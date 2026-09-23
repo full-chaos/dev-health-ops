@@ -2,6 +2,8 @@ package externalingest
 
 import (
 	"fmt"
+	"strconv"
+	"strings"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
@@ -19,9 +21,7 @@ type ValidationErrorItem struct {
 
 // toPyJSON builds the ordered wire shape (schemas.py's ValidationErrorItem
 // field order: index, kind, code, message, path) for policy.WriteJSON. Path
-// is omitted when empty, matching the struct tag's existing omitempty
-// behavior -- this only changes the writer, not the null-vs-omitted
-// semantics of any field.
+// is omitted when empty, matching the struct tag's omitempty.
 func (item ValidationErrorItem) toPyJSON() *pyjson.Object {
 	object := pyjson.NewObject()
 	object.Set("index", item.Index)
@@ -34,152 +34,83 @@ func (item ValidationErrorItem) toPyJSON() *pyjson.Object {
 	return object
 }
 
-// validateRecords is validate.py's validate_records: validates each
-// record's payload against its kind's field set. An unknown kind produces
-// exactly one unknown_kind item; a known kind can produce several (one per
-// violated field, matching Pydantic's "collect every error" behavior).
-//
-// This is a SHAPE port, not a byte-identical error-message port: codes
-// (missing_required_field / invalid_literal / invalid_field / unknown_kind)
-// and paths (records[i].payload.<field>) match validate.py's contract
-// exactly, since CHAOS-6247+ callers and any customer tooling branch on
-// those, not on message prose; the message text itself may read differently
-// from Pydantic's generated wording. See models.go's doc comment.
-func validateRecords(records []Record) []ValidationErrorItem {
-	var errors []ValidationErrorItem
+// RecordInput is one record for ValidateRecords: its kind and its payload
+// object, keys in input order and numbers exact.
+type RecordInput struct {
+	Kind    string
+	Payload *pyjson.Object
+}
+
+// ValidateRecords is external_ingest/validate.py validate_records, exact in
+// codes, messages and paths: an unknown kind is one unknown_kind item;
+// otherwise every pydantic error of model.model_validate(payload) (python
+// mode, see validateModel) becomes one item, in pydantic's order. The api's
+// record validation (the data plane's /validate and the admin validate
+// route) uses only this. The Go ingest worker (internal/streamhandlers)
+// still runs its own separate rules; moving it onto this is CHAOS-6345.
+func ValidateRecords(records []RecordInput) []ValidationErrorItem {
+	var items []ValidationErrorItem
 	for index, record := range records {
-		spec, known := recordKindValidators[record.Kind]
+		model, known := recordModels[record.Kind]
 		if !known {
-			errors = append(errors, ValidationErrorItem{
-				Index:   index,
-				Kind:    record.Kind,
-				Code:    "unknown_kind",
+			items = append(items, ValidationErrorItem{
+				Index: index, Kind: record.Kind, Code: "unknown_kind",
 				Message: "Unknown record kind: " + pythonparity.StrRepr(record.Kind),
 				Path:    fmt.Sprintf("records[%d].kind", index),
 			})
 			continue
 		}
-		errors = append(errors, validateRecordPayload(index, record.Kind, spec, record.Payload)...)
+		payload := record.Payload
+		if payload == nil {
+			payload = pyjson.NewObject()
+		}
+		for _, err := range validateModel(model, payload) {
+			items = append(items, ValidationErrorItem{
+				Index: index, Kind: record.Kind, Code: errorCode(err.Type), Message: err.Msg,
+				Path: errorPath(index, err.Loc),
+			})
+		}
 	}
-	return errors
+	return items
 }
 
-// validateRecordPayload checks one record's payload map against spec:
-// every declared field's presence/type/enum/length/range, and (extra=
-// "forbid") any key not declared on the model.
-func validateRecordPayload(index int, kind string, spec recordSpec, payload map[string]any) []ValidationErrorItem {
-	var errors []ValidationErrorItem
-	declared := make(map[string]bool, len(spec.fields))
-	pathFor := func(name string) string {
-		return fmt.Sprintf("records[%d].payload.%s", index, name)
-	}
-	item := func(name, code, message string) ValidationErrorItem {
-		return ValidationErrorItem{Index: index, Kind: kind, Code: code, Message: message, Path: pathFor(name)}
-	}
-
-	for _, f := range spec.fields {
-		declared[f.name] = true
-		value, present := payload[f.name]
-		if !present || value == nil {
-			if f.required {
-				errors = append(errors, item(f.name, "missing_required_field", "Field required"))
-			}
-			continue
+// validateRecords is ValidateRecords over parsed envelope records.
+func validateRecords(records []Record) []ValidationErrorItem {
+	inputs := make([]RecordInput, len(records))
+	for index, record := range records {
+		payload := record.ordered
+		if payload == nil {
+			payload = objectFromMap(record.Payload)
 		}
-		errors = append(errors, validateFieldValue(index, kind, f, value)...)
+		inputs[index] = RecordInput{Kind: record.Kind, Payload: payload}
 	}
-	for key := range payload {
-		if !declared[key] {
-			errors = append(errors, item(key, "invalid_field", fmt.Sprintf("Extra inputs are not permitted: %q", key)))
-		}
-	}
-	return errors
+	return ValidateRecords(inputs)
 }
 
-func validateFieldValue(index int, kind string, f field, value any) []ValidationErrorItem {
-	pathFor := func() string { return fmt.Sprintf("records[%d].payload.%s", index, f.name) }
-	item := func(code, message string) ValidationErrorItem {
-		return ValidationErrorItem{Index: index, Kind: kind, Code: code, Message: message, Path: pathFor()}
+// errorCode is validate.py _error_code_for.
+func errorCode(pydanticType string) string {
+	switch pydanticType {
+	case "missing":
+		return "missing_required_field"
+	case "literal_error", "enum":
+		return "invalid_literal"
 	}
-
-	switch f.typ {
-	case fString:
-		str, ok := value.(string)
-		if !ok {
-			return []ValidationErrorItem{item("invalid_field", "Input should be a valid string")}
-		}
-		if len(f.enum) > 0 && !contains(f.enum, str) {
-			return []ValidationErrorItem{item("invalid_literal", fmt.Sprintf("Input should be one of %v", f.enum))}
-		}
-		var errs []ValidationErrorItem
-		if f.minLen > 0 && len(str) < f.minLen {
-			errs = append(errs, item("invalid_field", fmt.Sprintf("String should have at least %d characters", f.minLen)))
-		}
-		if f.hasMax && f.maxLen > 0 && len(str) > f.maxLen {
-			errs = append(errs, item("invalid_field", fmt.Sprintf("String should have at most %d characters", f.maxLen)))
-		}
-		return errs
-	case fBool:
-		if _, ok := value.(bool); !ok {
-			return []ValidationErrorItem{item("invalid_field", "Input should be a valid boolean")}
-		}
-	case fNumber:
-		number, ok := asFloat(value)
-		if !ok {
-			return []ValidationErrorItem{item("invalid_field", "Input should be a valid number")}
-		}
-		var errs []ValidationErrorItem
-		if f.hasGE && number < f.ge {
-			errs = append(errs, item("invalid_field", fmt.Sprintf("Input should be greater than or equal to %v", f.ge)))
-		}
-		if f.hasLE && number > f.le {
-			errs = append(errs, item("invalid_field", fmt.Sprintf("Input should be less than or equal to %v", f.le)))
-		}
-		return errs
-	case fDatetime:
-		str, ok := value.(string)
-		if !ok || !isRFC3339(str) {
-			return []ValidationErrorItem{item("invalid_field", "Input should be a valid datetime")}
-		}
-	case fStringList:
-		list, ok := value.([]any)
-		if !ok {
-			return []ValidationErrorItem{item("invalid_field", "Input should be a valid list")}
-		}
-		var errs []ValidationErrorItem
-		for _, element := range list {
-			if _, ok := element.(string); !ok {
-				errs = append(errs, item("invalid_field", "Input should be a valid string"))
-				break
-			}
-		}
-		return errs
-	case fDict:
-		if _, ok := value.(map[string]any); !ok {
-			return []ValidationErrorItem{item("invalid_field", "Input should be a valid dictionary")}
-		}
-	}
-	return nil
+	return "invalid_field"
 }
 
-func contains(values []string, target string) bool {
-	for _, value := range values {
-		if value == target {
-			return true
+// errorPath is validate.py _error_path: records[i].payload, then each loc
+// part as str() prints it, joined with ".".
+func errorPath(index int, loc []pyjson.Value) string {
+	parts := []string{fmt.Sprintf("records[%d].payload", index)}
+	for _, part := range loc {
+		switch typed := part.(type) {
+		case string:
+			parts = append(parts, typed)
+		case int64:
+			parts = append(parts, strconv.FormatInt(typed, 10))
+		default:
+			parts = append(parts, fmt.Sprint(typed))
 		}
 	}
-	return false
-}
-
-func asFloat(value any) (float64, bool) {
-	switch v := value.(type) {
-	case float64:
-		return v, true
-	case int:
-		return float64(v), true
-	case int64:
-		return float64(v), true
-	default:
-		return 0, false
-	}
+	return strings.Join(parts, ".")
 }

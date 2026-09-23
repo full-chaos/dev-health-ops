@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"sort"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 )
 
 // BatchEnvelope mirrors schemas.py's BatchEnvelope: the wire shape every
@@ -41,6 +44,10 @@ type Record struct {
 	Kind       string         `json:"kind"`
 	ExternalID string         `json:"externalId"`
 	Payload    map[string]any `json:"payload"`
+	// ordered is Payload with its keys in input order and exact numbers,
+	// which the record validator needs (pydantic reports errors in field
+	// and key order). parseEnvelope fills it.
+	ordered *pyjson.Object
 }
 
 var sourceSystems = map[string]bool{
@@ -107,6 +114,7 @@ func parseEnvelope(raw []byte) (*BatchEnvelope, error) {
 	if len(envelope.Records) < 1 {
 		return nil, fmt.Errorf("records must be non-empty")
 	}
+	orderedPayloads(raw, envelope.Records)
 	for index, record := range envelope.Records {
 		if record.Kind == "" {
 			return nil, fmt.Errorf("records[%d].kind is required", index)
@@ -116,6 +124,63 @@ func parseEnvelope(raw []byte) (*BatchEnvelope, error) {
 		}
 	}
 	return &envelope, nil
+}
+
+// orderedPayloads fills each record's ordered payload from raw, which
+// encoding/json has already accepted. A payload pyjson cannot read in the
+// same position (never expected) keeps a key-sorted copy of Payload.
+func orderedPayloads(raw []byte, records []Record) {
+	var list []pyjson.Value
+	if decoded, err := pyjson.Decode(raw); err == nil {
+		if root, ok := decoded.(*pyjson.Object); ok {
+			if value, ok := root.Get("records"); ok {
+				list, _ = value.([]pyjson.Value)
+			}
+		}
+	}
+	for index := range records {
+		if index < len(list) {
+			if item, ok := list[index].(*pyjson.Object); ok {
+				if payload, ok := item.Get("payload"); ok {
+					if object, ok := payload.(*pyjson.Object); ok {
+						records[index].ordered = object
+						continue
+					}
+				}
+			}
+		}
+		records[index].ordered = objectFromMap(records[index].Payload)
+	}
+}
+
+// objectFromMap is an ordered copy of a decoded map, keys sorted.
+func objectFromMap(values map[string]any) *pyjson.Object {
+	out := pyjson.NewObject()
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		out.Set(key, fromAny(values[key]))
+	}
+	return out
+}
+
+func fromAny(value any) pyjson.Value {
+	switch typed := value.(type) {
+	case map[string]any:
+		return objectFromMap(typed)
+	case []any:
+		out := make([]pyjson.Value, len(typed))
+		for index, item := range typed {
+			out[index] = fromAny(item)
+		}
+		return out
+	case float64:
+		return pyjson.Float(typed)
+	}
+	return value
 }
 
 func isRFC3339(value string) bool {

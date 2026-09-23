@@ -7,8 +7,9 @@
 // users.
 //
 // Every port here states its scope explicitly where it narrows the Python
-// original: validateRecords (validate.go) matches Pydantic's error codes
-// and paths but not always its exact message text; matchesInstance
+// original. ValidateRecords (validate.go, records.go) is exact: codes,
+// messages and paths, pinned by a live oracle over every record kind.
+// matchesInstance
 // (ownership.go) covers the explicit-source-row precedence, the managed-
 // sync string-match override, and the operational-GitHub/GitLab host match
 // against an explicitly configured or default host, not the narrower

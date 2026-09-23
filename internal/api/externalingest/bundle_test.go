@@ -92,17 +92,17 @@ func TestRecordKindsMatchesTheGoldenBundle(t *testing.T) {
 	if !ok {
 		t.Fatalf("golden bundle has no recordKinds: %+v", document)
 	}
-	if len(index) != len(recordKindValidators) {
-		t.Fatalf("golden bundle has %d record kinds, recordKindValidators has %d", len(index), len(recordKindValidators))
+	if len(index) != len(recordModels) {
+		t.Fatalf("golden bundle has %d record kinds, recordModels has %d", len(index), len(recordModels))
 	}
 	for kind := range index {
-		if _, ok := recordKindValidators[kind]; !ok {
-			t.Errorf("golden bundle has kind %q with no Go validator", kind)
+		if _, ok := recordModels[kind]; !ok {
+			t.Errorf("golden bundle has kind %q with no Go model", kind)
 		}
 	}
-	for kind := range recordKindValidators {
+	for kind := range recordModels {
 		if _, ok := index[kind]; !ok {
-			t.Errorf("recordKindValidators has kind %q missing from the golden bundle", kind)
+			t.Errorf("recordModels has kind %q missing from the golden bundle", kind)
 		}
 	}
 }

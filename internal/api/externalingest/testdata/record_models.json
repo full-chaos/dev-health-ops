@@ -1,0 +1,4140 @@
+{
+ "kinds": {
+  "repository.v1": {
+   "extra": "forbid",
+   "populate_by_name": true,
+   "fields": [
+    {
+     "name": "external_id",
+     "alias": "externalId",
+     "has_default": false,
+     "schema": {
+      "type": "str",
+      "min_length": 1,
+      "max_length": 1024
+     }
+    },
+    {
+     "name": "source_system",
+     "alias": "sourceSystem",
+     "has_default": false,
+     "schema": {
+      "type": "literal",
+      "expected": [
+       "github",
+       "gitlab",
+       "custom"
+      ]
+     }
+    },
+    {
+     "name": "default_ref",
+     "alias": "defaultRef",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str"
+      }
+     }
+    },
+    {
+     "name": "tags",
+     "alias": null,
+     "has_default": true,
+     "schema": {
+      "type": "list",
+      "max_length": 50,
+      "items_schema": {
+       "type": "str"
+      }
+     }
+    },
+    {
+     "name": "settings",
+     "alias": null,
+     "has_default": true,
+     "schema": {
+      "type": "dict",
+      "values_schema": {
+       "type": "union",
+       "choices": [
+        {
+         "type": "str"
+        },
+        {
+         "type": "int"
+        },
+        {
+         "type": "float"
+        },
+        {
+         "type": "bool"
+        }
+       ],
+       "mode": "smart"
+      },
+      "keys_schema": {
+       "type": "str"
+      }
+     }
+    }
+   ]
+  },
+  "identity.v1": {
+   "extra": "forbid",
+   "populate_by_name": true,
+   "fields": [
+    {
+     "name": "canonical_id",
+     "alias": "canonicalId",
+     "has_default": false,
+     "schema": {
+      "type": "str",
+      "min_length": 1,
+      "max_length": 255
+     }
+    },
+    {
+     "name": "display_name",
+     "alias": "displayName",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str"
+      }
+     }
+    },
+    {
+     "name": "email",
+     "alias": null,
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str"
+      }
+     }
+    },
+    {
+     "name": "provider_identities",
+     "alias": "providerIdentities",
+     "has_default": true,
+     "schema": {
+      "type": "dict",
+      "values_schema": {
+       "type": "list",
+       "items_schema": {
+        "type": "str"
+       }
+      },
+      "keys_schema": {
+       "type": "str"
+      }
+     }
+    },
+    {
+     "name": "team_ids",
+     "alias": "teamIds",
+     "has_default": true,
+     "schema": {
+      "type": "list",
+      "items_schema": {
+       "type": "str"
+      }
+     }
+    },
+    {
+     "name": "is_active",
+     "alias": "isActive",
+     "has_default": true,
+     "schema": {
+      "type": "bool"
+     }
+    },
+    {
+     "name": "updated_at",
+     "alias": "updatedAt",
+     "has_default": false,
+     "schema": {
+      "type": "datetime"
+     }
+    }
+   ]
+  },
+  "team.v1": {
+   "extra": "forbid",
+   "populate_by_name": true,
+   "fields": [
+    {
+     "name": "id",
+     "alias": null,
+     "has_default": false,
+     "schema": {
+      "type": "str",
+      "min_length": 1,
+      "max_length": 255
+     }
+    },
+    {
+     "name": "name",
+     "alias": null,
+     "has_default": false,
+     "schema": {
+      "type": "str"
+     }
+    },
+    {
+     "name": "description",
+     "alias": null,
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str"
+      }
+     }
+    },
+    {
+     "name": "members",
+     "alias": null,
+     "has_default": true,
+     "schema": {
+      "type": "list",
+      "items_schema": {
+       "type": "str"
+      }
+     }
+    },
+    {
+     "name": "project_keys",
+     "alias": "projectKeys",
+     "has_default": true,
+     "schema": {
+      "type": "list",
+      "items_schema": {
+       "type": "str"
+      }
+     }
+    },
+    {
+     "name": "repo_patterns",
+     "alias": "repoPatterns",
+     "has_default": true,
+     "schema": {
+      "type": "list",
+      "items_schema": {
+       "type": "str"
+      }
+     }
+    },
+    {
+     "name": "is_active",
+     "alias": "isActive",
+     "has_default": true,
+     "schema": {
+      "type": "bool"
+     }
+    },
+    {
+     "name": "updated_at",
+     "alias": "updatedAt",
+     "has_default": false,
+     "schema": {
+      "type": "datetime"
+     }
+    },
+    {
+     "name": "native_team_key",
+     "alias": "nativeTeamKey",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str"
+      }
+     }
+    },
+    {
+     "name": "parent_team_id",
+     "alias": "parentTeamId",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str"
+      }
+     }
+    }
+   ]
+  },
+  "work_item.v1": {
+   "extra": "forbid",
+   "populate_by_name": true,
+   "fields": [
+    {
+     "name": "external_key",
+     "alias": "externalKey",
+     "has_default": false,
+     "schema": {
+      "type": "str",
+      "min_length": 1,
+      "max_length": 512
+     }
+    },
+    {
+     "name": "provider",
+     "alias": null,
+     "has_default": false,
+     "schema": {
+      "type": "literal",
+      "expected": [
+       "jira",
+       "github",
+       "gitlab",
+       "linear"
+      ]
+     }
+    },
+    {
+     "name": "title",
+     "alias": null,
+     "has_default": false,
+     "schema": {
+      "type": "str"
+     }
+    },
+    {
+     "name": "type",
+     "alias": null,
+     "has_default": true,
+     "schema": {
+      "type": "literal",
+      "expected": [
+       "story",
+       "task",
+       "bug",
+       "epic",
+       "pr",
+       "merge_request",
+       "issue",
+       "incident",
+       "chore",
+       "unknown"
+      ]
+     }
+    },
+    {
+     "name": "status",
+     "alias": null,
+     "has_default": false,
+     "schema": {
+      "type": "literal",
+      "expected": [
+       "backlog",
+       "todo",
+       "in_progress",
+       "in_review",
+       "blocked",
+       "done",
+       "canceled",
+       "unknown"
+      ]
+     }
+    },
+    {
+     "name": "status_raw",
+     "alias": "statusRaw",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str"
+      }
+     }
+    },
+    {
+     "name": "description",
+     "alias": null,
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str"
+      }
+     }
+    },
+    {
+     "name": "repository_external_id",
+     "alias": "repositoryExternalId",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str"
+      }
+     }
+    },
+    {
+     "name": "native_team_key",
+     "alias": "nativeTeamKey",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str"
+      }
+     }
+    },
+    {
+     "name": "project_key",
+     "alias": "projectKey",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str"
+      }
+     }
+    },
+    {
+     "name": "project_id",
+     "alias": "projectId",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str"
+      }
+     }
+    },
+    {
+     "name": "project_name",
+     "alias": "projectName",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str"
+      }
+     }
+    },
+    {
+     "name": "assignees",
+     "alias": null,
+     "has_default": true,
+     "schema": {
+      "type": "list",
+      "items_schema": {
+       "type": "str"
+      }
+     }
+    },
+    {
+     "name": "reporter",
+     "alias": null,
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str"
+      }
+     }
+    },
+    {
+     "name": "created_at",
+     "alias": "createdAt",
+     "has_default": false,
+     "schema": {
+      "type": "datetime"
+     }
+    },
+    {
+     "name": "updated_at",
+     "alias": "updatedAt",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "datetime"
+      }
+     }
+    },
+    {
+     "name": "started_at",
+     "alias": "startedAt",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "datetime"
+      }
+     }
+    },
+    {
+     "name": "completed_at",
+     "alias": "completedAt",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "datetime"
+      }
+     }
+    },
+    {
+     "name": "closed_at",
+     "alias": "closedAt",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "datetime"
+      }
+     }
+    },
+    {
+     "name": "labels",
+     "alias": null,
+     "has_default": true,
+     "schema": {
+      "type": "list",
+      "items_schema": {
+       "type": "str"
+      }
+     }
+    },
+    {
+     "name": "story_points",
+     "alias": "storyPoints",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "float"
+      }
+     }
+    },
+    {
+     "name": "sprint_id",
+     "alias": "sprintId",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str"
+      }
+     }
+    },
+    {
+     "name": "sprint_name",
+     "alias": "sprintName",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str"
+      }
+     }
+    },
+    {
+     "name": "parent_id",
+     "alias": "parentId",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str"
+      }
+     }
+    },
+    {
+     "name": "epic_id",
+     "alias": "epicId",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str"
+      }
+     }
+    },
+    {
+     "name": "url",
+     "alias": null,
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str"
+      }
+     }
+    },
+    {
+     "name": "priority_raw",
+     "alias": "priorityRaw",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str"
+      }
+     }
+    },
+    {
+     "name": "service_class",
+     "alias": "serviceClass",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str"
+      }
+     }
+    },
+    {
+     "name": "due_at",
+     "alias": "dueAt",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "datetime"
+      }
+     }
+    }
+   ]
+  },
+  "work_item_transition.v1": {
+   "extra": "forbid",
+   "populate_by_name": true,
+   "fields": [
+    {
+     "name": "external_key",
+     "alias": "externalKey",
+     "has_default": false,
+     "schema": {
+      "type": "str",
+      "min_length": 1,
+      "max_length": 512
+     }
+    },
+    {
+     "name": "provider",
+     "alias": null,
+     "has_default": false,
+     "schema": {
+      "type": "literal",
+      "expected": [
+       "jira",
+       "github",
+       "gitlab",
+       "linear"
+      ]
+     }
+    },
+    {
+     "name": "work_item_type",
+     "alias": "workItemType",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "literal",
+       "expected": [
+        "issue",
+        "pr",
+        "merge_request"
+       ]
+      }
+     }
+    },
+    {
+     "name": "occurred_at",
+     "alias": "occurredAt",
+     "has_default": false,
+     "schema": {
+      "type": "datetime"
+     }
+    },
+    {
+     "name": "from_status_raw",
+     "alias": "fromStatusRaw",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str"
+      }
+     }
+    },
+    {
+     "name": "to_status_raw",
+     "alias": "toStatusRaw",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str"
+      }
+     }
+    },
+    {
+     "name": "from_status",
+     "alias": "fromStatus",
+     "has_default": false,
+     "schema": {
+      "type": "literal",
+      "expected": [
+       "backlog",
+       "todo",
+       "in_progress",
+       "in_review",
+       "blocked",
+       "done",
+       "canceled",
+       "unknown"
+      ]
+     }
+    },
+    {
+     "name": "to_status",
+     "alias": "toStatus",
+     "has_default": false,
+     "schema": {
+      "type": "literal",
+      "expected": [
+       "backlog",
+       "todo",
+       "in_progress",
+       "in_review",
+       "blocked",
+       "done",
+       "canceled",
+       "unknown"
+      ]
+     }
+    },
+    {
+     "name": "actor",
+     "alias": null,
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str"
+      }
+     }
+    }
+   ]
+  },
+  "work_item_dependency.v1": {
+   "extra": "forbid",
+   "populate_by_name": true,
+   "fields": [
+    {
+     "name": "source_external_key",
+     "alias": "sourceExternalKey",
+     "has_default": false,
+     "schema": {
+      "type": "str",
+      "min_length": 1,
+      "max_length": 512
+     }
+    },
+    {
+     "name": "source_work_item_type",
+     "alias": "sourceWorkItemType",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "literal",
+       "expected": [
+        "issue",
+        "pr",
+        "merge_request"
+       ]
+      }
+     }
+    },
+    {
+     "name": "target_external_key",
+     "alias": "targetExternalKey",
+     "has_default": false,
+     "schema": {
+      "type": "str",
+      "min_length": 1,
+      "max_length": 512
+     }
+    },
+    {
+     "name": "target_work_item_type",
+     "alias": "targetWorkItemType",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "literal",
+       "expected": [
+        "issue",
+        "pr",
+        "merge_request"
+       ]
+      }
+     }
+    },
+    {
+     "name": "relationship_type",
+     "alias": "relationshipType",
+     "has_default": false,
+     "schema": {
+      "type": "literal",
+      "expected": [
+       "blocks",
+       "blocked_by",
+       "relates_to",
+       "duplicates",
+       "parent_of",
+       "child_of"
+      ]
+     }
+    },
+    {
+     "name": "relationship_type_raw",
+     "alias": "relationshipTypeRaw",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str"
+      }
+     }
+    }
+   ]
+  },
+  "pull_request.v1": {
+   "extra": "forbid",
+   "populate_by_name": true,
+   "fields": [
+    {
+     "name": "repository_external_id",
+     "alias": "repositoryExternalId",
+     "has_default": false,
+     "schema": {
+      "type": "str"
+     }
+    },
+    {
+     "name": "number",
+     "alias": null,
+     "has_default": false,
+     "schema": {
+      "type": "int",
+      "ge": 1
+     }
+    },
+    {
+     "name": "title",
+     "alias": null,
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str"
+      }
+     }
+    },
+    {
+     "name": "body",
+     "alias": null,
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str"
+      }
+     }
+    },
+    {
+     "name": "state",
+     "alias": null,
+     "has_default": false,
+     "schema": {
+      "type": "literal",
+      "expected": [
+       "open",
+       "closed",
+       "merged"
+      ]
+     }
+    },
+    {
+     "name": "author_name",
+     "alias": "authorName",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str"
+      }
+     }
+    },
+    {
+     "name": "author_email",
+     "alias": "authorEmail",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str"
+      }
+     }
+    },
+    {
+     "name": "created_at",
+     "alias": "createdAt",
+     "has_default": false,
+     "schema": {
+      "type": "datetime"
+     }
+    },
+    {
+     "name": "merged_at",
+     "alias": "mergedAt",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "datetime"
+      }
+     }
+    },
+    {
+     "name": "closed_at",
+     "alias": "closedAt",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "datetime"
+      }
+     }
+    },
+    {
+     "name": "head_branch",
+     "alias": "headBranch",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str"
+      }
+     }
+    },
+    {
+     "name": "base_branch",
+     "alias": "baseBranch",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str"
+      }
+     }
+    },
+    {
+     "name": "additions",
+     "alias": null,
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "int",
+       "ge": 0
+      }
+     }
+    },
+    {
+     "name": "deletions",
+     "alias": null,
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "int",
+       "ge": 0
+      }
+     }
+    },
+    {
+     "name": "changed_files",
+     "alias": "changedFiles",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "int",
+       "ge": 0
+      }
+     }
+    },
+    {
+     "name": "first_review_at",
+     "alias": "firstReviewAt",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "datetime"
+      }
+     }
+    },
+    {
+     "name": "first_comment_at",
+     "alias": "firstCommentAt",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "datetime"
+      }
+     }
+    },
+    {
+     "name": "changes_requested_count",
+     "alias": "changesRequestedCount",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "int",
+       "ge": 0
+      }
+     }
+    },
+    {
+     "name": "reviews_count",
+     "alias": "reviewsCount",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "int",
+       "ge": 0
+      }
+     }
+    },
+    {
+     "name": "comments_count",
+     "alias": "commentsCount",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "int",
+       "ge": 0
+      }
+     }
+    },
+    {
+     "name": "url",
+     "alias": null,
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str"
+      }
+     }
+    }
+   ]
+  },
+  "review.v1": {
+   "extra": "forbid",
+   "populate_by_name": true,
+   "fields": [
+    {
+     "name": "repository_external_id",
+     "alias": "repositoryExternalId",
+     "has_default": false,
+     "schema": {
+      "type": "str"
+     }
+    },
+    {
+     "name": "pull_request_number",
+     "alias": "pullRequestNumber",
+     "has_default": false,
+     "schema": {
+      "type": "int",
+      "ge": 1
+     }
+    },
+    {
+     "name": "review_id",
+     "alias": "reviewId",
+     "has_default": false,
+     "schema": {
+      "type": "str",
+      "min_length": 1
+     }
+    },
+    {
+     "name": "reviewer",
+     "alias": null,
+     "has_default": false,
+     "schema": {
+      "type": "str"
+     }
+    },
+    {
+     "name": "state",
+     "alias": null,
+     "has_default": false,
+     "schema": {
+      "type": "literal",
+      "expected": [
+       "APPROVED",
+       "CHANGES_REQUESTED",
+       "COMMENTED",
+       "DISMISSED",
+       "PENDING"
+      ]
+     }
+    },
+    {
+     "name": "submitted_at",
+     "alias": "submittedAt",
+     "has_default": false,
+     "schema": {
+      "type": "datetime"
+     }
+    }
+   ]
+  },
+  "commit.v1": {
+   "extra": "forbid",
+   "populate_by_name": true,
+   "fields": [
+    {
+     "name": "repository_external_id",
+     "alias": "repositoryExternalId",
+     "has_default": false,
+     "schema": {
+      "type": "str"
+     }
+    },
+    {
+     "name": "hash",
+     "alias": null,
+     "has_default": false,
+     "schema": {
+      "type": "str",
+      "min_length": 7,
+      "max_length": 64
+     }
+    },
+    {
+     "name": "message",
+     "alias": null,
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str"
+      }
+     }
+    },
+    {
+     "name": "author_name",
+     "alias": "authorName",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str"
+      }
+     }
+    },
+    {
+     "name": "author_email",
+     "alias": "authorEmail",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str"
+      }
+     }
+    },
+    {
+     "name": "author_when",
+     "alias": "authorWhen",
+     "has_default": false,
+     "schema": {
+      "type": "datetime"
+     }
+    },
+    {
+     "name": "committer_name",
+     "alias": "committerName",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str"
+      }
+     }
+    },
+    {
+     "name": "committer_email",
+     "alias": "committerEmail",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str"
+      }
+     }
+    },
+    {
+     "name": "committer_when",
+     "alias": "committerWhen",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "datetime"
+      }
+     }
+    },
+    {
+     "name": "parents",
+     "alias": null,
+     "has_default": true,
+     "schema": {
+      "type": "int",
+      "ge": 0
+     }
+    }
+   ]
+  },
+  "operational_service.v1": {
+   "extra": "forbid",
+   "populate_by_name": true,
+   "fields": [
+    {
+     "name": "external_id",
+     "alias": "externalId",
+     "has_default": false,
+     "schema": {
+      "type": "str",
+      "min_length": 1,
+      "max_length": 512
+     }
+    },
+    {
+     "name": "source_version_at",
+     "alias": "sourceVersionAt",
+     "has_default": false,
+     "schema": {
+      "type": "datetime"
+     }
+    },
+    {
+     "name": "source_url",
+     "alias": "sourceUrl",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 2048
+      }
+     }
+    },
+    {
+     "name": "source_event_at",
+     "alias": "sourceEventAt",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "datetime"
+      }
+     }
+    },
+    {
+     "name": "source_event_id",
+     "alias": "sourceEventId",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 512
+      }
+     }
+    },
+    {
+     "name": "raw_status",
+     "alias": "rawStatus",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 255
+      }
+     }
+    },
+    {
+     "name": "raw_severity",
+     "alias": "rawSeverity",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 255
+      }
+     }
+    },
+    {
+     "name": "raw_priority",
+     "alias": "rawPriority",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 255
+      }
+     }
+    },
+    {
+     "name": "normalized_status",
+     "alias": "normalizedStatus",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "literal",
+       "expected": [
+        "active",
+        "open",
+        "acknowledged",
+        "resolved",
+        "closed",
+        "suppressed"
+       ]
+      }
+     }
+    },
+    {
+     "name": "normalized_severity",
+     "alias": "normalizedSeverity",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "literal",
+       "expected": [
+        "critical",
+        "high",
+        "medium",
+        "low",
+        "info"
+       ]
+      }
+     }
+    },
+    {
+     "name": "normalized_priority",
+     "alias": "normalizedPriority",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "literal",
+       "expected": [
+        "critical",
+        "high",
+        "medium",
+        "low"
+       ]
+      }
+     }
+    },
+    {
+     "name": "relationship_provenance",
+     "alias": "relationshipProvenance",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 255
+      }
+     }
+    },
+    {
+     "name": "relationship_confidence",
+     "alias": "relationshipConfidence",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "float",
+       "ge": 0,
+       "le": 1
+      }
+     }
+    },
+    {
+     "name": "name",
+     "alias": null,
+     "has_default": false,
+     "schema": {
+      "type": "str",
+      "min_length": 1,
+      "max_length": 512
+     }
+    },
+    {
+     "name": "description",
+     "alias": null,
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 20000
+      }
+     }
+    },
+    {
+     "name": "service_type",
+     "alias": "serviceType",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 255
+      }
+     }
+    },
+    {
+     "name": "owning_team_external_id",
+     "alias": "owningTeamExternalId",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 512
+      }
+     }
+    },
+    {
+     "name": "escalation_policy_external_id",
+     "alias": "escalationPolicyExternalId",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 512
+      }
+     }
+    },
+    {
+     "name": "is_deleted",
+     "alias": "isDeleted",
+     "has_default": true,
+     "schema": {
+      "type": "bool"
+     }
+    },
+    {
+     "name": "deleted_at",
+     "alias": "deletedAt",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "datetime"
+      }
+     }
+    }
+   ]
+  },
+  "operational_incident.v1": {
+   "extra": "forbid",
+   "populate_by_name": true,
+   "fields": [
+    {
+     "name": "external_id",
+     "alias": "externalId",
+     "has_default": false,
+     "schema": {
+      "type": "str",
+      "min_length": 1,
+      "max_length": 512
+     }
+    },
+    {
+     "name": "source_version_at",
+     "alias": "sourceVersionAt",
+     "has_default": false,
+     "schema": {
+      "type": "datetime"
+     }
+    },
+    {
+     "name": "source_url",
+     "alias": "sourceUrl",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 2048
+      }
+     }
+    },
+    {
+     "name": "source_event_at",
+     "alias": "sourceEventAt",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "datetime"
+      }
+     }
+    },
+    {
+     "name": "source_event_id",
+     "alias": "sourceEventId",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 512
+      }
+     }
+    },
+    {
+     "name": "raw_status",
+     "alias": "rawStatus",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 255
+      }
+     }
+    },
+    {
+     "name": "raw_severity",
+     "alias": "rawSeverity",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 255
+      }
+     }
+    },
+    {
+     "name": "raw_priority",
+     "alias": "rawPriority",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 255
+      }
+     }
+    },
+    {
+     "name": "normalized_status",
+     "alias": "normalizedStatus",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "literal",
+       "expected": [
+        "active",
+        "open",
+        "acknowledged",
+        "resolved",
+        "closed",
+        "suppressed"
+       ]
+      }
+     }
+    },
+    {
+     "name": "normalized_severity",
+     "alias": "normalizedSeverity",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "literal",
+       "expected": [
+        "critical",
+        "high",
+        "medium",
+        "low",
+        "info"
+       ]
+      }
+     }
+    },
+    {
+     "name": "normalized_priority",
+     "alias": "normalizedPriority",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "literal",
+       "expected": [
+        "critical",
+        "high",
+        "medium",
+        "low"
+       ]
+      }
+     }
+    },
+    {
+     "name": "relationship_provenance",
+     "alias": "relationshipProvenance",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 255
+      }
+     }
+    },
+    {
+     "name": "relationship_confidence",
+     "alias": "relationshipConfidence",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "float",
+       "ge": 0,
+       "le": 1
+      }
+     }
+    },
+    {
+     "name": "title",
+     "alias": null,
+     "has_default": false,
+     "schema": {
+      "type": "str",
+      "min_length": 1,
+      "max_length": 1024
+     }
+    },
+    {
+     "name": "description",
+     "alias": null,
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 20000
+      }
+     }
+    },
+    {
+     "name": "service_external_id",
+     "alias": "serviceExternalId",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 512
+      }
+     }
+    },
+    {
+     "name": "escalation_policy_external_id",
+     "alias": "escalationPolicyExternalId",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 512
+      }
+     }
+    },
+    {
+     "name": "started_at",
+     "alias": "startedAt",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "datetime"
+      }
+     }
+    },
+    {
+     "name": "resolved_at",
+     "alias": "resolvedAt",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "datetime"
+      }
+     }
+    },
+    {
+     "name": "is_deleted",
+     "alias": "isDeleted",
+     "has_default": true,
+     "schema": {
+      "type": "bool"
+     }
+    },
+    {
+     "name": "deleted_at",
+     "alias": "deletedAt",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "datetime"
+      }
+     }
+    }
+   ]
+  },
+  "operational_alert.v1": {
+   "extra": "forbid",
+   "populate_by_name": true,
+   "fields": [
+    {
+     "name": "external_id",
+     "alias": "externalId",
+     "has_default": false,
+     "schema": {
+      "type": "str",
+      "min_length": 1,
+      "max_length": 512
+     }
+    },
+    {
+     "name": "source_version_at",
+     "alias": "sourceVersionAt",
+     "has_default": false,
+     "schema": {
+      "type": "datetime"
+     }
+    },
+    {
+     "name": "source_url",
+     "alias": "sourceUrl",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 2048
+      }
+     }
+    },
+    {
+     "name": "source_event_at",
+     "alias": "sourceEventAt",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "datetime"
+      }
+     }
+    },
+    {
+     "name": "source_event_id",
+     "alias": "sourceEventId",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 512
+      }
+     }
+    },
+    {
+     "name": "raw_status",
+     "alias": "rawStatus",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 255
+      }
+     }
+    },
+    {
+     "name": "raw_severity",
+     "alias": "rawSeverity",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 255
+      }
+     }
+    },
+    {
+     "name": "raw_priority",
+     "alias": "rawPriority",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 255
+      }
+     }
+    },
+    {
+     "name": "normalized_status",
+     "alias": "normalizedStatus",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "literal",
+       "expected": [
+        "active",
+        "open",
+        "acknowledged",
+        "resolved",
+        "closed",
+        "suppressed"
+       ]
+      }
+     }
+    },
+    {
+     "name": "normalized_severity",
+     "alias": "normalizedSeverity",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "literal",
+       "expected": [
+        "critical",
+        "high",
+        "medium",
+        "low",
+        "info"
+       ]
+      }
+     }
+    },
+    {
+     "name": "normalized_priority",
+     "alias": "normalizedPriority",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "literal",
+       "expected": [
+        "critical",
+        "high",
+        "medium",
+        "low"
+       ]
+      }
+     }
+    },
+    {
+     "name": "relationship_provenance",
+     "alias": "relationshipProvenance",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 255
+      }
+     }
+    },
+    {
+     "name": "relationship_confidence",
+     "alias": "relationshipConfidence",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "float",
+       "ge": 0,
+       "le": 1
+      }
+     }
+    },
+    {
+     "name": "title",
+     "alias": null,
+     "has_default": false,
+     "schema": {
+      "type": "str",
+      "min_length": 1,
+      "max_length": 1024
+     }
+    },
+    {
+     "name": "description",
+     "alias": null,
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 20000
+      }
+     }
+    },
+    {
+     "name": "service_external_id",
+     "alias": "serviceExternalId",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 512
+      }
+     }
+    },
+    {
+     "name": "incident_external_id",
+     "alias": "incidentExternalId",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 512
+      }
+     }
+    },
+    {
+     "name": "triggered_at",
+     "alias": "triggeredAt",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "datetime"
+      }
+     }
+    },
+    {
+     "name": "acknowledged_at",
+     "alias": "acknowledgedAt",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "datetime"
+      }
+     }
+    },
+    {
+     "name": "resolved_at",
+     "alias": "resolvedAt",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "datetime"
+      }
+     }
+    },
+    {
+     "name": "is_deleted",
+     "alias": "isDeleted",
+     "has_default": true,
+     "schema": {
+      "type": "bool"
+     }
+    },
+    {
+     "name": "deleted_at",
+     "alias": "deletedAt",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "datetime"
+      }
+     }
+    }
+   ]
+  },
+  "incident_timeline_event.v1": {
+   "extra": "forbid",
+   "populate_by_name": true,
+   "fields": [
+    {
+     "name": "external_id",
+     "alias": "externalId",
+     "has_default": false,
+     "schema": {
+      "type": "str",
+      "min_length": 1,
+      "max_length": 512
+     }
+    },
+    {
+     "name": "source_version_at",
+     "alias": "sourceVersionAt",
+     "has_default": false,
+     "schema": {
+      "type": "datetime"
+     }
+    },
+    {
+     "name": "source_url",
+     "alias": "sourceUrl",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 2048
+      }
+     }
+    },
+    {
+     "name": "source_event_at",
+     "alias": "sourceEventAt",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "datetime"
+      }
+     }
+    },
+    {
+     "name": "source_event_id",
+     "alias": "sourceEventId",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 512
+      }
+     }
+    },
+    {
+     "name": "raw_status",
+     "alias": "rawStatus",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 255
+      }
+     }
+    },
+    {
+     "name": "raw_severity",
+     "alias": "rawSeverity",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 255
+      }
+     }
+    },
+    {
+     "name": "raw_priority",
+     "alias": "rawPriority",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 255
+      }
+     }
+    },
+    {
+     "name": "normalized_status",
+     "alias": "normalizedStatus",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "literal",
+       "expected": [
+        "active",
+        "open",
+        "acknowledged",
+        "resolved",
+        "closed",
+        "suppressed"
+       ]
+      }
+     }
+    },
+    {
+     "name": "normalized_severity",
+     "alias": "normalizedSeverity",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "literal",
+       "expected": [
+        "critical",
+        "high",
+        "medium",
+        "low",
+        "info"
+       ]
+      }
+     }
+    },
+    {
+     "name": "normalized_priority",
+     "alias": "normalizedPriority",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "literal",
+       "expected": [
+        "critical",
+        "high",
+        "medium",
+        "low"
+       ]
+      }
+     }
+    },
+    {
+     "name": "relationship_provenance",
+     "alias": "relationshipProvenance",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 255
+      }
+     }
+    },
+    {
+     "name": "relationship_confidence",
+     "alias": "relationshipConfidence",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "float",
+       "ge": 0,
+       "le": 1
+      }
+     }
+    },
+    {
+     "name": "incident_external_id",
+     "alias": "incidentExternalId",
+     "has_default": false,
+     "schema": {
+      "type": "str",
+      "min_length": 1,
+      "max_length": 512
+     }
+    },
+    {
+     "name": "event_type",
+     "alias": "eventType",
+     "has_default": false,
+     "schema": {
+      "type": "str",
+      "min_length": 1,
+      "max_length": 255
+     }
+    },
+    {
+     "name": "body",
+     "alias": null,
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 20000
+      }
+     }
+    },
+    {
+     "name": "actor_type",
+     "alias": "actorType",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 255
+      }
+     }
+    },
+    {
+     "name": "actor_external_id",
+     "alias": "actorExternalId",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 512
+      }
+     }
+    },
+    {
+     "name": "occurred_at",
+     "alias": "occurredAt",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "datetime"
+      }
+     }
+    }
+   ]
+  },
+  "incident_note.v1": {
+   "extra": "forbid",
+   "populate_by_name": true,
+   "fields": [
+    {
+     "name": "external_id",
+     "alias": "externalId",
+     "has_default": false,
+     "schema": {
+      "type": "str",
+      "min_length": 1,
+      "max_length": 512
+     }
+    },
+    {
+     "name": "source_version_at",
+     "alias": "sourceVersionAt",
+     "has_default": false,
+     "schema": {
+      "type": "datetime"
+     }
+    },
+    {
+     "name": "source_url",
+     "alias": "sourceUrl",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 2048
+      }
+     }
+    },
+    {
+     "name": "source_event_at",
+     "alias": "sourceEventAt",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "datetime"
+      }
+     }
+    },
+    {
+     "name": "source_event_id",
+     "alias": "sourceEventId",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 512
+      }
+     }
+    },
+    {
+     "name": "raw_status",
+     "alias": "rawStatus",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 255
+      }
+     }
+    },
+    {
+     "name": "raw_severity",
+     "alias": "rawSeverity",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 255
+      }
+     }
+    },
+    {
+     "name": "raw_priority",
+     "alias": "rawPriority",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 255
+      }
+     }
+    },
+    {
+     "name": "normalized_status",
+     "alias": "normalizedStatus",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "literal",
+       "expected": [
+        "active",
+        "open",
+        "acknowledged",
+        "resolved",
+        "closed",
+        "suppressed"
+       ]
+      }
+     }
+    },
+    {
+     "name": "normalized_severity",
+     "alias": "normalizedSeverity",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "literal",
+       "expected": [
+        "critical",
+        "high",
+        "medium",
+        "low",
+        "info"
+       ]
+      }
+     }
+    },
+    {
+     "name": "normalized_priority",
+     "alias": "normalizedPriority",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "literal",
+       "expected": [
+        "critical",
+        "high",
+        "medium",
+        "low"
+       ]
+      }
+     }
+    },
+    {
+     "name": "relationship_provenance",
+     "alias": "relationshipProvenance",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 255
+      }
+     }
+    },
+    {
+     "name": "relationship_confidence",
+     "alias": "relationshipConfidence",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "float",
+       "ge": 0,
+       "le": 1
+      }
+     }
+    },
+    {
+     "name": "incident_external_id",
+     "alias": "incidentExternalId",
+     "has_default": false,
+     "schema": {
+      "type": "str",
+      "min_length": 1,
+      "max_length": 512
+     }
+    },
+    {
+     "name": "body",
+     "alias": null,
+     "has_default": false,
+     "schema": {
+      "type": "str",
+      "min_length": 1,
+      "max_length": 20000
+     }
+    },
+    {
+     "name": "author_user_external_id",
+     "alias": "authorUserExternalId",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 512
+      }
+     }
+    },
+    {
+     "name": "created_at",
+     "alias": "createdAt",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "datetime"
+      }
+     }
+    }
+   ]
+  },
+  "incident_responder.v1": {
+   "extra": "forbid",
+   "populate_by_name": true,
+   "fields": [
+    {
+     "name": "external_id",
+     "alias": "externalId",
+     "has_default": false,
+     "schema": {
+      "type": "str",
+      "min_length": 1,
+      "max_length": 512
+     }
+    },
+    {
+     "name": "source_version_at",
+     "alias": "sourceVersionAt",
+     "has_default": false,
+     "schema": {
+      "type": "datetime"
+     }
+    },
+    {
+     "name": "source_url",
+     "alias": "sourceUrl",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 2048
+      }
+     }
+    },
+    {
+     "name": "source_event_at",
+     "alias": "sourceEventAt",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "datetime"
+      }
+     }
+    },
+    {
+     "name": "source_event_id",
+     "alias": "sourceEventId",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 512
+      }
+     }
+    },
+    {
+     "name": "raw_status",
+     "alias": "rawStatus",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 255
+      }
+     }
+    },
+    {
+     "name": "raw_severity",
+     "alias": "rawSeverity",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 255
+      }
+     }
+    },
+    {
+     "name": "raw_priority",
+     "alias": "rawPriority",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 255
+      }
+     }
+    },
+    {
+     "name": "normalized_status",
+     "alias": "normalizedStatus",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "literal",
+       "expected": [
+        "active",
+        "open",
+        "acknowledged",
+        "resolved",
+        "closed",
+        "suppressed"
+       ]
+      }
+     }
+    },
+    {
+     "name": "normalized_severity",
+     "alias": "normalizedSeverity",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "literal",
+       "expected": [
+        "critical",
+        "high",
+        "medium",
+        "low",
+        "info"
+       ]
+      }
+     }
+    },
+    {
+     "name": "normalized_priority",
+     "alias": "normalizedPriority",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "literal",
+       "expected": [
+        "critical",
+        "high",
+        "medium",
+        "low"
+       ]
+      }
+     }
+    },
+    {
+     "name": "relationship_provenance",
+     "alias": "relationshipProvenance",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 255
+      }
+     }
+    },
+    {
+     "name": "relationship_confidence",
+     "alias": "relationshipConfidence",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "float",
+       "ge": 0,
+       "le": 1
+      }
+     }
+    },
+    {
+     "name": "incident_external_id",
+     "alias": "incidentExternalId",
+     "has_default": false,
+     "schema": {
+      "type": "str",
+      "min_length": 1,
+      "max_length": 512
+     }
+    },
+    {
+     "name": "user_external_id",
+     "alias": "userExternalId",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 512
+      }
+     }
+    },
+    {
+     "name": "responder_name",
+     "alias": "responderName",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 512
+      }
+     }
+    },
+    {
+     "name": "role",
+     "alias": null,
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 255
+      }
+     }
+    },
+    {
+     "name": "responder_assignment_id",
+     "alias": "responderAssignmentId",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 512
+      }
+     }
+    },
+    {
+     "name": "requested_at",
+     "alias": "requestedAt",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "datetime"
+      }
+     }
+    },
+    {
+     "name": "assigned_at",
+     "alias": "assignedAt",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "datetime"
+      }
+     }
+    },
+    {
+     "name": "acknowledged_at",
+     "alias": "acknowledgedAt",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "datetime"
+      }
+     }
+    },
+    {
+     "name": "completed_at",
+     "alias": "completedAt",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "datetime"
+      }
+     }
+    }
+   ]
+  },
+  "escalation_policy.v1": {
+   "extra": "forbid",
+   "populate_by_name": true,
+   "fields": [
+    {
+     "name": "external_id",
+     "alias": "externalId",
+     "has_default": false,
+     "schema": {
+      "type": "str",
+      "min_length": 1,
+      "max_length": 512
+     }
+    },
+    {
+     "name": "source_version_at",
+     "alias": "sourceVersionAt",
+     "has_default": false,
+     "schema": {
+      "type": "datetime"
+     }
+    },
+    {
+     "name": "source_url",
+     "alias": "sourceUrl",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 2048
+      }
+     }
+    },
+    {
+     "name": "source_event_at",
+     "alias": "sourceEventAt",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "datetime"
+      }
+     }
+    },
+    {
+     "name": "source_event_id",
+     "alias": "sourceEventId",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 512
+      }
+     }
+    },
+    {
+     "name": "raw_status",
+     "alias": "rawStatus",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 255
+      }
+     }
+    },
+    {
+     "name": "raw_severity",
+     "alias": "rawSeverity",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 255
+      }
+     }
+    },
+    {
+     "name": "raw_priority",
+     "alias": "rawPriority",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 255
+      }
+     }
+    },
+    {
+     "name": "normalized_status",
+     "alias": "normalizedStatus",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "literal",
+       "expected": [
+        "active",
+        "open",
+        "acknowledged",
+        "resolved",
+        "closed",
+        "suppressed"
+       ]
+      }
+     }
+    },
+    {
+     "name": "normalized_severity",
+     "alias": "normalizedSeverity",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "literal",
+       "expected": [
+        "critical",
+        "high",
+        "medium",
+        "low",
+        "info"
+       ]
+      }
+     }
+    },
+    {
+     "name": "normalized_priority",
+     "alias": "normalizedPriority",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "literal",
+       "expected": [
+        "critical",
+        "high",
+        "medium",
+        "low"
+       ]
+      }
+     }
+    },
+    {
+     "name": "relationship_provenance",
+     "alias": "relationshipProvenance",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 255
+      }
+     }
+    },
+    {
+     "name": "relationship_confidence",
+     "alias": "relationshipConfidence",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "float",
+       "ge": 0,
+       "le": 1
+      }
+     }
+    },
+    {
+     "name": "name",
+     "alias": null,
+     "has_default": false,
+     "schema": {
+      "type": "str",
+      "min_length": 1,
+      "max_length": 512
+     }
+    },
+    {
+     "name": "description",
+     "alias": null,
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 20000
+      }
+     }
+    },
+    {
+     "name": "is_deleted",
+     "alias": "isDeleted",
+     "has_default": true,
+     "schema": {
+      "type": "bool"
+     }
+    },
+    {
+     "name": "deleted_at",
+     "alias": "deletedAt",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "datetime"
+      }
+     }
+    }
+   ]
+  },
+  "on_call_schedule.v1": {
+   "extra": "forbid",
+   "populate_by_name": true,
+   "fields": [
+    {
+     "name": "external_id",
+     "alias": "externalId",
+     "has_default": false,
+     "schema": {
+      "type": "str",
+      "min_length": 1,
+      "max_length": 512
+     }
+    },
+    {
+     "name": "source_version_at",
+     "alias": "sourceVersionAt",
+     "has_default": false,
+     "schema": {
+      "type": "datetime"
+     }
+    },
+    {
+     "name": "source_url",
+     "alias": "sourceUrl",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 2048
+      }
+     }
+    },
+    {
+     "name": "source_event_at",
+     "alias": "sourceEventAt",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "datetime"
+      }
+     }
+    },
+    {
+     "name": "source_event_id",
+     "alias": "sourceEventId",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 512
+      }
+     }
+    },
+    {
+     "name": "raw_status",
+     "alias": "rawStatus",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 255
+      }
+     }
+    },
+    {
+     "name": "raw_severity",
+     "alias": "rawSeverity",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 255
+      }
+     }
+    },
+    {
+     "name": "raw_priority",
+     "alias": "rawPriority",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 255
+      }
+     }
+    },
+    {
+     "name": "normalized_status",
+     "alias": "normalizedStatus",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "literal",
+       "expected": [
+        "active",
+        "open",
+        "acknowledged",
+        "resolved",
+        "closed",
+        "suppressed"
+       ]
+      }
+     }
+    },
+    {
+     "name": "normalized_severity",
+     "alias": "normalizedSeverity",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "literal",
+       "expected": [
+        "critical",
+        "high",
+        "medium",
+        "low",
+        "info"
+       ]
+      }
+     }
+    },
+    {
+     "name": "normalized_priority",
+     "alias": "normalizedPriority",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "literal",
+       "expected": [
+        "critical",
+        "high",
+        "medium",
+        "low"
+       ]
+      }
+     }
+    },
+    {
+     "name": "relationship_provenance",
+     "alias": "relationshipProvenance",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 255
+      }
+     }
+    },
+    {
+     "name": "relationship_confidence",
+     "alias": "relationshipConfidence",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "float",
+       "ge": 0,
+       "le": 1
+      }
+     }
+    },
+    {
+     "name": "name",
+     "alias": null,
+     "has_default": false,
+     "schema": {
+      "type": "str",
+      "min_length": 1,
+      "max_length": 512
+     }
+    },
+    {
+     "name": "description",
+     "alias": null,
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 20000
+      }
+     }
+    },
+    {
+     "name": "is_deleted",
+     "alias": "isDeleted",
+     "has_default": true,
+     "schema": {
+      "type": "bool"
+     }
+    },
+    {
+     "name": "deleted_at",
+     "alias": "deletedAt",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "datetime"
+      }
+     }
+    },
+    {
+     "name": "timezone",
+     "alias": null,
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 255
+      }
+     }
+    }
+   ]
+  },
+  "on_call_assignment.v1": {
+   "extra": "forbid",
+   "populate_by_name": true,
+   "fields": [
+    {
+     "name": "external_id",
+     "alias": "externalId",
+     "has_default": false,
+     "schema": {
+      "type": "str",
+      "min_length": 1,
+      "max_length": 512
+     }
+    },
+    {
+     "name": "source_version_at",
+     "alias": "sourceVersionAt",
+     "has_default": false,
+     "schema": {
+      "type": "datetime"
+     }
+    },
+    {
+     "name": "source_url",
+     "alias": "sourceUrl",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 2048
+      }
+     }
+    },
+    {
+     "name": "source_event_at",
+     "alias": "sourceEventAt",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "datetime"
+      }
+     }
+    },
+    {
+     "name": "source_event_id",
+     "alias": "sourceEventId",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 512
+      }
+     }
+    },
+    {
+     "name": "raw_status",
+     "alias": "rawStatus",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 255
+      }
+     }
+    },
+    {
+     "name": "raw_severity",
+     "alias": "rawSeverity",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 255
+      }
+     }
+    },
+    {
+     "name": "raw_priority",
+     "alias": "rawPriority",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 255
+      }
+     }
+    },
+    {
+     "name": "normalized_status",
+     "alias": "normalizedStatus",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "literal",
+       "expected": [
+        "active",
+        "open",
+        "acknowledged",
+        "resolved",
+        "closed",
+        "suppressed"
+       ]
+      }
+     }
+    },
+    {
+     "name": "normalized_severity",
+     "alias": "normalizedSeverity",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "literal",
+       "expected": [
+        "critical",
+        "high",
+        "medium",
+        "low",
+        "info"
+       ]
+      }
+     }
+    },
+    {
+     "name": "normalized_priority",
+     "alias": "normalizedPriority",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "literal",
+       "expected": [
+        "critical",
+        "high",
+        "medium",
+        "low"
+       ]
+      }
+     }
+    },
+    {
+     "name": "relationship_provenance",
+     "alias": "relationshipProvenance",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 255
+      }
+     }
+    },
+    {
+     "name": "relationship_confidence",
+     "alias": "relationshipConfidence",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "float",
+       "ge": 0,
+       "le": 1
+      }
+     }
+    },
+    {
+     "name": "schedule_external_id",
+     "alias": "scheduleExternalId",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 512
+      }
+     }
+    },
+    {
+     "name": "user_external_id",
+     "alias": "userExternalId",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 512
+      }
+     }
+    },
+    {
+     "name": "escalation_policy_external_id",
+     "alias": "escalationPolicyExternalId",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 512
+      }
+     }
+    },
+    {
+     "name": "escalation_level",
+     "alias": "escalationLevel",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "int",
+       "ge": 0,
+       "le": 100
+      }
+     }
+    },
+    {
+     "name": "starts_at",
+     "alias": "startsAt",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "datetime"
+      }
+     }
+    },
+    {
+     "name": "ends_at",
+     "alias": "endsAt",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "datetime"
+      }
+     }
+    }
+   ]
+  },
+  "operational_team.v1": {
+   "extra": "forbid",
+   "populate_by_name": true,
+   "fields": [
+    {
+     "name": "external_id",
+     "alias": "externalId",
+     "has_default": false,
+     "schema": {
+      "type": "str",
+      "min_length": 1,
+      "max_length": 512
+     }
+    },
+    {
+     "name": "source_version_at",
+     "alias": "sourceVersionAt",
+     "has_default": false,
+     "schema": {
+      "type": "datetime"
+     }
+    },
+    {
+     "name": "source_url",
+     "alias": "sourceUrl",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 2048
+      }
+     }
+    },
+    {
+     "name": "source_event_at",
+     "alias": "sourceEventAt",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "datetime"
+      }
+     }
+    },
+    {
+     "name": "source_event_id",
+     "alias": "sourceEventId",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 512
+      }
+     }
+    },
+    {
+     "name": "raw_status",
+     "alias": "rawStatus",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 255
+      }
+     }
+    },
+    {
+     "name": "raw_severity",
+     "alias": "rawSeverity",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 255
+      }
+     }
+    },
+    {
+     "name": "raw_priority",
+     "alias": "rawPriority",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 255
+      }
+     }
+    },
+    {
+     "name": "normalized_status",
+     "alias": "normalizedStatus",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "literal",
+       "expected": [
+        "active",
+        "open",
+        "acknowledged",
+        "resolved",
+        "closed",
+        "suppressed"
+       ]
+      }
+     }
+    },
+    {
+     "name": "normalized_severity",
+     "alias": "normalizedSeverity",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "literal",
+       "expected": [
+        "critical",
+        "high",
+        "medium",
+        "low",
+        "info"
+       ]
+      }
+     }
+    },
+    {
+     "name": "normalized_priority",
+     "alias": "normalizedPriority",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "literal",
+       "expected": [
+        "critical",
+        "high",
+        "medium",
+        "low"
+       ]
+      }
+     }
+    },
+    {
+     "name": "relationship_provenance",
+     "alias": "relationshipProvenance",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 255
+      }
+     }
+    },
+    {
+     "name": "relationship_confidence",
+     "alias": "relationshipConfidence",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "float",
+       "ge": 0,
+       "le": 1
+      }
+     }
+    },
+    {
+     "name": "name",
+     "alias": null,
+     "has_default": false,
+     "schema": {
+      "type": "str",
+      "min_length": 1,
+      "max_length": 512
+     }
+    },
+    {
+     "name": "description",
+     "alias": null,
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 20000
+      }
+     }
+    },
+    {
+     "name": "is_deleted",
+     "alias": "isDeleted",
+     "has_default": true,
+     "schema": {
+      "type": "bool"
+     }
+    },
+    {
+     "name": "deleted_at",
+     "alias": "deletedAt",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "datetime"
+      }
+     }
+    }
+   ]
+  },
+  "operational_user.v1": {
+   "extra": "forbid",
+   "populate_by_name": true,
+   "fields": [
+    {
+     "name": "external_id",
+     "alias": "externalId",
+     "has_default": false,
+     "schema": {
+      "type": "str",
+      "min_length": 1,
+      "max_length": 512
+     }
+    },
+    {
+     "name": "source_version_at",
+     "alias": "sourceVersionAt",
+     "has_default": false,
+     "schema": {
+      "type": "datetime"
+     }
+    },
+    {
+     "name": "source_url",
+     "alias": "sourceUrl",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 2048
+      }
+     }
+    },
+    {
+     "name": "source_event_at",
+     "alias": "sourceEventAt",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "datetime"
+      }
+     }
+    },
+    {
+     "name": "source_event_id",
+     "alias": "sourceEventId",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 512
+      }
+     }
+    },
+    {
+     "name": "raw_status",
+     "alias": "rawStatus",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 255
+      }
+     }
+    },
+    {
+     "name": "raw_severity",
+     "alias": "rawSeverity",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 255
+      }
+     }
+    },
+    {
+     "name": "raw_priority",
+     "alias": "rawPriority",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 255
+      }
+     }
+    },
+    {
+     "name": "normalized_status",
+     "alias": "normalizedStatus",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "literal",
+       "expected": [
+        "active",
+        "open",
+        "acknowledged",
+        "resolved",
+        "closed",
+        "suppressed"
+       ]
+      }
+     }
+    },
+    {
+     "name": "normalized_severity",
+     "alias": "normalizedSeverity",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "literal",
+       "expected": [
+        "critical",
+        "high",
+        "medium",
+        "low",
+        "info"
+       ]
+      }
+     }
+    },
+    {
+     "name": "normalized_priority",
+     "alias": "normalizedPriority",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "literal",
+       "expected": [
+        "critical",
+        "high",
+        "medium",
+        "low"
+       ]
+      }
+     }
+    },
+    {
+     "name": "relationship_provenance",
+     "alias": "relationshipProvenance",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 255
+      }
+     }
+    },
+    {
+     "name": "relationship_confidence",
+     "alias": "relationshipConfidence",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "float",
+       "ge": 0,
+       "le": 1
+      }
+     }
+    },
+    {
+     "name": "display_name",
+     "alias": "displayName",
+     "has_default": false,
+     "schema": {
+      "type": "str",
+      "min_length": 1,
+      "max_length": 512
+     }
+    },
+    {
+     "name": "email",
+     "alias": null,
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 512
+      }
+     }
+    },
+    {
+     "name": "is_deleted",
+     "alias": "isDeleted",
+     "has_default": true,
+     "schema": {
+      "type": "bool"
+     }
+    },
+    {
+     "name": "deleted_at",
+     "alias": "deletedAt",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "datetime"
+      }
+     }
+    }
+   ]
+  },
+  "service_repository_mapping.v1": {
+   "extra": "forbid",
+   "populate_by_name": true,
+   "fields": [
+    {
+     "name": "external_id",
+     "alias": "externalId",
+     "has_default": false,
+     "schema": {
+      "type": "str",
+      "min_length": 1,
+      "max_length": 512
+     }
+    },
+    {
+     "name": "source_version_at",
+     "alias": "sourceVersionAt",
+     "has_default": false,
+     "schema": {
+      "type": "datetime"
+     }
+    },
+    {
+     "name": "source_url",
+     "alias": "sourceUrl",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 2048
+      }
+     }
+    },
+    {
+     "name": "source_event_at",
+     "alias": "sourceEventAt",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "datetime"
+      }
+     }
+    },
+    {
+     "name": "source_event_id",
+     "alias": "sourceEventId",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 512
+      }
+     }
+    },
+    {
+     "name": "raw_status",
+     "alias": "rawStatus",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 255
+      }
+     }
+    },
+    {
+     "name": "raw_severity",
+     "alias": "rawSeverity",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 255
+      }
+     }
+    },
+    {
+     "name": "raw_priority",
+     "alias": "rawPriority",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 255
+      }
+     }
+    },
+    {
+     "name": "normalized_status",
+     "alias": "normalizedStatus",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "literal",
+       "expected": [
+        "active",
+        "open",
+        "acknowledged",
+        "resolved",
+        "closed",
+        "suppressed"
+       ]
+      }
+     }
+    },
+    {
+     "name": "normalized_severity",
+     "alias": "normalizedSeverity",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "literal",
+       "expected": [
+        "critical",
+        "high",
+        "medium",
+        "low",
+        "info"
+       ]
+      }
+     }
+    },
+    {
+     "name": "normalized_priority",
+     "alias": "normalizedPriority",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "literal",
+       "expected": [
+        "critical",
+        "high",
+        "medium",
+        "low"
+       ]
+      }
+     }
+    },
+    {
+     "name": "relationship_provenance",
+     "alias": "relationshipProvenance",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 255
+      }
+     }
+    },
+    {
+     "name": "relationship_confidence",
+     "alias": "relationshipConfidence",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "float",
+       "ge": 0,
+       "le": 1
+      }
+     }
+    },
+    {
+     "name": "service_external_id",
+     "alias": "serviceExternalId",
+     "has_default": false,
+     "schema": {
+      "type": "str",
+      "min_length": 1,
+      "max_length": 512
+     }
+    },
+    {
+     "name": "repo_full_name",
+     "alias": "repoFullName",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 1024
+      }
+     }
+    },
+    {
+     "name": "repo_provider",
+     "alias": "repoProvider",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "literal",
+       "expected": [
+        "github",
+        "gitlab",
+        "custom"
+       ]
+      }
+     }
+    },
+    {
+     "name": "mapping_kind",
+     "alias": "mappingKind",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 255
+      }
+     }
+    },
+    {
+     "name": "rule_id",
+     "alias": "ruleId",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "str",
+       "max_length": 512
+      }
+     }
+    },
+    {
+     "name": "valid_from",
+     "alias": "validFrom",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "datetime"
+      }
+     }
+    },
+    {
+     "name": "valid_to",
+     "alias": "validTo",
+     "has_default": true,
+     "schema": {
+      "type": "nullable",
+      "schema": {
+       "type": "datetime"
+      }
+     }
+    },
+    {
+     "name": "is_active",
+     "alias": "isActive",
+     "has_default": true,
+     "schema": {
+      "type": "bool"
+     }
+    }
+   ]
+  }
+ },
+ "operational": [
+  "escalation_policy.v1",
+  "incident_note.v1",
+  "incident_responder.v1",
+  "incident_timeline_event.v1",
+  "on_call_assignment.v1",
+  "on_call_schedule.v1",
+  "operational_alert.v1",
+  "operational_incident.v1",
+  "operational_service.v1",
+  "operational_team.v1",
+  "operational_user.v1",
+  "service_repository_mapping.v1"
+ ]
+}

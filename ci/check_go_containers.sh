@@ -130,6 +130,19 @@ build_target() {
     --tag "${tag}" \
     "$@" \
     "${ROOT}"
+  # A leg that selects a platform (the CI arm64 leg sets
+  # DOCKER_DEFAULT_PLATFORM) must have built THAT architecture: an image of
+  # the host's architecture would pass every check below without the
+  # emulated run the leg exists for.
+  if [ -n "${DOCKER_DEFAULT_PLATFORM:-}" ]; then
+    local want_arch="${DOCKER_DEFAULT_PLATFORM#*/}"
+    want_arch="${want_arch%%/*}"
+    local built_arch
+    built_arch="$(docker image inspect --format '{{.Architecture}}' "${tag}")"
+    printf 'image %s architecture: %s\n' "${tag}" "${built_arch}"
+    [ "${built_arch}" = "${want_arch}" ] \
+      || die "${tag} is ${built_arch}, but DOCKER_DEFAULT_PLATFORM=${DOCKER_DEFAULT_PLATFORM}"
+  fi
 }
 
 wait_for_status() {

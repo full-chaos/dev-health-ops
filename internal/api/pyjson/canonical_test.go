@@ -88,6 +88,33 @@ func TestMarshalCanonicalPreservesJSONNumberDigitTextExactly(t *testing.T) {
 	}
 }
 
+// TestMarshalCanonicalRendersFloatsBothInputShapes proves the Float and
+// float64 cases render through writer.writeFloat (float.__repr__ shortest
+// round-tripping digits), the same rendering Marshal/Dumps use -- a rebase
+// once silently broke this to an undefined bare writeFloat call that only a
+// build failure caught, because nothing here fed a real float value through.
+func TestMarshalCanonicalRendersFloatsBothInputShapes(t *testing.T) {
+	got, err := MarshalCanonical(map[string]any{"a": float64(1.5), "b": float64(1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `{"a":1.5,"b":1.0}`; string(got) != want {
+		t.Fatalf("stdlib float64 shape: got %s, want %s", got, want)
+	}
+
+	value, err := DecodeString(`{"a":1.5,"b":1.0}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err = MarshalCanonical(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `{"a":1.5,"b":1.0}`; string(got) != want {
+		t.Fatalf("pyjson.Float shape: got %s, want %s", got, want)
+	}
+}
+
 func TestMarshalCanonicalScalarsAndEmptyContainers(t *testing.T) {
 	cases := []struct {
 		name, json, want string

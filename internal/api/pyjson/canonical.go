@@ -34,6 +34,11 @@ func MarshalCanonical(value any) ([]byte, error) {
 	return buffer.Bytes(), nil
 }
 
+// canonicalWriter reuses writer.writeFloat's float.__repr__ rendering with
+// ensure_ascii=True -- MarshalCanonical's own doc comment on why -- via the
+// shared writer type instead of a second copy of float formatting.
+var canonicalWriter = writer{ascii: true}
+
 func writeCanonical(buffer *bytes.Buffer, value any) error {
 	switch typed := value.(type) {
 	case nil:
@@ -78,9 +83,9 @@ func writeCanonical(buffer *bytes.Buffer, value any) error {
 		// canonical spellings only.
 		buffer.WriteString(string(typed))
 	case Float:
-		return writeFloat(buffer, float64(typed))
+		return canonicalWriter.writeFloat(buffer, float64(typed))
 	case float64:
-		return writeFloat(buffer, typed)
+		return canonicalWriter.writeFloat(buffer, typed)
 	case *Object:
 		keys := append([]string(nil), typed.Keys()...)
 		sort.Strings(keys)

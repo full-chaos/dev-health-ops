@@ -126,6 +126,13 @@ func TestNewServerRequiresAnAddress(t *testing.T) {
 	}
 }
 
+// TestConfigureRegistersTheListenerReadinessCheck exercises `dho api` with
+// no APIDatabaseURI/ValkeyURI configured (the pre-bootstrap shape the
+// w1-route-lanes brief documents as legal: "PRs can merge with goApi off").
+// The process still starts -- /buildinfo and /healthz work -- but overall
+// readiness stays false forever, on the api_database/api_valkey checks
+// buildDeps registers in deps.go, not just the listener check this test
+// predates.
 func TestConfigureRegistersTheListenerReadinessCheck(t *testing.T) {
 	registry := health.NewRegistry(time.Second)
 	components, err := configure(context.Background(), config.Config{APIAddress: "127.0.0.1:0"}, registry, quietLogger())
@@ -135,8 +142,8 @@ func TestConfigureRegistersTheListenerReadinessCheck(t *testing.T) {
 	if len(components) != 1 {
 		t.Fatalf("%d components", len(components))
 	}
-	if registry.RequiredCount() != 1 {
-		t.Fatalf("%d required checks, want the listener check", registry.RequiredCount())
+	if registry.RequiredCount() != 3 {
+		t.Fatalf("%d required checks, want listener + api_database + api_valkey", registry.RequiredCount())
 	}
 	if ready := registry.CheckRequired(context.Background()); ready.Ready {
 		t.Fatal("ready before the listener is bound")
@@ -146,8 +153,10 @@ func TestConfigureRegistersTheListenerReadinessCheck(t *testing.T) {
 		t.Fatalf("start: %v", err)
 	}
 	defer func() { _ = server.Shutdown(context.Background()) }()
-	if ready := registry.CheckRequired(context.Background()); !ready.Ready {
-		t.Fatalf("not ready after bind: %+v", ready)
+	// Neither dependency is configured, so overall readiness stays false
+	// even after the listener binds -- fail-closed, not a false positive.
+	if ready := registry.CheckRequired(context.Background()); ready.Ready {
+		t.Fatalf("ready with no database/valkey configured: %+v", ready)
 	}
 	if server.Name() != "api-http" {
 		t.Fatalf("component name %q", server.Name())
@@ -169,17 +178,27 @@ func TestConfigureRegistersTheListenerReadinessCheck(t *testing.T) {
 	}
 }
 
-// TestRoutesMountsTheAcrAreaEvenWithoutAStore proves the acr area
-// (CHAOS-6244) is always on the mux, dormancy-lifted for good: with store
-// nil (APIDatabaseURI not configured) the health path still answers and the
-// entitlement path answers 503 rather than being absent -- see acr.Deps's
-// doc comment for why omitting the route entirely would be the wrong
-// failure mode (a silent 404 reads as "no such route", not "not ready").
-func TestRoutesMountsTheAcrAreaEvenWithoutAStore(t *testing.T) {
-	routes := Routes(nil, nil)
+// TestRoutesMountsEveryArea proves both business-route areas (acr,
+// CHAOS-6244; external-ingest, CHAOS-6246) are always on the mux,
+// regardless of whether Deps is live: with a nil Pool/Valkey the acr health
+// path still answers and its entitlement path answers 503 rather than
+// being absent (see acr.Deps's doc comment for why omitting the route
+// entirely would be the wrong failure mode -- a silent 404 reads as "no
+// such route", not "not ready"), and external-ingest's routes register
+// unconditionally too (a handler that needs a live dependency answers
+// CodeInternal at request time instead).
+func TestRoutesMountsEveryArea(t *testing.T) {
+	routes := Routes(Deps{}, nil)
 	want := map[string]bool{
-		"GET /api/v1/internal/acr/health":                false,
-		"GET /api/v1/internal/acr/entitlements/{org_id}": false,
+		"GET /api/v1/internal/acr/health":                      false,
+		"GET /api/v1/internal/acr/entitlements/{org_id}":       false,
+		"GET /api/v1/external-ingest/schemas":                  false,
+		"GET /api/v1/external-ingest/schemas/{schema_version}": false,
+		"GET /api/v1/external-ingest/availability":             false,
+		"POST /api/v1/external-ingest/validate":                false,
+		"POST /api/v1/external-ingest/batches":                 false,
+		"GET /api/v1/external-ingest/batches":                  false,
+		"GET /api/v1/external-ingest/batches/{ingestion_id}":   false,
 	}
 	if len(routes) != len(want) {
 		t.Fatalf("route count = %d, want %d: %+v", len(routes), len(want), routes)

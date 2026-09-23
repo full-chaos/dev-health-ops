@@ -68,7 +68,7 @@ func serverFor(t *testing.T, origins *string) http.Handler {
 	if err != nil {
 		t.Fatalf("config.Load: %v", err)
 	}
-	server, err := NewServer(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), Routes(nil, nil))
+	server, err := NewServer(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), Routes(Deps{}, nil))
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
 	}

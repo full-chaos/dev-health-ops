@@ -89,6 +89,71 @@ func acrEntitlementTables(t *testing.T, ctx context.Context, admin *pgxpool.Pool
 	}
 }
 
+// externalIngestTables creates and grants the 7 tables CHAOS-6246's
+// apiPosture() addition declares (external_ingest_tokens/_sources/_batches/
+// _batch_payloads/_rejections, integration_sources, integrations -- see
+// api_authorization.go), with write grants matching exactly what the
+// external-ingest route's own queries issue: UPDATE on tokens (bumping
+// last_used_at/last_used_ip), INSERT+UPDATE on batches and batch_payloads
+// (the CC22 accept sequence), SELECT-only on the rest. apiPosture()'s
+// manifest now spans both this function's tables and
+// acrEntitlementTables'; every caller below that asserts CheckAPIAuthorization
+// succeeds calls both.
+func externalIngestTables(t *testing.T, ctx context.Context, admin *pgxpool.Pool, role string) {
+	t.Helper()
+	for _, statement := range []string{
+		`CREATE TABLE IF NOT EXISTS external_ingest_tokens (
+  id uuid PRIMARY KEY, org_id text NOT NULL, source_id uuid, token_hash text UNIQUE NOT NULL,
+  scopes jsonb NOT NULL, expires_at timestamptz, revoked_at timestamptz,
+  last_used_at timestamptz, last_used_ip text)`,
+		`CREATE TABLE IF NOT EXISTS external_ingest_sources (
+  id uuid PRIMARY KEY, org_id text NOT NULL, system text NOT NULL, instance text NOT NULL,
+  entity_family text NOT NULL DEFAULT 'legacy', mode text NOT NULL DEFAULT 'disabled',
+  enabled boolean NOT NULL DEFAULT true)`,
+		`CREATE TABLE IF NOT EXISTS external_ingest_batches (
+  ingestion_id uuid PRIMARY KEY, org_id text NOT NULL, idempotency_key text NOT NULL,
+  payload_hash text NOT NULL, source_system text NOT NULL, source_instance text NOT NULL,
+  entity_family text NOT NULL DEFAULT 'legacy', producer text, producer_version text,
+  schema_version text NOT NULL, window_started_at timestamptz, window_ended_at timestamptz,
+  status text NOT NULL DEFAULT 'accepted', attempts integer NOT NULL DEFAULT 1,
+  items_received integer NOT NULL DEFAULT 0, items_accepted integer NOT NULL DEFAULT 0,
+  items_rejected integer NOT NULL DEFAULT 0, record_counts jsonb, error_summary jsonb,
+  created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL, completed_at timestamptz,
+  recompute_status text NOT NULL DEFAULT 'not_applicable', recompute_scope jsonb,
+  recompute_dispatched_at timestamptz, recompute_completed_at timestamptz, recompute_error text)`,
+		`CREATE TABLE IF NOT EXISTS external_ingest_batch_payloads (
+  ingestion_id uuid PRIMARY KEY, org_id text NOT NULL, schema_version text NOT NULL,
+  payload_json bytea NOT NULL, byte_size integer NOT NULL, created_at timestamptz NOT NULL)`,
+		`CREATE TABLE IF NOT EXISTS external_ingest_rejections (
+  id uuid PRIMARY KEY, org_id text NOT NULL, ingestion_id uuid NOT NULL, record_index integer NOT NULL,
+  record_kind text NOT NULL, external_id text, code text NOT NULL, message text NOT NULL,
+  path text, created_at timestamptz NOT NULL)`,
+		`CREATE TABLE IF NOT EXISTS integrations (id uuid PRIMARY KEY, org_id text NOT NULL, provider text NOT NULL, is_active boolean NOT NULL DEFAULT true)`,
+		`CREATE TABLE IF NOT EXISTS integration_sources (
+  id uuid PRIMARY KEY, org_id text NOT NULL, integration_id uuid NOT NULL,
+  provider text NOT NULL, external_id text NOT NULL, name text NOT NULL, full_name text NOT NULL,
+  metadata jsonb NOT NULL DEFAULT '{}', is_enabled boolean NOT NULL DEFAULT true)`,
+	} {
+		if _, err := admin.Exec(ctx, statement); err != nil {
+			t.Fatalf("bootstrap %s: %v", statement, err)
+		}
+	}
+	grants := map[string]string{
+		"external_ingest_tokens":         "SELECT, UPDATE",
+		"external_ingest_sources":        "SELECT",
+		"external_ingest_batches":        "SELECT, INSERT, UPDATE",
+		"external_ingest_batch_payloads": "SELECT, INSERT, UPDATE",
+		"external_ingest_rejections":     "SELECT",
+		"integrations":                   "SELECT",
+		"integration_sources":            "SELECT",
+	}
+	for table, privileges := range grants {
+		if _, err := admin.Exec(ctx, "GRANT "+privileges+" ON "+table+" TO "+role); err != nil {
+			t.Fatalf("grant %s on %s: %v", privileges, table, err)
+		}
+	}
+}
+
 // TestCheckAPIAuthorizationAcceptsTheBaselineBootstrap proves a role
 // provisioned exactly the way provision_river_roles.sql's optional api_role
 // block provisions it -- CONNECT, USAGE on public -- PLUS the four
@@ -125,6 +190,7 @@ func TestCheckAPIAuthorizationAcceptsTheBaselineBootstrap(t *testing.T) {
 
 	bootstrapAPIRole(t, ctx, admin, dbName, role)
 	acrEntitlementTables(t, ctx, admin, role)
+	externalIngestTables(t, ctx, admin, role)
 
 	api := connectAs(t, ctx, instance.URI, role, apiAuthorizationPass)
 	if err := CheckAPIAuthorization(ctx, api, role, grantSchema); err != nil {
@@ -213,6 +279,7 @@ func TestCheckAPIAuthorizationRefusesAnExtraPrivilege(t *testing.T) {
 
 	bootstrapAPIRole(t, ctx, admin, dbName, role)
 	acrEntitlementTables(t, ctx, admin, role)
+	externalIngestTables(t, ctx, admin, role)
 	api := connectAs(t, ctx, instance.URI, role, apiAuthorizationPass)
 	if err := CheckAPIAuthorization(ctx, api, role, grantSchema); err != nil {
 		t.Fatalf("baseline-bootstrapped api role failed readiness before the extra grant: %v", err)
@@ -272,6 +339,7 @@ func TestCheckAPIAuthorizationRefusesAMissingBaselinePrivilege(t *testing.T) {
 
 	bootstrapAPIRole(t, ctx, admin, dbName, role)
 	acrEntitlementTables(t, ctx, admin, role)
+	externalIngestTables(t, ctx, admin, role)
 	api := connectAs(t, ctx, instance.URI, role, apiAuthorizationPass)
 	if err := CheckAPIAuthorization(ctx, api, role, grantSchema); err != nil {
 		t.Fatalf("baseline-bootstrapped api role failed readiness before the revoke: %v", err)
@@ -378,6 +446,7 @@ func TestProvisionScriptAPIRoleOptInMatchesTheDeclaredPosture(t *testing.T) {
 	// caused exactly by the missing table grants, nothing else about the
 	// script's output.
 	acrEntitlementTables(t, ctx, admin, role)
+	externalIngestTables(t, ctx, admin, role)
 	if err := CheckAPIAuthorization(ctx, api, role, grantSchema); err != nil {
 		t.Fatalf("provision_river_roles.sql's api_role opt-in failed readiness after the missing grants were added: %v", err)
 	}
@@ -640,6 +709,7 @@ func TestProvisionScriptAPIRoleRefusedWhenPublicHoldsCreate(t *testing.T) {
 		t.Fatal(err)
 	}
 	acrEntitlementTables(t, ctx, admin, role)
+	externalIngestTables(t, ctx, admin, role)
 	if err := CheckAPIAuthorization(ctx, api, role, grantSchema); err != nil {
 		t.Fatalf("api role failed readiness after PUBLIC's CREATE grant was revoked: %v", err)
 	}

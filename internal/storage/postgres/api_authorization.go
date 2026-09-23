@@ -12,16 +12,18 @@ import (
 // must hold (CONNECT, USAGE on the public schema, no CREATE, no ownership,
 // no privilege on any other relation, sequence or function in the public or
 // River schema -- rolePostureQuery's own catch-all predicates, unconditional
-// for every caller of CheckRolePosture). CHAOS-6244 is the first route PR
-// to need anything more; it adds exactly the four tables its own query
-// reads, all SELECT-only (no insert/update/delete: the acr entitlement
-// route is a pure read, and it writes no audit row -- see
-// internal/apiservice/acr's package doc for why the Python credential-audit
-// path is not ported for this internal route). Each route PR that follows adds exactly
-// the grants its own tables need directly to this function's
-// RequiredTables/ColumnScoped/RequiredSequences, in the SAME PR that ships
-// the route, the same discipline domainPosture/coordinatorPosture already
-// follow.
+// for every caller of CheckRolePosture). CHAOS-6244 was the first route PR
+// to need anything more (four SELECT-only tables: the acr entitlement route
+// is a pure read, and it writes no audit row -- see internal/apiservice/acr's
+// package doc for why the Python credential-audit path is not ported for
+// that internal route). CHAOS-6246 (external-ingest) is the first to need
+// writes: accepting a customer push durably records a Postgres status row
+// and the raw payload before it is acknowledged (the CC22 accept sequence),
+// and bumping a used token's last_used_at/last_used_ip is part of the auth
+// path itself. Each route PR adds exactly the grants its own tables need
+// directly to this function's RequiredTables/ColumnScoped/RequiredSequences,
+// in the SAME PR that ships the route, the same discipline
+// domainPosture/coordinatorPosture already follow.
 //
 // Unlike the three River runtime roles, the api role never opens a River
 // pool and is not part of the CHAOS-3033 Option B split -- it is declared
@@ -56,6 +58,31 @@ func apiPosture() RolePosture {
 			{"org_feature_overrides", false, false, false},
 			// License tier + features_override JSON.
 			{"org_licenses", false, false, false},
+			// external-ingest (CHAOS-6246): bearer-token auth resolves the
+			// token row and bumps last_used_at/last_used_ip on every
+			// request that reaches a scope check (auth.go's bumpLastUsed).
+			{"external_ingest_tokens", false, true, false},
+			// The token's bound source, and source-ownership resolution
+			// (ownership.go's resolveEffectiveMode): read-only.
+			{"external_ingest_sources", false, false, false},
+			// The CC22 accept sequence's status row: created on NEW,
+			// updated on RETRY/mark-stream-unavailable, read by
+			// GET /batches* and the idempotency NEW/REPLAY/CONFLICT/RETRY
+			// resolution.
+			{"external_ingest_batches", true, true, false},
+			// The raw batch payload, written (or refreshed) in the SAME
+			// transaction as the status row (payload.go's upsertPayloadTx),
+			// read back only to prove the fail-closed durability
+			// precondition before XADD.
+			{"external_ingest_batch_payloads", true, true, false},
+			// Read-only: GET /batches/{id}'s per-record rejection detail.
+			// This route never writes a rejection row -- that is the
+			// CHAOS-2697 worker's job, over the domain role, not this one.
+			{"external_ingest_rejections", false, false, false},
+			// Managed-sync ownership matching (ownership.go's
+			// findActiveManagedOwner): read-only.
+			{"integration_sources", false, false, false},
+			{"integrations", false, false, false},
 		},
 	}
 }

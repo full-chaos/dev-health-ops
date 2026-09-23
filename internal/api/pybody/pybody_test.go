@@ -130,3 +130,101 @@ func mustDecode(t *testing.T, text string) pyjson.Value {
 	}
 	return value
 }
+
+// TestDefaultedStringMatchesPydantic pins DefaultedString against a
+// pydantic `field: str = "default"` (not `str | None`): absent means
+// "apply the default yourself" (present=false, no error); a present null
+// or wrong-type value is a type error, not a fall-back to the default --
+// the live round finding this pins: `class M(BaseModel): s: str =
+// "local"` on `{"s": null}` raises string_type, it does not set s="local".
+func TestDefaultedStringMatchesPydantic(t *testing.T) {
+	var errs Errors
+	object, ok := errs.Object(Body{Value: mustDecode(t, `{"s":null,"n":5,"e":""}`)})
+	if !ok {
+		t.Fatal("object refused")
+	}
+	if _, present := errs.DefaultedString(object, "absent", 0, 0); present {
+		t.Fatal("absent must report present=false with no error")
+	}
+	errs.DefaultedString(object, "s", 0, 0)
+	errs.DefaultedString(object, "n", 0, 0)
+	if value, present := errs.DefaultedString(object, "e", 0, 0); !present || value != "" {
+		t.Fatalf("explicit empty string must be preserved: value=%q present=%v", value, present)
+	}
+	rendered, _ := pyjson.Marshal(Detail(errs))
+	want := `{"detail":[` +
+		`{"type":"string_type","loc":["body","s"],"msg":"Input should be a valid string","input":null},` +
+		`{"type":"string_type","loc":["body","n"],"msg":"Input should be a valid string","input":5}]}`
+	if string(rendered) != want {
+		t.Fatalf("%s", rendered)
+	}
+}
+
+// TestDefaultedBoolMatchesPydantic is DefaultedString's bool counterpart,
+// same absent/null/wrong-type shape, for a `field: bool = False` schema.
+func TestDefaultedBoolMatchesPydantic(t *testing.T) {
+	var errs Errors
+	object, ok := errs.Object(Body{Value: mustDecode(t, `{"b":null,"w":[],"t":true}`)})
+	if !ok {
+		t.Fatal("object refused")
+	}
+	if _, present := errs.DefaultedBool(object, "absent"); present {
+		t.Fatal("absent must report present=false with no error")
+	}
+	errs.DefaultedBool(object, "b")
+	errs.DefaultedBool(object, "w")
+	if value, present := errs.DefaultedBool(object, "t"); !present || !value {
+		t.Fatalf("true must be preserved: value=%v present=%v", value, present)
+	}
+	rendered, _ := pyjson.Marshal(Detail(errs))
+	want := `{"detail":[` +
+		`{"type":"bool_type","loc":["body","b"],"msg":"Input should be a valid boolean","input":null},` +
+		`{"type":"bool_type","loc":["body","w"],"msg":"Input should be a valid boolean","input":[]}]}`
+	if string(rendered) != want {
+		t.Fatalf("%s", rendered)
+	}
+}
+
+// TestOptionalBoolLaxCoercionMatchesPydantic pins the live round finding:
+// pydantic's bool validator is LAX by default, coercing more than native
+// JSON booleans -- the int/float 0/1, and a fixed case-insensitive string
+// vocabulary. A stricter Go-only `raw.(bool)` assertion answered 422 where
+// Python answers 200 for these. Verified live against the installed
+// pydantic (2.13.4); see pydanticBool's own doc comment for the full rule.
+func TestOptionalBoolLaxCoercionMatchesPydantic(t *testing.T) {
+	accept := []struct {
+		json string
+		want bool
+	}{
+		{`true`, true}, {`false`, false},
+		{`1`, true}, {`0`, false},
+		{`1.0`, true}, {`0.0`, false},
+		{`"yes"`, true}, {`"no"`, false},
+		{`"Y"`, true}, {`"N"`, false},
+		{`"on"`, true}, {`"off"`, false},
+		{`"TRUE"`, true}, {`"False"`, false},
+		{`"1"`, true}, {`"0"`, false},
+	}
+	for _, c := range accept {
+		var errs Errors
+		object, ok := errs.Object(Body{Value: mustDecode(t, `{"b":`+c.json+`}`)})
+		if !ok {
+			t.Fatalf("%s: object refused", c.json)
+		}
+		value, present := errs.OptionalBool(object, "b")
+		if !present || value != c.want || len(errs) != 0 {
+			t.Errorf("%s: value=%v present=%v errs=%v, want %v with no error", c.json, value, present, errs, c.want)
+		}
+	}
+	reject := []string{`2`, `-1`, `0.5`, `"yep"`, `""`, `[]`, `{}`, `" true "`}
+	for _, json := range reject {
+		var errs Errors
+		object, ok := errs.Object(Body{Value: mustDecode(t, `{"b":`+json+`}`)})
+		if !ok {
+			t.Fatalf("%s: object refused", json)
+		}
+		if _, present := errs.OptionalBool(object, "b"); present || len(errs) != 1 || errs[0].Type != "bool_type" {
+			t.Errorf("%s: present=%v errs=%v, want one bool_type error", json, present, errs)
+		}
+	}
+}

@@ -185,9 +185,26 @@ func TestAPIRoleEndToEnd(t *testing.T) {
 	if err := postgres.CheckAPIAuthorization(ctx, api, roles["api"], "river"); err != nil {
 		t.Fatalf("api role not ready after the migration: %v", err)
 	}
+	// The api role's users UPDATE privilege tracks postgres.APIPosture()'s
+	// own declared manifest, not a value pinned here: route areas widen
+	// (never narrow) users' grants in the manifest as they land (CHAOS-6304
+	// admin user routes was the first to need UPDATE), and this assertion
+	// holds "exactly the posture", same as the readiness check above, by
+	// reading the SAME manifest rather than re-asserting an independent
+	// guess that goes stale the next time a route area's own grants change.
+	var wantUpdate bool
+	for _, table := range postgres.APIPosture().RequiredTables {
+		if table.TableName == "users" {
+			wantUpdate = table.AllowUpdate
+			break
+		}
+	}
 	var writable bool
-	if err := api.QueryRow(ctx, `SELECT has_table_privilege(current_user, 'public.users', 'UPDATE')`).Scan(&writable); err != nil || writable {
-		t.Fatalf("api role can update users: %v %v", writable, err)
+	if err := api.QueryRow(ctx, `SELECT has_table_privilege(current_user, 'public.users', 'UPDATE')`).Scan(&writable); err != nil {
+		t.Fatalf("check users UPDATE privilege: %v", err)
+	}
+	if writable != wantUpdate {
+		t.Fatalf("api role UPDATE on users = %v, want %v (per postgres.APIPosture())", writable, wantUpdate)
 	}
 
 	// 4. Seed and read through PGStore as the api role.

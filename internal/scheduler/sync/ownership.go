@@ -75,7 +75,7 @@ func reviewedGoMutationOwnershipPolicy() OwnershipPolicy {
 // Obtaining this policy is necessary but not sufficient for mutation to
 // actually happen in production. allowsMutation() still requires
 // {owner: go, mode: mutation} on the specific Repository that runs the
-// write, and cmd/dev-health-scheduler's composition root additionally gates
+// write, and internal/schedulerservice's composition root additionally gates
 // on its own checkedInSchedulerActivation.goOwnsMarkers flag before it will
 // even open a database pool. That gate exists precisely so that this
 // function's existence does not, by itself, put a marker mutation on the

@@ -26,7 +26,7 @@ import (
 // relative to the process's own working directory (the dho api image's
 // WORKDIR /app, docker/go-worker.Dockerfile's dho target). A var, not a
 // const, so a test two directories below the repo root can override it to
-// "../../contracts/jobs/v1" -- cmd/dev-health-scheduler's own
+// "../../contracts/jobs/v1" -- internal/schedulerservice's own
 // testContractRoot convention, restored after the test.
 var contractRoot = "contracts/jobs/v1"
 

@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/full-chaos/dev-health-ops/internal/reconcilerservice"
+	"github.com/full-chaos/dev-health-ops/internal/schedulerservice"
 	"github.com/full-chaos/dev-health-ops/internal/streamrunnerservice"
 )
 
@@ -19,7 +21,7 @@ import (
 func TestStreamGroupsRequireTheStreamRunnerVerb(t *testing.T) {
 	for name, extra := range map[string]string{
 		"missing subcommand": "",
-		"wrong subcommand":   "        subcommand: api\n",
+		"wrong subcommand":   "        subcommand: reconciler\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			output, err := renderWithStreamGroup(t, extra)
@@ -115,6 +117,54 @@ func TestStreamGroupsRefuseTheRetiredStreamRunnerImage(t *testing.T) {
 		t.Fatal("a stream group on the retired dev-health-go-stream-runner image rendered")
 	}
 	if !strings.Contains(output, "retired dev-health-go-stream-runner image") {
+		t.Fatalf("render failed for another reason: %s", output)
+	}
+}
+
+// A group's subcommand is a dho Service verb. The values schema lists the
+// ones a worker group may run; it must equal the verbs those services declare,
+// and any other verb (which dho rejects with exit 2) is refused at render time.
+func TestValuesSchemaPinsTheGroupServiceVerbs(t *testing.T) {
+	raw, err := os.ReadFile("values.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema struct {
+		Properties struct {
+			GoWorkers struct {
+				Properties struct {
+					Groups struct {
+						Items struct {
+							Properties struct {
+								Subcommand struct {
+									Enum []string `json:"enum"`
+								} `json:"subcommand"`
+							} `json:"properties"`
+						} `json:"items"`
+					} `json:"groups"`
+				} `json:"properties"`
+			} `json:"goWorkers"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(raw, &schema); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		reconcilerservice.Command().Name,
+		schedulerservice.Command().Name,
+		streamrunnerservice.Command().Name,
+	}
+	slices.Sort(want)
+	got := slices.Clone(schema.Properties.GoWorkers.Properties.Groups.Items.Properties.Subcommand.Enum)
+	slices.Sort(got)
+	if !slices.Equal(got, want) {
+		t.Fatalf("values.schema.json subcommand enum = %v, the group services declare %v", got, want)
+	}
+	output, err := renderStreamGroup(t, "ghcr.io/full-chaos/dev-health-go-dho:latest", "ingest", "        subcommand: not-a-command\n")
+	if err == nil {
+		t.Fatalf("a group with an unknown dho verb rendered:\n%s", output)
+	}
+	if !strings.Contains(output, "subcommand") {
 		t.Fatalf("render failed for another reason: %s", output)
 	}
 }

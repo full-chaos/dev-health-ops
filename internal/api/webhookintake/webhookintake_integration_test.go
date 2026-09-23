@@ -27,7 +27,7 @@ import (
 
 func bytesReader(body []byte) *bytes.Reader { return bytes.NewReader(body) }
 
-// testContractRoot matches cmd/dev-health-scheduler's own convention: this
+// testContractRoot matches internal/schedulerservice's own convention: this
 // package is two directories below the repo root.
 const testContractRoot = "../../../contracts/jobs/v1"
 

@@ -396,8 +396,8 @@ def test_autoscaling_disabled_group_is_not_constrained_by_minreplicas(
     never read and must not be checked."""
     completed = _render(
         _group(
-            name="scheduler",
-            queues=[],
+            name="ops",
+            queues=["coverage"],
             replicas=1,
             grace=60,
             autoscaling="{enabled: false}",

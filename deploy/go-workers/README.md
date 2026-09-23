@@ -138,10 +138,10 @@ per-kind route, and `internal/scheduler/sync/ownership.go`'s own, unrelated
 ### Images and topology
 
 Publish one immutable image per target in `docker/go-worker.Dockerfile`:
-`dev-health-go-worker` (deployment-selected queue groups),
-`dev-health-go-scheduler`, and `dev-health-go-dho`, whose `dho reconciler`
-verb runs the reconciler and whose `dho stream-runner` verb runs the stream
-profiles (external, ingest, pagerduty). All workload definitions
+`dev-health-go-worker` (deployment-selected queue groups) and
+`dev-health-go-dho`, whose `dho reconciler` and `dho scheduler` verbs run the
+reconciler and the scheduler and whose `dho stream-runner` verb runs the
+stream profiles (external, ingest, pagerduty). All workload definitions
 run as UID/GID `65532`, deny privilege escalation, use a read-only root
 filesystem, and expose only the operator HTTP surface on port 8080:
 `/healthz`, `/readyz`, and `/metrics`.

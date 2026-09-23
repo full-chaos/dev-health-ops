@@ -193,7 +193,8 @@
     },
     {
       "name": "scheduler",
-      "binary": "dev-health-scheduler",
+      "binary": "dho",
+      "subcommand": "scheduler",
       "runtime": "control",
       "enabled_by_default": true,
       "min_replicas": 0,

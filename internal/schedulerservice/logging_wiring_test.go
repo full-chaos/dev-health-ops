@@ -1,4 +1,4 @@
-package main
+package schedulerservice
 
 import (
 	"bytes"
@@ -20,7 +20,7 @@ import (
 // real composition root (buildSchedulerLoopWithSources with a real
 // schedulersync.NewLoop), not a direct
 // schedulersync.NewLoop(..., LoopConfig{Logger: ...}) call, which would prove
-// nothing about cmd/dev-health-scheduler. scheduler/sync.Loop is the literal
+// nothing about internal/schedulerservice. scheduler/sync.Loop is the literal
 // sibling of scheduler/fixed.Loop (already fixed under CHAOS-3903); before
 // this wiring, sync.Loop had no Logger field at all and a handoff window
 // could fail forever with zero output.

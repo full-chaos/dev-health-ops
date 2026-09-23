@@ -1421,18 +1421,19 @@ services:
 
   go-scheduler:
     <<: *go-worker
-    image: ${DEV_HEALTH_GO_SCHEDULER_IMAGE:-ghcr.io/full-chaos/dev-health-go-scheduler:local}
+    image: ${DEV_HEALTH_GO_DHO_IMAGE:-ghcr.io/full-chaos/dev-health-go-dho:local}
     # Default pull_policy, see go-worker-heavy's comment above.
     build:
       context: .
       dockerfile: docker/go-worker.Dockerfile
-      target: scheduler
+      target: dho
       args:
         COMMIT: ${COMMIT:-unknown}
         BUILD_TIME: ${BUILD_TIME:-1970-01-01T00:00:00Z}
     labels:
       dev-health.io/worker-group: scheduler
     command:
+      - scheduler
       - --shutdown-timeout=60s
       - *flag-http-addr
       - *flag-river-schema

@@ -41,7 +41,7 @@ var (
 // This lives here, beside the sentinels it classifies, because every sentinel
 // added above has to be considered for this list. It was previously a private
 // copy of the list inside cmd/dev-health-worker, which is exactly how
-// cmd/dev-health-scheduler came to crash on an unconfigured DSN where the
+// internal/schedulerservice came to crash on an unconfigured DSN where the
 // worker stayed live: the classification existed, but only one binary could
 // reach it.
 func ConfigurationRejected(err error) bool {

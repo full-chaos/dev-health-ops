@@ -162,8 +162,7 @@ same binary.
 | Pin variable | Default image (`<family>:local`, never published) | Services |
 | --- | --- | --- |
 | `DEV_HEALTH_GO_WORKER_IMAGE` | `dev-health-go-worker` | the four `go-worker-*` processes |
-| `DEV_HEALTH_GO_SCHEDULER_IMAGE` | `dev-health-go-scheduler` | `go-scheduler` |
-| `DEV_HEALTH_GO_DHO_IMAGE` | `dev-health-go-dho` | `go-reconciler` (`dho reconciler`) and the three `go-stream-*` processes (`dho stream-runner`) |
+| `DEV_HEALTH_GO_DHO_IMAGE` | `dev-health-go-dho` | `go-reconciler` (`dho reconciler`), `go-scheduler` (`dho scheduler`) and the three `go-stream-*` processes (`dho stream-runner`) |
 | `DEV_HEALTH_GO_OPERATOR_IMAGE` | `dev-health-go-operator` | the four `go-sync-*-route-activate` one-shots |
 | `DEV_HEALTH_GO_CONTRACTCHECK_IMAGE` | `dev-health-go-contractcheck` | `go-contractcheck` |
 | `DEV_HEALTH_IMAGE` | `dev-hops-runner` | `go-river-provision`, `go-river-migrate`, and the dormant Celery services |

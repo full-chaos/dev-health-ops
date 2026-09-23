@@ -49,7 +49,7 @@ below is derived from it.
 | `sync` | `dev-health-worker` | River | `sync` | 960s |
 | `sync-provider` | `dev-health-worker` | River | `sync_provider` | 960s |
 | `reconciler` | `dho reconciler` | control loop | none | 60s |
-| `scheduler` | `dev-health-scheduler` | control loop | none | 60s |
+| `scheduler` | `dho scheduler` | control loop | none | 60s |
 | `stream-ingest` | `dho stream-runner` | Valkey streams | none | 60s |
 | `stream-external` | `dho stream-runner` | Valkey streams | none | 60s |
 | `stream-pagerduty` | `dho stream-runner` | Valkey streams | none | 60s |
@@ -197,7 +197,7 @@ pool while its first statement reads coordinator-exclusive
 `worker_job_routes` (CHAOS-4035). Until that is fixed, this row is a known
 defect rather than a pattern to copy.
 
-**`dev-health-scheduler`** — the contrast with the worker is the point.
+**`dho scheduler`** (service identity `dev-health-scheduler`) — the contrast with the worker is the point.
 
 | Component | Constructed at | Pool |
 | --- | --- | --- |
@@ -230,7 +230,7 @@ about which pool it belongs on in a new caller.
 
 Three readiness checks, not one: each role's posture can only be proven by a
 connection authenticated **as that role**, so a binary using all three pools
-runs all three checks (`dev-health-scheduler/dependencies.go:91-94` explains
+runs all three checks (`internal/schedulerservice/dependencies.go:91-94` explains
 why cross-role attribution makes this non-optional).
 
 #### Components that hold more than one pool
@@ -1147,7 +1147,7 @@ changing any of the source files.
 | `ops` (`dev-health-worker`) | `retention` | `system.retention_cleanup` | 300 | 3 | — | `beat` | Go-native consolidated sweep; historical retention work was several discrete Beat-scheduled tasks (retired under CHAOS-4026, e.g. ask-dev-retention-sweep)<br>`system.retention_cleanup`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json) |
 | `ops` (`dev-health-worker`) | `webhooks` | `operational.billing_notification`<br>`operational.webhook_delivery` | 120-900 | 4 | `webhooks` | `worker` | Celery dormant since 2026-08-19 (CHAOS-4026); Go/River live<br>`operational.billing_notification`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json)<br>`operational.webhook_delivery`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json) |
 | `reconciler` (`dho`) | `—` | — | — | — | — | — | Go-native -- no Celery predecessor<br>Control loop, not a River queue -- no -Q for this process. |
-| `scheduler` (`dev-health-scheduler`) | `—` | — | — | — | `scheduler` | `beat` | Celery Beat retired 2026-08-21 (CHAOS-4026); Go scheduler is sole production owner<br>Control loop, not a River queue -- no -Q for this process. |
+| `scheduler` (`dho`) | `—` | — | — | — | `scheduler` | `beat` | Celery Beat retired 2026-08-21 (CHAOS-4026); Go scheduler is sole production owner<br>Control loop, not a River queue -- no -Q for this process. |
 | `stream-external` (`dho`) | `—` | — | — | — | `external-ingest` | `worker-external-ingest` | Celery dormant since 2026-08-19 (CHAOS-4026); Go stream runner live<br>Valkey stream consumer, not a River queue -- no -Q for this process. |
 | `stream-ingest` (`dho`) | `—` | — | — | — | `ingest` | `worker-ingest` | Celery dormant since 2026-08-19 (CHAOS-4026); Go stream runner live<br>Valkey stream consumer, not a River queue -- no -Q for this process. |
 | `stream-pagerduty` (`dho`) | `—` | — | — | — | — | — | Go-native -- no Celery predecessor<br>Valkey stream consumer, not a River queue -- no -Q for this process. |
@@ -1312,7 +1312,7 @@ flowchart TD
 this page documents everywhere else holds here too, and it is more layered
 than a single label per hop. `Materialize` is not coordinator-only: it reads
 and locks on the caller's `coordinatorTx` (`OccurrenceReconciler`'s own pool,
-`cmd/dev-health-scheduler/dependencies.go`'s `NewOccurrenceReconciler(
+`internal/schedulerservice/dependencies.go`'s `NewOccurrenceReconciler(
 coordinatorPool, ...)`), but the domain-owned write
 (`sync_runs`/`sync_run_units`) runs in a SEPARATE transaction the
 materializer opens on its own `domainPool` and commits BEFORE the

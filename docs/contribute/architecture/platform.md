@@ -147,7 +147,7 @@ Jira Service Management incident code exists behind a stricter provider contract
 The foundation provides:
 
 - `dev-health-worker` — future River job execution process;
-- `dev-health-scheduler` — bounded schedule-evaluation foundation;
+- `dho scheduler` — bounded schedule-evaluation foundation;
 - `dho reconciler` — route-safe outbox and River reconciliation loop;
 - `dho stream-runner` — stream-oriented process foundation;
 - `dho workers` — payload-redacted operator CLI;

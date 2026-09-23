@@ -880,11 +880,11 @@ func TestDeploymentManifestSchemaPinsTheStreamRunnerVerb(t *testing.T) {
 	})
 }
 
-// The reconciler process runs `dho reconciler`. The old binary, a missing or
-// different subcommand, and the verb (or any dho verb) on the scheduler each
-// fail validation,
-// in the Go validator and in the JSON Schema a schema-only consumer reads.
-func TestManifestPinsTheReconcilerSubcommand(t *testing.T) {
+// The reconciler and scheduler processes run `dho reconciler` and `dho
+// scheduler`. For each, the old binary, a missing or different subcommand, and
+// the verb on another process each fail validation, in the Go validator and in
+// the JSON Schema a schema-only consumer reads.
+func TestManifestPinsTheControlServiceSubcommands(t *testing.T) {
 	t.Parallel()
 	schemaBytes, err := os.ReadFile(filepath.Join("..", "..", "contracts", "jobs", "v1", "deployment-manifest.schema.json"))
 	if err != nil {
@@ -919,12 +919,15 @@ func TestManifestPinsTheReconcilerSubcommand(t *testing.T) {
 		process string
 		mutate  func(*Process)
 	}{
-		"old binary":             {"reconciler", func(p *Process) { p.Binary, p.Subcommand = "dev-health-reconciler", "" }},
-		"no subcommand":          {"reconciler", func(p *Process) { p.Subcommand = "" }},
-		"other subcommand":       {"reconciler", func(p *Process) { p.Subcommand = "stream-runner" }},
-		"verb on the scheduler":  {"scheduler", func(p *Process) { p.Binary, p.Subcommand = "dho", "reconciler" }},
-		"scheduler on dho alone": {"scheduler", func(p *Process) { p.Binary, p.Subcommand = "dho", "scheduler" }},
-		"verb on a worker":       {"heavy", func(p *Process) { p.Binary, p.Subcommand = "dho", "reconciler" }},
+		"old binary":                  {"reconciler", func(p *Process) { p.Binary, p.Subcommand = "dev-health-reconciler", "" }},
+		"no subcommand":               {"reconciler", func(p *Process) { p.Subcommand = "" }},
+		"other subcommand":            {"reconciler", func(p *Process) { p.Subcommand = "stream-runner" }},
+		"verb on the scheduler":       {"scheduler", func(p *Process) { p.Binary, p.Subcommand = "dho", "reconciler" }},
+		"scheduler: old binary":       {"scheduler", func(p *Process) { p.Binary, p.Subcommand = "dev-health-scheduler", "" }},
+		"scheduler: no subcommand":    {"scheduler", func(p *Process) { p.Subcommand = "" }},
+		"scheduler: other subcommand": {"scheduler", func(p *Process) { p.Subcommand = "api" }},
+		"scheduler verb on a worker":  {"heavy", func(p *Process) { p.Binary, p.Subcommand = "dho", "scheduler" }},
+		"verb on a worker":            {"heavy", func(p *Process) { p.Binary, p.Subcommand = "dho", "reconciler" }},
 	} {
 		t.Run(name, func(t *testing.T) {
 			manifest, registry := loadFixture(t)

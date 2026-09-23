@@ -1,10 +1,17 @@
-package main
+// Package schedulerservice is the scheduler service: `dho scheduler`, the
+// long-running process that materializes due schedules and produces their
+// jobs. It was the dev-health-scheduler binary; its shell.Spec keeps the
+// service identity "dev-health-scheduler", so the option registry, telemetry
+// service.name, the posture guards and the deployment contract see the same
+// service as before the fold.
+package schedulerservice
 
 import (
 	"context"
 	"errors"
 	"log/slog"
 
+	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
@@ -115,8 +122,19 @@ var productionSchedulerDependencySources = schedulerDependencySources{
 	buildLoop: buildProductionSchedulerLoop,
 }
 
-func main() {
-	shell.Main(schedulerSpec)
+// Command is `dho scheduler`.
+func Command() cli.Command {
+	return cli.Command{
+		Name:    "scheduler",
+		Summary: "materialize due schedules and produce their jobs",
+		Kind:    cli.Service,
+		Run: func(ctx context.Context, env cli.Env) int {
+			return shell.Execute(ctx, schedulerSpec, env.Args, env.Lookup, shell.IO{
+				Stdout: env.Stdout,
+				Stderr: env.Stderr,
+			})
+		},
+	}
 }
 
 func configureSchedulerDependencies(

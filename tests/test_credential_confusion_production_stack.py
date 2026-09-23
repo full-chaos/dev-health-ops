@@ -141,6 +141,36 @@ class TestOpaqueCredentialDegradesToAnonymousNotError:
         assert response.status_code == 401
 
 
+def test_the_deleted_billing_route_is_gone_not_merely_unused(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CHAOS-5353: /billing must be absent, not just unexercised.
+
+    A re-mounted route would accept a POST from an old Go binary and send
+    an email the native handler has already sent. Restored standalone
+    (CHAOS-6240) after its previous home, TestWorkerBridgeRouteReject
+    sForeignCredentialClasses, was deleted along with worker_auth.py and
+    its last route caller -- this specific assertion needs neither: a
+    404 for an unmounted route holds regardless of whether
+    authorize_worker_bridge exists, and contracts/jobs/v1/
+    transitional-inventory.json's operational.billing_notification row
+    still cites this exact test id as its deletion-evidence requirement.
+    """
+    monkeypatch.setenv("WORKER_OPERATIONAL_BRIDGE_TOKEN", "the-real-bridge-secret")
+    response = client.post(
+        "/api/internal/worker-operational/billing",
+        headers={"Authorization": "Bearer the-real-bridge-secret"},
+        json={
+            "notification_id": "00000000-0000-4000-8000-000000000011",
+            "organization_id": "00000000-0000-4000-8000-000000000010",
+            "notification_type": "invoice_receipt",
+        },
+    )
+    assert response.status_code == 404, (
+        "the billing bridge route must be DELETED, not merely unused"
+    )
+
+
 class _DBTouchSpy:
     """Records whether ``get_postgres_session()`` was ever entered.
 

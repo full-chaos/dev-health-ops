@@ -53,6 +53,7 @@ func TestVenueOracleProtectedRoutes(t *testing.T) {
 		APIDatabaseURI: secrets.NewValue(venue.GoAPIDatabaseURI(t)),
 		APIJWTSecret:   secrets.NewValue(venueKey), APIJWTIssuer: "dev-health-ops", APIJWTAudience: "dev-health-api",
 		CORSAllowedOrigins: []string{"http://localhost:3000"},
+		ValkeyURI:          secrets.NewValue(venue.ValkeyURI),
 	}
 	groups := venueGroupList()
 	cfg.APIExpectedWorkerGroups = &groups

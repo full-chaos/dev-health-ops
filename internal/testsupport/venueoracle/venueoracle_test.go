@@ -1,6 +1,8 @@
 package venueoracle
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -66,6 +68,56 @@ func TestCompareDecisionTable(t *testing.T) {
 				if tc.py.Headers[key] != value {
 					t.Fatalf("Compare changed the caller's headers: %s", key)
 				}
+			}
+		})
+	}
+}
+
+func TestInterpreterDirNeedsAnExecutablePython3(t *testing.T) {
+	write := func(dir, name string, mode os.FileMode) string {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte("#!/bin/sh\n"), mode); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	root := t.TempDir()
+	venv := filepath.Join(root, "venv", "bin")
+	python3 := write(venv, "python3", 0o755)
+	python := filepath.Join(venv, "python")
+	if err := os.Symlink(python3, python); err != nil {
+		t.Fatal(err)
+	}
+	noPython3 := write(filepath.Join(root, "bare"), "python3.12", 0o755)
+	notExec := filepath.Join(root, "noexec")
+	write(notExec, "python3", 0o644)
+	dirPython3 := filepath.Join(root, "dir")
+	if err := os.MkdirAll(filepath.Join(dirPython3, "python3"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, path, want string
+	}{
+		{"venv python symlink", python, venv},
+		{"venv python3", python3, venv},
+		{"no python3 beside it", noPython3, ""},
+		{"python3 not executable", filepath.Join(notExec, "python"), ""},
+		{"python3 is a directory", filepath.Join(dirPython3, "python"), ""},
+		{"unknown bare name", "no-such-interpreter-venue", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := interpreterDir(tc.path)
+			if tc.want == "" {
+				if err == nil {
+					t.Fatalf("interpreterDir(%q) = %q, want an error", tc.path, got)
+				}
+				return
+			}
+			if err != nil || got != tc.want {
+				t.Fatalf("interpreterDir(%q) = %q, %v; want %q", tc.path, got, err, tc.want)
 			}
 		})
 	}

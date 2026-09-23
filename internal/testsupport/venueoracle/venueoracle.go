@@ -167,7 +167,18 @@ func Start(t *testing.T, ctx context.Context, options Options) *Venue {
 	if logger == nil {
 		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
-	v := &Venue{Root: options.Root, Python: pyoracle.Resolve(t, options.Root), Tokens: map[string]string{}, Roles: map[string]string{}}
+	python := pyoracle.Resolve(t, options.Root)
+	bin, err := interpreterDir(python)
+	if err != nil {
+		t.Fatalf("venue: %v", err)
+	}
+	// Activate the interpreter's environment as `source bin/activate` does:
+	// its directory goes first on PATH, and the program runs as "python3".
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	if found, err := exec.LookPath("python3"); err != nil || filepath.Dir(found) != bin {
+		t.Fatalf("venue: python3 on PATH is %q (%v), want the one in %s", found, err, bin)
+	}
+	v := &Venue{Root: options.Root, Python: filepath.Join(bin, "python3"), Tokens: map[string]string{}, Roles: map[string]string{}}
 
 	instance, err := containers.StartPostgres(ctx)
 	if err != nil {
@@ -243,6 +254,33 @@ func Start(t *testing.T, ctx context.Context, options Options) *Venue {
 	return v
 }
 
+// interpreterDir returns the directory of the interpreter pyoracle chose,
+// which must also hold an executable python3 (every virtualenv and every
+// Python 3 install directory does), as an absolute path. The venue runs
+// that python3 by activating the directory, never by executing a path.
+func interpreterDir(path string) (string, error) {
+	if !filepath.IsAbs(path) {
+		found, err := exec.LookPath(path)
+		if err != nil {
+			return "", fmt.Errorf("interpreter %q: %w", path, err)
+		}
+		path = found
+	}
+	dir, err := filepath.Abs(filepath.Dir(path))
+	if err != nil {
+		return "", err
+	}
+	python3 := filepath.Join(dir, "python3")
+	info, err := os.Stat(python3)
+	if err != nil {
+		return "", fmt.Errorf("interpreter %q: no python3 beside it: %w", path, err)
+	}
+	if !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
+		return "", fmt.Errorf("interpreter %q: %s is not an executable file", path, python3)
+	}
+	return dir, nil
+}
+
 // AdminURI is a superuser DSN for database on the venue's Postgres.
 func (v *Venue) AdminURI(t *testing.T, database string) string {
 	return withDatabase(t, v.postgresURI, database, "", "")
@@ -313,7 +351,10 @@ func (v *Venue) ServePython(t *testing.T, requests []Request) []Response {
 
 func (v *Venue) runPython(t *testing.T, stdin any, args ...string) []byte {
 	t.Helper()
-	command := exec.Command(v.Python, append([]string{"-c", pythonProgram}, args...)...)
+	// Start put the chosen interpreter's directory first on PATH. The
+	// program is the compiled-in pythonProgram; only its mode and the JSON
+	// on stdin vary.
+	command := exec.Command("python3", append([]string{"-c", pythonProgram}, args...)...)
 	command.Env = append(os.Environ(), v.pythonEnv...)
 	if stdin != nil {
 		payload, err := json.Marshal(stdin)

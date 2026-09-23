@@ -366,7 +366,7 @@ func (h *handlers) orgDeletionPurgeClickHouse(ctx context.Context, orgIDStr stri
 	for _, t := range tables {
 		condition := "org_id = ?"
 		var bind any = orgIDStr
-		if isUUIDType(t.OrgIDType) {
+		if IsUUIDColumnType(t.OrgIDType) {
 			condition = "org_id = toUUID(?)"
 		}
 		var count uint64
@@ -433,9 +433,11 @@ func DiscoverClickHouseOrgTables(ctx context.Context, conn driver.Conn) ([]ChTab
 	return tables, nil
 }
 
-// isUUIDType reports whether a ClickHouse column type string names UUID
-// (its own type, or a Nullable(UUID)/LowCardinality(UUID) wrapper).
-func isUUIDType(chType string) bool {
+// IsUUIDColumnType reports whether a ClickHouse column type string names
+// UUID (its own type, or a Nullable(UUID)/LowCardinality(UUID) wrapper).
+// Exported so a test can bind the same way orgDeletionPurgeClickHouse does,
+// never a second hand-authored copy of this rule.
+func IsUUIDColumnType(chType string) bool {
 	for i := 0; i+4 <= len(chType); i++ {
 		if chType[i:i+4] == "UUID" {
 			return true

@@ -116,6 +116,10 @@ EXPECTED_PACKAGES = {
     # The api's protected-route policy read path: provision, migrate, api
     # readiness and an authenticated request on a real Postgres.
     "internal/api/policy",
+    # The team + identity admin CRUD store/handlers: real ClickHouse CRUD
+    # round trips and the identity POST route's 404/409/facet-reconciliation
+    # logic, against a real server (testcontainers).
+    "internal/api/teamsidentity",
     # CHAOS-6247: GitHub/GitLab/Jira webhook intake against a real Postgres
     # (durable delivery row + job outbox publish), PagerDuty intake against
     # a real Postgres and a real Valkey (binding lookup, replay claim/
@@ -208,6 +212,10 @@ EXPECTED_PACKAGES = {
     "internal/providersync",
     "internal/scheduler/fixed",
     "internal/scheduler/sync",
+    # The ClickHouse posture manifest (CHAOS-6310): SHOW GRANTS FOR
+    # CURRENT_USER parsing proven against a real server, including the
+    # missing-privilege/extra-grant/extra-privilege negative controls.
+    "internal/storage/clickhouse",
     "internal/storage/postgres",
     # CHAOS-4882: the auth-owned schema's migration lineage. Its suite starts
     # a real PostgreSQL and connects AS the runtime role to prove DDL and

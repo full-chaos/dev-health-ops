@@ -15,6 +15,15 @@
 // then the River migration with postgres.APIPosture). The caller starts
 // the Go api on Venue.GoAPIDatabaseURI and passes its base URL to Diff.
 //
+// A ClickHouse container is started too (CHAOS-6310), with two isolated
+// databases -- Python's own CLICKHOUSE_URI is pointed at one (unset by
+// default otherwise, so a route touching ClickHouse would 500 without
+// this), and a dedicated login is provisioned on the other, granted
+// exactly clickhouse.APIPosture()'s manifest via
+// clickhouse.GrantStatements -- the same statements a deploy's grant
+// recipe runs, so the two can never drift. Venue.GoAPIClickHouseURI is
+// that login's DSN, for a route area's Deps.ClickHouse.
+//
 // The oracle needs the live Python api: Start skips unless
 // DEV_HEALTH_LIVE_PYTHON_ORACLES=1, and ci/check_go.sh live-python-oracles
 // sets it.
@@ -33,6 +42,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -40,6 +50,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	valkeygo "github.com/valkey-io/valkey-go"
 
+	chclickhouse "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
@@ -156,6 +167,13 @@ type Venue struct {
 
 	postgresURI string
 	pythonEnv   []string
+
+	// ClickHouse (CHAOS-6310): one server, two databases. PythonClickHouseDB
+	// is what CLICKHOUSE_URI (Python's env) names; GoClickHouseDB is what
+	// the dedicated api login is scoped to.
+	clickHouseURI, clickHouseHTTPURI     string
+	PythonClickHouseDB, GoClickHouseDB   string
+	clickHouseAPIRole, clickHouseAPIPass string
 }
 
 // Start builds the venue; see the package comment. It skips unless
@@ -209,13 +227,70 @@ func Start(t *testing.T, ctx context.Context, options Options) *Venue {
 	if v.SourceDB, err = containers.DatabaseName(instance.URI); err != nil {
 		t.Fatal(err)
 	}
+	v.GoDB = v.SourceDB + "_go"
+
+	// ClickHouse (CHAOS-6310): one server, two isolated databases, named
+	// after the Postgres ones above for the same "one identical copy per
+	// plane" shape. Real migrations, applied to each database
+	// independently (ClickHouse has no CREATE DATABASE ... TEMPLATE, so
+	// this is two migration runs, not a copy).
+	chInstance, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = chInstance.Close(context.Background()) })
+	v.clickHouseURI = chInstance.URI
+	// Python's clickhouse_connect is an HTTP-only client: it needs the
+	// HTTP-port DSN, never Instance.URI's native-port one (clickhouse-go,
+	// this package's own admin/CHRows connections, speaks the native
+	// protocol and needs the opposite -- confirmed live, both ways, with
+	// the wrong port on either side).
+	chHTTPURI, err := containers.ClickHouseHTTPDSN(ctx, chInstance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v.clickHouseHTTPURI = chHTTPURI
+	v.PythonClickHouseDB, v.GoClickHouseDB = v.SourceDB, v.GoDB
+	chAdmin, err := chclickhouse.Open(ctx, chclickhouse.DefaultConfig(chInstance.URI))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = chAdmin.Close() })
+	for _, database := range []string{v.PythonClickHouseDB, v.GoClickHouseDB} {
+		// IF NOT EXISTS: v.SourceDB can collide with containers.ClickHouseDatabase
+		// ("worker_test"), which StartClickHouse's own CLICKHOUSE_DB env var
+		// already pre-creates on every fresh container -- confirmed live.
+		if err := chAdmin.Exec(ctx, "CREATE DATABASE IF NOT EXISTS "+database); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, database := range []string{v.PythonClickHouseDB, v.GoClickHouseDB} {
+		v.migrateClickHouse(t, ctx, database)
+	}
+	chRole, err := containers.RoleName("venue_ch_api", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v.clickHouseAPIRole, v.clickHouseAPIPass = chRole, "venue_ch_api_password"
+	if err := chAdmin.Exec(ctx, fmt.Sprintf(
+		"CREATE USER %s IDENTIFIED WITH plaintext_password BY '%s'", v.clickHouseAPIRole, v.clickHouseAPIPass)); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = chAdmin.Exec(context.Background(), "DROP USER IF EXISTS "+v.clickHouseAPIRole) })
+	for _, statement := range chclickhouse.GrantStatements(v.clickHouseAPIRole, chclickhouse.APIPosture(v.GoClickHouseDB)) {
+		if err := chAdmin.Exec(ctx, statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+
 	async := strings.Replace(v.AdminURI(t, v.SourceDB), "postgres://", "postgresql+asyncpg://", 1)
 	async = strings.Replace(async, "postgresql://", "postgresql+asyncpg://", 1)
 	v.pythonEnv = append([]string{"PYTHONPATH=" + filepath.Join(options.Root, "src"), "POSTGRES_URI=" + async,
 		"JWT_SECRET_KEY=" + options.JWTKey, "OTEL_SDK_DISABLED=true", "DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1",
 		// NullPool: TestClient gives each request its own event loop, and a
 		// pooled asyncpg connection cannot cross loops.
-		"PGBOUNCER_TRANSACTION_MODE=true", "ENVIRONMENT=test", "REDIS_URL=" + v.PythonValkeyURI, "CLICKHOUSE_URI="},
+		"PGBOUNCER_TRANSACTION_MODE=true", "ENVIRONMENT=test", "REDIS_URL=" + v.PythonValkeyURI,
+		"CLICKHOUSE_URI=" + v.AdminClickHouseHTTPURI(t, v.PythonClickHouseDB)},
 		options.PythonEnv...)
 
 	// 1. The real schema, then one seed and its tokens.
@@ -236,7 +311,6 @@ func Start(t *testing.T, ctx context.Context, options Options) *Venue {
 	}
 
 	// 2. Two identical copies: Python serves the source, Go serves the copy.
-	v.GoDB = v.SourceDB + "_go"
 	server, err := pgxpool.New(ctx, v.AdminURI(t, "postgres"))
 	if err != nil {
 		t.Fatal(err)
@@ -300,6 +374,25 @@ func (v *Venue) AdminURI(t *testing.T, database string) string {
 // Go copy.
 func (v *Venue) GoAPIDatabaseURI(t *testing.T) string {
 	return withDatabase(t, v.postgresURI, v.GoDB, v.Roles["api"], APIPassword)
+}
+
+// AdminClickHouseURI is the ClickHouse server's admin connection (native
+// protocol), scoped to database.
+func (v *Venue) AdminClickHouseURI(t *testing.T, database string) string {
+	return withDatabase(t, v.clickHouseURI, database, "", "")
+}
+
+// AdminClickHouseHTTPURI is AdminClickHouseURI's HTTP-port sibling, for a
+// Python-side caller (clickhouse_connect is HTTP-only).
+func (v *Venue) AdminClickHouseHTTPURI(t *testing.T, database string) string {
+	return withDatabase(t, v.clickHouseHTTPURI, database, "", "")
+}
+
+// GoAPIClickHouseURI is API_CLICKHOUSE_URI for the Go api: the dedicated
+// login (granted exactly clickhouse.APIPosture()'s manifest) on the
+// GoClickHouseDB copy.
+func (v *Venue) GoAPIClickHouseURI(t *testing.T) string {
+	return withDatabase(t, v.clickHouseURI, v.GoClickHouseDB, v.clickHouseAPIRole, v.clickHouseAPIPass)
 }
 
 // DiagnoseAPIRole reports the api role's missing grants on the Go copy, for
@@ -384,6 +477,27 @@ func (v *Venue) runPython(t *testing.T, stdin any, args ...string) []byte {
 	}
 	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
 	return []byte(lines[len(lines)-1])
+}
+
+// migrateClickHouse runs the real `dev-hops migrate clickhouse upgrade`
+// CLI against database -- the same entrypoint a deploy's init step runs,
+// never a hand-copied CREATE TABLE list (the trap class this whole family
+// of test fixtures kept hitting elsewhere in this repo). CLICKHOUSE_URI is
+// this call's own env, never v.pythonEnv: the venue's Python plane must
+// keep pointing at PythonClickHouseDB throughout, including while this
+// runs against GoClickHouseDB.
+func (v *Venue) migrateClickHouse(t *testing.T, ctx context.Context, database string) {
+	t.Helper()
+	command := exec.CommandContext(ctx, "python3", "-m", "dev_health_ops.cli", "migrate", "clickhouse", "upgrade")
+	// os.Environ() already carries the activated interpreter's PATH (Start
+	// set it with t.Setenv, which changes this test process's own env, not
+	// only pythonEnv); only PYTHONPATH and CLICKHOUSE_URI are this call's
+	// own additions.
+	command.Env = append(os.Environ(),
+		"PYTHONPATH="+filepath.Join(v.Root, "src"), "CLICKHOUSE_URI="+v.AdminClickHouseHTTPURI(t, database))
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("clickhouse migrate %s: %v\n%s", database, err, output)
+	}
 }
 
 func (v *Venue) provisionRoles(t *testing.T, ctx context.Context) {
@@ -589,6 +703,50 @@ func TableRows(t *testing.T, ctx context.Context, uri, query string) string {
 			t.Fatal(err)
 		}
 		lines = append(lines, fmt.Sprint(values...))
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return strings.Join(lines, " | ")
+}
+
+// CHRows is TableRows' ClickHouse sibling: opens its own connection, runs
+// query, and renders every row the same "space-joined values, rows joined
+// by | " shape TableRows does, so a caller's comparison code (e.g.
+// compareRows in internal/apiservice's own venue oracle test) treats both
+// planes identically regardless of which database engine backs them.
+// Column values are read generically via each column's own ScanType
+// (reflection), since driver.Rows has no pgx-style Values() -- a caller
+// query must select FINAL and order deterministically, exactly as the
+// Python readers this compares against do, or two otherwise-identical
+// ReplacingMergeTree states can render in a different row order.
+func CHRows(t *testing.T, ctx context.Context, uri, query string) string {
+	t.Helper()
+	conn, err := chclickhouse.Open(ctx, chclickhouse.DefaultConfig(uri))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	rows, err := conn.Query(ctx, query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	columnTypes := rows.ColumnTypes()
+	var lines []string
+	for rows.Next() {
+		dests := make([]any, len(columnTypes))
+		for index, columnType := range columnTypes {
+			dests[index] = reflect.New(columnType.ScanType()).Interface()
+		}
+		if err := rows.Scan(dests...); err != nil {
+			t.Fatal(err)
+		}
+		values := make([]string, len(dests))
+		for index, dest := range dests {
+			values[index] = fmt.Sprint(reflect.ValueOf(dest).Elem().Interface())
+		}
+		lines = append(lines, strings.Join(values, " "))
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)

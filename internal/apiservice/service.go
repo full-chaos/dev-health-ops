@@ -40,6 +40,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/orgs"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/producttelemetry"
+	"github.com/full-chaos/dev-health-ops/internal/api/teamsidentity"
 	"github.com/full-chaos/dev-health-ops/internal/api/telemetry"
 	"github.com/full-chaos/dev-health-ops/internal/api/webhookintake"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/acr"
@@ -95,6 +96,11 @@ const (
 	// webhookintake's PagerDuty replay-claim/stream-write path) can PING.
 	// It is registered only when ValkeyURI is configured (buildDeps, deps.go).
 	apiValkeyCheck = "api_valkey"
+	// apiClickHouseCheck is the readiness check that fails until the
+	// ClickHouse connection (internal/api/teamsidentity, CHAOS-6251, the
+	// first Go api ClickHouse writer) can PING. It is registered only when
+	// CLICKHOUSE_URI is configured (buildDeps, deps.go).
+	apiClickHouseCheck = "api_clickhouse"
 )
 
 // Spec is the shell specification of `dho api`. Exported so a test can run
@@ -145,7 +151,12 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 		Logger: logger,
 	})...)
 	routes = append(routes, healthroutes.Routes(healthroutes.Deps{
-		Pool: deps.Pool, ClickHouseDSN: deps.Probes.ClickHouseDSN, ValkeyURI: deps.Probes.ValkeyURI,
+		// deps.ClickHouse is the api's own dedicated ClickHouse login
+		// (CHAOS-6310), the SAME connection internal/api/teamsidentity's
+		// routes use -- one process, one ClickHouse credential (R395),
+		// never a fresh connection from a separate, generic DSN a real
+		// deployment's api Secret has no reason to also carry.
+		Pool: deps.Pool, ClickHouse: deps.ClickHouse, ValkeyURI: deps.Probes.ValkeyURI,
 		ExpectedWorkerGroups: deps.Probes.ExpectedWorkerGroups, Logger: logger,
 	})...)
 	routes = append(routes, producttelemetry.Routes(&producttelemetry.ValkeyStreams{URI: deps.Telemetry.ValkeyURI}, logger)...)
@@ -153,6 +164,9 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 		routes = append(routes, orgs.Routes(deps.Pool, deps.Guard, logger)...)
 		routes = append(routes, telemetry.Routes(deps.Pool, deps.Guard, deps.Auth, deps.Telemetry.Endpoint, logger)...)
 		routes = append(routes, customerpush.Routes(customerpush.Deps{Pool: deps.Pool, Guard: deps.Guard, Logger: logger})...)
+		if deps.ClickHouse != nil {
+			routes = append(routes, teamsidentity.Routes(deps.ClickHouse, deps.Guard, logger)...)
+		}
 	}
 	// admin is this Service's other consumer of policy.Guard: mounted only
 	// when the protected-route runtime is actually up (deps.Pool
@@ -197,7 +211,7 @@ func configure(
 		scope = []func(http.Handler) http.Handler{protected.scope.OrgScope, protected.scope.Impersonation}
 	}
 	deps.Probes = ProbeConfig{
-		ClickHouseDSN: cfg.ClickHouseURI.Reveal(), ValkeyURI: cfg.ValkeyURI.Reveal(),
+		ValkeyURI:            cfg.ValkeyURI.Reveal(),
 		ExpectedWorkerGroups: cfg.APIExpectedWorkerGroups,
 	}
 	deps.Telemetry = TelemetryConfig{Endpoint: cfg.TelemetryEndpoint, ValkeyURI: cfg.ValkeyURI.Reveal()}

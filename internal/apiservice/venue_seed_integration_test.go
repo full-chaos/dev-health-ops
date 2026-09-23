@@ -304,6 +304,73 @@ func venueRequests(f venueFixture, tokens map[string]string) []venueoracle.Reque
 	add("slash: GET unknown/", "GET", "/api/v1/nothing-here/", nil, nil)
 	add("slash: GET unknown (add direction)", "GET", "/api/v1/nothing-here", nil, nil)
 	add("slash: GET /health with slash and Host", "GET", "/health/", map[string]string{"Host": "api.example.com:8443"}, nil)
+
+	// Team + identity admin CRUD (CHAOS-6310). Both org-A callers below
+	// authenticate to the SAME org, so their writes accumulate in order --
+	// Python and Go each process this exact sequence once, against their
+	// own isolated ClickHouse database, so the two must reach identical
+	// end states.
+	teams := "/api/v1/admin/teams"
+	identities := "/api/v1/admin/identities"
+	add("teams: anonymous", "GET", teams, nil, nil)
+	add("teams: non-admin", "GET", teams, bearer("member"), nil)
+	add("teams: list empty", "GET", teams, bearer("admin"), nil)
+	add("teams: create missing team_id", "POST", teams, json(bearer("admin")), b64(`{"name":"Eng"}`))
+	add("teams: create missing name", "POST", teams, json(bearer("admin")), b64(`{"team_id":"eng"}`))
+	add("teams: create ok", "POST", teams, json(bearer("admin")),
+		b64(`{"team_id":"eng","name":"Engineering","description":"core","repo_patterns":["svc-*"],"project_keys":["ENG"]}`))
+	add("teams: create is update on same id", "POST", teams, json(bearer("admin")), b64(`{"team_id":"eng","name":"Engineering Renamed"}`))
+	add("teams: get existing", "GET", teams+"/eng", bearer("admin"), nil)
+	add("teams: get missing", "GET", teams+"/nope", bearer("admin"), nil)
+	add("teams: list after create", "GET", teams, bearer("admin"), nil)
+	add("teams: patch description only", "PATCH", teams+"/eng", json(bearer("admin")), b64(`{"description":"patched"}`))
+	add("teams: patch missing team", "PATCH", teams+"/nope", json(bearer("admin")), b64(`{"name":"x"}`))
+	add("teams: patch wrong type", "PATCH", teams+"/eng", json(bearer("admin")), b64(`{"repo_patterns":"not-a-list"}`))
+	add("teams: create second team", "POST", teams, json(bearer("owner")), b64(`{"team_id":"design","name":"Design"}`))
+	add("identities: create missing canonical_id", "POST", identities, json(bearer("admin")), b64(`{}`))
+	add("identities: create unknown team_id", "POST", identities, json(bearer("admin")), b64(`{"canonical_id":"alice","team_ids":["nope"]}`))
+	add("identities: create ok", "POST", identities, json(bearer("admin")),
+		b64(`{"canonical_id":"alice","email":"alice@example.com","provider_identities":{"github":["alice-gh"]},"team_ids":["eng"]}`))
+	add("identities: create conflicting provider identity", "POST", identities, json(bearer("admin")),
+		b64(`{"canonical_id":"bob","provider_identities":{"github":["alice-gh"]}}`))
+	add("identities: list", "GET", identities, bearer("admin"), nil)
+	add("identities: update moves team and email", "POST", identities, json(bearer("admin")),
+		b64(`{"canonical_id":"alice","email":"alice-new@example.com","team_ids":["design"]}`))
+	add("teams: get eng after identity left", "GET", teams+"/eng", bearer("admin"), nil)
+	add("teams: get design after identity joined", "GET", teams+"/design", bearer("admin"), nil)
+	add("teams: delete eng", "DELETE", teams+"/eng", bearer("admin"), nil)
+	add("teams: delete already deleted", "DELETE", teams+"/eng", bearer("admin"), nil)
+	add("teams: get after delete", "GET", teams+"/eng", bearer("admin"), nil)
+
+	// r1 findings, extended coverage (CHAOS-6310): each of these reproduces
+	// one of the 10 defects the codex round's live venue run found, now
+	// fixed at the pydantic-model source rather than the reported case.
+	add("teams: create qa", "POST", teams, json(bearer("admin")),
+		b64(`{"team_id":"qa","name":"QA","repo_patterns":["qa-*"]}`))
+	add("teams: create rejects null repo_patterns (create-shaped, no | None)", "POST", teams, json(bearer("admin")),
+		b64(`{"team_id":"qa2","name":"QA2","repo_patterns":null}`))
+	add("teams: patch null repo_patterns keeps existing (update-shaped, | None)", "PATCH", teams+"/qa", json(bearer("admin")),
+		b64(`{"repo_patterns":null}`))
+	add("teams: create rejects extra_data not a dict", "POST", teams, json(bearer("admin")),
+		b64(`{"team_id":"qa3","name":"QA3","extra_data":"not-a-dict"}`))
+	add("teams: patch rejects extra_data null-vs-object mismatch", "PATCH", teams+"/qa", json(bearer("admin")),
+		b64(`{"extra_data":"not-a-dict"}`))
+	add("teams: create coerces sync_policy string", "POST", teams, json(bearer("admin")),
+		b64(`{"team_id":"qa4","name":"QA4","sync_policy":"1"}`))
+	add("teams: list rejects active_only=not-a-bool", "GET", teams+"?active_only=not-a-bool", bearer("admin"), nil)
+	add("identities: create rejects null provider_identities (create-shaped, no | None)", "POST", identities, json(bearer("admin")),
+		b64(`{"canonical_id":"carol","provider_identities":null}`))
+	add("identities: create rejects null team_ids (create-shaped, no | None)", "POST", identities, json(bearer("admin")),
+		b64(`{"canonical_id":"dave","team_ids":null}`))
+	// Status-only proof (r1 finding #6): both APIs 404 here regardless of
+	// how the message escapes the apostrophe -- the message BODY's
+	// element-quoting is a documented, still-open gap (see
+	// unknownTeamIDsDetail's doc comment and
+	// venueOracleKnownGapRequest/unknownTeamIDDetailPattern in
+	// venue_oracle_integration_test.go, which blanks exactly this one
+	// request's quoting difference before comparing, never any other).
+	add(venueOracleKnownGapRequest, "POST", identities, json(bearer("admin")),
+		b64(`{"canonical_id":"erin","team_ids":["doesn't-exist"]}`))
 	return out
 }
 

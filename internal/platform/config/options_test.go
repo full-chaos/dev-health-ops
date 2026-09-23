@@ -67,7 +67,12 @@ func TestHelpDeclaresTheDocumentedEnvironmentHandful(t *testing.T) {
 	// role for anything), but both hold a real secret value.
 	// 16 -> 17: JWT_SECRET_KEY added -- the access-token key dho api
 	// verifies with, the same Secret key the Python api and web already read.
-	if len(required) > 17 {
+	// 17 -> 19 (CHAOS-6310): API_CLICKHOUSE_URI, DEV_HEALTH_CH_API_PASSWORD
+	// added -- the api Service's own dedicated ClickHouse write login (team
+	// + identity admin CRUD), same shape as the API_DATABASE_URI /
+	// DEV_HEALTH_PG_API_PASSWORD pair. Neither is required for a standard
+	// deployment today, but both hold a real secret value.
+	if len(required) > 19 {
 		t.Fatalf("required environment grew to %d settings: %v", len(required), required)
 	}
 	for _, name := range required {

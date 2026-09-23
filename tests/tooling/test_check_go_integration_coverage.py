@@ -216,10 +216,16 @@ def test_integration_coverage_inventory_completes_and_stays_nonempty() -> None:
     # 78 -> 80.
     # CHAOS-6247 added internal/api/webhookintake (80 -> 81): webhook-intake
     # routes proved against real Postgres and real Valkey.
-    # CURRENT TOTAL: 81. Adding one -tags=integration package bumps every
+    # CHAOS-6310 added internal/api/teamsidentity (81 -> 82): the team +
+    # identity admin CRUD store/handlers, proved against a real ClickHouse
+    # container. It also added internal/storage/clickhouse's first
+    # -tags=integration file (82 -> 83): the ClickHouse posture-manifest
+    # check (SHOW GRANTS FOR CURRENT_USER parsing), proved against a real
+    # server including its missing-privilege/extra-grant negative controls.
+    # CURRENT TOTAL: 83. Adding one -tags=integration package bumps every
     # literal below by +1 -- this is the one number to change; the
     # narrative above is for someone auditing history, not for the bump.
-    assert "81 package(s) discovered, 0 denylisted, 81 will run" in result.stdout
+    assert "83 package(s) discovered, 0 denylisted, 83 will run" in result.stdout
     # Name the package explicitly (SET MEMBERSHIP), not just the count --
     # a bare count is exactly what let CHAOS-4643's own literal drift
     # 31 -> 32 -> 33 unnoticed.

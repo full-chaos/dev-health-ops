@@ -18,6 +18,7 @@ package pybody
 import (
 	"errors"
 	"io"
+	"math"
 	"mime"
 	"net/http"
 	"strconv"
@@ -355,6 +356,295 @@ func plural(n int) string {
 		return ""
 	}
 	return "s"
+}
+
+// OptionalStringList validates one `list[str]` field with a default (e.g.
+// `Field(default_factory=list)`): absent/null resolves to the zero value
+// (present=false, caller uses its own default), a non-list value is
+// "list_type", and a non-string element is "string_type" at loc
+// body.<name>.<index> -- matching pydantic's per-element reporting (a
+// multi-element list can add more than one error, exactly like pydantic).
+func (e *Errors) OptionalStringList(object *pyjson.Object, name string) ([]string, bool) {
+	raw, ok := object.Get(name)
+	if !ok || raw == nil {
+		return nil, false
+	}
+	loc := []pyjson.Value{"body", name}
+	list, isList := raw.([]pyjson.Value)
+	if !isList {
+		*e = append(*e, Error{Type: "list_type", Loc: loc, Msg: "Input should be a valid list", Input: raw})
+		return nil, false
+	}
+	out := make([]string, 0, len(list))
+	valid := true
+	for index, item := range list {
+		text, isString := item.(string)
+		if !isString {
+			itemLoc := append(append([]pyjson.Value(nil), loc...), int64(index))
+			*e = append(*e, Error{Type: "string_type", Loc: itemLoc, Msg: "Input should be a valid string", Input: item})
+			valid = false
+			continue
+		}
+		out = append(out, text)
+	}
+	if !valid {
+		return nil, false
+	}
+	return out, true
+}
+
+// OptionalStringArrayDict validates one `dict[str, list[str]]` field (e.g.
+// `Field(default_factory=dict)`): absent/null resolves to the zero value,
+// a non-object value is "dict_type", and a non-list value at any key is
+// "list_type" at loc body.<name>.<key> -- matching pydantic's per-key
+// reporting.
+func (e *Errors) OptionalStringArrayDict(object *pyjson.Object, name string) (map[string][]string, bool) {
+	raw, ok := object.Get(name)
+	if !ok || raw == nil {
+		return nil, false
+	}
+	loc := []pyjson.Value{"body", name}
+	nested, isObject := raw.(*pyjson.Object)
+	if !isObject {
+		*e = append(*e, Error{Type: "dict_type", Loc: loc, Msg: "Input should be a valid dictionary", Input: raw})
+		return nil, false
+	}
+	out := make(map[string][]string, nested.Len())
+	valid := true
+	for _, key := range nested.Keys() {
+		value, _ := nested.Get(key)
+		keyLoc := append(append([]pyjson.Value(nil), loc...), key)
+		list, isList := value.([]pyjson.Value)
+		if !isList {
+			*e = append(*e, Error{Type: "list_type", Loc: keyLoc, Msg: "Input should be a valid list", Input: value})
+			valid = false
+			continue
+		}
+		values := make([]string, 0, len(list))
+		for index, item := range list {
+			text, isString := item.(string)
+			if !isString {
+				itemLoc := append(append([]pyjson.Value(nil), keyLoc...), int64(index))
+				*e = append(*e, Error{Type: "string_type", Loc: itemLoc, Msg: "Input should be a valid string", Input: item})
+				valid = false
+				continue
+			}
+			values = append(values, text)
+		}
+		out[key] = values
+	}
+	if !valid {
+		return nil, false
+	}
+	return out, true
+}
+
+// OptionalBoundedInt validates one `int` field with pydantic `ge`/`le`
+// bounds (e.g. `Field(default=1, ge=0, le=2)`): absent/null resolves to
+// present=false (caller uses its own default), a non-integer JSON number
+// (or non-number) is "int_type" (a float like 1.5 -- pydantic's strict-ish
+// int coercion rejects a fractional JSON number the same way), and an
+// out-of-bounds integer is "greater_than_equal"/"less_than_equal".
+func (e *Errors) OptionalBoundedInt(object *pyjson.Object, name string, minValue, maxValue int64) (int64, bool) {
+	raw, ok := object.Get(name)
+	if !ok || raw == nil {
+		return 0, false
+	}
+	return e.boundedInt(raw, name, minValue, maxValue)
+}
+
+// DefaultedStringList validates one `list[str] = Field(default_factory=list)`
+// field (no `| None` in the pydantic model -- this is the create-shaped
+// counterpart of OptionalStringList, for a route whose body model does not
+// accept null): absent resolves to the zero value (present=false, caller
+// uses its own default); an explicit JSON null is itself a "list_type"
+// error -- pydantic does not accept null for a non-Optional field even when
+// the field has a default, verified empirically against a live pydantic
+// model. Otherwise identical to OptionalStringList.
+func (e *Errors) DefaultedStringList(object *pyjson.Object, name string) ([]string, bool) {
+	raw, ok := object.Get(name)
+	if !ok {
+		return nil, false
+	}
+	loc := []pyjson.Value{"body", name}
+	if raw == nil {
+		*e = append(*e, Error{Type: "list_type", Loc: loc, Msg: "Input should be a valid list", Input: nil})
+		return nil, false
+	}
+	list, isList := raw.([]pyjson.Value)
+	if !isList {
+		*e = append(*e, Error{Type: "list_type", Loc: loc, Msg: "Input should be a valid list", Input: raw})
+		return nil, false
+	}
+	out := make([]string, 0, len(list))
+	valid := true
+	for index, item := range list {
+		text, isString := item.(string)
+		if !isString {
+			itemLoc := append(append([]pyjson.Value(nil), loc...), int64(index))
+			*e = append(*e, Error{Type: "string_type", Loc: itemLoc, Msg: "Input should be a valid string", Input: item})
+			valid = false
+			continue
+		}
+		out = append(out, text)
+	}
+	if !valid {
+		return nil, false
+	}
+	return out, true
+}
+
+// DefaultedStringArrayDict is OptionalStringArrayDict's create-shaped
+// counterpart (no `| None` in the pydantic model): absent resolves to the
+// zero value, an explicit JSON null is a "dict_type" error. See
+// DefaultedStringList's doc for why null and absent differ here.
+func (e *Errors) DefaultedStringArrayDict(object *pyjson.Object, name string) (map[string][]string, bool) {
+	raw, ok := object.Get(name)
+	if !ok {
+		return nil, false
+	}
+	loc := []pyjson.Value{"body", name}
+	if raw == nil {
+		*e = append(*e, Error{Type: "dict_type", Loc: loc, Msg: "Input should be a valid dictionary", Input: nil})
+		return nil, false
+	}
+	nested, isObject := raw.(*pyjson.Object)
+	if !isObject {
+		*e = append(*e, Error{Type: "dict_type", Loc: loc, Msg: "Input should be a valid dictionary", Input: raw})
+		return nil, false
+	}
+	out := make(map[string][]string, nested.Len())
+	valid := true
+	for _, key := range nested.Keys() {
+		value, _ := nested.Get(key)
+		keyLoc := append(append([]pyjson.Value(nil), loc...), key)
+		list, isList := value.([]pyjson.Value)
+		if !isList {
+			*e = append(*e, Error{Type: "list_type", Loc: keyLoc, Msg: "Input should be a valid list", Input: value})
+			valid = false
+			continue
+		}
+		values := make([]string, 0, len(list))
+		for index, item := range list {
+			text, isString := item.(string)
+			if !isString {
+				itemLoc := append(append([]pyjson.Value(nil), keyLoc...), int64(index))
+				*e = append(*e, Error{Type: "string_type", Loc: itemLoc, Msg: "Input should be a valid string", Input: item})
+				valid = false
+				continue
+			}
+			values = append(values, text)
+		}
+		out[key] = values
+	}
+	if !valid {
+		return nil, false
+	}
+	return out, true
+}
+
+// OptionalAnyDict validates one `dict[str, Any] | None = None` field:
+// present is false when the field is absent, null, or invalid. Pydantic's
+// `Any` accepts any JSON value for each key, so this only checks the field
+// itself is an object.
+func (e *Errors) OptionalAnyDict(object *pyjson.Object, name string) (*pyjson.Object, bool) {
+	raw, ok := object.Get(name)
+	if !ok || raw == nil {
+		return nil, false
+	}
+	nested, isObject := raw.(*pyjson.Object)
+	if !isObject {
+		*e = append(*e, Error{Type: "dict_type", Loc: []pyjson.Value{"body", name}, Msg: "Input should be a valid dictionary", Input: raw})
+		return nil, false
+	}
+	return nested, true
+}
+
+// DefaultedAnyDict is OptionalAnyDict's create-shaped counterpart (no
+// `| None` in the pydantic model, e.g. `dict[str, Any] = Field(default_factory=dict)`):
+// absent resolves to the zero value, an explicit JSON null is a "dict_type"
+// error.
+func (e *Errors) DefaultedAnyDict(object *pyjson.Object, name string) (*pyjson.Object, bool) {
+	raw, ok := object.Get(name)
+	if !ok {
+		return nil, false
+	}
+	loc := []pyjson.Value{"body", name}
+	if raw == nil {
+		*e = append(*e, Error{Type: "dict_type", Loc: loc, Msg: "Input should be a valid dictionary", Input: nil})
+		return nil, false
+	}
+	nested, isObject := raw.(*pyjson.Object)
+	if !isObject {
+		*e = append(*e, Error{Type: "dict_type", Loc: loc, Msg: "Input should be a valid dictionary", Input: raw})
+		return nil, false
+	}
+	return nested, true
+}
+
+// DefaultedBoundedInt is OptionalBoundedInt's create-shaped counterpart (no
+// `| None` in the pydantic model): absent resolves to present=false, an
+// explicit JSON null is an "int_type" error rather than "not provided".
+func (e *Errors) DefaultedBoundedInt(object *pyjson.Object, name string, minValue, maxValue int64) (int64, bool) {
+	raw, ok := object.Get(name)
+	if !ok {
+		return 0, false
+	}
+	if raw == nil {
+		*e = append(*e, Error{Type: "int_type", Loc: []pyjson.Value{"body", name}, Msg: "Input should be a valid integer", Input: nil})
+		return 0, false
+	}
+	return e.boundedInt(raw, name, minValue, maxValue)
+}
+
+// boundedInt is OptionalBoundedInt/DefaultedBoundedInt's shared non-null
+// path: raw is coerced the way pydantic's lax int mode does (verified
+// empirically against a live pydantic model) -- a JSON integer passes
+// through; a JSON float with no fractional part coerces, a fractional one
+// is "int_from_float"; a string that parses cleanly as a base-10 integer
+// (ASCII whitespace trimmed) coerces, one that does not is "int_parsing";
+// any other JSON type is "int_type" -- then bounds-checked.
+func (e *Errors) boundedInt(raw pyjson.Value, name string, minValue, maxValue int64) (int64, bool) {
+	loc := []pyjson.Value{"body", name}
+	var value int64
+	switch v := raw.(type) {
+	case pyjson.Int:
+		value = v.Int64()
+	case pyjson.Float:
+		f := float64(v)
+		if f != math.Trunc(f) {
+			*e = append(*e, Error{Type: "int_from_float", Loc: loc, Input: raw,
+				Msg: "Input should be a valid integer, got a number with a fractional part"})
+			return 0, false
+		}
+		value = int64(f)
+	case string:
+		parsed, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
+		if err != nil {
+			*e = append(*e, Error{Type: "int_parsing", Loc: loc, Input: raw,
+				Msg: "Input should be a valid integer, unable to parse string as an integer"})
+			return 0, false
+		}
+		value = parsed
+	default:
+		*e = append(*e, Error{Type: "int_type", Loc: loc, Msg: "Input should be a valid integer", Input: raw})
+		return 0, false
+	}
+	if value < minValue {
+		ctx := pyjson.NewObject()
+		ctx.Set("ge", minValue)
+		*e = append(*e, Error{Type: "greater_than_equal", Loc: loc, Input: raw, Ctx: ctx,
+			Msg: "Input should be greater than or equal to " + strconv.FormatInt(minValue, 10)})
+		return 0, false
+	}
+	if value > maxValue {
+		ctx := pyjson.NewObject()
+		ctx.Set("le", maxValue)
+		*e = append(*e, Error{Type: "less_than_equal", Loc: loc, Input: raw, Ctx: ctx,
+			Msg: "Input should be less than or equal to " + strconv.FormatInt(maxValue, 10)})
+		return 0, false
+	}
+	return value, true
 }
 
 // undecodableBytes stands for request bytes that are not UTF-8.

@@ -28,6 +28,7 @@ var contractedWriters = map[string]string{
 	"internal/streamhandlers/external_clickhouse.go|git_pull_requests":                "external pull_request.v1",
 	"internal/streamhandlers/external_clickhouse.go|git_pull_request_reviews":         "external review.v1",
 	"internal/streamhandlers/external_clickhouse.go|identities":                       "external identity.v1",
+	"internal/api/teamsidentity/store.go|identities":                                  "admin identity CRUD: CreateOrUpdateIdentity reads the current row (GetIdentity) and carries forward every field this write did not provide -- R1/R2 applied by hand rather than through storedversion.Contract, since the admin write's own IdentityWrite already distinguishes not-provided (nil) from provided (including empty)",
 	"internal/streamhandlers/external_clickhouse.go|repos":                            "external repository.v1",
 	"internal/streamhandlers/external_clickhouse.go|work_items":                       "external work_item.v1",
 	"internal/streamhandlers/internal_ingest.go|deployments":                          "internal deployments",

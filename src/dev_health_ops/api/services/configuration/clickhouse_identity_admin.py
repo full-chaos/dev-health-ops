@@ -130,7 +130,13 @@ class ClickHouseIdentityStore:
         if active_only:
             conditions.append("is_active = 1")
         where = " AND ".join(conditions)
-        query = f"SELECT {_IDENTITY_SELECT} FROM identities FINAL WHERE {where}"
+        # ORDER BY: without one, ClickHouse's merge order is whatever the
+        # engine happens to return -- not a contract either the Go port or
+        # this reader could rely on (CHAOS-6310 r1 finding #9). canonical_id
+        # matches this table's own MergeTree sort key (org_id, canonical_id),
+        # so it costs nothing extra while making list responses
+        # deterministic on both planes.
+        query = f"SELECT {_IDENTITY_SELECT} FROM identities FINAL WHERE {where} ORDER BY canonical_id"
         async with self.store._lock:
             result = await asyncio.to_thread(client.query, query, parameters=params)
         return [self._row_to_identity(row) for row in (result.result_rows or [])]

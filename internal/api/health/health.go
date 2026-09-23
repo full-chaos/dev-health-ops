@@ -12,11 +12,11 @@ import (
 	"sync"
 	"time"
 
+	chdriver "github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
-	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/storage/valkey"
 )
 
@@ -24,10 +24,17 @@ import (
 type Deps struct {
 	// Pool is the api pool; nil means Postgres is not configured.
 	Pool *pgxpool.Pool
-	// ClickHouseDSN and ValkeyURI are the dependencies /health pings; ""
-	// means not configured.
-	ClickHouseDSN string
-	ValkeyURI     string
+	// ClickHouse is the api Service's OWN already-open connection (its
+	// dedicated login, the same one internal/api/teamsidentity's routes
+	// use) -- one process, one ClickHouse credential (R395): this reuses
+	// that connection rather than opening a fresh one from a generic DSN,
+	// which would need its own separate credential a real deployment's api
+	// Secret is never guaranteed to carry (CHAOS-6310 introduced the FIRST
+	// dedicated ClickHouse login for this service; there is no other one
+	// to fall back to). nil means ClickHouse is not configured.
+	ClickHouse chdriver.Conn
+	// ValkeyURI is the dependency /health pings; "" means not configured.
+	ValkeyURI string
 	// ExpectedWorkerGroups is EXPECTED_WORKER_GROUPS: nil when unset.
 	ExpectedWorkerGroups *[]string
 	Logger               *slog.Logger
@@ -150,21 +157,22 @@ func (d Deps) checkPostgres(ctx context.Context) (string, string) {
 	return "postgres", "ok"
 }
 
-// checkClickHouse is _check_clickhouse_health: SELECT 1 on a fresh
-// connection.
+// checkClickHouse is _check_clickhouse_health: SELECT 1 on the api's own
+// already-open connection (see Deps.ClickHouse's doc comment for why this
+// is not a fresh connection from a generic DSN). Nil is "down", NOT
+// "not_configured": Python's own check has no unconfigured state at all --
+// an unset CLICKHOUSE_URI there falls back to a default DSN
+// (localhost:8123) a pod cannot reach, so it always attempts a connection
+// and always answers "down" when ClickHouse is absent, confirmed against
+// the venue's own GET /health case (a ruled item, #2830's RISK-NOTES). A
+// nil Deps.ClickHouse here means the same real-world state Python is
+// always in when unconfigured, so it must answer the same way.
 func (d Deps) checkClickHouse(ctx context.Context) (string, string) {
-	if d.ClickHouseDSN == "" {
-		// Python falls back to a localhost default, which a pod cannot reach.
+	if d.ClickHouse == nil {
 		return "clickhouse", "down"
 	}
-	connection, err := clickhouse.Open(ctx, clickhouse.DefaultConfig(d.ClickHouseDSN))
-	if err != nil {
-		d.Logger.WarnContext(ctx, "api health: clickhouse unavailable")
-		return "clickhouse", "down"
-	}
-	defer connection.Close()
 	var one uint8
-	if err := connection.QueryRow(ctx, `SELECT 1 AS ok`).Scan(&one); err != nil {
+	if err := d.ClickHouse.QueryRow(ctx, `SELECT 1 AS ok`).Scan(&one); err != nil {
 		d.Logger.WarnContext(ctx, "api health: clickhouse query failed")
 		return "clickhouse", "down"
 	}

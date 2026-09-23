@@ -203,7 +203,11 @@ class ClickHouseTeamAdminService:
         if active_only:
             conditions.append("is_active = 1")
         where = " AND ".join(conditions)
-        query = f"SELECT {_TEAM_SELECT} FROM teams FINAL WHERE {where}"
+        # ORDER BY: without one, ClickHouse's merge order is whatever the
+        # engine happens to return -- not a contract either the Go port or
+        # this reader could rely on (CHAOS-6310 r1 finding #9). `id` is the
+        # team_id an operator actually reads.
+        query = f"SELECT {_TEAM_SELECT} FROM teams FINAL WHERE {where} ORDER BY id"
         async with self.store._lock:
             result = await asyncio.to_thread(client.query, query, parameters=params)
         return [self._row_to_team(row) for row in (result.result_rows or [])]

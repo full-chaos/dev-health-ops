@@ -42,6 +42,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/principal"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/routeswitch"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/teamscope"
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 )
 
 // workUnitsGetOperation/workUnitsPostOperation are this route's
@@ -492,23 +493,16 @@ func newWorkUnitsGetHandler(reader *investmentexplain.Reader) http.HandlerFunc {
 // field, nothing else required" shape) -- confirmed live there already,
 // not re-derived here.
 func decodeWorkUnitsRequestBody(bodyBytes []byte) (filters map[string]any, limit int, includeTextual bool, validationErrors []pydanticErrorDetail, bodyErr *pydanticErrorDetail) {
-	var decoded any
-	bodyIsEmptyOrNull := len(bodyBytes) == 0
-	if !bodyIsEmptyOrNull {
-		if err := json.Unmarshal(bodyBytes, &decoded); err != nil {
-			detail := jsonSyntaxErrorDetail([]any{"body"}, bodyBytes)
-			return nil, 0, false, nil, &detail
-		}
-		if decoded == nil {
-			bodyIsEmptyOrNull = true
-		}
+	decoded, bodyIsEmptyOrNull, syntaxDetail := decodeRequestBody([]any{"body"}, bodyBytes)
+	if syntaxDetail != nil {
+		return nil, 0, false, nil, syntaxDetail
 	}
 	if bodyIsEmptyOrNull {
 		detail := missingFieldError([]any{"body"}, nil)
 		return nil, 0, false, nil, &detail
 	}
 
-	body, isObject := decoded.(map[string]any)
+	body, isObject := decoded.(*pyjson.Object)
 	if !isObject {
 		detail := modelAttributesTypeError([]any{"body"}, decoded)
 		return nil, 0, false, nil, &detail
@@ -516,7 +510,7 @@ func decodeWorkUnitsRequestBody(bodyBytes []byte) (filters map[string]any, limit
 
 	var errs []pydanticErrorDetail
 
-	filtersValue, hasFilters := body["filters"]
+	filtersValue, hasFilters := body.Get("filters")
 	if !hasFilters {
 		errs = append(errs, missingFieldError([]any{"body", "filters"}, body))
 	} else {
@@ -528,7 +522,7 @@ func decodeWorkUnitsRequestBody(bodyBytes []byte) (filters map[string]any, limit
 	// `payload.limit or 200`, api/main.py:620) applied by the caller, not
 	// here; this function only reports a present-but-ill-typed value.
 	limitSet := false
-	if limitValue, hasLimit := body["limit"]; hasLimit && limitValue != nil {
+	if limitValue, hasLimit := body.Get("limit"); hasLimit && limitValue != nil {
 		coerced, detail := coerceIntBodyField([]any{"body", "limit"}, limitValue)
 		if detail != nil {
 			errs = append(errs, *detail)
@@ -539,7 +533,7 @@ func decodeWorkUnitsRequestBody(bodyBytes []byte) (filters map[string]any, limit
 	}
 
 	includeTextual = true
-	if includeTextualValue, hasIncludeTextual := body["include_textual"]; hasIncludeTextual && includeTextualValue != nil {
+	if includeTextualValue, hasIncludeTextual := body.Get("include_textual"); hasIncludeTextual && includeTextualValue != nil {
 		coerced, _, detail := coerceBoolBodyField([]any{"body", "include_textual"}, includeTextualValue)
 		if detail != nil {
 			errs = append(errs, *detail)
@@ -552,7 +546,7 @@ func decodeWorkUnitsRequestBody(bodyBytes []byte) (filters map[string]any, limit
 		return nil, 0, false, errs, nil
 	}
 
-	filters, _ = filtersValue.(map[string]any)
+	filters, _ = legacyJSON(filtersValue).(map[string]any)
 	if !limitSet {
 		limit = 0
 	}

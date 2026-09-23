@@ -54,11 +54,20 @@ func Routes(deps Deps) []httpapi.Route {
 		h.getenv = lookupEnv
 	}
 	admin := func(handler http.HandlerFunc) http.Handler { return h.guard.Wrap(policy.Admin, handler) }
+	// A route with a pydantic body reads it before the admin dependency
+	// (FastAPI's order); its validation errors come after it.
+	adminBody := func(handler http.HandlerFunc) http.Handler { return h.guard.BodyFirst(policy.Admin, handler) }
 	return []httpapi.Route{
-		{Method: http.MethodGet, Pattern: prefix + "/sources", Handler: admin(h.listSources), Allow: "POST"},
+		{Method: http.MethodPost, Pattern: prefix + "/sources", Handler: adminBody(h.createSource), Allow: "POST"},
+		{Method: http.MethodGet, Pattern: prefix + "/sources", Handler: admin(h.listSources)},
 		{Method: http.MethodGet, Pattern: prefix + "/sources/{source_id}", Handler: admin(h.getSource), Allow: "GET"},
+		{Method: http.MethodPatch, Pattern: prefix + "/sources/{source_id}", Handler: adminBody(h.patchSource)},
 		{Method: http.MethodGet, Pattern: prefix + "/sources/{source_id}/tokens", Handler: admin(h.listSourceTokens), Allow: "GET"},
+		{Method: http.MethodPost, Pattern: prefix + "/sources/{source_id}/tokens", Handler: adminBody(h.createSourceToken)},
 		{Method: http.MethodGet, Pattern: prefix + "/tokens", Handler: admin(h.listOrgTokens), Allow: "GET"},
+		{Method: http.MethodPost, Pattern: prefix + "/tokens", Handler: adminBody(h.createOrgToken)},
+		{Method: http.MethodPost, Pattern: prefix + "/tokens/{token_id}/rotate", Handler: admin(h.rotateToken), Allow: "POST"},
+		{Method: http.MethodPost, Pattern: prefix + "/tokens/{token_id}/revoke", Handler: admin(h.revokeToken), Allow: "POST"},
 		{Method: http.MethodGet, Pattern: prefix + "/sources/{source_id}/batches", Handler: admin(h.listSourceBatches), Allow: "GET"},
 		{Method: http.MethodGet, Pattern: prefix + "/batches/{ingestion_id}", Handler: admin(h.getBatch), Allow: "GET"},
 		{Method: http.MethodGet, Pattern: prefix + "/schemas", Handler: admin(h.listSchemas), Allow: "GET"},

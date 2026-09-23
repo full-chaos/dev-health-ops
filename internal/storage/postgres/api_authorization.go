@@ -66,10 +66,13 @@ func apiPosture() RolePosture {
 			// external-ingest (CHAOS-6246): bearer-token auth resolves the
 			// token row and bumps last_used_at/last_used_ip on every
 			// request that reaches a scope check (auth.go's bumpLastUsed).
-			{"external_ingest_tokens", false, true, false},
+			// CHAOS-6319 (customer-push admin writes) mints tokens (INSERT)
+			// and rotates/revokes them (UPDATE revoked_at), widened in place.
+			{"external_ingest_tokens", true, true, false},
 			// The token's bound source, and source-ownership resolution
-			// (ownership.go's resolveEffectiveMode): read-only.
-			{"external_ingest_sources", false, false, false},
+			// (ownership.go's resolveEffectiveMode). CHAOS-6319 registers
+			// sources (INSERT) and patches them (UPDATE), widened in place.
+			{"external_ingest_sources", true, true, false},
 			// The CC22 accept sequence's status row: created on NEW,
 			// updated on RETRY/mark-stream-unavailable, read by
 			// GET /batches* and the idempotency NEW/REPLAY/CONFLICT/RETRY
@@ -96,6 +99,10 @@ func apiPosture() RolePosture {
 			// findActiveManagedOwner): read-only.
 			{"integration_sources", false, false, false},
 			{"integrations", false, false, false},
+			// CHAOS-6319: the customer-push ownership check reads a managed
+			// integration's credential row (provider and plain config only;
+			// the encrypted payload is never read or decrypted here).
+			{"integration_credentials", false, false, false},
 			// The protected-route principal (internal/api/policy): the users
 			// row behind every access token, org membership behind
 			// X-Org-Id, and the active impersonation session of a superuser.

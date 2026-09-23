@@ -9,10 +9,16 @@ package audit
 
 import (
 	"context"
+	"net"
+	"net/http"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
+
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
 // Action is models/audit.py AuditAction's value. Only the actions this PR's
@@ -138,4 +144,40 @@ func jsonOrEmptyObject(raw []byte) any {
 		return []byte("{}")
 	}
 	return raw
+}
+
+// RequestMetadata is the request_metadata JSON column text emit_audit_log
+// stores (api/utils/audit.py extract_request_metadata, then
+// AuditLog.create_entry): ip_address (the first X-Forwarded-For hop,
+// stripped, when the header is non-empty; else the peer host), user_agent
+// and request_id (X-Request-ID), each kept only when non-empty, in that
+// order, written as SQLAlchemy's JSON type writes it (json.dumps defaults).
+// nil when none is present (create_entry stores None, which AuditLog
+// stores as "{}").
+func RequestMetadata(r *http.Request) ([]byte, error) {
+	metadata := pyjson.NewObject()
+	var ip string
+	if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
+		first, _, _ := strings.Cut(forwarded, ",")
+		ip = pythonparity.Strip(first)
+	} else if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		ip = host
+	}
+	if ip != "" {
+		metadata.Set("ip_address", ip)
+	}
+	if agent := r.Header.Get("User-Agent"); agent != "" {
+		metadata.Set("user_agent", agent)
+	}
+	if requestID := r.Header.Get("X-Request-ID"); requestID != "" {
+		metadata.Set("request_id", requestID)
+	}
+	if metadata.Len() == 0 {
+		return nil, nil
+	}
+	text, err := pyjson.Dumps(metadata)
+	if err != nil {
+		return nil, err
+	}
+	return []byte(text), nil
 }

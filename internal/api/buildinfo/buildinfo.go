@@ -7,19 +7,12 @@
 package buildinfo
 
 import (
-	"encoding/json"
 	"net/http"
-	"strings"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/platform/buildstamp"
 	"github.com/full-chaos/dev-health-ops/internal/platform/version"
-)
-
-// Header names the prover reads from every candidate response.
-const (
-	PlaneHeader = "x-dev-health-plane"
-	BuildHeader = "x-dev-health-build"
 )
 
 // Routes returns GET /buildinfo behind any authenticated caller. A nil guard
@@ -29,11 +22,10 @@ func Routes(guard *policy.Guard, info version.Info) []httpapi.Route {
 	if guard == nil {
 		return nil
 	}
-	body, err := json.Marshal(info)
+	body, err := buildstamp.Body(info)
 	if err != nil {
 		return nil // six scalar fields; cannot fail
 	}
-	body = append(body, '\n')
 	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -45,18 +37,13 @@ func Routes(guard *policy.Guard, info version.Info) []httpapi.Route {
 	}}
 }
 
-// Stamp sets x-dev-health-plane: go on every response and, when info names a
-// real build, x-dev-health-build. Both are set before the handler runs, so a
-// handler that commits its status line first cannot lose them.
+// Stamp applies buildstamp.SetProvenance to every response, before the
+// handler runs, so a handler that commits its status line first cannot lose
+// the headers.
 func Stamp(info version.Info) func(http.Handler) http.Handler {
-	commit := strings.TrimSpace(info.Commit)
-	known := commit != "" && commit != "unknown"
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set(PlaneHeader, "go")
-			if known {
-				w.Header().Set(BuildHeader, commit)
-			}
+			buildstamp.SetProvenance(w.Header(), info.Commit)
 			next.ServeHTTP(w, r)
 		})
 	}

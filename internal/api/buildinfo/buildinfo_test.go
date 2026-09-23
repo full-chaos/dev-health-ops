@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/full-chaos/dev-health-ops/internal/platform/buildstamp"
 	"github.com/full-chaos/dev-health-ops/internal/platform/version"
 )
 
@@ -21,10 +22,10 @@ func serve(t *testing.T, info version.Info, status int) http.Header {
 func TestStampNamesPlaneAndBuildOnEveryStatus(t *testing.T) {
 	for _, status := range []int{200, 401, 500} {
 		header := serve(t, version.Info{Commit: " abc123 "}, status)
-		if got := header.Get(PlaneHeader); got != "go" {
+		if got := header.Get(buildstamp.PlaneHeader); got != "go" {
 			t.Fatalf("status %d plane = %q, want go", status, got)
 		}
-		if got := header.Get(BuildHeader); got != "abc123" {
+		if got := header.Get(buildstamp.BuildHeader); got != "abc123" {
 			t.Fatalf("status %d build = %q, want abc123", status, got)
 		}
 	}
@@ -33,10 +34,10 @@ func TestStampNamesPlaneAndBuildOnEveryStatus(t *testing.T) {
 func TestStampOmitsBuildWhenCommitUnknown(t *testing.T) {
 	for _, commit := range []string{"", "unknown"} {
 		header := serve(t, version.Info{Commit: commit}, 200)
-		if got := header.Get(BuildHeader); got != "" {
+		if got := header.Get(buildstamp.BuildHeader); got != "" {
 			t.Fatalf("commit %q produced build header %q; an unidentified build must not be named", commit, got)
 		}
-		if header.Get(PlaneHeader) != "go" {
+		if header.Get(buildstamp.PlaneHeader) != "go" {
 			t.Fatalf("plane header missing for commit %q", commit)
 		}
 	}

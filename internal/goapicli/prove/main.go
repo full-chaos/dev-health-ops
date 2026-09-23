@@ -39,7 +39,6 @@
 package prove
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -48,7 +47,6 @@ import (
 	"io"
 	"net/url"
 	"os"
-	"os/exec"
 	"os/signal"
 	"reflect"
 	"sort"
@@ -72,8 +70,8 @@ import (
 // The two planes accept different credential KINDS, measured on the
 // deployed stack (JOB 4): an access token gets HTTP 200 on the Python edge
 // and 401 on /buildinfo; an effective-principal envelope gets the reverse.
-// The edge leg has no env var: -edge-bearer-exec is its only source, since
-// mint-edge-token can mint a fresh access token for every run.
+// The edge leg has no env var: minting in process (mint-edge-token) is its
+// only source, a fresh access token every run.
 const proofBearerEnvVar = "GO_API_PROVE_PROOF_BEARER"
 
 // postgresURIEnvVar is the ONLY place the DSN may come from other than the
@@ -92,9 +90,9 @@ const postgresURIEnvVar = "POSTGRES_URI"
 const proofCredentialFreshness = 25 * time.Second
 
 // edgeCredentialFreshness is how long a minted edge access token is reused
-// before -edge-bearer-exec is run again. mint-edge-token's default TTL is
-// ten minutes; four leaves six for the request to arrive, and it keeps a
-// long run on short-lived tokens instead of one token as long as the run.
+// before mint-edge-token is re-invoked. Its default TTL is ten minutes;
+// four leaves six for the request to arrive, and it keeps a long run on
+// short-lived tokens instead of one token as long as the run.
 const edgeCredentialFreshness = 4 * time.Minute
 
 // Command is the `goapi prove` verb of the dho binary.
@@ -114,29 +112,26 @@ func Command() cli.Command {
 }
 
 type flags struct {
-	registryURL           string
-	buildInfoURL          string
-	edgeURL               string
-	candidateBuild        string
-	allowProverBuildSkew  bool
-	proofURL              string
-	documentsPath         string
-	postgresURI           string
-	orgID                 string
-	artifactDir           string
-	recordedBy            string
-	reviewEvidence        string
-	principalKind         string
-	audience              string
-	keyID                 string
-	proofBearerExec       string
-	edgeBearerExec        string
-	proofBearerSecretFile string
-	dryRun                bool
-	timeout               time.Duration
-	window                goapiproof.Window
-	reportPath            string
-	instanceIDs           instanceIDFlag
+	registryURL          string
+	buildInfoURL         string
+	edgeURL              string
+	candidateBuild       string
+	allowProverBuildSkew bool
+	proofURL             string
+	documentsPath        string
+	postgresURI          string
+	orgID                string
+	artifactDir          string
+	recordedBy           string
+	reviewEvidence       string
+	principalKind        string
+	audience             string
+	keyID                string
+	dryRun               bool
+	timeout              time.Duration
+	window               goapiproof.Window
+	reportPath           string
+	instanceIDs          instanceIDFlag
 }
 
 // instanceIDFlag collects repeated -instance-id operation=value pairs into
@@ -186,9 +181,6 @@ func registerFlags() (*flag.FlagSet, *flags) {
 	fs.StringVar(&f.candidateBuild, "candidate-build", "", "optional CROSS-CHECK: fail if the running build is not this sha. Never the source of the value written (team-lead ruling R51)")
 	fs.StringVar(&f.edgeURL, "edge-url", "http://localhost:8000/graphql", "the real product GraphQL edge; both the canary/primary candidate leg and every baseline leg go through it")
 	fs.StringVar(&f.proofURL, "proof-url", "", "measurement-only route able to execute a SHADOW-mode operation on the deployed Go build; empty means shadow operations are refused by name rather than skipped")
-	fs.StringVar(&f.proofBearerExec, "proof-bearer-exec", "", "JSON argv of a helper printing a FRESH effective-principal envelope on stdout, e.g. '[\"/opt/job5/mint-envelope.sh\",\"--org\",\"70d529e0\"]'. Re-run as the previous envelope ages out; required when the envelope's TTL is shorter than the run (it is: 60s). argv, not a shell string, so nothing is interpolated into a shell. NOTE: argv IS visible in the process table, so a secret must NEVER appear as one of these elements -- an element that looks like one is refused by index, never by value. If the helper needs a credential, pass it with -proof-bearer-secret-file: it arrives on an inherited file descriptor (fd 3, env PROOF_BEARER_SECRET_FD=3), never in argv. The helper's stdout and stderr are NEVER reported by this command")
-	fs.StringVar(&f.edgeBearerExec, "edge-bearer-exec", "", "JSON argv of a helper printing a FRESH edge access token on stdout, e.g. '[\"/usr/local/bin/dho\",\"mint\",\"edge-token\",\"-org\",\"<org>\"]'. Re-run as the token ages. This is the ONLY source for the edge credential (required). The same argv rules as -proof-bearer-exec apply: no secret may appear as an element (the helper reads its key from its own environment). The helper's stdout and stderr are NEVER reported by this command")
-	fs.StringVar(&f.proofBearerSecretFile, "proof-bearer-secret-file", "", "path to a file holding the credential the -proof-bearer-exec helper needs. Its bytes are handed to the helper on an inherited fd (3, env PROOF_BEARER_SECRET_FD=3) -- never in argv, an env VALUE, a log, or an error. The file must be owner-only (refused if group- or other-readable) and non-empty")
 	fs.StringVar(&f.documentsPath, "documents", "", "path to `registrydump -file cmd/query-api/query_route.go` JSON output (required)")
 	secrets.BindFlag(fs, &f.postgresURI, "postgres-uri", postgresURIEnvVar, "domain Postgres DSN holding go_api_routing_state / go_api_proof_run")
 	fs.StringVar(&f.orgID, "org", "", "org id every request is made for (required)")
@@ -756,9 +748,9 @@ func emitReport(f flags, registry goapiproof.RegistryView, builds goapiproof.Pro
 	// a run that will fail at the closing /buildinfo, and without this
 	// line that is invisible until it does.
 	fmt.Printf("go-api-prove:   envelope mints = %d\n", proofCredential.Mints())
-	// The edge credential is always minted (-edge-bearer-exec is the only
-	// source), so this is at least 1 on a successful run -- a 0 here means
-	// the edge leg was never actually exercised.
+	// The edge credential is always minted (the only source), so this is
+	// at least 1 on a successful run -- a 0 here means the edge leg was
+	// never actually exercised.
 	fmt.Printf("go-api-prove:   edge access token mints = %d\n", edgeCredential.Mints())
 	for _, state := range sortedKeys(summary.ByTerminalState) {
 		fmt.Printf("go-api-prove:   terminal_state %s = %d\n", state, summary.ByTerminalState[state])
@@ -815,53 +807,38 @@ func sortedKeys[V any](m map[string]V) []string {
 	return keys
 }
 
-// credentials builds the two credential sources, one per plane.
+// mintCredential mints one of the two allowlisted credentials, exactly
+// like goapiproof.MintViaAllowlistedHelper -- which this package-level
+// var defaults to. credentials() below calls THIS, never the function
+// directly, so a test can substitute a synthetic minter for the duration
+// of one run() call (see e2e_test.go's withFakeMinter), the same seam
+// openPostgresPool already gives run()'s Postgres connection step.
+var mintCredential = goapiproof.MintViaAllowlistedHelper //nolint:gochecknoglobals // deliberately test-substitutable, same seam as openPostgresPool
+
+// credentials builds the two credential sources, one per plane, minted
+// IN PROCESS via mintCredential -- the same mechanism `goapi rest-prove`
+// already uses: mint-envelope and mint-edge-token are compiled into this
+// binary, so minting calls their packages directly; nothing forks a
+// subprocess to mint a credential anymore.
 //
-// The edge token is always MINTED: -edge-bearer-exec runs a helper that
-// signs a short-lived access token for the proof service principal
-// (cmd/mint-edge-token), re-run as the token ages. It is the only source
-// for this credential -- the earlier hand-minted static token expired
-// mid-day and had to be replaced by hand, and mint-edge-token replaces
-// that operator step. The proof
-// credential is normally MINTED, because the effective-principal envelope
-// it needs lives 60 seconds and a fifteen-operation run does not fit in
-// that. Go cannot mint one itself -- issue_effective_principal_envelope
-// needs the envelope signing private key and a database-authenticated
-// user, and nothing exposes it to an external caller -- so the minting
-// stays outside this process behind an operator-supplied command.
+// The edge token is always minted (mint-edge-token), re-run as it ages --
+// the only source for this credential; a hand-minted static token expired
+// mid-day once and had to be replaced by hand.
 //
-// A static proof bearer is still accepted, because it is the right shape
-// for a one-operation run and for a test, but it is exactly what failed
-// on the real stack; the refusal below says so rather than letting a
-// second operator rediscover it at the closing /buildinfo.
+// The proof credential is normally minted too (mint-envelope): the
+// effective-principal envelope it needs lives 60 seconds and a
+// fifteen-operation run does not fit in that. A static proof bearer
+// (proofBearerEnvVar) is still accepted as a fallback, because it is the
+// right shape for a one-operation run and for a test -- but it is exactly
+// what failed on the real stack; the refusal below says so rather than
+// letting a second operator rediscover it at the closing /buildinfo.
 func credentials(f flags) (edge, proof *goapiproof.Credential, err error) {
-	switch {
-	case f.edgeBearerExec != "":
-		argv, err := parseHelperArgv("-edge-bearer-exec", f.edgeBearerExec)
-		if err != nil {
-			return nil, nil, err
-		}
-		// An access token is a JWT as well, so the same shape check
-		// catches a helper that printed a usage line instead of a token.
-		edge = goapiproof.MintedCredential("Authorization", "edge access token", edgeCredentialFreshness,
-			func(ctx context.Context) (string, error) {
-				return mintBearer(ctx, argv, "")
-			}).WithShapeValidator(goapiproof.ValidateEnvelopeShape)
-	default:
-		return nil, nil, errors.New("no edge credential: set -edge-bearer-exec to a helper printing a fresh ACCESS TOKEN the Python edge accepts (the VALUE is never printed by this command)")
-	}
+	edge = goapiproof.MintedCredential("Authorization", "edge access token", edgeCredentialFreshness,
+		func(ctx context.Context) (string, error) {
+			return mintCredential(ctx, "mint-edge-token", []string{"-org", f.orgID})
+		}).WithShapeValidator(goapiproof.ValidateEnvelopeShape)
 
 	switch {
-	case f.proofBearerExec != "":
-		argv, err := parseHelperArgv("-proof-bearer-exec", f.proofBearerExec)
-		if err != nil {
-			return nil, nil, err
-		}
-		secretFile := f.proofBearerSecretFile
-		proof = goapiproof.MintedCredential("Authorization", "effective-principal envelope", proofCredentialFreshness,
-			func(ctx context.Context) (string, error) {
-				return mintBearer(ctx, argv, secretFile)
-			}).WithShapeValidator(goapiproof.ValidateEnvelopeShape)
 	case os.Getenv(proofBearerEnvVar) != "":
 		// Validated HERE, at construction, so a malformed static envelope
 		// fails as a configuration error before anything is measured
@@ -873,306 +850,12 @@ func credentials(f flags) (edge, proof *goapiproof.Credential, err error) {
 		}
 		proof = goapiproof.StaticCredential("Authorization", "effective-principal envelope", static)
 	default:
-		return nil, nil, fmt.Errorf(
-			"no proof-plane credential: /buildinfo and %s check the effective-principal ENVELOPE, which the edge access token cannot satisfy (measured: access token -> 401 on /buildinfo, envelope -> 401 on the edge).\n"+
-				"  Set -proof-bearer-exec to a JSON argv printing a fresh envelope -- preferred, because ENVELOPE_DEFAULT_TTL_SECONDS is 60 and a full run outlives that --\n"+
-				"  or %s for a short run.", "/query/proof", proofBearerEnvVar)
+		proof = goapiproof.MintedCredential("Authorization", "effective-principal envelope", proofCredentialFreshness,
+			func(ctx context.Context) (string, error) {
+				return mintCredential(ctx, "mint-envelope", []string{"-org", f.orgID})
+			}).WithShapeValidator(goapiproof.ValidateEnvelopeShape)
 	}
 	return edge, proof, nil
-}
-
-// parseHelperArgv decodes a -*-bearer-exec flag value into an argv and
-// refuses an element that looks like a credential. flagName is only used
-// in messages.
-func parseHelperArgv(flagName, raw string) ([]string, error) {
-	var argv []string
-	if err := json.Unmarshal([]byte(raw), &argv); err != nil {
-		return nil, fmt.Errorf("%s must be a JSON array of strings, e.g. [\"/path/to/helper\",\"--org\",\"ORG\"]: %w", flagName, err)
-	}
-	if len(argv) == 0 {
-		return nil, fmt.Errorf("%s is an empty argv", flagName)
-	}
-	if err := refuseCredentialLikeArgv(flagName, argv); err != nil {
-		return nil, err
-	}
-	return argv, nil
-}
-
-// Bounds on the minting helper. All three exist because the helper is
-// operator-supplied and its output becomes an Authorization header.
-const (
-	// mintStdoutLimit caps what is read. A helper that streams megabytes
-	// (a log, a core dump, /dev/urandom) must not be buffered whole just
-	// to be rejected as the wrong shape. Exceeding it is a REFUSAL, never
-	// a truncation: a test built a helper emitting exactly 8192 JWT-shaped
-	// bytes followed by noise, and the truncated prefix passed the shape
-	// check and was installed as an Authorization header. A silently
-	// truncated credential fails remotely as another 401 that reads like a
-	// rejected one.
-	mintStdoutLimit = 8 << 10
-	// mintTimeout bounds one invocation. It is separate from the run
-	// deadline so a hung helper fails as a hung helper, with its own
-	// message, rather than as an unexplained slow run.
-	mintTimeout = 20 * time.Second
-)
-
-// mintBearer runs the operator's helper and returns its stdout.
-//
-// Three properties, each from an executed finding or its root cause:
-//
-//  1. NOTHING from the helper reaches the error. Not its stderr, not its
-//     argv, not its output. Testing proved the previous version printed a
-//     secret written to stderr straight into the operator-facing error --
-//     the helper's own diagnostics are not separable from its credential,
-//     so the only safe amount to quote is none. The error carries a fixed
-//     message and the exit code, which is what an operator needs to go
-//     look at their own helper's logs.
-//
-//  2. argv, never `sh -c`. A shell string puts the whole command line in
-//     the process table, so a credential written inline in that string is
-//     readable by every user on the box, and it invites shell injection
-//     through anything interpolated into it. The helper is now a path plus
-//     arguments, executed directly.
-//
-//  3. Bounded and killable. Output is capped, the invocation has its own
-//     timeout, and the helper runs in its own process group so a timeout
-//     kills the children it spawned rather than orphaning them -- a
-//     `docker compose exec` helper is a process tree, not a process.
-//
-//  4. A credential the helper itself needs never rides on argv either.
-//     secretFilePath, when set, is opened here and its bytes are handed
-//     to the helper on an inherited fd (3) with PROOF_BEARER_SECRET_FD=3
-//     set so the helper knows where to read it -- the same argv-is-a-
-//     process-table-leak reasoning as (2), one level further out.
-func mintBearer(ctx context.Context, argv []string, secretFilePath string) (string, error) {
-	if len(argv) == 0 {
-		return "", errors.New("no minting helper configured")
-	}
-	ctx, cancel := context.WithTimeout(ctx, mintTimeout)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
-	// Own process group, so Cancel below reaches the whole tree.
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error {
-		if cmd.Process == nil {
-			return nil
-		}
-		// Negative pid = the process GROUP.
-		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-	}
-	// WaitDelay bounds the wait on the OUTPUT PIPE, which Cancel does not
-	// reach. A helper whose parent exits while a CHILD inherited
-	// stdout leaves the write end open, and cmd.Run() blocks reading it
-	// long after the group has been signalled.
-	cmd.WaitDelay = time.Second
-
-	var stdout bytes.Buffer
-	bounded := &limitedWriter{w: &stdout, remaining: mintStdoutLimit}
-	cmd.Stdout = bounded
-	// stderr is DISCARDED rather than captured. Captured, it would sit in
-	// memory waiting for somebody to decide it was safe to print, and testing
-	// showed how that decision goes.
-	cmd.Stderr = io.Discard
-
-	var secretReader *os.File
-	if secretFilePath != "" {
-		secretBytes, secretErr := readSecretFile(secretFilePath)
-		if secretErr != nil {
-			return "", secretErr
-		}
-		reader, writer, pipeErr := os.Pipe()
-		if pipeErr != nil {
-			return "", fmt.Errorf("open the -proof-bearer-secret-file delivery pipe: %w", pipeErr)
-		}
-		secretReader = reader
-		// fd 3: stdin/stdout/stderr are 0/1/2, so the first ExtraFiles
-		// entry lands at 3 -- the fd number PROOF_BEARER_SECRET_FD names.
-		cmd.ExtraFiles = []*os.File{reader}
-		cmd.Env = append(os.Environ(), "PROOF_BEARER_SECRET_FD=3")
-		// Written in a goroutine: the pipe's kernel buffer is finite, and
-		// this write must not be able to deadlock against a helper that
-		// reads fd 3 only after doing something else first.
-		go func() {
-			_, _ = writer.Write(secretBytes)
-			_ = writer.Close()
-		}()
-	}
-
-	// Start, not Run: the parent's copy of the pipe's read end must close
-	// once the child has it (via fd inheritance across exec), or a helper
-	// that never reads fd 3 leaves this process holding it open forever.
-	startErr := cmd.Start()
-	if secretReader != nil {
-		_ = secretReader.Close()
-	}
-	var err error
-	if startErr != nil {
-		err = startErr
-	} else {
-		err = cmd.Wait()
-	}
-	// WaitDelay bounds the WAIT, not the descendants. The parent can
-	// exit, mintBearer can return, and a grandchild the helper spawned is
-	// still running -- observed `State: S (sleeping)` after the deadline
-	// error was already returned. So the group is killed unconditionally
-	// and REAPED here, whatever Run reported: a helper is a process tree,
-	// and returning while part of it lives is reporting a termination that
-	// did not happen.
-	killHelperGroup(cmd)
-	// Overflow is checked FIRST. Testing found the specific message never
-	// fired: a helper that overruns the limit also makes cmd.Run() return
-	// an error, so the run-failure branch classified it as "could not be
-	// run" and the operator was told the wrong thing about a case we
-	// deliberately detect.
-	if bounded.overflowed {
-		return "", fmt.Errorf("the minting helper printed more than %d bytes on stdout; refusing rather than using a truncated value, which would fail remotely as an ordinary 401 (its output is deliberately not reported here -- check the helper's own logs)", mintStdoutLimit)
-	}
-	if ctxErr := ctx.Err(); errors.Is(ctxErr, context.DeadlineExceeded) {
-		return "", fmt.Errorf("the minting helper did not finish within %s and was killed (its output is deliberately not reported here -- check the helper's own logs)", mintTimeout)
-	}
-	if err != nil {
-		var exit *exec.ExitError
-		if errors.As(err, &exit) {
-			return "", fmt.Errorf("the minting helper exited %d (its output is deliberately not reported here -- check the helper's own logs)", exit.ExitCode())
-		}
-		return "", errors.New("the minting helper could not be run (its output is deliberately not reported here -- check the helper's own logs)")
-	}
-
-	minted := strings.TrimSpace(stdout.String())
-	if minted == "" {
-		return "", errors.New("the minting helper printed nothing on stdout")
-	}
-	if strings.HasPrefix(minted, "Bearer ") {
-		return minted, nil
-	}
-	return "Bearer " + minted, nil
-}
-
-// readSecretFile reads the bytes -proof-bearer-secret-file names, after
-// checking the file cannot be read by anyone but its owner and is not
-// empty.
-//
-// Every error names the FLAG and the PATH only -- never the file's
-// contents. This flag exists specifically to keep a credential off argv;
-// an error that echoed it to explain the refusal would be the exact
-// disclosure it removes.
-func readSecretFile(path string) ([]byte, error) {
-	info, err := os.Stat(path)
-	if err != nil {
-		return nil, fmt.Errorf("-proof-bearer-secret-file %s: %w", path, err)
-	}
-	if mode := info.Mode().Perm(); mode&0o077 != 0 {
-		return nil, fmt.Errorf("-proof-bearer-secret-file %s is readable by group or other (mode %04o); chmod it 0600 or tighter", path, mode)
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("-proof-bearer-secret-file %s: %w", path, err)
-	}
-	if len(data) == 0 {
-		return nil, fmt.Errorf("-proof-bearer-secret-file %s is empty", path)
-	}
-	return data, nil
-}
-
-// refuseCredentialLikeArgv refuses to start when a -*-bearer-exec
-// argv element looks like a credential rather than a path or an ordinary
-// argument.
-//
-// One function with a bounded rule set, table-tested, rather than checks
-// sprinkled at each call site: looksLikeCredential is the whole rule, and
-// this just applies it and reports WHERE.
-//
-// The refusal names the element's INDEX only, never its value -- printing
-// the value to justify the refusal would be exactly the disclosure this
-// guard exists to prevent.
-func refuseCredentialLikeArgv(flagName string, argv []string) error {
-	for i, element := range argv {
-		if looksLikeCredential(element) {
-			return fmt.Errorf("%s argv element %d looks like a credential and is refused (its value is not printed here); a helper reads its credential from its own environment or, for -proof-bearer-exec, from -proof-bearer-secret-file, never from the command line", flagName, i)
-		}
-	}
-	return nil
-}
-
-// looksLikeCredential is the bounded rule set refuseCredentialLikeArgv
-// applies: a JWT shape, a well-known provider token prefix, or a long
-// bare run of hex/base64 characters -- three shapes actually seen typed
-// into an argv, and nothing broader. A UUID (org ids look like one) does
-// NOT match: its dashes are outside both the hex and the base64 alphabet
-// this checks.
-func looksLikeCredential(value string) bool {
-	if strings.HasPrefix(value, "eyJ") && strings.Count(value, ".") == 2 {
-		return true
-	}
-	for _, prefix := range []string{"sk-", "ghp_", "github_pat_", "xoxb-"} {
-		if strings.HasPrefix(value, prefix) {
-			return true
-		}
-	}
-	return isBareTokenShape(value)
-}
-
-// isBareTokenShape reports whether value is nothing but a long run of hex
-// or (non-URL) base64 characters -- the shape of a raw token or key with
-// no recognizable prefix. 32 is the floor: shorter than every real secret
-// shape this guard has seen, and long enough that an ordinary argument (an
-// org id, a flag name, a short path segment) does not accidentally match.
-func isBareTokenShape(value string) bool {
-	if len(value) < 32 {
-		return false
-	}
-	return isAllHex(value) || isAllBase64(value)
-}
-
-func isAllHex(value string) bool {
-	for _, r := range value {
-		switch {
-		case r >= '0' && r <= '9', r >= 'a' && r <= 'f', r >= 'A' && r <= 'F':
-		default:
-			return false
-		}
-	}
-	return true
-}
-
-func isAllBase64(value string) bool {
-	for _, r := range value {
-		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
-		case r == '+' || r == '/' || r == '=':
-		default:
-			return false
-		}
-	}
-	return true
-}
-
-// limitedWriter stops storing past its limit and RECORDS that it did.
-//
-// It keeps accepting writes rather than returning an error, so the helper
-// is not killed by a broken pipe mid-sentence and the caller decides what
-// an overflow means -- and the caller refuses. Recording the overflow is
-// the part once missing: dropping the excess silently left a truncated
-// prefix looking like a whole credential.
-type limitedWriter struct {
-	w          io.Writer
-	remaining  int
-	overflowed bool
-}
-
-func (l *limitedWriter) Write(p []byte) (int, error) {
-	if len(p) > l.remaining {
-		l.overflowed = true
-		p = p[:max(l.remaining, 0)]
-	}
-	if len(p) == 0 {
-		return len(p), nil
-	}
-	n, err := l.w.Write(p)
-	l.remaining -= n
-	// Report the full length: the caller wrote it, we chose to drop it.
-	return len(p), err
 }
 
 // labelledProofURL renders a proof URL safely, passing through the
@@ -1183,37 +866,6 @@ func labelledProofURL(proofURL string) string {
 	}
 	return goapiproof.EndpointLabel(proofURL)
 }
-
-// killHelperGroup signals the helper's whole process group and waits for
-// it to actually be gone.
-//
-// Called on EVERY path, success included: a helper that spawned a
-// background child and exited 0 has still left that child holding
-// whatever it inherited. The kill is best-effort -- an already-dead group
-// gives ESRCH, which is the outcome we want -- and the wait is bounded, so
-// a process this program cannot kill (a different owner, an unkillable
-// state) delays it by helperReapTimeout and no longer.
-func killHelperGroup(cmd *exec.Cmd) {
-	if cmd.Process == nil {
-		return
-	}
-	pgid := cmd.Process.Pid
-	_ = syscall.Kill(-pgid, syscall.SIGKILL)
-
-	deadline := time.Now().Add(helperReapTimeout)
-	for time.Now().Before(deadline) {
-		// Signal 0 probes for existence without delivering anything.
-		if err := syscall.Kill(-pgid, 0); err != nil {
-			return // the group is gone
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-}
-
-// helperReapTimeout bounds the wait for the helper's group to die. Short:
-// this runs after the helper has already been SIGKILLed, and anything
-// still alive after it is not going to be killed by waiting longer.
-const helperReapTimeout = 2 * time.Second
 
 // validateEndpointFlags refuses any endpoint flag this package cannot
 // fully account for.

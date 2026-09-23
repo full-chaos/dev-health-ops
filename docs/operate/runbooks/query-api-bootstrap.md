@@ -166,24 +166,23 @@ Real proof run after the metrics drain completes (Trap #174 repair landed). Tool
 ```bash
 # From tools Pod. GO_API_ENVELOPE_PRIVATE_KEY reaches this Pod's own
 # environment via secretKeyRef (same Secret/key the api Deployment reads),
-# and `dho mint envelope` mints the envelope LOCALLY from it -- see "Tools
-# pod (operator image)" below. JWT_SECRET_KEY and POSTGRES_URI reach it the
-# same way, and `dho mint edge-token` mints the edge access token for the
-# proof service principal LOCALLY from them.
+# and `dho goapi prove` mints the envelope IN PROCESS from it -- calling
+# internal/mintcli/envelope directly, no subprocess. JWT_SECRET_KEY and
+# POSTGRES_URI reach it the same way, and the edge access token for the
+# proof service principal is minted in process too
+# (internal/mintcli/edgetoken).
 dho goapi prove \
   -registry-url=http://dev-health-query-api:8000/registry \
   -buildinfo-url=http://dev-health-query-api:8000/buildinfo \
   -edge-url=http://dev-health-ops.default.svc.cluster.local:8000/graphql \
   -documents=/app/go-api/documents.json \
   -artifact-dir=/tmp/proof/artifacts \
-  -proof-bearer-exec='["/usr/local/bin/dho","mint","envelope","-org","c6a38355-dad6-42e4-8cc9-4c712450827d"]' \
-  -edge-bearer-exec='["/usr/local/bin/dho","mint","edge-token","-org","c6a38355-dad6-42e4-8cc9-4c712450827d"]' \
   -org=c6a38355-dad6-42e4-8cc9-4c712450827d \
   -recorded-by=<operator> -review-evidence="<why this run>" \
   -since-utc=<baseline-start RFC3339> -until-utc=<proof-end RFC3339>
 ```
 
-Each bearer exec names the `dho` binary's own `mint envelope` / `mint edge-token` verbs, never a bare helper name or a path; `dho goapi prove` execs them as an ordinary subprocess and each verb reads its own secret from the Pod's environment. `-documents` is the registry dump baked into the tools image at the same commit as the binary.
+Both credentials are minted automatically, in process -- no flag names a helper or a path. `-documents` is the registry dump baked into the tools image at the same commit as the binary.
 
 The REST routes are proven the same way from the same Pod:
 
@@ -205,12 +204,12 @@ dho goapi rest-prove \
 Proof runs against the 12 canary operations (shadow set is empty by design, not deferred). Compare baseline and candidate legs; `-proof-url` left empty (Trap #163: `/query/proof` cannot mount on prod). Result: `{12 total, 11 match, 1 mismatch}` or better.
 
 **Retirement note.** `dho goapi prove` no longer accepts a hand-minted static
-edge bearer; `-edge-bearer-exec` (above) is the only source. Two prod
-cleanup steps remain, owned separately from this repo change: remove the
-now-unused bearer key from the `dev-health-go-api-prove` Secret, and remove
-the operator script that used to hand-mint it from the prod host. Re-run
-the 12-operation proof above afterward to confirm the exec path alone still
-produces a clean result.
+edge bearer; the edge credential is always minted in process now (above).
+Two prod cleanup steps remain, owned separately from this repo change:
+remove the now-unused bearer key from the `dev-health-go-api-prove`
+Secret, and remove the operator script that used to hand-mint it from the
+prod host. Re-run the 12-operation proof above afterward to confirm the
+in-process path alone still produces a clean result.
 
 ### Enable the canary set
 

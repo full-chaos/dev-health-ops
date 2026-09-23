@@ -101,6 +101,7 @@ func TestRunRefusesABaselinePrincipalThatIsNotTheNamedOrg(t *testing.T) {
 			graphqlHits.Add(1)
 			w.WriteHeader(http.StatusOK)
 		}))
+		withOrgMinter(t, cell.edgeOrg, cell.proofOrg)
 		err := runCLI(t, []string{
 			"-registry-url=" + registry.URL + "/registry",
 			"-buildinfo-url=" + buildinfo.URL + "/buildinfo",
@@ -111,8 +112,6 @@ func TestRunRefusesABaselinePrincipalThatIsNotTheNamedOrg(t *testing.T) {
 			"-recorded-by=harness",
 			"-review-evidence=e2e harness",
 			"-dry-run",
-			"-edge-bearer-exec=" + jsonArgv(t, e2eBearerHelper(t, syntheticJWT(t, map[string]string{"sub": "edge", "org_id": cell.edgeOrg}))),
-			"-proof-bearer-exec=" + jsonArgv(t, e2eBearerHelper(t, syntheticJWT(t, map[string]string{"sub": "proof", "org_id": cell.proofOrg}))),
 			"-timeout=5s",
 		})
 		edge.Close()
@@ -182,6 +181,7 @@ func exitFixture(t *testing.T, onGraphQL func(w http.ResponseWriter, baseline bo
 		t.Fatal(err)
 	}
 	withFakePool(t, &e2ePool{routingRows: [][]any{{"featureFlags", digest, "canary", buildSHA}}})
+	withOrgMinter(t, org, org)
 	reportPath = filepath.Join(t.TempDir(), "report.json")
 	return []string{
 		"-registry-url=" + registry.URL + "/registry",
@@ -193,8 +193,6 @@ func exitFixture(t *testing.T, onGraphQL func(w http.ResponseWriter, baseline bo
 		"-artifact-dir=" + t.TempDir(),
 		"-recorded-by=harness",
 		"-review-evidence=exit-path harness",
-		"-edge-bearer-exec=" + jsonArgv(t, e2eBearerHelper(t, syntheticJWT(t, map[string]string{"sub": "edge", "org_id": org}))),
-		"-proof-bearer-exec=" + jsonArgv(t, e2eBearerHelper(t, syntheticJWT(t, map[string]string{"sub": "proof", "org_id": org}))),
 		"-report=" + reportPath,
 		"-timeout=5s",
 	}, reportPath
@@ -231,11 +229,11 @@ func TestEveryGraphQLExitPathWritesTheReportWithItsCause(t *testing.T) {
 	})
 	t.Run("refused before anything is measured", func(t *testing.T) {
 		args, reportPath := exitFixture(t, func(w http.ResponseWriter, _ bool) { t.Error("a GraphQL request was sent") })
-		for i, a := range args {
-			if strings.HasPrefix(a, "-edge-bearer-exec=") {
-				args[i] = "-edge-bearer-exec=" + jsonArgv(t, e2eBearerHelper(t, syntheticJWT(t, map[string]string{"sub": "edge", "org_id": "other"})))
-			}
-		}
+		// exitFixture's own withOrgMinter named both credentials for its
+		// own org (the same "70d529e0" literal exitFixture itself uses);
+		// override the edge one to a mismatched org here, after
+		// exitFixture, so this subtest's runCLI sees the mismatch.
+		withOrgMinter(t, "other", "70d529e0")
 		if err := runCLI(t, args); !errors.Is(err, goapiproof.ErrCredentialNamesAnotherOrg) {
 			t.Fatalf("err = %v", err)
 		}

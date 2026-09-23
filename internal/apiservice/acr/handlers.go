@@ -74,14 +74,11 @@ type entitlementResponse struct {
 // already static regardless of database state, so this route stays exactly
 // as cheap.
 func healthHandler() http.Handler {
-	body, err := json.Marshal(healthResponse{
+	response := healthResponse{
 		SchemaVersion: healthSchemaVersion, Service: "dev-health-ops", Status: "ok",
-	})
-	if err != nil {
-		panic("acr: static health body must marshal: " + err.Error())
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, body)
+		writeJSON(w, r, slog.Default(), http.StatusOK, response)
 	})
 }
 
@@ -91,34 +88,27 @@ func entitlementHandler(store EntitlementStore, logger *slog.Logger) http.Handle
 		if store == nil {
 			logger.ErrorContext(r.Context(), "acr entitlement lookup: no entitlement store configured",
 				slog.String("org_id", orgID))
-			writeDetail(w, http.StatusServiceUnavailable, "Service unavailable")
+			writeDetail(w, r, logger, http.StatusServiceUnavailable, "Service unavailable")
 			return
 		}
 		entitlement, err := store.Lookup(r.Context(), orgID)
 		switch {
 		case err == nil:
-			body, marshalErr := json.Marshal(entitlementResponse{
+			writeJSON(w, r, logger, http.StatusOK, entitlementResponse{
 				SchemaVersion:       entitlementSchemaVersion,
 				OrgID:               entitlement.OrgID,
 				AgentContextRuntime: entitlement.AgentContextRuntime,
 			})
-			if marshalErr != nil {
-				logger.ErrorContext(r.Context(), "acr entitlement lookup: encode response failed",
-					slog.String("org_id", orgID), slog.Any("error", marshalErr))
-				writeDetail(w, http.StatusInternalServerError, "Internal Server Error")
-				return
-			}
-			writeJSON(w, http.StatusOK, body)
 		case errors.Is(err, ErrOrgNotFound):
-			writeDetail(w, http.StatusNotFound, "Not found")
+			writeDetail(w, r, logger, http.StatusNotFound, "Not found")
 		case errors.Is(err, ErrUnavailable):
 			logger.ErrorContext(r.Context(), "acr entitlement lookup: store unavailable",
 				slog.String("org_id", orgID), slog.Any("error", err))
-			writeDetail(w, http.StatusServiceUnavailable, "Service unavailable")
+			writeDetail(w, r, logger, http.StatusServiceUnavailable, "Service unavailable")
 		default:
 			logger.ErrorContext(r.Context(), "acr entitlement lookup: unclassified error",
 				slog.String("org_id", orgID), slog.Any("error", err))
-			writeDetail(w, http.StatusInternalServerError, "Internal Server Error")
+			writeDetail(w, r, logger, http.StatusInternalServerError, "Internal Server Error")
 		}
 	})
 }
@@ -131,17 +121,26 @@ func entitlementHandler(store EntitlementStore, logger *slog.Logger) http.Handle
 // 200 { return errUnavailable }"), so only the status code is load-bearing
 // for that caller; the body shape is kept 1:1 for any other caller and for
 // parity testing.
-func writeDetail(w http.ResponseWriter, status int, detail string) {
-	body, err := json.Marshal(map[string]string{"detail": detail})
-	if err != nil {
-		body, status = []byte(`{"detail":"Internal Server Error"}`), http.StatusInternalServerError
-	}
-	writeJSON(w, status, body)
+func writeDetail(w http.ResponseWriter, r *http.Request, logger *slog.Logger, status int, detail string) {
+	writeJSON(w, r, logger, status, map[string]string{"detail": detail})
 }
 
-func writeJSON(w http.ResponseWriter, status int, body []byte) {
+// writeJSON encodes value via json.NewEncoder(w).Encode -- this repo's own
+// JSON-response convention (cmd/query-api/pydantic_validation_error.go:
+// writePydanticValidationError), never a raw w.Write of pre-marshalled
+// bytes, which is the same Semgrep/CodeQL
+// go.lang.security.audit.xss.no-direct-write-to-responsewriter class
+// query-api's writers already avoid. Every value passed here is a fixed,
+// concrete struct or a map with plain string values (healthResponse,
+// entitlementResponse, {"detail": string}), so Encode cannot fail in
+// practice; a failure is still logged with the request id rather than
+// dropped, matching writePydanticValidationError's own convention.
+func writeJSON(w http.ResponseWriter, r *http.Request, logger *slog.Logger, status int, value any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(status)
-	_, _ = w.Write(body)
+	if err := json.NewEncoder(w).Encode(value); err != nil {
+		logger.ErrorContext(r.Context(), "acr: encode JSON response failed",
+			slog.Int("status", status), slog.Any("error", err))
+	}
 }

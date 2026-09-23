@@ -1,6 +1,7 @@
 package acr
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -159,5 +160,39 @@ func TestRoutesCarryNoCredentialsOrAuthz(t *testing.T) {
 			t.Fatalf("route %s %s sets a server-default override; internal routes use plain server defaults, nothing route-specific",
 				route.Method, route.Pattern)
 		}
+	}
+}
+
+// TestResponseBodyHasNoTrailingBytesAfterTheJSONValue is the regression
+// proof for switching writeJSON from a raw w.Write of pre-marshalled bytes
+// to json.NewEncoder(w).Encode (this repo's own JSON-response convention,
+// avoiding the go.lang.security.audit.xss.no-direct-write-to-responsewriter
+// class): Encode appends a trailing newline the old code never sent. acr's
+// own client decoder (internal/entitlements/response.go in the acr repo,
+// read-only for this change) reads the body with json.Decoder and asserts
+// `decoder.Decode(&struct{}{}) == io.EOF` immediately after the closing
+// brace to reject trailing garbage -- this test proves that check still
+// passes: a json.Decoder skips leading whitespace before deciding EOF, so a
+// single trailing "\n" is accepted exactly like an empty tail was.
+func TestResponseBodyHasNoTrailingBytesAfterTheJSONValue(t *testing.T) {
+	server := newTestServer(nil)
+	defer server.Close()
+
+	response, err := http.Get(server.URL + "/api/v1/internal/acr/health")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	raw, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	var value map[string]any
+	if err := decoder.Decode(&value); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		t.Fatalf("acr's own trailing-garbage check (Decode after the value) = %v, want io.EOF -- got body %q", err, raw)
 	}
 }

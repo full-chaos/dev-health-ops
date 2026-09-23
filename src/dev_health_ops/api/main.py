@@ -39,16 +39,6 @@ from ._errors import (
 from ._errors import (
     register_exception_handlers,
 )
-
-# CHAOS-6241: nothing in this module calls _analytics_db_url any more -- the
-# 32 handlers that did are gone. Re-exported anyway (explicit self-alias, the
-# same idiom _generic_exception_handler uses below) because
-# tests/conftest.py's autouse mock_analytics_db_url fixture patches it by
-# module-attribute path (monkeypatch.setattr("dev_health_ops.api.main.
-# _analytics_db_url", ...)) for the WHOLE suite, not just this module's own
-# tests -- removing the import breaks monkeypatch.setattr's default
-# raising=True on every single test collected, not just the 32 routes' own.
-from ._health import _analytics_db_url as _analytics_db_url
 from ._health import (
     _check_celery_health,
     _check_clickhouse_health,

@@ -19,6 +19,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 )
 
@@ -326,7 +327,7 @@ func (h handlers) entitlements(w http.ResponseWriter, r *http.Request) {
 		out.Set("limits_override", nil)
 	}
 	if license != nil && license.ExpiresAt != nil {
-		out.Set("expires_at", PydanticTime(*license.ExpiresAt))
+		out.Set("expires_at", pytime.Pydantic(pytime.UTC(*license.ExpiresAt)))
 	} else {
 		out.Set("expires_at", nil)
 	}
@@ -380,23 +381,4 @@ func coerceLimits(value pyjson.Value) *pyjson.Object {
 		}
 	}
 	return out
-}
-
-// PydanticTime is pydantic's JSON form of an aware datetime read from
-// Postgres (UTC): microseconds only when non-zero, "Z" for UTC.
-func PydanticTime(at time.Time) string {
-	at = at.UTC()
-	text := at.Format("2006-01-02T15:04:05")
-	if micros := at.Nanosecond() / 1000; micros != 0 {
-		text += "." + pad6(micros)
-	}
-	return text + "Z"
-}
-
-func pad6(n int) string {
-	digits := itoa(n)
-	for len(digits) < 6 {
-		digits = "0" + digits
-	}
-	return digits
 }

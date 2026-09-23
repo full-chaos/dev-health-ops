@@ -111,13 +111,26 @@ WHERE feature.key = $1`, featureKey, orgID).Scan(
 		// features_override JSON is the license-override source.
 		state.OrgTier = *licenseTier
 		if len(encodedOverrides) != 0 {
-			var overrides map[string]any
-			if err := json.Unmarshal(encodedOverrides, &overrides); err != nil {
+			var decoded any
+			if err := json.Unmarshal(encodedOverrides, &decoded); err != nil {
 				return state, fmt.Errorf("decode org_licenses.features_override: %w", err)
 			}
-			if raw, ok := overrides[featureKey]; ok {
-				value := jsonTruth(raw)
-				state.LicenseOverride = &value
+			// gating.py's own guard reads raw_license_overrides as the
+			// override source only `if isinstance(raw_license_overrides,
+			// dict)`, else treats it as {} -- valid JSON that decodes to
+			// something other than an object (an array, string, number,
+			// bool, or null) is a silent NO-OVERRIDE state on both planes,
+			// never a read failure. Scanning straight into map[string]any
+			// instead of checking the decoded shape first made a
+			// features_override value of exactly `[]` return an error here
+			// and deny an active org grant with a false 503 -- confirmed
+			// live against real Postgres. Only genuinely malformed JSON
+			// bytes (the Unmarshal error above) are ErrUnavailable.
+			if overrides, ok := decoded.(map[string]any); ok {
+				if raw, ok := overrides[featureKey]; ok {
+					value := jsonTruth(raw)
+					state.LicenseOverride = &value
+				}
 			}
 		}
 	} else if orgTier != nil {

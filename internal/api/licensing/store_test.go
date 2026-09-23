@@ -117,3 +117,36 @@ func TestLoadStateMalformedFeaturesOverrideJSONIsAnError(t *testing.T) {
 		t.Fatal("expected an error decoding malformed features_override JSON")
 	}
 }
+
+// TestLoadStateNonObjectFeaturesOverrideIsSilentlyNoOverride is the
+// regression proof for the confirmed P1: gating.py's own guard treats
+// raw_license_overrides as the override source only when it is a dict,
+// else as {} -- valid JSON that decodes to something other than an object
+// is a no-override state, never a read failure. Live-confirmed with
+// features_override exactly `[]`: an active org override was denied with a
+// false ErrUnavailable before this fix.
+func TestLoadStateNonObjectFeaturesOverrideIsSilentlyNoOverride(t *testing.T) {
+	for _, encoded := range []string{`[]`, `[1]`, `"x"`, `5`, `true`, `null`} {
+		t.Run(encoded, func(t *testing.T) {
+			queryer := fakeQueryer{row: fakeRow{values: []any{
+				ptr("community"), ptr(true),
+				ptr(true), (*time.Time)(nil), // an active org override, so the
+				// decision is Allowed once the (wrongly-erroring) license
+				// decode is out of the way.
+				ptr("community"), []byte(encoded),
+				ptr("community"),
+			}}}
+			state, err := loadState(context.Background(), queryer, "org-1", "agent_context_runtime", evaluatedAt)
+			if err != nil {
+				t.Fatalf("unexpected error decoding valid non-object JSON %q: %v", encoded, err)
+			}
+			if state.LicenseOverride != nil {
+				t.Fatalf("LicenseOverride = %v, want nil (non-object JSON carries no override)", *state.LicenseOverride)
+			}
+			decision := Decide("agent_context_runtime", state)
+			if !decision.Allowed || decision.Reason != ReasonEnabledByOrgOverride {
+				t.Fatalf("decision = %+v, want allowed by the active org override, unaffected by features_override %q", decision, encoded)
+			}
+		})
+	}
+}

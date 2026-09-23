@@ -165,9 +165,15 @@ def test_river_migrate_defaults_to_the_pinned_operator_image() -> None:
 def test_river_migrate_falls_back_to_the_dho_image() -> None:
     """With route activation off there is no operator image to share; the
     hook then runs the dho image (goApi.image), which CI publishes."""
-    jobs = _jobs(*_BOTH_ON, "migrations.hook.routeActivate.enabled=false", "migrations.hook.routeActivate.image=")
+    jobs = _jobs(
+        *_BOTH_ON,
+        "migrations.hook.routeActivate.enabled=false",
+        "migrations.hook.routeActivate.image=",
+    )
     container = jobs[_RIVER]["spec"]["template"]["spec"]["containers"][0]
-    assert container["image"].startswith("ghcr.io/full-chaos/dev-health-go-dho:"), container["image"]
+    assert container["image"].startswith("ghcr.io/full-chaos/dev-health-go-dho:"), (
+        container["image"]
+    )
 
 
 def test_river_migrate_applies_and_checks_with_no_shell() -> None:
@@ -181,7 +187,9 @@ def test_river_migrate_applies_and_checks_with_no_shell() -> None:
     jobs = _jobs(*_BOTH_ON)
     container = jobs[_RIVER]["spec"]["template"]["spec"]["containers"][0]
     assert "command" not in container, container.get("command")
-    assert container["args"] == ["migrate", "river", "--apply-and-check"], container.get("args")
+    assert container["args"] == ["migrate", "river", "--apply-and-check"], (
+        container.get("args")
+    )
 
 
 def test_role_passwords_never_appear_in_the_rendered_manifest() -> None:

@@ -6,6 +6,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
 // ParseReportID ports uuid.UUID(text) as the Python resolvers call it on a
@@ -25,20 +27,12 @@ func ParseReportID(text string) (string, error) {
 	}
 	value, ok := pyIntBase16(h)
 	if !ok {
-		return "", fmt.Errorf("invalid literal for int() with base 16: %s", pyQuote(h))
+		return "", fmt.Errorf("invalid literal for int() with base 16: %s", pythonparity.StrRepr(h))
 	}
 	// 32 characters hold at most 128 bits and the hyphen removal leaves no
 	// sign to read, so the value is always in the 128-bit range.
 	raw := fmt.Sprintf("%032x", value)
 	return raw[0:8] + "-" + raw[8:12] + "-" + raw[12:16] + "-" + raw[16:20] + "-" + raw[20:32], nil
-}
-
-func pyQuote(s string) string {
-	quote := "'"
-	if strings.Contains(s, "'") && !strings.Contains(s, `"`) {
-		quote = `"`
-	}
-	return quote + s + quote
 }
 
 // digitValue is the value of a Unicode decimal digit (Nd), or -1.

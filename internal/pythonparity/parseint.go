@@ -57,7 +57,7 @@ func ParseInt(value string) (*big.Int, error) {
 		position++
 	}
 
-	invalid := fmt.Errorf("invalid literal for int() with base 10: %q", value)
+	invalid := fmt.Errorf("invalid literal for int() with base 10: %s", StrRepr(value))
 
 	if position >= len(runes) || !isASCIIDecimalDigit(runes[position]) {
 		return nil, invalid

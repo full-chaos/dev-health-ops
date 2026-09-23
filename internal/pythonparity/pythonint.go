@@ -60,7 +60,7 @@ func parsePythonIntBase16(value string) (*big.Int, error) {
 		afterPrefix = true
 	}
 
-	invalid := fmt.Errorf("invalid literal for int() with base 16: %q", value)
+	invalid := fmt.Errorf("invalid literal for int() with base 16: %s", StrRepr(value))
 
 	// An underscore may LEAD only when a prefix introduced the digits, so "0x_1"
 	// parses and "_1" does not.

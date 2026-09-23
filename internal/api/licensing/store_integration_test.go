@@ -1,10 +1,9 @@
 //go:build integration
 
-package acr
+package licensing
 
 import (
 	"context"
-	"errors"
 	"testing"
 	"time"
 
@@ -32,11 +31,12 @@ func schemaFor(ctx context.Context, t *testing.T, pool *pgxpool.Pool) {
 	}
 }
 
-// TestPostgresEntitlementStoreLookupEndToEnd proves the ROUTE-LEVEL contract
-// this package owns on top of licensing.PostgresStore (already proven on its
-// own terms in internal/api/licensing/store_integration_test.go): org
-// existence is a 404, independent of the entitlement decision itself.
-func TestPostgresEntitlementStoreLookupEndToEnd(t *testing.T) {
+// TestPostgresStoreDecideEndToEnd proves the real query against a real
+// Postgres for an explicit-purchase feature (agent_context_runtime): org
+// registered/enabled with no override must be CLOSED, and an org override
+// enables it -- the property CHAOS-6244 exists to prove, now against the
+// shared engine every future route reuses.
+func TestPostgresStoreDecideEndToEnd(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
 	instance, err := containers.StartPostgres(ctx)
@@ -57,41 +57,44 @@ func TestPostgresEntitlementStoreLookupEndToEnd(t *testing.T) {
 	defer pool.Close()
 	schemaFor(ctx, t, pool)
 
-	store := PostgresEntitlementStore{Pool: pool, Now: func() time.Time { return time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC) }}
+	store := PostgresStore{Pool: pool, Now: func() time.Time { return evaluatedAt }}
+	orgID := uuid.NewString()
 
-	t.Run("org does not exist", func(t *testing.T) {
-		_, err := store.Lookup(ctx, uuid.NewString())
-		if !errors.Is(err, ErrOrgNotFound) {
-			t.Fatalf("error = %v, want ErrOrgNotFound", err)
+	t.Run("no organization row at all: falls back to community, still closed", func(t *testing.T) {
+		decision, err := store.Decide(ctx, orgID, "agent_context_runtime")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if decision.Allowed {
+			t.Fatal("Allowed = true, want false: feature is not even registered yet")
 		}
 	})
 
-	orgID := uuid.NewString()
 	if _, err := pool.Exec(ctx,
 		`INSERT INTO organizations (id, tier) VALUES ($1, 'community')`, orgID,
 	); err != nil {
 		t.Fatal(err)
 	}
-
-	t.Run("org exists, feature not registered: closed, no error, echoes org_id verbatim", func(t *testing.T) {
-		entitlement, err := store.Lookup(ctx, orgID)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if entitlement.AgentContextRuntime {
-			t.Fatal("AgentContextRuntime = true, want false: feature is not registered")
-		}
-		if entitlement.OrgID != orgID {
-			t.Fatalf("OrgID = %q, want the exact org_id argument %q", entitlement.OrgID, orgID)
-		}
-	})
-
 	featureID := uuid.NewString()
 	if _, err := pool.Exec(ctx, `
 INSERT INTO feature_flags (id, key, min_tier, is_enabled)
 VALUES ($1, 'agent_context_runtime', 'community', true)`, featureID); err != nil {
 		t.Fatal(err)
 	}
+
+	t.Run("registered, enabled, no override: explicit purchase required", func(t *testing.T) {
+		decision, err := store.Decide(ctx, orgID, "agent_context_runtime")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if decision.Allowed {
+			t.Fatal("Allowed = true, want false: no override exists and agent_context_runtime is explicit-purchase")
+		}
+		if decision.Reason != ReasonExplicitPurchaseRequired {
+			t.Fatalf("Reason = %q, want %q", decision.Reason, ReasonExplicitPurchaseRequired)
+		}
+	})
+
 	if _, err := pool.Exec(ctx, `
 INSERT INTO org_feature_overrides (org_id, feature_id, is_enabled)
 VALUES ($1, $2, true)`, orgID, featureID); err != nil {
@@ -99,12 +102,12 @@ VALUES ($1, $2, true)`, orgID, featureID); err != nil {
 	}
 
 	t.Run("org override enables it", func(t *testing.T) {
-		entitlement, err := store.Lookup(ctx, orgID)
+		decision, err := store.Decide(ctx, orgID, "agent_context_runtime")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if !entitlement.AgentContextRuntime {
-			t.Fatal("AgentContextRuntime = false, want true: an active org override exists")
+		if !decision.Allowed || decision.Reason != ReasonEnabledByOrgOverride {
+			t.Fatalf("decision = %+v, want allowed by org override", decision)
 		}
 	})
 }

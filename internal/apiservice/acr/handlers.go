@@ -1,3 +1,12 @@
+// Package acr serves the two internal routes acr's entitlement client calls
+// directly (bypassing ingress): GET /api/v1/internal/acr/health and
+// GET /api/v1/internal/acr/entitlements/{org_id}. Both routes are reachable
+// only inside the cluster network, so neither carries the bearer/mint check
+// or audit trail the Python routes had (api/internal/acr.py's credential
+// lookup and its InternalServiceCredentialAudit rows are not ported) -- the
+// network boundary is the control, not a per-request token. The
+// agent_context_runtime entitlement decision itself is ported in full via
+// internal/api/licensing, this package's only dependency for it.
 package acr
 
 import (
@@ -20,9 +29,11 @@ type Deps struct {
 	Logger *slog.Logger
 }
 
-// Routes is the acr area's route set. Both paths carry no Credentials/Authz/
-// Tenant/Feature/Audit (R340): the internal_svc_acr_token bearer check and
-// its audit trail (api/internal/acr.py) are not ported.
+// Routes is the acr area's route set. Both paths are internal, reachable
+// only inside the cluster network, so neither carries Credentials/Authz/
+// Tenant/Feature/Audit: the internal_svc_acr_token bearer check and its
+// audit trail (api/internal/acr.py) are not ported -- the network boundary
+// is the control, not a per-request token.
 func Routes(deps Deps) []httpapi.Route {
 	logger := deps.Logger
 	if logger == nil {
@@ -57,8 +68,8 @@ type entitlementResponse struct {
 	AgentContextRuntime bool   `json:"agent_context_runtime"`
 }
 
-// healthHandler is unconditional and dependency-free: with the credential
-// check removed (R340), the Python success body
+// healthHandler is unconditional and dependency-free: with no credential
+// check on this route, the Python success body
 // (ACRServiceHealthResponse's field defaults, api/internal/acr.py:40-46) was
 // already static regardless of database state, so this route stays exactly
 // as cheap.

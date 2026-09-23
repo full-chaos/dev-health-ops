@@ -156,7 +156,7 @@ func TestEntitlementHandlerNilStoreIsServiceUnavailable(t *testing.T) {
 func TestRoutesCarryNoCredentialsOrAuthz(t *testing.T) {
 	for _, route := range Routes(Deps{}) {
 		if route.RateLimitPerSecond != 0 || route.RateLimitBurst != 0 || route.MaxBodyBytes != 0 {
-			t.Fatalf("route %s %s sets a server-default override; R340 routes use plain server defaults, nothing route-specific",
+			t.Fatalf("route %s %s sets a server-default override; internal routes use plain server defaults, nothing route-specific",
 				route.Method, route.Pattern)
 		}
 	}

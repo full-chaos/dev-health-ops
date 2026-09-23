@@ -17,7 +17,7 @@ import (
 // reads, all SELECT-only (no insert/update/delete: the acr entitlement
 // route is a pure read, and it writes no audit row -- see
 // internal/apiservice/acr's package doc for why the Python credential-audit
-// path is not ported under R340). Each route PR that follows adds exactly
+// path is not ported for this internal route). Each route PR that follows adds exactly
 // the grants its own tables need directly to this function's
 // RequiredTables/ColumnScoped/RequiredSequences, in the SAME PR that ships
 // the route, the same discipline domainPosture/coordinatorPosture already

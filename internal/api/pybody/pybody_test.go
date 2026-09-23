@@ -221,17 +221,29 @@ func TestOptionalBoolLaxCoercionMatchesPydantic(t *testing.T) {
 	reject := []struct{ json, want string }{
 		{`2`, "bool_parsing"}, {`-1`, "bool_parsing"}, {`2.0`, "bool_parsing"}, {`"yep"`, "bool_parsing"},
 		{`""`, "bool_parsing"}, {`" true "`, "bool_parsing"}, {`"1.0"`, "bool_parsing"},
+		{`9.2e18`, "bool_parsing"}, {`-9.2e18`, "bool_parsing"}, {`9223372036854775807`, "bool_parsing"},
+		{`-9223372036854775808`, "bool_parsing"},
 		{`0.5`, "bool_type"}, {`1e300`, "bool_type"}, {`1000000000000000000000000000000`, "bool_type"},
+		{`9.223372036854776e18`, "bool_type"}, {`-9.223372036854776e18`, "bool_type"}, {`9223372036854775808`, "bool_type"},
 		{`[]`, "bool_type"}, {`{}`, "bool_type"},
 	}
+	messages := map[string]string{
+		"bool_parsing": "Input should be a valid boolean, unable to interpret input",
+		"bool_type":    "Input should be a valid boolean",
+	}
 	for _, c := range reject {
-		var errs Errors
-		object, ok := errs.Object(Body{Value: mustDecode(t, `{"b":`+c.json+`}`)})
-		if !ok {
-			t.Fatalf("%s: object refused", c.json)
-		}
-		if _, present := errs.OptionalBool(object, "b"); present || len(errs) != 1 || errs[0].Type != c.want {
-			t.Errorf("%s: present=%v errs=%v, want one %s error", c.json, present, errs, c.want)
+		for name, validate := range map[string]func(*Errors, *pyjson.Object) bool{
+			"OptionalBool":  func(e *Errors, o *pyjson.Object) bool { _, present := e.OptionalBool(o, "b"); return present },
+			"DefaultedBool": func(e *Errors, o *pyjson.Object) bool { _, present := e.DefaultedBool(o, "b"); return present },
+		} {
+			var errs Errors
+			object, ok := errs.Object(Body{Value: mustDecode(t, `{"b":`+c.json+`}`)})
+			if !ok {
+				t.Fatalf("%s: object refused", c.json)
+			}
+			if present := validate(&errs, object); present || len(errs) != 1 || errs[0].Type != c.want || errs[0].Msg != messages[c.want] {
+				t.Errorf("%s %s: present=%v errs=%v, want one %s error with its message", name, c.json, present, errs, c.want)
+			}
 		}
 	}
 }

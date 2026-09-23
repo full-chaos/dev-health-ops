@@ -150,6 +150,31 @@ func venueRequests(f venueFixture, tokens map[string]string) []venueRequest {
 	add("patch: owner", "PATCH", me, json(bearer("owner")), b64(`{"description":""}`))
 	add("patch: no org", "PATCH", me, json(bearer("no_org")), b64(`{"name":"x"}`))
 	add("patch: admin free org", "PATCH", me, json(bearer("admin_free")), b64(`{"name":"Free Renamed"}`))
+	utf16Body := func(text string, bigEndian bool) *string {
+		raw := []byte{0xff, 0xfe}
+		if bigEndian {
+			raw = []byte{0xfe, 0xff}
+		}
+		for _, r := range text {
+			if bigEndian {
+				raw = append(raw, byte(r>>8), byte(r))
+			} else {
+				raw = append(raw, byte(r), byte(r>>8))
+			}
+		}
+		encoded := base64.StdEncoding.EncodeToString(raw)
+		return &encoded
+	}
+	rawBody := func(raw []byte) *string {
+		encoded := base64.StdEncoding.EncodeToString(raw)
+		return &encoded
+	}
+	add("patch: anonymous UTF-16LE", "PATCH", me, json(nil), utf16Body(`{"name":"x"}`, false))
+	add("patch: admin UTF-16BE description", "PATCH", me, json(bearer("admin")), utf16Body(`{"description":"sixteen"}`, true))
+	add("patch: admin lone surrogate name", "PATCH", me, json(bearer("admin")), b64(`{"name":"\ud800"}`))
+	add("patch: admin surrogate too long", "PATCH", me, json(bearer("admin")), b64(`{"name":"`+repeat(`\ud800`, 256)+`"}`))
+	add("patch: anonymous invalid UTF-8", "PATCH", me, json(nil), rawBody([]byte("{\"name\":\"\xff\"}")))
+	add("patch: admin text/plain invalid UTF-8", "PATCH", me, with(bearer("admin"), "Content-Type", "text/plain"), rawBody([]byte("\xff")))
 	add("me: after writes", "GET", me, bearer("admin"), nil)
 	// Entitlements.
 	add("ent: anonymous", "GET", ent+f.orgA.String(), nil, nil)
@@ -165,6 +190,9 @@ func venueRequests(f venueFixture, tokens map[string]string) []venueRequest {
 	add("ent: superuser not uuid", "GET", ent+"nope", bearer("superuser"), nil)
 	add("ent: superuser unknown org", "GET", ent+"00000000-0000-4000-8000-000000000000", bearer("superuser"), nil)
 	add("ent: bad org claim", "GET", ent+"not-a-uuid", bearer("bad_org_claim"), nil)
+	add("ent: anonymous encoded slash", "GET", ent+"not-a%2Fuuid", nil, nil)
+	add("ent: member encoded slash", "GET", ent+"a%2fb", bearer("member"), nil)
+	add("ent: acr encoded slash", "GET", "/api/v1/internal/acr/entitlements/not-a%2Fuuid", nil, nil)
 	add("ent: POST", "POST", ent+f.orgA.String(), bearer("member"), nil)
 	add("ent: HEAD", "HEAD", ent+f.orgA.String(), bearer("member"), nil)
 	add("ent: impersonator", "GET", ent+f.orgB.String(), bearer("impersonator"), nil)

@@ -243,13 +243,15 @@ func TestVenueOracleProtectedRoutes(t *testing.T) {
 	if err := json.Unmarshal(runPython(t, python, pyEnv(sourceDB), requests, "serve"), &pythonResponses); err != nil {
 		t.Fatal(err)
 	}
-	compared := []string{"content-type", "allow", "www-authenticate", "x-impersonating", "x-impersonated-user-id"}
+	// Every response header is compared except the per-response ones.
+	volatile := map[string]bool{"date": true, "server": true, "x-request-id": true}
 	var receipt strings.Builder
 	for index, request := range requests {
 		goResponse := doVenueRequest(t, "http://"+server.Address(), request)
 		python := pythonResponses[index]
 		pythonBody, _ := base64.StdEncoding.DecodeString(python.Body)
 		same := goResponse.Status == python.Status && goResponse.Body == string(pythonBody)
+		compared := headerUnion(python.Headers, goResponse.Headers, volatile)
 		for _, header := range compared {
 			if goResponse.Headers[header] != python.Headers[header] {
 				same = false
@@ -372,4 +374,19 @@ func migrateVenue(t *testing.T, ctx context.Context, uri string, roles map[strin
 	}); err != nil {
 		t.Fatalf("River migration: %v", err)
 	}
+}
+
+func headerUnion(a, b map[string]string, skip map[string]bool) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, headers := range []map[string]string{a, b} {
+		for key := range headers {
+			if !skip[key] && !seen[key] {
+				seen[key] = true
+				out = append(out, key)
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
 }

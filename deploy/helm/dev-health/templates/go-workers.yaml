@@ -24,6 +24,15 @@ list because reconciler/scheduler declare no `queues` key at all.
 {{- fail (printf "goWorkers.groups[%s]: terminationGracePeriodSeconds=%v is below the 7260s floor required for the `metrics` queue (7200s job registry timeout + 60s finalization). It is passed straight to --shutdown-timeout, so a shorter value SIGKILLs a claimed metrics job mid-flight and surfaces as `dependency_configuration_failed reason=queue_coverage_validation_failed`." $group.name $group.terminationGracePeriodSeconds) }}
 {{- end }}
 {{- end }}
+{{- /*
+A stream group (one with a runtimeProfile) is `dho stream-runner`: the dho
+image runs whatever verb is first, and without `subcommand: stream-runner`
+the first argument would be --profile=..., which dho refuses as an unknown
+command, so the pod could never start. Refuse the render instead.
+*/}}
+{{- if and $group.runtimeProfile (ne ($group.subcommand | default "") "stream-runner") }}
+{{- fail (printf "goWorkers.groups[%s]: a stream group (runtimeProfile=%q) runs `dho stream-runner` and needs subcommand: stream-runner (got %q); without it dho gets --profile as its command and exits 2." $group.name $group.runtimeProfile ($group.subcommand | default "")) }}
+{{- end }}
 ---
 apiVersion: apps/v1
 kind: Deployment

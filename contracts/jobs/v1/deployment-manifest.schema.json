@@ -115,9 +115,20 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "if": {"properties": {"binary": {"const": "dho"}}, "required": ["binary"]},
-        "then": {"required": ["subcommand"]},
-        "else": {"not": {"required": ["subcommand"]}},
+        "allOf": [
+          {
+            "if": {"properties": {"binary": {"const": "dho"}}, "required": ["binary"]},
+            "then": {"required": ["subcommand"]},
+            "else": {"not": {"required": ["subcommand"]}}
+          },
+          {
+            "if": {"properties": {"runtime": {"const": "stream"}}, "required": ["runtime"]},
+            "then": {
+              "properties": {"binary": {"const": "dho"}, "subcommand": {"const": "stream-runner"}},
+              "required": ["binary", "subcommand"]
+            }
+          }
+        ],
         "required": [
           "name",
           "binary",

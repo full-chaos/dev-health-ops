@@ -36,11 +36,6 @@ const schemaVersion = "external-ingest.v1"
 //go:embed testdata/schema_bundle.v1.json
 var bundleGolden []byte
 
-// recordKinds is RECORD_KIND_MODELS' keys (schemas.py), sorted. Used both to
-// answer GET /schemas' recordKinds list and to validate POST /batches'
-// _check_all_kinds_known_or_400 / POST /validate's unknown_kind check.
-var recordKinds = sortedKeys(recordKindValidators)
-
 // limitsPayload mirrors router.py's _limits_payload(): the live,
 // env-overridable ingest limits, served on both GET /schemas* and merged
 // into the ETag'd schema document.

@@ -102,9 +102,9 @@ func TestValidateRecordsAcceptsAWellFormedRecordOfEveryKind(t *testing.T) {
 			"externalId": "sm-1", "sourceVersionAt": "2026-01-01T00:00:00Z", "serviceExternalId": "svc-1",
 		},
 	}
-	if len(fixtures) != len(recordKindValidators) {
-		t.Fatalf("fixture set covers %d kinds, recordKindValidators has %d -- add the missing fixture(s)",
-			len(fixtures), len(recordKindValidators))
+	if len(fixtures) != len(recordModels) {
+		t.Fatalf("fixture set covers %d kinds, recordModels has %d -- add the missing fixture(s)",
+			len(fixtures), len(recordModels))
 	}
 	for kind, payload := range fixtures {
 		t.Run(kind, func(t *testing.T) {

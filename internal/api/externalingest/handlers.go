@@ -250,7 +250,7 @@ func (d Deps) handleAcceptBatch() http.HandlerFunc {
 		kinds := make([]string, len(envelope.Records))
 		for i, rec := range envelope.Records {
 			kinds[i] = rec.Kind
-			if _, known := recordKindValidators[rec.Kind]; !known {
+			if _, known := recordModels[rec.Kind]; !known {
 				writeIngestError(w, newIngestError(http.StatusBadRequest, "unknown_record_kind",
 					fmt.Sprintf("Unknown record kind at index %d: ", i)+pythonparity.StrRepr(rec.Kind)))
 				return

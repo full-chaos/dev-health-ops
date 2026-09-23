@@ -16,6 +16,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
 func quietLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
@@ -126,6 +127,16 @@ func TestNewServerRequiresAnAddress(t *testing.T) {
 	}
 }
 
+// TestConfigureRegistersTheListenerReadinessCheck exercises `dho api` with
+// no APIDatabaseURI/ValkeyURI configured (the pre-bootstrap shape the
+// w1-route-lanes brief documents as legal: "PRs can merge with goApi off",
+// and the exact shape the go-container-smoke CI job runs `dho api` under --
+// it passes no database or Valkey configuration at all and asserts /readyz
+// still reaches 200). buildDeps registers api_database/api_valkey ONLY when
+// each URI is configured (matching CHAOS-6244's original acr wiring, where
+// RegisterRequired lived inside the same `if …Configured()` block); with
+// neither configured, the listener check is the only one, and readiness
+// follows the listener alone.
 func TestConfigureRegistersTheListenerReadinessCheck(t *testing.T) {
 	registry := health.NewRegistry(time.Second)
 	components, err := configure(context.Background(), config.Config{APIAddress: "127.0.0.1:0"}, registry, quietLogger())
@@ -136,7 +147,7 @@ func TestConfigureRegistersTheListenerReadinessCheck(t *testing.T) {
 		t.Fatalf("%d components", len(components))
 	}
 	if registry.RequiredCount() != 1 {
-		t.Fatalf("%d required checks, want the listener check", registry.RequiredCount())
+		t.Fatalf("%d required checks, want only the listener (no database/valkey configured)", registry.RequiredCount())
 	}
 	if ready := registry.CheckRequired(context.Background()); ready.Ready {
 		t.Fatal("ready before the listener is bound")
@@ -146,8 +157,10 @@ func TestConfigureRegistersTheListenerReadinessCheck(t *testing.T) {
 		t.Fatalf("start: %v", err)
 	}
 	defer func() { _ = server.Shutdown(context.Background()) }()
+	// Neither dependency is configured, so nothing else can hold readiness
+	// back -- once the listener binds, the process is ready.
 	if ready := registry.CheckRequired(context.Background()); !ready.Ready {
-		t.Fatalf("not ready after bind: %+v", ready)
+		t.Fatalf("not ready once the listener is bound, with no database/valkey configured: %+v", ready)
 	}
 	if server.Name() != "api-http" {
 		t.Fatalf("component name %q", server.Name())
@@ -169,17 +182,60 @@ func TestConfigureRegistersTheListenerReadinessCheck(t *testing.T) {
 	}
 }
 
-// TestRoutesMountsTheAcrAreaEvenWithoutAStore proves the acr area
-// (CHAOS-6244) is always on the mux, dormancy-lifted for good: with store
-// nil (APIDatabaseURI not configured) the health path still answers and the
-// entitlement path answers 503 rather than being absent -- see acr.Deps's
-// doc comment for why omitting the route entirely would be the wrong
-// failure mode (a silent 404 reads as "no such route", not "not ready").
-func TestRoutesMountsTheAcrAreaEvenWithoutAStore(t *testing.T) {
-	routes := Routes(nil, nil)
+// TestConfigureRegistersTheDatabaseCheckOnlyWhenConfigured proves the other
+// half of the buildDeps contract: when APIDatabaseURI IS configured, the
+// api_database readiness check IS registered (RequiredCount grows to 2,
+// listener + api_database), even though the address is unreachable here --
+// postgres.New pools lazily (no dial at construction, per its own doc
+// comment), so configure() itself must not fail or block on an unreachable
+// database; only the registered check reports it.
+func TestConfigureRegistersTheDatabaseCheckOnlyWhenConfigured(t *testing.T) {
+	registry := health.NewRegistry(time.Second)
+	cfg := config.Config{
+		APIAddress:     "127.0.0.1:0",
+		APIDatabaseURI: secrets.NewValue("postgres://user:pass@127.0.0.1:1/nonexistent"),
+	}
+	components, err := configure(context.Background(), cfg, registry, quietLogger())
+	if err != nil {
+		t.Fatalf("configure must not fail on an unreachable-but-configured database: %v", err)
+	}
+	if registry.RequiredCount() != 2 {
+		t.Fatalf("%d required checks, want listener + api_database", registry.RequiredCount())
+	}
+	if len(components) != 2 {
+		t.Fatalf("%d components, want the pgx pool component + the server", len(components))
+	}
+	server := components[len(components)-1].(*httpapi.Server)
+	if err := server.Start(context.Background()); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	defer func() { _ = server.Shutdown(context.Background()) }()
+	if ready := registry.CheckRequired(context.Background()); ready.Ready {
+		t.Fatalf("ready against an unreachable configured database: %+v", ready)
+	}
+}
+
+// TestRoutesMountsEveryArea proves both business-route areas (acr,
+// CHAOS-6244; external-ingest, CHAOS-6246) are always on the mux,
+// regardless of whether Deps is live: with a nil Pool/Valkey the acr health
+// path still answers and its entitlement path answers 503 rather than
+// being absent (see acr.Deps's doc comment for why omitting the route
+// entirely would be the wrong failure mode -- a silent 404 reads as "no
+// such route", not "not ready"), and external-ingest's routes register
+// unconditionally too (a handler that needs a live dependency answers
+// CodeInternal at request time instead).
+func TestRoutesMountsEveryArea(t *testing.T) {
+	routes := Routes(Deps{}, nil)
 	want := map[string]bool{
-		"GET /api/v1/internal/acr/health":                false,
-		"GET /api/v1/internal/acr/entitlements/{org_id}": false,
+		"GET /api/v1/internal/acr/health":                      false,
+		"GET /api/v1/internal/acr/entitlements/{org_id}":       false,
+		"GET /api/v1/external-ingest/schemas":                  false,
+		"GET /api/v1/external-ingest/schemas/{schema_version}": false,
+		"GET /api/v1/external-ingest/availability":             false,
+		"POST /api/v1/external-ingest/validate":                false,
+		"POST /api/v1/external-ingest/batches":                 false,
+		"GET /api/v1/external-ingest/batches":                  false,
+		"GET /api/v1/external-ingest/batches/{ingestion_id}":   false,
 	}
 	if len(routes) != len(want) {
 		t.Fatalf("route count = %d, want %d: %+v", len(routes), len(want), routes)

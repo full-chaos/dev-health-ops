@@ -421,6 +421,29 @@ check_live_python_oracles() {
     return 1
   fi
 
+  printf 'go test -count=1: internal/api/externalingest (schema bundle vs live Python schema_registry)\n'
+  if ! (
+    cd "${ROOT}"
+    "${GO_ENV_OFF[@]}" \
+      GOWORK=off \
+      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
+      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
+      PYTHON="${PYTHON:-python3}" \
+      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
+      go test -mod=readonly -count=1 \
+        -run '^TestSchemaBundleMatchesLivePython$' \
+        ./internal/api/externalingest
+  ); then
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  proof_file="${proof_dir}/externalingest-schema-bundle"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: externalingest schema-bundle live Python oracle measurement did not occur\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+
   printf 'go test -count=1: internal/jobs/metrics/aigovernance (ai_governance port vs live Python, CHAOS-4285)\n'
   if ! (
     cd "${ROOT}"

@@ -292,6 +292,18 @@ func venueRequests(f venueFixture, tokens map[string]string) []venueoracle.Reque
 		add("probe: POST "+path, "POST", path, nil, nil)
 		add("probe: GET "+path+" stranger org", "GET", path, with(bearer("member"), "X-Org-Id", f.orgB.String()), nil)
 	}
+	// Starlette's redirect_slashes: an unmatched path whose trailing slash,
+	// toggled, matches a route answers 307 (the harness does not follow
+	// redirects). Removing: one or more trailing slashes, any method, the
+	// query kept. Adding: no Python route ends in "/", so an unmatched path
+	// without one stays 404 on both planes.
+	add("slash: GET /health/", "GET", "/health/", nil, nil)
+	add("slash: GET /health/workers//", "GET", "/health/workers//", nil, nil)
+	add("slash: POST /ready/ with query", "POST", "/ready/?a=1&b=%2F", nil, nil)
+	add("slash: GET org route with slash", "GET", "/api/v1/orgs/me/", bearer("admin"), nil)
+	add("slash: GET unknown/", "GET", "/api/v1/nothing-here/", nil, nil)
+	add("slash: GET unknown (add direction)", "GET", "/api/v1/nothing-here", nil, nil)
+	add("slash: GET /health with slash and Host", "GET", "/health/", map[string]string{"Host": "api.example.com:8443"}, nil)
 	return out
 }
 

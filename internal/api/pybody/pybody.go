@@ -8,6 +8,11 @@
 // bytes that are not UTF-8) before any dependency runs; the route's
 // dependencies (authentication) run next; the body's validation errors are
 // reported only after them.
+//
+// Integer grammars: ParsePydanticInt is pydantic-core's str-to-int (query and
+// path parameters, body fields); pythonparity.ParseInt is CPython's int().
+// They differ (non-ASCII digits, zero fractions), so each call site uses the
+// one its Python counterpart runs.
 package pybody
 
 import (

@@ -88,6 +88,14 @@ type ServerOptions struct {
 	// mux default): HEAD then gets the pattern's 405 unless a HEAD route is
 	// registered for it.
 	ExplicitHead bool
+	// RedirectSlashes answers a request no route matches with Starlette's
+	// redirect_slashes 307 when the same path with its trailing slash
+	// toggled matches a route (for any method); see slashRedirector.
+	RedirectSlashes bool
+	// ForwardedAllowIPs is uvicorn's FORWARDED_ALLOW_IPS for the redirect's
+	// scheme: a peer it trusts may set X-Forwarded-Proto. Nil means the
+	// variable is unset, which is uvicorn's default, "127.0.0.1".
+	ForwardedAllowIPs *string
 }
 
 // Server is the auth API listener. It is a lifecycle.Component so the runtime,
@@ -228,9 +236,25 @@ func buildHandler(options ServerOptions, logger *slog.Logger) (http.Handler, err
 		}
 	}
 
-	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	var redirector *slashRedirector
+	if options.RedirectSlashes {
+		patterns := make([]string, 0, len(methodsByPattern))
+		for pattern := range methodsByPattern {
+			patterns = append(patterns, pattern)
+		}
+		allow := "127.0.0.1"
+		if options.ForwardedAllowIPs != nil {
+			allow = *options.ForwardedAllowIPs
+		}
+		redirector = newSlashRedirector(patterns, ParseForwardedTrust(allow))
+	}
+	notFound := func(w http.ResponseWriter, r *http.Request) {
+		if redirector != nil && redirector.redirect(w, r) {
+			return
+		}
 		write(w, r, CodeNotFound)
-	}))
+	}
+	mux.Handle("/", http.HandlerFunc(notFound))
 
 	// RequestID is outermost so every response -- including the 404 and 405
 	// envelopes above, which never reach a route chain -- carries a
@@ -238,10 +262,13 @@ func buildHandler(options ServerOptions, logger *slog.Logger) (http.Handler, err
 	// handlers; a route's own Recover (inside routeChain) catches first and
 	// logs the real pattern.
 	var handler http.Handler = mux
+	if redirector != nil {
+		handler = redirector.wrap(mux, notFound)
+	}
 	if options.StrictPaths {
 		// Inside the middleware, so a refused target still gets every
 		// transport header a routed response gets.
-		handler = strictPaths(handler, write)
+		handler = strictPaths(handler, notFound)
 	}
 	for index := len(options.Middleware) - 1; index >= 0; index-- {
 		if options.Middleware[index] == nil {
@@ -363,11 +390,11 @@ func (discard) Write(p []byte) (int, error) { return len(p), nil }
 // mirrors Starlette, which never rewrites a path) stops those requests here.
 // The check is the mux's own rule (net/http cleanPath over EscapedPath), so
 // every request that passes it is one the mux routes without redirecting.
-func strictPaths(next http.Handler, write ErrorWriter) http.Handler {
+func strictPaths(next http.Handler, notFound http.HandlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		escaped := r.URL.EscapedPath()
 		if r.RequestURI == "*" || !strings.HasPrefix(escaped, "/") || canonicalPath(escaped) != escaped {
-			write(w, r, CodeNotFound)
+			notFound(w, r)
 			return
 		}
 		next.ServeHTTP(w, r)

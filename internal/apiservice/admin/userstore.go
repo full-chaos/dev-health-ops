@@ -277,9 +277,14 @@ WHERE id = $1`, id, email, username, fullName, avatarURL, isActive, isVerified, 
 // existing access tokens fail TokenVersion comparison) and the caller
 // separately revokes all refresh tokens (revokeAllRefreshTokens), matching
 // set_password's own two side effects.
-func (s pgStore) setUserPassword(ctx context.Context, id uuid.UUID, passwordHash string) (bool, error) {
+// setUserPassword takes tx, not the pool: Python's set_password (the
+// password UPDATE), revoke_all_for_user (the refresh_tokens UPDATE), and
+// the router's own emit_audit_log all run through the SAME SQLAlchemy
+// session and its one implicit commit, so all three of this route's writes
+// share one Go transaction too.
+func (s pgStore) setUserPassword(ctx context.Context, tx pgx.Tx, id uuid.UUID, passwordHash string) (bool, error) {
 	now := s.now().UTC()
-	tag, err := s.Pool.Exec(ctx, `
+	tag, err := tx.Exec(ctx, `
 UPDATE users SET password_hash = $2, token_version = token_version + 1, updated_at = $3 WHERE id = $1`,
 		id, passwordHash, now)
 	if err != nil {
@@ -288,9 +293,10 @@ UPDATE users SET password_hash = $2, token_version = token_version + 1, updated_
 	return tag.RowsAffected() > 0, nil
 }
 
-// revokeAllRefreshTokens is refresh_tokens.py's revoke_all_for_user.
-func (s pgStore) revokeAllRefreshTokens(ctx context.Context, userID uuid.UUID) error {
-	_, err := s.Pool.Exec(ctx, `
+// revokeAllRefreshTokens is refresh_tokens.py's revoke_all_for_user, over
+// the same transaction as setUserPassword -- see its doc comment.
+func (s pgStore) revokeAllRefreshTokens(ctx context.Context, tx pgx.Tx, userID uuid.UUID) error {
+	_, err := tx.Exec(ctx, `
 UPDATE refresh_tokens SET revoked_at = $2 WHERE user_id = $1 AND revoked_at IS NULL`, userID, s.now().UTC())
 	return err
 }

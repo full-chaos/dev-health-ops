@@ -20,10 +20,10 @@ func (h *handlers) userRoutes() []httpapi.Route {
 	return []httpapi.Route{
 		{Method: http.MethodGet, Pattern: usersPrefix + "/users", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.listUsers))},
 		{Method: http.MethodGet, Pattern: usersPrefix + "/users/{user_id}", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.getUser))},
-		{Method: http.MethodPost, Pattern: usersPrefix + "/users", Handler: h.guard.Wrap(policy.Public, http.HandlerFunc(h.createUser))},
-		{Method: http.MethodPatch, Pattern: usersPrefix + "/users/{user_id}", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.updateUser))},
+		{Method: http.MethodPost, Pattern: usersPrefix + "/users", Handler: h.bodyFirst(policy.Public, http.HandlerFunc(h.createUser))},
+		{Method: http.MethodPatch, Pattern: usersPrefix + "/users/{user_id}", Handler: h.bodyFirst(policy.Admin, http.HandlerFunc(h.updateUser))},
 		{Method: http.MethodPost, Pattern: usersPrefix + "/users/{user_id}/password",
-			Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.setUserPassword)), RateLimitPerSecond: 1, RateLimitBurst: 10},
+			Handler: h.bodyFirst(policy.Admin, http.HandlerFunc(h.setUserPassword)), RateLimitPerSecond: 1, RateLimitBurst: 10},
 		{Method: http.MethodDelete, Pattern: usersPrefix + "/users/{user_id}", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.deleteUser))},
 	}
 }
@@ -166,10 +166,7 @@ func (h *handlers) getUser(w http.ResponseWriter, r *http.Request) {
 // self-registration rides this same admin endpoint).
 func (h *handlers) createUser(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	body, outcome, failure, err := pybody.Read(r)
-	if !handleBodyOutcome(w, body, outcome, failure, err) {
-		return
-	}
+	body := bodyFromContext(ctx)
 	var errs pybody.Errors
 	object, ok := errs.Object(body)
 	var email, password, username, fullName, authProvider, authProviderID string
@@ -261,10 +258,7 @@ func (h *handlers) updateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	body, outcome, failure, err := pybody.Read(r)
-	if !handleBodyOutcome(w, body, outcome, failure, err) {
-		return
-	}
+	body := bodyFromContext(ctx)
 	var errs pybody.Errors
 	object, ok := errs.Object(body)
 	patch := userUpdate{}
@@ -332,10 +326,7 @@ func (h *handlers) setUserPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	body, outcome, failure, err := pybody.Read(r)
-	if !handleBodyOutcome(w, body, outcome, failure, err) {
-		return
-	}
+	body := bodyFromContext(ctx)
 	var errs pybody.Errors
 	object, ok := errs.Object(body)
 	var adminPassword, newPassword string
@@ -406,7 +397,28 @@ func (h *handlers) setUserPassword(w http.ResponseWriter, r *http.Request) {
 		policy.WriteInternal(w)
 		return
 	}
-	success, err := h.store.setUserPassword(ctx, targetID, string(newHash))
+
+	auditOrgID, orgErr := parseOptionalOrgID(orgIDRaw)
+	if orgErr == nil && auditOrgID == uuid.Nil {
+		if fallback, err := h.store.membershipOrgIDForUser(ctx, targetID); err == nil && fallback != nil {
+			auditOrgID = *fallback
+		}
+	}
+
+	// The password UPDATE, the refresh_tokens revocation, and the audit
+	// write all go through ONE transaction: Python's set_password and
+	// revoke_all_for_user share the request's own SQLAlchemy session with
+	// the router's own emit_audit_log call, one implicit commit for all
+	// three.
+	tx, txErr := h.store.Pool.Begin(ctx)
+	if txErr != nil {
+		h.logger.ErrorContext(ctx, "admin: set password begin tx failed", "error", txErr)
+		policy.WriteInternal(w)
+		return
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	success, err := h.store.setUserPassword(ctx, tx, targetID, string(newHash))
 	if err != nil {
 		h.logger.ErrorContext(ctx, "admin: set password failed", "error", err)
 		policy.WriteInternal(w)
@@ -416,21 +428,14 @@ func (h *handlers) setUserPassword(w http.ResponseWriter, r *http.Request) {
 		policy.WriteDetail(w, http.StatusNotFound, "User not found", nil)
 		return
 	}
-	if err := h.store.revokeAllRefreshTokens(ctx, targetID); err != nil {
+	if err := h.store.revokeAllRefreshTokens(ctx, tx, targetID); err != nil {
 		h.logger.ErrorContext(ctx, "admin: revoke refresh tokens failed", "error", err)
 		policy.WriteInternal(w)
 		return
 	}
-
-	auditOrgID, orgErr := parseOptionalOrgID(orgIDRaw)
-	if orgErr == nil && auditOrgID == uuid.Nil {
-		if fallback, err := h.store.membershipOrgIDForUser(ctx, targetID); err == nil && fallback != nil {
-			auditOrgID = *fallback
-		}
-	}
 	if auditOrgID != uuid.Nil {
 		description := "Admin changed user password"
-		if _, err := h.audit.Write(ctx, requestAuditEntry(r, audit.Entry{
+		if _, err := h.audit.Write(ctx, tx, requestAuditEntry(r, audit.Entry{
 			OrgID: auditOrgID, UserID: &actingID, Action: audit.ActionPasswordChanged,
 			ResourceType: audit.ResourceUser, ResourceID: target.ID.String(), Description: &description,
 		})); err != nil {
@@ -438,6 +443,11 @@ func (h *handlers) setUserPassword(w http.ResponseWriter, r *http.Request) {
 			policy.WriteInternal(w)
 			return
 		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		h.logger.ErrorContext(ctx, "admin: set password commit failed", "error", err)
+		policy.WriteInternal(w)
+		return
 	}
 
 	out := pyjson.NewObject()
@@ -489,24 +499,4 @@ func (h *handlers) deleteUser(w http.ResponseWriter, r *http.Request) {
 	out := pyjson.NewObject()
 	out.Set("deleted", true)
 	policy.WriteJSON(w, http.StatusOK, out, nil)
-}
-
-// handleBodyOutcome answers ParseFailed/DecodeFailed/read-error the same
-// way every route in this package does; returns false when it already
-// wrote the response.
-func handleBodyOutcome(w http.ResponseWriter, body pybody.Body, outcome pybody.Outcome, failure *pybody.Error, err error) bool {
-	if err != nil {
-		policy.WriteInternal(w)
-		return false
-	}
-	if outcome == pybody.ParseFailed {
-		policy.WriteDetail(w, http.StatusBadRequest, "Invalid request body", nil)
-		return false
-	}
-	if outcome == pybody.DecodeFailed {
-		policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail([]pybody.Error{*failure}), nil)
-		return false
-	}
-	_ = body
-	return true
 }

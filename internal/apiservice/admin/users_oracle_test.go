@@ -72,12 +72,29 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, uuid.New(), orgID, memberID
 			Body: venueoracle.B64(`{"email":"venue-newuser@example.com","password":"a brand new password 7"}`)},
 		{Name: "patch user", Method: "PATCH", Path: "/api/v1/admin/users/" + memberID.String(), Headers: jsonHeaders,
 			Body: venueoracle.B64(`{"full_name":"A New Name"}`)},
-		{Name: "set password", Method: "POST", Path: "/api/v1/admin/users/" + memberID.String() + "/password", Headers: jsonHeaders,
+		// request_metadata is compared row-for-row below (audit_logs), so
+		// this request sets explicit, stable User-Agent/X-Forwarded-For/
+		// X-Request-ID headers: leaving them unset would let each plane's
+		// own default HTTP client identity (httpx TestClient's "testclient"
+		// vs Go's http.Client's "Go-http-client/1.1" and 127.0.0.1) leak
+		// into the comparison, which is a test-harness artifact, not a
+		// product difference.
+		{Name: "set password", Method: "POST", Path: "/api/v1/admin/users/" + memberID.String() + "/password",
+			Headers: map[string]string{
+				"Authorization": "Bearer " + venue.Tokens["admin"], "Content-Type": "application/json",
+				"User-Agent": "venue-oracle-test/1.0", "X-Forwarded-For": "203.0.113.42", "X-Request-ID": "venue-set-password-req",
+			},
 			Body: venueoracle.B64(fmt.Sprintf(`{"admin_password":%q,"password":"a new strong password 42"}`, adminPlaintextPassword))},
 		{Name: "set password wrong admin password", Method: "POST", Path: "/api/v1/admin/users/" + memberID.String() + "/password", Headers: jsonHeaders,
 			Body: venueoracle.B64(`{"admin_password":"totally the wrong password","password":"a new strong password 42"}`)},
 		{Name: "delete user", Method: "DELETE", Path: "/api/v1/admin/users/" + memberID.String(), Headers: authHeaders},
 		{Name: "delete user again", Method: "DELETE", Path: "/api/v1/admin/users/" + memberID.String(), Headers: authHeaders},
+		// Unauthenticated + malformed body: FastAPI validates the pydantic
+		// body parameter before the auth Depends() ever runs, so this is a
+		// 422 on both planes, never a 401 -- see the impersonation oracle's
+		// identical case for the P1 this pins.
+		{Name: "unauthenticated malformed body", Method: "PATCH", Path: "/api/v1/admin/users/" + memberID.String(),
+			Headers: map[string]string{"Content-Type": "application/json"}, Body: venueoracle.B64(`{`)},
 	}
 	python := venue.ServePython(t, requests)
 	goBase, _ := startGoServer(t, ctx, venue, jwtKey)
@@ -85,7 +102,7 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, uuid.New(), orgID, memberID
 	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{
 		Normalize: func(request venueoracle.Request, body string) string {
 			for _, field := range []string{"id", "created_at", "updated_at"} {
-				body = redactField(body, field)
+				body = redactField(t, body, field)
 			}
 			return body
 		},
@@ -100,6 +117,6 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, uuid.New(), orgID, memberID
 }
 
 func userPasswordAuditQuery(orgID, adminID uuid.UUID) string {
-	return fmt.Sprintf(`SELECT org_id, user_id, action, resource_type, status, changes
+	return fmt.Sprintf(`SELECT org_id, user_id, action, resource_type, status, changes, request_metadata
 FROM audit_logs WHERE org_id = '%s' AND user_id = '%s' ORDER BY created_at`, orgID, adminID)
 }

@@ -55,12 +55,47 @@ func bootstrapAPIRole(t *testing.T, ctx context.Context, admin *pgxpool.Pool, db
 	}
 }
 
+// acrEntitlementTables creates the four tables CHAOS-6244's apiPosture()
+// declares (organizations, feature_flags, org_feature_overrides,
+// org_licenses -- see api_authorization.go), with the same minimal shape
+// providersync's incident-entitlement integration test uses for the same
+// four tables (they share the source schema). GRANTs SELECT on each to
+// role, standing in for the api-role grant-apply step api_authorization.go's
+// NOTE says does not exist yet: this is the SAME manual/future-automated
+// step, executed here so a test proves the readiness check accepts a role
+// that genuinely holds the declared manifest, not just the pre-CHAOS-6244
+// empty one.
+func acrEntitlementTables(t *testing.T, ctx context.Context, admin *pgxpool.Pool, role string) {
+	t.Helper()
+	for _, statement := range []string{
+		`CREATE TABLE IF NOT EXISTS organizations (id uuid PRIMARY KEY, tier text NOT NULL)`,
+		`CREATE TABLE IF NOT EXISTS feature_flags (
+  id uuid PRIMARY KEY, key text UNIQUE NOT NULL, min_tier text NOT NULL,
+  is_enabled boolean NOT NULL)`,
+		`CREATE TABLE IF NOT EXISTS org_feature_overrides (
+  org_id uuid NOT NULL, feature_id uuid NOT NULL, is_enabled boolean NOT NULL,
+  expires_at timestamptz, PRIMARY KEY (org_id, feature_id))`,
+		`CREATE TABLE IF NOT EXISTS org_licenses (
+  org_id uuid PRIMARY KEY, tier text NOT NULL, features_override json)`,
+	} {
+		if _, err := admin.Exec(ctx, statement); err != nil {
+			t.Fatalf("bootstrap %s: %v", statement, err)
+		}
+	}
+	for _, table := range []string{"organizations", "feature_flags", "org_feature_overrides", "org_licenses"} {
+		if _, err := admin.Exec(ctx, "GRANT SELECT ON "+table+" TO "+role); err != nil {
+			t.Fatalf("grant SELECT on %s: %v", table, err)
+		}
+	}
+}
+
 // TestCheckAPIAuthorizationAcceptsTheBaselineBootstrap proves a role
 // provisioned exactly the way provision_river_roles.sql's optional api_role
-// block provisions it -- CONNECT, USAGE on public, nothing else -- passes
-// CheckAPIAuthorization against apiPosture()'s empty manifest (CHAOS-6269:
-// S0 grants CONNECT plus what /readyz reads, and until a route exists there
-// is nothing more to read).
+// block provisions it -- CONNECT, USAGE on public -- PLUS the four
+// acrEntitlementTables SELECT grants CHAOS-6244's apiPosture() now declares,
+// passes CheckAPIAuthorization. Before CHAOS-6244 the manifest was empty and
+// the baseline alone was sufficient; TestCheckAPIAuthorizationRefusesTheBareBaselineNow
+// below is the regression proof that the bare baseline is no longer enough.
 func TestCheckAPIAuthorizationAcceptsTheBaselineBootstrap(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -89,6 +124,7 @@ func TestCheckAPIAuthorizationAcceptsTheBaselineBootstrap(t *testing.T) {
 	t.Cleanup(func() { containers.DropRole(admin, role, t.Logf) })
 
 	bootstrapAPIRole(t, ctx, admin, dbName, role)
+	acrEntitlementTables(t, ctx, admin, role)
 
 	api := connectAs(t, ctx, instance.URI, role, apiAuthorizationPass)
 	if err := CheckAPIAuthorization(ctx, api, role, grantSchema); err != nil {
@@ -96,9 +132,56 @@ func TestCheckAPIAuthorizationAcceptsTheBaselineBootstrap(t *testing.T) {
 	}
 }
 
+// TestCheckAPIAuthorizationRefusesTheBareBaselineNow is the regression proof
+// that CHAOS-6244's four-table manifest is genuinely enforced: a role
+// bootstrapped the OLD way (CONNECT + USAGE only, no acrEntitlementTables
+// grants) now FAILS readiness, where before CHAOS-6244 (apiPosture() empty)
+// it passed. provision_river_roles.sql's api_role block still produces
+// exactly this bare baseline (see TestProvisionScriptAPIRoleOptInMatchesTheDeclaredPosture's
+// updated doc comment) -- the manifest is declared here, ahead of any
+// automated step that applies it as GRANTs.
+func TestCheckAPIAuthorizationRefusesTheBareBaselineNow(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { closePostgresInstanceInternal(t, instance) })
+
+	dbName, err := containers.DatabaseName(instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	role, err := containers.RoleName(apiAuthorizationRole+"_bare", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	admin, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(admin.Close)
+	t.Cleanup(func() { containers.DropRole(admin, role, t.Logf) })
+
+	bootstrapAPIRole(t, ctx, admin, dbName, role)
+
+	api := connectAs(t, ctx, instance.URI, role, apiAuthorizationPass)
+	err = CheckAPIAuthorization(ctx, api, role, grantSchema)
+	if !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("bare-baseline api role readiness error = %v, want ErrUnavailable", err)
+	}
+	if !errors.Is(err, ErrPostureRefused) {
+		t.Fatalf("bare-baseline api role readiness error = %v, want ErrPostureRefused", err)
+	}
+}
+
 // TestCheckAPIAuthorizationRefusesAnExtraPrivilege proves the "no more" half
-// of apiPosture()'s empty manifest: a role that is otherwise correctly
-// bootstrapped, but ALSO holds an undeclared privilege on some other
+// of apiPosture()'s manifest: a role that holds every declared grant
+// (acrEntitlementTables) PLUS an undeclared privilege on some other
 // relation, fails readiness -- exactly the property that stops the api role
 // from silently accumulating access no route has asked for.
 func TestCheckAPIAuthorizationRefusesAnExtraPrivilege(t *testing.T) {
@@ -129,6 +212,7 @@ func TestCheckAPIAuthorizationRefusesAnExtraPrivilege(t *testing.T) {
 	t.Cleanup(func() { containers.DropRole(admin, role, t.Logf) })
 
 	bootstrapAPIRole(t, ctx, admin, dbName, role)
+	acrEntitlementTables(t, ctx, admin, role)
 	api := connectAs(t, ctx, instance.URI, role, apiAuthorizationPass)
 	if err := CheckAPIAuthorization(ctx, api, role, grantSchema); err != nil {
 		t.Fatalf("baseline-bootstrapped api role failed readiness before the extra grant: %v", err)
@@ -155,11 +239,10 @@ func TestCheckAPIAuthorizationRefusesAnExtraPrivilege(t *testing.T) {
 }
 
 // TestCheckAPIAuthorizationRefusesAMissingBaselinePrivilege proves the
-// "no less" half: apiPosture() is empty, so the only privilege every api
-// role must hold is the baseline rolePostureQuery itself requires of every
-// runtime role unconditionally -- USAGE on the public schema. Revoking it
-// must fail readiness even though the declared manifest names nothing at
-// all.
+// "no less" half: even with every acrEntitlementTables grant held, the
+// baseline rolePostureQuery itself requires of every runtime role
+// unconditionally -- USAGE on the public schema -- is still checked.
+// Revoking it must fail readiness regardless of the declared table manifest.
 func TestCheckAPIAuthorizationRefusesAMissingBaselinePrivilege(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -188,6 +271,7 @@ func TestCheckAPIAuthorizationRefusesAMissingBaselinePrivilege(t *testing.T) {
 	t.Cleanup(func() { containers.DropRole(admin, role, t.Logf) })
 
 	bootstrapAPIRole(t, ctx, admin, dbName, role)
+	acrEntitlementTables(t, ctx, admin, role)
 	api := connectAs(t, ctx, instance.URI, role, apiAuthorizationPass)
 	if err := CheckAPIAuthorization(ctx, api, role, grantSchema); err != nil {
 		t.Fatalf("baseline-bootstrapped api role failed readiness before the revoke: %v", err)
@@ -215,12 +299,16 @@ func TestCheckAPIAuthorizationRefusesAMissingBaselinePrivilege(t *testing.T) {
 
 // TestProvisionScriptAPIRoleOptInMatchesTheDeclaredPosture runs the REAL
 // scripts/worker/provision_river_roles.sql through psql with api_role set --
-// not a Go re-implementation of it, the same discipline
-// TestProvisionScriptGrantsNoTablePrivileges holds the three River roles to
-// -- and proves the role it produces passes CheckAPIAuthorization against
-// apiPosture(). This is the executed proof that the SQL file itself, not
-// just this test's own hand-rolled bootstrapAPIRole mimic above, produces a
-// role the readiness check accepts.
+// not a Go re-implementation of it -- and proves the role it produces
+// matches bootstrapAPIRole's own hand-rolled mimic: CONNECT + USAGE on
+// public, nothing else. Since CHAOS-6244, that bare baseline is no longer
+// apiPosture()'s whole manifest (api_authorization.go's NOTE: no automated
+// step yet applies the four acrEntitlementTables grants), so the role the
+// script produces correctly FAILS readiness here -- this test's job is
+// proving the SQL file produces exactly the bare baseline, the same thing
+// TestCheckAPIAuthorizationRefusesTheBareBaselineNow proves for the
+// hand-rolled version, not that provisioning alone is sufficient for
+// readiness.
 func TestProvisionScriptAPIRoleOptInMatchesTheDeclaredPosture(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -276,8 +364,22 @@ func TestProvisionScriptAPIRoleOptInMatchesTheDeclaredPosture(t *testing.T) {
 	}
 
 	api := connectAs(t, ctx, instance.URI, role, apiAuthorizationPass)
+	err = CheckAPIAuthorization(ctx, api, role, grantSchema)
+	if !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("provision_river_roles.sql's api_role opt-in readiness error = %v, want ErrUnavailable", err)
+	}
+	if !errors.Is(err, ErrPostureRefused) {
+		t.Fatalf("provision_river_roles.sql's api_role opt-in readiness error = %v, want ErrPostureRefused", err)
+	}
+
+	// And the converse: granting the four acrEntitlementTables privileges the
+	// script itself does not (yet) apply is what actually gets the
+	// script-provisioned role to readiness -- proving the refusal above is
+	// caused exactly by the missing table grants, nothing else about the
+	// script's output.
+	acrEntitlementTables(t, ctx, admin, role)
 	if err := CheckAPIAuthorization(ctx, api, role, grantSchema); err != nil {
-		t.Fatalf("provision_river_roles.sql's api_role opt-in failed readiness: %v", err)
+		t.Fatalf("provision_river_roles.sql's api_role opt-in failed readiness after the missing grants were added: %v", err)
 	}
 }
 
@@ -528,11 +630,16 @@ func TestProvisionScriptAPIRoleRefusedWhenPublicHoldsCreate(t *testing.T) {
 
 	// And the converse, same connection/role: revoking PUBLIC's grant (the
 	// deliberate, human step this test's docstring says the script must not
-	// take silently) lets the identical role pass readiness -- proving the
-	// refusal above is caused by PUBLIC's grant, not some other defect.
+	// take silently) PLUS granting the four acrEntitlementTables privileges
+	// the script itself does not yet apply (api_authorization.go's NOTE) lets
+	// the identical role pass readiness -- proving the refusal above is
+	// caused by PUBLIC's CREATE grant, not some other defect, and that it is
+	// the ONLY thing standing between this role and readiness once the table
+	// grants are present.
 	if _, err := admin.Exec(ctx, "REVOKE CREATE ON SCHEMA public FROM PUBLIC"); err != nil {
 		t.Fatal(err)
 	}
+	acrEntitlementTables(t, ctx, admin, role)
 	if err := CheckAPIAuthorization(ctx, api, role, grantSchema); err != nil {
 		t.Fatalf("api role failed readiness after PUBLIC's CREATE grant was revoked: %v", err)
 	}

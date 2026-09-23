@@ -88,8 +88,17 @@ VALUES ($1::uuid, $2, 'github', 'acme/venue-repo', 'legacy', 'customer_push', tr
 		{`INSERT INTO external_ingest_tokens (id, org_id, source_id, name, token_hash, token_prefix, scopes, created_at)
 VALUES ($1::uuid, $2, $3::uuid, 'venue oracle token', $4, 'fcpush_venue', $5::jsonb, now())`,
 			[]any{uuid.New().String(), seed.orgID, seed.sourceID, tokenHash, `["schema:read","ingest:write","ingest:status"]`}},
+		// created_at/updated_at are a FIXED literal, not now(): its
+		// microseconds (254860) end in a trailing zero on purpose --
+		// formatOptionalRFC3339 used to format this through Go's
+		// RFC3339Nano, which trims trailing zero fractional digits, where
+		// Pydantic's JSON datetime serializer always renders exactly six.
+		// now() lands on a value with a trailing zero roughly 1 run in 10,
+		// which is exactly how this bug flaked the required venue-oracles
+		// check instead of failing it outright -- a fixed value with a
+		// trailing zero makes a regression fail every run, not 1 in 10.
 		{`INSERT INTO external_ingest_batches (ingestion_id, org_id, idempotency_key, payload_hash, source_system, source_instance, schema_version, items_received, created_at, updated_at)
-VALUES ($1::uuid, $2, 'venue-seeded-batch', 'venue-seeded-hash', 'github', 'acme/venue-repo', 'external-ingest.v1', 1, now(), now())`,
+VALUES ($1::uuid, $2, 'venue-seeded-batch', 'venue-seeded-hash', 'github', 'acme/venue-repo', 'external-ingest.v1', 1, '2026-09-15T08:30:22.254860+00:00'::timestamptz, '2026-09-15T08:30:22.254860+00:00'::timestamptz)`,
 			[]any{seed.seededBatchID, seed.orgID}},
 		// mark_failed's shape (status.py:723): {"system_failure": true,
 		// "reason": ...} -- NOT _build_error_summary()'s
@@ -98,8 +107,10 @@ VALUES ($1::uuid, $2, 'venue-seeded-batch', 'venue-seeded-hash', 'github', 'acme
 		// driving the real worker failure path) since the row shape, not
 		// the path that produced it, is what the writer must render
 		// byte-identically.
+		// Same fixed-literal, trailing-zero-microsecond reasoning as the
+		// plain seeded batch above, extended to completed_at too.
 		{`INSERT INTO external_ingest_batches (ingestion_id, org_id, idempotency_key, payload_hash, source_system, source_instance, schema_version, status, items_received, items_accepted, items_rejected, error_summary, completed_at, created_at, updated_at)
-VALUES ($1::uuid, $2, 'venue-seeded-failed-batch', 'venue-seeded-failed-hash', 'github', 'acme/venue-repo', 'external-ingest.v1', 'failed', 1, 0, 1, $3::jsonb, now(), now(), now())`,
+VALUES ($1::uuid, $2, 'venue-seeded-failed-batch', 'venue-seeded-failed-hash', 'github', 'acme/venue-repo', 'external-ingest.v1', 'failed', 1, 0, 1, $3::jsonb, '2026-09-15T08:30:22.254860+00:00'::timestamptz, '2026-09-15T08:30:22.254860+00:00'::timestamptz, '2026-09-15T08:30:22.254860+00:00'::timestamptz)`,
 			[]any{seed.seededFailedBatchID, seed.orgID, `{"system_failure": true, "reason": "worker failed"}`}},
 		// A recompute row carrying a persisted scope (status.py's
 		// RecomputeScopeResponse: repoIds, teamIds, windowStartedAt,
@@ -122,7 +133,7 @@ VALUES ($1::uuid, $2, 'venue-seeded-failed-batch', 'venue-seeded-failed-hash', '
 		// fromisoformat/Pydantic pairing from a naive UTC-forcing,
 		// trailing-zero-trimming formatter; this one can.
 		{`INSERT INTO external_ingest_batches (ingestion_id, org_id, idempotency_key, payload_hash, source_system, source_instance, schema_version, items_received, recompute_status, recompute_scope, recompute_dispatched_at, created_at, updated_at)
-VALUES ($1::uuid, $2, 'venue-seeded-recompute-batch', 'venue-seeded-recompute-hash', 'github', 'acme/venue-repo', 'external-ingest.v1', 1, 'dispatched', $3::jsonb, $4::timestamptz, now(), now())`,
+VALUES ($1::uuid, $2, 'venue-seeded-recompute-batch', 'venue-seeded-recompute-hash', 'github', 'acme/venue-repo', 'external-ingest.v1', 1, 'dispatched', $3::jsonb, $4::timestamptz, '2026-09-15T08:30:22.254860+00:00'::timestamptz, '2026-09-15T08:30:22.254860+00:00'::timestamptz)`,
 			[]any{seed.seededRecomputeBatchID, seed.orgID,
 				`{"repoIds":["repo-1","repo-2"],"teamIds":["team-1"],"windowStartedAt":"2026-09-01T00:00:00.123400+05:30","windowEndedAt":"2026-09-08T00:00:00+05:30","cappedDays":true,"cappedRepos":false}`,
 				seed.recomputeDispatchedAt},
@@ -145,7 +156,23 @@ VALUES ($1::uuid, $2, 'github', 'acme/venue-repo', 'run_daily_metrics', 'task-12
 // normalizer over every response is harmless there: blanking an
 // already-identical value changes nothing about whether the two sides
 // match.
-func blankExternalIngestVolatileFields(_ venueoracle.Request, body string) string {
+// seededByIDRequestNames names the three "get seeded ... by id" cases:
+// both planes read the IDENTICAL row (seeded once, before the CREATE
+// DATABASE ... TEMPLATE copy, with a FIXED created_at/updated_at literal),
+// so their ingestionId/createdAt/updatedAt are not volatile at all and
+// blanking them would hide a real divergence -- exactly what happened
+// before this map existed: a round-1 review of CHAOS-6359 reverted only
+// batchStatusResponse's inline createdAt/updatedAt formatting (leaving the
+// shared formatOptionalRFC3339 helper fixed) and the live oracle still
+// PASSED, because these three cases' createdAt/updatedAt were blanked
+// before comparison.
+var seededByIDRequestNames = map[string]bool{
+	"get seeded batch by id":           true,
+	"get seeded failed batch by id":    true,
+	"get seeded recompute batch by id": true,
+}
+
+func blankExternalIngestVolatileFields(request venueoracle.Request, body string) string {
 	decoded, err := pyjson.DecodeString(body)
 	if err != nil {
 		return body
@@ -155,10 +182,12 @@ func blankExternalIngestVolatileFields(_ venueoracle.Request, body string) strin
 		return body
 	}
 	changed := false
-	for _, key := range []string{"ingestionId", "createdAt", "updatedAt"} {
-		if _, ok := object.Get(key); ok {
-			object.Set(key, "<"+key+">")
-			changed = true
+	if !seededByIDRequestNames[request.Name] {
+		for _, key := range []string{"ingestionId", "createdAt", "updatedAt"} {
+			if _, ok := object.Get(key); ok {
+				object.Set(key, "<"+key+">")
+				changed = true
+			}
 		}
 	}
 	if items, ok := object.Get("items"); ok {
@@ -183,6 +212,51 @@ func blankExternalIngestVolatileFields(_ venueoracle.Request, body string) strin
 		return body
 	}
 	return string(rewritten)
+}
+
+// seededListItemField finds the items[] entry whose ingestionId is
+// ingestionID in a GET /batches response body and returns its named string
+// field, or "" (and fails the test) if either is missing.
+func seededListItemField(t *testing.T, body, ingestionID, field string) string {
+	t.Helper()
+	decoded, err := pyjson.DecodeString(body)
+	if err != nil {
+		t.Fatalf("decode list batches body: %v", err)
+	}
+	object, ok := decoded.(*pyjson.Object)
+	if !ok {
+		t.Fatalf("list batches body is not an object: %s", body)
+	}
+	items, ok := object.Get("items")
+	if !ok {
+		t.Fatalf("list batches body has no items: %s", body)
+	}
+	list, ok := items.([]pyjson.Value)
+	if !ok {
+		t.Fatalf("list batches items is not an array: %s", body)
+	}
+	for _, item := range list {
+		itemObject, ok := item.(*pyjson.Object)
+		if !ok {
+			continue
+		}
+		id, ok := itemObject.Get("ingestionId")
+		if !ok {
+			continue
+		}
+		idStr, _ := id.(string)
+		if idStr != ingestionID {
+			continue
+		}
+		value, ok := itemObject.Get(field)
+		if !ok {
+			t.Fatalf("list batches item %q has no field %q", ingestionID, field)
+		}
+		valueStr, _ := value.(string)
+		return valueStr
+	}
+	t.Fatalf("list batches: no item with ingestionId %q", ingestionID)
+	return ""
 }
 
 // TestExternalIngestVenueOracle is CHAOS-6321's proof shape: the REAL
@@ -345,6 +419,22 @@ func TestExternalIngestVenueOracle(t *testing.T) {
 	}
 	if schemaPython.Headers["etag"] != schemaGo.Headers["etag"] || schemaPython.Headers["etag"] == "" {
 		t.Errorf("get schema known version: etag python=%q go=%q", schemaPython.Headers["etag"], schemaGo.Headers["etag"])
+	}
+
+	// batchListItem's own createdAt formatting (handlers.go, separate from
+	// batchStatusResponse's) is only reached through GET /batches -- and
+	// that list mixes freshly-accepted rows (genuinely per-plane-volatile
+	// createdAt, which blankExternalIngestVolatileFields must still blank
+	// in the Diff above) with the seeded ones. This pins the one list item
+	// this test CAN check exactly: the seeded batch's own entry, by its
+	// known fixed id, unblanked.
+	listRequest := venueoracle.Request{Name: "list batches (createdAt check)", Method: "GET", Path: "/api/v1/external-ingest/batches", Headers: auth}
+	listPython := venue.ServePython(t, []venueoracle.Request{listRequest})[0]
+	listGo := venueoracle.Do(t, goBase, listRequest)
+	pythonSeededCreatedAt := seededListItemField(t, listPython.Body, seed.seededBatchID, "createdAt")
+	goSeededCreatedAt := seededListItemField(t, listGo.Body, seed.seededBatchID, "createdAt")
+	if pythonSeededCreatedAt != goSeededCreatedAt || pythonSeededCreatedAt == "" {
+		t.Errorf("list batches: seeded item createdAt python=%q go=%q", pythonSeededCreatedAt, goSeededCreatedAt)
 	}
 
 	pythonBatches := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB),

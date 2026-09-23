@@ -7,8 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
-
-	"github.com/full-chaos/dev-health-ops/internal/storedversion"
 	"net"
 	"net/url"
 	"slices"
@@ -18,6 +16,8 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/full-chaos/dev-health-ops/internal/projectmembership"
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
+	"github.com/full-chaos/dev-health-ops/internal/storedversion"
 	"github.com/full-chaos/dev-health-ops/internal/streamrunner"
 	"github.com/google/uuid"
 )
@@ -901,7 +901,21 @@ func externalPythonJSONWithSeparators(value any, itemSeparator, keySeparator str
 			}
 			output.WriteString(typed.String())
 		case float64:
-			output.WriteString(strconv.FormatFloat(typed, 'g', -1, 64))
+			// Python's json.dumps: float.__repr__ for finite values (1.0
+			// stays 1.0, -0.0 stays -0.0), and its non-spec NaN/Infinity/
+			// -Infinity spellings otherwise. strconv.FormatFloat would write
+			// 1, -0 and +Inf: different JSON numeric types, and text no JSON
+			// parser accepts.
+			switch {
+			case math.IsNaN(typed):
+				output.WriteString("NaN")
+			case math.IsInf(typed, 1):
+				output.WriteString("Infinity")
+			case math.IsInf(typed, -1):
+				output.WriteString("-Infinity")
+			default:
+				output.WriteString(pythonparity.Repr(typed))
+			}
 		case int:
 			output.WriteString(strconv.Itoa(typed))
 		case []string:

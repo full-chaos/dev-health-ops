@@ -346,3 +346,29 @@ func TestExternalPermanentFinalizerMarksAddressableBatchOnly(t *testing.T) {
 		t.Fatal("malformed unaddressable ID attempted status finalization")
 	}
 }
+
+// TestRepositorySettingsFloatsSerializeAsPythonDoes pins the sink's JSON
+// text for a float in a stored JSON column (repository.v1 settings) to what
+// Python's json.dumps writes: 1.0 stays 1.0, -0.0 stays -0.0, and a value
+// that overflows float64 is Infinity, not Go's +Inf (which no JSON parser
+// accepts). It runs the real parse path, so the float arrives as
+// payloadFromOrdered produces it.
+func TestRepositorySettingsFloatsSerializeAsPythonDoes(t *testing.T) {
+	body := []byte(`{"schemaVersion":"external-ingest.v1","idempotencyKey":"settings-floats",` +
+		`"source":{"type":"customer_push","system":"github","instance":"acme/repo","entityFamily":"legacy"},` +
+		`"records":[{"kind":"repository.v1","externalId":"acme/repo","payload":` +
+		`{"externalId":"acme/repo","sourceSystem":"github","settings":{"threshold":1.0,"negativeZero":-0.0,"overflow":1e1000}}}]}`)
+	envelope, err := parseExternalEnvelope(body)
+	if err != nil {
+		t.Fatalf("parseExternalEnvelope: %v", err)
+	}
+	settings := objectField(envelope.Records[0].Payload, "settings")
+	got, err := externalPythonCompactJSON(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = `{"negativeZero":-0.0,"overflow":Infinity,"threshold":1.0}`
+	if got != want {
+		t.Fatalf("settings JSON = %s, want %s", got, want)
+	}
+}

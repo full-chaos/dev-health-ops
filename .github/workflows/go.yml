@@ -693,11 +693,31 @@ jobs:
           changed_paths_file="$(mktemp)"
           trap 'rm -f "${changed_paths_file}"' EXIT
           git diff --name-only "${BASE_SHA}...HEAD" > "${changed_paths_file}"
-          if grep -qE '^(internal/api/|internal/apiservice/|internal/testsupport/venueoracle/|internal/testsupport/containers/|internal/testsupport/pyoracle/|src/dev_health_ops/api/)' "${changed_paths_file}"; then
-            echo "relevant=true" >> "${GITHUB_OUTPUT}"
-          else
-            echo "relevant=false" >> "${GITHUB_OUTPUT}"
-          fi
+          # Any Go source change is treated as relevant: the venue oracle
+          # exercises the WHOLE dho api binary (auth middleware, routing,
+          # every dependency it imports transitively), so a narrower
+          # allowlist of specific package paths keeps missing a real
+          # dependency (internal/auth/httpapi/ was one such miss). This job
+          # is non-required, so the cost of a false positive here is a few
+          # extra CI minutes; the cost of a false negative is a silent gap
+          # in the one thing this job exists to guarantee.
+          set +e
+          grep -qE '^(internal/|src/dev_health_ops/api/)' "${changed_paths_file}"
+          grep_status=$?
+          set -e
+          case "${grep_status}" in
+            0) echo "relevant=true" >> "${GITHUB_OUTPUT}" ;;
+            1) echo "relevant=false" >> "${GITHUB_OUTPUT}" ;;
+            *)
+              # grep's own exit codes are 0 (match), 1 (no match), and 2+
+              # (a real error -- bad pattern, unreadable file). Treating
+              # anything nonzero as "no match" silently swallows the
+              # error-2 case and would report an unchecked diff as
+              # irrelevant.
+              echo "grep exited ${grep_status} while checking relevance, not 0 or 1 -- treating as an error, not a no-match" >&2
+              exit 1
+              ;;
+          esac
 
       - name: Set up Go
         if: steps.relevance.outputs.relevant == 'true'

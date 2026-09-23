@@ -157,13 +157,14 @@ type Venue struct {
 
 // Start builds the venue; see the package comment. It skips unless
 // DEV_HEALTH_LIVE_PYTHON_ORACLES=1. Everything it creates is removed by
-// t.Cleanup. On success it writes this venue's own proof file (see
-// writeProof) -- every caller gets that for free, with no per-test
-// boilerplate, and a caller whose venue never built (t.Skip fired, or a
-// t.Fatal along the way) never gets one, which is the point: a CI job that
-// requires this file for every venue-oracle test by name fails loudly on a
-// skip, exactly the "measurement that did not happen must FAIL" rule this
-// mechanism exists to satisfy.
+// t.Cleanup.
+//
+// Start itself writes no proof file: it only proves the venue built, not
+// that the caller went on to compare anything against it, and a test that
+// calls Start and returns (no Diff, no failure, no skip) would otherwise
+// still satisfy a proof-file check while never running a real comparison.
+// Diff writes the proof instead, once it has actually sent requests to
+// both planes and compared them -- see its doc comment.
 func Start(t *testing.T, ctx context.Context, options Options) *Venue {
 	t.Helper()
 	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
@@ -257,7 +258,6 @@ func Start(t *testing.T, ctx context.Context, options Options) *Venue {
 	})
 	v.provisionRoles(t, ctx)
 	v.migrate(t, ctx, logger)
-	writeProof(t)
 	return v
 }
 
@@ -441,6 +441,14 @@ type DiffOptions struct {
 // Diff sends each request to the Go api at goBase, compares it with the
 // matching Python response, reports each difference with t.Errorf, and
 // returns the receipt: one "name python=S go=S SAME|DIFF" line per request.
+//
+// On completion (whatever the verdict -- DIFF fails the test via t.Errorf
+// above, same as ever) it writes this test's proof file (see writeProof):
+// Diff is where a real request actually goes to both planes and gets
+// compared, so reaching the end of it is genuine evidence a comparison ran,
+// unlike Start returning (which only proves the venue was built). A test
+// that calls Start and never calls Diff gets no proof file and fails the
+// CI job's check loudly, rather than reading as a pass built on nothing.
 func Diff(t *testing.T, goBase string, requests []Request, python []Response, options DiffOptions) string {
 	t.Helper()
 	if len(python) != len(requests) {
@@ -459,6 +467,7 @@ func Diff(t *testing.T, goBase string, requests []Request, python []Response, op
 				pick(pyShown.Headers, compared), goResponse.Status, goShown.Body, pick(goShown.Headers, compared))
 		}
 	}
+	writeProof(t)
 	return receipt.String()
 }
 
@@ -672,13 +681,14 @@ func tail(text string) string {
 	return text
 }
 
-// writeProof marks that THIS test's venue genuinely built and ran against
+// writeProof marks that THIS test genuinely compared a real request against
 // the live Python api -- one file per test name, so a CI job naming every
 // expected venue-oracle test by name can fail loudly when one is missing
-// (a t.Skip that fired, or a step that never reached Start at all), rather
-// than reporting a pass built on nothing. DEV_HEALTH_LIVE_PYTHON_ORACLE_
-// PROOF_DIR is optional: unset (the common local case) writes nothing and
-// is not an error.
+// (a t.Skip before Start, a t.Fatal along the way, or a test that built a
+// venue and never actually called Diff), rather than reporting a pass built
+// on nothing. Called from Diff, not Start -- see Diff's doc comment for why.
+// DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is optional: unset (the common
+// local case) writes nothing and is not an error.
 func writeProof(t *testing.T) {
 	t.Helper()
 	proofDir := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")

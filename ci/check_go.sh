@@ -1347,27 +1347,38 @@ check_live_python_oracles() {
 # (team-lead's shape, CHAOS-6314) -- today that is exactly one package
 # (internal/apiservice), but the grouping does not assume that stays true.
 #
-# Each discovered test's own venueoracle.Start writes a proof file (its own
-# t.Name()) into DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR once its venue
-# genuinely built. This verb fails loudly, rule-4-style, if that file is
-# missing for ANY discovered name after every invocation completes (a
-# t.Skip fired -- DEV_HEALTH_LIVE_PYTHON_ORACLES was unset, or
-# pyoracle.Resolve could not find python3 -- reads as a hard failure here,
-# never a silent pass) or if discovery itself found zero tests (the
-# discovery mechanism is broken, not a genuinely oracle-free tree). Two
-# hardenings here, both reproduced live against a temporary repro test:
-# the proof file only proves Start() returned, not that the test's own
-# comparison ran -- a t.Skip() fired immediately after Start() would still
-# leave a genuine proof file behind, so this also greps the raw `go test -v`
-# output for a `--- SKIP:` line naming a discovered test and fails on it
-# (DEV_HEALTH_LIVE_PYTHON_ORACLES=1 is always set here, so no discovered
-# test has a legitimate reason to skip under this verb); and each package
-# gets its OWN proof subdirectory, not one shared namespace, so two packages
-# that happen to declare a same-named VenueOracle test can never let one
-# package's real proof satisfy the other's check.
+# Each discovered test's own venueoracle.Diff writes a proof file (its own
+# t.Name()) into DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR once it has
+# actually sent a request to both planes and compared them -- NOT Start,
+# which only proves the venue was built, not that anything was compared.
+# This verb fails loudly, rule-4-style, if that file is missing for ANY
+# discovered name after every invocation completes, or if discovery itself
+# found zero tests (the discovery mechanism is broken, not a genuinely
+# oracle-free tree).
+#
+# Two same-named VenueOracle tests in one directory (an internal test
+# package and an external `_test` package can both declare the identical
+# function name) are rejected at discovery: go test's own text and JSON
+# event streams cannot tell the two apart by name, so no per-test signal
+# here could distinguish "the real one ran" from "a same-named impostor
+# ran while the real one silently didn't" -- the only honest response is to
+# refuse rather than trust an ambiguous signal.
+#
+# Status is read from `go test -json` (via jq), not a text-line grep: a
+# grep anchored on `--- SKIP: <name>` cannot see a skip inside a SUBTEST
+# (`<name>/Sub`, no top-level line at all) and can be fooled by ordinary
+# captured output that happens to look like a status line. The JSON event
+# stream's Action/Test fields distinguish a real skip (at any subtest
+# depth) from captured output, structurally. DEV_HEALTH_LIVE_PYTHON_
+# ORACLES=1 is always set by this verb, so no discovered test or subtest
+# has a legitimate reason to skip under it. Each package also gets its own
+# proof subdirectory, not one shared namespace, so two DIFFERENT packages
+# with a same-named test can't let one satisfy the other's check.
 check_venue_oracles() {
   [ "${DEV_HEALTH_LIVE_PYTHON_ORACLES:-}" = "1" ] \
     || die "venue-oracles requires DEV_HEALTH_LIVE_PYTHON_ORACLES=1 (this verb never sets it itself -- a skip must be visible to the caller, not swallowed here)"
+  command -v jq >/dev/null 2>&1 \
+    || die "venue-oracles requires jq to read go test -json status events (a text-line grep cannot see a subtest skip or tell captured output from a real status line)"
 
   local proof_dir file dir names name total=0
   local -a vo_dirs=() vo_names=()
@@ -1399,9 +1410,19 @@ check_venue_oracles() {
     rm -rf -- "${proof_dir}"
     die "venue-oracles: discovered zero VenueOracle-named tests -- the discovery mechanism itself is almost certainly broken, not a genuinely oracle-free tree"
   fi
+
+  local index dup_names
+  for index in "${!vo_names[@]}"; do
+    dup_names="$(printf '%s\n' "${vo_names[${index}]//|/$'\n'}" | LC_ALL=C sort | uniq -d)"
+    if [ -n "${dup_names}" ]; then
+      rm -rf -- "${proof_dir}"
+      die "venue-oracles: duplicate VenueOracle test name(s) in ${vo_dirs[${index}]}: ${dup_names} -- go test cannot tell which declaration ran, so this must be renamed before the verb can trust its own signal"
+    fi
+  done
+
   printf 'venue-oracles: %d test(s) discovered across %d package(s)\n' "${total}" "${#vo_dirs[@]}"
 
-  local index rel pattern pkg_proof_dir log_file failed=0
+  local rel pattern pkg_proof_dir json_log stderr_log go_test_status failed=0
   for index in "${!vo_dirs[@]}"; do
     rel="./${vo_dirs[${index}]#"${ROOT}"/}"
     pattern="^(${vo_names[${index}]})\$"
@@ -1409,32 +1430,46 @@ check_venue_oracles() {
 
     pkg_proof_dir="${proof_dir}/${index}"
     mkdir -p "${pkg_proof_dir}"
-    log_file="$(mktemp "${TMPDIR:-/tmp}/dev-health-venue-oracles-log.XXXXXX")"
+    json_log="$(mktemp "${TMPDIR:-/tmp}/dev-health-venue-oracles-json.XXXXXX")"
+    stderr_log="$(mktemp "${TMPDIR:-/tmp}/dev-health-venue-oracles-stderr.XXXXXX")"
 
-    if ! (
+    go_test_status=0
+    (
       cd "${ROOT}"
       "${GO_ENV_OFF[@]}" \
         GOWORK=off \
         DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
         DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${pkg_proof_dir}" \
         go test -mod=readonly -tags=integration -count=1 -timeout=20m \
-          -run "${pattern}" -v "${rel}"
-    ) 2>&1 | tee "${log_file}"; then
+          -run "${pattern}" -json "${rel}"
+    ) >"${json_log}" 2>"${stderr_log}" || go_test_status=$?
+
+    # Human-readable receipt: the captured output events, in the order go
+    # test emitted them -- the same text `-v` alone would have printed.
+    jq -r 'select(.Action == "output") | .Output' "${json_log}" 2>/dev/null
+    if [ -s "${stderr_log}" ]; then
+      cat "${stderr_log}" >&2
+    fi
+    rm -f -- "${stderr_log}"
+
+    if [ "${go_test_status}" -ne 0 ]; then
       failed=1
     fi
 
     local -a this_names=()
     IFS='|' read -ra this_names <<< "${vo_names[${index}]}"
     for name in "${this_names[@]}"; do
-      if grep -qE "^--- SKIP: ${name}( |\$)" "${log_file}"; then
-        printf 'ERROR: venue oracle %s reported SKIP -- a discovered venue oracle test must never skip under this verb; no real comparison ran\n' "${name}" >&2
+      if jq -e --arg name "${name}" \
+          'select(.Action == "skip") | select(.Test == $name or ((.Test // "") | startswith($name + "/")))' \
+          "${json_log}" >/dev/null 2>&1; then
+        printf 'ERROR: venue oracle %s (or one of its subtests) reported SKIP -- a discovered venue oracle test must never skip under this verb; no real comparison ran\n' "${name}" >&2
         failed=1
       elif [ ! -f "${pkg_proof_dir}/${name}" ] || [ "$(cat "${pkg_proof_dir}/${name}")" != "executed" ]; then
-        printf 'ERROR: venue oracle %s did not run (no proof file in its own package directory -- venueoracle.Start likely never returned)\n' "${name}" >&2
+        printf 'ERROR: venue oracle %s did not run a real comparison (no proof file in its own package directory -- venueoracle.Diff was likely never reached)\n' "${name}" >&2
         failed=1
       fi
     done
-    rm -f -- "${log_file}"
+    rm -f -- "${json_log}"
   done
 
   rm -rf -- "${proof_dir}"

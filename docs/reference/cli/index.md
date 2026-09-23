@@ -327,13 +327,13 @@ deleted at spec S2. Run it directly:
 
 ```bash
 # Single day, every org repository
-dho workers metrics daily-start --org <org-uuid> --day 2025-02-01
+dho workers metrics daily-start --org <org-uuid> --day 2025-02-01 --reason <code> --correlation-id <id>
 
 # Day range (inclusive)
-dho workers metrics daily-start --org <org-uuid> --day 2025-01-26 --to 2025-02-01
+dho workers metrics daily-start --org <org-uuid> --day 2025-01-26 --to 2025-02-01 --reason <code> --correlation-id <id>
 
 # Scope to specific repositories (repeatable)
-dho workers metrics daily-start --org <org-uuid> --day 2025-02-01 --repo-id <uuid>
+dho workers metrics daily-start --org <org-uuid> --day 2025-02-01 --repo-id <uuid> --reason <code> --correlation-id <id>
 ```
 
 See [`metrics daily-start`](#metrics-daily-start-chaos-5055) for the full
@@ -347,10 +347,12 @@ day-scoped families):
 
 ```bash
 dho workers metrics remaining trigger-backstop --family dora --org <org-uuid> \
-  --day 2026-08-01 --review-evidence "CHAOS-1234 -- routine trigger, no automatic run yet today"
+  --day 2026-08-01 --review-evidence "CHAOS-1234 -- routine trigger, no automatic run yet today" \
+  --reason <code> --correlation-id <id>
 
 dho workers metrics remaining trigger-backstop --family capacity --org <org-uuid> \
-  --team <team-uuid> --review-evidence "CHAOS-1234 -- routine trigger"
+  --team <team-uuid> --review-evidence "CHAOS-1234 -- routine trigger" \
+  --reason <code> --correlation-id <id>
 ```
 
 `--day` defaults to yesterday UTC, targeting today requires `--today`, and
@@ -920,6 +922,19 @@ still requires `--reason` and `--correlation-id`, and it writes an audit
 row (principal `operator/dho-workers`). Name yourself in those two flags:
 they and the cluster's exec audit log are the record of who acted.
 
+**Every write verb is audited first.** That covers the job, queue and route
+verbs, and also the verbs that write outside the operator service:
+`metrics daily-start`, `daily-redrive`, `daily-finalize`, `finalize-redrive`,
+`partition-recompute`, `execution-repair`, `metrics remaining start`,
+`trigger-backstop` and `redrive`, `workgraph trigger` and `repair`,
+`investment trigger`, `external-recompute replay`, both `providersync retire-*`
+verbs and `sync-dispatch-outbox close-backlog`. Each one writes its
+`worker_operator_audits` row before it writes anything else, and completes it
+`succeeded` or `failed`. If the row cannot be written, the command stops with
+`audit_unavailable` and changes nothing. `--dry-run` writes nothing, so it
+needs neither flag and writes no row. `--review-evidence` keeps its own
+meaning; it is not the reason code.
+
 **Flags must precede the positional argument.** Go's `flag` package stops
 parsing at the first positional, so an id-first invocation fails with a generic
 `invalid_request` that names neither the cause nor the fix:
@@ -930,9 +945,9 @@ dho workers jobs retry --reason r --correlation-id c 9457   # parses
 ```
 
 **`COORDINATOR_DATABASE_URI` is required, and not every image carries it.**
-`workerctl` authenticates the operator token against `internal_service_credentials`,
-which is a coordinator-exclusive read, so without that DSN the CLI is entirely
-non-functional and returns `configuration_error`. A `workerctl` invocation needs
+The route controllers and the audit table run on the coordinator pool, so
+without that DSN the CLI is entirely non-functional and returns
+`configuration_error`. A `dho workers` invocation needs
 all three database URIs — `POSTGRES_URI`, `WORKER_DATABASE_URI`, and
 `COORDINATOR_DATABASE_URI` — plus the session-safe mode settings. The
 `go-reconciler` container carries the coordinator DSN; `go-worker-heavy` does
@@ -981,14 +996,16 @@ changing the nightly schedule's own behavior, deliberately out of scope here.
 dho workers metrics daily-start \
   --org 70d529e0-3c06-4597-8480-794fd02328b6 \
   --day 2026-09-01 \
-  --to 2026-09-04
+  --to 2026-09-04 \
+  --reason <code> --correlation-id <id>
 
 # Scope to specific repositories (repeatable --repo-id); omit for every
 # org repository (deferred discovery, resolved by the worker)
 dho workers metrics daily-start \
   --org 70d529e0-3c06-4597-8480-794fd02328b6 \
   --day 2026-09-04 \
-  --repo-id 550e8400-e29b-41d4-a716-446655440000
+  --repo-id 550e8400-e29b-41d4-a716-446655440000 \
+  --reason <code> --correlation-id <id>
 ```
 
 Repair a daily-metrics run stranded by CHAOS-4358: every `daily_partition`
@@ -1003,7 +1020,8 @@ dho workers metrics daily-redrive \
   --org 70d529e0-3c06-4597-8480-794fd02328b6 \
   --from 2026-08-08 \
   --to 2026-08-27 \
-  --review-evidence "confirmed via ClickHouse readback that testops_test/dora/cicd have zero rows for these repo+day scopes; safe to re-run"
+  --review-evidence "confirmed via ClickHouse readback that testops_test/dora/cicd have zero rows for these repo+day scopes; safe to re-run" \
+  --reason <code> --correlation-id <id>
 ```
 
 `--review-evidence` is **required**, with no default (codex review round 3):
@@ -1087,7 +1105,8 @@ success. This is the finalize-side counterpart of the CHAOS-4358 gap
 ```bash
 dho workers metrics daily-finalize \
   --run 6f2caa3e-2a8b-4e46-9c47-6a5a0a5b9a12 \
-  --review-evidence "confirmed all partitions succeeded and no user_metrics_daily/ic_landscape_rolling_30d rows exist yet for this run's target_day -- the prior metrics.daily_finalize job never reached CompleteFinalize"
+  --review-evidence "confirmed all partitions succeeded and no user_metrics_daily/ic_landscape_rolling_30d rows exist yet for this run's target_day -- the prior metrics.daily_finalize job never reached CompleteFinalize" \
+  --reason <code> --correlation-id <id>
 ```
 
 `--run` additionally repairs the named run's finalize ledger
@@ -1247,7 +1266,8 @@ Then run for real:
 dho workers metrics finalize-redrive \
   --org c6a38355-dad6-42e4-8cc9-4c712450827d \
   --from 2026-05-01 --to 2026-05-31 \
-  --review-evidence "CHAOS-4405: backfilling compounding_risk_daily(team)/team_cognitive_load_daily for days finalized before #1963 landed the team-aggregation write"
+  --review-evidence "CHAOS-4405: backfilling compounding_risk_daily(team)/team_cognitive_load_daily for days finalized before #1963 landed the team-aggregation write" \
+  --reason <code> --correlation-id <id>
 ```
 
 `--review-evidence` is **required** for a real invocation, with no default —
@@ -1402,7 +1422,8 @@ dho workers metrics partition-recompute \
   --org c6a38355-dad6-42e4-8cc9-4c712450827d \
   --from 2026-08-20 --to 2026-08-27 \
   --family repo_user_commit \
-  --review-evidence "CHAOS-4459: org-scoped commit_metrics/repo_metrics_daily/user_metrics_daily rows are 0 for this range because the partition succeeded under the pre-#1960 writer that stamped org_id=''"
+  --review-evidence "CHAOS-4459: org-scoped commit_metrics/repo_metrics_daily/user_metrics_daily rows are 0 for this range because the partition succeeded under the pre-#1960 writer that stamped org_id=''" \
+  --reason <code> --correlation-id <id>
 ```
 
 `--family` is restricted to a closed list (`daily.SupportedPartitionRecomputeFamilies`
@@ -1487,7 +1508,8 @@ dho workers metrics remaining start \
   --family dora \
   --day 2026-08-25 --to 2026-08-27 \
   --org c6a38355-dad6-42e4-8cc9-4c712450827d \
-  --review-evidence "CHAOS-4384: dora frozen at 0 rows for 08-25..08-27 by the pre-fix same-day coverage bug (5ddab4c65); deployments/incidents have since landed for these closed days"
+  --review-evidence "CHAOS-4384: dora frozen at 0 rows for 08-25..08-27 by the pre-fix same-day coverage bug (5ddab4c65); deployments/incidents have since landed for these closed days" \
+  --reason <code> --correlation-id <id>
 ```
 
 Supported `--family` values are the day-scoped remaining-metrics families
@@ -1999,7 +2021,8 @@ dev-hops sync git --provider github \
 # 4. Compute metrics (needs a running worker and the Postgres coordinator)
 dho workers metrics daily-start \
   --org "$ORG_ID" \
-  --day "$(date -u -d '30 days ago' +%F)" --to "$(date -u -d yesterday +%F)"
+  --day "$(date -u -d '30 days ago' +%F)" --to "$(date -u -d yesterday +%F)" \
+  --reason <code> --correlation-id <id>
 ```
 
 ### Local Development

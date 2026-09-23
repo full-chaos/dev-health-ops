@@ -486,6 +486,11 @@ func TestDispatchJobRouteApplyIsOneBoundedAuthenticatedCommand(t *testing.T) {
 
 func commandRuntime(t *testing.T, authorizer joboperator.Authorizer) *operatorRuntime {
 	t.Helper()
+	return commandRuntimeWithAuditor(t, authorizer, commandAuditor{})
+}
+
+func commandRuntimeWithAuditor(t *testing.T, authorizer joboperator.Authorizer, auditor joboperator.Auditor) *operatorRuntime {
+	t.Helper()
 	registry, err := jobruntime.Load(filepath.Join("..", "..", "contracts", "jobs", "v1"))
 	if err != nil {
 		t.Fatal(err)
@@ -493,7 +498,7 @@ func commandRuntime(t *testing.T, authorizer joboperator.Authorizer) *operatorRu
 	backend := &commandBackend{queues: map[string]joboperator.QueueSummary{}}
 	service, err := joboperator.New(joboperator.Dependencies{
 		Registry: registry, Backend: backend, Authorizer: authorizer,
-		DomainGuard: commandDomainGuard{}, Auditor: commandAuditor{},
+		DomainGuard: commandDomainGuard{}, Auditor: auditor,
 		RouteController:    commandRouteController{},
 		JobRouteController: commandJobRouteController{},
 	})
@@ -712,6 +717,7 @@ func TestDispatchMetricsDailyStartReportsBackendUnavailableOnceFlagsAreValid(t *
 	var stdout, stderr bytes.Buffer
 	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{
 		"daily-start", "--org", "00000000-0000-4000-8000-000000000001", "--day", "2026-08-01",
+		"--reason", "operator_test", "--correlation-id", "corr-1",
 	}, &stdout, &stderr)
 	if code != 1 || stderr.String() != "{\"error\":{\"code\":\"operator_backend_unavailable\"}}\n" {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
@@ -767,7 +773,7 @@ func TestDispatchProvidersyncRetireLinearPseudoProjectsRejectsExtraArgs(t *testi
 // panicking or silently proceeding to authorize/mutate anything.
 func TestDispatchProvidersyncRetireLinearPseudoProjectsFailsClosedWithoutService(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	code := dispatchProvidersyncRetireLinearPseudoProjects(context.Background(), &operatorRuntime{}, nil, &stdout, &stderr)
+	code := dispatchProvidersyncRetireLinearPseudoProjects(context.Background(), &operatorRuntime{}, auditFlags(), &stdout, &stderr)
 	if code != 1 || stderr.String() != "{\"error\":{\"code\":\"operator_backend_unavailable\"}}\n" {
 		t.Fatalf("code=%d stderr=%q", code, stderr.String())
 	}
@@ -785,7 +791,7 @@ func TestDispatchProvidersyncRetireLinearPseudoProjectsRejectsUnauthorizedCreden
 	var stdout, stderr bytes.Buffer
 	runtime := commandRuntime(t, commandAuthorizer{err: errors.New("insufficient scope")})
 	runtime.lookup = func(string) (string, bool) { return "clickhouse://unreachable-host-for-this-test:9999/default", true }
-	code := dispatchProvidersyncRetireLinearPseudoProjects(context.Background(), runtime, nil, &stdout, &stderr)
+	code := dispatchProvidersyncRetireLinearPseudoProjects(context.Background(), runtime, auditFlags(), &stdout, &stderr)
 	if code != 1 || stderr.String() != "{\"error\":{\"code\":\"unauthorized\"}}\n" {
 		t.Fatalf("code=%d stderr=%q", code, stderr.String())
 	}
@@ -799,7 +805,7 @@ func TestDispatchProvidersyncRetireLinearPseudoProjectsRequiresClickHouseURI(t *
 	var stdout, stderr bytes.Buffer
 	runtime := commandRuntime(t, commandAuthorizer{})
 	runtime.lookup = func(string) (string, bool) { return "", false }
-	code := dispatchProvidersyncRetireLinearPseudoProjects(context.Background(), runtime, nil, &stdout, &stderr)
+	code := dispatchProvidersyncRetireLinearPseudoProjects(context.Background(), runtime, auditFlags(), &stdout, &stderr)
 	// Assert the stable "code" AND the "detail" field naming the missing
 	// key, rather than an exact string, so this test does not itself pin
 	// a less useful shape in place.
@@ -829,7 +835,7 @@ func TestDispatchProvidersyncRetireLinearPseudoProjectsLogsResolvedDatabase(t *t
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	code := dispatchProvidersyncRetireLinearPseudoProjects(ctx, runtime, nil, &stdout, &stderr)
+	code := dispatchProvidersyncRetireLinearPseudoProjects(ctx, runtime, auditFlags(), &stdout, &stderr)
 	if code != 1 {
 		t.Fatalf("code = %d, want 1 (unroutable ClickHouse host)", code)
 	}
@@ -881,7 +887,7 @@ func TestDispatchProvidersyncRetireStaleLinearProjectOwnershipRejectsExtraArgs(t
 
 func TestDispatchProvidersyncRetireStaleLinearProjectOwnershipFailsClosedWithoutService(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	code := dispatchProvidersyncRetireStaleLinearProjectOwnership(context.Background(), &operatorRuntime{}, nil, &stdout, &stderr)
+	code := dispatchProvidersyncRetireStaleLinearProjectOwnership(context.Background(), &operatorRuntime{}, auditFlags(), &stdout, &stderr)
 	if code != 1 || stderr.String() != "{\"error\":{\"code\":\"operator_backend_unavailable\"}}\n" {
 		t.Fatalf("code=%d stderr=%q", code, stderr.String())
 	}
@@ -897,7 +903,7 @@ func TestDispatchProvidersyncRetireStaleLinearProjectOwnershipRejectsUnauthorize
 	var stdout, stderr bytes.Buffer
 	runtime := commandRuntime(t, commandAuthorizer{err: errors.New("insufficient scope")})
 	runtime.lookup = func(string) (string, bool) { return "clickhouse://unreachable-host-for-this-test:9999/default", true }
-	code := dispatchProvidersyncRetireStaleLinearProjectOwnership(context.Background(), runtime, nil, &stdout, &stderr)
+	code := dispatchProvidersyncRetireStaleLinearProjectOwnership(context.Background(), runtime, auditFlags(), &stdout, &stderr)
 	if code != 1 || stderr.String() != "{\"error\":{\"code\":\"unauthorized\"}}\n" {
 		t.Fatalf("code=%d stderr=%q", code, stderr.String())
 	}
@@ -907,7 +913,7 @@ func TestDispatchProvidersyncRetireStaleLinearProjectOwnershipRequiresClickHouse
 	var stdout, stderr bytes.Buffer
 	runtime := commandRuntime(t, commandAuthorizer{})
 	runtime.lookup = func(string) (string, bool) { return "", false }
-	code := dispatchProvidersyncRetireStaleLinearProjectOwnership(context.Background(), runtime, nil, &stdout, &stderr)
+	code := dispatchProvidersyncRetireStaleLinearProjectOwnership(context.Background(), runtime, auditFlags(), &stdout, &stderr)
 	// See the sibling test above -- the stable "code" plus a "detail"
 	// field naming the missing key.
 	if code != 1 ||
@@ -932,7 +938,7 @@ func TestDispatchProvidersyncRetireStaleLinearProjectOwnershipLogsResolvedDataba
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	code := dispatchProvidersyncRetireStaleLinearProjectOwnership(ctx, runtime, nil, &stdout, &stderr)
+	code := dispatchProvidersyncRetireStaleLinearProjectOwnership(ctx, runtime, auditFlags(), &stdout, &stderr)
 	if code != 1 {
 		t.Fatalf("code = %d, want 1 (unroutable ClickHouse host)", code)
 	}
@@ -988,7 +994,7 @@ func TestDispatchSyncDispatchOutboxCloseBacklogRejectsOutOfRangeBatchSize(t *tes
 // the providersync cleanup verbs' same guard.
 func TestDispatchSyncDispatchOutboxCloseBacklogFailsClosedWithoutService(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	code := dispatchSyncDispatchOutboxCloseBacklog(context.Background(), &operatorRuntime{}, nil, &stdout, &stderr)
+	code := dispatchSyncDispatchOutboxCloseBacklog(context.Background(), &operatorRuntime{}, auditFlags(), &stdout, &stderr)
 	if code != 1 || stderr.String() != "{\"error\":{\"code\":\"operator_backend_unavailable\"}}\n" {
 		t.Fatalf("code=%d stderr=%q", code, stderr.String())
 	}
@@ -1003,7 +1009,7 @@ func TestDispatchSyncDispatchOutboxCloseBacklogFailsClosedWithoutService(t *test
 func TestDispatchSyncDispatchOutboxCloseBacklogRejectsUnauthorizedCredential(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	runtime := commandRuntime(t, commandAuthorizer{err: errors.New("insufficient scope")})
-	code := dispatchSyncDispatchOutboxCloseBacklog(context.Background(), runtime, nil, &stdout, &stderr)
+	code := dispatchSyncDispatchOutboxCloseBacklog(context.Background(), runtime, auditFlags(), &stdout, &stderr)
 	if code != 1 || stderr.String() != "{\"error\":{\"code\":\"unauthorized\"}}\n" {
 		t.Fatalf("code=%d stderr=%q", code, stderr.String())
 	}
@@ -1016,7 +1022,7 @@ func TestDispatchSyncDispatchOutboxCloseBacklogRejectsUnauthorizedCredential(t *
 func TestDispatchSyncDispatchOutboxCloseBacklogRequiresCoordinatorPool(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	runtime := commandRuntime(t, commandAuthorizer{})
-	code := dispatchSyncDispatchOutboxCloseBacklog(context.Background(), runtime, nil, &stdout, &stderr)
+	code := dispatchSyncDispatchOutboxCloseBacklog(context.Background(), runtime, auditFlags(), &stdout, &stderr)
 	if code != 1 || stderr.String() != "{\"error\":{\"code\":\"operator_backend_unavailable\"}}\n" {
 		t.Fatalf("code=%d stderr=%q", code, stderr.String())
 	}
@@ -1041,10 +1047,10 @@ func TestDispatchMetricsDailyFinalizeRequiresReviewEvidence(t *testing.T) {
 // this command cannot tell which scope governs otherwise.
 func TestDispatchMetricsDailyFinalizeRequiresExactlyOneScope(t *testing.T) {
 	for name, args := range map[string][]string{
-		"neither": {"daily-finalize", "--review-evidence", "testing"},
+		"neither": {"daily-finalize", "--review-evidence", "testing", "--reason", "operator_test", "--correlation-id", "corr-1"},
 		"both": {
 			"daily-finalize", "--run", "00000000-0000-4000-8000-000000000001",
-			"--all-complete", "--review-evidence", "testing",
+			"--all-complete", "--review-evidence", "testing", "--reason", "operator_test", "--correlation-id", "corr-1",
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -1060,7 +1066,7 @@ func TestDispatchMetricsDailyFinalizeRequiresExactlyOneScope(t *testing.T) {
 func TestDispatchMetricsDailyFinalizeRejectsInvalidRunID(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{
-		"daily-finalize", "--run", "not-a-uuid", "--review-evidence", "testing",
+		"daily-finalize", "--run", "not-a-uuid", "--review-evidence", "testing", "--reason", "operator_test", "--correlation-id", "corr-1",
 	}, &stdout, &stderr)
 	if code != 2 || stderr.String() != invalidRequestJSON {
 		t.Fatalf("invalid run id not rejected: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
@@ -1079,7 +1085,7 @@ func TestDispatchMetricsDailyFinalizeRejectsInvalidRunID(t *testing.T) {
 func TestDispatchMetricsDailyFinalizeAcceptsUppercaseRunID(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{
-		"daily-finalize", "--run", "6F2CAA3E-2A8B-4E46-9C47-6A5A0A5B9A12", "--review-evidence", "testing",
+		"daily-finalize", "--run", "6F2CAA3E-2A8B-4E46-9C47-6A5A0A5B9A12", "--review-evidence", "testing", "--reason", "operator_test", "--correlation-id", "corr-1",
 	}, &stdout, &stderr)
 	const operatorBackendUnavailableJSON = "{\"error\":{\"code\":\"operator_backend_unavailable\"}}\n"
 	if code != 1 || stderr.String() != operatorBackendUnavailableJSON {
@@ -1106,7 +1112,7 @@ func TestDispatchMetricsFinalizeRedriveRejectsInvalidOrg(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{
 		"finalize-redrive", "--org", "not-a-uuid",
-		"--from", "2026-05-01", "--to", "2026-05-01", "--review-evidence", "testing",
+		"--from", "2026-05-01", "--to", "2026-05-01", "--review-evidence", "testing", "--reason", "operator_test", "--correlation-id", "corr-1",
 	}, &stdout, &stderr)
 	if code != 2 || stderr.String() != invalidRequestJSON {
 		t.Fatalf("invalid org not rejected: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
@@ -1117,7 +1123,7 @@ func TestDispatchMetricsFinalizeRedriveRejectsInvalidDateRange(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{
 		"finalize-redrive", "--org", "00000000-0000-4000-8000-000000000001",
-		"--from", "not-a-date", "--to", "2026-05-01", "--review-evidence", "testing",
+		"--from", "not-a-date", "--to", "2026-05-01", "--review-evidence", "testing", "--reason", "operator_test", "--correlation-id", "corr-1",
 	}, &stdout, &stderr)
 	if code != 2 || stderr.String() != invalidRequestJSON {
 		t.Fatalf("invalid --from not rejected: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
@@ -1132,7 +1138,7 @@ func TestDispatchMetricsFinalizeRedriveDefaultsIncludeSucceededTrue(t *testing.T
 	var stdout, stderr bytes.Buffer
 	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{
 		"finalize-redrive", "--org", "00000000-0000-4000-8000-000000000001",
-		"--from", "2026-05-01", "--to", "2026-05-01", "--review-evidence", "testing",
+		"--from", "2026-05-01", "--to", "2026-05-01", "--review-evidence", "testing", "--reason", "operator_test", "--correlation-id", "corr-1",
 	}, &stdout, &stderr)
 	const operatorBackendUnavailableJSON = "{\"error\":{\"code\":\"operator_backend_unavailable\"}}\n"
 	if code != 1 || stderr.String() != operatorBackendUnavailableJSON {
@@ -1145,7 +1151,7 @@ func TestDispatchMetricsFinalizeRedriveAcceptsExplicitIncludeSucceededFalse(t *t
 	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{
 		"finalize-redrive", "--org", "00000000-0000-4000-8000-000000000001",
 		"--from", "2026-05-01", "--to", "2026-05-01", "--include-succeeded=false",
-		"--review-evidence", "testing",
+		"--review-evidence", "testing", "--reason", "operator_test", "--correlation-id", "corr-1",
 	}, &stdout, &stderr)
 	const operatorBackendUnavailableJSON = "{\"error\":{\"code\":\"operator_backend_unavailable\"}}\n"
 	if code != 1 || stderr.String() != operatorBackendUnavailableJSON {
@@ -1188,7 +1194,7 @@ func TestDispatchMetricsRemainingStartRejectsNonDayScopedFamily(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{
 		"remaining", "start", "--family", "capacity", "--day", "2026-08-26",
-		"--org", "00000000-0000-4000-8000-000000000001", "--review-evidence", "testing",
+		"--org", "00000000-0000-4000-8000-000000000001", "--review-evidence", "testing", "--reason", "operator_test", "--correlation-id", "corr-1",
 	}, &stdout, &stderr)
 	if code != 2 || stderr.String() != invalidRequestJSON {
 		t.Fatalf("capacity family not rejected: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
@@ -1199,7 +1205,7 @@ func TestDispatchMetricsRemainingStartRejectsInvalidOrg(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{
 		"remaining", "start", "--family", "dora", "--day", "2026-08-26",
-		"--org", "not-a-uuid", "--review-evidence", "testing",
+		"--org", "not-a-uuid", "--review-evidence", "testing", "--reason", "operator_test", "--correlation-id", "corr-1",
 	}, &stdout, &stderr)
 	if code != 2 || stderr.String() != invalidRequestJSON {
 		t.Fatalf("invalid org not rejected: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
@@ -1210,7 +1216,7 @@ func TestDispatchMetricsRemainingStartRejectsMalformedDay(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{
 		"remaining", "start", "--family", "dora", "--day", "not-a-date",
-		"--org", "00000000-0000-4000-8000-000000000001", "--review-evidence", "testing",
+		"--org", "00000000-0000-4000-8000-000000000001", "--review-evidence", "testing", "--reason", "operator_test", "--correlation-id", "corr-1",
 	}, &stdout, &stderr)
 	if code != 2 || stderr.String() != invalidRequestJSON {
 		t.Fatalf("malformed --day not rejected: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
@@ -1221,7 +1227,7 @@ func TestDispatchMetricsRemainingStartRejectsToBeforeDay(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{
 		"remaining", "start", "--family", "dora", "--day", "2026-08-26", "--to", "2026-08-20",
-		"--org", "00000000-0000-4000-8000-000000000001", "--review-evidence", "testing",
+		"--org", "00000000-0000-4000-8000-000000000001", "--review-evidence", "testing", "--reason", "operator_test", "--correlation-id", "corr-1",
 	}, &stdout, &stderr)
 	if code != 2 || stderr.String() != invalidRequestJSON {
 		t.Fatalf("--to before --day not rejected: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
@@ -1235,7 +1241,7 @@ func TestDispatchMetricsRemainingStartRejectsSpanOverTheDayLimit(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{
 		"remaining", "start", "--family", "dora", "--day", "2026-01-01", "--to", "2026-12-31",
-		"--org", "00000000-0000-4000-8000-000000000001", "--review-evidence", "testing",
+		"--org", "00000000-0000-4000-8000-000000000001", "--review-evidence", "testing", "--reason", "operator_test", "--correlation-id", "corr-1",
 	}, &stdout, &stderr)
 	if code != 2 || stderr.String() != invalidRequestJSON {
 		t.Fatalf("day span over manualBackfillMaxDays not rejected: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
@@ -1246,7 +1252,7 @@ func TestDispatchMetricsRemainingStartRejectsUnknownFamilyFlag(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{
 		"remaining", "start", "--family", "not-a-real-family", "--day", "2026-08-26",
-		"--org", "00000000-0000-4000-8000-000000000001", "--review-evidence", "testing",
+		"--org", "00000000-0000-4000-8000-000000000001", "--review-evidence", "testing", "--reason", "operator_test", "--correlation-id", "corr-1",
 	}, &stdout, &stderr)
 	if code != 2 || stderr.String() != invalidRequestJSON {
 		t.Fatalf("unknown family not rejected: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
@@ -1260,7 +1266,7 @@ func TestDispatchMetricsRemainingStartRejectsFutureDay(t *testing.T) {
 	future := time.Now().UTC().AddDate(1, 0, 0).Format("2006-01-02")
 	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{
 		"remaining", "start", "--family", "dora", "--day", future,
-		"--org", "00000000-0000-4000-8000-000000000001", "--review-evidence", "testing",
+		"--org", "00000000-0000-4000-8000-000000000001", "--review-evidence", "testing", "--reason", "operator_test", "--correlation-id", "corr-1",
 	}, &stdout, &stderr)
 	if code != 2 || stderr.String() != invalidRequestJSON {
 		t.Fatalf("future --day not rejected: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
@@ -1277,7 +1283,7 @@ func TestDispatchMetricsRemainingStartRejectsToday(t *testing.T) {
 	today := time.Now().UTC().Format("2006-01-02")
 	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{
 		"remaining", "start", "--family", "dora", "--day", today,
-		"--org", "00000000-0000-4000-8000-000000000001", "--review-evidence", "testing",
+		"--org", "00000000-0000-4000-8000-000000000001", "--review-evidence", "testing", "--reason", "operator_test", "--correlation-id", "corr-1",
 	}, &stdout, &stderr)
 	if code != 2 || stderr.String() != invalidRequestJSON {
 		t.Fatalf("today's --day not rejected: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
@@ -1288,13 +1294,13 @@ func TestDispatchMetricsRemainingRedriveValidatesFlagsBeforeTouchingTheBackend(t
 	const org = "00000000-0000-4000-8000-000000000001"
 	cases := map[string][]string{
 		"invalid org": {
-			"remaining", "redrive", "--org", "not-a-uuid", "--review-evidence", "testing",
+			"remaining", "redrive", "--org", "not-a-uuid", "--review-evidence", "testing", "--reason", "operator_test", "--correlation-id", "corr-1",
 		},
 		"invalid family": {
-			"remaining", "redrive", "--org", org, "--family", "not-a-real-family", "--review-evidence", "testing",
+			"remaining", "redrive", "--org", org, "--family", "not-a-real-family", "--review-evidence", "testing", "--reason", "operator_test", "--correlation-id", "corr-1",
 		},
 		"invalid run": {
-			"remaining", "redrive", "--org", org, "--run", "not-a-uuid", "--review-evidence", "testing",
+			"remaining", "redrive", "--org", org, "--run", "not-a-uuid", "--review-evidence", "testing", "--reason", "operator_test", "--correlation-id", "corr-1",
 		},
 		"missing review-evidence": {
 			"remaining", "redrive", "--org", org,
@@ -1336,7 +1342,7 @@ func TestDispatchMetricsRemainingRedriveReportsBackendUnavailableOnceFlagsAreVal
 	var stdout, stderr bytes.Buffer
 	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{
 		"remaining", "redrive", "--org", "00000000-0000-4000-8000-000000000001",
-		"--review-evidence", "testing",
+		"--review-evidence", "testing", "--reason", "operator_test", "--correlation-id", "corr-1",
 	}, &stdout, &stderr)
 	if code != 1 || stderr.String() != "{\"error\":{\"code\":\"operator_backend_unavailable\"}}\n" {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
@@ -1727,7 +1733,7 @@ func TestDispatchMetricsRemainingTriggerBackstopAcceptsDayScopedFamiliesUniforml
 			var stdout, stderr bytes.Buffer
 			code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{
 				"remaining", "trigger-backstop", "--family", family,
-				"--org", "00000000-0000-4000-8000-000000000001", "--review-evidence", "testing",
+				"--org", "00000000-0000-4000-8000-000000000001", "--review-evidence", "testing", "--reason", "operator_test", "--correlation-id", "corr-1",
 			}, &stdout, &stderr)
 			if code != 1 || stderr.String() != "{\"error\":{\"code\":\"operator_backend_unavailable\"}}\n" {
 				t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
@@ -1745,7 +1751,7 @@ func TestDispatchMetricsRemainingTriggerBackstopStillRequiresTodayExplicitly(t *
 	var stdout, stderr bytes.Buffer
 	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{
 		"remaining", "trigger-backstop", "--family", "dora", "--day", todayUTC,
-		"--org", "00000000-0000-4000-8000-000000000001", "--review-evidence", "testing",
+		"--org", "00000000-0000-4000-8000-000000000001", "--review-evidence", "testing", "--reason", "operator_test", "--correlation-id", "corr-1",
 	}, &stdout, &stderr)
 	if code != 2 || stderr.String() != invalidRequestJSON {
 		t.Fatalf("today without --today not rejected: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
@@ -1761,7 +1767,7 @@ func TestDispatchMetricsRemainingTriggerBackstopRequiresExactlyOneTeamFlagForCap
 	baseArgs := func(family string, extra ...string) []string {
 		return append([]string{
 			"remaining", "trigger-backstop", "--family", family,
-			"--org", "00000000-0000-4000-8000-000000000001", "--review-evidence", "testing",
+			"--org", "00000000-0000-4000-8000-000000000001", "--review-evidence", "testing", "--reason", "operator_test", "--correlation-id", "corr-1",
 		}, extra...)
 	}
 	for _, family := range []string{"capacity", "recommendations"} {
@@ -1813,7 +1819,7 @@ func TestDispatchMetricsRemainingTriggerBackstopRejectsUnknownFamily(t *testing.
 	var stdout, stderr bytes.Buffer
 	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{
 		"remaining", "trigger-backstop", "--family", "not-a-real-family",
-		"--org", "00000000-0000-4000-8000-000000000001", "--review-evidence", "testing",
+		"--org", "00000000-0000-4000-8000-000000000001", "--review-evidence", "testing", "--reason", "operator_test", "--correlation-id", "corr-1",
 	}, &stdout, &stderr)
 	if code != 2 || stderr.String() != invalidRequestJSON {
 		t.Fatalf("unknown family not rejected: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
@@ -1824,7 +1830,7 @@ func TestDispatchMetricsRemainingTriggerBackstopRejectsInvalidOrg(t *testing.T) 
 	var stdout, stderr bytes.Buffer
 	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{
 		"remaining", "trigger-backstop", "--family", "work_item_attribution",
-		"--org", "not-a-uuid", "--review-evidence", "testing",
+		"--org", "not-a-uuid", "--review-evidence", "testing", "--reason", "operator_test", "--correlation-id", "corr-1",
 	}, &stdout, &stderr)
 	if code != 2 || stderr.String() != invalidRequestJSON {
 		t.Fatalf("invalid org not rejected: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
@@ -1835,7 +1841,7 @@ func TestDispatchMetricsRemainingTriggerBackstopRejectsMalformedDay(t *testing.T
 	var stdout, stderr bytes.Buffer
 	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{
 		"remaining", "trigger-backstop", "--family", "work_item_attribution", "--day", "not-a-date",
-		"--org", "00000000-0000-4000-8000-000000000001", "--review-evidence", "testing",
+		"--org", "00000000-0000-4000-8000-000000000001", "--review-evidence", "testing", "--reason", "operator_test", "--correlation-id", "corr-1",
 	}, &stdout, &stderr)
 	if code != 2 || stderr.String() != invalidRequestJSON {
 		t.Fatalf("malformed --day not rejected: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
@@ -1847,7 +1853,7 @@ func TestDispatchMetricsRemainingTriggerBackstopRejectsFutureDay(t *testing.T) {
 	future := time.Now().UTC().AddDate(0, 0, 1).Format("2006-01-02")
 	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{
 		"remaining", "trigger-backstop", "--family", "work_item_attribution", "--day", future,
-		"--org", "00000000-0000-4000-8000-000000000001", "--review-evidence", "testing",
+		"--org", "00000000-0000-4000-8000-000000000001", "--review-evidence", "testing", "--reason", "operator_test", "--correlation-id", "corr-1",
 	}, &stdout, &stderr)
 	if code != 2 || stderr.String() != invalidRequestJSON {
 		t.Fatalf("future --day not rejected: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
@@ -1862,7 +1868,7 @@ func TestDispatchMetricsRemainingTriggerBackstopRejectsTodayWithoutTheFlag(t *te
 	today := time.Now().UTC().Format("2006-01-02")
 	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{
 		"remaining", "trigger-backstop", "--family", "work_item_attribution", "--day", today,
-		"--org", "00000000-0000-4000-8000-000000000001", "--review-evidence", "testing",
+		"--org", "00000000-0000-4000-8000-000000000001", "--review-evidence", "testing", "--reason", "operator_test", "--correlation-id", "corr-1",
 	}, &stdout, &stderr)
 	if code != 2 || stderr.String() != invalidRequestJSON {
 		t.Fatalf("today's --day without --today not rejected: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
@@ -1880,7 +1886,7 @@ func TestDispatchMetricsRemainingTriggerBackstopAcceptsTodayWithTheFlag(t *testi
 	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{
 		"remaining", "trigger-backstop", "--family", "work_item_attribution",
 		"--day", today, "--today",
-		"--org", "00000000-0000-4000-8000-000000000001", "--review-evidence", "testing",
+		"--org", "00000000-0000-4000-8000-000000000001", "--review-evidence", "testing", "--reason", "operator_test", "--correlation-id", "corr-1",
 	}, &stdout, &stderr)
 	const operatorBackendUnavailableJSON = "{\"error\":{\"code\":\"operator_backend_unavailable\"}}\n"
 	if code != 1 || stderr.String() != operatorBackendUnavailableJSON {
@@ -1895,7 +1901,7 @@ func TestDispatchMetricsRemainingTriggerBackstopDefaultsDayToYesterday(t *testin
 	var stdout, stderr bytes.Buffer
 	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{
 		"remaining", "trigger-backstop", "--family", "work_item_attribution",
-		"--org", "00000000-0000-4000-8000-000000000001", "--review-evidence", "testing",
+		"--org", "00000000-0000-4000-8000-000000000001", "--review-evidence", "testing", "--reason", "operator_test", "--correlation-id", "corr-1",
 	}, &stdout, &stderr)
 	const operatorBackendUnavailableJSON = "{\"error\":{\"code\":\"operator_backend_unavailable\"}}\n"
 	if code != 1 || stderr.String() != operatorBackendUnavailableJSON {
@@ -1907,7 +1913,7 @@ func TestDispatchMetricsRemainingTriggerBackstopAcceptsExplicitPastDay(t *testin
 	var stdout, stderr bytes.Buffer
 	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{
 		"remaining", "trigger-backstop", "--family", "work_item_attribution", "--day", "2026-08-20",
-		"--org", "00000000-0000-4000-8000-000000000001", "--review-evidence", "testing",
+		"--org", "00000000-0000-4000-8000-000000000001", "--review-evidence", "testing", "--reason", "operator_test", "--correlation-id", "corr-1",
 	}, &stdout, &stderr)
 	const operatorBackendUnavailableJSON = "{\"error\":{\"code\":\"operator_backend_unavailable\"}}\n"
 	if code != 1 || stderr.String() != operatorBackendUnavailableJSON {

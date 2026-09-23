@@ -18,8 +18,9 @@ import (
 // TestEveryAuditedMutationIsInAuditedActions drives every Service method
 // that writes an audit row, each on a fresh fixture, and collects the
 // Action each one passes to Auditor.Begin. The set must equal
-// AuditedActions exactly: a new audited mutation fails here until it is
-// listed (and the audit action check is widened to allow it).
+// serviceAuditedActions exactly: a new audited mutation fails here until it
+// is listed (and the audit action check is widened to allow it). The
+// direct-write verbs' Actions are pinned in workersctl, where the verbs are.
 func TestEveryAuditedMutationIsInAuditedActions(t *testing.T) {
 	ctx := context.Background()
 	registry, err := jobruntime.Load("../../contracts/jobs/v1")
@@ -94,11 +95,11 @@ func TestEveryAuditedMutationIsInAuditedActions(t *testing.T) {
 		seen[string(fixture.auditor.event.Action)] = true
 	}
 	want := map[string]bool{}
-	for _, action := range AuditedActions {
+	for _, action := range serviceAuditedActions {
 		want[string(action)] = true
 	}
 	if !maps(seen, want) {
-		t.Fatalf("audited actions = %v, AuditedActions = %v", sortedKeys(seen), sortedKeys(want))
+		t.Fatalf("audited actions = %v, serviceAuditedActions = %v", sortedKeys(seen), sortedKeys(want))
 	}
 }
 
@@ -108,13 +109,13 @@ func TestEveryAuditedMutationIsInAuditedActions(t *testing.T) {
 // Postgres integration test applies the real chain and runs one audited
 // mutation per Action.
 func TestAuditActionMigrationMatchesAuditedActions(t *testing.T) {
-	source, err := os.ReadFile("../../src/dev_health_ops/alembic/versions/0137_worker_operator_audits_action_check.py")
+	source, err := os.ReadFile("../../src/dev_health_ops/alembic/versions/0138_worker_operator_audits_direct_write_actions.py")
 	if err != nil {
 		t.Fatal(err)
 	}
 	block := regexp.MustCompile(`(?ms)^_ACTIONS\s*=\s*\((.*?)\)`).FindSubmatch(source)
 	if block == nil {
-		t.Fatal("0137 has no _ACTIONS tuple")
+		t.Fatal("0138 has no _ACTIONS tuple")
 	}
 	migration := map[string]bool{}
 	for _, match := range regexp.MustCompile(`"([^"]+)"`).FindAllSubmatch(block[1], -1) {
@@ -125,7 +126,7 @@ func TestAuditActionMigrationMatchesAuditedActions(t *testing.T) {
 		want[string(action)] = true
 	}
 	if !maps(migration, want) {
-		t.Fatalf("0137 actions = %v, AuditedActions = %v", sortedKeys(migration), sortedKeys(want))
+		t.Fatalf("0138 actions = %v, AuditedActions = %v", sortedKeys(migration), sortedKeys(want))
 	}
 }
 

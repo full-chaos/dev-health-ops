@@ -151,7 +151,8 @@ func dispatchWorkgraphRepair(ctx context.Context, runtime *operatorRuntime, args
 	reviewEvidence := flags.String("review-evidence", "", "REQUIRED: what you verified before authorizing this resolution (e.g. \"confirmed ClickHouse has zero rows for this request's target -- safe to retry\")")
 	outputEvidence := flags.String("output-evidence", "", "REQUIRED only when --resolution=confirm_succeeded: a JSON object describing the real output this execution already produced; refused for retry_safe")
 	dryRun := flags.Bool("dry-run", false, "run the repair in a transaction that is rolled back, and print what it would have done")
-	if flags.Parse(args) != nil || flags.NArg() != 0 {
+	mutation := addMutationFlags(flags)
+	if flags.Parse(args) != nil || flags.NArg() != 0 || !mutation.valid(*dryRun) {
 		return writeError(stderr, "invalid_request")
 	}
 	requestID, err := uuid.Parse(*request)
@@ -188,23 +189,29 @@ func dispatchWorkgraphRepair(ctx context.Context, runtime *operatorRuntime, args
 	} else if trimmedOutputEvidence != "" {
 		return writeError(stderr, "invalid_request")
 	}
-	pool, err := coordinatorPoolOf(ctx, runtime)
-	if err != nil {
-		return writeRepairSetupError(stderr, err)
+	perform := func(ctx context.Context) int {
+		pool, err := coordinatorPoolOf(ctx, runtime)
+		if err != nil {
+			return writeRepairSetupError(stderr, err)
+		}
+		result, err := repair.RepairWorkgraph(ctx, pool, repairRequest, *dryRun)
+		return writeRepairOutcome(stdout, stderr, result, err, *dryRun)
 	}
-	result, err := repair.RepairWorkgraph(ctx, pool, repairRequest, *dryRun)
-	return writeRepairOutcome(stdout, stderr, result, err, *dryRun)
+	if *dryRun {
+		return perform(ctx)
+	}
+	return auditedWrite(ctx, runtime, stderr, mutation, joboperator.ActionLedgerRepair, "workgraph_request", requestID.String(), perform)
 }
 
 // coordinatorPoolOf is the pool every repair verb runs on: the coordinator
-// role, which alone holds the ledger repair grants. The caller's credential is
-// authorized for the repair before the pool is handed out, so no repair path
-// reaches a transaction on authentication alone.
+// role, which alone holds the ledger repair grants. The caller is authorized
+// for the repair before the pool is handed out, dry-run included; the
+// durable repair itself then runs through auditedWrite.
 func coordinatorPoolOf(ctx context.Context, runtime *operatorRuntime) (*pgxpool.Pool, error) {
 	if runtime == nil || runtime.service == nil {
 		return nil, errors.New("operator backend unavailable")
 	}
-	if err := runtime.service.AuthorizeLedgerRepair(ctx, runtime.principal, "*"); err != nil {
+	if err := runtime.service.Authorize(ctx, runtime.principal, joboperator.ActionLedgerRepair, "ledger", "*"); err != nil {
 		return nil, err
 	}
 	if runtime.pools == nil {
@@ -250,11 +257,11 @@ func writeRepairOutcome(stdout, stderr io.Writer, result any, err error, dryRun 
 // workgraphRepairCommandHint builds the ready-to-copy `workgraph repair`
 // invocation for one `list-ambiguous` row (team-lead addition, CHAOS-5042):
 // --request/--expected-attempt-count come straight from this read, so an
-// operator only fills in --resolution/--review-evidence (and
-// --output-evidence for confirm_succeeded) themselves.
+// operator only fills in --resolution/--review-evidence/--reason/
+// --correlation-id (and --output-evidence for confirm_succeeded) themselves.
 func workgraphRepairCommandHint(requestID string, attemptCount int) string {
 	return fmt.Sprintf(
-		`dho workers workgraph repair --request %s --expected-attempt-count %d --resolution <confirm_succeeded|retry_safe> --review-evidence "<what you verified>" [--output-evidence '{"...":"..."}']`,
+		`dho workers workgraph repair --request %s --expected-attempt-count %d --resolution <confirm_succeeded|retry_safe> --review-evidence "<what you verified>" --reason <reason_code> --correlation-id <id> [--output-evidence '{"...":"..."}']`,
 		requestID, attemptCount,
 	)
 }

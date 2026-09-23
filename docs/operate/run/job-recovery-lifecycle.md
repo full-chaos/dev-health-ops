@@ -403,7 +403,7 @@ nothing re-enqueues work for that run on its own — a fresh
 `PublishPartition` with the SAME `metrics.daily_partition:<id>` outbox dedupe
 key, so it silently no-ops. `dho workers metrics daily-redrive --org
 <uuid> --from <YYYY-MM-DD> --to <YYYY-MM-DD> --review-evidence "<what you
-verified>"` closes this for one org+day window in two ordered steps (
+verified>" --reason <code> --correlation-id <id>` closes this for one org+day window in two ordered steps (
 `--review-evidence` is required, with no default — see
 [cli-reference](../../reference/cli/index.md#dho-workers-metrics)
 for why). It FIRST runs the bulk ledger repair (a Go-native Postgres

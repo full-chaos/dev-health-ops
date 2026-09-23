@@ -19,7 +19,7 @@ const validTriggerOrg = "00000000-0000-4000-8000-000000000001"
 func TestDispatchWorkgraphTriggerRequiresOrg(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := dispatchWorkgraph(context.Background(), &operatorRuntime{}, []string{
-		"trigger", "--review-evidence", "testing",
+		"trigger", "--review-evidence", "testing", "--reason", "operator_test", "--correlation-id", "corr-1",
 	}, &stdout, &stderr)
 	if code != 2 || stderr.String() != invalidRequestJSON {
 		t.Fatalf("missing --org: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
@@ -39,7 +39,7 @@ func TestDispatchWorkgraphTriggerRequiresReviewEvidence(t *testing.T) {
 func TestDispatchWorkgraphTriggerRejectsInvalidOrg(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := dispatchWorkgraph(context.Background(), &operatorRuntime{}, []string{
-		"trigger", "--org", "not-a-uuid", "--review-evidence", "testing",
+		"trigger", "--org", "not-a-uuid", "--review-evidence", "testing", "--reason", "operator_test", "--correlation-id", "corr-1",
 	}, &stdout, &stderr)
 	if code != 2 || stderr.String() != invalidRequestJSON {
 		t.Fatalf("invalid org: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
@@ -49,7 +49,7 @@ func TestDispatchWorkgraphTriggerRejectsInvalidOrg(t *testing.T) {
 func TestDispatchWorkgraphTriggerRejectsMalformedDate(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := dispatchWorkgraph(context.Background(), &operatorRuntime{}, []string{
-		"trigger", "--org", validTriggerOrg, "--review-evidence", "testing", "--from", "not-a-date",
+		"trigger", "--org", validTriggerOrg, "--review-evidence", "testing", "--reason", "operator_test", "--correlation-id", "corr-1", "--from", "not-a-date",
 	}, &stdout, &stderr)
 	if code != 2 || stderr.String() != invalidRequestJSON {
 		t.Fatalf("malformed --from: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
@@ -63,7 +63,7 @@ func TestDispatchWorkgraphTriggerReachesBackendUnavailableWithValidFlags(t *test
 	// a backend, without needing a real Postgres.
 	var stdout, stderr bytes.Buffer
 	code := dispatchWorkgraph(context.Background(), &operatorRuntime{}, []string{
-		"trigger", "--org", validTriggerOrg, "--review-evidence", "testing",
+		"trigger", "--org", validTriggerOrg, "--review-evidence", "testing", "--reason", "operator_test", "--correlation-id", "corr-1",
 		"--from", "2026-01-01", "--to", "2026-01-31",
 	}, &stdout, &stderr)
 	if code != 1 || stderr.String() != "{\"error\":{\"code\":\"operator_backend_unavailable\"}}\n" {
@@ -81,7 +81,7 @@ func TestDispatchWorkgraphTriggerDryRunNeedsNoDataBackend(t *testing.T) {
 	// every check WITHOUT a real Postgres.
 	var stdout, stderr bytes.Buffer
 	code := dispatchWorkgraph(context.Background(), commandRuntime(t, commandAuthorizer{}), []string{
-		"trigger", "--org", validTriggerOrg, "--review-evidence", "testing",
+		"trigger", "--org", validTriggerOrg, "--review-evidence", "testing", "--reason", "operator_test", "--correlation-id", "corr-1",
 		"--from", "2026-01-01", "--to", "2026-01-31", "--dry-run",
 	}, &stdout, &stderr)
 	if code != 0 {
@@ -110,7 +110,7 @@ func TestDispatchWorkgraphTriggerRequestIDIsDeterministic(t *testing.T) {
 	run := func() string {
 		var stdout, stderr bytes.Buffer
 		code := dispatchWorkgraph(context.Background(), commandRuntime(t, commandAuthorizer{}), []string{
-			"trigger", "--org", validTriggerOrg, "--review-evidence", "testing",
+			"trigger", "--org", validTriggerOrg, "--review-evidence", "testing", "--reason", "operator_test", "--correlation-id", "corr-1",
 			"--from", "2026-01-01", "--to", "2026-01-31", "--dry-run",
 		}, &stdout, &stderr)
 		if code != 0 {
@@ -133,7 +133,7 @@ func TestDispatchWorkgraphTriggerRequestIDDiffersByWindow(t *testing.T) {
 	idFor := func(from string) string {
 		var stdout, stderr bytes.Buffer
 		code := dispatchWorkgraph(context.Background(), commandRuntime(t, commandAuthorizer{}), []string{
-			"trigger", "--org", validTriggerOrg, "--review-evidence", "testing",
+			"trigger", "--org", validTriggerOrg, "--review-evidence", "testing", "--reason", "operator_test", "--correlation-id", "corr-1",
 			"--from", from, "--to", "2026-01-31", "--dry-run",
 		}, &stdout, &stderr)
 		if code != 0 {
@@ -159,7 +159,7 @@ func TestDispatchWorkgraphTriggerRequestIDDiffersFromInvestmentTrigger(t *testin
 	dryRunID := func(dispatch func(context.Context, *operatorRuntime, []string, *bytes.Buffer, *bytes.Buffer) int) string {
 		var stdout, stderr bytes.Buffer
 		code := dispatch(context.Background(), commandRuntime(t, commandAuthorizer{}), []string{
-			"trigger", "--org", validTriggerOrg, "--review-evidence", "testing",
+			"trigger", "--org", validTriggerOrg, "--review-evidence", "testing", "--reason", "operator_test", "--correlation-id", "corr-1",
 			"--from", "2026-01-01", "--to", "2026-01-31", "--dry-run",
 		}, &stdout, &stderr)
 		if code != 0 {
@@ -188,7 +188,7 @@ func TestDispatchWorkgraphTriggerRequestIDDiffersFromInvestmentTrigger(t *testin
 func TestDispatchInvestmentTriggerRequiresOrg(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := dispatchInvestment(context.Background(), &operatorRuntime{}, []string{
-		"trigger", "--review-evidence", "testing",
+		"trigger", "--review-evidence", "testing", "--reason", "operator_test", "--correlation-id", "corr-1",
 	}, &stdout, &stderr)
 	if code != 2 || stderr.String() != invalidRequestJSON {
 		t.Fatalf("missing --org: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
@@ -208,7 +208,7 @@ func TestDispatchInvestmentTriggerRequiresReviewEvidence(t *testing.T) {
 func TestDispatchInvestmentTriggerRejectsInvalidOrg(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := dispatchInvestment(context.Background(), &operatorRuntime{}, []string{
-		"trigger", "--org", "not-a-uuid", "--review-evidence", "testing",
+		"trigger", "--org", "not-a-uuid", "--review-evidence", "testing", "--reason", "operator_test", "--correlation-id", "corr-1",
 	}, &stdout, &stderr)
 	if code != 2 || stderr.String() != invalidRequestJSON {
 		t.Fatalf("invalid org: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
@@ -226,7 +226,7 @@ func TestDispatchInvestmentDispatchesUnknownVerb(t *testing.T) {
 func TestDispatchInvestmentTriggerReachesBackendUnavailableWithValidFlags(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := dispatchInvestment(context.Background(), &operatorRuntime{}, []string{
-		"trigger", "--org", validTriggerOrg, "--review-evidence", "testing",
+		"trigger", "--org", validTriggerOrg, "--review-evidence", "testing", "--reason", "operator_test", "--correlation-id", "corr-1",
 	}, &stdout, &stderr)
 	if code != 1 || stderr.String() != "{\"error\":{\"code\":\"operator_backend_unavailable\"}}\n" {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
@@ -240,7 +240,7 @@ func TestDispatchInvestmentTriggerDryRunUsesDateOnlyScope(t *testing.T) {
 	// builders back into one shape is caught here, not in production.
 	var stdout, stderr bytes.Buffer
 	code := dispatchInvestment(context.Background(), commandRuntime(t, commandAuthorizer{}), []string{
-		"trigger", "--org", validTriggerOrg, "--review-evidence", "testing",
+		"trigger", "--org", validTriggerOrg, "--review-evidence", "testing", "--reason", "operator_test", "--correlation-id", "corr-1",
 		"--from", "2026-01-01", "--to", "2026-01-31", "--dry-run",
 	}, &stdout, &stderr)
 	if code != 0 {
@@ -282,7 +282,7 @@ func TestDispatchWorkgraphTriggerRejectsReadOnlyCredentialEvenOnDryRun(t *testin
 	runtime := commandRuntime(t, commandAuthorizer{err: joboperator.ErrAuthorization})
 	for _, dryRun := range []bool{false, true} {
 		args := []string{
-			"trigger", "--org", validTriggerOrg, "--review-evidence", "testing",
+			"trigger", "--org", validTriggerOrg, "--review-evidence", "testing", "--reason", "operator_test", "--correlation-id", "corr-1",
 			"--from", "2026-01-01", "--to", "2026-01-31",
 		}
 		if dryRun {
@@ -305,7 +305,7 @@ func TestDispatchInvestmentTriggerRejectsReadOnlyCredentialEvenOnDryRun(t *testi
 	runtime := commandRuntime(t, commandAuthorizer{err: joboperator.ErrAuthorization})
 	for _, dryRun := range []bool{false, true} {
 		args := []string{
-			"trigger", "--org", validTriggerOrg, "--review-evidence", "testing",
+			"trigger", "--org", validTriggerOrg, "--review-evidence", "testing", "--reason", "operator_test", "--correlation-id", "corr-1",
 			"--from", "2026-01-01", "--to", "2026-01-31",
 		}
 		if dryRun {
@@ -337,7 +337,7 @@ func TestDispatchWorkgraphTriggerRejectsContractInvalidOrg(t *testing.T) {
 	}
 	var stdout, stderr bytes.Buffer
 	code := dispatchWorkgraph(context.Background(), commandRuntime(t, commandAuthorizer{}), []string{
-		"trigger", "--org", contractInvalidOrg, "--review-evidence", "testing", "--dry-run",
+		"trigger", "--org", contractInvalidOrg, "--review-evidence", "testing", "--reason", "operator_test", "--correlation-id", "corr-1", "--dry-run",
 	}, &stdout, &stderr)
 	if code != 2 || stderr.String() != invalidRequestJSON {
 		t.Fatalf("contract-invalid org: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
@@ -348,7 +348,7 @@ func TestDispatchInvestmentTriggerRejectsContractInvalidOrg(t *testing.T) {
 	const contractInvalidOrg = "00000000-0000-0000-0000-000000000001"
 	var stdout, stderr bytes.Buffer
 	code := dispatchInvestment(context.Background(), commandRuntime(t, commandAuthorizer{}), []string{
-		"trigger", "--org", contractInvalidOrg, "--review-evidence", "testing", "--dry-run",
+		"trigger", "--org", contractInvalidOrg, "--review-evidence", "testing", "--reason", "operator_test", "--correlation-id", "corr-1", "--dry-run",
 	}, &stdout, &stderr)
 	if code != 2 || stderr.String() != invalidRequestJSON {
 		t.Fatalf("contract-invalid org: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
@@ -364,7 +364,7 @@ func TestDispatchInvestmentTriggerRejectsContractInvalidOrg(t *testing.T) {
 func TestDispatchWorkgraphTriggerRejectsYearZeroScope(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := dispatchWorkgraph(context.Background(), commandRuntime(t, commandAuthorizer{}), []string{
-		"trigger", "--org", validTriggerOrg, "--review-evidence", "testing",
+		"trigger", "--org", validTriggerOrg, "--review-evidence", "testing", "--reason", "operator_test", "--correlation-id", "corr-1",
 		"--from", "0000-01-01", "--dry-run",
 	}, &stdout, &stderr)
 	if code != 2 || stderr.String() != invalidRequestJSON {
@@ -375,7 +375,7 @@ func TestDispatchWorkgraphTriggerRejectsYearZeroScope(t *testing.T) {
 func TestDispatchInvestmentTriggerRejectsYearZeroScope(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := dispatchInvestment(context.Background(), commandRuntime(t, commandAuthorizer{}), []string{
-		"trigger", "--org", validTriggerOrg, "--review-evidence", "testing",
+		"trigger", "--org", validTriggerOrg, "--review-evidence", "testing", "--reason", "operator_test", "--correlation-id", "corr-1",
 		"--to", "0000-12-31", "--dry-run",
 	}, &stdout, &stderr)
 	if code != 2 || stderr.String() != invalidRequestJSON {
@@ -395,7 +395,7 @@ func TestDispatchInvestmentTriggerRejectsYearZeroScope(t *testing.T) {
 func TestDispatchWorkgraphTriggerWhitespaceDateMatchesOmittedDate(t *testing.T) {
 	dryRunID := func(from string) string {
 		var stdout, stderr bytes.Buffer
-		args := []string{"trigger", "--org", validTriggerOrg, "--review-evidence", "testing", "--dry-run"}
+		args := []string{"trigger", "--org", validTriggerOrg, "--review-evidence", "testing", "--reason", "operator_test", "--correlation-id", "corr-1", "--dry-run"}
 		if from != "" {
 			args = append(args, "--from", from)
 		}
@@ -420,7 +420,7 @@ func TestDispatchWorkgraphTriggerWhitespaceDateMatchesOmittedDate(t *testing.T) 
 func TestDispatchInvestmentTriggerWhitespaceDateMatchesOmittedDate(t *testing.T) {
 	dryRunID := func(to string) string {
 		var stdout, stderr bytes.Buffer
-		args := []string{"trigger", "--org", validTriggerOrg, "--review-evidence", "testing", "--dry-run"}
+		args := []string{"trigger", "--org", validTriggerOrg, "--review-evidence", "testing", "--reason", "operator_test", "--correlation-id", "corr-1", "--dry-run"}
 		if to != "" {
 			args = append(args, "--to", to)
 		}
@@ -467,7 +467,7 @@ func TestDispatchWorkgraphTriggerLogsAuthorizationDenials(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := dispatchWorkgraph(context.Background(),
 		commandRuntime(t, commandAuthorizer{err: joboperator.ErrAuthorization}),
-		[]string{"trigger", "--org", validTriggerOrg, "--review-evidence", "testing", "--dry-run"},
+		[]string{"trigger", "--org", validTriggerOrg, "--review-evidence", "testing", "--reason", "operator_test", "--correlation-id", "corr-1", "--dry-run"},
 		&stdout, &stderr)
 	if code != 1 || stdout.Len() != 0 || stderr.String() != "{\"error\":{\"code\":\"unauthorized\"}}\n" {
 		t.Fatalf("unexpected result: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
@@ -485,7 +485,7 @@ func TestDispatchInvestmentTriggerLogsAuthorizationDenials(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := dispatchInvestment(context.Background(),
 		commandRuntime(t, commandAuthorizer{err: joboperator.ErrAuthorization}),
-		[]string{"trigger", "--org", validTriggerOrg, "--review-evidence", "testing", "--dry-run"},
+		[]string{"trigger", "--org", validTriggerOrg, "--review-evidence", "testing", "--reason", "operator_test", "--correlation-id", "corr-1", "--dry-run"},
 		&stdout, &stderr)
 	if code != 1 || stdout.Len() != 0 || stderr.String() != "{\"error\":{\"code\":\"unauthorized\"}}\n" {
 		t.Fatalf("unexpected result: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())

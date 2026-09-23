@@ -14,6 +14,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	postgresstore "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/operatorauditschema"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -64,6 +65,17 @@ CREATE TABLE worker_job_completion_fences (
 
 func triggerIntegrationRuntime(t *testing.T, ctx context.Context, authorizer joboperator.Authorizer) *operatorRuntime {
 	t.Helper()
+	return triggerIntegrationRuntimeWithAuditor(t, ctx, authorizer, nil)
+}
+
+// triggerIntegrationRuntimeWithAuditor builds the trigger runtime on a fresh
+// Postgres. A nil newAuditor keeps the in-memory commandAuditor; otherwise
+// newAuditor builds the auditor from the runtime's own pool.
+func triggerIntegrationRuntimeWithAuditor(
+	t *testing.T, ctx context.Context, authorizer joboperator.Authorizer,
+	newAuditor func(t *testing.T, uri string, pool *pgxpool.Pool) joboperator.Auditor,
+) *operatorRuntime {
+	t.Helper()
 	instance, err := containers.StartPostgres(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -86,10 +98,14 @@ func triggerIntegrationRuntime(t *testing.T, ctx context.Context, authorizer job
 	if err != nil {
 		t.Fatal(err)
 	}
+	var auditor joboperator.Auditor = commandAuditor{}
+	if newAuditor != nil {
+		auditor = newAuditor(t, instance.URI, pool)
+	}
 	backend := &commandBackend{queues: map[string]joboperator.QueueSummary{}}
 	service, err := joboperator.New(joboperator.Dependencies{
 		Registry: registry, Backend: backend, Authorizer: authorizer,
-		DomainGuard: commandDomainGuard{}, Auditor: commandAuditor{},
+		DomainGuard: commandDomainGuard{}, Auditor: auditor,
 		RouteController:    commandRouteController{},
 		JobRouteController: commandJobRouteController{},
 	})
@@ -125,6 +141,7 @@ func TestManualTriggerWritesARealRequestRowWhenAuthorized(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := dispatchWorkgraphTrigger(ctx, runtime, []string{
 		"--org", validTriggerOrg, "--review-evidence", "testing",
+		"--reason", "operator_test", "--correlation-id", "corr-1",
 		"--from", "2026-01-01", "--to", "2026-01-31",
 	}, &stdout, &stderr)
 	if code != 0 {
@@ -148,6 +165,7 @@ func TestManualTriggerRequiresOperateScope(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := dispatchWorkgraphTrigger(ctx, runtime, []string{
 		"--org", validTriggerOrg, "--review-evidence", "testing",
+		"--reason", "operator_test", "--correlation-id", "corr-1",
 		"--from", "2026-01-01", "--to", "2026-01-31",
 	}, &stdout, &stderr)
 	if code != 1 || !bytes.Contains(stderr.Bytes(), []byte("unauthorized")) {
@@ -243,6 +261,7 @@ func TestManualTriggerWriteTxFailureLogsUnderlyingErrorAndIdentifiers(t *testing
 	var stdout, stderr bytes.Buffer
 	code := dispatchWorkgraphTrigger(ctx, runtime, []string{
 		"--org", validTriggerOrg, "--review-evidence", "testing",
+		"--reason", "operator_test", "--correlation-id", "corr-1",
 		"--from", "2026-01-01", "--to", "2026-01-31",
 	}, &stdout, &stderr)
 	if code != 1 {
@@ -270,6 +289,7 @@ func TestInvestmentManualTriggerRequiresOperateScope(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := dispatchInvestmentTrigger(ctx, runtime, []string{
 		"--org", validTriggerOrg, "--review-evidence", "testing",
+		"--reason", "operator_test", "--correlation-id", "corr-1",
 		"--from", "2026-01-01", "--to", "2026-01-31",
 	}, &stdout, &stderr)
 	if code != 1 || !bytes.Contains(stderr.Bytes(), []byte("unauthorized")) {
@@ -277,5 +297,69 @@ func TestInvestmentManualTriggerRequiresOperateScope(t *testing.T) {
 	}
 	if got := countRows(t, ctx, runtime.pools.Domain, "work_graph_execution_requests"); got != 0 {
 		t.Fatalf("requests=%d, want 0 -- an unauthorized credential wrote a real row", got)
+	}
+}
+
+// migratedPostgresAuditor applies the real worker_operator_audits
+// migrations and returns the production PostgresAuditor on that pool.
+func migratedPostgresAuditor(t *testing.T, uri string, pool *pgxpool.Pool) joboperator.Auditor {
+	t.Helper()
+	operatorauditschema.Apply(t, context.Background(), uri)
+	auditor, err := joboperator.NewPostgresAuditor(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return auditor
+}
+
+// TestManualTriggersWriteOneAuditRowOrNothing drives the direct-write
+// audited path end to end on Postgres, with the table the real migrations
+// build and the production PostgresAuditor: a workgraph trigger writes its
+// request and exactly one succeeded audit row; with the audit table
+// unwritable, an investment trigger answers audit_unavailable and writes no
+// request at all.
+func TestManualTriggersWriteOneAuditRowOrNothing(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	runtime := triggerIntegrationRuntimeWithAuditor(t, ctx, commandAuthorizer{}, migratedPostgresAuditor)
+	pool := runtime.pools.Domain
+
+	var stdout, stderr bytes.Buffer
+	code := dispatch(ctx, runtime, []string{
+		"workgraph", "trigger", "--org", validTriggerOrg, "--review-evidence", "testing",
+		"--reason", "operator_test", "--correlation-id", "corr-audit-1",
+	}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("trigger: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if got := countRows(t, ctx, pool, "work_graph_execution_requests"); got != 1 {
+		t.Fatalf("requests=%d, want 1", got)
+	}
+	var rows int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM public.worker_operator_audits
+		WHERE action = 'workgraph.manual_trigger' AND principal_type = 'operator' AND principal_id = 'dho-workers'
+		  AND credential_id IS NULL AND resource_type = 'organization' AND resource_id = $1
+		  AND reason_code = 'operator_test' AND correlation_id = 'corr-audit-1'
+		  AND status = 'succeeded' AND completed_at IS NOT NULL`, validTriggerOrg).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 1 || countRows(t, ctx, pool, "public.worker_operator_audits") != 1 {
+		t.Fatalf("matching audit rows=%d, total=%d, want exactly one succeeded row", rows, countRows(t, ctx, pool, "public.worker_operator_audits"))
+	}
+
+	if _, err := pool.Exec(ctx, "ALTER TABLE public.worker_operator_audits RENAME TO worker_operator_audits_unwritable"); err != nil {
+		t.Fatal(err)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	code = dispatch(ctx, runtime, []string{
+		"investment", "trigger", "--org", validTriggerOrg, "--review-evidence", "testing",
+		"--reason", "operator_test", "--correlation-id", "corr-audit-2",
+	}, &stdout, &stderr)
+	if code != 1 || stderr.String() != "{\"error\":{\"code\":\"audit_unavailable\"}}\n" || stdout.Len() != 0 {
+		t.Fatalf("unauditable trigger: code=%d stdout=%q stderr=%q, want audit_unavailable", code, stdout.String(), stderr.String())
+	}
+	if got := countRows(t, ctx, pool, "work_graph_execution_requests"); got != 1 {
+		t.Fatalf("requests=%d, want still 1 -- a trigger whose audit row could not be written wrote its request", got)
 	}
 }

@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/joboperator"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/repair"
 )
 
@@ -31,7 +32,8 @@ func dispatchMetricsExecutionRepair(ctx context.Context, runtime *operatorRuntim
 	reviewEvidence := flags.String("review-evidence", "", "REQUIRED: what you verified before authorizing this resolution")
 	outputEvidence := flags.String("output-evidence", "", "REQUIRED only when --resolution=confirm_succeeded: a JSON object describing the real output this execution already produced; refused for retry_safe")
 	dryRun := flags.Bool("dry-run", false, "run the repair in a transaction that is rolled back, and print what it would have done")
-	if flags.Parse(args) != nil || flags.NArg() != 0 {
+	mutation := addMutationFlags(flags)
+	if flags.Parse(args) != nil || flags.NArg() != 0 || !mutation.valid(*dryRun) {
 		return writeError(stderr, "invalid_request")
 	}
 	executionID, err := uuid.Parse(*execution)
@@ -70,12 +72,18 @@ func dispatchMetricsExecutionRepair(ctx context.Context, runtime *operatorRuntim
 	} else if trimmedOutputEvidence != "" {
 		return writeError(stderr, "invalid_request")
 	}
-	pool, err := coordinatorPoolOf(ctx, runtime)
-	if err != nil {
-		return writeRepairSetupError(stderr, err)
+	perform := func(ctx context.Context) int {
+		pool, err := coordinatorPoolOf(ctx, runtime)
+		if err != nil {
+			return writeRepairSetupError(stderr, err)
+		}
+		result, err := repair.RepairMetricExecution(ctx, pool, repairRequest, *dryRun)
+		return writeRepairOutcome(stdout, stderr, result, err, *dryRun)
 	}
-	result, err := repair.RepairMetricExecution(ctx, pool, repairRequest, *dryRun)
-	return writeRepairOutcome(stdout, stderr, result, err, *dryRun)
+	if *dryRun {
+		return perform(ctx)
+	}
+	return auditedWrite(ctx, runtime, stderr, mutation, joboperator.ActionLedgerRepair, "metrics_execution", executionID.String(), perform)
 }
 
 type metricsAmbiguousExecution struct {
@@ -197,7 +205,7 @@ ORDER BY execution.last_attempt_at`, orgFilter)
 // --expected-attempt-count come straight from this read.
 func metricsExecutionRepairCommandHint(executionID, state string, attemptCount int) string {
 	return fmt.Sprintf(
-		`dho workers metrics execution-repair --execution %s --expected-state %s --expected-attempt-count %d --resolution <confirm_succeeded|retry_safe> --review-evidence "<what you verified>" [--output-evidence '{"...":"..."}']`,
+		`dho workers metrics execution-repair --execution %s --expected-state %s --expected-attempt-count %d --resolution <confirm_succeeded|retry_safe> --review-evidence "<what you verified>" --reason <reason_code> --correlation-id <id> [--output-evidence '{"...":"..."}']`,
 		executionID, state, attemptCount,
 	)
 }

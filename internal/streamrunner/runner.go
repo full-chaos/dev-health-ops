@@ -196,10 +196,19 @@ func (r *Runner) cycle(ctx context.Context, maintain bool) (bool, error) {
 		r.mu.Unlock()
 		return active, err
 	}
+	// A cycle that was already in flight when Shutdown began finishes here
+	// with no failure. Shutdown cleared readiness before it cancelled this
+	// cycle's context, so an unconditional ready.Store(true) would land after
+	// that clear and report a stopped runner ready. Both writers order through
+	// r.mu, and Shutdown sets stopping under it, so either this runs first
+	// (Shutdown's clear then wins) or it sees stopping and leaves the state
+	// Shutdown left.
 	r.mu.Lock()
-	r.lastSuccess, r.up = time.Now().UTC(), true
+	if !r.stopping {
+		r.lastSuccess, r.up = time.Now().UTC(), true
+		r.ready.Store(true)
+	}
 	r.mu.Unlock()
-	r.ready.Store(true)
 	return active, nil
 }
 
@@ -405,9 +414,9 @@ func (r *Runner) Shutdown(ctx context.Context) error {
 	if r == nil || ctx == nil {
 		return ErrInvalidConfig
 	}
-	r.ready.Store(false)
 	r.mu.Lock()
 	r.stopping = true
+	r.ready.Store(false)
 	cancel, done := r.cancel, r.done
 	r.mu.Unlock()
 	if cancel != nil {

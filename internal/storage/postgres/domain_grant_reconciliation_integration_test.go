@@ -677,7 +677,7 @@ func startGrantHarness(t *testing.T, ctx context.Context) (*pgxpool.Pool, string
 	}
 	// Apply the REAL production grants, not a copy of them — for all three
 	// roles. CoordinatorGrants is derived from CoordinatorPosture() exactly the
-	// way cmd/dev-health-worker-migrate derives it, so the coordinator
+	// way internal/rivermigrate derives it, so the coordinator
 	// privileges these tests observe are the ones a real migration produces,
 	// not a posture-shaped stand-in for them.
 	coordinatorPosture := CoordinatorPosture()

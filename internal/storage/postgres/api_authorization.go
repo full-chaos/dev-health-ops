@@ -37,7 +37,7 @@ import (
 //
 // The River migration applies this manifest as GRANT statements to the api
 // role once the role exists (riverstore.MigrationOptions.APIRole, derived
-// from APIPosture in cmd/dev-health-worker-migrate), so the grant side and
+// from APIPosture in internal/rivermigrate), so the grant side and
 // this readiness side are one list.
 func apiPosture() RolePosture {
 	return RolePosture{

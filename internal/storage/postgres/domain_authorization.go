@@ -1093,7 +1093,7 @@ func coordinatorPosture() RolePosture {
 // own hand-written, current_user-bound boolean, unchanged by this addition.
 // This declaration exists solely so an admin connection (one that is not,
 // and cannot be, authenticated as the queue role -- see
-// cmd/dev-health-worker-migrate/posture_gate.go) can still name a missing
+// internal/rivermigrate/posture_gate.go) can still name a missing
 // (table, privilege) pair via DiagnoseRolePosture, the same way domain and
 // coordinator gaps are named. CHAOS-4261 added this after a coarse
 // nonzero-grant-count check let a single stray or leftover grant read as
@@ -1122,7 +1122,7 @@ func queuePosture() RolePosture {
 }
 
 // QueuePosture exposes queuePosture for callers outside this package (the
-// executed-proof posture gate in cmd/dev-health-worker-migrate), the same
+// executed-proof posture gate in internal/rivermigrate), the same
 // way DomainPosture/CoordinatorPosture do.
 func QueuePosture() RolePosture {
 	return queuePosture()

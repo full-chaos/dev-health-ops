@@ -60,7 +60,9 @@ on install would leave grant drift unrepaired, and re-running it is safe — see
 
 `dev-hops migrate postgres` does not only run Alembic. When
 `MIGRATION_DATABASE_URI` (or `MIGRATION_DATABASE_URI_FILE`) is set, it also runs
-`dev-health-worker-migrate` itself, as a second fail-closed step.
+`dev-health-worker-migrate` itself, as a second fail-closed step. That binary
+is a thin main over the code `dho migrate river` runs; it stays in the Python
+image for this path until spec S10.
 
 The test is presence, not truthiness: `migrate.py` checks `is not None`, so
 `MIGRATION_DATABASE_URI=""` still runs the migrator. **Absent and empty are
@@ -95,7 +97,7 @@ the Secret's contents decide which one a deployment is on:
 | --- | --- | --- |
 | `true` | yes | the weight-10 hook, after provisioning — the only ordering a fresh install survives |
 | `false` | yes | `dev-hops migrate postgres` itself, inside the weight-0 Job. Compose-equivalent, and safe only where the roles already exist — an upgrade, never a fresh install |
-| `false` | no | nothing. The operator runs `dev-health-worker-migrate` out of band |
+| `false` | no | nothing. The operator runs `dho migrate river --apply-and-check` out of band |
 
 ## Which credential each step reads
 

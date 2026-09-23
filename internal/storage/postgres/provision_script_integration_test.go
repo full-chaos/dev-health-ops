@@ -214,7 +214,7 @@ func assertFullRuntimePostureHolds(t *testing.T, ctx context.Context, admin *pgx
 // counterpart to TestDomainAuthorizationAcceptsTheGrantsItIsPairedWith /
 // TestCoordinatorReadinessAcceptsTheGrantsThePostureDescribes: it proves
 // queuePosture() (added for CHAOS-4261 so the admin-only executed-proof
-// gate in cmd/dev-health-worker-migrate can name a queue gap via
+// gate in internal/rivermigrate can name a queue gap via
 // DiagnoseRolePosture) agrees with what go-river-migrate's real
 // runtimeGrantStatements actually grants the queue role, through the real
 // production grant path (ApplyPinnedMigrations via startGrantHarness), not

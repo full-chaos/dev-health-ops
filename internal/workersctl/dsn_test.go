@@ -127,7 +127,7 @@ func TestResolveDSNRequiredUsesTheSharedComponentForm(t *testing.T) {
 // TestLogResolvedDatabaseReportsFormAndNameWithoutParsingAURI pins that
 // configureRuntime and the two lazy ClickHouse
 // dispatch paths must emit the resolution Info record every other
-// entry point (config.Load's daemons, cmd/dev-health-worker-migrate)
+// entry point (config.Load's daemons, internal/rivermigrate)
 // promises. A pre-built URI is never parsed for this
 // purpose -- the URI form names only "form":"uri"; the component form's
 // database name is read directly from the env, never derived from the

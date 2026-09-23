@@ -82,7 +82,7 @@ func provision(t *testing.T, ctx context.Context, uri string, roles map[string]s
 	}
 }
 
-// migrate runs the River migration exactly as cmd/dev-health-worker-migrate
+// migrate runs the River migration exactly as internal/rivermigrate
 // builds its api leg: the role name, and grants derived from APIPosture().
 func migrate(t *testing.T, ctx context.Context, admin *pgxpool.Pool, roles map[string]string) {
 	t.Helper()

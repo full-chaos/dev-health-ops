@@ -2445,7 +2445,7 @@ func resolveDSNRequired(rawKey string, spec platformconfig.ComponentSpec, lookup
 // which form (uri|components) name's DSN resolved through -- and, for the
 // component form only, the database identifier the DRIVER reports for
 // the assembled DSN -- what will actually be connected to, not the
-// string the operator requested. Mirrors cmd/dev-health-worker-migrate's identical rule and
+// string the operator requested. Mirrors internal/rivermigrate's identical rule and
 // internal/platform/config's own Load() binding loop: the rule that
 // every entry point resolving one of these DSNs must make the resolution
 // observable applies here too -- workerctl resolves these same five DSNs

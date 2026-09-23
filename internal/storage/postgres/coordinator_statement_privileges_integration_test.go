@@ -350,7 +350,7 @@ func TestCoordinatorStatementsAreDeniedToTheDomainRole(t *testing.T) {
 //
 // The grants in force here are now the ones ApplyPinnedMigrations itself
 // emits — startGrantHarness passes CoordinatorRole and a CoordinatorGrants set
-// derived from CoordinatorPosture(), the same way cmd/dev-health-worker-migrate
+// derived from CoordinatorPosture(), the same way internal/rivermigrate
 // does. That is strictly stronger than granting the posture directly in the
 // test: it proves the MIGRATION grants what the statements need, so a bug in
 // coordinatorGrantStatements (a dropped flag, a mis-sanitized identifier, a

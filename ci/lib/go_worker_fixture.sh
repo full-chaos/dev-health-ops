@@ -42,8 +42,8 @@
 # BIN_DIR (caller-set global; created by the caller beforehand).
 # ---------------------------------------------------------------------------
 build_go_binaries() {
-  echo "==> building Go binaries (dev-health-worker-migrate, dev-health-worker, dev-health-reconciler)"
-  go build -o "${BIN_DIR}/dev-health-worker-migrate" ./cmd/dev-health-worker-migrate
+  echo "==> building Go binaries (dho, dev-health-worker, dev-health-reconciler)"
+  go build -o "${BIN_DIR}/dho" ./cmd/dho
   go build -o "${BIN_DIR}/dev-health-worker" ./cmd/dev-health-worker
   go build -o "${BIN_DIR}/dev-health-reconciler" ./cmd/dev-health-reconciler
 }
@@ -126,12 +126,28 @@ provision_river() {
     --set=coordinator_password="${RIVER_COORDINATOR_PASSWORD}" \
     --file="${ROOT_DIR}/scripts/worker/provision_river_roles.sql"
 
-  echo "==> applying the pinned River schema + per-table domain/queue/coordinator grants"
-  MIGRATION_DATABASE_URI="postgresql://${POSTGRES_SUPERUSER}:${POSTGRES_SUPERUSER_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}" \
+  echo "==> applying and checking the pinned River schema + per-table domain/queue/coordinator grants"
+  local river_output
+  river_output="$(MIGRATION_DATABASE_URI="postgresql://${POSTGRES_SUPERUSER}:${POSTGRES_SUPERUSER_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}" \
     RIVER_DOMAIN_DATABASE_ROLE="${RIVER_DOMAIN_ROLE}" \
     RIVER_QUEUE_DATABASE_ROLE="${RIVER_QUEUE_ROLE}" \
     RIVER_COORDINATOR_DATABASE_ROLE="${RIVER_COORDINATOR_ROLE}" \
-    "${BIN_DIR}/dev-health-worker-migrate"
+    "${BIN_DIR}/dho" migrate river --apply-and-check)"
+  printf '%s\n' "${river_output}"
+  # --apply-and-check must have applied AND THEN checked: the apply summary
+  # ("... (N applied)") and, as the last line, the separate check's result.
+  # Exit 0 alone would also pass a verb that silently skipped the check.
+  if ! printf '%s\n' "${river_output}" | grep -Eq '^River .* schema current at pinned version [0-9]+ \([0-9]+ applied\)$'; then
+    echo "ERROR: dho migrate river --apply-and-check printed no apply summary"
+    exit "${EXIT_FAILURE}"
+  fi
+  case "$(printf '%s\n' "${river_output}" | tail -n 1)" in
+    "River schema current at pinned version "*) ;;
+    *)
+      echo "ERROR: dho migrate river --apply-and-check did not end with the schema check"
+      exit "${EXIT_FAILURE}"
+      ;;
+  esac
 
   # A fresh Alembic install creates sync_dispatch_transport_routes rows with
   # transport='celery' for every sync-orchestration kind (post_sync,

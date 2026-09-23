@@ -57,7 +57,8 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # cmd/dho pulls in every vertical under internal/ (including
 # internal/goapicli, internal/mintcli, internal/goapidigest and
 # internal/goapiproof) plus contracts/graphql/v1 (the schemav1.SDL embed
-# the posture/schema-digest is computed from). cmd/query-api is needed
+# the posture/schema-digest is computed from) and contracts/jobs/v1 (the job
+# migration policy `dho migrate river` embeds). cmd/query-api is needed
 # too, whole-tree, for its tools/registrydump helper and the
 # query_route.go it reads (below) -- same reasoning query-api.Dockerfile
 # documents for its own COPY internal ./internal: an enumerated
@@ -67,6 +68,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 COPY cmd/dho ./cmd/dho
 COPY cmd/query-api ./cmd/query-api
 COPY contracts/graphql/v1 ./contracts/graphql/v1
+COPY contracts/jobs/v1 ./contracts/jobs/v1
 COPY internal ./internal
 
 RUN --mount=type=cache,target=/go/pkg/mod \

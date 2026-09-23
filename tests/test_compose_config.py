@@ -1867,6 +1867,12 @@ def test_go_operator_target_services_declare_a_nonempty_command() -> None:
             "`command:` -- it would run with zero args and fail closed "
             "with {'error': {'code': 'invalid_request'}}"
         )
+        # go-river-migrate runs the River migrator from the same image
+        # (spec S4): its whole argv is pinned, and the route-apply shape
+        # below is only for the route-activate services.
+        if name == "go-river-migrate":
+            assert command == ["migrate", "river", "--apply-and-check"], command
+            continue
         # The operator image's entrypoint is dho; `workers` selects the
         # operator verbs (spec S2).
         assert command[:3] == ["workers", "routes", "apply"], (

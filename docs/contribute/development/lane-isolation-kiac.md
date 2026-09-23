@@ -250,7 +250,7 @@ dev-health-go-reconciler:latest
 dev-health-go-stream-ingest:latest
 dev-health-go-stream-external:latest
 dev-health-go-stream-pagerduty:latest
-dev-health-go-worker-migrate:latest
+dev-health-go-operator:latest
 EOF
 
 # 3. bridge each one into apple/container's image store.
@@ -347,14 +347,14 @@ ALTER ROLE devhealth_coordinator WITH LOGIN PASSWORD 'devhealth_coordinator';
 ### 5. Run the three migration steps IN THIS ORDER
 
 This ordering is not cosmetic. `provision_river_roles.sql` **revokes** the
-runtime-role grants; `dev-health-worker-migrate` is what **grants** them. Run
+runtime-role grants; `dho migrate river` is what **grants** them. Run
 provisioning last and every Go worker fails readiness with nothing in the log
 but `failed_checks:"domain_postgres"`.
 
 1. **Provision the roles** — `scripts/worker/provision_river_roles.sql`, with
    `domain_role`/`queue_role`/`coordinator_role` and their passwords set.
 2. **Alembic + ClickHouse** — the ops chart's migration hook (below).
-3. **River + grants** — the `dev-health-worker-migrate` image as a one-shot Job
+3. **River + grants** — `dho migrate river --apply-and-check` on the Go operator image as a one-shot Job
    with `MIGRATION_DATABASE_URI` pointing **directly** at Postgres (never at a
    pooler). Nothing in either chart renders this Job, so apply it yourself:
 
@@ -370,8 +370,9 @@ but `failed_checks:"domain_postgres"`.
          restartPolicy: Never
          containers:
            - name: migrate
-             image: dev-health-go-worker-migrate:latest
+             image: dev-health-go-operator:latest
              imagePullPolicy: Never
+             args: [migrate, river, --apply-and-check]
              env:
                - { name: MIGRATION_DATABASE_URI, value: "postgresql://devhealth:acr-trial-dev@trial-postgres:5432/devhealth" }
                - { name: RIVER_DATABASE_SCHEMA, value: "river" }
@@ -419,7 +420,7 @@ helm upgrade --install lane-a-acr <acr-worktree>/deploy/helm/acr \
 ```
 
 **Install the workers at zero first.** The pre-install hook runs Alembic only;
-the River grants come from the `dev-health-worker-migrate` Job in step 5.3,
+the River grants come from the `dho migrate river` Job in step 5.3,
 which cannot run until the release exists. Install with the workers already
 running and they fail readiness on `domain_postgres`, `--wait` times out, and —
 the part that matters — **Helm records the release as `failed` and leaves it

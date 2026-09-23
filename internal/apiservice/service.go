@@ -36,6 +36,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/externalingest"
+	"github.com/full-chaos/dev-health-ops/internal/api/orgs"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/acr"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
@@ -133,6 +134,9 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 		Valkey: deps.Valkey,
 		Logger: logger,
 	})...)
+	if deps.Guard != nil {
+		routes = append(routes, orgs.Routes(deps.Pool, deps.Guard, logger)...)
+	}
 	return routes
 }
 

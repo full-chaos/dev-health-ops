@@ -112,6 +112,9 @@ EXPECTED_PACKAGES = {
     # The api's protected-route policy read path: provision, migrate, api
     # readiness and an authenticated request on a real Postgres.
     "internal/api/policy",
+    # The venue differential oracle: the real Python api and dho api on two
+    # copies of one Alembic-built Postgres (runs with the live Python env).
+    "internal/apiservice",
     "internal/apiservice/acr",
     "internal/cacheinvalidation",
     "internal/externalrecompute",

@@ -12,17 +12,20 @@ package policy
 
 import (
 	"bytes"
-	"encoding/json"
 	"io"
 	"net/http"
 	"strconv"
+
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 )
 
-// WriteJSON writes body as Starlette's JSONResponse renders it: compact
-// separators, no HTML escaping, UTF-8, and no trailing newline.
-// extra headers are set before the status line.
-func WriteJSON(w http.ResponseWriter, status int, body any, extra http.Header) {
-	payload, err := Marshal(body)
+// WriteJSON writes body as Starlette's JSONResponse renders it
+// (pyjson.Marshal: json.dumps with ensure_ascii=False, compact separators).
+// Objects are ordered *pyjson.Object values, never Go maps, so keys keep the
+// order Python declares them in. extra headers are set before the status
+// line.
+func WriteJSON(w http.ResponseWriter, status int, body pyjson.Value, extra http.Header) {
+	payload, err := pyjson.Marshal(body)
 	if err != nil {
 		payload = []byte(`{"detail":"Internal Server Error"}`)
 		status = http.StatusInternalServerError
@@ -38,27 +41,19 @@ func WriteJSON(w http.ResponseWriter, status int, body any, extra http.Header) {
 	_, _ = io.Copy(w, bytes.NewReader(payload))
 }
 
-// Marshal renders body the way json.dumps(..., ensure_ascii=False,
-// separators=(",", ":")) does for the values the api emits.
-func Marshal(body any) ([]byte, error) {
-	var buffer bytes.Buffer
-	encoder := json.NewEncoder(&buffer)
-	encoder.SetEscapeHTML(false)
-	if err := encoder.Encode(body); err != nil {
-		return nil, err
-	}
-	return bytes.TrimSuffix(buffer.Bytes(), []byte("\n")), nil
-}
-
 // WriteDetail writes FastAPI's HTTPException body, {"detail": detail}.
-func WriteDetail(w http.ResponseWriter, status int, detail any, extra http.Header) {
-	WriteJSON(w, status, map[string]any{"detail": detail}, extra)
+func WriteDetail(w http.ResponseWriter, status int, detail pyjson.Value, extra http.Header) {
+	body := pyjson.NewObject()
+	body.Set("detail", detail)
+	WriteJSON(w, status, body, extra)
 }
 
 // ErrorDetail is api/utils/errors.py's error_detail(message): the
 // {"message": ...} object some routes put under "detail".
-func ErrorDetail(message string) map[string]any {
-	return map[string]any{"message": message}
+func ErrorDetail(message string) *pyjson.Object {
+	out := pyjson.NewObject()
+	out.Set("message", message)
+	return out
 }
 
 // UnhandledErrorHeader marks a response as the Python api's answer to an

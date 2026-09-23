@@ -1,7 +1,11 @@
 package customerpush
 
 import (
+	"math/big"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
@@ -83,5 +87,25 @@ func TestLimitsAreIntOfTheEnvironment(t *testing.T) {
 				t.Fatalf("%v: got %s", tc.env, got)
 			}
 		}
+	}
+}
+
+// TestReadBodyLimitedAtTheMaximumLimit: EXTERNAL_INGEST_MAX_BODY_BYTES at
+// int64's maximum (or past it) still reads the whole body; limit+1 would
+// wrap negative and read nothing.
+func TestReadBodyLimitedAtTheMaximumLimit(t *testing.T) {
+	for _, limit := range []string{"9223372036854775807", "99999999999999999999"} {
+		maxBytes, _ := new(big.Int).SetString(limit, 10)
+		request := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"a":1}`))
+		request.ContentLength = -1
+		body, err := readBodyLimited(request, maxBytes)
+		if err != nil || string(body) != `{"a":1}` {
+			t.Errorf("limit %s: body %q err %v, want the whole body", limit, body, err)
+		}
+	}
+	request := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"a":1}`))
+	request.ContentLength = -1
+	if _, err := readBodyLimited(request, big.NewInt(3)); err != errTooLarge {
+		t.Errorf("limit 3: err %v, want errTooLarge", err)
 	}
 }

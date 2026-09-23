@@ -64,6 +64,17 @@ func envelopeCorpus() [][]byte {
 	for _, body := range fixed {
 		corpus = append(corpus, []byte(body))
 	}
+	// jiter's nesting limit, at and around it: bare arrays, objects under a
+	// key, mixed, inside a record payload, and cut off.
+	for _, depth := range []int{199, 200, 201, 202, 203, 260} {
+		corpus = append(corpus,
+			[]byte(strings.Repeat("[", depth)+strings.Repeat("]", depth)),
+			[]byte(strings.Repeat(`{"a":`, depth)+"1"+strings.Repeat("}", depth)),
+			[]byte(`{"x": `+strings.Repeat(`[{"k": `, depth/2)+"null"+strings.Repeat("}]", depth/2)+`}`),
+			[]byte(`{"schemaVersion":"external-ingest.v1","idempotencyKey":"k","source":{"system":"github","instance":"i"},"records":[{"kind":"repository.v1","externalId":"e","payload":{"settings":`+
+				strings.Repeat("[", depth)+strings.Repeat("]", depth)+`}}]}`),
+			[]byte(strings.Repeat("[", depth)))
+	}
 	parts := map[string][]string{
 		"schemaVersion":  {`"external-ingest.v1"`, `"v2"`, `""`, `1`, `null`, `["x"]`},
 		"idempotencyKey": {`"k"`, `""`, `"` + strings.Repeat("k", 255) + `"`, `"` + strings.Repeat("é", 256) + `"`, `7`, `null`},

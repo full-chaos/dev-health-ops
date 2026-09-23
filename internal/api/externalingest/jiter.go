@@ -55,7 +55,13 @@ func parseJiter(data []byte) (pyjson.Value, *jiterError) {
 type jiterParser struct {
 	data []byte
 	pos  int
+	// depth is the number of arrays and objects open around the parse.
+	depth int
 }
+
+// jiterRecursionLimit is jiter's nesting limit: a value inside a
+// container this deep is refused, at the value's position.
+const jiterRecursionLimit = 201
 
 func (p *jiterParser) fail(reason string, index int) *jiterError {
 	return &jiterError{Reason: reason, Index: index, data: p.data}
@@ -325,6 +331,8 @@ func (p *jiterParser) unicodeEscape() (rune, *jiterError) {
 
 func (p *jiterParser) object() (pyjson.Value, *jiterError) {
 	p.pos++ // '{'
+	p.depth++
+	defer func() { p.depth-- }()
 	out := pyjson.NewObject()
 	p.skipSpace()
 	if p.pos >= len(p.data) {
@@ -351,6 +359,9 @@ func (p *jiterParser) object() (pyjson.Value, *jiterError) {
 		}
 		p.pos++
 		p.skipSpace()
+		if p.depth >= jiterRecursionLimit && p.pos < len(p.data) {
+			return nil, p.fail("recursion limit exceeded", p.pos)
+		}
 		value, err := p.value()
 		if err != nil {
 			return nil, err
@@ -381,6 +392,8 @@ func (p *jiterParser) object() (pyjson.Value, *jiterError) {
 
 func (p *jiterParser) list() (pyjson.Value, *jiterError) {
 	p.pos++ // '['
+	p.depth++
+	defer func() { p.depth-- }()
 	out := []pyjson.Value{}
 	p.skipSpace()
 	if p.pos >= len(p.data) {
@@ -391,6 +404,9 @@ func (p *jiterParser) list() (pyjson.Value, *jiterError) {
 		return out, nil
 	}
 	for {
+		if p.depth >= jiterRecursionLimit {
+			return nil, p.fail("recursion limit exceeded", p.pos)
+		}
 		value, err := p.value()
 		if err != nil {
 			return nil, err

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"math/big"
 	"net/http"
 	"strconv"
@@ -61,14 +62,18 @@ func readBodyLimited(r *http.Request, maxBytes *big.Int) ([]byte, error) {
 			return nil, errTooLarge
 		}
 	}
-	limit := int64(1 << 62)
+	limit := int64(math.MaxInt64)
 	if maxBytes.IsInt64() {
 		limit = maxBytes.Int64()
 	}
 	if limit < 0 {
 		limit = -1
 	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, limit+1))
+	probe := limit + 1
+	if limit == math.MaxInt64 {
+		probe = limit // limit+1 would wrap negative and read nothing
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, probe))
 	if err != nil {
 		return nil, err
 	}

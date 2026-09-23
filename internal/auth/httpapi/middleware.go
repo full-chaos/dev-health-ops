@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"sync"
 	"time"
@@ -215,7 +216,13 @@ func MaxBodyWith(limit int64, write ErrorWriter) func(http.Handler) http.Handler
 
 			// Undeclared length: read one byte past the limit so "exactly at
 			// the limit" and "over it" are distinguishable.
-			buffered, err := io.ReadAll(io.LimitReader(r.Body, limit+1))
+			// At math.MaxInt64 there is no byte past the limit to probe
+			// (limit+1 would wrap negative and read nothing).
+			probe := limit + 1
+			if limit == math.MaxInt64 {
+				probe = limit
+			}
+			buffered, err := io.ReadAll(io.LimitReader(r.Body, probe))
 			// ORDER MATTERS, and this is the order. A size violation is
 			// DISPOSITIVE: once limit+1 bytes have been seen, the body is too
 			// large no matter what happened to the connection immediately

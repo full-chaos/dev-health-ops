@@ -512,7 +512,22 @@ check_live_python_oracles() {
     rm -rf -- "${proof_dir}"
     return 1
   fi
-  for proof_name in api-policy-principal api-pyjson api-orgs-registry api-pytime api-health-revisions api-pybody-queryint pythonparity-strrepr httpapi-forwarded-scheme; do
+  printf 'go test -count=1: internal/apiservice/customerpush (api decisions vs live Python)\n'
+  if ! (
+    cd "${ROOT}"
+    "${GO_ENV_OFF[@]}" \
+      GOWORK=off \
+      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
+      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
+      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
+      go test -mod=readonly -count=1 \
+        -run '^(TestAdminSchemaMatchesLivePython)$' \
+        ./internal/apiservice/customerpush
+  ); then
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  for proof_name in api-policy-principal api-pyjson api-orgs-registry api-pytime api-health-revisions api-pybody-queryint pythonparity-strrepr httpapi-forwarded-scheme api-customerpush-schema; do
     proof_file="${proof_dir}/${proof_name}"
     if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
       printf 'ERROR: api live Python oracle %s did not run\n' "${proof_name}" >&2

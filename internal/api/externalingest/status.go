@@ -12,27 +12,33 @@ import (
 
 // BatchRow mirrors status.py's BatchRow: one external_ingest_batches row.
 type BatchRow struct {
-	IngestionID           uuid.UUID
-	OrgID                 string
-	IdempotencyKey        string
-	PayloadHash           string
-	SourceSystem          string
-	SourceInstance        string
-	EntityFamily          string
-	Producer              *string
-	ProducerVersion       *string
-	SchemaVersion         string
-	WindowStartedAt       *time.Time
-	WindowEndedAt         *time.Time
-	Status                string
-	Attempts              int
-	ItemsReceived         int
-	ItemsAccepted         int
-	ItemsRejected         int
-	CreatedAt             time.Time
-	UpdatedAt             time.Time
-	CompletedAt           *time.Time
-	ErrorSummary          map[string]any
+	IngestionID     uuid.UUID
+	OrgID           string
+	IdempotencyKey  string
+	PayloadHash     string
+	SourceSystem    string
+	SourceInstance  string
+	EntityFamily    string
+	Producer        *string
+	ProducerVersion *string
+	SchemaVersion   string
+	WindowStartedAt *time.Time
+	WindowEndedAt   *time.Time
+	Status          string
+	Attempts        int
+	ItemsReceived   int
+	ItemsAccepted   int
+	ItemsRejected   int
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+	CompletedAt     *time.Time
+	ErrorSummary    map[string]any
+	// ErrorSummaryJSON and RecordCountsJSON are the columns' stored JSON
+	// text (nil for SQL NULL). A reader that re-emits them decodes this text
+	// with pyjson, so key order survives; ErrorSummary above is the
+	// data-plane handler's decoded form.
+	ErrorSummaryJSON      []byte
+	RecordCountsJSON      []byte
 	RecomputeStatus       string
 	RecomputeDispatchedAt *time.Time
 	RecomputeCompletedAt  *time.Time
@@ -43,7 +49,7 @@ const batchColumns = `ingestion_id, org_id, idempotency_key, payload_hash, sourc
 	source_instance, entity_family, producer, producer_version, schema_version,
 	window_started_at, window_ended_at, status, attempts, items_received,
 	items_accepted, items_rejected, created_at, updated_at, completed_at, error_summary,
-	recompute_status, recompute_dispatched_at, recompute_completed_at, recompute_error`
+	recompute_status, recompute_dispatched_at, recompute_completed_at, recompute_error, record_counts`
 
 func scanBatchRow(row pgx.Row) (*BatchRow, error) {
 	var b BatchRow
@@ -54,8 +60,10 @@ func scanBatchRow(row pgx.Row) (*BatchRow, error) {
 		&b.WindowStartedAt, &b.WindowEndedAt, &b.Status, &b.Attempts, &b.ItemsReceived,
 		&b.ItemsAccepted, &b.ItemsRejected, &b.CreatedAt, &b.UpdatedAt, &b.CompletedAt, &errorSummary,
 		&b.RecomputeStatus, &b.RecomputeDispatchedAt, &b.RecomputeCompletedAt, &b.RecomputeError,
+		&b.RecordCountsJSON,
 	)
 	b.ErrorSummary = decodeMetadata(errorSummary)
+	b.ErrorSummaryJSON = errorSummary
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
@@ -151,8 +159,45 @@ func getBatch(ctx context.Context, pool *pgxpool.Pool, orgID string, ingestionID
 	return scanBatchRow(row)
 }
 
-// listBatches ports status.py's list_batches: newest first, org-scoped,
-// optionally filtered by status/source, page bounded by limit/offset.
+// GetBatch is status.py's get_batch: one org-scoped batch, nil when absent.
+func GetBatch(ctx context.Context, pool *pgxpool.Pool, orgID string, ingestionID uuid.UUID) (*BatchRow, error) {
+	return getBatch(ctx, pool, orgID, ingestionID)
+}
+
+// ListRejections is status.py's list_rejections: one page of a batch's
+// rejections by record index, and their total.
+func ListRejections(ctx context.Context, pool *pgxpool.Pool, orgID string, ingestionID uuid.UUID, limit, offset int) ([]RejectionRow, int, error) {
+	return listRejections(ctx, pool, orgID, ingestionID, limit, offset)
+}
+
+// BatchQuery is status.py's list_batches filters. A nil filter is Python's
+// None (not applied); a non-nil empty string is applied as equality, as
+// Python's `is not None` checks do.
+type BatchQuery struct {
+	SourceSystem, SourceInstance, Status, Producer *string
+	CreatedAfter, CreatedBefore                    *time.Time
+	Limit, Offset                                  int
+}
+
+// ListBatches is status.py's list_batches: newest first (ingestion_id as
+// the tiebreaker), org-scoped, filtered, one page and the total.
+func ListBatches(ctx context.Context, pool *pgxpool.Pool, orgID string, query BatchQuery) ([]BatchRow, int, error) {
+	where := `WHERE org_id = $1`
+	args := []any{orgID}
+	for _, filter := range []struct {
+		column string
+		value  *string
+	}{{"source_system", query.SourceSystem}, {"source_instance", query.SourceInstance}, {"status", query.Status}, {"producer", query.Producer}} {
+		if filter.value != nil {
+			args = append(args, *filter.value)
+			where += ` AND ` + filter.column + ` = $` + strconv.Itoa(len(args))
+		}
+	}
+	return queryBatches(ctx, pool, where, args, query.CreatedAfter, query.CreatedBefore, query.Limit, query.Offset)
+}
+
+// listBatches is the data plane's call shape: an empty string means "not
+// filtered".
 func listBatches(
 	ctx context.Context, pool *pgxpool.Pool, orgID string,
 	statusFilter, sourceSystem, sourceInstance string, createdAfter, createdBefore *time.Time,
@@ -172,6 +217,13 @@ func listBatches(
 		args = append(args, sourceInstance)
 		where += ` AND source_instance = $` + strconv.Itoa(len(args))
 	}
+	return queryBatches(ctx, pool, where, args, createdAfter, createdBefore, limit, offset)
+}
+
+func queryBatches(
+	ctx context.Context, pool *pgxpool.Pool, where string, args []any,
+	createdAfter, createdBefore *time.Time, limit, offset int,
+) ([]BatchRow, int, error) {
 	if createdAfter != nil {
 		args = append(args, *createdAfter)
 		where += ` AND created_at >= $` + strconv.Itoa(len(args))

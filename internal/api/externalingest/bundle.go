@@ -112,3 +112,9 @@ func sortedKeys[V any](m map[string]V) []string {
 	sort.Strings(keys)
 	return keys
 }
+
+// SchemaVersion is SCHEMA_VERSION, exported for the admin schema proxy.
+const SchemaVersion = schemaVersion
+
+// RecordKinds is sorted(RECORD_KIND_MODELS), a fresh copy per call.
+func RecordKinds() []string { return append([]string(nil), recordKinds...) }

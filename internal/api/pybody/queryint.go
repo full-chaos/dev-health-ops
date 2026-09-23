@@ -142,3 +142,18 @@ func Instant(value *pytime.DateTime) *time.Time {
 	at := value.Time.UTC()
 	return &at
 }
+
+// QueryBool validates one bool query parameter as FastAPI's Query() does:
+// fallback when raw is nil, else pydantic's lax bool of the string. On
+// failure the error is appended and ok is false.
+func (e *Errors) QueryBool(name string, raw *string, fallback bool) (bool, bool) {
+	if raw == nil {
+		return fallback, true
+	}
+	value, failure := pydanticBool(*raw)
+	if failure != nil {
+		*e = append(*e, boolError([]pyjson.Value{"query", name}, *raw, failure))
+		return false, false
+	}
+	return value, true
+}

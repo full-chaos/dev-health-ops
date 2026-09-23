@@ -26,6 +26,19 @@ import (
 // line.
 func WriteJSON(w http.ResponseWriter, status int, body pyjson.Value, extra http.Header) {
 	payload, err := pyjson.Marshal(body)
+	writePayload(w, status, payload, err, extra)
+}
+
+// WriteModel writes body as FastAPI writes a route's response_model
+// (pyjson.MarshalModel: pydantic-core's dump_json). Use it for a route that
+// declares a response model or a return annotation FastAPI takes as one;
+// WriteJSON is the JSONResponse of a route without one.
+func WriteModel(w http.ResponseWriter, status int, body pyjson.Value, extra http.Header) {
+	payload, err := pyjson.MarshalModel(body)
+	writePayload(w, status, payload, err, extra)
+}
+
+func writePayload(w http.ResponseWriter, status int, payload []byte, err error, extra http.Header) {
 	if err != nil {
 		payload = []byte(`{"detail":"Internal Server Error"}`)
 		status = http.StatusInternalServerError

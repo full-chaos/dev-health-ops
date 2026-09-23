@@ -183,3 +183,28 @@ func cloneFlags(input map[string]bool) map[string]bool {
 	}
 	return cloned
 }
+
+// legacyTargetOrder is sync/datasets.py's _LEGACY_TARGET_ORDER: the order
+// every legacy-target list is reported in.
+var legacyTargetOrder = []string{
+	"git", "prs", "blame", "cicd", "deployments", "incidents",
+	"security", "tests", "work-items", "feature-flags", "operational",
+}
+
+// SupportedLegacyTargets is sync/datasets.py's supported_legacy_targets: the
+// union of the provider's datasets' legacy targets, in legacyTargetOrder.
+func SupportedLegacyTargets(provider string) []string {
+	present := map[string]bool{}
+	for _, capability := range Capabilities(provider) {
+		for _, target := range capability.LegacyTargets {
+			present[target] = true
+		}
+	}
+	targets := []string{}
+	for _, target := range legacyTargetOrder {
+		if present[target] {
+			targets = append(targets, target)
+		}
+	}
+	return targets
+}

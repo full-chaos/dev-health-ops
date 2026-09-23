@@ -40,6 +40,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/orgs"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/producttelemetry"
+	"github.com/full-chaos/dev-health-ops/internal/api/syncadmin"
 	"github.com/full-chaos/dev-health-ops/internal/api/teamsidentity"
 	"github.com/full-chaos/dev-health-ops/internal/api/telemetry"
 	"github.com/full-chaos/dev-health-ops/internal/api/webhookintake"
@@ -165,6 +166,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 		routes = append(routes, orgs.Routes(deps.Pool, deps.Guard, logger)...)
 		routes = append(routes, telemetry.Routes(deps.Pool, deps.Guard, deps.Auth, deps.Telemetry.Endpoint, logger)...)
 		routes = append(routes, customerpush.Routes(customerpush.Deps{Pool: deps.Pool, Guard: deps.Guard, Logger: logger})...)
+		routes = append(routes, syncadmin.Routes(syncadmin.Deps{Pool: deps.Pool, Guard: deps.Guard, Logger: logger})...)
 		if deps.ClickHouse != nil {
 			routes = append(routes, teamsidentity.Routes(deps.ClickHouse, deps.Guard, logger, deps.Pool, deps.Decryptor)...)
 		}

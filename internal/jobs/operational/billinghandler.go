@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
+	"github.com/full-chaos/dev-health-ops/internal/mail"
 )
 
 // BillingHandler renders and sends one billing notification natively.
@@ -23,7 +24,7 @@ type BillingHandler struct {
 	store  DeliveryStore
 	fence  BillingFence
 	owners OwnerLookup
-	sender EmailSender
+	sender mail.Sender
 	// appBaseURL is captured at construction rather than read per render, so
 	// a mid-flight environment change cannot make two attempts at the same
 	// notification produce different links.
@@ -37,7 +38,7 @@ func NewBillingHandler(
 	store DeliveryStore,
 	fence BillingFence,
 	owners OwnerLookup,
-	sender EmailSender,
+	sender mail.Sender,
 	appBaseURL string,
 ) (*BillingHandler, error) {
 	if store == nil || fence == nil || owners == nil || sender == nil {
@@ -291,10 +292,10 @@ func (handler *BillingHandler) deliver(
 			"error", err, "claim_outcome", string(FenceOutcomePermanentDrop))
 		return false, FenceOutcomePermanentDrop, err
 	}
-	if err := handler.sender.Send(ctx, EmailMessage{
+	if err := handler.sender.Send(ctx, mail.Message{
 		To: owner.Email, Subject: rendered.Subject, HTML: rendered.HTML,
 	}); err != nil {
-		var ambiguous *AmbiguousSendError
+		var ambiguous *mail.AmbiguousSendError
 		if errors.As(err, &ambiguous) {
 			// CHAOS-5399: an ambiguous provider result -- e.g. Resend
 			// accepted the request and the response timed out, or an SMTP

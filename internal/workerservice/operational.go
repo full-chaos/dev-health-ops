@@ -12,6 +12,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/operational"
 	coveragejobs "github.com/full-chaos/dev-health-ops/internal/jobs/synccoverage"
 	systemjobs "github.com/full-chaos/dev-health-ops/internal/jobs/system"
+	"github.com/full-chaos/dev-health-ops/internal/mail"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/version"
 	"github.com/full-chaos/dev-health-ops/internal/synccoverage"
@@ -109,7 +110,7 @@ func buildOperationalWorker(
 			// EMAIL_FROM_ADDRESS / EMAIL_API_KEY / SMTP_* variables the
 			// Python sender used, so a misconfiguration refuses worker
 			// startup instead of failing every notification at send time.
-			sender, senderErr := operational.NewEmailSenderFromEnv(
+			sender, senderErr := mail.NewSenderFromEnv(
 				&http.Client{Timeout: cfg.OperationalBridgeTimeout},
 			)
 			if senderErr != nil {

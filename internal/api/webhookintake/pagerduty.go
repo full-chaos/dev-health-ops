@@ -235,8 +235,8 @@ func enqueuePagerDutyEvent(ctx context.Context, client valkeygo.Client, bindingI
 		"binding_id":      bindingID,
 		"event_id":        webhook.Event.ID,
 		"event_type":      webhook.Event.EventType,
-		"occurred_at":     webhook.Event.OccurredAt.UTC().Format(time.RFC3339),
-		"received_at":     now.UTC().Format(time.RFC3339),
+		"occurred_at":     pythonIsoformat(webhook.Event.OccurredAt),
+		"received_at":     pythonIsoformat(now),
 		"raw_body_sha256": rawBodySHA256,
 		"payload":         string(payloadJSON),
 	}
@@ -254,6 +254,19 @@ func enqueuePagerDutyEvent(ctx context.Context, client valkeygo.Client, bindingI
 
 const receiverStreamMaxlen = 10_000
 
+// pythonIsoformat renders instant like Python's datetime.isoformat() on a
+// UTC-aware datetime (pagerduty.py's _enqueue_event: occurred_at.astimezone
+// (UTC).isoformat(), received_at = datetime.now(UTC).isoformat()): the
+// offset is always the numeric "+00:00" and never a "Z" suffix, and
+// microseconds are shown (6 digits, no trailing-zero trimming beyond what
+// Python itself does) only when nonzero. VENUE-ORACLE-CAUGHT: the previous
+// time.RFC3339 formatting rendered "Z" for a UTC offset, which time.Parse
+// (internal/jobs/pagerduty/stream.go's own consumer) accepts either way, but
+// which failed byte-for-byte against the real Python stream entry.
+func pythonIsoformat(instant time.Time) string {
+	return instant.UTC().Format("2006-01-02T15:04:05.999999-07:00")
+}
+
 // pagerDutyV3Webhook is pagerduty_models.py's PagerDutyV3Webhook: a frozen,
 // extra="ignore" model with exactly one field (event). model_dump_json()
 // therefore reserializes ONLY {"event": {"id", "event_type", "occurred_at",
@@ -261,10 +274,14 @@ const receiverStreamMaxlen = 10_000
 // dropped, and "data" is carried through structurally as received (it is
 // declared dict[str, JsonValue], not reshaped).
 //
-// NAMED LIMIT: occurred_at's exact re-serialized text (pydantic's own
-// datetime-to-JSON formatting) is approximated here as RFC3339 with a "Z"
-// suffix for a UTC instant; pinning it exactly needs the live-Python oracle
-// this ticket's proof already calls for (venue diff of the stream entry).
+// occurred_at's re-serialized text inside "payload" (pydantic's own
+// datetime-to-JSON formatting) is a "Z"-suffixed UTC instant -- confirmed
+// byte-for-byte against the real Python stream entry by the venue oracle
+// (TestWebhookIntakeVenueOraclePagerDuty) for a UTC-offset input, which is
+// what every real PagerDuty v3 webhook sends. NAMED LIMIT: a non-UTC offset
+// input is normalized to UTC here before re-serializing (time.Parse then
+// .UTC()); whether pydantic instead preserves the original offset on such
+// an input is unverified -- the oracle's fixture never exercises one.
 type pagerDutyV3Webhook struct {
 	Event pagerDutyEvent
 	data  pyjson.Value

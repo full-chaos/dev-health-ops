@@ -56,6 +56,17 @@ func (o *Object) Keys() []string { return append([]string(nil), o.keys...) }
 // Len is len(dict).
 func (o *Object) Len() int { return len(o.keys) }
 
+// MarshalJSON makes *Object usable directly wherever a caller passes a
+// value to encoding/json (internal/api/policy.WriteJSON, in particular):
+// Go's own json.Marshal sorts map[string]any keys alphabetically, which
+// diverges from Python's dict insertion order the moment a handler's field
+// order doesn't happen to already BE alphabetical order (venue-oracle-
+// caught: /api/v1/webhooks/health's status/secrets_configured/
+// celery_available). Implementing json.Marshaler makes the standard
+// encoder call this instead of its own map-sorting path, so Object's own
+// Set() order survives even through a generic any-typed caller.
+func (o *Object) MarshalJSON() ([]byte, error) { return Marshal(o) }
+
 // IntOf returns an Int holding n.
 func IntOf(n int64) Int { return Int{big.NewInt(n)} }
 

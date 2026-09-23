@@ -50,8 +50,11 @@ import (
 // mints access tokens with the real AuthService (stdin: name -> keyword
 // arguments of create_access_token), "call" runs Python functions (stdin: a
 // list of {"target": "module:attribute", "args": [...], "kwargs": {...}};
-// stdout: their JSON results, in order), and "serve" answers a batch of
-// requests with TestClient over the real app.
+// stdout: their JSON results, in order -- CHAOS-6247's PagerDuty binding
+// secret is seeded through this mode, calling core.encryption.encrypt_value,
+// so the ciphertext is a genuine cross-language artifact rather than a
+// Go-side round-trip), and "serve" answers a batch of requests with
+// TestClient over the real app.
 const pythonProgram = `
 import base64, json, sys
 mode = sys.argv[1]

@@ -65,11 +65,6 @@ func (o *Object) Len() int { return len(o.keys) }
 // celery_available). Implementing json.Marshaler makes the standard
 // encoder call this instead of its own map-sorting path, so Object's own
 // Set() order survives even through a generic any-typed caller.
-//
-// TEMPORARY: this method is gwc-w1-push's fix (#2837, tip 80680ac6),
-// applied directly rather than duplicated with a different design -- it
-// drops out of this branch's own diff once #2837 merges to main and this
-// stack rebases.
 func (o *Object) MarshalJSON() ([]byte, error) { return Marshal(o) }
 
 // IntOf returns an Int holding n.

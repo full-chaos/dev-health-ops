@@ -4,7 +4,6 @@ package admin_test
 
 import (
 	"context"
-	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http/httptest"
@@ -16,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
@@ -77,23 +77,32 @@ func startGoServer(t *testing.T, ctx context.Context, venue *venueoracle.Venue, 
 }
 
 // redactField blanks key's value in a JSON object body (top-level only),
-// leaving every other field untouched, so Compare's equality check ignores
-// a field that is legitimately wall-clock-derived and not asserted equal to
-// the microsecond between the two planes. A non-JSON-object body (an empty
+// leaving every other field's VALUE and every field's POSITION untouched,
+// so Compare's equality check ignores a field that is legitimately
+// wall-clock-derived and not asserted equal to the microsecond between the
+// two planes. Decodes and re-encodes through pyjson, never stdlib
+// encoding/json: stdlib's json.Marshal alphabetizes map keys, which would
+// silently mask a real declared-field-order mismatch between the two
+// planes instead of exposing it (Object.Set replaces an existing key's
+// value in place, without moving it). A non-JSON-object body (an empty
 // 200, or a 4xx body with no such key) passes through unchanged.
 func redactField(body, key string) string {
 	if body == "" {
 		return body
 	}
-	var decoded map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(body), &decoded); err != nil {
+	value, err := pyjson.DecodeString(body)
+	if err != nil {
 		return body
 	}
-	if _, present := decoded[key]; !present {
+	object, ok := value.(*pyjson.Object)
+	if !ok {
 		return body
 	}
-	decoded[key] = json.RawMessage(`""`)
-	encoded, err := json.Marshal(decoded)
+	if _, present := object.Get(key); !present {
+		return body
+	}
+	object.Set(key, "")
+	encoded, err := pyjson.Marshal(object)
 	if err != nil {
 		return body
 	}

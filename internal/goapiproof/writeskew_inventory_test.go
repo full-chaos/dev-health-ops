@@ -62,6 +62,9 @@ var writeSkewRefusalPlaces = map[string]string{
 	// Status-only producer (F0b): no body is compared, no re-read.
 	"RESTRefusalCandidateProducerUnresolved": "F0b",
 	"RESTRefusalCandidateBodyUndecodable":    "F0b",
+	// Candidate-shape liveness check (F0b): only the candidate body is
+	// decoded, no second leg exists to re-read.
+	"RESTRefusalCandidateShapeInvalid": "F0b",
 	// Refused before any leg is read, or a search-level outcome.
 	"RESTRefusalIDBindingUnresolved":         "not an axis: refused before any leg is read",
 	"RESTRefusalBoundIDNotAPathLiteral":      "not an axis: refused before any leg is read",

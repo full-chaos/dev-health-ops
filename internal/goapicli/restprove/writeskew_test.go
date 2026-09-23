@@ -101,6 +101,17 @@ func TestProveOneRESTRequest_BracketedRereadOnCapturedSunburst(t *testing.T) {
 			request = r
 		}
 	}
+	// GET /api/v1/investment/sunburst is a deleted-Python-body route
+	// (CHAOS-6241, goapiproof/restdeletedbody.go): the committed corpus
+	// now declares team_scoped's baseline as the fixed sentinel, never
+	// 200. This test is about the bracketed-reread MECHANISM, exercised
+	// against a real captured production write-skew case that predates
+	// the deletion -- restored to its pre-deletion shape locally, on this
+	// copy only; every other field (Parity, IDBindings, Produces, ...) is
+	// left exactly as the live corpus declares it.
+	request.WantBaselineStatus = 200
+	request.BodyMode = goapiproof.RESTBodyModeJSON
+	request.StatusDivergenceReason = ""
 	for _, cell := range []struct {
 		name          string
 		baselineReads []string
@@ -292,19 +303,25 @@ func itoa(n int) string {
 	return string(b)
 }
 
-// TestRunMeasurement_SunburstTeamScopedWriteSkewIsAdmittedAndNamed runs the
-// full real corpus the way an operator does. The team-scoped sunburst case
-// replays the first production capture at the one outside leaf. The
-// report carries the case as skew-admitted with the three values; every
-// other corpus case answers {} and is unaffected. The baseline's second
-// read of that case carries the candidate's generation.
-func TestRunMeasurement_SunburstTeamScopedWriteSkewIsAdmittedAndNamed(t *testing.T) {
+// TestRunMeasurement_SunburstTeamScopedAdmitsUnderTheDeletedBodyOverride
+// runs the full real corpus the way an operator does. GET
+// /api/v1/investment/sunburst and GET /api/v1/filters/options (team_scoped's
+// own team_id producer) are both deleted-Python-body routes (CHAOS-6241,
+// goapiproof/restdeletedbody.go): their baseline now always answers the
+// fixed sentinel, never the real capture team_scoped used to write-skew
+// against (that scenario, and this test's own bracketed-reread coverage of
+// it, moved to TestProveOneRESTRequest_BracketedRereadOnCapturedSunburst,
+// which restores the pre-deletion shape on a local, unexported RESTRequest
+// copy -- not reachable from here, since restEndpointSpecs is unexported).
+// What THIS test proves instead, end to end through the real report:
+// team_scoped is ADMITTED (never refused) with a real candidate_shape
+// liveness pass, and its own team_id producer resolves from the CANDIDATE
+// leg of filters/options (also admitted, also candidate_shape) -- the
+// exact mechanism restidbind.go's own doc comment describes.
+func TestRunMeasurement_SunburstTeamScopedAdmitsUnderTheDeletedBodyOverride(t *testing.T) {
 	const build = "build123"
-	firstBaseline := readProveFixture(t, "investmentsunburst_teamscoped_skew_baseline_3cf72260.json")
 	candidateBody := readProveFixture(t, "investmentsunburst_teamscoped_skew_candidate_a12379ac.json")
-	caughtUp := withSunburstValue(t, firstBaseline, "quality", "quality.bugfix", "full-chaos/dev-health-ops", "167758.7945792228")
-	var mu sync.Mutex
-	teamReads := 0
+	sentinelBody := `{"detail":"GET /api/v1/investment/sunburst is served by query-api and has no Python implementation"}`
 	isTeamSunburst := func(r *http.Request) bool {
 		return r.URL.Path == "/api/v1/investment/sunburst" && r.URL.Query().Get("scope_type") == "team"
 	}
@@ -321,19 +338,13 @@ func TestRunMeasurement_SunburstTeamScopedWriteSkewIsAdmittedAndNamed(t *testing
 	}))
 	defer candidate.Close()
 	baseline := httptest.NewServer(referencePlane(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == "/api/v1/filters/options":
-			_, _ = w.Write([]byte(`{"teams":["ABC-123"],"repos":[]}`))
-		case isTeamSunburst(r):
-			mu.Lock()
-			teamReads++
-			n := teamReads
-			mu.Unlock()
-			if n == 1 {
-				_, _ = w.Write([]byte(firstBaseline))
-				return
-			}
-			_, _ = w.Write([]byte(caughtUp))
+		switch r.URL.Path {
+		case "/api/v1/filters/options":
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"detail":"GET /api/v1/filters/options is served by query-api and has no Python implementation"}`))
+		case "/api/v1/investment/sunburst":
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(sentinelBody))
 		default:
 			_, _ = w.Write([]byte(`{}`))
 		}
@@ -350,7 +361,7 @@ func TestRunMeasurement_SunburstTeamScopedWriteSkewIsAdmittedAndNamed(t *testing
 		org: "org-1", recordedBy: "chris", reviewEvidence: "test",
 		timeout: 5 * time.Second, dryRun: true, reportPath: reportPath,
 	}
-	stdout := captureStdout(t, func() {
+	_ = captureStdout(t, func() {
 		_ = runMeasurement(context.Background(), goapiproof.NewLegClient(0), f,
 			staticCredentialForTest(), staticCredentialForTest(), sameProverBuildForTest(build), nil, artifacts)
 	})
@@ -366,18 +377,14 @@ func TestRunMeasurement_SunburstTeamScopedWriteSkewIsAdmittedAndNamed(t *testing
 		if o.Operation != "REST:GET:/api/v1/investment/sunburst" || o.Request != "team_scoped" {
 			continue
 		}
-		for _, line := range strings.Split(stdout, "\n") {
-			if strings.Contains(line, "investment/sunburst/team_scoped:") {
-				t.Logf("stdout: %s", line)
-			}
+		if !o.Admitted || o.Refusal != "" {
+			t.Fatalf("team_scoped = %+v, want admitted with no refusal", o)
 		}
-		if o.WriteSkew == nil || o.WriteSkew.Verdict != goapiproof.WriteSkewAdmitted || o.DifferencesOutsideBaselineDefect != 0 || o.WriteSkew.SecondBaselineResponseRef == "" {
-			t.Fatalf("team_scoped = %+v (write skew %+v), want skew-admitted with outside 0 and the second body stored", o, o.WriteSkew)
+		if o.TerminalState != goapiproof.TerminalStateMatch {
+			t.Fatalf("team_scoped TerminalState = %q, want match -- candidate_shape never compares bodies", o.TerminalState)
 		}
-		leaf := o.WriteSkew.Leaves[0]
-		t.Logf("leaf %s key %q B1=%v C1=%v B2=%v", leaf.Path, leaf.Key, leaf.FirstBaseline, leaf.Candidate, leaf.SecondBaseline)
-		if teamReads != 2 {
-			t.Fatalf("team sunburst baseline reads = %d, want 2 (the first read and the bracketed re-read)", teamReads)
+		if o.WriteSkew != nil {
+			t.Fatalf("team_scoped WriteSkew = %+v, want none -- the deleted-body baseline never times out or mismatches", o.WriteSkew)
 		}
 		return
 	}
@@ -455,6 +462,14 @@ func TestProveOneRESTRequest_BracketedRereadInjectsDedupKeysOnTheSecondRead(t *t
 	if request.DedupListPath == "" {
 		t.Fatal("drilldown/prs default_window injects no dedup keys")
 	}
+	// GET /api/v1/drilldown/prs is a deleted-Python-body route
+	// (CHAOS-6241, goapiproof/restdeletedbody.go): the committed corpus
+	// now declares default_window's baseline as the fixed sentinel, never
+	// 200. This test is about the bracketed-reread's dedup-key injection,
+	// restored to its pre-deletion shape locally, on this copy only.
+	request.WantBaselineStatus = 200
+	request.BodyMode = goapiproof.RESTBodyModeJSON
+	request.StatusDivergenceReason = ""
 	item := func(title string) string {
 		return `{"items":[{"repo_id":"ABC-123","number":7,"title":"` + title + `"}]}`
 	}

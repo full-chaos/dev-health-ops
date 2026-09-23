@@ -51,8 +51,11 @@ func findRESTRequest(t *testing.T, operation, name string) RESTRequest {
 // (TestPersonDrilldownPRsDefault_UsesBoundedCandidateIteration).
 func TestInvestmentFlowRepoScoped_UsesBoundedCandidateIteration(t *testing.T) {
 	req := findRESTRequest(t, "REST:POST:/api/v1/investment/flow", "repo_scoped")
-	if req.WantCandidateStatus != 200 || req.WantBaselineStatus != 200 {
-		t.Fatalf("repo_scoped WantCandidateStatus/WantBaselineStatus = %d/%d, want 200/200", req.WantCandidateStatus, req.WantBaselineStatus)
+	// POST /api/v1/investment/flow is a deleted-Python-body route
+	// (CHAOS-6241, restdeletedbody.go): the baseline now always answers
+	// the fixed sentinel, not a real 200.
+	if req.WantCandidateStatus != 200 || req.WantBaselineStatus != 500 {
+		t.Fatalf("repo_scoped WantCandidateStatus/WantBaselineStatus = %d/%d, want 200/500", req.WantCandidateStatus, req.WantBaselineStatus)
 	}
 	if len(req.IDBindings) != 1 {
 		t.Fatalf("repo_scoped IDBindings = %+v, want exactly one binding", req.IDBindings)
@@ -83,8 +86,10 @@ func TestInvestmentFamilyRepoScopedSiblings_BindToTheExposedWinner(t *testing.T)
 	} {
 		t.Run(tc.operation, func(t *testing.T) {
 			req := findRESTRequest(t, tc.operation, "repo_scoped")
-			if req.WantCandidateStatus != 200 || req.WantBaselineStatus != 200 {
-				t.Fatalf("repo_scoped WantCandidateStatus/WantBaselineStatus = %d/%d, want 200/200", req.WantCandidateStatus, req.WantBaselineStatus)
+			// Every operation in this table is a deleted-Python-body
+			// route too (CHAOS-6241, restdeletedbody.go).
+			if req.WantCandidateStatus != 200 || req.WantBaselineStatus != 500 {
+				t.Fatalf("repo_scoped WantCandidateStatus/WantBaselineStatus = %d/%d, want 200/500", req.WantCandidateStatus, req.WantBaselineStatus)
 			}
 			if len(req.IDBindings) != 1 || req.IDBindings[0].Producer != "investment_repo_id" {
 				t.Fatalf("repo_scoped IDBindings = %+v, want exactly one binding on producer investment_repo_id", req.IDBindings)

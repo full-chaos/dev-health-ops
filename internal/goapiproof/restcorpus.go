@@ -40,6 +40,17 @@ const (
 	// body's content field-by-field -- see restEndpointSpecs' own entries
 	// for which and why.
 	RESTBodyModeStatusOnly RESTBodyMode = "status_only"
+	// RESTBodyModeCandidateShape decodes ONLY the candidate body -- never
+	// the baseline's, and never a Compare between them -- and asserts it
+	// is live (a non-null JSON value of the declared kind, non-empty when
+	// it is an object) via AssertRESTCandidateShape. For a route whose
+	// baseline answers a single, fixed, uninteresting status regardless
+	// of input (see restdeletedbody.go), there is no second leg worth
+	// admitting a body from, let alone comparing against; this mode
+	// proves the candidate answered something real instead of proving
+	// nothing at all the way RESTBodyModeStatusOnly does for the SAME
+	// shape of entry.
+	RESTBodyModeCandidateShape RESTBodyMode = "candidate_shape"
 )
 
 // RESTRequest is one corpus entry: a single, fully-specified HTTP request
@@ -92,6 +103,13 @@ type RESTRequest struct {
 
 	// BodyMode controls whether the two bodies are compared at all.
 	BodyMode RESTBodyMode
+	// CandidateShapeArray is meaningful only under RESTBodyModeCandidateShape:
+	// true when this request's declared response is JSON-array-shaped at
+	// its root (the route's Python response_model is a list[...]); false
+	// (the default, and the overwhelming majority) for an object-shaped
+	// root. AssertRESTCandidateShape reads this to know which JSON kind
+	// -- and, for an object, non-emptiness -- counts as "live".
+	CandidateShapeArray bool
 	// Parity is this request's declared comparator configuration -- the
 	// SAME Options type a GraphQL OperationSpec declares, reused rather
 	// than duplicated: FloatTierB/VolatileFields/BaselineDefects/
@@ -6440,8 +6458,11 @@ func ValidateRESTCorpus() error {
 			if !diverges && hasReason {
 				return fmt.Errorf("goapiproof: REST corpus entry %q request %q gives a StatusDivergenceReason but declares equal candidate/baseline statuses", operation, req.Name)
 			}
-			if req.BodyMode != RESTBodyModeJSON && req.BodyMode != RESTBodyModeStatusOnly {
+			if req.BodyMode != RESTBodyModeJSON && req.BodyMode != RESTBodyModeStatusOnly && req.BodyMode != RESTBodyModeCandidateShape {
 				return fmt.Errorf("goapiproof: REST corpus entry %q request %q has an unrecognised BodyMode %q", operation, req.Name, req.BodyMode)
+			}
+			if req.CandidateShapeArray && req.BodyMode != RESTBodyModeCandidateShape {
+				return fmt.Errorf("goapiproof: REST corpus entry %q request %q sets CandidateShapeArray but BodyMode is %q, not RESTBodyModeCandidateShape", operation, req.Name, req.BodyMode)
 			}
 			if err := validateBaselineDefects(req.Parity.BaselineDefects); err != nil {
 				return fmt.Errorf("goapiproof: REST corpus entry %q request %q: %w", operation, req.Name, err)

@@ -1,0 +1,182 @@
+package goapiproof
+
+import "fmt"
+
+// This file is the ONE place a Python route-body deletion registers
+// itself against the REST corpus. api/main.py's GoServedRouteUnavailableError
+// (raised by _raise_served_by_go_api) replaces a deleted handler's whole
+// body with a single, fixed diagnostic status that fires UNCONDITIONALLY
+// for any request that reaches the handler, regardless of what that
+// handler used to compute. A corpus entry written before its route's
+// deletion still declares whatever the OLD handler answered -- a real
+// 200 with real data, or an earlier production-observed failure like a
+// 503 -- which is simply false once the body is gone. Rather than
+// hand-editing every affected RESTRequest literal across restcorpus.go
+// (many operations, several Requests each), this file's init() rewrites
+// them all from the one list below -- a future deletion wave adds its
+// operations to DeletedPythonBodyOperations and nothing else.
+//
+// What is left untouched: a Request whose declared WantCandidateStatus
+// and WantBaselineStatus already agree at one of frameworkOnlyEqualStatuses
+// below (422/401/403/429) -- these are enforced BEFORE the handler body
+// ever runs, so they hold identically whether or not the body has been
+// deleted. Everything else -- WantBaselineStatus == 200 (the real happy
+// path), an equal pair the HANDLER used to compute itself (a 404
+// not-found, a 503 availability gate -- exactly as dead as a 200 once the
+// body is gone), or an already-divergent pair (an earlier
+// production-observed handler failure) -- described what the now-deleted
+// body used to compute, so it is overridden to the fixed sentinel.
+
+// DeletedPythonBodyOperations names every REST corpus operation (the
+// same "REST:<METHOD>:<path>" key restEndpointSpecs is keyed by) whose
+// Python handler body has been deleted. Exported so both
+// internal/goapicli/restprove (a local proof run) and this package's own
+// tests can enumerate exactly the set this file's init() has rewritten.
+var DeletedPythonBodyOperations = map[string]bool{
+	"REST:GET:/api/v1/meta":                                true,
+	"REST:POST:/api/v1/home":                               true,
+	"REST:GET:/api/v1/home":                                true,
+	"REST:POST:/api/v1/explain":                            true,
+	"REST:GET:/api/v1/explain":                             true,
+	"REST:GET:/api/v1/heatmap":                             true,
+	"REST:POST:/api/v1/work-units":                         true,
+	"REST:GET:/api/v1/work-units":                          true,
+	"REST:POST:/api/v1/work-units/{work_unit_id}/explain":  true,
+	"REST:GET:/api/v1/flame":                               true,
+	"REST:GET:/api/v1/flame/aggregated":                    true,
+	"REST:GET:/api/v1/quadrant":                            true,
+	"REST:POST:/api/v1/drilldown/prs":                      true,
+	"REST:GET:/api/v1/drilldown/prs":                       true,
+	"REST:POST:/api/v1/drilldown/issues":                   true,
+	"REST:GET:/api/v1/drilldown/issues":                    true,
+	"REST:GET:/api/v1/people":                              true,
+	"REST:GET:/api/v1/people/{person_id}/summary":          true,
+	"REST:GET:/api/v1/people/{person_id}/metric":           true,
+	"REST:GET:/api/v1/people/{person_id}/drilldown/prs":    true,
+	"REST:GET:/api/v1/people/{person_id}/drilldown/issues": true,
+	"REST:GET:/api/v1/opportunities":                       true,
+	"REST:POST:/api/v1/opportunities":                      true,
+	"REST:GET:/api/v1/investment":                          true,
+	"REST:POST:/api/v1/investment":                         true,
+	"REST:GET:/api/v1/investment/sunburst":                 true,
+	"REST:POST:/api/v1/investment/explain":                 true,
+	"REST:POST:/api/v1/investment/flow":                    true,
+	"REST:POST:/api/v1/investment/flow/repo-team":          true,
+	"REST:GET:/api/v1/sankey":                              true,
+	"REST:POST:/api/v1/sankey":                             true,
+	"REST:GET:/api/v1/filters/options":                     true,
+}
+
+// deletedBodyArrayShapedOperations is the subset of
+// DeletedPythonBodyOperations whose Python response_model is a
+// list[...] (a JSON-array root) rather than a BaseModel (a JSON-object
+// root) -- read directly from the SAME route decorators
+// DeletedPythonBodyOperations was built from (src/dev_health_ops/api/
+// main.py). Everything in DeletedPythonBodyOperations but not here is
+// object-shaped, the overwhelming majority.
+var deletedBodyArrayShapedOperations = map[string]bool{
+	"REST:POST:/api/v1/work-units":         true,
+	"REST:GET:/api/v1/work-units":          true,
+	"REST:GET:/api/v1/people":              true,
+	"REST:GET:/api/v1/investment/sunburst": true,
+}
+
+// pythonBodyDeletedSentinelStatus is the fixed HTTP status every deleted
+// Python route body answers, unconditionally, for any request that
+// reaches it (GoServedRouteUnavailableError, api/main.py).
+const pythonBodyDeletedSentinelStatus = 500
+
+// PythonBodyDeletedReason is the StatusDivergenceReason every request
+// this file overrides carries -- behaviour only (what the planes DO),
+// never a ticket id: this file's own DeletedPythonBodyOperations list is
+// where a route is cited into the deletion, not a string embedded in a
+// corpus reason.
+const PythonBodyDeletedReason = "the Python handler's body has been deleted and replaced with a fixed diagnostic error; it answers this status unconditionally for any request that reaches it, regardless of what it used to compute, so its real answer is never compared"
+
+// init rewrites every Request under an operation named in
+// DeletedPythonBodyOperations, IN PLACE (RESTEndpointSpec.Requests is a
+// slice; restEndpointSpecs[op] returns a copy of the struct but that
+// copy's Requests header still points at the SAME backing array the map
+// value holds, so writing through &spec.Requests[i] mutates what every
+// later reader of restEndpointSpecs sees). Go guarantees every
+// package-level var initializer -- including restEndpointSpecs' own
+// giant literal -- completes before any init() in the package runs, so
+// the table is fully built by the time this runs.
+// frameworkOnlyEqualStatuses are the ONLY statuses an equal
+// (WantCandidateStatus == WantBaselineStatus) pair may declare and still
+// be left untouched by init() below: every one of these is enforced by
+// FastAPI itself -- Pydantic/type-coercion (422), an auth Depends()
+// (401/403), or the rate limiter (429) -- strictly BEFORE the handler
+// body runs, so it holds identically whether or not that body has been
+// deleted. Any OTHER equal pair (404, 503, or anything else) is
+// APPLICATION logic the handler itself used to compute -- e.g. this
+// route's own "absent_work_unit" 404 and a availability-gated 503 --
+// which is exactly as dead as a 200 happy path once the body is gone, so
+// it is NOT exempted: init() overrides it below like every other entry.
+var frameworkOnlyEqualStatuses = map[int]bool{422: true, 401: true, 403: true, 429: true}
+
+func init() {
+	for operation := range DeletedPythonBodyOperations {
+		spec, ok := restEndpointSpecs[operation]
+		if !ok {
+			panic(fmt.Sprintf("goapiproof: DeletedPythonBodyOperations names %q, which restEndpointSpecs does not declare", operation))
+		}
+		arrayShaped := deletedBodyArrayShapedOperations[operation]
+		for i := range spec.Requests {
+			req := &spec.Requests[i]
+			if req.WantCandidateStatus == req.WantBaselineStatus && frameworkOnlyEqualStatuses[req.WantBaselineStatus] {
+				// Framework-level parity: left exactly as declared,
+				// comparison and all.
+				continue
+			}
+			if req.WantCandidateStatus == pythonBodyDeletedSentinelStatus {
+				// The candidate itself already declares the sentinel
+				// status too (not expected in today's corpus): no
+				// divergence to state, and nothing to shape-assert.
+				req.WantBaselineStatus = pythonBodyDeletedSentinelStatus
+				req.StatusDivergenceReason = ""
+				req.BodyMode = RESTBodyModeStatusOnly
+				continue
+			}
+			req.WantBaselineStatus = pythonBodyDeletedSentinelStatus
+			req.StatusDivergenceReason = PythonBodyDeletedReason
+			// A baseline-timeout declaration is a claim that the
+			// REFERENCE PLANE cannot answer inside the run's budget --
+			// moot now that the reference plane answers the fixed
+			// sentinel immediately, every time, rather than ever timing
+			// out; ValidateRESTCorpus also requires BodyMode json for
+			// one, which this override never leaves an entry holding.
+			req.BaselineTimeoutDeclared = nil
+			if req.WantCandidateStatus == 200 {
+				req.BodyMode = RESTBodyModeCandidateShape
+				req.CandidateShapeArray = arrayShaped
+			} else {
+				// The candidate itself does not reach 200 either (a
+				// Go-side validation refusal, for example): no real
+				// body worth a shape assertion on that leg.
+				req.BodyMode = RESTBodyModeStatusOnly
+			}
+		}
+	}
+}
+
+// RequestBreaksDeletedBodyInvariant reports whether req -- a Request
+// under an operation named in DeletedPythonBodyOperations -- carries a
+// shape init() above should have overridden and did not: WantBaselineStatus
+// == 200 (a live happy path against a baseline that no longer computes
+// one, ever), or BodyMode == RESTBodyModeJSON where the two Want values
+// are not one of frameworkOnlyEqualStatuses' own framework-enforced pairs
+// (a full baseline-equality comparison against the fixed sentinel, which
+// would refuse every live run). A pure predicate over one Request, not a
+// corpus walk, so a test can assert it fires on a constructed bad
+// Request -- proof the guard can fail, not just that today's committed
+// corpus happens to pass it (see restdeletedbody_test.go).
+func RequestBreaksDeletedBodyInvariant(req RESTRequest) bool {
+	if req.WantBaselineStatus == 200 {
+		return true
+	}
+	if req.BodyMode == RESTBodyModeJSON {
+		return req.WantCandidateStatus != req.WantBaselineStatus || !frameworkOnlyEqualStatuses[req.WantBaselineStatus]
+	}
+	return false
+}

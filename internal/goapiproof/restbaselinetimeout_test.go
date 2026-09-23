@@ -169,71 +169,77 @@ func TestRESTAdmitCandidateAlone_RefusesWhatRESTAdmitRefusesOnTheCandidate(t *te
 	}
 }
 
-// Every team-scoped request on home and work-units (GET and POST) is bound to a
-// live team id and carries the declaration; no other request carries one.
+// TestBaselineTimeoutDeclaredExactlyOnTheTeamScopedRequests pins that NO
+// corpus entry carries a BaselineTimeoutDeclared today. Historically the
+// team-scoped requests on home and work-units (GET and POST) carried one --
+// a declaration is a claim that the REFERENCE PLANE cannot answer inside
+// the run's budget -- but all four of those routes are now in
+// DeletedPythonBodyOperations (CHAOS-6241, restdeletedbody.go): their
+// baseline answers the fixed sentinel immediately, every time, so it never
+// times out any more, and restdeletedbody.go's own init() clears the
+// declaration on every entry it overrides. Any future route that adds a
+// genuine one (a route NOT in DeletedPythonBodyOperations, whose reference
+// plane really is slow) is expected to update this test's exemption
+// alongside its own new declaration.
 func TestBaselineTimeoutDeclaredExactlyOnTheTeamScopedRequests(t *testing.T) {
-	routes := []string{
-		"REST:GET:/api/v1/home", "REST:POST:/api/v1/home",
-		"REST:GET:/api/v1/work-units", "REST:POST:/api/v1/work-units",
-	}
-	team := map[string]bool{}
 	for _, operation := range KnownRESTOperations() {
 		spec, err := SpecForREST(operation)
 		if err != nil {
 			t.Fatal(err)
 		}
 		for _, req := range spec.Requests {
-			bindsTeam := false
-			for _, binding := range req.IDBindings {
-				if binding.Producer == "team_id" {
-					bindsTeam = true
-				}
-			}
-			isRoute := false
-			for _, route := range routes {
-				isRoute = isRoute || route == operation
-			}
-			key := operation + "/" + req.Name
-			switch {
-			case isRoute && bindsTeam:
-				team[key] = true
-				if req.BaselineTimeoutDeclared == nil {
-					t.Errorf("%s binds a team id and carries no BaselineTimeoutDeclared", key)
-				}
-			case req.BaselineTimeoutDeclared != nil:
-				t.Errorf("%s carries a BaselineTimeoutDeclared but is not a team-scoped request on the four routes", key)
+			if req.BaselineTimeoutDeclared != nil {
+				t.Errorf("%s/%s carries a BaselineTimeoutDeclared -- want none: every route that used to declare one is a deleted-Python-body route now", operation, req.Name)
 			}
 		}
-	}
-	if len(team) != 4 {
-		t.Fatalf("team-scoped requests on the four routes = %v, want exactly 4 (GET+POST home home_team_scoped, GET+POST work-units team_scoped)", team)
 	}
 }
 
 // ValidateRESTCorpus runs every declaration's own validation: a corpus entry
-// whose declaration is invalid does not load.
+// whose declaration is invalid does not load. No COMMITTED entry carries a
+// BaselineTimeoutDeclared any more (every route this corpus proves is a
+// deleted-Python-body route as of CHAOS-6241, and restdeletedbody.go's
+// init() clears the declaration on every one of those -- see
+// TestBaselineTimeoutDeclaredExactlyOnTheTeamScopedRequests), so this test
+// temporarily swaps an existing operation's own Requests for a synthetic
+// one carrying a valid-then-broken declaration -- restRunOrder requires
+// every restEndpointSpecs KEY to appear exactly once (ValidateRESTCorpus
+// checks the two counts agree), so this reuses an existing key rather than
+// adding a new one. Which key does not matter: restdeletedbody.go's init()
+// already ran once at package load, before this test's own temporary swap,
+// so it never re-fires on this test's synthetic Requests.
 func TestValidateRESTCorpus_RefusesAnInvalidBaselineTimeoutDeclaration(t *testing.T) {
-	const operation = "REST:GET:/api/v1/home"
+	const operation = "REST:GET:/api/v1/quadrant"
 	original := restEndpointSpecs[operation]
 	t.Cleanup(func() { restEndpointSpecs[operation] = original })
 	if err := ValidateRESTCorpus(); err != nil {
 		t.Fatalf("the committed corpus must validate first: %v", err)
 	}
+
+	valid := &BaselineTimeoutDeclaration{
+		Ticket:        "TEST-1",
+		Reason:        "constructed for this test",
+		MinTimeout:    BaselineTimeoutFloor,
+		NonEmptyPaths: []string{"data.items"},
+	}
 	spec := original
-	spec.Requests = append([]RESTRequest(nil), original.Requests...)
-	changed := false
-	for i, req := range spec.Requests {
-		if req.BaselineTimeoutDeclared == nil {
-			continue
-		}
-		broken := *req.BaselineTimeoutDeclared
-		broken.Ticket = ""
-		spec.Requests[i].BaselineTimeoutDeclared = &broken
-		changed = true
+	spec.Requests = []RESTRequest{{
+		Name: "req", WantCandidateStatus: 200, WantBaselineStatus: 200,
+		BodyMode: RESTBodyModeJSON, Timeout: BaselineTimeoutFloor,
+		BaselineTimeoutDeclared: valid,
+	}}
+	restEndpointSpecs[operation] = spec
+	if err := ValidateRESTCorpus(); err != nil {
+		t.Fatalf("a well-formed declaration must validate: %v", err)
 	}
-	if !changed {
-		t.Fatal("home carries no declaration to break")
-	}
+
+	broken := *valid
+	broken.Ticket = ""
+	spec.Requests = []RESTRequest{{
+		Name: "req", WantCandidateStatus: 200, WantBaselineStatus: 200,
+		BodyMode: RESTBodyModeJSON, Timeout: BaselineTimeoutFloor,
+		BaselineTimeoutDeclared: &broken,
+	}}
 	restEndpointSpecs[operation] = spec
 	err := ValidateRESTCorpus()
 	if err == nil || !strings.Contains(err.Error(), "blank Ticket") {

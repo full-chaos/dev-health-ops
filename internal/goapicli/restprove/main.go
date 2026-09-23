@@ -2318,7 +2318,7 @@ func proveOneRESTRequest(
 				return out, nil
 			}
 		}
-	} else if len(request.Produces) > 0 {
+	} else if request.BodyMode == goapiproof.RESTBodyModeCandidateShape || len(request.Produces) > 0 {
 		// A StatusOnly request may still Produce ids, but only in the one
 		// shape ValidateRESTCorpus admits (goapiproof/restcorpus.go): the
 		// two Want statuses differ and the CANDIDATE's own want is 200 --
@@ -2328,7 +2328,10 @@ func proveOneRESTRequest(
 		// with a body: here that is the CANDIDATE, not the BASELINE the
 		// decodeBody branch above reads for every other request. Decoded
 		// through the same production decoder (DecodeRESTSnapshot) real
-		// evidence uses, never hand-built.
+		// evidence uses, never hand-built. A RESTBodyModeCandidateShape
+		// request reaches this branch even with no Produces at all --
+		// its own shape assertion below needs the SAME candidate-only
+		// decode, so the two never duplicate it.
 		//
 		// A declared producer this branch cannot resolve refuses THIS
 		// request by name -- a body that does not decode as
@@ -2353,6 +2356,20 @@ func proveOneRESTRequest(
 			out.Refusal = goapiproof.RESTRefusalTrailingBytes
 			out.Detail = "the candidate body carried bytes after its JSON value"
 			return out, nil
+		}
+		if request.BodyMode == goapiproof.RESTBodyModeCandidateShape {
+			// The one check RESTBodyModeStatusOnly never runs at all: with
+			// no second leg worth admitting a body from (see
+			// restcorpus.go's own RESTBodyModeCandidateShape doc comment),
+			// this is the only evidence a live run has that the candidate
+			// answered something real rather than a live, technically-200
+			// but empty or null body.
+			if shapeErr := goapiproof.AssertRESTCandidateShape(candidateSnap.Data, request.CandidateShapeArray); shapeErr != nil {
+				out.Admitted = false
+				out.Refusal = goapiproof.RESTRefusalCandidateShapeInvalid
+				out.Detail = shapeErr.Error()
+				return out, nil
+			}
 		}
 		out.producedIDs = make(map[string]string, len(request.Produces))
 		out.producedCandidateIDs = make(map[string][]string, len(request.Produces))

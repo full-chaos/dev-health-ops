@@ -4,11 +4,8 @@ package joboperator
 
 import (
 	"context"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"regexp"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -16,31 +13,9 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/operatorauditschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 )
-
-// applyAuditMigrations runs the REAL alembic migration code that shapes
-// worker_operator_audits -- 0047 (create), 0136 (principal check) and 0137
-// (action check) -- against the container, through alembic's own Operations
-// on the project's interpreter. No DDL for this table is authored here.
-const applyAuditMigrations = `
-import importlib, sys
-import sqlalchemy as sa
-from alembic.migration import MigrationContext
-from alembic.operations import Operations
-
-engine = sa.create_engine(sys.argv[1])
-with engine.begin() as connection:
-    connection.execute(sa.text("CREATE TABLE IF NOT EXISTS internal_service_credentials (id uuid PRIMARY KEY)"))
-    with Operations.context(MigrationContext.configure(connection)):
-        for name in (
-            "0047_add_worker_operator_audits",
-            "0136_worker_operator_audits_operator_principal",
-            "0137_worker_operator_audits_action_check",
-        ):
-            importlib.import_module("dev_health_ops.alembic.versions." + name).upgrade()
-print("AUDIT_MIGRATIONS_APPLIED")
-`
 
 // TestEveryAuditedActionPassesTheMigratedAuditConstraints is the proof of
 // record for the audit action check: against the table the real migrations
@@ -56,17 +31,11 @@ func TestEveryAuditedActionPassesTheMigratedAuditConstraints(t *testing.T) {
 	}
 	defer instance.Close(context.Background())
 
-	_, currentFile, _, _ := runtime.Caller(0)
-	root := filepath.Dir(filepath.Dir(filepath.Dir(currentFile)))
-	python := pyoracle.Resolve(t, root)
-	dsn := strings.Replace(instance.URI, "postgres://", "postgresql+psycopg2://", 1)
-	dsn = strings.Replace(dsn, "postgresql://", "postgresql+psycopg2://", 1)
-	command := exec.CommandContext(ctx, python, "-c", applyAuditMigrations, dsn)
-	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"))
+	python := pyoracle.Resolve(t, operatorauditschema.Root())
+	command := exec.CommandContext(ctx, python, operatorauditschema.Argv(instance.URI)...)
+	command.Env = operatorauditschema.Env()
 	output, err := command.CombinedOutput()
-	if err != nil || !strings.Contains(string(output), "AUDIT_MIGRATIONS_APPLIED") {
-		t.Fatal(pyoracle.RunError(python, err, output))
-	}
+	operatorauditschema.CheckApplied(t, python, output, err)
 
 	pool, err := pgxpool.New(ctx, instance.URI)
 	if err != nil {
@@ -121,7 +90,7 @@ func TestEveryAuditedActionPassesTheMigratedAuditConstraints(t *testing.T) {
 		t.Fatalf("migrated action check allows %v, AuditedActions = %v (definition %s)", sortedKeys(allowed), sortedKeys(want), definition)
 	}
 	// An action outside the check stays refused: the constraint still binds.
-	if _, err := auditor.Begin(ctx, event(ActionWorkgraphTrigger)); err == nil {
-		t.Fatal("the migrated check allowed workgraph.manual_trigger, which it must not")
+	if _, err := auditor.Begin(ctx, event(ActionInspect)); err == nil {
+		t.Fatal("the migrated check allowed jobs.inspect, which it must not")
 	}
 }

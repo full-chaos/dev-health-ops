@@ -1805,7 +1805,7 @@ does not collapse to `unassigned`.
    computes them into the same analytics database):
 
    ```bash
-   dho workers metrics daily-start --org <org-id> --day <YYYY-MM-DD>
+   dho workers metrics daily-start --org <org-id> --day <YYYY-MM-DD> --reason <code> --correlation-id <id>
    ```
 
 4. Open `dev-health-web` in a real browser (Playwright is preferred for evidence)

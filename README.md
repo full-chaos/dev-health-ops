@@ -141,11 +141,12 @@ the operator CLI in a worker pod (or with the worker's database settings):
 
 ```bash
 # Daily analytics rollups for one organization and day range
-dho workers metrics daily-start --org <org-uuid> --day 2026-08-01 --to 2026-08-30
+dho workers metrics daily-start --org <org-uuid> --day 2026-08-01 --to 2026-08-30 --reason <code> --correlation-id <id>
 
 # Complexity (and the other remaining families) for one day
 dho workers metrics remaining trigger-backstop --family complexity --org <org-uuid> \
-  --day 2026-08-30 --review-evidence "manual run: <why>"
+  --day 2026-08-30 --review-evidence "manual run: <why>" \
+  --reason <code> --correlation-id <id>
 ```
 
 ### Generate demo data

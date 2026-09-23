@@ -80,7 +80,8 @@ func dispatchInvestmentTrigger(ctx context.Context, runtime *operatorRuntime, ar
 		`REQUIRED: why this materialize is being triggered manually (e.g. "CHAOS-5173 -- confirming investment quotes after a late-arriving sync")`,
 	)
 	dryRun := flags.Bool("dry-run", false, "validate flags and print the request that WOULD be written, without writing it")
-	if flags.Parse(args) != nil || flags.NArg() != 0 {
+	mutation := addMutationFlags(flags)
+	if flags.Parse(args) != nil || flags.NArg() != 0 || !mutation.valid(*dryRun) {
 		return writeError(stderr, "invalid_request")
 	}
 	canonicalOrg, err := canonicalUUID(*org)
@@ -108,7 +109,7 @@ func dispatchInvestmentTrigger(ctx context.Context, runtime *operatorRuntime, ar
 	if runtime.service == nil {
 		return writeError(stderr, "operator_backend_unavailable")
 	}
-	if err := runtime.service.AuthorizeInvestmentTrigger(ctx, runtime.principal, canonicalOrg); err != nil {
+	if err := runtime.service.Authorize(ctx, runtime.principal, joboperator.ActionInvestmentTrigger, "organization", canonicalOrg); err != nil {
 		// See trigger_workgraph.go's identical log call for the full
 		// rationale (codex review, 2026-09-05, CHAOS-5170 r3 P2).
 		slog.Default().LogAttrs(ctx, slog.LevelWarn,
@@ -164,6 +165,18 @@ func dispatchInvestmentTrigger(ctx context.Context, runtime *operatorRuntime, ar
 		})
 	}
 
+	return auditedWrite(ctx, runtime, stderr, mutation, joboperator.ActionInvestmentTrigger, "organization", canonicalOrg,
+		func(ctx context.Context) int {
+			return writeManualInvestmentTrigger(ctx, runtime, request, *reviewEvidence, stdout, stderr)
+		})
+}
+
+// writeManualInvestmentTrigger enqueues the manual investment.materialize
+// request in one domain transaction. It runs inside auditedWrite.
+func writeManualInvestmentTrigger(
+	ctx context.Context, runtime *operatorRuntime, request workgraph.Request, reviewEvidence string, stdout, stderr io.Writer,
+) int {
+	requestID, canonicalOrg, generation := request.ID, request.OrganizationID, request.IdempotencyKey
 	if runtime.pools == nil || runtime.registry == nil {
 		return writeError(stderr, "operator_backend_unavailable")
 	}
@@ -210,13 +223,13 @@ func dispatchInvestmentTrigger(ctx context.Context, runtime *operatorRuntime, ar
 	}
 	slog.Default().LogAttrs(ctx, slog.LevelInfo,
 		"workerctl manual investment trigger: enqueued",
-		append(logAttrs, slog.String("review_evidence", *reviewEvidence))...)
+		append(logAttrs, slog.String("review_evidence", reviewEvidence))...)
 	return writeResult(stdout, stderr, map[string]any{
 		"request_id":      requestID,
 		"org":             canonicalOrg,
 		"kind":            string(workgraph.KindMaterialize),
 		"generation":      generation,
-		"review_evidence": *reviewEvidence,
+		"review_evidence": reviewEvidence,
 		"status":          "started",
 	})
 }

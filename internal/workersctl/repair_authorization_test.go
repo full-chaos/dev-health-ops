@@ -20,6 +20,7 @@ func repairVerbCases(extra ...string) map[string]func(ctx context.Context, runti
 				"--resolution", "retry_safe",
 				"--expected-attempt-count", "1",
 				"--review-evidence", "checked the target has no rows",
+				"--reason", "operator_test", "--correlation-id", "corr-1",
 			}, extra...), stdout, stderr)
 		},
 		"metrics execution-repair": func(ctx context.Context, runtime *operatorRuntime, stdout, stderr io.Writer) int {
@@ -29,6 +30,7 @@ func repairVerbCases(extra ...string) map[string]func(ctx context.Context, runti
 				"--expected-attempt-count", "1",
 				"--resolution", "retry_safe",
 				"--review-evidence", "checked the target has no rows",
+				"--reason", "operator_test", "--correlation-id", "corr-1",
 			}, extra...), stdout, stderr)
 		},
 	}

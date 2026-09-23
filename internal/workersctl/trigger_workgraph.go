@@ -105,7 +105,8 @@ func dispatchWorkgraphTrigger(ctx context.Context, runtime *operatorRuntime, arg
 		`REQUIRED: why this build is being triggered manually (e.g. "CHAOS-5172 -- confirming a repo's edges after a late-arriving sync")`,
 	)
 	dryRun := flags.Bool("dry-run", false, "validate flags and print the request that WOULD be written, without writing it")
-	if flags.Parse(args) != nil || flags.NArg() != 0 {
+	mutation := addMutationFlags(flags)
+	if flags.Parse(args) != nil || flags.NArg() != 0 || !mutation.valid(*dryRun) {
 		return writeError(stderr, "invalid_request")
 	}
 	canonicalOrg, err := canonicalUUID(*org)
@@ -132,19 +133,13 @@ func dispatchWorkgraphTrigger(ctx context.Context, runtime *operatorRuntime, arg
 	}
 
 	// Authorized BEFORE anything backend-related is even attempted, dry-run
-	// included -- the same gate AuthorizeProvidersyncCleanup/
-	// AuthorizeSyncDispatchOutboxClose use for the same class of action: a
-	// workers:read-only credential must never reach WriteTx (codex review,
-	// 2026-09-05, CHAOS-5170 r1 P1 -- the first version of this command
-	// authenticated the caller but never authorized the action at all).
-	// Covering dry-run too matches this service's own established
-	// convention: AuthorizeProvidersyncCleanup gates its own dry-run
-	// preview identically, so this trigger does not introduce a NEW
-	// asymmetry where a preview needs less privilege than the real write.
+	// included: a preview needs the same authority as the write it previews
+	// (codex review, 2026-09-05, CHAOS-5170 r1 P1 -- the first version of
+	// this command never authorized the action at all).
 	if runtime.service == nil {
 		return writeError(stderr, "operator_backend_unavailable")
 	}
-	if err := runtime.service.AuthorizeWorkgraphTrigger(ctx, runtime.principal, canonicalOrg); err != nil {
+	if err := runtime.service.Authorize(ctx, runtime.principal, joboperator.ActionWorkgraphTrigger, "organization", canonicalOrg); err != nil {
 		// A denial is logged too -- not just a Begin/Commit/WriteTx failure
 		// (codex review, 2026-09-05, CHAOS-5170 r3 P2): the failure occurs
 		// before request_id/generation exist, so there is no idempotency
@@ -211,6 +206,18 @@ func dispatchWorkgraphTrigger(ctx context.Context, runtime *operatorRuntime, arg
 		})
 	}
 
+	return auditedWrite(ctx, runtime, stderr, mutation, joboperator.ActionWorkgraphTrigger, "organization", canonicalOrg,
+		func(ctx context.Context) int {
+			return writeManualWorkgraphTrigger(ctx, runtime, request, *reviewEvidence, stdout, stderr)
+		})
+}
+
+// writeManualWorkgraphTrigger enqueues the manual workgraph.build request in
+// one domain transaction. It runs inside auditedWrite.
+func writeManualWorkgraphTrigger(
+	ctx context.Context, runtime *operatorRuntime, request workgraph.Request, reviewEvidence string, stdout, stderr io.Writer,
+) int {
+	requestID, canonicalOrg, generation := request.ID, request.OrganizationID, request.IdempotencyKey
 	if runtime.pools == nil || runtime.registry == nil {
 		return writeError(stderr, "operator_backend_unavailable")
 	}
@@ -271,13 +278,13 @@ func dispatchWorkgraphTrigger(ctx context.Context, runtime *operatorRuntime, arg
 	}
 	slog.Default().LogAttrs(ctx, slog.LevelInfo,
 		"workerctl manual workgraph trigger: enqueued",
-		append(logAttrs, slog.String("review_evidence", *reviewEvidence))...)
+		append(logAttrs, slog.String("review_evidence", reviewEvidence))...)
 	return writeResult(stdout, stderr, map[string]any{
 		"request_id":      requestID,
 		"org":             canonicalOrg,
 		"kind":            string(workgraph.KindBuild),
 		"generation":      generation,
-		"review_evidence": *reviewEvidence,
+		"review_evidence": reviewEvidence,
 		"status":          "started",
 	})
 }

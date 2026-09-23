@@ -9,14 +9,21 @@ import (
 
 var ErrAuditUnavailable = errors.New("worker operator audit unavailable")
 
-// AuditedActions is every Action the service writes a worker_operator_audits
-// row for (Service.mutate). The table's action check
-// (ck_worker_operator_audits_action, alembic 0137) must allow exactly these:
-// TestEveryAuditedMutationIsInAuditedActions pins the Go side and
+// AuditedActions is every Action a worker_operator_audits row can carry:
+// the service's own audited mutations (Service.mutate) and the direct-write
+// verbs (Service.Audited). The table's action check
+// (ck_worker_operator_audits_action, alembic 0138) must allow exactly these.
+// TestEveryAuditedMutationIsInAuditedActions pins the service's own list,
+// workersctl's TestEveryDirectWriteVerbIsAuditedBeforeItWrites pins
+// DirectWriteActions to the verbs, and
 // TestAuditActionMigrationMatchesAuditedActions pins the migration. Two
 // Actions share the string job_routes.apply_checked_in (the sync-route and
 // job-route apply), so the list holds strings, not Action names.
-var AuditedActions = []Action{
+var AuditedActions = append(append([]Action{}, serviceAuditedActions...), DirectWriteActions...)
+
+// serviceAuditedActions are the Actions of the service's own audited
+// mutations: jobs, queues, workers, sync routes and job routes.
+var serviceAuditedActions = []Action{
 	ActionCancel,
 	ActionRetry,
 	ActionPauseQueue,
@@ -28,6 +35,27 @@ var AuditedActions = []Action{
 	ActionPauseRoute,
 	ActionDrainRoute,
 	ActionResumeRoute,
+}
+
+// DirectWriteActions are the Actions of the `dho workers` verbs whose write
+// does not go through the service's own backends; each runs its write
+// through Service.Audited.
+var DirectWriteActions = []Action{
+	ActionProvidersyncCleanup,
+	ActionProvidersyncOwnershipCleanup,
+	ActionSyncDispatchOutboxClose,
+	ActionWorkgraphTrigger,
+	ActionInvestmentTrigger,
+	ActionLedgerRepair,
+	ActionMetricsDailyStart,
+	ActionMetricsDailyRedrive,
+	ActionMetricsDailyFinalize,
+	ActionMetricsFinalizeRedrive,
+	ActionMetricsPartitionRecompute,
+	ActionMetricsRemainingStart,
+	ActionMetricsRemainingTriggerBackstop,
+	ActionMetricsRemainingRedrive,
+	ActionExternalRecomputeReplay,
 }
 
 // PostgresAuditor stores bounded mutation intent in the semantic database.

@@ -207,10 +207,17 @@ def test_integration_coverage_inventory_completes_and_stays_nonempty() -> None:
     # proved against real containers.
     # internal/api/policy (76 -> 77): the api principal end-to-end test.
     # internal/apiservice (77 -> 78): the venue differential oracle.
-    # CURRENT TOTAL: 78. Adding one -tags=integration package bumps every
+    # The admin org/user/invite/impersonation area added its first
+    # -tags=integration files across two packages: internal/api/audit
+    # (real Postgres INSERT round-trips for the generic audit writer) and
+    # internal/apiservice/admin (the venue-oracle differentials for the
+    # ported routes, each skipping without DEV_HEALTH_LIVE_PYTHON_ORACLES=1
+    # but still discovered and registered under the plain integration tag).
+    # 78 -> 80.
+    # CURRENT TOTAL: 80. Adding one -tags=integration package bumps every
     # literal below by +1 -- this is the one number to change; the
     # narrative above is for someone auditing history, not for the bump.
-    assert "78 package(s) discovered, 0 denylisted, 78 will run" in result.stdout
+    assert "80 package(s) discovered, 0 denylisted, 80 will run" in result.stdout
     # Name the package explicitly (SET MEMBERSHIP), not just the count --
     # a bare count is exactly what let CHAOS-4643's own literal drift
     # 31 -> 32 -> 33 unnoticed.
@@ -222,4 +229,6 @@ def test_integration_coverage_inventory_completes_and_stays_nonempty() -> None:
     assert "  RUN  cmd/query-api/internal/featureflags" in result.stdout
     assert "  RUN  internal/goapicli/routing" in result.stdout
     assert "  RUN  cmd/query-api/internal/explain" in result.stdout
+    assert "  RUN  internal/api/audit" in result.stdout
+    assert "  RUN  internal/apiservice/admin" in result.stdout
     assert "  SKIP cmd/query-api/internal/analytics: " not in result.stdout

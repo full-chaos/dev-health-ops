@@ -192,6 +192,81 @@ func (e *Errors) OptionalString(object *pyjson.Object, name string, minLength, m
 	return text, true
 }
 
+// RequiredString validates one required `str` field (no default) with
+// pydantic's min_length/max_length (code points; 0 = no bound). present is
+// false when the field is absent (a "missing" error, matching pydantic's
+// own error, whose input is the WHOLE containing object -- verified
+// empirically against a live pydantic model, which is why this differs
+// from OptionalString's absent case: an optional field has a default, so
+// its absence is not a validation error at all, but a required field's
+// absence needs a "missing" error whose input is the object it was missing
+// from), null, or invalid.
+func (e *Errors) RequiredString(object *pyjson.Object, name string, minLength, maxLength int) (string, bool) {
+	loc := []pyjson.Value{"body", name}
+	raw, ok := object.Get(name)
+	if !ok {
+		*e = append(*e, Error{Type: "missing", Loc: loc, Msg: "Field required", Input: object})
+		return "", false
+	}
+	if raw == nil {
+		*e = append(*e, Error{Type: "string_type", Loc: loc, Msg: "Input should be a valid string", Input: nil})
+		return "", false
+	}
+	text, isString := raw.(string)
+	if !isString {
+		*e = append(*e, Error{Type: "string_type", Loc: loc, Msg: "Input should be a valid string", Input: raw})
+		return "", false
+	}
+	length := pyjson.Len(text)
+	if minLength > 0 && length < minLength {
+		ctx := pyjson.NewObject()
+		ctx.Set("min_length", int64(minLength))
+		*e = append(*e, Error{Type: "string_too_short", Loc: loc, Input: text, Ctx: ctx,
+			Msg: "String should have at least " + strconv.Itoa(minLength) + " character" + plural(minLength)})
+		return "", false
+	}
+	if maxLength > 0 && length > maxLength {
+		ctx := pyjson.NewObject()
+		ctx.Set("max_length", int64(maxLength))
+		*e = append(*e, Error{Type: "string_too_long", Loc: loc, Input: text, Ctx: ctx,
+			Msg: "String should have at most " + strconv.Itoa(maxLength) + " character" + plural(maxLength)})
+		return "", false
+	}
+	return text, true
+}
+
+// OptionalBool validates one `bool | None` field. present is false when the
+// field is absent or null (the default/unset case); a non-bool present
+// value is a "bool_type" pydantic error.
+func (e *Errors) OptionalBool(object *pyjson.Object, name string) (bool, bool) {
+	raw, ok := object.Get(name)
+	if !ok || raw == nil {
+		return false, false
+	}
+	value, isBool := raw.(bool)
+	if !isBool {
+		*e = append(*e, Error{Type: "bool_type", Loc: []pyjson.Value{"body", name}, Msg: "Input should be a valid boolean", Input: raw})
+		return false, false
+	}
+	return value, true
+}
+
+// OptionalInt validates one `int | None` field. present is false when the
+// field is absent or null; a non-integer present value is an "int_type"
+// pydantic error.
+func (e *Errors) OptionalInt(object *pyjson.Object, name string) (int64, bool) {
+	raw, ok := object.Get(name)
+	if !ok || raw == nil {
+		return 0, false
+	}
+	value, isInt := raw.(pyjson.Int)
+	if !isInt {
+		*e = append(*e, Error{Type: "int_type", Loc: []pyjson.Value{"body", name}, Msg: "Input should be a valid integer", Input: raw})
+		return 0, false
+	}
+	return value.Int64(), true
+}
+
 func plural(n int) string {
 	if n == 1 {
 		return ""

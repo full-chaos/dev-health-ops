@@ -83,6 +83,45 @@ func TestErrorsMatchPydantic(t *testing.T) {
 	}
 }
 
+// TestRequiredStringMatchesPydantic pins the three shapes verified against
+// a live pydantic model for a required (no-default) str field: absent
+// (type "missing", input the WHOLE object -- not null, unlike a missing
+// body), present-but-null (type "string_type", input null), and
+// present-with-the-wrong-JSON-type (type "string_type", input the raw
+// value). See RequiredString's own doc comment for why the absent case
+// differs from OptionalString's.
+func TestRequiredStringMatchesPydantic(t *testing.T) {
+	var errs Errors
+	object, ok := errs.Object(Body{Value: mustDecode(t, `{"target_user_id":null}`)})
+	if !ok {
+		t.Fatal("object refused")
+	}
+	errs.RequiredString(object, "missing_field", 0, 0)
+	errs.RequiredString(object, "target_user_id", 0, 0)
+
+	object2, ok := errs.Object(Body{Value: mustDecode(t, `{"target_user_id":5}`)})
+	if !ok {
+		t.Fatal("object refused")
+	}
+	errs.RequiredString(object2, "target_user_id", 0, 0)
+
+	rendered, _ := pyjson.Marshal(Detail(errs))
+	want := `{"detail":[` +
+		`{"type":"missing","loc":["body","missing_field"],"msg":"Field required","input":{"target_user_id":null}},` +
+		`{"type":"string_type","loc":["body","target_user_id"],"msg":"Input should be a valid string","input":null},` +
+		`{"type":"string_type","loc":["body","target_user_id"],"msg":"Input should be a valid string","input":5}]}`
+	if string(rendered) != want {
+		t.Fatalf("%s", rendered)
+	}
+
+	var happy Errors
+	object3, _ := happy.Object(Body{Value: mustDecode(t, `{"target_user_id":"abc"}`)})
+	value, ok := happy.RequiredString(object3, "target_user_id", 0, 0)
+	if !ok || value != "abc" || len(happy) != 0 {
+		t.Fatalf("value=%q ok=%v errs=%v", value, ok, happy)
+	}
+}
+
 func mustDecode(t *testing.T, text string) pyjson.Value {
 	t.Helper()
 	value, err := pyjson.DecodeString(text)

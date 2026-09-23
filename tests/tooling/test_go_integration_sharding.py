@@ -107,6 +107,10 @@ EXPECTED_PACKAGES = {
     # wip_age_p50/p90_hours and pr_first_review_p50_hours.
     "cmd/query-api/internal/throughputforecast",
     "cmd/query-api/internal/workgraph",
+    # The generic admin audit_logs writer: real INSERT round-trips (declared
+    # columns, the changes/request_metadata "{}" coercion, the org_id FK
+    # violation) against a real Postgres.
+    "internal/api/audit",
     "internal/api/externalingest",
     "internal/api/licensing",
     # The api's protected-route policy read path: provision, migrate, api
@@ -116,6 +120,12 @@ EXPECTED_PACKAGES = {
     # copies of one Alembic-built Postgres (runs with the live Python env).
     "internal/apiservice",
     "internal/apiservice/acr",
+    # The admin org/user/invite/impersonation routes' venue-oracle
+    # differentials against the real Python api; each test skips without
+    # DEV_HEALTH_LIVE_PYTHON_ORACLES=1, so under the plain integration tag
+    # this package still builds and its tests still register (SKIP counts
+    # as run), matching internal/api/policy's own live-oracle pattern.
+    "internal/apiservice/admin",
     "internal/cacheinvalidation",
     "internal/externalrecompute",
     "internal/joboperator",

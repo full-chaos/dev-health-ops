@@ -186,3 +186,51 @@ func TestIsFrameworkValidatedEqualStatus_AgreesWithCommittedCorpus(t *testing.T)
 		t.Error("deployment_gap_entity_id_bound_422's declared shape derives isFrameworkValidatedEqualStatus = true, want false -- this is the exact misclassification STEP 173 caught")
 	}
 }
+
+// TestEqualStatusIDBindingJudgments_EqualsKnownSet pins that
+// isFrameworkValidatedEqualStatus's soundness in the IDBindings!=empty
+// direction is an ASSUMPTION -- true of every entry init() has ever
+// judged by it, not a proven property --
+// so this test asserts equalStatusIDBindingJudgments (populated by
+// init()'s own pass over the PRE-override corpus, the only point that
+// distinction survives) equals today's single known member, and fails
+// loudly, by name, the moment a new entry is judged by that direction.
+//
+// A plain "any IDBindings-holding entry at a 422/401/403/429 status"
+// sweep over the committed (post-init) corpus is NOT the right set here:
+// it also matches flame's pr_gap_entity_id_bound_status_divergence and
+// issue_gap_entity_id_bound_status_divergence, which declare a genuine,
+// pre-existing, ALREADY-divergent status pair unrelated to the body
+// deletion (restcorpus.go's own doc comments on both) -- they were never
+// equal to begin with, so isFrameworkValidatedEqualStatus's risky
+// direction is never consulted for them, and including them here would
+// be a false positive that hides the real signal.
+func TestEqualStatusIDBindingJudgments_EqualsKnownSet(t *testing.T) {
+	knownToday := map[string]bool{
+		"REST:GET:/api/v1/flame/deployment_gap_entity_id_bound_422": true,
+	}
+
+	if len(equalStatusIDBindingJudgments) == 0 {
+		t.Fatal("equalStatusIDBindingJudgments is empty -- this pin's premise (the flame gap entry) no longer holds, or restdeletedbody.go's init() stopped populating it")
+	}
+	for _, entry := range equalStatusIDBindingJudgments {
+		if !knownToday[entry] {
+			t.Errorf(
+				"%s is newly judged by isFrameworkValidatedEqualStatus's IDBindings!=empty=>NOT-framework-validated direction -- that direction is an ASSUMPTION, not a proven property: if this entry's own malformed field is DIFFERENT from the one IDBindings resolves, it is still framework-validated and this derivation wrongly overrides its declared baseline status to the deleted-body sentinel. Confirm this entry's own malformed field IS the bound one (like flame's deployment_gap_entity_id_bound_422), or make the derivation two-way before adding it to knownToday",
+				entry,
+			)
+		}
+	}
+	for entry := range knownToday {
+		stillPresent := false
+		for _, g := range equalStatusIDBindingJudgments {
+			if g == entry {
+				stillPresent = true
+				break
+			}
+		}
+		if !stillPresent {
+			t.Errorf("%s is in knownToday but init() no longer judges it -- update this test's knownToday set", entry)
+		}
+	}
+}

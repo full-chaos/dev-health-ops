@@ -147,6 +147,19 @@ func isFrameworkValidatedEqualStatus(req RESTRequest) bool {
 // package-level var initializer -- including restEndpointSpecs' own
 // giant literal -- completes before any init() in the package runs, so
 // the table is fully built by the time this runs.
+// equalStatusIDBindingJudgments records every "<operation>/<name>" whose
+// request init() found EQUAL at a frameworkValidatableEqualStatuses code
+// AND declaring IDBindings -- i.e. every entry the risky, one-way half of
+// isFrameworkValidatedEqualStatus's derivation was actually consulted
+// against, regardless of which way it ruled. Populated
+// once, during init()'s own single pass over the PRE-override corpus --
+// the only point at which "was this entry equal" survives for an entry
+// init() goes on to override (an overridden entry's WantBaselineStatus no
+// longer equals WantCandidateStatus afterward, so this cannot be
+// reconstructed from the committed corpus post-init). Read only by this
+// package's own tests (restdeletedbody_test.go's pin, below).
+var equalStatusIDBindingJudgments []string
+
 func init() {
 	for operation := range DeletedPythonBodyOperations {
 		spec, ok := restEndpointSpecs[operation]
@@ -156,6 +169,9 @@ func init() {
 		arrayShaped := deletedBodyArrayShapedOperations[operation]
 		for i := range spec.Requests {
 			req := &spec.Requests[i]
+			if req.WantCandidateStatus == req.WantBaselineStatus && frameworkValidatableEqualStatuses[req.WantBaselineStatus] && len(req.IDBindings) != 0 {
+				equalStatusIDBindingJudgments = append(equalStatusIDBindingJudgments, operation+"/"+req.Name)
+			}
 			if req.WantCandidateStatus == req.WantBaselineStatus && isFrameworkValidatedEqualStatus(*req) {
 				// Framework-level parity: left exactly as declared,
 				// comparison and all.

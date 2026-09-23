@@ -45,7 +45,9 @@ func apiPosture() RolePosture {
 			// Read root for GET /api/v1/internal/acr/entitlements/{org_id}:
 			// existence (404 if absent) and the tier fallback when no
 			// org_licenses row exists (internal/apiservice/acr/store.go).
-			{"organizations", false, false, false},
+			// Also plan area L's self-service profile: read, and the name and
+			// description update of PATCH /api/v1/orgs/me.
+			{"organizations", false, true, false},
 			// The one feature row this route ever reads (key =
 			// "agent_context_runtime"), never any other feature.
 			{"feature_flags", false, false, false},

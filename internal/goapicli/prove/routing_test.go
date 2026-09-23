@@ -263,8 +263,7 @@ func TestRun_RedactsALaterQueryErrorEvenAfterASuccessfulOpen(t *testing.T) {
 		queryErr: errors.New("read go_api_routing_state: failed to connect to `" + dsn + "`: server closed the connection"),
 	})
 
-	edgeToken := syntheticJWT(t, map[string]string{"sub": "edge"})
-	proofToken := syntheticJWT(t, map[string]string{"sub": "proof"})
+	withOrgMinter(t, "70d529e0", "70d529e0")
 
 	err = runCLI(t, []string{
 		"-registry-url=" + registry.URL + "/registry",
@@ -275,8 +274,6 @@ func TestRun_RedactsALaterQueryErrorEvenAfterASuccessfulOpen(t *testing.T) {
 		"-artifact-dir=" + t.TempDir(),
 		"-recorded-by=harness",
 		"-review-evidence=e2e harness run",
-		"-edge-bearer-exec=" + jsonArgv(t, e2eBearerHelper(t, edgeToken)),
-		"-proof-bearer-exec=" + jsonArgv(t, e2eBearerHelper(t, proofToken)),
 		"-timeout=5s",
 	})
 

@@ -210,7 +210,8 @@ query_api_e2e_start() {
 # token minted with query_api_e2e_start's throwaway key, the same auth
 # query-api's REST routes (home_route.go's doc comment: "the same
 # bearer-envelope verifier every other REST route in this binary uses")
-# and run_go_api_prove_e2e's own -proof-bearer-exec already use.
+# and run_go_api_prove_e2e's own dho goapi prove invocation mints
+# in process, from the same key.
 query_api_e2e_mint_envelope_token() {
   "${BIN_DIR}/dho" mint envelope -org "$1" -key-file "${GO_API_PROVE_E2E_ENVELOPE_PEM}"
 }
@@ -255,7 +256,8 @@ run_go_api_prove_e2e() {
   (
     cd "${ROOT_DIR}"
     unset GO_API_PROVE_PROOF_BEARER
-    POSTGRES_URI="${pgx_uri}" "${BIN_DIR}/dho" goapi prove \
+    POSTGRES_URI="${pgx_uri}" GO_API_ENVELOPE_PRIVATE_KEY="$(cat "${GO_API_PROVE_E2E_ENVELOPE_PEM}")" \
+      "${BIN_DIR}/dho" goapi prove \
       -registry-url "${query_api}/registry" \
       -buildinfo-url "${query_api}/buildinfo" \
       -proof-url "${query_api}/query/proof" \
@@ -264,9 +266,7 @@ run_go_api_prove_e2e() {
       -org "${E2E_ORG_ID}" \
       -artifact-dir "${dir}/artifacts" \
       -recorded-by live-e2e \
-      -review-evidence "live-e2e: go-api-prove with the envelope and the edge access token minted by the tools-image helpers" \
-      -proof-bearer-exec "[\"${BIN_DIR}/dho\",\"mint\",\"envelope\",\"-org\",\"${E2E_ORG_ID}\",\"-key-file\",\"${dir}/envelope.pem\"]" \
-      -edge-bearer-exec "[\"${BIN_DIR}/dho\",\"mint\",\"edge-token\",\"-org\",\"${E2E_ORG_ID}\"]"
+      -review-evidence "live-e2e: go-api-prove with the envelope and the edge access token minted in process"
   ) > "${prove_log}" 2>&1
   rc=$?
   set -e
@@ -279,9 +279,9 @@ run_go_api_prove_e2e() {
   grep -Eq '^go-api-prove: attempted=[0-9]+ admitted=[0-9]+ executed=[1-9][0-9]* ' "${prove_log}" \
     || go_api_prove_e2e_fail "no operation was executed"
   grep -Eq '^go-api-prove:   edge access token mints = [1-9][0-9]*$' "${prove_log}" \
-    || go_api_prove_e2e_fail "the edge access token was not minted by -edge-bearer-exec"
+    || go_api_prove_e2e_fail "the edge access token was not minted in process"
   grep -Eq '^go-api-prove:   envelope mints = [1-9][0-9]*$' "${prove_log}" \
-    || go_api_prove_e2e_fail "the envelope was not minted by -proof-bearer-exec"
+    || go_api_prove_e2e_fail "the envelope was not minted in process"
 
   echo "==> [go-api-prove e2e] the edge re-checks the principal row on every request"
   (umask 077 && go_api_prove_e2e_mint_edge_token > "${dir}/token-v0") || go_api_prove_e2e_fail "mint-edge-token refused a provisioned principal"

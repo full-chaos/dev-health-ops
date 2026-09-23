@@ -703,20 +703,19 @@ kubectl exec dev-health-go-api-tools-oneoff -- \
 
 kubectl exec dev-health-go-api-tools-oneoff -- \
   dho goapi prove -documents /app/go-api/documents.json -org <org> \
-  -recorded-by <who> -review-evidence '<why>' -artifact-dir /tmp/proof \
-  -proof-bearer-exec '["/usr/local/bin/dho","mint","envelope","-org","<org>"]' \
-  -edge-bearer-exec '["/usr/local/bin/dho","mint","edge-token","-org","<org>"]'
+  -recorded-by <who> -review-evidence '<why>' -artifact-dir /tmp/proof
 
 kubectl delete pod dev-health-go-api-tools-oneoff
 ```
 
-The image also carries `dho mint envelope`, `dho goapi prove`'s
-`-proof-bearer-exec` helper (`internal/envelopemint`, called in process by
-`internal/mintcli/envelope` since spec S1). It mints the
-effective-principal envelope **locally, in this Pod** -- it does not call
-`principal_envelope.issue_effective_principal_envelope` over the network
-or exec into a running api Pod. It needs the same Ed25519 signing key the
-api Pod's own environment already holds
+`dho goapi prove` mints its own proof-plane credential -- the
+effective-principal envelope -- directly, calling
+`internal/mintcli/envelope` (the same package `dho mint envelope` calls
+for outside callers) in process: no subprocess, no flag naming a helper
+or a path. It mints the envelope **locally, in this Pod** -- it does not
+call `principal_envelope.issue_effective_principal_envelope` over the
+network or exec into a running api Pod. It needs the same Ed25519 signing
+key the api Pod's own environment already holds
 (`GO_API_ENVELOPE_PRIVATE_KEY`), reached the identical way: a Secret key
 mounted into this Pod's environment via `secretKeyRef`, as the
 `--overrides` above shows (the SAME Secret name and key the api
@@ -724,22 +723,24 @@ Deployment's `envFrom` pulls the value from -- see
 `_records/job7/go-api-tools-pod.yaml`'s R167 note for the shape this was
 proven against on prod). The key is never copied into the image and never
 passed as a flag value (which would land on argv/`/proc/<pid>/cmdline`);
-`dho mint envelope` reads it by env var name only, or from a `-key-file`
-path for local/dev use. Claim shape, algorithm (EdDSA/Ed25519), key id, TTL
-(60s) and issuer/audience all mirror `principal_envelope.py` exactly --
-`cmd/query-api/internal/principal`'s own test suite proves the two stay
-byte-compatible by signing with `internal/envelopemint` and verifying with
-the real `Verifier`. `dho goapi routing` still takes a pre-minted
-`GO_API_ROUTING_BEARER` the same way it always has.
+`internal/mintcli/envelope` reads it by env var name only. Claim shape,
+algorithm (EdDSA/Ed25519), key id, TTL (60s) and issuer/audience all
+mirror `principal_envelope.py` exactly -- `cmd/query-api/internal/principal`'s
+own test suite proves the two stay byte-compatible by signing with
+`internal/envelopemint` and verifying with the real `Verifier`. `dho goapi
+routing` still takes a pre-minted `GO_API_ROUTING_BEARER` the same way it
+always has. The standalone `dho mint envelope` verb still exists (and
+still execs nothing itself) for a caller outside `goapi prove` that needs
+the raw credential printed to stdout.
 
-The image also carries `dho mint edge-token`, `dho goapi prove`'s
-`-edge-bearer-exec` helper (`internal/edgetokenmint`, called in process by
-`internal/mintcli/edgetoken` since spec S1). It mints the other bearer,
-the edge **access token** the Python edge checks on every request, the
-same way `dho mint envelope` mints the envelope: locally, in this Pod,
-from the key the api Pod's environment already holds (`JWT_SECRET_KEY`,
-by `secretKeyRef`, as the `--overrides` above shows). The edge bearer
-check is unchanged; there is no in-cluster trust bypass.
+`dho goapi prove` mints its edge-plane credential the same way, calling
+`internal/mintcli/edgetoken` (the same package `dho mint edge-token`
+calls for outside callers) in process. It mints the other bearer, the
+edge **access token** the Python edge checks on every request, the same
+way the envelope is minted: locally, in this Pod, from the key the api
+Pod's environment already holds (`JWT_SECRET_KEY`, by `secretKeyRef`, as
+the `--overrides` above shows). The edge bearer check is unchanged; there
+is no in-cluster trust bypass.
 
 The token is for a **dedicated proof service principal**, never a human
 user: the `users` row with the fixed id `00000000-0000-4000-8000-00000000e0e1`,
@@ -756,13 +757,14 @@ through `POSTGRES_URI` and refuses unless the row is a service identity
 (`auth_provider = 'service'`, no password hash), is active, is not a
 superuser, and holds a `viewer` or `member` membership in the requested
 org. The token carries the row's current `token_version`, lives 10 minutes
-by default (30 at most), and `dho goapi prove` re-runs the helper every
+by default (30 at most), and `dho goapi prove` re-mints in process every
 four minutes, so no token outlives one run by more than its TTL. Revoke
 with `is_active = false` on the row; bumping `token_version` ends every
-token already minted. `dho mint edge-token` reads the key and the DSN by
-env var name only, never from a flag. `-edge-bearer-exec` is the only
-source for `dho goapi prove`'s edge credential; the earlier hand-minted
-static bearer is retired.
+token already minted. `internal/mintcli/edgetoken` reads the key and the
+DSN by env var name only, never from a flag. In-process minting is the
+only source for `dho goapi prove`'s edge credential; the earlier
+hand-minted static bearer, and the older subprocess-exec path before it,
+are both retired.
 
 ## Float comparison: engine nondeterminism and the Tier-B rule
 

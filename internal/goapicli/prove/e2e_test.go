@@ -116,29 +116,6 @@ func writeStaticJSONHandler(body string) http.HandlerFunc {
 	}
 }
 
-// e2eBearerHelper writes a helper script printing token on stdout -- the
-// -edge-bearer-exec/-proof-bearer-exec mechanism's own contract (JSON
-// argv naming a helper, never a shell string; see credentials()'s doc
-// comment in main.go). token is JWT-shaped so it passes
-// ValidateEnvelopeShape, and it is generated at runtime by the caller
-// (syntheticJWT) rather than written as a literal, so no `eyJ...`-shaped
-// string sits in the tree for a secret scanner to flag.
-func e2eBearerHelper(t *testing.T, token string) string {
-	t.Helper()
-	return writeHelper(t, fmt.Sprintf("#!/bin/sh\nprintf '%s'\n", token))
-}
-
-// jsonArgv renders argv the way -edge-bearer-exec/-proof-bearer-exec
-// expect it: a JSON array of strings.
-func jsonArgv(t *testing.T, argv ...string) string {
-	t.Helper()
-	encoded, err := json.Marshal(argv)
-	if err != nil {
-		t.Fatalf("marshal argv: %v", err)
-	}
-	return string(encoded)
-}
-
 // hotspotsRow/hotspotsBody mirror citation_shape_test.go's own fixtures
 // in internal/goapiproof (unexported there, so this file writes the
 // same shape rather than importing it): one hotspots row, and the rows
@@ -182,24 +159,31 @@ func TestRunRefusesACredentialBearingEndpointBeforeAnyHTTPCall(t *testing.T) {
 // Kill (a): the bracketing deadline on the OPENING /buildinfo read.
 // FetchBuildIdentity's ctx there comes from run()'s own boundedCtx()
 // closure, which -- per its comment -- exists specifically to bound the
-// minting helper invoked before the first measurement, not merely the
-// HTTP round trip (the http.Client itself already carries -timeout as
-// its own Timeout field, so an HTTP-level stall is bounded either way;
-// minting happens BEFORE client.Do and is only bounded by whichever ctx
+// minting step invoked before the first measurement, not merely the HTTP
+// round trip (the http.Client itself already carries -timeout as its own
+// Timeout field, so an HTTP-level stall is bounded either way; minting
+// happens BEFORE client.Do and is only bounded by whichever ctx
 // FetchBuildIdentity was actually given). Replacing `boundedCtx()` with
-// `context.Background()` at that call site lets a hanging helper run
-// for mintBearer's own internal 20s cap instead of -timeout: this test's
-// elapsed-time bound catches exactly that.
+// `context.Background()` at that call site lets a hanging minter block
+// forever instead of failing at -timeout: this test's elapsed-time bound
+// catches exactly that.
 //
-// The helper never returns on its own; it is killed by the context this
-// test exists to prove is applied, not by a sleep in this test's own
-// goroutine.
+// The fake minter never returns on its own; it is cancelled by the
+// context this test exists to prove is applied, not by a sleep in this
+// test's own goroutine -- respecting ctx is exactly what a real minting
+// helper invocation must also do.
 func TestRunBoundsTheOpeningBuildinfoReadToTheConfiguredTimeout(t *testing.T) {
 	registry := httptest.NewServer(writeStaticJSONHandler(
 		`{"schema_digest":"sha256:e2e","operations":[{"operation":"featureFlags","document_digest":"sha256:unused"}]}`))
 	t.Cleanup(registry.Close)
 
-	hangingHelper := writeHelper(t, "#!/bin/sh\nsleep 300\n")
+	withFakeMinter(t, func(ctx context.Context, helperName string, _ []string) (string, error) {
+		if helperName == "mint-edge-token" {
+			return syntheticJWT(t, map[string]string{"sub": "edge"}), nil
+		}
+		<-ctx.Done()
+		return "", ctx.Err()
+	})
 
 	started := time.Now()
 	err := runCLI(t, []string{
@@ -209,8 +193,6 @@ func TestRunBoundsTheOpeningBuildinfoReadToTheConfiguredTimeout(t *testing.T) {
 		"-artifact-dir=/nonexistent/artifacts",
 		"-recorded-by=harness",
 		"-review-evidence=e2e harness",
-		"-edge-bearer-exec=" + jsonArgv(t, "/bin/true"),
-		"-proof-bearer-exec=" + jsonArgv(t, hangingHelper),
 		"-timeout=300ms",
 		"-dry-run",
 	})
@@ -219,14 +201,13 @@ func TestRunBoundsTheOpeningBuildinfoReadToTheConfiguredTimeout(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected the opening /buildinfo read's minting step to fail once -timeout elapses")
 	}
-	if !strings.Contains(err.Error(), "did not finish") {
+	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("expected the minting-deadline refusal, got: %v", err)
 	}
-	// mintBearer's own internal cap is 20s; the bracketing deadline this
-	// test pins bounds the run to -timeout (300ms) instead. A generous
-	// margin over that, still far short of 20s, is the signal.
+	// The bracketing deadline this test pins bounds the run to -timeout
+	// (300ms). A generous margin over that is the signal.
 	if elapsed > 5*time.Second {
-		t.Fatalf("the opening /buildinfo read was not bounded to -timeout: took %s (mintBearer's own cap is 20s)", elapsed)
+		t.Fatalf("the opening /buildinfo read was not bounded to -timeout: took %s", elapsed)
 	}
 }
 
@@ -234,9 +215,9 @@ func TestRunBoundsTheOpeningBuildinfoReadToTheConfiguredTimeout(t *testing.T) {
 // agree) and hotspots (a genuine divergence fully covered by hotspots'
 // own declared baseline defect, CHAOS-5447's citation of
 // data.hotspots.rows) -- proven end to end against fake registry,
-// /buildinfo and edge servers plus a fake receipt store, with
-// -proof-bearer-exec/-edge-bearer-exec minting fixed tokens from a real
-// subprocess. AssertCoverage requires the registry to register every
+// /buildinfo and edge servers plus a fake receipt store, with a fake
+// in-process minter (withOrgMinter) standing in for mint-envelope/
+// mint-edge-token. AssertCoverage requires the registry to register every
 // operation this package's table covers, so the other known operations
 // are registered too, each with no matching document -- they are
 // refused by name (document_digest_drift) rather than measured, which is
@@ -264,10 +245,6 @@ func TestRunProvesTwoOperationsEndToEnd(t *testing.T) {
 
 // e2ePoolHook, when set, adjusts the fake receipt store before run().
 var e2ePoolHook func(*e2ePool)
-
-// e2eEdgeArgs, when set, replaces the default -edge-bearer-exec flag with
-// the flags a venue run passes (a login-token file and -venue).
-var e2eEdgeArgs func(t *testing.T) []string
 
 // runTwoOperationsEndToEnd drives run() against fake registry,
 // /buildinfo and edge servers plus a fake receipt store; extraArgs are
@@ -386,17 +363,11 @@ func runTwoOperationsEndToEnd(t *testing.T, extraArgs ...string) (stdout string,
 		e2ePoolHook(pool)
 	}
 	withFakePool(t, pool)
-
-	edgeToken := syntheticJWT(t, map[string]string{"sub": "edge", "org_id": "70d529e0"})
-	proofToken := syntheticJWT(t, map[string]string{"sub": "proof", "org_id": "70d529e0"})
+	withOrgMinter(t, "70d529e0", "70d529e0")
 	reportPath = filepath.Join(t.TempDir(), "report.json")
 
-	edgeArgs := []string{"-edge-bearer-exec=" + jsonArgv(t, e2eBearerHelper(t, edgeToken))}
-	if e2eEdgeArgs != nil {
-		edgeArgs = e2eEdgeArgs(t)
-	}
 	stdout = captureStdout(t, func() {
-		runErr = runCLI(t, append(append([]string{
+		runErr = runCLI(t, append([]string{
 			"-registry-url=" + registry.URL + "/registry",
 			"-buildinfo-url=" + buildinfo.URL + "/buildinfo",
 			"-edge-url=" + edge.URL + "/graphql",
@@ -406,10 +377,9 @@ func runTwoOperationsEndToEnd(t *testing.T, extraArgs ...string) (stdout string,
 			"-artifact-dir=" + t.TempDir(),
 			"-recorded-by=harness",
 			"-review-evidence=e2e harness run",
-			"-proof-bearer-exec=" + jsonArgv(t, e2eBearerHelper(t, proofToken)),
 			"-report=" + reportPath,
 			"-timeout=5s",
-		}, edgeArgs...), extraArgs...))
+		}, extraArgs...))
 	})
 	return stdout, runErr, reportPath, pool
 }

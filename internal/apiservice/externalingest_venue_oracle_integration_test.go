@@ -30,23 +30,40 @@ func ingestTokenHash(token string) string {
 // matching the PagerDuty oracle's canonical_incident_ingestion pattern),
 // one enabled customer_push source, one token bound to it carrying every
 // scope this package's routes check (schema:read, ingest:write,
-// ingest:status), and one PRE-SEEDED external_ingest_batches row with a
-// fixed, known id -- an accept_batch response's own ingestionId is minted
+// ingest:status), and PRE-SEEDED external_ingest_batches rows with fixed,
+// known ids -- an accept_batch response's own ingestionId is minted
 // independently by each plane's own INSERT (the same reason webhookintake's
 // blankVenueEventID exists), so a get-by-id request against a freshly
-// ACCEPTED batch cannot use the same id on both planes; seeding the row
+// ACCEPTED batch cannot use the same id on both planes; seeding the rows
 // directly (inside Start's Seed hook, before the CREATE DATABASE ...
 // TEMPLATE copy) gives both planes the identical row and id from the start.
+//
+// seededFailedBatchID and seededRecomputeBatchID cover the two response
+// shapes round 1 review found this venue oracle's original 13 cases never
+// reached: a mark_failed-shaped error_summary ({system_failure, reason} --
+// a DIFFERENT shape than _build_error_summary()'s, which a fixed-shape
+// converter silently dropped) and a recompute row carrying a persisted
+// scope + a matching recompute_jobs log row.
 type externalIngestVenueSeed struct {
-	orgID, sourceID, token, seededBatchID string
+	orgID, sourceID, token                                     string
+	seededBatchID, seededFailedBatchID, seededRecomputeBatchID string
+	recomputeDispatchedAt                                      string
 }
 
 func newExternalIngestVenueSeed() externalIngestVenueSeed {
 	return externalIngestVenueSeed{
-		orgID:         uuid.New().String(),
-		sourceID:      uuid.New().String(),
-		token:         "fcpush_venue-oracle-" + uuid.New().String(),
-		seededBatchID: uuid.New().String(),
+		orgID:                  uuid.New().String(),
+		sourceID:               uuid.New().String(),
+		token:                  "fcpush_venue-oracle-" + uuid.New().String(),
+		seededBatchID:          uuid.New().String(),
+		seededFailedBatchID:    uuid.New().String(),
+		seededRecomputeBatchID: uuid.New().String(),
+		// A fixed literal, not now(): the batch row and the job row below
+		// must carry the IDENTICAL timestamp for listRecomputeJobs'
+		// dispatched_at equality join (recompute_status.py's
+		// get_recompute_jobs joins the same way) to match either row to
+		// the other on both planes.
+		recomputeDispatchedAt: "2026-09-10T12:00:00+00:00",
 	}
 }
 
@@ -74,6 +91,33 @@ VALUES ($1::uuid, $2, $3::uuid, 'venue oracle token', $4, 'fcpush_venue', $5::js
 		{`INSERT INTO external_ingest_batches (ingestion_id, org_id, idempotency_key, payload_hash, source_system, source_instance, schema_version, items_received, created_at, updated_at)
 VALUES ($1::uuid, $2, 'venue-seeded-batch', 'venue-seeded-hash', 'github', 'acme/venue-repo', 'external-ingest.v1', 1, now(), now())`,
 			[]any{seed.seededBatchID, seed.orgID}},
+		// mark_failed's shape (status.py:723): {"system_failure": true,
+		// "reason": ...} -- NOT _build_error_summary()'s
+		// {total_rejected, stored_rejections, truncated, top_codes} shape.
+		// Planted directly (mirroring the seeded-batch case above, not by
+		// driving the real worker failure path) since the row shape, not
+		// the path that produced it, is what the writer must render
+		// byte-identically.
+		{`INSERT INTO external_ingest_batches (ingestion_id, org_id, idempotency_key, payload_hash, source_system, source_instance, schema_version, status, items_received, items_accepted, items_rejected, error_summary, completed_at, created_at, updated_at)
+VALUES ($1::uuid, $2, 'venue-seeded-failed-batch', 'venue-seeded-failed-hash', 'github', 'acme/venue-repo', 'external-ingest.v1', 'failed', 1, 0, 1, $3::jsonb, now(), now(), now())`,
+			[]any{seed.seededFailedBatchID, seed.orgID, `{"system_failure": true, "reason": "worker failed"}`}},
+		// A recompute row carrying a persisted scope (status.py's
+		// RecomputeScopeResponse: repoIds, teamIds, windowStartedAt,
+		// windowEndedAt, cappedDays, cappedRepos) plus one matching
+		// external_ingest_recompute_jobs row -- recompute_status.py's
+		// get_recompute_jobs joins jobs to a batch's dispatch by
+		// (org_id, source_system, source_instance, dispatched_at), not by
+		// ingestion_id, so the job row below shares seed.orgID/github/
+		// acme/venue-repo/recomputeDispatchedAt with this batch row.
+		{`INSERT INTO external_ingest_batches (ingestion_id, org_id, idempotency_key, payload_hash, source_system, source_instance, schema_version, items_received, recompute_status, recompute_scope, recompute_dispatched_at, created_at, updated_at)
+VALUES ($1::uuid, $2, 'venue-seeded-recompute-batch', 'venue-seeded-recompute-hash', 'github', 'acme/venue-repo', 'external-ingest.v1', 1, 'dispatched', $3::jsonb, $4::timestamptz, now(), now())`,
+			[]any{seed.seededRecomputeBatchID, seed.orgID,
+				`{"repoIds":["repo-1","repo-2"],"teamIds":["team-1"],"windowStartedAt":"2026-09-01T00:00:00+00:00","windowEndedAt":"2026-09-08T00:00:00+00:00","cappedDays":true,"cappedRepos":false}`,
+				seed.recomputeDispatchedAt},
+		},
+		{`INSERT INTO external_ingest_recompute_jobs (id, org_id, source_system, source_instance, celery_task_name, celery_task_id, queue, repo_id, status, dispatched_at)
+VALUES ($1::uuid, $2, 'github', 'acme/venue-repo', 'run_daily_metrics', 'task-123', 'metrics', 'repo-1', 'dispatched', $3::timestamptz)`,
+			[]any{uuid.New().String(), seed.orgID, seed.recomputeDispatchedAt}},
 	}
 	for _, statement := range statements {
 		if _, err := admin.Exec(ctx, statement.sql, statement.args...); err != nil {
@@ -204,6 +248,12 @@ func TestExternalIngestVenueOracle(t *testing.T) {
 	requests := []venueoracle.Request{
 		{Name: "list schemas", Method: "GET", Path: "/api/v1/external-ingest/schemas"},
 		{Name: "get schema unknown version", Method: "GET", Path: "/api/v1/external-ingest/schemas/external-ingest.v99"},
+		// pythonRepr's quote-delimiter switch (round 1 review, reproduced
+		// live): a version containing a single quote and no double quote
+		// makes CPython's repr switch to double quotes rather than escape
+		// the embedded ' -- a naive always-single-quote repr diverges here
+		// where the quote-free "v99" case above never could.
+		{Name: "get schema unknown version with quote", Method: "GET", Path: "/api/v1/external-ingest/schemas/bad'version"},
 		{Name: "availability authenticated", Method: "GET", Path: "/api/v1/external-ingest/availability", Headers: auth},
 		{Name: "availability unauthenticated", Method: "GET", Path: "/api/v1/external-ingest/availability"},
 		{
@@ -220,6 +270,16 @@ func TestExternalIngestVenueOracle(t *testing.T) {
 			Body: venueoracle.B64(`{"schemaVersion":"external-ingest.v1","idempotencyKey":"venue-validate-2",` +
 				`"source":{"system":"github","instance":"acme/venue-repo"},` +
 				`"records":[{"kind":"not_a_real_kind.v1","externalId":"x","payload":{}}]}`),
+		},
+		{
+			// Same pythonRepr quote-delimiter case as the schema-version one
+			// above, hit through validate.go's toPyJSON message path instead
+			// of errors.go's.
+			Name: "validate unknown kind with quote", Method: "POST", Path: "/api/v1/external-ingest/validate",
+			Headers: jsonHeaders(auth),
+			Body: venueoracle.B64(`{"schemaVersion":"external-ingest.v1","idempotencyKey":"venue-validate-3",` +
+				`"source":{"system":"github","instance":"acme/venue-repo"},` +
+				`"records":[{"kind":"not_a_real_kind's.v1","externalId":"x","payload":{}}]}`),
 		},
 		{
 			Name: "accept new batch", Method: "POST", Path: "/api/v1/external-ingest/batches",
@@ -244,6 +304,14 @@ func TestExternalIngestVenueOracle(t *testing.T) {
 		// "get one batch" round-trip without the per-plane-minted-id problem
 		// a freshly accepted batch would have.
 		{Name: "get seeded batch by id", Method: "GET", Path: "/api/v1/external-ingest/batches/" + seed.seededBatchID, Headers: auth},
+		// error_summary's second real shape (mark_failed's {system_failure,
+		// reason}, round 1 review): a fixed-shape converter that only knew
+		// _build_error_summary()'s four keys silently dropped both of these.
+		{Name: "get seeded failed batch by id", Method: "GET", Path: "/api/v1/external-ingest/batches/" + seed.seededFailedBatchID, Headers: auth},
+		// recompute.scope + recompute.jobs (round 1 review): a persisted
+		// scope and one matching recompute_jobs row, both previously
+		// hardcoded to null/[] regardless of what was stored.
+		{Name: "get seeded recompute batch by id", Method: "GET", Path: "/api/v1/external-ingest/batches/" + seed.seededRecomputeBatchID, Headers: auth},
 		{Name: "get batch unknown id", Method: "GET", Path: "/api/v1/external-ingest/batches/" + uuid.New().String(), Headers: auth},
 	}
 

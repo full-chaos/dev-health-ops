@@ -76,6 +76,14 @@ func apiPosture() RolePosture {
 			// This route never writes a rejection row -- that is the
 			// CHAOS-2697 worker's job, over the domain role, not this one.
 			{"external_ingest_rejections", false, false, false},
+			// Read-only: GET /batches/{id}'s recompute.jobs (CHAOS-6321
+			// round 1 -- the api role held no grant on this table at all
+			// until this route actually queried it; listRecomputeJobs
+			// joins by org_id/source_system/source_instance/dispatched_at,
+			// same as recompute_status.py's get_recompute_jobs). This route
+			// never writes a job row -- that is the CHAOS-2699 recompute
+			// dispatcher's job, over the domain role, not this one.
+			{"external_ingest_recompute_jobs", false, false, false},
 			// Managed-sync ownership matching (ownership.go's
 			// findActiveManagedOwner): read-only.
 			{"integration_sources", false, false, false},

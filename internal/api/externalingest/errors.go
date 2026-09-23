@@ -2,8 +2,11 @@ package externalingest
 
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
+	"unicode"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
@@ -35,15 +38,49 @@ func newIngestError(status int, code, message string) *ingestError {
 // (they don't today, by coincidence -- code before message before errors is
 // already alphabetical -- which is exactly the kind of accident this class
 // of fix exists to stop relying on).
-// pythonRepr renders s the way Python's f"{s!r}" (or an explicit '{s}'
-// literal) does for the plain, quote-free strings these error messages
-// ever hold (schema versions, record kind names, idempotency keys,
-// ingestion ids) -- a single-quoted literal, not Go's %q double-quoted
-// form. Confirmed a real divergence by the venue oracle, not inferred: the
-// live Python response used single quotes where the Go response's %q
-// produced double quotes for the identical case.
+
+// pythonRepr renders s the way CPython's str.__repr__ (what f"{s!r}" and an
+// explicit '{s}' literal both call) renders it: single-quoted unless s
+// contains a single quote and no double quote (then double-quoted, no
+// escaping needed for the embedded '), backslash/quote/control characters
+// backslash-escaped, other non-printable runes as \xHH/\uHHHH/\UHHHHHHHH,
+// everything else passed through. A first version always single-quoted
+// unconditionally -- round 1 review reproduced the divergence live:
+// bad'version rendered as "bad'version" from Python (repr switches to
+// double quotes rather than escape the embedded ') and as 'bad'version'
+// (unescaped, wrong) from the naive version.
 func pythonRepr(s string) string {
-	return "'" + s + "'"
+	quote := byte('\'')
+	if strings.ContainsRune(s, '\'') && !strings.ContainsRune(s, '"') {
+		quote = '"'
+	}
+	var b strings.Builder
+	b.WriteByte(quote)
+	for _, r := range s {
+		switch {
+		case byte(r) == quote && r < 0x80:
+			b.WriteByte('\\')
+			b.WriteByte(quote)
+		case r == '\\':
+			b.WriteString(`\\`)
+		case r == '\n':
+			b.WriteString(`\n`)
+		case r == '\r':
+			b.WriteString(`\r`)
+		case r == '\t':
+			b.WriteString(`\t`)
+		case unicode.IsPrint(r):
+			b.WriteRune(r)
+		case r <= 0xff:
+			fmt.Fprintf(&b, `\x%02x`, r)
+		case r <= 0xffff:
+			fmt.Fprintf(&b, `\u%04x`, r)
+		default:
+			fmt.Fprintf(&b, `\U%08x`, r)
+		}
+	}
+	b.WriteByte(quote)
+	return b.String()
 }
 
 func writeIngestError(w http.ResponseWriter, err *ingestError) {

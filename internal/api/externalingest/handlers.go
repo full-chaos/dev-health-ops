@@ -445,7 +445,12 @@ func (d Deps) writeReplayStatus(w http.ResponseWriter, ctx context.Context, orgI
 		writeIngestError(w, newIngestError(http.StatusInternalServerError, "internal_error", "failed to load rejections"))
 		return
 	}
-	policy.WriteJSON(w, http.StatusOK, batchStatusResponse(batch, rejections, total, 50, 0), nil)
+	jobs, err := listRecomputeJobs(ctx, d.Pool, batch.OrgID, batch.SourceSystem, batch.SourceInstance, batch.RecomputeDispatchedAt)
+	if err != nil {
+		writeIngestError(w, newIngestError(http.StatusInternalServerError, "internal_error", "failed to load recompute jobs"))
+		return
+	}
+	policy.WriteJSON(w, http.StatusOK, batchStatusResponse(batch, rejections, jobs, total, 50, 0), nil)
 }
 
 // handleListBatches is status.py's list_batch_statuses (GET /batches).
@@ -514,7 +519,12 @@ func (d Deps) handleGetBatch() http.HandlerFunc {
 			writeIngestError(w, newIngestError(http.StatusInternalServerError, "internal_error", "failed to load rejections"))
 			return
 		}
-		policy.WriteJSON(w, http.StatusOK, batchStatusResponse(batch, rejections, total, limit, offset), nil)
+		jobs, err := listRecomputeJobs(r.Context(), d.Pool, batch.OrgID, batch.SourceSystem, batch.SourceInstance, batch.RecomputeDispatchedAt)
+		if err != nil {
+			writeIngestError(w, newIngestError(http.StatusInternalServerError, "internal_error", "failed to load recompute jobs"))
+			return
+		}
+		policy.WriteJSON(w, http.StatusOK, batchStatusResponse(batch, rejections, jobs, total, limit, offset), nil)
 	}
 }
 
@@ -559,46 +569,72 @@ func timeRangeParams(r *http.Request) (after, before *time.Time) {
 	return after, before
 }
 
-// errorSummaryToPyJSON converts BatchRow.ErrorSummary -- status.py's
-// _build_error_summary()'s fixed shape (total_rejected, stored_rejections,
-// truncated, top_codes: [{code, count}]), stored as raw JSON via a bare
-// json.dumps (snake_case keys, no Pydantic alias) and decoded generically
-// via decodeMetadata -- into an ordered *pyjson.Object in that same
-// declared order. A plain map[string]any cannot go through policy.WriteJSON
-// directly (pyjson.Marshal refuses it, on purpose, so an unordered map
-// never reaches the wire silently); this is the fixed-shape conversion
-// rather than a generic one, since the Python source shows the shape is
-// exactly these four keys, never arbitrary. nil in, nil out (error_summary
-// is None when nothing was rejected).
-func errorSummaryToPyJSON(summary map[string]any) pyjson.Value {
-	if summary == nil {
+// recomputeScopePyJSON builds status.py's RecomputeScopeResponse -- a real
+// Pydantic submodel, so Python serializes it in the MODEL's declared field
+// order (repoIds, teamIds, windowStartedAt, windowEndedAt, cappedDays,
+// cappedRepos) regardless of what order the stored recompute_scope JSONB
+// happens to hold, with the same defaulting _recompute_scope_response
+// applies (missing/falsy list -> [], missing bool -> false). nil in, nil
+// out (recompute.scope is null until a bounded recompute has scoped one).
+func recomputeScopePyJSON(scope map[string]any) pyjson.Value {
+	if scope == nil {
 		return nil
 	}
 	object := pyjson.NewObject()
-	if v, ok := summary["total_rejected"]; ok {
-		object.Set("total_rejected", v)
-	}
-	if v, ok := summary["stored_rejections"]; ok {
-		object.Set("stored_rejections", v)
-	}
-	if v, ok := summary["truncated"]; ok {
-		object.Set("truncated", v)
-	}
-	if raw, ok := summary["top_codes"].([]any); ok {
-		topCodes := make([]pyjson.Value, len(raw))
-		for i, item := range raw {
-			entry, _ := item.(map[string]any)
-			code := pyjson.NewObject()
-			if v, ok := entry["code"]; ok {
-				code.Set("code", v)
-			}
-			if v, ok := entry["count"]; ok {
-				code.Set("count", v)
-			}
-			topCodes[i] = code
+	object.Set("repoIds", stringListOrEmpty(scope["repoIds"]))
+	object.Set("teamIds", stringListOrEmpty(scope["teamIds"]))
+	object.Set("windowStartedAt", scopeDatetimeValue(scope["windowStartedAt"]))
+	object.Set("windowEndedAt", scopeDatetimeValue(scope["windowEndedAt"]))
+	object.Set("cappedDays", boolOrFalse(scope["cappedDays"]))
+	object.Set("cappedRepos", boolOrFalse(scope["cappedRepos"]))
+	return object
+}
+
+// stringListOrEmpty ports `list(scope.get(key) or [])`: a missing or falsy
+// (nil, empty list) value becomes [], never null -- RecomputeScopeResponse's
+// repo_ids/team_ids fields are plain lists, not Optional.
+func stringListOrEmpty(raw any) []pyjson.Value {
+	items, _ := raw.([]any)
+	out := make([]pyjson.Value, 0, len(items))
+	for _, item := range items {
+		if s, ok := item.(string); ok {
+			out = append(out, s)
 		}
-		object.Set("top_codes", topCodes)
 	}
+	return out
+}
+
+// boolOrFalse ports `bool(scope.get(key, False))`.
+func boolOrFalse(raw any) bool {
+	b, _ := raw.(bool)
+	return b
+}
+
+// scopeDatetimeValue ports `_parse_dt(scope.get(key))`: an ISO8601 string
+// stored in the scope JSONB, re-serialized the same way every other
+// datetime field in this response is (formatOptionalRFC3339). A missing,
+// non-string, or unparseable value is null, matching _parse_dt_required's
+// own contract of only ever being called on a value the writer produced.
+func scopeDatetimeValue(raw any) any {
+	s, ok := raw.(string)
+	if !ok || s == "" {
+		return nil
+	}
+	t, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		return nil
+	}
+	return formatOptionalRFC3339(&t)
+}
+
+// recomputeJobPyJSON builds status.py's RecomputeJobResponse field order:
+// task, taskId, queue, repoId.
+func recomputeJobPyJSON(job RecomputeJobRow) *pyjson.Object {
+	object := pyjson.NewObject()
+	object.Set("task", job.Task)
+	object.Set("taskId", optionalStringValue(job.TaskID))
+	object.Set("queue", job.Queue)
+	object.Set("repoId", optionalStringValue(job.RepoID))
 	return object
 }
 
@@ -637,8 +673,12 @@ func batchListItem(row *BatchRow) *pyjson.Object {
 }
 
 // batchStatusResponse builds status.py's BatchStatusResponse field order,
-// through an ordered *pyjson.Object instead of a map[string]any.
-func batchStatusResponse(row *BatchRow, rejections []RejectionRow, total, limit, offset int) *pyjson.Object {
+// through an ordered *pyjson.Object instead of a map[string]any. jobs is
+// the recompute_jobs log fetched separately (listRecomputeJobs) since it
+// has no FK to this batch row -- a same-dispatched_at match across the
+// caller's own source_system/source_instance, exactly like Python's
+// _batch_to_recompute_response(row, jobs) split.
+func batchStatusResponse(row *BatchRow, rejections []RejectionRow, jobs []RecomputeJobRow, total, limit, offset int) *pyjson.Object {
 	errs := make([]pyjson.Value, len(rejections))
 	for i, rej := range rejections {
 		errItem := pyjson.NewObject()
@@ -650,19 +690,17 @@ func batchStatusResponse(row *BatchRow, rejections []RejectionRow, total, limit,
 		errItem.Set("path", optionalStringValue(rej.Path))
 		errs[i] = errItem
 	}
+	jobItems := make([]pyjson.Value, len(jobs))
+	for i, job := range jobs {
+		jobItems[i] = recomputeJobPyJSON(job)
+	}
 	recompute := pyjson.NewObject()
 	recompute.Set("status", row.RecomputeStatus)
-	// scope: status.py's RecomputeScopeResponse is not ported -- BatchRow
-	// carries no recompute_scope data to populate it from -- so this is
-	// always null, matching every real response observed so far (a fresh
-	// accept never sets a scope). Confirmed a real gap by the venue oracle:
-	// omitting the key entirely (as this writer did before) produced a
-	// response one key short of Python's, not just reordered.
-	recompute.Set("scope", nil)
+	recompute.Set("scope", recomputeScopePyJSON(row.RecomputeScope))
 	recompute.Set("dispatchedAt", formatOptionalRFC3339(row.RecomputeDispatchedAt))
 	recompute.Set("completedAt", formatOptionalRFC3339(row.RecomputeCompletedAt))
 	recompute.Set("error", optionalStringValue(row.RecomputeError))
-	recompute.Set("jobs", []pyjson.Value{})
+	recompute.Set("jobs", jobItems)
 
 	object := pyjson.NewObject()
 	object.Set("ingestionId", row.IngestionID.String())
@@ -678,7 +716,7 @@ func batchStatusResponse(row *BatchRow, rejections []RejectionRow, total, limit,
 	object.Set("createdAt", row.CreatedAt.UTC().Format(time.RFC3339Nano))
 	object.Set("updatedAt", row.UpdatedAt.UTC().Format(time.RFC3339Nano))
 	object.Set("completedAt", formatOptionalRFC3339(row.CompletedAt))
-	object.Set("errorSummary", errorSummaryToPyJSON(row.ErrorSummary))
+	object.Set("errorSummary", row.ErrorSummary)
 	object.Set("errors", errs)
 	object.Set("errorsTotal", total)
 	object.Set("errorsLimit", limit)

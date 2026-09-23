@@ -88,9 +88,13 @@ def test_migration_0136_allows_the_operator_principal_and_is_reversible():
     )
     assert migration.revision == "0136"
     assert migration.down_revision == "0135"
-    # Derived, not typed (tests/_alembic_heads.py): the next migration
-    # author supersedes this check.
-    assert migration.revision == application_schema_head()
+    # 0137 (the audit action check) supersedes the head check: derived, not
+    # typed (tests/_alembic_heads.py); the next migration author moves it.
+    action_check = importlib.import_module(
+        "dev_health_ops.alembic.versions.0137_worker_operator_audits_action_check"
+    )
+    assert action_check.down_revision == "0136"
+    assert action_check.revision == application_schema_head()
 
     engine = sa.create_engine("sqlite:///:memory:")
     metadata = sa.MetaData()

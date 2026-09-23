@@ -9,6 +9,27 @@ import (
 
 var ErrAuditUnavailable = errors.New("worker operator audit unavailable")
 
+// AuditedActions is every Action the service writes a worker_operator_audits
+// row for (Service.mutate). The table's action check
+// (ck_worker_operator_audits_action, alembic 0137) must allow exactly these:
+// TestEveryAuditedMutationIsInAuditedActions pins the Go side and
+// TestAuditActionMigrationMatchesAuditedActions pins the migration. Two
+// Actions share the string job_routes.apply_checked_in (the sync-route and
+// job-route apply), so the list holds strings, not Action names.
+var AuditedActions = []Action{
+	ActionCancel,
+	ActionRetry,
+	ActionPauseQueue,
+	ActionResumeQueue,
+	ActionDrain,
+	ActionUndrain,
+	ActionApplyJobRoute,
+	ActionRollbackJobRoute,
+	ActionPauseRoute,
+	ActionDrainRoute,
+	ActionResumeRoute,
+}
+
 // PostgresAuditor stores bounded mutation intent in the semantic database.
 // Begin uses its own committed statement, so no queue mutation can happen
 // without a durable intent record.

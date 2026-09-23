@@ -13,6 +13,7 @@ package policy
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"strconv"
 )
@@ -34,7 +35,7 @@ func WriteJSON(w http.ResponseWriter, status int, body any, extra http.Header) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
 	w.WriteHeader(status)
-	_, _ = w.Write(payload)
+	_, _ = io.Copy(w, bytes.NewReader(payload))
 }
 
 // Marshal renders body the way json.dumps(..., ensure_ascii=False,

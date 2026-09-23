@@ -1,9 +1,11 @@
 package policy
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -242,5 +244,5 @@ func writeOrgDenied(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Content-Length", strconv.Itoa(len(orgDeniedBody)))
 	w.WriteHeader(http.StatusForbidden)
-	_, _ = w.Write(orgDeniedBody)
+	_, _ = io.Copy(w, bytes.NewReader(orgDeniedBody))
 }

@@ -70,9 +70,8 @@ func TestRouteLimitersEnforceThePerMinuteCeilings(t *testing.T) {
 			if err == nil || err.Status != 429 || err.Code != "rate_limited" {
 				t.Fatalf("request %d must be rate-limited, got %v", c.ceil+1, err)
 			}
-			// A different key has its own budget -- this is the per-caller
-			// shape the P1 finding's repro (121 unauthenticated requests
-			// all returning 200) was missing entirely.
+			// A different key has its own budget -- per-caller keying, not
+			// one bucket shared by every caller of a route.
 			if err := rateLimitedOrTooManyRequests(c.bucket, "different-key"); err != nil {
 				t.Fatalf("a different key must not share an exhausted bucket: %v", err)
 			}

@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -99,6 +100,25 @@ func TestEveryAuditedActionPassesTheMigratedAuditConstraints(t *testing.T) {
 		WHERE principal_type = 'operator' AND principal_id = 'dho-workers' AND credential_id IS NULL
 		  AND status = 'succeeded'`).Scan(&rows); err != nil || rows != len(AuditedActions) {
 		t.Fatalf("succeeded operator audit rows = %d (err %v), want %d", rows, err, len(AuditedActions))
+	}
+	// The migrated predicate allows exactly AuditedActions: every quoted
+	// literal in the live constraint definition, compared as a set, so an
+	// extra allowed value fails here as surely as a missing one fails above.
+	var definition string
+	if err := pool.QueryRow(ctx, `SELECT pg_get_constraintdef(oid) FROM pg_constraint
+		WHERE conname = 'ck_worker_operator_audits_action'`).Scan(&definition); err != nil {
+		t.Fatalf("read the migrated action check: %v", err)
+	}
+	allowed := map[string]bool{}
+	for _, match := range regexp.MustCompile(`'([^']+)'`).FindAllStringSubmatch(definition, -1) {
+		allowed[match[1]] = true
+	}
+	want := map[string]bool{}
+	for _, action := range AuditedActions {
+		want[string(action)] = true
+	}
+	if !maps(allowed, want) {
+		t.Fatalf("migrated action check allows %v, AuditedActions = %v (definition %s)", sortedKeys(allowed), sortedKeys(want), definition)
 	}
 	// An action outside the check stays refused: the constraint still binds.
 	if _, err := auditor.Begin(ctx, event(ActionWorkgraphTrigger)); err == nil {

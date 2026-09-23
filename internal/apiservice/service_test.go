@@ -460,7 +460,7 @@ func TestServerRunsTheScopeMiddlewaresOutsideSecurityHeadersAndCORS(t *testing.T
 	request.Header.Set("Origin", "https://app.example")
 	recorder := httptest.NewRecorder()
 	server.Handler().ServeHTTP(recorder, request)
-	if recorder.Code != http.StatusForbidden || recorder.Body.String() != `{"detail":"X-Org-Id not permitted for this user"}` {
+	if recorder.Code != http.StatusForbidden || recorder.Body.String() != `{"detail": "X-Org-Id not permitted for this user"}` {
 		t.Fatalf("%d %s", recorder.Code, recorder.Body.String())
 	}
 	if recorder.Header().Get("X-Frame-Options") != "" || recorder.Header().Get("Access-Control-Allow-Origin") != "" {

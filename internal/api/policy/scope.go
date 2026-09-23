@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 )
 
@@ -109,7 +110,7 @@ func (s *Scope) OrgScope(next http.Handler) http.Handler {
 			if !allowed {
 				s.logger.WarnContext(r.Context(), "X-Org-Id rejected",
 					slog.String("user_id", user.UserID), slog.String("org_id", headerOrgID))
-				WriteDetail(w, http.StatusForbidden, "X-Org-Id not permitted for this user", nil)
+				writeOrgDenied(w)
 				return
 			}
 			resolved = headerOrgID
@@ -229,4 +230,17 @@ func pyTruthy(value any) bool {
 	default:
 		return true
 	}
+}
+
+// orgDeniedBody is OrgIdMiddleware._deny's body: json.dumps with its default
+// separators, so ": " with a space, unlike every JSONResponse body.
+var orgDeniedBody = []byte(`{"detail": "X-Org-Id not permitted for this user"}`)
+
+// writeOrgDenied is OrgIdMiddleware._deny: 403 with exactly content-type and
+// content-length.
+func writeOrgDenied(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Length", strconv.Itoa(len(orgDeniedBody)))
+	w.WriteHeader(http.StatusForbidden)
+	_, _ = w.Write(orgDeniedBody)
 }

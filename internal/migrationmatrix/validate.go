@@ -374,7 +374,7 @@ func ValidateDocumentDrift(render *Render, catalog Catalog) []Violation {
 		// it. Until a disable-by-document verb exists, the row is removed by
 		// its full key.
 		out = append(out, Violation{row.Operation, "R14-document-drift",
-			fmt.Sprintf("a live %s row at digest %s serves document %s, but %s: the edge resolves requests through the catalog, so this row cannot be dispatched and every request for it is served elsewhere. `dev-hops go-api routing status` reports it %s. No shipped verb reaches it (`go-api-routing disable` keys on the catalog's document): remove it by its full key -- DELETE FROM go_api_routing_state WHERE schema_digest = %s AND document_digest = %s AND selected_operation = %s -- then re-render",
+			fmt.Sprintf("a live %s row at digest %s serves document %s, but %s: the edge resolves requests through the catalog, so this row cannot be dispatched and every request for it is served elsewhere. `dev-hops go-api routing status` reports it %s. No shipped verb reaches it (`dho goapi routing disable` keys on the catalog's document): remove it by its full key -- DELETE FROM go_api_routing_state WHERE schema_digest = %s AND document_digest = %s AND selected_operation = %s -- then re-render",
 				row.Mode, row.SchemaDigest, row.DocumentDigest, want, state, sqlLiteral(row.SchemaDigest), sqlLiteral(row.DocumentDigest), sqlLiteral(row.Operation))})
 	}
 	return out

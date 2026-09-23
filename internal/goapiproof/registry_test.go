@@ -263,7 +263,7 @@ func TestAStaleRoutingRowRefusesTheRun(t *testing.T) {
 	// verb. `routing enable --candidate-build` re-points a row, but its
 	// --mode is canary|primary only, so following that advice on a SHADOW
 	// row silently flips it to canary.
-	if !strings.Contains(err.Error(), "go-api-routing repoint") {
+	if !strings.Contains(err.Error(), "dho goapi routing repoint") {
 		t.Fatalf("the refusal must name the mode-preserving re-point verb, got %v", err)
 	}
 	if !strings.Contains(err.Error(), "would also change the mode") {

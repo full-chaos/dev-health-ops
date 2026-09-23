@@ -268,7 +268,7 @@ func TestClassifyRoutingDrift_RowsOnlyAtASupersededDigestAreStale(t *testing.T) 
 	}
 	for _, want := range []string{
 		"ROUTING ROWS STALE", "12 rows at sha256:67b87d38",
-		"0 at sha256:29d509cd", "go-api-routing enable",
+		"0 at sha256:29d509cd", "dho goapi routing enable",
 	} {
 		if !strings.Contains(lines[0], want) {
 			t.Fatalf("stale line missing %q: %q", want, lines[0])

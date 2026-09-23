@@ -99,7 +99,7 @@ var writeSkewRefusalPlaces = map[string]string{
 func TestEveryRefusalHasAPlaceInTheWriteSkewTable(t *testing.T) {
 	name := regexp.MustCompile(`^(REST)?Refusal[A-Z]\w*$`)
 	found := map[string]bool{}
-	for _, dir := range []string{".", filepath.Join("..", "..", "cmd", "go-api-rest-prove")} {
+	for _, dir := range []string{".", filepath.Join("..", "goapicli", "restprove")} {
 		entries, err := os.ReadDir(dir)
 		if err != nil {
 			t.Fatal(err)

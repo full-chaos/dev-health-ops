@@ -1,4 +1,4 @@
-"""Every `go-api-routing enable` command an operator can read must parse.
+"""Every `dho goapi routing enable` command an operator can read must parse.
 
 The Go verb's flag set is the source of truth. A runbook, a checker hint or a
 log line that names a flag the verb does not define (or passes operations as
@@ -17,14 +17,14 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 VERB_SOURCES = (
-    ROOT / "cmd" / "go-api-routing" / "enable.go",
-    ROOT / "cmd" / "go-api-routing" / "main.go",
+    ROOT / "internal" / "goapicli" / "routing" / "enable.go",
+    ROOT / "internal" / "goapicli" / "routing" / "main.go",
 )
 FLAG_DEFINITION = re.compile(
     r"\.(?:String|Bool|Int|Duration)Var\(&[\w.]+,\s*\"([a-z][a-z-]*)\""
 )
 COMMAND = re.compile(
-    r"^\s*[\"']?\s*(?:[A-Z_]+=\S+\s+)*(?:SDL:\s+)?(go-api-routing enable\b)"
+    r"^\s*[\"']?\s*(?:[A-Z_]+=\S+\s+)*(?:SDL:\s+)?(dho goapi routing enable\b)"
 )
 BOOLEAN_FLAGS = {"dry-run"}
 
@@ -37,7 +37,7 @@ def _defined_flags() -> set[str]:
 
 
 def _commands(text: str) -> list[str]:
-    """Each `go-api-routing enable` invocation, continuation lines joined."""
+    """Each `dho goapi routing enable` invocation, continuation lines joined."""
     lines = text.splitlines()
     found: list[str] = []
     for index, line in enumerate(lines):
@@ -88,7 +88,7 @@ def test_every_enable_command_uses_only_flags_the_verb_defines(path: Path) -> No
     defined = _defined_flags()
     for command in _commands(path.read_text(encoding="utf-8")):
         text = command.replace('\\n"', " ").replace('"\n', " ")
-        tokens = shlex.split(text)[2:]
+        tokens = shlex.split(text)[4:]
         used = [
             token.lstrip("-").split("=")[0] for token in tokens if token.startswith("-")
         ]
@@ -107,13 +107,22 @@ def test_every_enable_command_uses_only_flags_the_verb_defines(path: Path) -> No
 
 
 SHORTHAND = re.compile(
-    r"(?<!go-api-)(?<!go-api )(?<![\w-])`routing (?:enable|disable|repoint|carry|status)\b"
+    r"(?<!goapi-)(?<!goapi )(?<![\w-])`routing (?:enable|disable|repoint|carry|status)\b"
+)
+# The OLD, now-deleted binary's own full invocation. Spec S1 (CHAOS-6280)
+# folded go-api-routing into `dho goapi routing`; this literal string is a
+# DIFFERENT failure shape from SHORTHAND above -- it already names a full
+# binary, so an operator following it gets "command not found" for a
+# binary that plausibly used to exist, not an obviously-incomplete
+# fragment, and SHORTHAND's own negative lookbehinds do not catch it.
+STALE_FULL_NAME = re.compile(
+    r"(?<![\w-])go-api-routing (?:enable|disable|repoint|carry|status)\b"
 )
 SCANNED_ROOTS = ("cmd", "internal", "src", "docs", "ci")
 SCANNED_SUFFIXES = {".go", ".py", ".md", ".sh"}
 
 
-def _shorthand_hits() -> list[str]:
+def _pattern_hits(pattern: re.Pattern[str]) -> list[str]:
     hits: list[str] = []
     for root in SCANNED_ROOTS:
         for path in sorted((ROOT / root).rglob("*")):
@@ -127,14 +136,26 @@ def _shorthand_hits() -> list[str]:
                 stripped = line.lstrip()
                 if path.suffix in {".go", ".py"} and stripped.startswith(("//", "#")):
                     continue
-                if SHORTHAND.search(line):
+                if pattern.search(line):
                     hits.append(f"{path.relative_to(ROOT)}:{number}")
     return hits
 
 
 def test_no_operator_text_names_a_routing_verb_without_its_binary() -> None:
-    """`routing enable` is not a command: it is `go-api-routing enable` (Go) or
-    `dev-hops go-api routing status|disable` (Python). A hint or message with
-    the bare shorthand sends an operator to `command not found` mid-recovery.
+    """`routing enable` is not a command: it is `dho goapi routing enable` (Go)
+    or `dev-hops go-api routing status|disable` (Python). A hint or message
+    with the bare shorthand sends an operator to `command not found`
+    mid-recovery.
     """
-    assert _shorthand_hits() == []
+    assert _pattern_hits(SHORTHAND) == []
+
+
+def test_no_operator_text_names_the_deleted_go_api_routing_binary() -> None:
+    """`go-api-routing enable` is not a command either, since spec S1
+    (CHAOS-6280): the binary was folded into `dho goapi routing enable`. A
+    live diagnostic or a doc still naming the old binary sends an operator
+    to `command not found` mid-recovery, exactly as the bare shorthand
+    above would -- this is the same failure shape with a full, plausible
+    -looking name instead of an obviously incomplete fragment.
+    """
+    assert _pattern_hits(STALE_FULL_NAME) == []

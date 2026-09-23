@@ -226,11 +226,11 @@ someone tailing logs at the moment it is written.
 old one -- "the SDL didn't change, so the old proof should still count". This directly contradicts the
 per-build proof requirement already stated above (a proof is keyed to the immutable 4-tuple *including*
 `candidate_build` and "is never carried forward across any of the four changing") and CHAOS-5425's own
-acceptance ruling, quoted in `cmd/go-api-prove/main.go` and `cmd/query-api/buildinfo_route.go`: **"Do not
+acceptance ruling, quoted in `internal/goapicli/prove/main.go` and `cmd/query-api/buildinfo_route.go`: **"Do not
 construct a receipt from a digest or an arbitrary build name."** A schema digest matching says the *SDL*
 didn't change; it says nothing about whether the new binary is the one that was actually measured. The
-recovery procedure stays exactly what it already is above: rebuild/redeploy, re-run `go-api-prove` against
-the deployed build, then `go-api-routing enable`. The two surfaces this section describes exist so that step is
+recovery procedure stays exactly what it already is above: rebuild/redeploy, re-run `dho goapi prove` against
+the deployed build, then `dho goapi routing enable`. The two surfaces this section describes exist so that step is
 never skipped silently, not so it can be skipped on purpose.
 
 A row that is live, reachable to real clients (`canary`/`primary`) and carries no proof is marked

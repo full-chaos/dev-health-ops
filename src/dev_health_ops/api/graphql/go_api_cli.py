@@ -1,7 +1,7 @@
 """``dev-hops go-api routing`` -- the operator surface for Go-API rollout.
 
 This surface reads and rolls back routing; it does not enable. Enabling an
-operation is the Go verb ``go-api-routing enable`` (``cmd/go-api-routing``),
+operation is the Go verb ``dho goapi routing enable`` (``internal/goapicli/routing``),
 which reads the candidate build from the deployed query-api's ``/buildinfo``
 and refuses -- exit 2, nothing written -- on any doubt. This module keeps
 two commands, and the split between them is deliberate:

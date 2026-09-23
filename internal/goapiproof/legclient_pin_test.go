@@ -16,9 +16,9 @@ import (
 // LegClient: both provers, this package, and the routing tool that reads
 // the registry and /buildinfo through it.
 var proverPackages = []string{
-	"./cmd/go-api-rest-prove",
-	"./cmd/go-api-prove",
-	"./cmd/go-api-routing",
+	"./internal/goapicli/restprove",
+	"./internal/goapicli/prove",
+	"./internal/goapicli/routing",
 	"./internal/goapiproof",
 }
 

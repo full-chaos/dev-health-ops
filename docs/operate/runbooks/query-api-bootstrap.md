@@ -14,7 +14,7 @@ Query-api provides the schema digest, routing tables, and proof harness for the 
 ## Prerequisites
 
 - **Prod k3s cluster running** (CHAOS-5590).
-- **Go API binary and routing state** — the `go-api-routing` binary and proof CLI available.
+- **Go API binary and routing state** — the `dho` operator binary (`goapi routing` and `goapi prove`/`goapi rest-prove`) available.
 - **Image registry credentials** — `ghcr-pull` Secret with `write:packages` scope.
 - **PostgreSQL query role** — `devhealth` user via pgbouncer-transaction (not direct `:5432` in this design, though current prod still uses direct due to chart limitations — see section **"Registry DSN"** below).
 
@@ -119,7 +119,7 @@ Or use `--patch-file` to avoid credential exposure (Trap #121).
 
 ## Step 6: First-time routing rows (canary set only)
 
-The routing state table is empty on first deploy, and nothing that reads it can create a row: `go-api-prove` routes a `shadow` operation through the proof route only when a row exists, `go-api-routing disable` never inserts one, and `go-api-routing enable` refuses an operation with no recorded proof run for the running build (there is no waiver flag; the only exception is a written limit in the compiled go-served ledger). So the first rows are seeded by hand in `shadow` mode, at the digests the running query-api reports, then proven (Step 7), then enabled (end of Step 7).
+The routing state table is empty on first deploy, and nothing that reads it can create a row: `dho goapi prove` routes a `shadow` operation through the proof route only when a row exists, `dho goapi routing disable` never inserts one, and `dho goapi routing enable` refuses an operation with no recorded proof run for the running build (there is no waiver flag; the only exception is a written limit in the compiled go-served ledger). So the first rows are seeded by hand in `shadow` mode, at the digests the running query-api reports, then proven (Step 7), then enabled (end of Step 7).
 
 Read the digests from the running query-api (`/registry` is unauthenticated; `/buildinfo` takes the envelope) and insert one row per canary operation, candidate build first:
 
@@ -161,34 +161,34 @@ Seat note: the principal then shows as a `viewer` member of that org
 toward the org's seats. Remove the membership to revoke it for that org, or
 set `users.is_active = false` to revoke it everywhere.
 
-Real proof run after the metrics drain completes (Trap #174 repair landed). Tools image carries `go-api-prove` binary built from the same `dev-health-api` digest.
+Real proof run after the metrics drain completes (Trap #174 repair landed). Tools image carries the `dho` operator binary (spec S1, CHAOS-6280) built from the same `dev-health-api` digest.
 
 ```bash
 # From tools Pod. GO_API_ENVELOPE_PRIVATE_KEY reaches this Pod's own
 # environment via secretKeyRef (same Secret/key the api Deployment reads),
-# and mint-envelope mints the envelope LOCALLY from it -- see "Tools pod
-# (operator image)" below. JWT_SECRET_KEY and POSTGRES_URI reach it the
-# same way, and mint-edge-token mints the edge access token for the proof
-# service principal LOCALLY from them.
-go-api-prove \
+# and `dho mint envelope` mints the envelope LOCALLY from it -- see "Tools
+# pod (operator image)" below. JWT_SECRET_KEY and POSTGRES_URI reach it the
+# same way, and `dho mint edge-token` mints the edge access token for the
+# proof service principal LOCALLY from them.
+dho goapi prove \
   -registry-url=http://dev-health-query-api:8000/registry \
   -buildinfo-url=http://dev-health-query-api:8000/buildinfo \
   -edge-url=http://dev-health-ops.default.svc.cluster.local:8000/graphql \
   -documents=/app/go-api/documents.json \
   -artifact-dir=/tmp/proof/artifacts \
-  -proof-bearer-exec='["mint-envelope","-org","c6a38355-dad6-42e4-8cc9-4c712450827d"]' \
-  -edge-bearer-exec='["mint-edge-token","-org","c6a38355-dad6-42e4-8cc9-4c712450827d"]' \
+  -proof-bearer-exec='["/usr/local/bin/dho","mint","envelope","-org","c6a38355-dad6-42e4-8cc9-4c712450827d"]' \
+  -edge-bearer-exec='["/usr/local/bin/dho","mint","edge-token","-org","c6a38355-dad6-42e4-8cc9-4c712450827d"]' \
   -org=c6a38355-dad6-42e4-8cc9-4c712450827d \
   -recorded-by=<operator> -review-evidence="<why this run>" \
   -since-utc=<baseline-start RFC3339> -until-utc=<proof-end RFC3339>
 ```
 
-Each bearer exec names an ALLOWLISTED HELPER NAME (`mint-envelope`, `mint-edge-token`), never a path; the helper reads its own secret from the Pod's environment. `-documents` is the registry dump baked into the tools image at the same commit as the binary.
+Each bearer exec names the `dho` binary's own `mint envelope` / `mint edge-token` verbs, never a bare helper name or a path; `dho goapi prove` execs them as an ordinary subprocess and each verb reads its own secret from the Pod's environment. `-documents` is the registry dump baked into the tools image at the same commit as the binary.
 
 The REST routes are proven the same way from the same Pod:
 
 ```bash
-go-api-rest-prove \
+dho goapi rest-prove \
   -query-api-url=http://dev-health-query-api:8000 \
   -python-api-url=http://dev-health-ops.default.svc.cluster.local:8000 \
   -candidate-bearer-exec='["mint-envelope","-org","c6a38355-dad6-42e4-8cc9-4c712450827d"]' \
@@ -198,11 +198,13 @@ go-api-rest-prove \
   -artifact-dir=/tmp/proof/artifacts -report=/tmp/proof/rest-report.json
 ```
 
-**Prover build.** `go-api-prove` and `go-api-rest-prove` carry every declaration, shape and corpus entry they apply compiled in, so both print `prover_build=<own commit> ... candidate_build=<commit /buildinfo names> prover_build_skew=<bool>` first and refuse to measure when the two commits differ or the prover carries no commit. A released image is built with `-buildvcs=false` and takes its commit from `-ldflags`, so it reports `prover_build_modified=false`; the modified arm names a locally built, VCS-stamped prover, and the commit comparison is what guards a released one. Run the tools image tagged with the candidate's own commit (`sha-<first 7>`). `-allow-prover-build-skew` measures anyway; the report then records `prover_build_skew_allowed: true` beside both commits.
+`dho goapi rest-prove`'s `-candidate-bearer-exec`/`-baseline-bearer-exec` still name an ALLOWLISTED HELPER NAME (`mint-envelope`, `mint-edge-token`), never a path -- since spec S1 (CHAOS-6280) these mint the credential IN PROCESS, calling `internal/mintcli`'s own packages directly rather than exec'ing a subprocess, so no secret ever crosses a process boundary at all.
+
+**Prover build.** `dho goapi prove` and `dho goapi rest-prove` carry every declaration, shape and corpus entry they apply compiled in, so both print `prover_build=<own commit> ... candidate_build=<commit /buildinfo names> prover_build_skew=<bool>` first and refuse to measure when the two commits differ or the prover carries no commit. A released image is built with `-buildvcs=false` and takes its commit from `-ldflags`, so it reports `prover_build_modified=false`; the modified arm names a locally built, VCS-stamped prover, and the commit comparison is what guards a released one. Run the tools image tagged with the candidate's own commit (`sha-<first 7>`). `-allow-prover-build-skew` measures anyway; the report then records `prover_build_skew_allowed: true` beside both commits.
 
 Proof runs against the 12 canary operations (shadow set is empty by design, not deferred). Compare baseline and candidate legs; `-proof-url` left empty (Trap #163: `/query/proof` cannot mount on prod). Result: `{12 total, 11 match, 1 mismatch}` or better.
 
-**Retirement note.** `go-api-prove` no longer accepts a hand-minted static
+**Retirement note.** `dho goapi prove` no longer accepts a hand-minted static
 edge bearer; `-edge-bearer-exec` (above) is the only source. Two prod
 cleanup steps remain, owned separately from this repo change: remove the
 now-unused bearer key from the `dev-health-go-api-prove` Secret, and remove
@@ -215,7 +217,7 @@ produces a clean result.
 After the proof run records a `deployed_executed` result for each canary operation at the running build, enable them with the Go verb. The candidate build is read from the deployed process's `/buildinfo`; there is no build flag and no waiver flag. Operations are one comma-separated value:
 
 ```bash
-GO_API_ROUTING_BEARER=<envelope> go-api-routing enable \
+GO_API_ROUTING_BEARER=<envelope> dho goapi routing enable \
   -registry-url  http://dev-health-query-api:8000/registry \
   -buildinfo-url http://dev-health-query-api:8000/buildinfo \
   -operations <op1>,<op2>,<op12> \

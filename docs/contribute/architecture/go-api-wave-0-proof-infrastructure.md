@@ -247,7 +247,7 @@ running binary can never read — exactly the failure above.
 So: **rebuild and deploy `query-api` first, re-enable second.** Never the
 other way round.
 
-That ordering leaves a window, and `go-api-routing carry` (CHAOS-6107) is
+That ordering leaves a window, and `dho goapi routing carry` (CHAOS-6107) is
 what closes it: between the first new pod starting and the re-enable, every
 enabled operation is un-routed — requests fall back to Python, and an
 operation whose Python execution path has been deleted (the go-only class)
@@ -322,7 +322,7 @@ dev-hops go-api routing status --query-api-url http://query-api:8080
 #    from this SDL. `enable` will refuse until they agree, by design.
 
 # 3. Re-enable against the deployed build with the Go verb
-#    (`go-api-routing enable`, next section). It reads the candidate build
+#    (`dho goapi routing enable`, next section). It reads the candidate build
 #    from the running query-api's /buildinfo; there is no Python enable.
 
 # 4. Confirm every operation reads MATCH, and none reads UNPROVEN
@@ -356,7 +356,7 @@ The enablement rule requires `build_binding = 'per_request'` on every
 receipt, and rows written before 0129 carry `build_binding` NULL. So the
 moment 0129 is applied, **every operation proven before it reads UNPROVEN**
 on `dev-hops go-api routing status` and on the migration-status page, and
-`go-api-routing enable` refuses it -- including operations whose old receipt was a
+`dho goapi routing enable` refuses it -- including operations whose old receipt was a
 sound `match`. Nothing is lost from the table; the old receipts stay as
 history. Re-run `go-api-prove` at the deployed build (JOB 6's re-prove step
 does exactly this) and the new receipts, bound per request, restore the
@@ -364,7 +364,9 @@ proofs.
 
 ### The same procedure with the Go verbs (CHAOS-5486)
 
-`cmd/go-api-routing` is the Go implementation of the same contract, built
+`dho goapi routing` (spec S1, CHAOS-6280 folded the standalone
+`cmd/go-api-routing` binary into the `dho` operator binary's `goapi
+routing` verb) is the Go implementation of the same contract, built
 because the cutover rule forbids new Python compute on the critical path
 of a rollout operation. The Python `status` and `disable` verbs still
 work. `enable` exists only in Go, and the Go verbs are the only ones that can
@@ -383,7 +385,7 @@ export POSTGRES_URI=<dsn>
 #    copy every reachable row to the digest that image computes, so the
 #    roll does not un-route what is already enabled. Writes nothing at the
 #    live digest, so a rollback still finds its own rows. -dry-run first.
-GO_API_ROUTING_BEARER=<envelope> go-api-routing carry \
+GO_API_ROUTING_BEARER=<envelope> dho goapi routing carry \
   -registry-url  http://query-api:8090/registry \
   -buildinfo-url http://query-api:8090/buildinfo \
   -recorded-by   <who> \
@@ -393,7 +395,7 @@ GO_API_ROUTING_BEARER=<envelope> go-api-routing carry \
 # carried rows still name the pre-roll build), then re-prove.
 
 # 1. Same question. Never refuses, works with query-api down.
-go-api-routing status -registry-url http://query-api:8090/registry
+dho goapi routing status -registry-url http://query-api:8090/registry
 
 # 2. Re-enable. NOTE the difference that matters: there is no
 #    -candidate-build to type. The build is READ from the deployed
@@ -402,7 +404,7 @@ go-api-routing status -registry-url http://query-api:8090/registry
 #    credential is the effective-principal ENVELOPE in
 #    GO_API_ROUTING_BEARER -- an env var, not a flag, because a flag value
 #    reaches `ps` and shell history.
-GO_API_ROUTING_BEARER=<envelope> go-api-routing enable \
+GO_API_ROUTING_BEARER=<envelope> dho goapi routing enable \
   -registry-url  http://query-api:8090/registry \
   -buildinfo-url http://query-api:8090/buildinfo \
   -operations    all-registered \
@@ -414,9 +416,9 @@ GO_API_ROUTING_BEARER=<envelope> go-api-routing enable \
 #    credential -- because it has to work when the planes disagree and the
 #    deployed process is down. -candidate-build here is a GUARD ("refuse
 #    if somebody repointed this since I looked"), never written.
-go-api-routing disable \
+dho goapi routing disable \
   -operations all-registered -mode python        # dry run, writes nothing
-go-api-routing disable \
+dho goapi routing disable \
   -operations all-registered -mode python -apply \
   -recorded-by <who> -review-evidence '<why>'
 
@@ -425,7 +427,7 @@ go-api-routing disable \
 #    pair cannot express -- `enable --mode` accepts only canary|primary,
 #    and `disable` never writes the build -- so a shadow row could not be
 #    re-pointed at all before it existed.
-GO_API_ROUTING_BEARER=<envelope> go-api-routing repoint ... -dry-run
+GO_API_ROUTING_BEARER=<envelope> dho goapi routing repoint ... -dry-run
 ```
 
 This is every point where the Go verbs deliberately behave differently
@@ -670,15 +672,18 @@ appear here.
 ## Tools pod (operator image)
 
 `ghcr.io/full-chaos/dev-health-go-api-tools` (`docker/go-api-tools.Dockerfile`)
-carries `go-api-routing` and `go-api-prove` on `PATH`, the registrydump
+carries the `dho` operator binary on `PATH` (spec S1, CHAOS-6280 folded
+`go-api-routing`, `go-api-prove`, `go-api-rest-prove`, `mint-envelope` and
+`mint-edge-token` into its `goapi` and `mint` verbs), the registrydump
 documents dump generated from the SAME commit at build time
 (`/app/go-api/documents.json`), and the checked-in operation catalog at its
 `DefaultCatalogPath` relative to the image's working directory
 (`/app/go-api/src/dev_health_ops/api/graphql/go_api_operations.json`) --
-`go-api-routing`'s `-catalog` flag needs no override when run from there,
-and neither does `carry`'s `-documents` flag, whose default is that same
-baked-in dump — which is exactly what makes the image's own binary able to
-say which documents the deployment it was built from will register.
+`dho goapi routing`'s `-catalog` flag needs no override when run from
+there, and neither does `carry`'s `-documents` flag, whose default is that
+same baked-in dump — which is exactly what makes the image's own binary
+able to say which documents the deployment it was built from will
+register.
 
 The runtime base is a small Debian, not distroless: this image doubles as
 the operator's one-off Pod for running both binaries by hand, and a
@@ -694,19 +699,20 @@ kubectl run dev-health-go-api-tools-oneoff \
   --overrides='{"spec":{"containers":[{"name":"dev-health-go-api-tools-oneoff","image":"ghcr.io/full-chaos/dev-health-go-api-tools:sha-<COMMIT>","command":["sleep","86400"],"env":[{"name":"GO_API_ENVELOPE_PRIVATE_KEY","valueFrom":{"secretKeyRef":{"name":"dev-health-ops","key":"GO_API_ENVELOPE_PRIVATE_KEY"}}},{"name":"JWT_SECRET_KEY","valueFrom":{"secretKeyRef":{"name":"dev-health-ops","key":"JWT_SECRET_KEY"}}},{"name":"POSTGRES_URI","valueFrom":{"secretKeyRef":{"name":"dev-health-ops","key":"POSTGRES_URI"}}}]}]}}'
 
 kubectl exec dev-health-go-api-tools-oneoff -- \
-  go-api-routing status -registry-url http://query-api:8090/registry
+  dho goapi routing status -registry-url http://query-api:8090/registry
 
 kubectl exec dev-health-go-api-tools-oneoff -- \
-  go-api-prove -documents /app/go-api/documents.json -org <org> \
+  dho goapi prove -documents /app/go-api/documents.json -org <org> \
   -recorded-by <who> -review-evidence '<why>' -artifact-dir /tmp/proof \
-  -proof-bearer-exec '["/usr/local/bin/mint-envelope","-org","<org>"]' \
-  -edge-bearer-exec '["/usr/local/bin/mint-edge-token","-org","<org>"]'
+  -proof-bearer-exec '["/usr/local/bin/dho","mint","envelope","-org","<org>"]' \
+  -edge-bearer-exec '["/usr/local/bin/dho","mint","edge-token","-org","<org>"]'
 
 kubectl delete pod dev-health-go-api-tools-oneoff
 ```
 
-The image also carries `mint-envelope`, `go-api-prove`'s
-`-proof-bearer-exec` helper (`internal/envelopemint`). It mints the
+The image also carries `dho mint envelope`, `dho goapi prove`'s
+`-proof-bearer-exec` helper (`internal/envelopemint`, called in process by
+`internal/mintcli/envelope` since spec S1). It mints the
 effective-principal envelope **locally, in this Pod** -- it does not call
 `principal_envelope.issue_effective_principal_envelope` over the network
 or exec into a running api Pod. It needs the same Ed25519 signing key the
@@ -718,44 +724,45 @@ Deployment's `envFrom` pulls the value from -- see
 `_records/job7/go-api-tools-pod.yaml`'s R167 note for the shape this was
 proven against on prod). The key is never copied into the image and never
 passed as a flag value (which would land on argv/`/proc/<pid>/cmdline`);
-`mint-envelope` reads it by env var name only, or from a `-key-file` path
-for local/dev use. Claim shape, algorithm (EdDSA/Ed25519), key id, TTL
+`dho mint envelope` reads it by env var name only, or from a `-key-file`
+path for local/dev use. Claim shape, algorithm (EdDSA/Ed25519), key id, TTL
 (60s) and issuer/audience all mirror `principal_envelope.py` exactly --
 `cmd/query-api/internal/principal`'s own test suite proves the two stay
 byte-compatible by signing with `internal/envelopemint` and verifying with
-the real `Verifier`. `go-api-routing` still takes a pre-minted
+the real `Verifier`. `dho goapi routing` still takes a pre-minted
 `GO_API_ROUTING_BEARER` the same way it always has.
 
-The image also carries `mint-edge-token`, `go-api-prove`'s
-`-edge-bearer-exec` helper (`internal/edgetokenmint`). It mints the other
-bearer, the edge **access token** the Python edge checks on every request,
-the same way `mint-envelope` mints the envelope: locally, in this Pod, from
-the key the api Pod's environment already holds (`JWT_SECRET_KEY`, by
-`secretKeyRef`, as the `--overrides` above shows). The edge bearer check is
-unchanged; there is no in-cluster trust bypass.
+The image also carries `dho mint edge-token`, `dho goapi prove`'s
+`-edge-bearer-exec` helper (`internal/edgetokenmint`, called in process by
+`internal/mintcli/edgetoken` since spec S1). It mints the other bearer,
+the edge **access token** the Python edge checks on every request, the
+same way `dho mint envelope` mints the envelope: locally, in this Pod,
+from the key the api Pod's environment already holds (`JWT_SECRET_KEY`,
+by `secretKeyRef`, as the `--overrides` above shows). The edge bearer
+check is unchanged; there is no in-cluster trust bypass.
 
 The token is for a **dedicated proof service principal**, never a human
 user: the `users` row with the fixed id `00000000-0000-4000-8000-00000000e0e1`,
 created by the application schema migration (alembic `0133`) with
 `auth_provider = 'service'`, no password, active, not a superuser, and **no
 membership**. Until an operator grants it a read-role membership in the
-org being proven, `mint-edge-token` refuses by name. The grant is one
+org being proven, `dho mint edge-token` refuses by name. The grant is one
 idempotent statement per org, kept in the prod-proof step of the
 [query-api bootstrap runbook](../../operate/runbooks/query-api-bootstrap.md)
 rather than in the migration.
 
-Before signing, `mint-edge-token` reads that row and its membership through
-`POSTGRES_URI` and refuses unless the row is a service identity
+Before signing, `dho mint edge-token` reads that row and its membership
+through `POSTGRES_URI` and refuses unless the row is a service identity
 (`auth_provider = 'service'`, no password hash), is active, is not a
 superuser, and holds a `viewer` or `member` membership in the requested
 org. The token carries the row's current `token_version`, lives 10 minutes
-by default (30 at most), and `go-api-prove` re-runs the helper every four
-minutes, so no token outlives one run by more than its TTL. Revoke with
-`is_active = false` on the row; bumping `token_version` ends every token
-already minted. `mint-edge-token` reads the key and the DSN by env var name
-only, never from a flag. `-edge-bearer-exec` is the only source for
-`go-api-prove`'s edge credential; the earlier hand-minted static bearer is
-retired.
+by default (30 at most), and `dho goapi prove` re-runs the helper every
+four minutes, so no token outlives one run by more than its TTL. Revoke
+with `is_active = false` on the row; bumping `token_version` ends every
+token already minted. `dho mint edge-token` reads the key and the DSN by
+env var name only, never from a flag. `-edge-bearer-exec` is the only
+source for `dho goapi prove`'s edge credential; the earlier hand-minted
+static bearer is retired.
 
 ## Float comparison: engine nondeterminism and the Tier-B rule
 

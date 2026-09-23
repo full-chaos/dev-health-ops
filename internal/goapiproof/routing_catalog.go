@@ -105,7 +105,7 @@ func SplitOperations(raw string) ([]string, error) {
 // -- executed, on the real binary and the real loader, against the same
 // file:
 //
-//	go-api-routing enable -catalog uppercase.json ... -> would enable total=1, exit 0
+//	dho goapi routing enable -catalog uppercase.json ... -> would enable total=1, exit 0
 //	python: KeyError 'digest' -> the edge cannot dispatch this operation at all
 //
 // That is the exact direction this file's own comment says must never

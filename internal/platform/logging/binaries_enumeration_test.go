@@ -46,12 +46,7 @@ var binaryLogging = map[string]string{
 	"dev-health-worker-migrate":              "silent",
 	"dev-health-workerctl":                   "installs",
 	"dho":                                    "cli",
-	"go-api-prove":                           "silent",
-	"go-api-rest-prove":                      "stdlib_cli",
-	"go-api-routing":                         "silent",
 	"gqlgen-guard":                           "silent",
-	"mint-edge-token":                        "silent",
-	"mint-envelope":                          "silent",
 	"query-api":                              "installs",
 	"worker-contractcheck":                   "silent",
 }

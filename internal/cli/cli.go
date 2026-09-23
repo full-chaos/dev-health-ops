@@ -13,6 +13,7 @@ package cli
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"log/slog"
@@ -38,6 +39,49 @@ const (
 	// ExitRefused means a preflight said no and nothing was written.
 	ExitRefused = 3
 )
+
+// FlagUsageError marks a (*flag.FlagSet).Parse failure that is not a help
+// request -- an unknown flag or a bad value, exactly the surface ExitUsage
+// documents ("nothing ran"). A verb wraps its own Parse error with
+// WrapFlagParseError at the call site; Command().Run then maps it to
+// ExitUsage instead of the verb's own generic failure code, keeping every
+// leaf in the tree honoring the same exit-code contract as dispatch itself
+// (an unknown top-level command already exits 2, see Execute below).
+type FlagUsageError struct{ Err error }
+
+func (e *FlagUsageError) Error() string { return e.Err.Error() }
+func (e *FlagUsageError) Unwrap() error { return e.Err }
+
+// WrapFlagParseError classifies a (*flag.FlagSet).Parse return value: nil
+// stays nil, flag.ErrHelp stays flag.ErrHelp (a request, not a failure --
+// the caller maps it to ExitOK and skips printing it as an error), anything
+// else is wrapped as a *FlagUsageError.
+func WrapFlagParseError(err error) error {
+	if err == nil || errors.Is(err, flag.ErrHelp) {
+		return err
+	}
+	return &FlagUsageError{Err: err}
+}
+
+// ExitForVerbError maps a Verb's Run error to this binary's exit-code
+// contract: ExitOK for a help request (nothing to report), ExitUsage for a
+// *FlagUsageError, ExitFailure for everything else. A Verb that has its own
+// finer classification (a refusal distinct from an internal failure, as
+// internal/goapicli/routing has) is not obligated to use this helper.
+func ExitForVerbError(err error) int {
+	switch {
+	case err == nil:
+		return ExitOK
+	case errors.Is(err, flag.ErrHelp):
+		return ExitOK
+	default:
+		var usage *FlagUsageError
+		if errors.As(err, &usage) {
+			return ExitUsage
+		}
+		return ExitFailure
+	}
+}
 
 // Kind says how a command runs.
 type Kind int

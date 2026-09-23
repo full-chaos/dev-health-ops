@@ -92,7 +92,7 @@ async def check_routing_digest_drift(session: AsyncSession) -> str:
         "routing row is keyed to a schema digest this process does not "
         "compute, so NO operation is reachable and every request silently "
         "falls back to Python. The SDL moved after these rows were "
-        "written. Re-enable with `go-api-routing enable` AFTER the "
+        "written. Re-enable with `dho goapi routing enable` AFTER the "
         "query-api image is rebuilt from this SDL; see the 'When the schema "
         "digest moves' section of "
         "docs/contribute/architecture/go-api-wave-0-proof-infrastructure.md",

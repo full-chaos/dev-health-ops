@@ -83,8 +83,16 @@ func apiPosture() RolePosture {
 			// The protected-route principal (internal/api/policy): the users
 			// row behind every access token, org membership behind
 			// X-Org-Id, and the active impersonation session of a superuser.
-			{"users", false, false, false},
+			// CHAOS-6304 (admin user routes) is the first route area over
+			// this principal to WRITE the users row itself: user CRUD and
+			// password changes. Widened in place, per the one-entry rule
+			// above.
+			{"users", true, true, true},
 			{"memberships", false, false, false},
+			// setUserPassword revokes every outstanding refresh token
+			// (refresh_tokens.py's revoke_all_for_user) on a password
+			// change.
+			{"refresh_tokens", false, true, false},
 			// CHAOS-6303 (admin impersonation routes) is the first route
 			// area over this principal to WRITE the impersonation session
 			// it reads: start_impersonation ends any prior open session

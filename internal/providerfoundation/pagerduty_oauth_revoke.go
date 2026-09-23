@@ -2,7 +2,6 @@ package providerfoundation
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
@@ -40,21 +39,24 @@ func (c PagerDutyRevokeConfig) revokeURL() string {
 // _revoke_pagerduty_oauth_before_delete), so the route answers the
 // generic 500; callers here get the same signal via a returned error and
 // must map it to policy.WriteInternal themselves, never a partial
-// "verification failed"-shaped response.
+// "verification failed"-shaped response. Like every other provider call in
+// this package, no provider-origin content (the transport error, the
+// response body, the URL) is ever formatted into the returned error --
+// only a fixed classification, matching clients.go/pagerduty_oauth.go.
 func RevokePagerDutyOAuthToken(ctx context.Context, doer HTTPDoer, config PagerDutyRevokeConfig, token string) error {
 	form := url.Values{"token": {token}, "client_id": {config.ClientID}}
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, config.revokeURL(), strings.NewReader(form.Encode()))
 	if err != nil {
-		return fmt.Errorf("pagerduty revoke: build request: %w", err)
+		return ErrCredentialInvalid
 	}
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	response, err := doer.Do(request)
 	if err != nil {
-		return fmt.Errorf("pagerduty revoke: %w", err)
+		return &ProviderError{Class: ErrorTransient}
 	}
 	defer response.Body.Close()
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return fmt.Errorf("pagerduty revoke: status %d", response.StatusCode)
+	if classification := ClassifyHTTP("pagerduty", response.StatusCode, response.Header); classification != nil {
+		return classification
 	}
 	return nil
 }

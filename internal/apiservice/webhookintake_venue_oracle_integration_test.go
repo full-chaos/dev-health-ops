@@ -8,7 +8,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"os"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -252,14 +251,8 @@ func TestWebhookIntakeVenueOracleGitHubGitLabJiraHealth(t *testing.T) {
 	if pythonOutbox != goOutbox {
 		t.Errorf("worker_job_outbox rows differ:\n python: %s\n go:     %s", pythonOutbox, goOutbox)
 	}
-
-	proofDir := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
-	if proofDir == "" {
-		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
-	}
-	if err := os.WriteFile(filepath.Join(proofDir, "webhookintake-venue-oracle"), []byte("executed"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	// venueoracle.Start already wrote this test's own proof file (by
+	// t.Name()) once the venue genuinely built -- nothing to do here.
 }
 
 func pagerdutyVenueSign(secret string, body []byte) string {
@@ -585,12 +578,5 @@ func TestWebhookIntakeVenueOraclePagerDuty(t *testing.T) {
 	if pythonReplay != goReplay {
 		t.Errorf("pagerduty-webhook-replay keys differ:\n python: %s\n go:     %s", pythonReplay, goReplay)
 	}
-
-	proofDir := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
-	if proofDir == "" {
-		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
-	}
-	if err := os.WriteFile(filepath.Join(proofDir, "webhookintake-pagerduty-venue-oracle"), []byte("executed"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	// venueoracle.Start already wrote this test's own proof file.
 }

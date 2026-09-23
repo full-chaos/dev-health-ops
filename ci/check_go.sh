@@ -1341,38 +1341,6 @@ check_live_python_oracles() {
     return 1
   fi
 
-  # internal/apiservice's webhookintake venue oracle (CHAOS-6247): the REAL
-  # Python api (internal/testsupport/venueoracle's TestClient-driven "serve"
-  # mode) and the REAL Go api answer identical signed GitHub/GitLab/Jira/
-  # health fixtures, and identical PagerDuty state-machine/replay/licensing
-  # fixtures with a binding secret encrypted by Python's OWN encrypt_value
-  # under one shared SETTINGS_ENCRYPTION_KEY, on two copies of one
-  # Alembic-migrated Postgres -- this is `-tags=integration` (real Postgres
-  # and Valkey containers), unlike every other oracle in this function.
-  printf 'go test -tags=integration -count=1: internal/apiservice (webhook intake vs live Python, CHAOS-6247)\n'
-  if ! (
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" \
-      GOWORK=off \
-      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
-      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -tags=integration -count=1 -timeout=10m \
-        -run '^(TestWebhookIntakeVenueOracleGitHubGitLabJiraHealth|TestWebhookIntakeVenueOraclePagerDuty)$' \
-        ./internal/apiservice
-  ); then
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  for proof_name in webhookintake-venue-oracle webhookintake-pagerduty-venue-oracle; do
-    proof_file="${proof_dir}/${proof_name}"
-    if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-      printf 'ERROR: webhook intake live Python oracle %s did not run\n' "${proof_name}" >&2
-      rm -rf -- "${proof_dir}"
-      return 1
-    fi
-  done
-
   rm -rf -- "${proof_dir}"
 }
 

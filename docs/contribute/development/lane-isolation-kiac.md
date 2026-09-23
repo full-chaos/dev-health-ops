@@ -244,7 +244,6 @@ cat > /tmp/image-list.txt <<EOF
 dev-health-ops-local:${SHA:0:12}
 ghcr.io/full-chaos/dev-health-web:0.1.0
 dev-health-acr:dev
-dev-health-go-worker:latest
 ghcr.io/full-chaos/dev-health-go-dho:local
 dev-health-go-operator:latest
 EOF
@@ -265,9 +264,10 @@ ACR_KIAC_CLUSTER_NAME=dev-full ACR_KIAC_ALLOW_VERSION_DRIFT=1 \
   "$ACR_WT/deploy/local/kiac.sh" load-image $(tr '\n' ' ' < /tmp/image-list.txt)
 ```
 
-One image serves the four River worker groups (`heavy`, `ops`, `sync`,
-`sync-provider`); the `reconciler` and `scheduler` groups and the three `stream-*`
-groups run `dho reconciler`, `dho scheduler` and `dho stream-runner` from the dho image
+One image serves every Go group: the four River worker groups (`heavy`,
+`ops`, `sync`, `sync-provider`) run `dho worker`, and the `reconciler`,
+`scheduler` and three `stream-*` groups run `dho reconciler`, `dho scheduler`
+and `dho stream-runner`, all from the dho image
 (`ghcr.io/full-chaos/dev-health-go-dho:local`, the tag Compose builds), with
 `subcommand` set so the verb is the first argument. The
 `heavy` group is also the metrics compatibility bridge's only caller, so it must
@@ -507,10 +507,10 @@ goWorkers:
   # chart's own queues/queueConcurrency for each group; only image and
   # replicas change.
   groups:
-    - { name: heavy,             image: dev-health-go-worker:latest,           queues: [investment, metrics, reports, workgraph], queueConcurrency: {investment: 1, metrics: 2, reports: 2, workgraph: 1}, replicas: 1, terminationGracePeriodSeconds: 7260, autoscaling: {enabled: false}, bridgeUrl: "" }
-    - { name: ops,               image: dev-health-go-worker:latest,           queues: [coverage, heartbeat, retention, webhooks], queueConcurrency: {coverage: 1, heartbeat: 1, retention: 1, webhooks: 4}, replicas: 1, terminationGracePeriodSeconds: 960, autoscaling: {enabled: false} }
-    - { name: sync,              image: dev-health-go-worker:latest,           queues: [sync], queueConcurrency: {sync: 4}, replicas: 1, terminationGracePeriodSeconds: 960, autoscaling: {enabled: false} }
-    - { name: sync-provider,     image: dev-health-go-worker:latest,           queues: [sync_provider], queueConcurrency: {sync_provider: 2}, replicas: 0, terminationGracePeriodSeconds: 960, autoscaling: {enabled: false} }
+    - { name: heavy,             image: ghcr.io/full-chaos/dev-health-go-dho:local, subcommand: worker, queues: [investment, metrics, reports, workgraph], queueConcurrency: {investment: 1, metrics: 2, reports: 2, workgraph: 1}, replicas: 1, terminationGracePeriodSeconds: 7260, autoscaling: {enabled: false}, bridgeUrl: "" }
+    - { name: ops,               image: ghcr.io/full-chaos/dev-health-go-dho:local, subcommand: worker, queues: [coverage, heartbeat, retention, webhooks], queueConcurrency: {coverage: 1, heartbeat: 1, retention: 1, webhooks: 4}, replicas: 1, terminationGracePeriodSeconds: 960, autoscaling: {enabled: false} }
+    - { name: sync,              image: ghcr.io/full-chaos/dev-health-go-dho:local, subcommand: worker, queues: [sync], queueConcurrency: {sync: 4}, replicas: 1, terminationGracePeriodSeconds: 960, autoscaling: {enabled: false} }
+    - { name: sync-provider,     image: ghcr.io/full-chaos/dev-health-go-dho:local, subcommand: worker, queues: [sync_provider], queueConcurrency: {sync_provider: 2}, replicas: 0, terminationGracePeriodSeconds: 960, autoscaling: {enabled: false} }
     - { name: reconciler,        image: ghcr.io/full-chaos/dev-health-go-dho:local, subcommand: reconciler, replicas: 1, terminationGracePeriodSeconds: 60, autoscaling: {enabled: false} }
     - { name: scheduler,         image: ghcr.io/full-chaos/dev-health-go-dho:local, subcommand: scheduler, replicas: 1, terminationGracePeriodSeconds: 60, autoscaling: {enabled: false} }
     - { name: stream-external,   image: ghcr.io/full-chaos/dev-health-go-dho:local, subcommand: stream-runner, runtimeProfile: external,  replicas: 1, terminationGracePeriodSeconds: 60, autoscaling: {enabled: false} }

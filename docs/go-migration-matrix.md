@@ -7,7 +7,7 @@ source_of_truth:
   - contracts/provider-matrix/v1/matrix.json (SYNC's provider x dataset table -- fully generated, do not hand-edit)
   - internal/jobs/metrics/daily/families.json (METRICS' daily-family table)
   - internal/jobs/metrics/remaining/families.json (METRICS' remaining-family table; `port` field mirrors daily's convention as of CHAOS-5030, but contracts/native-families/v1/native-families.json is the actual executor authority -- see below)
-  - contracts/native-families/v1/native-families.json (Go-emitted, AST-derived from cmd/dev-health-worker/daily.go by cmd/dev-health-worker/native_families_artifact_test.go -- the executor source of truth for METRICS)
+  - contracts/native-families/v1/native-families.json (Go-emitted, AST-derived from internal/workerservice/daily.go by internal/workerservice/native_families_artifact_test.go -- the executor source of truth for METRICS)
   - cmd/dev-health-migration-matrix (curated citation/ticket text lives in internal/migrationmatrix/curated.go; regenerate with `-render`, do not hand-edit the generated blocks -- CHAOS-5473 absorbed the former scripts/gen_go_migration_matrix_docs.py)
 applicability: current
 lifecycle: active
@@ -45,7 +45,7 @@ preview verb entirely -- see METRICS and RECOMMENDATIONS below).
 drift-test against (`tests/workers/test_provider_matrix_contract.py`); nothing there is hand-typed. METRICS'
 two family tables are generated from `families.json`'s family-name sets (coverage) plus
 `contracts/native-families/v1/native-families.json` (the Executor verdict itself) -- a Go-emitted artifact
-`cmd/dev-health-worker/native_families_artifact_test.go` statically parses out of `daily.go`'s own
+`internal/workerservice/native_families_artifact_test.go` statically parses out of `daily.go`'s own
 registration wiring, so no curated Python dict or hand-set JSON field can silently drift from what the
 worker actually executes. INVESTMENT/WORK-GRAPH's table is entirely hand-curated (no registry file exists
 for those 5 kinds; see [Known gaps](#known-gaps-not-fixed-in-this-pr)). Every CLI-verb sub-table under SYNC/
@@ -57,13 +57,13 @@ Regenerate the generated tables after any change to a source-of-truth file:
 
 ```bash
 go run ./cmd/dev-health-migration-matrix -render -root . -fleet none
-UPDATE_NATIVE_FAMILIES_ARTIFACT=1 go test ./cmd/dev-health-worker/... -run TestNativeFamiliesArtifactUpToDate
+UPDATE_NATIVE_FAMILIES_ARTIFACT=1 go test ./internal/workerservice/... -run TestNativeFamiliesArtifactUpToDate
 ```
 
 `ci/check_migration_matrix.sh contract` (`go run ./cmd/dev-health-migration-matrix -check`, CHAOS-5473 absorbed
 the former `scripts/check_go_migration_matrix_docs_drift.py`) fails CI the moment a generated block disagrees
 with its producer, or a family/dataset gains or loses a row without the doc being regenerated in the same PR.
-`cmd/dev-health-worker/native_families_artifact_test.go` separately fails CI if
+`internal/workerservice/native_families_artifact_test.go` separately fails CI if
 `contracts/native-families/v1/native-families.json` disagrees with `daily.go`'s actual wiring.
 
 **Last verified:** `1205ec23c1cf05a32f925a49f96ff1e0d58a0f69` (ops main, 2026-09-20) -- the commit every
@@ -101,7 +101,7 @@ go run ./cmd/dev-health-migration-matrix -render -root .
 `1205ec23c1cf` (see the PR body for the per-row audit table): the `internal/workersctl/main.go` verb-group
 ranges (`providersync`, `sync-dispatch-outbox`, `metrics` daily/finalize, `metrics remaining`) had drifted with file growth and
 were corrected to the current function bounds; the seven `river, native` remaining-family citations had pointed
-at unrelated lines of `daily.go` and now name each family's own block in `cmd/dev-health-worker/daily.go`; the
+at unrelated lines of `daily.go` and now name each family's own block in `internal/workerservice/daily.go`; the
 `linear_work_items_derived.go`, `jira_work_item_derived.go` and `inventory.go` line citations were moved; the
 webhook-bridge row now says the bridge is deleted (its Python files no longer exist). Every other citation
 checked out as written.
@@ -435,7 +435,7 @@ cross-contract inconsistency between the repo's two provider-sync contract files
 ## METRICS
 
 `metrics.daily_partition` (every family runs natively, constructed inside `dailyNativeFamilyRegistrations`,
-`cmd/dev-health-worker/daily.go`) and 7 independent `metrics.remaining.*` River kinds are the two
+`internal/workerservice/daily.go`) and 7 independent `metrics.remaining.*` River kinds are the two
 WORKER-side families below. **CHAOS-3092 (PR-A) deleted the daily Python compatibility bridge outright**:
 `internal/jobs/metrics/daily/compatibility_http.go`, the `daily.CompatibilityExecutor` interface, the
 `ComputePartition` call in `PartitionHandler.Work`, the skip-families negotiation and the Python route
@@ -517,13 +517,13 @@ deleted, the frozen file and this one test survive.
 <!-- BEGIN GENERATED REMAINING METRICS MATRIX -->
 | Family | Executor | Citation | Route transport | Ticket |
 | --- | --- | --- | --- | --- |
-| capacity | NATIVE | Go: `internal/jobs/metrics/remaining/capacity_native.go`, `capacity_native_clickhouse.go` | river, native (`cmd/dev-health-worker/daily.go:477-515`) | CUT-20 R2 (Done) |
-| complexity | NATIVE | Go: `internal/jobs/metrics/remaining/complexity_native.go`, `complexity_native_clickhouse.go` | river, native (`cmd/dev-health-worker/daily.go:517-558`) | CHAOS-4291 (Done) |
-| dora | NATIVE | Go: `internal/jobs/metrics/remaining/dora_native.go`, `dora_native_clickhouse.go` | river, native (`cmd/dev-health-worker/daily.go:415-475`) | CHAOS-3092 R1 (Done) |
-| membership_backfill | NATIVE | Go: `internal/jobs/metrics/remaining/membership_native.go` | river, native (`cmd/dev-health-worker/daily.go:608-654`) | CHAOS-4282 (Done) |
-| recommendations | NATIVE | Go: `internal/jobs/metrics/remaining/recommendations_native.go` | river, native (`cmd/dev-health-worker/daily.go:560-606`) | CHAOS-4281/CHAOS-3092 (Done) |
-| release_impact | NATIVE | Go: `internal/jobs/metrics/remaining/release_impact_native_executor.go`, `release_impact_native_clickhouse.go`. CHAOS-5244: Python daily-compute orchestrator (`job_release_impact.py`, `compute_release_impact_daily`) deleted -- job compute deleted; `release_impact.py`'s `_compute_day` survives only as `fixtures/runner.py`'s local/CI fixture-generation dependency, fixture-generation path pending CHAOS-5250 | river, native (`cmd/dev-health-worker/daily.go:707-756`) | CHAOS-4296 (Done) |
-| work_item_attribution | NATIVE (narrow: staleness backstop only) | Go: `internal/jobs/metrics/remaining/work_item_attribution_native.go` -- CHAOS-3092 PR-B staleness-window backstop, NOT the full daily attribution compute (that's §2's `work_item_attribution` row, native as of CHAOS-5078) | river, native (`cmd/dev-health-worker/daily.go:656-705`) | CHAOS-3092 PR-B (Done) |
+| capacity | NATIVE | Go: `internal/jobs/metrics/remaining/capacity_native.go`, `capacity_native_clickhouse.go` | river, native (`internal/workerservice/daily.go:477-515`) | CUT-20 R2 (Done) |
+| complexity | NATIVE | Go: `internal/jobs/metrics/remaining/complexity_native.go`, `complexity_native_clickhouse.go` | river, native (`internal/workerservice/daily.go:517-558`) | CHAOS-4291 (Done) |
+| dora | NATIVE | Go: `internal/jobs/metrics/remaining/dora_native.go`, `dora_native_clickhouse.go` | river, native (`internal/workerservice/daily.go:415-475`) | CHAOS-3092 R1 (Done) |
+| membership_backfill | NATIVE | Go: `internal/jobs/metrics/remaining/membership_native.go` | river, native (`internal/workerservice/daily.go:608-654`) | CHAOS-4282 (Done) |
+| recommendations | NATIVE | Go: `internal/jobs/metrics/remaining/recommendations_native.go` | river, native (`internal/workerservice/daily.go:560-606`) | CHAOS-4281/CHAOS-3092 (Done) |
+| release_impact | NATIVE | Go: `internal/jobs/metrics/remaining/release_impact_native_executor.go`, `release_impact_native_clickhouse.go`. CHAOS-5244: Python daily-compute orchestrator (`job_release_impact.py`, `compute_release_impact_daily`) deleted -- job compute deleted; `release_impact.py`'s `_compute_day` survives only as `fixtures/runner.py`'s local/CI fixture-generation dependency, fixture-generation path pending CHAOS-5250 | river, native (`internal/workerservice/daily.go:707-756`) | CHAOS-4296 (Done) |
+| work_item_attribution | NATIVE (narrow: staleness backstop only) | Go: `internal/jobs/metrics/remaining/work_item_attribution_native.go` -- CHAOS-3092 PR-B staleness-window backstop, NOT the full daily attribution compute (that's §2's `work_item_attribution` row, native as of CHAOS-5078) | river, native (`internal/workerservice/daily.go:656-705`) | CHAOS-3092 PR-B (Done) |
 <!-- END GENERATED REMAINING METRICS MATRIX -->
 
 ## RECOMMENDATIONS

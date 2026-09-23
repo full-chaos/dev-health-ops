@@ -270,7 +270,7 @@ func RenderDailyMetricsBlock(dailyNames []string, artifact *NativeFamilies, fina
 	if len(unknown) > 0 {
 		return "", fmt.Errorf("native-families.json's \"daily\"/\"finalize\" sections name family(ies) %v "+
 			"that no longer exist in internal/jobs/metrics/daily/families.json -- regenerate the artifact "+
-			"(UPDATE_NATIVE_FAMILIES_ARTIFACT=1 go test ./cmd/dev-health-worker/... -run TestNativeFamiliesArtifactUpToDate)",
+			"(UPDATE_NATIVE_FAMILIES_ARTIFACT=1 go test ./internal/workerservice/... -run TestNativeFamiliesArtifactUpToDate)",
 			sortedSet(unknown))
 	}
 
@@ -302,7 +302,7 @@ func RenderRemainingMetricsBlock(remainingNames []string, artifactRemaining map[
 		artifactNames[name] = true
 	}
 	if err := consistencyGuard("remaining metrics family(ies) in native-families.json", artifactNames, liveNames,
-		"Regenerate the artifact (UPDATE_NATIVE_FAMILIES_ARTIFACT=1 go test ./cmd/dev-health-worker/... "+
+		"Regenerate the artifact (UPDATE_NATIVE_FAMILIES_ARTIFACT=1 go test ./internal/workerservice/... "+
 			"-run TestNativeFamiliesArtifactUpToDate)."); err != nil {
 		return "", err
 	}
@@ -330,7 +330,7 @@ var workgraphLabelToLedgerPrefix = map[string][]string{
 func assertWorkgraphLedgerMatchesArtifact(artifactWorkgraph map[string]string) error {
 	if len(artifactWorkgraph) == 0 {
 		return fmt.Errorf("native-families.json has no `workgraph` section -- regenerate it with " +
-			"UPDATE_NATIVE_FAMILIES_ARTIFACT=1 go test ./cmd/dev-health-worker/... -run TestNativeFamiliesArtifactUpToDate")
+			"UPDATE_NATIVE_FAMILIES_ARTIFACT=1 go test ./internal/workerservice/... -run TestNativeFamiliesArtifactUpToDate")
 	}
 	kinds := make([]string, 0, len(artifactWorkgraph))
 	for kind := range artifactWorkgraph {

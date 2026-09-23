@@ -2,7 +2,7 @@ package externalrecompute
 
 // enqueue.go is the production Enqueuer: it turns a bounded plan into the SAME
 // native handoffs the scheduled fan-out and post-sync fanout publish
-// (cmd/dev-health-worker/sync_dispatch.go), namely metrics.daily_dispatch via
+// (internal/workerservice/sync_dispatch.go), namely metrics.daily_dispatch via
 // daily.PostgresStore.StartRunTx and investment.materialize via
 // workgraph.RequestWriter.WriteRequestTx.
 //

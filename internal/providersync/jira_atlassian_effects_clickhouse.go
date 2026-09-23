@@ -22,7 +22,7 @@ var jiraAtlassianEffectDestinations = []string{
 	// CHAOS-4193: project-membership history and the projects catalog rows
 	// that make it resolvable. This is the PRODUCTION jira route -- the
 	// plain JiraWorkItemsRouteHandler these mirror is not what
-	// cmd/dev-health-worker/provider_sync.go constructs for a live jira
+	// internal/workerservice/provider_sync.go constructs for a live jira
 	// claim.
 	"project_membership_transitions",
 	"projects",

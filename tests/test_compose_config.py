@@ -46,6 +46,9 @@ def _container_command_string(service: dict) -> str:
 def _go_worker_arguments(service: dict) -> dict[str, str]:
     command = service.get("command") or []
     assert isinstance(command, list), "Go worker command must use list form"
+    # A worker service is `dho worker`: the verb comes first, flags after it.
+    if command and str(command[0]) == "worker":
+        command = command[1:]
     arguments: dict[str, str] = {}
     for item in command:
         name, separator, value = str(item).partition("=")
@@ -1556,6 +1559,7 @@ def test_go_workers_select_manifest_queues_without_runtime_profile() -> None:
         assert "DEV_HEALTH_QUEUES" not in environment
         assert "DEV_HEALTH_QUEUE_CONCURRENCY" not in environment
         assert "DEV_HEALTH_WORKER_GROUP" not in environment
+        assert worker["command"][0] == "worker", service_name
         arguments = _go_worker_arguments(worker)
         process = processes_by_name[group]
         assert arguments["--queues"] == ",".join(process["queues"]), service_name

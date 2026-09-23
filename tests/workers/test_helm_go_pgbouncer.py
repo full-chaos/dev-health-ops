@@ -118,7 +118,7 @@ def _river_groups() -> dict[str, dict]:
     return {
         process["name"]: process
         for process in manifest["processes"]
-        if process["runtime"] == "river" and process["binary"] == "dev-health-worker"
+        if process["runtime"] == "river" and process.get("subcommand") == "worker"
     }
 
 
@@ -376,7 +376,9 @@ def test_helm_river_workers_select_manifest_queues_and_queue_metrics() -> None:
         # The queue topology leads the argument list; CHAOS-4020 appends the
         # rest of the worker's configuration after it, so this pins the prefix
         # and the settings it must carry rather than the exact whole list.
-        assert container["args"][:4] == [
+        # `dho worker`: the verb first, then the queue topology.
+        assert container["args"][0] == "worker", container["args"]
+        assert container["args"][1:5] == [
             f"--queues={','.join(process['queues'])}",
             f"--queue-concurrency={_queue_concurrency(process)}",
             f"--worker-group={group}",

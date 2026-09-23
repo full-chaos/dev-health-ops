@@ -2353,7 +2353,7 @@ func buildQueryRoute(cfg queryRouteConfig) (queryRouteHandlers, func(context.Con
 	if err != nil {
 		return queryRouteHandlers{}, nil, nil, err
 	}
-	// Eager readiness check, matching cmd/dev-health-worker's own
+	// Eager readiness check, matching internal/workerservice's own
 	// documented contract for this exact env var (deploy/go-workers/
 	// README.md, "ClickHouse: the Go worker needs the native port, not
 	// the HTTP port"): CLICKHOUSE_URI resolves to a DIFFERENT port for a

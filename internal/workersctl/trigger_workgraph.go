@@ -4,7 +4,7 @@
 // run_work_graph_build) computes work graph edges entirely in Python,
 // in-process -- a SEPARATE code path from the `workgraph.build` River kind
 // the worker dispatches automatically (post-sync fanout,
-// cmd/dev-health-worker/sync_dispatch.go:271-306; scheduled fanout,
+// internal/workerservice/sync_dispatch.go:271-306; scheduled fanout,
 // internal/scheduler/fixed/producers.go:862-901). This command gives the
 // CLI a way to enqueue a FRESH `workgraph.build` request through the same
 // `workgraph.RequestWriter.WriteTx` path those two producers use
@@ -336,7 +336,7 @@ func dateKey(t *time.Time) string {
 // Go's time.Parse happily accepts "0000-01-01" (year zero is a real,
 // representable time.Time in Go's proleptic Gregorian calendar) and
 // produces no error -- this repository explicitly documents that exact
-// behavior at cmd/dev-health-worker/workgraph_issue_pr_links.go:339 as a
+// behavior at internal/workerservice/workgraph_issue_pr_links.go:339 as a
 // known Go/real-calendar mismatch. manualTriggerDateRangeScope only checks
 // JSON syntax, not date sanity, so a year-zero (or negative-year) scope was
 // silently WRITTEN, then only caught later, ambiguously, by the build

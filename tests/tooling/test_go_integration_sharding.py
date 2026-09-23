@@ -30,7 +30,7 @@ CHECK_GO_TIMEOUT_SECONDS = 120
 EXPECTED_PACKAGES = {
     "internal/goapiproof",
     "internal/reconcilerservice",
-    "cmd/dev-health-worker",
+    "internal/workerservice",
     "internal/workersctl",
     # CHAOS-5486: the routing verbs' first //go:build integration file --
     # `enable` driven end to end against a real Postgres and a real HTTP
@@ -1398,7 +1398,7 @@ _IMAGE_PULLING_ACTION_DEBT = {
     # to carry no longer names a real job and was deleted here, per this
     # test's own stale-entry error message ("delete them so the list cannot
     # rot into a silent allowlist").
-    ("docker-images.yml", "go-build-worker-arm64", "docker/setup-buildx-action"),
+    ("docker-images.yml", "go-build-dho-arm64", "docker/setup-buildx-action"),
 }
 _IMAGE_PULLING_ACTIONS = ("docker/setup-buildx-action",)
 

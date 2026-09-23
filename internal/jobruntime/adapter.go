@@ -662,7 +662,7 @@ const jobTracerName = "github.com/full-chaos/dev-health-ops/internal/jobruntime"
 // parented from envelope.TraceParent when the Python producer captured one at
 // enqueue time (CHAOS-3993) so a sync run's outbox-relayed work lands in the
 // same trace it was dispatched from. otelriver's own river.work span (wired
-// in cmd/dev-health-worker/river_process.go and
+// in internal/workerservice/river_process.go and
 // internal/joboutbox/inserter.go) is the parent in context when this runs;
 // this span nests under it and carries the attributes otelriver's baseline
 // span does not: job id, correlation id, and domain identity.

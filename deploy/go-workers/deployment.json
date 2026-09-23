@@ -59,7 +59,8 @@
   "processes": [
     {
       "name": "heavy",
-      "binary": "dev-health-worker",
+      "binary": "dho",
+      "subcommand": "worker",
       "runtime": "river",
       "enabled_by_default": true,
       "min_replicas": 0,
@@ -119,7 +120,8 @@
     },
     {
       "name": "ops",
-      "binary": "dev-health-worker",
+      "binary": "dho",
+      "subcommand": "worker",
       "runtime": "river",
       "enabled_by_default": true,
       "min_replicas": 0,
@@ -289,7 +291,8 @@
     },
     {
       "name": "sync",
-      "binary": "dev-health-worker",
+      "binary": "dho",
+      "subcommand": "worker",
       "runtime": "river",
       "enabled_by_default": true,
       "min_replicas": 0,
@@ -324,7 +327,8 @@
     },
     {
       "name": "sync-provider",
-      "binary": "dev-health-worker",
+      "binary": "dho",
+      "subcommand": "worker",
       "runtime": "river",
       "enabled_by_default": true,
       "min_replicas": 1,

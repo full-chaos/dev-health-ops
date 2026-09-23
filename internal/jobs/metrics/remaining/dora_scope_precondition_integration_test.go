@@ -489,7 +489,7 @@ computed_at, org_id)`)
 // TestStartRunTxDeduplicatesDoraAcrossGenerationsForTheSameDay is the
 // CHAOS-4242 codex-round-2 fix: round 1's SkipIfCovered pre-flight only
 // protects the fixed-schedule producer's OWN call to StartRunTx -- it does
-// nothing when the post-sync trigger (cmd/dev-health-worker/sync_dispatch.go's
+// nothing when the post-sync trigger (internal/workerservice/sync_dispatch.go's
 // remainingPostSyncWriter, which never checked coverage at all) lands
 // SECOND, and the pre-flight's own read-before-savepoint is itself a TOCTOU
 // window a concurrent commit can slip through. Both gaps are closed by
@@ -623,7 +623,7 @@ func TestStartRunTxDeduplicatesDoraAcrossGenerationsForTheSameDay(t *testing.T) 
 
 // TestStartRunTxRecomputesAZeroRowDoraCoverageOnAnOpenDay is the CHAOS-4384
 // red-on-baseline reproduction. Prod shape: postSyncRemainingScope
-// (cmd/dev-health-worker/sync_dispatch.go) fires on the FIRST sync of each
+// (internal/workerservice/sync_dispatch.go) fires on the FIRST sync of each
 // UTC day, so its "day" is TODAY (still open) rather than a closed prior
 // day. That first run legitimately writes 0 rows (no deployments/incidents
 // exist yet) and succeeds -- and before this fix, loadRunCoveringDay's
@@ -1184,7 +1184,7 @@ func (nopPartitionPublisher) PublishPartitionTx(
 // codex-round-3 fix for a real gap in the round-2 dedup: loadRunCoveringDay
 // matched on (org, family, day) alone. The fixed schedule always requests
 // backfill_days=1; post-sync can request up to 90 for a real gap catch-up
-// (postSyncRemainingScope, cmd/dev-health-worker/sync_dispatch.go). Before
+// (postSyncRemainingScope, internal/workerservice/sync_dispatch.go). Before
 // this fix, a backfill_days=1 run succeeding FIRST for an anchor day would
 // satisfy a LATER backfill_days=30 request for that same anchor day,
 // silently leaving the 29 days behind the anchor uncomputed while the wider

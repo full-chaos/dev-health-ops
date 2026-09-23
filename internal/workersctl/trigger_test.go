@@ -506,7 +506,7 @@ func TestDispatchInvestmentTriggerLogsAuthorizationDenials(t *testing.T) {
 // generation string.
 func TestManualTriggerNamespacesDifferFromAutomaticProducers(t *testing.T) {
 	// postSyncFanoutNamespace and occurrenceDomainNamespace are unexported
-	// vars in OTHER packages (cmd/dev-health-worker/sync_dispatch.go:271,
+	// vars in OTHER packages (internal/workerservice/sync_dispatch.go:271,
 	// internal/scheduler/fixed/producers.go:45 respectively) and cannot be
 	// imported from here -- their literal values are duplicated below
 	// specifically so this test can compute what those packages' own

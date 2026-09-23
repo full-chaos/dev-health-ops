@@ -20,7 +20,7 @@ import (
 
 // gitlabLiveSyncOptions ports the exact sync_configurations read
 // team_catalog_clients.go's teamCatalogSelectionsResolver already does
-// (cmd/dev-health-worker), decoded into the map[string]any shape
+// (internal/workerservice), decoded into the map[string]any shape
 // TeamCatalogReference.SyncOptions carries in production (team-lead ruling,
 // 2026-08-28: no per-provider injection seams -- this collector reads
 // ref.SyncOptions directly, so this manual proof populates it the same way

@@ -53,7 +53,7 @@
 # real hosted number the next time this file is otherwise touched.
 shards	6
 internal/reconcilerservice	5
-cmd/dev-health-worker	246
+internal/workerservice	246
 internal/goapicli/routing	100
 internal/workersctl	14
 cmd/query-api	391

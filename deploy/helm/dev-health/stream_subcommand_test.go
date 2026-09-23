@@ -12,6 +12,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/reconcilerservice"
 	"github.com/full-chaos/dev-health-ops/internal/schedulerservice"
 	"github.com/full-chaos/dev-health-ops/internal/streamrunnerservice"
+	"github.com/full-chaos/dev-health-ops/internal/workerservice"
 )
 
 // A stream group runs `dho stream-runner`. Without subcommand the dho image
@@ -153,6 +154,7 @@ func TestValuesSchemaPinsTheGroupServiceVerbs(t *testing.T) {
 		reconcilerservice.Command().Name,
 		schedulerservice.Command().Name,
 		streamrunnerservice.Command().Name,
+		workerservice.Command().Name,
 	}
 	slices.Sort(want)
 	got := slices.Clone(schema.Properties.GoWorkers.Properties.Groups.Items.Properties.Subcommand.Enum)

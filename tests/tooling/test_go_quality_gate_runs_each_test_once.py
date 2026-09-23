@@ -504,7 +504,7 @@ def test_the_build_tag_boundary_is_asserted_not_described() -> None:
 
     declaring = [
         path
-        for path in (REPO_ROOT / "cmd/dev-health-worker").rglob("*_test.go")
+        for path in (REPO_ROOT / "internal/workerservice").rglob("*_test.go")
         if re.search(
             rf"^func {marker}\(",
             path.read_text(encoding="utf-8", errors="ignore"),
@@ -512,7 +512,7 @@ def test_the_build_tag_boundary_is_asserted_not_described() -> None:
         )
     ]
     assert declaring, (
-        f"{marker} is invoked but not declared under cmd/dev-health-worker"
+        f"{marker} is invoked but not declared under internal/workerservice"
     )
     for path in declaring:
         head = path.read_text(encoding="utf-8", errors="ignore")[:400]

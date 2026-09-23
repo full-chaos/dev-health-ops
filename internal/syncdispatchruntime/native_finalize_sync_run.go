@@ -53,7 +53,7 @@ type NativeFinalizeSyncRunService struct {
 	// coverageCache bumps the org's cache epoch in Valkey AFTER the
 	// finalizing transaction commits (CHAOS-4226). Optional at the type
 	// level so unit tests need no Valkey; the worker binary refuses to
-	// build the family without one (cmd/dev-health-worker/sync_dispatch.go).
+	// build the family without one (internal/workerservice/sync_dispatch.go).
 	coverageCache cacheinvalidation.OrgCacheInvalidator
 }
 
@@ -73,7 +73,7 @@ func (service *NativeFinalizeSyncRunService) UseCoverageCacheInvalidator(invalid
 }
 
 // CoverageCacheInvalidatorConfigured reports whether the post-commit cache
-// hop is wired -- the reachability probe cmd/dev-health-worker's tests use
+// hop is wired -- the reachability probe internal/workerservice's tests use
 // instead of citing a constructor.
 func (service *NativeFinalizeSyncRunService) CoverageCacheInvalidatorConfigured() bool {
 	return service != nil && service.coverageCache != nil

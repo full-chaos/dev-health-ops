@@ -685,7 +685,6 @@ jobs:
       fail-fast: false
       matrix:
         target:
-          - worker
           - operator
           - contractcheck
           - migrate
@@ -702,8 +701,8 @@ jobs:
             # `platforms:` cross-builds via buildx/QEMU on x64 same as any
             # other foreign-platform target in this workflow.
             runner: ${{ (vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}
-        # CHAOS-4906 (runner contract v1.6): (worker, linux/arm64) is built
-        # by the dedicated go-build-worker-arm64/-self-hosted pair below
+        # CHAOS-4906 (runner contract v1.6): (dho, linux/arm64) is built
+        # by the dedicated go-build-dho-arm64/-self-hosted pair below
         # instead -- the self-hosted-pool pilot for this workflow (re-added
         # in v1.6 shape from closed #2180, which used the retired v1.5.1
         # poller). Excluded here so it is never built twice; go-merge's
@@ -711,7 +710,7 @@ jobs:
         # whichever leg produced the real artifact without caring which job
         # did it.
         exclude:
-          - target: worker
+          - target: dho
             platform: linux/arm64
 
     steps:
@@ -926,6 +925,8 @@ jobs:
   # name: shape go.yml's go-container-reproducibility and go-arm64-
   # numeric-parity already use. #2180's own measured hosted wall time:
   # 1m37s (run 33764964734, job "Build Go Image (worker, linux/arm64)").
+  # CHAOS-6376: the worker target folded into dho (`dho worker`), so the pilot
+  # now builds the (dho, linux/arm64) leg, the image every Go service runs.
   #
   # PRECONDITION: unlike go-arm64-numeric-parity, this leg needs a
   # WORKING DOCKER DAEMON inside the ephemeral ARC pod -- same
@@ -984,10 +985,10 @@ jobs:
   # (the real list is ubuntu-latest/ubuntu-22.04/ubuntu-24.04 + windows/
   # macos), so the old hosted TWIN JOB is gone -- but unlike
   # go-arm64-numeric-parity (a non-required, real-hardware-only proof that
-  # is allowed to simply not run), this job feeds the PUBLISHED `worker`
+  # is allowed to simply not run), this job feeds the PUBLISHED `dho`
   # image's linux/arm64 layer, so losing its fallback entirely would
   # silently drop arm64 support from a real artifact. This one job (id kept
-  # as `go-build-worker-arm64`, no `-self-hosted` suffix, so it stays the
+  # as `go-build-dho-arm64`, no `-self-hosted` suffix, so it stays the
   # sole, direct producer of the check `go-merge`'s `needs:` names) now
   # carries the SAME routing shape as the `build`/`go-build` matrix arm64
   # legs below: `runs-on` picks the ARC pool when SELF_HOSTED_RUNNERS is
@@ -1008,8 +1009,8 @@ jobs:
   # `failure`/`cancelled` from dind-smoke-test still blocks this job, since
   # in that case `runs-on` already resolved to ARC and its daemon is
   # confirmed broken.
-  go-build-worker-arm64:
-    name: go-build-worker-arm64
+  go-build-dho-arm64:
+    name: go-build-dho-arm64
     needs: [changes, dind-smoke-test]
     if: >-
       always() &&
@@ -1073,14 +1074,14 @@ jobs:
         with:
           context: .
           file: docker/go-worker.Dockerfile
-          target: worker
+          target: dho
           platforms: linux/arm64
           build-args: |
             VERSION=${{ steps.versioning.outputs.version }}
             COMMIT=${{ steps.versioning.outputs.commit }}
             BUILD_TIME=${{ steps.versioning.outputs.build_time }}
             SOURCE_DATE_EPOCH=${{ steps.versioning.outputs.source_date_epoch }}
-          tags: ghcr.io/${{ github.repository_owner }}/dev-health-go-worker
+          tags: ghcr.io/${{ github.repository_owner }}/dev-health-go-dho
           outputs: type=image,push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true') }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -1096,7 +1097,7 @@ jobs:
         if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: digests-go-worker-arm64-self-hosted
+          name: digests-go-dho-arm64-self-hosted
           path: /tmp/digests/*
           if-no-files-found: error
           retention-days: 1
@@ -1104,12 +1105,12 @@ jobs:
   go-merge:
     name: Merge Go Digests
     runs-on: ubuntu-latest
-    needs: [go-build, go-build-worker-arm64]
-    # go-build-worker-arm64's former hosted twin was dropped (chris
+    needs: [go-build, go-build-dho-arm64]
+    # go-build-dho-arm64's former hosted twin was dropped (chris
     # 2026-09-04 16:59: ubuntu-26.04-arm was never a real hosted label) --
     # one job id now, so there is no "both legs skipped" ambiguity to guard
     # against structurally. A later ruling the same day moved
-    # go-build-worker-arm64's SELF_HOSTED_RUNNERS/fork-PR routing decision
+    # go-build-dho-arm64's SELF_HOSTED_RUNNERS/fork-PR routing decision
     # OUT of its `if:` and into its `runs-on:` (ARC when eligible, else an
     # x64+QEMU fallback), so that job no longer skips for either reason --
     # it can still legitimately report "skipped" for the SAME eligibility
@@ -1123,8 +1124,8 @@ jobs:
     if: >-
       always() &&
       needs.go-build.result == 'success' &&
-      needs.go-build-worker-arm64.result != 'failure' &&
-      needs.go-build-worker-arm64.result != 'cancelled' &&
+      needs.go-build-dho-arm64.result != 'failure' &&
+      needs.go-build-dho-arm64.result != 'cancelled' &&
       github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.push_images == 'true')
     # CHAOS-4947: see the identical output on `merge` above.
     outputs:
@@ -1132,7 +1133,6 @@ jobs:
     strategy:
       matrix:
         target:
-          - worker
           - operator
           - contractcheck
           - migrate
@@ -1414,7 +1414,7 @@ jobs:
     name: Apply moving tags (fan-in)
     runs-on: ubuntu-latest
     needs: [merge, go-merge, query-api-merge, go-api-tools-merge]
-    # go-merge and go-build-worker-arm64 already tolerate dind-smoke-test
+    # go-merge and go-build-dho-arm64 already tolerate dind-smoke-test
     # being skipped (self-hosted runners unavailable, or a fork PR) via
     # their own always() + explicit needs.*.result gate. That is not
     # enough here: GitHub's default implicit success() gate (added
@@ -1423,7 +1423,7 @@ jobs:
     # chain, and a skip anywhere in that chain fails the gate even when a
     # downstream job already decided to look past it. dind-smoke-test
     # skips on every run on this fleet, that skip flows through
-    # go-build-worker-arm64 into go-merge, and the implicit gate then
+    # go-build-dho-arm64 into go-merge, and the implicit gate then
     # sinks this job before it ever looks at merge/go-merge/query-api-merge/
     # go-api-tools-merge's own results -- which is why this job was
     # skipped on every push-to-main run regardless of those four jobs all
@@ -1432,7 +1432,7 @@ jobs:
     # The fix mirrors go-merge's own shape: always() opts this job out of
     # the whole-chain implicit gate, then explicit checks stand in for it
     # -- but scoped to ONLY this job's direct needs, not the full chain.
-    # Unlike go-build-worker-arm64 (a leg that can legitimately not run),
+    # Unlike go-build-dho-arm64 (a leg that can legitimately not run),
     # none of these four merge jobs has a by-design "did not need to run"
     # case once the event/push guard below is true: each of them carries
     # that exact same guard, so a push to main, a workflow_dispatch with
@@ -1703,7 +1703,7 @@ jobs:
           # The full family list, both naming schemes -- keep this whole,
           # like ci/check_go_containers.sh's ALL_TARGETS: a shorter,
           # second copy is how the next target goes untagged.
-          families="dev-hops-runner dev-hops-api dev-health-go-worker dev-health-go-operator dev-health-go-contractcheck dev-health-go-migrate dev-health-go-dho dev-health-query-api dev-health-go-api-tools"
+          families="dev-hops-runner dev-hops-api dev-health-go-operator dev-health-go-contractcheck dev-health-go-migrate dev-health-go-dho dev-health-query-api dev-health-go-api-tools"
           short_sha="$(echo "${BUILT_SHA}" | cut -c1-7)"
           # codex round 3, P2: every family shares this ONE short_sha, so an
           # UNKNOWN source-tag registry error (rc==2) on it is not a

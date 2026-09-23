@@ -18,7 +18,7 @@ var rawFamilies []byte
 // but until now nothing in the daily package READ it at runtime -- it was
 // documentation plus a fixture for tests and the generated matrix, while the
 // actual registration lived as hand-written map assignments in
-// cmd/dev-health-worker/daily.go. That was fine while the only per-family
+// internal/workerservice/daily.go. That was fine while the only per-family
 // facts were "is it native" and "which phase", both of which the registration
 // site expresses directly.
 //

@@ -8,7 +8,7 @@
 // the broker and result backend. That premise went stale on 2026-08-19: prod
 // runs zero Celery services (CHAOS-4026), and the three cadences the gate
 // exercised now run natively in Go:
-//   - monitor_queue_depths  -> cmd/dev-health-worker/queue_health.go
+//   - monitor_queue_depths  -> internal/workerservice/queue_health.go
 //     (queueHealthMonitor, samples River's queue state every 60s)
 //   - prune_rate_limit_observations / prune_external_ingest_batches ->
 //     internal/jobs/system's RateLimitObservationStore/ExternalIngestBatchStore,
@@ -104,7 +104,7 @@ func run(parent context.Context, args []string, lookup func(string) (string, boo
 }
 
 // queueDepth is the Go-native equivalent of the Celery worker probe: proves
-// River's queue state (the same table cmd/dev-health-worker's
+// River's queue state (the same table internal/workerservice's
 // queueHealthMonitor samples every 60s) is live and queryable, round-tripped
 // fresh on every healthcheck tick.
 type queueDepthRow struct {
@@ -119,7 +119,7 @@ func runQueueDepth(ctx context.Context, pool *pgxpool.Pool, lookup func(string) 
 	}
 	table := pgx.Identifier{schema, "river_job"}.Sanitize()
 
-	// Matches cmd/dev-health-worker/queue_health.go's own definition of
+	// Matches internal/workerservice/queue_health.go's own definition of
 	// "available now": internal/storage/river/telemetry.go's queueTelemetrySQL
 	// filters state='available' AND scheduled_at <= statement_timestamp() --
 	// a state='available' row scheduled in the future (a delayed retry) is

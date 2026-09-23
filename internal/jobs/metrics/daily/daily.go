@@ -323,7 +323,7 @@ type RunPublisher interface {
 // CHAOS-5243 had already deleted the fail-open policy that pointed at it:
 // a family's runtime failure now holds the whole partition incomplete (see
 // computeNativeFamilies and ErrPreBridgeFamilyIncomplete). Construction-time
-// refusal is handled one layer up, in cmd/dev-health-worker, where it is a
+// refusal is handled one layer up, in internal/workerservice, where it is a
 // startup error rather than a silently unregistered family.
 type NativeFamilyExecutor interface {
 	ComputeFamily(ctx context.Context, run Run, partition Partition) (rowsWritten int, err error)
@@ -588,7 +588,7 @@ func (handler *PartitionHandler) SetZeroRowsObserver(observer jobruntime.DailyMe
 // handler computes natively in Go (CHAOS-4276). CHAOS-3092 (PR-A): there is
 // no compatibility path left for an unregistered family to stay on, so a
 // nil/empty map means this handler computes NOTHING for a partition. The
-// caller (cmd/dev-health-worker/daily.go) is what guarantees the map is
+// caller (internal/workerservice/daily.go) is what guarantees the map is
 // complete: a native executor that cannot be constructed is a startup
 // error there, not a silently absent map entry.
 func (handler *PartitionHandler) SetNativeFamilies(families map[string]NativeFamilyExecutor) error {
@@ -814,7 +814,7 @@ func (handler *PartitionHandler) computeNativeFamilies(ctx context.Context, run 
 			//
 			// SetNativeFamilies makes this unreachable from the current
 			// constructor path (it derives nativeFamilyNames from the map
-			// it was handed, and cmd/dev-health-worker fails worker
+			// it was handed, and internal/workerservice fails worker
 			// construction on any executor that could not be built), so
 			// this is a defensive invariant rather than a live bug. It is
 			// enforced anyway because "unreachable today" is exactly how

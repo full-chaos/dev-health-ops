@@ -56,7 +56,7 @@ type PagerDutyIncidentHydrator interface {
 // writer. It is an interface rather than the concrete sink types so a test
 // can record what would be written without standing up ClickHouse; the
 // production wiring passes the very same PagerDuty*ClickHouseEffects values
-// cmd/dev-health-worker builds for the pull route.
+// internal/workerservice builds for the pull route.
 type PagerDutyWebhookSink interface {
 	WriteEffect(context.Context, Claim, EffectBatch) error
 }

@@ -28,7 +28,7 @@ var ErrGitHubWorkItemSinkIncomplete = errors.New(
 // WIRING: WIRED, and this paragraph used to say the opposite:
 //
 // SUPERSEDED: "It REGISTERS AND ACTIVATES NOTHING.
-// SUPERSEDED: cmd/dev-health-worker/provider_sync.go gains no case for the
+// SUPERSEDED: internal/workerservice/provider_sync.go gains no case for the
 // SUPERSEDED: work-item family here, the provider matrix still marks all five
 // SUPERSEDED: aliases route_ready: false, and the route still returns a nil
 // SUPERSEDED: watermark -- so the only thing that can reach this constructor

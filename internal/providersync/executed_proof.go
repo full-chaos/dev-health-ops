@@ -149,7 +149,7 @@ func (descriptor CompleteRouteDescriptor) ExecutedProofSatisfied(evidence *Execu
 // persisted key (CHAOS-4049) that pre-cutover rows still carry.
 //
 // records, not effects_written, is the correct Go-side signal: effects_written
-// (EffectCommitResult.Written, cmd/dev-health-worker payload shape written by
+// (EffectCommitResult.Written, internal/workerservice payload shape written by
 // providerunit.Handler.Work) counts committed EFFECT BATCHES -- one per
 // destination table -- not rows. A route can commit a batch with zero rows in
 // it (an optional upstream API returning nothing this window is a legitimate

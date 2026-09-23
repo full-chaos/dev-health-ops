@@ -889,7 +889,7 @@ func TestRoutesFlagIsGone(t *testing.T) {
 // main a blank argument was trimmed and fell through to the environment; an
 // empty override that won instead would silently drop a deployment's shutdown
 // budget to the 30s package default and flip ShutdownTimeoutExplicit, which
-// feeds the drain-budget branch in cmd/dev-health-worker.
+// feeds the drain-budget branch in internal/workerservice.
 func TestBlankFlagDoesNotShadowTheEnvironment(t *testing.T) {
 	var observed config.Config
 	var stdout, stderr bytes.Buffer

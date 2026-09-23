@@ -23,7 +23,6 @@ var publishedImageRepositories = map[string]bool{
 	"ghcr.io/full-chaos/dev-hops-api":         true,
 	"ghcr.io/full-chaos/dev-health-web":       true,
 	"ghcr.io/full-chaos/dev-health-query-api": true,
-	"ghcr.io/full-chaos/dev-health-go-worker": true,
 	"ghcr.io/full-chaos/dev-health-go-dho":    true,
 	"valkey/valkey":                           true,
 	"clickhouse/clickhouse-server":            true,

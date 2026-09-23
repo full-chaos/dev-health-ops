@@ -44,10 +44,10 @@ below is derived from it.
 
 | Process | Binary | Runtime | Queues | Shutdown grace |
 | --- | --- | --- | --- | --- |
-| `heavy` | `dev-health-worker` | River | `investment`, `metrics`, `reports`, `workgraph` | 7260s |
-| `ops` | `dev-health-worker` | River | `coverage`, `heartbeat`, `retention`, `webhooks` | 960s |
-| `sync` | `dev-health-worker` | River | `sync` | 960s |
-| `sync-provider` | `dev-health-worker` | River | `sync_provider` | 960s |
+| `heavy` | `dho worker` | River | `investment`, `metrics`, `reports`, `workgraph` | 7260s |
+| `ops` | `dho worker` | River | `coverage`, `heartbeat`, `retention`, `webhooks` | 960s |
+| `sync` | `dho worker` | River | `sync` | 960s |
+| `sync-provider` | `dho worker` | River | `sync_provider` | 960s |
 | `reconciler` | `dho reconciler` | control loop | none | 60s |
 | `scheduler` | `dho scheduler` | control loop | none | 60s |
 | `stream-ingest` | `dho stream-runner` | Valkey streams | none | 60s |
@@ -1138,21 +1138,21 @@ changing any of the source files.
 <!-- BEGIN GENERATED QUEUE MAP -->
 | Go process (binary) | Go queue | Job kind(s) | Timeout(s) | Max attempts | Historical Celery queue(s) | Historical Celery consumer(s) | Plane / route status |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `heavy` (`dev-health-worker`) | `investment` | `investment.materialize` | 7200 | 3 | — | — | Go-native -- no Celery predecessor<br>`investment.materialize`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json) |
-| `heavy` (`dev-health-worker`) | `metrics` | `metrics.daily_dispatch`<br>`metrics.daily_finalize`<br>`metrics.daily_partition`<br>`metrics.remaining.capacity`<br>`metrics.remaining.complexity`<br>`metrics.remaining.dora`<br>`metrics.remaining.membership_backfill`<br>`metrics.remaining.recommendations`<br>`metrics.remaining.release_impact`<br>`metrics.remaining.work_item_attribution` | 300-7200 | 3-5 | `metrics`, `backfill` | `worker-heavy` | Celery dormant since 2026-08-19 (CHAOS-4026); Go/River live<br>backfill's family (metrics.remaining.membership_backfill) rides this queue, not a dedicated Go 'backfill' queue.<br>`metrics.daily_dispatch`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json)<br>`metrics.daily_finalize`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json)<br>`metrics.daily_partition`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json)<br>`metrics.remaining.capacity`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json)<br>`metrics.remaining.complexity`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json)<br>`metrics.remaining.dora`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json)<br>`metrics.remaining.membership_backfill`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json)<br>`metrics.remaining.recommendations`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json)<br>`metrics.remaining.release_impact`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json)<br>`metrics.remaining.work_item_attribution`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json) |
-| `heavy` (`dev-health-worker`) | `reports` | `report.execute_on_demand`<br>`report.execute_scheduled` | 900 | 3 | `reports` | `worker` | Celery dormant since 2026-08-19 (CHAOS-4026); Go/River live<br>`report.execute_on_demand`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json)<br>`report.execute_scheduled`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json) |
-| `heavy` (`dev-health-worker`) | `workgraph` | `workgraph.build` | 3600 | 4 | `default` | `worker` | Celery dormant since 2026-08-19 (CHAOS-4026); Go/River live<br>work_graph_tasks.py routed through the shared 'default' catch-all, not a dedicated queue.<br>`workgraph.build`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json) |
-| `ops` (`dev-health-worker`) | `coverage` | `system.sync_coverage_refresh` | 900 | 3 | — | — | Go-native -- no Celery predecessor<br>`system.sync_coverage_refresh`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json) |
-| `ops` (`dev-health-worker`) | `heartbeat` | `system.heartbeat` | 30 | 1 | `default` | `worker` | Celery dormant since 2026-08-19 (CHAOS-4026); Go/River live<br>system_ops.phone_home_heartbeat routed through 'default', not a dedicated queue.<br>`system.heartbeat`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json) |
-| `ops` (`dev-health-worker`) | `retention` | `system.retention_cleanup` | 300 | 3 | — | `beat` | Go-native consolidated sweep; historical retention work was several discrete Beat-scheduled tasks (retired under CHAOS-4026, e.g. ask-dev-retention-sweep)<br>`system.retention_cleanup`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json) |
-| `ops` (`dev-health-worker`) | `webhooks` | `operational.billing_notification`<br>`operational.webhook_delivery` | 120-900 | 4 | `webhooks` | `worker` | Celery dormant since 2026-08-19 (CHAOS-4026); Go/River live<br>`operational.billing_notification`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json)<br>`operational.webhook_delivery`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json) |
+| `heavy` (`dho`) | `investment` | `investment.materialize` | 7200 | 3 | — | — | Go-native -- no Celery predecessor<br>`investment.materialize`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json) |
+| `heavy` (`dho`) | `metrics` | `metrics.daily_dispatch`<br>`metrics.daily_finalize`<br>`metrics.daily_partition`<br>`metrics.remaining.capacity`<br>`metrics.remaining.complexity`<br>`metrics.remaining.dora`<br>`metrics.remaining.membership_backfill`<br>`metrics.remaining.recommendations`<br>`metrics.remaining.release_impact`<br>`metrics.remaining.work_item_attribution` | 300-7200 | 3-5 | `metrics`, `backfill` | `worker-heavy` | Celery dormant since 2026-08-19 (CHAOS-4026); Go/River live<br>backfill's family (metrics.remaining.membership_backfill) rides this queue, not a dedicated Go 'backfill' queue.<br>`metrics.daily_dispatch`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json)<br>`metrics.daily_finalize`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json)<br>`metrics.daily_partition`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json)<br>`metrics.remaining.capacity`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json)<br>`metrics.remaining.complexity`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json)<br>`metrics.remaining.dora`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json)<br>`metrics.remaining.membership_backfill`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json)<br>`metrics.remaining.recommendations`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json)<br>`metrics.remaining.release_impact`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json)<br>`metrics.remaining.work_item_attribution`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json) |
+| `heavy` (`dho`) | `reports` | `report.execute_on_demand`<br>`report.execute_scheduled` | 900 | 3 | `reports` | `worker` | Celery dormant since 2026-08-19 (CHAOS-4026); Go/River live<br>`report.execute_on_demand`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json)<br>`report.execute_scheduled`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json) |
+| `heavy` (`dho`) | `workgraph` | `workgraph.build` | 3600 | 4 | `default` | `worker` | Celery dormant since 2026-08-19 (CHAOS-4026); Go/River live<br>work_graph_tasks.py routed through the shared 'default' catch-all, not a dedicated queue.<br>`workgraph.build`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json) |
+| `ops` (`dho`) | `coverage` | `system.sync_coverage_refresh` | 900 | 3 | — | — | Go-native -- no Celery predecessor<br>`system.sync_coverage_refresh`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json) |
+| `ops` (`dho`) | `heartbeat` | `system.heartbeat` | 30 | 1 | `default` | `worker` | Celery dormant since 2026-08-19 (CHAOS-4026); Go/River live<br>system_ops.phone_home_heartbeat routed through 'default', not a dedicated queue.<br>`system.heartbeat`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json) |
+| `ops` (`dho`) | `retention` | `system.retention_cleanup` | 300 | 3 | — | `beat` | Go-native consolidated sweep; historical retention work was several discrete Beat-scheduled tasks (retired under CHAOS-4026, e.g. ask-dev-retention-sweep)<br>`system.retention_cleanup`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json) |
+| `ops` (`dho`) | `webhooks` | `operational.billing_notification`<br>`operational.webhook_delivery` | 120-900 | 4 | `webhooks` | `worker` | Celery dormant since 2026-08-19 (CHAOS-4026); Go/River live<br>`operational.billing_notification`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json)<br>`operational.webhook_delivery`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json) |
 | `reconciler` (`dho`) | `—` | — | — | — | — | — | Go-native -- no Celery predecessor<br>Control loop, not a River queue -- no -Q for this process. |
 | `scheduler` (`dho`) | `—` | — | — | — | `scheduler` | `beat` | Celery Beat retired 2026-08-21 (CHAOS-4026); Go scheduler is sole production owner<br>Control loop, not a River queue -- no -Q for this process. |
 | `stream-external` (`dho`) | `—` | — | — | — | `external-ingest` | `worker-external-ingest` | Celery dormant since 2026-08-19 (CHAOS-4026); Go stream runner live<br>Valkey stream consumer, not a River queue -- no -Q for this process. |
 | `stream-ingest` (`dho`) | `—` | — | — | — | `ingest` | `worker-ingest` | Celery dormant since 2026-08-19 (CHAOS-4026); Go stream runner live<br>Valkey stream consumer, not a River queue -- no -Q for this process. |
 | `stream-pagerduty` (`dho`) | `—` | — | — | — | — | — | Go-native -- no Celery predecessor<br>Valkey stream consumer, not a River queue -- no -Q for this process. |
-| `sync` (`dev-health-worker`) | `sync` | `sync.team_autoimport`<br>`sync.team_repo_ownership_derivation` | 900 | 3 | `sync` | `worker` | Celery dormant since 2026-08-19 (CHAOS-4026); Go/River live. Historically also the shared fallback queue for all providers with PROVIDER_SYNC_QUEUES_ENABLED off.<br>`sync.team_autoimport`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json)<br>`sync.team_repo_ownership_derivation`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json) |
-| `sync-provider` (`dev-health-worker`) | `sync_provider` | `sync.provider_unit`<br>`system.dimension_fold` | 120-900 | 2-5 | `sync.github`, `sync.gitlab`, `sync.linear`, `sync.jira`, `sync.launchdarkly`, `sync.github.light`, `sync.github.medium`, `sync.github.heavy`, `sync.gitlab.light`, `sync.gitlab.medium`, `sync.gitlab.heavy`, `sync.jira.medium`, `sync.linear.medium` | `worker`, `worker-heavy` | Celery fleet-wide dormant since 2026-08-19 (CHAOS-4026); Go/River live. This queue's one kind (`sync.provider_unit`) was still `canary` per-kind for a time after the fleet-wide Celery retirement -- its own migration has since completed too (see below). Enablement is -Q topology plus the user's own sync config: CHAOS-4054 deleted the provider/dataset WORKER_*_ENABLED switch plane outright, so a shipped route is always executable and nothing hides it behind an environment flag.<br>The per-provider cost-class split (light/medium/heavy) has no Go equivalent yet -- CHAOS-4027, parked. All cost classes collapse onto the single sync_provider queue in Go.<br>`sync.provider_unit`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json)<br>`system.dimension_fold`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json) |
+| `sync` (`dho`) | `sync` | `sync.team_autoimport`<br>`sync.team_repo_ownership_derivation` | 900 | 3 | `sync` | `worker` | Celery dormant since 2026-08-19 (CHAOS-4026); Go/River live. Historically also the shared fallback queue for all providers with PROVIDER_SYNC_QUEUES_ENABLED off.<br>`sync.team_autoimport`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json)<br>`sync.team_repo_ownership_derivation`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json) |
+| `sync-provider` (`dho`) | `sync_provider` | `sync.provider_unit`<br>`system.dimension_fold` | 120-900 | 2-5 | `sync.github`, `sync.gitlab`, `sync.linear`, `sync.jira`, `sync.launchdarkly`, `sync.github.light`, `sync.github.medium`, `sync.github.heavy`, `sync.gitlab.light`, `sync.gitlab.medium`, `sync.gitlab.heavy`, `sync.jira.medium`, `sync.linear.medium` | `worker`, `worker-heavy` | Celery fleet-wide dormant since 2026-08-19 (CHAOS-4026); Go/River live. This queue's one kind (`sync.provider_unit`) was still `canary` per-kind for a time after the fleet-wide Celery retirement -- its own migration has since completed too (see below). Enablement is -Q topology plus the user's own sync config: CHAOS-4054 deleted the provider/dataset WORKER_*_ENABLED switch plane outright, so a shipped route is always executable and nothing hides it behind an environment flag.<br>The per-provider cost-class split (light/medium/heavy) has no Go equivalent yet -- CHAOS-4027, parked. All cost classes collapse onto the single sync_provider queue in Go.<br>`sync.provider_unit`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json)<br>`system.dimension_fold`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json) |
 
 Celery queues carrying no work reachable through a Go queue at all (telemetry, not routed work):
 
@@ -1167,7 +1167,7 @@ Celery queues carrying no work reachable through a Go queue at all (telemetry, n
 
 CHAOS-4278 (`work_item_state`) added a SECOND phase, because it broke that assumption: its native executor reads `work_item_team_attributions`, a table the STILL-PYTHON `work_item_attribution` family writes fresh inside the SAME partition's bridge call. Running `work_item_state` in the original (now `pre_bridge`) phase meant its Go read happened BEFORE that write -- a codex review round caught this as a same-partition staleness bug, not merely the already-disclosed "coverage caveat" of the read-not-recompute design (see the [Python↔Go live-path ledger](../../reference/runtime/python-go-live-path-ledger.md)'s Metrics family section).
 
-The fix is additive, not a rewrite of the existing dispatch: `families.json` gained an optional `"phase"` field (`"pre_bridge"`, the default when omitted -- every existing family needs no edit; `"post_bridge"` -- new). `PartitionHandler` gained `SetPostBridgeNativeFamilies` (`cmd/dev-health-worker/daily.go` registers `work_item_state` there, not in the `SetNativeFamilies` map) and `computePostBridgeNativeFamilies`. `Work`'s dispatch is now: pre_bridge natives run → their names, PLUS every registered post_bridge family name UNCONDITIONALLY, are excluded from the bridge call (`skipFamiliesForBridge`) → the bridge runs (computing `work_item_attribution` among whatever else was not skipped) → post_bridge natives run, now against fresh data.
+The fix is additive, not a rewrite of the existing dispatch: `families.json` gained an optional `"phase"` field (`"pre_bridge"`, the default when omitted -- every existing family needs no edit; `"post_bridge"` -- new). `PartitionHandler` gained `SetPostBridgeNativeFamilies` (`internal/workerservice/daily.go` registers `work_item_state` there, not in the `SetNativeFamilies` map) and `computePostBridgeNativeFamilies`. `Work`'s dispatch is now: pre_bridge natives run → their names, PLUS every registered post_bridge family name UNCONDITIONALLY, are excluded from the bridge call (`skipFamiliesForBridge`) → the bridge runs (computing `work_item_attribution` among whatever else was not skipped) → post_bridge natives run, now against fresh data.
 
 **Fail-open asymmetry, by design:** a `pre_bridge` family's runtime failure still has the bridge as a fallback (it was never told to skip that family). A `post_bridge` family's runtime failure does NOT -- the bridge was already told to skip it (skipFamiliesForBridge cannot know in advance that the later post_bridge run will fail), so a `post_bridge` failure means zero rows for that family this partition, surfaced only via the same `DailyMetricsNativeFamilyOutcomeRefused` telemetry every native-family refusal already uses.
 
@@ -1175,10 +1175,10 @@ The fix is additive, not a rewrite of the existing dispatch: `families.json` gai
 
 ### `metrics.remaining.extra_metrics` / `metrics.remaining.team_metrics`: retired, not fixed (CHAOS-4243)
 
-Both kinds were registered handlers (`cmd/dev-health-worker/daily.go`) with
+Both kinds were registered handlers (`internal/workerservice/daily.go`) with
 zero producer anywhere — the fixed-schedule fanout (`internal/scheduler/fixed
 /producers.go`'s `RemainingMetricsFanoutProducer.byScheduleID`) and the
-post-sync scope switch (`cmd/dev-health-worker/sync_dispatch.go`'s
+post-sync scope switch (`internal/workerservice/sync_dispatch.go`'s
 `postSyncRemainingScope`) both skipped them, so no partition was ever
 enqueued in either environment.
 
@@ -1223,7 +1223,7 @@ Leaving the two kinds registered-but-unreachable was judged itself the
 broken state the audit exists to catch, so the orchestrator ruled retirement
 must mean full removal, not a dormant registration: the `Kind*` constants,
 their contract definitions, their `RemainingMetricsPartitionPayload`-typed
-Go args, the `cmd/dev-health-worker/daily.go` handler bindings, the
+Go args, the `internal/workerservice/daily.go` handler bindings, the
 `contracts/jobs/v1/registry.json`/`migration-state.json` rows, the
 `internal/jobs/metrics/remaining/families.json` family entries, the
 `worker_metrics.py` HTTP-bridge handlers and their scope-contract classes,
@@ -1374,7 +1374,7 @@ topology](#queue-topology)):**
   (`internal/jobs/providerunit/providerunit.go`, `FeatureDisabledCategory`),
   the category Python's `_classify_error` stamps for the same refusal. The
   worker refuses to construct any PagerDuty executor without the entitlement
-  (`cmd/dev-health-worker/provider_sync.go`, `errWorkerDependencyUnavailable`),
+  (`internal/workerservice/provider_sync.go`, `errWorkerDependencyUnavailable`),
   the same fail-closed posture Jira incidents already had.
 - **The finalize → cache hop (CHAOS-4226, closed).** Before CHAOS-4226 the
   native finalize's only invalidation was the Postgres one
@@ -1441,7 +1441,7 @@ table, including on an already-initialised volume.
 Provisioning runs from the **ops runtime image** (`DEV_HEALTH_IMAGE`) — it
 carries both `psql` and `provision_river_roles.sql`
 (`docker/Dockerfile:98`). The posture assertions that check those grants ship in
-the **Go worker image** (`DEV_HEALTH_GO_WORKER_IMAGE`).
+the **Go worker image**, the dho image (`DEV_HEALTH_GO_DHO_IMAGE`).
 
 **A posture change requires both images to be bumped in the same deploy.** Bump
 only the worker image and the new assertion checks grants the old provisioning
@@ -1507,7 +1507,7 @@ a `max_attempts = 3` job's entire retry budget and discard it permanently
 Two structural facts follow, and both are open:
 
 * **Readiness is evaluated at startup only.** `preclaim-readiness`
-  (`cmd/dev-health-worker/dependencies.go:309`) correctly refuses to start a
+  (`internal/workerservice/dependencies.go:309`) correctly refuses to start a
   worker whose pools are unreachable, and it fails closed. But it is never
   re-evaluated, so a dependency that leaves *after* admission is invisible: the
   containers stayed `Up (healthy)` with no restarts through the whole two-hour

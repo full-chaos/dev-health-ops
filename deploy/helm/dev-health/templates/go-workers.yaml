@@ -2,6 +2,8 @@
 {{- if .Values.goWorkers.enabled }}
 {{- range $group := .Values.goWorkers.groups }}
 {{- $coordinator := has $group.name (list "reconciler" "scheduler") }}
+{{- /* One image for every group (goWorkers.image); a group's own `image` overrides it. */}}
+{{- $image := $group.image | default $.Values.goWorkers.image }}
 {{- /*
 CHAOS-4428: fail the render when a `metrics` group's grace period is too
 short to finish a job it has already claimed.
@@ -39,8 +41,8 @@ refuses the `stream-runner` verb as a positional argument and exits 2. A
 stream group must run an image whose entrypoint is dho (go-dho, or the
 operator image that also ships dho).
 */}}
-{{- if and $group.runtimeProfile (contains "dev-health-go-stream-runner" ($group.image | default "")) }}
-{{- fail (printf "goWorkers.groups[%s]: image %q is the retired dev-health-go-stream-runner image, which has no dho entrypoint and exits 2 on `stream-runner`; use the dev-health-go-dho image." $group.name $group.image) }}
+{{- if and $group.runtimeProfile (contains "dev-health-go-stream-runner" $image) }}
+{{- fail (printf "goWorkers.groups[%s]: image %q is the retired dev-health-go-stream-runner image, which has no dho entrypoint and exits 2 on `stream-runner`; use the dev-health-go-dho image." $group.name $image) }}
 {{- end }}
 {{- /*
 The `reconciler` and `scheduler` groups are `dho reconciler` and `dho
@@ -55,9 +57,22 @@ have no dho entrypoint.
 {{- if ne (eq $group.name $verb) (eq ($group.subcommand | default "") $verb) }}
 {{- fail (printf "goWorkers.groups[%s]: the %s group and only it runs `dho %s`; it needs subcommand: %s, and no other group may set it (got subcommand %q)." $group.name $verb $verb $verb ($group.subcommand | default "")) }}
 {{- end }}
-{{- if contains (printf "dev-health-go-%s" $verb) ($group.image | default "") }}
-{{- fail (printf "goWorkers.groups[%s]: image %q is the retired dev-health-go-%s image, which has no dho entrypoint; use the dev-health-go-dho image with subcommand: %s." $group.name $group.image $verb $verb) }}
+{{- if contains (printf "dev-health-go-%s" $verb) $image }}
+{{- fail (printf "goWorkers.groups[%s]: image %q is the retired dev-health-go-%s image, which has no dho entrypoint; use the dev-health-go-dho image with subcommand: %s." $group.name $image $verb $verb) }}
 {{- end }}
+{{- end }}
+{{- /*
+A group with `queues` is `dho worker`, the River worker, and `dho worker`
+needs the queues it consumes. A queue group without the verb would hand dho
+its flags as a command and exit 2, and the verb without queues fails the
+worker's own required --queues. Refuse both, and the retired
+dev-health-go-worker image, which has no dho entrypoint.
+*/}}
+{{- if ne (not (empty ($group.queues | default (list)))) (eq ($group.subcommand | default "") "worker") }}
+{{- fail (printf "goWorkers.groups[%s]: a group with queues runs `dho worker` and needs subcommand: worker, and `dho worker` needs queues (queues %v, subcommand %q)." $group.name ($group.queues | default (list)) ($group.subcommand | default "")) }}
+{{- end }}
+{{- if regexMatch "(^|/)dev-health-go-worker([:@]|$)" $image }}
+{{- fail (printf "goWorkers.groups[%s]: image %q is the retired dev-health-go-worker image, which has no dho entrypoint; use the dev-health-go-dho image with subcommand: worker." $group.name $image) }}
 {{- end }}
 {{- /*
 A `subcommand` is a dho verb, so the group's image must be one whose
@@ -66,8 +81,8 @@ ships dho (prod pins it). Any other image would receive the verb as a
 positional argument its own binary rejects. The repository is matched by its
 last path element, so a registry prefix, a tag and a digest are all allowed.
 */}}
-{{- if and $group.subcommand (not (regexMatch "(^|/)dev-health-go-(dho|operator)([:@]|$)" ($group.image | default ""))) }}
-{{- fail (printf "goWorkers.groups[%s]: subcommand %q is a dho verb, but image %q is not a dho image (dev-health-go-dho or dev-health-go-operator); its own binary would reject the verb." $group.name $group.subcommand ($group.image | default "")) }}
+{{- if and $group.subcommand (not (regexMatch "(^|/)dev-health-go-(dho|operator)([:@]|$)" $image)) }}
+{{- fail (printf "goWorkers.groups[%s]: subcommand %q is a dho verb, but image %q is not a dho image (dev-health-go-dho or dev-health-go-operator); its own binary would reject the verb." $group.name $group.subcommand $image) }}
 {{- end }}
 ---
 apiVersion: apps/v1
@@ -128,7 +143,7 @@ spec:
       securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
       containers:
         - name: {{ $group.name }}
-          image: {{ $group.image }}
+          image: {{ $image }}
           # CHAOS-4984: goWorkers.imagePullPolicy, NEVER image.pullPolicy --
           # see values.yaml's goWorkers.imagePullPolicy comment for why.
           imagePullPolicy: {{ $.Values.goWorkers.imagePullPolicy }}

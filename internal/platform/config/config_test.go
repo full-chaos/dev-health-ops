@@ -810,7 +810,7 @@ func TestSyncObservationTimeoutDefaultAndOverride(t *testing.T) {
 // TestBlankValuesAreTreatedAsUnsetOnBothSurfaces pins the edge the removed
 // conflict branches used to arbitrate.
 //
-// ShutdownTimeoutExplicit feeds cmd/dev-health-worker's drain-budget decision:
+// ShutdownTimeoutExplicit feeds internal/workerservice's drain-budget decision:
 // when it is false and the grace is at the package default, the worker derives
 // its budget from the queue selection instead of trusting 30s. A blank value
 // that read as "explicitly set" would silently hand a real worker a 30s drain

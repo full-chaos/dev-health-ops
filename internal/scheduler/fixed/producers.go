@@ -664,7 +664,7 @@ func NewRemainingMetricsFanoutProducer(
 					})
 				},
 				// dora also dispatches on the post-sync trigger
-				// (cmd/dev-health-worker/sync_dispatch.go's
+				// (internal/workerservice/sync_dispatch.go's
 				// postSyncRemainingScope "dora" case) with generation
 				// "post-sync:<sync_run_id>", a different format from this
 				// schedule's "fixed-schedule:dora_daily_fanout:<time>" --

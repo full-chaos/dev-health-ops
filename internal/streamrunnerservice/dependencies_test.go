@@ -22,7 +22,7 @@ import (
 // TestReadinessCheckFailuresLogTheCheckNameAndUnderlyingError proves
 // ClickHouseReady/DomainPostgresReady/ValkeyReady no longer swallow their
 // underlying dependency error -- CHAOS-5454, the same swallowed-readiness
-// class CHAOS-5435 fixed for cmd/dev-health-worker and
+// class CHAOS-5435 fixed for internal/workerservice and
 // internal/reconcilerservice. The domain_postgres cases build a REAL,
 // live-but-failing *pgxpool.Pool dialing a refused local port (reusing
 // internal/storage/postgres's own
@@ -180,7 +180,7 @@ func TestReadinessCheckFailuresLogTheCheckNameAndUnderlyingError(t *testing.T) {
 
 // TestReadinessChecksWithNoLoggerNeverPanic proves logDependencyCheckFailure
 // is a no-op, not a nil-pointer panic, when a productionStreamStorage was
-// built with no logger -- the same shape cmd/dev-health-worker's
+// built with no logger -- the same shape internal/workerservice's
 // TestReadinessCheckWithNoLoggerNeverPanics exercises for
 // *workerDependencies.
 func TestReadinessChecksWithNoLoggerNeverPanic(t *testing.T) {

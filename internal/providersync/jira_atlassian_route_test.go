@@ -294,7 +294,7 @@ func TestJiraAtlassianRouteCountsFailedAndRetriedWorklogAndSprintAttempts(t *tes
 // origin/main -- the fetch_dev_status option does not exist on
 // JiraAtlassianRouteHandler there. codex round 1 (P1) found the first
 // implementation wired this into JiraWorkItemsRouteHandler instead, which
-// the worker (cmd/dev-health-worker/provider_sync.go) never constructs for
+// the worker (internal/workerservice/provider_sync.go) never constructs for
 // Jira work-items -- JiraAtlassianRouteHandler is the actually-active route.
 func TestJiraAtlassianRouteDevStatusSyncsPrimaryDependencyRow(t *testing.T) {
 	claim := jiraAtlassianClaim()

@@ -204,7 +204,7 @@ func PlanRecompute(scope PlanScope, now time.Time) Plan {
 // run identity (jobcontract.DailyMetricsDispatchPayload is just run_id) and one
 // daily_metrics_runs row is scoped to exactly one target_day, so the same
 // window is expressed as BackfillDays separate runs. maxBackfillDays (14)
-// already bounds this, and it is the same bound cmd/dev-health-worker/
+// already bounds this, and it is the same bound internal/workerservice/
 // sync_dispatch.go's maxPostSyncDailyBackfillDays picked independently for the
 // identical "one sync must not burst dozens of day-pipelines" reason.
 func (plan Plan) DailyTargetDays() []time.Time {

@@ -81,7 +81,7 @@ type WriteOutcome struct {
 //     producers of work-graph requests each stamp their own prefix and no two
 //     of them collide: "ext-recompute:" (internal/externalrecompute/enqueue.go,
 //     shared with workerctl's replay of the same seam), "post-sync:"
-//     (cmd/dev-health-worker/sync_dispatch.go), "fixed-schedule:"
+//     (internal/workerservice/sync_dispatch.go), "fixed-schedule:"
 //     (internal/scheduler/fixed/producers.go) and "manual-trigger:"
 //     (internal/workersctl/trigger_investment.go). That separation is
 //     load-bearing rather than tidy: a post-sync materialize request can be the

@@ -8,7 +8,7 @@ source_of_truth:
   - src/dev_health_ops/providers/teams.py
   - src/dev_health_ops/migrations/clickhouse/051_team_attribution_dimensions.sql
   - src/dev_health_ops/migrations/clickhouse/053_manual_attribution_fallbacks.sql
-  - cmd/dev-health-worker/daily.go
+  - internal/workerservice/daily.go
   - internal/jobs/metrics/daily/compatibility_http.go
 applicability: current
 lifecycle: active
@@ -1001,7 +1001,7 @@ What moved is dispatch. The daily chain is now:
 metrics.daily_dispatch (Go, go_default/river)
   → Go orchestrates run and partition state (internal/jobs/metrics/daily)
   → HTTP compatibility bridge: POST /internal/worker/daily-metrics/v1/execute
-    (cmd/dev-health-worker/daily.go:97, daily.NewHTTPCompatibilityExecutor)
+    (internal/workerservice/daily.go:97, daily.NewHTTPCompatibilityExecutor)
   → Python compute_work_item_team_attributions / write_work_item_team_attributions
 ```
 
@@ -1025,7 +1025,7 @@ is read only by its own test (`internal/jobs/metrics/daily/families_test.go`); t
 `//go:embed families.json` in this tree is in `internal/jobs/metrics/remaining/families.go`, and it
 embeds a *different* file (`internal/jobs/metrics/remaining/families.json`, a different job family
 list entirely). Do not treat `daily/families.json`'s `port` field as evidence of what actually runs —
-the compatibility-bridge chain above is verified in `cmd/dev-health-worker/daily.go` and is what
+the compatibility-bridge chain above is verified in `internal/workerservice/daily.go` and is what
 executes. Two prior investigations were misled by this file; if you are deciding whether attribution
 runs through Go, read the wiring in `daily.go`, not this JSON file.
 
@@ -1499,7 +1499,7 @@ the READ side that turns that evidence into a team vote, IS ported to Go
 (`cmd/query-api/internal/analytics/investment.go`, serving the GraphQL `analytics` root) — only the
 WRITE side (the materializer that produces `structural_evidence_json` in the first place) has no
 Go-native COMPUTE — Go does own the execution orchestration (River job registration and the
-HTTP compatibility bridge to Python, `cmd/dev-health-worker/workgraph.go:23-53`) and the
+HTTP compatibility bridge to Python, `internal/workerservice/workgraph.go:23-53`) and the
 `work_item_dependencies` write (verified correct for Linear, see the table above); it just doesn't
 run the graph/materialization logic itself. The materializer node is marked as the confirmed CHAOS-4752 defect, root-caused
 as **CHAOS-4758**: Linear `relates`/`blocks` edges captured at confidence 1.0 (`work_graph/builder.py:905`)
@@ -2135,7 +2135,7 @@ detail the comments actually reference (the resolver internals), not at `work-gr
 | Recovery runbook | §5 above; backfill `backfill/runner.py`, investment `workers/work_graph_tasks.py` |
 | Tests | `tests/test_linked_issue_team_inheritance.py`, `tests/test_pr_issue_link_capture.py` |
 | Schema (base + widened) | `migrations/clickhouse/051_team_attribution_dimensions.sql`, `migrations/clickhouse/053_manual_attribution_fallbacks.sql` — see §0.6 |
-| Go dispatch → Python compatibility bridge (added §0.6) | `cmd/dev-health-worker/daily.go` (`NewHTTPCompatibilityExecutor`), `internal/jobs/metrics/daily/compatibility_http.go` |
+| Go dispatch → Python compatibility bridge (added §0.6) | `internal/workerservice/daily.go` (`NewHTTPCompatibilityExecutor`), `internal/jobs/metrics/daily/compatibility_http.go` |
 
 > All Python paths above are repo-relative to `src/dev_health_ops/` (e.g. `metrics/compute_work_items.py`
 > is `src/dev_health_ops/metrics/compute_work_items.py`). All Go paths are repo-relative to `ops/`.

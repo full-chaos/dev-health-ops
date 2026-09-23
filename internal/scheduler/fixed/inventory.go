@@ -96,7 +96,7 @@ func checkedInSchedules() []Schedule {
 		},
 		// CHAOS-4243 decision note: metrics.remaining.extra_metrics/team_metrics
 		// no longer exist anywhere in this codebase (not in this scheduler, not
-		// in contracts/jobs/v1/registry.json, not in cmd/dev-health-worker's
+		// in contracts/jobs/v1/registry.json, not in internal/workerservice's
 		// handler wiring, not in internal/jobs/metrics/remaining/families.json).
 		// They were registered handlers with zero producer anywhere -- the
 		// orchestrator ruled that "registered but unbound" is itself the broken
@@ -719,7 +719,7 @@ func RetiredBeatInventory() []RetiredLegacyEntry {
 		{
 			Name:    "monitor-queue-depths",
 			Cadence: EveryInterval(60 * time.Second),
-			Reason: "queueHealthMonitor (cmd/dev-health-worker/queue_health.go) has owned this " +
+			Reason: "queueHealthMonitor (internal/workerservice/queue_health.go) has owned this " +
 				"cadence in prod since CHAOS-3040 P2 (#1738); the legacy monitor_queue_depths " +
 				"Celery task probed kombu/Valkey list depth, which has no River analogue, and " +
 				"the ask-dev-acceptance probe now checks River queue depth directly.",

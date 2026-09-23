@@ -90,7 +90,7 @@ func RegisterWorkers(
 
 // TeamAutoImporter is the narrow seam RegisterTeamAutoimportWorker depends
 // on: every provider that can ever write real team-catalog data now has a
-// registered native collector (see cmd/dev-health-worker/
+// registered native collector (see internal/workerservice/
 // team_catalog_clients.go), so the worker consuming sync.team_autoimport
 // jobs no longer needs the wide bridge (Dispatch/Finalize/Discover) -- only
 // the one method it actually calls.

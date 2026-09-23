@@ -115,7 +115,7 @@ type Deps struct {
 	// ClickHouseDSN is the org-deletion route's analytics-table purge
 	// connection (CHAOS-6306), sourced from CLICKHOUSE_URI -- the same
 	// broadly-privileged, unrestricted-posture credential
-	// cmd/dev-health-worker's own daily/sync/reports jobs already use, NOT
+	// internal/workerservice's own daily/sync/reports jobs already use, NOT
 	// deps.ClickHouse/API_CLICKHOUSE_URI (that connection is locked to
 	// chclickhouse.APIPosture's closed, exact manifest -- teams/identities
 	// only -- so it structurally cannot hold ALTER DELETE on org-deletion's

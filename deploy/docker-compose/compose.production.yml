@@ -578,7 +578,7 @@ services:
         condition: service_completed_successfully
 
   go-worker-heavy: &go-worker
-    image: ${DEV_HEALTH_GO_WORKER_IMAGE:-ghcr.io/full-chaos/dev-health-go-worker:latest}
+    image: ${DEV_HEALTH_GO_DHO_IMAGE:-ghcr.io/full-chaos/dev-health-go-dho:latest}
     labels:
       dev-health.io/worker-group: heavy
     restart: unless-stopped
@@ -587,6 +587,7 @@ services:
     security_opt: [no-new-privileges:true]
     tmpfs: [/tmp]
     command:
+      - worker
       - --queues=investment,metrics,reports,workgraph
       - --queue-concurrency=investment=1,metrics=2,reports=2,workgraph=1
       - --worker-group=heavy
@@ -629,6 +630,7 @@ services:
     labels:
       dev-health.io/worker-group: ops
     command:
+      - worker
       - --queues=coverage,heartbeat,retention,webhooks
       - --queue-concurrency=coverage=1,heartbeat=1,retention=1,webhooks=4
       - --worker-group=ops
@@ -665,6 +667,7 @@ services:
     labels:
       dev-health.io/worker-group: sync
     command:
+      - worker
       - --queues=sync
       - --queue-concurrency=sync=4
       - --worker-group=sync
@@ -699,6 +702,7 @@ services:
     labels:
       dev-health.io/worker-group: sync-provider
     command:
+      - worker
       - --queues=sync_provider
       - --queue-concurrency=sync_provider=2
       - --worker-group=sync-provider
@@ -962,7 +966,7 @@ services:
   #   A replica costs its queue-control pgxpool (WORKER_DATABASE_MAX_CONNS, 2)
   #   plus one River notifier LISTEN session -- but ONLY if it starts a River
   #   client. Traced to code, not assumed: only the "river" runtime does
-  #   (cmd/dev-health-worker/river_process.go calls Client.Start). The
+  #   (internal/workerservice/river_process.go calls Client.Start). The
   #   "control" runtime builds a River client and drives it through the *Tx
   #   APIs, so no notifier attaches; the "stream" runtime opens no queue pool
   #   at all despite inheriting WORKER_DATABASE_URI from a YAML anchor; and

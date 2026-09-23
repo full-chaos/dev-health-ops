@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "generated_from": "cmd/dev-health-worker/daily.go + workgraph.go (static AST parse, cmd/dev-health-worker/native_families_artifact_test.go)",
+  "generated_from": "internal/workerservice/daily.go + workgraph.go (static AST parse, internal/workerservice/native_families_artifact_test.go)",
   "daily": {
     "ai_governance": "native",
     "ai_impact": "native",

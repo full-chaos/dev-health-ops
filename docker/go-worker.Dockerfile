@@ -43,7 +43,6 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     set -eu; \
     for command in \
-        dev-health-worker \
         dev-health-worker-migrate \
         dho; do \
       GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" go build \
@@ -57,39 +56,38 @@ RUN --mount=type=cache,target=/go/pkg/mod \
         "./cmd/${command}"; \
     done; \
     mkdir -p \
-      /runtime/worker/usr/local/bin \
-      /runtime/worker/app/contracts/jobs \
-      /runtime/worker/app/config \
-      /runtime/worker/app/deploy/go-workers \
       /runtime/operator/usr/local/bin \
       /runtime/operator/app/contracts/jobs \
       /runtime/operator/app/contracts/sync-dispatch \
       /runtime/operator/app/deploy/go-workers \
+      /runtime/operator/app/config \
       /runtime/contractcheck/usr/local/bin \
       /runtime/contractcheck/app/contracts/jobs \
       /runtime/contractcheck/app/deploy/go-workers \
       /runtime/migrate/usr/local/bin \
       /runtime/dho/usr/local/bin \
       /runtime/dho/app/contracts/jobs \
-      /runtime/dho/app/contracts/sync-dispatch; \
-    cp /out/dev-health-worker /runtime/worker/usr/local/bin/dev-health-worker; \
-    cp /out/dho /runtime/worker/usr/local/bin/dho; \
+      /runtime/dho/app/contracts/sync-dispatch \
+      /runtime/dho/app/deploy/go-workers \
+      /runtime/dho/app/config; \
     cp /out/dho /runtime/operator/usr/local/bin/dho; \
     cp /out/dho /runtime/contractcheck/usr/local/bin/dho; \
-    cp -R /src/contracts/jobs/v1 /runtime/worker/app/contracts/jobs/v1; \
-    cp /src/deploy/go-workers/deployment.json /runtime/worker/app/deploy/go-workers/deployment.json; \
-    cp /src/src/dev_health_ops/config/status_mapping.yaml /runtime/worker/app/config/status_mapping.yaml; \
-    cp /src/src/dev_health_ops/config/investment_areas.yaml /runtime/worker/app/config/investment_areas.yaml; \
-    cp /src/src/dev_health_ops/config/complexity.yaml /runtime/worker/app/config/complexity.yaml; \
     cp -R /src/contracts/jobs/v1 /runtime/operator/app/contracts/jobs/v1; \
     cp -R /src/contracts/sync-dispatch/v1 /runtime/operator/app/contracts/sync-dispatch/v1; \
     cp /src/deploy/go-workers/deployment.json /runtime/operator/app/deploy/go-workers/deployment.json; \
+    cp /src/src/dev_health_ops/config/status_mapping.yaml /runtime/operator/app/config/status_mapping.yaml; \
+    cp /src/src/dev_health_ops/config/investment_areas.yaml /runtime/operator/app/config/investment_areas.yaml; \
+    cp /src/src/dev_health_ops/config/complexity.yaml /runtime/operator/app/config/complexity.yaml; \
+    cp /src/src/dev_health_ops/config/status_mapping.yaml /runtime/dho/app/config/status_mapping.yaml; \
+    cp /src/src/dev_health_ops/config/investment_areas.yaml /runtime/dho/app/config/investment_areas.yaml; \
+    cp /src/src/dev_health_ops/config/complexity.yaml /runtime/dho/app/config/complexity.yaml; \
     cp -R /src/contracts/jobs/v1 /runtime/contractcheck/app/contracts/jobs/v1; \
     cp /src/deploy/go-workers/deployment.json /runtime/contractcheck/app/deploy/go-workers/deployment.json; \
     cp /out/dev-health-worker-migrate /runtime/migrate/usr/local/bin/dev-health-worker-migrate; \
     cp /out/dho /runtime/dho/usr/local/bin/dho; \
     cp -R /src/contracts/jobs/v1 /runtime/dho/app/contracts/jobs/v1; \
     cp -R /src/contracts/sync-dispatch/v1 /runtime/dho/app/contracts/sync-dispatch/v1; \
+    cp /src/deploy/go-workers/deployment.json /runtime/dho/app/deploy/go-workers/deployment.json; \
     find /runtime -exec touch -d "@${SOURCE_DATE_EPOCH}" {} +
 
 FROM ${GO_RUNTIME_IMAGE} AS runtime
@@ -108,11 +106,6 @@ LABEL org.opencontainers.image.title="Dev Health Go worker runtime" \
 USER 65532:65532
 EXPOSE 8080
 
-FROM runtime AS worker
-COPY --from=build --chown=65532:65532 /runtime/worker/ /
-WORKDIR /app
-ENTRYPOINT ["/usr/local/bin/dev-health-worker"]
-
 # The operator image runs dho; route activation passes `workers routes apply
 # ...` as args (spec S2 folded dev-health-workerctl into `dho workers`).
 FROM runtime AS operator
@@ -130,13 +123,16 @@ CMD ["contracts", "validate"]
 
 # dho is the operator binary (cmd/dho): one binary whose compiled-in
 # verticals are selected by the first argument, so every Deployment of it
-# passes its subcommand as args (`dho api`, `dho stream-runner
-# --profile=...`, `dho reconciler`, `dho scheduler`). The api vertical's
-# webhook-intake routes (CHAOS-6247), the reconciler and the scheduler load the
-# checked-in contracts/jobs/v1 manifest (jobruntime.Load), and the reconciler
-# also loads contracts/sync-dispatch/v1 -- so, like worker/operator/
-# contractcheck, this target stages them under /app and declares a WORKDIR.
-# The stream-runner verb reads no staged file.
+# passes its subcommand as args (`dho api`, `dho worker --queues=...`,
+# `dho stream-runner --profile=...`, `dho reconciler`, `dho scheduler`). The
+# api webhook-intake routes (CHAOS-6247), the worker, the reconciler and the
+# scheduler load the checked-in contracts/jobs/v1 manifest (jobruntime.Load);
+# the reconciler also loads contracts/sync-dispatch/v1; the worker also reads
+# deploy/go-workers/deployment.json and the three config YAMLs under
+# /app/config -- so, like operator/contractcheck, this target stages them
+# under /app and declares a WORKDIR. The operator image stages the same files,
+# because prod pins it for every dho service. The stream-runner verb reads no
+# staged file.
 FROM runtime AS dho
 COPY --from=build --chown=65532:65532 /runtime/dho/ /
 WORKDIR /app

@@ -42,9 +42,8 @@
 # BIN_DIR (caller-set global; created by the caller beforehand).
 # ---------------------------------------------------------------------------
 build_go_binaries() {
-  echo "==> building Go binaries (dho, dev-health-worker)"
+  echo "==> building Go binaries (dho)"
   go build -o "${BIN_DIR}/dho" ./cmd/dho
-  go build -o "${BIN_DIR}/dev-health-worker" ./cmd/dev-health-worker
 }
 
 # ---------------------------------------------------------------------------
@@ -227,7 +226,7 @@ wait_for_http_ready() {
 
 # ---------------------------------------------------------------------------
 # start_worker_stack worker_log_file reconciler_log_file -- starts
-# dev-health-worker (queues: metrics, sync) and dho reconciler in the
+# dho worker (queues: metrics, sync) and dho reconciler in the
 # background, sets WORKER_PID/RECONCILER_PID, and waits for both /readyz
 # endpoints. Brackets both launches with `set -m`/`set +m` itself (job
 # control ON for the launches: without it a background job stays in THIS
@@ -243,7 +242,7 @@ start_worker_stack() {
 
   set -m
 
-  echo "==> starting dev-health-worker (queues: metrics, sync)"
+  echo "==> starting dho worker (queues: metrics, sync)"
   (
     export POSTGRES_URI="postgresql://${RIVER_DOMAIN_ROLE}:${RIVER_DOMAIN_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}"
     export WORKER_DATABASE_URI="postgresql://${RIVER_QUEUE_ROLE}:${RIVER_QUEUE_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}"
@@ -265,7 +264,7 @@ start_worker_stack() {
     # CHAOS-5025 tried 120s and then 30s on the theory that 2h1m was an
     # unbounded-teardown time bomb. It is not, and the worker REFUSES to
     # start below the contract (CHAOS-3873,
-    # cmd/dev-health-worker/dependencies.go:1247+):
+    # internal/workerservice/dependencies.go:1247+):
     #
     #     workerDrainBudget = shutdownTimeout - workerFinalizationBuffer(60s)
     #     require workerDrainBudget >= longestTimeout of the selected queues
@@ -280,7 +279,7 @@ start_worker_stack() {
     # TEARDOWN_WAIT_SECS (60s) regardless of what the worker asks for, so the
     # harness bound dominates and the worker's own grace never decides how
     # long teardown takes.
-    exec "${BIN_DIR}/dev-health-worker" \
+    exec "${BIN_DIR}/dho" worker \
       --queues=metrics,sync \
       --queue-concurrency=metrics=2,sync=1 \
       --worker-group=heavy \
@@ -315,7 +314,7 @@ start_worker_stack() {
 
   set +m
 
-  wait_for_http_ready "dev-health-worker" "http://127.0.0.1:${WORKER_HTTP_PORT}/readyz" "${worker_log_file}" WORKER_PID
+  wait_for_http_ready "dho worker" "http://127.0.0.1:${WORKER_HTTP_PORT}/readyz" "${worker_log_file}" WORKER_PID
   wait_for_http_ready "dho reconciler" "http://127.0.0.1:${RECONCILER_HTTP_PORT}/readyz" "${reconciler_log_file}" RECONCILER_PID
 }
 
@@ -393,7 +392,7 @@ stop_service() {
 # header comment: no longer load-bearing, kept as a conservative
 # convention). Reads: WORKER_PID, RECONCILER_PID.
 stop_worker_stack() {
-  stop_service "dev-health-worker" "${WORKER_PID}"
+  stop_service "dho worker" "${WORKER_PID}"
   stop_service "dho reconciler" "${RECONCILER_PID}"
 }
 

@@ -227,3 +227,101 @@ func TestProveOneRESTRequest_CandidateShapeStillRefusesUnexpectedBaselineStatus(
 		t.Fatalf("out = %+v, want a named RESTRefusalUnexpectedStatus refusal (baseline recovered to 200)", out)
 	}
 }
+
+// TestProveOneRESTRequest_DeletedBodyStatusOnlyAlsoTerminatesUnsupported
+// proves the OTHER half of the deleted-body override never writes
+// TerminalStateMatch either: a deleted-body request whose CANDIDATE itself
+// does not reach 200 (a Go-side 404/422/503 refusal) gets
+// RESTBodyModeStatusOnly, not RESTBodyModeCandidateShape, so it never runs
+// AssertRESTCandidateShape at all -- but it still compares no body, and an
+// admitted status_only request otherwise defaults its terminal state to
+// "match" (proveOneRESTRequest's own zero value). Uses the real committed
+// corpus entry GET /api/v1/flame's own unknown_entity_type (candidate 404,
+// handler-computed, not framework-level -- restdeletedbody.go converts it
+// to status_only/500), the exact shape a round-2 review reproduced as a
+// false "match" receipt before this fix.
+func TestProveOneRESTRequest_DeletedBodyStatusOnlyAlsoTerminatesUnsupported(t *testing.T) {
+	const build = "abc123def456"
+	spec, err := goapiproof.SpecForREST("REST:GET:/api/v1/flame")
+	if err != nil {
+		t.Fatalf("SpecForREST: %v", err)
+	}
+	var request goapiproof.RESTRequest
+	for _, r := range spec.Requests {
+		if r.Name == "unknown_entity_type" {
+			request = r
+		}
+	}
+	if request.Name == "" {
+		t.Fatal("GET /api/v1/flame has no unknown_entity_type entry")
+	}
+	if request.BodyMode != goapiproof.RESTBodyModeStatusOnly || request.WantCandidateStatus != 404 || request.WantBaselineStatus != 500 {
+		t.Fatalf("unknown_entity_type = %+v, want (404, 500)/status_only -- corpus shape changed, update this test's fixture", request)
+	}
+	candidate := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("x-dev-health-build", build)
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"detail":"not found"}`))
+	}))
+	defer candidate.Close()
+	baseline := sentinelBaseline(t)
+	f := flags{queryAPIURL: candidate.URL, pythonAPIURL: baseline.URL, org: "org-1", recordedBy: "chris", reviewEvidence: "test", timeout: 5 * time.Second}
+	writer := &fakeReceiptWriter{}
+	out, err := proveOneRESTRequest(context.Background(), goapiproof.NewLegClient(0), f, "REST:GET:/api/v1/flame", spec, request,
+		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), writer, nil, false, nil)
+	if err != nil {
+		t.Fatalf("proveOneRESTRequest: %v", err)
+	}
+	if !out.Admitted {
+		t.Fatalf("request refused: %s -- %s", out.Refusal, out.Detail)
+	}
+	if out.TerminalState != goapiproof.TerminalStateUnsupported {
+		t.Fatalf("TerminalState = %q, want unsupported -- a status_only deleted-body receipt must not satisfy EnablementProofClause either", out.TerminalState)
+	}
+	if len(writer.receipts) != 1 || writer.receipts[0].TerminalState != goapiproof.TerminalStateUnsupported {
+		t.Fatalf("receipts = %+v, want exactly 1 with TerminalState unsupported", writer.receipts)
+	}
+}
+
+// TestProveOneRESTRequest_UnrelatedStatusOnlyStillTerminatesMatch is the
+// negative control for the fix above: an admitted status_only request
+// whose StatusDivergenceReason is NOT goapiproof.PythonBodyDeletedReason
+// (a pre-existing, unrelated declared-baseline-failure entry, the
+// CHAOS-5868 shape -- every real corpus operation is a deleted-body one
+// today, so this is constructed rather than looked up) keeps writing
+// TerminalStateMatch exactly as it always has. The fix is scoped by
+// StatusDivergenceReason, not by BodyMode alone, and this proves that
+// scope actually holds rather than silently widening to every status_only
+// entry.
+func TestProveOneRESTRequest_UnrelatedStatusOnlyStillTerminatesMatch(t *testing.T) {
+	const build = "abc123def456"
+	candidate := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("x-dev-health-build", build)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer candidate.Close()
+	baseline := httptest.NewServer(referencePlane(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(`{"detail":"Data unavailable"}`))
+	})))
+	defer baseline.Close()
+	f := flags{queryAPIURL: candidate.URL, pythonAPIURL: baseline.URL, org: "org-1", recordedBy: "chris", reviewEvidence: "test", timeout: 5 * time.Second}
+	spec := goapiproof.RESTEndpointSpec{Method: http.MethodGet, Path: "/api/v1/quadrant"}
+	request := goapiproof.RESTRequest{
+		Name: "wip_throughput_org", WantCandidateStatus: 200, WantBaselineStatus: 503,
+		StatusDivergenceReason: "constructed for this test, unrelated to the deleted-body override",
+		BodyMode:               goapiproof.RESTBodyModeStatusOnly,
+	}
+	writer := &fakeReceiptWriter{}
+	out, err := proveOneRESTRequest(context.Background(), goapiproof.NewLegClient(0), f, "REST:GET:/api/v1/quadrant", spec, request,
+		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), writer, nil, false, nil)
+	if err != nil {
+		t.Fatalf("proveOneRESTRequest: %v", err)
+	}
+	if !out.Admitted {
+		t.Fatalf("request refused: %s -- %s", out.Refusal, out.Detail)
+	}
+	if out.TerminalState != goapiproof.TerminalStateMatch {
+		t.Fatalf("TerminalState = %q, want match -- an unrelated status_only entry's terminal state must not change", out.TerminalState)
+	}
+}

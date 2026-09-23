@@ -2370,23 +2370,6 @@ func proveOneRESTRequest(
 				out.Detail = shapeErr.Error()
 				return out, nil
 			}
-			// TerminalStateUnsupported, never TerminalStateMatch: a
-			// liveness+kind check is not a body comparison, and writing
-			// "match" here would let this receipt satisfy
-			// EnablementProofClause (receipt.go) -- the SAME predicate
-			// go_api_routing_admin's `enable` preflight and
-			// migrationmatrix's REST "proven" column both read -- and
-			// silently promote a route on evidence no stronger than "the
-			// candidate answered something". "unsupported" is already the
-			// vocabulary's own word for "this pair could not be judged
-			// match or mismatch" (Compare's own watermark-missing/-drift
-			// cases use it identically), is already in the Postgres
-			// terminal_state CHECK constraint, and is already excluded by
-			// EnablementProofClause -- so this reaches a real receipt,
-			// still readable by an operator and by ReadRESTProof's own
-			// exclusion of it, without inventing a new DB value or a
-			// migration for it.
-			terminalState = goapiproof.TerminalStateUnsupported
 		}
 		out.producedIDs = make(map[string]string, len(request.Produces))
 		out.producedCandidateIDs = make(map[string][]string, len(request.Produces))
@@ -2422,6 +2405,32 @@ func proveOneRESTRequest(
 		}
 	}
 
+	// TerminalStateUnsupported, never TerminalStateMatch, for EVERY
+	// admitted request restdeletedbody.go's init() overrode (identified by
+	// its own PythonBodyDeletedReason, the one string it writes) --
+	// candidate_shape (asserted just above) AND status_only (the
+	// candidate's own want is not 200, e.g. a Go-side 404/422/503
+	// refusal): neither compares a baseline body, since there is none
+	// worth comparing against, so writing "match" would let either
+	// receipt satisfy EnablementProofClause (receipt.go) -- the SAME
+	// predicate go_api_routing_admin's `enable` preflight and
+	// migrationmatrix's REST "proven" column both read -- and silently
+	// promote a route on evidence no stronger than "the candidate
+	// answered its own expected status". "unsupported" is already the
+	// vocabulary's own word for "this pair could not be judged match or
+	// mismatch" (Compare's own watermark-missing/-drift cases use it
+	// identically), is already in the Postgres terminal_state CHECK
+	// constraint, and is already excluded by EnablementProofClause -- so
+	// this reaches a real receipt, still readable by an operator and by
+	// ReadRESTProof's own exclusion of it, without inventing a new DB
+	// value or a migration for it. Scoped by StatusDivergenceReason, not
+	// by BodyMode alone, so a PRE-EXISTING, unrelated status_only entry
+	// (e.g. the CHAOS-5868 baseline-503 class) keeps writing "match"
+	// exactly as it always has -- this never widens beyond what
+	// restdeletedbody.go itself touched.
+	if terminalState == goapiproof.TerminalStateMatch && request.StatusDivergenceReason == goapiproof.PythonBodyDeletedReason {
+		terminalState = goapiproof.TerminalStateUnsupported
+	}
 	out.TerminalState = terminalState
 	out.DifferencesOutsideBaselineDefect = differences
 	out.BaselineDefectsMatched = matchedDefects

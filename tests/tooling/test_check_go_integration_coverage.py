@@ -214,10 +214,12 @@ def test_integration_coverage_inventory_completes_and_stays_nonempty() -> None:
     # ported routes, each skipping without DEV_HEALTH_LIVE_PYTHON_ORACLES=1
     # but still discovered and registered under the plain integration tag).
     # 78 -> 80.
-    # CURRENT TOTAL: 80. Adding one -tags=integration package bumps every
+    # CHAOS-6247 added internal/api/webhookintake (80 -> 81): webhook-intake
+    # routes proved against real Postgres and real Valkey.
+    # CURRENT TOTAL: 81. Adding one -tags=integration package bumps every
     # literal below by +1 -- this is the one number to change; the
     # narrative above is for someone auditing history, not for the bump.
-    assert "80 package(s) discovered, 0 denylisted, 80 will run" in result.stdout
+    assert "81 package(s) discovered, 0 denylisted, 81 will run" in result.stdout
     # Name the package explicitly (SET MEMBERSHIP), not just the count --
     # a bare count is exactly what let CHAOS-4643's own literal drift
     # 31 -> 32 -> 33 unnoticed.

@@ -189,10 +189,6 @@ func buildHandler(options ServerOptions, logger *slog.Logger) (http.Handler, err
 
 	methodsByPattern := make(map[string][]string)
 	allowByPattern := make(map[string]string)
-	seen := make(map[string]struct{}, len(options.Routes))
-	for _, route := range options.Routes {
-		seen[route.Method+" "+route.Pattern] = struct{}{}
-	}
 	for _, route := range options.Routes {
 		if route.Handler == nil {
 			return nil, fmt.Errorf("route %s %s has no handler", route.Method, route.Pattern)
@@ -219,9 +215,9 @@ func buildHandler(options ServerOptions, logger *slog.Logger) (http.Handler, err
 	// when no method pattern matched. In the route mux a method-free
 	// /a/literal would conflict with GET /a/{id} (neither pattern is more
 	// specific), which net/http refuses to register; among method-free
-	// patterns alone the literal path is simply the more specific one. Its
-	// own "/" keeps the lookup the route mux's: an unmatched path resolves
-	// to "/" there, never to a trailing-slash redirect.
+	// patterns alone the literal path is simply the more specific one. Only
+	// a methodNotAllowed it returns is a 405: anything else (its own
+	// not-found or redirect) falls to the catch-all below.
 	pathMux := http.NewServeMux()
 	notAllowedByPattern := make(map[string]http.Handler, len(methodsByPattern))
 	for pattern, methods := range methodsByPattern {
@@ -235,19 +231,16 @@ func buildHandler(options ServerOptions, logger *slog.Logger) (http.Handler, err
 		notAllowedByPattern[pattern] = notAllowed
 		pathMux.Handle(pattern, notAllowed)
 	}
-	if _, routed := methodsByPattern["/"]; !routed {
-		pathMux.Handle("/", http.NotFoundHandler())
-	}
 
 	for _, route := range options.Routes {
 		handler := routeChain(route, options, logger, write)
-		// A GET pattern also matches HEAD in net/http's mux. With
-		// ExplicitHead the GET route itself refuses HEAD as its pattern's
-		// 405; a HEAD pattern registered beside it instead would conflict
-		// with a literal GET sibling of a wildcard (GET /a/literal beside
-		// HEAD /a/{id}), which net/http refuses to register.
-		_, hasHead := seen[http.MethodHead+" "+route.Pattern]
-		if options.ExplicitHead && route.Method == http.MethodGet && !hasHead {
+		// A GET pattern also matches HEAD in net/http's mux; a path with
+		// its own HEAD route sends HEAD there instead (the more specific
+		// pattern). With ExplicitHead the GET route itself refuses HEAD as
+		// its path's 405; a HEAD pattern registered beside it instead would
+		// conflict with a literal GET sibling of a wildcard (GET /a/literal
+		// beside HEAD /a/{id}), which net/http refuses to register.
+		if options.ExplicitHead && route.Method == http.MethodGet {
 			handler = refuseHead(handler, notAllowedByPattern[route.Pattern])
 		}
 		mux.Handle(route.Method+" "+route.Pattern, handler)
@@ -272,11 +265,10 @@ func buildHandler(options ServerOptions, logger *slog.Logger) (http.Handler, err
 		write(w, r, CodeNotFound)
 	}
 	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if handler, _ := pathMux.Handler(r); handler != nil {
-			if notAllowed, ok := handler.(*methodNotAllowed); ok {
-				notAllowed.ServeHTTP(w, r)
-				return
-			}
+		handler, _ := pathMux.Handler(r)
+		if notAllowed, ok := handler.(*methodNotAllowed); ok {
+			notAllowed.ServeHTTP(w, r)
+			return
 		}
 		notFound(w, r)
 	}))

@@ -1,6 +1,7 @@
 package teamsidentity
 
 import (
+	"math"
 	"net/http"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
@@ -16,7 +17,7 @@ import (
 func parseTeamImportRequest(object *pyjson.Object) (teams []discoveredTeam, onConflict string, problems pybody.Errors) {
 	rawTeams, ok := object.Get("teams")
 	if !ok {
-		problems = append(problems, pybody.Error{Type: "missing", Loc: []pyjson.Value{"body", "teams"}, Msg: "Field required", Input: nil})
+		problems = append(problems, pybody.Error{Type: "missing", Loc: []pyjson.Value{"body", "teams"}, Msg: "Field required", Input: object})
 	} else {
 		list, isList := rawTeams.([]pyjson.Value)
 		if !isList {
@@ -66,6 +67,17 @@ func parseDiscoveredTeam(raw pyjson.Value, loc []pyjson.Value) (discoveredTeam, 
 	providerType, _ := element.RequiredString(object, "provider_type", 1, 0)
 	providerTeamID, _ := element.RequiredString(object, "provider_team_id", 1, 0)
 	name, _ := element.RequiredString(object, "name", 1, 0)
+	description, hasDescription := element.OptionalString(object, "description", 0, 0)
+	memberCount, hasMemberCount := optionalLaxInt(&element, object, "member_count")
+	// associations: `dict[str, Any] = Field(default_factory=dict)` --
+	// absent is {}, an explicit null (or any non-dict) is a dict_type
+	// error, never silently replaced by {} (schemas_flat.py:578-585).
+	associations := pyjson.NewObject()
+	if nested, ok := element.DefaultedAnyDict(object, "associations"); ok {
+		associations = nested
+	}
+	// The pybody helpers report loc ["body", <field>]; nest each under this
+	// element's own loc ("body", "teams", <index>, <field>).
 	for _, e := range element {
 		e.Loc = append(append([]pyjson.Value(nil), loc...), e.Loc[1:]...)
 		problems = append(problems, e)
@@ -73,30 +85,57 @@ func parseDiscoveredTeam(raw pyjson.Value, loc []pyjson.Value) (discoveredTeam, 
 	if len(problems) > 0 {
 		return discoveredTeam{}, problems
 	}
-	var descriptionPtr *string
-	if raw, ok := object.Get("description"); ok && raw != nil {
-		if text, isString := raw.(string); isString {
-			descriptionPtr = &text
-		} else {
-			problems = append(problems, pybody.Error{
-				Type: "string_type", Loc: append(append([]pyjson.Value(nil), loc...), "description"),
-				Msg: "Input should be a valid string", Input: raw,
-			})
-		}
-	}
-	associations := pyjson.NewObject()
-	if raw, ok := object.Get("associations"); ok {
-		if nested, ok := raw.(*pyjson.Object); ok {
-			associations = nested
-		}
-	}
-	if len(problems) > 0 {
-		return discoveredTeam{}, problems
-	}
-	return discoveredTeam{
+	team := discoveredTeam{
 		ProviderType: providerType, ProviderTeamID: providerTeamID, Name: name,
-		Description: descriptionPtr, Associations: associations,
-	}, nil
+		Associations: associations,
+	}
+	if hasDescription {
+		team.Description = &description
+	}
+	if hasMemberCount {
+		team.MemberCount = &memberCount
+	}
+	return team, nil
+}
+
+// optionalLaxInt validates one pydantic `int | None` field the way pydantic's
+// default (lax) mode does, verified empirically against a live
+// TeamImportRequest: an int, a whole float (5.0), a bool (True -> 1) and a
+// numeric string ("5", " 7 ", "5.0") all coerce; a fractional float is
+// int_from_float, an unparseable string is int_parsing, anything else
+// (list, dict) is int_type. pybody.OptionalInt accepts JSON ints only, which
+// would answer 422 for inputs FastAPI accepts.
+func optionalLaxInt(problems *pybody.Errors, object *pyjson.Object, name string) (int64, bool) {
+	raw, ok := object.Get(name)
+	if !ok || raw == nil {
+		return 0, false
+	}
+	loc := []pyjson.Value{"body", name}
+	fail := func(errType, msg string) (int64, bool) {
+		*problems = append(*problems, pybody.Error{Type: errType, Loc: loc, Msg: msg, Input: raw})
+		return 0, false
+	}
+	switch value := raw.(type) {
+	case pyjson.Int:
+		return value.Int64(), true
+	case bool:
+		if value {
+			return 1, true
+		}
+		return 0, true
+	case pyjson.Float:
+		if float64(value) != math.Trunc(float64(value)) {
+			return fail("int_from_float", "Input should be a valid integer, got a number with a fractional part")
+		}
+		return int64(value), true
+	case string:
+		parsed, perr := pybody.ParsePydanticInt(value)
+		if perr != nil {
+			return fail(perr.Type, perr.Msg)
+		}
+		return parsed.Int64(), true
+	}
+	return fail("int_type", "Input should be a valid integer")
 }
 
 // importTeamsJSON mirrors TeamImportResponse (schemas_flat.py:602-606).

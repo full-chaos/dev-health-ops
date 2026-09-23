@@ -146,8 +146,25 @@ func stringListAssociation(associations *pyjson.Object, key string) ([]string, b
 	if !ok {
 		return nil, false
 	}
-	list, ok := value.([]string)
-	return list, ok
+	// A JSON-decoded request body carries arrays as []pyjson.Value; only
+	// hand-built values (tests, discovery output) are []string. Python passes
+	// `associations.get(key, [])` straight through, so string elements are
+	// what reach ClickHouse -- CHAOS-6311 r1's venue run showed an import
+	// silently dropping every project_keys/repo_patterns list because this
+	// only accepted []string.
+	switch list := value.(type) {
+	case []string:
+		return list, true
+	case []pyjson.Value:
+		out := make([]string, 0, len(list))
+		for _, item := range list {
+			if text, isString := item.(string); isString {
+				out = append(out, text)
+			}
+		}
+		return out, true
+	}
+	return nil, false
 }
 
 // importedTeamID mirrors import_teams' own team_id derivation

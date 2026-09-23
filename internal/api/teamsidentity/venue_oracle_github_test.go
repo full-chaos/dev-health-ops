@@ -3,10 +3,11 @@
 package teamsidentity
 
 import (
-	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,9 +17,11 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
 // venueOracleRequest records ONE HTTP request the stub server observed --
@@ -201,70 +204,57 @@ func TestVenueOracleDiscoverGitHubMatchesPython(t *testing.T) {
 	const org = "acme-corp"
 
 	// --- Go plane ------------------------------------------------------
+	//
+	// The credential carries NO base URL: discovery always targets
+	// api.github.com for a PAT (Python's PyGithub default; CHAOS-6311 r1
+	// finding 1 was Go sending the token to a stored config.base_url). The
+	// stub is reached by rewriting every outgoing request's host in the
+	// shared discovery HTTP client, so the production code path is
+	// unchanged.
 	credential := providerfoundation.NewCredential("github", "venue-oracle-cred",
-		map[string]string{"base_url": stub.server.URL},
+		map[string]string{},
 		map[string]secrets.Value{"token": secrets.NewValue(token)},
 	)
+	stubURL, err := url.Parse(stub.server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	previousClient := discoveryHTTPClient
+	discoveryHTTPClient = &http.Client{Transport: rewriteHostTransport{target: stubURL}}
+	t.Cleanup(func() { discoveryHTTPClient = previousClient })
+
 	goTeams, err := discoverGitHub(t.Context(), credential, org)
 	if err != nil {
 		t.Fatalf("discoverGitHub: %v", err)
+	}
+	goBody, err := pyjson.Marshal(teamDiscoverResponseJSON("github", goTeams, false, nil))
+	if err != nil {
+		t.Fatal(err)
 	}
 	goSignatures := stub.requestSignatures()
 	stub.reset()
 
 	// --- Python plane ----------------------------------------------------
 	scriptPath := filepath.Join(packageDir, "testdata", "venue_oracle_discover_github.py")
-	output, err := exec.Command(python, scriptPath, stub.server.URL, org, token).CombinedOutput()
+	pyBody, err := exec.Command(python, scriptPath, stub.server.URL, org, token).Output()
 	if err != nil {
-		t.Fatalf("execute Python venue oracle for github discovery: %v: %s", err, output)
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			t.Fatalf("execute Python venue oracle for github discovery: %v: %s", err, exitErr.Stderr)
+		}
+		t.Fatalf("execute Python venue oracle for github discovery: %v", err)
 	}
 	pySignatures := stub.requestSignatures()
 
-	var pyTeams []struct {
-		ProviderType   string         `json:"provider_type"`
-		ProviderTeamID string         `json:"provider_team_id"`
-		Name           string         `json:"name"`
-		Description    *string        `json:"description"`
-		MemberCount    *int64         `json:"member_count"`
-		Associations   map[string]any `json:"associations"`
-	}
-	if err := json.Unmarshal(output, &pyTeams); err != nil {
-		t.Fatalf("decode Python venue oracle output: %v\nraw output: %s", err, output)
-	}
-
-	// --- Compare response bodies ----------------------------------------
-	if len(goTeams) != len(pyTeams) {
-		t.Fatalf("team count: go=%d python=%d\ngo=%+v\npython=%+v", len(goTeams), len(pyTeams), goTeams, pyTeams)
-	}
-	for i := range goTeams {
-		go_, py := goTeams[i], pyTeams[i]
-		if go_.ProviderType != py.ProviderType || go_.ProviderTeamID != py.ProviderTeamID || go_.Name != py.Name {
-			t.Errorf("team %d core fields diverge: go=%+v python=%+v", i, go_, py)
-		}
-		goDesc, pyDesc := "<nil>", "<nil>"
-		if go_.Description != nil {
-			goDesc = *go_.Description
-		}
-		if py.Description != nil {
-			pyDesc = *py.Description
-		}
-		if goDesc != pyDesc {
-			t.Errorf("team %d description diverges: go=%q python=%q", i, goDesc, pyDesc)
-		}
-		goCount, pyCount := "<nil>", "<nil>"
-		if go_.MemberCount != nil {
-			goCount = fmt.Sprintf("%d", *go_.MemberCount)
-		}
-		if py.MemberCount != nil {
-			pyCount = fmt.Sprintf("%d", *py.MemberCount)
-		}
-		if goCount != pyCount {
-			t.Errorf("team %d member_count diverges: go=%s python=%s", i, goCount, pyCount)
-		}
-		goOrg, _ := go_.Associations.Get("provider_org")
-		if pyOrg, _ := py.Associations["provider_org"].(string); fmt.Sprint(goOrg) != pyOrg {
-			t.Errorf("team %d provider_org diverges: go=%v python=%v", i, goOrg, pyOrg)
-		}
+	// --- Compare the WHOLE response body ---------------------------------
+	//
+	// Byte for byte: the route's complete TeamDiscoverResponse envelope
+	// (provider, teams with every field incl. associations.repo_patterns,
+	// total, truncated, warnings), Go's pyjson rendering vs the real
+	// FastAPI-shaped serialization of Python's own model -- not a field
+	// subset.
+	if string(goBody) != string(pyBody) {
+		t.Errorf("response body diverges:\ngo:     %s\npython: %s", goBody, pyBody)
 	}
 
 	// --- Compare the stub's request sequence (ruling 25) -----------------
@@ -300,4 +290,31 @@ func TestVenueOracleDiscoverGitHubMatchesPython(t *testing.T) {
 	}
 	t.Logf("go requests: %v", goSignatures)
 	t.Logf("python requests (raw): %v", pySignatures)
+
+	// ci/check_go.sh's venue-oracles verb discovers every `func
+	// Test*VenueOracle*` in the repo by grep, not just ones built on
+	// venueoracle.Diff, and fails loudly if that discovered test's own
+	// proof file is missing after it runs (rule 4: a measurement that
+	// did not happen must fail loudly). This test's shape genuinely
+	// differs from Diff's (that diffs the dho api itself between planes
+	// over HTTP; this diffs a THIRD-PARTY provider's API surface via a
+	// local fixture-backed stub, which Diff has no facility for), so it
+	// cannot call Diff itself, but owes the same CI check the same
+	// proof-of-execution signal -- venueoracle.WriteProof is the shared,
+	// exported primitive for exactly this request/response-set-shaped
+	// case, called here once the real comparison against both planes has
+	// actually completed.
+	venueoracle.WriteProof(t)
+}
+
+// rewriteHostTransport redirects every outgoing request to the stub server,
+// keeping method, path and query intact.
+type rewriteHostTransport struct{ target *url.URL }
+
+func (t rewriteHostTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	clone := request.Clone(request.Context())
+	clone.URL.Scheme = t.target.Scheme
+	clone.URL.Host = t.target.Host
+	clone.Host = t.target.Host
+	return http.DefaultTransport.RoundTrip(clone)
 }

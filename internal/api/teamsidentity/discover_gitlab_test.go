@@ -171,3 +171,40 @@ func TestDiscoverGitLabNotTruncatedWhenUnderBound(t *testing.T) {
 		t.Errorf("repo_patterns = %v, want [acme/api]", repoPatterns)
 	}
 }
+
+// TestDiscoverGitLabPreservesEmptyVersusNullDescription: python-gitlab's
+// group.description is passed through to DiscoveredTeam unchanged
+// (team_discovery.py:255), so an empty string stays "" and only a real JSON
+// null becomes None -- the Go port used to collapse "" to null.
+func TestDiscoverGitLabPreservesEmptyVersusNullDescription(t *testing.T) {
+	type stub = struct {
+		body       string
+		nextPage   string
+		statusCode int
+	}
+	doer := &gitlabStubDoer{responses: map[string]stub{
+		"/api/v4/groups/acme?":                                                 {body: `{"id":1,"full_path":"acme","name":"Acme","description":""}`},
+		"/api/v4/groups/acme/subgroups?per_page=100&page=1":                    {body: `[{"id":2,"full_path":"acme/null-desc","name":"N","description":null}]`},
+		"/api/v4/groups/1/projects?per_page=100&page=1":                        {body: `[]`},
+		"/api/v4/groups/2/projects?per_page=100&page=1":                        {body: `[]`},
+		"/api/v4/groups/1/projects?per_page=100&page=1&include_subgroups=true": {body: `[]`},
+	}}
+	old := discoveryHTTPClient
+	discoveryHTTPClient = doer
+	defer func() { discoveryHTTPClient = old }()
+
+	teams, _, _, err := discoverGitLab(context.Background(), gitlabTestCredential(), "acme")
+	if err != nil {
+		t.Fatalf("discoverGitLab: %v", err)
+	}
+	if len(teams) != 2 {
+		t.Fatalf("teams=%d, want 2: %+v", len(teams), teams)
+	}
+	root, sub := teams[0], teams[1]
+	if root.Description == nil || *root.Description != "" {
+		t.Errorf("root description = %v, want a non-nil empty string", root.Description)
+	}
+	if sub.Description != nil {
+		t.Errorf("subgroup description = %q, want nil (JSON null)", *sub.Description)
+	}
+}

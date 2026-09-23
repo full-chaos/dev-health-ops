@@ -66,7 +66,7 @@ func Routes(conn driver.Conn, guard *policy.Guard, logger *slog.Logger, pool *pg
 		// parameter -- getTeam below now intercepts exactly that one case
 		// (the only one this PR can prove without CHAOS-6311's business
 		// logic) before it ever reaches a team lookup.
-		{Method: http.MethodDelete, Pattern: "/api/v1/admin/teams/{team_id}",
+		{Method: http.MethodDelete, Pattern: "/api/v1/admin/teams/{team_id}", Allow: "DELETE",
 			Handler: guard.Wrap(policy.AdminOrg, http.HandlerFunc(h.deleteTeam))},
 		{Method: http.MethodGet, Pattern: "/api/v1/admin/teams/{team_id}",
 			Handler: guard.Wrap(policy.AdminOrg, http.HandlerFunc(h.getTeam))},
@@ -348,6 +348,19 @@ func (h handlers) discoverTeams(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	// Python validates the credential's shape (400/401) BEFORE it resolves
+	// an org/group or calls a provider, and never sends a stored base URL
+	// to github (PAT) or linear -- see prepareDiscoveryCredential.
+	prepared, err := prepareDiscoveryCredential(ctx, provider, credential)
+	if err != nil {
+		var statusErr *discoveryStatusError
+		if errors.As(err, &statusErr) {
+			policy.WriteDetail(w, statusErr.Status, statusErr.Detail, nil)
+		} else {
+			h.internal(w, r, "prepare discover credential", err)
+		}
+		return
+	}
 	var (
 		teams     []discoveredTeam
 		truncated bool
@@ -355,9 +368,9 @@ func (h handlers) discoverTeams(w http.ResponseWriter, r *http.Request) {
 	)
 	switch provider {
 	case "jira":
-		teams, err = discoverJira(ctx, credential)
+		teams, err = discoverJira(ctx, prepared)
 	case "linear":
-		teams, err = discoverLinear(ctx, credential)
+		teams, err = discoverLinear(ctx, prepared)
 	case "github":
 		// Resolution order mirrors teams.py:231-249 exactly: explicit
 		// ?org= -> credential.config["org"] -> owners derived from this
@@ -387,7 +400,7 @@ func (h handlers) discoverTeams(w http.ResponseWriter, r *http.Request) {
 		}
 		var discovered []discoveredTeam
 		for _, orgName := range orgNames {
-			orgTeams, discoverErr := discoverGitHub(ctx, credential, orgName)
+			orgTeams, discoverErr := discoverGitHub(ctx, prepared, orgName)
 			if discoverErr != nil {
 				err = discoverErr
 				break
@@ -419,7 +432,7 @@ func (h handlers) discoverTeams(w http.ResponseWriter, r *http.Request) {
 		}
 		var discovered []discoveredTeam
 		for _, groupPath := range groupPaths {
-			groupTeams, groupTruncated, groupWarnings, discoverErr := discoverGitLab(ctx, credential, groupPath)
+			groupTeams, groupTruncated, groupWarnings, discoverErr := discoverGitLab(ctx, prepared, groupPath)
 			if discoverErr != nil {
 				err = discoverErr
 				break
@@ -483,7 +496,12 @@ func (h handlers) postTeamWildcard(w http.ResponseWriter, r *http.Request) {
 		h.importTeams(w, r)
 		return
 	}
-	policy.WriteDetail(w, http.StatusNotFound, "Not Found", nil)
+	// Python has no POST route on /teams/{team_id}: FastAPI answers 405
+	// with the Allow header of the pattern's first route (DELETE), not a
+	// 404 -- CHAOS-6311's venue run caught this once the wildcard gained a
+	// POST handler for /teams/import.
+	w.Header().Set("Allow", "DELETE")
+	policy.WriteDetail(w, http.StatusMethodNotAllowed, "Method Not Allowed", nil)
 }
 
 func (h handlers) updateTeam(w http.ResponseWriter, r *http.Request) {

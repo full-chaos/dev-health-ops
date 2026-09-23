@@ -10,20 +10,24 @@ PyGithub's discover_github call site (team_discovery.py:127-158) does not
 itself expose a base_url parameter -- it always constructs
 `Github(auth=auth, per_page=100)`. Rather than adding one (a Python fix,
 which this repo does not make -- port to Go, never patch Python), this
-script monkeypatches the `github.Github` class with `functools.partial`,
-injecting base_url the same way a GitHub Enterprise deployment would
+script monkeypatches the `github.Github` NAME with a real subclass that
+injects base_url, the same way a GitHub Enterprise deployment would,
 before team_discovery's own `from github import Auth, Github` (a
-call-time-scoped import) resolves it.
+call-time-scoped import) resolves it. A subclass is used rather than
+`functools.partial` specifically so the assignment stays type-correct: a
+`type[_BaseURLInjectedGithub]` is a valid `type[Github]` by ordinary
+subtype covariance, unlike a `functools.partial` object, which is not a
+`type[Github]` at all and needs a suppression to assign.
 
 Usage: venue_oracle_discover_github.py <base_url> <org_name> <token>
-Prints the DiscoveredTeam list as JSON (list of dicts, TeamDiscoveryService's
-own field names) to stdout.
+Prints the route's full TeamDiscoverResponse body (compact JSON, as FastAPI
+renders it) to stdout.
 """
 
 import asyncio
-import functools
 import json
 import sys
+from typing import Any
 
 
 def main() -> None:
@@ -31,29 +35,47 @@ def main() -> None:
 
     import github
 
-    github.Github = functools.partial(github.Github, base_url=base_url)
+    class _BaseURLInjectedGithub(github.Github):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            kwargs.setdefault("base_url", base_url)
+            super().__init__(*args, **kwargs)
+
+    # setattr, not `github.Github = ...`: mypy statically treats a module-
+    # level class NAME as a type binding and refuses ANY direct
+    # reassignment ("Cannot assign to a type") regardless of subtype
+    # compatibility. Going through setattr mutates the same module
+    # attribute at runtime -- team_discovery.py's own later
+    # `from github import Github` still resolves to this subclass -- but
+    # isn't a static assignment mypy's type-binding rule applies to.
+    setattr(github, "Github", _BaseURLInjectedGithub)
 
     from dev_health_ops.api.services.configuration.team_discovery import (
         TeamDiscoveryService,
     )
 
-    async def run():
+    async def run() -> str:
+        from dev_health_ops.api.admin.schemas import TeamDiscoverResponse
+
         svc = TeamDiscoveryService(None, "venue-oracle-org")
         teams = await svc.discover_github(token=token, org_name=org_name)
-        return [
-            {
-                "provider_type": t.provider_type,
-                "provider_team_id": t.provider_team_id,
-                "name": t.name,
-                "description": t.description,
-                "member_count": t.member_count,
-                "associations": t.associations,
-            }
-            for t in teams
-        ]
+        # The route's own response envelope, serialized the way FastAPI does
+        # (model_dump(mode="json") then compact json.dumps), so the Go side
+        # can compare the WHOLE body byte for byte, not selected fields.
+        response = TeamDiscoverResponse(
+            provider="github",
+            teams=teams,
+            total=len(teams),
+            truncated=False,
+            warnings=[],
+        )
+        return json.dumps(
+            response.model_dump(mode="json"),
+            ensure_ascii=False,
+            allow_nan=False,
+            separators=(",", ":"),
+        )
 
-    result = asyncio.run(run())
-    json.dump(result, sys.stdout)
+    sys.stdout.write(asyncio.run(run()))
 
 
 if __name__ == "__main__":

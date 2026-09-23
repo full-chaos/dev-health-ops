@@ -23,6 +23,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
+	chclickhouse "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
@@ -79,6 +80,24 @@ func TestVenueOracleProtectedRoutes(t *testing.T) {
 	groups := venueGroupList()
 	cfg.APIExpectedWorkerGroups = &groups
 	base := startVenueAPI(t, ctx, cfg, venue)
+
+	// team_sync_policies has no Python or Go write route in this venue's
+	// sequence (policies are set through the drift-review routes, out of
+	// scope here), so the FLAG_FOR_REVIEW import case seeds the same policy
+	// row into BOTH ClickHouse databases before any request runs: team
+	// "qa4" (created below by the CRUD sequence) is under FLAG_FOR_REVIEW,
+	// so importing it must write drift changes and leave the catalog row.
+	for _, database := range []string{venue.PythonClickHouseDB, venue.GoClickHouseDB} {
+		seedConn, err := chclickhouse.Open(ctx, chclickhouse.DefaultConfig(venue.AdminClickHouseURI(t, database)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := seedConn.Exec(ctx, `INSERT INTO team_sync_policies (org_id, team_id, sync_policy, managed_fields, updated_by, updated_at)
+			VALUES ($1, 'qa4', 1, ['name', 'description', 'members', 'project_keys', 'repo_patterns'], 'venue-seed', now64(6))`, seed.orgA.String()); err != nil {
+			t.Fatal(err)
+		}
+		_ = seedConn.Close()
+	}
 
 	requests := venueRequests(seed, venue.Tokens)
 	var receipt strings.Builder
@@ -137,6 +156,19 @@ func TestVenueOracleProtectedRoutes(t *testing.T) {
 		`SELECT id, name, coalesce(description, '<null>'), members, manual_members, project_keys,
 			repo_patterns, is_active, provider, native_team_key FROM teams FINAL
 		WHERE org_id != '' ORDER BY id`)
+	// CHAOS-6311: POST /teams/import's drift-projector writes, compared as
+	// raw text. Timestamps are excluded (each plane mints its own now()).
+	compareCHRows(t, ctx, venue, &receipt, "team_provider_observations",
+		`SELECT provider, native_team_key, team_id, coalesce(name, '<null>'), coalesce(description, '<null>'),
+			members_json, project_keys_json, repo_patterns_json, is_active, coalesce(parent_team_id, '<null>')
+		FROM team_provider_observations FINAL WHERE org_id != '' ORDER BY provider, native_team_key`)
+	compareCHRows(t, ctx, venue, &receipt, "team_drift_changes",
+		`SELECT change_id, entity_type, entity_id, provider, coalesce(native_team_key, '<null>'), change_type,
+			coalesce(field, '<null>'), old_value_json, new_value_json, status, coalesce(decided_by, '<null>')
+		FROM team_drift_changes FINAL WHERE org_id != '' ORDER BY change_id`)
+	compareCHRows(t, ctx, venue, &receipt, "team_sync_policies",
+		`SELECT team_id, sync_policy, managed_fields, coalesce(updated_by, '<null>')
+		FROM team_sync_policies FINAL WHERE org_id != '' ORDER BY team_id`)
 	compareCHRows(t, ctx, venue, &receipt, "identities",
 		`SELECT canonical_id, coalesce(display_name, '<null>'), coalesce(email, '<null>'),
 			provider_identities, team_ids, is_active FROM identities FINAL

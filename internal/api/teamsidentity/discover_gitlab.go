@@ -22,10 +22,14 @@ const (
 )
 
 type gitlabGroupEntry struct {
-	ID          int64  `json:"id"`
-	FullPath    string `json:"full_path"`
-	Name        string `json:"name"`
-	Description string `json:"description"`
+	ID       int64  `json:"id"`
+	FullPath string `json:"full_path"`
+	Name     string `json:"name"`
+	// Description is a pointer so a real JSON null (None) and an empty
+	// string stay distinct: python-gitlab's group.description is passed
+	// through to DiscoveredTeam unchanged (team_discovery.py:255), so ""
+	// must stay "" and only null becomes None.
+	Description *string `json:"description"`
 }
 
 type gitlabProjectEntry struct {
@@ -78,10 +82,6 @@ func discoverGitLab(ctx context.Context, credential providerfoundation.Credentia
 		for index, project := range projects {
 			repoPatterns[index] = project.PathWithNamespace
 		}
-		var description *string
-		if group.Description != "" {
-			description = &group.Description
-		}
 		associations := pyjson.NewObject()
 		associations.Set("repo_patterns", repoPatterns)
 		associations.Set("provider_org", rootGroup.FullPath)
@@ -89,7 +89,7 @@ func discoverGitLab(ctx context.Context, credential providerfoundation.Credentia
 			ProviderType:   "gitlab",
 			ProviderTeamID: group.FullPath,
 			Name:           group.Name,
-			Description:    description,
+			Description:    group.Description,
 			Associations:   associations,
 		})
 	}

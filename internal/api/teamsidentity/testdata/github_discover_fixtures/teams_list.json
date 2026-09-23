@@ -1,0 +1,19 @@
+[
+    {
+        "name": "Platform Team",
+        "id": 1000001,
+        "node_id": "T_fixture_node_id_list_1",
+        "slug": "platform-team",
+        "description": "Platform Team",
+        "privacy": "closed",
+        "notification_setting": "notifications_enabled",
+        "url": "https://api.github.com/organizations/9000001/team/1000001",
+        "html_url": "https://github.com/orgs/acme-corp/teams/platform-team",
+        "members_url": "https://api.github.com/organizations/9000001/team/1000001/members{/member}",
+        "repositories_url": "https://api.github.com/organizations/9000001/team/1000001/repos",
+        "type": "organization",
+        "organization_id": 9000001,
+        "permission": "pull",
+        "parent": null
+    }
+]

@@ -166,7 +166,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 		routes = append(routes, telemetry.Routes(deps.Pool, deps.Guard, deps.Auth, deps.Telemetry.Endpoint, logger)...)
 		routes = append(routes, customerpush.Routes(customerpush.Deps{Pool: deps.Pool, Guard: deps.Guard, Logger: logger})...)
 		if deps.ClickHouse != nil {
-			routes = append(routes, teamsidentity.Routes(deps.ClickHouse, deps.Guard, logger)...)
+			routes = append(routes, teamsidentity.Routes(deps.ClickHouse, deps.Guard, logger, deps.Pool, deps.Decryptor)...)
 		}
 	}
 	// admin is this Service's other consumer of policy.Guard: mounted only

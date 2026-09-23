@@ -55,6 +55,54 @@ func createTeamsIdentitiesTables(t *testing.T, ctx context.Context, conn interfa
 			source_id Nullable(UUID) DEFAULT NULL
 		) ENGINE = ReplacingMergeTree(updated_at)
 		ORDER BY (org_id, canonical_id)`,
+		// team_sync_policies/team_provider_observations/team_drift_changes:
+		// alembic-equivalent transcriptions of
+		// 056_team_sync_policies.sql / 057_team_provider_observations.sql /
+		// 058_team_drift_changes.sql, verbatim.
+		`CREATE TABLE team_sync_policies (
+			org_id String,
+			team_id String,
+			sync_policy UInt8 DEFAULT 0,
+			managed_fields Array(String) DEFAULT [],
+			updated_by Nullable(String),
+			updated_at DateTime64(6, 'UTC')
+		) ENGINE = ReplacingMergeTree(updated_at)
+		ORDER BY (org_id, team_id)`,
+		`CREATE TABLE team_provider_observations (
+			org_id String,
+			provider LowCardinality(String),
+			native_team_key String,
+			team_id String,
+			name Nullable(String),
+			description Nullable(String),
+			members_json String,
+			project_keys_json String,
+			repo_patterns_json String,
+			is_active UInt8,
+			parent_team_id Nullable(String),
+			discovered_at DateTime64(6, 'UTC'),
+			updated_at DateTime64(6, 'UTC')
+		) ENGINE = ReplacingMergeTree(updated_at)
+		ORDER BY (org_id, provider, native_team_key)`,
+		`CREATE TABLE team_drift_changes (
+			org_id String,
+			change_id String,
+			entity_type LowCardinality(String),
+			entity_id String,
+			provider LowCardinality(String),
+			native_team_key Nullable(String),
+			change_type LowCardinality(String),
+			field Nullable(String),
+			old_value_json String,
+			new_value_json String,
+			status LowCardinality(String),
+			first_seen_at DateTime64(6, 'UTC'),
+			last_seen_at DateTime64(6, 'UTC'),
+			decided_at Nullable(DateTime64(6, 'UTC')),
+			decided_by Nullable(String),
+			updated_at DateTime64(6, 'UTC')
+		) ENGINE = ReplacingMergeTree(updated_at)
+		ORDER BY (org_id, change_id)`,
 	}
 	for _, statement := range statements {
 		if err := conn.Exec(ctx, statement); err != nil {

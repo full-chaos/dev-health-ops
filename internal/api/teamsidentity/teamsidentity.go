@@ -3,26 +3,34 @@ package teamsidentity
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"regexp"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
 // Routes returns this area's routes: the 7 pure-CRUD team+identity admin
-// routes (list/create/get/patch/delete teams, list/create identities).
-// Discovery, import and drift-review routes are separate, later PRs under
-// CHAOS-6251 (see the package doc comment).
-func Routes(conn driver.Conn, guard *policy.Guard, logger *slog.Logger) []httpapi.Route {
+// routes (list/create/get/patch/delete teams, list/create identities) plus
+// GET /teams/discover (dispatched from inside getTeam -- see its own
+// comment below for why). Import and drift-review routes are separate,
+// later PRs under CHAOS-6251 (see the package doc comment). pool/decryptor
+// resolve a stored provider credential for discover; both may be nil,
+// mirroring the rest of this package's Deps.ClickHouse-nil convention --
+// discover then answers CodeInternal rather than dereferencing either.
+func Routes(conn driver.Conn, guard *policy.Guard, logger *slog.Logger, pool *pgxpool.Pool, decryptor providerfoundation.CredentialDecryptor) []httpapi.Route {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	h := handlers{store: Store{Conn: conn}, logger: logger}
+	h := handlers{store: Store{Conn: conn}, credentials: discoverCredentials{Pool: pool, Decryptor: decryptor}, logger: logger}
 	return []httpapi.Route{
 		{Method: http.MethodGet, Pattern: "/api/v1/admin/teams",
 			Handler: guard.Wrap(policy.AdminOrg, http.HandlerFunc(h.listTeams))},
@@ -64,6 +72,12 @@ func Routes(conn driver.Conn, guard *policy.Guard, logger *slog.Logger) []httpap
 			Handler: guard.Wrap(policy.AdminOrg, http.HandlerFunc(h.getTeam))},
 		{Method: http.MethodPatch, Pattern: "/api/v1/admin/teams/{team_id}",
 			Handler: h.decodeFirst(guard, http.HandlerFunc(h.updateTeam))},
+		// POST /teams/import is dispatched from inside postTeamWildcard the
+		// same way GET /teams/discover is dispatched from inside getTeam
+		// -- a second literal registration for it panics construction for
+		// the identical reason (see the comment above).
+		{Method: http.MethodPost, Pattern: "/api/v1/admin/teams/{team_id}",
+			Handler: h.decodeFirst(guard, http.HandlerFunc(h.postTeamWildcard))},
 		{Method: http.MethodGet, Pattern: "/api/v1/admin/identities",
 			Handler: guard.Wrap(policy.AdminOrg, http.HandlerFunc(h.listIdentities))},
 		{Method: http.MethodPost, Pattern: "/api/v1/admin/identities",
@@ -72,8 +86,9 @@ func Routes(conn driver.Conn, guard *policy.Guard, logger *slog.Logger) []httpap
 }
 
 type handlers struct {
-	store  Store
-	logger *slog.Logger
+	store       Store
+	credentials discoverCredentials
+	logger      *slog.Logger
 }
 
 func (h handlers) internal(w http.ResponseWriter, r *http.Request, what string, err error) {
@@ -274,34 +289,161 @@ func (h handlers) deleteTeam(w http.ResponseWriter, r *http.Request) {
 	policy.WriteJSON(w, http.StatusOK, out, nil)
 }
 
+// discoverProviderPattern is FastAPI's own Query(..., pattern=
+// "^(github|gitlab|jira|linear)$") for GET /teams/discover's `provider`
+// parameter (teams.py:159-161).
+var discoverProviderPattern = regexp.MustCompile(`^(github|gitlab|jira|linear)$`)
+
 // discoverMissingProviderDetail is the exact 422 body FastAPI's own
 // Query(...) dependency raises for GET /api/v1/admin/teams/discover
 // without its required `provider` query parameter (captured against the
-// live venue). CHAOS-6311 owns the real discover implementation (external
-// provider calls through IntegrationCredentialsService); this route table
-// cannot yet mount a literal /teams/discover pattern beside the
-// {team_id} wildcard without panicking httpapi's ServeMux construction
-// (see the route-table comment on Routes, and
-// TestTeamsDiscoverStaticRouteWins/TestRoutesRegisterWithoutPanicking).
-// r2 (CHAOS-6310) finding #4: leaving "discover" to fall all the way
-// through to a team lookup answered Go's OWN 404 "Team not found" where
-// Python answers 422 "Field required" for the one case this route can
-// prove without CHAOS-6311's business logic -- a missing `provider`. This
-// intercepts exactly that case inside the wildcard handler (the one
-// discriminator this route table can express); a request that DOES supply
-// `provider` still falls through to today's "team not found" 404,
-// unchanged and no worse than before -- discover's actual behavior once a
-// provider is present is CHAOS-6311's to implement and prove.
+// live venue).
 func discoverMissingProviderDetail() *pyjson.Object {
 	return pybody.Detail([]pybody.Error{{
 		Type: "missing", Loc: []pyjson.Value{"query", "provider"}, Msg: "Field required", Input: nil,
 	}})
 }
 
+// discoverInvalidProviderDetail mirrors FastAPI's pattern-mismatch 422 for
+// a `provider` value outside github|gitlab|jira|linear.
+func discoverInvalidProviderDetail(provider string) *pyjson.Object {
+	ctx := pyjson.NewObject()
+	ctx.Set("pattern", discoverProviderPattern.String())
+	return pybody.Detail([]pybody.Error{{
+		Type: "string_pattern_mismatch", Loc: []pyjson.Value{"query", "provider"},
+		Msg:   fmt.Sprintf("String should match pattern '%s'", discoverProviderPattern.String()),
+		Input: provider, Ctx: ctx,
+	}})
+}
+
+// discoverTeams is GET /api/v1/admin/teams/discover, reached from inside
+// getTeam (see the route-table comment on Routes for why this cannot be a
+// second registered pattern). Resolves a stored, encrypted provider
+// credential (providerfoundation, the same integration_credentials table
+// and Fernet decryptor internal/apiservice already builds for
+// webhookintake), then calls the live provider API.
+func (h handlers) discoverTeams(w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query()
+	if !query.Has("provider") {
+		policy.WriteJSON(w, http.StatusUnprocessableEntity, discoverMissingProviderDetail(), nil)
+		return
+	}
+	provider := query.Get("provider")
+	if !discoverProviderPattern.MatchString(provider) {
+		policy.WriteJSON(w, http.StatusUnprocessableEntity, discoverInvalidProviderDetail(provider), nil)
+		return
+	}
+	ctx := r.Context()
+	orgID := orgIDOf(ctx)
+	credential, err := h.credentials.resolve(ctx, orgID, provider, query.Get("credential_id"), query.Get("credential_name"))
+	if err != nil {
+		var ambiguous *providerfoundation.CredentialAmbiguousError
+		switch {
+		case errors.As(err, &ambiguous):
+			policy.WriteDetail(w, http.StatusConflict, ambiguous.Error(), nil)
+		case errors.Is(err, providerfoundation.ErrCredentialNotFound):
+			policy.WriteDetail(w, http.StatusNotFound, fmt.Sprintf("No credentials found for provider '%s'", provider), nil)
+		default:
+			h.internal(w, r, "resolve discover credential", err)
+		}
+		return
+	}
+	var (
+		teams     []discoveredTeam
+		truncated bool
+		warnings  []string
+	)
+	switch provider {
+	case "jira":
+		teams, err = discoverJira(ctx, credential)
+	case "linear":
+		teams, err = discoverLinear(ctx, credential)
+	case "github":
+		// Resolution order mirrors teams.py:231-249 exactly: explicit
+		// ?org= -> credential.config["org"] -> owners derived from this
+		// org's existing repo sync configurations
+		// (_derive_owners_from_sync_configs, teams.py:55-79). The last
+		// step can resolve MORE THAN ONE org (an org with several active
+		// GitHub sync configs pointed at different owners), so discovery
+		// loops over every resolved name and the combined results are
+		// deduped by provider_team_id (_dedupe_teams, teams.py:82-92).
+		var orgNames []string
+		switch {
+		case query.Get("org") != "":
+			orgNames = []string{query.Get("org")}
+		case credential.Config["org"] != "":
+			orgNames = []string{credential.Config["org"]}
+		default:
+			orgNames, err = deriveOwnersFromSyncConfigs(ctx, h.credentials.Pool, orgID, "github", []string{"owner", "org"})
+			if err != nil {
+				h.internal(w, r, "derive github owners from sync configs", err)
+				return
+			}
+		}
+		if len(orgNames) == 0 {
+			policy.WriteDetail(w, http.StatusBadRequest,
+				"Could not determine a GitHub organization for team discovery. Pass ?org=<org-name>, set config.org on the credential, or configure a GitHub repository sync first.", nil)
+			return
+		}
+		var discovered []discoveredTeam
+		for _, orgName := range orgNames {
+			orgTeams, discoverErr := discoverGitHub(ctx, credential, orgName)
+			if discoverErr != nil {
+				err = discoverErr
+				break
+			}
+			discovered = append(discovered, orgTeams...)
+		}
+		teams = dedupeDiscoveredTeams(discovered)
+	case "gitlab":
+		// Resolution order mirrors teams.py:266-283 -- same
+		// query-param -> credential.config -> sync-config-derived
+		// fallback shape as github above, option keys ("group", "owner").
+		var groupPaths []string
+		switch {
+		case query.Get("group") != "":
+			groupPaths = []string{query.Get("group")}
+		case credential.Config["group"] != "":
+			groupPaths = []string{credential.Config["group"]}
+		default:
+			groupPaths, err = deriveOwnersFromSyncConfigs(ctx, h.credentials.Pool, orgID, "gitlab", []string{"group", "owner"})
+			if err != nil {
+				h.internal(w, r, "derive gitlab owners from sync configs", err)
+				return
+			}
+		}
+		if len(groupPaths) == 0 {
+			policy.WriteDetail(w, http.StatusBadRequest,
+				"Could not determine a GitLab group for team discovery. Pass ?group=<group-path>, set config.group on the credential, or configure a GitLab repository sync first.", nil)
+			return
+		}
+		var discovered []discoveredTeam
+		for _, groupPath := range groupPaths {
+			groupTeams, groupTruncated, groupWarnings, discoverErr := discoverGitLab(ctx, credential, groupPath)
+			if discoverErr != nil {
+				err = discoverErr
+				break
+			}
+			discovered = append(discovered, groupTeams...)
+			truncated = truncated || groupTruncated
+			warnings = append(warnings, groupWarnings...)
+		}
+		teams = dedupeDiscoveredTeams(discovered)
+	default:
+		h.internal(w, r, "discover teams", fmt.Errorf("provider %q discovery not yet ported", provider))
+		return
+	}
+	if err != nil {
+		h.internal(w, r, "discover teams", err)
+		return
+	}
+	policy.WriteJSON(w, http.StatusOK, teamDiscoverResponseJSON(provider, teams, truncated, warnings), nil)
+}
+
 func (h handlers) getTeam(w http.ResponseWriter, r *http.Request) {
 	teamID := pathParam(r, "team_id")
-	if teamID == "discover" && !r.URL.Query().Has("provider") {
-		policy.WriteJSON(w, http.StatusUnprocessableEntity, discoverMissingProviderDetail(), nil)
+	if teamID == "discover" {
+		h.discoverTeams(w, r)
 		return
 	}
 	team, err := h.store.GetTeam(r.Context(), orgIDOf(r.Context()), teamID)
@@ -314,6 +456,34 @@ func (h handlers) getTeam(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	policy.WriteJSON(w, http.StatusOK, teamJSON(*team), nil)
+}
+
+// postTeamWildcard is POST /api/v1/admin/teams/{team_id}: Python has no
+// real route at this shape (POST /teams is create, a different, already-
+// registered literal path; there is no POST /teams/{team_id} at all) --
+// the ONLY POST path under /teams/ that exists is the literal
+// /teams/import. team_id=="import" dispatches to it; anything else
+// answers Starlette's own generic "no route matched" 404 shape, the same
+// thing Python would answer for a POST to any other /teams/<literal>
+// path it has no route for.
+//
+// KNOWN, DOCUMENTED GAP: this route (like the create/update routes) is
+// wrapped by decodeFirst, which reads and decodes the request body BEFORE
+// this dispatch ever runs -- matching FastAPI's own before-routing-
+// resolves-vs-after ordering for the "import" case (Python decodes the
+// body as part of resolving that ONE endpoint), but NOT for a POST to any
+// OTHER team_id: real Starlette never attempts body decoding for a path
+// it has no route for at all (routing fails before any dependency runs),
+// while this implementation always decodes first regardless of team_id --
+// a malformed body on a POST to a random team_id could answer 422/400
+// here where Python answers a clean 404. Narrow, low-likelihood (no
+// legitimate client sends this), not reproduced.
+func (h handlers) postTeamWildcard(w http.ResponseWriter, r *http.Request) {
+	if pathParam(r, "team_id") == "import" {
+		h.importTeams(w, r)
+		return
+	}
+	policy.WriteDetail(w, http.StatusNotFound, "Not Found", nil)
 }
 
 func (h handlers) updateTeam(w http.ResponseWriter, r *http.Request) {

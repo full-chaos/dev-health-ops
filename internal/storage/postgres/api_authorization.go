@@ -48,21 +48,21 @@ func apiPosture() RolePosture {
 			// Also plan area L's self-service profile: read, and the name
 			// and description update of PATCH /api/v1/orgs/me. The admin
 			// org routes add insert: create_org (update_org shares the
-			// self-service UPDATE grant above). Deletion is NOT ported
-			// (org_deletion.py is its own ticket; served separately) -- no
-			// AllowDelete here. Widened in place, per the one-entry rule
-			// below.
-			{"organizations", true, true, false},
+			// self-service UPDATE grant above). Delete: the org row is the
+			// LAST of org_deletion.py's 46 purge targets. Widened in
+			// place, per the one-entry rule below.
+			{"organizations", true, true, true},
 			// The one feature row this route ever reads (key =
 			// "agent_context_runtime"), never any other feature.
 			{"feature_flags", false, false, false},
-			// Per-org override for that same feature.
-			{"org_feature_overrides", false, false, false},
+			// Per-org override for that same feature. CHAOS-6306: a purge
+			// target, delete added.
+			{"org_feature_overrides", false, false, true},
 			// License tier + features_override JSON. The admin org PATCH
 			// route syncs an existing row's tier/managed_by on an actual
 			// tier change (OrganizationService._sync_license_tier);
-			// update added.
-			{"org_licenses", false, true, false},
+			// CHAOS-6306 adds delete (a purge target) on top.
+			{"org_licenses", false, true, true},
 			// external-ingest (CHAOS-6246): bearer-token auth resolves the
 			// token row and bumps last_used_at/last_used_ip on every
 			// request that reaches a scope check (auth.go's bumpLastUsed).
@@ -96,13 +96,15 @@ func apiPosture() RolePosture {
 			// dispatcher's job, over the domain role, not this one.
 			{"external_ingest_recompute_jobs", false, false, false},
 			// Managed-sync ownership matching (ownership.go's
-			// findActiveManagedOwner): read-only.
-			{"integration_sources", false, false, false},
-			{"integrations", false, false, false},
+			// findActiveManagedOwner): read-only. A purge target, delete
+			// added.
+			{"integration_sources", false, false, true},
+			{"integrations", false, false, true},
 			// CHAOS-6319: the customer-push ownership check reads a managed
 			// integration's credential row (provider and plain config only;
-			// the encrypted payload is never read or decrypted here).
-			{"integration_credentials", false, false, false},
+			// the encrypted payload is never read or decrypted here). A
+			// purge target, delete added.
+			{"integration_credentials", false, false, true},
 			// The protected-route principal (internal/api/policy): the users
 			// row behind every access token, org membership behind
 			// X-Org-Id, and the active impersonation session of a superuser.
@@ -117,18 +119,24 @@ func apiPosture() RolePosture {
 			{"memberships", true, true, true},
 			// setUserPassword revokes every outstanding refresh token
 			// (refresh_tokens.py's revoke_all_for_user) on a password
-			// change.
-			{"refresh_tokens", false, true, false},
+			// change. A purge target, delete added.
+			{"refresh_tokens", false, true, true},
+			// org_invites: create_org_invite is NOT mounted on the Go api
+			// (CHAOS-6334 tracks porting the mail sender and this route
+			// together), so there is no insert grant here -- this table is
+			// a purge target only, delete added.
+			{"org_invites", false, false, true},
 			// CHAOS-6303 (admin impersonation routes) is the first route
 			// area over this principal to WRITE the impersonation session
 			// it reads: start_impersonation ends any prior open session
 			// (UPDATE) and inserts the new one; stop_impersonation ends it
-			// (UPDATE). ONE entry per table is a hard requirement
-			// (riverstore.ValidateMigrationOptions rejects a duplicate
-			// TableName as a silent generic ErrMigrationConfiguration) --
-			// a later route area needing more on an already-declared table
-			// widens this entry in place, never appends a second one.
-			{"impersonation_sessions", true, true, false},
+			// (UPDATE). CHAOS-6306 adds delete (a purge target). ONE entry
+			// per table is a hard requirement (riverstore.ValidateMigrationOptions
+			// rejects a duplicate TableName as a silent generic
+			// ErrMigrationConfiguration) -- a later route area needing
+			// more on an already-declared table widens this entry in
+			// place, never appends a second one.
+			{"impersonation_sessions", true, true, true},
 			// Plan area A: /health's application schema revision and
 			// /health/workers' worker heartbeat presence.
 			{"alembic_version", false, false, false},
@@ -136,12 +144,17 @@ func apiPosture() RolePosture {
 			// Plan area K: the org telemetry settings, the instance usage
 			// counts /telemetry/report reads, and its audit row. (There is no
 			// Postgres repos table: repositories live in ClickHouse.)
-			{"settings", true, true, false},
-			{"sync_configurations", false, false, false},
+			// Delete: settings is also a purge target (encrypted settings
+			// included).
+			{"settings", true, true, true},
+			// A purge target, delete only.
+			{"sync_configurations", false, false, true},
 			// The generic audit writer (internal/api/audit): impersonation
 			// start/stop, password_changed, member_invited, and plan area K's
-			// telemetry-report audit row -- one entry, every area.
-			{"audit_logs", true, false, false},
+			// telemetry-report audit row -- one entry, every area. Also a
+			// purge target: the org's whole audit trail is deleted along
+			// with everything else.
+			{"audit_logs", true, false, true},
 			// webhook intake (CHAOS-6247): GitHub/GitLab/Jira persist their
 			// durable delivery row (INSERT; the (provider, delivery_key)
 			// conflict fallback is a SELECT, always implicit) then publish to
@@ -154,7 +167,74 @@ func apiPosture() RolePosture {
 			// candidate->ready transition on a verified ping
 			// (mark_candidate_ready_from_verified_ping). Binding admin CRUD
 			// (create/rotate/activate/revoke) is CHAOS-6255, not this route.
-			{"pagerduty_webhook_bindings", false, true, false},
+			// CHAOS-6306 adds delete (a purge target) on top.
+			{"pagerduty_webhook_bindings", false, true, true},
+
+			// CHAOS-6306 (org deletion): org_deletion.py's remaining purge
+			// targets, none previously declared. Every entry here is
+			// delete-only (the route counts with the implicit SELECT every
+			// declared table carries, then deletes rows with a nonzero
+			// count) unless a comment says otherwise. Dev/AI-assistant rows.
+			{"dev_feedback", false, false, true},
+			{"dev_tool_calls", false, false, true},
+			{"dev_runs", false, false, true},
+			{"dev_messages", false, false, true},
+			{"dev_conversations", false, false, true},
+			// Reports: report_runs is deleted via a subquery on
+			// saved_reports' own org_id (org_deletion.py's report_runs
+			// target has no org_id column of its own).
+			{"report_runs", false, false, true},
+			{"saved_reports", false, false, true},
+			// Scheduled jobs: job_runs is deleted via a subquery on
+			// scheduled_jobs' own org_id, same shape as report_runs.
+			// scheduled_jobs itself needs UPDATE too: the org-deletion
+			// route disables every remaining scheduled job (status,
+			// is_running, next_run_at) before deleting the org's other
+			// rows, mirroring org_deletion.py's own _disable_scheduled_jobs
+			// step.
+			{"job_runs", false, false, true},
+			{"scheduled_jobs", false, true, true},
+			{"backfill_jobs", false, false, true},
+			// Billing: invoice_line_items/subscription_events are each
+			// deleted via a subquery on their own owning row's org_id
+			// (invoices/subscriptions respectively).
+			{"refunds", false, false, true},
+			{"invoice_line_items", false, false, true},
+			{"invoices", false, false, true},
+			{"subscription_events", false, false, true},
+			{"subscriptions", false, false, true},
+			// Sync state.
+			{"metric_checkpoints", false, false, true},
+			{"sync_compute_checkpoints", false, false, true},
+			{"sync_watermarks", false, false, true},
+			{"sync_run_reference_discoveries", false, false, true},
+			{"sync_dispatch_outbox", false, false, true},
+			{"sync_run_post_dispatches", false, false, true},
+			{"sync_run_units", false, false, true},
+			{"sync_runs", false, false, true},
+			// PagerDuty: provider_oauth_credentials/provider_oauth_revocations
+			// also need SELECT (already implicit) to read the encrypted
+			// token the org-deletion route revokes before deleting the
+			// row; provider_oauth_revocations additionally needs its own
+			// DELETE for the single-row cleanup the revoke step performs
+			// on a successfully revoked pending record, ahead of the bulk
+			// purge pass. pagerduty_webhook_bindings' own delete grant is
+			// declared once, above, widened rather than duplicated here.
+			{"pagerduty_oauth_authorization_requests", false, false, true},
+			{"provider_oauth_credentials", false, false, true},
+			{"provider_oauth_revocations", false, false, true},
+			// Integrations.
+			{"integration_datasets", false, false, true},
+			{"github_app_installations", false, false, true},
+			// integration_credentials' delete grant is declared once, above
+			// (CHAOS-6319's read-only entry, widened rather than duplicated
+			// here) -- the one-entry-per-table rule.
+			// SSO: encrypted_secrets presence is also read for
+			// credentials_deleted's count.
+			{"sso_providers", false, false, true},
+			{"org_ip_allowlist", false, false, true},
+			{"org_retention_policies", false, false, true},
+			{"billing_audit_log", false, false, true},
 		},
 	}
 }

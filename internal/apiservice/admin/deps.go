@@ -12,6 +12,7 @@ package admin
 
 import (
 	"log/slog"
+	"net/http"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -20,6 +21,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/audit"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
 // Deps is this area's dependency set, built from the api Service's shared
@@ -33,6 +35,22 @@ type Deps struct {
 	Logger *slog.Logger
 	// Now is injectable for tests; nil means time.Now.
 	Now func() time.Time
+	// ClickHouseDSN is the org-deletion route's analytics-table purge
+	// target ("" = not configured; every ClickHouse count/delete is
+	// skipped with a warning, matching org_deletion.py's own behavior).
+	ClickHouseDSN string
+	// Decryptor reads provider_oauth_credentials/provider_oauth_revocations'
+	// encrypted PagerDuty tokens before the org-deletion route revokes
+	// them -- keyed by the same SETTINGS_ENCRYPTION_KEY/SALT every other
+	// encrypted-value reader in this repo uses.
+	Decryptor providerfoundation.FernetDecryptor
+	// PagerDuty is the registered app's OAuth client identity the
+	// org-deletion route revokes grants with. A venue test overrides
+	// PagerDuty.RevokeURL to point both planes at one fake endpoint.
+	PagerDuty providerfoundation.PagerDutyRevokeConfig
+	// HTTPDoer is the client the org-deletion route's PagerDuty revoke
+	// call uses; nil means http.DefaultClient.
+	HTTPDoer providerfoundation.HTTPDoer
 }
 
 // Routes is the admin area's route set.
@@ -47,12 +65,20 @@ func Routes(deps Deps) []httpapi.Route {
 	if deps.Now != nil {
 		cache.now = deps.Now
 	}
+	httpDoer := deps.HTTPDoer
+	if httpDoer == nil {
+		httpDoer = http.DefaultClient
+	}
 	area := &handlers{
-		store:  store,
-		audit:  auditWriter,
-		cache:  cache,
-		guard:  deps.Guard,
-		logger: logger,
+		store:         store,
+		audit:         auditWriter,
+		cache:         cache,
+		guard:         deps.Guard,
+		logger:        logger,
+		clickHouseDSN: deps.ClickHouseDSN,
+		decryptor:     deps.Decryptor,
+		pagerDuty:     deps.PagerDuty,
+		httpDoer:      httpDoer,
 	}
 	return area.routes()
 }
@@ -74,4 +100,11 @@ type handlers struct {
 	cache  *impersonationCache
 	guard  *policy.Guard
 	logger *slog.Logger
+	// clickHouseDSN, decryptor, pagerDuty and httpDoer are the org-deletion
+	// route's own dependencies (CHAOS-6306); every other handler in this
+	// package ignores them.
+	clickHouseDSN string
+	decryptor     providerfoundation.FernetDecryptor
+	pagerDuty     providerfoundation.PagerDutyRevokeConfig
+	httpDoer      providerfoundation.HTTPDoer
 }

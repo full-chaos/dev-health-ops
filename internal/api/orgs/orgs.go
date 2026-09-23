@@ -4,8 +4,10 @@
 package orgs
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"time"
@@ -78,7 +80,7 @@ func writeJSON(w http.ResponseWriter, status int, body pyjson.Value) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Content-Length", itoa(len(payload)))
 	w.WriteHeader(status)
-	_, _ = w.Write(payload)
+	_, _ = io.Copy(w, bytes.NewReader(payload))
 }
 
 // loadOrg is OrganizationService.get_by_id: uuid.UUID(org_id) raising on a

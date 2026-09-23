@@ -2,6 +2,7 @@ package externalingest
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 )
 
@@ -40,4 +41,24 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(body)
+}
+
+// recoverToIngestError wraps a handler so a panic on this route group still
+// answers with this package's own {"error": {...}} envelope (errors.py's
+// shape for this prefix), not the app-wide {"detail": ...} shape the shared
+// transport middleware writes for every other area. It must run BEFORE that
+// shared middleware sees anything on this prefix, so it recovers here rather
+// than relying on internal/auth/httpapi's own panic recovery.
+func recoverToIngestError(logger *slog.Logger, next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if rec := recover(); rec != nil {
+				if logger != nil {
+					logger.Error("external-ingest: unhandled panic", "panic", rec, "path", r.URL.Path)
+				}
+				writeIngestError(w, newIngestError(http.StatusInternalServerError, "internal_error", "internal server error"))
+			}
+		}()
+		next(w, r)
+	}
 }

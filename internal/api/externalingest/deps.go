@@ -18,6 +18,7 @@ package externalingest
 
 import (
 	"log/slog"
+	"net/http"
 	"os"
 	"strconv"
 	"time"
@@ -116,13 +117,14 @@ func Routes(deps Deps) []httpapi.Route {
 	}
 	maxBodyBytes := int64(deps.limits().MaxBodyBytes)
 	const prefix = "/api/v1/external-ingest"
+	guarded := func(h http.HandlerFunc) http.HandlerFunc { return recoverToIngestError(deps.logger(), h) }
 	return []httpapi.Route{
-		{Method: "GET", Pattern: prefix + "/schemas", Handler: deps.handleListSchemas()},
-		{Method: "GET", Pattern: prefix + "/schemas/{schema_version}", Handler: deps.handleGetSchema()},
-		{Method: "GET", Pattern: prefix + "/availability", Handler: deps.handleAvailability()},
-		{Method: "POST", Pattern: prefix + "/validate", Handler: deps.handleValidate(), MaxBodyBytes: maxBodyBytes},
-		{Method: "POST", Pattern: prefix + "/batches", Handler: deps.handleAcceptBatch(), MaxBodyBytes: maxBodyBytes},
-		{Method: "GET", Pattern: prefix + "/batches", Handler: deps.handleListBatches()},
-		{Method: "GET", Pattern: prefix + "/batches/{ingestion_id}", Handler: deps.handleGetBatch()},
+		{Method: "GET", Pattern: prefix + "/schemas", Handler: guarded(deps.handleListSchemas())},
+		{Method: "GET", Pattern: prefix + "/schemas/{schema_version}", Handler: guarded(deps.handleGetSchema())},
+		{Method: "GET", Pattern: prefix + "/availability", Handler: guarded(deps.handleAvailability())},
+		{Method: "POST", Pattern: prefix + "/validate", Handler: guarded(deps.handleValidate()), MaxBodyBytes: maxBodyBytes},
+		{Method: "POST", Pattern: prefix + "/batches", Handler: guarded(deps.handleAcceptBatch()), MaxBodyBytes: maxBodyBytes},
+		{Method: "GET", Pattern: prefix + "/batches", Handler: guarded(deps.handleListBatches())},
+		{Method: "GET", Pattern: prefix + "/batches/{ingestion_id}", Handler: guarded(deps.handleGetBatch())},
 	}
 }

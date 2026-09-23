@@ -36,6 +36,10 @@ type Route struct {
 	// MaxBodyBytes overrides the server default body bound for this route.
 	// Zero means the server default.
 	MaxBodyBytes int64
+	// Allow, set on the first route registered for a pattern, is the Allow
+	// header of that pattern's 405. Empty means every registered method of
+	// the pattern, sorted.
+	Allow string
 }
 
 // ServerOptions configures the API server.
@@ -80,6 +84,10 @@ type ServerOptions struct {
 	// IdleTimeout closes a keep-alive connection that has been idle this
 	// long. Zero means 60 s, this package's own value.
 	IdleTimeout time.Duration
+	// ExplicitHead stops a GET route from also answering HEAD (net/http's
+	// mux default): HEAD then gets the pattern's 405 unless a HEAD route is
+	// registered for it.
+	ExplicitHead bool
 }
 
 // Server is the auth API listener. It is a lifecycle.Component so the runtime,
@@ -172,7 +180,11 @@ func buildHandler(options ServerOptions, logger *slog.Logger) (http.Handler, err
 	mux := http.NewServeMux()
 
 	methodsByPattern := make(map[string][]string)
+	allowByPattern := make(map[string]string)
 	seen := make(map[string]struct{}, len(options.Routes))
+	for _, route := range options.Routes {
+		seen[route.Method+" "+route.Pattern] = struct{}{}
+	}
 	for _, route := range options.Routes {
 		if route.Handler == nil {
 			return nil, fmt.Errorf("route %s %s has no handler", route.Method, route.Pattern)
@@ -184,22 +196,36 @@ func buildHandler(options ServerOptions, logger *slog.Logger) (http.Handler, err
 			return nil, fmt.Errorf("route pattern %q must be rooted", route.Pattern)
 		}
 		key := route.Method + " " + route.Pattern
-		if _, exists := seen[key]; exists {
-			return nil, fmt.Errorf("route %s is registered twice", key)
+		if _, exists := methodsByPattern[route.Pattern]; !exists && route.Allow != "" {
+			allowByPattern[route.Pattern] = route.Allow
 		}
-		seen[key] = struct{}{}
+		for _, method := range methodsByPattern[route.Pattern] {
+			if method == route.Method {
+				return nil, fmt.Errorf("route %s is registered twice", key)
+			}
+		}
 		methodsByPattern[route.Pattern] = append(methodsByPattern[route.Pattern], route.Method)
-
 		mux.Handle(key, routeChain(route, options, logger, write))
 	}
 
 	for pattern, methods := range methodsByPattern {
 		sort.Strings(methods)
 		allow := strings.Join(methods, ", ")
-		mux.Handle(pattern, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if explicit, ok := allowByPattern[pattern]; ok {
+			allow = explicit
+		}
+		notAllowed := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Allow", allow)
 			write(w, r, CodeMethodNotAllowed)
-		}))
+		})
+		mux.Handle(pattern, notAllowed)
+		// A GET pattern also matches HEAD in net/http's mux; the more
+		// specific HEAD pattern registered here takes it back.
+		_, hasGet := seen[http.MethodGet+" "+pattern]
+		_, hasHead := seen[http.MethodHead+" "+pattern]
+		if options.ExplicitHead && hasGet && !hasHead {
+			mux.Handle(http.MethodHead+" "+pattern, notAllowed)
+		}
 	}
 
 	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -378,7 +378,7 @@ check_live_python_oracles() {
     return 1
   fi
 
-  printf 'go test -count=1: internal/api/policy (access-token decision vs the live Python AuthService)\n'
+  printf 'go test -count=1: internal/api/policy, internal/api/pyjson (api decisions vs live Python)\n'
   if ! (
     cd "${ROOT}"
     "${GO_ENV_OFF[@]}" \
@@ -387,18 +387,20 @@ check_live_python_oracles() {
       DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
       PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
       go test -mod=readonly -count=1 \
-        -run '^TestPrincipalMatchesLivePythonAuthService$' \
-        ./internal/api/policy
+        -run '^(TestPrincipalMatchesLivePythonAuthService|TestMarshalMatchesLivePythonJSONDumps|TestDecodeBodyMatchesLivePythonJSONLoads)$' \
+        ./internal/api/policy ./internal/api/pyjson
   ); then
     rm -rf -- "${proof_dir}"
     return 1
   fi
-  proof_file="${proof_dir}/api-policy-principal"
-  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-    printf 'ERROR: the api access-token decision was not compared with the live Python AuthService\n' >&2
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
+  for proof_name in api-policy-principal api-pyjson; do
+    proof_file="${proof_dir}/${proof_name}"
+    if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+      printf 'ERROR: api live Python oracle %s did not run\n' "${proof_name}" >&2
+      rm -rf -- "${proof_dir}"
+      return 1
+    fi
+  done
 
   printf 'go test -count=1: internal/scheduler/sync (live Python planner source is outside the Go embed/cache boundary)\n'
   if ! (

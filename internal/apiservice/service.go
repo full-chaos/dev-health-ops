@@ -217,7 +217,7 @@ func NewServer(
 	routes []httpapi.Route,
 	scope ...func(http.Handler) http.Handler,
 ) (*httpapi.Server, error) {
-	middleware := append([]func(http.Handler) http.Handler{CloseHTTP10}, scope...)
+	middleware := append([]func(http.Handler) http.Handler{UnhandledErrorShape, CloseHTTP10, DecodedPathRouting}, scope...)
 	middleware = append(middleware, SecurityHeaders, NewCORS(cfg.CORSAllowedOrigins).Wrap)
 	return httpapi.NewServer(httpapi.ServerOptions{
 		Name:           "api-http",
@@ -235,6 +235,8 @@ func NewServer(
 		MaxHeaderBytes:      maxHeaderBytes,
 		MaxHeaderValueCount: maxHeaderValueCount,
 		IdleTimeout:         idleTimeout,
-		Middleware:          middleware,
+		// FastAPI routes declared with @router.get do not answer HEAD.
+		ExplicitHead: true,
+		Middleware:   middleware,
 	})
 }

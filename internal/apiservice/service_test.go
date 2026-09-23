@@ -480,3 +480,50 @@ func TestServerRunsTheScopeMiddlewaresOutsideSecurityHeadersAndCORS(t *testing.T
 		t.Fatalf("%d %v", recorder.Code, recorder.Header())
 	}
 }
+
+// TestUnhandledErrorsCarryOnlyContentHeaders pins the Python shape of a 500
+// for an unhandled error (ServerErrorMiddleware is outermost), while any
+// other status keeps every transport header; and routing on the decoded
+// path (an encoded slash is a separator, as in Starlette).
+func TestUnhandledErrorsCarryOnlyContentHeaders(t *testing.T) {
+	cfg := apiTestConfig()
+	cfg.CORSAllowedOrigins = []string{"https://app.example"}
+	routes := []httpapi.Route{
+		{Method: http.MethodGet, Pattern: "/boom", Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("X-Impersonating", "true")
+			policy.WriteInternal(w)
+		})},
+		{Method: http.MethodGet, Pattern: "/panic", Handler: http.HandlerFunc(func(http.ResponseWriter, *http.Request) { panic("x") })},
+		{Method: http.MethodGet, Pattern: "/one/{id}", Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusNoContent)
+		})},
+	}
+	server, err := NewServer(cfg, quietLogger(), routes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/boom", "/panic"} {
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		request.Header.Set("Origin", "https://app.example")
+		recorder := httptest.NewRecorder()
+		server.Handler().ServeHTTP(recorder, request)
+		if recorder.Code != 500 || recorder.Body.String() != `{"detail":"Internal Server Error"}` {
+			t.Fatalf("%s: %d %s", path, recorder.Code, recorder.Body.String())
+		}
+		for key := range recorder.Header() {
+			if key != "Content-Type" && key != "Content-Length" {
+				t.Errorf("%s: unhandled 500 carries %s", path, key)
+			}
+		}
+	}
+	for path, status := range map[string]int{"/one/a%2Fb": 404, "/one/a%2fb": 404, "/one/a%20b": 204, "/one/ab": 204} {
+		recorder := httptest.NewRecorder()
+		server.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
+		if recorder.Code != status {
+			t.Errorf("%s: %d, want %d", path, recorder.Code, status)
+		}
+		if status == 404 && recorder.Header().Get("X-Frame-Options") != "DENY" {
+			t.Errorf("%s: a handled 404 keeps the transport headers", path)
+		}
+	}
+}

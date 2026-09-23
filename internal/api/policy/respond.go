@@ -60,8 +60,15 @@ func ErrorDetail(message string) map[string]any {
 	return map[string]any{"message": message}
 }
 
+// UnhandledErrorHeader marks a response as the Python api's answer to an
+// unhandled exception. Starlette's ServerErrorMiddleware, outside every
+// other middleware, builds that response with only its own headers; the
+// api's outermost middleware strips the others when it sees this marker
+// (and removes the marker).
+const UnhandledErrorHeader = "X-Dho-Unhandled-Error"
+
 // WriteInternal writes the Python api's generic 500
-// (api/_errors.py _generic_exception_handler).
+// (api/_errors.py _generic_exception_handler) for an unhandled exception.
 func WriteInternal(w http.ResponseWriter) {
-	WriteDetail(w, http.StatusInternalServerError, "Internal Server Error", nil)
+	WriteDetail(w, http.StatusInternalServerError, "Internal Server Error", http.Header{UnhandledErrorHeader: {"1"}})
 }

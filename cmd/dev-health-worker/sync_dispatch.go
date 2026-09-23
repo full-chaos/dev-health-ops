@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
-	"strings"
+	"os"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/cacheinvalidation"
@@ -438,11 +438,34 @@ func buildSyncCoordinatorWorker(
 		valkeyClient.Close()
 		_ = clickhouseConnection.Close()
 	}
-	bridge, err := syncdispatchruntime.NewHTTPBridge(syncdispatchruntime.HTTPBridgeConfig{
-		BaseURL:       strings.TrimRight(cfg.OperationalBridgeURL, "/"),
-		BearerToken:   cfg.OperationalBridgeToken.Reveal(),
-		Timeout:       cfg.OperationalBridgeTimeout,
-		AllowInsecure: cfg.OperationalBridgeAllowInsecure,
+	// CHAOS-6243: the dispatch budget estimate runs in this process. It
+	// decrypts the run's credential itself, so the sync coordinator needs
+	// the settings encryption key the provider-sync family already needs
+	// (both read it from the shared Secret); without it the family refuses
+	// to start instead of estimating nothing.
+	if !cfg.SettingsEncryptionKey.Configured() {
+		logger.Error("dispatch budget estimator needs SETTINGS_ENCRYPTION_KEY")
+		closeClickHouse()
+		return workerFamily{}, errWorkerDependencyUnavailable
+	}
+	credentialCipher, err := newWorkerCredentialCipher(cfg)
+	if err != nil {
+		closeClickHouse()
+		return workerFamily{}, errWorkerDependencyUnavailable
+	}
+	budgetEstimator, err := syncdispatchruntime.NewInProcessBudgetEstimator(syncdispatchruntime.BudgetEstimatorDependencies{
+		Pool: postgresDatabase.pools.Domain, Decryptor: credentialCipher, Getenv: os.Getenv, Logger: logger,
+		// The same PagerDuty hydration provider sync runs (provider_sync.go).
+		PagerDutyOAuth: providerfoundation.PagerDutyOAuthHydrator{
+			Repository: providerfoundation.PostgresPagerDutyOAuthTokenRepository{
+				Pool: postgresDatabase.pools.Domain,
+			},
+			Cipher:          credentialCipher,
+			Doer:            pagerDutyOAuthDoer(),
+			AppClientID:     cfg.PagerDutyOAuthClientID,
+			AppClientSecret: cfg.PagerDutyOAuthSecret,
+		},
+		PagerDutyDoer: pagerDutyOAuthDoer(),
 	})
 	if err != nil {
 		closeClickHouse()
@@ -661,7 +684,7 @@ func buildSyncCoordinatorWorker(
 	dispatchSyncRun, err := syncdispatchruntime.NewNativeDispatchSyncRunService(
 		postgresDatabase.pools.Domain,
 		logger,
-		bridge,
+		budgetEstimator,
 		producer,
 		registry,
 		budgetEstimateFailureObservers...,

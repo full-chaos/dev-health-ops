@@ -129,7 +129,7 @@ func enforceRun(
 		allCandidatesByID[unit.id] = unit
 	}
 
-	// Chunked at the estimate bridge's own documented request-size ceiling
+	// Chunked at dispatchBudgetEstimateMaxUnitIDs (the old bridge's documented request-size ceiling, kept as the batch size)
 	// (dispatchBudgetEstimateMaxUnitIDs, codex round 2, CHAOS-4175): Python
 	// has no equivalent ceiling to exceed at all (SyncTaskBootstrap.load
 	// runs per unit, in-process, no HTTP hop), so a batch this large hitting

@@ -191,7 +191,7 @@ FROM generate_series(1, $2) AS n`, activeRunID, fatalChunkCandidates); err != ni
 func TestEstimateErrorSentinelsAreAllClassified(t *testing.T) {
 	fset := token.NewFileSet()
 	found := map[string]bool{}
-	for _, file := range []string{"bridge.go", "budget_estimate_bridge.go", "budget_consumption.go"} {
+	for _, file := range []string{"bridge.go", "budget_estimate.go", "budget_consumption.go", "in_process_budget_estimator.go"} {
 		parsed, err := parser.ParseFile(fset, file, nil, 0)
 		if err != nil {
 			t.Fatal(err)

@@ -1139,6 +1139,30 @@ check_live_python_oracles() {
     return 1
   fi
 
+  # CHAOS-6243: the in-process dispatch budget estimator vs the REAL Python
+  # estimators (estimate_provider_budget over a real SyncTaskContext,
+  # credential_fingerprint, _resolve_env_credentials and _credential_mapping
+  # over ciphertext core.encryption wrote), on the same generated inputs.
+  printf 'go test -count=1: internal/syncbudget (in-process budget estimator vs live Python, CHAOS-6243)\n'
+  if ! (
+    cd "${ROOT}"
+    "${GO_ENV_OFF[@]}" \
+      GOWORK=off \
+      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
+      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
+      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
+      go test -mod=readonly -count=1 -run '^TestBudgetEstimatorMatchesLivePython$' ./internal/syncbudget
+  ); then
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  proof_file="${proof_dir}/sync-budget-estimate"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: in-process budget estimator live Python oracle measurement did not occur\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+
   printf 'go test -count=1: cmd/query-api/internal/principal (Go verifier vs a REAL Python-issued envelope + JWKS, CHAOS-4366)\n'
   if ! (
     cd "${ROOT}"

@@ -196,10 +196,10 @@ def test_integration_coverage_inventory_completes_and_stays_nonempty() -> None:
     # same shape as the featureFlagEvents entry above -- a fake RowScanner
     # cannot reproduce the real driver's own type-conversion refusal --
     # and both count toward the total below.
-    # CURRENT TOTAL: 72. Adding one -tags=integration package bumps every
+    # CURRENT TOTAL: 73 (CHAOS-6243 added internal/syncbudget). Adding one -tags=integration package bumps every
     # literal below by +1 -- this is the one number to change; the
     # narrative above is for someone auditing history, not for the bump.
-    assert "72 package(s) discovered, 0 denylisted, 72 will run" in result.stdout
+    assert "73 package(s) discovered, 0 denylisted, 73 will run" in result.stdout
     # Name the package explicitly (SET MEMBERSHIP), not just the count --
     # a bare count is exactly what let CHAOS-4643's own literal drift
     # 31 -> 32 -> 33 unnoticed.

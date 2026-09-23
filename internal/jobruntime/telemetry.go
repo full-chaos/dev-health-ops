@@ -4061,7 +4061,7 @@ func (collector *MetricsCollector) writeRemainingMetricsLease(output *strings.Bu
 			[]metricLabel{{"reason", reason}}, collector.membershipRefusals[reason])
 	}
 
-	writeMetadata(output, "worker_dispatch_budget_estimate_failures_total", "dispatch_sync_run BudgetGuard estimate-bridge fetches that fell open, by reason.", "counter")
+	writeMetadata(output, "worker_dispatch_budget_estimate_failures_total", "dispatch_sync_run BudgetGuard estimate batches that fell open because the estimator was unavailable, by reason.", "counter")
 	for _, reason := range budgetEstimateFailureReasons {
 		writeUintSample(output, "worker_dispatch_budget_estimate_failures_total",
 			[]metricLabel{{"reason", reason}}, collector.budgetEstimateFailures[reason])

@@ -224,7 +224,7 @@ Three of the five routes (`dispatch`, `finalize`, `reference-discovery`) are dea
 | --- | --- | --- | --- | --- | --- |
 <!-- END GENERATED BRIDGE ROUTE LEDGER -->
 
-A separate bridge, `internal/syncdispatchruntime/budget_estimate_bridge.go`, calls `POST /api/internal/worker-sync/dispatch-budget-estimate` (6 per-provider Python budget estimators, ~2000 LOC). It is live and out of `bridge.go`'s literal scope, so the drift gate does not enumerate it, and it has an owning ticket (CHAOS-4198) -- listed here so this page stays the complete picture even where the mechanical gate's scope is narrower. The PagerDuty reconciliation bridge that used to sit beside it (`internal/jobs/pagerduty/compatibility.go`, called from `dev-health-stream-runner`) is gone: CHAOS-4105 ported the reconciliation to Go and deleted both the bridge and the Python compute behind it.
+The separate budget-estimate bridge (`POST /api/internal/worker-sync/dispatch-budget-estimate`) is gone (CHAOS-6243): the Go dispatcher runs the unit bootstrap and the six per-provider budget estimators in-process (`internal/syncbudget`, called through `internal/syncdispatchruntime/in_process_budget_estimator.go`), pinned against the Python estimators by the live-Python oracle `internal/syncbudget/budget_estimate_oracle_test.go`. No `/api/internal/worker-sync` route remains.
 
 ## Python worker modules (`src/dev_health_ops/workers/*.py`)
 

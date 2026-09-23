@@ -125,6 +125,21 @@ type Credential struct {
 	fields   map[string]secrets.Value
 }
 
+// NewCredential builds a Credential from already-decrypted fields, for a
+// caller that resolves the credential row itself (the in-process budget
+// estimator's PagerDuty hydration, CHAOS-6243). The maps are copied.
+func NewCredential(provider, id string, config map[string]string, fields map[string]secrets.Value) Credential {
+	copiedConfig := make(map[string]string, len(config))
+	for key, value := range config {
+		copiedConfig[key] = value
+	}
+	copiedFields := make(map[string]secrets.Value, len(fields))
+	for key, value := range fields {
+		copiedFields[key] = value
+	}
+	return Credential{Provider: provider, ID: id, Config: copiedConfig, fields: copiedFields}
+}
+
 func (c Credential) Secret(name string) (secrets.Value, bool) {
 	v, ok := c.fields[name]
 	return v, ok

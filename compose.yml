@@ -12,8 +12,11 @@
 # empty volume -- it is no longer a way to attach to another project's data.
 name: dev-health-ops
 
-# The Python operational-bridge SERVERS (`api`,
-# `metrics-api`, via worker_auth.py's `_bounded_secret("WORKER_OPERATIONAL_BRIDGE_TOKEN")`)
+# The Python operational-bridge SERVERS (`api`, `metrics-api`, via
+# worker_sync.py's own `_authorize()` -- CHAOS-6240 deleted the shared
+# api/internal/worker_auth.py helper's only route caller, worker_metrics.py,
+# so worker_sync.py's independent, inline reimplementation of the same
+# constant-time-compare check is now this token's only Python-side reader)
 # and the Go worker CLIENTS that call them must read this exact shell
 # variable to the exact same default -- a mismatch means every bridge call
 # fails closed with 401, not a readiness-visible failure. One shared
@@ -584,9 +587,11 @@ services:
       --host 0.0.0.0 --port 8000 --reload
     environment: &env
       # Api/metrics-api -- and, via this shared
-      # anchor, billing-edge -- are the servers worker_auth.py authorizes
-      # incoming Go operational-bridge calls against; this must read the
-      # exact same shell variable and default as the Go-worker side below
+      # anchor, billing-edge -- are the servers worker_sync.py's own
+      # _authorize() checks incoming Go operational-bridge calls against
+      # (CHAOS-6240 deleted the shared worker_auth.py helper along with its
+      # only route caller); this must read the exact same shell variable
+      # and default as the Go-worker side below
       # (x-worker-operational-bridge-token), never a second literal.
       #
       # JWT_SECRET_KEY had no default anywhere in this

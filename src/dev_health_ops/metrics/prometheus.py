@@ -516,72 +516,20 @@ if _PROMETHEUS_AVAILABLE:
     )
 
     # ---------------------------------------------------------------------------
-    # Metric compatibility bridge runner subprocess (CHAOS-4264)
-    # ---------------------------------------------------------------------------
-    DEV_HEALTH_METRIC_COMPAT_RUNNER_RSS_BYTES = _prometheus_client_module.Gauge(
-        "dev_health_metric_compat_runner_rss_bytes",
-        "Peak resident set size observed for the metric compatibility bridge "
-        "runner subprocess (worker_metrics_runner), sampled from "
-        "/proc/<pid>/status while the child runs so a kernel OOM kill "
-        "(SIGKILL, no graceful exit) still leaves a reading (CHAOS-4264: "
-        "the runner reached 1.7 GB inside a 2 GiB api container with no "
-        "cgroup-level signal reaching Docker or SigNoz).",
-        ["worker_kind"],
-    )
-    DEV_HEALTH_METRIC_COMPAT_PROCESS_EXITS_TOTAL = _prometheus_client_module.Counter(
-        "dev_health_metric_compat_process_exits_total",
-        "Metric compatibility bridge runner subprocess exits by classified "
-        "reason. 'success' and 'process_failed' are ordinary outcomes; "
-        "'process_signaled' and 'resource_exhausted' mean the process never "
-        "returned its own exit path (killed) or hit its self-imposed "
-        "memory bound -- both are the CHAOS-4264 failure class that used to "
-        "surface only as an opaque -9 in Sentry.",
-        ["reason"],
-    )
-    DEV_HEALTH_METRIC_COMPAT_EXECUTION_DURATION_SECONDS = (
-        _prometheus_client_module.Histogram(
-            "dev_health_metric_compat_execution_duration_seconds",
-            "Wall-clock duration of one metric compatibility bridge "
-            "execution (subprocess spawn through exit), labeled by "
-            "worker_kind/operation so a daily partition's long tail is "
-            "distinguishable from a remaining-metrics family's.",
-            ["worker_kind", "operation"],
-            buckets=(1.0, 5.0, 15.0, 30.0, 60.0, 120.0, 300.0, 600.0),
-        )
-    )
-    # CHAOS-4319: the bounded terminal disposition of an ambiguous_refused
-    # metric-compatibility-execution ledger row. "retry_authorized" is
-    # emitted here, in _mark_retry_authorized, the moment a classified
-    # runner failure is handed straight back to River as retryable instead
-    # of sticking at "ambiguous"; "persisted_failed" is the Go-side mirror
-    # label (internal/jobruntime, same metric name and axis) for the case
-    # that still lands genuinely stuck. The two halves of one decision live
-    # in different languages because each is only ever observed from the
-    # side that made it.
-    DEV_HEALTH_METRIC_COMPAT_RETRY_TOTAL = _prometheus_client_module.Counter(
-        "dev_health_metric_compat_retry_total",
-        "Terminal disposition of an ambiguous_refused metrics.daily "
-        "compatibility-bridge execution, by worker_kind and bounded "
-        "decision (CHAOS-4319).",
-        ["worker_kind", "decision"],
-    )
-
-    # ---------------------------------------------------------------------------
     # Metric compatibility bridge liveness bound (CHAOS-4316)
+    #
+    # CHAOS-6240 deleted the compatibility bridge itself
+    # (api/internal/worker_metrics.py -- no route reached it) along with
+    # every metric above that only it incremented
+    # (RUNNER_RSS_BYTES/PROCESS_EXITS_TOTAL/EXECUTION_DURATION_SECONDS/
+    # RETRY_TOTAL/LIVENESS_KILL_TOTAL/RUNNER_SLOTS_IN_USE/PIDS_CURRENT/
+    # PIDS_CEILING/PIDS_WAIT_SECONDS/CAPACITY_WAIT_EXHAUSTED_TOTAL, this
+    # section's own former LIVENESS_KILL_TOTAL included). CHILD_SILENCE_SECONDS
+    # stays: it already had zero importers anywhere in src/ or tests/ before
+    # this change (a pre-existing orphan, not something this deletion caused),
+    # so it is out of this ticket's scope -- tracked as a follow-up, not
+    # silently swept up with the metrics this deletion actually orphaned.
     # ---------------------------------------------------------------------------
-    DEV_HEALTH_METRIC_COMPAT_LIVENESS_KILL_TOTAL = _prometheus_client_module.Counter(
-        "dev_health_metric_compat_liveness_kill_total",
-        "Daily-metrics compatibility bridge runner subprocesses killed by "
-        "the bridge's own liveness watchdog because ComputePartition had no "
-        "wall-clock/renewal-based bound (CHAOS-4316). 'stalled' means no "
-        "progress line arrived within the per-repo-derived stall window; "
-        "'timeout' means the hard ceiling backstop fired despite trickling "
-        "progress; 'oom' means the kill coincided with a real memcg OOM "
-        "signal (preferred) or, when that signal is unavailable, peak RSS "
-        "near the configured memory bound (CHAOS-4264) -- distinguishing a "
-        "genuine hang from a memory-pressure kill misclassified as a hang.",
-        ["reason"],
-    )
     DEV_HEALTH_METRIC_COMPAT_CHILD_SILENCE_SECONDS = (
         _prometheus_client_module.Histogram(
             "dev_health_metric_compat_child_silence_seconds",
@@ -595,59 +543,6 @@ if _PROMETHEUS_AVAILABLE:
             buckets=(30.0, 60.0, 120.0, 300.0, 600.0, 1200.0, 1800.0),
         )
     )
-    DEV_HEALTH_METRIC_COMPAT_RUNNER_SLOTS_IN_USE = _prometheus_client_module.Gauge(
-        "dev_health_metric_compat_runner_slots_in_use",
-        "Runner subprocess slots currently held against this replica's "
-        "process-local _RUNNER_CONCURRENCY_SEMAPHORE (CHAOS-4316). A value "
-        "pinned at the configured max concurrency for an extended period is "
-        "the same signature the 2026-08-26 incident showed: every partition "
-        "routed to this replica queues behind one stuck child while sibling "
-        "replicas keep working.",
-    )
-
-    # ---------------------------------------------------------------------------
-    # Metric compatibility bridge pids/thread capacity bound (CHAOS-4317)
-    # ---------------------------------------------------------------------------
-    DEV_HEALTH_METRIC_COMPAT_PIDS_CURRENT = _prometheus_client_module.Gauge(
-        "dev_health_metric_compat_pids_current",
-        "This api container's live cgroup pids.current, sampled every time "
-        "the CHAOS-4317 capacity gate checks headroom before spawning a "
-        "runner subprocess. Reacts to every thread/process consumer in the "
-        "container -- OTel init, sync_run threads, other requests -- not "
-        "just this feature's own subprocess count, which is what the "
-        "2026-08-26 incident's pthread_create failures actually exhausted.",
-    )
-    DEV_HEALTH_METRIC_COMPAT_PIDS_CEILING = _prometheus_client_module.Gauge(
-        "dev_health_metric_compat_pids_ceiling",
-        "This container's cgroup pids.max at capacity-gate check time, or "
-        "a documented fallback constant when pids.max is unset/unbounded "
-        "or unreadable. RLIMIT_NPROC and host kernel.threads-max are "
-        "deliberately NOT consulted (codex review, PR #1931 round 2): "
-        "neither is scoped to this container's cgroup, so mixing them in "
-        "could under-report a real host-wide exhaustion. Exists so an "
-        "alert can compare dev_health_metric_compat_pids_current against "
-        "the REAL current limit instead of a hardcoded number (CHAOS-4317 "
-        "to-do item 3: alert at 80% of this ratio).",
-    )
-    DEV_HEALTH_METRIC_COMPAT_PIDS_WAIT_SECONDS = _prometheus_client_module.Histogram(
-        "dev_health_metric_compat_pids_wait_seconds",
-        "Seconds one partition's runner spawn waited on the CHAOS-4317 "
-        "capacity gate before pids headroom was available. Zero in the "
-        "common case; the visible proof that a partition queued for "
-        "capacity rather than being dropped or erroring immediately.",
-        buckets=(0.0, 1.0, 5.0, 15.0, 30.0, 60.0, 120.0, 300.0),
-    )
-    DEV_HEALTH_METRIC_COMPAT_CAPACITY_WAIT_EXHAUSTED_TOTAL = (
-        _prometheus_client_module.Counter(
-            "dev_health_metric_compat_capacity_wait_exhausted_total",
-            "Runner spawns that waited past the CHAOS-4317 capacity gate's "
-            "derived wait ceiling and gave up, returning a retryable "
-            "capacity_exhausted outcome to the Go caller instead of "
-            "spawning over budget. Should be near-zero in steady state; a "
-            "real alert signal for sustained (not burst) pids starvation.",
-        )
-    )
-
     DEV_HEALTH_OTEL_INIT_FAILURES_TOTAL = _prometheus_client_module.Counter(
         "dev_health_otel_init_failures_total",
         "OpenTelemetry tracer initialisation failures (tracing.py "
@@ -770,21 +665,11 @@ else:
     DEV_HEALTH_METRICS_FAMILY_FAILURES_TOTAL = _noop_counter()
     WORK_ITEM_TEAM_ATTRIBUTIONS_WRITTEN_TOTAL = _noop_counter()
     TEAM_ATTRIBUTION_MEMBERSHIP_LAYER_TOTAL = _noop_counter()
-    DEV_HEALTH_METRIC_COMPAT_RUNNER_RSS_BYTES = _noop_gauge()
-    DEV_HEALTH_METRIC_COMPAT_PROCESS_EXITS_TOTAL = _noop_counter()
     SYNC_MANUAL_TRIGGER_AWAIT_OUTCOME_TOTAL = _noop_counter()
     SYNC_MANUAL_TRIGGER_AWAIT_LATENCY_SECONDS = _noop_histogram()
     INGEST_LEGACY_AUTH_REJECTED_TOTAL = _noop_counter()
     TELEMETRY_ORG_ID_REJECTED_TOTAL = _noop_counter()
-    DEV_HEALTH_METRIC_COMPAT_EXECUTION_DURATION_SECONDS = _noop_histogram()
-    DEV_HEALTH_METRIC_COMPAT_RETRY_TOTAL = _noop_counter()
-    DEV_HEALTH_METRIC_COMPAT_LIVENESS_KILL_TOTAL = _noop_counter()
     DEV_HEALTH_METRIC_COMPAT_CHILD_SILENCE_SECONDS = _noop_histogram()
-    DEV_HEALTH_METRIC_COMPAT_RUNNER_SLOTS_IN_USE = _noop_gauge()
-    DEV_HEALTH_METRIC_COMPAT_PIDS_CURRENT = _noop_gauge()
-    DEV_HEALTH_METRIC_COMPAT_PIDS_CEILING = _noop_gauge()
-    DEV_HEALTH_METRIC_COMPAT_PIDS_WAIT_SECONDS = _noop_histogram()
-    DEV_HEALTH_METRIC_COMPAT_CAPACITY_WAIT_EXHAUSTED_TOTAL = _noop_counter()
     DEV_HEALTH_OTEL_INIT_FAILURES_TOTAL = _noop_counter()
 
 

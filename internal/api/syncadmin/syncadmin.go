@@ -77,7 +77,7 @@ func Routes(deps Deps) []httpapi.Route {
 }
 
 type handlers struct {
-	store     store
+	store     reader
 	features  licensing.Store
 	logger    *slog.Logger
 	lookupEnv func(string) (string, bool)

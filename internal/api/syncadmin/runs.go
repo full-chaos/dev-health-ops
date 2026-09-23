@@ -95,7 +95,6 @@ func (h *handlers) listJobs(w http.ResponseWriter, r *http.Request) {
 	decoded := make([]pyjson.Value, len(runs))
 	syncRunIDs := make([]*uuid.UUID, len(runs))
 	var idSet []uuid.UUID
-	seen := map[uuid.UUID]bool{}
 	for index := range runs {
 		value, err := decodeStored(runs[index].Result)
 		if err != nil {
@@ -105,10 +104,7 @@ func (h *handlers) listJobs(w http.ResponseWriter, r *http.Request) {
 		decoded[index] = value
 		if id := plannerSyncRunID(value); id != nil {
 			syncRunIDs[index] = id
-			if !seen[*id] {
-				seen[*id] = true
-				idSet = append(idSet, *id)
-			}
+			idSet = append(idSet, *id)
 		}
 	}
 	plannerRuns, rollups, err := h.plannerRollups(r, org, idSet)
@@ -211,11 +207,7 @@ func (h *handlers) plannerRollups(r *http.Request, org string, ids []uuid.UUID) 
 		return nil, nil, err
 	}
 	for _, id := range ids {
-		statusCounts := counts[id]
-		if statusCounts == nil {
-			statusCounts = map[string]int64{}
-		}
-		rollups[id] = &unitRollup{StatusCounts: statusCounts, Requested: requested[id], Covered: covered[id]}
+		rollups[id] = &unitRollup{StatusCounts: counts[id], Requested: requested[id], Covered: covered[id]}
 	}
 	return runs, rollups, nil
 }
@@ -321,7 +313,7 @@ var itemsSyncedKeys = []string{"items_synced", "rows_ingested", "rows", "items",
 // itemsSynced is _items_synced_from_result.
 func itemsSynced(result pyjson.Value) (pyjson.Int, error) {
 	object, ok := result.(*pyjson.Object)
-	if !ok || object.Len() == 0 {
+	if !ok {
 		return pyjson.IntOf(0), nil
 	}
 	for _, key := range itemsSyncedKeys {
@@ -492,11 +484,7 @@ func backfillSyncRunID(job *backfillJob) string {
 // backfillRunCounts is _backfill_job_run_counts: nil when the job names no
 // sync run, a non-UUID one, or one not in the job's org.
 func (h *handlers) backfillRunCounts(r *http.Request, job *backfillJob) (*backfillCounts, error) {
-	text := backfillSyncRunID(job)
-	if text == "" {
-		return nil, nil
-	}
-	runID, err := pythonparity.ParseUUID(text)
+	runID, err := pythonparity.ParseUUID(backfillSyncRunID(job))
 	if err != nil {
 		return nil, nil
 	}
@@ -554,9 +542,7 @@ func backfillJobResponse(job *backfillJob, counts *backfillCounts) *pyjson.Objec
 		status, total, completed, failed = counts.Status, counts.Total, counts.Completed, counts.Failed
 		errorMessage = stringOrNone(counts.ErrorMessage)
 		completedAt = pyTimeOrNone(counts.CompletedAt)
-		if newest := latest(&job.UpdatedAt, counts.UpdatedAt); newest != nil {
-			updatedAt = *newest
-		}
+		updatedAt = *latest(&job.UpdatedAt, counts.UpdatedAt)
 	}
 	progress := 0.0
 	if total > 0 {

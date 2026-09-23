@@ -324,7 +324,7 @@ VALUES ($1, $2, $3, $4, $5::json, $6::json, $7, $8, $9, $10, $11, NULLIF($12, ''
 	config(ids.cfgPlanner, ids.orgA, "planner", "github", `["git", "prs"]`,
 		`{"owner": "acme", "all_repos": false, "ratio": 1.0, "big": 12345678901234567890, "tiny": 1e-7, "fx": 1e-05, "fx2": 1.5212603486793025e-05, "neg": -2.5e-08, "huge": 1e400, "e16": 1e16, "e22": 1e22, "nested": {"b": 1, "a": [1.5, "x", null, true]}, "dup": 1, "dup": 2, "uni": "café 😀"}`,
 		true, nil, ids.intA, nil, "2026-03-04 05:06:07.891234+00", true, nil, "2026-01-01 00:00:00.000001+00")
-	config(ids.cfgLegacyParent, ids.orgA, "legacy", "gitlab", `["git"]`, `{"group": "grp"}`, true, nil, nil, nil, "", nil, nil, "2026-01-01 00:00:01+00")
+	config(ids.cfgLegacyParent, ids.orgA, "legacy", "gitlab", `["git"]`, `{"group": "grp", "repo": "own"}`, true, nil, nil, nil, "", nil, nil, "2026-01-01 00:00:01+00")
 	config(ids.child1, ids.orgA, "child1", "gitlab", `["git"]`, `{"repo": "r1", "owner": "o1"}`, true, ids.cfgLegacyParent, nil, nil, "", nil, nil, "2026-01-01 00:00:02+00")
 	config(ids.child2, ids.orgA, "child2", "gitlab", `["git"]`, `{"project_id": 42}`, true, ids.cfgLegacyParent, nil, nil, "", nil, nil, "2026-01-01 00:00:03+00")
 	config(ids.child3, ids.orgA, "child3", "gitlab", `["git"]`, `{"repo": "a/b", "owner": "o"}`, true, ids.cfgLegacyParent, nil, nil, "", nil, nil, "2026-01-01 00:00:04+00")
@@ -334,7 +334,7 @@ VALUES ($1, $2, $3, $4, $5::json, $6::json, $7, $8, $9, $10, $11, NULLIF($12, ''
 	config(ids.childSourced, ids.orgA, "sourced", "github", `["git"]`, `{"repo": true, "owner": ["x", 1]}`, true, nil, ids.intA, ids.src1, "", nil, nil, "2026-01-01 00:00:08+00")
 	config(ids.cfgWeird, ids.orgA, "weird", "linear", `"abc"`, `[["k", "v"], "xy", {"p": 1, "q": 2}, ["k", 3.5e-06]]`, true, nil, nil, nil, "", nil, nil, "2026-01-01 00:00:09+00")
 	config(ids.cfgDictTargets, ids.orgA, "dict-targets", "jira", `{"z": 1, "y": 2}`, `null`, true, nil, nil, nil, "2026-02-02 02:02:02+00", false, "boom", "2026-01-01 00:00:10+00")
-	config(ids.cfgInactive, ids.orgA, "inactive", "jira", `[]`, `{}`, false, nil, nil, nil, "", nil, nil, "2026-01-01 00:00:11+00")
+	config(ids.cfgInactive, ids.orgA, "inactive", "jira", `[]`, `{"repo": "lonely"}`, false, nil, nil, nil, "", nil, nil, "2026-01-01 00:00:11+00")
 	config(ids.cfgNoSources, ids.orgA, "no-sources", "github", `["git"]`, `{"repo": "x/y", "owner": "ignored"}`, true, nil, ids.intEmpty, nil, "", nil, nil, "2026-01-01 00:00:12+00")
 	config(ids.cfgCrossOrg, ids.orgA, "cross-org", "github", `["git"]`, `{"repo": 5, "owner": 0, "group": "g"}`, true, nil, ids.intB, nil, "", nil, nil, "2026-01-01 00:00:13+00")
 	config(ids.cfgJobsBadList, ids.orgA, "jobs-bad-list", "jira", `[]`, `{}`, true, nil, nil, nil, "", nil, nil, "2026-01-01 00:00:14+00")

@@ -53,7 +53,7 @@ func (h *handlers) getRepositories(w http.ResponseWriter, r *http.Request) {
 				h.fail(w, r, "render_source_metadata", err)
 				return
 			}
-			if value, ok := get(metadata, "planner_managed_sync_config_id").(string); !ok || value != want {
+			if value, _ := get(metadata, "planner_managed_sync_config_id").(string); value != want {
 				continue
 			}
 			matched++
@@ -97,7 +97,7 @@ func (h *handlers) getRepositories(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if len(repos) == 0 {
-		if repo, present := options.Get("repo"); present && repo != nil {
+		if repo := get(options, "repo"); repo != nil {
 			repoText := pyjson.Str(repo)
 			if owner != "" && !strings.Contains(repoText, "/") {
 				repos = []pyjson.Value{owner + "/" + repoText}

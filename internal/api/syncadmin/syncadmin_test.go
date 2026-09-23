@@ -185,6 +185,9 @@ func TestDictConversionsFollowDictThenPydantic(t *testing.T) {
 		{`["abc"]`, "error", "error"},
 		{`[{"a":1}]`, "error", "error"},
 		{`[1]`, "error", "error"},
+		{`[["a","b","c"]]`, "error", "error"},
+		{`[{"a":1,"b":2,"c":3}]`, "error", "error"},
+		{`[{"a":1}]`, "error", "error"},
 		{`"abc"`, "error", "error"},
 		{`true`, "error", "error"},
 		{`3`, "error", "error"},
@@ -215,7 +218,7 @@ func TestItemsSyncedIsIntOfTheFirstPresentKey(t *testing.T) {
 		`{"count":false}`: "0", `{"items":"1.5"}`: "0", `{"rows_ingested":" 1_000 "}`: "1000", `{"items":1e20}`: "100000000000000000000",
 		`{"items_synced":[]}`: "0", `{"items_synced":[1]}`: "0", `{"items_synced":{"a":1}}`: "0", `{"items_synced":null,"rows":7}`: "0",
 		`{"items_synced":"٣"}`: "3", `{"items_synced":123456789012345678901234567890}`: "123456789012345678901234567890",
-		`{"items_synced":1e400}`: "error", `{"items_synced":-1e400}`: "error",
+		`{"items_synced":1e400}`: "error", `{"items_synced":-1e400}`: "error", `{"items_synced":NaN}`: "0",
 	} {
 		got, err := itemsSynced(decode(t, stored))
 		if want == "error" {
@@ -387,5 +390,19 @@ func TestPageLimitsAreTheQueryBounds(t *testing.T) {
 	}
 	if _, ok := offsetValue(new(big.Int).Lsh(big.NewInt(1), 63)); ok {
 		t.Fatal("an offset past int8 cannot be bound")
+	}
+}
+
+func TestDecodeStoredReadsNullAndRefusesMalformedText(t *testing.T) {
+	if value, err := decodeStored(nil); value != nil || err != nil {
+		t.Fatal(value, err)
+	}
+	broken := "{"
+	if _, err := decodeStored(&broken); err == nil {
+		t.Fatal("malformed stored text must not decode")
+	}
+	null := "null"
+	if value, err := decodeStored(&null); value != nil || err != nil {
+		t.Fatal(value, err)
 	}
 }

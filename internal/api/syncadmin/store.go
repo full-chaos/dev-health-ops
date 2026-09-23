@@ -10,6 +10,28 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// reader is every read the handlers make; store is the Postgres one.
+type reader interface {
+	listConfigs(ctx context.Context, orgID string, activeOnly bool) ([]*syncConfig, error)
+	configByID(ctx context.Context, orgID string, id uuid.UUID) (*syncConfig, error)
+	childrenCounts(ctx context.Context, parentIDs []uuid.UUID) (map[uuid.UUID]int64, error)
+	credentialIDs(ctx context.Context, orgID string, integrationIDs []uuid.UUID) (map[uuid.UUID]*uuid.UUID, error)
+	sourcesForIntegration(ctx context.Context, orgID string, integrationID uuid.UUID, provider string) ([]plannerSource, error)
+	childOptions(ctx context.Context, orgID string, parentID uuid.UUID) ([]*string, error)
+	scheduledSyncJobIDs(ctx context.Context, orgID string, configID uuid.UUID) ([]uuid.UUID, error)
+	jobRuns(ctx context.Context, jobIDs []uuid.UUID, limit, offset int64) ([]jobRun, error)
+	syncRunByID(ctx context.Context, orgID string, id uuid.UUID) (*syncRun, error)
+	syncRunsByID(ctx context.Context, orgID string, ids []uuid.UUID) (map[uuid.UUID]*syncRun, error)
+	unitStatusCounts(ctx context.Context, orgID string, runIDs []uuid.UUID) (map[uuid.UUID]map[string]int64, error)
+	unitRanges(ctx context.Context, orgID string, runIDs []uuid.UUID, successOnly bool) ([]unitRange, error)
+	countBackfillJobs(ctx context.Context, orgID string) (int64, error)
+	backfillJobs(ctx context.Context, orgID string, limit, offset int64) ([]backfillJob, error)
+	unitActivity(ctx context.Context, orgID string, runID uuid.UUID) (*time.Time, *time.Time, error)
+	runStatusCounts(ctx context.Context, orgID string, runID uuid.UUID) (map[string]int64, error)
+}
+
+var _ reader = store{}
+
 // store reads the sync admin tables over the api role's pool. No query
 // carries an ORDER BY the Python service does not carry: an unordered
 // Python read is an unordered read here, so both planes see one database's

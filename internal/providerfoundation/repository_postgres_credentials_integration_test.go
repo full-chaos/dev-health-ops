@@ -73,6 +73,20 @@ func insertCredential(t *testing.T, ctx context.Context, pool *pgxpool.Pool, id,
 	}
 }
 
+// insertCredentialWithConfig is insertCredential plus an explicit config
+// JSON literal, for rows whose config shape itself is under test (e.g. a
+// JSON array instead of an object -- the column has no shape constraint).
+func insertCredentialWithConfig(t *testing.T, ctx context.Context, pool *pgxpool.Pool, id, orgID, provider, name string, active bool, ciphertext, configJSON string) {
+	t.Helper()
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO public.integration_credentials (id, org_id, provider, name, is_active, credentials_encrypted, config)
+		 VALUES ($1::uuid, $2, $3, $4, $5, $6, $7::json)`,
+		id, orgID, provider, name, active, ciphertext, configJSON,
+	); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // insertCredentialNullCiphertext inserts an active row with a SQL NULL
 // credentials_encrypted -- a shape insertCredential's non-nullable string
 // param cannot express (Go can bind "" for an empty string, never NULL,
@@ -244,5 +258,56 @@ func TestResolveEncryptedActiveCredentialWithEmptyCiphertextStillCountsAsCandida
 	want := []string{"alpha-empty", "zulu-valid"}
 	if len(ambiguous.Names) != len(want) || ambiguous.Names[0] != want[0] || ambiguous.Names[1] != want[1] {
 		t.Fatalf("Names = %v, want %v", ambiguous.Names, want)
+	}
+}
+
+// TestResolveEncryptedMalformedCandidateConfigStillCountsAsCandidate is
+// CHAOS-6351's round-2 P1 reproduction: an active credential's `config`
+// column has no shape constraint (any valid JSON), and Python's
+// list_by_provider never touches `.config` during the ambiguity-detection
+// sweep at all -- SQLAlchemy loads it lazily and nothing in
+// resolve_with_fallback's candidate-counting path reads it, so a
+// malformed config on one candidate does not stop Python from reporting
+// the ambiguity. Before this fix, Go decoded config eagerly for every
+// candidate inside the scan loop, so one row's `config = []` (a JSON
+// array, not object) failed json.Unmarshal into map[string]any and
+// returned ErrCredentialInvalid for the WHOLE call, discarding every
+// already-collected match and hiding the ambiguity entirely.
+func TestResolveEncryptedMalformedCandidateConfigStillCountsAsCandidate(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	pool := startCredentialsPool(t, ctx)
+
+	insertCredentialWithConfig(t, ctx, pool, "00000000-0000-0000-0000-000000000051", "org-1", "github", "alpha-malformed-config", true, "v1:a", "[]")
+	insertCredential(t, ctx, pool, "00000000-0000-0000-0000-000000000052", "org-1", "github", "zulu-valid", true, "v1:b")
+
+	repo := PostgresCredentialRepository{Pool: pool}
+	_, err := repo.ResolveEncrypted(ctx, TenantScope{OrgID: "org-1", Provider: "github", IntegrationID: "admin-discover"})
+	var ambiguous *CredentialAmbiguousError
+	if !errors.As(err, &ambiguous) {
+		t.Fatalf("expected *CredentialAmbiguousError, got %T: %v", err, err)
+	}
+	want := []string{"alpha-malformed-config", "zulu-valid"}
+	if len(ambiguous.Names) != len(want) || ambiguous.Names[0] != want[0] || ambiguous.Names[1] != want[1] {
+		t.Fatalf("Names = %v, want %v", ambiguous.Names, want)
+	}
+}
+
+// TestResolveEncryptedMalformedConfigOnTheChosenCandidateStillFails proves
+// the deferred-decode restructuring does not silently swallow a genuinely
+// malformed config on the row that IS actually chosen and returned --
+// only the ambiguity-detection SWEEP skips config decoding, the single
+// final candidate's config is still decoded and still fails closed.
+func TestResolveEncryptedMalformedConfigOnTheChosenCandidateStillFails(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	pool := startCredentialsPool(t, ctx)
+
+	insertCredentialWithConfig(t, ctx, pool, "00000000-0000-0000-0000-000000000061", "org-1", "github", "only", true, "v1:a", "[]")
+
+	repo := PostgresCredentialRepository{Pool: pool}
+	_, err := repo.ResolveEncrypted(ctx, TenantScope{OrgID: "org-1", Provider: "github", IntegrationID: "admin-discover"})
+	if !errors.Is(err, ErrCredentialInvalid) {
+		t.Errorf("err = %v, want ErrCredentialInvalid", err)
 	}
 }

@@ -75,6 +75,21 @@ FROM integration_credentials WHERE org_id = $1 AND provider = $2 AND is_active =
 	}
 	defer rows.Close()
 	var matches []EncryptedCredential
+	// configBlobs holds each candidate's RAW config JSON, index-aligned
+	// with matches, deliberately left undecoded here. r3 (round 2, P1):
+	// config was previously decoded eagerly for EVERY candidate inside
+	// this loop, so a malformed config on any ONE active row (e.g. a
+	// stored JSON array instead of object -- the column has no shape
+	// constraint) aborted the WHOLE query with ErrCredentialInvalid
+	// before the ambiguity check ever ran, discarding every
+	// already-collected match, the same failure CLASS the ciphertext fix
+	// above closes. Python's list_by_provider (integration_credentials.py:
+	// 358) never touches `.config` during the ambiguity sweep at all --
+	// SQLAlchemy loads it lazily and nothing in resolve_with_fallback's
+	// candidate-counting path reads it. Config is decoded here ONLY for
+	// the single candidate actually being returned, at each return site
+	// below, matching that lazy Python behavior exactly.
+	var configBlobs [][]byte
 	for rows.Next() {
 		var record EncryptedCredential
 		// r2 (round 1, P1): credentials_encrypted scans into a NULLABLE
@@ -99,19 +114,16 @@ FROM integration_credentials WHERE org_id = $1 AND provider = $2 AND is_active =
 		if cipherText != nil && *cipherText != "" {
 			record.Ciphertext = secrets.NewValue(*cipherText)
 		}
-		record.Config = map[string]string{}
-		if err := decodeConfig(configJSON, record.Config); err != nil {
-			return EncryptedCredential{}, ErrCredentialInvalid
-		}
 		matches = append(matches, record)
+		configBlobs = append(configBlobs, configJSON)
 	}
 	if err := rows.Err(); err != nil || len(matches) == 0 {
 		return EncryptedCredential{}, ErrCredentialNotFound
 	}
 	if scope.CredentialID == "" && scope.CredentialName == "" {
-		for _, match := range matches {
+		for index, match := range matches {
 			if match.Name == "default" {
-				return match, nil
+				return finalizeConfig(match, configBlobs[index])
 			}
 		}
 		if len(matches) != 1 {
@@ -123,7 +135,18 @@ FROM integration_credentials WHERE org_id = $1 AND provider = $2 AND is_active =
 			return EncryptedCredential{}, &CredentialAmbiguousError{Provider: scope.Provider, Names: names}
 		}
 	}
-	return matches[0], nil
+	return finalizeConfig(matches[0], configBlobs[0])
+}
+
+// finalizeConfig decodes the single candidate ResolveEncrypted is actually
+// about to return -- see the configBlobs doc comment above for why this
+// must never run during the ambiguity-detection sweep.
+func finalizeConfig(record EncryptedCredential, configJSON []byte) (EncryptedCredential, error) {
+	record.Config = map[string]string{}
+	if err := decodeConfig(configJSON, record.Config); err != nil {
+		return EncryptedCredential{}, ErrCredentialInvalid
+	}
+	return record, nil
 }
 
 func decodeConfig(raw []byte, target map[string]string) error {

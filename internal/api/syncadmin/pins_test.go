@@ -2,6 +2,7 @@ package syncadmin
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -223,4 +224,70 @@ func newRequest(t *testing.T, target, org string) *http.Request {
 		t.Fatal(err)
 	}
 	return request.WithContext(policy.WithUser(request.Context(), &policy.User{OrgID: org, Role: "admin"}))
+}
+
+// shapeReader serves one config, its planner sources and its legacy
+// children with the stored JSON texts given.
+type shapeReader struct {
+	faultReader
+	options, metadata, child string
+	integration              bool
+}
+
+func (s *shapeReader) configByID(context.Context, string, uuid.UUID) (*syncConfig, error) {
+	config := s.config()
+	config.SyncOptions = &s.options
+	if !s.integration {
+		config.IntegrationID = nil
+	}
+	return config, nil
+}
+func (s *shapeReader) sourcesForIntegration(context.Context, string, uuid.UUID, string) ([]plannerSource, error) {
+	return []plannerSource{{FullName: "a/b", IsEnabled: true, Metadata: &s.metadata}}, nil
+}
+func (s *shapeReader) childOptions(context.Context, string, uuid.UUID) ([]*string, error) {
+	return []*string{&s.child}, nil
+}
+
+// TestUnrenderableStoredShapesAreLogged500s pins every stored-value
+// conversion of the config reads as a logged 500 at its own step: the
+// answer the Python router gives, reached by the decision, not by a panic.
+func TestUnrenderableStoredShapesAreLogged500s(t *testing.T) {
+	good := `{}`
+	for _, tc := range []struct {
+		step                     string
+		options, metadata, child string
+		integration              bool
+		handler                  func(*handlers) http.HandlerFunc
+	}{
+		{"decode_options", `{`, good, good, false, func(h *handlers) http.HandlerFunc { return h.getRepositories }},
+		{"render_options", `"abc"`, good, good, false, func(h *handlers) http.HandlerFunc { return h.getRepositories }},
+		{"decode_source_metadata", good, `{`, good, true, func(h *handlers) http.HandlerFunc { return h.getRepositories }},
+		{"render_source_metadata", good, `"abc"`, good, true, func(h *handlers) http.HandlerFunc { return h.getRepositories }},
+		{"decode_child_options", good, good, `{`, false, func(h *handlers) http.HandlerFunc { return h.getRepositories }},
+		{"render_child_options", good, good, `"abc"`, false, func(h *handlers) http.HandlerFunc { return h.getRepositories }},
+		{"render_config", `"abc"`, good, good, false, func(h *handlers) http.HandlerFunc { return h.getSyncConfig }},
+		{"render_config", `[[1, 2]]`, good, good, false, func(h *handlers) http.HandlerFunc { return h.getSyncConfig }},
+	} {
+		var logs strings.Builder
+		reader := &shapeReader{options: tc.options, metadata: tc.metadata, child: tc.child, integration: tc.integration}
+		h := &handlers{store: reader, features: fixedFeatures{}, logger: slog.New(slog.NewTextHandler(&logs, nil))}
+		request := newRequest(t, "/x", uuid.NewString())
+		request.SetPathValue("config_id", faultConfigID.String())
+		recorder := record(tc.handler(h), request)
+		if recorder.Code != http.StatusInternalServerError || !strings.Contains(logs.String(), "step="+tc.step) {
+			t.Errorf("%s: %d %s", tc.step, recorder.Code, logs.String())
+		}
+	}
+}
+
+func TestSyncConfigResponseRefusesUnrenderableColumns(t *testing.T) {
+	for _, tc := range []struct{ targets, options string }{
+		{`["a", 1]`, `{}`}, {`5`, `{}`}, {`[]`, `"abc"`}, {`[]`, `[[1, 2]]`}, {`[]`, `true`}, {`{`, `{}`}, {`[]`, `{`},
+	} {
+		targets, options := tc.targets, tc.options
+		if _, err := syncConfigResponse(&syncConfig{SyncTargets: &targets, SyncOptions: &options}, nil, nil); err == nil {
+			t.Errorf("targets=%s options=%s rendered", tc.targets, tc.options)
+		}
+	}
 }

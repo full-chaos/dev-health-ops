@@ -121,9 +121,6 @@ func selectionOwner(options *pyjson.Object) string {
 
 // selection is SyncConfigRepositorySelection.
 func selection(owner string, repos []pyjson.Value, allRepos bool) *pyjson.Object {
-	if repos == nil {
-		repos = []pyjson.Value{}
-	}
 	out := pyjson.NewObject()
 	out.Set("owner", owner)
 	out.Set("repos", repos)

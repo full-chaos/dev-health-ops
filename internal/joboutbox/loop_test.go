@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -104,6 +105,55 @@ func TestReconcilerLoopImmediateNoopStepOpensReadiness(t *testing.T) {
 	}
 	if err := loop.Shutdown(context.Background()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestReconcilerLoopShutdownStateIsNotRestoredByTheStepInFlight pins the
+// ordering a timing-dependent test would only hit occasionally. Shutdown clears
+// readiness before it cancels the loop context, so a tick-driven step that parks
+// until that context is cancelled and then succeeds returns strictly AFTER the
+// clear; it must not set readiness, the up gauge or the last-success time again.
+func TestReconcilerLoopShutdownStateIsNotRestoredByTheStepInFlight(t *testing.T) {
+	start := time.Date(2026, time.July, 22, 12, 0, 0, 0, time.UTC)
+	clock := &testReconcilerClock{now: start}
+	entered := make(chan struct{})
+	var calls atomic.Int32
+	loop, registry := newTestReconcilerLoop(t, loopStepFunc(func(ctx context.Context, _ time.Time, _ int) (StepResult, error) {
+		if calls.Add(1) == 1 {
+			// The synchronous initial step inside Start.
+			return StepResult{}, nil
+		}
+		close(entered)
+		<-ctx.Done()
+		// A non-zero blocked level, so a post-Shutdown update of that gauge is
+		// observable too.
+		return StepResult{UndeliveredBlocked: 5}, nil
+	}), clock)
+	if err := loop.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	openReconcilerReadiness(t, registry)
+	// A different time from the initial step, so a last-success update by the
+	// in-flight step is observable.
+	clock.ticker.ticks <- start.Add(time.Minute)
+	<-entered
+	if err := loop.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if status := registry.Readiness(context.Background()); status.Ready {
+		t.Fatalf("readiness after Shutdown = %#v, want not ready", status)
+	}
+	loop.mu.Lock()
+	up, lastOK, blocked := loop.up, loop.lastOK, loop.undeliveredBlocked
+	loop.mu.Unlock()
+	if up {
+		t.Fatal("up gauge is set after Shutdown; the in-flight step restored it")
+	}
+	if blocked != 0 {
+		t.Fatalf("undelivered-blocked gauge = %d after Shutdown, want the initial step's 0; the in-flight step set it", blocked)
+	}
+	if !lastOK.Equal(start) {
+		t.Fatalf("last-success time = %v after Shutdown, want the initial step's %v; the in-flight step moved it", lastOK, start)
 	}
 }
 

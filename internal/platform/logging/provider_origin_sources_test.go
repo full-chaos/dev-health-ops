@@ -568,8 +568,13 @@ func passesContent(call *ast.CallExpr) bool {
 // workerBinaries are the binaries the invariant covers.
 var workerBinaries = []string{
 	"dev-health-worker", "dev-health-stream-runner", "dev-health-scheduler",
-	"dev-health-reconciler", "dho", "dev-health-worker-migrate",
+	"dev-health-reconciler", "dev-health-worker-migrate",
 }
+
+// workerPackages are worker code that lives in a package of a multi-vertical
+// binary: `dho workers` (formerly the dev-health-workerctl binary). Only that
+// vertical is covered, not every vertical dho carries.
+var workerPackages = []string{"./internal/workersctl"}
 
 // accessorOnlyCarriers are error types that hold provider content in a field
 // for a classifier to read; their Error() never formats that field, which
@@ -593,6 +598,7 @@ func TestProviderOriginContentNeverEntersAnErrorAtItsSource(t *testing.T) {
 	for _, binary := range workerBinaries {
 		arguments = append(arguments, "./cmd/"+binary)
 	}
+	arguments = append(arguments, workerPackages...)
 	command := exec.Command("go", arguments...)
 	command.Dir = root
 	output, err := command.Output()

@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
 // ValidationErrorItem mirrors schemas.py's ValidationErrorItem: one
@@ -53,7 +54,7 @@ func validateRecords(records []Record) []ValidationErrorItem {
 				Index:   index,
 				Kind:    record.Kind,
 				Code:    "unknown_kind",
-				Message: "Unknown record kind: " + pythonRepr(record.Kind),
+				Message: "Unknown record kind: " + pythonparity.StrRepr(record.Kind),
 				Path:    fmt.Sprintf("records[%d].kind", index),
 			})
 			continue

@@ -14,6 +14,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/licensing"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 	"github.com/google/uuid"
 )
 
@@ -42,7 +43,7 @@ func (d Deps) handleGetSchema() http.HandlerFunc {
 		version := r.PathValue("schema_version")
 		if version != schemaVersion {
 			writeIngestError(w, newIngestError(http.StatusNotFound, "unsupported_schema_version",
-				"Unknown schema version: "+pythonRepr(version)))
+				"Unknown schema version: "+pythonparity.StrRepr(version)))
 			return
 		}
 		document, err := schemaDocument(d.limits())
@@ -153,7 +154,7 @@ func (d Deps) handleValidate() http.HandlerFunc {
 		}
 		if envelope.SchemaVersion != schemaVersion {
 			writeIngestError(w, newIngestError(http.StatusBadRequest, "unsupported_schema_version",
-				"Unsupported schemaVersion: "+pythonRepr(envelope.SchemaVersion)))
+				"Unsupported schemaVersion: "+pythonparity.StrRepr(envelope.SchemaVersion)))
 			return
 		}
 		if len(envelope.Records) > d.limits().MaxRecords {
@@ -242,7 +243,7 @@ func (d Deps) handleAcceptBatch() http.HandlerFunc {
 		}
 		if envelope.SchemaVersion != schemaVersion {
 			writeIngestError(w, newIngestError(http.StatusBadRequest, "unsupported_schema_version",
-				"Unsupported schemaVersion: "+pythonRepr(envelope.SchemaVersion)))
+				"Unsupported schemaVersion: "+pythonparity.StrRepr(envelope.SchemaVersion)))
 			return
 		}
 		kinds := make([]string, len(envelope.Records))
@@ -250,7 +251,7 @@ func (d Deps) handleAcceptBatch() http.HandlerFunc {
 			kinds[i] = rec.Kind
 			if _, known := recordKindValidators[rec.Kind]; !known {
 				writeIngestError(w, newIngestError(http.StatusBadRequest, "unknown_record_kind",
-					fmt.Sprintf("Unknown record kind at index %d: ", i)+pythonRepr(rec.Kind)))
+					fmt.Sprintf("Unknown record kind at index %d: ", i)+pythonparity.StrRepr(rec.Kind)))
 				return
 			}
 		}
@@ -305,7 +306,7 @@ func (d Deps) handleAcceptBatch() http.HandlerFunc {
 		}
 		if outcome.Kind == outcomeConflict {
 			writeIngestError(w, newIngestError(http.StatusConflict, "idempotency_conflict",
-				"Idempotency key "+pythonRepr(envelope.IdempotencyKey)+
+				"Idempotency key "+pythonparity.StrRepr(envelope.IdempotencyKey)+
 					fmt.Sprintf(" was already used for source '%s:%s' with a different payload. "+
 						"Use a new idempotencyKey, or retry with the exact original payload to get the cached status.",
 						envelope.Source.System, envelope.Source.Instance)))
@@ -342,7 +343,7 @@ func (d Deps) handleAcceptBatch() http.HandlerFunc {
 			}
 			writeIngestError(w, newIngestError(http.StatusServiceUnavailable, "stream_unavailable",
 				"The durable ingest stream is temporarily unavailable. The batch was recorded as "+
-					pythonRepr(batch.IngestionID.String())+"; retry with the same idempotencyKey once available."))
+					pythonparity.StrRepr(batch.IngestionID.String())+"; retry with the same idempotencyKey once available."))
 			return
 		}
 

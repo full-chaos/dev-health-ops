@@ -134,6 +134,14 @@
               "properties": {"binary": {"const": "dho"}, "subcommand": {"const": "reconciler"}},
               "required": ["binary", "subcommand"]
             }
+          },
+          {
+            "if": {"properties": {"subcommand": {"const": "reconciler"}}, "required": ["subcommand"]},
+            "then": {"properties": {"name": {"const": "reconciler"}}, "required": ["name"]}
+          },
+          {
+            "if": {"properties": {"name": {"const": "scheduler"}}, "required": ["name"]},
+            "then": {"properties": {"binary": {"const": "dev-health-scheduler"}}, "required": ["binary"]}
           }
         ],
         "required": [

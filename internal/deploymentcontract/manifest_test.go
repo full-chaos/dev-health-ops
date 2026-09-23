@@ -881,7 +881,8 @@ func TestDeploymentManifestSchemaPinsTheStreamRunnerVerb(t *testing.T) {
 }
 
 // The reconciler process runs `dho reconciler`. The old binary, a missing or
-// different subcommand, and the verb on the scheduler each fail validation,
+// different subcommand, and the verb (or any dho verb) on the scheduler each
+// fail validation,
 // in the Go validator and in the JSON Schema a schema-only consumer reads.
 func TestManifestPinsTheReconcilerSubcommand(t *testing.T) {
 	t.Parallel()
@@ -923,6 +924,7 @@ func TestManifestPinsTheReconcilerSubcommand(t *testing.T) {
 		"other subcommand":       {"reconciler", func(p *Process) { p.Subcommand = "stream-runner" }},
 		"verb on the scheduler":  {"scheduler", func(p *Process) { p.Binary, p.Subcommand = "dho", "reconciler" }},
 		"scheduler on dho alone": {"scheduler", func(p *Process) { p.Binary, p.Subcommand = "dho", "scheduler" }},
+		"verb on a worker":       {"heavy", func(p *Process) { p.Binary, p.Subcommand = "dho", "reconciler" }},
 	} {
 		t.Run(name, func(t *testing.T) {
 			manifest, registry := loadFixture(t)
@@ -939,10 +941,8 @@ func TestManifestPinsTheReconcilerSubcommand(t *testing.T) {
 			if _, err := manifest.Validate(registry); err == nil {
 				t.Fatal("Validate accepted the mutated control process")
 			}
-			if testCase.process == "reconciler" {
-				if err := resolved.Validate(toDocument(t, manifest)); err == nil {
-					t.Fatal("the schema accepted a reconciler process that is not `dho reconciler`")
-				}
+			if err := resolved.Validate(toDocument(t, manifest)); err == nil {
+				t.Fatal("the schema accepted the mutated control process that Validate rejects")
 			}
 		})
 	}

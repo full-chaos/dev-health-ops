@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/externalingest"
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/streamrunner"
 	"github.com/google/uuid"
 )
@@ -357,6 +359,16 @@ type externalEnvelope struct {
 type externalRecord struct {
 	Kind, ExternalID string
 	Payload          map[string]any
+	// OrderedPayload is Payload's exact same bytes, decoded a second time
+	// via pyjson.Decode instead of encoding/json+UseNumber: input key
+	// ORDER preserved, not just numeric type. externalingest.ValidateRecords
+	// needs this -- envelope_pydantic.go's own doc comment confirms
+	// pydantic's extra_forbidden errors are reported in INPUT order, which
+	// a map[string]any (Go map iteration order, unrelated to JSON input
+	// order) cannot reproduce. Payload itself is untouched and still what
+	// every other consumer (sink writers, the project-membership check)
+	// reads -- this field exists for validation only.
+	OrderedPayload *pyjson.Object
 }
 
 func parseExternalEnvelope(raw []byte) (externalEnvelope, error) {
@@ -376,9 +388,9 @@ func parseExternalEnvelope(raw []byte) (externalEnvelope, error) {
 			EndedAt   string `json:"endedAt"`
 		} `json:"window"`
 		Records []struct {
-			Kind       string         `json:"kind"`
-			ExternalID string         `json:"externalId"`
-			Payload    map[string]any `json:"payload"`
+			Kind       string          `json:"kind"`
+			ExternalID string          `json:"externalId"`
+			Payload    json.RawMessage `json:"payload"`
 		} `json:"records"`
 	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))
@@ -411,10 +423,33 @@ func parseExternalEnvelope(raw []byte) (externalEnvelope, error) {
 	envelope := externalEnvelope{SchemaVersion: wire.SchemaVersion, IdempotencyKey: wire.IdempotencyKey, Records: make([]externalRecord, 0, len(wire.Records))}
 	envelope.Source.Type, envelope.Source.System, envelope.Source.Instance, envelope.Source.EntityFamily = wire.Source.Type, wire.Source.System, wire.Source.Instance, entityFamily
 	for _, record := range wire.Records {
-		if record.Kind == "" || record.ExternalID == "" || record.Payload == nil {
+		if record.Kind == "" || record.ExternalID == "" || len(record.Payload) == 0 || string(record.Payload) == "null" {
 			return externalEnvelope{}, &streamrunner.PermanentError{Reason: "invalid_external_payload"}
 		}
-		envelope.Records = append(envelope.Records, externalRecord{Kind: record.Kind, ExternalID: record.ExternalID, Payload: record.Payload})
+		// Two decodes of the SAME bytes: payload (map[string]any,
+		// UseNumber -- unchanged from before, every other consumer reads
+		// this) and orderedPayload (*pyjson.Object, input order + exact
+		// Int/Float -- ValidateRecords only). A payload that isn't a JSON
+		// object (or is otherwise malformed) fails the first decode the
+		// same way the old single-pass decoder would have failed the
+		// whole envelope.
+		var payload map[string]any
+		payloadDecoder := json.NewDecoder(bytes.NewReader(record.Payload))
+		payloadDecoder.UseNumber()
+		if err := payloadDecoder.Decode(&payload); err != nil || payload == nil {
+			return externalEnvelope{}, &streamrunner.PermanentError{Reason: "invalid_external_payload"}
+		}
+		orderedValue, err := pyjson.Decode(record.Payload)
+		if err != nil {
+			return externalEnvelope{}, &streamrunner.PermanentError{Reason: "invalid_external_payload"}
+		}
+		orderedPayload, ok := orderedValue.(*pyjson.Object)
+		if !ok {
+			return externalEnvelope{}, &streamrunner.PermanentError{Reason: "invalid_external_payload"}
+		}
+		envelope.Records = append(envelope.Records, externalRecord{
+			Kind: record.Kind, ExternalID: record.ExternalID, Payload: payload, OrderedPayload: orderedPayload,
+		})
 	}
 	return envelope, nil
 }
@@ -427,24 +462,84 @@ func ensureJSONEOF(decoder *json.Decoder) error {
 	return nil
 }
 
+// externalShapeErrorsByIndex ports normalize_batch's own precedence
+// exactly: validate_records/ValidateRecords runs over EVERY record first,
+// and the FIRST error per index wins the batch's one persisted rejection
+// slot for that record (validate_records/ValidateRecords itself emits
+// errors in field-declaration order, so "first" is well-defined) --
+// confirmed from normalize.py's shape_error_by_index.setdefault(...), not
+// inferred. A shape error at an index, once found, is checked BEFORE
+// unsupported_kind_for_system in the caller: normalize_batch never reaches
+// its own kind-for-system check when validate_records already rejected
+// that index.
+func externalShapeErrorsByIndex(records []externalRecord) map[int]externalingest.ValidationErrorItem {
+	inputs := make([]externalingest.RecordInput, len(records))
+	for index, record := range records {
+		inputs[index] = externalingest.RecordInput{Kind: record.Kind, Payload: record.OrderedPayload}
+	}
+	byIndex := make(map[int]externalingest.ValidationErrorItem)
+	for _, item := range externalingest.ValidateRecords(inputs) {
+		if _, exists := byIndex[item.Index]; !exists {
+			byIndex[item.Index] = item
+		}
+	}
+	return byIndex
+}
+
+// shapeRejection builds an externalRejection straight from a
+// ValidationErrorItem -- NOT through the rejection() helper below, which
+// Sprintf's its own "records[%d]." prefix onto whatever path it is given;
+// ValidationErrorItem.Path is already fully qualified
+// (externalingest/validate.go's errorPath), so routing it through
+// rejection() would double-prefix it.
+func shapeRejection(record externalRecord, item externalingest.ValidationErrorItem) externalRejection {
+	return externalRejection{
+		Index: item.Index, Kind: record.Kind, ExternalID: record.ExternalID,
+		Code: item.Code, Message: item.Message, Path: item.Path,
+	}
+}
+
 func normalizeExternalRecords(pointer externalPointer, envelope externalEnvelope) ([]externalSinkRecord, []externalRejection, map[string]int) {
 	accepted := make([]externalSinkRecord, 0, len(envelope.Records))
 	rejections := make([]externalRejection, 0)
 	counts := make(map[string]int)
 	seenMembershipEvents := map[string]string{}
+	shapeErrors := externalShapeErrorsByIndex(envelope.Records)
 	for index, record := range envelope.Records {
-		if _, allowed := externalAllowedKinds[pointer.SourceSystem][record.Kind]; !allowed {
-			rejections = append(rejections, rejection(index, record, "unsupported_kind_for_system", "record kind is not accepted for source system", "kind"))
+		if externalKindsWithoutPythonModel[record.Kind] {
+			// This kind has no Python-side model at all (see
+			// externalKindsWithoutPythonModel's doc comment) -- ValidateRecords
+			// would report unknown_kind for every record of it, a real
+			// behavior change with no Python reference to prove correct
+			// against. Kept on its EXACT pre-CHAOS-6345 order and validator
+			// (kind-for-system, then entity-family, then this file's own
+			// field table) until that question resolves.
+			if _, allowed := externalAllowedKinds[pointer.SourceSystem][record.Kind]; !allowed {
+				rejections = append(rejections, rejection(index, record, "unsupported_kind_for_system", "record kind is not accepted for source system", "kind"))
+				continue
+			}
+			_, operational := operationalExternalKinds[record.Kind]
+			if (envelope.Source.EntityFamily == "operational") != operational {
+				rejections = append(rejections, rejection(index, record, "entity_family_mismatch", "record kind does not match source entity family", "kind"))
+				continue
+			}
+			if err := validateExternalRecordFieldTable(record.Kind, record.Payload); err != nil {
+				rejections = append(rejections, rejection(index, record, "invalid_field", err.Error(), "payload"))
+				continue
+			}
+		} else if item, hasShapeError := shapeErrors[index]; hasShapeError {
+			rejections = append(rejections, shapeRejection(record, item))
 			continue
-		}
-		_, operational := operationalExternalKinds[record.Kind]
-		if (envelope.Source.EntityFamily == "operational") != operational {
-			rejections = append(rejections, rejection(index, record, "entity_family_mismatch", "record kind does not match source entity family", "kind"))
-			continue
-		}
-		if err := validateExternalRecord(record.Kind, record.Payload); err != nil {
-			rejections = append(rejections, rejection(index, record, "invalid_field", err.Error(), "payload"))
-			continue
+		} else {
+			if _, allowed := externalAllowedKinds[pointer.SourceSystem][record.Kind]; !allowed {
+				rejections = append(rejections, rejection(index, record, "unsupported_kind_for_system", "record kind is not accepted for source system", "kind"))
+				continue
+			}
+			_, operational := operationalExternalKinds[record.Kind]
+			if (envelope.Source.EntityFamily == "operational") != operational {
+				rejections = append(rejections, rejection(index, record, "entity_family_mismatch", "record kind does not match source entity family", "kind"))
+				continue
+			}
 		}
 		// Every remaining project-membership contradiction lives here rather
 		// than in the schema table, because each one is a conflict BETWEEN two
@@ -468,6 +563,19 @@ func normalizeExternalRecords(pointer externalPointer, envelope externalEnvelope
 			}
 			if !strings.EqualFold(repo, pointer.SourceInstance) {
 				rejections = append(rejections, rejection(index, record, "record_outside_source_instance", "repository identifier does not match source instance", "payload"))
+				continue
+			}
+		}
+		// normalize.py's own post-shape check (not part of validate_records'
+		// shape rules -- ServiceRepositoryMappingV1.repo_full_name/
+		// repo_provider are BOTH Optional at the pydantic model level, so
+		// shape validation alone never catches either one's absence; Python
+		// enforces "both present, or neither is checked here" as this
+		// separate semantic check, immediately after the git-family
+		// instance-scoping check and before operational dispatch).
+		if record.Kind == "service_repository_mapping.v1" {
+			if stringField(record.Payload, "repoFullName") == "" || stringField(record.Payload, "repoProvider") == "" {
+				rejections = append(rejections, rejection(index, record, "repository_identity_required", "service_repository_mapping requires repoFullName and repoProvider", "payload"))
 				continue
 			}
 		}

@@ -7,6 +7,9 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/api/externalingest"
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 )
 
 type externalFieldType uint8
@@ -27,6 +30,16 @@ type externalFieldRule struct {
 	enum     []string
 }
 
+// externalRecordSchemas is a field-NAME reference per record kind, read by
+// stored_version_test.go's contract-completeness checks (does every
+// declared field reach a sink column or a named "unstored" reason) --
+// NOT a validation rule engine any more (CHAOS-6345, no second
+// implementation of the shape rules): normalizeExternalRecords
+// decides accept/reject through externalingest.ValidateRecords alone, the
+// one exact validator. The per-field required/enum metadata below is
+// UNUSED for validation decisions now; kept because it costs nothing to
+// leave in a name/metadata table and rewriting every literal into a bare
+// name set is a mechanical change with no behavioral upside.
 var externalRecordSchemas = buildExternalRecordSchemas()
 
 func buildExternalRecordSchemas() map[string]map[string]externalFieldRule {
@@ -227,26 +240,83 @@ func buildExternalRecordSchemas() map[string]map[string]externalFieldRule {
 	return schemas
 }
 
-// externalNonNullFields are optional fields the reference translation refuses
-// when stated null: absent is accepted, an explicit null is not.
-var externalNonNullFields = map[string]map[string]bool{
-	"repository.v1":                 {"settings": true, "tags": true},
-	"identity.v1":                   {"isActive": true, "providerIdentities": true, "teamIds": true},
-	"commit.v1":                     {"parents": true},
-	"work_item.v1":                  {"assignees": true, "labels": true, "type": true},
-	"team.v1":                       {"isActive": true, "members": true, "projectKeys": true, "repoPatterns": true},
-	"service_repository_mapping.v1": {"isActive": true},
+// externalKindsWithoutPythonModel names record kinds this worker accepts
+// that externalingest.ValidateRecords cannot validate at all, because
+// RECORD_KIND_MODELS (schemas.py) has no entry for them -- confirmed by
+// reading schemas.py's RECORD_KIND_MODELS dict directly (21 kinds) against
+// this package's 22, and normalize.py's ALLOWED_KINDS_BY_SYSTEM (every
+// frozenset it is built from), not inferred: the Python worker's
+// normalize_batch has never validated or accepted a
+// project_membership_transition.v1 record, ever, on any system. Routing
+// this kind through ValidateRecords like every other one would report
+// unknown_kind for every record of it -- a real behavior change (today's
+// production Go worker accepts and processes it via this file's own field
+// table + refuseProjectMembershipContradiction) with no Python reference
+// to prove correct against. Escalated on the CHAOS-6345 design thread
+// rather than silently changed or silently left as a second
+// implementation; this is the ONE kind still validated by this package's
+// own field-table rules (validateExternalValue below) until that resolves.
+var externalKindsWithoutPythonModel = map[string]bool{
+	"project_membership_transition.v1": true,
 }
 
+// validateExternalRecord reports whether normalize_batch would accept
+// kind's payload for every kind BUT externalKindsWithoutPythonModel,
+// checking (in Python's order) externalingest.ValidateRecords' shape
+// rules, then the one post-shape semantic check normalize.py applies
+// outside validate_records itself (service_repository_mapping.v1's
+// repository_identity_required -- ServiceRepositoryMappingV1.repo_full_name/
+// repo_provider are both Optional at the pydantic model level, so shape
+// validation alone never catches either one's absence). A thin
+// compatibility wrapper for existing tests that check "would Python accept
+// this fixture" as a precondition (project-membership contradiction
+// fixtures, the stored-version golden-fixture reference test) -- NOT a
+// second validation rule set (CHAOS-6345) for every kind Python
+// actually has: the shape RULES for those live only in
+// externalingest.ValidateRecords. normalizeExternalRecords (the production
+// accept/reject path) never calls this -- it uses
+// externalShapeErrorsByIndex, which passes OrderedPayload (input order
+// preserved) directly, plus its own inline repository_identity_required
+// check with pointer/source context this function does not have. This
+// wrapper round-trips payload through JSON to reach pyjson.Decode, so key
+// ORDER here is Go map iteration order, not input order -- fine for these
+// callers, which check accept/reject on one payload, never which of
+// several simultaneous errors ValidateRecords reports first.
 func validateExternalRecord(kind string, payload map[string]any) error {
+	if externalKindsWithoutPythonModel[kind] {
+		return validateExternalRecordFieldTable(kind, payload)
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("%s: %w", kind, err)
+	}
+	decoded, err := pyjson.Decode(raw)
+	if err != nil {
+		return fmt.Errorf("%s: %w", kind, err)
+	}
+	ordered, _ := decoded.(*pyjson.Object)
+	items := externalingest.ValidateRecords([]externalingest.RecordInput{{Kind: kind, Payload: ordered}})
+	if len(items) > 0 {
+		return fmt.Errorf("%s: %s", items[0].Path, items[0].Message)
+	}
+	if kind == "service_repository_mapping.v1" {
+		if stringField(payload, "repoFullName") == "" || stringField(payload, "repoProvider") == "" {
+			return fmt.Errorf("service_repository_mapping requires repoFullName and repoProvider")
+		}
+	}
+	return nil
+}
+
+// validateExternalRecordFieldTable is this file's PRE-CHAOS-6345 validator,
+// kept alive ONLY for externalKindsWithoutPythonModel: required/extra/type/
+// enum checks against externalRecordSchemas, exactly as this file always
+// ran them. Not a second implementation for any kind ValidateRecords can
+// reach -- validateExternalRecord only calls this for the one kind it
+// cannot.
+func validateExternalRecordFieldTable(kind string, payload map[string]any) error {
 	schema, ok := externalRecordSchemas[kind]
 	if !ok {
 		return fmt.Errorf("unsupported record kind")
-	}
-	for name := range externalNonNullFields[kind] {
-		if value, present := payload[name]; present && value == nil {
-			return fmt.Errorf("%s must not be null", name)
-		}
 	}
 	for key := range payload {
 		if _, allowed := schema[key]; !allowed {
@@ -263,26 +333,6 @@ func validateExternalRecord(kind string, payload map[string]any) error {
 		}
 		if err := validateExternalValue(name, value, rule); err != nil {
 			return err
-		}
-	}
-	if confidence, ok := numberField(payload, "relationshipConfidence"); ok && (confidence < 0 || confidence > 1) {
-		return fmt.Errorf("relationshipConfidence must be between 0 and 1")
-	}
-	for _, name := range []string{"number", "pullRequestNumber", "additions", "deletions", "changedFiles", "changesRequestedCount", "reviewsCount", "commentsCount", "parents", "escalationLevel"} {
-		if value, ok := integerField(payload, name); ok && value < 0 {
-			return fmt.Errorf("%s must be non-negative", name)
-		}
-	}
-	if value, ok := integerField(payload, "number"); ok && value < 1 {
-		return fmt.Errorf("number must be at least 1")
-	}
-	if value, ok := integerField(payload, "pullRequestNumber"); ok && value < 1 {
-		return fmt.Errorf("pullRequestNumber must be at least 1")
-	}
-	if kind == "commit.v1" {
-		hash := stringField(payload, "hash")
-		if len(hash) < 7 || len(hash) > 64 {
-			return fmt.Errorf("hash length must be between 7 and 64")
 		}
 	}
 	return nil

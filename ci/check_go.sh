@@ -620,6 +620,29 @@ check_live_python_oracles() {
     fi
   done
 
+  printf 'go test -count=1: internal/streamhandlers (external-ingest worker normalize_batch orchestration vs live Python, CHAOS-6345)\n'
+  if ! (
+    cd "${ROOT}"
+    "${GO_ENV_OFF[@]}" \
+      GOWORK=off \
+      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
+      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
+      PYTHON="${PYTHON:-python3}" \
+      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
+      go test -mod=readonly -count=1 \
+        -run '^TestNormalizeExternalRecordsMatchesLivePythonNormalizeBatch$' \
+        ./internal/streamhandlers
+  ); then
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  proof_file="${proof_dir}/streamhandlers-normalize-batch"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: streamhandlers normalize_batch live Python oracle did not run\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+
   printf 'go test -count=1: internal/jobs/metrics/aigovernance (ai_governance port vs live Python, CHAOS-4285)\n'
   if ! (
     cd "${ROOT}"

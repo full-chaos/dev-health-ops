@@ -338,7 +338,7 @@ type GitHubAppAuth struct {
 
 func NewGitHubAppAuth(credential Credential, baseURL string, doer HTTPDoer) (*GitHubAppAuth, error) {
 	appID, _ := credential.Secret("app_id")
-	privateKey, _ := credential.Secret("private_key")
+	privateKey, privateKeyPresent := credential.Secret("private_key")
 	installationID, _ := credential.Secret("installation_id")
 	// r2 (round 1 finding #1): github_credentials_from_mapping reads
 	// private_key FROM DISK at resolve.py:269-276 when the mapping has no
@@ -348,7 +348,25 @@ func NewGitHubAppAuth(credential Credential, baseURL string, doer HTTPDoer) (*Gi
 	// distinguishable error; this mirrors that by falling through to the
 	// SAME ErrCredentialInvalid below rather than surfacing the read
 	// error's own type.
-	if !privateKey.Configured() {
+	//
+	// r3 (round 2 finding #1): the path fallback fires only when
+	// private_key is ABSENT (`"private_key" not in cred_dict`,
+	// resolver.py:263), never merely empty -- a row carrying
+	// `privateKey: ""` normalizes to a PRESENT `private_key` key with an
+	// empty value, which Python carries forward unchanged into
+	// GitHubCredentials(**kwargs) and rejects there (empty string is
+	// falsy), it does NOT fall back to private_key_path. The previous
+	// check here (`!privateKey.Configured()`, i.e. raw == "") could not
+	// tell "present but empty" from "absent" and fell back to the path
+	// key in both cases -- silently authenticating with a stale
+	// file-backed key when the caller's intent, by writing an explicit
+	// empty inline key, was to reject the credential. credential.Secret's
+	// own `ok` return already carries real map-key presence (decodeCredential
+	// inserts a field for every JSON key, including an empty-string
+	// value), so checking `!privateKeyPresent` instead of
+	// `!privateKey.Configured()` reproduces Python's exact presence
+	// check with no new plumbing.
+	if !privateKeyPresent {
 		if path, ok := credential.Secret("private_key_path"); ok && path.Configured() {
 			if content, err := readGitHubAppPrivateKeyFile(path.Reveal()); err == nil {
 				privateKey = content

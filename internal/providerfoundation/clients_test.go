@@ -534,6 +534,29 @@ func TestGitHubAppAuthMissingPrivateKeyPathFileFailsClosed(t *testing.T) {
 	}
 }
 
+// TestGitHubAppAuthEmptyInlineKeyDoesNotFallBackToPath is round 2 finding
+// #1's own reproduction: a stored credential row carrying an EXPLICIT empty
+// private_key alongside a valid private_key_path must be rejected, not
+// silently authenticated with the path-backed key. Python's own check is
+// `"private_key" not in cred_dict` (resolver.py:263) -- a PRESENCE check,
+// not a truthiness one -- so a present-but-empty private_key never
+// triggers the path fallback and the credential is rejected downstream
+// (an empty private_key fails GitHubCredentials's own construction).
+func TestGitHubAppAuthEmptyInlineKeyDoesNotFallBackToPath(t *testing.T) {
+	keyFile := filepath.Join(t.TempDir(), "app-key.pem")
+	if err := os.WriteFile(keyFile, []byte(testGitHubAppPrivateKeyPEM), 0o600); err != nil {
+		t.Fatalf("write test key file: %v", err)
+	}
+	credential := testCredential("github", map[string]string{
+		"app_id": "12345", "installation_id": "67890",
+		"private_key": "", "private_key_path": keyFile,
+	})
+	doer := &githubAppDoer{}
+	if _, err := NewGitHubAppAuth(credential, githubAPIBase, doer); !errors.Is(err, ErrCredentialInvalid) {
+		t.Errorf("NewGitHubAppAuth = %v, want ErrCredentialInvalid (must not silently authenticate with the path key when private_key is present-but-empty)", err)
+	}
+}
+
 // TestDecodeCredentialDuplicateAliasIsDeterministic is round 1 finding
 // #2's own reproduction: a row carrying BOTH "appId" and "app_id" (with
 // different values) must decode to the SAME winner on every call --

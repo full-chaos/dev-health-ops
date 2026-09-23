@@ -255,7 +255,7 @@ func (e *Errors) DefaultedString(object *pyjson.Object, name string, minLength, 
 	return e.validateStringValue(raw, loc, minLength, maxLength)
 }
 
-// pydanticBool reports the bool value raw coerces to under pydantic's lax
+// PydanticBool reports the bool value raw coerces to under pydantic's lax
 // (non-strict) bool validation -- verified live against the installed
 // pydantic (2.13.4): a native JSON bool; the JSON integers 0/1 exactly (any
 // other integer, e.g. 2 or -1, is an error); a JSON float equal to exactly
@@ -265,7 +265,7 @@ func (e *Errors) DefaultedString(object *pyjson.Object, name string, minLength, 
 // yes/no, y/n, on/off, 1/0 -- with no leading/trailing whitespace and no
 // other string accepted (" true " and "TRUE " both fail; "TRUE" and "tRuE"
 // both pass).
-func pydanticBool(raw pyjson.Value) (bool, bool) {
+func PydanticBool(raw pyjson.Value) (bool, bool) {
 	switch v := raw.(type) {
 	case bool:
 		return v, true
@@ -298,14 +298,14 @@ func pydanticBool(raw pyjson.Value) (bool, bool) {
 
 // OptionalBool validates one `bool | None` field. present is false when the
 // field is absent or null (the default/unset case); a present value that
-// does not coerce to a bool under pydantic's lax rules (pydanticBool) is a
+// does not coerce to a bool under pydantic's lax rules (PydanticBool) is a
 // "bool_type" pydantic error.
 func (e *Errors) OptionalBool(object *pyjson.Object, name string) (bool, bool) {
 	raw, ok := object.Get(name)
 	if !ok || raw == nil {
 		return false, false
 	}
-	value, isBool := pydanticBool(raw)
+	value, isBool := PydanticBool(raw)
 	if !isBool {
 		*e = append(*e, Error{Type: "bool_type", Loc: []pyjson.Value{"body", name}, Msg: "Input should be a valid boolean", Input: raw})
 		return false, false
@@ -328,7 +328,7 @@ func (e *Errors) DefaultedBool(object *pyjson.Object, name string) (bool, bool) 
 		*e = append(*e, Error{Type: "bool_type", Loc: loc, Msg: "Input should be a valid boolean", Input: nil})
 		return false, false
 	}
-	value, isBool := pydanticBool(raw)
+	value, isBool := PydanticBool(raw)
 	if !isBool {
 		*e = append(*e, Error{Type: "bool_type", Loc: loc, Msg: "Input should be a valid boolean", Input: raw})
 		return false, false

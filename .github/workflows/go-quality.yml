@@ -97,18 +97,22 @@ jobs:
       - name: Decide whether this change set is Go-relevant
         id: relevance
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          # `github.event.before` is the push event's own pre-push sha --
+          # without it, a multi-commit push to main left BASE_SHA empty and
+          # fell back to HEAD^...HEAD, which only ever sees the LAST commit
+          # of the push, silently dropping every earlier one from the range
+          # (ci/go_relevant_diff.sh refuses rather than guess when this value
+          # is the all-zeros sentinel or no longer an ancestor of HEAD, which
+          # routes into the fail-open branch below).
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
         run: |
           set -euo pipefail
-          if [ -n "${BASE_SHA:-}" ]; then
-            range="${BASE_SHA}...HEAD"
-          else
-            # push to main: compare against the previous commit.
-            range="HEAD^...HEAD"
-          fi
-          echo "diff range: ${range}"
-          git diff --name-only "${range}" > changed.txt || {
-            echo "could not resolve the diff range; failing closed"
+          bash ci/go_relevant_diff.sh > changed.txt || {
+            # Fails OPEN, not closed: relevant=true runs the real gate rather
+            # than silently skipping it. An unresolvable range (or the
+            # all-zeros sentinel / non-ancestor BASE_SHA the script now
+            # refuses) is exactly the case where guessing would be wrong.
+            echo "could not resolve the diff range; failing open to relevant=true"
             printf 'relevant=true\n' >> "${GITHUB_OUTPUT}"
             exit 0
           }

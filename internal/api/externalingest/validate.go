@@ -44,8 +44,10 @@ type RecordInput struct {
 // ValidateRecords is external_ingest/validate.py validate_records, exact in
 // codes, messages and paths: an unknown kind is one unknown_kind item;
 // otherwise every pydantic error of model.model_validate(payload) (python
-// mode, see validateModel) becomes one item, in pydantic's order. The one
-// implementation both /validate routes and the accept path use.
+// mode, see validateModel) becomes one item, in pydantic's order. The api's
+// record validation (the data plane's /validate and the admin validate
+// route) uses only this. The Go ingest worker (internal/streamhandlers)
+// still runs its own separate rules; moving it onto this is CHAOS-6345.
 func ValidateRecords(records []RecordInput) []ValidationErrorItem {
 	var items []ValidationErrorItem
 	for index, record := range records {

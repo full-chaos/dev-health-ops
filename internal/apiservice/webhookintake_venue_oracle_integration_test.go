@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -254,7 +255,7 @@ func TestWebhookIntakeVenueOracleGitHubGitLabJiraHealth(t *testing.T) {
 	}
 	// args is stored JSON, compared as raw text. dedupe_key (the
 	// content-derived idempotency key) orders both planes' rows alike; the
-	// delivery ids inside are random per plane and blanked. Go stores the
+	// delivery ids inside are random per plane and become ordinal labels. Go stores the
 	// canonical job-contract text (indented), Python json.dumps text: that
 	// named gap is ticketed with the job outbox owner.
 	argsQuery := `SELECT coalesce(string_agg(args::text, E'\x1e' ORDER BY job_kind, dedupe_key), '') FROM worker_job_outbox`
@@ -593,15 +594,26 @@ func TestWebhookIntakeVenueOraclePagerDuty(t *testing.T) {
 
 var venueUUIDPattern = regexp.MustCompile(`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`)
 
-// blankedJSONRows splits a string_agg of stored JSON texts into rows, with
-// every UUID blanked.
+// blankedJSONRows splits a string_agg of stored JSON texts into rows,
+// with each UUID replaced by its ordinal label by first appearance: the
+// delivery ids are random per plane, but the same id inside one row (its
+// correlation id, domain id and payload) keeps one label, and a different
+// id gets its own.
 func blankedJSONRows(joined string) []string {
 	if joined == "" {
 		return nil
 	}
+	labels := map[string]string{}
 	rows := strings.Split(joined, venueoracle.JSONRowSeparator)
 	for index, row := range rows {
-		rows[index] = venueUUIDPattern.ReplaceAllString(row, "<uuid>")
+		rows[index] = venueUUIDPattern.ReplaceAllStringFunc(row, func(id string) string {
+			label, ok := labels[id]
+			if !ok {
+				label = fmt.Sprintf("<uuid-%d>", len(labels)+1)
+				labels[id] = label
+			}
+			return label
+		})
 	}
 	return rows
 }

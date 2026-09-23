@@ -149,6 +149,32 @@ provision_river() {
       ;;
   esac
 
+  # The checks above only prove --apply-and-check printed the right TEXT --
+  # a verb that printed a correct-looking summary without actually applying
+  # anything would still pass them. Assert the real Postgres state instead:
+  # river.river_migration is the riverqueue/river library's own migration
+  # ledger, one row per applied version under line='main'. The expected
+  # version is SOURCE-DERIVED, never a literal here, so this cannot drift
+  # from the pin the Go migrator itself enforces (same style as this file's
+  # other source-derived CI pins, e.g. ci/check_river_compat_static.sh's
+  # WorkerPoolMaxConns/InserterPoolMaxConns extraction).
+  local pinned_river_schema_version
+  pinned_river_schema_version="$(grep -oE 'PinnedSchemaVersion = [0-9]+' "${ROOT_DIR}/internal/storage/river/migrate.go" | grep -oE '[0-9]+$')"
+  if [ -z "${pinned_river_schema_version}" ]; then
+    echo "ERROR: could not read PinnedSchemaVersion out of internal/storage/river/migrate.go -- this gate's expected version has no source to derive from"
+    exit "${EXIT_FAILURE}"
+  fi
+  echo "==> asserting river.river_migration on the real Postgres actually reached version ${pinned_river_schema_version} (line='main')"
+  local applied_river_version
+  applied_river_version="$(PGPASSWORD="${POSTGRES_SUPERUSER_PASSWORD}" psql \
+    --host="${POSTGRES_HOST}" --port="${POSTGRES_PORT}" --username="${POSTGRES_SUPERUSER}" --dbname="${POSTGRES_DB}" \
+    --tuples-only --no-align \
+    -c "SELECT max(version) FROM river.river_migration WHERE line='main';")"
+  if [ "${applied_river_version}" != "${pinned_river_schema_version}" ]; then
+    echo "ERROR: river.river_migration (line='main') reports max(version)='${applied_river_version}', want '${pinned_river_schema_version}' -- dho migrate river --apply-and-check printed a matching summary but the real database was not actually migrated to it"
+    exit "${EXIT_FAILURE}"
+  fi
+
   # A fresh Alembic install creates sync_dispatch_transport_routes rows with
   # transport='celery' for every sync-orchestration kind (post_sync,
   # dispatch_sync_run, finalize_sync_run, reference_discovery) -- prod flips

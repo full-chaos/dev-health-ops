@@ -291,6 +291,21 @@ pullPolicy Never or IfNotPresent.
 {{- fail (printf "the River hook image %q (migrations.hook.riverMigrate.image, else migrations.hook.routeActivate.image) is not a pinned dho image. The hook runs `dho migrate river --apply-and-check` and needs the operator image built from the same commit as image.repository/image.tag: set migrations.hook.riverMigrate.image or migrations.hook.routeActivate.image to repo@sha256:<digest> or repo:sha-<12 hex>; repo:local is accepted only with pullPolicy Never or IfNotPresent." $riverImage) }}
 {{- end }}
 {{- /*
+Lockstep check: this River hook image and the api/migrate image
+(dev-health.image, image.repository/image.tag) must come from the SAME
+commit -- the exact rule route-activate-hooks.yaml already applies to its
+own operator image, for the same reason: `dho migrate river` writes a
+posture the running application build must match. Only comparable when
+BOTH sides carry this repo's `sha-<12 hex>` immutable-tag convention; a
+digest-only pin on either side is never compared here (see
+route-activate-hooks.yaml's identical comment for why).
+*/}}
+{{- $riverApiImageShaTag := regexFind ":sha-[0-9a-f]{12}$" (include "dev-health.image" .) }}
+{{- $riverImageShaTag := regexFind ":sha-[0-9a-f]{12}$" $riverImage }}
+{{- if and $riverApiImageShaTag $riverImageShaTag (ne $riverApiImageShaTag $riverImageShaTag) }}
+{{- fail (printf "the River hook image (migrations.hook.riverMigrate.image, else migrations.hook.routeActivate.image: %s) and image.repository/image.tag (%s) are pinned to different commits (%s vs %s) -- `dho migrate river` must run the same build as the application it is migrating for." $riverImage (include "dev-health.image" .) $riverImageShaTag $riverApiImageShaTag) }}
+{{- end }}
+{{- /*
 This hook owns the River step, so the elevated DSN reaches it under
 MIGRATION_DATABASE_URI and reaches the weight-0 migrate Job under POSTGRES_URI
 instead -- two consumers, two variable names, which is exactly how Compose

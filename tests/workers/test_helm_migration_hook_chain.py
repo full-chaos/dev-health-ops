@@ -200,6 +200,61 @@ def test_river_migrate_takes_its_own_pinned_image() -> None:
     assert container["image"] == own, container["image"]
 
 
+def test_river_migrate_refuses_lockstep_mismatch_with_the_api_image() -> None:
+    """The River hook must run the same build as the application it is
+    migrating for -- route-activate-hooks.yaml already refuses this same
+    class of mismatch for its own operator image; this is the identical
+    check for riverMigrate.image. Only comparable when BOTH sides carry
+    this repo's `sha-<12 hex>` immutable-tag convention.
+    """
+    code, stderr = _render_stderr(
+        "migrations.hook.provisionRoles.enabled=true",
+        "migrations.hook.riverMigrate.enabled=true",
+        "migrations.hook.routeActivate.enabled=false",
+        "migrations.hook.riverMigrate.image=ghcr.io/full-chaos/dev-health-go-dho:sha-aaaaaaaaaaaa",
+        "image.repository=ghcr.io/full-chaos/dev-hops-api",
+        "image.tag=sha-bbbbbbbbbbbb",
+    )
+    assert code != 0, (
+        "a River hook image pinned to a different commit than image.tag rendered"
+    )
+    assert "pinned to different commits" in stderr, stderr
+    assert "sha-aaaaaaaaaaaa" in stderr and "sha-bbbbbbbbbbbb" in stderr, stderr
+
+
+def test_river_migrate_accepts_lockstep_match_with_the_api_image() -> None:
+    """The control: the SAME sha-<12 hex> commit on both sides renders."""
+    jobs = _jobs(
+        "migrations.hook.provisionRoles.enabled=true",
+        "migrations.hook.riverMigrate.enabled=true",
+        "migrations.hook.routeActivate.enabled=false",
+        "migrations.hook.riverMigrate.image=ghcr.io/full-chaos/dev-health-go-dho:sha-cccccccccccc",
+        "image.repository=ghcr.io/full-chaos/dev-hops-api",
+        "image.tag=sha-cccccccccccc",
+    )
+    container = jobs[_RIVER]["spec"]["template"]["spec"]["containers"][0]
+    assert (
+        container["image"] == "ghcr.io/full-chaos/dev-health-go-dho:sha-cccccccccccc"
+    ), container["image"]
+
+
+def test_river_migrate_lockstep_check_skips_a_digest_pinned_image() -> None:
+    """A digest pin encodes no commit, so it is never compared -- keeping a
+    digest pin in lockstep with the api image is the operator's own
+    responsibility (route-activate-hooks.yaml's identical rule)."""
+    own = "ghcr.io/full-chaos/dev-health-go-dho@sha256:" + "d" * 64
+    jobs = _jobs(
+        "migrations.hook.provisionRoles.enabled=true",
+        "migrations.hook.riverMigrate.enabled=true",
+        "migrations.hook.routeActivate.enabled=false",
+        f"migrations.hook.riverMigrate.image={own}",
+        "image.repository=ghcr.io/full-chaos/dev-hops-api",
+        "image.tag=sha-eeeeeeeeeeee",
+    )
+    container = jobs[_RIVER]["spec"]["template"]["spec"]["containers"][0]
+    assert container["image"] == own, container["image"]
+
+
 def test_river_migrate_applies_and_checks_with_no_shell() -> None:
     """`--apply-and-check` applies, then checks on a fresh connection, in Go.
 

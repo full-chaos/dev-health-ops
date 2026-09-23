@@ -148,7 +148,7 @@ WORKDIR /app
 ENTRYPOINT ["/usr/local/bin/dho"]
 
 # The contractcheck image runs dho; worker-contractcheck folded into
-# `dho contracts` (spec S3, CHAOS-6302).
+# `dho contracts`.
 FROM runtime AS contractcheck
 COPY --from=build --chown=65532:65532 /runtime/contractcheck/ /
 WORKDIR /app

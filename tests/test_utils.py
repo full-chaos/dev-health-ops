@@ -449,9 +449,9 @@ class TestGlobalFlagsPropagateToSubparsers:
         )
         assert args.org == "acme-org"
 
-    def test_org_accepted_after_metrics_daily(self):
+    def test_org_accepted_after_metrics_validate_flags(self):
         parser = build_parser()
-        args = parser.parse_args(["metrics", "daily", "--org", "acme-org"])
+        args = parser.parse_args(["metrics", "validate-flags", "--org", "acme-org"])
         assert args.org == "acme-org"
 
     def test_org_accepted_after_audit_perf(self):

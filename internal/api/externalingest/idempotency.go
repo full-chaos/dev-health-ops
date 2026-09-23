@@ -139,8 +139,27 @@ func resolveBatchIdempotency(
 	}
 
 	params.IngestionID = uuid.New()
-	created, err := createBatchTx(ctx, tx, params)
+	// The INSERT runs inside a SAVEPOINT (pgx's Tx.Begin on an existing Tx
+	// is a pseudo-nested transaction implemented that way), matching
+	// idempotency.py's own comment on create_batch: "The insert runs
+	// inside create_batch's SAVEPOINT, so a losing racer only rolls back
+	// the savepoint, not the caller's session." Without this, a unique-
+	// violation aborts the WHOLE outer transaction (Postgres puts a
+	// failed transaction in a state where every subsequent statement is
+	// rejected until rollback), so the findExistingBatchTx query just
+	// below -- on the same tx -- would itself fail, turning a routine
+	// concurrent-duplicate race into a 500 instead of the REPLAY/RETRY/
+	// CONFLICT outcome it actually is (TestResolveBatchIdempotencyUnder
+	// ConcurrentDuplicateInserts pins this).
+	nested, err := tx.Begin(ctx)
 	if err != nil {
+		return idempotencyOutcome{}, err
+	}
+	created, err := createBatchTx(ctx, nested, params)
+	if err != nil {
+		if rollbackErr := nested.Rollback(ctx); rollbackErr != nil {
+			return idempotencyOutcome{}, rollbackErr
+		}
 		if isUniqueViolation(err) {
 			raced, raceErr := findExistingBatchTx(ctx, tx, params.OrgID, params.SourceSystem, params.SourceInstance, params.EntityFamily, params.IdempotencyKey)
 			if raceErr != nil {
@@ -151,6 +170,9 @@ func resolveBatchIdempotency(
 			}
 			return classifyExisting(*raced, params.PayloadHash, now), nil
 		}
+		return idempotencyOutcome{}, err
+	}
+	if err := nested.Commit(ctx); err != nil {
 		return idempotencyOutcome{}, err
 	}
 	return idempotencyOutcome{Kind: outcomeNew, Batch: *created}, nil

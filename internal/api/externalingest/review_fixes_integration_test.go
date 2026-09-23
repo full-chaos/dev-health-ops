@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -17,11 +18,12 @@ import (
 	valkeygo "github.com/valkey-io/valkey-go"
 )
 
-// TestAcceptBatchReviewFindingsFixed is the executed proof for the round-1
-// self-review's P1 findings (see the lane's invariant.md / PR body): each
-// subtest reproduces the finding's own repro shape against a real
-// Postgres + Valkey and asserts the fixed behavior.
-func TestAcceptBatchReviewFindingsFixed(t *testing.T) {
+// TestAcceptBatchAgainstFaultsAndEdgeCases exercises a battery of failure
+// modes and edge cases the accept-batch/status handlers must handle
+// correctly against a real Postgres + Valkey: malformed input, a durability-
+// write fault, time-range filtering, per-caller rate limiting, and an
+// active-managed-integration ownership conflict.
+func TestAcceptBatchAgainstFaultsAndEdgeCases(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
@@ -87,12 +89,12 @@ func TestAcceptBatchReviewFindingsFixed(t *testing.T) {
 		// other write (create, accept) still succeeds.
 		if _, err := pool.Exec(ctx, `
 			ALTER TABLE external_ingest_batches
-			ADD CONSTRAINT review_fix_no_stream_unavailable CHECK (status <> 'stream_unavailable')
+			ADD CONSTRAINT pin_no_stream_unavailable_transition CHECK (status <> 'stream_unavailable')
 		`); err != nil {
 			t.Fatal(err)
 		}
 		t.Cleanup(func() {
-			_, _ = pool.Exec(context.Background(), `ALTER TABLE external_ingest_batches DROP CONSTRAINT IF EXISTS review_fix_no_stream_unavailable`)
+			_, _ = pool.Exec(context.Background(), `ALTER TABLE external_ingest_batches DROP CONSTRAINT IF EXISTS pin_no_stream_unavailable_transition`)
 		})
 
 		// deps.Valkey is nil: enqueueBatch always fails closed
@@ -262,6 +264,210 @@ func TestAcceptBatchReviewFindingsFixed(t *testing.T) {
 			t.Fatalf("%+v", errBody)
 		}
 	})
+
+	// handleAvailability, handleValidate, and handleGetBatch each have their
+	// own behavior exercised here directly, not just route registration.
+	t.Run("handleAvailability, handleValidate, and handleGetBatch behave end to end", func(t *testing.T) {
+		orgID := uuid.New().String()
+		const token = "fcpush_handler_coverage_token"
+		seedIngestToken(t, ctx, pool, orgID, "github", "acme/repo", token)
+		deps := newTestDeps(t, pool, client)
+
+		availabilityReq := httptest.NewRequest(http.MethodGet, "/api/v1/external-ingest/availability", nil)
+		availabilityReq.Header.Set("Authorization", "Bearer "+token)
+		availabilityRecorder := httptest.NewRecorder()
+		deps.handleAvailability()(availabilityRecorder, availabilityReq)
+		if availabilityRecorder.Code != http.StatusOK {
+			t.Fatalf("availability: status = %d, body = %s", availabilityRecorder.Code, availabilityRecorder.Body.String())
+		}
+		var availability struct {
+			Features struct {
+				CustomerPushIngest bool `json:"customerPushIngest"`
+			} `json:"features"`
+		}
+		if err := json.Unmarshal(availabilityRecorder.Body.Bytes(), &availability); err != nil {
+			t.Fatal(err)
+		}
+		if !availability.Features.CustomerPushIngest {
+			t.Fatalf("expected customerPushIngest=true for a seeded org: %s", availabilityRecorder.Body.String())
+		}
+
+		validBody := `{"schemaVersion":"external-ingest.v1","idempotencyKey":"k",
+			"source":{"system":"github","instance":"acme/repo"},
+			"records":[{"kind":"repository.v1","externalId":"acme/repo","payload":{"externalId":"acme/repo","sourceSystem":"bitbucket"}}]}`
+		validateReq := httptest.NewRequest(http.MethodPost, "/api/v1/external-ingest/validate", strings.NewReader(validBody))
+		validateReq.Header.Set("Authorization", "Bearer "+token)
+		validateRecorder := httptest.NewRecorder()
+		deps.handleValidate()(validateRecorder, validateReq)
+		if validateRecorder.Code != http.StatusOK {
+			t.Fatalf("validate: status = %d, body = %s", validateRecorder.Code, validateRecorder.Body.String())
+		}
+		var validation struct {
+			Valid  bool `json:"valid"`
+			Errors []struct {
+				Code string `json:"code"`
+			} `json:"errors"`
+		}
+		if err := json.Unmarshal(validateRecorder.Body.Bytes(), &validation); err != nil {
+			t.Fatal(err)
+		}
+		if validation.Valid || len(validation.Errors) != 1 || validation.Errors[0].Code != "invalid_literal" {
+			t.Fatalf("expected exactly one invalid_literal error for sourceSystem=bitbucket: %+v", validation)
+		}
+
+		acceptBody := `{"schemaVersion":"external-ingest.v1","idempotencyKey":"handler-coverage",
+			"source":{"system":"github","instance":"acme/repo"},
+			"records":[{"kind":"repository.v1","externalId":"acme/repo","payload":{"externalId":"acme/repo","sourceSystem":"github"}}]}`
+		acceptReq := httptest.NewRequest(http.MethodPost, "/api/v1/external-ingest/batches", strings.NewReader(acceptBody))
+		acceptReq.Header.Set("Authorization", "Bearer "+token)
+		acceptRecorder := httptest.NewRecorder()
+		deps.handleAcceptBatch()(acceptRecorder, acceptReq)
+		if acceptRecorder.Code != http.StatusAccepted {
+			t.Fatalf("seed accept: %d %s", acceptRecorder.Code, acceptRecorder.Body.String())
+		}
+		var accepted struct {
+			IngestionID string `json:"ingestionId"`
+		}
+		if err := json.Unmarshal(acceptRecorder.Body.Bytes(), &accepted); err != nil {
+			t.Fatal(err)
+		}
+
+		getReq := httptest.NewRequest(http.MethodGet, "/api/v1/external-ingest/batches/"+accepted.IngestionID, nil)
+		getReq.SetPathValue("ingestion_id", accepted.IngestionID)
+		getReq.Header.Set("Authorization", "Bearer "+token)
+		getRecorder := httptest.NewRecorder()
+		deps.handleGetBatch()(getRecorder, getReq)
+		if getRecorder.Code != http.StatusOK {
+			t.Fatalf("get batch: status = %d, body = %s", getRecorder.Code, getRecorder.Body.String())
+		}
+		var status struct {
+			IngestionID string `json:"ingestionId"`
+			Status      string `json:"status"`
+		}
+		if err := json.Unmarshal(getRecorder.Body.Bytes(), &status); err != nil {
+			t.Fatal(err)
+		}
+		if status.IngestionID != accepted.IngestionID || status.Status != "accepted" {
+			t.Fatalf("got %+v", status)
+		}
+
+		unknownReq := httptest.NewRequest(http.MethodGet, "/api/v1/external-ingest/batches/"+uuid.New().String(), nil)
+		unknownReq.SetPathValue("ingestion_id", uuid.New().String())
+		unknownReq.Header.Set("Authorization", "Bearer "+token)
+		unknownRecorder := httptest.NewRecorder()
+		deps.handleGetBatch()(unknownRecorder, unknownReq)
+		if unknownRecorder.Code != http.StatusNotFound {
+			t.Fatalf("unknown ingestion id: status = %d, want 404", unknownRecorder.Code)
+		}
+		var notFound map[string]any
+		_ = json.Unmarshal(unknownRecorder.Body.Bytes(), &notFound)
+		if notFound["error"].(map[string]any)["code"] != "not_found" {
+			t.Fatalf("%+v", notFound)
+		}
+	})
+}
+
+// TestResolveBatchIdempotencyUnderConcurrentDuplicateInserts proves a
+// losing racer's INSERT (it hits the unique index, and Postgres marks its
+// enclosing transaction ABORTED -- refusing every further statement until
+// rollback) still resolves cleanly: resolveBatchIdempotency must run that
+// INSERT inside a savepoint, so the transaction stays usable afterward to
+// look up the winning row, resolving to REPLAY/RETRY/CONFLICT rather than
+// an internal_error. Reproduced with two real goroutines, each on its
+// own pool connection/transaction, released through a barrier so both
+// reach resolveBatchIdempotency at (as close to) the same instant as the
+// scheduler allows -- run across several distinct keys, since a single
+// pair of goroutines is not guaranteed to land inside the narrow window
+// (both sides' OWN first existence check must see nothing, which needs
+// the interleaving, not just concurrent calls) every time.
+func TestResolveBatchIdempotencyUnderConcurrentDuplicateInserts(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	pg, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = pg.Close(context.Background()) })
+	pool, err := pgxpool.New(ctx, pg.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	createExternalIngestTables(t, ctx, pool)
+
+	orgID := uuid.New().String()
+	const trials = 25
+
+	for trial := 0; trial < trials; trial++ {
+		key := "race-key-" + uuid.New().String()
+		params := createBatchParams{
+			OrgID: orgID, IdempotencyKey: key, PayloadHash: "hash-a",
+			SourceSystem: "github", SourceInstance: "acme/repo", EntityFamily: legacyEntityFamily,
+			SchemaVersion: schemaVersion, ItemsReceived: 1,
+		}
+
+		start := make(chan struct{})
+		type result struct {
+			outcome idempotencyOutcome
+			err     error
+		}
+		results := make(chan result, 2)
+		var ready sync.WaitGroup
+		ready.Add(2)
+		for i := 0; i < 2; i++ {
+			go func() {
+				tx, beginErr := pool.Begin(ctx)
+				if beginErr != nil {
+					ready.Done()
+					results <- result{err: beginErr}
+					return
+				}
+				ready.Done()
+				<-start
+				outcome, resolveErr := resolveBatchIdempotency(ctx, tx, params)
+				if resolveErr != nil {
+					_ = tx.Rollback(ctx)
+					results <- result{err: resolveErr}
+					return
+				}
+				if commitErr := tx.Commit(ctx); commitErr != nil {
+					results <- result{err: commitErr}
+					return
+				}
+				results <- result{outcome: outcome}
+			}()
+		}
+		ready.Wait() // both goroutines hold an open transaction before either proceeds
+		close(start)
+
+		var outcomes []idempotencyOutcome
+		for i := 0; i < 2; i++ {
+			r := <-results
+			if r.err != nil {
+				t.Fatalf("trial %d: resolveBatchIdempotency must never error on a concurrent duplicate: %v", trial, r.err)
+			}
+			outcomes = append(outcomes, r.outcome)
+		}
+
+		newCount, replayCount := 0, 0
+		for _, o := range outcomes {
+			switch o.Kind {
+			case outcomeNew:
+				newCount++
+			case outcomeReplay:
+				replayCount++
+			default:
+				t.Fatalf("trial %d: unexpected outcome kind %s", trial, o.Kind)
+			}
+		}
+		if newCount != 1 || replayCount != 1 {
+			t.Fatalf("trial %d: want exactly one NEW and one REPLAY, got new=%d replay=%d (%+v)", trial, newCount, replayCount, outcomes)
+		}
+		if got := countBatches(t, ctx, pool, orgID); got != trial+1 {
+			t.Fatalf("trial %d: expected %d cumulative row(s), got %d", trial, trial+1, got)
+		}
+	}
 }
 
 // uuidFromResponse re-derives the ingestion_id the "mark-stream-unavailable

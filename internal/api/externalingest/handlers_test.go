@@ -54,3 +54,43 @@ func TestTimeRangeParams(t *testing.T) {
 		t.Fatalf("absent params must stay nil: after=%v before=%v", after, before)
 	}
 }
+
+// TestHandleGetSchema exercises router.py's get_schema directly -- no
+// database needed, since schema discovery is unauthenticated.
+func TestHandleGetSchema(t *testing.T) {
+	deps := Deps{routeLimiters: newRouteLimiters(nil)}
+	handler := deps.handleGetSchema()
+
+	t.Run("unknown version is 404", func(t *testing.T) {
+		r := httptest.NewRequest("GET", "/x", nil)
+		r.SetPathValue("schema_version", "external-ingest.v99")
+		recorder := httptest.NewRecorder()
+		handler(recorder, r)
+		if recorder.Code != 404 {
+			t.Fatalf("status = %d, want 404", recorder.Code)
+		}
+	})
+
+	t.Run("known version returns the document with an ETag, and a matching If-None-Match 304s", func(t *testing.T) {
+		r := httptest.NewRequest("GET", "/x", nil)
+		r.SetPathValue("schema_version", schemaVersion)
+		recorder := httptest.NewRecorder()
+		handler(recorder, r)
+		if recorder.Code != 200 {
+			t.Fatalf("status = %d, want 200, body=%s", recorder.Code, recorder.Body.String())
+		}
+		etag := recorder.Header().Get("ETag")
+		if etag == "" {
+			t.Fatal("no ETag header")
+		}
+
+		cached := httptest.NewRequest("GET", "/x", nil)
+		cached.SetPathValue("schema_version", schemaVersion)
+		cached.Header.Set("If-None-Match", etag)
+		cachedRecorder := httptest.NewRecorder()
+		handler(cachedRecorder, cached)
+		if cachedRecorder.Code != 304 {
+			t.Fatalf("status = %d, want 304 for a matching If-None-Match", cachedRecorder.Code)
+		}
+	})
+}

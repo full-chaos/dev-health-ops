@@ -209,6 +209,16 @@ var optionRegistry = []Option{
 		Default: defaultCORSAllowedOrigins, Services: []string{APIServiceName}, Group: GroupRuntime,
 		Usage: "comma-separated CORS allow-list for the api (same format as the Python api)",
 	},
+	{
+		Flag: "jwt-issuer", Env: "JWT_ISSUER", Kind: KindString,
+		Default: defaultJWTIssuer, Services: []string{APIServiceName}, Group: GroupRuntime,
+		Usage: "access-token issuer the api accepts (same variable as the Python api)",
+	},
+	{
+		Flag: "jwt-audience", Env: "JWT_AUDIENCE", Kind: KindString,
+		Default: defaultJWTAudience, Services: []string{APIServiceName}, Group: GroupRuntime,
+		Usage: "access-token audience the api accepts (same variable as the Python api)",
+	},
 
 	// Database and River.
 	{
@@ -462,6 +472,7 @@ var optionRegistry = []Option{
 	{Env: "DEV_HEALTH_PG_COORDINATOR_PASSWORD", Secret: true, Group: GroupCredentials, Usage: "coordinator PostgreSQL password (component form)"},
 	{Env: "DEV_HEALTH_PG_API_PASSWORD", Secret: true, Group: GroupCredentials, Usage: "api Service PostgreSQL password (component form)"},
 	{Env: "VALKEY_URI", Secret: true, Group: GroupCredentials, Usage: "Valkey/Redis DSN"},
+	{Env: "JWT_SECRET_KEY", Secret: true, Group: GroupCredentials, Usage: "access-token signing key the api verifies with (the Python api's JWT_SECRET_KEY); required by the api binary"},
 	{Env: "SETTINGS_ENCRYPTION_KEY", Secret: true, Group: GroupCredentials, Usage: "provider credential encryption key"},
 	{Env: "SETTINGS_ENCRYPTION_SALT", Secret: true, Group: GroupCredentials, Usage: "provider credential encryption salt"},
 	{Env: "PAGER_DUTY_CLIENT_ID", Secret: true, Group: GroupCredentials, Usage: "PagerDuty OAuth client id"},

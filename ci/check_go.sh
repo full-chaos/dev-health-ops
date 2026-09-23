@@ -66,7 +66,7 @@ usage() {
   race   Run go test -race ./... in every Go module.
   live-python-oracles
          Run the provider-sync, providerfoundation encryption,
-         scheduled-planner, daily-metrics discovery, and sync-coverage live-Python oracle packages
+         api access-token, scheduled-planner, daily-metrics discovery, and sync-coverage live-Python oracle packages
          with `go test -count=1` unconditionally
          (cache lookup disabled by -count=1 itself, not by any assumption
          about cache state). Separate from `test` because that package
@@ -377,6 +377,45 @@ check_live_python_oracles() {
     rm -rf -- "${proof_dir}"
     return 1
   fi
+
+  printf 'go test -count=1: internal/api/policy (api decisions vs live Python)\n'
+  if ! (
+    cd "${ROOT}"
+    "${GO_ENV_OFF[@]}" \
+      GOWORK=off \
+      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
+      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
+      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
+      go test -mod=readonly -count=1 \
+        -run '^(TestPrincipalMatchesLivePythonAuthService)$' \
+        ./internal/api/policy
+  ); then
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  printf 'go test -count=1: internal/api/pyjson (api decisions vs live Python)\n'
+  if ! (
+    cd "${ROOT}"
+    "${GO_ENV_OFF[@]}" \
+      GOWORK=off \
+      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
+      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
+      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
+      go test -mod=readonly -count=1 \
+        -run '^(TestMarshalMatchesLivePythonJSONDumps|TestDecodeBodyMatchesLivePythonJSONLoads)$' \
+        ./internal/api/pyjson
+  ); then
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  for proof_name in api-policy-principal api-pyjson; do
+    proof_file="${proof_dir}/${proof_name}"
+    if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+      printf 'ERROR: api live Python oracle %s did not run\n' "${proof_name}" >&2
+      rm -rf -- "${proof_dir}"
+      return 1
+    fi
+  done
 
   printf 'go test -count=1: internal/scheduler/sync (live Python planner source is outside the Go embed/cache boundary)\n'
   if ! (

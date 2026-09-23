@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 )
 
@@ -53,6 +54,9 @@ func WriteError(w http.ResponseWriter, _ *http.Request, code httpapi.Code) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
+	if response.status == http.StatusInternalServerError {
+		w.Header().Set(policy.UnhandledErrorHeader, "1")
+	}
 	w.WriteHeader(response.status)
 	writeFixedBody(w, payload)
 }

@@ -65,6 +65,9 @@ _CREDENTIALS = frozenset(
         "SETTINGS_ENCRYPTION_SALT",
         "PAGER_DUTY_CLIENT_ID",
         "PAGER_DUTY_SECRET",
+        # The access-token signing key the api (dho api) verifies with, the
+        # same Secret key the Python api and web read.
+        "JWT_SECRET_KEY",
     }
 )
 

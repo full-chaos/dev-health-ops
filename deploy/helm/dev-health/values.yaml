@@ -1054,6 +1054,10 @@ secrets:
     #    and routing lookups then fail silently -- the shape of a prior
     #    multi-day outage.
     GO_API_REGISTRY_POSTGRES_URI: ""
+    # -- The Go api's (goApi) own Postgres DSN, for the role its migration
+    #    leg grants (API_DATABASE_ROLE, default devhealth_api). Required when
+    #    goApi.enabled.
+    API_DATABASE_URI: ""
     JWT_SECRET_KEY: ""
     SETTINGS_ENCRYPTION_KEY: ""
     ADMIN_API_KEY: ""

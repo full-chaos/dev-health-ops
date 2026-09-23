@@ -1,10 +1,13 @@
 package apiservice
 
 import (
+	"github.com/full-chaos/dev-health-ops/internal/api/policy"
+
 	"bufio"
 	"errors"
 	"net"
 	"net/http"
+	"strings"
 )
 
 // securityHeaders is the Python api's set, in its order
@@ -95,3 +98,67 @@ func CloseHTTP10(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 	})
 }
+
+// DecodedPathRouting routes on the percent-decoded path, as Starlette does:
+// an encoded slash ("%2F") in a request target is a path separator for
+// route matching, so /x/a%2Fb matches no one-segment {param} route and gets
+// the 404, before any authentication. net/http's mux would otherwise keep
+// "a%2Fb" as one segment.
+func DecodedPathRouting(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.RawPath != "" && strings.Contains(strings.ToLower(r.URL.RawPath), "%2f") {
+			clone := *r.URL
+			clone.RawPath = ""
+			r = r.Clone(r.Context())
+			r.URL = &clone
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// UnhandledErrorShape gives a 500 for an unhandled error the Python api's
+// shape: Starlette's ServerErrorMiddleware answers it outside every other
+// middleware, so the response carries only its content headers (no
+// security, CORS, correlation or impersonation header). It must be the
+// outermost installed middleware.
+func UnhandledErrorShape(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next.ServeHTTP(&unhandledWriter{ResponseWriter: w}, r)
+	})
+}
+
+type unhandledWriter struct {
+	http.ResponseWriter
+	wrote bool
+}
+
+func (w *unhandledWriter) commit() {
+	if w.wrote {
+		return
+	}
+	w.wrote = true
+	header := w.Header()
+	if header.Get(policy.UnhandledErrorHeader) == "" {
+		return
+	}
+	for key := range header {
+		switch key {
+		case "Content-Type", "Content-Length", "Connection":
+		default:
+			delete(header, key)
+		}
+	}
+}
+
+func (w *unhandledWriter) WriteHeader(status int) {
+	w.commit()
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w *unhandledWriter) Write(body []byte) (int, error) {
+	w.commit()
+	return w.ResponseWriter.Write(body)
+}
+
+// Unwrap lets http.ResponseController reach the underlying writer.
+func (w *unhandledWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }

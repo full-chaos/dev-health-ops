@@ -935,3 +935,60 @@ func TestErrorResponsesAreNotCacheable(t *testing.T) {
 		t.Fatalf("Cache-Control = %q, want no-store", got)
 	}
 }
+
+// TestAllowOverrideAndExplicitHead pins the two route-table options: a 405's
+// Allow comes from the first route's Allow when set, and with ExplicitHead a
+// GET route does not answer HEAD unless a HEAD route is registered.
+func TestAllowOverrideAndExplicitHead(t *testing.T) {
+	ok := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	for _, explicit := range []bool{false, true} {
+		server, err := NewServer(ServerOptions{
+			Address: "127.0.0.1:0", RequestTimeout: time.Second, MaxBodyBytes: 1024, ExplicitHead: explicit,
+			Routes: []Route{
+				{Method: http.MethodGet, Pattern: "/a", Handler: ok, Allow: http.MethodGet},
+				{Method: http.MethodPatch, Pattern: "/a", Handler: ok},
+				{Method: http.MethodGet, Pattern: "/b", Handler: ok},
+				{Method: http.MethodHead, Pattern: "/b", Handler: ok},
+				{Method: http.MethodGet, Pattern: "/c", Handler: ok},
+				{Method: http.MethodPost, Pattern: "/c", Handler: ok},
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		cases := []struct {
+			method, path string
+			status       int
+			allow        string
+		}{
+			{http.MethodPut, "/a", 405, "GET"},
+			{http.MethodPut, "/c", 405, "GET, POST"},
+			{http.MethodHead, "/b", 200, ""},
+		}
+		if explicit {
+			cases = append(cases, struct {
+				method, path string
+				status       int
+				allow        string
+			}{http.MethodHead, "/a", 405, "GET"}, struct {
+				method, path string
+				status       int
+				allow        string
+			}{http.MethodHead, "/c", 405, "GET, POST"})
+		} else {
+			cases = append(cases, struct {
+				method, path string
+				status       int
+				allow        string
+			}{http.MethodHead, "/a", 200, ""})
+		}
+		for _, c := range cases {
+			recorder := httptest.NewRecorder()
+			server.Handler().ServeHTTP(recorder, httptest.NewRequest(c.method, c.path, nil))
+			if recorder.Code != c.status || recorder.Header().Get("Allow") != c.allow {
+				t.Errorf("explicit=%v %s %s: %d Allow=%q, want %d %q", explicit, c.method, c.path,
+					recorder.Code, recorder.Header().Get("Allow"), c.status, c.allow)
+			}
+		}
+	}
+}

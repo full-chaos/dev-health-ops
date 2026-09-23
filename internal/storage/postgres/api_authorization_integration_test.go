@@ -77,14 +77,35 @@ func acrEntitlementTables(t *testing.T, ctx context.Context, admin *pgxpool.Pool
   expires_at timestamptz, PRIMARY KEY (org_id, feature_id))`,
 		`CREATE TABLE IF NOT EXISTS org_licenses (
   org_id uuid PRIMARY KEY, tier text NOT NULL, features_override json)`,
+		`CREATE TABLE IF NOT EXISTS users (id uuid PRIMARY KEY)`,
+		`CREATE TABLE IF NOT EXISTS memberships (id uuid PRIMARY KEY)`,
+		`CREATE TABLE IF NOT EXISTS impersonation_sessions (id uuid PRIMARY KEY)`,
 	} {
 		if _, err := admin.Exec(ctx, statement); err != nil {
 			t.Fatalf("bootstrap %s: %v", statement, err)
 		}
 	}
-	for _, table := range []string{"organizations", "feature_flags", "org_feature_overrides", "org_licenses"} {
-		if _, err := admin.Exec(ctx, "GRANT SELECT ON "+table+" TO "+role); err != nil {
-			t.Fatalf("grant SELECT on %s: %v", table, err)
+	// The grants derive from apiPosture() itself, as the River migration's
+	// api leg derives its GRANT statements; a declared table this helper
+	// does not model gets a stand-in.
+	for _, table := range apiPosture().RequiredTables {
+		if _, err := admin.Exec(ctx, "CREATE TABLE IF NOT EXISTS "+table.TableName+" (id uuid PRIMARY KEY)"); err != nil {
+			t.Fatalf("stand-in %s: %v", table.TableName, err)
+		}
+	}
+	for _, table := range apiPosture().RequiredTables {
+		privileges := "SELECT"
+		if table.AllowInsert {
+			privileges += ", INSERT"
+		}
+		if table.AllowUpdate {
+			privileges += ", UPDATE"
+		}
+		if table.AllowDelete {
+			privileges += ", DELETE"
+		}
+		if _, err := admin.Exec(ctx, "GRANT "+privileges+" ON "+table.TableName+" TO "+role); err != nil {
+			t.Fatalf("grant on %s: %v", table.TableName, err)
 		}
 	}
 }
@@ -723,5 +744,50 @@ func closePostgresInstanceInternal(t *testing.T, instance *containers.Instance) 
 	defer cancel()
 	if err := instance.Close(ctx); err != nil {
 		t.Errorf("terminate PostgreSQL test dependency: %v", err)
+	}
+}
+
+// TestCheckAPIAuthorizationRefusesAMissingDeclaredGrant is the "no less" half
+// for every declared table: a role missing any one declared grant is not
+// ready.
+func TestCheckAPIAuthorizationRefusesAMissingDeclaredGrant(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { closePostgresInstanceInternal(t, instance) })
+	dbName, err := containers.DatabaseName(instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	role, err := containers.RoleName(apiAuthorizationRole+"_declared", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	admin, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(admin.Close)
+	t.Cleanup(func() { containers.DropRole(admin, role, t.Logf) })
+
+	bootstrapAPIRole(t, ctx, admin, dbName, role)
+	acrEntitlementTables(t, ctx, admin, role)
+	api := connectAs(t, ctx, instance.URI, role, apiAuthorizationPass)
+	if err := CheckAPIAuthorization(ctx, api, role, grantSchema); err != nil {
+		t.Fatalf("fully granted api role failed readiness: %v", err)
+	}
+	for _, table := range apiPosture().RequiredTables {
+		if _, err := admin.Exec(ctx, "REVOKE ALL ON TABLE public."+table.TableName+" FROM "+role); err != nil {
+			t.Fatal(err)
+		}
+		if err := CheckAPIAuthorization(ctx, api, role, grantSchema); !errors.Is(err, ErrPostureRefused) {
+			t.Fatalf("api role missing its %s grant: readiness error %v, want ErrPostureRefused", table.TableName, err)
+		}
+		acrEntitlementTables(t, ctx, admin, role)
 	}
 }

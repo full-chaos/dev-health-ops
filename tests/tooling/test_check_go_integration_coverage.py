@@ -205,10 +205,11 @@ def test_integration_coverage_inventory_completes_and_stays_nonempty() -> None:
     # CHAOS-6246 added internal/api/externalingest (75 -> 76): the
     # external-ingest accept-batch route's Postgres/Valkey behavior is
     # proved against real containers.
-    # CURRENT TOTAL: 76. Adding one -tags=integration package bumps every
+    # internal/api/policy (76 -> 77): the api principal end-to-end test.
+    # CURRENT TOTAL: 77. Adding one -tags=integration package bumps every
     # literal below by +1 -- this is the one number to change; the
     # narrative above is for someone auditing history, not for the bump.
-    assert "76 package(s) discovered, 0 denylisted, 76 will run" in result.stdout
+    assert "77 package(s) discovered, 0 denylisted, 77 will run" in result.stdout
     # Name the package explicitly (SET MEMBERSHIP), not just the count --
     # a bare count is exactly what let CHAOS-4643's own literal drift
     # 31 -> 32 -> 33 unnoticed.

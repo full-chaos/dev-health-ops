@@ -29,6 +29,7 @@ const (
 	// defaultCoordinatorDatabaseRole so the migration grants the same role the
 	// runtime binaries connect as when neither side overrides the env var.
 	defaultCoordinatorRole = "devhealth_coordinator"
+	defaultAPIRole         = "devhealth_api"
 )
 
 func main() {
@@ -139,6 +140,13 @@ func execute(
 		coordinatorRole = value
 	}
 	coordinatorTableGrants, coordinatorColumnGrants, coordinatorSequences := coordinatorGrants()
+	// The api role (CHAOS-6269) is applied only when it exists; see
+	// riverstore.MigrationOptions.APIRole.
+	apiRole := defaultAPIRole
+	if value, present := lookup("API_DATABASE_ROLE"); present && strings.TrimSpace(value) != "" {
+		apiRole = value
+	}
+	apiTableGrants, apiColumnGrants, apiSequences := postureGrants(postgresstore.APIPosture())
 	// CHAOS-5437: postureManifestDigest is the SAME value every go-* runtime
 	// binary recomputes at startup (postgres.PostureManifestDigest()) --
 	// stamping it here is what lets each of them prove, without a live
@@ -167,13 +175,18 @@ func execute(
 		CoordinatorGrants:       coordinatorTableGrants,
 		CoordinatorColumnGrants: coordinatorColumnGrants,
 		CoordinatorSequences:    coordinatorSequences,
+		APIRole:                 apiRole,
+		APIGrants:               apiTableGrants,
+		APIColumnGrants:         apiColumnGrants,
+		APISequences:            apiSequences,
 		PostureManifestDigest:   postureManifestDigest,
 		PostureManifestBuildID:  migrateBuildID,
 		NativeRiverRoutes:       nativeRoutes,
 	}
 	if err := riverstore.ValidateMigrationOptions(migrationOptions); err != nil ||
-		migrationRole == domainRole || migrationRole == queueRole || migrationRole == coordinatorRole {
-		config.WriteConfigError(stderr, errors.New("migration, domain, queue-control, and coordinator PostgreSQL roles must be distinct"))
+		migrationRole == domainRole || migrationRole == queueRole || migrationRole == coordinatorRole ||
+		migrationRole == apiRole {
+		config.WriteConfigError(stderr, errors.New("migration, domain, queue-control, coordinator, and api PostgreSQL roles must be distinct"))
 		return 1
 	}
 
@@ -360,7 +373,12 @@ func resolveMigrationDatabaseURI(
 // privilege here would leave readiness demanding a grant the migration never
 // emitted, which is precisely the drift this indirection exists to prevent.
 func coordinatorGrants() ([]riverstore.TableGrant, []riverstore.ColumnGrant, []string) {
-	posture := postgresstore.CoordinatorPosture()
+	return postureGrants(postgresstore.CoordinatorPosture())
+}
+
+// postureGrants converts one role's declared posture into the migration's
+// grant options, so the grant side and the readiness side are one list.
+func postureGrants(posture postgresstore.RolePosture) ([]riverstore.TableGrant, []riverstore.ColumnGrant, []string) {
 	grants := make([]riverstore.TableGrant, 0, len(posture.RequiredTables))
 	for _, table := range posture.RequiredTables {
 		grants = append(grants, riverstore.TableGrant{

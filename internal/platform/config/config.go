@@ -37,6 +37,10 @@ const (
 	// defaultCORSAllowedOrigins is the Python api's own default
 	// (src/dev_health_ops/api/_middleware.py _DEFAULT_CORS_ORIGINS).
 	defaultCORSAllowedOrigins = "http://localhost:3000"
+	// defaultJWTIssuer and defaultJWTAudience are the Python api's own
+	// JWT_ISSUER/JWT_AUDIENCE defaults (api/services/auth.py).
+	defaultJWTIssuer   = "dev-health-ops"
+	defaultJWTAudience = "dev-health-api"
 )
 
 const (
@@ -308,6 +312,12 @@ type Config struct {
 	// Python api parses CORS_ALLOWED_ORIGINS: comma-separated, entries trimmed,
 	// empty entries dropped (dho api only).
 	CORSAllowedOrigins []string
+	// APIJWTSecret, APIJWTIssuer and APIJWTAudience verify the access token
+	// (dho api only): JWT_SECRET_KEY, JWT_ISSUER and JWT_AUDIENCE, the same
+	// variables the Python api reads.
+	APIJWTSecret   secrets.Value
+	APIJWTIssuer   string
+	APIJWTAudience string
 	// OperationalBridgeTimeout is CHAOS-6279's sole survivor from the
 	// deleted worker-operational-bridge trio (URL/Token/AllowInsecure) --
 	// nothing sends a bridge call any more (CHAOS-5320 deleted the Python
@@ -839,6 +849,12 @@ func Load(spec Spec) (Config, error) {
 		cfg.CORSAllowedOrigins = parseCORSOrigins(
 			envOrDefault(lookup, "CORS_ALLOWED_ORIGINS", defaultCORSAllowedOrigins),
 		)
+		cfg.APIJWTSecret, _, err = secrets.Resolve("JWT_SECRET_KEY", lookup)
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.APIJWTIssuer = envOrDefault(lookup, "JWT_ISSUER", defaultJWTIssuer)
+		cfg.APIJWTAudience = envOrDefault(lookup, "JWT_AUDIENCE", defaultJWTAudience)
 	}
 	cfg.StreamConfiguredReplicas, err = boundedIntEnv(
 		lookup,

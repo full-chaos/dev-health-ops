@@ -141,11 +141,16 @@ VALUES ($1, 'pagerduty', 'default', $2, 1, now(), now(), true)`, org.String(), c
 	goBase, _ := startGoServer(t, ctx, venue, jwtKey, func(deps *apiservice.Deps) {
 		deps.Decryptor = decryptor
 		deps.PagerDuty = providerfoundation.PagerDutyRevokeConfig{ClientID: orgDeletionVenuePagerDutyID, RevokeURL: fakeServer.URL}
+		// See orgdeletion_oracle_test.go's identical wiring: the admin
+		// (unrestricted) ClickHouse connection, matching production's
+		// CLICKHOUSE_URI, is what makes both planes' purge warnings
+		// comparable at all.
+		deps.ClickHouseDSN = venue.AdminClickHouseURI(t, venue.GoClickHouseDB)
 	})
 
 	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{
 		Normalize: func(request venueoracle.Request, body string) string {
-			return redactField(t, body, "timestamp")
+			return dropKnownStaleClickHouseWarnings(t, redactField(t, body, "timestamp"))
 		},
 	})
 	t.Log(receipt)

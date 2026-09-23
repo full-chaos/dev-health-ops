@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/full-chaos/dev-health-ops/internal/apiservice"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
@@ -107,10 +108,22 @@ VALUES ($1, $2, '10.0.0.0/8', true, now(), now())`, uuid.New(), controlOrgID)
 	bearer := func(name string) string { return "Bearer " + venue.Tokens[name] }
 	authHeaders := func(name string) map[string]string { return map[string]string{"Authorization": bearer(name)} }
 
-	goBase, _ := startGoServer(t, ctx, venue, jwtKey)
+	goBase, _ := startGoServer(t, ctx, venue, jwtKey, func(deps *apiservice.Deps) {
+		// The admin (unrestricted) ClickHouse connection, matching
+		// production's CLICKHOUSE_URI wiring -- not GoAPIClickHouseURI,
+		// which is locked to chclickhouse.APIPosture's closed teams/
+		// identities-only manifest and holds no ALTER DELETE on any
+		// org-deletion purge target (deps.go's own doc comment on
+		// apiservice.Deps.ClickHouseDSN explains why). Python's plane
+		// gets the same unrestricted access via its own CLICKHOUSE_URI
+		// env (venue.Start's AdminClickHouseHTTPURI), so this is what
+		// makes both planes' ClickHouse purge counts/warnings comparable
+		// at all rather than one side reporting "not configured".
+		deps.ClickHouseDSN = venue.AdminClickHouseURI(t, venue.GoClickHouseDB)
+	})
 	normalize := venueoracle.DiffOptions{
 		Normalize: func(request venueoracle.Request, body string) string {
-			return redactField(t, body, "timestamp")
+			return dropKnownStaleClickHouseWarnings(t, redactField(t, body, "timestamp"))
 		},
 	}
 

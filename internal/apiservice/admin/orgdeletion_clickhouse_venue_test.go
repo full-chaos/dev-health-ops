@@ -115,7 +115,7 @@ VALUES ($1, 'venue-chdel-super@example.com', true, true, true, 0, now(), now())`
 	}
 
 	goBase, _ := startGoServer(t, ctx, venue, jwtKey, func(deps *apiservice.Deps) {
-		deps.Probes.ClickHouseDSN = chInstance.URI
+		deps.ClickHouseDSN = chInstance.URI
 	})
 
 	request := venueoracle.Request{

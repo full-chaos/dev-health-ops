@@ -4,6 +4,7 @@ package admin_test
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http/httptest"
@@ -129,6 +130,65 @@ func redactField(t *testing.T, body, key string) string {
 		}
 	}
 	object.Set(key, "")
+	encoded, err := pyjson.Marshal(object)
+	if err != nil {
+		return body
+	}
+	return string(encoded)
+}
+
+// dropKnownStaleClickHouseWarnings removes org_deletion.py's own stale-table
+// warnings (clickHouseOrgTableKnownPythonOnlyStale, orgdeletion_clickhouse_
+// oracle_test.go) from a delete-org response body's top-level "warnings"
+// array before comparison -- CHAOS-6306 condition 1's accepted, SEPARATELY
+// proven divergence (TestClickHouseOrgTableDiscoveryMatchesThePythonMigrationRegex):
+// Python's static migration-regex still names 5 tables that no longer exist
+// or never held org_id, so it always warns on them; Go's live
+// system.columns discovery never even attempts a table it did not
+// discover, so it never emits those 5 warnings at all. Any OTHER warning
+// (a real, unexplained divergence) is left in place and still fails the
+// comparison. A non-JSON-object body, or one with no "warnings" key,
+// passes through unchanged, matching redactField's own contract.
+func dropKnownStaleClickHouseWarnings(t *testing.T, body string) string {
+	t.Helper()
+	if body == "" {
+		return body
+	}
+	value, err := pyjson.DecodeString(body)
+	if err != nil {
+		return body
+	}
+	object, ok := value.(*pyjson.Object)
+	if !ok {
+		return body
+	}
+	raw, present := object.Get("warnings")
+	if !present {
+		return body
+	}
+	list, ok := raw.([]pyjson.Value)
+	if !ok {
+		return body
+	}
+	filtered := make([]pyjson.Value, 0, len(list))
+	for _, entry := range list {
+		text, ok := entry.(string)
+		if !ok {
+			filtered = append(filtered, entry)
+			continue
+		}
+		stale := false
+		for table := range clickHouseOrgTableKnownPythonOnlyStale {
+			if text == fmt.Sprintf("ClickHouse table %s missing or has no org_id column; skipped.", table) {
+				stale = true
+				break
+			}
+		}
+		if !stale {
+			filtered = append(filtered, entry)
+		}
+	}
+	object.Set("warnings", filtered)
 	encoded, err := pyjson.Marshal(object)
 	if err != nil {
 		return body

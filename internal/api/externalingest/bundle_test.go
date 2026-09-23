@@ -2,38 +2,13 @@ package externalingest
 
 import "testing"
 
-// TestComputeETagMatchesPythonEnsureAscii is the oracle receipt for
-// escapeNonASCII: schema_registry.compute_etag, run against the SAME golden
-// document merged with the SAME default limits, executed via the real
-// Python producer (not hand-computed):
-//
-//	PYTHONPATH=src .venv/bin/python3 -c \
-//	  'from dev_health_ops.api.external_ingest.schema_registry import get_bundle, compute_etag; \
-//	   from dev_health_ops.api.external_ingest.schemas import SCHEMA_VERSION; \
-//	   bundle = get_bundle(SCHEMA_VERSION); \
-//	   body = {**bundle.document, "limits": {"maxRecordsPerBatch": 1000, "maxBodyBytes": 10000000}}; \
-//	   print(compute_etag(body))'
-//
-// The schema descriptions this hashes contain an em dash (copied from a
-// docstring), so this is a real exercise of ensure_ascii escaping, not a
-// vacuous ASCII-only case -- decoding the golden bundle back into Go values
-// and re-marshaling it without escapeNonASCII reintroduces raw UTF-8 and
-// produces a DIFFERENT hash (caught this exact regression once while
-// writing computeETag).
-func TestComputeETagMatchesPythonEnsureAscii(t *testing.T) {
-	document, err := schemaDocument(DefaultLimits)
-	if err != nil {
-		t.Fatalf("schemaDocument: %v", err)
-	}
-	etag, err := computeETag(document)
-	if err != nil {
-		t.Fatalf("computeETag: %v", err)
-	}
-	const pythonETag = `"20c04b9407c0b0d817b0971f307bdc037051e8907f45ff187ef6c6d7b917d990"`
-	if etag != pythonETag {
-		t.Fatalf("got %s, want the Python-computed %s", etag, pythonETag)
-	}
-}
+// The ensure_ascii oracle receipt lives in bundle_oracle_test.go's
+// TestSchemaBundleMatchesLivePython, which EXECUTES schema_registry.
+// compute_etag through ci/check_go.sh's live-python-oracles verb, rather
+// than pinning a hash computed once and typed into this file (a digest, not
+// execution -- see that test's doc comment). This file keeps the tests that
+// do not need a live Python process: escapeNonASCII's own byte-level
+// contract, and the two Go-only invariants below.
 
 func TestEscapeNonASCIISurrogatePairsAnAstralRune(t *testing.T) {
 	// U+1F600 GRINNING FACE, outside the BMP: Python's ensure_ascii emits a

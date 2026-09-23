@@ -297,12 +297,15 @@ func (h *handlers) createFeatureOverride(w http.ResponseWriter, r *http.Request)
 	configText := []byte("{}")
 	var configValue pyjson.Value = pyjson.NewObject()
 	if config != nil {
-		encoded, err := pyjson.Marshal(config)
+		// The json column stores json.dumps' default form (", " and ": "
+		// separators, ASCII escapes), which the comparison of stored rows
+		// reads as raw text.
+		encoded, err := pyjson.Dumps(config)
 		if err != nil {
 			h.internalError(ctx, w, "encode override config", err)
 			return
 		}
-		configText, configValue = encoded, config
+		configText, configValue = []byte(encoded), config
 	}
 	now := h.store.now().UTC()
 	override := &featureOverride{
@@ -414,12 +417,12 @@ WHERE o.id = $1 AND o.org_id = $2`, overrideID, orgID))
 		}
 		configText := []byte("null")
 		if current.Config != nil {
-			encoded, err := pyjson.Marshal(current.Config)
+			encoded, err := pyjson.Dumps(current.Config)
 			if err != nil {
 				h.internalError(ctx, w, "encode override config", err)
 				return
 			}
-			configText = encoded
+			configText = []byte(encoded)
 		}
 		if _, err := h.store.Pool.Exec(ctx, `
 UPDATE org_feature_overrides

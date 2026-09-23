@@ -23,7 +23,7 @@ func (h *handlers) ipAllowlistRoutes() []httpapi.Route {
 	return []httpapi.Route{
 		{Method: http.MethodGet, Pattern: governancePrefix + "/ip-allowlist", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.listIPAllowlist))},
 		{Method: http.MethodPost, Pattern: governancePrefix + "/ip-allowlist", Handler: h.bodyFirst(policy.Admin, http.HandlerFunc(h.createIPAllowlistEntry))},
-		{Method: http.MethodGet, Pattern: governancePrefix + "/ip-allowlist/{entry_id}", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.getIPAllowlistEntry))},
+		{Method: http.MethodGet, Pattern: governancePrefix + "/ip-allowlist/{entry_id}", Allow: "GET", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.getIPAllowlistEntry))},
 		{Method: http.MethodPatch, Pattern: governancePrefix + "/ip-allowlist/{entry_id}", Handler: h.bodyFirst(policy.Admin, http.HandlerFunc(h.updateIPAllowlistEntry))},
 		{Method: http.MethodDelete, Pattern: governancePrefix + "/ip-allowlist/{entry_id}", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.deleteIPAllowlistEntry))},
 		// POST /ip-allowlist/check shares its path shape with the
@@ -33,7 +33,7 @@ func (h *handlers) ipAllowlistRoutes() []httpapi.Route {
 		// wildcard itself and told apart by the segment; any other POST on
 		// it is FastAPI's 405 (whose Allow names the first route that matched the
 		// path, the GET one).
-		{Method: http.MethodPost, Pattern: governancePrefix + "/ip-allowlist/{entry_id}", Allow: "GET", Handler: h.checkOrMethodNotAllowed()},
+		{Method: http.MethodPost, Pattern: governancePrefix + "/ip-allowlist/{entry_id}", Handler: h.checkOrMethodNotAllowed()},
 	}
 }
 

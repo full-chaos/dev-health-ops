@@ -74,9 +74,9 @@ versions` (rc=0). `producer_version` is now 3.
 From the repository root:
 
 ```text
-go run ./cmd/worker-contractcheck validate
-go run ./cmd/worker-contractcheck capabilities --queues metrics
-go run ./cmd/worker-contractcheck compare --base <old-v1-dir> --candidate contracts/jobs/v1
+go run ./cmd/dho contracts validate
+go run ./cmd/dho contracts capabilities --queues metrics
+go run ./cmd/dho contracts compare --base <old-v1-dir> --candidate contracts/jobs/v1
 ```
 
 `compare` exits non-zero for a breaking in-place edit and is designed to be

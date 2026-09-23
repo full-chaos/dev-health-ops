@@ -270,7 +270,7 @@ smoke() {
   build_target contractcheck "${IMAGE_PREFIX}-contractcheck:ci"
   [ "$(docker image inspect --format '{{.Config.User}}' "${IMAGE_PREFIX}-contractcheck:ci")" = "65532:65532" ] \
     || die "contractcheck image is not configured for numeric non-root execution"
-  docker run --rm "${CONTAINER_SECURITY_ARGS[@]}" "${IMAGE_PREFIX}-contractcheck:ci" validate \
+  docker run --rm "${CONTAINER_SECURITY_ARGS[@]}" "${IMAGE_PREFIX}-contractcheck:ci" contracts validate \
     | grep -F "worker contracts valid" >/dev/null \
     || die "contractcheck image did not validate its embedded contract artifacts"
 

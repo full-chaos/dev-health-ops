@@ -51,7 +51,7 @@ Go process entry points live under `cmd/`:
 - `dev-health-reconciler`;
 - `dev-health-stream-runner`;
 - `dho workers`;
-- `worker-contractcheck`.
+- `dho contracts`.
 
 Shared implementation lives under `internal/`, including configuration, lifecycle, health, logging, secrets, database factories, River, job contracts, operator controls, outbox, scheduler, reconciler, and test support.
 

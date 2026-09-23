@@ -571,7 +571,7 @@ services:
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     network_mode: none
-    command: [validate]
+    command: [contracts, validate]
     depends_on:
       go-river-migrate:
         condition: service_completed_successfully

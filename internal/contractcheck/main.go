@@ -1,14 +1,22 @@
-package main
+// Package contractcheck is the `contracts` vertical of the dho binary:
+// worker job-contract validation, folded from the standalone
+// worker-contractcheck binary (spec S3, CHAOS-6302). The logic is
+// unchanged from cmd/worker-contractcheck/main.go -- it already took its
+// args, stdout and stderr as parameters and never called os.Exit or read
+// os.Args directly, so this fold is a package move plus one cli.Command
+// wrapper per verb; no parser change.
+package contractcheck
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
-	"os"
 	"sort"
 	"strings"
 
+	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/deploymentcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 )
@@ -16,31 +24,42 @@ import (
 const defaultContractRoot = "contracts/jobs/v1"
 const defaultDeploymentManifest = "deploy/go-workers/deployment.json"
 
-func main() {
-	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
-}
-
-func run(args []string, stdout, stderr io.Writer) int {
-	if len(args) == 0 {
-		printUsage(stderr)
-		return 2
-	}
-	switch args[0] {
-	case "validate":
-		return runValidate(args[1:], stdout, stderr)
-	case "capabilities":
-		return runCapabilities(args[1:], stdout, stderr)
-	case "rollout":
-		return runRollout(args[1:], stdout, stderr)
-	case "compare":
-		return runCompare(args[1:], stdout, stderr)
-	case "help", "-h", "--help":
-		printUsage(stdout)
-		return 0
-	default:
-		fmt.Fprintf(stderr, "unknown command %q\n", args[0])
-		printUsage(stderr)
-		return 2
+// Command is the `contracts` vertical of the dho binary.
+func Command() cli.Command {
+	return cli.Command{
+		Name:    "contracts",
+		Kind:    cli.Group,
+		Summary: "worker job-contract validation: schema, capability, rollout, compare",
+		Children: []cli.Command{
+			{
+				Name: "validate", Kind: cli.Verb,
+				Summary: "validate the job-contract tree and the Go worker deployment manifest against it",
+				Run: func(_ context.Context, env cli.Env) int {
+					return runValidate(env.Args, env.Stdout, env.Stderr)
+				},
+			},
+			{
+				Name: "capabilities", Kind: cli.Verb,
+				Summary: "emit a capability report for a live binary's registered queues",
+				Run: func(_ context.Context, env cli.Env) int {
+					return runCapabilities(env.Args, env.Stdout, env.Stderr)
+				},
+			},
+			{
+				Name: "rollout", Kind: cli.Verb,
+				Summary: "check that every live capability report supports its queues' producer versions",
+				Run: func(_ context.Context, env cli.Env) int {
+					return runRollout(env.Args, env.Stdout, env.Stderr)
+				},
+			},
+			{
+				Name: "compare", Kind: cli.Verb,
+				Summary: "diff two contract trees for breaking in-place changes",
+				Run: func(_ context.Context, env cli.Env) int {
+					return runCompare(env.Args, env.Stdout, env.Stderr)
+				},
+			},
+		},
 	}
 }
 
@@ -224,10 +243,6 @@ func runCompare(args []string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintln(stdout, "no breaking in-place contract changes")
 	return 0
-}
-
-func printUsage(writer io.Writer) {
-	fmt.Fprintln(writer, "usage: worker-contractcheck <validate|capabilities|rollout|compare> [flags]")
 }
 
 type stringList []string

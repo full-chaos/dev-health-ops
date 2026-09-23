@@ -47,7 +47,6 @@ var binaryLogging = map[string]string{
 	"dho":                                    "cli",
 	"gqlgen-guard":                           "silent",
 	"query-api":                              "installs",
-	"worker-contractcheck":                   "silent",
 }
 
 type listedPackage struct {

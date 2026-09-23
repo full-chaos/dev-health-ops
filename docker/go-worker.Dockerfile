@@ -47,7 +47,6 @@ RUN --mount=type=cache,target=/go/pkg/mod \
         dev-health-scheduler \
         dev-health-reconciler \
         dev-health-stream-runner \
-        worker-contractcheck \
         dev-health-worker-migrate \
         dho; do \
       GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" go build \
@@ -91,7 +90,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     cp -R /src/contracts/sync-dispatch/v1 /runtime/reconciler/app/contracts/sync-dispatch/v1; \
     cp /out/dev-health-stream-runner /runtime/stream-runner/usr/local/bin/dev-health-stream-runner; \
     cp /out/dho /runtime/operator/usr/local/bin/dho; \
-    cp /out/worker-contractcheck /runtime/contractcheck/usr/local/bin/worker-contractcheck; \
+    cp /out/dho /runtime/contractcheck/usr/local/bin/dho; \
     cp -R /src/contracts/jobs/v1 /runtime/worker/app/contracts/jobs/v1; \
     cp /src/deploy/go-workers/deployment.json /runtime/worker/app/deploy/go-workers/deployment.json; \
     cp /src/src/dev_health_ops/config/status_mapping.yaml /runtime/worker/app/config/status_mapping.yaml; \
@@ -148,11 +147,13 @@ COPY --from=build --chown=65532:65532 /runtime/operator/ /
 WORKDIR /app
 ENTRYPOINT ["/usr/local/bin/dho"]
 
+# The contractcheck image runs dho; worker-contractcheck folded into
+# `dho contracts` (spec S3, CHAOS-6302).
 FROM runtime AS contractcheck
 COPY --from=build --chown=65532:65532 /runtime/contractcheck/ /
 WORKDIR /app
-ENTRYPOINT ["/usr/local/bin/worker-contractcheck"]
-CMD ["validate"]
+ENTRYPOINT ["/usr/local/bin/dho"]
+CMD ["contracts", "validate"]
 
 # dho is the operator binary (cmd/dho): one binary whose compiled-in
 # verticals are selected by the first argument, so every Deployment of it

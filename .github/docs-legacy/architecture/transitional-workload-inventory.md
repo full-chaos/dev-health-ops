@@ -343,7 +343,7 @@ When you add, remove, or re-home a legacy surface:
 
 **Removing a `registry_kind` row is a separate, additional acknowledgement.**
 Deleting a row here tells the CUT-01 census the surface is no longer
-untracked; it says nothing to `cmd/worker-contractcheck`'s `compare` step
+untracked; it says nothing to `dho contracts`' `compare` step
 (`internal/jobcontract/compatibility.go`), which independently treats any
 registered kind that disappears from `contracts/jobs/v1/registry.json`
 between merged commits as a breaking regression, on purpose -- most removals

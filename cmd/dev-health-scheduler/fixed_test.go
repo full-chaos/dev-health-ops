@@ -81,7 +81,7 @@ func TestFixedScheduleProducersAreConstructedForEveryDeclaredSchedule(t *testing
 // go-worker-* / go-scheduler / go-reconciler container on prod, docker
 // inspect) -- report-ops.json's v3 schema digest for system.retention_cleanup
 // matches this tree's compiled digest exactly, and
-// `worker-contractcheck rollout` against that live report passes with
+// `dho contracts rollout` against that live report passes with
 // producer_version=3. migration-state.json now routes at v3.
 //
 // This test proves the composition root actually reached that route: the

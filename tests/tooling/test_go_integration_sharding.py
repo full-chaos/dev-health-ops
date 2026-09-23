@@ -107,6 +107,8 @@ EXPECTED_PACKAGES = {
     # wip_age_p50/p90_hours and pr_first_review_p50_hours.
     "cmd/query-api/internal/throughputforecast",
     "cmd/query-api/internal/workgraph",
+    "internal/api/licensing",
+    "internal/apiservice/acr",
     "internal/cacheinvalidation",
     "internal/externalrecompute",
     "internal/joboperator",

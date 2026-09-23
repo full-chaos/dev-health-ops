@@ -169,9 +169,35 @@ func TestConfigureRegistersTheListenerReadinessCheck(t *testing.T) {
 	}
 }
 
-func TestRoutesAreEmpty(t *testing.T) {
-	if len(Routes()) != 0 {
-		t.Fatal("no business route is mounted yet")
+// TestRoutesMountsTheAcrAreaEvenWithoutAStore proves the acr area
+// (CHAOS-6244) is always on the mux, dormancy-lifted for good: with store
+// nil (APIDatabaseURI not configured) the health path still answers and the
+// entitlement path answers 503 rather than being absent -- see acr.Deps's
+// doc comment for why omitting the route entirely would be the wrong
+// failure mode (a silent 404 reads as "no such route", not "not ready").
+func TestRoutesMountsTheAcrAreaEvenWithoutAStore(t *testing.T) {
+	routes := Routes(nil, nil)
+	want := map[string]bool{
+		"GET /api/v1/internal/acr/health":                false,
+		"GET /api/v1/internal/acr/entitlements/{org_id}": false,
+	}
+	if len(routes) != len(want) {
+		t.Fatalf("route count = %d, want %d: %+v", len(routes), len(want), routes)
+	}
+	for _, route := range routes {
+		key := route.Method + " " + route.Pattern
+		if _, ok := want[key]; !ok {
+			t.Fatalf("unexpected route %q", key)
+		}
+		want[key] = true
+		if route.Handler == nil {
+			t.Fatalf("route %q has no handler", key)
+		}
+	}
+	for key, seen := range want {
+		if !seen {
+			t.Fatalf("route %q missing", key)
+		}
 	}
 }
 

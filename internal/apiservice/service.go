@@ -1,9 +1,12 @@
 // Package apiservice is `dho api`: the Go HTTP api that takes over the
 // Python api's REST routes one area at a time.
 //
-// This package holds the service shell only. It mounts NO business route:
-// every request gets the Python api's own 404 body until an area package
-// adds routes. What runs today is the transport every future route inherits:
+// This package holds the service shell: transport, middleware, and the top-
+// level Routes() that composes each area package's own route set. CHAOS-6244
+// mounted the first business routes (the acr area, internal/apiservice/acr);
+// every other path still gets the Python api's own 404 body until its own
+// area package adds routes. What runs for every request, business route or
+// not, is the transport every route inherits:
 //
 //   - the shared process runtime (internal/platform/shell): flags > env
 //     configuration, the redacting JSON logger, OTEL, and the operator
@@ -28,12 +31,15 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/apiservice/acr"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
 	"github.com/full-chaos/dev-health-ops/internal/platform/shell"
+	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 const (
@@ -65,6 +71,11 @@ const (
 	// listenerCheck is the readiness check that fails until the api listener
 	// is bound.
 	listenerCheck = "api_listener"
+	// apiDatabaseCheck is the readiness check that fails until the acr area's
+	// Postgres role (CHAOS-6269, devhealth_api) holds exactly its declared
+	// apiPosture() manifest -- see CheckAPIAuthorization's doc comment. It is
+	// registered only when APIDatabaseURI is configured (configure below).
+	apiDatabaseCheck = "api_database"
 )
 
 // Spec is the shell specification of `dho api`. Exported so a test can run
@@ -91,17 +102,40 @@ func Command() cli.Command {
 	}
 }
 
-// Routes is the route set the api mounts. It is empty: no business route is
-// ported yet.
-func Routes() []httpapi.Route { return nil }
+// Routes is the route set the api mounts: transport-only plus the acr area
+// (CHAOS-6244, the first business routes ported). store is nil when
+// APIDatabaseURI is not configured; acr.Routes still mounts both paths in
+// that case (see acr.Deps's doc comment) -- the ingress path table switch
+// (spec.md §4.6), not process configuration, decides whether any traffic
+// ever reaches them, and the entitlement route answers 503 rather than being
+// silently absent from the mux.
+func Routes(store acr.EntitlementStore, logger *slog.Logger) []httpapi.Route {
+	return acr.Routes(acr.Deps{Store: store, Logger: logger})
+}
 
 func configure(
-	_ context.Context,
+	ctx context.Context,
 	cfg config.Config,
 	registry *health.Registry,
 	logger *slog.Logger,
 ) ([]lifecycle.Component, error) {
-	server, err := NewServer(cfg, logger, Routes())
+	var components []lifecycle.Component
+	var store acr.EntitlementStore
+	if cfg.APIDatabaseURI.Configured() {
+		pool, err := postgres.New(ctx, postgres.DefaultConfig(cfg.APIDatabaseURI.Reveal()))
+		if err != nil {
+			return nil, err
+		}
+		store = acr.PostgresEntitlementStore{Pool: pool}
+		components = append(components, apiDatabasePool{pool: pool})
+		if err := registry.RegisterRequired(apiDatabaseCheck, func(checkCtx context.Context) error {
+			return postgres.CheckAPIAuthorization(checkCtx, pool, cfg.APIDatabaseRole, cfg.RiverDatabaseSchema)
+		}); err != nil {
+			return nil, err
+		}
+	}
+
+	server, err := NewServer(cfg, logger, Routes(store, logger))
 	if err != nil {
 		return nil, err
 	}
@@ -113,7 +147,26 @@ func configure(
 	}); err != nil {
 		return nil, err
 	}
-	return []lifecycle.Component{server}, nil
+	components = append(components, server)
+	return components, nil
+}
+
+// apiDatabasePool is the acr area's Postgres pool as a lifecycle.Component.
+// Start is a no-op: postgres.New already returns an open, unping'd pool (the
+// same "long-running processes use this form so readiness can remain false
+// and recover" reasoning as every other runtime pool in this repo), and
+// readiness comes from apiDatabaseCheck, not from Start succeeding.
+type apiDatabasePool struct {
+	pool *pgxpool.Pool
+}
+
+func (p apiDatabasePool) Name() string { return "api-database" }
+
+func (p apiDatabasePool) Start(context.Context) error { return nil }
+
+func (p apiDatabasePool) Shutdown(context.Context) error {
+	p.pool.Close()
+	return nil
 }
 
 // NewServer builds the api listener with the full transport stack. The stack

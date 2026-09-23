@@ -7,16 +7,21 @@ import (
 )
 
 // apiPosture is the dho api Service's declared Postgres privilege manifest
-// (CHAOS-6269, spec.md §4.4). It starts EMPTY on purpose: S0 provisions the
+// (CHAOS-6269, spec.md §4.4). It started EMPTY on purpose: S0 provisions the
 // role and proves it holds nothing beyond the baseline every runtime role
 // must hold (CONNECT, USAGE on the public schema, no CREATE, no ownership,
 // no privilege on any other relation, sequence or function in the public or
 // River schema -- rolePostureQuery's own catch-all predicates, unconditional
-// for every caller of CheckRolePosture) -- because no route exists yet to
-// need anything more. Each route PR that follows adds exactly the grants its
-// own tables need directly to this function's RequiredTables/ColumnScoped/
-// RequiredSequences, in the SAME PR that ships the route, the same
-// discipline domainPosture/coordinatorPosture already follow.
+// for every caller of CheckRolePosture). CHAOS-6244 is the first route PR
+// to need anything more; it adds exactly the four tables its own query
+// reads, all SELECT-only (no insert/update/delete: the acr entitlement
+// route is a pure read, and it writes no audit row -- see
+// internal/apiservice/acr's package doc for why the Python credential-audit
+// path is not ported for this internal route). Each route PR that follows adds exactly
+// the grants its own tables need directly to this function's
+// RequiredTables/ColumnScoped/RequiredSequences, in the SAME PR that ships
+// the route, the same discipline domainPosture/coordinatorPosture already
+// follow.
 //
 // Unlike the three River runtime roles, the api role never opens a River
 // pool and is not part of the CHAOS-3033 Option B split -- it is declared
@@ -27,8 +32,32 @@ import (
 // matters: it is what makes rolePostureQuery assert the api role holds ZERO
 // privilege on the River schema too, exactly as it does for every other
 // role's own posture.
+//
+// NOTE (CHAOS-6244): unlike the three River roles, no automated step yet
+// applies this manifest as GRANT statements -- go-river-migrate's
+// runtimeGrantStatements has no api-role equivalent. Until one exists (or an
+// operator GRANTs these four tables by hand, the same manual step
+// provision_river_roles.sql's api_role block already documents for role
+// creation itself), CheckAPIAuthorization correctly reports the role's
+// posture as refused wherever APIDatabaseURI is configured -- the safe
+// direction: the api Service simply does not become ready, rather than
+// silently running with unproven privileges.
 func apiPosture() RolePosture {
-	return RolePosture{}
+	return RolePosture{
+		RequiredTables: []TablePrivilege{
+			// Read root for GET /api/v1/internal/acr/entitlements/{org_id}:
+			// existence (404 if absent) and the tier fallback when no
+			// org_licenses row exists (internal/apiservice/acr/store.go).
+			{"organizations", false, false, false},
+			// The one feature row this route ever reads (key =
+			// "agent_context_runtime"), never any other feature.
+			{"feature_flags", false, false, false},
+			// Per-org override for that same feature.
+			{"org_feature_overrides", false, false, false},
+			// License tier + features_override JSON.
+			{"org_licenses", false, false, false},
+		},
+	}
 }
 
 // APIPosture exposes apiPosture for callers outside this package -- the

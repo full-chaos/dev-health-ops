@@ -361,7 +361,7 @@ func startRawServer(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server, err := NewServer(cfg, quietLogger(), Routes())
+	server, err := NewServer(cfg, quietLogger(), Routes(nil, nil))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -205,7 +205,7 @@ func configure(
 		protected, err := newProtection(cfg, deps.Pool, logger)
 		if err != nil {
 			closeComponents(depComponents)
-			return nil, err
+			return nil, dependencyFailure(ctx, logger, "api_access_token_verifier", "api_protection_config_failed", err)
 		}
 		deps.Auth, deps.Guard = protected.auth, protected.guard
 		scope = []func(http.Handler) http.Handler{protected.scope.OrgScope, protected.scope.Impersonation}
@@ -217,7 +217,7 @@ func configure(
 	deps.Telemetry = TelemetryConfig{Endpoint: cfg.TelemetryEndpoint, ValkeyURI: cfg.ValkeyURI.Reveal()}
 	server, err := NewServer(cfg, logger, Routes(deps, logger), scope...)
 	if err != nil {
-		return nil, err
+		return nil, dependencyFailure(ctx, logger, "api_server", "api_server_config_failed", err)
 	}
 	if err := registry.RegisterRequired(listenerCheck, func(context.Context) error {
 		if server.Address() == "" {
@@ -225,7 +225,7 @@ func configure(
 		}
 		return nil
 	}); err != nil {
-		return nil, err
+		return nil, dependencyFailure(ctx, logger, "api_server", "api_listener_check_register_failed", err)
 	}
 	return append(depComponents, server), nil
 }

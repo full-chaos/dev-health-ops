@@ -1,0 +1,94 @@
+package restprove
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/goapiproof"
+)
+
+func serviceArgs(extra ...string) []string {
+	return append([]string{
+		"-python-api-url", "http://api:8000",
+		"-candidate-bearer-exec", `["/bin/true"]`,
+		"-baseline-bearer-exec", `["/bin/true"]`,
+		"-org", "org-1",
+		"-recorded-by", "chris",
+		"-review-evidence", "test",
+		"-artifact-dir", "/nonexistent-artifacts",
+		"-dry-run",
+	}, extra...)
+}
+
+func TestParseFlags_DefaultServiceIsQueryAPI(t *testing.T) {
+	f, err := parseFlags(serviceArgs("-query-api-url", "http://query-api:8090"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.service != goapiproof.RESTServiceQueryAPI || f.candidateBase() != "http://query-api:8090" || !f.sendsEdgeCredentialLeg() {
+		t.Fatalf("default run must behave as before: service=%q base=%q edgeLeg=%v", f.service, f.candidateBase(), f.sendsEdgeCredentialLeg())
+	}
+}
+
+func TestParseFlags_DHOAPIServiceMeasuresTheDHOAPI(t *testing.T) {
+	f, err := parseFlags(serviceArgs("-service", "dho-api", "-dho-api-url", "http://go-api:8000", "-query-api-url", "http://query-api:8090"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.candidateBase() != "http://go-api:8000" {
+		t.Fatalf("candidate base = %q, want the dho api", f.candidateBase())
+	}
+	if f.buildInfoURL != "http://go-api:8000/buildinfo" {
+		t.Fatalf("build identity must come from the service measured: %q", f.buildInfoURL)
+	}
+	if f.sendsEdgeCredentialLeg() {
+		t.Fatal("the dho api authenticates one edge token on both legs; the edge-credential leg must not run")
+	}
+}
+
+func TestParseFlags_DHOAPIServiceRequiresItsURLAndRefusesUnknownServices(t *testing.T) {
+	if _, err := parseFlags(serviceArgs("-service", "dho-api")); err == nil || !strings.Contains(err.Error(), "-dho-api-url") {
+		t.Fatalf("want a missing -dho-api-url refusal, got %v", err)
+	}
+	if _, err := parseFlags(serviceArgs("-service", "api")); err == nil {
+		t.Fatal("an unknown -service must be refused")
+	}
+}
+
+func TestPlanRESTRequestsForNeverMixesServices(t *testing.T) {
+	queryPlan, err := planRESTRequestsFor(goapiproof.RESTServiceQueryAPI)
+	if err != nil || len(queryPlan) == 0 {
+		t.Fatalf("query-api plan: %d entries, %v", len(queryPlan), err)
+	}
+	for _, p := range queryPlan {
+		if p.spec.EffectiveService() != goapiproof.RESTServiceQueryAPI {
+			t.Fatalf("%s is not a query-api entry", p.operation)
+		}
+	}
+	if legacy, _ := planRESTRequests(); len(legacy) != len(queryPlan) {
+		t.Fatalf("planRESTRequests must stay the query-api plan: %d vs %d", len(legacy), len(queryPlan))
+	}
+}
+
+func TestNotRunKeysNamesNoEdgeLegForADHOAPIEntry(t *testing.T) {
+	plan := []plannedRequest{{
+		operation: "REST:GET:/x",
+		spec:      goapiproof.RESTEndpointSpec{Service: goapiproof.RESTServiceDHOAPI},
+		request:   goapiproof.RESTRequest{Name: "r"},
+	}}
+	got := notRunKeys(plan, map[string]bool{})
+	if len(got) != 1 || got[0] != "REST:GET:/x/r" {
+		t.Fatalf("notRunKeys = %v; a dho-api entry never gets an edge-credential leg", got)
+	}
+}
+
+func TestRunRefusesAServiceWithNoCorpusEntries(t *testing.T) {
+	f, err := parseFlags(serviceArgs("-service", "dho-api", "-dho-api-url", "http://127.0.0.1:1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = run(f)
+	if err == nil || !strings.Contains(err.Error(), "would send nothing") {
+		t.Fatalf("a run that plans nothing must fail loudly before any request, got %v", err)
+	}
+}

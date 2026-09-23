@@ -143,6 +143,9 @@ const postgresURIEnvVar = "POSTGRES_URI"
 
 type flags struct {
 	queryAPIURL    string
+	dhoAPIURL      string
+	serviceName    string
+	service        goapiproof.RESTService
 	pythonAPIURL   string
 	buildInfoURL   string
 	candidateBuild string
@@ -218,6 +221,8 @@ func registerFlags() (*flag.FlagSet, *flags) {
 		return nil
 	})
 	fs.StringVar(&f.queryAPIURL, "query-api-url", "http://localhost:8090", "query-api's OWN in-cluster address -- the candidate leg. Never an edge or ingress URL: every request this tool sends goes DIRECTLY to this service")
+	fs.StringVar(&f.dhoAPIURL, "dho-api-url", "", "the dho api service's OWN in-cluster address -- the candidate leg when -service=dho-api (required then, ignored otherwise). Never an edge or ingress URL")
+	fs.StringVar(&f.serviceName, "service", string(goapiproof.RESTServiceQueryAPI), "which Go service this run measures: query-api (default) or dho-api. One run measures one service; the build every receipt names is read from that service's /buildinfo, and only that service's corpus entries are sent")
 	fs.StringVar(&f.pythonAPIURL, "python-api-url", "", "the Python api service's OWN in-cluster address -- the baseline leg (required). Never an edge or ingress URL, for the same reason as -query-api-url")
 	fs.BoolVar(&f.pythonForwarderOff, "python-forwarder-off", false, "attest that the Python app's forwarding switch for every endpoint it can forward to query-api (RESTEndpointSpec.PythonForwarder: POST /api/v1/investment/explain) is OFF for this whole run, so a 200 baseline there is Python's own answer and is compared. The Python app relays query-api's answer without any header that marks it, so nothing on the response can show which plane computed it: without this flag such a 200 baseline is refused by name, and with it every receipt for such an endpoint records the attestation")
 	fs.StringVar(&f.buildInfoURL, "buildinfo-url", "", "GET /buildinfo on query-api -- the ONLY source of the build identity every receipt names. Defaults to -query-api-url + \"/buildinfo\"")
@@ -253,6 +258,24 @@ func registerFlags() (*flag.FlagSet, *flags) {
 	return fs, f
 }
 
+// candidateBase is the address every candidate leg and the /buildinfo read
+// go to: the one service this run measures.
+func (f flags) candidateBase() string {
+	if f.service == goapiproof.RESTServiceDHOAPI {
+		return f.dhoAPIURL
+	}
+	return f.queryAPIURL
+}
+
+// sendsEdgeCredentialLeg says whether each authenticated request also gets
+// the edge-credential leg. That leg checks that query-api, which verifies the
+// effective-principal envelope, also answers the credential the Python edge
+// accepts; the dho api authenticates the same edge token on both legs, so the
+// extra leg would repeat the candidate leg.
+func (f flags) sendsEdgeCredentialLeg() bool {
+	return f.service != goapiproof.RESTServiceDHOAPI
+}
+
 func parseFlags(args []string) (flags, error) {
 	fs, fp := registerFlags()
 	if err := fs.Parse(args); err != nil {
@@ -261,10 +284,18 @@ func parseFlags(args []string) (flags, error) {
 	f := *fp
 	secrets.ResolveFlag(fs, &f.postgresURI, "postgres-uri", postgresURIEnvVar)
 
+	service, err := goapiproof.ParseRESTService(f.serviceName)
+	if err != nil {
+		return f, err
+	}
+	f.service = service
 	if f.buildInfoURL == "" {
-		f.buildInfoURL = strings.TrimRight(f.queryAPIURL, "/") + "/buildinfo"
+		f.buildInfoURL = strings.TrimRight(f.candidateBase(), "/") + "/buildinfo"
 	}
 	var missing []string
+	if f.service == goapiproof.RESTServiceDHOAPI && f.dhoAPIURL == "" {
+		missing = append(missing, "-dho-api-url (required with -service=dho-api)")
+	}
 	if f.pythonAPIURL == "" {
 		missing = append(missing, "-python-api-url")
 	}
@@ -303,9 +334,13 @@ func parseFlags(args []string) (flags, error) {
 	// named, so each is refused here, before anything is sent.
 	for _, base := range []struct{ name, value string }{
 		{"-query-api-url", f.queryAPIURL},
+		{"-dho-api-url", f.dhoAPIURL},
 		{"-python-api-url", f.pythonAPIURL},
 		{"-buildinfo-url", f.buildInfoURL},
 	} {
+		if base.value == "" && base.name == "-dho-api-url" {
+			continue // only required, and only checked, for -service=dho-api
+		}
 		if err := goapiproof.ValidateBaseURL(base.name, base.value); err != nil {
 			return f, err
 		}
@@ -639,8 +674,14 @@ type plannedRequest struct {
 // ValidateRESTIDBindingOrder have passed, kept as a named failure rather
 // than a panic on the day that stops being true.
 func planRESTRequests() ([]plannedRequest, error) {
+	return planRESTRequestsFor(goapiproof.RESTServiceQueryAPI)
+}
+
+// planRESTRequestsFor plans the requests of the corpus entries that target
+// service, in run order.
+func planRESTRequestsFor(service goapiproof.RESTService) ([]plannedRequest, error) {
 	var planned []plannedRequest
-	for _, operation := range goapiproof.RESTRunOrder() {
+	for _, operation := range goapiproof.RESTRunOrderFor(service) {
 		spec, err := goapiproof.SpecForREST(operation)
 		if err != nil {
 			return planned, fmt.Errorf("%s: %w", operation, err)
@@ -665,7 +706,7 @@ func notRunKeys(planned []plannedRequest, attemptedKeys map[string]bool) []strin
 		if !attemptedKeys[key] {
 			notRun = append(notRun, key)
 		}
-		if !p.spec.PublicNoAuth {
+		if !p.spec.PublicNoAuth && p.spec.EffectiveService() == goapiproof.RESTServiceQueryAPI {
 			edgeKey := key + " (edge-credential-on-candidate)"
 			if !attemptedKeys[edgeKey] {
 				notRun = append(notRun, edgeKey)
@@ -1061,7 +1102,10 @@ func run(f flags) (err error) {
 	// first for an unrelated reason. Nothing has been attempted yet at
 	// any of these steps, so there is no report to write if one refuses.
 	var mountedPaths []string
-	if f.queryAPISrc != "" {
+	if f.service == goapiproof.RESTServiceDHOAPI {
+		// query-api's mux is not this service's; this service's coverage is
+		// asserted by the corpus's own tests, not by a run.
+	} else if f.queryAPISrc != "" {
 		// OPTIONAL dev-only override: read a REAL query-api checkout live,
 		// to catch drift immediately instead of waiting for
 		// TestMountedRESTPathsMatchesTheRealQueryAPIMux's own CI run. Off
@@ -1078,11 +1122,17 @@ func run(f flags) (err error) {
 	} else {
 		mountedPaths = goapiproof.MountedRESTPaths()
 	}
-	if err := goapiproof.AssertRESTPathCoverage(mountedPaths); err != nil {
-		return err
+	if f.service != goapiproof.RESTServiceDHOAPI {
+		if err := goapiproof.AssertRESTPathCoverage(mountedPaths); err != nil {
+			return err
+		}
 	}
 	if err := goapiproof.ValidateRESTCorpus(); err != nil {
 		return err
+	}
+	// A run that plans nothing measured nothing; it must not read as a pass.
+	if len(goapiproof.RESTRunOrderFor(f.service)) == 0 {
+		return fmt.Errorf("the REST corpus has no entry that targets -service=%s, so this run would send nothing", f.service)
 	}
 
 	// Built before any credential or network step for the same reason the
@@ -1156,7 +1206,7 @@ const proverBuildSkewFlag = "-allow-prover-build-skew"
 // signal), else refused_before_measuring. runEnded is the run context's
 // own Err() as the run exited.
 func writeStoppedBeforeMeasuringReport(f flags, builds *goapiproof.ProverBuild, runEnded, stopErr error) error {
-	planned, _ := planRESTRequests()
+	planned, _ := planRESTRequestsFor(f.service)
 	notRun := notRunKeys(planned, nil)
 	cause := stopCause(runEnded, nil)
 	exitCause := exitCauseFromPartial(cause)
@@ -1540,7 +1590,7 @@ func runMeasurement(ctx context.Context, client *goapiproof.LegClient, f flags, 
 	// passed above (every RESTRunOrder entry is checked against
 	// restEndpointSpecs there), kept as a named, reported failure rather
 	// than a panic on the day that stops being true.
-	planned, specErr := planRESTRequests()
+	planned, specErr := planRESTRequestsFor(f.service)
 
 	var outcomes []outcome
 	attempted, admitted, matched, mismatched := 0, 0, 0, 0
@@ -1667,7 +1717,7 @@ requestLoop:
 		// exercises. Skipped for a PublicNoAuth route: meta.go's own
 		// "Auth: PUBLIC" contract sends no Authorization header on
 		// either leg, so there is no edge credential to re-send here.
-		if !attempt.spec.PublicNoAuth {
+		if !attempt.spec.PublicNoAuth && f.sendsEdgeCredentialLeg() {
 			// The run may have ended during this case's own legs: its
 			// edge-credential leg is then never sent, and is named in
 			// not_run like every other request the run did not reach.
@@ -2019,7 +2069,7 @@ func proveOneRESTRequest(
 		return outcome{}, fmt.Errorf("baseline leg: %w", err)
 	}
 	baselineObservedAt := time.Now().UTC()
-	candidateLeg, err := doREST(ctx, client, f.queryAPIURL, spec.Method, spec.Path, request.Query, request.Body, candidateCredential, timeout)
+	candidateLeg, err := doREST(ctx, client, f.candidateBase(), spec.Method, spec.Path, request.Query, request.Body, candidateCredential, timeout)
 	if err != nil {
 		if out, ok := legTransportOutcome(ctx, operation, request.Name, "candidate", boundIDs, err); ok {
 			return out, nil
@@ -2548,7 +2598,7 @@ func proveEdgeCredentialOnCandidate(
 ) (outcome, error) {
 	requestName := request.Name + " (edge-credential-on-candidate)"
 	timeout := resolveRESTTimeout(request.Timeout, f.timeout)
-	leg, err := doREST(ctx, client, f.queryAPIURL, spec.Method, spec.Path, request.Query, request.Body, edgeCredential, timeout)
+	leg, err := doREST(ctx, client, f.candidateBase(), spec.Method, spec.Path, request.Query, request.Body, edgeCredential, timeout)
 	if err != nil {
 		if out, ok := legTransportOutcome(ctx, operation, requestName, "candidate", nil, err); ok {
 			return out, nil

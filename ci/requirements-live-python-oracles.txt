@@ -6,6 +6,7 @@
 # not just one -- the interpreter mismatch, not a real content divergence.
 # Keep direct imports and their transitives explicit: CI installs this file
 # with --no-deps so an undeclared dependency fails instead of drifting latest.
+alembic==1.18.4
 amqp==5.3.1
 annotated-doc==0.0.4
 annotated-types==0.7.0
@@ -38,7 +39,9 @@ iniconfig==2.3.0
 kombu==5.6.2
 limits==5.8.0
 lz4==4.4.5
+Mako==1.3.12
 mando==0.7.1
+MarkupSafe==3.0.3
 packaging==26.2
 pluggy==1.6.0
 pycparser==3.0

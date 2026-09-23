@@ -1,2 +1,10 @@
 Generic single-database configuration with an async dbapi.
 Implementation plans, metrics inventory, and requirements details: `docs/project.md`, `docs/metrics-inventory.md`, `docs/roadmap.md`.
+
+Adding a revision: also add its id to `internal/api/health/schema_revisions.go`.
+The Go api's `/health` accepts a database only at a revision that set lists,
+so without the entry Go reports Postgres `down` for a database at the new
+revision. The live revision oracle (`TestSchemaRevisionsMatchLivePythonAlembic`,
+run by `ci/check_go.sh live-python-oracles`) compares that set with this
+directory's Alembic chain. When the entry is missing, CI turns red and names
+the missing id.

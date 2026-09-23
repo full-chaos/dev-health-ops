@@ -5,6 +5,7 @@ package apiservice
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -40,6 +41,7 @@ func TestVenueOracleProtectedRoutes(t *testing.T) {
 	var seed venueFixture
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Root: venueRoot(), JWTKey: venueKey, Logger: quietLogger(),
+		PythonEnv: []string{"EXPECTED_WORKER_GROUPS=" + venueWorkerGroups},
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
 			seed = venueSeed(t, ctx, admin)
 			return seed.tokenSpecs()
@@ -51,12 +53,22 @@ func TestVenueOracleProtectedRoutes(t *testing.T) {
 		APIDatabaseURI: secrets.NewValue(venue.GoAPIDatabaseURI(t)),
 		APIJWTSecret:   secrets.NewValue(venueKey), APIJWTIssuer: "dev-health-ops", APIJWTAudience: "dev-health-api",
 		CORSAllowedOrigins: []string{"http://localhost:3000"},
+		ValkeyURI:          secrets.NewValue(venue.ValkeyURI),
 	}
+	groups := venueGroupList()
+	cfg.APIExpectedWorkerGroups = &groups
 	base := startVenueAPI(t, ctx, cfg, venue)
 
 	requests := venueRequests(seed, venue.Tokens)
 	var receipt strings.Builder
-	receipt.WriteString(venueoracle.Diff(t, base, requests, venue.ServePython(t, requests), venueoracle.DiffOptions{}))
+	receipt.WriteString(venueoracle.Diff(t, base, requests, venue.ServePython(t, requests), venueoracle.DiffOptions{
+		Normalize: func(_ venueoracle.Request, body string) string { return normalizeRuled(body) },
+		// A HEAD probe has no body to normalize, but its content-length is the
+		// length of the ruled GET body.
+		SkipContentLength: func(request venueoracle.Request) bool {
+			return request.Method == http.MethodHead && (request.Path == "/health" || request.Path == "/health/workers")
+		},
+	}))
 	// The rows the writes touched are identical on both copies.
 	compareRows(t, ctx, venue, &receipt, "organizations", `SELECT id::text, slug, name, coalesce(description, '<null>'), tier, is_active,
 		updated_at > created_at FROM organizations ORDER BY slug`)
@@ -105,4 +117,41 @@ func compareRows(t *testing.T, ctx context.Context, venue *venueoracle.Venue, re
 		t.Errorf("%s after the writes differ (or are empty):\n python %s\n go     %s", name, pyRows, goRows)
 	}
 	fmt.Fprintf(receipt, "%s rows after writes: %s\n", name, venueoracle.Mark(pyRows == goRows && pyRows != ""))
+}
+
+// venueWorkerGroups is EXPECTED_WORKER_GROUPS on both planes: a blank entry
+// and a duplicate included.
+const venueWorkerGroups = "ops, sync,, heavy ,ops"
+
+func venueGroupList() []string {
+	var out []string
+	for _, group := range strings.Split(venueWorkerGroups, ",") {
+		if group = strings.TrimSpace(group); group != "" {
+			out = append(out, group)
+		}
+	}
+	return out
+}
+
+// normalizeRuled blanks the two /health values that differ by decision,
+// not by defect: the rate limiter backend (the Go api has none, "noop";
+// Python reports its own) and the Celery leg of /health/workers (the Go api
+// reports "retired"; Python inspects its broker).
+func normalizeRuled(body string) string {
+	for _, field := range []string{`"rate_limiter":"`, `"celery":"`} {
+		for start := 0; ; {
+			index := strings.Index(body[start:], field)
+			if index < 0 {
+				break
+			}
+			valueStart := start + index + len(field)
+			end := strings.Index(body[valueStart:], `"`)
+			if end < 0 {
+				break
+			}
+			body = body[:valueStart] + "<ruled>" + body[valueStart+end:]
+			start = valueStart + len("<ruled>")
+		}
+	}
+	return body
 }

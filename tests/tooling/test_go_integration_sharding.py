@@ -488,13 +488,16 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     # The five non-isolated "packages" shards (2/3/4/5/6) are what the LPT
     # planner actually balances against each other -- shard 1 only ever
     # holds internal/providersync, checked above. Recounted directly from
-    # this run's own planner output (not hand-adjusted): 1340s/1339s/1340s/
-    # 1338s/1338s, a 2s spread (shard 2 carries cmd/query-api/internal/
-    # explain's 122s weight). Re-tighten or loosen this to match a future
-    # re-time's actual output rather than forcing new weights to
-    # preserve today's gap.
+    # this run's own planner output (not hand-adjusted) after CHAOS-6246
+    # added internal/api/externalingest (weight 10, a placeholder estimate
+    # -- no hosted CI run has timed it yet, so it is not the observed-wall-
+    # time-from-a-green-run figure every other row's comment promises;
+    # re-measure and replace it the same way CHAOS-6244's rows were): 1370s/
+    # 1371s/1368s/1368s/1369s, a 3s spread. Re-tighten or loosen this to
+    # match a future re-time's actual output rather than forcing new
+    # weights to preserve today's gap.
     packages_totals = [estimated[shard] for shard in (2, 3, 4, 5, 6)]
-    assert max(packages_totals) - min(packages_totals) <= 2
+    assert max(packages_totals) - min(packages_totals) <= 3
 
     expected_provider_tests = _providersync_top_level_tests()
     expected_integration_tests = _providersync_integration_tagged_tests()

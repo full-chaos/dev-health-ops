@@ -3,8 +3,10 @@
 package telemetry
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -215,7 +217,7 @@ func (h handlers) respond(w http.ResponseWriter, r *http.Request, tx pgx.Tx, org
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(payload)
+	_, _ = io.Copy(w, bytes.NewReader(payload))
 }
 
 func (h handlers) status(w http.ResponseWriter, r *http.Request) {

@@ -5,8 +5,10 @@
 package producttelemetry
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -192,7 +194,7 @@ func writeJSON(w http.ResponseWriter, status int, body pyjson.Value) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
 	w.WriteHeader(status)
-	_, _ = w.Write(payload)
+	_, _ = io.Copy(w, bytes.NewReader(payload))
 }
 
 type batch struct {

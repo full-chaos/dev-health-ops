@@ -66,11 +66,13 @@ func TestLongRunningCommandsCannotAutoMigrate(t *testing.T) {
 		t.Fatal("locate test source")
 	}
 	repositoryRoot := filepath.Clean(filepath.Join(filepath.Dir(currentFile), "..", "..", ".."))
+	// The long-running services still built as their own cmd/ binaries. A
+	// service folded into dho is covered by cmd/dho's
+	// TestServiceVerbsCannotMigrate, which walks the command tree instead.
 	for _, command := range []string{
 		"dev-health-worker",
 		"dev-health-scheduler",
 		"dev-health-reconciler",
-		"dev-health-stream-runner",
 	} {
 		directory := filepath.Join(repositoryRoot, "cmd", command)
 		entries, err := os.ReadDir(directory)

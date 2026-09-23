@@ -50,7 +50,7 @@ registration wiring, so no curated Python dict or hand-set JSON field can silent
 worker actually executes. INVESTMENT/WORK-GRAPH's table is entirely hand-curated (no registry file exists
 for those 5 kinds; see [Known gaps](#known-gaps-not-fixed-in-this-pr)). Every CLI-verb sub-table under SYNC/
 METRICS/RECOMMENDATIONS/WEBHOOKS/STREAMS/SCHEDULER-RECONCILER-OPERATOR is hand-curated prose (read against
-both CLI trees -- Python `dev_health_ops.cli` and Go `internal/workersctl`/`dev-health-stream-runner` --
+both CLI trees -- Python `dev_health_ops.cli` and Go `internal/workersctl`/`dho stream-runner` --
 at the pinned sha below), because no JSON registry maps a CLI verb to a River kind or Python entrypoint.
 
 Regenerate the generated tables after any change to a source-of-truth file:
@@ -591,10 +591,10 @@ it.
 
 | Profile | Executor | Writer call site | Ticket |
 |---|---|---|---|
-| `ingest` (internal product events) | NATIVE | `internal/streamhandlers/`; `cmd/dev-health-stream-runner/dependencies.go:503` (`configureStreamRunnerDependenciesWithSources`'s `"ingest"` case) | -- |
-| `product-telemetry` | NATIVE -- a real separate handler, not folded into `ingest` (scheduler still names it `process-product-telemetry-streams`, `internal/scheduler/fixed/inventory.go:639`, but it's dispatched via the `ingest` binary's `productTelemetryHandlerKind`, `cmd/dev-health-stream-runner/dependencies.go:86,288,513`) | `internal/streamhandlers/product_telemetry.go:52-58` | -- |
-| `external` | NATIVE | `cmd/dev-health-stream-runner/dependencies.go:526` (`"external"` case) | -- |
-| `pagerduty` | NATIVE -- CHAOS-4105 ported the locked-graph reconciliation to Go; the handler writes the canonical rows through the providersync PagerDuty effect sinks and the Python compute is deleted | `cmd/dev-health-stream-runner/dependencies.go:553` (`"pagerduty"` case); `internal/jobs/pagerduty/reconcile_native.go`; `internal/providersync/pagerduty_webhook_reconcile.go` | -- |
+| `ingest` (internal product events) | NATIVE | `internal/streamhandlers/`; `internal/streamrunnerservice/dependencies.go:503` (`configureStreamRunnerDependenciesWithSources`'s `"ingest"` case) | -- |
+| `product-telemetry` | NATIVE -- a real separate handler, not folded into `ingest` (scheduler still names it `process-product-telemetry-streams`, `internal/scheduler/fixed/inventory.go:639`, but it's dispatched via the `ingest` binary's `productTelemetryHandlerKind`, `internal/streamrunnerservice/dependencies.go:86,288,513`) | `internal/streamhandlers/product_telemetry.go:52-58` | -- |
+| `external` | NATIVE | `internal/streamrunnerservice/dependencies.go:526` (`"external"` case) | -- |
+| `pagerduty` | NATIVE -- CHAOS-4105 ported the locked-graph reconciliation to Go; the handler writes the canonical rows through the providersync PagerDuty effect sinks and the Python compute is deleted | `internal/streamrunnerservice/dependencies.go:553` (`"pagerduty"` case); `internal/jobs/pagerduty/reconcile_native.go`; `internal/providersync/pagerduty_webhook_reconcile.go` | -- |
 
 ## SCHEDULER / RECONCILER / OPERATOR
 

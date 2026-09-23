@@ -788,10 +788,26 @@ jobs:
           if-no-files-found: ignore
 
   go-container-smoke:
+    # Every Go image is smoked on both architectures it ships for. The arm64
+    # leg runs on the same x64 host: the Dockerfile's build stage is
+    # `--platform=$BUILDPLATFORM` (Go cross-compiles natively), and only the
+    # arm64 runtime images run under QEMU, selected by DOCKER_DEFAULT_PLATFORM
+    # for both `docker build` and `docker run`.
+    name: go-container-smoke (${{ matrix.platform }})
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [linux/amd64, linux/arm64]
+    env:
+      DOCKER_DEFAULT_PLATFORM: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up QEMU
+        if: matrix.platform == 'linux/arm64'
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
 
       - name: Build and smoke Go images
         run: bash ci/check_go_containers.sh smoke
@@ -802,7 +818,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [worker, scheduler, reconciler, stream-runner, operator, contractcheck, migrate, dho]
+        target: [worker, scheduler, reconciler, operator, contractcheck, migrate, dho]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 

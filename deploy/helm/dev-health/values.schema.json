@@ -163,6 +163,7 @@
             "required": ["name"],
             "properties": {
               "name": { "type": "string" },
+              "subcommand": { "type": "string", "pattern": "^[a-z][a-z-]*$" },
               "autoscaling": {
                 "type": "object",
                 "required": ["enabled"],

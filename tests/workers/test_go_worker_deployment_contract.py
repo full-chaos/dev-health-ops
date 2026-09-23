@@ -102,8 +102,27 @@ def _queue_concurrency_env(process: dict) -> str:
     )
 
 
-def _process_arguments(container: dict) -> dict[str, str]:
+# dho service verbs a worker process names first (`dho stream-runner ...`);
+# every argument after the verb is a flag.
+_DHO_SERVICE_VERBS = frozenset({"stream-runner"})
+
+
+def _process_verb(container: dict) -> str | None:
     raw = container.get("command") or container.get("args") or []
+    if isinstance(raw, list) and raw and str(raw[0]) in _DHO_SERVICE_VERBS:
+        return str(raw[0])
+    return None
+
+
+def _process_flags(container: dict) -> list:
+    raw = container.get("command") or container.get("args") or []
+    if _process_verb(container) is not None:
+        return list(raw[1:])
+    return raw
+
+
+def _process_arguments(container: dict) -> dict[str, str]:
+    raw = _process_flags(container)
     assert isinstance(raw, list), "worker process arguments must use list form"
     arguments: dict[str, str] = {}
     for item in raw:
@@ -120,7 +139,7 @@ def _optional_process_arguments(container: dict) -> dict[str, str]:
     go-contractcheck runs a subcommand rather than a configured worker, so a
     selector that scans every service in a file cannot assume flag form.
     """
-    raw = container.get("command") or container.get("args") or []
+    raw = _process_flags(container)
     if not isinstance(raw, list) or not all(str(item).startswith("--") for item in raw):
         return {}
     return _process_arguments(container)
@@ -593,6 +612,10 @@ def test_river_worker_renderers_select_manifest_queues_without_profiles() -> Non
             # CHAOS-4020: the runtime profile is a flag, so it is visible in
             # the rendered `command:` rather than in a merged environment map.
             assert _process_arguments(service)["--profile"] == runtime_profile
+            # The stream runner is `dho stream-runner`: the dho image with the
+            # verb as its first argument.
+            assert _process_verb(service) == "stream-runner", service.get("command")
+            assert "/dev-health-go-dho:" in str(service["image"]), service["image"]
             environment = service["environment"]
             assert "DEV_HEALTH_PROFILE" not in environment
             assert "DEV_HEALTH_QUEUE_CONCURRENCY" not in environment
@@ -600,6 +623,8 @@ def test_river_worker_renderers_select_manifest_queues_without_profiles() -> Non
         deployment = deployments[f"dev-health-{service_name}"]
         container = deployment["spec"]["template"]["spec"]["containers"][0]
         assert _kubernetes_container_profile(container) == runtime_profile
+        assert _process_verb(container) == "stream-runner", container.get("args")
+        assert "/dev-health-go-dho:" in container["image"], container["image"]
         values = _load_yaml(_HELM_CHART / "values.yaml")
         helm_group = next(
             group_values
@@ -607,6 +632,8 @@ def test_river_worker_renderers_select_manifest_queues_without_profiles() -> Non
             if group_values["name"] == group
         )
         assert helm_group["runtimeProfile"] == runtime_profile
+        assert helm_group["subcommand"] == "stream-runner"
+        assert "/dev-health-go-dho:" in helm_group["image"], helm_group["image"]
 
     for service_name in ("go-reconciler", "go-scheduler"):
         environment = compose[service_name]["environment"]

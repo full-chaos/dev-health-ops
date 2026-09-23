@@ -389,10 +389,11 @@ services:
     stop_grace_period: 60s
   go-stream-external:
     <<: *go-worker
-    image: ${DEV_HEALTH_GO_STREAM_RUNNER_IMAGE:-ghcr.io/full-chaos/dev-health-go-stream-runner:latest}
+    image: ${DEV_HEALTH_GO_DHO_IMAGE:-ghcr.io/full-chaos/dev-health-go-dho:latest}
     labels:
       dev-health.io/worker-group: stream-external
     command:
+      - "stream-runner"
       - "--profile=external"
       - "--shutdown-timeout=60s"
       - *flag-http-addr
@@ -408,10 +409,11 @@ services:
     stop_grace_period: 60s
   go-stream-ingest:
     <<: *go-worker
-    image: ${DEV_HEALTH_GO_STREAM_RUNNER_IMAGE:-ghcr.io/full-chaos/dev-health-go-stream-runner:latest}
+    image: ${DEV_HEALTH_GO_DHO_IMAGE:-ghcr.io/full-chaos/dev-health-go-dho:latest}
     labels:
       dev-health.io/worker-group: stream-ingest
     command:
+      - "stream-runner"
       - "--profile=ingest"
       - "--shutdown-timeout=60s"
       - *flag-http-addr
@@ -427,10 +429,11 @@ services:
     stop_grace_period: 60s
   go-stream-pagerduty:
     <<: *go-worker
-    image: ${DEV_HEALTH_GO_STREAM_RUNNER_IMAGE:-ghcr.io/full-chaos/dev-health-go-stream-runner:latest}
+    image: ${DEV_HEALTH_GO_DHO_IMAGE:-ghcr.io/full-chaos/dev-health-go-dho:latest}
     labels:
       dev-health.io/worker-group: stream-pagerduty
     command:
+      - "stream-runner"
       - "--profile=pagerduty"
       - "--shutdown-timeout=60s"
       - *flag-http-addr

@@ -207,8 +207,8 @@ spec:
       securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
       containers:
         - name: stream-runner
-          image: ghcr.io/full-chaos/dev-health-go-stream-runner:latest
-          args: ["--profile=external", "--shutdown-timeout=60s", "--http-addr=:8080"]
+          image: ghcr.io/full-chaos/dev-health-go-dho:latest
+          args: ["stream-runner", "--profile=external", "--shutdown-timeout=60s", "--http-addr=:8080"]
           envFrom: [{configMapRef: {name: dev-health-config}}, {configMapRef: {name: dev-health-go-worker-config}}, {secretRef: {name: dev-health-secrets}}, {secretRef: {name: dev-health-go-worker-secrets}}]
           ports: [{name: metrics, containerPort: 8080}]
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
@@ -230,8 +230,8 @@ spec:
       securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
       containers:
         - name: stream-runner
-          image: ghcr.io/full-chaos/dev-health-go-stream-runner:latest
-          args: ["--profile=ingest", "--shutdown-timeout=60s", "--http-addr=:8080"]
+          image: ghcr.io/full-chaos/dev-health-go-dho:latest
+          args: ["stream-runner", "--profile=ingest", "--shutdown-timeout=60s", "--http-addr=:8080"]
           envFrom: [{configMapRef: {name: dev-health-config}}, {configMapRef: {name: dev-health-go-worker-config}}, {secretRef: {name: dev-health-secrets}}, {secretRef: {name: dev-health-go-worker-secrets}}]
           ports: [{name: metrics, containerPort: 8080}]
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
@@ -253,8 +253,8 @@ spec:
       securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
       containers:
         - name: stream-runner
-          image: ghcr.io/full-chaos/dev-health-go-stream-runner:latest
-          args: ["--profile=pagerduty", "--shutdown-timeout=60s", "--http-addr=:8080"]
+          image: ghcr.io/full-chaos/dev-health-go-dho:latest
+          args: ["stream-runner", "--profile=pagerduty", "--shutdown-timeout=60s", "--http-addr=:8080"]
           envFrom: [{configMapRef: {name: dev-health-config}}, {configMapRef: {name: dev-health-go-worker-config}}, {secretRef: {name: dev-health-secrets}}, {secretRef: {name: dev-health-go-worker-secrets}}]
           ports: [{name: metrics, containerPort: 8080}]
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}

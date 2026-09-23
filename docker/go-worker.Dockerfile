@@ -46,7 +46,6 @@ RUN --mount=type=cache,target=/go/pkg/mod \
         dev-health-worker \
         dev-health-scheduler \
         dev-health-reconciler \
-        dev-health-stream-runner \
         dev-health-worker-migrate \
         dho; do \
       GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" go build \
@@ -70,7 +69,6 @@ RUN --mount=type=cache,target=/go/pkg/mod \
       /runtime/reconciler/usr/local/bin \
       /runtime/reconciler/app/contracts/jobs \
       /runtime/reconciler/app/contracts/sync-dispatch \
-      /runtime/stream-runner/usr/local/bin \
       /runtime/operator/usr/local/bin \
       /runtime/operator/app/contracts/jobs \
       /runtime/operator/app/contracts/sync-dispatch \
@@ -89,7 +87,6 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     cp /out/dev-health-reconciler /runtime/reconciler/usr/local/bin/dev-health-reconciler; \
     cp -R /src/contracts/jobs/v1 /runtime/reconciler/app/contracts/jobs/v1; \
     cp -R /src/contracts/sync-dispatch/v1 /runtime/reconciler/app/contracts/sync-dispatch/v1; \
-    cp /out/dev-health-stream-runner /runtime/stream-runner/usr/local/bin/dev-health-stream-runner; \
     cp /out/dho /runtime/operator/usr/local/bin/dho; \
     cp /out/dho /runtime/contractcheck/usr/local/bin/dho; \
     cp -R /src/contracts/jobs/v1 /runtime/worker/app/contracts/jobs/v1; \
@@ -138,10 +135,6 @@ COPY --from=build --chown=65532:65532 /runtime/reconciler/ /
 WORKDIR /app
 ENTRYPOINT ["/usr/local/bin/dev-health-reconciler"]
 
-FROM runtime AS stream-runner
-COPY --from=build --chown=65532:65532 /runtime/stream-runner/ /
-ENTRYPOINT ["/usr/local/bin/dev-health-stream-runner"]
-
 # The operator image runs dho; route activation passes `workers routes apply
 # ...` as args (spec S2 folded dev-health-workerctl into `dho workers`).
 FROM runtime AS operator
@@ -159,11 +152,12 @@ CMD ["contracts", "validate"]
 
 # dho is the operator binary (cmd/dho): one binary whose compiled-in
 # verticals are selected by the first argument, so every Deployment of it
-# passes its subcommand as args (`dho api`). CHAOS-6247: the api vertical's
-# webhook-intake routes now write to the job outbox, which needs the checked-in
-# contracts/jobs/v1 manifest (jobruntime.Load) -- so, like worker/scheduler/
-# reconciler/operator/contractcheck, this target stages it under /app and
-# declares a WORKDIR.
+# passes its subcommand as args (`dho api`, `dho stream-runner
+# --profile=...`). CHAOS-6247: the api vertical's webhook-intake routes
+# write to the job outbox, which needs the checked-in contracts/jobs/v1
+# manifest (jobruntime.Load) -- so, like worker/scheduler/reconciler/
+# operator/contractcheck, this target stages it under /app and declares a
+# WORKDIR. The stream-runner verb reads no staged file.
 FROM runtime AS dho
 COPY --from=build --chown=65532:65532 /runtime/dho/ /
 WORKDIR /app
@@ -175,8 +169,8 @@ ENTRYPOINT ["/usr/local/bin/dho"]
 # RIVER_*_ROLE environment -- so, unlike most targets above, its runtime layer
 # stages nothing under /app.
 #
-# It therefore must NOT declare `WORKDIR /app`, and follows stream-runner (the
-# only other target with no /app tree) in omitting it. The `runtime` base does
+# It therefore must NOT declare `WORKDIR /app`, and follows dho (the only
+# other target with no /app tree) in omitting it. The `runtime` base does
 # not create /app, so the two cases are not equivalent:
 #
 #   - targets that stage an app/ tree receive /app from the build stage, where

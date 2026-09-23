@@ -140,7 +140,8 @@ per-kind route, and `internal/scheduler/sync/ownership.go`'s own, unrelated
 Publish one immutable image per target in `docker/go-worker.Dockerfile`:
 `dev-health-go-worker` (deployment-selected queue groups),
 `dev-health-go-reconciler`, `dev-health-go-scheduler`, and
-`dev-health-go-stream-runner` (external, ingest). All workload definitions
+`dev-health-go-dho`, whose `dho stream-runner` verb runs the stream
+profiles (external, ingest, pagerduty). All workload definitions
 run as UID/GID `65532`, deny privilege escalation, use a read-only root
 filesystem, and expose only the operator HTTP surface on port 8080:
 `/healthz`, `/readyz`, and `/metrics`.
@@ -313,7 +314,7 @@ failing if grants were the problem).
 
 ### Stream-runner profiles remain separate
 
-`dev-health-go-stream-runner` keeps its existing runtime profiles. The
+`dho stream-runner` (the `dev-health-go-dho` image) keeps the stream runner's runtime profiles. The
 `external`, `ingest`, and `pagerduty` stream profiles are separate process
 roles, use stream-specific configuration, and are not queue groups. Do not use
 their profile setting to configure `dev-health-worker`.

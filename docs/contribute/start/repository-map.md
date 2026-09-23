@@ -49,7 +49,7 @@ Go process entry points live under `cmd/`:
 - `dev-health-worker`;
 - `dev-health-scheduler`;
 - `dev-health-reconciler`;
-- `dev-health-stream-runner`;
+- `dho stream-runner`;
 - `dho workers`;
 - `dho contracts`.
 

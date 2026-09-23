@@ -94,6 +94,13 @@ spec:
           # ConfigMap, a Secret, and per-group env. Credentials stay in env:
           # an argument is visible to anyone who can read the pod spec.
           args:
+            {{- /*
+            A group run by the dho binary names its service verb first
+            (`dho stream-runner ...`); the flags below belong to that verb.
+            */}}
+            {{- with $group.subcommand }}
+            - {{ . | quote }}
+            {{- end }}
             {{- if $group.queues }}
             {{- $parts := list }}
             {{- range $queue := $group.queues }}

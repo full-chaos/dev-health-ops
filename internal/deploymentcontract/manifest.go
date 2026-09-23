@@ -106,6 +106,7 @@ type QueueWorker struct {
 type Process struct {
 	Name                       string        `json:"name"`
 	Binary                     string        `json:"binary"`
+	Subcommand                 string        `json:"subcommand,omitempty"`
 	Runtime                    string        `json:"runtime"`
 	EnabledByDefault           bool          `json:"enabled_by_default"`
 	MinReplicas                int           `json:"min_replicas"`
@@ -513,6 +514,11 @@ func validateProcess(process Process, coverage map[string]queueCoverage, state D
 	if !sortedUnique(queueWorkerNames) {
 		return errors.New("queue worker limits must be sorted and unique")
 	}
+	// A process run by the dho binary names its service verb; a process with
+	// a binary of its own has none.
+	if (process.Binary == "dho") != (process.Subcommand != "") {
+		return errors.New("a dho process needs a subcommand and no other binary takes one")
+	}
 	if contains(process.SecretEnv, "MIGRATION_DATABASE_URI") {
 		return errors.New("long-running process must not receive the migration DSN")
 	}
@@ -563,7 +569,9 @@ func validateProcess(process Process, coverage map[string]queueCoverage, state D
 			return errors.New("control runtime wiring is invalid")
 		}
 	case "stream":
-		if process.Binary != "dev-health-stream-runner" ||
+		// The stream runner is the `dho stream-runner` service verb: the
+		// operator binary with that subcommand as its first argument.
+		if process.Binary != "dho" || process.Subcommand != "stream-runner" ||
 			len(process.Queues) != 0 || len(process.JobKinds) != 0 ||
 			process.QueueControlMaxConnections != 0 || process.CoordinatorMaxConnections != 0 ||
 			!process.RequiresValkey || len(process.QueueWorkers) != 0 {

@@ -346,8 +346,8 @@ def test_every_buildable_service_declares_an_overridable_image() -> None:
         "ghcr.io/full-chaos/dev-health-go-worker",
         "ghcr.io/full-chaos/dev-health-go-scheduler",
         "ghcr.io/full-chaos/dev-health-go-reconciler",
-        "ghcr.io/full-chaos/dev-health-go-stream-runner",
         "ghcr.io/full-chaos/dev-health-go-operator",
+        "ghcr.io/full-chaos/dev-health-go-dho",
         "ghcr.io/full-chaos/dev-health-go-contractcheck",
         "ghcr.io/full-chaos/dev-health-go-migrate",
     }

@@ -149,7 +149,7 @@ The foundation provides:
 - `dev-health-worker` — future River job execution process;
 - `dev-health-scheduler` — bounded schedule-evaluation foundation;
 - `dev-health-reconciler` — route-safe outbox and River reconciliation loop;
-- `dev-health-stream-runner` — stream-oriented process foundation;
+- `dho stream-runner` — stream-oriented process foundation;
 - `dho workers` — payload-redacted operator CLI;
 - `dho contracts` — job registry, route, profile, capability, and migration-state validation.
 

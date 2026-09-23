@@ -115,6 +115,9 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
+        "if": {"properties": {"binary": {"const": "dho"}}, "required": ["binary"]},
+        "then": {"required": ["subcommand"]},
+        "else": {"not": {"required": ["subcommand"]}},
         "required": [
           "name",
           "binary",
@@ -136,7 +139,8 @@
         ],
         "properties": {
           "name": {"type": "string", "pattern": "^[a-z][a-z0-9-]+$"},
-          "binary": {"type": "string", "pattern": "^dev-health-[a-z-]+$"},
+          "binary": {"type": "string", "pattern": "^(dev-health-[a-z-]+|dho)$"},
+          "subcommand": {"type": "string", "pattern": "^[a-z][a-z-]*$"},
           "runtime": {"enum": ["control", "river", "stream"]},
           "enabled_by_default": {"type": "boolean"},
           "min_replicas": {"type": "integer", "minimum": 0, "maximum": 8},

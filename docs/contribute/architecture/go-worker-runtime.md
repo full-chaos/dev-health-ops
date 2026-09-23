@@ -50,9 +50,9 @@ below is derived from it.
 | `sync-provider` | `dev-health-worker` | River | `sync_provider` | 960s |
 | `reconciler` | `dev-health-reconciler` | control loop | none | 60s |
 | `scheduler` | `dev-health-scheduler` | control loop | none | 60s |
-| `stream-ingest` | `dev-health-stream-runner` | Valkey streams | none | 60s |
-| `stream-external` | `dev-health-stream-runner` | Valkey streams | none | 60s |
-| `stream-pagerduty` | `dev-health-stream-runner` | Valkey streams | none | 60s |
+| `stream-ingest` | `dho stream-runner` | Valkey streams | none | 60s |
+| `stream-external` | `dho stream-runner` | Valkey streams | none | 60s |
+| `stream-pagerduty` | `dho stream-runner` | Valkey streams | none | 60s |
 
 The run-once steps are `go-river-provision`, `go-river-migrate`, and
 `go-contractcheck`; the operator CLI is `dho workers`. Their ordering
@@ -1148,9 +1148,9 @@ changing any of the source files.
 | `ops` (`dev-health-worker`) | `webhooks` | `operational.billing_notification`<br>`operational.webhook_delivery` | 120-900 | 4 | `webhooks` | `worker` | Celery dormant since 2026-08-19 (CHAOS-4026); Go/River live<br>`operational.billing_notification`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json)<br>`operational.webhook_delivery`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json) |
 | `reconciler` (`dev-health-reconciler`) | `—` | — | — | — | — | — | Go-native -- no Celery predecessor<br>Control loop, not a River queue -- no -Q for this process. |
 | `scheduler` (`dev-health-scheduler`) | `—` | — | — | — | `scheduler` | `beat` | Celery Beat retired 2026-08-21 (CHAOS-4026); Go scheduler is sole production owner<br>Control loop, not a River queue -- no -Q for this process. |
-| `stream-external` (`dev-health-stream-runner`) | `—` | — | — | — | `external-ingest` | `worker-external-ingest` | Celery dormant since 2026-08-19 (CHAOS-4026); Go stream runner live<br>Valkey stream consumer, not a River queue -- no -Q for this process. |
-| `stream-ingest` (`dev-health-stream-runner`) | `—` | — | — | — | `ingest` | `worker-ingest` | Celery dormant since 2026-08-19 (CHAOS-4026); Go stream runner live<br>Valkey stream consumer, not a River queue -- no -Q for this process. |
-| `stream-pagerduty` (`dev-health-stream-runner`) | `—` | — | — | — | — | — | Go-native -- no Celery predecessor<br>Valkey stream consumer, not a River queue -- no -Q for this process. |
+| `stream-external` (`dho`) | `—` | — | — | — | `external-ingest` | `worker-external-ingest` | Celery dormant since 2026-08-19 (CHAOS-4026); Go stream runner live<br>Valkey stream consumer, not a River queue -- no -Q for this process. |
+| `stream-ingest` (`dho`) | `—` | — | — | — | `ingest` | `worker-ingest` | Celery dormant since 2026-08-19 (CHAOS-4026); Go stream runner live<br>Valkey stream consumer, not a River queue -- no -Q for this process. |
+| `stream-pagerduty` (`dho`) | `—` | — | — | — | — | — | Go-native -- no Celery predecessor<br>Valkey stream consumer, not a River queue -- no -Q for this process. |
 | `sync` (`dev-health-worker`) | `sync` | `sync.team_autoimport`<br>`sync.team_repo_ownership_derivation` | 900 | 3 | `sync` | `worker` | Celery dormant since 2026-08-19 (CHAOS-4026); Go/River live. Historically also the shared fallback queue for all providers with PROVIDER_SYNC_QUEUES_ENABLED off.<br>`sync.team_autoimport`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json)<br>`sync.team_repo_ownership_derivation`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json) |
 | `sync-provider` (`dev-health-worker`) | `sync_provider` | `sync.provider_unit`<br>`system.dimension_fold` | 120-900 | 2-5 | `sync.github`, `sync.gitlab`, `sync.linear`, `sync.jira`, `sync.launchdarkly`, `sync.github.light`, `sync.github.medium`, `sync.github.heavy`, `sync.gitlab.light`, `sync.gitlab.medium`, `sync.gitlab.heavy`, `sync.jira.medium`, `sync.linear.medium` | `worker`, `worker-heavy` | Celery fleet-wide dormant since 2026-08-19 (CHAOS-4026); Go/River live. This queue's one kind (`sync.provider_unit`) was still `canary` per-kind for a time after the fleet-wide Celery retirement -- its own migration has since completed too (see below). Enablement is -Q topology plus the user's own sync config: CHAOS-4054 deleted the provider/dataset WORKER_*_ENABLED switch plane outright, so a shipped route is always executable and nothing hides it behind an environment flag.<br>The per-provider cost-class split (light/medium/heavy) has no Go equivalent yet -- CHAOS-4027, parked. All cost classes collapse onto the single sync_provider queue in Go.<br>`sync.provider_unit`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json)<br>`system.dimension_fold`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json) |
 

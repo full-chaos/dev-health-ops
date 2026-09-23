@@ -12,8 +12,11 @@ readonly VERSION="phase1-ci"
 readonly COMMIT="0000000000000000000000000000000000000000"
 readonly BUILD_TIME="1970-01-01T00:00:00Z"
 readonly SOURCE_DATE_EPOCH="0"
-readonly RUNTIME_TARGETS=(worker scheduler reconciler stream-runner)
-readonly ALL_TARGETS=(worker scheduler reconciler stream-runner operator contractcheck migrate dho)
+# The long-running services the smoke runs to readiness. stream-runner is not
+# an image target: it is `dho stream-runner`, smoked on the dho image (the
+# chart default) and on the operator image (what prod pins for it).
+readonly RUNTIME_TARGETS=(worker scheduler reconciler stream-runner stream-runner-operator)
+readonly ALL_TARGETS=(worker scheduler reconciler operator contractcheck migrate dho)
 readonly CONTAINER_SECURITY_ARGS=(
   --read-only
   --cap-drop ALL
@@ -147,7 +150,21 @@ wait_for_status() {
 
 smoke_target() {
   local target="$1"
-  local tag="${IMAGE_PREFIX}-${target}:ci"
+  # A service folded into dho is smoked from the dho image, with its verb as
+  # the first argument -- the way the chart and Compose run it.
+  local image_target="${target}"
+  local verb_args=()
+  case "${target}" in
+    stream-runner)
+      image_target=dho
+      verb_args=(stream-runner)
+      ;;
+    stream-runner-operator)
+      image_target=operator
+      verb_args=(stream-runner)
+      ;;
+  esac
+  local tag="${IMAGE_PREFIX}-${image_target}:ci"
   local container_name="dev-health-go-${target}-smoke-$$"
   local published_address
   local exit_code
@@ -156,7 +173,7 @@ smoke_target() {
   local dependencies
   local startup_env
 
-  build_target "${target}" "${tag}"
+  build_target "${image_target}" "${tag}"
 
   [ "$(docker image inspect --format '{{.Config.User}}' "${tag}")" = "65532:65532" ] \
     || die "${target} image is not configured for numeric non-root execution"
@@ -200,7 +217,7 @@ smoke_target() {
     --publish "127.0.0.1::8080" \
     "${startup_env[@]}" \
     "${CONTAINER_SECURITY_ARGS[@]}" \
-    "${tag}" "${startup_args[@]}" >/dev/null
+    "${tag}" "${verb_args[@]}" "${startup_args[@]}" >/dev/null
   published_address="$(docker port "${container_name}" 8080/tcp 2>/dev/null | head -n 1 || true)"
   if [ -z "${published_address}" ]; then
     # Surface why the container is gone rather than only that the port is
@@ -234,7 +251,7 @@ smoke_target() {
       reconciler)
         dependencies="domain_postgres queue_postgres reconciler_loop river_schema"
         ;;
-      stream-runner)
+      stream-runner | stream-runner-operator)
         dependencies="clickhouse domain_postgres stream_consumer valkey"
         ;;
       *)

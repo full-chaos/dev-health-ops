@@ -46,9 +46,11 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 )
 
-// pythonProgram has three modes: "migrate" runs the Alembic heads, "mint"
+// pythonProgram has four modes: "migrate" runs the Alembic heads, "mint"
 // mints access tokens with the real AuthService (stdin: name -> keyword
-// arguments of create_access_token), and "serve" answers a batch of
+// arguments of create_access_token), "call" runs Python functions (stdin: a
+// list of {"target": "module:attribute", "args": [...], "kwargs": {...}};
+// stdout: their JSON results, in order), and "serve" answers a batch of
 // requests with TestClient over the real app.
 const pythonProgram = `
 import base64, json, sys
@@ -64,6 +66,16 @@ elif mode == "mint":
     out = {}
     for name, spec in json.loads(sys.stdin.read()).items():
         out[name] = svc.create_access_token(**spec)
+    print(json.dumps(out))
+elif mode == "call":
+    import importlib
+    out = []
+    for call in json.loads(sys.stdin.read()):
+        module, _, attribute = call["target"].partition(":")
+        target = importlib.import_module(module)
+        for part in attribute.split("."):
+            target = getattr(target, part)
+        out.append(target(*call.get("args", []), **call.get("kwargs", {})))
     print(json.dumps(out))
 elif mode == "serve":
     from fastapi.testclient import TestClient
@@ -116,9 +128,11 @@ type Options struct {
 	// EXPECTED_WORKER_GROUPS or TELEMETRY_ENDPOINT.
 	PythonEnv []string
 	// Seed fills the source database after the Alembic heads and before the
-	// copy, as a superuser. It returns the tokens to mint: name ->
-	// create_access_token keyword arguments (nil = none).
-	Seed func(t *testing.T, ctx context.Context, admin *pgxpool.Pool) map[string]map[string]any
+	// copy, as a superuser. It may call Python through venue.CallPython, for
+	// example to write a value the way the Python api encrypts it. It
+	// returns the tokens to mint: name -> create_access_token keyword
+	// arguments (nil = none).
+	Seed func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, venue *Venue) map[string]map[string]any
 	// Logger receives the River migration logs (nil = discard).
 	Logger *slog.Logger
 }
@@ -191,7 +205,7 @@ func Start(t *testing.T, ctx context.Context, options Options) *Venue {
 	}
 	var specs map[string]map[string]any
 	if options.Seed != nil {
-		specs = options.Seed(t, ctx, admin)
+		specs = options.Seed(t, ctx, admin, v)
 	}
 	admin.Close()
 	if len(specs) > 0 {
@@ -250,6 +264,30 @@ func (v *Venue) DiagnoseAPIRole(t *testing.T, ctx context.Context) string {
 	defer pool.Close()
 	gaps, err := postgres.DiagnoseRolePosture(ctx, pool, v.Roles["api"], postgres.APIPosture())
 	return fmt.Sprintf("gaps=%v err=%v", gaps, err)
+}
+
+// PythonCall is one function call for CallPython: Target is
+// "module:attribute" (attribute may be dotted), and the arguments and the
+// result are JSON values.
+type PythonCall struct {
+	Target string         `json:"target"`
+	Args   []any          `json:"args,omitempty"`
+	Kwargs map[string]any `json:"kwargs,omitempty"`
+}
+
+// CallPython runs calls in one Python process with the Python plane's
+// environment (the source database, Valkey and PythonEnv) and returns each
+// result as raw JSON, in order.
+func (v *Venue) CallPython(t *testing.T, calls ...PythonCall) []json.RawMessage {
+	t.Helper()
+	var out []json.RawMessage
+	if err := json.Unmarshal(v.runPython(t, calls, "call"), &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out) != len(calls) {
+		t.Fatalf("python returned %d of %d call results", len(out), len(calls))
+	}
+	return out
 }
 
 // ServePython answers requests with the Python plane, in order, in one

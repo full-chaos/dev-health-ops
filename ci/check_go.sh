@@ -1354,7 +1354,17 @@ check_live_python_oracles() {
 # t.Skip fired -- DEV_HEALTH_LIVE_PYTHON_ORACLES was unset, or
 # pyoracle.Resolve could not find python3 -- reads as a hard failure here,
 # never a silent pass) or if discovery itself found zero tests (the
-# discovery mechanism is broken, not a genuinely oracle-free tree).
+# discovery mechanism is broken, not a genuinely oracle-free tree). Two
+# hardenings here, both reproduced live against a temporary repro test:
+# the proof file only proves Start() returned, not that the test's own
+# comparison ran -- a t.Skip() fired immediately after Start() would still
+# leave a genuine proof file behind, so this also greps the raw `go test -v`
+# output for a `--- SKIP:` line naming a discovered test and fails on it
+# (DEV_HEALTH_LIVE_PYTHON_ORACLES=1 is always set here, so no discovered
+# test has a legitimate reason to skip under this verb); and each package
+# gets its OWN proof subdirectory, not one shared namespace, so two packages
+# that happen to declare a same-named VenueOracle test can never let one
+# package's real proof satisfy the other's check.
 check_venue_oracles() {
   [ "${DEV_HEALTH_LIVE_PYTHON_ORACLES:-}" = "1" ] \
     || die "venue-oracles requires DEV_HEALTH_LIVE_PYTHON_ORACLES=1 (this verb never sets it itself -- a skip must be visible to the caller, not swallowed here)"
@@ -1374,7 +1384,7 @@ check_venue_oracles() {
     local found=0 index
     for index in "${!vo_dirs[@]}"; do
       if [ "${vo_dirs[${index}]}" = "${dir}" ]; then
-        vo_names[${index}]="${vo_names[${index}]}|${names}"
+        vo_names[index]="${vo_names[${index}]}|${names}"
         found=1
         break
       fi
@@ -1391,39 +1401,44 @@ check_venue_oracles() {
   fi
   printf 'venue-oracles: %d test(s) discovered across %d package(s)\n' "${total}" "${#vo_dirs[@]}"
 
-  local index rel pattern
+  local index rel pattern pkg_proof_dir log_file failed=0
   for index in "${!vo_dirs[@]}"; do
     rel="./${vo_dirs[${index}]#"${ROOT}"/}"
     pattern="^(${vo_names[${index}]})\$"
     printf '  RUN  %s: %s\n' "${rel}" "${vo_names[${index}]//|/ }"
+
+    pkg_proof_dir="${proof_dir}/${index}"
+    mkdir -p "${pkg_proof_dir}"
+    log_file="$(mktemp "${TMPDIR:-/tmp}/dev-health-venue-oracles-log.XXXXXX")"
+
     if ! (
       cd "${ROOT}"
       "${GO_ENV_OFF[@]}" \
         GOWORK=off \
         DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
-        DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
+        DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${pkg_proof_dir}" \
         go test -mod=readonly -tags=integration -count=1 -timeout=20m \
           -run "${pattern}" -v "${rel}"
-    ); then
-      rm -rf -- "${proof_dir}"
-      return 1
+    ) 2>&1 | tee "${log_file}"; then
+      failed=1
     fi
-  done
 
-  local missing=0
-  for index in "${!vo_names[@]}"; do
-    local IFS='|'
-    local -a name_list=(${vo_names[${index}]})
-    unset IFS
-    for name in "${name_list[@]}"; do
-      if [ ! -f "${proof_dir}/${name}" ] || [ "$(cat "${proof_dir}/${name}")" != "executed" ]; then
-        printf 'ERROR: venue oracle %s did not run (no proof file -- venueoracle.Start likely skipped)\n' "${name}" >&2
-        missing=1
+    local -a this_names=()
+    IFS='|' read -ra this_names <<< "${vo_names[${index}]}"
+    for name in "${this_names[@]}"; do
+      if grep -qE "^--- SKIP: ${name}( |\$)" "${log_file}"; then
+        printf 'ERROR: venue oracle %s reported SKIP -- a discovered venue oracle test must never skip under this verb; no real comparison ran\n' "${name}" >&2
+        failed=1
+      elif [ ! -f "${pkg_proof_dir}/${name}" ] || [ "$(cat "${pkg_proof_dir}/${name}")" != "executed" ]; then
+        printf 'ERROR: venue oracle %s did not run (no proof file in its own package directory -- venueoracle.Start likely never returned)\n' "${name}" >&2
+        failed=1
       fi
     done
+    rm -f -- "${log_file}"
   done
+
   rm -rf -- "${proof_dir}"
-  [ "${missing}" -eq 0 ] || return 1
+  [ "${failed}" -eq 0 ] || return 1
 }
 
 check_build() {

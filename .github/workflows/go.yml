@@ -683,8 +683,17 @@ jobs:
           if ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
             git fetch --no-tags origin "${BASE_SHA}"
           fi
-          if git diff --name-only "${BASE_SHA}...HEAD" \
-              | grep -qE '^(internal/api/|internal/apiservice/|internal/testsupport/venueoracle/|src/dev_health_ops/api/)'; then
+          # A large diff piped straight into `grep -q` can make grep exit on
+          # its first match while git diff is still writing -- SIGPIPE kills
+          # git diff, and under `pipefail` that reads as a pipeline FAILURE,
+          # landing in the `else` below with a RELEVANT diff reported as
+          # irrelevant (reproduced live with 16k+ changed paths).
+          # Materializing the diff to a file first removes the live pipe
+          # grep could ever SIGPIPE.
+          changed_paths_file="$(mktemp)"
+          trap 'rm -f "${changed_paths_file}"' EXIT
+          git diff --name-only "${BASE_SHA}...HEAD" > "${changed_paths_file}"
+          if grep -qE '^(internal/api/|internal/apiservice/|internal/testsupport/venueoracle/|internal/testsupport/containers/|internal/testsupport/pyoracle/|src/dev_health_ops/api/)' "${changed_paths_file}"; then
             echo "relevant=true" >> "${GITHUB_OUTPUT}"
           else
             echo "relevant=false" >> "${GITHUB_OUTPUT}"

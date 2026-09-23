@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/api/recordvalidation"
 	"math/rand"
 	"net/http/httptest"
 	"strings"
@@ -139,7 +140,7 @@ func envelopeCorpus() [][]byte {
 	return corpus
 }
 
-// TestEnvelopeValidationMatchesLivePython compares ValidateEnvelopeJSON
+// TestEnvelopeValidationMatchesLivePython compares recordvalidation.ValidateEnvelopeJSON
 // with BatchEnvelope.model_validate_json on envelopeCorpus: each error's
 // type, loc and msg in order, or success, or the TypeError. jiter's JSON
 // syntax texts other than EOF, trailing characters and expected value are
@@ -164,7 +165,7 @@ func TestEnvelopeValidationMatchesLivePython(t *testing.T) {
 	}
 	mismatches, limited, syntax := 0, 0, 0
 	for index, body := range corpus {
-		_, errs, typeErr := ValidateEnvelopeJSON(body)
+		_, errs, typeErr := recordvalidation.ValidateEnvelopeJSON(body)
 		got := `"ok"`
 		switch {
 		case typeErr != nil:
@@ -250,7 +251,7 @@ func isLimitedSyntaxMessage(want, got any) bool {
 
 // renderDicts is json.dumps([dict(e) ...]) for errs, or UNRENDERABLE where
 // Python's json.dumps raises.
-func renderDicts(errs []PydanticError) string {
+func renderDicts(errs []recordvalidation.PydanticError) string {
 	list := make([]pyjson.Value, len(errs))
 	for index, err := range errs {
 		if err.Unrenderable {

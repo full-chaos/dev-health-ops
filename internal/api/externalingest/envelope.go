@@ -1,6 +1,7 @@
 package externalingest
 
 import (
+	"github.com/full-chaos/dev-health-ops/internal/api/recordvalidation"
 	"math/big"
 	"net/http"
 	"sort"
@@ -58,8 +59,8 @@ type Record struct {
 }
 
 const (
-	legacyEntityFamily      = "legacy"
-	operationalEntityFamily = "operational"
+	legacyEntityFamily      = recordvalidation.LegacyEntityFamily
+	operationalEntityFamily = recordvalidation.OperationalEntityFamily
 )
 
 // parseEnvelope is router.py's _parse_envelope_or_400: the envelope
@@ -71,7 +72,7 @@ const (
 // api answers its unhandled 500, and so does this. err is nil only for a
 // valid envelope.
 func parseEnvelope(raw []byte) (*BatchEnvelope, error) {
-	valid, errs, typeErr := ValidateEnvelopeJSON(raw)
+	valid, errs, typeErr := recordvalidation.ValidateEnvelopeJSON(raw)
 	if typeErr != nil {
 		return nil, unhandledError()
 	}
@@ -175,4 +176,18 @@ func fromAny(value any) pyjson.Value {
 		return pyjson.Float(typed)
 	}
 	return value
+}
+
+// validateRecords is recordvalidation.ValidateRecords over parsed envelope
+// records.
+func validateRecords(records []Record) []recordvalidation.ValidationErrorItem {
+	inputs := make([]recordvalidation.RecordInput, len(records))
+	for index, record := range records {
+		payload := record.ordered
+		if payload == nil {
+			payload = objectFromMap(record.Payload)
+		}
+		inputs[index] = recordvalidation.RecordInput{Kind: record.Kind, Payload: payload}
+	}
+	return recordvalidation.ValidateRecords(inputs)
 }

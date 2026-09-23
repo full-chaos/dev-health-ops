@@ -579,7 +579,7 @@ check_live_python_oracles() {
     return 1
   fi
 
-  printf 'go test -count=1: internal/api/externalingest (schema bundle, operational host, record and envelope validation vs live Python)\n'
+  printf 'go test -count=1: internal/api/externalingest (schema bundle, operational host, envelope validation vs live Python)\n'
   if ! (
     cd "${ROOT}"
     "${GO_ENV_OFF[@]}" \
@@ -589,8 +589,24 @@ check_live_python_oracles() {
       PYTHON="${PYTHON:-python3}" \
       PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
       go test -mod=readonly -count=1 \
-        -run '^(TestSchemaBundleMatchesLivePython|TestOperationalProviderInstanceMatchesLivePython|TestRecordModelsGoldenMatchesLivePython|TestRecordValidationMatchesLivePython|TestEnvelopeValidationMatchesLivePython|TestDataPlaneEnvelopeParseMatchesLivePython)$' \
+        -run '^(TestSchemaBundleMatchesLivePython|TestOperationalProviderInstanceMatchesLivePython|TestEnvelopeValidationMatchesLivePython|TestDataPlaneEnvelopeParseMatchesLivePython)$' \
         ./internal/api/externalingest
+  ); then
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  printf 'go test -count=1: internal/api/recordvalidation (record models and record validation vs live Python)\n'
+  if ! (
+    cd "${ROOT}"
+    "${GO_ENV_OFF[@]}" \
+      GOWORK=off \
+      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
+      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
+      PYTHON="${PYTHON:-python3}" \
+      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
+      go test -mod=readonly -count=1 \
+        -run '^(TestRecordModelsGoldenMatchesLivePython|TestRecordValidationMatchesLivePython)$' \
+        ./internal/api/recordvalidation
   ); then
     rm -rf -- "${proof_dir}"
     return 1

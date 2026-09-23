@@ -2,6 +2,7 @@ package externalingest
 
 import (
 	"encoding/json"
+	"github.com/full-chaos/dev-health-ops/internal/api/recordvalidation"
 	"log/slog"
 	"net/http"
 
@@ -17,7 +18,7 @@ type ingestError struct {
 	Status  int
 	Code    string
 	Message string
-	Errors  []ValidationErrorItem
+	Errors  []recordvalidation.ValidationErrorItem
 	// Details are pydantic error dicts (errors=[dict(e) ...]); when set the
 	// body is written with pyjson, key order and all, as JSONResponse does.
 	Details []pyjson.Value
@@ -61,7 +62,7 @@ func writeIngestError(w http.ResponseWriter, err *ingestError) {
 	if err.Details == nil && len(err.Errors) > 0 {
 		items := make([]pyjson.Value, len(err.Errors))
 		for i, item := range err.Errors {
-			items[i] = item.toPyJSON()
+			items[i] = item.ToPyJSON()
 		}
 		errorObject.Set("errors", items)
 	}

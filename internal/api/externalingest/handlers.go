@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/api/recordvalidation"
 	"io"
 	"log/slog"
 	"net/http"
@@ -28,7 +29,7 @@ func (d Deps) handleListSchemas() http.HandlerFunc {
 		}
 		body := pyjson.NewObject()
 		body.Set("schemaVersions", []string{schemaVersion})
-		body.Set("recordKinds", recordKinds)
+		body.Set("recordKinds", recordvalidation.RecordKinds())
 		body.Set("limits", limitsPayload(d.limits()))
 		policy.WriteJSON(w, http.StatusOK, body, nil)
 	}
@@ -93,19 +94,19 @@ func (d Deps) handleAvailability() http.HandlerFunc {
 		unavailable := map[string]bool{}
 		switch {
 		case !customerPush:
-			for _, kind := range recordKinds {
+			for _, kind := range recordvalidation.RecordKinds() {
 				unavailable[kind] = true
 			}
 		case !canonicalIncident:
-			for _, kind := range recordKinds {
-				if operationalRecordKinds[kind] {
+			for _, kind := range recordvalidation.RecordKinds() {
+				if recordvalidation.OperationalKind(kind) {
 					unavailable[kind] = true
 				} else {
 					available[kind] = true
 				}
 			}
 		default:
-			for _, kind := range recordKinds {
+			for _, kind := range recordvalidation.RecordKinds() {
 				available[kind] = true
 			}
 		}
@@ -183,7 +184,7 @@ func (d Deps) handleValidate() http.HandlerFunc {
 		errItems := nonNilErrors(errs)
 		errorValues := make([]pyjson.Value, len(errItems))
 		for i, item := range errItems {
-			errorValues[i] = item.toPyJSON()
+			errorValues[i] = item.ToPyJSON()
 		}
 		body := pyjson.NewObject()
 		body.Set("valid", len(errs) == 0)
@@ -194,16 +195,16 @@ func (d Deps) handleValidate() http.HandlerFunc {
 	}
 }
 
-func nonNilErrors(errs []ValidationErrorItem) []ValidationErrorItem {
+func nonNilErrors(errs []recordvalidation.ValidationErrorItem) []recordvalidation.ValidationErrorItem {
 	if errs == nil {
-		return []ValidationErrorItem{}
+		return []recordvalidation.ValidationErrorItem{}
 	}
 	return errs
 }
 
 func requiresCanonicalIncidentIngestion(records []Record) bool {
 	for _, r := range records {
-		if operationalRecordKinds[r.Kind] {
+		if recordvalidation.OperationalKind(r.Kind) {
 			return true
 		}
 	}
@@ -250,7 +251,7 @@ func (d Deps) handleAcceptBatch() http.HandlerFunc {
 		kinds := make([]string, len(envelope.Records))
 		for i, rec := range envelope.Records {
 			kinds[i] = rec.Kind
-			if _, known := recordModels[rec.Kind]; !known {
+			if !recordvalidation.KnownKind(rec.Kind) {
 				writeIngestError(w, newIngestError(http.StatusBadRequest, "unknown_record_kind",
 					fmt.Sprintf("Unknown record kind at index %d: ", i)+pythonparity.StrRepr(rec.Kind)))
 				return

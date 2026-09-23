@@ -51,7 +51,8 @@ func scanActiveBudgetConsumptionUnit(rows pgx.Rows) (budgetUnit, error) {
 var ErrEstimateFatal = errors.New("budget estimate failed fatally")
 
 // budgetEstimator is the credential-bound estimation call activeBudgetConsumption
-// needs -- satisfied by *HTTPBridge.DispatchBudgetEstimate, narrowed to an
+// needs -- satisfied by *InProcessBudgetEstimator.DispatchBudgetEstimate
+// (CHAOS-6243), narrowed to an
 // interface here so unit tests can supply a fake instead of a real bridge.
 type budgetEstimator interface {
 	DispatchBudgetEstimate(ctx context.Context, orgID, runID string, unitIDs []string) (map[string][]budgetEstimate, error)
@@ -68,17 +69,18 @@ type budgetEstimator interface {
 //
 // Python calls SyncTaskBootstrap.load/estimate_provider_budget per unit,
 // each independently try/excepted, so one unit's estimation failure never
-// affects any other. The estimate-only bridge this Go port uses
+// affects any other. The estimator this Go port uses
 // (DispatchBudgetEstimate) is scoped to ONE (org_id, sync_run_id) per call
-// by design (CHAOS-4175 estimate-bridge ruling, tenant-fenced), so active
+// (tenant-fenced, as the CHAOS-4175 bridge endpoint was), so active
 // units -- which can span many different runs and orgs at once -- are
 // grouped by (org_id, sync_run_id) here and the bridge is called once per
 // group. This is a pure Go-side batching optimization over Python's
 // unit-by-unit calls, not a behavior change: the per-unit degrade-to-empty
 // semantics on failure is preserved by degrading every unit in a group
-// whose OWN bridge call fails (network/decode error, not a per-unit
-// estimator exception -- those are already degraded server-side by
-// batch_estimate_provider_budget_for_units), matching what each of that
+// whose OWN estimate call fails (a batch read error, not a per-unit
+// estimator exception -- the estimator already degrades those to an empty
+// estimate per unit, as batch_estimate_provider_budget_for_units did),
+// matching what each of that
 // group's units would have individually logged and gotten had Python
 // called each in its own try/except and hit the same failure.
 func activeBudgetConsumption(
@@ -158,7 +160,7 @@ ORDER BY id`,
 			unitsByID[unit.id] = unit
 		}
 
-		// Chunked at the estimate bridge's own request-size ceiling (codex
+		// Chunked at dispatchBudgetEstimateMaxUnitIDs (the old bridge's request-size ceiling, kept as the batch size) (codex
 		// round 2, CHAOS-4175) -- same reasoning as enforceRun's own chunk
 		// loop. Unlike enforceRun, a chunk failure here (including a
 		// contract rejection) stays fail-OPEN for just that chunk: this

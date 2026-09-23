@@ -27,10 +27,9 @@ OWN work, not as a routing decision this contract governs:
   in, the populator's summary dict out) for the one step -- credential
   resolution and the team/sprint import -- that stays Python-side
   (CHAOS-4175, CHAOS-4198).
-* `dispatch_sync_run` calls `/dispatch-budget-estimate` (identifiers in, the
-  closed `BudgetEstimate` schema out) for the one step -- credential
-  resolution and the six per-provider budget estimators -- that stays
-  Python-side for the identical reason (CHAOS-4175, CHAOS-4198).
+* `dispatch_sync_run` no longer calls the api: credential resolution and the
+  six per-provider budget estimators run in-process in Go
+  (`internal/syncbudget`, CHAOS-6243).
 
 Neither call is `transport-routes.json`-governed: they are not claimed,
 published, or retried through the outbox/transport-route machinery this

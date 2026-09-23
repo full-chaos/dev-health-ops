@@ -65,7 +65,7 @@ func observeRun(
 		unitIDs[i] = unit.id
 		unitsByID[unit.id] = unit
 	}
-	// Chunked at the estimate bridge's own request-size ceiling (codex
+	// Chunked at dispatchBudgetEstimateMaxUnitIDs (the old bridge's request-size ceiling, kept as the batch size) (codex
 	// round 2, CHAOS-4175). Deliberately stays fail-OPEN per chunk even for
 	// a contract rejection -- unlike enforceRun, this whole function is
 	// read-only shadow telemetry with zero effect on real admission (see

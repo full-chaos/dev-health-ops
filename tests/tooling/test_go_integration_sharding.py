@@ -190,6 +190,9 @@ EXPECTED_PACKAGES = {
     "internal/storage/river",
     "internal/streamhandlers",
     "internal/streamrunner",
+    # CHAOS-6243: the in-process budget estimator's loader runs its real
+    # SQL against Postgres.
+    "internal/syncbudget",
     "internal/syncdispatchruntime",
     "internal/syncreconciler",
     "internal/synccoverage",

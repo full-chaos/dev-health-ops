@@ -72,10 +72,10 @@ type NativeDispatchSyncRunService struct {
 }
 
 // NewNativeDispatchSyncRunService constructs the native dispatch_sync_run
-// executor. bridge is the estimate-only bridge client (CHAOS-4175 ruling):
-// the credential-bound half of budget admission (SyncTaskBootstrap.load,
-// the six per-provider estimator classes) stays Python-side behind
-// /dispatch-budget-estimate; everything else in this service is native.
+// executor. bridge is the budget estimator: the credential-bound half of
+// budget admission (SyncTaskBootstrap.load, the six per-provider estimator
+// classes), in-process since CHAOS-6243 (InProcessBudgetEstimator; it was
+// an HTTP call to the Python api's /dispatch-budget-estimate).
 // producer/registry are the SAME dependency shapes teamAutoimportPostSyncWriter
 // already uses for its own Publish/PublishDeferred call. There is
 // deliberately no jobroute.Controller here (CHAOS-4175 ruling, see Dispatch's

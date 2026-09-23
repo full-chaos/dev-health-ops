@@ -225,7 +225,7 @@ func classifyRoutingDrift(counts map[string]int64, schemaDigest string) []string
 	sort.Strings(staleDigests)
 	lines := make([]string, 0, len(staleDigests))
 	for _, digest := range staleDigests {
-		lines = append(lines, fmt.Sprintf("query-api: ROUTING ROWS STALE: %d rows at %s, 0 at %s -- these rows are keyed to a schema digest this binary does not compute, so NO operation is reachable and every request silently falls back to Python. The SDL moved after they were written. Re-run `go-api-routing enable` against THIS image; see docs/contribute/architecture/go-api-wave-0-proof-infrastructure.md (section: When the schema digest moves)", counts[digest], digest, schemaDigest))
+		lines = append(lines, fmt.Sprintf("query-api: ROUTING ROWS STALE: %d rows at %s, 0 at %s -- these rows are keyed to a schema digest this binary does not compute, so NO operation is reachable and every request silently falls back to Python. The SDL moved after they were written. Re-run `dho goapi routing enable` against THIS image; see docs/contribute/architecture/go-api-wave-0-proof-infrastructure.md (section: When the schema digest moves)", counts[digest], digest, schemaDigest))
 	}
 	return lines
 }

@@ -731,10 +731,10 @@ func VerifyCandidateBuild(running string, expected string, routing map[string]Ro
 	// canary|primary only, so pointing a SHADOW row at the running build
 	// with it also flips that row to canary -- a routing change nobody
 	// asked for, produced by following a message whose only job is to say
-	// how to clear this block safely. CHAOS-5486's `go-api-routing
+	// how to clear this block safely. CHAOS-5486's `dho goapi routing
 	// repoint` preserves the mode and reads the running build from
 	// /buildinfo rather than taking it on trust from an operator.
-	return fmt.Errorf("goapiproof: routing rows point at a build the running process is not (running=%s): %s.\n  Re-point the row to the running build with `go-api-routing repoint` (mode preserved); `go-api-routing enable` would also change the mode. This is a REFUSAL, not a warning: see StaleRoutingRows for the replica argument that makes it one",
+	return fmt.Errorf("goapiproof: routing rows point at a build the running process is not (running=%s): %s.\n  Re-point the row to the running build with `dho goapi routing repoint` (mode preserved); `dho goapi routing enable` would also change the mode. This is a REFUSAL, not a warning: see StaleRoutingRows for the replica argument that makes it one",
 		running, strings.Join(disagreeing, "; "))
 }
 

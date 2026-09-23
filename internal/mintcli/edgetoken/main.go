@@ -50,11 +50,11 @@ func Command() cli.Command {
 		Kind:    cli.Verb,
 		Summary: "mint a fresh edge access token for the proof service principal and print it on stdout",
 		Run: func(ctx context.Context, env cli.Env) int {
-			if err := run(ctx, env.Args, env.Stdout, openPostgres); err != nil {
+			err := run(ctx, env.Args, env.Stdout, openPostgres)
+			if err != nil && !errors.Is(err, flag.ErrHelp) {
 				fmt.Fprintln(env.Stderr, "mint-edge-token:", err)
-				return cli.ExitFailure
 			}
-			return cli.ExitOK
+			return cli.ExitForVerbError(err)
 		},
 	}
 }
@@ -95,9 +95,9 @@ func Mint(ctx context.Context, args []string) (string, error) {
 func run(ctx context.Context, args []string, stdout io.Writer, open openFunc) error {
 	fs := flag.NewFlagSet("mint-edge-token", flag.ContinueOnError)
 	org := fs.String("org", "", "org id (UUID) to mint the token for; the proof service principal must hold a read-level membership in it")
-	ttl := fs.Duration("ttl", edgetokenmint.DefaultTTL, fmt.Sprintf("token lifetime, at most %s; go-api-prove re-runs this helper as the token ages", edgetokenmint.MaxTTL))
+	ttl := fs.Duration("ttl", edgetokenmint.DefaultTTL, fmt.Sprintf("token lifetime, at most %s; dho goapi prove re-runs this helper as the token ages", edgetokenmint.MaxTTL))
 	if err := fs.Parse(args); err != nil {
-		return err
+		return cli.WrapFlagParseError(err)
 	}
 	if strings.TrimSpace(*org) == "" {
 		return errors.New("-org is required")

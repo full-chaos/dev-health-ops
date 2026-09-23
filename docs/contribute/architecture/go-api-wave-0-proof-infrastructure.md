@@ -247,7 +247,7 @@ running binary can never read — exactly the failure above.
 So: **rebuild and deploy `query-api` first, re-enable second.** Never the
 other way round.
 
-That ordering leaves a window, and `go-api-routing carry` (CHAOS-6107) is
+That ordering leaves a window, and `dho goapi routing carry` (CHAOS-6107) is
 what closes it: between the first new pod starting and the re-enable, every
 enabled operation is un-routed — requests fall back to Python, and an
 operation whose Python execution path has been deleted (the go-only class)
@@ -322,7 +322,7 @@ dev-hops go-api routing status --query-api-url http://query-api:8080
 #    from this SDL. `enable` will refuse until they agree, by design.
 
 # 3. Re-enable against the deployed build with the Go verb
-#    (`go-api-routing enable`, next section). It reads the candidate build
+#    (`dho goapi routing enable`, next section). It reads the candidate build
 #    from the running query-api's /buildinfo; there is no Python enable.
 
 # 4. Confirm every operation reads MATCH, and none reads UNPROVEN
@@ -356,7 +356,7 @@ The enablement rule requires `build_binding = 'per_request'` on every
 receipt, and rows written before 0129 carry `build_binding` NULL. So the
 moment 0129 is applied, **every operation proven before it reads UNPROVEN**
 on `dev-hops go-api routing status` and on the migration-status page, and
-`go-api-routing enable` refuses it -- including operations whose old receipt was a
+`dho goapi routing enable` refuses it -- including operations whose old receipt was a
 sound `match`. Nothing is lost from the table; the old receipts stay as
 history. Re-run `go-api-prove` at the deployed build (JOB 6's re-prove step
 does exactly this) and the new receipts, bound per request, restore the

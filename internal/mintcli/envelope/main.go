@@ -42,11 +42,11 @@ func Command() cli.Command {
 		Kind:    cli.Verb,
 		Summary: "mint a fresh effective-principal envelope and print it on stdout",
 		Run: func(_ context.Context, env cli.Env) int {
-			if err := run(env.Args, env.Stdout); err != nil {
+			err := run(env.Args, env.Stdout)
+			if err != nil && !errors.Is(err, flag.ErrHelp) {
 				fmt.Fprintln(env.Stderr, "mint-envelope:", err)
-				return cli.ExitFailure
 			}
-			return cli.ExitOK
+			return cli.ExitForVerbError(err)
 		},
 	}
 }
@@ -69,7 +69,7 @@ func run(args []string, stdout io.Writer) error {
 	org := fs.String("org", "", "org id to mint the envelope for")
 	keyFile := fs.String("key-file", "", "path to a PEM file holding the Ed25519 private key (PKCS#8, \"PRIVATE KEY\" block); defaults to reading it from the "+envelopemint.PrivateKeyEnvVar+" environment variable, which is how the tools pod receives it via secretKeyRef")
 	if err := fs.Parse(args); err != nil {
-		return err
+		return cli.WrapFlagParseError(err)
 	}
 	if strings.TrimSpace(*org) == "" {
 		return errors.New("-org is required")

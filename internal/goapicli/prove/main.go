@@ -104,11 +104,11 @@ func Command() cli.Command {
 		Kind:    cli.Verb,
 		Summary: "execute every registered Go-API GraphQL operation against the deployed edge and record a receipt",
 		Run: func(_ context.Context, env cli.Env) int {
-			if err := run(env.Args); err != nil {
+			err := run(env.Args)
+			if err != nil && !errors.Is(err, flag.ErrHelp) {
 				fmt.Fprintf(env.Stderr, "go-api-prove: %v\n", err)
-				return cli.ExitFailure
 			}
-			return cli.ExitOK
+			return cli.ExitForVerbError(err)
 		},
 	}
 }
@@ -214,7 +214,7 @@ func registerFlags() (*flag.FlagSet, *flags) {
 func parseFlags(args []string) (flags, error) {
 	fs, fp := registerFlags()
 	if err := fs.Parse(args); err != nil {
-		return *fp, err
+		return *fp, cli.WrapFlagParseError(err)
 	}
 	f := *fp
 	secrets.ResolveFlag(fs, &f.postgresURI, "postgres-uri", postgresURIEnvVar)

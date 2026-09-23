@@ -119,7 +119,7 @@ Or use `--patch-file` to avoid credential exposure (Trap #121).
 
 ## Step 6: First-time routing rows (canary set only)
 
-The routing state table is empty on first deploy, and nothing that reads it can create a row: `go-api-prove` routes a `shadow` operation through the proof route only when a row exists, `go-api-routing disable` never inserts one, and `go-api-routing enable` refuses an operation with no recorded proof run for the running build (there is no waiver flag; the only exception is a written limit in the compiled go-served ledger). So the first rows are seeded by hand in `shadow` mode, at the digests the running query-api reports, then proven (Step 7), then enabled (end of Step 7).
+The routing state table is empty on first deploy, and nothing that reads it can create a row: `dho goapi prove` routes a `shadow` operation through the proof route only when a row exists, `dho goapi routing disable` never inserts one, and `dho goapi routing enable` refuses an operation with no recorded proof run for the running build (there is no waiver flag; the only exception is a written limit in the compiled go-served ledger). So the first rows are seeded by hand in `shadow` mode, at the digests the running query-api reports, then proven (Step 7), then enabled (end of Step 7).
 
 Read the digests from the running query-api (`/registry` is unauthenticated; `/buildinfo` takes the envelope) and insert one row per canary operation, candidate build first:
 

@@ -109,11 +109,20 @@ def test_every_enable_command_uses_only_flags_the_verb_defines(path: Path) -> No
 SHORTHAND = re.compile(
     r"(?<!goapi-)(?<!goapi )(?<![\w-])`routing (?:enable|disable|repoint|carry|status)\b"
 )
+# The OLD, now-deleted binary's own full invocation. Spec S1 (CHAOS-6280)
+# folded go-api-routing into `dho goapi routing`; this literal string is a
+# DIFFERENT failure shape from SHORTHAND above -- it already names a full
+# binary, so an operator following it gets "command not found" for a
+# binary that plausibly used to exist, not an obviously-incomplete
+# fragment, and SHORTHAND's own negative lookbehinds do not catch it.
+STALE_FULL_NAME = re.compile(
+    r"(?<![\w-])go-api-routing (?:enable|disable|repoint|carry|status)\b"
+)
 SCANNED_ROOTS = ("cmd", "internal", "src", "docs", "ci")
 SCANNED_SUFFIXES = {".go", ".py", ".md", ".sh"}
 
 
-def _shorthand_hits() -> list[str]:
+def _pattern_hits(pattern: re.Pattern[str]) -> list[str]:
     hits: list[str] = []
     for root in SCANNED_ROOTS:
         for path in sorted((ROOT / root).rglob("*")):
@@ -127,7 +136,7 @@ def _shorthand_hits() -> list[str]:
                 stripped = line.lstrip()
                 if path.suffix in {".go", ".py"} and stripped.startswith(("//", "#")):
                     continue
-                if SHORTHAND.search(line):
+                if pattern.search(line):
                     hits.append(f"{path.relative_to(ROOT)}:{number}")
     return hits
 
@@ -138,4 +147,15 @@ def test_no_operator_text_names_a_routing_verb_without_its_binary() -> None:
     with the bare shorthand sends an operator to `command not found`
     mid-recovery.
     """
-    assert _shorthand_hits() == []
+    assert _pattern_hits(SHORTHAND) == []
+
+
+def test_no_operator_text_names_the_deleted_go_api_routing_binary() -> None:
+    """`go-api-routing enable` is not a command either, since spec S1
+    (CHAOS-6280): the binary was folded into `dho goapi routing enable`. A
+    live diagnostic or a doc still naming the old binary sends an operator
+    to `command not found` mid-recovery, exactly as the bare shorthand
+    above would -- this is the same failure shape with a full, plausible
+    -looking name instead of an obviously incomplete fragment.
+    """
+    assert _pattern_hits(STALE_FULL_NAME) == []

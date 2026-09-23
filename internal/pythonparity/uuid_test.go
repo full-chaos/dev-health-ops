@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -95,5 +96,24 @@ func TestParseUUIDDivergesFromTheGeneralPurposeParser(t *testing.T) {
 				t.Fatalf("ParseUUID(%q) accepted a value CPython rejects", input)
 			}
 		})
+	}
+}
+
+// TestInvalidLiteralMessagesUseCPythonRepr pins the quoting of the
+// exception text int() raises: repr() picks single quotes, and double quotes
+// only when the text holds a single quote and no double quote.
+func TestInvalidLiteralMessagesUseCPythonRepr(t *testing.T) {
+	cases := []struct{ input, want string }{
+		{strings.Repeat("z", 32), "invalid literal for int() with base 16: '" + strings.Repeat("z", 32) + "'"},
+		{strings.Repeat("'", 32), `invalid literal for int() with base 16: "` + strings.Repeat("'", 32) + `"`},
+	}
+	for _, tc := range cases {
+		got, ok := UUIDValidationDetail(tc.input)
+		if !ok || got != tc.want {
+			t.Errorf("UUIDValidationDetail(%q) = %q, %v; want %q", tc.input, got, ok, tc.want)
+		}
+	}
+	if _, err := ParseInt("x1"); err == nil || err.Error() != "invalid literal for int() with base 10: 'x1'" {
+		t.Errorf("ParseInt error = %v", err)
 	}
 }

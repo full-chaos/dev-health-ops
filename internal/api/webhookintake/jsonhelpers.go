@@ -5,9 +5,31 @@ import (
 	"net/http"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
+	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/google/uuid"
 )
+
+// requiredHeaderErrors reports Python's Annotated[str, Header()]-required
+// headers that are entirely ABSENT from the request -- one pybody.Error per
+// missing header, {"type":"missing","loc":["header","<lowercase-name>"],
+// "msg":"Field required","input":null}, the exact shape FastAPI's own
+// RequestValidationError renders. Each pair is (canonical Go header name,
+// Python's lowercase field name for "loc"). A header sent with an EMPTY
+// value still counts as present: Python's declared type is a plain `str`
+// with no length constraint, so "" satisfies it -- only a header key with
+// no value at all is "missing", mirroring PagerDuty's own id: str field.
+func requiredHeaderErrors(r *http.Request, headers ...[2]string) []pybody.Error {
+	var errs []pybody.Error
+	for _, header := range headers {
+		if len(r.Header.Values(header[0])) == 0 {
+			errs = append(errs, pybody.Error{
+				Type: "missing", Loc: []pyjson.Value{"header", header[1]}, Msg: "Field required", Input: nil,
+			})
+		}
+	}
+	return errs
+}
 
 // objectField reads a nested *pyjson.Object field, nil-safe at every step
 // (a payload whose shape doesn't match what a provider normally sends

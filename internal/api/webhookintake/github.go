@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
+	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 )
 
@@ -34,6 +35,18 @@ func (d Deps) handleGitHubWebhook() http.HandlerFunc {
 			policy.WriteDetail(w, http.StatusInternalServerError, "Webhook secret not configured", nil)
 			return
 		}
+		// Python declares X-GitHub-Event/X-GitHub-Delivery as required
+		// FastAPI Header() params, resolved (and 422'd) ahead of the
+		// signature-checking body dependency -- confirmed live: a request
+		// with a VALID signature but a missing header still answers 422,
+		// never reaching the handler.
+		if errs := requiredHeaderErrors(r,
+			[2]string{"X-GitHub-Event", "x-github-event"},
+			[2]string{"X-GitHub-Delivery", "x-github-delivery"},
+		); len(errs) > 0 {
+			policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(errs), nil)
+			return
+		}
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			policy.WriteDetail(w, http.StatusBadRequest, "Invalid request body", nil)
@@ -44,13 +57,6 @@ func (d Deps) handleGitHubWebhook() http.HandlerFunc {
 			policy.WriteDetail(w, http.StatusUnauthorized, "Invalid signature", nil)
 			return
 		}
-		// NAMED LIMIT: Python declares X-GitHub-Event/X-GitHub-Delivery as
-		// required FastAPI Header() params, so a request missing either gets
-		// FastAPI's own 422 parameter-validation shape before any handler
-		// code runs. That shape is not ported here (a real GitHub delivery
-		// always sends both); a missing header degrades to an empty string
-		// instead, which still dispatches (delivery_key falls back to the
-		// payload hash when DeliveryID is "").
 		xGithubEvent := r.Header.Get("X-GitHub-Event")
 		xGithubDelivery := r.Header.Get("X-GitHub-Delivery")
 

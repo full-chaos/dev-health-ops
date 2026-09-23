@@ -374,8 +374,16 @@ func parsePagerDutyWebhook(body []byte) (pagerDutyV3Webhook, error) {
 	if eventObject == nil {
 		return pagerDutyV3Webhook{}, errInvalidEvent
 	}
-	id := stringField(eventObject, "id")
-	if id == "" || len(id) > 512 {
+	// id: str = Field(max_length=512) in Python -- REQUIRED (no default) but
+	// carries no min_length, so an empty string is a VALID id once present;
+	// _replay_identity (pagerduty.py) explicitly falls back to a body hash
+	// for exactly that case. stringField alone can't tell "absent" from
+	// "present as \"\"", which is why the earlier id == "" check rejected a
+	// well-formed empty-id event Python accepts -- Get's own ok distinguishes
+	// them.
+	idValue, idPresent := eventObject.Get("id")
+	id, idIsString := idValue.(string)
+	if !idPresent || !idIsString || len(id) > 512 {
 		return pagerDutyV3Webhook{}, errInvalidEvent
 	}
 	eventType := stringField(eventObject, "event_type")
@@ -401,8 +409,11 @@ func parsePagerDutyWebhook(body []byte) (pagerDutyV3Webhook, error) {
 	}, nil
 }
 
-var errMalformedJSON = errors.New("malformed JSON")
-var errInvalidEvent = errors.New("invalid PagerDuty V3 event")
+// Exact casing pinned to pagerduty.py's own HTTPException detail strings
+// ("Malformed JSON", "Invalid PagerDuty V3 event") -- these become the
+// {"detail": ...} response body verbatim (err.Error() at the call site).
+var errMalformedJSON = errors.New("Malformed JSON")
+var errInvalidEvent = errors.New("Invalid PagerDuty V3 event")
 
 func readBodyLimited(r *http.Request) ([]byte, *pagerdutyHTTPError) {
 	if raw := r.Header.Get("Content-Length"); raw != "" {

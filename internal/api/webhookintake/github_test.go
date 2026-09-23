@@ -1,9 +1,12 @@
 package webhookintake
 
 import (
+	"bytes"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 )
 
@@ -58,5 +61,30 @@ func TestMapGithubEvent(t *testing.T) {
 		if got := mapGithubEvent(c.event, c.action); got != c.want {
 			t.Errorf("mapGithubEvent(%q,%q) = %q, want %q", c.event, c.action, got, c.want)
 		}
+	}
+}
+
+// TestHandleGitHubWebhookRejectsAMissingRequiredHeaderEvenWithAValidSignature
+// pins the fix: Python resolves X-GitHub-Event/X-GitHub-Delivery as required
+// Header() params ahead of the signature-checking body dependency, so a
+// missing header 422s even when the signature is valid -- confirmed live
+// against the real Python route.
+func TestHandleGitHubWebhookRejectsAMissingRequiredHeaderEvenWithAValidSignature(t *testing.T) {
+	body := []byte(`{"repository":{"full_name":"acme/repo"}}`)
+	deps := Deps{Secrets: Secrets{GitHub: "s3cr3t"}}
+	handler := deps.handleGitHubWebhook()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/webhooks/github", bytes.NewReader(body))
+	req.Header.Set("X-GitHub-Delivery", "delivery-1")
+	req.Header.Set("X-Hub-Signature-256", sign("s3cr3t", string(body)))
+	recorder := httptest.NewRecorder()
+	handler(recorder, req)
+
+	if recorder.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422; body = %s", recorder.Code, recorder.Body.String())
+	}
+	want := `{"detail":[{"type":"missing","loc":["header","x-github-event"],"msg":"Field required","input":null}]}`
+	if got := recorder.Body.String(); got != want {
+		t.Fatalf("body = %s, want %s", got, want)
 	}
 }

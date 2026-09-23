@@ -60,6 +60,22 @@ func writeCanonical(buffer *bytes.Buffer, value any) error {
 		// The exact digit text encoding/json.Decoder.UseNumber() preserved
 		// from the source document -- never reparsed and re-rendered,
 		// which would risk losing precision on a large integer.
+		//
+		// NAMED LIMIT: this means a NONCANONICAL numeric spelling is not
+		// semantically normalized the way Python's json.loads -> int/float
+		// -> json.dumps round-trip would (`1e0` stays `1e0` here, Python
+		// renders `1.0`; `1E+2` stays `1E+2`, Python renders `100.0`; `-0`
+		// stays `-0`, Python renders `0`). Confirmed via an adversarial
+		// review round: a hand-built UseNumber() input containing these
+		// spellings mismatches Python byte for byte. Not fixed here because
+		// a semantic reparse can't tell "safe to reparse" (an integer,
+		// where digit-text preservation is the actual precision guard
+		// above) from "already a float" (already precision-lossy at
+		// float64) without re-deriving exactly the ambiguity this case
+		// exists to avoid. Not currently reachable through either live
+		// caller: the externalingest schema-bundle fixture (224 integers,
+		// no floats) and every webhookintake payload observed so far use
+		// canonical spellings only.
 		buffer.WriteString(string(typed))
 	case Float:
 		return writeFloat(buffer, float64(typed))

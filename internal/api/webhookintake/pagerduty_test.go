@@ -147,6 +147,36 @@ func TestParsePagerDutyWebhookAcceptsAWellFormedEvent(t *testing.T) {
 	}
 }
 
+// TestParsePagerDutyWebhookAcceptsAnEmptyEventID pins the fix: Python's
+// `id: str = Field(max_length=512)` has no min_length, so a PRESENT but
+// empty id is a VALID event -- _replay_identity (pagerduty.py) explicitly
+// falls back to a body hash for exactly this case. The earlier `id == ""`
+// check rejected this well-formed event with a 400 Python accepts with a
+// 202; only an ABSENT id (missing key) is invalid.
+func TestParsePagerDutyWebhookAcceptsAnEmptyEventID(t *testing.T) {
+	body := `{"event":{"id":"","event_type":"incident.triggered","occurred_at":"2026-01-02T03:04:05Z","data":{}}}`
+	webhook, err := parsePagerDutyWebhook([]byte(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if webhook.Event.ID != "" {
+		t.Fatalf("Event.ID = %q, want empty", webhook.Event.ID)
+	}
+}
+
+// TestParsePagerDutyErrorMessagesMatchPythonsExactCasing pins the fix: these
+// error strings become the {"detail": ...} response body verbatim
+// (err.Error() at the call site), so they must match pagerduty.py's own
+// HTTPException detail text byte for byte, including capitalization.
+func TestParsePagerDutyErrorMessagesMatchPythonsExactCasing(t *testing.T) {
+	if got, want := errMalformedJSON.Error(), "Malformed JSON"; got != want {
+		t.Fatalf("errMalformedJSON = %q, want %q", got, want)
+	}
+	if got, want := errInvalidEvent.Error(), "Invalid PagerDuty V3 event"; got != want {
+		t.Fatalf("errInvalidEvent = %q, want %q", got, want)
+	}
+}
+
 // TestPythonMicrosecondFractionMatchesPythonIsoformat pins the fix: Go's
 // ".999999" time layout trims trailing zeros (123400us -> ".1234"), but
 // Python's datetime.isoformat()/model_dump_json() never does -- it omits

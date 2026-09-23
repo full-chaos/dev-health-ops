@@ -187,11 +187,33 @@ func TestWebhookIntakeVenueOracleGitHubGitLabJiraHealth(t *testing.T) {
 			Body: venueoracle.B64(string(githubBody)),
 		},
 		{
+			// A valid signature but no X-GitHub-Event/X-GitHub-Delivery:
+			// Python resolves both as required Header() params ahead of the
+			// signature-checking body dependency, so this 422s even though
+			// the signature itself is genuine.
+			Name:   "github missing event header",
+			Method: "POST", Path: "/api/v1/webhooks/github",
+			Headers: map[string]string{
+				"X-Hub-Signature-256": githubVenueSign(githubSecret, githubBody),
+				"Content-Type":        "application/json",
+			},
+			Body: venueoracle.B64(string(githubBody)),
+		},
+		{
 			Name:   "gitlab push accepted",
 			Method: "POST", Path: "/api/v1/webhooks/gitlab",
 			Headers: map[string]string{
 				"X-Gitlab-Event": "Push Hook", "X-Gitlab-Token": gitlabSecret,
 				"Content-Type": "application/json",
+			},
+			Body: venueoracle.B64(string(gitlabBody)),
+		},
+		{
+			Name:   "gitlab missing event header",
+			Method: "POST", Path: "/api/v1/webhooks/gitlab",
+			Headers: map[string]string{
+				"X-Gitlab-Token": gitlabSecret,
+				"Content-Type":   "application/json",
 			},
 			Body: venueoracle.B64(string(gitlabBody)),
 		},

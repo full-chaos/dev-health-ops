@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
+	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 )
 
@@ -26,6 +27,14 @@ func (d Deps) handleGitLabWebhook() http.HandlerFunc {
 		if secret == "" {
 			d.logger().Warn("GITLAB_WEBHOOK_TOKEN not configured - rejecting webhook")
 			policy.WriteDetail(w, http.StatusInternalServerError, "Webhook token not configured", nil)
+			return
+		}
+		// Python declares X-Gitlab-Event as a required FastAPI Header()
+		// param, resolved (and 422'd) ahead of the token-checking body
+		// dependency -- same confirmed-live ordering as GitHub's own two
+		// headers (see github.go).
+		if errs := requiredHeaderErrors(r, [2]string{"X-Gitlab-Event", "x-gitlab-event"}); len(errs) > 0 {
+			policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(errs), nil)
 			return
 		}
 		if !verifyGitLabToken(r.Header.Get("X-Gitlab-Token"), secret) {

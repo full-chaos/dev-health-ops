@@ -7,6 +7,8 @@ import sqlalchemy as sa
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
 
+from tests._alembic_heads import application_schema_head
+
 
 def test_migration_0047_chains_after_outbox_and_is_reversible():
     migration = importlib.import_module(
@@ -86,6 +88,9 @@ def test_migration_0136_allows_the_operator_principal_and_is_reversible():
     )
     assert migration.revision == "0136"
     assert migration.down_revision == "0135"
+    # Derived, not typed (tests/_alembic_heads.py): the next migration
+    # author supersedes this check.
+    assert migration.revision == application_schema_head()
 
     engine = sa.create_engine("sqlite:///:memory:")
     metadata = sa.MetaData()
@@ -109,6 +114,21 @@ def test_migration_0136_allows_the_operator_principal_and_is_reversible():
                 with pytest.raises(sa.exc.IntegrityError, match="principal_type"):
                     with connection.begin_nested():
                         _insert_audit(connection, "user")
+                # Downgrade refuses while an operator row exists, and keeps
+                # both the row and the widened check.
+                with pytest.raises(sa.exc.IntegrityError, match="principal_type"):
+                    with connection.begin_nested():
+                        migration.downgrade()
+                assert (
+                    connection.execute(
+                        sa.text(
+                            "SELECT count(*) FROM worker_operator_audits "
+                            "WHERE principal_type = 'operator'"
+                        )
+                    ).scalar()
+                    == 1
+                )
+                _insert_audit(connection, "operator")
                 connection.execute(
                     sa.text(
                         "DELETE FROM worker_operator_audits "

@@ -26,8 +26,6 @@ from __future__ import annotations
 import importlib
 from types import ModuleType
 
-from tests._alembic_heads import application_schema_head
-
 _MODULE = (
     "dev_health_ops.alembic.versions.0135_add_go_api_rest_proof_run_declared_defects"
 )
@@ -37,14 +35,9 @@ def _migration() -> ModuleType:
     return importlib.import_module(_MODULE)
 
 
-def test_0135_is_the_application_schema_head_and_chains_after_0134() -> None:
-    """Derived, not typed. See tests/_alembic_heads.py's own docstring:
-    the next migration author renumbers THIS check (or supersedes it)
-    rather than leaving a stale pin.
-    """
+def test_0135_chains_after_0134() -> None:
+    """0136 superseded the head check (see tests/_alembic_heads.py); this
+    migration keeps only its place in the chain."""
     migration = _migration()
-    assert migration.revision == application_schema_head(), (
-        "0135 must be the application_schema head; if another migration "
-        "landed first, renumber this one and re-run"
-    )
+    assert migration.revision == "0135"
     assert migration.down_revision == "0134"

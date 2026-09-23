@@ -3,7 +3,9 @@
 package health
 
 import (
+	"bytes"
 	"context"
+	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -71,7 +73,7 @@ func write(w http.ResponseWriter, status int, body *pyjson.Object) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
 	w.WriteHeader(status)
-	_, _ = w.Write(payload)
+	_, _ = io.Copy(w, bytes.NewReader(payload))
 }
 
 // health is the deep check: Postgres (connectivity and the application

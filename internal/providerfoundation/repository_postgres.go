@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -11,6 +13,27 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// CredentialAmbiguousError reports 2+ active credentials for a provider
+// with no name/id given to disambiguate -- mirroring Python's
+// AmbiguousCredentialError (integration_credentials.py:121-131) message
+// shape exactly: "Multiple active credentials exist for provider
+// '<provider>' (<name1>, <name2>, ...); specify credential_name or
+// credential_id", names sorted. It wraps ErrCredentialInvalid (the
+// ObjectTooLargeError pattern in types.go) so every existing errors.Is(err,
+// ErrCredentialInvalid) classification keeps matching unchanged; a caller
+// that needs the candidate list for a 409 body (CHAOS-6311) uses errors.As.
+type CredentialAmbiguousError struct {
+	Provider string
+	Names    []string // sorted
+}
+
+func (e *CredentialAmbiguousError) Error() string {
+	return fmt.Sprintf("multiple active credentials exist for provider %q (%s); specify credential_name or credential_id",
+		e.Provider, strings.Join(e.Names, ", "))
+}
+
+func (e *CredentialAmbiguousError) Unwrap() error { return ErrCredentialInvalid }
 
 // PostgresCredentialRepository reads the existing Python-owned
 // integration_credentials table. It only returns ciphertext; decrypting is
@@ -35,7 +58,13 @@ FROM integration_credentials WHERE org_id = $1 AND provider = $2 AND is_active =
 		query += " AND name = $3"
 		args = append(args, scope.CredentialName)
 	} else {
-		query += " ORDER BY CASE WHEN name = 'default' THEN 0 ELSE 1 END, name LIMIT 2"
+		// No id/name: fetch EVERY active candidate (no LIMIT) so an
+		// ambiguous match can name every candidate, matching Python's
+		// AmbiguousCredentialError exactly -- a LIMIT 2 here previously
+		// could only ever see the first two candidates, never the true
+		// set, whenever a provider had 3+ active credentials and no
+		// "default" among them.
+		query += " ORDER BY CASE WHEN name = 'default' THEN 0 ELSE 1 END, name"
 	}
 	rows, err := r.Pool.Query(ctx, query, args...)
 	if err != nil {
@@ -70,7 +99,12 @@ FROM integration_credentials WHERE org_id = $1 AND provider = $2 AND is_active =
 			}
 		}
 		if len(matches) != 1 {
-			return EncryptedCredential{}, ErrCredentialInvalid
+			names := make([]string, len(matches))
+			for index, match := range matches {
+				names[index] = match.Name
+			}
+			sort.Strings(names)
+			return EncryptedCredential{}, &CredentialAmbiguousError{Provider: scope.Provider, Names: names}
 		}
 	}
 	return matches[0], nil

@@ -411,21 +411,18 @@ var optionRegistry = []Option{
 		Usage: "path to investment_areas.yaml; required when github/work-items is enabled",
 	},
 
-	// Operational bridge.
-	{
-		Flag: "operational-bridge-url", Env: "WORKER_OPERATIONAL_BRIDGE_URL", Kind: KindString,
-		Group: GroupBridge,
-		Usage: "base URL of the Python operational bridge",
-	},
+	// CHAOS-6279: operational-bridge-url and operational-bridge-allow-insecure
+	// are deleted -- CHAOS-5320 already deleted the Python HTTP bridge they
+	// pointed at, and nothing in this repo reads cfg.OperationalBridgeURL/
+	// AllowInsecure any more (confirmed by grep across internal/ and cmd/).
+	// operational-bridge-timeout survives: it's still consumed as a plain
+	// HTTP client timeout by two unrelated callers (billing email sender,
+	// native heartbeat dispatcher), see config.go's OperationalBridgeTimeout
+	// comment.
 	{
 		Flag: "operational-bridge-timeout", Env: "WORKER_OPERATIONAL_BRIDGE_TIMEOUT", Kind: KindDuration,
 		Default: "10s", Group: GroupBridge,
 		Usage: "operational bridge request timeout (100ms-30s)",
-	},
-	{
-		Flag: "operational-bridge-allow-insecure", Env: "WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE",
-		Kind: KindBool, Default: "false", Group: GroupBridge,
-		Usage: "permit a plaintext operational bridge origin",
 	},
 
 	// Telemetry: the heartbeat's phone-home effect (internal/jobs/system.
@@ -469,7 +466,6 @@ var optionRegistry = []Option{
 	{Env: "SETTINGS_ENCRYPTION_SALT", Secret: true, Group: GroupCredentials, Usage: "provider credential encryption salt"},
 	{Env: "PAGER_DUTY_CLIENT_ID", Secret: true, Group: GroupCredentials, Usage: "PagerDuty OAuth client id"},
 	{Env: "PAGER_DUTY_SECRET", Secret: true, Group: GroupCredentials, Usage: "PagerDuty OAuth client secret"},
-	{Env: "WORKER_OPERATIONAL_BRIDGE_TOKEN", Secret: true, Group: GroupCredentials, Usage: "operational bridge bearer token"},
 }
 
 // Options returns every declared option in registry order.

@@ -75,12 +75,13 @@ The API and sync workers need the same app client values. The redirect URI is th
     flag-backed settings in `command:`/`args:`, and an unknown flag is rejected
     at startup instead of a misspelled variable sitting inert.
 
-    Ten credentials have **no** flag and must stay in the environment, because
+    Nine credentials have **no** flag and must stay in the environment, because
     a process argument is readable through `ps` and `docker inspect`:
     `POSTGRES_URI`, `WORKER_DATABASE_URI`, `COORDINATOR_DATABASE_URI`,
     `CLICKHOUSE_URI`, `VALKEY_URI`, `SETTINGS_ENCRYPTION_KEY`,
-    `SETTINGS_ENCRYPTION_SALT`, `PAGER_DUTY_CLIENT_ID`, `PAGER_DUTY_SECRET`,
-    `WORKER_OPERATIONAL_BRIDGE_TOKEN`.
+    `SETTINGS_ENCRYPTION_SALT`, `PAGER_DUTY_CLIENT_ID`, `PAGER_DUTY_SECRET`.
+    `WORKER_OPERATIONAL_BRIDGE_TOKEN` (formerly here) is deleted entirely
+    from the Go config surface (CHAOS-6279).
 
     See [Workers and jobs](../../operate/run/workers-and-jobs.md#start-a-go-worker-group).
 

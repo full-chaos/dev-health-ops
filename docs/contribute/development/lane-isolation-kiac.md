@@ -471,7 +471,6 @@ secrets:
     VALKEY_URI: "redis://lane-a-dev-health-valkey:6379/1"
     JWT_SECRET_KEY: "dev-jwt-secret-min-32-chars-change-me"
     ADMIN_API_KEY: "lane-local-admin"
-    WORKER_OPERATIONAL_BRIDGE_TOKEN: "local-go-worker-bridge-token"
     EMAIL_PROVIDER: "console"
 
 migrations:

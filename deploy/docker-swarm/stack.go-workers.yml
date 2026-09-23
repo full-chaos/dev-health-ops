@@ -13,24 +13,14 @@ x-go-worker-flag:
   queue-mode: &flag-queue-mode "--queue-database-mode=${WORKER_DATABASE_MODE:-session}"
   coordinator-mode: &flag-coordinator-mode "--coordinator-database-mode=${COORDINATOR_DATABASE_MODE:-session}"
   domain-pooler: &flag-domain-pooler "--domain-transaction-pooler=${PGBOUNCER_TRANSACTION_MODE:-true}"
-  # The PagerDuty stream runner forwards reconciliation to the Python worker
-  # bridge until the locked-graph port lands (CUT-20), so it cannot open
-  # readiness without a bridge URL.
-  bridge-url: &flag-bridge-url "--operational-bridge-url=${WORKER_OPERATIONAL_BRIDGE_URL:-http://api:8000}"
-  # CHAOS-4351 GAP (documented, not fixed -- team-lead scoped this ticket
-  # to compose.yml/compose.production.yml + the Helm chart only, same
-  # posture as CHAOS-4317's own Swarm/Kubernetes gaps): this Swarm overlay
-  # has no `metrics-api` service and every worker group here -- including
-  # the one running the `metrics` queue -- still shares `api`'s stack via
-  # this single flag. A bridge-side pids/memory incident on a Swarm
-  # deployment therefore still risks `api` request handling as collateral
-  # damage the way `compose.go-workers.yml`'s `flag-bridge-url-heavy` no
-  # longer does. Add an equivalent `metrics-api` service + a heavy-only
-  # flag override here if this stack is ever a real deploy target again.
-  # The default endpoint above is a plaintext Swarm service-discovery name,
-  # which the runtime rejects unless this opt-in is set. Override to false once
-  # the bridge is reachable over an internal HTTPS origin.
-  bridge-insecure: &flag-bridge-insecure "--operational-bridge-allow-insecure=${WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE:-true}"
+  # CHAOS-6279: bridge-url/bridge-insecure (formerly here, CHAOS-4351) are
+  # deleted -- the --operational-bridge-url/--operational-bridge-allow-
+  # insecure flags no longer exist on the Go binaries at all (CHAOS-5320
+  # already deleted the Python HTTP bridge they pointed at); a stack still
+  # passing them would refuse to start ("unknown flag"). The PagerDuty
+  # stream runner's own readiness does not depend on this flag -- it never
+  # took it as an argument. The CHAOS-4351 GAP note that used to live here
+  # (no metrics-api service on this overlay) is moot along with it.
   # Exactly one runtime owns the PagerDuty webhook stream. Celery keeps it
   # until the route flips at cutover (CUT-14/18).
   log-level: &flag-log-level "--log-level=${LOG_LEVEL:-info}"
@@ -57,7 +47,6 @@ x-go-worker: &go-worker
     # deploy/go-workers/deployment.json requires this for the sync group, and
     # provider-sync handler construction fails closed without it.
     SETTINGS_ENCRYPTION_KEY: ${SETTINGS_ENCRYPTION_KEY:?provider credential encryption key is required}
-    WORKER_OPERATIONAL_BRIDGE_TOKEN: ${WORKER_OPERATIONAL_BRIDGE_TOKEN:-}
     AUTO_RUN_MIGRATIONS: "false"
     # CHAOS-4587: mirrors compose.go-workers.yml's go-worker-env-base -- every
     # process here reads a canonical operational table through the
@@ -109,8 +98,6 @@ services:
       - *flag-queue-mode
       - *flag-coordinator-mode
       - *flag-domain-pooler
-      - *flag-bridge-url
-      - *flag-bridge-insecure
       - *flag-log-level
     stop_grace_period: 7260s
   go-worker-ops:
@@ -129,8 +116,6 @@ services:
       - *flag-queue-mode
       - *flag-coordinator-mode
       - *flag-domain-pooler
-      - *flag-bridge-url
-      - *flag-bridge-insecure
       - *flag-log-level
     stop_grace_period: 960s
   go-worker-sync:
@@ -149,8 +134,6 @@ services:
       - *flag-queue-mode
       - *flag-coordinator-mode
       - *flag-domain-pooler
-      - *flag-bridge-url
-      - *flag-bridge-insecure
       - *flag-log-level
     stop_grace_period: 960s
   # Split from the sync worker: a combined service cannot start while provider
@@ -171,8 +154,6 @@ services:
       - *flag-queue-mode
       - *flag-coordinator-mode
       - *flag-domain-pooler
-      - *flag-bridge-url
-      - *flag-bridge-insecure
       - *flag-log-level
     stop_grace_period: 960s
   go-reconciler:
@@ -204,8 +185,6 @@ services:
       - *flag-queue-mode
       - *flag-coordinator-mode
       - *flag-domain-pooler
-      - *flag-bridge-url
-      - *flag-bridge-insecure
       - *flag-log-level
     environment:
       <<: *go-worker-env-base
@@ -225,8 +204,6 @@ services:
       - *flag-queue-mode
       - *flag-coordinator-mode
       - *flag-domain-pooler
-      - *flag-bridge-url
-      - *flag-bridge-insecure
       - *flag-log-level
     environment:
       <<: *go-worker-env-base
@@ -247,8 +224,6 @@ services:
       - *flag-queue-mode
       - *flag-coordinator-mode
       - *flag-domain-pooler
-      - *flag-bridge-url
-      - *flag-bridge-insecure
       - *flag-log-level
     environment:
       <<: *go-worker-env-base
@@ -268,8 +243,6 @@ services:
       - *flag-queue-mode
       - *flag-coordinator-mode
       - *flag-domain-pooler
-      - *flag-bridge-url
-      - *flag-bridge-insecure
       - *flag-log-level
     environment:
       <<: *go-worker-env-base
@@ -289,8 +262,6 @@ services:
       - *flag-queue-mode
       - *flag-coordinator-mode
       - *flag-domain-pooler
-      - *flag-bridge-url
-      - *flag-bridge-insecure
       - *flag-log-level
     environment:
       <<: *go-worker-env-base

@@ -126,59 +126,18 @@ spec:
             - {{ printf "--preclaim-readiness-timeout=%s" ($group.preclaimReadinessTimeout | default $.Values.goWorkers.defaultPreclaimReadinessTimeout) | quote }}
             {{- end }}
             {{- /*
-              CHAOS-4351: whichever group's queue set includes `metrics` is
-              the one that calls the metrics compatibility bridge -- point
-              it at the dedicated metricsApi Service instead of api's, same
-              rationale as compose.go-workers.yml's flag-bridge-url-heavy
-              anchor. Selected by QUEUE MEMBERSHIP, not the group's `name`
-              (codex review, PR #1938 round-3 P2) -- a name match silently
-              stops overriding the right group the moment an operator's
-              values.yaml reassigns the `metrics` queue away from `heavy`
-              (or onto a second group too), leaving that group's bridge
-              calls quietly still sharing api's cgroup. `has`/`intersect`
-              need a real list even for groups (reconciler/scheduler) that
-              declare no `queues` key at all, hence the `default (list)`.
-              Falls back to `api` if metricsApi isn't enabled (e.g. a
-              fresh install with goWorkers scaled to 0 everywhere), so this
-              never renders a reference to a Service that doesn't exist.
-              $group.bridgeUrl (values.yaml) overrides either default. Both
-              defaults read the target's own .port value (codex review, PR
-              #1938 round-1 P2) -- a hardcoded :8000 would silently break if
-              an operator overrides api.port/metricsApi.port, since the
-              Service's actual listening port would no longer match what
-              this flag tells the Go binary to dial.
-
-              CHAOS-4984 (kiac-workers trace, buildOperationalWorker in
-              cmd/dev-health-worker): the flag is not metrics-only -- the
-              `ops` group's own HTTPDispatcher (queues: coverage, heartbeat,
-              retention, webhooks) needs --operational-bridge-url too and
-              crash-loops without it. Same trace also caught
-              buildSyncCoordinatorWorker: the `sync` group's own
-              NewHTTPBridge call fails ErrInvalidBridge on an empty host,
-              since `sync` carries none of the other bridge-needing queues
-              either. Broadened the EMISSION condition to any of these six
-              queue names (checked one at a time -- this Helm's Sprig build
-              has no `intersect` function). The metricsApi-vs-api
-              DEFAULT-URL SELECTION stays gated on `metrics` specifically,
-              unchanged -- an ops- or sync-shaped group with no `metrics`
-              queue gets the `api` default, same as today, since metricsApi
-              exists only to isolate the metrics bridge load, not
-              ops/sync traffic.
+              CHAOS-6279: the --operational-bridge-url flag this block used
+              to emit (CHAOS-4351/CHAOS-4984 history), and the
+              $group.bridgeUrl override that fed it, are deleted --
+              CHAOS-5320 already deleted the Python HTTP bridge it pointed
+              at (the HTTPDispatcher/NewHTTPBridge call chains the
+              CHAOS-4984 trace cited), and nothing constructs a bridge
+              client from cfg.OperationalBridgeURL any more (confirmed by
+              grep across internal/ and cmd/). With this block gone, no
+              worker group's command line points at metricsApi any more
+              either -- see metrics-api-deployment.yaml's own comment for
+              the resulting open question (retire that Deployment or not).
             */}}
-            {{- $groupQueues := $group.queues | default (list) }}
-            {{- $needsBridge := false }}
-            {{- range $bridgeQueue := list "metrics" "coverage" "heartbeat" "retention" "webhooks" "sync" }}
-            {{- if has $bridgeQueue $groupQueues }}
-            {{- $needsBridge = true }}
-            {{- end }}
-            {{- end }}
-            {{- if $needsBridge }}
-            {{- $defaultBridgeUrl := printf "http://%s-api:%v" (include "dev-health.fullname" $) $.Values.api.port }}
-            {{- if and (has "metrics" $groupQueues) $.Values.metricsApi.enabled }}
-            {{- $defaultBridgeUrl = printf "http://%s-metrics-api:%v" (include "dev-health.fullname" $) $.Values.metricsApi.port }}
-            {{- end }}
-            - {{ printf "--operational-bridge-url=%s" (default $defaultBridgeUrl $group.bridgeUrl) | quote }}
-            {{- end }}
             {{- if $.Values.goWorkers.pgbouncer.enabled }}
             - "--domain-transaction-pooler=true"
             - "--queue-database-mode=session"

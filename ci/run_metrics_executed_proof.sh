@@ -129,7 +129,6 @@ RIVER_QUEUE_PASSWORD="devhealth_queue"
 RIVER_COORDINATOR_PASSWORD="devhealth_coordinator"
 
 SETTINGS_ENCRYPTION_KEY="${SETTINGS_ENCRYPTION_KEY:-ci-metrics-executed-proof-key}"
-WORKER_OPERATIONAL_BRIDGE_TOKEN="${WORKER_OPERATIONAL_BRIDGE_TOKEN:-ci-metrics-executed-proof-bridge-token}"
 ORG_ID="${METRICS_PROOF_ORG_ID:-c0ffee00-dead-4bee-8bad-f00dfeedface}"
 REPO_NAME="${METRICS_PROOF_REPO_NAME:-ci-metrics-executed-proof/repo}"
 BACKFILL_DAYS="${METRICS_PROOF_BACKFILL_DAYS:-7}"
@@ -182,14 +181,16 @@ cleanup() {
   # EXIT trap here -- on_signal() below manages that, because clearing EXIT from
   # inside cleanup is what let a cancelled run fall through and resume.
   trap '' INT TERM
-  # Kill ORDER is load-bearing (CHAOS-5025), not cosmetic. dev-health-worker is
-  # the API's only client (--operational-bridge-url below), so the API must be
-  # signalled LAST. The old loop signalled it FIRST and then blocked on an
-  # unbounded wait, which left the worker alive and still issuing bridge calls
-  # into a shutting-down uvicorn -- 100 further job attempts over 16 minutes in
-  # run 33822295135 -- so uvicorn's "waiting for connections to close" loop
-  # never converged. Drain the clients first, then the server.
-  # (ci/lib/go_worker_fixture.sh)
+  # Kill ORDER (CHAOS-5025), historically load-bearing, not cosmetic: back
+  # when dev-health-worker's --operational-bridge-url made it the API's
+  # only client, signalling the API FIRST left the worker alive and still
+  # issuing bridge calls into a shutting-down uvicorn -- 100 further job
+  # attempts over 16 minutes in run 33822295135, uvicorn's "waiting for
+  # connections to close" loop never converging. CHAOS-6279 deletes that
+  # flag/config (nothing sends bridge calls any more, CHAOS-5320 having
+  # already deleted the Python side), so this order is no longer
+  # load-bearing -- kept as a conservative convention; the incident above
+  # is why it existed. (ci/lib/go_worker_fixture.sh)
   stop_worker_stack
   stop_service "dev-hops api" "${API_PID}"
   rm -rf "${TMP_DIR}" >/dev/null 2>&1 || true
@@ -230,7 +231,7 @@ provision_river
 # its normal non-job-control behaviour.
 set -m
 
-echo "==> starting dev-hops api (the Go worker's operational bridge)"
+echo "==> starting dev-hops api"
 JWT_SECRET_KEY="$(SETTINGS_ENCRYPTION_KEY="${SETTINGS_ENCRYPTION_KEY}" python3 -c "import hashlib, os; print(hashlib.sha256(os.environ['SETTINGS_ENCRYPTION_KEY'].encode()).hexdigest())")"
 # Overridable to a path OUTSIDE TMP_DIR (matching LIVE_E2E_API_LOG_FILE in
 # ci/run_live_backend_e2e.sh): cleanup() below unconditionally rm -rf's
@@ -242,7 +243,7 @@ API_LOG_FILE="${METRICS_PROOF_API_LOG_FILE:-${TMP_DIR}/api.log}"
 (
   export DATABASE_URI="${POSTGRES_SUPERUSER_URI}"
   export CLICKHOUSE_URI="${CLICKHOUSE_URI_HTTP}"
-  export SETTINGS_ENCRYPTION_KEY WORKER_OPERATIONAL_BRIDGE_TOKEN JWT_SECRET_KEY
+  export SETTINGS_ENCRYPTION_KEY JWT_SECRET_KEY
   export REDIS_URL="redis://${VALKEY_HOST}:${VALKEY_PORT}/0"
   export ENVIRONMENT=test
   export OTEL_ENABLED=false

@@ -307,12 +307,17 @@ type Config struct {
 	// CORSAllowedOrigins is the api's CORS allow-list, parsed exactly as the
 	// Python api parses CORS_ALLOWED_ORIGINS: comma-separated, entries trimmed,
 	// empty entries dropped (dho api only).
-	CORSAllowedOrigins             []string
-	OperationalBridgeURL           string
-	OperationalBridgeToken         secrets.Value
-	OperationalBridgeTimeout       time.Duration
-	OperationalBridgeAllowInsecure bool
-	StreamConfiguredReplicas       int
+	CORSAllowedOrigins []string
+	// OperationalBridgeTimeout is CHAOS-6279's sole survivor from the
+	// deleted worker-operational-bridge trio (URL/Token/AllowInsecure) --
+	// nothing sends a bridge call any more (CHAOS-5320 deleted the Python
+	// HTTP bridge; CHAOS-6279 deleted the Go client-side config that used
+	// to point at it), but this duration is still consumed as a plain HTTP
+	// client timeout by the billing email sender and the native heartbeat
+	// dispatcher (cmd/dev-health-worker/operational.go). Kept, unrenamed,
+	// to avoid unrelated env-var churn for those two callers.
+	OperationalBridgeTimeout time.Duration
+	StreamConfiguredReplicas int
 
 	// TelemetryEndpoint is the phone-home receiver the native heartbeat
 	// dispatcher POSTs to (internal/jobs/system.NativeHeartbeatDispatcher);
@@ -400,12 +405,6 @@ func Load(spec Spec) (Config, error) {
 	cfg.UnreclaimableSweepMode = strings.TrimSpace(
 		envOrDefault(lookup, "SYNC_UNRECLAIMABLE_SWEEP", ""),
 	)
-	cfg.OperationalBridgeAllowInsecure, err = boolEnv(
-		lookup, "WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE", false,
-	)
-	if err != nil {
-		return Config{}, err
-	}
 	// CHAOS-4054: these default to the artifacts every worker image ships
 	// (docker/go-worker.Dockerfile copies both into /app/config in the runtime
 	// stage). They used to default only under the local all-routes preset,
@@ -517,7 +516,6 @@ func Load(spec Spec) (Config, error) {
 		{name: "SETTINGS_ENCRYPTION_SALT", target: &cfg.SettingsEncryptionSalt},
 		{name: "PAGER_DUTY_CLIENT_ID", target: &cfg.PagerDutyOAuthClientID},
 		{name: "PAGER_DUTY_SECRET", target: &cfg.PagerDutyOAuthSecret},
-		{name: "WORKER_OPERATIONAL_BRIDGE_TOKEN", target: &cfg.OperationalBridgeToken},
 	}
 	for _, item := range secretTargets {
 		value, _, resolveErr := secrets.Resolve(item.name, lookup)
@@ -600,9 +598,6 @@ func Load(spec Spec) (Config, error) {
 			*binding.formTarget = "uri"
 		}
 	}
-	cfg.OperationalBridgeURL = envOrDefault(
-		lookup, "WORKER_OPERATIONAL_BRIDGE_URL", "",
-	)
 	cfg.OperationalBridgeTimeout, err = durationEnv(
 		lookup,
 		"WORKER_OPERATIONAL_BRIDGE_TIMEOUT",
@@ -897,7 +892,6 @@ func (c Config) SafeAttrs() []slog.Attr {
 		slog.Duration("river_discarded_job_retention", c.DiscardedJobRetention),
 		slog.Duration("river_job_cleaner_timeout", c.RiverJobCleanerTimeout),
 		slog.Duration("sync_observation_timeout", c.SyncObservationTimeout),
-		slog.Bool("operational_bridge_allow_insecure", c.OperationalBridgeAllowInsecure),
 		slog.Bool("telemetry_endpoint_configured", c.TelemetryEndpoint != ""),
 		slog.String("telemetry_instance_id", c.TelemetryInstanceID),
 		slog.Int("stream_configured_replicas", c.StreamConfiguredReplicas),

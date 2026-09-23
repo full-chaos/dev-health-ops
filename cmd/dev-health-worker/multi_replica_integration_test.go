@@ -268,8 +268,10 @@ func newOperationalReplica(
 		WorkerQueueConcurrency: map[string]int{"coverage": 1, "heartbeat": 1, "retention": 1, "webhooks": 4},
 		RiverDatabaseSchema:    "river",
 		// The heartbeat's phone-home effect is native Go now: TelemetryEndpoint
-		// (not OperationalBridgeURL/Token, which no kind on this queue set
-		// still uses) is what the test's fake receiver below observes.
+		// is what the test's fake receiver below observes. OperationalBridge-
+		// URL/Token/AllowInsecure are deleted entirely (CHAOS-6279, zero
+		// remaining readers); only OperationalBridgeTimeout survives, reused
+		// below as this HTTP client's timeout.
 		TelemetryEndpoint:        telemetryURL,
 		TelemetryInstanceID:      "multi-replica-instance",
 		OperationalBridgeTimeout: 20 * time.Second,

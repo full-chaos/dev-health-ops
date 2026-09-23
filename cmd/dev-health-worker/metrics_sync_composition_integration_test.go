@@ -4,8 +4,6 @@ package main
 
 import (
 	"context"
-	"net/http"
-	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -58,14 +56,8 @@ func TestMetricsAndSyncQueueSelectionBootsWithMigratedClickHouse(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = valkey.Close(context.Background()) })
 
-	bridge := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
-		writer.WriteHeader(http.StatusOK)
-		_, _ = writer.Write([]byte(`{}`))
-	}))
-	t.Cleanup(bridge.Close)
-
 	family, err := bootQueueSelection(
-		t, ctx, postgres.URI, clickhouse.URI, valkey.URI, bridge.URL, []string{"metrics", "sync"},
+		t, ctx, postgres.URI, clickhouse.URI, valkey.URI, []string{"metrics", "sync"},
 	)
 	if err != nil {
 		t.Fatalf("queue selection metrics,sync did not compose against a migrated ClickHouse: %v", err)

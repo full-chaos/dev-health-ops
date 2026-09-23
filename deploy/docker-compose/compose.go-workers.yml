@@ -33,28 +33,15 @@ x-go-worker-flag:
   queue-mode: &flag-queue-mode "--queue-database-mode=${WORKER_DATABASE_MODE:-session}"
   coordinator-mode: &flag-coordinator-mode "--coordinator-database-mode=${COORDINATOR_DATABASE_MODE:-session}"
   domain-pooler: &flag-domain-pooler "--domain-transaction-pooler=${PGBOUNCER_TRANSACTION_MODE:-true}"
-  # The PagerDuty stream runner forwards reconciliation to the Python worker
-  # bridge until the locked-graph port lands (CUT-20), so it cannot open
-  # readiness without a bridge URL.
-  bridge-url: &flag-bridge-url "--operational-bridge-url=${WORKER_OPERATIONAL_BRIDGE_URL:-http://api:8000}"
-  # CHAOS-4351: `go-worker-heavy` is the ONLY worker group whose queue set
-  # includes `metrics` (confirmed via `rg 'queues='` against every
-  # go-worker-*/go-reconciler/go-scheduler/go-stream-* service below) --
-  # i.e. the only one that ever calls the daily/remaining metrics
-  # compatibility bridge that spawns worker_metrics_runner subprocesses
-  # (CHAOS-4264/4316/4317/4350's whole incident history). Every other
-  # group's operational-bridge traffic (auth/licensing/sync/webhooks/etc.)
-  # has nothing to do with that bridge and stays on `api` via the shared
-  # `flag-bridge-url` above -- only this group's flag is repointed at the
-  # dedicated `metrics-api` service (CHAOS-4351), so a bridge-side pids/
-  # memory incident there can no longer take unrelated `api` request
-  # handling, or unrelated go-worker groups' operational-bridge calls,
-  # down with it.
-  bridge-url-heavy: &flag-bridge-url-heavy "--operational-bridge-url=${DEV_HEALTH_METRICS_BRIDGE_URL:-http://metrics-api:8000}"
-  # The default bridge endpoint above is a plaintext Compose service-discovery
-  # name, which the runtime rejects unless this opt-in is set. Override to
-  # false once the bridge is reachable over an internal HTTPS origin.
-  bridge-insecure: &flag-bridge-insecure "--operational-bridge-allow-insecure=${WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE:-true}"
+  # CHAOS-6279: bridge-url/bridge-url-heavy/bridge-insecure (formerly here,
+  # CHAOS-4351) are deleted -- the --operational-bridge-url/--operational-
+  # bridge-allow-insecure flags no longer exist on the Go binaries at all
+  # (CHAOS-5320 already deleted the Python HTTP bridge they pointed at,
+  # and CHAOS-6240 deleted the worker_metrics_runner subprocess mechanism
+  # this comment used to cite); a deployment still passing them would
+  # refuse to start ("unknown flag"). The PagerDuty stream runner's own
+  # readiness does not depend on this flag -- it never took it as an
+  # argument.
   # Exactly one runtime owns the PagerDuty webhook stream. Celery keeps it
   # until the route flips at cutover (CUT-14/18).
   log-level: &flag-log-level "--log-level=${LOG_LEVEL:-info}"
@@ -75,7 +62,6 @@ x-go-worker-env-base: &go-worker-env-base
   # provider-sync handler construction fails closed without it. Shared with the
   # Python services so both runtimes decrypt the same provider credentials.
   SETTINGS_ENCRYPTION_KEY: ${SETTINGS_ENCRYPTION_KEY:?provider credential encryption key is required}
-  WORKER_OPERATIONAL_BRIDGE_TOKEN: ${WORKER_OPERATIONAL_BRIDGE_TOKEN:-}
   AUTO_RUN_MIGRATIONS: "false"
   # CHAOS-4587: every process in this file reads operational_incidents (or a
   # sibling canonical operational table) through the ordering-contract guard
@@ -229,10 +215,6 @@ services:
       - *flag-queue-mode
       - *flag-coordinator-mode
       - *flag-domain-pooler
-      # CHAOS-4351: only this group gets the metrics-api-pointed flag --
-      # see the anchor's own comment above for why.
-      - *flag-bridge-url-heavy
-      - *flag-bridge-insecure
       - *flag-log-level
     environment: &go-worker-env
       <<: *go-worker-env-base
@@ -241,17 +223,12 @@ services:
     depends_on:
       go-contractcheck:
         condition: service_completed_successfully
-      # codex review (PR #1938, P1): this group's --operational-bridge-url
-      # points at metrics-api, a separate profile-gated service with no
-      # other dependency edge into it -- a targeted `docker compose up -d
-      # go-worker-heavy` would otherwise start this worker with nothing
-      # ever bringing metrics-api up, so every compatibility-bridge call
-      # fails against a container that was never started. Gating on its
-      # healthcheck (not just container-started) also means this worker
-      # doesn't start dispatching metrics/workgraph jobs before the
-      # bridge target can actually answer them.
-      metrics-api:
-        condition: service_healthy
+      # CHAOS-6279: the metrics-api dependency edge (codex review, PR
+      # #1938, P1) that used to live here is deleted along with the flag
+      # that justified it (--operational-bridge-url-heavy) -- this group
+      # no longer calls out to metrics-api at all, so nothing here needs
+      # it healthy before starting. Whether the metrics-api service itself
+      # should be retired is a separate, not-yet-decided follow-up.
     deploy: &go-worker-resources
       # CHAOS-5541: matches deployment.json's go_default desired_replicas.
       # This is a checked-in renderer for compose.production.yml's opt-in
@@ -278,16 +255,7 @@ services:
       - *flag-queue-mode
       - *flag-coordinator-mode
       - *flag-domain-pooler
-      - *flag-bridge-url
-      - *flag-bridge-insecure
       - *flag-log-level
-    # codex review (PR #1938, independent post-cap review): the shared
-    # &go-worker anchor's own depends_on now includes metrics-api
-    # (needed by go-worker-heavy only, for its --operational-bridge-url).
-    # This service does not touch the metrics queue -- explicit override
-    # (not a merge) so it does NOT inherit that dependency and does not
-    # start metrics-api on a targeted `docker compose up -d` of just this
-    # service.
     depends_on:
       go-contractcheck:
         condition: service_completed_successfully
@@ -313,16 +281,7 @@ services:
       - *flag-queue-mode
       - *flag-coordinator-mode
       - *flag-domain-pooler
-      - *flag-bridge-url
-      - *flag-bridge-insecure
       - *flag-log-level
-    # codex review (PR #1938, independent post-cap review): the shared
-    # &go-worker anchor's own depends_on now includes metrics-api
-    # (needed by go-worker-heavy only, for its --operational-bridge-url).
-    # This service does not touch the metrics queue -- explicit override
-    # (not a merge) so it does NOT inherit that dependency and does not
-    # start metrics-api on a targeted `docker compose up -d` of just this
-    # service.
     depends_on:
       go-contractcheck:
         condition: service_completed_successfully
@@ -355,16 +314,7 @@ services:
       - *flag-queue-mode
       - *flag-coordinator-mode
       - *flag-domain-pooler
-      - *flag-bridge-url
-      - *flag-bridge-insecure
       - *flag-log-level
-    # codex review (PR #1938, independent post-cap review): the shared
-    # &go-worker anchor's own depends_on now includes metrics-api
-    # (needed by go-worker-heavy only, for its --operational-bridge-url).
-    # This service does not touch the metrics queue -- explicit override
-    # (not a merge) so it does NOT inherit that dependency and does not
-    # start metrics-api on a targeted `docker compose up -d` of just this
-    # service.
     depends_on:
       go-contractcheck:
         condition: service_completed_successfully
@@ -401,16 +351,7 @@ services:
       - *flag-queue-mode
       - *flag-coordinator-mode
       - *flag-domain-pooler
-      - *flag-bridge-url
-      - *flag-bridge-insecure
       - *flag-log-level
-    # codex review (PR #1938, independent post-cap review): the shared
-    # &go-worker anchor's own depends_on now includes metrics-api
-    # (needed by go-worker-heavy only, for its --operational-bridge-url).
-    # This service does not touch the metrics queue -- explicit override
-    # (not a merge) so it does NOT inherit that dependency and does not
-    # start metrics-api on a targeted `docker compose up -d` of just this
-    # service.
     depends_on:
       go-contractcheck:
         condition: service_completed_successfully
@@ -433,16 +374,7 @@ services:
       - *flag-queue-mode
       - *flag-coordinator-mode
       - *flag-domain-pooler
-      - *flag-bridge-url
-      - *flag-bridge-insecure
       - *flag-log-level
-    # codex review (PR #1938, independent post-cap review): the shared
-    # &go-worker anchor's own depends_on now includes metrics-api
-    # (needed by go-worker-heavy only, for its --operational-bridge-url).
-    # This service does not touch the metrics queue -- explicit override
-    # (not a merge) so it does NOT inherit that dependency and does not
-    # start metrics-api on a targeted `docker compose up -d` of just this
-    # service.
     depends_on:
       go-contractcheck:
         condition: service_completed_successfully
@@ -466,16 +398,7 @@ services:
       - *flag-queue-mode
       - *flag-coordinator-mode
       - *flag-domain-pooler
-      - *flag-bridge-url
-      - *flag-bridge-insecure
       - *flag-log-level
-    # codex review (PR #1938, independent post-cap review): the shared
-    # &go-worker anchor's own depends_on now includes metrics-api
-    # (needed by go-worker-heavy only, for its --operational-bridge-url).
-    # This service does not touch the metrics queue -- explicit override
-    # (not a merge) so it does NOT inherit that dependency and does not
-    # start metrics-api on a targeted `docker compose up -d` of just this
-    # service.
     depends_on:
       go-contractcheck:
         condition: service_completed_successfully
@@ -498,16 +421,7 @@ services:
       - *flag-queue-mode
       - *flag-coordinator-mode
       - *flag-domain-pooler
-      - *flag-bridge-url
-      - *flag-bridge-insecure
       - *flag-log-level
-    # codex review (PR #1938, independent post-cap review): the shared
-    # &go-worker anchor's own depends_on now includes metrics-api
-    # (needed by go-worker-heavy only, for its --operational-bridge-url).
-    # This service does not touch the metrics queue -- explicit override
-    # (not a merge) so it does NOT inherit that dependency and does not
-    # start metrics-api on a targeted `docker compose up -d` of just this
-    # service.
     depends_on:
       go-contractcheck:
         condition: service_completed_successfully
@@ -532,16 +446,7 @@ services:
       - *flag-queue-mode
       - *flag-coordinator-mode
       - *flag-domain-pooler
-      - *flag-bridge-url
-      - *flag-bridge-insecure
       - *flag-log-level
-    # codex review (PR #1938, independent post-cap review): the shared
-    # &go-worker anchor's own depends_on now includes metrics-api
-    # (needed by go-worker-heavy only, for its --operational-bridge-url).
-    # This service does not touch the metrics queue -- explicit override
-    # (not a merge) so it does NOT inherit that dependency and does not
-    # start metrics-api on a targeted `docker compose up -d` of just this
-    # service.
     depends_on:
       go-contractcheck:
         condition: service_completed_successfully

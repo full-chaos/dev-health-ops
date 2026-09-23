@@ -6,7 +6,6 @@ import re
 import shutil
 import subprocess
 from pathlib import Path
-from urllib.parse import urlparse
 
 import pytest
 import tomllib
@@ -55,28 +54,18 @@ _KUBERNETES_API = _KUBERNETES / "api.yaml"
 
 # CHAOS-3076 declared this wiring because the PagerDuty stream runner forwarded
 # reconciliation to the Python worker bridge. CHAOS-4105 made reconciliation
-# native, so the runner no longer reads the bridge endpoint or token; the
-# variables stay on the process because the shared worker image still resolves
-# them for the billing and heartbeat bridges (CHAOS-5353 owns their removal).
-# What is gone is PAGERDUTY_WEBHOOK_TRANSPORT: it chose which of two runtimes
+# native. CHAOS-6279: the bridge itself (WORKER_OPERATIONAL_BRIDGE_URL/
+# TOKEN/ALLOW_INSECURE) is now deleted entirely -- CHAOS-5320 already
+# deleted the Python HTTP bridge these pointed at, and nothing in the Go
+# binaries reads any of the three any more (confirmed by grep). The
+# completeness contracts this file used to pin for them
+# (_PAGERDUTY_CONFIG_ENV, _API_BRIDGE_ENV, _bridge_secret_env,
+# _pagerduty_required_env, _assert_insecure_optin_covers_endpoint, and the
+# five tests built on them) are deleted along with the mechanism. What is
+# also gone is PAGERDUTY_WEBHOOK_TRANSPORT: it chose which of two runtimes
 # consumed the webhook stream, and there is only one runtime now.
 _PAGERDUTY_PROCESS = "stream-pagerduty"
 _PAGERDUTY_RUNTIME_PROFILE = "pagerduty"
-# Non-secret half of the contract. It cannot be driven from deployment.json:
-# `processes[]` entries carry only `secret_env`, and internal/deploymentcontract
-# decodes the manifest with DisallowUnknownFields, so a `config_env` key there
-# would fail the Go contract check until the Go schema grows the field.
-_PAGERDUTY_CONFIG_ENV = {
-    "WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE",
-    "WORKER_OPERATIONAL_BRIDGE_URL",
-}
-# The API serves the bridge endpoint, so it needs the caller's token. It no
-# longer owns a dispatch decision: CHAOS-4105 deleted the Celery task it used
-# to dispatch and the transport selector that gated it.
-_API_BRIDGE_ENV = {"WORKER_OPERATIONAL_BRIDGE_TOKEN"}
-# strconv.ParseBool's truthy spellings, lowercased.
-_TRUTHY = {"1", "t", "true"}
-_LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
 
 _RIVER_WORKER_SERVICES = {
     "heavy": "go-worker-heavy",
@@ -173,29 +162,6 @@ def _assert_migration_command(command: str) -> None:
     assert "MIGRATION_DATABASE_URI+x" in command
     assert "MIGRATION_DATABASE_URI_FILE+x" in command
     assert "POSTGRES_URI" in command
-
-
-def _bridge_secret_env() -> set[str]:
-    """Bridge secrets the checked-in manifest declares for the process."""
-    process = next(
-        item
-        for item in _load_json(_DEPLOYMENT)["processes"]
-        if item["name"] == _PAGERDUTY_PROCESS
-    )
-    declared = {
-        name
-        for name in process["secret_env"]
-        if name.startswith("WORKER_OPERATIONAL_BRIDGE")
-    }
-    assert declared, (
-        f"{_PAGERDUTY_PROCESS} must declare its bridge credential in "
-        "deploy/go-workers/deployment.json"
-    )
-    return declared
-
-
-def _pagerduty_required_env() -> set[str]:
-    return _bridge_secret_env() | _PAGERDUTY_CONFIG_ENV
 
 
 def _flag_variable_default(value: object, variable: str) -> str:
@@ -1207,24 +1173,6 @@ def test_helm_migration_job_uses_its_dedicated_external_secret() -> None:
     assert secret_refs == {"elevated-migration-secrets"}
 
 
-def _assert_insecure_optin_covers_endpoint(
-    url: str, allow_insecure: str, source: str
-) -> None:
-    """Mirror internal/jobs/pagerduty `validBridgeEndpoint`: a plaintext bridge
-    endpoint is only usable for loopback unless the insecure opt-in is set, so a
-    renderer that defaults to a plaintext service name and leaves the opt-in
-    unset produces a runner that can never build its handler.
-    """
-    parsed = urlparse(url)
-    if parsed.scheme == "https" or parsed.hostname in _LOOPBACK_HOSTS:
-        return
-    assert allow_insecure.strip().lower() in _TRUTHY, (
-        f"{source} defaults the bridge endpoint to plaintext {url!r}; the Go "
-        "runtime rejects it unless WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE "
-        "opts in"
-    )
-
-
 @pytest.mark.parametrize(
     ("path", "required_declaration"),
     [
@@ -1234,79 +1182,145 @@ def _assert_insecure_optin_covers_endpoint(
         (_GO_SWARM_ONLY, False),
     ],
 )
-def test_compose_surfaces_render_complete_pagerduty_bridge_env(
+def test_compose_surfaces_declare_pagerduty_service_where_expected(
     path: Path, required_declaration: bool
 ) -> None:
-    """CHAOS-3076: wherever a Compose/Swarm surface declares the PagerDuty
-    stream runner, it must render every key the process needs to reach the
-    Python worker bridge — including an insecure opt-in that matches the
-    checked-in default endpoint.
+    """CHAOS-3076: wherever a Compose/Swarm surface is supposed to run the
+    PagerDuty stream runner, the service must actually be declared there.
+
+    CHAOS-6279: the completeness check this test used to run against the
+    now-deleted worker-operational-bridge env/flags is gone along with that
+    mechanism -- see this file's CHAOS-6279 header note.
     """
     services = _compose_pagerduty_services(path)
     assert bool(services) == required_declaration
 
-    # CHAOS-4020: every one of these settings except the bearer token moved
-    # from `environment:` to `command:`. The completeness requirement is
-    # unchanged -- the runner still cannot open readiness without all of them --
-    # only the surface each one is rendered on.
-    flag_for = {
-        "WORKER_OPERATIONAL_BRIDGE_URL": "--operational-bridge-url",
-        "WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE": (
-            "--operational-bridge-allow-insecure"
-        ),
+
+_BRIDGE_NAMES = frozenset(
+    {
+        "WORKER_OPERATIONAL_BRIDGE_URL",
+        "WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE",
+        "WORKER_OPERATIONAL_BRIDGE_TOKEN",
     }
-    for name, service in services.items():
-        environment = service["environment"]
-        arguments = _process_arguments(service)
-        missing = {
-            variable
-            for variable in _pagerduty_required_env()
-            if variable not in environment and flag_for.get(variable) not in arguments
-        }
-        assert not missing, f"{path.name}:{name} drops {sorted(missing)}"
-        _assert_insecure_optin_covers_endpoint(
-            _flag_variable_default(
-                arguments["--operational-bridge-url"],
-                "WORKER_OPERATIONAL_BRIDGE_URL",
-            ),
-            _flag_variable_default(
-                arguments["--operational-bridge-allow-insecure"],
-                "WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE",
-            ),
-            f"{path.name}:{name}",
+)
+_BRIDGE_FLAGS = ("--operational-bridge-url=", "--operational-bridge-allow-insecure=")
+
+
+@pytest.mark.skipif(shutil.which("helm") is None, reason="helm is not installed")
+def test_no_renderer_still_emits_the_deleted_operational_bridge(
+    tmp_path: Path,
+) -> None:
+    """CHAOS-6279 negative pin: the worker-operational-bridge mechanism
+    (WORKER_OPERATIONAL_BRIDGE_URL/TOKEN/ALLOW_INSECURE, and the
+    --operational-bridge-url/--operational-bridge-allow-insecure flags that
+    carried two of them) is deleted from every in-repo renderer -- Compose,
+    Swarm, Kubernetes, and Helm alike. internal/platform/config no longer
+    registers any of the three, so a renderer that still emitted one of the
+    flags would crash-loop the binary with "unknown flag" outright; this
+    test proves none of them does, on the rendered output, not just by the
+    absence of a deleted test file.
+    """
+    # Compose + Swarm: no service's command/environment may carry any of
+    # the four surfaces (flags or env), on either the go-workers-only
+    # overlay or the full production/stack files.
+    for path in (
+        _PRODUCTION_COMPOSE,
+        _SWARM_STACK,
+        _GO_COMPOSE,
+        _GO_COMPOSE_ONLY,
+        _GO_SWARM,
+        _GO_SWARM_ONLY,
+    ):
+        services = (_load_yaml(path).get("services") or {}) if path.exists() else {}
+        for name, service in services.items():
+            command = [str(a) for a in (service.get("command") or [])]
+            assert not any(
+                arg.startswith(flag) for arg in command for flag in _BRIDGE_FLAGS
+            ), f"{path.name}:{name} still renders an operational-bridge flag"
+            environment = service.get("environment") or {}
+            leaked = _BRIDGE_NAMES & set(environment)
+            assert not leaked, f"{path.name}:{name} still carries {sorted(leaked)}"
+
+    # Kubernetes: the ConfigMap/Secret must not declare any of the three
+    # names, and no go-workers.yaml container may pass either flag.
+    configmap = _load_yaml(_KUBERNETES_CONFIGMAP).get("data") or {}
+    assert not (_BRIDGE_NAMES & set(configmap)), (
+        f"configmap.yaml still declares {sorted(_BRIDGE_NAMES & set(configmap))}"
+    )
+    for document in _load_yaml_documents(_KUBERNETES_SECRETS):
+        secret_data = set(document.get("stringData") or {})
+        assert not (_BRIDGE_NAMES & secret_data), (
+            f"{document['metadata']['name']} still declares "
+            f"{sorted(_BRIDGE_NAMES & secret_data)}"
         )
+    for document in _load_yaml_documents(_GO_KUBERNETES):
+        if document.get("kind") != "Deployment":
+            continue
+        container = document["spec"]["template"]["spec"]["containers"][0]
+        args = [str(a) for a in (container.get("args") or [])]
+        assert not any(
+            arg.startswith(flag) for arg in args for flag in _BRIDGE_FLAGS
+        ), f"go-workers.yaml:{document['metadata']['name']} still renders an operational-bridge flag"
+
+    # Helm: render the real templating engine (default values and with
+    # metricsApi enabled, the state most likely to have re-introduced a
+    # bridge reference) and check every container's rendered args, plus the
+    # ConfigMap/Secret values.yaml declares by default.
+    values = _load_yaml(_HELM_CHART / "values.yaml")
+    resolved = set(values.get("config") or {}) | set(
+        (values.get("secrets") or {}).get("data") or {}
+    )
+    assert not (_BRIDGE_NAMES & resolved), (
+        f"helm values.yaml still declares {sorted(_BRIDGE_NAMES & resolved)}"
+    )
+    helpers = (_HELM_CHART / "templates" / "_helpers.tpl").read_text(encoding="utf-8")
+    assert "operationalBridgeURL" not in helpers, (
+        "_helpers.tpl still defines the deleted operationalBridgeURL helper"
+    )
+    for extra_set in ([], ["metricsApi.enabled=true"]):
+        argv = ["helm", "template", "phase1", str(_HELM_CHART)]
+        for value in extra_set:
+            argv += ["--set", value]
+        rendered = subprocess.run(argv, check=True, capture_output=True, text=True)
+        for document in yaml.safe_load_all(rendered.stdout):
+            if not document or document.get("kind") != "Deployment":
+                continue
+            containers = document["spec"]["template"]["spec"].get("containers") or []
+            for container in containers:
+                args = [str(a) for a in (container.get("args") or [])]
+                assert not any(
+                    arg.startswith(flag) for arg in args for flag in _BRIDGE_FLAGS
+                ), (
+                    f"{document['metadata']['name']} (extra_set={extra_set}) still "
+                    "renders an operational-bridge flag"
+                )
 
 
-def test_kubernetes_pagerduty_deployment_resolves_complete_bridge_env() -> None:
+def test_kubernetes_pagerduty_deployment_label_matches_profile() -> None:
     """CHAOS-4195: go-workers.yaml is the only Kubernetes worker topology
     now -- go-workers-only.yaml (the second, no-pagerduty case this test used
     to also parametrize over) was a Celery-scale-down patch with nothing left
-    to patch, and was deleted with it."""
+    to patch, and was deleted with it.
+
+    CHAOS-6279: the bridge-env completeness check this test used to run is
+    gone along with that mechanism -- see this file's CHAOS-6279 header
+    note. What remains: _kubernetes_pagerduty_containers itself asserts
+    every Deployment's `dev-health.io/worker-group` label agrees with the
+    profile its container actually runs (discovered by env, not label) --
+    that contract is unrelated to the bridge and still real.
+    """
     containers = _kubernetes_pagerduty_containers(_GO_KUBERNETES)
     assert containers
 
-    required = _pagerduty_required_env()
-    for name, container in containers.items():
-        missing = required - _kubernetes_container_env(container)
-        assert not missing, f"{_GO_KUBERNETES.name}:{name} drops {sorted(missing)}"
 
-    config = _load_yaml(_KUBERNETES_CONFIGMAP)["data"]
-    _assert_insecure_optin_covers_endpoint(
-        config["WORKER_OPERATIONAL_BRIDGE_URL"],
-        config["WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE"],
-        _KUBERNETES_CONFIGMAP.name,
-    )
-    # The bearer token stays a Secret key with an empty placeholder; a rendered
-    # literal would commit the credential.
-    secret = next(
-        document
-        for document in _load_yaml_documents(_KUBERNETES_SECRETS)
-        if document["metadata"]["name"] == "dev-health-secrets"
-    )
-    assert secret["stringData"]["WORKER_OPERATIONAL_BRIDGE_TOKEN"] == ""
-
-
-def test_helm_pagerduty_profile_resolves_complete_bridge_env() -> None:
+def test_helm_pagerduty_profile_binding_is_pinned() -> None:
+    """CHAOS-6279: the bridge-env completeness check this test used to run
+    (values.config/secrets.data carrying WORKER_OPERATIONAL_BRIDGE_*) is
+    gone along with that mechanism -- see this file's CHAOS-6279 header
+    note. What remains real: exactly one goWorkers group runs the pagerduty
+    profile, and the chart actually binds it to DEV_HEALTH_PROFILE, not
+    just declares it in values.
+    """
     values = _load_yaml(_HELM_CHART / "values.yaml")
     groups = [
         group
@@ -1343,55 +1357,21 @@ def test_helm_pagerduty_profile_resolves_complete_bridge_env() -> None:
         'dict "secretRef" (dict "name" (include "dev-health.secretName" $))' in template
     )
 
-    resolved = set(values["config"]) | set(values["secrets"]["data"])
-    missing = _pagerduty_required_env() - resolved
-    assert not missing, f"helm values drop {sorted(missing)}"
-    # An empty URL is auto-computed into the plaintext in-cluster API Service,
-    # so the opt-in must hold for the derived endpoint as well.
-    _assert_insecure_optin_covers_endpoint(
-        values["config"]["WORKER_OPERATIONAL_BRIDGE_URL"],
-        values["config"]["WORKER_OPERATIONAL_BRIDGE_ALLOW_INSECURE"],
-        "helm values.yaml",
-    )
-    assert 'define "dev-health.operationalBridgeURL"' in (
-        _HELM_CHART / "templates" / "_helpers.tpl"
-    ).read_text(encoding="utf-8")
-    assert values["secrets"]["data"]["WORKER_OPERATIONAL_BRIDGE_TOKEN"] == ""
 
-
-@pytest.mark.parametrize("path", [_PRODUCTION_COMPOSE, _SWARM_STACK])
-def test_api_service_carries_bridge_token(path: Path) -> None:
-    """CHAOS-3076: the API authenticates bridge callers against the shared
-    token; omitting it leaves the bridge answering 401.
-
-    This used to also pin the PagerDuty transport selector, because the API
-    decided whether to dispatch the Celery task alongside its stream write.
-    CHAOS-4105 deleted that task and the selector: the API writes the stream
-    entry unconditionally and the Go consumer owns it.
+def test_kubernetes_and_helm_api_envfrom_wiring() -> None:
+    """CHAOS-6279: the bridge-token completeness check this test used to run
+    is gone along with that mechanism -- see this file's CHAOS-6279 header
+    note. What remains real: the api Deployment/Deployment-template actually
+    wires its envFrom to the shared ConfigMap/Secret by name, on both
+    renderers.
     """
-    environment = _load_yaml(path)["services"]["api"]["environment"]
-
-    missing = _API_BRIDGE_ENV - set(environment)
-    assert not missing, f"{path.name}:api drops {sorted(missing)}"
-    # The token must arrive from the environment, never as a committed literal.
-    assert (
-        _compose_variable_default(
-            environment["WORKER_OPERATIONAL_BRIDGE_TOKEN"],
-            "WORKER_OPERATIONAL_BRIDGE_TOKEN",
-        )
-        == ""
-    )
-
-
-def test_kubernetes_and_helm_api_carry_bridge_token() -> None:
     api = next(
         document
         for document in _load_yaml_documents(_KUBERNETES_API)
         if document["kind"] == "Deployment"
     )
     container = api["spec"]["template"]["spec"]["containers"][0]
-    missing = _API_BRIDGE_ENV - _kubernetes_container_env(container)
-    assert not missing, f"api.yaml drops {sorted(missing)}"
+    assert _kubernetes_container_env(container)
 
     template = (_HELM_CHART / "templates" / "api-deployment.yaml").read_text(
         encoding="utf-8"
@@ -1404,9 +1384,6 @@ def test_kubernetes_and_helm_api_carry_bridge_token() -> None:
     assert (
         'dict "secretRef" (dict "name" (include "dev-health.secretName" .))' in template
     )
-    values = _load_yaml(_HELM_CHART / "values.yaml")
-    resolved = set(values["config"]) | set(values["secrets"]["data"])
-    assert not _API_BRIDGE_ENV - resolved
 
 
 # Every manifest process mapped to the service/deployment name each renderer
@@ -1769,10 +1746,12 @@ def test_compose_metrics_api_service_has_its_own_resource_limits() -> None:
 def test_compose_metrics_api_is_present_without_any_profile() -> None:
     """CHAOS-5589: the Go/River fleet is compose.production.yml's
     unconditional default now (no Celery baseline left to idle it against),
-    and `go-worker-heavy` depends_on `metrics-api` being healthy
-    unconditionally -- so `metrics-api` must start on a plain
-    `docker compose config`/`up` with no `--profile` flag, the opposite of
-    the pre-CHAOS-5589 CHAOS-4351 contract this test used to pin.
+    so `metrics-api` must start on a plain `docker compose config`/`up`
+    with no `--profile` flag, the opposite of the pre-CHAOS-5589 CHAOS-4351
+    contract this test used to pin. CHAOS-6279: no worker group's command
+    line points at metrics-api any more (that depends_on edge and the flag
+    that justified it are both deleted) -- this test only pins the
+    service's continued unconditional presence, not why anything needs it.
     """
     result = subprocess.run(
         ["docker", "compose", "-f", str(_PRODUCTION_COMPOSE), "config"],
@@ -1786,14 +1765,17 @@ def test_compose_metrics_api_is_present_without_any_profile() -> None:
 
 
 @pytest.mark.skipif(shutil.which("docker") is None, reason="docker is not installed")
-def test_compose_go_worker_heavy_alone_targets_metrics_api() -> None:
+def test_compose_go_worker_heavy_alone_owns_the_metrics_queue() -> None:
     """CHAOS-4351: `go-worker-heavy` is the only worker group whose queue
     set includes `metrics` (verified below, not just asserted -- a future
     queue reshuffle that quietly added `metrics` to another group would
-    silently leave that group's bridge calls pointed at the wrong service).
-    Only that group's rendered command may reference `metrics-api`; every
-    other go-worker-*/go-reconciler/go-scheduler/go-stream-* service must
-    still target `api`, unaffected by this ticket.
+    silently change which group owns it with nothing failing).
+
+    CHAOS-6279: the --operational-bridge-url routing assertions and the
+    go-worker-heavy -> metrics-api depends_on assertions this test used to
+    run are deleted along with that mechanism -- see this file's CHAOS-6279
+    header note. No worker group's command line references metrics-api any
+    more, and no group depends on it being healthy.
 
     CHAOS-5589: reads compose.production.yml alone -- it carries the full
     Go fleet unconditionally now, no `--profile go-workers` flag or
@@ -1842,263 +1824,13 @@ def test_compose_go_worker_heavy_alone_targets_metrics_api() -> None:
     )
 
     for name, svc in go_worker_services.items():
-        bridge_args = [
-            arg
+        assert not any(
+            isinstance(arg, str) and arg.startswith("--operational-bridge-url=")
             for arg in svc.get("command") or []
-            if isinstance(arg, str) and arg.startswith("--operational-bridge-url=")
-        ]
-        assert len(bridge_args) == 1, (
-            f"{name}: expected exactly one bridge-url arg, got {bridge_args}"
+        ), f"{name}: --operational-bridge-url is deleted (CHAOS-6279), found in command"
+        assert "metrics-api" not in (svc.get("depends_on") or {}), (
+            f"{name}: the metrics-api depends_on edge is deleted (CHAOS-6279)"
         )
-        if name == "go-worker-heavy":
-            assert bridge_args[0] == "--operational-bridge-url=http://metrics-api:8000"
-        else:
-            assert bridge_args[0] == "--operational-bridge-url=http://api:8000", (
-                f"{name}: expected to stay pointed at api, got {bridge_args[0]}"
-            )
-
-    # codex review (PR #1938, round-3 P1) falsifier: a targeted
-    # `docker compose up -d go-worker-heavy` starts only the requested
-    # service plus its depends_on graph -- without metrics-api in that
-    # graph, this worker would start dispatching metrics/workgraph jobs
-    # against a bridge target that was never brought up.
-    heavy_deps = go_worker_services["go-worker-heavy"].get("depends_on") or {}
-    assert heavy_deps.get("metrics-api", {}).get("condition") == "service_healthy", (
-        f"go-worker-heavy must depend on metrics-api being healthy, got {heavy_deps}"
-    )
-
-    # Independent post-cap review falsifier: the metrics-api dependency was
-    # first added inside the shared &go-worker anchor go-worker-heavy
-    # itself defines, so every sibling that merges via `<<: *go-worker`
-    # without its own depends_on override silently inherited it too --
-    # `docker compose up -d go-worker-sync` (or any other sibling) would
-    # then also start a full metrics-api process for no reason, the exact
-    # "second idle API process" scenario the profile gate exists to
-    # prevent. Every sibling must depend on go-contractcheck only.
-    for name, svc in go_worker_services.items():
-        if name == "go-worker-heavy":
-            continue
-        deps = svc.get("depends_on") or {}
-        assert "metrics-api" not in deps, (
-            f"{name} must NOT depend on metrics-api (only go-worker-heavy "
-            f"calls the metrics bridge), got depends_on={deps}"
-        )
-
-
-@pytest.mark.skipif(shutil.which("helm") is None, reason="helm is not installed")
-def test_helm_heavy_worker_bridge_url_targets_metrics_api_only_when_enabled() -> None:
-    """CHAOS-4351: render both states through the real templating engine
-    (a string match on the template source can't prove the conditional
-    actually gates the rendered manifest -- same rationale as the
-    EXPECTED_WORKER_GROUPS test above). With metricsApi disabled (the
-    chart's default), the `heavy` goWorkers group must fall back to `api`
-    so a fresh install never references a Service that doesn't exist; with
-    it enabled, `heavy` alone must point at the dedicated `metrics-api`
-    Service.
-    """
-    disabled = subprocess.run(
-        [
-            "helm",
-            "template",
-            "phase1",
-            str(_HELM_CHART),
-            "--show-only",
-            "templates/go-workers.yaml",
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    disabled_docs = list(yaml.safe_load_all(disabled.stdout))
-    heavy_disabled = next(
-        d
-        for d in disabled_docs
-        if d
-        and d.get("metadata", {}).get("labels", {}).get("dev-health.io/worker-group")
-        == "heavy"
-    )
-    heavy_args_disabled = heavy_disabled["spec"]["template"]["spec"]["containers"][0][
-        "args"
-    ]
-    bridge_disabled = [
-        a for a in heavy_args_disabled if a.startswith("--operational-bridge-url=")
-    ]
-    assert bridge_disabled == [
-        "--operational-bridge-url=http://phase1-dev-health-api:8000"
-    ]
-
-    enabled = subprocess.run(
-        [
-            "helm",
-            "template",
-            "phase1",
-            str(_HELM_CHART),
-            "--set",
-            "metricsApi.enabled=true",
-            "--show-only",
-            "templates/go-workers.yaml",
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    enabled_docs = list(yaml.safe_load_all(enabled.stdout))
-    heavy_enabled = next(
-        d
-        for d in enabled_docs
-        if d
-        and d.get("metadata", {}).get("labels", {}).get("dev-health.io/worker-group")
-        == "heavy"
-    )
-    heavy_args_enabled = heavy_enabled["spec"]["template"]["spec"]["containers"][0][
-        "args"
-    ]
-    bridge_enabled = [
-        a for a in heavy_args_enabled if a.startswith("--operational-bridge-url=")
-    ]
-    assert bridge_enabled == [
-        "--operational-bridge-url=http://phase1-dev-health-metrics-api:8000"
-    ]
-
-    # Every other group must be untouched by either state, EXCEPT ops/sync:
-    # CHAOS-4984 broadened emission so both also carry
-    # --operational-bridge-url (buildOperationalWorker's HTTPDispatcher and
-    # buildSyncCoordinatorWorker's NewHTTPBridge both need it too), always
-    # defaulting to `api` regardless of metricsApi.enabled since neither
-    # group carries the `metrics` queue that would switch the default to
-    # metrics-api.
-    _ALSO_BRIDGED_TO_API = {"ops", "sync"}
-    for docs, expected in (
-        (disabled_docs, "http://phase1-dev-health-api:8000"),
-        (enabled_docs, "http://phase1-dev-health-api:8000"),
-    ):
-        for doc in docs:
-            if not doc or doc.get("kind") != "Deployment":
-                continue
-            group = doc["metadata"]["labels"].get("dev-health.io/worker-group")
-            if group in (None, "heavy"):
-                continue
-            args = doc["spec"]["template"]["spec"]["containers"][0]["args"]
-            bridge = [a for a in args if a.startswith("--operational-bridge-url=")]
-            if group in _ALSO_BRIDGED_TO_API:
-                assert bridge == [f"--operational-bridge-url={expected}"], (
-                    f"{group}: expected the api default {expected!r}, got {bridge}"
-                )
-                continue
-            assert bridge == [], (
-                f"{group}: expected no explicit bridge-url override, got {bridge}"
-            )
-
-
-@pytest.mark.skipif(shutil.which("helm") is None, reason="helm is not installed")
-def test_helm_bridge_url_override_follows_the_metrics_queue_not_the_group_name(
-    tmp_path: Path,
-) -> None:
-    """CHAOS-4351 codex review (PR #1938 round-3 P2) falsifier: the previous
-    `{{- if eq $group.name "heavy" }}` selection silently stopped overriding
-    anything the moment an operator's values.yaml reassigned the `metrics`
-    queue to a differently-named group -- that group's bridge calls would
-    keep sharing api's cgroup with no error, no warning, nothing. Render
-    with `metrics` moved onto a group named `ops` instead of `heavy` and
-    confirm the override follows the QUEUE, not the name.
-    """
-    overrides = tmp_path / "values-override.yaml"
-    overrides.write_text(
-        yaml.safe_dump(
-            {
-                "metricsApi": {"enabled": True},
-                "goWorkers": {
-                    "groups": [
-                        {
-                            "name": "heavy",
-                            "image": "ghcr.io/full-chaos/dev-health-go-worker:latest",
-                            "queues": ["investment", "reports", "workgraph"],
-                            "queueConcurrency": {
-                                "investment": 1,
-                                "reports": 2,
-                                "workgraph": 1,
-                            },
-                            "replicas": 0,
-                            "terminationGracePeriodSeconds": 7260,
-                            "resources": {
-                                "requests": {"cpu": "250m", "memory": "256Mi"},
-                                "limits": {"cpu": "1", "memory": "1Gi"},
-                            },
-                            "autoscaling": {"enabled": False},
-                        },
-                        {
-                            "name": "ops",
-                            "image": "ghcr.io/full-chaos/dev-health-go-worker:latest",
-                            "queues": [
-                                "coverage",
-                                "heartbeat",
-                                "retention",
-                                "webhooks",
-                                "metrics",
-                            ],
-                            "queueConcurrency": {
-                                "coverage": 1,
-                                "heartbeat": 1,
-                                "retention": 1,
-                                "webhooks": 4,
-                                "metrics": 2,
-                            },
-                            "replicas": 0,
-                            # 7260, not the 960 this fixture used to carry.
-                            # CHAOS-4428 added a render-time floor: any group
-                            # holding `metrics` needs >= 7260s, because the
-                            # value becomes --shutdown-timeout and a metrics
-                            # job's registry timeout is 7200s. This fixture is
-                            # a small illustration of why that guard exists --
-                            # moving `metrics` onto a group whose grace period
-                            # was sized for short jobs is exactly the mistake
-                            # it catches, and it was easy enough to make here
-                            # by accident. The assertion below is unchanged:
-                            # the override still has to follow the QUEUE and
-                            # not the group name.
-                            "terminationGracePeriodSeconds": 7260,
-                            "resources": {
-                                "requests": {"cpu": "250m", "memory": "256Mi"},
-                                "limits": {"cpu": "1", "memory": "1Gi"},
-                            },
-                            "autoscaling": {"enabled": False},
-                        },
-                    ]
-                },
-            }
-        )
-    )
-    result = subprocess.run(
-        [
-            "helm",
-            "template",
-            "phase1",
-            str(_HELM_CHART),
-            "-f",
-            str(overrides),
-            "--show-only",
-            "templates/go-workers.yaml",
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    docs = list(yaml.safe_load_all(result.stdout))
-    by_group = {
-        doc["metadata"]["labels"]["dev-health.io/worker-group"]: doc
-        for doc in docs
-        if doc and doc.get("kind") == "Deployment"
-    }
-    assert set(by_group) == {"heavy", "ops"}
-
-    def bridge_args(group: str) -> list[str]:
-        args = by_group[group]["spec"]["template"]["spec"]["containers"][0]["args"]
-        return [a for a in args if a.startswith("--operational-bridge-url=")]
-
-    assert bridge_args("ops") == [
-        "--operational-bridge-url=http://phase1-dev-health-metrics-api:8000"
-    ]
-    assert bridge_args("heavy") == []
 
 
 @pytest.mark.skipif(shutil.which("helm") is None, reason="helm is not installed")

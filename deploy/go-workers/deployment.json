@@ -115,8 +115,7 @@
       "secret_env": [
         "CLICKHOUSE_URI",
         "POSTGRES_URI",
-        "WORKER_DATABASE_URI",
-        "WORKER_OPERATIONAL_BRIDGE_TOKEN"
+        "WORKER_DATABASE_URI"
       ]
     },
     {
@@ -281,8 +280,7 @@
       "secret_env": [
         "CLICKHOUSE_URI",
         "POSTGRES_URI",
-        "VALKEY_URI",
-        "WORKER_OPERATIONAL_BRIDGE_TOKEN"
+        "VALKEY_URI"
       ]
     },
     {

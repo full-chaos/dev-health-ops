@@ -15,7 +15,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
-	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -151,13 +150,10 @@ func TestSyncCoordinatorRefusesToBuildWithoutClickHouseConfigured(t *testing.T) 
 	_, err := buildSyncCoordinatorWorker(
 		context.Background(),
 		config.Config{
-			Queues:                         []string{"sync", "sync_provider"},
-			WorkerQueueConcurrency:         map[string]int{"sync": 13, "sync_provider": 7},
-			RiverDatabaseSchema:            "river",
-			OperationalBridgeURL:           "http://localhost",
-			OperationalBridgeToken:         secrets.NewValue("test-bridge-token"),
-			OperationalBridgeTimeout:       time.Second,
-			OperationalBridgeAllowInsecure: true,
+			Queues:                   []string{"sync", "sync_provider"},
+			WorkerQueueConcurrency:   map[string]int{"sync": 13, "sync_provider": 7},
+			RiverDatabaseSchema:      "river",
+			OperationalBridgeTimeout: time.Second,
 			// ClickHouseURI deliberately left unconfigured.
 		},
 		reportBuilderDatabase(t),

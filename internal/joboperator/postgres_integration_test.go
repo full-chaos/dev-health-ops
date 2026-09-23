@@ -402,6 +402,10 @@ func createOperatorIntegrationSchema(
 			status varchar(16) NOT NULL,
 			created_at timestamptz NOT NULL,
 			completed_at timestamptz,
+			-- alembic 0136: the fixed operator principal is allowed.
+			CONSTRAINT ck_worker_operator_audits_principal_type CHECK (
+				principal_type IN ('service_credential', 'operator')
+			),
 			CONSTRAINT ck_worker_operator_audits_action CHECK (
 				action IN (
 					'jobs.cancel', 'jobs.retry', 'queues.pause', 'queues.resume',

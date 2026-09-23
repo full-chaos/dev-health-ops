@@ -104,7 +104,9 @@ func parseEnvelope(raw []byte) (*BatchEnvelope, error) {
 // unhandledError is the Python api's unhandled-exception answer on this
 // prefix (api/_errors.py): 500 internal_error "Internal Server Error".
 func unhandledError() *ingestError {
-	return newIngestError(http.StatusInternalServerError, "internal_error", "Internal Server Error")
+	failure := newIngestError(http.StatusInternalServerError, "internal_error", "Internal Server Error")
+	failure.Unhandled = true
+	return failure
 }
 
 // toAny converts a pyjson value to the encoding/json shapes the accept path

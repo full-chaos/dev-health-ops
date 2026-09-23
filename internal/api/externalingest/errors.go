@@ -21,6 +21,10 @@ type ingestError struct {
 	// Details are pydantic error dicts (errors=[dict(e) ...]); when set the
 	// body is written with pyjson, key order and all, as JSONResponse does.
 	Details []pyjson.Value
+	// Unhandled marks the Python api's unhandled-exception answer, which its
+	// ServerErrorMiddleware writes outside the transport middleware (no
+	// security headers).
+	Unhandled bool
 }
 
 func (e *ingestError) Error() string { return e.Message }
@@ -63,7 +67,11 @@ func writeIngestError(w http.ResponseWriter, err *ingestError) {
 	}
 	body := pyjson.NewObject()
 	body.Set("error", errorObject)
-	policy.WriteJSON(w, err.Status, body, nil)
+	var extra http.Header
+	if err.Unhandled {
+		extra = http.Header{policy.UnhandledErrorHeader: {"1"}}
+	}
+	policy.WriteJSON(w, err.Status, body, extra)
 }
 
 // writeUnorderedJSON is the ONE remaining stdlib-map writer in this package,

@@ -367,6 +367,25 @@ func TestExternalIngestVenueOracle(t *testing.T) {
 				`"source":{"system":"github","instance":"acme/venue-repo"},` +
 				`"records":[{"kind":"not_a_real_kind's.v1","externalId":"x","payload":{}}]}`),
 		},
+		// Malformed envelopes (the shared exact envelope validation): the
+		// 400 carries errors=[dict(e) ...]; where Python's json.dumps cannot
+		// write them, both planes give the unhandled 500.
+		malformedEnvelope("validate JSON syntax error", "/api/v1/external-ingest/validate", auth, `{"schemaVersion": `),
+		malformedEnvelope("validate trailing data", "/api/v1/external-ingest/validate", auth, `{} x`),
+		malformedEnvelope("validate shape errors", "/api/v1/external-ingest/validate", auth,
+			`{"schemaVersion":1,"idempotencyKey":"","source":{"system":"x","instance":"","extra":1},"records":[1,{"kind":1,"externalId":"","payload":[],"q":1}],"zzz":1}`),
+		malformedEnvelope("validate null payload", "/api/v1/external-ingest/validate", auth,
+			`{"schemaVersion":"external-ingest.v1","idempotencyKey":"k","source":{"system":"github","instance":"acme/venue-repo"},"records":[{"kind":"repository.v1","externalId":"e","payload":null}]}`),
+		malformedEnvelope("validate empty records", "/api/v1/external-ingest/validate", auth,
+			`{"schemaVersion":"external-ingest.v1","idempotencyKey":"k","source":{"system":"github","instance":"acme/venue-repo"},"records":[]}`),
+		malformedEnvelope("validate field names and record errors", "/api/v1/external-ingest/validate", auth,
+			`{"schema_version":"external-ingest.v1","idempotency_key":"k","source":{"system":"github","instance":"acme/venue-repo"},"records":[{"kind":"repository.v1","external_id":"e","payload":{"externalId":"e","sourceSystem":"github","tags":["a",1],"settings":{"a":[1]}}}]}`),
+		malformedEnvelope("validate window ends before it starts", "/api/v1/external-ingest/validate", auth,
+			`{"schemaVersion":"external-ingest.v1","idempotencyKey":"k","source":{"system":"github","instance":"acme/venue-repo"},"window":{"startedAt":"2026-01-02T00:00:00Z","endedAt":"2026-01-01T00:00:00Z"},"records":[{"kind":"repository.v1","externalId":"e","payload":{}}]}`),
+		malformedEnvelope("validate naive and aware window", "/api/v1/external-ingest/validate", auth,
+			`{"schemaVersion":"external-ingest.v1","idempotencyKey":"k","source":{"system":"github","instance":"acme/venue-repo"},"window":{"startedAt":"2026-01-02T00:00:00","endedAt":"2026-01-01T00:00:00Z"},"records":[{"kind":"repository.v1","externalId":"e","payload":{}}]}`),
+		malformedEnvelope("accept shape errors", "/api/v1/external-ingest/batches", auth, `{"records":[]}`),
+		malformedEnvelope("accept JSON syntax error", "/api/v1/external-ingest/batches", auth, `[1,]`),
 		{
 			Name: "accept new batch", Method: "POST", Path: "/api/v1/external-ingest/batches",
 			Headers: jsonHeaders(auth), Body: venueoracle.B64(acceptBody),
@@ -445,4 +464,13 @@ func TestExternalIngestVenueOracle(t *testing.T) {
 		t.Errorf("external_ingest_batches rows differ:\n python: %s\n go:     %s", pythonBatches, goBatches)
 	}
 	// venueoracle.Start already wrote this test's own proof file.
+}
+
+// malformedEnvelope is a JSON POST of body to path with the ingest token.
+func malformedEnvelope(name, path string, auth map[string]string, body string) venueoracle.Request {
+	headers := map[string]string{"Content-Type": "application/json"}
+	for key, value := range auth {
+		headers[key] = value
+	}
+	return venueoracle.Request{Name: name, Method: "POST", Path: path, Headers: headers, Body: venueoracle.B64(body)}
 }

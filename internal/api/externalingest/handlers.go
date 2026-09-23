@@ -677,7 +677,7 @@ func batchListItem(row *BatchRow) *pyjson.Object {
 	object.Set("source", sourceRef(row.SourceSystem, row.SourceInstance))
 	object.Set("window", windowRef(row.WindowStartedAt, row.WindowEndedAt))
 	object.Set("producer", optionalStringValue(row.Producer))
-	object.Set("createdAt", row.CreatedAt.UTC().Format(time.RFC3339Nano))
+	object.Set("createdAt", pytime.Pydantic(pytime.UTC(row.CreatedAt)))
 	object.Set("completedAt", formatOptionalRFC3339(row.CompletedAt))
 	return object
 }
@@ -723,8 +723,8 @@ func batchStatusResponse(row *BatchRow, rejections []RejectionRow, jobs []Recomp
 	object.Set("window", windowRef(row.WindowStartedAt, row.WindowEndedAt))
 	object.Set("producer", optionalStringValue(row.Producer))
 	object.Set("producerVersion", optionalStringValue(row.ProducerVersion))
-	object.Set("createdAt", row.CreatedAt.UTC().Format(time.RFC3339Nano))
-	object.Set("updatedAt", row.UpdatedAt.UTC().Format(time.RFC3339Nano))
+	object.Set("createdAt", pytime.Pydantic(pytime.UTC(row.CreatedAt)))
+	object.Set("updatedAt", pytime.Pydantic(pytime.UTC(row.UpdatedAt)))
 	object.Set("completedAt", formatOptionalRFC3339(row.CompletedAt))
 	object.Set("errorSummary", row.ErrorSummary)
 	object.Set("errors", errs)
@@ -735,11 +735,22 @@ func batchStatusResponse(row *BatchRow, rejections []RejectionRow, jobs []Recomp
 	return object
 }
 
+// formatOptionalRFC3339 formats a real Postgres timestamptz-sourced instant
+// the way Pydantic's JSON datetime serializer does: exactly six fraction
+// digits when non-zero (never trimmed), "Z" for UTC. NOT
+// t.UTC().Format(time.RFC3339Nano): Go's %.9f-style fractional-second
+// formatting TRIMS trailing zeros, so a genuinely-random microsecond value
+// like 52254860 (".254860") renders as ".25486" -- a real, intermittent
+// mismatch (roughly 1 run in 10, whenever the low-order digit of a
+// timestamp happens to be zero), not a hypothetical one: it flaked
+// TestExternalIngestVenueOracle's required venue-oracles check on main.
+// pytime.Pydantic/pytime.UTC is the same pair scopeDatetimeValue already
+// uses for this exact contract.
 func formatOptionalRFC3339(t *time.Time) any {
 	if t == nil {
 		return nil
 	}
-	return t.UTC().Format(time.RFC3339Nano)
+	return pytime.Pydantic(pytime.UTC(*t))
 }
 
 func optionalStringValue(s *string) any {

@@ -5,6 +5,8 @@ import (
 	"strings"
 	"sync"
 	"unicode"
+
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
 //go:embed data/common_passwords.txt
@@ -54,12 +56,19 @@ func validatePassword(password string) []string {
 		violations = append(violations, "Password must be no more than 128 characters long")
 	}
 
+	// character.isalpha() has zero measured divergence from
+	// unicode.IsLetter (both are Unicode category L*), so hasLetter needs
+	// no parity helper. character.isdigit() is BROADER than
+	// unicode.IsDigit (decimal-only): pythonparity.IsDigit is the one
+	// canonical str.isdigit() -- e.g. "Abcdefghijk²" (U+00B2 SUPERSCRIPT
+	// TWO) satisfies Python's digit requirement and unicode.IsDigit does
+	// not.
 	hasLetter, hasDigit := false, false
 	for _, r := range password {
 		if unicode.IsLetter(r) {
 			hasLetter = true
 		}
-		if unicode.IsDigit(r) {
+		if pythonparity.IsDigit(r) {
 			hasDigit = true
 		}
 	}

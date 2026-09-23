@@ -176,14 +176,30 @@ func (s pgStore) insertUser(ctx context.Context, in userCreateInput) (*fullUser,
 	}
 	email := strings.ToLower(strings.TrimSpace(deref(in.Email)))
 	u.Email = email
-	if in.Username != nil {
+	// UserService.create: `username=username.lower().strip() if username
+	// else None` -- Python's truthy check runs on the RAW value, before
+	// strip/lower, so a whitespace-only username (falsy check passes: any
+	// non-empty string is truthy in Python, including " ") is NOT None --
+	// it lowers/strips to "" and is stored/returned as an empty string,
+	// never null. Gating on the TRIMMED result's emptiness instead of the
+	// raw value's emptiness silently turned that case into a stored NULL.
+	if in.Username != nil && *in.Username != "" {
 		lowered := strings.ToLower(strings.TrimSpace(*in.Username))
-		if lowered != "" {
-			u.Username = &lowered
-		}
+		u.Username = &lowered
 	}
+	// UserService.create's own signature default (`auth_provider: str =
+	// AuthProvider.LOCAL.value`) only ever applies when the caller OMITS
+	// the argument -- the router always passes payload.auth_provider
+	// (pydantic's own `str = "local"` field), so "local" only reaches here
+	// via pydantic's absent-key default, never via a present, explicitly
+	// empty string, which pydantic accepts as a valid `str` and passes
+	// through verbatim. in.AuthProvider is nil exactly when the key was
+	// absent (DefaultedString in the caller), so presence alone decides
+	// the fallback -- checking the STRING's own emptiness here collapsed
+	// an explicit "" into "local", which is a value Python never stores
+	// for that input.
 	provider := "local"
-	if in.AuthProvider != nil && *in.AuthProvider != "" {
+	if in.AuthProvider != nil {
 		provider = *in.AuthProvider
 	}
 	u.AuthProvider = &provider

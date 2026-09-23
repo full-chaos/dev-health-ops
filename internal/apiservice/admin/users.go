@@ -171,15 +171,21 @@ func (h *handlers) createUser(w http.ResponseWriter, r *http.Request) {
 	object, ok := errs.Object(body)
 	var email, password, username, fullName, authProvider, authProviderID string
 	var isVerified, isSuperuser bool
+	var fullNamePresent, authProviderPresent, authProviderIDPresent bool
 	if ok {
 		email, _ = errs.RequiredString(object, "email", 1, 0)
 		password, _ = errs.OptionalString(object, "password", 8, 128)
 		username, _ = errs.OptionalString(object, "username", 0, 0)
-		fullName, _ = errs.OptionalString(object, "full_name", 0, 0)
-		authProvider, _ = errs.OptionalString(object, "auth_provider", 0, 0)
-		authProviderID, _ = errs.OptionalString(object, "auth_provider_id", 0, 0)
-		isVerified, _ = errs.OptionalBool(object, "is_verified")
-		isSuperuser, _ = errs.OptionalBool(object, "is_superuser")
+		fullName, fullNamePresent = errs.OptionalString(object, "full_name", 0, 0)
+		// auth_provider/is_verified/is_superuser are pydantic fields with a
+		// DEFAULT, not `| None` -- DefaultedString/DefaultedBool: present is
+		// false only when the key is absent (apply the same default Python
+		// does), but an explicit null is a type error there, never a silent
+		// fall-back to the default (see their doc comments).
+		authProvider, authProviderPresent = errs.DefaultedString(object, "auth_provider", 0, 0)
+		authProviderID, authProviderIDPresent = errs.OptionalString(object, "auth_provider_id", 0, 0)
+		isVerified, _ = errs.DefaultedBool(object, "is_verified")
+		isSuperuser, _ = errs.DefaultedBool(object, "is_superuser")
 	}
 	if len(errs) > 0 {
 		policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(errs), nil)
@@ -190,13 +196,21 @@ func (h *handlers) createUser(w http.ResponseWriter, r *http.Request) {
 	if username != "" {
 		in.Username = &username
 	}
-	if fullName != "" {
+	// full_name/auth_provider_id are gated on PRESENCE, not on the
+	// validated value being non-empty: Python's User() constructor stores
+	// an explicitly-empty string verbatim (full_name=full_name,
+	// auth_provider_id=auth_provider_id -- no truthy check, unlike
+	// username, which the service layer DOES truthy-check; see
+	// insertUser's own comment). Gating on the string's own emptiness here
+	// silently turned an explicit "" into a stored NULL, diverging from
+	// Python's verbatim empty string.
+	if fullNamePresent {
 		in.FullName = &fullName
 	}
-	if authProvider != "" {
+	if authProviderPresent {
 		in.AuthProvider = &authProvider
 	}
-	if authProviderID != "" {
+	if authProviderIDPresent {
 		in.AuthProviderID = &authProviderID
 	}
 	if password != "" {
@@ -384,6 +398,20 @@ func (h *handlers) setUserPassword(w http.ResponseWriter, r *http.Request) {
 	}
 	if admin == nil || admin.PasswordHash == nil {
 		policy.WriteDetail(w, http.StatusForbidden, "Admin password verification failed", nil)
+		return
+	}
+	if len(adminPassword) > 72 {
+		// Python's route calls bcrypt.checkpw directly (not the
+		// try/except-wrapped _verify_password helper), so a plaintext
+		// longer than 72 bytes RAISES ValueError there -- unhandled, the
+		// generic 500, never "verification failed" (verified live:
+		// bcrypt.checkpw(b"a"*73, hash) raises "password cannot be longer
+		// than 72 bytes"). Go's bcrypt.CompareHashAndPassword has no such
+		// check (blowfish's own key expansion silently processes the
+		// extra bytes and the compare just falls through to an ordinary
+		// mismatch), so this route checks the length itself to match.
+		h.logger.ErrorContext(ctx, "admin: set password acting-admin password exceeds bcrypt's 72-byte limit")
+		policy.WriteInternal(w)
 		return
 	}
 	if bcrypt.CompareHashAndPassword([]byte(*admin.PasswordHash), []byte(adminPassword)) != nil {

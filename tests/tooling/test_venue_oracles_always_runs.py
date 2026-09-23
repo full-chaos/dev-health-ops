@@ -102,9 +102,19 @@ def test_the_declaring_workflow_has_no_path_filter() -> None:
     on_block = _on_block(document)
 
     for event in ("pull_request", "push"):
-        trigger = on_block.get(event)
-        if trigger is None:
-            continue
+        # A reproduced round: `if trigger is None: continue` here made every
+        # test in this file still pass after DELETING the pull_request
+        # trigger entirely -- the required check would then never fire on a
+        # pull_request at all, invisibly, and this guard said nothing. The
+        # trigger's ABSENCE is exactly as dangerous as a path filter on it,
+        # so it must fail loud too, not be skipped as "nothing to check".
+        assert event in on_block, (
+            f"{declaring.name} declares no {event!r} trigger at all. "
+            f"{JOB_ID!r} is a required status check and must always fire on "
+            f"every {event}, or the required context silently never posts "
+            "for that event class."
+        )
+        trigger = on_block[event]
         assert isinstance(trigger, dict), (
             f"{declaring.name}'s {event!r} trigger is {trigger!r}, not a "
             "mapping -- cannot check for a paths filter"

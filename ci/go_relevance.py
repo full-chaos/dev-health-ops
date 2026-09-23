@@ -93,7 +93,19 @@ def is_relevant(changed: list[str], patterns: list[str]) -> list[str]:
 
 
 def main() -> int:
-    changed = [line.strip() for line in sys.stdin if line.strip()]
+    # NUL-split when the caller supplies NUL-terminated entries (ci/go_relevant_
+    # diff.sh's `git diff -z --no-renames`, which disables ALL of git's path
+    # quoting -- see that script for why a non-ASCII or rename-shape path is
+    # otherwise silently lost); newline-split for a plain `git diff --name-only`
+    # producer, kept for backward compatibility with any caller that has not
+    # moved to the NUL-safe producer. A NUL byte never appears in ordinary
+    # newline-separated output, so presence of one is an unambiguous format tell.
+    raw = sys.stdin.read()
+    changed = (
+        [path for path in raw.split("\0") if path]
+        if "\0" in raw
+        else [line.strip() for line in raw.splitlines() if line.strip()]
+    )
     if not changed:
         # An empty diff is not evidence of irrelevance -- it usually means the
         # base ref was wrong. Fail closed and run the gate.

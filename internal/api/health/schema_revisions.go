@@ -1,0 +1,75 @@
+// Code generated from the Alembic script directory; DO NOT EDIT.
+// TestSchemaRevisionsMatchLivePythonAlembic regenerates the set and must
+// agree: a new migration descending from the minimum is added here.
+
+package health
+
+// minimumSchemaRevision is migrate._APPLICATION_SCHEMA_MINIMUM_REVISION.
+const minimumSchemaRevision = "0075"
+
+// satisfyingRevisions is every revision that has minimumSchemaRevision as
+// an ancestor (itself included): a database whose alembic_version holds one
+// of them has the schema the api needs.
+var satisfyingRevisions = map[string]bool{
+	"0075": true,
+	"0076": true,
+	"0077": true,
+	"0078": true,
+	"0079": true,
+	"0080": true,
+	"0081": true,
+	"0082": true,
+	"0083": true,
+	"0084": true,
+	"0085": true,
+	"0086": true,
+	"0087": true,
+	"0088": true,
+	"0089": true,
+	"0090": true,
+	"0091": true,
+	"0092": true,
+	"0093": true,
+	"0094": true,
+	"0095": true,
+	"0096": true,
+	"0097": true,
+	"0098": true,
+	"0099": true,
+	"0100": true,
+	"0101": true,
+	"0102": true,
+	"0103": true,
+	"0104": true,
+	"0105": true,
+	"0106": true,
+	"0107": true,
+	"0108": true,
+	"0109": true,
+	"0110": true,
+	"0111": true,
+	"0112": true,
+	"0113": true,
+	"0114": true,
+	"0115": true,
+	"0116": true,
+	"0117": true,
+	"0118": true,
+	"0119": true,
+	"0120": true,
+	"0121": true,
+	"0122": true,
+	"0123": true,
+	"0124": true,
+	"0125": true,
+	"0126": true,
+	"0127": true,
+	"0128": true,
+	"0129": true,
+	"0130": true,
+	"0131": true,
+	"0132": true,
+	"0133": true,
+	"0134": true,
+	"0135": true,
+}

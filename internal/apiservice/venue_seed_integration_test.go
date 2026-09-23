@@ -81,6 +81,10 @@ func venueSeed(t *testing.T, ctx context.Context, pool *pgxpool.Pool) venueFixtu
 		{`INSERT INTO users (id, email, is_superuser) VALUES ($1, 'imp@x', true)`, []any{f.impersonator}},
 		{`INSERT INTO impersonation_sessions (id, admin_user_id, target_user_id, target_org_id, target_role, expires_at)
 			VALUES (gen_random_uuid(), $1, $2, $3, 'member', now() + interval '1 hour')`, []any{f.impersonator, f.member, f.orgA}},
+		{`INSERT INTO worker_instances (instance_id, worker_group, queues, state, started_at, heartbeat_at, expires_at) VALUES
+			(gen_random_uuid(), 'ops', '{default}', 'accepting', now(), now(), now() + interval '1 hour'),
+			(gen_random_uuid(), 'sync', '{default}', 'draining', now(), now(), now() - interval '1 minute'),
+			(gen_random_uuid(), 'other', '{default}', 'accepting', now(), now(), now() + interval '1 hour')`, nil},
 		{`INSERT INTO feature_flags (id, key, name, min_tier, is_enabled, created_at, updated_at) VALUES
 			(gen_random_uuid(),'stored_only','Stored','team',true,now(),now()),
 			(gen_random_uuid(),'bad_tier','Bad','platinum',true,now(),now()),
@@ -195,6 +199,13 @@ func venueRequests(f venueFixture, tokens map[string]string) []venueoracle.Reque
 	add("ent: POST", "POST", ent+f.orgA.String(), bearer("member"), nil)
 	add("ent: HEAD", "HEAD", ent+f.orgA.String(), bearer("member"), nil)
 	add("ent: impersonator", "GET", ent+f.orgB.String(), bearer("impersonator"), nil)
+	// Probes (the rate limiter and Celery values are normalized: ruled).
+	for _, path := range []string{"/health", "/ready", "/health/workers"} {
+		add("probe: GET "+path, "GET", path, nil, nil)
+		add("probe: HEAD "+path, "HEAD", path, nil, nil)
+		add("probe: POST "+path, "POST", path, nil, nil)
+		add("probe: GET "+path+" stranger org", "GET", path, with(bearer("member"), "X-Org-Id", f.orgB.String()), nil)
+	}
 	return out
 }
 

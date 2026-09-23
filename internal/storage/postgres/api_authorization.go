@@ -86,6 +86,10 @@ func apiPosture() RolePosture {
 			{"users", false, false, false},
 			{"memberships", false, false, false},
 			{"impersonation_sessions", false, false, false},
+			// Plan area A: /health's application schema revision and
+			// /health/workers' worker heartbeat presence.
+			{"alembic_version", false, false, false},
+			{"worker_instances", false, false, false},
 		},
 	}
 }

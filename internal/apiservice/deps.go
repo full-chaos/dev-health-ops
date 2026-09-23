@@ -36,6 +36,17 @@ type Deps struct {
 	// Guard to wrap a handler with its authorization level.
 	Auth  *policy.Authenticator
 	Guard *policy.Guard
+	// Probes is the configuration the health probes report on.
+	Probes ProbeConfig
+}
+
+// ProbeConfig is what /health, /ready and /health/workers check: the
+// ClickHouse and Valkey DSNs ("" = not configured) and EXPECTED_WORKER_GROUPS
+// (nil = unset).
+type ProbeConfig struct {
+	ClickHouseDSN        string
+	ValkeyURI            string
+	ExpectedWorkerGroups *[]string
 }
 
 // pgxpoolComponent closes the pool on shutdown. Start performs no I/O, for

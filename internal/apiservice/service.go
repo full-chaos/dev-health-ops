@@ -36,6 +36,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/externalingest"
+	healthroutes "github.com/full-chaos/dev-health-ops/internal/api/health"
 	"github.com/full-chaos/dev-health-ops/internal/api/orgs"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/acr"
@@ -134,6 +135,10 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 		Valkey: deps.Valkey,
 		Logger: logger,
 	})...)
+	routes = append(routes, healthroutes.Routes(healthroutes.Deps{
+		Pool: deps.Pool, ClickHouseDSN: deps.Probes.ClickHouseDSN, ValkeyURI: deps.Probes.ValkeyURI,
+		ExpectedWorkerGroups: deps.Probes.ExpectedWorkerGroups, Logger: logger,
+	})...)
 	if deps.Guard != nil {
 		routes = append(routes, orgs.Routes(deps.Pool, deps.Guard, logger)...)
 	}
@@ -159,6 +164,10 @@ func configure(
 		}
 		deps.Auth, deps.Guard = protected.auth, protected.guard
 		scope = []func(http.Handler) http.Handler{protected.scope.OrgScope, protected.scope.Impersonation}
+	}
+	deps.Probes = ProbeConfig{
+		ClickHouseDSN: cfg.ClickHouseURI.Reveal(), ValkeyURI: cfg.ValkeyURI.Reveal(),
+		ExpectedWorkerGroups: cfg.APIExpectedWorkerGroups,
 	}
 	server, err := NewServer(cfg, logger, Routes(deps, logger), scope...)
 	if err != nil {

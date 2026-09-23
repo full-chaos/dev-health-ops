@@ -8,6 +8,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
 var (
@@ -92,13 +94,16 @@ func New(ctx context.Context, config Config) (*pgxpool.Pool, error) {
 
 	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
 	if err != nil {
-		return nil, ErrUnavailable
+		return nil, secrets.WithRedactedCause(ErrUnavailable, config.URI, err)
 	}
 	return pool, nil
 }
 
-// Open creates and verifies a pool. Driver errors are deliberately replaced by
-// stable categories so a malformed or unreachable URI cannot appear in logs.
+// Open creates and verifies a pool. A driver error is returned under a stable
+// category (errors.Is ErrUnavailable) with the driver's text appended after
+// every credential component of the URI is redacted, so an operator can tell a
+// refused dial from an authentication failure while the URI and its password
+// never appear in logs.
 func Open(ctx context.Context, config Config) (*pgxpool.Pool, error) {
 	pool, err := New(ctx, config)
 	if err != nil {
@@ -106,7 +111,7 @@ func Open(ctx context.Context, config Config) (*pgxpool.Pool, error) {
 	}
 	if err := pool.Ping(ctx); err != nil {
 		pool.Close()
-		return nil, ErrUnavailable
+		return nil, secrets.WithRedactedCause(ErrUnavailable, config.URI, err)
 	}
 	return pool, nil
 }

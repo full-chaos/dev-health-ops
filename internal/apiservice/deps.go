@@ -30,6 +30,38 @@ import (
 // testContractRoot convention, restored after the test.
 var contractRoot = "contracts/jobs/v1"
 
+// apiDependencyError is a start-up failure at one named construction site. The
+// shell logs only a DependencyReason, never an arbitrary error, so without this
+// a failing site reached the log as a bare "configure runtime dependencies"
+// line with no dependency named. Reason is a bounded constant per site.
+type apiDependencyError struct {
+	dependency string
+	reason     string
+	err        error
+}
+
+func (e apiDependencyError) Error() string            { return e.dependency + ": " + e.err.Error() }
+func (e apiDependencyError) Unwrap() error            { return e.err }
+func (e apiDependencyError) DependencyReason() string { return e.reason }
+
+// dependencyFailure logs the failing dependency, its reason and the underlying
+// error, and returns the reason-coded error the shell logs again. Every error
+// reaching it is free of credentials: the storage opens return a fixed sentinel
+// (ErrInvalidConfig), or ErrUnavailable followed by the driver's text with every
+// credential component of the DSN redacted (secrets.WithRedactedCause), and the
+// other sites return configuration or contract messages that never format a
+// secret.
+func dependencyFailure(ctx context.Context, logger *slog.Logger, dependency, reason string, err error) error {
+	if logger != nil {
+		logger.LogAttrs(ctx, slog.LevelError, "api dependency configuration failed",
+			slog.String("dependency", dependency),
+			slog.String("reason", reason),
+			slog.String("error", err.Error()),
+		)
+	}
+	return apiDependencyError{dependency: dependency, reason: reason, err: err}
+}
+
 // apiDatabaseCheck and apiValkeyCheck are declared in service.go, alongside
 // listenerCheck -- one place names every readiness check this Service
 // registers.
@@ -190,23 +222,23 @@ func buildDeps(
 	if cfg.APIDatabaseURI.Configured() {
 		pool, err := postgres.New(ctx, postgres.DefaultConfig(cfg.APIDatabaseURI.Reveal()))
 		if err != nil {
-			return Deps{}, nil, err
+			return Deps{}, nil, dependencyFailure(ctx, logger, "api_postgres", "api_postgres_open_failed", err)
 		}
 		deps.Pool = pool
 		components = append(components, &pgxpoolComponent{pool: pool})
 		if err := registry.RegisterRequired(apiDatabaseCheck, func(checkCtx context.Context) error {
 			return postgres.CheckAPIAuthorization(checkCtx, pool, cfg.APIDatabaseRole, cfg.RiverDatabaseSchema)
 		}); err != nil {
-			return Deps{}, nil, err
+			return Deps{}, nil, dependencyFailure(ctx, logger, "api_postgres", "api_postgres_check_register_failed", err)
 		}
 
 		jobRegistry, err := webhookintake.LoadJobRegistry(contractRoot)
 		if err != nil {
-			return Deps{}, nil, fmt.Errorf("load job contracts for webhook intake: %w", err)
+			return Deps{}, nil, dependencyFailure(ctx, logger, "webhook_job_registry", "api_job_registry_load_failed", fmt.Errorf("load job contracts for webhook intake: %w", err))
 		}
 		producer, err := joboutbox.NewProducer(pool, jobRegistry)
 		if err != nil {
-			return Deps{}, nil, fmt.Errorf("build webhook intake job outbox producer: %w", err)
+			return Deps{}, nil, dependencyFailure(ctx, logger, "webhook_outbox_producer", "api_outbox_producer_failed", fmt.Errorf("build webhook intake job outbox producer: %w", err))
 		}
 		deps.Producer = producer
 		// SettingsEncryptionKey unconfigured leaves Decryptor at its zero
@@ -216,7 +248,7 @@ func buildDeps(
 		if cfg.SettingsEncryptionKey.Configured() {
 			decryptor, err := providerfoundation.NewFernetDecryptor(cfg.SettingsEncryptionKey, cfg.SettingsEncryptionSalt.Reveal())
 			if err != nil {
-				return Deps{}, nil, fmt.Errorf("build webhook intake secret decryptor: %w", err)
+				return Deps{}, nil, dependencyFailure(ctx, logger, "webhook_secret_decryptor", "api_secret_decryptor_failed", fmt.Errorf("build webhook intake secret decryptor: %w", err))
 			}
 			deps.Decryptor = decryptor
 		}
@@ -225,28 +257,28 @@ func buildDeps(
 	if cfg.ValkeyURI.Configured() {
 		client, err := valkey.Open(ctx, valkey.DefaultConfig(cfg.ValkeyURI.Reveal()))
 		if err != nil {
-			return Deps{}, nil, err
+			return Deps{}, nil, dependencyFailure(ctx, logger, "api_valkey", "api_valkey_open_failed", err)
 		}
 		deps.Valkey = client
 		components = append(components, &valkeyComponent{client: client})
 		if err := registry.RegisterRequired(apiValkeyCheck, func(ctx context.Context) error {
 			return client.Do(ctx, client.B().Ping().Build()).Error()
 		}); err != nil {
-			return Deps{}, nil, err
+			return Deps{}, nil, dependencyFailure(ctx, logger, "api_valkey", "api_valkey_check_register_failed", err)
 		}
 	}
 
 	if cfg.APIClickHouseURI.Configured() {
 		conn, err := chclickhouse.Open(ctx, chclickhouse.DefaultConfig(cfg.APIClickHouseURI.Reveal()))
 		if err != nil {
-			return Deps{}, nil, err
+			return Deps{}, nil, dependencyFailure(ctx, logger, "api_clickhouse", "api_clickhouse_open_failed", err)
 		}
 		deps.ClickHouse = conn
 		components = append(components, &clickHouseComponent{conn: conn})
 		if err := registry.RegisterRequired(apiClickHouseCheck, func(checkCtx context.Context) error {
 			return chclickhouse.CheckAPIClickHouseAuthorization(checkCtx, conn)
 		}); err != nil {
-			return Deps{}, nil, err
+			return Deps{}, nil, dependencyFailure(ctx, logger, "api_clickhouse", "api_clickhouse_check_register_failed", err)
 		}
 	}
 

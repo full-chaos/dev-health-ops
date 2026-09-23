@@ -73,7 +73,16 @@ def github_glob_to_regex(pattern: str) -> re.Pattern[str]:
         else:
             out.append(re.escape(pattern[index]))
             index += 1
-    return re.compile("^" + "".join(out) + "$")
+    # re.DOTALL: without it, `.` (from `**`/`**/` above) does NOT match a
+    # literal newline in a path -- `**/*.go` compiled to `^(?:.*/)?[^/]*\.go$`
+    # cannot match `internal/newline\ndirectory/module.go` because `.*`
+    # refuses to cross the embedded `\n` to reach the string's real end, so
+    # `$` never matches even though the file genuinely lives under a
+    # Go-relevant directory. `[^/]*` (from a bare `*`) is unaffected -- a
+    # negated character class matches a literal newline regardless of
+    # DOTALL. DOTALL only changes what `.` matches; `$`'s own end-of-string
+    # anchoring is unaffected (no MULTILINE here).
+    return re.compile("^" + "".join(out) + "$", re.DOTALL)
 
 
 def go_relevant_patterns() -> list[str]:

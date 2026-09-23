@@ -1135,6 +1135,20 @@ def test_the_runtime_built_path_limit_is_real(tmp_path: Path) -> None:
         # `*` must not span a separator; `**` must.
         ("docs/*.md", "docs/a/b.md", False),
         ("docs/**", "docs/a/b.md", True),
+        # A literal newline in a NON-final path segment. `.` (from `**`'s
+        # `.*` translation) does not match `\n` without re.DOTALL, so
+        # `**/*.go` compiled without it cannot cross the embedded `\n` to
+        # reach the string's real end -- a file genuinely living under a
+        # Go-relevant directory whose name happens to contain a newline was
+        # reported as no match. A newline in the FINAL segment already
+        # worked, matched by `[^/]*` (a bare `*`), a negated character class
+        # unaffected by DOTALL -- only `.*` needed the fix.
+        ("**/*.go", "internal/newline\ndirectory/module.go", True),
+        # The boundary case: a newline sitting directly against a `/`, with
+        # nothing else in that segment, exercising `(?:.*/)?`'s own
+        # backtracking under DOTALL rather than an ordinary-character
+        # segment with a newline inside it.
+        ("**/*.go", "internal/\n/module.go", True),
     ],
 )
 def test_the_shared_translator_matches_github_semantics(

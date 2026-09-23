@@ -43,7 +43,7 @@ import (
 )
 
 const (
-	serviceName            = "dho workers"
+	serviceName            = "dho"
 	operatorAdvisoryKey    = int64(30330001)
 	defaultDomainRole      = "devhealth_domain"
 	defaultQueueRole       = "devhealth_queue"

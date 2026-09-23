@@ -1801,10 +1801,11 @@ does not collapse to `unassigned`.
    "Auto-import teams, projects & members" checkbox with these three).
 2. Trigger the sync through the sync-config UI or worker-backed trigger endpoint
    so the configured worker credentials are used.
-3. After the sync succeeds, run daily metrics with the same analytics database:
+3. After the sync succeeds, dispatch daily metrics for that day (the worker
+   computes them into the same analytics database):
 
    ```bash
-   CLICKHOUSE_URI=clickhouse://... dev-hops metrics daily
+   dho workers metrics daily-start --org <org-id> --day <YYYY-MM-DD>
    ```
 
 4. Open `dev-health-web` in a real browser (Playwright is preferred for evidence)

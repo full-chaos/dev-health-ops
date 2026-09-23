@@ -60,3 +60,16 @@ func TestDhoWorkersRunsTheSameVerbTree(t *testing.T) {
 		t.Fatalf("the table reached usage=%v config=%v; it must reach both, or it compares nothing", sawUsage, sawConfig)
 	}
 }
+
+// TestDhoWorkersVersionNamesTheBinary pins what `dho workers --version`
+// reports: the binary is dho, so the service is "dho" (it was
+// "dev-health-workerctl" while that binary existed).
+func TestDhoWorkersVersionNamesTheBinary(t *testing.T) {
+	var stdout bytes.Buffer
+	code := cli.Execute(context.Background(), "dho", []cli.Command{Command()}, cli.Env{
+		Args: []string{"workers", "--version"}, Stdout: &stdout,
+	})
+	if code != cli.ExitOK || !bytes.Contains(stdout.Bytes(), []byte(`"service":"dho"`)) {
+		t.Fatalf("code=%d stdout=%s", code, stdout.String())
+	}
+}

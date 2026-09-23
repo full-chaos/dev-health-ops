@@ -528,6 +528,65 @@ func TestShutdownClosesReadinessAndLeavesUncommittedMessagePending(t *testing.T)
 	}
 }
 
+// parkedUntilCancelTransport parks ReadNew until its context is cancelled and
+// then reports an empty, error-free read -- what a blocking stream read that is
+// interrupted at shutdown legitimately returns. The cycle in flight when
+// Shutdown begins therefore finishes SUCCESSFULLY, and only after Shutdown has
+// cleared readiness: Shutdown clears readiness before it cancels the context
+// this read is waiting on, so the read cannot return any earlier. That fixes
+// the interleaving by construction instead of by timing.
+type parkedUntilCancelTransport struct {
+	*fakeTransport
+	entered chan struct{}
+	once    sync.Once
+}
+
+func (t *parkedUntilCancelTransport) ReadNew(ctx context.Context, _ []string, _ string, _ string, _ int, _ time.Duration) ([]Message, error) {
+	t.once.Do(func() { close(t.entered) })
+	<-ctx.Done()
+	return nil, nil
+}
+
+// TestShutdownReadinessIsNotRestoredByTheCycleInFlight pins the ordering the
+// timing-dependent test above only hits occasionally: a cycle that was already
+// running when Shutdown began and that completes without a failure must not set
+// readiness (or the up gauge) again after Shutdown cleared it.
+func TestShutdownReadinessIsNotRestoredByTheCycleInFlight(t *testing.T) {
+	transport := &parkedUntilCancelTransport{fakeTransport: &fakeTransport{}, entered: make(chan struct{})}
+	registry := health.NewRegistry(time.Second)
+	runner, err := New(transport, handlerFunc(func(context.Context, Message) error { return nil }), testConfig(), registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := (health.Gate{Registry: registry}).Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	// The run loop is now parked inside ReadNew, before the cycle's success tail.
+	<-transport.entered
+	if err := runner.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if readiness := registry.Readiness(context.Background()); readiness.Ready {
+		t.Fatalf("readiness after Shutdown = %#v, want not ready", readiness)
+	}
+	runner.mu.Lock()
+	up, lastSuccess := runner.up, runner.lastSuccess
+	runner.mu.Unlock()
+	if up {
+		t.Fatal("up gauge is set after Shutdown; the in-flight cycle's success tail restored it")
+	}
+	// lastSuccess feeds worker_stream_last_success_age_seconds; the success tail
+	// sets it in the same statement as up, so it is pinned separately: a tail
+	// that keeps the readiness guard but moves this assignment outside it must
+	// also fail here.
+	if !lastSuccess.IsZero() {
+		t.Fatalf("last-success time = %v after Shutdown; the in-flight cycle's success tail set it", lastSuccess)
+	}
+}
+
 // TestRunnerWithoutALoggerDoesNotFallBackToSlogDefault proves the nil-logger
 // path is inert: a runner given no Config.Logger must not panic on a cycle
 // failure, and it must not fall back to slog.Default() -- that would send

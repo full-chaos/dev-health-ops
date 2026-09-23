@@ -24,8 +24,12 @@ import (
 // the tables it touches directly, rather than running the full Python
 // alembic chain -- the columns here are taken from the SQLAlchemy models
 // this package's queries were written against (models/ingest_auth.py,
-// models/external_ingest.py, models/integrations.py) plus the minimal
-// feature-flag tables featuregate.go reads.
+// models/external_ingest.py, models/integrations.py) plus the tables
+// internal/api/licensing.PostgresStore.Decide reads (org_feature_overrides
+// needs its `config` column -- see that package's own store_integration_test.go
+// for the DDL this mirrors; omitting it fails every Decide call with
+// "column org_override.config does not exist", surfaced here as the
+// generic internal_error "failed to resolve feature state").
 func createExternalIngestTables(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
 	statements := []string{
@@ -33,7 +37,7 @@ func createExternalIngestTables(t *testing.T, ctx context.Context, pool *pgxpool
 		`CREATE TABLE organizations (id uuid PRIMARY KEY, tier text)`,
 		`CREATE TABLE org_licenses (org_id uuid PRIMARY KEY, tier text, features_override jsonb)`,
 		`CREATE TABLE feature_flags (id uuid PRIMARY KEY, key text UNIQUE NOT NULL, is_enabled boolean NOT NULL, min_tier text NOT NULL)`,
-		`CREATE TABLE org_feature_overrides (org_id uuid, feature_id uuid, is_enabled boolean, expires_at timestamptz, PRIMARY KEY (org_id, feature_id))`,
+		`CREATE TABLE org_feature_overrides (org_id uuid, feature_id uuid, is_enabled boolean, expires_at timestamptz, config jsonb, PRIMARY KEY (org_id, feature_id))`,
 		`CREATE TABLE external_ingest_sources (
 			id uuid PRIMARY KEY, org_id text NOT NULL, system text NOT NULL, instance text NOT NULL,
 			entity_family text NOT NULL DEFAULT 'legacy', mode text NOT NULL DEFAULT 'disabled',

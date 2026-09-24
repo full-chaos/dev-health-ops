@@ -510,10 +510,24 @@ type smtpSender struct {
 
 func (sender *smtpSender) Name() string { return "smtp" }
 
+// errEnvelopeNotASCII is returned for a non-ASCII SMTP envelope address.
+var errEnvelopeNotASCII = errors.New("smtp envelope address is not ASCII (SMTPUTF8 is not negotiated)")
+
 func (sender *smtpSender) Send(ctx context.Context, message Message) error {
 	payload, err := sender.compose(message)
 	if err != nil {
 		return err
+	}
+	// smtplib writes MAIL FROM / RCPT TO as ASCII and this sender never
+	// negotiates SMTPUTF8, so Python raises UnicodeEncodeError for a
+	// non-ASCII envelope address and sends nothing. Writing the raw UTF-8 to
+	// a relay that did not advertise SMTPUTF8 is a protocol violation, so
+	// refuse before dialing. (A non-ASCII display name is fine: it travels in
+	// the encoded header, not the envelope.)
+	for _, address := range []string{sender.from, message.To} {
+		if !isASCII(envelopeAddress(address)) {
+			return errEnvelopeNotASCII
+		}
 	}
 	address := net.JoinHostPort(sender.host, strconv.Itoa(sender.port))
 	dialer := &net.Dialer{}

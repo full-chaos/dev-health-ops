@@ -322,6 +322,9 @@ func TestSMTPSenderMatchesLivePythonSMTPProvider(t *testing.T) {
 		{Name: "refused: bare newline in ascii subject", From: sender, To: recipient, Subject: "A\nB", HTML: "<p>x</p>", Refused: true},
 		{Name: "refused: CRLF in ascii subject", From: sender, To: recipient, Subject: "A\r\nB", HTML: "<p>x</p>", Refused: true},
 		{Name: "refused: newline in from", From: "a@example.test\nBcc: evil@example.test", To: recipient, Subject: "Hello", HTML: "<p>x</p>", Refused: true},
+		{Name: "refused: non-ascii recipient address", From: sender, To: "j\u00f6rg@example.test", Subject: "Hello", HTML: "<p>x</p>", Refused: true},
+		{Name: "refused: non-ascii recipient in a display-name form", From: sender, To: "Jorg <j\u00f6rg@example.test>", Subject: "Hello", HTML: "<p>x</p>", Refused: true},
+		{Name: "refused: non-ascii sender address", From: "d\u00e9v@example.test", To: recipient, Subject: "Hello", HTML: "<p>x</p>", Refused: true},
 		{Name: "refused: newline in to", From: sender, To: "owner@example.test\nBcc: evil@example.test", Subject: "Hello", HTML: "<p>x</p>", Refused: true},
 	}
 	names := make([]string, 0, len(cases))

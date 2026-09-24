@@ -873,3 +873,11 @@ func Field(body, name string) string { return field(body, name) }
 
 // JTIOf is the jti claim of a token ("" when it has none).
 func JTIOf(token string) string { return jtiOf(token) }
+
+// TableRows renders one of the scenario's row queries on the database at
+// uri, as the venue renders it: the Go-only replay compares these with the
+// rows recorded from the Python plane.
+func TableRows(t *testing.T, ctx context.Context, uri, query string) string {
+	t.Helper()
+	return venueoracle.TableRows(t, ctx, uri, query)
+}

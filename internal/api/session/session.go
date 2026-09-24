@@ -37,9 +37,9 @@ type Deps struct {
 	// ClickHouse is the api's own ClickHouse login, used for organization
 	// activity; nil means no activity (Python: no CLICKHOUSE_URI).
 	ClickHouse driver.Conn
-	// Limits is where the rate limits count: the api's shared store
-	// (Valkey when configured); nil means an in-process store on Now.
-	Limits httpapi.HitStore
+	// Limits is where the rate limits count: the api's shared counter
+	// store (Valkey when configured); nil means an in-process one on Now.
+	Limits httpapi.CounterStore
 	// Write renders the limits' refusal (httpapi.CodeRateLimited); nil
 	// means httpapi.WriteError.
 	Write httpapi.ErrorWriter
@@ -53,7 +53,10 @@ type Deps struct {
 	Logger  *slog.Logger
 }
 
-type handlers struct{ Deps }
+type handlers struct {
+	Deps
+	loginLimiter, refreshLimiter, validateLimiter *httpapi.KeyedLimiter
+}
 
 func (d Deps) withDefaults() Deps {
 	if d.Getenv == nil {
@@ -75,7 +78,7 @@ func (d Deps) withDefaults() Deps {
 		d.OAuth = oauthprovider.NewClient()
 	}
 	if d.Limits == nil {
-		d.Limits = httpapi.NewMemoryStore(d.Now)
+		d.Limits = httpapi.NewMemoryCounters(d.Now)
 	}
 	if d.Write == nil {
 		d.Write = httpapi.WriteError
@@ -89,19 +92,24 @@ func Routes(deps Deps) []httpapi.Route {
 	if deps.Pool == nil || deps.Guard == nil || deps.Auth == nil || deps.Verifier == nil || deps.Signer == nil {
 		return nil
 	}
-	h := handlers{Deps: deps.withDefaults()}
+	defaults := deps.withDefaults()
+	h := handlers{Deps: defaults,
+		loginLimiter:    httpapi.NewKeyedLimiter(defaults.Limits, loginLimit),
+		refreshLimiter:  httpapi.NewKeyedLimiter(defaults.Limits, refreshLimit),
+		validateLimiter: httpapi.NewKeyedLimiter(defaults.Limits, validateLimit),
+	}
 	guard := h.Guard
 	return []httpapi.Route{
 		{Method: http.MethodPost, Pattern: "/api/v1/auth/login", Handler: guard.BodyFirst(policy.Public,
-			httpapi.ValidateThenLimit(validateLogin, h.Limits, loginLimit, forwardedIPKey, h.Write)(http.HandlerFunc(h.login)))},
+			httpapi.ValidateThenLimit(validateLogin, h.loginLimiter, forwardedIPKey, h.Write)(http.HandlerFunc(h.login)))},
 		{Method: http.MethodPost, Pattern: "/api/v1/auth/social-login", Handler: guard.BodyFirst(policy.Public, http.HandlerFunc(h.socialLogin))},
 		{Method: http.MethodPost, Pattern: "/api/v1/auth/refresh", Handler: guard.BodyFirst(policy.Public,
-			httpapi.ValidateThenLimit(validateRefresh, h.Limits, refreshLimit, forwardedIPKey, h.Write)(http.HandlerFunc(h.refresh)))},
+			httpapi.ValidateThenLimit(validateRefresh, h.refreshLimiter, forwardedIPKey, h.Write)(http.HandlerFunc(h.refresh)))},
 		{Method: http.MethodGet, Pattern: "/api/v1/auth/me", Handler: guard.Wrap(policy.Authenticated, http.HandlerFunc(h.me))},
 		{Method: http.MethodGet, Pattern: "/api/v1/auth/me/organizations", Handler: guard.Wrap(policy.Authenticated, http.HandlerFunc(h.myOrganizations))},
 		{Method: http.MethodPost, Pattern: "/api/v1/auth/switch-org", Handler: guard.BodyFirst(policy.Authenticated, http.HandlerFunc(h.switchOrg))},
 		{Method: http.MethodPost, Pattern: "/api/v1/auth/validate", Handler: guard.BodyFirst(policy.Public,
-			httpapi.ValidateThenLimit(h.validateTokenBody, h.Limits, validateLimit, validateLimitKey, h.Write)(http.HandlerFunc(h.validate)))},
+			httpapi.ValidateThenLimit(h.validateTokenBody, h.validateLimiter, validateLimitKey, h.Write)(http.HandlerFunc(h.validate)))},
 		{Method: http.MethodPost, Pattern: "/api/v1/auth/logout", Handler: guard.BodyFirst(policy.Public, http.HandlerFunc(h.logout))},
 	}
 }

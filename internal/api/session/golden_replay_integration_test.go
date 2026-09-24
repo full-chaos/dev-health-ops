@@ -26,7 +26,6 @@ import (
 	chclickhouse "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/sessionscenario"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
 // schemaDDL is the slice of the Alembic schema the session routes and the
@@ -111,7 +110,7 @@ func TestSessionRoutesMatchGolden(t *testing.T) {
 			}
 		},
 		Reset: st.openWindows,
-		Rows:  func(query string) (string, string) { return "", venueoracle.TableRows(t, ctx, pg.URI, query) },
+		Rows:  func(query string) (string, string) { return "", sessionscenario.TableRows(t, ctx, pg.URI, query) },
 	})
 	t.Log("\n" + receipt)
 }
@@ -196,7 +195,7 @@ func startStack(t *testing.T, ctx context.Context) stack {
 	oauth := oauthprovider.NewClient()
 	oauth.Endpoints = sessionscenario.ProviderEndpoints(fake.URL)
 	routes := session.Routes(session.Deps{Pool: pool, Guard: policy.NewGuard(auth, logger), Auth: auth, Verifier: verifier,
-		Signer: signer, ClickHouse: chConn, Limits: httpapi.NewMemoryStore(limiterNow), Write: apiservice.WriteError, OAuth: oauth, Logger: logger})
+		Signer: signer, ClickHouse: chConn, Limits: httpapi.NewMemoryCounters(limiterNow), Write: apiservice.WriteError, OAuth: oauth, Logger: logger})
 	mux := http.NewServeMux()
 	for _, route := range routes {
 		mux.Handle(route.Method+" "+route.Pattern, route.Handler)

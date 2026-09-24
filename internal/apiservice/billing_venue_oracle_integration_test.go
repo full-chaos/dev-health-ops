@@ -231,6 +231,29 @@ func (f *fakeStripe) serve(plane string, w http.ResponseWriter, r *http.Request)
 		}
 		id := f.next(plane, "bps")
 		fmt.Fprintf(w, `{"id": %q, "object": "billing_portal.session", "url": "https://portal.venue.test/%s"}`, id, id)
+	case r.Method == http.MethodGet && strings.HasPrefix(path, "/v1/checkout/sessions/") && strings.HasSuffix(path, "/line_items"):
+		session := strings.TrimSuffix(strings.TrimPrefix(path, "/v1/checkout/sessions/"), "/line_items")
+		item := func(price string) string {
+			return `{"id": "li_venue", "object": "item", "quantity": 1, "price": ` + price + `}`
+		}
+		var items []string
+		switch session {
+		case "cs_fail":
+			stripeFail(w, "No such checkout.session")
+			return
+		case "cs_ent":
+			items = []string{item(`{"id": "price_ent_cfg", "object": "price"}`)}
+		case "cs_unknown":
+			items = []string{item(`{"id": "price_other", "object": "price"}`)}
+		case "cs_nullprice":
+			items = []string{item("null"), item(`{"id": "price_ent_cfg", "object": "price"}`)}
+		case "cs_noprice":
+			items = []string{`{"id": "li_venue", "object": "item", "quantity": 1}`}
+		case "cs_empty":
+		default:
+			items = []string{item(`{"id": "price_team_cfg", "object": "price"}`)}
+		}
+		fmt.Fprintf(w, `{"object": "list", "url": %q, "has_more": false, "data": [%s]}`, path, strings.Join(items, ", "))
 	case r.Method == http.MethodGet && fakeLists[path] != nil:
 		after := r.URL.Query().Get("starting_after")
 		if after == "" {

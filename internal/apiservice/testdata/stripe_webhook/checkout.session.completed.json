@@ -1,0 +1,127 @@
+{
+ "id": "evt_probe_checkout_0",
+ "object": "event",
+ "api_version": "2026-02-25.clover",
+ "created": 1790241578,
+ "data": {
+  "object": {
+   "id": "cs_test_a1EDNfqrmROCILwy8SzCATfxf9ZsOkSOTRG0ba9dLJ3jcazbHNEtTgKmVA",
+   "object": "checkout.session",
+   "adaptive_pricing": {
+    "enabled": true
+   },
+   "after_expiration": null,
+   "allow_promotion_codes": null,
+   "allowed_payment_method_types": null,
+   "amount_subtotal": 0,
+   "amount_total": 0,
+   "automatic_tax": {
+    "enabled": false,
+    "liability": null,
+    "provider": null,
+    "status": null
+   },
+   "billing_address_collection": null,
+   "branding_settings": {
+    "background_color": "#ffffff",
+    "border_style": "rounded",
+    "button_color": "#0074d4",
+    "display_name": "Full Chaos, LLC sandbox",
+    "font_family": "default",
+    "icon": null,
+    "logo": null
+   },
+   "cancel_url": "https://app.venue.test/no",
+   "client_reference_id": "33c69352-c896-47ca-bb3d-97618e9a6bc4",
+   "client_secret": null,
+   "collected_information": null,
+   "consent": null,
+   "consent_collection": null,
+   "created": 1790241578,
+   "currency": "usd",
+   "currency_conversion": null,
+   "custom_fields": [],
+   "custom_text": {
+    "after_submit": null,
+    "shipping_address": null,
+    "submit": null,
+    "terms_of_service_acceptance": null
+   },
+   "customer": null,
+   "customer_account": null,
+   "customer_creation": "always",
+   "customer_details": null,
+   "customer_email": null,
+   "discounts": [],
+   "expires_at": 1790327978,
+   "integration_identifier": null,
+   "invoice": null,
+   "invoice_creation": null,
+   "livemode": false,
+   "locale": null,
+   "managed_payments": {
+    "enabled": false
+   },
+   "metadata": {
+    "org_id": "33c69352-c896-47ca-bb3d-97618e9a6bc4"
+   },
+   "mode": "subscription",
+   "origin_context": null,
+   "payment_intent": null,
+   "payment_link": null,
+   "payment_method_collection": "always",
+   "payment_method_configuration_details": {
+    "id": "pmc_1T4jv3EIXptJX86eOgx06Fzk",
+    "parent": null
+   },
+   "payment_method_options": {
+    "card": {
+     "request_three_d_secure": "automatic"
+    }
+   },
+   "payment_method_types": [
+    "card",
+    "klarna",
+    "link",
+    "cashapp",
+    "amazon_pay"
+   ],
+   "payment_status": "unpaid",
+   "permissions": null,
+   "phone_number_collection": {
+    "enabled": false
+   },
+   "recovered_from": null,
+   "saved_payment_method_options": {
+    "allow_redisplay_filters": [
+     "always"
+    ],
+    "payment_method_remove": "disabled",
+    "payment_method_save": null
+   },
+   "setup_intent": null,
+   "shipping_address_collection": null,
+   "shipping_cost": null,
+   "shipping_options": [],
+   "status": "open",
+   "submit_type": null,
+   "subscription": null,
+   "success_url": "https://app.venue.test/ok",
+   "total_details": {
+    "amount_discount": 0,
+    "amount_shipping": 0,
+    "amount_tax": 0
+   },
+   "ui_mode": "hosted",
+   "url": "https://checkout.stripe.com/c/pay/cs_test_a1EDNfqrmROCILwy8SzCATfxf9ZsOkSOTRG0ba9dLJ3jcazbHNEtTgKmVA#fidnandhYHdWcXxpYCc%2FJ2FgY2RwaXEnKSdicyc%2FNSknZHVsTmB8Jz8ndW5acWB2cVowNFExb3BdQExddXFPXT0zYEp3ZDRpN29ONUZ0U2ROcnM2UVJDM09gME5wVzVJYEljYjFWf1NMcDY8Nk9cYnN2N2JBf0YydTJSNUltQXVwR0RyZDY9fVVoVjU1N1J8MWB2NUQnKSdjd2poVmB3c2B3Jz9xd3BgKSdnZGZuYndqcGthRmppancnPycmY2NjY2NjJyknaWR8anBxUXx1YCc%2FJ3Zsa2JpYFpscWBoJyknYGtkZ2lgVWlkZmBtamlhYHd2Jz9xd3BgeCUl",
+   "wallet_options": null
+  }
+ },
+ "livemode": false,
+ "pending_webhooks": 1,
+ "request": {
+  "id": null,
+  "idempotency_key": null
+ },
+ "type": "checkout.session.completed"
+}

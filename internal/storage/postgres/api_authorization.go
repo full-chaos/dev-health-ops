@@ -64,7 +64,9 @@ func apiPosture() RolePosture {
 			// route syncs an existing row's tier/managed_by on an actual
 			// tier change (OrganizationService._sync_license_tier);
 			// CHAOS-6306 adds delete (a purge target) on top.
-			{"org_licenses", false, true, true},
+			// org_licenses insert: the Stripe webhook's checkout path creates
+			// an org's first license row (CHAOS-6517).
+			{"org_licenses", true, true, true},
 			// external-ingest (CHAOS-6246): bearer-token auth resolves the
 			// token row and bumps last_used_at/last_used_ip on every
 			// request that reaches a scope check (auth.go's bumpLastUsed).

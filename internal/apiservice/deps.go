@@ -22,6 +22,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	chclickhouse "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
@@ -132,6 +133,11 @@ type Deps struct {
 	// the key. BillingConfig is the rest of their configuration.
 	Stripe        *stripeclient.Provider
 	BillingConfig config.BillingConfig
+	// StripeWebhookSecret and LicensePrivateKey are the Stripe webhook's
+	// signing secret and license signing key; empty makes the webhook
+	// answer the Python api's 500 ("Billing not configured" / no license).
+	StripeWebhookSecret secrets.Value
+	LicensePrivateKey   secrets.Value
 	// ClickHouseDSN is the org-deletion route's analytics-table purge
 	// connection (CHAOS-6306), sourced from CLICKHOUSE_URI -- the same
 	// broadly-privileged, unrestricted-posture credential

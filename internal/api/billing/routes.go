@@ -21,6 +21,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
 const prefix = "/api/v1/billing"
@@ -31,24 +32,31 @@ type Deps struct {
 	Guard  *policy.Guard
 	Stripe *stripeclient.Provider
 	Config config.BillingConfig
-	Logger *slog.Logger
+	// WebhookSecret is STRIPE_WEBHOOK_SECRET; LicensePrivateKey is
+	// LICENSE_PRIVATE_KEY (the Stripe webhook's two secrets).
+	WebhookSecret     secrets.Value
+	LicensePrivateKey secrets.Value
+	Logger            *slog.Logger
 	// Now is the clock (nil = time.Now).
 	Now func() time.Time
 }
 
 type handlers struct {
-	pool   *pgxpool.Pool
-	stripe *stripeclient.Provider
-	config config.BillingConfig
-	logger *slog.Logger
-	now    func() time.Time
+	pool          *pgxpool.Pool
+	stripe        *stripeclient.Provider
+	config        config.BillingConfig
+	webhookSecret secrets.Value
+	licenseKey    secrets.Value
+	logger        *slog.Logger
+	now           func() time.Time
 }
 
 // Routes returns the area's routes, in the Python router's registration
 // order. Allow names the first route Starlette would find for a path, which
 // is the method its 405 reports.
 func Routes(deps Deps) []httpapi.Route {
-	h := handlers{pool: deps.Pool, stripe: deps.Stripe, config: deps.Config, logger: deps.Logger, now: deps.Now}
+	h := handlers{pool: deps.Pool, stripe: deps.Stripe, config: deps.Config, webhookSecret: deps.WebhookSecret,
+		licenseKey: deps.LicensePrivateKey, logger: deps.Logger, now: deps.Now}
 	if h.logger == nil {
 		h.logger = slog.Default()
 	}
@@ -79,6 +87,8 @@ func Routes(deps Deps) []httpapi.Route {
 		{Method: http.MethodPost, Pattern: prefix + "/refunds", Allow: http.MethodPost, Handler: body(policy.Authenticated, h.createRefund)},
 		{Method: http.MethodGet, Pattern: prefix + "/refunds", Handler: wrap(policy.Authenticated, h.listRefunds)},
 		{Method: http.MethodGet, Pattern: prefix + "/refunds/{refund_id}", Allow: http.MethodGet, Handler: wrap(policy.Authenticated, h.getRefund)},
+		// The Stripe webhook: Stripe's signature is its only credential.
+		{Method: http.MethodPost, Pattern: prefix + "/webhooks/stripe", Allow: http.MethodPost, Handler: http.HandlerFunc(h.stripeWebhook)},
 		{Method: http.MethodPost, Pattern: prefix + "/checkout", Allow: http.MethodPost, Handler: body(policy.Authenticated, h.checkout)},
 		{Method: http.MethodPost, Pattern: prefix + "/portal", Allow: http.MethodPost, Handler: wrap(policy.Authenticated, h.portal)},
 		{Method: http.MethodGet, Pattern: prefix + "/entitlements/{org_id}", Allow: http.MethodGet, Handler: wrap(policy.Authenticated, h.entitlements)},

@@ -42,6 +42,7 @@ var responseModelRoutes = map[string]bool{
 	"POST /api/v1/billing/refunds":                                        true,
 	"POST /api/v1/billing/subscriptions/cancel":                           true,
 	"POST /api/v1/billing/subscriptions/change-plan":                      true,
+	"POST /api/v1/billing/webhooks/stripe":                                true,
 	"POST /api/v1/billing/subscriptions/reactivate":                       true,
 	"PUT /api/v1/billing/plans/{plan_id}":                                 true,
 	"GET /api/v1/auth/me":                                                 true,

@@ -165,6 +165,17 @@ elif mode == "serve":
 
         _oauth.httpx = type("httpx_shim", (), {"AsyncClient": _RedirectedClient, "HTTPStatusError": httpx.HTTPStatusError,
                                                "RequestError": httpx.RequestError, "Response": httpx.Response})
+    # VENUE_STRIPE_SESSION_LINE_ITEMS=1 gives the checkout session service
+    # the list_line_items(session_id) the webhook's checkout handler calls
+    # (stripe-python's is sessions.line_items.list), so the handler reads the
+    # line items it was written to read instead of failing to TEAM.
+    if os.environ.get("VENUE_STRIPE_SESSION_LINE_ITEMS") == "1":
+        from stripe.checkout._session_service import SessionService as _CheckoutSessionService
+
+        def _list_line_items(self, session, params=None, options=None):
+            return self.line_items.list(session, params, options)
+
+        _CheckoutSessionService.list_line_items = _list_line_items
     # VENUE_STRIPE_EVENT_AS_DICT=1 hands the webhook handlers the verified
     # event as plain JSON dicts (a dict with attribute access), which is
     # what they were written against; stripe-python's StripeObject is not a

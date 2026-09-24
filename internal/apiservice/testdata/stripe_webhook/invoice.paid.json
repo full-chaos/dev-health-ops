@@ -1,0 +1,166 @@
+{
+ "id": "evt_1UJ8n3EIXptJX86eKchaUmxC",
+ "object": "event",
+ "api_version": "2026-02-25.clover",
+ "created": 1790241485,
+ "data": {
+  "object": {
+   "id": "in_1UJ8n1EIXptJX86eB3Nn1ali",
+   "object": "invoice",
+   "account_country": "US",
+   "account_name": "Full Chaos, LLC sandbox",
+   "account_tax_ids": null,
+   "amount_due": 1000,
+   "amount_overpaid": 0,
+   "amount_paid": 1000,
+   "amount_remaining": 0,
+   "amount_shipping": 0,
+   "application": null,
+   "attempt_count": 1,
+   "attempted": true,
+   "auto_advance": false,
+   "automatic_tax": {
+    "disabled_reason": null,
+    "enabled": false,
+    "liability": null,
+    "provider": null,
+    "status": null
+   },
+   "automatically_finalizes_at": null,
+   "billing_reason": "subscription_create",
+   "collection_method": "charge_automatically",
+   "created": 1790241483,
+   "currency": "usd",
+   "custom_fields": null,
+   "customer": "cus_VJmL8AsRlG1mDG",
+   "customer_account": null,
+   "customer_address": null,
+   "customer_email": "customer@example.com",
+   "customer_name": null,
+   "customer_phone": null,
+   "customer_shipping": null,
+   "customer_tax_exempt": "none",
+   "customer_tax_ids": [],
+   "default_payment_method": null,
+   "default_source": null,
+   "default_tax_rates": [],
+   "description": null,
+   "discounts": [],
+   "due_date": null,
+   "effective_at": 1790241483,
+   "ending_balance": 0,
+   "footer": null,
+   "from_invoice": null,
+   "hosted_invoice_url": "https://invoice.stripe.test/venue",
+   "invoice_pdf": "https://pay.stripe.test/venue",
+   "issuer": {
+    "type": "self"
+   },
+   "last_finalization_error": null,
+   "latest_revision": null,
+   "lines": {
+    "object": "list",
+    "data": [
+     {
+      "id": "il_1UJ8n0EIXptJX86e4xruKSUB",
+      "object": "line_item",
+      "amount": 1000,
+      "currency": "usd",
+      "description": "1 \u00d7 Venue venue-5fb8d856 (at $10.00 / month)",
+      "discount_amounts": [],
+      "discountable": true,
+      "discounts": [],
+      "invoice": "in_1UJ8n1EIXptJX86eB3Nn1ali",
+      "livemode": false,
+      "metadata": {},
+      "parent": {
+       "invoice_item_details": null,
+       "license_fee_subscription_details": null,
+       "subscription_item_details": {
+        "invoice_item": null,
+        "proration": false,
+        "proration_details": {
+         "credited_items": null
+        },
+        "subscription": "sub_1UJ8n0EIXptJX86ewrDPuKoH",
+        "subscription_item": "si_VJmLKiUpNjT3Dy"
+       },
+       "type": "subscription_item_details"
+      },
+      "period": {
+       "end": 1792833482,
+       "start": 1790241482
+      },
+      "pretax_credit_amounts": [],
+      "pricing": {
+       "price_details": {
+        "price": "price_1UJ8muEIXptJX86eoKRExtq0",
+        "product": "prod_VJmL0WyVWsP847"
+       },
+       "type": "price_details",
+       "unit_amount_decimal": "1000"
+      },
+      "quantity": 1,
+      "quantity_decimal": "1",
+      "subtotal": 1000,
+      "taxes": []
+     }
+    ],
+    "has_more": false,
+    "total_count": 1,
+    "url": "/v1/invoices/in_1UJ8n1EIXptJX86eB3Nn1ali/lines"
+   },
+   "livemode": false,
+   "metadata": {},
+   "next_payment_attempt": null,
+   "number": "S5KVPNOH-0001",
+   "on_behalf_of": null,
+   "parent": {
+    "quote_details": null,
+    "subscription_details": {
+     "metadata": {},
+     "subscription": "sub_1UJ8n0EIXptJX86ewrDPuKoH"
+    },
+    "type": "subscription_details"
+   },
+   "payment_settings": {
+    "default_mandate": null,
+    "payment_method_options": null,
+    "payment_method_types": null
+   },
+   "period_end": 1790241482,
+   "period_start": 1790241482,
+   "post_payment_credit_notes_amount": 0,
+   "pre_payment_credit_notes_amount": 0,
+   "receipt_number": null,
+   "rendering": null,
+   "shipping_cost": null,
+   "shipping_details": null,
+   "starting_balance": 0,
+   "statement_descriptor": null,
+   "status": "paid",
+   "status_transitions": {
+    "finalized_at": 1790241483,
+    "marked_uncollectible_at": null,
+    "paid_at": 1790241482,
+    "voided_at": null
+   },
+   "subtotal": 1000,
+   "subtotal_excluding_tax": 1000,
+   "test_clock": null,
+   "total": 1000,
+   "total_discount_amounts": [],
+   "total_excluding_tax": 1000,
+   "total_pretax_credit_amounts": [],
+   "total_taxes": [],
+   "webhooks_delivered_at": null
+  }
+ },
+ "livemode": false,
+ "pending_webhooks": 1,
+ "request": {
+  "id": "req_xtbv05j5qCXe1z",
+  "idempotency_key": null
+ },
+ "type": "invoice.paid"
+}

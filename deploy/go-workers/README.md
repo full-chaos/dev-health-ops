@@ -175,38 +175,30 @@ Every deploy artifact in this directory tree now *references*
 read a canonical operational table (`heavy`, `ops`, `sync`, `sync-provider`,
 `reconciler`, `scheduler`, and all three stream-runner profiles — the full
 `processes` list in `deployment.json`), so an explicit export now actually
-reaches them. **The default stays `1`** (rollout-safe, matching the binary's
-own omitted default per
-`.github/docs-legacy/architecture/canonical-operational-model.md`,
-"Ordering-contract rollout and recovery") — this PR does not, and must not,
-make any environment assume contract 2 on its own. Concretely:
+reaches them. **The default is `2`**, production's contract: the migrate Job
+now runs `dho migrate upgrade`, which applies the contract-2 ClickHouse head and
+refuses any other value, so every topology defaults the migrate Job and every
+worker to contract 2 together. Concretely:
 
 1. **Never restart a contract-1 binary against a contract-2 (post-067)
    table**, and never restart a contract-2 binary against a contract-1
    table — either direction fails a canonical-table read/write with
    `operational_old_writer_rejected` or an ordering-contract stale-state
    error, and there is no automatic recovery.
-2. At cutover, set `OPERATIONAL_ORDERING_CONTRACT=2` for the migrate job
-   **and** every worker process **in the same deploy pass** — not one
-   without the other, and not a config-file default forcing it ahead of
-   time. Migration 067 itself requires quiescing ingress and draining
-   queued work first (see the doc above). **The mechanism differs by
-   topology** (codex review, delta round 4 — the raw Kubernetes manifests
-   have no shell-interpolation surface, so "export it" alone silently does
-   nothing there):
-   - **Compose / Swarm**: export `OPERATIONAL_ORDERING_CONTRACT=2` in the
-     shell/`.env` before `docker compose`/`docker stack deploy` — every
-     `migrate`/worker service in both files references `${OPERATIONAL_ORDERING_CONTRACT:-1}`,
-     so one export reaches all of them.
-   - **Raw Kubernetes manifests**: there is no environment to export into.
-     Edit the literal `OPERATIONAL_ORDERING_CONTRACT` value in the
-     `dev-health-go-worker-config` ConfigMap (`deploy/kubernetes/go-workers.yaml`)
-     from `"1"` to `"2"`, then `kubectl apply -k deploy/kubernetes/` — the
-     migrate Job and every go-* Deployment envFrom that one ConfigMap.
-   - **Helm**: set `--set goWorkers.operationalOrderingContract=2` (or the
-     equivalent `values.yaml` edit) and `helm upgrade` — the migrate Job's
-     template and every worker group's template both read this single
-     values key, so one flag reaches both.
+2. An environment whose ClickHouse is still contract 1 (067 not applied)
+   must not take this default: bring it to the head with the Python chain
+   (`dev-hops migrate clickhouse` with `OPERATIONAL_ORDERING_CONTRACT=2`,
+   after quiescing ingress and draining queued work, see the doc above), or
+   re-create it from the head, before deploying. `dho migrate clickhouse
+   status` reports where a database stands without changing it. Where the
+   contract is set by hand:
+   - **Compose / Swarm**: every `migrate`/worker service references
+     `${OPERATIONAL_ORDERING_CONTRACT:-2}`.
+   - **Raw Kubernetes manifests**: the `dev-health-go-worker-config`
+     ConfigMap (`deploy/kubernetes/go-workers.yaml`) carries `"2"`, and the
+     migrate Job sets `2` itself.
+   - **Helm**: `goWorkers.operationalOrderingContract` (default `"2"`) feeds
+     the migrate Job and every worker group.
 3. The Python `api`/`metrics-api` services are **not** wired here on
    purpose. `src/dev_health_ops/storage/operational_current.py` reads the
    same env var for its own reader-shape selection, so once 067 is applied

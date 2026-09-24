@@ -53,10 +53,11 @@ own; roll them only after the migration Job has completed (see below).
   nonzero and relies on the kubelet's restart backoff as the overall timeout.
   Pods stuck in `Init:...` mean the migrate Job has not completed — check
   `kubectl -n dev-health logs job/dev-health-migrate`.
-- The check covers **ClickHouse only**. Postgres is external/optional in this
-  stack (the Alembic step is skipped when `POSTGRES_URI` is unset) and Alembic
-  has no equally cheap read-only pending-check wired into `dev-hops`; if you
-  run Postgres, use the explicit `kubectl wait` flow above for full ordering.
+- The check covers **ClickHouse only**. The migrate Job (`dho migrate
+  upgrade --river`) always applies the PostgreSQL head too, and refuses to
+  start without `POSTGRES_URI` or `MIGRATION_DATABASE_URI` in
+  `dev-health-migration-secrets`; use the explicit `kubectl wait` flow above
+  for full ordering.
 
 Notes:
 

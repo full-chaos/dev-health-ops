@@ -30,6 +30,8 @@ type faultReader struct {
 	calls map[string]int
 	// noPlannerRun makes the job run carry no sync_run_id.
 	noPlannerRun bool
+	// noBackfillJob makes backfillJobByID find no job.
+	noBackfillJob bool
 }
 
 var (
@@ -116,6 +118,15 @@ func (f *faultReader) runUnits(context.Context, string, uuid.UUID) ([]runUnit, e
 func (f *faultReader) watermarkRows(context.Context, string, []string, []string) ([]schedsync.WatermarkRow, error) {
 	return nil, f.hit("watermarkRows")
 }
+func (f *faultReader) backfillJobByID(context.Context, string, uuid.UUID) (*backfillJob, error) {
+	if f.noBackfillJob {
+		return nil, f.hit("backfillJobByID")
+	}
+	task := "sync_run:" + faultRunID.String()
+	return &backfillJob{ID: uuid.New(), CeleryTaskID: &task,
+		SinceDate:  time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		BeforeDate: time.Date(2026, 1, 3, 0, 0, 0, 0, time.UTC)}, f.hit("backfillJobByID")
+}
 func (f *faultReader) coverageProjection(context.Context, string, uuid.UUID, int, int) (*coverageProjection, error) {
 	return &coverageProjection{Payload: "{}"}, f.hit("coverageProjection")
 }
@@ -162,6 +173,8 @@ func TestEveryStoreFailureIsA500(t *testing.T) {
 		{"backfill", func(h *handlers) http.HandlerFunc { return h.listBackfillJobs }, nil, []string{
 			"countBackfillJobs", "backfillJobs", "syncRunByID", "unitActivity", "runStatusCounts"}},
 		{"sync run", func(h *handlers) http.HandlerFunc { return h.getSyncRun }, run, []string{"syncRunByID"}},
+		{"backfill job", func(h *handlers) http.HandlerFunc { return h.getBackfillJob }, map[string]string{"job_id": faultRunID.String()},
+			[]string{"backfillJobByID", "syncRunByID", "unitActivity", "runStatusCounts"}},
 	}
 	for _, tc := range cases {
 		for _, method := range append([]string{""}, tc.methods...) {

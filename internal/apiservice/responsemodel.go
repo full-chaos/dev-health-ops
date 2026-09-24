@@ -66,6 +66,7 @@ var responseModelRoutes = map[string]bool{
 	"GET /api/v1/admin/audit-logs/user/{user_id}":                         true,
 	"GET /api/v1/admin/audit-logs/{log_id}":                               true,
 	"GET /api/v1/admin/backfill-jobs":                                     false,
+	"GET /api/v1/admin/backfill-jobs/{job_id}":                            false,
 	"GET /api/v1/admin/credentials":                                       true,
 	"GET /api/v1/admin/credentials/{provider}/{name}":                     true,
 	"GET /api/v1/admin/customer-push/batches/{ingestion_id}":              true,

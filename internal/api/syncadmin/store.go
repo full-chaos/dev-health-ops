@@ -32,6 +32,7 @@ type reader interface {
 	runStatusCounts(ctx context.Context, orgID string, runID uuid.UUID) (map[string]int64, error)
 	runUnits(ctx context.Context, orgID string, runID uuid.UUID) ([]runUnit, error)
 	watermarkRows(ctx context.Context, orgID string, sourceKeys, lookupValues []string) ([]schedsync.WatermarkRow, error)
+	backfillJobByID(ctx context.Context, orgID string, id uuid.UUID) (*backfillJob, error)
 	coverageProjection(ctx context.Context, orgID string, configID uuid.UUID, lookbackDays, version int) (*coverageProjection, error)
 }
 
@@ -411,24 +412,45 @@ func (s store) countBackfillJobs(ctx context.Context, orgID string) (int64, erro
 
 func (s store) backfillJobs(ctx context.Context, orgID string, limit, offset int64) ([]backfillJob, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT id, org_id, sync_config_id, celery_task_id, status, since_date, before_date, total_chunks,
-completed_chunks, failed_chunks, error_message, started_at, completed_at, created_at, updated_at
-FROM backfill_jobs WHERE org_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3`, orgID, limit, offset)
+		`SELECT `+backfillJobColumns+` FROM backfill_jobs WHERE org_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3`,
+		orgID, limit, offset)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	var jobs []backfillJob
 	for rows.Next() {
-		var job backfillJob
-		if err := rows.Scan(&job.ID, &job.OrgID, &job.SyncConfigID, &job.CeleryTaskID, &job.Status, &job.SinceDate,
-			&job.BeforeDate, &job.TotalChunks, &job.CompletedChunks, &job.FailedChunks, &job.ErrorMessage,
-			&job.StartedAt, &job.CompletedAt, &job.CreatedAt, &job.UpdatedAt); err != nil {
+		job, err := scanBackfillJob(rows)
+		if err != nil {
 			return nil, err
 		}
-		jobs = append(jobs, job)
+		jobs = append(jobs, *job)
 	}
 	return jobs, rows.Err()
+}
+
+const backfillJobColumns = `id, org_id, sync_config_id, celery_task_id, status, since_date, before_date, total_chunks,
+completed_chunks, failed_chunks, error_message, started_at, completed_at, created_at, updated_at`
+
+func scanBackfillJob(row pgx.Row) (*backfillJob, error) {
+	var job backfillJob
+	if err := row.Scan(&job.ID, &job.OrgID, &job.SyncConfigID, &job.CeleryTaskID, &job.Status, &job.SinceDate,
+		&job.BeforeDate, &job.TotalChunks, &job.CompletedChunks, &job.FailedChunks, &job.ErrorMessage,
+		&job.StartedAt, &job.CompletedAt, &job.CreatedAt, &job.UpdatedAt); err != nil {
+		return nil, err
+	}
+	return &job, nil
+}
+
+// backfillJobByID is BackfillJobService.get_job after the id parsed: the
+// org's job, nil when none.
+func (s store) backfillJobByID(ctx context.Context, orgID string, id uuid.UUID) (*backfillJob, error) {
+	job, err := scanBackfillJob(s.pool.QueryRow(ctx,
+		`SELECT `+backfillJobColumns+` FROM backfill_jobs WHERE id = $1 AND org_id = $2`, id, orgID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	return job, err
 }
 
 // unitActivity is _backfill_job_run_counts's latest unit updated_at and

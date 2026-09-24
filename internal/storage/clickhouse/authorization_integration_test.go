@@ -122,6 +122,11 @@ const (
 	// Team drift review's edge tables (CHAOS-6312).
 	grantMembershipsExact = "GRANT INSERT ON default.team_memberships"
 	grantFallbacksExact   = "GRANT INSERT ON default.manual_attribution_fallbacks"
+
+	// The backfill job detail's metrics diagnostics reads (CHAOS-6439);
+	// its repo_metrics_daily read rides grantMetricsExact below.
+	grantRepoComplexityExact = "GRANT SELECT ON default.repo_complexity_daily"
+	grantCompoundingExact    = "GRANT SELECT ON default.compounding_risk_daily"
 )
 
 // grantMetricsExact are the read-only metric-table grants of the manifest
@@ -134,11 +139,13 @@ var grantMetricsExact = []string{
 	"GRANT SELECT ON default.work_item_metrics_daily",
 }
 
-// importGrants is the exact grant set for the three import tables and the
-// metric tables, appended to each test's teams/identities grants so the
-// whole manifest is met.
+// importGrants is the exact grant set for every declared table other than
+// teams and identities (the import tables, the backfill diagnostics reads
+// and the metric tables), appended to each test's teams/identities grants so
+// the whole manifest is met.
 func importGrants() []string {
-	return append([]string{grantSyncPoliciesExact, grantObservationsExact, grantDriftChangesExact, grantMembershipsExact, grantFallbacksExact}, grantMetricsExact...)
+	return append([]string{grantSyncPoliciesExact, grantObservationsExact, grantDriftChangesExact, grantMembershipsExact, grantFallbacksExact,
+		grantRepoComplexityExact, grantCompoundingExact}, grantMetricsExact...)
 }
 
 // TestCheckPostureAcceptsExactMatch proves the happy path: a user granted

@@ -10,6 +10,7 @@
 //	GET /api/v1/admin/sync-configs/{config_id}/jobs
 //	GET /api/v1/admin/sync-configs/{config_id}/coverage
 //	GET /api/v1/admin/backfill-jobs
+//	GET /api/v1/admin/backfill-jobs/{job_id}
 //	GET /api/v1/admin/sync-runs/{run_id}
 //	GET /api/v1/admin/sync-runs/{run_id}/units
 //
@@ -26,6 +27,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -44,10 +46,14 @@ const prefix = "/api/v1/admin"
 // the protected-route runtime. LookupEnv reads HIDE_MIGRATED_CHILD_CONFIGS
 // per request as the Python route does (nil means os.LookupEnv).
 type Deps struct {
-	Pool      *pgxpool.Pool
-	Guard     *policy.Guard
-	Logger    *slog.Logger
-	LookupEnv func(string) (string, bool)
+	Pool *pgxpool.Pool
+	// ClickHouse is the api's own ClickHouse login; nil when the api has
+	// none (the backfill job detail then carries no metrics diagnostics,
+	// as the Python route does without a ClickHouse URI).
+	ClickHouse driver.Conn
+	Guard      *policy.Guard
+	Logger     *slog.Logger
+	LookupEnv  func(string) (string, bool)
 }
 
 // Routes is the area's route set.
@@ -67,6 +73,9 @@ func Routes(deps Deps) []httpapi.Route {
 		lookupEnv: lookup,
 		clock:     time.Now,
 	}
+	if deps.ClickHouse != nil {
+		h.diagnostics = clickhouseDiagnostics{conn: deps.ClickHouse}
+	}
 	wrap := func(handler http.HandlerFunc) http.Handler { return deps.Guard.Wrap(policy.AdminOrg, handler) }
 	return []httpapi.Route{
 		{Method: http.MethodGet, Pattern: prefix + "/sync-configs/auto-import-capabilities", Handler: wrap(h.autoImportCapabilities)},
@@ -77,6 +86,7 @@ func Routes(deps Deps) []httpapi.Route {
 		{Method: http.MethodGet, Pattern: prefix + "/sync-configs/{config_id}/jobs", Handler: wrap(h.listJobs)},
 		{Method: http.MethodGet, Pattern: prefix + "/sync-configs/{config_id}/coverage", Handler: wrap(h.getCoverage)},
 		{Method: http.MethodGet, Pattern: prefix + "/backfill-jobs", Handler: wrap(h.listBackfillJobs)},
+		{Method: http.MethodGet, Pattern: prefix + "/backfill-jobs/{job_id}", Handler: wrap(h.getBackfillJob)},
 		{Method: http.MethodGet, Pattern: prefix + "/sync-runs/{run_id}", Handler: wrap(h.getSyncRun)},
 		{Method: http.MethodGet, Pattern: prefix + "/sync-runs/{run_id}/units", Handler: wrap(h.getRunUnits)},
 	}
@@ -89,6 +99,8 @@ type handlers struct {
 	lookupEnv func(string) (string, bool)
 	// clock is build_dataset_freshness's datetime.now(timezone.utc).
 	clock func() time.Time
+	// diagnostics is nil when the api has no ClickHouse login.
+	diagnostics diagnosticsReader
 }
 
 // orgID is get_admin_org_id's value; the guard already refused an empty

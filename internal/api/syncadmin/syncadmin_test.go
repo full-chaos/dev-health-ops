@@ -75,6 +75,7 @@ func TestEveryRouteIsGuardedAtAdminOrg(t *testing.T) {
 		"GET /api/v1/admin/sync-configs/{config_id}/jobs",
 		"GET /api/v1/admin/sync-configs/{config_id}/coverage",
 		"GET /api/v1/admin/backfill-jobs",
+		"GET /api/v1/admin/backfill-jobs/{job_id}",
 		"GET /api/v1/admin/sync-runs/{run_id}",
 		"GET /api/v1/admin/sync-runs/{run_id}/units",
 	}
@@ -94,7 +95,7 @@ func TestEveryRouteIsGuardedAtAdminOrg(t *testing.T) {
 		if got := route.Method + " " + route.Pattern; got != want[index] {
 			t.Fatalf("route %d = %q, want %q", index, got, want[index])
 		}
-		path := strings.NewReplacer("{config_id}", uuid.NewString(), "{run_id}", uuid.NewString()).Replace(route.Pattern)
+		path := strings.NewReplacer("{config_id}", uuid.NewString(), "{run_id}", uuid.NewString(), "{job_id}", uuid.NewString()).Replace(route.Pattern)
 		for _, tc := range cases {
 			request := httptest.NewRequest(route.Method, path+"?limit=bad", nil)
 			if tc.authorization != "" {

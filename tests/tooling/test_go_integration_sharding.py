@@ -116,6 +116,10 @@ EXPECTED_PACKAGES = {
     # The api's protected-route policy read path: provision, migrate, api
     # readiness and an authenticated request on a real Postgres.
     "internal/api/policy",
+    # The sync admin reads' venue differential oracle: the real Python api
+    # and dho api on two copies of one seeded Postgres (skips without the
+    # live Python env).
+    "internal/api/syncadmin",
     # The team + identity admin CRUD store/handlers: real ClickHouse CRUD
     # round trips and the identity POST route's 404/409/facet-reconciliation
     # logic, against a real server (testcontainers).

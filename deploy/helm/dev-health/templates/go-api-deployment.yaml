@@ -83,6 +83,15 @@ spec:
               valueFrom: {secretKeyRef: {name: {{ include "dev-health.secretName" . }}, key: API_DATABASE_URI}}
             - name: JWT_SECRET_KEY
               valueFrom: {secretKeyRef: {name: {{ include "dev-health.secretName" . }}, key: JWT_SECRET_KEY}}
+            {{- /*
+            A route-behaviour setting the Python api reads from the platform
+            ConfigMap it envFroms: dho api reads the SAME key of the SAME
+            ConfigMap, so the two planes can never disagree on it. Optional:
+            an absent key leaves the variable unset on both planes.
+            HIDE_MIGRATED_CHILD_CONFIGS filters GET /api/v1/admin/sync-configs.
+            */}}
+            - name: HIDE_MIGRATED_CHILD_CONFIGS
+              valueFrom: {configMapKeyRef: {name: {{ include "dev-health.configMapName" . }}, key: HIDE_MIGRATED_CHILD_CONFIGS, optional: true}}
           {{- with .Values.goApi.extraEnv }}
             {{- toYaml . | nindent 12 }}
           {{- end }}

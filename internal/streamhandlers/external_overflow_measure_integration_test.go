@@ -111,11 +111,9 @@ func overflowRecords(raw [][3]string) ([]externalSinkRecord, error) {
 // through the real Python sink (normalize_batch + write_batch) and the Go sink
 // against the same real ClickHouse schema (CHAOS-6415), logs both outcomes as
 // data, and asserts: a batch fails on one plane exactly when it fails on the
-// other, and where both succeed the stored rows are equal.
+// other, and the stored rows are equal (a failing kind is skipped whole and
+// every other kind is written, on both planes).
 func TestExternalSinkOutcomesMatchPythonAgainstClickHouse(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("needs the live Python sink (fastapi, pydantic, clickhouse_connect); run with DEV_HEALTH_LIVE_PYTHON_ORACLES=1 -tags=integration")
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	instance, err := containers.StartClickHouse(ctx)
@@ -231,10 +229,9 @@ func TestExternalSinkOutcomesMatchPythonAgainstClickHouse(t *testing.T) {
 			t.Errorf("%s: python failed=%v, go failed=%v (err %v)", item.Name, pythonFailed, goFailed, writeErr)
 			continue
 		}
-		// Both failed: what each plane wrote BEFORE failing may differ (Python
-		// writes its kinds in its own fixed order, Go in sorted order); the batch
-		// is retried whole either way and the writes are idempotent upserts.
-		if !pythonFailed && pythonStored != goStored {
+		// Python isolates per kind and Go does the same, so what is stored
+		// must be equal whether or not the batch failed.
+		if pythonStored != goStored {
 			t.Errorf("%s: stored rows differ: python %s, go %s", item.Name, pythonStored, goStored)
 		}
 	}

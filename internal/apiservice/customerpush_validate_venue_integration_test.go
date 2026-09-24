@@ -63,11 +63,17 @@ func customerPushValidateRequests(f customerPushWriteFixture, tokens map[string]
 			record("pull_request.v1", `{"repositoryExternalId": "r", "number": "0x1", "state": "merged", "createdAt": ".5", "additions": 1e300}`),
 			record("nope.v1", `{}`), record("it's", `{}`)),
 		"sixty errors": sixtyExtraKeys(),
+		// jiter's integer-part limit (4300 chars, sign included): Python answers
+		// a 200 row "number out of range" at the position 4301 chars in.
+		"integer part at limit":         `{"extra":` + strings.Repeat("1", 4300) + `}`,
+		"integer part over limit":       `{"extra":` + strings.Repeat("1", 4301) + `}`,
+		"signed integer part over":      `{"extra":-` + strings.Repeat("1", 4300) + `}`,
+		"float integer part over limit": `{"extra":` + strings.Repeat("1", 4301) + `.5}`,
 	} {
 		add("body: "+name, p, body, bearer("admin"))
 	}
 	add("naive vs aware window", p, `{"schemaVersion":"external-ingest.v1","idempotencyKey":"k","source":{"system":"github","instance":"i"},"window":{"startedAt":"2026-01-02T00:00:00","endedAt":"2026-01-01T00:00:00Z"},"records":[{"kind":"k","externalId":"e","payload":{}}]}`, bearer("admin"))
-	add("too large", p, envelope("external-ingest.v1", good)+strings.Repeat(" ", 5000), bearer("admin"))
+	add("too large", p, envelope("external-ingest.v1", good)+strings.Repeat(" ", 7000), bearer("admin"))
 	add("form content type", p, envelope("external-ingest.v1", good), map[string]string{"Authorization": "Bearer " + tokens["admin"], "Content-Type": "text/plain"})
 	add("GET validate", p, "\x00", bearer("admin"))
 	return out
@@ -90,11 +96,11 @@ func TestVenueOracleCustomerPushValidate(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
 	t.Setenv("EXTERNAL_INGEST_MAX_RECORDS", "3")
-	t.Setenv("EXTERNAL_INGEST_MAX_BODY_BYTES", "4000")
+	t.Setenv("EXTERNAL_INGEST_MAX_BODY_BYTES", "6000")
 	var seed customerPushWriteFixture
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Root: venueRoot(), JWTKey: venueKey, Logger: quietLogger(),
-		PythonEnv: []string{"EXTERNAL_INGEST_MAX_RECORDS=3", "EXTERNAL_INGEST_MAX_BODY_BYTES=4000"},
+		PythonEnv: []string{"EXTERNAL_INGEST_MAX_RECORDS=3", "EXTERNAL_INGEST_MAX_BODY_BYTES=6000"},
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
 			seed = customerPushWriteSeed(t, ctx, admin)
 			return seed.tokenSpecs()

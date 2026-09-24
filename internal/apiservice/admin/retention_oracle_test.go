@@ -199,7 +199,14 @@ VALUES ($1, $2, $3, 'team', 'r', '{}'::json, '{}'::json, 'success', now() - ($4 
 		send("W create days fractional", "POST", "", "ent", `{"resource_type":"work_items","retention_days":7.5}`),
 		send("W create days null", "POST", "", "ent", `{"resource_type":"work_items","retention_days":null}`),
 		send("W create days text", "POST", "", "ent", `{"resource_type":"work_items","retention_days":"abc"}`),
-		send("W create days past int32", "POST", "", "ent", `{"resource_type":"sync_logs_x","retention_days":2147483648}`),
+		// A valid type the org has no policy for yet, so each case reaches the
+		// integer checks and the 32-bit storage limit rather than the
+		// duplicate check (the override org holds only an audit_logs policy).
+		send("W create days past int32", "POST", "", "ovr", `{"resource_type":"work_items","retention_days":2147483648}`),
+		send("W create days beyond int64", "POST", "", "ovr", `{"resource_type":"work_items","retention_days":100000000000000000000000000000}`),
+		send("W create days float beyond int64", "POST", "", "ovr", `{"resource_type":"work_items","retention_days":1e19}`),
+		send("W create days boolean false", "POST", "", "ovr", `{"resource_type":"work_items","retention_days":false}`),
+		send("W create days boolean true", "POST", "", "ovr", `{"resource_type":"work_items","retention_days":true}`),
 		send("W create duplicate type", "POST", "", "ent", `{"resource_type":"audit_logs"}`),
 		send("W create missing type", "POST", "", "ent", `{}`),
 		send("W create null type", "POST", "", "ent", `{"resource_type":null}`),
@@ -233,6 +240,10 @@ VALUES ($1, $2, $3, 'team', 'r', '{}'::json, '{}'::json, 'success', now() - ($4 
 		send("W patch days zero", "PATCH", "/"+pAudit.String(), "ent", `{"retention_days":0}`),
 		send("W patch days fractional", "PATCH", "/"+pAudit.String(), "ent", `{"retention_days":1.5}`),
 		send("W patch days past int32", "PATCH", "/"+pAudit.String(), "ent", `{"retention_days":2147483648}`),
+		send("W patch days beyond int64", "PATCH", "/"+pAudit.String(), "ent", `{"retention_days":100000000000000000000000000000}`),
+		send("W patch days float beyond int64", "PATCH", "/"+pAudit.String(), "ent", `{"retention_days":-1e19}`),
+		send("W patch days boolean false", "PATCH", "/"+pInactive.String(), "ent", `{"retention_days":false}`),
+		send("W patch days boolean", "PATCH", "/"+pInactive.String(), "ent", `{"retention_days":true}`),
 		send("W patch bad bool", "PATCH", "/"+pAudit.String(), "ent", `{"is_active":"perhaps"}`),
 		send("W patch unknown", "PATCH", "/"+uuid.New().String(), "ent", `{}`),
 		send("W patch malformed id", "PATCH", "/nope", "ent", `{}`),

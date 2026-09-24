@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"math/big"
 	"net/http"
 	"time"
 
@@ -187,12 +188,12 @@ func (h *handlers) createRetentionPolicy(w http.ResponseWriter, r *http.Request)
 	object, ok := errs.Object(body)
 	var (
 		resourceType string
-		days         int64 = 90
+		days         = big.NewInt(90)
 		description  *string
 	)
 	if ok {
 		resourceType, _ = errs.RequiredString(object, "resource_type", 0, 0)
-		if value, present := errs.DefaultedBoundedInt(object, "retention_days", 1, math.MaxInt64); present {
+		if value, present := errs.DefaultedMinInt(object, "retention_days", 1); present {
 			days = value
 		}
 		if value, present := errs.OptionalString(object, "description", 0, 0); present {
@@ -238,13 +239,13 @@ func (h *handlers) createRetentionPolicy(w http.ResponseWriter, r *http.Request)
 	}
 	// retention_days is an Integer column; a value past int32 fails the
 	// insert (a 500) exactly as it does in Python.
-	if days > math.MaxInt32 {
+	if days.Cmp(big.NewInt(math.MaxInt32)) > 0 {
 		h.internalError(ctx, w, "insert retention policy", errors.New("retention_days out of range for integer"))
 		return
 	}
 	now := h.store.now().UTC()
 	created := &retentionPolicy{
-		ID: uuid.New(), OrgID: org, ResourceType: resourceType, RetentionDays: int32(days), Description: description,
+		ID: uuid.New(), OrgID: org, ResourceType: resourceType, RetentionDays: int32(days.Int64()), Description: description,
 		IsActive: true, CreatedByID: createdBy, CreatedAt: now, UpdatedAt: now,
 	}
 	if _, err := h.store.Pool.Exec(ctx, `
@@ -305,13 +306,13 @@ func (h *handlers) updateRetentionPolicy(w http.ResponseWriter, r *http.Request)
 	var errs pybody.Errors
 	object, ok := errs.Object(body)
 	var (
-		days        *int64
+		days        *big.Int
 		description *string
 		isActive    *bool
 	)
 	if ok {
-		if value, present := errs.OptionalBoundedInt(object, "retention_days", 1, math.MaxInt64); present {
-			days = &value
+		if value, present := errs.OptionalMinInt(object, "retention_days", 1); present {
+			days = value
 		}
 		if value, present := errs.OptionalString(object, "description", 0, 0); present {
 			description = &value
@@ -335,11 +336,11 @@ func (h *handlers) updateRetentionPolicy(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if days != nil {
-		if *days > math.MaxInt32 {
+		if days.Cmp(big.NewInt(math.MaxInt32)) > 0 {
 			h.internalError(ctx, w, "update retention policy", errors.New("retention_days out of range for integer"))
 			return
 		}
-		found.RetentionDays = int32(*days)
+		found.RetentionDays = int32(days.Int64())
 	}
 	if description != nil {
 		found.Description = description

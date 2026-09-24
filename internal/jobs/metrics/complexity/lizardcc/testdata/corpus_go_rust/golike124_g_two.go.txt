@@ -1,0 +1,4 @@
+package p
+func G1[T any]() { if a {} }
+func G2[T any]() { if b {} }
+func G3() { if c {} }

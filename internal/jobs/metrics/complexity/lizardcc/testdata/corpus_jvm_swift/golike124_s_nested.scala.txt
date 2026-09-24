@@ -1,0 +1,4 @@
+object O {
+ def f[A <: List[B], B](x: A): Int = { if (x.isEmpty) 0 else 1 }
+ def h() = { if (a) 1 else 2 }
+}

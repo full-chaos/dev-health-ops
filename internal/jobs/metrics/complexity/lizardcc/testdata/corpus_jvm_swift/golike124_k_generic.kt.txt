@@ -1,0 +1,5 @@
+fun <T> f(x: T): T {
+  if (x != null) return x
+  return x
+}
+fun g(a: Int): Int { if (a > 0) return 1; return 2 }

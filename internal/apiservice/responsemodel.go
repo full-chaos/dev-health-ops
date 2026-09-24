@@ -60,6 +60,7 @@ var responseModelRoutes = map[string]bool{
 	"DELETE /api/v1/admin/retention-policies/{policy_id}":                 true,
 	"DELETE /api/v1/admin/llm-settings":                                   true,
 	"DELETE /api/v1/admin/settings/{category}/{key}":                      true,
+	"DELETE /api/v1/admin/sync-configs/{config_id}":                       false,
 	"DELETE /api/v1/admin/teams/{team_id}":                                true,
 	"DELETE /api/v1/admin/users/{user_id}":                                true,
 	"GET /api/v1/admin/audit-logs":                                        true,

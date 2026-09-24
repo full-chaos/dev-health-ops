@@ -23,14 +23,19 @@ import (
 // environment at request time on both planes, so it must be set before
 // either plane answers a request).
 func TestImpersonationTTLConfigMatchesThePythonAPI(t *testing.T) {
-	t.Run("unicode digit TTL", func(t *testing.T) {
+	unicode := t.Run("unicode digit TTL", func(t *testing.T) {
 		runImpersonationTTLCase(t, "١٠") // Arabic-Indic "10"
 	})
-	t.Run("TTL beyond Go Duration range", func(t *testing.T) {
+	beyond := t.Run("TTL beyond Go Duration range", func(t *testing.T) {
 		// ~292.47 years in minutes -- the smallest value the live round
 		// found wrapping time.Duration's int64 nanoseconds negative.
 		runImpersonationTTLCase(t, "153722868")
 	})
+	// Each subtest compares both planes under its own name; the parent's
+	// proof stands for both having run to the end.
+	if unicode && beyond {
+		venueoracle.WriteProof(t)
+	}
 }
 
 func runImpersonationTTLCase(t *testing.T, ttlMinutes string) {

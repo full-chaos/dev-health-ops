@@ -1758,6 +1758,7 @@ check_venue_oracles() {
         GOWORK=off \
         DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
         DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${pkg_proof_dir}" \
+        PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
         go test -mod=readonly -tags=integration -count=1 -timeout=20m \
           -run "${pattern}" -json "${rel}"
     ) >"${json_log}" 2>"${stderr_log}" || go_test_status=$?

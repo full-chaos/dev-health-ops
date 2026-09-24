@@ -142,7 +142,7 @@ jobs:
         if: steps.relevance.outputs.relevant == 'true'
         run: |
           uv pip install --python .venv/bin/python --no-deps -r ci/requirements-deployed-python-api.txt
-          .venv/bin/python ci/check_deployed_python_pins.py
+          bash ci/check_deployed_python_pins.sh .venv/bin/python
 
       - name: Log in to GitHub Container Registry
         if: steps.relevance.outputs.relevant == 'true'

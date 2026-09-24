@@ -1,0 +1,6 @@
+fn f<T>(x: T) -> T {
+  if true { return x; }
+  x
+}
+fn g(a: i32) -> i32 { if a > 0 { 1 } else { 2 } }
+fn h<T: Clone, U>(t: T, u: U) { for _ in 0..3 { if true {} } }

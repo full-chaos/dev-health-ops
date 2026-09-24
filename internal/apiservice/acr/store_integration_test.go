@@ -5,6 +5,7 @@ package acr
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -107,4 +108,45 @@ VALUES ($1, $2, true)`, orgID, featureID); err != nil {
 			t.Fatal("AgentContextRuntime = false, want true: an active org override exists")
 		}
 	})
+}
+
+// TestPostgresEntitlementStoreReadyFailsWhenAnyEntitlementTableIsUnreadable:
+// the health route answers 503 when Ready fails, so Ready must fail when any
+// table the entitlement route reads is unreadable, not only organizations.
+func TestPostgresEntitlementStoreReadyFailsWhenAnyEntitlementTableIsUnreadable(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer closeCancel()
+		if err := instance.Close(closeCtx); err != nil {
+			t.Errorf("terminate PostgreSQL: %v", err)
+		}
+	}()
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	schemaFor(ctx, t, pool)
+
+	store := PostgresEntitlementStore{Pool: pool}
+	if err := store.Ready(ctx); err != nil {
+		t.Fatalf("Ready with every table readable = %v, want nil", err)
+	}
+	for _, table := range []string{"feature_flags", "org_feature_overrides", "org_licenses", "organizations"} {
+		if _, err := pool.Exec(ctx, fmt.Sprintf(`ALTER TABLE %q RENAME TO %q`, table, table+"_gone")); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.Ready(ctx); !errors.Is(err, ErrUnavailable) {
+			t.Errorf("Ready with %s unreadable = %v, want ErrUnavailable", table, err)
+		}
+		if _, err := pool.Exec(ctx, fmt.Sprintf(`ALTER TABLE %q RENAME TO %q`, table+"_gone", table)); err != nil {
+			t.Fatal(err)
+		}
+	}
 }

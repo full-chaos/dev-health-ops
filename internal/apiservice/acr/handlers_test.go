@@ -18,8 +18,11 @@ import (
 type fakeStore struct {
 	entitlement Entitlement
 	err         error
+	readyErr    error
 	gotOrgID    string
 }
+
+func (f *fakeStore) Ready(context.Context) error { return f.readyErr }
 
 func (f *fakeStore) Lookup(_ context.Context, orgID string) (Entitlement, error) {
 	f.gotOrgID = orgID
@@ -34,8 +37,8 @@ func newTestServer(store EntitlementStore) *httptest.Server {
 	return httptest.NewServer(mux)
 }
 
-func TestHealthHandlerIsStaticAndUnconditional(t *testing.T) {
-	server := newTestServer(nil)
+func TestHealthHandlerReadyStoreIsTheStaticBody(t *testing.T) {
+	server := newTestServer(&fakeStore{})
 	defer server.Close()
 
 	response, err := http.Get(server.URL + "/api/v1/internal/acr/health")
@@ -65,6 +68,34 @@ func TestHealthHandlerIsStaticAndUnconditional(t *testing.T) {
 	}
 	if response.Header.Get("Content-Type") != "application/json" {
 		t.Fatalf("Content-Type = %q", response.Header.Get("Content-Type"))
+	}
+}
+
+// TestHealthHandlerUnusableStoreIsServiceUnavailable: Python's health route
+// answers 503 when its Postgres read fails, and acr reads a non-200 health
+// as "entitlements unavailable".
+func TestHealthHandlerUnusableStoreIsServiceUnavailable(t *testing.T) {
+	for name, store := range map[string]EntitlementStore{
+		"nil store":      nil,
+		"ping fails":     &fakeStore{readyErr: errors.Join(errors.New("connection refused"), ErrUnavailable)},
+		"any ping error": &fakeStore{readyErr: errors.New("boom")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			server := newTestServer(store)
+			defer server.Close()
+			response, err := http.Get(server.URL + "/api/v1/internal/acr/health")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer response.Body.Close()
+			raw, err := io.ReadAll(response.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if response.StatusCode != http.StatusServiceUnavailable || string(raw) != `{"detail":"Service unavailable"}` {
+				t.Fatalf("health = %d %q, want 503 {\"detail\":\"Service unavailable\"}", response.StatusCode, raw)
+			}
+		})
 	}
 }
 
@@ -129,12 +160,14 @@ func TestEntitlementHandlerErrorStatusCodes(t *testing.T) {
 			if response.StatusCode != test.wantStatus {
 				t.Fatalf("status = %d, want %d", response.StatusCode, test.wantStatus)
 			}
-			var body map[string]string
-			if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+			raw, err := io.ReadAll(response.Body)
+			if err != nil {
 				t.Fatal(err)
 			}
-			if body["detail"] != test.wantDetail {
-				t.Fatalf("detail = %q, want %q", body["detail"], test.wantDetail)
+			// FastAPI's JSONResponse bytes: compact, no trailing newline.
+			want := `{"detail":"` + test.wantDetail + `"}`
+			if string(raw) != want {
+				t.Fatalf("body = %q, want %q", raw, want)
 			}
 		})
 	}
@@ -163,19 +196,12 @@ func TestRoutesCarryNoCredentialsOrAuthz(t *testing.T) {
 	}
 }
 
-// TestResponseBodyHasNoTrailingBytesAfterTheJSONValue is the regression
-// proof for switching writeJSON from a raw w.Write of pre-marshalled bytes
-// to json.NewEncoder(w).Encode (this repo's own JSON-response convention,
-// avoiding the go.lang.security.audit.xss.no-direct-write-to-responsewriter
-// class): Encode appends a trailing newline the old code never sent. acr's
-// own client decoder (internal/entitlements/response.go in the acr repo,
-// read-only for this change) reads the body with json.Decoder and asserts
-// `decoder.Decode(&struct{}{}) == io.EOF` immediately after the closing
-// brace to reject trailing garbage -- this test proves that check still
-// passes: a json.Decoder skips leading whitespace before deciding EOF, so a
-// single trailing "\n" is accepted exactly like an empty tail was.
+// TestResponseBodyHasNoTrailingBytesAfterTheJSONValue: acr's own client
+// decoder (internal/entitlements/response.go in the acr repo) reads the body
+// with json.Decoder and requires io.EOF right after the value, so no
+// trailing bytes may follow it. The policy writers send none.
 func TestResponseBodyHasNoTrailingBytesAfterTheJSONValue(t *testing.T) {
-	server := newTestServer(nil)
+	server := newTestServer(&fakeStore{})
 	defer server.Close()
 
 	response, err := http.Get(server.URL + "/api/v1/internal/acr/health")
@@ -194,5 +220,8 @@ func TestResponseBodyHasNoTrailingBytesAfterTheJSONValue(t *testing.T) {
 	}
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		t.Fatalf("acr's own trailing-garbage check (Decode after the value) = %v, want io.EOF -- got body %q", err, raw)
+	}
+	if raw[len(raw)-1] != '}' {
+		t.Fatalf("body %q ends after the JSON value", raw)
 	}
 }

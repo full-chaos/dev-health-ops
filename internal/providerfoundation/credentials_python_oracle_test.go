@@ -68,6 +68,101 @@ func TestFernetCipherMatchesLivePythonCustomSalt(t *testing.T) {
 	}
 }
 
+// TestFernetCipherMatchesLivePythonDefaultSalt is the same exchange with no
+// salt configured on either side: Python derives its key with
+// DEFAULT_SETTINGS_ENCRYPTION_SALT when SETTINGS_ENCRYPTION_SALT is absent
+// from the environment, and NewFernetDecryptor takes an empty salt as that
+// same default -- so a deployment that sets only the key (the shape the
+// shared Secret has) opens the other runtime's ciphertext.
+func TestFernetCipherMatchesLivePythonDefaultSalt(t *testing.T) {
+	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
+		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
+	}
+	_, currentFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve providerfoundation package path")
+	}
+	repositoryRoot := filepath.Clean(filepath.Join(filepath.Dir(currentFile), "..", ".."))
+	python := pyoracle.Resolve(t, repositoryRoot)
+
+	const (
+		key       = "default-salt-cross-runtime-test-key"
+		plaintext = "integration-credential-payload"
+	)
+	cipher, err := NewFernetDecryptor(secrets.NewValue(key), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	goCiphertext, err := cipher.Encrypt([]byte(plaintext))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pythonPlaintext := runPythonEncryptionOracle(t, python, repositoryRoot, map[string]string{
+		"SETTINGS_ENCRYPTION_KEY": key,
+		"CIPHERTEXT":              goCiphertext.Reveal(),
+	}, "from dev_health_ops.core.encryption import decrypt_value; import os; assert 'SETTINGS_ENCRYPTION_SALT' not in os.environ; print(decrypt_value(os.environ['CIPHERTEXT']))")
+	if pythonPlaintext != plaintext {
+		t.Fatalf("Python decrypted Go ciphertext as %q", pythonPlaintext)
+	}
+	pythonCiphertext := runPythonEncryptionOracle(t, python, repositoryRoot, map[string]string{
+		"SETTINGS_ENCRYPTION_KEY": key,
+		"PLAINTEXT":               plaintext,
+	}, "from dev_health_ops.core.encryption import encrypt_value; import os; assert 'SETTINGS_ENCRYPTION_SALT' not in os.environ; print(encrypt_value(os.environ['PLAINTEXT']))")
+	goPlaintext, err := cipher.Decrypt(secrets.NewValue(pythonCiphertext))
+	if err != nil || string(goPlaintext) != plaintext {
+		t.Fatalf("Go decrypt of Python ciphertext: plaintext=%q err=%v", goPlaintext, err)
+	}
+	// A custom salt must NOT open it: the default is the salt, not "no salt".
+	other, err := NewFernetDecryptor(secrets.NewValue(key), "some-other-salt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := other.Decrypt(secrets.NewValue(pythonCiphertext)); err == nil {
+		t.Fatal("a different salt decrypted the default-salt ciphertext")
+	}
+	proofDir := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
+	if proofDir == "" {
+		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
+	}
+	if err := os.WriteFile(filepath.Join(proofDir, "providerfoundation-credentials-default-salt"), []byte("executed"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestFernetRefusesWithoutKeyLikePython pins the behaviour the credential
+// routes inherit when a deployment has no SETTINGS_ENCRYPTION_KEY: Python's
+// encrypt_value raises (the route answers 500) and the Go encryptor refuses
+// too (its route answers 500), so a missing key is a refused write in both
+// planes, never a plaintext or default-key write.
+func TestFernetRefusesWithoutKeyLikePython(t *testing.T) {
+	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
+		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
+	}
+	_, currentFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve providerfoundation package path")
+	}
+	repositoryRoot := filepath.Clean(filepath.Join(filepath.Dir(currentFile), "..", ".."))
+	python := pyoracle.Resolve(t, repositoryRoot)
+
+	command := exec.Command(python, "-c", "from dev_health_ops.core.encryption import encrypt_value; encrypt_value('x')")
+	command.Env = []string{"PYTHONPATH=" + filepath.Join(repositoryRoot, "src"), "PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME")}
+	output, err := command.CombinedOutput()
+	if err == nil || !strings.Contains(string(output), "SETTINGS_ENCRYPTION_KEY environment variable is required") {
+		t.Fatalf("Python encrypt_value without a key: err=%v output=%s", err, output)
+	}
+	if _, err := (FernetDecryptor{}).Encrypt([]byte("x")); err == nil {
+		t.Fatal("the Go encryptor sealed a payload without a key")
+	}
+	proofDir := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
+	if proofDir == "" {
+		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
+	}
+	if err := os.WriteFile(filepath.Join(proofDir, "providerfoundation-credentials-no-key"), []byte("executed"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func runPythonEncryptionOracle(
 	t *testing.T,
 	python string,
@@ -78,6 +173,17 @@ func runPythonEncryptionOracle(
 	t.Helper()
 	command := exec.Command(python, "-c", program)
 	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(repositoryRoot, "src"))
+	if _, salted := values["SETTINGS_ENCRYPTION_SALT"]; !salted {
+		// An ambient salt would silently turn a default-salt exchange into a
+		// custom-salt one.
+		kept := command.Env[:0]
+		for _, entry := range command.Env {
+			if !strings.HasPrefix(entry, "SETTINGS_ENCRYPTION_SALT=") {
+				kept = append(kept, entry)
+			}
+		}
+		command.Env = kept
+	}
 	for key, value := range values {
 		command.Env = append(command.Env, key+"="+value)
 	}

@@ -1,0 +1,5 @@
+func f<T>(_ x: T) -> T {
+  if x != nil { return x }
+  return x
+}
+func g(_ a: Int) -> Int { if a > 0 { return 1 }; return 2 }

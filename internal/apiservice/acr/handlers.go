@@ -4,13 +4,14 @@
 // only inside the cluster network, so neither carries the bearer/mint check
 // or audit trail the Python routes had (api/internal/acr.py's credential
 // lookup and its InternalServiceCredentialAudit rows are not ported) -- the
-// network boundary is the control, not a per-request token. The
+// network boundary is the control, not a per-request token
+// (deploy/helm/dev-health's TestInternalACRRoutesStayOffThePublicIngress
+// pins that no Ingress routes to the Go api). The
 // agent_context_runtime entitlement decision itself is ported in full via
 // internal/api/licensing, this package's only dependency for it.
 package acr
 
 import (
-	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -42,7 +43,7 @@ func Routes(deps Deps) []httpapi.Route {
 		logger = slog.Default()
 	}
 	return []httpapi.Route{
-		{Method: http.MethodGet, Pattern: "/api/v1/internal/acr/health", Handler: healthHandler()},
+		{Method: http.MethodGet, Pattern: "/api/v1/internal/acr/health", Handler: healthHandler(deps.Store, logger)},
 		{
 			Method: http.MethodGet, Pattern: "/api/v1/internal/acr/entitlements/{org_id}",
 			Handler: entitlementHandler(deps.Store, logger),
@@ -64,16 +65,27 @@ type healthResponse struct {
 	Status        string `json:"status"`
 }
 
-// healthHandler is unconditional and dependency-free: with no credential
-// check on this route, the Python success body
-// (ACRServiceHealthResponse's field defaults, api/internal/acr.py:40-46) was
-// already static regardless of database state, so this route stays exactly
-// as cheap.
-func healthHandler() http.Handler {
+// healthHandler answers whether the entitlement service is usable, as
+// acr's client reads it. Python's health route reads Postgres on every call
+// (its credential lookup, api/internal/acr.py:93-103) and answers 503
+// "Service unavailable" when that read fails, so the Go route makes the
+// entitlement store's decision read (EntitlementStore.Ready): a nil store
+// or a failed read is that 503, anything else the static success body. No credential is checked (see the package comment).
+func healthHandler(store EntitlementStore, logger *slog.Logger) http.Handler {
 	response := healthResponse{
 		SchemaVersion: healthSchemaVersion, Service: "dev-health-ops", Status: "ok",
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if store == nil {
+			logger.ErrorContext(r.Context(), "acr health: no entitlement store configured")
+			writeDetail(w, http.StatusServiceUnavailable, "Service unavailable")
+			return
+		}
+		if err := store.Ready(r.Context()); err != nil {
+			logger.ErrorContext(r.Context(), "acr health: entitlement store unreachable", slog.Any("error", err))
+			writeDetail(w, http.StatusServiceUnavailable, "Service unavailable")
+			return
+		}
 		body := pyjson.NewObject()
 		body.Set("schema_version", response.SchemaVersion)
 		body.Set("service", response.Service)
@@ -88,7 +100,7 @@ func entitlementHandler(store EntitlementStore, logger *slog.Logger) http.Handle
 		if store == nil {
 			logger.ErrorContext(r.Context(), "acr entitlement lookup: no entitlement store configured",
 				slog.String("org_id", orgID))
-			writeDetail(w, r, logger, http.StatusServiceUnavailable, "Service unavailable")
+			writeDetail(w, http.StatusServiceUnavailable, "Service unavailable")
 			return
 		}
 		entitlement, err := store.Lookup(r.Context(), orgID)
@@ -100,27 +112,19 @@ func entitlementHandler(store EntitlementStore, logger *slog.Logger) http.Handle
 			body.Set("agent_context_runtime", entitlement.AgentContextRuntime)
 			writeModel(w, http.StatusOK, body)
 		case errors.Is(err, ErrOrgNotFound):
-			writeDetail(w, r, logger, http.StatusNotFound, "Not found")
+			writeDetail(w, http.StatusNotFound, "Not found")
 		case errors.Is(err, ErrUnavailable):
 			logger.ErrorContext(r.Context(), "acr entitlement lookup: store unavailable",
 				slog.String("org_id", orgID), slog.Any("error", err))
-			writeDetail(w, r, logger, http.StatusServiceUnavailable, "Service unavailable")
+			writeDetail(w, http.StatusServiceUnavailable, "Service unavailable")
 		default:
 			logger.ErrorContext(r.Context(), "acr entitlement lookup: unclassified error",
 				slog.String("org_id", orgID), slog.Any("error", err))
-			writeDetail(w, r, logger, http.StatusInternalServerError, "Internal Server Error")
+			policy.WriteInternal(w)
 		}
 	})
 }
 
-// writeDetail renders {"detail": "<text>"}, the shape FastAPI's own
-// HTTPException handler emits (Starlette's default exception handler:
-// {"detail": exc.detail}) -- the exact bodies
-// api/internal/acr.py:91,109,121,155,203 raise. acr's own client ignores
-// every non-200 body (internal/entitlements/client.go: "if StatusCode !=
-// 200 { return errUnavailable }"), so only the status code is load-bearing
-// for that caller; the body shape is kept 1:1 for any other caller and for
-// parity testing.
 // writeModel writes a success body as FastAPI writes the route's
 // response_model (policy.WriteModel), keeping this route family's nosniff
 // header.
@@ -128,26 +132,11 @@ func writeModel(w http.ResponseWriter, status int, body *pyjson.Object) {
 	policy.WriteModel(w, status, body, http.Header{"X-Content-Type-Options": {"nosniff"}})
 }
 
-func writeDetail(w http.ResponseWriter, r *http.Request, logger *slog.Logger, status int, detail string) {
-	writeJSON(w, r, logger, status, map[string]string{"detail": detail})
-}
-
-// writeJSON encodes value via json.NewEncoder(w).Encode -- this repo's own
-// JSON-response convention (cmd/query-api/pydantic_validation_error.go:
-// writePydanticValidationError), never a raw w.Write of pre-marshalled
-// bytes, which is the same Semgrep/CodeQL
-// go.lang.security.audit.xss.no-direct-write-to-responsewriter class
-// query-api's writers already avoid. Every value passed here is a fixed,
-// concrete struct or a map with plain string values (healthResponse,
-// entitlementResponse, {"detail": string}), so Encode cannot fail in
-// practice; a failure is still logged with the request id rather than
-// dropped, matching writePydanticValidationError's own convention.
-func writeJSON(w http.ResponseWriter, r *http.Request, logger *slog.Logger, status int, value any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(value); err != nil {
-		logger.ErrorContext(r.Context(), "acr: encode JSON response failed",
-			slog.Int("status", status), slog.Any("error", err))
-	}
+// writeDetail renders {"detail": "<text>"}, the body FastAPI's HTTPException
+// handler writes (through JSONResponse, so policy.WriteDetail) for the
+// statuses api/internal/acr.py raises. acr's own client treats every
+// non-200 as unavailable, so only the status is load-bearing for it; the
+// body is kept byte-identical for any other caller and for the venue.
+func writeDetail(w http.ResponseWriter, status int, detail string) {
+	policy.WriteDetail(w, status, detail, http.Header{"X-Content-Type-Options": {"nosniff"}})
 }

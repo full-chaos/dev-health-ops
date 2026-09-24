@@ -21,7 +21,6 @@ resources:
   # group's Deployment declares replicas: 1; the sync-provider HPA keeps a
   # floor of one (see README.md).
   - go-workers.yaml
-  - cronjobs.yaml
   - ingress.yaml
 
 # Common labels applied to all resources

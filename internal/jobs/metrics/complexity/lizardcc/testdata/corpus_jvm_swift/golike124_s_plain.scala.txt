@@ -1,0 +1,1 @@
+object O { def p(a: Int): Int = { if (a > 0) 1 else 2 } }

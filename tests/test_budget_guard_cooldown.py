@@ -874,11 +874,21 @@ def test_cooldown_available_at_respects_wall_clock_clamp(db_session, monkeypatch
     db_session.refresh(second)
     assert second.status == SyncRunUnitStatus.RETRYING.value
     assert second.available_at is not None
-    deadline = now + timedelta(seconds=RATE_LIMIT_MAX_TOTAL_WAIT_SECONDS)
+    # The deadline is anchored on the dispatcher's OWN first-seen stamp, the
+    # anchor the clamp itself uses (budget_guard's wall_clock_deadline =
+    # first_seen_at + RATE_LIMIT_MAX_TOTAL_WAIT_SECONDS), not on this test's
+    # `now`: dispatch_sync_run takes its own `now` some time after ours
+    # (seeding, DB round trips), and on a loaded runner that gap exceeded the
+    # one-second tolerance this assertion used to carry, failing the test
+    # although the clamp was correct. Anchored on the same stamp the
+    # assertion is exact and independent of how long the dispatch took.
+    assert second.rate_limit_first_seen_at is not None
+    deadline = _aware(second.rate_limit_first_seen_at) + timedelta(
+        seconds=RATE_LIMIT_MAX_TOTAL_WAIT_SECONDS
+    )
     # Never past the wall-clock deadline, even with jitter added on top of
-    # an already-clamped not_before -- a small tolerance only for the clock
-    # drift between this test's `now` and dispatch_sync_run's own `now`.
-    assert _aware(second.available_at) <= deadline + timedelta(seconds=1)
+    # an already-clamped not_before.
+    assert _aware(second.available_at) <= deadline
     # And not clamped away to something implausibly early either.
     assert _aware(second.available_at) >= deadline - timedelta(
         seconds=jitter_seconds + 5
@@ -891,7 +901,7 @@ def test_cooldown_available_at_respects_wall_clock_clamp(db_session, monkeypatch
         .filter_by(sync_run_id=run.id, kind=OUTBOX_KIND_DISPATCH)
         .one()
     )
-    assert _aware(outbox.available_at) <= deadline + timedelta(seconds=1)
+    assert _aware(outbox.available_at) <= deadline
 
 
 def test_cooldown_wall_clock_budget_exhausted_terminalizes_rather_than_sleeping_past_clamp(  # noqa: E501

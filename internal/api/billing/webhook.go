@@ -100,14 +100,16 @@ func (h handlers) stripeWebhook(w http.ResponseWriter, r *http.Request) {
 	case "customer.subscription.created":
 		h.processSubscriptionEvent(ctx, event, eventType, dataObject)
 	case "customer.subscription.updated":
-		h.processSubscriptionEvent(ctx, event, eventType, dataObject)
-		if err := h.subscriptionUpdated(ctx, dataObject); err != nil {
-			h.internal(w, r, "stripe webhook", err)
-			return
+		if replayed := h.processSubscriptionEvent(ctx, event, eventType, dataObject); !replayed {
+			if err := h.subscriptionUpdated(ctx, dataObject); err != nil {
+				h.internal(w, r, "stripe webhook", err)
+				return
+			}
 		}
 	case "customer.subscription.deleted":
-		h.processSubscriptionEvent(ctx, event, eventType, dataObject)
-		h.subscriptionDeleted(ctx, dataObject)
+		if replayed := h.processSubscriptionEvent(ctx, event, eventType, dataObject); !replayed {
+			h.subscriptionDeleted(ctx, dataObject)
+		}
 	case "customer.subscription.trial_will_end":
 		if err := h.trialWillEnd(ctx, dataObject); err != nil {
 			h.internal(w, r, "stripe webhook", err)

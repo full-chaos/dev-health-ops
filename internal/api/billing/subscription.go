@@ -83,47 +83,60 @@ func asDict(value pyjson.Value) *pyjson.Object { return ensureDict(value) }
 // processSubscriptionEvent is router._process_subscription_event: one
 // session running process_event, committed on success; every failure is
 // logged and swallowed.
-func (h handlers) processSubscriptionEvent(ctx context.Context, event pyjson.Value, eventType string, subscription pyjson.Value) {
+//
+// It reports replayed: the event was already recorded (a redelivery), or it
+// is older than the newest event recorded for its subscription (Stripe does
+// not promise delivery order). The route then skips the router handlers for
+// it, so a redelivered or late event re-signs, revokes and notifies nothing
+// (a named divergence from the Python route, which runs them again,
+// CHAOS-6525).
+func (h handlers) processSubscriptionEvent(ctx context.Context, event pyjson.Value, eventType string, subscription pyjson.Value) (replayed bool) {
 	err := h.inTxFunc(ctx, func(tx pgx.Tx) error {
-		return h.subscriptionEventTx(ctx, tx, event, eventType, subscription)
+		var err error
+		replayed, err = h.subscriptionEventTx(ctx, tx, event, eventType, subscription)
+		return err
 	})
 	switch {
-	case err == nil, errors.Is(err, errSubscriptionConflict):
+	case err == nil:
+	case errors.Is(err, errSubscriptionConflict):
+		replayed = true
 	case errors.Is(err, errSubscriptionMalformed):
 		h.logger.WarnContext(ctx, "Skipping malformed subscription event", "error", err.Error())
 	default:
 		h.logger.ErrorContext(ctx, "Failed to process subscription event", "error", err.Error())
 	}
+	return replayed
 }
 
-// subscriptionEventTx is SubscriptionService.process_event.
-func (h handlers) subscriptionEventTx(ctx context.Context, tx pgx.Tx, event pyjson.Value, eventType string, subscription pyjson.Value) error {
+// subscriptionEventTx is SubscriptionService.process_event; replayed as
+// processSubscriptionEvent reports it.
+func (h handlers) subscriptionEventTx(ctx context.Context, tx pgx.Tx, event pyjson.Value, eventType string, subscription pyjson.Value) (replayed bool, err error) {
 	eventID, err := stripeStr(attr(event, "id", ""))
 	if err != nil {
-		return err
+		return false, err
 	}
 	if eventID == "" {
-		return errSubscriptionMalformed
+		return false, errSubscriptionMalformed
 	}
 	var seen int
 	switch err := tx.QueryRow(ctx, `SELECT 1 FROM subscription_events WHERE stripe_event_id = $1`, eventID).Scan(&seen); {
 	case err == nil:
-		return nil
+		return true, nil
 	case !errors.Is(err, pgx.ErrNoRows):
-		return err
+		return false, err
 	}
 	if !strings.HasPrefix(eventType, "customer.subscription.") {
-		return nil
+		return false, nil
 	}
 	if subscription == nil {
-		return errSubscriptionMalformed
+		return false, errSubscriptionMalformed
 	}
 	metadata := asDict(attr(subscription, "metadata", pyjson.NewObject()))
 	orgValue, _ := metadata.Get("org_id")
 	var org uuid.UUID
 	if pyjson.Truthy(orgValue) {
 		if org, err = pythonparity.ParseUUID(pyjson.Str(orgValue)); err != nil {
-			return errSubscriptionMalformed
+			return false, errSubscriptionMalformed
 		}
 	} else {
 		// No org in the metadata (every subscription a checkout created
@@ -133,11 +146,11 @@ func (h handlers) subscriptionEventTx(ctx context.Context, tx pgx.Tx, event pyjs
 		customer, _ := attr(subscription, "customer", "").(string)
 		owner, _, err := stripeOwnerOrg(ctx, tx, subscriptionID, customer)
 		if err != nil {
-			return err
+			return false, err
 		}
 		if owner == nil {
 			h.logger.WarnContext(ctx, "Subscription event names no org and none owns its subscription or customer, skipping", "event_id", eventID)
-			return nil
+			return false, nil
 		}
 		org = *owner
 	}
@@ -147,28 +160,50 @@ func (h handlers) subscriptionEventTx(ctx context.Context, tx pgx.Tx, event pyjs
 		// value that is not a str for a text parameter.
 		text, isText := rawID.(string)
 		if !isText {
-			return errSubscriptionValue
+			return false, errSubscriptionValue
 		}
 		if err := tx.QueryRow(ctx, `SELECT status FROM subscriptions WHERE stripe_subscription_id = $1`, text).
 			Scan(&previousStatus); err != nil && !errors.Is(err, pgx.ErrNoRows) {
-			return err
+			return false, err
+		}
+	}
+	payload, err := pyjson.Dumps(event)
+	if err != nil {
+		return false, err
+	}
+	// An event older than the newest one recorded for its subscription is
+	// recorded (so its redelivery is a duplicate) but not applied.
+	if created, isInt := attr(event, "created", nil).(pyjson.Int); isInt && previousStatus != nil {
+		subscriptionID, _ := attr(subscription, "id", "").(string)
+		var stored uuid.UUID
+		var newest *int64
+		if err := tx.QueryRow(ctx, `SELECT s.id, max(CASE WHEN json_typeof(e.payload -> 'created') = 'number'
+			THEN (e.payload ->> 'created')::numeric::bigint END)
+			FROM subscriptions s LEFT JOIN subscription_events e ON e.subscription_id = s.id
+			WHERE s.stripe_subscription_id = $1 GROUP BY s.id`, subscriptionID).Scan(&stored, &newest); err != nil {
+			return false, err
+		}
+		if newest != nil && created.IsInt64() && created.Int64() < *newest {
+			h.logger.InfoContext(ctx, "Subscription event older than the newest recorded; recorded, not applied", "event_id", eventID)
+			_, err := tx.Exec(ctx, `INSERT INTO subscription_events (id, subscription_id, stripe_event_id, event_type, previous_status, new_status, payload)
+				VALUES ($1, $2, $3, $4, $5, $5, $6::json)`, uuid.New(), stored, eventID, eventType, *previousStatus, payload)
+			if err != nil {
+				return false, err
+			}
+			return true, nil
 		}
 	}
 	row, err := h.upsertSubscription(ctx, tx, subscription, org, metadata)
 	if err != nil {
-		return err
-	}
-	payload, err := pyjson.Dumps(event)
-	if err != nil {
-		return err
+		return false, err
 	}
 	_, err = tx.Exec(ctx, `INSERT INTO subscription_events (id, subscription_id, stripe_event_id, event_type, previous_status, new_status, payload)
 		VALUES ($1, $2, $3, $4, $5, $6, $7::json)`, uuid.New(), row.id, eventID, eventType, previousStatus, row.status, payload)
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && strings.HasPrefix(pgErr.Code, "23") {
-		return errSubscriptionConflict
+		return false, errSubscriptionConflict
 	}
-	return err
+	return false, err
 }
 
 // upsertedSubscription is the part of a subscriptions row the upsert carries.

@@ -1103,18 +1103,46 @@ func TestPreclaimReadinessLogsNothingWhenDependenciesPass(t *testing.T) {
 	}
 }
 
-// preclaimSleepAfterCheckTimeout returns a fake preclaimReadinessComponent
-// sleep function that waits long enough (a few multiples of checkTimeout)
-// for a timed-out check's own goroutine to actually notice its context was
-// canceled and return, before the retry loop calls CheckRequired again.
-// Without this buffer, a fast retry can race the still-unwinding goroutine
-// from the PREVIOUS attempt and reuse its in-flight execution (by design --
-// see health.Registry's non-cooperative-check sharing), undercounting how
-// many times the check function itself actually ran.
-func preclaimSleepAfterCheckTimeout(checkTimeout time.Duration) func(context.Context, time.Duration) {
-	return func(context.Context, time.Duration) {
-		time.Sleep(4 * checkTimeout)
+// preclaimTestCheckTimeout is the registry's per-check timeout in the retry
+// tests below. It is long enough never to fire: each check's outcome is
+// decided by the check itself (errPreclaimCheckDeadline is what a check
+// returns when its own deadline fired, which the registry classifies as a
+// timeout), never by a race between two short timers on a loaded runner.
+// The registry's own timeout classification is covered in the health
+// package's tests.
+const preclaimTestCheckTimeout = time.Hour
+
+var errPreclaimCheckDeadline = fmt.Errorf("check deadline: %w", context.DeadlineExceeded)
+
+// preclaimFakeClock drives preclaimReadinessComponent's retry loop with no
+// real waiting: sleep advances the clock by exactly the requested wait and
+// records it, so a test asserts the backoff schedule the loop chose.
+type preclaimFakeClock struct {
+	mu    sync.Mutex
+	at    time.Time
+	waits []time.Duration
+}
+
+func (c *preclaimFakeClock) now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.at
+}
+
+func (c *preclaimFakeClock) sleep(_ context.Context, wait time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.at = c.at.Add(wait)
+	c.waits = append(c.waits, wait)
+	if len(c.waits) > 50 {
+		panic("preclaim retry loop did not terminate: more than 50 waits on a fake clock")
 	}
+}
+
+func (c *preclaimFakeClock) recordedWaits() []time.Duration {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]time.Duration(nil), c.waits...)
 }
 
 // A posture client that only starts answering after a burst of contention
@@ -1124,27 +1152,27 @@ func preclaimSleepAfterCheckTimeout(checkTimeout time.Duration) func(context.Con
 // returning an error.
 func TestPreclaimReadinessRetriesTimeoutsUntilPostureClientRecovers(t *testing.T) {
 	t.Parallel()
-	const checkTimeout = 10 * time.Millisecond
 	const wantSuccessAttempt = 3
 
-	registry := health.NewRegistry(checkTimeout)
+	registry := health.NewRegistry(preclaimTestCheckTimeout)
 	var attempts atomic.Int32
 	if err := registry.RegisterRequired("posture_manifest_lockstep", func(ctx context.Context) error {
 		if attempts.Add(1) < wantSuccessAttempt {
-			<-ctx.Done()
-			return ctx.Err()
+			return errPreclaimCheckDeadline
 		}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
 	}
 
+	clock := &preclaimFakeClock{}
 	var logs bytes.Buffer
 	component := preclaimReadinessComponent{
 		registry: registry,
 		logger:   slog.New(slog.NewJSONHandler(&logs, nil)),
-		budget:   time.Second,
-		sleep:    preclaimSleepAfterCheckTimeout(checkTimeout),
+		budget:   time.Minute,
+		now:      clock.now,
+		sleep:    clock.sleep,
 	}
 	if err := component.Start(context.Background()); err != nil {
 		t.Fatalf("Start() error = %v, want nil once the posture client recovers", err)
@@ -1154,6 +1182,9 @@ func TestPreclaimReadinessRetriesTimeoutsUntilPostureClientRecovers(t *testing.T
 	}
 	if count := strings.Count(logs.String(), "preclaim readiness timed out, retrying"); count != wantSuccessAttempt-1 {
 		t.Fatalf("retry log count = %d, want %d (one per timed-out attempt)", count, wantSuccessAttempt-1)
+	}
+	if got, want := clock.recordedWaits(), []time.Duration{preclaimReadinessInitialBackoff, 2 * preclaimReadinessInitialBackoff}; !slices.Equal(got, want) {
+		t.Fatalf("backoff waits = %v, want %v (doubling from the initial backoff)", got, want)
 	}
 	if strings.Contains(logs.String(), "preclaim readiness refused") {
 		t.Fatalf("a recovered posture client must never log a refusal: %s", logs.String())
@@ -1208,35 +1239,40 @@ func TestPreclaimReadinessExitsImmediatelyOnGenuinePostureMismatch(t *testing.T)
 // so an operator is not left with a bare crash loop and no explanation.
 func TestPreclaimReadinessExitsAfterBudgetExhaustedOnPersistentTimeout(t *testing.T) {
 	t.Parallel()
-	const checkTimeout = 10 * time.Millisecond
-	const budget = 45 * time.Millisecond
+	const budget = 5 * time.Second
 
-	registry := health.NewRegistry(checkTimeout)
+	registry := health.NewRegistry(preclaimTestCheckTimeout)
 	var attempts atomic.Int32
 	if err := registry.RegisterRequired("queue_postgres", func(ctx context.Context) error {
 		attempts.Add(1)
-		<-ctx.Done()
-		return ctx.Err()
+		return errPreclaimCheckDeadline
 	}); err != nil {
 		t.Fatal(err)
 	}
 
+	clock := &preclaimFakeClock{}
 	var logs bytes.Buffer
 	component := preclaimReadinessComponent{
 		registry: registry,
 		logger:   slog.New(slog.NewJSONHandler(&logs, nil)),
 		budget:   budget,
-		sleep:    preclaimSleepAfterCheckTimeout(checkTimeout),
+		now:      clock.now,
+		sleep:    clock.sleep,
 	}
 	if err := component.Start(context.Background()); !errors.Is(err, errWorkerDependencyUnavailable) {
 		t.Fatalf("Start() error = %v, want preclaim dependency refusal once the budget is spent", err)
 	}
+	// With a 5s budget and a 2s initial backoff the loop waits 2s, then the
+	// 3s that remain, and gives up on the third attempt.
 	finalAttempts := attempts.Load()
-	if finalAttempts < 2 {
-		t.Fatalf("queue check ran %d times, want at least 2 (proof retrying happened before giving up)", finalAttempts)
+	if finalAttempts != 3 {
+		t.Fatalf("queue check ran %d times, want exactly 3 (retried twice, then gave up)", finalAttempts)
 	}
-	if count := strings.Count(logs.String(), "preclaim readiness timed out, retrying"); count < 1 {
-		t.Fatalf("retry log count = %d, want at least 1 warn-level retry before giving up", count)
+	if got, want := clock.recordedWaits(), []time.Duration{2 * time.Second, 3 * time.Second}; !slices.Equal(got, want) {
+		t.Fatalf("backoff waits = %v, want %v (the second wait is clamped to the remaining budget)", got, want)
+	}
+	if count := strings.Count(logs.String(), "preclaim readiness timed out, retrying"); count != 2 {
+		t.Fatalf("retry log count = %d, want 2 (one per retried attempt)", count)
 	}
 	lines := strings.Split(strings.TrimSpace(logs.String()), "\n")
 	var record struct {
@@ -1262,15 +1298,13 @@ func TestPreclaimReadinessExitsAfterBudgetExhaustedOnPersistentTimeout(t *testin
 // already does.
 func TestPreclaimReadinessRetriesWhenEveryFailingMemberTimedOut(t *testing.T) {
 	t.Parallel()
-	const checkTimeout = 10 * time.Millisecond
 	const wantSuccessAttempt = 2
 
-	registry := health.NewRegistry(checkTimeout)
+	registry := health.NewRegistry(preclaimTestCheckTimeout)
 	var schemaAttempts, queueAttempts atomic.Int32
 	if err := registry.RegisterRequired("river_schema", func(ctx context.Context) error {
 		if schemaAttempts.Add(1) < wantSuccessAttempt {
-			<-ctx.Done()
-			return ctx.Err()
+			return errPreclaimCheckDeadline
 		}
 		return nil
 	}); err != nil {
@@ -1278,20 +1312,21 @@ func TestPreclaimReadinessRetriesWhenEveryFailingMemberTimedOut(t *testing.T) {
 	}
 	if err := registry.RegisterRequired("queue_postgres", func(ctx context.Context) error {
 		if queueAttempts.Add(1) < wantSuccessAttempt {
-			<-ctx.Done()
-			return ctx.Err()
+			return errPreclaimCheckDeadline
 		}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
 	}
 
+	clock := &preclaimFakeClock{}
 	var logs bytes.Buffer
 	component := preclaimReadinessComponent{
 		registry: registry,
 		logger:   slog.New(slog.NewJSONHandler(&logs, nil)),
-		budget:   time.Second,
-		sleep:    preclaimSleepAfterCheckTimeout(checkTimeout),
+		budget:   time.Minute,
+		now:      clock.now,
+		sleep:    clock.sleep,
 	}
 	if err := component.Start(context.Background()); err != nil {
 		t.Fatalf("Start() error = %v, want nil: two members both timing out must be retryable", err)
@@ -1299,8 +1334,8 @@ func TestPreclaimReadinessRetriesWhenEveryFailingMemberTimedOut(t *testing.T) {
 	if strings.Contains(logs.String(), "preclaim readiness refused") {
 		t.Fatalf("two members timing out together must never refuse: %s", logs.String())
 	}
-	if count := strings.Count(logs.String(), "preclaim readiness timed out, retrying"); count < 1 {
-		t.Fatalf("retry log count = %d, want at least 1", count)
+	if count := strings.Count(logs.String(), "preclaim readiness timed out, retrying"); count != 1 {
+		t.Fatalf("retry log count = %d, want 1 (one retry: both members recover on the second attempt)", count)
 	}
 }
 
@@ -1311,14 +1346,12 @@ func TestPreclaimReadinessRetriesWhenEveryFailingMemberTimedOut(t *testing.T) {
 // to completion and reported a real problem.
 func TestPreclaimReadinessRefusesWhenOneFailingMemberIsNotATimeout(t *testing.T) {
 	t.Parallel()
-	const checkTimeout = 10 * time.Millisecond
 
-	registry := health.NewRegistry(checkTimeout)
+	registry := health.NewRegistry(preclaimTestCheckTimeout)
 	var timeoutAttempts, postureAttempts atomic.Int32
 	if err := registry.RegisterRequired("river_schema", func(ctx context.Context) error {
 		timeoutAttempts.Add(1)
-		<-ctx.Done()
-		return ctx.Err()
+		return errPreclaimCheckDeadline
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -1353,6 +1386,99 @@ func TestPreclaimReadinessRefusesWhenOneFailingMemberIsNotATimeout(t *testing.T)
 	}
 	if record.Reason != "dependency_check_failed" || record.Attempts != 1 {
 		t.Fatalf("log record = %#v, want reason dependency_check_failed at attempt 1", record)
+	}
+}
+
+// A member that already passes does not make the aggregate non-retryable: only
+// a member that failed without timing out does. One passing member beside one
+// that times out and then recovers is the ordinary shape of a roll storm.
+func TestPreclaimReadinessRetriesWhenAPassingMemberIsBesideATimedOutOne(t *testing.T) {
+	t.Parallel()
+	registry := health.NewRegistry(preclaimTestCheckTimeout)
+	if err := registry.RegisterRequired("river_schema", func(context.Context) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	var attempts atomic.Int32
+	if err := registry.RegisterRequired("queue_postgres", func(context.Context) error {
+		if attempts.Add(1) < 2 {
+			return errPreclaimCheckDeadline
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	clock := &preclaimFakeClock{}
+	var logs bytes.Buffer
+	component := preclaimReadinessComponent{
+		registry: registry,
+		logger:   slog.New(slog.NewJSONHandler(&logs, nil)),
+		budget:   time.Minute,
+		now:      clock.now,
+		sleep:    clock.sleep,
+	}
+	if err := component.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v, want nil: a passing member must not block the retry", err)
+	}
+	if got := len(clock.recordedWaits()); got != 1 {
+		t.Fatalf("retries = %d, want 1", got)
+	}
+}
+
+// A registry with no required checks reports not-ready with no per-check
+// statuses; there is nothing to wait out, so it is refused on the first
+// attempt rather than retried until the budget is spent.
+func TestPreclaimReadinessRefusesAnEmptyRegistryWithoutRetrying(t *testing.T) {
+	t.Parallel()
+	clock := &preclaimFakeClock{}
+	var logs bytes.Buffer
+	component := preclaimReadinessComponent{
+		registry: health.NewRegistry(preclaimTestCheckTimeout),
+		logger:   slog.New(slog.NewJSONHandler(&logs, nil)),
+		budget:   time.Minute,
+		now:      clock.now,
+		sleep:    clock.sleep,
+	}
+	if err := component.Start(context.Background()); !errors.Is(err, errWorkerDependencyUnavailable) {
+		t.Fatalf("Start() error = %v, want preclaim dependency refusal", err)
+	}
+	if got := clock.recordedWaits(); len(got) != 0 {
+		t.Fatalf("waits = %v, want none for an empty registry", got)
+	}
+}
+
+// A canceled context ends the retry loop even with budget left: the process is
+// shutting down, so waiting for a dependency to recover is pointless.
+func TestPreclaimReadinessStopsRetryingWhenTheContextIsCanceled(t *testing.T) {
+	t.Parallel()
+	registry := health.NewRegistry(preclaimTestCheckTimeout)
+	ctx, cancel := context.WithCancel(context.Background())
+	var attempts atomic.Int32
+	if err := registry.RegisterRequired("queue_postgres", func(context.Context) error {
+		attempts.Add(1)
+		cancel()
+		return errPreclaimCheckDeadline
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	clock := &preclaimFakeClock{}
+	var logs bytes.Buffer
+	component := preclaimReadinessComponent{
+		registry: registry,
+		logger:   slog.New(slog.NewJSONHandler(&logs, nil)),
+		budget:   time.Minute,
+		now:      clock.now,
+		sleep:    clock.sleep,
+	}
+	if err := component.Start(ctx); !errors.Is(err, errWorkerDependencyUnavailable) {
+		t.Fatalf("Start() error = %v, want preclaim dependency refusal", err)
+	}
+	if got := attempts.Load(); got != 1 {
+		t.Fatalf("check ran %d times, want 1 (canceled before the first retry)", got)
+	}
+	if got := clock.recordedWaits(); len(got) != 0 {
+		t.Fatalf("waits = %v, want none after cancellation", got)
 	}
 }
 
@@ -1638,7 +1764,6 @@ func TestQueuedContractVersionsReadyGenuineMismatchStaysNonRetryable(t *testing.
 // than exit on the first attempt.
 func TestPreclaimReadinessRetriesRealCheckWrappersWhenBothMembersTimeOut(t *testing.T) {
 	t.Parallel()
-	const checkTimeout = 10 * time.Millisecond
 	const wantSuccessAttempt = 2
 
 	database := &fakeWorkerDatabase{
@@ -1647,7 +1772,7 @@ func TestPreclaimReadinessRetriesRealCheckWrappersWhenBothMembersTimeOut(t *test
 	}
 	dependencies := &workerDependencies{database: database}
 
-	registry := health.NewRegistry(checkTimeout)
+	registry := health.NewRegistry(preclaimTestCheckTimeout)
 	var queueAttempts, schemaAttempts atomic.Int32
 	if err := registry.RegisterRequired("queue_postgres", func(ctx context.Context) error {
 		if queueAttempts.Add(1) < wantSuccessAttempt {
@@ -1667,12 +1792,14 @@ func TestPreclaimReadinessRetriesRealCheckWrappersWhenBothMembersTimeOut(t *test
 		t.Fatal(err)
 	}
 
+	clock := &preclaimFakeClock{}
 	var logs bytes.Buffer
 	component := preclaimReadinessComponent{
 		registry: registry,
 		logger:   slog.New(slog.NewJSONHandler(&logs, nil)),
-		budget:   time.Second,
-		sleep:    preclaimSleepAfterCheckTimeout(checkTimeout),
+		budget:   time.Minute,
+		now:      clock.now,
+		sleep:    clock.sleep,
 	}
 	if err := component.Start(context.Background()); err != nil {
 		t.Fatalf("Start() error = %v, want nil: both real members timing out together must be retryable", err)
@@ -1691,7 +1818,6 @@ func TestPreclaimReadinessRetriesRealCheckWrappersWhenBothMembersTimeOut(t *test
 // aggregate must retry rather than exit on the first attempt.
 func TestPreclaimReadinessRetriesTheRealQueuedContractVersionsWrapperOnTimeout(t *testing.T) {
 	t.Parallel()
-	const checkTimeout = 10 * time.Millisecond
 	const wantSuccessAttempt = 2
 
 	telemetry := &fakeQueueTelemetry{
@@ -1702,7 +1828,7 @@ func TestPreclaimReadinessRetriesTheRealQueuedContractVersionsWrapperOnTimeout(t
 		queueTelemetry:         telemetry,
 	}
 
-	registry := health.NewRegistry(checkTimeout)
+	registry := health.NewRegistry(preclaimTestCheckTimeout)
 	var attempts atomic.Int32
 	if err := registry.RegisterRequired("queued_contract_versions", func(ctx context.Context) error {
 		if attempts.Add(1) < wantSuccessAttempt {
@@ -1713,12 +1839,14 @@ func TestPreclaimReadinessRetriesTheRealQueuedContractVersionsWrapperOnTimeout(t
 		t.Fatal(err)
 	}
 
+	clock := &preclaimFakeClock{}
 	var logs bytes.Buffer
 	component := preclaimReadinessComponent{
 		registry: registry,
 		logger:   slog.New(slog.NewJSONHandler(&logs, nil)),
-		budget:   time.Second,
-		sleep:    preclaimSleepAfterCheckTimeout(checkTimeout),
+		budget:   time.Minute,
+		now:      clock.now,
+		sleep:    clock.sleep,
 	}
 	if err := component.Start(context.Background()); err != nil {
 		t.Fatalf("Start() error = %v, want nil: a timing-out queued_contract_versions member must be retryable", err)

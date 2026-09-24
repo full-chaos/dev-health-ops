@@ -17,8 +17,10 @@ import (
 )
 
 func TestDecide(t *testing.T) {
-	application := Baseline{Heads: []string{"0138"}}
-	cutover := Baseline{Cutover: true, Heads: []string{"0066", "0138"}}
+	schema := "CREATE TABLE public.alembic_version (\n);\nCREATE TABLE public.users (\n);\n"
+	application := Baseline{Heads: []string{"0138"}, Schema: schema}
+	cutover := Baseline{Cutover: true, Heads: []string{"0066", "0138"}, Schema: schema}
+	tables := []string{"alembic_version", "users"}
 	chain := []ChainFile{{Revision: "0139", Name: "0139_a.sql"}, {Revision: "0140", Name: "0140_b.sql"}}
 	for name, testCase := range map[string]struct {
 		observation Observation
@@ -26,15 +28,19 @@ func TestDecide(t *testing.T) {
 		want        Plan
 	}{
 		"empty":   {Observation{}, application, Plan{State: StateEmpty, ApplicationHead: "0138", Pending: chain}},
-		"foreign": {Observation{PublicRelations: 3}, application, Plan{State: StateForeign}},
-		"at the head": {Observation{HasVersionTable: true, Versions: []string{"0138"}, PublicRelations: 90}, application,
+		"foreign": {Observation{PublicObjects: 3}, application, Plan{State: StateForeign}},
+		"at the head": {Observation{HasVersionTable: true, Versions: []string{"0138"}, PublicObjects: 90, PublicTables: tables}, application,
 			Plan{State: StateAtHead, ApplicationHead: "0138", Pending: chain}},
 		"below the head": {Observation{HasVersionTable: true, Versions: []string{"0137"}}, application,
 			Plan{State: StateBelowHead, Missing: []string{"0138"}}},
 		"an application head under the cutover": {Observation{HasVersionTable: true, Versions: []string{"0138"}}, cutover,
 			Plan{State: StateBelowHead, Missing: []string{"0066"}}},
-		"the cutover head": {Observation{HasVersionTable: true, Versions: []string{"0066", "0138"}}, cutover,
+		"the cutover head": {Observation{HasVersionTable: true, Versions: []string{"0066", "0138"}, PublicTables: tables}, cutover,
 			Plan{State: StateAtHead, ApplicationHead: "0138", Pending: chain}},
+		"the heads recorded without the schema": {Observation{HasVersionTable: true, Versions: []string{"0066", "0138"}, PublicTables: []string{"alembic_version"}}, cutover,
+			Plan{State: StateSchemaMismatch, MissingTables: []string{"users"}}},
+		"a chain revision recorded, a baseline table dropped": {Observation{HasVersionTable: true, Versions: []string{"0066", "0139"}, PublicTables: []string{"alembic_version"}}, cutover,
+			Plan{State: StateAtHead, ApplicationHead: "0139", Pending: chain[1:]}},
 		"part of the chain applied": {Observation{HasVersionTable: true, Versions: []string{"0066", "0139"}}, cutover,
 			Plan{State: StateAtHead, ApplicationHead: "0139", Pending: chain[1:]}},
 		"the whole chain applied": {Observation{HasVersionTable: true, Versions: []string{"0140"}}, application,
@@ -49,6 +55,17 @@ func TestDecide(t *testing.T) {
 				t.Fatalf("Decide = %+v, want %+v", got, testCase.want)
 			}
 		})
+	}
+}
+
+func TestBaselineTables(t *testing.T) {
+	baseline, err := LoadBaseline()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tables := baseline.Tables()
+	if len(tables) < 100 || tables[0] != "alembic_version" {
+		t.Fatalf("Tables() = %d tables starting %v; want the head's 100+ tables, alembic_version first", len(tables), tables[:min(3, len(tables))])
 	}
 }
 

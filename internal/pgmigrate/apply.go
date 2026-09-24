@@ -34,7 +34,9 @@ func Upgrade(ctx context.Context, conn *pgx.Conn, baseline Baseline, chain []Cha
 		plan = Decide(observation, baseline, chain)
 		switch plan.State {
 		case StateForeign:
-			return ForeignDatabaseError{Relations: observation.PublicRelations}
+			return ForeignDatabaseError{Objects: observation.PublicObjects}
+		case StateSchemaMismatch:
+			return SchemaMismatchError{Recorded: observation.Versions, MissingTables: plan.MissingTables}
 		case StateBelowHead:
 			return BelowHeadError{Recorded: observation.Versions, Missing: plan.Missing}
 		case StateEmpty:
@@ -105,7 +107,9 @@ type Status struct {
 	Heads    []string `json:"heads"`
 	Recorded []string `json:"recorded"`
 	Missing  []string `json:"missing,omitempty"`
-	Pending  []string `json:"pending,omitempty"`
+	// MissingTables are the baseline tables a schema_mismatch database lacks.
+	MissingTables []string `json:"missing_tables,omitempty"`
+	Pending       []string `json:"pending,omitempty"`
 }
 
 // ReadStatus reports where the database stands without changing it.
@@ -119,10 +123,11 @@ func ReadStatus(ctx context.Context, conn *pgx.Conn, baseline Baseline, chain []
 		status.Recorded = observation.Versions
 		plan := Decide(observation, baseline, chain)
 		status.Missing = plan.Missing
+		status.MissingTables = plan.MissingTables
 		for _, file := range plan.Pending {
 			status.Pending = append(status.Pending, file.Revision)
 		}
-		status.State = map[State]string{StateEmpty: "empty", StateAtHead: "at_head", StateBelowHead: "below_head", StateForeign: "foreign"}[plan.State]
+		status.State = map[State]string{StateEmpty: "empty", StateAtHead: "at_head", StateBelowHead: "below_head", StateForeign: "foreign", StateSchemaMismatch: "schema_mismatch"}[plan.State]
 		return nil
 	})
 	return status, err
@@ -134,9 +139,23 @@ func observe(ctx context.Context, tx pgx.Tx) (Observation, error) {
 	if err := tx.QueryRow(ctx, "SELECT to_regclass('public.alembic_version') IS NOT NULL").Scan(&observation.HasVersionTable); err != nil {
 		return observation, fmt.Errorf("look for alembic_version: %w", err)
 	}
-	if err := tx.QueryRow(ctx, "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "+
-		"WHERE n.nspname = 'public' AND c.relkind IN ('r','p','v','m','S','f')").Scan(&observation.PublicRelations); err != nil {
-		return observation, fmt.Errorf("count public relations: %w", err)
+	// Every relation kind (indexes and composite types included), every
+	// function or procedure, and every type that is not an array or a
+	// relation's row type.
+	if err := tx.QueryRow(ctx, "SELECT "+
+		"(SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public') + "+
+		"(SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public') + "+
+		"(SELECT count(*) FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace "+
+		"WHERE n.nspname = 'public' AND t.typrelid = 0 AND t.typcategory <> 'A')").Scan(&observation.PublicObjects); err != nil {
+		return observation, fmt.Errorf("count public objects: %w", err)
+	}
+	tables, err := tx.Query(ctx, "SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "+
+		"WHERE n.nspname = 'public' AND c.relkind IN ('r','p') ORDER BY c.relname")
+	if err != nil {
+		return observation, fmt.Errorf("list public tables: %w", err)
+	}
+	if observation.PublicTables, err = pgx.CollectRows(tables, pgx.RowTo[string]); err != nil {
+		return observation, fmt.Errorf("list public tables: %w", err)
 	}
 	if !observation.HasVersionTable {
 		return observation, nil

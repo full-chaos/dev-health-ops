@@ -21,15 +21,18 @@
 // before it touches a database.
 //
 // Upgrade decides from the database's own state:
-//   - no alembic_version table and no relation in public: apply the baseline,
+//   - no alembic_version table and no object (relation, function or type)
+//     in public: apply the baseline,
 //     schema then data, in ONE transaction, so an interrupted run leaves
 //     nothing behind;
+//   - alembic_version holds every baseline head and no later revision, but
+//     tables the baseline creates are absent: schema_mismatch, refused;
 //   - alembic_version holds every baseline head: apply the .sql revisions
 //     after the head (sql/), each in its own transaction together with the
 //     alembic_version update;
 //   - alembic_version without every baseline head: below the head, refused,
 //     naming what the database holds and what is required;
-//   - relations in public but no alembic_version: a database this migrator
+//   - objects in public but no alembic_version: a database this migrator
 //     did not create, refused.
 package pgmigrate
 
@@ -171,27 +174,37 @@ func LoadChain() ([]ChainFile, error) {
 type State int
 
 const (
-	// StateEmpty: no alembic_version and no relation in public.
+	// StateEmpty: no alembic_version and no object in public.
 	StateEmpty State = iota
 	// StateAtHead: every baseline head (or a chain revision after it) is recorded.
 	StateAtHead
 	// StateBelowHead: alembic_version lacks a baseline head.
 	StateBelowHead
-	// StateForeign: relations in public but no alembic_version.
+	// StateForeign: objects in public but no alembic_version.
 	StateForeign
+	// StateSchemaMismatch: alembic_version records the baseline heads and no
+	// later revision, but tables the baseline creates are absent.
+	StateSchemaMismatch
 )
 
 // Observation is what Decide needs to know about a database.
 type Observation struct {
 	HasVersionTable bool
 	Versions        []string
-	PublicRelations int
+	// PublicObjects counts the relations, functions and types in public;
+	// an index, a sequence owned by nothing, a function or an enum each
+	// makes the database not empty.
+	PublicObjects int
+	// PublicTables names the ordinary and partitioned tables in public.
+	PublicTables []string
 }
 
 // Plan is the decision Upgrade acts on.
 type Plan struct {
 	State   State
 	Missing []string
+	// MissingTables are the baseline tables a StateSchemaMismatch database lacks.
+	MissingTables []string
 	// ApplicationHead is the revision the chain continues from.
 	ApplicationHead string
 	Pending         []ChainFile
@@ -215,7 +228,7 @@ const cutoverRevision = "0066"
 // Decide classifies a database.
 func Decide(observation Observation, baseline Baseline, chain []ChainFile) Plan {
 	if !observation.HasVersionTable {
-		if observation.PublicRelations == 0 {
+		if observation.PublicObjects == 0 {
 			return Plan{State: StateEmpty, ApplicationHead: applicationHead(baseline), Pending: chain}
 		}
 		return Plan{State: StateForeign}
@@ -244,6 +257,26 @@ func Decide(observation Observation, baseline Baseline, chain []ChainFile) Plan 
 	if len(missing) > 0 {
 		return Plan{State: StateBelowHead, Missing: missing}
 	}
+	// With no chain revision recorded, the database claims exactly the
+	// baseline, so the baseline's tables must be there: alembic_version rows
+	// alone do not prove the schema. Once a chain revision is recorded, a
+	// revision may have dropped a baseline table, and alembic_version is
+	// trusted as Alembic trusts it.
+	if position < 0 {
+		present := map[string]bool{}
+		for _, table := range observation.PublicTables {
+			present[table] = true
+		}
+		var absent []string
+		for _, table := range baseline.Tables() {
+			if !present[table] {
+				absent = append(absent, table)
+			}
+		}
+		if len(absent) > 0 {
+			return Plan{State: StateSchemaMismatch, MissingTables: absent}
+		}
+	}
 	return Plan{State: StateAtHead, ApplicationHead: current, Pending: chain[position+1:]}
 }
 
@@ -265,12 +298,41 @@ func (e BelowHeadError) Error() string {
 		e.Recorded, e.Missing, detail)
 }
 
-// ForeignDatabaseError is the refusal for a database with relations but no
+// ForeignDatabaseError is the refusal for a database with objects but no
 // alembic_version.
-type ForeignDatabaseError struct{ Relations int }
+type ForeignDatabaseError struct{ Objects int }
 
 func (e ForeignDatabaseError) Error() string {
-	return fmt.Sprintf("the public schema holds %d relation(s) but no alembic_version table; refusing to apply the head over a database this migrator did not create", e.Relations)
+	return fmt.Sprintf("the public schema holds %d object(s) (relations, functions or types) but no alembic_version table; refusing to apply the head over a database this migrator did not create", e.Objects)
+}
+
+// SchemaMismatchError is the refusal for a database whose alembic_version
+// records the baseline heads while tables the baseline creates are absent.
+type SchemaMismatchError struct {
+	Recorded      []string
+	MissingTables []string
+}
+
+func (e SchemaMismatchError) Error() string {
+	shown := e.MissingTables
+	more := ""
+	if len(shown) > 10 {
+		shown, more = shown[:10], fmt.Sprintf(" and %d more", len(e.MissingTables)-10)
+	}
+	return fmt.Sprintf("alembic_version records %v, but %d table(s) the head creates are absent: %v%s; "+
+		"refusing to treat this database as at the head", e.Recorded, len(e.MissingTables), shown, more)
+}
+
+// baselineTable matches a table the baseline schema creates.
+var baselineTable = regexp.MustCompile(`(?m)^CREATE TABLE public\.(\w+) \(`)
+
+// Tables names the tables the baseline schema creates, in dump order.
+func (b Baseline) Tables() []string {
+	var tables []string
+	for _, match := range baselineTable.FindAllStringSubmatch(b.Schema, -1) {
+		tables = append(tables, match[1])
+	}
+	return tables
 }
 
 // SanitizeDump turns pg_dump plain output into SQL a driver can execute. It

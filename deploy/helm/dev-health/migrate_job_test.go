@@ -107,7 +107,7 @@ func TestMigrateJobRunsDhoMigrateUpgrade(t *testing.T) {
 		{"the operator image, no River hook", []string{"migrations.hook.routeActivate.image=" + pinnedOperatorImage},
 			pinnedOperatorImage, []string{"migrate", "upgrade", "--river"}},
 		{"the River hook owns River", []string{"migrations.hook.routeActivate.image=" + pinnedOperatorImage, "migrations.hook.riverMigrate.enabled=true"},
-			pinnedOperatorImage, []string{"migrate", "upgrade"}},
+			pinnedOperatorImage, []string{"migrate", "upgrade", "--river=false"}},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			jobs, _, refusal := renderJobs(t, testCase.sets...)

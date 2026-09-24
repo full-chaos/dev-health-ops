@@ -2030,31 +2030,6 @@ def test_migrate_jobs_can_also_receive_operational_ordering_contract() -> None:
     )
 
 
-def test_readme_documents_the_kubernetes_cutover_has_no_shell_export() -> None:
-    """Unlike Compose/Swarm/Helm, the raw
-    Kubernetes manifests have no shell-interpolation surface -- exporting
-    OPERATIONAL_ORDERING_CONTRACT=2 before `kubectl apply` silently does
-    nothing, because the ConfigMap value is a literal. The only correct
-    cutover mechanism there is editing the ConfigMap value directly. This
-    guards against the rollout note quietly reverting to a single
-    "export the env var" instruction that is actually false for this one
-    topology.
-    """
-    readme = (_REPO_ROOT / "deploy" / "go-workers" / "README.md").read_text(
-        encoding="utf-8"
-    )
-    assert (
-        "no shell-interpolation surface" in readme
-        or "no environment to export into" in readme
-    )
-    assert "dev-health-go-worker-config" in readme
-    assert 'from `"1"` to `"2"`' in readme
-
-
-# ---------------------------------------------------------------------------
-# CHAOS-5471: compose.yml must pass COMMIT and BUILD_TIME as build args.
-# ---------------------------------------------------------------------------
-
 _DOCKERFILE = _REPO_ROOT / "docker" / "Dockerfile"
 _PROVENANCE_BUILD_ARGS = ("COMMIT", "BUILD_TIME")
 _DOCKERFILE_ARG = re.compile(

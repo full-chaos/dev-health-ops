@@ -186,3 +186,32 @@ func TestRunStepsArguments(t *testing.T) {
 		t.Fatalf("a positional argument: exit %d, ran %v; want 2 and nothing run", code, ran)
 	}
 }
+
+// With MIGRATION_DATABASE_URI configured the caller must say whether this run
+// applies River; without --river or --river=false the run is refused before
+// any step, so River is never skipped without a word.
+func TestRunStepsRequiresARiverChoiceWhenTheMigrationURIIsSet(t *testing.T) {
+	uri := map[string]string{"MIGRATION_DATABASE_URI": "postgresql://u:p@h/db"}
+	for _, testCase := range []struct {
+		args []string
+		env  map[string]string
+		code int
+		ran  []string
+	}{
+		{nil, uri, cli.ExitUsage, nil},
+		{[]string{"--river=false"}, uri, cli.ExitOK, []string{"one", "two", "three"}},
+		{[]string{"--river"}, uri, cli.ExitOK, []string{"one", "two", "three"}},
+		{nil, nil, cli.ExitOK, []string{"one", "two", "three"}},
+	} {
+		var ran []string
+		var stdout, stderr bytes.Buffer
+		lookup := func(key string) (string, bool) { value, ok := testCase.env[key]; return value, ok }
+		code := runSteps(context.Background(), cli.Env{Args: testCase.args, Lookup: lookup, Stdout: &stdout, Stderr: &stderr}, fakeSteps(&ran, "", 0))
+		if code != testCase.code || !reflect.DeepEqual(ran, testCase.ran) {
+			t.Fatalf("args %v env %v: exit %d, ran %v; want %d, %v", testCase.args, testCase.env, code, ran, testCase.code, testCase.ran)
+		}
+		if refused := strings.Contains(stderr.String(), `"code":"river_step_unspecified"`); refused != (testCase.code == cli.ExitUsage) {
+			t.Fatalf("args %v env %v: refusal logged %v: %s", testCase.args, testCase.env, refused, stderr.String())
+		}
+	}
+}

@@ -142,7 +142,7 @@ spec:
           # docs/operate/configure/databases-and-storage.md.
           {{- if .Values.migrations.hook.riverMigrate.enabled }}
           # The weight-10 river-migrate hook owns the River step (CHAOS-4428).
-          args: ["migrate", "upgrade"]
+          args: ["migrate", "upgrade", "--river=false"]
           {{- else }}
           # No River hook: this Job applies the River schema itself right
           # after the PostgreSQL step, when MIGRATION_DATABASE_URI is

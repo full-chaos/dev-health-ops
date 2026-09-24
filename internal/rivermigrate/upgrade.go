@@ -108,7 +108,10 @@ Runs the migrate Job's steps in order, each exactly as its own verb runs:
 
 Flags:
   --river   also apply the River schema after the PostgreSQL step, as the
-            migrate Job does when no River hook owns that step
+            migrate Job does when no River hook owns that step.
+            --river=false: a River hook or the operator applies it. When
+            MIGRATION_DATABASE_URI is configured one of the two is required,
+            so River is never skipped without a word.
 
 Each step prints its JSON result on stdout and logs its duration at Info on
 stderr. The first step that fails stops the run: later steps do not run, and
@@ -134,6 +137,22 @@ func runSteps(ctx context.Context, env cli.Env, build func(river bool) []upgrade
 	}
 	if flags.NArg() != 0 {
 		fmt.Fprintln(env.Stderr, "argument error: positional arguments are not accepted")
+		return cli.ExitUsage
+	}
+	if env.Lookup == nil {
+		env.Lookup = func(string) (string, bool) { return "", false }
+	}
+	riverChosen := false
+	flags.Visit(func(set *flag.Flag) { riverChosen = riverChosen || set.Name == "river" })
+	if configured, _ := migrationDatabaseConfigured(env.Lookup); configured && !riverChosen {
+		// The Python Job ran River whenever MIGRATION_DATABASE_URI was set.
+		// A caller that does not say whether this run owns River would skip
+		// it without a word, so it must choose: --river, or --river=false
+		// when a River hook or the operator applies it.
+		_ = json.NewEncoder(env.Stderr).Encode(map[string]any{"error": map[string]string{
+			"code":   "river_step_unspecified",
+			"detail": "MIGRATION_DATABASE_URI is configured, so this run must say whether it applies River: pass --river, or --river=false when a River hook or the operator applies it",
+		}})
 		return cli.ExitUsage
 	}
 	steps := build(*river)

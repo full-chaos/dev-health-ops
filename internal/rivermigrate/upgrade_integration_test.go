@@ -48,7 +48,7 @@ func TestUpgradeRunsTheJobEndToEnd(t *testing.T) {
 		"OPERATIONAL_ORDERING_CONTRACT":         "2",
 	}
 
-	code, results, stderr := runUpgrade(t, settings)
+	code, results, stderr := runUpgrade(t, settings, "--river=false")
 	if code != cli.ExitOK || len(results) != 3 {
 		t.Fatalf("first upgrade: exit %d, %d result(s), stderr:\n%s", code, len(results), stderr)
 	}
@@ -68,7 +68,7 @@ func TestUpgradeRunsTheJobEndToEnd(t *testing.T) {
 		t.Fatalf("the steps did not run in the Job's order:\n%s", stderr)
 	}
 
-	code, results, stderr = runUpgrade(t, settings)
+	code, results, stderr = runUpgrade(t, settings, "--river=false")
 	if code != cli.ExitOK || len(results) != 3 || results[0]["action"] != "up_to_date" || results[2]["action"] != "up_to_date" {
 		t.Fatalf("second upgrade: exit %d, results %v, stderr:\n%s", code, results, stderr)
 	}
@@ -96,7 +96,7 @@ func TestUpgradeRunsTheJobEndToEnd(t *testing.T) {
 		unreachable[key] = value
 	}
 	unreachable["CLICKHOUSE_URI"] = "clickhouse://default:unused@127.0.0.1:1/nothing"
-	code, results, stderr = runUpgrade(t, unreachable)
+	code, results, stderr = runUpgrade(t, unreachable, "--river=false")
 	if code != cli.ExitFailure || len(results) != 2 ||
 		!strings.Contains(stderr, `"code":"step_failed"`) || !strings.Contains(stderr, `"step":"migrate clickhouse upgrade"`) {
 		t.Fatalf("an unreachable ClickHouse: exit %d, results %v, stderr:\n%s", code, results, stderr)

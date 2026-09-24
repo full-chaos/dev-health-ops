@@ -3,6 +3,7 @@ package syncadmin
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -167,7 +168,7 @@ func TestCoverageEmitsTheBuildersInfoEvents(t *testing.T) {
 	if status != http.StatusOK || len(got) != 2 || !strings.Contains(got[0], "msg=sync_coverage_summary_waiting") ||
 		!strings.Contains(got[1], "msg=sync_coverage_summary_completed") || !strings.Contains(got[1], config) ||
 		!strings.Contains(got[1], "elapsed_seconds=") || !strings.Contains(got[1], "gap_count=true") ||
-		!strings.Contains(got[1], `failed_range_count=0`) || !strings.Contains(got[1], "projection_version=2") ||
+		!strings.Contains(got[1], `failed_range_count=`) || !strings.Contains(got[1], "projection_version=2.0") ||
 		!strings.Contains(got[1], "projection_refreshing=true") {
 		t.Errorf("completed: %d %q", status, got)
 	}
@@ -177,5 +178,33 @@ func TestCoverageEmitsTheBuildersInfoEvents(t *testing.T) {
 	if status != http.StatusInternalServerError || strings.Contains(logs.String(), "sync_coverage_summary_completed") ||
 		!strings.Contains(logs.String(), "step=coverage_log_fields") {
 		t.Errorf("missing failed_range_count: %d %s", status, logs)
+	}
+}
+
+// TestCoverageCompletedEventCarriesStoredValuesAsJSON pins the completed
+// event's payload fields as the Python JSON logger writes extras: an
+// integer past int64 is a number, a string is a string, and a list, an
+// object or null is JSON, never a repr.
+func TestCoverageCompletedEventCarriesStoredValuesAsJSON(t *testing.T) {
+	payload := strings.Replace(strings.Replace(coverageMinimal, `"gap_count": true`, `"gap_count": 9223372036854775808`, 1),
+		`"failed_range_count": "0"`, `"failed_range_count": [1, {"a": null}]`, 1)
+	var logs bytes.Buffer
+	reader := &coverageReader{faultReader: &faultReader{}, row: &coverageProjection{Payload: payload}}
+	h := &handlers{store: reader, features: faultFeatures{}, logger: slog.New(slog.NewJSONHandler(&logs, nil))}
+	serveAs(t, h, h.getCoverage, "/x", map[string]string{"config_id": faultConfigID.String()})
+	var completed map[string]json.RawMessage
+	for _, line := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+		var event map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(line), &event); err == nil && string(event["msg"]) == `"sync_coverage_summary_completed"` {
+			completed = event
+		}
+	}
+	for key, want := range map[string]string{
+		"gap_count": `9223372036854775808`, "failed_range_count": `[1,{"a":null}]`,
+		"projection_version": `2.0`, "projection_refreshing": `false`,
+	} {
+		if got := string(completed[key]); got != want {
+			t.Errorf("%s = %s, want %s (all: %v)", key, got, want, completed)
+		}
 	}
 }

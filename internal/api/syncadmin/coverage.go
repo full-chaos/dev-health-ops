@@ -431,21 +431,22 @@ func coverageCompletedFields(payload *pyjson.Object) ([]any, error) {
 	}, nil
 }
 
-// logValue is a stored JSON value as a log attribute: numbers, strings and
-// bools as themselves, anything else as its Python repr.
+// logValue is a stored JSON value as a log attribute carrying its JSON
+// form, as the Python JSON logger writes the extra: an integer of any size
+// a number, a string quoted, a bool, null, a list or an object as JSON. A
+// value json.dumps refuses falls back to its repr.
 func logValue(key string, value pyjson.Value) slog.Attr {
-	switch typed := value.(type) {
-	case pyjson.Int:
-		if typed.IsInt64() {
-			return slog.Int64(key, typed.Int64())
-		}
-		return slog.String(key, typed.String())
-	case pyjson.Float:
-		return slog.Float64(key, float64(typed))
-	case string:
-		return slog.String(key, typed)
-	case bool:
-		return slog.Bool(key, typed)
+	encoded, err := pyjson.Marshal(value)
+	if err != nil {
+		return slog.String(key, pyjson.Repr(value))
 	}
-	return slog.String(key, pyjson.Repr(value))
+	return slog.Any(key, loggedJSON(encoded))
 }
+
+// loggedJSON is a log value already in JSON form: a JSON log handler embeds
+// it as is (a big integer stays a number), a text handler prints its text.
+type loggedJSON []byte
+
+func (value loggedJSON) MarshalJSON() ([]byte, error) { return value, nil }
+
+func (value loggedJSON) MarshalText() ([]byte, error) { return value, nil }

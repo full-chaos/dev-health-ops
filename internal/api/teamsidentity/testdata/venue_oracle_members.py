@@ -33,7 +33,9 @@ def _identities(path: str) -> list[Any]:
     )
 
     out = []
-    for row in json.load(open(path)):
+    with open(path) as handle:
+        rows = json.load(handle)
+    for row in rows:
         out.append(
             ClickHouseIdentity(
                 canonical_id=row["canonical_id"],
@@ -76,7 +78,9 @@ async def _run(mode: str, args: list[str]) -> str:
         setattr(linear_client, "LINEAR_API_URL", stub_url + "/graphql")
         members = await svc.discover_members_linear(api_key=api_key, team_key=team_key)
         team_id, provider = team_key, "linear"
-    matched = await svc.match_members(members, identity_store=_Store(_identities(identities_path)))
+    matched = await svc.match_members(
+        members, identity_store=_Store(_identities(identities_path))
+    )
     response = TeamMembersDiscoverResponse(
         team_id=team_id, provider=provider, members=matched, total=len(matched)
     )

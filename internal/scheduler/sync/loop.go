@@ -388,9 +388,15 @@ func (loop *Loop) Shutdown(ctx context.Context) error {
 	if loop == nil || ctx == nil {
 		return ErrInvalidTransactionRequest
 	}
-	loop.setFailed()
+	// Readiness and the up gauge are cleared in the same critical section that
+	// sets stopping. A step whose success tail is already queued on loop.mu
+	// then either runs first (and this clear wins) or finds stopping set and
+	// leaves the state alone; clearing before taking the lock would let that
+	// tail reopen readiness after Shutdown had returned.
 	loop.mu.Lock()
 	loop.stopping = true
+	loop.ready.Store(false)
+	loop.up = false
 	cancel, ticker, done := loop.cancel, loop.ticker, loop.done
 	loop.mu.Unlock()
 	if ticker != nil {

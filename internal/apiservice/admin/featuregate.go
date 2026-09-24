@@ -43,13 +43,18 @@ func (h *handlers) requireFeature(ctx context.Context, w http.ResponseWriter, fe
 	if allowed {
 		return true
 	}
+	writeFeatureNotLicensed(w, feature)
+	return false
+}
+
+// writeFeatureNotLicensed is the decorator's 402 body.
+func writeFeatureNotLicensed(w http.ResponseWriter, feature string) {
 	detail := pyjson.NewObject()
 	detail.Set("error", "feature_not_licensed")
 	detail.Set("feature", feature)
 	detail.Set("required_tier", "enterprise")
 	detail.Set("current_tier", "community")
 	policy.WriteDetail(w, http.StatusPaymentRequired, detail, nil)
-	return false
 }
 
 // featureMinTier is the STANDARD_FEATURES minimum tier of each feature this

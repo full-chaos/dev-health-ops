@@ -17,7 +17,7 @@ import (
 // "/api/v1/admin" -- this is the whole route table this Service mounts
 // under that prefix, so this file list is also this test's own coverage
 // statement.
-var adminRouteGuardFiles = []string{"impersonation.go", "users.go", "orgs.go", "platformstats.go", "featureflags.go", "auditlogs.go", "ipallowlist.go"}
+var adminRouteGuardFiles = []string{"impersonation.go", "users.go", "orgs.go", "platformstats.go", "featureflags.go", "auditlogs.go", "ipallowlist.go", "retention.go"}
 
 // adminRouteGuardFuncs names the exact functions parsed for a Route
 // table -- a route registered anywhere else in this package is invisible
@@ -31,6 +31,7 @@ var adminRouteGuardFuncs = map[string]bool{
 	"featureRoutes":       true,
 	"auditLogRoutes":      true,
 	"ipAllowlistRoutes":   true,
+	"retentionRoutes":     true,
 }
 
 // adminRouteGuardExceptions names every route this test permits at a
@@ -131,11 +132,10 @@ func guardLevelOf(handler ast.Expr) (string, bool) {
 		return "", false
 	}
 	name := calleeName(call.Fun)
-	// checkOrMethodNotAllowed is the one dispatcher (see its doc comment in
-	// ipallowlist.go): it wraps the check handler in bodyFirst(policy.Admin)
-	// itself and answers the 405 for other paths before any guard, as
-	// FastAPI's router does. TestDispatcherGuardsAtAdmin pins that.
-	if name == "checkOrMethodNotAllowed" && len(call.Args) == 0 {
+	// The dispatchers (dispatcherFiles) wrap their handlers in a guard at
+	// Admin themselves and answer the 405 for other paths before any guard,
+	// as FastAPI's router does. TestDispatchersGuardAtAdmin pins that.
+	if dispatcherFiles[name] != "" && len(call.Args) == 0 {
 		return "Admin", true
 	}
 	if len(call.Args) == 0 {
@@ -285,31 +285,46 @@ func TestAdminRoutesAreNeverMountedBelowAdmin(t *testing.T) {
 	}
 }
 
-// TestDispatcherGuardsAtAdmin pins the level guardLevelOf assumes for
-// checkOrMethodNotAllowed: its source must wrap the check handler in
-// bodyFirst(policy.Admin, ...).
-func TestDispatcherGuardsAtAdmin(t *testing.T) {
-	tree, err := parser.ParseFile(token.NewFileSet(), "ipallowlist.go", nil, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	found := false
-	ast.Inspect(tree, func(n ast.Node) bool {
-		fn, ok := n.(*ast.FuncDecl)
-		if !ok || fn.Name.Name != "checkOrMethodNotAllowed" {
-			return true
+// dispatcherFiles names each route-table dispatcher (a handler that tells a
+// literal path segment from a wildcard one, because the route table cannot
+// register the two side by side) and the file that defines it.
+var dispatcherFiles = map[string]string{
+	"checkOrMethodNotAllowed":  "ipallowlist.go",
+	"resourceTypesOrGetPolicy": "retention.go",
+}
+
+// TestDispatchersGuardAtAdmin pins the level guardLevelOf assumes for every
+// dispatcher: its source must call a guard at policy.Admin, and every guard
+// call inside it must be at Admin.
+func TestDispatchersGuardAtAdmin(t *testing.T) {
+	for name, file := range dispatcherFiles {
+		tree, err := parser.ParseFile(token.NewFileSet(), file, nil, 0)
+		if err != nil {
+			t.Fatal(err)
 		}
-		ast.Inspect(fn, func(n ast.Node) bool {
-			if call, ok := n.(*ast.CallExpr); ok {
-				if level, guarded := guardLevelOf(call); guarded && level == "Admin" && calleeName(call.Fun) == "bodyFirst" {
-					found = true
-				}
+		guards, wrong := 0, 0
+		ast.Inspect(tree, func(n ast.Node) bool {
+			fn, ok := n.(*ast.FuncDecl)
+			if !ok || fn.Name.Name != name {
+				return true
 			}
-			return true
+			ast.Inspect(fn, func(n ast.Node) bool {
+				call, ok := n.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				if level, guarded := guardLevelOf(call); guarded && (calleeName(call.Fun) == "bodyFirst" || calleeName(call.Fun) == "Wrap") {
+					guards++
+					if level != "Admin" {
+						wrong++
+					}
+				}
+				return true
+			})
+			return false
 		})
-		return false
-	})
-	if !found {
-		t.Fatal("checkOrMethodNotAllowed no longer wraps the check handler in bodyFirst(policy.Admin, ...)")
+		if guards == 0 || wrong != 0 {
+			t.Errorf("%s: %d guard calls, %d not at Admin; it must guard every handler it dispatches at Admin", name, guards, wrong)
+		}
 	}
 }

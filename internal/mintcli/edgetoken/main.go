@@ -36,6 +36,13 @@ import (
 // is never a flag value.
 const postgresURIEnvVar = "POSTGRES_URI"
 
+// The -principal values: the read-level proof principal (the default, so
+// every existing caller is unchanged) and the org-admin proof principal.
+const (
+	principalProof      = "proof"
+	principalAdminProof = "admin-proof"
+)
+
 // lookupTimeout bounds the database read. It stays below go-api-prove's
 // own per-invocation helper timeout, so a slow database fails here with
 // this program's message rather than as a killed helper.
@@ -103,10 +110,14 @@ func Mint(ctx context.Context, args []string) (string, error) {
 func run(ctx context.Context, args []string, stdout, flagErrOutput io.Writer, open openFunc) error {
 	fs := flag.NewFlagSet("mint-edge-token", flag.ContinueOnError)
 	fs.SetOutput(flagErrOutput)
-	org := fs.String("org", "", "org id (UUID) to mint the token for; the proof service principal must hold a read-level membership in it")
+	org := fs.String("org", "", "org id (UUID) to mint the token for; the principal must hold its membership in it (read-level for proof, admin for admin-proof)")
+	principal := fs.String("principal", principalProof, "which dedicated service principal to mint for: proof (read-level, the default) or admin-proof (the org-admin principal, admin role only)")
 	ttl := fs.Duration("ttl", edgetokenmint.DefaultTTL, fmt.Sprintf("token lifetime, at most %s; dho goapi prove re-runs this helper as the token ages", edgetokenmint.MaxTTL))
 	if err := fs.Parse(args); err != nil {
 		return cli.WrapFlagParseError(err)
+	}
+	if *principal != principalProof && *principal != principalAdminProof {
+		return fmt.Errorf("-principal must be %s or %s", principalProof, principalAdminProof)
 	}
 	if strings.TrimSpace(*org) == "" {
 		return errors.New("-org is required")
@@ -133,7 +144,11 @@ func run(ctx context.Context, args []string, stdout, flagErrOutput io.Writer, op
 	}
 	defer closeDB()
 
-	token, err := edgetokenmint.MintForProve(ctx, db, signingKey, *org, edgetokenmint.Options{TTL: *ttl})
+	mint := edgetokenmint.MintForProve
+	if *principal == principalAdminProof {
+		mint = edgetokenmint.MintForAdminProve
+	}
+	token, err := mint(ctx, db, signingKey, *org, edgetokenmint.Options{TTL: *ttl})
 	if err != nil {
 		return err
 	}

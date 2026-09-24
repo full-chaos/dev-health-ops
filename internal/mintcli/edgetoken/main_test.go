@@ -42,11 +42,13 @@ type fakeDB struct {
 
 func (d *fakeDB) QueryRow(_ context.Context, _ string, args ...any) pgx.Row {
 	d.args = args
-	role := "viewer"
-	return fakeRow{values: []any{
-		edgetokenmint.ProvePrincipalID, "go-api-prove@service.dev-health.invalid",
-		d.active, false, 6, edgetokenmint.ServiceAuthProvider, false, &role,
-	}}
+	// The row answers for the principal the lookup bound: the admin
+	// principal holds admin, the proof principal viewer.
+	id, email, role := edgetokenmint.ProvePrincipalID, "go-api-prove@service.dev-health.invalid", "viewer"
+	if len(args) > 0 && args[0] == edgetokenmint.AdminProofPrincipalID {
+		id, email, role = edgetokenmint.AdminProofPrincipalID, "go-api-admin-prove@service.dev-health.invalid", "admin"
+	}
+	return fakeRow{values: []any{id, email, d.active, false, 6, edgetokenmint.ServiceAuthProvider, false, &role}}
 }
 
 // opener returns an openFunc over db, recording whether it was used and
@@ -66,6 +68,8 @@ func TestRunRefusesBadFlagsWithoutOpeningTheDatabase(t *testing.T) {
 		"zero ttl":          {"-org", testOrg, "-ttl", "0s"},
 		"negative ttl":      {"-org", testOrg, "-ttl", "-1m"},
 		"ttl above the cap": {"-org", testOrg, "-ttl", "31m"},
+		"unknown principal": {"-org", testOrg, "-principal", "owner"},
+		"empty principal":   {"-org", testOrg, "-principal", ""},
 	} {
 		t.Run(name, func(t *testing.T) {
 			var opened, closed bool
@@ -202,5 +206,43 @@ func TestOpenPostgresNeverEchoesTheURI(t *testing.T) {
 		if strings.Contains(err.Error(), password) {
 			t.Fatalf("the error echoed the URI: %v", err)
 		}
+	}
+}
+
+// -principal admin-proof mints for the org-admin proof principal, and only
+// then: the default is still the read-level proof principal.
+func TestRunMintsForTheAdminProofPrincipalOnlyWhenAsked(t *testing.T) {
+	t.Setenv(edgetokenmint.SigningKeyEnvVar, testKey)
+	t.Setenv(edgetokenmint.IssuerEnvVar, "")
+	t.Setenv(edgetokenmint.AudienceEnvVar, "")
+	for name, tc := range map[string]struct {
+		args        []string
+		wantSubject string
+		wantRole    string
+	}{
+		"default":           {[]string{"-org", testOrg}, edgetokenmint.ProvePrincipalID, "viewer"},
+		"explicit proof":    {[]string{"-org", testOrg, "-principal", "proof"}, edgetokenmint.ProvePrincipalID, "viewer"},
+		"explicit admin":    {[]string{"-org", testOrg, "-principal", "admin-proof"}, edgetokenmint.AdminProofPrincipalID, "admin"},
+		"admin, flag first": {[]string{"-principal", "admin-proof", "-org", testOrg, "-ttl", "1m"}, edgetokenmint.AdminProofPrincipalID, "admin"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			db := &fakeDB{active: true}
+			var opened, closed bool
+			var out bytes.Buffer
+			if err := run(context.Background(), tc.args, &out, io.Discard, opener(db, &opened, &closed)); err != nil {
+				t.Fatalf("run: %v", err)
+			}
+			if !reflect.DeepEqual(db.args, []any{tc.wantSubject, testOrg}) {
+				t.Fatalf("looked up %v, want %s in the requested org", db.args, tc.wantSubject)
+			}
+			claims := &edgetokenmint.Claims{}
+			if _, err := jwt.ParseWithClaims(strings.TrimSpace(out.String()), claims, func(*jwt.Token) (any, error) { return []byte(testKey), nil },
+				jwt.WithValidMethods([]string{"HS256"}), jwt.WithExpirationRequired()); err != nil {
+				t.Fatalf("the printed token does not verify: %v", err)
+			}
+			if claims.Subject != tc.wantSubject || claims.Role != tc.wantRole {
+				t.Fatalf("claims subject %s role %s, want %s %s", claims.Subject, claims.Role, tc.wantSubject, tc.wantRole)
+			}
+		})
 	}
 }

@@ -367,3 +367,136 @@ func TestMintForProveCarriesTheRowTokenVersion(t *testing.T) {
 		t.Fatalf("an inactive principal was minted for (token bytes=%d, err=%v)", len(token), err)
 	}
 }
+
+func adminPrincipal() Principal {
+	return Principal{
+		UserID:       AdminProofPrincipalID,
+		Email:        "go-api-admin-prove@service.dev-health.invalid",
+		OrgID:        testOrg,
+		Role:         "admin",
+		TokenVersion: 5,
+	}
+}
+
+// The role a token may carry is decided per principal (CHAOS-6570): the
+// org-admin proof principal mints admin and nothing else; the read-level
+// proof principal is still refused admin; no other user id can ever carry
+// admin, whatever the caller asks for.
+func TestMintRoleIsDecidedPerPrincipal(t *testing.T) {
+	clearIssuerAudienceEnv(t)
+	otherID := "00000000-0000-4000-8000-00000000e0e3"
+	for name, tc := range map[string]struct {
+		userID, role string
+		want         bool
+	}{
+		"admin principal, admin":     {AdminProofPrincipalID, "admin", true},
+		"admin principal, viewer":    {AdminProofPrincipalID, "viewer", false},
+		"admin principal, member":    {AdminProofPrincipalID, "member", false},
+		"admin principal, owner":     {AdminProofPrincipalID, "owner", false},
+		"admin principal, empty":     {AdminProofPrincipalID, "", false},
+		"proof principal, admin":     {ProvePrincipalID, "admin", false},
+		"proof principal, viewer":    {ProvePrincipalID, "viewer", true},
+		"proof principal, member":    {ProvePrincipalID, "member", true},
+		"any other principal, admin": {otherID, "admin", false},
+		"any other principal, owner": {otherID, "owner", false},
+		"upper-case admin id, admin": {strings.ToUpper(AdminProofPrincipalID), "admin", false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			principal := testPrincipal()
+			principal.UserID, principal.Role = tc.userID, tc.role
+			token, err := Mint([]byte(testKey), principal, Options{Now: func() time.Time { return testNow }})
+			if tc.want {
+				if err != nil {
+					t.Fatalf("refused: %v", err)
+				}
+				claims := decodeSegment(t, token, 1)
+				if claims["role"] != tc.role || claims["sub"] != tc.userID {
+					t.Fatalf("claims role %v sub %v, want %s %s", claims["role"], claims["sub"], tc.role, tc.userID)
+				}
+				return
+			}
+			if !errors.Is(err, ErrRoleNotAllowed) || token != "" {
+				t.Fatalf("minted %d bytes / err %v; want ErrRoleNotAllowed", len(token), err)
+			}
+			if RoleAllowedFor(tc.userID, tc.role) {
+				t.Fatalf("RoleAllowedFor(%s, %q) = true", tc.userID, tc.role)
+			}
+		})
+	}
+}
+
+func adminRow(mutate func(values []any)) fakeRow {
+	return principalRow(func(v []any) {
+		v[0] = AdminProofPrincipalID
+		v[1] = "go-api-admin-prove@service.dev-health.invalid"
+		v[7] = strPtr("admin")
+		if mutate != nil {
+			mutate(v)
+		}
+	})
+}
+
+func TestLookupAdminPrincipalReadsItsOwnRowAndRefusesEveryOtherShape(t *testing.T) {
+	q := &fakeQuerier{row: adminRow(nil)}
+	principal, err := LookupAdminPrincipal(context.Background(), q, testOrg)
+	if err != nil {
+		t.Fatalf("LookupAdminPrincipal: %v", err)
+	}
+	if want := (Principal{UserID: AdminProofPrincipalID, Email: "go-api-admin-prove@service.dev-health.invalid", OrgID: testOrg, Role: "admin", TokenVersion: 4}); principal != want {
+		t.Fatalf("principal = %+v, want %+v", principal, want)
+	}
+	if !reflect.DeepEqual(q.args, []any{AdminProofPrincipalID, testOrg}) {
+		t.Fatalf("bound args = %v, want the admin principal id then the org", q.args)
+	}
+
+	for name, tc := range map[string]struct {
+		row  fakeRow
+		want error
+	}{
+		"no users row":            {row: fakeRow{err: pgx.ErrNoRows}, want: ErrPrincipalNotFound},
+		"a human row":             {row: adminRow(func(v []any) { v[5] = "local" }), want: ErrPrincipalNotService},
+		"service with a password": {row: adminRow(func(v []any) { v[6] = true }), want: ErrPrincipalNotService},
+		"inactive":                {row: adminRow(func(v []any) { v[2] = false }), want: ErrPrincipalInactive},
+		"superuser":               {row: adminRow(func(v []any) { v[3] = true }), want: ErrPrincipalSuperuser},
+		"no membership in org":    {row: adminRow(func(v []any) { v[7] = (*string)(nil) }), want: ErrNoMembership},
+		"viewer in org":           {row: adminRow(func(v []any) { v[7] = strPtr("viewer") }), want: ErrRoleNotAllowed},
+		"member in org":           {row: adminRow(func(v []any) { v[7] = strPtr("member") }), want: ErrRoleNotAllowed},
+		"owner in org":            {row: adminRow(func(v []any) { v[7] = strPtr("owner") }), want: ErrRoleNotAllowed},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := LookupAdminPrincipal(context.Background(), &fakeQuerier{row: tc.row}, testOrg); !errors.Is(err, tc.want) {
+				t.Fatalf("err = %v, want %v", err, tc.want)
+			}
+		})
+	}
+
+	// The read-level principal's lookup is unchanged: an admin row for it is
+	// still refused, so the two principals cannot swap roles.
+	if _, err := LookupPrincipal(context.Background(), &fakeQuerier{row: principalRow(func(v []any) { v[7] = strPtr("admin") })}, testOrg); !errors.Is(err, ErrRoleNotAllowed) {
+		t.Fatalf("the proof principal holding admin: err = %v, want ErrRoleNotAllowed", err)
+	}
+	// ...and the proof lookup binds the proof principal's id, never the admin's.
+	proofQ := &fakeQuerier{row: principalRow(nil)}
+	if _, err := LookupPrincipal(context.Background(), proofQ, testOrg); err != nil || proofQ.args[0] != ProvePrincipalID {
+		t.Fatalf("proof lookup bound %v (err %v), want %s", proofQ.args, err, ProvePrincipalID)
+	}
+}
+
+func TestMintForAdminProveMintsTheAdminRoleAndCarriesTheRowTokenVersion(t *testing.T) {
+	clearIssuerAudienceEnv(t)
+	q := &fakeQuerier{row: adminRow(func(v []any) { v[4] = 11 })}
+	token, err := MintForAdminProve(context.Background(), q, []byte(testKey), testOrg, Options{})
+	if err != nil {
+		t.Fatalf("MintForAdminProve: %v", err)
+	}
+	claims := decodeSegment(t, token, 1)
+	if claims["role"] != "admin" || claims["sub"] != AdminProofPrincipalID || claims["org_id"] != testOrg || claims["tv"] != float64(11) || claims["is_superuser"] != false {
+		t.Fatalf("claims = %v", claims)
+	}
+
+	// The viewer entry point never mints admin, even when the row says so.
+	viewerQ := &fakeQuerier{row: principalRow(func(v []any) { v[7] = strPtr("admin") })}
+	if token, err := MintForProve(context.Background(), viewerQ, []byte(testKey), testOrg, Options{}); err == nil || token != "" {
+		t.Fatalf("MintForProve minted for an admin row (bytes=%d, err=%v)", len(token), err)
+	}
+}

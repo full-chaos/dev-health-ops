@@ -766,6 +766,25 @@ only source for `dho goapi prove`'s edge credential; the earlier
 hand-minted static bearer, and the older subprocess-exec path before it,
 are both retired.
 
+### The org-admin proof principal
+
+Proofs of org-admin routes need a principal with the `admin` membership, and
+the principal above is read-level on purpose: every existing proof depends
+on it. So there is a **second** dedicated service principal, never a
+promotion of the first: the `users` row with the fixed id
+`00000000-0000-4000-8000-00000000e0e2`, selected with `dho mint edge-token
+-principal admin-proof` (the default, `-principal proof`, is the read-level
+principal, so every current caller is unchanged). It is a service identity
+under the same rules (`auth_provider = 'service'`, no password, active, not a
+superuser) and must hold **exactly the `admin` role** in the requested org;
+a `viewer`, `member` or `owner` row for it is refused. The minter's role
+check is per principal: `admin` can be minted for that one id only, so the
+read-level principal and every other user id are refused it. The row and its
+one Admin membership are not created by a migration: an operator bootstraps
+them per environment (values never recorded), and the proof org's read-back
+shows ids only. Platform superadmin proofs are a different principal and are
+not covered here.
+
 ## Float comparison: engine nondeterminism and the Tier-B rule
 
 ClickHouse merges partial aggregate states in thread-completion order and

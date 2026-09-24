@@ -100,7 +100,9 @@ func TestRunStepsRiverStep(t *testing.T) {
 		if code != cli.ExitOK || !reflect.DeepEqual(ran, testCase.want) {
 			t.Fatalf("args %v env %v: exit %d, ran %v; want %v", testCase.args, testCase.env, code, ran, testCase.want)
 		}
-		skipped := strings.Contains(stderr.String(), `"msg":"migrate step skipped","step":"river","reason":"RIVER_ON is not set"`)
+		// A skipped River step is a Warn: an explicit --river that does not
+		// run is something an operator must see at the default log level.
+		skipped := strings.Contains(stderr.String(), `"level":"WARN","msg":"migrate step skipped","step":"river","reason":"RIVER_ON is not set"`)
 		if wantSkip := len(testCase.args) == 1 && testCase.env == nil; skipped != wantSkip {
 			t.Fatalf("args %v env %v: skip logged %v, want %v: %s", testCase.args, testCase.env, skipped, wantSkip, stderr.String())
 		}

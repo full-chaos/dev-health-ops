@@ -38,7 +38,8 @@ type upgradeStep struct {
 // With river, `migrate river --apply-and-check` runs right after the
 // PostgreSQL step, and only when MIGRATION_DATABASE_URI (or its _FILE or
 // component form) is configured -- what `dev-hops migrate postgres` did when
-// no River hook owned that step.
+// no River hook owned that step. A skipped step is logged at Warn: an explicit
+// --river that does not run must be visible at the default log level.
 func upgradeSteps(river bool) []upgradeStep {
 	steps := []upgradeStep{{name: "migrate postgres upgrade", run: verbRun(migrationPostgresCommand(), "upgrade")}}
 	if river {
@@ -161,7 +162,7 @@ func runSteps(ctx context.Context, env cli.Env, build func(river bool) []upgrade
 	for index, step := range steps {
 		if step.when != nil {
 			if run, skip := step.when(env.Lookup); !run {
-				logger.Info("migrate step skipped", "step", step.name, "reason", skip)
+				logger.Warn("migrate step skipped", "step", step.name, "reason", skip)
 				continue
 			}
 		}

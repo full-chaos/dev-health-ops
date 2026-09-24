@@ -40,17 +40,18 @@
 # in sync with it.
 services:
   query-api:
-    # CHAOS-5608: docker-images.yml's query-api-build/query-api-merge jobs
-    # now publish this image (multi-arch, sha-/main/latest tags) to
-    # ghcr.io/full-chaos/dev-health-query-api on every merge to main -- same
-    # `image:`-pins-but-`build:`-still-works shape compose.yml's go-worker
-    # services already use, so `DEV_HEALTH_QUERY_API_IMAGE` can pin a
-    # published tag/digest, or `--build` still builds this tree locally.
-    image: ${DEV_HEALTH_QUERY_API_IMAGE:-ghcr.io/full-chaos/dev-health-query-api:local}
+    # query-api is the `dho query-api` verb of the dho image, which
+    # docker-images.yml publishes (multi-arch, sha-/main/latest tags) as
+    # ghcr.io/full-chaos/dev-health-go-dho on every merge to main -- the
+    # same `image:`-pins-but-`build:`-still-works shape compose.yml's Go
+    # services use, so `DEV_HEALTH_GO_DHO_IMAGE` can pin a published
+    # tag/digest, or `--build` still builds this tree locally.
+    image: ${DEV_HEALTH_GO_DHO_IMAGE:-ghcr.io/full-chaos/dev-health-go-dho:local}
     build:
       context: ${DEV_HEALTH_OPS_ROOT:-./ops}
-      dockerfile: docker/query-api.Dockerfile
-      target: runtime
+      dockerfile: docker/go-worker.Dockerfile
+      target: dho
+    command: ["query-api"]
     profiles: ["go-api"]
     restart: unless-stopped
     labels:
@@ -115,7 +116,8 @@ services:
       migrate:
         condition: service_completed_successfully
     # No container healthcheck: the runtime image
-    # (gcr.io/distroless/static-debian12:nonroot, docker/query-api.Dockerfile)
+    # (gcr.io/distroless/static-debian12:nonroot, the dho target of
+    # docker/go-worker.Dockerfile)
     # has no shell and no wget/curl -- a CMD-SHELL test cannot run here
     # (see root compose.yml's go-reconciler service for the same constraint,
     # solved there by a binary-native `healthcheck` subcommand this binary

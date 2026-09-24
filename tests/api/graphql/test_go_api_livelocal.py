@@ -37,7 +37,7 @@ ENUMERATION IS BY REFLECTION, NEVER A HAND-MAINTAINED LIST (the lane
 brief's hardest constraint, twice-learned the hard way: CHAOS-4466 lost
 71 tables and CHAOS-4495 lost two sites to exactly this class of drift).
 `_enumerate_registered_documents` below shells out to
-`cmd/query-api/tools/registrydump`, a small Go program that parses
+`cmd/registrydump`, a small Go program that parses
 `internal/queryapi/server/query_route.go`'s actual AST -- the same source the
 running binary compiles from -- and extracts the `registered*Document`
 consts plus the `digestByOperation` map that together are this route's
@@ -130,7 +130,7 @@ pytestmark = [
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 QUERY_ROUTE_GO = REPO_ROOT / "internal" / "queryapi" / "server" / "query_route.go"
-REGISTRYDUMP_DIR = REPO_ROOT / "cmd" / "query-api" / "tools" / "registrydump"
+REGISTRYDUMP_DIR = REPO_ROOT / "cmd" / "registrydump"
 
 # org `70d529e0-3c06-4597-8480-794fd02328b6` (admin@test.com) -- REAL synced
 # data on the shared compose stack. Fixed per the lane brief; never
@@ -195,7 +195,7 @@ def _real_local_data_precondition() -> None:
 
 @functools.lru_cache(maxsize=1)
 def _enumerate_registered_documents() -> tuple[dict[str, str], ...]:
-    """Runs `cmd/query-api/tools/registrydump` against the REAL
+    """Runs `cmd/registrydump` against the REAL
     query_route.go and returns its {"operation", "document", "const_name"}
     rows verbatim. Deliberately raises rather than returning an empty
     tuple on any failure -- an operator missing `go`, or a genuine
@@ -765,18 +765,16 @@ def query_api_binary(tmp_path_factory: pytest.TempPathFactory) -> str:
     go = shutil.which("go")
     if go is None:
         pytest.skip("go toolchain not on PATH")
-    out = tmp_path_factory.mktemp("query-api-bin") / "query-api"
+    out = tmp_path_factory.mktemp("query-api-bin") / "dho"
     result = subprocess.run(
-        [go, "build", "-o", str(out), "./cmd/query-api"],
+        [go, "build", "-o", str(out), "./cmd/dho"],
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
         env={**os.environ, "GOWORK": "off"},
     )
     if result.returncode != 0:
-        pytest.fail(
-            f"go build ./cmd/query-api failed:\n{result.stdout}\n{result.stderr}"
-        )
+        pytest.fail(f"go build ./cmd/dho failed:\n{result.stdout}\n{result.stderr}")
     return str(out)
 
 
@@ -1043,7 +1041,7 @@ def _start_go_server(
         "GO_API_ENVELOPE_AUDIENCE": audience,
     }
     process = subprocess.Popen(
-        [binary],
+        [binary, "query-api"],
         env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,

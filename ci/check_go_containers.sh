@@ -520,6 +520,60 @@ smoke_dho() {
   exit_code="$(docker inspect --format '{{.State.ExitCode}}' "${container_name}")"
   [ "${exit_code}" = "0" ] || die "dho exited with status ${exit_code}"
   cleanup_active_container
+
+  smoke_query_api "${tag}"
+}
+
+# smoke_query_api runs `dho query-api` from the dho image the way its
+# Deployment does: the verb as the only argument, QUERY_API_ADDR on :8090,
+# and no route configured. The one listener must serve /healthz, /readyz and
+# /metrics, leave /query unmounted (404), and stop with exit 0. --help must
+# exit 0 and an unknown argument must exit 2.
+smoke_query_api() {
+  local tag="$1"
+  local container_name="dev-health-go-query-api-smoke-$$"
+  local address
+  local exit_code
+  local code
+
+  printf 'container smoke: query-api\n'
+  docker run --rm "${CONTAINER_SECURITY_ARGS[@]}" "${tag}" query-api --help \
+    | grep -F 'Usage: dho query-api' >/dev/null \
+    || die "dho query-api --help did not print its usage"
+  set +e
+  docker run --rm "${CONTAINER_SECURITY_ARGS[@]}" "${tag}" query-api --unknown >/dev/null 2>&1
+  code=$?
+  set -e
+  [ "${code}" = "2" ] || die "dho query-api with an unknown argument exited ${code}, want 2"
+
+  ACTIVE_CONTAINER="${container_name}"
+  docker run --detach \
+    --name "${container_name}" \
+    --publish "127.0.0.1::8090" \
+    --env "QUERY_API_ADDR=:8090" \
+    "${CONTAINER_SECURITY_ARGS[@]}" \
+    "${tag}" query-api >/dev/null
+  address="$(docker port "${container_name}" 8090/tcp 2>/dev/null | head -n 1 || true)"
+  if [ -z "${address}" ]; then
+    printf 'container query-api exited before publishing its port; its output was:\n' >&2
+    docker logs "${container_name}" 2>&1 | tail -20 >&2
+    die "dho query-api did not publish its listener"
+  fi
+  wait_for_status "http://${address}/healthz" 200 \
+    || die "dho query-api health endpoint did not become available"
+  wait_for_status "http://${address}/readyz" 200 \
+    || die "dho query-api did not become ready"
+  wait_for_status "http://${address}/metrics" 200 \
+    || die "dho query-api metrics endpoint did not become available"
+  wait_for_status "http://${address}/query" 404 \
+    || die "dho query-api mounted /query with no route configured"
+  docker logs "${container_name}" 2>&1 | grep -F '"service_name":"dev-health-query-api"' >/dev/null \
+    || die "dho query-api did not start tracing as dev-health-query-api"
+
+  docker stop --time 5 "${container_name}" >/dev/null
+  exit_code="$(docker inspect --format '{{.State.ExitCode}}' "${container_name}")"
+  [ "${exit_code}" = "0" ] || die "dho query-api exited with status ${exit_code}"
+  cleanup_active_container
 }
 
 reproducible() {

@@ -44,7 +44,7 @@ These are cross-checked twice, by two paths that do not share code:
 `registered_forecast_documents_test.go` digests the Go consts against
 these files, and `src/dev_health_ops/api/graphql/go_api_operations.json`
 carries the same three values, produced independently by
-`cmd/query-api/tools/registrydump` parsing `query_route.go`'s AST.
+`cmd/registrydump` parsing `query_route.go`'s AST.
 
 ## Refreshing
 

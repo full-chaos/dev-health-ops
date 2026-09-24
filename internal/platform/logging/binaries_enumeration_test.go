@@ -42,7 +42,7 @@ var binaryLogging = map[string]string{
 	"dev-health-worker-migrate":              "silent",
 	"dho":                                    "cli",
 	"gqlgen-guard":                           "silent",
-	"query-api":                              "installs",
+	"registrydump":                           "silent",
 }
 
 type listedPackage struct {

@@ -2103,7 +2103,7 @@ const registeredProductTelemetryPlatformDashboardDocument = `query ProductTeleme
 // digestHex is a thin wrapper over the ONE canonical document-digest
 // algorithm (CHAOS-4696): sha256(strings.TrimSpace(text)), hex-encoded,
 // now shared code in internal/queryapi/digest so
-// cmd/query-api/tools/registrydump computes the EXACT SAME digest this
+// cmd/registrydump computes the EXACT SAME digest this
 // running process does -- not a second hand-typed copy of a two-line
 // function that could silently drift from this one. (The schema-digest
 // half -- digest.Schema(schemav1.SDL), computed in buildQueryRoute for
@@ -2576,7 +2576,7 @@ func sortedOperationNames(m map[string]string) []string {
 //
 // Deliberately a free function taking the map as a parameter, NOT a
 // package-level "build the map" function of its own: digestByOperation's
-// composite literal below is cmd/query-api/tools/registrydump's parse
+// composite literal below is cmd/registrydump's parse
 // target (see that tool's doc comment -- it asserts EXACTLY ONE
 // `digestByOperation := map[string]string{...}` assignment exists in
 // this file and reads the map from that literal via go/ast, not via
@@ -2616,7 +2616,7 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 	// index, and each go_api_routing_state row PostgresSwitch looks up by
 	// this same string -- it is never compared against request text.
 	//
-	// This is cmd/query-api/tools/registrydump's parse target -- see
+	// This is cmd/registrydump's parse target -- see
 	// mountedRouteLogMessage's doc comment above for why this literal's
 	// exact shape (a single `digestByOperation := map[string]string{...}`
 	// assignment) must stay untouched.

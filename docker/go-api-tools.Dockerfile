@@ -15,9 +15,8 @@
 # two mint helpers), always invoked from the same tools pod, so there is
 # no deploy unit that wants a subset.
 #
-# Same build-image pin and build discipline as query-api.Dockerfile /
-# go-worker.Dockerfile. The runtime base deliberately does NOT follow
-# those two into distroless: this image is also the operator's one-off
+# Same build-image pin and build discipline as go-worker.Dockerfile.
+# The runtime base deliberately does NOT follow it into distroless: this image is also the operator's one-off
 # corrective-verb pod (docs/operate/runbooks/query-api-bootstrap.md), and
 # a distroless runtime has no shell or coreutils to stay up for
 # `kubectl exec` or to read the baked-in documents dump / operation
@@ -58,15 +57,14 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # internal/goapicli, internal/mintcli, internal/goapidigest and
 # internal/goapiproof) plus contracts/graphql/v1 (the schemav1.SDL embed
 # the posture/schema-digest is computed from) and contracts/jobs/v1 (the job
-# migration policy `dho migrate river` embeds). cmd/query-api is needed
-# too, whole-tree, for its tools/registrydump helper and the
-# query_route.go it reads (below) -- same reasoning query-api.Dockerfile
-# documents for its own COPY internal ./internal: an enumerated
-# subpackage list is how the next import added to any of these goes
+# migration policy `dho migrate river` embeds). cmd/registrydump is needed
+# too, with the query_route.go it reads (below, inside internal/). The
+# whole internal/ tree is copied, not an enumerated subpackage list: an
+# enumerated list is how the next import added to any of these goes
 # uncopied and fails closed with a "-mod=readonly" error instead of a
 # clear diff.
 COPY cmd/dho ./cmd/dho
-COPY cmd/query-api ./cmd/query-api
+COPY cmd/registrydump ./cmd/registrydump
 COPY contracts/graphql/v1 ./contracts/graphql/v1
 COPY contracts/jobs/v1 ./contracts/jobs/v1
 COPY internal ./internal
@@ -92,7 +90,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # old hand-built tags left open.
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    go build -buildvcs=false -trimpath -o /out/registrydump ./cmd/query-api/tools/registrydump && \
+    go build -buildvcs=false -trimpath -o /out/registrydump ./cmd/registrydump && \
     /out/registrydump -file internal/queryapi/server/query_route.go > /out/documents.json && \
     rm /out/registrydump && \
     touch -d "@${SOURCE_DATE_EPOCH}" /out/documents.json

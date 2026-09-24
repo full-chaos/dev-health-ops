@@ -3,7 +3,7 @@
 //
 // CHAOS-4696 PR2: query-api's startup schema-digest verification needs
 // the exact SDL bytes it was built against, and the ops CI/harness
-// digest producer (cmd/query-api/tools/registrydump's schema-digest
+// digest producer (cmd/registrydump's schema-digest
 // subcommand) needs the SAME bytes -- both compute
 // internal/queryapi/digest.Schema() over whatever []byte this
 // package hands them. go:embed is what makes "the bytes a running

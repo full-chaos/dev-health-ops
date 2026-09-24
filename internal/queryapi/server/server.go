@@ -60,6 +60,16 @@ const tracingShutdownTimeout = 5 * time.Second
 
 const defaultAddr = ":8090"
 
+// usage is what -h/--help prints. query-api takes no arguments; every setting
+// is an environment variable, read through the lookup Run is given.
+const usage = `Usage: dho query-api
+
+Serves the read-only Go query plane on QUERY_API_ADDR (default :8090):
+/query, /registry, /buildinfo, the /api/v1 routes, /healthz, /readyz and
+/metrics. It takes no arguments; each route is configured by its own
+environment variables and stays unmounted until they are set.
+`
+
 // Exit codes Run returns, the same set every dho command uses.
 const (
 	exitOK      = 0
@@ -243,8 +253,9 @@ func mountQueryRoute(mux *http.ServeMux, query http.HandlerFunc) {
 
 // Run serves query-api until ctx ends or SIGINT/SIGTERM arrives, and returns
 // the process exit code: 0 after a clean shutdown, 1 when a route cannot be
-// built or the listener fails. query-api takes no arguments; any it is given
-// are logged and ignored, as the binary always did. Logs go to stdout as JSON
+// built or the listener fails. query-api takes no arguments except -h/--help,
+// which prints the usage; any other it is given are logged and ignored, as the
+// binary always did. Logs go to stdout as JSON
 // through the redacting handler, installed as the process default for the run
 // and restored when Run returns.
 //
@@ -260,6 +271,10 @@ func mountQueryRoute(mux *http.ServeMux, query http.HandlerFunc) {
 // passes the process environment as lookup, so the two sources agree; moving
 // the rest onto one option registry is the shell-lifecycle port.
 func Run(ctx context.Context, args []string, lookup func(string) (string, bool), stdout, stderr io.Writer) int {
+	if len(args) == 1 && (args[0] == "-h" || args[0] == "--help") {
+		fmt.Fprint(stdout, usage)
+		return exitOK
+	}
 	getenv := getenvFunc(func(key string) string {
 		value, _ := lookup(key)
 		return value
@@ -375,7 +390,7 @@ func Run(ctx context.Context, args []string, lookup func(string) (string, bool),
 		// to the digestByOperation map it describes, via
 		// mountedRouteLogMessage -- see that function's doc comment for
 		// why it cannot be a package-level function called from here
-		// instead (cmd/query-api/tools/registrydump's AST parser requires
+		// instead (cmd/registrydump's AST parser requires
 		// digestByOperation's composite literal to stay exactly where it
 		// is, assigned directly, not returned from a helper).
 	} else {

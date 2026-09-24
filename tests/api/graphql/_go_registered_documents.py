@@ -18,7 +18,7 @@ cannot see" -- these harnesses could not see their OWN staleness because
 nothing compared their literal against the real source).
 
 :func:`registered_document` is the ONE place these harnesses read a
-document's text from now: ``cmd/query-api/tools/registrydump``'s own
+document's text from now: ``cmd/registrydump``'s own
 enumeration (a ``go/ast`` parse of ``query_route.go``, the exact source
 the running binary compiles from -- the same mechanism
 ``test_go_api_livelocal.py``'s own ``_enumerate_registered_documents``
@@ -39,7 +39,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 QUERY_ROUTE_GO = REPO_ROOT / "internal" / "queryapi" / "server" / "query_route.go"
-REGISTRYDUMP_DIR = REPO_ROOT / "cmd" / "query-api" / "tools" / "registrydump"
+REGISTRYDUMP_DIR = REPO_ROOT / "cmd" / "registrydump"
 
 
 @functools.lru_cache(maxsize=1)

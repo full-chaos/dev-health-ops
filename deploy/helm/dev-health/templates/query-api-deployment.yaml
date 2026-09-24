@@ -6,6 +6,21 @@ learns an endpoint and every operation stays on the Python plane, which is why
 this defaults off like billingEdge and metricsApi.
 */ -}}
 {{- if .Values.queryApi.enabled }}
+{{- /*
+query-api is the `dho query-api` verb. The container passes the verb as its
+only argument and the image entrypoint is dho, so the image must be a dho
+image (dev-health-go-dho or dev-health-go-operator, matched on the last path
+element, so a registry prefix, a tag and a digest are all allowed). The
+retired dev-health-query-api image has no dho entrypoint: its own binary
+exits 2 on the `query-api` argument, so the render refuses it by name.
+*/}}
+{{- $queryApiImage := include "dev-health.queryApiImage" . }}
+{{- if regexMatch "(^|/)dev-health-query-api([:@]|$)" $queryApiImage }}
+{{- fail (printf "queryApi.image %q is the retired dev-health-query-api image, which has no dho entrypoint and exits 2 on `query-api`; use the dev-health-go-dho image." $queryApiImage) }}
+{{- end }}
+{{- if not (regexMatch "(^|/)dev-health-go-(dho|operator)([:@]|$)" $queryApiImage) }}
+{{- fail (printf "queryApi.image %q is not a dho image (dev-health-go-dho or dev-health-go-operator); the container runs `dho query-api`." $queryApiImage) }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -40,8 +55,9 @@ spec:
       serviceAccountName: {{ include "dev-health.serviceAccountName" . }}
       containers:
         - name: query-api
-          image: {{ include "dev-health.queryApiImage" . }}
+          image: {{ $queryApiImage }}
           imagePullPolicy: {{ .Values.queryApi.image.pullPolicy }}
+          args: ["query-api"]
           ports:
             - name: http
               containerPort: {{ .Values.queryApi.port }}

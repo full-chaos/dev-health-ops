@@ -41,7 +41,7 @@ artifact to rubber-stamp.
   (`live-e2e.yml`) diffs that copy against a fresh export from this repo;
   when this file changes, regenerate and commit the web copy too, and run
   web's codegen to refresh generated TS types.
-- **`query-api`** (Go, `ops/cmd/query-api`, gqlgen schema-first): gqlgen's
+- **`query-api`** (Go, `dho query-api`, `ops/internal/queryapi`, gqlgen schema-first): gqlgen's
   code generation takes this same SDL as its input schema. See
   `ops/internal/queryapi/server/README.md` (or the equivalent docs page once wired)
   for the exact gqlgen config pointing here.

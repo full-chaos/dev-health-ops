@@ -14,7 +14,7 @@
     "in the same change.",
     "",
     "Produced by: python -c \"import hashlib,pathlib; print('sha256:'+hashlib.sha256(pathlib.Path('contracts/graphql/v1/schema.graphql').read_bytes()).hexdigest())\"",
-    "Cross-checked by: go run ./cmd/query-api/tools/registrydump -schema-digest"
+    "Cross-checked by: go run ./cmd/registrydump -schema-digest"
   ],
   "sdl": "contracts/graphql/v1/schema.graphql",
   "schema_digest": "sha256:898250a995e65f792e0383a07d7a683251894cbe51f426a4dcf520bcd82bf91e",

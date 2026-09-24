@@ -138,7 +138,8 @@ func (h handlers) stripeWebhook(w http.ResponseWriter, r *http.Request) {
 // stripeEventRoutes are the event types stripe_webhook dispatches by name;
 // every "invoice." type goes to the invoice branch. A type Python applies
 // and this port does not is listed in stripeEventGaps instead, and
-// TestStripeEventRoutesCoverPythonDispatch holds both lists to router.py.
+// TestVenueOracleStripeEventDispatch holds both lists to the executed
+// Python route.
 var stripeEventRoutes = map[string]bool{
 	"checkout.session.completed":           true,
 	"customer.subscription.created":        true,

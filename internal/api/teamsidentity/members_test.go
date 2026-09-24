@@ -8,6 +8,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
 )
 
 func strPtr(s string) *string { return &s }
@@ -133,7 +134,7 @@ func TestParseJiraDatetimeAndStampJSON(t *testing.T) {
 			t.Errorf("%q did not parse", in)
 			continue
 		}
-		if got := stampJSON(stamp); got != want {
+		if got := pytime.Pydantic(*stamp); got != want {
 			t.Errorf("%q rendered %v, want %s", in, got, want)
 		}
 	}
@@ -211,16 +212,43 @@ func TestBatchClaimDetectsADivergentCanonical(t *testing.T) {
 	}
 }
 
-func TestJiraStampInstantOrdersByTheMomentNotTheClock(t *testing.T) {
+func TestJiraTimestampsOrderByTheMomentNotTheClock(t *testing.T) {
 	later := parseJiraDatetime("2026-09-06T08:00:00+0000")
 	earlier := parseJiraDatetime("2026-09-06T10:00:00+14:00")
 	if later == nil || earlier == nil {
 		t.Fatal("both timestamps parse")
 	}
-	if !earlier.Wall.After(later.Wall) {
+	wall := func(d *pytime.DateTime) time.Time {
+		return d.Time.Add(time.Duration(d.Offset) * time.Second)
+	}
+	if !wall(earlier).After(wall(later)) {
 		t.Fatal("the fixture needs the later wall clock on the earlier instant")
 	}
-	if !later.Instant().After(earlier.Instant()) {
-		t.Errorf("08:00Z must be after 10:00+14:00: %v vs %v", later.Instant(), earlier.Instant())
+	if !later.Time.After(earlier.Time) {
+		t.Errorf("08:00Z must be after 10:00+14:00: %v vs %v", later.Time, earlier.Time)
+	}
+}
+
+func TestJiraStrptimeFallback(t *testing.T) {
+	// fromisoformat refuses these; strptime's one-digit fields, leading-space
+	// day and lower-case T accept them.
+	for text, want := range map[string]string{
+		"2026-9-1T1:2:3+0000":        "2026-09-01T01:02:03Z",
+		"2026-09- 1T10:00:00+0100":   "2026-09-01T10:00:00+01:00",
+		"2026-09-01t10:00:00.5+0000": "2026-09-01T10:00:00.500000Z",
+	} {
+		parsed := parseJiraDatetime(text)
+		if parsed == nil {
+			t.Errorf("%q must parse through strptime", text)
+			continue
+		}
+		if got := pytime.Pydantic(*parsed); got != want {
+			t.Errorf("%q rendered %s, want %s", text, got, want)
+		}
+	}
+	for _, bad := range []string{"2026-9-1T1:2:3", "2026-02-30T1:2:3+0000", "2026-9-1T1:2:61+0000", "2026-9-1T1:2:3+2400"} {
+		if parseJiraDatetime(bad) != nil {
+			t.Errorf("%q must not parse", bad)
+		}
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
@@ -21,230 +23,115 @@ const (
 	jiraInferIssueLimit = 500 // iter_issues(limit=500) in JiraActivityInferenceService
 )
 
-// jiraStamp is a parsed Jira timestamp: an aware datetime keeps its own
-// offset, a naive one (no offset in the text) has none -- Python refuses to
-// order the two, which the route surfaces as a 500.
-type jiraStamp struct {
-	// Wall is the timestamp's own clock reading (labelled UTC, no zone);
-	// OffsetMicros is its UTC offset in microseconds when Aware.
-	Wall         time.Time
-	Aware        bool
-	OffsetMicros int64
+// jiraStrptimeLayouts are the two strptime formats
+// JiraActivityInferenceService._parse_jira_datetime falls back to when
+// fromisoformat refuses a string: "%Y-%m-%dT%H:%M:%S.%f%z" and
+// "%Y-%m-%dT%H:%M:%S%z". Python compiles them case-insensitively (so a
+// lower-case "t" matches), with strptime's own field patterns: one- or
+// two-digit month/day/hour/minute/second, a day that may carry a leading
+// space, a fraction of one to six digits, and %z as Z or ±HH[:]MM[[:]SS[.f]].
+var jiraStrptimeLayouts = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)^(\d\d\d\d)-(1[0-2]|0[1-9]|[1-9])-(3[0-1]|[1-2]\d|0[1-9]|[1-9]| [1-9])T(2[0-3]|[0-1]\d|\d):([0-5]\d|\d):(6[0-1]|[0-5]\d|\d)\.([0-9]{1,6})(Z|[+-]\d\d:?[0-5]\d(?::?[0-5]\d(?:\.\d{1,6})?)?)$`),
+	regexp.MustCompile(`(?i)^(\d\d\d\d)-(1[0-2]|0[1-9]|[1-9])-(3[0-1]|[1-2]\d|0[1-9]|[1-9]| [1-9])T(2[0-3]|[0-1]\d|\d):([0-5]\d|\d):(6[0-1]|[0-5]\d|\d)()(Z|[+-]\d\d:?[0-5]\d(?::?[0-5]\d(?:\.\d{1,6})?)?)$`),
 }
 
-// Instant is the moment the stamp names (Wall minus its offset), the value
-// two aware stamps are ordered by.
-func (s jiraStamp) Instant() time.Time {
-	return s.Wall.Add(-time.Duration(s.OffsetMicros) * time.Microsecond)
+// jiraStrptime is datetime.strptime over those two layouts: an aware
+// datetime, or nil where Python raises (an impossible date, a second of 60
+// or 61, an offset of a day or more).
+func jiraStrptime(text string) *pytime.DateTime {
+	for _, layout := range jiraStrptimeLayouts {
+		match := layout.FindStringSubmatch(text)
+		if match == nil {
+			continue
+		}
+		number := func(index int) int {
+			value, _ := strconv.Atoi(strings.TrimSpace(match[index]))
+			return value
+		}
+		year, month, day, hour, minute, second := number(1), number(2), number(3), number(4), number(5), number(6)
+		micro := 0
+		if fraction := match[7]; fraction != "" {
+			micro, _ = strconv.Atoi((fraction + "000000")[:6])
+		}
+		if year < 1 || day > time.Date(year, time.Month(month)+1, 0, 0, 0, 0, 0, time.UTC).Day() || second > 59 {
+			return nil
+		}
+		offsetSeconds, offsetMicro := 0, 0
+		if zone := match[8]; !strings.EqualFold(zone, "Z") {
+			// _strptime's %z handling, step for step: a colon at index 3
+			// must be matched by one at index 5 (else "Inconsistent use of
+			// :"), the colons are dropped, and hours, minutes, seconds and
+			// the fraction are sliced from fixed positions -- a slice that
+			// is not digits (a stray ":" when index 3 held none) raises.
+			z := zone
+			if z[3] == ':' {
+				z = z[:3] + z[4:]
+				if len(z) > 5 {
+					if z[5] != ':' {
+						return nil
+					}
+					z = z[:5] + z[6:]
+				}
+			}
+			slice := func(from, to int) string {
+				if from >= len(z) {
+					return ""
+				}
+				if to > len(z) {
+					to = len(z)
+				}
+				return z[from:to]
+			}
+			atoi := func(text string) (int, bool) {
+				if text == "" {
+					return 0, true
+				}
+				for _, c := range text {
+					if c < '0' || c > '9' {
+						return 0, false
+					}
+				}
+				value, _ := strconv.Atoi(text)
+				return value, true
+			}
+			hours, okH := atoi(slice(1, 3))
+			minutes, okM := atoi(slice(3, 5))
+			seconds, okS := atoi(slice(5, 7))
+			remainder := slice(8, len(z))
+			fraction, okF := atoi((remainder + "000000")[:6])
+			if !okH || !okM || !okS || !okF {
+				return nil
+			}
+			offsetSeconds = hours*3600 + minutes*60 + seconds
+			offsetMicro = fraction
+			if z[0] == '-' {
+				offsetSeconds, offsetMicro = -offsetSeconds, -offsetMicro
+			}
+			if total := int64(offsetSeconds)*1_000_000 + int64(offsetMicro); total <= -86400_000_000 || total >= 86400_000_000 {
+				return nil
+			}
+		}
+		wall := time.Date(year, time.Month(month), day, hour, minute, second, micro*1000, time.UTC)
+		instant := wall.Add(-time.Duration(offsetSeconds)*time.Second - time.Duration(offsetMicro)*time.Microsecond)
+		return &pytime.DateTime{Time: instant, Aware: true, Offset: offsetSeconds, OffsetMicro: offsetMicro}
+	}
+	return nil
 }
 
 // parseJiraDatetime is JiraActivityInferenceService._parse_jira_datetime:
-// every "Z" becomes "+00:00", then ISO 8601 text of the shapes Jira and
-// datetime.fromisoformat share is parsed (YYYY-MM-DD or YYYYMMDD, a single
-// separator character, HH[:MM[:SS[.f]]] or the compact form, an optional
-// +HH[:MM[:SS]] / +HHMM offset); anything else is None. ISO week dates,
-// whitespace before the offset and the other exotic fromisoformat grammars
-// are not parsed (Jira emits none of them).
-func parseJiraDatetime(raw pyjson.Value) *jiraStamp {
+// every "Z" becomes "+00:00", then datetime.fromisoformat (Python 3.14's
+// grammar, pytime.FromISOFormat), then the two strptime layouts; anything
+// else, or a non-string, is None.
+func parseJiraDatetime(raw pyjson.Value) *pytime.DateTime {
 	text, ok := raw.(string)
 	if !ok || text == "" {
 		return nil
 	}
 	text = strings.ReplaceAll(text, "Z", "+00:00")
-	runes := []rune(text)
-	var date time.Time
-	var rest []rune
-	digits := func(s []rune, n int) (int, bool) {
-		if len(s) < n {
-			return 0, false
-		}
-		value := 0
-		for _, c := range s[:n] {
-			if c < '0' || c > '9' {
-				return 0, false
-			}
-			value = value*10 + int(c-'0')
-		}
-		return value, true
+	if parsed, ok := pytime.FromISOFormat(text); ok {
+		return &parsed
 	}
-	var year, month, day int
-	switch {
-	case len(runes) >= 10 && runes[4] == '-' && runes[7] == '-':
-		y, ok1 := digits(runes[0:], 4)
-		m, ok2 := digits(runes[5:], 2)
-		d, ok3 := digits(runes[8:], 2)
-		if !ok1 || !ok2 || !ok3 {
-			return nil
-		}
-		year, month, day, rest = y, m, d, runes[10:]
-	case len(runes) >= 8:
-		y, ok1 := digits(runes[0:], 4)
-		m, ok2 := digits(runes[4:], 2)
-		d, ok3 := digits(runes[6:], 2)
-		if !ok1 || !ok2 || !ok3 {
-			return nil
-		}
-		year, month, day, rest = y, m, d, runes[8:]
-	default:
-		return nil
-	}
-	if month < 1 || month > 12 || day < 1 || year < 1 {
-		return nil
-	}
-	date = time.Date(year, time.Month(month), day, 0, 0, 0, 0, time.UTC)
-	if date.Day() != day {
-		return nil
-	}
-	hour, minute, second, micro := 0, 0, 0, 0
-	aware := false
-	var offsetMicros int64
-	if len(rest) > 0 {
-		rest = rest[1:] // the separator: any single character
-		// Split the time from its offset at the first + or -.
-		timePart, offsetPart := rest, []rune(nil)
-		for index, c := range rest {
-			if c == '+' || c == '-' {
-				timePart, offsetPart = rest[:index], rest[index:]
-				break
-			}
-		}
-		if len(timePart) == 0 {
-			return nil
-		}
-		var okTime bool
-		hour, minute, second, micro, okTime = parseISOTimeOfDay(timePart)
-		if !okTime {
-			return nil
-		}
-		if len(offsetPart) > 0 {
-			micros, okOffset := parseISOOffset(offsetPart)
-			if !okOffset {
-				return nil
-			}
-			aware, offsetMicros = true, micros
-		}
-	}
-	// 24:00[:00[.0]] is accepted and means midnight of the next day; any
-	// other hour-24 time is refused, as are minutes/seconds past 59 and an
-	// offset of a day or more.
-	if hour == 24 && minute == 0 && second == 0 && micro == 0 {
-		hour = 0
-		date = date.AddDate(0, 0, 1)
-		year, month, day = date.Year(), int(date.Month()), date.Day()
-	}
-	if hour > 23 || minute > 59 || second > 59 || offsetMicros <= -86400_000_000 || offsetMicros >= 86400_000_000 {
-		return nil
-	}
-	return &jiraStamp{Wall: time.Date(year, time.Month(month), day, hour, minute, second, micro*1000, time.UTC), Aware: aware, OffsetMicros: offsetMicros}
-}
-
-func parseISOTimeOfDay(s []rune) (hour, minute, second, micro int, ok bool) {
-	body := string(s)
-	fraction := ""
-	if index := strings.IndexAny(body, ".,"); index >= 0 {
-		fraction, body = body[index+1:], body[:index]
-		if fraction == "" {
-			return 0, 0, 0, 0, false
-		}
-		for _, c := range fraction {
-			if c < '0' || c > '9' {
-				return 0, 0, 0, 0, false
-			}
-		}
-		for len(fraction) < 6 {
-			fraction += "0"
-		}
-		micro, _ = strconv.Atoi(fraction[:6])
-	}
-	num := func(t string) (int, bool) {
-		if len(t) != 2 {
-			return 0, false
-		}
-		v, err := strconv.Atoi(t)
-		return v, err == nil && t[0] != '+' && t[0] != '-'
-	}
-	var parts []string
-	if strings.Contains(body, ":") {
-		parts = strings.Split(body, ":")
-	} else {
-		for i := 0; i < len(body); i += 2 {
-			end := i + 2
-			if end > len(body) {
-				end = len(body)
-			}
-			parts = append(parts, body[i:end])
-		}
-	}
-	if len(parts) < 1 || len(parts) > 3 || (fraction != "" && len(parts) != 3) {
-		return 0, 0, 0, 0, false
-	}
-	values := [3]int{}
-	for i, part := range parts {
-		v, valid := num(part)
-		if !valid {
-			return 0, 0, 0, 0, false
-		}
-		values[i] = v
-	}
-	return values[0], values[1], values[2], micro, true
-}
-
-// parseISOOffset reads +HH, +HH:MM, +HH:MM:SS[.ffffff] (or the compact
-// +HHMM, +HHMMSS[.ffffff]) as microseconds; fractional seconds beyond six
-// digits are truncated, and a fraction needs a seconds component.
-func parseISOOffset(s []rune) (int64, bool) {
-	sign := int64(1)
-	if s[0] == '-' {
-		sign = -1
-	}
-	body := string(s[1:])
-	fraction := ""
-	if index := strings.IndexAny(body, ".,"); index >= 0 {
-		fraction, body = body[index+1:], body[:index]
-		if fraction == "" {
-			return 0, false
-		}
-		for _, c := range fraction {
-			if c < '0' || c > '9' {
-				return 0, false
-			}
-		}
-	}
-	var parts []string
-	if strings.Contains(body, ":") {
-		parts = strings.Split(body, ":")
-	} else {
-		for i := 0; i < len(body); i += 2 {
-			end := i + 2
-			if end > len(body) {
-				end = len(body)
-			}
-			parts = append(parts, body[i:end])
-		}
-	}
-	if len(parts) < 1 || len(parts) > 3 || (fraction != "" && len(parts) != 3) {
-		return 0, false
-	}
-	var total int64
-	for i, part := range parts {
-		if len(part) != 2 {
-			return 0, false
-		}
-		v, err := strconv.Atoi(part)
-		if err != nil || part[0] == '+' || part[0] == '-' {
-			return 0, false
-		}
-		total += int64(v) * []int64{3600, 60, 1}[i]
-	}
-	micros := total * 1_000_000
-	if fraction != "" {
-		for len(fraction) < 6 {
-			fraction += "0"
-		}
-		frac, _ := strconv.Atoi(fraction[:6])
-		micros += int64(frac)
-	}
-	return sign * micros, true
+	return jiraStrptime(text)
 }
 
 // inferredMember is InferredMember (schemas_flat.py:650).
@@ -258,7 +145,7 @@ type inferredMember struct {
 	emailRaw   pyjson.Value
 	Count      int
 	Roles      map[string]bool
-	LastActive *jiraStamp
+	LastActive *pytime.DateTime
 }
 
 func confidenceForCount(count int) string {
@@ -340,7 +227,7 @@ func inferJiraMembers(ctx context.Context, credential providerfoundation.Credent
 	activity := map[string]*inferredMember{}
 	var order []string
 	var comparisonErr error
-	touch := func(actor pyjson.Value, role string, updated *jiraStamp) {
+	touch := func(actor pyjson.Value, role string, updated *pytime.DateTime) {
 		object, ok := actor.(*pyjson.Object)
 		if !ok {
 			return
@@ -372,7 +259,7 @@ func inferJiraMembers(ctx context.Context, credential providerfoundation.Credent
 				current.LastActive = updated
 			} else if current.LastActive.Aware != updated.Aware {
 				comparisonErr = fmt.Errorf("can't compare offset-naive and offset-aware datetimes")
-			} else if updated.Instant().After(current.LastActive.Instant()) {
+			} else if updated.Time.After(current.LastActive.Time) {
 				current.LastActive = updated
 			}
 		}
@@ -436,34 +323,6 @@ func optionalTextOf(value pyjson.Value) (*string, error) {
 	return &text, nil
 }
 
-// stampJSON renders a datetime the way pydantic's JSON encoder does: an
-// aware UTC value ends in "Z", another offset in +HH:MM, a naive value has
-// no suffix; microseconds appear as six digits when non-zero.
-func stampJSON(stamp *jiraStamp) pyjson.Value {
-	if stamp == nil {
-		return nil
-	}
-	text := stamp.Wall.Format("2006-01-02T15:04:05")
-	if micro := stamp.Wall.Nanosecond() / 1000; micro != 0 {
-		text += fmt.Sprintf(".%06d", micro)
-	}
-	if stamp.Aware {
-		// pydantic keeps whole seconds of the offset (truncated toward
-		// zero) and prints only hours and minutes of them.
-		offset := stamp.OffsetMicros / 1_000_000
-		if offset == 0 {
-			text += "Z"
-		} else {
-			sign := "+"
-			if offset < 0 {
-				sign, offset = "-", -offset
-			}
-			text += fmt.Sprintf("%s%02d:%02d", sign, offset/3600, offset%3600/60)
-		}
-	}
-	return text
-}
-
 func inferredMemberJSON(member inferredMember) *pyjson.Object {
 	roles := make([]string, 0, len(member.Roles))
 	for role := range member.Roles {
@@ -477,7 +336,11 @@ func inferredMemberJSON(member inferredMember) *pyjson.Object {
 	out.Set("activity_count", int64(member.Count))
 	out.Set("confidence", confidenceForCount(member.Count))
 	out.Set("roles", stringsToValues(roles))
-	out.Set("last_active", stampJSON(member.LastActive))
+	if member.LastActive != nil {
+		out.Set("last_active", pytime.Pydantic(*member.LastActive))
+	} else {
+		out.Set("last_active", nil)
+	}
 	return out
 }
 

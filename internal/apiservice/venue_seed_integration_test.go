@@ -433,9 +433,22 @@ func venueRequests(f venueFixture, tokens map[string]string) []venueoracle.Reque
 		b64(`{"teams":[{"provider_type":"jira","provider_team_id":"qa4","name":"QA4 Imported","description":"drifted","associations":{"project_keys":["QA4","QA4B"]}}],"on_conflict":"merge"}`))
 	add("teams import: FLAG_FOR_REVIEW same drift again is idempotent", "POST", imp, json(bearer("admin")),
 		b64(`{"teams":[{"provider_type":"jira","provider_team_id":"qa4","name":"QA4 Imported","description":"drifted","associations":{"project_keys":["QA4","QA4B"]}}],"on_conflict":"merge"}`))
+	// _list_field (clickhouse_team_drift_projector.py:497): str() of every
+	// non-null element, a string is a one-element list, anything else is [].
+	for _, c := range []struct{ id, projectKeys string }{
+		{"AINT", `[7,"ENG"]`}, {"ANULL", `["a",null]`}, {"ABOOL", `[true]`}, {"AFLOAT", `[1.5]`},
+		{"ASTR", `"single"`}, {"ANUM", `5`}, {"ADICT", `{"a":1}`}, {"ANESTED", `[["x"]]`}, {"AEMPTY", `[]`},
+		{"ANULLV", `null`}, {"ABOOLS", `true`}, {"AFLOATS", `1.5`}, {"AEMPTYSTR", `""`}, {"AUNI", `"日本ü"`}, {"ADICT2", `{"k":[1],"z":null}`},
+	} {
+		add("teams import: AUTO_APPLY project_keys "+c.id, "POST", imp, json(bearer("admin")),
+			team(`"provider_type":"jira","provider_team_id":"`+c.id+`","name":"`+c.id+`","associations":{"project_keys":`+c.projectKeys+`}`))
+	}
+	add("teams import: FLAG_FOR_REVIEW numeric association elements", "POST", imp, json(bearer("admin")),
+		b64(`{"teams":[{"provider_type":"jira","provider_team_id":"qa4","name":"QA4 Imported","description":"drifted","associations":{"project_keys":[7,"QA4"]}}],"on_conflict":"merge"}`))
 	add("teams import: several teams in one request", "POST", imp, json(bearer("admin")),
 		b64(`{"teams":[{"provider_type":"linear","provider_team_id":"L1","name":"Lin One","associations":{"project_keys":["L1"]}},{"provider_type":"linear","provider_team_id":"L2","name":"Lin Two"}],"on_conflict":"merge"}`))
 	add("teams: PUT is not a route (Allow header of the pattern's first route)", "PUT", teams+"/eng", json(bearer("admin")), b64(`{}`))
+	add("teams import: POST to another team id with a malformed body is still a 405", "POST", teams+"/eng", json(bearer("admin")), b64(`{not json`))
 	add("teams import: POST to another team id is not a route", "POST", teams+"/eng", json(bearer("admin")), b64(`{}`))
 	return out
 }

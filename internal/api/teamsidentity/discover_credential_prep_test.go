@@ -193,3 +193,34 @@ func TestGitHubAppBaseURLIsSSRFGuarded(t *testing.T) {
 	_, err = prepareDiscoveryCredential(ctx, "github", app("https://mapped.example"))
 	assertStatus(t, err, 401, "GitHub App authentication failed")
 }
+
+// TestJiraConfigEmailIsMergedLikePython: Python builds Jira credentials from
+// {**config, **decrypted}, so a credential with email and URL in config and
+// only the token in the decrypted secret is valid there. The Go client read
+// email from secrets only and refused it with Python's own 400 wording.
+func TestJiraConfigEmailIsMergedLikePython(t *testing.T) {
+	ctx := context.Background()
+	config := map[string]string{"email": "a@b.c", "url": "https://acme.atlassian.net"}
+	secret := func(name, value string) map[string]secrets.Value {
+		return map[string]secrets.Value{name: secrets.NewValue(value)}
+	}
+
+	prepared, err := prepareDiscoveryCredential(ctx, "jira", providerfoundation.NewCredential("jira", "c", config, secret("api_token", "tok")))
+	if err != nil {
+		t.Fatalf("email+url in config, token in secrets must be accepted: %v", err)
+	}
+	if email, _ := prepared.Secret("email"); email.Reveal() != "a@b.c" {
+		t.Errorf("email = %q, want the config value", email.Reveal())
+	}
+
+	// A decrypted key that is PRESENT shadows config even when empty (dict
+	// merge), so an explicit empty email is refused, not silently rescued.
+	fields := secret("api_token", "tok")
+	fields["email"] = secrets.NewValue("")
+	_, err = prepareDiscoveryCredential(ctx, "jira", providerfoundation.NewCredential("jira", "c", config, fields))
+	assertStatus(t, err, 400, "Jira credentials require email, api_token, and url")
+
+	// Nothing anywhere: still Python's 400.
+	_, err = prepareDiscoveryCredential(ctx, "jira", providerfoundation.NewCredential("jira", "c", nil, secret("api_token", "tok")))
+	assertStatus(t, err, 400, "Jira credentials require email, api_token, and url")
+}

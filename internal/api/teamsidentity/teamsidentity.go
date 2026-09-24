@@ -72,12 +72,12 @@ func Routes(conn driver.Conn, guard *policy.Guard, logger *slog.Logger, pool *pg
 			Handler: guard.Wrap(policy.AdminOrg, http.HandlerFunc(h.getTeam))},
 		{Method: http.MethodPatch, Pattern: "/api/v1/admin/teams/{team_id}",
 			Handler: h.decodeFirst(guard, http.HandlerFunc(h.updateTeam))},
-		// POST /teams/import is dispatched from inside postTeamWildcard the
+		// POST /teams/import is dispatched from inside postTeamRoute the
 		// same way GET /teams/discover is dispatched from inside getTeam
 		// -- a second literal registration for it panics construction for
 		// the identical reason (see the comment above).
 		{Method: http.MethodPost, Pattern: "/api/v1/admin/teams/{team_id}",
-			Handler: h.decodeFirst(guard, http.HandlerFunc(h.postTeamWildcard))},
+			Handler: h.postTeamRoute(guard)},
 		{Method: http.MethodGet, Pattern: "/api/v1/admin/identities",
 			Handler: guard.Wrap(policy.AdminOrg, http.HandlerFunc(h.listIdentities))},
 		{Method: http.MethodPost, Pattern: "/api/v1/admin/identities",
@@ -471,37 +471,24 @@ func (h handlers) getTeam(w http.ResponseWriter, r *http.Request) {
 	policy.WriteJSON(w, http.StatusOK, teamJSON(*team), nil)
 }
 
-// postTeamWildcard is POST /api/v1/admin/teams/{team_id}: Python has no
-// real route at this shape (POST /teams is create, a different, already-
-// registered literal path; there is no POST /teams/{team_id} at all) --
-// the ONLY POST path under /teams/ that exists is the literal
-// /teams/import. team_id=="import" dispatches to it; anything else
-// answers Starlette's own generic "no route matched" 404 shape, the same
-// thing Python would answer for a POST to any other /teams/<literal>
-// path it has no route for.
-//
-// KNOWN, DOCUMENTED GAP: this route (like the create/update routes) is
-// wrapped by decodeFirst, which reads and decodes the request body BEFORE
-// this dispatch ever runs -- matching FastAPI's own before-routing-
-// resolves-vs-after ordering for the "import" case (Python decodes the
-// body as part of resolving that ONE endpoint), but NOT for a POST to any
-// OTHER team_id: real Starlette never attempts body decoding for a path
-// it has no route for at all (routing fails before any dependency runs),
-// while this implementation always decodes first regardless of team_id --
-// a malformed body on a POST to a random team_id could answer 422/400
-// here where Python answers a clean 404. Narrow, low-likelihood (no
-// legitimate client sends this), not reproduced.
-func (h handlers) postTeamWildcard(w http.ResponseWriter, r *http.Request) {
-	if pathParam(r, "team_id") == "import" {
-		h.importTeams(w, r)
-		return
-	}
-	// Python has no POST route on /teams/{team_id}: FastAPI answers 405
-	// with the Allow header of the pattern's first route (DELETE), not a
-	// 404 -- CHAOS-6311's venue run caught this once the wildcard gained a
-	// POST handler for /teams/import.
-	w.Header().Set("Allow", "DELETE")
-	policy.WriteDetail(w, http.StatusMethodNotAllowed, "Method Not Allowed", nil)
+// postTeamRoute is the handler for POST /teams/{team_id}: the only POST path
+// under /teams/ Python serves is the literal /teams/import, so team_id ==
+// "import" runs the body-first (decode, then auth) import handler and any
+// other id answers FastAPI's 405 with the Allow header of the pattern's
+// first route (DELETE) -- decided BEFORE any body is read or auth runs,
+// exactly as Starlette resolves the route first (a malformed body POSTed
+// to another team id is a clean 405, not the 422/400 body decoding would
+// give it).
+func (h handlers) postTeamRoute(guard *policy.Guard) http.Handler {
+	importHandler := h.decodeFirst(guard, http.HandlerFunc(h.importTeams))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if pathParam(r, "team_id") == "import" {
+			importHandler.ServeHTTP(w, r)
+			return
+		}
+		w.Header().Set("Allow", "DELETE")
+		policy.WriteDetail(w, http.StatusMethodNotAllowed, "Method Not Allowed", nil)
+	})
 }
 
 func (h handlers) updateTeam(w http.ResponseWriter, r *http.Request) {

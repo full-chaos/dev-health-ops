@@ -67,6 +67,7 @@ func prepareDiscoveryCredential(ctx context.Context, provider string, credential
 		}
 		return providerfoundation.NewCredential("linear", credential.ID, nil, map[string]secrets.Value{"api_key": key}), nil
 	case "jira":
+		credential = mergeJiraConfigIntoSecrets(credential)
 		if _, err := providerfoundation.NewJiraClient(credential, discoveryHTTPClient, providerfoundation.DefaultRetryPolicy(), alwaysValidLease{}); err != nil {
 			return providerfoundation.Credential{}, &discoveryStatusError{http.StatusBadRequest, "Jira credentials require email, api_token, and url"}
 		}
@@ -111,4 +112,28 @@ func prepareGitHubDiscovery(ctx context.Context, credential providerfoundation.C
 
 func githubTokenCredential(source providerfoundation.Credential, token secrets.Value) providerfoundation.Credential {
 	return providerfoundation.NewCredential("github", source.ID, nil, map[string]secrets.Value{"token": token})
+}
+
+// jiraMappingKeys are every key jira_credentials_from_mapping reads
+// (resolver.py:375-388).
+var jiraMappingKeys = []string{"email", "api_token", "apiToken", "token", "base_url", "baseUrl", "url", "server_url"}
+
+// mergeJiraConfigIntoSecrets reproduces the route's
+// `jira_credentials_from_mapping({**config, **decrypted})` (teams.py:303):
+// each Jira key comes from the decrypted secret when it is PRESENT there
+// (even empty -- dict merge lets an explicit empty value shadow config and
+// the resolver's `or` chain then falls through to the next alias) and from
+// the config column otherwise. The Jira client reads email and the token
+// only from secrets, so a credential keeping its email or URL in config was
+// refused here with Python's 400 wording where Python accepts it.
+func mergeJiraConfigIntoSecrets(credential providerfoundation.Credential) providerfoundation.Credential {
+	fields := map[string]secrets.Value{}
+	for _, key := range jiraMappingKeys {
+		if value, ok := credential.Secret(key); ok {
+			fields[key] = value
+		} else if value, ok := credential.Config[key]; ok {
+			fields[key] = secrets.NewValue(value)
+		}
+	}
+	return providerfoundation.NewCredential("jira", credential.ID, credential.Config, fields)
 }

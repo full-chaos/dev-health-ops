@@ -4,12 +4,15 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
 // Team-drift policy constants, transcribed from
@@ -146,25 +149,79 @@ func stringListAssociation(associations *pyjson.Object, key string) ([]string, b
 	if !ok {
 		return nil, false
 	}
-	// A JSON-decoded request body carries arrays as []pyjson.Value; only
-	// hand-built values (tests, discovery output) are []string. Python passes
-	// `associations.get(key, [])` straight through, so string elements are
-	// what reach ClickHouse -- CHAOS-6311 r1's venue run showed an import
-	// silently dropping every project_keys/repo_patterns list because this
-	// only accepted []string.
+	return pythonListField(value), true
+}
+
+// pythonListField ports _list_field
+// (clickhouse_team_drift_projector.py:497-504): None -> [], a string -> [it],
+// a list/tuple/set -> [str(item) for item in it if item is not None], anything
+// else -> []. Python's `str()` of each element is what reaches ClickHouse, so
+// a numeric key 7 is stored as "7" -- CHAOS-6311's review executed exactly
+// that input against the Go route and found it stored ["ENG"] where Python
+// stores ["7", "ENG"]. A JSON-decoded body carries arrays as
+// []pyjson.Value; hand-built values (tests, discovery output) are []string.
+func pythonListField(value pyjson.Value) []string {
 	switch list := value.(type) {
+	case nil:
+		return []string{}
+	case string:
+		return []string{list}
 	case []string:
-		return list, true
+		return append([]string{}, list...)
 	case []pyjson.Value:
 		out := make([]string, 0, len(list))
 		for _, item := range list {
-			if text, isString := item.(string); isString {
-				out = append(out, text)
+			if item != nil {
+				out = append(out, pythonStr(item))
 			}
 		}
-		return out, true
+		return out
 	}
-	return nil, false
+	return []string{}
+}
+
+// pythonStr is Python's str() of a JSON-decoded value: a string is itself,
+// ints are decimal, floats use repr, bools are True/False, None is "None",
+// and a list or dict renders as its Python repr (strings inside a container
+// use repr's quoting).
+func pythonStr(value pyjson.Value) string {
+	switch v := value.(type) {
+	case nil:
+		return "None"
+	case string:
+		return v
+	case bool:
+		if v {
+			return "True"
+		}
+		return "False"
+	case pyjson.Int:
+		return v.String()
+	case pyjson.Float:
+		return pythonparity.Repr(float64(v))
+	case []pyjson.Value:
+		parts := make([]string, len(v))
+		for i, item := range v {
+			parts[i] = pythonRepr(item)
+		}
+		return "[" + strings.Join(parts, ", ") + "]"
+	case *pyjson.Object:
+		parts := make([]string, 0, v.Len())
+		for _, key := range v.Keys() {
+			item, _ := v.Get(key)
+			parts = append(parts, pythonparity.StrRepr(key)+": "+pythonRepr(item))
+		}
+		return "{" + strings.Join(parts, ", ") + "}"
+	}
+	return fmt.Sprint(value)
+}
+
+// pythonRepr is repr() of a JSON-decoded value (only strings differ from str).
+func pythonRepr(value pyjson.Value) string {
+	if text, ok := value.(string); ok {
+		return pythonparity.StrRepr(text)
+	}
+	return pythonStr(value)
 }
 
 // importedTeamID mirrors import_teams' own team_id derivation
@@ -433,10 +490,22 @@ func (s Store) projectTeam(ctx context.Context, orgID string, team discoveredTea
 		// or overwritten by a later real provider sync matching on
 		// provider+native_team_key; only the observation history remembers
 		// where it came from.
+		// The catalog row takes the RAW association values (Python passes
+		// `associations.get("project_keys", [])` straight into the insert,
+		// only the observation goes through _list_field), so what
+		// ClickHouse accepts decides -- see catalogStringList.
+		catalogProjectKeys, err := catalogStringList(team.Associations, "project_keys")
+		if err != nil {
+			return projectTeamResult{}, err
+		}
+		catalogRepoPatterns, err := catalogStringList(team.Associations, "repo_patterns")
+		if err != nil {
+			return projectTeamResult{}, err
+		}
 		if err := s.insertTeamRow(ctx, teamInsertRow{
 			ID: observed.TeamID, TeamUUID: teamUUIDValue, Name: stringPtrOr(observed.Name, observed.TeamID),
 			Description: observed.Description, Members: members, ManualMembers: manualMembers,
-			ProjectKeys: observed.ProjectKeys, RepoPatterns: observed.RepoPatterns, IsActive: true,
+			ProjectKeys: catalogProjectKeys, RepoPatterns: catalogRepoPatterns, IsActive: true,
 			OrgID: orgID, Provider: "", NativeTeamKey: nil, ParentTeamID: observed.ParentTeamID,
 			UpdatedAt: now,
 		}); err != nil {
@@ -611,4 +680,49 @@ func (s Store) insertChanges(ctx context.Context, rows []teamDriftChangeRow) err
 		}
 	}
 	return batch.Send()
+}
+
+// catalogStringList is what an Array(String) catalog insert makes of an
+// association value Python hands over untouched, established by running
+// import requests through the real Python api and the Go api side by side
+// (the protected-routes venue oracle): absent or an explicit null -> []; a list is inserted
+// element by element and every element must be a string (an int, bool,
+// float, null or nested list makes the insert fail, so the request 500s
+// after the observation row was already written); a string is iterated
+// into its characters and a dict into its keys (both accepted); any other
+// scalar (number, bool) fails the insert. An error is a 500, as in Python.
+func catalogStringList(associations *pyjson.Object, key string) ([]string, error) {
+	if associations == nil {
+		return []string{}, nil
+	}
+	value, ok := associations.Get(key)
+	if !ok {
+		return []string{}, nil
+	}
+	switch v := value.(type) {
+	case nil:
+		// An explicit null is accepted and stored as an empty array.
+		return []string{}, nil
+	case string:
+		out := []string{}
+		for _, r := range v {
+			out = append(out, string(r))
+		}
+		return out, nil
+	case *pyjson.Object:
+		return v.Keys(), nil
+	case []string:
+		return append([]string{}, v...), nil
+	case []pyjson.Value:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			text, isString := item.(string)
+			if !isString {
+				return nil, fmt.Errorf("%s: a catalog Array(String) insert cannot take a %T element", key, item)
+			}
+			out = append(out, text)
+		}
+		return out, nil
+	}
+	return nil, fmt.Errorf("%s: a catalog Array(String) insert cannot take a %T value", key, value)
 }

@@ -11,6 +11,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 )
 
 // postImportBody drives POST /teams/import's handler with a decoded body
@@ -30,7 +31,7 @@ func postImportBody(t *testing.T, store Store, body string) *httptest.ResponseRe
 	ctx = policy.WithUser(ctx, &policy.User{OrgID: "org-1"})
 	req = req.WithContext(ctx)
 	rec := httptest.NewRecorder()
-	handlers{store: store, logger: slog.Default()}.postTeamWildcard(rec, req)
+	handlers{store: store, logger: slog.Default()}.importTeams(rec, req)
 	return rec
 }
 
@@ -136,13 +137,56 @@ func TestImportMissingTeamsReportsTheWholeBodyAsInput(t *testing.T) {
 	}
 }
 
+// TestPostToAnotherTeamIDIsMethodNotAllowed: Python has no POST route on
+// /teams/{team_id}, and Starlette resolves the route before reading any
+// body, so even a MALFORMED body (or none, or no auth) answers 405 with the
+// pattern's first route's Allow header -- run through the production
+// handler chain, not the inner handler.
 func TestPostToAnotherTeamIDIsMethodNotAllowed(t *testing.T) {
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/teams/eng", strings.NewReader(`{}`))
-	req.SetPathValue("team_id", "eng")
-	rec := httptest.NewRecorder()
-	handlers{store: Store{}, logger: slog.Default()}.postTeamWildcard(rec, req)
-	if rec.Code != http.StatusMethodNotAllowed || rec.Header().Get("Allow") != "DELETE" ||
-		rec.Body.String() != `{"detail":"Method Not Allowed"}` {
-		t.Errorf("got %d allow=%q body=%s", rec.Code, rec.Header().Get("Allow"), rec.Body.String())
+	handler := handlers{store: Store{}, logger: slog.Default()}.postTeamRoute(policy.NewGuard(nil, nil))
+	for name, body := range map[string]string{"empty object": `{}`, "malformed json": `{not json`, "invalid utf-8": "\xff\xfe"} {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/teams/eng", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.SetPathValue("team_id", "eng")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusMethodNotAllowed || rec.Header().Get("Allow") != "DELETE" ||
+			rec.Body.String() != `{"detail":"Method Not Allowed"}` {
+			t.Errorf("%s: got %d allow=%q body=%s", name, rec.Code, rec.Header().Get("Allow"), rec.Body.String())
+		}
+	}
+}
+
+// TestCatalogStringListMatchesPythonsInsert pins catalogStringList to what
+// the protected-routes venue oracle observed Python's Array(String) catalog
+// insert do with each raw association value (import a team, read the row
+// back): a list of strings is stored, absent/null/[] is empty, a string is
+// split into characters, a dict into its keys, and a list holding a
+// non-string or a non-list scalar fails the insert (a 500).
+func TestCatalogStringListMatchesPythonsInsert(t *testing.T) {
+	decode := func(raw string) *pyjson.Object {
+		value, err := pyjson.DecodeString(`{"k":` + raw + `}`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return value.(*pyjson.Object)
+	}
+	accepted := map[string]string{
+		`["a","b"]`: "a,b", `[]`: "", `null`: "", `""`: "", `"single"`: "s,i,n,g,l,e",
+		`"日本ü"`: "日,本,ü", `{"a":1}`: "a", `{"k":[1],"z":null}`: "k,z",
+	}
+	for raw, want := range accepted {
+		got, err := catalogStringList(decode(raw), "k")
+		if err != nil || strings.Join(got, ",") != want {
+			t.Errorf("%s: got %q err=%v, want %q", raw, got, err, want)
+		}
+	}
+	for _, raw := range []string{`[7,"a"]`, `["a",null]`, `[true]`, `[1.5]`, `[["x"]]`, `5`, `1.5`, `true`} {
+		if got, err := catalogStringList(decode(raw), "k"); err == nil {
+			t.Errorf("%s: got %q, want an error (Python's insert 500s)", raw, got)
+		}
+	}
+	if got, err := catalogStringList(pyjson.NewObject(), "k"); err != nil || len(got) != 0 {
+		t.Errorf("absent key: got %q err=%v, want empty", got, err)
 	}
 }

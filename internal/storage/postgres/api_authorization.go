@@ -237,7 +237,7 @@ func apiPosture() RolePosture {
 			// The admin IP-allowlist routes create, update and delete
 			// entries.
 			{"org_ip_allowlist", true, true, true},
-			{"org_retention_policies", false, false, true},
+			{"org_retention_policies", true, true, true},
 			// Billing plans/subscriptions/checkout/portal (CHAOS-6256): plan
 			// create/update/soft-delete and the Stripe id write-back; price
 			// replacement inserts, updates and deletes rows; bundle links are

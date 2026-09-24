@@ -36,7 +36,15 @@ type overflowCase struct {
 // then write_batch against the real ClickHouse (no retry ladder: one attempt,
 // the ladder only re-runs the same call). It prints one JSON row per case.
 const pythonSinkProgram = `
-import asyncio, json, sys, uuid
+import asyncio, json, os, sys, types, uuid
+# The integration shards install only the migration chain's Python closure, and
+# importing dev_health_ops.api.external_ingest runs its __init__ (the whole
+# FastAPI router and its middleware). The models this needs are in
+# .schemas: register the package without running its __init__.
+import dev_health_ops
+package = types.ModuleType("dev_health_ops.api.external_ingest")
+package.__path__ = [os.path.join(os.path.dirname(dev_health_ops.__file__), "api", "external_ingest")]
+sys.modules["dev_health_ops.api.external_ingest"] = package
 from dev_health_ops.api.external_ingest.schemas import RecordEnvelope
 from dev_health_ops.external_ingest.normalize import normalize_batch
 from dev_health_ops.external_ingest.sinks import write_batch

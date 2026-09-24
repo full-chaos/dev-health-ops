@@ -669,6 +669,13 @@ func sortedRawKeys(values map[string]json.RawMessage) []string {
 // the scope middlewares, as configure() wires them) on the venue's Go copy.
 func startGoServer(t *testing.T, ctx context.Context, venue *venueoracle.Venue, jwtKey string) string {
 	t.Helper()
+	return startGoServerWith(t, ctx, venue, jwtKey, nil)
+}
+
+// startGoServerWith is startGoServer with a hook that adjusts the api
+// dependencies (a clock, a decryptor) before the routes are built.
+func startGoServerWith(t *testing.T, ctx context.Context, venue *venueoracle.Venue, jwtKey string, adjust func(*apiservice.Deps)) string {
+	t.Helper()
 	pool, err := pgxpool.New(ctx, venue.GoAPIDatabaseURI(t))
 	if err != nil {
 		t.Fatalf("go pool: %v", err)
@@ -695,7 +702,11 @@ func startGoServer(t *testing.T, ctx context.Context, venue *venueoracle.Venue, 
 		t.Fatalf("go clickhouse: %v", err)
 	}
 	t.Cleanup(func() { _ = clickHouse.Close() })
-	routes := apiservice.Routes(apiservice.Deps{Pool: pool, ClickHouse: clickHouse, Auth: auth, Guard: policy.NewGuard(auth, logger)}, logger)
+	deps := apiservice.Deps{Pool: pool, ClickHouse: clickHouse, Auth: auth, Guard: policy.NewGuard(auth, logger)}
+	if adjust != nil {
+		adjust(&deps)
+	}
+	routes := apiservice.Routes(deps, logger)
 	scope := policy.NewScope(auth, logger)
 	server, err := apiservice.NewServer(cfg, logger, routes, scope.OrgScope, scope.Impersonation)
 	if err != nil {

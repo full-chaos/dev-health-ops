@@ -182,6 +182,7 @@ var responseModelRoutes = map[string]bool{
 	"POST /api/v1/webhooks/pagerduty/{binding_id}":                        false,
 	"PUT /api/v1/admin/llm-settings":                                      true,
 	"PUT /api/v1/admin/settings/{category}/{key}":                         true,
+	"PUT /api/v1/admin/sync-configs/{config_id}/repositories":             true,
 }
 
 // jsonResponseRoutes are response_model routes on the FastAPI side whose

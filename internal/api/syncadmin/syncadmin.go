@@ -36,6 +36,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
@@ -54,6 +55,15 @@ type Deps struct {
 	Guard      *policy.Guard
 	Logger     *slog.Logger
 	LookupEnv  func(string) (string, bool)
+	// Decryptor reads stored integration credentials (the api's Fernet
+	// key); nil reads every credential as undecryptable.
+	Decryptor providerfoundation.CredentialDecryptor
+	// Now is the clock of the run units freshness read and of the writes
+	// (nil: time.Now).
+	Now func() time.Time
+	// GitLabHTTP is the GitLab listing's HTTP client (nil: the client's
+	// default, 15 s timeout, no redirects followed).
+	GitLabHTTP *http.Client
 }
 
 // Routes is the area's route set.
@@ -66,13 +76,22 @@ func Routes(deps Deps) []httpapi.Route {
 	if lookup == nil {
 		lookup = os.LookupEnv
 	}
+	// One clock for the run units freshness read and the writes: Python
+	// reads datetime.now in both; nil means the wall clock.
+	clock := deps.Now
+	if clock == nil {
+		clock = time.Now
+	}
 	h := &handlers{
-		store:     store{pool: deps.Pool},
-		writes:    store{pool: deps.Pool},
-		features:  licensing.PostgresStore{Pool: deps.Pool},
-		logger:    logger,
-		lookupEnv: lookup,
-		clock:     time.Now,
+		store:      store{pool: deps.Pool},
+		writes:     store{pool: deps.Pool},
+		features:   licensing.PostgresStore{Pool: deps.Pool},
+		logger:     logger,
+		lookupEnv:  lookup,
+		pool:       deps.Pool,
+		decryptor:  deps.Decryptor,
+		clock:      clock,
+		gitlabHTTP: deps.GitLabHTTP,
 	}
 	if deps.ClickHouse != nil {
 		h.diagnostics = clickhouseDiagnostics{conn: deps.ClickHouse}
@@ -85,6 +104,8 @@ func Routes(deps Deps) []httpapi.Route {
 		{Method: http.MethodGet, Pattern: prefix + "/sync-configs/{config_id}", Handler: wrap(h.getSyncConfig)},
 		{Method: http.MethodDelete, Pattern: prefix + "/sync-configs/{config_id}", Handler: wrap(h.deleteSyncConfig)},
 		{Method: http.MethodGet, Pattern: prefix + "/sync-configs/{config_id}/repositories", Handler: wrap(h.getRepositories)},
+		{Method: http.MethodPut, Pattern: prefix + "/sync-configs/{config_id}/repositories",
+			Handler: deps.Guard.BodyFirst(policy.AdminOrg, http.HandlerFunc(h.replaceRepositories))},
 		{Method: http.MethodGet, Pattern: prefix + "/sync-configs/{config_id}/jobs", Handler: wrap(h.listJobs)},
 		{Method: http.MethodGet, Pattern: prefix + "/sync-configs/{config_id}/coverage", Handler: wrap(h.getCoverage)},
 		{Method: http.MethodGet, Pattern: prefix + "/backfill-jobs", Handler: wrap(h.listBackfillJobs)},
@@ -100,10 +121,22 @@ type handlers struct {
 	features  licensing.Store
 	logger    *slog.Logger
 	lookupEnv func(string) (string, bool)
-	// clock is build_dataset_freshness's datetime.now(timezone.utc).
-	clock func() time.Time
+	pool      *pgxpool.Pool
+	decryptor providerfoundation.CredentialDecryptor
+	// clock is build_dataset_freshness's datetime.now(timezone.utc) and
+	// the writes' clock.
+	clock      func() time.Time
+	gitlabHTTP *http.Client
 	// diagnostics is nil when the api has no ClickHouse login.
 	diagnostics diagnosticsReader
+}
+
+// now is the writes' clock.
+func (h *handlers) now() time.Time {
+	if h.clock != nil {
+		return h.clock()
+	}
+	return time.Now()
 }
 
 // orgID is get_admin_org_id's value; the guard already refused an empty

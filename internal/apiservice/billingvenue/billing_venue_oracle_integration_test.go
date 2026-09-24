@@ -329,6 +329,9 @@ func (f *fakeStripe) serve(plane string, w http.ResponseWriter, r *http.Request)
 			"in_pi_bad": `{"type": "payment_intent", "payment_intent": "pi_fail"}`,
 			"in_charge": `{"type": "charge", "charge": "ch_bare"}`,
 		}[r.URL.Query().Get("invoice")]
+		if r.URL.Query().Get("status") != "paid" {
+			payment = ""
+		}
 		data := ""
 		if payment != "" {
 			data = `{"id": "inpay_1", "object": "invoice_payment", "status": "paid", "payment": ` + payment + `}`
@@ -344,10 +347,16 @@ func (f *fakeStripe) serve(plane string, w http.ResponseWriter, r *http.Request)
 		if intent != "" {
 			charge, intentJSON = "ch_of_"+intent, strconv.Quote(intent)
 		}
+		// A 1-cent refund answers without a status and with a failure
+		// reason, as a refund Stripe has not settled can.
+		status := `"status": "succeeded"`
+		if form.Get("amount") == "1" {
+			status = `"failure_reason": "lost_or_stolen_card"`
+		}
 		f.refunds++
 		fmt.Fprintf(w, `{"id": "re_%d", "object": "refund", "amount": %s, "charge": %q, "payment_intent": %s, "currency": "usd",
-			"status": "succeeded", "metadata": {"invoice_id": %q, "org_id": %q}}`,
-			f.refunds, form.Get("amount"), charge, intentJSON, form.Get("metadata[invoice_id]"), form.Get("metadata[org_id]"))
+			%s, "metadata": {"invoice_id": %q, "org_id": %q}}`,
+			f.refunds, form.Get("amount"), charge, intentJSON, status, form.Get("metadata[invoice_id]"), form.Get("metadata[org_id]"))
 	default:
 		w.WriteHeader(http.StatusNotFound)
 		fmt.Fprint(w, `{"error": {"message": "unrouted fake call", "type": "invalid_request_error"}}`)

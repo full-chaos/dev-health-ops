@@ -161,7 +161,7 @@ func (h handlers) createRefund(w http.ResponseWriter, r *http.Request) {
 		var refundIntent *string
 		if refund.PaymentIntent != nil && refund.PaymentIntent.ID != "" {
 			refundIntent = &refund.PaymentIntent.ID
-		} else {
+		} else if paymentIntent != nil && *paymentIntent != "" {
 			refundIntent = paymentIntent
 		}
 		refundStatus := string(refund.Status)

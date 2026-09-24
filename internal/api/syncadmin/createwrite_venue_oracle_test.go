@@ -103,7 +103,7 @@ func createWriteCases() (keys []keysCase, options []optionsCase, parents []paren
 		`{}`, `{"service_repository_mappings": {"svc": ["repo"]}}`, `{"service_repository_mappings": ["x"]}`,
 		`{"service_repository_mappings": null}`, `{"fetch_comments": false, "comments_limit": 5}`,
 		`{"fetch_comments": "no"}`, `{"fetch_milestones": 1}`, `{"comments_limit": -1}`, `{"comments_limit": 2.0}`,
-		`{"comments_limit": true}`, `{"comments_limit": 123456789012345678901234567890}`, `{"fetch_comments": null, "comments_limit": null}`,
+		`{"comments_limit": true}`, `{"comments_limit": 0}`, `{"comments_limit": 123456789012345678901234567890}`, `{"fetch_comments": null, "comments_limit": null}`,
 	}
 	for _, provider := range []string{"github", "GitHub", "pagerduty", "PagerDuty", "gitlab"} {
 		for _, key := range []string{"work-items", "services", "commits"} {

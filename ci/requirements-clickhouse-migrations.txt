@@ -88,7 +88,7 @@ psycopg2-binary==2.9.12
 # file with --no-deps into a clean 3.14 venv and running that test until it
 # passed; versions from uv.lock.
 asyncpg==0.31.0
-croniter==6.2.2
+croniter==6.2.4
 python-dateutil==2.9.0.post0
 six==1.17.0
 
@@ -98,4 +98,4 @@ six==1.17.0
 # imports jwt at module load. Found by installing this file with --no-deps
 # into a clean 3.14 venv and running that test until it passed; version from
 # uv.lock.
-pyjwt==2.13.0
+pyjwt==2.15.0

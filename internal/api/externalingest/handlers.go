@@ -525,10 +525,7 @@ func (d Deps) handleGetBatch() http.HandlerFunc {
 		// declaration order).
 		var problems pybody.Errors
 		rawID := r.PathValue("ingestion_id")
-		ingestionID, idFailure := pybody.ParsePydanticUUID(rawID)
-		if idFailure != nil {
-			problems = append(problems, pybody.UUIDError([]pyjson.Value{"path", "ingestion_id"}, rawID, idFailure))
-		}
+		ingestionID, _ := problems.PathUUID("ingestion_id", rawID)
 		values := r.URL.Query()
 		errorLimit, _ := problems.QueryInt("errorLimit", pybody.LastQuery(values, "errorLimit"), 50, int64Pointer(1), int64Pointer(200))
 		errorOffset, _ := problems.QueryInt("errorOffset", pybody.LastQuery(values, "errorOffset"), 0, int64Pointer(0), nil)

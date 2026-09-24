@@ -126,6 +126,25 @@ elif mode == "serve":
             _stripe_original_init(self, *args, **kwargs)
 
         _stripe.StripeClient.__init__ = _stripe_patched_init
+    # VENUE_STRIPE_LIST_KWARGS=1 lets the v1 subscription, invoice and
+    # refund services take list(limit=...) as keywords, the call the
+    # reconciliation service makes (and stripe-python refuses with a
+    # TypeError). The Python plane then runs the reconciliation it was
+    # written to run, which is what the Go port implements.
+    if os.environ.get("VENUE_STRIPE_LIST_KWARGS") == "1":
+        from stripe._invoice_service import InvoiceService as _InvoiceService
+        from stripe._refund_service import RefundService as _RefundService
+        from stripe._subscription_service import SubscriptionService as _SubscriptionService
+
+        def _stripe_list_kwargs(original):
+            def patched(self, params=None, options=None, **keywords):
+                if keywords:
+                    params = {**(params or {}), **keywords}
+                return original(self, params, options)
+            return patched
+
+        for _service in (_SubscriptionService, _InvoiceService, _RefundService):
+            _service.list = _stripe_list_kwargs(_service.list)
     from fastapi.testclient import TestClient
     from dev_health_ops.api.main import app
     client = TestClient(app, raise_server_exceptions=False, follow_redirects=False)

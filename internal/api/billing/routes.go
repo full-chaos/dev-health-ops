@@ -61,41 +61,55 @@ func Routes(deps Deps) []httpapi.Route {
 	return []httpapi.Route{
 		{Method: http.MethodGet, Pattern: prefix + "/plans", Allow: http.MethodGet, Handler: wrap(policy.Optional, h.listPlans)},
 		{Method: http.MethodPost, Pattern: prefix + "/plans", Handler: body(policy.Authenticated, h.createPlan)},
-		// POST /plans/pull-stripe shares a path shape with /plans/{plan_id};
-		// Go's mux cannot hold a method-less fallback for the literal path
-		// beside the method patterns of the wildcard one, so the literal is
-		// dispatched inside the POST wildcard route (see planPost).
+		// The literal path is its own pattern, so a wrong method on it
+		// answers its own 405 (Allow: POST, as Starlette's first partial
+		// match), while GET/PUT/DELETE on it reach the {plan_id} routes.
+		{Method: http.MethodPost, Pattern: prefix + "/plans/pull-stripe", Allow: http.MethodPost, Handler: g.Wrap(policy.Superuser, http.HandlerFunc(h.pullStripe))},
+		// HEAD would otherwise reach GET /plans/{plan_id}, whose 405 names
+		// GET; Starlette's first partial match for this path is the POST.
+		{Method: http.MethodHead, Pattern: prefix + "/plans/pull-stripe", Handler: http.HandlerFunc(pullStripeNotAllowed)},
 		{Method: http.MethodGet, Pattern: prefix + "/plans/{plan_id}", Allow: http.MethodGet, Handler: wrap(policy.Optional, h.getPlan)},
-		{Method: http.MethodPost, Pattern: prefix + "/plans/{plan_id}", Handler: h.planPost(g)},
+		{Method: http.MethodPost, Pattern: prefix + "/plans/{plan_id}", Handler: http.HandlerFunc(planPostNotAllowed)},
 		{Method: http.MethodPut, Pattern: prefix + "/plans/{plan_id}", Handler: body(policy.Authenticated, h.updatePlan)},
 		{Method: http.MethodDelete, Pattern: prefix + "/plans/{plan_id}", Handler: wrap(policy.Authenticated, h.deletePlan)},
 		{Method: http.MethodPost, Pattern: prefix + "/plans/{plan_id}/sync-stripe", Allow: http.MethodPost, Handler: wrap(policy.Authenticated, h.syncPlan)},
+		{Method: http.MethodGet, Pattern: prefix + "/invoices", Allow: http.MethodGet, Handler: wrap(policy.Authenticated, h.listInvoices)},
+		{Method: http.MethodGet, Pattern: prefix + "/invoices/{invoice_id}", Allow: http.MethodGet, Handler: wrap(policy.Authenticated, h.getInvoice)},
+		{Method: http.MethodPost, Pattern: prefix + "/invoices/{invoice_id}/void", Allow: http.MethodPost, Handler: wrap(policy.Admin, h.voidInvoice)},
+		{Method: http.MethodPost, Pattern: prefix + "/refunds", Allow: http.MethodPost, Handler: body(policy.Authenticated, h.createRefund)},
+		{Method: http.MethodGet, Pattern: prefix + "/refunds", Handler: wrap(policy.Authenticated, h.listRefunds)},
+		{Method: http.MethodGet, Pattern: prefix + "/refunds/{refund_id}", Allow: http.MethodGet, Handler: wrap(policy.Authenticated, h.getRefund)},
 		{Method: http.MethodPost, Pattern: prefix + "/checkout", Allow: http.MethodPost, Handler: body(policy.Authenticated, h.checkout)},
 		{Method: http.MethodPost, Pattern: prefix + "/portal", Allow: http.MethodPost, Handler: wrap(policy.Authenticated, h.portal)},
+		{Method: http.MethodGet, Pattern: prefix + "/entitlements/{org_id}", Allow: http.MethodGet, Handler: wrap(policy.Authenticated, h.entitlements)},
 		{Method: http.MethodGet, Pattern: prefix + "/subscriptions/list", Allow: http.MethodGet, Handler: wrap(policy.Authenticated, h.listSubscriptions)},
 		{Method: http.MethodGet, Pattern: prefix + "/subscriptions", Allow: http.MethodGet, Handler: wrap(policy.Authenticated, h.getSubscription)},
 		{Method: http.MethodGet, Pattern: prefix + "/subscriptions/history", Allow: http.MethodGet, Handler: wrap(policy.Authenticated, h.subscriptionHistory)},
 		{Method: http.MethodPost, Pattern: prefix + "/subscriptions/change-plan", Allow: http.MethodPost, Handler: body(policy.Admin, h.changePlan)},
 		{Method: http.MethodPost, Pattern: prefix + "/subscriptions/cancel", Allow: http.MethodPost, Handler: body(policy.Admin, h.cancelSubscription)},
 		{Method: http.MethodPost, Pattern: prefix + "/subscriptions/reactivate", Allow: http.MethodPost, Handler: wrap(policy.Admin, h.reactivateSubscription)},
+		{Method: http.MethodGet, Pattern: prefix + "/audit", Allow: http.MethodGet, Handler: wrap(policy.Authenticated, h.listAudit)},
+		{Method: http.MethodGet, Pattern: prefix + "/audit/{audit_id}", Allow: http.MethodGet, Handler: wrap(policy.Authenticated, h.getAudit)},
+		{Method: http.MethodPost, Pattern: prefix + "/audit/{audit_id}/resolve", Allow: http.MethodPost, Handler: body(policy.Authenticated, h.resolveAudit)},
+		{Method: http.MethodPost, Pattern: prefix + "/reconcile", Allow: http.MethodPost, Handler: wrap(policy.Authenticated, h.reconcile)},
 	}
 }
 
-// planPost is POST /plans/{plan_id}: "pull-stripe" is its own route
-// (require_superuser); any other segment has no POST route in Python, so
-// Starlette answers 405 with the first partially matching route's methods
-// (GET /plans/{plan_id}).
-func (h handlers) planPost(g *policy.Guard) http.Handler {
-	pull := g.Wrap(policy.Superuser, http.HandlerFunc(h.pullStripe))
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.PathValue("plan_id") == "pull-stripe" {
-			pull.ServeHTTP(w, r)
-			return
-		}
-		header := http.Header{}
-		header.Set("Allow", http.MethodGet)
-		policy.WriteDetail(w, http.StatusMethodNotAllowed, "Method Not Allowed", header)
-	})
+// pullStripeNotAllowed is any method but POST on /plans/pull-stripe that
+// the mux would otherwise hand to a /plans/{plan_id} route.
+func pullStripeNotAllowed(w http.ResponseWriter, _ *http.Request) {
+	header := http.Header{}
+	header.Set("Allow", http.MethodPost)
+	policy.WriteDetail(w, http.StatusMethodNotAllowed, "Method Not Allowed", header)
+}
+
+// planPostNotAllowed is POST /plans/{plan_id} for any id but
+// "pull-stripe": Python has no such route, so Starlette answers 405 with the
+// first partially matching route's methods (GET /plans/{plan_id}).
+func planPostNotAllowed(w http.ResponseWriter, _ *http.Request) {
+	header := http.Header{}
+	header.Set("Allow", http.MethodGet)
+	policy.WriteDetail(w, http.StatusMethodNotAllowed, "Method Not Allowed", header)
 }
 
 // reply is one route answer.
@@ -116,7 +130,15 @@ func validation(errs pybody.Errors) reply {
 	return reply{http.StatusUnprocessableEntity, pybody.Detail(errs)}
 }
 
+// write writes one answer. Every billing route is a response_model route
+// in FastAPI and none returns a JSONResponse itself, so a success body is
+// pydantic-core's dump_json (policy.WriteModel); an error body is the
+// HTTPException or validation JSONResponse (policy.WriteJSON).
 func (h handlers) write(w http.ResponseWriter, answer reply) {
+	if answer.status >= 200 && answer.status < 300 {
+		policy.WriteModel(w, answer.status, answer.body, nil)
+		return
+	}
 	policy.WriteJSON(w, answer.status, answer.body, nil)
 }
 

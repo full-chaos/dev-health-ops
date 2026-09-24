@@ -134,7 +134,37 @@ func page(items []string, idOf func(string) string, startingAfter, url string) s
 
 var fakeID = regexp.MustCompile(`"id": "([^"]+)"`)
 
-func idOf(item string) string { return fakeID.FindStringSubmatch(item)[1] }
+func idOf(item string) string {
+	if match := fakeID.FindStringSubmatch(item); match != nil {
+		return match[1]
+	}
+	return ""
+}
+
+// fakeLists are what the reconciliation lists, in Stripe's order: a status
+// that differs from the stored one, a null status, an object with no id
+// (skipped by both planes) placed first on its page, and objects no local
+// row holds.
+var fakeLists = map[string][]string{
+	"/v1/subscriptions": {
+		`{"id": "sub_A", "object": "subscription", "status": "past_due"}`,
+		`{"id": "sub_A2", "object": "subscription", "status": "trialing"}`,
+		`{"object": "subscription", "status": "active"}`,
+		`{"id": "sub_C", "object": "subscription", "status": null}`,
+		`{"id": "sub_stripe_only", "object": "subscription", "status": "active"}`,
+	},
+	"/v1/invoices": {
+		`{"id": "in_A1", "object": "invoice", "status": "void"}`,
+		`{"id": "in_A2", "object": "invoice", "status": "paid"}`,
+		`{"id": "in_B1", "object": "invoice", "status": "uncollectible"}`,
+		`{"id": "in_stripe_only", "object": "invoice", "status": "open"}`,
+	},
+	"/v1/refunds": {
+		`{"id": "re_A1", "object": "refund", "status": "succeeded"}`,
+		`{"id": "re_B1", "object": "refund", "status": "succeeded"}`,
+		`{"id": "re_stripe_only", "object": "refund", "status": "pending"}`,
+	},
+}
 
 // plane is one plane's view of the fake.
 func (f *fakeStripe) plane(name string) http.Handler {
@@ -201,6 +231,41 @@ func (f *fakeStripe) serve(plane string, w http.ResponseWriter, r *http.Request)
 		}
 		id := f.next(plane, "bps")
 		fmt.Fprintf(w, `{"id": %q, "object": "billing_portal.session", "url": "https://portal.venue.test/%s"}`, id, id)
+	case r.Method == http.MethodGet && fakeLists[path] != nil:
+		after := r.URL.Query().Get("starting_after")
+		if after == "" {
+			f.counters[plane+path]++
+		}
+		run := f.counters[plane+path]
+		items := fakeLists[path]
+		switch {
+		// Invoices: the first listing fails outright, so that run's invoice
+		// report holds only the local invoices missing in Stripe.
+		case path == "/v1/invoices" && run == 1:
+			stripeFail(w, "invoice list refused")
+			return
+		// Refunds: the second listing fails on its second page, so a
+		// failure part way drops the page already read too.
+		case path == "/v1/refunds" && run == 2 && after != "":
+			stripeFail(w, "refund list refused")
+			return
+		// Subscriptions: the first listing holds only org A's two, one
+		// with a null status (a report with mismatches and nothing
+		// missing); the second fails (a report with nothing at all).
+		case path == "/v1/subscriptions" && run == 1:
+			items = []string{items[0], `{"id": "sub_A2", "object": "subscription", "status": null}`}
+		case path == "/v1/subscriptions" && run == 2:
+			stripeFail(w, "subscription list refused")
+			return
+		}
+		fmt.Fprint(w, page(items, idOf, after, path))
+	case r.Method == http.MethodPost && strings.HasPrefix(path, "/v1/invoices/") && strings.HasSuffix(path, "/void"):
+		id := strings.TrimSuffix(strings.TrimPrefix(path, "/v1/invoices/"), "/void")
+		if id == "in_err" {
+			stripeFail(w, "This invoice can no longer be voided.")
+			return
+		}
+		fmt.Fprintf(w, `{"id": %q, "object": "invoice", "status": "void"}`, id)
 	default:
 		w.WriteHeader(http.StatusNotFound)
 		fmt.Fprint(w, `{"error": {"message": "unrouted fake call", "type": "invalid_request_error"}}`)
@@ -802,6 +867,7 @@ func TestVenueOracleBillingWithoutStripeKey(t *testing.T) {
 		Root: venueRoot(), JWTKey: venueKey, Logger: quietLogger(), PythonEnv: pythonEnv,
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
 			seed = billingSeed(t, ctx, admin)
+			ledgerSeed(t, ctx, admin, seed)
 			return seed.tokenSpecs()
 		},
 	})
@@ -846,11 +912,13 @@ func TestVenueOracleBillingWithoutStripeKey(t *testing.T) {
 		{Name: "reactivate: no subscription, no key", Method: "POST", Path: p + "/subscriptions/reactivate?org_id=" + seed.orgD.String(), Headers: headers("super")},
 		{Name: "plans: no key needed", Method: "GET", Path: p + "/plans", Headers: headers("ownerA")},
 	}
+	requests = append(requests, ledgerBareRequests(venue.Tokens)...)
 	python := venue.ServePython(t, requests)
 	receipt := venueoracle.Diff(t, base, requests, python, venueoracle.DiffOptions{})
 	for _, table := range []string{
 		`SELECT key, stripe_product_id, updated_at FROM billing_plans ORDER BY key`,
-		`SELECT action, org_id::text, local_state::text FROM billing_audit_log ORDER BY org_id`,
+		`SELECT action, org_id::text, local_state::text FROM billing_audit_log ORDER BY org_id, created_at, action`,
+		`SELECT id::text, status, voided_at, updated_at FROM invoices ORDER BY id`,
 	} {
 		pyRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), table)
 		goRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), table)

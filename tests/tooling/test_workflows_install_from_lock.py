@@ -83,7 +83,9 @@ def _unlocked_jobs(workflows_dir: Path) -> set[tuple[str, str]]:
     return found
 
 
-def test_no_unlisted_workflow_job_installs_from_the_unlocked_requirements_file() -> None:
+def test_no_unlisted_workflow_job_installs_from_the_unlocked_requirements_file() -> (
+    None
+):
     found = _unlocked_jobs(WORKFLOWS_DIR)
     unlisted = sorted(found - set(ALLOWED_UNLOCKED))
     assert not unlisted, (
@@ -111,7 +113,9 @@ def test_the_e2e_jobs_install_the_lock() -> None:
     for job_id in E2E_JOBS:
         job = (workflow.get("jobs") or {}).get(job_id)
         assert job is not None, f"{E2E_WORKFLOW} has no job {job_id!r}"
-        runs = [s["run"] for s in job.get("steps") or [] if isinstance(s.get("run"), str)]
+        runs = [
+            s["run"] for s in job.get("steps") or [] if isinstance(s.get("run"), str)
+        ]
         assert any("uv sync --frozen" in r for r in runs), (
             f"{E2E_WORKFLOW}:{job_id} must install with `uv sync --frozen ...`"
         )
@@ -121,7 +125,8 @@ def test_the_e2e_jobs_install_the_lock() -> None:
         )
         assert not any(_installs_unlocked(r) for r in runs)
         assert any(
-            "astral-sh/setup-uv" in str(s.get("uses", "")) for s in job.get("steps") or []
+            "astral-sh/setup-uv" in str(s.get("uses", ""))
+            for s in job.get("steps") or []
         ), f"{E2E_WORKFLOW}:{job_id} must set up uv"
 
 
@@ -145,13 +150,15 @@ def _workflow_with(tmp_path: Path, run: str) -> Path:
 
 
 def test_detector_accepts_locked_and_other_requirement_files(tmp_path: Path) -> None:
-    for i, run in enumerate((
-        "uv sync --frozen --all-extras --dev\n",
-        "python -m pip install --no-deps -r ci/requirements-live-python-oracles.txt\n",
-        "pip install -r requirements-docs.txt\n",
-        "uv pip install --python .venv/bin/python -r requirements-docs.txt\n",
-        "# pip install -r requirements.txt (a comment)\n",
-    )):
+    for i, run in enumerate(
+        (
+            "uv sync --frozen --all-extras --dev\n",
+            "python -m pip install --no-deps -r ci/requirements-live-python-oracles.txt\n",
+            "pip install -r requirements-docs.txt\n",
+            "uv pip install --python .venv/bin/python -r requirements-docs.txt\n",
+            "# pip install -r requirements.txt (a comment)\n",
+        )
+    ):
         assert _unlocked_jobs(_workflow_with(tmp_path / f"ok{i}", run)) == set(), run
 
 

@@ -121,3 +121,17 @@ func TestCoverageAnswers(t *testing.T) {
 		t.Errorf("config failure: %d %s", status, logs)
 	}
 }
+
+// TestABackfillBoundaryReadsISOFormsBeforeTimestamps pins the before-
+// validator's order: datetime.fromisoformat first, pydantic's lax parse
+// only for what it refuses. A basic ISO date is 2026-01-01, never Unix
+// seconds (the digits read as a timestamp would be 1970-08-23).
+func TestABackfillBoundaryReadsISOFormsBeforeTimestamps(t *testing.T) {
+	payload := strings.Replace(coverageMinimal, `"since": "2026-01-01", "before": "2026-01-02T00:00:00"`,
+		`"since": "20260101", "before": "2026-W01-5"`, 1)
+	reader := &coverageReader{faultReader: &faultReader{}, row: &coverageProjection{Payload: payload}}
+	_, status, body, _ := serveCoverage(t, reader)
+	if status != http.StatusOK || !strings.Contains(body, `"backfill_windows":[{"since":"2026-01-01T00:00:00Z","before":"2026-01-02T00:00:00Z"`) {
+		t.Errorf("basic and week boundaries: %d %s", status, body)
+	}
+}

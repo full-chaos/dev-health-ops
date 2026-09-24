@@ -250,6 +250,7 @@ func syncAdminRequests(venue *venueoracle.Venue, ids venueIDs) []venueoracle.Req
 		"refused status": ids.cfgInactive.String(), "null payload": ids.cfgDictTargets.String(),
 		"no overall": ids.cfgJobsBadList.String(), "other org config": ids.cfgB.String(),
 		"unknown": uuid.NewString(), "not a uuid": "zzz", "uppercase": strings.ToUpper(ids.cfgPlanner.String()),
+		"basic and week boundaries": ids.child1.String(),
 	} {
 		requests = append(requests, get("coverage "+name, "/sync-configs/"+raw+"/coverage", a))
 	}
@@ -475,6 +476,11 @@ VALUES ($1, $2, $3, $4, $5, '2026-09-01 10:00:00+00', NULL, NULL, CASE WHEN $6 T
 	projection(ids.orgA, ids.cfgDictTargets, 3650, 2, false, `null`)
 	projection(ids.orgA, ids.cfgJobsBadList, 3650, 2, false, `{"config_id": "x", "projection_version": 2}`)
 	projection(ids.orgB, ids.cfgB, 3650, 2, false, coveragePayload(ids.cfgB.String(), "planner", ""))
+	// Backfill boundaries in forms only datetime.fromisoformat reads: a
+	// basic date and an ISO week date (the digits of the first read as
+	// Unix seconds would answer 1970).
+	projection(ids.orgA, ids.child1, 3650, 2, false, strings.Replace(coveragePayload(ids.child1.String(), "legacy", ""),
+		`"since": "2026-01-01", "before": "2026-01-02T00:00:00"`, `"since": "20260101", "before": "2026-W01-5"`, 1))
 }
 
 // coveragePayload is a projection payload in the projector's shape; extra

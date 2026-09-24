@@ -111,21 +111,6 @@ var coverageFieldPaths = [][]any{
 
 const absent = "\x00absent"
 
-// fromISOFormatLimit is pytime.FromISOFormat's named limit: Python's
-// datetime.fromisoformat also reads hour 24, the basic (no-dash) forms and
-// ISO week dates, which the Go port refuses. Only a backfill window
-// boundary goes through fromisoformat. Each entry must still differ, so a
-// fix to the shared helper fails this list until the entry is removed.
-var fromISOFormatLimit = map[string]bool{}
-
-func init() {
-	for _, field := range []string{"since", "before"} {
-		for _, value := range []string{"2026-01-01T24:00:00Z", "20260101", "20260101T000000Z", "2026-W01-1"} {
-			fromISOFormatLimit[`["backfill_windows",0,"`+field+`"]="`+value+`"`] = true
-		}
-	}
-}
-
 // setPath replaces (or, for absent, deletes) the value at path.
 func setPath(root any, path []any, value any) {
 	parent := root
@@ -212,17 +197,9 @@ func TestCoverageModelVenueOracleMatchesLivePydantic(t *testing.T) {
 	if len(want) != len(cases) {
 		t.Fatalf("python answered %d of %d", len(want), len(cases))
 	}
-	accepted, refused, limited := 0, 0, 0
+	accepted, refused := 0, 0
 	for index, c := range cases {
 		got, goErr := goCoverage(c)
-		same := (want[index].Error != "" && goErr != nil) || (want[index].Error == "" && goErr == nil && got == want[index].OK)
-		if fromISOFormatLimit[c.Name] {
-			if same {
-				t.Errorf("%s: named fromisoformat limit no longer differs; remove it from fromISOFormatLimit", c.Name)
-			}
-			limited++
-			continue
-		}
 		switch {
 		case want[index].Error != "" && goErr != nil:
 			refused++
@@ -232,11 +209,10 @@ func TestCoverageModelVenueOracleMatchesLivePydantic(t *testing.T) {
 			t.Errorf("%s:\n go     %s %v\n python %s %s", c.Name, got, goErr, want[index].OK, want[index].Error)
 		}
 	}
-	if len(cases) != 3897 || limited != len(fromISOFormatLimit) || accepted+refused+limited != len(cases) {
-		t.Fatalf("compared %d of 3897 cases: %d accepted, %d refused, %d of %d named limits",
-			len(cases), accepted, refused, limited, len(fromISOFormatLimit))
+	if len(cases) != 3897 || accepted != 1077 || refused != 2820 {
+		t.Fatalf("compared %d of 3897 cases: %d accepted (want 1077), %d refused (want 2820)", len(cases), accepted, refused)
 	}
-	t.Logf("%d cases: %d accepted, %d refused on both planes, %d named limits", len(cases), accepted, refused, limited)
+	t.Logf("%d cases: %d accepted, %d refused on both planes", len(cases), accepted, refused)
 	venueoracle.WriteProof(t)
 }
 

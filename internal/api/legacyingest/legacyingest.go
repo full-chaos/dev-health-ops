@@ -71,6 +71,9 @@ type Deps struct {
 	// not streamed, and no idempotency key is checked, as the Python api does
 	// without REDIS_URL.
 	Store Store
+	// Metrics counts credential refusals; register it with the health
+	// registry to expose it. Nil counts nothing.
+	Metrics *Metrics
 	// Getenv reads the credentials and the environment name on every
 	// request, as the Python api does; nil means os.Getenv.
 	Getenv func(string) string
@@ -105,17 +108,18 @@ func Routes(deps Deps) []httpapi.Route {
 		out[index] = httpapi.Route{
 			Method:  http.MethodPost,
 			Pattern: "/api/v1/ingest/" + item.path,
-			Handler: handler{route: item, store: deps.Store, getenv: getenv, logger: logger},
+			Handler: handler{route: item, store: deps.Store, metrics: deps.Metrics, getenv: getenv, logger: logger},
 		}
 	}
 	return out
 }
 
 type handler struct {
-	route  route
-	store  Store
-	getenv func(string) string
-	logger *slog.Logger
+	route   route
+	store   Store
+	metrics *Metrics
+	getenv  func(string) string
+	logger  *slog.Logger
 }
 
 func (h handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {

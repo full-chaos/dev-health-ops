@@ -5,29 +5,79 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
+	"fmt"
+	"io"
 	"net/http"
+	"sort"
 	"strings"
-
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/metric"
+	"sync"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
-// rejected counts refusals by reason, as the Python api's
-// record_ingest_legacy_auth_rejected does (a fixed vocabulary, never
-// request contents).
-var rejected = func() metric.Int64Counter {
-	counter, err := otel.Meter("github.com/full-chaos/dev-health-ops/internal/api/legacyingest").Int64Counter(
-		"dev_health_api_ingest_legacy_auth_rejected_total",
-		metric.WithDescription("Legacy /api/v1/ingest/* requests refused for their credentials, by reason"))
-	if err != nil {
-		counter, _ = otel.GetMeterProvider().Meter("noop").Int64Counter("dev_health_api_ingest_legacy_auth_rejected_total")
+// authRejectedName is the series of the refusals counter.
+const authRejectedName = "dev_health_api_ingest_legacy_auth_rejected_total"
+
+// rejectionReasons is the fixed vocabulary of the counter (never request
+// contents), each series present at zero from the first scrape.
+var rejectionReasons = []string{"no_credential_configured", "invalid_api_key", "invalid_signature"}
+
+// Metrics counts refusals by reason, as the Python api's
+// record_ingest_legacy_auth_rejected does. It is exposed on the operator
+// /metrics endpoint by registering it with the health registry
+// (RegisterMetrics); a process-global OpenTelemetry counter would count into
+// nothing.
+type Metrics struct {
+	mu       sync.Mutex
+	rejected map[string]uint64
+}
+
+// NewMetrics returns a Metrics with every reason at zero.
+func NewMetrics() *Metrics {
+	counts := make(map[string]uint64, len(rejectionReasons))
+	for _, reason := range rejectionReasons {
+		counts[reason] = 0
 	}
-	return counter
-}()
+	return &Metrics{rejected: counts}
+}
+
+func (m *Metrics) count(reason string) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.rejected[reason]++
+}
+
+// WritePrometheus implements health.MetricsSource.
+func (m *Metrics) WritePrometheus(writer io.Writer) error {
+	if m == nil {
+		return nil
+	}
+	m.mu.Lock()
+	snapshot := make(map[string]uint64, len(m.rejected))
+	for reason, value := range m.rejected {
+		snapshot[reason] = value
+	}
+	m.mu.Unlock()
+	if _, err := io.WriteString(writer, "# HELP "+authRejectedName+
+		" Legacy /api/v1/ingest/* requests refused for their credentials, by reason.\n# TYPE "+authRejectedName+" counter\n"); err != nil {
+		return err
+	}
+	reasons := make([]string, 0, len(snapshot))
+	for reason := range snapshot {
+		reasons = append(reasons, reason)
+	}
+	sort.Strings(reasons)
+	for _, reason := range reasons {
+		if _, err := fmt.Fprintf(writer, "%s{reason=%q} %d\n", authRejectedName, reason, snapshot[reason]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 // latin1 is what Starlette makes of a header value: every byte one
 // character. Comparing against an environment value (decoded as UTF-8) or
@@ -90,8 +140,8 @@ func developmentEnvironment(getenv func(string) string) bool {
 }
 
 // reject answers a 401 and counts it.
-func reject(w http.ResponseWriter, r *http.Request, reason, detail string) {
-	rejected.Add(r.Context(), 1, metric.WithAttributes(attribute.String("reason", reason)))
+func (h handler) reject(w http.ResponseWriter, reason, detail string) {
+	h.metrics.count(reason)
 	policy.WriteDetail(w, http.StatusUnauthorized, detail, nil)
 }
 
@@ -104,7 +154,7 @@ func (h handler) authenticate(w http.ResponseWriter, r *http.Request, raw []byte
 	secret := h.getenv("INGEST_SIGNING_SECRET")
 	if len(keys) == 0 && secret == "" && !developmentEnvironment(h.getenv) {
 		h.logger.WarnContext(r.Context(), "Neither INGEST_API_KEYS nor INGEST_SIGNING_SECRET is configured outside a development environment - rejecting ingest request (CHAOS-4720)")
-		reject(w, r, "no_credential_configured", "Invalid API key")
+		h.reject(w, "no_credential_configured", "Invalid API key")
 		return false
 	}
 	if len(keys) > 0 {
@@ -117,7 +167,7 @@ func (h handler) authenticate(w http.ResponseWriter, r *http.Request, raw []byte
 			}
 		}
 		if presented == "" || !found {
-			reject(w, r, "invalid_api_key", "Invalid API key")
+			h.reject(w, "invalid_api_key", "Invalid API key")
 			return false
 		}
 	}
@@ -138,7 +188,7 @@ func (h handler) authenticate(w http.ResponseWriter, r *http.Request, raw []byte
 			valid = subtle.ConstantTimeCompare([]byte(computed), []byte(expected)) == 1
 		}
 		if !valid {
-			reject(w, r, "invalid_signature", "Invalid signature")
+			h.reject(w, "invalid_signature", "Invalid signature")
 			return false
 		}
 	}

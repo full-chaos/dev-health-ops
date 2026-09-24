@@ -16,8 +16,16 @@ func join(parts []string) string { return strings.Join(parts, ", ") }
 // pyEqual is Python's == over decoded JSON values: dicts compare without
 // regard to key order, lists element by element, and numbers across bool,
 // int and float exactly (True == 1 == 1.0; two large ints that share a
-// float rounding are not equal; NaN equals nothing).
+// float rounding are not equal; an infinity equals only an infinity of the
+// same sign, as inf == inf is True; NaN equals nothing).
 func pyEqual(a, b pyjson.Value) bool {
+	if x, ok := a.(pyjson.Float); ok && math.IsInf(float64(x), 0) {
+		y, isFloat := b.(pyjson.Float)
+		return isFloat && float64(x) == float64(y)
+	}
+	if y, ok := b.(pyjson.Float); ok && math.IsInf(float64(y), 0) {
+		return false
+	}
 	if left, ok := pyNumber(a); ok {
 		right, isNumber := pyNumber(b)
 		return isNumber && left != nil && right != nil && left.Cmp(right) == 0

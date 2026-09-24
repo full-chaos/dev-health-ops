@@ -161,7 +161,7 @@ func TestSyntaxErrorTextMatchesLivePython(t *testing.T) {
 	if proof == "" {
 		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
 	}
-	if err := os.WriteFile(filepath.Join(proof, "pyjson-syntax-error-text"), []byte("executed"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(proof, "api-pyjson-syntax-error-text"), []byte("executed"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Logf("%d bodies compared (%d errors, %d ok, %d other), %d mismatches", len(corpus), texts, oks, others, mismatches)

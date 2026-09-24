@@ -272,7 +272,10 @@ def _run_relevance_step(
     if changed_file is not None:
         target = repo / changed_file
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text("changed\n", encoding="utf-8")
+        # Append a comment rather than overwrite: a copied script must keep
+        # working, or the step fails open and passes for the wrong reason.
+        previous = target.read_text(encoding="utf-8") if target.exists() else ""
+        target.write_text(previous + "\n# changed\n", encoding="utf-8")
         git("add", "-A")
         git("commit", "-q", "-m", "push")
 
@@ -304,26 +307,32 @@ def _run_relevance_step(
 
 
 @pytest.mark.parametrize(
-    ("changed_file", "want"),
+    ("changed_file", "want", "reason"),
     [
-        # The gate itself: go.yml's pattern list names neither file, and a
-        # change to either must still run the suite that proves it.
-        (".github/workflows/venue-oracles.yml", "relevant=true"),
-        ("ci/venue_oracle_discovery.awk", "relevant=true"),
+        # The gate itself: go.yml's pattern list names none of these files,
+        # and a change to any of them must still run the suite that proves it.
+        (".github/workflows/venue-oracles.yml", "relevant=true", "gate itself changed"),
+        ("ci/venue_oracle_discovery.awk", "relevant=true", "gate itself changed"),
+        ("ci/go_relevant_diff.sh", "relevant=true", "gate itself changed"),
         # Go-relevant through go.yml's own list.
-        ("internal/example/example.go", "relevant=true"),
+        ("internal/example/example.go", "relevant=true", "Go-relevant: 1"),
         # Not Go-relevant: an honest skip.
-        ("README.md", "relevant=false"),
+        ("README.md", "relevant=false", "Go-relevant: 0"),
     ],
 )
 def test_a_push_to_main_runs_the_suite_when_the_change_needs_it(
-    tmp_path: Path, changed_file: str, want: str
+    tmp_path: Path, changed_file: str, want: str, reason: str
 ) -> None:
-    """Runs the relevance step itself, not a text search of it."""
+    """Runs the relevance step itself, not a text search of it. The reason
+    line pins the branch that decided, so a fail-open cannot pass for it."""
     output, stdout = _run_relevance_step(tmp_path, changed_file, "push")
     assert output.splitlines() == [want], (
         f"a push changing only {changed_file} wrote {output!r} to "
         f"GITHUB_OUTPUT, want exactly {want!r}. stdout: {stdout!r}"
+    )
+    assert reason in stdout and "failing open" not in stdout, (
+        f"a push changing only {changed_file} decided on the wrong branch: "
+        f"want {reason!r} in stdout, got {stdout!r}"
     )
 
 

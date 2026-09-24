@@ -7,7 +7,10 @@ import (
 	"encoding/hex"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 )
 
 func sign(secret, body string) string {
@@ -86,5 +89,26 @@ func TestHandleGitHubWebhookRejectsAMissingRequiredHeaderEvenWithAValidSignature
 	want := `{"detail":[{"type":"missing","loc":["header","x-github-event"],"msg":"Field required","input":null}]}`
 	if got := recorder.Body.String(); got != want {
 		t.Fatalf("body = %s, want %s", got, want)
+	}
+}
+
+// TestHandleGitHubWebhookAnswersAnIntegerLiteralPastThe4300DigitLimitAs500
+// pins the Python route's behaviour: it catches only json.JSONDecodeError,
+// so json.loads' ValueError for a 4301-digit integer literal is an unhandled
+// exception -- the generic 500 -- not the 400 "Invalid JSON payload".
+func TestHandleGitHubWebhookAnswersAnIntegerLiteralPastThe4300DigitLimitAs500(t *testing.T) {
+	body := []byte(`{"n":` + strings.Repeat("1", 4301) + `}`)
+	deps := Deps{Secrets: Secrets{GitHub: "s3cr3t"}}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/webhooks/github", bytes.NewReader(body))
+	req.Header.Set("X-GitHub-Event", "ping")
+	req.Header.Set("X-GitHub-Delivery", "delivery-1")
+	req.Header.Set("X-Hub-Signature-256", sign("s3cr3t", string(body)))
+	recorder := httptest.NewRecorder()
+	deps.handleGitHubWebhook()(recorder, req)
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500; body = %s", recorder.Code, recorder.Body.String())
+	}
+	if recorder.Header().Get(policy.UnhandledErrorHeader) == "" {
+		t.Fatal("the 500 must be marked as the unhandled-exception answer")
 	}
 }

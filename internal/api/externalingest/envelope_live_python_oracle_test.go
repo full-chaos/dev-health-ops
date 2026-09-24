@@ -76,6 +76,24 @@ func envelopeCorpus() [][]byte {
 				strings.Repeat("[", depth)+strings.Repeat("]", depth)+`}}]}`),
 			[]byte(strings.Repeat("[", depth)))
 	}
+	// jiter's integer-part limit: 4300 characters, sign included, float or
+	// not (digits after a '.' or an exponent are unbounded); measured, not
+	// json.loads' 4300 digits without the sign. In a top-level extra key,
+	// an array element, a record payload, and cut off after the literal.
+	for _, literal := range []string{
+		strings.Repeat("1", 4299), strings.Repeat("1", 4300), strings.Repeat("1", 4301), strings.Repeat("1", 9000),
+		"-" + strings.Repeat("1", 4299), "-" + strings.Repeat("1", 4300), "-" + strings.Repeat("1", 4301),
+		strings.Repeat("1", 4300) + ".5", strings.Repeat("1", 4301) + ".5", "1." + strings.Repeat("1", 9000),
+		strings.Repeat("1", 4300) + "e5", strings.Repeat("1", 4301) + "e5", "1e" + strings.Repeat("1", 4400),
+		"0." + strings.Repeat("0", 5000), strings.Repeat("0", 4301), strings.Repeat("1", 4301) + "x", `"` + strings.Repeat("1", 4301) + `"`,
+	} {
+		corpus = append(corpus,
+			[]byte(`{"extra":`+literal+`}`),
+			[]byte(`[`+literal+`]`),
+			[]byte(`{"schemaVersion":"external-ingest.v1","idempotencyKey":"k","source":{"system":"github","instance":"i"},"records":[{"kind":"repository.v1","externalId":"e","payload":{"n":`+literal+`}}]}`),
+			[]byte(`{"schemaVersion":"external-ingest.v1","idempotencyKey":"k","source":{"system":"github","instance":"i"},"n":`+literal),
+			[]byte(`{"schemaVersion":"external-ingest.v1","idempotencyKey":`+literal+`,"source":{"system":"github","instance":"i"},"records":[]}`))
+	}
 	parts := map[string][]string{
 		"schemaVersion": {`"external-ingest.v1"`, `"v2"`, `""`, `1`, `null`, `["x"]`},
 		"idempotencyKey": {`"k"`, `""`, `"` + strings.Repeat("k", 255) + `"`, `"` + strings.Repeat("é", 256) + `"`, `7`, `null`,

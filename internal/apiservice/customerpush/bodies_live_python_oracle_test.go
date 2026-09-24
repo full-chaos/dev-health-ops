@@ -72,6 +72,13 @@ func bodiesCorpus() [][2]string {
 		for _, body := range []string{``, `null`, `[]`, `"x"`, `1`, `{}`, `{`, `{"a":1}`, `{"x": NaN}`} {
 			corpus = append(corpus, [2]string{model, body})
 		}
+		// json.loads refuses an integer literal past 4300 digits with a
+		// ValueError (FastAPI: 400 "There was an error parsing the body");
+		// 4300 digits, a sign, a float and a string are fine.
+		for _, literal := range []string{strings.Repeat("1", 4300), strings.Repeat("1", 4301), "-" + strings.Repeat("1", 4301),
+			strings.Repeat("1", 4301) + ".0", strings.Repeat("1", 4301) + "e0", `"` + strings.Repeat("1", 4301) + `"`} {
+			corpus = append(corpus, [2]string{model, `{"extra":` + literal + `}`}, [2]string{model, `[` + literal + `]`})
+		}
 	}
 	fields := bodyFields()
 	random := rand.New(rand.NewSource(63190))

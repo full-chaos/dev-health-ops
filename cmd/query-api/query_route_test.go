@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -66,4 +68,26 @@ func TestTruncateForLog(t *testing.T) {
 			t.Fatalf("truncated real-shaped chain is still %d bytes, want at most ~%d", len(got), maxUnwrapChainLogBytes)
 		}
 	})
+}
+
+// TestQueryRouteAnswersAnIntegerPastThe4300DigitLimitAsPythons500 pins the
+// canary route's body contract: the Python edge reads the body with
+// json.loads, so an integer literal past 4300 digits ANYWHERE in it (the
+// variables here, which the {query} decode alone would not see) is an
+// unhandled ValueError, the generic 500, never a served operation.
+func TestQueryRouteAnswersAnIntegerPastThe4300DigitLimitAsPythons500(t *testing.T) {
+	handler := newDocumentDispatchHandler(nil, nil, nil)
+	post := func(digits int) *httptest.ResponseRecorder {
+		body := `{"query":"{ __typename }","variables":{"n":` + strings.Repeat("1", digits) + `}}`
+		recorder := httptest.NewRecorder()
+		handler(recorder, httptest.NewRequest(http.MethodPost, "/query", strings.NewReader(body)))
+		return recorder
+	}
+	over := post(4301)
+	if over.Code != http.StatusInternalServerError || strings.TrimSpace(over.Body.String()) != `{"detail":"Internal Server Error"}` {
+		t.Fatalf("4301 digits answered %d %s, want the generic 500", over.Code, over.Body.String())
+	}
+	if within := post(4300); within.Code == http.StatusInternalServerError {
+		t.Fatalf("4300 digits answered the 500: %s", within.Body.String())
+	}
 }

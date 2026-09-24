@@ -122,6 +122,9 @@ func (p *jiterParser) ident(word string) *jiterError {
 	return nil
 }
 
+// maxIntegerPartChars is the longest integer part (sign included) jiter parses.
+const maxIntegerPartChars = 4300
+
 func isJSONDigit(c byte) bool { return c >= '0' && c <= '9' }
 
 func (p *jiterParser) number() (pyjson.Value, *jiterError) {
@@ -150,6 +153,14 @@ func (p *jiterParser) number() (pyjson.Value, *jiterError) {
 		for p.pos < len(p.data) && isJSONDigit(p.data[p.pos]) {
 			p.pos++
 		}
+	}
+	// jiter refuses an integer part (sign included) past 4300 characters,
+	// float or not, and reports the position 4301 characters into the
+	// literal; digits after a '.' or an exponent are unbounded. Measured
+	// against live pydantic-core: 4300 digits parse, "-" + 4300 digits and
+	// 4301 digits fail, "1" * 4300 + ".1" parses, "1" * 4301 + ".1" fails.
+	if p.pos-start > maxIntegerPartChars {
+		return nil, p.fail("number out of range", start+maxIntegerPartChars+1)
 	}
 	isFloat := false
 	if p.pos < len(p.data) && p.data[p.pos] == '.' {

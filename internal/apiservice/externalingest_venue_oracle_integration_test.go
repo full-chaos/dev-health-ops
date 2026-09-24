@@ -357,6 +357,16 @@ func TestExternalIngestVenueOracle(t *testing.T) {
 			`{"schemaVersion":"external-ingest.v1","idempotencyKey":"k","source":{"system":"github","instance":"acme/venue-repo"},"window":{"startedAt":"2026-01-02T00:00:00","endedAt":"2026-01-01T00:00:00Z"},"records":[{"kind":"repository.v1","externalId":"e","payload":{}}]}`),
 		malformedEnvelope("accept shape errors", "/api/v1/external-ingest/batches", auth, `{"records":[]}`),
 		malformedEnvelope("accept JSON syntax error", "/api/v1/external-ingest/batches", auth, `[1,]`),
+		// jiter refuses an integer part (sign included) past 4300 characters:
+		// Python answers its unhandled 500 and stores no batch row.
+		malformedEnvelope("validate integer part at jiter's limit", "/api/v1/external-ingest/validate", auth, `{"extra":`+strings.Repeat("1", 4300)+`}`),
+		malformedEnvelope("validate integer part over jiter's limit", "/api/v1/external-ingest/validate", auth, `{"extra":`+strings.Repeat("1", 4301)+`}`),
+		malformedEnvelope("validate signed integer part over jiter's limit", "/api/v1/external-ingest/validate", auth, `{"extra":-`+strings.Repeat("1", 4300)+`}`),
+		malformedEnvelope("validate float integer part over jiter's limit", "/api/v1/external-ingest/validate", auth, `{"extra":`+strings.Repeat("1", 4301)+`.5}`),
+		malformedEnvelope("accept integer part over jiter's limit", "/api/v1/external-ingest/batches", auth,
+			`{"schemaVersion":"external-ingest.v1","idempotencyKey":"venue-huge-int","source":{"system":"github","instance":"acme/api"},"records":[{"kind":"repository.v1","externalId":"e","payload":{"n":`+strings.Repeat("1", 4301)+`}}]}`),
+		malformedEnvelope("accept integer part at jiter's limit", "/api/v1/external-ingest/batches", auth,
+			`{"schemaVersion":"external-ingest.v1","idempotencyKey":"venue-huge-int-ok","source":{"system":"github","instance":"acme/api"},"records":[{"kind":"repository.v1","externalId":"e","payload":{"n":`+strings.Repeat("1", 4300)+`}}]}`),
 		{
 			Name: "accept new batch", Method: "POST", Path: "/api/v1/external-ingest/batches",
 			Headers: jsonHeaders(auth), Body: venueoracle.B64(acceptBody),

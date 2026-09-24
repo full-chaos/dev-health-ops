@@ -151,6 +151,10 @@ func apiPosture() RolePosture {
 			{"settings", true, true, true},
 			// A purge target, delete only.
 			{"sync_configurations", false, false, true},
+			// CHAOS-6437: the sync coverage read serves the stored
+			// projection (build_sync_coverage_summary). Read-only; rows go
+			// with their config by ON DELETE CASCADE, so no purge grant.
+			{"sync_coverage_projections", false, false, false},
 			// The generic audit writer (internal/api/audit): impersonation
 			// start/stop, password_changed, member_invited, and plan area K's
 			// telemetry-report audit row -- one entry, every area. Also a
@@ -237,7 +241,7 @@ func apiPosture() RolePosture {
 			// The admin IP-allowlist routes create, update and delete
 			// entries.
 			{"org_ip_allowlist", true, true, true},
-			{"org_retention_policies", false, false, true},
+			{"org_retention_policies", true, true, true},
 			// Billing plans/subscriptions/checkout/portal (CHAOS-6256): plan
 			// create/update/soft-delete and the Stripe id write-back; price
 			// replacement inserts, updates and deletes rows; bundle links are

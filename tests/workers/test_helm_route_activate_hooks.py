@@ -445,7 +445,8 @@ def test_worker_group_deployment_uses_that_groups_own_declared_image(
               enabled: true
               groups:
                 - name: sync-provider
-                  image: ghcr.io/example/sync-provider-test-pin:v42
+                  image: ghcr.io/example/dev-health-go-dho:sync-provider-test-pin-v42
+                  subcommand: worker
                   queues: [sync_provider]
                   queueConcurrency: {sync_provider: 2}
                   replicas: 1
@@ -469,7 +470,9 @@ def test_worker_group_deployment_uses_that_groups_own_declared_image(
         and d["metadata"]["name"].endswith("-go-sync-provider")
     )
     image = deployment["spec"]["template"]["spec"]["containers"][0]["image"]
-    assert image == "ghcr.io/example/sync-provider-test-pin:v42", image
+    assert image == "ghcr.io/example/dev-health-go-dho:sync-provider-test-pin-v42", (
+        image
+    )
 
 
 def test_sync_provider_checked_in_default_image_is_the_published_go_worker_image() -> (
@@ -492,7 +495,7 @@ def test_sync_provider_checked_in_default_image_is_the_published_go_worker_image
         and d["metadata"]["name"].endswith("-go-sync-provider")
     )
     image = deployment["spec"]["template"]["spec"]["containers"][0]["image"]
-    assert image == "ghcr.io/full-chaos/dev-health-go-worker:latest", image
+    assert image == "ghcr.io/full-chaos/dev-health-go-dho:latest", image
 
 
 # --- credentials never reach the JOB spec or the route-activate containers -

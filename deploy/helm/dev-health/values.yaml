@@ -571,9 +571,14 @@ goWorkers:
         RIVER_QUEUE_DATABASE_PASSWORD: "change-me-river-queue-password"
         RIVER_COORDINATOR_DATABASE_PASSWORD: "change-me-river-coordinator-password"
         RIVER_KEDA_READONLY_PASSWORD: "change-me-river-keda-readonly-password"
+  # -- The one image every group runs: dho, whose first argument (each group's
+  #    `subcommand`) selects the service -- `worker`, `reconciler`,
+  #    `scheduler` or `stream-runner`. A group's own `image` overrides it (the
+  #    prod values pin the operator image, which also ships dho).
+  image: ghcr.io/full-chaos/dev-health-go-dho:latest
   groups:
     - name: heavy
-      image: ghcr.io/full-chaos/dev-health-go-worker:latest
+      subcommand: worker
       queues: [investment, metrics, reports, workgraph]
       queueConcurrency: {investment: 1, metrics: 2, reports: 2, workgraph: 1}
       replicas: 1
@@ -600,7 +605,7 @@ goWorkers:
       # result -- see metrics-api-deployment.yaml's comment for the
       # resulting open question (retire that Deployment or not).
     - name: ops
-      image: ghcr.io/full-chaos/dev-health-go-worker:latest
+      subcommand: worker
       queues: [coverage, heartbeat, retention, webhooks]
       queueConcurrency: {coverage: 1, heartbeat: 1, retention: 1, webhooks: 4}
       replicas: 1
@@ -612,7 +617,7 @@ goWorkers:
       # trickle.
       autoscaling: {enabled: true, minReplicas: 1, maxReplicas: 2, queueDepthPerReplica: 5, cooldownPeriod: 300, pollingInterval: 30}
     - name: sync
-      image: ghcr.io/full-chaos/dev-health-go-worker:latest
+      subcommand: worker
       queues: [sync]
       queueConcurrency: {sync: 4}
       replicas: 1
@@ -625,7 +630,7 @@ goWorkers:
     # cannot start while provider routes are default-off: selected queues must
     # equal constructed queues, and no provider handler is built (CHAOS-3926).
     - name: sync-provider
-      image: ghcr.io/full-chaos/dev-health-go-worker:latest
+      subcommand: worker
       queues: [sync_provider]
       queueConcurrency: {sync_provider: 2}
       replicas: 1
@@ -635,30 +640,26 @@ goWorkers:
       # this group idles at 0 backlog on a fresh install, so the KEDA
       # trigger simply never fires above minReplicas until routes activate.
       autoscaling: {enabled: true, minReplicas: 1, maxReplicas: 2, queueDepthPerReplica: 3, cooldownPeriod: 300, pollingInterval: 30}
-    # The reconciler runs `dho reconciler`: the dho image with `subcommand`,
-    # which go-workers.yaml renders as the first argument.
+    # The reconciler runs `dho reconciler`: `subcommand` is rendered as the
+    # first argument.
     - name: reconciler
-      image: ghcr.io/full-chaos/dev-health-go-dho:latest
       subcommand: reconciler
       replicas: 1
       terminationGracePeriodSeconds: 60
       resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
       autoscaling: {enabled: false}
-    # The scheduler runs `dho scheduler`: the dho image with `subcommand`.
+    # The scheduler runs `dho scheduler`.
     - name: scheduler
-      image: ghcr.io/full-chaos/dev-health-go-dho:latest
       subcommand: scheduler
       replicas: 1
       terminationGracePeriodSeconds: 60
       resources: {requests: {cpu: 100m, memory: 128Mi}, limits: {cpu: 500m, memory: 512Mi}}
       autoscaling: {enabled: false}
-    # The stream groups run `dho stream-runner`: the dho image (entrypoint
-    # dho) with `subcommand`, which go-workers.yaml renders as the first
-    # argument. A group without `subcommand` runs its image's own binary. A
+    # The stream groups run `dho stream-runner`, with `subcommand` rendered as
+    # the first argument. A
     # group with no stream profile omits `runtimeProfile` (never `""`, which the
     # values schema refuses).
     - name: stream-external
-      image: ghcr.io/full-chaos/dev-health-go-dho:latest
       subcommand: stream-runner
       runtimeProfile: external
       replicas: 1
@@ -666,7 +667,6 @@ goWorkers:
       resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
       autoscaling: {enabled: false}
     - name: stream-ingest
-      image: ghcr.io/full-chaos/dev-health-go-dho:latest
       subcommand: stream-runner
       runtimeProfile: ingest
       replicas: 1
@@ -676,7 +676,6 @@ goWorkers:
     # Not a singleton: PagerDuty entries are exclusive per consumer through the
     # group PEL and duplicates are fenced by the receipt claim token.
     - name: stream-pagerduty
-      image: ghcr.io/full-chaos/dev-health-go-dho:latest
       subcommand: stream-runner
       runtimeProfile: pagerduty
       replicas: 1

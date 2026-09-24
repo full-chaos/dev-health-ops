@@ -19,7 +19,7 @@ import (
 // the route can read what the derivation observed after the call returns.
 //
 // Lifetime is one provider unit: the production construction path builds a
-// deriver per claim inside BuildExecutor (cmd/dev-health-worker), so counts
+// deriver per claim inside BuildExecutor (internal/workerservice), so counts
 // accumulate across a unit's Derive calls (a chunked route emits several) and
 // never bleed between units. The mutex guards that accumulation rather than
 // any expected concurrency -- Derive is not called in parallel today, and this

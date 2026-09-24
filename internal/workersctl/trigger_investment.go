@@ -5,7 +5,7 @@
 // computes entirely in Python, in-process -- a SEPARATE entry point from the
 // `investment.materialize` River kind, which is NATIVE
 // (internal/jobs/investment/nativeexecutor.go) and already reached
-// automatically from post-sync (cmd/dev-health-worker/sync_dispatch.go:229-235,
+// automatically from post-sync (internal/workerservice/sync_dispatch.go:229-235,
 // syncdispatchruntime's plan.Investment branch). The Python implementation is
 // retained but unreachable from the worker path (CHAOS-4767 tracks its
 // removal); the CLI just never enqueues through the native path either.

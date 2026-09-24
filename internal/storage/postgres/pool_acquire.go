@@ -30,7 +30,7 @@ type poolAcquireStartKey struct{}
 // The observer is attached after construction (attach) rather than passed to
 // the constructor, because pgxpool freezes its AcquireTracer at
 // pgxpool.NewWithConfig — before the process's MetricsCollector, which is
-// built later in cmd/dev-health-worker, exists.
+// built later in internal/workerservice, exists.
 type poolAcquireTracer struct {
 	pool string
 

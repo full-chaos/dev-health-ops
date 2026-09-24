@@ -77,7 +77,7 @@ func openSchedulerDatabase(ctx context.Context, cfg config.Config) (schedulerDat
 // wrapSchedulerReadinessCheckWithLogging is domain_postgres/queue_postgres/
 // coordinator_postgres/river_schema's single reporting path (CHAOS-5435),
 // the scheduler's counterpart of the same-named helper in
-// cmd/dev-health-worker and internal/reconcilerservice's dependencies.go.
+// internal/workerservice and internal/reconcilerservice's dependencies.go.
 // health.Registry never surfaces a CheckFunc's returned error anywhere
 // (registry.go: "Error text is deliberately never returned by the HTTP
 // surface"), so a scheduler readiness refusal used to reach an operator as
@@ -594,7 +594,7 @@ func buildSchedulerLoopWithSources(
 	}
 	// CHAOS-5437: posture_manifest_lockstep refuses readiness the instant
 	// this binary's compiled-in posture manifest is older than what
-	// go-worker-migrate has applied -- see cmd/dev-health-worker's identical
+	// go-worker-migrate has applied -- see internal/workerservice's identical
 	// check for the full incident this closes.
 	postureGuard := postureguard.New(
 		"dev-health-scheduler", database.PostureManifestLockstep, postgres.PostureManifestDigest(),
@@ -628,7 +628,7 @@ func buildSchedulerLoopWithSources(
 	}
 	// execution_liveness (CHAOS-4029): the scheduler's own periodic
 	// self-probe against the domain pool, on an independent clock -- the
-	// same signal cmd/dev-health-worker and internal/reconcilerservice
+	// same signal internal/workerservice and internal/reconcilerservice
 	// register, so a scheduler whose handoff/reconcile loop is wedged (but
 	// whose dependency checks above still pass) goes visibly unhealthy
 	// instead of continuing to report ready while planning nothing. This is
@@ -682,7 +682,7 @@ func buildSchedulerLoopWithSources(
 	// Refusing to construct would turn an evidence outage into a scheduler
 	// outage, and refusing to RUN would reproduce CHAOS-4124 by another
 	// route. The scheduler's loop does not gate on Registry.CheckRequired
-	// (only the worker does, cmd/dev-health-worker/dependencies.go), so a
+	// (only the worker does, internal/workerservice/dependencies.go), so a
 	// failing check here surfaces on /ready and in
 	// dev_health_runtime_check_failed while planning continues on whatever
 	// evidence exists -- the deploy goes visibly unhealthy instead of

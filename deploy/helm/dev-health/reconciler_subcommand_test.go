@@ -57,7 +57,7 @@ func TestReconcilerGroupRefusesShapesThatCannotStart(t *testing.T) {
 			want:  "retired dev-health-go-reconciler image",
 		},
 		"an image without dho": {
-			group: "    - name: reconciler\n      image: ghcr.io/full-chaos/dev-health-go-worker:latest\n      subcommand: reconciler\n",
+			group: "    - name: reconciler\n      image: ghcr.io/full-chaos/dev-hops-api:latest\n      subcommand: reconciler\n",
 			want:  "is not a dho image",
 		},
 	} {

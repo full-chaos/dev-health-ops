@@ -1,5 +1,5 @@
 // Package providersyncschema creates the provider-sync Postgres fixture schema
-// that internal/providersync's integration tests and cmd/dev-health-worker's
+// that internal/providersync's integration tests and internal/workerservice's
 // end-to-end provider-unit tests share. ONE copy: the DDL below is pinned to
 // the alembic migrations by tests/test_providersync_fixture_ddl_matches_migrations.py.
 package providersyncschema

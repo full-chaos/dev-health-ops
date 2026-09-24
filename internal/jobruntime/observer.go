@@ -472,7 +472,7 @@ type BudgetEstimateFailureObserver interface {
 // a native collector actually wrote per destination table -- only the
 // dispatch implementation itself (TeamCatalogDiscoveryExecutor in
 // internal/syncdispatchruntime, or nativeTeamAutoimportDispatcher in
-// cmd/dev-health-worker) knows either.
+// internal/workerservice) knows either.
 type TeamCatalogObserver interface {
 	// ObserveTeamCatalogDispatch records one dispatch decision: which path a
 	// (provider, entry point) pair took for one call.

@@ -60,7 +60,8 @@ def _group(
           enabled: true
           groups:
             - name: {name}
-              image: ghcr.io/full-chaos/dev-health-go-worker:latest
+              image: ghcr.io/full-chaos/dev-health-go-dho:latest
+              subcommand: worker
               queues: [{", ".join(queues)}]
               queueConcurrency: {{{", ".join(f"{q}: 1" for q in queues)}}}
               replicas: {replicas}
@@ -329,7 +330,8 @@ def test_a_group_without_an_autoscaling_block_is_rejected_chart_wide(
           enabled: true
           groups:
             - name: solo
-              image: ghcr.io/full-chaos/dev-health-go-worker:latest
+              image: ghcr.io/full-chaos/dev-health-go-dho:latest
+              subcommand: worker
               queues: [heartbeat]
               queueConcurrency: {heartbeat: 1}
               replicas: 3

@@ -581,7 +581,7 @@ wait_for_ready
 #
 # Reuses ci/run_metrics_executed_proof.sh's own mechanism (ci/lib/go_worker_
 # fixture.sh): build the Go binaries, provision River against this job's
-# throwaway Postgres, start dev-health-worker + dho reconciler,
+# throwaway Postgres, start dho worker + dho reconciler,
 # seed real source rows through the real sync path for cicd/deployments/
 # incidents/tests, finalize those sync_runs (triggering the real post-sync
 # fanout -> metrics.daily_dispatch/daily_partition River jobs), and confirm

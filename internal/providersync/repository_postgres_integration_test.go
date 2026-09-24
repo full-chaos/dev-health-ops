@@ -536,7 +536,7 @@ INSERT INTO public.sync_run_units (
 }
 
 // createProviderSyncFixture delegates to the shared
-// internal/testsupport/providersyncschema DDL so cmd/dev-health-worker's
+// internal/testsupport/providersyncschema DDL so internal/workerservice's
 // end-to-end provider-unit tests build the identical schema (CHAOS-4219).
 func createProviderSyncFixture(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()

@@ -179,7 +179,7 @@ What this activation waived and satisfied:
    `EffectCommitter.Readback` to `GitHubRepositoryClickHouseEffects`. The
    `repos` effect is `EffectReadbackRequired`, so a committer without a
    readback fails closed with `ErrEffectRecoveryAmbiguous` rather than
-   reinserting. `cmd/dev-health-worker/provider_sync.go`'s `BuildExecutor`
+   reinserting. `internal/workerservice/provider_sync.go`'s `BuildExecutor`
    now selects `Handler`/`Sink`/`Readback` by `session.Claim.Provider` and
    `session.Claim.Dataset` (CHAOS-3123) — a single hardcoded
    `LaunchDarklyRouteHandler`/`LaunchDarklyClickHouseEffects` pair would fail

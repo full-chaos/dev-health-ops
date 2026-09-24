@@ -61,7 +61,7 @@ privilege gap without leaking a DSN. Tracked as CHAOS-4036 and CHAOS-4028.
 
 ## A start-only probe cannot see a dependency that leaves
 
-`preclaim-readiness` (`cmd/dev-health-worker/dependencies.go:309`) is evaluated
+`preclaim-readiness` (`internal/workerservice/dependencies.go:309`) is evaluated
 once, at startup, and it works: it refused to admit four workers whose pools
 were unreachable and exited fail-closed. But it is never re-evaluated. When a
 pooler was recreated seventeen seconds after admission, every worker reported

@@ -1408,7 +1408,7 @@ check_live_python_oracles() {
     return 1
   fi
 
-  # cmd/dev-health-worker's live-Python rot guard
+  # internal/workerservice's live-Python rot guard
   # (TestBuildScopeParityTableMatchesLivePython, CHAOS-4837) was retired here:
   # its generator's producer, run_work_graph_build, was DELETED (CHAOS-4924),
   # not merely un-called, and its _admit() reference kind (workgraph.build)
@@ -2547,7 +2547,7 @@ check_multi_replica_workers() {
       DEV_HEALTH_MULTI_REPLICA_PROOF="${proof_file}" \
       go test -mod=readonly -tags=integration -count=1 -timeout=5m \
         -run '^TestExplicitQueueMultiReplicaClaimDrainRestart$' \
-        ./cmd/dev-health-worker
+        ./internal/workerservice
   ) || result=$?
   if [ "${result}" -ne 0 ]; then
     rm -rf -- "${proof_dir}"

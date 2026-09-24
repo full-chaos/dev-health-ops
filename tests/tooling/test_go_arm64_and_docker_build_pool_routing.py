@@ -74,7 +74,7 @@ DOCKER_WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "docker-images.yml"
 _ARM64_PARITY_JOB = "go-arm64-numeric-parity"
 
 _DIND_JOB = "dind-smoke-test"
-_DOCKER_BUILD_JOB = "go-build-worker-arm64"
+_DOCKER_BUILD_JOB = "go-build-dho-arm64"
 _DOCKER_BUILD_RUN_STEP = "Build and push by digest"
 _GO_BUILD_MATRIX_JOB = "go-build"
 _GO_MERGE_JOB = "go-merge"
@@ -339,7 +339,7 @@ def test_docker_build_has_no_poll_step() -> None:
         )
 
 
-def test_go_build_matrix_excludes_worker_arm64() -> None:
+def test_go_build_matrix_excludes_dho_arm64() -> None:
     matrix = _dict_field(
         _dict_field(_job(DOCKER_WORKFLOW_PATH, _GO_BUILD_MATRIX_JOB), "strategy"),
         "matrix",
@@ -348,13 +348,13 @@ def test_go_build_matrix_excludes_worker_arm64() -> None:
     assert (
         isinstance(excludes, list)
         and {
-            "target": "worker",
+            "target": "dho",
             "platform": "linux/arm64",
         }
         in excludes
     ), (
         f"{DOCKER_WORKFLOW_PATH.name}: {_GO_BUILD_MATRIX_JOB!r}'s matrix "
-        "must exclude (worker, linux/arm64) -- otherwise it is built "
+        "must exclude (dho, linux/arm64) -- otherwise it is built "
         "twice, once by the matrix and once by the dedicated pilot leg"
     )
 

@@ -12,12 +12,12 @@ readonly VERSION="phase1-ci"
 readonly COMMIT="0000000000000000000000000000000000000000"
 readonly BUILD_TIME="1970-01-01T00:00:00Z"
 readonly SOURCE_DATE_EPOCH="0"
-# The long-running services the smoke runs to readiness. stream-runner,
-# reconciler and scheduler are not image targets: they are `dho stream-runner`,
-# `dho reconciler` and `dho scheduler`, smoked on the dho image (the chart
-# default) and on the operator image (what prod pins for them).
-readonly RUNTIME_TARGETS=(worker scheduler scheduler-operator reconciler reconciler-operator stream-runner stream-runner-operator)
-readonly ALL_TARGETS=(worker operator contractcheck migrate dho)
+# The long-running services the smoke runs to readiness. None is an image
+# target: they are `dho worker`, `dho scheduler`, `dho reconciler` and `dho
+# stream-runner`, smoked on the dho image (the chart default) and on the
+# operator image (what prod pins for them).
+readonly RUNTIME_TARGETS=(worker worker-operator scheduler scheduler-operator reconciler reconciler-operator stream-runner stream-runner-operator)
+readonly ALL_TARGETS=(operator contractcheck migrate dho)
 readonly CONTAINER_SECURITY_ARGS=(
   --read-only
   --cap-drop ALL
@@ -169,6 +169,14 @@ smoke_target() {
   local image_target="${target}"
   local verb_args=()
   case "${target}" in
+    worker)
+      image_target=dho
+      verb_args=(worker)
+      ;;
+    worker-operator)
+      image_target=operator
+      verb_args=(worker)
+      ;;
     stream-runner)
       image_target=dho
       verb_args=(stream-runner)
@@ -210,17 +218,6 @@ smoke_target() {
   docker run --rm "${CONTAINER_SECURITY_ARGS[@]}" "${tag}" --version \
     | grep -F '"version":"phase1-ci"' >/dev/null \
     || die "${target} did not report injected version metadata"
-  # The worker image packages dho so operators can run `dho workers ...` in
-  # a worker pod (spec S2 folded dev-health-workerctl into dho). Prove the
-  # binary runs and its workers vertical is reachable.
-  if [ "${target}" = "worker" ]; then
-    docker run --rm --entrypoint /usr/local/bin/dho \
-      "${CONTAINER_SECURITY_ARGS[@]}" "${tag}" --version \
-      | grep -F '"version":"phase1-ci"' >/dev/null \
-      || die "worker image does not package dho"
-    smoke_workers_vertical --entrypoint /usr/local/bin/dho "${tag}"
-  fi
-
   ACTIVE_CONTAINER="${container_name}"
   # The worker requires an explicit queue set and an exact per-queue concurrency
   # map even for this deliberately unconfigured dependency run. Keep these
@@ -228,13 +225,13 @@ smoke_target() {
   # the stream runner has its own separate stream-profile contract.
   #
   # Queue topology is flag-only (CHAOS-3875), so it is passed as an argument
-  # after the image, exactly the way every deploy artifact passes it. The
-  # worker target declares an ENTRYPOINT and no CMD, so these append rather
-  # than override anything.
+  # after the verb, exactly the way every deploy artifact passes it. The dho
+  # and operator images declare an ENTRYPOINT and no CMD, so these append
+  # rather than override anything.
   startup_env=()
   startup_args=()
   case "${target}" in
-    worker)
+    worker | worker-operator)
       startup_env=(
         --env "DEV_HEALTH_QUEUE_CONCURRENCY=sync=4,sync_provider=2"
         --env "DEV_HEALTH_WORKER_GROUP=container-smoke"
@@ -265,7 +262,7 @@ smoke_target() {
   wait_for_status "http://${published_address}/readyz" 503 \
     || die "${target} reported ready without required dependencies"
   readiness_body="$(curl --silent --show-error --max-time 1 "http://${published_address}/readyz")"
-  if [ "${target}" = "worker" ]; then
+  if [ "${target}" = "worker" ] || [ "${target}" = "worker-operator" ]; then
     for dependency in domain_postgres queue_completeness queue_postgres river_schema; do
       grep -F "\"${dependency}\"" <<<"${readiness_body}" >/dev/null \
         || die "worker readiness omitted ${dependency}"

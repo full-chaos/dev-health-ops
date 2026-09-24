@@ -567,17 +567,18 @@ func passesContent(call *ast.CallExpr) bool {
 
 // workerBinaries are the binaries the invariant covers.
 var workerBinaries = []string{
-	"dev-health-worker", "dev-health-worker-migrate",
+	"dev-health-worker-migrate",
 }
 
 // workerPackages are worker code that lives in a package of a multi-vertical
 // binary: `dho workers` (formerly the dev-health-workerctl binary), `dho
 // migrate river` (the code dev-health-worker-migrate also runs until the
 // Python migrate path folds into dho), `dho stream-runner` (formerly the
-// dev-health-stream-runner binary), `dho reconciler` and `dho scheduler`
-// (formerly the dev-health-reconciler and dev-health-scheduler binaries). Only
-// those verticals are covered, not every vertical dho carries.
-var workerPackages = []string{"./internal/workersctl", "./internal/rivermigrate", "./internal/streamrunnerservice", "./internal/reconcilerservice", "./internal/schedulerservice"}
+// dev-health-stream-runner binary), `dho reconciler`, `dho scheduler` and `dho
+// worker` (formerly the dev-health-reconciler, dev-health-scheduler and
+// dev-health-worker binaries). Only those verticals are covered, not every
+// vertical dho carries.
+var workerPackages = []string{"./internal/workersctl", "./internal/rivermigrate", "./internal/streamrunnerservice", "./internal/reconcilerservice", "./internal/schedulerservice", "./internal/workerservice"}
 
 // accessorOnlyCarriers are error types that hold provider content in a field
 // for a classifier to read; their Error() never formats that field, which

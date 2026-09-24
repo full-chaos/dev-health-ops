@@ -68,7 +68,7 @@ type PostgresBudget struct {
 	// A started River client holds ONE long-lived LISTEN session for its
 	// notifier, outside the queue-control pgxpool that
 	// queue_control_max_connections declares. Only the "river" runtime starts
-	// one (cmd/dev-health-worker/river_process.go calls Client.Start); the
+	// one (internal/workerservice/river_process.go calls Client.Start); the
 	// "control" runtime builds a client but drives it through the *Tx APIs, so
 	// no notifier or elector attaches, and the "stream" runtime opens no queue
 	// pool at all. Declaring the term here is what lets the pool size be
@@ -532,7 +532,8 @@ func validateProcess(process Process, coverage map[string]queueCoverage, state D
 
 	switch process.Runtime {
 	case "river":
-		if process.Binary != "dev-health-worker" || process.QueueControlMaxConnections < 1 ||
+		// The River worker is the `dho worker` service verb.
+		if process.Binary != "dho" || process.Subcommand != "worker" || process.QueueControlMaxConnections < 1 ||
 			process.CoordinatorMaxConnections != 0 ||
 			!contains(process.SecretEnv, "WORKER_DATABASE_URI") {
 			return errors.New("River runtime is missing its binary, queue coverage, or queue-control DSN")

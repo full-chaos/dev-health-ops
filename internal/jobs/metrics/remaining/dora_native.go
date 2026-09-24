@@ -24,7 +24,7 @@ import (
 // HTTP bridge executor did, so the swap happened where the handler is
 // constructed, per kind, with no environment switch and no fallback: a worker
 // either builds the native executor for this kind or refuses to start the
-// family (see cmd/dev-health-worker/daily.go).
+// family (see internal/workerservice/daily.go).
 //
 // # Fidelity, and where it is NOT obvious
 //

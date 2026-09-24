@@ -46,7 +46,7 @@ const (
 var errReconcilerDependencyUnavailable = errors.New("reconciler readiness dependency is unavailable")
 
 // dependencyFailure attaches a bounded reason code to the generic dependency
-// sentinel, mirroring cmd/dev-health-worker/dependencies.go's dependencyFailure
+// sentinel, mirroring internal/workerservice/dependencies.go's dependencyFailure
 // exactly. Before this, every distinct construction failure in this binary --
 // a database that would not open, a missing job registry, a broken sync
 // dispatch pipeline -- collapsed into the same bare
@@ -563,7 +563,7 @@ func configureReconcilerDependenciesWithActivationSourcesAndLogger(
 	}
 
 	dependencies := buildReconcilerDependencies(ctx, cfg, registry, logger, activation, sources)
-	// livenessMonitor (CHAOS-4029) mirrors cmd/dev-health-worker's
+	// livenessMonitor (CHAOS-4029) mirrors internal/workerservice's
 	// execution_liveness signal: a periodic, independent self-probe against
 	// the domain pool, proving the reconciler's OWN loop is still pumping,
 	// immune to an idle relay/sync-dispatch backlog. Registered now
@@ -642,7 +642,7 @@ func configureReconcilerDependenciesWithActivationSourcesAndLogger(
 	// LeaseRepair/the Observer/every domain-pool component above already
 	// depends on). Probe synchronously so execution_liveness is meaningful
 	// the instant this function returns, not only once the lifecycle
-	// runtime later calls Start (see cmd/dev-health-worker's identical
+	// runtime later calls Start (see internal/workerservice's identical
 	// reasoning).
 	livenessMonitor = selfprobe.New("reconciler_execution_liveness", selfprobe.NewPool(dependencies.database.DomainPool()), logger)
 	if livenessMonitor != nil {
@@ -872,7 +872,7 @@ func (dependencies *reconcilerDependencies) coordinatorReady(ctx context.Context
 }
 
 // postureManifestLockstepReady is CHAOS-5437's posture_manifest_lockstep
-// check -- see cmd/dev-health-worker's identical check for the full
+// check -- see internal/workerservice's identical check for the full
 // incident this closes.
 func (dependencies *reconcilerDependencies) postureManifestLockstepReady(ctx context.Context) error {
 	if dependencies == nil || dependencies.databaseErr != nil || dependencies.database == nil || dependencies.postureGuard == nil {
@@ -887,7 +887,7 @@ func (dependencies *reconcilerDependencies) postureManifestLockstepReady(ctx con
 
 // logDependencyCheckFailure is domainReady/queueReady/coordinatorReady/
 // riverSchemaReady's single reporting path (CHAOS-5435), mirroring
-// cmd/dev-health-worker/dependencies.go's helper of the same name.
+// internal/workerservice/dependencies.go's helper of the same name.
 // health.Registry never surfaces a CheckFunc's returned error anywhere
 // (registry.go: "Error text is deliberately never returned by the HTTP
 // surface"), so before this existed a readiness refusal reached an operator

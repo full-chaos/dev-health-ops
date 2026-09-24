@@ -21,7 +21,7 @@ import (
 var logSitePackages = []string{
 	"./internal/providersync",
 	"./internal/jobs/providerunit",
-	"./cmd/dev-health-worker",
+	"./internal/workerservice",
 }
 
 var slogScalarAttrConstructors = map[string]bool{

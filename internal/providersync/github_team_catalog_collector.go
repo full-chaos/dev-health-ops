@@ -26,7 +26,7 @@ import (
 // telemetry label.
 //
 // Telemetry is generic, not per-provider: the caller (syncdispatchruntime.
-// TeamCatalogDiscoveryExecutor, or cmd/dev-health-worker's
+// TeamCatalogDiscoveryExecutor, or internal/workerservice's
 // nativeTeamAutoimportDispatcher) observes dispatch outcome and
 // rows-written-per-table from this method's own return value via
 // jobruntime.TeamCatalogObserver -- no bespoke GitHub-specific Observer

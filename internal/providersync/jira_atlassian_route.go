@@ -109,7 +109,7 @@ type JiraSprintReferenceSink func([]jiraSprintRow) error
 
 // JiraAtlassianRouteHandler is Jira's WIRED work-items route.
 //
-// WIRING: cmd/dev-health-worker/provider_sync.go's
+// WIRING: internal/workerservice/provider_sync.go's
 // `provider == "jira" && dataset == "work-items"` case constructs this handler
 // and assigns it to routeHandler, with NewJiraWorkItemCompositeClickHouseEffects
 // as sink and readback and NewJiraWorkItemDeriver as Derived. Note this is the

@@ -72,7 +72,7 @@ type TeamWellbeingExecutor struct {
 	nowUTC             func() time.Time
 	// repoCountObserver (CHAOS-4329) is optional -- set via
 	// SetRepoCountObserver, mirroring PartitionHandler's
-	// SetZeroRowsObserver/SetNativeFamilyObserver pattern (cmd/dev-health-worker/
+	// SetZeroRowsObserver/SetNativeFamilyObserver pattern (internal/workerservice/
 	// daily.go asserts the runtime's Observer against the narrow
 	// jobruntime.TeamMetricsDailyRepoCountObserver interface). nil means no
 	// observer wired -- ComputeFamily degrades to not recording, never panics.

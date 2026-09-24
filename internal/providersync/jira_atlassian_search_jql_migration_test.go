@@ -16,7 +16,7 @@ import (
 // live-captured evidence) beside a working /rest/api/3/search/jql. Before the
 // CHAOS-4585 fix, JiraAtlassianRouteHandler.Collect -- the handler actually
 // registered for provider=jira dataset=work-items in
-// cmd/dev-health-worker/provider_sync.go, NOT the unregistered
+// internal/workerservice/provider_sync.go, NOT the unregistered
 // JiraWorkItemsRouteHandler the ticket's original scope note pointed at --
 // called the retired path via collectJiraAtlassianIssues and this test failed
 // with exactly that shape. After the fix it calls /search/jql and succeeds.

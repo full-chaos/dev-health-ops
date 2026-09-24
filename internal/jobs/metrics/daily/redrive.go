@@ -912,7 +912,7 @@ var riverSchemaPattern = regexp.MustCompile(`^[a-z_][a-z0-9_]{0,62}$`)
 //     outbox row still sitting at status='dead' -- the fact just outlived
 //     the row it was about (codex review finding on #1971, delta round).
 //     This table is queue-role-owned (DeleteTerminalBefore always runs on
-//     the queue-control pool -- see cmd/dev-health-worker/operational.go's
+//     the queue-control pool -- see internal/workerservice/operational.go's
 //     "the domain role is producer-only for worker_job_outbox" comment),
 //     so this checks queueControlPool, not the domain pool.
 //   - The outbox row WAS delivered into River (status='delivered',

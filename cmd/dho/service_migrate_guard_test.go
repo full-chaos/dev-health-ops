@@ -94,7 +94,7 @@ func TestServiceVerbsCannotMigrate(t *testing.T) {
 	for _, service := range services {
 		names = append(names, service.path)
 	}
-	for _, want := range []string{"api", "reconciler", "scheduler", "stream-runner"} {
+	for _, want := range []string{"api", "reconciler", "scheduler", "stream-runner", "worker"} {
 		if !containsString(names, want) {
 			t.Fatalf("service verbs = %v; %q is missing, so the walk no longer sees the tree", names, want)
 		}

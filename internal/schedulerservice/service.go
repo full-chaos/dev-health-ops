@@ -57,7 +57,7 @@ var schedulerOwnership = schedulersync.TransferScheduleMarkerOwnershipToGo()
 var errSchedulerActivationUnavailable = errors.New("scheduler activation is unavailable")
 
 // dependencyFailure attaches a bounded reason code to the generic activation
-// sentinel, mirroring cmd/dev-health-worker/dependencies.go's dependencyFailure
+// sentinel, mirroring internal/workerservice/dependencies.go's dependencyFailure
 // exactly. Before this, every distinct construction failure in this binary --
 // a missing coordinator pool, a failed handoff repository, a broken sync loop
 // -- collapsed into the same bare errSchedulerActivationUnavailable, so the

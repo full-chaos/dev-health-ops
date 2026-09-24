@@ -111,32 +111,19 @@ func startGoServer(t *testing.T, ctx context.Context, venue *venueoracle.Venue, 
 // expires_at, changed to the JSON number 7 on both planes, still passed).
 func redactField(t *testing.T, body, key string) string {
 	t.Helper()
-	if body == "" {
-		return body
-	}
-	value, err := pyjson.DecodeString(body)
-	if err != nil {
-		return body
-	}
-	object, ok := value.(*pyjson.Object)
-	if !ok {
-		return body
-	}
-	raw, present := object.Get(key)
-	if !present {
-		return body
-	}
-	if raw != nil {
-		if _, isString := raw.(string); !isString {
-			t.Fatalf("redactField(%q): value is %T, want string or null", key, raw)
+	// Redact in the raw text (venueoracle.RedactJSON): re-rendering the
+	// decoded body would rewrite every other value's spelling (a float's
+	// digits among them) the same way on both planes and hide a real
+	// difference.
+	return venueoracle.RedactJSON(body, func(path []string, raw string) (string, bool) {
+		if len(path) != 1 || path[0] != key {
+			return "", false
 		}
-	}
-	object.Set(key, "")
-	encoded, err := pyjson.Marshal(object)
-	if err != nil {
-		return body
-	}
-	return string(encoded)
+		if raw != "null" && !strings.HasPrefix(raw, `"`) {
+			t.Fatalf("redactField(%q): value is %s, want a string or null", key, raw)
+		}
+		return `""`, true
+	})
 }
 
 // dropKnownStaleClickHouseWarnings removes org_deletion.py's own stale-table

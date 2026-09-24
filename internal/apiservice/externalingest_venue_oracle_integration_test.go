@@ -174,45 +174,18 @@ var seededByIDRequestNames = map[string]bool{
 }
 
 func blankExternalIngestVolatileFields(request venueoracle.Request, body string) string {
-	decoded, err := pyjson.DecodeString(body)
-	if err != nil {
-		return body
-	}
-	object, ok := decoded.(*pyjson.Object)
-	if !ok {
-		return body
-	}
-	changed := false
-	if !seededByIDRequestNames[request.Name] {
-		for _, key := range []string{"ingestionId", "createdAt", "updatedAt"} {
-			if _, ok := object.Get(key); ok {
-				object.Set(key, "<"+key+">")
-				changed = true
-			}
+	// Replaced in the raw text, so every other byte stays as the plane
+	// wrote it (venueoracle.RedactJSON).
+	seeded := seededByIDRequestNames[request.Name]
+	return venueoracle.RedactJSON(body, func(path []string, _ string) (string, bool) {
+		switch {
+		case len(path) == 1 && !seeded && (path[0] == "ingestionId" || path[0] == "createdAt" || path[0] == "updatedAt"):
+			return `"<` + path[0] + `>"`, true
+		case len(path) == 3 && path[0] == "items" && path[1] == "[]" && (path[2] == "ingestionId" || path[2] == "createdAt"):
+			return `"<` + path[2] + `>"`, true
 		}
-	}
-	if items, ok := object.Get("items"); ok {
-		if list, ok := items.([]pyjson.Value); ok {
-			for _, item := range list {
-				if itemObject, ok := item.(*pyjson.Object); ok {
-					for _, key := range []string{"ingestionId", "createdAt"} {
-						if _, ok := itemObject.Get(key); ok {
-							itemObject.Set(key, "<"+key+">")
-							changed = true
-						}
-					}
-				}
-			}
-		}
-	}
-	if !changed {
-		return body
-	}
-	rewritten, err := pyjson.Marshal(object)
-	if err != nil {
-		return body
-	}
-	return string(rewritten)
+		return "", false
+	})
 }
 
 // seededListItemField finds the items[] entry whose ingestionId is

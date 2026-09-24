@@ -40,6 +40,51 @@ type Route struct {
 	// header of that pattern's 405. Empty means every registered method of
 	// the pattern, sorted.
 	Allow string
+	// ResponseModel says the Python route this one ports writes its success
+	// body as a FastAPI response_model (pydantic-core dump_json), not as a
+	// JSONResponse (json.dumps). The handler sees a writer that reports the
+	// flag (RouteWriter), so the shared writers can refuse the wrong form.
+	// A live test pins every route's flag against the FastAPI app.
+	ResponseModel bool
+	// ResponseModelFor, when set, decides ResponseModel per request: a
+	// wildcard route that dispatches a literal path itself (a Python
+	// route of its own) reports that path's answer.
+	ResponseModelFor func(*http.Request) bool
+}
+
+// RouteWriter is implemented by the writer every registered route's
+// handler receives: ResponseModelRoute reports the route's ResponseModel.
+// A writer that does not implement it (a unit test's recorder) belongs to
+// no registered route.
+type RouteWriter interface {
+	http.ResponseWriter
+	ResponseModelRoute() bool
+	// RouteKey is the route's "METHOD pattern", for diagnostics.
+	RouteKey() string
+}
+
+type routeWriter struct {
+	http.ResponseWriter
+	responseModel bool
+	key           string
+}
+
+func (w routeWriter) ResponseModelRoute() bool { return w.responseModel }
+
+func (w routeWriter) RouteKey() string { return w.key }
+
+// Unwrap lets http.ResponseController reach the underlying writer.
+func (w routeWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
+func markRoute(route Route) http.Handler {
+	key := route.Method + " " + route.Pattern
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		responseModel := route.ResponseModel
+		if route.ResponseModelFor != nil {
+			responseModel = route.ResponseModelFor(r)
+		}
+		route.Handler.ServeHTTP(routeWriter{ResponseWriter: w, responseModel: responseModel, key: key}, r)
+	})
 }
 
 // ServerOptions configures the API server.
@@ -319,7 +364,7 @@ func routeChain(route Route, options ServerOptions, logger *slog.Logger, write E
 		maxBody = options.MaxBodyBytes
 	}
 
-	handler := RecoverWith(logger, route.Method+" "+route.Pattern, write)(route.Handler)
+	handler := RecoverWith(logger, route.Method+" "+route.Pattern, write)(markRoute(route))
 	handler = Deadline(options.RequestTimeout)(handler)
 	handler = MaxBodyWith(maxBody, write)(handler)
 	handler = RateLimitWith(NewBucket(perSecond, burst, options.Now), write)(handler)

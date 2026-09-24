@@ -159,5 +159,5 @@ func (h handlers) importTeams(w http.ResponseWriter, r *http.Request) {
 		}
 		details = append(details, result)
 	}
-	policy.WriteJSON(w, http.StatusOK, importTeamsJSON(imported, skipped, merged, details), nil)
+	policy.WriteModel(w, http.StatusOK, importTeamsJSON(imported, skipped, merged, details), nil)
 }

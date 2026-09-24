@@ -16,6 +16,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"sync/atomic"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 )
@@ -26,6 +27,11 @@ import (
 // order Python declares them in. extra headers are set before the status
 // line.
 func WriteJSON(w http.ResponseWriter, status int, body pyjson.Value, extra http.Header) {
+	if status >= 200 && status < 300 {
+		if responseModel, key, known := routeResponseModel(w); known && responseModel {
+			recordWriterViolation("WriteJSON wrote a success body on a response_model route", key)
+		}
+	}
 	payload, err := pyjson.Marshal(body)
 	writePayload(w, status, payload, err, extra)
 }
@@ -35,6 +41,9 @@ func WriteJSON(w http.ResponseWriter, status int, body pyjson.Value, extra http.
 // declares a response model or a return annotation FastAPI takes as one;
 // WriteJSON is the JSONResponse of a route without one.
 func WriteModel(w http.ResponseWriter, status int, body pyjson.Value, extra http.Header) {
+	if responseModel, key, known := routeResponseModel(w); known && !responseModel {
+		recordWriterViolation("WriteModel wrote a body on a route without a response_model", key)
+	}
 	payload, err := pyjson.MarshalModel(body)
 	writePayload(w, status, payload, err, extra)
 }
@@ -89,3 +98,35 @@ const UnhandledErrorHeader = "X-Dho-Unhandled-Error"
 func WriteInternal(w http.ResponseWriter) {
 	WriteDetail(w, http.StatusInternalServerError, "Internal Server Error", http.Header{UnhandledErrorHeader: {"1"}})
 }
+
+// routeResponseModel reads the ResponseModel flag of the registered route
+// w serves (httpapi.RouteWriter), unwrapping writer wrappers; known is
+// false for a writer outside any registered route.
+func routeResponseModel(w http.ResponseWriter) (responseModel bool, key string, known bool) {
+	for w != nil {
+		if route, ok := w.(interface {
+			ResponseModelRoute() bool
+			RouteKey() string
+		}); ok {
+			return route.ResponseModelRoute(), route.RouteKey(), true
+		}
+		unwrapper, ok := w.(interface{ Unwrap() http.ResponseWriter })
+		if !ok {
+			return false, "", false
+		}
+		w = unwrapper.Unwrap()
+	}
+	return false, "", false
+}
+
+var writerViolations atomic.Int64
+
+func recordWriterViolation(what, route string) {
+	writerViolations.Add(1)
+	slog.Error("policy: wrong body writer for the route; FastAPI writes this body the other way", "violation", what, "route", route)
+}
+
+// WriterViolations is how many times a handler wrote a body with the
+// writer its route's ResponseModel flag does not allow. The venues assert
+// it stays zero.
+func WriterViolations() int64 { return writerViolations.Load() }

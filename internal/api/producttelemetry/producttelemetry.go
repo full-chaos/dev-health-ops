@@ -147,7 +147,7 @@ func (h handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	out.Set("status", "accepted")
 	out.Set("items_received", int64(len(batch.events)))
 	out.Set("stream", stream)
-	writeJSON(w, http.StatusAccepted, out)
+	policy.WriteModel(w, http.StatusAccepted, out, nil)
 }
 
 func (h handler) write(ctx context.Context, batch batch, ingestionID string) (string, error) {

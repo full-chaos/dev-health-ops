@@ -201,7 +201,7 @@ func (h *handlers) listSources(w http.ResponseWriter, r *http.Request) {
 	for index, source := range sources {
 		out[index] = sourceResponse(source, nil)
 	}
-	policy.WriteJSON(w, http.StatusOK, out, nil)
+	policy.WriteModel(w, http.StatusOK, out, nil)
 }
 
 func (h *handlers) getSource(w http.ResponseWriter, r *http.Request) {
@@ -213,7 +213,7 @@ func (h *handlers) getSource(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	policy.WriteJSON(w, http.StatusOK, sourceResponse(source, nil), nil)
+	policy.WriteModel(w, http.StatusOK, sourceResponse(source, nil), nil)
 }
 
 func (h *handlers) writeTokens(w http.ResponseWriter, r *http.Request, query string, args ...any) {
@@ -236,7 +236,7 @@ func (h *handlers) writeTokens(w http.ResponseWriter, r *http.Request, query str
 		}
 		out[index] = rendered
 	}
-	policy.WriteJSON(w, http.StatusOK, out, nil)
+	policy.WriteModel(w, http.StatusOK, out, nil)
 }
 
 func (h *handlers) listSourceTokens(w http.ResponseWriter, r *http.Request) {
@@ -323,7 +323,7 @@ func (h *handlers) listSourceBatches(w http.ResponseWriter, r *http.Request) {
 	out.Set("total", total)
 	out.Set("limit", limit.Int64())
 	out.Set("offset", offset.Int64())
-	policy.WriteJSON(w, http.StatusOK, out, nil)
+	policy.WriteModel(w, http.StatusOK, out, nil)
 }
 
 // jsonObjectColumn is a `dict | None` field read from a json column's
@@ -379,7 +379,7 @@ func (h *handlers) getBatch(w http.ResponseWriter, r *http.Request) {
 		h.internal(w, r, "render batch", err)
 		return
 	}
-	policy.WriteJSON(w, http.StatusOK, out, nil)
+	policy.WriteModel(w, http.StatusOK, out, nil)
 }
 
 // batchDetail is _batch_to_admin_response.

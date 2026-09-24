@@ -4,10 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"io"
 	"log/slog"
 	"net/http"
-	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -99,10 +97,9 @@ func (h handlers) report(w http.ResponseWriter, r *http.Request) {
 		h.internal(w, r, "commit", err)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
-	w.WriteHeader(http.StatusOK)
-	_, _ = io.Copy(w, bytes.NewReader(payload))
+	// The response is the TelemetryReport model (dump_json); the upstream
+	// payload above keeps its own rendering.
+	policy.WriteModel(w, http.StatusOK, report, nil)
 }
 
 type rowQuerier interface {

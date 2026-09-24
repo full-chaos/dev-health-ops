@@ -208,7 +208,7 @@ func (h *handlers) writeAuditPage(ctx context.Context, w http.ResponseWriter, lo
 	out.Set("total", total)
 	out.Set("limit", limit)
 	out.Set("offset", offset)
-	policy.WriteJSON(w, http.StatusOK, out, nil)
+	policy.WriteModel(w, http.StatusOK, out, nil)
 }
 
 // listAuditLogs is audit_logs.py's list_audit_logs.
@@ -296,7 +296,7 @@ func (h *handlers) getAuditLog(w http.ResponseWriter, r *http.Request) {
 		h.internalError(ctx, w, "encode audit log", err)
 		return
 	}
-	policy.WriteJSON(w, http.StatusOK, object, nil)
+	policy.WriteModel(w, http.StatusOK, object, nil)
 }
 
 // getResourceAuditHistory is audit_logs.py's get_resource_audit_history.
@@ -367,5 +367,5 @@ func (h *handlers) writeAuditList(ctx context.Context, w http.ResponseWriter, lo
 		h.internalError(ctx, w, "encode audit logs", err)
 		return
 	}
-	policy.WriteJSON(w, http.StatusOK, items, nil)
+	policy.WriteModel(w, http.StatusOK, items, nil)
 }

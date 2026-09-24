@@ -204,7 +204,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 		Decryptor: deps.Decryptor,
 		Logger:    logger,
 	})...)
-	return routes
+	return markResponseModels(routes)
 }
 
 func configure(

@@ -126,7 +126,7 @@ func (h *handlers) validateSource(w http.ResponseWriter, r *http.Request) {
 	}
 	raw, err := readBodyLimited(r, maxBytes)
 	if errors.Is(err, errTooLarge) {
-		policy.WriteJSON(w, http.StatusOK, validateFailure("payload_too_large", "Request body exceeds "+maxBytes.String()+" bytes", nil), nil)
+		policy.WriteModel(w, http.StatusOK, validateFailure("payload_too_large", "Request body exceeds "+maxBytes.String()+" bytes", nil), nil)
 		return
 	}
 	if err != nil {
@@ -146,11 +146,11 @@ func (h *handlers) validateSource(w http.ResponseWriter, r *http.Request) {
 		for index, item := range envelopeErrs {
 			rows[index] = rejectedRow(0, "unknown", nil, "invalid_envelope", item.Msg, locPath(item.Loc))
 		}
-		policy.WriteJSON(w, http.StatusOK, validateResponse(false, 0, 0, rows), nil)
+		policy.WriteModel(w, http.StatusOK, validateResponse(false, 0, 0, rows), nil)
 		return
 	}
 	if envelope.SchemaVersion != externalingest.SchemaVersion {
-		policy.WriteJSON(w, http.StatusOK, validateFailure("unsupported_schema_version",
+		policy.WriteModel(w, http.StatusOK, validateFailure("unsupported_schema_version",
 			"Unsupported schemaVersion: "+pythonparity.StrRepr(envelope.SchemaVersion), "schemaVersion"), nil)
 		return
 	}
@@ -162,7 +162,7 @@ func (h *handlers) validateSource(w http.ResponseWriter, r *http.Request) {
 	maxRecordsValue, _ := limits.Get("maxRecordsPerBatch")
 	maxRecords := maxRecordsValue.(pyjson.Int).Int
 	if big.NewInt(int64(len(envelope.Records))).Cmp(maxRecords) > 0 {
-		policy.WriteJSON(w, http.StatusOK, validateFailure("batch_too_large",
+		policy.WriteModel(w, http.StatusOK, validateFailure("batch_too_large",
 			fmt.Sprintf("Batch has %d records; max is %s", len(envelope.Records), maxRecords.String()), "records"), nil)
 		return
 	}
@@ -181,5 +181,5 @@ func (h *handlers) validateSource(w http.ResponseWriter, r *http.Request) {
 		}
 		rows[index] = rejectedRow(item.Index, item.Kind, externalID, item.Code, item.Message, item.Path)
 	}
-	policy.WriteJSON(w, http.StatusOK, validateResponse(len(items) == 0, len(envelope.Records)-len(rejected), len(rejected), rows), nil)
+	policy.WriteModel(w, http.StatusOK, validateResponse(len(items) == 0, len(envelope.Records)-len(rejected), len(rejected), rows), nil)
 }

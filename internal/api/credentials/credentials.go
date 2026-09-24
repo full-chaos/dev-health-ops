@@ -209,6 +209,10 @@ func (h handlers) load(ctx context.Context, q interface {
 
 // get is GET /credentials/{provider}/{name}.
 func (h handlers) get(w http.ResponseWriter, r *http.Request) {
+	if r.PathValue("name") == "repos" {
+		h.reposShadow(w, r)
+		return
+	}
 	c, err := h.load(r.Context(), h.pool, orgIDOf(r.Context()), r.PathValue("provider"), r.PathValue("name"), false)
 	if err != nil {
 		h.internal(w, r, "get credential", err)
@@ -219,6 +223,32 @@ func (h handlers) get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	policy.WriteModel(w, http.StatusOK, c.responseJSON(), nil)
+}
+
+// reposShadow answers GET /credentials/{x}/repos, where Python's
+// /credentials/{credential_id}/repos route is registered before the read
+// route and wins the same-shaped path. That route looks the segment up as a
+// credential id: a segment that is not a UUID, or names no credential of the
+// org, is Python's 404 "Credential not found" -- answered here identically --
+// and an id that names one is repo listing, which is not served on this
+// plane (501, never a credential read of the wrong shape).
+func (h handlers) reposShadow(w http.ResponseWriter, r *http.Request) {
+	id, ok := policy.ParsePyUUID(r.PathValue("provider"))
+	if ok {
+		var found bool
+		err := h.pool.QueryRow(r.Context(), `SELECT EXISTS (SELECT 1 FROM integration_credentials WHERE org_id = $1 AND id = $2)`,
+			orgIDOf(r.Context()), id).Scan(&found)
+		if err != nil {
+			h.internal(w, r, "look up credential for repo listing", err)
+			return
+		}
+		ok = found
+	}
+	if !ok {
+		policy.WriteDetail(w, http.StatusNotFound, "Credential not found", nil)
+		return
+	}
+	policy.WriteDetail(w, http.StatusNotImplemented, "Repository listing is not served by this API plane", nil)
 }
 
 const pagerDutyDedicated = "Use the dedicated PagerDuty setup endpoints"

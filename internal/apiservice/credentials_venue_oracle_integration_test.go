@@ -51,6 +51,7 @@ func credentialSeedRows(f venueFixture) []credentialSeedRow {
 		{org: f.orgA, provider: "github", name: "eq-create", secrets: map[string]any{"token": "gh_eq"}, config: `{"org": "acme", "zeta": 1, "alpha": [1, 2]}`, isActive: true},
 		{org: f.orgA, provider: "jira", name: "null-config", secrets: map[string]any{"email": "a@example.test", "api_token": "t"}, config: "", isActive: true},
 		{org: f.orgA, provider: "jira", name: "null-config2", secrets: map[string]any{"email": "b@example.test", "api_token": "t"}, config: "", isActive: true},
+		{org: f.orgA, provider: "github", name: "repos", secrets: map[string]any{"token": "gh_repos"}, config: `{"org": "shadowed"}`, isActive: true},
 		{org: f.orgA, provider: "pagerduty", name: "default", secrets: map[string]any{"auth_mode": "api_token", "api_token": "x", "subdomain": "s", "region": "us"}, config: `{"auth_mode": "api_token"}`, isActive: true},
 		{org: f.orgB, provider: "github", name: "other-org", secrets: map[string]any{"token": "ghp_other"}, config: `{}`, isActive: true},
 	}
@@ -129,6 +130,13 @@ func credentialRequests(f venueFixture, tokens map[string]string) []venueoracle.
 	add("get: missing", "GET", one("github", "missing"), bearer("admin"), nil)
 	add("get: other org row is not visible", "GET", one("github", "other-org"), bearer("admin"), nil)
 	add("get: percent-encoded name", "GET", one("github", "a%20b"), bearer("admin"), nil)
+	// /credentials/{credential_id}/repos wins the same-shaped path in Python:
+	// a segment that is no credential id of the org is a plain not-found, so
+	// a credential NAMED "repos" is unreadable through this route.
+	add("get: a credential named repos is shadowed by the repos route", "GET", one("github", "repos"), bearer("admin"), nil)
+	add("get: repos route with an unknown uuid", "GET", one("11111111-1111-4111-8111-111111111111", "repos"), bearer("admin"), nil)
+	add("get: repos route as a non-admin", "GET", one("11111111-1111-4111-8111-111111111112", "repos"), bearer("member"), nil)
+	add("patch: a credential named repos is patched like any other", "PATCH", one("github", "repos"), jsonH("admin"), b64(`{"config":{"org":"patched"}}`))
 	add("get: PUT is not a route", "PUT", one("github", "seeded"), jsonH("admin"), b64(`{}`))
 
 	add("create: anonymous bad json", "POST", base, jsonH("member"), b64(`{`))
@@ -241,6 +249,23 @@ func TestVenueOracleCredentialAdmin(t *testing.T) {
 		Path: "/api/v1/admin/credentials/gitlab/noop-a", Headers: map[string]string{"Authorization": "Bearer " + venue.Tokens["admin"]}})
 	if deleteResponse.Status != http.StatusMethodNotAllowed {
 		t.Errorf("DELETE /credentials/{provider}/{name} on the Go plane answered %d, want 405", deleteResponse.Status)
+	}
+
+	// /credentials/{id}/repos of a credential the org holds is repo listing,
+	// which this plane does not serve: 501, not a credential read.
+	goPool, err := pgxpool.New(ctx, venue.AdminURI(t, venue.GoDB))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var heldID string
+	if err := goPool.QueryRow(ctx, `SELECT id::text FROM integration_credentials WHERE provider = 'github' AND name = 'eq-create'`).Scan(&heldID); err != nil {
+		t.Fatal(err)
+	}
+	goPool.Close()
+	repos := venueoracle.Do(t, base, venueoracle.Request{Name: "repos of a held credential", Method: "GET",
+		Path: "/api/v1/admin/credentials/" + heldID + "/repos", Headers: map[string]string{"Authorization": "Bearer " + venue.Tokens["admin"]}})
+	if repos.Status != http.StatusNotImplemented || !strings.Contains(repos.Body, "not served by this API plane") {
+		t.Errorf("repos of a held credential answered %d %s, want 501", repos.Status, repos.Body)
 	}
 
 	// Rows: everything but the generated id and the write timestamps, plus

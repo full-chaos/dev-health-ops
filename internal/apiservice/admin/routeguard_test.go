@@ -294,8 +294,11 @@ var dispatcherFiles = map[string]string{
 }
 
 // TestDispatchersGuardAtAdmin pins the level guardLevelOf assumes for every
-// dispatcher: its source must call a guard at policy.Admin, and every guard
-// call inside it must be at Admin.
+// dispatcher: its source must call a guard at policy.Admin, every guard call
+// inside it must be at Admin, and every guarded handler must actually be the
+// one served -- each guard call's result is assigned to a variable that is
+// later called through .ServeHTTP, so a guard whose result is discarded (and
+// an unguarded handler returned instead) fails.
 func TestDispatchersGuardAtAdmin(t *testing.T) {
 	for name, file := range dispatcherFiles {
 		tree, err := parser.ParseFile(token.NewFileSet(), file, nil, 0)
@@ -303,20 +306,38 @@ func TestDispatchersGuardAtAdmin(t *testing.T) {
 			t.Fatal(err)
 		}
 		guards, wrong := 0, 0
+		var assigned []string
+		served := map[string]bool{}
 		ast.Inspect(tree, func(n ast.Node) bool {
 			fn, ok := n.(*ast.FuncDecl)
 			if !ok || fn.Name.Name != name {
 				return true
 			}
 			ast.Inspect(fn, func(n ast.Node) bool {
-				call, ok := n.(*ast.CallExpr)
-				if !ok {
-					return true
-				}
-				if level, guarded := guardLevelOf(call); guarded && (calleeName(call.Fun) == "bodyFirst" || calleeName(call.Fun) == "Wrap") {
-					guards++
-					if level != "Admin" {
-						wrong++
+				switch node := n.(type) {
+				case *ast.AssignStmt:
+					for index, rhs := range node.Rhs {
+						call, isCall := rhs.(*ast.CallExpr)
+						if !isCall || index >= len(node.Lhs) {
+							continue
+						}
+						level, guarded := guardLevelOf(call)
+						if !guarded || (calleeName(call.Fun) != "bodyFirst" && calleeName(call.Fun) != "Wrap") {
+							continue
+						}
+						guards++
+						if level != "Admin" {
+							wrong++
+						}
+						if ident, isIdent := node.Lhs[index].(*ast.Ident); isIdent {
+							assigned = append(assigned, ident.Name)
+						}
+					}
+				case *ast.CallExpr:
+					if sel, isSel := node.Fun.(*ast.SelectorExpr); isSel && sel.Sel.Name == "ServeHTTP" {
+						if ident, isIdent := sel.X.(*ast.Ident); isIdent {
+							served[ident.Name] = true
+						}
 					}
 				}
 				return true
@@ -325,6 +346,11 @@ func TestDispatchersGuardAtAdmin(t *testing.T) {
 		})
 		if guards == 0 || wrong != 0 {
 			t.Errorf("%s: %d guard calls, %d not at Admin; it must guard every handler it dispatches at Admin", name, guards, wrong)
+		}
+		for _, variable := range assigned {
+			if !served[variable] {
+				t.Errorf("%s: the guarded handler %q is never served through .ServeHTTP; a discarded guard leaves the route unprotected", name, variable)
+			}
 		}
 	}
 }

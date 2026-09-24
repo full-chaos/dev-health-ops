@@ -436,8 +436,14 @@ func (h *handlers) executeRetentionPolicy(w http.ResponseWriter, r *http.Request
 		}
 		count, err = h.store.applyRetention(ctx, found, cutoff, dryRun, now)
 		if err != nil {
-			h.internalError(ctx, w, "execute retention policy", err)
-			return
+			// execute_policy catches any exception from the count or delete
+			// and returns it as the response's error text with a zero
+			// count (status 200); the transaction is rolled back. The text
+			// is the driver's own message, so it differs from Python's.
+			h.logger.ErrorContext(ctx, "admin: execute retention policy failed", "error", err)
+			count = 0
+			text := err.Error()
+			message = &text
 		}
 	}
 	out := pyjson.NewObject()

@@ -5,6 +5,7 @@ package admin_test
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -14,6 +15,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
+
+var dbFailureText = regexp.MustCompile(`"error":"[^"]*sentinel retention delete failure[^"]*"`)
 
 // TestRetentionRoutesVenueOracle is the venue-oracle proof for the retention
 // policy admin routes, including the execute route that deletes audit_logs
@@ -29,6 +32,7 @@ func TestRetentionRoutesVenueOracle(t *testing.T) {
 	superID := uuid.New()
 	adminEnt, adminComm, adminOvr, adminTier, adminBogus, memberEnt := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	pAudit, pInactive, pMetrics, pTier, pHuge := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	orgFail, adminFail, pFail := uuid.New(), uuid.New(), uuid.New()
 
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Root:   root,
@@ -69,6 +73,16 @@ VALUES ($1, $2, true, true, $3, 0, now(), now())`, id, email, super)
 			user(adminTier, "ret-admintier@example.com", false)
 			user(adminBogus, "ret-adminbogus@example.com", false)
 			user(memberEnt, "ret-memberent@example.com", false)
+			// An org whose audit_logs deletes fail inside the database, so
+			// execute reaches its catch-all: the error text is the driver's
+			// own and is compared only for the sentinel it carries.
+			org(orgFail, "ret-fail", "enterprise")
+			license(orgFail, "enterprise", "{}")
+			user(adminFail, "ret-adminfail@example.com", false)
+			exec(`CREATE FUNCTION retention_delete_guard() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN RAISE EXCEPTION 'sentinel retention delete failure'; END $$`)
+			exec(`CREATE TRIGGER retention_delete_guard BEFORE DELETE ON audit_logs FOR EACH ROW
+WHEN (OLD.org_id = '` + orgFail.String() + `') EXECUTE FUNCTION retention_delete_guard()`)
 
 			policy := func(id, org uuid.UUID, rtype string, days int, desc any, active bool, createdAt string) {
 				exec(`INSERT INTO org_retention_policies (id, org_id, resource_type, retention_days, description, is_active, created_at, updated_at)
@@ -79,11 +93,13 @@ VALUES ($1, $2, $3, $4, $5, $6, $7::timestamptz, $7::timestamptz)`, id, org, rty
 			policy(pMetrics, orgEnterprise, "metrics_daily", 45, "not implemented", true, "2026-02-03T00:00:00+00:00")
 			policy(pTier, orgTierOnly, "audit_logs", 5, nil, true, "2026-02-04T00:00:00+00:00")
 			policy(pHuge, orgOverride, "audit_logs", 2000000000, nil, true, "2026-02-05T00:00:00+00:00")
-			// Rows of the audit trail around the 30-day cutoff, plus other orgs'.
+			policy(pFail, orgFail, "audit_logs", 30, nil, true, "2026-02-06T00:00:00+00:00")
 			audit := func(org uuid.UUID, action, ageDays string) {
 				exec(`INSERT INTO audit_logs (id, org_id, action, resource_type, resource_id, changes, request_metadata, status, created_at)
 VALUES ($1, $2, $3, 'team', 'r', '{}'::json, '{}'::json, 'success', now() - ($4 || ' days')::interval)`, uuid.New(), org, action, ageDays)
 			}
+			audit(orgFail, "fail-old", "400")
+			// Rows of the audit trail around the 30-day cutoff, plus other orgs'.
 			for _, age := range []string{"400", "90", "31", "29", "1", "0"} {
 				audit(orgEnterprise, "ent-"+age, age)
 			}
@@ -101,6 +117,7 @@ VALUES ($1, $2, $3, 'team', 'r', '{}'::json, '{}'::json, 'success', now() - ($4 
 				"tier":   admin2(adminTier, orgTierOnly, "ret-admintier@example.com"),
 				"bogus":  admin2(adminBogus, orgBogus, "ret-adminbogus@example.com"),
 				"member": {"user_id": memberEnt.String(), "email": "ret-memberent@example.com", "org_id": orgEnterprise.String(), "role": "member"},
+				"fail":   admin2(adminFail, orgFail, "ret-adminfail@example.com"),
 			}
 		},
 	})
@@ -181,6 +198,8 @@ VALUES ($1, $2, $3, 'team', 'r', '{}'::json, '{}'::json, 'success', now() - ($4 
 		send("execute malformed id", "POST", "/nope/execute", "ent", `{}`),
 		send("execute community refused", "POST", "/"+pAudit.String()+"/execute", "comm", `{}`),
 		send("execute 422 beats licence", "POST", "/"+pAudit.String()+"/execute", "comm", `{"dry_run":null}`),
+		send("execute database failure dry run counts", "POST", "/"+pFail.String()+"/execute", "fail", `{}`),
+		send("execute database failure on delete", "POST", "/"+pFail.String()+"/execute", "fail", `{"dry_run":false}`),
 		send("execute member refused", "POST", "/"+pAudit.String()+"/execute", "member", `{}`),
 		send("execute huge retention days overflows", "POST", "/"+pHuge.String()+"/execute", "ovr", `{}`),
 		send("execute huge retention days real", "POST", "/"+pHuge.String()+"/execute", "ovr", `{"dry_run":false}`),
@@ -205,6 +224,7 @@ VALUES ($1, $2, $3, 'team', 'r', '{}'::json, '{}'::json, 'success', now() - ($4 
 		send("W create days past int32", "POST", "", "ovr", `{"resource_type":"work_items","retention_days":2147483648}`),
 		send("W create days beyond int64", "POST", "", "ovr", `{"resource_type":"work_items","retention_days":100000000000000000000000000000}`),
 		send("W create days float beyond int64", "POST", "", "ovr", `{"resource_type":"work_items","retention_days":1e19}`),
+		send("W create days infinite float", "POST", "", "ovr", `{"resource_type":"work_items","retention_days":1e400}`),
 		send("W create days boolean false", "POST", "", "ovr", `{"resource_type":"work_items","retention_days":false}`),
 		send("W create days boolean true", "POST", "", "ovr", `{"resource_type":"work_items","retention_days":true}`),
 		send("W create duplicate type", "POST", "", "ent", `{"resource_type":"audit_logs"}`),
@@ -271,6 +291,9 @@ VALUES ($1, $2, $3, 'team', 'r', '{}'::json, '{}'::json, 'success', now() - ($4 
 
 	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{
 		Inspect: func(request venueoracle.Request, response venueoracle.Response) {
+			if request.Name == "execute database failure on delete" && !strings.Contains(response.Body, "sentinel retention delete failure") {
+				t.Errorf("%s: the error text does not carry the database failure: %s", request.Name, response.Body)
+			}
 			if request.Method != "POST" || !strings.HasSuffix(request.Path, "/retention-policies") || response.Status != 201 {
 				return
 			}
@@ -293,6 +316,11 @@ VALUES ($1, $2, $3, 'team', 'r', '{}'::json, '{}'::json, 'success', now() - ($4 
 			}
 		},
 		Normalize: func(request venueoracle.Request, body string) string {
+			if request.Name == "execute database failure on delete" {
+				// The error text is each driver's own message; the sentinel
+				// the trigger raised must be in it (checked in Inspect).
+				body = dbFailureText.ReplaceAllString(body, `"error":"<database error>"`)
+			}
 			if strings.HasPrefix(request.Name, "W ") {
 				body = redactDeep(t, body, "id", "created_at", "updated_at", "last_run_at", "next_run_at")
 			}

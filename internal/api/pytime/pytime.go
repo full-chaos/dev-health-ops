@@ -37,7 +37,9 @@ func daysIn(year, month int) int {
 // ".ffffff" only when microseconds are non-zero, then "Z" for a zero
 // offset, "±HH:MM" otherwise, nothing when naive.
 func Pydantic(value DateTime) string {
-	wall := value.Time.Add(time.Duration(value.Offset) * time.Second).UTC()
+	// The wall clock is the instant moved by the whole offset, its
+	// microseconds included (a Python timezone carries a timedelta).
+	wall := value.Time.Add(time.Duration(value.Offset)*time.Second + time.Duration(value.OffsetMicro)*time.Microsecond).UTC()
 	text := wall.Format("2006-01-02T15:04:05")
 	if micro := wall.Nanosecond() / 1000; micro != 0 {
 		text += fmt.Sprintf(".%06d", micro)

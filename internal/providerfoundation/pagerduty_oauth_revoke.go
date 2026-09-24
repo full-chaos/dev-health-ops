@@ -7,21 +7,30 @@ import (
 	"strings"
 )
 
-// pagerDutyRevokeURL is providers/pagerduty/oauth.py's
-// PagerDutyOAuthConfig.revoke_url default.
-const pagerDutyRevokeURL = "https://identity.pagerduty.com/oauth/revoke"
+// pagerDutyRevokeURL/pagerDutyAuthorizationURL are providers/pagerduty/
+// oauth.py's PagerDutyOAuthConfig field defaults (pagerDutyTokenURL, the
+// third, is declared once in clients.go).
+const (
+	pagerDutyRevokeURL        = "https://identity.pagerduty.com/oauth/revoke"
+	pagerDutyAuthorizationURL = "https://identity.pagerduty.com/oauth/authorize"
+)
 
 // PagerDutyRevokeConfig is the registered PagerDuty app's OAuth client
-// identity, the one RevokePagerDutyOAuthToken needs -- client_secret is
-// unused by the revoke call itself (matching revoke_token's own request
-// body, client_id + token only) but kept alongside ClientID for callers
-// that already carry both from config, and so a future revoke_url override
-// (a test double, see RevokeURL) has somewhere to live beside it.
+// identity (providers/pagerduty/oauth.py's PagerDutyOAuthConfig.from_env,
+// the name kept from CHAOS-6306's org-deletion route -- CHAOS-6591's
+// authorize route also needs RedirectURI; revoke itself still only needs
+// ClientID+token). The URL fields override PagerDuty's real endpoints when
+// non-empty; a live venue test points both planes at one fake server per
+// field it exercises, the same seam RevokeURL already established.
 type PagerDutyRevokeConfig struct {
 	ClientID string
-	// RevokeURL overrides pagerDutyRevokeURL when non-empty -- a live
-	// venue test points both planes at one fake endpoint here.
+	// RedirectURI is unused by the client-credentials (self-hosted) flow
+	// and empty by default -- PAGER_DUTY_REDIRECT_URI.
+	RedirectURI string
+	// RevokeURL overrides pagerDutyRevokeURL when non-empty.
 	RevokeURL string
+	// AuthorizationURL overrides pagerDutyAuthorizationURL when non-empty.
+	AuthorizationURL string
 }
 
 func (c PagerDutyRevokeConfig) revokeURL() string {
@@ -29,6 +38,13 @@ func (c PagerDutyRevokeConfig) revokeURL() string {
 		return c.RevokeURL
 	}
 	return pagerDutyRevokeURL
+}
+
+func (c PagerDutyRevokeConfig) authorizationURL() string {
+	if c.AuthorizationURL != "" {
+		return c.AuthorizationURL
+	}
+	return pagerDutyAuthorizationURL
 }
 
 // RevokePagerDutyOAuthToken is providers/pagerduty/oauth.py's

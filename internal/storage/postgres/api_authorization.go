@@ -256,7 +256,10 @@ func apiPosture() RolePosture {
 			// existing DELETE grant) on success or updates attempts/last_error
 			// on failure, matching PagerDutyOAuthRevocationRepository.enqueue/
 			// retry_pending.
-			{"pagerduty_oauth_authorization_requests", false, false, true},
+			// CHAOS-6591's authorize route inserts one PKCE authorization
+			// request per call (and deletes the calling org's own expired
+			// rows first); the callback half will consume (delete) it.
+			{"pagerduty_oauth_authorization_requests", true, false, true},
 			{"provider_oauth_credentials", false, false, true},
 			{"provider_oauth_revocations", true, true, true},
 			// Integrations.

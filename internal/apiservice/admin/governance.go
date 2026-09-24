@@ -30,6 +30,7 @@ func (h *handlers) governanceRoutes() []httpapi.Route {
 	out = append(out, h.llmSettingsRoutes()...)
 	out = append(out, h.pagerDutyRoutes()...)
 	out = append(out, h.pagerDutyDisconnectRoutes()...)
+	out = append(out, h.pagerDutyAuthorizeRoutes()...)
 	return out
 }
 

@@ -60,6 +60,9 @@ type Deps struct {
 	// building a real Service always pass it; nil is a test-only default
 	// for a case that does not care about the exact body.
 	Write httpapi.ErrorWriter
+	// Invites configures create_org_invite's token signing, accept link and
+	// email sender; see InviteConfig. The zero value works (no email sent).
+	Invites InviteConfig
 }
 
 // Routes is the admin area's route set.
@@ -95,6 +98,11 @@ func Routes(deps Deps) []httpapi.Route {
 		write:         write,
 		// ADMIN_PASSWORD_LIMIT = "5/hour" (rate_limit.py).
 		adminPasswordRateLimit: httpapi.NewKeyedLimiter(5, time.Hour, deps.Now),
+		// create_org_invite's `@limiter.limit("10/hour", key_func=
+		// get_admin_user_key)`: its own instance, since a limiter holds one
+		// (limit, window) pair.
+		inviteRateLimit: httpapi.NewKeyedLimiter(10, time.Hour, deps.Now),
+		invites:         deps.Invites,
 	}
 	return area.routes()
 }
@@ -136,4 +144,8 @@ type handlers struct {
 	// pair for its whole lifetime, so distinct limits are distinct
 	// instances, never one shared limiter reconfigured per call.
 	adminPasswordRateLimit *httpapi.KeyedLimiter
+	// inviteRateLimit is create_org_invite's 10/hour keyed limiter, and
+	// invites its token/mail configuration.
+	inviteRateLimit *httpapi.KeyedLimiter
+	invites         InviteConfig
 }

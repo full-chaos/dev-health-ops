@@ -27,14 +27,12 @@ func (h *handlers) orgRoutes() []httpapi.Route {
 		{Method: http.MethodDelete, Pattern: orgsPrefix + "/orgs/{org_id}", Handler: h.guard.Wrap(policy.Superuser, http.HandlerFunc(h.deleteOrganization))},
 		{Method: http.MethodGet, Pattern: orgsPrefix + "/orgs/{org_id}/members", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.listMembers))},
 		{Method: http.MethodPost, Pattern: orgsPrefix + "/orgs/{org_id}/members", Handler: h.bodyFirst(policy.Admin, http.HandlerFunc(h.addMember))},
-		// create_org_invite (POST /orgs/{org_id}/invites) is NOT mounted
-		// here: it best-effort emails the invite (invites.py's
-		// send_invite_email), and no Go mail path exists yet to port that
-		// behavior onto. Sending no email at all would silently diverge
-		// from Python rather than answer a route this Service cannot yet
-		// serve correctly. Python keeps serving this route unchanged.
-		// CHAOS-6334 tracks porting the mail sender and this route
-		// together.
+		// create_org_invite: authentication, then body validation, then the
+		// rate limit, then the endpoint -- the order FastAPI and slowapi
+		// run them in (see validateInviteBody).
+		{Method: http.MethodPost, Pattern: orgsPrefix + "/orgs/{org_id}/invites",
+			Handler: h.bodyFirst(policy.Admin,
+				httpapi.ValidateThenLimit(validateInviteBody, h.inviteRateLimit, adminUserKey, h.write)(http.HandlerFunc(h.createOrgInvite)))},
 		{Method: http.MethodPatch, Pattern: orgsPrefix + "/orgs/{org_id}/members/{user_id}", Handler: h.bodyFirst(policy.Admin, http.HandlerFunc(h.updateMemberRole))},
 		{Method: http.MethodDelete, Pattern: orgsPrefix + "/orgs/{org_id}/members/{user_id}", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.removeMember))},
 		{Method: http.MethodPost, Pattern: orgsPrefix + "/orgs/{org_id}/transfer-ownership", Handler: h.bodyFirst(policy.Admin, http.HandlerFunc(h.transferOwnership))},

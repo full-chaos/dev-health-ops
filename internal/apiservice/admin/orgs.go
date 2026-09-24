@@ -32,7 +32,7 @@ func (h *handlers) orgRoutes() []httpapi.Route {
 		// run them in (see validateInviteBody).
 		{Method: http.MethodPost, Pattern: orgsPrefix + "/orgs/{org_id}/invites",
 			Handler: h.bodyFirst(policy.Admin,
-				httpapi.ValidateThenLimit(validateInviteBody, h.inviteRateLimit, adminUserKey, h.write)(http.HandlerFunc(h.createOrgInvite)))},
+				httpapi.ValidateThenLimit(validateInviteBody, h.limits, inviteLimit, adminUserKey, h.write)(http.HandlerFunc(h.createOrgInvite)))},
 		{Method: http.MethodPatch, Pattern: orgsPrefix + "/orgs/{org_id}/members/{user_id}", Handler: h.bodyFirst(policy.Admin, http.HandlerFunc(h.updateMemberRole))},
 		{Method: http.MethodDelete, Pattern: orgsPrefix + "/orgs/{org_id}/members/{user_id}", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.removeMember))},
 		{Method: http.MethodPost, Pattern: orgsPrefix + "/orgs/{org_id}/transfer-ownership", Handler: h.bodyFirst(policy.Admin, http.HandlerFunc(h.transferOwnership))},

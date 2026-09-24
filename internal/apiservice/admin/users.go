@@ -22,7 +22,7 @@ const usersPrefix = "/api/v1/admin"
 // only where a Guard has already authenticated the caller (policy.UserFrom
 // is populated), which every route this key_func is applied to already
 // requires -- unlike Python's version, it never falls back to an IP key,
-// because httpapi.KeyedRateLimit is wired inside the authenticated part of
+// because httpapi.LimitWith is wired inside the authenticated part of
 // the chain and so never sees an unauthenticated request at all.
 func adminUserKey(r *http.Request) string {
 	user := policy.UserFrom(r.Context())
@@ -63,7 +63,7 @@ func (h *handlers) userRoutes() []httpapi.Route {
 		{Method: http.MethodPatch, Pattern: usersPrefix + "/users/{user_id}", Handler: h.bodyFirst(policy.Admin, http.HandlerFunc(h.updateUser))},
 		{Method: http.MethodPost, Pattern: usersPrefix + "/users/{user_id}/password",
 			Handler: h.bodyFirst(policy.Admin,
-				httpapi.ValidateThenLimit(validateSetPasswordBody, h.adminPasswordRateLimit, adminUserKey, h.write)(http.HandlerFunc(h.setUserPassword)))},
+				httpapi.ValidateThenLimit(validateSetPasswordBody, h.limits, passwordLimit, adminUserKey, h.write)(http.HandlerFunc(h.setUserPassword)))},
 		{Method: http.MethodDelete, Pattern: usersPrefix + "/users/{user_id}", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.deleteUser))},
 	}
 }

@@ -336,12 +336,11 @@ func venueGroupList() []string {
 }
 
 // normalizeRuled blanks values that differ by decision or by construction,
-// not by defect: the rate limiter backend (the Go api has none, "noop";
-// Python reports its own), the Celery leg of /health/workers (the Go api
+// not by defect: the Celery leg of /health/workers (the Go api
 // reports "retired"; Python inspects its broker), a random ingestion id,
 // the build version and the report time.
 func normalizeRuled(body string) string {
-	for _, field := range []string{`"rate_limiter":"`, `"celery":"`, `"ingestion_id":"`, `"version":"`, `"collected_at":"`} {
+	for _, field := range []string{`"celery":"`, `"ingestion_id":"`, `"version":"`, `"collected_at":"`} {
 		for start := 0; ; {
 			index := strings.Index(body[start:], field)
 			if index < 0 {

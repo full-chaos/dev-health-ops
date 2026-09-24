@@ -146,6 +146,13 @@ func Command() cli.Command {
 // (its own Deps doc comment). Each area package contributes its own
 // []httpapi.Route; this function only concatenates them.
 func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
+	limits, err := limitStore(deps)
+	if err != nil {
+		// Only a nil Valkey client can fail it and that path is not taken; keep
+		// the process up on the in-process store rather than mount no limits.
+		logger.Error("api: shared rate limiter unavailable; using the in-process limiter", "error", err)
+		limits = httpapi.NewMemoryStore(deps.Now)
+	}
 	var store acr.EntitlementStore
 	if deps.Pool != nil {
 		store = acr.PostgresEntitlementStore{Pool: deps.Pool}
@@ -165,6 +172,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 		// deployment's api Secret has no reason to also carry.
 		Pool: deps.Pool, ClickHouse: deps.ClickHouse, ValkeyURI: deps.Probes.ValkeyURI,
 		ExpectedWorkerGroups: deps.Probes.ExpectedWorkerGroups, Logger: logger,
+		RateLimiterBackend: limits.Backend(),
 	})...)
 	routes = append(routes, producttelemetry.Routes(&producttelemetry.ValkeyStreams{URI: deps.Telemetry.ValkeyURI}, logger)...)
 	routes = append(routes, buildinfo.Routes(deps.Guard, version.Current("api"))...)
@@ -197,6 +205,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 			HTTPDoer:      deps.HTTPDoer,
 			Now:           deps.Now,
 			Write:         WriteError,
+			Limits:        limits,
 			Invites:       deps.Invites,
 		})...)
 	}
@@ -269,6 +278,12 @@ func configureWith(
 	server, err := NewServer(cfg, logger, Routes(deps, logger), scope...)
 	if err != nil {
 		return nil, dependencyFailure(ctx, logger, "api_server", "api_server_config_failed", err)
+	}
+	// The rate-limit store error counter is scraped from the operator
+	// /metrics: the api installs no OTel meter provider, so this is the one
+	// place it is observable.
+	if err := registry.RegisterMetrics("api_rate_limit_store", httpapi.RateLimitStoreErrors); err != nil {
+		return nil, dependencyFailure(ctx, logger, "api_server", "api_metrics_register_failed", err)
 	}
 	if err := registry.RegisterRequired(listenerCheck, func(context.Context) error {
 		if server.Address() == "" {

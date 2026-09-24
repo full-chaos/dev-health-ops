@@ -60,6 +60,11 @@ type Deps struct {
 	// building a real Service always pass it; nil is a test-only default
 	// for a case that does not care about the exact body.
 	Write httpapi.ErrorWriter
+	// Limits is the rate-limit store every limited route in this area counts
+	// through: the shared Valkey-backed store in a real deployment (so a limit
+	// holds across api replicas), the in-process one otherwise. Nil means an
+	// in-process store on Now, for a test that does not care.
+	Limits httpapi.HitStore
 	// Invites configures create_org_invite's token signing, accept link and
 	// email sender; see InviteConfig. The zero value works (no email sent).
 	Invites InviteConfig
@@ -81,6 +86,10 @@ func Routes(deps Deps) []httpapi.Route {
 	if httpDoer == nil {
 		httpDoer = http.DefaultClient
 	}
+	limits := deps.Limits
+	if limits == nil {
+		limits = httpapi.NewMemoryStore(deps.Now)
+	}
 	write := deps.Write
 	if write == nil {
 		write = httpapi.WriteError
@@ -96,13 +105,8 @@ func Routes(deps Deps) []httpapi.Route {
 		pagerDuty:     deps.PagerDuty,
 		httpDoer:      httpDoer,
 		write:         write,
-		// ADMIN_PASSWORD_LIMIT = "5/hour" (rate_limit.py).
-		adminPasswordRateLimit: httpapi.NewKeyedLimiter(5, time.Hour, deps.Now),
-		// create_org_invite's `@limiter.limit("10/hour", key_func=
-		// get_admin_user_key)`: its own instance, since a limiter holds one
-		// (limit, window) pair.
-		inviteRateLimit: httpapi.NewKeyedLimiter(10, time.Hour, deps.Now),
-		invites:         deps.Invites,
+		limits:        limits,
+		invites:       deps.Invites,
 	}
 	return area.routes()
 }
@@ -135,17 +139,19 @@ type handlers struct {
 	// write renders this area's own directly-written errors (the keyed
 	// rate limiter's 429) in the same wire shape every other error uses.
 	write httpapi.ErrorWriter
-	// adminPasswordRateLimit is setUserPassword's keyed rate limiter
-	// (CHAOS-6357): fixed window, per (authenticated admin, exact resolved
-	// path) -- the Go equivalent of users.py's
-	// `@limiter.limit(ADMIN_PASSWORD_LIMIT, key_func=get_admin_user_key)`.
-	// A route needing a DIFFERENT limit/window gets its own
-	// *httpapi.KeyedLimiter field: one instance holds one (limit, window)
-	// pair for its whole lifetime, so distinct limits are distinct
-	// instances, never one shared limiter reconfigured per call.
-	adminPasswordRateLimit *httpapi.KeyedLimiter
-	// inviteRateLimit is create_org_invite's 10/hour keyed limiter, and
-	// invites its token/mail configuration.
-	inviteRateLimit *httpapi.KeyedLimiter
-	invites         InviteConfig
+	// limits is where every limited route's hits are counted (see
+	// Deps.Limits); the limits themselves are passwordLimit and inviteLimit.
+	limits  httpapi.HitStore
+	invites InviteConfig
 }
+
+// passwordLimit is users.py's `@limiter.limit(ADMIN_PASSWORD_LIMIT =
+// "5/hour", key_func=get_admin_user_key)` on set_user_password, and
+// inviteLimit orgs.py's `@limiter.limit("10/hour", key_func=
+// get_admin_user_key)` on create_org_invite: fixed window per (admin, exact
+// path). The IDs are the shared store's namespace; do not rename them once
+// deployed (a rename resets every counter).
+var (
+	passwordLimit = httpapi.Limit{ID: "admin_password", Count: 5, Window: time.Hour}
+	inviteLimit   = httpapi.Limit{ID: "admin_org_invite", Count: 10, Window: time.Hour}
+)

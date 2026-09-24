@@ -39,6 +39,12 @@ func quietLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard
 // its own save/override/restore.
 func TestMain(m *testing.M) {
 	contractRoot = "../../contracts/jobs/v1"
+	// Tests that reach buildDeps with a database configured run in the
+	// development environment (the shared rate-limit store is required only
+	// outside it); the refusal itself is tested with the variable cleared.
+	if _, set := os.LookupEnv("ENVIRONMENT"); !set {
+		_ = os.Setenv("ENVIRONMENT", "test")
+	}
 	os.Exit(m.Run())
 }
 

@@ -39,6 +39,10 @@ type Deps struct {
 	// ExpectedWorkerGroups is EXPECTED_WORKER_GROUPS: nil when unset.
 	ExpectedWorkerGroups *[]string
 	Logger               *slog.Logger
+	// RateLimiterBackend is the limiter backend /health reports:
+	// "redis" (the shared Valkey store, Python's word for it) or "memory";
+	// "" reports "noop", the truth for a Service with no limiter.
+	RateLimiterBackend string
 }
 
 // checkTimeout bounds each dependency check.
@@ -111,9 +115,13 @@ func (d Deps) health(w http.ResponseWriter, r *http.Request) {
 			overall = "down"
 		}
 	}
-	// The api has no client rate limiter (the Python api's backend is
-	// redis, memory or noop): it reports the truth.
-	services.Set("rate_limiter", "noop")
+	// The limiter backend the process actually counts limited routes in (the
+	// Python api reports redis, memory or noop the same way).
+	backend := d.RateLimiterBackend
+	if backend == "" {
+		backend = "noop"
+	}
+	services.Set("rate_limiter", backend)
 	status := http.StatusOK
 	if overall != "ok" {
 		status = http.StatusServiceUnavailable

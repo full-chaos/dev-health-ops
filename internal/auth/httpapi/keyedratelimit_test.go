@@ -2,9 +2,11 @@ package httpapi
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -247,12 +249,13 @@ func TestKeyedLimiterIsSafeUnderConcurrency(t *testing.T) {
 	}
 }
 
-// TestKeyedRateLimitWithRefusesOverTheKeyedBudget is the middleware-level
+// TestLimitWithRefusesOverTheKeyedBudget is the middleware-level
 // proof: the handler behind it is reached exactly `limit` times per key,
 // and a refusal renders through the configured ErrorWriter.
-func TestKeyedRateLimitWithRefusesOverTheKeyedBudget(t *testing.T) {
+func TestLimitWithRefusesOverTheKeyedBudget(t *testing.T) {
 	now := time.Now()
-	limiter := NewKeyedLimiter(2, time.Hour, func() time.Time { return now })
+	store := NewMemoryStore(func() time.Time { return now })
+	limit := Limit{ID: "test", Count: 2, Window: time.Hour}
 	var reached int
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		reached++
@@ -264,7 +267,7 @@ func TestKeyedRateLimitWithRefusesOverTheKeyedBudget(t *testing.T) {
 		w.WriteHeader(http.StatusTooManyRequests)
 	}
 	keyFunc := func(r *http.Request) string { return r.Header.Get("X-Test-Admin") }
-	handler := KeyedRateLimitWith(limiter, keyFunc, write)(inner)
+	handler := LimitWith(store, limit, keyFunc, write)(inner)
 
 	call := func(admin string) int {
 		request := httptest.NewRequest(http.MethodPost, "/x", nil)
@@ -294,15 +297,13 @@ func TestKeyedRateLimitWithRefusesOverTheKeyedBudget(t *testing.T) {
 	}
 }
 
-// TestKeyedRateLimitUsesTheDefaultErrorWriter exercises KeyedRateLimit
-// itself (not just KeyedRateLimitWith, which the mounted admin route
-// uses) -- codex-review pr2873-r2 P3: KeyedRateLimit had 0% coverage.
-// Proves its refusal renders through this package's default WriteError,
-// the Python-wire generic envelope (Code, not a caller-supplied writer).
-func TestKeyedRateLimitUsesTheDefaultErrorWriter(t *testing.T) {
-	limiter := NewKeyedLimiter(1, time.Hour, nil)
+// TestLimitWithRendersThroughTheGivenErrorWriter proves a refusal renders
+// through the ErrorWriter the caller passes (here this package's own).
+func TestLimitWithRendersThroughTheGivenErrorWriter(t *testing.T) {
+	store := NewMemoryStore(nil)
+	limit := Limit{ID: "test", Count: 1, Window: time.Hour}
 	keyFunc := func(r *http.Request) string { return "k" }
-	handler := KeyedRateLimit(limiter, keyFunc)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := LimitWith(store, limit, keyFunc, WriteError)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 
@@ -320,7 +321,7 @@ func TestKeyedRateLimitUsesTheDefaultErrorWriter(t *testing.T) {
 		t.Fatalf("call 2 = %d, want 429", second.Code)
 	}
 	if body := second.Body.String(); body == "" {
-		t.Fatal("KeyedRateLimit's default writer produced an empty body")
+		t.Fatal("the error writer produced an empty body")
 	}
 }
 
@@ -330,8 +331,9 @@ func TestKeyedRateLimitUsesTheDefaultErrorWriter(t *testing.T) {
 // must reach the handler, not be refused by the limiter.
 func TestKeyedRateLimitFreshAdminIsNotLockedOutByAnotherAdminsPaths(t *testing.T) {
 	now := time.Now()
-	limiter := NewKeyedLimiter(10, time.Hour, func() time.Time { return now })
-	handler := KeyedRateLimit(limiter, func(r *http.Request) string { return r.Header.Get("X-Admin") })(
+	store := NewMemoryStore(func() time.Time { return now })
+	limit := Limit{ID: "cap_probe", Count: 10, Window: time.Hour}
+	handler := LimitWith(store, limit, func(r *http.Request) string { return r.Header.Get("X-Admin") }, WriteError)(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusForbidden) }))
 	call := func(admin, path string) int {
 		request := httptest.NewRequest(http.MethodPost, path, nil)
@@ -340,11 +342,13 @@ func TestKeyedRateLimitFreshAdminIsNotLockedOutByAnotherAdminsPaths(t *testing.T
 		handler.ServeHTTP(recorder, request)
 		return recorder.Code
 	}
-	// The 100,000 requests share this limiter; feeding it directly keeps the
+	// The 100,000 requests share this store; feeding it directly keeps the
 	// test fast under the race detector (the middleware's own wiring is what
 	// the final request below exercises).
 	for i := range 100_000 {
-		limiter.Allow("admin-a", fmt.Sprintf("/api/v1/admin/orgs/%d/invites", i))
+		if _, err := store.Hit(context.Background(), limit, "admin-a", fmt.Sprintf("/api/v1/admin/orgs/%d/invites", i)); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if got := call("admin-a", "/api/v1/admin/orgs/0/invites"); got != http.StatusForbidden {
 		t.Fatalf("admin a's own tracked path through the middleware = %d, want 403 from the handler", got)
@@ -423,7 +427,8 @@ func TestKeyedLimiterGlobalCapIgnoresExpiredButUnsweptEntries(t *testing.T) {
 // only requests that pass it count, and the limit still holds for those.
 func TestValidateThenLimitSpendsNoAllowanceOnAFailedValidation(t *testing.T) {
 	now := time.Now()
-	limiter := NewKeyedLimiter(2, time.Hour, func() time.Time { return now })
+	store := NewMemoryStore(func() time.Time { return now })
+	limit := Limit{ID: "test", Count: 2, Window: time.Hour}
 	type marker struct{}
 	validate := func(w http.ResponseWriter, r *http.Request) (*http.Request, bool) {
 		if r.Header.Get("X-Valid") != "yes" {
@@ -433,7 +438,7 @@ func TestValidateThenLimitSpendsNoAllowanceOnAFailedValidation(t *testing.T) {
 		return r.WithContext(context.WithValue(r.Context(), marker{}, "validated")), true
 	}
 	reached := 0
-	handler := ValidateThenLimit(validate, limiter, func(*http.Request) string { return "admin" }, WriteError)(
+	handler := ValidateThenLimit(validate, store, limit, func(*http.Request) string { return "admin" }, WriteError)(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			reached++
 			if r.Context().Value(marker{}) != "validated" {
@@ -478,7 +483,94 @@ func TestValidateThenLimitRequiresAValidator(t *testing.T) {
 			t.Fatal("a nil validator was accepted; it would limit first and silently reintroduce the divergence")
 		}
 	}()
-	ValidateThenLimit(nil, NewKeyedLimiter(1, time.Hour, nil), func(*http.Request) string { return "" }, WriteError)
+	ValidateThenLimit(nil, NewMemoryStore(nil), Limit{ID: "t", Count: 1, Window: time.Hour}, func(*http.Request) string { return "" }, WriteError)
+}
+
+// failingStore is a HitStore whose backend is down.
+type failingStore struct{}
+
+func (failingStore) Hit(context.Context, Limit, string, string) (bool, error) {
+	return false, errors.New("valkey is down")
+}
+func (failingStore) Backend() string { return "redis" }
+
+// A store error is the Python api's unhandled-error 500 (slowapi has no
+// swallow_errors): the request is never let through, the handler is never
+// reached, and the body carries no detail of the failure.
+func TestLimitWithFailsClosedWithA500WhenTheStoreErrors(t *testing.T) {
+	reached := false
+	var code Code
+	write := func(w http.ResponseWriter, r *http.Request, c Code) {
+		code = c
+		w.WriteHeader(http.StatusInternalServerError)
+	}
+	handler := LimitWith(failingStore{}, Limit{ID: "test", Count: 5, Window: time.Hour}, func(*http.Request) string { return "secret-caller-key" }, write)(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { reached = true }))
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/x", nil))
+	if recorder.Code != http.StatusInternalServerError || code != CodeInternal {
+		t.Fatalf("store error answered %d (%q), want 500 internal_error", recorder.Code, code)
+	}
+	if reached {
+		t.Fatal("the handler ran although the limit store could not answer")
+	}
+}
+
+// MemoryStore keeps one limiter per limit ID: two limits never share a
+// bucket, and the same limit ID always resolves to the same counters.
+func TestMemoryStoreKeepsLimitsApart(t *testing.T) {
+	now := time.Now()
+	store := NewMemoryStore(func() time.Time { return now })
+	a := Limit{ID: "a", Count: 1, Window: time.Hour}
+	b := Limit{ID: "b", Count: 1, Window: time.Hour}
+	if ok, _ := store.Hit(context.Background(), a, "k", "/p"); !ok {
+		t.Fatal("first hit of limit a refused")
+	}
+	if ok, _ := store.Hit(context.Background(), a, "k", "/p"); ok {
+		t.Fatal("second hit of limit a allowed")
+	}
+	if ok, _ := store.Hit(context.Background(), b, "k", "/p"); !ok {
+		t.Fatal("limit b shares limit a's bucket")
+	}
+	if store.Backend() != "memory" {
+		t.Fatalf("Backend() = %q, want memory", store.Backend())
+	}
+}
+
+// The store error counter is a metrics source: the series exists at zero as
+// soon as a limit is wired, counts each store error by limit id, and never
+// carries a caller key or a path.
+func TestRateLimitStoreErrorsAreWrittenAsPrometheusSeries(t *testing.T) {
+	before := scrapeStoreErrors(t)
+	limit := Limit{ID: "metrics_probe", Count: 5, Window: time.Hour}
+	handler := LimitWith(failingStore{}, limit, func(*http.Request) string { return "secret-caller-key" }, WriteError)(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	if got := scrapeStoreErrors(t); !strings.Contains(got, `dev_health_api_rate_limit_store_errors_total{limit="metrics_probe"} 0`) {
+		t.Fatalf("a wired limit has no zero series:\n%s", got)
+	}
+	for range 3 {
+		handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/orgs/secret-path/invites", nil))
+	}
+	after := scrapeStoreErrors(t)
+	if !strings.Contains(after, `dev_health_api_rate_limit_store_errors_total{limit="metrics_probe"} 3`) {
+		t.Fatalf("three store errors were not counted:\n%s", after)
+	}
+	if !strings.Contains(after, "# TYPE dev_health_api_rate_limit_store_errors_total counter") {
+		t.Fatalf("the series has no TYPE line:\n%s", after)
+	}
+	if strings.Contains(after, "secret-caller-key") || strings.Contains(after, "secret-path") {
+		t.Fatalf("the metric carries a caller key or a path:\n%s", after)
+	}
+	_ = before
+}
+
+func scrapeStoreErrors(t *testing.T) string {
+	t.Helper()
+	var out strings.Builder
+	if err := RateLimitStoreErrors.WritePrometheus(&out); err != nil {
+		t.Fatal(err)
+	}
+	return out.String()
 }
 
 // The second review round's repro: a sweep that ran shortly BEFORE the

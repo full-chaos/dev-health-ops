@@ -36,7 +36,7 @@ x-go-worker: &go-worker
     VALKEY_URI: redis://valkey:6379/1
     SETTINGS_ENCRYPTION_KEY: ${SETTINGS_ENCRYPTION_KEY:?provider credential encryption key is required}
     AUTO_RUN_MIGRATIONS: "false"
-    OPERATIONAL_ORDERING_CONTRACT: ${OPERATIONAL_ORDERING_CONTRACT:-1}
+    OPERATIONAL_ORDERING_CONTRACT: ${OPERATIONAL_ORDERING_CONTRACT:-2}
   networks: [dev-health-internal]
   deploy: &go-worker-deploy
     mode: replicated
@@ -138,27 +138,26 @@ services:
   # transaction-mode pooler. PostgreSQL migration is skipped when both are
   # unset (ClickHouse-only stacks).
   migrate:
-    image: ghcr.io/your-org/dev-health-ops:latest
+    image: ${DEV_HEALTH_GO_DHO_IMAGE:-ghcr.io/full-chaos/dev-health-go-dho:latest}
     security_opt:
       - no-new-privileges:true
     read_only: true
+    user: "65532:65532"
     tmpfs:
       - /tmp
-    entrypoint:
-      - sh
-      - -c
-      - >-
-        if [ -z "$${MIGRATION_DATABASE_URI:-}" ];
-        then unset MIGRATION_DATABASE_URI; fi;
-        if [ -n "$$POSTGRES_URI" ]
-        || [ "$${MIGRATION_DATABASE_URI+x}" = x ]
-        || [ "$${MIGRATION_DATABASE_URI_FILE+x}" = x ];
-        then dev-hops migrate postgres; fi
-        && dev-hops migrate clickhouse
+    # `dho migrate upgrade`: the PostgreSQL head, the standard feature flags,
+    # then the ClickHouse head. --river also applies the River schema right
+    # after the PostgreSQL step when MIGRATION_DATABASE_URI is set.
+    command: ["migrate", "upgrade", "--river"]
     environment:
+      # Required: a direct Postgres URI (5432), unless MIGRATION_DATABASE_URI
+      # is set; dho refuses to start without a database.
       POSTGRES_URI: ${POSTGRES_URI:-}
       MIGRATION_DATABASE_URI: ${MIGRATION_DATABASE_URI:-}
-      DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER: ${DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER:-}
+      # The PostgreSQL head dho applies has the Celery->River cutover
+      # (revision 0066) applied, as production runs; dho refuses any other
+      # value, naming it.
+      DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER: ${DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER:-1}
       RIVER_DATABASE_SCHEMA: ${RIVER_DATABASE_SCHEMA:-river}
       RIVER_DOMAIN_DATABASE_ROLE: ${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}
       RIVER_QUEUE_DATABASE_ROLE: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
@@ -170,8 +169,9 @@ services:
       # wired to the same export (stack.go-workers.yml) start against a
       # still-contract-1 table. Must move with the worker export in the
       # same deploy pass; see deploy/go-workers/README.md.
-      OPERATIONAL_ORDERING_CONTRACT: ${OPERATIONAL_ORDERING_CONTRACT:-1}
-      CLICKHOUSE_URI: clickhouse://ch:ch@clickhouse:8123/default
+      OPERATIONAL_ORDERING_CONTRACT: ${OPERATIONAL_ORDERING_CONTRACT:-2}
+      # dho speaks ClickHouse's native protocol (9000), not HTTP (8123).
+      CLICKHOUSE_URI: clickhouse://ch:ch@clickhouse:9000/default
       LOG_LEVEL: INFO
     deploy:
       mode: replicated

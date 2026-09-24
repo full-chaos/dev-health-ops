@@ -79,7 +79,7 @@ x-go-worker-env-base: &go-worker-env-base
   # the environment (set for the migrate job AND every worker in the SAME
   # deploy pass, never one without the other) should ever flip it. See
   # deploy/go-workers/README.md's rollout note before changing this value.
-  OPERATIONAL_ORDERING_CONTRACT: ${OPERATIONAL_ORDERING_CONTRACT:-1}
+  OPERATIONAL_ORDERING_CONTRACT: ${OPERATIONAL_ORDERING_CONTRACT:-2}
 
 services:
   # CHAOS-3942: /health/workers is Celery-authoritative until it is told

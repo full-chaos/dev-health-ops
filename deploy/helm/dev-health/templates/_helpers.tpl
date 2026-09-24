@@ -355,10 +355,21 @@ River step waits for the weight-5 hook that creates the roles it requires.
 {{ $key }}: {{ $value | quote }}
 {{- end }}
 {{- end }}
-{{- if and (not (index .Values.migrations.hook.secretData "CLICKHOUSE_URI")) (index .Values.secrets.data "CLICKHOUSE_URI") }}
+{{- /*
+The migrate Job runs dho, which speaks ClickHouse's native protocol (9000):
+an explicit migrations.hook.secretData.CLICKHOUSE_URI wins (it must be
+native), else the Go runtimes' URI (goWorkers.clickhouseURI, else the bundled
+ClickHouse addressed natively), else the shared secrets.data.CLICKHOUSE_URI,
+which the Python api reads over HTTP -- with an external ClickHouse, set
+goWorkers.clickhouseURI, as the Go workers already require.
+*/}}
+{{- if not (index .Values.migrations.hook.secretData "CLICKHOUSE_URI") }}
+{{- $nativeClickhouseURI := include "dev-health.goWorkerClickhouseURI" . }}
+{{- if $nativeClickhouseURI }}
+CLICKHOUSE_URI: {{ $nativeClickhouseURI | quote }}
+{{- else if (index .Values.secrets.data "CLICKHOUSE_URI") }}
 CLICKHOUSE_URI: {{ index .Values.secrets.data "CLICKHOUSE_URI" | quote }}
-{{- else if and (not (index .Values.migrations.hook.secretData "CLICKHOUSE_URI")) .Values.clickhouse.enabled }}
-CLICKHOUSE_URI: {{ include "dev-health.clickhouseURI" . | quote }}
+{{- end }}
 {{- end }}
 {{- $hasDedicatedMigrationURI := index .Values.migrations.hook.secretData "MIGRATION_DATABASE_URI" }}
 {{- $hasHookPostgresURI := index .Values.migrations.hook.secretData "POSTGRES_URI" }}

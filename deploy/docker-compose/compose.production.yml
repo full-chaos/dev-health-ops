@@ -51,7 +51,7 @@ x-go-worker-env-base: &go-worker-env-base
   # explicit OPERATIONAL_ORDERING_CONTRACT=2 in the environment (set for the
   # migrate job AND every worker in the SAME deploy pass) should ever flip
   # it. See deploy/go-workers/README.md's rollout note before changing this.
-  OPERATIONAL_ORDERING_CONTRACT: ${OPERATIONAL_ORDERING_CONTRACT:-1}
+  OPERATIONAL_ORDERING_CONTRACT: ${OPERATIONAL_ORDERING_CONTRACT:-2}
 
 services:
   clickhouse:
@@ -125,29 +125,32 @@ services:
   #   docker compose -f compose.production.yml up migrate     # re-run just migrations
   #   docker compose -f compose.production.yml up -d          # then start the rest
   #
-  # `dev-hops migrate clickhouse status` (read-only) shows applied vs pending
-  # migrations; `--check` makes it exit 1 while any migration is pending.
+  # `dho migrate postgres status` and `dho migrate clickhouse status`
+  # (read-only) show where each store stands.
   migrate:
-    image: ${DEV_HEALTH_IMAGE:-ghcr.io/your-org/dev-health-ops:latest}
+    image: ${DEV_HEALTH_GO_DHO_IMAGE:-ghcr.io/full-chaos/dev-health-go-dho:latest}
     container_name: dev-health-migrate
     restart: "no"
-    entrypoint:
-      - sh
-      - -c
-      - >-
-        if [ -z "$${MIGRATION_DATABASE_URI:-}" ];
-        then unset MIGRATION_DATABASE_URI; fi;
-        if [ -n "$$POSTGRES_URI" ]
-        || [ "$${MIGRATION_DATABASE_URI+x}" = x ]
-        || [ "$${MIGRATION_DATABASE_URI_FILE+x}" = x ];
-        then dev-hops migrate postgres; fi
-        && dev-hops migrate clickhouse
+    read_only: true
+    user: "65532:65532"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    # `dho migrate upgrade`: the PostgreSQL head, the standard feature flags,
+    # then the ClickHouse head. --river also applies the River schema right
+    # after the PostgreSQL step when MIGRATION_DATABASE_URI is set.
+    command: ["migrate", "upgrade", "--river"]
     environment:
-      # Direct Postgres URI (5432), NOT pgbouncer — empty skips the Alembic step.
+      # Direct Postgres URI (5432), NOT pgbouncer, and required: dho applies
+      # the PostgreSQL head on every run, and refuses to start without a
+      # database (MIGRATION_DATABASE_URI, else this).
       POSTGRES_URI: ${POSTGRES_URI:-}
       # Dedicated elevated DSN activates the pinned River migration step.
       MIGRATION_DATABASE_URI: ${MIGRATION_DATABASE_URI:-}
-      DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER: ${DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER:-}
+      # The PostgreSQL head dho applies has the Celery->River cutover
+      # (revision 0066) applied, as production runs; dho refuses any other
+      # value, naming it.
+      DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER: ${DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER:-1}
       RIVER_DATABASE_SCHEMA: ${RIVER_DATABASE_SCHEMA:-river}
       RIVER_DOMAIN_DATABASE_ROLE: ${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}
       RIVER_QUEUE_DATABASE_ROLE: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
@@ -159,8 +162,9 @@ services:
       # wired to the same export (compose.go-workers.yml) start against a
       # still-contract-1 table. Must move with the worker export in the
       # same deploy pass; see deploy/go-workers/README.md.
-      OPERATIONAL_ORDERING_CONTRACT: ${OPERATIONAL_ORDERING_CONTRACT:-1}
-      CLICKHOUSE_URI: clickhouse://${CLICKHOUSE_USER:-ch}:${CLICKHOUSE_PASSWORD:-ch}@clickhouse:8123/${CLICKHOUSE_DB:-default}
+      OPERATIONAL_ORDERING_CONTRACT: ${OPERATIONAL_ORDERING_CONTRACT:-2}
+      # dho speaks ClickHouse's native protocol (9000), not HTTP (8123).
+      CLICKHOUSE_URI: clickhouse://${CLICKHOUSE_USER:-ch}:${CLICKHOUSE_PASSWORD:-ch}@clickhouse:9000/${CLICKHOUSE_DB:-default}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     depends_on:
       clickhouse:

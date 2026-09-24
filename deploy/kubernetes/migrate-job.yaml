@@ -1,9 +1,10 @@
 ---
 # Database migration Job (CHAOS-2304)
 #
-# Applies PostgreSQL (Alembic plus River when MIGRATION_DATABASE_URI is set)
-# and ClickHouse schema migrations, then exits. Existing direct POSTGRES_URI
-# deployments remain Alembic-only compatible. App pods run with
+# Runs `dho migrate upgrade --river`: the PostgreSQL head (plus River when
+# MIGRATION_DATABASE_URI is set), the standard feature flags, then the
+# ClickHouse head, and exits. With only POSTGRES_URI, River is left to
+# `dho migrate river`. App pods run with
 # AUTO_RUN_MIGRATIONS=false (see
 # configmap.yaml) so they never ambient-migrate — migration 042+ does
 # shadow-table rebuilds that are not safe to run concurrently from workers.
@@ -23,6 +24,10 @@
 # The api/worker `wait-for-migrations` initContainers are NOT that: they only
 # poll the read-only `dev-hops migrate clickhouse status --check` (no DDL)
 # until this Job has brought the schema current.
+#
+# The image is the dho image, distroless: exec form, no shell. It applies
+# production's heads: the Celery->River cutover (revision 0066) and
+# operational ordering contract 2, set below; dho refuses any other value.
 #
 # MIGRATION_DATABASE_URI (preferred) or compatibility POSTGRES_URI must point
 # DIRECTLY at Postgres (port 5432), never at a transaction-mode pooler
@@ -50,20 +55,10 @@ spec:
         runAsNonRoot: true
       containers:
         - name: migrate
-          image: ghcr.io/your-org/dev-health-ops:latest
+          image: ghcr.io/full-chaos/dev-health-go-dho:latest
           securityContext:
             allowPrivilegeEscalation: false
-          command:
-            - sh
-            - -c
-            - >-
-              if [ -z "${MIGRATION_DATABASE_URI:-}" ];
-              then unset MIGRATION_DATABASE_URI; fi;
-              if [ -n "$POSTGRES_URI" ]
-              || [ "${MIGRATION_DATABASE_URI+x}" = x ]
-              || [ "${MIGRATION_DATABASE_URI_FILE+x}" = x ];
-              then dev-hops migrate postgres; fi
-              && dev-hops migrate clickhouse
+          args: ["migrate", "upgrade", "--river"]
           envFrom:
             - configMapRef:
                 name: dev-health-config
@@ -90,11 +85,9 @@ spec:
                 name: dev-health-migration-secrets
           env:
             - name: DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER
-              valueFrom:
-                secretKeyRef:
-                  name: dev-health-migration-secrets
-                  key: DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER
-                  optional: true
+              value: "1"
+            - name: OPERATIONAL_ORDERING_CONTRACT
+              value: "2"
           resources:
             requests:
               memory: "256Mi"

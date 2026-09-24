@@ -89,7 +89,7 @@ func TestLimitStoreSelection(t *testing.T) {
 	if err != nil || store.Backend() != "memory" {
 		t.Fatalf("no Valkey: store %v (%v), want the in-process one", store, err)
 	}
-	explicit := httpapi.NewMemoryStore(nil)
+	explicit := httpapi.NewMemoryCounters(nil)
 	if got, _ := limitStore(Deps{Limits: explicit}); got != explicit {
 		t.Fatal("an explicit Deps.Limits was not used")
 	}
@@ -97,8 +97,8 @@ func TestLimitStoreSelection(t *testing.T) {
 
 type downStore struct{}
 
-func (downStore) Hit(context.Context, httpapi.Limit, string, string) (bool, error) {
-	return false, errors.New("dial tcp 10.0.0.9:6379: connection refused")
+func (downStore) Increment(context.Context, httpapi.Hit) (int64, error) {
+	return 0, errors.New("dial tcp 10.0.0.9:6379: connection refused")
 }
 func (downStore) Backend() string { return "redis" }
 
@@ -107,7 +107,7 @@ func (downStore) Backend() string { return "redis" }
 // unhandled -- and the body carries nothing of the failure.
 func TestLimitedRouteAnswersPythonsUnhandledError500WhenTheStoreIsDown(t *testing.T) {
 	reached := false
-	handler := httpapi.LimitWith(downStore{}, httpapi.Limit{ID: "admin_org_invite", Count: 10, Window: time.Hour},
+	handler := httpapi.LimitWith(httpapi.NewKeyedLimiter(downStore{}, httpapi.Limit{ID: "admin_org_invite", Count: 10, Window: time.Hour}),
 		func(*http.Request) string { return "admin-user:secret" }, WriteError)(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { reached = true }))
 	recorder := httptest.NewRecorder()
@@ -137,7 +137,7 @@ func TestStoreErrorCounterIsScrapedFromTheOperatorEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler := httpapi.LimitWith(downStore{}, httpapi.Limit{ID: "scrape_probe", Count: 1, Window: time.Hour},
+	handler := httpapi.LimitWith(httpapi.NewKeyedLimiter(downStore{}, httpapi.Limit{ID: "scrape_probe", Count: 1, Window: time.Hour}),
 		func(*http.Request) string { return "k" }, WriteError)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/x", nil))
 	var scrape strings.Builder

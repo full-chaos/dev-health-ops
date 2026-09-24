@@ -17,7 +17,7 @@ import (
 // "/api/v1/admin" -- this is the whole route table this Service mounts
 // under that prefix, so this file list is also this test's own coverage
 // statement.
-var adminRouteGuardFiles = []string{"impersonation.go", "users.go", "orgs.go", "platformstats.go", "featureflags.go", "auditlogs.go", "ipallowlist.go", "retention.go"}
+var adminRouteGuardFiles = []string{"impersonation.go", "users.go", "orgs.go", "platformstats.go", "featureflags.go", "auditlogs.go", "ipallowlist.go", "retention.go", "settings.go"}
 
 // adminRouteGuardFuncs names the exact functions parsed for a Route
 // table -- a route registered anywhere else in this package is invisible
@@ -32,6 +32,7 @@ var adminRouteGuardFuncs = map[string]bool{
 	"auditLogRoutes":      true,
 	"ipAllowlistRoutes":   true,
 	"retentionRoutes":     true,
+	"settingsRoutes":      true,
 }
 
 // adminRouteGuardExceptions names every route this test permits at a
@@ -291,6 +292,7 @@ func TestAdminRoutesAreNeverMountedBelowAdmin(t *testing.T) {
 var dispatcherFiles = map[string]string{
 	"checkOrMethodNotAllowed":  "ipallowlist.go",
 	"resourceTypesOrGetPolicy": "retention.go",
+	"categoriesOrListSettings": "settings.go",
 }
 
 // TestDispatchersGuardAtAdmin pins the level guardLevelOf assumes for every

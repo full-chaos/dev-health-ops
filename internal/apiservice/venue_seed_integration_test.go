@@ -452,6 +452,8 @@ func venueRequests(f venueFixture, tokens map[string]string) []venueoracle.Reque
 	add("drift: pending anonymous", "GET", pend, nil, nil)
 	add("drift: pending non-admin", "GET", pend, bearer("member"), nil)
 	add("drift: pending all", "GET", pend, bearer("admin"), nil)
+	// The route takes no filter: a team_id query parameter is ignored on both
+	// planes, so these three requests must answer the full pending list.
 	add("drift: pending filtered to qa", "GET", pend+"?team_id=qa", bearer("admin"), nil)
 	add("drift: pending filtered to a team with none", "GET", pend+"?team_id=nope", bearer("admin"), nil)
 	add("drift: pending other org sees own only", "GET", pend, bearer("owner"), nil)

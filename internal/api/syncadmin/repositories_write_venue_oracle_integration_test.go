@@ -392,7 +392,10 @@ metadata, is_enabled, discovered_at, last_seen_at) VALUES ($1, $2, $3, $4, $5, $
 			id, org.String(), integrationID, provider, sourceType, externalID, name, fullName, metadata, enabled, at)
 	}
 	gh := `{"planner_managed_sync_config_id": "` + ids.cfgGH.String() + `", "owner": "acme"}`
-	source(ids.orgA, ids.intGH, "github", "repository", "acme/one", "one", "acme/one", gh, true)
+	// Equal to the metadata the write computes, in another key order: Python
+	// compares dicts, not text, so it leaves this text as stored.
+	source(ids.orgA, ids.intGH, "github", "repository", "acme/one", "one", "acme/one",
+		`{"owner":"acme","planner_managed_sync_config_id":"`+ids.cfgGH.String()+`"}`, true)
 	source(ids.orgA, ids.intGH, "github", "repository", "acme/two", "two", "acme/two", gh, false)
 	source(ids.orgA, ids.intGH, "github", "repository", "acme/three", "3", "acme/three",
 		`{"owner":"acme","planner_managed_sync_config_id":"`+ids.cfgGH.String()+`","extra":[1.0,true]}`, true)

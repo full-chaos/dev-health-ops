@@ -29,10 +29,12 @@ class Min(BaseModel):
     v: int = Field(90, ge=1)
 class Bounded(BaseModel):
     v: int = Field(1, ge=0, le=2)
+class Lax(BaseModel):
+    v: int | None = None
 out = []
 for text in json.loads(sys.stdin.read()):
     row = {}
-    for name, model in (("min", Min), ("bounded", Bounded)):
+    for name, model in (("min", Min), ("bounded", Bounded), ("lax", Lax)):
         try:
             row[name] = {"ok": str(model.model_validate({"v": json.loads(text)}).v)}
         except ValidationError as exc:
@@ -87,11 +89,18 @@ func TestBodyIntMatchesLivePydantic(t *testing.T) {
 		if minOK {
 			minText = minValue.String()
 		}
+		var laxErrs Errors
+		laxValue, laxOK := laxErrs.OptionalLaxInt(object, "v")
+		laxText := ""
+		if laxOK {
+			laxText = laxValue.String()
+		}
 		var boundedErrs Errors
 		boundedValue, boundedOK := boundedErrs.DefaultedBoundedInt(object, "v", 0, 2)
 		for name, got := range map[string]string{
 			"min":     render(minText, minOK, minErrs),
 			"bounded": render(strconv.FormatInt(boundedValue, 10), boundedOK, boundedErrs),
+			"lax":     render(laxText, laxOK, laxErrs),
 		} {
 			expected := want[index][name]
 			wantText := "ok:" + expected.OK

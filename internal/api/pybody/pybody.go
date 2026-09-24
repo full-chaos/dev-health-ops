@@ -665,7 +665,7 @@ func (e *Errors) DefaultedBoundedInt(object *pyjson.Object, name string, minValu
 // same pattern QueryInt (queryint.go) already uses for query-parameter
 // bounds -- one comparison rule, not two that can disagree at the edges.
 func (e *Errors) boundedInt(raw pyjson.Value, name string, minValue, maxValue int64) (int64, bool) {
-	value, ok := e.intField(raw, name, minValue, &maxValue)
+	value, ok := e.intField(raw, name, &minValue, &maxValue)
 	if !ok {
 		return 0, false
 	}
@@ -683,7 +683,18 @@ func (e *Errors) OptionalMinInt(object *pyjson.Object, name string, minValue int
 	if !ok || raw == nil {
 		return nil, false
 	}
-	return e.intField(raw, name, minValue, nil)
+	return e.intField(raw, name, &minValue, nil)
+}
+
+// OptionalLaxInt validates one `int | None` field with no bounds at all, the
+// way pydantic's lax mode does (see intField): present is false when the field
+// is absent or null.
+func (e *Errors) OptionalLaxInt(object *pyjson.Object, name string) (*big.Int, bool) {
+	raw, ok := object.Get(name)
+	if !ok || raw == nil {
+		return nil, false
+	}
+	return e.intField(raw, name, nil, nil)
 }
 
 // DefaultedMinInt is OptionalMinInt's create-shaped counterpart (no `| None`
@@ -698,7 +709,7 @@ func (e *Errors) DefaultedMinInt(object *pyjson.Object, name string, minValue in
 		*e = append(*e, Error{Type: "int_type", Loc: []pyjson.Value{"body", name}, Msg: "Input should be a valid integer", Input: nil})
 		return nil, false
 	}
-	return e.intField(raw, name, minValue, nil)
+	return e.intField(raw, name, &minValue, nil)
 }
 
 // intField coerces raw as pydantic's lax `int` does and checks the `ge`
@@ -707,7 +718,7 @@ func (e *Errors) DefaultedMinInt(object *pyjson.Object, name string, minValue in
 // the integer 0 or 1 (lax int accepts a bool; verified against pydantic
 // 2.13: {"a": true} with `a: int = Field(90, ge=1)` validates as 1, and
 // false fails the `ge` bound, not the type).
-func (e *Errors) intField(raw pyjson.Value, name string, minValue int64, maxValue *int64) (*big.Int, bool) {
+func (e *Errors) intField(raw pyjson.Value, name string, minValue, maxValue *int64) (*big.Int, bool) {
 	loc := []pyjson.Value{"body", name}
 	var value *big.Int
 	switch v := raw.(type) {
@@ -750,11 +761,11 @@ func (e *Errors) intField(raw pyjson.Value, name string, minValue int64, maxValu
 		*e = append(*e, Error{Type: "int_type", Loc: loc, Msg: "Input should be a valid integer", Input: raw})
 		return nil, false
 	}
-	if value.Cmp(big.NewInt(minValue)) < 0 {
+	if minValue != nil && value.Cmp(big.NewInt(*minValue)) < 0 {
 		ctx := pyjson.NewObject()
-		ctx.Set("ge", minValue)
+		ctx.Set("ge", *minValue)
 		*e = append(*e, Error{Type: "greater_than_equal", Loc: loc, Input: raw, Ctx: ctx,
-			Msg: "Input should be greater than or equal to " + strconv.FormatInt(minValue, 10)})
+			Msg: "Input should be greater than or equal to " + strconv.FormatInt(*minValue, 10)})
 		return nil, false
 	}
 	if maxValue != nil && value.Cmp(big.NewInt(*maxValue)) > 0 {

@@ -161,6 +161,41 @@ func TestBaselineIsTheExecutedPythonChain(t *testing.T) {
 		t.Fatalf("the resumed database differs from the baseline: %s", diff)
 	}
 
+	// Version rows alone do not prove the schema: with the head recorded and
+	// a baseline view dropped, status reports schema_mismatch naming it and
+	// upgrade refuses without creating anything.
+	var view chmigrate.Object
+	for _, object := range checkedIn.Objects {
+		if object.IsView() {
+			view = object
+			break
+		}
+	}
+	if err := resumeConn.Exec(ctx, "DROP VIEW "+view.Name); err != nil {
+		t.Fatal(err)
+	}
+	requireStatus(t, ctx, resumeConn, resumeDB, resumeStore, checkedIn, nil, "schema_mismatch")
+	_, err = chmigrate.Upgrade(ctx, resumeStore, checkedIn, nil)
+	var mismatch chmigrate.SchemaMismatchError
+	if !errors.As(err, &mismatch) || !reflect.DeepEqual(mismatch.MissingObjects, []string{view.Name}) {
+		t.Fatalf("upgrade with %s dropped = %v, want a schema mismatch naming it", view.Name, err)
+	}
+	if err := resumeConn.Exec(ctx, view.Create); err != nil {
+		t.Fatalf("recreate %s: %v", view.Name, err)
+	}
+
+	// A chain file after the head is applied, recorded, and reported as the
+	// head.
+	probe := []chmigrate.ChainFile{{Version: "999_probe.sql", SQL: "CREATE TABLE chain_probe (x Int8) ENGINE = Memory;\n"}}
+	applied, err := chmigrate.Upgrade(ctx, resumeStore, checkedIn, probe)
+	if err != nil || applied.Action != "chain_applied" || !reflect.DeepEqual(applied.Applied, []string{"999_probe.sql"}) || applied.Head != "999_probe.sql" {
+		t.Fatalf("the chain probe = %+v, %v; want chain_applied [999_probe.sql] with head 999_probe.sql", applied, err)
+	}
+	status, err := chmigrate.ReadStatus(ctx, resumeStore, checkedIn, probe)
+	if err != nil || status.State != "at_head" || status.Head != "999_probe.sql" || len(status.Pending) != 0 {
+		t.Fatalf("status after the probe = %+v, %v; want at_head with head 999_probe.sql", status, err)
+	}
+
 	// An unversioned database holding a table the baseline does not create
 	// is not dho's to migrate.
 	foreignDB := scratchDatabase(t, admin)

@@ -38,7 +38,7 @@ type Result struct {
 // Upgrade brings the database behind db to the head for contract, then
 // applies every chain file after the head.
 func Upgrade(ctx context.Context, db DB, baseline Baseline, chain []ChainFile) (Result, error) {
-	result := Result{Contract: baseline.Contract, Head: HeadVersion(baseline)}
+	result := Result{Contract: baseline.Contract, Head: HeadVersion(baseline, chain)}
 	plan, err := readPlan(ctx, db, baseline, chain)
 	if err != nil {
 		return result, err
@@ -48,6 +48,8 @@ func Upgrade(ctx context.Context, db DB, baseline Baseline, chain []ChainFile) (
 		return result, BelowHeadError{Contract: baseline.Contract, Missing: plan.Missing}
 	case StateForeign:
 		return result, ForeignDatabaseError{Objects: plan.Foreign}
+	case StateSchemaMismatch:
+		return result, SchemaMismatchError{MissingObjects: plan.MissingObjects}
 	case StateEmpty:
 		created, seeded, err := applyBaseline(ctx, db, baseline)
 		result.Created, result.Seeded = created, seeded
@@ -70,14 +72,20 @@ func Upgrade(ctx context.Context, db DB, baseline Baseline, chain []ChainFile) (
 	return result, nil
 }
 
-// HeadVersion is the last migration the baseline records. The Python runner
-// also records "__init__.py", which sorts after every numbered name, so it is
-// skipped.
-func HeadVersion(baseline Baseline) string {
+// HeadVersion is the last migration: the last chain file after the head
+// when there is one, else the last one the baseline records. The Python
+// runner also records "__init__.py", which sorts after every numbered name,
+// so it is skipped.
+func HeadVersion(baseline Baseline, chain []ChainFile) string {
 	head := ""
 	for _, version := range baseline.Versions {
 		if version != "__init__.py" && version > head {
 			head = version
+		}
+	}
+	for _, file := range chain {
+		if file.Version > head {
+			head = file.Version
 		}
 	}
 	return head
@@ -89,11 +97,9 @@ func readPlan(ctx context.Context, db DB, baseline Baseline, chain []ChainFile) 
 	if err != nil {
 		return Plan{}, fmt.Errorf("read applied versions: %w", err)
 	}
-	var objects []string
-	if len(applied) == 0 {
-		if objects, err = db.Objects(ctx); err != nil {
-			return Plan{}, fmt.Errorf("list objects: %w", err)
-		}
+	objects, err := db.Objects(ctx)
+	if err != nil {
+		return Plan{}, fmt.Errorf("list objects: %w", err)
 	}
 	return Decide(applied, objects, baseline, chain), nil
 }
@@ -224,12 +230,14 @@ type Status struct {
 	Applied  int      `json:"applied"`
 	Missing  []string `json:"missing,omitempty"`
 	Foreign  []string `json:"foreign,omitempty"`
-	Pending  []string `json:"pending,omitempty"`
+	// MissingObjects are the baseline objects a schema_mismatch database lacks.
+	MissingObjects []string `json:"missing_objects,omitempty"`
+	Pending        []string `json:"pending,omitempty"`
 }
 
 // ReadStatus reports where the database stands without changing it.
 func ReadStatus(ctx context.Context, db DB, baseline Baseline, chain []ChainFile) (Status, error) {
-	status := Status{Contract: baseline.Contract, Head: HeadVersion(baseline)}
+	status := Status{Contract: baseline.Contract, Head: HeadVersion(baseline, chain)}
 	applied, err := db.AppliedVersions(ctx)
 	if err != nil {
 		return status, fmt.Errorf("read applied versions: %w", err)
@@ -239,7 +247,7 @@ func ReadStatus(ctx context.Context, db DB, baseline Baseline, chain []ChainFile
 	if err != nil {
 		return status, err
 	}
-	status.Missing, status.Foreign = plan.Missing, plan.Foreign
+	status.Missing, status.Foreign, status.MissingObjects = plan.Missing, plan.Foreign, plan.MissingObjects
 	for _, file := range plan.Pending {
 		status.Pending = append(status.Pending, file.Version)
 	}
@@ -250,6 +258,8 @@ func ReadStatus(ctx context.Context, db DB, baseline Baseline, chain []ChainFile
 		status.State = "below_head"
 	case StateForeign:
 		status.State = "foreign"
+	case StateSchemaMismatch:
+		status.State = "schema_mismatch"
 	default:
 		status.State = "at_head"
 	}

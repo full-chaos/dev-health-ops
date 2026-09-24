@@ -165,6 +165,9 @@ const (
 	// StateForeign: no version is applied but the database holds an object
 	// the baseline does not create. Refused.
 	StateForeign
+	// StateSchemaMismatch: every baseline version and no chain file is
+	// recorded, but objects the baseline creates are absent. Refused.
+	StateSchemaMismatch
 )
 
 // Plan is the decision Upgrade acts on.
@@ -177,10 +180,13 @@ type Plan struct {
 	Foreign []string
 	// Pending lists the chain files to apply, in order.
 	Pending []ChainFile
+	// MissingObjects lists the baseline objects a schema-mismatch database
+	// lacks.
+	MissingObjects []string
 }
 
-// Decide classifies a database from its applied versions and, when none is
-// applied, the objects it holds.
+// Decide classifies a database from its applied versions and the objects it
+// holds.
 func Decide(applied map[string]bool, objects []string, baseline Baseline, chain []ChainFile) Plan {
 	if len(applied) == 0 {
 		known := map[string]bool{}
@@ -209,12 +215,48 @@ func Decide(applied map[string]bool, objects []string, baseline Baseline, chain 
 		return Plan{State: StateBelowHead, Missing: missing}
 	}
 	var pending []ChainFile
+	chainApplied := false
 	for _, file := range chain {
-		if !applied[file.Version] {
+		if applied[file.Version] {
+			chainApplied = true
+		} else {
 			pending = append(pending, file)
 		}
 	}
+	// With no chain file recorded, the database claims exactly the baseline,
+	// so its objects must be there: version rows alone do not prove the
+	// schema. Once a chain file is recorded, it may have dropped a baseline
+	// object, and schema_migrations is trusted, as the Python runner trusts it.
+	if !chainApplied {
+		present := map[string]bool{}
+		for _, name := range objects {
+			present[name] = true
+		}
+		var absent []string
+		for _, object := range baseline.Objects {
+			if !present[object.Name] {
+				absent = append(absent, object.Name)
+			}
+		}
+		if len(absent) > 0 {
+			sort.Strings(absent)
+			return Plan{State: StateSchemaMismatch, MissingObjects: absent}
+		}
+	}
 	return Plan{State: StateAtHead, Pending: pending}
+}
+
+// SchemaMismatchError is the refusal for a database whose schema_migrations
+// records the head while objects the baseline creates are absent.
+type SchemaMismatchError struct{ MissingObjects []string }
+
+func (e SchemaMismatchError) Error() string {
+	shown, suffix := e.MissingObjects, ""
+	if len(shown) > 5 {
+		shown, suffix = shown[:5], fmt.Sprintf(" and %d more", len(e.MissingObjects)-5)
+	}
+	return fmt.Sprintf("schema_migrations records the head, but %d object(s) the head creates are absent (%s%s); "+
+		"refusing to treat this database as at the head", len(e.MissingObjects), strings.Join(shown, ", "), suffix)
 }
 
 // ForeignDatabaseError is the refusal for an unversioned database that holds

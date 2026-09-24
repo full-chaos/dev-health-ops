@@ -120,7 +120,10 @@ func run(ctx context.Context, verb string, env cli.Env) int {
 	if err != nil {
 		var below BelowHeadError
 		var foreign ForeignDatabaseError
+		var mismatch SchemaMismatchError
 		switch {
+		case errors.As(err, &mismatch):
+			return writeError(env.Stderr, "schema_mismatch", err.Error())
 		case errors.As(err, &below):
 			return writeError(env.Stderr, "below_head", err.Error())
 		case errors.As(err, &foreign):

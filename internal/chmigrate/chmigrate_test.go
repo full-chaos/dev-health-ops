@@ -33,16 +33,21 @@ func testBaseline() Baseline {
 func TestDecide(t *testing.T) {
 	baseline := testBaseline()
 	chain := []ChainFile{{Version: "002_c.sql"}, {Version: "003_d.sql"}}
+	all := []string{"schema_migrations", "seeded", "t", "v"}
 	for name, testCase := range map[string]struct {
 		applied map[string]bool
 		objects []string
 		want    Plan
 	}{
-		"empty":                     {map[string]bool{}, nil, Plan{State: StateEmpty, Pending: chain}},
-		"a baseline half applied":   {map[string]bool{}, []string{"schema_migrations", "t"}, Plan{State: StateEmpty, Pending: chain}},
-		"a foreign object":          {map[string]bool{}, []string{"t", "unrelated"}, Plan{State: StateForeign, Foreign: []string{"unrelated"}}},
-		"below the head":            {map[string]bool{"000_a.sql": true}, nil, Plan{State: StateBelowHead, Missing: []string{"001_b.py"}}},
-		"at the head":               {map[string]bool{"000_a.sql": true, "001_b.py": true}, nil, Plan{State: StateAtHead, Pending: chain}},
+		"empty":                   {map[string]bool{}, nil, Plan{State: StateEmpty, Pending: chain}},
+		"a baseline half applied": {map[string]bool{}, []string{"schema_migrations", "t"}, Plan{State: StateEmpty, Pending: chain}},
+		"a foreign object":        {map[string]bool{}, []string{"t", "unrelated"}, Plan{State: StateForeign, Foreign: []string{"unrelated"}}},
+		"below the head":          {map[string]bool{"000_a.sql": true}, nil, Plan{State: StateBelowHead, Missing: []string{"001_b.py"}}},
+		"at the head":             {map[string]bool{"000_a.sql": true, "001_b.py": true}, all, Plan{State: StateAtHead, Pending: chain}},
+		"the head recorded, a view dropped": {map[string]bool{"000_a.sql": true, "001_b.py": true}, []string{"schema_migrations", "seeded", "t"},
+			Plan{State: StateSchemaMismatch, MissingObjects: []string{"v"}}},
+		"a chain file recorded, a baseline object dropped": {map[string]bool{"000_a.sql": true, "001_b.py": true, "002_c.sql": true}, []string{"schema_migrations"},
+			Plan{State: StateAtHead, Pending: chain[1:]}},
 		"part of the chain applied": {map[string]bool{"000_a.sql": true, "001_b.py": true, "002_c.sql": true}, nil, Plan{State: StateAtHead, Pending: chain[1:]}},
 		"an unknown extra version": {
 			map[string]bool{"000_a.sql": true, "001_b.py": true, "067_x.py": true, "002_c.sql": true, "003_d.sql": true}, nil,
@@ -223,6 +228,9 @@ func TestAChainFileIsRecordedOnlyAfterEveryStatement(t *testing.T) {
 	for _, version := range testBaseline().Versions {
 		db.versions[version] = true
 	}
+	for _, object := range testBaseline().Objects {
+		db.objects[object.Name] = object.Create
+	}
 	db.failOn = "second"
 	chain := []ChainFile{{Version: "002_c.sql", SQL: "SELECT 'first';\nSELECT 'second';\n"}}
 	if _, err := Upgrade(context.Background(), db, testBaseline(), chain); err == nil || !strings.Contains(err.Error(), "002_c.sql statement 2") {
@@ -273,11 +281,15 @@ func TestHeadVersionSkipsTheInitFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if head := HeadVersion(baseline); head == "__init__.py" || !strings.HasSuffix(head, ".sql") && !strings.HasSuffix(head, ".py") || head[0] < '0' || head[0] > '9' {
+	if head := HeadVersion(baseline, nil); head == "__init__.py" || !strings.HasSuffix(head, ".sql") && !strings.HasSuffix(head, ".py") || head[0] < '0' || head[0] > '9' {
 		t.Fatalf("HeadVersion = %q, want the last numbered migration", head)
 	}
-	if got := HeadVersion(Baseline{Versions: []string{"000_a.sql", "098_b.sql", "__init__.py"}}); got != "098_b.sql" {
+	if got := HeadVersion(Baseline{Versions: []string{"000_a.sql", "098_b.sql", "__init__.py"}}, nil); got != "098_b.sql" {
 		t.Fatalf("HeadVersion = %q, want 098_b.sql", got)
+	}
+	// A chain file after the head is the head.
+	if got := HeadVersion(Baseline{Versions: []string{"000_a.sql", "098_b.sql", "__init__.py"}}, []ChainFile{{Version: "099_c.sql"}}); got != "099_c.sql" {
+		t.Fatalf("HeadVersion with a chain = %q, want 099_c.sql", got)
 	}
 }
 

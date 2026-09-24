@@ -250,9 +250,15 @@ func apiPosture() RolePosture {
 			// on a successfully revoked pending record, ahead of the bulk
 			// purge pass. pagerduty_webhook_bindings' own delete grant is
 			// declared once, above, widened rather than duplicated here.
+			// CHAOS-6591's disconnect route widens provider_oauth_revocations
+			// to insert+update: it enqueues a pending revocation row before
+			// the live PagerDuty revoke attempt, then either deletes it (the
+			// existing DELETE grant) on success or updates attempts/last_error
+			// on failure, matching PagerDutyOAuthRevocationRepository.enqueue/
+			// retry_pending.
 			{"pagerduty_oauth_authorization_requests", false, false, true},
 			{"provider_oauth_credentials", false, false, true},
-			{"provider_oauth_revocations", false, false, true},
+			{"provider_oauth_revocations", true, true, true},
 			// Integrations.
 			{"integration_datasets", false, false, true},
 			{"github_app_installations", false, false, true},

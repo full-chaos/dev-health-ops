@@ -160,6 +160,7 @@ var responseModelRoutes = map[string]bool{
 	"POST /api/v1/admin/orgs/{org_id}/feature-overrides":                  true,
 	"POST /api/v1/admin/orgs/{org_id}/invites":                            true,
 	"POST /api/v1/admin/orgs/{org_id}/members":                            true,
+	"POST /api/v1/admin/integrations/pagerduty/disconnect":                true,
 	"POST /api/v1/admin/integrations/pagerduty/preflight":                 true,
 	"POST /api/v1/admin/retention-policies":                               true,
 	"POST /api/v1/admin/retention-policies/{policy_id}/execute":           true,

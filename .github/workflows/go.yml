@@ -107,6 +107,8 @@ on:
       - 'ci/go_integration_shards.tsv'
       - 'ci/go_providersync_test_shards.tsv'
       - 'ci/requirements-live-python-oracles.txt'
+      - 'ci/requirements-deployed-python-api.txt'
+      - 'ci/check_deployed_python_pins.py'
       - 'ci/check_go_containers.sh'
       # The migration matrix's evidence columns are validated by a Go
       # binary (cmd/dev-health-migration-matrix) against two committed
@@ -241,6 +243,8 @@ on:
       - 'ci/go_integration_shards.tsv'
       - 'ci/go_providersync_test_shards.tsv'
       - 'ci/requirements-live-python-oracles.txt'
+      - 'ci/requirements-deployed-python-api.txt'
+      - 'ci/check_deployed_python_pins.py'
       - 'ci/check_go_containers.sh'
       # The migration matrix's evidence columns are validated by a Go
       # binary (cmd/dev-health-migration-matrix) against two committed

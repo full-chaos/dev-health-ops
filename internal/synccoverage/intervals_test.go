@@ -123,7 +123,7 @@ func TestEffectiveWorkItemFamilyExpansion(t *testing.T) {
         "family_dataset_work_item_comments": true,
         "family_dataset_work_item_history": false
     }`)
-	got := effectiveDatasetKeys("work-items", flags)
+	got, _ := effectiveDatasetKeys("work-items", flags)
 	want := []string{"work-items", "work-item-comments"}
 	if len(got) != len(want) {
 		t.Fatalf("effective dataset keys = %v", got)
@@ -133,7 +133,7 @@ func TestEffectiveWorkItemFamilyExpansion(t *testing.T) {
 			t.Fatalf("effective dataset keys = %v, want %v", got, want)
 		}
 	}
-	if got := effectiveDatasetKeys("commits", flags); len(got) != 1 || got[0] != "commits" {
+	if got, _ := effectiveDatasetKeys("commits", flags); len(got) != 1 || got[0] != "commits" {
 		t.Fatalf("non-family effective keys = %v", got)
 	}
 }

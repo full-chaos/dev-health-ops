@@ -454,7 +454,7 @@ func (h handlers) discoverTeams(w http.ResponseWriter, r *http.Request) {
 		h.internal(w, r, "discover teams", err)
 		return
 	}
-	policy.WriteJSON(w, http.StatusOK, teamDiscoverResponseJSON(provider, teams, truncated, warnings), nil)
+	policy.WriteModel(w, http.StatusOK, teamDiscoverResponseJSON(provider, teams, truncated, warnings), nil)
 }
 
 func (h handlers) getTeam(w http.ResponseWriter, r *http.Request) {

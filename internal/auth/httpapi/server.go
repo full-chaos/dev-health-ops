@@ -46,6 +46,10 @@ type Route struct {
 	// flag (RouteWriter), so the shared writers can refuse the wrong form.
 	// A live test pins every route's flag against the FastAPI app.
 	ResponseModel bool
+	// ResponseModelFor, when set, decides ResponseModel per request: a
+	// wildcard route that dispatches a literal path itself (a Python
+	// route of its own) reports that path's answer.
+	ResponseModelFor func(*http.Request) bool
 }
 
 // RouteWriter is implemented by the writer every registered route's
@@ -75,7 +79,11 @@ func (w routeWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 func markRoute(route Route) http.Handler {
 	key := route.Method + " " + route.Pattern
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		route.Handler.ServeHTTP(routeWriter{ResponseWriter: w, responseModel: route.ResponseModel, key: key}, r)
+		responseModel := route.ResponseModel
+		if route.ResponseModelFor != nil {
+			responseModel = route.ResponseModelFor(r)
+		}
+		route.Handler.ServeHTTP(routeWriter{ResponseWriter: w, responseModel: responseModel, key: key}, r)
 	})
 }
 

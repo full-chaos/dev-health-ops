@@ -171,7 +171,7 @@ func (h *handlers) listIPAllowlist(w http.ResponseWriter, r *http.Request) {
 	out.Set("total", total)
 	out.Set("limit", limit)
 	out.Set("offset", offset)
-	policy.WriteJSON(w, http.StatusOK, out, nil)
+	policy.WriteModel(w, http.StatusOK, out, nil)
 }
 
 // createIPAllowlistEntry is ip_allowlist.py's create_ip_allowlist_entry.
@@ -233,7 +233,7 @@ VALUES ($1, $2, $3, $4, true, $5, $6, $6, $7)`,
 		h.internalError(ctx, w, "insert ip allowlist entry", err)
 		return
 	}
-	policy.WriteJSON(w, http.StatusCreated, ipEntryObject(entry), nil)
+	policy.WriteModel(w, http.StatusCreated, ipEntryObject(entry), nil)
 }
 
 // firstHeader is Starlette's Headers.get: the first value, decoded latin-1.
@@ -256,7 +256,7 @@ func (h *handlers) getIPAllowlistEntry(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	policy.WriteJSON(w, http.StatusOK, ipEntryObject(entry), nil)
+	policy.WriteModel(w, http.StatusOK, ipEntryObject(entry), nil)
 }
 
 // loadIPEntry is IPAllowlistService.get_entry for the route's entry_id; it
@@ -345,7 +345,7 @@ WHERE id = $1`, entry.ID, entry.IPRange, entry.Description, entry.IsActive, inst
 		h.internalError(ctx, w, "update ip allowlist entry", err)
 		return
 	}
-	policy.WriteJSON(w, http.StatusOK, ipEntryObject(entry), nil)
+	policy.WriteModel(w, http.StatusOK, ipEntryObject(entry), nil)
 }
 
 // deleteIPAllowlistEntry is ip_allowlist.py's delete_ip_allowlist_entry.
@@ -365,7 +365,7 @@ func (h *handlers) deleteIPAllowlistEntry(w http.ResponseWriter, r *http.Request
 	}
 	out := pyjson.NewObject()
 	out.Set("deleted", true)
-	policy.WriteJSON(w, http.StatusOK, out, nil)
+	policy.WriteModel(w, http.StatusOK, out, nil)
 }
 
 // checkIPAllowed is ip_allowlist.py's check_ip_allowed.
@@ -421,7 +421,7 @@ WHERE org_id = $1 AND is_active = true ORDER BY created_at LIMIT 1000`, org)
 	out := pyjson.NewObject()
 	out.Set("allowed", allowed)
 	out.Set("ip_address", ipAddress)
-	policy.WriteJSON(w, http.StatusOK, out, nil)
+	policy.WriteModel(w, http.StatusOK, out, nil)
 }
 
 // checkOrMethodNotAllowed answers POST /ip-allowlist/check with the guarded

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -41,10 +42,13 @@ for route in app.routes:
 print("ROUTES " + json.dumps(out))
 `
 
-// goRoutesWithoutPython are Go routes with no FastAPI counterpart, by
-// ruling: they are not compared.
+// goRoutesWithoutPython are Go route patterns with no FastAPI route of
+// their own, by ruling or because they only dispatch literal Python
+// routes (which responseModelRoutes names) and answer 405 otherwise.
 var goRoutesWithoutPython = map[string]string{
 	"POST /api/v1/admin/orgs/{org_id}/transfer-ownership": "Go serves the web's shape; the ruled intentional divergence",
+	"POST /api/v1/admin/teams/{team_id}":                  "dispatches POST /api/v1/admin/teams/import; any other id is 405",
+	"POST /api/v1/admin/ip-allowlist/{entry_id}":          "dispatches POST /api/v1/admin/ip-allowlist/check; any other id is 405",
 }
 
 var routeParameter = regexp.MustCompile(`\{[^}]+\}`)
@@ -98,55 +102,99 @@ func TestVenueOracleRouteResponseModels(t *testing.T) {
 	// connection; their route lists do not need either to be built.
 	routes := Routes(Deps{Guard: guard}, logger)
 	routes = append(routes, markResponseModels(admin.Routes(admin.Deps{Guard: guard, Logger: logger, Write: WriteError}))...)
-	routes = append(routes, markResponseModels(teamsidentity.Routes(nil, guard, logger))...)
-	seen := map[string]httpapi.Route{}
+	routes = append(routes, markResponseModels(teamsidentity.Routes(nil, guard, logger, nil, nil))...)
+	patterns := map[string]httpapi.Route{}
 	for _, route := range routes {
-		seen[route.Method+" "+route.Pattern] = route
+		patterns[route.Method+" "+route.Pattern] = route
 	}
 
-	compared, flagged := 0, 0
-	for key, route := range seen {
-		model, ok := pythonModel[routeShape(route.Method, route.Pattern)]
-		if _, divergent := goRoutesWithoutPython[key]; divergent {
-			if ok {
-				t.Errorf("%s is listed as having no FastAPI route, but FastAPI has one", key)
-			}
-			continue
+	// Every Go route pattern is in the table or named as having no
+	// FastAPI route of its own.
+	for key := range patterns {
+		_, inTable := responseModelRoutes[key]
+		_, without := goRoutesWithoutPython[key]
+		switch {
+		case inTable && without:
+			t.Errorf("%s is both in responseModelRoutes and named as having no FastAPI route", key)
+		case !inTable && !without:
+			t.Errorf("%s is in neither responseModelRoutes nor goRoutesWithoutPython", key)
 		}
+		if without {
+			if _, ok := pythonModel[routeShape(strings.SplitN(key, " ", 2)[0], strings.SplitN(key, " ", 2)[1])]; ok {
+				t.Errorf("%s is named as having no FastAPI route, but FastAPI has one", key)
+			}
+		}
+	}
+
+	// Every table entry matches FastAPI, is served by a Go route, and is
+	// what that route reports for the request.
+	compared, flagged := 0, 0
+	for key, flag := range responseModelRoutes {
+		method, path, _ := strings.Cut(key, " ")
+		model, ok := pythonModel[routeShape(method, path)]
 		if !ok {
-			t.Errorf("%s has no FastAPI route (name it in goRoutesWithoutPython with the ruling, or fix the pattern)", key)
+			t.Errorf("responseModelRoutes names %s, which FastAPI has no route for", key)
 			continue
 		}
 		compared++
-		if reason, exception := jsonResponseRoutes[key]; exception {
-			if !model {
-				t.Errorf("%s is a named JSONResponse exception (%s), but FastAPI no longer declares a response_model for it", key, reason)
-			}
-			if route.ResponseModel {
-				t.Errorf("%s is a named JSONResponse exception but is flagged ResponseModel", key)
-			}
-			continue
-		}
-		if route.ResponseModel {
+		if flag {
 			flagged++
 		}
-		if route.ResponseModel != model {
-			t.Errorf("%s: ResponseModel=%v, FastAPI writes it as a response_model=%v", key, route.ResponseModel, model)
+		if reason, exception := jsonResponseRoutes[key]; exception {
+			if !model || flag {
+				t.Errorf("%s is a named JSONResponse exception (%s): FastAPI response_model=%v, table=%v; want true and false", key, reason, model, flag)
+			}
+		} else if flag != model {
+			t.Errorf("%s: table says %v, FastAPI writes it as a response_model=%v", key, flag, model)
 		}
-	}
-	for key := range responseModelRoutes {
-		if _, ok := seen[key]; !ok {
-			t.Errorf("responseModelRoutes names %s, which no Go route registers", key)
+		route, served := servingRoute(patterns, method, path)
+		if !served {
+			t.Errorf("responseModelRoutes names %s, which no Go route serves", key)
+			continue
+		}
+		request := httptest.NewRequest(method, strings.NewReplacer("{", "x", "}", "x").Replace(path), nil)
+		if got := route.ResponseModelFor(request); got != flag {
+			t.Errorf("%s: the Go route %s %s reports ResponseModel=%v for it, the table says %v", key, route.Method, route.Pattern, got, flag)
 		}
 	}
 	for key := range jsonResponseRoutes {
-		if _, ok := seen[key]; !ok {
-			t.Errorf("jsonResponseRoutes names %s, which no Go route registers", key)
+		if _, ok := responseModelRoutes[key]; !ok {
+			t.Errorf("jsonResponseRoutes names %s, which responseModelRoutes does not", key)
 		}
 	}
 	if compared == 0 || flagged == 0 {
 		t.Fatalf("compared %d routes, %d flagged: the comparison measured nothing", compared, flagged)
 	}
 	venueoracle.WriteProof(t)
-	t.Logf("%d Go routes compared with the live FastAPI table; %d write a response_model body", compared, flagged)
+	t.Logf("%d Python routes the dho api serves compared with the live FastAPI table; %d write a response_model body", compared, flagged)
+}
+
+// servingRoute is the Go route that serves method and path: the route
+// registered for exactly that pattern, or a wildcard route whose pattern
+// matches the literal path segment by segment.
+func servingRoute(patterns map[string]httpapi.Route, method, path string) (httpapi.Route, bool) {
+	if route, ok := patterns[method+" "+path]; ok {
+		return route, true
+	}
+	segments := strings.Split(path, "/")
+	for _, route := range patterns {
+		if route.Method != method {
+			continue
+		}
+		candidate := strings.Split(route.Pattern, "/")
+		if len(candidate) != len(segments) {
+			continue
+		}
+		matched := true
+		for index, segment := range candidate {
+			if segment != segments[index] && !(strings.HasPrefix(segment, "{") && strings.HasSuffix(segment, "}")) {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			return route, true
+		}
+	}
+	return httpapi.Route{}, false
 }

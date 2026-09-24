@@ -12,15 +12,15 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 )
 
-// TestLinearWorkItemsOraclePrepExecutesLiveProducer is intentionally opt-in.
-// It keeps the original producer probe available for focused debugging while
-// the generic pair tests provide the required whole-row comparison. This test
+// TestLinearWorkItemsOraclePrepExecutesLiveProducer runs the live Linear
+// work-items producer probe beside the generic pair tests (which hold the
+// whole-row comparison): the producer still emits a complete work item and
+// its transitions. It runs in ci/check_go.sh live-python-oracles with the
+// rest of this package, and its proof file is required there. This test
 // remains provider-only: it does not inspect or activate registry, matrix,
 // scheduler, or route wiring.
 func TestLinearWorkItemsOraclePrepExecutesLiveProducer(t *testing.T) {
-	if os.Getenv("LINEAR_ORACLE_PREP") != "1" {
-		t.Skip("Linear oracle preparation is opt-in until the provider handler exists")
-	}
+	requireLivePythonOracles(t)
 
 	_, currentFile, _, _ := runtime.Caller(0)
 	packageDir := filepath.Dir(currentFile)
@@ -66,5 +66,9 @@ func TestLinearWorkItemsOraclePrepExecutesLiveProducer(t *testing.T) {
 
 	if strings.TrimSpace(result.WorkItem["provider"].(string)) != "linear" {
 		t.Fatalf("live Linear producer emitted wrong provider: %#v", result.WorkItem["provider"])
+	}
+	proof := filepath.Join(os.Getenv(livePythonOracleProofDir), "linear-work-items-oracle-prep")
+	if err := os.WriteFile(proof, []byte("executed"), 0o600); err != nil {
+		t.Fatalf("write live Python oracle proof: %v", err)
 	}
 }

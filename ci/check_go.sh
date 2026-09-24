@@ -348,6 +348,12 @@ check_live_python_oracles() {
     rm -rf -- "${proof_dir}"
     return 1
   fi
+  proof_file="${proof_dir}/linear-work-items-oracle-prep"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: the live Linear work-items producer probe (TestLinearWorkItemsOraclePrepExecutesLiveProducer) did not execute\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
 
   printf 'go test -count=1: internal/providerfoundation (live Python encryption compatibility)\n'
   if ! (

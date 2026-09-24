@@ -165,8 +165,51 @@ elif mode == "serve":
 
         _oauth.httpx = type("httpx_shim", (), {"AsyncClient": _RedirectedClient, "HTTPStatusError": httpx.HTTPStatusError,
                                                "RequestError": httpx.RequestError, "Response": httpx.Response})
+    # VENUE_STRIPE_EVENT_AS_DICT=1 hands the webhook handlers the verified
+    # event as plain JSON dicts (a dict with attribute access), which is
+    # what they were written against; stripe-python's StripeObject is not a
+    # dict, so the unpatched handlers crash or skip. The signature is
+    # still verified by the real stripe-python code first.
+    if os.environ.get("VENUE_STRIPE_EVENT_AS_DICT") == "1":
+        import json as _json
+        import stripe as _stripe_ev
+
+        class _EventDict(dict):
+            def __getattr__(self, name):
+                try:
+                    return self[name]
+                except KeyError:
+                    raise AttributeError(name) from None
+
+        def _as_event_dict(value):
+            if isinstance(value, dict):
+                return _EventDict((k, _as_event_dict(v)) for k, v in value.items())
+            if isinstance(value, list):
+                return [_as_event_dict(v) for v in value]
+            return value
+
+        _stripe_original_construct = _stripe_ev.StripeClient.construct_event
+
+        def _stripe_construct_as_dict(self, payload, sig_header, secret, *args, **kwargs):
+            _stripe_original_construct(self, payload, sig_header, secret, *args, **kwargs)
+            return _as_event_dict(_json.loads(payload))
+
+        _stripe_ev.StripeClient.construct_event = _stripe_construct_as_dict
     from fastapi.testclient import TestClient
     from dev_health_ops.api.main import app
+    # VENUE_PY_TRACEBACKS=1 writes each unhandled exception's traceback to
+    # stderr (DEV_HEALTH_VENUE_PY_LOG keeps it), so a 500 carries its cause.
+    if os.environ.get("VENUE_PY_TRACEBACKS") == "1":
+        import traceback as _traceback
+        _inner_app = app
+
+        async def app(scope, receive, send):
+            try:
+                await _inner_app(scope, receive, send)
+            except Exception:
+                sys.stderr.write("VENUE TRACEBACK %s %s\n" % (scope.get("method"), scope.get("path")))
+                _traceback.print_exc(file=sys.stderr)
+                raise
     client = TestClient(app, raise_server_exceptions=False, follow_redirects=False)
     out = []
     for req in json.loads(sys.stdin.read()):

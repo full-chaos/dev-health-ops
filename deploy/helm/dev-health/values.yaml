@@ -421,9 +421,10 @@ goWorkers:
   # contract-2 (post-067) table without this set. Rendered as a per-group
   # container env (go-workers.yaml), not the shared api/worker ConfigMap --
   # the Python api's own ordering-contract awareness is a separate,
-  # out-of-scope concern. Omitted defaults to contract 1 (rollout-safe); see
-  # deploy/go-workers/README.md's rollout note before changing this value.
-  operationalOrderingContract: "1"
+  # out-of-scope concern. The migrate Job reads it too. The default is
+  # production's contract 2: the ClickHouse head `dho migrate upgrade` applies
+  # is the contract-2 schema, and dho refuses any other value.
+  operationalOrderingContract: "2"
   # -- Pull policy for every worker group's image (all `ghcr.io/full-chaos/
   #    dev-health-go-*` -- REGISTRY images). This must NOT inherit the
   #    top-level image.pullPolicy: that value exists for the commit-tagged
@@ -763,6 +764,19 @@ migrations:
     # -- Explicit local/evaluation-only acknowledgement for post-install with
     #    the chart's bundled PostgreSQL. Requires postgresql.enabled=true.
     localBundledPostgres: false
+    # -- Image the migrate Job runs `dho migrate upgrade` from. EMPTY MEANS
+    #    routeActivate.image (the operator image, entrypoint dho), else the
+    #    chart's dho image (goApi.image). An image set here or in
+    #    routeActivate.image must be pinned (repo@sha256:<digest>,
+    #    repo:sha-<12 hex>, or repo:local with pullPolicy Never/IfNotPresent);
+    #    the Python image is refused.
+    image: ""
+    pullPolicy: ""
+    # -- DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER for the migrate Job. The
+    #    PostgreSQL head dho applies has the Celery->River route-table cutover
+    #    (revision 0066) applied, as production runs, and dho refuses any
+    #    other value. Kept a value so an operator sees what the Job runs with.
+    celeryRiverCutover: "1"
     # -- CHAOS-4428: the two migration steps that were previously run by hand.
     #    Ordered by hook weight behind the migrate Job (0): provisionRoles (5)
     #    creates the three runtime logins, riverMigrate (10) applies the River
@@ -778,14 +792,14 @@ migrations:
     riverMigrate:
       # -- OFF is not "River never happens". With the hook off there are two
       #    paths, and which one you are on depends on secretData below:
-      #      * MIGRATION_DATABASE_URI set -> `dev-hops migrate postgres` runs
-      #        dev-health-worker-migrate (a thin main over `dho migrate river`,
-      #        kept for this path until spec S10) ITSELF inside the weight-0 Job. That is
-      #        what Compose's migrate service does, and it is safe only where
-      #        the runtime roles already exist -- an upgrade, never a fresh
-      #        install, where the preflight fails before provisioning runs.
-      #      * no MIGRATION_DATABASE_URI -> the weight-0 Job is Alembic plus the
-      #        ClickHouse migrator only, and NOTHING applies the River schema.
+      #      * MIGRATION_DATABASE_URI set -> the weight-0 migrate Job runs
+      #        `dho migrate upgrade --river`, which applies River ITSELF right
+      #        after the PostgreSQL step. It is safe only where the runtime
+      #        roles already exist -- an upgrade, never a fresh install, where
+      #        the preflight fails before provisioning runs.
+      #      * no MIGRATION_DATABASE_URI -> the weight-0 Job applies the
+      #        PostgreSQL head, the feature flags and the ClickHouse head only,
+      #        and NOTHING applies the River schema.
       #        The operator runs `dho migrate river --apply-and-check` out of band.
       #    Turning this ON moves the step to its own weight-10 Job, after role
       #    provisioning, which is the only ordering a fresh install survives.
@@ -877,18 +891,13 @@ migrations:
     # -- Dedicated secret values mounted only into the one-shot migration Job.
     #    Setting MIGRATION_DATABASE_URI activates the pinned River migration.
     #    When riverMigrate.enabled=true the dedicated URI is delivered to the
-    #    weight-10 River Job instead, and reaches the weight-0 Alembic Job as
-    #    POSTGRES_URI -- `dev-hops migrate postgres` runs the River migrator
-    #    itself whenever MIGRATION_DATABASE_URI is set, which at weight 0 would
-    #    precede role provisioning.
+    #    weight-10 River Job instead, and reaches the weight-0 migrate Job as
+    #    POSTGRES_URI; otherwise the migrate Job runs River itself (`dho
+    #    migrate upgrade --river`) whenever MIGRATION_DATABASE_URI is set.
     secretData:
       MIGRATION_DATABASE_URI: ""
       POSTGRES_URI: ""
       CLICKHOUSE_URI: ""
-      # -- Set to "1" to authorise the Celery->River route-table cutover
-      #    (revision 0066), which `dev-hops migrate postgres` otherwise defers.
-      #    Empty is the same operator passthrough Compose ships.
-      DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER: ""
     # -- Existing dedicated Secret when secrets.create=false. Falls back to
     #    secrets.externalSecretName for backward compatibility when empty.
     externalSecretName: ""

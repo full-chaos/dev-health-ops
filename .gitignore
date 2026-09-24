@@ -42,6 +42,8 @@ demo-data**
 # Tracked on purpose: the issue ledger, not local beads state.
 !.beads/issues.jsonl
 **/site**
+# The provider stub Python loads through PYTHONPATH must be tracked.
+!internal/apiservice/testdata/provider_stub/sitecustomize.py
 *.egg-info/
 build/
 dist/

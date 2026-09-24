@@ -11,12 +11,14 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/externalurl"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
@@ -26,19 +28,28 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
-// Encryptor seals a credential payload the way core.encryption.encrypt_value
-// does; providerfoundation.FernetDecryptor is the production one.
-type Encryptor interface {
+// Cipher seals and opens a credential payload the way core.encryption's
+// encrypt_value and decrypt_value do; providerfoundation.FernetDecryptor is
+// the production one. Configured is false when no encryption key is set.
+type Cipher interface {
 	Encrypt(plaintext []byte) (secrets.Value, error)
+	Decrypt(ciphertext secrets.Value) ([]byte, error)
+	Configured() bool
 }
 
 // Deps is what the routes need.
 type Deps struct {
-	Pool      *pgxpool.Pool
-	Guard     *policy.Guard
-	Encryptor Encryptor
-	Logger    *slog.Logger
-	Now       func() time.Time
+	Pool   *pgxpool.Pool
+	Guard  *policy.Guard
+	Cipher Cipher
+	Logger *slog.Logger
+	Now    func() time.Time
+	// HTTPClient carries the connection-test probes (nil: a client with no
+	// redirect following and the probes' own timeouts); HostLookup resolves
+	// hostnames for the SSRF guard (nil: the system resolver). Tests replace
+	// both to reach a stub provider.
+	HTTPClient *http.Client
+	HostLookup func(context.Context, string) ([]netip.Addr, error)
 }
 
 // Routes returns the credential routes. Python registers the list route
@@ -53,12 +64,22 @@ func Routes(deps Deps) []httpapi.Route {
 	if now == nil {
 		now = time.Now
 	}
-	h := handlers{pool: deps.Pool, encryptor: deps.Encryptor, logger: logger, now: now}
+	client := deps.HTTPClient
+	if client == nil {
+		client = defaultProbeClient()
+	}
+	lookup := deps.HostLookup
+	if lookup == nil {
+		lookup = externalurl.ResolveHostAddrs
+	}
+	h := handlers{pool: deps.Pool, cipher: deps.Cipher, logger: logger, now: now, client: client, lookup: lookup}
 	return []httpapi.Route{
 		{Method: http.MethodGet, Pattern: "/api/v1/admin/credentials", Allow: http.MethodGet,
 			Handler: deps.Guard.Wrap(policy.AdminOrg, http.HandlerFunc(h.list))},
 		{Method: http.MethodPost, Pattern: "/api/v1/admin/credentials",
 			Handler: deps.Guard.BodyFirst(policy.AdminOrg, http.HandlerFunc(h.create))},
+		{Method: http.MethodPost, Pattern: "/api/v1/admin/credentials/test",
+			Handler: deps.Guard.BodyFirst(policy.AdminOrg, http.HandlerFunc(h.testConnection))},
 		{Method: http.MethodGet, Pattern: "/api/v1/admin/credentials/{provider}/{name}", Allow: http.MethodGet,
 			Handler: deps.Guard.Wrap(policy.AdminOrg, http.HandlerFunc(h.get))},
 		{Method: http.MethodPatch, Pattern: "/api/v1/admin/credentials/{provider}/{name}",
@@ -66,11 +87,19 @@ func Routes(deps Deps) []httpapi.Route {
 	}
 }
 
+// defaultProbeClient follows no redirects and dials only addresses the SSRF
+// guard's classification allows, whatever the URL check resolved earlier.
+func defaultProbeClient() *http.Client {
+	return &http.Client{Transport: externalurl.GuardedTransport(), CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+}
+
 type handlers struct {
-	pool      *pgxpool.Pool
-	encryptor Encryptor
-	logger    *slog.Logger
-	now       func() time.Time
+	pool   *pgxpool.Pool
+	cipher Cipher
+	logger *slog.Logger
+	now    func() time.Time
+	client *http.Client
+	lookup func(context.Context, string) ([]netip.Addr, error)
 }
 
 func (h handlers) internal(w http.ResponseWriter, r *http.Request, what string, err error) {
@@ -302,7 +331,7 @@ func (h handlers) seal(credentials *pyjson.Object) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	sealed, err := h.encryptor.Encrypt([]byte(plain))
+	sealed, err := h.cipher.Encrypt([]byte(plain))
 	if err != nil {
 		return "", err
 	}

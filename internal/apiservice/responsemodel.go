@@ -125,6 +125,7 @@ var responseModelRoutes = map[string]bool{
 	"PATCH /api/v1/admin/users/{user_id}":                                 true,
 	"PATCH /api/v1/orgs/me":                                               true,
 	"POST /api/v1/admin/credentials":                                      true,
+	"POST /api/v1/admin/credentials/test":                                 true,
 	"POST /api/v1/admin/customer-push/sources":                            true,
 	"POST /api/v1/admin/customer-push/sources/{source_id}/tokens":         true,
 	"POST /api/v1/admin/customer-push/sources/{source_id}/validate":       true,

@@ -46,6 +46,11 @@ func NewFernetDecryptor(key secrets.Value, salt string) (FernetDecryptor, error)
 	return FernetDecryptor{key: key, salt: salt}, nil
 }
 
+// Configured reports whether an encryption key is set: without one every
+// Encrypt and Decrypt is refused, which callers must tell apart from a wrong
+// key (Python raises RuntimeError for the first and ValueError for the second).
+func (d FernetDecryptor) Configured() bool { return d.key.Configured() }
+
 func (d FernetDecryptor) Decrypt(ciphertext secrets.Value) ([]byte, error) {
 	if !d.key.Configured() || !ciphertext.Configured() {
 		return nil, ErrCredentialInvalid

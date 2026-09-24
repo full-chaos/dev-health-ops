@@ -85,9 +85,9 @@ func TestDiscoverGitHubWalksTeamsAndRepoPages(t *testing.T) {
 			body:   `{"members_count":0}`,
 		},
 	}}
-	oldClient := discoveryHTTPClient
-	discoveryHTTPClient = doer
-	defer func() { discoveryHTTPClient = oldClient }()
+	oldClient, oldExchange := discoveryHTTPClient, discoveryAppExchangeClient
+	discoveryHTTPClient, discoveryAppExchangeClient = doer, doer
+	defer func() { discoveryHTTPClient, discoveryAppExchangeClient = oldClient, oldExchange }()
 
 	teams, err := discoverGitHub(context.Background(), githubTestCredential(), "acme")
 	if err != nil {

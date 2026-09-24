@@ -238,3 +238,49 @@ func TestSetUserPasswordRateLimitWindowDoesNotRollOverEarly(t *testing.T) {
 		t.Fatalf("call 7 just past t=60m = %d, want 200 (fresh window)", got)
 	}
 }
+
+// TestSetUserPasswordValidationBeforeLimitVenueOracle is CHAOS-6435's class
+// proof on the password route, diffed against live Python: FastAPI validates
+// UserSetPassword's field constraints BEFORE the endpoint, and slowapi's
+// decorator wraps the endpoint, so malformed bodies cost no allowance -- while
+// what the endpoint itself refuses (the password policy) DOES count. One
+// admin sends five malformed bodies (free), two policy-violating ones (each
+// spends one of its five), then valid ones: three succeed and the next is
+// limited, on both planes.
+func TestSetUserPasswordValidationBeforeLimitVenueOracle(t *testing.T) {
+	ctx := context.Background()
+	root := repoRoot(t)
+	const jwtKey = "venue-oracle-test-secret-key-for-password-validate-limit-32"
+	const adminPlaintextPassword = "correct horse battery staple vl"
+
+	orgID, adminID, targetID := uuid.New(), uuid.New(), uuid.New()
+	venue := venueoracle.Start(t, ctx, venueoracle.Options{
+		Root:   root,
+		JWTKey: jwtKey,
+		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
+			return seedRateLimitVenue(t, ctx, admin, orgID, []uuid.UUID{adminID}, []uuid.UUID{targetID}, adminPlaintextPassword)
+		},
+	})
+	headers := map[string]string{"Authorization": "Bearer " + venue.Tokens["admin0"], "Content-Type": "application/json"}
+	path := "/api/v1/admin/users/" + targetID.String() + "/password"
+	send := func(name, body string) venueoracle.Request {
+		return venueoracle.Request{Name: name, Method: "POST", Path: path, Headers: headers, Body: venueoracle.B64(body)}
+	}
+	var requests []venueoracle.Request
+	for i := range 5 {
+		requests = append(requests, send(fmt.Sprintf("malformed body %d/5 (validation, free)", i+1), `{"admin_password":"x","password":"y"}`))
+	}
+	requests = append(requests,
+		send("missing field (validation, free)", fmt.Sprintf(`{"admin_password":%q}`, adminPlaintextPassword)),
+		send("not an object (validation, free)", `[]`),
+		send("password policy violation 1/2 (endpoint, counts)", fmt.Sprintf(`{"admin_password":%q,"password":"aaaaaaaa"}`, adminPlaintextPassword)),
+		send("password policy violation 2/2 (endpoint, counts)", fmt.Sprintf(`{"admin_password":%q,"password":"12345678"}`, adminPlaintextPassword)),
+	)
+	for i := range 4 {
+		requests = append(requests, send(fmt.Sprintf("valid %d/4", i+1),
+			fmt.Sprintf(`{"admin_password":%q,"password":"a new strong password %d"}`, adminPlaintextPassword, i)))
+	}
+	python := venue.ServePython(t, requests)
+	goBase, _ := startGoServer(t, ctx, venue, jwtKey)
+	t.Log(venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{}))
+}

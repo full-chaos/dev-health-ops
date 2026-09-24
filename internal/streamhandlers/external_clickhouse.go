@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"net"
@@ -1117,11 +1118,27 @@ func externalFloatChecked(payload map[string]any, key, columnType string) (value
 	if !ok || raw == nil {
 		return 0, false, nil
 	}
-	value, ok = numberField(payload, key)
-	if !ok {
-		return 0, true, externalNumericOverflow(key, columnType)
+	// Every float64 is storable: Float64 holds +/-Inf and NaN, and Python's
+	// sink writes them as they come (json.loads reads 1e1000 as +inf and the
+	// NaN/Infinity tokens as nan/inf; measured against the real Python sink
+	// on a real ClickHouse, CHAOS-6415). Rejecting them failed a whole batch
+	// Python accepts. Only a value that is not a number at all is an error.
+	switch typed := raw.(type) {
+	case float64:
+		return typed, true, nil
+	case json.Number:
+		parsed, parseErr := strconv.ParseFloat(typed.String(), 64)
+		var numErr *strconv.NumError
+		if parseErr != nil && !(errors.As(parseErr, &numErr) && numErr.Err == strconv.ErrRange) {
+			return 0, true, externalNumericOverflow(key, columnType)
+		}
+		return parsed, true, nil // ErrRange leaves +/-Inf (or 0 on underflow), as float() does
+	case int:
+		return float64(typed), true, nil
+	case int64:
+		return float64(typed), true, nil
 	}
-	return value, true, nil
+	return 0, true, externalNumericOverflow(key, columnType)
 }
 
 func externalNumberPointer(payload map[string]any, key, columnType string) (*float64, error) {

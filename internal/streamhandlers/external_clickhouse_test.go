@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -527,31 +528,48 @@ func TestClickHouseExternalSinkFailsClosedOnNumericOverflow(t *testing.T) {
 		}
 	})
 
-	t.Run("float overflow never becomes a substituted null", func(t *testing.T) {
-		connection := &productSink{batch: &productBatch{}}
-		sink, err := NewClickHouseExternalBatchSink(connection)
-		if err != nil {
-			t.Fatal(err)
-		}
-		sink.now = func() time.Time { return now }
-		source := externalSinkBatch{
-			Pointer: pointer, SourceID: uuid.New(),
-			Records: []externalSinkRecord{externalSinkFixture("work_item.v1", map[string]any{
-				"externalKey": "7", "provider": "github", "title": "Issue",
-				"type": "issue", "status": "open", "createdAt": "2026-07-22T10:00:00Z",
-				"repositoryExternalId": pointer.SourceInstance,
-				"storyPoints":          json.Number("1e1000"),
-			})},
-		}
-		_, err = sink.Write(context.Background(), source)
-		if err == nil {
-			t.Fatal("expected Write to fail closed on a storyPoints value that overflows float64")
-		}
-		if !strings.Contains(err.Error(), "payload.storyPoints") || !strings.Contains(err.Error(), "work_items.story_points") {
-			t.Fatalf("error = %q, want it to name the field and the destination column", err.Error())
-		}
-		if connection.batch.sent {
-			t.Fatal("a batch containing an unrepresentable float must never be sent")
+	// Python's sink writes what json.loads produced -- +inf for 1e1000, -inf,
+	// nan for the NaN token -- and Float64 stores them, so the Go sink must
+	// too (measured on a real ClickHouse: TestMeasureExternalSinkOverflowAgainstPython,
+	// CHAOS-6415). Failing the whole batch for them was stricter than Python.
+	t.Run("a float that overflows float64 is stored as +/-Inf like Python's, never null or a failure", func(t *testing.T) {
+		for name, item := range map[string]struct {
+			points any
+			want   func(float64) bool
+		}{
+			"json.Number 1e1000":  {json.Number("1e1000"), func(v float64) bool { return math.IsInf(v, 1) }},
+			"float64 +Inf":        {math.Inf(1), func(v float64) bool { return math.IsInf(v, 1) }},
+			"json.Number -1e1000": {json.Number("-1e1000"), func(v float64) bool { return math.IsInf(v, -1) }},
+			"float64 -Inf":        {math.Inf(-1), func(v float64) bool { return math.IsInf(v, -1) }},
+			"float64 NaN":         {math.NaN(), math.IsNaN},
+		} {
+			connection := &productSink{batch: &productBatch{}}
+			sink, err := NewClickHouseExternalBatchSink(connection)
+			if err != nil {
+				t.Fatal(err)
+			}
+			sink.now = func() time.Time { return now }
+			source := externalSinkBatch{
+				Pointer: pointer, SourceID: uuid.New(),
+				Records: []externalSinkRecord{externalSinkFixture("work_item.v1", map[string]any{
+					"externalKey": "7", "provider": "github", "title": "Issue",
+					"type": "issue", "status": "todo", "createdAt": "2026-07-22T10:00:00Z",
+					"repositoryExternalId": pointer.SourceInstance, "storyPoints": item.points,
+				})},
+			}
+			if _, err := sink.Write(context.Background(), source); err != nil {
+				t.Fatalf("%s: Write failed: %v", name, err)
+			}
+			if !connection.batch.sent || len(connection.batch.rows) != 1 {
+				t.Fatalf("%s: batch sent=%v rows=%d, want one sent row", name, connection.batch.sent, len(connection.batch.rows))
+			}
+			got, ok := connection.batch.rows[0][19].(float64)
+			if !ok {
+				t.Fatalf("%s: story_points = %#v, want a float64", name, connection.batch.rows[0][19])
+			}
+			if !item.want(got) {
+				t.Fatalf("%s: story_points = %v", name, got)
+			}
 		}
 	})
 }

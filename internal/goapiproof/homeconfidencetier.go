@@ -10,7 +10,7 @@ import "math"
 // The mechanism this shape's OWN citation names (in its Reason, never
 // here) is fetch_coverage's raw read of work_item_cycle_times
 // (ReplacingMergeTree(computed_at), key (org_id, provider, work_item_id),
-// `day` NOT part of that key -- cmd/query-api/internal/home/
+// `day` NOT part of that key -- internal/queryapi/home/
 // queries_freshness.go's own doc comment) on the reference plane, FINAL
 // on this port. A physical stale/live version pair can straddle the
 // day-window filter independently of one another, so the resulting
@@ -39,7 +39,7 @@ import "math"
 //  3. data.data_confidence.level is admitted only when RECOMPUTING it
 //     from THAT leg's own coverage_pct/missing_sources/connected_sources,
 //     via the documented thresholds (build_data_confidence, services/
-//     home.py:444-456 / BuildDataConfidence, cmd/query-api/internal/home/
+//     home.py:444-456 / BuildDataConfidence, internal/queryapi/home/
 //     signals.go:261-289), reproduces the OBSERVED level on BOTH legs
 //     independently. A leg whose own observed level disagrees with its
 //     own recomputed level is never admitted -- that is a real,

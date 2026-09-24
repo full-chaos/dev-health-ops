@@ -42,8 +42,8 @@ import (
 	"sort"
 	"strconv"
 
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/digest"
 	schemav1 "github.com/full-chaos/dev-health-ops/contracts/graphql/v1"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/digest"
 )
 
 // registeredDocument is one row of the enumeration this tool emits: the

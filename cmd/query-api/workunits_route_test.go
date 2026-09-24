@@ -14,11 +14,11 @@ import (
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/authctx"
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/investmentexplain"
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/routeswitch"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/investmentexplain"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
 
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/teamscope"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
 
 // TestWorkUnitsSwitchFromEnvDefaultsDisabled mirrors

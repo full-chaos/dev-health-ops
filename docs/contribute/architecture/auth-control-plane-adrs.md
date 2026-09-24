@@ -8,7 +8,7 @@ source_of_truth:
   - contracts/auth/v1/endpoint-profiles.ops.json (frozen ops surface inventory)
   - src/dev_health_ops/api/services/auth.py (current HS256 issuer, TTLs, superuser verification)
   - src/dev_health_ops/api/graphql/principal_envelope.py (current EdDSA envelope issuer)
-  - cmd/query-api/internal/principal (current EdDSA verifier, the prior art for ADR-01)
+  - internal/queryapi/principal (current EdDSA verifier, the prior art for ADR-01)
 applicability: current
 lifecycle: active
 ---
@@ -87,7 +87,7 @@ The platform is not starting from zero. Two independent JWT verification
 implementations already exist and one of them is materially better than the
 other:
 
-* `cmd/query-api/internal/principal/verifier.go:62-109` uses
+* `internal/queryapi/principal/verifier.go:62-109` uses
   `github.com/golang-jwt/jwt/v5` and pins issuer, audience, `exp` (via
   `WithExpirationRequired`, so an `exp`-less token is rejected rather than
   treated as non-expiring), the algorithm set (`WithValidMethods(["EdDSA"])`,
@@ -110,7 +110,7 @@ at the tag its consumer pins.
 Select, and record here as pinned versions at Wave 1 start:
 
 1. **JOSE/JWT: `github.com/golang-jwt/jwt/v5`**, with
-   `cmd/query-api/internal/principal/verifier.go` promoted to the **canonical
+   `internal/queryapi/principal/verifier.go` promoted to the **canonical
    verification pattern** — every field it pins is mandatory for every platform
    token verifier, and the empty-issuer construction guard is mandatory.
 2. **JWKS: `dev-health-go/authverify`**, extended rather than re-implemented.
@@ -529,7 +529,7 @@ remain the entitlement authority; the control plane consumes a projection.
 
 The complication is already in the tree: the effective-principal envelope
 carries `tier` and `licensed_features[]` **as signed token claims**
-(`cmd/query-api/internal/principal/claims.go:38-39`). That is entitlement
+(`internal/queryapi/principal/claims.go:38-39`). That is entitlement
 travelling inside a credential, which G-14 forbids by name.
 
 ### Decision
@@ -791,7 +791,7 @@ setting observable — a startup log line and a gauge — so its state is visibl
 rather than inferred). The property this ADR relies on is therefore the
 deployed one, not merely the coded one.
 
-`cmd/query-api/internal/graph/schema.resolvers.go` does not have this property.
+`internal/queryapi/graph/schema.resolvers.go` does not have this property.
 It declares **50** query resolvers, **10** implemented and the rest stubs, and
 each of the 10 re-implements `authctx.FromContext(ctx)` + `claims.OrgID == ""`
 + (sometimes) `claims.OrgID != orgID` **by hand** (`:123`, `:186`, `:222`,

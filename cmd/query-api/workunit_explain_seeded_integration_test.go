@@ -33,7 +33,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/authctx"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 )
 
 const (

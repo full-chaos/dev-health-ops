@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/principal"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 )
 
 // The saved-report reads, exercised through the real /query handler against a

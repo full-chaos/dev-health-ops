@@ -114,7 +114,7 @@ func (reader *Reader) FetchWorkGraphEdges(ctx context.Context, opts EdgeQueryOpt
 		// the tupled winner below), not a raw column or another aggregate --
 		// the outer query no longer aggregates at all (the tupled argMax
 		// moved the GROUP BY into the subquery, mirroring
-		// cmd/query-api/internal/workgraph/edges.go's own CHAOS-4985 fix),
+		// internal/queryapi/workgraph/edges.go's own CHAOS-4985 fix),
 		// so this is a plain WHERE, not HAVING. Re-aggregating the raw
 		// column here would still raise ILLEGAL_AGGREGATION (184) for the
 		// same reason the old HAVING-on-alias form avoided it -- same
@@ -128,7 +128,7 @@ func (reader *Reader) FetchWorkGraphEdges(ctx context.Context, opts EdgeQueryOpt
 	// evidence), last_synced), computed ONCE in a subquery, parts extracted
 	// in the outer SELECT (CHAOS-4985 follow-up, codex round 2 on #2186, P3
 	// -- the same hybrid-row-on-a-last_synced-tie defect the sibling
-	// cmd/query-api/internal/workgraph/edges.go reader already had, and was
+	// internal/queryapi/workgraph/edges.go reader already had, and was
 	// already fixed for: two unmerged rows sharing the same last_synced can
 	// tie under argMax, which ClickHouse documents as implementation-defined
 	// for the tie-break; five INDEPENDENT argMax calls could each break that

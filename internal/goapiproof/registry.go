@@ -871,8 +871,7 @@ func LoadDocuments(path string) (map[string]string, error) {
 // over that text against the digests the process reports.
 //
 // digestFn is passed in so this package does not depend on
-// cmd/query-api/internal/digest (which Go's internal rule puts out of
-// reach here); the caller hands in that exact function, so there is still
+// internal/queryapi/digest; the caller hands in that exact function, so there is still
 // only ONE digest implementation in play.
 func VerifyDocuments(documents map[string]string, registry RegistryView, digestFn func(string) string) error {
 	var drifted []string

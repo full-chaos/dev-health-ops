@@ -15,11 +15,11 @@ import (
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/authctx"
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/investmentexplain"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/categorize"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/investmentexplain"
 
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/teamscope"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
 
 // newTestWorkUnitExplainHandler builds the work handler over the shared
@@ -579,7 +579,7 @@ func TestWorkUnitExplainOrgScopeEmitsNoTeamCondition(t *testing.T) {
 // ollamaFixtureRowScanner is a RowScanner over a single fixed row, its
 // values matching one query's Scan destination count/order exactly --
 // package main's own copy of the same fixture-row pattern
-// cmd/query-api/internal/investmentexplain/explain_golden_test.go uses,
+// internal/queryapi/investmentexplain/explain_golden_test.go uses,
 // needed here because that package's version is unexported.
 type ollamaFixtureRowScanner struct {
 	rows  [][]any

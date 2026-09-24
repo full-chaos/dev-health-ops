@@ -24,8 +24,8 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/principal"
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/workgraph"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/workgraph"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 

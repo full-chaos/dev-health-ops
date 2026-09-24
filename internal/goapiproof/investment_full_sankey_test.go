@@ -30,7 +30,7 @@ var investmentFullDocumentPattern = regexp.MustCompile(
 // selects `analytics.sankey.nodes.value` / `.edges.value`, but the batch
 // this table built never asked the resolver for a sankey sub-request --
 // `resolveSankey` only runs when `batch.Sankey != nil`
-// (cmd/query-api/internal/analytics/resolve.go:194) -- so both planes
+// (internal/queryapi/analytics/resolve.go:194) -- so both planes
 // answered null and the first deployed-executed run correctly REFUSED the
 // two declared FloatTierB paths as vacuous (JOB 5, 12:56Z 2026-09-10).
 //
@@ -41,7 +41,7 @@ var investmentFullDocumentPattern = regexp.MustCompile(
 // fields, required fields, enum membership all get checked by
 // validator.VariableValues) and then asserts the business rule the SDL
 // itself cannot express: a Sankey path needs >= 2 dimensions
-// (validateSankeyPath, cmd/query-api/internal/analytics/sankey.go).
+// (validateSankeyPath, internal/queryapi/analytics/sankey.go).
 func TestInvestmentFullVariablesAskForSankey(t *testing.T) {
 	root := repoRootFromTest(t)
 

@@ -61,7 +61,7 @@ REGENERATE_HINT = (
 
 def compute_schema_digest(sdl_path: Path) -> str:
     """``"sha256:" + hex(sha256(raw bytes))`` -- the same algorithm
-    ``cmd/query-api/internal/digest.Schema`` and
+    ``internal/queryapi/digest.Schema`` and
     ``api/graphql/go_api_schema_digest.current_schema_digest`` use. No
     parsing and no reprinting on any side, so a Python read and a Go
     ``go:embed`` read of identical bytes cannot disagree.

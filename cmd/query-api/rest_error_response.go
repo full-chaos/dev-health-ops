@@ -29,8 +29,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/authctx"
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/principal"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 )
 
 // restErrorBody is FastAPI's default HTTPException response envelope.

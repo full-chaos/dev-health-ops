@@ -62,7 +62,7 @@ type RESTIDProducer struct {
 	// JoinField, when set, names a SECOND field to read from the SAME
 	// array element and append after IDField's own value, joined by ":"
 	// -- flame's own "pr" entity_id shape ("<repo_id>:<number>",
-	// parseRepoEntity's own doc comment in cmd/query-api/internal/flame)
+	// parseRepoEntity's own doc comment in internal/queryapi/flame)
 	// needs BOTH a repo_id and a PR number from the SAME drilldown item,
 	// never two independently-produced ids that could each name a
 	// different PR. drilldown/prs' own PRItem.Number (prs.go) is a JSON

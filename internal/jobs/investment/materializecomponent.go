@@ -408,7 +408,7 @@ type structuralEvidence struct {
 // re-categorization and MUST be byte-identical), this column is read back
 // only through ClickHouse's JSONExtract by every consumer
 // (workUnitEvidenceWorkItemRefsExpr and siblings in
-// cmd/query-api/internal/analytics/investment.go) -- valid JSON with the
+// internal/queryapi/analytics/investment.go) -- valid JSON with the
 // right keys and values is sufficient; nothing compares its raw bytes across
 // planes. Every value here is a plain ASCII id (uuid/hash), so there is no
 // unicode-escaping divergence to worry about either.

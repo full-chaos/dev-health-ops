@@ -17,7 +17,7 @@ var (
 )
 
 // reachableModes are the modes in which a REAL client request can be served
-// by Go. Kept in sync with cmd/query-api/internal/routeswitch's own
+// by Go. Kept in sync with internal/queryapi/routeswitch's own
 // reachableModes: "shadow" executes but the client still gets Python's
 // answer, so it is not reachable in this sense.
 var reachableModes = map[string]bool{"canary": true, "primary": true}

@@ -410,7 +410,7 @@ func (doer *githubDeploymentStatusStillRunningDoer) Do(request *http.Request) (*
 // TestGitHubDeploymentsRoutePersistsRunningStatusForFlameReader is this
 // PR's own load-bearing proof: a genuinely still-running GitHub deployment
 // (no terminal status entry recorded yet) must persist a real "in_progress"
-// status, not nil -- cmd/query-api/internal/flame's own
+// status, not nil -- internal/queryapi/flame's own
 // deploymentStatusIsRunning treats a nil Status as terminal (its own doc
 // comment: "never invents a duration for a status it cannot affirmatively
 // confirm is still running"), so a writer that leaves Status nil for a

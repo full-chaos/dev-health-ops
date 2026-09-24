@@ -5,7 +5,7 @@
 // Secret mounted into this process's own environment (secretKeyRef), never
 // a copied key file or a network call to a running pod. See
 // internal/envelopemint for the signing logic, kept byte-compatible with
-// the Python edge's issuer and cmd/query-api/internal/principal's
+// the Python edge's issuer and internal/queryapi/principal's
 // verifier.
 //
 // Its stdout is exactly what go-api-prove's `-proof-bearer-exec` contract

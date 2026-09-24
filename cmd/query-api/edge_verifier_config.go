@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/principal"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 )
 
 // The pod env contract for the edge access token credential -- the

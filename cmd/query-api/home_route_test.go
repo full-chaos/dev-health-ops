@@ -11,9 +11,9 @@ import (
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/authctx"
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/home"
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/routeswitch"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/home"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
 )
 
 // TestHomeSwitchFromEnvDefaultsDisabled mirrors quadrant's own switch

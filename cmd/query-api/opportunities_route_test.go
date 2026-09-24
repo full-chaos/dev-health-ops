@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/authctx"
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/opportunities"
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/routeswitch"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/opportunities"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
 )
 
 // TestOpportunitiesSwitchFromEnvDefaultsDisabled mirrors home's own

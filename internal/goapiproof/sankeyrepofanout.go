@@ -105,7 +105,7 @@ type SankeyRepoFanoutShape struct {
 	// value difference -- must equal one of the defect's own Paths
 	// entries, e.g. "data.nodes.value". Leave empty for a response whose
 	// Node.Value is always null (GET/POST /api/v1/sankey's own
-	// sankeyRepoDedupParity entry -- cmd/query-api/internal/sankey's own
+	// sankeyRepoDedupParity entry -- internal/queryapi/sankey's own
 	// Node struct doc comment: "_touch_node never sets it" -- citing a
 	// value path there would be the appearance of coverage rather than
 	// coverage itself, so that entry leaves this field unset and rule 4

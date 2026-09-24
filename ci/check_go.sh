@@ -1429,7 +1429,7 @@ check_live_python_oracles() {
     return 1
   fi
 
-  printf 'go test -count=1: cmd/query-api/internal/principal (Go verifier vs a REAL Python-issued envelope + JWKS, CHAOS-4366)\n'
+  printf 'go test -count=1: internal/queryapi/principal (Go verifier vs a REAL Python-issued envelope + JWKS, CHAOS-4366)\n'
   if ! (
     cd "${ROOT}"
     "${GO_ENV_OFF[@]}" \
@@ -1440,7 +1440,7 @@ check_live_python_oracles() {
       PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
       go test -mod=readonly -count=1 \
         -run '^TestVerifierMatchesLivePythonIssuedEnvelope$' \
-        ./cmd/query-api/internal/principal
+        ./internal/queryapi/principal
   ); then
     rm -rf -- "${proof_dir}"
     return 1
@@ -1707,7 +1707,7 @@ check_contract() {
 # the run set, failing loudly, not hidden here. Legitimate reasons look like
 # "needs a live vendor credential CI does not provision."
 #
-# CHAOS-4730: cmd/query-api/internal/analytics was the one entry here
+# CHAOS-4730: internal/queryapi/analytics was the one entry here
 # (CHAOS-4643), because its ONLY integration-tagged file at the time,
 # nan_class_live_test.go, could never run in CI (it dials CLICKHOUSE_URI
 # directly, which .github/workflows/go.yml's integration-shard job never

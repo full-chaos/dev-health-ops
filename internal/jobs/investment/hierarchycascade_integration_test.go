@@ -36,7 +36,7 @@ const hierarchyCascadeTestOrg = "70d529e0-3c06-4597-8480-794fd02328b6"
 // always writes one, even its empty tier. A cascade that patched only
 // work_unit_investments would be silently shadowed by that empty-tier row.
 // This test evaluates the SAME boolean expression compileSankeyCoverage
-// builds (cmd/query-api/internal/analytics/sankeycoverage.go:190) directly
+// builds (internal/queryapi/analytics/sankeycoverage.go:190) directly
 // against the written rows, so a regression that reintroduces the shadow
 // fails HERE, not only in a manual Sankey read.
 func TestRepoHierarchyCascadeEndToEnd(t *testing.T) {

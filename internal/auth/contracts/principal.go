@@ -259,7 +259,7 @@ type Delegation struct {
 //     separate role/action namespace resolved against CURRENT state.
 //
 // The existing effective-principal envelope
-// (cmd/query-api/internal/principal/claims.go) carries all four today. It is
+// (internal/queryapi/principal/claims.go) carries all four today. It is
 // the compatibility implementation this migration retires; a reader diffing
 // against it will find four things "missing", and the absence is the design.
 type Principal struct {

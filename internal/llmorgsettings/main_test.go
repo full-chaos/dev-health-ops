@@ -10,7 +10,7 @@ import (
 
 // realMeterReader is the ONE real OTel SDK meter reader for this whole test
 // binary run -- otel's global meter-provider delegation is a process-wide
-// sync.Once (see cmd/query-api/internal/analytics/main_test.go's own doc
+// sync.Once (see internal/queryapi/analytics/main_test.go's own doc
 // comment for the full mechanics), so every "RecordsToRealMeter" test in
 // this package must read from this same shared reader.
 var realMeterReader *sdkmetric.ManualReader

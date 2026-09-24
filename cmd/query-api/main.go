@@ -37,11 +37,11 @@ import (
 	gqlhandler "github.com/99designs/gqlgen/graphql/handler"
 	"go.opentelemetry.io/otel"
 
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/analytics"
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graph"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/platform/tracing"
 	"github.com/full-chaos/dev-health-ops/internal/platform/version"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/analytics"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph"
 )
 
 // otelServiceName is this binary's OTEL_SERVICE_NAME fallback (CHAOS-5408) --

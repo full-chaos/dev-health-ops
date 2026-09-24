@@ -28,7 +28,7 @@ func (c *capturingConn) Query(_ context.Context, query string, args ...any) (dri
 
 // TestFetchWorkGraphEdgesQueryShapeHasArgMaxCollapse pins the CHAOS-4985
 // follow-up fix (codex round 2 on #2186, P3) directly at the query-shape
-// level -- mirroring cmd/query-api/internal/workgraph/workgraph_test.go's
+// level -- mirroring internal/queryapi/workgraph/workgraph_test.go's
 // TestFetchDedupedEdgeRows_QueryShapeHasArgMaxCollapse for this package's
 // own, previously-unguarded, work_graph_edges reader. A smoke test that the
 // tupled argMax collapse is actually IN the rendered query text, so a

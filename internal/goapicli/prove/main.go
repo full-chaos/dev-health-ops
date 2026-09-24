@@ -17,7 +17,7 @@
 //
 // The document digest comes from internal/goapidigest -- the same
 // function query_route.go and registrydump reach through
-// cmd/query-api/internal/digest, which forwards there. Re-implementing it
+// internal/queryapi/digest, which forwards there. Re-implementing it
 // here would be exactly the two-copies drift CHAOS-4696 closed.
 //
 // What this command will NOT do:

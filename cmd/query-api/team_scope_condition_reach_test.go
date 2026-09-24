@@ -24,17 +24,17 @@ import (
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/authctx"
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/drilldown"
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/explain"
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/heatmap"
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/home"
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/investment"
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/investmentexplain"
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/investmentflow"
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/opportunities"
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/sankey"
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/teamscope"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/drilldown"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/explain"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/heatmap"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/home"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/investment"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/investmentexplain"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/investmentflow"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/opportunities"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/sankey"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
 
 const (

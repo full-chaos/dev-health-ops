@@ -23,8 +23,8 @@
       "operation": "throughputForecast",
       "two_plane_ops_sha": "33ebad6b2d1747302667fb14902dafaa1bdf99ea",
       "guards": [
-        {"file": "cmd/query-api/internal/throughputforecast/kernel_golden_test.go", "test": "TestForecastThroughputCapacityMatchesLivePythonBitExact"},
-        {"file": "cmd/query-api/internal/throughputforecast/kernel_golden_test.go", "test": "TestNoHistoryPayloadMatchesLivePythonBitExact"},
+        {"file": "internal/queryapi/throughputforecast/kernel_golden_test.go", "test": "TestForecastThroughputCapacityMatchesLivePythonBitExact"},
+        {"file": "internal/queryapi/throughputforecast/kernel_golden_test.go", "test": "TestNoHistoryPayloadMatchesLivePythonBitExact"},
         {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_retained_oracles_exist_and_have_no_production_importer"}
       ]
     },
@@ -32,8 +32,8 @@
       "operation": "operatingReview",
       "two_plane_ops_sha": "12a6fa86fb59f2c6fe3aeec0ca44d040fc9e216f",
       "guards": [
-        {"file": "cmd/query-api/internal/operatingreview/operatingreview_golden_test.go", "test": "TestOperatingReviewMatchesTheFrozenGolden"},
-        {"file": "cmd/query-api/internal/operatingreview/operatingreview_test.go", "test": "TestSumAvgMaxMin_SkipNilLikePythonNone"},
+        {"file": "internal/queryapi/operatingreview/operatingreview_golden_test.go", "test": "TestOperatingReviewMatchesTheFrozenGolden"},
+        {"file": "internal/queryapi/operatingreview/operatingreview_test.go", "test": "TestSumAvgMaxMin_SkipNilLikePythonNone"},
         {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
       ]
     },
@@ -41,8 +41,8 @@
       "operation": "reviewEdges",
       "two_plane_ops_sha": "12a6fa86fb59f2c6fe3aeec0ca44d040fc9e216f",
       "guards": [
-        {"file": "cmd/query-api/internal/reviewedges/reviewedges_golden_test.go", "test": "TestReviewEdgesMatchesTheFrozenGolden"},
-        {"file": "cmd/query-api/internal/reviewedges/reviewedges_test.go", "test": "TestResolve_RepoIDsFilterBindsWhenProvided"},
+        {"file": "internal/queryapi/reviewedges/reviewedges_golden_test.go", "test": "TestReviewEdgesMatchesTheFrozenGolden"},
+        {"file": "internal/queryapi/reviewedges/reviewedges_test.go", "test": "TestResolve_RepoIDsFilterBindsWhenProvided"},
         {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
       ]
     },
@@ -50,8 +50,8 @@
       "operation": "featureFlags",
       "two_plane_ops_sha": "12a6fa86fb59f2c6fe3aeec0ca44d040fc9e216f",
       "guards": [
-        {"file": "cmd/query-api/internal/featureflags/featureflags_golden_test.go", "test": "TestFeatureFlagResolversMatchTheFrozenGolden"},
-        {"file": "cmd/query-api/internal/featureflags/featureflags_test.go", "test": "TestResolve_MissingTableDegradesInsteadOfErroring"},
+        {"file": "internal/queryapi/featureflags/featureflags_golden_test.go", "test": "TestFeatureFlagResolversMatchTheFrozenGolden"},
+        {"file": "internal/queryapi/featureflags/featureflags_test.go", "test": "TestResolve_MissingTableDegradesInsteadOfErroring"},
         {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
       ]
     },
@@ -59,8 +59,8 @@
       "operation": "featureFlagEvents",
       "two_plane_ops_sha": "12a6fa86fb59f2c6fe3aeec0ca44d040fc9e216f",
       "guards": [
-        {"file": "cmd/query-api/internal/featureflags/featureflags_golden_test.go", "test": "TestFeatureFlagResolversMatchTheFrozenGolden"},
-        {"file": "cmd/query-api/internal/featureflags/events_test.go", "test": "TestResolveEvents_MissingTableDegradesInsteadOfErroring"},
+        {"file": "internal/queryapi/featureflags/featureflags_golden_test.go", "test": "TestFeatureFlagResolversMatchTheFrozenGolden"},
+        {"file": "internal/queryapi/featureflags/events_test.go", "test": "TestResolveEvents_MissingTableDegradesInsteadOfErroring"},
         {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
       ]
     },
@@ -68,8 +68,8 @@
       "operation": "complexityTimeseries",
       "two_plane_ops_sha": "12a6fa86fb59f2c6fe3aeec0ca44d040fc9e216f",
       "guards": [
-        {"file": "cmd/query-api/internal/complexitytimeseries/complexitytimeseries_golden_test.go", "test": "TestComplexityTimeseriesMatchesTheFrozenGolden"},
-        {"file": "cmd/query-api/internal/complexitytimeseries/complexitytimeseries_test.go", "test": "TestPyWeekday_MatchesPythonConvention"},
+        {"file": "internal/queryapi/complexitytimeseries/complexitytimeseries_golden_test.go", "test": "TestComplexityTimeseriesMatchesTheFrozenGolden"},
+        {"file": "internal/queryapi/complexitytimeseries/complexitytimeseries_test.go", "test": "TestPyWeekday_MatchesPythonConvention"},
         {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
       ]
     },
@@ -77,8 +77,8 @@
       "operation": "hotspots",
       "two_plane_ops_sha": "12a6fa86fb59f2c6fe3aeec0ca44d040fc9e216f",
       "guards": [
-        {"file": "cmd/query-api/internal/hotspots/hotspots_golden_test.go", "test": "TestHotspotsMatchesTheFrozenGolden"},
-        {"file": "cmd/query-api/internal/hotspots/hotspots_test.go", "test": "TestQuotePython_MatchesPythonQuoteDefaultSafeSet"},
+        {"file": "internal/queryapi/hotspots/hotspots_golden_test.go", "test": "TestHotspotsMatchesTheFrozenGolden"},
+        {"file": "internal/queryapi/hotspots/hotspots_test.go", "test": "TestQuotePython_MatchesPythonQuoteDefaultSafeSet"},
         {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
       ]
     },
@@ -86,8 +86,8 @@
       "operation": "cognitiveLoad",
       "two_plane_ops_sha": "12a6fa86fb59f2c6fe3aeec0ca44d040fc9e216f",
       "guards": [
-        {"file": "cmd/query-api/internal/cognitiveload/cognitiveload_golden_test.go", "test": "TestCognitiveLoadMatchesTheFrozenGolden"},
-        {"file": "cmd/query-api/internal/cognitiveload/cognitiveload_test.go", "test": "TestResolve_TeamAndRepoCombined_OwnedByADifferentTeam_NeverPatternFallback_ReturnsEmpty"},
+        {"file": "internal/queryapi/cognitiveload/cognitiveload_golden_test.go", "test": "TestCognitiveLoadMatchesTheFrozenGolden"},
+        {"file": "internal/queryapi/cognitiveload/cognitiveload_test.go", "test": "TestResolve_TeamAndRepoCombined_OwnedByADifferentTeam_NeverPatternFallback_ReturnsEmpty"},
         {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
       ]
     },
@@ -95,8 +95,8 @@
       "operation": "pr",
       "two_plane_ops_sha": "12a6fa86fb59f2c6fe3aeec0ca44d040fc9e216f",
       "guards": [
-        {"file": "cmd/query-api/internal/graph/pr_golden_test.go", "test": "TestPrMatchesTheFrozenGolden"},
-        {"file": "cmd/query-api/internal/workgraph/pr_test.go", "test": "TestParsePRDetailID"},
+        {"file": "internal/queryapi/graph/pr_golden_test.go", "test": "TestPrMatchesTheFrozenGolden"},
+        {"file": "internal/queryapi/workgraph/pr_test.go", "test": "TestParsePRDetailID"},
         {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
       ]
     },
@@ -104,8 +104,8 @@
       "operation": "catalogValues",
       "two_plane_ops_sha": "fb24ec18c004798b1e99e1907f80fafe0dd12f25",
       "guards": [
-        {"file": "cmd/query-api/internal/analytics/catalog_golden_test.go", "test": "TestCatalogMatchesTheFrozenGolden"},
-        {"file": "cmd/query-api/internal/analytics/catalog_test.go", "test": "TestCanonicalRepositoryValues"},
+        {"file": "internal/queryapi/analytics/catalog_golden_test.go", "test": "TestCatalogMatchesTheFrozenGolden"},
+        {"file": "internal/queryapi/analytics/catalog_test.go", "test": "TestCanonicalRepositoryValues"},
         {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
       ]
     },
@@ -113,8 +113,8 @@
       "operation": "acrRepositoryScopes",
       "two_plane_ops_sha": "fb24ec18c004798b1e99e1907f80fafe0dd12f25",
       "guards": [
-        {"file": "cmd/query-api/internal/analytics/catalog_golden_test.go", "test": "TestCatalogMatchesTheFrozenGolden"},
-        {"file": "cmd/query-api/internal/analytics/catalog_test.go", "test": "TestCanonicalRepositoryValues"},
+        {"file": "internal/queryapi/analytics/catalog_golden_test.go", "test": "TestCatalogMatchesTheFrozenGolden"},
+        {"file": "internal/queryapi/analytics/catalog_test.go", "test": "TestCanonicalRepositoryValues"},
         {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
       ]
     },
@@ -122,8 +122,8 @@
       "operation": "busFactor",
       "two_plane_ops_sha": "fb24ec18c004798b1e99e1907f80fafe0dd12f25",
       "guards": [
-        {"file": "cmd/query-api/internal/busfactor/busfactor_golden_test.go", "test": "TestBusFactorMatchesTheFrozenGolden"},
-        {"file": "cmd/query-api/internal/busfactor/busfactor_test.go", "test": "TestTiebreaks_DoNotDependOnRowOrder"},
+        {"file": "internal/queryapi/busfactor/busfactor_golden_test.go", "test": "TestBusFactorMatchesTheFrozenGolden"},
+        {"file": "internal/queryapi/busfactor/busfactor_test.go", "test": "TestTiebreaks_DoNotDependOnRowOrder"},
         {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
       ]
     },
@@ -131,8 +131,8 @@
       "operation": "securityOverview",
       "two_plane_ops_sha": "fb24ec18c004798b1e99e1907f80fafe0dd12f25",
       "guards": [
-        {"file": "cmd/query-api/internal/security/secoverview_golden_test.go", "test": "TestSecurityOverviewMatchesTheFrozenGolden"},
-        {"file": "cmd/query-api/internal/security/security_test.go", "test": "TestResolveOverview_ParsesAndScopes"},
+        {"file": "internal/queryapi/security/secoverview_golden_test.go", "test": "TestSecurityOverviewMatchesTheFrozenGolden"},
+        {"file": "internal/queryapi/security/security_test.go", "test": "TestResolveOverview_ParsesAndScopes"},
         {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_symbols_are_not_redefined"}
       ]
     },
@@ -140,8 +140,8 @@
       "operation": "workGraphEdges",
       "two_plane_ops_sha": "9b218f69f10796bfb747a1e0301edf5c29c4ba40",
       "guards": [
-        {"file": "cmd/query-api/internal/workgraph/workgraph_golden_test.go", "test": "TestWorkGraphResolversMatchTheFrozenGolden"},
-        {"file": "cmd/query-api/internal/workgraph/workgraph_test.go", "test": "TestFetchDedupedEdgeRows_QueryShapeHasArgMaxCollapse"},
+        {"file": "internal/queryapi/workgraph/workgraph_golden_test.go", "test": "TestWorkGraphResolversMatchTheFrozenGolden"},
+        {"file": "internal/queryapi/workgraph/workgraph_test.go", "test": "TestFetchDedupedEdgeRows_QueryShapeHasArgMaxCollapse"},
         {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
       ]
     },
@@ -149,8 +149,8 @@
       "operation": "workGraphFlow",
       "two_plane_ops_sha": "9b218f69f10796bfb747a1e0301edf5c29c4ba40",
       "guards": [
-        {"file": "cmd/query-api/internal/workgraph/workgraph_golden_test.go", "test": "TestWorkGraphResolversMatchTheFrozenGolden"},
-        {"file": "cmd/query-api/internal/workgraph/flow_test.go", "test": "TestResolveFlow_AggregatesInflowAndOutflowPerNodeType"},
+        {"file": "internal/queryapi/workgraph/workgraph_golden_test.go", "test": "TestWorkGraphResolversMatchTheFrozenGolden"},
+        {"file": "internal/queryapi/workgraph/flow_test.go", "test": "TestResolveFlow_AggregatesInflowAndOutflowPerNodeType"},
         {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
       ]
     },
@@ -158,8 +158,8 @@
       "operation": "workGraphArtifacts",
       "two_plane_ops_sha": "9b218f69f10796bfb747a1e0301edf5c29c4ba40",
       "guards": [
-        {"file": "cmd/query-api/internal/workgraph/workgraph_golden_test.go", "test": "TestWorkGraphResolversMatchTheFrozenGolden"},
-        {"file": "cmd/query-api/internal/workgraph/artifacts_evidence_tiebreak_integration_test.go", "test": "TestResolveArtifactsEvidenceMatchesPythonReaderLiteral"},
+        {"file": "internal/queryapi/workgraph/workgraph_golden_test.go", "test": "TestWorkGraphResolversMatchTheFrozenGolden"},
+        {"file": "internal/queryapi/workgraph/artifacts_evidence_tiebreak_integration_test.go", "test": "TestResolveArtifactsEvidenceMatchesPythonReaderLiteral"},
         {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
       ]
     },
@@ -167,8 +167,8 @@
       "operation": "releaseImpact",
       "two_plane_ops_sha": "9b218f69f10796bfb747a1e0301edf5c29c4ba40",
       "guards": [
-        {"file": "cmd/query-api/internal/workgraph/workgraph_golden_test.go", "test": "TestWorkGraphResolversMatchTheFrozenGolden"},
-        {"file": "cmd/query-api/internal/workgraph/workgraph_test.go", "test": "TestFetchDedupedEdgeRows_QueryShapeHasArgMaxCollapse"},
+        {"file": "internal/queryapi/workgraph/workgraph_golden_test.go", "test": "TestWorkGraphResolversMatchTheFrozenGolden"},
+        {"file": "internal/queryapi/workgraph/workgraph_test.go", "test": "TestFetchDedupedEdgeRows_QueryShapeHasArgMaxCollapse"},
         {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
       ]
     },
@@ -176,8 +176,8 @@
       "operation": "experiments",
       "two_plane_ops_sha": "fe2e37171c7c6f76a182328359796fcc6d76034a",
       "guards": [
-        {"file": "cmd/query-api/internal/experiments/experiments_golden_test.go", "test": "TestExperimentsMatchesTheFrozenGolden"},
-        {"file": "cmd/query-api/internal/experiments/experiments_test.go", "test": "TestStableID_MatchesTheReferenceDigest"},
+        {"file": "internal/queryapi/experiments/experiments_golden_test.go", "test": "TestExperimentsMatchesTheFrozenGolden"},
+        {"file": "internal/queryapi/experiments/experiments_test.go", "test": "TestStableID_MatchesTheReferenceDigest"},
         {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_symbols_are_not_redefined"}
       ]
     },
@@ -185,8 +185,8 @@
       "operation": "aiOpportunities",
       "two_plane_ops_sha": "9d6512ef7ee24aaac9c293f7fdbb5ea52c36dab6",
       "guards": [
-        {"file": "cmd/query-api/internal/aianalytics/oracle_d_test.go", "test": "TestOpportunityDetectors_MatchPythonDetectors"},
-        {"file": "cmd/query-api/internal/aianalytics/statements_d_test.go", "test": "TestDetectorStatements_ApplyScopeAndWindow"},
+        {"file": "internal/queryapi/aianalytics/oracle_d_test.go", "test": "TestOpportunityDetectors_MatchPythonDetectors"},
+        {"file": "internal/queryapi/aianalytics/statements_d_test.go", "test": "TestDetectorStatements_ApplyScopeAndWindow"},
         {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_symbols_are_not_redefined"}
       ]
     },
@@ -194,8 +194,8 @@
       "operation": "productTelemetryDashboard",
       "two_plane_ops_sha": "1653f5066af107acfc0f32de97727d734f2090c2",
       "guards": [
-        {"file": "cmd/query-api/internal/producttelemetry/dashboard_golden_test.go", "test": "TestOrgDashboardMatchesTheFrozenGolden"},
-        {"file": "cmd/query-api/internal/producttelemetry/producttelemetry_test.go", "test": "TestOrgDashboard_ScopeBindingsAndMapping"},
+        {"file": "internal/queryapi/producttelemetry/dashboard_golden_test.go", "test": "TestOrgDashboardMatchesTheFrozenGolden"},
+        {"file": "internal/queryapi/producttelemetry/producttelemetry_test.go", "test": "TestOrgDashboard_ScopeBindingsAndMapping"},
         {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_symbols_are_not_redefined"}
       ]
     },
@@ -203,8 +203,8 @@
       "operation": "testopsRisk",
       "two_plane_ops_sha": "f33a0ce94a7ca22eca8b5c635bb22d501d0ba744",
       "guards": [
-        {"file": "cmd/query-api/internal/testopsrisk/testopsrisk_test.go", "test": "TestResolve_MatchesPythonCells"},
-        {"file": "cmd/query-api/internal/testopsrisk/testopsrisk_test.go", "test": "TestResolve_ScopesEveryStatement"},
+        {"file": "internal/queryapi/testopsrisk/testopsrisk_test.go", "test": "TestResolve_MatchesPythonCells"},
+        {"file": "internal/queryapi/testopsrisk/testopsrisk_test.go", "test": "TestResolve_ScopesEveryStatement"},
         {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
       ]
     },
@@ -212,7 +212,7 @@
       "operation": "savedReports",
       "unproven_reason": "production holds no saved reports, so the data-bearing savedReports cases answered empty on both planes (vacuous_empty_legs) and only the empty-page cases matched; no two-plane run compared a leaf; record deploy-156/r156/r155g/prove-report-step155.json",
       "guards": [
-        {"file": "cmd/query-api/internal/reports/reports_test.go", "test": "TestList_StatementsAndArguments"},
+        {"file": "internal/queryapi/reports/reports_test.go", "test": "TestList_StatementsAndArguments"},
         {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_symbols_are_not_redefined"}
       ]
     },
@@ -220,7 +220,7 @@
       "operation": "savedReport",
       "unproven_reason": "production holds no saved report to name and the operation was not routed to Go in the last two-plane run (operation_not_routed_to_go), so no two-plane run compared any leaf; record deploy-156/r156/r155g/prove-report-step155.json",
       "guards": [
-        {"file": "cmd/query-api/internal/reports/reports_test.go", "test": "TestGet_StatementIdNormalizedAndOrgBound"},
+        {"file": "internal/queryapi/reports/reports_test.go", "test": "TestGet_StatementIdNormalizedAndOrgBound"},
         {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_symbols_are_not_redefined"}
       ]
     },
@@ -228,7 +228,7 @@
       "operation": "reportRuns",
       "unproven_reason": "production holds no saved report to name and the operation was not routed to Go in the last two-plane run (operation_not_routed_to_go), so no two-plane run compared any leaf; record deploy-156/r156/r155g/prove-report-step155.json",
       "guards": [
-        {"file": "cmd/query-api/internal/reports/reports_test.go", "test": "TestRuns_StatementsAndMapping"},
+        {"file": "internal/queryapi/reports/reports_test.go", "test": "TestRuns_StatementsAndMapping"},
         {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_symbols_are_not_redefined"}
       ]
     },
@@ -236,8 +236,8 @@
       "operation": "productTelemetryPlatformDashboard",
       "unproven_reason": "platform-admin-only route (a superuser, not impersonating): the viewer principal the production prover mints can never run it, so no two-plane run at a production build compared any leaf; enabled on the venue run as an admin at the same build (receipt sha256 prefix 27c03ff9, both executed requests matched) and the Go route's own authorization decision table",
       "guards": [
-        {"file": "cmd/query-api/internal/producttelemetry/producttelemetry_test.go", "test": "TestPlatform_NoOrgPredicateAndAssembly"},
-        {"file": "cmd/query-api/internal/producttelemetry/producttelemetry_test.go", "test": "TestRequirePlatformAdmin_DecisionTable"},
+        {"file": "internal/queryapi/producttelemetry/producttelemetry_test.go", "test": "TestPlatform_NoOrgPredicateAndAssembly"},
+        {"file": "internal/queryapi/producttelemetry/producttelemetry_test.go", "test": "TestRequirePlatformAdmin_DecisionTable"},
         {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_symbols_are_not_redefined"}
       ]
     },
@@ -245,8 +245,8 @@
       "operation": "compoundingRisk",
       "two_plane_ops_sha": "8b08058f369cbe5415ebebb282c4fed5fac266c5",
       "guards": [
-        {"file": "cmd/query-api/internal/compoundingrisk/resolve_test.go", "test": "TestTeamPoints_MatchesPythonCells"},
-        {"file": "cmd/query-api/internal/compoundingrisk/compoundingrisk_integration_test.go", "test": "TestRealClickHouse_RepoBreakout"},
+        {"file": "internal/queryapi/compoundingrisk/resolve_test.go", "test": "TestTeamPoints_MatchesPythonCells"},
+        {"file": "internal/queryapi/compoundingrisk/compoundingrisk_integration_test.go", "test": "TestRealClickHouse_RepoBreakout"},
         {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
       ]
     },
@@ -254,7 +254,7 @@
       "operation": "aiImpactSummary",
       "two_plane_ops_sha": "9b218f69f10796bfb747a1e0301edf5c29c4ba40",
       "guards": [
-        {"file": "cmd/query-api/internal/aianalytics/oracle_test.go", "test": "TestResolvers_MatchPythonResolvers"},
+        {"file": "internal/queryapi/aianalytics/oracle_test.go", "test": "TestResolvers_MatchPythonResolvers"},
         {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_symbols_are_not_redefined"}
       ]
     },
@@ -262,7 +262,7 @@
       "operation": "aiComparison",
       "two_plane_ops_sha": "9b218f69f10796bfb747a1e0301edf5c29c4ba40",
       "guards": [
-        {"file": "cmd/query-api/internal/aianalytics/oracle_test.go", "test": "TestResolvers_MatchPythonResolvers"},
+        {"file": "internal/queryapi/aianalytics/oracle_test.go", "test": "TestResolvers_MatchPythonResolvers"},
         {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_symbols_are_not_redefined"}
       ]
     },
@@ -270,7 +270,7 @@
       "operation": "aiReviewLoad",
       "two_plane_ops_sha": "9b218f69f10796bfb747a1e0301edf5c29c4ba40",
       "guards": [
-        {"file": "cmd/query-api/internal/aianalytics/oracle_test.go", "test": "TestResolvers_MatchPythonResolvers"},
+        {"file": "internal/queryapi/aianalytics/oracle_test.go", "test": "TestResolvers_MatchPythonResolvers"},
         {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_symbols_are_not_redefined"}
       ]
     },
@@ -278,7 +278,7 @@
       "operation": "aiRiskBreakdown",
       "two_plane_ops_sha": "9b218f69f10796bfb747a1e0301edf5c29c4ba40",
       "guards": [
-        {"file": "cmd/query-api/internal/aianalytics/oracle_b_test.go", "test": "TestGroupB_MatchPythonResolvers"},
+        {"file": "internal/queryapi/aianalytics/oracle_b_test.go", "test": "TestGroupB_MatchPythonResolvers"},
         {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_symbols_are_not_redefined"}
       ]
     },
@@ -286,7 +286,7 @@
       "operation": "aiAttributedPrs",
       "two_plane_ops_sha": "9b218f69f10796bfb747a1e0301edf5c29c4ba40",
       "guards": [
-        {"file": "cmd/query-api/internal/aianalytics/oracle_b_test.go", "test": "TestGroupB_MatchPythonResolvers"},
+        {"file": "internal/queryapi/aianalytics/oracle_b_test.go", "test": "TestGroupB_MatchPythonResolvers"},
         {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_symbols_are_not_redefined"}
       ]
     },
@@ -294,7 +294,7 @@
       "operation": "aiAttributionOverview",
       "two_plane_ops_sha": "9b218f69f10796bfb747a1e0301edf5c29c4ba40",
       "guards": [
-        {"file": "cmd/query-api/internal/aianalytics/oracle_b_test.go", "test": "TestGroupB_MatchPythonResolvers"},
+        {"file": "internal/queryapi/aianalytics/oracle_b_test.go", "test": "TestGroupB_MatchPythonResolvers"},
         {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_symbols_are_not_redefined"}
       ]
     },
@@ -302,7 +302,7 @@
       "operation": "aiGovernanceSummary",
       "two_plane_ops_sha": "9d6512ef7ee24aaac9c293f7fdbb5ea52c36dab6",
       "guards": [
-        {"file": "cmd/query-api/internal/aianalytics/oracle_c_test.go", "test": "TestGroupC_MatchPythonResolvers"},
+        {"file": "internal/queryapi/aianalytics/oracle_c_test.go", "test": "TestGroupC_MatchPythonResolvers"},
         {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_symbols_are_not_redefined"}
       ]
     },
@@ -310,7 +310,7 @@
       "operation": "aiWorkflowDrilldown",
       "two_plane_ops_sha": "9d6512ef7ee24aaac9c293f7fdbb5ea52c36dab6",
       "guards": [
-        {"file": "cmd/query-api/internal/aianalytics/oracle_c_test.go", "test": "TestGroupC_MatchPythonResolvers"},
+        {"file": "internal/queryapi/aianalytics/oracle_c_test.go", "test": "TestGroupC_MatchPythonResolvers"},
         {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_symbols_are_not_redefined"}
       ]
     },
@@ -318,8 +318,8 @@
       "operation": "securityAlerts",
       "two_plane_ops_sha": "9d6512ef7ee24aaac9c293f7fdbb5ea52c36dab6",
       "guards": [
-        {"file": "cmd/query-api/internal/security/security_test.go", "test": "TestBuildFilter_Enumeration"},
-        {"file": "cmd/query-api/internal/security/security_integration_test.go", "test": "TestRealClickHouse_Alerts"},
+        {"file": "internal/queryapi/security/security_test.go", "test": "TestBuildFilter_Enumeration"},
+        {"file": "internal/queryapi/security/security_integration_test.go", "test": "TestRealClickHouse_Alerts"},
         {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
       ]
     },
@@ -327,8 +327,8 @@
       "operation": "improveOpportunities",
       "two_plane_ops_sha": "9d6512ef7ee24aaac9c293f7fdbb5ea52c36dab6",
       "guards": [
-        {"file": "cmd/query-api/internal/aianalytics/oracle_d_test.go", "test": "TestOpportunityDetectors_MatchPythonDetectors"},
-        {"file": "cmd/query-api/internal/aianalytics/integration_d_test.go", "test": "TestRealClickHouse_AIDetectors"},
+        {"file": "internal/queryapi/aianalytics/oracle_d_test.go", "test": "TestOpportunityDetectors_MatchPythonDetectors"},
+        {"file": "internal/queryapi/aianalytics/integration_d_test.go", "test": "TestRealClickHouse_AIDetectors"},
         {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
       ]
     },
@@ -336,8 +336,8 @@
       "operation": "workUnitTeamAttributions",
       "two_plane_ops_sha": "22e1e8c5fe1e729f057e3c231a3db0c807658da5",
       "guards": [
-        {"file": "cmd/query-api/internal/workgraph/teamattribution_test.go", "test": "TestResolveWorkUnitTeamAttributions_QueryShape"},
-        {"file": "cmd/query-api/internal/workgraph/teamattribution_integration_test.go", "test": "TestResolveWorkUnitTeamAttributions_SourcePrecedenceAndShapeRealEngine"},
+        {"file": "internal/queryapi/workgraph/teamattribution_test.go", "test": "TestResolveWorkUnitTeamAttributions_QueryShape"},
+        {"file": "internal/queryapi/workgraph/teamattribution_integration_test.go", "test": "TestResolveWorkUnitTeamAttributions_SourcePrecedenceAndShapeRealEngine"},
         {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_symbols_are_not_redefined"}
       ]
     },
@@ -346,8 +346,8 @@
       "two_plane_ops_sha": "84828635426669a9e45901edb04923449c6f930e",
       "enable_limit": "admin-only route (role admin, owner or operator, or a superuser): the viewer principal the production prover mints can never run it, so no proof run can be recorded at a production build; enabled on the venue run as an admin at the same build (receipt sha256 prefix 27c03ff9) and the Go route's own authorization decision table",
       "guards": [
-        {"file": "cmd/query-api/internal/datahealth/datahealth_test.go", "test": "TestConnectorFailureDecisionTable"},
-        {"file": "cmd/query-api/internal/datahealth/datahealth_test.go", "test": "TestConnectorsReadsTheAuthorizedOrgAndMapsRows"},
+        {"file": "internal/queryapi/datahealth/datahealth_test.go", "test": "TestConnectorFailureDecisionTable"},
+        {"file": "internal/queryapi/datahealth/datahealth_test.go", "test": "TestConnectorsReadsTheAuthorizedOrgAndMapsRows"},
         {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
       ]
     },
@@ -356,8 +356,8 @@
       "two_plane_ops_sha": "84828635426669a9e45901edb04923449c6f930e",
       "enable_limit": "admin-only route (role admin, owner or operator, or a superuser): the viewer principal the production prover mints can never run it, so no proof run can be recorded at a production build; enabled on the venue run as an admin at the same build (receipt sha256 prefix 27c03ff9) and the Go route's own authorization decision table",
       "guards": [
-        {"file": "cmd/query-api/internal/datahealth/datahealth_test.go", "test": "TestIdentityMapping"},
-        {"file": "cmd/query-api/internal/datahealth/datahealth_test.go", "test": "TestIdentityMappingTeamScopesTheMappedSet"},
+        {"file": "internal/queryapi/datahealth/datahealth_test.go", "test": "TestIdentityMapping"},
+        {"file": "internal/queryapi/datahealth/datahealth_test.go", "test": "TestIdentityMappingTeamScopesTheMappedSet"},
         {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
       ]
     },
@@ -366,7 +366,7 @@
       "two_plane_ops_sha": "84828635426669a9e45901edb04923449c6f930e",
       "enable_limit": "admin-only route (role admin, owner or operator, or a superuser): the viewer principal the production prover mints can never run it, so no proof run can be recorded at a production build; enabled on the venue run as an admin at the same build (receipt sha256 prefix 27c03ff9) and the Go route's own authorization decision table",
       "guards": [
-        {"file": "cmd/query-api/internal/datahealth/datahealth_test.go", "test": "TestCoverageStat"},
+        {"file": "internal/queryapi/datahealth/datahealth_test.go", "test": "TestCoverageStat"},
         {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
       ]
     },
@@ -375,7 +375,7 @@
       "two_plane_ops_sha": "84828635426669a9e45901edb04923449c6f930e",
       "enable_limit": "admin-only route (role admin, owner or operator, or a superuser): the viewer principal the production prover mints can never run it, so no proof run can be recorded at a production build; enabled on the venue run as an admin at the same build (receipt sha256 prefix 27c03ff9) and the Go route's own authorization decision table",
       "guards": [
-        {"file": "cmd/query-api/internal/datahealth/datahealth_test.go", "test": "TestMetricLineage"},
+        {"file": "internal/queryapi/datahealth/datahealth_test.go", "test": "TestMetricLineage"},
         {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
       ]
     },
@@ -383,8 +383,8 @@
       "operation": "investmentBreakdown",
       "two_plane_ops_sha": "84828635426669a9e45901edb04923449c6f930e",
       "guards": [
-        {"file": "cmd/query-api/internal/analytics/resolve_test.go", "test": "TestResolve_Investment_ResolvesEndToEnd"},
-        {"file": "cmd/query-api/internal/analytics/breakdown_seeded_integration_test.go", "test": "TestCompileBreakdown_ThemeCount_SeededRealClickHouse_ExactAggregate"},
+        {"file": "internal/queryapi/analytics/resolve_test.go", "test": "TestResolve_Investment_ResolvesEndToEnd"},
+        {"file": "internal/queryapi/analytics/breakdown_seeded_integration_test.go", "test": "TestCompileBreakdown_ThemeCount_SeededRealClickHouse_ExactAggregate"},
         {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
       ]
     },
@@ -392,8 +392,8 @@
       "operation": "investmentFull",
       "two_plane_ops_sha": "84828635426669a9e45901edb04923449c6f930e",
       "guards": [
-        {"file": "cmd/query-api/internal/analytics/resolve_test.go", "test": "TestResolve_Investment_EvidenceQualityStats_PopulatedWhenUseInvestmentTrue"},
-        {"file": "cmd/query-api/internal/analytics/sankeycoverage_seeded_integration_test.go", "test": "TestResolveSankeyCoverage_SeededRealClickHouse_ExactShares"},
+        {"file": "internal/queryapi/analytics/resolve_test.go", "test": "TestResolve_Investment_EvidenceQualityStats_PopulatedWhenUseInvestmentTrue"},
+        {"file": "internal/queryapi/analytics/sankeycoverage_seeded_integration_test.go", "test": "TestResolveSankeyCoverage_SeededRealClickHouse_ExactShares"},
         {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
       ]
     },
@@ -401,8 +401,8 @@
       "operation": "flowMatrix",
       "two_plane_ops_sha": "84828635426669a9e45901edb04923449c6f930e",
       "guards": [
-        {"file": "cmd/query-api/internal/analytics/resolve_test.go", "test": "TestResolve_FlowMatrix_RealClientShape_BatchUseInvestmentTrueDoesNotReject"},
-        {"file": "cmd/query-api/internal/analytics/flowmatrix_worktype_final_seeded_integration_test.go", "test": "TestFlowMatrixWorkType_FinalExcludesSupersededCycleTimeVersions"},
+        {"file": "internal/queryapi/analytics/resolve_test.go", "test": "TestResolve_FlowMatrix_RealClientShape_BatchUseInvestmentTrueDoesNotReject"},
+        {"file": "internal/queryapi/analytics/flowmatrix_worktype_final_seeded_integration_test.go", "test": "TestFlowMatrixWorkType_FinalExcludesSupersededCycleTimeVersions"},
         {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
       ]
     },
@@ -410,8 +410,8 @@
       "operation": "featureFlagTimeseries",
       "unproven_reason": "two-plane run at build 84828635 (the last build with a Python analytics leg) in a seeded org: 4 of 5 cases differ only inside declared defect CHAOS-6149 (0 outside) and 1 case is refused by the corpus Tier-B declaration on buckets.value, so no case is a plain match; no Python leg exists after the analytics deletion, so the row stays a named limit; enabled canary 100 by the acknowledgement (chris, option c) 2026-09-20T23:40Z; record deploy-154/r154/ladder-featureFlagTimeseries/enable.md",
       "guards": [
-        {"file": "cmd/query-api/internal/analytics/resolve_test.go", "test": "TestResolve_HappyPath_TimeseriesAndBreakdown"},
-        {"file": "cmd/query-api/internal/analytics/timeseries_test.go", "test": "TestExecuteTimeseries_AllNullBucketYieldsNilValue_NotZero"},
+        {"file": "internal/queryapi/analytics/resolve_test.go", "test": "TestResolve_HappyPath_TimeseriesAndBreakdown"},
+        {"file": "internal/queryapi/analytics/timeseries_test.go", "test": "TestExecuteTimeseries_AllNullBucketYieldsNilValue_NotZero"},
         {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
       ]
     },
@@ -419,8 +419,8 @@
       "operation": "testOpsPipeline",
       "two_plane_ops_sha": "84828635426669a9e45901edb04923449c6f930e",
       "guards": [
-        {"file": "cmd/query-api/internal/analytics/timeseries_test.go", "test": "TestCompileTimeseries_TestopsMeasureOverridesSource"},
-        {"file": "cmd/query-api/internal/analytics/timeseries_test.go", "test": "TestExecuteTimeseries_AllNullBucketYieldsNilValue_NotZero"},
+        {"file": "internal/queryapi/analytics/timeseries_test.go", "test": "TestCompileTimeseries_TestopsMeasureOverridesSource"},
+        {"file": "internal/queryapi/analytics/timeseries_test.go", "test": "TestExecuteTimeseries_AllNullBucketYieldsNilValue_NotZero"},
         {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
       ]
     },
@@ -428,8 +428,8 @@
       "operation": "testOpsTest",
       "two_plane_ops_sha": "84828635426669a9e45901edb04923449c6f930e",
       "guards": [
-        {"file": "cmd/query-api/internal/analytics/timeseries_test.go", "test": "TestCompileTimeseries_TestopsMeasureOverridesSource"},
-        {"file": "cmd/query-api/internal/analytics/breakdown_test.go", "test": "TestExecuteBreakdown_AllNullGroupYieldsNilValue_NotZero"},
+        {"file": "internal/queryapi/analytics/timeseries_test.go", "test": "TestCompileTimeseries_TestopsMeasureOverridesSource"},
+        {"file": "internal/queryapi/analytics/breakdown_test.go", "test": "TestExecuteBreakdown_AllNullGroupYieldsNilValue_NotZero"},
         {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
       ]
     },
@@ -437,8 +437,8 @@
       "operation": "testOpsCoverage",
       "two_plane_ops_sha": "e1b1e86aeddf02ad15dedd202a08c2f1a67534e9",
       "guards": [
-        {"file": "cmd/query-api/internal/analytics/breakdown_test.go", "test": "TestCompileBreakdown_TestopsCoverageMeasure"},
-        {"file": "cmd/query-api/internal/analytics/breakdown_test.go", "test": "TestExecuteBreakdown_AllNullGroupYieldsNilValue_NotZero"},
+        {"file": "internal/queryapi/analytics/breakdown_test.go", "test": "TestCompileBreakdown_TestopsCoverageMeasure"},
+        {"file": "internal/queryapi/analytics/breakdown_test.go", "test": "TestExecuteBreakdown_AllNullGroupYieldsNilValue_NotZero"},
         {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
       ]
     }

@@ -62,10 +62,10 @@ COPY cmd/query-api ./cmd/query-api
 COPY contracts/graphql/v1 ./contracts/graphql/v1
 # CHAOS-5014: `COPY internal ./internal` IS now required -- this comment
 # used to say query-api imports nothing from the shared repo-root
-# internal/ tree (distinct from cmd/query-api/internal/, which is already
-# copied above with the rest of cmd/query-api) and that build broke the
-# moment it stopped being true. #2197 added
-# cmd/query-api/internal/investmentexplain (imported by
+# internal/ tree (query-api's own packages then lived under cmd/query-api;
+# they are now internal/queryapi/, inside this same COPY) and that build
+# broke the moment it stopped being true. #2197 added
+# investmentexplain (now internal/queryapi/investmentexplain, imported by
 # investment_explain_route.go) and it imports internal/pythonparity,
 # internal/jobs/investment/categorize, and internal/jobs/workgraph/units;
 # investment_explain_route.go itself also imports

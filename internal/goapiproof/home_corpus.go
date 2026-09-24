@@ -74,7 +74,7 @@ var homeNumericLeaves = Options{
 	// dotted-path key is index-free by construction), and it excludes the
 	// leaf from comparison ENTIRELY: it does not itself assert a wire
 	// format the way StochasticLeafClass's type/order checks would. This
-	// PR's own cmd/query-api/internal/home wire-format test is what pins
+	// PR's own internal/queryapi/home wire-format test is what pins
 	// the byte shape instead.
 	VolatileFields: map[string]string{
 		"data.events.ts": "datetime.now(timezone.utc) read fresh per request on both planes (services/home.py) -- drawn, not derived, so it cannot agree across calls, same plane or cross-plane. Ticket: CHAOS-5907",
@@ -123,7 +123,7 @@ var homeNumericLeaves = Options{
 // never verified alongside this one, so this citation stays off it.
 var homeConfidenceTierDefect = BaselineDefect{
 	Ticket: "CHAOS-5448",
-	Reason: "fetch_coverage's two work_item_cycle_times reads (api/queries/freshness.py:83-115) run raw (no FINAL) against a ReplacingMergeTree(computed_at) table whose sorting key (org_id, provider, work_item_id) does not include `day` (cmd/query-api/internal/home/queries_freshness.go:1-24, reading it FINAL) -- a physical stale/live version pair can straddle the day-window filter independently, so issues_with_cycle_states_pct, and through it data.data_confidence.coverage_pct (_coverage_pct_from_coverage's mean of three ratios, home.py:437-441), can differ between planes with no provable direction (admitted only while each leg's coverage_pct is the mean of its own three ratios, and repos_covered_pct is never admitted; no direction or magnitude is claimed). When that drift straddles the level/confidence thresholds (build_data_confidence, home.py:444-473 / BuildDataConfidence, cmd/query-api/internal/home/signals.go:261-289; _confidence_from_evidence, home.py:359-366 / signals.go:150), every downstream tier/confidence leaf is a MECHANICAL, recomputable function of its own leg's own coverage_pct/evidence_count -- HomeConfidenceTierShape verifies exactly that recomputation, never the base drift's own magnitude or direction. Go is correct.",
+	Reason: "fetch_coverage's two work_item_cycle_times reads (api/queries/freshness.py:83-115) run raw (no FINAL) against a ReplacingMergeTree(computed_at) table whose sorting key (org_id, provider, work_item_id) does not include `day` (internal/queryapi/home/queries_freshness.go:1-24, reading it FINAL) -- a physical stale/live version pair can straddle the day-window filter independently, so issues_with_cycle_states_pct, and through it data.data_confidence.coverage_pct (_coverage_pct_from_coverage's mean of three ratios, home.py:437-441), can differ between planes with no provable direction (admitted only while each leg's coverage_pct is the mean of its own three ratios, and repos_covered_pct is never admitted; no direction or magnitude is claimed). When that drift straddles the level/confidence thresholds (build_data_confidence, home.py:444-473 / BuildDataConfidence, internal/queryapi/home/signals.go:261-289; _confidence_from_evidence, home.py:359-366 / signals.go:150), every downstream tier/confidence leaf is a MECHANICAL, recomputable function of its own leg's own coverage_pct/evidence_count -- HomeConfidenceTierShape verifies exactly that recomputation, never the base drift's own magnitude or direction. Go is correct.",
 	Paths: []string{
 		"data.data_confidence.coverage_pct",
 		"data.freshness.coverage.issues_with_cycle_states_pct",
@@ -167,7 +167,7 @@ var homeConfidenceTierParity = Options{
 // api/queries/scopes.py), and in production that read has not answered within
 // 180 s on four consecutive runs; the candidate reads the team's repositories
 // from team_repo_ownership through one shared condition
-// (cmd/query-api/internal/teamscope.RepoCondition). While the reference does
+// (internal/queryapi/teamscope.RepoCondition). While the reference does
 // not answer, the team branch is admitted on the candidate's answer alone, and
 // only when the candidate held rework allocation rows (which exist only for a
 // team with work in the window) and all eleven metric deltas.

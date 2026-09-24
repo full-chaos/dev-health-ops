@@ -32,15 +32,15 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/vektah/gqlparser/v2/gqlerror"
 
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/analytics"
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/authctx"
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/digest"
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/featureflags"
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graph"
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/principal"
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/routeswitch"
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/workgraph"
 	schemav1 "github.com/full-chaos/dev-health-ops/contracts/graphql/v1"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/analytics"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/digest"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/featureflags"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/workgraph"
 )
 
 // registeredFeatureFlagsDocument is the ONE query document query-api
@@ -2101,7 +2101,7 @@ const registeredProductTelemetryPlatformDashboardDocument = `query ProductTeleme
 
 // digestHex is a thin wrapper over the ONE canonical document-digest
 // algorithm (CHAOS-4696): sha256(strings.TrimSpace(text)), hex-encoded,
-// now shared code in cmd/query-api/internal/digest so
+// now shared code in internal/queryapi/digest so
 // cmd/query-api/tools/registrydump computes the EXACT SAME digest this
 // running process does -- not a second hand-typed copy of a two-line
 // function that could silently drift from this one. (The schema-digest

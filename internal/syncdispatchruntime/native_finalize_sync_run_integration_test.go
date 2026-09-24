@@ -104,6 +104,7 @@ CREATE TABLE sync_run_post_dispatches (
 );
 CREATE TABLE sync_coverage_projections (
  org_id text NOT NULL, sync_config_id uuid NOT NULL, invalidated_at timestamptz NULL,
+ updated_at timestamptz NOT NULL DEFAULT '2000-01-01 00:00:00+00',
  PRIMARY KEY (org_id, sync_config_id)
 )`)
 	if err != nil {

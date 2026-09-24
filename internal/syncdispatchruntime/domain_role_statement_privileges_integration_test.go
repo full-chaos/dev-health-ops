@@ -479,7 +479,11 @@ func TestNativeFinalizeSyncRunExecutesEntirelyAsTheDomainRole(t *testing.T) {
 		finalizeTestSyncConfig)
 	assertSingleRow(t, ctx, admin,
 		"sync_coverage_projections invalidation",
-		`SELECT count(*) FROM sync_coverage_projections WHERE sync_config_id=$1 AND invalidated_at IS NOT NULL`,
+		// updated_at moves with invalidated_at: the Python statement is an
+		// ORM-enabled update() and the model's updated_at has
+		// onupdate=func.now().
+		`SELECT count(*) FROM sync_coverage_projections WHERE sync_config_id=$1 AND invalidated_at IS NOT NULL
+		   AND updated_at > '2000-01-01 00:00:00+00'`,
 		finalizeTestSyncConfig)
 	assertSingleRow(t, ctx, admin,
 		"post_sync outbox wakeup",

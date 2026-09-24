@@ -19,6 +19,8 @@
 // internal/goapiproof/home_corpus.go for the specific citations.
 package home
 
+import "github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+
 // Coverage is the wire shape of Coverage (schemas.py:9-12).
 type Coverage struct {
 	ReposCoveredPct          float64 `json:"repos_covered_pct"`
@@ -163,7 +165,7 @@ type Response struct {
 	Deltas                []MetricDelta           `json:"deltas"`
 	ReworkThemeAllocation []ReworkThemeAllocation `json:"rework_theme_allocation"`
 	Summary               []SummarySentence       `json:"summary"`
-	Tiles                 map[string]Tile         `json:"tiles"`
+	Tiles                 pyjson.OrderedMap[Tile] `json:"tiles"`
 	Constraint            ConstraintCard          `json:"constraint"`
 	Events                []EventItem             `json:"events"`
 	HealthState           HealthState             `json:"health_state"`

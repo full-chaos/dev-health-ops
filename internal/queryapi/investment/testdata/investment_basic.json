@@ -2,18 +2,18 @@
   "edges": [],
   "evidence_quality_distribution": {
     "high": 1.0,
-    "low": 9.0,
     "moderate": 1.0,
-    "unknown": 10.0,
-    "very_low": 3.0
+    "low": 9.0,
+    "very_low": 3.0,
+    "unknown": 10.0
   },
   "evidence_quality_stats": {
     "band_counts": {
       "high": 1,
-      "low": 9,
       "moderate": 1,
-      "unknown": 10,
-      "very_low": 3
+      "low": 9,
+      "very_low": 3,
+      "unknown": 10
     },
     "mean": 0.3,
     "quality_drivers": [

@@ -2,6 +2,7 @@ package home
 
 import (
 	"encoding/json"
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"regexp"
 	"strings"
 	"testing"
@@ -84,7 +85,7 @@ func TestHomeResponseWireDateTimeLeavesMatchPythonBytes(t *testing.T) {
 		Deltas:                []MetricDelta{},
 		ReworkThemeAllocation: []ReworkThemeAllocation{},
 		Summary:               []SummarySentence{},
-		Tiles:                 map[string]Tile{},
+		Tiles:                 pyjson.NewOrderedMap[Tile](),
 		Constraint:            ConstraintCard{Evidence: []ConstraintEvidence{}, Experiments: []string{}},
 		Events:                []EventItem{{TS: eventTS, Type: "spike", Text: "t", Link: "l"}},
 		HealthState:           HealthState{AsOf: &lastIngested},

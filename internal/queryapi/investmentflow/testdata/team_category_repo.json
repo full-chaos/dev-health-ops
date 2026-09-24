@@ -1,8 +1,8 @@
 {
   "chosen_mode": "team_category_repo",
   "coverage": {
-    "repo_coverage": 0.9,
-    "team_coverage": 0.9
+    "team_coverage": 0.9,
+    "repo_coverage": 0.9
   },
   "description": "Team burden flow with category rollups.",
   "distinct_repo_targets": 2,
@@ -94,8 +94,8 @@
   "team_coverage": 0.9,
   "top_n_repos": 1,
   "unassigned_reasons": {
-    "missing_repo": 2,
-    "missing_team": 1
+    "missing_team": 1,
+    "missing_repo": 2
   },
   "unit": null
 }

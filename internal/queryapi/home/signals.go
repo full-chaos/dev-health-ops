@@ -9,6 +9,7 @@ package home
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"regexp"
 	"sort"
 	"strconv"
@@ -609,13 +610,14 @@ func SelectConstraint(deltas []MetricDelta) MetricDelta {
 
 // tiles ports the fixed tiles map (services/home.py:1187-1208), built
 // fresh per call so no caller can mutate a shared value.
-func tiles() map[string]Tile {
-	return map[string]Tile{
-		"understand": {Title: "Understand", Subtitle: "Flow stages", Link: "/explore?view=understand"},
-		"measure":    {Title: "Measure", Subtitle: "Coverage & freshness", Link: "/explore?view=measure"},
-		"align":      {Title: "Align", Subtitle: "Investment mix", Link: "/investment"},
-		"execute":    {Title: "Execute", Subtitle: "Top opportunities", Link: "/opportunities"},
-	}
+// tiles is home.py's tiles dict, in the order Python builds it.
+func tiles() pyjson.OrderedMap[Tile] {
+	return pyjson.OrderedMapOf(
+		pyjson.KeyValue[Tile]{Key: "understand", Value: Tile{Title: "Understand", Subtitle: "Flow stages", Link: "/explore?view=understand"}},
+		pyjson.KeyValue[Tile]{Key: "measure", Value: Tile{Title: "Measure", Subtitle: "Coverage & freshness", Link: "/explore?view=measure"}},
+		pyjson.KeyValue[Tile]{Key: "align", Value: Tile{Title: "Align", Subtitle: "Investment mix", Link: "/investment"}},
+		pyjson.KeyValue[Tile]{Key: "execute", Value: Tile{Title: "Execute", Subtitle: "Top opportunities", Link: "/opportunities"}},
+	)
 }
 
 func absFloat(v float64) float64 {

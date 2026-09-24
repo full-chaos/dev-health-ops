@@ -1,8 +1,8 @@
 {
   "chosen_mode": "team_subcategory_repo",
   "coverage": {
-    "repo_coverage": 0.6666666666666666,
-    "team_coverage": 0.6666666666666666
+    "team_coverage": 0.6666666666666666,
+    "repo_coverage": 0.6666666666666666
   },
   "description": "Showing subcategories within Feature Delivery.",
   "distinct_repo_targets": 2,
@@ -89,8 +89,8 @@
   "team_coverage": 0.6666666666666666,
   "top_n_repos": 12,
   "unassigned_reasons": {
-    "missing_repo": 2,
-    "missing_team": 1
+    "missing_team": 1,
+    "missing_repo": 2
   },
   "unit": null
 }

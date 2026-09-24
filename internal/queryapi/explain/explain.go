@@ -31,6 +31,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"math"
 	"strings"
 	"time"
@@ -116,14 +117,14 @@ type Contributor struct {
 
 // Response ports api/models/schemas.py's ExplainResponse model.
 type Response struct {
-	Metric         string            `json:"metric"`
-	Label          string            `json:"label"`
-	Unit           string            `json:"unit"`
-	Value          float64           `json:"value"`
-	DeltaPct       float64           `json:"delta_pct"`
-	Drivers        []Contributor     `json:"drivers"`
-	Contributors   []Contributor     `json:"contributors"`
-	DrilldownLinks map[string]string `json:"drilldown_links"`
+	Metric         string                    `json:"metric"`
+	Label          string                    `json:"label"`
+	Unit           string                    `json:"unit"`
+	Value          float64                   `json:"value"`
+	DeltaPct       float64                   `json:"delta_pct"`
+	Drivers        []Contributor             `json:"drivers"`
+	Contributors   []Contributor             `json:"contributors"`
+	DrilldownLinks pyjson.OrderedMap[string] `json:"drilldown_links"`
 }
 
 // safeFloat ports api/utils/numeric.py's safe_float for an already-float64

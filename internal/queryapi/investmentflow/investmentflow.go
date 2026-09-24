@@ -41,6 +41,8 @@
 package investmentflow
 
 import (
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+
 	"context"
 	"errors"
 	"time"
@@ -300,11 +302,20 @@ func buildFlowModeResponse(ctx context.Context, client QueryClient, params Param
 		DistinctTeamTargets: intPtr(distinctTeamTargets),
 		DistinctRepoTargets: intPtr(distinctRepoTargets),
 		ChosenMode:          strPtr(flowMode),
-		Coverage:            map[string]float64{"team_coverage": teamCoverage, "repo_coverage": repoCoverage},
-		UnassignedReasons:   map[string]int{"missing_team": int(unassigned.MissingTeam), "missing_repo": int(unassigned.MissingRepo)},
-		FlowMode:            strPtr(flowMode),
-		DrillCategory:       drillCategoryPtr,
-		TopNRepos:           intPtr(topNRepos),
+		// investment_flow.py builds coverage as team then repo, and
+		// fetch_investment_unassigned_counts returns missing_team then
+		// missing_repo.
+		Coverage: pyjson.OrderedMapOf(
+			pyjson.KeyValue[float64]{Key: "team_coverage", Value: teamCoverage},
+			pyjson.KeyValue[float64]{Key: "repo_coverage", Value: repoCoverage},
+		),
+		UnassignedReasons: pyjson.OrderedMapOf(
+			pyjson.KeyValue[int]{Key: "missing_team", Value: int(unassigned.MissingTeam)},
+			pyjson.KeyValue[int]{Key: "missing_repo", Value: int(unassigned.MissingRepo)},
+		),
+		FlowMode:      strPtr(flowMode),
+		DrillCategory: drillCategoryPtr,
+		TopNRepos:     intPtr(topNRepos),
 	}, nil
 }
 

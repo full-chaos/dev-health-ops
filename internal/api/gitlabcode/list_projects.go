@@ -79,7 +79,7 @@ func (c Client) ListGroupProjects(ctx context.Context, group string) ([]Project,
 	root := strings.TrimRight(c.BaseURL, "/") + "/api/v4"
 	path := "/groups/" + pythonparity.Quote(group, "") + "/projects"
 	var items []pyjson.Value
-	page := 1
+	page := big.NewInt(1)
 	for pages := 0; ; pages++ {
 		if pages >= (maxItems+perPage-1)/perPage {
 			break
@@ -126,30 +126,30 @@ func (c Client) ListGroupProjects(ctx context.Context, group string) ([]Project,
 
 // nextPage is _next_page_param: a non-empty X-Next-Page read by int()
 // (a value int() refuses stops), else a short page stops, else page + 1.
-func nextPage(headers http.Header, current, count int) (int, bool) {
+// The page is an arbitrary-size integer, as Python's int is, so any page
+// number the header names is requested as its exact decimal text.
+func nextPage(headers http.Header, current *big.Int, count int) (*big.Int, bool) {
 	if values := headers.Values("X-Next-Page"); len(values) > 0 {
 		raw := strings.Join(values, ", ")
 		if raw != "" {
 			value, err := pythonparity.ParseInt(raw)
-			if err != nil || !value.IsInt64() || value.Int64() > math.MaxInt32 {
-				// A page past any real page count is a stop here; Python
-				// would request it and read an empty page (named limit).
-				return 0, false
+			if err != nil {
+				return nil, false
 			}
-			return int(value.Int64()), true
+			return value, true
 		}
 	}
 	if count < perPage {
-		return 0, false
+		return nil, false
 	}
-	return current + 1, true
+	return new(big.Int).Add(current, big.NewInt(1)), true
 }
 
 // request is InstrumentedRESTCore.request for one GET: retried in place on
 // a timeout or refused connection, on 429/500/502/503/504 and on a
 // rate-limit-qualified 403, then classified by _classify_error and
 // _raise_for_status.
-func (c Client) request(ctx context.Context, url string, page int) (*http.Response, []byte, error) {
+func (c Client) request(ctx context.Context, url string, page *big.Int) (*http.Response, []byte, error) {
 	httpClient := c.HTTP
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: timeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
@@ -158,7 +158,7 @@ func (c Client) request(ctx context.Context, url string, page int) (*http.Respon
 	if sleep == nil {
 		sleep = sleepContext
 	}
-	full := fmt.Sprintf("%s?page=%d&per_page=%d", url, page, perPage)
+	full := fmt.Sprintf("%s?page=%s&per_page=%d", url, page.String(), perPage)
 	delay := initialBackoff
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		request, err := http.NewRequestWithContext(ctx, http.MethodGet, full, nil)

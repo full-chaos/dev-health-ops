@@ -102,6 +102,12 @@ func listScenarios() []scenario {
 	add("grp", ok(two, [2]string{"X-Next-Page", "2"}), ok(`[{"id": 3, "name": "three"}]`, [2]string{"X-Next-Page", ""}))
 	add("grp", ok(two, [2]string{"X-Next-Page", " 3 "}), ok(`[{"id": 3, "name": "three"}]`))
 	add("grp", ok(two, [2]string{"X-Next-Page", "abc"}), ok(`[{"id": 3}]`))
+	// Python's int is unbounded, so any page number the header names is
+	// requested: past 32 and 64 bits, negative, zero, and int()'s own forms;
+	// a value beyond int()'s 4300-digit limit stops.
+	for _, header := range []string{"2147483648", "9223372036854775808", "123456789012345678901234567890", "-3", "0", " +0_7 ", strings.Repeat("9", 4300), strings.Repeat("9", 4301)} {
+		add("grp", ok(two, [2]string{"X-Next-Page", header}), ok(`[{"id": 3, "name": "three"}]`))
+	}
 	add("grp", ok(fullPage(0)), ok(`[]`))
 	add("grp", ok(fullPage(0)), ok(fullPage(100)), ok(two))
 	add("grp", ok(`[1, "x", null, {"id": " 7 ", "name": null, "path": "only-path"}, {"id": 3.9, "name": 5}, {"id": true, "name": [1, "a"]},

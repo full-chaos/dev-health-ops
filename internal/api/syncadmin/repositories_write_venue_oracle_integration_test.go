@@ -92,6 +92,12 @@ func fakeGitLab(t *testing.T) *httptest.Server {
 		t.Fatal(err)
 	}
 	dup := recordedGitLab{status: 200, headers: [][2]string{{"content-type", "application/json"}, {"x-next-page", ""}}, body: dupBody}
+	// A page number past 32 bits (Python's int is unbounded): the selected
+	// project is on the page the header names.
+	overflowFirst := recordedGitLab{status: 200, headers: [][2]string{{"content-type", "application/json"}, {"x-next-page", "2147483648"}},
+		body: []byte(`[{"id":1,"name":"first","path_with_namespace":"overflow/first"}]`)}
+	overflowNext := recordedGitLab{status: 200, headers: [][2]string{{"content-type", "application/json"}, {"x-next-page", ""}},
+		body: []byte(`[{"id":9,"name":"target","path_with_namespace":"overflow/target"}]`)}
 	serve := func(w http.ResponseWriter, response recordedGitLab) {
 		for _, header := range response.headers {
 			w.Header().Add(header[0], header[1])
@@ -114,6 +120,10 @@ func fakeGitLab(t *testing.T) *httptest.Server {
 			serve(w, empty)
 		case group == "dupgroup":
 			serve(w, dup)
+		case group == "overflow" && r.URL.Query().Get("page") == "2147483648":
+			serve(w, overflowNext)
+		case group == "overflow":
+			serve(w, overflowFirst)
 		default:
 			serve(w, missing)
 		}
@@ -234,6 +244,7 @@ func TestSyncConfigRepositoriesVenueOracle(t *testing.T) {
 		put("gitlab missing group", ids.cfgGL, `{"owner":"gitlab-examples/no-such-group-for-venue-test","repos":["x"]}`, a),
 		put("gitlab ids with failed listing", ids.cfgGL, `{"owner":"gitlab-examples/no-such-group-for-venue-test","repos":["31","32"]}`, a),
 		put("gitlab invalid token", ids.cfgGLInvalidToken, `{"owner":"gitlab-examples/maven","repos":["simple-maven-dep"]}`, a),
+		put("gitlab page above int32", ids.cfgGL, `{"owner":"overflow","repos":["target"]}`, a),
 		put("gitlab none", ids.cfgGL, `{"owner":"gitlab-examples/maven","repos":[]}`, a),
 		put("gitlab no credential, name", ids.cfgGLNoCred, `{"owner":"gitlab-examples/maven","repos":["simple-maven-dep"]}`, a),
 		put("gitlab no credential, ids", ids.cfgGLNoCred, `{"owner":"gitlab-examples/maven","repos":["5"," 6 "]}`, a),

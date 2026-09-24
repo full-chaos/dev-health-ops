@@ -17,9 +17,9 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/full-chaos/dev-health-ops/internal/cli"
+	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
-	"github.com/full-chaos/dev-health-ops/internal/rivermigrate"
 )
 
 // Command is the `admin` group.
@@ -112,7 +112,7 @@ func runSeed(ctx context.Context, env cli.Env) int {
 		fmt.Fprintln(env.Stderr, "argument error: positional arguments are not accepted")
 		return cli.ExitUsage
 	}
-	dsn, source, ok := rivermigrate.ResolveMigrationDatabase(env.Lookup, env.Stderr)
+	dsn, source, ok := config.ResolveMigrationDatabase(env.Lookup, env.Stderr, true)
 	if !ok {
 		return cli.ExitFailure
 	}

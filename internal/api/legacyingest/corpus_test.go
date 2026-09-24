@@ -6,8 +6,15 @@ import (
 )
 
 var (
-	strPool = []string{`"x"`, `""`, `"é"`, `"\ud800"`, `"a\u0000b"`, `1`, `1.5`, `true`, `null`, `[]`, `{}`, `"😀"`, `"` + strings.Repeat("y", 300) + `"`}
-	dtPool  = []string{`"2026-01-01T00:00:00Z"`, `"2026-01-01T00:00:00"`, `"2026-01-01"`, `"2026-01-01T00:00:00.123456+02:00"`, `"2026-01-01 00:00:00-05:30"`,
+	listPool   = []string{`[]`, `["a"]`, `["a","b","a"]`, `[1]`, `"a"`, `null`, `[null]`, `{}`, `["é","\ud800"]`}
+	reviewPool = []string{`[]`, `null`, `{}`, `"x"`, `[1]`, `[{}]`, `[{"review_id":"r1","reviewer":"u","state":"APPROVED","submitted_at":"2026-01-01T00:00:00Z"}]`,
+		`[{"review_id":1,"reviewer":"u","state":"APPROVED","submitted_at":"2026-01-01T00:00:00Z"}]`, `[{"review_id":"r","reviewer":"u","state":"S","submitted_at":"nope"},{"reviewer":"u"}]`,
+		`[{"review_id":"r","reviewer":"u","state":"S","submitted_at":1767225600,"extra":true}]`, `[{"review_id":"r","reviewer":null,"state":"S","submitted_at":null}]`}
+	providerPool = []string{`"jira"`, `"github"`, `"gitlab"`, `"linear"`, `"JIRA"`, `"bitbucket"`, `""`, `1`, `null`, `[]`, `true`}
+	typePool     = []string{`"story"`, `"task"`, `"bug"`, `"epic"`, `"issue"`, `"incident"`, `"chore"`, `"unknown"`, `"Bug"`, `"feature"`, `null`, `1`, `[]`}
+	statusPool   = []string{`"backlog"`, `"todo"`, `"in_progress"`, `"in_review"`, `"blocked"`, `"done"`, `"canceled"`, `"unknown"`, `"open"`, `"Done"`, `null`, `0`, `{}`}
+	strPool      = []string{`"x"`, `""`, `"é"`, `"\ud800"`, `"a\u0000b"`, `1`, `1.5`, `true`, `null`, `[]`, `{}`, `"😀"`, `"` + strings.Repeat("y", 300) + `"`}
+	dtPool       = []string{`"2026-01-01T00:00:00Z"`, `"2026-01-01T00:00:00"`, `"2026-01-01"`, `"2026-01-01T00:00:00.123456+02:00"`, `"2026-01-01 00:00:00-05:30"`,
 		`1767225600`, `1767225600.5`, `"1767225600"`, `1e20`, `true`, `null`, `""`, `"garbage"`, `[]`, `-1`, `"2026-13-01"`, `"2026-01-01T25:00:00Z"`, `{}`}
 	intPool   = []string{`1`, `0`, `-1`, `"5"`, `5.0`, `5.5`, `true`, `null`, `"x"`, `1e3`, `9223372036854775808`, `"٣"`, `[]`, `"_1"`, `" 7 "`}
 	floatPool = []string{`0.5`, `1`, `"0.5"`, `"nan"`, `1e999`, `"inf"`, `true`, `null`, `[]`, `-0.0`, `"1e5"`, `2.5e-7`, `100000000000000000000.0`, `1e16`,
@@ -37,6 +44,18 @@ var models = map[string][]modelField{
 		{"started_at", dtPool, `"2026-01-01T00:00:00Z"`}, {"finished_at", dtPool, `"2026-01-01T01:00:00Z"`}, {"deployed_at", dtPool, `"2026-01-01T00:30:00.5Z"`},
 		{"pull_request_number", intPool, `7`}, {"release_ref", strPool, `"v1"`}, {"release_ref_confidence", floatPool, `0.75`},
 	},
+	"pull-requests": {
+		{"number", intPool, `12`}, {"title", strPool, `"t"`}, {"body", strPool, `"b"`}, {"state", strPool, `"open"`}, {"author_name", strPool, `"a"`},
+		{"author_email", strPool, `"a@x"`}, {"created_at", dtPool, `"2026-01-01T00:00:00Z"`}, {"merged_at", dtPool, `"2026-01-02T00:00:00Z"`},
+		{"closed_at", dtPool, `"2026-01-03T00:00:00+02:00"`}, {"head_branch", strPool, `"feat"`}, {"base_branch", strPool, `"main"`},
+		{"additions", intPool, `3`}, {"deletions", intPool, `4`}, {"changed_files", intPool, `5`}, {"reviews", reviewPool, `[{"review_id":"r1","reviewer":"u","state":"APPROVED","submitted_at":"2026-01-01T00:00:00Z"}]`},
+	},
+	"work-items": {
+		{"work_item_id", strPool, `"jira:ABC-1"`}, {"provider", providerPool, `"jira"`}, {"title", strPool, `"t"`}, {"type", typePool, `"bug"`}, {"status", statusPool, `"done"`},
+		{"status_raw", strPool, `"Done"`}, {"description", strPool, `"d"`}, {"project_key", strPool, `"ABC"`}, {"assignees", listPool, `["a","b"]`}, {"reporter", strPool, `"r"`},
+		{"created_at", dtPool, `"2026-01-01T00:00:00Z"`}, {"updated_at", dtPool, `"2026-01-02T00:00:00Z"`}, {"started_at", dtPool, `"2026-01-01T01:00:00Z"`},
+		{"completed_at", dtPool, `"2026-01-03T00:00:00Z"`}, {"labels", listPool, `["x"]`}, {"story_points", floatPool, `2.5`}, {"priority_raw", strPool, `"P1"`}, {"url", strPool, `"https://x"`},
+	},
 	"incidents": {
 		{"incident_id", strPool, `"i1"`}, {"status", strPool, `"open"`}, {"started_at", dtPool, `"2026-01-01T00:00:00Z"`}, {"resolved_at", dtPool, `"2026-01-01T02:00:00Z"`},
 	},
@@ -46,9 +65,11 @@ var rootPool = map[string][]string{"org_id": strPool, "repo_url": strPool}
 
 // requiredFields are the item fields with no default.
 var requiredFields = map[string][]string{
-	"commits":     {"hash", "message", "author_name", "author_email", "author_when"},
-	"deployments": {"deployment_id", "status", "environment"},
-	"incidents":   {"incident_id", "status", "started_at"},
+	"commits":       {"hash", "message", "author_name", "author_email", "author_when"},
+	"deployments":   {"deployment_id", "status", "environment"},
+	"incidents":     {"incident_id", "status", "started_at"},
+	"pull-requests": {"number", "title", "state", "author_name", "created_at"},
+	"work-items":    {"work_item_id", "provider", "title", "created_at"},
 }
 
 func itemText(route string, override map[string]string, drop map[string]bool) string {
@@ -84,7 +105,7 @@ func bodyCorpus() []oracleCase {
 	var corpus []oracleCase
 	env := map[string]string{"ENVIRONMENT": "dev"}
 	add := func(route, body string) { corpus = append(corpus, oracleCase{Route: route, Env: env, Body: body}) }
-	for _, route := range []string{"commits", "deployments", "incidents"} {
+	for _, route := range []string{"commits", "deployments", "incidents", "pull-requests", "work-items"} {
 		good := itemText(route, nil, nil)
 		add(route, batchText(route, `"o"`, `"r"`, "["+good+"]"))
 		for _, body := range []string{``, `null`, `[]`, `1`, `"x"`, `{}`, `{`, `{"a":1}`, `{"org_id":1,"repo_url":2,"items":3}`,

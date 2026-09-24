@@ -179,6 +179,8 @@ var responseModelRoutes = map[string]bool{
 	"POST /api/v1/ingest/commits":                                         true,
 	"POST /api/v1/ingest/deployments":                                     true,
 	"POST /api/v1/ingest/incidents":                                       true,
+	"POST /api/v1/ingest/pull-requests":                                   true,
+	"POST /api/v1/ingest/work-items":                                      true,
 	"POST /api/v1/product-telemetry/events":                               true,
 	"POST /api/v1/telemetry/opt-in":                                       true,
 	"POST /api/v1/telemetry/opt-out":                                      true,

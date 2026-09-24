@@ -82,3 +82,7 @@ func pyNumber(value pyjson.Value) (*big.Rat, bool) {
 	}
 	return nil, false
 }
+
+// PyEqual is Python's == over decoded JSON values (pyEqual), for another
+// admin route that compares a decoded provider value with its own.
+func PyEqual(a, b pyjson.Value) bool { return pyEqual(a, b) }

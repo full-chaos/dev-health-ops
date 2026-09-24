@@ -41,6 +41,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/buildinfo"
 	"github.com/full-chaos/dev-health-ops/internal/api/credentials"
 	"github.com/full-chaos/dev-health-ops/internal/api/externalingest"
+	"github.com/full-chaos/dev-health-ops/internal/api/githubapp"
 	healthroutes "github.com/full-chaos/dev-health-ops/internal/api/health"
 	"github.com/full-chaos/dev-health-ops/internal/api/orgs"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
@@ -139,6 +140,15 @@ func Command() cli.Command {
 // connection test's outbound seams: nil in production (a client that follows
 // no redirects, the system resolver); the venue oracle replaces them to reach
 // a stub provider through the same SSRF guard.
+// githubAppHTTPClient, githubAppGitHubURL and githubAppAPIURL are the GitHub
+// App install callback's outbound seams: nil/empty in production (github.com
+// and api.github.com, no redirects); the venue oracle points them at a stub.
+var (
+	githubAppHTTPClient *http.Client
+	githubAppGitHubURL  string
+	githubAppAPIURL     string
+)
+
 var (
 	credentialProbeClient *http.Client
 	credentialHostLookup  func(context.Context, string) ([]netip.Addr, error)
@@ -193,6 +203,9 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 		routes = append(routes, syncadmin.Routes(syncadmin.Deps{Pool: deps.Pool, Guard: deps.Guard, Logger: logger})...)
 		routes = append(routes, credentials.Routes(credentials.Deps{Pool: deps.Pool, Guard: deps.Guard, Cipher: deps.Decryptor, Logger: logger, Now: deps.Now,
 			HTTPClient: credentialProbeClient, HostLookup: credentialHostLookup})...)
+		routes = append(routes, githubapp.Routes(githubapp.Deps{Pool: deps.Pool, Guard: deps.Guard, Valkey: deps.Valkey, Cipher: deps.Decryptor,
+			Logger: logger, Now: deps.Now, Config: deps.GitHubApp, Signer: deps.GitHubStateSigner,
+			HTTPClient: githubAppHTTPClient, GitHubURL: githubAppGitHubURL, GitHubAPIURL: githubAppAPIURL})...)
 		if deps.ClickHouse != nil {
 			routes = append(routes, teamsidentity.Routes(deps.ClickHouse, deps.Guard, logger, deps.Pool, deps.Decryptor)...)
 		}
@@ -283,6 +296,8 @@ func configureWith(
 		deps.ClickHouseDSN = cfg.ClickHouseURI.Reveal()
 	}
 	deps.Invites = inviteConfig(cfg, logger, os.LookupEnv)
+	deps.GitHubApp = githubAppConfig(os.LookupEnv)
+	deps.GitHubStateSigner = githubapp.Signer{Secret: cfg.APIJWTSecret.Reveal(), Issuer: cfg.APIJWTIssuer, Audience: cfg.APIJWTAudience}
 	if adjust != nil {
 		adjust(&deps)
 	}

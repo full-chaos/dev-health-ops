@@ -132,6 +132,8 @@ var responseModelRoutes = map[string]bool{
 	"POST /api/v1/admin/customer-push/tokens":                             true,
 	"POST /api/v1/admin/customer-push/tokens/{token_id}/revoke":           true,
 	"POST /api/v1/admin/customer-push/tokens/{token_id}/rotate":           true,
+	"POST /api/v1/admin/integrations/github/install-callback":             true,
+	"POST /api/v1/admin/integrations/github/install-url":                  true,
 	"POST /api/v1/admin/identities":                                       true,
 	"POST /api/v1/admin/impersonate":                                      true,
 	"POST /api/v1/admin/impersonate/stop":                                 true,

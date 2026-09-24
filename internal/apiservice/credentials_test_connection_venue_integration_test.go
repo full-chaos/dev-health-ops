@@ -247,7 +247,7 @@ func (s *probeStub) handle(w http.ResponseWriter, r *http.Request) {
 // probeHosts are the hostnames the planes send to the stub; probeAddresses
 // the fixed public addresses they resolve to for the SSRF guard.
 var (
-	probeHosts     = map[string]bool{"provider.example.test": true, "api.github.com": true, "gitlab.com": true, "api.linear.app": true, "app.launchdarkly.com": true}
+	probeHosts     = map[string]bool{"provider.example.test": true, "github.com": true, "api.github.com": true, "gitlab.com": true, "api.linear.app": true, "app.launchdarkly.com": true}
 	probeAddresses = map[string]string{"provider.example.test": "93.184.216.34", "api.github.com": "140.82.112.5", "gitlab.com": "172.65.251.78"}
 )
 

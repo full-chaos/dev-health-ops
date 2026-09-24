@@ -269,7 +269,10 @@ func apiPosture() RolePosture {
 			// request per call (and deletes the calling org's own expired
 			// rows first); the callback half will consume (delete) it.
 			{"pagerduty_oauth_authorization_requests", true, false, true},
-			{"provider_oauth_credentials", false, false, true},
+			// CHAOS-6595's callback replaces the org's OAuth grant
+			// (replace_and_capture: insert a new binding, update an existing
+			// one in place); the manual credential routes delete it.
+			{"provider_oauth_credentials", true, true, true},
 			{"provider_oauth_revocations", true, true, true},
 			// Integrations.
 			// CHAOS-6597: the create path seeds the planner datasets (INSERT)

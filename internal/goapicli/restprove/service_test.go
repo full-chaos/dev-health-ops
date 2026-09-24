@@ -133,3 +133,20 @@ func TestParseFlags_DHOAPIRequiresEdgeTokenBearers(t *testing.T) {
 		}
 	}
 }
+
+func TestFinalRunReportFailsADHOAPIRunThatAdmittedNothing(t *testing.T) {
+	refused := []outcome{{Operation: "REST:GET:/x", Request: "r", Refusal: goapiproof.RESTRefusalIDBindingUnresolved}}
+	admitted := []outcome{{Operation: "REST:GET:/x", Request: "r", Admitted: true}}
+
+	dho := flags{service: goapiproof.RESTServiceDHOAPI}
+	if report, err := finalRunReport(dho, refused, nil, nil, nil, nil, nil); err == nil || report.ExitCause != exitCompletedWithNothingMeasured {
+		t.Fatalf("all-refused dho-api run: exit_cause=%q err=%v, want a failure naming nothing measured", report.ExitCause, err)
+	}
+	if report, err := finalRunReport(dho, admitted, nil, nil, nil, nil, nil); err != nil || report.ExitCause != exitCompleted {
+		t.Fatalf("a dho-api run with an admitted request must complete: %q %v", report.ExitCause, err)
+	}
+	// query-api keeps its per-case refusal semantics.
+	if report, err := finalRunReport(flags{}, refused, nil, nil, nil, nil, nil); err != nil || report.ExitCause != exitCompleted {
+		t.Fatalf("query-api run changed behaviour: %q %v", report.ExitCause, err)
+	}
+}

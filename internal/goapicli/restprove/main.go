@@ -1899,8 +1899,26 @@ func finalRunReport(f flags, outcomes []outcome, notRun []string, runEnded, runE
 		runErr = fmt.Errorf("run interrupted: %w", runEnded)
 	}
 	exitCause, finalErr := exitCauseFor(runEnded, runErr, legFailures, vacuityErrs)
+	if finalErr == nil && f.service == goapiproof.RESTServiceDHOAPI && !anyAdmitted(outcomes) {
+		// Every planned request was refused before a comparison could
+		// happen (an unresolved -bind, say): the run measured nothing, and
+		// exiting zero would read as a pass. The existing query-api runs keep
+		// their per-case refusal semantics.
+		exitCause = exitCompletedWithNothingMeasured
+		finalErr = fmt.Errorf("this -service=%s run admitted no request, so it measured nothing (read the REFUSED lines above; an unresolved -bind is the usual cause)", f.service)
+	}
 	report := jsonReport{Outcomes: outcomes, NotRun: notRun, PartialCause: partialCause, PartialError: partialError(f, runErr), ExitCause: exitCause, RunDeadline: f.runDeadline.String(), SkewAdmittedByOperation: skewAdmittedByOperation(outcomes), GapAdmittedByOperation: gapAdmittedByOperation(outcomes)}
 	return report, finalErr
+}
+
+// anyAdmitted says whether at least one outcome was admitted.
+func anyAdmitted(outcomes []outcome) bool {
+	for _, out := range outcomes {
+		if out.Admitted {
+			return true
+		}
+	}
+	return false
 }
 
 // writeFinalReport prints the run's causes on stdout and writes the
@@ -2000,6 +2018,7 @@ const (
 	exitCompleted                          = "completed"
 	exitCompletedWithLegsThatNeverAnswered = "completed_with_legs_that_never_answered"
 	exitCompletedWithVacuousDeclarations   = "completed_with_declarations_that_excuse_nothing"
+	exitCompletedWithNothingMeasured       = "completed_with_nothing_measured"
 	exitStoppedBySignal                    = "stopped_by_signal"
 	exitStoppedByRunDeadline               = "stopped_by_run_deadline"
 	exitAbortedByToolError                 = "aborted_by_tool_error"

@@ -33,13 +33,15 @@ func daysIn(year, month int) int {
 	return time.Date(year, time.Month(month)+1, 0, 0, 0, 0, 0, time.UTC).Day()
 }
 
-// Pydantic is pydantic's JSON form of the value: ISO date and time,
-// ".ffffff" only when microseconds are non-zero, then "Z" for a zero
-// offset, "±HH:MM" otherwise, nothing when naive.
+// Pydantic is pydantic-core's JSON form of the value: ISO date and time,
+// ".ffffff" only when microseconds are non-zero, then the offset (nothing
+// when naive). pydantic-core rounds the offset to whole seconds, half away
+// from zero; zero is "Z", anything else the sign and the whole hours and
+// minutes ("±HH:MM", seconds dropped, so a non-zero offset under a minute
+// is "+00:00" or "-00:00").
 func Pydantic(value DateTime) string {
-	// The wall clock is the instant moved by the whole offset, its
-	// microseconds included (a Python timezone carries a timedelta).
-	wall := value.Time.Add(time.Duration(value.Offset)*time.Second + time.Duration(value.OffsetMicro)*time.Microsecond).UTC()
+	offset := time.Duration(value.Offset)*time.Second + time.Duration(value.OffsetMicro)*time.Microsecond
+	wall := value.Time.Add(offset).UTC()
 	text := wall.Format("2006-01-02T15:04:05")
 	if micro := wall.Nanosecond() / 1000; micro != 0 {
 		text += fmt.Sprintf(".%06d", micro)
@@ -47,18 +49,17 @@ func Pydantic(value DateTime) string {
 	if !value.Aware {
 		return text
 	}
-	if value.Offset == 0 {
+	micros := int64(offset / time.Microsecond)
+	sign := '+'
+	if micros < 0 {
+		sign, micros = '-', -micros
+	}
+	seconds := (micros + 500_000) / 1_000_000
+	if seconds == 0 {
 		return text + "Z"
 	}
-	sign, offset := '+', value.Offset
-	if offset < 0 {
-		sign, offset = '-', -offset
-	}
-	text += fmt.Sprintf("%c%02d:%02d", sign, offset/3600, offset%3600/60)
-	if offset%60 != 0 {
-		text += fmt.Sprintf(":%02d", offset%60)
-	}
-	return text
+	minutes := seconds / 60
+	return text + fmt.Sprintf("%c%02d:%02d", sign, minutes/60, minutes%60)
 }
 
 // UTC wraps an aware UTC instant (a timestamptz read from Postgres).

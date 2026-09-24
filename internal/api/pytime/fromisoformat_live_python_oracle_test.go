@@ -162,3 +162,82 @@ func timeOffset(value DateTime) time.Duration {
 	}
 	return time.Duration(value.Offset)*time.Second + time.Duration(value.OffsetMicro)*time.Microsecond
 }
+
+const pythonPydanticFormatProgram = `
+import json, sys
+from datetime import datetime
+from pydantic import TypeAdapter
+adapter = TypeAdapter(datetime)
+out = []
+for text in json.loads(sys.stdin.read()):
+    try:
+        value = datetime.fromisoformat(text)
+    except (ValueError, TypeError):
+        out.append(None)
+        continue
+    out.append(json.loads(adapter.dump_json(value)))
+print(json.dumps(out))
+`
+
+// TestPydanticMatchesLivePydanticDumpJSON pins Pydantic, the pydantic-core
+// JSON form of a datetime, on every value datetime.fromisoformat reads from
+// the fromisoformat corpus: naive and aware, UTC, offsets with seconds and
+// microseconds, negative and sub-minute offsets.
+func TestPydanticMatchesLivePydanticDumpJSON(t *testing.T) {
+	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
+		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
+	}
+	_, file, _, _ := runtime.Caller(0)
+	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
+	python := pyoracle.Resolve(t, root)
+	corpus := append([]string(nil), fromISOCorpus...)
+	for _, offset := range []string{"+05:30:15", "+05:30:15.5", "-05:30:15", "-05:30:15.5", "+00:00:59", "-00:00:59",
+		"+00:00:00.5", "-00:00:00.5", "-00:00:00.000001", "+23:59:59.999999", "-23:59:59.999999", "+00:01", "-00:01", "Z", "+00:00", "-00:00",
+		"+00:00:59.5", "-00:00:59.5", "+00:00:59.499999", "+00:00:00.499999", "-00:00:00.499999", "+23:59:59.5", "+23:59:59.499999",
+		"+00:01:59.5", "+00:59:59.999999"} {
+		for _, at := range []string{"2026-01-01T00:00:00", "2026-06-15T12:34:56.789", "0001-01-01T12:00:00", "9999-12-31T12:00:00"} {
+			corpus = append(corpus, at+offset)
+		}
+	}
+	input, _ := json.Marshal(corpus)
+	command := exec.Command(python, "-c", pythonPydanticFormatProgram)
+	command.Stdin = strings.NewReader(string(input))
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("live python: %v", pyoracle.RunError(python, err, output))
+	}
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	var want []*string
+	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &want); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(want) != len(corpus) {
+		t.Fatalf("python answered %d of %d", len(want), len(corpus))
+	}
+	compared := 0
+	for index, text := range corpus {
+		if want[index] == nil {
+			continue
+		}
+		parsed, ok := FromISOFormat(text)
+		if !ok {
+			t.Errorf("%q: go refused, python %s", text, *want[index])
+			continue
+		}
+		compared++
+		if got := Pydantic(parsed); got != *want[index] {
+			t.Errorf("%q: go %s, python %s", text, got, *want[index])
+		}
+	}
+	if compared != 166 {
+		t.Fatalf("compared %d values, want 166", compared)
+	}
+	proofDir := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
+	if proofDir == "" {
+		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
+	}
+	if err := os.WriteFile(filepath.Join(proofDir, "api-pytime-pydantic"), []byte("executed"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("%d values compared", compared)
+}

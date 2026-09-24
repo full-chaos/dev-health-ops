@@ -10,12 +10,14 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
 	"github.com/full-chaos/dev-health-ops/internal/cli"
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/rivermigrate"
 )
@@ -110,7 +112,7 @@ func runSeed(ctx context.Context, env cli.Env) int {
 		fmt.Fprintln(env.Stderr, "argument error: positional arguments are not accepted")
 		return cli.ExitUsage
 	}
-	dsn, _, ok := rivermigrate.ResolveMigrationDatabase(env.Lookup, env.Stderr)
+	dsn, source, ok := rivermigrate.ResolveMigrationDatabase(env.Lookup, env.Stderr)
 	if !ok {
 		return cli.ExitFailure
 	}
@@ -120,10 +122,16 @@ func runSeed(ctx context.Context, env cli.Env) int {
 		return writeError(env.Stderr, "postgres_unavailable", boundary.Redact(err).Error())
 	}
 	defer conn.Close(context.Background())
+	// Which database the seed writes, named without credentials: the
+	// setting it came from, the host and the database name.
+	logger := logging.NewJSON(env.Stderr, slog.LevelInfo)
+	logger.Info("feature seed database", "source", source, "host", conn.Config().Host, "database", conn.Config().Database)
+	started := time.Now()
 	result, err := Seed(ctx, conn, time.Now)
 	if err != nil {
 		return writeError(env.Stderr, "seed_failed", boundary.Redact(err).Error())
 	}
+	logger.Info("feature seed done", "created", len(result.Created), "duration_ms", time.Since(started).Milliseconds())
 	if err := json.NewEncoder(env.Stdout).Encode(result); err != nil {
 		fmt.Fprintln(env.Stderr, "could not write the result")
 		return cli.ExitFailure

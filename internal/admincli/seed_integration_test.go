@@ -3,6 +3,7 @@
 package admincli_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -20,6 +21,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/full-chaos/dev-health-ops/internal/admincli"
+	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 )
@@ -112,6 +114,7 @@ func TestSeedMatchesPython(t *testing.T) {
 	}
 
 	for _, pass := range []string{"missing features", "nothing missing"} {
+		before := [2]map[string]string{existingRows(t, ctx, databases[0]), existingRows(t, ctx, databases[1])}
 		pythonStarted := time.Now()
 		output := runPython(t, root, python, seedProgram, uris[0])
 		pythonWindow := [2]time.Time{pythonStarted, time.Now()}
@@ -133,6 +136,15 @@ func TestSeedMatchesPython(t *testing.T) {
 		if !strings.Contains(string(output), wantPython) {
 			t.Fatalf("%s: the Python seed printed %q, want %q", pass, output, wantPython)
 		}
+		// A row that existed before the seed is left exactly as it was, id and
+		// stamps included, by both seeds.
+		for index, conn := range databases {
+			for key, row := range existingRows(t, ctx, conn) {
+				if was, existed := before[index][key]; existed && row != was {
+					t.Fatalf("%s: database %d: the seed changed the existing row %s:\n  before %s\n  after  %s", pass, index, key, was, row)
+				}
+			}
+		}
 		pythonRows := featureRows(t, ctx, databases[0], removed, pythonWindow)
 		goRows := featureRows(t, ctx, databases[1], removed, goWindow)
 		if !reflect.DeepEqual(goRows, pythonRows) {
@@ -152,6 +164,64 @@ func TestSeedMatchesPython(t *testing.T) {
 			t.Fatalf("%s: feature_flags differ in %d row(s):%s", pass, len(differing), strings.Join(differing, ""))
 		}
 	}
+
+	// The verb itself, as the migrate Job runs it: it resolves the database
+	// from MIGRATION_DATABASE_URI, names the source, host and database at
+	// Info without credentials, and prints the result.
+	var run func(context.Context, cli.Env) int
+	for _, child := range admincli.Command().Children[0].Children {
+		if child.Name == "seed" {
+			run = child.Run
+		}
+	}
+	var stdout, stderr bytes.Buffer
+	lookup := func(key string) (string, bool) {
+		value, ok := map[string]string{"MIGRATION_DATABASE_URI": uris[1]}[key]
+		return value, ok
+	}
+	if code := run(ctx, cli.Env{Lookup: lookup, Stdout: &stdout, Stderr: &stderr}); code != cli.ExitOK {
+		t.Fatalf("the seed verb exited %d: %s", code, stderr.String())
+	}
+	if strings.TrimSpace(stdout.String()) != `{"created":[]}` {
+		t.Fatalf("the seed verb printed %q, want {\"created\":[]}", stdout.String())
+	}
+	parsed, err := url.Parse(uris[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	password, _ := parsed.User.Password()
+	logged := stderr.String()
+	for _, want := range []string{`"msg":"feature seed database"`, `"source":"MIGRATION_DATABASE_URI"`, `"database":"` + strings.TrimPrefix(parsed.Path, "/") + `"`, `"msg":"feature seed done"`} {
+		if !strings.Contains(logged, want) {
+			t.Fatalf("the seed verb's log lacks %s: %s", want, logged)
+		}
+	}
+	if password != "" && strings.Contains(logged, password) {
+		t.Fatalf("the seed verb logged the password: %s", logged)
+	}
+}
+
+// existingRows reads every feature_flags row in full, id and stamps
+// included, keyed by key.
+func existingRows(t *testing.T, ctx context.Context, conn *pgx.Conn) map[string]string {
+	t.Helper()
+	rows, err := conn.Query(ctx, "SELECT key, row_to_json(f)::text FROM feature_flags f")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var key, row string
+		if err := rows.Scan(&key, &row); err != nil {
+			t.Fatal(err)
+		}
+		out[key] = row
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return out
 }
 
 // featureRows reads feature_flags with every value compared as text, except

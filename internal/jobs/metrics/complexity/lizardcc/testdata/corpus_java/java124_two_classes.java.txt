@@ -1,0 +1,2 @@
+class A { void f() { if (a) {} } }
+class B { void g() { while (b) {} } }

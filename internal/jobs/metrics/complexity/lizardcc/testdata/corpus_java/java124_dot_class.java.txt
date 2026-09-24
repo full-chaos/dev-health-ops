@@ -1,0 +1,1 @@
+class C { Class<?> f() { if (a) return C.class; return String.class; } }

@@ -1,0 +1,1 @@
+record _R(int x) { _R { if (x > 0) { x = x; } } }

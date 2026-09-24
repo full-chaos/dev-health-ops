@@ -1,0 +1,1 @@
+class C { int a; static { a = 1; } { if (a>0) {} } }

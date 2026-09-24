@@ -54,7 +54,7 @@ func TestGoldenPinnedToLockedLizardVue(t *testing.T) {
 }
 
 // TestGoMatchesLizardGoldenVue proves numeric equality with real lizard
-// 1.23.0 for this package's Vue analyzer, including two_script_blocks.vue.txt
+// 1.24.0 for this package's Vue analyzer, including two_script_blocks.vue.txt
 // -- a fixture proving BOTH a plain <script> and a <script setup> block in
 // the same Single-File-Component are captured independently (vue.go's
 // vuePreprocess), and that <template>/<style> content contributes nothing

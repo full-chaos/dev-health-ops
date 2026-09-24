@@ -1,0 +1,1 @@
+class C { <T> T f(T x) { if (x == null) return null; return x; } }

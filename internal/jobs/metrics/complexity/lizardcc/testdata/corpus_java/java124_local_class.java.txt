@@ -1,0 +1,1 @@
+class C { int f() { class L { int g() { if (a) return 1; return 2; } } return 1; } }

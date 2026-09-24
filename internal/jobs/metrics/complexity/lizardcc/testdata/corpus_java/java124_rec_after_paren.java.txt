@@ -1,0 +1,1 @@
+class C { void f() { g(); } record R(int x) { int h() { if (x>0) return 1; return 2; } } }

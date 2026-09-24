@@ -1,0 +1,1 @@
+class C { static int a = 1; static void f() { if (a>0) {} } static class N { void g() { if (b) {} } } }

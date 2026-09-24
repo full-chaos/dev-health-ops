@@ -1,0 +1,4 @@
+class C {
+ Runnable r = new Runnable() { public void run() { if (x) {} } };
+ int f() { if (y) return 1; return 2; }
+}

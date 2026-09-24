@@ -1,0 +1,3 @@
+class C {
+ Object create() { return new Box<>() { void method() { if (true) {} } }; }
+}

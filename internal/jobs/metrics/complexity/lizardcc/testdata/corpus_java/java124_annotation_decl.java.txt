@@ -1,0 +1,2 @@
+@interface A { int v() default 1; }
+class C { void f() { if (a) {} } }

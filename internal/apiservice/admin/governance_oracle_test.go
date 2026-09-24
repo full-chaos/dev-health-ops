@@ -15,52 +15,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
-// redactDeep blanks every string value stored under one of keys at any depth
-// of a JSON body, leaving key order and every other value alone. It is used
-// only on responses that carry rows a write created on each plane (random
-// ids, wall-clock timestamps).
-func redactDeep(t *testing.T, body string, keys ...string) string {
-	t.Helper()
-	value, err := pyjson.DecodeString(body)
-	if err != nil {
-		return body
-	}
-	var walk func(pyjson.Value) pyjson.Value
-	walk = func(node pyjson.Value) pyjson.Value {
-		switch typed := node.(type) {
-		case *pyjson.Object:
-			for _, key := range typed.Keys() {
-				item, _ := typed.Get(key)
-				redacted := false
-				for _, want := range keys {
-					if key == want {
-						if _, isString := item.(string); isString {
-							typed.Set(key, "")
-							redacted = true
-						}
-					}
-				}
-				if !redacted {
-					typed.Set(key, walk(item))
-				}
-			}
-			return typed
-		case []pyjson.Value:
-			for index := range typed {
-				typed[index] = walk(typed[index])
-			}
-			return typed
-		default:
-			return node
-		}
-	}
-	encoded, err := pyjson.Marshal(walk(value))
-	if err != nil {
-		return body
-	}
-	return string(encoded)
-}
-
 // TestGovernanceRoutesVenueOracle is the venue-oracle proof for the
 // governance admin routes: audit logs, feature flags and overrides, the IP
 // allowlist, and platform stats. The real Python api and the Go api answer
@@ -501,7 +455,7 @@ VALUES ($1, $2, (SELECT id FROM feature_flags ORDER BY key LIMIT 1), true, NULL,
 		},
 		Normalize: func(request venueoracle.Request, body string) string {
 			if strings.HasPrefix(request.Name, "W ") {
-				body = redactDeep(t, body, "id", "created_at", "updated_at")
+				body = redactVolatileText(body, "id", "created_at", "updated_at")
 			}
 			return body
 		},

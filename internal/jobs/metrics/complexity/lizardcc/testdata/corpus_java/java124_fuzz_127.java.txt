@@ -1,0 +1,2 @@
+@A
+class C { Object o1 = new Object() { void x() { if (a) {} } }; record R(int x) { R { if (x > 0) throw new E(); } } static record S(int x) { int g() { if (x>0) return 1; return 2; } } }

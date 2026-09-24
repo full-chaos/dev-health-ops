@@ -1,0 +1,1 @@
+enum E { A, B; int f() { if (this == A) return 1; return 2; } }

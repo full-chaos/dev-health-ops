@@ -95,13 +95,17 @@ def tree(tmp_path: Path) -> Path:
         _go_test("a", "TestAlpha", "TestBeta", harness=True),
     )
     # b: NO harness import; found by name only (the Trap #392 shape).
-    _write(
-        tmp_path / "internal/b/b_test.go", _go_test("b", "TestVenueOracleGamma")
-    )
+    _write(tmp_path / "internal/b/b_test.go", _go_test("b", "TestVenueOracleGamma"))
     # c: one local-only test beside a run test.
     _write(
         tmp_path / "internal/c/c_test.go",
-        _go_test("c", "TestDelta", "TestEpsilonVenueOracle", harness=True, marker="TestEpsilonVenueOracle"),
+        _go_test(
+            "c",
+            "TestDelta",
+            "TestEpsilonVenueOracle",
+            harness=True,
+            marker="TestEpsilonVenueOracle",
+        ),
     )
     _registry(
         tmp_path,
@@ -116,11 +120,11 @@ def tree(tmp_path: Path) -> Path:
     return tmp_path
 
 
-def _registry(tree: Path, rows: list[tuple[str, str, str]], *, raw: str | None = None) -> None:
+def _registry(
+    tree: Path, rows: list[tuple[str, str, str]], *, raw: str | None = None
+) -> None:
     text = REGISTRY_HEAD + (
-        raw
-        if raw is not None
-        else "".join(f"{p}\t{t}\t{m}\n" for p, t, m in rows)
+        raw if raw is not None else "".join(f"{p}\t{t}\t{m}\n" for p, t, m in rows)
     )
     _write(tree / "ci" / "venue_oracle_registry.tsv", text)
 
@@ -228,7 +232,10 @@ def test_a_test_declared_twice_in_one_package_fails(tree: Path) -> None:
 
 
 def test_mode_contradicting_the_local_only_marker_fails(tree: Path) -> None:
-    rows = [r.replace("TestEpsilonVenueOracle\tlocal", "TestEpsilonVenueOracle\trun") for r in _read_rows(tree)]
+    rows = [
+        r.replace("TestEpsilonVenueOracle\tlocal", "TestEpsilonVenueOracle\trun")
+        for r in _read_rows(tree)
+    ]
     _registry(tree, [], raw="\n".join(rows) + "\n")
     proc = _run(tree)
     assert proc.returncode != 0
@@ -305,7 +312,9 @@ exit 0
 """
 
 
-def _run_verb(tree: Path, skip_proof: str = "") -> tuple[subprocess.CompletedProcess[str], list[str]]:
+def _run_verb(
+    tree: Path, skip_proof: str = ""
+) -> tuple[subprocess.CompletedProcess[str], list[str]]:
     bin_dir = tree / "bin"
     bin_dir.mkdir(exist_ok=True)
     fake = bin_dir / "go"
@@ -352,14 +361,18 @@ def test_the_verb_runs_a_registry_only_test_discovery_cannot_reach(tree: Path) -
         tree / "internal/e/e_test.go",
         _go_test("e", "TestReachesHarnessSomeOtherWay"),
     )
-    rows = sorted(_read_rows(tree) + ["internal/e\tTestReachesHarnessSomeOtherWay\trun"])
+    rows = sorted(
+        _read_rows(tree) + ["internal/e\tTestReachesHarnessSomeOtherWay\trun"]
+    )
     _registry(tree, [], raw="\n".join(rows) + "\n")
     proc, calls = _run_verb(tree)
     assert proc.returncode == 0, proc.stderr + proc.stdout
     assert "./internal/e ^(TestReachesHarnessSomeOtherWay)$" in calls
 
 
-def test_the_verb_fails_before_running_anything_on_an_unregistered_test(tree: Path) -> None:
+def test_the_verb_fails_before_running_anything_on_an_unregistered_test(
+    tree: Path,
+) -> None:
     _write(
         tree / "internal/d/d_test.go",
         _go_test("d", "TestVenueOracleOmega"),
@@ -367,7 +380,9 @@ def test_the_verb_fails_before_running_anything_on_an_unregistered_test(tree: Pa
     proc, calls = _run_verb(tree)
     assert proc.returncode != 0
     assert "internal/d TestVenueOracleOmega" in proc.stderr
-    assert calls == [""] or calls == [], "the verb ran go test before validating the registry"
+    assert calls == [""] or calls == [], (
+        "the verb ran go test before validating the registry"
+    )
 
 
 def test_the_verb_fails_when_a_registered_test_writes_no_proof(tree: Path) -> None:
@@ -379,7 +394,9 @@ def test_the_verb_fails_when_a_registered_test_writes_no_proof(tree: Path) -> No
 def test_a_package_registered_only_local_only_fails(tree: Path) -> None:
     _write(
         tree / "internal/f/f_test.go",
-        _go_test("f", "TestOnlyVenueOracle", harness=True, marker="TestOnlyVenueOracle"),
+        _go_test(
+            "f", "TestOnlyVenueOracle", harness=True, marker="TestOnlyVenueOracle"
+        ),
     )
     rows = sorted(_read_rows(tree) + ["internal/f\tTestOnlyVenueOracle\tlocal"])
     _registry(tree, [], raw="\n".join(rows) + "\n")

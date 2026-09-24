@@ -63,6 +63,7 @@ func signCases() []signCase {
 		signCase{zero, "o", "gold", 5, "l"},
 		signCase{" " + zero[:10] + "\n" + zero[10:] + " ", "o", "team", 5, "l"},
 		signCase{base64.StdEncoding.EncodeToString(make([]byte, 31)), "o", "team", 5, "l"},
+		signCase{base64.StdEncoding.EncodeToString(make([]byte, 33)), "o", "team", 5, "l"},
 		signCase{"not base64 at all!", "o", "team", 5, "l"},
 		signCase{zero, "o", "team", 5, ""},
 	)

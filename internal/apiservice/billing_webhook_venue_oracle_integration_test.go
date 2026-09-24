@@ -131,6 +131,9 @@ func webhookRequests(t *testing.T, f billingFixture) []venueoracle.Request {
 	event("checkout: no customer", "checkout.session.completed.json", "checkout.session.completed", func(_, object map[string]any) {
 		object["id"], object["metadata"], object["customer"] = "cs_team", map[string]any{"org_id": f.orgB.String()}, nil
 	})
+	event("checkout: empty customer", "checkout.session.completed.json", "checkout.session.completed", func(_, object map[string]any) {
+		object["id"], object["metadata"], object["customer"] = "cs_team", map[string]any{"org_id": orgA}, ""
+	})
 	event("checkout: object not a dict", "checkout.session.completed.json", "checkout.session.completed", func(value, _ map[string]any) {
 		value["data"] = map[string]any{"object": []any{1}}
 	})

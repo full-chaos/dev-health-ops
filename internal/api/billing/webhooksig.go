@@ -33,7 +33,7 @@ var errWebhookCrash = errors.New("billing: stripe webhook verification raised")
 //     "t" item's value goes through int() (anything int() refuses, or a
 //     "t" item without "=", is a signature error); every "v1" item's value
 //     is a signature;
-//   - no v1 signature is a signature error;
+//   - no v1 signature is a signature error (no signature matches);
 //   - HMAC-SHA256 of "<int timestamp>.<body>" in lower hex is compared with
 //     each signature in order; a non-ASCII signature reached before a match
 //     makes hmac.compare_digest raise (the 500); no match is a signature
@@ -93,9 +93,6 @@ func verifyStripeSignature(payload []byte, header, secret string, now time.Time)
 			}
 			signatures = append(signatures, entry.value)
 		}
-	}
-	if len(signatures) == 0 {
-		return errSignature
 	}
 	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write([]byte(timestamp.String() + "."))

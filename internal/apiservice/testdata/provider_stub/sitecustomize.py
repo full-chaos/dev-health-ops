@@ -10,10 +10,12 @@ GitHub App token exchange). Nothing in src/ is touched.
 
 import os
 import socket
+from typing import Any
 
 _PORT = os.environ.get("VENUE_PROVIDER_STUB_PORT")
 
 if _PORT:
+    _PORT_NUMBER = int(_PORT)
     _FAKE_ADDRESSES = {
         "provider.example.test": "93.184.216.34",
         "api.github.com": "140.82.112.5",
@@ -23,7 +25,9 @@ if _PORT:
 
     def _getaddrinfo(host, *args, **kwargs):
         if host in _FAKE_ADDRESSES:
-            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (_FAKE_ADDRESSES[host], 0))]
+            return [
+                (socket.AF_INET, socket.SOCK_STREAM, 6, "", (_FAKE_ADDRESSES[host], 0))
+            ]
         return _real_getaddrinfo(host, *args, **kwargs)
 
     socket.getaddrinfo = _getaddrinfo
@@ -39,28 +43,33 @@ if _PORT:
     import httpx
 
     class _StubTransport(httpx.AsyncHTTPTransport):
-        async def handle_async_request(self, request):
+        async def handle_async_request(self, request: Any) -> Any:
             if request.url.host in _STUBBED_HOSTS:
-                request.url = request.url.copy_with(scheme="http", host="127.0.0.1", port=int(_PORT))
+                request.url = request.url.copy_with(
+                    scheme="http", host="127.0.0.1", port=_PORT_NUMBER
+                )
             return await super().handle_async_request(request)
 
     _orig_init = httpx.AsyncClient.__init__
 
-    def _init(self, *args, **kwargs):
+    def _init(self: Any, *args: Any, **kwargs: Any) -> None:
         kwargs.setdefault("transport", _StubTransport())
         _orig_init(self, *args, **kwargs)
 
-    httpx.AsyncClient.__init__ = _init
+    setattr(httpx.AsyncClient, "__init__", _init)
+
+    from urllib.parse import urlsplit, urlunsplit
 
     import requests
-    from urllib.parse import urlsplit, urlunsplit
 
     _orig_send = requests.Session.send
 
-    def _send(self, prepared, **kwargs):
+    def _send(self: Any, prepared: Any, **kwargs: Any) -> Any:
         parts = urlsplit(prepared.url)
         if parts.hostname in _STUBBED_HOSTS:
-            prepared.url = urlunsplit(("http", f"127.0.0.1:{_PORT}", parts.path, parts.query, parts.fragment))
+            prepared.url = urlunsplit(
+                ("http", f"127.0.0.1:{_PORT}", parts.path, parts.query, parts.fragment)
+            )
         return _orig_send(self, prepared, **kwargs)
 
-    requests.Session.send = _send
+    setattr(requests.Session, "send", _send)

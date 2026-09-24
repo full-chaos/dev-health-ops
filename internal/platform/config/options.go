@@ -224,6 +224,27 @@ var optionRegistry = []Option{
 		Usage: "access-token audience the api accepts (same variable as the Python api)",
 	},
 
+	{
+		Flag: "stripe-price-id-team", Env: "STRIPE_PRICE_ID_TEAM", Kind: KindString, Services: []string{APIServiceName}, Group: GroupRuntime,
+		Usage: "Stripe price id checkout uses for the team tier (same variable as the Python api)",
+	},
+	{
+		Flag: "stripe-price-id-enterprise", Env: "STRIPE_PRICE_ID_ENTERPRISE", Kind: KindString, Services: []string{APIServiceName}, Group: GroupRuntime,
+		Usage: "Stripe price id checkout uses for the enterprise tier (same variable as the Python api)",
+	},
+	{
+		Flag: "trial-days", Env: "TRIAL_DAYS", Kind: KindString, Services: []string{APIServiceName}, Group: GroupRuntime,
+		Usage: "checkout trial length in days for the team tier (unset: 14; not an integer: 14, logged)",
+	},
+	{
+		Flag: "app-base-url", Env: "APP_BASE_URL", Kind: KindString, Services: []string{APIServiceName}, Group: GroupRuntime,
+		Usage: "checkout success/cancel URL prefix the api accepts (unset: https://example.com, as the Python api)",
+	},
+	{
+		Flag: "allowed-checkout-domains", Env: "ALLOWED_CHECKOUT_DOMAINS", Kind: KindString, Services: []string{APIServiceName}, Group: GroupRuntime,
+		Usage: "comma-separated extra checkout URL prefixes (same variable as the Python api)",
+	},
+
 	// Database and River.
 	{
 		Flag: "queue-database-mode", Env: "WORKER_DATABASE_MODE", Kind: KindString,
@@ -499,6 +520,7 @@ var optionRegistry = []Option{
 	{Env: "SETTINGS_ENCRYPTION_SALT", Secret: true, Group: GroupCredentials, Usage: "provider credential encryption salt"},
 	{Env: "PAGER_DUTY_CLIENT_ID", Secret: true, Group: GroupCredentials, Usage: "PagerDuty OAuth client id"},
 	{Env: "PAGER_DUTY_SECRET", Secret: true, Group: GroupCredentials, Usage: "PagerDuty OAuth client secret"},
+	{Env: "STRIPE_SECRET_KEY", Secret: true, Group: GroupCredentials, Usage: "Stripe API key the api's billing routes call Stripe with (the Python api's STRIPE_SECRET_KEY)"},
 }
 
 // Options returns every declared option in registry order.

@@ -46,20 +46,29 @@ func (h *handlers) deleteSyncConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 // deleteConfig is SyncConfigurationService.delete for config, in one
-// transaction: errDeleteWithChildren when any config names it as parent,
-// else the org's config named (name, provider) -- unique per org
-// (uq_sync_config_org_provider_name), so config itself -- removed. Every
-// foreign key to sync_configurations is ON DELETE CASCADE or SET NULL, so
-// one DELETE leaves the rows the ORM delete leaves. None found (a
-// concurrent delete) is not an error, as the Python delete returns False
-// and the route still answers 204.
+// transaction, as Python runs it: the org's config named (name, provider)
+// is looked up again (uq_sync_config_org_provider_name makes it one row,
+// which is config unless a concurrent request replaced it); none found is
+// not an error (the Python delete returns False and the route still
+// answers 204); errDeleteWithChildren when any config names that row as
+// parent; else that row is deleted. Every foreign key to
+// sync_configurations is ON DELETE CASCADE or SET NULL, so one DELETE
+// leaves the rows the ORM delete leaves.
 func (s store) deleteConfig(ctx context.Context, orgID string, config *syncConfig) error {
 	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
-		return deleteConfigTx(ctx, tx, orgID, config.ID, config.Name, config.Provider)
+		return deleteConfigTx(ctx, tx, orgID, config.Name, config.Provider)
 	})
 }
 
-func deleteConfigTx(ctx context.Context, tx pgx.Tx, orgID string, id uuid.UUID, name, provider string) error {
+func deleteConfigTx(ctx context.Context, tx pgx.Tx, orgID, name, provider string) error {
+	var id uuid.UUID
+	err := tx.QueryRow(ctx, `SELECT id FROM sync_configurations WHERE org_id = $1 AND name = $2 AND provider = $3`, orgID, name, provider).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read config by name: %w", err)
+	}
 	var hasChildren bool
 	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM sync_configurations WHERE parent_id = $1)`, id).Scan(&hasChildren); err != nil {
 		return fmt.Errorf("read child configs: %w", err)
@@ -67,6 +76,6 @@ func deleteConfigTx(ctx context.Context, tx pgx.Tx, orgID string, id uuid.UUID, 
 	if hasChildren {
 		return errDeleteWithChildren
 	}
-	_, err := tx.Exec(ctx, `DELETE FROM sync_configurations WHERE org_id = $1 AND name = $2 AND provider = $3`, orgID, name, provider)
+	_, err = tx.Exec(ctx, `DELETE FROM sync_configurations WHERE id = $1`, id)
 	return err
 }

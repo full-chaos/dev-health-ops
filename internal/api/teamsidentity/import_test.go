@@ -80,7 +80,10 @@ func TestImportTeamsValidationMatchesPydantic(t *testing.T) {
 // TestParseDiscoveredTeamAcceptsWhatPydanticAccepts: lax-mode coercions and
 // the associations default must NOT be rejected.
 func TestParseDiscoveredTeamAcceptsWhatPydanticAccepts(t *testing.T) {
-	for _, memberCount := range []string{`"5"`, `" 7 "`, `5.0`, `true`, `"5.0"`, `100000000000000000000`} {
+	for _, memberCount := range []string{`"5"`, `" 7 "`, `5.0`, `true`, `"5.0"`, `100000000000000000000`,
+		// Values past the int64 range, in every form the body can carry them:
+		// pydantic keeps the exact integer, so each must validate.
+		`9223372036854775808`, `-9223372036854775809`, `"-9223372036854775809"`, `"9223372036854775808"`, `" -9223372036854775809 "`} {
 		body := `{"teams":[{"provider_type":"jira","provider_team_id":"ENG","name":"Eng","member_count":` + memberCount + `}]}`
 		req := httptest.NewRequest(http.MethodPost, "/x", strings.NewReader(body))
 		decoded, _, _, err := pybody.Read(req)
@@ -94,8 +97,8 @@ func TestParseDiscoveredTeamAcceptsWhatPydanticAccepts(t *testing.T) {
 			t.Errorf("member_count=%s: problems=%v teams=%d, want accepted", memberCount, parseProblems, len(teams))
 			continue
 		}
-		if teams[0].MemberCount == nil {
-			t.Errorf("member_count=%s: not captured", memberCount)
+		if teams[0].MemberCount != nil {
+			t.Errorf("member_count=%s: an import must not carry a member count (int64 cannot hold every value pydantic accepts)", memberCount)
 		}
 		if teams[0].Associations == nil {
 			t.Errorf("member_count=%s: absent associations must default to {}, got nil", memberCount)

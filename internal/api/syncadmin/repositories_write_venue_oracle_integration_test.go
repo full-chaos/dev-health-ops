@@ -9,6 +9,9 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -31,76 +34,89 @@ const repositoriesVenueKey = "venue-sync-repositories-settings-encryption-key"
 // models' defaults and onupdate hooks) and the Go api's injected clock.
 const repositoriesPinnedNow = "2026-09-01T12:34:56.123456+00:00"
 
-// gitlabDocProject is one project in the shape GitLab's REST API documents
-// for GET /groups/:id/projects (doc-sourced, not a recording).
-func gitlabDocProject(id int, name, path, pathWithNamespace string) map[string]any {
-	return map[string]any{
-		"id": id, "description": nil, "name": name, "name_with_namespace": "Acme / " + name, "path": path,
-		"path_with_namespace": pathWithNamespace, "created_at": "2024-01-02T03:04:05.000Z", "default_branch": "main",
-		"tag_list": []any{}, "topics": []any{}, "ssh_url_to_repo": "git@gitlab.example.com:" + pathWithNamespace + ".git",
-		"http_url_to_repo": "https://gitlab.example.com/" + pathWithNamespace + ".git",
-		"web_url":          "https://gitlab.example.com/" + pathWithNamespace, "readme_url": nil, "avatar_url": nil,
-		"forks_count": 0, "star_count": 1, "last_activity_at": "2026-08-01T00:00:00.000Z",
-		"namespace": map[string]any{"id": 7, "name": "Acme", "path": "acme", "kind": "group", "full_path": "acme"},
-	}
+// invalidGitLabToken is the fixed test string the invalid_token recording
+// was captured with: not a credential.
+const invalidGitLabToken = "invalid-venue-test-token-not-a-credential"
+
+// recordedGitLab is one response recorded from gitlab.com
+// (testdata/gitlab_recorded, see its README): status, the headers the
+// listing reads, and the raw body.
+type recordedGitLab struct {
+	status  int
+	headers [][2]string
+	body    []byte
 }
 
-// fakeGitLab answers GET /api/v4/groups/{group}/projects the same way for
-// both planes, per group and page: a two-page group, a group with two
-// projects of one name, and the failure statuses the listing reports.
+func loadRecordedGitLab(t *testing.T, name string) recordedGitLab {
+	t.Helper()
+	dir := filepath.Join("testdata", "gitlab_recorded")
+	read := func(suffix string) []byte {
+		data, err := os.ReadFile(filepath.Join(dir, name+suffix))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return data
+	}
+	var out recordedGitLab
+	if _, err := fmt.Sscanf(strings.TrimSpace(string(read(".status"))), "%d", &out.status); err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(read(".headers"))), "\n") {
+		key, value, ok := strings.Cut(line, ":")
+		if ok {
+			out.headers = append(out.headers, [2]string{key, strings.TrimSpace(value)})
+		}
+	}
+	out.body = read(".body")
+	return out
+}
+
+// fakeGitLab serves the recorded gitlab.com responses to both planes, by
+// group, page and token: the two-page gitlab-examples/maven group, the
+// empty gitlab-examples/ops group, 404 for any other group, 401 for the
+// recorded invalid token. dupgroup is the maven recording's first page with
+// its second project renamed to the first one's name (a modified
+// recording: gitlab.com has no public group with two same-name projects to
+// record), for the ambiguous-name answer.
 func fakeGitLab(t *testing.T) *httptest.Server {
 	t.Helper()
-	pages := map[string][][]map[string]any{
-		"acme": {
-			{gitlabDocProject(11, "api", "api", "acme/api"), gitlabDocProject(12, "web", "web", "acme/sub/web")},
-			{gitlabDocProject(13, "007", "007", "acme/007"), gitlabDocProject(14, "docs", "docs", "acme/docs")},
-		},
-		"dupgroup": {{gitlabDocProject(21, "same", "same", "dupgroup/same"), gitlabDocProject(22, "same", "same-2", "dupgroup/sub/same")}},
+	page1, page2 := loadRecordedGitLab(t, "maven_page1"), loadRecordedGitLab(t, "maven_page2")
+	empty, missing, invalid := loadRecordedGitLab(t, "empty_group"), loadRecordedGitLab(t, "missing_group"), loadRecordedGitLab(t, "invalid_token")
+	var projects []map[string]any
+	if err := json.Unmarshal(page1.body, &projects); err != nil || len(projects) < 2 {
+		t.Fatalf("recorded page: %v", err)
+	}
+	projects[1]["name"] = projects[0]["name"]
+	dupBody, err := json.Marshal(projects)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dup := recordedGitLab{status: 200, headers: [][2]string{{"content-type", "application/json"}, {"x-next-page", ""}}, body: dupBody}
+	serve := func(w http.ResponseWriter, response recordedGitLab) {
+		for _, header := range response.headers {
+			w.Header().Add(header[0], header[1])
+		}
+		w.WriteHeader(response.status)
+		_, _ = w.Write(response.body)
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		path := strings.TrimPrefix(r.URL.EscapedPath(), "/api/v4/groups/")
-		group := strings.TrimSuffix(path, "/projects")
-		if r.Header.Get("PRIVATE-TOKEN") == "" {
-			w.WriteHeader(http.StatusUnauthorized)
-			_, _ = w.Write([]byte(`{"message":"401 Unauthorized"}`))
+		group, _ := url.PathUnescape(strings.TrimSuffix(strings.TrimPrefix(r.URL.EscapedPath(), "/api/v4/groups/"), "/projects"))
+		if r.Header.Get("PRIVATE-TOKEN") == invalidGitLabToken {
+			serve(w, invalid)
 			return
 		}
-		switch group {
-		case "denied":
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusUnauthorized)
-			_, _ = w.Write([]byte(`{"message":"401 Unauthorized"}`))
-			return
-		case "gone":
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusNotFound)
-			_, _ = w.Write([]byte(`{"message":"404 Group Not Found"}`))
-			return
-		case "boom":
-			w.WriteHeader(http.StatusNotImplemented)
-			_, _ = w.Write([]byte(`not implemented`))
-			return
+		switch {
+		case group == "gitlab-examples/maven" && r.URL.Query().Get("page") == "2":
+			serve(w, page2)
+		case group == "gitlab-examples/maven":
+			serve(w, page1)
+		case group == "gitlab-examples/ops":
+			serve(w, empty)
+		case group == "dupgroup":
+			serve(w, dup)
+		default:
+			serve(w, missing)
 		}
-		groupPages, ok := pages[group]
-		if !ok {
-			w.WriteHeader(http.StatusNotFound)
-			_, _ = w.Write([]byte(`{"message":"404 Group Not Found"}`))
-			return
-		}
-		page := 1
-		fmt.Sscanf(r.URL.Query().Get("page"), "%d", &page)
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("X-Total-Pages", fmt.Sprint(len(groupPages)))
-		if page < len(groupPages) {
-			w.Header().Set("X-Next-Page", fmt.Sprint(page+1))
-		} else {
-			w.Header().Set("X-Next-Page", "")
-		}
-		body := []map[string]any{}
-		if page >= 1 && page <= len(groupPages) {
-			body = groupPages[page-1]
-		}
-		_ = json.NewEncoder(w).Encode(body)
 	}))
 	t.Cleanup(server.Close)
 	return server
@@ -108,10 +124,11 @@ func fakeGitLab(t *testing.T) *httptest.Server {
 
 type repositoriesIDs struct {
 	orgA, orgB, adminA, memberA, ownerB                                        uuid.UUID
-	credGL, credNoToken, credConfigURL, credBroken                             uuid.UUID
+	credGL, credNoToken, credConfigURL, credBroken, credInvalid                uuid.UUID
 	intGH, intGH2, intGH3, intGH4, intGL, intGL2, intGL3, intGL4, intGL5, intB uuid.UUID
-	intJira                                                                    uuid.UUID
+	intJira, intGL6                                                            uuid.UUID
 	cfgGH, cfgGL, cfgGLNoCred, cfgGLNoToken, cfgGLConfigURL, cfgGLBroken       uuid.UUID
+	cfgGLInvalidToken                                                          uuid.UUID
 	cfgLegacy, cfgJira, cfgGated, cfgBadTargets, cfgPairs, cfgEmptyName, cfgB  uuid.UUID
 	seededSources                                                              []uuid.UUID
 }
@@ -121,7 +138,7 @@ func newRepositoriesIDs() repositoriesIDs {
 	for _, target := range []*uuid.UUID{&ids.orgA, &ids.orgB, &ids.adminA, &ids.memberA, &ids.ownerB, &ids.credGL, &ids.credNoToken,
 		&ids.credConfigURL, &ids.credBroken, &ids.intGH, &ids.intGH2, &ids.intGH3, &ids.intGH4, &ids.intGL, &ids.intGL2, &ids.intGL3,
 		&ids.intGL4, &ids.intGL5, &ids.intB, &ids.intJira, &ids.cfgGH, &ids.cfgGL, &ids.cfgGLNoCred, &ids.cfgGLNoToken, &ids.cfgGLConfigURL,
-		&ids.cfgGLBroken, &ids.cfgLegacy, &ids.cfgJira, &ids.cfgGated, &ids.cfgBadTargets, &ids.cfgPairs, &ids.cfgEmptyName, &ids.cfgB} {
+		&ids.cfgGLBroken, &ids.cfgLegacy, &ids.cfgJira, &ids.cfgGated, &ids.cfgBadTargets, &ids.cfgPairs, &ids.cfgEmptyName, &ids.cfgB, &ids.credInvalid, &ids.intGL6, &ids.cfgGLInvalidToken} {
 		*target = uuid.New()
 	}
 	return ids
@@ -206,20 +223,20 @@ func TestSyncConfigRepositoriesVenueOracle(t *testing.T) {
 		put("github new owner, none", ids.cfgGH, `{"owner":"other","repos":[]}`, a),
 		put("github duplicate new", ids.cfgGH, `{"owner":"acme","repos":["dup","dup"]}`, a),
 		put("stored pairs options", ids.cfgPairs, `{"owner":"old","repos":["a"]}`, a),
-		put("gitlab names, ids, shadowed name", ids.cfgGL, `{"owner":"acme","repos":["api","14","007","555"," 12 "]}`, a),
-		put("gitlab unknown name", ids.cfgGL, `{"owner":"acme","repos":["nope","api"]}`, a),
-		put("gitlab ambiguous name", ids.cfgGL, `{"owner":"dupgroup","repos":["same"]}`, a),
-		put("gitlab 401", ids.cfgGL, `{"owner":"denied","repos":["x"]}`, a),
-		put("gitlab 404", ids.cfgGL, `{"owner":"gone","repos":["x"]}`, a),
-		put("gitlab 501", ids.cfgGL, `{"owner":"boom","repos":["x"]}`, a),
-		put("gitlab ids with failed listing", ids.cfgGL, `{"owner":"boom","repos":["31","32"]}`, a),
-		put("gitlab none", ids.cfgGL, `{"owner":"acme","repos":[]}`, a),
-		put("gitlab no credential, name", ids.cfgGLNoCred, `{"owner":"acme","repos":["api"]}`, a),
-		put("gitlab no credential, ids", ids.cfgGLNoCred, `{"owner":"acme","repos":["5"," 6 "]}`, a),
-		put("gitlab no token, name", ids.cfgGLNoToken, `{"owner":"acme","repos":["api"]}`, a),
-		put("gitlab no token, id", ids.cfgGLNoToken, `{"owner":"acme","repos":["7"]}`, a),
-		put("gitlab url from config", ids.cfgGLConfigURL, `{"owner":"acme","repos":["web","docs"]}`, a),
-		put("gitlab credential not decryptable", ids.cfgGLBroken, `{"owner":"acme","repos":["api"]}`, a),
+		put("gitlab names, path, ids", ids.cfgGL, `{"owner":"gitlab-examples/maven","repos":["simple-maven-dep","Simple Maven Example","gitlab-examples/maven/simple-maven-app","3467535","999"," 12 "]}`, a),
+		put("gitlab unknown name", ids.cfgGL, `{"owner":"gitlab-examples/maven","repos":["nope","simple-maven-dep"]}`, a),
+		put("gitlab ambiguous name", ids.cfgGL, `{"owner":"dupgroup","repos":["Simple Maven Example"]}`, a),
+		put("gitlab empty group", ids.cfgGL, `{"owner":"gitlab-examples/ops","repos":["anything"]}`, a),
+		put("gitlab missing group", ids.cfgGL, `{"owner":"gitlab-examples/no-such-group-for-venue-test","repos":["x"]}`, a),
+		put("gitlab ids with failed listing", ids.cfgGL, `{"owner":"gitlab-examples/no-such-group-for-venue-test","repos":["31","32"]}`, a),
+		put("gitlab invalid token", ids.cfgGLInvalidToken, `{"owner":"gitlab-examples/maven","repos":["simple-maven-dep"]}`, a),
+		put("gitlab none", ids.cfgGL, `{"owner":"gitlab-examples/maven","repos":[]}`, a),
+		put("gitlab no credential, name", ids.cfgGLNoCred, `{"owner":"gitlab-examples/maven","repos":["simple-maven-dep"]}`, a),
+		put("gitlab no credential, ids", ids.cfgGLNoCred, `{"owner":"gitlab-examples/maven","repos":["5"," 6 "]}`, a),
+		put("gitlab no token, name", ids.cfgGLNoToken, `{"owner":"gitlab-examples/maven","repos":["simple-maven-dep"]}`, a),
+		put("gitlab no token, id", ids.cfgGLNoToken, `{"owner":"gitlab-examples/maven","repos":["7"]}`, a),
+		put("gitlab url from config", ids.cfgGLConfigURL, `{"owner":"gitlab-examples/maven","repos":["simple-maven-app","3467553"]}`, a),
+		put("gitlab credential not decryptable", ids.cfgGLBroken, `{"owner":"gitlab-examples/maven","repos":["simple-maven-dep"]}`, a),
 		put("over the repo limit", ids.cfgB, `{"owner":"acme","repos":["a","b","c","d","e"]}`, b),
 		put("at the repo limit", ids.cfgB, `{"owner":"acme","repos":["a","b","c"]}`, b),
 		{Name: "github after", Method: "GET", Path: "/api/v1/admin/sync-configs/" + ids.cfgGH.String() + "/repositories", Headers: a},
@@ -302,6 +319,7 @@ SELECT $1, $2, id, false, $3, $3 FROM feature_flags WHERE key = 'canonical_incid
 		{"token": "tok-a", "url": gitlabURL},
 		{"url": gitlabURL},
 		{"token": "tok-c"},
+		{"token": invalidGitLabToken, "url": gitlabURL},
 	}
 	var calls []venueoracle.PythonCall
 	for _, payload := range secretsOf {
@@ -324,6 +342,7 @@ VALUES ($1, $2, 'gitlab', $3, true, $4, $5::json, $6, $6)`, id, ids.orgA.String(
 	credential(ids.credGL, "gl", texts[0], `{}`)
 	credential(ids.credNoToken, "gl-no-token", texts[1], `{}`)
 	credential(ids.credConfigURL, "gl-config-url", texts[2], `{"url": "`+gitlabURL+`"}`)
+	credential(ids.credInvalid, "gl-invalid-token", texts[3], `{}`)
 	credential(ids.credBroken, "gl-broken", base64.StdEncoding.EncodeToString([]byte("not a fernet token")), `{}`)
 
 	integration := func(id, org uuid.UUID, provider string, credentialID any) {
@@ -336,7 +355,8 @@ VALUES ($1, $2, $3, $4, $5, '{}', true, $6, $6)`, id, org.String(), provider, cr
 		credential any
 	}{{ids.intGH, "github", nil}, {ids.intGH2, "github", nil}, {ids.intGH3, "github", nil}, {ids.intGH4, "github", nil},
 		{ids.intGL, "gitlab", ids.credGL}, {ids.intGL2, "gitlab", nil}, {ids.intGL3, "gitlab", ids.credNoToken},
-		{ids.intGL4, "gitlab", ids.credConfigURL}, {ids.intGL5, "gitlab", ids.credBroken}, {ids.intJira, "jira", nil}} {
+		{ids.intGL4, "gitlab", ids.credConfigURL}, {ids.intGL5, "gitlab", ids.credBroken}, {ids.intJira, "jira", nil},
+		{ids.intGL6, "gitlab", ids.credInvalid}} {
 		integration(spec.id, ids.orgA, spec.provider, spec.credential)
 	}
 	integration(ids.intB, ids.orgB, "github", nil)
@@ -352,6 +372,7 @@ integration_id, created_at, updated_at) VALUES ($1, $2, $3, $4, $5::json, $6::js
 	config(ids.cfgGLNoToken, ids.orgA, "gl-no-token", "gitlab", `["git"]`, `{"group": "acme"}`, ids.intGL3)
 	config(ids.cfgGLConfigURL, ids.orgA, "gl-config-url", "GitLab", `["git"]`, `{"owner": "acme"}`, ids.intGL4)
 	config(ids.cfgGLBroken, ids.orgA, "gl-broken", "gitlab", `["git"]`, `{}`, ids.intGL5)
+	config(ids.cfgGLInvalidToken, ids.orgA, "gl-invalid-token", "gitlab", `["git"]`, `{}`, ids.intGL6)
 	config(ids.cfgLegacy, ids.orgA, "legacy", "github", `["git"]`, `{"owner": "acme"}`, nil)
 	config(ids.cfgJira, ids.orgA, "jira", "jira", `["work-items"]`, `{}`, ids.intJira)
 	config(ids.cfgGated, ids.orgA, "gated", "github", `["git", "Incidents"]`, `{}`, ids.intGH2)
@@ -378,8 +399,9 @@ metadata, is_enabled, discovered_at, last_seen_at) VALUES ($1, $2, $3, $4, $5, $
 	gl := func(path string) string {
 		return `{"path_with_namespace": "` + path + `", "planner_managed_sync_config_id": "` + ids.cfgGL.String() + `"}`
 	}
-	source(ids.orgA, ids.intGL, "gitlab", "project", "11", "api", "acme/api", gl("acme/api"), true)
-	source(ids.orgA, ids.intGL, "gitlab", "project", "99", "old", "acme/old", gl("acme/old"), true)
+	source(ids.orgA, ids.intGL, "gitlab", "project", "3467553", "simple-maven-dep", "gitlab-examples/maven/simple-maven-dep",
+		gl("gitlab-examples/maven/simple-maven-dep"), true)
+	source(ids.orgA, ids.intGL, "gitlab", "project", "99", "old", "gitlab-examples/maven/old", gl("gitlab-examples/maven/old"), true)
 	b := `{"planner_managed_sync_config_id": "` + ids.cfgB.String() + `", "owner": "acme"}`
 	for _, name := range []string{"x", "y", "z"} {
 		source(ids.orgB, ids.intB, "github", "repository", "acme/"+name, name, "acme/"+name, b, true)

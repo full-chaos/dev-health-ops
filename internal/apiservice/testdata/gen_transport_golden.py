@@ -22,7 +22,7 @@ import sys
 from typing import Any
 
 AXES: dict[str, list[Any]] = {
-    "config": ["default", "list", "star"],
+    "config": ["default", "list", "star", "empty", "blank"],
     "method": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     "origin": [
         None,
@@ -47,6 +47,8 @@ CONFIGS = {
     "default": None,
     "list": "https://a.example, https://b.example,,",
     "star": "*",
+    "empty": "",
+    "blank": "   ",
 }
 HEADER_NAMES = {
     "origin": "Origin",

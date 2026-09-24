@@ -53,6 +53,8 @@ func TestAPISettingsResolution(t *testing.T) {
 		{name: "flag wins over env", env: map[string]string{"DEV_HEALTH_API_ADDR": ":9000"},
 			overrides: map[string]string{"DEV_HEALTH_API_ADDR": ":9100"}, address: ":9100", origins: []string{"http://localhost:3000"}},
 		{name: "empty origin list", env: map[string]string{"CORS_ALLOWED_ORIGINS": " , "}, address: ":8000", origins: []string{}},
+		{name: "present empty origin list", env: map[string]string{"CORS_ALLOWED_ORIGINS": ""}, address: ":8000", origins: []string{}},
+		{name: "present blank origin list", env: map[string]string{"CORS_ALLOWED_ORIGINS": "   "}, address: ":8000", origins: []string{}},
 		{name: "blank address falls back to the default", env: map[string]string{"DEV_HEALTH_API_ADDR": "  "}, address: ":8000", origins: []string{"http://localhost:3000"}},
 		{name: "star kept verbatim", env: map[string]string{"CORS_ALLOWED_ORIGINS": "*"}, address: ":8000", origins: []string{"*"}},
 		{name: "not host:port", env: map[string]string{"DEV_HEALTH_API_ADDR": "8000"}, err: "DEV_HEALTH_API_ADDR"},

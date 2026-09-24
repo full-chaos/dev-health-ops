@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
@@ -90,7 +91,13 @@ func TestCORSVenueOracleMatchesLiveStarlette(t *testing.T) {
 	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
 	python := pyoracle.Resolve(t, root)
 
-	configs := map[string]*string{"default": nil, "list": ptr("https://a.example, https://b.example,,"), "star": ptr("*")}
+	configs := map[string]*string{
+		"default": nil,
+		"list":    ptr("https://a.example, https://b.example,,"),
+		"star":    ptr("*"),
+		"empty":   ptr(""),
+		"blank":   ptr("   "),
+	}
 	var cases []corsCase
 	for _, origin := range []*string{nil, ptr(""), ptr("https://a.example"), ptr("http://localhost:3000"), ptr("https://evil.example")} {
 		for vary := 0; vary <= 2; vary++ {
@@ -132,8 +139,22 @@ func TestCORSVenueOracleMatchesLiveStarlette(t *testing.T) {
 		t.Fatalf("decode: %v\n%s", err, output)
 	}
 	compared := 0
+	if len(cases) != 45 || len(want.Configs) != 5 {
+		t.Fatalf("matrix is %d cases x %d configs, want 45 x 5", len(cases), len(want.Configs))
+	}
 	for name, config := range want.Configs {
-		cors := NewCORS(config.AllowOrigins)
+		origins, known := configs[name]
+		if !known {
+			t.Fatalf("python answered an unknown config %q", name)
+		}
+		// Go's origin list comes from the production loader, never from
+		// Python's parse: an unset, empty or blank variable must reach the
+		// same allow-list on both planes.
+		goOrigins := loadCORSOrigins(t, origins)
+		if !reflect.DeepEqual(append([]string{}, goOrigins...), append([]string{}, config.AllowOrigins...)) {
+			t.Errorf("config=%s allow_origins: go %q, python %q", name, goOrigins, config.AllowOrigins)
+		}
+		cors := NewCORS(goOrigins)
 		for index, c := range cases {
 			vary := c.Vary
 			handler := cors.Wrap(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -164,13 +185,31 @@ func TestCORSVenueOracleMatchesLiveStarlette(t *testing.T) {
 			compared++
 		}
 	}
-	if compared != len(cases)*len(configs) || !strings.HasPrefix(want.Starlette, "1.7.") {
-		t.Fatalf("compared %d of %d cases against starlette %s", compared, len(cases)*len(configs), want.Starlette)
+	if compared != 225 || !strings.HasPrefix(want.Starlette, "1.7.") {
+		t.Fatalf("compared %d of 225 cases against starlette %s", compared, want.Starlette)
 	}
 	venueoracle.WriteProof(t)
 }
 
 func ptr(value string) *string { return &value }
+
+// loadCORSOrigins is the allow-list the real config.Load builds for one
+// CORS_ALLOWED_ORIGINS setting (nil: the variable is absent).
+func loadCORSOrigins(t *testing.T, origins *string) []string {
+	t.Helper()
+	env := map[string]string{}
+	if origins != nil {
+		env["CORS_ALLOWED_ORIGINS"] = *origins
+	}
+	cfg, err := config.Load(config.Spec{
+		Service:   config.APIServiceName,
+		LookupEnv: func(key string) (string, bool) { value, ok := env[key]; return value, ok },
+	})
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+	return cfg.CORSAllowedOrigins
+}
 
 func withOrigin(origin *string) map[string]string {
 	if origin == nil {

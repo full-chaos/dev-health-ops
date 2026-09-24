@@ -523,7 +523,7 @@ func buildCredential(header, kind, flagName, rawArgv string) (*goapiproof.Creden
 // measuring meta WITH a bearer token would exercise a path real anonymous
 // traffic never takes, and a route that happens to also accept an
 // unrelated valid token is not proof of the public code path.
-func doREST(ctx context.Context, client *goapiproof.LegClient, baseURL, method, path string, query url.Values, body any, credential *goapiproof.Credential, timeout time.Duration) (goapiproof.RESTLeg, error) {
+func doREST(ctx context.Context, client *goapiproof.LegClient, baseURL, method, path string, query url.Values, body any, credential *goapiproof.Credential, baseline bool, timeout time.Duration) (goapiproof.RESTLeg, error) {
 	target := strings.TrimRight(baseURL, "/") + path
 	if len(query) > 0 {
 		target += "?" + query.Encode()
@@ -555,6 +555,20 @@ func doREST(ctx context.Context, client *goapiproof.LegClient, baseURL, method, 
 		if err := credential.Apply(ctx, req); err != nil {
 			return goapiproof.RESTLeg{}, err
 		}
+	}
+	if baseline {
+		// CHAOS-6580: the Python api's unhandled-error path answers a real
+		// response (its own status and body -- doREST never treats that as a
+		// failure) but does not send `Connection: close`, and then drops the
+		// TCP connection anyway. A reused pooled connection to a Python
+		// process that just did this fails the NEXT request with a transport
+		// error indistinguishable, in the report, from a real outage. The
+		// candidate (Go) plane has no such class, so only the baseline leg
+		// pays for a fresh connection per request; setting Close here (not
+		// only after an observed 5xx) also covers a Python error shape that
+		// is not a plain 5xx, which this corpus has already found one of
+		// (bigint_4301's JSON-encode failure inside the error renderer).
+		req.Close = true
 	}
 
 	legResponse, err := client.Do(req)
@@ -1573,7 +1587,7 @@ func bracketedReread(
 ) (*writeSkewRecord, *outcome, goapiproof.Snapshot, goapiproof.Result, error) {
 	record := &writeSkewRecord{Verdict: goapiproof.WriteSkewRefused}
 	var none goapiproof.Snapshot
-	secondLeg, err := doREST(ctx, client, f.pythonAPIURL, spec.Method, spec.Path, request.Query, request.Body, baselineCredential, timeout)
+	secondLeg, err := doREST(ctx, client, f.pythonAPIURL, spec.Method, spec.Path, request.Query, request.Body, baselineCredential, true, timeout)
 	if err != nil {
 		transport, ok := legTransportOutcome(ctx, "", request.Name, "baseline", nil, err)
 		if !ok {
@@ -2151,7 +2165,7 @@ func proveOneRESTRequest(
 	// re-reads the baseline after the candidate, so a write landing
 	// between the legs shows as a change on the reference plane itself.
 	baselineStarted := time.Now()
-	baselineLeg, err := doREST(ctx, client, f.pythonAPIURL, spec.Method, spec.Path, request.Query, request.Body, baselineCredential, timeout)
+	baselineLeg, err := doREST(ctx, client, f.pythonAPIURL, spec.Method, spec.Path, request.Query, request.Body, baselineCredential, true, timeout)
 	if err != nil {
 		if out, ok := legTransportOutcome(ctx, operation, request.Name, "baseline", boundIDs, err); ok {
 			var started answerStartedError
@@ -2163,7 +2177,7 @@ func proveOneRESTRequest(
 		return outcome{}, fmt.Errorf("baseline leg: %w", err)
 	}
 	baselineObservedAt := time.Now().UTC()
-	candidateLeg, err := doREST(ctx, client, f.candidateBase(), spec.Method, spec.Path, request.Query, request.Body, candidateCredential, timeout)
+	candidateLeg, err := doREST(ctx, client, f.candidateBase(), spec.Method, spec.Path, request.Query, request.Body, candidateCredential, false, timeout)
 	if err != nil {
 		if out, ok := legTransportOutcome(ctx, operation, request.Name, "candidate", boundIDs, err); ok {
 			return out, nil
@@ -2692,7 +2706,7 @@ func proveEdgeCredentialOnCandidate(
 ) (outcome, error) {
 	requestName := request.Name + " (edge-credential-on-candidate)"
 	timeout := resolveRESTTimeout(request.Timeout, f.timeout)
-	leg, err := doREST(ctx, client, f.candidateBase(), spec.Method, spec.Path, request.Query, request.Body, edgeCredential, timeout)
+	leg, err := doREST(ctx, client, f.candidateBase(), spec.Method, spec.Path, request.Query, request.Body, edgeCredential, false, timeout)
 	if err != nil {
 		if out, ok := legTransportOutcome(ctx, operation, requestName, "candidate", nil, err); ok {
 			return out, nil

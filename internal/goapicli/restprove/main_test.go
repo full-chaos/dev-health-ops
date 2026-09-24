@@ -737,7 +737,7 @@ func TestDoREST_SendsQueryAndBodyAndReadsBuildHeader(t *testing.T) {
 	defer server.Close()
 
 	leg, err := doREST(context.Background(), goapiproof.NewLegClient(0), server.URL, http.MethodPost, "/p",
-		url.Values{"q": {"1"}}, map[string]any{"x": "y"}, staticCredentialForTest(), 0)
+		url.Values{"q": {"1"}}, map[string]any{"x": "y"}, staticCredentialForTest(), false, 0)
 	if err != nil {
 		t.Fatalf("doREST: %v", err)
 	}
@@ -1652,7 +1652,7 @@ func TestDoREST_TimeoutClassifiesAsTransportTimeout(t *testing.T) {
 	server := stallingServer(t)
 	defer server.Close()
 
-	_, err := doREST(context.Background(), goapiproof.NewLegClient(0), server.URL, http.MethodGet, "/p", nil, nil, nil, 30*time.Millisecond)
+	_, err := doREST(context.Background(), goapiproof.NewLegClient(0), server.URL, http.MethodGet, "/p", nil, nil, nil, false, 30*time.Millisecond)
 	if err == nil {
 		t.Fatal("doREST: want an error from a leg that never answers, got nil")
 	}
@@ -1674,7 +1674,7 @@ func TestDoREST_ConnectionDropClassifiesAsTransportError(t *testing.T) {
 	server := hijackAndCloseServer(t)
 	defer server.Close()
 
-	_, err := doREST(context.Background(), goapiproof.NewLegClient(0), server.URL, http.MethodGet, "/p", nil, nil, nil, 5*time.Second)
+	_, err := doREST(context.Background(), goapiproof.NewLegClient(0), server.URL, http.MethodGet, "/p", nil, nil, nil, false, 5*time.Second)
 	if err == nil {
 		t.Fatal("doREST: want an error from a dropped connection, got nil")
 	}

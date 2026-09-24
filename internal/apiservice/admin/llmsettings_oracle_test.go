@@ -376,10 +376,11 @@ FROM settings ORDER BY org_id, category, key`)
 }
 
 // checkBudgetLockSerializes proves the PUT takes the per-org budget advisory
-// lock: while another transaction holds that lock, a budget write must wait,
-// and it completes once the lock is released. A handler that skipped the lock
-// (or took a different key) answers at once and fails the first check. The
-// venue's requests are serial, so this is the only place a missing lock shows.
+// lock: while another transaction holds that lock, a budget write must wait
+// on it (Postgres shows the waiting backend), and it completes only after the
+// lock is released. A handler that skipped the lock, or took a different key,
+// answers before any waiter appears and fails. The venue's requests are
+// serial, so this is the only place a missing lock shows.
 func checkBudgetLockSerializes(t *testing.T, ctx context.Context, venue *venueoracle.Venue, goBase string, org uuid.UUID, token string) {
 	t.Helper()
 	pool, err := pgxpool.New(ctx, venue.AdminURI(t, venue.GoDB))
@@ -418,10 +419,28 @@ func checkBudgetLockSerializes(t *testing.T, ctx context.Context, venue *venueor
 		response.Body.Close()
 		done <- answer{status: response.StatusCode}
 	}()
-	select {
-	case got := <-done:
-		t.Fatalf("budget PUT answered (%d, %v) while another transaction held the per-org budget lock", got.status, got.err)
-	case <-time.After(2 * time.Second):
+	// The order is the assertion, not a wall-clock wait: the lock is released
+	// only after Postgres shows a backend waiting on it, and a PUT that answers
+	// before that never took the lock. (A PUT that takes no lock never appears
+	// as a waiter, so it fails here whatever the runner's speed.)
+	key := admin.BudgetLockKey(org.String())
+	deadline := time.Now().Add(30 * time.Second)
+	for waiting := 0; waiting == 0; {
+		select {
+		case got := <-done:
+			t.Fatalf("budget PUT answered (%d, %v) before any backend waited on the per-org budget lock", got.status, got.err)
+		default:
+		}
+		if err := pool.QueryRow(ctx, `SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted
+AND ((classid::bigint << 32) | objid::bigint) = $1`, key).Scan(&waiting); err != nil {
+			t.Fatalf("read pg_locks: %v", err)
+		}
+		if waiting == 0 {
+			if time.Now().After(deadline) {
+				t.Fatal("no backend waited on the per-org budget lock: the PUT did not take it")
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
 	}
 	if err := holder.Rollback(ctx); err != nil {
 		t.Fatalf("release budget lock: %v", err)

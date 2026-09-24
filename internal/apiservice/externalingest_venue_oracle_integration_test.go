@@ -403,6 +403,15 @@ func TestExternalIngestVenueOracle(t *testing.T) {
 				`"records":[{"kind":"not_a_real_kind.v1","externalId":"x","payload":{}}]}`),
 		},
 		{Name: "list batches", Method: "GET", Path: "/api/v1/external-ingest/batches", Headers: auth},
+		{Name: "list batches createdAfter exponent", Method: "GET", Path: "/api/v1/external-ingest/batches?createdAfter=1e5", Headers: auth},
+		{Name: "list batches createdAfter unix seconds", Method: "GET", Path: "/api/v1/external-ingest/batches?createdAfter=1767323045", Headers: auth},
+		{Name: "list batches createdAfter naive iso", Method: "GET", Path: "/api/v1/external-ingest/batches?createdAfter=2026-01-01T00:00:00", Headers: auth},
+		{Name: "list batches createdBefore garbage with bad page", Method: "GET", Path: "/api/v1/external-ingest/batches?createdBefore=bogus&limit=0&offset=-1", Headers: auth},
+		{Name: "list batches limit not an integer", Method: "GET", Path: "/api/v1/external-ingest/batches?limit=abc", Headers: auth},
+		{Name: "list batches limit over the cap", Method: "GET", Path: "/api/v1/external-ingest/batches?limit=201", Headers: auth},
+		{Name: "list batches empty status filter", Method: "GET", Path: "/api/v1/external-ingest/batches?status=", Headers: auth},
+		{Name: "list batches offset past int64", Method: "GET", Path: "/api/v1/external-ingest/batches?offset=99999999999999999999", Headers: auth},
+		{Name: "list batches repeated createdAfter", Method: "GET", Path: "/api/v1/external-ingest/batches?createdAfter=bogus&createdAfter=2026-01-01T00:00:00Z", Headers: auth},
 		{Name: "get batches unauthenticated", Method: "GET", Path: "/api/v1/external-ingest/batches"},
 		// The SEEDED batch (fixed id, identical row on both planes from the
 		// start -- see externalIngestVenueSeed's doc comment): a real

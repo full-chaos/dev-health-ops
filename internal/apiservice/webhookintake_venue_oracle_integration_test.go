@@ -572,6 +572,36 @@ func TestWebhookIntakeVenueOraclePagerDuty(t *testing.T) {
 		},
 	}
 
+	// occurred_at is pydantic's lax datetime: a numeric string or a number is
+	// a unix timestamp, a naive value is refused by the model's validator,
+	// and a non-UTC offset is normalized to UTC. Each variant is compared
+	// with the real Python response and stream entry.
+	for index, occurredAt := range []struct{ name, json string }{
+		{"numeric string", `".5"`},
+		{"exponent string", `"1e5"`},
+		{"integer", `1767323045`},
+		{"float", `1767323045.5`},
+		{"milliseconds", `1767323045123`},
+		{"naive iso", `"2026-01-02T03:04:05"`},
+		{"date only", `"2026-01-02"`},
+		{"non-utc offset", `"2026-01-02T03:04:05+05:30"`},
+		{"bool", `true`},
+		{"null", `null`},
+		{"garbage", `"not-a-date"`},
+	} {
+		body := []byte(fmt.Sprintf(`{"event":{"id":"PD-OCC-%d","event_type":"incident.triggered","occurred_at":%s,"data":{}}}`, index, occurredAt.json))
+		requests = append(requests, venueoracle.Request{
+			Name:   "pagerduty occurred_at " + occurredAt.name,
+			Method: "POST", Path: "/api/v1/webhooks/pagerduty/" + seed.bindingActive,
+			Headers: map[string]string{
+				"X-Webhook-Subscription": "sub-active",
+				"X-PagerDuty-Signature":  pagerdutyVenueSign(secretActive, body),
+				"Content-Type":           "application/json",
+			},
+			Body: venueoracle.B64(string(body)),
+		})
+	}
+
 	python := venue.ServePython(t, requests)
 	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{})
 	t.Log(receipt)

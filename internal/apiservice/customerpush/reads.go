@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"net/url"
 	"time"
 
 	"github.com/google/uuid"
@@ -262,25 +261,7 @@ func (h *handlers) listOrgTokens(w http.ResponseWriter, r *http.Request) {
 		WHERE org_id = $1 ORDER BY created_at DESC`, orgID)
 }
 
-// lastQuery is Starlette's QueryParams.get: the LAST value of a repeated
-// parameter, nil when absent.
-func lastQuery(values url.Values, name string) *string {
-	list, ok := values[name]
-	if !ok || len(list) == 0 {
-		return nil
-	}
-	return &list[len(list)-1]
-}
-
 func int64Pointer(value int64) *int64 { return &value }
-
-func instant(value *pytime.DateTime) *time.Time {
-	if value == nil {
-		return nil
-	}
-	at := value.Time.UTC()
-	return &at
-}
 
 // batchListItem is _batch_to_admin_list_item.
 func batchListItem(row externalingest.BatchRow) *pyjson.Object {
@@ -301,12 +282,12 @@ func batchListItem(row externalingest.BatchRow) *pyjson.Object {
 func (h *handlers) listSourceBatches(w http.ResponseWriter, r *http.Request) {
 	values := r.URL.Query()
 	var errs pybody.Errors
-	status := lastQuery(values, "status")
-	producer := lastQuery(values, "producer")
-	from, _ := errs.QueryDatetime("from", lastQuery(values, "from"))
-	to, _ := errs.QueryDatetime("to", lastQuery(values, "to"))
-	limit, _ := errs.QueryInt("limit", lastQuery(values, "limit"), 50, int64Pointer(1), int64Pointer(200))
-	offset, _ := errs.QueryInt("offset", lastQuery(values, "offset"), 0, int64Pointer(0), nil)
+	status := pybody.LastQuery(values, "status")
+	producer := pybody.LastQuery(values, "producer")
+	from, _ := errs.QueryDatetime("from", pybody.LastQuery(values, "from"))
+	to, _ := errs.QueryDatetime("to", pybody.LastQuery(values, "to"))
+	limit, _ := errs.QueryInt("limit", pybody.LastQuery(values, "limit"), 50, int64Pointer(1), int64Pointer(200))
+	offset, _ := errs.QueryInt("offset", pybody.LastQuery(values, "offset"), 0, int64Pointer(0), nil)
 	if len(errs) > 0 {
 		policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(errs), nil)
 		return
@@ -327,7 +308,7 @@ func (h *handlers) listSourceBatches(w http.ResponseWriter, r *http.Request) {
 	}
 	rows, total, err := externalingest.ListBatches(r.Context(), h.pool, orgID, externalingest.BatchQuery{
 		SourceSystem: &source.System, SourceInstance: &source.Instance, Status: status, Producer: producer,
-		CreatedAfter: instant(from), CreatedBefore: instant(to), Limit: int(limit.Int64()), Offset: int(offset.Int64()),
+		CreatedAfter: pybody.Instant(from), CreatedBefore: pybody.Instant(to), Limit: int(limit.Int64()), Offset: int(offset.Int64()),
 	})
 	if err != nil {
 		h.internal(w, r, "list batches", err)
@@ -365,8 +346,8 @@ func jsonObjectColumn(raw []byte) (pyjson.Value, error) {
 func (h *handlers) getBatch(w http.ResponseWriter, r *http.Request) {
 	values := r.URL.Query()
 	var errs pybody.Errors
-	limit, _ := errs.QueryInt("rejected_records_limit", lastQuery(values, "rejected_records_limit"), 50, int64Pointer(1), int64Pointer(200))
-	offset, _ := errs.QueryInt("rejected_records_offset", lastQuery(values, "rejected_records_offset"), 0, int64Pointer(0), nil)
+	limit, _ := errs.QueryInt("rejected_records_limit", pybody.LastQuery(values, "rejected_records_limit"), 50, int64Pointer(1), int64Pointer(200))
+	offset, _ := errs.QueryInt("rejected_records_offset", pybody.LastQuery(values, "rejected_records_offset"), 0, int64Pointer(0), nil)
 	if len(errs) > 0 {
 		policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(errs), nil)
 		return

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/recordvalidation"
 	"io"
 	"log/slog"
@@ -456,6 +457,8 @@ func (d Deps) writeReplayStatus(w http.ResponseWriter, ctx context.Context, orgI
 	policy.WriteJSON(w, http.StatusOK, batchStatusResponse(batch, rejections, jobs, total, 50, 0), nil)
 }
 
+func int64Pointer(value int64) *int64 { return &value }
+
 // handleListBatches is status.py's list_batch_statuses (GET /batches).
 func (d Deps) handleListBatches() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -464,15 +467,32 @@ func (d Deps) handleListBatches() http.HandlerFunc {
 			writeIngestError(w, authErr)
 			return
 		}
+		values := r.URL.Query()
+		var problems pybody.Errors
+		sourceSystem, sourceInstance, statusFilter := pybody.LastQuery(values, "sourceSystem"), pybody.LastQuery(values, "sourceInstance"), pybody.LastQuery(values, "status")
+		createdAfter, _ := problems.QueryDatetime("createdAfter", pybody.LastQuery(values, "createdAfter"))
+		createdBefore, _ := problems.QueryDatetime("createdBefore", pybody.LastQuery(values, "createdBefore"))
+		limit, _ := problems.QueryInt("limit", pybody.LastQuery(values, "limit"), 50, int64Pointer(1), int64Pointer(200))
+		offset, _ := problems.QueryInt("offset", pybody.LastQuery(values, "offset"), 0, int64Pointer(0), nil)
+		if len(problems) > 0 {
+			policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(problems), nil)
+			return
+		}
+		// pydantic's int is unbounded; asyncpg refuses an offset past int64
+		// when it binds the page query, Python's unhandled 500.
+		if !offset.IsInt64() {
+			writeIngestError(w, unhandledError())
+			return
+		}
 		if err := rateLimitedOrTooManyRequests(d.routeLimiters.listBatches, ingestTokenRateLimitKey(authCtx.TokenID)); err != nil {
 			writeIngestError(w, err)
 			return
 		}
-		limit, offset := pageParams(r, "limit", "offset")
-		createdAfter, createdBefore := timeRangeParams(r)
-		batches, total, err := listBatches(r.Context(), d.Pool, authCtx.OrgID,
-			r.URL.Query().Get("status"), r.URL.Query().Get("sourceSystem"), r.URL.Query().Get("sourceInstance"),
-			createdAfter, createdBefore, limit, offset)
+		batches, total, err := ListBatches(r.Context(), d.Pool, authCtx.OrgID, BatchQuery{
+			SourceSystem: sourceSystem, SourceInstance: sourceInstance, Status: statusFilter,
+			CreatedAfter: pybody.Instant(createdAfter), CreatedBefore: pybody.Instant(createdBefore),
+			Limit: int(limit.Int64()), Offset: int(offset.Int64()),
+		})
 		if err != nil {
 			writeIngestError(w, newIngestError(http.StatusInternalServerError, "internal_error", "failed to list batches"))
 			return
@@ -484,8 +504,8 @@ func (d Deps) handleListBatches() http.HandlerFunc {
 		body := pyjson.NewObject()
 		body.Set("items", items)
 		body.Set("total", total)
-		body.Set("limit", limit)
-		body.Set("offset", offset)
+		body.Set("limit", limit.Int64())
+		body.Set("offset", offset.Int64())
 		policy.WriteJSON(w, http.StatusOK, body, nil)
 	}
 }
@@ -550,26 +570,6 @@ func pageParams(r *http.Request, limitParam, offsetParam string) (limit, offset 
 		offset = v
 	}
 	return limit, offset
-}
-
-// timeRangeParams reads createdAfter/createdBefore as RFC3339 timestamps
-// (status.py's list_batch_statuses, Query(alias="createdAfter"/"createdBefore")).
-// An absent or unparseable value is nil, matching FastAPI's optional
-// datetime query params -- this is a narrowing from FastAPI's exact 422 on
-// a malformed value to "silently not filtered"; see deps.go's package doc
-// for this package's convention of stating such narrowings explicitly.
-func timeRangeParams(r *http.Request) (after, before *time.Time) {
-	if raw := r.URL.Query().Get("createdAfter"); raw != "" {
-		if t, err := time.Parse(time.RFC3339, raw); err == nil {
-			after = &t
-		}
-	}
-	if raw := r.URL.Query().Get("createdBefore"); raw != "" {
-		if t, err := time.Parse(time.RFC3339, raw); err == nil {
-			before = &t
-		}
-	}
-	return after, before
 }
 
 // recomputeScopePyJSON builds status.py's RecomputeScopeResponse -- a real

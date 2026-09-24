@@ -224,30 +224,6 @@ func ListBatches(ctx context.Context, pool *pgxpool.Pool, orgID string, query Ba
 	return queryBatches(ctx, pool, where, args, query.CreatedAfter, query.CreatedBefore, query.Limit, query.Offset)
 }
 
-// listBatches is the data plane's call shape: an empty string means "not
-// filtered".
-func listBatches(
-	ctx context.Context, pool *pgxpool.Pool, orgID string,
-	statusFilter, sourceSystem, sourceInstance string, createdAfter, createdBefore *time.Time,
-	limit, offset int,
-) ([]BatchRow, int, error) {
-	where := `WHERE org_id = $1`
-	args := []any{orgID}
-	if statusFilter != "" {
-		args = append(args, statusFilter)
-		where += ` AND status = $` + strconv.Itoa(len(args))
-	}
-	if sourceSystem != "" {
-		args = append(args, sourceSystem)
-		where += ` AND source_system = $` + strconv.Itoa(len(args))
-	}
-	if sourceInstance != "" {
-		args = append(args, sourceInstance)
-		where += ` AND source_instance = $` + strconv.Itoa(len(args))
-	}
-	return queryBatches(ctx, pool, where, args, createdAfter, createdBefore, limit, offset)
-}
-
 func queryBatches(
 	ctx context.Context, pool *pgxpool.Pool, where string, args []any,
 	createdAfter, createdBefore *time.Time, limit, offset int,

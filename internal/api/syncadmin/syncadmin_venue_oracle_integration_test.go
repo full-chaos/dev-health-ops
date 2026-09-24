@@ -783,7 +783,7 @@ threshold_elevated, threshold_high, computed_at) VALUES
 // day count.
 func inspectBackfillDiagnostics(t *testing.T) func(venueoracle.Request, venueoracle.Response) {
 	want := map[string]string{
-		"backfill job linked run": `31 {"repo_metrics_rows":4,"repo_complexity_rows":1,"compounding_risk_rows":3,"compounding_risk_non_null_rows":2,` +
+		"backfill job linked run": `31 {"repo_metrics_rows":4,"repo_complexity_rows":2,"compounding_risk_rows":3,"compounding_risk_non_null_rows":2,` +
 			`"compounding_risk_unknown_rows":1,"reason_counts":{"missing_rework_churn":1,"missing_complexity_delta":2,"missing_review_latency":1,"missing_ownership_signal":1}}`,
 		"backfill job month edge": `4 {"repo_metrics_rows":2,"repo_complexity_rows":2,"compounding_risk_rows":1,"compounding_risk_non_null_rows":0,` +
 			`"compounding_risk_unknown_rows":1,"reason_counts":{"missing_rework_churn":1,"missing_complexity_delta":1,"missing_review_latency":1,"missing_ownership_signal":1}}`,

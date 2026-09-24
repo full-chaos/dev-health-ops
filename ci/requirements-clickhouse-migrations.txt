@@ -91,3 +91,11 @@ asyncpg==0.31.0
 croniter==6.2.2
 python-dateutil==2.9.0.post0
 six==1.17.0
+
+# --- the features seed oracle (dho admin features seed) ---
+# internal/admincli's TestSeedMatchesPython runs the Python producer
+# dev_health_ops.api.services.licensing.seed_feature_flags_async, which
+# imports jwt at module load. Found by installing this file with --no-deps
+# into a clean 3.14 venv and running that test until it passed; version from
+# uv.lock.
+pyjwt==2.13.0

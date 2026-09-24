@@ -35,12 +35,29 @@ from dev_health_ops.migrate import _run_upgrade
 sys.exit(_run_upgrade(argparse.Namespace(db=normalize_async_postgres_uri(sys.argv[1]), revision="head")))
 `
 
-// seedProgram runs the Python verb the migrate Job runs after the upgrade:
-// `dev-hops admin features seed`.
+// seedProgram runs the producer behind the Python verb the migrate Job runs
+// after the upgrade (`dev-hops admin features seed`): seed_feature_flags_async
+// on a session built the way the verb builds it (an async engine on the DSN,
+// expire_on_commit=False). It prints the number of rows created. The verb's
+// own module (dev_health_ops.api.admin.cli) imports the whole API, a Python
+// closure the Go integration shards do not install; the producer is what
+// writes the rows.
 const seedProgram = `
-import argparse, sys
-from dev_health_ops.api.admin.cli import seed_features
-sys.exit(seed_features(argparse.Namespace(db=sys.argv[1])))
+import asyncio, sys
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from dev_health_ops.db import normalize_async_postgres_uri
+from dev_health_ops.api.services.licensing import seed_feature_flags_async
+
+async def main():
+    engine = create_async_engine(normalize_async_postgres_uri(sys.argv[1]), pool_pre_ping=True)
+    session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)()
+    try:
+        print(await seed_feature_flags_async(session))
+    finally:
+        await session.close()
+        await engine.dispose()
+
+asyncio.run(main())
 `
 
 // registryProgram prints Python's STANDARD_FEATURES registry.
@@ -126,15 +143,15 @@ func TestSeedMatchesPython(t *testing.T) {
 		goWindow := [2]time.Time{goStarted, time.Now()}
 
 		wantCreated := removed
-		wantPython := fmt.Sprintf("Seeded %d feature flags.", len(removed))
+		wantPython := fmt.Sprint(len(removed))
 		if pass == "nothing missing" {
-			wantCreated, wantPython = []string{}, "All feature flags already exist."
+			wantCreated, wantPython = []string{}, "0"
 		}
 		if !reflect.DeepEqual(sorted(result.Created), sorted(wantCreated)) {
 			t.Fatalf("%s: dho created %v, want %v", pass, result.Created, wantCreated)
 		}
-		if !strings.Contains(string(output), wantPython) {
-			t.Fatalf("%s: the Python seed printed %q, want %q", pass, output, wantPython)
+		if strings.TrimSpace(string(output)) != wantPython {
+			t.Fatalf("%s: the Python seed created %q row(s), want %s", pass, output, wantPython)
 		}
 		// A row that existed before the seed is left exactly as it was, id and
 		// stamps included, by both seeds.
@@ -145,8 +162,8 @@ func TestSeedMatchesPython(t *testing.T) {
 				}
 			}
 		}
-		pythonRows := featureRows(t, ctx, databases[0], removed, pythonWindow)
-		goRows := featureRows(t, ctx, databases[1], removed, goWindow)
+		pythonRows := featureRows(t, ctx, databases[0], wantCreated, pythonWindow)
+		goRows := featureRows(t, ctx, databases[1], wantCreated, goWindow)
 		if !reflect.DeepEqual(goRows, pythonRows) {
 			var differing []string
 			for index := 0; index < len(goRows) || index < len(pythonRows); index++ {
@@ -225,9 +242,11 @@ func existingRows(t *testing.T, ctx context.Context, conn *pgx.Conn) map[string]
 }
 
 // featureRows reads feature_flags with every value compared as text, except
-// the id and the stamps of the rows a seed created: those are random or
-// run-time, so each is replaced by whether it has the shape the model gives it
-// (a uuid4 id; created_at = updated_at, inside the run window).
+// the id and the stamps: those are random or run-time. For a row this pass's
+// seed created, they are replaced by whether they have the shape the model
+// gives them (a uuid4 id; created_at = updated_at, inside this seed's run
+// window); for every other row they are left out here, and the full-row
+// snapshot above requires them unchanged.
 func featureRows(t *testing.T, ctx context.Context, conn *pgx.Conn, created []string, window [2]time.Time) []string {
 	t.Helper()
 	rows, err := conn.Query(ctx, "SELECT key, name, coalesce(description, '<null>'), category, min_tier, is_enabled, is_beta, is_deprecated, "+

@@ -66,9 +66,8 @@ func pyEqual(a, b pyjson.Value) bool {
 
 // pyNumber reads a bool, int or float as the exact rational Python
 // compares; a NaN or an infinity is a number with no rational (nil), which
-// equals nothing -- an infinity is equal only to itself, handled by the
-// caller's rational compare never matching, a deliberate simplification
-// that is exact for every stored JSON value because JSON has no infinity.
+// equals nothing here. pyEqual compares infinities before it calls this,
+// because a JSON number such as 1e400 decodes to an infinity.
 func pyNumber(value pyjson.Value) (*big.Rat, bool) {
 	switch v := value.(type) {
 	case bool:

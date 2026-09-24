@@ -7,38 +7,6 @@ import (
 	"testing"
 )
 
-func TestPageParamsClampsToPythonsBounds(t *testing.T) {
-	cases := []struct {
-		name                  string
-		query                 string
-		wantLimit, wantOffset int
-	}{
-		{"defaults", "", 50, 0},
-		{"over the 200 cap", "limit=201", 200, 0},
-		{"under the 1 floor", "limit=0", 1, 0},
-		{"negative limit", "limit=-5", 1, 0},
-		{"negative offset ignored, default kept", "offset=-1", 50, 0},
-		{"within bounds", "limit=10&offset=20", 10, 20},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			r := httptest.NewRequest("GET", "/x?"+c.query, nil)
-			limit, offset := pageParams(r, "limit", "offset")
-			if limit != c.wantLimit || offset != c.wantOffset {
-				t.Errorf("got (%d,%d), want (%d,%d)", limit, offset, c.wantLimit, c.wantOffset)
-			}
-		})
-	}
-}
-
-func TestPageParamsUsesTheNamedParamPair(t *testing.T) {
-	r := httptest.NewRequest("GET", "/x?limit=999&offset=999&errorLimit=5&errorOffset=6", nil)
-	limit, offset := pageParams(r, "errorLimit", "errorOffset")
-	if limit != 5 || offset != 6 {
-		t.Fatalf("got (%d,%d), want (5,6) -- errorLimit/errorOffset must not fall back to limit/offset", limit, offset)
-	}
-}
-
 // TestHandleGetSchema exercises router.py's get_schema directly -- no
 // database needed, since schema discovery is unauthenticated.
 func TestHandleGetSchema(t *testing.T) {

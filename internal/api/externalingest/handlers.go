@@ -10,7 +10,6 @@ import (
 	"log/slog"
 	"net/http"
 	"sort"
-	"strconv"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/licensing"
@@ -19,7 +18,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
-	"github.com/google/uuid"
 )
 
 // handleListSchemas is router.py's list_schemas (GET /schemas).
@@ -520,13 +518,31 @@ func (d Deps) handleGetBatch() http.HandlerFunc {
 			writeIngestError(w, authErr)
 			return
 		}
-		if err := rateLimitedOrTooManyRequests(d.routeLimiters.getBatch, ingestTokenRateLimitKey(authCtx.TokenID)); err != nil {
-			writeIngestError(w, err)
+		// FastAPI validates the path and query parameters after the auth
+		// dependency and BEFORE slowapi's wrapper runs, so a 422 costs
+		// nothing against the limit (path errors first, then query, in
+		// declaration order).
+		var problems pybody.Errors
+		rawID := r.PathValue("ingestion_id")
+		ingestionID, idFailure := pybody.ParsePydanticUUID(rawID)
+		if idFailure != nil {
+			problems = append(problems, pybody.UUIDError([]pyjson.Value{"path", "ingestion_id"}, rawID, idFailure))
+		}
+		values := r.URL.Query()
+		errorLimit, _ := problems.QueryInt("errorLimit", pybody.LastQuery(values, "errorLimit"), 50, int64Pointer(1), int64Pointer(200))
+		errorOffset, _ := problems.QueryInt("errorOffset", pybody.LastQuery(values, "errorOffset"), 0, int64Pointer(0), nil)
+		if len(problems) > 0 {
+			policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(problems), nil)
 			return
 		}
-		ingestionID, err := uuid.Parse(r.PathValue("ingestion_id"))
-		if err != nil {
-			writeIngestError(w, newIngestError(http.StatusNotFound, "not_found", "ingestion batch not found"))
+		// pydantic's int is unbounded; asyncpg refuses an offset past int64
+		// when it binds the page query, Python's unhandled 500.
+		if !errorOffset.IsInt64() {
+			writeIngestError(w, unhandledError())
+			return
+		}
+		if err := rateLimitedOrTooManyRequests(d.routeLimiters.getBatch, ingestTokenRateLimitKey(authCtx.TokenID)); err != nil {
+			writeIngestError(w, err)
 			return
 		}
 		batch, err := getBatch(r.Context(), d.Pool, authCtx.OrgID, ingestionID)
@@ -538,7 +554,7 @@ func (d Deps) handleGetBatch() http.HandlerFunc {
 			writeIngestError(w, newIngestError(http.StatusNotFound, "not_found", "ingestion batch not found"))
 			return
 		}
-		limit, offset := pageParams(r, "errorLimit", "errorOffset")
+		limit, offset := int(errorLimit.Int64()), int(errorOffset.Int64())
 		rejections, total, err := listRejections(r.Context(), d.Pool, authCtx.OrgID, ingestionID, limit, offset)
 		if err != nil {
 			writeIngestError(w, newIngestError(http.StatusInternalServerError, "internal_error", "failed to load rejections"))
@@ -551,28 +567,6 @@ func (d Deps) handleGetBatch() http.HandlerFunc {
 		}
 		policy.WriteModel(w, http.StatusOK, batchStatusResponse(batch, rejections, jobs, total, limit, offset), nil)
 	}
-}
-
-// pageParams reads limitParam/offsetParam, clamped to Python's Query(ge=1,
-// le=200) / Query(ge=0) bounds -- status.py's list_batch_statuses uses
-// "limit"/"offset", get_batch_status uses "errorLimit"/"errorOffset"
-// (status.py:1123-1124), never the same pair.
-func pageParams(r *http.Request, limitParam, offsetParam string) (limit, offset int) {
-	limit, offset = 50, 0
-	query := r.URL.Query()
-	if v, err := strconv.Atoi(httpapi.QueryLast(query, limitParam)); err == nil {
-		limit = v
-	}
-	if limit < 1 {
-		limit = 1
-	}
-	if limit > 200 {
-		limit = 200
-	}
-	if v, err := strconv.Atoi(httpapi.QueryLast(query, offsetParam)); err == nil && v >= 0 {
-		offset = v
-	}
-	return limit, offset
 }
 
 // recomputeScopePyJSON builds status.py's RecomputeScopeResponse -- a real

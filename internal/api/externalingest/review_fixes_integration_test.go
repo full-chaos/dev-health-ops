@@ -5,6 +5,7 @@ package externalingest
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -189,6 +190,68 @@ func TestAcceptBatchAgainstFaultsAndEdgeCases(t *testing.T) {
 			if recorder.Code != http.StatusUnprocessableEntity || strings.TrimSpace(recorder.Body.String()) != want {
 				t.Errorf("?%s: %d %s, want 422 %s", query, recorder.Code, recorder.Body.String(), want)
 			}
+		}
+	})
+
+	t.Run("GET /batches/{id} validates its path and query before the limiter", func(t *testing.T) {
+		orgID := uuid.New().String()
+		const token = "fcpush_get_batch_422_token"
+		seedIngestToken(t, ctx, pool, orgID, "github", "acme/repo", token)
+		deps := newTestDeps(t, pool, client)
+		calls := 0
+		get := func(target string) *httptest.ResponseRecorder {
+			req := httptest.NewRequest(http.MethodGet, target, nil)
+			// Every ingest auth attempt counts against a per-IP limit
+			// (100/minute) before validation runs, in Python too: spread the
+			// burst over addresses so it isolates the read limit.
+			calls++
+			req.RemoteAddr = fmt.Sprintf("10.9.%d.%d:4000", calls/250, calls%250)
+			req.SetPathValue("ingestion_id", strings.SplitN(strings.TrimPrefix(target, "/api/v1/external-ingest/batches/"), "?", 2)[0])
+			req.Header.Set("Authorization", "Bearer "+token)
+			recorder := httptest.NewRecorder()
+			deps.handleGetBatch()(recorder, req)
+			return recorder
+		}
+		want := `{"detail":[{"type":"uuid_parsing","loc":["path","ingestion_id"],"msg":"Input should be a valid UUID, invalid character: found ` + "`n`" + ` at 1","input":"not-a-uuid","ctx":{"error":"invalid character: found ` + "`n`" + ` at 1"}},` +
+			`{"type":"greater_than_equal","loc":["query","errorLimit"],"msg":"Input should be greater than or equal to 1","input":"0","ctx":{"ge":1}}]}`
+		if got := get("/api/v1/external-ingest/batches/not-a-uuid?errorLimit=0"); got.Code != http.StatusUnprocessableEntity || strings.TrimSpace(got.Body.String()) != want {
+			t.Fatalf("invalid id + query: %d %s, want 422 %s", got.Code, got.Body.String(), want)
+		}
+		// 125 invalid requests exceed the 120/minute read limit; none of
+		// them counts, so a valid lookup still reaches the handler (404 for
+		// an unknown id), never 429.
+		for range 125 {
+			if got := get("/api/v1/external-ingest/batches/not-a-uuid"); got.Code != http.StatusUnprocessableEntity {
+				t.Fatalf("invalid uuid answered %d, want 422 every time", got.Code)
+			}
+		}
+		if got := get("/api/v1/external-ingest/batches/" + uuid.New().String()); got.Code != http.StatusNotFound {
+			t.Fatalf("valid unknown id after an invalid burst: %d %s, want 404", got.Code, got.Body.String())
+		}
+	})
+
+	// Python's limiter wraps the endpoint AFTER FastAPI's parameter
+	// validation, and POST /validate and POST /batches have no parameter to
+	// validate: the body is read inside the limited function. So a malformed
+	// body DOES consume the limit there (measured against the real app: 60
+	// answered, then 429), the opposite of the two read routes above. A
+	// syntax error is Python's unhandled 500 (json.dumps cannot write the
+	// error's bytes input), so the answered ones are 500s.
+	t.Run("POST /validate counts a malformed body against the limit", func(t *testing.T) {
+		orgID := uuid.New().String()
+		const token = "fcpush_validate_burst_token"
+		seedIngestToken(t, ctx, pool, orgID, "github", "acme/repo", token)
+		deps := newTestDeps(t, pool, client)
+		statuses := map[int]int{}
+		for range 70 {
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/external-ingest/validate", strings.NewReader("{"))
+			req.Header.Set("Authorization", "Bearer "+token)
+			recorder := httptest.NewRecorder()
+			deps.handleValidate()(recorder, req)
+			statuses[recorder.Code]++
+		}
+		if statuses[http.StatusTooManyRequests] != 10 || statuses[http.StatusInternalServerError] != 60 {
+			t.Fatalf("70 malformed validate bodies answered %v, want 60x500 then 10x429", statuses)
 		}
 	})
 

@@ -741,9 +741,19 @@ func Run(h *Harness) string {
 	for attempt := 1; attempt <= 25; attempt++ {
 		bursts = append(bursts, same(fmt.Sprintf("burst: login invalid %d", attempt), http.MethodPost, "/api/v1/auth/login", "", `{"email": "not-an-email", "password": "x"}`))
 	}
+	// A lone surrogate in the password (max_length 128) is pydantic's
+	// string_unicode refusal, before the limiter: it costs nothing either.
+	for attempt := 1; attempt <= 3; attempt++ {
+		bursts = append(bursts, same(fmt.Sprintf("burst: login surrogate password %d", attempt), http.MethodPost, "/api/v1/auth/login", "",
+			`{"email": "burst@example.com", "password": "\ud800"}`))
+	}
 	for attempt := 1; attempt <= 21; attempt++ {
 		bursts = append(bursts, login(fmt.Sprintf("burst: login valid %d", attempt), fmt.Sprintf("burst%d@example.com", attempt), "x", ""))
 	}
+	// Past the limit, the same body is still refused at validation, not
+	// answered with the 429.
+	bursts = append(bursts, same("burst: login surrogate password past the limit", http.MethodPost, "/api/v1/auth/login", "",
+		`{"email": "burst@example.com", "password": "\ud800"}`))
 	for attempt := 1; attempt <= 12; attempt++ {
 		bursts = append(bursts, same(fmt.Sprintf("burst: refresh invalid %d", attempt), http.MethodPost, "/api/v1/auth/refresh", "", `{}`))
 	}

@@ -1076,6 +1076,21 @@
    "body": "{\"detail\":[{\"type\":\"value_error\",\"loc\":[\"body\",\"email\"],\"msg\":\"value is not a valid email address: An email address must have an @-sign.\",\"input\":\"not-an-email\",\"ctx\":{\"reason\":\"An email address must have an @-sign.\"}}]}"
   },
   {
+   "name": "burst: login surrogate password 1",
+   "status": 500,
+   "body": "{\"detail\":\"Internal Server Error\"}"
+  },
+  {
+   "name": "burst: login surrogate password 2",
+   "status": 500,
+   "body": "{\"detail\":\"Internal Server Error\"}"
+  },
+  {
+   "name": "burst: login surrogate password 3",
+   "status": 500,
+   "body": "{\"detail\":\"Internal Server Error\"}"
+  },
+  {
    "name": "burst: login valid 1",
    "status": 401,
    "body": "{\"detail\":{\"message\":\"Invalid credentials\"}}"
@@ -1179,6 +1194,11 @@
    "name": "burst: login valid 21",
    "status": 429,
    "body": "{\"detail\":{\"message\":\"Rate limit exceeded. Please try again later.\"}}"
+  },
+  {
+   "name": "burst: login surrogate password past the limit",
+   "status": 500,
+   "body": "{\"detail\":\"Internal Server Error\"}"
   },
   {
    "name": "burst: refresh invalid 1",

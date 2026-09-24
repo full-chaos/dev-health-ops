@@ -201,6 +201,13 @@ func (f *fakeStripe) serve(plane string, w http.ResponseWriter, r *http.Request)
 		}
 		id := f.next(plane, "bps")
 		fmt.Fprintf(w, `{"id": %q, "object": "billing_portal.session", "url": "https://portal.venue.test/%s"}`, id, id)
+	case r.Method == http.MethodPost && strings.HasPrefix(path, "/v1/invoices/") && strings.HasSuffix(path, "/void"):
+		id := strings.TrimSuffix(strings.TrimPrefix(path, "/v1/invoices/"), "/void")
+		if id == "in_err" {
+			stripeFail(w, "This invoice can no longer be voided.")
+			return
+		}
+		fmt.Fprintf(w, `{"id": %q, "object": "invoice", "status": "void"}`, id)
 	default:
 		w.WriteHeader(http.StatusNotFound)
 		fmt.Fprint(w, `{"error": {"message": "unrouted fake call", "type": "invalid_request_error"}}`)
@@ -802,6 +809,7 @@ func TestVenueOracleBillingWithoutStripeKey(t *testing.T) {
 		Root: venueRoot(), JWTKey: venueKey, Logger: quietLogger(), PythonEnv: pythonEnv,
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
 			seed = billingSeed(t, ctx, admin)
+			ledgerSeed(t, ctx, admin, seed)
 			return seed.tokenSpecs()
 		},
 	})
@@ -846,11 +854,13 @@ func TestVenueOracleBillingWithoutStripeKey(t *testing.T) {
 		{Name: "reactivate: no subscription, no key", Method: "POST", Path: p + "/subscriptions/reactivate?org_id=" + seed.orgD.String(), Headers: headers("super")},
 		{Name: "plans: no key needed", Method: "GET", Path: p + "/plans", Headers: headers("ownerA")},
 	}
+	requests = append(requests, ledgerBareRequests(venue.Tokens)...)
 	python := venue.ServePython(t, requests)
 	receipt := venueoracle.Diff(t, base, requests, python, venueoracle.DiffOptions{})
 	for _, table := range []string{
 		`SELECT key, stripe_product_id, updated_at FROM billing_plans ORDER BY key`,
-		`SELECT action, org_id::text, local_state::text FROM billing_audit_log ORDER BY org_id`,
+		`SELECT action, org_id::text, local_state::text FROM billing_audit_log ORDER BY org_id, created_at, action`,
+		`SELECT id::text, status, voided_at, updated_at FROM invoices ORDER BY id`,
 	} {
 		pyRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), table)
 		goRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), table)

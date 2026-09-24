@@ -156,7 +156,7 @@ func newPeopleDrilldownIssuesHandler(reader *people.Reader) http.HandlerFunc {
 			}
 		}
 		limit := 50
-		if raw := query.Get("limit"); raw != "" {
+		if raw := lastQueryValue(query, "limit"); raw != "" {
 			parsed, err := strconv.Atoi(raw)
 			if err != nil {
 				validationErrors = append(validationErrors, intQueryParamError([]any{"query", "limit"}, raw))
@@ -164,9 +164,9 @@ func newPeopleDrilldownIssuesHandler(reader *people.Reader) http.HandlerFunc {
 				limit = parsed
 			}
 		}
-		cursorTime, cursorPresent, cursorOK := parseISODateTimeQueryParam(query.Get("cursor"))
+		cursorTime, cursorPresent, cursorOK := parseISODateTimeQueryParam(lastQueryValue(query, "cursor"))
 		if cursorPresent && !cursorOK {
-			validationErrors = append(validationErrors, dateTimeQueryParamError([]any{"query", "cursor"}, query.Get("cursor")))
+			validationErrors = append(validationErrors, dateTimeQueryParamError([]any{"query", "cursor"}, lastQueryValue(query, "cursor")))
 		}
 
 		if len(validationErrors) > 0 {

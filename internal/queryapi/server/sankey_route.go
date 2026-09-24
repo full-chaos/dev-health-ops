@@ -229,15 +229,15 @@ func newSankeyGetHandler(client sankey.QueryClient) http.HandlerFunc {
 		}
 
 		query := r.URL.Query()
-		mode := query.Get("mode")
+		mode := lastQueryValue(query, "mode")
 		if !query.Has("mode") {
 			mode = "investment"
 		}
-		scopeType := query.Get("scope_type")
+		scopeType := lastQueryValue(query, "scope_type")
 		if scopeType == "" {
 			scopeType = "org"
 		}
-		scopeID := query.Get("scope_id")
+		scopeID := lastQueryValue(query, "scope_id")
 
 		var validationErrors []pydanticErrorDetail
 
@@ -253,21 +253,21 @@ func newSankeyGetHandler(client sankey.QueryClient) http.HandlerFunc {
 			}
 		}
 
-		startDate, startPresent, startOK := parseISODateQueryParam(query.Get("start_date"))
+		startDate, startPresent, startOK := parseISODateQueryParam(lastQueryValue(query, "start_date"))
 		if startPresent && !startOK {
-			validationErrors = append(validationErrors, dateQueryParamError([]any{"query", "start_date"}, query.Get("start_date")))
+			validationErrors = append(validationErrors, dateQueryParamError([]any{"query", "start_date"}, lastQueryValue(query, "start_date")))
 		}
-		endDate, endPresent, endOK := parseISODateQueryParam(query.Get("end_date"))
+		endDate, endPresent, endOK := parseISODateQueryParam(lastQueryValue(query, "end_date"))
 		if endPresent && !endOK {
-			validationErrors = append(validationErrors, dateQueryParamError([]any{"query", "end_date"}, query.Get("end_date")))
+			validationErrors = append(validationErrors, dateQueryParamError([]any{"query", "end_date"}, lastQueryValue(query, "end_date")))
 		}
-		windowStart, windowStartPresent, windowStartOK := parseISODateQueryParam(query.Get("window_start"))
+		windowStart, windowStartPresent, windowStartOK := parseISODateQueryParam(lastQueryValue(query, "window_start"))
 		if windowStartPresent && !windowStartOK {
-			validationErrors = append(validationErrors, dateQueryParamError([]any{"query", "window_start"}, query.Get("window_start")))
+			validationErrors = append(validationErrors, dateQueryParamError([]any{"query", "window_start"}, lastQueryValue(query, "window_start")))
 		}
-		windowEnd, windowEndPresent, windowEndOK := parseISODateQueryParam(query.Get("window_end"))
+		windowEnd, windowEndPresent, windowEndOK := parseISODateQueryParam(lastQueryValue(query, "window_end"))
 		if windowEndPresent && !windowEndOK {
-			validationErrors = append(validationErrors, dateQueryParamError([]any{"query", "window_end"}, query.Get("window_end")))
+			validationErrors = append(validationErrors, dateQueryParamError([]any{"query", "window_end"}, lastQueryValue(query, "window_end")))
 		}
 
 		if len(validationErrors) > 0 {

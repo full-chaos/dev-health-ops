@@ -155,15 +155,15 @@ func newQuadrantWorkHandler(client quadrant.QueryClient) http.HandlerFunc {
 		query := r.URL.Query()
 		var validationErrors []pydanticErrorDetail
 
-		quadrantType := query.Get("type")
+		quadrantType := lastQueryValue(query, "type")
 		if !query.Has("type") {
 			validationErrors = append(validationErrors, missingFieldError([]any{"query", "type"}, nil))
 		}
-		scopeType := query.Get("scope_type")
+		scopeType := lastQueryValue(query, "scope_type")
 		if scopeType == "" {
 			scopeType = "org"
 		}
-		bucket := query.Get("bucket")
+		bucket := lastQueryValue(query, "bucket")
 		if bucket == "" {
 			bucket = "week"
 		}
@@ -177,13 +177,13 @@ func newQuadrantWorkHandler(client quadrant.QueryClient) http.HandlerFunc {
 			}
 		}
 
-		startDate, startPresent, startOK := parseISODateQueryParam(query.Get("start_date"))
+		startDate, startPresent, startOK := parseISODateQueryParam(lastQueryValue(query, "start_date"))
 		if startPresent && !startOK {
-			validationErrors = append(validationErrors, dateQueryParamError([]any{"query", "start_date"}, query.Get("start_date")))
+			validationErrors = append(validationErrors, dateQueryParamError([]any{"query", "start_date"}, lastQueryValue(query, "start_date")))
 		}
-		endDate, endPresent, endOK := parseISODateQueryParam(query.Get("end_date"))
+		endDate, endPresent, endOK := parseISODateQueryParam(lastQueryValue(query, "end_date"))
 		if endPresent && !endOK {
-			validationErrors = append(validationErrors, dateQueryParamError([]any{"query", "end_date"}, query.Get("end_date")))
+			validationErrors = append(validationErrors, dateQueryParamError([]any{"query", "end_date"}, lastQueryValue(query, "end_date")))
 		}
 
 		if len(validationErrors) > 0 {
@@ -206,7 +206,7 @@ func newQuadrantWorkHandler(client quadrant.QueryClient) http.HandlerFunc {
 		params := quadrant.Params{
 			Type:      quadrantType,
 			ScopeType: scopeType,
-			ScopeID:   query.Get("scope_id"),
+			ScopeID:   lastQueryValue(query, "scope_id"),
 			RangeDays: rangeDays,
 			Bucket:    bucket,
 		}

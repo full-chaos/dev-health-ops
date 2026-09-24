@@ -44,6 +44,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 )
 
 // pydanticErrorDetail is one entry of Pydantic's ValidationError.errors(),
@@ -449,12 +450,12 @@ func coerceIntBodyField(loc []any, value pyjson.Value) (n int, detail *pydanticE
 }
 
 // lastQueryValue is the value FastAPI reads for a scalar query parameter:
-// the LAST of repeated values (pybody.LastQueryValue), "" when absent.
+// the LAST of repeated values (httpapi.QueryLast, the one shared
+// implementation, CHAOS-6585), "" when absent. Every raw query.Get in this
+// package goes through this wrapper instead, never url.Values.Get directly
+// (Get returns the FIRST of a repeated key -- the mismatch this closes).
 func lastQueryValue(query url.Values, name string) string {
-	if value := pybody.LastQueryValue(query, name); value != nil {
-		return *value
-	}
-	return ""
+	return httpapi.QueryLast(query, name)
 }
 
 // parseQueryInt reads an int query parameter as FastAPI does (pydantic's

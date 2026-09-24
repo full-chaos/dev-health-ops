@@ -183,10 +183,10 @@ func newPeopleSearchHandler(reader *people.Reader) http.HandlerFunc {
 		// (main.py:202-208, main.py:1056) only runs once execution
 		// actually reaches the function body. This port must check limit
 		// first for the same reason.
-		q := query.Get("q")
+		q := lastQueryValue(query, "q")
 
 		limit := 20
-		if raw := query.Get("limit"); raw != "" {
+		if raw := lastQueryValue(query, "limit"); raw != "" {
 			parsed, err := strconv.Atoi(raw)
 			if err != nil {
 				// Python's `limit: int = 20` is FastAPI/Pydantic

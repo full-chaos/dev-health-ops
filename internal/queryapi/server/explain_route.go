@@ -236,13 +236,13 @@ func newExplainGetHandler(reader *explain.Reader) http.HandlerFunc {
 		if !query.Has("metric") {
 			validationErrors = append(validationErrors, missingFieldError([]any{"query", "metric"}, nil))
 		}
-		metric := query.Get("metric")
+		metric := lastQueryValue(query, "metric")
 
-		scopeType := query.Get("scope_type")
+		scopeType := lastQueryValue(query, "scope_type")
 		if scopeType == "" {
 			scopeType = "org"
 		}
-		scopeID := query.Get("scope_id")
+		scopeID := lastQueryValue(query, "scope_id")
 
 		rangeDays := 14
 		// An explicit empty value is still parsed (pydantic: int_parsing).
@@ -268,13 +268,13 @@ func newExplainGetHandler(reader *explain.Reader) http.HandlerFunc {
 			}
 		}
 
-		startDate, startPresent, startOK := parseISODateQueryParam(query.Get("start_date"))
+		startDate, startPresent, startOK := parseISODateQueryParam(lastQueryValue(query, "start_date"))
 		if startPresent && !startOK {
-			validationErrors = append(validationErrors, dateQueryParamError([]any{"query", "start_date"}, query.Get("start_date")))
+			validationErrors = append(validationErrors, dateQueryParamError([]any{"query", "start_date"}, lastQueryValue(query, "start_date")))
 		}
-		endDate, endPresent, endOK := parseISODateQueryParam(query.Get("end_date"))
+		endDate, endPresent, endOK := parseISODateQueryParam(lastQueryValue(query, "end_date"))
 		if endPresent && !endOK {
-			validationErrors = append(validationErrors, dateQueryParamError([]any{"query", "end_date"}, query.Get("end_date")))
+			validationErrors = append(validationErrors, dateQueryParamError([]any{"query", "end_date"}, lastQueryValue(query, "end_date")))
 		}
 
 		if len(validationErrors) > 0 {

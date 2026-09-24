@@ -146,16 +146,16 @@ func newHeatmapWorkHandler(client heatmap.QueryClient) http.HandlerFunc {
 		query := r.URL.Query()
 		var validationErrors []pydanticErrorDetail
 
-		heatmapType := query.Get("type")
+		heatmapType := lastQueryValue(query, "type")
 		if !query.Has("type") {
 			validationErrors = append(validationErrors, missingFieldError([]any{"query", "type"}, nil))
 		}
-		metric := query.Get("metric")
+		metric := lastQueryValue(query, "metric")
 		if !query.Has("metric") {
 			validationErrors = append(validationErrors, missingFieldError([]any{"query", "metric"}, nil))
 		}
 
-		scopeType := query.Get("scope_type")
+		scopeType := lastQueryValue(query, "scope_type")
 		if scopeType == "" {
 			scopeType = "org"
 		}
@@ -170,18 +170,18 @@ func newHeatmapWorkHandler(client heatmap.QueryClient) http.HandlerFunc {
 			}
 		}
 
-		startDate, startPresent, startOK := parseISODateQueryParam(query.Get("start_date"))
+		startDate, startPresent, startOK := parseISODateQueryParam(lastQueryValue(query, "start_date"))
 		if startPresent && !startOK {
-			validationErrors = append(validationErrors, dateQueryParamError([]any{"query", "start_date"}, query.Get("start_date")))
+			validationErrors = append(validationErrors, dateQueryParamError([]any{"query", "start_date"}, lastQueryValue(query, "start_date")))
 		}
-		endDate, endPresent, endOK := parseISODateQueryParam(query.Get("end_date"))
+		endDate, endPresent, endOK := parseISODateQueryParam(lastQueryValue(query, "end_date"))
 		if endPresent && !endOK {
-			validationErrors = append(validationErrors, dateQueryParamError([]any{"query", "end_date"}, query.Get("end_date")))
+			validationErrors = append(validationErrors, dateQueryParamError([]any{"query", "end_date"}, lastQueryValue(query, "end_date")))
 		}
 
 		limit := 50
 		if query.Has("limit") {
-			raw := query.Get("limit")
+			raw := lastQueryValue(query, "limit")
 			if parsed, err := strconv.Atoi(raw); err == nil {
 				limit = parsed
 			} else {
@@ -210,10 +210,10 @@ func newHeatmapWorkHandler(client heatmap.QueryClient) http.HandlerFunc {
 			Type:      heatmapType,
 			Metric:    metric,
 			ScopeType: scopeType,
-			ScopeID:   query.Get("scope_id"),
+			ScopeID:   lastQueryValue(query, "scope_id"),
 			RangeDays: rangeDays,
-			X:         query.Get("x"),
-			Y:         query.Get("y"),
+			X:         lastQueryValue(query, "x"),
+			Y:         lastQueryValue(query, "y"),
 			Limit:     boundedLimitParamHeatmap(limit, 200),
 		}
 		if startPresent {

@@ -154,3 +154,25 @@ func TestRepeatedDayCountLastWins(t *testing.T) {
 		}
 	}
 }
+
+// TestRepeatedStringScalarQueryParamLastWins is TestRepeatedDayCountLastWins'
+// sibling for a STRING-typed scalar (CHAOS-6585): before the sweep,
+// range_days/compare_days already went through lastQueryValue (a live round
+// caught them first), but start_date/end_date and every other string
+// query param on these routes still read query.Get directly -- Go's FIRST,
+// not FastAPI's LAST. A malformed date in the first position and a valid
+// one in the second must still 200; the reverse must still 422.
+func TestRepeatedStringScalarQueryParamLastWins(t *testing.T) {
+	for target, want := range map[string]int{
+		"/api/v1/drilldown/prs?scope_type=repo&scope_id=repo-a&start_date=not-a-date&start_date=2024-01-01": http.StatusOK,
+		"/api/v1/drilldown/prs?scope_type=repo&scope_id=repo-a&start_date=2024-01-01&start_date=not-a-date": http.StatusUnprocessableEntity,
+	} {
+		req := httptest.NewRequest(http.MethodGet, target, nil)
+		req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+		rec := httptest.NewRecorder()
+		newDrilldownPRsGetHandler(newEmptyRowsDrilldownReader(t))(rec, req)
+		if rec.Code != want {
+			t.Errorf("%s: got %d %s, want %d", target, rec.Code, rec.Body.String(), want)
+		}
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"math/rand"
 	"os"
 	"os/exec"
@@ -184,6 +185,37 @@ func validText(node *schemaNode) string {
 	return `null`
 }
 
+// floatValues is integer literals around float64's range for a float field
+// (or a nullable one): pydantic converts an int to the nearest float and
+// refuses it (float_type, "Input should be a valid number") when that is
+// infinite, including the exact halfway point above MaxFloat64 that rounds
+// to even (2^1024 - 2^970), which is refused too; 2^1024 - 2^970 - 1 and
+// 10^308 are accepted.
+func floatValues(node *schemaNode) []string {
+	inner := node
+	if inner.Type == "nullable" {
+		inner = inner.Inner
+	}
+	if inner.Type != "float" {
+		return nil
+	}
+	two := big.NewInt(2)
+	top := new(big.Int).Exp(two, big.NewInt(1024), nil)
+	half := new(big.Int).Exp(two, big.NewInt(970), nil)
+	nearMax := new(big.Int).Sub(top, half)
+	values := []*big.Int{
+		new(big.Int).Sub(top, big.NewInt(1)), nearMax, new(big.Int).Sub(nearMax, big.NewInt(1)), top,
+		new(big.Int).Neg(top), new(big.Int).Neg(nearMax), new(big.Int).Neg(new(big.Int).Sub(nearMax, big.NewInt(1))),
+		new(big.Int).Exp(big.NewInt(10), big.NewInt(308), nil), new(big.Int).Exp(big.NewInt(10), big.NewInt(309), nil),
+		new(big.Int).Exp(big.NewInt(10), big.NewInt(400), nil), new(big.Int).Neg(new(big.Int).Exp(big.NewInt(10), big.NewInt(400), nil)),
+	}
+	out := make([]string, len(values))
+	for index, value := range values {
+		out[index] = value.String()
+	}
+	return out
+}
+
 // listValues is list texts at and past a list's max length, with valid and
 // invalid items.
 func listValues(node *schemaNode) []string {
@@ -246,6 +278,7 @@ func recordCorpus() [][2]string {
 		for index, field := range model.Fields {
 			node := field.Schema
 			values := append(append(append([]string{}, valuePool...), boundaryStrings(node)...), listValues(node)...)
+			values = append(values, floatValues(node)...)
 			if node.Type == "nullable" {
 				values = append(values, boundaryStrings(node.Inner)...)
 			}

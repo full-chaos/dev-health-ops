@@ -5,7 +5,7 @@ independent pieces of code produce or consume that value:
 
 * ``api/graphql/go_api_schema_digest.current_schema_digest`` -- the runtime
   producer (dispatcher reads, CLI writes, startup drift check).
-* ``cmd/query-api/internal/digest.Schema`` -- what the deployed Go binary
+* ``internal/queryapi/digest.Schema`` -- what the deployed Go binary
   computes for its own ``PostgresSwitch`` lookups, reachable from a
   checkout via ``registrydump -schema-digest``.
 * ``ci/check_go_api_routing_digest.py`` -- the auditor, which deliberately

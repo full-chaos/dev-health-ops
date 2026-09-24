@@ -15,7 +15,7 @@ import (
 // gitlab_work_items_rows.go:715/742/764). Codex round chaos-5316-2322-r1
 // verified this is NOT a silent-drop bug: both internal/jobs/workgraph/edges'
 // dependencyTypeMap (canonical.go:50, with an unrecognised-type fallback to
-// EdgeTypeRelates at :107) and cmd/query-api/internal/workgraph.go's
+// EdgeTypeRelates at :107) and internal/queryapi/workgraph.go's
 // dependencyRelationshipTypeMap (:139-146, which has explicit entries for
 // BOTH "relates" and "relates_to") already handle Jira's pre-fix "relates"
 // value without dropping it. The fix's real value is CONSISTENCY: Jira's raw

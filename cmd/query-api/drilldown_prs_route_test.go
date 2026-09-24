@@ -12,8 +12,8 @@ import (
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/authctx"
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/drilldown"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/drilldown"
 )
 
 // emptyRowsDrilldownClient answers every ClickHouse call with zero rows --

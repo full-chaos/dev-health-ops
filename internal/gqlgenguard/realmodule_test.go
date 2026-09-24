@@ -148,7 +148,7 @@ func TestGenerateOnACopyOfThisRepositoryProducesTheRecordedDigests(t *testing.T)
 	}
 
 	// A difference the record does not describe: the fail-closed arm.
-	handEdited := filepath.Join(copyDir, "cmd", "query-api", "internal", "graph", "model", "models_gen.go")
+	handEdited := filepath.Join(copyDir, "internal", "queryapi", "graph", "model", "models_gen.go")
 	original, err := os.ReadFile(handEdited)
 	if err != nil {
 		t.Fatalf("read a generated file to hand-edit: %v", err)

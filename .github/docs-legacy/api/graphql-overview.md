@@ -6,7 +6,7 @@ The GraphQL analytics API provides a read-only query interface for dev-health-op
 
 - `src/dev_health_ops/api/graphql/app.py`
 - `src/dev_health_ops/api/graphql/schema.py`
-- `cmd/query-api/internal/analytics/resolve.go` (served by query-api; the Python resolver is deleted)
+- `internal/queryapi/analytics/resolve.go` (served by query-api; the Python resolver is deleted)
 - `src/dev_health_ops/api/graphql/sql/compiler.py`
 
 ## What it provides

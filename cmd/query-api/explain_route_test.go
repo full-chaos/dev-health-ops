@@ -11,8 +11,8 @@ import (
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/authctx"
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/explain"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/explain"
 )
 
 // emptyRowsExplainClient answers every ClickHouse call with zero rows --

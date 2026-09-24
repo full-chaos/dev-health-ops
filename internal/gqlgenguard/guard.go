@@ -23,7 +23,7 @@ import (
 )
 
 // DefaultConfigPath is the gqlgen config this repository guards.
-const DefaultConfigPath = "cmd/query-api/gqlgen.yml"
+const DefaultConfigPath = "internal/queryapi/gqlgen.yml"
 
 // DefaultDriftPath is the committed record of the differences between the
 // checked-in generated files and a fresh generation.

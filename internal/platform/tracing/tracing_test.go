@@ -191,7 +191,7 @@ func TestEnabledFromEnvDefaultsTrue(t *testing.T) {
 // tracing enabled and an endpoint configured must find
 // otel.GetTracerProvider() returning the REAL SDK provider afterward, not
 // still the package-default no-op -- this is the exact assertion every span
-// a resolver starts (cmd/query-api/internal/graph/telemetry.go's tracer,
+// a resolver starts (internal/queryapi/graph/telemetry.go's tracer,
 // captured once at package init from whatever the global provider was at
 // that time) depends on, since the OTel Go API's global package delegates a
 // pre-Init Tracer to the real provider once one is installed.

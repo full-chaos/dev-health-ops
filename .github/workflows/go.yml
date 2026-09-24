@@ -91,13 +91,13 @@ on:
       # //go:embed-ed and read directly by prompt_golden_test.go -- not
       # under testdata/ or fixtures/, so the shared glob above does not
       # reach it.
-      - 'cmd/query-api/internal/investmentexplain/prompts/**'
+      - 'internal/queryapi/investmentexplain/prompts/**'
       # gqlgen.yml is the generator's configuration -- the schema it
       # reads and every path it writes. Editing it changes the generated Go
       # layer as surely as editing the SDL does, and go-quality now runs a drift
       # check that regenerates from it. Without this line a gqlgen.yml-only
       # change is classified non-Go and that check passes vacuously.
-      - 'cmd/query-api/gqlgen.yml'
+      - 'internal/queryapi/gqlgen.yml'
       # ci/go_relevance.py decides whether go-quality's steps run at all, and
       # internal/gqlgenguard's wiring test executes it -- so it is an input of
       # a Go test. It was named only in comments here, never as a path, so a
@@ -229,13 +229,13 @@ on:
       # //go:embed-ed and read directly by prompt_golden_test.go -- not
       # under testdata/ or fixtures/, so the shared glob above does not
       # reach it.
-      - 'cmd/query-api/internal/investmentexplain/prompts/**'
+      - 'internal/queryapi/investmentexplain/prompts/**'
       # gqlgen.yml is the generator's configuration -- the schema it
       # reads and every path it writes. Editing it changes the generated Go
       # layer as surely as editing the SDL does, and go-quality now runs a drift
       # check that regenerates from it. Without this line a gqlgen.yml-only
       # change is classified non-Go and that check passes vacuously.
-      - 'cmd/query-api/gqlgen.yml'
+      - 'internal/queryapi/gqlgen.yml'
       # ci/go_relevance.py decides whether go-quality's steps run at all, and
       # internal/gqlgenguard's wiring test executes it -- so it is an input of
       # a Go test. It was named only in comments here, never as a path, so a
@@ -471,7 +471,9 @@ jobs:
           # lives under cmd/, not internal/jobs/. Before this, the job's package
           # glob silently excluded it -- the test existed, passed on amd64, and
           # was never once run on the architecture it was written for.
-          go test -mod=readonly -count=1 -timeout 8m -json ./internal/jobs/... ./cmd/query-api/... \
+          # CHAOS-6432 moved that kernel to internal/queryapi/throughputforecast,
+          # so ./internal/queryapi/... is in the glob too.
+          go test -mod=readonly -count=1 -timeout 8m -json ./internal/jobs/... ./internal/queryapi/... ./cmd/query-api/... \
             -run '(MatchesLivePythonBitExact|IntegerPercentilesMatchesLivePython)$' \
             | tee go-test-output.json
           ran=$(jq -s '[.[] | select(.Action=="run" and (.Test // "") != "")] | length' go-test-output.json)
@@ -778,7 +780,7 @@ jobs:
 
   # CHAOS-5014: docker/query-api.Dockerfile had no CI coverage at all --
   # unlike docker/go-worker.Dockerfile above, nothing built it, so #2197
-  # landed importing cmd/query-api/internal/investmentexplain (which
+  # landed importing internal/queryapi/investmentexplain (which
   # reaches internal/pythonparity, internal/jobs/investment/categorize,
   # internal/jobs/workgraph/units) plus investment_explain_route.go's own
   # internal/storage/clickhouse import, none of which this Dockerfile's

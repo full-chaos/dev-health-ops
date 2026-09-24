@@ -1,17 +1,17 @@
 // Package goapidigest holds the ONE implementation of the Go-API
 // document and schema digests.
 //
-// It exists for the same reason cmd/query-api/internal/digest existed
+// It exists for the same reason internal/queryapi/digest existed
 // before it, one directory level up. That package's own doc comment
 // records the rule: "Package main cannot be imported, so this had to move
 // somewhere both binaries can reach". CHAOS-5425 adds a THIRD reader --
 // cmd/go-api-prove, an operator command outside cmd/query-api -- and Go's
-// internal-package rule puts anything under cmd/query-api/internal out of
-// its reach. The choice was to move the algorithm here or to re-type it
+// internal-package rule then put query-api's packages (at that time under
+// cmd/query-api) out of its reach. The choice was to move the algorithm here or to re-type it
 // in the new command, and re-typing it is exactly the two-copies drift
 // CHAOS-4696 closed for the other half of this contract.
 //
-// cmd/query-api/internal/digest now DELEGATES here rather than being
+// internal/queryapi/digest now DELEGATES here rather than being
 // deleted, so query_route.go and registrydump keep their import paths and
 // this is a move of the implementation, not a second one. There is still
 // exactly one sha256 in play, reached by import from every binary.

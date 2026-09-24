@@ -120,7 +120,7 @@ func Load(path string) *Resolver {
 // re-reading the file on every call by design -- team-catalog collection
 // runs once per sync per provider, not a hot path, so re-reading a small
 // static config file costs nothing that matters. This mirrors
-// cmd/query-api/internal/quadrant/identity.go's loadIdentityAliases, which
+// internal/queryapi/quadrant/identity.go's loadIdentityAliases, which
 // takes the same non-caching posture for the identical reason: caching here
 // would silently defeat IDENTITY_MAPPING_PATH-based test isolation (a test
 // setting the env var per-case, as Python's own tests do, would otherwise

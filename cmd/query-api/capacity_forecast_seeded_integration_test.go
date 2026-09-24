@@ -25,7 +25,7 @@
 //
 // It exercises capacityforecast from OUTSIDE, through the package's exported
 // entry points, and it sits in an ALREADY-SHARDED package (cmd/query-api is in
-// ci/go_integration_shards.tsv). Putting it in cmd/query-api/internal/
+// ci/go_integration_shards.tsv). Putting it in internal/queryapi/
 // capacityforecast would have made that a new integration package, requiring a
 // new .tsv row AND an addition to tests/tooling/test_go_integration_sharding.py's
 // EXPECTED_PACKAGES -- a three-way pin for no additional coverage.
@@ -40,9 +40,9 @@ import (
 	stdclickhouse "github.com/ClickHouse/clickhouse-go/v2"
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/capacityforecast"
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graph/model"
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graphqldate"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/capacityforecast"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )

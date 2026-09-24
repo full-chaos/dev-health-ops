@@ -13,8 +13,8 @@ import (
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/authctx"
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/drilldown"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/drilldown"
 )
 
 // errUnexpectedScopeFilter is returned by a fake ClickHouse client when a

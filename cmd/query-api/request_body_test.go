@@ -4,9 +4,9 @@ import (
 	"math"
 	"testing"
 
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/investmentexplain"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/investmentexplain"
 )
 
 // TestValidatedIntsKeepTheirValue pins what a route uses after validation:

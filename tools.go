@@ -12,7 +12,7 @@
 //	(imported by github.com/99designs/gqlgen)
 //
 // gqlgen is already a direct require, but only its RUNTIME library is
-// imported (cmd/query-api/internal/graph uses github.com/99designs/gqlgen/graphql).
+// imported (internal/queryapi/graph uses github.com/99designs/gqlgen/graphql).
 // Nothing imports the CLI's own main package, so `go mod tidy` has no reason
 // to record its transitive deps -- and tidy alone does NOT fix this, measured:
 // it produces an empty diff. The blank import below is what puts the CLI in

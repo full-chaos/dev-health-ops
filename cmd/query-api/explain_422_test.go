@@ -9,7 +9,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/authctx"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 )
 
 // loadExplainValidationErrorGolden decodes a testdata JSON file captured

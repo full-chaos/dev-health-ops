@@ -13,7 +13,7 @@ import "strings"
 // leaf-only Paths citation (leafDifference, compare.go).
 //
 // Established from source: for blocked_work, fetchMetricContributors/
-// fetchMetricDriverDelta (cmd/query-api/internal/explain/metrics.go) GROUP
+// fetchMetricDriverDelta (internal/queryapi/explain/metrics.go) GROUP
 // BY over the SAME status-filtered FROM clause metricValueProjection's own
 // headline read uses (response.go:158-176) -- zero matching rows for the
 // window leaves the headline value 0 AND the list empty, by the SAME

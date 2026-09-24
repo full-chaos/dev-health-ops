@@ -19,7 +19,7 @@ const membershipMarkerLagAlertBoundEnv = "WORKER_REMAINING_MEMBERSHIP_MARKER_LAG
 // membershipMarkerLagAlertBoundEnv. Its meaning: once a freshly published
 // marker trails the newest investment computation by more than this, the
 // read-side scope gate (investmentMembershipScopeStateSource,
-// cmd/query-api/internal/analytics/investmentmembershipscope.go) is in
+// internal/queryapi/analytics/investmentmembershipscope.go) is in
 // its unscoped_fallback branch for this org -- latest_investment_computed_at
 // is past latest_run_completed_at, so investment reads are NOT filtered to
 // this marker's membership generation at all; every investment row is
@@ -55,7 +55,7 @@ func resolveMembershipMarkerLagAlertBound(lookup func(string) (string, bool)) (t
 }
 
 // latestInvestmentComputedAtQuery reads the SAME quantity
-// cmd/query-api/internal/analytics's own latestInvestmentClockSource()
+// internal/queryapi/analytics's own latestInvestmentClockSource()
 // (investmentmembershipscope.go) reads on the query-api read side --
 // max(computed_at) over work_unit_investments for one org -- so this
 // write-side check observes the identical clock the read-side scope gate

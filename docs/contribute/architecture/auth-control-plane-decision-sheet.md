@@ -50,7 +50,7 @@ routes is scheduled for Wave 10 (CHAOS-3283), after customer notice.
 
 | | |
 |---|---|
-| **Recommend** | **Accept.** Adopt `golang-jwt/jwt/v5` with `cmd/query-api/internal/principal/verifier.go` promoted to the canonical verification pattern; `dev-health-go/authverify` for JWKS; `net/http`+`ServeMux`; Ed25519/EdDSA for every asymmetric platform token; `pgx/v5`. **Defer OAuth/OIDC, SAML, and password hashing to a named Wave 1 addendum.** |
+| **Recommend** | **Accept.** Adopt `golang-jwt/jwt/v5` with `internal/queryapi/principal/verifier.go` promoted to the canonical verification pattern; `dev-health-go/authverify` for JWKS; `net/http`+`ServeMux`; Ed25519/EdDSA for every asymmetric platform token; `pgx/v5`. **Defer OAuth/OIDC, SAML, and password hashing to a named Wave 1 addendum.** |
 | **Alternatives** | (a) Select all six now — rejected: three of them had no candidate evaluated in Wave 0, and inventing one in an ADR is how an unreviewed dependency becomes a decision. (b) A third-party router — rejected: TRD §6 wants strict method+path registration, which `ServeMux` gives, and `query-api` already runs on it. (c) RS256 — rejected: `Ed25519JWKSVerifier` is Ed25519-only by design and the platform's other asymmetric key is already Ed25519. |
 | **Risk of accepting** | **Low.** The main risk is the deferral: if the Wave 1 addendum slips, Wave 2 (human identity parity) has no SAML/OIDC library and stalls. Mitigation: the addendum is a Wave 1 exit criterion, not a Wave 2 entry criterion. |
 | **Risk of rejecting** | Wave 1 starts with no pinned security dependencies, and the first PR picks them implicitly. |

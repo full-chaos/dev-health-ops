@@ -5,7 +5,7 @@ content_type: task-guide
 owner: platform-api
 source_of_truth:
   - src/dev_health_ops/api/graphql/schema.py
-  - cmd/query-api/internal/analytics/resolve.go
+  - internal/queryapi/analytics/resolve.go
   - docs/api/graphql-overview.md
 applicability: current
 lifecycle: active

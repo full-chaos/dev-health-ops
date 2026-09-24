@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/authctx"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 )
 
 // loadPeopleDrilldownPRsValidationErrorGolden decodes a testdata JSON file

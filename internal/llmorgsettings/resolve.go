@@ -10,7 +10,7 @@ import (
 // the set of provider name strings the ORG SETTINGS resolver recognizes as
 // configurable at all. This is deliberately a WIDER set than any Go
 // implementation registry (categorize.goImplementedProviderKinds, or
-// cmd/query-api/internal/investmentexplain's
+// internal/queryapi/investmentexplain's
 // goUnsupportedButPythonKnownProviderKinds): an org can configure
 // "lmstudio"/"qwen-local"/"qwen-lmstudio" exactly as Python allows, even
 // though today's Go port cannot construct a client for them -- that gap is
@@ -222,7 +222,7 @@ func (s Store) RawBaseURL(ctx context.Context, orgID, provider string) (baseURL 
 }
 
 // Resolver is the seam a caller outside this package (CHAOS-5006 PR3:
-// cmd/query-api/internal/investmentexplain) depends on instead of the
+// internal/queryapi/investmentexplain) depends on instead of the
 // concrete Store type -- an interface, not internal/jobs/investment/
 // categorize.OrgProviderResolver's bare func type, because a caller that
 // needs credentials/model too (not just kind resolution) wants all three

@@ -13,7 +13,7 @@ import (
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/datahealth"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/datahealth"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 

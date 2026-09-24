@@ -31,10 +31,10 @@ import (
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/authctx"
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/flame"
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/principal"
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/routeswitch"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/flame"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
 )
 
 // flameOperation is this route's routeswitch operation name -- a

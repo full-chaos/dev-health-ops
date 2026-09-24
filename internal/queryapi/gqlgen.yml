@@ -1,0 +1,119 @@
+# gqlgen config for query-api (CHAOS-4366 Wave 0, deliverable 6).
+#
+# Schema-first FROM THE CANONICAL SDL PIN: this points directly at
+# contracts/graphql/v1/schema.graphql (the CI-checked export of the
+# Strawberry schema -- see contracts/graphql/v1/README.md), never a copy.
+# Regenerating this package after a schema.graphql change is therefore the
+# same drift-detection contract as web's codegen: run `go generate ./...`
+# (or the gqlgen command below) and the diff IS the review.
+schema:
+  - ../../contracts/graphql/v1/schema.graphql
+
+exec:
+  filename: graph/generated.go
+  package: graph
+
+model:
+  filename: graph/model/models_gen.go
+  package: model
+
+resolver:
+  layout: follow-schema
+  dir: graph
+  package: graph
+  filename_template: "{name}.resolvers.go"
+
+# Wave 0 deliberately implements NO resolvers (plan §6: "deploy an empty Go
+# query-api and prove a route becomes reachable when, and only when, its
+# individual switch is enabled" -- resolver logic is a LATER wave). gqlgen's
+# default generated resolver bodies panic with "not implemented" for every
+# field, which is exactly the honest, loud failure this repo's conventions
+# require (root AGENTS.md rule #4) rather than a silent zero-value stub.
+omit_slice_element_pointers: true
+
+# Custom scalars: the canonical SDL declares three (`scalar Date`,
+# `scalar DateTime`, `scalar JSON`).
+#
+# `Date` (CHAOS-4368 Wave 2, `reviewEdges` -- `sinceDate`/`untilDate`/`day`
+# are all `Date`-typed): FIXED in this PR, bound to
+# `graphqldate.Date`, a real custom marshaler -- see that
+# package's doc comment for why graphql.Time (the Wave-0 placeholder) was
+# KNOWN INCORRECT for this scalar specifically (RFC3339Nano parser rejects
+# a bare "2026-08-27"; marshaler emitted a full timestamp, not a date) and
+# what confirms "YYYY-MM-DD" as the actual Python wire format
+# (Strawberry's built-in Date scalar, `date.isoformat()`).
+#
+# `DateTime` is UNCHANGED, still a Wave-0 placeholder, and is STILL KNOWN
+# INCORRECT for the same reason as before (codex review, 2026-08-27) --
+# `reviewEdges` doesn't use it, so that port didn't need to fix it; a
+# later wave that ports a resolver returning it must do so there:
+#   - `DateTime`: graphql.Time's marshaler can format Python's UTC
+#     isoformat() `+00:00` offset as Go's `Z` instead -- a client-visible
+#     serialization difference the comparator (CHAOS-4381 rule 2/3) would
+#     have to special-case rather than the scalar just matching.
+#
+# `JSON` (CHAOS-4506 Wave 4, `analytics` -- `evidenceQualityDistribution`/
+# `bandCounts`): FIXED in this PR, bound to `graphqljson.JSON`, a
+# real custom marshaler backed by `json.RawMessage` -- see that package's
+# doc comment for why `graphql.Map` (the Wave-0 placeholder) was KNOWN
+# INCORRECT (the SDL's `JSON` accepts any ECMA-404 value per its
+# `@specifiedBy`, contracts/graphql/v1/schema.graphql:1408; `graphql.Map`
+# and the generated `map[string]any` fields can only ever hold a JSON
+# *object*, not an array/string/number/bool) and why fixing it generically
+# now -- rather than narrowly for just this port's object-shaped fields --
+# is free: every OTHER `JSON`-typed field in the schema
+# (parameterOverrides/reportPlan/parameters/provenanceRecords) resolves
+# through SavedReport/SavedReports/ReportRuns, which are still
+# `panic("not implemented")` stubs in schema.resolvers.go, so nothing else
+# marshals a JSON value yet.
+# Python's actual serialization behavior (ISO-8601, JSON passthrough) is
+# documented in contracts/graphql/v1/README.md (plan §4: "custom scalar
+# serialization ... are all client-visible contracts").
+models:
+  DateTime:
+    model:
+      - github.com/99designs/gqlgen/graphql.Time
+  Date:
+    model:
+      - github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate.Date
+  JSON:
+    model:
+      - github.com/full-chaos/dev-health-ops/internal/queryapi/graphqljson.JSON
+  # The four types whose Go shape is a decision, not a transcription: their
+  # nullable value fields carry `json:"value"` WITHOUT `omitempty`, so a nil
+  # renders as an explicit null rather than vanishing. gqlgen's generator emits
+  # `,omitempty` for a nullable field, so these lived in models_gen.go as
+  # hand-edits that every regeneration reverted. Bound here, gqlgen uses the
+  # declarations in graph/model/models_bound.go and does not rewrite
+  # them. The reasoning is in that file and in each resolver's doc comment.
+  BreakdownItem:
+    model:
+      - github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model.BreakdownItem
+  SankeyEdge:
+    model:
+      - github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model.SankeyEdge
+  SankeyNode:
+    model:
+      - github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model.SankeyNode
+  TimeseriesBucket:
+    model:
+      - github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model.TimeseriesBucket
+  SankeyCoverage:
+    model:
+      - github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model.SankeyCoverage
+  # DataHealth carries the requested team so its argument-taking
+  # `metricLineage` field, resolved by a field resolver, reads the same scope
+  # the parent was resolved under.
+  DataHealth:
+    model:
+      - github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model.DataHealth
+    fields:
+      metricLineage:
+        resolver: true
+
+# autobind intentionally omitted: Wave 0 has no Go domain model package to
+# bind generated GraphQL types to yet (no resolver logic exists). Every
+# type below is therefore gqlgen-generated in graph/model, not bound to a
+# hand-written struct -- correct for an empty scaffold, and it should be
+# revisited once the first real resolver (Wave 1, featureFlags) needs to
+# bind to a store-layer type.

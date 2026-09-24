@@ -12,7 +12,7 @@
 //
 // Business logic (repo-scope resolution, category-filter split, the
 // ClickHouse reads and their ReplacingMergeTree dedup, the per-unit
-// evidence/team assembly) lives in cmd/query-api/internal/investmentexplain
+// evidence/team assembly) lives in internal/queryapi/investmentexplain
 // -- (*Reader).BuildWorkUnitInvestments already ports
 // build_work_unit_investments (work_units.py:234-460) in full, reused
 // here rather than duplicated: it was built for POST /api/v1/investment/
@@ -36,13 +36,13 @@ import (
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/analytics"
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/authctx"
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/investmentexplain"
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/principal"
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/routeswitch"
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/teamscope"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/analytics"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/investmentexplain"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
 
 // workUnitsGetOperation/workUnitsPostOperation are this route's

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/digest"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/digest"
 )
 
 // writeFixture writes src to a temp .go file and returns its path.

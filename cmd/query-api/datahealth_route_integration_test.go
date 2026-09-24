@@ -13,7 +13,7 @@ import (
 	"github.com/full-chaos/dev-health-go/clickhouse"
 	"github.com/golang-jwt/jwt/v5"
 
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/principal"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 )
 
 // The operator gate, exercised through the real /query handler: a signed

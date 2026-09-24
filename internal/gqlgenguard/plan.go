@@ -363,7 +363,7 @@ func physicalConfigLocation(moduleAbs, configPath string) (dirAbs, configRel str
 // non-`..` one. Such a `..` climbs from wherever the name before it resolves,
 // which through a link is not where filepath.Clean says; a path that needs it
 // is always writable without it. Leading `..` components (a config under
-// cmd/query-api naming ../../contracts/...) climb from the config's physical
+// internal/queryapi naming ../../contracts/...) climb from the config's physical
 // directory and stay.
 func refuseDotDotAfterAName(knob, p string) error {
 	named := false

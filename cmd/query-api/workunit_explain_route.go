@@ -37,17 +37,17 @@ import (
 
 	chclickhouse "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/analytics"
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/authctx"
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/investmentexplain"
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/principal"
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/routeswitch"
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/teamscope"
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/workunitexplain"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/categorize"
 	"github.com/full-chaos/dev-health-ops/internal/llmorgsettings"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/analytics"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/investmentexplain"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/workunitexplain"
 )
 
 // workUnitExplainOperation is this route's routeswitch operation name --

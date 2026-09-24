@@ -14,9 +14,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/authctx"
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/investmentexplain"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/investmentexplain"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 )
 

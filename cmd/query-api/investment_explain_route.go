@@ -48,12 +48,6 @@ import (
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/analytics"
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/authctx"
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/investmentexplain"
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/principal"
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/routeswitch"
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/teamscope"
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
@@ -61,6 +55,12 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/llmorgsettings"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/analytics"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/investmentexplain"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	chclickhouse "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 )
 

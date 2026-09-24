@@ -37,9 +37,9 @@ import (
 	"os"
 	"strings"
 
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/principal"
 	"github.com/full-chaos/dev-health-ops/internal/platform/buildstamp"
 	"github.com/full-chaos/dev-health-ops/internal/platform/version"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 )
 
 // proofRouteEnabledEnv opts the measurement-only route in. Absent or

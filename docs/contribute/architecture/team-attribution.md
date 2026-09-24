@@ -365,9 +365,9 @@ means the ClickHouse `teams` dimension is empty.
 > Both rules landed together in the CHAOS-5649 PR; neither changes the 9-value `_SOURCE_ORDER`
 > ladder or any rank — they change what gets *recorded* (rule 1) and what gets *resolved at all*
 > (rule 2), not precedence. Confirmed serving-path scope while implementing: both the flow-matrix
-> Team node (`primaryWorkItemTeamAttributionSource`, `cmd/query-api/internal/analytics/flowmatrix.go`)
+> Team node (`primaryWorkItemTeamAttributionSource`, `internal/queryapi/analytics/flowmatrix.go`)
 > and the Investment Evidence drilldown's per-unit team vote (`buildUnitTeamSubquery`,
-> `cmd/query-api/internal/analytics/investment.go`, §"Investment work-graph consumption" below) read
+> `internal/queryapi/analytics/investment.go`, §"Investment work-graph consumption" below) read
 > the SAME `is_primary = 1`, latest-`computed_at` source — there is no separate path joining
 > membership or non-primary rows on either page, so an `Ops Team` node/drilldown entry with units on
 > it was rule 2's 232 PRIMARY rows, never rule 1's 834 non-primary ones (which were already inert
@@ -1482,7 +1482,7 @@ flowchart TD
         WGE[("work_graph_edges<br/>(generic graph, what the materializer reads)")]
         Materialize["investment materializer<br/>Python · work_graph/investment/materialize.py<br/>⚠️ CHAOS-4752/CHAOS-4758 — a PR-only work unit's<br/>structural_evidence_json can lose its issue link when<br/>the CHAOS-2775 oversized-component split's hub removal<br/>orphans the PR from its component; fix in progress"]
         SEJ[("work_unit_investments<br/>.structural_evidence_json.issues")]
-        UnitTeam["build_unit_team_subquery<br/>Python · api/queries/investment.py<br/>Go · cmd/query-api/internal/analytics/investment.go"]
+        UnitTeam["build_unit_team_subquery<br/>Python · api/queries/investment.py<br/>Go · internal/queryapi/analytics/investment.go"]
         Resolved(["team with the most votes across the unit's evidence<br/>items' PRIMARY attributions (work_item_team_attributions,<br/>is_primary = 1), tie-broken by team_id — NOT simply the<br/>single highest-ranked source. native_team (rank 0) is this<br/>section's worked example outcome, not the only reachable one"])
         Derive --> WGIP --> FastPath --> WGE --> Materialize --> SEJ --> UnitTeam --> Resolved
     end
@@ -1496,7 +1496,7 @@ flowchart TD
 superseded. Every node from `_build_issue_pr_edges_from_fast_path` through `structural_evidence_json`
 remains Python-only — no Go port exists for them. `build_unit_team_subquery`,
 the READ side that turns that evidence into a team vote, IS ported to Go
-(`cmd/query-api/internal/analytics/investment.go`, serving the GraphQL `analytics` root) — only the
+(`internal/queryapi/analytics/investment.go`, serving the GraphQL `analytics` root) — only the
 WRITE side (the materializer that produces `structural_evidence_json` in the first place) has no
 Go-native COMPUTE — Go does own the execution orchestration (River job registration and the
 HTTP compatibility bridge to Python, `internal/workerservice/workgraph.go:23-53`) and the

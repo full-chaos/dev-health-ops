@@ -176,7 +176,7 @@ type RESTEndpointSpec struct {
 // its own doc comment for why that inheritance is harmless there).
 // Both read internal/investment's shared source (the same
 // LATEST_WORK_UNIT_INVESTMENTS_CTE-derived query every other reader in
-// cmd/query-api/internal/analytics already composes from), which
+// internal/queryapi/analytics already composes from), which
 // excludes any work unit a later regrouping run has recorded in
 // work_unit_supersessions -- a table the Python query this route ports
 // has no knowledge of at all. Whenever a live org holds a superseded
@@ -875,7 +875,7 @@ type pullRequestDrilldownRoute struct {
 // /api/v1/drilldown/prs (fetch_pull_requests, api/queries/drilldown.py;
 // internal/drilldown/prs.go) and GET /api/v1/people/{person_id}/
 // drilldown/prs (fetch_person_pull_requests, sql/people/
-// person_drilldown_prs.sql; cmd/query-api/internal/people/
+// person_drilldown_prs.sql; internal/queryapi/people/
 // drilldownprs.go). Both reference readers select the same
 // git_pull_requests row fields through an INNER JOIN on repos with no
 // FINAL on either table, ORDER BY created_at DESC LIMIT; both ports read
@@ -1274,7 +1274,7 @@ var drilldownIssuesParity = Options{
 // explainAggregateFloats declares explain's own ClickHouse-derived
 // numeric leaves as Tier B: metricValueProjection's headline read and
 // fetchMetricContributors/fetchMetricDriverDelta's ranking read
-// (cmd/query-api/internal/explain/metrics.go) are each a merged Float64
+// (internal/queryapi/explain/metrics.go) are each a merged Float64
 // ClickHouse aggregate over work_item_metrics_daily/repo_metrics_daily/
 // work_item_state_durations_daily, the same class every sibling
 // FloatTierB table in this service already declares (CHAOS-5451).
@@ -1350,7 +1350,7 @@ var explainParity = Options{
 		},
 		{
 			Ticket: "CHAOS-5818",
-			Reason: "fetch_metric_contributors and fetch_metric_driver_delta (api/queries/explain.py) rank every metric with a hardcoded avg(column), regardless of that metric's own aggregator in _METRIC_CONFIG -- this table's own headline reader, fetch_metric_value (api/queries/metrics.py), already keys off the metric's configured aggregator, so an avg-aggregator metric's ranking agrees with its own headline while a sum-aggregator metric's ranking (throughput, deploy_freq, churn, blocked_work) silently averages a quantity the metric's own label, unit and headline all present as a total. This port's fetchMetricContributors/fetchMetricDriverDelta (cmd/query-api/internal/explain/metrics.go) take the metric's own config.Aggregator, matching the headline read. Go is correct. DIRECTION: a sum over N>=1 non-negative values is >= their average, equal only at N=1 -- every one of the four sum-aggregator metrics this entry covers reads a structurally non-negative column (metricconfig.go: throughput/items_completed and deploy_freq/deployments_count are counts, churn/total_loc_touched is touched-lines, blocked_work/duration_hours is a duration; none can go negative), so candidate (Go, sum) is admitted only when strictly greater than baseline (Python, avg) at the same driver/contributor id -- the reverse of every OTHER KeyedDirectionShape in this file, which is why this entry sets CandidateMustBeGreater. The non-negativity is this claim's own premise, not incidental: the same argument reverses for a signed quantity (see data.drivers.delta_pct's own drop below), and no metric this entry reaches carries one. Pairing is by id, over data.drivers/data.contributors declared order-insensitive under this ticket (explainDriverRankOrderInsensitive above) -- see that declaration's own doc comment for why positional pairing cannot be used here and what leaving it in costs.",
+			Reason: "fetch_metric_contributors and fetch_metric_driver_delta (api/queries/explain.py) rank every metric with a hardcoded avg(column), regardless of that metric's own aggregator in _METRIC_CONFIG -- this table's own headline reader, fetch_metric_value (api/queries/metrics.py), already keys off the metric's configured aggregator, so an avg-aggregator metric's ranking agrees with its own headline while a sum-aggregator metric's ranking (throughput, deploy_freq, churn, blocked_work) silently averages a quantity the metric's own label, unit and headline all present as a total. This port's fetchMetricContributors/fetchMetricDriverDelta (internal/queryapi/explain/metrics.go) take the metric's own config.Aggregator, matching the headline read. Go is correct. DIRECTION: a sum over N>=1 non-negative values is >= their average, equal only at N=1 -- every one of the four sum-aggregator metrics this entry covers reads a structurally non-negative column (metricconfig.go: throughput/items_completed and deploy_freq/deployments_count are counts, churn/total_loc_touched is touched-lines, blocked_work/duration_hours is a duration; none can go negative), so candidate (Go, sum) is admitted only when strictly greater than baseline (Python, avg) at the same driver/contributor id -- the reverse of every OTHER KeyedDirectionShape in this file, which is why this entry sets CandidateMustBeGreater. The non-negativity is this claim's own premise, not incidental: the same argument reverses for a signed quantity (see data.drivers.delta_pct's own drop below), and no metric this entry reaches carries one. Pairing is by id, over data.drivers/data.contributors declared order-insensitive under this ticket (explainDriverRankOrderInsensitive above) -- see that declaration's own doc comment for why positional pairing cannot be used here and what leaving it in costs.",
 			Paths: []string{
 				"data.drivers.value",
 				"data.contributors.value",
@@ -1381,7 +1381,7 @@ var explainParity = Options{
 		},
 		{
 			Ticket: "CHAOS-5819",
-			Reason: "blocked_work's table/column read (work_item_state_durations_daily.duration_hours) carries no status predicate in fetch_metric_value/fetch_metric_contributors/fetch_metric_driver_delta (api/queries/metrics.py, api/queries/explain.py), so the 'Blocked Work' headline, its drivers and its contributors sum/rank duration_hours across every status the table records (backlog/todo/in_progress/in_review/blocked/done/canceled/unknown) -- only this table's OTHER, unrelated reader (fetch_blocked_hours, used by home.py, never by /explain) restricts to status = 'blocked'. This port's blocked_work config carries a StatusFilter of 'blocked' (cmd/query-api/internal/explain/metricconfig.go), reaching every numeric field this route derives from that column for this one metric. Go is correct. This same divergence can also manifest as a LIST-LENGTH difference: a window/scope whose blocked-status rows are fewer than its non-blocked ones leaves data.drivers/data.contributors shorter on the candidate side, and a window with no blocked-status row at all leaves them empty against a populated baseline. Paths above cannot reach that manifestation and no addition to them would: classifyBaselineDefects (compare.go) admits a finding only when leafDifference(shape) holds, which is exactly ShapeValue/ShapeNull/ShapeScalarType -- a length, presence or structure difference is categorically outside every BaselineDefect's coverage, independent of what its Paths name. A list-length instance of this divergence is therefore knowingly left uncovered and stays a visible, real finding on the receipt whenever it fires.",
+			Reason: "blocked_work's table/column read (work_item_state_durations_daily.duration_hours) carries no status predicate in fetch_metric_value/fetch_metric_contributors/fetch_metric_driver_delta (api/queries/metrics.py, api/queries/explain.py), so the 'Blocked Work' headline, its drivers and its contributors sum/rank duration_hours across every status the table records (backlog/todo/in_progress/in_review/blocked/done/canceled/unknown) -- only this table's OTHER, unrelated reader (fetch_blocked_hours, used by home.py, never by /explain) restricts to status = 'blocked'. This port's blocked_work config carries a StatusFilter of 'blocked' (internal/queryapi/explain/metricconfig.go), reaching every numeric field this route derives from that column for this one metric. Go is correct. This same divergence can also manifest as a LIST-LENGTH difference: a window/scope whose blocked-status rows are fewer than its non-blocked ones leaves data.drivers/data.contributors shorter on the candidate side, and a window with no blocked-status row at all leaves them empty against a populated baseline. Paths above cannot reach that manifestation and no addition to them would: classifyBaselineDefects (compare.go) admits a finding only when leafDifference(shape) holds, which is exactly ShapeValue/ShapeNull/ShapeScalarType -- a length, presence or structure difference is categorically outside every BaselineDefect's coverage, independent of what its Paths name. A list-length instance of this divergence is therefore knowingly left uncovered and stays a visible, real finding on the receipt whenever it fires.",
 			Paths: []string{
 				"data.value",
 				"data.delta_pct",
@@ -1418,7 +1418,7 @@ var explainParity = Options{
 }
 
 // explainScopeDropDefect is scope_filter_for_metric's own org_id-
-// omission bug (cmd/query-api/internal/explain/response.go's own
+// omission bug (internal/queryapi/explain/response.go's own
 // scopeFilterForMetric doc comment): explain.py's one call site for this
 // chain omits the org_id keyword entirely, so for a "repo"-scoped metric
 // (review_latency, deploy_freq, churn, change_failure_rate --
@@ -1436,7 +1436,7 @@ var explainParity = Options{
 // entries carry no citation for it.
 var explainScopeDropDefect = BaselineDefect{
 	Ticket:             "CHAOS-5813",
-	Reason:             "explain.py's own call site for scope_filter_for_metric (api/services/explain.py:150-152) is the only caller anywhere in the Python source that omits the org_id keyword -- it silently defaults to \"\". For a repo-scoped metric (review_latency/deploy_freq/churn/change_failure_rate) that flows into resolve_repo_id's own org_id filter, which no real org's repos row ever matches: every repo/team scope ref fails to resolve, repo_ids ends up [], and the scope filter is silently dropped, so the headline value/delta and every driver/contributor value are computed over the whole org rather than the requested scope. This port passes the real org id throughout. Go is correct. The reference's own team-to-repo resolver for this scope (resolve_repo_ids_for_teams, api/queries/scopes.py:72-89) reads DISTINCT repo_id straight off user_metrics_daily.team_id -- it bridges through the metrics table, never through team ownership -- while this port resolves a team's repositories from team_repo_ownership (cmd/query-api/internal/teamscope), so for a team scope the two planes read different tables: see this file's own TEAM SCOPE paragraph above for why that difference is a knowingly uncovered finding rather than a declared defect. This same divergence can also manifest as a LIST-LENGTH difference: data.drivers/data.contributors come back shorter on the candidate side than the baseline's substituted org-wide list, and a scope with no matching rows in the window leaves them empty against a populated baseline, with data.value/data.delta_pct then reading 0 against a real number rather than a differently-scoped one -- a structural difference, never covered by ANY BaselineDefect shape (see compare.go's leafDifference gate), knowingly left uncovered and a real, visible finding on the receipt whenever a requested scope's resolved repo set is small or has no overlap with the metric's own source table. The same gap can also surface one layer earlier, before any field comparison runs: a resolved scope narrow enough widens the two response bodies past the proof comparator's own size-disagreement threshold, and the request is REFUSED as legs_do_not_overlap instead of reaching an admitted mismatch -- the same fallout, not a second defect.",
+	Reason:             "explain.py's own call site for scope_filter_for_metric (api/services/explain.py:150-152) is the only caller anywhere in the Python source that omits the org_id keyword -- it silently defaults to \"\". For a repo-scoped metric (review_latency/deploy_freq/churn/change_failure_rate) that flows into resolve_repo_id's own org_id filter, which no real org's repos row ever matches: every repo/team scope ref fails to resolve, repo_ids ends up [], and the scope filter is silently dropped, so the headline value/delta and every driver/contributor value are computed over the whole org rather than the requested scope. This port passes the real org id throughout. Go is correct. The reference's own team-to-repo resolver for this scope (resolve_repo_ids_for_teams, api/queries/scopes.py:72-89) reads DISTINCT repo_id straight off user_metrics_daily.team_id -- it bridges through the metrics table, never through team ownership -- while this port resolves a team's repositories from team_repo_ownership (internal/queryapi/teamscope), so for a team scope the two planes read different tables: see this file's own TEAM SCOPE paragraph above for why that difference is a knowingly uncovered finding rather than a declared defect. This same divergence can also manifest as a LIST-LENGTH difference: data.drivers/data.contributors come back shorter on the candidate side than the baseline's substituted org-wide list, and a scope with no matching rows in the window leaves them empty against a populated baseline, with data.value/data.delta_pct then reading 0 against a real number rather than a differently-scoped one -- a structural difference, never covered by ANY BaselineDefect shape (see compare.go's leafDifference gate), knowingly left uncovered and a real, visible finding on the receipt whenever a requested scope's resolved repo set is small or has no overlap with the metric's own source table. The same gap can also surface one layer earlier, before any field comparison runs: a resolved scope narrow enough widens the two response bodies past the proof comparator's own size-disagreement threshold, and the request is REFUSED as legs_do_not_overlap instead of reaching an admitted mismatch -- the same fallout, not a second defect.",
 	Paths:              []string{"data.value", "data.delta_pct", "data.drivers.value", "data.drivers.delta_pct", "data.contributors.value"},
 	Intermittent:       true,
 	IntermittentReason: "present only while the requested repo/team scope's own aggregate actually differs from the whole org's aggregate for this metric and window; a scope whose narrowed value happens to equal the org-wide one shows no divergence under these paths",
@@ -1474,7 +1474,7 @@ func explainScopedRequest(name, metric, scopeType, producerName string) RESTRequ
 // candidate list is missing exactly the contributors/drivers whose work
 // falls outside the team's own repositories, which the candidate resolves
 // through team_repo_ownership via one shared condition
-// (cmd/query-api/internal/teamscope.RepoCondition) while the reference
+// (internal/queryapi/teamscope.RepoCondition) while the reference
 // resolves the same scope from user_metrics_daily.team_id
 // (resolve_repo_ids_for_teams, api/queries/scopes.py) -- explainScopeDropDefect's
 // own Reason states the two tables. Neither declares an EqualLeaves or
@@ -1952,7 +1952,7 @@ var personDrilldownIssuesParity = drilldownIssuesParity
 
 // flamePRIDBoundParity is GET /api/v1/flame's own live (pr_id-bound, 200)
 // "pr" entity_type entry below. flame_route.go's own package doc comment
-// (cmd/query-api/internal/flame) states the citation this mirrors: both
+// (internal/queryapi/flame) states the citation this mirrors: both
 // git_pull_requests and git_pull_request_reviews are ReplacingMergeTree(
 // last_synced) (000_raw_tables.sql, sort-keyed by migration 027), and
 // api/queries/flame.py's fetch_pull_request reads a bare `LIMIT 1` (no
@@ -1966,7 +1966,7 @@ var personDrilldownIssuesParity = drilldownIssuesParity
 // flamePRIDBoundEntityInts declares the "pr" entity_type's own
 // data.entity.number leaf: services/flame.py's _build_pr_flame_response
 // (entity["number"] = number) and this port's buildPRFlameResponse
-// (cmd/query-api/internal/flame/flame.go's entity map, line 360) both
+// (internal/queryapi/flame/flame.go's entity map, line 360) both
 // assign it a plain int parsed off the "<repo_id>:<number>" entity_id --
 // never aggregated -- so it is integer, not float. "issue"/"deployment"
 // entity dicts carry no numeric field at all (services/flame.py's own
@@ -1981,7 +1981,7 @@ var flamePRIDBoundParity = Options{
 	BaselineDefects: []BaselineDefect{
 		{
 			Ticket: "CHAOS-5803",
-			Reason: "git_pull_requests and git_pull_request_reviews are both ReplacingMergeTree(last_synced) (000_raw_tables.sql, org_id added to both sorting keys by migration 027); api/queries/flame.py's fetch_pull_request reads git_pull_requests with a bare LIMIT 1 (no ORDER BY, no FINAL) and fetch_pull_request_reviews reads git_pull_request_reviews ordered by submitted_at with no FINAL either -- neither dedups an unmerged physical version of the same logical row. This port's fetchPullRequest/fetchPullRequestReviews (cmd/query-api/internal/flame) read both tables FINAL. An unmerged physical version can surface a stale PR field (entity/timeline/frame values derived from it) or a stale/duplicated review that shifts the rework-window frames this entity_type builds. Go is correct. This citation's Paths reach the divergence but, by this package's own leaf-only coverage rule (BaselineDefect's doc comment), never silently admit a length or structural difference: it stays a real, uncovered finding on the receipt whenever it fires.",
+			Reason: "git_pull_requests and git_pull_request_reviews are both ReplacingMergeTree(last_synced) (000_raw_tables.sql, org_id added to both sorting keys by migration 027); api/queries/flame.py's fetch_pull_request reads git_pull_requests with a bare LIMIT 1 (no ORDER BY, no FINAL) and fetch_pull_request_reviews reads git_pull_request_reviews ordered by submitted_at with no FINAL either -- neither dedups an unmerged physical version of the same logical row. This port's fetchPullRequest/fetchPullRequestReviews (internal/queryapi/flame) read both tables FINAL. An unmerged physical version can surface a stale PR field (entity/timeline/frame values derived from it) or a stale/duplicated review that shifts the rework-window frames this entity_type builds. Go is correct. This citation's Paths reach the divergence but, by this package's own leaf-only coverage rule (BaselineDefect's doc comment), never silently admit a length or structural difference: it stays a real, uncovered finding on the receipt whenever it fires.",
 			// flame.Response's whole field set (flame.go): the Reason
 			// names all three -- entity, timeline and frame values -- as
 			// directly derived from the one PR/review read this
@@ -2028,7 +2028,7 @@ var flamePRIDBoundParity = Options{
 // TEAM SCOPE ON A REPO-KEYED ROUTE IS NOT PROVABLE BY EQUALITY. The two
 // planes resolve a team's repositories from different tables. This port
 // reads team_repo_ownership through one shared condition
-// (cmd/query-api/internal/teamscope.RepoCondition), the source
+// (internal/queryapi/teamscope.RepoCondition), the source
 // migrations/clickhouse/081_team_cognitive_load_daily.sql names as the one
 // that defines a team's repositories. The reference reads DISTINCT repo_id
 // off user_metrics_daily.team_id (resolve_repo_ids_for_teams,
@@ -2410,7 +2410,7 @@ var heatmapRepoTouchpointsParity = Options{
 // below via its own shared KeyedDirectionShape entry) to the FULL
 // consequence set it produces specifically on hotspot_risk's own
 // two-level structure: fetchHotspotRisk's own top_query (api/queries/
-// heatmap.py:161-178, cmd/query-api/internal/heatmap/queries.go:244-257)
+// heatmap.py:161-178, internal/queryapi/heatmap/queries.go:244-257)
 // selects the top 20 files (services/heatmap.py:367, heatmap.go:322) by
 // sum(hotspot_score) BEFORE the per-week detail query builds data.cells,
 // and data.axes.y (services/heatmap.py's own `_axis_order` default
@@ -2487,7 +2487,7 @@ var heatmapActiveHoursParity = Options{
 // heatmapRepoTouchpointsTeamScopeSubsetDefect/heatmapHotspotRiskTeamScope
 // SubsetDefect/heatmapReviewWaitDensityTeamScopeSubsetDefect declare
 // data.cells as a bounded subset for the three team-scoped heatmap
-// metrics: cmd/query-api/internal/heatmap/scopefilter.go's own
+// metrics: internal/queryapi/heatmap/scopefilter.go's own
 // scopeFilterForMetric splices teamscope.RepoCondition(orgID,"repo_id",
 // scopeIDs,asOf) (scopefilter.go:144-174) for a team scope, resolving a
 // team's repositories from team_repo_ownership through the one shared
@@ -2667,7 +2667,7 @@ var heatmapHotspotRiskTeamScopedParity = Options{
 // maxHotspotRowsCorpus mirrors maxHotspotRows (sankey.go:97) and
 // MAX_HOTSPOT_ROWS (services/sankey.py:59) -- neither package is
 // importable from here (sankey.go's constant is unexported inside
-// cmd/query-api/internal/sankey, and this package never imports a cmd
+// internal/queryapi/sankey, and this package never imports a cmd
 // tree), so HotspotListBoundaryShape's own Limit field is set from this
 // mirrored value rather than the source constant directly. Hotspot's own
 // query params carry no limit field on either plane (established from
@@ -4527,7 +4527,7 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				DedupListPath: drilldownPRsDedup.ListPath, DedupKeyFields: drilldownPRsDedup.KeyFields,
 				// Produces pr_id from this response's own FIRST item as
 				// "<repo_id>:<number>" -- flame's own "pr" entity_id
-				// shape (parseRepoEntity, cmd/query-api/internal/flame)
+				// shape (parseRepoEntity, internal/queryapi/flame)
 				// -- via restidbind.go's JoinField, so both halves come
 				// from the SAME PR rather than an independently-produced
 				// repo_id that might name a different repo. Consumed by
@@ -5557,7 +5557,7 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				// reached this branch before (pr_entity_id_missing_repo_
 				// prefix and pr_entity_id_invalid_repo_uuid both fail
 				// earlier in the same function). parseRepoEntity's own Go
-				// port: cmd/query-api/internal/flame/flame.go:178-180.
+				// port: internal/queryapi/flame/flame.go:178-180.
 				Name: "pr_entity_id_missing_suffix",
 				Query: url.Values{
 					"entity_type": {"pr"}, "entity_id": {"00000000-0000-0000-0000-000000000000:"},
@@ -5571,7 +5571,7 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				// pr_entity_id_missing_repo_prefix already covers via the
 				// "pr" call site at services/flame.py:372) -- deterministic,
 				// no ClickHouse call, no producer needed. BuildResponse's
-				// own "deployment" case: cmd/query-api/internal/flame/
+				// own "deployment" case: internal/queryapi/flame/
 				// flame.go:512-516.
 				Name: "deployment_entity_id_missing_repo_prefix",
 				Query: url.Values{
@@ -5649,7 +5649,7 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 			{
 				// The "deployment" entity_type's own declared 200 path
 				// (services/flame.py:409-424, buildDeploymentFlameResponse
-				// in cmd/query-api/internal/flame/flame.go:414-473):
+				// in internal/queryapi/flame/flame.go:414-473):
 				// entity_id is bound to deployment_entity_id, a
 				// restOperatorSuppliedProducers entry supplied by the run
 				// invocation's own -bind flag rather than by an earlier

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/principal"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 )
 
 // The platform gate and the org check, exercised through the real /query

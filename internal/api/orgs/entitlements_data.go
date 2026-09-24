@@ -18,9 +18,9 @@ import (
 
 // Tiers, lowest first (types.TIER_ORDER).
 const (
-	TierCommunity  = "community"
-	TierTeam       = "team"
-	TierEnterprise = "enterprise"
+	TierCommunity  = licensing.TierCommunity
+	TierTeam       = licensing.TierTeam
+	TierEnterprise = licensing.TierEnterprise
 )
 
 // TierOrder is types.TIER_ORDER.
@@ -57,33 +57,15 @@ var StandardFeatureKeys = []string{
 	"priority_support", "byo_llm",
 }
 
-// LimitValue is one TIER_LIMITS value: nil (unlimited), an int, or a float.
-type LimitValue any
-
-// TierLimit is one (key, value) of TIER_LIMITS, in the dict's order.
-type TierLimit struct {
-	Key   string
-	Value LimitValue // nil, int64 or float64
-}
+// LimitValue, TierLimit and TierLimits are licensing's TIER_LIMITS table,
+// shared with TierLimitService.get_limit's port there.
+type (
+	LimitValue = licensing.LimitValue
+	TierLimit  = licensing.TierLimit
+)
 
 // TierLimits is models.licensing.TIER_LIMITS (TIER_LIMITS_DEFAULTS).
-var TierLimits = map[string][]TierLimit{
-	TierCommunity: {
-		{"max_users", int64(5)}, {"max_repos", int64(3)}, {"max_work_items", int64(1000)},
-		{"retention_days", int64(30)}, {"backfill_days", int64(30)},
-		{"api_rate_limit_per_min", int64(100)}, {"min_sync_interval_hours", int64(24)},
-	},
-	TierTeam: {
-		{"max_users", int64(20)}, {"max_repos", int64(10)}, {"max_work_items", int64(10000)},
-		{"retention_days", int64(90)}, {"backfill_days", int64(90)},
-		{"api_rate_limit_per_min", int64(500)}, {"min_sync_interval_hours", int64(6)},
-	},
-	TierEnterprise: {
-		{"max_users", nil}, {"max_repos", nil}, {"max_work_items", nil},
-		{"retention_days", nil}, {"backfill_days", nil},
-		{"api_rate_limit_per_min", nil}, {"min_sync_interval_hours", 0.25},
-	},
-}
+var TierLimits = licensing.TierLimits
 
 // Querier is the pgx surface the loaders use (a pool or a transaction).
 type Querier interface {

@@ -21,8 +21,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/rivermigrate"
 	"github.com/full-chaos/dev-health-ops/internal/schedulerservice"
 	"github.com/full-chaos/dev-health-ops/internal/streamrunnerservice"
-	"github.com/full-chaos/dev-health-ops/internal/workerservice"
 	"github.com/full-chaos/dev-health-ops/internal/workersctl"
+	"github.com/full-chaos/dev-health-ops/internal/workerservice"
 )
 
 func main() { cli.Main("dho", commands()) }

@@ -79,11 +79,11 @@ queue this fleet does not serve fails before readiness, because startup
 validation requires the selected queue set to equal the constructed handler
 set.
 
-**`--help` is the discovery surface.** Run `dev-health-worker --help` for the
+**`--help` is the discovery surface.** Run `dho worker --help` for the
 complete option list: every flag, the environment variable it falls back to,
-and its default, grouped by purpose. The reconciler, scheduler, and stream
-runner print the options *they* accept, so a binary never advertises a setting
-it ignores.
+and its default, grouped by purpose. `dho reconciler --help`, `dho scheduler
+--help` and `dho stream-runner --help` print the options *they* accept, so a
+service never advertises a setting it ignores.
 
 Resolution order is **flag > environment > default**. Every option except the
 credentials below may be given either way; the flag wins when both are present,

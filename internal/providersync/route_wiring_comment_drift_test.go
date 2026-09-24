@@ -91,7 +91,7 @@ const supersededTag = "SUPERSEDED:"
 
 func wiringFilePath(t *testing.T) string {
 	t.Helper()
-	path, err := filepath.Abs(filepath.Join("..", "..", "cmd", "dev-health-worker", "provider_sync.go"))
+	path, err := filepath.Abs(filepath.Join("..", "..", "internal", "workerservice", "provider_sync.go"))
 	if err != nil {
 		t.Fatalf("resolve wiring file: %v", err)
 	}

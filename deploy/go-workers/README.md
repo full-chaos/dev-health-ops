@@ -621,7 +621,7 @@ canonical queue set, per-queue concurrency, worker identity, one River client,
 and effective database limits in its startup and readiness evidence.
 
 Since CHAOS-4020 the same is true of the *rest* of the configuration: run
-`dev-health-worker --help` for the full option list, the environment variable
+`dho worker --help` for the full option list, the environment variable
 each flag falls back to, and its default. Resolution is flag > environment >
 default, an unknown flag is rejected at startup with exit status 2, and the
 manifests in this directory pass their configuration in `command:` so

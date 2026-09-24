@@ -248,7 +248,14 @@ func (f *fakeStripe) serve(plane string, w http.ResponseWriter, r *http.Request)
 		case "cs_nullprice":
 			items = []string{item("null"), item(`{"id": "price_ent_cfg", "object": "price"}`)}
 		case "cs_noprice":
-			items = []string{`{"id": "li_venue", "object": "item", "quantity": 1}`}
+			// An item without a price makes Python's item.price raise:
+			// the whole read falls back to team, the enterprise item after
+			// it included.
+			items = []string{`{"id": "li_venue", "object": "item", "quantity": 1}`, item(`{"id": "price_ent_cfg", "object": "price"}`)}
+		case "cs_team_then_ent":
+			items = []string{item(`{"id": "price_team_cfg", "object": "price"}`), item(`{"id": "price_ent_cfg", "object": "price"}`)}
+		case "cs_blank_then_ent":
+			items = []string{item(`{"id": "", "object": "price"}`), item(`{"id": "price_ent_cfg", "object": "price"}`)}
 		case "cs_empty":
 		default:
 			items = []string{item(`{"id": "price_team_cfg", "object": "price"}`)}

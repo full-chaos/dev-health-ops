@@ -64,6 +64,14 @@ func loadWebhookFixture(t *testing.T, name string) map[string]any {
 // the metadata, ids and types each case needs, signed with the venue
 // secret (a timestamp in the near future, so the whole run stays inside
 // the tolerance), plus the signature and payload shapes the route refuses.
+// webhookOrgs are orgs of this test only, one per checkout case whose tier
+// the rows must show (each case the last event for its org).
+var webhookOrgs = []string{
+	"77777777-0000-4000-8000-000000000001", "77777777-0000-4000-8000-000000000002",
+	"77777777-0000-4000-8000-000000000003", "77777777-0000-4000-8000-000000000004",
+	"77777777-0000-4000-8000-000000000005", "77777777-0000-4000-8000-000000000006",
+}
+
 func webhookRequests(t *testing.T, f billingFixture) []venueoracle.Request {
 	t.Helper()
 	stamp := time.Now().Unix() + 200
@@ -105,10 +113,13 @@ func webhookRequests(t *testing.T, f billingFixture) []venueoracle.Request {
 	checkout("checkout: team (org A, existing license)", "cs_team", map[string]any{"org_id": orgA})
 	checkout("checkout: enterprise (org D, no license)", "cs_ent", map[string]any{"org_id": orgD})
 	checkout("checkout: unknown price", "cs_unknown", map[string]any{"org_id": f.orgB.String()})
-	checkout("checkout: null price then enterprise", "cs_nullprice", map[string]any{"org_id": orgA})
-	checkout("checkout: item without price", "cs_noprice", map[string]any{"org_id": orgA})
-	checkout("checkout: line items fail", "cs_fail", map[string]any{"org_id": orgA})
-	checkout("checkout: no line items", "cs_empty", map[string]any{"org_id": orgA})
+	// One org each: the rows show each case's own tier.
+	checkout("checkout: null price then enterprise", "cs_nullprice", map[string]any{"org_id": webhookOrgs[0]})
+	checkout("checkout: item without price", "cs_noprice", map[string]any{"org_id": webhookOrgs[1]})
+	checkout("checkout: first recognized price wins", "cs_team_then_ent", map[string]any{"org_id": webhookOrgs[2]})
+	checkout("checkout: blank price id then enterprise", "cs_blank_then_ent", map[string]any{"org_id": webhookOrgs[3]})
+	checkout("checkout: line items fail", "cs_fail", map[string]any{"org_id": webhookOrgs[4]})
+	checkout("checkout: no line items", "cs_empty", map[string]any{"org_id": webhookOrgs[5]})
 	checkout("checkout: no session id", "", map[string]any{"org_id": orgA})
 	checkout("checkout: manual org", "cs_ent", map[string]any{"org_id": f.orgC.String()})
 	checkout("checkout: org not a uuid", "cs_team", map[string]any{"org_id": "org-abc"})
@@ -150,7 +161,7 @@ func webhookRequests(t *testing.T, f billingFixture) []venueoracle.Request {
 	signed("payload: not utf-8", []byte("\xff\xfe"))
 	signed("payload: not json", []byte("not json"))
 	signed("payload: a list", []byte("[1, 2]"))
-	signed("payload: v2 thin event", []byte(`{"id": "evt_v2", "object": "v2.core.event", "type": "x"}`))
+	signed("payload: v2 thin event", []byte(`{"id": "evt_v2", "object": "v2.core.event", "type": "customer.created", "data": {"object": {}}}`))
 	signed("payload: no type", []byte(`{"id": "evt_nt", "object": "event", "data": {"object": {}}}`))
 	signed("payload: type not a string", []byte(`{"id": "evt_ti", "object": "event", "type": 5, "data": {"object": {}}}`))
 	signed("payload: no data", []byte(`{"id": "evt_nd", "object": "event", "type": "customer.created"}`))
@@ -226,6 +237,12 @@ func TestVenueOracleBillingWebhook(t *testing.T) {
 			// Org C's tier is managed by hand: Stripe events leave it alone.
 			if _, err := admin.Exec(ctx, `UPDATE organizations SET managed_by = 'manual' WHERE id = $1`, seed.orgC); err != nil {
 				t.Fatal(err)
+			}
+			for index, id := range webhookOrgs {
+				if _, err := admin.Exec(ctx, `INSERT INTO organizations (id, slug, name, tier) VALUES ($1, $2, $2, 'community')`,
+					id, fmt.Sprintf("webhook-%d", index)); err != nil {
+					t.Fatal(err)
+				}
 			}
 			return seed.tokenSpecs()
 		},

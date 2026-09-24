@@ -148,11 +148,9 @@ func readWebhookEvent(payload []byte) (pyjson.Value, string, pyjson.Value, error
 
 // invoiceHasOrgID is _invoice_has_org_id over a plain dict.
 func invoiceHasOrgID(invoice pyjson.Value) bool {
-	metadata := attr(invoice, "metadata", pyjson.NewObject())
-	if !pyjson.Truthy(metadata) {
-		return false
-	}
-	object, isObject := metadata.(*pyjson.Object)
+	// `getattr(..., {}) or {}` then isinstance(dict): a falsy or non-dict
+	// metadata carries no org.
+	object, isObject := attr(invoice, "metadata", nil).(*pyjson.Object)
 	if !isObject {
 		return false
 	}
@@ -211,8 +209,8 @@ func (h handlers) checkoutTier(ctx context.Context, client *stripe.Client, sessi
 		priceIDs = append(priceIDs, attr(price, "id", nil))
 	}
 	for _, id := range priceIDs {
-		text, isText := id.(string)
-		if isText && text != "" {
+		// `if price_id:`: an empty id never matches a configured price.
+		if text, isText := id.(string); isText {
 			if tier, known := h.priceTier(text); known {
 				return tier
 			}

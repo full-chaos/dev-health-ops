@@ -525,26 +525,23 @@ smoke_dho() {
 }
 
 # smoke_query_api runs `dho query-api` from the dho image the way its
-# Deployment does: the verb as the only argument, QUERY_API_ADDR on :8090,
+# Deployment does: the verb, QUERY_API_ADDR on :8090,
 # and no route configured. The one listener must serve /healthz, /readyz and
 # /metrics, leave /query unmounted (404), and stop with exit 0. --help must
-# exit 0 and an unknown argument must exit 2.
+# print the usage and exit 0. Any other argument is logged and ignored, as the
+# old binary did, so the serving run passes one and checks the warning.
+# /metrics must name the service dev-health-query-api in target_info, the
+# same name tracing logs, not the executable's.
 smoke_query_api() {
   local tag="$1"
   local container_name="dev-health-go-query-api-smoke-$$"
   local address
   local exit_code
-  local code
 
   printf 'container smoke: query-api\n'
   docker run --rm "${CONTAINER_SECURITY_ARGS[@]}" "${tag}" query-api --help \
     | grep -F 'Usage: dho query-api' >/dev/null \
     || die "dho query-api --help did not print its usage"
-  set +e
-  docker run --rm "${CONTAINER_SECURITY_ARGS[@]}" "${tag}" query-api --unknown >/dev/null 2>&1
-  code=$?
-  set -e
-  [ "${code}" = "2" ] || die "dho query-api with an unknown argument exited ${code}, want 2"
 
   ACTIVE_CONTAINER="${container_name}"
   docker run --detach \
@@ -552,7 +549,7 @@ smoke_query_api() {
     --publish "127.0.0.1::8090" \
     --env "QUERY_API_ADDR=:8090" \
     "${CONTAINER_SECURITY_ARGS[@]}" \
-    "${tag}" query-api >/dev/null
+    "${tag}" query-api --unknown >/dev/null
   address="$(docker port "${container_name}" 8090/tcp 2>/dev/null | head -n 1 || true)"
   if [ -z "${address}" ]; then
     printf 'container query-api exited before publishing its port; its output was:\n' >&2
@@ -569,6 +566,11 @@ smoke_query_api() {
     || die "dho query-api mounted /query with no route configured"
   docker logs "${container_name}" 2>&1 | grep -F '"service_name":"dev-health-query-api"' >/dev/null \
     || die "dho query-api did not start tracing as dev-health-query-api"
+  docker logs "${container_name}" 2>&1 | grep -F 'query-api takes no arguments; ignoring them' >/dev/null \
+    || die "dho query-api did not log the argument it ignored"
+  curl --silent --max-time 5 "http://${address}/metrics" \
+    | grep -E '^target_info\{.*service_name="dev-health-query-api"' >/dev/null \
+    || die "dho query-api /metrics target_info does not name dev-health-query-api"
 
   docker stop --time 5 "${container_name}" >/dev/null
   exit_code="$(docker inspect --format '{{.State.ExitCode}}' "${container_name}")"

@@ -85,7 +85,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     touch -d "@${SOURCE_DATE_EPOCH}" /out/dho
 
 # `goapi prove`'s -documents flag needs registrydump's enumeration of
-# query-api's registered GraphQL documents (cmd/query-api/query_route.go).
+# query-api's registered GraphQL documents (internal/queryapi/server/query_route.go).
 # Built and run here, at the SAME commit as dho above, so the baked-in
 # dump can never drift from what this image's `dho goapi prove` actually
 # verifies against -- a stale, hand-carried dump was exactly the gap the
@@ -93,7 +93,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     go build -buildvcs=false -trimpath -o /out/registrydump ./cmd/query-api/tools/registrydump && \
-    /out/registrydump -file cmd/query-api/query_route.go > /out/documents.json && \
+    /out/registrydump -file internal/queryapi/server/query_route.go > /out/documents.json && \
     rm /out/registrydump && \
     touch -d "@${SOURCE_DATE_EPOCH}" /out/documents.json
 

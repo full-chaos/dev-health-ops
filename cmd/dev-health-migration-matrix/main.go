@@ -62,7 +62,7 @@ const (
 	// `src/dev_health_ops/api/**` entry, query-api's *.go files as
 	// ordinary Go source.
 	mainPyRelative      = "src/dev_health_ops/api/main.py"
-	queryAPIDirRelative = "cmd/query-api"
+	queryAPIDirRelative = "internal/queryapi/server"
 
 	// catalogRelative is the registered-operation catalog the edge
 	// dispatches by -- the file `dev-hops go-api routing status` reports

@@ -55,7 +55,7 @@ const (
 // workUnitsReadLimit is the limit the read below carries, under the
 // read-only client's own 1,000-row result ceiling: a team owning more
 // repositories than that is bounded by the request's limit, exactly as the
-// route bounds it (boundedWorkUnitsLimit, cmd/query-api/workunits_route.go).
+// route bounds it (boundedWorkUnitsLimit, internal/queryapi/server/workunits_route.go).
 const workUnitsReadLimit = 200
 
 // teamScopeReadAsOf is the instant these tests resolve ownership at: after

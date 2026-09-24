@@ -238,7 +238,7 @@ A row that is live, reachable to real clients (`canary`/`primary`) and carries n
 is required before stage 4/5, and "a bare 200 does not qualify".
 
 <!-- BEGIN GENERATED GO API OPERATIONS -->
-_Rendered 2026-09-20T13:31:59Z against main merge-base `55b59036632bd6ef22c04ec50118fa3fb70fce1f`; SDL digest pin `sha256:898250a995e65f792e0383a07d7a683251894cbe51f426a4dcf520bcd82bf91e`; fleet read 2026-09-16T12:25:30Z via fleet file fleet-prod.json._
+_Rendered 2026-09-20T13:31:59Z against main merge-base `c0ccd2acaac499b592f9a462a31bc8b78f0a2470`; SDL digest pin `sha256:898250a995e65f792e0383a07d7a683251894cbe51f426a4dcf520bcd82bf91e`; fleet read 2026-09-16T12:25:30Z via fleet file fleet-prod.json._
 
 _Rows in `go_api_proof_run` at read time: **2845**. Operations reachable to real clients with no deployed-executed proof: **0**. Rows whose mode says Go but whose schema digest no longer matches the pin, so every request silently falls back to Python: **25**._
 
@@ -300,38 +300,38 @@ _32 `/api/v1/*` routes in `src/dev_health_ops/api/main.py`: **32** ported, **0**
 
 | Method | Path | Status | Go handler |
 | --- | --- | --- | --- |
-| GET | `/api/v1/drilldown/issues` | ported | `cmd/query-api/drilldown_issues_route.go:80` |
-| POST | `/api/v1/drilldown/issues` | ported | `cmd/query-api/drilldown_issues_route.go:80` |
-| GET | `/api/v1/drilldown/prs` | ported | `cmd/query-api/drilldown_prs_route.go:87` |
-| POST | `/api/v1/drilldown/prs` | ported | `cmd/query-api/drilldown_prs_route.go:87` |
-| GET | `/api/v1/explain` | ported | `cmd/query-api/explain_route.go:99` |
-| POST | `/api/v1/explain` | ported | `cmd/query-api/explain_route.go:99` |
-| GET | `/api/v1/filters/options` | ported | `cmd/query-api/filter_options_route.go:81` |
-| GET | `/api/v1/flame` | ported | `cmd/query-api/flame_route.go:94` |
-| GET | `/api/v1/flame/aggregated` | ported | `cmd/query-api/flame_aggregated_route.go:96` |
-| GET | `/api/v1/heatmap` | ported | `cmd/query-api/heatmap_route.go:75` |
-| GET | `/api/v1/home` | ported | `cmd/query-api/home_route.go:60` |
-| POST | `/api/v1/home` | ported | `cmd/query-api/home_route.go:60` |
-| GET | `/api/v1/investment` | ported | `cmd/query-api/investment_route.go:108` |
-| POST | `/api/v1/investment` | ported | `cmd/query-api/investment_route.go:108` |
-| POST | `/api/v1/investment/explain` | ported | `cmd/query-api/investment_explain_route.go:128` |
-| POST | `/api/v1/investment/flow` | ported | `cmd/query-api/investment_flow_route.go:88` |
-| POST | `/api/v1/investment/flow/repo-team` | ported | `cmd/query-api/investment_flow_route.go:88` |
-| GET | `/api/v1/investment/sunburst` | ported | `cmd/query-api/investment_route.go:176` |
-| GET | `/api/v1/meta` | ported | `cmd/query-api/meta_route.go:79` |
-| GET | `/api/v1/opportunities` | ported | `cmd/query-api/opportunities_route.go:68` |
-| POST | `/api/v1/opportunities` | ported | `cmd/query-api/opportunities_route.go:68` |
-| GET | `/api/v1/people` | ported | `cmd/query-api/people_route.go:93` |
-| GET | `/api/v1/people/{person_id}/drilldown/issues` | ported | `cmd/query-api/people_drilldown_issues_route.go:65` |
-| GET | `/api/v1/people/{person_id}/drilldown/prs` | ported | `cmd/query-api/people_drilldown_prs_route.go:67` |
-| GET | `/api/v1/people/{person_id}/metric` | ported | `cmd/query-api/people_metric_route.go:69` |
-| GET | `/api/v1/people/{person_id}/summary` | ported | `cmd/query-api/people_summary_route.go:88` |
-| GET | `/api/v1/quadrant` | ported | `cmd/query-api/quadrant_route.go:79` |
-| GET | `/api/v1/sankey` | ported | `cmd/query-api/sankey_route.go:82` |
-| POST | `/api/v1/sankey` | ported | `cmd/query-api/sankey_route.go:82` |
-| GET | `/api/v1/work-units` | ported | `cmd/query-api/workunits_route.go:113` |
-| POST | `/api/v1/work-units` | ported | `cmd/query-api/workunits_route.go:113` |
-| POST | `/api/v1/work-units/{work_unit_id}/explain` | ported | `cmd/query-api/workunit_explain_route.go:81` |
+| GET | `/api/v1/drilldown/issues` | ported | `internal/queryapi/server/drilldown_issues_route.go:79` |
+| POST | `/api/v1/drilldown/issues` | ported | `internal/queryapi/server/drilldown_issues_route.go:79` |
+| GET | `/api/v1/drilldown/prs` | ported | `internal/queryapi/server/drilldown_prs_route.go:86` |
+| POST | `/api/v1/drilldown/prs` | ported | `internal/queryapi/server/drilldown_prs_route.go:86` |
+| GET | `/api/v1/explain` | ported | `internal/queryapi/server/explain_route.go:98` |
+| POST | `/api/v1/explain` | ported | `internal/queryapi/server/explain_route.go:98` |
+| GET | `/api/v1/filters/options` | ported | `internal/queryapi/server/filter_options_route.go:80` |
+| GET | `/api/v1/flame` | ported | `internal/queryapi/server/flame_route.go:93` |
+| GET | `/api/v1/flame/aggregated` | ported | `internal/queryapi/server/flame_aggregated_route.go:95` |
+| GET | `/api/v1/heatmap` | ported | `internal/queryapi/server/heatmap_route.go:74` |
+| GET | `/api/v1/home` | ported | `internal/queryapi/server/home_route.go:59` |
+| POST | `/api/v1/home` | ported | `internal/queryapi/server/home_route.go:59` |
+| GET | `/api/v1/investment` | ported | `internal/queryapi/server/investment_route.go:107` |
+| POST | `/api/v1/investment` | ported | `internal/queryapi/server/investment_route.go:107` |
+| POST | `/api/v1/investment/explain` | ported | `internal/queryapi/server/investment_explain_route.go:127` |
+| POST | `/api/v1/investment/flow` | ported | `internal/queryapi/server/investment_flow_route.go:87` |
+| POST | `/api/v1/investment/flow/repo-team` | ported | `internal/queryapi/server/investment_flow_route.go:87` |
+| GET | `/api/v1/investment/sunburst` | ported | `internal/queryapi/server/investment_route.go:175` |
+| GET | `/api/v1/meta` | ported | `internal/queryapi/server/meta_route.go:78` |
+| GET | `/api/v1/opportunities` | ported | `internal/queryapi/server/opportunities_route.go:67` |
+| POST | `/api/v1/opportunities` | ported | `internal/queryapi/server/opportunities_route.go:67` |
+| GET | `/api/v1/people` | ported | `internal/queryapi/server/people_route.go:92` |
+| GET | `/api/v1/people/{person_id}/drilldown/issues` | ported | `internal/queryapi/server/people_drilldown_issues_route.go:64` |
+| GET | `/api/v1/people/{person_id}/drilldown/prs` | ported | `internal/queryapi/server/people_drilldown_prs_route.go:66` |
+| GET | `/api/v1/people/{person_id}/metric` | ported | `internal/queryapi/server/people_metric_route.go:68` |
+| GET | `/api/v1/people/{person_id}/summary` | ported | `internal/queryapi/server/people_summary_route.go:87` |
+| GET | `/api/v1/quadrant` | ported | `internal/queryapi/server/quadrant_route.go:78` |
+| GET | `/api/v1/sankey` | ported | `internal/queryapi/server/sankey_route.go:81` |
+| POST | `/api/v1/sankey` | ported | `internal/queryapi/server/sankey_route.go:81` |
+| GET | `/api/v1/work-units` | ported | `internal/queryapi/server/workunits_route.go:112` |
+| POST | `/api/v1/work-units` | ported | `internal/queryapi/server/workunits_route.go:112` |
+| POST | `/api/v1/work-units/{work_unit_id}/explain` | ported | `internal/queryapi/server/workunit_explain_route.go:80` |
 <!-- END GENERATED REST ENDPOINTS -->
 
 ## SYNC

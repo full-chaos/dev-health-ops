@@ -885,7 +885,7 @@ def test_a_variable_rooted_filepath_join_is_found(tmp_path: Path) -> None:
     plain sight in the Go source.
 
     `src/dev_health_ops/api/graphql/go_api_operations.json` was reached exactly
-    this way from `cmd/query-api/query_route_mounted_log_test.go:188`, matched
+    this way from `internal/queryapi/server/query_route_mounted_log_test.go:188`, matched
     no path filter, and was invisible to two rounds of review.
 
     The single-segment case is covered deliberately: `filepath.Join(root,

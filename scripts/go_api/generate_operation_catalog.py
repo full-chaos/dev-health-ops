@@ -5,14 +5,14 @@ The edge dispatcher (``api/graphql/go_api_dispatcher.py``) must know, given
 an incoming request's document digest, which ``selected_operation`` string
 to use for the ``go_api_routing_state`` lookup -- that string is
 query-api's OWN internal registry key (``digestByOperation`` in
-``cmd/query-api/query_route.go``), not derivable from the GraphQL
+``internal/queryapi/server/query_route.go``), not derivable from the GraphQL
 operation name (see that map's doc comment: "investmentBreakdown"/
 "investmentFull" both invoke the `analytics` root field).
 
 Rather than hand-maintain that mapping (the CHAOS-4466/CHAOS-4495 drift
 class the runbook and ``registrydump`` itself warn about), this script
 regenerates it from the ONE canonical producer -- ``registrydump -file
-cmd/query-api/query_route.go``, a ``go/ast`` parse of the real route
+internal/queryapi/server/query_route.go``, a ``go/ast`` parse of the real route
 source -- and writes ONLY ``operation`` and ``digest`` to the checked-in
 catalog (``api/graphql/go_api_operations.json``). The raw document text is
 deliberately NOT persisted here: the edge never needs it at runtime (only
@@ -20,7 +20,7 @@ the digest, to match against a request's own computed digest), and
 carrying a second copy of the query text would be exactly the kind of
 extra copy CHAOS-4696 warns about, for no runtime benefit.
 
-Run this whenever ``cmd/query-api/query_route.go``'s registered documents
+Run this whenever ``internal/queryapi/server/query_route.go``'s registered documents
 change. ``tests/api/graphql/test_go_api_operation_catalog.py`` asserts the
 checked-in file has NOT drifted from what this script would produce right
 now -- a CI failure there means this script needs to be re-run and the
@@ -37,7 +37,7 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-QUERY_ROUTE_GO = REPO_ROOT / "cmd" / "query-api" / "query_route.go"
+QUERY_ROUTE_GO = REPO_ROOT / "internal" / "queryapi" / "server" / "query_route.go"
 REGISTRYDUMP_DIR = REPO_ROOT / "cmd" / "query-api" / "tools" / "registrydump"
 CATALOG_PATH = (
     REPO_ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "go_api_operations.json"

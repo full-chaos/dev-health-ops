@@ -2,7 +2,7 @@
 
 **EXECUTED regression found running this repo's OWN real dual-run proof**
 (CHAOS-4696 PR2, 2026-08-31): CHAOS-4696 PR1 regenerated all 12
-``registered*Document`` consts in ``cmd/query-api/query_route.go`` to the
+``registered*Document`` consts in ``internal/queryapi/server/query_route.go`` to the
 TRUE wire form a real urql client sends (``print()`` reflow AND
 ``cacheExchange``'s ``__typename`` injection) -- but every
 ``test_go_api_dual_run_*.py`` file's own ``<OPERATION>_DOCUMENT`` constant
@@ -38,7 +38,7 @@ import subprocess
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-QUERY_ROUTE_GO = REPO_ROOT / "cmd" / "query-api" / "query_route.go"
+QUERY_ROUTE_GO = REPO_ROOT / "internal" / "queryapi" / "server" / "query_route.go"
 REGISTRYDUMP_DIR = REPO_ROOT / "cmd" / "query-api" / "tools" / "registrydump"
 
 

@@ -1,5 +1,5 @@
 // Command registrydump enumerates query-api's registered GraphQL
-// documents by static reflection over cmd/query-api/query_route.go's
+// documents by static reflection over internal/queryapi/server/query_route.go's
 // actual source -- never a hand-maintained list.
 //
 // Why source-level reflection rather than Go's runtime reflect package:
@@ -71,7 +71,7 @@ type registeredDocument struct {
 var documentConstPattern = regexp.MustCompile(`^registered.*Document$`)
 
 func main() {
-	filePath := flag.String("file", "", "path to cmd/query-api/query_route.go (required unless -schema-digest)")
+	filePath := flag.String("file", "", "path to internal/queryapi/server/query_route.go (required unless -schema-digest)")
 	schemaDigest := flag.Bool("schema-digest", false, "print the canonical schema-digest value and exit (does not need -file)")
 	flag.Parse()
 

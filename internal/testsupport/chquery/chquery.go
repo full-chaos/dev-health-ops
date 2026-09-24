@@ -14,7 +14,7 @@ import (
 // place for the row/byte ceilings that matter here: MaxResultRows is
 // left unset, so it inherits dev-health-go's own 1,000-row default
 // (clickhouse/options.go's resolveCeilingUint) -- the exact ceiling
-// query-api's cmd/query-api/query_route.go's
+// query-api's internal/queryapi/server/query_route.go's
 // newUnrestrictedReadClickHouseOptions ALSO leaves untouched for every
 // route but /query itself (that helper only raises MaxBytesToRead).
 // Every statement this client runs is checked by the same

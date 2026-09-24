@@ -43,7 +43,7 @@ artifact to rubber-stamp.
   web's codegen to refresh generated TS types.
 - **`query-api`** (Go, `ops/cmd/query-api`, gqlgen schema-first): gqlgen's
   code generation takes this same SDL as its input schema. See
-  `ops/cmd/query-api/README.md` (or the equivalent docs page once wired)
+  `ops/internal/queryapi/server/README.md` (or the equivalent docs page once wired)
   for the exact gqlgen config pointing here.
 
 ## Known gap tracked separately

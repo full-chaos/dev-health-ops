@@ -785,7 +785,7 @@ func sortedOperations(m map[string]string) []string {
 
 // registrydump's JSON output is one array of {operation, document,
 // digest} objects (produced by `registrydump -file
-// cmd/query-api/query_route.go`). LoadDocuments reads it by exact key,
+// internal/queryapi/server/query_route.go`). LoadDocuments reads it by exact key,
 // not through a struct tag -- see the comment at its call site.
 
 // DefaultDocumentsPath is where the registered-document dump lives in

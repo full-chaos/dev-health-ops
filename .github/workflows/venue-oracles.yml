@@ -101,6 +101,14 @@ jobs:
             printf 'relevant=true\n' >> "${GITHUB_OUTPUT}"
             exit 0
           }
+          # The gate itself: go.yml's pattern list names neither this
+          # workflow nor the oracle discovery, and a change to either must
+          # still run the suite that proves it.
+          if tr '\0' '\n' < changed.txt | grep -qxE '\.github/workflows/venue-oracles\.yml|ci/venue_oracle_discovery\.awk'; then
+            echo "the venue-oracles gate itself changed: running the full oracle suite"
+            printf 'relevant=true\n' >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
           python ci/go_relevance.py < changed.txt | tee relevance.out
           grep -E '^relevant=(true|false)$' relevance.out >> "${GITHUB_OUTPUT}"
 

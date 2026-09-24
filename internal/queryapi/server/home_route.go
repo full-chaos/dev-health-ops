@@ -142,18 +142,18 @@ func newHomeGetHandler(client home.QueryClient, pgPool home.PGQueryClient) http.
 
 		rangeDays := 14
 		if raw := query.Get("range_days"); raw != "" {
-			if parsed, err := strconv.Atoi(raw); err == nil {
+			if parsed, parseErr := parseQueryInt([]any{"query", "range_days"}, raw); parseErr == nil {
 				rangeDays = parsed
 			} else {
-				validationErrors = append(validationErrors, intQueryParamError([]any{"query", "range_days"}, raw))
+				validationErrors = append(validationErrors, *parseErr)
 			}
 		}
 		compareDays := 14
 		if raw := query.Get("compare_days"); raw != "" {
-			if parsed, err := strconv.Atoi(raw); err == nil {
+			if parsed, parseErr := parseQueryInt([]any{"query", "compare_days"}, raw); parseErr == nil {
 				compareDays = parsed
 			} else {
-				validationErrors = append(validationErrors, intQueryParamError([]any{"query", "compare_days"}, raw))
+				validationErrors = append(validationErrors, *parseErr)
 			}
 		}
 		startDate, startPresent, startOK := parseISODateQueryParam(query.Get("start_date"))

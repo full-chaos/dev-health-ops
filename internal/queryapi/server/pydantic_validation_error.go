@@ -447,6 +447,18 @@ func coerceIntBodyField(loc []any, value pyjson.Value) (n int, detail *pydanticE
 	return saturatedInt(number), nil
 }
 
+// parseQueryInt reads an int query parameter as FastAPI does (pydantic's
+// lax int from a string, pybody.ParsePydanticInt): an int past the Go int
+// range is accepted and clamped (see saturatedInt), and a failure is the
+// 422 entry pydantic writes for it.
+func parseQueryInt(loc []any, raw string) (int, *pydanticErrorDetail) {
+	number, perr := pybody.ParsePydanticInt(raw)
+	if perr != nil {
+		return 0, &pydanticErrorDetail{Type: perr.Type, Loc: loc, Msg: perr.Msg, Input: raw}
+	}
+	return saturatedInt(number), nil
+}
+
 // saturatedInt is number as a Go int, clamped to the int range. Clamping
 // gives Python's answer for every use of these fields: a day count past
 // 999999999 already fails Python's timedelta, and timewindow.Compute fails

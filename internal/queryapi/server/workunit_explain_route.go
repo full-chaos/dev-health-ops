@@ -203,9 +203,9 @@ func parseWorkUnitExplainQuery(r *http.Request) (workUnitExplainQuery, []pydanti
 	var validationErrors []pydanticErrorDetail
 	if query.Has("range_days") {
 		raw := query.Get("range_days")
-		value, err := strconv.Atoi(raw)
-		if err != nil {
-			validationErrors = append(validationErrors, intQueryParamError([]any{"query", "range_days"}, raw))
+		value, parseErr := parseQueryInt([]any{"query", "range_days"}, raw)
+		if parseErr != nil {
+			validationErrors = append(validationErrors, *parseErr)
 		} else {
 			parsed.rangeDays = value
 		}

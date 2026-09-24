@@ -197,8 +197,8 @@ func explainTimeWindow(filters map[string]any) (startDay, endDay, compareStart, 
 // it).
 func explainTimeFilterMap(rangeDays, compareDays int, startDate, endDate *time.Time) map[string]any {
 	timeFilter := map[string]any{
-		"range_days":   float64(rangeDays),
-		"compare_days": float64(compareDays),
+		"range_days":   int64(rangeDays),
+		"compare_days": int64(compareDays),
 	}
 	if startDate != nil {
 		timeFilter["start_date"] = startDate.Format("2006-01-02")
@@ -246,9 +246,9 @@ func newExplainGetHandler(reader *explain.Reader) http.HandlerFunc {
 
 		rangeDays := 14
 		if raw := query.Get("range_days"); raw != "" {
-			parsed, err := strconv.Atoi(raw)
-			if err != nil {
-				validationErrors = append(validationErrors, intQueryParamError([]any{"query", "range_days"}, raw))
+			parsed, parseErr := parseQueryInt([]any{"query", "range_days"}, raw)
+			if parseErr != nil {
+				validationErrors = append(validationErrors, *parseErr)
 			} else {
 				rangeDays = parsed
 			}
@@ -256,9 +256,9 @@ func newExplainGetHandler(reader *explain.Reader) http.HandlerFunc {
 
 		compareDays := 14
 		if raw := query.Get("compare_days"); raw != "" {
-			parsed, err := strconv.Atoi(raw)
-			if err != nil {
-				validationErrors = append(validationErrors, intQueryParamError([]any{"query", "compare_days"}, raw))
+			parsed, parseErr := parseQueryInt([]any{"query", "compare_days"}, raw)
+			if parseErr != nil {
+				validationErrors = append(validationErrors, *parseErr)
 			} else {
 				compareDays = parsed
 			}

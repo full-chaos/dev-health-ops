@@ -156,7 +156,7 @@ func buildDrilldownPRsRoute(getenv getenvFunc) (handler http.HandlerFunc, cleanu
 // exact same MetricFilter shape GET's handler passes to time_window, so
 // this is the one Go function that shape ever reaches either way.
 func drilldownTimeFilterMap(rangeDays int, startDate, endDate *time.Time) map[string]any {
-	timeFilter := map[string]any{"range_days": float64(rangeDays)}
+	timeFilter := map[string]any{"range_days": int64(rangeDays)}
 	if startDate != nil {
 		timeFilter["start_date"] = startDate.Format("2006-01-02")
 	}
@@ -212,13 +212,13 @@ func newDrilldownPRsGetHandler(reader *drilldown.Reader) http.HandlerFunc {
 
 		rangeDays := 14
 		if raw := query.Get("range_days"); raw != "" {
-			parsed, err := strconv.Atoi(raw)
-			if err != nil {
+			parsed, parseErr := parseQueryInt([]any{"query", "range_days"}, raw)
+			if parseErr != nil {
 				// Python's `range_days: int = 14` is FastAPI/Pydantic
 				// query-param validation, not a handler-level try/except:
 				// a non-numeric value never reaches the handler at all,
 				// it is rejected up front as 422 -- confirmed live.
-				validationErrors = append(validationErrors, intQueryParamError([]any{"query", "range_days"}, raw))
+				validationErrors = append(validationErrors, *parseErr)
 			} else {
 				rangeDays = parsed
 			}

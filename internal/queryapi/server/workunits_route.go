@@ -356,15 +356,15 @@ func newWorkUnitsGetHandler(reader *investmentexplain.Reader) http.HandlerFunc {
 		rangeDays := 14
 		if query.Has("range_days") {
 			raw := query.Get("range_days")
-			parsed, err := strconv.Atoi(raw)
-			if err != nil {
+			parsed, parseErr := parseQueryInt([]any{"query", "range_days"}, raw)
+			if parseErr != nil {
 				// Confirmed live: an explicit-but-empty value ALSO fails
 				// int parsing (FastAPI does not treat "" as absent for an
 				// int query param), unlike a bare string field -- query.Has
 				// (not a raw != "" check) is what lets an empty value reach
 				// strconv.Atoi and fail here instead of silently keeping
 				// the default.
-				validationErrors = append(validationErrors, intQueryParamError([]any{"query", "range_days"}, raw))
+				validationErrors = append(validationErrors, *parseErr)
 			} else {
 				rangeDays = parsed
 			}

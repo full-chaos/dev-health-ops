@@ -163,10 +163,10 @@ func newHeatmapWorkHandler(client heatmap.QueryClient) http.HandlerFunc {
 		rangeDays := 14
 		if query.Has("range_days") {
 			raw := query.Get("range_days")
-			if parsed, err := strconv.Atoi(raw); err == nil {
+			if parsed, parseErr := parseQueryInt([]any{"query", "range_days"}, raw); parseErr == nil {
 				rangeDays = parsed
 			} else {
-				validationErrors = append(validationErrors, intQueryParamError([]any{"query", "range_days"}, raw))
+				validationErrors = append(validationErrors, *parseErr)
 			}
 		}
 

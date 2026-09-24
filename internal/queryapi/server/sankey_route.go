@@ -243,9 +243,9 @@ func newSankeyGetHandler(client sankey.QueryClient) http.HandlerFunc {
 
 		rangeDays := 30
 		if raw := query.Get("range_days"); raw != "" {
-			parsed, err := strconv.Atoi(raw)
-			if err != nil {
-				validationErrors = append(validationErrors, intQueryParamError([]any{"query", "range_days"}, raw))
+			parsed, parseErr := parseQueryInt([]any{"query", "range_days"}, raw)
+			if parseErr != nil {
+				validationErrors = append(validationErrors, *parseErr)
 			} else {
 				rangeDays = parsed
 			}

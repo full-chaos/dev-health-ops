@@ -178,13 +178,13 @@ func newDrilldownIssuesGetHandler(reader *drilldown.Reader) http.HandlerFunc {
 
 		rangeDays := 14
 		if raw := query.Get("range_days"); raw != "" {
-			parsed, err := strconv.Atoi(raw)
-			if err != nil {
+			parsed, parseErr := parseQueryInt([]any{"query", "range_days"}, raw)
+			if parseErr != nil {
 				// Python's `range_days: int = 14` is FastAPI/Pydantic
 				// query-param validation, not a handler-level try/except --
 				// same confirmed-live contract drilldown_prs_route.go's own
 				// GET handler documents.
-				validationErrors = append(validationErrors, intQueryParamError([]any{"query", "range_days"}, raw))
+				validationErrors = append(validationErrors, *parseErr)
 			} else {
 				rangeDays = parsed
 			}

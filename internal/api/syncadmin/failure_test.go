@@ -108,6 +108,10 @@ func (f *faultReader) runStatusCounts(context.Context, string, uuid.UUID) (map[s
 	return map[string]int64{}, f.hit("runStatusCounts")
 }
 
+func (f *faultReader) coverageProjection(context.Context, string, uuid.UUID, int, int) (*coverageProjection, error) {
+	return &coverageProjection{Payload: "{}"}, f.hit("coverageProjection")
+}
+
 type faultFeatures struct{ fail bool }
 
 func (f faultFeatures) Decide(context.Context, string, string) (licensing.Decision, error) {

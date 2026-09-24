@@ -8,6 +8,7 @@ import (
 	"unicode"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
 )
 
 // PydanticInt is pydantic's lax int: a bool or int as is; a finite float with no
@@ -42,6 +43,19 @@ func PydanticInt(value pyjson.Value) (*big.Int, string, string) {
 		return number, "", ""
 	}
 	return nil, "int_type", "Input should be a valid integer"
+}
+
+// PydanticDatetime is pydantic's lax datetime of a decoded JSON value
+// (python mode): pytime.ParseDatetime with a JSON number passed as the
+// number it is.
+func PydanticDatetime(value pyjson.Value) (pytime.DateTime, *pytime.ValidationError) {
+	switch typed := value.(type) {
+	case pyjson.Int:
+		return pytime.ParseDatetime(typed.Int)
+	case pyjson.Float:
+		return pytime.ParseDatetime(float64(typed))
+	}
+	return pytime.ParseDatetime(value)
 }
 
 // PydanticFloat is pydantic's lax float: a bool, int or float as a float; a str

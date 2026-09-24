@@ -4,12 +4,14 @@ package syncadmin_test
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"testing"
 
@@ -112,6 +114,7 @@ func syncAdminRequests(venue *venueoracle.Venue, ids venueIDs) []venueoracle.Req
 		"/sync-configs/auto-import-capabilities", "/sync-targets", "/sync-configs",
 		"/sync-configs/" + ids.cfgPlanner.String(), "/sync-configs/" + ids.cfgPlanner.String() + "/repositories",
 		"/sync-configs/" + ids.cfgPlanner.String() + "/jobs", "/backfill-jobs", "/sync-runs/" + ids.runP1.String(),
+		"/sync-configs/" + ids.cfgPlanner.String() + "/coverage",
 	}
 	// The guard domain, on every route: no credential, a malformed and a
 	// wrong-key credential, a member, an admin and a superuser without an
@@ -235,6 +238,23 @@ func syncAdminRequests(venue *venueoracle.Venue, ids venueIDs) []venueoracle.Req
 		requests = append(requests, get("sync run "+name, "/sync-runs/"+raw, a))
 	}
 	requests = append(requests, get("sync run trailing slash", "/sync-runs/"+ids.runP1.String()+"/", a))
+
+	// get_sync_config_coverage: a fresh and a refreshing projection, a
+	// payload stored as pairs, rows at another version, lookback or org
+	// (pending), payloads the response model refuses, another org's config,
+	// an unknown config and a path that is not a uuid.
+	for name, raw := range map[string]string{
+		"fresh": ids.cfgPlanner.String(), "refreshing": ids.cfgLegacyParent.String(), "pairs": ids.cfgWeird.String(),
+		"offsets": ids.cfgJobsInf.String(), "old version": ids.cfgSingleRepo.String(),
+		"other lookback": ids.cfgNoSources.String(), "row in other org": ids.cfgCrossOrg.String(),
+		"refused status": ids.cfgInactive.String(), "null payload": ids.cfgDictTargets.String(),
+		"no overall": ids.cfgJobsBadList.String(), "other org config": ids.cfgB.String(),
+		"unknown": uuid.NewString(), "not a uuid": "zzz", "uppercase": strings.ToUpper(ids.cfgPlanner.String()),
+		"basic and week boundaries": ids.child1.String(),
+	} {
+		requests = append(requests, get("coverage "+name, "/sync-configs/"+raw+"/coverage", a))
+	}
+	requests = append(requests, get("coverage other org caller", "/sync-configs/"+ids.cfgB.String()+"/coverage", b))
 	return requests
 }
 
@@ -431,6 +451,75 @@ VALUES ($1, $2, $3, $4, $5, '2026-01-01', '2026-01-31', $6, $7, $8, $9, '2026-02
 	backfill(ids.orgA, nil, "running", 2000000000, 1, 0, nil, "2026-07-01 00:00:08+00")
 	backfill(ids.orgA, nil, "running", 9000000, 1, 0, nil, "2026-07-01 00:00:09+00")
 	backfill(ids.orgB, nil, "pending", 0, 0, 0, nil, "2026-07-01 00:00:10+00")
+
+	projection := func(org uuid.UUID, configID uuid.UUID, lookback, version int, invalidated bool, payload string) {
+		exec(`INSERT INTO sync_coverage_projections (id, org_id, sync_config_id, history_lookback_days, projection_version,
+generated_at, source_updated_at, backfill_updated_at, invalidated_at, payload, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, '2026-09-01 10:00:00+00', NULL, NULL, CASE WHEN $6 THEN now() END, $7::json, now(), now())`,
+			uuid.New(), org.String(), configID, lookback, version, invalidated, payload)
+	}
+	projection(ids.orgA, ids.cfgPlanner, 3650, 2, false, coveragePayload(ids.cfgPlanner.String(), "planner", ""))
+	projection(ids.orgA, ids.cfgLegacyParent, 3650, 2, true, coveragePayload(ids.cfgLegacyParent.String(), "legacy", `, "projection_refreshing": false`))
+	projection(ids.orgA, ids.cfgWeird, 3650, 2, false, coveragePairs(ids.cfgWeird.String()))
+	projection(ids.orgA, ids.cfgJobsInf, 3650, 2, false, strings.NewReplacer(
+		`"2026-01-01T00:00:00+00:00"`, `"2026-01-01T05:30:00+05:30"`,
+		`"2026-08-31T00:00:00+00:00"`, `"2026-08-31"`,
+		`"history_lookback_days": 3650`, `"history_lookback_days": "3650"`,
+		`"gap_count": 1`, `"gap_count": 1.0`,
+		`"is_truncated": false`, `"is_truncated": "off"`,
+	).Replace(coveragePayload(ids.cfgJobsInf.String(), "planner", `, "extra": {"ignored": [1e400]}`)))
+	projection(ids.orgA, ids.cfgSingleRepo, 3650, 1, false, coveragePayload(ids.cfgSingleRepo.String(), "planner", ""))
+	projection(ids.orgA, ids.cfgNoSources, 30, 2, false, coveragePayload(ids.cfgNoSources.String(), "planner", ""))
+	projection(ids.orgB, ids.cfgCrossOrg, 3650, 2, false, coveragePayload(ids.cfgCrossOrg.String(), "planner", ""))
+	projection(ids.orgA, ids.cfgInactive, 3650, 2, false, strings.Replace(
+		coveragePayload(ids.cfgInactive.String(), "planner", ""), `"health": "gaps"`, `"health": "bogus"`, 1))
+	projection(ids.orgA, ids.cfgDictTargets, 3650, 2, false, `null`)
+	projection(ids.orgA, ids.cfgJobsBadList, 3650, 2, false, `{"config_id": "x", "projection_version": 2}`)
+	projection(ids.orgB, ids.cfgB, 3650, 2, false, coveragePayload(ids.cfgB.String(), "planner", ""))
+	// Backfill boundaries in forms only datetime.fromisoformat reads: a
+	// basic date and an ISO week date (the digits of the first read as
+	// Unix seconds would answer 1970).
+	projection(ids.orgA, ids.child1, 3650, 2, false, strings.Replace(coveragePayload(ids.child1.String(), "legacy", ""),
+		`"since": "2026-01-01", "before": "2026-01-02T00:00:00"`, `"since": "20260101", "before": "2026-W01-5"`, 1))
+}
+
+// coveragePayload is a projection payload in the projector's shape; extra
+// is appended inside the top-level object.
+func coveragePayload(configID, basis, extra string) string {
+	return `{"config_id": "` + configID + `", "provider": "github", "generated_at": "2026-09-01T10:00:00.123456+00:00",
+"data_basis": "` + basis + `", "history_lookback_days": 3650, "truncated_before": "2016-09-03T10:00:00+00:00",
+"coverage_since": "2026-01-01T00:00:00+00:00", "coverage_through": null, "is_truncated": false,
+"truncation_reason": null, "projection_version": 2, "projection_complete": true,
+"overall": {"health": "gaps", "latest_successful_run_at": "2026-08-31T00:00:00+00:00", "latest_covered_through": null,
+ "next_scheduled_run_at": null, "gap_count": 1, "stale_dataset_count": 0, "failed_range_count": 0},
+"datasets": [{"dataset_key": "git.commits", "status": "gaps", "covered_through": "2026-08-31T00:00:00+00:00",
+ "requested_ranges": [{"since": "2026-01-01T00:00:00+00:00", "before": "2026-01-02T00:00:00+00:00", "source_ids": ["s1"], "run_ids": []}],
+ "gaps": [{"since": "2026-01-01T00:00:00+00:00", "before": "2026-01-02T00:00:00+00:00"}]}],
+"sources": [{"source_id": "s1", "source_name": "org/repo", "status": "not_enabled", "covered_through": null, "gap_count": 1, "failed_range_count": 0}],
+"backfill_windows": [{"since": "2026-01-01", "before": "2026-01-02T00:00:00", "source_ids": ["s1"], "dataset_keys": ["git.commits"], "reasons": ["gap", "failed"]}]` + extra + `}`
+}
+
+// coveragePairs is a payload stored as a list of [key, value] pairs, which
+// dict() reads.
+func coveragePairs(configID string) string {
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(coveragePayload(configID, "legacy", "")), &object); err != nil {
+		panic(err)
+	}
+	pairs := make([]string, 0, len(object))
+	for _, key := range sortedRawKeys(object) {
+		pairs = append(pairs, `["`+key+`", `+string(object[key])+`]`)
+	}
+	return "[" + strings.Join(pairs, ", ") + "]"
+}
+
+func sortedRawKeys(values map[string]json.RawMessage) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // startGoServer runs the real Go api (apiservice.Routes and NewServer with

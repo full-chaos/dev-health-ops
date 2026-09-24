@@ -15,7 +15,7 @@ import (
 )
 
 // The parity contract for this package is numeric equality with lizard
-// 1.23.0, not resemblance -- the same contract pycc holds with radon, and
+// 1.24.0, not resemblance -- the same contract pycc holds with radon, and
 // for the same reason: BuildFileResult (compute.go) derives every stored
 // field from these raw numbers, so "close" is simply wrong.
 //

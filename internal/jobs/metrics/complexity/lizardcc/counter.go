@@ -1,4 +1,4 @@
-// Package lizardcc ports lizard 1.23.0's C-family cyclomatic-complexity
+// Package lizardcc ports lizard 1.24.0's C-family cyclomatic-complexity
 // engine to Go (CHAOS-5156 / CHAOS-4971b), for the extensions Python routes
 // to lizard's CLikeReader and its direct subclasses: c, cpp, cc, cxx, h,
 // hpp (CLikeReader itself), java (JavaReader) and cs (CSharpReader).

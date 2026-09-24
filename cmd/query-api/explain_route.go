@@ -48,6 +48,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/explain"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/principal"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/routeswitch"
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 )
 
 // explainGetOperation/explainPostOperation are this route's routeswitch
@@ -379,23 +380,17 @@ func newExplainPostHandler(reader *explain.Reader) http.HandlerFunc {
 		// as DrilldownRequest (drilldown_prs_route.go's own doc comment
 		// on this exact point). A genuinely empty/null body is Pydantic's
 		// whole-model-missing case (loc ["body"]).
-		var decoded any
-		bodyIsEmptyOrNull := len(bodyBytes) == 0
-		if !bodyIsEmptyOrNull {
-			if err := json.Unmarshal(bodyBytes, &decoded); err != nil {
-				writePydanticValidationError(w, r, claims.OrgID, jsonSyntaxErrorDetail([]any{"body"}, bodyBytes))
-				return
-			}
-			if decoded == nil {
-				bodyIsEmptyOrNull = true
-			}
+		decoded, bodyIsEmptyOrNull, syntaxDetail := decodeRequestBody([]any{"body"}, bodyBytes)
+		if syntaxDetail != nil {
+			writePydanticValidationError(w, r, claims.OrgID, *syntaxDetail)
+			return
 		}
 		if bodyIsEmptyOrNull {
 			writePydanticValidationError(w, r, claims.OrgID, missingFieldError([]any{"body"}, nil))
 			return
 		}
 
-		body, isObject := decoded.(map[string]any)
+		body, isObject := decoded.(*pyjson.Object)
 		if !isObject {
 			writePydanticValidationError(w, r, claims.OrgID, modelAttributesTypeError([]any{"body"}, decoded))
 			return
@@ -407,7 +402,7 @@ func newExplainPostHandler(reader *explain.Reader) http.HandlerFunc {
 		// api/models/filters.py:57-59) -- Pydantic aggregates every
 		// simultaneously-invalid field in that same order.
 		var metric string
-		metricValue, hasMetric := body["metric"]
+		metricValue, hasMetric := body.Get("metric")
 		if !hasMetric {
 			validationErrors = append(validationErrors, missingFieldError([]any{"body", "metric"}, body))
 		} else if s, isString := metricValue.(string); !isString {
@@ -416,7 +411,7 @@ func newExplainPostHandler(reader *explain.Reader) http.HandlerFunc {
 			metric = s
 		}
 
-		filtersValue, hasFilters := body["filters"]
+		filtersValue, hasFilters := body.Get("filters")
 		if !hasFilters {
 			validationErrors = append(validationErrors, missingFieldError([]any{"body", "filters"}, body))
 		} else {
@@ -428,7 +423,7 @@ func newExplainPostHandler(reader *explain.Reader) http.HandlerFunc {
 			return
 		}
 
-		filters, _ := filtersValue.(map[string]any)
+		filters, _ := legacyJSON(filtersValue).(map[string]any)
 		scope, _ := filters["scope"].(map[string]any)
 		scopeLevel, _ := scope["level"].(string)
 		if scopeLevel == "" {

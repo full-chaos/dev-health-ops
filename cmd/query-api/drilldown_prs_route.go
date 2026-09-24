@@ -34,6 +34,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/drilldown"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/principal"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/routeswitch"
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 )
 
 // drilldownPRsGetOperation/drilldownPRsPostOperation are this route's
@@ -317,27 +318,17 @@ func newDrilldownPRsPostHandler(reader *drilldown.Reader) http.HandlerFunc {
 		// whole model missing (loc ["body"], not ["body","filters"]) --
 		// confirmed live, and true for an explicit JSON `null` body too
 		// (byte-identical response either way).
-		var decoded any
-		bodyIsEmptyOrNull := len(bodyBytes) == 0
-		if !bodyIsEmptyOrNull {
-			if err := json.Unmarshal(bodyBytes, &decoded); err != nil {
-				// Genuinely malformed JSON syntax -- jsonSyntaxErrorDetail
-				// (pydantic_json_syntax_error.go) reproduces jiter's own
-				// message/position for this shape, not a generic
-				// placeholder.
-				writePydanticValidationError(w, r, claims.OrgID, jsonSyntaxErrorDetail([]any{"body"}, bodyBytes))
-				return
-			}
-			if decoded == nil {
-				bodyIsEmptyOrNull = true
-			}
+		decoded, bodyIsEmptyOrNull, syntaxDetail := decodeRequestBody([]any{"body"}, bodyBytes)
+		if syntaxDetail != nil {
+			writePydanticValidationError(w, r, claims.OrgID, *syntaxDetail)
+			return
 		}
 		if bodyIsEmptyOrNull {
 			writePydanticValidationError(w, r, claims.OrgID, missingFieldError([]any{"body"}, nil))
 			return
 		}
 
-		body, isObject := decoded.(map[string]any)
+		body, isObject := decoded.(*pyjson.Object)
 		if !isObject {
 			writePydanticValidationError(w, r, claims.OrgID, modelAttributesTypeError([]any{"body"}, decoded))
 			return
@@ -345,14 +336,14 @@ func newDrilldownPRsPostHandler(reader *drilldown.Reader) http.HandlerFunc {
 
 		var validationErrors []pydanticErrorDetail
 
-		filtersValue, hasFilters := body["filters"]
+		filtersValue, hasFilters := body.Get("filters")
 		if !hasFilters {
 			validationErrors = append(validationErrors, missingFieldError([]any{"body", "filters"}, body))
 		} else {
 			validationErrors = append(validationErrors, validateMetricFilter([]any{"body", "filters"}, filtersValue)...)
 		}
 
-		if sortValue, hasSort := body["sort"]; hasSort && sortValue != nil {
+		if sortValue, hasSort := body.Get("sort"); hasSort && sortValue != nil {
 			if _, isString := sortValue.(string); !isString {
 				validationErrors = append(validationErrors, stringBodyFieldError([]any{"body", "sort"}, sortValue))
 			}
@@ -371,7 +362,7 @@ func newDrilldownPRsPostHandler(reader *drilldown.Reader) http.HandlerFunc {
 		// own dead field (parsed by Pydantic, never read by
 		// drilldown_prs_post, api/main.py:910-935).
 		limit := 0
-		if limitValue, hasLimit := body["limit"]; hasLimit {
+		if limitValue, hasLimit := body.Get("limit"); hasLimit {
 			coerced, detail := coerceIntBodyField([]any{"body", "limit"}, limitValue)
 			if detail != nil {
 				validationErrors = append(validationErrors, *detail)
@@ -388,7 +379,7 @@ func newDrilldownPRsPostHandler(reader *drilldown.Reader) http.HandlerFunc {
 			limit = 50
 		}
 
-		filters, _ := filtersValue.(map[string]any)
+		filters, _ := legacyJSON(filtersValue).(map[string]any)
 		scope, _ := filters["scope"].(map[string]any)
 		scopeLevel, _ := scope["level"].(string)
 		if scopeLevel == "" {

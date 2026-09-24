@@ -13,10 +13,10 @@ package main
 
 import (
 	"strings"
-	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
 )
 
 // scopeLevelValues/whatArtifactsValues mirror MetricFilter's two
@@ -31,50 +31,57 @@ var whatArtifactsValues = []string{"pr", "issue", "commit", "pipeline"}
 // value is not itself an error (MetricFilter's own callers -- this
 // file's -- already declare "filters" required or not; absence is a
 // SEPARATE, caller-owned check).
-func validateMetricFilter(loc []any, value any) []pydanticErrorDetail {
+func validateMetricFilter(loc []any, value pyjson.Value) []pydanticErrorDetail {
 	if value == nil {
 		return nil
 	}
-	filters, ok := value.(map[string]any)
+	filters, ok := value.(*pyjson.Object)
 	if !ok {
 		return []pydanticErrorDetail{modelAttributesTypeError(loc, value)}
 	}
 
 	var errs []pydanticErrorDetail
-	errs = append(errs, validateTimeFilter(appendLoc(loc, "time"), filters["time"], hasKey(filters, "time"))...)
-	errs = append(errs, validateScopeFilter(appendLoc(loc, "scope"), filters["scope"], hasKey(filters, "scope"))...)
-	errs = append(errs, validateWhoFilter(appendLoc(loc, "who"), filters["who"], hasKey(filters, "who"))...)
-	errs = append(errs, validateWhatFilter(appendLoc(loc, "what"), filters["what"], hasKey(filters, "what"))...)
-	errs = append(errs, validateWhyFilter(appendLoc(loc, "why"), filters["why"], hasKey(filters, "why"))...)
-	errs = append(errs, validateHowFilter(appendLoc(loc, "how"), filters["how"], hasKey(filters, "how"))...)
+	field := func(key string) (pyjson.Value, bool) { return filters.Get(key) }
+	timeValue, hasTime := field("time")
+	errs = append(errs, validateTimeFilter(appendLoc(loc, "time"), timeValue, hasTime)...)
+	scopeValue, hasScope := field("scope")
+	errs = append(errs, validateScopeFilter(appendLoc(loc, "scope"), scopeValue, hasScope)...)
+	whoValue, hasWho := field("who")
+	errs = append(errs, validateWhoFilter(appendLoc(loc, "who"), whoValue, hasWho)...)
+	whatValue, hasWhat := field("what")
+	errs = append(errs, validateWhatFilter(appendLoc(loc, "what"), whatValue, hasWhat)...)
+	whyValue, hasWhy := field("why")
+	errs = append(errs, validateWhyFilter(appendLoc(loc, "why"), whyValue, hasWhy)...)
+	howValue, hasHow := field("how")
+	errs = append(errs, validateHowFilter(appendLoc(loc, "how"), howValue, hasHow)...)
 	return errs
 }
 
-func validateTimeFilter(loc []any, value any, present bool) []pydanticErrorDetail {
+func validateTimeFilter(loc []any, value pyjson.Value, present bool) []pydanticErrorDetail {
 	if !present || value == nil {
 		return nil
 	}
-	m, ok := value.(map[string]any)
+	m, ok := value.(*pyjson.Object)
 	if !ok {
 		return []pydanticErrorDetail{modelAttributesTypeError(loc, value)}
 	}
 	var errs []pydanticErrorDetail
-	if v, has := m["range_days"]; has {
+	if v, has := m.Get("range_days"); has {
 		if _, detail := coerceIntBodyField(appendLoc(loc, "range_days"), v); detail != nil {
 			errs = append(errs, *detail)
 		}
 	}
-	if v, has := m["compare_days"]; has {
+	if v, has := m.Get("compare_days"); has {
 		if _, detail := coerceIntBodyField(appendLoc(loc, "compare_days"), v); detail != nil {
 			errs = append(errs, *detail)
 		}
 	}
-	if v, has := m["start_date"]; has {
+	if v, has := m.Get("start_date"); has {
 		if detail := validateBodyDateField(appendLoc(loc, "start_date"), v); detail != nil {
 			errs = append(errs, *detail)
 		}
 	}
-	if v, has := m["end_date"]; has {
+	if v, has := m.Get("end_date"); has {
 		if detail := validateBodyDateField(appendLoc(loc, "end_date"), v); detail != nil {
 			errs = append(errs, *detail)
 		}
@@ -82,60 +89,60 @@ func validateTimeFilter(loc []any, value any, present bool) []pydanticErrorDetai
 	return errs
 }
 
-func validateScopeFilter(loc []any, value any, present bool) []pydanticErrorDetail {
+func validateScopeFilter(loc []any, value pyjson.Value, present bool) []pydanticErrorDetail {
 	if !present || value == nil {
 		return nil
 	}
-	m, ok := value.(map[string]any)
+	m, ok := value.(*pyjson.Object)
 	if !ok {
 		return []pydanticErrorDetail{modelAttributesTypeError(loc, value)}
 	}
 	var errs []pydanticErrorDetail
-	if v, has := m["level"]; has {
+	if v, has := m.Get("level"); has {
 		if s, isString := v.(string); !isString || !stringInSlice(s, scopeLevelValues) {
 			errs = append(errs, literalErrorDetail(appendLoc(loc, "level"), v, scopeLevelValues))
 		}
 	}
-	if v, has := m["ids"]; has {
+	if v, has := m.Get("ids"); has {
 		errs = append(errs, validateStringListField(appendLoc(loc, "ids"), v)...)
 	}
 	return errs
 }
 
-func validateWhoFilter(loc []any, value any, present bool) []pydanticErrorDetail {
+func validateWhoFilter(loc []any, value pyjson.Value, present bool) []pydanticErrorDetail {
 	if !present || value == nil {
 		return nil
 	}
-	m, ok := value.(map[string]any)
+	m, ok := value.(*pyjson.Object)
 	if !ok {
 		return []pydanticErrorDetail{modelAttributesTypeError(loc, value)}
 	}
 	var errs []pydanticErrorDetail
 	for _, field := range []string{"developers", "roles"} {
-		if v, has := m[field]; has {
+		if v, has := m.Get(field); has {
 			errs = append(errs, validateStringListField(appendLoc(loc, field), v)...)
 		}
 	}
 	return errs
 }
 
-func validateWhatFilter(loc []any, value any, present bool) []pydanticErrorDetail {
+func validateWhatFilter(loc []any, value pyjson.Value, present bool) []pydanticErrorDetail {
 	if !present || value == nil {
 		return nil
 	}
-	m, ok := value.(map[string]any)
+	m, ok := value.(*pyjson.Object)
 	if !ok {
 		return []pydanticErrorDetail{modelAttributesTypeError(loc, value)}
 	}
 	var errs []pydanticErrorDetail
 	for _, field := range []string{"repos", "services"} {
-		if v, has := m[field]; has {
+		if v, has := m.Get(field); has {
 			errs = append(errs, validateStringListField(appendLoc(loc, field), v)...)
 		}
 	}
-	if v, has := m["artifacts"]; has && v != nil {
+	if v, has := m.Get("artifacts"); has && v != nil {
 		artifactsLoc := appendLoc(loc, "artifacts")
-		list, isList := v.([]any)
+		list, isList := v.([]pyjson.Value)
 		if !isList {
 			errs = append(errs, pydanticErrorDetail{Type: "list_type", Loc: artifactsLoc, Msg: "Input should be a valid list", Input: v})
 		} else {
@@ -150,41 +157,41 @@ func validateWhatFilter(loc []any, value any, present bool) []pydanticErrorDetai
 	return errs
 }
 
-func validateWhyFilter(loc []any, value any, present bool) []pydanticErrorDetail {
+func validateWhyFilter(loc []any, value pyjson.Value, present bool) []pydanticErrorDetail {
 	if !present || value == nil {
 		return nil
 	}
-	m, ok := value.(map[string]any)
+	m, ok := value.(*pyjson.Object)
 	if !ok {
 		return []pydanticErrorDetail{modelAttributesTypeError(loc, value)}
 	}
 	var errs []pydanticErrorDetail
 	for _, field := range []string{"work_category", "issue_type", "initiative"} {
-		if v, has := m[field]; has {
+		if v, has := m.Get(field); has {
 			errs = append(errs, validateStringListField(appendLoc(loc, field), v)...)
 		}
 	}
 	return errs
 }
 
-func validateHowFilter(loc []any, value any, present bool) []pydanticErrorDetail {
+func validateHowFilter(loc []any, value pyjson.Value, present bool) []pydanticErrorDetail {
 	if !present || value == nil {
 		return nil
 	}
-	m, ok := value.(map[string]any)
+	m, ok := value.(*pyjson.Object)
 	if !ok {
 		return []pydanticErrorDetail{modelAttributesTypeError(loc, value)}
 	}
 	var errs []pydanticErrorDetail
-	if v, has := m["flow_stage"]; has {
+	if v, has := m.Get("flow_stage"); has {
 		errs = append(errs, validateStringListField(appendLoc(loc, "flow_stage"), v)...)
 	}
-	if v, has := m["blocked"]; has {
+	if v, has := m.Get("blocked"); has {
 		if _, _, detail := coerceBoolBodyField(appendLoc(loc, "blocked"), v); detail != nil {
 			errs = append(errs, *detail)
 		}
 	}
-	if v, has := m["wip_state"]; has {
+	if v, has := m.Get("wip_state"); has {
 		errs = append(errs, validateStringListField(appendLoc(loc, "wip_state"), v)...)
 	}
 	return errs
@@ -193,7 +200,7 @@ func validateHowFilter(loc []any, value any, present bool) []pydanticErrorDetail
 // modelAttributesTypeError ports Pydantic's error for a non-object value
 // where a nested model is expected -- confirmed live for "filters" and
 // for a nested section (e.g. filters.time) both.
-func modelAttributesTypeError(loc []any, value any) pydanticErrorDetail {
+func modelAttributesTypeError(loc []any, value pyjson.Value) pydanticErrorDetail {
 	return pydanticErrorDetail{
 		Type: "model_attributes_type", Loc: loc,
 		Msg: "Input should be a valid dictionary or object to extract fields from", Input: value,
@@ -206,7 +213,7 @@ func modelAttributesTypeError(loc []any, value any) pydanticErrorDetail {
 // suffix are the SAME string, Python's own English list join ("'a',
 // 'b' or 'c'" -- no Oxford comma before "or", confirmed live for both
 // a 5-value and a 4-value enum).
-func literalErrorDetail(loc []any, input any, allowed []string) pydanticErrorDetail {
+func literalErrorDetail(loc []any, input pyjson.Value, allowed []string) pydanticErrorDetail {
 	expected := formatPydanticLiteralExpected(allowed)
 	return pydanticErrorDetail{
 		Type: "literal_error", Loc: loc,
@@ -233,11 +240,11 @@ func formatPydanticLiteralExpected(allowed []string) string {
 // element that isn't a string -- both confirmed live. A nil value
 // (JSON null, or the key absent) is valid: every list[str] field in
 // MetricFilter is `| None = None`.
-func validateStringListField(loc []any, value any) []pydanticErrorDetail {
+func validateStringListField(loc []any, value pyjson.Value) []pydanticErrorDetail {
 	if value == nil {
 		return nil
 	}
-	list, ok := value.([]any)
+	list, ok := value.([]pyjson.Value)
 	if !ok {
 		return []pydanticErrorDetail{{Type: "list_type", Loc: loc, Msg: "Input should be a valid list", Input: value}}
 	}
@@ -257,17 +264,11 @@ func validateStringListField(loc []any, value any) []pydanticErrorDetail {
 // is absent. A JSON number arrives here as float64 (encoding/json), so an
 // integer beyond 2^53 is judged as its float value (named limit: pydantic
 // sees the exact int, which only differs at the int64 edges).
-func coerceBoolBodyField(loc []any, value any) (b bool, present bool, detail *pydanticErrorDetail) {
-	var input pyjson.Value
-	switch v := value.(type) {
-	case nil:
+func coerceBoolBodyField(loc []any, value pyjson.Value) (b bool, present bool, detail *pydanticErrorDetail) {
+	if value == nil {
 		return false, false, nil
-	case float64:
-		input = pyjson.Float(v)
-	default:
-		input = v
 	}
-	coerced, kind, msg := pybody.PydanticBool(input)
+	coerced, kind, msg := pybody.PydanticBool(value)
 	if kind != "" {
 		return false, true, &pydanticErrorDetail{Type: kind, Loc: loc, Msg: msg, Input: value}
 	}
@@ -284,28 +285,40 @@ func coerceBoolBodyField(loc []any, value any) (b bool, present bool, detail *py
 // result, confirmed live); any other JSON type is date_type. nil (an
 // absent key, or an explicit JSON null) is valid -- both start_date and
 // end_date are `| None`.
-func validateBodyDateField(loc []any, value any) *pydanticErrorDetail {
-	switch v := value.(type) {
+func validateBodyDateField(loc []any, value pyjson.Value) *pydanticErrorDetail {
+	var input any
+	switch typed := value.(type) {
 	case nil:
 		return nil
-	case string:
-		if _, err := time.Parse("2006-01-02", v); err == nil {
-			return nil
-		}
-		reason := classifyDateParseError(v)
+	case pyjson.Int:
+		input = typed.Int
+	case pyjson.Float:
+		input = float64(typed)
+	case string, bool:
+		input = typed
+	default:
+		input = struct{}{}
+	}
+	_, failure, judged := pytime.ParseDate(input)
+	if !judged {
+		// A string that is neither a date nor a datetime: the reason is
+		// speedate's datetime error, which classifyDateParseError carries.
+		text := value.(string)
+		reason := classifyDateParseError(text)
 		return &pydanticErrorDetail{
 			Type: "date_from_datetime_parsing", Loc: loc,
 			Msg:   "Input should be a valid date or datetime, " + reason,
-			Input: v, Ctx: map[string]string{"error": reason},
+			Input: text, Ctx: map[string]string{"error": reason},
 		}
-	case float64:
-		return &pydanticErrorDetail{
-			Type: "date_from_datetime_inexact", Loc: loc,
-			Msg: "Datetimes provided to dates should have zero time - e.g. be exact dates", Input: v,
-		}
-	default:
-		return &pydanticErrorDetail{Type: "date_type", Loc: loc, Msg: "Input should be a valid date", Input: v}
 	}
+	if failure == nil {
+		return nil
+	}
+	detail := &pydanticErrorDetail{Type: failure.Type, Loc: loc, Msg: failure.Msg, Input: value}
+	if failure.Reason != "" {
+		detail.Ctx = map[string]string{"error": failure.Reason}
+	}
+	return detail
 }
 
 func appendLoc(loc []any, next any) []any {
@@ -313,11 +326,6 @@ func appendLoc(loc []any, next any) []any {
 	copy(out, loc)
 	out[len(loc)] = next
 	return out
-}
-
-func hasKey(m map[string]any, key string) bool {
-	_, ok := m[key]
-	return ok
 }
 
 func stringInSlice(s string, values []string) bool {

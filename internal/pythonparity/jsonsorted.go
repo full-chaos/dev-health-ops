@@ -2,6 +2,7 @@ package pythonparity
 
 import (
 	"fmt"
+	"math/big"
 	"strconv"
 )
 
@@ -64,6 +65,9 @@ func appendSortedValue(dst []byte, value any, seen map[containerKey]bool) ([]byt
 		return strconv.AppendInt(dst, int64(typed), 10), nil
 	case int64:
 		return strconv.AppendInt(dst, typed, 10), nil
+	case *big.Int:
+		// A Python int of any size.
+		return typed.Append(dst, 10), nil
 
 	case float64:
 		return appendPythonJSONFloat(dst, typed), nil
@@ -95,7 +99,7 @@ func appendSortedValue(dst []byte, value any, seen map[containerKey]bool) ([]byt
 	default:
 		return nil, fmt.Errorf(
 			"pythonparity: refusing to encode %T -- MarshalPythonJSONSorted accepts "+
-				"nil, bool, string, int, int64, float64, []any and map[string]any; "+
+				"nil, bool, string, int, int64, *big.Int, float64, []any and map[string]any; "+
 				"other numeric types are refused because their conversion to a "+
 				"Python number is ambiguous",
 			value,

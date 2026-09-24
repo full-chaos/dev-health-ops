@@ -40,6 +40,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/opportunities"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/principal"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/routeswitch"
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 )
 
 const (
@@ -223,30 +224,24 @@ func newOpportunitiesPostHandler(client home.QueryClient) http.HandlerFunc {
 			return
 		}
 
-		var decoded any
-		bodyIsEmptyOrNull := len(bodyBytes) == 0
-		if !bodyIsEmptyOrNull {
-			if err := json.Unmarshal(bodyBytes, &decoded); err != nil {
-				writePydanticValidationError(w, r, claims.OrgID, jsonSyntaxErrorDetail([]any{"body"}, bodyBytes))
-				return
-			}
-			if decoded == nil {
-				bodyIsEmptyOrNull = true
-			}
+		decoded, bodyIsEmptyOrNull, syntaxDetail := decodeRequestBody([]any{"body"}, bodyBytes)
+		if syntaxDetail != nil {
+			writePydanticValidationError(w, r, claims.OrgID, *syntaxDetail)
+			return
 		}
 		if bodyIsEmptyOrNull {
 			writePydanticValidationError(w, r, claims.OrgID, missingFieldError([]any{"body"}, nil))
 			return
 		}
 
-		body, isObject := decoded.(map[string]any)
+		body, isObject := decoded.(*pyjson.Object)
 		if !isObject {
 			writePydanticValidationError(w, r, claims.OrgID, modelAttributesTypeError([]any{"body"}, decoded))
 			return
 		}
 
 		var validationErrors []pydanticErrorDetail
-		filtersValue, hasFilters := body["filters"]
+		filtersValue, hasFilters := body.Get("filters")
 		if !hasFilters {
 			validationErrors = append(validationErrors, missingFieldError([]any{"body", "filters"}, body))
 		} else {
@@ -257,7 +252,7 @@ func newOpportunitiesPostHandler(client home.QueryClient) http.HandlerFunc {
 			return
 		}
 
-		filtersMap, _ := filtersValue.(map[string]any)
+		filtersMap, _ := legacyJSON(filtersValue).(map[string]any)
 		// homeFiltersFromMap (home_route.go) reads the SAME validated
 		// MetricFilter shape HomeRequest carries -- opportunities_post's
 		// own payload (main.py:1211-1226) is the identical HomeRequest

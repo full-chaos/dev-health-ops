@@ -52,8 +52,18 @@ func ParseDatetime(value any) (DateTime, *ValidationError) {
 // For a negative non-integral value that adds |fract| to the floor, which
 // is speedate's result, not the value's.
 func fromFloat(timestamp float64) (DateTime, *ValidationError) {
+	at, failure := refuseYearZero(rawFloat(timestamp))
+	if failure != "" {
+		return DateTime{}, &ValidationError{"datetime_parsing", parsingPrefix + failure}
+	}
+	return at, nil
+}
+
+// rawFloat is float_as_datetime's speedate datetime (year 0 allowed) or
+// its datetime_parsing reason.
+func rawFloat(timestamp float64) (DateTime, string) {
 	if math.IsNaN(timestamp) {
-		return DateTime{}, &ValidationError{"datetime_parsing", parsingPrefix + "NaN values not permitted"}
+		return DateTime{}, "NaN values not permitted"
 	}
 	fraction := math.Abs(timestamp - math.Trunc(timestamp))
 	if math.IsInf(timestamp, 0) {
@@ -63,28 +73,44 @@ func fromFloat(timestamp float64) (DateTime, *ValidationError) {
 	if math.Abs(timestamp) > unixMillisBound {
 		scale = 1e3
 	}
-	return fromTimestamp(rustF64ToI64(math.Floor(timestamp)), rustF64ToU32(math.Round(fraction*scale)))
+	return speedateUnix(rustF64ToI64(math.Floor(timestamp)), rustF64ToU32(math.Round(fraction*scale)))
 }
 
 // fromTimestamp is pydantic's int_as_datetime: speedate's timestamp, with
 // its error as a datetime_parsing error.
 func fromTimestamp(timestamp int64, micro uint32) (DateTime, *ValidationError) {
-	second, total, failure := speedateTimestamp(timestamp, micro)
+	at, failure := rawTimestamp(timestamp, micro)
 	if failure != "" {
 		return DateTime{}, &ValidationError{"datetime_parsing", parsingPrefix + failure}
 	}
-	return unixDateTime(second, total)
+	return at, nil
 }
 
-// unixDateTime converts speedate's result to Python's datetime, which
-// refuses year 0.
-func unixDateTime(second int64, micro uint32) (DateTime, *ValidationError) {
-	at := time.Unix(second, int64(micro)*1000).UTC()
-	if at.Year() == 0 {
-		return DateTime{}, &ValidationError{"datetime_parsing", parsingPrefix + "year 0 is out of range"}
-	}
-	return DateTime{Time: at, Aware: true}, nil
+// rawTimestamp is speedate's timestamp as a Python datetime, or the
+// datetime_parsing reason (speedate's error, or Python's year-0 refusal).
+func rawTimestamp(timestamp int64, micro uint32) (DateTime, string) {
+	return refuseYearZero(speedateUnix(timestamp, micro))
 }
+
+// speedateUnix is speedate's timestamp (year 0 allowed, as speedate has
+// it before Python converts it), or speedate's error.
+func speedateUnix(timestamp int64, micro uint32) (DateTime, string) {
+	second, total, failure := speedateTimestamp(timestamp, micro)
+	if failure != "" {
+		return DateTime{}, failure
+	}
+	return DateTime{Time: time.Unix(second, int64(total)*1000).UTC(), Aware: true}, ""
+}
+
+// refuseYearZero is Python's datetime refusing speedate's year 0.
+func refuseYearZero(at DateTime, failure string) (DateTime, string) {
+	if failure == "" && at.Time.Year() == 0 {
+		return DateTime{}, yearZeroReason
+	}
+	return at, failure
+}
+
+const yearZeroReason = "year 0 is out of range"
 
 // speedateNumber is speedate's float_parse_bytes: an optional sign and
 // ASCII digits accumulated with wrapping i64 arithmetic are an int unless
@@ -225,27 +251,39 @@ func numericString(text string) (DateTime, *ValidationError, bool) {
 	if !ok {
 		return DateTime{}, nil, false
 	}
-	var second int64
-	var micro uint32
-	var failure string
 	if isFloat {
-		normalized := float
-		if math.Abs(float) > unixMillisBound {
-			normalized = float / 1000
+		at, failure := rawFloatString(float)
+		if failure == "" && at.Time.Year() == 0 {
+			failure = yearZeroReason
 		}
-		whole := rustF64ToI64(math.Floor(normalized))
-		second, micro, failure = speedateTimestamp(whole, rustF64ToU32(math.Round((normalized-float64(whole))*1e6)))
+		if failure == yearZeroReason {
+			return DateTime{}, &ValidationError{"datetime_parsing", parsingPrefix + failure}, true
+		}
 		if failure != "" {
 			return DateTime{}, &ValidationError{"datetime_from_date_parsing", fromDatePrefix + dateReason(text)}, true
 		}
-	} else {
-		second, micro, failure = speedateTimestamp(integer, 0)
-		if failure != "" {
-			return DateTime{}, &ValidationError{"datetime_from_date_parsing", fromDatePrefix + failure}, true
-		}
+		return at, nil, true
 	}
-	parsed, yearZero := unixDateTime(second, micro)
-	return parsed, yearZero, true
+	at, failure := rawTimestamp(integer, 0)
+	if failure == yearZeroReason {
+		return DateTime{}, &ValidationError{"datetime_parsing", parsingPrefix + failure}, true
+	}
+	if failure != "" {
+		return DateTime{}, &ValidationError{"datetime_from_date_parsing", fromDatePrefix + failure}, true
+	}
+	return at, nil, true
+}
+
+// rawFloatString is DateTime::parse_bytes_with_config's float branch: a
+// float above MS_WATERSHED is divided by 1000 here, and speedate's
+// timestamp watershed divides again.
+func rawFloatString(float float64) (DateTime, string) {
+	normalized := float
+	if math.Abs(float) > unixMillisBound {
+		normalized = float / 1000
+	}
+	whole := rustF64ToI64(math.Floor(normalized))
+	return speedateUnix(whole, rustF64ToU32(math.Round((normalized-float64(whole))*1e6)))
 }
 
 func parseString(text string) (DateTime, *ValidationError) {

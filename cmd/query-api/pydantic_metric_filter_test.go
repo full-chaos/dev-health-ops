@@ -3,6 +3,8 @@ package main
 import (
 	"reflect"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 )
 
 // TestValidateMetricFilterMatchesLiveCapture pins validateMetricFilter
@@ -14,12 +16,12 @@ func TestValidateMetricFilterMatchesLiveCapture(t *testing.T) {
 	loc := []any{"body", "filters"}
 	cases := []struct {
 		name    string
-		filters map[string]any
+		filters string
 		want    []pydanticErrorDetail
 	}{
 		{
 			name:    "scope.level bad literal",
-			filters: map[string]any{"scope": map[string]any{"level": "bogus"}},
+			filters: `{"scope": {"level": "bogus"}}`,
 			want: []pydanticErrorDetail{{
 				Type: "literal_error", Loc: []any{"body", "filters", "scope", "level"},
 				Msg: "Input should be 'org', 'team', 'repo', 'service' or 'developer'", Input: "bogus",
@@ -28,7 +30,7 @@ func TestValidateMetricFilterMatchesLiveCapture(t *testing.T) {
 		},
 		{
 			name:    "scope.ids not a list",
-			filters: map[string]any{"scope": map[string]any{"ids": "not-a-list"}},
+			filters: `{"scope": {"ids": "not-a-list"}}`,
 			want: []pydanticErrorDetail{{
 				Type: "list_type", Loc: []any{"body", "filters", "scope", "ids"},
 				Msg: "Input should be a valid list", Input: "not-a-list",
@@ -36,15 +38,15 @@ func TestValidateMetricFilterMatchesLiveCapture(t *testing.T) {
 		},
 		{
 			name:    "scope.ids element not string",
-			filters: map[string]any{"scope": map[string]any{"ids": []any{"a", float64(5)}}},
+			filters: `{"scope": {"ids": ["a", 5]}}`,
 			want: []pydanticErrorDetail{{
 				Type: "string_type", Loc: []any{"body", "filters", "scope", "ids", 1},
-				Msg: "Input should be a valid string", Input: float64(5),
+				Msg: "Input should be a valid string", Input: pyjson.IntOf(5),
 			}},
 		},
 		{
 			name:    "how.blocked bad type",
-			filters: map[string]any{"how": map[string]any{"blocked": "maybe"}},
+			filters: `{"how": {"blocked": "maybe"}}`,
 			want: []pydanticErrorDetail{{
 				Type: "bool_parsing", Loc: []any{"body", "filters", "how", "blocked"},
 				Msg: "Input should be a valid boolean, unable to interpret input", Input: "maybe",
@@ -52,20 +54,20 @@ func TestValidateMetricFilterMatchesLiveCapture(t *testing.T) {
 		},
 		{
 			name:    "how.blocked coerces string true",
-			filters: map[string]any{"how": map[string]any{"blocked": "true"}},
+			filters: `{"how": {"blocked": "true"}}`,
 			want:    nil,
 		},
 		{
 			name:    "time.start_date wrong type (number)",
-			filters: map[string]any{"time": map[string]any{"start_date": float64(123)}},
+			filters: `{"time": {"start_date": 123}}`,
 			want: []pydanticErrorDetail{{
 				Type: "date_from_datetime_inexact", Loc: []any{"body", "filters", "time", "start_date"},
-				Msg: "Datetimes provided to dates should have zero time - e.g. be exact dates", Input: float64(123),
+				Msg: "Datetimes provided to dates should have zero time - e.g. be exact dates", Input: pyjson.IntOf(123),
 			}},
 		},
 		{
 			name:    "time.range_days bad type",
-			filters: map[string]any{"time": map[string]any{"range_days": "abc"}},
+			filters: `{"time": {"range_days": "abc"}}`,
 			want: []pydanticErrorDetail{{
 				Type: "int_parsing", Loc: []any{"body", "filters", "time", "range_days"},
 				Msg: "Input should be a valid integer, unable to parse string as an integer", Input: "abc",
@@ -73,7 +75,7 @@ func TestValidateMetricFilterMatchesLiveCapture(t *testing.T) {
 		},
 		{
 			name:    "what.artifacts bad literal",
-			filters: map[string]any{"what": map[string]any{"artifacts": []any{"pr", "bogus"}}},
+			filters: `{"what": {"artifacts": ["pr", "bogus"]}}`,
 			want: []pydanticErrorDetail{{
 				Type: "literal_error", Loc: []any{"body", "filters", "what", "artifacts", 1},
 				Msg: "Input should be 'pr', 'issue', 'commit' or 'pipeline'", Input: "bogus",
@@ -82,7 +84,7 @@ func TestValidateMetricFilterMatchesLiveCapture(t *testing.T) {
 		},
 		{
 			name:    "time not a dict",
-			filters: map[string]any{"time": "nope"},
+			filters: `{"time": "nope"}`,
 			want: []pydanticErrorDetail{{
 				Type: "model_attributes_type", Loc: []any{"body", "filters", "time"},
 				Msg: "Input should be a valid dictionary or object to extract fields from", Input: "nope",
@@ -90,7 +92,7 @@ func TestValidateMetricFilterMatchesLiveCapture(t *testing.T) {
 		},
 		{
 			name:    "multiple nested errors aggregate in field order",
-			filters: map[string]any{"scope": map[string]any{"level": "bogus"}, "how": map[string]any{"blocked": "maybe"}},
+			filters: `{"scope": {"level": "bogus"}, "how": {"blocked": "maybe"}}`,
 			want: []pydanticErrorDetail{
 				{
 					Type: "literal_error", Loc: []any{"body", "filters", "scope", "level"},
@@ -107,7 +109,11 @@ func TestValidateMetricFilterMatchesLiveCapture(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := validateMetricFilter(loc, map[string]any(tc.filters))
+			filters, err := pyjson.DecodeString(tc.filters)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := validateMetricFilter(loc, filters)
 			if len(got) == 0 && len(tc.want) == 0 {
 				return
 			}

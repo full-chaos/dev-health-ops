@@ -38,10 +38,11 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
+	"math/big"
 	"net/http"
 	"os"
 	"strconv"
-	"strings"
 	"time"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
@@ -53,6 +54,9 @@ import (
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/principal"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/routeswitch"
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/teamscope"
+	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/categorize"
 	"github.com/full-chaos/dev-health-ops/internal/llmorgsettings"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
@@ -676,47 +680,56 @@ func stringsFromAny(value any) []string {
 	return out
 }
 
-// intFromAny reads a JSON-decoded value the way Pydantic's lenient int
-// coercion reads a request field: a JSON number (encoding/json always
-// decodes a bare "2.0"/"2.5" number to float64) or a numeric STRING both
-// coerce -- e.g. `{"range_days": "2"}` is a normal Pydantic request body
-// (form/query-param-style stringly-typed JSON is common from hand-built
-// clients) and TimeFilter(range_days="2") genuinely resolves to 2, not a
-// validation error (confirmed via a live `uv run python3` construction
-// against the real TimeFilter model, not assumed). A first draft here
-// only handled float64, so a string "2" silently fell through to the
-// 14-day fallback instead of the request's own intent -- caught by codex
-// round 1 (P1). Non-numeric or absent values still fall back, matching
-// TimeFilter's own default_factory for an omitted field (an explicit
-// JSON null is a DIFFERENT case Pydantic actually rejects outright --
-// out of scope here, same as the rest of this route's documented
-// narrower-than-full-Pydantic-validation boundary).
+// intFromAny reads an already-validated field with pydantic's lax int
+// rule (pybody.PydanticInt, the rule validation used), saturated at Go's
+// int range, or fallback for an absent/null value. Values arrive in
+// legacyJSON's shape (an exact int64 or *big.Int, or a float64) or from a
+// GET handler's own filter map (float64).
 func intFromAny(value any, fallback int) int {
+	var raw pyjson.Value
 	switch v := value.(type) {
-	case float64:
-		return int(v)
-	case string:
-		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
-			return n
-		}
+	case nil:
 		return fallback
+	case float64:
+		raw = legacyNumber(v)
+	case int64:
+		raw = pyjson.IntOf(v)
+	case *big.Int:
+		raw = pyjson.Int{Int: v}
 	default:
+		raw = v
+	}
+	number, kind, _ := pybody.PydanticInt(raw)
+	if kind != "" {
 		return fallback
 	}
+	return saturatedInt(number)
 }
 
-// dateFromAny parses a "YYYY-MM-DD" JSON string value (Pydantic's
-// date's mode="json" wire form) into a UTC midnight time.Time. ok is
-// false for a missing/null/malformed value, matching Python's
-// filters.time.start_date/end_date being None.
+// dateFromAny reads an already-validated `date | None` field with
+// pydantic's lax date rule (pytime.ParseDate, the rule validation used):
+// a YYYY-MM-DD string, or a datetime string or unix timestamp at
+// midnight. ok is false for an absent/null value, as Python's None.
 func dateFromAny(value any) (t time.Time, ok bool) {
-	s, isString := value.(string)
-	if !isString || s == "" {
+	switch typed := value.(type) {
+	case string, float64, *big.Int:
+	case int64:
+		value = big.NewInt(typed)
+	default:
 		return time.Time{}, false
 	}
-	parsed, err := time.Parse("2006-01-02", s)
-	if err != nil {
+	date, failure, judged := pytime.ParseDate(value)
+	if !judged || failure != nil {
 		return time.Time{}, false
 	}
-	return parsed.UTC(), true
+	return date, true
+}
+
+// legacyNumber is a legacyJSON float64 as pyjson reads it: an integral
+// value inside the int64 range is an int, anything else a float.
+func legacyNumber(f float64) pyjson.Value {
+	if f == math.Trunc(f) && f > -9223372036854775808 && f < 9223372036854775808 {
+		return pyjson.IntOf(int64(f))
+	}
+	return pyjson.Float(f)
 }

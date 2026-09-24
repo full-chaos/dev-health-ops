@@ -19,7 +19,7 @@ import (
 // around the bounds, and non-strings.
 var stringCorpus = []string{
 	`"\ud800"`, `"\udfff"`, `"a\udc00b"`, `"\ud800\ud800"`, `"\udc00\ud800"`, `"\ud800abcdefgh"`, `""`,
-	`"😀"`, `"😀"`, `"é"`, `"ab"`, `"abcde"`, `"abcdef"`, `"\u0000"`, `"abc\udfffdefgh"`,
+	`"\ud83d\ude00"`, `"😀"`, `"é"`, `"ab"`, `"abcde"`, `"abcdef"`, `"\u0000"`, `"abc\udfffdefgh"`,
 	`null`, `5`, `true`, `[]`, `{}`,
 }
 

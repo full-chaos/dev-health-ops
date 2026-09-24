@@ -500,18 +500,18 @@ func floatPtr(f float64) *float64 { return &f }
 //	async def main():
 //	    # default: include_text=True, one row, one quote present.
 //	    default = await capture([BASE_ROW], [QUOTE_ROW], True, 200)
-//	    json.dump(default, open("cmd/query-api/testdata/workunits_golden_default.json", "w"), indent=2)
+//	    json.dump(default, open("internal/queryapi/server/testdata/workunits_golden_default.json", "w"), indent=2)
 //	    # include_text=False: the SAME row/quote data available, but the
 //	    # builder's own `if include_text:` branch must skip the quotes
 //	    # fetch entirely -- textual must be empty despite a matching quote.
 //	    include_false = await capture([BASE_ROW], [QUOTE_ROW], False, 200)
-//	    json.dump(include_false, open("cmd/query-api/testdata/workunits_golden_include_text_false.json", "w"), indent=2)
+//	    json.dump(include_false, open("internal/queryapi/server/testdata/workunits_golden_include_text_false.json", "w"), indent=2)
 //	    # limit path: two rows with different effort_value, sorted DESC by
 //	    # the builder's own `results.sort(...)` then truncated by
 //	    # `results[:limit]` -- limit=1 must keep only the higher-effort row.
 //	    low_effort_row = dict(BASE_ROW, work_unit_id="abc-000", effort_value=1.0, categorization_run_id=None)
 //	    limit_path = await capture([BASE_ROW, low_effort_row], [], True, 1)
-//	    json.dump(limit_path, open("cmd/query-api/testdata/workunits_golden_limit_path.json", "w"), indent=2)
+//	    json.dump(limit_path, open("internal/queryapi/server/testdata/workunits_golden_limit_path.json", "w"), indent=2)
 //	asyncio.run(main())
 //	PY
 func TestBuildWorkUnitsResponseMatchesPythonGolden(t *testing.T) {

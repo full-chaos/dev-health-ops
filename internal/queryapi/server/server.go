@@ -26,7 +26,6 @@ package server
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"log"
 	"log/slog"
@@ -65,7 +64,6 @@ const defaultAddr = ":8090"
 const (
 	exitOK      = 0
 	exitFailure = 1
-	exitUsage   = 2
 )
 
 // getenvFunc reads one setting by name. Run builds it from the lookup the
@@ -245,14 +243,23 @@ func mountQueryRoute(mux *http.ServeMux, query http.HandlerFunc) {
 
 // Run serves query-api until ctx ends or SIGINT/SIGTERM arrives, and returns
 // the process exit code: 0 after a clean shutdown, 1 when a route cannot be
-// built or the listener fails, 2 for a usage error. query-api takes no
-// arguments. Every setting it reads comes from lookup, never from the process
-// environment directly; logs go to stdout as JSON.
+// built or the listener fails. query-api takes no arguments; any it is given
+// are logged and ignored, as the binary always did. Logs go to stdout as JSON
+// through the redacting handler, installed as the process default for the run
+// and restored when Run returns.
+//
+// Where settings come from. Every setting query-api's own wiring reads -- the
+// listener address, each route's ClickHouse/registry/envelope configuration,
+// the route switches and the proof route -- comes from lookup. Three kinds of
+// setting are still read from the process environment below this function,
+// exactly as every other dho Service reads them: the OTEL_* tracing settings
+// (internal/platform/tracing, the same path internal/platform/shell uses),
+// and the per-request resolver settings IDENTITY_MAPPING_PATH, the LLM_*
+// provider settings and two work-graph switches. TestDirectEnvironmentReads
+// pins that set, so a new direct read cannot appear unnoticed. Every caller
+// passes the process environment as lookup, so the two sources agree; moving
+// the rest onto one option registry is the shell-lifecycle port.
 func Run(ctx context.Context, args []string, lookup func(string) (string, bool), stdout, stderr io.Writer) int {
-	if len(args) != 0 {
-		fmt.Fprintf(stderr, "query-api: unexpected arguments %q; query-api takes none\n", args)
-		return exitUsage
-	}
 	getenv := getenvFunc(func(key string) string {
 		value, _ := lookup(key)
 		return value
@@ -270,7 +277,11 @@ func Run(ctx context.Context, args []string, lookup func(string) (string, bool),
 	// last, after the HTTP server has stopped accepting requests, so
 	// buffered spans from the final in-flight requests still flush.
 	logger := logging.NewJSON(stdout, slog.LevelInfo)
-	logging.InstallDefault(logger)
+	restoreDefaultLogger := logging.InstallDefault(logger)
+	defer restoreDefaultLogger()
+	if len(args) != 0 {
+		logger.Warn("query-api takes no arguments; ignoring them", "arguments", args)
+	}
 	tracingComponent := tracing.InitWithServiceName(logger, otelServiceName)
 
 	// Installs the process-wide OTel MeterProvider so the gauges/counters

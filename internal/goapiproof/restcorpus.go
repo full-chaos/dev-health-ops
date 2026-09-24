@@ -2109,7 +2109,7 @@ var flamePRIDBoundParity = Options{
 // above establishes -- Paths names the whole payload ("data") because the
 // extra element can appear anywhere in the result list, not under one
 // fixed field. No validation-error entry duplicates the two already-
-// captured 422 fixtures (cmd/query-api/testdata/people_422): this table's
+// captured 422 fixtures (internal/queryapi/server/testdata/people_422): this table's
 // two 422 entries below reproduce them by request shape, not by re-typing
 // a body a live comparison already gets from the real route.
 //
@@ -5796,7 +5796,7 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				BodyMode: RESTBodyModeJSON,
 			},
 			{
-				// Captured live: cmd/query-api/testdata/people_422/
+				// Captured live: internal/queryapi/server/testdata/people_422/
 				// get_non_numeric_limit.json.
 				Name:                "invalid_limit",
 				Query:               url.Values{"limit": {"not-a-number"}},
@@ -5804,7 +5804,7 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				BodyMode: RESTBodyModeJSON,
 			},
 			{
-				// Captured live: cmd/query-api/testdata/people_422/
+				// Captured live: internal/queryapi/server/testdata/people_422/
 				// get_non_numeric_limit_with_comparative_param.json --
 				// byte-identical to invalid_limit's own body, proving
 				// FastAPI's query-parameter validation (422) runs BEFORE

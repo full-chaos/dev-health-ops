@@ -116,7 +116,7 @@ import (
 // job) keeps it that way: it fails the moment this text and the web
 // repo's pinned urql wire form disagree, for this or any of the other 11
 // registered documents. See
-// cmd/query-api/testdata/wire_capture/featureflags_captured.graphql and
+// internal/queryapi/server/testdata/wire_capture/featureflags_captured.graphql and
 // its README for a byte-for-byte fixture captured off a real HTTP
 // request produced by this repo's actual graphqlFetch code path against
 // a real local HTTP listener -- not reconstructed from source and not
@@ -781,7 +781,7 @@ const registeredThroughputForecastDocument = `query ThroughputForecast($orgId: S
 // hardcodes FEATURE_FLAG_REGISTRY_QUERY; this operation's capture used a
 // same-mechanism variant script run once against an unmodified
 // dev-health-web checkout, output verified byte-for-byte against
-// cmd/query-api/testdata/wire_capture/featureflagevents_captured.graphql
+// internal/queryapi/server/testdata/wire_capture/featureflagevents_captured.graphql
 // and its digest cross-checked independently in Python before being
 // pasted here -- see that file's README section and
 // query_route_wire_capture_test.go's

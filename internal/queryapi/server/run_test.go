@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"log/slog"
 	"net"
 	"net/http"
 	"strings"
@@ -62,18 +63,47 @@ func waitForHealthz(t *testing.T, addr string, done <-chan int) {
 	t.Fatalf("query-api never served /healthz on %s", addr)
 }
 
-func TestRunRefusesArgumentsWithAUsageExit(t *testing.T) {
-	// Bounded, on a free address: a Run that ignored its arguments would
-	// serve until this deadline and return 0, not hang the test.
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+// The binary always ignored its arguments; Run keeps that, and says so in
+// its log so an unexpected argument is visible.
+func TestRunIgnoresArgumentsAndLogsThem(t *testing.T) {
+	addr := freeAddr(t)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var stdout, stderr bytes.Buffer
-	code := Run(ctx, []string{"--port=1"}, lookupOf(map[string]string{"QUERY_API_ADDR": freeAddr(t)}), &stdout, &stderr)
-	if code != exitUsage {
-		t.Fatalf("Run with an argument returned %d, want %d", code, exitUsage)
+	done := make(chan int, 1)
+	go func() {
+		done <- Run(ctx, []string{"extra"}, lookupOf(map[string]string{"QUERY_API_ADDR": addr}), &stdout, &stderr)
+	}()
+	waitForHealthz(t, addr, done)
+	cancel()
+	if code := <-done; code != exitOK {
+		t.Fatalf("Run with an argument returned %d, want %d", code, exitOK)
 	}
-	if !strings.Contains(stderr.String(), "takes none") {
-		t.Fatalf("stderr does not name the usage error: %q", stderr.String())
+	if !strings.Contains(stdout.String(), `"msg":"query-api takes no arguments; ignoring them"`) ||
+		!strings.Contains(stdout.String(), `"extra"`) {
+		t.Fatalf("the ignored argument is not logged: %s", stdout.String())
+	}
+}
+
+// Run installs its logger as the process default only for the run: a caller
+// that continues after Run logs through its own handler again.
+func TestRunRestoresTheDefaultLogger(t *testing.T) {
+	before := slog.Default()
+	var callerOutput bytes.Buffer
+	callerLogger := slog.New(slog.NewTextHandler(&callerOutput, nil))
+	slog.SetDefault(callerLogger)
+	t.Cleanup(func() { slog.SetDefault(before) })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var stdout, stderr bytes.Buffer
+	Run(ctx, nil, lookupOf(map[string]string{"QUERY_API_ADDR": freeAddr(t)}), &stdout, &stderr)
+	if slog.Default() != callerLogger {
+		t.Fatal("Run left its own logger as the process default")
+	}
+	slog.Info("after run")
+	if strings.Contains(stdout.String(), "after run") || !strings.Contains(callerOutput.String(), "after run") {
+		t.Fatalf("a log after Run went to query-api's stream: query-api %q, caller %q", stdout.String(), callerOutput.String())
 	}
 }
 

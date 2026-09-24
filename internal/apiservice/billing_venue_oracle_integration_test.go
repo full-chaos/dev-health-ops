@@ -233,27 +233,30 @@ func (f *fakeStripe) serve(plane string, w http.ResponseWriter, r *http.Request)
 		fmt.Fprintf(w, `{"id": %q, "object": "billing_portal.session", "url": "https://portal.venue.test/%s"}`, id, id)
 	case r.Method == http.MethodGet && fakeLists[path] != nil:
 		after := r.URL.Query().Get("starting_after")
-		// The second refund listing of each plane fails: that reconcile
-		// run reads no Stripe refunds.
-		if path == "/v1/refunds" && after == "" && f.next(plane, "refund_list") == "refund_list_venue_2" {
+		if after == "" {
+			f.counters[plane+path]++
+		}
+		run := f.counters[plane+path]
+		items := fakeLists[path]
+		switch {
+		// Invoices: the first listing fails outright, so that run's invoice
+		// report holds only the local invoices missing in Stripe.
+		case path == "/v1/invoices" && run == 1:
+			stripeFail(w, "invoice list refused")
+			return
+		// Refunds: the second listing fails on its second page, so a
+		// failure part way drops the page already read too.
+		case path == "/v1/refunds" && run == 2 && after != "":
 			stripeFail(w, "refund list refused")
 			return
-		}
-		items := fakeLists[path]
-		// Subscriptions, per plane: the first listing holds only org A's
-		// two (a report with a mismatch and nothing missing), the second
-		// fails (a report with nothing at all), later ones hold every one.
-		if path == "/v1/subscriptions" {
-			if after == "" {
-				f.counters[plane+"sub_list_run"]++
-			}
-			switch f.counters[plane+"sub_list_run"] {
-			case 1:
-				items = items[:2]
-			case 2:
-				stripeFail(w, "subscription list refused")
-				return
-			}
+		// Subscriptions: the first listing holds only org A's two, one
+		// with a null status (a report with mismatches and nothing
+		// missing); the second fails (a report with nothing at all).
+		case path == "/v1/subscriptions" && run == 1:
+			items = []string{items[0], `{"id": "sub_A2", "object": "subscription", "status": null}`}
+		case path == "/v1/subscriptions" && run == 2:
+			stripeFail(w, "subscription list refused")
+			return
 		}
 		fmt.Fprint(w, page(items, idOf, after, path))
 	case r.Method == http.MethodPost && strings.HasPrefix(path, "/v1/invoices/") && strings.HasSuffix(path, "/void"):

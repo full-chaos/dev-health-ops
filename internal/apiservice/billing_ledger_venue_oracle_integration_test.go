@@ -324,10 +324,12 @@ func TestVenueOracleBillingLedger(t *testing.T) {
 	// The reconciliation must have read the fake Stripe lists: a
 	// comparison of two empty Stripe sides would also read SAME.
 	reconcileWants := map[string][]string{
-		// Org A: the subscription listing holds org A's two only.
+		// Org A: subscriptions list org A's two (one null status);
+		// invoices fail outright.
 		"reconcile: org A": {`"stripe_id":"sub_A","field":"status","local_value":"active","stripe_value":"past_due"`,
-			`"missing_local":["in_B1","in_stripe_only","re_B1","re_stripe_only"]`},
-		// Org D: the subscription and refund listings fail.
+			`"stripe_id":"sub_A2","field":"status","local_value":"trialing","stripe_value":null`,
+			`"missing_local":["re_B1","re_stripe_only"]`, `"in_err"`},
+		// Org D: subscriptions fail; refunds fail on their second page.
 		"reconcile: org D (nothing)": {`"missing_local":["in_A1","in_A2","in_B1","in_stripe_only"]`},
 		"reconcile: all orgs": {`"stripe_id":"in_B1","field":"status","local_value":"void","stripe_value":"uncollectible"`,
 			`"stripe_id":"sub_C","field":"status","local_value":"active","stripe_value":null`, `"sub_stripe_only"`, `"re_stripe_only"`},

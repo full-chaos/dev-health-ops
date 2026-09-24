@@ -12,7 +12,7 @@ import (
 )
 
 // investmentFullDocumentPattern extracts registeredInvestmentFullDocument's
-// literal text straight from cmd/query-api/query_route.go, rather than
+// literal text straight from internal/queryapi/server/query_route.go, rather than
 // retyping it here -- a second, hand-copied statement of the document is
 // exactly the kind of artefact that silently drifts from the one actually
 // registered (this package cannot import cmd/query-api's `internal/graph`
@@ -26,7 +26,7 @@ var investmentFullDocumentPattern = regexp.MustCompile(
 
 // TestInvestmentFullVariablesAskForSankey is the shape test for the
 // investmentFull fix: the operation's registered document
-// (cmd/query-api/query_route.go's registeredInvestmentFullDocument)
+// (internal/queryapi/server/query_route.go's registeredInvestmentFullDocument)
 // selects `analytics.sankey.nodes.value` / `.edges.value`, but the batch
 // this table built never asked the resolver for a sankey sub-request --
 // `resolveSankey` only runs when `batch.Sankey != nil`
@@ -54,7 +54,7 @@ func TestInvestmentFullVariablesAskForSankey(t *testing.T) {
 		t.Fatalf("parse SDL: %v", schemaErr)
 	}
 
-	routeSource, err := os.ReadFile(filepath.Join(root, "cmd", "query-api", "query_route.go"))
+	routeSource, err := os.ReadFile(filepath.Join(root, "internal", "queryapi", "server", "query_route.go"))
 	if err != nil {
 		t.Fatalf("read query_route.go: %v", err)
 	}

@@ -149,7 +149,7 @@ go_api_prove_e2e_mint_edge_token() {
 # reuse.
 #
 # GO_API_HOME_ENABLED/GO_API_META_ENABLED (both default OFF in production --
-# see cmd/query-api/home_route.go / meta_route.go) are turned on here: these
+# see internal/queryapi/server/home_route.go / meta_route.go) are turned on here: these
 # two REST routes are Go-served in prod, and CHAOS-6241 deleted their Python
 # bodies (main.py's home()/meta() now raise GoServedRouteUnavailableError
 # unconditionally) -- the live-e2e pipeline-proof for them has to run
@@ -177,7 +177,7 @@ query_api_e2e_start() {
     -o "${BIN_DIR}/query-api" ./cmd/query-api
   go build -buildvcs=false -ldflags "-X github.com/full-chaos/dev-health-ops/internal/platform/version.Commit=${commit}" \
     -o "${BIN_DIR}/dho" ./cmd/dho
-  go run ./cmd/query-api/tools/registrydump -file cmd/query-api/query_route.go > "${dir}/documents.json"
+  go run ./cmd/query-api/tools/registrydump -file internal/queryapi/server/query_route.go > "${dir}/documents.json"
 
   echo "==> [query-api] generating a throwaway envelope key pair"
   (umask 077 && openssl genpkey -algorithm ed25519 -out "${GO_API_PROVE_E2E_ENVELOPE_PEM}")
@@ -226,7 +226,7 @@ run_go_api_prove_e2e() {
   # dho (goapi prove, mint edge-token) is already built, by
   # query_api_e2e_start -- nothing to build here.
   commit="${GITHUB_SHA:-$(git -C "${ROOT_DIR}" rev-parse HEAD)}"
-  go run ./cmd/query-api/tools/registrydump -file cmd/query-api/query_route.go > "${dir}/documents.json"
+  go run ./cmd/query-api/tools/registrydump -file internal/queryapi/server/query_route.go > "${dir}/documents.json"
 
   echo "==> [go-api-prove e2e] routing ${GO_API_PROVE_E2E_OPERATION} to shadow at the running build"
   local query_api="http://127.0.0.1:${QUERY_API_PORT}"

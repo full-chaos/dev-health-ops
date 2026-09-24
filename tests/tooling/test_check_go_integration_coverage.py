@@ -2,10 +2,22 @@
 
 from __future__ import annotations
 
+import re
 import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+MANIFEST = ROOT / "ci" / "go_integration_shards.tsv"
+
+
+def _manifest_packages() -> set[str]:
+    """Package rows of the shard manifest (its first data row is the shard count)."""
+    rows = [
+        line.split("\t")[0]
+        for line in MANIFEST.read_text().splitlines()
+        if line.strip() and not line.startswith("#")
+    ]
+    return set(rows[1:])
 
 
 def test_integration_coverage_inventory_completes_and_stays_nonempty() -> None:
@@ -222,18 +234,20 @@ def test_integration_coverage_inventory_completes_and_stays_nonempty() -> None:
     # -tags=integration file (82 -> 83): the ClickHouse posture-manifest
     # check (SHOW GRANTS FOR CURRENT_USER parsing), proved against a real
     # server including its missing-privilege/extra-grant negative controls.
-    # CURRENT TOTAL: 83. Adding one -tags=integration package bumps every
-    # literal below by +1 -- this is the one number to change; the
-    # narrative above is for someone auditing history, not for the bump.
-    # CHAOS-6461 added internal/chmigrate and CHAOS-6462 internal/pgmigrate
-    # (85 -> 87): the ClickHouse and PostgreSQL head baselines, each
-    # re-derived by executing its Python chain, and dho's migrators checked
-    # against them.
-    # CHAOS-6368 added internal/auth/ratelimitvalkey (87 -> 88): the shared
-    # rate-limit store against a real Valkey.
-    # internal/api/externalurl (88 -> 89): the external URL guard's venue
-    # differential oracle against the real Python guard.
-    assert "89 package(s) discovered, 0 denylisted, 89 will run" in result.stdout
+    # The count is derived, not pinned: the discovery verb's own total must
+    # equal the shard manifest's package rows (tests/tooling/
+    # test_go_integration_sharding.py holds the manifest to EXPECTED_PACKAGES),
+    # so adding an integration package edits the two lists and never a
+    # number. The narrative above is history only.
+    match = re.search(
+        r"(\d+) package\(s\) discovered, 0 denylisted, (\d+) will run", result.stdout
+    )
+    assert match, result.stdout
+    discovered, will_run = int(match.group(1)), int(match.group(2))
+    manifest = _manifest_packages()
+    assert discovered == will_run == len(manifest), (
+        f"discovered={discovered} will_run={will_run} manifest_rows={len(manifest)}"
+    )
     # Name the package explicitly (SET MEMBERSHIP), not just the count --
     # a bare count is exactly what let CHAOS-4643's own literal drift
     # 31 -> 32 -> 33 unnoticed.

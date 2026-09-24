@@ -236,12 +236,15 @@ func apiV1Routes(routes []RESTRoute) []RESTRoute {
 
 var muxHandleFuncRe = regexp.MustCompile(`mux\.HandleFunc\(\s*"(/api/v1/[^"]+)"\s*,\s*([A-Za-z0-9_]+)\s*\)`)
 
-// builderAssignRe finds `<handlerVar>, ... := <builderFunc>()` -- the shape
-// every /api/v1/* route in query-api's main.go uses today
+// builderAssignRe finds `<handlerVar>, ... := <builderFunc>(<args>)` -- the
+// shape every /api/v1/* route in query-api's server.go uses today
 // (`explainHandler, explainCleanup, explainOK, explainErr :=
-// buildInvestmentExplainRoute()`) to build its handler before mounting it.
+// buildInvestmentExplainRoute(getenv)`) to build its handler before mounting
+// it. The argument list is matched loosely (no nested parentheses): a builder
+// that gains a parameter must still resolve to its definition, not fall back
+// to the mount site.
 func builderAssignRe(handlerVar string) *regexp.Regexp {
-	return regexp.MustCompile(regexp.QuoteMeta(handlerVar) + `\s*,[^\n=]*:=\s*([A-Za-z0-9_]+)\(\)`)
+	return regexp.MustCompile(regexp.QuoteMeta(handlerVar) + `\s*,[^\n=]*:=\s*([A-Za-z0-9_]+)\([^()\n]*\)`)
 }
 
 func funcDefRe(name string) *regexp.Regexp {
@@ -249,10 +252,10 @@ func funcDefRe(name string) *regexp.Regexp {
 }
 
 // LoadQueryAPIMuxRoutes mechanically parses every `/api/v1/*`
-// `mux.HandleFunc` registration across query-api's own top-level source
-// files (not `internal/`, not `tools/`, not `_test.go` -- the mux itself is
-// built in `cmd/query-api`'s own package). Read it from the Go source, not
-// from a registry: query-api has none for its REST surface, only for
+// `mux.HandleFunc` registration across the source files of query-api's
+// server package, internal/queryapi/server (not its subpackages, not
+// `_test.go` -- the mux itself is built there). Read it from the Go source,
+// not from a registry: query-api has none for its REST surface, only for
 // GraphQL operations.
 //
 // For each registration this also tries to resolve the handler's builder
@@ -262,12 +265,12 @@ func funcDefRe(name string) *regexp.Regexp {
 // not a bug: it is a real, if less useful, "Go handler location".
 // queryAPILoc renders a "Go handler location" citation for a file inside
 // query-api's own directory. It names the file relative to
-// cmd/query-api/ -- a fixed, repo-relative label, deliberately NOT derived
-// from the caller-supplied queryAPIDir argument, which can be absolute
-// (a test's t.TempDir(), or -root resolved to an absolute path) and would
-// otherwise leak a build-machine path onto the rendered page.
+// internal/queryapi/server/ -- a fixed, repo-relative label, deliberately NOT
+// derived from the caller-supplied queryAPIDir argument, which can be
+// absolute (a test's t.TempDir(), or -root resolved to an absolute path) and
+// would otherwise leak a build-machine path onto the rendered page.
 func queryAPILoc(name string, line int) string {
-	return fmt.Sprintf("cmd/query-api/%s:%d", filepath.Base(name), line)
+	return fmt.Sprintf("internal/queryapi/server/%s:%d", filepath.Base(name), line)
 }
 
 func LoadQueryAPIMuxRoutes(queryAPIDir string) ([]QueryAPIMuxRoute, error) {

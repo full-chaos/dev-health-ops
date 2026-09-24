@@ -888,7 +888,7 @@ func staticCredentialForTest() *goapiproof.Credential {
 // mounts, or a mounted route with no corpus entry, fails here before it
 // can fail silently in a live run.
 func TestCorpusCoversExactlyWhatQueryAPIMounts(t *testing.T) {
-	mounted, err := migrationmatrix.LoadQueryAPIMuxRoutes("../../../cmd/query-api")
+	mounted, err := migrationmatrix.LoadQueryAPIMuxRoutes("../../../internal/queryapi/server")
 	if err != nil {
 		t.Fatalf("LoadQueryAPIMuxRoutes: %v", err)
 	}
@@ -910,7 +910,7 @@ func TestCorpusCoversExactlyWhatQueryAPIMounts(t *testing.T) {
 // updated to match. This is the test MountedRESTPaths' own doc comment
 // tells a developer to run and read before hand-editing the list.
 func TestMountedRESTPathsMatchesTheRealQueryAPIMux(t *testing.T) {
-	mounted, err := migrationmatrix.LoadQueryAPIMuxRoutes("../../../cmd/query-api")
+	mounted, err := migrationmatrix.LoadQueryAPIMuxRoutes("../../../internal/queryapi/server")
 	if err != nil {
 		t.Fatalf("LoadQueryAPIMuxRoutes: %v", err)
 	}
@@ -921,7 +921,7 @@ func TestMountedRESTPathsMatchesTheRealQueryAPIMux(t *testing.T) {
 	sort.Strings(live)
 	checkedIn := goapiproof.MountedRESTPaths()
 	if !slices.Equal(live, checkedIn) {
-		t.Fatalf("goapiproof.MountedRESTPaths (internal/goapiproof/restmounted.go) has drifted from the real cmd/query-api mux:\n  live:       %v\n  checked-in: %v\nUpdate the mountedRESTPaths literal to match live.", live, checkedIn)
+		t.Fatalf("goapiproof.MountedRESTPaths (internal/goapiproof/restmounted.go) has drifted from the real query-api mux (internal/queryapi/server):\n  live:       %v\n  checked-in: %v\nUpdate the mountedRESTPaths literal to match live.", live, checkedIn)
 	}
 }
 

@@ -615,7 +615,7 @@ var investmentSunburstParity = Options{
 // investmentSunburstDefaultLimit is investment_sunburst's own `limit:
 // int = 500` default (api/main.py, the investment_sunburst route
 // signature) mirrored by newInvestmentSunburstGetHandler's own `limit
-// := 500` (cmd/query-api/investment_route.go): applies only while the
+// := 500` (internal/queryapi/server/investment_route.go): applies only while the
 // request's own query carries no `limit` parameter at all. A PRESENT
 // value (including 0 or a negative number) passes straight through
 // unclamped on both planes; an invalid one is a 422 on both (this
@@ -2119,7 +2119,7 @@ var flamePRIDBoundParity = Options{
 // above establishes -- Paths names the whole payload ("data") because the
 // extra element can appear anywhere in the result list, not under one
 // fixed field. No validation-error entry duplicates the two already-
-// captured 422 fixtures (cmd/query-api/testdata/people_422): this table's
+// captured 422 fixtures (internal/queryapi/server/testdata/people_422): this table's
 // two 422 entries below reproduce them by request shape, not by re-typing
 // a body a live comparison already gets from the real route.
 //
@@ -5806,7 +5806,7 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				BodyMode: RESTBodyModeJSON,
 			},
 			{
-				// Captured live: cmd/query-api/testdata/people_422/
+				// Captured live: internal/queryapi/server/testdata/people_422/
 				// get_non_numeric_limit.json.
 				Name:                "invalid_limit",
 				Query:               url.Values{"limit": {"not-a-number"}},
@@ -5814,7 +5814,7 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				BodyMode: RESTBodyModeJSON,
 			},
 			{
-				// Captured live: cmd/query-api/testdata/people_422/
+				// Captured live: internal/queryapi/server/testdata/people_422/
 				// get_non_numeric_limit_with_comparative_param.json --
 				// byte-identical to invalid_limit's own body, proving
 				// FastAPI's query-parameter validation (422) runs BEFORE

@@ -1514,7 +1514,7 @@ check_live_python_oracles() {
     return 1
   fi
 
-  printf 'go test -count=1: cmd/query-api (POST body validation vs live FastAPI request models)\n'
+  printf 'go test -count=1: internal/queryapi/server (POST body validation vs live FastAPI request models)\n'
   if ! (
     cd "${ROOT}"
     "${GO_ENV_OFF[@]}" \
@@ -1522,7 +1522,7 @@ check_live_python_oracles() {
       DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
       DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
       PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 -run '^TestQueryAPIBodiesMatchLiveFastAPI$' ./cmd/query-api
+      go test -mod=readonly -count=1 -run '^TestQueryAPIBodiesMatchLiveFastAPI$' ./internal/queryapi/server
   ); then
     rm -rf -- "${proof_dir}"
     return 1

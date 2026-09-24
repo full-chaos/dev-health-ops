@@ -17,16 +17,21 @@ func TestBuildSafeURL(t *testing.T) {
 	}
 }
 
-func TestPyJSONDecodeMessage(t *testing.T) {
+func TestJSONObjectErrorText(t *testing.T) {
 	cases := map[string]string{
-		"":           "Expecting value: line 1 column 1 (char 0)",
-		"not json":   "Expecting value: line 1 column 1 (char 0)",
-		"  \n  oops": "Expecting value: line 2 column 3 (char 5)",
-		"\t<html>":   "Expecting value: line 1 column 2 (char 1)",
+		"":                "Expecting value: line 1 column 1 (char 0)",
+		"{":               "Expecting property name enclosed in double quotes: line 1 column 2 (char 1)",
+		"  \n  oops":      "Expecting value: line 2 column 3 (char 5)",
+		`{"a":1,}`:        "Illegal trailing comma before end of object: line 1 column 7 (char 6)",
+		`{"a" 1}`:         "Expecting ':' delimiter: line 1 column 6 (char 5)",
+		`{"a":1} x`:       "Extra data: line 1 column 9 (char 8)",
+		`{"a":"b`:         "Unterminated string starting at: line 1 column 6 (char 5)",
+		"{\"a\":\"\\q\"}": "Invalid \\escape: line 1 column 7 (char 6)",
 	}
 	for body, want := range cases {
-		if got := pyJSONDecodeMessage(body); got != want {
-			t.Errorf("pyJSONDecodeMessage(%q) = %q, want %q", body, got, want)
+		_, err := response{status: 200, body: []byte(body)}.jsonObject()
+		if err == nil || err.Error() != want {
+			t.Errorf("jsonObject(%q) error = %v, want %q", body, err, want)
 		}
 	}
 }

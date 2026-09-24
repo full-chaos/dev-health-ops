@@ -188,9 +188,15 @@ func (r response) text() string { return strings.ToValidUTF8(string(r.body), "ï¿
 // not a JSON object raises in Python (JSONDecodeError or AttributeError) and
 // the route shows its message.
 func (r response) jsonObject() (*pyjson.Object, error) {
+	if message, status := pythonparity.PythonJSONDecode(r.body); status == pythonparity.JSONDecodeError {
+		return nil, errors.New(message)
+	}
 	value, err := pyjson.DecodeString(string(r.body))
 	if err != nil {
-		return nil, errors.New(pyJSONDecodeMessage(string(r.body)))
+		// A body Python's json.loads accepts (NaN) or cannot decode as text
+		// (a non-UTF-8 encoding) and the Go decoder refuses: the message
+		// stays the generic first-character one.
+		return nil, errors.New("Expecting value: line 1 column 1 (char 0)")
 	}
 	object, ok := value.(*pyjson.Object)
 	if !ok {
@@ -215,31 +221,6 @@ func pyTypeName(value pyjson.Value) string {
 		return "list"
 	}
 	return "dict"
-}
-
-// pyJSONDecodeMessage is json.JSONDecodeError's text for a body that does not
-// start a JSON value ("Expecting value: line L column C (char N)"); any other
-// syntax error is reported at the first offending character the same way.
-func pyJSONDecodeMessage(body string) string {
-	text := body
-	if !utf8.ValidString(text) {
-		text = strings.ToValidUTF8(text, "ï¿½")
-	}
-	offset := 0
-	runes := []rune(text)
-	for offset < len(runes) && (runes[offset] == ' ' || runes[offset] == '\t' || runes[offset] == '\n' || runes[offset] == '\r') {
-		offset++
-	}
-	line, column := 1, 1
-	for _, r := range runes[:offset] {
-		if r == '\n' {
-			line++
-			column = 1
-		} else {
-			column++
-		}
-	}
-	return "Expecting value: line " + strconv.Itoa(line) + " column " + strconv.Itoa(column) + " (char " + strconv.Itoa(offset) + ")"
 }
 
 // failedStatus is the shared non-200 shape of the four HTTP probes.

@@ -139,6 +139,20 @@ func (s *probeStub) handle(w http.ResponseWriter, r *http.Request) {
 			write(401, `{"message":"Bad credentials: Authorization: Bearer ghp_abcdefghijklmnopqrstuvwxyz0123"}`)
 		case "ghp_junk":
 			write(200, `not json`)
+		case "ghp_junk_open":
+			write(200, `{`)
+		case "ghp_junk_comma":
+			write(200, "{\"login\":\"octo\",\n}")
+		case "ghp_junk_colon":
+			write(200, `{"login" "octo"}`)
+		case "ghp_junk_extra":
+			write(200, `{"login":"octo"} tail`)
+		case "ghp_junk_cut":
+			write(200, `{"login":"oc`)
+		case "ghp_junk_escape":
+			write(200, `{"login":"\q"}`)
+		case "ghp_junk_utf":
+			write(200, "{\"login\":\"\u00e9\u65e5\",\n \u65e5}")
 		case "ghp_list":
 			write(200, `[1,2]`)
 		case "ghp_long":
@@ -387,6 +401,9 @@ func probeRequests(tokens map[string]string, ids map[string]string, pemKey strin
 	inline("test: github inline ok", "github", `{"token":"ghp_ok"}`)
 	inline("test: github inline null name", "github", `{"token":"ghp_nullname"}`)
 	inline("test: github inline junk body", "github", `{"token":"ghp_junk"}`)
+	for _, kind := range []string{"open", "comma", "colon", "extra", "cut", "escape", "utf"} {
+		inline("test: github malformed json body "+kind, "github", `{"token":"ghp_junk_`+kind+`"}`)
+	}
 	inline("test: github inline list body", "github", `{"token":"ghp_list"}`)
 	inline("test: github inline long error body", "github", `{"token":"ghp_long"}`)
 	inline("test: github inline redirect", "github", `{"token":"ghp_redirect"}`)

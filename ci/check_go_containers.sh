@@ -427,6 +427,21 @@ smoke_migrate_clickhouse() {
     || die "${tag}: dho migrate clickhouse status did not report the missing CLICKHOUSE_URI: ${output}"
 }
 
+# smoke_migrate_postgres runs `dho migrate postgres status` with no database
+# configured: the verb must be reached, load the embedded head baselines, and
+# fail closed (exit 1) with the migration-DSN refusal the River verb prints --
+# not an unknown command (exit 2) or a missing baseline.
+smoke_migrate_postgres() {
+  local tag="$1" output code
+  set +e
+  output="$(docker run --rm "${CONTAINER_SECURITY_ARGS[@]}" "${tag}" migrate postgres status 2>&1 >/dev/null)"
+  code=$?
+  set -e
+  [ "${code}" = "1" ] || die "${tag}: dho migrate postgres status without a DSN exited ${code}, want 1: ${output}"
+  printf '%s' "${output}" | grep -F 'neither MIGRATION_DATABASE_URI nor POSTGRES_URI is set' >/dev/null \
+    || die "${tag}: dho migrate postgres status did not report the missing migration DSN: ${output}"
+}
+
 # smoke_workers_vertical runs `dho workers status` with no database
 # configured: the verb tree must be reached and fail closed with the JSON
 # configuration error naming the first missing DSN (exit 1), not an unknown
@@ -461,6 +476,7 @@ smoke_dho() {
     || die "dho did not report injected version metadata"
   smoke_migrate_river "${tag}"
   smoke_migrate_clickhouse "${tag}"
+  smoke_migrate_postgres "${tag}"
 
   ACTIVE_CONTAINER="${container_name}"
   docker run --detach \

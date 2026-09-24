@@ -39,6 +39,22 @@ for text in json.loads(sys.stdin.read()):
 print(json.dumps(out))
 `
 
+// pythonPlainIntProgram is pydantic's unbounded int validation of each text:
+// the exact parsed value, or the error type. The bounded program above only
+// shows which side of a bound a value fell on.
+const pythonPlainIntProgram = `
+import json, sys
+from pydantic import TypeAdapter, ValidationError
+ta = TypeAdapter(int)
+out = []
+for text in json.loads(sys.stdin.read()):
+    try:
+        out.append(str(ta.validate_python(text)))
+    except ValidationError as exc:
+        out.append("E:" + exc.errors()[0]["type"])
+print(json.dumps(out))
+`
+
 // fuzzQueryInts adds deterministic random strings over the characters the
 // grammar cares about, so a rule the corpus does not name still meets
 // pydantic.
@@ -155,6 +171,32 @@ func TestQueryIntMatchesLivePydantic(t *testing.T) {
 		if got != expected {
 			mismatches++
 			t.Errorf("%s: go %q, python %q", abbreviate(text), got, expected)
+		}
+	}
+	// The exact parsed value, unbounded: a wrong value on the same side of a
+	// bound would pass the bounded comparison above.
+	plain := exec.Command(python, "-c", pythonPlainIntProgram)
+	plain.Stdin = strings.NewReader(string(input))
+	plainOutput, err := plain.CombinedOutput()
+	if err != nil {
+		t.Fatalf("live pydantic (plain int): %v", pyoracle.RunError(python, err, plainOutput))
+	}
+	plainLines := strings.Split(strings.TrimSpace(string(plainOutput)), "\n")
+	var plainWant []string
+	if err := json.Unmarshal([]byte(plainLines[len(plainLines)-1]), &plainWant); err != nil || len(plainWant) != len(corpus) {
+		t.Fatalf("decode plain: %v (%d of %d)", err, len(plainWant), len(corpus))
+	}
+	for index, text := range corpus {
+		value, failure := ParsePydanticInt(text)
+		var got string
+		if failure != nil {
+			got = "E:" + failure.Type
+		} else {
+			got = value.String()
+		}
+		if got != plainWant[index] {
+			mismatches++
+			t.Errorf("%s: go value %q, python %q", abbreviate(text), got, plainWant[index])
 		}
 	}
 	if proof := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR"); proof != "" {

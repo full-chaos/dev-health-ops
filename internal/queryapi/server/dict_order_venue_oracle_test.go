@@ -165,7 +165,7 @@ func TestVenueOracleQueryAPIDictOrder(t *testing.T) {
 	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
 	orgID := uuid.NewString()
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Root:   root,
+		Root: root,
 		// A key made per run: no route here checks a token, and a fixed
 		// literal would read as a secret to the secret scan.
 		JWTKey: uuid.NewString() + uuid.NewString(),

@@ -962,14 +962,16 @@ func tail(text string) string {
 // on nothing. Called from Diff, not Start -- see Diff's doc comment for why.
 // DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is optional: unset (the common
 // local case) writes nothing and is not an error.
-func writeProof(t *testing.T) {
+func writeProof(t *testing.T) { writeProofText(t, "executed") }
+
+func writeProofText(t *testing.T, text string) {
 	t.Helper()
 	proofDir := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
 	if proofDir == "" {
 		return
 	}
 	name := strings.NewReplacer("/", "_", " ", "_").Replace(t.Name())
-	if err := os.WriteFile(filepath.Join(proofDir, name), []byte("executed"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(proofDir, name), []byte(text), 0o600); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -978,8 +980,22 @@ func writeProof(t *testing.T) {
 // comparison shape does not fit Diff (e.g. comparing stored digest VALUES
 // across planes, or planting a row cross-plane and retrying) and so calls
 // ServePython/Do/TableRows directly instead. Such a test must call this
-// itself once its real, both-planes comparison has actually run -- the
-// discovery in ci/check_go.sh's venue-oracles verb finds it by its
-// ...VenueOracle... name regardless, and fails loudly if no proof file
-// shows up for it.
+// itself once its real, both-planes comparison has actually run; a test
+// that compares no Python response calls WriteGoOnlyProof instead. The
+// venue-oracles verb in ci/check_go.sh fails loudly when a test it
+// discovered leaves no proof file.
 func WriteProof(t *testing.T) { writeProof(t) }
+
+// WriteGoOnlyProof marks that THIS test ran its measurement to the end in
+// the venue but compared no Python response: it checks Go against a
+// recorded Python truth or a property of the venue itself. reason says
+// what it measures. The venue-oracles verb accepts this proof, counts it
+// apart from the both-planes proofs and names the test and reason in its
+// summary, so a Go-only check never reads as a parity comparison.
+func WriteGoOnlyProof(t *testing.T, reason string) {
+	t.Helper()
+	if strings.TrimSpace(reason) == "" || strings.ContainsAny(reason, "\n\r") {
+		t.Fatal("WriteGoOnlyProof needs a one-line reason naming what the test measures instead of a Python response")
+	}
+	writeProofText(t, "go-only: "+reason)
+}

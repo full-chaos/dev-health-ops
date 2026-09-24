@@ -241,6 +241,10 @@ func TestSetUserPasswordRateLimitWindowDoesNotRollOverEarly(t *testing.T) {
 	if got := call(6); got != 200 {
 		t.Fatalf("call 7 just past t=60m = %d, want 200 (fresh window)", got)
 	}
+	// This test compares Go against a recorded Python ground truth, not a
+	// second live plane, so it has no Diff; the Go-only proof marks that all
+	// seven calls ran.
+	venueoracle.WriteGoOnlyProof(t, "Go's password rate-limit window against the recorded Python fixed window (7 calls over 60m)")
 }
 
 // TestSetUserPasswordValidationBeforeLimitVenueOracle is CHAOS-6435's class

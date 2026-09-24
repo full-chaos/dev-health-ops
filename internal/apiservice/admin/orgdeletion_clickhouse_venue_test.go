@@ -206,4 +206,8 @@ VALUES ($1, 'venue-chdel-super@example.com', true, true, true, 0, now(), now())`
 	if got := countGitBlame(controlOrgID); got == 0 {
 		t.Fatal("control org's own git_blame row is gone too -- the zero-rows-everywhere check above would be vacuous proof; the delete over-scoped")
 	}
+	// A Go-only check over the venue (no second plane, so no Diff): the
+	// Go-only proof marks that the delete ran and every discovered table was
+	// read.
+	venueoracle.WriteGoOnlyProof(t, "Go's org delete leaves no row of the org in any discovered ClickHouse table, and the control org's rows stay")
 }

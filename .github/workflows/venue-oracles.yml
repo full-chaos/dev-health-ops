@@ -59,7 +59,10 @@ jobs:
     # closure -- discovered the hard way when this job's own PR first failed
     # go-quality with `ModuleNotFoundError: alembic`.
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # The verb runs its packages one after another; a full local run took
+    # 39 minutes and the hosted one 28, with more oracles landing. Each
+    # package's own go test is bounded at 40 minutes inside the verb.
+    timeout-minutes: 75
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository_owner }}
     steps:

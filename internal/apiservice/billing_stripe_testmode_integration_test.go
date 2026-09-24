@@ -32,6 +32,8 @@ import (
 // product. Afterwards both subscriptions are read back from Stripe and
 // compared field by field; the products and prices the run created are
 // archived and the subscriptions canceled at cleanup.
+//
+//venueoracle:local-only needs a Stripe test-mode key hosted CI does not hold
 func TestStripeTestModeBillingDifferential(t *testing.T) {
 	if os.Getenv("DEV_HEALTH_STRIPE_TEST_MODE") != "1" {
 		t.Skip("real Stripe test mode runs only with DEV_HEALTH_STRIPE_TEST_MODE=1 (local receipt)")

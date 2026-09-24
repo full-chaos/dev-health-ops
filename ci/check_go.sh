@@ -84,8 +84,10 @@ usage() {
          containers AND the whole real FastAPI app, a heavier requirement
          than any live-python-oracles block above -- needs the FULL project
          Python environment (`uv sync`), never the narrow
-         ci/requirements-live-python-oracles.txt closure. Discovery is a
-         grep for VenueOracle-named tests, never a hardcoded list. Fails if
+         ci/requirements-live-python-oracles.txt closure. Discovery is
+         every test reaching a venueoracle harness entry point (a
+         test marked //venueoracle:local-only is named and left out),
+         never a hardcoded list. Fails if
          any discovered test has no proof file afterward (a skip, never a
          silent pass) or if discovery finds nothing. Requires
          DEV_HEALTH_LIVE_PYTHON_ORACLES=1 already set by the caller -- this
@@ -1607,21 +1609,37 @@ check_live_python_oracles() {
 # ci/requirements-live-python-oracles.txt closure. It is invoked ONLY from
 # the dedicated venue-oracles CI job, never from `ci`/`fast`/`all`.
 #
-# Discovery is a grep over every *_test.go for `^func Test...VenueOracle...`,
-# never a hardcoded name list: a new venue-oracle test anywhere in the tree
-# is picked up the next time this runs, with no edit here. Tests are grouped
-# by their containing directory and run one `go test` invocation per package
-# (team-lead's shape, CHAOS-6314) -- today that is exactly one package
-# (internal/apiservice), but the grouping does not assume that stays true.
+# Discovery is by the harness, never by a test's name or a hardcoded list:
+# in every package that has a *_test.go importing
+# internal/testsupport/venueoracle, every top-level Test function (TestMain
+# aside) whose code reaches a harness entry point -- a call of
+# venueoracle.Start, Diff, WriteProof or WriteGoOnlyProof in its own body,
+# or a name (function, var, const or type) of the same package's test files
+# that reaches one, followed to a fixed point -- is discovered (a unit test
+# that only reaches a pure helper such as venueoracle.RedactJSON is not),
+# whatever its parameter is called, however its signature is wrapped, and
+# in whichever file of the package its helpers live (a name-based grep once
+# ran 2 of the 13 admin oracles; a one-line `(t *testing.T)` pattern missed
+# wrapped signatures and cross-file helpers). The match is by name within
+# the package, so it can only err towards discovering too much, and a
+# wrongly discovered test fails the verb loudly (no proof), never silently.
+# The one opt-out is VENUE_ORACLE_LOCAL_ONLY_MARKER directly above a test,
+# logged by name and counted in the summary; a harness package that runs
+# no test at all fails the verb. Tests run one `go test` invocation per
+# package.
 #
-# Each discovered test's own venueoracle.Diff writes a proof file (its own
-# t.Name()) into DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR once it has
-# actually sent a request to both planes and compared them -- NOT Start,
-# which only proves the venue was built, not that anything was compared.
-# This verb fails loudly, rule-4-style, if that file is missing for ANY
-# discovered name after every invocation completes, or if discovery itself
-# found zero tests (the discovery mechanism is broken, not a genuinely
-# oracle-free tree).
+# Each discovered test's own venueoracle.Diff (or WriteProof) writes a proof
+# file (its own t.Name()) into DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR once it
+# has actually sent a request to both planes and compared them -- NOT Start,
+# which only proves the venue was built, not that anything was compared. A
+# test that compares no Python response (Go against a recorded Python truth,
+# or a property of the venue) writes a Go-only proof instead
+# (venueoracle.WriteGoOnlyProof, "go-only: <reason>"): accepted, but counted
+# apart and named with its reason in the summary, so it never reads as a
+# parity comparison. This verb fails loudly, rule-4-style, if a proof is
+# missing for ANY discovered name after every invocation completes, or if
+# discovery itself found zero tests (the discovery mechanism is broken, not
+# a genuinely oracle-free tree).
 #
 # Two same-named VenueOracle tests in one directory (an internal test
 # package and an external `_test` package can both declare the identical
@@ -1641,41 +1659,59 @@ check_live_python_oracles() {
 # has a legitimate reason to skip under it. Each package also gets its own
 # proof subdirectory, not one shared namespace, so two DIFFERENT packages
 # with a same-named test can't let one satisfy the other's check.
+# VENUE_ORACLE_LOCAL_ONLY_MARKER, on the line directly above a test
+# function, keeps that one test out of this verb: it is for a test that
+# needs something hosted CI does not hold (a real Stripe test-mode key) and
+# skips without it. The marker is named in the log, never silent.
+VENUE_ORACLE_LOCAL_ONLY_MARKER='//venueoracle:local-only'
+
+# venue_oracle_package_tests reads one package's *_test.go files (its
+# arguments) and prints "RUN <Test>" for each discovered test and "LOCAL
+# <Test> <file>" for one carrying the local-only marker (see Discovery
+# above).
+venue_oracle_package_tests() {
+  awk -v marker="${VENUE_ORACLE_LOCAL_ONLY_MARKER}" -f "${ROOT}/ci/venue_oracle_discovery.awk" "$@"
+}
+
+
 check_venue_oracles() {
   [ "${DEV_HEALTH_LIVE_PYTHON_ORACLES:-}" = "1" ] \
     || die "venue-oracles requires DEV_HEALTH_LIVE_PYTHON_ORACLES=1 (this verb never sets it itself -- a skip must be visible to the caller, not swallowed here)"
   command -v jq >/dev/null 2>&1 \
     || die "venue-oracles requires jq to read go test -json status events (a text-line grep cannot see a subtest skip or tell captured output from a real status line)"
 
-  local proof_dir file dir names name total=0
-  local -a vo_dirs=() vo_names=()
+  local proof_dir dir kind name file names total=0
+  local -a vo_dirs=() vo_names=() local_only=()
   proof_dir="$(mktemp -d "${TMPDIR:-/tmp}/dev-health-venue-oracles.XXXXXX")"
 
-  while IFS= read -r file; do
-    dir="$(dirname "${file}")"
+  while IFS= read -r dir; do
     names=""
-    while IFS= read -r name; do
-      names="${names:+${names}|}${name}"
-      total=$((total + 1))
-    done < <(grep -ohE '^func Test[A-Za-z0-9_]*VenueOracle[A-Za-z0-9_]*' "${file}" | sed 's/^func //')
-    [ -n "${names}" ] || continue
-    local found=0 index
-    for index in "${!vo_dirs[@]}"; do
-      if [ "${vo_dirs[${index}]}" = "${dir}" ]; then
-        vo_names[index]="${vo_names[${index}]}|${names}"
-        found=1
-        break
-      fi
-    done
-    if [ "${found}" -eq 0 ]; then
-      vo_dirs+=("${dir}")
-      vo_names+=("${names}")
+    while read -r kind name file; do
+      case "${kind}" in
+        RUN)
+          names="${names:+${names}|}${name}"
+          total=$((total + 1))
+          ;;
+        LOCAL)
+          printf 'venue-oracles: %s in %s is marked local-only and is not run here\n' "${name}" "${file}" >&2
+          local_only+=("${name}")
+          ;;
+      esac
+    done < <(venue_oracle_package_tests "${dir}"/*_test.go | LC_ALL=C sort)
+    if [ -z "${names}" ]; then
+      # A package that imports the harness and runs no test through it --
+      # every oracle opted out, or a helper nothing calls -- runs zero
+      # comparisons while reading as covered: refuse it.
+      rm -rf -- "${proof_dir}"
+      die "venue-oracles: ${dir} imports the venue harness but no test there is run by this verb (local-only: ${#local_only[@]} so far) -- an oracle package that runs zero comparisons must not read as covered"
     fi
-  done < <(grep -rl '^func Test.*VenueOracle' --include='*_test.go' "${ROOT}" | LC_ALL=C sort)
+    vo_dirs+=("${dir}")
+    vo_names+=("${names}")
+  done < <(grep -rlF --include='*_test.go' '"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"' "${ROOT}" | xargs -n1 dirname | LC_ALL=C sort -u)
 
   if [ "${total}" -eq 0 ]; then
     rm -rf -- "${proof_dir}"
-    die "venue-oracles: discovered zero VenueOracle-named tests -- the discovery mechanism itself is almost certainly broken, not a genuinely oracle-free tree"
+    die "venue-oracles: discovered zero venue-oracle tests -- the discovery mechanism itself is almost certainly broken, not a genuinely oracle-free tree"
   fi
 
   local index dup_names
@@ -1689,7 +1725,8 @@ check_venue_oracles() {
 
   printf 'venue-oracles: %d test(s) discovered across %d package(s)\n' "${total}" "${#vo_dirs[@]}"
 
-  local rel pattern pkg_proof_dir json_log stderr_log go_test_status failed=0
+  local rel pattern pkg_proof_dir json_log stderr_log go_test_status proof failed=0
+  local -a compared=() go_only=()
   for index in "${!vo_dirs[@]}"; do
     rel="./${vo_dirs[${index}]#"${ROOT}"/}"
     pattern="^(${vo_names[${index}]})\$"
@@ -1707,7 +1744,8 @@ check_venue_oracles() {
         GOWORK=off \
         DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
         DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${pkg_proof_dir}" \
-        go test -mod=readonly -tags=integration -count=1 -timeout=20m \
+        PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
+        go test -mod=readonly -tags=integration -count=1 -timeout=40m \
           -run "${pattern}" -json "${rel}"
     ) >"${json_log}" 2>"${stderr_log}" || go_test_status=$?
 
@@ -1731,15 +1769,29 @@ check_venue_oracles() {
           "${json_log}" >/dev/null 2>&1; then
         printf 'ERROR: venue oracle %s (or one of its subtests) reported SKIP -- a discovered venue oracle test must never skip under this verb; no real comparison ran\n' "${name}" >&2
         failed=1
-      elif [ ! -f "${pkg_proof_dir}/${name}" ] || [ "$(cat "${pkg_proof_dir}/${name}")" != "executed" ]; then
+      elif [ ! -f "${pkg_proof_dir}/${name}" ]; then
         printf 'ERROR: venue oracle %s did not run a real comparison (no proof file in its own package directory -- venueoracle.Diff was likely never reached)\n' "${name}" >&2
         failed=1
+      else
+        proof="$(cat "${pkg_proof_dir}/${name}")"
+        case "${proof}" in
+          executed) compared+=("${name}") ;;
+          "go-only: "?*) go_only+=("${name} (${proof#go-only: })") ;;
+          *)
+            printf 'ERROR: venue oracle %s left an unknown proof %q\n' "${name}" "${proof}" >&2
+            failed=1
+            ;;
+        esac
       fi
     done
     rm -f -- "${json_log}"
   done
 
   rm -rf -- "${proof_dir}"
+  printf 'venue-oracles summary: %d discovered; %d compared both planes; %d Go-only (no Python plane); %d local-only (not run here)\n' \
+    "${total}" "${#compared[@]}" "${#go_only[@]}" "${#local_only[@]}"
+  for name in "${go_only[@]}"; do printf '  go-only:    %s\n' "${name}"; done
+  for name in "${local_only[@]}"; do printf '  local-only: %s\n' "${name}"; done
   [ "${failed}" -eq 0 ] || return 1
 }
 

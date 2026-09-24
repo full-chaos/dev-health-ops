@@ -38,6 +38,9 @@ on:
       # compiled binary and is covered by that package's tests -- but it is
       # a .sql file, which no other pattern here matches (CHAOS-4882).
       - 'internal/storage/postgres/authschema/migrations/**'
+      # internal/pgmigrate //go:embed-s its sql/ chain directory, so a file
+      # there is an input of the Go build and its tests.
+      - 'internal/pgmigrate/sql/**'
       # internal/chmigrate //go:embed-s its sql/ chain directory, so a file
       # there is an input of the Go build and its tests.
       - 'internal/chmigrate/sql/**'
@@ -179,6 +182,9 @@ on:
       # compiled binary and is covered by that package's tests -- but it is
       # a .sql file, which no other pattern here matches (CHAOS-4882).
       - 'internal/storage/postgres/authschema/migrations/**'
+      # internal/pgmigrate //go:embed-s its sql/ chain directory, so a file
+      # there is an input of the Go build and its tests.
+      - 'internal/pgmigrate/sql/**'
       # internal/chmigrate //go:embed-s its sql/ chain directory, so a file
       # there is an input of the Go build and its tests.
       - 'internal/chmigrate/sql/**'

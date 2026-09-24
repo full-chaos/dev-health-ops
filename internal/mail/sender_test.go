@@ -25,6 +25,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -189,10 +190,35 @@ func TestResendSenderTreatsAConnectionRefusalAsDefinitelyNotSent(t *testing.T) {
 // DATA, then the connection was lost before the acknowledgement" -- and
 // "reject" replies with an explicit SMTP error code, the server's definite,
 // stated answer rather than a lost one.
+//
+// Its goroutine logs through the test's t, so it must end before the test
+// does: start registers a t.Cleanup that closes the listener and the
+// accepted connection and then waits for the goroutine. A log line after
+// the test has completed panics ("Log in goroutine after ... has
+// completed") and is a data race under -race.
 type fakeSMTPServer struct {
 	listener net.Listener
 	behavior string           // "ack", "hangup", or "reject"
 	tlsCert  *tls.Certificate // non-nil enables STARTTLS (CHAOS-5400)
+
+	mu   sync.Mutex
+	conn net.Conn // the accepted connection, once there is one
+	done chan struct{}
+}
+
+// start serves one connection in a goroutine and makes the test wait for it.
+func (server *fakeSMTPServer) start(t *testing.T) {
+	server.done = make(chan struct{})
+	go server.serveOne(t)
+	t.Cleanup(func() {
+		_ = server.listener.Close()
+		server.mu.Lock()
+		if server.conn != nil {
+			_ = server.conn.Close()
+		}
+		server.mu.Unlock()
+		<-server.done
+	})
 }
 
 func newFakeSMTPServer(t *testing.T, behavior string) *fakeSMTPServer {
@@ -202,7 +228,7 @@ func newFakeSMTPServer(t *testing.T, behavior string) *fakeSMTPServer {
 		t.Fatal(err)
 	}
 	server := &fakeSMTPServer{listener: listener, behavior: behavior}
-	go server.serveOne(t)
+	server.start(t)
 	return server
 }
 
@@ -216,17 +242,21 @@ func newFakeSTARTTLSSMTPServer(t *testing.T, behavior string, cert tls.Certifica
 		t.Fatal(err)
 	}
 	server := &fakeSMTPServer{listener: listener, behavior: behavior, tlsCert: &cert}
-	go server.serveOne(t)
+	server.start(t)
 	return server
 }
 
 func (server *fakeSMTPServer) addr() string { return server.listener.Addr().String() }
 
 func (server *fakeSMTPServer) serveOne(t *testing.T) {
+	defer close(server.done)
 	conn, err := server.listener.Accept()
 	if err != nil {
 		return // listener closed by test cleanup
 	}
+	server.mu.Lock()
+	server.conn = conn
+	server.mu.Unlock()
 	defer conn.Close()
 	server.serveConn(t, conn, true)
 }

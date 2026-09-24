@@ -21,12 +21,12 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
-// TestCreatePlannerManagedConfigWritesUnderTheAPIRole runs the create
+// TestCreateWriteVenueOracleSequenceUnderTheAPIRole runs the create
 // path's write sequence on the real migrated schema as the api role (so
 // its grants are exercised too) and pins the rows each provider shape
 // leaves. It is not the parity proof: the raw-row differential against
 // the Python create route is the route's venue oracle.
-func TestCreatePlannerManagedConfigWritesUnderTheAPIRole(t *testing.T) {
+func TestCreateWriteVenueOracleSequenceUnderTheAPIRole(t *testing.T) {
 	ctx := context.Background()
 	_, file, _, _ := runtime.Caller(0)
 	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))

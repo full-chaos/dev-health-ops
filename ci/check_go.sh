@@ -1514,7 +1514,7 @@ check_live_python_oracles() {
     return 1
   fi
 
-  printf 'go test -count=1: internal/queryapi/server (POST body validation vs live FastAPI request models; response_model success bodies vs live pydantic dump_json)\n'
+  printf 'go test -count=1: internal/queryapi/server (POST body validation vs live FastAPI request models)\n'
   if ! (
     cd "${ROOT}"
     "${GO_ENV_OFF[@]}" \
@@ -1522,7 +1522,7 @@ check_live_python_oracles() {
       DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
       DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
       PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-      go test -mod=readonly -count=1 -run '^(TestQueryAPIBodiesMatchLiveFastAPI|TestQueryAPIResponseModelsMatchLiveFastAPI)$' ./internal/queryapi/server
+      go test -mod=readonly -count=1 -run '^TestQueryAPIBodiesMatchLiveFastAPI$' ./internal/queryapi/server
   ); then
     rm -rf -- "${proof_dir}"
     return 1
@@ -1530,12 +1530,6 @@ check_live_python_oracles() {
   proof_file="${proof_dir}/query-api-bodies"
   if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
     printf 'ERROR: the query-api POST body live FastAPI oracle measurement did not occur\n' >&2
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
-  proof_file="${proof_dir}/query-api-response-models"
-  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-    printf 'ERROR: the query-api response_model live FastAPI oracle measurement did not occur\n' >&2
     rm -rf -- "${proof_dir}"
     return 1
   fi

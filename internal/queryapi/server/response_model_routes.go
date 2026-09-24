@@ -13,7 +13,7 @@ import (
 // (fastapi/routing.py use_dump_json: a response field and the default
 // response class), which pydantic-core's dump_json renders. Those routes'
 // success bodies go through writeModelResponse. The live registry test
-// (TestQueryAPIResponseModelsMatchLiveFastAPI) fails when this table and
+// (TestVenueOracleQueryAPIResponseModels) fails when this table and
 // the FastAPI app disagree.
 var responseModelRoutes = map[string]bool{
 	"GET /api/v1/meta":                                true,

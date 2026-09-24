@@ -165,7 +165,7 @@ func responseModelOracleRoutes() map[string]responseModelOracleRoute {
 	}
 }
 
-// TestQueryAPIResponseModelsMatchLiveFastAPI checks two things against the
+// TestVenueOracleQueryAPIResponseModels checks two things against the
 // live FastAPI app. The route table: responseModelRoutes names exactly the
 // response_model routes on the paths the query-api serves. The bytes: for
 // each such route, a value of its Go response type, filled from the
@@ -173,10 +173,13 @@ func responseModelOracleRoutes() map[string]responseModelOracleRoute {
 // the production writer and by FastAPI's own response_model path from the
 // same data, and the two bodies must be byte-identical. That also pins
 // field order, int-versus-float field types, and fields the model drops.
-func TestQueryAPIResponseModelsMatchLiveFastAPI(t *testing.T) {
+func TestVenueOracleQueryAPIResponseModels(t *testing.T) {
 	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
+		t.Skip("live Python oracles run only through ci/check_go.sh venue-oracles")
 	}
+	// It imports the whole FastAPI app (dev_health_ops.api.main), so it
+	// needs the full project environment: the venue-oracles job (uv sync),
+	// not the live-python-oracles pin set.
 	_, file, _, _ := runtime.Caller(0)
 	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
 	python := pyoracle.Resolve(t, root)
@@ -351,7 +354,7 @@ func TestQueryAPIResponseModelsMatchLiveFastAPI(t *testing.T) {
 	}
 	t.Logf("%d routes, %d bodies byte-identical to FastAPI's response_model path", len(keys), same)
 	if proof := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR"); proof != "" && !t.Failed() {
-		if err := os.WriteFile(filepath.Join(proof, "query-api-response-models"), []byte("executed"), 0o600); err != nil {
+		if err := os.WriteFile(filepath.Join(proof, t.Name()), []byte("executed"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}

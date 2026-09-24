@@ -239,7 +239,23 @@ func (f *fakeStripe) serve(plane string, w http.ResponseWriter, r *http.Request)
 			stripeFail(w, "refund list refused")
 			return
 		}
-		fmt.Fprint(w, page(fakeLists[path], idOf, after, path))
+		items := fakeLists[path]
+		// Subscriptions, per plane: the first listing holds only org A's
+		// two (a report with a mismatch and nothing missing), the second
+		// fails (a report with nothing at all), later ones hold every one.
+		if path == "/v1/subscriptions" {
+			if after == "" {
+				f.counters[plane+"sub_list_run"]++
+			}
+			switch f.counters[plane+"sub_list_run"] {
+			case 1:
+				items = items[:2]
+			case 2:
+				stripeFail(w, "subscription list refused")
+				return
+			}
+		}
+		fmt.Fprint(w, page(items, idOf, after, path))
 	case r.Method == http.MethodPost && strings.HasPrefix(path, "/v1/invoices/") && strings.HasSuffix(path, "/void"):
 		id := strings.TrimSuffix(strings.TrimPrefix(path, "/v1/invoices/"), "/void")
 		if id == "in_err" {

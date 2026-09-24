@@ -324,12 +324,13 @@ func TestVenueOracleBillingLedger(t *testing.T) {
 	// The reconciliation must have read the fake Stripe lists: a
 	// comparison of two empty Stripe sides would also read SAME.
 	reconcileWants := map[string][]string{
+		// Org A: the subscription listing holds org A's two only.
 		"reconcile: org A": {`"stripe_id":"sub_A","field":"status","local_value":"active","stripe_value":"past_due"`,
-			`"sub_stripe_only"`, `"in_stripe_only"`, `"re_stripe_only"`},
-		// The second refund listing fails: no Stripe refunds that run.
-		"reconcile: org D (nothing)": {`"missing_local":["sub_A","sub_A2","sub_C","sub_stripe_only","in_A1","in_A2","in_B1","in_stripe_only"]`},
+			`"missing_local":["in_B1","in_stripe_only","re_B1","re_stripe_only"]`},
+		// Org D: the subscription and refund listings fail.
+		"reconcile: org D (nothing)": {`"missing_local":["in_A1","in_A2","in_B1","in_stripe_only"]`},
 		"reconcile: all orgs": {`"stripe_id":"in_B1","field":"status","local_value":"void","stripe_value":"uncollectible"`,
-			`"stripe_id":"sub_C","field":"status","local_value":"active","stripe_value":null`, `"re_stripe_only"`},
+			`"stripe_id":"sub_C","field":"status","local_value":"active","stripe_value":null`, `"sub_stripe_only"`, `"re_stripe_only"`},
 	}
 	inspected := 0
 	receipt := venueoracle.Diff(t, base, requests, python, venueoracle.DiffOptions{

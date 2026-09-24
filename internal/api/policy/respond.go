@@ -16,10 +16,9 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"sync/atomic"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
-	"log/slog"
-	"sync/atomic"
 )
 
 // WriteJSON writes body as Starlette's JSONResponse renders it

@@ -31,7 +31,7 @@ func TestSyncConfigDeleteVenueOracle(t *testing.T) {
 	root := repoRoot(t)
 	const jwtKey = "venue-oracle-test-secret-key-for-sync-admin-reads-32b!"
 	ids := newVenueIDs()
-	grandchild, foreignParent := uuid.New(), uuid.New()
+	grandchild, foreignParent, sameNameGitHub := uuid.New(), uuid.New(), uuid.New()
 	t.Setenv("HIDE_MIGRATED_CHILD_CONFIGS", " On ")
 
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
@@ -41,7 +41,7 @@ func TestSyncConfigDeleteVenueOracle(t *testing.T) {
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
 			seedSyncAdmin(t, ctx, admin, ids)
-			seedDeleteReach(t, ctx, admin, ids, grandchild, foreignParent)
+			seedDeleteReach(t, ctx, admin, ids, grandchild, foreignParent, sameNameGitHub)
 			return map[string]map[string]any{
 				"adminA":  {"user_id": ids.adminA.String(), "email": "admin-a@example.com", "org_id": ids.orgA.String(), "role": "admin"},
 				"memberA": {"user_id": ids.memberA.String(), "email": "member-a@example.com", "org_id": ids.orgA.String(), "role": "member"},
@@ -70,6 +70,7 @@ func TestSyncConfigDeleteVenueOracle(t *testing.T) {
 		del("child with a child", ids.child1.String(), a),
 		del("parent of another org's child only", foreignParent.String(), a),
 		del("grandchild", grandchild.String(), a),
+		del("one of two same-name configs", sameNameGitHub.String(), a),
 		del("child after its child is gone", ids.child2.String(), a),
 		del("upper-case braced id", "{"+strings.ToUpper(ids.cfgSingleRepo.String())+"}", a),
 		del("sourced config", ids.childSourced.String(), a),
@@ -101,17 +102,18 @@ FROM pg_constraint WHERE contype = 'f' AND confrelid = 'sync_configurations'::re
 	// with children (the legacy parent, child1 over the grandchild) is
 	// refused whole, so it and its children remain.
 	remaining := venueoracle.TableRows(t, ctx, goDB, fmt.Sprintf(`SELECT
-  (SELECT count(*) FROM sync_configurations WHERE id IN ('%s', '%s', '%s', '%s', '%s')),
+  (SELECT count(*) FROM sync_configurations WHERE id IN ('%s', '%s', '%s', '%s', '%s', '%s')),
   (SELECT count(*) FROM backfill_jobs WHERE sync_config_id = '%s'),
   (SELECT count(*) FROM sync_coverage_projections WHERE sync_config_id = '%s'),
   (SELECT count(*) FROM scheduled_sync_occurrences WHERE sync_config_id = '%s'),
   (SELECT count(*) FROM scheduled_jobs WHERE id = '%s' AND sync_config_id IS NULL),
-  (SELECT count(*) FROM sync_configurations WHERE id IN ('%s', '%s', '%s', '%s'))`,
-		ids.cfgPlanner, grandchild, ids.cfgSingleRepo, ids.childSourced, ids.cfgB,
+  (SELECT count(*) FROM sync_configurations WHERE id IN ('%s', '%s', '%s', '%s')
+     OR (org_id = '%s' AND name = 'same-name' AND provider = 'gitlab'))`,
+		ids.cfgPlanner, grandchild, ids.cfgSingleRepo, ids.childSourced, ids.cfgB, sameNameGitHub,
 		ids.cfgPlanner, ids.cfgPlanner, ids.cfgPlanner, ids.jobSync,
-		ids.cfgLegacyParent, ids.child1, foreignParent, ids.cfgInactive))
-	if remaining != "0 0 0 0 1 4" {
-		t.Errorf("after the deletes (deleted configs, backfill, projections, occurrences, jobs set null, refused and untouched configs) = %s, want 0 0 0 0 1 4", remaining)
+		ids.cfgLegacyParent, ids.child1, foreignParent, ids.cfgInactive, ids.orgA))
+	if remaining != "0 0 0 0 1 5" {
+		t.Errorf("after the deletes (deleted configs, backfill, projections, occurrences, jobs set null, refused and untouched configs) = %s, want 0 0 0 0 1 5", remaining)
 	}
 }
 
@@ -126,7 +128,7 @@ func contains(values []string, want string) bool {
 
 // seedDeleteReach adds the rows only a delete reaches: a grandchild under
 // a legacy child, and schedule occurrences of the planner config.
-func seedDeleteReach(t *testing.T, ctx context.Context, admin *pgxpool.Pool, ids venueIDs, grandchild, foreignParent uuid.UUID) {
+func seedDeleteReach(t *testing.T, ctx context.Context, admin *pgxpool.Pool, ids venueIDs, grandchild, foreignParent, sameNameGitHub uuid.UUID) {
 	t.Helper()
 	exec := func(sql string, args ...any) {
 		t.Helper()
@@ -145,6 +147,17 @@ created_at, updated_at) VALUES ($1, $2, 'foreign-parent', 'github', '["git"]', '
 	exec(`INSERT INTO sync_configurations (id, org_id, name, provider, sync_targets, sync_options, is_active, planner_managed,
 parent_id, created_at, updated_at) VALUES ($1, $2, 'foreign-parent-child', 'github', '["git"]', '{}', true, false, $3,
 '2026-01-01 00:00:32+00', '2026-01-01 00:00:32+00')`, uuid.New(), ids.orgB.String(), foreignParent)
+	// Two org A configs named alike, one per provider: the delete is by
+	// (name, provider), so only the addressed one goes.
+	for index, provider := range []string{"github", "gitlab"} {
+		id := uuid.New()
+		if provider == "github" {
+			id = sameNameGitHub
+		}
+		exec(`INSERT INTO sync_configurations (id, org_id, name, provider, sync_targets, sync_options, is_active, planner_managed,
+created_at, updated_at) VALUES ($1, $2, 'same-name', $3, '["git"]', '{}', true, false, $4::timestamptz, $4::timestamptz)`,
+			id, ids.orgA.String(), provider, fmt.Sprintf("2026-01-01 00:00:4%d+00", index))
+	}
 	for index, at := range []string{"2026-06-01 00:00:00+00", "2026-06-01 01:00:00+00"} {
 		exec(`INSERT INTO scheduled_sync_occurrences (occurrence_id, identity_version, org_id, sync_config_id, scheduled_job_id,
 scheduled_for, reconcile_status, created_at) VALUES ($1, 'v1', $2, $3, $4, $5::timestamptz, 'pending', $5::timestamptz)`,

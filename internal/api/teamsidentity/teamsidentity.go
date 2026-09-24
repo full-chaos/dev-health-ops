@@ -78,6 +78,10 @@ func Routes(conn driver.Conn, guard *policy.Guard, logger *slog.Logger, pool *pg
 		// the identical reason (see the comment above).
 		{Method: http.MethodPost, Pattern: "/api/v1/admin/teams/{team_id}",
 			Handler: h.postTeamRoute(guard)},
+		{Method: http.MethodPost, Pattern: "/api/v1/admin/teams/{team_id}/approve-changes",
+			Handler: h.decodeFirst(guard, http.HandlerFunc(h.approveChanges))},
+		{Method: http.MethodPost, Pattern: "/api/v1/admin/teams/{team_id}/dismiss-changes",
+			Handler: h.decodeFirst(guard, http.HandlerFunc(h.dismissChanges))},
 		{Method: http.MethodGet, Pattern: "/api/v1/admin/identities",
 			Handler: guard.Wrap(policy.AdminOrg, http.HandlerFunc(h.listIdentities))},
 		{Method: http.MethodPost, Pattern: "/api/v1/admin/identities",
@@ -457,6 +461,10 @@ func (h handlers) getTeam(w http.ResponseWriter, r *http.Request) {
 	teamID := pathParam(r, "team_id")
 	if teamID == "discover" {
 		h.discoverTeams(w, r)
+		return
+	}
+	if teamID == "pending-changes" {
+		h.pendingChanges(w, r)
 		return
 	}
 	team, err := h.store.GetTeam(r.Context(), orgIDOf(r.Context()), teamID)

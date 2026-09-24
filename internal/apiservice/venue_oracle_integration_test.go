@@ -40,6 +40,11 @@ const venueKey = "venue-oracle-signing-key-0123456789abcdef"
 // venue oracle diff can blank them before comparing bodies.
 var timestampFieldPattern = regexp.MustCompile(`"(created_at|updated_at|last_drift_sync_at)":"[^"]*"`)
 
+// importedDiscoveredAtPattern matches discovered_at values written by the
+// wall-clock (POST /teams/import) rather than by seedDriftReview, whose rows
+// all carry a fixed 2026-09-01 date and stay compared exactly.
+var importedDiscoveredAtPattern = regexp.MustCompile(`"discovered_at":"(?:2026-09-(?:0[2-9]|[1-3][0-9])|2026-1[0-2]|2027|202[89]|20[3-9][0-9])[^"]*"`)
+
 func venueRoot() string {
 	_, file, _, _ := runtime.Caller(0)
 	return filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
@@ -99,6 +104,8 @@ func TestVenueOracleProtectedRoutes(t *testing.T) {
 		_ = seedConn.Close()
 	}
 
+	seedDriftReview(t, ctx, venue, seed.orgA.String(), seed.orgB.String())
+
 	requests := venueRequests(seed, venue.Tokens)
 	var receipt strings.Builder
 	receipt.WriteString(venueoracle.Diff(t, base, requests, venue.ServePython(t, requests), venueoracle.DiffOptions{
@@ -115,6 +122,7 @@ func TestVenueOracleProtectedRoutes(t *testing.T) {
 		Normalize: func(request venueoracle.Request, body string) string {
 			body = normalizeRuled(body)
 			body = timestampFieldPattern.ReplaceAllString(body, `"$1":"<time>"`)
+			body = importedDiscoveredAtPattern.ReplaceAllString(body, `"discovered_at":"<time>"`)
 			return body
 		},
 		Inspect: func(request venueoracle.Request, goResponse venueoracle.Response) {
@@ -166,6 +174,16 @@ func TestVenueOracleProtectedRoutes(t *testing.T) {
 		`SELECT change_id, entity_type, entity_id, provider, coalesce(native_team_key, '<null>'), change_type,
 			coalesce(field, '<null>'), old_value_json, new_value_json, status, coalesce(decided_by, '<null>')
 		FROM team_drift_changes FINAL WHERE org_id != '' ORDER BY change_id`)
+	compareCHRows(t, ctx, venue, &receipt, "team_memberships",
+		`SELECT provider, team_id, member_id, coalesce(raw_provider_user_id, '<null>'), coalesce(raw_email, '<null>'), identity_facets,
+			source, is_primary, specificity, priority, valid_from, valid_to IS NULL, toUInt8(ifNull(valid_to > valid_from, 0))
+		FROM team_memberships FINAL WHERE org_id != '' ORDER BY provider, team_id, member_id, source, valid_from`)
+	compareCHRows(t, ctx, venue, &receipt, "manual_attribution_fallbacks",
+		`SELECT provider, scope_type, scope_id, team_id, team_name, reason, priority, valid_from, valid_to IS NULL,
+			coalesce(created_by, '<null>'), created_at FROM manual_attribution_fallbacks FINAL WHERE org_id != '' ORDER BY provider, scope_type, scope_id`)
+	compareCHRows(t, ctx, venue, &receipt, "team_drift_changes (seeded review rows, decided fields)",
+		`SELECT change_id, entity_type, entity_id, status, coalesce(decided_by, '<null>'), decided_at IS NOT NULL, first_seen_at, last_seen_at > toDateTime64('2026-09-10', 6)
+		FROM team_drift_changes FINAL WHERE org_id != '' AND change_id LIKE 'c-%' ORDER BY org_id, change_id`)
 	compareCHRows(t, ctx, venue, &receipt, "team_sync_policies",
 		`SELECT team_id, sync_policy, managed_fields, coalesce(updated_by, '<null>')
 		FROM team_sync_policies FINAL WHERE org_id != '' ORDER BY team_id`)

@@ -699,6 +699,11 @@ func catalogStringList(associations *pyjson.Object, key string) ([]string, error
 	if !ok {
 		return []string{}, nil
 	}
+	return arrayStringValue(key, value)
+}
+
+// arrayStringValue is catalogStringList for one already-extracted value.
+func arrayStringValue(key string, value pyjson.Value) ([]string, error) {
 	switch v := value.(type) {
 	case nil:
 		// An explicit null is accepted and stored as an empty array.

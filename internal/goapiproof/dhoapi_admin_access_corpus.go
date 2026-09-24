@@ -17,9 +17,11 @@ package goapiproof
 //   - The {id} routes are sent an id that does not exist (404) or, for the
 //     resource/user lists, an id with no rows (an empty list). The proof org
 //     had no IP-allowlist entry and no retention policy at capture time, so a
-//     produced-id case for those two would have no id to bind; the audit trail
-//     had 2 rows, so a produced-id case for audit-logs/{log_id} is a follow-up
-//     that needs its own capture before its status is set.
+//     produced-id case for those two would have no id to bind. The audit trail
+//     had 2 rows, so audit-logs/{log_id} also has a produced-id case: the id
+//     is read from the first item of the audit-logs list (200 on both planes
+//     in the same capture family, corpus-baseline-admin2). An org with an
+//     empty trail leaves that case unresolved: refused by name, never sent.
 //   - Writes (every POST/PATCH/DELETE of these areas, and the retention
 //     execute) are real use only and have no synthetic case (R402/R406).
 //   - Prod is not covered: it has no org-admin proof principal until
@@ -53,9 +55,32 @@ func adminGET(path, name string, status int, literals map[string]string) RESTEnd
 	}
 }
 
+// adminAuditLogIDProducer names the id read from the audit-logs list's first
+// item and bound into audit-logs/{log_id}.
+const adminAuditLogIDProducer = "admin_audit_log_id"
+
+// withProducer declares that the entry's first request makes an id available.
+func withProducer(spec RESTEndpointSpec, producer RESTIDProducer) RESTEndpointSpec {
+	spec.Requests[0].Produces = append(spec.Requests[0].Produces, producer)
+	return spec
+}
+
+// withSecondRequest adds one more request case to an entry.
+func withSecondRequest(spec RESTEndpointSpec, request RESTRequest) RESTEndpointSpec {
+	spec.Requests = append(spec.Requests, request)
+	return spec
+}
+
 var dhoAPIAdminAccessEndpointSpecs = map[string]RESTEndpointSpec{
-	"REST:GET:/api/v1/admin/audit-logs":                     adminGET("/api/v1/admin/audit-logs", "list", 200, nil),
-	"REST:GET:/api/v1/admin/audit-logs/{log_id}":            adminGET("/api/v1/admin/audit-logs/{log_id}", "missing", 404, map[string]string{"log_id": adminMissingID}),
+	"REST:GET:/api/v1/admin/audit-logs": withProducer(adminGET("/api/v1/admin/audit-logs", "list", 200, nil),
+		RESTIDProducer{Name: adminAuditLogIDProducer, ListPath: "items", IDField: "id"}),
+	"REST:GET:/api/v1/admin/audit-logs/{log_id}": withSecondRequest(adminGET("/api/v1/admin/audit-logs/{log_id}", "missing", 404, map[string]string{"log_id": adminMissingID}),
+		RESTRequest{
+			Name:                "produced",
+			IDBindings:          []RESTIDBinding{{Producer: adminAuditLogIDProducer, PathParam: "log_id"}},
+			WantCandidateStatus: 200, WantBaselineStatus: 200,
+			BodyMode: RESTBodyModeJSON,
+		}),
 	"REST:GET:/api/v1/admin/audit-logs/user/{user_id}":      adminGET("/api/v1/admin/audit-logs/user/{user_id}", "user_without_rows", 200, map[string]string{"user_id": adminMissingID}),
 	"REST:GET:/api/v1/admin/ip-allowlist":                   adminGET("/api/v1/admin/ip-allowlist", "list", 200, nil),
 	"REST:GET:/api/v1/admin/ip-allowlist/{entry_id}":        adminGET("/api/v1/admin/ip-allowlist/{entry_id}", "missing", 404, map[string]string{"entry_id": adminMissingID}),

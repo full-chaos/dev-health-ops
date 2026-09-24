@@ -85,7 +85,9 @@ usage() {
          than any live-python-oracles block above -- needs the FULL project
          Python environment (`uv sync`), never the narrow
          ci/requirements-live-python-oracles.txt closure. Discovery is a
-         grep for VenueOracle-named tests, never a hardcoded list. Fails if
+         every test in a *_test.go importing the venueoracle harness (a
+         test marked //venueoracle:local-only is named and left out),
+         never a hardcoded list. Fails if
          any discovered test has no proof file afterward (a skip, never a
          silent pass) or if discovery finds nothing. Requires
          DEV_HEALTH_LIVE_PYTHON_ORACLES=1 already set by the caller -- this
@@ -1605,9 +1607,13 @@ check_live_python_oracles() {
 # ci/requirements-live-python-oracles.txt closure. It is invoked ONLY from
 # the dedicated venue-oracles CI job, never from `ci`/`fast`/`all`.
 #
-# Discovery is a grep over every *_test.go for `^func Test...VenueOracle...`,
-# never a hardcoded name list: a new venue-oracle test anywhere in the tree
-# is picked up the next time this runs, with no edit here. Tests are grouped
+# Discovery is every top-level test function in every *_test.go that imports
+# internal/testsupport/venueoracle -- the harness import is the marker, not
+# the test's name (a name-based grep once ran 2 of the 13 admin oracles),
+# and never a hardcoded list: a new venue-oracle test anywhere in the tree
+# is picked up the next time this runs, with no edit here. The one opt-out
+# is VENUE_ORACLE_LOCAL_ONLY_MARKER directly above a test, logged by name;
+# a package whose every oracle test is opted out fails the verb. Tests are grouped
 # by their containing directory and run one `go test` invocation per package
 # (team-lead's shape, CHAOS-6314) -- today that is exactly one package
 # (internal/apiservice), but the grouping does not assume that stays true.
@@ -1639,6 +1645,29 @@ check_live_python_oracles() {
 # has a legitimate reason to skip under it. Each package also gets its own
 # proof subdirectory, not one shared namespace, so two DIFFERENT packages
 # with a same-named test can't let one satisfy the other's check.
+# VENUE_ORACLE_LOCAL_ONLY_MARKER, on the line directly above a test
+# function, keeps that one test out of this verb: it is for a test that
+# needs something hosted CI does not hold (a real Stripe test-mode key) and
+# skips without it. The marker is named in the log, never silent.
+VENUE_ORACLE_LOCAL_ONLY_MARKER='//venueoracle:local-only'
+
+# venue_oracle_test_names prints every top-level `func TestX(t *testing.T)`
+# in file, except one whose previous line is the local-only marker (that one
+# is reported on stderr).
+venue_oracle_test_names() {
+  awk -v marker="${VENUE_ORACLE_LOCAL_ONLY_MARKER}" -v file="$1" '
+    /^func Test[A-Za-z0-9_]+\(t \*testing\.T\)/ {
+      name = $2; sub(/\(.*/, "", name)
+      if (index(previous, marker) == 1) {
+        printf "venue-oracles: %s in %s is marked local-only and is not run here\n", name, file > "/dev/stderr"
+      } else {
+        print name
+      }
+    }
+    { previous = $0 }
+  ' "$1"
+}
+
 check_venue_oracles() {
   [ "${DEV_HEALTH_LIVE_PYTHON_ORACLES:-}" = "1" ] \
     || die "venue-oracles requires DEV_HEALTH_LIVE_PYTHON_ORACLES=1 (this verb never sets it itself -- a skip must be visible to the caller, not swallowed here)"
@@ -1646,7 +1675,7 @@ check_venue_oracles() {
     || die "venue-oracles requires jq to read go test -json status events (a text-line grep cannot see a subtest skip or tell captured output from a real status line)"
 
   local proof_dir file dir names name total=0
-  local -a vo_dirs=() vo_names=()
+  local -a vo_dirs=() vo_names=() vo_declared_dirs=()
   proof_dir="$(mktemp -d "${TMPDIR:-/tmp}/dev-health-venue-oracles.XXXXXX")"
 
   while IFS= read -r file; do
@@ -1655,8 +1684,17 @@ check_venue_oracles() {
     while IFS= read -r name; do
       names="${names:+${names}|}${name}"
       total=$((total + 1))
-    done < <(grep -ohE '^func Test[A-Za-z0-9_]*VenueOracle[A-Za-z0-9_]*' "${file}" | sed 's/^func //')
-    [ -n "${names}" ] || continue
+    done < <(venue_oracle_test_names "${file}")
+    if [ -z "${names}" ]; then
+      # A file that imports the harness and declares tests, all of them
+      # marked local-only, contributes nothing; a helper-only file declares
+      # none. Either way, record the directory so an oracle package whose
+      # tests all vanished is caught below.
+      if grep -qE '^func Test[A-Za-z0-9_]+\(t \*testing\.T\)' "${file}"; then
+        vo_declared_dirs+=("${dir}")
+      fi
+      continue
+    fi
     local found=0 index
     for index in "${!vo_dirs[@]}"; do
       if [ "${vo_dirs[${index}]}" = "${dir}" ]; then
@@ -1669,11 +1707,26 @@ check_venue_oracles() {
       vo_dirs+=("${dir}")
       vo_names+=("${names}")
     fi
-  done < <(grep -rl '^func Test.*VenueOracle' --include='*_test.go' "${ROOT}" | LC_ALL=C sort)
+  done < <(grep -rlF --include='*_test.go' '"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"' "${ROOT}" | LC_ALL=C sort)
+
+  # An oracle package whose every test is marked local-only (or whose
+  # discovery otherwise yielded nothing) would run zero comparisons while
+  # reading as covered: refuse it.
+  local declared seen_dir
+  for declared in "${vo_declared_dirs[@]}"; do
+    seen_dir=0
+    for index in "${!vo_dirs[@]}"; do
+      [ "${vo_dirs[${index}]}" = "${declared}" ] && seen_dir=1
+    done
+    if [ "${seen_dir}" -eq 0 ]; then
+      rm -rf -- "${proof_dir}"
+      die "venue-oracles: ${declared} holds venue-oracle tests but none is run here (all marked ${VENUE_ORACLE_LOCAL_ONLY_MARKER}) -- an oracle package that runs zero comparisons must not read as covered"
+    fi
+  done
 
   if [ "${total}" -eq 0 ]; then
     rm -rf -- "${proof_dir}"
-    die "venue-oracles: discovered zero VenueOracle-named tests -- the discovery mechanism itself is almost certainly broken, not a genuinely oracle-free tree"
+    die "venue-oracles: discovered zero venue-oracle tests -- the discovery mechanism itself is almost certainly broken, not a genuinely oracle-free tree"
   fi
 
   local index dup_names

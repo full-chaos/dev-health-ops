@@ -17,7 +17,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/platform/buildstamp"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
+	"github.com/full-chaos/dev-health-ops/internal/platform/version"
 )
 
 // pythonRawGolden is testdata/python_raw_http_golden.json.gz (gzip of JSON): the REAL Python
@@ -88,7 +90,7 @@ func TestServerMatchesThePythonAPIOverRawHTTP(t *testing.T) {
 				// valid (RFC 9110 section 6.2); nothing else may differ.
 				wantLine = strings.Replace(wantLine, "HTTP/1.1 ", "HTTP/1.0 ", 1)
 			}
-			if line != wantLine || status != c.Status || body != c.Body || !reflect.DeepEqual(got, want) || !serverHeaderDecided(headers, c.Headers) {
+			if line != wantLine || status != c.Status || body != c.Body || !reflect.DeepEqual(got, want) || !serverHeaderDecided(headers, c.Headers) || !planeStampDecided(headers) {
 				mismatches++
 				if mismatches <= 8 {
 					t.Errorf("%s %.40s:\n go     %s %q %v %v\n python %s %q %v %v", c.Method, c.Target, line, body, got, headers["server"], c.Line, c.Body, want, c.Headers["server"])
@@ -186,6 +188,25 @@ func firstLine(request []byte) []byte {
 	return line
 }
 
+// planeStampDecided: the Go api stamps x-dev-health-plane: go on every
+// response so the REST prover can tell which plane answered; uvicorn behind
+// the ingress carries no such header. The stamp is asserted here, not
+// compared.
+func planeStampDecided(goHeaders map[string][]string) bool {
+	plane := goHeaders["x-dev-health-plane"]
+	if len(plane) != 1 || plane[0] != "go" {
+		return false
+	}
+	// The build header names this binary's commit whenever it has one; a
+	// binary with no commit stamp carries none (see buildstamp.IsKnownBuild).
+	build := goHeaders["x-dev-health-build"]
+	commit := strings.TrimSpace(version.Current("api").Commit)
+	if !buildstamp.IsKnownBuild(commit) {
+		return len(build) == 0
+	}
+	return len(build) == 1 && build[0] == commit
+}
+
 // serverHeaderDecided: uvicorn sends exactly "server: uvicorn"; the Go api
 // sends no Server header.
 func serverHeaderDecided(goHeaders, pythonHeaders map[string][]string) bool {
@@ -199,6 +220,9 @@ func normalizeRaw(headers map[string][]string) map[string][]string {
 		key := strings.ToLower(name)
 		if key == "server" {
 			continue // asserted separately, see serverHeaderDecided
+		}
+		if key == "x-dev-health-plane" || key == "x-dev-health-build" {
+			continue // asserted separately, see planeStampDecided
 		}
 		copied := append([]string(nil), values...)
 		if key == "date" {
@@ -351,6 +375,11 @@ func loadRawGolden(t *testing.T) pythonRawGolden {
 // startRawServer starts the real api listener, configured through the
 // production config.Load, on a free port.
 func startRawServer(t *testing.T) string {
+	// A test binary carries no commit stamp; give it one so the build half
+	// of the provenance stamp is pinned by planeStampDecided too.
+	previous := version.Commit
+	version.Commit = "rawgolden0123456789abcdef0123456789abcdef01"
+	t.Cleanup(func() { version.Commit = previous })
 	t.Helper()
 	cfg, err := config.Load(config.Spec{Service: config.APIServiceName, LookupEnv: func(key string) (string, bool) {
 		if key == "DEV_HEALTH_API_ADDR" {

@@ -2,6 +2,7 @@ package apiservice
 
 import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
+	"github.com/full-chaos/dev-health-ops/internal/platform/buildstamp"
 
 	"bufio"
 	"errors"
@@ -120,7 +121,8 @@ func DecodedPathRouting(next http.Handler) http.Handler {
 // shape: Starlette's ServerErrorMiddleware answers it outside every other
 // middleware, so the response carries only its content headers (no
 // security, CORS, correlation or impersonation header). It must be the
-// outermost installed middleware.
+// outermost installed middleware except the provenance stamp, which sits
+// outside it so scope rejections carry it too and which this shape keeps.
 func UnhandledErrorShape(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		next.ServeHTTP(&unhandledWriter{ResponseWriter: w}, r)
@@ -144,6 +146,9 @@ func (w *unhandledWriter) commit() {
 	for key := range header {
 		switch key {
 		case "Content-Type", "Content-Length", "Connection":
+		case http.CanonicalHeaderKey(buildstamp.PlaneHeader), http.CanonicalHeaderKey(buildstamp.BuildHeader):
+			// Provenance the prover reads from every response, error or not;
+			// uvicorn behind the ingress carries neither, so nothing is lost.
 		default:
 			delete(header, key)
 		}

@@ -38,6 +38,7 @@ import (
 	"strings"
 
 	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/principal"
+	"github.com/full-chaos/dev-health-ops/internal/platform/buildstamp"
 	"github.com/full-chaos/dev-health-ops/internal/platform/version"
 )
 
@@ -84,8 +85,8 @@ var productionPostures = map[string]bool{"prod": true, "production": true}
 // build read from /buildinfo on one replica while another replica served
 // the query.
 const (
-	planeHeaderName = "x-dev-health-plane"
-	buildHeaderName = "x-dev-health-build"
+	planeHeaderName = buildstamp.PlaneHeader
+	buildHeaderName = buildstamp.BuildHeader
 )
 
 // buildInfoResponse is GET /buildinfo's body.
@@ -93,17 +94,7 @@ const (
 // Deliberately just the build identity. Same discipline as
 // registryResponse: this route answers one question, and the next person
 // who wants to add pool state or environment to it should add a route.
-type buildInfoResponse struct {
-	Service   string `json:"service"`
-	Version   string `json:"version"`
-	Commit    string `json:"commit"`
-	BuildTime string `json:"build_time"`
-	GoVersion string `json:"go_version"`
-	// Modified reports a dirty tree at build time. A consumer that needs
-	// a build to IDENTIFY source must refuse on true -- the commit does
-	// not describe what was actually compiled.
-	Modified bool `json:"modified"`
-}
+type buildInfoResponse = version.Info
 
 // newBuildInfoHandler serves GET /buildinfo behind the same bearer
 // envelope /query requires.
@@ -116,14 +107,7 @@ type buildInfoResponse struct {
 // would be indistinguishable from a right one.
 func newBuildInfoHandler(verifier *principal.Verifier) http.HandlerFunc {
 	info := version.Current("query-api")
-	body, err := json.Marshal(buildInfoResponse{
-		Service:   info.Service,
-		Version:   info.Version,
-		Commit:    info.Commit,
-		BuildTime: info.BuildTime,
-		GoVersion: info.GoVersion,
-		Modified:  info.Modified,
-	})
+	body, err := buildstamp.Body(info)
 	if err != nil {
 		// Six scalar fields; unreachable in practice. But a silently
 		// empty body would make go-api-prove refuse for the wrong reason,
@@ -195,10 +179,7 @@ func withProofProvenance(handler http.HandlerFunc, commit string) http.HandlerFu
 		// Set BEFORE the handler runs: once the wrapped handler calls
 		// WriteHeader, the header map is already on the wire and a later
 		// write is silently dropped.
-		w.Header().Set(planeHeaderName, "go")
-		if isKnownBuild(commit) {
-			w.Header().Set(buildHeaderName, strings.TrimSpace(commit))
-		}
+		buildstamp.SetProvenance(w.Header(), commit)
 		handler(w, r)
 	}
 }
@@ -215,10 +196,7 @@ func withProofProvenance(handler http.HandlerFunc, commit string) http.HandlerFu
 // presented as a bound one, which is the exact failure the header exists
 // to prevent. FetchBuildIdentity already refuses "unknown" on the
 // /buildinfo route; this is the same refusal on the header route.
-func isKnownBuild(commit string) bool {
-	commit = strings.TrimSpace(commit)
-	return commit != "" && commit != "unknown"
-}
+func isKnownBuild(commit string) bool { return buildstamp.IsKnownBuild(commit) }
 
 func mountProofRoute(mux *http.ServeMux, handler http.HandlerFunc) {
 	posture := strings.ToLower(strings.TrimSpace(os.Getenv(deploymentEnvEnv)))

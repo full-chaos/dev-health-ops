@@ -23,7 +23,7 @@ import (
 // "overflow" for an OverflowError. Any other exception fails the run.
 const pythonTimeWindowProgram = `
 import json, sys
-from datetime import date
+from datetime import date, timedelta
 import dev_health_ops.api.services.filtering as filtering
 import dev_health_ops.api.services.people as people
 from dev_health_ops.api.models.filters import MetricFilter
@@ -34,6 +34,9 @@ for case in cases:
     filtering.utc_today = lambda: today
     people.utc_today = lambda: today
     try:
+        if case.get("subtract"):
+            out.append([(date.fromisoformat(case["end"]) - timedelta(days=int(case["range"]))).isoformat()])
+            continue
         if case["people"]:
             window = people._time_window(int(case["range"]), int(case["compare"]))
         else:
@@ -74,12 +77,15 @@ func TestComputeMatchesLivePythonTimeWindow(t *testing.T) {
 		dates = append(dates, &text)
 	}
 	type windowCase struct {
-		People  bool    `json:"people"`
-		Range   string  `json:"range"`
-		Compare string  `json:"compare"`
-		Start   *string `json:"start"`
-		End     *string `json:"end"`
-		Today   string  `json:"today"`
+		// Subtract is aggregated flame's own `end_day - timedelta(days=
+		// range_days)` (no max(1, ...)), checked against AddDays.
+		Subtract bool    `json:"subtract"`
+		People   bool    `json:"people"`
+		Range    string  `json:"range"`
+		Compare  string  `json:"compare"`
+		Start    *string `json:"start"`
+		End      *string `json:"end"`
+		Today    string  `json:"today"`
 	}
 	var cases []windowCase
 	for _, today := range []string{"2026-09-24", "9999-12-31", "0001-01-01"} {
@@ -92,6 +98,12 @@ func TestComputeMatchesLivePythonTimeWindow(t *testing.T) {
 					}
 				}
 			}
+		}
+	}
+
+	for _, rangeDays := range counts {
+		for _, end := range []string{"0001-01-01", "0001-01-02", "2026-09-24", "9999-12-30", "9999-12-31"} {
+			cases = append(cases, windowCase{Subtract: true, Range: rangeDays, End: &end, Today: "2026-09-24"})
 		}
 	}
 
@@ -127,16 +139,19 @@ func TestComputeMatchesLivePythonTimeWindow(t *testing.T) {
 		if item.End != nil {
 			end = new(mustDate(t, *item.End))
 		}
-		window, err := Compute(saturated(t, item.Range), saturated(t, item.Compare), start, end, today)
 		var got any = "overflow"
-		if err == nil {
+		if item.Subtract {
+			if sum, err := AddDays(*end, -saturated(t, item.Range)); err == nil {
+				got = []any{day(sum)}
+			}
+		} else if window, err := Compute(saturated(t, item.Range), saturated(t, item.Compare), start, end, today); err == nil {
 			got = []any{day(window.StartDay), day(window.EndDay), day(window.CompareStart), day(window.CompareEnd)}
 		}
 		if fmt.Sprint(got) != fmt.Sprint(results[index]) {
 			t.Errorf("%+v: go %v, python %v", item, got, results[index])
 			continue
 		}
-		if err != nil {
+		if got == "overflow" {
 			overflows++
 		} else {
 			windows++

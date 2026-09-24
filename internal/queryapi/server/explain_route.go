@@ -245,7 +245,9 @@ func newExplainGetHandler(reader *explain.Reader) http.HandlerFunc {
 		scopeID := query.Get("scope_id")
 
 		rangeDays := 14
-		if raw := query.Get("range_days"); raw != "" {
+		// An explicit empty value is still parsed (pydantic: int_parsing).
+		if query.Has("range_days") {
+			raw := query.Get("range_days")
 			parsed, parseErr := parseQueryInt([]any{"query", "range_days"}, raw)
 			if parseErr != nil {
 				validationErrors = append(validationErrors, *parseErr)
@@ -255,7 +257,9 @@ func newExplainGetHandler(reader *explain.Reader) http.HandlerFunc {
 		}
 
 		compareDays := 14
-		if raw := query.Get("compare_days"); raw != "" {
+		// An explicit empty value is still parsed (pydantic: int_parsing).
+		if query.Has("compare_days") {
+			raw := query.Get("compare_days")
 			parsed, parseErr := parseQueryInt([]any{"query", "compare_days"}, raw)
 			if parseErr != nil {
 				validationErrors = append(validationErrors, *parseErr)

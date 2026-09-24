@@ -68,8 +68,14 @@ func Compute(rangeDays, compareDays int, startDate, endDate *time.Time, today ti
 	return Window{StartDay: startDay, EndDay: endDay, CompareStart: compareStart, CompareEnd: startDay}, nil
 }
 
-// addDays is date + timedelta(days=days): the timedelta itself fails past
-// 999999999 days, and the sum fails outside Python's date range.
+// AddDays is date + timedelta(days=days): the timedelta itself fails past
+// 999999999 days, and the sum fails outside Python's date range. A route
+// whose Python code does its own day arithmetic (aggregated flame's
+// end_day - timedelta(days=range_days)) uses it directly.
+func AddDays(day time.Time, days int) (time.Time, error) {
+	return addDays(midnight(day), days)
+}
+
 func addDays(day time.Time, days int) (time.Time, error) {
 	if days > maxTimedeltaDays || days < -maxTimedeltaDays {
 		return time.Time{}, ErrOverflow

@@ -141,7 +141,9 @@ func newHomeGetHandler(client home.QueryClient, pgPool home.PGQueryClient) http.
 		var validationErrors []pydanticErrorDetail
 
 		rangeDays := 14
-		if raw := query.Get("range_days"); raw != "" {
+		// An explicit empty value is still parsed (pydantic: int_parsing).
+		if query.Has("range_days") {
+			raw := query.Get("range_days")
 			if parsed, parseErr := parseQueryInt([]any{"query", "range_days"}, raw); parseErr == nil {
 				rangeDays = parsed
 			} else {
@@ -149,7 +151,9 @@ func newHomeGetHandler(client home.QueryClient, pgPool home.PGQueryClient) http.
 			}
 		}
 		compareDays := 14
-		if raw := query.Get("compare_days"); raw != "" {
+		// An explicit empty value is still parsed (pydantic: int_parsing).
+		if query.Has("compare_days") {
+			raw := query.Get("compare_days")
 			if parsed, parseErr := parseQueryInt([]any{"query", "compare_days"}, raw); parseErr == nil {
 				compareDays = parsed
 			} else {

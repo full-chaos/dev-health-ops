@@ -211,7 +211,9 @@ func newDrilldownPRsGetHandler(reader *drilldown.Reader) http.HandlerFunc {
 		var validationErrors []pydanticErrorDetail
 
 		rangeDays := 14
-		if raw := query.Get("range_days"); raw != "" {
+		// An explicit empty value is still parsed (pydantic: int_parsing).
+		if query.Has("range_days") {
+			raw := query.Get("range_days")
 			parsed, parseErr := parseQueryInt([]any{"query", "range_days"}, raw)
 			if parseErr != nil {
 				// Python's `range_days: int = 14` is FastAPI/Pydantic

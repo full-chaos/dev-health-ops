@@ -71,3 +71,57 @@ func TestReportWindowOverflowIsThePython503(t *testing.T) {
 		})
 	}
 }
+
+// TestAggregatedFlameWindowOverflowIsTheGeneric500: Python's aggregated
+// flame route computes end_day - timedelta(days=range_days) BEFORE its
+// try block, so an overflow there is the api's unhandled-exception 500.
+func TestAggregatedFlameWindowOverflowIsTheGeneric500(t *testing.T) {
+	for _, target := range []string{
+		"/api/v1/flame/aggregated?mode=throughput&range_days=9223372036854775808",
+		"/api/v1/flame/aggregated?mode=throughput&range_days=-9223372036854775809",
+		"/api/v1/flame/aggregated?mode=throughput&range_days=1000000000&end_date=2026-01-01",
+		"/api/v1/flame/aggregated?mode=throughput&range_days=-1&end_date=9999-12-31",
+	} {
+		handler := newFlameAggregatedWorkHandler(emptyRowsFlameAggregatedClient{})
+		req := httptest.NewRequest(http.MethodGet, target, nil)
+		req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+		rec := httptest.NewRecorder()
+		handler(rec, req)
+		if rec.Code != http.StatusInternalServerError || strings.TrimSpace(rec.Body.String()) != `{"detail":"Internal Server Error"}` {
+			t.Errorf("%s: got %d %q, want 500 {\"detail\":\"Internal Server Error\"}", target, rec.Code, rec.Body.String())
+		}
+	}
+	// A start_date means Python never computes end_day - range_days.
+	handler := newFlameAggregatedWorkHandler(emptyRowsFlameAggregatedClient{})
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/flame/aggregated?mode=throughput&range_days=9223372036854775808&start_date=2026-01-01", nil)
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("with start_date: got %d, want 200", rec.Code)
+	}
+}
+
+// TestEmptyDayCountIsA422: FastAPI parses an explicit empty int query
+// value and refuses it (int_parsing); it does not fall back to the
+// default.
+func TestEmptyDayCountIsA422(t *testing.T) {
+	for name, test := range map[string]struct {
+		handler http.HandlerFunc
+		target  string
+		field   string
+	}{
+		"drilldown prs range_days": {newDrilldownPRsGetHandler(newEmptyRowsDrilldownReader(t)), "/api/v1/drilldown/prs?scope_type=repo&scope_id=repo-a&range_days=", "range_days"},
+		"home compare_days":        {newHomeGetHandler(emptyRowsHomeClient{}, nil), "/api/v1/home?compare_days=", "compare_days"},
+		"explain compare_days":     {newExplainGetHandler(newEmptyRowsExplainReader(t)), "/api/v1/explain?metric=cycle_time&scope_type=repo&scope_id=repo-a&compare_days=", "compare_days"},
+	} {
+		req := httptest.NewRequest(http.MethodGet, test.target, nil)
+		req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+		rec := httptest.NewRecorder()
+		test.handler(rec, req)
+		want := `"type":"int_parsing","loc":["query","` + test.field + `"]`
+		if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), want) || !strings.Contains(rec.Body.String(), `"input":""`) {
+			t.Errorf("%s: got %d %s, want 422 with %s and input \"\"", name, rec.Code, rec.Body.String(), want)
+		}
+	}
+}

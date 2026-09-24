@@ -238,7 +238,7 @@ A row that is live, reachable to real clients (`canary`/`primary`) and carries n
 is required before stage 4/5, and "a bare 200 does not qualify".
 
 <!-- BEGIN GENERATED GO API OPERATIONS -->
-_Rendered 2026-09-20T13:31:59Z against main merge-base `5e6b23d968dec1cbb1c9de57c0857552218a3911`; SDL digest pin `sha256:898250a995e65f792e0383a07d7a683251894cbe51f426a4dcf520bcd82bf91e`; fleet read 2026-09-16T12:25:30Z via fleet file fleet-prod.json._
+_Rendered 2026-09-20T13:31:59Z against main merge-base `9eedcd59e08bf159af64bbceb350ed006661f518`; SDL digest pin `sha256:898250a995e65f792e0383a07d7a683251894cbe51f426a4dcf520bcd82bf91e`; fleet read 2026-09-16T12:25:30Z via fleet file fleet-prod.json._
 
 _Rows in `go_api_proof_run` at read time: **2845**. Operations reachable to real clients with no deployed-executed proof: **0**. Rows whose mode says Go but whose schema digest no longer matches the pin, so every request silently falls back to Python: **25**._
 
@@ -308,7 +308,7 @@ _32 `/api/v1/*` routes in `src/dev_health_ops/api/main.py`: **32** ported, **0**
 | POST | `/api/v1/explain` | ported | `internal/queryapi/server/explain_route.go:97` |
 | GET | `/api/v1/filters/options` | ported | `internal/queryapi/server/filter_options_route.go:79` |
 | GET | `/api/v1/flame` | ported | `internal/queryapi/server/flame_route.go:92` |
-| GET | `/api/v1/flame/aggregated` | ported | `internal/queryapi/server/flame_aggregated_route.go:94` |
+| GET | `/api/v1/flame/aggregated` | ported | `internal/queryapi/server/flame_aggregated_route.go:95` |
 | GET | `/api/v1/heatmap` | ported | `internal/queryapi/server/heatmap_route.go:75` |
 | GET | `/api/v1/home` | ported | `internal/queryapi/server/home_route.go:60` |
 | POST | `/api/v1/home` | ported | `internal/queryapi/server/home_route.go:60` |

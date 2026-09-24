@@ -41,16 +41,17 @@ kubectl -n dev-health logs job/dev-health-migrate
 The explicit `kubectl wait` flow above is the recommended path, but a naive
 `kubectl apply -k deploy/kubernetes/` is also safe: the api Deployment carries
 a `wait-for-migrations` initContainer that blocks app start until
-`dev-hops migrate clickhouse status --check` reports the schema current. The
-go-worker groups in `go-workers.yaml` carry no such initContainer of their
-own; roll them only after the migration Job has completed (see below).
+`dho migrate clickhouse status --check` (dho image, exec form) reports the
+schema current. The go-worker groups in `go-workers.yaml` carry no such
+initContainer of their own; roll them only after the migration Job has completed (see below).
 
 - The check is strictly **read-only** (it lists applied vs pending migrations
   and exits 1 while any are pending) — it never runs DDL, so multiple replicas
   polling concurrently cannot race. The migrate Job remains the only thing
   that applies schema.
-- Each initContainer run polls every 5s for up to ~5 minutes, then exits
-  nonzero and relies on the kubelet's restart backoff as the overall timeout.
+- The probe runs once per initContainer start and exits nonzero while the
+  schema is not current; the kubelet's restart backoff is the wait (there is
+  no shell to loop in).
   Pods stuck in `Init:...` mean the migrate Job has not completed — check
   `kubectl -n dev-health logs job/dev-health-migrate`.
 - The check covers **ClickHouse only**. The migrate Job (`dho migrate

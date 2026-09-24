@@ -24,36 +24,34 @@ spec:
       # CHAOS-2304 safety net: a naive `kubectl apply -k deploy/kubernetes/`
       # rolls Deployments without waiting for the migrate Job. This
       # initContainer blocks app start until all ClickHouse migrations are
-      # applied. It is strictly READ-ONLY (`status --check` — exit 0 when
-      # current, 1 when pending); the one-shot Job (migrate-job.yaml) remains
-      # the only thing that runs DDL. After 60 pending checks (~5 min) it
-      # exits 1 and relies on kubelet restart backoff as the overall timeout.
-      # The recommended deploy flow (README.md: `kubectl wait` on the Job)
-      # still applies — this is the safety net, not the primary ordering.
+      # applied. It is strictly READ-ONLY (`dho migrate clickhouse status
+      # --check` -- exit 0 at the head with nothing pending, 1 otherwise); the
+      # one-shot Job (migrate-job.yaml) remains the only thing that runs DDL.
+      # The dho image is distroless: exec form, no shell, no retry loop. A
+      # failing probe fails the initContainer and kubelet restart backoff is
+      # the wait. The recommended deploy flow (README.md: `kubectl wait` on
+      # the Job) still applies -- this is the safety net, not the primary
+      # ordering.
+      #
+      # The probe reads ONE key, not a whole Secret: the migrate Job's own
+      # native-protocol CLICKHOUSE_URI (dev-health-secrets holds the HTTP 8123
+      # URI the Python api uses, which the Go client cannot speak), so it
+      # checks the same ClickHouse the Job migrates. dho refuses any ordering
+      # contract but 2.
       initContainers:
         - name: wait-for-migrations
-          image: ghcr.io/your-org/dev-health-ops:latest
+          image: ghcr.io/full-chaos/dev-health-go-dho:latest
           securityContext:
             allowPrivilegeEscalation: false
-          command:
-            - sh
-            - -c
-            - |
-              attempts=0
-              until dev-hops migrate clickhouse status --check; do
-                attempts=$((attempts + 1))
-                if [ "$attempts" -ge 60 ]; then
-                  echo "ClickHouse migrations still pending after $attempts checks; exiting for restart backoff" >&2
-                  exit 1
-                fi
-                echo "ClickHouse migrations pending; re-checking in 5s (attempt $attempts/60)"
-                sleep 5
-              done
-          envFrom:
-            - configMapRef:
-                name: dev-health-config
-            - secretRef:
-                name: dev-health-secrets
+          args: ["migrate", "clickhouse", "status", "--check"]
+          env:
+            - name: CLICKHOUSE_URI
+              valueFrom:
+                secretKeyRef:
+                  name: dev-health-migration-secrets
+                  key: CLICKHOUSE_URI
+            - name: OPERATIONAL_ORDERING_CONTRACT
+              value: "2"
           resources:
             requests:
               memory: "128Mi"

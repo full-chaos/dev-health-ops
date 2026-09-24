@@ -22,7 +22,7 @@
 # api/worker run multiple replicas under HPAs — per-pod initContainers would
 # run the same DDL concurrently, which is exactly the race this Job removes.
 # The api/worker `wait-for-migrations` initContainers are NOT that: they only
-# poll the read-only `dev-hops migrate clickhouse status --check` (no DDL)
+# poll the read-only `dho migrate clickhouse status --check` (no DDL)
 # until this Job has brought the schema current.
 #
 # The image is the dho image, distroless: exec form, no shell. It applies

@@ -105,12 +105,12 @@ func (g *gapRereadState) run(
 		}
 		return record, none, noDecision
 	}
-	candidateLeg, err := doREST(ctx, client, f.candidateBase(), spec.Method, spec.Path, request.Query, request.Body, candidateCredential, timeout)
+	candidateLeg, err := doREST(ctx, client, f.candidateBase(), spec.Method, spec.Path, request.Query, request.Body, candidateCredential, false, timeout)
 	if err != nil {
 		return fail("delayed candidate read failed")
 	}
 	record.CandidateReadAt = time.Now().UTC()
-	baselineLeg, err := doREST(ctx, client, f.pythonAPIURL, spec.Method, spec.Path, request.Query, request.Body, baselineCredential, timeout)
+	baselineLeg, err := doREST(ctx, client, f.pythonAPIURL, spec.Method, spec.Path, request.Query, request.Body, baselineCredential, true, timeout)
 	if err != nil {
 		return fail("delayed baseline read failed")
 	}

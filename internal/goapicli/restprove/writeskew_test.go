@@ -757,12 +757,17 @@ func TestBracketedRereadProverEnumeration(t *testing.T) {
 				for _, fail := range failures {
 					out, calls, receipts := run(t, b1, c1, opts, fail.reply)
 					rereadFailures++
-					// A dropped connection on an idempotent GET is retried
-					// once by the HTTP client itself before it fails.
-					wantCalls := 2
-					if fail.name == "dropped connection" {
-						wantCalls = 3
-					}
+					// CHAOS-6580: every baseline request (this reread's included)
+					// now closes its own connection rather than pooling it
+					// (doREST(baseline=true) sets req.Close), so the reread never
+					// reuses call 1's connection. Go's http.Transport only
+					// silently retries a request whose connection came from the
+					// idle pool (a fresh dial failing is a real failure, not a
+					// race with the server's own idle timeout) -- so a dropped
+					// connection on the reread is no longer masked by one hidden
+					// retry, and reports on exactly the same call count as every
+					// other failure shape.
+					const wantCalls = 2
 					if out.Admitted || out.Refusal != fail.reason || receipts != 0 || calls != wantCalls || out.WriteSkew == nil || out.WriteSkew.Verdict != goapiproof.WriteSkewRefused {
 						t.Fatalf("coverage %d, B1=%s C1=%s, second read %s: admitted=%v refusal=%q receipts=%d calls=%d write_skew=%+v; want refused %q, no receipt",
 							ci, b1, c1, fail.name, out.Admitted, out.Refusal, receipts, calls, out.WriteSkew, fail.reason)

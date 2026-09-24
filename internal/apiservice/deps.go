@@ -15,6 +15,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/billing/stripeclient"
 	"github.com/full-chaos/dev-health-ops/internal/api/webhookintake"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
+	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
@@ -134,6 +135,10 @@ type Deps struct {
 	// warning, matching org_deletion.py's own behavior when its ClickHouse
 	// client cannot connect.
 	ClickHouseDSN string
+	// Limits is the rate-limit store every limited route counts through
+	// (see limitStore); nil means the Valkey-backed store when Valkey is
+	// configured, else an in-process one.
+	Limits httpapi.HitStore
 	// Invites is create_org_invite's token secret, accept-link base and email
 	// sender (CHAOS-6391); the zero value sends no email.
 	Invites admin.InviteConfig
@@ -240,6 +245,15 @@ func buildDeps(
 	if processLicenseConfigured(os.LookupEnv) {
 		return Deps{}, nil, dependencyFailure(ctx, logger, "api_process_license", "api_process_license_unsupported",
 			errors.New("LICENSE_KEY and LICENSE_PUBLIC_KEY are both set: the Go api does not evaluate a process-wide license, and its feature-gated routes would answer differently from the Python api; unset one or keep these routes on the Python api"))
+	}
+
+	// verify_rate_limit_config: a deployment that serves the limited routes
+	// (it has its database) must count them in the shared store outside
+	// development, else every limit is per replica. A process with no
+	// database configured (the pre-bootstrap shape) serves none of them and
+	// still starts.
+	if cfg.APIDatabaseURI.Configured() && !cfg.ValkeyURI.Configured() && !developmentEnvironment(os.LookupEnv) {
+		return Deps{}, nil, dependencyFailure(ctx, logger, "api_rate_limiter", "api_rate_limiter_shared_store_required", errSharedLimiterRequired)
 	}
 
 	if cfg.APIDatabaseURI.Configured() {

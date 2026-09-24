@@ -139,6 +139,9 @@ EXPECTED_PACKAGES = {
     # this package still builds and its tests still register (SKIP counts
     # as run), matching internal/api/policy's own live-oracle pattern.
     "internal/apiservice/admin",
+    # CHAOS-6368: the shared rate-limit store against a real Valkey (limit held
+    # across two clients, the fixed window, the per-caller path bound, TTLs).
+    "internal/auth/ratelimitvalkey",
     "internal/cacheinvalidation",
     # CHAOS-6461: the ClickHouse head baseline is re-derived by executing the
     # real Python chain on a fresh ClickHouse, and dho's migrator is checked

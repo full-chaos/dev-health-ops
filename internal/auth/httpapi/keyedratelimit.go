@@ -279,30 +279,6 @@ func (l *KeyedLimiter) drop(entryKey string, entry *fixedWindowEntry) {
 	}
 }
 
-// KeyedRateLimit rejects a request once its (keyFunc(r), r.URL.Path) pair
-// exceeds limiter's window budget, rendering the refusal with WriteError.
-// See KeyedLimiter's own doc comment for why this is a separate wrapper
-// from RateLimit/RateLimitWith (unauthenticated, per-route only) and where
-// in a route's chain it belongs: around the ALREADY-authenticated inner
-// handler, never at the mux level.
-func KeyedRateLimit(limiter *KeyedLimiter, keyFunc KeyFunc) func(http.Handler) http.Handler {
-	return KeyedRateLimitWith(limiter, keyFunc, WriteError)
-}
-
-// KeyedRateLimitWith is KeyedRateLimit with the error body rendered by
-// write (see RecoverWith).
-func KeyedRateLimitWith(limiter *KeyedLimiter, keyFunc KeyFunc, write ErrorWriter) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if limiter != nil && !limiter.Allow(keyFunc(r), r.URL.Path) {
-				write(w, r, CodeRateLimited)
-				return
-			}
-			next.ServeHTTP(w, r)
-		})
-	}
-}
-
 // RequestValidator is a route's request validation: the checks FastAPI runs
 // BEFORE it calls the endpoint (a pydantic body model's field constraints).
 // On failure it writes the response itself and returns false; on success it
@@ -315,7 +291,7 @@ type RequestValidator func(w http.ResponseWriter, r *http.Request) (*http.Reques
 // then run the handler. On the Python api, FastAPI validates the body before
 // the endpoint runs and slowapi's @limiter.limit wraps the endpoint, so a
 // request that fails validation is a 422 that costs the caller nothing
-// against the limit. Validating inside the handler, behind KeyedRateLimit,
+// against the limit. Validating inside the handler, behind LimitWith,
 // spends one allowance per malformed request instead -- measured against the
 // live Python api on set_user_password: five malformed bodies then six valid
 // ones is 200 x5 then 429 on Python, and 429 on every valid call on the old
@@ -326,16 +302,16 @@ type RequestValidator func(w http.ResponseWriter, r *http.Request) (*http.Reques
 // the limiter there and must stay in the handler, where it keeps counting.
 //
 // validate is required: a route with no validation stage has no reason to
-// use this wrapper (use KeyedRateLimitWith), and a nil validator that
+// use this wrapper (use LimitWith), and a nil validator that
 // silently limited first would reintroduce exactly the divergence this
 // exists to end.
-func ValidateThenLimit(validate RequestValidator, limiter *KeyedLimiter, keyFunc KeyFunc, write ErrorWriter) func(http.Handler) http.Handler {
+func ValidateThenLimit(validate RequestValidator, store HitStore, limit Limit, keyFunc KeyFunc, write ErrorWriter) func(http.Handler) http.Handler {
 	if validate == nil {
 		panic("httpapi: ValidateThenLimit needs a validator")
 	}
-	limit := KeyedRateLimitWith(limiter, keyFunc, write)
+	limitWith := LimitWith(store, limit, keyFunc, write)
 	return func(next http.Handler) http.Handler {
-		limited := limit(next)
+		limited := limitWith(next)
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			checked, ok := validate(w, r)
 			if !ok {

@@ -13,6 +13,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/full-chaos/dev-health-ops/internal/apiservice"
+	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
@@ -209,8 +210,11 @@ func TestSetUserPasswordRateLimitWindowDoesNotRollOverEarly(t *testing.T) {
 	})
 
 	now := time.Now()
+	// The clock here is injected, so this test counts in the in-process
+	// store (a shared Valkey store's windows are the server's real time).
 	goBase, _ := startGoServer(t, ctx, venue, jwtKey, func(deps *apiservice.Deps) {
 		deps.Now = func() time.Time { return now }
+		deps.Limits = httpapi.NewMemoryStore(deps.Now)
 	})
 
 	headers := map[string]string{"Authorization": "Bearer " + venue.Tokens["admin0"], "Content-Type": "application/json"}

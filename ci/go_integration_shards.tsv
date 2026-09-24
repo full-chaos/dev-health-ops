@@ -51,6 +51,11 @@
 # revision's "hosted measurement only" rule, since a package's first hosted
 # run cannot happen before this manifest already lists it. Correct it to the
 # real hosted number the next time this file is otherwise touched.
+#
+# internal/auth/ratelimitvalkey (CHAOS-6368) is brand-new for the same reason:
+# its weight (11) is its local `-tags=integration -count=1` wall time (10.7 s,
+# one Valkey container), to be replaced by the hosted number the next time this
+# file is otherwise touched.
 shards	6
 internal/reconcilerservice	5
 internal/workerservice	246
@@ -85,6 +90,7 @@ internal/api/webhookintake	13
 internal/apiservice	37
 internal/apiservice/acr	6
 internal/apiservice/admin	2
+internal/auth/ratelimitvalkey	11
 internal/cacheinvalidation	2
 internal/chmigrate	60
 internal/externalrecompute	32

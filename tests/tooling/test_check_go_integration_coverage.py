@@ -229,7 +229,9 @@ def test_integration_coverage_inventory_completes_and_stays_nonempty() -> None:
     # (85 -> 87): the ClickHouse and PostgreSQL head baselines, each
     # re-derived by executing its Python chain, and dho's migrators checked
     # against them.
-    assert "87 package(s) discovered, 0 denylisted, 87 will run" in result.stdout
+    # CHAOS-6368 added internal/auth/ratelimitvalkey (87 -> 88): the shared
+    # rate-limit store against a real Valkey.
+    assert "88 package(s) discovered, 0 denylisted, 88 will run" in result.stdout
     # Name the package explicitly (SET MEMBERSHIP), not just the count --
     # a bare count is exactly what let CHAOS-4643's own literal drift
     # 31 -> 32 -> 33 unnoticed.
@@ -243,4 +245,5 @@ def test_integration_coverage_inventory_completes_and_stays_nonempty() -> None:
     assert "  RUN  internal/queryapi/explain" in result.stdout
     assert "  RUN  internal/api/audit" in result.stdout
     assert "  RUN  internal/apiservice/admin" in result.stdout
+    assert "  RUN  internal/auth/ratelimitvalkey" in result.stdout
     assert "  SKIP internal/queryapi/analytics: " not in result.stdout

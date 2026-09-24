@@ -29,9 +29,31 @@ func TestDHOAPICorpusPinsItsRoutes(t *testing.T) {
 		"REST:GET:/api/v1/orgs/me",
 		"REST:GET:/api/v1/licensing/entitlements/{org_id}",
 		"REST:GET:/api/v1/telemetry/status",
+		"REST:GET:/api/v1/billing/plans",
+		"REST:GET:/api/v1/billing/plans/{plan_id}",
+		"REST:GET:/api/v1/billing/invoices",
+		"REST:GET:/api/v1/billing/invoices/{invoice_id}",
+		"REST:GET:/api/v1/billing/refunds",
+		"REST:GET:/api/v1/billing/refunds/{refund_id}",
+		"REST:GET:/api/v1/billing/entitlements/{org_id}",
+		"REST:GET:/api/v1/billing/subscriptions/list",
+		"REST:GET:/api/v1/billing/subscriptions",
+		"REST:GET:/api/v1/billing/subscriptions/history",
+		"REST:GET:/api/v1/billing/audit",
+		"REST:GET:/api/v1/billing/audit/{audit_id}",
+		"REST:HEAD:/health",
+		"REST:HEAD:/ready",
+		"REST:HEAD:/health/workers",
 	}
-	if got := RESTRunOrderFor(RESTServiceDHOAPI); !slices.Equal(got, want) {
-		t.Fatalf("dho-api run order = %v, want %v", got, want)
+	// Set equality: which file's init registers an entry (and so its position
+	// in the run order) is not what is pinned, only that every entry is there
+	// exactly once.
+	got := slices.Clone(RESTRunOrderFor(RESTServiceDHOAPI))
+	slices.Sort(got)
+	sortedWant := slices.Clone(want)
+	slices.Sort(sortedWant)
+	if !slices.Equal(got, sortedWant) {
+		t.Fatalf("dho-api operations = %v, want %v", got, sortedWant)
 	}
 	for _, operation := range want {
 		spec, err := SpecForREST(operation)
@@ -165,5 +187,85 @@ func TestPushTokenFileCredentialReadsTheFileEachTimeAndNeverLeaksIt(t *testing.T
 	}
 	if _, err := PushTokenFileCredential(filepath.Join(t.TempDir(), "absent")).value(context.Background()); err == nil {
 		t.Fatal("a missing token file must be an error, never an empty credential")
+	}
+}
+
+func TestHEADEntriesMustBeStatusOnlyAndBodyless(t *testing.T) {
+	operation := "REST:HEAD:/test-only-head"
+	restEndpointSpecs[operation] = RESTEndpointSpec{
+		Method: "HEAD", Path: "/test-only-head", Service: RESTServiceDHOAPI, PublicNoAuth: true,
+		Requests: []RESTRequest{{Name: "head", WantCandidateStatus: 200, WantBaselineStatus: 200, BodyMode: RESTBodyModeJSON}},
+	}
+	restRunOrder = append(restRunOrder, operation)
+	t.Cleanup(func() {
+		delete(restEndpointSpecs, operation)
+		restRunOrder = restRunOrder[:len(restRunOrder)-1]
+	})
+	if err := ValidateRESTCorpus(); err == nil {
+		t.Fatal("a HEAD entry compared as JSON must be refused: a HEAD answer has no body to decode")
+	}
+}
+
+func TestBillingReadEntriesAreSharedCasesOnly(t *testing.T) {
+	// Every billing entry is a GET (billing writes are real-use only, no
+	// synthetic case) and none sends the push token.
+	for _, operation := range RESTRunOrderFor(RESTServiceDHOAPI) {
+		spec, err := SpecForREST(operation)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.HasPrefix(spec.Path, "/api/v1/billing/") {
+			if spec.Method != "GET" || spec.Credential != RESTCredentialRun {
+				t.Errorf("%s: method %s credential %q, want a GET on the run's own bearers", operation, spec.Method, spec.Credential)
+			}
+		}
+	}
+}
+
+// TestBillingReadCasesPinTheCapturedStatuses pins the statuses both planes must
+// answer the proof principal (a non-superuser): they are the Python api's own
+// answers from a live capture, so a change here is a change of the reference.
+func TestBillingReadCasesPinTheCapturedStatuses(t *testing.T) {
+	want := map[string]int{
+		"REST:GET:/api/v1/billing/plans/list":                        200,
+		"REST:GET:/api/v1/billing/plans/{plan_id}/missing":           404,
+		"REST:GET:/api/v1/billing/invoices/list":                     200,
+		"REST:GET:/api/v1/billing/invoices/{invoice_id}/missing":     404,
+		"REST:GET:/api/v1/billing/refunds/not_superuser":             403,
+		"REST:GET:/api/v1/billing/refunds/{refund_id}/not_superuser": 403,
+		"REST:GET:/api/v1/billing/entitlements/{org_id}/own_org":     200,
+		"REST:GET:/api/v1/billing/subscriptions/list/list":           200,
+		"REST:GET:/api/v1/billing/subscriptions/no_subscription":     404,
+		"REST:GET:/api/v1/billing/subscriptions/history/history":     200,
+		"REST:GET:/api/v1/billing/audit/missing_org_id":              422,
+		"REST:GET:/api/v1/billing/audit/not_superuser":               403,
+		"REST:GET:/api/v1/billing/audit/{audit_id}/not_superuser":    403,
+		"REST:HEAD:/health/head":                                     200,
+		"REST:HEAD:/ready/head":                                      200,
+		"REST:HEAD:/health/workers/head":                             200,
+	}
+	got := map[string]int{}
+	for _, operation := range RESTRunOrderFor(RESTServiceDHOAPI) {
+		spec, err := SpecForREST(operation)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.HasPrefix(spec.Path, "/api/v1/billing/") && spec.Method != "HEAD" {
+			continue
+		}
+		for _, request := range spec.Requests {
+			if request.WantCandidateStatus != request.WantBaselineStatus {
+				t.Errorf("%s/%s: the planes must be held to the same status (%d vs %d)", operation, request.Name, request.WantCandidateStatus, request.WantBaselineStatus)
+			}
+			got[operation+"/"+request.Name] = request.WantBaselineStatus
+		}
+	}
+	if len(got) != len(want) {
+		t.Fatalf("billing/HEAD cases = %d, want %d: %v", len(got), len(want), got)
+	}
+	for key, status := range want {
+		if got[key] != status {
+			t.Errorf("%s: status %d, want %d", key, got[key], status)
+		}
 	}
 }

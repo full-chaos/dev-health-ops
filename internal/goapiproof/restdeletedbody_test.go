@@ -143,6 +143,12 @@ func TestDeletedPythonBodyOperations_ArrayShapedSubsetIsWellFormed(t *testing.T)
 func TestIsFrameworkValidatedEqualStatus_AgreesWithCommittedCorpus(t *testing.T) {
 	checked := 0
 	for operation, spec := range restEndpointSpecs {
+		if spec.EffectiveService() != RESTServiceQueryAPI {
+			// The deleted-Python-body override is a query-api concern; a dho-api
+			// entry's Python body is alive, so an equal 403/422 pair there is a
+			// real comparison and may carry IDBindings.
+			continue
+		}
 		for _, req := range spec.Requests {
 			if req.WantCandidateStatus != req.WantBaselineStatus || !frameworkValidatableEqualStatuses[req.WantBaselineStatus] {
 				continue

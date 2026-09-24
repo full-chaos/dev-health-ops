@@ -217,6 +217,45 @@ func TestWebhookIntakeVenueOracleGitHubGitLabJiraHealth(t *testing.T) {
 		{Name: "webhooks health", Method: "GET", Path: "/api/v1/webhooks/health"},
 	}
 
+	// An integer literal past CPython's 4300-digit limit makes json.loads
+	// raise a ValueError; these routes catch only JSONDecodeError, so Python
+	// answers its generic unhandled 500 for each, not the 400 "Invalid JSON".
+	hugeInt := []byte(`{"n":` + strings.Repeat("1", 4301) + `}`)
+	requests = append(requests,
+		venueoracle.Request{
+			Name:   "github integer past the digit limit",
+			Method: "POST", Path: "/api/v1/webhooks/github",
+			Headers: map[string]string{
+				"X-GitHub-Event": "push", "X-GitHub-Delivery": "venue-github-delivery-huge",
+				"X-Hub-Signature-256": githubVenueSign(githubSecret, hugeInt),
+				"Content-Type":        "application/json",
+			},
+			Body: venueoracle.B64(string(hugeInt)),
+		},
+		venueoracle.Request{
+			Name:   "gitlab integer past the digit limit",
+			Method: "POST", Path: "/api/v1/webhooks/gitlab",
+			Headers: map[string]string{
+				"X-Gitlab-Event": "Push Hook", "X-Gitlab-Token": gitlabSecret,
+				"Content-Type": "application/json",
+			},
+			Body: venueoracle.B64(string(hugeInt)),
+		},
+		venueoracle.Request{
+			Name:   "jira integer past the digit limit",
+			Method: "POST", Path: "/api/v1/webhooks/jira",
+			Headers: map[string]string{
+				"X-Hub-Signature": func() string {
+					mac := hmac.New(sha256.New, []byte(jiraSecret))
+					mac.Write(hugeInt)
+					return hex.EncodeToString(mac.Sum(nil))
+				}(),
+				"Content-Type": "application/json",
+			},
+			Body: venueoracle.B64(string(hugeInt)),
+		},
+	)
+
 	python := venue.ServePython(t, requests)
 	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{Normalize: blankVenueEventID})
 	t.Log(receipt)
@@ -589,6 +628,18 @@ func TestWebhookIntakeVenueOraclePagerDuty(t *testing.T) {
 			Body: venueoracle.B64(string(body)),
 		})
 	}
+
+	hugeEvent := []byte(`{"event":{"id":"PD-HUGE-1","event_type":"incident.triggered","occurred_at":"2026-01-02T03:04:05Z","data":{"n":` + strings.Repeat("1", 4301) + `}}}`)
+	requests = append(requests, venueoracle.Request{
+		Name:   "pagerduty integer past the digit limit",
+		Method: "POST", Path: "/api/v1/webhooks/pagerduty/" + seed.bindingActive,
+		Headers: map[string]string{
+			"X-Webhook-Subscription": "sub-active",
+			"X-PagerDuty-Signature":  pagerdutyVenueSign(secretActive, hugeEvent),
+			"Content-Type":           "application/json",
+		},
+		Body: venueoracle.B64(string(hugeEvent)),
+	})
 
 	python := venue.ServePython(t, requests)
 	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{})

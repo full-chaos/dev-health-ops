@@ -78,6 +78,18 @@ func stringPtrField(object *pyjson.Object, name string) *string {
 	return &text
 }
 
+// writeIntLimit answers the Python api's unhandled ValueError for an integer
+// literal past the 4300-digit limit: the routes catch only
+// json.JSONDecodeError, so json.loads' ValueError is a generic 500.
+func writeIntLimit(w http.ResponseWriter, err error) bool {
+	var limit *pyjson.IntLimitError
+	if !errors.As(err, &limit) {
+		return false
+	}
+	policy.WriteInternal(w)
+	return true
+}
+
 // decodeJSONBody applies pyjson's json.loads-compatible pre-decode (BOM/
 // UTF-16/UTF-32 detection) then parses, the way pybody.Read does for the
 // JSON content-type branch -- either failure means "invalid JSON payload"

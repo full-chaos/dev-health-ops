@@ -62,6 +62,9 @@ func (d Deps) handleGitHubWebhook() http.HandlerFunc {
 
 		payload, err := decodeJSONBody(body)
 		if err != nil {
+			if writeIntLimit(w, err) {
+				return
+			}
 			d.logger().Warn("Invalid JSON in GitHub webhook", "error", err)
 			policy.WriteDetail(w, http.StatusBadRequest, "Invalid JSON payload", nil)
 			return

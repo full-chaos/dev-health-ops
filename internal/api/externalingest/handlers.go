@@ -16,6 +16,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
+	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
@@ -526,8 +527,8 @@ func (d Deps) handleGetBatch() http.HandlerFunc {
 		rawID := r.PathValue("ingestion_id")
 		ingestionID, _ := problems.PathUUID("ingestion_id", rawID)
 		values := r.URL.Query()
-		errorLimit, _ := problems.QueryInt("errorLimit", pybody.LastQuery(values, "errorLimit"), 50, int64Pointer(1), int64Pointer(200))
-		errorOffset, _ := problems.QueryInt("errorOffset", pybody.LastQuery(values, "errorOffset"), 0, int64Pointer(0), nil)
+		errorLimit, _ := problems.QueryInt("errorLimit", httpapi.QueryLastPtr(values, "errorLimit"), 50, int64Pointer(1), int64Pointer(200))
+		errorOffset, _ := problems.QueryInt("errorOffset", httpapi.QueryLastPtr(values, "errorOffset"), 0, int64Pointer(0), nil)
 		if len(problems) > 0 {
 			policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(problems), nil)
 			return

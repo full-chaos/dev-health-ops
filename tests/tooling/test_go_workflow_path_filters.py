@@ -1289,12 +1289,18 @@ def test_an_empty_tracked_list_for_the_repo_root_fails_loudly(
 
 
 def _closures_installed_by_workflows() -> set[str]:
-    """Every `ci/requirements-*.txt` a workflow installs with `pip install -r`."""
+    """Every `ci/requirements-*.txt` a workflow installs with `pip install -r`.
+
+    Both workflow extensions are read, and a shell line continuation
+    (`\\` + newline) between the command and the `-r` flag does not hide the
+    install.
+    """
+    workflows = sorted((REPO_ROOT / ".github/workflows").glob("*.y*ml"))
     installed: set[str] = set()
-    for workflow in sorted((REPO_ROOT / ".github/workflows").glob("*.yml")):
+    for workflow in workflows:
+        text = re.sub(r"\\\n\s*", " ", workflow.read_text())
         for match in re.finditer(
-            r"pip install[^\n]*?-r\s+(ci/requirements-[\w.-]+\.txt)",
-            workflow.read_text(),
+            r"pip install[^\n]*?-r\s+(ci/requirements-[\w.-]+\.txt)", text
         ):
             installed.add(match.group(1))
     return installed

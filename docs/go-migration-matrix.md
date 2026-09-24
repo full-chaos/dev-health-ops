@@ -238,7 +238,7 @@ A row that is live, reachable to real clients (`canary`/`primary`) and carries n
 is required before stage 4/5, and "a bare 200 does not qualify".
 
 <!-- BEGIN GENERATED GO API OPERATIONS -->
-_Rendered 2026-09-20T13:31:59Z against main merge-base `4bc05646b9a5b690fa25ad9160e8806632df526e`; SDL digest pin `sha256:898250a995e65f792e0383a07d7a683251894cbe51f426a4dcf520bcd82bf91e`; fleet read 2026-09-16T12:25:30Z via fleet file fleet-prod.json._
+_Rendered 2026-09-20T13:31:59Z against main merge-base `5e6b23d968dec1cbb1c9de57c0857552218a3911`; SDL digest pin `sha256:898250a995e65f792e0383a07d7a683251894cbe51f426a4dcf520bcd82bf91e`; fleet read 2026-09-16T12:25:30Z via fleet file fleet-prod.json._
 
 _Rows in `go_api_proof_run` at read time: **2845**. Operations reachable to real clients with no deployed-executed proof: **0**. Rows whose mode says Go but whose schema digest no longer matches the pin, so every request silently falls back to Python: **25**._
 
@@ -309,12 +309,12 @@ _32 `/api/v1/*` routes in `src/dev_health_ops/api/main.py`: **32** ported, **0**
 | GET | `/api/v1/filters/options` | ported | `internal/queryapi/server/filter_options_route.go:79` |
 | GET | `/api/v1/flame` | ported | `internal/queryapi/server/flame_route.go:92` |
 | GET | `/api/v1/flame/aggregated` | ported | `internal/queryapi/server/flame_aggregated_route.go:94` |
-| GET | `/api/v1/heatmap` | ported | `internal/queryapi/server/heatmap_route.go:73` |
-| GET | `/api/v1/home` | ported | `internal/queryapi/server/home_route.go:58` |
-| POST | `/api/v1/home` | ported | `internal/queryapi/server/home_route.go:58` |
+| GET | `/api/v1/heatmap` | ported | `internal/queryapi/server/heatmap_route.go:75` |
+| GET | `/api/v1/home` | ported | `internal/queryapi/server/home_route.go:60` |
+| POST | `/api/v1/home` | ported | `internal/queryapi/server/home_route.go:60` |
 | GET | `/api/v1/investment` | ported | `internal/queryapi/server/investment_route.go:106` |
 | POST | `/api/v1/investment` | ported | `internal/queryapi/server/investment_route.go:106` |
-| POST | `/api/v1/investment/explain` | ported | `internal/queryapi/server/investment_explain_route.go:128` |
+| POST | `/api/v1/investment/explain` | ported | `internal/queryapi/server/investment_explain_route.go:129` |
 | POST | `/api/v1/investment/flow` | ported | `internal/queryapi/server/investment_flow_route.go:86` |
 | POST | `/api/v1/investment/flow/repo-team` | ported | `internal/queryapi/server/investment_flow_route.go:86` |
 | GET | `/api/v1/investment/sunburst` | ported | `internal/queryapi/server/investment_route.go:174` |
@@ -322,11 +322,11 @@ _32 `/api/v1/*` routes in `src/dev_health_ops/api/main.py`: **32** ported, **0**
 | GET | `/api/v1/opportunities` | ported | `internal/queryapi/server/opportunities_route.go:66` |
 | POST | `/api/v1/opportunities` | ported | `internal/queryapi/server/opportunities_route.go:66` |
 | GET | `/api/v1/people` | ported | `internal/queryapi/server/people_route.go:91` |
-| GET | `/api/v1/people/{person_id}/drilldown/issues` | ported | `internal/queryapi/server/people_drilldown_issues_route.go:63` |
-| GET | `/api/v1/people/{person_id}/drilldown/prs` | ported | `internal/queryapi/server/people_drilldown_prs_route.go:65` |
-| GET | `/api/v1/people/{person_id}/metric` | ported | `internal/queryapi/server/people_metric_route.go:67` |
-| GET | `/api/v1/people/{person_id}/summary` | ported | `internal/queryapi/server/people_summary_route.go:86` |
-| GET | `/api/v1/quadrant` | ported | `internal/queryapi/server/quadrant_route.go:77` |
+| GET | `/api/v1/people/{person_id}/drilldown/issues` | ported | `internal/queryapi/server/people_drilldown_issues_route.go:65` |
+| GET | `/api/v1/people/{person_id}/drilldown/prs` | ported | `internal/queryapi/server/people_drilldown_prs_route.go:67` |
+| GET | `/api/v1/people/{person_id}/metric` | ported | `internal/queryapi/server/people_metric_route.go:69` |
+| GET | `/api/v1/people/{person_id}/summary` | ported | `internal/queryapi/server/people_summary_route.go:88` |
+| GET | `/api/v1/quadrant` | ported | `internal/queryapi/server/quadrant_route.go:79` |
 | GET | `/api/v1/sankey` | ported | `internal/queryapi/server/sankey_route.go:80` |
 | POST | `/api/v1/sankey` | ported | `internal/queryapi/server/sankey_route.go:80` |
 | GET | `/api/v1/work-units` | ported | `internal/queryapi/server/workunits_route.go:111` |

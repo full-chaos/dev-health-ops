@@ -247,6 +247,8 @@ EXPECTED_PACKAGES = {
     # connection cannot prove the population it asserts.
     "internal/testsupport/chschema",
     "internal/testsupport/containers",
+    # venueoracle's TableRows guard, checked against a real Postgres.
+    "internal/testsupport/venueoracle",
 }
 
 

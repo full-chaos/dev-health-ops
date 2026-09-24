@@ -98,9 +98,10 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, uuid.New(), orgID, targetID
 	if sourceRows != goRows {
 		t.Errorf("audit_logs rows differ:\n python: %s\n go:     %s", sourceRows, goRows)
 	}
+	compareAuditJSONWithSpacingGap(t, ctx, venue, fmt.Sprintf("user_id = '%s' AND resource_id = '%s'", adminID, targetID), "request_metadata")
 }
 
 func impersonationAuditQuery(adminID, targetID uuid.UUID) string {
-	return fmt.Sprintf(`SELECT org_id, user_id, action, resource_type, resource_id, status, request_metadata
+	return fmt.Sprintf(`SELECT org_id, user_id, action, resource_type, resource_id, status
 FROM audit_logs WHERE user_id = '%s' AND resource_id = '%s' ORDER BY created_at`, adminID, targetID)
 }

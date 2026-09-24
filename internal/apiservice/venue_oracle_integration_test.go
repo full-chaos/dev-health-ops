@@ -111,7 +111,7 @@ func TestVenueOracleProtectedRoutes(t *testing.T) {
 	}))
 	// The rows the writes touched are identical on both copies.
 	compareRows(t, ctx, venue, &receipt, "organizations", `SELECT id::text, slug, name, coalesce(description, '<null>'), tier, is_active,
-		updated_at > created_at FROM organizations ORDER BY slug`)
+		updated_at > created_at, settings::text FROM organizations ORDER BY slug`)
 	compareRows(t, ctx, venue, &receipt, "settings", `SELECT org_id, category, key, CASE WHEN key = 'telemetry_last_report_at' AND value ~ '^2026-09-01' THEN value
 		WHEN key = 'telemetry_last_report_at' AND value <> 'garbage' THEN 'reported' ELSE coalesce(value, '<null>') END, is_encrypted,
 		coalesce(description, '<null>') FROM settings ORDER BY org_id, category, key`)

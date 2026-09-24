@@ -223,7 +223,7 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, uuid.New(), orgID, newMembe
 
 	// Finding: a tier PATCH that actually changes the tier must sync a
 	// PRE-EXISTING org_licenses row's own tier/managed_by, on both planes.
-	licenseQuery := fmt.Sprintf(`SELECT tier, managed_by FROM org_licenses WHERE org_id = '%s'`, orgID)
+	licenseQuery := fmt.Sprintf(`SELECT tier, managed_by, coalesce(features_override::text, '<null>'), coalesce(limits_override::text, '<null>') FROM org_licenses WHERE org_id = '%s'`, orgID)
 	sourceLicense := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), licenseQuery)
 	goLicense := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), licenseQuery)
 	if sourceLicense != goLicense {

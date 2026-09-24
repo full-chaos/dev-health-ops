@@ -335,21 +335,26 @@ func TestVenueOracleCustomerPushWrites(t *testing.T) {
 		t.Fatal("no minted token was checked")
 	}
 
-	// Stored rows, generated values blanked.
-	tables := map[string]string{
-		"sources": `SELECT id::text, org_id, system, instance, entity_family, display_name, mode, enabled, webhook_mode,
+	// Stored rows, generated values blanked. Generated ids become ordinal
+	// labels by first appearance across the tables in this fixed order, so
+	// an id stored inside the audit JSON must name the same row on both
+	// planes (a wrong or unrelated id gets a label of its own).
+	tables := []struct{ name, query string }{
+		{"sources", `SELECT id::text, org_id, system, instance, entity_family, display_name, mode, enabled, webhook_mode,
 			webhook_secret_id::text, matched_integration_source_id IS NOT NULL, created_by_user_id::text,
-			created_at, updated_at FROM external_ingest_sources ORDER BY org_id, system, instance, entity_family`,
-		"tokens": `SELECT id::text, org_id, source_id::text, name, length(token_hash), token_prefix, scopes::text,
+			created_at, updated_at FROM external_ingest_sources ORDER BY org_id, system, instance, entity_family`},
+		{"tokens", `SELECT id::text, org_id, source_id::text, name, length(token_hash), token_prefix, scopes::text,
 			created_by_user_id::text, expires_at, revoked_at, last_used_at, last_used_ip, created_at
-			FROM external_ingest_tokens ORDER BY name, created_at, expires_at NULLS FIRST`,
-		"audit": `SELECT org_id::text, user_id::text, action, resource_type, resource_id, description, changes::text,
+			FROM external_ingest_tokens ORDER BY name, created_at, expires_at NULLS FIRST`},
+		{"audit", `SELECT org_id::text, user_id::text, action, resource_type, resource_id, description, changes::text,
 			request_metadata::text, status, error_message, created_at FROM audit_logs
-			WHERE action LIKE 'ingest_%' ORDER BY created_at, action`,
+			WHERE action LIKE 'ingest_%' ORDER BY created_at, action`},
 	}
-	for name, query := range tables {
-		pythonRows := normalizeRows(venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), query), seeded, start)
-		goRows := normalizeRows(venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), query), seeded, start)
+	pythonIDs, goIDs := map[string]string{}, map[string]string{}
+	for _, table := range tables {
+		name := table.name
+		pythonRows := normalizeRows(venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), table.query), seeded, pythonIDs, start)
+		goRows := normalizeRows(venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), table.query), seeded, goIDs, start)
 		mark := venueoracle.Mark(pythonRows == goRows)
 		receipt += fmt.Sprintf("%s rows after writes: %s\n", name, mark)
 		if pythonRows != goRows {
@@ -365,14 +370,22 @@ func TestVenueOracleCustomerPushWrites(t *testing.T) {
 
 var venueGoTime = regexp.MustCompile(`\d{4}-\d\d-\d\d \d\d:\d\d:\d\d(?:\.\d+)? \+0000 UTC`)
 
-// normalizeRows blanks generated ids and clock times in TableRows output
-// (Go's time rendering).
-func normalizeRows(rows string, seeded map[string]bool, start time.Time) string {
+// normalizeRows blanks clock times in TableRows output (Go's time
+// rendering) and replaces each generated id with its ordinal label in
+// labels (one map per plane, shared across that plane's tables), so equal
+// ids stay equal and different ids stay different.
+func normalizeRows(rows string, seeded map[string]bool, labels map[string]string, start time.Time) string {
 	rows = venueUUID.ReplaceAllStringFunc(rows, func(match string) string {
-		if seeded[strings.ToLower(match)] {
+		id := strings.ToLower(match)
+		if seeded[id] {
 			return match
 		}
-		return "<id>"
+		label, ok := labels[id]
+		if !ok {
+			label = fmt.Sprintf("<id-%d>", len(labels)+1)
+			labels[id] = label
+		}
+		return label
 	})
 	rows = venuePrefix.ReplaceAllString(rows, "<prefix>")
 	rows = regexp.MustCompile(`fcpush_[A-Za-z0-9_-]{5}`).ReplaceAllStringFunc(rows, func(match string) string {

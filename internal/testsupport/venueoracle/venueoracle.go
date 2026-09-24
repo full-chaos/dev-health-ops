@@ -47,6 +47,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	valkeygo "github.com/valkey-io/valkey-go"
 
@@ -700,9 +701,35 @@ func Do(t *testing.T, base string, request Request) Response {
 	return Response{Status: response.StatusCode, Headers: headers, Body: string(raw)}
 }
 
+// RowsReporter is the part of *testing.T TableRows reports through.
+type RowsReporter interface {
+	Helper()
+	Fatal(args ...any)
+	Fatalf(format string, args ...any)
+}
+
+// jsonTypeOIDs are Postgres's json, jsonb and their array types.
+var jsonTypeOIDs = map[uint32]string{114: "json", 3802: "jsonb", 199: "json[]", 3807: "jsonb[]"}
+
+// decodedJSONColumns names each result column TableRows would decode as
+// JSON. A decoded value renders through fmt.Sprint, which hides spacing,
+// escaping (ensure_ascii) and key order (it sorts map keys), so two
+// planes that store different JSON text would compare equal. A venue
+// compares stored JSON as raw text: the query casts the column ::text.
+func decodedJSONColumns(fields []pgconn.FieldDescription) []string {
+	var named []string
+	for _, field := range fields {
+		if kind, ok := jsonTypeOIDs[field.DataTypeOID]; ok {
+			named = append(named, field.Name+" ("+kind+")")
+		}
+	}
+	return named
+}
+
 // TableRows runs query on uri and renders every row, in query order, as
-// "v1 v2 ... | ...".
-func TableRows(t *testing.T, ctx context.Context, uri, query string) string {
+// "v1 v2 ... | ...". A json or jsonb result column fails the test: cast it
+// ::text so the stored text is compared (decodedJSONColumns).
+func TableRows(t RowsReporter, ctx context.Context, uri, query string) string {
 	t.Helper()
 	pool, err := pgxpool.New(ctx, uri)
 	if err != nil {
@@ -714,6 +741,10 @@ func TableRows(t *testing.T, ctx context.Context, uri, query string) string {
 		t.Fatal(err)
 	}
 	defer rows.Close()
+	if named := decodedJSONColumns(rows.FieldDescriptions()); len(named) > 0 {
+		t.Fatalf("venueoracle.TableRows: cast %s to text; a venue compares stored JSON as raw text, not decoded: %s",
+			strings.Join(named, ", "), query)
+	}
 	var lines []string
 	for rows.Next() {
 		values, err := rows.Values()

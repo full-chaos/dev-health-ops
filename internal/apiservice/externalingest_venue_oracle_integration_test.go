@@ -457,9 +457,11 @@ func TestExternalIngestVenueOracle(t *testing.T) {
 	}
 
 	pythonBatches := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB),
-		`SELECT idempotency_key, status, items_received, items_accepted, items_rejected FROM external_ingest_batches ORDER BY idempotency_key`)
+		`SELECT idempotency_key, status, items_received, items_accepted, items_rejected, coalesce(record_counts::text, '<null>'),
+			coalesce(error_summary::text, '<null>'), coalesce(recompute_scope::text, '<null>') FROM external_ingest_batches ORDER BY idempotency_key`)
 	goBatches := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB),
-		`SELECT idempotency_key, status, items_received, items_accepted, items_rejected FROM external_ingest_batches ORDER BY idempotency_key`)
+		`SELECT idempotency_key, status, items_received, items_accepted, items_rejected, coalesce(record_counts::text, '<null>'),
+			coalesce(error_summary::text, '<null>'), coalesce(recompute_scope::text, '<null>') FROM external_ingest_batches ORDER BY idempotency_key`)
 	if pythonBatches != goBatches {
 		t.Errorf("external_ingest_batches rows differ:\n python: %s\n go:     %s", pythonBatches, goBatches)
 	}

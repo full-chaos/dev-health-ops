@@ -8,7 +8,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strings"
@@ -245,12 +247,27 @@ func TestWebhookIntakeVenueOracleGitHubGitLabJiraHealth(t *testing.T) {
 	}
 
 	pythonOutbox := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB),
-		`SELECT job_kind FROM worker_job_outbox ORDER BY job_kind, id`)
+		`SELECT job_kind FROM worker_job_outbox ORDER BY job_kind, dedupe_key`)
 	goOutbox := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB),
-		`SELECT job_kind FROM worker_job_outbox ORDER BY job_kind, id`)
+		`SELECT job_kind FROM worker_job_outbox ORDER BY job_kind, dedupe_key`)
 	if pythonOutbox != goOutbox {
 		t.Errorf("worker_job_outbox rows differ:\n python: %s\n go:     %s", pythonOutbox, goOutbox)
 	}
+	// args is stored JSON, compared as raw text. dedupe_key (the
+	// content-derived idempotency key) orders both planes' rows alike. The
+	// delivery ids inside are random per plane: each plane's stored
+	// webhook_deliveries ids are labelled first, in the delivery rows'
+	// order, so an args id must name that plane's persisted delivery (an
+	// id that joins no delivery gets a label of its own). Go stores the
+	// canonical job-contract text (indented), Python json.dumps text: that
+	// named gap is ticketed with the job outbox owner.
+	argsQuery := `SELECT coalesce(string_agg(args::text, E'\x1e' ORDER BY job_kind, dedupe_key), '') FROM worker_job_outbox`
+	deliveryIDs := `SELECT coalesce(string_agg(id::text, ' ' ORDER BY provider, delivery_key), '') FROM webhook_deliveries`
+	planeArgs := func(uri string) []string {
+		return blankedJSONRows(venueoracle.TableRows(t, ctx, uri, argsQuery), strings.Fields(venueoracle.TableRows(t, ctx, uri, deliveryIDs)))
+	}
+	venueoracle.CompareJSONSpacingGap(t, "worker_job_outbox.args",
+		planeArgs(venue.AdminURI(t, venue.SourceDB)), planeArgs(venue.AdminURI(t, venue.GoDB)))
 	// venueoracle.Start already wrote this test's own proof file (by
 	// t.Name()) once the venue genuinely built -- nothing to do here.
 }
@@ -579,4 +596,35 @@ func TestWebhookIntakeVenueOraclePagerDuty(t *testing.T) {
 		t.Errorf("pagerduty-webhook-replay keys differ:\n python: %s\n go:     %s", pythonReplay, goReplay)
 	}
 	// venueoracle.Start already wrote this test's own proof file.
+}
+
+var venueUUIDPattern = regexp.MustCompile(`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`)
+
+// blankedJSONRows splits a string_agg of stored JSON texts into rows,
+// with each UUID replaced by an ordinal label. The plane's stored ids
+// (known, in a plane-independent order) take the first labels, so an id
+// in the JSON that names a stored row gets that row's label on both
+// planes, and any other id gets a label of its own by first appearance.
+func blankedJSONRows(joined string, known []string) []string {
+	if joined == "" {
+		return nil
+	}
+	labels := map[string]string{}
+	for _, id := range known {
+		if _, ok := labels[id]; !ok {
+			labels[id] = fmt.Sprintf("<uuid-%d>", len(labels)+1)
+		}
+	}
+	rows := strings.Split(joined, venueoracle.JSONRowSeparator)
+	for index, row := range rows {
+		rows[index] = venueUUIDPattern.ReplaceAllStringFunc(row, func(id string) string {
+			label, ok := labels[id]
+			if !ok {
+				label = fmt.Sprintf("<uuid-%d>", len(labels)+1)
+				labels[id] = label
+			}
+			return label
+		})
+	}
+	return rows
 }

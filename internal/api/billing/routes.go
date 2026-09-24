@@ -65,6 +65,9 @@ func Routes(deps Deps) []httpapi.Route {
 		// answers its own 405 (Allow: POST, as Starlette's first partial
 		// match), while GET/PUT/DELETE on it reach the {plan_id} routes.
 		{Method: http.MethodPost, Pattern: prefix + "/plans/pull-stripe", Allow: http.MethodPost, Handler: g.Wrap(policy.Superuser, http.HandlerFunc(h.pullStripe))},
+		// HEAD would otherwise reach GET /plans/{plan_id}, whose 405 names
+		// GET; Starlette's first partial match for this path is the POST.
+		{Method: http.MethodHead, Pattern: prefix + "/plans/pull-stripe", Handler: http.HandlerFunc(pullStripeNotAllowed)},
 		{Method: http.MethodGet, Pattern: prefix + "/plans/{plan_id}", Allow: http.MethodGet, Handler: wrap(policy.Optional, h.getPlan)},
 		{Method: http.MethodPost, Pattern: prefix + "/plans/{plan_id}", Handler: http.HandlerFunc(planPostNotAllowed)},
 		{Method: http.MethodPut, Pattern: prefix + "/plans/{plan_id}", Handler: body(policy.Authenticated, h.updatePlan)},
@@ -90,6 +93,14 @@ func Routes(deps Deps) []httpapi.Route {
 		{Method: http.MethodPost, Pattern: prefix + "/audit/{audit_id}/resolve", Allow: http.MethodPost, Handler: body(policy.Authenticated, h.resolveAudit)},
 		{Method: http.MethodPost, Pattern: prefix + "/reconcile", Allow: http.MethodPost, Handler: wrap(policy.Authenticated, h.reconcile)},
 	}
+}
+
+// pullStripeNotAllowed is any method but POST on /plans/pull-stripe that
+// the mux would otherwise hand to a /plans/{plan_id} route.
+func pullStripeNotAllowed(w http.ResponseWriter, _ *http.Request) {
+	header := http.Header{}
+	header.Set("Allow", http.MethodPost)
+	policy.WriteDetail(w, http.StatusMethodNotAllowed, "Method Not Allowed", header)
 }
 
 // planPostNotAllowed is POST /plans/{plan_id} for any id but

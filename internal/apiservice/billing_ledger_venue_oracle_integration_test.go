@@ -265,6 +265,8 @@ func ledgerRequests(f billingFixture, tokens map[string]string) []venueoracle.Re
 	// The pull-stripe literal's own 405.
 	m("pull: 405 patch", "PATCH", p+"/plans/pull-stripe", none, headers("super"))
 	m("pull: 405 options", "OPTIONS", p+"/plans/pull-stripe", none, headers("super"))
+	m("pull: 405 head", "HEAD", p+"/plans/pull-stripe", none, headers("super"))
+	m("plan: head", "HEAD", p+"/plans/"+f.planTeam.String(), none, headers("super"))
 	m("plan post: 405", "POST", p+"/plans/"+f.planTeam.String(), none, headers("super"))
 	m("plan patch: 405", "PATCH", p+"/plans/"+f.planTeam.String(), none, headers("super"))
 	return list

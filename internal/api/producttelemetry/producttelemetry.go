@@ -5,10 +5,8 @@
 package producttelemetry
 
 import (
-	"bytes"
 	"context"
 	"errors"
-	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -185,16 +183,10 @@ func (h handler) write(ctx context.Context, batch batch, ingestionID string) (st
 	return stream, err
 }
 
+// writeJSON is the shared JSONResponse writer (policy.WriteJSON), which
+// logs a body it cannot serialize and answers the unhandled-error 500.
 func writeJSON(w http.ResponseWriter, status int, body pyjson.Value) {
-	payload, err := pyjson.Marshal(body)
-	if err != nil {
-		policy.WriteInternal(w)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
-	w.WriteHeader(status)
-	_, _ = io.Copy(w, bytes.NewReader(payload))
+	policy.WriteJSON(w, status, body, nil)
 }
 
 type batch struct {

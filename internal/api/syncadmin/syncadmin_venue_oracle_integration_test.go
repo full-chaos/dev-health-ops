@@ -36,6 +36,7 @@ type venueIDs struct {
 	cfgB, cfgJobsBadList, cfgJobsInf                            uuid.UUID
 	cfgBadTargetsInt, cfgBadTargetsNumber, cfgBadTargetsTrue    uuid.UUID
 	cfgBadOptionsString, cfgBadOptionsIntKey, cfgBadOptionsTrue uuid.UUID
+	cfgSurrogate                                                uuid.UUID
 	jobSync, jobMetrics, jobB, jobBadList, jobInf               uuid.UUID
 	runP1, runP2, runB, runBadResult, runNullResult             uuid.UUID
 }
@@ -49,7 +50,7 @@ func newVenueIDs() venueIDs {
 		&ids.cfgDictTargets, &ids.cfgInactive, &ids.cfgNoSources, &ids.cfgCrossOrg, &ids.child1, &ids.child2,
 		&ids.child3, &ids.child4, &ids.child5, &ids.childSourced, &ids.cfgB, &ids.cfgJobsBadList, &ids.cfgJobsInf,
 		&ids.cfgBadTargetsInt, &ids.cfgBadTargetsNumber, &ids.cfgBadTargetsTrue, &ids.cfgBadOptionsString,
-		&ids.cfgBadOptionsIntKey, &ids.cfgBadOptionsTrue, &ids.jobSync, &ids.jobMetrics, &ids.jobB, &ids.jobBadList,
+		&ids.cfgBadOptionsIntKey, &ids.cfgBadOptionsTrue, &ids.cfgSurrogate, &ids.jobSync, &ids.jobMetrics, &ids.jobB, &ids.jobBadList,
 		&ids.jobInf, &ids.runP1, &ids.runP2, &ids.runB, &ids.runBadResult, &ids.runNullResult,
 	} {
 		*target = uuid.New()
@@ -163,6 +164,10 @@ func syncAdminRequests(venue *venueoracle.Venue, ids venueIDs) []venueoracle.Req
 		"targets int items": ids.cfgBadTargetsInt, "targets number": ids.cfgBadTargetsNumber,
 		"targets true": ids.cfgBadTargetsTrue, "options string": ids.cfgBadOptionsString,
 		"options int key": ids.cfgBadOptionsIntKey, "options true": ids.cfgBadOptionsTrue,
+		// Renders in Go and in Python, and then neither can serialize it:
+		// both answer the unhandled-exception 500 (the repository selection
+		// never writes the options, so it answers 200).
+		"options lone surrogate": ids.cfgSurrogate,
 	}
 	for _, name := range sortedKeys(configIDs) {
 		id := configIDs[name]
@@ -349,6 +354,7 @@ VALUES ($1, $2, $3, $4, $5::json, $6::json, $7, $8, $9, $10, $11, NULLIF($12, ''
 	config(ids.cfgBadOptionsString, ids.orgC, "bad-options-string", "github", `[]`, `"abc"`, true, nil, nil, nil, "", nil, nil, "2026-01-01 00:00:21+00")
 	config(ids.cfgBadOptionsIntKey, ids.orgC, "bad-options-int-key", "github", `[]`, `[[1, 2], ["repo", "r"], ["owner", "o"]]`, true, nil, nil, nil, "", nil, nil, "2026-01-01 00:00:22+00")
 	config(ids.cfgBadOptionsTrue, ids.orgC, "bad-options-true", "github", `[]`, `true`, true, nil, nil, nil, "", nil, nil, "2026-01-01 00:00:23+00")
+	config(ids.cfgSurrogate, ids.orgC, "surrogate", "github", `[]`, `{"x": "\ud800"}`, true, nil, nil, nil, "", nil, nil, "2026-01-01 00:00:24+00")
 
 	scheduled := func(id, org, configID uuid.UUID, jobType string) {
 		exec(`INSERT INTO scheduled_jobs (id, org_id, name, job_type, provider, schedule_cron, timezone, job_config, sync_config_id,

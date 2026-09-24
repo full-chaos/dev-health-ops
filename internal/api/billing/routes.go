@@ -130,7 +130,15 @@ func validation(errs pybody.Errors) reply {
 	return reply{http.StatusUnprocessableEntity, pybody.Detail(errs)}
 }
 
+// write writes one answer. Every billing route is a response_model route
+// in FastAPI and none returns a JSONResponse itself, so a success body is
+// pydantic-core's dump_json (policy.WriteModel); an error body is the
+// HTTPException or validation JSONResponse (policy.WriteJSON).
 func (h handlers) write(w http.ResponseWriter, answer reply) {
+	if answer.status >= 200 && answer.status < 300 {
+		policy.WriteModel(w, answer.status, answer.body, nil)
+		return
+	}
 	policy.WriteJSON(w, answer.status, answer.body, nil)
 }
 

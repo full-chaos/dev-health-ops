@@ -170,3 +170,25 @@ func TestNaiveDatetimeMatchesPydanticNaive(t *testing.T) {
 		}
 	}
 }
+
+// TestNaiveDatetimeInServerZone pins the non-UTC server-zone form: the
+// driver reports the stored instant in the server zone and the Python api
+// prints that wall clock with its offset (observed live: a 18:37:05Z
+// instant read from a America/Los_Angeles server prints
+// 2026-09-21T11:37:05.895620-07:00). The live venue runs both zones.
+func TestNaiveDatetimeInServerZone(t *testing.T) {
+	pacific := time.FixedZone("PDT", -7*3600)
+	at := time.Date(2026, 9, 21, 18, 37, 5, 895620000, time.UTC).In(pacific)
+	if got, want := naiveDatetime(at), "2026-09-21T11:37:05.895620-07:00"; got != want {
+		t.Errorf("got %q want %q", got, want)
+	}
+	whole := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC).In(time.FixedZone("IST", 5*3600+1800))
+	if got, want := naiveDatetime(whole), "2026-01-02T08:34:05+05:30"; got != want {
+		t.Errorf("got %q want %q", got, want)
+	}
+	// A zero-offset zone that is not UTC is aware, so "Z".
+	london := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC).In(time.FixedZone("GMT", 0))
+	if got, want := naiveDatetime(london), "2026-01-02T03:04:05Z"; got != want {
+		t.Errorf("got %q want %q", got, want)
+	}
+}

@@ -13,6 +13,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -22,6 +23,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	chclickhouse "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
@@ -46,6 +48,21 @@ var stamps = []string{
 // microsecond timestamps, and requires byte-identical answers: the compare
 // is raw response text (R398), so a "Z" suffix or a trimmed zero is a diff.
 func TestAdminTimestampVenueOracle(t *testing.T) {
+	runAdminTimestampVenue(t)
+}
+
+// TestAdminTimestampServerZoneVenueOracle is the same comparison against a
+// ClickHouse server whose zone is not UTC: clickhouse-connect then returns
+// aware datetimes in that zone and the Python api prints their offset, so the
+// Go route must too. Both a winter and a summer stamp are seeded, so the
+// offset changes with daylight saving.
+func TestAdminTimestampServerZoneVenueOracle(t *testing.T) {
+	t.Setenv(containers.ClickHouseTimezoneEnv, "America/Los_Angeles")
+	runAdminTimestampVenue(t)
+}
+
+func runAdminTimestampVenue(t *testing.T) {
+	zone := os.Getenv(containers.ClickHouseTimezoneEnv)
 	ctx := context.Background()
 	root := repoRoot(t)
 	const jwtKey = "venue-oracle-test-secret-key-for-admin-stamps-32b!"
@@ -106,7 +123,7 @@ VALUES ($1, $2, true, true, false, 0, now(), now())`, user.id, user.email)
 			if request.Name != "teams inactive too" && request.Name != "identities inactive too" {
 				return
 			}
-			for _, want := range wantRendered() {
+			for _, want := range wantRendered(zone) {
 				if !strings.Contains(goResponse.Body, `"updated_at":"`+want+`"`) {
 					t.Errorf("%s: body lacks updated_at %s:\n%s", request.Name, want, goResponse.Body)
 				}
@@ -116,13 +133,28 @@ VALUES ($1, $2, true, true, false, 0, now(), now())`, user.id, user.email)
 	t.Logf("receipt (%d requests):\n%s", len(requests), receipt)
 }
 
-// wantRendered is Python's datetime.isoformat() of each stamp (a naive
-// datetime: no zone, no fraction when the microseconds are zero).
-func wantRendered() []string {
+// wantRendered is Python's rendering of each stamp: a naive datetime (no
+// zone, no fraction when the microseconds are zero) on a UTC server, and on a
+// server in zone the stamp's wall clock with that zone's offset on that date.
+func wantRendered(zone string) []string {
+	var location *time.Location
+	if zone != "" {
+		var err error
+		if location, err = time.LoadLocation(zone); err != nil {
+			panic(err)
+		}
+	}
 	out := make([]string, 0, len(stamps))
 	for _, stamp := range stamps {
 		text := strings.Replace(stamp, " ", "T", 1)
 		text = strings.TrimSuffix(text, ".000000")
+		if location != nil {
+			at, err := time.ParseInLocation("2006-01-02 15:04:05.000000", stamp, location)
+			if err != nil {
+				panic(err)
+			}
+			text += at.Format("-07:00")
+		}
 		out = append(out, text)
 	}
 	return out

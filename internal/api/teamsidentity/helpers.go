@@ -38,12 +38,20 @@ func queryBoolDefaultTrue(r *http.Request, name string) (bool, *pybody.Error) {
 	}
 }
 
-// naiveDatetime renders a NAIVE datetime column (ClickHouse DateTime64(6)
-// without a zone) the way pydantic-core serializes a naive Python datetime:
-// no zone, ".ffffff" only when the microseconds are non-zero. One shared
-// implementation (pytime.Pydantic) owns the wire form (R299).
+// naiveDatetime renders a DateTime64(6) column without an explicit zone the
+// way the Python api serializes what its driver returns for it: clickhouse-
+// connect hands back a naive datetime when the server zone is UTC and an
+// aware one in the server zone otherwise, and pydantic-core prints a naive
+// value with no zone and an aware one with its offset ("Z" for zero). The
+// Go driver reports the column in the server zone the same way (time.UTC for
+// a UTC server), so the location decides. One shared implementation
+// (pytime.Pydantic) owns the wire form (R299).
 func naiveDatetime(value time.Time) string {
-	return pytime.Pydantic(pytime.DateTime{Time: value.UTC(), Aware: false})
+	if value.Location() == time.UTC {
+		return pytime.Pydantic(pytime.DateTime{Time: value.UTC()})
+	}
+	_, offset := value.Zone()
+	return pytime.Pydantic(pytime.DateTime{Time: value.UTC(), Aware: true, Offset: offset})
 }
 
 func sortedKeysBool(m map[string]bool) []string {

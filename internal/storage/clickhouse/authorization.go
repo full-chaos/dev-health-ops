@@ -48,12 +48,20 @@ func APIPosture(database string) Posture {
 		// POST /teams/import (CHAOS-6311) runs import_teams' drift-projector
 		// write path: it reads a team's sync policy and its pending drift
 		// changes, and writes provider observations and drift changes.
+		// (Team drift review, CHAOS-6312, also reads the observations.)
 		// Nothing else touches these tables through this login, and none
 		// of them is ever deleted from here (status moves by inserting a
 		// newer ReplacingMergeTree row).
 		{Database: database, Table: "team_sync_policies", AllowSelect: true},
-		{Database: database, Table: "team_provider_observations", AllowInsert: true},
+		{Database: database, Table: "team_provider_observations", AllowInsert: true, AllowSelect: true},
 		{Database: database, Table: "team_drift_changes", AllowInsert: true, AllowSelect: true},
+		// Team drift review (CHAOS-6312): approving an identity membership
+		// change inserts the membership and expires the manual membership /
+		// member fallback it conflicted with (a newer ReplacingMergeTree row),
+		// and approving a team change reads the provider observation it
+		// applies. Insert only: nothing here reads or deletes these tables.
+		{Database: database, Table: "team_memberships", AllowInsert: true},
+		{Database: database, Table: "manual_attribution_fallbacks", AllowInsert: true},
 	}}
 }
 

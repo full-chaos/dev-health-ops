@@ -63,6 +63,8 @@ func startPostureHarness(t *testing.T) *postureHarness {
 		"CREATE TABLE team_sync_policies (org_id String, team_id String) ENGINE = ReplacingMergeTree() ORDER BY team_id",
 		"CREATE TABLE team_provider_observations (org_id String, team_id String) ENGINE = ReplacingMergeTree() ORDER BY team_id",
 		"CREATE TABLE team_drift_changes (org_id String, change_id String) ENGINE = ReplacingMergeTree() ORDER BY change_id",
+		"CREATE TABLE team_memberships (org_id String, member_id String) ENGINE = ReplacingMergeTree() ORDER BY member_id",
+		"CREATE TABLE manual_attribution_fallbacks (org_id String, scope_id String) ENGINE = ReplacingMergeTree() ORDER BY scope_id",
 		"CREATE TABLE other_table (id String) ENGINE = ReplacingMergeTree() ORDER BY id",
 	} {
 		if err := admin.Exec(ctx, statement); err != nil {
@@ -109,14 +111,18 @@ const (
 
 	// POST /teams/import's drift-projector tables (CHAOS-6311).
 	grantSyncPoliciesExact = "GRANT SELECT ON default.team_sync_policies"
-	grantObservationsExact = "GRANT INSERT ON default.team_provider_observations"
+	grantObservationsExact = "GRANT SELECT, INSERT ON default.team_provider_observations"
 	grantDriftChangesExact = "GRANT SELECT, INSERT ON default.team_drift_changes"
+
+	// Team drift review's edge tables (CHAOS-6312).
+	grantMembershipsExact = "GRANT INSERT ON default.team_memberships"
+	grantFallbacksExact   = "GRANT INSERT ON default.manual_attribution_fallbacks"
 )
 
 // importGrants is the exact grant set for the three import tables, appended
 // to each test's teams/identities grants so the whole manifest is met.
 func importGrants() []string {
-	return []string{grantSyncPoliciesExact, grantObservationsExact, grantDriftChangesExact}
+	return []string{grantSyncPoliciesExact, grantObservationsExact, grantDriftChangesExact, grantMembershipsExact, grantFallbacksExact}
 }
 
 // TestCheckPostureAcceptsExactMatch proves the happy path: a user granted
@@ -211,7 +217,7 @@ func TestCheckPostureRejectsExtraPrivilegeOnDeclaredTable(t *testing.T) {
 func TestCheckPostureRejectsMissingImportTableGrant(t *testing.T) {
 	h := startPostureHarness(t)
 	conn := h.newUser(t, grantTeamsExact, grantIdentitiesExact, grantSyncPoliciesExact,
-		grantObservationsExact, "GRANT SELECT ON default.team_drift_changes")
+		grantObservationsExact, grantMembershipsExact, grantFallbacksExact, "GRANT SELECT ON default.team_drift_changes")
 	err := CheckAPIClickHouseAuthorization(h.ctx, conn)
 	if err == nil || !errors.Is(err, ErrPostureMismatch) {
 		t.Fatalf("missing INSERT on team_drift_changes must fail with ErrPostureMismatch, got: %v", err)

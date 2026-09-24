@@ -303,7 +303,9 @@ func checkLabel(label []rune) *Error {
 			// is a ValueError (through UnicodeError): the handler catches
 			// that raise too, so every refused joiner surfaces as this
 			// message, the same as an unknown neighbouring code point.
-			if valid, ok := validContextJ(label, pos); !ok || !valid {
+			// validContextJ's unknown-neighbour result carries valid=false,
+			// so valid alone decides.
+			if valid, _ := validContextJ(label, pos); !valid {
 				return idnaError(KindIDNA, "Unknown codepoint adjacent to joiner %s at position %d in %s", unot(r), pos+1, repr(label))
 			}
 		case inRanges(codepointClasses["CONTEXTO"], r):

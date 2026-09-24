@@ -47,8 +47,9 @@ func (e *Errors) RequiredEmailStr(object *pyjson.Object, name string) (string, b
 // OptionalEmailStr validates one `EmailStr | None = None` field. present is
 // false when the field is absent, null, or invalid.
 func (e *Errors) OptionalEmailStr(object *pyjson.Object, name string) (string, bool) {
-	raw, ok := object.Get(name)
-	if !ok || raw == nil {
+	// An absent key reads back as nil, the same as an explicit null.
+	raw, _ := object.Get(name)
+	if raw == nil {
 		return "", false
 	}
 	return e.emailStr(raw, []pyjson.Value{"body", name})

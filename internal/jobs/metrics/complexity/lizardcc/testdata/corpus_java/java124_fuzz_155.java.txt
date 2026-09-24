@@ -1,0 +1,1 @@
+class C { int[][] nn = { {1}, {2} }; record R(int x) { R { if (x > 0) throw new E(); } } @Deprecated record R(int x) { int f() { if (x > 0) return 1; return 2; } } void an2() { g(new B<C>() { void y() { if (1) {} } }, new D<E>(2)); } @A @B record W(int x) { int h() { while (x > 0) x--; return x; } } }

@@ -1,0 +1,1 @@
+class C { void f() { Outer.Inner i = outer.new Inner() { void q() { if (a) {} } }; } }

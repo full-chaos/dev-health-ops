@@ -1,0 +1,2 @@
+@Deprecated
+class C { @A int record; static void sm() { if (q) {} } void loc3() { @A int r = 1; record L3(int z) {} if (r > 0) {} } final record FR(int x) { } sealed record SR(int x) { } }

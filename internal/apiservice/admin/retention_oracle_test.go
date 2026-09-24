@@ -227,6 +227,9 @@ VALUES ($1, $2, $3, 'team', 'r', '{}'::json, '{}'::json, 'success', now() - ($4 
 		send("W create days infinite float", "POST", "", "ovr", `{"resource_type":"work_items","retention_days":1e400}`),
 		send("W create days boolean false", "POST", "", "ovr", `{"resource_type":"work_items","retention_days":false}`),
 		send("W create days boolean true", "POST", "", "ovr", `{"resource_type":"work_items","retention_days":true}`),
+		// Non-ASCII text: a plane that escaped it differently would differ in
+		// the raw response text (and only there).
+		send("W create description non-ascii", "POST", "", "ovr", `{"resource_type":"git_commits","description":"Café 東京 ünï"}`),
 		send("W create duplicate type", "POST", "", "ent", `{"resource_type":"audit_logs"}`),
 		send("W create missing type", "POST", "", "ent", `{}`),
 		send("W create null type", "POST", "", "ent", `{"resource_type":null}`),
@@ -322,7 +325,7 @@ VALUES ($1, $2, $3, 'team', 'r', '{}'::json, '{}'::json, 'success', now() - ($4 
 				body = dbFailureText.ReplaceAllString(body, `"error":"<database error>"`)
 			}
 			if strings.HasPrefix(request.Name, "W ") {
-				body = redactDeep(t, body, "id", "created_at", "updated_at", "last_run_at", "next_run_at")
+				body = redactVolatileText(body, "id", "created_at", "updated_at", "last_run_at", "next_run_at")
 			}
 			return body
 		},

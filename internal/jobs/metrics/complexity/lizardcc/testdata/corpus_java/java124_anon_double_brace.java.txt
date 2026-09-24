@@ -1,0 +1,1 @@
+class C { List<String> l = new ArrayList<>() {{ add("x"); }}; int f() { if (l != null) return 1; return 2; } }

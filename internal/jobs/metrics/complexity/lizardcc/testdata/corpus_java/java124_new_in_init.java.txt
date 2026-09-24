@@ -1,0 +1,1 @@
+class C { { Object o = new Object() { void x() { if (a) {} } }; } }

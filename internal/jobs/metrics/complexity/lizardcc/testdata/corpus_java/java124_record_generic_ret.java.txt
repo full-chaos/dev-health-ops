@@ -1,0 +1,1 @@
+class C { List<String> record() { if (a) return null; return null; } }

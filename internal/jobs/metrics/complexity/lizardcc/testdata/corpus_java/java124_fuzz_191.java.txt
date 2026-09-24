@@ -1,0 +1,2 @@
+class C { @A Foo record; void gen() { List<String> l = new ArrayList<String>(); if (l != null) {} } void loc3() { @A int r = 1; record L3(int z) {} if (r > 0) {} } enum EN { A, B; void em() { if (this == A) {} } } @A int record; }
+class D { void d() { if (a) {} } }

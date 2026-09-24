@@ -1,0 +1,1 @@
+class C { void f() { run(new R<String>(1) { void r() { if (a) {} } }); } }

@@ -72,7 +72,7 @@ func analyzerForCorpusFile(realName string) func(path, source string) ([]int, bo
 }
 
 // TestGoMatchesLizardGoldenJSTS proves numeric equality with real lizard
-// 1.23.0 for this package's TypeScript/JavaScript analyzer.
+// 1.24.0 for this package's TypeScript/JavaScript analyzer.
 func TestGoMatchesLizardGoldenJSTS(t *testing.T) {
 	doc := loadJSTSGolden(t)
 

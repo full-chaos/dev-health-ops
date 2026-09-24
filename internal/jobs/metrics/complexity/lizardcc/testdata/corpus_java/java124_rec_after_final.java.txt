@@ -1,0 +1,1 @@
+class C { final record R(int x) { int h() { if (x>0) return 1; return 2; } } }

@@ -45,6 +45,15 @@ func APIPosture(database string) Posture {
 	return Posture{RequiredTables: []TableGrant{
 		{Database: database, Table: "teams", AllowInsert: true, AllowSelect: true, AllowDelete: true},
 		{Database: database, Table: "identities", AllowInsert: true, AllowSelect: true, AllowDelete: true},
+		// POST /teams/import (CHAOS-6311) runs import_teams' drift-projector
+		// write path: it reads a team's sync policy and its pending drift
+		// changes, and writes provider observations and drift changes.
+		// Nothing else touches these tables through this login, and none
+		// of them is ever deleted from here (status moves by inserting a
+		// newer ReplacingMergeTree row).
+		{Database: database, Table: "team_sync_policies", AllowSelect: true},
+		{Database: database, Table: "team_provider_observations", AllowInsert: true},
+		{Database: database, Table: "team_drift_changes", AllowInsert: true, AllowSelect: true},
 	}}
 }
 

@@ -6452,8 +6452,11 @@ func ValidateRESTCorpus() error {
 				return fmt.Errorf("goapiproof: REST corpus entry %q declares request %q twice", operation, req.Name)
 			}
 			seenNames[req.Name] = true
-			if spec.Method == "GET" && req.Body != nil {
-				return fmt.Errorf("goapiproof: REST corpus entry %q request %q is a GET carrying a body", operation, req.Name)
+			if (spec.Method == "GET" || spec.Method == "HEAD") && req.Body != nil {
+				return fmt.Errorf("goapiproof: REST corpus entry %q request %q is a %s carrying a body", operation, req.Name, spec.Method)
+			}
+			if spec.Method == "HEAD" && req.BodyMode != RESTBodyModeStatusOnly {
+				return fmt.Errorf("goapiproof: REST corpus entry %q request %q is a HEAD (its answer has no body) but its BodyMode is %q, not status_only", operation, req.Name, req.BodyMode)
 			}
 			diverges := req.WantCandidateStatus != req.WantBaselineStatus
 			hasReason := req.StatusDivergenceReason != ""

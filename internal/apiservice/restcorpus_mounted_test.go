@@ -1,6 +1,7 @@
 package apiservice
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -8,6 +9,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/goapiproof"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // TestDHOAPICorpusEntriesAreMountedRoutes ties the REST prover's dho-api
@@ -24,8 +26,15 @@ func TestDHOAPICorpusEntriesAreMountedRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// A Pool that never connects (pgxpool dials lazily) makes the pool-backed
+	// areas (billing, admin) mount, exactly as in a configured service.
+	pool, err := pgxpool.New(context.Background(), "postgres://u:p@127.0.0.1:1/db?sslmode=disable")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
 	mounted := map[string]bool{}
-	for _, route := range Routes(Deps{Auth: auth, Guard: policy.NewGuard(auth, quietLogger())}, quietLogger()) {
+	for _, route := range Routes(Deps{Pool: pool, Auth: auth, Guard: policy.NewGuard(auth, quietLogger())}, quietLogger()) {
 		mounted[route.Method+" "+route.Pattern] = true
 	}
 

@@ -29,6 +29,12 @@ func TestNewValidatorsMatchPydantic(t *testing.T) {
 	if _, ok := errs.RequiredString(object, "missing_field", 1, 0); ok {
 		t.Error("missing_field should not validate")
 	}
+	if _, ok := errs.RequiredStringList(object, "c"); ok {
+		t.Error("RequiredStringList on a non-list value should not validate")
+	}
+	if _, ok := errs.RequiredStringList(object, "missing_list"); ok {
+		t.Error("RequiredStringList on a missing field should not validate")
+	}
 
 	rendered, _ := pyjson.Marshal(Detail(errs))
 	want := `{"detail":[` +
@@ -40,7 +46,9 @@ func TestNewValidatorsMatchPydantic(t *testing.T) {
 		`{"type":"less_than_equal","loc":["body","e"],"msg":"Input should be less than or equal to 2","input":5,"ctx":{"le":2}},` +
 		`{"type":"greater_than_equal","loc":["body","f"],"msg":"Input should be greater than or equal to 0","input":-1,"ctx":{"ge":0}},` +
 		`{"type":"int_parsing","loc":["body","g"],"msg":"Input should be a valid integer, unable to parse string as an integer","input":"bad"},` +
-		`{"type":"missing","loc":["body","missing_field"],"msg":"Field required","input":` + mustRenderObject(t, object) + `}` +
+		`{"type":"missing","loc":["body","missing_field"],"msg":"Field required","input":` + mustRenderObject(t, object) + `},` +
+		`{"type":"list_type","loc":["body","c"],"msg":"Input should be a valid list","input":"not-a-dict"},` +
+		`{"type":"missing","loc":["body","missing_list"],"msg":"Field required","input":` + mustRenderObject(t, object) + `}` +
 		`]}`
 	if string(rendered) != want {
 		t.Fatalf("%s", rendered)
@@ -73,6 +81,10 @@ func TestNewValidatorsHappyPath(t *testing.T) {
 	if !ok || text != "team-1" {
 		t.Errorf("RequiredString: %q %v", text, ok)
 	}
+	rlist, ok := errs.RequiredStringList(object, "a")
+	if !ok || len(rlist) != 2 || rlist[0] != "x" || rlist[1] != "y" {
+		t.Errorf("RequiredStringList: %v %v", rlist, ok)
+	}
 
 	_, present = errs.OptionalStringList(object, "absent")
 	if present {
@@ -88,6 +100,40 @@ func TestNewValidatorsHappyPath(t *testing.T) {
 	}
 	if len(errs) != 0 {
 		t.Fatalf("happy path recorded errors: %+v", errs)
+	}
+}
+
+// TestForbidExtraMatchesPydantic pins ForbidExtra against
+// `ConfigDict(extra="forbid")`, captured live: known-field errors (min
+// length, missing) come first in the model's declared field order,
+// extra_forbidden errors come last in the INPUT's own key order (not
+// sorted, not matching the extra keys' relative position to known ones in
+// the input).
+func TestForbidExtraMatchesPydantic(t *testing.T) {
+	var errs Errors
+	object, ok := errs.Object(Body{Value: mustDecode(t, `{"z":1,"a":"x"}`)})
+	if !ok {
+		t.Fatal("object refused")
+	}
+	errs.RequiredString(object, "a", 3, 0)
+	errs.RequiredStringList(object, "b")
+	errs.ForbidExtra(object, "a", "b")
+
+	rendered, _ := pyjson.Marshal(Detail(errs))
+	want := `{"detail":[` +
+		`{"type":"string_too_short","loc":["body","a"],"msg":"String should have at least 3 characters","input":"x","ctx":{"min_length":3}},` +
+		`{"type":"missing","loc":["body","b"],"msg":"Field required","input":` + mustRenderObject(t, object) + `},` +
+		`{"type":"extra_forbidden","loc":["body","z"],"msg":"Extra inputs are not permitted","input":1}` +
+		`]}`
+	if string(rendered) != want {
+		t.Fatalf("%s", rendered)
+	}
+
+	var happy Errors
+	object2, _ := happy.Object(Body{Value: mustDecode(t, `{"a":"abc"}`)})
+	happy.ForbidExtra(object2, "a")
+	if len(happy) != 0 {
+		t.Fatalf("no extra keys should record no errors: %+v", happy)
 	}
 }
 

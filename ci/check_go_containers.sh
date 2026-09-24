@@ -449,6 +449,20 @@ smoke_migrate_postgres() {
     || die "${tag}: dho migrate postgres status did not report the missing migration DSN: ${output}"
 }
 
+# smoke_admin_features_seed runs `dho admin features seed` with no database
+# configured: the verb must be reached and fail closed (exit 1) with the
+# migration-DSN refusal -- not an unknown command (exit 2).
+smoke_admin_features_seed() {
+  local tag="$1" output code
+  set +e
+  output="$(docker run --rm "${CONTAINER_SECURITY_ARGS[@]}" "${tag}" admin features seed 2>&1 >/dev/null)"
+  code=$?
+  set -e
+  [ "${code}" = "1" ] || die "${tag}: dho admin features seed without a DSN exited ${code}, want 1: ${output}"
+  printf '%s' "${output}" | grep -F 'neither MIGRATION_DATABASE_URI nor POSTGRES_URI is set' >/dev/null \
+    || die "${tag}: dho admin features seed did not report the missing database: ${output}"
+}
+
 # smoke_workers_vertical runs `dho workers status` with no database
 # configured: the verb tree must be reached and fail closed with the JSON
 # configuration error naming the first missing DSN (exit 1), not an unknown
@@ -484,6 +498,7 @@ smoke_dho() {
   smoke_migrate_river "${tag}"
   smoke_migrate_clickhouse "${tag}"
   smoke_migrate_postgres "${tag}"
+  smoke_admin_features_seed "${tag}"
 
   ACTIVE_CONTAINER="${container_name}"
   docker run --detach \

@@ -24,7 +24,6 @@ CHECK_GO = ROOT / "ci" / "check_go.sh"
 ORACLE_ENV = "DEV_HEALTH_LIVE_PYTHON_ORACLES"
 
 _RUN_ARGUMENT = re.compile(r"-run\s+'\^?\(?([^']*?)\)?\$'")
-_FUNC = re.compile(r"(?m)^func (Test\w+)\(")
 
 
 def selected_test_names(script: str) -> set[str]:

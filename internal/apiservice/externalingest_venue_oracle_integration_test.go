@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
@@ -408,6 +409,7 @@ func TestExternalIngestVenueOracle(t *testing.T) {
 		{Name: "list batches limit over the cap", Method: "GET", Path: "/api/v1/external-ingest/batches?limit=201", Headers: auth},
 		{Name: "list batches limit leading zeros then minus", Method: "GET", Path: "/api/v1/external-ingest/batches?limit=0-5", Headers: auth},
 		{Name: "list batches limit leading zeros and underscores", Method: "GET", Path: "/api/v1/external-ingest/batches?limit=0__5", Headers: auth},
+		{Name: "list batches limit leading underscores beyond 4300 chars", Method: "GET", Path: "/api/v1/external-ingest/batches?limit=" + strings.Repeat("0_", 2150) + "5", Headers: auth},
 		{Name: "list batches empty status filter", Method: "GET", Path: "/api/v1/external-ingest/batches?status=", Headers: auth},
 		{Name: "list batches offset past int64", Method: "GET", Path: "/api/v1/external-ingest/batches?offset=99999999999999999999", Headers: auth},
 		{Name: "list batches repeated createdAfter", Method: "GET", Path: "/api/v1/external-ingest/batches?createdAfter=bogus&createdAfter=2026-01-01T00:00:00Z", Headers: auth},

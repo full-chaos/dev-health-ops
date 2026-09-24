@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -76,6 +77,37 @@ func exhaustiveQueryInts() []string {
 	return out
 }
 
+// longQueryInts is the size boundary: every prefix shape (none, zeros,
+// zeros and underscores, "+", "-", zeros after a sign, zeros before a minus)
+// against digit runs either side of the 4300 limit, with the tails that
+// decide whether the size gate or the digit limit answers (nothing, a zero
+// fraction, a real fraction, junk, a trailing underscore), and digit runs
+// broken by underscores.
+func longQueryInts() []string {
+	prefixes := []string{"", "0", strings.Repeat("0", 10), strings.Repeat("0", 5000), strings.Repeat("0_", 5), strings.Repeat("0_", 3000),
+		"+", "+" + strings.Repeat("0", 10), "-", "-" + strings.Repeat("0", 10), "-" + strings.Repeat("0", 5000),
+		strings.Repeat("0", 10) + "-", strings.Repeat("0", 5000) + "-", strings.Repeat("0_", 5) + "-", strings.Repeat("0_", 3000) + "-",
+		"-0", "+0_", " "}
+	tails := []string{"", ".0", ".5", "x", "_", "e5", "-5"}
+	var out []string
+	for _, prefix := range prefixes {
+		for _, digits := range []int{1, 4299, 4300, 4301} {
+			for _, tail := range tails {
+				out = append(out, prefix+strings.Repeat("1", digits)+tail)
+			}
+		}
+	}
+	for _, digits := range []int{2150, 2151, 4300, 4301} {
+		interleaved := "1" + strings.Repeat("_1", digits-1)
+		for _, prefix := range []string{"", "-", "+", "0", "0_", "-0"} {
+			out = append(out, prefix+interleaved)
+		}
+	}
+	return append(out, strings.Repeat("1", 2500)+"_"+strings.Repeat("1", 2500), strings.Repeat("1", 2500)+" "+strings.Repeat("1", 2500),
+		strings.Repeat("٣", 4301), "٣"+strings.Repeat("1", 4301), "."+strings.Repeat("1", 4301),
+		"1."+strings.Repeat("0", 5000), "1."+strings.Repeat("0", 5000)+"1", strings.Repeat("1", 10)+"."+strings.Repeat("0", 5000))
+}
+
 func TestQueryIntMatchesLivePydantic(t *testing.T) {
 	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
 		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
@@ -83,7 +115,7 @@ func TestQueryIntMatchesLivePydantic(t *testing.T) {
 	_, file, _, _ := runtime.Caller(0)
 	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
 	python := pyoracle.Resolve(t, root)
-	corpus := append(append(append([]string(nil), queryIntCorpus...), fuzzQueryInts()...), exhaustiveQueryInts()...)
+	corpus := append(append(append(append([]string(nil), queryIntCorpus...), fuzzQueryInts()...), exhaustiveQueryInts()...), longQueryInts()...)
 	input, _ := json.Marshal(corpus)
 	command := exec.Command(python, "-c", pythonQueryIntProgram)
 	command.Stdin = strings.NewReader(string(input))
@@ -122,7 +154,7 @@ func TestQueryIntMatchesLivePydantic(t *testing.T) {
 		}
 		if got != expected {
 			mismatches++
-			t.Errorf("%q: go %q, python %q", text, got, expected)
+			t.Errorf("%s: go %q, python %q", abbreviate(text), got, expected)
 		}
 	}
 	if proof := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR"); proof != "" {
@@ -133,4 +165,13 @@ func TestQueryIntMatchesLivePydantic(t *testing.T) {
 		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
 	}
 	t.Logf("%d query ints compared, %d mismatches", len(corpus), mismatches)
+}
+
+// abbreviate shortens a long corpus value to its length and both ends, so a
+// mismatch on a 4300-digit input stays readable.
+func abbreviate(text string) string {
+	if len(text) <= 48 {
+		return strconv.Quote(text)
+	}
+	return strconv.Quote(text[:20]) + "..." + strconv.Quote(text[len(text)-20:]) + " (" + strconv.Itoa(len(text)) + " bytes)"
 }

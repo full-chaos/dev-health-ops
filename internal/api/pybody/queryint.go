@@ -24,7 +24,12 @@ const maxIntDigits = 4300
 // when the text is not an integer.
 func ParsePydanticInt(raw string) (*big.Int, *Error) {
 	text := strings.TrimFunc(raw, unicode.IsSpace)
-	if len(text) > maxIntDigits {
+	// The size gate is on the leading run, in the text as received (before
+	// whitespace is trimmed), of an unsigned-or-minus number that starts
+	// with a nonzero digit ("-?[1-9][0-9]*", sign counted), and on nothing
+	// else: a zero-led, "+"-led or underscored text is only bound by the
+	// digit limit below, whatever its length.
+	if leadingSignedRun(raw) > maxIntDigits {
 		return nil, &Error{Type: "int_parsing_size", Msg: "Unable to parse input string as an integer, exceeded maximum size"}
 	}
 	failed := &Error{Type: "int_parsing", Msg: "Input should be a valid integer, unable to parse string as an integer"}
@@ -82,6 +87,9 @@ func ParsePydanticInt(raw string) (*big.Int, *Error) {
 		}
 	}
 	if digits.Len() == 0 {
+		return nil, failed
+	}
+	if len(sign)+digits.Len() > maxIntDigits {
 		return nil, failed
 	}
 	value, ok := new(big.Int).SetString(sign+digits.String(), 10)
@@ -185,4 +193,20 @@ func (e *Errors) QueryBool(name string, raw *string, fallback bool) (bool, bool)
 		return false, false
 	}
 	return value, true
+}
+
+// leadingSignedRun is the length of the "-?[1-9][0-9]*" prefix of text, 0
+// when text does not start that way.
+func leadingSignedRun(text string) int {
+	index := 0
+	if index < len(text) && text[index] == '-' {
+		index++
+	}
+	if index >= len(text) || text[index] < '1' || text[index] > '9' {
+		return 0
+	}
+	for index < len(text) && text[index] >= '0' && text[index] <= '9' {
+		index++
+	}
+	return index
 }

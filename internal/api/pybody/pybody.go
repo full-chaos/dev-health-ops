@@ -394,7 +394,33 @@ func (e *Errors) OptionalStringList(object *pyjson.Object, name string) ([]strin
 	if !ok || raw == nil {
 		return nil, false
 	}
+	return e.stringListValue(raw, []pyjson.Value{"body", name})
+}
+
+// RequiredStringList validates one required `list[str]` field (no default):
+// present is false when the field is absent (a "missing" error, matching
+// pydantic's own error, whose input is the WHOLE containing object -- the
+// same shape RequiredString's absent case documents), null, or invalid.
+func (e *Errors) RequiredStringList(object *pyjson.Object, name string) ([]string, bool) {
 	loc := []pyjson.Value{"body", name}
+	raw, ok := object.Get(name)
+	if !ok {
+		*e = append(*e, Error{Type: "missing", Loc: loc, Msg: "Field required", Input: object})
+		return nil, false
+	}
+	if raw == nil {
+		*e = append(*e, Error{Type: "list_type", Loc: loc, Msg: "Input should be a valid list", Input: nil})
+		return nil, false
+	}
+	return e.stringListValue(raw, loc)
+}
+
+// stringListValue is the `list[str]` element loop OptionalStringList and
+// RequiredStringList share: a non-list value is "list_type", and a
+// non-string element is "string_type" at loc body.<name>.<index> --
+// matching pydantic's per-element reporting (a multi-element list can add
+// more than one error, exactly like pydantic).
+func (e *Errors) stringListValue(raw pyjson.Value, loc []pyjson.Value) ([]string, bool) {
 	list, isList := raw.([]pyjson.Value)
 	if !isList {
 		*e = append(*e, Error{Type: "list_type", Loc: loc, Msg: "Input should be a valid list", Input: raw})
@@ -768,6 +794,31 @@ func (e *Errors) intField(raw pyjson.Value, name string, minValue, maxValue *int
 		return nil, false
 	}
 	return value, true
+}
+
+// ForbidExtra ports `model_config = ConfigDict(extra="forbid")`: one
+// "extra_forbidden" error per key of object not in known, in the object's
+// OWN key order (verified live against pydantic 2.13 -- extra keys are
+// reported in the INPUT's order, not sorted and not the model's declared
+// field order). Every known field must still be validated by its own
+// caller; this only rejects keys the model does not declare at all. Call
+// it LAST, after every known field's own validator: pydantic reports every
+// known-field error (in the model's declared field order) before any
+// extra_forbidden error, whatever the input's own key order (verified
+// live: a too-short known field and a missing known field both precede an
+// extra key that appears earlier in the input JSON).
+func (e *Errors) ForbidExtra(object *pyjson.Object, known ...string) {
+	allowed := make(map[string]bool, len(known))
+	for _, name := range known {
+		allowed[name] = true
+	}
+	for _, key := range object.Keys() {
+		if allowed[key] {
+			continue
+		}
+		value, _ := object.Get(key)
+		*e = append(*e, Error{Type: "extra_forbidden", Loc: []pyjson.Value{"body", key}, Msg: "Extra inputs are not permitted", Input: value})
+	}
 }
 
 // undecodableBytes stands for request bytes that are not UTF-8.

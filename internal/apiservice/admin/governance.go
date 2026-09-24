@@ -28,6 +28,7 @@ func (h *handlers) governanceRoutes() []httpapi.Route {
 	out = append(out, h.retentionRoutes()...)
 	out = append(out, h.settingsRoutes()...)
 	out = append(out, h.llmSettingsRoutes()...)
+	out = append(out, h.pagerDutyRoutes()...)
 	return out
 }
 
@@ -94,6 +95,18 @@ func limitOnly(errs *pybody.Errors, values url.Values, defaultLimit, maxLimit in
 // writeValidation answers FastAPI's 422 for the collected errors.
 func writeValidation(w http.ResponseWriter, errs pybody.Errors) {
 	policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(errs), nil)
+}
+
+// pydanticValueError is a raised `@field_validator`'s ValueError, as
+// jsonable_encoder renders it: type "value_error", ctx {"error": {}} (the
+// exception object itself, which jsonable_encoder cannot serialize
+// further), Msg prefixed "Value error, ", Input the RAW (unmodified) field
+// value the validator was given -- verified live against orgs.py's own
+// `validate_name`.
+func pydanticValueError(loc []pyjson.Value, input pyjson.Value, message string) pybody.Error {
+	ctx := pyjson.NewObject()
+	ctx.Set("error", pyjson.NewObject())
+	return pybody.Error{Type: "value_error", Loc: loc, Msg: "Value error, " + message, Input: input, Ctx: ctx}
 }
 
 // pathUUID is `uuid.UUID(path_param)`: a ValueError there is unhandled, so

@@ -20,12 +20,12 @@ func TestSetProvenanceNamesPlaneAlwaysAndBuildOnlyWhenKnown(t *testing.T) {
 	}
 }
 
-func TestBodyIsTheInfoJSONWithATrailingNewline(t *testing.T) {
+func TestBodyIsTheInfoJSON(t *testing.T) {
 	body, err := Body(version.Info{Service: "api", Commit: "abc"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `{"service":"api","version":"","commit":"abc","build_time":"","go_version":"","modified":false}` + "\n"
+	want := `{"service":"api","version":"","commit":"abc","build_time":"","go_version":"","modified":false}`
 	if string(body) != want {
 		t.Fatalf("body = %q, want %q", body, want)
 	}

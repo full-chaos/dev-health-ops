@@ -37,12 +37,9 @@ func SetProvenance(header http.Header, commit string) {
 	}
 }
 
-// Body is the /buildinfo body for info: its JSON encoding plus the trailing
-// newline the encoder writes.
+// Body is the /buildinfo body for info: its JSON encoding. Handlers write it
+// with json.NewEncoder(w).Encode(json.RawMessage(body)), which adds the one
+// trailing newline the wire carries.
 func Body(info version.Info) ([]byte, error) {
-	body, err := json.Marshal(info)
-	if err != nil {
-		return nil, err
-	}
-	return append(body, '\n'), nil
+	return json.Marshal(info)
 }

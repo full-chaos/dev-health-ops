@@ -31,6 +31,7 @@ package main
 // which is deployment detail rather than repository content.
 
 import (
+	"encoding/json"
 	"log"
 	"net/http"
 	"os"
@@ -139,7 +140,7 @@ func newBuildInfoHandler(verifier *principal.Verifier) http.HandlerFunc {
 		// through byte-for-byte (plus the encoder's trailing newline) --
 		// there is no second marshal to diverge from it. An encode failure
 		// is logged rather than dropped, matching writeRESTError's contract.
-		if _, encodeErr := w.Write(body); encodeErr != nil {
+		if encodeErr := json.NewEncoder(w).Encode(json.RawMessage(body)); encodeErr != nil {
 			log.Printf("query-api: /buildinfo: encode response failed: err=%v", encodeErr)
 		}
 	}

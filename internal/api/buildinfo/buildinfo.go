@@ -7,6 +7,7 @@
 package buildinfo
 
 import (
+	"encoding/json"
 	"net/http"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
@@ -32,7 +33,7 @@ func Routes(guard *policy.Guard, info version.Info) []httpapi.Route {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(body)
+		_ = json.NewEncoder(w).Encode(json.RawMessage(body))
 	})
 	return []httpapi.Route{{
 		Method: http.MethodGet, Pattern: "/buildinfo", Allow: http.MethodGet,

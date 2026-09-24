@@ -217,7 +217,7 @@ gauges, `devhealth_query_api_routing_rows_for_digest` (rows keyed to the digest 
 computed) and `devhealth_query_api_routing_rows_total` (rows across every digest, alive or dead) --
 `for_digest == 0 AND total > 0` is the DEAD-fleet condition above, distinguishable on a dashboard from the
 legitimate `total == 0` "nothing enabled yet" default posture. The same check also emits an ERROR-level
-structured log record for exactly that condition (`cmd/query-api/registry_drift_telemetry.go`), separate
+structured log record for exactly that condition (`internal/queryapi/server/registry_drift_telemetry.go`), separate
 from the pre-existing plain-text `ROUTING ROWS STALE` line, which carries no level at all and only reaches
 someone tailing logs at the moment it is written.
 
@@ -226,7 +226,7 @@ someone tailing logs at the moment it is written.
 old one -- "the SDL didn't change, so the old proof should still count". This directly contradicts the
 per-build proof requirement already stated above (a proof is keyed to the immutable 4-tuple *including*
 `candidate_build` and "is never carried forward across any of the four changing") and CHAOS-5425's own
-acceptance ruling, quoted in `internal/goapicli/prove/main.go` and `cmd/query-api/buildinfo_route.go`: **"Do not
+acceptance ruling, quoted in `internal/goapicli/prove/main.go` and `internal/queryapi/server/buildinfo_route.go`: **"Do not
 construct a receipt from a digest or an arbitrary build name."** A schema digest matching says the *SDL*
 didn't change; it says nothing about whether the new binary is the one that was actually measured. The
 recovery procedure stays exactly what it already is above: rebuild/redeploy, re-run `dho goapi prove` against
@@ -284,7 +284,7 @@ _Live rows the edge cannot dispatch -- serving a document the operation catalog 
 Every `/api/v1/*` route `src/dev_health_ops/api/main.py` declares, enumerated mechanically from its FastAPI
 decorators (`internal/migrationmatrix.LoadFastAPIRoutes`) and cross-referenced against every `/api/v1/*`
 path query-api's own mux registers (`internal/migrationmatrix.LoadQueryAPIMuxRoutes`, read straight from
-`cmd/query-api`'s Go source -- query-api has no separate REST route registry the way it has an operation
+`internal/queryapi/server`'s Go source -- query-api has no separate REST route registry the way it has an operation
 catalog for GraphQL). `ported` means the path is registered on query-api's mux; `python-only` is the
 default every other route earns by simply existing; `dead-by-design` is emitted only for a route already
 carrying chris's word on record that it is staying Python (see `RESTDeadByDesign`'s own doc comment --

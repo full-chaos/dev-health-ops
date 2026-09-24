@@ -6,9 +6,9 @@ Wave 1 (CHAOS-4367) ported the first real resolver, `featureFlags`;
 Wave 2 (CHAOS-4368) ported the second, `reviewEdges`; Wave 3 (CHAOS-4369)
 ports `cognitiveLoad` alongside `complexityTimeseries` and `hotspots`
 (this lane, same wave) — see
-[`docs/contribute/architecture/go-api-wave-0-proof-infrastructure.md`](../../docs/contribute/architecture/go-api-wave-0-proof-infrastructure.md)
+[`docs/contribute/architecture/go-api-wave-0-proof-infrastructure.md`](../../../docs/contribute/architecture/go-api-wave-0-proof-infrastructure.md)
 and the plan doc,
-[`.github/docs-legacy/plans/go-api-epic.md`](../../.github/docs-legacy/plans/go-api-epic.md).
+[`.github/docs-legacy/plans/go-api-epic.md`](../../../.github/docs-legacy/plans/go-api-epic.md).
 
 ## Wave 1 & 2: featureFlags and reviewEdges are live behind the switch
 
@@ -242,7 +242,7 @@ is enabled." What exists in this Wave:
 ## Schema-first from the canonical SDL pin
 
 `gqlgen.yml` points directly at
-[`contracts/graphql/v1/schema.graphql`](../../contracts/graphql/v1/README.md)
+[`contracts/graphql/v1/schema.graphql`](../../../contracts/graphql/v1/README.md)
 — the CI-checked export of the Strawberry schema — never a copy.
 
 Regeneration goes through `cmd/gqlgen-guard`, never the generator directly:
@@ -280,7 +280,7 @@ The copy is made under `TMPDIR`, which must therefore be outside the module; the
 guard refuses one inside it.
 
 Every difference between the checked-in files and a fresh generation is
-recorded in [`contracts/gqlgen/v1/expected-drift.record`](../../contracts/gqlgen/v1/expected-drift.record),
+recorded in [`contracts/gqlgen/v1/expected-drift.record`](../../../contracts/gqlgen/v1/expected-drift.record),
 which `go-quality` compares byte for byte. New drift fails, and so does a
 recorded hand-edit that has silently vanished. When a difference is a
 deliberate change, rewrite the record with
@@ -303,7 +303,7 @@ Uses the repo's single root Go module (`github.com/full-chaos/dev-health-ops`)
 ## Local compose
 
 Off by default. See
-[`deploy/go-api/compose-query-api.yml`](../../deploy/go-api/compose-query-api.yml)
+[`deploy/go-api/compose-query-api.yml`](../../../deploy/go-api/compose-query-api.yml)
 for the overlay and how to bring it up explicitly. Not part of the assumed
 local stack — bring it up only for deliberate verification.
 

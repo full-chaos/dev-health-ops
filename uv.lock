@@ -832,7 +832,7 @@ requires-dist = [
     { name = "sentry-sdk", extras = ["celery", "fastapi"], specifier = ">=2.0.0" },
     { name = "signxml", marker = "extra == 'enterprise-sso'", specifier = ">=3.0.0" },
     { name = "slowapi", specifier = ">=0.1.9" },
-    { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.49" },
+    { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.49,<2.1" },
     { name = "starlette", specifier = ">=1.3.1" },
     { name = "strawberry-graphql", extras = ["fastapi"], specifier = ">=0.315.4" },
     { name = "stripe", specifier = ">=7.0.0" },

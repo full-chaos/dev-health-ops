@@ -13,6 +13,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/auth/passwordpolicy"
 )
 
 const usersPrefix = "/api/v1/admin"
@@ -385,7 +386,7 @@ func (h *handlers) setUserPassword(w http.ResponseWriter, r *http.Request) {
 	input, _ := ctx.Value(setPasswordInputKey{}).(setPasswordInput)
 	adminPassword, newPassword := input.AdminPassword, input.Password
 
-	if violations := validatePassword(newPassword); len(violations) > 0 {
+	if violations := passwordpolicy.Validate(newPassword); len(violations) > 0 {
 		detail := pyjson.NewObject()
 		list := make([]pyjson.Value, len(violations))
 		for i, v := range violations {

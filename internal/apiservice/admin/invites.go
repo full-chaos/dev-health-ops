@@ -2,11 +2,7 @@ package admin
 
 import (
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
-	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -18,6 +14,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/auth/signedtoken"
 	"github.com/full-chaos/dev-health-ops/internal/mail"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
@@ -58,10 +55,7 @@ type InviteConfig struct {
 }
 
 func (c InviteConfig) tokenSecret() string {
-	if c.TokenSecret != "" {
-		return c.TokenSecret
-	}
-	return "dev-key-not-for-prod"
+	return signedtoken.Secret(c.TokenSecret, "")
 }
 
 func (c InviteConfig) baseURL() string {
@@ -70,17 +64,6 @@ func (c InviteConfig) baseURL() string {
 		base = c.AppBaseURL
 	}
 	return strings.TrimRight(base, "/")
-}
-
-// inviteToken is invites.py's _build_token/_hash_token: "<uuid hex>.<hmac
-// sha256 hex of the uuid hex>" and the sha256 hex of that whole string.
-func inviteToken(id uuid.UUID, secret string) (token, tokenHash string) {
-	idHex := strings.ReplaceAll(id.String(), "-", "")
-	mac := hmac.New(sha256.New, []byte(secret))
-	mac.Write([]byte(idHex))
-	token = idHex + "." + hex.EncodeToString(mac.Sum(nil))
-	sum := sha256.Sum256([]byte(token))
-	return token, hex.EncodeToString(sum[:])
 }
 
 // orgInvite is one org_invites row, as create_org_invite returns it.
@@ -254,7 +237,7 @@ SELECT EXISTS (
 	}
 
 	id := uuid.New()
-	token, tokenHash := inviteToken(id, h.invites.tokenSecret())
+	token, tokenHash := signedtoken.Build(id, h.invites.tokenSecret())
 	stamp := h.store.now().UTC()
 	invite := &orgInvite{
 		ID: id, OrgID: orgID, Email: email, Role: role, InvitedByID: &invitedByID,
@@ -293,7 +276,7 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
 // sendInviteEmail is invites.py's send_invite_email, best effort: any failure
 // is logged and swallowed.
 func (h *handlers) sendInviteEmail(ctx context.Context, orgName, inviter string, invite *orgInvite, token string) {
-	acceptURL := h.invites.baseURL() + "/accept-invite?token=" + pythonQuote(token)
+	acceptURL := h.invites.baseURL() + "/accept-invite?token=" + pythonparity.Quote(token, "/")
 	html, err := mail.RenderTemplate("invite", map[string]string{
 		"org_name": orgName, "inviter_name": inviter, "accept_url": acceptURL,
 	})
@@ -314,24 +297,6 @@ func (h *handlers) sendInviteEmail(ctx context.Context, orgName, inviter string,
 		h.logger.ErrorContext(ctx, "admin: failed to send invite email",
 			"invite_id", invite.ID.String(), "org_id", invite.OrgID.String(), "error", err)
 	}
-}
-
-// pythonQuote is urllib.parse.quote(token) with its default safe="/": every
-// byte outside the unreserved set is percent-encoded. A token is only hex and
-// ".", so this is the identity for real tokens; it is kept exact anyway.
-func pythonQuote(value string) string {
-	var out strings.Builder
-	for i := 0; i < len(value); i++ {
-		c := value[i]
-		switch {
-		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9',
-			c == '_', c == '.', c == '-', c == '~', c == '/':
-			out.WriteByte(c)
-		default:
-			out.WriteString(fmt.Sprintf("%%%02X", c))
-		}
-	}
-	return out.String()
 }
 
 // inviterIdentity reads the inviting user's full_name and email; both nil when

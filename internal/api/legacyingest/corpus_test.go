@@ -13,8 +13,13 @@ var (
 	providerPool = []string{`"jira"`, `"github"`, `"gitlab"`, `"linear"`, `"JIRA"`, `"bitbucket"`, `""`, `1`, `null`, `[]`, `true`}
 	typePool     = []string{`"story"`, `"task"`, `"bug"`, `"epic"`, `"issue"`, `"incident"`, `"chore"`, `"unknown"`, `"Bug"`, `"feature"`, `null`, `1`, `[]`}
 	statusPool   = []string{`"backlog"`, `"todo"`, `"in_progress"`, `"in_review"`, `"blocked"`, `"done"`, `"canceled"`, `"unknown"`, `"open"`, `"Done"`, `null`, `0`, `{}`}
-	strPool      = []string{`"x"`, `""`, `"é"`, `"\ud800"`, `"a\u0000b"`, `1`, `1.5`, `true`, `null`, `[]`, `{}`, `"😀"`, `"` + strings.Repeat("y", 300) + `"`}
-	dtPool       = []string{`"2026-01-01T00:00:00Z"`, `"2026-01-01T00:00:00"`, `"2026-01-01"`, `"2026-01-01T00:00:00.123456+02:00"`, `"2026-01-01 00:00:00-05:30"`,
+	repoPool     = []string{`"3f2504e0-4f89-11d3-9a0c-0305e82c3301"`, `"{3F2504E0-4F89-11D3-9A0C-0305E82C3301}"`, `"urn:uuid:3f2504e0-4f89-11d3-9a0c-0305e82c3301"`,
+		`"3f2504e04f8911d39a0c0305e82c3301"`, `""`, `null`, `0`, `false`, `0.0`, `[]`, `{}`, `"x"`, `5`, `1.5`, `true`, `[1]`, `{"a":[1,"b"]}`, `"é"`, `"\ud800"`,
+		`" 3f2504e0-4f89-11d3-9a0c-0305e82c3301"`, `"3f2504e0-4f89-11d3-9a0c-0305e82c330"`, `"0x3f2504e04f8911d39a0c0305e82c33"`, `"3f2504e0_4f89_11d3_9a0c_0305e82c3301"`,
+		`"3F2504E0-4F89-11D3-9A0C-0305E82C3301"`, `"urn:uuid:{3f2504e0-4f89-11d3-9a0c-0305e82c3301}"`, `"----3f2504e04f8911d39a0c0305e82c3301"`, `-1`, `"it's \"q\""`}
+	boolPool = []string{`true`, `false`, `null`, `0`, `1`, `2`, `"yes"`, `"off"`, `"true"`, `[]`, `1.0`, `0.5`}
+	strPool  = []string{`"x"`, `""`, `"é"`, `"\ud800"`, `"a\u0000b"`, `1`, `1.5`, `true`, `null`, `[]`, `{}`, `"😀"`, `"` + strings.Repeat("y", 300) + `"`}
+	dtPool   = []string{`"2026-01-01T00:00:00Z"`, `"2026-01-01T00:00:00"`, `"2026-01-01"`, `"2026-01-01T00:00:00.123456+02:00"`, `"2026-01-01 00:00:00-05:30"`,
 		`1767225600`, `1767225600.5`, `"1767225600"`, `1e20`, `true`, `null`, `""`, `"garbage"`, `[]`, `-1`, `"2026-13-01"`, `"2026-01-01T25:00:00Z"`, `{}`}
 	intPool   = []string{`1`, `0`, `-1`, `"5"`, `5.0`, `5.5`, `true`, `null`, `"x"`, `1e3`, `9223372036854775808`, `"٣"`, `[]`, `"_1"`, `" 7 "`}
 	floatPool = []string{`0.5`, `1`, `"0.5"`, `"nan"`, `1e999`, `"inf"`, `true`, `null`, `[]`, `-0.0`, `"1e5"`, `2.5e-7`, `100000000000000000000.0`, `1e16`,
@@ -56,6 +61,12 @@ var models = map[string][]modelField{
 		{"created_at", dtPool, `"2026-01-01T00:00:00Z"`}, {"updated_at", dtPool, `"2026-01-02T00:00:00Z"`}, {"started_at", dtPool, `"2026-01-01T01:00:00Z"`},
 		{"completed_at", dtPool, `"2026-01-03T00:00:00Z"`}, {"labels", listPool, `["x"]`}, {"story_points", floatPool, `2.5`}, {"priority_raw", strPool, `"P1"`}, {"url", strPool, `"https://x"`},
 	},
+	"telemetry": {
+		{"signal_type", strPool, `"friction.rage_click"`}, {"signal_count", intPool, `4`}, {"session_count", intPool, `2`}, {"unique_pseudonymous_count", intPool, `3`},
+		{"endpoint_group", strPool, `"/api/x"`}, {"environment", strPool, `"prod"`}, {"repo_id", repoPool, `"3f2504e0-4f89-11d3-9a0c-0305e82c3301"`},
+		{"release_ref", strPool, `"v1.2"`}, {"bucket_start", dtPool, `"2026-01-01T00:00:00Z"`}, {"bucket_end", dtPool, `"2026-01-01T01:00:00.123456+02:00"`},
+		{"is_sampled", boolPool, `true`}, {"schema_version", strPool, `"1.0"`}, {"dedupe_key", strPool, `"d-1"`},
+	},
 	"incidents": {
 		{"incident_id", strPool, `"i1"`}, {"status", strPool, `"open"`}, {"started_at", dtPool, `"2026-01-01T00:00:00Z"`}, {"resolved_at", dtPool, `"2026-01-01T02:00:00Z"`},
 	},
@@ -70,6 +81,34 @@ var requiredFields = map[string][]string{
 	"incidents":     {"incident_id", "status", "started_at"},
 	"pull-requests": {"number", "title", "state", "author_name", "created_at"},
 	"work-items":    {"work_item_id", "provider", "title", "created_at"},
+	"telemetry":     {"signal_type", "signal_count", "session_count", "environment", "bucket_start", "bucket_end", "dedupe_key"},
+}
+
+// keepValue drops the values only ClickHouse refuses (a negative count, a lone
+// surrogate): the telemetry corpus here compares the rows the route would
+// write, and what the column then does with them is the venue's.
+func keepValue(route, field, value string) bool {
+	if route != "telemetry" {
+		return true
+	}
+	if strings.Contains(value, `\ud800`) {
+		return false
+	}
+	switch field {
+	case "signal_count", "session_count", "unique_pseudonymous_count":
+		return value != `-1`
+	}
+	return true
+}
+
+func filtered(route, field string, pool []string) []string {
+	var out []string
+	for _, value := range pool {
+		if keepValue(route, field, value) {
+			out = append(out, value)
+		}
+	}
+	return out
 }
 
 func itemText(route string, override map[string]string, drop map[string]bool) string {
@@ -105,7 +144,7 @@ func bodyCorpus() []oracleCase {
 	var corpus []oracleCase
 	env := map[string]string{"ENVIRONMENT": "dev"}
 	add := func(route, body string) { corpus = append(corpus, oracleCase{Route: route, Env: env, Body: body}) }
-	for _, route := range []string{"commits", "deployments", "incidents", "pull-requests", "work-items"} {
+	for _, route := range []string{"commits", "deployments", "incidents", "pull-requests", "work-items", "telemetry"} {
 		good := itemText(route, nil, nil)
 		add(route, batchText(route, `"o"`, `"r"`, "["+good+"]"))
 		for _, body := range []string{``, `null`, `[]`, `1`, `"x"`, `{}`, `{`, `{"a":1}`, `{"org_id":1,"repo_url":2,"items":3}`,
@@ -118,7 +157,11 @@ func bodyCorpus() []oracleCase {
 		} {
 			add(route, body)
 		}
-		for _, size := range []int{999, 1000, 1001, 1200} {
+		sizes := []int{999, 1000, 1001, 1200}
+		if route == "telemetry" {
+			sizes = []int{4999, 5000, 5001}
+		}
+		for _, size := range sizes {
 			items := make([]string, size)
 			for index := range items {
 				items[index] = good
@@ -134,7 +177,7 @@ func bodyCorpus() []oracleCase {
 		many[3] = bad
 		add(route, batchText(route, `"o"`, `"r"`, "["+strings.Join(many, ",")+"]"))
 		for name, pool := range rootPool {
-			for _, value := range pool {
+			for _, value := range filtered(route, name, pool) {
 				org, repo := `"o"`, `"r"`
 				if name == "org_id" {
 					org = value
@@ -149,7 +192,7 @@ func bodyCorpus() []oracleCase {
 			required[name] = true
 		}
 		for _, field := range models[route] {
-			for _, value := range field.pool {
+			for _, value := range filtered(route, field.name, field.pool) {
 				add(route, batchText(route, `"o"`, `"r"`, "["+itemText(route, map[string]string{field.name: value}, nil)+"]"))
 			}
 			add(route, batchText(route, `"o"`, `"r"`, "["+itemText(route, nil, map[string]bool{field.name: true})+"]"))
@@ -163,7 +206,8 @@ func bodyCorpus() []oracleCase {
 				case 0:
 					drop[field.name] = true
 				case 1:
-					override[field.name] = field.pool[random.Intn(len(field.pool))]
+					pool := filtered(route, field.name, field.pool)
+					override[field.name] = pool[random.Intn(len(pool))]
 				}
 			}
 			count := 1 + random.Intn(3)
@@ -176,7 +220,7 @@ func bodyCorpus() []oracleCase {
 			}
 			org, repo := `"o"`, `"r"`
 			if random.Intn(8) == 0 {
-				org = strPool[random.Intn(len(strPool))]
+				org = filtered(route, "org_id", strPool)[random.Intn(len(filtered(route, "org_id", strPool)))]
 			}
 			if random.Intn(8) == 0 {
 				repo = strPool[random.Intn(len(strPool))]

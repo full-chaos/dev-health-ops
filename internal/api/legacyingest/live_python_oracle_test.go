@@ -16,6 +16,9 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 )
@@ -34,6 +37,17 @@ ingest_router = importlib.import_module("dev_health_ops.api.ingest.router")
 captured = []
 ingest_router.get_redis_client = lambda: object()
 ingest_router.write_to_stream = lambda rc, name, data: captured.append([name, data["payload"]]) or True
+rows = []
+async def persist(records):
+    def iso(value):
+        if value.tzinfo is not None:
+            from datetime import timezone
+            value = value.astimezone(timezone.utc).replace(tzinfo=None)
+        return value.isoformat(timespec="microseconds")
+    for r in records:
+        rows.append([r.org_id, r.signal_type, r.signal_count, r.session_count, r.unique_pseudonymous_count, r.endpoint_group or "", r.environment,
+                     str(r.repo_id) if r.repo_id else "", r.release_ref or "", iso(r.bucket_start), iso(r.bucket_end), r.is_sampled, r.schema_version or "", r.dedupe_key])
+ingest_router._persist_telemetry = persist
 app = FastAPI()
 app.include_router(ingest_router.router)
 client = TestClient(app, raise_server_exceptions=False)
@@ -44,11 +58,12 @@ for case in json.loads(sys.stdin.read()):
         os.environ.pop(key, None)
     os.environ.update(case["env"])
     del captured[:]
+    del rows[:]
     headers = {"content-type": "application/json"}
     headers.update({k: base64.b64decode(v) for k, v in case["headers"].items()})
     body = base64.b64decode(case["body"])
     r = client.post("/api/v1/ingest/" + case["route"], content=body, headers=headers)
-    out.append([r.status_code, r.text, list(captured)])
+    out.append([r.status_code, r.text, list(captured), list(rows)])
 print(json.dumps(out))
 `
 
@@ -70,6 +85,22 @@ type oracleWire struct {
 
 type fakeStore struct{ streams [][2]string }
 
+// fakeBatch records the rows a telemetry insert appends.
+type fakeBatch struct {
+	driver.Batch
+	rows [][]any
+}
+
+func (b *fakeBatch) Append(values ...any) error { b.rows = append(b.rows, values); return nil }
+func (b *fakeBatch) Send() error                { return nil }
+func (b *fakeBatch) Abort() error               { return nil }
+
+type fakeClickHouse struct{ batch *fakeBatch }
+
+func (f *fakeClickHouse) PrepareBatch(context.Context, string, ...driver.PrepareBatchOption) (driver.Batch, error) {
+	return f.batch, nil
+}
+
 func (f *fakeStore) Append(_ context.Context, stream, _ string, payload string) error {
 	f.streams = append(f.streams, [2]string{stream, payload})
 	return nil
@@ -80,10 +111,11 @@ var ingestionID = regexp.MustCompile(`"ingestion_id":"[0-9a-f-]{36}"`)
 
 // goAnswer is the Go routes' answer for one case, in the Python program's
 // terms.
-func goAnswer(t *testing.T, item oracleCase) (int, string, [][2]string) {
+func goAnswer(t *testing.T, item oracleCase) (int, string, [][2]string, [][]any) {
 	t.Helper()
 	store := &fakeStore{}
-	routes := Routes(Deps{Store: store, Getenv: func(key string) string { return item.Env[key] }, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	clickhouse := &fakeClickHouse{batch: &fakeBatch{}}
+	routes := Routes(Deps{Store: store, ClickHouse: clickhouse, Getenv: func(key string) string { return item.Env[key] }, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
 	var handler http.Handler
 	for _, route := range routes {
 		if route.Pattern == "/api/v1/ingest/"+item.Route {
@@ -100,7 +132,7 @@ func goAnswer(t *testing.T, item oracleCase) (int, string, [][2]string) {
 	}
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, request)
-	return recorder.Code, recorder.Body.String(), store.streams
+	return recorder.Code, recorder.Body.String(), store.streams, clickhouse.batch.rows
 }
 
 func credentials(secret, body string) string { return sign(secret, body) }
@@ -171,13 +203,17 @@ func TestLegacyIngestMatchesLiveFastAPI(t *testing.T) {
 			Status int
 			Body   string
 			Stream [][2]string
+			Rows   [][]any
 		}
 		var raw []json.RawMessage
 		_ = json.Unmarshal(want[index], &raw)
 		_ = json.Unmarshal(raw[0], &answer.Status)
 		_ = json.Unmarshal(raw[1], &answer.Body)
 		_ = json.Unmarshal(raw[2], &answer.Stream)
-		status, body, stream := goAnswer(t, item)
+		decoder := json.NewDecoder(strings.NewReader(string(raw[3])))
+		decoder.UseNumber()
+		_ = decoder.Decode(&answer.Rows)
+		status, body, stream, rows := goAnswer(t, item)
 		statuses[status]++
 		wantBody, gotBody := ingestionID.ReplaceAllString(answer.Body, `"ingestion_id":"<id>"`), ingestionID.ReplaceAllString(body, `"ingestion_id":"<id>"`)
 		if status == http.StatusInternalServerError {
@@ -185,11 +221,14 @@ func TestLegacyIngestMatchesLiveFastAPI(t *testing.T) {
 			// venue's to compare.
 			wantBody, gotBody = "", ""
 		}
-		if status != answer.Status || gotBody != wantBody || fmt.Sprint(stream) != fmt.Sprint(answer.Stream) {
+		if status != answer.Status || gotBody != wantBody || fmt.Sprint(stream) != fmt.Sprint(answer.Stream) || normalizedRows(rows) != normalizedRows(answer.Rows) {
 			mismatches++
 			if mismatches <= 12 {
 				t.Errorf("%s env=%v headers=%v body=%.300s:\n  go     %d %.400s %v\n  python %d %.400s %v", item.Route, item.Env, item.Headers, item.Body,
 					status, body, stream, answer.Status, answer.Body, answer.Stream)
+				if rows != nil || answer.Rows != nil {
+					t.Errorf("  rows go %s\n       python %s", normalizedRows(rows), normalizedRows(answer.Rows))
+				}
 			}
 		}
 	}
@@ -209,4 +248,39 @@ func writeProof(t *testing.T, name string) {
 	if err := os.WriteFile(filepath.Join(dir, name), []byte("executed"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// normalizedRows renders a telemetry insert the way the Python program
+// reports it: Go's typed values (uint64, *uint64, time.Time) in the same
+// terms, the ingested_at column left out.
+func normalizedRows(rows [][]any) string {
+	var out []string
+	for _, row := range rows {
+		var cells []string
+		for index, value := range row {
+			switch typed := value.(type) {
+			case time.Time:
+				if index == 11 {
+					continue // ingested_at
+				}
+				cells = append(cells, typed.Format("2006-01-02T15:04:05.000000"))
+			case *uint64:
+				cells = append(cells, fmt.Sprint(*typed))
+			case uint64:
+				cells = append(cells, fmt.Sprint(typed))
+			case uint8:
+				cells = append(cells, fmt.Sprint(typed == 1))
+			case json.Number:
+				cells = append(cells, typed.String()) // the Python program's JSON numbers
+			case bool:
+				cells = append(cells, fmt.Sprint(typed))
+			case nil:
+				cells = append(cells, "<nil>")
+			default:
+				cells = append(cells, fmt.Sprintf("%v", typed))
+			}
+		}
+		out = append(out, strings.Join(cells, "|"))
+	}
+	return strings.Join(out, "\n")
 }

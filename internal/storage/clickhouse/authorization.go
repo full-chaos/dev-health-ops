@@ -75,6 +75,10 @@ func APIPosture(database string) Posture {
 		// complexity and compounding-risk rows. Read-only.
 		{Database: database, Table: "repo_complexity_daily", AllowSelect: true},
 		{Database: database, Table: "compounding_risk_daily", AllowSelect: true},
+		// POST /api/v1/ingest/telemetry (CHAOS-6501) inserts its signal buckets
+		// with this login, as the Python route does with its own. Insert
+		// only: the route never reads, updates or deletes them.
+		{Database: database, Table: "telemetry_signal_bucket", AllowInsert: true},
 	}}
 }
 

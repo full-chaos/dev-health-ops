@@ -2,7 +2,9 @@ package pybody
 
 import (
 	"math/big"
+	"net/url"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
@@ -119,4 +121,24 @@ func (e *Errors) QueryDatetime(name string, raw *string) (*pytime.DateTime, bool
 		return nil, false
 	}
 	return &parsed, true
+}
+
+// LastQuery is Starlette's QueryParams.get: the LAST value of a repeated
+// parameter, nil when absent.
+func LastQuery(values url.Values, name string) *string {
+	list, ok := values[name]
+	if !ok || len(list) == 0 {
+		return nil
+	}
+	return &list[len(list)-1]
+}
+
+// Instant is the UTC time of a parsed datetime query value, nil when the
+// parameter was absent.
+func Instant(value *pytime.DateTime) *time.Time {
+	if value == nil {
+		return nil
+	}
+	at := value.Time.UTC()
+	return &at
 }

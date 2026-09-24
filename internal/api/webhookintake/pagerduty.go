@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
 	"io"
 	"net/http"
 	"strconv"
@@ -390,11 +391,15 @@ func parsePagerDutyWebhook(body []byte) (pagerDutyV3Webhook, error) {
 	if !pagerDutyEventTypes[eventType] {
 		return pagerDutyV3Webhook{}, errInvalidEvent
 	}
-	occurredAtRaw := stringField(eventObject, "occurred_at")
-	occurredAt, err := time.Parse(time.RFC3339, occurredAtRaw)
-	if err != nil {
+	// occurred_at: datetime is pydantic's lax datetime (an ISO string, a unix
+	// timestamp as a number or numeric string), then the model's validator
+	// refuses a naive value.
+	occurredAtRaw, _ := eventObject.Get("occurred_at")
+	occurredAtParsed, failure := pytime.ParseDatetime(pydanticDatetimeInput(occurredAtRaw))
+	if failure != nil || !occurredAtParsed.Aware {
 		return pagerDutyV3Webhook{}, errInvalidEvent
 	}
+	occurredAt := occurredAtParsed.Time
 	// data: dict[str, JsonValue] is REQUIRED in Python (no default) and must
 	// be a JSON object -- objectField returns nil for both "absent" and
 	// "present but not an object", exactly pydantic's rejection surface.
@@ -407,6 +412,20 @@ func parsePagerDutyWebhook(body []byte) (pagerDutyV3Webhook, error) {
 		Event: pagerDutyEvent{ID: id, EventType: eventType, OccurredAt: occurredAt.UTC()},
 		data:  data,
 	}, nil
+}
+
+// pydanticDatetimeInput maps a decoded JSON value onto the shapes
+// pytime.ParseDatetime reads: a string, a float64, an exact integer; anything
+// else (bool, null, array, object) reaches it as itself and is refused as
+// datetime_type.
+func pydanticDatetimeInput(value pyjson.Value) any {
+	switch typed := value.(type) {
+	case pyjson.Int:
+		return typed.Int
+	case pyjson.Float:
+		return float64(typed)
+	}
+	return value
 }
 
 // Exact casing pinned to pagerduty.py's own HTTPException detail strings

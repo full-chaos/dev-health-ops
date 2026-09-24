@@ -171,6 +171,27 @@ func TestAcceptBatchAgainstFaultsAndEdgeCases(t *testing.T) {
 		}
 	})
 
+	t.Run("a malformed list query is FastAPI's 422, not silently unfiltered", func(t *testing.T) {
+		orgID := uuid.New().String()
+		const token = "fcpush_list_query_422_token"
+		seedIngestToken(t, ctx, pool, orgID, "github", "acme/repo", token)
+		deps := newTestDeps(t, pool, client)
+		for query, want := range map[string]string{
+			"createdAfter=1e5": `{"detail":[{"type":"datetime_from_date_parsing","loc":["query","createdAfter"],"msg":"Input should be a valid datetime or date, input is too short","input":"1e5","ctx":{"error":"input is too short"}}]}`,
+			"createdBefore=bogus&limit=0&offset=-1": `{"detail":[{"type":"datetime_from_date_parsing","loc":["query","createdBefore"],"msg":"Input should be a valid datetime or date, input is too short","input":"bogus","ctx":{"error":"input is too short"}},` +
+				`{"type":"greater_than_equal","loc":["query","limit"],"msg":"Input should be greater than or equal to 1","input":"0","ctx":{"ge":1}},` +
+				`{"type":"greater_than_equal","loc":["query","offset"],"msg":"Input should be greater than or equal to 0","input":"-1","ctx":{"ge":0}}]}`,
+		} {
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/external-ingest/batches?"+query, nil)
+			req.Header.Set("Authorization", "Bearer "+token)
+			recorder := httptest.NewRecorder()
+			deps.handleListBatches()(recorder, req)
+			if recorder.Code != http.StatusUnprocessableEntity || strings.TrimSpace(recorder.Body.String()) != want {
+				t.Errorf("?%s: %d %s, want 422 %s", query, recorder.Code, recorder.Body.String(), want)
+			}
+		}
+	})
+
 	t.Run("GET /schemas is rate limited per caller, not unlimited", func(t *testing.T) {
 		deps := newTestDeps(t, pool, client)
 		var statuses [130]int

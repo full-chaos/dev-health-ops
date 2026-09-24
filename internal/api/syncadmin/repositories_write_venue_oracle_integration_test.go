@@ -126,9 +126,9 @@ type repositoriesIDs struct {
 	orgA, orgB, adminA, memberA, ownerB                                        uuid.UUID
 	credGL, credNoToken, credConfigURL, credBroken, credInvalid                uuid.UUID
 	intGH, intGH2, intGH3, intGH4, intGL, intGL2, intGL3, intGL4, intGL5, intB uuid.UUID
-	intJira, intGL6                                                            uuid.UUID
+	intJira, intGL6, intGH5                                                    uuid.UUID
 	cfgGH, cfgGL, cfgGLNoCred, cfgGLNoToken, cfgGLConfigURL, cfgGLBroken       uuid.UUID
-	cfgGLInvalidToken                                                          uuid.UUID
+	cfgGLInvalidToken, cfgInfinity                                             uuid.UUID
 	cfgLegacy, cfgJira, cfgGated, cfgBadTargets, cfgPairs, cfgEmptyName, cfgB  uuid.UUID
 	seededSources                                                              []uuid.UUID
 }
@@ -138,7 +138,7 @@ func newRepositoriesIDs() repositoriesIDs {
 	for _, target := range []*uuid.UUID{&ids.orgA, &ids.orgB, &ids.adminA, &ids.memberA, &ids.ownerB, &ids.credGL, &ids.credNoToken,
 		&ids.credConfigURL, &ids.credBroken, &ids.intGH, &ids.intGH2, &ids.intGH3, &ids.intGH4, &ids.intGL, &ids.intGL2, &ids.intGL3,
 		&ids.intGL4, &ids.intGL5, &ids.intB, &ids.intJira, &ids.cfgGH, &ids.cfgGL, &ids.cfgGLNoCred, &ids.cfgGLNoToken, &ids.cfgGLConfigURL,
-		&ids.cfgGLBroken, &ids.cfgLegacy, &ids.cfgJira, &ids.cfgGated, &ids.cfgBadTargets, &ids.cfgPairs, &ids.cfgEmptyName, &ids.cfgB, &ids.credInvalid, &ids.intGL6, &ids.cfgGLInvalidToken} {
+		&ids.cfgGLBroken, &ids.cfgLegacy, &ids.cfgJira, &ids.cfgGated, &ids.cfgBadTargets, &ids.cfgPairs, &ids.cfgEmptyName, &ids.cfgB, &ids.credInvalid, &ids.intGL6, &ids.cfgGLInvalidToken, &ids.intGH5, &ids.cfgInfinity} {
 		*target = uuid.New()
 	}
 	return ids
@@ -225,6 +225,8 @@ func TestSyncConfigRepositoriesVenueOracle(t *testing.T) {
 		put("github new owner, none", ids.cfgGH, `{"owner":"other","repos":[]}`, a),
 		put("github duplicate new", ids.cfgGH, `{"owner":"acme","repos":["dup","dup"]}`, a),
 		put("stored pairs options", ids.cfgPairs, `{"owner":"old","repos":["a"]}`, a),
+		put("stored infinite option, unchanged", ids.cfgInfinity, `{"owner":"acme","repos":[]}`, a),
+		put("stored infinite option, new owner", ids.cfgInfinity, `{"owner":"other","repos":[]}`, a),
 		put("gitlab names, path, ids", ids.cfgGL, `{"owner":"gitlab-examples/maven","repos":["simple-maven-dep","Simple Maven Example","gitlab-examples/maven/simple-maven-app","999"," 12 "]}`, a),
 		put("gitlab unknown name", ids.cfgGL, `{"owner":"gitlab-examples/maven","repos":["nope","simple-maven-dep"]}`, a),
 		put("gitlab ambiguous name", ids.cfgGL, `{"owner":"dupgroup","repos":["Simple Maven Example"]}`, a),
@@ -359,7 +361,7 @@ VALUES ($1, $2, $3, $4, $5, '{}', true, $6, $6)`, id, org.String(), provider, cr
 	}{{ids.intGH, "github", nil}, {ids.intGH2, "github", nil}, {ids.intGH3, "github", nil}, {ids.intGH4, "github", nil},
 		{ids.intGL, "gitlab", ids.credGL}, {ids.intGL2, "gitlab", nil}, {ids.intGL3, "gitlab", ids.credNoToken},
 		{ids.intGL4, "gitlab", ids.credConfigURL}, {ids.intGL5, "gitlab", ids.credBroken}, {ids.intJira, "jira", nil},
-		{ids.intGL6, "gitlab", ids.credInvalid}} {
+		{ids.intGL6, "gitlab", ids.credInvalid}, {ids.intGH5, "github", nil}} {
 		integration(spec.id, ids.orgA, spec.provider, spec.credential)
 	}
 	integration(ids.intB, ids.orgB, "github", nil)
@@ -376,6 +378,9 @@ integration_id, created_at, updated_at) VALUES ($1, $2, $3, $4, $5::json, $6::js
 	config(ids.cfgGLConfigURL, ids.orgA, "gl-config-url", "GitLab", `["git"]`, `{"owner": "acme"}`, ids.intGL4)
 	config(ids.cfgGLBroken, ids.orgA, "gl-broken", "gitlab", `["git"]`, `{}`, ids.intGL5)
 	config(ids.cfgGLInvalidToken, ids.orgA, "gl-invalid-token", "gitlab", `["git"]`, `{}`, ids.intGL6)
+	// 1e400 is valid JSON that decodes to inf on both planes: an unchanged
+	// selection must read the options as equal (inf == inf) and write nothing.
+	config(ids.cfgInfinity, ids.orgA, "infinity", "github", `["git"]`, `{"owner": "acme", "limit": 1e400}`, ids.intGH5)
 	config(ids.cfgLegacy, ids.orgA, "legacy", "github", `["git"]`, `{"owner": "acme"}`, nil)
 	config(ids.cfgJira, ids.orgA, "jira", "jira", `["work-items"]`, `{}`, ids.intJira)
 	config(ids.cfgGated, ids.orgA, "gated", "github", `["git", "Incidents"]`, `{}`, ids.intGH2)

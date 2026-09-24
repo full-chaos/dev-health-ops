@@ -5,8 +5,10 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -104,6 +106,146 @@ func TestReconcilerLoopImmediateNoopStepOpensReadiness(t *testing.T) {
 	}
 	if err := loop.Shutdown(context.Background()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestReconcilerLoopShutdownStateIsNotRestoredByTheStepInFlight pins the
+// ordering a timing-dependent test would only hit occasionally. Shutdown clears
+// readiness before it cancels the loop context, so a tick-driven step that parks
+// until that context is cancelled and then succeeds returns strictly AFTER the
+// clear; it must not set readiness, the up gauge or the last-success time again.
+func TestReconcilerLoopShutdownStateIsNotRestoredByTheStepInFlight(t *testing.T) {
+	start := time.Date(2026, time.July, 22, 12, 0, 0, 0, time.UTC)
+	clock := &testReconcilerClock{now: start}
+	entered := make(chan struct{})
+	var calls atomic.Int32
+	loop, registry := newTestReconcilerLoop(t, loopStepFunc(func(ctx context.Context, _ time.Time, _ int) (StepResult, error) {
+		switch calls.Add(1) {
+		case 1:
+			// The synchronous initial step inside Start.
+			return StepResult{}, nil
+		case 2:
+			// One failed tick, so the failure streak is non-zero and a reset of
+			// it by the in-flight step is observable.
+			return StepResult{}, ErrUnavailable
+		}
+		close(entered)
+		<-ctx.Done()
+		// A non-zero blocked level, so a post-Shutdown update of that gauge is
+		// observable too.
+		return StepResult{UndeliveredBlocked: 5}, nil
+	}), clock)
+	if err := loop.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	observed := make(chan struct{}, 2)
+	loop.stepObserved = func() { observed <- struct{}{} }
+	openReconcilerReadiness(t, registry)
+	clock.ticker.ticks <- start.Add(30 * time.Second)
+	<-observed // the failed tick's bookkeeping is complete: streak == 1
+	// A different time from the initial step, so a last-success update by the
+	// in-flight step is observable.
+	clock.ticker.ticks <- start.Add(time.Minute)
+	<-entered
+	if err := loop.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if status := registry.Readiness(context.Background()); status.Ready {
+		t.Fatalf("readiness after Shutdown = %#v, want not ready", status)
+	}
+	loop.mu.Lock()
+	up, lastOK, blocked, streak := loop.up, loop.lastOK, loop.undeliveredBlocked, loop.consecutiveFailures
+	loop.mu.Unlock()
+	if up {
+		t.Fatal("up gauge is set after Shutdown; the in-flight step restored it")
+	}
+	if blocked != 0 {
+		t.Fatalf("undelivered-blocked gauge = %d after Shutdown, want the initial step's 0; the in-flight step set it", blocked)
+	}
+	if streak != 1 {
+		t.Fatalf("failure streak = %d after Shutdown, want the one failed tick's 1; the in-flight step reset it", streak)
+	}
+	if !lastOK.Equal(start) {
+		t.Fatalf("last-success time = %v after Shutdown, want the initial step's %v; the in-flight step moved it", lastOK, start)
+	}
+}
+
+// blockedInMutexLock reports whether some goroutine is parked in sync.Mutex.Lock
+// beneath a frame whose name contains within. It observes a state -- the
+// goroutine is queued on the mutex -- rather than waiting for time to pass.
+func blockedInMutexLock(within string) bool {
+	buffer := make([]byte, 1<<20)
+	written := runtime.Stack(buffer, true)
+	for _, block := range strings.Split(string(buffer[:written]), "\n\n") {
+		if strings.Contains(block, within) && strings.Contains(block, "sync.(*Mutex).Lock") {
+			return true
+		}
+	}
+	return false
+}
+
+func waitUntilObserved(t *testing.T, what string, condition func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for !condition() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		runtime.Gosched()
+	}
+}
+
+// TestReconcilerLoopShutdownClearsReadinessAndSetsStoppingInOneCriticalSection
+// pins the Shutdown-side half of the fix, which the park-until-cancel test above
+// cannot reach: that test releases the step only after Shutdown's critical
+// section has finished. Here the test holds loop.mu, lets a step's success tail
+// queue on it FIRST, starts Shutdown so it queues behind, and releases. If
+// Shutdown clears readiness before it takes the lock that sets stopping, the
+// clear has already happened and the queued tail (stopping still false) sets
+// readiness again; if both happen inside one critical section, either order of
+// the two is correct. sync.Mutex hands the lock to waiters in queue order but
+// does not promise it, so the scenario runs repeatedly and a broken Shutdown
+// must lose at least once; a correct one never fails on any attempt.
+func TestReconcilerLoopShutdownClearsReadinessAndSetsStoppingInOneCriticalSection(t *testing.T) {
+	const attempts = 25
+	start := time.Date(2026, time.July, 22, 12, 0, 0, 0, time.UTC)
+	for attempt := 1; attempt <= attempts; attempt++ {
+		clock := &testReconcilerClock{now: start}
+		inStep := make(chan struct{})
+		release := make(chan struct{})
+		var calls atomic.Int32
+		loop, registry := newTestReconcilerLoop(t, loopStepFunc(func(context.Context, time.Time, int) (StepResult, error) {
+			if calls.Add(1) == 1 {
+				return StepResult{}, nil
+			}
+			close(inStep)
+			<-release
+			return StepResult{}, nil
+		}), clock)
+		if err := loop.Start(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		openReconcilerReadiness(t, registry)
+		clock.ticker.ticks <- start.Add(time.Minute)
+		<-inStep
+
+		loop.mu.Lock()
+		close(release)
+		waitUntilObserved(t, "the step's success tail to queue on loop.mu", func() bool {
+			return blockedInMutexLock("(*ReconcilerLoop).step")
+		})
+		done := make(chan error, 1)
+		go func() { done <- loop.Shutdown(context.Background()) }()
+		waitUntilObserved(t, "Shutdown to queue on loop.mu", func() bool {
+			return blockedInMutexLock("(*ReconcilerLoop).Shutdown")
+		})
+		loop.mu.Unlock()
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+		if status := registry.Readiness(context.Background()); status.Ready {
+			t.Fatalf("attempt %d: readiness after Shutdown = %#v, want not ready", attempt, status)
+		}
 	}
 }
 

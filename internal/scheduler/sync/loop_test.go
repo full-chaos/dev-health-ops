@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -279,6 +280,143 @@ func TestLoopTimeoutIsFailureNotEmptySuccessAndShutdownCancelsStep(t *testing.T)
 	}
 	if err := loop.Shutdown(context.Background()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// blockedInMutexLock reports whether some goroutine is parked in a
+// sync.Mutex.Lock beneath a frame whose name contains within. It observes a
+// state -- the goroutine is queued on the mutex -- rather than waiting for
+// time to pass.
+func blockedInMutexLock(within string) bool {
+	buffer := make([]byte, 1<<20)
+	written := runtime.Stack(buffer, true)
+	for _, block := range strings.Split(string(buffer[:written]), "\n\n") {
+		if strings.Contains(block, within) && strings.Contains(block, "sync.(*Mutex).Lock") {
+			return true
+		}
+	}
+	return false
+}
+
+func waitUntilObserved(t *testing.T, what string, condition func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for !condition() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		runtime.Gosched()
+	}
+}
+
+// TestLoopShutdownClearsReadinessAndSetsStoppingInOneCriticalSection holds
+// loop.mu, lets a step's success tail queue on it first (observed from a
+// goroutine dump, not a wait), starts Shutdown so it queues behind, and
+// releases. If Shutdown clears readiness before it takes the lock that sets
+// stopping, the queued tail (stopping still false) sets readiness again and a
+// probe after Shutdown reports a stopped loop ready; with one critical section
+// either order is correct. sync.Mutex does not promise waiter order, so each
+// run makes several attempts and a broken Shutdown must lose at least once.
+func TestLoopShutdownClearsReadinessAndSetsStoppingInOneCriticalSection(t *testing.T) {
+	const attempts = 25
+	for attempt := 1; attempt <= attempts; attempt++ {
+		clock := &testLoopClock{now: at("2026-07-23T12:00:00Z")}
+		inStep := make(chan struct{})
+		release := make(chan struct{})
+		var calls atomic.Int32
+		loop, registry := newTestLoop(t, loopStepFunc(func(context.Context, time.Time, int, Coordinator) (HandoffResult, error) {
+			if calls.Add(1) == 1 {
+				return HandoffResult{}, nil
+			}
+			close(inStep)
+			<-release
+			return HandoffResult{}, nil
+		}), clock)
+		openLoopReadiness(t, registry)
+		if err := loop.Start(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		waitForLoopReadiness(t, loop, registry, true)
+		clock.ticker.ticks <- clock.Now().Add(time.Minute)
+		<-inStep
+
+		loop.mu.Lock()
+		close(release)
+		waitUntilObserved(t, "the step's success tail to queue on loop.mu", func() bool {
+			return blockedInMutexLock("(*Loop).step")
+		})
+		done := make(chan error, 1)
+		go func() { done <- loop.Shutdown(context.Background()) }()
+		waitUntilObserved(t, "Shutdown to queue on loop.mu", func() bool {
+			return blockedInMutexLock("(*Loop).Shutdown")
+		})
+		loop.mu.Unlock()
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+		if status := registry.Readiness(context.Background()); status.Ready {
+			t.Fatalf("attempt %d: readiness after Shutdown = %#v, want not ready", attempt, status)
+		}
+		loop.mu.Lock()
+		up := loop.up
+		loop.mu.Unlock()
+		if up {
+			t.Fatalf("attempt %d: up gauge after Shutdown = true, want false", attempt)
+		}
+	}
+}
+
+// TestLoopStepQueuedBehindShutdownDoesNotReopenReadiness is the opposite queue
+// order of the test above: Shutdown is queued on loop.mu first and the step's
+// success tail second. The tail must find stopping already set and leave the
+// cleared readiness and up gauge alone; a Shutdown that did not set stopping
+// in the same critical section as the clear would let the tail reopen them.
+func TestLoopStepQueuedBehindShutdownDoesNotReopenReadiness(t *testing.T) {
+	const attempts = 25
+	for attempt := 1; attempt <= attempts; attempt++ {
+		clock := &testLoopClock{now: at("2026-07-23T12:00:00Z")}
+		inStep := make(chan struct{})
+		release := make(chan struct{})
+		var calls atomic.Int32
+		loop, registry := newTestLoop(t, loopStepFunc(func(context.Context, time.Time, int, Coordinator) (HandoffResult, error) {
+			if calls.Add(1) == 1 {
+				return HandoffResult{}, nil
+			}
+			close(inStep)
+			<-release
+			return HandoffResult{}, nil
+		}), clock)
+		openLoopReadiness(t, registry)
+		if err := loop.Start(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		waitForLoopReadiness(t, loop, registry, true)
+		clock.ticker.ticks <- clock.Now().Add(time.Minute)
+		<-inStep
+
+		loop.mu.Lock()
+		done := make(chan error, 1)
+		go func() { done <- loop.Shutdown(context.Background()) }()
+		waitUntilObserved(t, "Shutdown to queue on loop.mu", func() bool {
+			return blockedInMutexLock("(*Loop).Shutdown")
+		})
+		close(release)
+		waitUntilObserved(t, "the step's success tail to queue on loop.mu", func() bool {
+			return blockedInMutexLock("(*Loop).step")
+		})
+		loop.mu.Unlock()
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+		if status := registry.Readiness(context.Background()); status.Ready {
+			t.Fatalf("attempt %d: readiness after Shutdown = %#v, want not ready", attempt, status)
+		}
+		loop.mu.Lock()
+		up := loop.up
+		loop.mu.Unlock()
+		if up {
+			t.Fatalf("attempt %d: up gauge after Shutdown = true, want false", attempt)
+		}
 	}
 }
 

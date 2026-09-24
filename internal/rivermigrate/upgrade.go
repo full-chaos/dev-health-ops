@@ -23,19 +23,47 @@ import (
 // by its path under dho.
 type upgradeStep struct {
 	name string
+	args []string
 	run  func(context.Context, cli.Env) int
+	// when, if set, decides at run time whether the step runs; skip names
+	// why it did not.
+	when func(lookup platformsecrets.LookupEnv) (run bool, skip string)
 }
 
 // upgradeSteps are the migrate Job's steps, in the order the Python Job ran
 // them: the PostgreSQL schema, then the standard feature flags it seeds, then
 // the ClickHouse schema. Each is the stand-alone verb itself, run through its
 // own Run, so the composite cannot drift from the verbs.
-func upgradeSteps() []upgradeStep {
-	return []upgradeStep{
-		{"migrate postgres upgrade", verbRun(migrationPostgresCommand(), "upgrade")},
-		{"admin features seed", verbRun(admincli.Command(), "features", "seed")},
-		{"migrate clickhouse upgrade", verbRun(chmigrate.Command(), "upgrade")},
+//
+// With river, `migrate river --apply-and-check` runs right after the
+// PostgreSQL step, and only when MIGRATION_DATABASE_URI (or its _FILE or
+// component form) is configured -- what `dev-hops migrate postgres` did when
+// no River hook owned that step.
+func upgradeSteps(river bool) []upgradeStep {
+	steps := []upgradeStep{{name: "migrate postgres upgrade", run: verbRun(migrationPostgresCommand(), "upgrade")}}
+	if river {
+		steps = append(steps, upgradeStep{
+			name: "migrate river --apply-and-check",
+			args: []string{"--apply-and-check"},
+			run:  verbRun(Command(), "river"),
+			when: migrationDatabaseConfigured,
+		})
 	}
+	return append(steps,
+		upgradeStep{name: "admin features seed", run: verbRun(admincli.Command(), "features", "seed")},
+		upgradeStep{name: "migrate clickhouse upgrade", run: verbRun(chmigrate.Command(), "upgrade")},
+	)
+}
+
+// migrationDatabaseConfigured reports whether MIGRATION_DATABASE_URI is
+// configured in any of its forms. A malformed setting counts as configured,
+// so the River step runs and reports it.
+func migrationDatabaseConfigured(lookup platformsecrets.LookupEnv) (bool, string) {
+	_, configured, err := config.ResolveDSN(lookup, "MIGRATION_DATABASE_URI", config.MigrationDatabaseSpec)
+	if err != nil || configured {
+		return true, ""
+	}
+	return false, "MIGRATION_DATABASE_URI is not configured"
 }
 
 // migrationPostgresCommand is `dho migrate postgres`, resolving the database
@@ -73,8 +101,14 @@ const upgradeUsage = `Usage: dho migrate upgrade
 Runs the migrate Job's steps in order, each exactly as its own verb runs:
 
   1. dho migrate postgres upgrade
+     (with --river: dho migrate river --apply-and-check, when
+     MIGRATION_DATABASE_URI is configured)
   2. dho admin features seed
   3. dho migrate clickhouse upgrade
+
+Flags:
+  --river   also apply the River schema after the PostgreSQL step, as the
+            migrate Job does when no River hook owns that step
 
 Each step prints its JSON result on stdout and logs its duration at Info on
 stderr. The first step that fails stops the run: later steps do not run, and
@@ -84,13 +118,14 @@ the steps' own environment (see each verb's -h).
 
 // runUpgrade is `dho migrate upgrade`.
 func runUpgrade(ctx context.Context, env cli.Env) int {
-	return runSteps(ctx, env, upgradeSteps())
+	return runSteps(ctx, env, upgradeSteps)
 }
 
-func runSteps(ctx context.Context, env cli.Env, steps []upgradeStep) int {
+func runSteps(ctx context.Context, env cli.Env, build func(river bool) []upgradeStep) int {
 	flags := flag.NewFlagSet("dho migrate upgrade", flag.ContinueOnError)
 	flags.SetOutput(env.Stderr)
 	flags.Usage = func() { fmt.Fprint(env.Stderr, upgradeUsage) }
+	river := flags.Bool("river", false, "also run `migrate river --apply-and-check` after the PostgreSQL step, when MIGRATION_DATABASE_URI is configured")
 	if err := flags.Parse(env.Args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return cli.ExitOK
@@ -101,12 +136,19 @@ func runSteps(ctx context.Context, env cli.Env, steps []upgradeStep) int {
 		fmt.Fprintln(env.Stderr, "argument error: positional arguments are not accepted")
 		return cli.ExitUsage
 	}
+	steps := build(*river)
 	logger := logging.NewJSON(env.Stderr, slog.LevelInfo)
 	started := time.Now()
 	for index, step := range steps {
+		if step.when != nil {
+			if run, skip := step.when(env.Lookup); !run {
+				logger.Info("migrate step skipped", "step", step.name, "reason", skip)
+				continue
+			}
+		}
 		logger.Info("migrate step started", "step", step.name, "position", index+1, "of", len(steps))
 		stepStarted := time.Now()
-		code := step.run(ctx, cli.Env{Lookup: env.Lookup, Stdout: env.Stdout, Stderr: env.Stderr})
+		code := step.run(ctx, cli.Env{Args: step.args, Lookup: env.Lookup, Stdout: env.Stdout, Stderr: env.Stderr})
 		duration := time.Since(stepStarted).Milliseconds()
 		if code != cli.ExitOK {
 			logger.Error("migrate step failed", "step", step.name, "exit_code", code, "duration_ms", duration)

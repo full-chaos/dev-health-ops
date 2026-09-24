@@ -10,21 +10,26 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/cli"
+	platformsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
 // The composite runs the migrate Job's three verbs, in the Job's order, and
 // each is the stand-alone verb's own Run.
 func TestUpgradeStepsAreTheJobsVerbsInOrder(t *testing.T) {
-	var names []string
-	for _, step := range upgradeSteps() {
-		if step.run == nil {
-			t.Fatalf("step %s has no Run", step.name)
+	for river, want := range map[bool][]string{
+		false: {"migrate postgres upgrade", "admin features seed", "migrate clickhouse upgrade"},
+		true:  {"migrate postgres upgrade", "migrate river --apply-and-check", "admin features seed", "migrate clickhouse upgrade"},
+	} {
+		var names []string
+		for _, step := range upgradeSteps(river) {
+			if step.run == nil {
+				t.Fatalf("step %s has no Run", step.name)
+			}
+			names = append(names, step.name)
 		}
-		names = append(names, step.name)
-	}
-	want := []string{"migrate postgres upgrade", "admin features seed", "migrate clickhouse upgrade"}
-	if !reflect.DeepEqual(names, want) {
-		t.Fatalf("steps = %v, want %v", names, want)
+		if !reflect.DeepEqual(names, want) {
+			t.Fatalf("river=%v: steps = %v, want %v", river, names, want)
+		}
 	}
 	var found bool
 	for _, child := range Command().Children {
@@ -38,9 +43,21 @@ func TestUpgradeStepsAreTheJobsVerbsInOrder(t *testing.T) {
 }
 
 // fakeSteps records which steps ran; the step named in fail exits with code.
-func fakeSteps(ran *[]string, fail string, code int) []upgradeStep {
+// With river, a conditional step "river" runs between one and two when
+// RIVER_ON is set.
+func fakeSteps(ran *[]string, fail string, code int) func(bool) []upgradeStep {
+	return func(river bool) []upgradeStep {
+		names := []string{"one", "two", "three"}
+		if river {
+			names = []string{"one", "river", "two", "three"}
+		}
+		return fakeNamedSteps(ran, names, fail, code)
+	}
+}
+
+func fakeNamedSteps(ran *[]string, names []string, fail string, code int) []upgradeStep {
 	var steps []upgradeStep
-	for _, name := range []string{"one", "two", "three"} {
+	for _, name := range names {
 		steps = append(steps, upgradeStep{name: name, run: func(_ context.Context, env cli.Env) int {
 			*ran = append(*ran, name)
 			if len(env.Args) != 0 {
@@ -52,8 +69,60 @@ func fakeSteps(ran *[]string, fail string, code int) []upgradeStep {
 			}
 			return cli.ExitOK
 		}})
+		if name == "river" {
+			steps[len(steps)-1].when = func(lookup platformsecrets.LookupEnv) (bool, string) {
+				if _, ok := lookup("RIVER_ON"); ok {
+					return true, ""
+				}
+				return false, "RIVER_ON is not set"
+			}
+		}
 	}
 	return steps
+}
+
+// --river adds its step, which runs only when its condition holds and is
+// otherwise logged as skipped.
+func TestRunStepsRiverStep(t *testing.T) {
+	for _, testCase := range []struct {
+		args []string
+		env  map[string]string
+		want []string
+	}{
+		{nil, map[string]string{"RIVER_ON": "1"}, []string{"one", "two", "three"}},
+		{[]string{"--river"}, map[string]string{"RIVER_ON": "1"}, []string{"one", "river", "two", "three"}},
+		{[]string{"--river"}, nil, []string{"one", "two", "three"}},
+	} {
+		var ran []string
+		var stdout, stderr bytes.Buffer
+		lookup := func(key string) (string, bool) { value, ok := testCase.env[key]; return value, ok }
+		code := runSteps(context.Background(), cli.Env{Args: testCase.args, Lookup: lookup, Stdout: &stdout, Stderr: &stderr}, fakeSteps(&ran, "", 0))
+		if code != cli.ExitOK || !reflect.DeepEqual(ran, testCase.want) {
+			t.Fatalf("args %v env %v: exit %d, ran %v; want %v", testCase.args, testCase.env, code, ran, testCase.want)
+		}
+		skipped := strings.Contains(stderr.String(), `"msg":"migrate step skipped","step":"river","reason":"RIVER_ON is not set"`)
+		if wantSkip := len(testCase.args) == 1 && testCase.env == nil; skipped != wantSkip {
+			t.Fatalf("args %v env %v: skip logged %v, want %v: %s", testCase.args, testCase.env, skipped, wantSkip, stderr.String())
+		}
+	}
+}
+
+// The River step's condition is MIGRATION_DATABASE_URI in any configured form.
+func TestMigrationDatabaseConfigured(t *testing.T) {
+	for _, testCase := range []struct {
+		env  map[string]string
+		want bool
+	}{
+		{nil, false},
+		{map[string]string{"POSTGRES_URI": "postgresql://u:p@h/db"}, false},
+		{map[string]string{"MIGRATION_DATABASE_URI": "postgresql://u:p@h/db"}, true},
+		{map[string]string{"DEV_HEALTH_MIGRATION_PG_HOST": "h", "DEV_HEALTH_MIGRATION_PG_USER": "u", "DEV_HEALTH_MIGRATION_PG_PASSWORD": "p"}, true},
+	} {
+		lookup := func(key string) (string, bool) { value, ok := testCase.env[key]; return value, ok }
+		if got, _ := migrationDatabaseConfigured(lookup); got != testCase.want {
+			t.Fatalf("env %v: configured = %v, want %v", testCase.env, got, testCase.want)
+		}
+	}
 }
 
 func TestRunStepsRunsEveryStepInOrder(t *testing.T) {

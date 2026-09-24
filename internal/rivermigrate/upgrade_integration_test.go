@@ -76,6 +76,20 @@ func TestUpgradeRunsTheJobEndToEnd(t *testing.T) {
 		t.Fatalf("the second seed created %v, want nothing", created)
 	}
 
+	// --river with no MIGRATION_DATABASE_URI (the database under
+	// POSTGRES_URI): the River step is skipped and logged, the rest run.
+	fallback := map[string]string{
+		"POSTGRES_URI":                          pgURI,
+		"DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER": "1",
+		"CLICKHOUSE_URI":                        chURI,
+		"OPERATIONAL_ORDERING_CONTRACT":         "2",
+	}
+	code, results, stderr = runUpgrade(t, fallback, "--river")
+	if code != cli.ExitOK || len(results) != 3 ||
+		!strings.Contains(stderr, `"msg":"migrate step skipped","step":"migrate river --apply-and-check","reason":"MIGRATION_DATABASE_URI is not configured"`) {
+		t.Fatalf("--river without MIGRATION_DATABASE_URI: exit %d, results %v, stderr:\n%s", code, results, stderr)
+	}
+
 	unreachable := map[string]string{}
 	for key, value := range settings {
 		unreachable[key] = value
@@ -93,7 +107,7 @@ func TestUpgradeRunsTheJobEndToEnd(t *testing.T) {
 
 // runUpgrade runs `dho migrate upgrade` with exactly settings as its
 // environment and returns its exit code, its stdout JSON lines, and stderr.
-func runUpgrade(t *testing.T, settings map[string]string) (int, []map[string]any, string) {
+func runUpgrade(t *testing.T, settings map[string]string, args ...string) (int, []map[string]any, string) {
 	t.Helper()
 	var run func(context.Context, cli.Env) int
 	for _, child := range rivermigrate.Command().Children {
@@ -109,7 +123,7 @@ func runUpgrade(t *testing.T, settings map[string]string) (int, []map[string]any
 		value, ok := settings[key]
 		return value, ok
 	}
-	code := run(context.Background(), cli.Env{Lookup: lookup, Stdout: &stdout, Stderr: &stderr})
+	code := run(context.Background(), cli.Env{Args: args, Lookup: lookup, Stdout: &stdout, Stderr: &stderr})
 	var results []map[string]any
 	for _, line := range strings.Split(strings.TrimSpace(stdout.String()), "\n") {
 		if line == "" {

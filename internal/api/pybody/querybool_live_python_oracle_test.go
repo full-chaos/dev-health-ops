@@ -36,7 +36,7 @@ print(json.dumps(out))
 
 // TestQueryBoolMatchesLivePydantic pins QueryBool against pydantic's lax
 // str -> bool (FastAPI's bool query validation) over a corpus and
-// deterministic fuzz, and QueryValue's last-value rule.
+// deterministic fuzz, and LastQuery's last-value rule.
 func TestQueryBoolMatchesLivePydantic(t *testing.T) {
 	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
 		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
@@ -88,13 +88,13 @@ func TestQueryBoolMatchesLivePydantic(t *testing.T) {
 		}
 	}
 	values := url.Values{"a": {"false", "true"}, "e": {""}}
-	if got := QueryValue(values, "a"); got == nil || *got != "true" {
+	if got := LastQuery(values, "a"); got == nil || *got != "true" {
 		t.Error("the last value of a repeated key wins")
 	}
-	if got := QueryValue(values, "e"); got == nil || *got != "" {
+	if got := LastQuery(values, "e"); got == nil || *got != "" {
 		t.Error("a present empty value is \"\", not absent")
 	}
-	if QueryValue(values, "missing") != nil {
+	if LastQuery(values, "missing") != nil {
 		t.Error("an absent key is nil")
 	}
 	if proof := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR"); proof != "" {

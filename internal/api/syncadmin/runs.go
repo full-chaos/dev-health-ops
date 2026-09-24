@@ -42,8 +42,8 @@ var (
 func pageQuery(w http.ResponseWriter, r *http.Request) (limit, offset *big.Int, ok bool) {
 	query := r.URL.Query()
 	var errs pybody.Errors
-	limit, _ = errs.QueryInt("limit", pybody.QueryValue(query, "limit"), 50, &pageLimitMin, &pageLimitMax)
-	offset, _ = errs.QueryInt("offset", pybody.QueryValue(query, "offset"), 0, &pageOffsetGe, nil)
+	limit, _ = errs.QueryInt("limit", pybody.LastQuery(query, "limit"), 50, &pageLimitMin, &pageLimitMax)
+	offset, _ = errs.QueryInt("offset", pybody.LastQuery(query, "offset"), 0, &pageOffsetGe, nil)
 	if len(errs) > 0 {
 		writeQueryErrors(w, errs)
 		return nil, nil, false

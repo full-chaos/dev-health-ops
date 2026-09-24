@@ -195,9 +195,9 @@ func (h *handlers) listSyncConfigs(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	query := r.URL.Query()
 	var errs pybody.Errors
-	activeOnly, _ := errs.QueryBool("active_only", pybody.QueryValue(query, "active_only"), false)
-	parentOnly, _ := errs.QueryBool("parent_only", pybody.QueryValue(query, "parent_only"), false)
-	includeMigrated, _ := errs.QueryBool("include_migrated", pybody.QueryValue(query, "include_migrated"), false)
+	activeOnly, _ := errs.QueryBool("active_only", pybody.LastQuery(query, "active_only"), false)
+	parentOnly, _ := errs.QueryBool("parent_only", pybody.LastQuery(query, "parent_only"), false)
+	includeMigrated, _ := errs.QueryBool("include_migrated", pybody.LastQuery(query, "include_migrated"), false)
 	if len(errs) > 0 {
 		writeQueryErrors(w, errs)
 		return

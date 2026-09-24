@@ -284,7 +284,8 @@ func closeComponents(components []lifecycle.Component) {
 
 // NewServer builds the api listener with the full transport stack. The stack
 // order, request side first, is: the plane/build provenance stamp (outside
-// everything so no response, scope rejection or unhandled error, lacks it),
+// every handler-chain layer so no response it produces, scope rejection or
+// unhandled error, lacks it),
 // request id, panic recovery, then scope (the
 // org scope and impersonation middlewares, when given), security headers,
 // CORS, then the mux (and, per route, recovery, deadline, body bound). It

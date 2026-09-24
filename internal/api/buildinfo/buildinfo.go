@@ -40,8 +40,10 @@ func Routes(guard *policy.Guard, info version.Info) []httpapi.Route {
 	}}
 }
 
-// Stamp applies buildstamp.SetProvenance to every response, before the
-// handler runs, so a handler that commits its status line first cannot lose
+// Stamp applies buildstamp.SetProvenance to every response the handler chain
+// produces, before the handler runs (a malformed request net/http rejects
+// before dispatch never reaches any handler and carries no stamp; it has no
+// Python counterpart either), so a handler that commits its status line first cannot lose
 // the headers.
 func Stamp(info version.Info) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {

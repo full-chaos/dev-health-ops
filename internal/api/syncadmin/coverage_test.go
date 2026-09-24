@@ -3,6 +3,7 @@ package syncadmin
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -63,7 +64,7 @@ func TestCoverageAnswers(t *testing.T) {
 	if reader.askedLookback != 3650 || reader.askedVersion != 2 {
 		t.Errorf("asked lookback %d version %d, want 3650 and 2", reader.askedLookback, reader.askedVersion)
 	}
-	if logs.Len() != 0 {
+	if strings.Contains(logs.String(), "level=ERROR") {
 		t.Errorf("pending logged a failure: %s", logs)
 	}
 
@@ -94,7 +95,7 @@ func TestCoverageAnswers(t *testing.T) {
 		{"null", `null`, "coverage_payload_dict"},
 		{"number", `5`, "coverage_payload_dict"},
 		{"not json", `{`, "decode_coverage_payload"},
-		{"empty", `{}`, "coverage_model"},
+		{"empty", `{}`, "coverage_log_fields"},
 		{"null required datetime", strings.Replace(coverageMinimal, `"generated_at": "2026-09-01T10:00:00"`, `"generated_at": null`, 1), "coverage_model"},
 		{"null default bool", strings.Replace(coverageMinimal, `"is_truncated": "off"`, `"is_truncated": null`, 1), "coverage_model"},
 		{"null default list", strings.Replace(coverageMinimal, `"backfill_windows": [{"since": "2026-01-01", "before": "2026-01-02T00:00:00", "reasons": ["failed"]}]`, `"backfill_windows": null`, 1), "coverage_model"},
@@ -133,5 +134,77 @@ func TestABackfillBoundaryReadsISOFormsBeforeTimestamps(t *testing.T) {
 	_, status, body, _ := serveCoverage(t, reader)
 	if status != http.StatusOK || !strings.Contains(body, `"backfill_windows":[{"since":"2026-01-01T00:00:00Z","before":"2026-01-02T00:00:00Z"`) {
 		t.Errorf("basic and week boundaries: %d %s", status, body)
+	}
+}
+
+// TestCoverageEmitsTheBuildersInfoEvents pins build_sync_coverage_summary's
+// Info events: waiting on every read; pending when no row; completed with
+// the payload's gap and failed-range counts, projection version and
+// refreshing flag, read before the model runs; no completed event when
+// the payload lacks them (Python raises on the subscript first).
+func TestCoverageEmitsTheBuildersInfoEvents(t *testing.T) {
+	events := func(logs string) []string {
+		var out []string
+		for _, line := range strings.Split(strings.TrimSpace(logs), "\n") {
+			if strings.Contains(line, "level=INFO") {
+				out = append(out, line)
+			}
+		}
+		return out
+	}
+	config := "sync_config_id=" + faultConfigID.String() + " history_lookback_days=3650"
+
+	logs, status, _, _ := serveCoverage(t, &coverageReader{faultReader: &faultReader{}})
+	got := events(logs.String())
+	if status != http.StatusServiceUnavailable || len(got) != 2 ||
+		!strings.Contains(got[0], "msg=sync_coverage_summary_waiting") || !strings.Contains(got[0], config) ||
+		!strings.Contains(got[1], "msg=sync_coverage_projection_pending") || !strings.Contains(got[1], config) {
+		t.Errorf("pending: %d %q", status, got)
+	}
+
+	reader := &coverageReader{faultReader: &faultReader{}, row: &coverageProjection{Payload: coverageMinimal, Invalidated: true}}
+	logs, status, _, _ = serveCoverage(t, reader)
+	got = events(logs.String())
+	if status != http.StatusOK || len(got) != 2 || !strings.Contains(got[0], "msg=sync_coverage_summary_waiting") ||
+		!strings.Contains(got[1], "msg=sync_coverage_summary_completed") || !strings.Contains(got[1], config) ||
+		!strings.Contains(got[1], "elapsed_seconds=") || !strings.Contains(got[1], "gap_count=true") ||
+		!strings.Contains(got[1], `failed_range_count=`) || !strings.Contains(got[1], "projection_version=2.0") ||
+		!strings.Contains(got[1], "projection_refreshing=true") {
+		t.Errorf("completed: %d %q", status, got)
+	}
+
+	reader = &coverageReader{faultReader: &faultReader{}, row: &coverageProjection{Payload: `{"projection_version": 2, "overall": {"gap_count": 1}}`}}
+	logs, status, _, _ = serveCoverage(t, reader)
+	if status != http.StatusInternalServerError || strings.Contains(logs.String(), "sync_coverage_summary_completed") ||
+		!strings.Contains(logs.String(), "step=coverage_log_fields") {
+		t.Errorf("missing failed_range_count: %d %s", status, logs)
+	}
+}
+
+// TestCoverageCompletedEventCarriesStoredValuesAsJSON pins the completed
+// event's payload fields as the Python JSON logger writes extras: an
+// integer past int64 is a number, a string is a string, and a list, an
+// object or null is JSON, never a repr.
+func TestCoverageCompletedEventCarriesStoredValuesAsJSON(t *testing.T) {
+	payload := strings.Replace(strings.Replace(coverageMinimal, `"gap_count": true`, `"gap_count": 9223372036854775808`, 1),
+		`"failed_range_count": "0"`, `"failed_range_count": [1, {"a": null}]`, 1)
+	var logs bytes.Buffer
+	reader := &coverageReader{faultReader: &faultReader{}, row: &coverageProjection{Payload: payload}}
+	h := &handlers{store: reader, features: faultFeatures{}, logger: slog.New(slog.NewJSONHandler(&logs, nil))}
+	serveAs(t, h, h.getCoverage, "/x", map[string]string{"config_id": faultConfigID.String()})
+	var completed map[string]json.RawMessage
+	for _, line := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+		var event map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(line), &event); err == nil && string(event["msg"]) == `"sync_coverage_summary_completed"` {
+			completed = event
+		}
+	}
+	for key, want := range map[string]string{
+		"gap_count": `9223372036854775808`, "failed_range_count": `[1,{"a":null}]`,
+		"projection_version": `2.0`, "projection_refreshing": `false`,
+	} {
+		if got := string(completed[key]); got != want {
+			t.Errorf("%s = %s, want %s (all: %v)", key, got, want, completed)
+		}
 	}
 }

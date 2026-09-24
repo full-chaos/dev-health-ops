@@ -111,8 +111,8 @@ func TestFnMatchDiffersFromPathMatchWhereItMust(t *testing.T) {
 // TestFnMatchMatchesLivePython is the oracle: it compares both the match
 // outcome AND the translated expression against CPython.
 func TestFnMatchMatchesLivePython(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE") == "" {
-		t.Skip("live Python oracle runs only through the uncached live-oracle gate")
+	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
+		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
 	}
 	python := pyoracle.Resolve(t, parityRepositoryRoot(t))
 
@@ -177,5 +177,8 @@ func TestFnMatchMatchesLivePython(t *testing.T) {
 	}
 	if checked != len(fnMatchCases) {
 		t.Fatalf("checked %d of %d cases", checked, len(fnMatchCases))
+	}
+	if !t.Failed() {
+		writeLiveProof(t, "pythonparity-fnmatch")
 	}
 }

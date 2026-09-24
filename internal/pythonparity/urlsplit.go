@@ -5,7 +5,7 @@ import (
 	"regexp"
 	"strings"
 
-	"golang.org/x/text/unicode/norm"
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity/pyunicodedata"
 )
 
 // URLValueError is the ValueError urllib.parse raises; Message is Python's
@@ -143,7 +143,7 @@ func checkNetlocNFKC(netloc string) error {
 		return nil
 	}
 	stripped := strings.NewReplacer("@", "", ":", "", "#", "", "?", "").Replace(netloc)
-	normalized := norm.NFKC.String(stripped)
+	normalized := string(pyunicodedata.NFKC([]rune(stripped)))
 	if normalized == stripped || !strings.ContainsAny(normalized, "/?#@:") {
 		return nil
 	}

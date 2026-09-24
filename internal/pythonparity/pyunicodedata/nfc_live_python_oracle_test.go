@@ -16,8 +16,14 @@ import (
 const nfcProgram = `
 import json, sys, unicodedata
 out = []
+u32 = unicodedata.ucd_3_2_0
 for cps in json.load(sys.stdin):
-    out.append([ord(c) for c in unicodedata.normalize("NFC", "".join(map(chr, cps or [])))])
+    text = "".join(map(chr, cps or []))
+    out.append([
+        [ord(c) for c in unicodedata.normalize("NFC", text)],
+        [ord(c) for c in unicodedata.normalize("NFKC", text)],
+        [ord(c) for c in u32.normalize("NFKC", text)],
+    ])
 json.dump(out, sys.stdout)
 `
 
@@ -70,8 +76,9 @@ func nfcCorpus() [][]rune {
 	return corpus
 }
 
-// TestNFCMatchesLivePython compares NFC with unicodedata.normalize("NFC",
-// ...) over nfcCorpus.
+// TestNFCMatchesLivePython compares NFC, NFKC and NFKC32 with
+// unicodedata.normalize("NFC" / "NFKC", ...) and
+// unicodedata.ucd_3_2_0.normalize("NFKC", ...) over nfcCorpus.
 func TestNFCMatchesLivePython(t *testing.T) {
 	regenerate := os.Getenv("DEV_HEALTH_REGENERATE_TABLES") == "1"
 	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" && !regenerate {
@@ -90,9 +97,13 @@ func TestNFCMatchesLivePython(t *testing.T) {
 	if err != nil {
 		t.Fatalf("live python: %v", pyoracle.RunError(python, err, []byte(stderr.String())))
 	}
-	var want [][]rune
-	if err := json.Unmarshal(output, &want); err != nil {
+	var answers [][3][]rune
+	if err := json.Unmarshal(output, &answers); err != nil {
 		t.Fatal(err)
+	}
+	want := make([][]rune, len(answers))
+	for index, answer := range answers {
+		want[index] = answer[0]
 	}
 	differences := 0
 	report := func(kind string, input, got, expected []rune) {
@@ -102,8 +113,14 @@ func TestNFCMatchesLivePython(t *testing.T) {
 		}
 	}
 	for index, input := range corpus {
-		if got := NFC(input); !equal(got, want[index]) {
-			report("NFC", input, got, want[index])
+		if got := NFC(input); !equal(got, answers[index][0]) {
+			report("NFC", input, got, answers[index][0])
+		}
+		if got := NFKC(input); !equal(got, answers[index][1]) {
+			report("NFKC", input, got, answers[index][1])
+		}
+		if got := NFKC32(input); !equal(got, answers[index][2]) {
+			report("NFKC32", input, got, answers[index][2])
 		}
 	}
 	t.Logf("%d inputs, %d differences", len(corpus), differences)

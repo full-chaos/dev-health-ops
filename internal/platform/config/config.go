@@ -873,9 +873,14 @@ func Load(spec Spec) (Config, error) {
 				settingLabel("DEV_HEALTH_API_ADDR"), settingLabel("DEV_HEALTH_HTTP_ADDR"),
 			)
 		}
-		cfg.CORSAllowedOrigins = parseCORSOrigins(
-			envOrDefault(lookup, "CORS_ALLOWED_ORIGINS", defaultCORSAllowedOrigins),
-		)
+		// os.getenv("CORS_ALLOWED_ORIGINS", default): the default only when
+		// the variable is absent. A present empty or blank value is an empty
+		// allow-list, never the default.
+		corsOrigins, present := lookup("CORS_ALLOWED_ORIGINS")
+		if !present {
+			corsOrigins = defaultCORSAllowedOrigins
+		}
+		cfg.CORSAllowedOrigins = parseCORSOrigins(corsOrigins)
 		cfg.APIJWTSecret, _, err = secrets.Resolve("JWT_SECRET_KEY", lookup)
 		if err != nil {
 			return Config{}, err

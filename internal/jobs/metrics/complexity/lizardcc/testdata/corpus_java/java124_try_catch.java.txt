@@ -1,0 +1,1 @@
+class C { void f() { try { a(); } catch (Exception e) { if (b) {} } finally { c(); } } }

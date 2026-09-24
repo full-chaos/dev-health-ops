@@ -1,0 +1,1 @@
+class C { Map<String, List<Integer>> m = new HashMap<String, List<Integer>>() { { put("a", null); } }; void f() { if (m != null) {} } }

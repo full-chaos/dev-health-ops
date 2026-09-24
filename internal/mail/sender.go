@@ -439,8 +439,8 @@ func (sender *resendSender) Send(ctx context.Context, message Message) error {
 	return nil
 }
 
-// resendUserAgent is what the pinned Resend Python SDK (2.30.0) sends.
-const resendUserAgent = "resend-python:2.30.0"
+// resendUserAgent is what the deployed Resend Python SDK (2.47.0) sends.
+const resendUserAgent = "resend-python:2.47.0"
 
 // bodyStatusIsAnError mirrors `data.get("statusCode") not in (None, 200)`: a
 // statusCode that is absent or JSON null is fine, a number equal to 200 is

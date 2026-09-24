@@ -9,7 +9,7 @@ import (
 )
 
 // This file mirrors clike_parity_test.go's contract exactly (numeric
-// equality with real lizard 1.23.0, not resemblance) for the four readers
+// equality with real lizard 1.24.0, not resemblance) for the four readers
 // PR2b adds: C#, Kotlin, Scala, Swift. It reuses that file's oracleDoc/
 // oracleFile/oracleFunction JSON shape and complexityDiff/itoa helpers --
 // only the corpus directory, golden path, and per-extension dispatch to

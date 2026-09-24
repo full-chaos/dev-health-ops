@@ -1,0 +1,1 @@
+class C { void f() { Foo<Bar> f = new Foo<Bar>(g(1, 2), h()); if (f != null) {} } }

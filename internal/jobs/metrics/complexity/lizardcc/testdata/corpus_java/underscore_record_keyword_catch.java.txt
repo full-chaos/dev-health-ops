@@ -1,0 +1,9 @@
+// A record whose name starts with an underscore never captures its class
+// name, so its compact constructor body is scanned by the global state.
+// The `catch` statement keyword below must not be taken for a function name
+// there; the expected result is lizard's own.
+record _K(int x) {
+    _K {
+        try { x = 1; } catch (RuntimeException e) { x = 2; }
+    }
+}

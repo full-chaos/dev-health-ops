@@ -1,0 +1,1 @@
+record P<T>(T a) { P { if (a == null) throw new X(); } T f() { if (a != null) return a; return null; } }

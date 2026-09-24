@@ -59,6 +59,8 @@ func TestImportTeamsValidationMatchesPydantic(t *testing.T) {
 			`{"detail":[{"type":"int_parsing","loc":["body","teams",0,"member_count"],"msg":"Input should be a valid integer, unable to parse string as an integer","input":"x"}]}`},
 		{"member_count fractional float", `,"member_count":5.5`,
 			`{"detail":[{"type":"int_from_float","loc":["body","teams",0,"member_count"],"msg":"Input should be a valid integer, got a number with a fractional part","input":5.5}]}`},
+		{"member_count float beyond int64", `,"member_count":1e300`,
+			`{"detail":[{"type":"int_parsing_size","loc":["body","teams",0,"member_count"],"msg":"Unable to parse input string as an integer, exceeded maximum size","input":1e+300}]}`},
 		{"member_count list", `,"member_count":[]`,
 			`{"detail":[{"type":"int_type","loc":["body","teams",0,"member_count"],"msg":"Input should be a valid integer","input":[]}]}`},
 	}
@@ -78,7 +80,7 @@ func TestImportTeamsValidationMatchesPydantic(t *testing.T) {
 // TestParseDiscoveredTeamAcceptsWhatPydanticAccepts: lax-mode coercions and
 // the associations default must NOT be rejected.
 func TestParseDiscoveredTeamAcceptsWhatPydanticAccepts(t *testing.T) {
-	for _, memberCount := range []string{`"5"`, `" 7 "`, `5.0`, `true`, `"5.0"`} {
+	for _, memberCount := range []string{`"5"`, `" 7 "`, `5.0`, `true`, `"5.0"`, `100000000000000000000`} {
 		body := `{"teams":[{"provider_type":"jira","provider_team_id":"ENG","name":"Eng","member_count":` + memberCount + `}]}`
 		req := httptest.NewRequest(http.MethodPost, "/x", strings.NewReader(body))
 		decoded, _, _, err := pybody.Read(req)

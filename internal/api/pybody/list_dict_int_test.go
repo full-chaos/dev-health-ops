@@ -155,7 +155,8 @@ func TestDefaultedVariantsAbsentUsesDefault(t *testing.T) {
 // string coerces, a whole-number float coerces, a fractional float is
 // "int_from_float", and a string that does not parse as an integer
 // (including a fractional one) is "int_parsing" -- not the same error as a
-// wrong JSON type ("int_type", reserved for e.g. a bool/list/object).
+// wrong JSON type ("int_type", reserved for e.g. a list/object; a bool is the
+// integer 0 or 1, see TestBoundedIntAcceptsBooleans).
 func TestBoundedIntCoercionMatchesPydantic(t *testing.T) {
 	var errs Errors
 	object, ok := errs.Object(Body{Value: mustDecode(t,
@@ -219,6 +220,12 @@ func TestBoundedIntRejectsValuesBeyondInt64(t *testing.T) {
 		t.Error(`OptionalBoundedInt("2**64+1", le=2): present=true, want a rejected out-of-range value`)
 	}
 	for _, e := range errs {
+		// A float outside the int64 range is pydantic's int_parsing_size
+		// (it converts through a machine integer before any bound), which
+		// the live differential in bodyint_live_python_oracle_test.go pins.
+		if e.Loc[len(e.Loc)-1] == "json_float" && e.Type == "int_parsing_size" {
+			continue
+		}
 		if e.Type != "less_than_equal" && e.Type != "greater_than_equal" {
 			t.Errorf("unexpected error type %q for %v (loc %v) -- an out-of-range magnitude must fail the BOUNDS check, never int_parsing/int_type/int_from_float",
 				e.Type, e.Input, e.Loc)
@@ -358,4 +365,51 @@ func mustRenderObject(t *testing.T, object *pyjson.Object) string {
 		t.Fatal(err)
 	}
 	return string(rendered)
+}
+
+// TestBoundedIntAcceptsBooleans pins pydantic's lax int: a JSON boolean is 0
+// or 1, then bounds-checked (`true` passes ge=1; `false` fails it with
+// greater_than_equal, not int_type).
+func TestBoundedIntAcceptsBooleans(t *testing.T) {
+	var errs Errors
+	object, ok := errs.Object(Body{Value: mustDecode(t, `{"t":true,"f":false}`)})
+	if !ok {
+		t.Fatal("object refused")
+	}
+	if value, present := errs.OptionalBoundedInt(object, "t", 1, 2); !present || value != 1 {
+		t.Errorf("OptionalBoundedInt(true, ge=1): %d %v, want 1 true", value, present)
+	}
+	if value, present := errs.OptionalMinInt(object, "t", 1); !present || value.Int64() != 1 {
+		t.Errorf("OptionalMinInt(true, ge=1): %v %v, want 1 true", value, present)
+	}
+	if len(errs) != 0 {
+		t.Fatalf("unexpected errors: %+v", errs)
+	}
+	if _, present := errs.OptionalBoundedInt(object, "f", 1, 2); present {
+		t.Error("OptionalBoundedInt(false, ge=1) must fail its bound")
+	}
+	if len(errs) != 1 || errs[0].Type != "greater_than_equal" {
+		t.Fatalf("errors = %+v, want one greater_than_equal", errs)
+	}
+}
+
+// TestMinIntKeepsUnboundedValuesExact pins the no-upper-bound helpers: a value
+// past int64 is exact (never wrapped, never rejected by a bound pydantic does
+// not have), and only the ge bound applies.
+func TestMinIntKeepsUnboundedValuesExact(t *testing.T) {
+	var errs Errors
+	object, ok := errs.Object(Body{Value: mustDecode(t, `{"big":100000000000000000000000000000,"neg":-100000000000000000000000000000}`)})
+	if !ok {
+		t.Fatal("object refused")
+	}
+	value, present := errs.OptionalMinInt(object, "big", 1)
+	if !present || value.String() != "100000000000000000000000000000" {
+		t.Errorf("OptionalMinInt(1e29): %v %v", value, present)
+	}
+	if _, present := errs.DefaultedMinInt(object, "neg", 1); present {
+		t.Error("DefaultedMinInt(-1e29, ge=1) must fail its bound")
+	}
+	if len(errs) != 1 || errs[0].Type != "greater_than_equal" {
+		t.Fatalf("errors = %+v, want one greater_than_equal", errs)
+	}
 }

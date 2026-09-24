@@ -1,7 +1,6 @@
 package teamsidentity
 
 import (
-	"math"
 	"net/http"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
@@ -68,7 +67,7 @@ func parseDiscoveredTeam(raw pyjson.Value, loc []pyjson.Value) (discoveredTeam, 
 	providerTeamID, _ := element.RequiredString(object, "provider_team_id", 1, 0)
 	name, _ := element.RequiredString(object, "name", 1, 0)
 	description, hasDescription := element.OptionalString(object, "description", 0, 0)
-	memberCount, hasMemberCount := optionalLaxInt(&element, object, "member_count")
+	memberCountValue, hasMemberCount := element.OptionalLaxInt(object, "member_count")
 	// associations: `dict[str, Any] = Field(default_factory=dict)` --
 	// absent is {}, an explicit null (or any non-dict) is a dict_type
 	// error, never silently replaced by {} (schemas_flat.py:578-585).
@@ -93,49 +92,13 @@ func parseDiscoveredTeam(raw pyjson.Value, loc []pyjson.Value) (discoveredTeam, 
 		team.Description = &description
 	}
 	if hasMemberCount {
+		// member_count is only echoed by the discover routes; an import
+		// never reads it back, so a value past int64 (which pydantic
+		// accepts) is kept as its low 64 bits rather than refused.
+		memberCount := memberCountValue.Int64()
 		team.MemberCount = &memberCount
 	}
 	return team, nil
-}
-
-// optionalLaxInt validates one pydantic `int | None` field the way pydantic's
-// default (lax) mode does, verified empirically against a live
-// TeamImportRequest: an int, a whole float (5.0), a bool (True -> 1) and a
-// numeric string ("5", " 7 ", "5.0") all coerce; a fractional float is
-// int_from_float, an unparseable string is int_parsing, anything else
-// (list, dict) is int_type. pybody.OptionalInt accepts JSON ints only, which
-// would answer 422 for inputs FastAPI accepts.
-func optionalLaxInt(problems *pybody.Errors, object *pyjson.Object, name string) (int64, bool) {
-	raw, ok := object.Get(name)
-	if !ok || raw == nil {
-		return 0, false
-	}
-	loc := []pyjson.Value{"body", name}
-	fail := func(errType, msg string) (int64, bool) {
-		*problems = append(*problems, pybody.Error{Type: errType, Loc: loc, Msg: msg, Input: raw})
-		return 0, false
-	}
-	switch value := raw.(type) {
-	case pyjson.Int:
-		return value.Int64(), true
-	case bool:
-		if value {
-			return 1, true
-		}
-		return 0, true
-	case pyjson.Float:
-		if float64(value) != math.Trunc(float64(value)) {
-			return fail("int_from_float", "Input should be a valid integer, got a number with a fractional part")
-		}
-		return int64(value), true
-	case string:
-		parsed, perr := pybody.ParsePydanticInt(value)
-		if perr != nil {
-			return fail(perr.Type, perr.Msg)
-		}
-		return parsed.Int64(), true
-	}
-	return fail("int_type", "Input should be a valid integer")
 }
 
 // importTeamsJSON mirrors TeamImportResponse (schemas_flat.py:602-606).

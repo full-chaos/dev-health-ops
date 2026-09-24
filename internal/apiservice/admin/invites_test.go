@@ -28,7 +28,7 @@ func TestInviteBaseURL(t *testing.T) {
 		{"set but empty stays empty", InviteConfig{AppBaseURL: "", AppBaseURLSet: true}, ""},
 		{"a value given without the set flag is ignored", InviteConfig{AppBaseURL: "https://ignored.test"}, "http://localhost:3000"},
 	} {
-		if got := tc.cfg.baseURL(); got != tc.want {
+		if got := tc.cfg.BaseURL(); got != tc.want {
 			t.Errorf("%s: baseURL = %q, want %q", tc.name, got, tc.want)
 		}
 	}

@@ -165,25 +165,23 @@ func (h *handlers) autoImportCapabilities(w http.ResponseWriter, _ *http.Request
 	policy.WriteModel(w, http.StatusOK, autoImportCapabilityTable(), nil)
 }
 
-// autoImportCapabilityTable is _AUTO_IMPORT_CAPABILITIES in its dict order.
+// autoImportCapabilityTable is _AUTO_IMPORT_CAPABILITIES in its dict order,
+// rendered from the one capability table the write checks read.
 func autoImportCapabilityTable() *pyjson.Object {
-	entry := func(teams, projects, members bool, reasons ...[2]string) *pyjson.Object {
-		out := pyjson.NewObject()
-		out.Set("teams", teams)
-		out.Set("projects", projects)
-		out.Set("members", members)
-		reasonObject := pyjson.NewObject()
-		for _, reason := range reasons {
-			reasonObject.Set(reason[0], reason[1])
-		}
-		out.Set("reasons", reasonObject)
-		return out
-	}
 	table := pyjson.NewObject()
-	table.Set("github", entry(true, false, true, [2]string{"projects", "GitHub attributes ownership via repos, not projects."}))
-	table.Set("gitlab", entry(true, true, true))
-	table.Set("jira", entry(true, true, true))
-	table.Set("linear", entry(true, true, true))
+	for _, provider := range autoImportCapabilityProviders {
+		capability := autoImportCapabilityByProvider[provider]
+		entry := pyjson.NewObject()
+		for _, category := range autoImportCategories {
+			entry.Set(category.category, capability.supports[category.category])
+		}
+		reasons := pyjson.NewObject()
+		for _, reason := range capability.reasons {
+			reasons.Set(reason[0], reason[1])
+		}
+		entry.Set("reasons", reasons)
+		table.Set(provider, entry)
+	}
 	return table
 }
 

@@ -15,6 +15,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/billing"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/teamsidentity"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
@@ -49,7 +50,9 @@ var goRoutesWithoutPython = map[string]string{
 	"POST /api/v1/admin/orgs/{org_id}/transfer-ownership": "Go serves the web's shape; the ruled intentional divergence",
 	"POST /api/v1/admin/teams/{team_id}":                  "dispatches POST /api/v1/admin/teams/import; any other id is 405",
 	"POST /api/v1/admin/ip-allowlist/{entry_id}":          "dispatches POST /api/v1/admin/ip-allowlist/check; any other id is 405",
-	"GET /buildinfo": "Go-only build stamp; the Python api has no such route",
+	"GET /buildinfo":                         "Go-only build stamp; the Python api has no such route",
+	"POST /api/v1/billing/plans/{plan_id}":   "answers 405 for every id; POST /api/v1/billing/plans/pull-stripe is its own pattern",
+	"HEAD /api/v1/billing/plans/pull-stripe": "answers the 405 FastAPI gives a HEAD there (Allow: POST); without it the GET /plans/{plan_id} route's 405 would answer",
 }
 
 var routeParameter = regexp.MustCompile(`\{[^}]+\}`)
@@ -104,6 +107,9 @@ func TestVenueOracleRouteResponseModels(t *testing.T) {
 	routes := Routes(Deps{Guard: guard}, logger)
 	routes = append(routes, markResponseModels(admin.Routes(admin.Deps{Guard: guard, Logger: logger, Write: WriteError}))...)
 	routes = append(routes, markResponseModels(teamsidentity.Routes(nil, guard, logger, nil, nil))...)
+	// billing mounts only with a pool; its route list needs neither a pool
+	// nor a Stripe client to be built.
+	routes = append(routes, markResponseModels(billing.Routes(billing.Deps{Guard: guard, Logger: logger}))...)
 	patterns := map[string]httpapi.Route{}
 	for _, route := range routes {
 		patterns[route.Method+" "+route.Pattern] = route

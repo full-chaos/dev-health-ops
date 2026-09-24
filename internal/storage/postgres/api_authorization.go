@@ -125,11 +125,10 @@ func apiPosture() RolePosture {
 			// (refresh_tokens.py's revoke_all_for_user) on a password
 			// change. A purge target, delete added.
 			{"refresh_tokens", false, true, true},
-			// org_invites: create_org_invite is NOT mounted on the Go api
-			// (CHAOS-6334 tracks porting the mail sender and this route
-			// together), so there is no insert grant here -- this table is
-			// a purge target only, delete added.
-			{"org_invites", false, false, true},
+			// org_invites: create_org_invite (CHAOS-6391) checks for a
+			// pending invite (read) and inserts one; a purge target, delete
+			// added. Never updated by this role.
+			{"org_invites", true, false, true},
 			// CHAOS-6303 (admin impersonation routes) is the first route
 			// area over this principal to WRITE the impersonation session
 			// it reads: start_impersonation ends any prior open session
@@ -205,10 +204,12 @@ func apiPosture() RolePosture {
 			{"backfill_jobs", false, false, true},
 			// Billing: invoice_line_items/subscription_events are each
 			// deleted via a subquery on their own owning row's org_id
-			// (invoices/subscriptions respectively).
+			// (invoices/subscriptions respectively). invoices also takes
+			// the void route's status write (CHAOS-6257); refunds and
+			// line items are only read by the billing routes.
 			{"refunds", false, false, true},
 			{"invoice_line_items", false, false, true},
-			{"invoices", false, false, true},
+			{"invoices", false, true, true},
 			{"subscription_events", false, false, true},
 			{"subscriptions", false, false, true},
 			// Sync state.

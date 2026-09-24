@@ -10,14 +10,16 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/smtpcapture"
 )
 
 // A successful SMTP send must not log anything at warning level: QUIT closes
 // the connection, and a second Close used to report "use of closed network
 // connection" on every good send, burying real teardown failures.
 func TestSuccessfulSMTPSendLogsNoWarning(t *testing.T) {
-	server := startCaptureSMTPServer(t)
-	host, port := server.hostPort(t)
+	server := smtpcapture.Start(t)
+	host, port := server.HostPort(t)
 	var logs bytes.Buffer
 	previous := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
@@ -27,7 +29,7 @@ func TestSuccessfulSMTPSendLogsNoWarning(t *testing.T) {
 	if err := sender.Send(context.Background(), Message{To: "to@example.test", Subject: "s", HTML: "<p>x</p>"}); err != nil {
 		t.Fatalf("send: %v", err)
 	}
-	server.take(t)
+	server.Take(t)
 	if strings.Contains(logs.String(), "level=WARN") {
 		t.Fatalf("successful send logged a warning:\n%s", logs.String())
 	}
@@ -74,17 +76,23 @@ func TestSMTPSendHonoursContextAfterDial(t *testing.T) {
 // A non-ASCII envelope address is refused before any connection, matching
 // smtplib (UnicodeEncodeError, nothing sent). Display names are unaffected.
 func TestSMTPSenderRefusesNonASCIIEnvelopeAddresses(t *testing.T) {
-	server := startCaptureSMTPServer(t)
-	host, port := server.hostPort(t)
+	refusing := smtpcapture.Start(t)
+	refusingHost, refusingPort := refusing.HostPort(t)
+	sending := smtpcapture.Start(t)
+	sendingHost, sendingPort := sending.HostPort(t)
 	for _, tc := range []struct {
 		name, from, to string
 		refused        bool
 	}{
-		{"recipient", "billing@example.test", "jörg@example.test", true},
-		{"recipient with a display name", "billing@example.test", "Jorg <jörg@example.test>", true},
-		{"sender", "dév@example.test", "to@example.test", true},
-		{"non-ascii display name only", "Dév <billing@example.test>", "to@example.test", false},
+		{"recipient", "billing@example.test", "j\u00f6rg@example.test", true},
+		{"recipient with a display name", "billing@example.test", "Jorg <j\u00f6rg@example.test>", true},
+		{"sender", "d\u00e9v@example.test", "to@example.test", true},
+		{"non-ascii display name only", "D\u00e9v <billing@example.test>", "to@example.test", false},
 	} {
+		host, port := sendingHost, sendingPort
+		if tc.refused {
+			host, port = refusingHost, refusingPort
+		}
 		sender := &smtpSender{from: tc.from, host: host, port: port}
 		err := sender.Send(context.Background(), Message{To: tc.to, Subject: "s", HTML: "<p>x</p>"})
 		if tc.refused {
@@ -97,7 +105,9 @@ func TestSMTPSenderRefusesNonASCIIEnvelopeAddresses(t *testing.T) {
 			t.Errorf("%s: %v", tc.name, err)
 			continue
 		}
-		server.take(t)
+		sending.Take(t)
 	}
-	server.assertNone(t)
+	// Refused BEFORE dialing: not one connection reached the server that
+	// took the refused cases (no captured message would not prove that).
+	refusing.AssertNoConnections(t)
 }

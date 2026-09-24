@@ -86,6 +86,7 @@ var outOfScopeWriters = map[string]string{
 var unresolvedWriters = map[string]string{
 	"internal/providerfoundation/sinks.go":          "writes the normalized provider-entity schema (schema_version, dedupe_key, attributes_json), which no in-scope table has",
 	"internal/storage/postgres/authschema/apply.go": "PostgreSQL schema-migration ledger",
+	"internal/chmigrate/apply.go":                   "ClickHouse schema migrator: records schema_migrations, and seeds the head baseline's captured rows only into a table it has just created and that holds no row; the checked-in baseline seeds no table, and its drift test ties it to the Python chain",
 	"internal/testsupport/chschema/snapshot.go":     "test support: restores the migration ledger rows into a throwaway ClickHouse container, table named at run time",
 }
 

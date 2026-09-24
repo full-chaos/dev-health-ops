@@ -83,9 +83,11 @@ func TestKeyedLimiterEvictsExpiredEntries(t *testing.T) {
 	now := time.Now()
 	limiter := NewKeyedLimiter(5, time.Hour, func() time.Time { return now })
 
+	// 5,000 distinct pairs, spread over five keys so each stays inside its
+	// own per-key bound.
 	const distinctPaths = 5000
 	for i := range distinctPaths {
-		limiter.Allow("admin-user:a", fmt.Sprintf("/users/%d/password", i))
+		limiter.Allow(fmt.Sprintf("admin-user:%d", i/maxKeyedLimiterEntriesPerKey), fmt.Sprintf("/users/%d/password", i))
 	}
 	limiter.mu.Lock()
 	got := len(limiter.entries)
@@ -107,48 +109,104 @@ func TestKeyedLimiterEvictsExpiredEntries(t *testing.T) {
 
 // TestKeyedLimiterCapsMapGrowthWithinOneWindow is the codex-review
 // pr2873-r2 P1: sweep only reclaims an entry once ITS OWN window has
-// elapsed, so it cannot bound how many distinct (key, path) pairs a
-// caller creates WITHIN one window -- reproduced live with 5,000 distinct
-// paths from one caller, all still present, no sweep yet due. Proves the
-// hard cap: the map never grows past maxKeyedLimiterEntries, and once
-// saturated a genuinely NEW pair is refused (fail closed), while an
-// already-tracked pair's own counting is unaffected by the cap.
+// elapsed, so it cannot bound how many distinct (key, path) pairs are
+// created WITHIN one window. Proves the global backstop: filled by as many
+// keys as it takes (each key is itself bounded, see the per-key test below),
+// the map never grows past maxKeyedLimiterEntries, a genuinely NEW pair past
+// it is refused (fail closed), and an already-tracked pair's own counting is
+// unaffected.
 func TestKeyedLimiterCapsMapGrowthWithinOneWindow(t *testing.T) {
 	now := time.Now()
-	limiter := NewKeyedLimiter(5, time.Hour, func() time.Time { return now })
+	limiter := smallLimiter(&now)
 
-	for i := range maxKeyedLimiterEntries {
-		if !limiter.Allow("admin-user:a", fmt.Sprintf("/x/%d", i)) {
-			t.Fatalf("path %d (within the cap) was refused, want allowed", i)
+	keys := smallGlobal / smallPerKey
+	for k := range keys {
+		for i := range smallPerKey {
+			if !limiter.Allow(fmt.Sprintf("admin-user:%d", k), fmt.Sprintf("/x/%d", i)) {
+				t.Fatalf("key %d path %d (within both caps) was refused, want allowed", k, i)
+			}
 		}
 	}
 	limiter.mu.Lock()
 	got := len(limiter.entries)
 	limiter.mu.Unlock()
-	if got != maxKeyedLimiterEntries {
-		t.Fatalf("entries after filling the cap = %d, want %d", got, maxKeyedLimiterEntries)
+	if got != smallGlobal {
+		t.Fatalf("entries after filling the cap = %d, want %d", got, smallGlobal)
 	}
 
-	if limiter.Allow("admin-user:a", "/x/one-too-many") {
-		t.Fatal("a brand-new pair past the cap was allowed, want refused (fail closed)")
+	if limiter.Allow("admin-user:fresh", "/x/one-too-many") {
+		t.Fatal("a brand-new pair past the global cap was allowed, want refused (fail closed)")
 	}
 	limiter.mu.Lock()
 	got = len(limiter.entries)
 	limiter.mu.Unlock()
-	if got != maxKeyedLimiterEntries {
-		t.Fatalf("entries after the refused pair = %d, want unchanged at %d (the cap must never grow the map)", got, maxKeyedLimiterEntries)
+	if got != smallGlobal {
+		t.Fatalf("entries after the refused pair = %d, want unchanged at %d (the cap must never grow the map)", got, smallGlobal)
 	}
 
 	// An already-tracked pair keeps working normally even while the map
 	// is saturated -- the cap only refuses ADMISSION of a new pair.
-	if !limiter.Allow("admin-user:a", "/x/0") {
+	if !limiter.Allow("admin-user:0", "/x/0") {
 		t.Fatal("an existing, already-counted pair was refused by the saturation cap, want allowed (it is not a new pair)")
 	}
 }
 
-// TestKeyedLimiterZeroConfigurationIsUnlimited matches NewBucket's own
-// degenerate-configuration contract: a non-positive limit or window never
-// silently produces a limiter that refuses everything.
+// TestKeyedLimiterOneKeyCannotStarveAnother is CHAOS-6459: one caller minting
+// distinct paths used to fill the global cap and turn every other caller's
+// first request into a 429. Now the minter is bounded by its own per-key
+// cap: its new paths are refused and no other key is affected, however many
+// paths it tries.
+func TestKeyedLimiterOneKeyCannotStarveAnother(t *testing.T) {
+	now := time.Now()
+	limiter := smallLimiter(&now)
+
+	admitted := 0
+	for i := range smallGlobal + 1 {
+		if limiter.Allow("admin-user:minter", fmt.Sprintf("/orgs/%d/invites", i)) {
+			admitted++
+		}
+	}
+	if admitted != smallPerKey {
+		t.Fatalf("the minter got %d distinct paths admitted, want its per-key bound %d", admitted, smallPerKey)
+	}
+	if !limiter.Allow("admin-user:other", "/orgs/some-org/invites") {
+		t.Fatal("another admin's first request was refused after the minter filled ITS OWN cap (the CHAOS-6459 lockout)")
+	}
+	limiter.mu.Lock()
+	minter, total := len(limiter.keyPaths["admin-user:minter"]), len(limiter.entries)
+	limiter.mu.Unlock()
+	if minter != smallPerKey || total != smallPerKey+1 {
+		t.Fatalf("minter holds %d entries, total %d; want %d and %d", minter, total, smallPerKey, smallPerKey+1)
+	}
+	// The minter's own admitted paths still count normally.
+	if !limiter.Allow("admin-user:minter", "/orgs/0/invites") {
+		t.Fatal("an already-tracked path of the minter was refused")
+	}
+}
+
+// Entries leave the per-key count when their window expires, so a key that
+// filled its bound gets its allowance back with the next window.
+func TestKeyedLimiterPerKeyCountFollowsSweep(t *testing.T) {
+	now := time.Now()
+	limiter := smallLimiter(&now)
+	for i := range smallPerKey {
+		limiter.Allow("admin-user:a", fmt.Sprintf("/p/%d", i))
+	}
+	if limiter.Allow("admin-user:a", "/p/new") {
+		t.Fatal("a new path past the per-key bound was admitted")
+	}
+	now = now.Add(time.Hour + time.Second)
+	if !limiter.Allow("admin-user:a", "/p/new") {
+		t.Fatal("after the window the key's entries expired but a new path is still refused")
+	}
+	limiter.mu.Lock()
+	got := len(limiter.keyPaths["admin-user:a"])
+	limiter.mu.Unlock()
+	if got != 1 {
+		t.Fatalf("per-key count after the sweep = %d, want 1 (the one new entry)", got)
+	}
+}
+
 func TestKeyedLimiterZeroConfigurationIsUnlimited(t *testing.T) {
 	if NewKeyedLimiter(0, time.Hour, nil) != nil {
 		t.Fatal("limit=0 should yield a nil limiter")
@@ -266,6 +324,100 @@ func TestKeyedRateLimitUsesTheDefaultErrorWriter(t *testing.T) {
 	}
 }
 
+// The round's repro through the real middleware: one admin sends requests on
+// 100,000 distinct paths (each answered 403 by the handler, as an org-access
+// refusal would be), then a different admin's first request on a fresh path
+// must reach the handler, not be refused by the limiter.
+func TestKeyedRateLimitFreshAdminIsNotLockedOutByAnotherAdminsPaths(t *testing.T) {
+	now := time.Now()
+	limiter := NewKeyedLimiter(10, time.Hour, func() time.Time { return now })
+	handler := KeyedRateLimit(limiter, func(r *http.Request) string { return r.Header.Get("X-Admin") })(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusForbidden) }))
+	call := func(admin, path string) int {
+		request := httptest.NewRequest(http.MethodPost, path, nil)
+		request.Header.Set("X-Admin", admin)
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, request)
+		return recorder.Code
+	}
+	// The 100,000 requests share this limiter; feeding it directly keeps the
+	// test fast under the race detector (the middleware's own wiring is what
+	// the final request below exercises).
+	for i := range 100_000 {
+		limiter.Allow("admin-a", fmt.Sprintf("/api/v1/admin/orgs/%d/invites", i))
+	}
+	if got := call("admin-a", "/api/v1/admin/orgs/0/invites"); got != http.StatusForbidden {
+		t.Fatalf("admin a's own tracked path through the middleware = %d, want 403 from the handler", got)
+	}
+	if got := call("admin-b", "/api/v1/admin/orgs/other/invites"); got != http.StatusForbidden {
+		t.Fatalf("a fresh admin's first request = %d, want 403 from the handler (a 429 means another admin's paths locked it out)", got)
+	}
+}
+
+const (
+	smallPerKey = 10
+	smallGlobal = 100
+)
+
+// smallLimiter is a KeyedLimiter with the per-key and global bounds shrunk so
+// the saturation logic is exercised without 100,000 calls.
+func smallLimiter(now *time.Time) *KeyedLimiter {
+	limiter := NewKeyedLimiter(5, time.Hour, func() time.Time { return *now })
+	limiter.perKeyBound, limiter.globalBound = smallPerKey, smallGlobal
+	return limiter
+}
+
+// The review round's repro at the limiter: entries created at staggered times
+// must not keep a key locked out after they expire just because the periodic
+// full sweep is not due yet. A sweep happens at t=0, the key fills its bound
+// from t=1m, another sweep at t=60m+1s finds nothing expired, and at t=61m+1s
+// all of the key's entries have expired but no sweep is due until t=120m+1s:
+// a new path must be admitted.
+func TestKeyedLimiterPerKeyBoundIgnoresExpiredButUnsweptEntries(t *testing.T) {
+	now := time.Now()
+	limiter := smallLimiter(&now)
+	limiter.Allow("marker", "/m") // first call: the periodic sweep runs here
+	now = now.Add(time.Minute)
+	for i := range smallPerKey {
+		limiter.Allow("admin-user:a", fmt.Sprintf("/p/%d", i))
+	}
+	if limiter.Allow("admin-user:a", "/p/new") {
+		t.Fatal("a new path past the per-key bound was admitted")
+	}
+	// A periodic sweep at t=60m+1s (a different key's request) finds nothing
+	// expired yet -- a's entries started at t=1m -- so the next sweep is not
+	// due until t=120m+1s.
+	now = now.Add(59*time.Minute + time.Second)
+	limiter.Allow("marker-2", "/m")
+	now = now.Add(time.Minute) // t=61m+1s: a's entries have expired; no sweep is due
+	if !limiter.Allow("admin-user:a", "/p/new") {
+		t.Fatal("the key is still locked out after all its entries expired (stale entries held its allowance)")
+	}
+}
+
+// The same at the global backstop: expired-but-unswept entries must not keep
+// a brand-new key out.
+func TestKeyedLimiterGlobalCapIgnoresExpiredButUnsweptEntries(t *testing.T) {
+	now := time.Now()
+	limiter := smallLimiter(&now)
+	limiter.Allow("marker", "/m")
+	now = now.Add(time.Minute)
+	for k := range smallGlobal / smallPerKey {
+		for i := range smallPerKey {
+			limiter.Allow(fmt.Sprintf("admin-user:%d", k), fmt.Sprintf("/p/%d", i))
+		}
+	}
+	if limiter.Allow("admin-user:fresh", "/p/x") {
+		t.Fatal("a new pair past the global cap was admitted")
+	}
+	now = now.Add(59*time.Minute + time.Second)
+	limiter.Allow("marker-2", "/m") // periodic sweep: nothing expired yet
+	now = now.Add(time.Minute)      // every entry has now expired; no sweep is due
+	if !limiter.Allow("admin-user:fresh", "/p/x") {
+		t.Fatal("a new key is locked out after every entry expired (stale entries held the global cap)")
+	}
+}
+
 // TestValidateThenLimitSpendsNoAllowanceOnAFailedValidation is the class
 // property behind CHAOS-6435: requests the validator refuses cost nothing;
 // only requests that pass it count, and the limit still holds for those.
@@ -327,4 +479,72 @@ func TestValidateThenLimitRequiresAValidator(t *testing.T) {
 		}
 	}()
 	ValidateThenLimit(nil, NewKeyedLimiter(1, time.Hour, nil), func(*http.Request) string { return "" }, WriteError)
+}
+
+// The second review round's repro: a sweep that ran shortly BEFORE the
+// entries expired must not make the next request wait out a cooldown.
+// Saturate the global cap, let another key's request at t=window-500ms hit
+// the saturated map (nothing has expired yet, so no sweep can help), then
+// ask for a fresh pair the instant the entries expire: it must be admitted.
+func TestKeyedLimiterGlobalCapNeverWaitsOutACooldownAfterExpiry(t *testing.T) {
+	now := time.Now()
+	limiter := smallLimiter(&now)
+	for k := range smallGlobal / smallPerKey {
+		for i := range smallPerKey {
+			limiter.Allow(fmt.Sprintf("admin-user:%d", k), fmt.Sprintf("/p/%d", i))
+		}
+	}
+	now = now.Add(time.Hour - 500*time.Millisecond)
+	limiter.lastSweep = now // a periodic sweep just ran: none is due when the entries expire
+	if limiter.Allow("admin-user:fresh", "/p/x") {
+		t.Fatal("a new pair past the global cap was admitted while every entry was still live")
+	}
+	now = now.Add(500 * time.Millisecond) // every entry has just expired
+	if !limiter.Allow("admin-user:fresh", "/p/x") {
+		t.Fatal("a fresh pair was refused the instant every entry expired (a scan cooldown held the cap)")
+	}
+}
+
+// The same for one key at its bound.
+func TestKeyedLimiterKeyBoundNeverWaitsOutACooldownAfterExpiry(t *testing.T) {
+	now := time.Now()
+	limiter := smallLimiter(&now)
+	for i := range smallPerKey {
+		limiter.Allow("admin-user:a", fmt.Sprintf("/p/%d", i))
+	}
+	now = now.Add(time.Hour - 500*time.Millisecond)
+	limiter.lastSweep = now // a periodic sweep just ran: none is due when the entries expire
+	if limiter.Allow("admin-user:a", "/p/x") {
+		t.Fatal("a new path past the key's bound was admitted while all its entries were live")
+	}
+	now = now.Add(500 * time.Millisecond)
+	if !limiter.Allow("admin-user:a", "/p/x") {
+		t.Fatal("a new path was refused the instant the key's entries expired (a scan cooldown held the bound)")
+	}
+}
+
+// Scans run only when something can have expired: hammering a saturated key
+// or map with nothing expired costs no scan at all, and the first request
+// after expiry costs exactly one.
+func TestKeyedLimiterScansOnlyWhenSomethingCanHaveExpired(t *testing.T) {
+	now := time.Now()
+	limiter := smallLimiter(&now)
+	for k := range smallGlobal / smallPerKey {
+		for i := range smallPerKey {
+			limiter.Allow(fmt.Sprintf("admin-user:%d", k), fmt.Sprintf("/p/%d", i))
+		}
+	}
+	for i := range 200 {
+		limiter.Allow("admin-user:0", fmt.Sprintf("/over/%d", i))     // key at its bound
+		limiter.Allow(fmt.Sprintf("admin-user:new-%d", i), "/over/x") // map at its cap
+	}
+	if limiter.keyScans != 0 || limiter.fullSweeps != 0 {
+		t.Fatalf("scans ran with nothing expired: keyScans=%d fullSweeps=%d", limiter.keyScans, limiter.fullSweeps)
+	}
+	now = now.Add(time.Hour)
+	limiter.lastSweep = now // the periodic sweep is not due: the on-demand one must do the work
+	limiter.Allow("admin-user:fresh", "/p/x")
+	if limiter.fullSweeps != 1 {
+		t.Fatalf("fullSweeps after expiry = %d, want exactly 1", limiter.fullSweeps)
+	}
 }

@@ -79,3 +79,15 @@ alembic==1.18.4
 Mako==1.3.12
 MarkupSafe==3.0.3
 psycopg2-binary==2.9.12
+
+# --- the full Postgres alembic upgrade (dho migrate postgres oracle) ---
+# internal/pgmigrate's TestBaselineIsTheExecutedPythonUpgrade runs the whole
+# Python upgrade (`dev-hops migrate postgres`, _run_upgrade to head) against
+# its Postgres container. Loading every revision imports croniter (0097) and
+# connecting through the async URI imports asyncpg. Found by installing this
+# file with --no-deps into a clean 3.14 venv and running that test until it
+# passed; versions from uv.lock.
+asyncpg==0.31.0
+croniter==6.2.2
+python-dateutil==2.9.0.post0
+six==1.17.0

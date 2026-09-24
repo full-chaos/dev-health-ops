@@ -86,6 +86,7 @@ internal/apiservice	37
 internal/apiservice/acr	6
 internal/apiservice/admin	2
 internal/cacheinvalidation	2
+internal/chmigrate	60
 internal/externalrecompute	32
 internal/goapiproof	604
 internal/joboperator	9
@@ -116,6 +117,7 @@ internal/jobs/workgraph/issueprlinks	134
 internal/jobs/workgraph/operationaledges	49
 internal/jobs/workgraph/prcommit	24
 internal/llmorgsettings	44
+internal/pgmigrate	45
 internal/platform/config	14
 internal/providerfoundation	16
 internal/providersync	2337

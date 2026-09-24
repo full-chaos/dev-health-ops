@@ -64,22 +64,10 @@ func TestStripeTestModeBillingDifferential(t *testing.T) {
 		return price
 	}
 	priceA, priceB := newPrice(1000), newPrice(2000)
-	type planeStripe struct{ customer, subscription string }
+	type planeStripe struct{ customer, subscription, openInvoice, paidInvoice string }
 	planes := map[string]planeStripe{}
-	for _, plane := range []string{"py", "go"} {
-		customer, err := client.V1Customers.Create(ctx, &stripe.CustomerCreateParams{Name: stripe.String(run + " " + plane),
-			PaymentMethod:   stripe.String("pm_card_visa"),
-			InvoiceSettings: &stripe.CustomerCreateInvoiceSettingsParams{DefaultPaymentMethod: stripe.String("pm_card_visa")}})
-		if err != nil {
-			t.Fatalf("create customer: %v", err)
-		}
-		sub, err := client.V1Subscriptions.Create(ctx, &stripe.SubscriptionCreateParams{Customer: stripe.String(customer.ID),
-			Items: []*stripe.SubscriptionCreateItemParams{{Price: stripe.String(priceA.ID)}}})
-		if err != nil {
-			t.Fatalf("create subscription: %v", err)
-		}
-		planes[plane] = planeStripe{customer.ID, sub.ID}
-	}
+	// Registered before the fixtures, so a fixture failure part way still
+	// cleans up what was created.
 	t.Cleanup(func() {
 		cleanup := context.Background()
 		for _, plane := range planes {
@@ -90,12 +78,46 @@ func TestStripeTestModeBillingDifferential(t *testing.T) {
 			_, _ = client.V1Products.Update(cleanup, id, &stripe.ProductUpdateParams{Active: stripe.Bool(false)})
 		}
 	})
+	for _, plane := range []string{"py", "go"} {
+		customer, err := client.V1Customers.Create(ctx, &stripe.CustomerCreateParams{Name: stripe.String(run + " " + plane), Email: stripe.String(run + "-" + plane + "@example.com"),
+			PaymentMethod:   stripe.String("pm_card_visa"),
+			InvoiceSettings: &stripe.CustomerCreateInvoiceSettingsParams{DefaultPaymentMethod: stripe.String("pm_card_visa")}})
+		if err != nil {
+			t.Fatalf("create customer: %v", err)
+		}
+		planes[plane] = planeStripe{customer: customer.ID}
+		sub, err := client.V1Subscriptions.Create(ctx, &stripe.SubscriptionCreateParams{Customer: stripe.String(customer.ID),
+			Items: []*stripe.SubscriptionCreateItemParams{{Price: stripe.String(priceA.ID)}}})
+		if err != nil {
+			t.Fatalf("create subscription: %v", err)
+		}
+		// An open invoice to void, beside the subscription's first
+		// invoice, which the default test card has paid.
+		if _, err := client.V1InvoiceItems.Create(ctx, &stripe.InvoiceItemCreateParams{Customer: stripe.String(customer.ID),
+			Amount: stripe.Int64(500), Currency: stripe.String("usd")}); err != nil {
+			t.Fatalf("create invoice item: %v", err)
+		}
+		draft, err := client.V1Invoices.Create(ctx, &stripe.InvoiceCreateParams{Customer: stripe.String(customer.ID),
+			CollectionMethod: stripe.String("send_invoice"), DaysUntilDue: stripe.Int64(30),
+			PendingInvoiceItemsBehavior: stripe.String("include")})
+		if err != nil {
+			t.Fatalf("create invoice: %v", err)
+		}
+		open, err := client.V1Invoices.FinalizeInvoice(ctx, draft.ID, nil)
+		if err != nil {
+			t.Fatalf("finalize invoice: %v", err)
+		}
+		planes[plane] = planeStripe{customer.ID, sub.ID, open.ID, sub.LatestInvoice.ID}
+	}
 
 	// The venue: one org whose subscription and license point at the
 	// Python plane's Stripe objects; the Go copy is then pointed at Go's.
 	org, owner, superuser, plan, price, barePlan := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	openInvoice, paidInvoice := uuid.New(), uuid.New()
 	env := map[string]string{"STRIPE_SECRET_KEY": key, "STRIPE_PRICE_ID_TEAM": priceA.ID, "APP_BASE_URL": "https://app.venue.test"}
-	var pythonEnv []string
+	// The Python reconciliation's Stripe list call is patched to the call
+	// it was written to make (a named divergence: unpatched it raises).
+	pythonEnv := []string{"VENUE_STRIPE_LIST_KWARGS=1"}
 	for name, value := range env {
 		pythonEnv = append(pythonEnv, name+"="+value)
 	}
@@ -118,6 +140,12 @@ func TestStripeTestModeBillingDifferential(t *testing.T) {
 				{`INSERT INTO subscriptions (id, org_id, billing_plan_id, billing_price_id, stripe_subscription_id, stripe_customer_id, status,
 					current_period_start, current_period_end) VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, 'active', now(), now() + interval '30 days')`,
 					[]any{org, plan, price, planes["py"].subscription, planes["py"].customer}},
+				// The paid invoice is stored as open, so the void reaches
+				// Stripe and Stripe refuses it.
+				{`INSERT INTO invoices (id, org_id, stripe_invoice_id, stripe_customer_id, status, amount_due, currency, metadata, created_at, updated_at)
+					VALUES ($1, $3, $4, $6, 'open', 500, 'usd', '{}', now(), now()),
+						($2, $3, $5, $6, 'open', 1000, 'usd', '{}', now() - interval '1 minute', now() - interval '1 minute')`,
+					[]any{openInvoice, paidInvoice, org, planes["py"].openInvoice, planes["py"].paidInvoice, planes["py"].customer}},
 			} {
 				if _, err := admin.Exec(ctx, statement.sql, statement.args...); err != nil {
 					t.Fatalf("seed: %v", err)
@@ -136,6 +164,12 @@ func TestStripeTestModeBillingDifferential(t *testing.T) {
 	for _, statement := range []string{`UPDATE subscriptions SET stripe_subscription_id = $1, stripe_customer_id = $2 WHERE org_id = $3`,
 		`UPDATE org_licenses SET customer_id = $2 WHERE org_id = $3 AND $1 = $1`} {
 		if _, err := goAdmin.Exec(ctx, statement, planes["go"].subscription, planes["go"].customer, org); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for id, stripeID := range map[uuid.UUID]string{openInvoice: planes["go"].openInvoice, paidInvoice: planes["go"].paidInvoice} {
+		if _, err := goAdmin.Exec(ctx, `UPDATE invoices SET stripe_invoice_id = $1, stripe_customer_id = $2 WHERE id = $3`,
+			stripeID, planes["go"].customer, id); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -168,11 +202,21 @@ func TestStripeTestModeBillingDifferential(t *testing.T) {
 		regexp.QuoteMeta(planes["py"].subscription), regexp.QuoteMeta(planes["go"].subscription),
 		regexp.QuoteMeta(planes["py"].customer), regexp.QuoteMeta(planes["go"].customer),
 		`cs_test_[A-Za-z0-9]+`, `https://checkout\.stripe\.com/[^"]+`, `https://billing\.stripe\.com/[^"]+`,
-		`prod_[A-Za-z0-9]+`, `price_[A-Za-z0-9]+`,
+		`prod_[A-Za-z0-9]+`, `price_[A-Za-z0-9]+`, `in_[A-Za-z0-9]+`, `req_[A-Za-z0-9]+`,
 	}, "|"))
-	normalize := func(_ venueoracle.Request, body string) string {
+	// The reconciliation lists the whole shared test account, and the
+	// planes run minutes apart (the Go plane's subscription is still active
+	// while Python lists), so only that list of Stripe objects no local row
+	// holds is blanked; the mismatches, the counts and missing_stripe are
+	// compared.
+	accountWide := regexp.MustCompile(`"missing_local":\[[^\]]*\]`)
+	normalize := func(request venueoracle.Request, body string) string {
+		if request.Name == "reconcile org" {
+			body = accountWide.ReplaceAllString(body, `"missing_local":"<account-wide>"`)
+		}
 		body = perPlane.ReplaceAllString(body, "<stripe>")
-		return billingNormalizer(map[string]bool{org.String(): true, plan.String(): true, price.String(): true, barePlan.String(): true},
+		return billingNormalizer(map[string]bool{org.String(): true, plan.String(): true, price.String(): true, barePlan.String(): true,
+			openInvoice.String(): true, paidInvoice.String(): true},
 			time.Now().Add(-time.Hour))(body)
 	}
 	var receipt strings.Builder
@@ -197,6 +241,11 @@ func TestStripeTestModeBillingDifferential(t *testing.T) {
 		request("reactivate", "POST", "/api/v1/billing/subscriptions/reactivate", "", "owner"),
 		request("cancel immediately", "POST", "/api/v1/billing/subscriptions/cancel", `{"immediately":true}`, "owner"),
 		request("change plan after cancel", "POST", "/api/v1/billing/subscriptions/change-plan", `{"price_id":"`+priceB.ID+`"}`, "owner"),
+		request("void open invoice", "POST", "/api/v1/billing/invoices/"+openInvoice.String()+"/void", "", "owner"),
+		request("void paid invoice (Stripe refuses)", "POST", "/api/v1/billing/invoices/"+paidInvoice.String()+"/void", "", "owner"),
+		request("invoices after void", "GET", "/api/v1/billing/invoices", "", "owner"),
+		request("refund (the Python 500)", "POST", "/api/v1/billing/refunds", `{"invoice_id":"`+paidInvoice.String()+`"}`, "super"),
+		request("reconcile org", "POST", "/api/v1/billing/reconcile?org_id="+org.String(), "", "super"),
 	})
 
 	// Created products (sync) are archived at cleanup.
@@ -221,6 +270,22 @@ func TestStripeTestModeBillingDifferential(t *testing.T) {
 		}
 		return fmt.Sprintf("status=%s cancel_at_period_end=%t canceled=%t items=%v", sub.Status, sub.CancelAtPeriodEnd, sub.CanceledAt != 0, items)
 	}
+	invoiceState := func(p planeStripe) string {
+		var parts []string
+		for _, id := range []string{p.openInvoice, p.paidInvoice} {
+			invoice, err := client.V1Invoices.Retrieve(ctx, id, nil)
+			if err != nil {
+				t.Fatalf("retrieve invoice: %v", err)
+			}
+			parts = append(parts, fmt.Sprintf("%s/%d", invoice.Status, invoice.AmountRemaining))
+		}
+		return strings.Join(parts, " ")
+	}
+	pyInvoices, goInvoices := invoiceState(planes["py"]), invoiceState(planes["go"])
+	fmt.Fprintf(&receipt, "stripe invoice state after the run: python{%s} go{%s} %s\n", pyInvoices, goInvoices, venueoracle.Mark(pyInvoices == goInvoices))
+	if pyInvoices != goInvoices || !strings.HasPrefix(goInvoices, "void/") {
+		t.Errorf("stripe invoice state: python %s go %s (want the open invoice void on both)", pyInvoices, goInvoices)
+	}
 	pyState, goState := state(planes["py"].subscription), state(planes["go"].subscription)
 	fmt.Fprintf(&receipt, "stripe subscription state after the run: python{%s} go{%s} %s\n", pyState, goState, venueoracle.Mark(pyState == goState))
 	if pyState != goState {
@@ -229,7 +294,8 @@ func TestStripeTestModeBillingDifferential(t *testing.T) {
 	for _, table := range []string{
 		`SELECT key, name, tier, is_active, display_order, stripe_product_id IS NOT NULL, metadata::text FROM billing_plans ORDER BY key`,
 		`SELECT b.key, p.interval, p.amount, p.currency, p.is_active, p.stripe_price_id IS NOT NULL FROM billing_prices p JOIN billing_plans b ON b.id = p.plan_id ORDER BY b.key, p.interval, p.amount`,
-		`SELECT action, resource_type, description, local_state::text FROM billing_audit_log ORDER BY created_at`,
+		`SELECT action, resource_type, description, local_state::text FROM billing_audit_log ORDER BY created_at, action`,
+		`SELECT status, amount_remaining, voided_at IS NULL FROM invoices ORDER BY amount_due`,
 	} {
 		pyRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), table)
 		goRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), table)

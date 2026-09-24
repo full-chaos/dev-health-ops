@@ -197,6 +197,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 			HTTPDoer:      deps.HTTPDoer,
 			Now:           deps.Now,
 			Write:         WriteError,
+			Invites:       deps.Invites,
 		})...)
 	}
 	routes = append(routes, webhookintake.Routes(webhookintake.Deps{
@@ -261,6 +262,7 @@ func configureWith(
 	if cfg.ClickHouseURI.Configured() {
 		deps.ClickHouseDSN = cfg.ClickHouseURI.Reveal()
 	}
+	deps.Invites = inviteConfig(cfg, logger, os.LookupEnv)
 	if adjust != nil {
 		adjust(&deps)
 	}

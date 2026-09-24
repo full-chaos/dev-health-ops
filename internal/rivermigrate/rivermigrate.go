@@ -16,8 +16,10 @@ import (
 	"time"
 
 	jobsv1 "github.com/full-chaos/dev-health-ops/contracts/jobs/v1"
+	"github.com/full-chaos/dev-health-ops/internal/chmigrate"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
+	"github.com/full-chaos/dev-health-ops/internal/pgmigrate"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	platformsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
@@ -34,21 +36,27 @@ const (
 	defaultAPIRole         = "devhealth_api"
 )
 
-// Command is `dho migrate`: today only its `river` verb. S10 adds the
-// alembic and ClickHouse migrators beside it.
+// Command is `dho migrate`: the `postgres` group (the application schema
+// head, internal/pgmigrate) and the `river` verb.
 func Command() cli.Command {
 	return cli.Command{
 		Name:    "migrate",
 		Summary: "apply or check database schemas",
 		Kind:    cli.Group,
-		Children: []cli.Command{{
-			Name:    "river",
-			Summary: "apply the pinned River schema and runtime grant posture, or check it (--check, --apply-and-check)",
-			Kind:    cli.Verb,
-			Run: func(ctx context.Context, env cli.Env) int {
-				return Execute(ctx, "dho", env.Args, env.Lookup, env.Stdout, env.Stderr)
+		Children: []cli.Command{
+			pgmigrate.Command(func(lookup platformsecrets.LookupEnv, stderr io.Writer) (platformsecrets.Value, string, bool) {
+				return resolveMigrationDatabaseURI(lookup, stderr, true)
+			}),
+			chmigrate.Command(),
+			{
+				Name:    "river",
+				Summary: "apply the pinned River schema and runtime grant posture, or check it (--check, --apply-and-check)",
+				Kind:    cli.Verb,
+				Run: func(ctx context.Context, env cli.Env) int {
+					return Execute(ctx, "dho", env.Args, env.Lookup, env.Stdout, env.Stderr)
+				},
 			},
-		}},
+		},
 	}
 }
 

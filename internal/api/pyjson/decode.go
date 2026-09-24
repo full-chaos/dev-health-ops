@@ -18,6 +18,26 @@ type SyntaxError struct {
 
 func (e *SyntaxError) Error() string { return fmt.Sprintf("%s: char %d", e.Msg, e.Pos) }
 
+// Text is str(json.JSONDecodeError) for document (the string that was
+// decoded): "<msg>: line L column C (char N)". The line is one more than the
+// newlines before Pos and the column is Pos less the last such newline's
+// index (Pos + 1 on the first line), all counted in code points.
+func (e *SyntaxError) Text(document string) string {
+	runes := Runes(document)
+	line, lastNewline := 1, -1
+	for index := 0; index < e.Pos && index < len(runes); index++ {
+		if runes[index] == '\n' {
+			line++
+			lastNewline = index
+		}
+	}
+	column := e.Pos + 1
+	if lastNewline >= 0 {
+		column = e.Pos - lastNewline
+	}
+	return fmt.Sprintf("%s: line %d column %d (char %d)", e.Msg, line, column, e.Pos)
+}
+
 // maxIntDigits is CPython's default sys.get_int_max_str_digits().
 const maxIntDigits = 4300
 

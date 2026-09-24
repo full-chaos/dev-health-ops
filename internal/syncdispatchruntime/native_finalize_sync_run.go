@@ -12,6 +12,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/cacheinvalidation"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
+	"github.com/full-chaos/dev-health-ops/internal/synccoverage"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -894,49 +895,13 @@ ON CONFLICT ON CONSTRAINT uq_sync_compute_checkpoint_unit_type DO NOTHING`,
 	return nil, nil
 }
 
-// invalidateSyncCoverageForIntegration ports
-// sync_coverage.py::invalidate_sync_coverage_projection_sync (the
-// integration_id selector variant -- the only one finalize_sync_run calls).
-// Pure Postgres: an advisory transaction lock per resolved sync_config_id
-// (serializes against a concurrent coverage rebuild) followed by a single
-// invalidating UPDATE. Python's statement is an ORM-enabled update() of
-// SyncCoverageProjection, whose updated_at has onupdate=func.now(), so the
-// UPDATE sets updated_at = now() as well.
+// invalidateSyncCoverageForIntegration is the shared
+// synccoverage.InvalidateForIntegration (a port of
+// sync_coverage.py::invalidate_sync_coverage_projection_sync's
+// integration_id selector, the only one finalize_sync_run calls), with
+// every failure reported as ErrFinalizeSyncRunUnavailable as before.
 func invalidateSyncCoverageForIntegration(ctx context.Context, tx pgx.Tx, orgID, integrationID string) error {
-	rows, err := tx.Query(ctx, `
-SELECT id::text FROM public.sync_configurations
-WHERE org_id = $1 AND integration_id = $2::uuid
-ORDER BY id`, orgID, integrationID)
-	if err != nil {
-		return ErrFinalizeSyncRunUnavailable
-	}
-	var configIDs []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			rows.Close()
-			return ErrFinalizeSyncRunUnavailable
-		}
-		configIDs = append(configIDs, id)
-	}
-	if rows.Err() != nil {
-		rows.Close()
-		return ErrFinalizeSyncRunUnavailable
-	}
-	rows.Close()
-	for _, configID := range configIDs {
-		lockName := "sync-coverage:" + orgID + ":" + configID
-		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, lockName); err != nil {
-			return ErrFinalizeSyncRunUnavailable
-		}
-	}
-	if len(configIDs) == 0 {
-		return nil
-	}
-	if _, err := tx.Exec(ctx, `
-UPDATE public.sync_coverage_projections
-SET invalidated_at = now(), updated_at = now()
-WHERE org_id = $1 AND sync_config_id = ANY($2::uuid[])`, orgID, configIDs); err != nil {
+	if err := synccoverage.InvalidateForIntegration(ctx, tx, orgID, integrationID); err != nil {
 		return ErrFinalizeSyncRunUnavailable
 	}
 	return nil

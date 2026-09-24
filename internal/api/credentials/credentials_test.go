@@ -48,40 +48,6 @@ func TestNormalizeCredentialKeys(t *testing.T) {
 	}
 }
 
-func TestPyEqual(t *testing.T) {
-	cases := []struct {
-		a, b  string
-		equal bool
-	}{
-		{`{"a":1,"b":2}`, `{"b":2,"a":1}`, true},
-		{`{"a":1}`, `{"a":true}`, true},
-		{`{"a":1}`, `{"a":1.0}`, true},
-		{`{"a":0}`, `{"a":false}`, true},
-		{`{"a":1}`, `{"a":"1"}`, false},
-		{`{"a":[1,2]}`, `{"a":[2,1]}`, false},
-		{`{"a":1}`, `{"a":1,"b":2}`, false},
-		{`{"a":null}`, `{"a":null}`, true},
-		{`{"a":null}`, `{"a":0}`, false},
-		{`{"a":12345678901234567890}`, `{"a":12345678901234567891}`, false},
-		{`{"a":12345678901234567890}`, `{"a":12345678901234567890}`, true},
-		{`{"a":{"b":[{"c":1}]}}`, `{"a":{"b":[{"c":true}]}}`, true},
-		{`{"a":"x"}`, `{"a":"y"}`, false},
-		// 1e400 is valid JSON (Postgres json stores it) and decodes to
-		// inf, and Python's inf == inf is True; an infinity equals no
-		// finite number and no infinity of the other sign.
-		{`{"a":1e400}`, `{"a":1e400}`, true},
-		{`{"a":-1e400}`, `{"a":-1e400}`, true},
-		{`{"a":1e400}`, `{"a":-1e400}`, false},
-		{`{"a":1e400}`, `{"a":1e308}`, false},
-		{`{"a":1e400}`, `{"a":true}`, false},
-	}
-	for _, c := range cases {
-		if got := pyEqual(decodeObject(t, c.a), decodeObject(t, c.b)); got != c.equal {
-			t.Errorf("pyEqual(%s, %s) = %v, want %v", c.a, c.b, got, c.equal)
-		}
-	}
-}
-
 func TestResponseJSONShape(t *testing.T) {
 	at := time.Date(2026, 9, 1, 10, 0, 0, 123400000, time.UTC)
 	c := credential{ID: uuid.MustParse("11111111-1111-4111-8111-111111111111"), Provider: "github", Name: "n", IsActive: true, CreatedAt: at, UpdatedAt: at.Add(time.Second)}

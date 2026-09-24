@@ -101,8 +101,10 @@ func apiPosture() RolePosture {
 			{"external_ingest_recompute_jobs", false, false, false},
 			// Managed-sync ownership matching (ownership.go's
 			// findActiveManagedOwner): read-only. A purge target, delete
-			// added.
-			{"integration_sources", false, false, true},
+			// added. CHAOS-6529 (PUT /sync-configs/{id}/repositories)
+			// creates planner sources (INSERT) and edits and disables them
+			// (UPDATE), widened in place.
+			{"integration_sources", true, true, true},
 			{"integrations", false, false, true},
 			// CHAOS-6319: the customer-push ownership check reads a managed
 			// integration's credential row (provider and plain config only;
@@ -158,12 +160,18 @@ func apiPosture() RolePosture {
 			// Delete: settings is also a purge target (encrypted settings
 			// included).
 			{"settings", true, true, true},
-			// A purge target, delete only.
-			{"sync_configurations", false, false, true},
+			// A purge target, delete. CHAOS-6529: the repository selection
+			// write updates the config's sync_options (UPDATE).
+			{"sync_configurations", false, true, true},
 			// CHAOS-6437: the sync coverage read serves the stored
-			// projection (build_sync_coverage_summary). Read-only; rows go
-			// with their config by ON DELETE CASCADE, so no purge grant.
-			{"sync_coverage_projections", false, false, false},
+			// projection (build_sync_coverage_summary). Rows go with their
+			// config by ON DELETE CASCADE, so no purge grant. CHAOS-6529:
+			// a sync config write invalidates the projection
+			// (invalidate_sync_coverage_projection: UPDATE invalidated_at).
+			{"sync_coverage_projections", false, true, false},
+			// CHAOS-6529: TierLimitService.get_limit reads the tier's
+			// limits (the repo limit of the sync config writes). Read-only.
+			{"tier_limits", false, false, false},
 			// The generic audit writer (internal/api/audit): impersonation
 			// start/stop, password_changed, member_invited, and plan area K's
 			// telemetry-report audit row -- one entry, every area. Also a

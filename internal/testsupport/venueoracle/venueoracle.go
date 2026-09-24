@@ -211,6 +211,29 @@ elif mode == "serve":
             return _as_event_dict(_json.loads(payload))
 
         _stripe_ev.StripeClient.construct_event = _stripe_construct_as_dict
+    # Test-runner-only monkeypatch, same rule as above: when set, every
+    # datetime.now()/utcnow() the listed modules call reads the pinned
+    # instant instead of the wall clock (each module's own global name
+    # 'datetime' is replaced by a subclass whose now() is pinned), so a
+    # venue test can compare Python-written timestamps as raw values
+    # against a Go plane run on the same injected clock.
+    _pinned_now = os.environ.get("VENUE_PINNED_NOW")
+    if _pinned_now:
+        import datetime as _dt, importlib as _importlib
+        _pin = _dt.datetime.fromisoformat(_pinned_now)
+
+        class _PinnedDatetime(_dt.datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return _pin.astimezone(tz) if tz is not None else _pin.replace(tzinfo=None)
+
+            @classmethod
+            def utcnow(cls):
+                return _pin.astimezone(_dt.timezone.utc).replace(tzinfo=None)
+
+        for _module_name in os.environ.get("VENUE_PINNED_NOW_MODULES", "").split(","):
+            if _module_name:
+                setattr(_importlib.import_module(_module_name), "datetime", _PinnedDatetime)
     from fastapi.testclient import TestClient
     from dev_health_ops.api.main import app
     # VENUE_STRIPE_SUBSCRIPTION_HANDLERS_AS_DICT=1 hands the router's

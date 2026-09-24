@@ -424,7 +424,7 @@ func (h handlers) set(ctx context.Context, orgID, provider, name string, credent
 	response.IsActive = isActive
 	response.UpdatedAt = now
 	if config != nil {
-		if existing.Config == nil || !pyEqual(existing.Config, config) {
+		if existing.Config == nil || !pyjson.Equal(existing.Config, config) {
 			text, err := configText(config)
 			if err != nil {
 				return credential{}, err
@@ -512,7 +512,7 @@ func (h handlers) patchFlags(ctx context.Context, orgID string, existing credent
 	var args []any
 	if hasConfig {
 		response.Config = config
-		if existing.Config == nil || !pyEqual(existing.Config, config) {
+		if existing.Config == nil || !pyjson.Equal(existing.Config, config) {
 			text, err := configText(config)
 			if err != nil {
 				return credential{}, err

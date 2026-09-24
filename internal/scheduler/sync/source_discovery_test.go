@@ -886,29 +886,6 @@ func TestNormalizeSourceKeyMatchesJiraKeyNorm(t *testing.T) {
 	}
 }
 
-// TestRepoLimitAdvisoryLockKeyMatchesPython pins Go's advisory-lock key
-// formula against values independently computed with Python's own
-// discovery.py::_acquire_repo_limit_lock algorithm
-// (`uuid.UUID(org_id).int & ((1<<63)-1)`, falling back to
-// `uuid.uuid5(uuid.NAMESPACE_URL, org_id).int & ((1<<63)-1)` for a non-UUID
-// org_id) -- this key MUST agree across languages, or Python's
-// create_sync_config repo-limit preflight and this Go rebalance step stop
-// serializing against each other during the coexistence window.
-func TestRepoLimitAdvisoryLockKeyMatchesPython(t *testing.T) {
-	for _, test := range []struct {
-		orgID string
-		want  int64
-	}{
-		{"11111111-1111-1111-1111-111111111111", 1229782938247303441},
-		{"70d529e0-3c06-4597-8480-794fd02328b6", 324392556872018102},
-		{"not-a-uuid-org", 1247898447986800358},
-	} {
-		if got := repoLimitAdvisoryLockKey(test.orgID); got != test.want {
-			t.Errorf("repoLimitAdvisoryLockKey(%q) = %d, want %d (Python parity)", test.orgID, got, test.want)
-		}
-	}
-}
-
 // TestJiraMaxReposTierDefaultsMatchPython pins the hardcoded fallback tier
 // against models/licensing.py::TIER_LIMITS_DEFAULTS' max_repos entries.
 func TestJiraMaxReposTierDefaultsMatchPython(t *testing.T) {

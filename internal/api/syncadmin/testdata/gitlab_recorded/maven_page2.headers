@@ -1,0 +1,8 @@
+content-type: application/json
+link: <https://gitlab.com/api/v4/groups/gitlab-examples%2Fmaven/projects?id=gitlab-examples%2Fmaven&include_ancestor_groups=false&include_subgroups=false&order_by=created_at&owned=false&page=1&per_page=2&simple=false&sort=desc&starred=false&with_custom_attributes=false&with_issues_enabled=false&with_merge_requests_enabled=false&with_security_reports=false&with_shared=true>; rel="prev", <https://gitlab.com/api/v4/groups/gitlab-examples%2Fmaven/projects?id=gitlab-examples%2Fmaven&include_ancestor_groups=false&include_subgroups=false&order_by=created_at&owned=false&page=1&per_page=2&simple=false&sort=desc&starred=false&with_custom_attributes=false&with_issues_enabled=false&with_merge_requests_enabled=false&with_security_reports=false&with_shared=true>; rel="first", <https://gitlab.com/api/v4/groups/gitlab-examples%2Fmaven/projects?id=gitlab-examples%2Fmaven&include_ancestor_groups=false&include_subgroups=false&order_by=created_at&owned=false&page=2&per_page=2&simple=false&sort=desc&starred=false&with_custom_attributes=false&with_issues_enabled=false&with_merge_requests_enabled=false&with_security_reports=false&with_shared=true>; rel="last"
+x-next-page: 
+x-page: 2
+x-per-page: 2
+x-prev-page: 1
+x-total: 3
+x-total-pages: 2

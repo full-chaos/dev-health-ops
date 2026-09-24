@@ -67,7 +67,7 @@ six==1.17.0
 smmap==5.0.3
 SQLAlchemy==2.0.54
 starlette==1.7.0
-stripe==15.1.0
+stripe==15.6.1
 truststore==0.10.4
 typing-extensions==4.16.0
 typing-inspection==0.4.4

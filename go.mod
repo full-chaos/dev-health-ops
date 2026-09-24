@@ -16,6 +16,7 @@ require (
 	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.44.0
 	github.com/riverqueue/river/rivertype v0.44.0
 	github.com/riverqueue/rivercontrib/otelriver v0.12.0
+	github.com/stripe/stripe-go/v86 v86.4.2
 	github.com/testcontainers/testcontainers-go v0.43.0
 	github.com/valkey-io/valkey-go v1.0.76
 	github.com/vektah/gqlparser/v2 v2.5.22
@@ -101,7 +102,6 @@ require (
 	github.com/sirupsen/logrus v1.9.4 // indirect
 	github.com/sosodev/duration v1.3.1 // indirect
 	github.com/stretchr/testify v1.11.1 // indirect
-	github.com/stripe/stripe-go/v85 v85.1.0 // indirect
 	github.com/tidwall/gjson v1.19.0 // indirect
 	github.com/tidwall/match v1.2.0 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect

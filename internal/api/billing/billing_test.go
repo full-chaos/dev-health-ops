@@ -7,7 +7,7 @@ import (
 	"log/slog"
 	"testing"
 
-	"github.com/stripe/stripe-go/v85"
+	"github.com/stripe/stripe-go/v86"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 )

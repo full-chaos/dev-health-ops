@@ -931,6 +931,7 @@
 {"call":{"fn":"alabel","text":[1488,1161]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+0489 at position 2 of 'א҉' not allowed"}}
 {"call":{"fn":"alabel","text":[2325,2381,1161]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+0489 at position 3 of 'क्҉' not allowed"}}
 {"call":{"fn":"remap","text":[120,1200,121]},"want":{"ok":[120,1201,121],"kind":"","message":""}}
+{"call":{"fn":"remap","text":[120,1368,121]},"want":{"ok":[120,1383,121],"kind":"","message":""}}
 {"call":{"fn":"remap","text":[120,1370,121]},"want":{"ok":[120,1370,121],"kind":"","message":""}}
 {"call":{"fn":"alabel","text":[120,1370]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+055A at position 2 of 'x՚' not allowed"}}
 {"call":{"fn":"alabel","text":[1370]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+055A at position 1 of '՚' not allowed"}}
@@ -946,6 +947,7 @@
 {"call":{"fn":"alabel","text":[1418]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+058A at position 1 of '֊' not allowed"}}
 {"call":{"fn":"alabel","text":[1488,1418]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+058A at position 2 of 'א֊' not allowed"}}
 {"call":{"fn":"alabel","text":[2325,2381,1418]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+058A at position 3 of 'क्֊' not allowed"}}
+{"call":{"fn":"remap","text":[120,1419,121]},"want":{"ok":[120,1387,121],"kind":"","message":""}}
 {"call":{"fn":"remap","text":[120,1470,121]},"want":{"ok":[120,1470,121],"kind":"","message":""}}
 {"call":{"fn":"alabel","text":[120,1470]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+05BE at position 2 of 'x־' not allowed"}}
 {"call":{"fn":"alabel","text":[1470]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+05BE at position 1 of '־' not allowed"}}
@@ -961,6 +963,16 @@
 {"call":{"fn":"alabel","text":[1475]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+05C3 at position 1 of '׃' not allowed"}}
 {"call":{"fn":"alabel","text":[1488,1475]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+05C3 at position 2 of 'א׃' not allowed"}}
 {"call":{"fn":"alabel","text":[2325,2381,1475]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+05C3 at position 3 of 'क्׃' not allowed"}}
+{"call":{"fn":"remap","text":[120,1480,121]},"want":{"ok":[120,1480,121],"kind":"","message":""}}
+{"call":{"fn":"alabel","text":[120,1480]},"want":{"ok":null,"kind":"IDNABidiError","message":"Unknown directionality in label 'x\\u05c8' at position 2"}}
+{"call":{"fn":"alabel","text":[1480]},"want":{"ok":null,"kind":"IDNABidiError","message":"Unknown directionality in label '\\u05c8' at position 1"}}
+{"call":{"fn":"alabel","text":[1488,1480]},"want":{"ok":null,"kind":"IDNABidiError","message":"Unknown directionality in label 'א\\u05c8' at position 2"}}
+{"call":{"fn":"alabel","text":[2325,2381,1480]},"want":{"ok":null,"kind":"IDNABidiError","message":"Unknown directionality in label 'क्\\u05c8' at position 3"}}
+{"call":{"fn":"remap","text":[120,1481,121]},"want":{"ok":[120,1481,121],"kind":"","message":""}}
+{"call":{"fn":"alabel","text":[120,1481]},"want":{"ok":null,"kind":"IDNABidiError","message":"Unknown directionality in label 'x\\u05c9' at position 2"}}
+{"call":{"fn":"alabel","text":[1481]},"want":{"ok":null,"kind":"IDNABidiError","message":"Unknown directionality in label '\\u05c9' at position 1"}}
+{"call":{"fn":"alabel","text":[1488,1481]},"want":{"ok":null,"kind":"IDNABidiError","message":"Unknown directionality in label 'א\\u05c9' at position 2"}}
+{"call":{"fn":"alabel","text":[2325,2381,1481]},"want":{"ok":null,"kind":"IDNABidiError","message":"Unknown directionality in label 'क्\\u05c9' at position 3"}}
 {"call":{"fn":"remap","text":[120,1488,121]},"want":{"ok":[120,1488,121],"kind":"","message":""}}
 {"call":{"fn":"alabel","text":[120,1488]},"want":{"ok":null,"kind":"IDNABidiError","message":"Invalid direction for codepoint at position 2 in a left-to-right label"}}
 {"call":{"fn":"alabel","text":[1488]},"want":{"ok":[120,110,45,45,52,100,98],"kind":"","message":""}}
@@ -1235,7 +1247,14 @@
 {"call":{"fn":"alabel","text":[1488,2554]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+09FA at position 2 of 'א৺' not allowed"}}
 {"call":{"fn":"alabel","text":[2325,2381,2554]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+09FA at position 3 of 'क्৺' not allowed"}}
 {"call":{"fn":"remap","text":[120,2800,121]},"want":{"ok":[120,2800,121],"kind":"","message":""}}
-{"call":{"fn":"remap","text":[120,3164,121]},"want":{"ok":[120,3164,121],"kind":"","message":""}}
+{"call":{"fn":"alabel","text":[120,2899]},"want":{"ok":null,"kind":"IDNABidiError","message":"Unknown directionality in label 'x\\u0b53' at position 2"}}
+{"call":{"fn":"alabel","text":[2899]},"want":{"ok":null,"kind":"IDNABidiError","message":"Unknown directionality in label '\\u0b53' at position 1"}}
+{"call":{"fn":"alabel","text":[1488,2899]},"want":{"ok":null,"kind":"IDNABidiError","message":"Unknown directionality in label 'א\\u0b53' at position 2"}}
+{"call":{"fn":"alabel","text":[2325,2381,2899]},"want":{"ok":null,"kind":"IDNABidiError","message":"Unknown directionality in label 'क्\\u0b53' at position 3"}}
+{"call":{"fn":"alabel","text":[120,2900]},"want":{"ok":null,"kind":"IDNABidiError","message":"Unknown directionality in label 'x\\u0b54' at position 2"}}
+{"call":{"fn":"alabel","text":[2900]},"want":{"ok":null,"kind":"IDNABidiError","message":"Unknown directionality in label '\\u0b54' at position 1"}}
+{"call":{"fn":"alabel","text":[1488,2900]},"want":{"ok":null,"kind":"IDNABidiError","message":"Unknown directionality in label 'א\\u0b54' at position 2"}}
+{"call":{"fn":"alabel","text":[2325,2381,2900]},"want":{"ok":null,"kind":"IDNABidiError","message":"Unknown directionality in label 'क्\\u0b54' at position 3"}}
 {"call":{"fn":"alabel","text":[120,3164]},"want":{"ok":null,"kind":"IDNABidiError","message":"Unknown directionality in label 'x\\u0c5c' at position 2"}}
 {"call":{"fn":"alabel","text":[3164]},"want":{"ok":null,"kind":"IDNABidiError","message":"Unknown directionality in label '\\u0c5c' at position 1"}}
 {"call":{"fn":"alabel","text":[1488,3164]},"want":{"ok":null,"kind":"IDNABidiError","message":"Unknown directionality in label 'א\\u0c5c' at position 2"}}
@@ -1251,7 +1270,6 @@
 {"call":{"fn":"alabel","text":[3270]},"want":{"ok":null,"kind":"IDNAError","message":"Label begins with an illegal combining character"}}
 {"call":{"fn":"alabel","text":[1488,3270]},"want":{"ok":null,"kind":"IDNABidiError","message":"Invalid direction for codepoint at position 2 in a right-to-left label"}}
 {"call":{"fn":"alabel","text":[2325,2381,3270]},"want":{"ok":[120,110,45,45,49,49,98,54,105,49,52,105],"kind":"","message":""}}
-{"call":{"fn":"remap","text":[120,3292,121]},"want":{"ok":[120,3292,121],"kind":"","message":""}}
 {"call":{"fn":"alabel","text":[120,3292]},"want":{"ok":null,"kind":"IDNABidiError","message":"Unknown directionality in label 'x\\u0cdc' at position 2"}}
 {"call":{"fn":"alabel","text":[3292]},"want":{"ok":null,"kind":"IDNABidiError","message":"Unknown directionality in label '\\u0cdc' at position 1"}}
 {"call":{"fn":"alabel","text":[1488,3292]},"want":{"ok":null,"kind":"IDNABidiError","message":"Unknown directionality in label 'א\\u0cdc' at position 2"}}
@@ -1323,26 +1341,8 @@
 {"call":{"fn":"alabel","text":[2325,2381,6211]},"want":{"ok":[120,110,45,45,49,49,98,54,105,115,50,57,98],"kind":"","message":""}}
 {"call":{"fn":"remap","text":[120,6400,121]},"want":{"ok":[120,6400,121],"kind":"","message":""}}
 {"call":{"fn":"remap","text":[120,6800,121]},"want":{"ok":[120,6800,121],"kind":"","message":""}}
-{"call":{"fn":"remap","text":[120,6863,121]},"want":{"ok":[120,6863,121],"kind":"","message":""}}
 {"call":{"fn":"alabel","text":[120,6863]},"want":{"ok":null,"kind":"IDNABidiError","message":"Unknown directionality in label 'x\\u1acf' at position 2"}}
 {"call":{"fn":"alabel","text":[6863]},"want":{"ok":null,"kind":"IDNABidiError","message":"Unknown directionality in label '\\u1acf' at position 1"}}
-{"call":{"fn":"alabel","text":[1488,6863]},"want":{"ok":null,"kind":"IDNABidiError","message":"Unknown directionality in label 'א\\u1acf' at position 2"}}
-{"call":{"fn":"alabel","text":[2325,2381,6863]},"want":{"ok":null,"kind":"IDNABidiError","message":"Unknown directionality in label 'क्\\u1acf' at position 3"}}
-{"call":{"fn":"remap","text":[120,6864,121]},"want":{"ok":[120,6864,121],"kind":"","message":""}}
-{"call":{"fn":"alabel","text":[120,6864]},"want":{"ok":null,"kind":"IDNABidiError","message":"Unknown directionality in label 'x\\u1ad0' at position 2"}}
-{"call":{"fn":"alabel","text":[6864]},"want":{"ok":null,"kind":"IDNABidiError","message":"Unknown directionality in label '\\u1ad0' at position 1"}}
-{"call":{"fn":"alabel","text":[1488,6864]},"want":{"ok":null,"kind":"IDNABidiError","message":"Unknown directionality in label 'א\\u1ad0' at position 2"}}
-{"call":{"fn":"alabel","text":[2325,2381,6864]},"want":{"ok":null,"kind":"IDNABidiError","message":"Unknown directionality in label 'क्\\u1ad0' at position 3"}}
-{"call":{"fn":"alabel","text":[120,6865]},"want":{"ok":null,"kind":"IDNABidiError","message":"Unknown directionality in label 'x\\u1ad1' at position 2"}}
-{"call":{"fn":"alabel","text":[6865]},"want":{"ok":null,"kind":"IDNABidiError","message":"Unknown directionality in label '\\u1ad1' at position 1"}}
-{"call":{"fn":"alabel","text":[1488,6865]},"want":{"ok":null,"kind":"IDNABidiError","message":"Unknown directionality in label 'א\\u1ad1' at position 2"}}
-{"call":{"fn":"alabel","text":[2325,2381,6865]},"want":{"ok":null,"kind":"IDNABidiError","message":"Unknown directionality in label 'क्\\u1ad1' at position 3"}}
-{"call":{"fn":"alabel","text":[120,6866]},"want":{"ok":null,"kind":"IDNABidiError","message":"Unknown directionality in label 'x\\u1ad2' at position 2"}}
-{"call":{"fn":"alabel","text":[6866]},"want":{"ok":null,"kind":"IDNABidiError","message":"Unknown directionality in label '\\u1ad2' at position 1"}}
-{"call":{"fn":"alabel","text":[1488,6866]},"want":{"ok":null,"kind":"IDNABidiError","message":"Unknown directionality in label 'א\\u1ad2' at position 2"}}
-{"call":{"fn":"alabel","text":[2325,2381,6866]},"want":{"ok":null,"kind":"IDNABidiError","message":"Unknown directionality in label 'क्\\u1ad2' at position 3"}}
-{"call":{"fn":"alabel","text":[120,6867]},"want":{"ok":null,"kind":"IDNABidiError","message":"Unknown directionality in label 'x\\u1ad3' at position 2"}}
-{"call":{"fn":"alabel","text":[6867]},"want":{"ok":null,"kind":"IDNABidiError","message":"Unknown directionality in label '\\u1ad3' at position 1"}}
 {"call":{"fn":"remap","text":[120,7200,121]},"want":{"ok":[120,7200,121],"kind":"","message":""}}
 {"call":{"fn":"remap","text":[120,7600,121]},"want":{"ok":[120,628,121],"kind":"","message":""}}
 {"call":{"fn":"remap","text":[120,8000,121]},"want":{"ok":[120,8000,121],"kind":"","message":""}}
@@ -1385,14 +1385,14 @@
 {"call":{"fn":"alabel","text":[1488,8203]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+200B at position 2 of 'א\\u200b' not allowed"}}
 {"call":{"fn":"alabel","text":[2325,2381,8203]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+200B at position 3 of 'क्\\u200b' not allowed"}}
 {"call":{"fn":"remap","text":[120,8204,121]},"want":{"ok":[120,8204,121],"kind":"","message":""}}
-{"call":{"fn":"alabel","text":[120,8204]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 2 in 'x\\u200c'"}}
-{"call":{"fn":"alabel","text":[8204]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 1 in '\\u200c'"}}
-{"call":{"fn":"alabel","text":[1488,8204]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 2 in 'א\\u200c'"}}
+{"call":{"fn":"alabel","text":[120,8204]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 2 in 'x\\u200c'"}}
+{"call":{"fn":"alabel","text":[8204]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 1 in '\\u200c'"}}
+{"call":{"fn":"alabel","text":[1488,8204]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 2 in 'א\\u200c'"}}
 {"call":{"fn":"alabel","text":[2325,2381,8204]},"want":{"ok":[120,110,45,45,49,49,98,54,105,118,49,52,101],"kind":"","message":""}}
 {"call":{"fn":"remap","text":[120,8205,121]},"want":{"ok":[120,8205,121],"kind":"","message":""}}
-{"call":{"fn":"alabel","text":[120,8205]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200D at position 2 in 'x\\u200d'"}}
-{"call":{"fn":"alabel","text":[8205]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200D at position 1 in '\\u200d'"}}
-{"call":{"fn":"alabel","text":[1488,8205]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200D at position 2 in 'א\\u200d'"}}
+{"call":{"fn":"alabel","text":[120,8205]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200D not allowed at position 2 in 'x\\u200d'"}}
+{"call":{"fn":"alabel","text":[8205]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200D not allowed at position 1 in '\\u200d'"}}
+{"call":{"fn":"alabel","text":[1488,8205]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200D not allowed at position 2 in 'א\\u200d'"}}
 {"call":{"fn":"alabel","text":[2325,2381,8205]},"want":{"ok":[120,110,45,45,49,49,98,54,105,121,49,52,101],"kind":"","message":""}}
 {"call":{"fn":"remap","text":[120,8206,121]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+200E not allowed at position 2 in 'x\\u200ey'"}}
 {"call":{"fn":"alabel","text":[120,8206]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+200E at position 2 of 'x\\u200e' not allowed"}}
@@ -1929,6 +1929,16 @@
 {"call":{"fn":"alabel","text":[69318]},"want":{"ok":null,"kind":"IDNABidiError","message":"Unknown directionality in label '\\U00010ec6' at position 1"}}
 {"call":{"fn":"alabel","text":[1488,69318]},"want":{"ok":null,"kind":"IDNABidiError","message":"Unknown directionality in label 'א\\U00010ec6' at position 2"}}
 {"call":{"fn":"alabel","text":[2325,2381,69318]},"want":{"ok":null,"kind":"IDNABidiError","message":"Unknown directionality in label 'क्\\U00010ec6' at position 3"}}
+{"call":{"fn":"remap","text":[120,69337,121]},"want":{"ok":[120,69337,121],"kind":"","message":""}}
+{"call":{"fn":"alabel","text":[120,69337]},"want":{"ok":null,"kind":"IDNABidiError","message":"Unknown directionality in label 'x\\U00010ed9' at position 2"}}
+{"call":{"fn":"alabel","text":[69337]},"want":{"ok":null,"kind":"IDNABidiError","message":"Unknown directionality in label '\\U00010ed9' at position 1"}}
+{"call":{"fn":"alabel","text":[1488,69337]},"want":{"ok":null,"kind":"IDNABidiError","message":"Unknown directionality in label 'א\\U00010ed9' at position 2"}}
+{"call":{"fn":"alabel","text":[2325,2381,69337]},"want":{"ok":null,"kind":"IDNABidiError","message":"Unknown directionality in label 'क्\\U00010ed9' at position 3"}}
+{"call":{"fn":"remap","text":[120,69338,121]},"want":{"ok":[120,69338,121],"kind":"","message":""}}
+{"call":{"fn":"alabel","text":[120,69338]},"want":{"ok":null,"kind":"IDNABidiError","message":"Unknown directionality in label 'x\\U00010eda' at position 2"}}
+{"call":{"fn":"alabel","text":[69338]},"want":{"ok":null,"kind":"IDNABidiError","message":"Unknown directionality in label '\\U00010eda' at position 1"}}
+{"call":{"fn":"alabel","text":[1488,69338]},"want":{"ok":null,"kind":"IDNABidiError","message":"Unknown directionality in label 'א\\U00010eda' at position 2"}}
+{"call":{"fn":"alabel","text":[2325,2381,69338]},"want":{"ok":null,"kind":"IDNABidiError","message":"Unknown directionality in label 'क्\\U00010eda' at position 3"}}
 {"call":{"fn":"remap","text":[120,69457,121]},"want":{"ok":[120,69457,121],"kind":"","message":""}}
 {"call":{"fn":"alabel","text":[120,69457]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+10F51 at position 2 of 'x𐽑' not allowed"}}
 {"call":{"fn":"alabel","text":[69457]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+10F51 at position 1 of '𐽑' not allowed"}}
@@ -1968,12 +1978,12 @@
 {"call":{"fn":"remap","text":[120,72000,121]},"want":{"ok":[120,72000,121],"kind":"","message":""}}
 {"call":{"fn":"remap","text":[120,72400,121]},"want":{"ok":[120,72400,121],"kind":"","message":""}}
 {"call":{"fn":"remap","text":[120,72800,121]},"want":{"ok":[120,72800,121],"kind":"","message":""}}
-{"call":{"fn":"remap","text":[120,73200,121]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+11DF0 not allowed at position 2 in 'x\\U00011df0y'"}}
+{"call":{"fn":"remap","text":[120,73200,121]},"want":{"ok":[120,73200,121],"kind":"","message":""}}
 {"call":{"fn":"remap","text":[120,73600,121]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+11F80 not allowed at position 2 in 'x\\U00011f80y'"}}
 {"call":{"fn":"remap","text":[120,74000,121]},"want":{"ok":[120,74000,121],"kind":"","message":""}}
 {"call":{"fn":"remap","text":[120,74400,121]},"want":{"ok":[120,74400,121],"kind":"","message":""}}
 {"call":{"fn":"remap","text":[120,74800,121]},"want":{"ok":[120,74800,121],"kind":"","message":""}}
-{"call":{"fn":"remap","text":[120,75200,121]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+125C0 not allowed at position 2 in 'x\\U000125c0y'"}}
+{"call":{"fn":"remap","text":[120,75200,121]},"want":{"ok":[120,75200,121],"kind":"","message":""}}
 {"call":{"fn":"remap","text":[120,75600,121]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+12750 not allowed at position 2 in 'x\\U00012750y'"}}
 {"call":{"fn":"remap","text":[120,76000,121]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+128E0 not allowed at position 2 in 'x\\U000128e0y'"}}
 {"call":{"fn":"remap","text":[120,76400,121]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+12A70 not allowed at position 2 in 'x\\U00012a70y'"}}
@@ -2047,9 +2057,9 @@
 {"call":{"fn":"remap","text":[120,100800,121]},"want":{"ok":[120,100800,121],"kind":"","message":""}}
 {"call":{"fn":"remap","text":[120,101200,121]},"want":{"ok":[120,101200,121],"kind":"","message":""}}
 {"call":{"fn":"remap","text":[120,101600,121]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+18CE0 not allowed at position 2 in 'x\\U00018ce0y'"}}
-{"call":{"fn":"remap","text":[120,102000,121]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+18E70 not allowed at position 2 in 'x\\U00018e70y'"}}
-{"call":{"fn":"remap","text":[120,102400,121]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+19000 not allowed at position 2 in 'x\\U00019000y'"}}
-{"call":{"fn":"remap","text":[120,102800,121]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+19190 not allowed at position 2 in 'x\\U00019190y'"}}
+{"call":{"fn":"remap","text":[120,102000,121]},"want":{"ok":[120,102000,121],"kind":"","message":""}}
+{"call":{"fn":"remap","text":[120,102400,121]},"want":{"ok":[120,102400,121],"kind":"","message":""}}
+{"call":{"fn":"remap","text":[120,102800,121]},"want":{"ok":[120,102800,121],"kind":"","message":""}}
 {"call":{"fn":"remap","text":[120,103200,121]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+19320 not allowed at position 2 in 'x\\U00019320y'"}}
 {"call":{"fn":"remap","text":[120,103600,121]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+194B0 not allowed at position 2 in 'x\\U000194b0y'"}}
 {"call":{"fn":"remap","text":[120,104000,121]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+19640 not allowed at position 2 in 'x\\U00019640y'"}}
@@ -2090,6 +2100,14 @@
 {"call":{"fn":"remap","text":[120,118000,121]},"want":{"ok":[120,48,121],"kind":"","message":""}}
 {"call":{"fn":"remap","text":[120,118400,121]},"want":{"ok":[120,118400,121],"kind":"","message":""}}
 {"call":{"fn":"remap","text":[120,118800,121]},"want":{"ok":[120,118800,121],"kind":"","message":""}}
+{"call":{"fn":"alabel","text":[120,119079]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+1D127 at position 2 of 'x\\U0001d127' not allowed"}}
+{"call":{"fn":"alabel","text":[119079]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+1D127 at position 1 of '\\U0001d127' not allowed"}}
+{"call":{"fn":"alabel","text":[1488,119079]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+1D127 at position 2 of 'א\\U0001d127' not allowed"}}
+{"call":{"fn":"alabel","text":[2325,2381,119079]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+1D127 at position 3 of 'क्\\U0001d127' not allowed"}}
+{"call":{"fn":"alabel","text":[120,119080]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+1D128 at position 2 of 'x\\U0001d128' not allowed"}}
+{"call":{"fn":"alabel","text":[119080]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+1D128 at position 1 of '\\U0001d128' not allowed"}}
+{"call":{"fn":"alabel","text":[1488,119080]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+1D128 at position 2 of 'א\\U0001d128' not allowed"}}
+{"call":{"fn":"alabel","text":[2325,2381,119080]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+1D128 at position 3 of 'क्\\U0001d128' not allowed"}}
 {"call":{"fn":"alabel","text":[120,119134]},"want":{"ok":null,"kind":"IDNAError","message":"Label must be in Normalization Form C"}}
 {"call":{"fn":"alabel","text":[119134]},"want":{"ok":null,"kind":"IDNAError","message":"Label must be in Normalization Form C"}}
 {"call":{"fn":"alabel","text":[1488,119134]},"want":{"ok":null,"kind":"IDNAError","message":"Label must be in Normalization Form C"}}
@@ -2104,7 +2122,7 @@
 {"call":{"fn":"remap","text":[120,120400,121]},"want":{"ok":[120,117,121],"kind":"","message":""}}
 {"call":{"fn":"remap","text":[120,120800,121]},"want":{"ok":[120,56,121],"kind":"","message":""}}
 {"call":{"fn":"remap","text":[120,121200,121]},"want":{"ok":[120,121200,121],"kind":"","message":""}}
-{"call":{"fn":"remap","text":[120,121600,121]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+1DB00 not allowed at position 2 in 'x\\U0001db00y'"}}
+{"call":{"fn":"remap","text":[120,121600,121]},"want":{"ok":[120,121600,121],"kind":"","message":""}}
 {"call":{"fn":"remap","text":[120,122000,121]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+1DC90 not allowed at position 2 in 'x\\U0001dc90y'"}}
 {"call":{"fn":"remap","text":[120,122400,121]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+1DE20 not allowed at position 2 in 'x\\U0001de20y'"}}
 {"call":{"fn":"remap","text":[120,122800,121]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+1DFB0 not allowed at position 2 in 'x\\U0001dfb0y'"}}
@@ -2388,18 +2406,18 @@
 {"call":{"fn":"remap","text":[120,247088,121]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+3C530 not allowed at position 2 in 'x\\U0003c530y'"}}
 {"call":{"fn":"remap","text":[120,248088,121]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+3C918 not allowed at position 2 in 'x\\U0003c918y'"}}
 {"call":{"fn":"remap","text":[120,249088,121]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+3CD00 not allowed at position 2 in 'x\\U0003cd00y'"}}
-{"call":{"fn":"remap","text":[120,250088,121]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+3D0E8 not allowed at position 2 in 'x\\U0003d0e8y'"}}
-{"call":{"fn":"remap","text":[120,251088,121]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+3D4D0 not allowed at position 2 in 'x\\U0003d4d0y'"}}
-{"call":{"fn":"remap","text":[120,252088,121]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+3D8B8 not allowed at position 2 in 'x\\U0003d8b8y'"}}
-{"call":{"fn":"remap","text":[120,253088,121]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+3DCA0 not allowed at position 2 in 'x\\U0003dca0y'"}}
-{"call":{"fn":"remap","text":[120,254088,121]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+3E088 not allowed at position 2 in 'x\\U0003e088y'"}}
-{"call":{"fn":"remap","text":[120,255088,121]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+3E470 not allowed at position 2 in 'x\\U0003e470y'"}}
-{"call":{"fn":"remap","text":[120,256088,121]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+3E858 not allowed at position 2 in 'x\\U0003e858y'"}}
-{"call":{"fn":"remap","text":[120,257088,121]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+3EC40 not allowed at position 2 in 'x\\U0003ec40y'"}}
-{"call":{"fn":"remap","text":[120,258088,121]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+3F028 not allowed at position 2 in 'x\\U0003f028y'"}}
-{"call":{"fn":"remap","text":[120,259088,121]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+3F410 not allowed at position 2 in 'x\\U0003f410y'"}}
-{"call":{"fn":"remap","text":[120,260088,121]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+3F7F8 not allowed at position 2 in 'x\\U0003f7f8y'"}}
-{"call":{"fn":"remap","text":[120,261088,121]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+3FBE0 not allowed at position 2 in 'x\\U0003fbe0y'"}}
+{"call":{"fn":"remap","text":[120,250088,121]},"want":{"ok":[120,250088,121],"kind":"","message":""}}
+{"call":{"fn":"remap","text":[120,251088,121]},"want":{"ok":[120,251088,121],"kind":"","message":""}}
+{"call":{"fn":"remap","text":[120,252088,121]},"want":{"ok":[120,252088,121],"kind":"","message":""}}
+{"call":{"fn":"remap","text":[120,253088,121]},"want":{"ok":[120,253088,121],"kind":"","message":""}}
+{"call":{"fn":"remap","text":[120,254088,121]},"want":{"ok":[120,254088,121],"kind":"","message":""}}
+{"call":{"fn":"remap","text":[120,255088,121]},"want":{"ok":[120,255088,121],"kind":"","message":""}}
+{"call":{"fn":"remap","text":[120,256088,121]},"want":{"ok":[120,256088,121],"kind":"","message":""}}
+{"call":{"fn":"remap","text":[120,257088,121]},"want":{"ok":[120,257088,121],"kind":"","message":""}}
+{"call":{"fn":"remap","text":[120,258088,121]},"want":{"ok":[120,258088,121],"kind":"","message":""}}
+{"call":{"fn":"remap","text":[120,259088,121]},"want":{"ok":[120,259088,121],"kind":"","message":""}}
+{"call":{"fn":"remap","text":[120,260088,121]},"want":{"ok":[120,260088,121],"kind":"","message":""}}
+{"call":{"fn":"remap","text":[120,261088,121]},"want":{"ok":[120,261088,121],"kind":"","message":""}}
 {"call":{"fn":"remap","text":[120,262088,121]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+3FFC8 not allowed at position 2 in 'x\\U0003ffc8y'"}}
 {"call":{"fn":"remap","text":[120,263088,121]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+403B0 not allowed at position 2 in 'x\\U000403b0y'"}}
 {"call":{"fn":"remap","text":[120,264088,121]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+40798 not allowed at position 2 in 'x\\U00040798y'"}}
@@ -3339,9 +3357,9 @@
 {"call":{"fn":"encode","text":[1633,1777]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Codepoint U+0661 not allowed at position 1 in '١۱'"}}
 {"call":{"fn":"ulabel","text":[1633,1634]},"want":{"ok":null,"kind":"IDNABidiError","message":"First codepoint in label '١٢' must be directionality L, R or AL"}}
 {"call":{"fn":"encode","text":[1633,1634]},"want":{"ok":null,"kind":"IDNABidiError","message":"First codepoint in label '١٢' must be directionality L, R or AL"}}
-{"call":{"fn":"alabel","text":[120,8204,121]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 2 in 'x\\u200cy'"}}
-{"call":{"fn":"ulabel","text":[120,8204,121]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 2 in 'x\\u200cy'"}}
-{"call":{"fn":"encode","text":[120,8204,121]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 2 in 'x\\u200cy'"}}
+{"call":{"fn":"alabel","text":[120,8204,121]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 2 in 'x\\u200cy'"}}
+{"call":{"fn":"ulabel","text":[120,8204,121]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 2 in 'x\\u200cy'"}}
+{"call":{"fn":"encode","text":[120,8204,121]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 2 in 'x\\u200cy'"}}
 {"call":{"fn":"alabel","text":[2325,2381,8204]},"want":{"ok":[120,110,45,45,49,49,98,54,105,118,49,52,101],"kind":"","message":""}}
 {"call":{"fn":"ulabel","text":[2325,2381,8204]},"want":{"ok":[2325,2381,8204],"kind":"","message":""}}
 {"call":{"fn":"encode","text":[2325,2381,8204]},"want":{"ok":[120,110,45,45,49,49,98,54,105,118,49,52,101],"kind":"","message":""}}
@@ -3477,18 +3495,18 @@
 {"call":{"fn":"ulabel","text":[1641,1633]},"want":{"ok":null,"kind":"IDNABidiError","message":"First codepoint in label '٩١' must be directionality L, R or AL"}}
 {"call":{"fn":"encode","text":[1641,1633]},"want":{"ok":null,"kind":"IDNABidiError","message":"First codepoint in label '٩١' must be directionality L, R or AL"}}
 {"call":{"fn":"ulabel","text":[1785,1777]},"want":{"ok":[1785,1777],"kind":"","message":""}}
-{"call":{"fn":"alabel","text":[2325,8205]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200D at position 2 in 'क\\u200d'"}}
-{"call":{"fn":"ulabel","text":[2325,8205]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200D at position 2 in 'क\\u200d'"}}
-{"call":{"fn":"encode","text":[2325,8205]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200D at position 2 in 'क\\u200d'"}}
-{"call":{"fn":"alabel","text":[8205]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200D at position 1 in '\\u200d'"}}
-{"call":{"fn":"ulabel","text":[8205]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200D at position 1 in '\\u200d'"}}
-{"call":{"fn":"encode","text":[8205]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200D at position 1 in '\\u200d'"}}
-{"call":{"fn":"alabel","text":[8204,1576]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 1 in '\\u200cب'"}}
-{"call":{"fn":"ulabel","text":[8204,1576]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 1 in '\\u200cب'"}}
-{"call":{"fn":"encode","text":[8204,1576]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 1 in '\\u200cب'"}}
-{"call":{"fn":"alabel","text":[1576,8204]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 2 in 'ب\\u200c'"}}
-{"call":{"fn":"ulabel","text":[1576,8204]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 2 in 'ب\\u200c'"}}
-{"call":{"fn":"encode","text":[1576,8204]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 2 in 'ب\\u200c'"}}
+{"call":{"fn":"alabel","text":[2325,8205]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200D not allowed at position 2 in 'क\\u200d'"}}
+{"call":{"fn":"ulabel","text":[2325,8205]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200D not allowed at position 2 in 'क\\u200d'"}}
+{"call":{"fn":"encode","text":[2325,8205]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200D not allowed at position 2 in 'क\\u200d'"}}
+{"call":{"fn":"alabel","text":[8205]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200D not allowed at position 1 in '\\u200d'"}}
+{"call":{"fn":"ulabel","text":[8205]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200D not allowed at position 1 in '\\u200d'"}}
+{"call":{"fn":"encode","text":[8205]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200D not allowed at position 1 in '\\u200d'"}}
+{"call":{"fn":"alabel","text":[8204,1576]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 1 in '\\u200cب'"}}
+{"call":{"fn":"ulabel","text":[8204,1576]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 1 in '\\u200cب'"}}
+{"call":{"fn":"encode","text":[8204,1576]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 1 in '\\u200cب'"}}
+{"call":{"fn":"alabel","text":[1576,8204]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 2 in 'ب\\u200c'"}}
+{"call":{"fn":"ulabel","text":[1576,8204]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 2 in 'ب\\u200c'"}}
+{"call":{"fn":"encode","text":[1576,8204]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 2 in 'ب\\u200c'"}}
 {"call":{"fn":"ulabel","text":[1576,1614,8204,1576]},"want":{"ok":[1576,1614,8204,1576],"kind":"","message":""}}
 {"call":{"fn":"ulabel","text":[1576,8204,1575]},"want":{"ok":[1576,8204,1575],"kind":"","message":""}}
 {"call":{"fn":"ulabel","text":[43122,8204,1576]},"want":{"ok":null,"kind":"IDNABidiError","message":"Invalid direction for codepoint at position 3 in a left-to-right label"}}
@@ -5833,6 +5851,34 @@
 {"call":{"fn":"contexto","text":[1475,12539,1475],"pos":1},"want":{"ok":[0],"kind":"","message":""}}
 {"call":{"fn":"contexto","text":[1475,1633,1475],"pos":1},"want":{"ok":[1],"kind":"","message":""}}
 {"call":{"fn":"contexto","text":[1475,1777,1475],"pos":1},"want":{"ok":[1],"kind":"","message":""}}
+{"call":{"fn":"contexto","text":[1480]},"want":{"ok":[0],"kind":"","message":""}}
+{"call":{"fn":"contextj","text":[1480,8204,1576],"pos":1},"want":{"ok":null,"kind":"ValueError","message":"no such name"}}
+{"call":{"fn":"contextj","text":[1576,8204,1480],"pos":1},"want":{"ok":[0],"kind":"","message":""}}
+{"call":{"fn":"contextj","text":[1480,8205],"pos":1},"want":{"ok":null,"kind":"ValueError","message":"no such name"}}
+{"call":{"fn":"bidi","text":[1488,1480]},"want":{"ok":null,"kind":"IDNABidiError","message":"Unknown directionality in label 'א\\u05c8' at position 2"}}
+{"call":{"fn":"bidi","text":[1480,1488]},"want":{"ok":null,"kind":"IDNABidiError","message":"Unknown directionality in label '\\u05c8א' at position 1"}}
+{"call":{"fn":"bidi","text":[97,1480,1488]},"want":{"ok":null,"kind":"IDNABidiError","message":"Unknown directionality in label 'a\\u05c8א' at position 2"}}
+{"call":{"fn":"contexto","text":[1480,183,1480],"pos":1},"want":{"ok":[0],"kind":"","message":""}}
+{"call":{"fn":"contexto","text":[1480,885,1480],"pos":1},"want":{"ok":[0],"kind":"","message":""}}
+{"call":{"fn":"contexto","text":[1480,1523,1480],"pos":1},"want":{"ok":[1],"kind":"","message":""}}
+{"call":{"fn":"contexto","text":[1480,1524,1480],"pos":1},"want":{"ok":[1],"kind":"","message":""}}
+{"call":{"fn":"contexto","text":[1480,12539,1480],"pos":1},"want":{"ok":[0],"kind":"","message":""}}
+{"call":{"fn":"contexto","text":[1480,1633,1480],"pos":1},"want":{"ok":[1],"kind":"","message":""}}
+{"call":{"fn":"contexto","text":[1480,1777,1480],"pos":1},"want":{"ok":[1],"kind":"","message":""}}
+{"call":{"fn":"contexto","text":[1481]},"want":{"ok":[0],"kind":"","message":""}}
+{"call":{"fn":"contextj","text":[1481,8204,1576],"pos":1},"want":{"ok":null,"kind":"ValueError","message":"no such name"}}
+{"call":{"fn":"contextj","text":[1576,8204,1481],"pos":1},"want":{"ok":[0],"kind":"","message":""}}
+{"call":{"fn":"contextj","text":[1481,8205],"pos":1},"want":{"ok":null,"kind":"ValueError","message":"no such name"}}
+{"call":{"fn":"bidi","text":[1488,1481]},"want":{"ok":null,"kind":"IDNABidiError","message":"Unknown directionality in label 'א\\u05c9' at position 2"}}
+{"call":{"fn":"bidi","text":[1481,1488]},"want":{"ok":null,"kind":"IDNABidiError","message":"Unknown directionality in label '\\u05c9א' at position 1"}}
+{"call":{"fn":"bidi","text":[97,1481,1488]},"want":{"ok":null,"kind":"IDNABidiError","message":"Unknown directionality in label 'a\\u05c9א' at position 2"}}
+{"call":{"fn":"contexto","text":[1481,183,1481],"pos":1},"want":{"ok":[0],"kind":"","message":""}}
+{"call":{"fn":"contexto","text":[1481,885,1481],"pos":1},"want":{"ok":[0],"kind":"","message":""}}
+{"call":{"fn":"contexto","text":[1481,1523,1481],"pos":1},"want":{"ok":[1],"kind":"","message":""}}
+{"call":{"fn":"contexto","text":[1481,1524,1481],"pos":1},"want":{"ok":[1],"kind":"","message":""}}
+{"call":{"fn":"contexto","text":[1481,12539,1481],"pos":1},"want":{"ok":[0],"kind":"","message":""}}
+{"call":{"fn":"contexto","text":[1481,1633,1481],"pos":1},"want":{"ok":[1],"kind":"","message":""}}
+{"call":{"fn":"contexto","text":[1481,1777,1481],"pos":1},"want":{"ok":[1],"kind":"","message":""}}
 {"call":{"fn":"contexto","text":[1488]},"want":{"ok":[0],"kind":"","message":""}}
 {"call":{"fn":"contextj","text":[1488,8204,1576],"pos":1},"want":{"ok":[0],"kind":"","message":""}}
 {"call":{"fn":"contextj","text":[1576,8204,1488],"pos":1},"want":{"ok":[0],"kind":"","message":""}}
@@ -6541,6 +6587,10 @@
 {"call":{"fn":"contexto","text":[2554,1777,2554],"pos":1},"want":{"ok":[1],"kind":"","message":""}}
 {"call":{"fn":"contexto","text":[2683]},"want":{"ok":[0],"kind":"","message":""}}
 {"call":{"fn":"contexto","text":[2825,1633,2825],"pos":1},"want":{"ok":[1],"kind":"","message":""}}
+{"call":{"fn":"contexto","text":[2899,1523,2899],"pos":1},"want":{"ok":[0],"kind":"","message":""}}
+{"call":{"fn":"contexto","text":[2899,1524,2899],"pos":1},"want":{"ok":[0],"kind":"","message":""}}
+{"call":{"fn":"contexto","text":[2900,1523,2900],"pos":1},"want":{"ok":[0],"kind":"","message":""}}
+{"call":{"fn":"contexto","text":[2900,1524,2900],"pos":1},"want":{"ok":[0],"kind":"","message":""}}
 {"call":{"fn":"contexto","text":[2968,1524,2968],"pos":1},"want":{"ok":[0],"kind":"","message":""}}
 {"call":{"fn":"contexto","text":[3111,885,3111],"pos":1},"want":{"ok":[0],"kind":"","message":""}}
 {"call":{"fn":"bidi","text":[97,3254,1488]},"want":{"ok":null,"kind":"IDNABidiError","message":"Invalid direction for codepoint at position 3 in a left-to-right label"}}
@@ -6741,34 +6791,6 @@
 {"call":{"fn":"contextj","text":[1576,8204,6540],"pos":1},"want":{"ok":[0],"kind":"","message":""}}
 {"call":{"fn":"contexto","text":[6683]},"want":{"ok":[0],"kind":"","message":""}}
 {"call":{"fn":"contexto","text":[6825,1633,6825],"pos":1},"want":{"ok":[1],"kind":"","message":""}}
-{"call":{"fn":"contexto","text":[6863]},"want":{"ok":[0],"kind":"","message":""}}
-{"call":{"fn":"contextj","text":[6863,8204,1576],"pos":1},"want":{"ok":null,"kind":"ValueError","message":"no such name"}}
-{"call":{"fn":"contextj","text":[1576,8204,6863],"pos":1},"want":{"ok":[0],"kind":"","message":""}}
-{"call":{"fn":"contextj","text":[6863,8205],"pos":1},"want":{"ok":null,"kind":"ValueError","message":"no such name"}}
-{"call":{"fn":"bidi","text":[1488,6863]},"want":{"ok":null,"kind":"IDNABidiError","message":"Unknown directionality in label 'א\\u1acf' at position 2"}}
-{"call":{"fn":"bidi","text":[6863,1488]},"want":{"ok":null,"kind":"IDNABidiError","message":"Unknown directionality in label '\\u1acfא' at position 1"}}
-{"call":{"fn":"bidi","text":[97,6863,1488]},"want":{"ok":null,"kind":"IDNABidiError","message":"Unknown directionality in label 'a\\u1acfא' at position 2"}}
-{"call":{"fn":"contexto","text":[6863,183,6863],"pos":1},"want":{"ok":[0],"kind":"","message":""}}
-{"call":{"fn":"contexto","text":[6863,885,6863],"pos":1},"want":{"ok":[0],"kind":"","message":""}}
-{"call":{"fn":"contexto","text":[6863,1523,6863],"pos":1},"want":{"ok":[0],"kind":"","message":""}}
-{"call":{"fn":"contexto","text":[6863,1524,6863],"pos":1},"want":{"ok":[0],"kind":"","message":""}}
-{"call":{"fn":"contexto","text":[6863,12539,6863],"pos":1},"want":{"ok":[0],"kind":"","message":""}}
-{"call":{"fn":"contexto","text":[6863,1633,6863],"pos":1},"want":{"ok":[1],"kind":"","message":""}}
-{"call":{"fn":"contexto","text":[6863,1777,6863],"pos":1},"want":{"ok":[1],"kind":"","message":""}}
-{"call":{"fn":"contexto","text":[6864]},"want":{"ok":[0],"kind":"","message":""}}
-{"call":{"fn":"contextj","text":[6864,8204,1576],"pos":1},"want":{"ok":null,"kind":"ValueError","message":"no such name"}}
-{"call":{"fn":"contextj","text":[1576,8204,6864],"pos":1},"want":{"ok":[0],"kind":"","message":""}}
-{"call":{"fn":"contextj","text":[6864,8205],"pos":1},"want":{"ok":null,"kind":"ValueError","message":"no such name"}}
-{"call":{"fn":"bidi","text":[1488,6864]},"want":{"ok":null,"kind":"IDNABidiError","message":"Unknown directionality in label 'א\\u1ad0' at position 2"}}
-{"call":{"fn":"bidi","text":[6864,1488]},"want":{"ok":null,"kind":"IDNABidiError","message":"Unknown directionality in label '\\u1ad0א' at position 1"}}
-{"call":{"fn":"bidi","text":[97,6864,1488]},"want":{"ok":null,"kind":"IDNABidiError","message":"Unknown directionality in label 'a\\u1ad0א' at position 2"}}
-{"call":{"fn":"contexto","text":[6864,183,6864],"pos":1},"want":{"ok":[0],"kind":"","message":""}}
-{"call":{"fn":"contexto","text":[6864,885,6864],"pos":1},"want":{"ok":[0],"kind":"","message":""}}
-{"call":{"fn":"contexto","text":[6864,1523,6864],"pos":1},"want":{"ok":[0],"kind":"","message":""}}
-{"call":{"fn":"contexto","text":[6864,1524,6864],"pos":1},"want":{"ok":[0],"kind":"","message":""}}
-{"call":{"fn":"contexto","text":[6864,12539,6864],"pos":1},"want":{"ok":[0],"kind":"","message":""}}
-{"call":{"fn":"contexto","text":[6864,1633,6864],"pos":1},"want":{"ok":[1],"kind":"","message":""}}
-{"call":{"fn":"contexto","text":[6864,1777,6864],"pos":1},"want":{"ok":[1],"kind":"","message":""}}
 {"call":{"fn":"contexto","text":[6968,1524,6968],"pos":1},"want":{"ok":[0],"kind":"","message":""}}
 {"call":{"fn":"contexto","text":[7111,885,7111],"pos":1},"want":{"ok":[0],"kind":"","message":""}}
 {"call":{"fn":"bidi","text":[97,7254,1488]},"want":{"ok":null,"kind":"IDNABidiError","message":"Invalid direction for codepoint at position 3 in a left-to-right label"}}
@@ -8057,6 +8079,34 @@
 {"call":{"fn":"contexto","text":[69318,12539,69318],"pos":1},"want":{"ok":[0],"kind":"","message":""}}
 {"call":{"fn":"contexto","text":[69318,1633,69318],"pos":1},"want":{"ok":[1],"kind":"","message":""}}
 {"call":{"fn":"contexto","text":[69318,1777,69318],"pos":1},"want":{"ok":[1],"kind":"","message":""}}
+{"call":{"fn":"contexto","text":[69337]},"want":{"ok":[0],"kind":"","message":""}}
+{"call":{"fn":"contextj","text":[69337,8204,1576],"pos":1},"want":{"ok":null,"kind":"ValueError","message":"no such name"}}
+{"call":{"fn":"contextj","text":[1576,8204,69337],"pos":1},"want":{"ok":[0],"kind":"","message":""}}
+{"call":{"fn":"contextj","text":[69337,8205],"pos":1},"want":{"ok":null,"kind":"ValueError","message":"no such name"}}
+{"call":{"fn":"bidi","text":[1488,69337]},"want":{"ok":null,"kind":"IDNABidiError","message":"Unknown directionality in label 'א\\U00010ed9' at position 2"}}
+{"call":{"fn":"bidi","text":[69337,1488]},"want":{"ok":null,"kind":"IDNABidiError","message":"Unknown directionality in label '\\U00010ed9א' at position 1"}}
+{"call":{"fn":"bidi","text":[97,69337,1488]},"want":{"ok":null,"kind":"IDNABidiError","message":"Unknown directionality in label 'a\\U00010ed9א' at position 2"}}
+{"call":{"fn":"contexto","text":[69337,183,69337],"pos":1},"want":{"ok":[0],"kind":"","message":""}}
+{"call":{"fn":"contexto","text":[69337,885,69337],"pos":1},"want":{"ok":[0],"kind":"","message":""}}
+{"call":{"fn":"contexto","text":[69337,1523,69337],"pos":1},"want":{"ok":[0],"kind":"","message":""}}
+{"call":{"fn":"contexto","text":[69337,1524,69337],"pos":1},"want":{"ok":[0],"kind":"","message":""}}
+{"call":{"fn":"contexto","text":[69337,12539,69337],"pos":1},"want":{"ok":[0],"kind":"","message":""}}
+{"call":{"fn":"contexto","text":[69337,1633,69337],"pos":1},"want":{"ok":[1],"kind":"","message":""}}
+{"call":{"fn":"contexto","text":[69337,1777,69337],"pos":1},"want":{"ok":[1],"kind":"","message":""}}
+{"call":{"fn":"contexto","text":[69338]},"want":{"ok":[0],"kind":"","message":""}}
+{"call":{"fn":"contextj","text":[69338,8204,1576],"pos":1},"want":{"ok":null,"kind":"ValueError","message":"no such name"}}
+{"call":{"fn":"contextj","text":[1576,8204,69338],"pos":1},"want":{"ok":[0],"kind":"","message":""}}
+{"call":{"fn":"contextj","text":[69338,8205],"pos":1},"want":{"ok":null,"kind":"ValueError","message":"no such name"}}
+{"call":{"fn":"bidi","text":[1488,69338]},"want":{"ok":null,"kind":"IDNABidiError","message":"Unknown directionality in label 'א\\U00010eda' at position 2"}}
+{"call":{"fn":"bidi","text":[69338,1488]},"want":{"ok":null,"kind":"IDNABidiError","message":"Unknown directionality in label '\\U00010edaא' at position 1"}}
+{"call":{"fn":"bidi","text":[97,69338,1488]},"want":{"ok":null,"kind":"IDNABidiError","message":"Unknown directionality in label 'a\\U00010edaא' at position 2"}}
+{"call":{"fn":"contexto","text":[69338,183,69338],"pos":1},"want":{"ok":[0],"kind":"","message":""}}
+{"call":{"fn":"contexto","text":[69338,885,69338],"pos":1},"want":{"ok":[0],"kind":"","message":""}}
+{"call":{"fn":"contexto","text":[69338,1523,69338],"pos":1},"want":{"ok":[0],"kind":"","message":""}}
+{"call":{"fn":"contexto","text":[69338,1524,69338],"pos":1},"want":{"ok":[0],"kind":"","message":""}}
+{"call":{"fn":"contexto","text":[69338,12539,69338],"pos":1},"want":{"ok":[0],"kind":"","message":""}}
+{"call":{"fn":"contexto","text":[69338,1633,69338],"pos":1},"want":{"ok":[1],"kind":"","message":""}}
+{"call":{"fn":"contexto","text":[69338,1777,69338],"pos":1},"want":{"ok":[1],"kind":"","message":""}}
 {"call":{"fn":"bidi","text":[1488,69397]},"want":{"ok":[1],"kind":"","message":""}}
 {"call":{"fn":"contexto","text":[69457]},"want":{"ok":[0],"kind":"","message":""}}
 {"call":{"fn":"contextj","text":[69457,8204,1576],"pos":1},"want":{"ok":[1],"kind":"","message":""}}
@@ -8543,6 +8593,8 @@
 {"call":{"fn":"contextj","text":[1576,8204,122540],"pos":1},"want":{"ok":[0],"kind":"","message":""}}
 {"call":{"fn":"contexto","text":[122683]},"want":{"ok":[0],"kind":"","message":""}}
 {"call":{"fn":"contexto","text":[122825,1633,122825],"pos":1},"want":{"ok":[1],"kind":"","message":""}}
+{"call":{"fn":"contexto","text":[122867,885,122867],"pos":1},"want":{"ok":[1],"kind":"","message":""}}
+{"call":{"fn":"contexto","text":[122868,885,122868],"pos":1},"want":{"ok":[1],"kind":"","message":""}}
 {"call":{"fn":"contexto","text":[122968,1524,122968],"pos":1},"want":{"ok":[0],"kind":"","message":""}}
 {"call":{"fn":"contexto","text":[123111,885,123111],"pos":1},"want":{"ok":[0],"kind":"","message":""}}
 {"call":{"fn":"bidi","text":[97,123254,1488]},"want":{"ok":null,"kind":"IDNABidiError","message":"Unknown directionality in label 'a\\U0001e176א' at position 2"}}
@@ -9160,17 +9212,17 @@
 {"call":{"fn":"ulabel","text":[45,122,2325,120,110,45,45,252,120,110,45,45]},"want":{"ok":null,"kind":"IDNAError","message":"Label must not start or end with a hyphen"}}
 {"call":{"fn":"encode","text":[183,769,769,1488,97,57,8204,252,2325,1488,108]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Codepoint U+00B7 not allowed at position 1 in '·́́אa9\\u200cüकאl'"}}
 {"call":{"fn":"ulabel","text":[252,2381,46,45,1488,8204,769,45,1488,252]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+002E at position 3 of 'ü्.-א\\u200ć-אü' not allowed"}}
-{"call":{"fn":"encode","text":[108,12290,252,8204,2325,108,57]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 2 in 'ü\\u200cकl9'"}}
-{"call":{"fn":"ulabel","text":[57,48,8204,57]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 3 in '90\\u200c9'"}}
+{"call":{"fn":"encode","text":[108,12290,252,8204,2325,108,57]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 2 in 'ü\\u200cकl9'"}}
+{"call":{"fn":"ulabel","text":[57,48,8204,57]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 3 in '90\\u200c9'"}}
 {"call":{"fn":"encode","text":[120,110,45,45,2325,2381,45,183,120,110,45,45,46,12290,46]},"want":{"ok":null,"kind":"IDNAError","message":"Label has disallowed hyphens in 3rd and 4th position"}}
 {"call":{"fn":"ulabel","text":null},"want":{"ok":null,"kind":"IDNAError","message":"Empty Label"}}
 {"call":{"fn":"encode","text":null},"want":{"ok":null,"kind":"IDNAError","message":"Empty domain"}}
-{"call":{"fn":"alabel","text":[8204,12290,46,252,12290,97,252,48,108,97]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 1 in '\\u200c。.ü。aü0la'"}}
+{"call":{"fn":"alabel","text":[8204,12290,46,252,12290,97,252,48,108,97]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 1 in '\\u200c。.ü。aü0la'"}}
 {"call":{"fn":"ulabel","text":[45,120,110,45,45,8204,97,183,183,769,12290,2381,122]},"want":{"ok":null,"kind":"IDNAError","message":"Label must not start or end with a hyphen"}}
 {"call":{"fn":"encode","text":[183,252,45,252,252,8204,2325,97,46,1488]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Codepoint U+00B7 not allowed at position 1 in '·ü-üü\\u200cकa'"}}
 {"call":{"fn":"ulabel","text":[120,110,45,45,45,46,769,183,8204,45,769,183,8204]},"want":{"ok":null,"kind":"IDNAError","message":"Label has disallowed hyphens in 3rd and 4th position"}}
 {"call":{"fn":"encode","text":[12290,120,110,45,45,97,2381,2381]},"want":{"ok":null,"kind":"IDNAError","message":"Empty Label"}}
-{"call":{"fn":"alabel","text":[8204,46,1488,183,1488]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 1 in '\\u200c.א·א'"}}
+{"call":{"fn":"alabel","text":[8204,46,1488,183,1488]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 1 in '\\u200c.א·א'"}}
 {"call":{"fn":"ulabel","text":[252,122,769,122,120,110,45,45,8204,769,2381,8204,46]},"want":{"ok":null,"kind":"IDNAError","message":"Label must be in Normalization Form C"}}
 {"call":{"fn":"encode","text":[2381,122,57,2381,769,97,46,122,769,252]},"want":{"ok":null,"kind":"IDNAError","message":"Label begins with an illegal combining character"}}
 {"call":{"fn":"alabel","text":null},"want":{"ok":null,"kind":"IDNAError","message":"Empty Label"}}
@@ -9180,10 +9232,10 @@
 {"call":{"fn":"ulabel","text":[1488,122,2325,769]},"want":{"ok":null,"kind":"IDNABidiError","message":"Invalid direction for codepoint at position 2 in a right-to-left label"}}
 {"call":{"fn":"encode","text":[1488,48,183,108,1488]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Codepoint U+00B7 not allowed at position 3 in 'א0·lא'"}}
 {"call":{"fn":"decode","text":[120,110,45,45,122]},"want":{"ok":null,"kind":"IDNAError","message":"Invalid A-label"}}
-{"call":{"fn":"alabel","text":[108,2325,2381,108,57,48,108,8204]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 8 in 'lक्l90l\\u200c'"}}
-{"call":{"fn":"ulabel","text":[8204,108,108]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 1 in '\\u200cll'"}}
+{"call":{"fn":"alabel","text":[108,2325,2381,108,57,48,108,8204]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 8 in 'lक्l90l\\u200c'"}}
+{"call":{"fn":"ulabel","text":[8204,108,108]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 1 in '\\u200cll'"}}
 {"call":{"fn":"encode","text":[120,110,45,45,2325,12290,46,48]},"want":{"ok":null,"kind":"IDNAError","message":"Label has disallowed hyphens in 3rd and 4th position"}}
-{"call":{"fn":"ulabel","text":[8204,120,110,45,45,183]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 1 in '\\u200cxn--·'"}}
+{"call":{"fn":"ulabel","text":[8204,120,110,45,45,183]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 1 in '\\u200cxn--·'"}}
 {"call":{"fn":"ulabel","text":[46,45,2325,48,46,97,120,110,45,45]},"want":{"ok":null,"kind":"IDNAError","message":"Label must not start or end with a hyphen"}}
 {"call":{"fn":"encode","text":[12290,108]},"want":{"ok":null,"kind":"IDNAError","message":"Empty Label"}}
 {"call":{"fn":"decode","text":null},"want":{"ok":null,"kind":"IDNAError","message":"Empty domain"}}
@@ -9195,10 +9247,10 @@
 {"call":{"fn":"ulabel","text":[45,252,252,252,46,769,108,769,252,1488,183]},"want":{"ok":null,"kind":"IDNAError","message":"Label must be in Normalization Form C"}}
 {"call":{"fn":"encode","text":null},"want":{"ok":null,"kind":"IDNAError","message":"Empty domain"}}
 {"call":{"fn":"ulabel","text":[57,183,2381,183]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Codepoint U+00B7 not allowed at position 2 in '9·्·'"}}
-{"call":{"fn":"encode","text":[8204,252,183,183]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 1 in '\\u200cü··'"}}
+{"call":{"fn":"encode","text":[8204,252,183,183]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 1 in '\\u200cü··'"}}
 {"call":{"fn":"alabel","text":[183,46,183,12290,2381,12290,2325,183,8204,2381]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Codepoint U+00B7 not allowed at position 1 in '·.·。्。क·\\u200c्'"}}
 {"call":{"fn":"ulabel","text":[48,183,183,122,46,120,110,45,45,1488,12290,183,12290,1488]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Codepoint U+00B7 not allowed at position 2 in '0··z.xn--א。·。א'"}}
-{"call":{"fn":"encode","text":[97,8204,57,769,120,110,45,45,2381]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 2 in 'a\\u200c9́xn--्'"}}
+{"call":{"fn":"encode","text":[97,8204,57,769,120,110,45,45,2381]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 2 in 'a\\u200c9́xn--्'"}}
 {"call":{"fn":"ulabel","text":null},"want":{"ok":null,"kind":"IDNAError","message":"Empty Label"}}
 {"call":{"fn":"alabel","text":[48]},"want":{"ok":[48],"kind":"","message":""}}
 {"call":{"fn":"ulabel","text":[183,769,183,769,12290,46,12290,2325,122,183]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Codepoint U+00B7 not allowed at position 1 in '·́·́。.。कz·'"}}
@@ -9220,8 +9272,8 @@
 {"call":{"fn":"encode","text":null},"want":{"ok":null,"kind":"IDNAError","message":"Empty domain"}}
 {"call":{"fn":"alabel","text":[48]},"want":{"ok":[48],"kind":"","message":""}}
 {"call":{"fn":"ulabel","text":[769,108]},"want":{"ok":null,"kind":"IDNAError","message":"Label begins with an illegal combining character"}}
-{"call":{"fn":"encode","text":[8204,122,48]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 1 in '\\u200cz0'"}}
-{"call":{"fn":"alabel","text":[8204,46,183,97,108]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 1 in '\\u200c.·al'"}}
+{"call":{"fn":"encode","text":[8204,122,48]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 1 in '\\u200cz0'"}}
+{"call":{"fn":"alabel","text":[8204,46,183,97,108]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 1 in '\\u200c.·al'"}}
 {"call":{"fn":"ulabel","text":[122,108,108,108,120,110,45,45,252,2381,48,769,1488,183]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Codepoint U+00B7 not allowed at position 14 in 'zlllxn--ü्0́א·'"}}
 {"call":{"fn":"encode","text":[12290,183,183]},"want":{"ok":null,"kind":"IDNAError","message":"Empty Label"}}
 {"call":{"fn":"decode","text":null},"want":{"ok":null,"kind":"IDNAError","message":"Empty domain"}}
@@ -9236,7 +9288,7 @@
 {"call":{"fn":"ulabel","text":[12290,12290,2381,46,12290]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+3002 at position 1 of '。。्.。' not allowed"}}
 {"call":{"fn":"encode","text":[120,110,45,45,122,183,2325,120,110,45,45,2381,45,57,120,110,45,45,48,46]},"want":{"ok":null,"kind":"IDNAError","message":"Label has disallowed hyphens in 3rd and 4th position"}}
 {"call":{"fn":"alabel","text":[120,110,45,45,97,122,120,110,45,45,252,57,97]},"want":{"ok":null,"kind":"IDNAError","message":"Label has disallowed hyphens in 3rd and 4th position"}}
-{"call":{"fn":"ulabel","text":[8204]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 1 in '\\u200c'"}}
+{"call":{"fn":"ulabel","text":[8204]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 1 in '\\u200c'"}}
 {"call":{"fn":"ulabel","text":[2381,769,183,97,122,183,97,108,122]},"want":{"ok":null,"kind":"IDNAError","message":"Label begins with an illegal combining character"}}
 {"call":{"fn":"encode","text":[769,8204,12290,45,108,2381,120,110,45,45,2325,2381,120,110,45,45,48]},"want":{"ok":null,"kind":"IDNAError","message":"Label begins with an illegal combining character"}}
 {"call":{"fn":"ulabel","text":[46,46,122,1488,12290,2325,183,12290,12290,122]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+002E at position 1 of '..zא。क·。。z' not allowed"}}
@@ -9248,19 +9300,19 @@
 {"call":{"fn":"encode","text":[46]},"want":{"ok":null,"kind":"IDNAError","message":"Empty Label"}}
 {"call":{"fn":"ulabel","text":[97,252,45,8204,2381,46,46,120,110,45,45]},"want":{"ok":null,"kind":"IDNAError","message":"Label must not start or end with a hyphen"}}
 {"call":{"fn":"encode","text":[97,2381,252,183,48,183]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Codepoint U+00B7 not allowed at position 4 in 'a्ü·0·'"}}
-{"call":{"fn":"ulabel","text":[252,45,252,45,1488,108,8204]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 7 in 'ü-ü-אl\\u200c'"}}
+{"call":{"fn":"ulabel","text":[252,45,252,45,1488,108,8204]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 7 in 'ü-ü-אl\\u200c'"}}
 {"call":{"fn":"encode","text":null},"want":{"ok":null,"kind":"IDNAError","message":"Empty domain"}}
 {"call":{"fn":"decode","text":[108]},"want":{"ok":[108],"kind":"","message":""}}
-{"call":{"fn":"alabel","text":[8204,97]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 1 in '\\u200ca'"}}
+{"call":{"fn":"alabel","text":[8204,97]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 1 in '\\u200ca'"}}
 {"call":{"fn":"ulabel","text":null},"want":{"ok":null,"kind":"IDNAError","message":"Empty Label"}}
 {"call":{"fn":"encode","text":[252,769]},"want":{"ok":null,"kind":"IDNAError","message":"Label must be in Normalization Form C"}}
 {"call":{"fn":"ulabel","text":[183,48,252,122,252,57,2381,8204,183,769]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Codepoint U+00B7 not allowed at position 1 in '·0üzü9्\\u200c·́'"}}
 {"call":{"fn":"encode","text":[122,108,45,108,57,120,110,45,45,120,110,45,45,252,120,110,45,45]},"want":{"ok":null,"kind":"IDNAError","message":"Label must not start or end with a hyphen"}}
 {"call":{"fn":"ulabel","text":[120,110,45,45]},"want":{"ok":null,"kind":"IDNAError","message":"Malformed A-label, no Punycode eligible content found"}}
 {"call":{"fn":"encode","text":[45,46,57,2381,57,769,97,769,45,1488]},"want":{"ok":null,"kind":"IDNAError","message":"Label must not start or end with a hyphen"}}
-{"call":{"fn":"alabel","text":[8204,45,97,183,57]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 1 in '\\u200c-a·9'"}}
+{"call":{"fn":"alabel","text":[8204,45,97,183,57]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 1 in '\\u200c-a·9'"}}
 {"call":{"fn":"encode","text":[120,110,45,45,120,110,45,45,1488,122,1488,57,252,769]},"want":{"ok":null,"kind":"IDNAError","message":"Label must be in Normalization Form C"}}
-{"call":{"fn":"alabel","text":[8204]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 1 in '\\u200c'"}}
+{"call":{"fn":"alabel","text":[8204]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 1 in '\\u200c'"}}
 {"call":{"fn":"ulabel","text":null},"want":{"ok":null,"kind":"IDNAError","message":"Empty Label"}}
 {"call":{"fn":"encode","text":[97,46,769,2325,252,2325,252,769,57]},"want":{"ok":null,"kind":"IDNAError","message":"Label must be in Normalization Form C"}}
 {"call":{"fn":"ulabel","text":[2381,1488,97,57,46]},"want":{"ok":null,"kind":"IDNAError","message":"Label begins with an illegal combining character"}}
@@ -9285,15 +9337,15 @@
 {"call":{"fn":"encode","text":[120,110,45,45,2325,8204,8204,8204]},"want":{"ok":null,"kind":"IDNAError","message":"Label has disallowed hyphens in 3rd and 4th position"}}
 {"call":{"fn":"ulabel","text":[1488,97,122,122,252,769,8204,183]},"want":{"ok":null,"kind":"IDNAError","message":"Label must be in Normalization Form C"}}
 {"call":{"fn":"encode","text":[57,120,110,45,45]},"want":{"ok":null,"kind":"IDNAError","message":"Label must not start or end with a hyphen"}}
-{"call":{"fn":"alabel","text":[8204,1488]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 1 in '\\u200cא'"}}
+{"call":{"fn":"alabel","text":[8204,1488]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 1 in '\\u200cא'"}}
 {"call":{"fn":"ulabel","text":[769,12290,97,45,12290]},"want":{"ok":null,"kind":"IDNAError","message":"Label begins with an illegal combining character"}}
 {"call":{"fn":"encode","text":[183,97,769,12290,120,110,45,45,183,8204,183,46,252,2325]},"want":{"ok":null,"kind":"IDNAError","message":"Label must be in Normalization Form C"}}
 {"call":{"fn":"decode","text":null},"want":{"ok":null,"kind":"IDNAError","message":"Empty domain"}}
 {"call":{"fn":"ulabel","text":null},"want":{"ok":null,"kind":"IDNAError","message":"Empty Label"}}
 {"call":{"fn":"encode","text":[12290,97,46]},"want":{"ok":null,"kind":"IDNAError","message":"Empty Label"}}
 {"call":{"fn":"ulabel","text":[2325,252,45]},"want":{"ok":null,"kind":"IDNAError","message":"Label must not start or end with a hyphen"}}
-{"call":{"fn":"encode","text":[122,48,48,8204,1488,1488,12290,769,122,12290,57]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 4 in 'z00\\u200cאא'"}}
-{"call":{"fn":"alabel","text":[57,97,122,8204,48,120,110,45,45,120,110,45,45,48]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 4 in '9az\\u200c0xn--xn--0'"}}
+{"call":{"fn":"encode","text":[122,48,48,8204,1488,1488,12290,769,122,12290,57]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 4 in 'z00\\u200cאא'"}}
+{"call":{"fn":"alabel","text":[57,97,122,8204,48,120,110,45,45,120,110,45,45,48]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 4 in '9az\\u200c0xn--xn--0'"}}
 {"call":{"fn":"encode","text":[2325,2325,12290,12290,2325,108,8204,122,48,8204]},"want":{"ok":null,"kind":"IDNAError","message":"Empty Label"}}
 {"call":{"fn":"alabel","text":[120,110,45,45,97,57,1488,97]},"want":{"ok":null,"kind":"IDNAError","message":"Label has disallowed hyphens in 3rd and 4th position"}}
 {"call":{"fn":"ulabel","text":[183]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Codepoint U+00B7 not allowed at position 1 in '·'"}}
@@ -9304,10 +9356,10 @@
 {"call":{"fn":"alabel","text":[122,46,120,110,45,45,2325,183,45,46,97,45]},"want":{"ok":null,"kind":"IDNAError","message":"Label must not start or end with a hyphen"}}
 {"call":{"fn":"ulabel","text":[252,108,57,45]},"want":{"ok":null,"kind":"IDNAError","message":"Label must not start or end with a hyphen"}}
 {"call":{"fn":"encode","text":[45,48,46,12290,122,8204,183,45,769,57,57]},"want":{"ok":null,"kind":"IDNAError","message":"Label must not start or end with a hyphen"}}
-{"call":{"fn":"ulabel","text":[8204,183,120,110,45,45,46,97,122,2325,183]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 1 in '\\u200c·xn--.azक·'"}}
+{"call":{"fn":"ulabel","text":[8204,183,120,110,45,45,46,97,122,2325,183]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 1 in '\\u200c·xn--.azक·'"}}
 {"call":{"fn":"encode","text":[1488,120,110,45,45,252,2381,12290,2381]},"want":{"ok":null,"kind":"IDNABidiError","message":"Invalid direction for codepoint at position 2 in a right-to-left label"}}
 {"call":{"fn":"ulabel","text":null},"want":{"ok":null,"kind":"IDNAError","message":"Empty Label"}}
-{"call":{"fn":"ulabel","text":[8204,46,45,57,108,252,45,252,8204,97]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 1 in '\\u200c.-9lü-ü\\u200ca'"}}
+{"call":{"fn":"ulabel","text":[8204,46,45,57,108,252,45,252,8204,97]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 1 in '\\u200c.-9lü-ü\\u200ca'"}}
 {"call":{"fn":"encode","text":[45,1488]},"want":{"ok":null,"kind":"IDNAError","message":"Label must not start or end with a hyphen"}}
 {"call":{"fn":"alabel","text":[2325,108,12290,57,122,45]},"want":{"ok":null,"kind":"IDNAError","message":"Label must not start or end with a hyphen"}}
 {"call":{"fn":"ulabel","text":[12290,2325]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+3002 at position 1 of '。क' not allowed"}}
@@ -9326,31 +9378,31 @@
 {"call":{"fn":"decode","text":[122,97]},"want":{"ok":[122,97],"kind":"","message":""}}
 {"call":{"fn":"alabel","text":null},"want":{"ok":null,"kind":"IDNAError","message":"Empty Label"}}
 {"call":{"fn":"ulabel","text":null},"want":{"ok":null,"kind":"IDNAError","message":"Empty Label"}}
-{"call":{"fn":"encode","text":[252,57,48,46,8204,12290,46,2381]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 1 in '\\u200c'"}}
+{"call":{"fn":"encode","text":[252,57,48,46,8204,12290,46,2381]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 1 in '\\u200c'"}}
 {"call":{"fn":"alabel","text":[120,110,45,45,769,769,46,2325,120,110,45,45,12290,183,252,122]},"want":{"ok":null,"kind":"IDNAError","message":"Label has disallowed hyphens in 3rd and 4th position"}}
 {"call":{"fn":"ulabel","text":[48,48,46,2325,2325,252]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+002E at position 3 of '00.ककü' not allowed"}}
 {"call":{"fn":"encode","text":[183,122,8204,45]},"want":{"ok":null,"kind":"IDNAError","message":"Label must not start or end with a hyphen"}}
 {"call":{"fn":"alabel","text":[45,46,2381,2381,57,45,8204]},"want":{"ok":null,"kind":"IDNAError","message":"Label must not start or end with a hyphen"}}
 {"call":{"fn":"ulabel","text":[2325,769,2325,108,183,48,120,110,45,45,183,12290]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Codepoint U+00B7 not allowed at position 5 in 'क́कl·0xn--·。'"}}
-{"call":{"fn":"encode","text":[8204,46,2381,252,2325,183,12290,2381,57,2381]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 1 in '\\u200c'"}}
+{"call":{"fn":"encode","text":[8204,46,2381,252,2325,183,12290,2381,57,2381]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 1 in '\\u200c'"}}
 {"call":{"fn":"alabel","text":[120,110,45,45,183,769,97,183,252]},"want":{"ok":null,"kind":"IDNAError","message":"Label has disallowed hyphens in 3rd and 4th position"}}
 {"call":{"fn":"ulabel","text":[122,45,57,57,2325,48,769,57,46]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+002E at position 9 of 'z-99क0́9.' not allowed"}}
 {"call":{"fn":"encode","text":[12290,48]},"want":{"ok":null,"kind":"IDNAError","message":"Empty Label"}}
 {"call":{"fn":"alabel","text":[120,110,45,45,48,2381,120,110,45,45,45]},"want":{"ok":null,"kind":"IDNAError","message":"Label has disallowed hyphens in 3rd and 4th position"}}
 {"call":{"fn":"ulabel","text":[12290]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+3002 at position 1 of '。' not allowed"}}
 {"call":{"fn":"encode","text":[2381,183,183,48]},"want":{"ok":null,"kind":"IDNAError","message":"Label begins with an illegal combining character"}}
-{"call":{"fn":"ulabel","text":[48,2325,2381,252,122,8204,2325,2325,2381,8204]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 6 in '0क्üz\\u200cकक्\\u200c'"}}
+{"call":{"fn":"ulabel","text":[48,2325,2381,252,122,8204,2325,2325,2381,8204]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 6 in '0क्üz\\u200cकक्\\u200c'"}}
 {"call":{"fn":"encode","text":[120,110,45,45,8204,45,57,108,769,12290,48,45,46]},"want":{"ok":null,"kind":"IDNAError","message":"Label must be in Normalization Form C"}}
 {"call":{"fn":"ulabel","text":[8204,252,97,769,108,1488,183,252,8204]},"want":{"ok":null,"kind":"IDNAError","message":"Label must be in Normalization Form C"}}
 {"call":{"fn":"encode","text":[48,46,108,45]},"want":{"ok":null,"kind":"IDNAError","message":"Label must not start or end with a hyphen"}}
 {"call":{"fn":"alabel","text":null},"want":{"ok":null,"kind":"IDNAError","message":"Empty Label"}}
 {"call":{"fn":"ulabel","text":[183,48,2381,2381,252,252,12290,769]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Codepoint U+00B7 not allowed at position 1 in '·0््üü。́'"}}
-{"call":{"fn":"alabel","text":[48,120,110,45,45,48,45,120,110,45,45,97,252,8204]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 14 in '0xn--0-xn--aü\\u200c'"}}
+{"call":{"fn":"alabel","text":[48,120,110,45,45,48,45,120,110,45,45,97,252,8204]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 14 in '0xn--0-xn--aü\\u200c'"}}
 {"call":{"fn":"ulabel","text":[252,57,108,46,12290]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+002E at position 4 of 'ü9l.。' not allowed"}}
-{"call":{"fn":"encode","text":[8204]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 1 in '\\u200c'"}}
+{"call":{"fn":"encode","text":[8204]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 1 in '\\u200c'"}}
 {"call":{"fn":"decode","text":null},"want":{"ok":null,"kind":"IDNAError","message":"Empty domain"}}
 {"call":{"fn":"ulabel","text":[2381,2325,252,46,2325]},"want":{"ok":null,"kind":"IDNAError","message":"Label begins with an illegal combining character"}}
-{"call":{"fn":"ulabel","text":[8204,769,1488,8204,12290,2381,252]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 1 in '\\u200ćא\\u200c。्ü'"}}
+{"call":{"fn":"ulabel","text":[8204,769,1488,8204,12290,2381,252]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 1 in '\\u200ćא\\u200c。्ü'"}}
 {"call":{"fn":"encode","text":[97,252,769,252,48,122]},"want":{"ok":null,"kind":"IDNAError","message":"Label must be in Normalization Form C"}}
 {"call":{"fn":"decode","text":null},"want":{"ok":null,"kind":"IDNAError","message":"Empty domain"}}
 {"call":{"fn":"ulabel","text":[120,110,45,45,183,1488,2325,97,48,108,57,2325]},"want":{"ok":null,"kind":"IDNAError","message":"Label has disallowed hyphens in 3rd and 4th position"}}
@@ -9369,24 +9421,24 @@
 {"call":{"fn":"ulabel","text":[252,97,2325,252,122,48,108,48,252,12290]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+3002 at position 10 of 'üaकüz0l0ü。' not allowed"}}
 {"call":{"fn":"encode","text":[122,12290,12290]},"want":{"ok":null,"kind":"IDNAError","message":"Empty Label"}}
 {"call":{"fn":"alabel","text":[183,120,110,45,45,2381,252,120,110,45,45,8204,57,252,183,45]},"want":{"ok":null,"kind":"IDNAError","message":"Label must not start or end with a hyphen"}}
-{"call":{"fn":"ulabel","text":[57,45,120,110,45,45,2381,45,1488,97,8204,769,8204,183]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 11 in '9-xn--्-אa\\u200ć\\u200c·'"}}
+{"call":{"fn":"ulabel","text":[57,45,120,110,45,45,2381,45,1488,97,8204,769,8204,183]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 11 in '9-xn--्-אa\\u200ć\\u200c·'"}}
 {"call":{"fn":"encode","text":[183,122,769,57,108]},"want":{"ok":null,"kind":"IDNAError","message":"Label must be in Normalization Form C"}}
 {"call":{"fn":"decode","text":[122,48]},"want":{"ok":[122,48],"kind":"","message":""}}
 {"call":{"fn":"alabel","text":[48,769,45,45,57,108]},"want":{"ok":null,"kind":"IDNAError","message":"Label has disallowed hyphens in 3rd and 4th position"}}
 {"call":{"fn":"ulabel","text":[1488,120,110,45,45,2381,1488,46,1488,97]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+002E at position 8 of 'אxn--्א.אa' not allowed"}}
 {"call":{"fn":"encode","text":[2381]},"want":{"ok":null,"kind":"IDNAError","message":"Label begins with an illegal combining character"}}
-{"call":{"fn":"alabel","text":[8204,2325,183,57,2325,12290,183,183]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 1 in '\\u200cक·9क。··'"}}
+{"call":{"fn":"alabel","text":[8204,2325,183,57,2325,12290,183,183]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 1 in '\\u200cक·9क。··'"}}
 {"call":{"fn":"encode","text":[252,1488,252,122]},"want":{"ok":null,"kind":"IDNABidiError","message":"Invalid direction for codepoint at position 2 in a left-to-right label"}}
 {"call":{"fn":"ulabel","text":[183,97,252,12290,48,97,769,769,108,183]},"want":{"ok":null,"kind":"IDNAError","message":"Label must be in Normalization Form C"}}
 {"call":{"fn":"encode","text":[45,97,2325,46,1488,97,57,46,183]},"want":{"ok":null,"kind":"IDNAError","message":"Label must not start or end with a hyphen"}}
-{"call":{"fn":"alabel","text":[8204,97,46,57,122]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 1 in '\\u200ca.9z'"}}
+{"call":{"fn":"alabel","text":[8204,97,46,57,122]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 1 in '\\u200ca.9z'"}}
 {"call":{"fn":"ulabel","text":[769,48,120,110,45,45,120,110,45,45,45,120,110,45,45,108,769,183]},"want":{"ok":null,"kind":"IDNAError","message":"Label must be in Normalization Form C"}}
 {"call":{"fn":"decode","text":null},"want":{"ok":null,"kind":"IDNAError","message":"Empty domain"}}
 {"call":{"fn":"alabel","text":null},"want":{"ok":null,"kind":"IDNAError","message":"Empty Label"}}
 {"call":{"fn":"encode","text":[122,2381,1488,46]},"want":{"ok":null,"kind":"IDNABidiError","message":"Invalid direction for codepoint at position 3 in a left-to-right label"}}
 {"call":{"fn":"alabel","text":[46]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+002E at position 1 of '.' not allowed"}}
 {"call":{"fn":"ulabel","text":[2325,183,122,46]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Codepoint U+00B7 not allowed at position 2 in 'क·z.'"}}
-{"call":{"fn":"alabel","text":[8204]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 1 in '\\u200c'"}}
+{"call":{"fn":"alabel","text":[8204]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 1 in '\\u200c'"}}
 {"call":{"fn":"encode","text":[122,1488,2325,97,57,2325,57,46,769,122,46]},"want":{"ok":null,"kind":"IDNABidiError","message":"Invalid direction for codepoint at position 2 in a left-to-right label"}}
 {"call":{"fn":"alabel","text":[108,97,45,45,183,769,45,97,45]},"want":{"ok":null,"kind":"IDNAError","message":"Label has disallowed hyphens in 3rd and 4th position"}}
 {"call":{"fn":"ulabel","text":[769,183,769,1488,48,12290,122,12290,108]},"want":{"ok":null,"kind":"IDNAError","message":"Label begins with an illegal combining character"}}
@@ -9400,7 +9452,7 @@
 {"call":{"fn":"decode","text":[46,120,110,45,45]},"want":{"ok":null,"kind":"IDNAError","message":"Empty Label"}}
 {"call":{"fn":"alabel","text":[120,110,45,45,57,97,108,48,12290,183]},"want":{"ok":null,"kind":"IDNAError","message":"Label has disallowed hyphens in 3rd and 4th position"}}
 {"call":{"fn":"encode","text":[252,8204,769,252,769]},"want":{"ok":null,"kind":"IDNAError","message":"Label must be in Normalization Form C"}}
-{"call":{"fn":"alabel","text":[8204,108,122,57,12290]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 1 in '\\u200clz9。'"}}
+{"call":{"fn":"alabel","text":[8204,108,122,57,12290]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 1 in '\\u200clz9。'"}}
 {"call":{"fn":"ulabel","text":[12290,2325,8204,252,8204]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+3002 at position 1 of '。क\\u200cü\\u200c' not allowed"}}
 {"call":{"fn":"encode","text":[45,122]},"want":{"ok":null,"kind":"IDNAError","message":"Label must not start or end with a hyphen"}}
 {"call":{"fn":"decode","text":[97]},"want":{"ok":[97],"kind":"","message":""}}
@@ -9408,10 +9460,10 @@
 {"call":{"fn":"ulabel","text":[769,1488,57,122,2381,108,120,110,45,45,122,769,57,1488]},"want":{"ok":null,"kind":"IDNAError","message":"Label must be in Normalization Form C"}}
 {"call":{"fn":"encode","text":[769,1488,120,110,45,45]},"want":{"ok":null,"kind":"IDNAError","message":"Label must not start or end with a hyphen"}}
 {"call":{"fn":"decode","text":null},"want":{"ok":null,"kind":"IDNAError","message":"Empty domain"}}
-{"call":{"fn":"ulabel","text":[108,120,110,45,45,1488,1488,57,120,110,45,45,122,8204,8204,1488,12290]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 14 in 'lxn--אא9xn--z\\u200c\\u200cא。'"}}
+{"call":{"fn":"ulabel","text":[108,120,110,45,45,1488,1488,57,120,110,45,45,122,8204,8204,1488,12290]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 14 in 'lxn--אא9xn--z\\u200c\\u200cא。'"}}
 {"call":{"fn":"decode","text":null},"want":{"ok":null,"kind":"IDNAError","message":"Empty domain"}}
 {"call":{"fn":"ulabel","text":[57,8204,8204,12290,769,2381,97,120,110,45,45,183,252,769]},"want":{"ok":null,"kind":"IDNAError","message":"Label must be in Normalization Form C"}}
-{"call":{"fn":"encode","text":[57,8204,8204,2381,45,183,252,48,1488,183]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 2 in '9\\u200c\\u200c्-·ü0א·'"}}
+{"call":{"fn":"encode","text":[57,8204,8204,2381,45,183,252,48,1488,183]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 2 in '9\\u200c\\u200c्-·ü0א·'"}}
 {"call":{"fn":"ulabel","text":[120,110,45,45]},"want":{"ok":null,"kind":"IDNAError","message":"Malformed A-label, no Punycode eligible content found"}}
 {"call":{"fn":"encode","text":[45,2381,252,57,48,97,8204,12290,2381]},"want":{"ok":null,"kind":"IDNAError","message":"Label must not start or end with a hyphen"}}
 {"call":{"fn":"ulabel","text":[122,183,769]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Codepoint U+00B7 not allowed at position 2 in 'z·́'"}}
@@ -9419,10 +9471,10 @@
 {"call":{"fn":"ulabel","text":[120,110,45,45,2325,2381,46,120,110,45,45,2381,57]},"want":{"ok":null,"kind":"IDNAError","message":"Label has disallowed hyphens in 3rd and 4th position"}}
 {"call":{"fn":"encode","text":null},"want":{"ok":null,"kind":"IDNAError","message":"Empty domain"}}
 {"call":{"fn":"alabel","text":[57,769,57,108,48,46,45,12290,769,45]},"want":{"ok":null,"kind":"IDNAError","message":"Label must not start or end with a hyphen"}}
-{"call":{"fn":"ulabel","text":[108,1488,8204,108,252,2381,46]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 3 in 'lא\\u200clü्.'"}}
-{"call":{"fn":"encode","text":[48,769,8204]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 3 in '0́\\u200c'"}}
-{"call":{"fn":"alabel","text":[2325,8204,57,97,8204,46,769,12290]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 2 in 'क\\u200c9a\\u200c.́。'"}}
-{"call":{"fn":"ulabel","text":[8204]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 1 in '\\u200c'"}}
+{"call":{"fn":"ulabel","text":[108,1488,8204,108,252,2381,46]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 3 in 'lא\\u200clü्.'"}}
+{"call":{"fn":"encode","text":[48,769,8204]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 3 in '0́\\u200c'"}}
+{"call":{"fn":"alabel","text":[2325,8204,57,97,8204,46,769,12290]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 2 in 'क\\u200c9a\\u200c.́。'"}}
+{"call":{"fn":"ulabel","text":[8204]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 1 in '\\u200c'"}}
 {"call":{"fn":"encode","text":[769,2381,46,57,2381,57,57]},"want":{"ok":null,"kind":"IDNAError","message":"Label must be in Normalization Form C"}}
 {"call":{"fn":"ulabel","text":[252,1488,1488,2325,2381,97,769,97]},"want":{"ok":null,"kind":"IDNAError","message":"Label must be in Normalization Form C"}}
 {"call":{"fn":"ulabel","text":[57,120,110,45,45,1488]},"want":{"ok":null,"kind":"IDNABidiError","message":"First codepoint in label '9xn--א' must be directionality L, R or AL"}}
@@ -9431,19 +9483,19 @@
 {"call":{"fn":"ulabel","text":[183,2381,120,110,45,45,183]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Codepoint U+00B7 not allowed at position 1 in '·्xn--·'"}}
 {"call":{"fn":"ulabel","text":[57,183,183,48,769,108,8204,45]},"want":{"ok":null,"kind":"IDNAError","message":"Label must not start or end with a hyphen"}}
 {"call":{"fn":"encode","text":null},"want":{"ok":null,"kind":"IDNAError","message":"Empty domain"}}
-{"call":{"fn":"alabel","text":[108,108,2325,45,8204,97,8204,183]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 5 in 'llक-\\u200ca\\u200c·'"}}
+{"call":{"fn":"alabel","text":[108,108,2325,45,8204,97,8204,183]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 5 in 'llक-\\u200ca\\u200c·'"}}
 {"call":{"fn":"alabel","text":[46]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+002E at position 1 of '.' not allowed"}}
-{"call":{"fn":"encode","text":[8204,2381,57,2381,252,45,252,48,120,110,45,45,1488]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 1 in '\\u200c्9्ü-ü0xn--א'"}}
+{"call":{"fn":"encode","text":[8204,2381,57,2381,252,45,252,48,120,110,45,45,1488]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 1 in '\\u200c्9्ü-ü0xn--א'"}}
 {"call":{"fn":"ulabel","text":[120,110,45,45,252,48,108,108,45,97,252]},"want":{"ok":null,"kind":"IDNAError","message":"Label has disallowed hyphens in 3rd and 4th position"}}
 {"call":{"fn":"encode","text":[45,120,110,45,45,122,252,12290,1488,48,2325]},"want":{"ok":null,"kind":"IDNAError","message":"Label must not start or end with a hyphen"}}
 {"call":{"fn":"alabel","text":[57]},"want":{"ok":[57],"kind":"","message":""}}
 {"call":{"fn":"ulabel","text":[183,8204,57,2325,120,110,45,45,108,769]},"want":{"ok":null,"kind":"IDNAError","message":"Label must be in Normalization Form C"}}
-{"call":{"fn":"encode","text":[122,1488,122,2325,108,8204]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 6 in 'zאzकl\\u200c'"}}
-{"call":{"fn":"ulabel","text":[122,8204,1488,120,110,45,45,8204,97,8204]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 2 in 'z\\u200cאxn--\\u200ca\\u200c'"}}
+{"call":{"fn":"encode","text":[122,1488,122,2325,108,8204]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 6 in 'zאzकl\\u200c'"}}
+{"call":{"fn":"ulabel","text":[122,8204,1488,120,110,45,45,8204,97,8204]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 2 in 'z\\u200cאxn--\\u200ca\\u200c'"}}
 {"call":{"fn":"encode","text":[45,183,108,46]},"want":{"ok":null,"kind":"IDNAError","message":"Label must not start or end with a hyphen"}}
 {"call":{"fn":"alabel","text":null},"want":{"ok":null,"kind":"IDNAError","message":"Empty Label"}}
 {"call":{"fn":"encode","text":[12290,1488,8204,57,108,46,48,45,12290]},"want":{"ok":null,"kind":"IDNAError","message":"Empty Label"}}
-{"call":{"fn":"alabel","text":[8204,120,110,45,45,2325,8204,122,45,2381,1488,12290]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 1 in '\\u200cxn--क\\u200cz-्א。'"}}
+{"call":{"fn":"alabel","text":[8204,120,110,45,45,2325,8204,122,45,2381,1488,12290]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 1 in '\\u200cxn--क\\u200cz-्א。'"}}
 {"call":{"fn":"ulabel","text":null},"want":{"ok":null,"kind":"IDNAError","message":"Empty Label"}}
 {"call":{"fn":"encode","text":[12290,1488,57,108,97]},"want":{"ok":null,"kind":"IDNAError","message":"Empty Label"}}
 {"call":{"fn":"decode","text":null},"want":{"ok":null,"kind":"IDNAError","message":"Empty domain"}}
@@ -9460,21 +9512,21 @@
 {"call":{"fn":"alabel","text":[2325,120,110,45,45]},"want":{"ok":null,"kind":"IDNAError","message":"Label must not start or end with a hyphen"}}
 {"call":{"fn":"encode","text":[45,108,12290,57,12290,183,122,1488]},"want":{"ok":null,"kind":"IDNAError","message":"Label must not start or end with a hyphen"}}
 {"call":{"fn":"alabel","text":null},"want":{"ok":null,"kind":"IDNAError","message":"Empty Label"}}
-{"call":{"fn":"ulabel","text":[108,2325,120,110,45,45,2381,2381,120,110,45,45,8204,183,48,12290]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 13 in 'lकxn--््xn--\\u200c·0。'"}}
+{"call":{"fn":"ulabel","text":[108,2325,120,110,45,45,2381,2381,120,110,45,45,8204,183,48,12290]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 13 in 'lकxn--््xn--\\u200c·0。'"}}
 {"call":{"fn":"encode","text":[120,110,45,45,122,8204,108,45,252,1488,122,252]},"want":{"ok":null,"kind":"IDNAError","message":"Label has disallowed hyphens in 3rd and 4th position"}}
 {"call":{"fn":"ulabel","text":[122,769,2325,45,2325,48,122,12290]},"want":{"ok":null,"kind":"IDNAError","message":"Label must be in Normalization Form C"}}
 {"call":{"fn":"encode","text":[12290,2381,12290,122,769,2325]},"want":{"ok":null,"kind":"IDNAError","message":"Empty Label"}}
-{"call":{"fn":"alabel","text":[1488,8204,1488]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 2 in 'א\\u200cא'"}}
+{"call":{"fn":"alabel","text":[1488,8204,1488]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 2 in 'א\\u200cא'"}}
 {"call":{"fn":"ulabel","text":[97,2381,183,97,120,110,45,45,46,45]},"want":{"ok":null,"kind":"IDNAError","message":"Label must not start or end with a hyphen"}}
 {"call":{"fn":"encode","text":null},"want":{"ok":null,"kind":"IDNAError","message":"Empty domain"}}
 {"call":{"fn":"encode","text":[252,8204,57,8204,48,2325,1488,108,108,769]},"want":{"ok":null,"kind":"IDNAError","message":"Label must be in Normalization Form C"}}
 {"call":{"fn":"decode","text":[97,122]},"want":{"ok":[97,122],"kind":"","message":""}}
 {"call":{"fn":"ulabel","text":[45,108,120,110,45,45,769,46,8204,57,97,57,45]},"want":{"ok":null,"kind":"IDNAError","message":"Label must not start or end with a hyphen"}}
-{"call":{"fn":"ulabel","text":[122,8204,97,57,252,45,57,2381,2381,2381]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 2 in 'z\\u200ca9ü-9्््'"}}
+{"call":{"fn":"ulabel","text":[122,8204,97,57,252,45,57,2381,2381,2381]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 2 in 'z\\u200ca9ü-9्््'"}}
 {"call":{"fn":"encode","text":[120,110,45,45,252,8204,12290,122,183,769,1488]},"want":{"ok":null,"kind":"IDNAError","message":"Label has disallowed hyphens in 3rd and 4th position"}}
 {"call":{"fn":"alabel","text":[120,110,45,45,183,122,45,2381,252,120,110,45,45,97,1488,183]},"want":{"ok":null,"kind":"IDNAError","message":"Label has disallowed hyphens in 3rd and 4th position"}}
-{"call":{"fn":"encode","text":[8204,97,122,2381,57,2381,8204,183,122,120,110,45,45,769]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 1 in '\\u200caz्9्\\u200c·zxn--́'"}}
-{"call":{"fn":"encode","text":[8204,108,183,46,57,122,46,2381]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 1 in '\\u200cl·'"}}
+{"call":{"fn":"encode","text":[8204,97,122,2381,57,2381,8204,183,122,120,110,45,45,769]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 1 in '\\u200caz्9्\\u200c·zxn--́'"}}
+{"call":{"fn":"encode","text":[8204,108,183,46,57,122,46,2381]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 1 in '\\u200cl·'"}}
 {"call":{"fn":"encode","text":[769,183,57]},"want":{"ok":null,"kind":"IDNAError","message":"Label begins with an illegal combining character"}}
 {"call":{"fn":"alabel","text":[45,2325,2381,97,122,8204,252,122]},"want":{"ok":null,"kind":"IDNAError","message":"Label must not start or end with a hyphen"}}
 {"call":{"fn":"ulabel","text":[1488,2381,769,45,2381,97,252,45,48]},"want":{"ok":null,"kind":"IDNABidiError","message":"Invalid direction for codepoint at position 6 in a right-to-left label"}}
@@ -9488,16 +9540,16 @@
 {"call":{"fn":"encode","text":[120,110,45,45,252,2381,183,120,110,45,45,48,46,8204,122,57]},"want":{"ok":null,"kind":"IDNAError","message":"Label has disallowed hyphens in 3rd and 4th position"}}
 {"call":{"fn":"ulabel","text":null},"want":{"ok":null,"kind":"IDNAError","message":"Empty Label"}}
 {"call":{"fn":"encode","text":[46,12290,252]},"want":{"ok":null,"kind":"IDNAError","message":"Empty Label"}}
-{"call":{"fn":"alabel","text":[8204,57,46,57,45,1488]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 1 in '\\u200c9.9-א'"}}
+{"call":{"fn":"alabel","text":[8204,57,46,57,45,1488]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 1 in '\\u200c9.9-א'"}}
 {"call":{"fn":"ulabel","text":[45]},"want":{"ok":null,"kind":"IDNAError","message":"Label must not start or end with a hyphen"}}
-{"call":{"fn":"ulabel","text":[122,2325,769,120,110,45,45,45,57,8204,108,12290]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 10 in 'zक́xn---9\\u200cl。'"}}
+{"call":{"fn":"ulabel","text":[122,2325,769,120,110,45,45,45,57,8204,108,12290]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 10 in 'zक́xn---9\\u200cl。'"}}
 {"call":{"fn":"encode","text":[46,120,110,45,45,108,252,2325,97]},"want":{"ok":null,"kind":"IDNAError","message":"Empty Label"}}
 {"call":{"fn":"alabel","text":null},"want":{"ok":null,"kind":"IDNAError","message":"Empty Label"}}
 {"call":{"fn":"encode","text":[46,120,110,45,45,8204,120,110,45,45]},"want":{"ok":null,"kind":"IDNAError","message":"Empty Label"}}
 {"call":{"fn":"encode","text":[57,2381,120,110,45,45,108,252,108,1488,769,120,110,45,45,108]},"want":{"ok":null,"kind":"IDNABidiError","message":"First codepoint in label '9्xn--lülא́xn--l' must be directionality L, R or AL"}}
 {"call":{"fn":"ulabel","text":null},"want":{"ok":null,"kind":"IDNAError","message":"Empty Label"}}
 {"call":{"fn":"encode","text":[183,183,120,110,45,45,8204,45,48,108]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Codepoint U+00B7 not allowed at position 1 in '··xn--\\u200c-0l'"}}
-{"call":{"fn":"ulabel","text":[8204,1488,769,2325,108,57,120,110,45,45,12290]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 1 in '\\u200cא́कl9xn--。'"}}
+{"call":{"fn":"ulabel","text":[8204,1488,769,2325,108,57,120,110,45,45,12290]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 1 in '\\u200cא́कl9xn--。'"}}
 {"call":{"fn":"encode","text":[2381,1488,97,120,110,45,45,12290]},"want":{"ok":null,"kind":"IDNAError","message":"Label must not start or end with a hyphen"}}
 {"call":{"fn":"ulabel","text":[120,110,45,45,46,45,122,1488,97,252]},"want":{"ok":null,"kind":"IDNAError","message":"Label has disallowed hyphens in 3rd and 4th position"}}
 {"call":{"fn":"encode","text":null},"want":{"ok":null,"kind":"IDNAError","message":"Empty domain"}}
@@ -9507,14 +9559,14 @@
 {"call":{"fn":"alabel","text":[252,97,12290,97,120,110,45,45]},"want":{"ok":null,"kind":"IDNAError","message":"Label must not start or end with a hyphen"}}
 {"call":{"fn":"ulabel","text":[769,45,122,12290,46,769,252]},"want":{"ok":null,"kind":"IDNAError","message":"Label begins with an illegal combining character"}}
 {"call":{"fn":"encode","text":[183,252,2325,2325,12290,2325]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Codepoint U+00B7 not allowed at position 1 in '·üकक'"}}
-{"call":{"fn":"ulabel","text":[8204,8204,769]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 1 in '\\u200c\\u200ć'"}}
-{"call":{"fn":"encode","text":[122,8204,2381,48,252]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 2 in 'z\\u200c्0ü'"}}
+{"call":{"fn":"ulabel","text":[8204,8204,769]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 1 in '\\u200c\\u200ć'"}}
+{"call":{"fn":"encode","text":[122,8204,2381,48,252]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 2 in 'z\\u200c्0ü'"}}
 {"call":{"fn":"alabel","text":[46,252,48,120,110,45,45,2325,2381,183,45,183,45]},"want":{"ok":null,"kind":"IDNAError","message":"Label must not start or end with a hyphen"}}
 {"call":{"fn":"encode","text":[48,46,12290,97,45,2325]},"want":{"ok":null,"kind":"IDNAError","message":"Empty Label"}}
 {"call":{"fn":"ulabel","text":null},"want":{"ok":null,"kind":"IDNAError","message":"Empty Label"}}
 {"call":{"fn":"encode","text":null},"want":{"ok":null,"kind":"IDNAError","message":"Empty domain"}}
 {"call":{"fn":"alabel","text":[1488,45,2325,8204,120,110,45,45,2325,120,110,45,45,2381,57,45,120,110,45,45]},"want":{"ok":null,"kind":"IDNAError","message":"Label must not start or end with a hyphen"}}
-{"call":{"fn":"encode","text":[8204,183,45,122,8204,252,48,183,57,1488]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 1 in '\\u200c·-z\\u200cü0·9א'"}}
+{"call":{"fn":"encode","text":[8204,183,45,122,8204,252,48,183,57,1488]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 1 in '\\u200c·-z\\u200cü0·9א'"}}
 {"call":{"fn":"alabel","text":[122,46,183,48,57,57,48,252,57,120,110,45,45]},"want":{"ok":null,"kind":"IDNAError","message":"Label must not start or end with a hyphen"}}
 {"call":{"fn":"alabel","text":[120,110,45,45,97,120,110,45,45,769,48,252,1488,252,108,252]},"want":{"ok":null,"kind":"IDNAError","message":"Label has disallowed hyphens in 3rd and 4th position"}}
 {"call":{"fn":"ulabel","text":[769,108,45,120,110,45,45]},"want":{"ok":null,"kind":"IDNAError","message":"Label must not start or end with a hyphen"}}
@@ -9524,15 +9576,15 @@
 {"call":{"fn":"encode","text":[183,2325,46,97]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Codepoint U+00B7 not allowed at position 1 in '·क'"}}
 {"call":{"fn":"alabel","text":[120,110,45,45,122,45,2381]},"want":{"ok":null,"kind":"IDNAError","message":"Label has disallowed hyphens in 3rd and 4th position"}}
 {"call":{"fn":"ulabel","text":[45,769,46,2381,122,108]},"want":{"ok":null,"kind":"IDNAError","message":"Label must not start or end with a hyphen"}}
-{"call":{"fn":"encode","text":[8204,769,252,120,110,45,45,2381,8204,1488,48,183,1488,1488]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 1 in '\\u200ćüxn--्\\u200cא0·אא'"}}
+{"call":{"fn":"encode","text":[8204,769,252,120,110,45,45,2381,8204,1488,48,183,1488,1488]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 1 in '\\u200ćüxn--्\\u200cא0·אא'"}}
 {"call":{"fn":"encode","text":[769,12290,46,2325]},"want":{"ok":null,"kind":"IDNAError","message":"Label begins with an illegal combining character"}}
 {"call":{"fn":"ulabel","text":[769,97]},"want":{"ok":null,"kind":"IDNAError","message":"Label begins with an illegal combining character"}}
 {"call":{"fn":"encode","text":[120,110,45,45]},"want":{"ok":null,"kind":"IDNAError","message":"Malformed A-label, no Punycode eligible content found"}}
 {"call":{"fn":"ulabel","text":[183,57,108,97,48,122,2325,2325,45]},"want":{"ok":null,"kind":"IDNAError","message":"Label must not start or end with a hyphen"}}
-{"call":{"fn":"encode","text":[108,8204,769,2325,48,108,46,2381,48,48]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 2 in 'l\\u200ćक0l'"}}
+{"call":{"fn":"encode","text":[108,8204,769,2325,48,108,46,2381,48,48]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 2 in 'l\\u200ćक0l'"}}
 {"call":{"fn":"alabel","text":[57]},"want":{"ok":[57],"kind":"","message":""}}
-{"call":{"fn":"ulabel","text":[97,8204,252,2381,8204,2381,45,46,2325,122]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 2 in 'a\\u200cü्\\u200c्-.कz'"}}
-{"call":{"fn":"encode","text":[122,8204,252,2381,12290,252,252,183]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 2 in 'z\\u200cü्'"}}
+{"call":{"fn":"ulabel","text":[97,8204,252,2381,8204,2381,45,46,2325,122]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 2 in 'a\\u200cü्\\u200c्-.कz'"}}
+{"call":{"fn":"encode","text":[122,8204,252,2381,12290,252,252,183]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 2 in 'z\\u200cü्'"}}
 {"call":{"fn":"alabel","text":[122,8204,108,8204,2381,12290,45,183,183,252,120,110,45,45]},"want":{"ok":null,"kind":"IDNAError","message":"Label must not start or end with a hyphen"}}
 {"call":{"fn":"ulabel","text":null},"want":{"ok":null,"kind":"IDNAError","message":"Empty Label"}}
 {"call":{"fn":"encode","text":[108,252,769,12290,48,97,120,110,45,45,122]},"want":{"ok":null,"kind":"IDNAError","message":"Label must be in Normalization Form C"}}
@@ -9551,7 +9603,7 @@
 {"call":{"fn":"alabel","text":null},"want":{"ok":null,"kind":"IDNAError","message":"Empty Label"}}
 {"call":{"fn":"ulabel","text":null},"want":{"ok":null,"kind":"IDNAError","message":"Empty Label"}}
 {"call":{"fn":"alabel","text":[183,120,110,45,45,120,110,45,45,2381,57,252,120,110,45,45]},"want":{"ok":null,"kind":"IDNAError","message":"Label must not start or end with a hyphen"}}
-{"call":{"fn":"ulabel","text":[97,45,8204,8204,252,2325,57]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 3 in 'a-\\u200c\\u200cüक9'"}}
+{"call":{"fn":"ulabel","text":[97,45,8204,8204,252,2325,57]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 3 in 'a-\\u200c\\u200cüक9'"}}
 {"call":{"fn":"encode","text":[57,120,110,45,45,48,46,769]},"want":{"ok":null,"kind":"IDNAError","message":"Label begins with an illegal combining character"}}
 {"call":{"fn":"ulabel","text":[769]},"want":{"ok":null,"kind":"IDNAError","message":"Label begins with an illegal combining character"}}
 {"call":{"fn":"encode","text":[57,46,120,110,45,45,769,45,97,8204]},"want":{"ok":null,"kind":"IDNAError","message":"Label has disallowed hyphens in 3rd and 4th position"}}
@@ -9575,19 +9627,19 @@
 {"call":{"fn":"encode","text":[1488,2381,48,183,183,1488]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Codepoint U+00B7 not allowed at position 4 in 'א्0··א'"}}
 {"call":{"fn":"alabel","text":[120,110,45,45,97,183,2381,2381,108]},"want":{"ok":null,"kind":"IDNAError","message":"Label has disallowed hyphens in 3rd and 4th position"}}
 {"call":{"fn":"ulabel","text":null},"want":{"ok":null,"kind":"IDNAError","message":"Empty Label"}}
-{"call":{"fn":"encode","text":[8204,57,108,97]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 1 in '\\u200c9la'"}}
-{"call":{"fn":"ulabel","text":[48,108,57,252,48,48,1488,8204]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 8 in '0l9ü00א\\u200c'"}}
+{"call":{"fn":"encode","text":[8204,57,108,97]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 1 in '\\u200c9la'"}}
+{"call":{"fn":"ulabel","text":[48,108,57,252,48,48,1488,8204]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 8 in '0l9ü00א\\u200c'"}}
 {"call":{"fn":"encode","text":null},"want":{"ok":null,"kind":"IDNAError","message":"Empty domain"}}
 {"call":{"fn":"alabel","text":[122]},"want":{"ok":[122],"kind":"","message":""}}
 {"call":{"fn":"ulabel","text":[769,45,2325,12290,183,120,110,45,45,2325,97,57,46,108]},"want":{"ok":null,"kind":"IDNAError","message":"Label begins with an illegal combining character"}}
-{"call":{"fn":"encode","text":[8204,769,183]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 1 in '\\u200ć·'"}}
+{"call":{"fn":"encode","text":[8204,769,183]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 1 in '\\u200ć·'"}}
 {"call":{"fn":"ulabel","text":[8204,252,1488,183,108,769,2381,120,110,45,45]},"want":{"ok":null,"kind":"IDNAError","message":"Label must be in Normalization Form C"}}
 {"call":{"fn":"encode","text":[1488,48,183,183,57,12290,46,8204]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Codepoint U+00B7 not allowed at position 3 in 'א0··9'"}}
 {"call":{"fn":"ulabel","text":[769,108,12290,57,57]},"want":{"ok":null,"kind":"IDNAError","message":"Label begins with an illegal combining character"}}
 {"call":{"fn":"encode","text":[2381,1488,97,8204,2325,122,1488,8204,769]},"want":{"ok":null,"kind":"IDNAError","message":"Label begins with an illegal combining character"}}
 {"call":{"fn":"decode","text":[120,110,45,45]},"want":{"ok":null,"kind":"IDNAError","message":"Malformed A-label, no Punycode eligible content found"}}
 {"call":{"fn":"ulabel","text":[45,8204,769,45,769,2381]},"want":{"ok":null,"kind":"IDNAError","message":"Label must be in Normalization Form C"}}
-{"call":{"fn":"ulabel","text":[2325,8204,46,45,183,252,183,57,122]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 2 in 'क\\u200c.-·ü·9z'"}}
+{"call":{"fn":"ulabel","text":[2325,8204,46,45,183,252,183,57,122]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 2 in 'क\\u200c.-·ü·9z'"}}
 {"call":{"fn":"encode","text":[120,110,45,45,97,2381,12290,252,97,46,45]},"want":{"ok":null,"kind":"IDNAError","message":"Label has disallowed hyphens in 3rd and 4th position"}}
 {"call":{"fn":"ulabel","text":[2381,2381,57]},"want":{"ok":null,"kind":"IDNAError","message":"Label begins with an illegal combining character"}}
 {"call":{"fn":"decode","text":null},"want":{"ok":null,"kind":"IDNAError","message":"Empty domain"}}
@@ -9612,16 +9664,16 @@
 {"call":{"fn":"decode","text":[45]},"want":{"ok":null,"kind":"IDNAError","message":"Label must not start or end with a hyphen"}}
 {"call":{"fn":"encode","text":null},"want":{"ok":null,"kind":"IDNAError","message":"Empty domain"}}
 {"call":{"fn":"decode","text":null},"want":{"ok":null,"kind":"IDNAError","message":"Empty domain"}}
-{"call":{"fn":"encode","text":[8204,183,2325,122,252,57]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 1 in '\\u200c·कzü9'"}}
+{"call":{"fn":"encode","text":[8204,183,2325,122,252,57]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 1 in '\\u200c·कzü9'"}}
 {"call":{"fn":"encode","text":null},"want":{"ok":null,"kind":"IDNAError","message":"Empty domain"}}
-{"call":{"fn":"encode","text":[8204,8204,183,1488,48,2381,12290,8204,120,110,45,45,2325,1488]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 1 in '\\u200c\\u200c·א0्'"}}
+{"call":{"fn":"encode","text":[8204,8204,183,1488,48,2381,12290,8204,120,110,45,45,2325,1488]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 1 in '\\u200c\\u200c·א0्'"}}
 {"call":{"fn":"ulabel","text":[120,110,45,45,108,1488,8204,57,45,252,183,120,110,45,45]},"want":{"ok":null,"kind":"IDNAError","message":"Label has disallowed hyphens in 3rd and 4th position"}}
 {"call":{"fn":"encode","text":null},"want":{"ok":null,"kind":"IDNAError","message":"Empty domain"}}
 {"call":{"fn":"alabel","text":null},"want":{"ok":null,"kind":"IDNAError","message":"Empty Label"}}
 {"call":{"fn":"ulabel","text":[769,183]},"want":{"ok":null,"kind":"IDNAError","message":"Label begins with an illegal combining character"}}
 {"call":{"fn":"ulabel","text":[45,46,769,57,8204,57,769,120,110,45,45]},"want":{"ok":null,"kind":"IDNAError","message":"Label must not start or end with a hyphen"}}
 {"call":{"fn":"encode","text":[1488,2381,120,110,45,45,48,45,122]},"want":{"ok":null,"kind":"IDNABidiError","message":"Invalid direction for codepoint at position 3 in a right-to-left label"}}
-{"call":{"fn":"ulabel","text":[252,8204,183,120,110,45,45,2325]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 2 in 'ü\\u200c·xn--क'"}}
+{"call":{"fn":"ulabel","text":[252,8204,183,120,110,45,45,2325]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 2 in 'ü\\u200c·xn--क'"}}
 {"call":{"fn":"encode","text":[120,110,45,45,1488,1488,12290,57,122,122,12290,120,110,45,45]},"want":{"ok":null,"kind":"IDNAError","message":"Label has disallowed hyphens in 3rd and 4th position"}}
 {"call":{"fn":"encode","text":null},"want":{"ok":null,"kind":"IDNAError","message":"Empty domain"}}
 {"call":{"fn":"decode","text":null},"want":{"ok":null,"kind":"IDNAError","message":"Empty domain"}}
@@ -9631,8 +9683,8 @@
 {"call":{"fn":"encode","text":[48,48,45,1488,122,97,97]},"want":{"ok":null,"kind":"IDNABidiError","message":"First codepoint in label '00-אzaa' must be directionality L, R or AL"}}
 {"call":{"fn":"encode","text":[769,48,769,45,120,110,45,45,57]},"want":{"ok":null,"kind":"IDNAError","message":"Label begins with an illegal combining character"}}
 {"call":{"fn":"decode","text":null},"want":{"ok":null,"kind":"IDNAError","message":"Empty domain"}}
-{"call":{"fn":"ulabel","text":[8204,46,97,2381,1488,183,57,45,183]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 1 in '\\u200c.a्א·9-·'"}}
-{"call":{"fn":"encode","text":[8204]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 1 in '\\u200c'"}}
+{"call":{"fn":"ulabel","text":[8204,46,97,2381,1488,183,57,45,183]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 1 in '\\u200c.a्א·9-·'"}}
+{"call":{"fn":"encode","text":[8204]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 1 in '\\u200c'"}}
 {"call":{"fn":"ulabel","text":[769,48,122,252,1488,45,183,12290,122]},"want":{"ok":null,"kind":"IDNAError","message":"Label begins with an illegal combining character"}}
 {"call":{"fn":"alabel","text":[120,110,45,45,769,1488,8204,769,46,48,12290,57,46,57]},"want":{"ok":null,"kind":"IDNAError","message":"Label has disallowed hyphens in 3rd and 4th position"}}
 {"call":{"fn":"ulabel","text":null},"want":{"ok":null,"kind":"IDNAError","message":"Empty Label"}}
@@ -9642,7 +9694,7 @@
 {"call":{"fn":"encode","text":[97,108,252,97,46,2381,46,108]},"want":{"ok":null,"kind":"IDNAError","message":"Label begins with an illegal combining character"}}
 {"call":{"fn":"alabel","text":[48]},"want":{"ok":[48],"kind":"","message":""}}
 {"call":{"fn":"ulabel","text":[183,45,48,120,110,45,45,108,45]},"want":{"ok":null,"kind":"IDNAError","message":"Label must not start or end with a hyphen"}}
-{"call":{"fn":"encode","text":[8204,183,2381,45,1488]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 1 in '\\u200c·्-א'"}}
+{"call":{"fn":"encode","text":[8204,183,2381,45,1488]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 1 in '\\u200c·्-א'"}}
 {"call":{"fn":"ulabel","text":[769,46,183,122,8204,46,45]},"want":{"ok":null,"kind":"IDNAError","message":"Label must not start or end with a hyphen"}}
 {"call":{"fn":"encode","text":[769]},"want":{"ok":null,"kind":"IDNAError","message":"Label begins with an illegal combining character"}}
 {"call":{"fn":"encode","text":null},"want":{"ok":null,"kind":"IDNAError","message":"Empty domain"}}
@@ -9922,7 +9974,7 @@
 {"call":{"fn":"decode","text":[45,45]},"want":{"ok":null,"kind":"IDNAError","message":"Label must not start or end with a hyphen"}}
 {"call":{"fn":"ulabel","text":[120,110,45,45,97,97,45]},"want":{"ok":null,"kind":"IDNAError","message":"A-label must not end with a hyphen"}}
 {"call":{"fn":"decode","text":[46]},"want":{"ok":null,"kind":"IDNAError","message":"Empty Label"}}
-{"call":{"fn":"encode","text":[120,110,45,45,45,97,46,122,48,1488,769,57]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+0080 at position 1 of '\\x80' not allowed"}}
+{"call":{"fn":"encode","text":[120,110,45,45,45,97,46,122,48,1488,769,57]},"want":{"ok":null,"kind":"IDNAError","message":"A-label is not the canonical Punycode encoding of its U-label"}}
 {"call":{"fn":"ulabel","text":[122,2325,252,1488]},"want":{"ok":null,"kind":"IDNABidiError","message":"Invalid direction for codepoint at position 4 in a left-to-right label"}}
 {"call":{"fn":"alabel","text":[1488,97]},"want":{"ok":null,"kind":"IDNABidiError","message":"Invalid direction for codepoint at position 2 in a right-to-left label"}}
 {"call":{"fn":"decode","text":[46,122]},"want":{"ok":null,"kind":"IDNAError","message":"Empty Label"}}
@@ -9983,7 +10035,7 @@
 {"call":{"fn":"alabel","text":[108]},"want":{"ok":[108],"kind":"","message":""}}
 {"call":{"fn":"ulabel","text":[2325,48,2325,122,1488,120,110,45,45,2325]},"want":{"ok":null,"kind":"IDNABidiError","message":"Invalid direction for codepoint at position 5 in a left-to-right label"}}
 {"call":{"fn":"alabel","text":[48]},"want":{"ok":[48],"kind":"","message":""}}
-{"call":{"fn":"alabel","text":[1488,8204]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 2 in 'א\\u200c'"}}
+{"call":{"fn":"alabel","text":[1488,8204]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 2 in 'א\\u200c'"}}
 {"call":{"fn":"encode","text":[48,1488,1488,12290,108,97]},"want":{"ok":null,"kind":"IDNABidiError","message":"First codepoint in label '0אא' must be directionality L, R or AL"}}
 {"call":{"fn":"alabel","text":[122]},"want":{"ok":[122],"kind":"","message":""}}
 {"call":{"fn":"alabel","text":[97]},"want":{"ok":[97],"kind":"","message":""}}
@@ -9993,7 +10045,7 @@
 {"call":{"fn":"alabel","text":[108]},"want":{"ok":[108],"kind":"","message":""}}
 {"call":{"fn":"decode","text":[46]},"want":{"ok":null,"kind":"IDNAError","message":"Empty Label"}}
 {"call":{"fn":"alabel","text":[120,110,45,45]},"want":{"ok":null,"kind":"IDNAError","message":"Malformed A-label, no Punycode eligible content found"}}
-{"call":{"fn":"alabel","text":[2325,8204,48,120,110,45,45,48,8204,2381]},"want":{"ok":null,"kind":"IDNAError","message":"Unknown codepoint adjacent to joiner U+200C at position 2 in 'क\\u200c0xn--0\\u200c्'"}}
+{"call":{"fn":"alabel","text":[2325,8204,48,120,110,45,45,48,8204,2381]},"want":{"ok":null,"kind":"InvalidCodepointContext","message":"Joiner U+200C not allowed at position 2 in 'क\\u200c0xn--0\\u200c्'"}}
 {"call":{"fn":"encode","text":[120,110,45,45]},"want":{"ok":null,"kind":"IDNAError","message":"Malformed A-label, no Punycode eligible content found"}}
 {"call":{"fn":"encode","text":[120,110,45,45,108,12290,1488,769,122,45]},"want":{"ok":null,"kind":"IDNAError","message":"Invalid A-label"}}
 {"call":{"fn":"decode","text":[120,110,45,45]},"want":{"ok":null,"kind":"IDNAError","message":"Malformed A-label, no Punycode eligible content found"}}
@@ -10115,7 +10167,7 @@
 {"call":{"fn":"encode","text":[108,46,57,57,1488,97,2325,120,110,45,45,2325]},"want":{"ok":null,"kind":"IDNABidiError","message":"First codepoint in label '99אaकxn--क' must be directionality L, R or AL"}}
 {"call":{"fn":"encode","text":[57,1488,2325,12290,122,1488,8204,122,108]},"want":{"ok":null,"kind":"IDNABidiError","message":"First codepoint in label '9אक' must be directionality L, R or AL"}}
 {"call":{"fn":"decode","text":[120,110,45,45]},"want":{"ok":null,"kind":"IDNAError","message":"Malformed A-label, no Punycode eligible content found"}}
-{"call":{"fn":"encode","text":[120,110,45,45,45,97,46,97,97]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+0080 at position 1 of '\\x80' not allowed"}}
+{"call":{"fn":"encode","text":[120,110,45,45,45,97,46,97,97]},"want":{"ok":null,"kind":"IDNAError","message":"A-label is not the canonical Punycode encoding of its U-label"}}
 {"call":{"fn":"alabel","text":[45]},"want":{"ok":null,"kind":"IDNAError","message":"Label must not start or end with a hyphen"}}
 {"call":{"fn":"encode","text":[1488,1488,46,57,1488]},"want":{"ok":null,"kind":"IDNABidiError","message":"First codepoint in label '9א' must be directionality L, R or AL"}}
 {"call":{"fn":"encode","text":[120,110,45,45,45,122,46,2325,2381,183,97,122]},"want":{"ok":null,"kind":"IDNAError","message":"Invalid A-label"}}
@@ -10257,6 +10309,7 @@
 {"call":{"fn":"alabel","text":[120,110,45,45]},"want":{"ok":null,"kind":"IDNAError","message":"Malformed A-label, no Punycode eligible content found"}}
 {"call":{"fn":"alabel","text":[45]},"want":{"ok":null,"kind":"IDNAError","message":"Label must not start or end with a hyphen"}}
 {"call":{"fn":"alabel","text":[97]},"want":{"ok":[97],"kind":"","message":""}}
+{"call":{"fn":"ulabel","text":[120,110,45,45,45,57,108,108]},"want":{"ok":null,"kind":"IDNAError","message":"A-label is not the canonical Punycode encoding of its U-label"}}
 {"call":{"fn":"alabel","text":[46]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+002E at position 1 of '.' not allowed"}}
 {"call":{"fn":"alabel","text":[45]},"want":{"ok":null,"kind":"IDNAError","message":"Label must not start or end with a hyphen"}}
 {"call":{"fn":"alabel","text":[46]},"want":{"ok":null,"kind":"InvalidCodepoint","message":"Codepoint U+002E at position 1 of '.' not allowed"}}
@@ -10280,6 +10333,7 @@
 {"call":{"fn":"alabel","text":[108]},"want":{"ok":[108],"kind":"","message":""}}
 {"call":{"fn":"encode","text":[120,110,45,45,45]},"want":{"ok":null,"kind":"IDNAError","message":"A-label must not end with a hyphen"}}
 {"call":{"fn":"alabel","text":[57]},"want":{"ok":[57],"kind":"","message":""}}
+{"call":{"fn":"ulabel","text":[120,110,45,45,45,97]},"want":{"ok":null,"kind":"IDNAError","message":"A-label is not the canonical Punycode encoding of its U-label"}}
 {"call":{"fn":"remap","text":[122]},"want":{"ok":[122],"kind":"","message":""}}
 {"call":{"fn":"alabel","text":[122]},"want":{"ok":[122],"kind":"","message":""}}
 {"call":{"fn":"alabel","text":[57]},"want":{"ok":[57],"kind":"","message":""}}

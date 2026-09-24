@@ -135,11 +135,6 @@ func renderTables(t *testing.T, dump tablesDump) []byte {
 		}
 	}
 	out.WriteString("}\n\n")
-	out.WriteString("var uts46HasReplacement = [...]bool{\n")
-	for _, replacement := range dump.Replacements {
-		fmt.Fprintf(&out, "\t%v,\n", replacement != nil)
-	}
-	out.WriteString("}\n\n")
 	renderRangeMap(&out, "codepointClasses", dump.Classes, []string{"PVALID", "CONTEXTJ", "CONTEXTO"})
 	renderRangeMap(&out, "scripts", dump.Scripts, []string{"Greek", "Han", "Hebrew", "Hiragana", "Katakana"})
 	out.WriteString("var joiningTypes = [...]struct {\n\tname   string\n\tranges [][2]rune\n}{\n")

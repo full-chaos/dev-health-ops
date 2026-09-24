@@ -298,15 +298,15 @@ func checkLabel(label []rune) *Error {
 		case inRanges(codepointClasses["PVALID"], r):
 			continue
 		case inRanges(codepointClasses["CONTEXTJ"], r):
-			// check_label raises InvalidCodepointContext for an invalid
-			// joiner INSIDE a "try: ... except ValueError", and IDNAError
-			// is a ValueError (through UnicodeError): the handler catches
-			// that raise too, so every refused joiner surfaces as this
-			// message, the same as an unknown neighbouring code point.
-			// validContextJ's unknown-neighbour result carries valid=false,
-			// so valid alone decides.
-			if valid, _ := validContextJ(label, pos); !valid {
+			// Only valid_contextj's own ValueError (a neighbour without a
+			// name) is the unknown-codepoint error; a refused joiner is
+			// InvalidCodepointContext.
+			valid, known := validContextJ(label, pos)
+			if !known {
 				return idnaError(KindIDNA, "Unknown codepoint adjacent to joiner %s at position %d in %s", unot(r), pos+1, repr(label))
+			}
+			if !valid {
+				return idnaError(KindInvalidCodepointContext, "Joiner %s not allowed at position %d in %s", unot(r), pos+1, repr(label))
 			}
 		case inRanges(codepointClasses["CONTEXTO"], r):
 			if !validContextO(label, pos) {
@@ -407,6 +407,9 @@ func ulabelBytes(labelBytes []byte) ([]rune, *Error) {
 		if !ok {
 			return nil, idnaError(KindIDNA, "Invalid A-label")
 		}
+		if string(punycodeEncode(decoded)) != string(rest) {
+			return nil, idnaError(KindIDNA, "A-label is not the canonical Punycode encoding of its U-label")
+		}
 		if err := checkLabel(decoded); err != nil {
 			return nil, err
 		}
@@ -419,24 +422,25 @@ func ulabelBytes(labelBytes []byte) ([]rune, *Error) {
 	return label, nil
 }
 
-// UTS46Remap is uts46_remap(domain, std3_rules, transitional).
-func UTS46Remap(domain []rune, std3Rules, transitional bool) ([]rune, *Error) {
+// UTS46Remap is uts46_remap(domain, std3_rules=False, transitional=False),
+// the only call email-validator makes: valid and deviation code points are
+// kept, mapped ones replaced, ignored ones dropped, any other refused, and
+// the result is NFC. idna's own shortcut for an all-ASCII domain (lower()
+// without NFC) is not needed: for every ASCII code point the table gives
+// the same answer.
+func UTS46Remap(domain []rune) ([]rune, *Error) {
 	if len(domain) > maxInputLength {
 		return nil, idnaError(KindIDNA, "Domain too long")
 	}
 	var out []rune
 	for pos, r := range domain {
 		index := sort.Search(len(uts46Starts), func(i int) bool { return uts46Starts[i] > r }) - 1
-		status := uts46Statuses[index]
-		replacement, hasReplacement := uts46Replacements[index], uts46HasReplacement[index]
-		keep := status == 'V' || (status == 'D' && !transitional) || (status == '3' && !std3Rules && !hasReplacement)
-		replace := hasReplacement && (status == 'M' || (status == '3' && !std3Rules) || (status == 'D' && transitional))
-		switch {
-		case keep:
+		switch uts46Statuses[index] {
+		case 'V', 'D':
 			out = append(out, r)
-		case replace:
-			out = append(out, []rune(replacement)...)
-		case status == 'I':
+		case 'M':
+			out = append(out, []rune(uts46Replacements[index])...)
+		case 'I':
 		default:
 			return nil, idnaError(KindInvalidCodepoint, "Codepoint %s not allowed at position %d in %s", unot(r), pos+1, repr(domain))
 		}

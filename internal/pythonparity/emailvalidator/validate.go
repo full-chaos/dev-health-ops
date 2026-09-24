@@ -256,7 +256,7 @@ func validateDomainName(domain []rune) (domainResult, *SyntaxError) {
 		return domainResult{}, syntaxError("The part after the @-sign contains invalid characters: %s.", bad)
 	}
 	original := domain
-	remapped, idnaErr := pyidna.UTS46Remap(domain, false, false)
+	remapped, idnaErr := pyidna.UTS46Remap(domain)
 	if idnaErr != nil {
 		return domainResult{}, syntaxError("The part after the @-sign contains invalid characters (%s).", idnaErr.Message)
 	}

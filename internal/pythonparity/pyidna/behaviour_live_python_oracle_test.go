@@ -191,7 +191,7 @@ func goBehaviour(call behaviourCall) behaviourResult {
 	var err *Error
 	switch call.Fn {
 	case "remap":
-		out, err = UTS46Remap(call.Text, false, false)
+		out, err = UTS46Remap(call.Text)
 	case "alabel":
 		var encoded []byte
 		encoded, err = Alabel(call.Text)

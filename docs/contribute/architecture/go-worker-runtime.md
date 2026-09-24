@@ -1285,7 +1285,7 @@ flowchart TD
 
   subgraph WFIN["dev-health-worker — NativeFinalizeSyncRunService"]
     TERM["Terminalize sync_runs / sync_run_units;<br/>observeTerminalSyncRun updates backfill_jobs / job_runs<br/>[domain]"]
-    COV["invalidateSyncCoverageForIntegration: advisory xact lock,<br/>then UPDATE sync_coverage_projections SET invalidated_at<br/>(once-only branch, inside the finalizing tx)<br/>[domain]"]
+    COV["invalidateSyncCoverageForIntegration: advisory xact lock,<br/>then UPDATE sync_coverage_projections SET invalidated_at,<br/>updated_at (both now(), as the Python ORM update does)<br/>(once-only branch, inside the finalizing tx)<br/>[domain]"]
     COMMIT["tx.Commit"]
     EPOCH["invalidateCoverageCache (CHAOS-4226): INCR + EXPIRE<br/>cache_epoch:org:{org_id} via VALKEY_URI (DB 1), 5s bound,<br/>AFTER commit, once-only branch only; failure is logged +<br/>counted, never fails the committed finalize<br/>[external — Valkey, no Postgres role]"]
     CNT["emitted_total{provider}++ always;<br/>consumed_total{provider}++ only on Valkey ACK<br/>(devhealth_sync_coverage_cache_invalidations_*)"]

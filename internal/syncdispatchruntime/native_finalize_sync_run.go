@@ -899,7 +899,9 @@ ON CONFLICT ON CONSTRAINT uq_sync_compute_checkpoint_unit_type DO NOTHING`,
 // integration_id selector variant -- the only one finalize_sync_run calls).
 // Pure Postgres: an advisory transaction lock per resolved sync_config_id
 // (serializes against a concurrent coverage rebuild) followed by a single
-// invalidating UPDATE.
+// invalidating UPDATE. Python's statement is an ORM-enabled update() of
+// SyncCoverageProjection, whose updated_at has onupdate=func.now(), so the
+// UPDATE sets updated_at = now() as well.
 func invalidateSyncCoverageForIntegration(ctx context.Context, tx pgx.Tx, orgID, integrationID string) error {
 	rows, err := tx.Query(ctx, `
 SELECT id::text FROM public.sync_configurations
@@ -933,7 +935,7 @@ ORDER BY id`, orgID, integrationID)
 	}
 	if _, err := tx.Exec(ctx, `
 UPDATE public.sync_coverage_projections
-SET invalidated_at = now()
+SET invalidated_at = now(), updated_at = now()
 WHERE org_id = $1 AND sync_config_id = ANY($2::uuid[])`, orgID, configIDs); err != nil {
 		return ErrFinalizeSyncRunUnavailable
 	}

@@ -218,10 +218,12 @@ func apiPosture() RolePosture {
 			// webhook's subscription events (CHAOS-6518) insert and update
 			// subscriptions and insert their subscription_events row, and
 			// queue billing_notifications intents (the key-conflict
-			// fallback is a SELECT, always implicit).
+			// fallback is a SELECT, always implicit). Its invoice events
+			// (CHAOS-6526) upsert invoices (INSERT ... ON CONFLICT DO
+			// UPDATE) and replace their line items (delete, then insert).
 			{"refunds", false, false, true},
-			{"invoice_line_items", false, false, true},
-			{"invoices", false, true, true},
+			{"invoice_line_items", true, false, true},
+			{"invoices", true, true, true},
 			{"subscription_events", true, false, true},
 			{"subscriptions", true, true, true},
 			{"billing_notifications", true, false, false},

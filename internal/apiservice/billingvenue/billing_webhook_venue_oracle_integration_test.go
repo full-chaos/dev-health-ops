@@ -153,17 +153,16 @@ func webhookRequests(t *testing.T, f billingFixture) []venueoracle.Request {
 		value["data"] = map[string]any{"object": []any{1}}
 	})
 
-	// Invoices: the no-org payment_failed branch, and the dedupe failure
-	// both planes answer with (CHAOS-6526).
+	// Invoices: the no-org payment_failed branch (logged, 200, nothing
+	// written on both planes). Every invoice event the Go plane applies is
+	// a named divergence (the Python handler 500s, CHAOS-6526) and is
+	// measured in TestInvoiceWebhookAppliesTestModeEvents instead.
 	invoice := func(name, eventType string, metadata any) {
 		event(name, "invoice.paid.json", eventType, func(_, object map[string]any) { object["metadata"] = metadata })
 	}
 	invoice("invoice.payment_failed: no org", "invoice.payment_failed", map[string]any{})
 	invoice("invoice.payment_failed: metadata null", "invoice.payment_failed", nil)
 	invoice("invoice.payment_failed: empty org_id", "invoice.payment_failed", map[string]any{"org_id": ""})
-	invoice("invoice.payment_failed: with org", "invoice.payment_failed", map[string]any{"org_id": orgA})
-	invoice("invoice.paid: with org", "invoice.paid", map[string]any{"org_id": orgA})
-	invoice("invoice.finalized: no org", "invoice.finalized", map[string]any{})
 
 	subscriptionRequests(t, f, event, func(name string, body []byte) { signed(name, body) })
 
@@ -232,7 +231,8 @@ func webhookEnv() map[string]string {
 
 // TestVenueOracleBillingWebhook is the Stripe webhook differential:
 // signature and payload handling, checkout.session.completed to a signed,
-// persisted license, the invoice branch's shared 500, and the
+// persisted license, the invoice branch's no-org answer (the applied
+// invoice events are TestInvoiceWebhookAppliesTestModeEvents), and the
 // customer.subscription.* events (subscription rows, the license sync,
 // license re-sign and revoke, and the notification intents with their job
 // outbox handoffs). The Python handlers the deployed StripeObject breaks

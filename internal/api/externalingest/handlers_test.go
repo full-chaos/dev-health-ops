@@ -94,6 +94,9 @@ func TestHandleGetSchema(t *testing.T) {
 		if cachedRecorder.Code != 304 {
 			t.Fatalf("status = %d, want 304 for a matching If-None-Match", cachedRecorder.Code)
 		}
+		if got := cachedRecorder.Header().Get("ETag"); got != etag {
+			t.Fatalf("304 ETag = %q, want %q (a 304 must carry the validator)", got, etag)
+		}
 	})
 }
 

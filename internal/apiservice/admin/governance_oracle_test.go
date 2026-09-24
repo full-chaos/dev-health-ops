@@ -464,9 +464,41 @@ VALUES ($1, $2, (SELECT id FROM feature_flags ORDER BY key LIMIT 1), true, NULL,
 	)
 
 	python := venue.ServePython(t, requests)
-	goBase, _ := startGoServer(t, ctx, venue, jwtKey)
+	goBase, goPool := startGoServer(t, ctx, venue, jwtKey)
 
 	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{
+		// Ids are redacted from the comparison, so a created row's id is
+		// checked here instead: the Go response must carry a valid UUID that
+		// names the row it inserted.
+		Inspect: func(request venueoracle.Request, response venueoracle.Response) {
+			table := ""
+			switch {
+			case request.Method == "POST" && strings.HasSuffix(request.Path, "/ip-allowlist"):
+				table = "org_ip_allowlist"
+			case request.Method == "POST" && strings.HasSuffix(request.Path, "/feature-overrides"):
+				table = "org_feature_overrides"
+			}
+			if table == "" || response.Status != 201 {
+				return
+			}
+			value, err := pyjson.DecodeString(response.Body)
+			object, isObject := value.(*pyjson.Object)
+			if err != nil || !isObject {
+				t.Errorf("%s: 201 body is not an object: %s", request.Name, response.Body)
+				return
+			}
+			raw, _ := object.Get("id")
+			id, isString := raw.(string)
+			parsed, parseErr := uuid.Parse(id)
+			if !isString || parseErr != nil {
+				t.Errorf("%s: created id %v is not a UUID", request.Name, raw)
+				return
+			}
+			var rows int
+			if err := goPool.QueryRow(ctx, "SELECT count(*) FROM "+table+" WHERE id = $1", parsed).Scan(&rows); err != nil || rows != 1 {
+				t.Errorf("%s: created id %s names %d rows in %s (err %v), want 1", request.Name, id, rows, table, err)
+			}
+		},
 		Normalize: func(request venueoracle.Request, body string) string {
 			if strings.HasPrefix(request.Name, "W ") {
 				body = redactDeep(t, body, "id", "created_at", "updated_at")

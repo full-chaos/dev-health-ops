@@ -93,18 +93,11 @@ func TestStartupDependencyFailuresNameTheDependency(t *testing.T) {
 		"process license": {
 			cfg: func(t *testing.T) config.Config {
 				t.Setenv("LICENSE_KEY", "signed-key-value")
-				return config.Config{APIAddress: "127.0.0.1:0"}
-			},
-			dependency: "api_process_license", reason: "api_process_license_unsupported",
-			errorText: "LICENSE_KEY is set",
-		},
-		"process license public key": {
-			cfg: func(t *testing.T) config.Config {
 				t.Setenv("LICENSE_PUBLIC_KEY", "public-key-value")
 				return config.Config{APIAddress: "127.0.0.1:0"}
 			},
 			dependency: "api_process_license", reason: "api_process_license_unsupported",
-			errorText: "LICENSE_PUBLIC_KEY is set",
+			errorText: "LICENSE_KEY and LICENSE_PUBLIC_KEY are both set",
 		},
 		"server": {
 			cfg:        func(*testing.T) config.Config { return config.Config{} },
@@ -194,17 +187,24 @@ func TestShellLogsTheStartupDependencyReason(t *testing.T) {
 	}
 }
 
-func TestProcessLicenseVariableIgnoresUnsetAndEmpty(t *testing.T) {
-	env := map[string]string{"LICENSE_KEY": "", "LICENSE_PUBLIC_KEY": ""}
-	lookup := func(key string) (string, bool) { value, ok := env[key]; return value, ok }
-	if got := processLicenseVariable(lookup); got != "" {
-		t.Fatalf("empty values named %q, want none", got)
-	}
-	if got := processLicenseVariable(func(string) (string, bool) { return "", false }); got != "" {
-		t.Fatalf("unset values named %q, want none", got)
-	}
-	env["LICENSE_PUBLIC_KEY"] = "k"
-	if got := processLicenseVariable(lookup); got != "LICENSE_PUBLIC_KEY" {
-		t.Fatalf("got %q, want LICENSE_PUBLIC_KEY", got)
+// Python activates a process licence only with BOTH a public key and a key;
+// either alone (or an empty value) leaves it at the community tier, which the
+// Go gates agree with, so start-up must not refuse those.
+func TestProcessLicenseConfiguredNeedsBothVariables(t *testing.T) {
+	for name, testCase := range map[string]struct {
+		env  map[string]string
+		want bool
+	}{
+		"neither":         {map[string]string{}, false},
+		"both empty":      {map[string]string{"LICENSE_KEY": "", "LICENSE_PUBLIC_KEY": ""}, false},
+		"key only":        {map[string]string{"LICENSE_KEY": "k"}, false},
+		"public key only": {map[string]string{"LICENSE_PUBLIC_KEY": "p"}, false},
+		"key and empty":   {map[string]string{"LICENSE_KEY": "k", "LICENSE_PUBLIC_KEY": ""}, false},
+		"both":            {map[string]string{"LICENSE_KEY": "k", "LICENSE_PUBLIC_KEY": "p"}, true},
+	} {
+		lookup := func(key string) (string, bool) { value, ok := testCase.env[key]; return value, ok }
+		if got := processLicenseConfigured(lookup); got != testCase.want {
+			t.Errorf("%s: processLicenseConfigured = %v, want %v", name, got, testCase.want)
+		}
 	}
 }

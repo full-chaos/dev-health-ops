@@ -1,6 +1,7 @@
 package apiservice
 
 import (
+	"errors"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"os"
 
@@ -226,9 +227,9 @@ func buildDeps(
 	var deps Deps
 	var components []lifecycle.Component
 
-	if name := processLicenseVariable(os.LookupEnv); name != "" {
+	if processLicenseConfigured(os.LookupEnv) {
 		return Deps{}, nil, dependencyFailure(ctx, logger, "api_process_license", "api_process_license_unsupported",
-			fmt.Errorf("%s is set: the Go api does not evaluate a process-wide license, and its feature-gated routes would answer differently from the Python api; unset it or keep these routes on the Python api", name))
+			errors.New("LICENSE_KEY and LICENSE_PUBLIC_KEY are both set: the Go api does not evaluate a process-wide license, and its feature-gated routes would answer differently from the Python api; unset one or keep these routes on the Python api"))
 	}
 
 	if cfg.APIDatabaseURI.Configured() {
@@ -304,16 +305,17 @@ func buildDeps(
 	return deps, components, nil
 }
 
-// processLicenseVariable names the first process-license variable (the signed
-// key and the public key Python's LicenseManager reads from its environment)
-// that holds a value, "" when neither does. The Go feature gates decide from
-// the org's own license rows only, so a process that sets either would serve
-// gated routes differently from Python; start-up refuses instead.
-func processLicenseVariable(lookup func(string) (string, bool)) string {
-	for _, name := range []string{"LICENSE_KEY", "LICENSE_PUBLIC_KEY"} {
-		if value, ok := lookup(name); ok && value != "" {
-			return name
-		}
+// processLicenseVariables names the two variables Python's LicenseManager
+// reads when it activates a process-wide licence, and true when BOTH hold a
+// value: it validates a signed key only when a public key is configured and
+// a key is present, so either one alone leaves Python at the community tier
+// (the same answer the Go gates give). The Go feature gates decide from the
+// org's own licence rows only, so a process with both set would serve gated
+// routes differently from Python; start-up refuses instead.
+func processLicenseConfigured(lookup func(string) (string, bool)) bool {
+	holds := func(name string) bool {
+		value, ok := lookup(name)
+		return ok && value != ""
 	}
-	return ""
+	return holds("LICENSE_KEY") && holds("LICENSE_PUBLIC_KEY")
 }

@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strings"
@@ -41,6 +42,7 @@ type venueIDs struct {
 	cfgSurrogate                                                uuid.UUID
 	jobSync, jobMetrics, jobB, jobBadList, jobInf               uuid.UUID
 	runP1, runP2, runB, runBadResult, runNullResult             uuid.UUID
+	runRich, runBadUnit, srcNoFull, runBadFlags                 uuid.UUID
 }
 
 func newVenueIDs() venueIDs {
@@ -54,6 +56,7 @@ func newVenueIDs() venueIDs {
 		&ids.cfgBadTargetsInt, &ids.cfgBadTargetsNumber, &ids.cfgBadTargetsTrue, &ids.cfgBadOptionsString,
 		&ids.cfgBadOptionsIntKey, &ids.cfgBadOptionsTrue, &ids.cfgSurrogate, &ids.jobSync, &ids.jobMetrics, &ids.jobB, &ids.jobBadList,
 		&ids.jobInf, &ids.runP1, &ids.runP2, &ids.runB, &ids.runBadResult, &ids.runNullResult,
+		&ids.runRich, &ids.runBadUnit, &ids.srcNoFull, &ids.runBadFlags,
 	} {
 		*target = uuid.New()
 	}
@@ -75,11 +78,15 @@ func TestSyncAdminReadsVenueOracle(t *testing.T) {
 	// Both planes read HIDE_MIGRATED_CHILD_CONFIGS per request; the venue
 	// runs with it on, so include_migrated decides the child rows.
 	t.Setenv("HIDE_MIGRATED_CHILD_CONFIGS", " On ")
+	// The run-units freshness judges lag against the HEAVY window cap both
+	// planes resolve from these: a 5-day cap, a one-hour overlap.
+	t.Setenv("SYNC_INCREMENTAL_HEAVY_MAX_WINDOW_DAYS", "5")
+	t.Setenv("SYNC_WATERMARK_OVERLAP", "3600")
 
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Root:      root,
 		JWTKey:    jwtKey,
-		PythonEnv: []string{"HIDE_MIGRATED_CHILD_CONFIGS= On "},
+		PythonEnv: []string{"HIDE_MIGRATED_CHILD_CONFIGS= On ", "SYNC_INCREMENTAL_HEAVY_MAX_WINDOW_DAYS=5", "SYNC_WATERMARK_OVERLAP=3600"},
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
 			seedSyncAdmin(t, ctx, admin, ids)
@@ -97,7 +104,37 @@ func TestSyncAdminReadsVenueOracle(t *testing.T) {
 
 	requests := syncAdminRequests(venue, ids)
 	python := venue.ServePython(t, requests)
-	receipt := venueoracle.Diff(t, base, requests, python, venueoracle.DiffOptions{})
+	receipt := venueoracle.Diff(t, base, requests, python, venueoracle.DiffOptions{
+		// lag_seconds is now minus the watermark at request time, and the
+		// two planes answer minutes apart: the digits are blanked on both.
+		// catching_up and ticks_behind are compared (every seeded
+		// watermark sits mid-tick or in the future), and the arithmetic is
+		// pinned exactly by the live model oracle at a fixed now.
+		Normalize: func(request venueoracle.Request, body string) string {
+			if !strings.HasSuffix(strings.SplitN(request.Path, "?", 2)[0], "/units") {
+				return body
+			}
+			return lagSeconds.ReplaceAllString(body, `"lag_seconds":"<volatile>"`)
+		},
+		// The seed must reach every freshness state it was built for, or a
+		// SAME on the rich run could be two empty lists agreeing.
+		Inspect: func(request venueoracle.Request, goResponse venueoracle.Response) {
+			if request.Name != "run units rich " {
+				return
+			}
+			for _, want := range []string{
+				`"catching_up_dataset_count":2,`, `"dataset_key":"commit-stats","cost_class":"heavy",`, `"catching_up":true,"ticks_behind":11,"window_cap_days":5`, `"ticks_behind":81,`, `"source_name":"acme/zero","dataset_key":"tests"`,
+				`"dataset_key":"work-item-history","cost_class":"medium",`, `"lag_seconds":0,`,
+				`"dataset_key":"work-item-labels","cost_class":"light","watermark_at":"`,
+				`"dataset_key":"files","cost_class":"heavy","watermark_at":null,"lag_seconds":null`,
+				`"retry_exhausted_unit_count":2,"budget_blocked_unit_count":1,`, `"unit_count":9,`,
+			} {
+				if !strings.Contains(goResponse.Body, want) {
+					t.Errorf("rich run units body lacks %s:\n%s", want, goResponse.Body)
+				}
+			}
+		},
+	})
 	t.Logf("receipt (%d requests):\n%s", len(requests), receipt)
 }
 
@@ -114,7 +151,7 @@ func syncAdminRequests(venue *venueoracle.Venue, ids venueIDs) []venueoracle.Req
 		"/sync-configs/auto-import-capabilities", "/sync-targets", "/sync-configs",
 		"/sync-configs/" + ids.cfgPlanner.String(), "/sync-configs/" + ids.cfgPlanner.String() + "/repositories",
 		"/sync-configs/" + ids.cfgPlanner.String() + "/jobs", "/backfill-jobs", "/sync-runs/" + ids.runP1.String(),
-		"/sync-configs/" + ids.cfgPlanner.String() + "/coverage",
+		"/sync-configs/" + ids.cfgPlanner.String() + "/coverage", "/sync-runs/" + ids.runRich.String() + "/units",
 	}
 	// The guard domain, on every route: no credential, a malformed and a
 	// wrong-key credential, a member, an admin and a superuser without an
@@ -239,6 +276,27 @@ func syncAdminRequests(venue *venueoracle.Venue, ids venueIDs) []venueoracle.Req
 	}
 	requests = append(requests, get("sync run trailing slash", "/sync-runs/"+ids.runP1.String()+"/", a))
 
+	// get_sync_run_units: the rich run under every limit shape, other
+	// runs, another org's run, unknown and malformed ids, a unit the
+	// response model refuses, and a bad limit next to an unknown run (the
+	// query is validated first).
+	for _, query := range []string{"", "?limit=2", "?limit=0", "?limit=-1", "?limit=-100", "?limit=99999999999999999999",
+		"?limit=x", "?limit=", "?limit=1.0", "?limit=2&limit=3", "?limit=%201%20"} {
+		requests = append(requests, get("run units rich "+query, "/sync-runs/"+ids.runRich.String()+"/units"+query, a))
+	}
+	for name, raw := range map[string]string{
+		"planner run": ids.runP1.String(), "idle run": ids.runP2.String(), "other org": ids.runB.String(),
+		"unknown": uuid.NewString(), "not a uuid": "zzz", "uppercase": strings.ToUpper(ids.runRich.String()),
+		"refused unit":             ids.runBadUnit.String(),
+		"list-shaped family flags": ids.runBadFlags.String(),
+	} {
+		requests = append(requests, get("run units "+name, "/sync-runs/"+raw+"/units", a))
+	}
+	requests = append(requests,
+		get("run units bad limit unknown run", "/sync-runs/"+uuid.NewString()+"/units?limit=x", a),
+		get("run units other org caller", "/sync-runs/"+ids.runB.String()+"/units", b),
+	)
+
 	// get_sync_config_coverage: a fresh and a refreshing projection, a
 	// payload stored as pairs, rows at another version, lookback or org
 	// (pending), payloads the response model refuses, another org's config,
@@ -257,6 +315,8 @@ func syncAdminRequests(venue *venueoracle.Venue, ids venueIDs) []venueoracle.Req
 	requests = append(requests, get("coverage other org caller", "/sync-configs/"+ids.cfgB.String()+"/coverage", b))
 	return requests
 }
+
+var lagSeconds = regexp.MustCompile(`"lag_seconds":[0-9]+`)
 
 func sortedKeys(values map[string]uuid.UUID) []string {
 	keys := make([]string, 0, len(values))
@@ -410,6 +470,53 @@ VALUES ($1, $2, $3, $4, $5, 'github', 'commits', 'medium', 'incremental', $6::ti
 	unit(ids.runP1, ids.src3, "success", "2026-03-30 00:00:00.5+00", "2026-04-01 00:00:00+00", "2026-05-01 10:00:02+00", "2026-05-01 11:00:00+00")
 	unit(ids.runP1, ids.src2, "failed", "2026-03-01 00:00:00+00", "2026-04-09 00:00:00+00", "2026-05-01 10:00:03+00", nil)
 	unit(ids.runP1, ids.src1, "planned", nil, "2026-04-10 00:00:00+00", "2026-05-01 10:00:04+00", nil)
+
+	source(ids.srcNoFull, ids.orgA, ids.intA, "github", "acme/zero", "", true, planner)
+	syncRun(ids.runRich, ids.orgA, "running", 9, "2026-05-01 10:00:00+00", nil, `{}`, nil)
+	syncRun(ids.runBadUnit, ids.orgA, "running", 1, nil, nil, `{}`, nil)
+	richUnit := func(runID, sourceID uuid.UUID, dataset, cost, status string, available, duration, result, flags any) {
+		exec(`INSERT INTO sync_run_units (id, org_id, sync_run_id, integration_id, source_id, provider, dataset_key, cost_class, mode,
+since_at, before_at, status, attempts, available_at, duration_seconds, result, processor_flags, rate_limit_deferrals,
+budget_deferrals, error, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, 'github', $6, $7, 'incremental', '2026-04-01 00:00:00+00', '2026-04-02 00:00:00.25+00', $8, 2,
+$9::timestamptz, $10, $11::json, $12::json, 1, 3, 'e', '2026-05-01 10:00:00+00', '2026-05-01 10:30:00+00')`,
+			uuid.New(), ids.orgA.String(), runID, ids.intA, sourceID, dataset, cost, status, available, duration, result, flags)
+	}
+	richUnit(ids.runRich, ids.src1, "commits", "medium", "success", nil, 30, `{"items": 1.5, "nested": {"b": [1e-7, null]}}`, nil)
+	richUnit(ids.runRich, ids.src1, "files", "heavy", "failed", nil, 90, `{"error_category": "timeout", "retry_count": "2", "retry_surfaces": ["a"]}`, nil)
+	richUnit(ids.runRich, ids.src2, "work-items", "medium", "retrying", "2027-01-01 00:00:00+00", nil,
+		`{"error_category": "budget_deferred", "linear_page_count": 4.0}`,
+		`{"family_dataset_work_item_labels": true, "family_dataset_work_item_history": true, "family_dataset_work_item_comments": false}`)
+	richUnit(ids.runRich, ids.src2, "prs", "light", "retrying", "2026-12-01 00:00:00.5+00", nil,
+		`{"retry_exhausted": true, "next_retry_at": "2026-01-01T00:00:00", "retry_reason": "lease"}`, nil)
+	richUnit(ids.runRich, ids.src4, "blame", "heavy", "failed", nil, 90, `{"error_category": "worker_lost_retry_exhausted", "retry_exhausted": "yes"}`, nil)
+	richUnit(ids.runRich, ids.src1, "repo-metadata", "light", "success", nil, 5, `{}`, nil)
+	richUnit(ids.runRich, ids.src3, "commit-stats", "heavy", "pending", nil, nil, `[1]`, nil)
+	richUnit(ids.runRich, ids.src5, "files", "heavy", "success", nil, 90, `null`, nil)
+	richUnit(ids.runRich, ids.srcNoFull, "tests", "heavy", "retrying", nil, 1, `{"last_lease_expired_at": 1767225600}`, `[]`)
+	richUnit(ids.runBadUnit, ids.src1, "commits", "medium", "failed", nil, nil, `{"retry_count": "x"}`, nil)
+	// A family unit whose processor_flags is a truthy non-object:
+	// _effective_dataset_keys raises in build_dataset_freshness.
+	syncRun(ids.runBadFlags, ids.orgA, "running", 1, nil, nil, `{}`, nil)
+	richUnit(ids.runBadFlags, ids.src1, "work-items", "medium", "success", nil, nil, `{}`, `["x"]`)
+
+	// Watermarks, relative to seed time so every verdict holds for the
+	// minutes between the planes: the net advance is 5 days less one hour
+	// (428400 s), so a watermark 10.5 advances back is catching up with 11
+	// ticks behind, stable for 59 hours either way.
+	watermark := func(org uuid.UUID, repoID, sourceID, target, dataset, at string) {
+		exec(`INSERT INTO sync_watermarks (id, org_id, repo_id, source_id, target, dataset_key, last_synced_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, `+at+`, now())`, uuid.New(), org.String(), repoID, sourceID, target, dataset)
+	}
+	watermark(ids.orgA, "r-commits", "acme/one", "t-commits", "commits", "now() - interval '30 days'")
+	watermark(ids.orgA, "r-files-null", "acme/one", "t-files-null", "files", "NULL")
+	watermark(ids.orgA, "acme/one", "x-files", "files", "x-files", "now() - interval '1 day'")
+	watermark(ids.orgA, "acme/two", "x-wi", "work-items", "work-items", "now() - interval '3 days'")
+	watermark(ids.orgA, "acme/two", "x-wih", "work-item-history", "x-wih", "now() + interval '10 days'")
+	watermark(ids.orgA, "r-cs", "acme/three", "t-cs", "commit-stats", "now() - 10.5 * interval '428400 seconds'")
+	watermark(ids.orgA, "r-blame", "acme/four", "t-blame", "blame", "now() - interval '2 days'")
+	watermark(ids.orgA, "r-files5", "acme/five", "t-files5", "files", "now() - interval '400 days'")
+	watermark(ids.orgB, "r-other", "acme/one", "t-other", "commits", "now() - interval '1 day'")
 
 	jobRun := func(jobID uuid.UUID, status int, started, completed any, duration any, result any, runError any, created string) {
 		exec(`INSERT INTO job_runs (id, job_id, status, started_at, completed_at, duration_seconds, result, error, triggered_by, created_at)

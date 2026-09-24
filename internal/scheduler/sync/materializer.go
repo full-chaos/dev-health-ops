@@ -1810,55 +1810,26 @@ WHERE org_id=$1 AND last_synced_at IS NOT NULL`, orgID)
 		return nil, fmt.Errorf("load scheduled sync watermarks: %w", err)
 	}
 	defer rows.Close()
-	type watermarkRow struct {
-		sourceID string
-		dataset  string
-		repoID   string
-		target   string
-		at       time.Time
-	}
-	var loaded []watermarkRow
+	var loaded []WatermarkRow
 	for rows.Next() {
-		var row watermarkRow
-		if err := rows.Scan(&row.sourceID, &row.dataset, &row.repoID, &row.target, &row.at); err != nil {
+		var row WatermarkRow
+		var at time.Time
+		if err := rows.Scan(&row.SourceID, &row.DatasetKey, &row.RepoID, &row.Target, &at); err != nil {
 			return nil, err
 		}
+		row.LastSyncedAt = &at
 		loaded = append(loaded, row)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+	// The query keeps only rows with a last_synced_at, so every resolved
+	// watermark is non-nil here.
+	index := NewWatermarkIndex(loaded)
 	for _, source := range sources {
 		for _, dataset := range datasets {
-			key := WatermarkKey{SourceID: source.ExternalID, Dataset: dataset.Key}
-			for _, row := range loaded {
-				if row.sourceID == source.ExternalID && row.dataset == dataset.Key {
-					result[key] = row.at.UTC()
-					break
-				}
-			}
-			if _, ok := result[key]; ok {
-				continue
-			}
-			for _, row := range loaded {
-				if row.repoID == source.ExternalID && row.target == dataset.Key {
-					result[key] = row.at.UTC()
-					break
-				}
-			}
-			if _, ok := result[key]; ok {
-				continue
-			}
-			for _, legacy := range legacyTargetsByDataset[dataset.Key] {
-				for _, row := range loaded {
-					if row.repoID == source.ExternalID && row.target == legacy && row.dataset == legacy {
-						result[key] = row.at.UTC()
-						break
-					}
-				}
-				if _, ok := result[key]; ok {
-					break
-				}
+			if at := index.Resolve(source.ExternalID, dataset.Key); at != nil {
+				result[WatermarkKey{SourceID: source.ExternalID, Dataset: dataset.Key}] = at.UTC()
 			}
 		}
 	}

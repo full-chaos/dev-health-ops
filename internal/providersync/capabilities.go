@@ -5,6 +5,8 @@ package providersync
 import (
 	"sort"
 	"strings"
+
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
 type CostClass string
@@ -207,4 +209,27 @@ func SupportedLegacyTargets(provider string) []string {
 		}
 	}
 	return targets
+}
+
+// DatasetWatermark is sync/datasets.py's _watermark_behavior: provider
+// independent and exact on the key, none for a dataset some provider
+// registers without a watermark, incremental for every other key --
+// including one no provider registers.
+func DatasetWatermark(dataset string) WatermarkBehavior {
+	for _, datasets := range datasetCapabilities {
+		if capability, ok := datasets[dataset]; ok && capability.Watermark == WatermarkNone {
+			return WatermarkNone
+		}
+	}
+	return WatermarkIncremental
+}
+
+// DatasetCostClass is api/services/integrations.py's _dataset_cost_class:
+// the registry's cost class for (provider, dataset), the provider matched
+// case-insensitively and the dataset exactly, else the unit's own class.
+func DatasetCostClass(provider, dataset, unitCostClass string) string {
+	if capability, ok := datasetCapabilities[pythonparity.Lower(provider)][dataset]; ok {
+		return string(capability.CostClass)
+	}
+	return unitCostClass
 }

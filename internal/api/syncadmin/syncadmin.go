@@ -11,6 +11,7 @@
 //	GET /api/v1/admin/sync-configs/{config_id}/coverage
 //	GET /api/v1/admin/backfill-jobs
 //	GET /api/v1/admin/sync-runs/{run_id}
+//	GET /api/v1/admin/sync-runs/{run_id}/units
 //
 // Every route is Depends(get_admin_org_id): policy.AdminOrg, and the org is
 // the caller's own org_id claim. As in FastAPI, the dependency answers
@@ -23,6 +24,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -63,6 +65,7 @@ func Routes(deps Deps) []httpapi.Route {
 		features:  licensing.PostgresStore{Pool: deps.Pool},
 		logger:    logger,
 		lookupEnv: lookup,
+		clock:     time.Now,
 	}
 	wrap := func(handler http.HandlerFunc) http.Handler { return deps.Guard.Wrap(policy.AdminOrg, handler) }
 	return []httpapi.Route{
@@ -75,6 +78,7 @@ func Routes(deps Deps) []httpapi.Route {
 		{Method: http.MethodGet, Pattern: prefix + "/sync-configs/{config_id}/coverage", Handler: wrap(h.getCoverage)},
 		{Method: http.MethodGet, Pattern: prefix + "/backfill-jobs", Handler: wrap(h.listBackfillJobs)},
 		{Method: http.MethodGet, Pattern: prefix + "/sync-runs/{run_id}", Handler: wrap(h.getSyncRun)},
+		{Method: http.MethodGet, Pattern: prefix + "/sync-runs/{run_id}/units", Handler: wrap(h.getRunUnits)},
 	}
 }
 
@@ -83,6 +87,8 @@ type handlers struct {
 	features  licensing.Store
 	logger    *slog.Logger
 	lookupEnv func(string) (string, bool)
+	// clock is build_dataset_freshness's datetime.now(timezone.utc).
+	clock func() time.Time
 }
 
 // orgID is get_admin_org_id's value; the guard already refused an empty

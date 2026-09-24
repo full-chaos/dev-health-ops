@@ -90,6 +90,22 @@ func auditJSON(entry auditEntry) (*pyjson.Object, error) {
 	return out, nil
 }
 
+// auditListWhere is BillingAuditService.query's filter: the org, then each
+// optional filter only when given (a falsy string filter is no filter).
+const auditListWhere = `WHERE org_id = $1 AND ($2::text IS NULL OR resource_type = $2)
+	AND ($3::uuid IS NULL OR resource_id = $3) AND ($4::text IS NULL OR action = $4)
+	AND ($5::text IS NULL OR reconciliation_status = $5) AND ($6::timestamptz IS NULL OR created_at >= $6)
+	AND ($7::timestamptz IS NULL OR created_at <= $7)`
+
+// nonEmpty is a query string filter as a bind value: nil (no filter) when
+// absent or empty.
+func nonEmpty(value *string) *string {
+	if value == nil || *value == "" {
+		return nil
+	}
+	return value
+}
+
 // queryPlainInt is a bare `name: int = fallback` query parameter.
 func queryPlainInt(errs *pybody.Errors, r *http.Request, name string, fallback int64) *big.Int {
 	value, _ := errs.QueryInt(name, pybody.LastQueryValue(r.URL.Query(), name), fallback, nil, nil)
@@ -135,31 +151,10 @@ func (h handlers) listAudit(w http.ResponseWriter, r *http.Request) {
 		if !queryLimit.IsInt64() || !queryOffset.IsInt64() {
 			return reply{}, errOverflow
 		}
-		where, args := `WHERE org_id = $1`, []any{orgID}
-		add := func(clause string, value any) {
-			args = append(args, value)
-			where += ` AND ` + clause + ` $` + itoa(len(args))
-		}
-		if resourceType != nil && *resourceType != "" {
-			add("resource_type =", *resourceType)
-		}
-		if resourceID != nil {
-			add("resource_id =", *resourceID)
-		}
-		if action != nil && *action != "" {
-			add("action =", *action)
-		}
-		if status != nil && *status != "" {
-			add("reconciliation_status =", *status)
-		}
-		if from != nil {
-			add("created_at >=", *pybody.Instant(from))
-		}
-		if to != nil {
-			add("created_at <=", *pybody.Instant(to))
-		}
-		rows, err := tx.Query(ctx, `SELECT `+auditColumns+` FROM billing_audit_log `+where+
-			` ORDER BY created_at DESC LIMIT `+queryLimit.String()+` OFFSET `+queryOffset.String(), args...)
+		filters := []any{orgID, nonEmpty(resourceType), resourceID, nonEmpty(action), nonEmpty(status),
+			pybody.Instant(from), pybody.Instant(to)}
+		rows, err := tx.Query(ctx, `SELECT `+auditColumns+` FROM billing_audit_log `+auditListWhere+
+			` ORDER BY created_at DESC LIMIT $8 OFFSET $9`, append(filters, queryLimit.Int64(), queryOffset.Int64())...)
 		if err != nil {
 			return reply{}, err
 		}
@@ -177,7 +172,7 @@ func (h handlers) listAudit(w http.ResponseWriter, r *http.Request) {
 			return reply{}, err
 		}
 		var total int64
-		if err := tx.QueryRow(ctx, `SELECT count(*) FROM billing_audit_log `+where, args...).Scan(&total); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT count(*) FROM billing_audit_log `+auditListWhere, filters...).Scan(&total); err != nil {
 			return reply{}, err
 		}
 		items := make([]pyjson.Value, 0, len(entries))

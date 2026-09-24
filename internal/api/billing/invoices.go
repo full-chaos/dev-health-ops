@@ -150,21 +150,14 @@ func (h handlers) listInvoices(w http.ResponseWriter, r *http.Request) {
 		if page.offset < 0 {
 			return reply{}, errOverflow
 		}
-		where, args := `WHERE true`, []any{}
-		if org != nil {
-			args = append(args, *org)
-			where += ` AND org_id = $` + itoa(len(args))
-		}
-		if status != nil && *status != "" {
-			args = append(args, *status)
-			where += ` AND status = $` + itoa(len(args))
-		}
+		filters := []any{org, nonEmpty(status)}
+		const where = `WHERE ($1::uuid IS NULL OR org_id = $1) AND ($2::text IS NULL OR status = $2)`
 		var total int64
-		if err := tx.QueryRow(ctx, `SELECT count(id) FROM invoices `+where, args...).Scan(&total); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT count(id) FROM invoices `+where, filters...).Scan(&total); err != nil {
 			return reply{}, err
 		}
-		rows, err := tx.Query(ctx, `SELECT `+invoiceColumns+` FROM invoices `+where+
-			` ORDER BY created_at DESC LIMIT `+itoa(int(page.limit))+` OFFSET `+itoa(int(page.offset)), args...)
+		rows, err := tx.Query(ctx, `SELECT `+invoiceColumns+` FROM invoices `+where+` ORDER BY created_at DESC LIMIT $3 OFFSET $4`,
+			append(filters, page.limit, page.offset)...)
 		if err != nil {
 			return reply{}, err
 		}

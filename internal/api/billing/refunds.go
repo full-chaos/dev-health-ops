@@ -140,9 +140,9 @@ func (h handlers) listRefunds(w http.ResponseWriter, r *http.Request) {
 		if page.offset < 0 {
 			return reply{}, errOverflow
 		}
-		where, args := orgFilter(`WHERE true`, nil, orgID)
-		rows, err := tx.Query(ctx, `SELECT `+refundColumns+` FROM refunds s `+where+
-			` ORDER BY s.created_at DESC LIMIT `+itoa(int(page.limit))+` OFFSET `+itoa(int(page.offset)), args...)
+		const where = `WHERE ($1::uuid IS NULL OR s.org_id = $1)`
+		rows, err := tx.Query(ctx, `SELECT `+refundColumns+` FROM refunds s `+where+` ORDER BY s.created_at DESC LIMIT $2 OFFSET $3`,
+			orgID, page.limit, page.offset)
 		if err != nil {
 			return reply{}, err
 		}
@@ -160,7 +160,7 @@ func (h handlers) listRefunds(w http.ResponseWriter, r *http.Request) {
 			return reply{}, err
 		}
 		var total int64
-		if err := tx.QueryRow(ctx, `SELECT count(s.id) FROM refunds s `+where, args...).Scan(&total); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT count(s.id) FROM refunds s `+where, orgID).Scan(&total); err != nil {
 			return reply{}, err
 		}
 		return ok(pageJSON(items, total, page)), nil

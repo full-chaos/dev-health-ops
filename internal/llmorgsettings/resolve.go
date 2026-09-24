@@ -128,7 +128,13 @@ func (s Store) ResolveUsableProvider(ctx context.Context, orgID string) (string,
 	if !credentialsComplete(provider, creds.APIKey) {
 		return "", nil
 	}
-	if ok, _ := ValidateBaseURL(ctx, creds.BaseURL); !ok {
+	// An escaped ValueError (a malformed IPv6 bracket) raises in Python; it is
+	// an error here, not a fallback.
+	ok, _, verr := ValidateBaseURLChecked(ctx, creds.BaseURL)
+	if verr != nil {
+		return "", verr
+	}
+	if !ok {
 		return "", nil
 	}
 	return provider, nil
@@ -162,7 +168,11 @@ func (s Store) Credentials(ctx context.Context, orgID, provider string) (Credent
 	if !credentialsComplete(requested, creds.APIKey) {
 		return Credentials{}, false, nil
 	}
-	if ok, _ := ValidateBaseURL(ctx, creds.BaseURL); !ok {
+	ok, _, verr := ValidateBaseURLChecked(ctx, creds.BaseURL)
+	if verr != nil {
+		return Credentials{}, false, verr
+	}
+	if !ok {
 		return Credentials{}, false, nil
 	}
 	return creds, true, nil

@@ -40,6 +40,8 @@ func validateBaseURLCorpus() []string {
 		"https://example.invalid:/v1", "https://example.invalid:8443/v1", "https://example.invalid:٣/v1", "https://8.8.8.8:99999/",
 		"https://[::1/v1", "https://::1]/v1", "https://[zz::1]/v1", "https://[::1]x/v1", "https://[1.2.3.4]/v1", "https://[v1.fe]/v1", "https://[vz.fe]/v1",
 		"https://exa%mple.invalid/v1", "https://example%.invalid/v1", "https://exa%41mple.invalid", "https://例え.invalid/v1", "https://ＧＩＴ.invalid",
+		"https://０.０.０.０/", "https://１２７.０.０.１/", "https://127。0。0。1/", "https://ｅxample.invalid/v1", "https://straße.invalid/v1", "https://ＬＯＣＡＬＨＯＳＴ/",
+		"https://\u05d0\u05d1.invalid/", "https://a\u05d0.invalid/", "https://xn--é.invalid/", "https://é..invalid/", "https://" + strings.Repeat("ａ", 64) + ".invalid/",
 		"https:", "https://", "https:///v1", "https://.", "https://...", "https://a..b.invalid/", "https://.a.invalid/", "https://a.invalid./",
 		"https://" + strings.Repeat("a", 63) + ".invalid/", "https://" + strings.Repeat("a", 64) + ".invalid/", "https://a." + strings.Repeat("b", 63) + "/",
 		"https://a." + strings.Repeat("b", 64) + "/", "https://" + strings.Repeat("é", 40) + ".invalid/", "https://" + strings.Repeat("é", 70) + ".invalid/",

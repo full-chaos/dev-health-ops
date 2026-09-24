@@ -6,8 +6,6 @@ import (
 	"net/netip"
 	"strings"
 
-	"golang.org/x/net/idna"
-
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
@@ -138,54 +136,11 @@ func normalizeHost(host string) (string, string) {
 	if lowered == "localhost" {
 		return lowered, ""
 	}
-	normalized, ok := idnaEncode(lowered)
-	if !ok {
+	normalized, err := pythonparity.IDNAEncode(lowered)
+	if err != nil {
 		return "", "LLM base_url host is not valid IDNA"
 	}
 	return normalized, ""
-}
-
-// idnaEncode is str.encode("idna"): a pure-ASCII name passes through when
-// every label but the last is 1..63 characters and the last under 64; any
-// other name is split on the four IDNA dots and each label punycode-encoded
-// (named residual: Python applies nameprep, Go's punycode profile does not
-// map, so a non-ASCII host that nameprep rewrites can differ).
-func idnaEncode(host string) (string, bool) {
-	if isASCIIText(host) {
-		labels := strings.Split(host, ".")
-		for _, label := range labels[:len(labels)-1] {
-			if len(label) == 0 || len(label) >= 64 {
-				return "", false
-			}
-		}
-		if len(labels[len(labels)-1]) >= 64 {
-			return "", false
-		}
-		return host, true
-	}
-	replacer := strings.NewReplacer("\u3002", ".", "\uff0e", ".", "\uff61", ".")
-	parts := strings.Split(replacer.Replace(host), ".")
-	if len(parts) > 0 && parts[len(parts)-1] == "" {
-		parts = parts[:len(parts)-1]
-	}
-	out := make([]string, 0, len(parts))
-	for _, part := range parts {
-		encoded, err := idna.ToASCII(part)
-		if err != nil || len(encoded) == 0 || len(encoded) >= 64 {
-			return "", false
-		}
-		out = append(out, encoded)
-	}
-	return strings.Join(out, "."), true
-}
-
-func isASCIIText(text string) bool {
-	for index := 0; index < len(text); index++ {
-		if text[index] >= 0x80 {
-			return false
-		}
-	}
-	return true
 }
 
 // extraUnsafePrefixes are IANA special-purpose ranges Go's netip.Addr

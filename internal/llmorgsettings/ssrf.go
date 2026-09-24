@@ -4,11 +4,9 @@ import (
 	"context"
 	"net"
 	"net/netip"
-	"net/url"
-	"strconv"
 	"strings"
 
-	"golang.org/x/net/idna"
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
 // resolver looks up the IP addresses a hostname resolves to, mirroring
@@ -43,56 +41,58 @@ func defaultResolver(ctx context.Context, host string) ([]net.IP, error) {
 // own comment on _resolved_addresses' empty-set branch). ok=true,
 // reason="" on success; ok=false, reason=<non-empty> on rejection.
 func ValidateBaseURL(ctx context.Context, baseURL string) (bool, string) {
+	ok, reason, err := ValidateBaseURLChecked(ctx, baseURL)
+	if err != nil {
+		return false, err.Error()
+	}
+	return ok, reason
+}
+
+// ValidateBaseURLChecked is ValidateBaseURL with Python's third outcome: the
+// error is the ValueError urllib.parse.urlsplit raises for a malformed
+// netloc (an unbalanced or invalid IPv6 bracket), which validate_llm_base_url
+// does not catch -- a caller that answers as the Python api does answers its
+// unhandled-error response.
+func ValidateBaseURLChecked(ctx context.Context, baseURL string) (bool, string, error) {
 	return validateBaseURL(ctx, baseURL, defaultResolver)
 }
 
-func validateBaseURL(ctx context.Context, baseURL string, resolve resolver) (bool, string) {
+func validateBaseURL(ctx context.Context, baseURL string, resolve resolver) (bool, string, error) {
 	if baseURL == "" {
-		return true, ""
+		return true, "", nil
 	}
 	if containsControlOrSpace(baseURL) {
-		return false, "LLM base_url must not contain whitespace or control characters"
+		return false, "LLM base_url must not contain whitespace or control characters", nil
 	}
-	parsed, err := url.Parse(baseURL)
+	parsed, err := pythonparity.SplitURL(baseURL)
 	if err != nil {
-		return false, "LLM base_url is invalid: " + err.Error()
+		return false, "", err
 	}
-	if parsed.User != nil {
-		return false, "LLM base_url must not include userinfo"
+	if parsed.HasUserInfo() {
+		return false, "LLM base_url must not include userinfo", nil
 	}
-	scheme := strings.ToLower(parsed.Scheme)
-	if scheme != "http" && scheme != "https" {
-		return false, "LLM base_url must use http or https"
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return false, "LLM base_url must use http or https", nil
 	}
-	rawHost := parsed.Hostname()
-	if rawHost == "" {
-		return false, "LLM base_url is missing a host"
+	rawHost, hasHost := parsed.Hostname()
+	_, _, portErr := parsed.Port()
+	if portErr != nil {
+		return false, "LLM base_url is invalid: " + portErr.Error(), nil
 	}
-	// codex round 3, P2: Go's net/url only checks a port is ALL-DIGIT
-	// syntax (net/url's validOptionalPort), never its magnitude -- unlike
-	// Python's urlsplit.port, which raises ValueError("Port out of range
-	// 0-65535") for e.g. ":65536" (credentials.py:182, caught by
-	// validate_llm_base_url's own try/except ValueError and rejected).
-	// Without this check Go accepted a URL like
-	// "https://host:65536/v1" as a usable BYO endpoint where Python
-	// rejects it outright.
-	if portStr := parsed.Port(); portStr != "" {
-		port, perr := strconv.Atoi(portStr)
-		if perr != nil || port < 0 || port > 65535 {
-			return false, "LLM base_url is invalid: port out of range 0-65535"
-		}
+	if !hasHost {
+		return false, "LLM base_url is missing a host", nil
 	}
 	host, reason := normalizeHost(rawHost)
 	if reason != "" {
-		return false, reason
+		return false, reason, nil
 	}
-	if scheme != "https" {
-		return false, "LLM base_url must use https"
+	if parsed.Scheme != "https" {
+		return false, "LLM base_url must use https", nil
 	}
 
-	if literal, err := netip.ParseAddr(host); err == nil {
+	if literal, ok := pythonparity.ParseIPAddress(host); ok {
 		if !isSafePublicIP(literal) {
-			return false, "LLM base_url host resolves to a non-public address"
+			return false, "LLM base_url host resolves to a non-public address", nil
 		}
 	}
 
@@ -100,7 +100,7 @@ func validateBaseURL(ctx context.Context, baseURL string, resolve resolver) (boo
 	if err != nil || len(addresses) == 0 {
 		// Unresolvable names are not SSRF targets at persist-time -- see
 		// this function's doc comment.
-		return true, ""
+		return true, "", nil
 	}
 	for _, addr := range addresses {
 		ip, ok := netip.AddrFromSlice(addr)
@@ -108,10 +108,10 @@ func validateBaseURL(ctx context.Context, baseURL string, resolve resolver) (boo
 			continue
 		}
 		if !isSafePublicIP(ip) {
-			return false, "LLM base_url host resolves to a non-public address"
+			return false, "LLM base_url host resolves to a non-public address", nil
 		}
 	}
-	return true, ""
+	return true, "", nil
 }
 
 func containsControlOrSpace(value string) bool {
@@ -132,11 +132,11 @@ func normalizeHost(host string) (string, string) {
 	if stripped == "" {
 		return "", "LLM base_url is missing a host"
 	}
-	lowered := strings.ToLower(stripped)
+	lowered := pythonparity.Lower(stripped)
 	if lowered == "localhost" {
 		return lowered, ""
 	}
-	normalized, err := idna.ToASCII(lowered)
+	normalized, err := pythonparity.IDNAEncode(lowered)
 	if err != nil {
 		return "", "LLM base_url host is not valid IDNA"
 	}

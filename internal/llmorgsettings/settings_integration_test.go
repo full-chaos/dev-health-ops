@@ -281,6 +281,20 @@ INSERT INTO org_feature_overrides (org_id, feature_id, is_enabled) VALUES ($1, $
 		}
 	})
 
+	t.Run("malformed IPv6 bracket in base_url is an error, as Python raises", func(t *testing.T) {
+		store, pool := newTestStore(t)
+		seedByoLLMFeature(ctx, t, pool, "team", true)
+		orgID := seedOrg(ctx, t, pool, "enterprise")
+		insertSetting(ctx, t, pool, orgID, "provider", "ollama")
+		insertSetting(ctx, t, pool, orgID, "base_url", "https://[::1/v1")
+		if got, err := store.ResolveUsableProvider(ctx, orgID.String()); err == nil {
+			t.Fatalf("ResolveUsableProvider = %q, nil; want the urlsplit ValueError", got)
+		}
+		if _, ok, err := store.Credentials(ctx, orgID.String(), "ollama"); err == nil || ok {
+			t.Fatalf("Credentials ok=%v err=%v; want the urlsplit ValueError", ok, err)
+		}
+	})
+
 	t.Run("incomplete credentials (api-key-required provider, no key) not usable", func(t *testing.T) {
 		store, pool := newTestStore(t)
 		seedByoLLMFeature(ctx, t, pool, "team", true)

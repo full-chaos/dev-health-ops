@@ -89,9 +89,16 @@ spec:
             ConfigMap, so the two planes can never disagree on it. Optional:
             an absent key leaves the variable unset on both planes.
             HIDE_MIGRATED_CHILD_CONFIGS filters GET /api/v1/admin/sync-configs.
+            SYNC_WATERMARK_OVERLAP and SYNC_INCREMENTAL_HEAVY_MAX_WINDOW_DAYS
+            set the HEAVY window cap GET /api/v1/admin/sync-runs/{run_id}/units
+            judges watermark lag against.
             */}}
             - name: HIDE_MIGRATED_CHILD_CONFIGS
               valueFrom: {configMapKeyRef: {name: {{ include "dev-health.configMapName" . }}, key: HIDE_MIGRATED_CHILD_CONFIGS, optional: true}}
+            - name: SYNC_WATERMARK_OVERLAP
+              valueFrom: {configMapKeyRef: {name: {{ include "dev-health.configMapName" . }}, key: SYNC_WATERMARK_OVERLAP, optional: true}}
+            - name: SYNC_INCREMENTAL_HEAVY_MAX_WINDOW_DAYS
+              valueFrom: {configMapKeyRef: {name: {{ include "dev-health.configMapName" . }}, key: SYNC_INCREMENTAL_HEAVY_MAX_WINDOW_DAYS, optional: true}}
           {{- with .Values.goApi.extraEnv }}
             {{- toYaml . | nindent 12 }}
           {{- end }}

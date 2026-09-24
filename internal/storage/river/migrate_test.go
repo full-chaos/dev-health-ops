@@ -5,10 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"os"
-	"path/filepath"
 	"reflect"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -55,44 +52,6 @@ func TestPinnedMigratorRequiresTwoConnectionsForLockAndCommitSeparatedMigrations
 	})
 	if !errors.Is(err, ErrMigrationConfiguration) {
 		t.Fatalf("ApplyPinnedMigrations() error = %v", err)
-	}
-}
-
-func TestLongRunningCommandsCannotAutoMigrate(t *testing.T) {
-	t.Parallel()
-
-	_, currentFile, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("locate test source")
-	}
-	repositoryRoot := filepath.Clean(filepath.Join(filepath.Dir(currentFile), "..", "..", ".."))
-	// The long-running services still built as their own cmd/ binaries. A
-	// service folded into dho is covered by cmd/dho's
-	// TestServiceVerbsCannotMigrate, which walks the command tree instead.
-	for _, command := range []string{
-		"dev-health-worker",
-	} {
-		directory := filepath.Join(repositoryRoot, "cmd", command)
-		entries, err := os.ReadDir(directory)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, entry := range entries {
-			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") || strings.HasSuffix(entry.Name(), "_test.go") {
-				continue
-			}
-			path := filepath.Join(directory, entry.Name())
-			contents, err := os.ReadFile(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			text := string(contents)
-			for _, forbidden := range []string{"rivermigrate", "ApplyPinnedMigrations", "dev-health-worker-migrate"} {
-				if strings.Contains(text, forbidden) {
-					t.Fatalf("long-running command %s file %s references migration surface %q", command, entry.Name(), forbidden)
-				}
-			}
-		}
 	}
 }
 

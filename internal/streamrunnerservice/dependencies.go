@@ -30,7 +30,7 @@ import (
 var errStreamDependencyUnavailable = errors.New("stream-runner dependency is unavailable")
 
 // dependencyFailure attaches a bounded reason code to the generic dependency
-// sentinel, mirroring cmd/dev-health-worker/dependencies.go's dependencyFailure
+// sentinel, mirroring internal/workerservice/dependencies.go's dependencyFailure
 // exactly. Before this, every distinct storage-construction failure -- a
 // missing URI, a domain Postgres pool that would not open, ClickHouse
 // refusing the connection, Valkey refusing the connection -- collapsed into
@@ -249,7 +249,7 @@ func (storage *productionStreamStorage) PostureManifestLockstep(
 	return postgres.CheckPostureManifestLockstep(ctx, storage.domainPool, binaryDigest)
 }
 
-// logDependencyCheckFailure mirrors cmd/dev-health-worker/dependencies.go's
+// logDependencyCheckFailure mirrors internal/workerservice/dependencies.go's
 // and internal/reconcilerservice/dependencies.go's helper of the same name
 // (CHAOS-5435). health.Registry never surfaces a CheckFunc's returned error
 // anywhere -- before this, ClickHouseReady/DomainPostgresReady/ValkeyReady
@@ -457,7 +457,7 @@ func configureStreamRunnerDependenciesWithSources(
 	supervisor := newStreamConsumerSupervisor(cfg, registry, sources.openStorage, logger, specs, observer)
 	// CHAOS-5437: posture_manifest_lockstep refuses readiness the instant
 	// this binary's compiled-in posture manifest is older than what
-	// go-worker-migrate has applied -- see cmd/dev-health-worker's identical
+	// go-worker-migrate has applied -- see internal/workerservice's identical
 	// check for the full incident this closes (three stream runners sat
 	// not_ready for 9h with no crash loop and no alert).
 	postureGuard := postureguard.New(
@@ -644,7 +644,7 @@ func pagerdutyRunnerConfig(replicas int) streamrunner.Config {
 }
 
 // pagerDutyWebhookSinks builds the effect writers one webhook reconciliation
-// commits through. They are the SAME types cmd/dev-health-worker constructs
+// commits through. They are the SAME types internal/workerservice constructs
 // for the native pull route (provider_sync.go), with the same entitlement and
 // the same ClickHouse connection -- the only difference is the lease, which
 // here is the webhook's receipt claim rather than a sync-unit lease.

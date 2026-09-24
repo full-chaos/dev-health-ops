@@ -1744,7 +1744,7 @@ const manualBackfillMaxDays = 31
 // is never observed. dev_health_remaining_metrics_manual_backfill_total
 // exists in internal/jobruntime for when a long-running process calls
 // StartManualBackfillRun; daily-redrive's own SetRedriveObserver is wired
-// the identical way (cmd/dev-health-worker/daily.go only, never here) for
+// the identical way (internal/workerservice/daily.go only, never here) for
 // the same reason -- see this command's PR RISK-NOTES.
 func dispatchMetricsRemaining(ctx context.Context, runtime *operatorRuntime, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {

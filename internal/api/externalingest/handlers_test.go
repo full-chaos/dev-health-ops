@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 )
 
 func TestPageParamsClampsToPythonsBounds(t *testing.T) {
@@ -37,23 +36,6 @@ func TestPageParamsUsesTheNamedParamPair(t *testing.T) {
 	limit, offset := pageParams(r, "errorLimit", "errorOffset")
 	if limit != 5 || offset != 6 {
 		t.Fatalf("got (%d,%d), want (5,6) -- errorLimit/errorOffset must not fall back to limit/offset", limit, offset)
-	}
-}
-
-func TestTimeRangeParams(t *testing.T) {
-	r := httptest.NewRequest("GET", "/x?createdAfter=2026-01-01T00:00:00Z&createdBefore=2026-01-02T00:00:00Z", nil)
-	after, before := timeRangeParams(r)
-	if after == nil || !after.Equal(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)) {
-		t.Fatalf("after = %v", after)
-	}
-	if before == nil || !before.Equal(time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)) {
-		t.Fatalf("before = %v", before)
-	}
-
-	empty := httptest.NewRequest("GET", "/x", nil)
-	after, before = timeRangeParams(empty)
-	if after != nil || before != nil {
-		t.Fatalf("absent params must stay nil: after=%v before=%v", after, before)
 	}
 }
 
@@ -93,6 +75,9 @@ func TestHandleGetSchema(t *testing.T) {
 		handler(cachedRecorder, cached)
 		if cachedRecorder.Code != 304 {
 			t.Fatalf("status = %d, want 304 for a matching If-None-Match", cachedRecorder.Code)
+		}
+		if got := cachedRecorder.Header().Get("ETag"); got != etag {
+			t.Fatalf("304 ETag = %q, want %q (a 304 must carry the validator)", got, etag)
 		}
 	})
 }

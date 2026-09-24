@@ -241,7 +241,7 @@ var liveDataGenerators = map[string]struct {
 	// table.py, is not listed here because it was never routed through this
 	// map -- it was fully discoverable via explicitCorpusPaths and ran fine.
 	// It was DELETED outright, along with its own dedicated rot guard
-	// (cmd/dev-health-worker/workgraph_scope_rot_guard_test.go), for the same
+	// (internal/workerservice/workgraph_scope_rot_guard_test.go), for the same
 	// reason: its `_production_window_digest` anchored on `def
 	// run_work_graph_build(`, which this PR deletes from work_graph_tasks.py,
 	// and its `_admit` reference called `worker_workgraph._scope_arguments(
@@ -249,7 +249,7 @@ var liveDataGenerators = map[string]struct {
 	// function's allowed set -- so every case would trivially become RAISES
 	// regardless of scope shape, collapsing the corpus's entire measurement
 	// axis rather than reporting reference drift. tests/fixtures/build_scope_
-	// parity_table.json stays as a frozen fixture: cmd/dev-health-worker/
+	// parity_table.json stays as a frozen fixture: internal/workerservice/
 	// workgraph_scope_parity_test.go's TestBuildScopeMatchesTheBridgeAdmission
 	// still diffs the (already-native) issue-pr-links pre-step's window
 	// parser against it, which needs no live Python.

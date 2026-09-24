@@ -19,7 +19,7 @@ import (
 // for worker_budget_wait_seconds: it runs ValkeyBudgetStore.Acquire and
 // ValkeyBackoffGate.Wait against a real, isolated Valkey instance (not a
 // mocked client), wired to a real *jobruntime.MetricsCollector exactly the
-// way cmd/dev-health-worker/provider_sync.go wires them in production, and
+// way internal/workerservice/provider_sync.go wires them in production, and
 // reads the collector's own Prometheus exposition to prove non-zero series.
 func TestValkeyBudgetStoreAndBackoffGateObserveRealWait(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)

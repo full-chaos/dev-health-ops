@@ -52,12 +52,14 @@ func apiPosture() RolePosture {
 			// LAST of org_deletion.py's 46 purge targets. Widened in
 			// place, per the one-entry rule below.
 			{"organizations", true, true, true},
-			// The one feature row this route ever reads (key =
-			// "agent_context_runtime"), never any other feature.
-			{"feature_flags", false, false, false},
+			// The acr route reads one feature row (key =
+			// "agent_context_runtime"). The admin feature-flag routes list
+			// every flag and update is_enabled/is_beta/is_deprecated.
+			{"feature_flags", false, true, false},
 			// Per-org override for that same feature. CHAOS-6306: a purge
-			// target, delete added.
-			{"org_feature_overrides", false, false, true},
+			// target, delete added. The admin override routes create and
+			// update rows.
+			{"org_feature_overrides", true, true, true},
 			// License tier + features_override JSON. The admin org PATCH
 			// route syncs an existing row's tier/managed_by on an actual
 			// tier change (OrganizationService._sync_license_tier);
@@ -232,7 +234,9 @@ func apiPosture() RolePosture {
 			// SSO: encrypted_secrets presence is also read for
 			// credentials_deleted's count.
 			{"sso_providers", false, false, true},
-			{"org_ip_allowlist", false, false, true},
+			// The admin IP-allowlist routes create, update and delete
+			// entries.
+			{"org_ip_allowlist", true, true, true},
 			{"org_retention_policies", false, false, true},
 			{"billing_audit_log", false, false, true},
 		},

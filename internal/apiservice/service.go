@@ -35,11 +35,13 @@ import (
 	"os"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/buildinfo"
 	"github.com/full-chaos/dev-health-ops/internal/api/externalingest"
 	healthroutes "github.com/full-chaos/dev-health-ops/internal/api/health"
 	"github.com/full-chaos/dev-health-ops/internal/api/orgs"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/producttelemetry"
+	"github.com/full-chaos/dev-health-ops/internal/api/syncadmin"
 	"github.com/full-chaos/dev-health-ops/internal/api/teamsidentity"
 	"github.com/full-chaos/dev-health-ops/internal/api/telemetry"
 	"github.com/full-chaos/dev-health-ops/internal/api/webhookintake"
@@ -53,6 +55,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
 	"github.com/full-chaos/dev-health-ops/internal/platform/shell"
+	"github.com/full-chaos/dev-health-ops/internal/platform/version"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -161,12 +164,14 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 		ExpectedWorkerGroups: deps.Probes.ExpectedWorkerGroups, Logger: logger,
 	})...)
 	routes = append(routes, producttelemetry.Routes(&producttelemetry.ValkeyStreams{URI: deps.Telemetry.ValkeyURI}, logger)...)
+	routes = append(routes, buildinfo.Routes(deps.Guard, version.Current("api"))...)
 	if deps.Guard != nil {
 		routes = append(routes, orgs.Routes(deps.Pool, deps.Guard, logger)...)
 		routes = append(routes, telemetry.Routes(deps.Pool, deps.Guard, deps.Auth, deps.Telemetry.Endpoint, logger)...)
 		routes = append(routes, customerpush.Routes(customerpush.Deps{Pool: deps.Pool, Guard: deps.Guard, Logger: logger})...)
+		routes = append(routes, syncadmin.Routes(syncadmin.Deps{Pool: deps.Pool, Guard: deps.Guard, Logger: logger})...)
 		if deps.ClickHouse != nil {
-			routes = append(routes, teamsidentity.Routes(deps.ClickHouse, deps.Guard, logger)...)
+			routes = append(routes, teamsidentity.Routes(deps.ClickHouse, deps.Guard, logger, deps.Pool, deps.Decryptor)...)
 		}
 	}
 	// admin is this Service's other consumer of policy.Guard: mounted only
@@ -282,7 +287,10 @@ func closeComponents(components []lifecycle.Component) {
 }
 
 // NewServer builds the api listener with the full transport stack. The stack
-// order, request side first, is: request id, panic recovery, then scope (the
+// order, request side first, is: the plane/build provenance stamp (outside
+// every handler-chain layer so no response it produces, scope rejection or
+// unhandled error, lacks it),
+// request id, panic recovery, then scope (the
 // org scope and impersonation middlewares, when given), security headers,
 // CORS, then the mux (and, per route, recovery, deadline, body bound). It
 // matches the Python api's request order (src/dev_health_ops/api/
@@ -295,7 +303,7 @@ func NewServer(
 	routes []httpapi.Route,
 	scope ...func(http.Handler) http.Handler,
 ) (*httpapi.Server, error) {
-	middleware := append([]func(http.Handler) http.Handler{UnhandledErrorShape, CloseHTTP10, DecodedPathRouting}, scope...)
+	middleware := append([]func(http.Handler) http.Handler{buildinfo.Stamp(version.Current("api")), UnhandledErrorShape, CloseHTTP10, DecodedPathRouting}, scope...)
 	middleware = append(middleware, SecurityHeaders, NewCORS(cfg.CORSAllowedOrigins).Wrap)
 	return httpapi.NewServer(httpapi.ServerOptions{
 		Name:           "api-http",

@@ -3,6 +3,7 @@ package externalingest
 import (
 	"bytes"
 	"encoding/json"
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -54,8 +55,8 @@ func TestSchemaBundleMatchesLivePython(t *testing.T) {
 	}
 
 	var oracle struct {
-		Document map[string]any `json:"document"`
-		ETag     string         `json:"etag"`
+		Body string `json:"body"`
+		ETag string `json:"etag"`
 	}
 	if err := json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &oracle); err != nil {
 		t.Fatalf("decode production Python oracle output %q: %v", stdout.String(), err)
@@ -69,25 +70,18 @@ func TestSchemaBundleMatchesLivePython(t *testing.T) {
 	if err != nil {
 		t.Fatalf("computeETag: %v", err)
 	}
-
 	if goETag != oracle.ETag {
 		t.Errorf("etag mismatch: go=%s python=%s", goETag, oracle.ETag)
 	}
-	// Compare through a JSON round-trip on both sides (json.Number vs
-	// float64, map key ordering, etc. are marshal-form details neither
-	// side's caller should care about) rather than reflect.DeepEqual on
-	// the raw decoded values, which would fail on those irrelevant
-	// differences and mask a real drift under noise.
-	goCanonical, err := json.Marshal(normalizeForCompare(goDocument))
+	// The served body as raw text: key order, separators, escapes and the
+	// absence of a trailing newline all count.
+	goBody, err := pyjson.Marshal(goDocument)
 	if err != nil {
 		t.Fatal(err)
 	}
-	pyCanonical, err := json.Marshal(normalizeForCompare(oracle.Document))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(goCanonical, pyCanonical) {
-		t.Errorf("schema document drifted from the live Python producer:\ngo:     %s\npython: %s", goCanonical, pyCanonical)
+	if string(goBody) != oracle.Body {
+		t.Errorf("schema document differs from the live Python producer's served body (go %d bytes, python %d bytes); first difference at byte %d",
+			len(goBody), len(oracle.Body), firstDifference(string(goBody), oracle.Body))
 	}
 
 	if err := os.WriteFile(filepath.Join(proofDirectory, "externalingest-schema-bundle"), []byte("executed\n"), 0o600); err != nil {
@@ -95,18 +89,11 @@ func TestSchemaBundleMatchesLivePython(t *testing.T) {
 	}
 }
 
-// normalizeForCompare re-marshals v through encoding/json so json.Number
-// values (from the Go side's UseNumber decode) and plain float64/string
-// values (from the oracle's own json.Unmarshal, which never sets
-// UseNumber) compare on their JSON text form, not their Go type.
-func normalizeForCompare(v any) any {
-	raw, err := json.Marshal(v)
-	if err != nil {
-		return v
+func firstDifference(a, b string) int {
+	for index := 0; index < len(a) && index < len(b); index++ {
+		if a[index] != b[index] {
+			return index
+		}
 	}
-	var out any
-	if err := json.Unmarshal(raw, &out); err != nil {
-		return v
-	}
-	return out
+	return min(len(a), len(b))
 }

@@ -1,6 +1,7 @@
 package pythonparity
 
 import (
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -19,14 +20,19 @@ func IsPrintable(r rune) bool {
 // quote, \t, \n and \r escaped; every other non-printable code point as
 // \xhh, \uhhhh or \Uhhhhhhhh. Invalid UTF-8 bytes (which a Python str
 // cannot hold) are written as U+FFFD, as Go decodes them.
-func StrRepr(text string) string {
+func StrRepr(text string) string { return StrReprRunes([]rune(text)) }
+
+// StrReprRunes is StrRepr over code points, for a Python str that holds a
+// lone surrogate (which a Go string cannot): the surrogate is not
+// printable, so it is written as \udxxx, as repr() writes it.
+func StrReprRunes(runes []rune) string {
 	quote := '\''
-	if strings.ContainsRune(text, '\'') && !strings.ContainsRune(text, '"') {
+	if slices.Contains(runes, '\'') && !slices.Contains(runes, '"') {
 		quote = '"'
 	}
 	var out strings.Builder
 	out.WriteRune(quote)
-	for _, r := range text {
+	for _, r := range runes {
 		switch {
 		case r == quote || r == '\\':
 			out.WriteByte('\\')

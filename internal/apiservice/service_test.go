@@ -20,6 +20,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
+	"github.com/full-chaos/dev-health-ops/internal/platform/buildstamp"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
@@ -499,6 +500,9 @@ func TestServerRunsTheScopeMiddlewaresOutsideSecurityHeadersAndCORS(t *testing.T
 	if recorder.Header().Get("X-Request-ID") == "" {
 		t.Fatal("the org scope 403 lacks the correlation id (outer)")
 	}
+	if recorder.Header().Get(buildstamp.PlaneHeader) != "go" {
+		t.Fatalf("the org scope 403 lacks the plane stamp the prover reads: %v", recorder.Header())
+	}
 
 	request = httptest.NewRequest(http.MethodGet, "/api/v1/anything", nil)
 	request.Header.Set("Authorization", "Bearer "+sign(store.admin, true))
@@ -541,9 +545,12 @@ func TestUnhandledErrorsCarryOnlyContentHeaders(t *testing.T) {
 			t.Fatalf("%s: %d %s", path, recorder.Code, recorder.Body.String())
 		}
 		for key := range recorder.Header() {
-			if key != "Content-Type" && key != "Content-Length" {
+			if key != "Content-Type" && key != "Content-Length" && key != http.CanonicalHeaderKey(buildstamp.PlaneHeader) && key != http.CanonicalHeaderKey(buildstamp.BuildHeader) {
 				t.Errorf("%s: unhandled 500 carries %s", path, key)
 			}
+		}
+		if recorder.Header().Get(buildstamp.PlaneHeader) != "go" {
+			t.Errorf("%s: an unhandled 500 lost the plane stamp: %v", path, recorder.Header())
 		}
 	}
 	for path, status := range map[string]int{"/one/a%2Fb": 404, "/one/a%2fb": 404, "/one/a%20b": 204, "/one/ab": 204} {

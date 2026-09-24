@@ -462,7 +462,7 @@ VALUES ($1,$2,$3,'github','commits','00000000-0000-4000-8000-0000000000ed','plan
 // zero for all five Dispatch-path values in production. This is the SAME
 // scenario as TestDispatchDeniesWithActiveUnitsFailsOnlyStrandedOnes, with
 // a real *providerfoundation.Metrics wired via WithMetrics (mirroring
-// cmd/dev-health-worker/sync_dispatch.go's own
+// internal/workerservice/sync_dispatch.go's own
 // `dispatchSyncRun.WithMetrics(syncCoordinatorMetrics)` production call),
 // asserting the counter via the SAME WritePrometheus a real /metrics
 // scrape would render.

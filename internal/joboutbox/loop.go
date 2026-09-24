@@ -366,7 +366,12 @@ func (loop *ReconcilerLoop) step(ctx context.Context, now time.Time) error {
 	loop.retried += nonNegativeUint(result.Retried)
 	loop.dead += nonNegativeUint(result.Dead)
 	loop.leaseLost += nonNegativeUint(result.LeaseLost)
-	if err == nil {
+	// Health state is applied only while the loop is not stopping. A step that
+	// was in flight when Shutdown began and then succeeds finishes AFTER
+	// Shutdown cleared readiness and the up gauge; without this it would set
+	// them again and report a stopped loop healthy. The counters above stay
+	// unconditional: they record work that already committed.
+	if err == nil && !loop.stopping {
 		// A level, not a counter: set only from a pass that finished, so a
 		// failed pass cannot report a partial backlog as the whole one.
 		loop.undeliveredBlocked = nonNegativeUint(result.UndeliveredBlocked)
@@ -442,7 +447,15 @@ func (loop *ReconcilerLoop) step(ctx context.Context, now time.Time) error {
 		)
 	}
 	if err == nil {
-		loop.ready.Store(true)
+		// Under loop.mu with the stopping check: Shutdown sets stopping and
+		// clears readiness in one critical section, so either this runs first
+		// (Shutdown's clear then wins) or it sees stopping and leaves the state
+		// Shutdown left.
+		loop.mu.Lock()
+		if !loop.stopping {
+			loop.ready.Store(true)
+		}
+		loop.mu.Unlock()
 	}
 	return err
 }
@@ -534,10 +547,12 @@ func (loop *ReconcilerLoop) Shutdown(ctx context.Context) error {
 	if loop == nil || ctx == nil {
 		return ErrInvalidConfiguration
 	}
-	loop.setFailed()
-
+	// Readiness and the up gauge are cleared in the same critical section that
+	// sets stopping, so no step can observe stopping == false after the clear.
 	loop.mu.Lock()
 	loop.stopping = true
+	loop.ready.Store(false)
+	loop.up = false
 	cancel := loop.cancel
 	ticker := loop.ticker
 	done := loop.done

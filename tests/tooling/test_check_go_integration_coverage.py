@@ -37,18 +37,18 @@ def test_integration_coverage_inventory_completes_and_stays_nonempty() -> None:
     # container, so the package grew its first -tags integration file.
     # CHAOS-4226 added internal/cacheinvalidation (29 -> 30): the per-org
     # cache epoch bump is proved against a real Valkey container.
-    # CHAOS-4366 added cmd/query-api/internal/routeswitch (30 -> 31): the
+    # CHAOS-4366 added internal/queryapi/routeswitch (30 -> 31): the
     # go_api_registry-backed PostgresSwitch is proved against a real
     # Postgres testcontainer.
     # CHAOS-4367 added cmd/query-api (31 -> 32): the featureFlags Wave-1
     # canary's HTTP-level reachability test
     # (query_route_integration_test.go) is proved against a real Postgres
     # testcontainer + the real gqlgen/routeswitch/PostgresSwitch wiring.
-    # CHAOS-4506 added cmd/query-api/internal/analytics (32 -> 33): the
+    # CHAOS-4506 added internal/queryapi/analytics (32 -> 33): the
     # NaN-class live proof (nan_class_live_test.go) is proved against a
     # real ClickHouse container -- the analytics package's first
     # -tags integration file.
-    # CHAOS-4643 denylisted cmd/query-api/internal/analytics (discovered
+    # CHAOS-4643 denylisted internal/queryapi/analytics (discovered
     # count stays 33; denylisted 0 -> 1, will-run 33 -> 32). CI's
     # integration-shard job gives every other package its own ClickHouse via
     # testcontainers, but nan_class_live_test.go dials an externally supplied
@@ -58,10 +58,10 @@ def test_integration_coverage_inventory_completes_and_stays_nonempty() -> None:
     # discretionary, slot-only proof (see
     # the file's own STATUS header); denylisting it stops the shard from
     # implying coverage it structurally cannot deliver.
-    # CHAOS-4684 added cmd/query-api/internal/hotspots (33 -> 34 discovered,
+    # CHAOS-4684 added internal/queryapi/hotspots (33 -> 34 discovered,
     # 32 -> 33 will run): the argMax(<col>, (day, computed_at)) tie-break
     # regression guard runs against a real ClickHouse container.
-    # CHAOS-4730 un-denylisted cmd/query-api/internal/analytics (34
+    # CHAOS-4730 un-denylisted internal/queryapi/analytics (34
     # discovered unchanged, 33 -> 34 will run, 1 -> 0 denylisted): the
     # CHAOS-4643 premise (this package's ONLY integration file could never
     # run in CI) no longer holds -- the SETTINGS max_execution_time =
@@ -74,7 +74,7 @@ def test_integration_coverage_inventory_completes_and_stays_nonempty() -> None:
     # pattern is not what CHAOS-4643 objected to; its complaint was a
     # package whose ENTIRE integration coverage was a permanent, silent
     # skip.
-    # CHAOS-4655 added cmd/query-api/internal/workgraph (34 -> 35
+    # CHAOS-4655 added internal/queryapi/workgraph (34 -> 35
     # discovered, 34 -> 35 will run): the batch-membership pair-bound-match
     # fix needed a real-engine red/green proof against a real ClickHouse
     # container.
@@ -104,7 +104,7 @@ def test_integration_coverage_inventory_completes_and_stays_nonempty() -> None:
     # CHAOS-4441 then added internal/jobs/investment/chwrite: 39 -> 40.
     # CHAOS-4977 and CHAOS-4902 landed independently, each written as
     # 40 -> 41 on its own branch: CHAOS-4977's
-    # cmd/query-api/internal/investmentexplain and CHAOS-4902's
+    # internal/queryapi/investmentexplain and CHAOS-4902's
     # internal/testsupport/chschema (the RMT sweep's own authoritative-count
     # integration test). Merged total: 42.
     # CHAOS-4989 and CHAOS-4897 landed independently, each written as
@@ -160,7 +160,7 @@ def test_integration_coverage_inventory_completes_and_stays_nonempty() -> None:
     # file (receipt_integration_test.go: the `prove` verb's receipt writer
     # and the enablement-proof predicate, against a real Postgres with the
     # registry's actual FK and CHECK constraints). 51 -> 52.
-    # CHAOS-5523 added cmd/query-api/internal/featureflags's first
+    # CHAOS-5523 added internal/queryapi/featureflags's first
     # //go:build integration file (events_integration_test.go: the
     # featureFlagEvents port's org-scoping/flagKey-filter/ORDER BY/
     # count-not-limit-bound happy path and the real UNKNOWN_TABLE degraded
@@ -185,12 +185,12 @@ def test_integration_coverage_inventory_completes_and_stays_nonempty() -> None:
     # exactly the Trap #105 shape this comment block exists to prevent a
     # recurrence of: name every pin that carries this count, not just the
     # nearest one.
-    # cmd/query-api/internal/explain carries integration-tagged tests
+    # internal/queryapi/explain carries integration-tagged tests
     # (team_scope_large_repo_set_integration_test.go and
     # blocked_work_status_filter_integration_test.go, four tests total,
     # against a real ClickHouse container) -- the same package
     # test_go_integration_sharding.py's EXPECTED_PACKAGES also counts.
-    # cmd/query-api/internal/investmentflow and cmd/query-api/internal/
+    # internal/queryapi/investmentflow and internal/queryapi/
     # sankey each carry a real-ClickHouse recurrence guard for a
     # UInt64-aggregate-scanned-into-a-mismatched-Go-type class of defect,
     # same shape as the featureFlagEvents entry above -- a fake RowScanner
@@ -225,7 +225,7 @@ def test_integration_coverage_inventory_completes_and_stays_nonempty() -> None:
     # CURRENT TOTAL: 83. Adding one -tags=integration package bumps every
     # literal below by +1 -- this is the one number to change; the
     # narrative above is for someone auditing history, not for the bump.
-    assert "84 package(s) discovered, 0 denylisted, 84 will run" in result.stdout
+    assert "85 package(s) discovered, 0 denylisted, 85 will run" in result.stdout
     # Name the package explicitly (SET MEMBERSHIP), not just the count --
     # a bare count is exactly what let CHAOS-4643's own literal drift
     # 31 -> 32 -> 33 unnoticed.
@@ -233,10 +233,10 @@ def test_integration_coverage_inventory_completes_and_stays_nonempty() -> None:
     assert "  RUN  internal/goapiproof" in result.stdout
     assert "  RUN  internal/jobs/dimensionfold" in result.stdout
     assert "  RUN  internal/platform/config" in result.stdout
-    assert "  RUN  cmd/query-api/internal/analytics" in result.stdout
-    assert "  RUN  cmd/query-api/internal/featureflags" in result.stdout
+    assert "  RUN  internal/queryapi/analytics" in result.stdout
+    assert "  RUN  internal/queryapi/featureflags" in result.stdout
     assert "  RUN  internal/goapicli/routing" in result.stdout
-    assert "  RUN  cmd/query-api/internal/explain" in result.stdout
+    assert "  RUN  internal/queryapi/explain" in result.stdout
     assert "  RUN  internal/api/audit" in result.stdout
     assert "  RUN  internal/apiservice/admin" in result.stdout
-    assert "  SKIP cmd/query-api/internal/analytics: " not in result.stdout
+    assert "  SKIP internal/queryapi/analytics: " not in result.stdout

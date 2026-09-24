@@ -59,7 +59,7 @@ The API and sync workers need the same app client values. The redirect URI is th
 
 !!! note "Go workers are configured by flags first (CHAOS-4020)"
 
-    The Go worker processes (`dev-health-worker`, `dho reconciler`,
+    The Go worker processes (`dho worker`, `dho reconciler`,
     `dho scheduler`, `dho stream-runner`) resolve every setting
     that has a flag **flag > environment > default**. The forty
     `WORKER_*_ENABLED` provider route switches and the `OTEL_*` variables have

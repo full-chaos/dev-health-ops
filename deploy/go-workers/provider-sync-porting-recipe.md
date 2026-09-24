@@ -46,7 +46,7 @@ are not style guidance.
 
 1. **A cited constructor is not proof of capability.** It must be reachable
    for its own pair. `github/security` shipped a correct case in
-   `cmd/dev-health-worker/provider_sync.go`, but an upstream activation gate
+   `internal/workerservice/provider_sync.go`, but an upstream activation gate
    returned an empty worker family because the pair was missing from the gate
    condition. The registry said Go owned it; the binary could not construct
    it. That gate is now the queue topology alone, so extend the table-driven
@@ -735,7 +735,7 @@ New file: `internal/providersync/<provider>_<dataset>_route.go`.
 - `Collect(ctx, claim, credential, client, normalizedAt) (CompleteRouteBatch, error)`
   is the entire contract. Validate `claim.Provider`/`claim.Dataset` and fail
   closed (`ErrInvalidConfiguration`) on anything else — this is what lets
-  `cmd/dev-health-worker/provider_sync.go`'s `BuildExecutor` switch select a
+  `internal/workerservice/provider_sync.go`'s `BuildExecutor` switch select a
   handler by claim without every handler quietly serving every claim.
 - Reuse `providerfoundation.CollectGitHubLinkPages` /
   `CollectGitLabPageParamPages` / `CollectLaunchDarklyOffsetPages` for
@@ -828,7 +828,7 @@ Two edits, always in this order:
 
 ### 6. Wire the worker binary
 
-`cmd/dev-health-worker/provider_sync.go`:
+`internal/workerservice/provider_sync.go`:
 
 - Add a `case session.Claim.Provider == "x" && session.Claim.Dataset == "y":`
   arm inside `BuildExecutor`'s switch, constructing the sink and setting
@@ -836,7 +836,7 @@ Two edits, always in this order:
 - Widen `buildProviderSyncWorker`'s "construct the family when ANY route
   switch is on" condition to include the new config flag.
 
-`cmd/dev-health-worker/dependencies.go` and
+`internal/workerservice/dependencies.go` and
 `internal/platform/config/config.go`:
 
 - Nothing. CHAOS-4054 deleted the route enablement plane: there is no switch
@@ -866,10 +866,10 @@ NOT auto-follow the registry (grep the constant name, don't guess):
   `routeReadyPairs` (add the pair), the `all := CompleteRouteSwitches{...}`
   literal + its `NumField()` count (both `TestProviderMatrixKeepsEveryRouteClosedExceptReadyPairs`),
   and the `handlers` map in `TestProviderMatrixExecutorRegistryIsHonest`.
-- `cmd/dev-health-worker/provider_sync_test.go`:
+- `internal/workerservice/provider_sync_test.go`:
   `TestProviderSyncHandlerSwitchesFollowConfiguration`'s table,
   `TestWorkerRouteSwitchesMapsEveryConfiguredRoute`'s table.
-- `cmd/dev-health-worker/dependencies_test.go`:
+- `internal/workerservice/dependencies_test.go`:
   `TestProviderRouteSwitchesAreIndependentAndRejectIncompleteRoutes`'s table.
 - `internal/platform/config/config_test.go`: the all-off assertion, the
   all-on env map, the invalid-value env map.

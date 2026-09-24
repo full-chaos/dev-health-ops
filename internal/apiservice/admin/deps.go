@@ -105,6 +105,7 @@ func (h *handlers) routes() []httpapi.Route {
 	out = append(out, h.impersonationRoutes()...)
 	out = append(out, h.userRoutes()...)
 	out = append(out, h.orgRoutes()...)
+	out = append(out, h.governanceRoutes()...)
 	return out
 }
 

@@ -122,6 +122,9 @@ func TestParsePagerDutyWebhookRejectsMalformedAndInvalidShapes(t *testing.T) {
 		// -- confirmed live against real Postgres+Valkey.
 		{"unknown event_type", `{"event":{"id":"E1","event_type":"incident.made_up","occurred_at":"2026-01-01T00:00:00Z","data":{}}}`},
 		{"missing data", `{"event":{"id":"E1","event_type":"incident.triggered","occurred_at":"2026-01-01T00:00:00Z"}}`},
+		{"naive occurred_at", `{"event":{"id":"E1","event_type":"incident.triggered","occurred_at":"2026-01-01T00:00:00","data":{}}}`},
+		{"boolean occurred_at", `{"event":{"id":"E1","event_type":"incident.triggered","occurred_at":true,"data":{}}}`},
+		{"null occurred_at", `{"event":{"id":"E1","event_type":"incident.triggered","occurred_at":null,"data":{}}}`},
 		{"data is not an object", `{"event":{"id":"E1","event_type":"incident.triggered","occurred_at":"2026-01-01T00:00:00Z","data":[1,2]}}`},
 	}
 	for _, c := range cases {
@@ -213,5 +216,28 @@ func TestPythonIsoformatOmitsFractionAtZeroAndUsesNumericOffset(t *testing.T) {
 	zero := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	if got, want := pythonIsoformat(zero), "2026-01-02T03:04:05+00:00"; got != want {
 		t.Fatalf("pythonIsoformat = %q, want %q", got, want)
+	}
+}
+
+// TestParsePagerDutyWebhookReadsOccurredAtAsPydanticDoes pins the lax
+// datetime forms pydantic accepts for occurred_at (a unix timestamp as a
+// number or numeric string) and the UTC instant each one means; the venue
+// oracle compares them with the live Python api.
+func TestParsePagerDutyWebhookReadsOccurredAtAsPydanticDoes(t *testing.T) {
+	for occurredAt, want := range map[string]time.Time{
+		`".5"`:                        time.Date(1970, 1, 1, 0, 0, 0, 500_000_000, time.UTC),
+		`1767323045`:                  time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
+		`1767323045.5`:                time.Date(2026, 1, 2, 3, 4, 5, 500_000_000, time.UTC),
+		`"2026-01-02T08:34:05+05:30"`: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
+	} {
+		body := `{"event":{"id":"E1","event_type":"incident.triggered","occurred_at":` + occurredAt + `,"data":{}}}`
+		webhook, err := parsePagerDutyWebhook([]byte(body))
+		if err != nil {
+			t.Errorf("occurred_at %s: %v", occurredAt, err)
+			continue
+		}
+		if !webhook.Event.OccurredAt.Equal(want) {
+			t.Errorf("occurred_at %s = %v, want %v", occurredAt, webhook.Event.OccurredAt, want)
+		}
 	}
 }

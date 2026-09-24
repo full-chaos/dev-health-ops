@@ -998,7 +998,7 @@ var metricSyncRunRollupBumpedPathVocabulary = map[string]bool{
 // Prometheus parsers (including
 // Prometheus's own) hard-fail the WHOLE scrape on a second one, not just
 // that series. A single process-wide instance, registered exactly once
-// (see cmd/dev-health-worker's health-registry setup), is what
+// (see internal/workerservice's health-registry setup), is what
 // internal/synccoverage's ScopeIntentMetrics/FoldedKeyResolutionMetrics
 // already do for exactly this reason -- this follows that precedent rather
 // than inventing a second pattern.

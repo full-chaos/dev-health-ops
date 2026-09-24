@@ -21,7 +21,7 @@ import (
 // dataset-unit dispatch that called them (dataset_adapters.run_dataset_unit's
 // work-items branch) -- there is no longer a Python "work item kwargs"
 // contract to assert on; the native provider-sync route
-// (cmd/dev-health-worker/provider_sync.go's work-items dataset case, one Go
+// (internal/workerservice/provider_sync.go's work-items dataset case, one Go
 // implementation per provider) is production now. Deleted the oracle script
 // (testdata/python_work_item_contract_oracle.py) and this test with it.
 //

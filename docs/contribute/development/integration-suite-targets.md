@@ -81,7 +81,7 @@ one package can get a different answer for each of its three.
 > class of suite. That rule exists because the prose kept drifting from the
 > table: four separate corrections traced to sentences generalising about
 > "Valkey suites" or "role suites", every one of them wrong about
-> `cmd/dev-health-worker` and `internal/syncdispatchruntime`, which are blocked
+> `internal/workerservice` and `internal/syncdispatchruntime`, which are blocked
 > by two stores at once. A second source of truth for routing is a second thing
 > that can be wrong; read the row.
 
@@ -162,7 +162,7 @@ semantics that a version change can move.
 | `internal/storage/postgres` | 91s | kiac | — | — | yes | Role names parameterised by CHAOS-4661 (7 creation sites across this package -- 6 that literally `CREATE ROLE`, plus `provision_script_integration_test.go`'s `TestProvisionScriptGrantsNoTablePrivileges`, whose roles come from an external `psql --file=provision_river_roles.sql` invocation -- each self-cleaning via `containers.DropRole`; plus 3 same-package pure consumers of `domain_grant_reconciliation_integration_test.go`'s shared `startGrantHarness` fixture a `CREATE ROLE` grep could not see -- `coordinator_statement_privileges`, `posture_diagnostics`, `fixed_engine_statement_privileges`, and `provision_script`'s other test, `TestProvisionScriptNeverWipesMigrateGrants`). Otherwise pure PostgreSQL. |
 | `internal/jobs/report` | 33s | kiac | kiac | — | **no** | Mixed: most files use only `LIMIT 1 BY`/`uniqExact`, but `team_metrics_daily_ratio` uses `countIf(...) OVER (PARTITION BY ...)`. |
 | `internal/scheduler/sync` | 32s | kiac | — | — | yes | Pure PostgreSQL. |
-| `cmd/dev-health-worker` | 24s | kiac | kiac | **host** | **no** | Sensitive via `dora_refusal_boot`, which classifies ordering contracts from `system.tables.sorting_key`. Role names parameterised by CHAOS-4661; still host-bound overall for Valkey -- moving PostgreSQL alone does not move the package until Valkey is also resolved (CHAOS-4666). |
+| `internal/workerservice` | 24s | kiac | kiac | **host** | **no** | Sensitive via `dora_refusal_boot`, which classifies ordering contracts from `system.tables.sorting_key`. Role names parameterised by CHAOS-4661; still host-bound overall for Valkey -- moving PostgreSQL alone does not move the package until Valkey is also resolved (CHAOS-4666). |
 | `internal/syncreconciler` | 16s | kiac | — | — | yes | Role names parameterised by CHAOS-4661: `unreclaimable_sweep_role_split_integration_test.go` plus 3 same-package consumers of `kernel_integration_test.go`'s shared role fixture (`active_active_integration_test.go`, `terminal_delivery_repair_integration_test.go` × 3 call sites) that a `CREATE ROLE` grep could not see. |
 | `internal/externalrecompute` | 15s | kiac | — | **host** | yes | Uses Valkey. |
 | `internal/workersctl` | 13s | kiac | — | — | yes | Role names parameterised by CHAOS-4661. |
@@ -173,15 +173,15 @@ semantics that a version change can move.
 | `internal/jobs/system` | 12s | kiac | — | — | yes | Pure PostgreSQL. |
 | `internal/providerfoundation` | 12s | kiac | kiac | **host** | **no** | Sensitive: asserts insert-block dedup under `SETTINGS non_replicated_deduplication_window=100`. |
 | `internal/reconcilerservice` | 10s | kiac | — | — | yes | Pure PostgreSQL. |
-| `cmd/query-api/internal/hotspots` | 26s | — | kiac | — | **no** | Sensitive. CHAOS-4684: `argMax(<col>, (day, computed_at))` tie-break regression guard — a fake `QueryClient` cannot exercise how ClickHouse itself resolves an argMax tie, so this package's first `-tags=integration` file drives the real engine. Two tests: the tie-break proof (confirmed RED on the parent `argMax(<col>, computed_at)`, no `day` in the ordering tuple, GREEN after the fix) and a second regression guard (codex review round 1, EXECUTED) pinning that six INDEPENDENT `argMax(<col>, (day, computed_at))` calls still mix days when the winning day's `blame_concentration` is `NULL` — ClickHouse's argMax skips a NULL-valued Nullable argument when choosing that column's own winning row, so the fix aggregates one `argMax(tuple(...), (day, computed_at))` and extracts all six fields with `tupleElement` so the row selection is atomic. Both tests confirmed RED/GREEN on BOTH ClickHouse 26.7.5.10 (kiac/prod line) and the digest-pinned 26.6.1.1193 host-Testcontainers image this repo's CI Go integration-shard job actually runs against today (`.github/workflows/go.yml`'s job sets no remote-DSN env var, so every package in this table executes via host Testcontainers in CI regardless of this column — the "Open" caveat above applies here too). |
+| `internal/queryapi/hotspots` | 26s | — | kiac | — | **no** | Sensitive. CHAOS-4684: `argMax(<col>, (day, computed_at))` tie-break regression guard — a fake `QueryClient` cannot exercise how ClickHouse itself resolves an argMax tie, so this package's first `-tags=integration` file drives the real engine. Two tests: the tie-break proof (confirmed RED on the parent `argMax(<col>, computed_at)`, no `day` in the ordering tuple, GREEN after the fix) and a second regression guard (codex review round 1, EXECUTED) pinning that six INDEPENDENT `argMax(<col>, (day, computed_at))` calls still mix days when the winning day's `blame_concentration` is `NULL` — ClickHouse's argMax skips a NULL-valued Nullable argument when choosing that column's own winning row, so the fix aggregates one `argMax(tuple(...), (day, computed_at))` and extracts all six fields with `tupleElement` so the row selection is atomic. Both tests confirmed RED/GREEN on BOTH ClickHouse 26.7.5.10 (kiac/prod line) and the digest-pinned 26.6.1.1193 host-Testcontainers image this repo's CI Go integration-shard job actually runs against today (`.github/workflows/go.yml`'s job sets no remote-DSN env var, so every package in this table executes via host Testcontainers in CI regardless of this column — the "Open" caveat above applies here too). |
 | `internal/jobs/pagerduty` | 9s | kiac | — | — | yes | Pure PostgreSQL. |
 | `internal/storage/river` | 9s | kiac | — | — | yes | Role names parameterised by CHAOS-4661 across `migrate_integration_test.go` and `telemetry_integration_test.go` -- both independently call `containers.RoleName` and create their own roles (not a shared-fixture consumer pair, despite the similar name); each self-cleans via `containers.DropRole`. **Dual-path backup/restore**: its round-trip test dispatches on `instance.Container` -- non-nil (host Testcontainers, including CI) runs `pg_dump`/`createdb`/`pg_restore` via `instance.Container.Exec`, reusing the `postgres:18-alpine` image's own bundled PostgreSQL 18 client tools with zero host dependency (this is the original, pre-CHAOS-4661 mechanism, restored); nil (the kiac remote path, no container to exec into) runs the same three binaries as host processes instead. **Host-tools requirement is remote-path only**: `assertPostgresClientToolsAvailable` (PATH + PostgreSQL 18+ major-version check, failing with an install instruction rather than an opaque exec error) gates only the host-process branch -- CI, which runs the container path, carries no such dependency and is unaffected by what PostgreSQL client tools its runner happens to have. |
 | `internal/jobs/workgraph` | 7s | kiac | — | — | yes | Pure PostgreSQL. |
 | `internal/jobroute` | 6s | kiac | — | — | yes | **Demonstrated** — see below. |
 | `internal/jobs/metrics/daily` | 6s | kiac | kiac | — | **no** | Role name parameterised by CHAOS-4661 -- this is the package the original collision was found on (`finalize_redrive_test_domain`, SQLSTATE 42710). Also sensitive: `argMax` tie-break, `DateTime64(6)` precision, `INNER JOIN ... FINAL`. **Demonstrated** — see below. |
 | `internal/jobs/metrics/remaining` | 6s | kiac | kiac | — | **no** | Mixed: the capacity schema guard reads `system.tables` as strings (neutral), but `dora_ordering_contract` tests `FINAL` vs `LIMIT 1 BY` divergence directly. |
-| `internal/syncdispatchruntime` | 6s | kiac | kiac | **host** | **no** | Sensitive: `argMax(id, updated_at)` dedup readback. Role names parameterised by CHAOS-4661 across 3 files (7 test functions sharing 1 setup helper, plus 2 standalone files); still host-bound overall for Valkey, same as `cmd/dev-health-worker`. Also fixed a cross-*package* literal collision: this package and `internal/storage/postgres`'s grant-reconciliation suite hard-coded the identical role name `grant_domain_runtime`, which ordinary `go test ./...` parallelism could already collide on, independent of any lane/cluster concept. |
-| `cmd/query-api/internal/routeswitch` | 5s | kiac | — | — | yes | Pure PostgreSQL. |
+| `internal/syncdispatchruntime` | 6s | kiac | kiac | **host** | **no** | Sensitive: `argMax(id, updated_at)` dedup readback. Role names parameterised by CHAOS-4661 across 3 files (7 test functions sharing 1 setup helper, plus 2 standalone files); still host-bound overall for Valkey, same as `internal/workerservice`. Also fixed a cross-*package* literal collision: this package and `internal/storage/postgres`'s grant-reconciliation suite hard-coded the identical role name `grant_domain_runtime`, which ordinary `go test ./...` parallelism could already collide on, independent of any lane/cluster concept. |
+| `internal/queryapi/routeswitch` | 5s | kiac | — | — | yes | Pure PostgreSQL. |
 | `internal/jobrescue` | 5s | kiac | — | — | yes | Pure PostgreSQL. |
 | `internal/jobruntime` | 5s | kiac | — | — | yes | Pure PostgreSQL. |
 | `internal/syncroute` | 3s | kiac | — | — | yes | Pure PostgreSQL. |
@@ -201,7 +201,7 @@ but is not done here.
 Two classifications were left explicitly uncertain rather than guessed:
 `jobs/metrics/daily/repo_user_commit_org_scope` (queries `FROM work_items FINAL`
 but never inserts into that table, so `FINAL`'s effect is not outcome-asserted)
-and `cmd/dev-health-worker/multi_family_boot` (may transitively hit the
+and `internal/workerservice/multi_family_boot` (may transitively hit the
 ordering guard but asserts nothing about it). Both sit inside packages already
 routed to kiac, so the uncertainty changes no routing decision today.
 
@@ -280,7 +280,7 @@ concurrent lane. Under the concurrent bar it counted as blocked.
 | Movable to kiac | 1728s | **93.3%** |
 | Blocked by out-of-band fixed-name databases | 50s | 2.7% |
 | Blocked by Valkey | 31s | 1.7% |
-| Blocked by roles **and** Valkey (`cmd/dev-health-worker`, `internal/syncdispatchruntime`) — Valkey is now the ONLY blocker, but it still blocks | 30s | 1.6% |
+| Blocked by roles **and** Valkey (`internal/workerservice`, `internal/syncdispatchruntime`) — Valkey is now the ONLY blocker, but it still blocks | 30s | 1.6% |
 | The harness's own self-test | 13s | 0.7% |
 
 1728/1852 = **93.30%**, rounded to 93.3% above — re-derived by script from
@@ -291,7 +291,7 @@ still_blocked_by_valkey_too (30) = 1728`.
 **A package counts as movable only when EVERY blocking store is resolved.**
 That distinction is not pedantry — it is the correction that produced this
 number. Adding the blocked buckets together over-counts, because
-`cmd/dev-health-worker` and `internal/syncdispatchruntime` were blocked by
+`internal/workerservice` and `internal/syncdispatchruntime` were blocked by
 roles **and** Valkey, so CHAOS-4661 moved their PostgreSQL and left them
 host-bound anyway (CHAOS-4666 tracks the Valkey side). The same 30s pair had
 already caused two earlier arithmetic errors on this page while it was still a
@@ -555,7 +555,7 @@ content (sha256 digest match), never via `git checkout`.
 | `internal/joboperator` | **PASS** — full package, both runs |
 | `internal/syncreconciler` | **PASS** — full package, both runs |
 | `internal/workersctl` | **PASS** — full package, both runs |
-| `cmd/dev-health-worker` | **PASS** — the role-creating test (`TestRiverWorkerClientRunsReindexerWithoutPermissionErrors`); the package's other tests are Valkey/ClickHouse suites this ticket does not touch and stay host-bound regardless (see the matrix) |
+| `internal/workerservice` | **PASS** — the role-creating test (`TestRiverWorkerClientRunsReindexerWithoutPermissionErrors`); the package's other tests are Valkey/ClickHouse suites this ticket does not touch and stay host-bound regardless (see the matrix) |
 | `internal/syncdispatchruntime` | **PASS** — the 9 role-creating tests across its 3 files; same host-Valkey caveat as above |
 | `internal/jobs/metrics/daily` | **PASS** — see red-on-baseline and mutation-proof above |
 | `internal/storage/river` | **PASS** — full package, both runs, including the rewritten backup/restore round-trip |

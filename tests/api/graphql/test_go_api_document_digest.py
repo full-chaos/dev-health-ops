@@ -126,7 +126,7 @@ def _registrydump_documents() -> list[dict[str, str]]:
 
 def test_python_digest_matches_go_digest_over_the_real_corpus():
     """The conformance test the CHAOS-4697 brief demands: this module's
-    document_digest() must equal cmd/query-api/internal/digest.Document's
+    document_digest() must equal internal/queryapi/digest.Document's
     output (via registrydump, which calls that exact function -- see its
     own doc comment) for every one of the REAL registered documents, not
     a hand-typed sample.

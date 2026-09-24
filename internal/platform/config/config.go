@@ -338,7 +338,7 @@ type Config struct {
 	// HTTP bridge; CHAOS-6279 deleted the Go client-side config that used
 	// to point at it), but this duration is still consumed as a plain HTTP
 	// client timeout by the billing email sender and the native heartbeat
-	// dispatcher (cmd/dev-health-worker/operational.go). Kept, unrenamed,
+	// dispatcher (internal/workerservice/operational.go). Kept, unrenamed,
 	// to avoid unrelated env-var churn for those two callers.
 	OperationalBridgeTimeout time.Duration
 	StreamConfiguredReplicas int
@@ -360,7 +360,7 @@ type Config struct {
 	// WorkerGithubWorkItemsInvestmentConfigPath are explicit production paths
 	// for the two Python-parity config engines. Production has no source-relative
 	// default; a local deployment falls back to artifacts packaged at fixed
-	// image paths. cmd/dev-health-worker validates both paths and rejects
+	// image paths. internal/workerservice validates both paths and rejects
 	// ambient STATUS_MAPPING_PATH overrides.
 	WorkerGithubWorkItemsStatusMappingPath    string
 	WorkerGithubWorkItemsInvestmentConfigPath string

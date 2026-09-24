@@ -26,7 +26,7 @@ func mustOperationalCounter(name, description string) metric.Int64Counter {
 	meter := otel.Meter("github.com/full-chaos/dev-health-ops/internal/jobs/operational")
 	counter, err := meter.Int64Counter(name, metric.WithDescription(description))
 	if err != nil {
-		// Same otel guarantee cmd/query-api/internal/analytics/telemetry.go
+		// Same otel guarantee internal/queryapi/analytics/telemetry.go
 		// relies on: Int64Counter never returns a nil counter even on
 		// error, so a broken meter provider must not panic the worker.
 		counter, _ = otel.GetMeterProvider().Meter("noop").Int64Counter(name)

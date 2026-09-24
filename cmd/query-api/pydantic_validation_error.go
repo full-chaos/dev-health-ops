@@ -32,13 +32,17 @@
 package main
 
 import (
-	"encoding/json"
 	"log"
 	"math"
+	"math/big"
 	"net/http"
+	"sort"
 	"strconv"
-	"strings"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/api/policy"
+	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 )
 
 // pydanticErrorDetail is one entry of Pydantic's ValidationError.errors(),
@@ -62,19 +66,80 @@ type pydanticValidationErrorBody struct {
 }
 
 // writePydanticValidationError answers 422 with the given error details,
-// via json.NewEncoder(w).Encode -- this repo's JSON-response path, never
-// a raw w.Write of pre-marshalled bytes (the same Semgrep/CodeQL
-// go.lang.security.audit.xss.no-direct-write-to-responsewriter class
-// writeDrilldownPRsResponse already avoids). An encode failure is logged
-// with org_id and the caller-supplied X-Request-Id rather than dropped,
-// same convention as writeDrilldownPRsResponse.
+// rendered as FastAPI's JSONResponse renders them (json.dumps with
+// ensure_ascii=False, compact separators, no trailing newline): the
+// echoed inputs keep their key order and Python's number text. An input
+// json.dumps cannot render (NaN or an infinity, allow_nan=False) makes
+// FastAPI's handler raise, so the answer is the app's generic 500.
 func writePydanticValidationError(w http.ResponseWriter, r *http.Request, orgID string, details ...pydanticErrorDetail) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusUnprocessableEntity)
-	body := pydanticValidationErrorBody{Detail: details}
-	if encodeErr := json.NewEncoder(w).Encode(body); encodeErr != nil {
-		log.Printf("query-api: drilldown: encode validation-error response failed: org_id=%s request_id=%s err=%v",
-			orgID, envelopeRequestID(r), encodeErr)
+	list := make([]pyjson.Value, len(details))
+	for index, detail := range details {
+		list[index] = detail.pyjsonObject()
+	}
+	body := pyjson.NewObject()
+	body.Set("detail", list)
+	if _, err := pyjson.Marshal(body); err != nil {
+		log.Printf("query-api: validation-error response is not renderable, answering 500 as FastAPI does: org_id=%s request_id=%s err=%v",
+			orgID, envelopeRequestID(r), err)
+		policy.WriteDetail(w, http.StatusInternalServerError, "Internal Server Error", nil)
+		return
+	}
+	policy.WriteJSON(w, http.StatusUnprocessableEntity, body, nil)
+}
+
+// pyjsonObject is the detail as pydantic's error dict, in its key order:
+// type, loc, msg, input, then ctx when present.
+func (d pydanticErrorDetail) pyjsonObject() *pyjson.Object {
+	out := pyjson.NewObject()
+	out.Set("type", d.Type)
+	loc := make([]pyjson.Value, len(d.Loc))
+	for index, part := range d.Loc {
+		loc[index] = pyjsonFromAny(part)
+	}
+	out.Set("loc", loc)
+	out.Set("msg", d.Msg)
+	out.Set("input", pyjsonFromAny(d.Input))
+	if len(d.Ctx) > 0 {
+		keys := make([]string, 0, len(d.Ctx))
+		for key := range d.Ctx {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		ctx := pyjson.NewObject()
+		for _, key := range keys {
+			ctx.Set(key, d.Ctx[key])
+		}
+		out.Set("ctx", ctx)
+	}
+	return out
+}
+
+// pyjsonFromAny carries a detail's loc part or input into pyjson: body
+// inputs already are pyjson values; query inputs are strings; a Go int is
+// a loc index.
+func pyjsonFromAny(value any) pyjson.Value {
+	switch typed := value.(type) {
+	case int:
+		return int64(typed)
+	case []any:
+		out := make([]pyjson.Value, len(typed))
+		for index, item := range typed {
+			out[index] = pyjsonFromAny(item)
+		}
+		return out
+	case map[string]any:
+		keys := make([]string, 0, len(typed))
+		for key := range typed {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		out := pyjson.NewObject()
+		for _, key := range keys {
+			out.Set(key, pyjsonFromAny(typed[key]))
+		}
+		return out
+	default:
+		return typed
 	}
 }
 
@@ -360,65 +425,39 @@ func allDigits(s string) bool {
 	return true
 }
 
-// coerceIntBodyField reproduces Pydantic's lenient `int` coercion for one
-// already-JSON-decoded value (a member of a map[string]any/[]any
-// unmarshal target: nil, bool, float64, string, map[string]any or
-// []any) -- confirmed live for every branch: a bool coerces (true -> 1),
-// a whole-number float or a numeric string (fractional strings like
-// "5.0" included, truncated the same way) coerces, a float or string
-// carrying a genuine fraction is int_from_float/int_parsing, and any
-// other JSON type is int_type. present is false only when value is the
-// Go zero value for "key absent from the map" (nil interface) AND the
-// caller has independently confirmed the key was never in the map --
-// this function alone cannot distinguish an absent key from a JSON
-// `null` value (both decode to a nil `any`); an absent optional field is
-// never an error in this route's own body schema (limit/sort both
-// default when omitted), so this function is only ever called with a
-// present value.
-func coerceIntBodyField(loc []any, value any) (n int, detail *pydanticErrorDetail) {
-	switch v := value.(type) {
-	case nil:
+// coerceIntBodyField is pydantic's lax `int` for one body value
+// (pybody.PydanticInt): a bool; an int; a finite float with no fraction
+// strictly inside the int64 range; a str pydantic-core parses as an int.
+// A JSON null is the absent optional (present false, no error); the
+// caller has already found the key. An int beyond Go's int saturates at
+// its bound: Python carries the exact int onward, and every use here
+// (a limit, a day count) treats the bound as "as many as there are".
+func coerceIntBodyField(loc []any, value pyjson.Value) (n int, detail *pydanticErrorDetail) {
+	if value == nil {
 		return 0, nil
-	case bool:
-		if v {
-			return 1, nil
-		}
-		return 0, nil
-	case float64:
-		if v != math.Trunc(v) {
-			return 0, &pydanticErrorDetail{
-				Type:  "int_from_float",
-				Loc:   loc,
-				Msg:   "Input should be a valid integer, got a number with a fractional part",
-				Input: v,
-			}
-		}
-		return int(v), nil
-	case string:
-		trimmed := strings.TrimSpace(v)
-		if parsed, err := strconv.ParseFloat(trimmed, 64); err == nil && parsed == math.Trunc(parsed) {
-			return int(parsed), nil
-		}
-		return 0, &pydanticErrorDetail{
-			Type:  "int_parsing",
-			Loc:   loc,
-			Msg:   "Input should be a valid integer, unable to parse string as an integer",
-			Input: v,
-		}
-	default:
-		return 0, &pydanticErrorDetail{
-			Type:  "int_type",
-			Loc:   loc,
-			Msg:   "Input should be a valid integer",
-			Input: v,
-		}
 	}
+	number, kind, msg := pybody.PydanticInt(value)
+	if kind != "" {
+		return 0, &pydanticErrorDetail{Type: kind, Loc: loc, Msg: msg, Input: value}
+	}
+	return saturatedInt(number), nil
+}
+
+// saturatedInt is number as a Go int, clamped to the int range.
+func saturatedInt(number *big.Int) int {
+	switch {
+	case number.Cmp(big.NewInt(math.MaxInt)) > 0:
+		return math.MaxInt
+	case number.Cmp(big.NewInt(math.MinInt)) < 0:
+		return math.MinInt
+	}
+	return int(number.Int64())
 }
 
 // stringBodyFieldError builds the string_type detail Pydantic's `str`
 // field type produces for any non-string, non-null JSON value --
 // confirmed live for a number, object, array and bool.
-func stringBodyFieldError(loc []any, value any) pydanticErrorDetail {
+func stringBodyFieldError(loc []any, value pyjson.Value) pydanticErrorDetail {
 	return pydanticErrorDetail{
 		Type:  "string_type",
 		Loc:   loc,

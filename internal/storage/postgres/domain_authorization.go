@@ -534,7 +534,7 @@ type RolePosture struct {
 //     finalize_sync_run
 //     (internal/syncdispatchruntime/native_reference_discovery.go,
 //     native_finalize_sync_run.go), which run on pools.Domain
-//     (cmd/dev-health-worker/sync_dispatch.go:340,374) while issuing statements
+//     (internal/workerservice/sync_dispatch.go:340,374) while issuing statements
 //     the domain role had no grant for. The coordinator side of the three newly
 //     dual-grant tables is UNCHANGED: reference discoveries and job_runs keep
 //     the coordinator's INSERT (it opens those ledgers), post dispatches keeps

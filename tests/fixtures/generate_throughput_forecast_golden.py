@@ -1,7 +1,7 @@
 """Golden vectors for the Go throughput forecast kernel (CHAOS-5349).
 
 Captured from the REAL producer -- dev_health_ops.metrics.forecast -- so the Go
-port in cmd/query-api/internal/throughputforecast is measured against the
+port in internal/queryapi/throughputforecast is measured against the
 function that actually serves `throughputForecast` today, not against a reading
 of it. Captured BEFORE any Python deletion, which is the whole point: once
 metrics/forecast.py is gone there is no oracle left to disagree with.

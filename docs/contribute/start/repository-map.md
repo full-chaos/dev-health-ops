@@ -46,7 +46,7 @@ New provider work belongs under `src/dev_health_ops/providers/<provider>/`. Lega
 
 Go process entry points live under `cmd/`:
 
-- `dev-health-worker`;
+- `dho worker`;
 - `dho scheduler`;
 - `dho reconciler`;
 - `dho stream-runner`;
@@ -55,7 +55,7 @@ Go process entry points live under `cmd/`:
 
 Shared implementation lives under `internal/`, including configuration, lifecycle, health, logging, secrets, database factories, River, job contracts, operator controls, outbox, scheduler, reconciler, and test support.
 
-These packages are coexistence foundations. `dev-health-worker` consumes only
+These packages are coexistence foundations. `dho worker` consumes only
 the registered queues selected by its deployment. It does not own current
 production jobs unless the checked-in route and migration state say so. The
 stream runner remains a separate process with its own runtime profiles.

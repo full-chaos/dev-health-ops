@@ -26,7 +26,7 @@ x-go-worker-flag:
   log-level: &flag-log-level "--log-level=${LOG_LEVEL:-info}"
 
 x-go-worker: &go-worker
-  image: ${DEV_HEALTH_GO_WORKER_IMAGE:-ghcr.io/full-chaos/dev-health-go-worker:latest}
+  image: ${DEV_HEALTH_GO_DHO_IMAGE:-ghcr.io/full-chaos/dev-health-go-dho:latest}
   read_only: true
   user: "65532:65532"
   security_opt: [no-new-privileges:true]
@@ -87,6 +87,7 @@ services:
     labels:
       dev-health.io/worker-group: heavy
     command:
+      - "worker"
       - "--queues=investment,metrics,reports,workgraph"
       - "--queue-concurrency=investment=1,metrics=2,reports=2,workgraph=1"
       - "--worker-group=heavy"
@@ -105,6 +106,7 @@ services:
     labels:
       dev-health.io/worker-group: ops
     command:
+      - "worker"
       - "--queues=coverage,heartbeat,retention,webhooks"
       - "--queue-concurrency=coverage=1,heartbeat=1,retention=1,webhooks=4"
       - "--worker-group=ops"
@@ -123,6 +125,7 @@ services:
     labels:
       dev-health.io/worker-group: sync
     command:
+      - "worker"
       - "--queues=sync"
       - "--queue-concurrency=sync=4"
       - "--worker-group=sync"
@@ -143,6 +146,7 @@ services:
     labels:
       dev-health.io/worker-group: sync-provider
     command:
+      - "worker"
       - "--queues=sync_provider"
       - "--queue-concurrency=sync_provider=2"
       - "--worker-group=sync-provider"

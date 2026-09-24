@@ -149,6 +149,12 @@ func (producer *Producer) publish(
 	}
 	hash := sha256.Sum256(encoded)
 	payloadHash := "sha256:" + hex.EncodeToString(hash[:])
+	// The hash covers the canonical bytes; the column stores the same envelope as
+	// Python's json.dumps text (see StoredArgsText).
+	storedArgs, err := StoredArgsText(encoded)
+	if err != nil {
+		return fmt.Errorf("%w: envelope_args_text_rejected: %w", ErrContractRejected, err)
+	}
 	now := producer.now().UTC()
 	id := OutboxRowID(envelope.IdempotencyKey)
 	command, err := tx.Exec(ctx, `
@@ -161,7 +167,7 @@ INSERT INTO public.worker_job_outbox (
     'pending', 0, $10, NULLIF($11, ''), $10, $10
 )
 ON CONFLICT (dedupe_key) DO NOTHING`,
-		id, envelope.IdempotencyKey, kind, envelope.ContractVersion, string(encoded),
+		id, envelope.IdempotencyKey, kind, envelope.ContractVersion, storedArgs,
 		payloadHash, descriptor.Queue, descriptor.Priority, descriptor.MaxAttempts, now,
 		prerequisiteCompletionKey,
 	)

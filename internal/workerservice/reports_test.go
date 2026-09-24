@@ -1,0 +1,214 @@
+package workerservice
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"slices"
+	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
+	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
+	"github.com/full-chaos/dev-health-ops/internal/platform/config"
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
+	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/riverqueue/river"
+)
+
+// promotedContractRoot copies the checked-in contract tree and routes exactly
+// the named kinds to River. Startup validation is scoped to executable kinds,
+// so a fixture that promotes nothing would let every assertion pass vacuously.
+func promotedContractRoot(t *testing.T, kinds ...string) (*jobruntime.Registry, string) {
+	t.Helper()
+	root := filepath.Join(t.TempDir(), "v1")
+	if err := os.CopyFS(root, os.DirFS(defaultContractRoot)); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "migration-state.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document struct {
+		SchemaVersion int              `json:"schema_version"`
+		Jobs          []map[string]any `json:"jobs"`
+	}
+	if err := json.Unmarshal(data, &document); err != nil {
+		t.Fatal(err)
+	}
+	for _, job := range document.Jobs {
+		kind, _ := job["kind"].(string)
+		if slices.Contains(kinds, kind) {
+			// CHAOS-5320: the real checked-in rollback_route for report/
+			// daily-metrics kinds is "none" now (celery is no longer
+			// resolvable fleet-wide), but this fixture deliberately promotes
+			// to the plain go_default/river shape, which requires
+			// rollback=celery per validateMigrationPolicy's state table --
+			// set it explicitly rather than relying on the base document's
+			// real value.
+			job["state"] = "go_default"
+			job["route"] = "river"
+			job["rollback_route"] = "celery"
+		}
+	}
+	encoded, err := json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, encoded, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	registry, err := jobruntime.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return registry, root
+}
+
+// demotedContractRoot copies the checked-in contract tree and routes exactly
+// the named kinds back to Celery. It is the inverse of promotedContractRoot:
+// the checked-in tree now ships every kind on River (CHAOS-3033), so a
+// genuinely celery-routed/dormant scenario has to be constructed explicitly
+// rather than found by loading the production tree unmodified.
+func demotedContractRoot(t *testing.T, kinds ...string) (*jobruntime.Registry, string) {
+	t.Helper()
+	root := filepath.Join(t.TempDir(), "v1")
+	if err := os.CopyFS(root, os.DirFS(defaultContractRoot)); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "migration-state.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document struct {
+		SchemaVersion int              `json:"schema_version"`
+		Jobs          []map[string]any `json:"jobs"`
+	}
+	if err := json.Unmarshal(data, &document); err != nil {
+		t.Fatal(err)
+	}
+	for _, job := range document.Jobs {
+		kind, _ := job["kind"].(string)
+		if slices.Contains(kinds, kind) {
+			job["state"] = "go_implemented"
+			job["route"] = "celery"
+			job["rollback_route"] = "celery"
+		}
+	}
+	encoded, err := json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, encoded, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	registry, err := jobruntime.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return registry, root
+}
+
+func reportBuilderDatabase(t *testing.T) *postgresWorkerDatabase {
+	t.Helper()
+	ctx := context.Background()
+	domainPool, err := pgxpool.New(ctx, "postgresql://domain@127.0.0.1:1/devhealth")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(domainPool.Close)
+	queuePool, err := pgxpool.New(ctx, "postgresql://queue@127.0.0.1:1/devhealth")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(queuePool.Close)
+	return &postgresWorkerDatabase{
+		pools: &postgres.RuntimePools{Domain: domainPool, QueueControl: queuePool},
+	}
+}
+
+func TestReportBuilderStaysDormantWhileRoutesAreCelery(t *testing.T) {
+	t.Chdir(filepath.Join("..", ".."))
+	// report.execute_on_demand and report.execute_scheduled now ship at
+	// go_default in the checked-in contract, so dormancy is no longer the
+	// production default for this pair; it has to be constructed explicitly
+	// to prove the builder still refuses to touch ClickHouse while the route
+	// is not River.
+	registry, _ := demotedContractRoot(t,
+		jobcontract.KindReportExecuteOnDemand,
+		jobcontract.KindReportExecuteScheduled,
+	)
+	family, err := buildReportWorker(
+		context.Background(),
+		config.Config{Queues: []string{"investment", "metrics", "reports", "workgraph"}, RiverDatabaseSchema: "river"},
+		reportBuilderDatabase(t),
+		registry,
+		reportTestObserver(t),
+		slog.Default(),
+		river.NewWorkers(),
+	)
+	if err != nil {
+		t.Fatalf("dormant report builder error = %v", err)
+	}
+	if len(family.handlers) != 0 || len(family.queues) != 0 || len(family.cleanups) != 0 {
+		t.Fatalf("celery-routed report kinds constructed a runtime: %#v", family)
+	}
+}
+
+func TestReportBuilderRefusesPartialRoutePromotion(t *testing.T) {
+	t.Chdir(filepath.Join("..", ".."))
+	registry, _ := promotedContractRoot(t, jobcontract.KindReportExecuteOnDemand)
+	_, err := buildReportWorker(
+		context.Background(),
+		config.Config{
+			Queues:              []string{"investment", "metrics", "reports", "workgraph"},
+			RiverDatabaseSchema: "river",
+			ClickHouseURI:       secrets.NewValue("clickhouse://127.0.0.1:1/default"),
+		},
+		reportBuilderDatabase(t),
+		registry,
+		reportTestObserver(t),
+		slog.Default(),
+		river.NewWorkers(),
+	)
+	if !errors.Is(err, errWorkerDependencyUnavailable) {
+		t.Fatalf("half-promoted report pair error = %v, want unavailable", err)
+	}
+}
+
+// TestReportBuilderRequiresClickHouse proves the report runtime cannot be
+// half-constructed: without its query backend the selected queue group closes rather
+// than registering adapters that would fail every fetch.
+func TestReportBuilderRequiresClickHouse(t *testing.T) {
+	t.Chdir(filepath.Join("..", ".."))
+	registry, _ := promotedContractRoot(t,
+		jobcontract.KindReportExecuteOnDemand,
+		jobcontract.KindReportExecuteScheduled,
+	)
+	_, err := buildReportWorker(
+		context.Background(),
+		config.Config{Queues: []string{"investment", "metrics", "reports", "workgraph"}, RiverDatabaseSchema: "river"},
+		reportBuilderDatabase(t),
+		registry,
+		reportTestObserver(t),
+		slog.Default(),
+		river.NewWorkers(),
+	)
+	if !errors.Is(err, errWorkerDependencyUnavailable) {
+		t.Fatalf("missing ClickHouse error = %v, want unavailable", err)
+	}
+}
+
+func reportTestObserver(t *testing.T) jobruntime.Observer {
+	t.Helper()
+	collector, err := jobruntime.NewMetricsCollector(jobruntime.MetricDimensions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return collector
+}

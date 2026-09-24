@@ -12,7 +12,7 @@ livelocal-schema-digest"`` -- nine different scratch strings across nine
 files before this module existed), and nothing stopped one of those
 reaching a real environment.
 
-CHAOS-4696 PR2 made ``cmd/query-api/internal/digest.Schema`` the ONE
+CHAOS-4696 PR2 made ``internal/queryapi/digest.Schema`` the ONE
 canonical algorithm (``sha256:<hex of raw contracts/graphql/v1/
 schema.graphql bytes>``), shared code both a running ``query-api``
 process and ``cmd/query-api/tools/registrydump -schema-digest`` call.

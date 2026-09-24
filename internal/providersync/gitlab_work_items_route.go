@@ -90,7 +90,7 @@ type gitlabWorkItemsDeriver interface {
 // events, notes, links, and milestones while retaining the live
 // fetch_gitlab_work_items boundary for issue status/type normalization.
 //
-// WIRING: WIRED. cmd/dev-health-worker/provider_sync.go's
+// WIRING: WIRED. internal/workerservice/provider_sync.go's
 // `provider == "gitlab" && dataset == "work-items"` case constructs this
 // handler and assigns it to routeHandler, with
 // NewGitLabWorkItemFamilyClickHouseEffects as sink and readback and

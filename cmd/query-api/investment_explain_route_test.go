@@ -5,7 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/routeswitch"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
 )
 
 // TestInvestmentExplainSwitchFromEnvDefaultsDisabled proves the

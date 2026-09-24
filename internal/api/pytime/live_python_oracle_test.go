@@ -127,3 +127,96 @@ func TestParseDatetimeMatchesLivePydantic(t *testing.T) {
 	}
 	t.Logf("%d values compared", len(corpus))
 }
+
+const pythonDateProgram = `
+import json, sys
+from datetime import date
+from pydantic import TypeAdapter, ValidationError
+ta = TypeAdapter(date)
+out = []
+for text in json.loads(sys.stdin.read()):
+    try:
+        out.append({"ok": ta.validate_python(json.loads(text)).isoformat()})
+    except ValidationError as exc:
+        err = exc.errors()[0]
+        out.append({"type": err["type"], "msg": err["msg"], "reason": (err.get("ctx") or {}).get("error", "")})
+print(json.dumps(out))
+`
+
+// TestParseDateMatchesLivePydantic compares ParseDate with pydantic's
+// TypeAdapter(date) on the datetime corpus and the numeric-string corpus.
+// A non-numeric string that is neither a date nor a datetime is not
+// judged by ParseDate (its reason is speedate's datetime error, which the
+// caller carries); for those, only pydantic's error type is checked.
+func TestParseDateMatchesLivePydantic(t *testing.T) {
+	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
+		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
+	}
+	_, file, _, _ := runtime.Caller(0)
+	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
+	python := pyoracle.Resolve(t, root)
+	corpus := append(append([]string{}, datetimeCorpus...), numericStringCorpus()...)
+	corpus = append(corpus, `86400`, `86400.0`, `"86400"`, `"86400.0"`, `0.5`, `-86400`, `"2024-01-01T00:00:00Z"`,
+		`"2024-01-01T00:00:00+05:00"`, `"2024-01-01T00:00:01"`, `253402214400`, `253402300800`, `-62135596800`, `1e20`)
+	input, _ := json.Marshal(corpus)
+	command := exec.Command(python, "-c", pythonDateProgram)
+	command.Stdin = strings.NewReader(string(input))
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("live pydantic: %v", pyoracle.RunError(python, err, output))
+	}
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	var want []struct{ OK, Type, Msg, Reason string }
+	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &want); err != nil {
+		t.Fatalf("decode: %v: %s", err, output)
+	}
+	if len(want) != len(corpus) {
+		t.Fatalf("python returned %d results for %d inputs", len(want), len(corpus))
+	}
+	judged := 0
+	for index, text := range corpus {
+		var raw any
+		decoder := json.NewDecoder(strings.NewReader(text))
+		decoder.UseNumber()
+		_ = decoder.Decode(&raw)
+		if number, ok := raw.(json.Number); ok {
+			if integer, ok := new(big.Int).SetString(string(number), 10); ok {
+				raw = integer
+			} else {
+				raw, _ = number.Float64()
+			}
+		}
+		if raw == nil {
+			continue
+		}
+		date, failure, ok := ParseDate(raw)
+		expected := want[index].OK
+		if expected == "" {
+			expected = want[index].Type + "|" + want[index].Msg + "|" + want[index].Reason
+		}
+		if !ok {
+			if want[index].OK != "" || want[index].Type != "date_from_datetime_parsing" {
+				t.Errorf("%s: not judged, but python gives %s", text, expected)
+			}
+			continue
+		}
+		judged++
+		got := ""
+		if failure != nil {
+			got = failure.Type + "|" + failure.Msg + "|" + failure.Reason
+		} else {
+			got = date.Format("2006-01-02")
+		}
+		if got != expected {
+			t.Errorf("%s:\n Go     %s\n Python %s", text, got, expected)
+		}
+	}
+	proofDir := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
+	if proofDir == "" {
+		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
+	}
+	if err := os.WriteFile(filepath.Join(proofDir, "api-pytime-date"), []byte("executed"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("%d values compared, %d judged by ParseDate", len(corpus), judged)
+}

@@ -1,6 +1,7 @@
 package customerpush
 
 import (
+	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -53,13 +54,13 @@ func TestJSONObjectColumnKeepsStoredKeyOrder(t *testing.T) {
 
 func TestLastQueryIsStarlettesLastValue(t *testing.T) {
 	values, _ := url.ParseQuery("limit=1&limit=2&empty=")
-	if got := lastQuery(values, "limit"); got == nil || *got != "2" {
+	if got := pybody.LastQuery(values, "limit"); got == nil || *got != "2" {
 		t.Fatalf("limit: %v", got)
 	}
-	if got := lastQuery(values, "empty"); got == nil || *got != "" {
+	if got := pybody.LastQuery(values, "empty"); got == nil || *got != "" {
 		t.Fatalf("empty: %v", got)
 	}
-	if got := lastQuery(values, "absent"); got != nil {
+	if got := pybody.LastQuery(values, "absent"); got != nil {
 		t.Fatalf("absent: %v", *got)
 	}
 }

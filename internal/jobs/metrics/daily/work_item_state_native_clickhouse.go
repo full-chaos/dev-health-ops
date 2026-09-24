@@ -243,7 +243,7 @@ type workItemPrimaryAttribution struct {
 // KNOWN REMAINING GAP (codex round-1 P1, not yet resolved -- see
 // WorkItemStateExecutor's doc comment and CHAOS-4278's handoff): this fence
 // guarantees "the latest snapshot THIS QUERY CAN SEE", not "today's
-// snapshot". `cmd/dev-health-worker/daily.go`'s PartitionHandler.Work runs
+// snapshot". `internal/workerservice/daily.go`'s PartitionHandler.Work runs
 // every registered NativeFamilyExecutor (this one included) BEFORE the
 // Python compatibility bridge call that recomputes `work_item_attribution`
 // for the SAME partition (daily.go: computeNativeFamilies then

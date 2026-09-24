@@ -95,7 +95,7 @@ func TestGitHubWorkItemDeriverCarriesRealRejectionsIntoRouteEffects(t *testing.T
 // TestJiraWorkItemCompositeConstructorEmitsOwnershipMetrics, and
 // TestLinearWorkItemFamilyConstructorEmitsOwnershipMetrics are CHAOS-4320's
 // red-first pins for codex round 6's second P1 (NOT CLEAN, executed repro):
-// the real worker constructors (cmd/dev-health-worker/provider_sync.go)
+// the real worker constructors (internal/workerservice/provider_sync.go)
 // called these three providers' family/composite constructors WITHOUT a
 // Metrics argument at all -- the rejection/ownership plumbing this ticket
 // adds was otherwise correct for all four providers, but

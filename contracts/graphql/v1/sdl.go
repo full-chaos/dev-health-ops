@@ -5,7 +5,7 @@
 // the exact SDL bytes it was built against, and the ops CI/harness
 // digest producer (cmd/query-api/tools/registrydump's schema-digest
 // subcommand) needs the SAME bytes -- both compute
-// cmd/query-api/internal/digest.Schema() over whatever []byte this
+// internal/queryapi/digest.Schema() over whatever []byte this
 // package hands them. go:embed is what makes "the bytes a running
 // process verifies against" and "the bytes checked into this directory"
 // the SAME bytes by construction: there is no copy step, no build-time

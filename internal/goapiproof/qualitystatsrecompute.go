@@ -167,7 +167,7 @@ func optionalFiniteFloat(value any) (*float64, bool) {
 // QualityDriversRecomputeShape, set on a BaselineDefect, admits a
 // quality_drivers difference only when EACH leg's own list equals,
 // element for element and in order, the list computeQualityStats
-// (cmd/query-api/internal/investment/response.go) and
+// (internal/queryapi/investment/response.go) and
 // _compute_quality_stats (api/services/investment.py) derive from that
 // SAME leg's own total, band_counts, mean and stddev:
 //

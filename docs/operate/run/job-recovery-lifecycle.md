@@ -5,7 +5,7 @@ content_type: reference
 owner: platform-operations
 source_of_truth:
   - contracts/jobs/v1/ (kind timeouts and attempt limits)
-  - cmd/dev-health-worker/river_process.go (River client configuration)
+  - internal/workerservice/river_process.go (River client configuration)
   - internal/jobs/metrics/daily/postgres.go (domain lease behaviour)
   - internal/jobs/workgraph/coalesce.go (materialize coalescing and start bound)
 applicability: current
@@ -37,7 +37,7 @@ runs on the elected leader. Two conditions must **both** be satisfied before a
 stuck job is touched:
 
 1. The job has been running longer than `RescueStuckJobsAfter`. This is not
-   configured in `cmd/dev-health-worker/river_process.go`, so River's default
+   configured in `internal/workerservice/river_process.go`, so River's default
    of **one hour** applies.
 2. The job has been running longer than **its own declared timeout**. River
    ignores a stuck job whose timeout has not yet elapsed, because a job that is

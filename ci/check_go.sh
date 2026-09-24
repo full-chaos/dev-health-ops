@@ -392,6 +392,30 @@ check_live_python_oracles() {
     return 1
   fi
 
+  printf 'go test -count=1: internal/mail (SMTP wire format and Resend requests/outcomes vs the live Python email service)\n'
+  if ! (
+    cd "${ROOT}"
+    "${GO_ENV_OFF[@]}" \
+      GOWORK=off \
+      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
+      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
+      PYTHON="${PYTHON:-python3}" \
+      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
+      go test -mod=readonly -count=1 \
+        -run '^(TestSMTPSenderMatchesLivePythonSMTPProvider|TestResendSenderMatchesLivePythonResendProvider)$' \
+        ./internal/mail
+  ); then
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  for proof_file in "${proof_dir}/mail-smtp-oracle" "${proof_dir}/mail-resend-oracle"; do
+    if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+      printf 'ERROR: the internal/mail live Python oracle %s did not run a real comparison\n' "${proof_file##*/}" >&2
+      rm -rf -- "${proof_dir}"
+      return 1
+    fi
+  done
+
   printf 'go test -count=1: internal/api/policy (api decisions vs live Python)\n'
   if ! (
     cd "${ROOT}"
@@ -416,7 +440,7 @@ check_live_python_oracles() {
       DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
       PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
       go test -mod=readonly -count=1 \
-        -run '^(TestMarshalMatchesLivePythonJSONDumps|TestDecodeBodyMatchesLivePythonJSONLoads|TestDumpsMatchesLivePythonJSONDumpsDefault)$' \
+        -run '^(TestMarshalMatchesLivePythonJSONDumps|TestDecodeBodyMatchesLivePythonJSONLoads|TestDumpsMatchesLivePythonJSONDumpsDefault|TestMarshalModelAndReprMatchLivePydantic)$' \
         ./internal/api/pyjson
   ); then
     rm -rf -- "${proof_dir}"
@@ -446,7 +470,7 @@ check_live_python_oracles() {
       DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
       PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
       go test -mod=readonly -count=1 \
-        -run '^(TestParseDatetimeMatchesLivePydantic)$' \
+        -run '^(TestParseDatetimeMatchesLivePydantic|TestParseDateMatchesLivePydantic)$' \
         ./internal/api/pytime
   ); then
     rm -rf -- "${proof_dir}"
@@ -476,7 +500,7 @@ check_live_python_oracles() {
       DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
       PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
       go test -mod=readonly -count=1 \
-        -run '^(TestQueryIntMatchesLivePydantic)$' \
+        -run '^(TestQueryIntMatchesLivePydantic|TestQueryBoolMatchesLivePydantic|TestBodyIntMatchesLivePydantic)$' \
         ./internal/api/pybody
   ); then
     rm -rf -- "${proof_dir}"
@@ -527,7 +551,7 @@ check_live_python_oracles() {
     rm -rf -- "${proof_dir}"
     return 1
   fi
-  for proof_name in api-policy-principal api-pyjson api-pyjson-dumps api-orgs-registry api-pytime api-health-revisions api-pybody-queryint pythonparity-strrepr pythonparity-utf8-replace httpapi-forwarded-scheme api-customerpush-schema api-customerpush-bodies; do
+  for proof_name in api-policy-principal api-pyjson api-pyjson-dumps api-pyjson-model api-orgs-registry api-pytime api-pytime-date api-health-revisions api-pybody-queryint api-pybody-querybool api-pybody-bodyint pythonparity-strrepr pythonparity-utf8-replace httpapi-forwarded-scheme api-customerpush-schema api-customerpush-bodies; do
     proof_file="${proof_dir}/${proof_name}"
     if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
       printf 'ERROR: api live Python oracle %s did not run\n' "${proof_name}" >&2
@@ -619,6 +643,29 @@ check_live_python_oracles() {
       return 1
     fi
   done
+
+  printf 'go test -count=1: internal/streamhandlers (external-ingest worker normalize_batch orchestration vs live Python, CHAOS-6345)\n'
+  if ! (
+    cd "${ROOT}"
+    "${GO_ENV_OFF[@]}" \
+      GOWORK=off \
+      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
+      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
+      PYTHON="${PYTHON:-python3}" \
+      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
+      go test -mod=readonly -count=1 \
+        -run '^TestNormalizeExternalRecordsMatchesLivePythonNormalizeBatch$' \
+        ./internal/streamhandlers
+  ); then
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  proof_file="${proof_dir}/streamhandlers-normalize-batch"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: streamhandlers normalize_batch live Python oracle did not run\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
 
   printf 'go test -count=1: internal/jobs/metrics/aigovernance (ai_governance port vs live Python, CHAOS-4285)\n'
   if ! (
@@ -1362,7 +1409,27 @@ check_live_python_oracles() {
     return 1
   fi
 
-  printf 'go test -count=1: cmd/query-api/internal/principal (Go verifier vs a REAL Python-issued envelope + JWKS, CHAOS-4366)\n'
+  printf 'go test -count=1: cmd/query-api (POST body validation vs live FastAPI request models)\n'
+  if ! (
+    cd "${ROOT}"
+    "${GO_ENV_OFF[@]}" \
+      GOWORK=off \
+      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
+      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
+      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
+      go test -mod=readonly -count=1 -run '^TestQueryAPIBodiesMatchLiveFastAPI$' ./cmd/query-api
+  ); then
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  proof_file="${proof_dir}/query-api-bodies"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: the query-api POST body live FastAPI oracle measurement did not occur\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+
+  printf 'go test -count=1: internal/queryapi/principal (Go verifier vs a REAL Python-issued envelope + JWKS, CHAOS-4366)\n'
   if ! (
     cd "${ROOT}"
     "${GO_ENV_OFF[@]}" \
@@ -1373,7 +1440,7 @@ check_live_python_oracles() {
       PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
       go test -mod=readonly -count=1 \
         -run '^TestVerifierMatchesLivePythonIssuedEnvelope$' \
-        ./cmd/query-api/internal/principal
+        ./internal/queryapi/principal
   ); then
     rm -rf -- "${proof_dir}"
     return 1
@@ -1385,7 +1452,7 @@ check_live_python_oracles() {
     return 1
   fi
 
-  # cmd/dev-health-worker's live-Python rot guard
+  # internal/workerservice's live-Python rot guard
   # (TestBuildScopeParityTableMatchesLivePython, CHAOS-4837) was retired here:
   # its generator's producer, run_work_graph_build, was DELETED (CHAOS-4924),
   # not merely un-called, and its _admit() reference kind (workgraph.build)
@@ -1640,7 +1707,7 @@ check_contract() {
 # the run set, failing loudly, not hidden here. Legitimate reasons look like
 # "needs a live vendor credential CI does not provision."
 #
-# CHAOS-4730: cmd/query-api/internal/analytics was the one entry here
+# CHAOS-4730: internal/queryapi/analytics was the one entry here
 # (CHAOS-4643), because its ONLY integration-tagged file at the time,
 # nan_class_live_test.go, could never run in CI (it dials CLICKHOUSE_URI
 # directly, which .github/workflows/go.yml's integration-shard job never
@@ -2524,7 +2591,7 @@ check_multi_replica_workers() {
       DEV_HEALTH_MULTI_REPLICA_PROOF="${proof_file}" \
       go test -mod=readonly -tags=integration -count=1 -timeout=5m \
         -run '^TestExplicitQueueMultiReplicaClaimDrainRestart$' \
-        ./cmd/dev-health-worker
+        ./internal/workerservice
   ) || result=$?
   if [ "${result}" -ne 0 ]; then
     rm -rf -- "${proof_dir}"

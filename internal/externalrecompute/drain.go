@@ -110,7 +110,7 @@ type Enqueued struct {
 // would double-enqueue on the next lease reclaim) nor a row marked done with
 // nothing enqueued (which is the silent-drop this whole ticket exists about).
 //
-// Implemented by the worker (cmd/dev-health-worker/external_recompute.go), which
+// Implemented by the worker (internal/workerservice/external_recompute.go), which
 // owns the daily store/publisher and work-graph request writer.
 type Enqueuer interface {
 	Enqueue(ctx context.Context, tx pgx.Tx, plan Plan, correlation string) (Enqueued, error)

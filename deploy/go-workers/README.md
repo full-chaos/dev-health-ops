@@ -137,11 +137,11 @@ per-kind route, and `internal/scheduler/sync/ownership.go`'s own, unrelated
 
 ### Images and topology
 
-Publish one immutable image per target in `docker/go-worker.Dockerfile`:
-`dev-health-go-worker` (deployment-selected queue groups) and
-`dev-health-go-dho`, whose `dho reconciler` and `dho scheduler` verbs run the
-reconciler and the scheduler and whose `dho stream-runner` verb runs the
-stream profiles (external, ingest, pagerduty). All workload definitions
+Every Go service runs from one image, `dev-health-go-dho` (the
+`docker/go-worker.Dockerfile` `dho` target): `dho worker` runs the
+deployment-selected queue groups, `dho reconciler` and `dho scheduler` run the
+control loops, and `dho stream-runner` runs the stream profiles (external,
+ingest, pagerduty). All workload definitions
 run as UID/GID `65532`, deny privilege escalation, use a read-only root
 filesystem, and expose only the operator HTTP surface on port 8080:
 `/healthz`, `/readyz`, and `/metrics`.
@@ -621,7 +621,7 @@ canonical queue set, per-queue concurrency, worker identity, one River client,
 and effective database limits in its startup and readiness evidence.
 
 Since CHAOS-4020 the same is true of the *rest* of the configuration: run
-`dev-health-worker --help` for the full option list, the environment variable
+`dho worker --help` for the full option list, the environment variable
 each flag falls back to, and its default. Resolution is flag > environment >
 default, an unknown flag is rejected at startup with exit status 2, and the
 manifests in this directory pass their configuration in `command:` so
@@ -995,11 +995,11 @@ with the mechanism they described.
 even though every selected queue's kinds are registered, route to `river`,
 and were successfully constructed. Nothing in that reason string mentions
 shutdown or drain budget — `queuesReady()`
-(`cmd/dev-health-worker/dependencies.go`) wraps every `ValidateStartup`
+(`internal/workerservice/dependencies.go`) wraps every `ValidateStartup`
 failure in the same generic reason code, so this reads identically to an
 actual handler-coverage mismatch.
 
-**Why:** the drain-budget check (`cmd/dev-health-worker/dependencies.go`,
+**Why:** the drain-budget check (`internal/workerservice/dependencies.go`,
 around the `shutdown_timeout_below_drain_budget` reason,
 `workerFinalizationBuffer = 60 * time.Second`) requires
 `shutdown_timeout - 60s >= (the longest Timeout among the selected queues'
@@ -1052,9 +1052,9 @@ install defaults it to `celery`, a silent no-op relay with no consumer; see
 CHAOS-4272), but that job's queue is `sync`
 (`internal/syncdispatchcontract.RiverQueue = "sync"`), not `metrics`, and it
 sits `available`, unclaimed, indefinitely. `post_sync` is constructed by
-`buildSyncCoordinatorWorker` (`cmd/dev-health-worker/sync_dispatch.go`), a
+`buildSyncCoordinatorWorker` (`internal/workerservice/sync_dispatch.go`), a
 different builder from `buildDailyWorker`
-(`cmd/dev-health-worker/daily.go`), gated on `--queues` containing `"sync"`
+(`internal/workerservice/daily.go`), gated on `--queues` containing `"sync"`
 specifically. Any worker that needs the post-sync fanout to actually run
 (as opposed to just computing already-dispatched metrics partitions) needs
 **both** `metrics` and `sync` selected — confirmed while building

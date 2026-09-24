@@ -428,7 +428,7 @@ func TestTheGuardsOwnInputsAreInBothParsedPathLists(t *testing.T) {
 	if err := yaml.Unmarshal([]byte(readRepoFile(t, ".github/workflows/go.yml")), &wf); err != nil {
 		t.Fatalf("parse go.yml: %v", err)
 	}
-	for _, want := range []string{"**/*.go", "cmd/query-api/gqlgen.yml", "contracts/**", ".github/workflows/go-quality.yml", ".github/workflows/go.yml", "**/go.mod", "**/go.sum", "ci/go_relevance.py"} {
+	for _, want := range []string{"**/*.go", "internal/queryapi/gqlgen.yml", "contracts/**", ".github/workflows/go-quality.yml", ".github/workflows/go.yml", "**/go.mod", "**/go.sum", "ci/go_relevance.py"} {
 		for event, list := range map[string][]string{"push": wf.On.Push.Paths, "pull_request": wf.On.PullRequest.Paths} {
 			found := false
 			for _, p := range list {

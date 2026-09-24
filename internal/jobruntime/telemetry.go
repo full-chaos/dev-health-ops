@@ -306,7 +306,7 @@ func incidentValidFromGuardReasons() []IncidentValidFromGuardReason {
 // TeamCatalogEntryPoint names which of the two team-autoimport dispatch
 // paths a call took (they are NOT equivalent -- see
 // nativeTeamAutoimportDispatcher's doc comment,
-// cmd/dev-health-worker/team_catalog_clients.go): reference discovery
+// internal/workerservice/team_catalog_clients.go): reference discovery
 // mirrors Python's old selection-blind run_team_autoimport_strict, post_sync
 // mirrors the selection-gated run_team_autoimport.
 type TeamCatalogEntryPoint string
@@ -689,13 +689,13 @@ func dailyMetricsCompatRetryDecisions() []DailyMetricsCompatRetryDecision {
 // would move, not absent from it.
 // "incident" (CHAOS-4295) is included here even though that PR did not add
 // it -- CHAOS-4295 registers IncidentExecutor into PartitionHandler's
-// nativeFamilies map (cmd/dev-health-worker/daily.go) and its
+// nativeFamilies map (internal/workerservice/daily.go) and its
 // ComputeFamily runs through computeNativeFamilies exactly like every other
 // native family, but CHAOS-4295 gave incident its own SEPARATE telemetry
 // (incidentValidFromGuardRows) instead of also registering it here --
 // discovered independently while resolving this file's merge conflict
 // against CHAOS-4295, first by CHAOS-4292 (this PR, which also added the
-// registration-drift tests in cmd/dev-health-worker), then again by
+// registration-drift tests in internal/workerservice), then again by
 // CHAOS-4277 (file_hotspots/file_risk_hotspots) resolving the same merge --
 // the same silent-telemetry-loss class either PR's own codex rounds found
 // and fixed for their own new family (a family absent from this closed

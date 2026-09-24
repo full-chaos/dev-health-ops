@@ -120,7 +120,7 @@ func NewNativeDispatchSyncRunService(
 // this, or passing nil, leaves rollup-bump telemetry a no-op while the
 // rollup WRITE itself (bumpSyncRunRollup) still runs unconditionally --
 // see this method's callers' doc comments for why production wiring
-// (cmd/dev-health-worker/sync_dispatch.go) does not call this yet.
+// (internal/workerservice/sync_dispatch.go) does not call this yet.
 func (service *NativeDispatchSyncRunService) WithMetrics(metrics *providerfoundation.Metrics) *NativeDispatchSyncRunService {
 	if service != nil {
 		service.metrics = metrics
@@ -161,7 +161,7 @@ func (service *NativeDispatchSyncRunService) nowUTC() time.Time {
 // "worker_job_routes ... moved OUT of this posture entirely ... attributes
 // [it] exclusively to the coordinator role") and dev-health-worker (the
 // binary that hosts this service) never opts into a coordinator pool
-// (cmd/dev-health-worker/dependencies.go's openWorkerDatabase never calls
+// (internal/workerservice/dependencies.go's openWorkerDatabase never calls
 // RuntimeConfig.WithCoordinator). A tx-scoped route read here would 42501
 // in production; it only looked safe in this package's own integration
 // tests because those fixtures run one ungated role against one pool.

@@ -39,12 +39,13 @@ import (
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/analytics"
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/authctx"
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/investmentflow"
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/principal"
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/routeswitch"
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/sankey"
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/analytics"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/investmentflow"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/sankey"
 )
 
 const (
@@ -201,23 +202,17 @@ func parseInvestmentFlowRequestBody(w http.ResponseWriter, r *http.Request, orgI
 		return investmentFlowRequestBody{}, false
 	}
 
-	var decoded any
-	bodyIsEmptyOrNull := len(bodyBytes) == 0
-	if !bodyIsEmptyOrNull {
-		if err := json.Unmarshal(bodyBytes, &decoded); err != nil {
-			writePydanticValidationError(w, r, orgID, jsonSyntaxErrorDetail([]any{"body"}, bodyBytes))
-			return investmentFlowRequestBody{}, false
-		}
-		if decoded == nil {
-			bodyIsEmptyOrNull = true
-		}
+	decoded, bodyIsEmptyOrNull, syntaxDetail := decodeRequestBody([]any{"body"}, bodyBytes)
+	if syntaxDetail != nil {
+		writePydanticValidationError(w, r, orgID, *syntaxDetail)
+		return investmentFlowRequestBody{}, false
 	}
 	if bodyIsEmptyOrNull {
 		writePydanticValidationError(w, r, orgID, missingFieldError([]any{"body"}, nil))
 		return investmentFlowRequestBody{}, false
 	}
 
-	body, isObject := decoded.(map[string]any)
+	body, isObject := decoded.(*pyjson.Object)
 	if !isObject {
 		writePydanticValidationError(w, r, orgID, modelAttributesTypeError([]any{"body"}, decoded))
 		return investmentFlowRequestBody{}, false
@@ -226,16 +221,16 @@ func parseInvestmentFlowRequestBody(w http.ResponseWriter, r *http.Request, orgI
 	var validationErrors []pydanticErrorDetail
 	result := investmentFlowRequestBody{TopNRepos: 12}
 
-	if filtersValue, hasFilters := body["filters"]; hasFilters && filtersValue == nil {
+	if filtersValue, hasFilters := body.Get("filters"); hasFilters && filtersValue == nil {
 		validationErrors = append(validationErrors, modelAttributesTypeError([]any{"body", "filters"}, nil))
 	} else if hasFilters {
 		validationErrors = append(validationErrors, validateMetricFilter([]any{"body", "filters"}, filtersValue)...)
-		if filtersMap, ok := filtersValue.(map[string]any); ok {
+		if filtersMap, ok := legacyJSON(filtersValue).(map[string]any); ok {
 			result.Filters = filtersMap
 		}
 	}
 
-	if themeValue, hasTheme := body["theme"]; hasTheme && themeValue != nil {
+	if themeValue, hasTheme := body.Get("theme"); hasTheme && themeValue != nil {
 		if s, isString := themeValue.(string); isString {
 			result.Theme = &s
 		} else {
@@ -243,7 +238,7 @@ func parseInvestmentFlowRequestBody(w http.ResponseWriter, r *http.Request, orgI
 		}
 	}
 
-	if flowModeValue, hasFlowMode := body["flow_mode"]; hasFlowMode && flowModeValue != nil {
+	if flowModeValue, hasFlowMode := body.Get("flow_mode"); hasFlowMode && flowModeValue != nil {
 		if s, isString := flowModeValue.(string); isString && stringInSlice(s, investmentFlowModeValues) {
 			result.FlowMode = &s
 		} else {
@@ -251,7 +246,7 @@ func parseInvestmentFlowRequestBody(w http.ResponseWriter, r *http.Request, orgI
 		}
 	}
 
-	if drillValue, hasDrill := body["drill_category"]; hasDrill && drillValue != nil {
+	if drillValue, hasDrill := body.Get("drill_category"); hasDrill && drillValue != nil {
 		if s, isString := drillValue.(string); isString {
 			result.DrillCategory = &s
 		} else {
@@ -259,7 +254,7 @@ func parseInvestmentFlowRequestBody(w http.ResponseWriter, r *http.Request, orgI
 		}
 	}
 
-	if topNValue, hasTopN := body["top_n_repos"]; hasTopN && topNValue == nil {
+	if topNValue, hasTopN := body.Get("top_n_repos"); hasTopN && topNValue == nil {
 		// top_n_repos: int = 12 has a default for an ABSENT key but is not
 		// Optional -- an explicit null fails the field's own int type check
 		// (confirmed live, same shape "filters: null" fails above, not a

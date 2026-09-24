@@ -78,7 +78,7 @@ func jiraWorkItemRowsAsGitHub(rows jiraWorkItemRows) githubWorkItemRows {
 // The interface itself is not a registry or constructor-selection seam -- that
 // part of the original comment still holds -- but it is no longer inert:
 //
-// WIRING: WIRED. cmd/dev-health-worker/provider_sync.go's
+// WIRING: WIRED. internal/workerservice/provider_sync.go's
 // `provider == "jira" && dataset == "work-items"` case (:375) constructs
 // JiraWorkItemDeriver through NewJiraWorkItemDeriver (:386) and injects it here
 // as JiraAtlassianRouteHandler{Derived: ...}; the effect sink and readback come

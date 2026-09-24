@@ -2,7 +2,9 @@ package pybody
 
 import (
 	"math/big"
+	"net/url"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
@@ -22,7 +24,12 @@ const maxIntDigits = 4300
 // when the text is not an integer.
 func ParsePydanticInt(raw string) (*big.Int, *Error) {
 	text := strings.TrimFunc(raw, unicode.IsSpace)
-	if len(text) > maxIntDigits {
+	// The size gate is on the leading run, in the text as received (before
+	// whitespace is trimmed), of an unsigned-or-minus number that starts
+	// with a nonzero digit ("-?[1-9][0-9]*", sign counted), and on nothing
+	// else: a zero-led, "+"-led or underscored text is only bound by the
+	// digit limit below, whatever its length.
+	if leadingSignedRun(raw) > maxIntDigits {
 		return nil, &Error{Type: "int_parsing_size", Msg: "Unable to parse input string as an integer, exceeded maximum size"}
 	}
 	failed := &Error{Type: "int_parsing", Msg: "Input should be a valid integer, unable to parse string as an integer"}
@@ -39,6 +46,35 @@ func ParsePydanticInt(raw string) (*big.Int, *Error) {
 	}
 	var digits strings.Builder
 	previousDigit := false
+	if strings.HasPrefix(whole, "0") {
+		// pydantic-core drops a leading run of zeros and underscores before
+		// it reads the number, so "0__5" is 5, "00_0" is 0 and "0_" is
+		// refused (nothing follows a trailing underscore). What follows may
+		// be a minus, but only when no sign came first: "0-5" and "+0-5" are
+		// -5, "-0-5" is refused, and the digits after that minus carry no
+		// leading zero ("0-05" is refused, "0-0" is 0), with one optional
+		// underscore after the minus ("0-_5" is -5).
+		rest := strings.TrimLeft(whole, "0_")
+		prefix := whole[:len(whole)-len(rest)]
+		switch {
+		case rest == "":
+			if prefix[len(prefix)-1] != '0' {
+				return nil, failed
+			}
+			return new(big.Int), nil
+		case rest[0] == '-':
+			if sign != "" {
+				return nil, failed
+			}
+			rest = strings.TrimPrefix(rest[1:], "_")
+			if rest == "" || rest[0] < '0' || rest[0] > '9' || (rest[0] == '0' && len(rest) > 1) {
+				return nil, failed
+			}
+			sign, whole = "-", rest
+		default:
+			whole = rest
+		}
+	}
 	for index := 0; index < len(whole); index++ {
 		switch c := whole[index]; {
 		case c >= '0' && c <= '9':
@@ -51,6 +87,9 @@ func ParsePydanticInt(raw string) (*big.Int, *Error) {
 		}
 	}
 	if digits.Len() == 0 {
+		return nil, failed
+	}
+	if len(sign)+digits.Len() > maxIntDigits {
 		return nil, failed
 	}
 	value, ok := new(big.Int).SetString(sign+digits.String(), 10)
@@ -119,4 +158,55 @@ func (e *Errors) QueryDatetime(name string, raw *string) (*pytime.DateTime, bool
 		return nil, false
 	}
 	return &parsed, true
+}
+
+// LastQuery is Starlette's QueryParams.get: the LAST value of a repeated
+// parameter, nil when absent.
+func LastQuery(values url.Values, name string) *string {
+	list, ok := values[name]
+	if !ok || len(list) == 0 {
+		return nil
+	}
+	return &list[len(list)-1]
+}
+
+// Instant is the UTC time of a parsed datetime query value, nil when the
+// parameter was absent.
+func Instant(value *pytime.DateTime) *time.Time {
+	if value == nil {
+		return nil
+	}
+	at := value.Time.UTC()
+	return &at
+}
+
+// QueryBool validates one bool query parameter as FastAPI's Query() does:
+// fallback when raw is nil, else pydantic's lax bool of the string. On
+// failure the error is appended and ok is false.
+func (e *Errors) QueryBool(name string, raw *string, fallback bool) (bool, bool) {
+	if raw == nil {
+		return fallback, true
+	}
+	value, failure := pydanticBool(*raw)
+	if failure != nil {
+		*e = append(*e, boolError([]pyjson.Value{"query", name}, *raw, failure))
+		return false, false
+	}
+	return value, true
+}
+
+// leadingSignedRun is the length of the "-?[1-9][0-9]*" prefix of text, 0
+// when text does not start that way.
+func leadingSignedRun(text string) int {
+	index := 0
+	if index < len(text) && text[index] == '-' {
+		index++
+	}
+	if index >= len(text) || text[index] < '1' || text[index] > '9' {
+		return 0
+	}
+	for index < len(text) && text[index] >= '0' && text[index] <= '9' {
+		index++
+	}
+	return index
 }

@@ -485,3 +485,73 @@ func externalOperationalSinkFixtures() []externalSinkRecord {
 		})),
 	}
 }
+
+// TestClickHouseExternalSinkFailsClosedOnNumericOverflow is the kill-test for
+// the P1 this pins: the shared validator has no upper bound on an integer or
+// float field (Python's pydantic models only set a lower bound), so a
+// payload the validator now accepts can still be too large for its
+// destination ClickHouse column. Before this fix the sink's own conversion
+// silently substituted a fallback (0/null/1) and wrote it -- a real
+// corruption, not a rejection. Both probes here are the exact values a live
+// ClickHouse repro used: 9223372036854775808 is one past math.MaxInt64 (and
+// far past git_pull_requests.number's UInt32 range); 1e1000 overflows
+// float64 to +Inf. Write must fail closed and send nothing.
+func TestClickHouseExternalSinkFailsClosedOnNumericOverflow(t *testing.T) {
+	pointer := externalTestPointer()
+	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
+
+	t.Run("integer overflow never becomes a substituted 0", func(t *testing.T) {
+		connection := &productSink{batch: &productBatch{}}
+		sink, err := NewClickHouseExternalBatchSink(connection)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sink.now = func() time.Time { return now }
+		source := externalSinkBatch{
+			Pointer: pointer, SourceID: uuid.New(),
+			Records: []externalSinkRecord{externalSinkFixture("pull_request.v1", map[string]any{
+				"repositoryExternalId": pointer.SourceInstance,
+				"number":               json.Number("9223372036854775808"),
+				"state":                "open", "createdAt": "2026-07-22T12:00:00Z",
+			})},
+		}
+		_, err = sink.Write(context.Background(), source)
+		if err == nil {
+			t.Fatal("expected Write to fail closed on an out-of-range pull_request.v1.number")
+		}
+		if !strings.Contains(err.Error(), "payload.number") || !strings.Contains(err.Error(), "git_pull_requests.number") {
+			t.Fatalf("error = %q, want it to name the field and the destination column", err.Error())
+		}
+		if connection.batch.sent {
+			t.Fatal("a batch containing an unrepresentable integer must never be sent")
+		}
+	})
+
+	t.Run("float overflow never becomes a substituted null", func(t *testing.T) {
+		connection := &productSink{batch: &productBatch{}}
+		sink, err := NewClickHouseExternalBatchSink(connection)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sink.now = func() time.Time { return now }
+		source := externalSinkBatch{
+			Pointer: pointer, SourceID: uuid.New(),
+			Records: []externalSinkRecord{externalSinkFixture("work_item.v1", map[string]any{
+				"externalKey": "7", "provider": "github", "title": "Issue",
+				"type": "issue", "status": "open", "createdAt": "2026-07-22T10:00:00Z",
+				"repositoryExternalId": pointer.SourceInstance,
+				"storyPoints":          json.Number("1e1000"),
+			})},
+		}
+		_, err = sink.Write(context.Background(), source)
+		if err == nil {
+			t.Fatal("expected Write to fail closed on a storyPoints value that overflows float64")
+		}
+		if !strings.Contains(err.Error(), "payload.storyPoints") || !strings.Contains(err.Error(), "work_items.story_points") {
+			t.Fatalf("error = %q, want it to name the field and the destination column", err.Error())
+		}
+		if connection.batch.sent {
+			t.Fatal("a batch containing an unrepresentable float must never be sent")
+		}
+	})
+}

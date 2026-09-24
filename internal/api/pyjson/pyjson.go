@@ -95,7 +95,21 @@ func Dumps(value Value) (string, error) {
 	return buffer.String(), nil
 }
 
-type writer struct{ spaced, ascii bool }
+type writer struct{ spaced, ascii, pydantic bool }
+
+// MarshalModel writes value as FastAPI writes a route's response_model:
+// pydantic-core's dump_json (the fast path FastAPI takes when a route has a
+// response model and no custom response class). It is Marshal except for
+// floats: the same shortest digits, positional down to 1e-5 (not 1e-4),
+// an exponent without zero padding ("1e-7", "1e+16"), and NaN and the
+// infinities as null (ser_json_inf_nan="null").
+func MarshalModel(value Value) ([]byte, error) {
+	var buffer bytes.Buffer
+	if err := (writer{pydantic: true}).write(&buffer, value); err != nil {
+		return nil, err
+	}
+	return buffer.Bytes(), nil
+}
 
 // allowNaN is json.dumps(allow_nan=True): NaN and the infinities as the
 // bare words Python writes.
@@ -229,6 +243,10 @@ var ErrNotFinite = errors.New("pyjson: out of range float values are not JSON co
 // exponent form otherwise ("1e+16", "1.5e-05").
 func (wr writer) writeFloat(buffer *bytes.Buffer, value float64) error {
 	if math.IsNaN(value) || math.IsInf(value, 0) {
+		if wr.pydantic {
+			buffer.WriteString("null")
+			return nil
+		}
 		if !wr.allowNaN() {
 			return ErrNotFinite
 		}
@@ -253,12 +271,16 @@ func (wr writer) writeFloat(buffer *bytes.Buffer, value float64) error {
 	exponentForm := strconv.FormatFloat(value, 'e', -1, 64) // d.ddde±XX
 	mantissa, exponentText, _ := strings.Cut(exponentForm, "e")
 	exponent, _ := strconv.Atoi(exponentText)
-	if exponent < -4 || exponent >= 16 {
+	lowest, padding := -4, "%se%s%02d"
+	if wr.pydantic {
+		lowest, padding = -5, "%se%s%d"
+	}
+	if exponent < lowest || exponent >= 16 {
 		sign := "+"
 		if exponent < 0 {
 			sign, exponent = "-", -exponent
 		}
-		fmt.Fprintf(buffer, "%se%s%02d", mantissa, sign, exponent)
+		fmt.Fprintf(buffer, padding, mantissa, sign, exponent)
 		return nil
 	}
 	positional := strconv.FormatFloat(value, 'f', -1, 64)

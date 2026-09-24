@@ -36,4 +36,10 @@ document = {
     },
 }
 
-print(json.dumps({"document": document, "etag": compute_etag(document)}))
+# The body Starlette's JSONResponse writes for `return body` (router.py's
+# get_schema): json.dumps(ensure_ascii=False, allow_nan=False, indent=None,
+# separators=(",", ":")), in the dict's own key order, no trailing newline.
+served = json.dumps(
+    document, ensure_ascii=False, allow_nan=False, indent=None, separators=(",", ":")
+)
+print(json.dumps({"body": served, "etag": compute_etag(document)}))

@@ -1023,7 +1023,7 @@ func marshalCategorizationAudit(outcome categorize.CategorizationOutcome) (strin
 //
 // The previous version fell back to cfg.ProviderName, so an empty model_ref --
 // the state the live post-sync producer always creates, since
-// cmd/dev-health-worker/sync_dispatch.go:298-308 sets no ModelRef -- stamped
+// internal/workerservice/sync_dispatch.go:298-308 sets no ModelRef -- stamped
 // `model=openai` while the provider ran the env-configured model. Every native
 // row then carried a categorization_model_version Python never wrote, so the
 // skip-existing lookup missed every historical row (full re-categorization at

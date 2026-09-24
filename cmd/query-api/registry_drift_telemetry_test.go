@@ -16,7 +16,7 @@ import (
 
 // driftMeterReader is the ONE real OTel SDK meter reader for this test
 // binary, following the exact one-time-global-delegation discipline
-// cmd/query-api/internal/analytics/main_test.go documents: every
+// internal/queryapi/analytics/main_test.go documents: every
 // package-level instrument in this package is created via the global
 // otel.Meter(...) proxy at package-init time, and the process-wide
 // delegateMeterOnce binds it to whichever provider FIRST calls

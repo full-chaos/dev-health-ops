@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -258,16 +259,21 @@ func TestWebhookIntakeVenueOracleGitHubGitLabJiraHealth(t *testing.T) {
 	// delivery ids inside are random per plane: each plane's stored
 	// webhook_deliveries ids are labelled first, in the delivery rows'
 	// order, so an args id must name that plane's persisted delivery (an
-	// id that joins no delivery gets a label of its own). Go stores the
-	// canonical job-contract text (indented), Python json.dumps text: that
-	// named gap is ticketed with the job outbox owner.
+	// id that joins no delivery gets a label of its own). Both planes store
+	// json.dumps text, so the rows are compared exactly.
 	argsQuery := `SELECT coalesce(string_agg(args::text, E'\x1e' ORDER BY job_kind, dedupe_key), '') FROM worker_job_outbox`
 	deliveryIDs := `SELECT coalesce(string_agg(id::text, ' ' ORDER BY provider, delivery_key), '') FROM webhook_deliveries`
 	planeArgs := func(uri string) []string {
 		return blankedJSONRows(venueoracle.TableRows(t, ctx, uri, argsQuery), strings.Fields(venueoracle.TableRows(t, ctx, uri, deliveryIDs)))
 	}
-	venueoracle.CompareJSONSpacingGap(t, "worker_job_outbox.args",
-		planeArgs(venue.AdminURI(t, venue.SourceDB)), planeArgs(venue.AdminURI(t, venue.GoDB)))
+	pythonArgs := planeArgs(venue.AdminURI(t, venue.SourceDB))
+	goArgs := planeArgs(venue.AdminURI(t, venue.GoDB))
+	if len(pythonArgs) == 0 {
+		t.Error("worker_job_outbox.args: no rows compared; the check measured nothing")
+	}
+	if !slices.Equal(pythonArgs, goArgs) {
+		t.Errorf("worker_job_outbox.args differs:\n python: %q\n go:     %q", pythonArgs, goArgs)
+	}
 	// venueoracle.Start already wrote this test's own proof file (by
 	// t.Name()) once the venue genuinely built -- nothing to do here.
 }
@@ -570,6 +576,36 @@ func TestWebhookIntakeVenueOraclePagerDuty(t *testing.T) {
 			},
 			Body: venueoracle.B64(string(gatedBody)),
 		},
+	}
+
+	// occurred_at is pydantic's lax datetime: a numeric string or a number is
+	// a unix timestamp, a naive value is refused by the model's validator,
+	// and a non-UTC offset is normalized to UTC. Each variant is compared
+	// with the real Python response and stream entry.
+	for index, occurredAt := range []struct{ name, json string }{
+		{"numeric string", `".5"`},
+		{"exponent string", `"1e5"`},
+		{"integer", `1767323045`},
+		{"float", `1767323045.5`},
+		{"milliseconds", `1767323045123`},
+		{"naive iso", `"2026-01-02T03:04:05"`},
+		{"date only", `"2026-01-02"`},
+		{"non-utc offset", `"2026-01-02T03:04:05+05:30"`},
+		{"bool", `true`},
+		{"null", `null`},
+		{"garbage", `"not-a-date"`},
+	} {
+		body := []byte(fmt.Sprintf(`{"event":{"id":"PD-OCC-%d","event_type":"incident.triggered","occurred_at":%s,"data":{}}}`, index, occurredAt.json))
+		requests = append(requests, venueoracle.Request{
+			Name:   "pagerduty occurred_at " + occurredAt.name,
+			Method: "POST", Path: "/api/v1/webhooks/pagerduty/" + seed.bindingActive,
+			Headers: map[string]string{
+				"X-Webhook-Subscription": "sub-active",
+				"X-PagerDuty-Signature":  pagerdutyVenueSign(secretActive, body),
+				"Content-Type":           "application/json",
+			},
+			Body: venueoracle.B64(string(body)),
+		})
 	}
 
 	python := venue.ServePython(t, requests)

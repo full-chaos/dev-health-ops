@@ -39,11 +39,12 @@ import (
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/analytics"
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/authctx"
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/principal"
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/routeswitch"
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/sankey"
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/analytics"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/sankey"
 )
 
 const (
@@ -344,23 +345,17 @@ func newSankeyPostHandler(client sankey.QueryClient) http.HandlerFunc {
 			return
 		}
 
-		var decoded any
-		bodyIsEmptyOrNull := len(bodyBytes) == 0
-		if !bodyIsEmptyOrNull {
-			if err := json.Unmarshal(bodyBytes, &decoded); err != nil {
-				writePydanticValidationError(w, r, claims.OrgID, jsonSyntaxErrorDetail([]any{"body"}, bodyBytes))
-				return
-			}
-			if decoded == nil {
-				bodyIsEmptyOrNull = true
-			}
+		decoded, bodyIsEmptyOrNull, syntaxDetail := decodeRequestBody([]any{"body"}, bodyBytes)
+		if syntaxDetail != nil {
+			writePydanticValidationError(w, r, claims.OrgID, *syntaxDetail)
+			return
 		}
 		if bodyIsEmptyOrNull {
 			writePydanticValidationError(w, r, claims.OrgID, missingFieldError([]any{"body"}, nil))
 			return
 		}
 
-		body, isObject := decoded.(map[string]any)
+		body, isObject := decoded.(*pyjson.Object)
 		if !isObject {
 			writePydanticValidationError(w, r, claims.OrgID, modelAttributesTypeError([]any{"body"}, decoded))
 			return
@@ -371,7 +366,7 @@ func newSankeyPostHandler(client sankey.QueryClient) http.HandlerFunc {
 		// window_end.
 		var validationErrors []pydanticErrorDetail
 
-		modeValue, hasMode := body["mode"]
+		modeValue, hasMode := body.Get("mode")
 		var mode string
 		if !hasMode {
 			validationErrors = append(validationErrors, missingFieldError([]any{"body", "mode"}, body))
@@ -381,24 +376,24 @@ func newSankeyPostHandler(client sankey.QueryClient) http.HandlerFunc {
 			mode = modeStr
 		}
 
-		filtersValue, hasFilters := body["filters"]
+		filtersValue, hasFilters := body.Get("filters")
 		if !hasFilters {
 			validationErrors = append(validationErrors, missingFieldError([]any{"body", "filters"}, body))
 		} else {
 			validationErrors = append(validationErrors, validateMetricFilter([]any{"body", "filters"}, filtersValue)...)
 		}
 
-		if ctxValue, hasCtx := body["context"]; hasCtx && ctxValue != nil {
-			ctxObj, isObj := ctxValue.(map[string]any)
+		if ctxValue, hasCtx := body.Get("context"); hasCtx && ctxValue != nil {
+			ctxObj, isObj := ctxValue.(*pyjson.Object)
 			if !isObj {
 				validationErrors = append(validationErrors, modelAttributesTypeError([]any{"body", "context"}, ctxValue))
 			} else {
-				if v, ok := ctxObj["entity_id"]; ok && v != nil {
+				if v, ok := ctxObj.Get("entity_id"); ok && v != nil {
 					if _, isStr := v.(string); !isStr {
 						validationErrors = append(validationErrors, stringBodyFieldError([]any{"body", "context", "entity_id"}, v))
 					}
 				}
-				if v, ok := ctxObj["entity_label"]; ok && v != nil {
+				if v, ok := ctxObj.Get("entity_label"); ok && v != nil {
 					if _, isStr := v.(string); !isStr {
 						validationErrors = append(validationErrors, stringBodyFieldError([]any{"body", "context", "entity_label"}, v))
 					}
@@ -407,13 +402,13 @@ func newSankeyPostHandler(client sankey.QueryClient) http.HandlerFunc {
 		}
 
 		var windowStartValue, windowEndValue any
-		if v, hasWindowStart := body["window_start"]; hasWindowStart {
+		if v, hasWindowStart := body.Get("window_start"); hasWindowStart {
 			windowStartValue = v
 			if detail := validateBodyDateField([]any{"body", "window_start"}, v); detail != nil {
 				validationErrors = append(validationErrors, *detail)
 			}
 		}
-		if v, hasWindowEnd := body["window_end"]; hasWindowEnd {
+		if v, hasWindowEnd := body.Get("window_end"); hasWindowEnd {
 			windowEndValue = v
 			if detail := validateBodyDateField([]any{"body", "window_end"}, v); detail != nil {
 				validationErrors = append(validationErrors, *detail)
@@ -425,13 +420,13 @@ func newSankeyPostHandler(client sankey.QueryClient) http.HandlerFunc {
 			return
 		}
 
-		filters, _ := filtersValue.(map[string]any)
+		filters, _ := legacyJSON(filtersValue).(map[string]any)
 
 		var windowStartPtr, windowEndPtr *time.Time
-		if t, ok := dateFromAny(windowStartValue); ok {
+		if t, ok := dateFromAny(legacyJSON(windowStartValue)); ok {
 			windowStartPtr = &t
 		}
-		if t, ok := dateFromAny(windowEndValue); ok {
+		if t, ok := dateFromAny(legacyJSON(windowEndValue)); ok {
 			windowEndPtr = &t
 		}
 		filters = applySankeyWindow(filters, windowStartPtr, windowEndPtr)

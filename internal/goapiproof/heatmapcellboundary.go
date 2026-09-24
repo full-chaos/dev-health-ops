@@ -12,7 +12,7 @@ import (
 // own KeyedDirectionShape entry, same class of mechanism) produces on
 // GET /api/v1/heatmap's hotspot_risk metric: a bounded, value-DESC top-N
 // FILE selection (fetchHotspotRisk's own top_query, api/queries/
-// heatmap.py:161-178 / cmd/query-api/internal/heatmap/queries.go:
+// heatmap.py:161-178 / internal/queryapi/heatmap/queries.go:
 // 244-257, LIMIT 20 on both planes -- services/heatmap.py:367,
 // heatmap.go:322) feeding a flat, (week, file_key)-keyed `data.cells`
 // list PLUS a SEPARATE, positional `data.axes.y` file-name list derived

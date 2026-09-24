@@ -7,7 +7,7 @@ source_of_truth:
   - contracts/provider-matrix/v1/matrix.json (SYNC's provider x dataset table -- fully generated, do not hand-edit)
   - internal/jobs/metrics/daily/families.json (METRICS' daily-family table)
   - internal/jobs/metrics/remaining/families.json (METRICS' remaining-family table; `port` field mirrors daily's convention as of CHAOS-5030, but contracts/native-families/v1/native-families.json is the actual executor authority -- see below)
-  - contracts/native-families/v1/native-families.json (Go-emitted, AST-derived from cmd/dev-health-worker/daily.go by cmd/dev-health-worker/native_families_artifact_test.go -- the executor source of truth for METRICS)
+  - contracts/native-families/v1/native-families.json (Go-emitted, AST-derived from internal/workerservice/daily.go by internal/workerservice/native_families_artifact_test.go -- the executor source of truth for METRICS)
   - cmd/dev-health-migration-matrix (curated citation/ticket text lives in internal/migrationmatrix/curated.go; regenerate with `-render`, do not hand-edit the generated blocks -- CHAOS-5473 absorbed the former scripts/gen_go_migration_matrix_docs.py)
 applicability: current
 lifecycle: active
@@ -45,7 +45,7 @@ preview verb entirely -- see METRICS and RECOMMENDATIONS below).
 drift-test against (`tests/workers/test_provider_matrix_contract.py`); nothing there is hand-typed. METRICS'
 two family tables are generated from `families.json`'s family-name sets (coverage) plus
 `contracts/native-families/v1/native-families.json` (the Executor verdict itself) -- a Go-emitted artifact
-`cmd/dev-health-worker/native_families_artifact_test.go` statically parses out of `daily.go`'s own
+`internal/workerservice/native_families_artifact_test.go` statically parses out of `daily.go`'s own
 registration wiring, so no curated Python dict or hand-set JSON field can silently drift from what the
 worker actually executes. INVESTMENT/WORK-GRAPH's table is entirely hand-curated (no registry file exists
 for those 5 kinds; see [Known gaps](#known-gaps-not-fixed-in-this-pr)). Every CLI-verb sub-table under SYNC/
@@ -57,13 +57,13 @@ Regenerate the generated tables after any change to a source-of-truth file:
 
 ```bash
 go run ./cmd/dev-health-migration-matrix -render -root . -fleet none
-UPDATE_NATIVE_FAMILIES_ARTIFACT=1 go test ./cmd/dev-health-worker/... -run TestNativeFamiliesArtifactUpToDate
+UPDATE_NATIVE_FAMILIES_ARTIFACT=1 go test ./internal/workerservice/... -run TestNativeFamiliesArtifactUpToDate
 ```
 
 `ci/check_migration_matrix.sh contract` (`go run ./cmd/dev-health-migration-matrix -check`, CHAOS-5473 absorbed
 the former `scripts/check_go_migration_matrix_docs_drift.py`) fails CI the moment a generated block disagrees
 with its producer, or a family/dataset gains or loses a row without the doc being regenerated in the same PR.
-`cmd/dev-health-worker/native_families_artifact_test.go` separately fails CI if
+`internal/workerservice/native_families_artifact_test.go` separately fails CI if
 `contracts/native-families/v1/native-families.json` disagrees with `daily.go`'s actual wiring.
 
 **Last verified:** `1205ec23c1cf05a32f925a49f96ff1e0d58a0f69` (ops main, 2026-09-20) -- the commit every
@@ -101,7 +101,7 @@ go run ./cmd/dev-health-migration-matrix -render -root .
 `1205ec23c1cf` (see the PR body for the per-row audit table): the `internal/workersctl/main.go` verb-group
 ranges (`providersync`, `sync-dispatch-outbox`, `metrics` daily/finalize, `metrics remaining`) had drifted with file growth and
 were corrected to the current function bounds; the seven `river, native` remaining-family citations had pointed
-at unrelated lines of `daily.go` and now name each family's own block in `cmd/dev-health-worker/daily.go`; the
+at unrelated lines of `daily.go` and now name each family's own block in `internal/workerservice/daily.go`; the
 `linear_work_items_derived.go`, `jira_work_item_derived.go` and `inventory.go` line citations were moved; the
 webhook-bridge row now says the bridge is deleted (its Python files no longer exist). Every other citation
 checked out as written.
@@ -238,7 +238,7 @@ A row that is live, reachable to real clients (`canary`/`primary`) and carries n
 is required before stage 4/5, and "a bare 200 does not qualify".
 
 <!-- BEGIN GENERATED GO API OPERATIONS -->
-_Rendered 2026-09-20T13:31:59Z against main merge-base `1205ec23c1cf05a32f925a49f96ff1e0d58a0f69`; SDL digest pin `sha256:898250a995e65f792e0383a07d7a683251894cbe51f426a4dcf520bcd82bf91e`; fleet read 2026-09-16T12:25:30Z via fleet file fleet-prod.json._
+_Rendered 2026-09-20T13:31:59Z against main merge-base `55b59036632bd6ef22c04ec50118fa3fb70fce1f`; SDL digest pin `sha256:898250a995e65f792e0383a07d7a683251894cbe51f426a4dcf520bcd82bf91e`; fleet read 2026-09-16T12:25:30Z via fleet file fleet-prod.json._
 
 _Rows in `go_api_proof_run` at read time: **2845**. Operations reachable to real clients with no deployed-executed proof: **0**. Rows whose mode says Go but whose schema digest no longer matches the pin, so every request silently falls back to Python: **25**._
 
@@ -300,37 +300,37 @@ _32 `/api/v1/*` routes in `src/dev_health_ops/api/main.py`: **32** ported, **0**
 
 | Method | Path | Status | Go handler |
 | --- | --- | --- | --- |
-| GET | `/api/v1/drilldown/issues` | ported | `cmd/query-api/drilldown_issues_route.go:79` |
-| POST | `/api/v1/drilldown/issues` | ported | `cmd/query-api/drilldown_issues_route.go:79` |
-| GET | `/api/v1/drilldown/prs` | ported | `cmd/query-api/drilldown_prs_route.go:86` |
-| POST | `/api/v1/drilldown/prs` | ported | `cmd/query-api/drilldown_prs_route.go:86` |
-| GET | `/api/v1/explain` | ported | `cmd/query-api/explain_route.go:98` |
-| POST | `/api/v1/explain` | ported | `cmd/query-api/explain_route.go:98` |
+| GET | `/api/v1/drilldown/issues` | ported | `cmd/query-api/drilldown_issues_route.go:80` |
+| POST | `/api/v1/drilldown/issues` | ported | `cmd/query-api/drilldown_issues_route.go:80` |
+| GET | `/api/v1/drilldown/prs` | ported | `cmd/query-api/drilldown_prs_route.go:87` |
+| POST | `/api/v1/drilldown/prs` | ported | `cmd/query-api/drilldown_prs_route.go:87` |
+| GET | `/api/v1/explain` | ported | `cmd/query-api/explain_route.go:99` |
+| POST | `/api/v1/explain` | ported | `cmd/query-api/explain_route.go:99` |
 | GET | `/api/v1/filters/options` | ported | `cmd/query-api/filter_options_route.go:81` |
 | GET | `/api/v1/flame` | ported | `cmd/query-api/flame_route.go:94` |
 | GET | `/api/v1/flame/aggregated` | ported | `cmd/query-api/flame_aggregated_route.go:96` |
 | GET | `/api/v1/heatmap` | ported | `cmd/query-api/heatmap_route.go:75` |
-| GET | `/api/v1/home` | ported | `cmd/query-api/home_route.go:59` |
-| POST | `/api/v1/home` | ported | `cmd/query-api/home_route.go:59` |
-| GET | `/api/v1/investment` | ported | `cmd/query-api/investment_route.go:107` |
-| POST | `/api/v1/investment` | ported | `cmd/query-api/investment_route.go:107` |
-| POST | `/api/v1/investment/explain` | ported | `cmd/query-api/investment_explain_route.go:124` |
-| POST | `/api/v1/investment/flow` | ported | `cmd/query-api/investment_flow_route.go:87` |
-| POST | `/api/v1/investment/flow/repo-team` | ported | `cmd/query-api/investment_flow_route.go:87` |
-| GET | `/api/v1/investment/sunburst` | ported | `cmd/query-api/investment_route.go:175` |
+| GET | `/api/v1/home` | ported | `cmd/query-api/home_route.go:60` |
+| POST | `/api/v1/home` | ported | `cmd/query-api/home_route.go:60` |
+| GET | `/api/v1/investment` | ported | `cmd/query-api/investment_route.go:108` |
+| POST | `/api/v1/investment` | ported | `cmd/query-api/investment_route.go:108` |
+| POST | `/api/v1/investment/explain` | ported | `cmd/query-api/investment_explain_route.go:128` |
+| POST | `/api/v1/investment/flow` | ported | `cmd/query-api/investment_flow_route.go:88` |
+| POST | `/api/v1/investment/flow/repo-team` | ported | `cmd/query-api/investment_flow_route.go:88` |
+| GET | `/api/v1/investment/sunburst` | ported | `cmd/query-api/investment_route.go:176` |
 | GET | `/api/v1/meta` | ported | `cmd/query-api/meta_route.go:79` |
-| GET | `/api/v1/opportunities` | ported | `cmd/query-api/opportunities_route.go:67` |
-| POST | `/api/v1/opportunities` | ported | `cmd/query-api/opportunities_route.go:67` |
+| GET | `/api/v1/opportunities` | ported | `cmd/query-api/opportunities_route.go:68` |
+| POST | `/api/v1/opportunities` | ported | `cmd/query-api/opportunities_route.go:68` |
 | GET | `/api/v1/people` | ported | `cmd/query-api/people_route.go:93` |
 | GET | `/api/v1/people/{person_id}/drilldown/issues` | ported | `cmd/query-api/people_drilldown_issues_route.go:65` |
 | GET | `/api/v1/people/{person_id}/drilldown/prs` | ported | `cmd/query-api/people_drilldown_prs_route.go:67` |
 | GET | `/api/v1/people/{person_id}/metric` | ported | `cmd/query-api/people_metric_route.go:69` |
 | GET | `/api/v1/people/{person_id}/summary` | ported | `cmd/query-api/people_summary_route.go:88` |
 | GET | `/api/v1/quadrant` | ported | `cmd/query-api/quadrant_route.go:79` |
-| GET | `/api/v1/sankey` | ported | `cmd/query-api/sankey_route.go:81` |
-| POST | `/api/v1/sankey` | ported | `cmd/query-api/sankey_route.go:81` |
-| GET | `/api/v1/work-units` | ported | `cmd/query-api/workunits_route.go:112` |
-| POST | `/api/v1/work-units` | ported | `cmd/query-api/workunits_route.go:112` |
+| GET | `/api/v1/sankey` | ported | `cmd/query-api/sankey_route.go:82` |
+| POST | `/api/v1/sankey` | ported | `cmd/query-api/sankey_route.go:82` |
+| GET | `/api/v1/work-units` | ported | `cmd/query-api/workunits_route.go:113` |
+| POST | `/api/v1/work-units` | ported | `cmd/query-api/workunits_route.go:113` |
 | POST | `/api/v1/work-units/{work_unit_id}/explain` | ported | `cmd/query-api/workunit_explain_route.go:81` |
 <!-- END GENERATED REST ENDPOINTS -->
 
@@ -435,7 +435,7 @@ cross-contract inconsistency between the repo's two provider-sync contract files
 ## METRICS
 
 `metrics.daily_partition` (every family runs natively, constructed inside `dailyNativeFamilyRegistrations`,
-`cmd/dev-health-worker/daily.go`) and 7 independent `metrics.remaining.*` River kinds are the two
+`internal/workerservice/daily.go`) and 7 independent `metrics.remaining.*` River kinds are the two
 WORKER-side families below. **CHAOS-3092 (PR-A) deleted the daily Python compatibility bridge outright**:
 `internal/jobs/metrics/daily/compatibility_http.go`, the `daily.CompatibilityExecutor` interface, the
 `ComputePartition` call in `PartitionHandler.Work`, the skip-families negotiation and the Python route
@@ -517,13 +517,13 @@ deleted, the frozen file and this one test survive.
 <!-- BEGIN GENERATED REMAINING METRICS MATRIX -->
 | Family | Executor | Citation | Route transport | Ticket |
 | --- | --- | --- | --- | --- |
-| capacity | NATIVE | Go: `internal/jobs/metrics/remaining/capacity_native.go`, `capacity_native_clickhouse.go` | river, native (`cmd/dev-health-worker/daily.go:477-515`) | CUT-20 R2 (Done) |
-| complexity | NATIVE | Go: `internal/jobs/metrics/remaining/complexity_native.go`, `complexity_native_clickhouse.go` | river, native (`cmd/dev-health-worker/daily.go:517-558`) | CHAOS-4291 (Done) |
-| dora | NATIVE | Go: `internal/jobs/metrics/remaining/dora_native.go`, `dora_native_clickhouse.go` | river, native (`cmd/dev-health-worker/daily.go:415-475`) | CHAOS-3092 R1 (Done) |
-| membership_backfill | NATIVE | Go: `internal/jobs/metrics/remaining/membership_native.go` | river, native (`cmd/dev-health-worker/daily.go:608-654`) | CHAOS-4282 (Done) |
-| recommendations | NATIVE | Go: `internal/jobs/metrics/remaining/recommendations_native.go` | river, native (`cmd/dev-health-worker/daily.go:560-606`) | CHAOS-4281/CHAOS-3092 (Done) |
-| release_impact | NATIVE | Go: `internal/jobs/metrics/remaining/release_impact_native_executor.go`, `release_impact_native_clickhouse.go`. CHAOS-5244: Python daily-compute orchestrator (`job_release_impact.py`, `compute_release_impact_daily`) deleted -- job compute deleted; `release_impact.py`'s `_compute_day` survives only as `fixtures/runner.py`'s local/CI fixture-generation dependency, fixture-generation path pending CHAOS-5250 | river, native (`cmd/dev-health-worker/daily.go:707-756`) | CHAOS-4296 (Done) |
-| work_item_attribution | NATIVE (narrow: staleness backstop only) | Go: `internal/jobs/metrics/remaining/work_item_attribution_native.go` -- CHAOS-3092 PR-B staleness-window backstop, NOT the full daily attribution compute (that's §2's `work_item_attribution` row, native as of CHAOS-5078) | river, native (`cmd/dev-health-worker/daily.go:656-705`) | CHAOS-3092 PR-B (Done) |
+| capacity | NATIVE | Go: `internal/jobs/metrics/remaining/capacity_native.go`, `capacity_native_clickhouse.go` | river, native (`internal/workerservice/daily.go:477-515`) | CUT-20 R2 (Done) |
+| complexity | NATIVE | Go: `internal/jobs/metrics/remaining/complexity_native.go`, `complexity_native_clickhouse.go` | river, native (`internal/workerservice/daily.go:517-558`) | CHAOS-4291 (Done) |
+| dora | NATIVE | Go: `internal/jobs/metrics/remaining/dora_native.go`, `dora_native_clickhouse.go` | river, native (`internal/workerservice/daily.go:415-475`) | CHAOS-3092 R1 (Done) |
+| membership_backfill | NATIVE | Go: `internal/jobs/metrics/remaining/membership_native.go` | river, native (`internal/workerservice/daily.go:608-654`) | CHAOS-4282 (Done) |
+| recommendations | NATIVE | Go: `internal/jobs/metrics/remaining/recommendations_native.go` | river, native (`internal/workerservice/daily.go:560-606`) | CHAOS-4281/CHAOS-3092 (Done) |
+| release_impact | NATIVE | Go: `internal/jobs/metrics/remaining/release_impact_native_executor.go`, `release_impact_native_clickhouse.go`. CHAOS-5244: Python daily-compute orchestrator (`job_release_impact.py`, `compute_release_impact_daily`) deleted -- job compute deleted; `release_impact.py`'s `_compute_day` survives only as `fixtures/runner.py`'s local/CI fixture-generation dependency, fixture-generation path pending CHAOS-5250 | river, native (`internal/workerservice/daily.go:707-756`) | CHAOS-4296 (Done) |
+| work_item_attribution | NATIVE (narrow: staleness backstop only) | Go: `internal/jobs/metrics/remaining/work_item_attribution_native.go` -- CHAOS-3092 PR-B staleness-window backstop, NOT the full daily attribution compute (that's §2's `work_item_attribution` row, native as of CHAOS-5078) | river, native (`internal/workerservice/daily.go:656-705`) | CHAOS-3092 PR-B (Done) |
 <!-- END GENERATED REMAINING METRICS MATRIX -->
 
 ## RECOMMENDATIONS
@@ -585,7 +585,7 @@ it.
 | Area | Executor | Writer call site | Ticket |
 |---|---|---|---|
 | `operational.webhook_delivery` | NATIVE | Go: `internal/jobs/operational/handler.go` (`WebhookHandler.Work`) -- routes every recognised event natively via `SyncDispatchWriter.TriggerScopedSync` (github/gitlab/jira) or the two native GitHub App event types (`InstallationWriter`), with an explicit counted ignore (`recordIgnoredWebhookEvent`) for anything else. CHAOS-5320 deleted the HTTP compatibility bridge (`internal/jobs/operational/http.go`'s `webhookEndpoint`, `POST /api/internal/worker-operational/webhook`, `process_webhook_reference` in the deleted `worker_operational.py`, `process_webhook_event` in the deleted `system_webhooks.py`) entirely -- no Python callback of any kind remains. | CHAOS-5320 |
-| `operational.billing_notification` | NATIVE | Go: `internal/jobs/operational/billinghandler.go` (`BillingHandler.Work`) -- owns the CHAOS-3952 completion fence (`billingfence.go`), the organization-owner lookup, all seven email renderings (`billingemail.go`, templates embedded) and the console/resend/smtp send (`emailsender.go`, under the pre-existing `EMAIL_PROVIDER`/`EMAIL_FROM_ADDRESS`/`EMAIL_API_KEY`/`SMTP_*` names). CHAOS-5353 deletes the HTTP compatibility bridge (`internal/jobs/operational/http.go`'s `billingEndpoint` and `DispatchBilling`, `POST /api/internal/worker-operational/billing`, `worker_operational.py process_billing_reference`, `system_ops.py send_billing_notification` and its fence helpers, `api/services/billing_emails.py`) entirely -- no Python callback of any kind remains. Byte-for-byte parity with the retired Python renderer is pinned by `internal/jobs/operational/testdata/billing_email/*.json`, generated from it before deletion. | CHAOS-5353 (this PR) |
+| `operational.billing_notification` | NATIVE | Go: `internal/jobs/operational/billinghandler.go` (`BillingHandler.Work`) -- owns the CHAOS-3952 completion fence (`billingfence.go`), the organization-owner lookup, all seven email renderings (`billingemail.go`, templates embedded) and the console/resend/smtp send (the shared `internal/mail` package -- extracted from this package's `emailsender.go` so the org-invite route uses the same transport -- under the pre-existing `EMAIL_PROVIDER`/`EMAIL_FROM_ADDRESS`/`EMAIL_API_KEY`/`SMTP_*` names; its SMTP wire format and Resend requests are compared against the live Python email service by `TestSMTPSenderMatchesLivePythonSMTPProvider`/`TestResendSenderMatchesLivePythonResendProvider`). CHAOS-5353 deletes the HTTP compatibility bridge (`internal/jobs/operational/http.go`'s `billingEndpoint` and `DispatchBilling`, `POST /api/internal/worker-operational/billing`, `worker_operational.py process_billing_reference`, `system_ops.py send_billing_notification` and its fence helpers, `api/services/billing_emails.py`) entirely -- no Python callback of any kind remains. Byte-for-byte parity with the retired Python renderer is pinned by `internal/jobs/operational/testdata/billing_email/*.json`, generated from it before deletion. | CHAOS-5353 (this PR) |
 
 ## STREAMS
 

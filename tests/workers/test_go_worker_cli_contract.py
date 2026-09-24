@@ -228,7 +228,7 @@ def test_compose_surfaces_keep_only_credentials_in_the_environment(
         assert command, f"{path.name}:{name} passes no flags at all"
         # A dho service names its verb first (`dho stream-runner ...`, `dho
         # reconciler ...`); the rest is flags.
-        if str(command[0]) in {"stream-runner", "reconciler", "scheduler"}:
+        if str(command[0]) in {"stream-runner", "reconciler", "scheduler", "worker"}:
             command = command[1:]
         assert all(str(item).startswith("--") for item in command), (
             f"{path.name}:{name} mixes positional arguments into command:"

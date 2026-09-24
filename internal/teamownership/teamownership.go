@@ -149,7 +149,7 @@ func AuthoritativeOwnerByRepo(
 	// written earlier in the SAME wall-clock second as not-yet-valid, and
 	// `o.valid_to > ?` can read a just-closed row as still open, both for up
 	// to a full second. The named form preserves the DateTime64(3) scale --
-	// same established fix as cmd/query-api/internal/teamscope's
+	// same established fix as internal/queryapi/teamscope's
 	// RepoCondition and team_repo_ownership_derivation_clickhouse.go's
 	// loadTeamRepoOwnershipProjectLinks. asOf is formatted to a literal
 	// string (dateTime64Literal), not bound as a raw time.Time: clickhouse-go

@@ -3,7 +3,7 @@
 //
 // # Why a library rather than a test
 //
-// The adapter under test (`windowFor` in cmd/dev-health-worker) and the
+// The adapter under test (`windowFor` in internal/workerservice) and the
 // generator that measures the reference live in different places, and a second
 // adapter — the investment materializer's, CHAOS-4441 — will need the same
 // comparison. Putting the comparison in a package means one asymmetric rule and

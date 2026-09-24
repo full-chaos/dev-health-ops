@@ -727,7 +727,8 @@ func nextProviderUnitReclaimKey(dedupeKey, unitID string) (string, error) {
 }
 
 // reclaimEnvelope rebuilds the source envelope under a new idempotency key and
-// returns it with its payload hash.
+// returns the args text to store (Python's json.dumps spelling of it) with the
+// payload hash of its canonical form.
 //
 // It goes through jobcontract.Decode and MarshalCanonical rather than editing
 // the stored JSON, because those two functions are exactly what the relay's
@@ -758,8 +759,15 @@ func reclaimEnvelope(args string, idempotencyKey string) (string, string, error)
 	if err != nil || decoded.IdempotencyKey != idempotencyKey {
 		return "", "", fmt.Errorf("reclaim key not round-trippable: %w", ErrInvalidConfiguration)
 	}
+	// The hash covers the canonical bytes; the column stores the same envelope
+	// as Python's json.dumps text, spelled by the one function every writer of
+	// worker_job_outbox.args uses.
+	stored, err := joboutbox.StoredArgsText(encoded)
+	if err != nil {
+		return "", "", fmt.Errorf("reclaim args text: %w", err)
+	}
 	digest := sha256.Sum256(encoded)
-	return string(encoded), "sha256:" + hex.EncodeToString(digest[:]), nil
+	return stored, "sha256:" + hex.EncodeToString(digest[:]), nil
 }
 
 // orphanedUnitIdlePredicate is the ONE definition of "no genuine progress on

@@ -8,9 +8,80 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/streamrunner"
 	"github.com/google/uuid"
 )
+
+// TestParseExternalEnvelopeKeepsPayloadAndOrderedPayloadConsistentOnALoneSurrogate
+// pins the fix for a real divergence a round-1 review found: a lone UTF-16
+// surrogate ("\ud800" with no paired low surrogate) used to decode two
+// different ways depending on which of the envelope's two independent
+// decodes produced it -- encoding/json's own decoder (the old source of
+// Payload) replaces it with U+FFFD, while pyjson.Decode (OrderedPayload,
+// which ValidateRecords reads) keeps it, matching Python's json.loads.
+// Payload is now DERIVED from the same decoded value as OrderedPayload
+// (payloadFromOrdered), so the two can no longer disagree.
+func TestParseExternalEnvelopeKeepsPayloadAndOrderedPayloadConsistentOnALoneSurrogate(t *testing.T) {
+	body := []byte(`{"schemaVersion":"external-ingest.v1","idempotencyKey":"surrogate-1",` +
+		`"source":{"type":"customer_push","system":"github","instance":"acme/repo","entityFamily":"legacy"},` +
+		`"records":[{"kind":"identity.v1","externalId":"rec-1",` +
+		`"payload":{"canonicalId":"a\ud800b","updatedAt":"2026-07-23T11:00:00Z"}}]}`)
+	envelope, err := parseExternalEnvelope(body)
+	if err != nil {
+		t.Fatalf("parseExternalEnvelope: %v", err)
+	}
+	record := envelope.Records[0]
+	mapValue, ok := record.Payload["canonicalId"].(string)
+	if !ok {
+		t.Fatal(`Payload["canonicalId"] is not a string`)
+	}
+	orderedRaw, ok := record.OrderedPayload.Get("canonicalId")
+	if !ok {
+		t.Fatal("OrderedPayload is missing canonicalId")
+	}
+	orderedValue, ok := orderedRaw.(string)
+	if !ok {
+		t.Fatal(`OrderedPayload["canonicalId"] is not a string`)
+	}
+	if mapValue != orderedValue {
+		t.Fatalf("Payload and OrderedPayload disagree on a lone surrogate: %q vs %q", mapValue, orderedValue)
+	}
+	if !pyjson.HasSurrogate(mapValue) {
+		t.Fatalf(`Payload["canonicalId"] = %q, want the lone surrogate preserved (WTF-8), not replaced with U+FFFD`, mapValue)
+	}
+}
+
+// TestNormalizeExternalRecordsRejectsEmptyRepoFullName pins a deliberate,
+// reviewed divergence from Python: normalize.py's own repository_identity_
+// required guard (normalize.py:589-591) tests repo_full_name/repo_provider
+// for None only, so an empty string "" (valid at the pydantic model level --
+// no min_length) passes it. What actually catches "" downstream is
+// ServiceRepositoryMapping.__post_init__ (models/operational.py:283),
+// called unguarded, so it raises an uncaught OperationalContractError that
+// aborts the whole batch -- contradicting normalize_batch's own docstring
+// guarantee that no per-record problem ever raises. That is a Python-side
+// defect (out of scope: no Python fixes), not a stricter behavior to port.
+// Go checks == "" on both fields and rejects this record cleanly instead.
+func TestNormalizeExternalRecordsRejectsEmptyRepoFullName(t *testing.T) {
+	pointer := externalPointer{OrgID: "org-1", SourceSystem: "pagerduty", SourceInstance: "tenant.pagerduty.com", SchemaVersion: externalSchemaVersion}
+	body := []byte(`{"schemaVersion":"external-ingest.v1","idempotencyKey":"repo-full-name-empty",` +
+		`"source":{"type":"customer_push","system":"pagerduty","instance":"tenant.pagerduty.com","entityFamily":"operational"},` +
+		`"records":[{"kind":"service_repository_mapping.v1","externalId":"mapping-1","payload":` +
+		`{"externalId":"mapping-1","sourceVersionAt":"2026-07-22T15:00:00Z","serviceExternalId":"service-1",` +
+		`"repoFullName":"","repoProvider":"github"}}]}`)
+	envelope, err := parseExternalEnvelope(body)
+	if err != nil {
+		t.Fatalf("parseExternalEnvelope: %v", err)
+	}
+	_, rejections, _ := normalizeExternalRecords(pointer, envelope)
+	if len(rejections) != 1 {
+		t.Fatalf("rejections = %d, want 1: %#v", len(rejections), rejections)
+	}
+	if rejections[0].Code != "repository_identity_required" {
+		t.Fatalf("code = %q, want repository_identity_required", rejections[0].Code)
+	}
+}
 
 type externalRepositoryFake struct {
 	batch       externalBatch
@@ -273,5 +344,31 @@ func TestExternalPermanentFinalizerMarksAddressableBatchOnly(t *testing.T) {
 	}
 	if len(repository.failed) != 1 {
 		t.Fatal("malformed unaddressable ID attempted status finalization")
+	}
+}
+
+// TestRepositorySettingsFloatsSerializeAsPythonDoes pins the sink's JSON
+// text for a float in a stored JSON column (repository.v1 settings) to what
+// Python's json.dumps writes: 1.0 stays 1.0, -0.0 stays -0.0, and a value
+// that overflows float64 is Infinity, not Go's +Inf (which no JSON parser
+// accepts). It runs the real parse path, so the float arrives as
+// payloadFromOrdered produces it.
+func TestRepositorySettingsFloatsSerializeAsPythonDoes(t *testing.T) {
+	body := []byte(`{"schemaVersion":"external-ingest.v1","idempotencyKey":"settings-floats",` +
+		`"source":{"type":"customer_push","system":"github","instance":"acme/repo","entityFamily":"legacy"},` +
+		`"records":[{"kind":"repository.v1","externalId":"acme/repo","payload":` +
+		`{"externalId":"acme/repo","sourceSystem":"github","settings":{"threshold":1.0,"negativeZero":-0.0,"overflow":1e1000}}}]}`)
+	envelope, err := parseExternalEnvelope(body)
+	if err != nil {
+		t.Fatalf("parseExternalEnvelope: %v", err)
+	}
+	settings := objectField(envelope.Records[0].Payload, "settings")
+	got, err := externalPythonCompactJSON(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = `{"negativeZero":-0.0,"overflow":Infinity,"threshold":1.0}`
+	if got != want {
+		t.Fatalf("settings JSON = %s, want %s", got, want)
 	}
 }

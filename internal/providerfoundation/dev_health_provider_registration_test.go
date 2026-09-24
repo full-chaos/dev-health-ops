@@ -17,7 +17,7 @@ import (
 //
 //  1. A single, shared *Metrics accumulates across multiple real
 //     HTTPClient.Do calls, instead of the pre-fix pattern
-//     (cmd/dev-health-worker/provider_sync.go constructing a fresh
+//     (internal/workerservice/provider_sync.go constructing a fresh
 //     providerfoundation.NewMetrics() inside BuildExecutor, once per unit
 //     dispatch, and discarding it — every counter reset to zero on the very
 //     next unit and was never scraped in between).
@@ -25,7 +25,7 @@ import (
 //     production /metrics path (health.Server.handleMetrics ->
 //     Registry.WriteMetricsPartial) — surfaces its real, accumulated,
 //     HELP/TYPE-complete series, which is what "registered" means for this
-//     family (see cmd/dev-health-worker/dependencies.go's
+//     family (see internal/workerservice/dependencies.go's
 //     workerFamily.metricsSource wiring).
 func TestSharedMetricsAccumulateAcrossRealRequestsAndScrape(t *testing.T) {
 	t.Parallel()

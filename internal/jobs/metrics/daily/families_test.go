@@ -39,7 +39,7 @@ func TestFamilyRegistryIsCompleteAndRoutesCorePortFirst(t *testing.T) {
 	// the Go-executor construction site.
 	validPorts := map[string]bool{"pending": true, "next_core": true, "go": true}
 	// phase (CHAOS-4278) is additive: "" (omitted) and "pre_bridge" are the
-	// SAME thing (today's dispatch order, cmd/dev-health-worker/daily.go
+	// SAME thing (today's dispatch order, internal/workerservice/daily.go
 	// SetNativeFamilies), so every existing family needs no edit.
 	// "post_bridge" (PartitionHandler.SetPostBridgeNativeFamilies) means the
 	// family's native executor depends on data the SAME partition's
@@ -104,7 +104,7 @@ func TestFamilyRegistryIsCompleteAndRoutesCorePortFirst(t *testing.T) {
 		t.Fatalf("incident must be port=go, got %q", got)
 	}
 	// testops_risk (CHAOS-4294): TestopsRiskExecutor is registered in
-	// cmd/dev-health-worker/daily.go the same way team_wellbeing/
+	// internal/workerservice/daily.go the same way team_wellbeing/
 	// repo_user_commit are above -- catches a families.json edit that
 	// flips this back (or forgets to) without touching the registration.
 	if got := byName["testops_risk"]; got != "go" {
@@ -166,7 +166,7 @@ func TestFamilyRegistryIsCompleteAndRoutesCorePortFirst(t *testing.T) {
 	// order -- "compounding_risk" sorts BEFORE "repo_user_commit", so a
 	// pre_bridge registration reads the table before this partition's rows
 	// land. Same assertion-pair discipline as work_item_state above: this is
-	// the families.json half, cmd/dev-health-worker/daily.go's registration is
+	// the families.json half, internal/workerservice/daily.go's registration is
 	// the other.
 	//
 	// A DIFFERENT reason from the CHAOS-4283/CHAOS-5078 four above, and

@@ -407,6 +407,105 @@ func venueRequests(f venueFixture, tokens map[string]string) []venueoracle.Reque
 	add("identities: create multi-provider preserves insertion order", "POST", identities, json(bearer("admin")),
 		b64(`{"canonical_id":"frank","provider_identities":{"zeta":["z-gh"],"alpha":["a-gh"]}}`))
 	add("identities: get multi-provider identity preserves stored order", "GET", identities, bearer("admin"), nil)
+
+	// POST /teams/import (CHAOS-6311): status + body compared per request,
+	// and the rows it writes (teams, team_provider_observations,
+	// team_drift_changes, team_sync_policies) compared as raw text after
+	// the whole sequence. The sequence exercises every branch of
+	// import_teams: new (imported), existing under on_conflict=skip
+	// (skipped, observation only), existing under merge with the default
+	// AUTO_APPLY policy (merged), existing under a FLAG_FOR_REVIEW policy
+	// (qa4, created above with sync_policy=1: drift-change rows, catalog
+	// untouched), and the pydantic 422 shapes.
+	imp := teams + "/import"
+	team := func(fields string) *string {
+		return b64(`{"teams":[{` + fields + `}]}`)
+	}
+	add("teams import: anonymous", "POST", imp, json(nil), b64(`{"teams":[]}`))
+	add("teams import: non-admin", "POST", imp, json(bearer("member")), b64(`{"teams":[]}`))
+	add("teams import: missing teams", "POST", imp, json(bearer("admin")), b64(`{}`))
+	add("teams import: bad on_conflict", "POST", imp, json(bearer("admin")), b64(`{"teams":[],"on_conflict":"overwrite"}`))
+	add("teams import: associations null is a 422", "POST", imp, json(bearer("admin")),
+		team(`"provider_type":"jira","provider_team_id":"BAD","name":"Bad","associations":null`))
+	add("teams import: member_count fractional is a 422", "POST", imp, json(bearer("admin")),
+		team(`"provider_type":"jira","provider_team_id":"BAD","name":"Bad","member_count":5.5`))
+	add("teams import: empty list", "POST", imp, json(bearer("admin")), b64(`{"teams":[]}`))
+	add("teams import: jira team is imported", "POST", imp, json(bearer("admin")),
+		team(`"provider_type":"jira","provider_team_id":"IMP","name":"Imported Jira","description":"","associations":{"project_keys":["IMP"],"provider_org":"https://x.atlassian.net"}`))
+	add("teams import: github team with repo patterns", "POST", imp, json(bearer("admin")),
+		team(`"provider_type":"github","provider_team_id":"platform","name":"Platform","description":"gh team","member_count":"4","associations":{"repo_patterns":["acme/api","acme/web"],"provider_org":"acme"}`))
+	add("teams import: gitlab subgroup path", "POST", imp, json(bearer("admin")),
+		team(`"provider_type":"gitlab","provider_team_id":"acme/sub","name":"Sub","associations":{"repo_patterns":["acme/sub/x"],"provider_org":"acme"}`))
+	add("teams import: same team again is skipped by default", "POST", imp, json(bearer("admin")),
+		team(`"provider_type":"jira","provider_team_id":"IMP","name":"Imported Jira","associations":{"project_keys":["IMP"]}`))
+	add("teams import: same team merged with a new name", "POST", imp, json(bearer("admin")),
+		b64(`{"teams":[{"provider_type":"jira","provider_team_id":"IMP","name":"Imported Jira Renamed","associations":{"project_keys":["IMP","IMP2"]}}],"on_conflict":"merge"}`))
+	add("teams import: existing manual team merged (AUTO_APPLY)", "POST", imp, json(bearer("admin")),
+		b64(`{"teams":[{"provider_type":"jira","provider_team_id":"qa","name":"QA Imported","associations":{"project_keys":["QA"]}}],"on_conflict":"merge"}`))
+	add("teams import: existing team skipped", "POST", imp, json(bearer("admin")),
+		team(`"provider_type":"jira","provider_team_id":"design","name":"Design Imported"`))
+	add("teams import: FLAG_FOR_REVIEW team writes drift changes only", "POST", imp, json(bearer("admin")),
+		b64(`{"teams":[{"provider_type":"jira","provider_team_id":"qa4","name":"QA4 Imported","description":"drifted","associations":{"project_keys":["QA4","QA4B"]}}],"on_conflict":"merge"}`))
+	add("teams import: FLAG_FOR_REVIEW same drift again is idempotent", "POST", imp, json(bearer("admin")),
+		b64(`{"teams":[{"provider_type":"jira","provider_team_id":"qa4","name":"QA4 Imported","description":"drifted","associations":{"project_keys":["QA4","QA4B"]}}],"on_conflict":"merge"}`))
+	// _list_field (clickhouse_team_drift_projector.py:497): str() of every
+	// non-null element, a string is a one-element list, anything else is [].
+	for _, c := range []struct{ id, projectKeys string }{
+		{"AINT", `[7,"ENG"]`}, {"ANULL", `["a",null]`}, {"ABOOL", `[true]`}, {"AFLOAT", `[1.5]`},
+		{"ASTR", `"single"`}, {"ANUM", `5`}, {"ADICT", `{"a":1}`}, {"ANESTED", `[["x"]]`}, {"AEMPTY", `[]`},
+		{"ANULLV", `null`}, {"ABOOLS", `true`}, {"AFLOATS", `1.5`}, {"AEMPTYSTR", `""`}, {"AUNI", `"日本ü"`}, {"ADICT2", `{"k":[1],"z":null}`},
+	} {
+		add("teams import: AUTO_APPLY project_keys "+c.id, "POST", imp, json(bearer("admin")),
+			team(`"provider_type":"jira","provider_team_id":"`+c.id+`","name":"`+c.id+`","associations":{"project_keys":`+c.projectKeys+`}`))
+	}
+	add("teams import: FLAG_FOR_REVIEW numeric association elements", "POST", imp, json(bearer("admin")),
+		b64(`{"teams":[{"provider_type":"jira","provider_team_id":"qa4","name":"QA4 Imported","description":"drifted","associations":{"project_keys":[7,"QA4"]}}],"on_conflict":"merge"}`))
+	add("teams import: several teams in one request", "POST", imp, json(bearer("admin")),
+		b64(`{"teams":[{"provider_type":"linear","provider_team_id":"L1","name":"Lin One","associations":{"project_keys":["L1"]}},{"provider_type":"linear","provider_team_id":"L2","name":"Lin Two"}],"on_conflict":"merge"}`))
+	// Team drift review (CHAOS-6312): seeded by seedDriftReview.
+	pend := teams + "/pending-changes"
+	add("drift: pending anonymous", "GET", pend, nil, nil)
+	add("drift: pending non-admin", "GET", pend, bearer("member"), nil)
+	add("drift: pending all", "GET", pend, bearer("admin"), nil)
+	// The route takes no filter: a team_id query parameter is ignored on both
+	// planes, so these three requests must answer the full pending list.
+	add("drift: pending filtered to qa", "GET", pend+"?team_id=qa", bearer("admin"), nil)
+	add("drift: pending filtered to a team with none", "GET", pend+"?team_id=nope", bearer("admin"), nil)
+	add("drift: pending other org sees own only", "GET", pend, bearer("owner"), nil)
+	dec := func(verb, team string) string { return teams + "/" + team + "/" + verb + "-changes" }
+	add("drift: approve anonymous", "POST", dec("approve", "qa"), json(nil), b64(`{"change_ids":["c-name-qa"]}`))
+	add("drift: approve non-admin", "POST", dec("approve", "qa"), json(bearer("member")), b64(`{"change_ids":["c-name-qa"]}`))
+	add("drift: approve empty body object", "POST", dec("approve", "qa"), json(bearer("admin")), b64(`{}`))
+	add("drift: approve change_ids wrong type", "POST", dec("approve", "qa"), json(bearer("admin")), b64(`{"change_ids":"c-name-qa"}`))
+	add("drift: approve approve_all wrong type", "POST", dec("approve", "qa"), json(bearer("admin")), b64(`{"approve_all":"maybe"}`))
+	add("drift: approve body not an object", "POST", dec("approve", "qa"), json(bearer("admin")), b64(`[1]`))
+	add("drift: approve unknown ids", "POST", dec("approve", "qa"), json(bearer("admin")), b64(`{"change_ids":["nope","c-other-org"]}`))
+	add("drift: approve already-approved and dismissed ids", "POST", dec("approve", "qa"), json(bearer("admin")), b64(`{"change_ids":["c-already","c-dismissed"]}`))
+	add("drift: approve name change", "POST", dec("approve", "qa"), json(bearer("admin")), b64(`{"change_ids":["c-name-qa"]}`))
+	add("drift: approve name change again is a no-op", "POST", dec("approve", "qa"), json(bearer("admin")), b64(`{"change_ids":["c-name-qa"]}`))
+	add("drift: get qa after name approval", "GET", teams+"/qa", bearer("admin"), nil)
+	add("drift: approve members change", "POST", dec("approve", "qa"), json(bearer("admin")), b64(`{"change_ids":["c-members-qa"]}`))
+	add("drift: approve description change", "POST", dec("approve", "qa"), json(bearer("admin")), b64(`{"change_ids":["c-desc-qa"]}`))
+	add("drift: approve unmapped field", "POST", dec("approve", "qa"), json(bearer("admin")), b64(`{"change_ids":["c-badcol-qa"]}`))
+	add("drift: approve is_active field", "POST", dec("approve", "qa"), json(bearer("admin")), b64(`{"change_ids":["c-active-qa"]}`))
+	add("drift: approve change without a field", "POST", dec("approve", "qa"), json(bearer("admin")), b64(`{"change_ids":["c-nofield-qa"]}`))
+	add("drift: approve with no observation", "POST", dec("approve", "nobs"), json(bearer("admin")), b64(`{"change_ids":["c-noobs"]}`))
+	add("drift: approve bad-json payload", "POST", dec("approve", "qa"), json(bearer("admin")), b64(`{"change_ids":["c-badjson"]}`))
+	add("drift: approve project_keys on a new team", "POST", dec("approve", "dr-team"), json(bearer("admin")), b64(`{"change_ids":["c-projkeys-dr","c-repo-dr","c-members-dr"]}`))
+	add("drift: get dr-team", "GET", teams+"/dr-team", bearer("admin"), nil)
+	add("drift: approve identity membership change", "POST", dec("approve", "design"), json(bearer("admin")), b64(`{"change_ids":["c-ident-mem"]}`))
+	add("drift: approve identity fallback change", "POST", dec("approve", "design"), json(bearer("admin")), b64(`{"change_ids":["c-ident-fb"]}`))
+	add("drift: approve identity malformed payload", "POST", dec("approve", "design"), json(bearer("admin")), b64(`{"change_ids":["c-ident-bad"]}`))
+	add("drift: pending after approvals", "GET", pend, bearer("admin"), nil)
+	add("drift: dismiss unknown", "POST", dec("dismiss", "qa"), json(bearer("admin")), b64(`{"change_ids":["nope"]}`))
+	add("drift: dismiss empty body object", "POST", dec("dismiss", "qa"), json(bearer("admin")), b64(`{}`))
+	add("drift: dismiss dismiss_all wrong type", "POST", dec("dismiss", "qa"), json(bearer("admin")), b64(`{"dismiss_all":[]}`))
+	add("drift: dismiss all", "POST", dec("dismiss", "qa"), json(bearer("admin")), b64(`{"dismiss_all":true}`))
+	add("drift: pending after dismiss_all", "GET", pend, bearer("admin"), nil)
+	add("drift: approve_all with nothing pending", "POST", dec("approve", "qa"), json(bearer("admin")), b64(`{"approve_all":true}`))
+	add("teams: PUT is not a route (Allow header of the pattern's first route)", "PUT", teams+"/eng", json(bearer("admin")), b64(`{}`))
+	add("teams import: POST to another team id with a malformed body is still a 405", "POST", teams+"/eng", json(bearer("admin")), b64(`{not json`))
+	add("teams import: POST to another team id is not a route", "POST", teams+"/eng", json(bearer("admin")), b64(`{}`))
 	return out
 }
 

@@ -156,8 +156,8 @@ func normalizedHeaders(header http.Header) map[string][]string {
 	out := make(map[string][]string, len(header))
 	for name, values := range header {
 		key := strings.ToLower(name)
-		if key == "date" || key == "server" {
-			continue
+		if key == "date" || key == "server" || key == "x-dev-health-plane" || key == "x-dev-health-build" {
+			continue // the Go api's own plane/build stamp; asserted by TestServerMatchesThePythonAPIOverRawHTTP
 		}
 		if key == "x-request-id" {
 			values = []string{"<generated>"}

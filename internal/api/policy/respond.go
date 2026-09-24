@@ -13,6 +13,7 @@ package policy
 import (
 	"bytes"
 	"io"
+	"log/slog"
 	"net/http"
 	"strconv"
 
@@ -26,9 +27,29 @@ import (
 // line.
 func WriteJSON(w http.ResponseWriter, status int, body pyjson.Value, extra http.Header) {
 	payload, err := pyjson.Marshal(body)
+	writePayload(w, status, payload, err, extra)
+}
+
+// WriteModel writes body as FastAPI writes a route's response_model
+// (pyjson.MarshalModel: pydantic-core's dump_json). Use it for a route that
+// declares a response model or a return annotation FastAPI takes as one;
+// WriteJSON is the JSONResponse of a route without one.
+func WriteModel(w http.ResponseWriter, status int, body pyjson.Value, extra http.Header) {
+	payload, err := pyjson.MarshalModel(body)
+	writePayload(w, status, payload, err, extra)
+}
+
+// writePayload writes a serialized body. A body the Python api could not
+// serialize either (a lone surrogate, a non-finite float json.dumps refuses)
+// raises there, so the Python api answers its unhandled-exception 500; this
+// logs the failure and answers that same 500 through WriteInternal, never a
+// silent one.
+func writePayload(w http.ResponseWriter, status int, payload []byte, err error, extra http.Header) {
 	if err != nil {
-		payload = []byte(`{"detail":"Internal Server Error"}`)
-		status = http.StatusInternalServerError
+		slog.Default().Error("api response: body could not be serialized",
+			slog.Int("status", status), slog.String("error", err.Error()))
+		WriteInternal(w)
+		return
 	}
 	for key, values := range extra {
 		for _, value := range values {

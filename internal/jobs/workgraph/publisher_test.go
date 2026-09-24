@@ -20,7 +20,7 @@ func TestSameJSONAcceptsPostgresJSONBFormatting(t *testing.T) {
 // a jsonb column is read back, so a caller re-marshaling the same scope on
 // retry sees its own keys in a different order than what WriteTx's
 // existing-row readback round-trips as. Reproduces the exact scope shape
-// cmd/dev-health-worker/sync_dispatch.go's postSyncWorkGraphScope writes
+// internal/workerservice/sync_dispatch.go's postSyncWorkGraphScope writes
 // (`{"from_date":...,"to_date":...}`) and a reordered/respaced form
 // equivalent to what a live work_graph_execution_requests row can read
 // back as -- json.Compact alone (the prior implementation) rejected this

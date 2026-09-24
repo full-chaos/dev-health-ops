@@ -22,7 +22,7 @@ const (
 // TestRuntimePoolsObserveRealAcquireLatency is CHAOS-3118 evidence for
 // worker_database_pool_acquire_seconds: it opens real domain and
 // queue-control pools against an isolated PostgreSQL instance exactly the way
-// cmd/dev-health-worker does (postgres.NewRuntimePools followed by
+// internal/workerservice does (postgres.NewRuntimePools followed by
 // AttachPoolAcquireObserver, since pgxpool freezes its AcquireTracer before
 // the process's MetricsCollector exists), issues real queries that force real
 // Acquire calls, and reads the collector's own Prometheus exposition to prove

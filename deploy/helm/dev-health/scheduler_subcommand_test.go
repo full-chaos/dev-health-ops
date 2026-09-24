@@ -57,7 +57,7 @@ func TestSchedulerGroupRefusesShapesThatCannotStart(t *testing.T) {
 			want:  "retired dev-health-go-scheduler image",
 		},
 		"an image without dho": {
-			group: "    - name: scheduler\n      image: ghcr.io/full-chaos/dev-health-go-worker:latest\n      subcommand: scheduler\n",
+			group: "    - name: scheduler\n      image: ghcr.io/full-chaos/dev-hops-api:latest\n      subcommand: scheduler\n",
 			want:  "is not a dho image",
 		},
 	} {

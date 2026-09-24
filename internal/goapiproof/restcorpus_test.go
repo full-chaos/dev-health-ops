@@ -709,7 +709,7 @@ func TestPersonDrilldownPRsSiblings_BindToTheExposedWinner(t *testing.T) {
 // issue_entity_id_bound_200's own issue_flame_frame_id producer (its
 // ListPath/IDField, read straight off the live corpus declaration, never
 // hand-copied) actually resolves against a body shaped like flame.Response
-// and flame.Frame's real json tags (cmd/query-api/internal/flame/flame.go)
+// and flame.Frame's real json tags (internal/queryapi/flame/flame.go)
 // -- entity/timeline/frames, each frame carrying id/parent_id/label/start/
 // end/state/category. A body missing frames, or an empty frames list (the
 // two ways a live candidate response can fail to carry this branch's own

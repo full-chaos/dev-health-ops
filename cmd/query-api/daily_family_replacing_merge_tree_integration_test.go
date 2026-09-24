@@ -37,9 +37,9 @@ import (
 
 	stdclickhouse "github.com/ClickHouse/clickhouse-go/v2"
 
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/graphqldate"
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/hotspots"
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/reviewedges"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/hotspots"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/reviewedges"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )

@@ -1017,7 +1017,7 @@ func doraScopeDay(raw json.RawMessage) (day string, ok bool) {
 // CHAOS-4242 round 3 (codex): the cross-trigger lock's coverage check must
 // not compare on day alone. The fixed schedule always requests
 // backfill_days=1; post-sync can request up to 90 (a real gap catch-up,
-// postSyncRemainingScope in cmd/dev-health-worker/sync_dispatch.go). A
+// postSyncRemainingScope in internal/workerservice/sync_dispatch.go). A
 // day-only match let a backfill_days=1 run (say, the fixed schedule)
 // falsely satisfy a LATER backfill_days=30 request for the same anchor
 // day: the wider request would be told "already covered" and silently

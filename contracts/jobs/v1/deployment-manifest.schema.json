@@ -149,6 +149,13 @@
           {
             "if": {"properties": {"subcommand": {"const": "scheduler"}}, "required": ["subcommand"]},
             "then": {"properties": {"name": {"const": "scheduler"}}, "required": ["name"]}
+          },
+          {
+            "if": {"properties": {"runtime": {"const": "river"}}, "required": ["runtime"]},
+            "then": {
+              "properties": {"binary": {"const": "dho"}, "subcommand": {"const": "worker"}},
+              "required": ["binary", "subcommand"]
+            }
           }
         ],
         "required": [

@@ -99,7 +99,7 @@ func TestTheGuardsInputsAreClassifiedRelevantByTheRelevanceScript(t *testing.T) 
 	}
 
 	for _, changed := range []string{
-		"cmd/query-api/gqlgen.yml",
+		"internal/queryapi/gqlgen.yml",
 		"cmd/gqlgen-guard/main.go",
 		"internal/gqlgenguard/guard.go",
 		"contracts/gqlgen/v1/expected-drift.record",

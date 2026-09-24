@@ -10,7 +10,7 @@
 // only the field-by-field wiring for THIS route's own request shape.
 package main
 
-import "encoding/json"
+import "github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 
 // decodeInvestmentExplainRequestBody decodes bodyBytes into
 // investmentExplainRequestBody at loc (["body"]). A non-empty errs
@@ -25,76 +25,51 @@ func decodeInvestmentExplainRequestBody(loc []any, bodyBytes []byte) (investment
 		return reqBody, nil
 	}
 
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(bodyBytes, &raw); err != nil {
-		return investmentExplainRequestBody{}, []pydanticErrorDetail{jsonSyntaxErrorDetail(loc, bodyBytes)}
+	decoded, empty, syntaxDetail := decodeRequestBody(loc, bodyBytes)
+	if syntaxDetail != nil {
+		return investmentExplainRequestBody{}, []pydanticErrorDetail{*syntaxDetail}
+	}
+	if empty {
+		// A JSON null body is accepted like an empty one, as before: both
+		// are FastAPI's missing body, a named gap with its own ticket.
+		return reqBody, nil
+	}
+	raw, isObject := decoded.(*pyjson.Object)
+	if !isObject {
+		return investmentExplainRequestBody{}, []pydanticErrorDetail{modelAttributesTypeError(loc, decoded)}
 	}
 
 	var errs []pydanticErrorDetail
-
-	if v, has := raw["theme"]; has {
-		s, decodeErr := decodeOptionalStringField(v)
-		if decodeErr != nil {
-			errs = append(errs, stringBodyFieldError(appendLoc(loc, "theme"), rawJSONToAny(v)))
-		} else {
-			reqBody.Theme = s
+	optionalString := func(name string) *string {
+		v, has := raw.Get(name)
+		if !has || v == nil {
+			return nil
 		}
-	}
-	if v, has := raw["subcategory"]; has {
-		s, decodeErr := decodeOptionalStringField(v)
-		if decodeErr != nil {
-			errs = append(errs, stringBodyFieldError(appendLoc(loc, "subcategory"), rawJSONToAny(v)))
-		} else {
-			reqBody.Subcategory = s
+		s, isString := v.(string)
+		if !isString {
+			errs = append(errs, stringBodyFieldError(appendLoc(loc, name), v))
+			return nil
 		}
+		return &s
 	}
 
-	var filtersValue any
-	if v, has := raw["filters"]; has {
-		filtersValue = rawJSONToAny(v)
+	reqBody.Theme = optionalString("theme")
+	reqBody.Subcategory = optionalString("subcategory")
+
+	filtersValue, hasFilters := raw.Get("filters")
+	if hasFilters {
 		errs = append(errs, validateMetricFilter(appendLoc(loc, "filters"), filtersValue)...)
 	}
 
-	if v, has := raw["llm_model"]; has {
-		s, decodeErr := decodeOptionalStringField(v)
-		if decodeErr != nil {
-			errs = append(errs, stringBodyFieldError(appendLoc(loc, "llm_model"), rawJSONToAny(v)))
-		} else {
-			reqBody.LLMModel = s
-		}
-	}
+	reqBody.LLMModel = optionalString("llm_model")
 
 	if len(errs) > 0 {
 		return investmentExplainRequestBody{}, errs
 	}
 
-	if filtersMap, ok := filtersValue.(map[string]any); ok {
+	if filtersMap, ok := legacyJSON(filtersValue).(map[string]any); ok {
 		reqBody.Filters = filtersMap
 	}
 
 	return reqBody, nil
-}
-
-// decodeOptionalStringField decodes one JSON value into a *string --
-// theme/subcategory/llm_model are all `*string`, matching
-// InvestmentExplainRequest's `str | None` fields; a JSON null decodes to
-// a nil pointer (a valid, absent value), same as Pydantic accepts null
-// for an Optional field.
-func decodeOptionalStringField(raw json.RawMessage) (*string, error) {
-	var s *string
-	if err := json.Unmarshal(raw, &s); err != nil {
-		return nil, err
-	}
-	return s, nil
-}
-
-// rawJSONToAny decodes one JSON value generically, for building a
-// validation error's "input" field -- best-effort: a value this route
-// already knows is well-formed JSON (it came from a successful top-level
-// json.Unmarshal into map[string]json.RawMessage) always decodes here
-// too, so the error case is unreachable in practice.
-func rawJSONToAny(raw json.RawMessage) any {
-	var v any
-	_ = json.Unmarshal(raw, &v)
-	return v
 }

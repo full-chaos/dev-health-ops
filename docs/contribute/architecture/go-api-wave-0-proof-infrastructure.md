@@ -7,8 +7,8 @@ source_of_truth:
   - .github/docs-legacy/plans/go-api-epic.md (the epic plan; this page documents two of its pieces in the customer-nav-visible docs tree)
   - .github/docs-legacy/plans/chaos-4381-parity-rules-proposal.md (comparator parity rules, ACCEPTED 2026-08-27)
   - src/dev_health_ops/api/graphql/go_api_comparator.py (comparator implementation)
-  - cmd/query-api/internal/principal (Go envelope verifier)
-  - cmd/query-api/internal/routeswitch (reachability gate, incl. PostgresSwitch)
+  - internal/queryapi/principal (Go envelope verifier)
+  - internal/queryapi/routeswitch (reachability gate, incl. PostgresSwitch)
   - src/dev_health_ops/api/graphql/principal_envelope.py (envelope issuer)
   - src/dev_health_ops/models/go_api_registry.py (registry + ledger schema)
   - src/dev_health_ops/alembic/versions/0114_add_go_api_operation_registry.py
@@ -56,7 +56,7 @@ sequenceDiagram
     QueryAPI->>QueryAPI: check iss, aud, exp (WithExpirationRequired), v (schema version)
 ```
 
-`cmd/query-api/internal/principal` (`Verifier`, `Claims`) is this diagram's
+`internal/queryapi/principal` (`Verifier`, `Claims`) is this diagram's
 Go half — verified end-to-end against a real Python-issued envelope, not
 just self-consistent Go-only fixtures. It rejects: wrong audience, wrong
 issuer, an expired or `exp`-less envelope, an unknown `kid`, a signature
@@ -185,7 +185,7 @@ flowchart LR
     Switch -->|true, mode in canary/primary| Handler[registered http.Handler]
 ```
 
-`PostgresSwitch` (`cmd/query-api/internal/routeswitch/postgres_switch.go`)
+`PostgresSwitch` (`internal/queryapi/routeswitch/postgres_switch.go`)
 is the `go_api_registry`-backed `Switch` plan §6 forward-declared —
 implementing the same interface `StaticSwitch`/`DynamicSwitch` already do,
 not a redesign of it. It treats only `mode IN ('canary', 'primary')` as
@@ -610,7 +610,7 @@ are recorded. `principal_id` is who the *credential* says is acting: the
 envelope's `sub`, a user id, read only after `/buildinfo` has answered 200
 — which is the deployed verifier accepting that exact token. This command
 never verifies the envelope itself; one validator per credential class is
-the Auth Control Plane's rule, and `cmd/query-api/internal/principal` is
+the Auth Control Plane's rule, and `internal/queryapi/principal` is
 that validator. `recorded_by` is what the operator typed about themselves,
 verified by nothing, and required on every row. The pairing CHECK makes the
 distinction structural: an envelope-class row MUST name a subject, an
@@ -725,7 +725,7 @@ proven against on prod). The key is never copied into the image and never
 passed as a flag value (which would land on argv/`/proc/<pid>/cmdline`);
 `internal/mintcli/envelope` reads it by env var name only. Claim shape,
 algorithm (EdDSA/Ed25519), key id, TTL (60s) and issuer/audience all
-mirror `principal_envelope.py` exactly -- `cmd/query-api/internal/principal`'s
+mirror `principal_envelope.py` exactly -- `internal/queryapi/principal`'s
 own test suite proves the two stay byte-compatible by signing with
 `internal/envelopemint` and verifying with the real `Verifier`. `dho goapi
 routing` still takes a pre-minted `GO_API_ROUTING_BEARER` the same way it

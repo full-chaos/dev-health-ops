@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
@@ -268,13 +269,9 @@ func seededListItemField(t *testing.T, body, ingestionID, field string) string {
 // render through policy.WriteJSON + an ordered *pyjson.Object instead of a
 // map[string]any.
 //
-// GET /schemas/{version}'s document body is NOT diffed here: that response
-// stays a stdlib map[string]any writer by design (bundle.go's schemaDocument
-// doc comment, a NAMED LIMIT this change does not touch), so a byte-for-byte
-// diff against it would only prove the two planes' JSON Schema GENERATORS
-// agree, not anything this PR changed. The route is still called, once, to
-// prove it answers 200 with a matching ETag on both planes (the cheap,
-// relevant half of that route this PR's scope covers).
+// GET /schemas/{version}'s document is diffed here like every other route:
+// the body is compared as raw text (key order, separators, no trailing
+// newline), so it fails on any byte the two planes render differently.
 func TestExternalIngestVenueOracle(t *testing.T) {
 	ctx := context.Background()
 	root := webhookintakeRepoRoot(t)
@@ -333,6 +330,7 @@ func TestExternalIngestVenueOracle(t *testing.T) {
 
 	requests := []venueoracle.Request{
 		{Name: "list schemas", Method: "GET", Path: "/api/v1/external-ingest/schemas"},
+		{Name: "get schema known version", Method: "GET", Path: "/api/v1/external-ingest/schemas/external-ingest.v1"},
 		{Name: "get schema unknown version", Method: "GET", Path: "/api/v1/external-ingest/schemas/external-ingest.v99"},
 		// pythonRepr's quote-delimiter switch (round 1 review, reproduced
 		// live): a version containing a single quote and no double quote
@@ -403,6 +401,18 @@ func TestExternalIngestVenueOracle(t *testing.T) {
 				`"records":[{"kind":"not_a_real_kind.v1","externalId":"x","payload":{}}]}`),
 		},
 		{Name: "list batches", Method: "GET", Path: "/api/v1/external-ingest/batches", Headers: auth},
+		{Name: "list batches createdAfter exponent", Method: "GET", Path: "/api/v1/external-ingest/batches?createdAfter=1e5", Headers: auth},
+		{Name: "list batches createdAfter unix seconds", Method: "GET", Path: "/api/v1/external-ingest/batches?createdAfter=1767323045", Headers: auth},
+		{Name: "list batches createdAfter naive iso", Method: "GET", Path: "/api/v1/external-ingest/batches?createdAfter=2026-01-01T00:00:00", Headers: auth},
+		{Name: "list batches createdBefore garbage with bad page", Method: "GET", Path: "/api/v1/external-ingest/batches?createdBefore=bogus&limit=0&offset=-1", Headers: auth},
+		{Name: "list batches limit not an integer", Method: "GET", Path: "/api/v1/external-ingest/batches?limit=abc", Headers: auth},
+		{Name: "list batches limit over the cap", Method: "GET", Path: "/api/v1/external-ingest/batches?limit=201", Headers: auth},
+		{Name: "list batches limit leading zeros then minus", Method: "GET", Path: "/api/v1/external-ingest/batches?limit=0-5", Headers: auth},
+		{Name: "list batches limit leading zeros and underscores", Method: "GET", Path: "/api/v1/external-ingest/batches?limit=0__5", Headers: auth},
+		{Name: "list batches limit leading underscores beyond 4300 chars", Method: "GET", Path: "/api/v1/external-ingest/batches?limit=" + strings.Repeat("0_", 2150) + "5", Headers: auth},
+		{Name: "list batches empty status filter", Method: "GET", Path: "/api/v1/external-ingest/batches?status=", Headers: auth},
+		{Name: "list batches offset past int64", Method: "GET", Path: "/api/v1/external-ingest/batches?offset=99999999999999999999", Headers: auth},
+		{Name: "list batches repeated createdAfter", Method: "GET", Path: "/api/v1/external-ingest/batches?createdAfter=bogus&createdAfter=2026-01-01T00:00:00Z", Headers: auth},
 		{Name: "get batches unauthenticated", Method: "GET", Path: "/api/v1/external-ingest/batches"},
 		// The SEEDED batch (fixed id, identical row on both planes from the
 		// start -- see externalIngestVenueSeed's doc comment): a real
@@ -423,22 +433,6 @@ func TestExternalIngestVenueOracle(t *testing.T) {
 	python := venue.ServePython(t, requests)
 	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{Normalize: blankExternalIngestVolatileFields})
 	t.Log(receipt)
-
-	// GET /schemas/{version}'s document body is a NAMED LIMIT (bundle.go's
-	// schemaDocument doc comment): it stays a stdlib map[string]any writer,
-	// so a full-body Diff would only prove the two planes' JSON Schema
-	// GENERATORS produce the same document, not anything this PR touched.
-	// This checks the relevant half instead: both planes answer 200 with a
-	// matching ETag for the identical request.
-	schemaRequest := venueoracle.Request{Name: "get schema known version", Method: "GET", Path: "/api/v1/external-ingest/schemas/external-ingest.v1"}
-	schemaPython := venue.ServePython(t, []venueoracle.Request{schemaRequest})[0]
-	schemaGo := venueoracle.Do(t, goBase, schemaRequest)
-	if schemaPython.Status != schemaGo.Status {
-		t.Errorf("get schema known version: status python=%d go=%d", schemaPython.Status, schemaGo.Status)
-	}
-	if schemaPython.Headers["etag"] != schemaGo.Headers["etag"] || schemaPython.Headers["etag"] == "" {
-		t.Errorf("get schema known version: etag python=%q go=%q", schemaPython.Headers["etag"], schemaGo.Headers["etag"])
-	}
 
 	// batchListItem's own createdAt formatting (handlers.go, separate from
 	// batchStatusResponse's) is only reached through GET /batches -- and

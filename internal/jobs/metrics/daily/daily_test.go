@@ -152,7 +152,7 @@ func TestPartitionNativeFamilySuccessCompletesWithNoBridgeCall(t *testing.T) {
 //
 // Not reachable from the current constructor path -- SetNativeFamilies
 // derives nativeFamilyNames from the map it is handed, and
-// cmd/dev-health-worker now fails worker construction on any executor it
+// internal/workerservice now fails worker construction on any executor it
 // could not build. Pinned anyway: "unreachable today" is precisely how the
 // pre_bridge fail-open path survived as long as it did, and this test is
 // what makes a future reintroduction fail loudly instead of silently.
@@ -1060,7 +1060,7 @@ func TestNativeFamilyLoggerIsOptional(t *testing.T) {
 // TestPartitionWithNoNativeFamiliesIsANoop proves an unconfigured handler
 // (no SetNativeFamilies call) still claims, completes and releases cleanly
 // rather than erroring. CHAOS-3092 (PR-A): it computes NOTHING now -- there
-// is no bridge behind it -- which is why cmd/dev-health-worker makes an
+// is no bridge behind it -- which is why internal/workerservice makes an
 // unbuildable family a startup error instead of an empty map.
 func TestPartitionWithNoNativeFamiliesIsANoop(t *testing.T) {
 	store := &fakeStore{

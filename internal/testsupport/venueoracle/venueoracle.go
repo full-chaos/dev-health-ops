@@ -563,8 +563,12 @@ func (v *Venue) migrate(t *testing.T, ctx context.Context, logger *slog.Logger) 
 // server layer (src/dev_health_ops/api/runner.py calls uvicorn.run with its
 // default date_header and server_header), which TestClient never reaches,
 // so the Python plane here cannot show them. In production, Cloudflare in
-// front of both planes sets its own Server header.
-var Volatile = map[string]bool{"date": true, "server": true, "x-request-id": true}
+// front of both planes sets its own Server header. x-dev-health-plane and
+// x-dev-health-build are the Go api's own provenance stamp, which the REST
+// prover reads to bind a receipt to a build; the Python api carries neither,
+// so they can never agree across planes. The Go side of them is asserted by
+// the api's own tests (internal/apiservice, internal/api/buildinfo).
+var Volatile = map[string]bool{"date": true, "server": true, "x-request-id": true, "x-dev-health-plane": true, "x-dev-health-build": true}
 
 // DiffOptions tune Diff for the ruled differences of a route set.
 type DiffOptions struct {

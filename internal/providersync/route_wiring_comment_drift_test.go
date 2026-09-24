@@ -15,7 +15,7 @@ import (
 // This guard exists because the "unregistered" claim in a doc comment is not
 // checked by anything the compiler runs. Three comments in this package
 // asserted their deriver or route was unregistered/inactive while
-// cmd/dev-health-worker/provider_sync.go constructed them, and four more were
+// internal/workerservice/provider_sync.go constructed them, and four more were
 // found only by a hand sweep (CHAOS-4848). A hand-maintained set of comments
 // that must agree with a wiring file is a countdown to the next miss, so the
 // agreement is asserted here instead.
@@ -91,7 +91,7 @@ const supersededTag = "SUPERSEDED:"
 
 func wiringFilePath(t *testing.T) string {
 	t.Helper()
-	path, err := filepath.Abs(filepath.Join("..", "..", "cmd", "dev-health-worker", "provider_sync.go"))
+	path, err := filepath.Abs(filepath.Join("..", "..", "internal", "workerservice", "provider_sync.go"))
 	if err != nil {
 		t.Fatalf("resolve wiring file: %v", err)
 	}
@@ -385,7 +385,7 @@ func TestNoLiveSymbolIsDocumentedAsUnregistered(t *testing.T) {
 		}
 		if claims := assertedStaleClaims(decl.doc); len(claims) > 0 {
 			violations = append(violations, decl.file+":"+strconv.Itoa(decl.line)+" "+decl.name+
-				" is wired by cmd/dev-health-worker/provider_sync.go but its comment asserts "+
+				" is wired by internal/workerservice/provider_sync.go but its comment asserts "+
 				strings.Join(claims, " / "))
 		}
 	}

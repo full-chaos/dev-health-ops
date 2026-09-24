@@ -12,7 +12,7 @@ import (
 
 // ProviderClientResolver resolves the credential + HTTP client pair a native
 // team-catalog collector needs, the same way
-// cmd/dev-health-worker/provider_sync.go already builds them for a claimed
+// internal/workerservice/provider_sync.go already builds them for a claimed
 // provider-unit -- minus the claim and lease, which this seam never has
 // (CHAOS-4431 ruling, team-lead 2026-08-28, option (c)). runID is required
 // (not just orgID+provider): an org can have more than one active
@@ -84,7 +84,7 @@ type SourceExternalIDsResolver interface {
 // Python's team_autoimport.py ever resolved a real populate() for
 // (_IMPORTER_MODULES: linear/jira/github/gitlab). jira's own native
 // collector closed this set out -- every provider in it is now registered
-// in the production Native map (cmd/dev-health-worker/sync_dispatch.go).
+// in the production Native map (internal/workerservice/sync_dispatch.go).
 // A provider in THIS set that is absent from Native is therefore a wiring
 // bug (a collector that failed to register), not a legitimate "nothing to
 // discover" provider, and Discover fails loudly rather than silently
@@ -179,7 +179,7 @@ func (executor *TeamCatalogDiscoveryExecutor) Discover(
 		return nil, err
 	}
 	// Unlike the non-strict post-sync dispatcher
-	// (cmd/dev-health-worker/team_catalog_clients.go's
+	// (internal/workerservice/team_catalog_clients.go's
 	// nativeTeamAutoimportDispatcher), this seam NEVER skips the collector
 	// call outright when every import selection is off. Sprints/cycles are
 	// unconditional reference data in Python's old STRICT mode --

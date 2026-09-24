@@ -88,7 +88,7 @@ def _river_processes() -> dict[str, dict]:
     return {
         process["name"]: process
         for process in _load_json(_DEPLOYMENT)["processes"]
-        if process["runtime"] == "river" and process["binary"] == "dev-health-worker"
+        if process["runtime"] == "river" and process.get("subcommand") == "worker"
     }
 
 
@@ -104,7 +104,7 @@ def _queue_concurrency_env(process: dict) -> str:
 
 # dho service verbs a worker process names first (`dho stream-runner ...`,
 # `dho reconciler ...`); every argument after the verb is a flag.
-_DHO_SERVICE_VERBS = frozenset({"stream-runner", "reconciler", "scheduler"})
+_DHO_SERVICE_VERBS = frozenset({"stream-runner", "reconciler", "scheduler", "worker"})
 
 
 def _process_verb(container: dict) -> str | None:
@@ -379,17 +379,19 @@ def test_go_worker_image_packages_work_item_semantic_config() -> None:
 
     for filename, runtime_path in _PACKAGED_WORK_ITEM_CONFIG.items():
         source = f"src/dev_health_ops/config/{filename}"
-        staged = f"/runtime/worker{runtime_path}"
         assert (_REPO_ROOT / source).is_file()
         assert f"COPY {source} ./src/dev_health_ops/config/{filename}" in dockerfile
-        assert staged in dockerfile
+        # The worker is `dho worker`: the dho image and the operator image
+        # (prod's pin) both stage the config it reads.
+        for image in ("dho", "operator"):
+            assert f"/runtime/{image}{runtime_path}" in dockerfile
 
 
 def test_go_worker_image_packages_lifecycle_route_operator() -> None:
-    """The worker image packages dho, so `dho workers ...` runs in a worker pod."""
+    """A worker pod runs the dho image, so `dho workers ...` runs in it."""
     dockerfile = _GO_WORKER_DOCKERFILE.read_text(encoding="utf-8")
 
-    assert "cp /out/dho /runtime/worker/usr/local/bin/dho;" in dockerfile
+    assert "cp /out/dho /runtime/dho/usr/local/bin/dho;" in dockerfile
 
 
 def test_go_deployment_surfaces_are_additive_and_group_complete() -> None:
@@ -633,7 +635,9 @@ def test_river_worker_renderers_select_manifest_queues_without_profiles() -> Non
         )
         assert helm_group["runtimeProfile"] == runtime_profile
         assert helm_group["subcommand"] == "stream-runner"
-        assert "/dev-health-go-dho:" in helm_group["image"], helm_group["image"]
+        # The group takes the one goWorkers.image, which is the dho image.
+        image = helm_group.get("image", values["goWorkers"]["image"])
+        assert "/dev-health-go-dho:" in image, image
 
     for service_name in ("go-reconciler", "go-scheduler"):
         environment = compose[service_name]["environment"]

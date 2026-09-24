@@ -98,6 +98,7 @@
       "type": "object",
       "properties": {
         "enabled": { "type": "boolean" },
+        "image": { "type": "string", "minLength": 1 },
         "extraEnvFrom": { "$ref": "#/definitions/extraEnvFrom" },
         "pgbouncer": {
           "type": "object",
@@ -163,7 +164,7 @@
             "required": ["name"],
             "properties": {
               "name": { "type": "string" },
-              "subcommand": { "type": "string", "enum": ["reconciler", "scheduler", "stream-runner"] },
+              "subcommand": { "type": "string", "enum": ["reconciler", "scheduler", "stream-runner", "worker"] },
               "runtimeProfile": { "type": "string", "enum": ["ingest", "external", "pagerduty"] },
               "autoscaling": {
                 "type": "object",

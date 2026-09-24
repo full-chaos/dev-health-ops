@@ -397,7 +397,7 @@ type linearWorkItemRows struct {
 // grep for `routeHandler = .*LinearWorkItemsRouteHandler` finds nothing and
 // appears to confirm the superseded comment below.
 //
-// WIRING: cmd/dev-health-worker/provider_sync.go's
+// WIRING: internal/workerservice/provider_sync.go's
 // `provider == "linear" && dataset == "work-items"` case constructs
 // LinearWorkItemFamilyRouteHandler and passes this type as its `Direct` field
 // (linear_work_items_composition.go:28-31 declares

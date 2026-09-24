@@ -59,7 +59,7 @@ const (
 const (
 	// CredentialClassEnvelope is `enable` and `repoint`. Both read the
 	// deployed process's authenticated /buildinfo, which VERIFIES the
-	// envelope (cmd/query-api/internal/principal/verifier.go) -- so by the
+	// envelope (internal/queryapi/principal/verifier.go) -- so by the
 	// time a row is written the credential has been checked by the
 	// verifier that owns it. This process never verifies it itself: one
 	// validator per class is the ACP's rule, and this is not that
@@ -271,7 +271,7 @@ func describeAuditWriteFailure(operation string, err error) error {
 //
 // IT DOES NOT VERIFY THE ENVELOPE, and must not. The Auth Control Plane's
 // rule is one validator per credential class, and this process is not that
-// validator -- `cmd/query-api/internal/principal/verifier.go` is, and it
+// validator -- `internal/queryapi/principal/verifier.go` is, and it
 // holds the public key. What makes reading the subject here honest is the
 // ORDER: `enable` and `repoint` both call the authenticated `/buildinfo`
 // BEFORE they write, and that route runs the real verifier and answers 401

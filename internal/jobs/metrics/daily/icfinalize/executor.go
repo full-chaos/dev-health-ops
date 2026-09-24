@@ -423,7 +423,7 @@ type TeamResolver func(identity string) (teamID string, ok bool)
 //
 // CHAOS-5151's fourth defect: this used to be `func(ctx) (map[string]string,
 // error)` -- no org parameter at all -- wired via SetTeamMapper, which
-// nothing in cmd/dev-health-worker/daily.go ever called. teamMapper was
+// nothing in internal/workerservice/daily.go ever called. teamMapper was
 // therefore always nil and every identity silently fell through to its
 // git-backed team_id (typically "unassigned"), regardless of real team
 // ownership. Injected as a function value (built once, at construction, from

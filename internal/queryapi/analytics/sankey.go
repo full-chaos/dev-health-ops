@@ -1,0 +1,268 @@
+package analytics
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"sync"
+
+	"github.com/full-chaos/dev-health-go/clickhouse"
+
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
+)
+
+// SankeyRequest is the Go port of compiler.py's SankeyRequest dataclass
+// (compiler.py:106-116), non-investment path only -- same scope split as
+// TimeseriesRequest/BreakdownRequest.
+type SankeyRequest struct {
+	Path      []Dimension
+	Measure   Measure
+	StartDate graphqldate.Date
+	EndDate   graphqldate.Date
+	MaxNodes  int
+	MaxEdges  int
+}
+
+// validateSankeyPath ports validate_sankey_path (sql/validate.py:286-325):
+// at least 2 dimensions, no duplicates (case-insensitive on the wire
+// string, moot here since model.DimensionInput values are already
+// canonical uppercase, but the duplicate check itself is real business
+// logic, not just enum validation).
+func validateSankeyPath(path []model.DimensionInput) ([]Dimension, error) {
+	if len(path) < 2 {
+		return nil, newValidationError("path", path, "Sankey path must contain at least 2 dimensions")
+	}
+	seen := make(map[model.DimensionInput]bool, len(path))
+	out := make([]Dimension, 0, len(path))
+	for _, d := range path {
+		if seen[d] {
+			return nil, newValidationError("path", path, "Duplicate dimension in Sankey path: %q", d)
+		}
+		seen[d] = true
+		dim, err := dimensionFromInput(d)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, dim)
+	}
+	return out, nil
+}
+
+// SankeyRequestFromInput converts the GraphQL input.
+func SankeyRequestFromInput(input model.SankeyRequestInput) (SankeyRequest, error) {
+	path, err := validateSankeyPath(input.Path)
+	if err != nil {
+		return SankeyRequest{}, err
+	}
+	measure, err := measureFromInput(input.Measure)
+	if err != nil {
+		return SankeyRequest{}, err
+	}
+	if input.DateRange == nil {
+		return SankeyRequest{}, newValidationError("dateRange", nil, "sankey.dateRange is required")
+	}
+	maxNodes, maxEdges := input.MaxNodes, input.MaxEdges
+	return SankeyRequest{
+		Path:      path,
+		Measure:   measure,
+		StartDate: input.DateRange.StartDate,
+		EndDate:   input.DateRange.EndDate,
+		MaxNodes:  maxNodes,
+		MaxEdges:  maxEdges,
+	}, nil
+}
+
+// CompileSankey ports compile_sankey (compiler.py:388-447, e9ea257ff)
+// for BOTH the non-investment and investment (CHAOS-4538) paths -- same
+// investmentContextFor wiring as CompileTimeseries, see that function's
+// doc comment. _get_context_params is called with the FULL path (not
+// per-dimension), matching Python: one team/repo/author join set serves
+// every UNION branch in the nodes query and every edges query.
+//
+// Returns exactly 1 nodes query (a single UNION ALL across every
+// dimension in the path -- sankey_nodes_template folds all dimensions
+// into ONE query, unlike edges) and len(path)-1 edges queries, one per
+// adjacent dimension pair -- mirrors Python's
+// `[(nodes_sql, nodes_params)], edges_queries` return shape
+// (compiler.py:447) exactly, including that nodes is always a
+// single-element list while edges can be longer.
+func CompileSankey(req SankeyRequest, orgID string, timeoutSeconds int, useInvestment bool, filters *model.FilterInput) (nodes compiledQuery, edges []compiledQuery, err error) {
+	shape, err := compileSankeyShape(req, useInvestment, filters)
+	if err != nil {
+		return compiledQuery{}, nil, err
+	}
+	fc, source, alias, dateFilter, extraClauses, measureExpr := shape.fc, shape.source, shape.alias, shape.dateFilter, shape.extraClauses, shape.measureExpr
+	limitPerDim := shape.limitPerDim
+
+	// CHAOS-5546: a plain UNION ALL across the per-dimension branches
+	// below has NO guaranteed row order without an explicit outer ORDER
+	// BY -- ClickHouse documents this ("if you don't use ORDER BY, the
+	// result depends on the order the query was executed, which is
+	// undefined") and it is not a theoretical concern: running this
+	// EXACT SQL (bindings resolved, no other change) four times in a row
+	// against live ClickHouse produced three DIFFERENT branch orderings
+	// (REPO/THEME/TEAM, THEME/REPO/TEAM x2, TEAM/THEME/REPO) -- each
+	// branch's parallel aggregation finishes and hands its blocks to the
+	// union in whatever order the server's thread scheduler happens to
+	// pick that run. This is true of the query text itself, independent
+	// of which client/language issues it -- go-api-prove's frozen
+	// baseline body (a5e7c5d3...) recorded exactly one such sample
+	// (THEME, REPO, TEAM), not a stable contract to reproduce bit for
+	// bit; a fresh baseline run against the same window is just as
+	// likely to come back in a different order. The only correct fix is
+	// to make the OUTPUT deterministic and tie it to something
+	// meaningful -- the dimension's position in the REQUESTED path,
+	// `req.Path`, which is exactly what a Sankey diagram's caller
+	// expects ("TEAM, THEME, REPO" was asked for in that order). Each
+	// branch below tags its rows with `dim_order`, the branch's index in
+	// req.Path, and the outer SELECT sorts on it first -- this also
+	// makes ExecuteSankeyQueries's node order independent of which
+	// goroutine's queryNodes call happens to return first (moot here
+	// since CompileSankey emits exactly one nodes query, but the
+	// UNION ALL's OWN internal parallelism is the same class of
+	// nondeterminism one level down).
+	var unionParts []string
+	for i, dim := range req.Path {
+		dimCol, dimErr := dbColumn(dim, useInvestment)
+		if dimErr != nil {
+			return compiledQuery{}, nil, dimErr
+		}
+		unionParts = append(unionParts, fmt.Sprintf(`
+SELECT
+    '%s' AS dimension,
+    toString(%s) AS node_id,
+    %s AS value,
+    %d AS dim_order
+FROM %s
+%s
+WHERE %s
+  AND %s.org_id = {org_id:String}
+%s
+GROUP BY node_id
+ORDER BY value DESC, node_id ASC
+LIMIT {limit_per_dim:UInt32}
+`, strings.ToUpper(string(dim)), dimCol, measureExpr, i, source, extraClauses, dateFilter, alias, fc.sql))
+	}
+	// The outer SELECT drops dim_order from the projection -- queryNodes
+	// (flowmatrix.go) scans exactly 3 columns (dimension, node_id,
+	// value) and is shared with flow-matrix's own node query, so the
+	// tie-break column stays ORDER-BY-only, never part of the result
+	// set. Referencing an unprojected subquery column in ORDER BY is
+	// valid ClickHouse (and standard SQL without DISTINCT): the column
+	// is still in scope from the FROM subquery.
+	nodesSQL := fmt.Sprintf(`
+SELECT dimension, node_id, value
+FROM (
+%s
+)
+ORDER BY dim_order ASC, value DESC, node_id ASC
+%s
+`, strings.Join(unionParts, "\nUNION ALL\n"), settingsMaxExecutionTime(timeoutSeconds))
+	nodesBindings := []clickhouse.Binding{
+		{Name: "org_id", Value: orgID},
+		{Name: "start_date", Value: dateBindingValue(req.StartDate.Time())},
+		{Name: "end_date", Value: dateBindingValue(req.EndDate.Time())},
+		{Name: "limit_per_dim", Value: limitPerDim},
+	}
+	nodesBindings = append(nodesBindings, fc.bindings...)
+	nodes = compiledQuery{sql: nodesSQL, bindings: nodesBindings}
+
+	// One edges query per adjacent (source_dim, target_dim) pair,
+	// compiler.py:428-445. max_edges divided evenly across pairs --
+	// integer division, matching Python's `//`.
+	maxEdgesPerPair := shape.maxEdgesPerPair
+	for i := 0; i < len(req.Path)-1; i++ {
+		sourceDim, targetDim := req.Path[i], req.Path[i+1]
+		sourceCol, colErr := dbColumn(sourceDim, useInvestment)
+		if colErr != nil {
+			return compiledQuery{}, nil, colErr
+		}
+		targetCol, colErr := dbColumn(targetDim, useInvestment)
+		if colErr != nil {
+			return compiledQuery{}, nil, colErr
+		}
+		edgeSQL := fmt.Sprintf(`
+SELECT
+    '%s' AS source_dimension,
+    '%s' AS target_dimension,
+    toString(%s) AS source,
+    toString(%s) AS target,
+    %s AS value
+FROM %s
+%s
+WHERE %s
+  AND %s.org_id = {org_id:String}
+%s
+  AND %s IS NOT NULL
+  AND %s IS NOT NULL
+GROUP BY source, target
+ORDER BY value DESC, source ASC, target ASC
+LIMIT {max_edges:UInt32}
+%s
+`, strings.ToUpper(string(sourceDim)), strings.ToUpper(string(targetDim)), sourceCol, targetCol, measureExpr, source, extraClauses, dateFilter, alias, fc.sql, sourceCol, targetCol, settingsMaxExecutionTime(timeoutSeconds))
+
+		edgeBindings := []clickhouse.Binding{
+			{Name: "org_id", Value: orgID},
+			{Name: "start_date", Value: dateBindingValue(req.StartDate.Time())},
+			{Name: "end_date", Value: dateBindingValue(req.EndDate.Time())},
+			{Name: "max_edges", Value: maxEdgesPerPair},
+		}
+		edgeBindings = append(edgeBindings, fc.bindings...)
+		edges = append(edges, compiledQuery{sql: edgeSQL, bindings: edgeBindings})
+	}
+
+	return nodes, edges, nil
+}
+
+// ExecuteSankeyQueries ports _execute_sankey_inner (analytics.py:275-331)
+// in full generality -- unlike flow-matrix's ExecuteFlowMatrix (always
+// exactly 1 nodes + 1 edges query), sankey can have 1 nodes query and
+// MULTIPLE edges queries (one per path hop). Every query in BOTH lists
+// runs concurrently (Python: nodes_task/edges_task each wrap their own
+// asyncio.gather over their query list, then both tasks are gathered
+// together, analytics.py:328-330) -- no cancellation on first failure,
+// same reasoning as ExecuteFlowMatrix's doc comment. Returns a real
+// error on failure; the caller (once the top-level orchestrator exists)
+// is responsible for catching it and degrading to an empty SankeyResult,
+// matching analytics.py:646-656's swallow boundary -- this function does
+// NOT swallow on its own, same compile-fatal/execute-swallow split as
+// flow-matrix.
+func ExecuteSankeyQueries(ctx context.Context, client QueryClient, nodesQueries []compiledQuery, edgesQueries []compiledQuery) ([]model.SankeyNode, []model.SankeyEdge, error) {
+	var wg sync.WaitGroup
+	nodesResults := make([][]model.SankeyNode, len(nodesQueries))
+	nodesErrs := make([]error, len(nodesQueries))
+	edgesResults := make([][]model.SankeyEdge, len(edgesQueries))
+	edgesErrs := make([]error, len(edgesQueries))
+
+	wg.Add(len(nodesQueries) + len(edgesQueries))
+	for i, q := range nodesQueries {
+		go func(i int, q compiledQuery) {
+			defer wg.Done()
+			nodesResults[i], nodesErrs[i] = queryNodes(ctx, client, q)
+		}(i, q)
+	}
+	for i, q := range edgesQueries {
+		go func(i int, q compiledQuery) {
+			defer wg.Done()
+			edgesResults[i], edgesErrs[i] = queryEdges(ctx, client, q)
+		}(i, q)
+	}
+	wg.Wait()
+
+	var nodes []model.SankeyNode
+	for i, err := range nodesErrs {
+		if err != nil {
+			return nil, nil, fmt.Errorf("analytics: sankey nodes[%d]: %w", i, err)
+		}
+		nodes = append(nodes, nodesResults[i]...)
+	}
+	var edges []model.SankeyEdge
+	for i, err := range edgesErrs {
+		if err != nil {
+			return nil, nil, fmt.Errorf("analytics: sankey edges[%d]: %w", i, err)
+		}
+		edges = append(edges, edgesResults[i]...)
+	}
+	return nodes, edges, nil
+}

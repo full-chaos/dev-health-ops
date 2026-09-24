@@ -253,7 +253,7 @@ func TestAdapterMiddlewareOutcomesAreSafeAndDeterministic(t *testing.T) {
 // succeed, so it cannot exercise a FAILURE at any of those three gates --
 // exactly the class of failure that made JobStarted (and, initially,
 // JobFinished's Result/Category pair) an unreliable execution-liveness
-// signal for cmd/dev-health-worker/claim_liveness.go. This test constructs
+// signal for internal/workerservice/claim_liveness.go. This test constructs
 // its own Adapter per case with a failing gate and proves HandlerInvoked
 // never fires when the handler itself would panic if reached.
 func TestHandlerInvokedNeverFiresBeforeTenantBudgetOrIdempotencyGatesPass(t *testing.T) {

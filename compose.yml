@@ -1180,7 +1180,7 @@ services:
   go-worker-heavy: &go-worker
     # `build:` lets this file build the
     # same tree's image locally when asked (`docker compose build`/
-    # `up --build`); `image:` stays so `DEV_HEALTH_GO_WORKER_IMAGE` can
+    # `up --build`); `image:` stays so `DEV_HEALTH_GO_DHO_IMAGE` can
     # pin an already-published tag OR DIGEST instead.
     # This anchor briefly carried a `pull_policy: build` hardening; it is
     # gone, because pinning every image to one sha is the call that was
@@ -1196,11 +1196,11 @@ services:
     # prebuild produces (`job6-prebuild/*:<sha>`), never by forcing a
     # build on every bring-up. `docker compose build`/`up --build` still
     # builds this tree on request via the `build:` block below.
-    image: ${DEV_HEALTH_GO_WORKER_IMAGE:-ghcr.io/full-chaos/dev-health-go-worker:local}
+    image: ${DEV_HEALTH_GO_DHO_IMAGE:-ghcr.io/full-chaos/dev-health-go-dho:local}
     build:
       context: .
       dockerfile: docker/go-worker.Dockerfile
-      target: worker
+      target: dho
       args:
         COMMIT: ${COMMIT:-unknown}
         BUILD_TIME: ${BUILD_TIME:-1970-01-01T00:00:00Z}
@@ -1212,6 +1212,7 @@ services:
     security_opt: [no-new-privileges:true]
     tmpfs: [/tmp]
     command:
+      - worker
       - --queues=investment,metrics,reports,workgraph
       - --queue-concurrency=investment=1,metrics=2,reports=2,workgraph=1
       - --worker-group=heavy
@@ -1258,6 +1259,7 @@ services:
     labels:
       dev-health.io/worker-group: ops
     command:
+      - worker
       - --queues=coverage,heartbeat,retention,webhooks
       - --queue-concurrency=coverage=1,heartbeat=1,retention=1,webhooks=4
       - --worker-group=ops
@@ -1290,6 +1292,7 @@ services:
     labels:
       dev-health.io/worker-group: sync
     command:
+      - worker
       - --queues=sync
       - --queue-concurrency=sync=4
       - --worker-group=sync
@@ -1325,6 +1328,7 @@ services:
     labels:
       dev-health.io/worker-group: sync-provider
     command:
+      - worker
       - --queues=sync_provider
       - --queue-concurrency=sync_provider=2
       - --worker-group=sync-provider

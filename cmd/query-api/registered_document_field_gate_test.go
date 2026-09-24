@@ -306,7 +306,7 @@ func collectSelectedFields(t *testing.T, docName string, doc *gqlast.QueryDocume
 // field) so a future document selecting one is covered with no edit here.
 func parseQueryResolverImplemented(t *testing.T, repoRoot string) map[string]bool {
 	t.Helper()
-	path := filepath.Join(repoRoot, "cmd", "query-api", "internal", "graph", "schema.resolvers.go")
+	path := filepath.Join(repoRoot, "internal", "queryapi", "graph", "schema.resolvers.go")
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, path, nil, 0)
 	if err != nil {
@@ -336,7 +336,7 @@ func parseQueryResolverImplemented(t *testing.T, repoRoot string) map[string]boo
 // its resolver is what populates it.
 func parseFieldResolversImplemented(t *testing.T, repoRoot string) map[string]bool {
 	t.Helper()
-	path := filepath.Join(repoRoot, "cmd", "query-api", "internal", "graph", "schema.resolvers.go")
+	path := filepath.Join(repoRoot, "internal", "queryapi", "graph", "schema.resolvers.go")
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, path, nil, 0)
 	if err != nil {
@@ -449,7 +449,7 @@ func isNilableFieldType(expr goast.Expr) bool {
 // package and is deliberately absent from the generated one.
 func parseModelStructFields(t *testing.T, repoRoot string) map[string]map[string]modelFieldInfo {
 	t.Helper()
-	dir := filepath.Join(repoRoot, "cmd", "query-api", "internal", "graph", "model")
+	dir := filepath.Join(repoRoot, "internal", "queryapi", "graph", "model")
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatalf("read the model package %s: %v", dir, err)
@@ -557,14 +557,27 @@ func (o *populatabilityOracle) instanceCount(typeName, fieldName string) int {
 // literals `model.<TypeName>{...}` -- gqlgen response types are always
 // referenced through the imported `model` package alias in this
 // codebase (confirmed: every Compile*/Execute*/Resolve* construction
-// site in cmd/query-api/internal/analytics does this) -- and records,
+// site in internal/queryapi/analytics does this) -- and records,
 // per keyed field, whether its value expression is the bare identifier
 // `nil`.
 func buildPopulatabilityOracle(t *testing.T, repoRoot string, typeNames map[string]bool) *populatabilityOracle {
 	t.Helper()
 	oracle := &populatabilityOracle{populated: map[string]bool{}, instances: map[string]int{}}
-	root := filepath.Join(repoRoot, "cmd", "query-api")
 	fset := token.NewFileSet()
+	// query-api's code lives in two trees: the service package
+	// (cmd/query-api) and its packages (internal/queryapi). Each root must
+	// yield files, or the oracle would silently shrink.
+	for _, root := range []string{
+		filepath.Join(repoRoot, "cmd", "query-api"),
+		filepath.Join(repoRoot, "internal", "queryapi"),
+	} {
+		walkPopulatabilityRoot(t, fset, root, oracle, typeNames)
+	}
+	return oracle
+}
+
+func walkPopulatabilityRoot(t *testing.T, fset *token.FileSet, root string, oracle *populatabilityOracle, typeNames map[string]bool) {
+	t.Helper()
 	filesWalked := 0
 	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
@@ -610,7 +623,6 @@ func buildPopulatabilityOracle(t *testing.T, repoRoot string, typeNames map[stri
 	if filesWalked == 0 {
 		t.Fatalf("walked zero .go files under %s -- extraction is broken", root)
 	}
-	return oracle
 }
 
 // scanFunctionBody is buildPopulatabilityOracle's per-function pass. A
@@ -882,7 +894,7 @@ func TestRegisteredDocumentFieldsArePopulatable(t *testing.T) {
 			if oracle.instanceCount(f.typeName, info.goName) == 0 {
 				violations = append(violations, violation{
 					operation: sel.operation, field: f,
-					reason: fmt.Sprintf("model.%s.%s (json %q) is never assigned in any composite literal anywhere under cmd/query-api -- nothing populates it", f.typeName, info.goName, f.fieldName),
+					reason: fmt.Sprintf("model.%s.%s (json %q) is never assigned in any composite literal anywhere under cmd/query-api or internal/queryapi -- nothing populates it", f.typeName, info.goName, f.fieldName),
 				})
 				continue
 			}

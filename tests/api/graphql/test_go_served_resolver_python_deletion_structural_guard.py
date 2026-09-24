@@ -19,7 +19,7 @@ one deletion at a time, and are NEVER removed.
 
 2. THAT FILE IS HALF THE ROUTING KEY. ``routeswitch.PostgresSwitch`` looks up
    ``go_api_routing_state`` by the 3-tuple (schema_digest, document_digest,
-   selected_operation) (``cmd/query-api/internal/routeswitch/postgres_switch.go``),
+   selected_operation) (``internal/queryapi/routeswitch/postgres_switch.go``),
    and the Python dispatcher computes the identical digest over the identical
    file (``go_api_dispatcher.py``). Changing it invalidates the routing row of
    EVERY registered operation at once. It is also gqlgen's input SDL, so the Go

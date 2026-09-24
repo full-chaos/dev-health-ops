@@ -15,7 +15,7 @@ import (
 )
 
 // newTestStore boots a real Postgres (containers.StartPostgres -- same
-// harness cmd/dev-health-worker's entitlement integration tests use) with
+// harness internal/workerservice's entitlement integration tests use) with
 // the settings/feature_flags/org_feature_overrides/org_licenses/
 // organizations tables this package reads. One instance per test keeps
 // each precedence-matrix case's fixtures independent.

@@ -21,7 +21,7 @@
 // so every writer and serializer across both the worker and query-api
 // binaries can import it without pulling in the other's stack; each binary
 // registers MetricsSource() with its own health.MetricsSource registry
-// (see cmd/dev-health-worker/dependencies.go) to expose the counter.
+// (see internal/workerservice/dependencies.go) to expose the counter.
 package finite
 
 import (

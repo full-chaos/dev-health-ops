@@ -68,7 +68,7 @@ func (result GitHubWorkItemsRESTResult) NoOptionalDegradation() bool {
 // WIRING: WIRED, as a FIELD rather than by direct assignment --
 // github_work_items_route.go:182-183 declares
 // `REST GitHubWorkItemsRESTCollector` on GitHubWorkItemsRouteHandler, which
-// cmd/dev-health-worker/provider_sync.go's
+// internal/workerservice/provider_sync.go's
 // `provider == "github" && dataset == "work-items"` case constructs and assigns
 // to routeHandler alongside NewGitHubWorkItemClickHouseEffects and
 // NewGitHubWorkItemDeriver.

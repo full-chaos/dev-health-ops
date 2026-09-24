@@ -62,7 +62,7 @@ func TestEveryFamilyHasIndependentRollbackAndReviewedReplay(t *testing.T) {
 // regression-guards the exact split found while auditing this contract (all
 // 7 families are native as of CHAOS-4291's complexity cutover, the last one
 // still on the compat bridge); a future accidental change is caught here
-// even by a reviewer who doesn't reread cmd/dev-health-worker/daily.go's
+// even by a reviewer who doesn't reread internal/workerservice/daily.go's
 // wiring.
 func TestFamilyPortMatchesKnownSplit(t *testing.T) {
 	inventory, err := Load()
@@ -88,7 +88,7 @@ func TestFamilyPortMatchesKnownSplit(t *testing.T) {
 // TestFamilyPortMatchesNativeFamiliesArtifact cross-checks this hand-set
 // "port" field against contracts/native-families/v1/native-families.json --
 // the mechanically Go-AST-derived artifact
-// cmd/dev-health-worker/native_families_artifact_test.go regenerates from
+// internal/workerservice/native_families_artifact_test.go regenerates from
 // daily.go's actual registration wiring. The artifact, not this field, is
 // the real source of truth; this test exists so the two can never silently
 // disagree (a human hand-editing families.json's port without touching the
@@ -126,7 +126,7 @@ func TestFamilyPortMatchesNativeFamiliesArtifact(t *testing.T) {
 			t.Errorf(
 				"%s: families.json port=%q but native-families.json says executor=%q (want port=%q) -- "+
 					"regenerate one or fix the other (UPDATE_NATIVE_FAMILIES_ARTIFACT=1 go test "+
-					"./cmd/dev-health-worker/... -run TestNativeFamiliesArtifactUpToDate is authoritative)",
+					"./internal/workerservice/... -run TestNativeFamiliesArtifactUpToDate is authoritative)",
 				family.Name, family.Port, artifactExecutor, wantPort,
 			)
 		}

@@ -50,7 +50,7 @@ func proveUnderBaselineTimeout(
 		return timedOut, nil
 	}
 	timeout := resolveRESTTimeout(request.Timeout, f.timeout)
-	candidateLeg, err := doREST(ctx, client, f.queryAPIURL, spec.Method, spec.Path, request.Query, request.Body, candidateCredential, timeout)
+	candidateLeg, err := doREST(ctx, client, f.candidateBase(), spec.Method, spec.Path, request.Query, request.Body, candidateCredential, timeout)
 	if err != nil {
 		if out, ok := legTransportOutcome(ctx, operation, request.Name, "candidate", boundIDs, err); ok {
 			out.BaselineTimedOut, out.BaselineTimedOutAfter = true, waitedText

@@ -415,7 +415,7 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 		// only a discovered project whose raw numeric id (the SAME id
 		// gitlabProjectCatalogID mints this row's id from) is in the
 		// run's enabled-source set is cataloged. The shared resolver
-		// (teamCatalogSourceResolver, cmd/dev-health-worker/team_catalog_
+		// (teamCatalogSourceResolver, internal/workerservice/team_catalog_
 		// clients.go) populates ref.SourceExternalIDs from the identical
 		// sync_run_units-JOIN-integration_sources join Python's
 		// _load_discovery_context uses -- this collector stays DB-free,

@@ -9,6 +9,8 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
 // TestRoutesRegisterWithoutPanicking is the test that actually would have
@@ -28,7 +30,7 @@ func TestRoutesRegisterWithoutPanicking(t *testing.T) {
 	guard := policy.NewGuard(nil, nil)
 	_, err := httpapi.NewServer(httpapi.ServerOptions{
 		Address:        "127.0.0.1:0",
-		Routes:         Routes(nil, guard, nil),
+		Routes:         Routes(nil, guard, nil, nil, nil),
 		RequestTimeout: time.Second,
 		MaxBodyBytes:   1024,
 		ExplicitHead:   true,
@@ -58,7 +60,7 @@ func TestTeamsDiscoverCapturedByWildcardOnRealRoutesToday(t *testing.T) {
 	guard := policy.NewGuard(nil, nil)
 	server, err := httpapi.NewServer(httpapi.ServerOptions{
 		Address:        "127.0.0.1:0",
-		Routes:         Routes(nil, guard, nil),
+		Routes:         Routes(nil, guard, nil, nil, nil),
 		RequestTimeout: time.Second,
 		MaxBodyBytes:   1024,
 		ExplicitHead:   true,
@@ -145,5 +147,59 @@ func TestTeamsDiscoverStaticRouteWins(t *testing.T) {
 	mux.ServeHTTP(rec, req)
 	if !hitWildcard || hitLiteral {
 		t.Errorf("a real team_id must reach the wildcard: wildcard=%v literal=%v", hitWildcard, hitLiteral)
+	}
+}
+
+// TestDiscoverTeamsValidatesProviderPattern proves the FastAPI Query(...,
+// pattern=...) 422 for a provider outside github|gitlab|jira|linear, and
+// that a real one still passes validation (checked by observing it does
+// NOT hit the pattern-mismatch branch -- credential resolution then fails
+// with a nil Pool, a distinct, later error this test also pins).
+func TestDiscoverTeamsValidatesProviderPattern(t *testing.T) {
+	h := handlers{store: Store{}, logger: slog.Default()}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/teams/discover?provider=bitbucket", nil)
+	req.SetPathValue("team_id", "discover")
+	rec := httptest.NewRecorder()
+	h.getTeam(rec, req)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("provider=bitbucket: got %d, want 422\nbody: %s", rec.Code, rec.Body.String())
+	}
+	want := `{"detail":[{"type":"string_pattern_mismatch","loc":["query","provider"],"msg":"String should match pattern '^(github|gitlab|jira|linear)$'","input":"bitbucket","ctx":{"pattern":"^(github|gitlab|jira|linear)$"}}]}`
+	if rec.Body.String() != want {
+		t.Errorf("body = %s, want %s", rec.Body.String(), want)
+	}
+}
+
+// TestDiscoverTeamsNoCredentialConfigured proves the 404 "No credentials
+// found for provider" body FastAPI's route answers when
+// resolve_with_fallback finds nothing -- reachable here with a nil Pool
+// (PostgresCredentialRepository.ResolveEncrypted's own "no pool" branch
+// answers the same ErrCredentialNotFound a real empty-result query would).
+// noopDecryptor is never actually invoked in this test: with a nil Pool,
+// PostgresCredentialRepository.ResolveEncrypted returns ErrCredentialNotFound
+// before CredentialResolver.Resolve ever reaches a decrypt call -- but
+// Resolve's OWN nil-Decryptor guard fires first if this is left nil, which
+// would mask that behavior behind a different, unrelated error.
+type noopDecryptor struct{}
+
+func (noopDecryptor) Decrypt(secrets.Value) ([]byte, error) {
+	return nil, providerfoundation.ErrCredentialInvalid
+}
+
+func TestDiscoverTeamsNoCredentialConfigured(t *testing.T) {
+	h := handlers{store: Store{}, credentials: discoverCredentials{Decryptor: noopDecryptor{}}, logger: slog.Default()}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/teams/discover?provider=jira", nil)
+	req.SetPathValue("team_id", "discover")
+	req = req.WithContext(policy.WithUser(req.Context(), &policy.User{OrgID: "org-1"}))
+	rec := httptest.NewRecorder()
+	h.getTeam(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("no credential configured: got %d, want 404\nbody: %s", rec.Code, rec.Body.String())
+	}
+	want := `{"detail":"No credentials found for provider 'jira'"}`
+	if rec.Body.String() != want {
+		t.Errorf("body = %s, want %s", rec.Body.String(), want)
 	}
 }

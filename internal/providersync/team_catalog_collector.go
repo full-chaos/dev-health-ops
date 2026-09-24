@@ -48,7 +48,7 @@ type TeamCatalogReference struct {
 	// selection gate upstream of the collector) and false from the
 	// post-sync seam (run_team_autoimport -- the caller, not the collector,
 	// degrades a failure to a non-fatal zero result; see
-	// cmd/dev-health-worker/team_catalog_clients.go's
+	// internal/workerservice/team_catalog_clients.go's
 	// nativeTeamAutoimportDispatcher). A collector MAY use it to decide
 	// per-item soft-fail vs hard-fail internally; none do yet (Linear's
 	// collector always propagates, which already matches strict semantics,
@@ -195,7 +195,7 @@ type TeamCatalogResult struct {
 // team/member/project-catalog collector implements (CHAOS-4431 activates
 // Linear as the first; CHAOS-4434/CHAOS-4432 add GitHub/GitLab against this
 // same interface). A caller resolves credentials/HTTP client exactly as
-// cmd/dev-health-worker/provider_sync.go already does for claimed
+// internal/workerservice/provider_sync.go already does for claimed
 // provider-units; this seam itself carries no lease and no Claim.
 type TeamCatalogCollector interface {
 	CollectTeamCatalog(

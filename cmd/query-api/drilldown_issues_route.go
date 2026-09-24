@@ -27,10 +27,11 @@ import (
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/authctx"
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/drilldown"
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/principal"
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/routeswitch"
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/drilldown"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
 )
 
 // drilldownIssuesGetOperation/drilldownIssuesPostOperation are this
@@ -278,23 +279,17 @@ func newDrilldownIssuesPostHandler(reader *drilldown.Reader) http.HandlerFunc {
 		// See newDrilldownPRsPostHandler's own doc comment for the
 		// confirmed-live empty-body/null-body/malformed-JSON contract this
 		// block reproduces verbatim.
-		var decoded any
-		bodyIsEmptyOrNull := len(bodyBytes) == 0
-		if !bodyIsEmptyOrNull {
-			if err := json.Unmarshal(bodyBytes, &decoded); err != nil {
-				writePydanticValidationError(w, r, claims.OrgID, jsonSyntaxErrorDetail([]any{"body"}, bodyBytes))
-				return
-			}
-			if decoded == nil {
-				bodyIsEmptyOrNull = true
-			}
+		decoded, bodyIsEmptyOrNull, syntaxDetail := decodeRequestBody([]any{"body"}, bodyBytes)
+		if syntaxDetail != nil {
+			writePydanticValidationError(w, r, claims.OrgID, *syntaxDetail)
+			return
 		}
 		if bodyIsEmptyOrNull {
 			writePydanticValidationError(w, r, claims.OrgID, missingFieldError([]any{"body"}, nil))
 			return
 		}
 
-		body, isObject := decoded.(map[string]any)
+		body, isObject := decoded.(*pyjson.Object)
 		if !isObject {
 			writePydanticValidationError(w, r, claims.OrgID, modelAttributesTypeError([]any{"body"}, decoded))
 			return
@@ -302,14 +297,14 @@ func newDrilldownIssuesPostHandler(reader *drilldown.Reader) http.HandlerFunc {
 
 		var validationErrors []pydanticErrorDetail
 
-		filtersValue, hasFilters := body["filters"]
+		filtersValue, hasFilters := body.Get("filters")
 		if !hasFilters {
 			validationErrors = append(validationErrors, missingFieldError([]any{"body", "filters"}, body))
 		} else {
 			validationErrors = append(validationErrors, validateMetricFilter([]any{"body", "filters"}, filtersValue)...)
 		}
 
-		if sortValue, hasSort := body["sort"]; hasSort && sortValue != nil {
+		if sortValue, hasSort := body.Get("sort"); hasSort && sortValue != nil {
 			if _, isString := sortValue.(string); !isString {
 				validationErrors = append(validationErrors, stringBodyFieldError([]any{"body", "sort"}, sortValue))
 			}
@@ -321,7 +316,7 @@ func newDrilldownIssuesPostHandler(reader *drilldown.Reader) http.HandlerFunc {
 		// but otherwise unused here too (api/main.py:979-1005 never reads
 		// payload.sort).
 		limit := 0
-		if limitValue, hasLimit := body["limit"]; hasLimit {
+		if limitValue, hasLimit := body.Get("limit"); hasLimit {
 			coerced, detail := coerceIntBodyField([]any{"body", "limit"}, limitValue)
 			if detail != nil {
 				validationErrors = append(validationErrors, *detail)
@@ -338,7 +333,7 @@ func newDrilldownIssuesPostHandler(reader *drilldown.Reader) http.HandlerFunc {
 			limit = 50
 		}
 
-		filters, _ := filtersValue.(map[string]any)
+		filters, _ := legacyJSON(filtersValue).(map[string]any)
 		scope, _ := filters["scope"].(map[string]any)
 		scopeLevel, _ := scope["level"].(string)
 		if scopeLevel == "" {

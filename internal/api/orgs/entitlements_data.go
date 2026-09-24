@@ -232,27 +232,8 @@ func LicenseOverrides(value pyjson.Value) *pyjson.Object {
 	return out
 }
 
-// Truthy is bool() of a decoded JSON value.
-func Truthy(value pyjson.Value) bool {
-	switch typed := value.(type) {
-	case nil:
-		return false
-	case bool:
-		return typed
-	case string:
-		return typed != ""
-	case pyjson.Int:
-		return typed.Int != nil && typed.Sign() != 0
-	case pyjson.Float:
-		return typed != 0
-	case []pyjson.Value:
-		return len(typed) > 0
-	case *pyjson.Object:
-		return typed.Len() > 0
-	default:
-		return true
-	}
-}
+// Truthy is bool() of a decoded JSON value (pyjson.Truthy).
+func Truthy(value pyjson.Value) bool { return pyjson.Truthy(value) }
 
 // Decisions is _decisions_from_rows: allowed per key, each decided by the
 // shared engine (licensing.Decide, feature_policy.decide_feature).

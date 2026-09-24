@@ -16,12 +16,10 @@ import (
 )
 
 // verifyForTest is a minimal, LOCAL structural check -- this package
-// cannot import cmd/query-api/internal/principal (it lives under a
-// directory scoped to cmd/query-api by Go's own internal-package
-// visibility rule). The real byte-compatibility proof against that
-// verifier lives in cmd/query-api/internal/principal's own test suite,
-// which imports this package instead (the import direction Go allows)
-// and signs with it.
+// does not import internal/queryapi/principal. The real
+// byte-compatibility proof against that verifier lives in
+// internal/queryapi/principal's own test suite, which imports this
+// package instead and signs with it.
 func verifyForTest(token string, pub ed25519.PublicKey) (*envelopemint.Claims, error) {
 	claims := &envelopemint.Claims{}
 	_, err := jwt.ParseWithClaims(token, claims, func(*jwt.Token) (any, error) {

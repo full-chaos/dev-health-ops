@@ -7,7 +7,7 @@
 // -- work_unit_membership in particular carries `run_id` as the LAST
 // sorting-key column on prod (049_work_unit_membership_run_id_dedup_key.py
 // rebuilt it there; the SIBLING seeded test in
-// cmd/query-api/internal/investmentexplain predates that migration's
+// internal/queryapi/investmentexplain predates that migration's
 // rebuild and still declares the table without it).
 //
 // Three mechanisms this file proves against a REAL merge-eligible engine,
@@ -43,11 +43,11 @@ import (
 	chdriver "github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/analytics"
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/investmentexplain"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/analytics"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/investmentexplain"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/teamscope"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
 
 func splitWorkUnitsSeededDDL(sql string) []string {

@@ -1,7 +1,7 @@
 // Package envelopemint mints an effective-principal envelope in Go, byte-
 // compatible with the Python edge's issuer
 // (graphql/principal_envelope.py:issue_effective_principal_envelope) and
-// verifiable by cmd/query-api/internal/principal.Verifier unchanged.
+// verifiable by internal/queryapi/principal.Verifier unchanged.
 //
 // This exists so a caller that already holds the Ed25519 signing key --
 // the tools pod, via the SAME Secret key the api pod's environment reads
@@ -13,11 +13,11 @@
 // Field names, the v1 schema version, the algorithm (EdDSA/Ed25519), the
 // default key id, issuer, audience and TTL all mirror
 // principal_envelope.py exactly -- see Claims' doc comment for the
-// field-by-field mapping. cmd/query-api/internal/principal.Claims cannot
+// field-by-field mapping. internal/queryapi/principal.Claims cannot
 // be imported here (it lives under an `internal/` directory scoped to
 // cmd/query-api, by Go's own visibility rule); Claims below is kept
 // field-for-field identical to it instead, and
-// cmd/query-api/internal/principal's own test suite proves the two stay
+// internal/queryapi/principal's own test suite proves the two stay
 // compatible by signing with this package and verifying with that one.
 package envelopemint
 
@@ -38,7 +38,7 @@ import (
 
 const (
 	// SchemaVersion is the envelope's `v` claim. Bump it, here and in
-	// principal_envelope.py and cmd/query-api/internal/principal.Claims
+	// principal_envelope.py and internal/queryapi/principal.Claims
 	// together, whenever a claim is added, removed, or its meaning
 	// changes -- a verifier that did not check `v` would silently accept
 	// a schema it was not written against.
@@ -71,7 +71,7 @@ const (
 
 // Claims is the v1 effective-principal envelope claim schema. Field names
 // and JSON tags match principal_envelope.EffectivePrincipalEnvelopeClaims
-// and cmd/query-api/internal/principal.Claims exactly.
+// and internal/queryapi/principal.Claims exactly.
 type Claims struct {
 	SchemaVersion       int      `json:"v"`
 	OrgID               string   `json:"org_id"`

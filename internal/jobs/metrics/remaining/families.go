@@ -44,7 +44,7 @@ type Family struct {
 	HistoricalLimitation  string   `json:"historical_limitation"`
 	ParityState           string   `json:"parity_state"`
 	// Port mirrors internal/jobs/metrics/daily/families.json's own "port"
-	// field ("go"/"pending"): whether cmd/dev-health-worker/daily.go's
+	// field ("go"/"pending"): whether internal/workerservice/daily.go's
 	// per-kind switch (daily.go:571-634) passes this family's partitions to
 	// a native Go executor ("go") or the Python compatibility bridge
 	// ("pending"). PythonSources deliberately stays populated for "go"
@@ -56,7 +56,7 @@ type Family struct {
 	// exactly the "told done" drift class this contract exists to prevent.
 	// Cross-checked against the mechanically Go-AST-derived
 	// contracts/native-families/v1/native-families.json by
-	// cmd/dev-health-worker/native_families_artifact_test.go -- that
+	// internal/workerservice/native_families_artifact_test.go -- that
 	// artifact, not this hand-set field, is the actual source of truth if
 	// the two ever disagree.
 	//

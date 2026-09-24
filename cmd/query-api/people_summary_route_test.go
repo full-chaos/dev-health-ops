@@ -11,8 +11,8 @@ import (
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/authctx"
-	"github.com/full-chaos/dev-health-ops/cmd/query-api/internal/people"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/people"
 )
 
 // emptyScanner answers Next() false unconditionally -- safe as a stand-in
@@ -48,7 +48,7 @@ func (s *personFoundScanner) Close() error { return nil }
 
 // personLookupClient answers resolvePersonIdentity's own md5-lookup query
 // (detected by its distinctive SQL fragment, same convention
-// cmd/query-api/internal/people's own golden tests use) with a fixed
+// internal/queryapi/people's own golden tests use) with a fixed
 // identity, and every other query with zero rows -- enough for
 // BuildSummaryResponse/BuildMetricResponse to reach a 200 with empty-but-
 // present sections, without this test package needing to replay every

@@ -90,6 +90,15 @@ func TestStartupDependencyFailuresNameTheDependency(t *testing.T) {
 			dependency: "api_clickhouse", reason: "api_clickhouse_open_failed",
 			errorText: "ClickHouse readiness check failed",
 		},
+		"process license": {
+			cfg: func(t *testing.T) config.Config {
+				t.Setenv("LICENSE_KEY", "signed-key-value")
+				t.Setenv("LICENSE_PUBLIC_KEY", "public-key-value")
+				return config.Config{APIAddress: "127.0.0.1:0"}
+			},
+			dependency: "api_process_license", reason: "api_process_license_unsupported",
+			errorText: "LICENSE_KEY and LICENSE_PUBLIC_KEY are both set",
+		},
 		"server": {
 			cfg:        func(*testing.T) config.Config { return config.Config{} },
 			dependency: "api_server", reason: "api_server_config_failed",
@@ -175,5 +184,27 @@ func TestShellLogsTheStartupDependencyReason(t *testing.T) {
 	}
 	if strings.Contains(output, testCredential) {
 		t.Fatalf("a credential reached the log:\n%s", output)
+	}
+}
+
+// Python activates a process licence only with BOTH a public key and a key;
+// either alone (or an empty value) leaves it at the community tier, which the
+// Go gates agree with, so start-up must not refuse those.
+func TestProcessLicenseConfiguredNeedsBothVariables(t *testing.T) {
+	for name, testCase := range map[string]struct {
+		env  map[string]string
+		want bool
+	}{
+		"neither":         {map[string]string{}, false},
+		"both empty":      {map[string]string{"LICENSE_KEY": "", "LICENSE_PUBLIC_KEY": ""}, false},
+		"key only":        {map[string]string{"LICENSE_KEY": "k"}, false},
+		"public key only": {map[string]string{"LICENSE_PUBLIC_KEY": "p"}, false},
+		"key and empty":   {map[string]string{"LICENSE_KEY": "k", "LICENSE_PUBLIC_KEY": ""}, false},
+		"both":            {map[string]string{"LICENSE_KEY": "k", "LICENSE_PUBLIC_KEY": "p"}, true},
+	} {
+		lookup := func(key string) (string, bool) { value, ok := testCase.env[key]; return value, ok }
+		if got := processLicenseConfigured(lookup); got != testCase.want {
+			t.Errorf("%s: processLicenseConfigured = %v, want %v", name, got, testCase.want)
+		}
 	}
 }

@@ -1360,7 +1360,7 @@ LIMIT ?`, orgID, asOf, asOf, GithubWorkItemDerivationContextLimit+1)
 // earlier in the SAME wall-clock second as not-yet-valid for up to a full
 // second. The named form preserves the DateTime64(3) scale -- same
 // established fix as internal/teamownership's OwnedRepoIDs/
-// AuthoritativeOwnerByRepo and cmd/query-api/internal/teamscope's
+// AuthoritativeOwnerByRepo and internal/queryapi/teamscope's
 // RepoCondition, all readers of this same table. asOf is formatted as a
 // literal string, not bound as a raw time.Time: clickhouse-go renders a
 // bare time.Time bound to a {name:DateTime64(...)} placeholder as a

@@ -17,7 +17,7 @@ import (
 
 // ComplexityExecutor is the NATIVE implementation of the complexity
 // remaining-metric kind (CHAOS-4291) -- it was the last kind still served
-// through the HTTP compatibility bridge (see cmd/dev-health-worker/daily.go's
+// through the HTTP compatibility bridge (see internal/workerservice/daily.go's
 // KindRemainingComplexity case: every sibling kind already held a native
 // executor there); with this executor, no bridge remains in this package.
 //

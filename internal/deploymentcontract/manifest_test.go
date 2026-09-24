@@ -378,11 +378,11 @@ func TestManifestPinsTheStreamRunnerSubcommand(t *testing.T) {
 			}
 		})
 	}
-	t.Run("subcommand on a worker", func(t *testing.T) {
+	t.Run("subcommand on a process with its own binary", func(t *testing.T) {
 		manifest, registry := loadFixture(t)
 		for index := range manifest.Processes {
 			if manifest.Processes[index].Runtime == "river" {
-				manifest.Processes[index].Subcommand = "worker"
+				manifest.Processes[index].Binary = "dev-health-worker"
 				break
 			}
 		}
@@ -865,12 +865,12 @@ func TestDeploymentManifestSchemaPinsTheStreamRunnerVerb(t *testing.T) {
 			}
 		})
 	}
-	t.Run("subcommand on a worker", func(t *testing.T) {
+	t.Run("subcommand on a process with its own binary", func(t *testing.T) {
 		document := load(t)
 		for _, raw := range document["processes"].([]any) {
 			process := raw.(map[string]any)
 			if process["runtime"] == "river" {
-				process["subcommand"] = "worker"
+				process["binary"] = "dev-health-worker"
 				break
 			}
 		}
@@ -919,15 +919,19 @@ func TestManifestPinsTheControlServiceSubcommands(t *testing.T) {
 		process string
 		mutate  func(*Process)
 	}{
-		"old binary":                  {"reconciler", func(p *Process) { p.Binary, p.Subcommand = "dev-health-reconciler", "" }},
-		"no subcommand":               {"reconciler", func(p *Process) { p.Subcommand = "" }},
-		"other subcommand":            {"reconciler", func(p *Process) { p.Subcommand = "stream-runner" }},
-		"verb on the scheduler":       {"scheduler", func(p *Process) { p.Binary, p.Subcommand = "dho", "reconciler" }},
-		"scheduler: old binary":       {"scheduler", func(p *Process) { p.Binary, p.Subcommand = "dev-health-scheduler", "" }},
-		"scheduler: no subcommand":    {"scheduler", func(p *Process) { p.Subcommand = "" }},
-		"scheduler: other subcommand": {"scheduler", func(p *Process) { p.Subcommand = "api" }},
-		"scheduler verb on a worker":  {"heavy", func(p *Process) { p.Binary, p.Subcommand = "dho", "scheduler" }},
-		"verb on a worker":            {"heavy", func(p *Process) { p.Binary, p.Subcommand = "dho", "reconciler" }},
+		"old binary":                   {"reconciler", func(p *Process) { p.Binary, p.Subcommand = "dev-health-reconciler", "" }},
+		"no subcommand":                {"reconciler", func(p *Process) { p.Subcommand = "" }},
+		"other subcommand":             {"reconciler", func(p *Process) { p.Subcommand = "stream-runner" }},
+		"verb on the scheduler":        {"scheduler", func(p *Process) { p.Binary, p.Subcommand = "dho", "reconciler" }},
+		"scheduler: old binary":        {"scheduler", func(p *Process) { p.Binary, p.Subcommand = "dev-health-scheduler", "" }},
+		"scheduler: no subcommand":     {"scheduler", func(p *Process) { p.Subcommand = "" }},
+		"scheduler: other subcommand":  {"scheduler", func(p *Process) { p.Subcommand = "api" }},
+		"scheduler verb on a worker":   {"heavy", func(p *Process) { p.Binary, p.Subcommand = "dho", "scheduler" }},
+		"verb on a worker":             {"heavy", func(p *Process) { p.Binary, p.Subcommand = "dho", "reconciler" }},
+		"worker: old binary":           {"heavy", func(p *Process) { p.Binary, p.Subcommand = "dev-health-worker", "" }},
+		"worker: no subcommand":        {"heavy", func(p *Process) { p.Subcommand = "" }},
+		"worker: other subcommand":     {"heavy", func(p *Process) { p.Subcommand = "stream-runner" }},
+		"worker verb on the scheduler": {"scheduler", func(p *Process) { p.Subcommand = "worker" }},
 	} {
 		t.Run(name, func(t *testing.T) {
 			manifest, registry := loadFixture(t)

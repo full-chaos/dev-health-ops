@@ -165,7 +165,7 @@ dev-hops sync prs --provider github \
 ### `sync work-items` (deleted, CHAOS-5351)
 
 This command no longer exists. Work items are synced automatically by the
-native Go provider-sync route (`cmd/dev-health-worker/provider_sync.go`'s
+native Go provider-sync route (`internal/workerservice/provider_sync.go`'s
 work-items dataset case, one per provider, dispatched via the river
 `sync_provider` queue) and by webhooks — there is no manual per-provider sync
 trigger. To force a backfill for a specific sync configuration and window,

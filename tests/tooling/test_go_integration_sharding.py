@@ -30,7 +30,7 @@ CHECK_GO_TIMEOUT_SECONDS = 120
 EXPECTED_PACKAGES = {
     "internal/goapiproof",
     "internal/reconcilerservice",
-    "cmd/dev-health-worker",
+    "internal/workerservice",
     "internal/workersctl",
     # CHAOS-5486: the routing verbs' first //go:build integration file --
     # `enable` driven end to end against a real Postgres and a real HTTP
@@ -42,23 +42,23 @@ EXPECTED_PACKAGES = {
     # when go-api-routing folded into the dho operator binary.
     "internal/goapicli/routing",
     "cmd/query-api",
-    "cmd/query-api/internal/aianalytics",
-    "cmd/query-api/internal/analytics",
-    "cmd/query-api/internal/busfactor",
-    "cmd/query-api/internal/compoundingrisk",
-    # cmd/query-api/internal/explain's integration-tagged tests exercise
+    "internal/queryapi/aianalytics",
+    "internal/queryapi/analytics",
+    "internal/queryapi/busfactor",
+    "internal/queryapi/compoundingrisk",
+    # internal/queryapi/explain's integration-tagged tests exercise
     # the team-scoped repo filter's pushed-down membership condition
     # against a real ClickHouse: the query text that once returned every
     # matching repo id as its own result set throws the read-only
     # client's row ceiling when run standalone, while the route itself
     # succeeds on the same data; a status-filtered metric's
     # empty-vs-populated response is exercised in both directions too.
-    "cmd/query-api/internal/explain",
+    "internal/queryapi/explain",
     # CHAOS-5523: the featureFlagEvents port's own Testcontainers-backed
     # tests (events_integration_test.go) -- the org-scoping/flagKey-filter/
     # ORDER BY/count-not-limit-bound happy path and the real UNKNOWN_TABLE
     # degraded path, both against a real ClickHouse engine.
-    "cmd/query-api/internal/featureflags",
+    "internal/queryapi/featureflags",
     # Every home reader runs once against a real ClickHouse container
     # with the canonical migration chain applied, each ReplacingMergeTree
     # table seeded with a duplicate physical version at its own natural
@@ -68,15 +68,15 @@ EXPECTED_PACKAGES = {
     # destination, nor can it prove FINAL/argMax actually collapses a
     # duplicate row the way canned fixture rows already assume it does
     # (see readers_seeded_integration_test.go's own header comment).
-    "cmd/query-api/internal/home",
-    "cmd/query-api/internal/hotspots",
+    "internal/queryapi/home",
+    "internal/queryapi/hotspots",
     # CHAOS-4977 step 7: the recurrence guard for FetchWorkUnitInvestments'
     # real Map(String, Float64) theme/subcategory columns -- a fake
     # RowScanner double can hand back any Go type its author declares, so
     # it can never prove the real clickhouse-go driver's type-conversion
     # path actually works against the real column type (it didn't, see
     # workunitreader_seeded_integration_test.go's own header comment).
-    "cmd/query-api/internal/investmentexplain",
+    "internal/queryapi/investmentexplain",
     # fetchInvestmentUnassignedCounts' countDistinctIf() columns: the
     # aggregate returns UInt64 in ClickHouse regardless of the counted
     # column's own type, and a fake RowScanner answers a Scan call by
@@ -85,28 +85,28 @@ EXPECTED_PACKAGES = {
     # it cannot prove a narrower scan destination actually works against
     # the real driver (see unassignedcounts_seeded_integration_test.go's
     # own header comment).
-    "cmd/query-api/internal/investmentflow",
+    "internal/queryapi/investmentflow",
     # The argMax dedup NULL-skip fix (Nullable(Float64) fields on
     # work_item_metrics_daily/repo_metrics_daily/incident_metrics_daily/
     # ai_impact_metrics_daily) has its own real-ClickHouse proof, since a
     # fake RowScanner cannot reproduce argMax's server-side null-skip
     # behaviour.
-    "cmd/query-api/internal/operatingreview",
-    "cmd/query-api/internal/routeswitch",
+    "internal/queryapi/operatingreview",
+    "internal/queryapi/routeswitch",
     # sum()/countIf() aggregates over UInt32 columns (new_items_count,
     # new_bugs_count, items_touched, churn) promote to UInt64 in
     # ClickHouse, and a fake RowScanner cannot reproduce the real
     # clickhouse-go driver's refusal to scan that into a narrower/
     # mismatched Go destination (see
     # aggregatescan_seeded_integration_test.go's own header comment).
-    "cmd/query-api/internal/sankey",
-    "cmd/query-api/internal/scopelabel",
-    "cmd/query-api/internal/security",
-    "cmd/query-api/internal/testopsrisk",
+    "internal/queryapi/sankey",
+    "internal/queryapi/scopelabel",
+    "internal/queryapi/security",
+    "internal/queryapi/testopsrisk",
     # Same argMax dedup NULL-skip proof as operatingreview above, for
     # wip_age_p50/p90_hours and pr_first_review_p50_hours.
-    "cmd/query-api/internal/throughputforecast",
-    "cmd/query-api/internal/workgraph",
+    "internal/queryapi/throughputforecast",
+    "internal/queryapi/workgraph",
     # The generic admin audit_logs writer: real INSERT round-trips (declared
     # columns, the changes/request_metadata "{}" coercion, the org_id FK
     # violation) against a real Postgres.
@@ -116,6 +116,10 @@ EXPECTED_PACKAGES = {
     # The api's protected-route policy read path: provision, migrate, api
     # readiness and an authenticated request on a real Postgres.
     "internal/api/policy",
+    # The sync admin reads' venue differential oracle: the real Python api
+    # and dho api on two copies of one seeded Postgres (skips without the
+    # live Python env).
+    "internal/api/syncadmin",
     # The team + identity admin CRUD store/handlers: real ClickHouse CRUD
     # round trips and the identity POST route's 404/409/facet-reconciliation
     # logic, against a real server (testcontainers).
@@ -1400,7 +1404,7 @@ _IMAGE_PULLING_ACTION_DEBT = {
     # to carry no longer names a real job and was deleted here, per this
     # test's own stale-entry error message ("delete them so the list cannot
     # rot into a silent allowlist").
-    ("docker-images.yml", "go-build-worker-arm64", "docker/setup-buildx-action"),
+    ("docker-images.yml", "go-build-dho-arm64", "docker/setup-buildx-action"),
 }
 _IMAGE_PULLING_ACTIONS = ("docker/setup-buildx-action",)
 

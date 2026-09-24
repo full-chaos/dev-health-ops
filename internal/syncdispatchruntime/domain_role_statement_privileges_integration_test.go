@@ -22,7 +22,7 @@ import (
 )
 
 // Every native sync-dispatch service in this package is constructed with
-// postgresDatabase.pools.Domain (cmd/dev-health-worker/sync_dispatch.go), so
+// postgresDatabase.pools.Domain (internal/workerservice/sync_dispatch.go), so
 // under the Option B two-role split every statement any of them issues is
 // executed by the restricted DOMAIN login. Nothing in this package's other
 // integration suites measures that: they all connect as the container's

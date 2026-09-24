@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"regexp"
 	"strings"
 	"testing"
@@ -231,6 +232,16 @@ func TestVenueOracleCredentialAdmin(t *testing.T) {
 			return credentialIDPattern.ReplaceAllString(body, `"id":"<uuid>"`)
 		},
 	})
+
+	// DELETE on a credential is deliberately not served here (its PagerDuty
+	// disconnect is ported with the PagerDuty admin, and the path stays on
+	// the Python plane until then): Go answers 405. This pins the gap so a
+	// later change to it is a decision, not an accident.
+	deleteResponse := venueoracle.Do(t, base, venueoracle.Request{Name: "delete: not served by Go", Method: "DELETE",
+		Path: "/api/v1/admin/credentials/gitlab/noop-a", Headers: map[string]string{"Authorization": "Bearer " + venue.Tokens["admin"]}})
+	if deleteResponse.Status != http.StatusMethodNotAllowed {
+		t.Errorf("DELETE /credentials/{provider}/{name} on the Go plane answered %d, want 405", deleteResponse.Status)
+	}
 
 	// Rows: everything but the generated id and the write timestamps, plus
 	// the decrypted payload of each row from the Python plane's decrypt_value.

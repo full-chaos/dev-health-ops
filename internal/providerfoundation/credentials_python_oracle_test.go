@@ -129,6 +129,40 @@ func TestFernetCipherMatchesLivePythonDefaultSalt(t *testing.T) {
 	}
 }
 
+// TestFernetRefusesWithoutKeyLikePython pins the behaviour the credential
+// routes inherit when a deployment has no SETTINGS_ENCRYPTION_KEY: Python's
+// encrypt_value raises (the route answers 500) and the Go encryptor refuses
+// too (its route answers 500), so a missing key is a refused write in both
+// planes, never a plaintext or default-key write.
+func TestFernetRefusesWithoutKeyLikePython(t *testing.T) {
+	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
+		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
+	}
+	_, currentFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve providerfoundation package path")
+	}
+	repositoryRoot := filepath.Clean(filepath.Join(filepath.Dir(currentFile), "..", ".."))
+	python := pyoracle.Resolve(t, repositoryRoot)
+
+	command := exec.Command(python, "-c", "from dev_health_ops.core.encryption import encrypt_value; encrypt_value('x')")
+	command.Env = []string{"PYTHONPATH=" + filepath.Join(repositoryRoot, "src"), "PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME")}
+	output, err := command.CombinedOutput()
+	if err == nil || !strings.Contains(string(output), "SETTINGS_ENCRYPTION_KEY environment variable is required") {
+		t.Fatalf("Python encrypt_value without a key: err=%v output=%s", err, output)
+	}
+	if _, err := (FernetDecryptor{}).Encrypt([]byte("x")); err == nil {
+		t.Fatal("the Go encryptor sealed a payload without a key")
+	}
+	proofDir := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
+	if proofDir == "" {
+		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
+	}
+	if err := os.WriteFile(filepath.Join(proofDir, "providerfoundation-credentials-no-key"), []byte("executed"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func runPythonEncryptionOracle(
 	t *testing.T,
 	python string,

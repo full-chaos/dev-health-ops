@@ -13,9 +13,9 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 )
 
-// onboardingState is OnboardingStateResponse. The routes declare no
-// response_model, so FastAPI renders the model with jsonable_encoder:
-// every field, defaults included, in declaration order.
+// onboardingState is OnboardingStateResponse. The routes' `-> Any` return
+// annotation makes FastAPI serialize the returned model as its response
+// model: every field, defaults included, in declaration order.
 type onboardingState struct {
 	needsOnboarding, orgCreated              bool
 	orgID, orgName                           *string
@@ -144,7 +144,7 @@ func (h handlers) onboardingStateRoute(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = tx.Rollback(context.Background()) }()
 	if state := h.buildOnboardingState(w, r, tx); state != nil {
-		policy.WriteJSON(w, http.StatusOK, state.object(), nil)
+		policy.WriteModel(w, http.StatusOK, state.object(), nil)
 	}
 }
 
@@ -215,6 +215,6 @@ func (h handlers) skipIntegration(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = read.Rollback(context.Background()) }()
 	if state := h.buildOnboardingState(w, r, read); state != nil {
-		policy.WriteJSON(w, http.StatusOK, state.object(), nil)
+		policy.WriteModel(w, http.StatusOK, state.object(), nil)
 	}
 }

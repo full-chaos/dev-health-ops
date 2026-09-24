@@ -3,7 +3,7 @@
 // IT issued from step to step), one normalization and one set of row
 // queries, shared by two runners:
 //
-//   - the venue oracle (internal/apiservice TestSessionVenueOracle), where
+//   - the venue oracle (internal/apiservice/sessionvenue TestSessionVenueOracle), where
 //     the REAL Python api answers every batch through TestClient and the
 //     Go api answers the same batch; it also records the Python side as a
 //     golden and fails when the committed golden differs;

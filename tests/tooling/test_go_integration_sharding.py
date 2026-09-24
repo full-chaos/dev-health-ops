@@ -125,6 +125,9 @@ EXPECTED_PACKAGES = {
     # Python answers, concurrent refreshes of one token, and the failed-
     # attempt record on a locked row, against real Postgres and ClickHouse.
     "internal/api/session",
+    # The session routes' venue differential (skips without the live Python
+    # env), in its own package for its own venue time budget.
+    "internal/apiservice/sessionvenue",
     # The team + identity admin CRUD store/handlers: real ClickHouse CRUD
     # round trips and the identity POST route's 404/409/facet-reconciliation
     # logic, against a real server (testcontainers).

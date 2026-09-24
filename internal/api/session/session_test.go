@@ -159,3 +159,17 @@ func TestUnverifiedOrgAndSubject(t *testing.T) {
 		t.Fatal("a falsy org claim is no org")
 	}
 }
+
+// The timing hash costs what login.py's DUMMY_PASSWORD_HASH costs (bcrypt,
+// cost 12) and is one hash for the process, so every login without a usable
+// user hash spends the same bcrypt work.
+func TestDummyHashCostsWhatPythonsDoes(t *testing.T) {
+	first := dummyHash()
+	cost, err := bcrypt.Cost([]byte(first))
+	if err != nil || cost != 12 {
+		t.Fatalf("dummy hash: cost %d, err %v; want a bcrypt hash of cost 12", cost, err)
+	}
+	if again := dummyHash(); again != first {
+		t.Fatal("the dummy hash changed between calls")
+	}
+}

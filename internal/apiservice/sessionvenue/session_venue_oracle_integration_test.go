@@ -1,6 +1,6 @@
 //go:build integration
 
-package apiservice
+package sessionvenue_test
 
 import (
 	"context"
@@ -9,6 +9,8 @@ import (
 	"log/slog"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -19,6 +21,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/oauthprovider"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/apiservice"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	chclickhouse "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
@@ -41,7 +44,7 @@ func TestSessionVenueOracle(t *testing.T) {
 	fake := httptest.NewServer(provider)
 	t.Cleanup(fake.Close)
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Root: venueRoot(), JWTKey: sessionscenario.Key, Logger: quietLogger(),
+		Root: venueRoot(), JWTKey: sessionscenario.Key, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		PythonEnv: append([]string{"VENUE_OAUTH_PROVIDER_BASE_URL=" + fake.URL}, sessionscenario.SocialEnv...),
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, venue *venueoracle.Venue) map[string]map[string]any {
 			// The password hash is made by Python's own bcrypt, a real
@@ -168,14 +171,20 @@ func startSessionGoAPI(t *testing.T, ctx context.Context, venue *venueoracle.Ven
 	}
 	oauth := oauthprovider.NewClient()
 	oauth.Endpoints = sessionscenario.ProviderEndpoints(providerURL)
-	deps := Deps{Pool: pool, Valkey: valkeyClient, ClickHouse: ch, Auth: auth, Guard: policy.NewGuard(auth, logger),
+	deps := apiservice.Deps{Pool: pool, Valkey: valkeyClient, ClickHouse: ch, Auth: auth, Guard: policy.NewGuard(auth, logger),
 		Verifier: verifier, Signer: signer, SessionOAuth: oauth}
 	scope := policy.NewScope(auth, logger)
-	server, err := NewServer(cfg, logger, Routes(deps, logger), scope.OrgScope, scope.Impersonation)
+	server, err := apiservice.NewServer(cfg, logger, apiservice.Routes(deps, logger), scope.OrgScope, scope.Impersonation)
 	if err != nil {
 		t.Fatal(err)
 	}
 	ts := httptest.NewServer(server.Handler())
 	t.Cleanup(ts.Close)
 	return ts.URL
+}
+
+// venueRoot is the repository root, where the venue finds the Python api.
+func venueRoot() string {
+	_, file, _, _ := runtime.Caller(0)
+	return filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
 }

@@ -12,7 +12,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/stripe/stripe-go/v85"
+	"github.com/stripe/stripe-go/v86"
 )
 
 // ErrKeyMissing is get_stripe_client's RuntimeError text when

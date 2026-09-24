@@ -13,7 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/stripe/stripe-go/v85"
+	"github.com/stripe/stripe-go/v86"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/billing/stripeclient"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"

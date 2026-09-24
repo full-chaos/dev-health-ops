@@ -3,7 +3,7 @@ package billing
 import (
 	"errors"
 
-	"github.com/stripe/stripe-go/v85"
+	"github.com/stripe/stripe-go/v86"
 )
 
 // pyStripeError is str() of the exception the Python SDK raises for err:

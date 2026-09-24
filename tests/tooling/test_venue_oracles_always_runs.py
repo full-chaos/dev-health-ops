@@ -42,6 +42,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS_DIR = REPO_ROOT / ".github" / "workflows"
 
 JOB_ID = "venue-oracles"
+PLAN_JOB_ID = "venue-oracles-plan"
 
 
 def _on_block(document: dict) -> dict:
@@ -152,24 +153,26 @@ def test_the_declaring_workflow_has_a_merge_group_trigger() -> None:
     )
 
 
-def test_the_job_carries_no_conditional_skip() -> None:
+def test_the_job_runs_whatever_its_needs_did() -> None:
     """A reproduced round: a job-level `if: false` (or any other condition
     that can evaluate false) makes GitHub report the job `Success` while it
     ran nothing at all -- indistinguishable, in the merge UI, from a real
-    pass, and just as silent as a path filter or a missing trigger. The job
-    that produces a required context must have no `if:` of its own; every
-    conditional decision belongs to individual STEPS inside it, which is
-    exactly how this job already decides whether to run the real oracle
-    suite or report an honest skip.
+    pass. Since the sharding (CHAOS-6574) this job aggregates the plan and
+    the package matrix, so it needs one condition, `always()`: without it a
+    failed shard SKIPS this job, and a skipped required check reads as
+    passing. `always()` is the only condition allowed, because it cannot
+    evaluate false; every other decision lives in the verdict script.
     """
     (declaring,) = _workflows_declaring_job(JOB_ID)
     job = _job_definition(declaring, JOB_ID)
-    assert "if" not in job, (
-        f"the {JOB_ID!r} job in {declaring.name} carries a job-level `if:` "
-        f"({job.get('if')!r}). GitHub reports a conditionally-skipped job as "
-        "Success, including when it is required -- indistinguishable from a "
-        "real pass. Move any conditional logic into a STEP inside the job, "
-        "never onto the job itself."
+    assert (
+        str(job.get("if", "")).strip().removeprefix("${{").removesuffix("}}").strip()
+        == "always()"
+    ), (
+        f"the {JOB_ID!r} job in {declaring.name} carries `if: {job.get('if')!r}`. "
+        "It must be exactly `always()`: any condition that can evaluate false "
+        "reports Success while running nothing, and no condition at all lets "
+        "a failed shard skip the required check, which also reads as passing."
     )
 
 
@@ -183,12 +186,14 @@ def test_the_relevance_step_wires_the_push_fallback_sha() -> None:
     only falls back to when no BASE_SHA is set at all.
     """
     (declaring,) = _workflows_declaring_job(JOB_ID)
-    job = _job_definition(declaring, JOB_ID)
+    # Since the sharding (CHAOS-6574) the relevance decision lives in the
+    # plan job, whose output the required job's verdict reads.
+    job = _job_definition(declaring, PLAN_JOB_ID)
     steps = job.get("steps") or []
     relevance_steps = [s for s in steps if s.get("id") == "relevance"]
     assert len(relevance_steps) == 1, (
         f"expected exactly one step with id: relevance in {declaring.name}'s "
-        f"{JOB_ID!r} job, found {len(relevance_steps)}"
+        f"{PLAN_JOB_ID!r} job, found {len(relevance_steps)}"
     )
     base_sha_expr = ((relevance_steps[0].get("env") or {}).get("BASE_SHA")) or ""
     assert "github.event.before" in base_sha_expr, (

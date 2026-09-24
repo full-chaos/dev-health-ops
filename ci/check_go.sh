@@ -58,7 +58,7 @@ GO_ENV_OFF=(env -u GO_PROVIDER_ROUTES -u DEV_HEALTH_ENV -u GOFLAGS -u GOEXPERIME
 usage() {
   # Backticks in the literal help text document commands; they are not substitutions.
   # shellcheck disable=SC2016
-  printf '%s\n' 'Usage: ci/check_go.sh [fmt|vet|test|race|live-python-oracles|venue-oracles|build|contract|multi-replica-workers|integration-vet|integration-coverage|integration-shard-plan|integration-prepull|integration-shard|integration|fast|ci|all]
+  printf '%s\n' 'Usage: ci/check_go.sh [fmt|vet|test|race|live-python-oracles|venue-oracles|venue-oracle-packages|build|contract|multi-replica-workers|integration-vet|integration-coverage|integration-shard-plan|integration-prepull|integration-shard|integration|fast|ci|all]
 
   fmt    Check gofmt without modifying files.
   vet    Run go vet ./... in every Go module.
@@ -92,6 +92,10 @@ usage() {
          verb does not set it itself. NOT in `fast`/`ci`/`all`: it runs only
          from the dedicated venue-oracles CI job, which is the one place
          with the full Python environment this verb needs.
+         VENUE_ORACLE_PACKAGE=./dir runs that one discovered package only.
+  venue-oracle-packages
+         Print the discovered venue-oracle packages as a JSON array: the
+         matrix of the venue-oracles CI job, one package per job.
   build  Run go build ./... in every Go module.
   contract
          Validate the job contract tree and, when DEV_HEALTH_CONTRACT_BASE is
@@ -1641,51 +1645,96 @@ check_live_python_oracles() {
 # has a legitimate reason to skip under it. Each package also gets its own
 # proof subdirectory, not one shared namespace, so two DIFFERENT packages
 # with a same-named test can't let one satisfy the other's check.
+# discover_venue_oracles fills VO_DIRS (absolute package dirs) and VO_NAMES
+# ('|'-joined test names, one entry per dir) from a grep over every
+# *_test.go, and VO_TOTAL; it dies on zero tests or a duplicate name in one
+# directory (see check_venue_oracles). Shared by venue-oracles and
+# venue-oracle-packages, so the CI matrix and the run discover the same set.
+VO_DIRS=()
+VO_NAMES=()
+VO_TOTAL=0
+discover_venue_oracles() {
+  local file dir names name found index dup_names
+  VO_DIRS=()
+  VO_NAMES=()
+  VO_TOTAL=0
+  while IFS= read -r file; do
+    dir="$(dirname "${file}")"
+    names=""
+    while IFS= read -r name; do
+      names="${names:+${names}|}${name}"
+      VO_TOTAL=$((VO_TOTAL + 1))
+    done < <(grep -ohE '^func Test[A-Za-z0-9_]*VenueOracle[A-Za-z0-9_]*' "${file}" | sed 's/^func //')
+    [ -n "${names}" ] || continue
+    found=0
+    for index in "${!VO_DIRS[@]}"; do
+      if [ "${VO_DIRS[${index}]}" = "${dir}" ]; then
+        VO_NAMES[index]="${VO_NAMES[${index}]}|${names}"
+        found=1
+        break
+      fi
+    done
+    if [ "${found}" -eq 0 ]; then
+      VO_DIRS+=("${dir}")
+      VO_NAMES+=("${names}")
+    fi
+  done < <(grep -rl '^func Test.*VenueOracle' --include='*_test.go' "${ROOT}" | LC_ALL=C sort)
+
+  if [ "${VO_TOTAL}" -eq 0 ]; then
+    die "venue-oracles: discovered zero VenueOracle-named tests -- the discovery mechanism itself is almost certainly broken, not a genuinely oracle-free tree"
+  fi
+  for index in "${!VO_NAMES[@]}"; do
+    dup_names="$(printf '%s\n' "${VO_NAMES[${index}]//|/$'\n'}" | LC_ALL=C sort | uniq -d)"
+    if [ -n "${dup_names}" ]; then
+      die "venue-oracles: duplicate VenueOracle test name(s) in ${VO_DIRS[${index}]}: ${dup_names} -- go test cannot tell which declaration ran, so this must be renamed before the verb can trust its own signal"
+    fi
+  done
+}
+
+# check_venue_oracle_packages prints one line, packages=<JSON array of
+# repository-relative "./dir" strings in discovery order>: the CI workflow's
+# matrix, one job per package (CHAOS-6574). The line is the GITHUB_OUTPUT
+# form, so the workflow greps it out of the script's other output.
+check_venue_oracle_packages() {
+  discover_venue_oracles
+  local index
+  {
+    for index in "${!VO_DIRS[@]}"; do
+      printf '%s\n' "./${VO_DIRS[${index}]#"${ROOT}"/}"
+    done
+  } | jq -R . | jq -cs . | sed 's/^/packages=/'
+}
+
 check_venue_oracles() {
   [ "${DEV_HEALTH_LIVE_PYTHON_ORACLES:-}" = "1" ] \
     || die "venue-oracles requires DEV_HEALTH_LIVE_PYTHON_ORACLES=1 (this verb never sets it itself -- a skip must be visible to the caller, not swallowed here)"
   command -v jq >/dev/null 2>&1 \
     || die "venue-oracles requires jq to read go test -json status events (a text-line grep cannot see a subtest skip or tell captured output from a real status line)"
 
-  local proof_dir file dir names name total=0
-  local -a vo_dirs=() vo_names=()
+  local proof_dir name
+  discover_venue_oracles
   proof_dir="$(mktemp -d "${TMPDIR:-/tmp}/dev-health-venue-oracles.XXXXXX")"
 
-  while IFS= read -r file; do
-    dir="$(dirname "${file}")"
-    names=""
-    while IFS= read -r name; do
-      names="${names:+${names}|}${name}"
-      total=$((total + 1))
-    done < <(grep -ohE '^func Test[A-Za-z0-9_]*VenueOracle[A-Za-z0-9_]*' "${file}" | sed 's/^func //')
-    [ -n "${names}" ] || continue
-    local found=0 index
-    for index in "${!vo_dirs[@]}"; do
-      if [ "${vo_dirs[${index}]}" = "${dir}" ]; then
-        vo_names[index]="${vo_names[${index}]}|${names}"
-        found=1
-        break
-      fi
-    done
-    if [ "${found}" -eq 0 ]; then
-      vo_dirs+=("${dir}")
-      vo_names+=("${names}")
-    fi
-  done < <(grep -rl '^func Test.*VenueOracle' --include='*_test.go' "${ROOT}" | LC_ALL=C sort)
-
-  if [ "${total}" -eq 0 ]; then
-    rm -rf -- "${proof_dir}"
-    die "venue-oracles: discovered zero VenueOracle-named tests -- the discovery mechanism itself is almost certainly broken, not a genuinely oracle-free tree"
-  fi
-
-  local index dup_names
-  for index in "${!vo_names[@]}"; do
-    dup_names="$(printf '%s\n' "${vo_names[${index}]//|/$'\n'}" | LC_ALL=C sort | uniq -d)"
-    if [ -n "${dup_names}" ]; then
-      rm -rf -- "${proof_dir}"
-      die "venue-oracles: duplicate VenueOracle test name(s) in ${vo_dirs[${index}]}: ${dup_names} -- go test cannot tell which declaration ran, so this must be renamed before the verb can trust its own signal"
+  # VENUE_ORACLE_PACKAGE="./dir" runs that one discovered package (the CI
+  # matrix runs one package per job, each with the 20-minute package budget
+  # below); unset runs every package. A named package with no discovered
+  # venue test is refused: a shard that runs nothing must not pass.
+  local total="${VO_TOTAL}"
+  local -a vo_dirs=() vo_names=()
+  local index
+  for index in "${!VO_DIRS[@]}"; do
+    if [ -z "${VENUE_ORACLE_PACKAGE:-}" ] || [ "./${VO_DIRS[${index}]#"${ROOT}"/}" = "${VENUE_ORACLE_PACKAGE}" ]; then
+      vo_dirs+=("${VO_DIRS[${index}]}")
+      vo_names+=("${VO_NAMES[${index}]}")
     fi
   done
+  if [ "${#vo_dirs[@]}" -eq 0 ]; then
+    rm -rf -- "${proof_dir}"
+    die "venue-oracles: VENUE_ORACLE_PACKAGE=${VENUE_ORACLE_PACKAGE} has no discovered VenueOracle test"
+  fi
+  if [ -n "${VENUE_ORACLE_PACKAGE:-}" ]; then
+    total="$(printf '%s\n' "${vo_names[0]//|/$'\n'}" | wc -l | tr -d ' ')"
+  fi
 
   printf 'venue-oracles: %d test(s) discovered across %d package(s)\n' "${total}" "${#vo_dirs[@]}"
 
@@ -2760,6 +2809,10 @@ case "${1:-all}" in
   venue-oracles)
     [ "$#" -eq 1 ] || die "venue-oracles accepts no arguments"
     check_venue_oracles
+    ;;
+  venue-oracle-packages)
+    [ "$#" -eq 1 ] || die "venue-oracle-packages accepts no arguments"
+    check_venue_oracle_packages
     ;;
   build)
     check_build

@@ -1,5 +1,15 @@
 # The required `venue-oracles` check, in ONE always-run workflow.
 #
+# SHARDED (CHAOS-6574). Every venue-oracle package ran in sequence in one
+# job, and the packages together outgrew the job's 30-minute limit: a run
+# was cancelled mid-package with every finished package green. The
+# `venue-oracles-plan` job lists the discovered packages
+# (`ci/check_go.sh venue-oracle-packages`), `venue-oracles-package` runs one
+# package per matrix job (each with its own 20-minute package budget and
+# 30-minute job limit), and the job named `venue-oracles` -- the context
+# branch protection requires, so that list does not change -- decides the
+# check from both (ci/venue_oracles_verdict.py).
+#
 # WHY. A workflow that is path-filtered can never satisfy a required status
 # check for a diff that touches none of its listed paths: the workflow never
 # triggers at all, so the required context never posts. GitHub then reports
@@ -47,21 +57,13 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref != 'refs/heads/main') }}
 
 jobs:
-  venue-oracles:
-    # venue-oracles: every venue differential oracle
-    # test (internal/testsupport/venueoracle) against the REAL Python api and
-    # the REAL Go api on two copies of one Alembic-migrated Postgres. Distinct
-    # from `ci/check_go.sh live-python-oracles` (go-quality's own step): that
-    # verb's blocks are narrow pure-function comparisons installed via
-    # `pip install --no-deps -r ci/requirements-live-python-oracles.txt`; a
-    # venue oracle imports the WHOLE real FastAPI app plus alembic, so it
-    # needs the full project Python environment (`uv sync`), not that narrow
-    # closure -- discovered the hard way when this job's own PR first failed
-    # go-quality with `ModuleNotFoundError: alembic`.
+  venue-oracles-plan:
+    # Decides relevance and lists the venue-oracle packages for the matrix.
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-    env:
-      TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository_owner }}
+    timeout-minutes: 10
+    outputs:
+      relevant: ${{ steps.relevance.outputs.relevant }}
+      packages: ${{ steps.packages.outputs.packages }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -107,18 +109,49 @@ jobs:
         run: |
           echo "skipped: no Go-relevant paths in this change set."
           echo "Relevance is decided by ci/go_relevance.py against go.yml's own"
-          echo "on.pull_request.paths list. This job still REPORTS, so the required"
-          echo "check is satisfied honestly rather than by a workflow that never ran."
+          echo "on.pull_request.paths list. The venue-oracles job still REPORTS, so"
+          echo "the required check is satisfied honestly rather than by a workflow"
+          echo "that never ran."
+
+      - name: List the venue-oracle packages
+        id: packages
+        if: steps.relevance.outputs.relevant == 'true'
+        run: |
+          set -euo pipefail
+          bash ci/check_go.sh venue-oracle-packages | tee packages.out
+          grep -E '^packages=\[' packages.out >> "${GITHUB_OUTPUT}"
+
+  venue-oracles-package:
+    # venue-oracles: every venue differential oracle test
+    # (internal/testsupport/venueoracle) against the REAL Python api and the
+    # REAL Go api on two copies of one Alembic-migrated Postgres, one
+    # package per job. Distinct from `ci/check_go.sh live-python-oracles`
+    # (go-quality's own step): that verb's blocks are narrow pure-function
+    # comparisons installed via `pip install --no-deps -r
+    # ci/requirements-live-python-oracles.txt`; a venue oracle imports the
+    # WHOLE real FastAPI app plus alembic, so it needs the full project Python
+    # environment (`uv sync`), not that narrow closure.
+    name: venue-oracles-package (${{ matrix.package }})
+    needs: venue-oracles-plan
+    if: needs.venue-oracles-plan.outputs.relevant == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        package: ${{ fromJSON(needs.venue-oracles-plan.outputs.packages) }}
+    env:
+      TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository_owner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Go
-        if: steps.relevance.outputs.relevant == 'true'
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache-dependency-path: '**/go.sum'
 
       - name: Install uv
-        if: steps.relevance.outputs.relevant == 'true'
         uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           python-version: '3.14'
@@ -126,14 +159,11 @@ jobs:
       # The FULL project environment -- see the job comment above for why
       # ci/requirements-live-python-oracles.txt is not enough here. Once
       # .venv exists, pyoracle.Resolve (internal/testsupport/pyoracle)
-      # already prefers it over a bare `python3` on PATH; no extra PATH
-      # wiring needed in this job.
+      # already prefers it over a bare `python3` on PATH.
       - name: Install the full Python project
-        if: steps.relevance.outputs.relevant == 'true'
         run: uv sync --frozen --all-extras --dev
 
       - name: Log in to GitHub Container Registry
-        if: steps.relevance.outputs.relevant == 'true'
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
@@ -141,25 +171,86 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Pre-pull pinned test dependency images with bounded retry
-        if: steps.relevance.outputs.relevant == 'true'
         run: bash ci/check_go.sh integration-prepull
+
+      - name: Name this package's artifacts
+        id: name
+        env:
+          PACKAGE: ${{ matrix.package }}
+        run: printf 'slug=%s\n' "$(printf '%s' "${PACKAGE#./}" | tr '/.' '--')" >> "${GITHUB_OUTPUT}"
 
       # `set -o pipefail` (via -euo pipefail) is load-bearing: without it, a
       # failing check_go.sh in this pipe would be masked by `tee`'s own zero
       # exit, and the step would report success on a red run.
-      - name: Run every venue differential oracle against the live Python api
-        if: steps.relevance.outputs.relevant == 'true'
+      - name: Run this package's venue differential oracles against the live Python api
         env:
           DEV_HEALTH_LIVE_PYTHON_ORACLES: '1'
+          VENUE_ORACLE_PACKAGE: ${{ matrix.package }}
         run: |
           set -euo pipefail
           mkdir -p "${RUNNER_TEMP}/venue-oracle-receipt"
           bash ci/check_go.sh venue-oracles 2>&1 | tee "${RUNNER_TEMP}/venue-oracle-receipt/receipt.log"
 
-      - name: Upload the venue oracle receipt
-        if: steps.relevance.outputs.relevant == 'true' && always()
+      # Written only after the run step succeeded: the verdict job counts
+      # these, so a package that never ran (or failed) leaves no marker.
+      - name: Record that this package passed
+        env:
+          PACKAGE: ${{ matrix.package }}
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/venue-oracle-done"
+          printf '%s\n' "${PACKAGE}" > "${RUNNER_TEMP}/venue-oracle-done/${{ steps.name.outputs.slug }}"
+
+      - name: Upload the completion marker
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: venue-oracle-receipt-${{ github.run_id }}-${{ github.run_attempt }}
+          name: venue-oracle-done-${{ steps.name.outputs.slug }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/venue-oracle-done/${{ steps.name.outputs.slug }}
+          if-no-files-found: error
+
+      - name: Upload the venue oracle receipt
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: venue-oracle-receipt-${{ steps.name.outputs.slug }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/venue-oracle-receipt/receipt.log
           if-no-files-found: ignore
+
+  venue-oracles:
+    # The required context. `if: always()` makes it run and report whatever
+    # the plan and the shards did: without it, a failed shard would SKIP
+    # this job, and GitHub reports a skipped required check as passing. It
+    # decides nothing itself beyond calling the verdict script.
+    needs:
+      - venue-oracles-plan
+      - venue-oracles-package
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python 3.14 for the verdict
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.14'
+
+      # No markers exist when the shards were skipped or all failed; the
+      # verdict script then fails the check on the shard result or the
+      # missing markers, so a failed download is not an error here.
+      - name: Download the shards' completion markers
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          path: ${{ runner.temp }}/venue-oracle-done
+          pattern: venue-oracle-done-*-${{ github.run_attempt }}
+          merge-multiple: true
+
+      - name: Decide the venue-oracles check
+        env:
+          PLAN_RESULT: ${{ needs.venue-oracles-plan.result }}
+          SHARDS_RESULT: ${{ needs.venue-oracles-package.result }}
+          RELEVANT: ${{ needs.venue-oracles-plan.outputs.relevant }}
+          PACKAGES: ${{ needs.venue-oracles-plan.outputs.packages }}
+          MARKERS_DIR: ${{ runner.temp }}/venue-oracle-done
+        run: python ci/venue_oracles_verdict.py

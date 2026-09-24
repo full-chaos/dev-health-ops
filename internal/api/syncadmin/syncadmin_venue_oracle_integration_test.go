@@ -735,10 +735,16 @@ func seedBackfillDiagnostics(t *testing.T, ctx context.Context, venue *venueorac
 	t.Helper()
 	orgA, orgB := ids.orgA.String(), ids.orgB.String()
 	repo1, repo2 := uuid.NewString(), uuid.NewString()
+	// The tables are ReplacingMergeTree: a recomputed row inserted in the
+	// same block as its first version collapses at insert time, and a merge
+	// collapses it later. Merges are stopped and each recomputed row is its
+	// own INSERT (its own part), so the reads' DISTINCT and argMax face
+	// both versions.
 	statements := []string{
+		"SYSTEM STOP MERGES repo_metrics_daily", "SYSTEM STOP MERGES repo_complexity_daily",
+		"SYSTEM STOP MERGES compounding_risk_daily",
 		`INSERT INTO repo_metrics_daily (org_id, repo_id, day, computed_at) VALUES
 ('` + orgA + `', '` + repo1 + `', '2026-01-01', '2026-02-01 00:00:00'),
-('` + orgA + `', '` + repo1 + `', '2026-01-01', '2026-02-02 00:00:00'),
 ('` + orgA + `', '` + repo2 + `', '2026-01-01', '2026-02-01 00:00:00'),
 ('` + orgA + `', '` + repo2 + `', '2026-01-31', '2026-02-01 00:00:00'),
 ('` + orgA + `', '` + repo1 + `', '2026-02-01', '2026-02-01 00:00:00'),
@@ -754,12 +760,17 @@ func seedBackfillDiagnostics(t *testing.T, ctx context.Context, venue *venueorac
 complexity_delta, single_owner_ratio, ownership_gini, review_latency_p90h, w_churn, w_complexity, w_ownership, w_review,
 threshold_elevated, threshold_high, computed_at) VALUES
 ('` + orgA + `', '2026-01-01', 'repo', 'r1', NULL, 'unknown', NULL, 1, NULL, NULL, NULL, 0, 0, 0, 0, 0, 0, '2026-02-01 00:00:00'),
-('` + orgA + `', '2026-01-01', 'repo', 'r1', 0.5, 'elevated', 1, 1, 0.1, NULL, 2, 0, 0, 0, 0, 0, 0, '2026-02-02 00:00:00'),
 ('` + orgA + `', '2026-01-01', 'repo', 'r2', NULL, 'unknown', NULL, NULL, NULL, NULL, NULL, 0, 0, 0, 0, 0, 0, '2026-02-01 00:00:00'),
 ('` + orgA + `', '2026-01-01', 'team', 't1', NULL, 'unknown', NULL, NULL, NULL, NULL, NULL, 0, 0, 0, 0, 0, 0, '2026-02-01 00:00:00'),
 ('` + orgA + `', '2026-01-15', 'repo', 'r1', 0.9, 'high', 1, NULL, NULL, 0.3, 5, 0, 0, 0, 0, 0, 0, '2026-02-01 00:00:00'),
 ('` + orgA + `', '2026-02-01', 'repo', 'r1', NULL, 'unknown', NULL, NULL, NULL, NULL, NULL, 0, 0, 0, 0, 0, 0, '2026-02-01 00:00:00'),
 ('` + orgB + `', '2026-01-01', 'repo', 'r1', NULL, 'unknown', NULL, NULL, NULL, NULL, NULL, 0, 0, 0, 0, 0, 0, '2026-02-01 00:00:00')`,
+		`INSERT INTO repo_metrics_daily (org_id, repo_id, day, computed_at) VALUES
+('` + orgA + `', '` + repo1 + `', '2026-01-01', '2026-02-02 00:00:00')`,
+		`INSERT INTO compounding_risk_daily (org_id, day, scope, scope_id, compounding_risk, severity, rework_churn,
+complexity_delta, single_owner_ratio, ownership_gini, review_latency_p90h, w_churn, w_complexity, w_ownership, w_review,
+threshold_elevated, threshold_high, computed_at) VALUES
+('` + orgA + `', '2026-01-01', 'repo', 'r1', 0.5, 'elevated', 1, 1, 0.1, NULL, 2, 0, 0, 0, 0, 0, 0, '2026-02-02 00:00:00')`,
 	}
 	for _, database := range []string{venue.PythonClickHouseDB, venue.GoClickHouseDB} {
 		conn, err := chclickhouse.Open(ctx, chclickhouse.DefaultConfig(venue.AdminClickHouseURI(t, database)))

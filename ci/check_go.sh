@@ -515,8 +515,23 @@ check_live_python_oracles() {
       DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
       PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
       go test -mod=readonly -count=1 \
-        -run '^(TestStrReprMatchesLivePython|TestDecodeUTF8ReplaceMatchesLivePython)$' \
+        -run '^(TestStrReprMatchesLivePython|TestDecodeUTF8ReplaceMatchesLivePython|TestURLSplitMatchesLivePython)$' \
         ./internal/pythonparity
+  ); then
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  printf 'go test -count=1: internal/llmorgsettings (validate_llm_base_url vs live Python)\n'
+  if ! (
+    cd "${ROOT}"
+    "${GO_ENV_OFF[@]}" \
+      GOWORK=off \
+      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
+      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
+      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
+      go test -mod=readonly -count=1 \
+        -run '^(TestValidateBaseURLMatchesLivePython)$' \
+        ./internal/llmorgsettings
   ); then
     rm -rf -- "${proof_dir}"
     return 1
@@ -581,7 +596,7 @@ check_live_python_oracles() {
     rm -rf -- "${proof_dir}"
     return 1
   fi
-  for proof_name in api-policy-principal api-pyjson api-pyjson-dumps api-pyjson-model api-orgs-registry api-pytime api-pytime-date api-pytime-fromisoformat api-pytime-pydantic api-health-revisions api-pybody-queryint api-pybody-querybool api-pybody-bodyint pythonparity-strrepr pythonparity-utf8-replace httpapi-forwarded-scheme api-customerpush-schema api-customerpush-bodies api-pybody-queryuuid api-billing-bodies api-billing-helpers api-billing-stripe-version; do
+  for proof_name in api-policy-principal api-pyjson api-pyjson-dumps api-pyjson-model api-orgs-registry api-pytime api-pytime-date api-pytime-fromisoformat api-pytime-pydantic api-health-revisions api-pybody-queryint api-pybody-querybool api-pybody-bodyint pythonparity-strrepr pythonparity-utf8-replace pythonparity-urlsplit llmorgsettings-validate-base-url httpapi-forwarded-scheme api-customerpush-schema api-customerpush-bodies api-pybody-queryuuid api-billing-bodies api-billing-helpers api-billing-stripe-version; do
     proof_file="${proof_dir}/${proof_name}"
     if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
       printf 'ERROR: api live Python oracle %s did not run\n' "${proof_name}" >&2

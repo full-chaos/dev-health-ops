@@ -66,7 +66,7 @@ func ResolveMigrationDatabase(
 		return secrets.Value{}, "", false
 	}
 	if configured {
-		return value, "MIGRATION_DATABASE_URI", true
+		return normalizeMigrationDSN(value), "MIGRATION_DATABASE_URI", true
 	}
 	if !fallbackToPostgres {
 		WriteConfigError(stderr, errors.New("MIGRATION_DATABASE_URI is required"))
@@ -81,5 +81,29 @@ func ResolveMigrationDatabase(
 		fmt.Fprintln(stderr, NoMigrationDatabaseMessage)
 		return secrets.Value{}, "", false
 	}
-	return postgres, "POSTGRES_URI", true
+	return normalizeMigrationDSN(postgres), "POSTGRES_URI", true
+}
+
+// migrationDriverSchemes are the SQLAlchemy driver-qualified schemes the
+// Python stack writes (the chart's bundled POSTGRES_URI is
+// postgresql+asyncpg://). pgx parses only postgres:// and postgresql://, so
+// each is rewritten to postgresql:// -- the same aliases
+// internal/storage/postgres accepts at its own Go boundary.
+var migrationDriverSchemes = []string{
+	"postgresql+asyncpg://",
+	"postgresql+psycopg://",
+	"postgresql+psycopg2://",
+	"postgres+asyncpg://",
+}
+
+// normalizeMigrationDSN rewrites a driver-qualified scheme to postgresql://
+// and changes nothing else: credentials, host, path and query stay as given.
+func normalizeMigrationDSN(value secrets.Value) secrets.Value {
+	raw := value.Reveal()
+	for _, scheme := range migrationDriverSchemes {
+		if strings.HasPrefix(strings.ToLower(raw), scheme) {
+			return secrets.NewValue("postgresql://" + raw[len(scheme):])
+		}
+	}
+	return value
 }

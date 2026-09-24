@@ -77,9 +77,10 @@ func TestUpgradeRunsTheJobEndToEnd(t *testing.T) {
 	}
 
 	// --river with no MIGRATION_DATABASE_URI (the database under
-	// POSTGRES_URI): the River step is skipped and logged, the rest run.
+	// POSTGRES_URI, in the postgresql+asyncpg:// form the chart's bundled
+	// PostgreSQL renders): the River step is skipped and logged, the rest run.
 	fallback := map[string]string{
-		"POSTGRES_URI":                          pgURI,
+		"POSTGRES_URI":                          "postgresql+asyncpg://" + pgURI[strings.Index(pgURI, "://")+3:],
 		"DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER": "1",
 		"CLICKHOUSE_URI":                        chURI,
 		"OPERATIONAL_ORDERING_CONTRACT":         "2",

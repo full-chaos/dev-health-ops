@@ -75,6 +75,10 @@ _CREDENTIALS = frozenset(
         # The Stripe API key the api's billing routes call Stripe with, the
         # same Secret key the Python api reads.
         "STRIPE_SECRET_KEY",
+        # The Stripe webhook's signing secret and the license signing key,
+        # the same Secret keys the Python api reads.
+        "STRIPE_WEBHOOK_SECRET",
+        "LICENSE_PRIVATE_KEY",
     }
 )
 

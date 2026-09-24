@@ -64,7 +64,9 @@ func apiPosture() RolePosture {
 			// route syncs an existing row's tier/managed_by on an actual
 			// tier change (OrganizationService._sync_license_tier);
 			// CHAOS-6306 adds delete (a purge target) on top.
-			{"org_licenses", false, true, true},
+			// org_licenses insert: the Stripe webhook's checkout path creates
+			// an org's first license row (CHAOS-6517).
+			{"org_licenses", true, true, true},
 			// external-ingest (CHAOS-6246): bearer-token auth resolves the
 			// token row and bumps last_used_at/last_used_ip on every
 			// request that reaches a scope check (auth.go's bumpLastUsed).
@@ -212,12 +214,17 @@ func apiPosture() RolePosture {
 			// deleted via a subquery on their own owning row's org_id
 			// (invoices/subscriptions respectively). invoices also takes
 			// the void route's status write (CHAOS-6257); refunds and
-			// line items are only read by the billing routes.
+			// line items are only read by the billing routes. The Stripe
+			// webhook's subscription events (CHAOS-6518) insert and update
+			// subscriptions and insert their subscription_events row, and
+			// queue billing_notifications intents (the key-conflict
+			// fallback is a SELECT, always implicit).
 			{"refunds", false, false, true},
 			{"invoice_line_items", false, false, true},
 			{"invoices", false, true, true},
-			{"subscription_events", false, false, true},
-			{"subscriptions", false, false, true},
+			{"subscription_events", true, false, true},
+			{"subscriptions", true, true, true},
+			{"billing_notifications", true, false, false},
 			// Sync state.
 			{"metric_checkpoints", false, false, true},
 			{"sync_compute_checkpoints", false, false, true},

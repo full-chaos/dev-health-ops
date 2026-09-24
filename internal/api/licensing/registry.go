@@ -22,6 +22,17 @@ var standardFeatures = []standardFeature{
 	{"priority_support", "enterprise"}, {"byo_llm", "team"},
 }
 
+// IsStandardFeature reports whether key is a STANDARD_FEATURES key (the
+// registry _sync_org_license validates bundle features against).
+func IsStandardFeature(key string) bool {
+	for _, feature := range standardFeatures {
+		if feature.key == key {
+			return true
+		}
+	}
+	return false
+}
+
 // TierFeature is one feature of a tier's default set.
 type TierFeature struct {
 	Key     string

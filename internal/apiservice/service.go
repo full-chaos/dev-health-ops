@@ -210,6 +210,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 	if deps.Pool != nil && deps.Guard != nil {
 		routes = append(routes, billing.Routes(billing.Deps{
 			Pool: deps.Pool, Guard: deps.Guard, Stripe: deps.Stripe, Config: deps.BillingConfig, Logger: logger,
+			WebhookSecret: deps.StripeWebhookSecret, LicensePrivateKey: deps.LicensePrivateKey, Producer: deps.Producer,
 		})...)
 		routes = append(routes, admin.Routes(admin.Deps{
 			Pool:          deps.Pool,
@@ -283,6 +284,8 @@ func configureWith(
 	// stored token.
 	deps.Stripe = stripeclient.New(stripeclient.Options{Key: cfg.StripeSecretKey.Reveal()})
 	deps.BillingConfig = cfg.APIBilling
+	deps.StripeWebhookSecret = cfg.StripeWebhookSecret
+	deps.LicensePrivateKey = cfg.LicensePrivateKey
 	deps.PagerDuty = providerfoundation.PagerDutyRevokeConfig{ClientID: cfg.PagerDutyOAuthClientID.Reveal()}
 	// deps.ClickHouseDSN: see Deps' own doc comment for why this is
 	// CLICKHOUSE_URI, never API_CLICKHOUSE_URI.

@@ -521,6 +521,8 @@ var optionRegistry = []Option{
 	{Env: "PAGER_DUTY_CLIENT_ID", Secret: true, Group: GroupCredentials, Usage: "PagerDuty OAuth client id"},
 	{Env: "PAGER_DUTY_SECRET", Secret: true, Group: GroupCredentials, Usage: "PagerDuty OAuth client secret"},
 	{Env: "STRIPE_SECRET_KEY", Secret: true, Group: GroupCredentials, Usage: "Stripe API key the api's billing routes call Stripe with (the Python api's STRIPE_SECRET_KEY)"},
+	{Env: "STRIPE_WEBHOOK_SECRET", Secret: true, Group: GroupCredentials, Usage: "signing secret the api's Stripe webhook verifies events with (the Python api's STRIPE_WEBHOOK_SECRET)"},
+	{Env: "LICENSE_PRIVATE_KEY", Secret: true, Group: GroupCredentials, Usage: "base64 Ed25519 seed the api's Stripe webhook signs org licenses with (the Python api's LICENSE_PRIVATE_KEY)"},
 }
 
 // Options returns every declared option in registry order.

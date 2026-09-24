@@ -81,6 +81,7 @@ internal/queryapi/testopsrisk	31
 internal/queryapi/throughputforecast	41
 internal/queryapi/workgraph	280
 internal/api/audit	10
+internal/api/billing	6
 internal/api/externalingest	10
 internal/api/externalurl	10
 internal/api/licensing	6
@@ -94,6 +95,7 @@ internal/apiservice/acr	6
 internal/admincli	40
 internal/apiservice/admin	2
 internal/apiservice/sessionvenue	1
+internal/apiservice/billingvenue	2
 internal/auth/ratelimitvalkey	11
 internal/cacheinvalidation	2
 internal/chmigrate	60

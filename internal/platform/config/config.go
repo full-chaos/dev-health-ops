@@ -269,6 +269,14 @@ type Config struct {
 	// StripeSecretKey is STRIPE_SECRET_KEY, the Stripe API key the billing
 	// routes of dho api call Stripe with (the Python api's same variable).
 	StripeSecretKey secrets.Value
+	// StripeWebhookSecret is STRIPE_WEBHOOK_SECRET, the signing secret the
+	// Stripe webhook verifies event signatures with (the Python api's same
+	// variable).
+	StripeWebhookSecret secrets.Value
+	// LicensePrivateKey is LICENSE_PRIVATE_KEY, the base64 Ed25519 seed the
+	// Stripe webhook signs org licenses with (the Python api's same
+	// variable).
+	LicensePrivateKey secrets.Value
 
 	QueueDatabaseMode           QueueControlMode
 	CoordinatorDatabaseMode     QueueControlMode
@@ -547,6 +555,8 @@ func Load(spec Spec) (Config, error) {
 		{name: "PAGER_DUTY_CLIENT_ID", target: &cfg.PagerDutyOAuthClientID},
 		{name: "PAGER_DUTY_SECRET", target: &cfg.PagerDutyOAuthSecret},
 		{name: "STRIPE_SECRET_KEY", target: &cfg.StripeSecretKey},
+		{name: "STRIPE_WEBHOOK_SECRET", target: &cfg.StripeWebhookSecret},
+		{name: "LICENSE_PRIVATE_KEY", target: &cfg.LicensePrivateKey},
 	}
 	for _, item := range secretTargets {
 		value, _, resolveErr := secrets.Resolve(item.name, lookup)
@@ -974,6 +984,8 @@ func (c Config) SafeAttrs() []slog.Attr {
 		slog.Bool("pagerduty_oauth_client_id_configured", c.PagerDutyOAuthClientID.Configured()),
 		slog.Bool("pagerduty_oauth_secret_configured", c.PagerDutyOAuthSecret.Configured()),
 		slog.Bool("stripe_api_configured", c.StripeSecretKey.Configured()),
+		slog.Bool("stripe_webhook_configured", c.StripeWebhookSecret.Configured()),
+		slog.Bool("license_signing_configured", c.LicensePrivateKey.Configured()),
 	}
 	if c.Profile != "" {
 		attrs = append(attrs, slog.String("profile", c.Profile))

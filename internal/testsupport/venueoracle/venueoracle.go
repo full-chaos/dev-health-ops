@@ -165,8 +165,116 @@ elif mode == "serve":
 
         _oauth.httpx = type("httpx_shim", (), {"AsyncClient": _RedirectedClient, "HTTPStatusError": httpx.HTTPStatusError,
                                                "RequestError": httpx.RequestError, "Response": httpx.Response})
+    # VENUE_STRIPE_SESSION_LINE_ITEMS=1 gives the checkout session service
+    # the list_line_items(session_id) the webhook's checkout handler calls
+    # (stripe-python's is sessions.line_items.list), so the handler reads the
+    # line items it was written to read instead of failing to TEAM.
+    if os.environ.get("VENUE_STRIPE_SESSION_LINE_ITEMS") == "1":
+        from stripe.checkout._session_service import SessionService as _CheckoutSessionService
+
+        def _list_line_items(self, session, params=None, options=None):
+            return self.line_items.list(session, params, options)
+
+        _CheckoutSessionService.list_line_items = _list_line_items
+    # VENUE_STRIPE_EVENT_AS_DICT names the event types (comma separated,
+    # or 1 for every type) whose verified event reaches the webhook
+    # handlers as plain JSON dicts with attribute access, which is what
+    # those handlers were written against; stripe-python's StripeObject is
+    # not a dict, so the unpatched handlers crash or skip. Other types keep
+    # the deployed StripeObject. The signature is still verified by the
+    # real stripe-python code first.
+    _event_as_dict = os.environ.get("VENUE_STRIPE_EVENT_AS_DICT", "")
+    if _event_as_dict:
+        import json as _json
+        import stripe as _stripe_ev
+
+        class _EventDict(dict):
+            def __getattr__(self, name):
+                try:
+                    return self[name]
+                except KeyError:
+                    raise AttributeError(name) from None
+
+        def _as_event_dict(value):
+            if isinstance(value, dict):
+                return _EventDict((k, _as_event_dict(v)) for k, v in value.items())
+            if isinstance(value, list):
+                return [_as_event_dict(v) for v in value]
+            return value
+
+        _stripe_original_construct = _stripe_ev.StripeClient.construct_event
+
+        def _stripe_construct_as_dict(self, payload, sig_header, secret, *args, **kwargs):
+            event = _stripe_original_construct(self, payload, sig_header, secret, *args, **kwargs)
+            if _event_as_dict != "1" and event.type not in _event_as_dict.split(","):
+                return event
+            return _as_event_dict(_json.loads(payload))
+
+        _stripe_ev.StripeClient.construct_event = _stripe_construct_as_dict
     from fastapi.testclient import TestClient
     from dev_health_ops.api.main import app
+    # VENUE_STRIPE_SUBSCRIPTION_HANDLERS_AS_DICT=1 hands the router's
+    # subscription updated/deleted/trial_will_end handlers the subscription
+    # as what they were written against: a dict (isinstance, .get) whose
+    # fields are also attributes, a field winning over a dict method of the
+    # same name (subscription.items is the Stripe items list, not
+    # dict.items). On the deployed StripeObject, metadata is not a dict and
+    # those handlers skip every event. SubscriptionService.process_event
+    # keeps the deployed StripeObject, which it reads correctly.
+    if os.environ.get("VENUE_STRIPE_SUBSCRIPTION_HANDLERS_AS_DICT") == "1":
+        import importlib as _importlib
+
+        # sys.modules, not attribute access: the billing package exports an
+        # APIRouter named router that shadows the module.
+        _importlib.import_module("dev_health_ops.api.billing.router")
+        _billing_router = sys.modules["dev_health_ops.api.billing.router"]
+
+        class _FieldDict(dict):
+            # A field is an attribute; an absent field is getattr's default
+            # (not a dict method of the same name: a subscription without
+            # items has no items). .get stays, for metadata.get.
+            def __getattribute__(self, name):
+                if name.startswith("__"):
+                    return dict.__getattribute__(self, name)
+                if dict.__contains__(self, name):
+                    return dict.__getitem__(self, name)
+                if name == "get":
+                    return dict.__getattribute__(self, name)
+                raise AttributeError(name)
+
+        def _as_field_dict(value):
+            if isinstance(value, dict):
+                return _FieldDict((k, _as_field_dict(v)) for k, v in value.items())
+            if isinstance(value, list):
+                return [_as_field_dict(v) for v in value]
+            return value
+
+        def _field_dict_handler(original):
+            async def handler(subscription):
+                return await original(_as_field_dict(subscription.to_dict()))
+            return handler
+
+        for _name in ("_handle_subscription_updated", "_handle_subscription_deleted", "_handle_trial_will_end"):
+            setattr(_billing_router, _name, _field_dict_handler(getattr(_billing_router, _name)))
+    # VENUE_PY_LOGGING=1 sends the app's log records (INFO and up) to stderr,
+    # so a handled failure (a logged, swallowed exception) shows its cause.
+    if os.environ.get("VENUE_PY_LOGGING") == "1":
+        import logging as _logging
+        _logging.basicConfig(stream=sys.stderr, level=_logging.INFO, force=True,
+                             format="VENUE LOG %(levelname)s %(name)s: %(message)s")
+    # VENUE_PY_TRACEBACKS=1 writes each unhandled exception's traceback to
+    # stderr (DEV_HEALTH_VENUE_PY_LOG keeps it), so a 500 carries its cause.
+    if os.environ.get("VENUE_PY_TRACEBACKS") == "1":
+        import traceback as _traceback
+        _inner_app = app
+
+        async def app(scope, receive, send):
+            try:
+                await _inner_app(scope, receive, send)
+            except Exception:
+                sys.stderr.write("VENUE TRACEBACK %s %s\n" % (scope.get("method"), scope.get("path")))
+                _traceback.print_exc(file=sys.stderr)
+                raise
     client = TestClient(app, raise_server_exceptions=False, follow_redirects=False)
     out = []
     for req in json.loads(sys.stdin.read()):

@@ -72,7 +72,12 @@ func TestHelpDeclaresTheDocumentedEnvironmentHandful(t *testing.T) {
 	// + identity admin CRUD), same shape as the API_DATABASE_URI /
 	// DEV_HEALTH_PG_API_PASSWORD pair. Neither is required for a standard
 	// deployment today, but both hold a real secret value.
-	if len(required) > 19 {
+	// 19 -> 21 (CHAOS-6517): STRIPE_WEBHOOK_SECRET, LICENSE_PRIVATE_KEY
+	// added -- the Stripe webhook's signing secret and the license signing
+	// key, the same Secret keys the Python api reads. Neither is required
+	// for a standard deployment (without them the webhook answers the
+	// Python api's 500), but both hold a real secret value.
+	if len(required) > 21 {
 		t.Fatalf("required environment grew to %d settings: %v", len(required), required)
 	}
 	for _, name := range required {

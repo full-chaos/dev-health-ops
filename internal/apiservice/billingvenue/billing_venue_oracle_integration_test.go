@@ -1,6 +1,6 @@
 //go:build integration
 
-package apiservice
+package billingvenue
 
 import (
 	"context"
@@ -23,7 +23,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/billing/stripeclient"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
-	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
@@ -231,6 +230,36 @@ func (f *fakeStripe) serve(plane string, w http.ResponseWriter, r *http.Request)
 		}
 		id := f.next(plane, "bps")
 		fmt.Fprintf(w, `{"id": %q, "object": "billing_portal.session", "url": "https://portal.venue.test/%s"}`, id, id)
+	case r.Method == http.MethodGet && strings.HasPrefix(path, "/v1/checkout/sessions/") && strings.HasSuffix(path, "/line_items"):
+		session := strings.TrimSuffix(strings.TrimPrefix(path, "/v1/checkout/sessions/"), "/line_items")
+		item := func(price string) string {
+			return `{"id": "li_venue", "object": "item", "quantity": 1, "price": ` + price + `}`
+		}
+		var items []string
+		switch session {
+		case "cs_fail":
+			stripeFail(w, "No such checkout.session")
+			return
+		case "cs_ent":
+			items = []string{item(`{"id": "price_ent_cfg", "object": "price"}`)}
+		case "cs_unknown":
+			items = []string{item(`{"id": "price_other", "object": "price"}`)}
+		case "cs_nullprice":
+			items = []string{item("null"), item(`{"id": "price_ent_cfg", "object": "price"}`)}
+		case "cs_noprice":
+			// An item without a price makes Python's item.price raise:
+			// the whole read falls back to team, the enterprise item after
+			// it included.
+			items = []string{`{"id": "li_venue", "object": "item", "quantity": 1}`, item(`{"id": "price_ent_cfg", "object": "price"}`)}
+		case "cs_team_then_ent":
+			items = []string{item(`{"id": "price_team_cfg", "object": "price"}`), item(`{"id": "price_ent_cfg", "object": "price"}`)}
+		case "cs_blank_then_ent":
+			items = []string{item(`{"id": "", "object": "price"}`), item(`{"id": "price_ent_cfg", "object": "price"}`)}
+		case "cs_empty":
+		default:
+			items = []string{item(`{"id": "price_team_cfg", "object": "price"}`)}
+		}
+		fmt.Fprintf(w, `{"object": "list", "url": %q, "has_more": false, "data": [%s]}`, path, strings.Join(items, ", "))
 	case r.Method == http.MethodGet && fakeLists[path] != nil:
 		after := r.URL.Query().Get("starting_after")
 		if after == "" {
@@ -657,39 +686,6 @@ func sortRecordKeys(body string) string {
 		return body
 	}
 	return string(encoded)
-}
-
-// startBillingVenueAPI is startVenueAPI with the Go plane's Stripe client
-// pointed at the fake server.
-func startBillingVenueAPI(t *testing.T, ctx context.Context, cfg config.Config, venue *venueoracle.Venue, stripeBase string) string {
-	t.Helper()
-	registry := health.NewRegistry(5 * time.Second)
-	components, err := configureWith(ctx, cfg, registry, quietLogger(), func(deps *Deps) {
-		deps.Stripe = stripeclient.New(stripeclient.Options{Key: cfg.StripeSecretKey.Reveal(), BaseURL: stripeBase})
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, component := range components {
-		if err := component.Start(ctx); err != nil {
-			t.Fatal(err)
-		}
-	}
-	t.Cleanup(func() {
-		for index := len(components) - 1; index >= 0; index-- {
-			_ = components[index].Shutdown(context.Background())
-		}
-	})
-	if ready := registry.CheckRequired(ctx); !ready.Ready {
-		t.Fatalf("dho api not ready as the api role: %+v %s", ready, venue.DiagnoseAPIRole(t, ctx))
-	}
-	for _, component := range components {
-		if server, ok := component.(interface{ Address() string }); ok {
-			return "http://" + server.Address()
-		}
-	}
-	t.Fatal("configure started no HTTP server")
-	return ""
 }
 
 // billingEnv is the billing configuration both planes run with.

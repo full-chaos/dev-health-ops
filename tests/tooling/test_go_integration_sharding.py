@@ -139,6 +139,10 @@ EXPECTED_PACKAGES = {
     # DEV_HEALTH_LIVE_PYTHON_ORACLES=1, so under the plain integration tag
     # this package still builds and its tests still register (SKIP counts
     # as run), matching internal/api/policy's own live-oracle pattern.
+    # CHAOS-6463: `dho admin features seed` is checked against the Python verb
+    # on databases the real Python upgrade built -- only a real engine can
+    # build either side.
+    "internal/admincli",
     "internal/apiservice/admin",
     # CHAOS-6368: the shared rate-limit store against a real Valkey (limit held
     # across two clients, the fixed window, the per-caller path bound, TTLs).

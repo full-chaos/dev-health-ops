@@ -485,3 +485,11 @@ func postureGrants(posture postgresstore.RolePosture) ([]riverstore.TableGrant, 
 	}
 	return grants, columns, append([]string(nil), posture.RequiredSequences...)
 }
+
+// ResolveMigrationDatabase finds the DSN a one-shot migration step uses:
+// MIGRATION_DATABASE_URI (or its component form), else POSTGRES_URI. The
+// migrate Job runs every step against the same database this way. ok=false
+// means the error is already written to stderr.
+func ResolveMigrationDatabase(lookup platformsecrets.LookupEnv, stderr io.Writer) (platformsecrets.Value, string, bool) {
+	return resolveMigrationDatabaseURI(lookup, stderr, true)
+}

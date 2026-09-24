@@ -38,6 +38,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/billing"
 	"github.com/full-chaos/dev-health-ops/internal/api/billing/stripeclient"
 	"github.com/full-chaos/dev-health-ops/internal/api/buildinfo"
+	"github.com/full-chaos/dev-health-ops/internal/api/credentials"
 	"github.com/full-chaos/dev-health-ops/internal/api/externalingest"
 	healthroutes "github.com/full-chaos/dev-health-ops/internal/api/health"
 	"github.com/full-chaos/dev-health-ops/internal/api/orgs"
@@ -172,6 +173,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 		routes = append(routes, telemetry.Routes(deps.Pool, deps.Guard, deps.Auth, deps.Telemetry.Endpoint, logger)...)
 		routes = append(routes, customerpush.Routes(customerpush.Deps{Pool: deps.Pool, Guard: deps.Guard, Logger: logger})...)
 		routes = append(routes, syncadmin.Routes(syncadmin.Deps{Pool: deps.Pool, Guard: deps.Guard, Logger: logger})...)
+		routes = append(routes, credentials.Routes(credentials.Deps{Pool: deps.Pool, Guard: deps.Guard, Encryptor: deps.Decryptor, Logger: logger, Now: deps.Now})...)
 		if deps.ClickHouse != nil {
 			routes = append(routes, teamsidentity.Routes(deps.ClickHouse, deps.Guard, logger, deps.Pool, deps.Decryptor)...)
 		}

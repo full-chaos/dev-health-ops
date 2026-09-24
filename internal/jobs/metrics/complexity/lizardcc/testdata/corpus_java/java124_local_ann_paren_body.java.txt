@@ -1,0 +1,1 @@
+class C { void f() { @SuppressWarnings("unchecked") List<String> l = (List<String>) o; if (l != null) {} } void g() { if (b) {} } }

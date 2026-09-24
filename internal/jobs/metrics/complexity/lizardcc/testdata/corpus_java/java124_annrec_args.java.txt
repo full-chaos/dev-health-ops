@@ -1,0 +1,4 @@
+@SuppressWarnings("x")
+record R(int x) {
+  R { if (x > 0) throw new IllegalArgumentException(); }
+}

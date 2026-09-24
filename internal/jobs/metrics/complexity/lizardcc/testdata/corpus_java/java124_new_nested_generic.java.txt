@@ -1,0 +1,3 @@
+class C {
+ Object create() { return new Box<List<String>>() { void m() { if (true) {} while(true){} } }; }
+}

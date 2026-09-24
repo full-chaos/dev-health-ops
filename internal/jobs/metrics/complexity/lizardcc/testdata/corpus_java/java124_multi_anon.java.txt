@@ -1,0 +1,1 @@
+class C { void f() { g(new A() { void x() { if (1) {} } }, new B<C>() { void y() { if (2) {} } }); } }

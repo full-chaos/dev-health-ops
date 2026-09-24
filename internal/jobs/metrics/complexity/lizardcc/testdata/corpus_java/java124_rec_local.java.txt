@@ -1,0 +1,3 @@
+class C {
+  int f() { record L(int a) {} if (true) return 1; return 2; }
+}

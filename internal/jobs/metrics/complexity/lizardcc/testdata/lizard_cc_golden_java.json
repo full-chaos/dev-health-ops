@@ -80,6 +80,1612 @@
       "loc": 8,
       "very_high_complexity_functions": 0
     },
+    "java124_ann_array_args.java.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 2,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 2,
+          "long_name": "C::f()",
+          "name": "C::f"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 2,
+      "very_high_complexity_functions": 0
+    },
+    "java124_ann_before_method_after_field.java.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 2,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 2,
+          "long_name": "C::toString()",
+          "name": "C::toString"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 2,
+      "very_high_complexity_functions": 0
+    },
+    "java124_ann_class_then_record.java.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 2,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 1,
+          "long_name": "C::R( int x)",
+          "name": "C::R"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 1,
+      "very_high_complexity_functions": 0
+    },
+    "java124_ann_dot.java.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 2,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 2,
+          "long_name": "R( int x)",
+          "name": "R"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 2,
+      "very_high_complexity_functions": 0
+    },
+    "java124_ann_method.java.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 4,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 1,
+          "long_name": "C::f()",
+          "name": "C::f"
+        },
+        {
+          "complexity": 2,
+          "lineno": 1,
+          "long_name": "C::g()",
+          "name": "C::g"
+        }
+      ],
+      "functions_count": 2,
+      "high_complexity_functions": 0,
+      "loc": 1,
+      "very_high_complexity_functions": 0
+    },
+    "java124_ann_param.java.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 4,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 1,
+          "long_name": "C::f( @ A int x , @ B(1) int y)",
+          "name": "C::f"
+        },
+        {
+          "complexity": 2,
+          "lineno": 1,
+          "long_name": "C::g()",
+          "name": "C::g"
+        }
+      ],
+      "functions_count": 2,
+      "high_complexity_functions": 0,
+      "loc": 1,
+      "very_high_complexity_functions": 0
+    },
+    "java124_ann_record_after.java.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 2,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 2,
+          "long_name": "B( 1)",
+          "name": "B"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 3,
+      "very_high_complexity_functions": 0
+    },
+    "java124_annotation_decl.java.txt": {
+      "cyclomatic_avg": 0.0,
+      "cyclomatic_total": 0,
+      "functions": [],
+      "functions_count": 0,
+      "high_complexity_functions": 0,
+      "loc": 2,
+      "very_high_complexity_functions": 0
+    },
+    "java124_annrec.java.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 2,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 2,
+          "long_name": "R( int x)",
+          "name": "R"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 4,
+      "very_high_complexity_functions": 0
+    },
+    "java124_annrec_args.java.txt": {
+      "cyclomatic_avg": 0.0,
+      "cyclomatic_total": 0,
+      "functions": [],
+      "functions_count": 0,
+      "high_complexity_functions": 0,
+      "loc": 4,
+      "very_high_complexity_functions": 0
+    },
+    "java124_annrec_pub.java.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 2,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 4,
+          "long_name": "f()",
+          "name": "R::f"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 5,
+      "very_high_complexity_functions": 0
+    },
+    "java124_anon_double_brace.java.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 2,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 1,
+          "long_name": "C::f()",
+          "name": "C::f"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 1,
+      "very_high_complexity_functions": 0
+    },
+    "java124_anon_in_field_generic_nested.java.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 2,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 1,
+          "long_name": "C::f()",
+          "name": "C::f"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 1,
+      "very_high_complexity_functions": 0
+    },
+    "java124_array_init.java.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 2,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 3,
+          "long_name": "C::f()",
+          "name": "C::f"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 4,
+      "very_high_complexity_functions": 0
+    },
+    "java124_dot_class.java.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 2,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 1,
+          "long_name": "C::f()",
+          "name": "C::f"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 1,
+      "very_high_complexity_functions": 0
+    },
+    "java124_enum.java.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 2,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 1,
+          "long_name": "f()",
+          "name": "E::f"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 1,
+      "very_high_complexity_functions": 0
+    },
+    "java124_enum_body.java.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 2,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 1,
+          "long_name": "f()",
+          "name": "E::f"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 1,
+      "very_high_complexity_functions": 0
+    },
+    "java124_fuzz_001.java.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 2,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 2,
+          "long_name": "C::loc3()",
+          "name": "static::loc3"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 2,
+      "very_high_complexity_functions": 0
+    },
+    "java124_fuzz_009.java.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 6,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 1,
+          "long_name": "Box<>()",
+          "name": "Box<>"
+        },
+        {
+          "complexity": 2,
+          "lineno": 1,
+          "long_name": "gen()",
+          "name": "gen"
+        },
+        {
+          "complexity": 2,
+          "lineno": 1,
+          "long_name": "record( int x)",
+          "name": "record"
+        }
+      ],
+      "functions_count": 3,
+      "high_complexity_functions": 0,
+      "loc": 1,
+      "very_high_complexity_functions": 0
+    },
+    "java124_fuzz_067.java.txt": {
+      "cyclomatic_avg": 2.5,
+      "cyclomatic_total": 5,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 2,
+          "long_name": "TR.em()",
+          "name": "EN::em"
+        },
+        {
+          "complexity": 3,
+          "lineno": 2,
+          "long_name": "TR( int z)",
+          "name": "TR"
+        }
+      ],
+      "functions_count": 2,
+      "high_complexity_functions": 0,
+      "loc": 2,
+      "very_high_complexity_functions": 0
+    },
+    "java124_fuzz_127.java.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 4,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 2,
+          "long_name": "C::Object()",
+          "name": "C::Object"
+        },
+        {
+          "complexity": 2,
+          "lineno": 2,
+          "long_name": "C::g()",
+          "name": "S::g"
+        }
+      ],
+      "functions_count": 2,
+      "high_complexity_functions": 0,
+      "loc": 2,
+      "very_high_complexity_functions": 0
+    },
+    "java124_fuzz_155.java.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 2,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 1,
+          "long_name": "C::y()",
+          "name": "(anonymous)::y"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 1,
+      "very_high_complexity_functions": 0
+    },
+    "java124_fuzz_191.java.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 4,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 1,
+          "long_name": "C::em()",
+          "name": "EN::em"
+        },
+        {
+          "complexity": 2,
+          "lineno": 2,
+          "long_name": "D::d()",
+          "name": "class::d"
+        }
+      ],
+      "functions_count": 2,
+      "high_complexity_functions": 0,
+      "loc": 2,
+      "very_high_complexity_functions": 0
+    },
+    "java124_generic_class_method.java.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 2,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 1,
+          "long_name": "C::f( U u)",
+          "name": "C::f"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 1,
+      "very_high_complexity_functions": 0
+    },
+    "java124_generic_method.java.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 2,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 1,
+          "long_name": "C::f( T x)",
+          "name": "C::f"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 1,
+      "very_high_complexity_functions": 0
+    },
+    "java124_iface.java.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 2,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 1,
+          "long_name": "f()",
+          "name": "f"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 1,
+      "very_high_complexity_functions": 0
+    },
+    "java124_init_after_brace.java.txt": {
+      "cyclomatic_avg": 1.5,
+      "cyclomatic_total": 3,
+      "functions": [
+        {
+          "complexity": 1,
+          "lineno": 1,
+          "long_name": "C::f()",
+          "name": "C::f"
+        },
+        {
+          "complexity": 2,
+          "lineno": 1,
+          "long_name": "C::g()",
+          "name": "C::g"
+        }
+      ],
+      "functions_count": 2,
+      "high_complexity_functions": 0,
+      "loc": 1,
+      "very_high_complexity_functions": 0
+    },
+    "java124_init_block.java.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 2,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 4,
+          "long_name": "C::f()",
+          "name": "C::f"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 5,
+      "very_high_complexity_functions": 0
+    },
+    "java124_interface_records.java.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 2,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 1,
+          "long_name": "R( int x)",
+          "name": "R"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 1,
+      "very_high_complexity_functions": 0
+    },
+    "java124_lambda.java.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 2,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 1,
+          "long_name": "C::f()",
+          "name": "C::f"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 1,
+      "very_high_complexity_functions": 0
+    },
+    "java124_local_ann.java.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 2,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 1,
+          "long_name": "C::f()",
+          "name": "C::f"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 1,
+      "very_high_complexity_functions": 0
+    },
+    "java124_local_ann_paren_body.java.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 2,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 1,
+          "long_name": "C::f()",
+          "name": "C::f"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 1,
+      "very_high_complexity_functions": 0
+    },
+    "java124_local_class.java.txt": {
+      "cyclomatic_avg": 1.5,
+      "cyclomatic_total": 3,
+      "functions": [
+        {
+          "complexity": 1,
+          "lineno": 1,
+          "long_name": "C::f()",
+          "name": "C::f"
+        },
+        {
+          "complexity": 2,
+          "lineno": 1,
+          "long_name": "C::C::f.L::g()",
+          "name": "L::g"
+        }
+      ],
+      "functions_count": 2,
+      "high_complexity_functions": 0,
+      "loc": 1,
+      "very_high_complexity_functions": 0
+    },
+    "java124_method_ref.java.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 2,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 1,
+          "long_name": "C::f()",
+          "name": "C::f"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 1,
+      "very_high_complexity_functions": 0
+    },
+    "java124_multi_anon.java.txt": {
+      "cyclomatic_avg": 1.6666666666666667,
+      "cyclomatic_total": 5,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 1,
+          "long_name": "C::C::f.x()",
+          "name": "(anonymous)::x"
+        },
+        {
+          "complexity": 2,
+          "lineno": 1,
+          "long_name": "C::C::f.y()",
+          "name": "(anonymous)::y"
+        },
+        {
+          "complexity": 1,
+          "lineno": 1,
+          "long_name": "C::f()",
+          "name": "C::f"
+        }
+      ],
+      "functions_count": 3,
+      "high_complexity_functions": 0,
+      "loc": 1,
+      "very_high_complexity_functions": 0
+    },
+    "java124_nested.java.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 4,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 1,
+          "long_name": "O::I::f()",
+          "name": "I::f"
+        },
+        {
+          "complexity": 2,
+          "lineno": 1,
+          "long_name": "O::g()",
+          "name": "I::g"
+        }
+      ],
+      "functions_count": 2,
+      "high_complexity_functions": 0,
+      "loc": 1,
+      "very_high_complexity_functions": 0
+    },
+    "java124_nested_array_init.java.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 2,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 1,
+          "long_name": "C::f()",
+          "name": "C::f"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 1,
+      "very_high_complexity_functions": 0
+    },
+    "java124_new_anon_ctor_args_lambda.java.txt": {
+      "cyclomatic_avg": 1.5,
+      "cyclomatic_total": 3,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 1,
+          "long_name": "C::C::f.r()",
+          "name": "(anonymous)::r"
+        },
+        {
+          "complexity": 1,
+          "lineno": 1,
+          "long_name": "C::f()",
+          "name": "C::f"
+        }
+      ],
+      "functions_count": 2,
+      "high_complexity_functions": 0,
+      "loc": 1,
+      "very_high_complexity_functions": 0
+    },
+    "java124_new_array.java.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 2,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 2,
+          "long_name": "C::c()",
+          "name": "C::c"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 3,
+      "very_high_complexity_functions": 0
+    },
+    "java124_new_array_of_generic.java.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 2,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 1,
+          "long_name": "C::f()",
+          "name": "C::f"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 1,
+      "very_high_complexity_functions": 0
+    },
+    "java124_new_ctor_generic.java.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 2,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 2,
+          "long_name": "C::c()",
+          "name": "C::c"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 3,
+      "very_high_complexity_functions": 0
+    },
+    "java124_new_diamond.java.txt": {
+      "cyclomatic_avg": 1.5,
+      "cyclomatic_total": 3,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 2,
+          "long_name": "C::C::create.method()",
+          "name": "(anonymous)::method"
+        },
+        {
+          "complexity": 1,
+          "lineno": 2,
+          "long_name": "C::create()",
+          "name": "C::create"
+        }
+      ],
+      "functions_count": 2,
+      "high_complexity_functions": 0,
+      "loc": 3,
+      "very_high_complexity_functions": 0
+    },
+    "java124_new_field_anon.java.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 4,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 2,
+          "long_name": "C::run()",
+          "name": "(anonymous)::run"
+        },
+        {
+          "complexity": 2,
+          "lineno": 3,
+          "long_name": "C::f()",
+          "name": "C::f"
+        }
+      ],
+      "functions_count": 2,
+      "high_complexity_functions": 0,
+      "loc": 4,
+      "very_high_complexity_functions": 0
+    },
+    "java124_new_field_generic_anon.java.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 4,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 2,
+          "long_name": "C::compare( String a , String b)",
+          "name": "(anonymous)::compare"
+        },
+        {
+          "complexity": 2,
+          "lineno": 3,
+          "long_name": "C::g()",
+          "name": "C::g"
+        }
+      ],
+      "functions_count": 2,
+      "high_complexity_functions": 0,
+      "loc": 4,
+      "very_high_complexity_functions": 0
+    },
+    "java124_new_generic.java.txt": {
+      "cyclomatic_avg": 1.5,
+      "cyclomatic_total": 3,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 2,
+          "long_name": "C::C::create.method()",
+          "name": "(anonymous)::method"
+        },
+        {
+          "complexity": 1,
+          "lineno": 2,
+          "long_name": "C::create()",
+          "name": "C::create"
+        }
+      ],
+      "functions_count": 2,
+      "high_complexity_functions": 0,
+      "loc": 3,
+      "very_high_complexity_functions": 0
+    },
+    "java124_new_generic_ctor_args.java.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 2,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 1,
+          "long_name": "C::f()",
+          "name": "C::f"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 1,
+      "very_high_complexity_functions": 0
+    },
+    "java124_new_in_init.java.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 2,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 1,
+          "long_name": "C::x()",
+          "name": "(anonymous)::x"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 1,
+      "very_high_complexity_functions": 0
+    },
+    "java124_new_in_static.java.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 2,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 1,
+          "long_name": "C::x()",
+          "name": "(anonymous)::x"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 1,
+      "very_high_complexity_functions": 0
+    },
+    "java124_new_nested_generic.java.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 4,
+      "functions": [
+        {
+          "complexity": 3,
+          "lineno": 2,
+          "long_name": "C::C::create.m()",
+          "name": "(anonymous)::m"
+        },
+        {
+          "complexity": 1,
+          "lineno": 2,
+          "long_name": "C::create()",
+          "name": "C::create"
+        }
+      ],
+      "functions_count": 2,
+      "high_complexity_functions": 0,
+      "loc": 3,
+      "very_high_complexity_functions": 0
+    },
+    "java124_new_outer_inner.java.txt": {
+      "cyclomatic_avg": 1.5,
+      "cyclomatic_total": 3,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 1,
+          "long_name": "C::C::f.q()",
+          "name": "(anonymous)::q"
+        },
+        {
+          "complexity": 1,
+          "lineno": 1,
+          "long_name": "C::f()",
+          "name": "C::f"
+        }
+      ],
+      "functions_count": 2,
+      "high_complexity_functions": 0,
+      "loc": 1,
+      "very_high_complexity_functions": 0
+    },
+    "java124_new_plain.java.txt": {
+      "cyclomatic_avg": 1.5,
+      "cyclomatic_total": 3,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 2,
+          "long_name": "C::C::c.m()",
+          "name": "(anonymous)::m"
+        },
+        {
+          "complexity": 1,
+          "lineno": 2,
+          "long_name": "C::c()",
+          "name": "C::c"
+        }
+      ],
+      "functions_count": 2,
+      "high_complexity_functions": 0,
+      "loc": 3,
+      "very_high_complexity_functions": 0
+    },
+    "java124_new_qualified.java.txt": {
+      "cyclomatic_avg": 1.5,
+      "cyclomatic_total": 3,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 2,
+          "long_name": "C::C::c.m()",
+          "name": "(anonymous)::m"
+        },
+        {
+          "complexity": 1,
+          "lineno": 2,
+          "long_name": "C::c()",
+          "name": "C::c"
+        }
+      ],
+      "functions_count": 2,
+      "high_complexity_functions": 0,
+      "loc": 3,
+      "very_high_complexity_functions": 0
+    },
+    "java124_new_shift_generic.java.txt": {
+      "cyclomatic_avg": 1.5,
+      "cyclomatic_total": 3,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 1,
+          "long_name": "C::C::f.q()",
+          "name": "(anonymous)::q"
+        },
+        {
+          "complexity": 1,
+          "lineno": 1,
+          "long_name": "C::f()",
+          "name": "C::f"
+        }
+      ],
+      "functions_count": 2,
+      "high_complexity_functions": 0,
+      "loc": 1,
+      "very_high_complexity_functions": 0
+    },
+    "java124_new_wild.java.txt": {
+      "cyclomatic_avg": 1.5,
+      "cyclomatic_total": 3,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 2,
+          "long_name": "C::C::c.m()",
+          "name": "(anonymous)::m"
+        },
+        {
+          "complexity": 1,
+          "lineno": 2,
+          "long_name": "C::c()",
+          "name": "C::c"
+        }
+      ],
+      "functions_count": 2,
+      "high_complexity_functions": 0,
+      "loc": 3,
+      "very_high_complexity_functions": 0
+    },
+    "java124_rec_after_at.java.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 2,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 1,
+          "long_name": "C::f()",
+          "name": "C::f"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 1,
+      "very_high_complexity_functions": 0
+    },
+    "java124_rec_after_bracket.java.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 2,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 1,
+          "long_name": "C::f()",
+          "name": "C::f"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 1,
+      "very_high_complexity_functions": 0
+    },
+    "java124_rec_after_dollar.java.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 2,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 1,
+          "long_name": "C::f()",
+          "name": "C::f"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 1,
+      "very_high_complexity_functions": 0
+    },
+    "java124_rec_after_final.java.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 2,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 1,
+          "long_name": "C::h()",
+          "name": "R::h"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 1,
+      "very_high_complexity_functions": 0
+    },
+    "java124_rec_after_gt.java.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 2,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 1,
+          "long_name": "C::f()",
+          "name": "C::f"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 1,
+      "very_high_complexity_functions": 0
+    },
+    "java124_rec_after_lower_ident.java.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 2,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 1,
+          "long_name": "C::f()",
+          "name": "C::f"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 1,
+      "very_high_complexity_functions": 0
+    },
+    "java124_rec_after_paren.java.txt": {
+      "cyclomatic_avg": 1.5,
+      "cyclomatic_total": 3,
+      "functions": [
+        {
+          "complexity": 1,
+          "lineno": 1,
+          "long_name": "C::f()",
+          "name": "C::f"
+        },
+        {
+          "complexity": 2,
+          "lineno": 1,
+          "long_name": "C::h()",
+          "name": "R::h"
+        }
+      ],
+      "functions_count": 2,
+      "high_complexity_functions": 0,
+      "loc": 1,
+      "very_high_complexity_functions": 0
+    },
+    "java124_rec_after_primitive.java.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 4,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 1,
+          "long_name": "C::f()",
+          "name": "C::f"
+        },
+        {
+          "complexity": 2,
+          "lineno": 1,
+          "long_name": "C::g()",
+          "name": "C::g"
+        }
+      ],
+      "functions_count": 2,
+      "high_complexity_functions": 0,
+      "loc": 1,
+      "very_high_complexity_functions": 0
+    },
+    "java124_rec_after_sealed.java.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 2,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 1,
+          "long_name": "C::h()",
+          "name": "R::h"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 1,
+      "very_high_complexity_functions": 0
+    },
+    "java124_rec_after_semicolon.java.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 2,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 1,
+          "long_name": "C::f()",
+          "name": "R::f"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 1,
+      "very_high_complexity_functions": 0
+    },
+    "java124_rec_after_upper_ident.java.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 2,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 1,
+          "long_name": "C::f()",
+          "name": "C::f"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 1,
+      "very_high_complexity_functions": 0
+    },
+    "java124_rec_field.java.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 2,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 3,
+          "long_name": "C::f()",
+          "name": "C::f"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 4,
+      "very_high_complexity_functions": 0
+    },
+    "java124_rec_first_token.java.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 2,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 1,
+          "long_name": "h()",
+          "name": "R::h"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 1,
+      "very_high_complexity_functions": 0
+    },
+    "java124_rec_in_method.java.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 2,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 1,
+          "long_name": "C::f()",
+          "name": "C::f"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 1,
+      "very_high_complexity_functions": 0
+    },
+    "java124_rec_local.java.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 2,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 2,
+          "long_name": "C::f()",
+          "name": "C::f"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 3,
+      "very_high_complexity_functions": 0
+    },
+    "java124_rec_method.java.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 4,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 2,
+          "long_name": "C::record( int x)",
+          "name": "C::record"
+        },
+        {
+          "complexity": 2,
+          "lineno": 3,
+          "long_name": "C::g()",
+          "name": "C::g"
+        }
+      ],
+      "functions_count": 2,
+      "high_complexity_functions": 0,
+      "loc": 4,
+      "very_high_complexity_functions": 0
+    },
+    "java124_rec_type.java.txt": {
+      "cyclomatic_avg": 1.5,
+      "cyclomatic_total": 3,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 2,
+          "long_name": "C::s()",
+          "name": "Pt::s"
+        },
+        {
+          "complexity": 1,
+          "lineno": 3,
+          "long_name": "C::h()",
+          "name": "Pt::h"
+        }
+      ],
+      "functions_count": 2,
+      "high_complexity_functions": 0,
+      "loc": 4,
+      "very_high_complexity_functions": 0
+    },
+    "java124_record_after_brace.java.txt": {
+      "cyclomatic_avg": 1.5,
+      "cyclomatic_total": 3,
+      "functions": [
+        {
+          "complexity": 1,
+          "lineno": 1,
+          "long_name": "C::a()",
+          "name": "C::a"
+        },
+        {
+          "complexity": 2,
+          "lineno": 1,
+          "long_name": "C::f()",
+          "name": "R::f"
+        }
+      ],
+      "functions_count": 2,
+      "high_complexity_functions": 0,
+      "loc": 1,
+      "very_high_complexity_functions": 0
+    },
+    "java124_record_after_type.java.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 2,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 1,
+          "long_name": "C::f()",
+          "name": "C::f"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 1,
+      "very_high_complexity_functions": 0
+    },
+    "java124_record_generic.java.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 2,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 1,
+          "long_name": "f()",
+          "name": "P::f"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 1,
+      "very_high_complexity_functions": 0
+    },
+    "java124_record_generic_ret.java.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 2,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 1,
+          "long_name": "C::record()",
+          "name": "C::record"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 1,
+      "very_high_complexity_functions": 0
+    },
+    "java124_record_static.java.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 2,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 1,
+          "long_name": "C::f()",
+          "name": "R::f"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 1,
+      "very_high_complexity_functions": 0
+    },
+    "java124_static_block.java.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 2,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 3,
+          "long_name": "C::f()",
+          "name": "C::f"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 4,
+      "very_high_complexity_functions": 0
+    },
+    "java124_static_block_annot.java.txt": {
+      "cyclomatic_avg": 0.0,
+      "cyclomatic_total": 0,
+      "functions": [],
+      "functions_count": 0,
+      "high_complexity_functions": 0,
+      "loc": 4,
+      "very_high_complexity_functions": 0
+    },
+    "java124_static_generic.java.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 2,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 1,
+          "long_name": "C::f( T t)",
+          "name": "C::f"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 1,
+      "very_high_complexity_functions": 0
+    },
+    "java124_static_init_after_semi.java.txt": {
+      "cyclomatic_avg": 0.0,
+      "cyclomatic_total": 0,
+      "functions": [],
+      "functions_count": 0,
+      "high_complexity_functions": 0,
+      "loc": 1,
+      "very_high_complexity_functions": 0
+    },
+    "java124_static_plain.java.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 4,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 1,
+          "long_name": "C::f()",
+          "name": "C::f"
+        },
+        {
+          "complexity": 2,
+          "lineno": 1,
+          "long_name": "C::N::g()",
+          "name": "N::g"
+        }
+      ],
+      "functions_count": 2,
+      "high_complexity_functions": 0,
+      "loc": 1,
+      "very_high_complexity_functions": 0
+    },
+    "java124_switch.java.txt": {
+      "cyclomatic_avg": 3.0,
+      "cyclomatic_total": 3,
+      "functions": [
+        {
+          "complexity": 3,
+          "lineno": 1,
+          "long_name": "C::f( int x)",
+          "name": "C::f"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 1,
+      "very_high_complexity_functions": 0
+    },
+    "java124_switch_expr.java.txt": {
+      "cyclomatic_avg": 3.0,
+      "cyclomatic_total": 3,
+      "functions": [
+        {
+          "complexity": 3,
+          "lineno": 1,
+          "long_name": "C::f( int x)",
+          "name": "C::f"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 1,
+      "very_high_complexity_functions": 0
+    },
+    "java124_sync_block.java.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 4,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 1,
+          "long_name": "C::f()",
+          "name": "C::f"
+        },
+        {
+          "complexity": 2,
+          "lineno": 1,
+          "long_name": "C::g()",
+          "name": "C::g"
+        }
+      ],
+      "functions_count": 2,
+      "high_complexity_functions": 0,
+      "loc": 1,
+      "very_high_complexity_functions": 0
+    },
+    "java124_ternary_new.java.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 4,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 1,
+          "long_name": "C::C::f.q()",
+          "name": "(anonymous)::q"
+        },
+        {
+          "complexity": 2,
+          "lineno": 1,
+          "long_name": "C::f()",
+          "name": "C::f"
+        }
+      ],
+      "functions_count": 2,
+      "high_complexity_functions": 0,
+      "loc": 1,
+      "very_high_complexity_functions": 0
+    },
+    "java124_text_block_like.java.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 2,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 1,
+          "long_name": "C::f()",
+          "name": "C::f"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 1,
+      "very_high_complexity_functions": 0
+    },
+    "java124_throws.java.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 2,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 1,
+          "long_name": "C::f()",
+          "name": "C::f"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 1,
+      "very_high_complexity_functions": 0
+    },
+    "java124_try_catch.java.txt": {
+      "cyclomatic_avg": 3.0,
+      "cyclomatic_total": 3,
+      "functions": [
+        {
+          "complexity": 3,
+          "lineno": 1,
+          "long_name": "C::f()",
+          "name": "C::f"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 1,
+      "very_high_complexity_functions": 0
+    },
+    "java124_two_classes.java.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 4,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 1,
+          "long_name": "A::f()",
+          "name": "A::f"
+        },
+        {
+          "complexity": 2,
+          "lineno": 2,
+          "long_name": "B::g()",
+          "name": "B::g"
+        }
+      ],
+      "functions_count": 2,
+      "high_complexity_functions": 0,
+      "loc": 2,
+      "very_high_complexity_functions": 0
+    },
+    "java124_unbalanced.java.txt": {
+      "cyclomatic_avg": 0.0,
+      "cyclomatic_total": 0,
+      "functions": [],
+      "functions_count": 0,
+      "high_complexity_functions": 0,
+      "loc": 1,
+      "very_high_complexity_functions": 0
+    },
+    "java124_underscore_rec.java.txt": {
+      "cyclomatic_avg": 0.0,
+      "cyclomatic_total": 0,
+      "functions": [],
+      "functions_count": 0,
+      "high_complexity_functions": 0,
+      "loc": 1,
+      "very_high_complexity_functions": 0
+    },
     "old_style_array_return.java.txt": {
       "cyclomatic_avg": 2.0,
       "cyclomatic_total": 2,

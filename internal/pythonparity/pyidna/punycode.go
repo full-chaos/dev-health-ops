@@ -133,7 +133,7 @@ func punycodeDecode(text []byte) ([]rune, bool) {
 	var base []rune
 	var extended []byte
 	if pos == -1 {
-		extended = upperASCII(text)
+		extended = text
 	} else {
 		for _, b := range text[:pos] {
 			if b >= 0x80 {
@@ -141,7 +141,7 @@ func punycodeDecode(text []byte) ([]rune, bool) {
 			}
 			base = append(base, rune(b))
 		}
-		extended = upperASCII(text[pos+1:])
+		extended = text[pos+1:]
 	}
 	char := 0x80
 	position := -1
@@ -175,8 +175,13 @@ func decodeGeneralizedNumber(extended []byte, extPos, bias int) (int, int, bool)
 		extPos++
 		var digit int
 		switch {
+		// CPython upper-cases the extended part first; matching both cases
+		// here is the same thing for ASCII, and a non-ASCII byte is refused
+		// either way.
 		case char >= 'A' && char <= 'Z':
 			digit = int(char - 'A')
+		case char >= 'a' && char <= 'z':
+			digit = int(char - 'a')
 		case char >= '0' && char <= '9':
 			digit = int(char) - 22
 		default:
@@ -203,15 +208,4 @@ func saturatingMul(a, b int) int {
 		return punycodeCeiling
 	}
 	return a * b
-}
-
-func upperASCII(text []byte) []byte {
-	out := make([]byte, len(text))
-	for i, b := range text {
-		if b >= 'a' && b <= 'z' {
-			b -= 'a' - 'A'
-		}
-		out[i] = b
-	}
-	return out
 }

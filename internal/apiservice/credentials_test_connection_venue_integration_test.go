@@ -536,6 +536,21 @@ func TestVenueOracleCredentialConnectionTest(t *testing.T) {
 	receipt := venueoracle.Diff(t, base, requests, pythonResponses, venueoracle.DiffOptions{})
 	goProvider := stub.take()
 
+	// PagerDuty is the one provider this plane does not serve: 501 for an inline
+	// test whatever its auth mode (a by-name test of an absent row is the
+	// same 404 as Python's).
+	for _, body := range []string{
+		`{"provider":"pagerduty","credentials":{"auth_mode":"client_credentials","client_id":"c","client_secret":"s","subdomain":"acme","region":"us"}}`,
+		`{"provider":"pagerduty","name":"default","credentials":{"auth_mode":"oauth","oauth_credential_name":"x","oauth_binding_id":"y"}}`,
+	} {
+		pagerDuty := venueoracle.Do(t, base, venueoracle.Request{Name: "pagerduty test is not served", Method: "POST",
+			Path: "/api/v1/admin/credentials/test", Body: venueoracle.B64(body),
+			Headers: map[string]string{"Authorization": "Bearer " + venue.Tokens["admin"], "Content-Type": "application/json"}})
+		if pagerDuty.Status != http.StatusNotImplemented || !strings.Contains(pagerDuty.Body, "not served by this API plane") {
+			t.Errorf("pagerduty test %s answered %d %s, want 501", body, pagerDuty.Status, pagerDuty.Body)
+		}
+	}
+
 	providerSame := len(goProvider) > 0 && stripJWT(pythonProvider) == stripJWT(goProvider)
 	if !providerSame {
 		t.Errorf("provider requests differ:\n python:\n%s\n go:\n%s", strings.Join(pythonProvider, "\n"), strings.Join(goProvider, "\n"))

@@ -182,6 +182,14 @@ func (h handlers) testConnection(w http.ResponseWriter, r *http.Request) {
 	}
 
 	success, details, probeErr := h.probe(ctx, provider, creds)
+	if errors.Is(probeErr, errPagerDutyNotServed) {
+		// PagerDuty hydrates OAuth tokens before its live read, which this
+		// plane does not do: refuse the request outright rather than answer a
+		// success=false test result (and record it on the stored row) that
+		// Python would not give.
+		policy.WriteDetail(w, http.StatusNotImplemented, errPagerDutyNotServed.Error(), nil)
+		return
+	}
 	var errorText *string
 	if probeErr != nil {
 		h.logger.ErrorContext(ctx, "test connection failed", "provider", strings.NewReplacer("\r", "", "\n", "").Replace(provider), "error", probeErr.Error())

@@ -1,6 +1,11 @@
 package credentials
 
-import "testing"
+import (
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+)
 
 func TestBuildSafeURL(t *testing.T) {
 	cases := map[[2]string]string{
@@ -76,5 +81,25 @@ func TestOrChainUsesTruthiness(t *testing.T) {
 	}
 	if got := orChain(creds, "b", "f"); got != "5" {
 		t.Errorf("a number is its str(), got %q", got)
+	}
+}
+
+func TestDefaultProbeClientRefusesAnInternalDial(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("a probe reached an internal server (Authorization %q)", r.Header.Get("Authorization"))
+	}))
+	defer server.Close()
+	request, err := http.NewRequest(http.MethodGet, server.URL+"/user", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Authorization", "Bearer probe-token")
+	response, err := defaultProbeClient().Do(request)
+	if err == nil {
+		response.Body.Close()
+		t.Fatalf("the probe client connected to %s (status %d)", server.URL, response.StatusCode)
+	}
+	if !strings.Contains(err.Error(), "Connection to private/internal networks is not allowed") {
+		t.Errorf("error = %v, want the internal-network refusal", err)
 	}
 }

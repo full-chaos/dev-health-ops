@@ -66,7 +66,7 @@ func Routes(deps Deps) []httpapi.Route {
 	}
 	client := deps.HTTPClient
 	if client == nil {
-		client = &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+		client = defaultProbeClient()
 	}
 	lookup := deps.HostLookup
 	if lookup == nil {
@@ -85,6 +85,12 @@ func Routes(deps Deps) []httpapi.Route {
 		{Method: http.MethodPatch, Pattern: "/api/v1/admin/credentials/{provider}/{name}",
 			Handler: deps.Guard.BodyFirst(policy.AdminOrg, http.HandlerFunc(h.update))},
 	}
+}
+
+// defaultProbeClient follows no redirects and dials only addresses the SSRF
+// guard's classification allows, whatever the URL check resolved earlier.
+func defaultProbeClient() *http.Client {
+	return &http.Client{Transport: externalurl.GuardedTransport(), CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 }
 
 type handlers struct {

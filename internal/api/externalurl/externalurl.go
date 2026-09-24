@@ -4,10 +4,14 @@ package externalurl
 
 import (
 	"context"
+	"errors"
 	"net"
+	"net/http"
 	"net/netip"
 	"net/url"
 	"strings"
+	"syscall"
+	"time"
 )
 
 // Validate ports _validate_external_url
@@ -128,4 +132,38 @@ func pythonIPNotGlobalTarget(addr netip.Addr) bool {
 	}
 	private := inAny(addr, pyV6Private) && !inAny(addr, pyV6PrivateExceptions)
 	return private || inAny(addr, pyV6Loopback) || inAny(addr, pyV6LinkLocal) || inAny(addr, pyV6Reserved)
+}
+
+// GuardedTransport is the transport for an outbound call whose URL Validate
+// approved. Validate resolves the host once and discards the answer, so a
+// second resolution at connect time could land on an internal address
+// (DNS rebinding); this transport checks the address each connection
+// actually dials, with the same classification Validate applies, and refuses
+// an internal one before any byte (a bearer token included) is written. It
+// never uses an environment proxy: the address that is dialled must be the
+// address that was checked.
+func GuardedTransport() *http.Transport {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
+	dialer := &net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second, Control: refuseInternalAddress}
+	transport.DialContext = dialer.DialContext
+	return transport
+}
+
+// errInternalDial is what a refused connection reports; it is Validate's own
+// wording for a resolved internal address.
+var errInternalDial = errors.New("Connection to private/internal networks is not allowed")
+
+// refuseInternalAddress is net.Dialer.Control: it runs on the resolved
+// address of every connection attempt, before connect.
+func refuseInternalAddress(_, address string, _ syscall.RawConn) error {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return errInternalDial
+	}
+	addr, err := netip.ParseAddr(host)
+	if err != nil || pythonIPNotGlobalTarget(addr) {
+		return errInternalDial
+	}
+	return nil
 }

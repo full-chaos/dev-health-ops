@@ -204,10 +204,12 @@ func apiPosture() RolePosture {
 			{"backfill_jobs", false, false, true},
 			// Billing: invoice_line_items/subscription_events are each
 			// deleted via a subquery on their own owning row's org_id
-			// (invoices/subscriptions respectively).
+			// (invoices/subscriptions respectively). invoices also takes
+			// the void route's status write (CHAOS-6257); refunds and
+			// line items are only read by the billing routes.
 			{"refunds", false, false, true},
 			{"invoice_line_items", false, false, true},
-			{"invoices", false, false, true},
+			{"invoices", false, true, true},
 			{"subscription_events", false, false, true},
 			{"subscriptions", false, false, true},
 			// Sync state.

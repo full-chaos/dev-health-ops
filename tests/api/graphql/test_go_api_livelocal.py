@@ -38,7 +38,7 @@ brief's hardest constraint, twice-learned the hard way: CHAOS-4466 lost
 71 tables and CHAOS-4495 lost two sites to exactly this class of drift).
 `_enumerate_registered_documents` below shells out to
 `cmd/query-api/tools/registrydump`, a small Go program that parses
-`cmd/query-api/query_route.go`'s actual AST -- the same source the
+`internal/queryapi/server/query_route.go`'s actual AST -- the same source the
 running binary compiles from -- and extracts the `registered*Document`
 consts plus the `digestByOperation` map that together are this route's
 real source of truth (see that file's own doc comments). Nothing in this
@@ -129,7 +129,7 @@ pytestmark = [
 ]
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-QUERY_ROUTE_GO = REPO_ROOT / "cmd" / "query-api" / "query_route.go"
+QUERY_ROUTE_GO = REPO_ROOT / "internal" / "queryapi" / "server" / "query_route.go"
 REGISTRYDUMP_DIR = REPO_ROOT / "cmd" / "query-api" / "tools" / "registrydump"
 
 # org `70d529e0-3c06-4597-8480-794fd02328b6` (admin@test.com) -- REAL synced
@@ -208,7 +208,7 @@ def _enumerate_registered_documents() -> tuple[dict[str, str], ...]:
     if go is None:
         raise RuntimeError(
             "go toolchain not on PATH -- required to enumerate registered "
-            "documents by reflection over cmd/query-api/query_route.go. "
+            "documents by reflection over internal/queryapi/server/query_route.go. "
             "There is deliberately no hand-maintained fallback list."
         )
     result = subprocess.run(

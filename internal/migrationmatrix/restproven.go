@@ -40,12 +40,12 @@ import (
 // package.
 
 // RESTOperationName renders the routeswitch operation name one REST route
-// carries -- "REST:<METHOD>:<path>", the SAME string cmd/query-api's own
-// route files declare as a package constant (e.g. quadrantOperation) and
-// goapiproof's restcorpus.go keys its corpus by. Built here from (method,
-// path) rather than imported, because cmd/query-api is package main and
-// cannot be imported; see restcorpus.go's own package doc comment for the
-// same constraint on that side.
+// carries -- "REST:<METHOD>:<path>", the SAME string query-api's route files
+// (internal/queryapi/server) declare as a package constant (e.g.
+// quadrantOperation) and goapiproof's restcorpus.go keys its corpus by.
+// Built here from (method, path) rather than imported: those files were
+// package main when this was written, and importing the server package now
+// would link the whole query plane into this tool.
 func RESTOperationName(method, path string) string {
 	return fmt.Sprintf("REST:%s:%s", method, path)
 }

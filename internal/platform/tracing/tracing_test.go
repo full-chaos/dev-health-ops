@@ -222,7 +222,7 @@ func TestInitWithServiceNameInstallsTheSDKProviderNotTheNoop(t *testing.T) {
 // component.provider != nil, not what name actually reached the exporter) --
 // this package has no way to read a *sdktrace.TracerProvider's Resource back
 // out (no exported getter). The value-level check that closes that gap lives
-// in cmd/query-api/main_otel_export_integration_test.go
+// in internal/queryapi/server/main_otel_export_integration_test.go
 // (TestOrgScopingDenialSpanReachesARealOTLPCollector), which reads the
 // service.name resource attribute off REAL OTLP wire traffic -- proven to
 // catch the exact ignores-defaultName mutant by running it there.

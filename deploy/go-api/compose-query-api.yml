@@ -16,7 +16,7 @@
 # file's directory, i.e. the dev-health root).
 #
 # LANE-4460-L3 (CHAOS-4460 precondition 6 / CHAOS-4654): this is no longer
-# Wave-0 shape. cmd/query-api/query_route.go's loadQueryRouteConfig()
+# Wave-0 shape. internal/queryapi/server/query_route.go's loadQueryRouteConfig()
 # requires ALL FIVE of the env vars below together; if any one is unset,
 # /query is never mounted (main.go's documented "stay Wave-0 empty"
 # fallback) -- see that file's doc comment. Getting five-of-five set is a

@@ -162,7 +162,7 @@ const planeHeader = "x-dev-health-plane"
 
 // buildHeader names the build of the process that served THIS request.
 //
-// Only /query/proof stamps it (cmd/query-api/buildinfo_route.go). The
+// Only /query/proof stamps it (internal/queryapi/server/buildinfo_route.go). The
 // Python edge cannot: go_api_dispatcher's _forward_to_go builds a NEW
 // Response carrying only content, status and media_type, so any header
 // query-api sets on a /query response is dropped before the client sees

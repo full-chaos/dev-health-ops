@@ -2,7 +2,7 @@
 // dev_health_ops.api.graphql.resolvers.feature_flags.resolve_feature_flag_events
 // (ops/src/dev_health_ops/api/graphql/resolvers/feature_flags.py), the
 // featureFlags sibling deferred out of the Wave 1 canary
-// (cmd/query-api/README.md's former "not here yet" bullet, removed by
+// (internal/queryapi/server/README.md's former "not here yet" bullet, removed by
 // this change). Lives in this package -- not a new one -- because it
 // shares featureFlags's org-scoping convention, its FEATURE_FLAG_LIMIT_MAX
 // clamp (clampLimit, unchanged), and its missing-ClickHouse-table

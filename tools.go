@@ -5,7 +5,7 @@
 // graph and `go.sum`.
 //
 // CHAOS-5489: without this, `go run github.com/99designs/gqlgen` -- the
-// command cmd/query-api/README.md documents for regenerating the GraphQL
+// command internal/queryapi/server/README.md documents for regenerating the GraphQL
 // layer -- cannot start:
 //
 //	missing go.sum entry for module providing package github.com/urfave/cli/v2

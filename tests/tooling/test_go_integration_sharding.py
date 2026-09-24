@@ -41,7 +41,7 @@ EXPECTED_PACKAGES = {
     # moved the package from cmd/go-api-routing to internal/goapicli/routing
     # when go-api-routing folded into the dho operator binary.
     "internal/goapicli/routing",
-    "cmd/query-api",
+    "internal/queryapi/server",
     "internal/queryapi/aianalytics",
     "internal/queryapi/analytics",
     "internal/queryapi/busfactor",

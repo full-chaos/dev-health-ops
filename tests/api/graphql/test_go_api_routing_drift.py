@@ -17,7 +17,7 @@ what is under test is the DECISION, and driving it directly is what lets
 all four branches be reached in CI. The real-database half of this
 contract is proven on the Go plane, where the equivalent check runs
 against a Postgres testcontainer
-(``cmd/query-api/registry_route_integration_test.go``).
+(``internal/queryapi/server/registry_route_integration_test.go``).
 """
 
 from __future__ import annotations

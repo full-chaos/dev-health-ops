@@ -15,8 +15,8 @@ func TestRESTOperationName(t *testing.T) {
 
 func TestApplyRESTProof_PromotesAnAdmissibleRoute(t *testing.T) {
 	rows := []RESTEndpointRow{
-		{Method: "GET", Path: "/api/v1/quadrant", Status: RESTPorted, GoHandler: "cmd/query-api/quadrant_route.go:1"},
-		{Method: "GET", Path: "/api/v1/filters/options", Status: RESTPorted, GoHandler: "cmd/query-api/filter_options_route.go:1"},
+		{Method: "GET", Path: "/api/v1/quadrant", Status: RESTPorted, GoHandler: "internal/queryapi/server/quadrant_route.go:1"},
+		{Method: "GET", Path: "/api/v1/filters/options", Status: RESTPorted, GoHandler: "internal/queryapi/server/filter_options_route.go:1"},
 		{Method: "GET", Path: "/api/v1/dead", Status: RESTPythonOnly},
 	}
 	proven := map[string]string{"REST:GET:/api/v1/quadrant": "11111111-1111-1111-1111-111111111111"}
@@ -89,7 +89,7 @@ func TestRESTEndpointCounts_TalliesProvenRowsAsPorted(t *testing.T) {
 
 func TestRenderRESTEndpointsBlock_RendersProvenStatusVerbatim(t *testing.T) {
 	rows := ApplyRESTProof(
-		[]RESTEndpointRow{{Method: "GET", Path: "/api/v1/quadrant", Status: RESTPorted, GoHandler: "cmd/query-api/quadrant_route.go:1"}},
+		[]RESTEndpointRow{{Method: "GET", Path: "/api/v1/quadrant", Status: RESTPorted, GoHandler: "internal/queryapi/server/quadrant_route.go:1"}},
 		map[string]string{"REST:GET:/api/v1/quadrant": "some-id"},
 	)
 	rendered := RenderRESTEndpointsBlock(rows)
@@ -107,8 +107,8 @@ func TestRenderRESTEndpointsBlock_RendersProvenStatusVerbatim(t *testing.T) {
 // "no row happens to say proven".
 func TestApplyRESTProof_NilProvenLeavesEveryRowPortedAndByteIdentical(t *testing.T) {
 	rows := []RESTEndpointRow{
-		{Method: "GET", Path: "/api/v1/quadrant", Status: RESTPorted, GoHandler: "cmd/query-api/quadrant_route.go:1"},
-		{Method: "GET", Path: "/api/v1/filters/options", Status: RESTPorted, GoHandler: "cmd/query-api/filter_options_route.go:1"},
+		{Method: "GET", Path: "/api/v1/quadrant", Status: RESTPorted, GoHandler: "internal/queryapi/server/quadrant_route.go:1"},
+		{Method: "GET", Path: "/api/v1/filters/options", Status: RESTPorted, GoHandler: "internal/queryapi/server/filter_options_route.go:1"},
 		{Method: "GET", Path: "/api/v1/never-ported", Status: RESTPythonOnly},
 	}
 	before := RenderRESTEndpointsBlock(rows)

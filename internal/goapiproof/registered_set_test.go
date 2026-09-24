@@ -11,7 +11,7 @@ import (
 
 // queryRouteSource is cmd/query-api's route table -- the artefact that
 // decides which operations the running binary actually registers.
-const queryRouteSource = "../../cmd/query-api/query_route.go"
+const queryRouteSource = "../../internal/queryapi/server/query_route.go"
 
 // digestByOperationVar is the map literal inside mountQueryRoutes whose
 // KEYS are the registered operation names. query_route.go's own

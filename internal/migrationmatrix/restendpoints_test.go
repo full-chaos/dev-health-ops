@@ -218,7 +218,7 @@ import "net/http"
 
 func main() {
 	mux := http.NewServeMux()
-	if h, cleanup, ok, err := buildPeopleSummaryRoute(); err != nil {
+	if h, cleanup, ok, err := buildPeopleSummaryRoute(getenv); err != nil {
 		panic(err)
 	} else if ok {
 		defer cleanup()
@@ -230,7 +230,7 @@ func main() {
 
 import "net/http"
 
-func buildPeopleSummaryRoute() (handler http.HandlerFunc, cleanup func(), ok bool, err error) {
+func buildPeopleSummaryRoute(getenv func(string) string) (handler http.HandlerFunc, cleanup func(), ok bool, err error) {
 	return nil, func() {}, true, nil
 }
 `)
@@ -371,7 +371,7 @@ async def meta():
 
 func TestRenderRESTEndpointsBlockRendersCountsAndRowsGolden(t *testing.T) {
 	rows := []RESTEndpointRow{
-		{Method: "POST", Path: "/api/v1/investment/explain", Status: RESTPorted, GoHandler: "cmd/query-api/investment_explain_route.go:119"},
+		{Method: "POST", Path: "/api/v1/investment/explain", Status: RESTPorted, GoHandler: "internal/queryapi/server/investment_explain_route.go:119"},
 		{Method: "GET", Path: "/api/v1/meta", Status: RESTPythonOnly},
 		{Method: "GET", Path: "/api/v1/opportunities", Status: RESTDeadByDesignStatus, Note: "CHAOS-0000"},
 	}
@@ -379,7 +379,7 @@ func TestRenderRESTEndpointsBlockRendersCountsAndRowsGolden(t *testing.T) {
 	want := "_3 `/api/v1/*` routes in `src/dev_health_ops/api/main.py`: **1** ported, **1** python-only, **1** dead-by-design._\n\n" +
 		"| Method | Path | Status | Go handler |\n" +
 		"| --- | --- | --- | --- |\n" +
-		"| POST | `/api/v1/investment/explain` | ported | `cmd/query-api/investment_explain_route.go:119` |\n" +
+		"| POST | `/api/v1/investment/explain` | ported | `internal/queryapi/server/investment_explain_route.go:119` |\n" +
 		"| GET | `/api/v1/meta` | python-only | -- |\n" +
 		"| GET | `/api/v1/opportunities` | dead-by-design (CHAOS-0000) | -- |\n"
 	if got != want {
@@ -397,7 +397,7 @@ func TestLoadRESTEndpointsOnTheRealRepo(t *testing.T) {
 	root := repoRootForTest(t)
 	rows, err := LoadRESTEndpoints(
 		filepath.Join(root, "src/dev_health_ops/api/main.py"),
-		filepath.Join(root, "cmd/query-api"),
+		filepath.Join(root, "internal/queryapi/server"),
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

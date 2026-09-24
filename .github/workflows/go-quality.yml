@@ -175,7 +175,7 @@ jobs:
         # Until tools.go was added, the only thing preventing that revert
         # was that `gqlgen generate` COULD NOT RUN: the CLI's own dependencies
         # were absent from go.sum, so the command documented in
-        # cmd/query-api/README.md failed before doing anything. An accident was
+        # internal/queryapi/server/README.md failed before doing anything. An accident was
         # holding a contract. This step is what replaces the accident.
         #
         # The guard regenerates inside a PRIVATE COPY of the module -- the

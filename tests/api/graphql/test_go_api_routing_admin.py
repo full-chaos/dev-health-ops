@@ -11,7 +11,7 @@ Requires ``DEV_HEALTH_POSTGRES_TEST_URI`` (admin credentials able to
 already uses; skipped without it. In CI that means these skip, so the
 DB-backed half of the drift contract is ALSO proven on the Go plane,
 where it runs against a Postgres testcontainer under the integration tag
-(``cmd/query-api/registry_route_integration_test.go``). This file is the
+(``internal/queryapi/server/registry_route_integration_test.go``). This file is the
 Python-side proof of the writer and the status report, which have no Go
 equivalent.
 """

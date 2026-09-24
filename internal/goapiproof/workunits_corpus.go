@@ -97,7 +97,7 @@ var workUnitsParity = Options{
 // this route's own assembly computes the same way regardless of scope --
 // RepoIDs narrows WHICH units the read returns, never resums a returned
 // unit's own effort/investment/evidence fields across a repository set
-// (cmd/query-api/workunits_route.go's own RepoIDs wiring is a WHERE-filter
+// (internal/queryapi/server/workunits_route.go's own RepoIDs wiring is a WHERE-filter
 // input only) -- so every one of those fields is declared EQUAL, never
 // bounded: this route carries no per-unit sum-type leaf a narrower scope
 // could legitimately shrink.

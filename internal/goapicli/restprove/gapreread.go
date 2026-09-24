@@ -105,7 +105,7 @@ func (g *gapRereadState) run(
 		}
 		return record, none, noDecision
 	}
-	candidateLeg, err := doREST(ctx, client, f.queryAPIURL, spec.Method, spec.Path, request.Query, request.Body, candidateCredential, timeout)
+	candidateLeg, err := doREST(ctx, client, f.candidateBase(), spec.Method, spec.Path, request.Query, request.Body, candidateCredential, timeout)
 	if err != nil {
 		return fail("delayed candidate read failed")
 	}

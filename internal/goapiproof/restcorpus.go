@@ -169,6 +169,9 @@ type RESTEndpointSpec struct {
 	// because request validation and authentication reject before the
 	// handler reaches the forwarder.
 	PythonForwarder bool
+	// Service is the Go service the candidate leg is sent to. Empty means
+	// query-api; see RESTService.
+	Service RESTService
 }
 
 // investmentBaselineDefects is shared by GET and POST /api/v1/investment
@@ -6372,18 +6375,7 @@ func KnownRESTOperations() []string {
 // answers for GraphQL), and restendpoints.go's own doc comment already
 // establishes path-level (not (method, path)) matching as this service's
 // convention for exactly that reason.
-func KnownRESTPaths() []string {
-	seen := map[string]bool{}
-	for _, spec := range restEndpointSpecs {
-		seen[spec.Path] = true
-	}
-	paths := make([]string, 0, len(seen))
-	for path := range seen {
-		paths = append(paths, path)
-	}
-	sort.Strings(paths)
-	return paths
-}
+func KnownRESTPaths() []string { return KnownRESTPathsFor(RESTServiceQueryAPI) }
 
 // AssertRESTPathCoverage checks this table's paths against `mounted`, the
 // paths a live query-api actually registers (migrationmatrix.
@@ -6434,6 +6426,9 @@ func AssertRESTPathCoverage(mounted []string) error {
 // (validateBaselineDefects). Run by TestRESTCorpusIsValid so a future
 // entry that violates one of these cannot merge silently.
 func ValidateRESTCorpus() error {
+	if err := validateRESTServices(); err != nil {
+		return err
+	}
 	for operation, spec := range restEndpointSpecs {
 		if len(spec.Requests) == 0 {
 			return fmt.Errorf("goapiproof: REST corpus entry %q declares zero requests", operation)

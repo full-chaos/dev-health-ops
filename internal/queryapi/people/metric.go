@@ -128,7 +128,10 @@ func BuildMetricResponse(ctx context.Context, reader *Reader, orgID string, para
 		return MetricResponse{}, badRequest("Metric not supported")
 	}
 
-	startDay, endDay, _, _ := timeWindow(params.Now, params.RangeDays, params.CompareDays)
+	startDay, endDay, _, _, windowErr := timeWindow(params.Now, params.RangeDays, params.CompareDays)
+	if windowErr != nil {
+		return MetricResponse{}, windowErr
+	}
 
 	canonical, aliasList, err := resolveIdentityContext(ctx, reader.client, params.PersonID, orgID)
 	if err != nil {

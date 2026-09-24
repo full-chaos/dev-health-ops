@@ -246,7 +246,11 @@ func newDrilldownPRsGetHandler(reader *drilldown.Reader) http.HandlerFunc {
 			endDatePtr = &endDate
 		}
 
-		startTS, endTS := timeWindow(drilldownTimeFilterMap(rangeDays, startDatePtr, endDatePtr))
+		startTS, endTS, windowErr := timeWindow(drilldownTimeFilterMap(rangeDays, startDatePtr, endDatePtr))
+		if windowErr != nil {
+			writeTimeWindowOverflow(w, r, "drilldown_prs", claims.OrgID)
+			return
+		}
 
 		var scopeIDs []string
 		if scopeID != "" {
@@ -386,7 +390,11 @@ func newDrilldownPRsPostHandler(reader *drilldown.Reader) http.HandlerFunc {
 		what, _ := filters["what"].(map[string]any)
 		whatRepos := stringsFromAny(what["repos"])
 
-		startTS, endTS := timeWindow(filters)
+		startTS, endTS, windowErr := timeWindow(filters)
+		if windowErr != nil {
+			writeTimeWindowOverflow(w, r, "drilldown_prs", claims.OrgID)
+			return
+		}
 
 		params := drilldown.PRParams{
 			StartDay:   startTS,

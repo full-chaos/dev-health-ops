@@ -426,7 +426,11 @@ func newWorkUnitsGetHandler(reader *investmentexplain.Reader) http.HandlerFunc {
 		// range-days/start/end triple -- the SAME time_window computation
 		// _filters_from_query (api/main.py:178-199) feeds into for this
 		// route's own GET handler in Python, reused rather than re-built.
-		startTS, endTS := timeWindow(drilldownTimeFilterMap(rangeDays, startDatePtr, endDatePtr))
+		startTS, endTS, windowErr := timeWindow(drilldownTimeFilterMap(rangeDays, startDatePtr, endDatePtr))
+		if windowErr != nil {
+			writeTimeWindowOverflow(w, r, "work_units", claims.OrgID)
+			return
+		}
 
 		var scopeIDs []string
 		if scopeID != "" {
@@ -588,7 +592,11 @@ func newWorkUnitsPostHandler(reader *investmentexplain.Reader) http.HandlerFunc 
 			rawLimit = 200
 		}
 
-		startTS, endTS := timeWindow(filters)
+		startTS, endTS, windowErr := timeWindow(filters)
+		if windowErr != nil {
+			writeTimeWindowOverflow(w, r, "work_units", claims.OrgID)
+			return
+		}
 
 		// scopeRepoFilter (investment_explain_route.go) already ports
 		// resolve_repo_filter_ids's full team-scope branch over a raw

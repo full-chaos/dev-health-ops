@@ -21,6 +21,7 @@
 package server
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -32,6 +33,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/quadrant"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/timewindow"
 )
 
 // quadrantOperation is this route's routeswitch operation name -- a
@@ -217,6 +219,10 @@ func newQuadrantWorkHandler(client quadrant.QueryClient) http.HandlerFunc {
 
 		resp, err := quadrant.BuildResponse(r.Context(), client, claims.OrgID, params)
 		if err != nil {
+			if errors.Is(err, timewindow.ErrOverflow) {
+				writeTimeWindowOverflow(w, r, "quadrant", claims.OrgID)
+				return
+			}
 			if reqErr, ok := quadrant.AsRequestError(err); ok {
 				writeRESTError(w, r, "quadrant", claims.OrgID, reqErr.Status, reqErr.Message)
 				return

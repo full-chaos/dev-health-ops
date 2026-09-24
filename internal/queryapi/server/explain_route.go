@@ -185,37 +185,9 @@ func writeExplainResponse(w http.ResponseWriter, orgID, requestID string, resp *
 // plus the driver delta), so this is a parallel implementation over the
 // same `filters["time"]` map shape, additionally reading compare_days
 // (default 14, same floor-at-1 rule as range_days).
-func explainTimeWindow(filters map[string]any) (startDay, endDay, compareStart, compareEnd time.Time) {
-	timeFilter, _ := filters["time"].(map[string]any)
-
-	rangeDays := intFromAny(timeFilter["range_days"], 14)
-	if rangeDays < 1 {
-		rangeDays = 1
-	}
-	compareDays := intFromAny(timeFilter["compare_days"], 14)
-	if compareDays < 1 {
-		compareDays = 1
-	}
-
-	endDate, hasEndDate := dateFromAny(timeFilter["end_date"])
-	if !hasEndDate {
-		endDate = time.Now().UTC().Truncate(24 * time.Hour)
-	}
-	endDay = endDate.AddDate(0, 0, 1)
-
-	startDate, hasStartDate := dateFromAny(timeFilter["start_date"])
-	if hasStartDate {
-		startDay = startDate
-		if !startDay.Before(endDay) {
-			startDay = endDay.AddDate(0, 0, -1)
-		}
-	} else {
-		startDay = endDay.AddDate(0, 0, -rangeDays)
-	}
-
-	compareEnd = startDay
-	compareStart = compareEnd.AddDate(0, 0, -compareDays)
-	return startDay, endDay, compareStart, compareEnd
+func explainTimeWindow(filters map[string]any) (startDay, endDay, compareStart, compareEnd time.Time, err error) {
+	window, err := filtersTimeWindow(filters)
+	return window.StartDay, window.EndDay, window.CompareStart, window.CompareEnd, err
 }
 
 // explainTimeFilterMap adapts GET's own query-param inputs into the
@@ -314,7 +286,11 @@ func newExplainGetHandler(reader *explain.Reader) http.HandlerFunc {
 			endDatePtr = &endDate
 		}
 
-		startDay, endDay, compareStart, compareEnd := explainTimeWindow(explainTimeFilterMap(rangeDays, compareDays, startDatePtr, endDatePtr))
+		startDay, endDay, compareStart, compareEnd, windowErr := explainTimeWindow(explainTimeFilterMap(rangeDays, compareDays, startDatePtr, endDatePtr))
+		if windowErr != nil {
+			writeTimeWindowOverflow(w, r, "explain", claims.OrgID)
+			return
+		}
 
 		var scopeIDs []string
 		if scopeID != "" {
@@ -430,7 +406,11 @@ func newExplainPostHandler(reader *explain.Reader) http.HandlerFunc {
 		what, _ := filters["what"].(map[string]any)
 		whatRepos := stringsFromAny(what["repos"])
 
-		startDay, endDay, compareStart, compareEnd := explainTimeWindow(filters)
+		startDay, endDay, compareStart, compareEnd, windowErr := explainTimeWindow(filters)
+		if windowErr != nil {
+			writeTimeWindowOverflow(w, r, "explain", claims.OrgID)
+			return
+		}
 
 		params := explain.Params{
 			Metric:       metric,

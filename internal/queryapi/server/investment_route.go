@@ -332,7 +332,11 @@ func newInvestmentGetHandler(reader *investment.Reader) http.HandlerFunc {
 			endDatePtr = &endDate
 		}
 
-		startTS, endTS := timeWindow(investmentTimeFilterMap(rangeDays, startDatePtr, endDatePtr))
+		startTS, endTS, windowErr := timeWindow(investmentTimeFilterMap(rangeDays, startDatePtr, endDatePtr))
+		if windowErr != nil {
+			writeTimeWindowOverflow(w, r, "investment", claims.OrgID)
+			return
+		}
 
 		var scopeIDs []string
 		if scopeID != "" {
@@ -427,7 +431,11 @@ func newInvestmentPostHandler(reader *investment.Reader) http.HandlerFunc {
 		what, _ := filters["what"].(map[string]any)
 		whatRepos := stringsFromAny(what["repos"])
 
-		startTS, endTS := timeWindow(filters)
+		startTS, endTS, windowErr := timeWindow(filters)
+		if windowErr != nil {
+			writeTimeWindowOverflow(w, r, "investment", claims.OrgID)
+			return
+		}
 
 		params := investment.Params{
 			StartTS: startTS, EndTS: endTS,
@@ -512,7 +520,11 @@ func newInvestmentSunburstGetHandler(reader *investment.Reader) http.HandlerFunc
 			endDatePtr = &endDate
 		}
 
-		startTS, endTS := timeWindow(investmentTimeFilterMap(rangeDays, startDatePtr, endDatePtr))
+		startTS, endTS, windowErr := timeWindow(investmentTimeFilterMap(rangeDays, startDatePtr, endDatePtr))
+		if windowErr != nil {
+			writeTimeWindowOverflow(w, r, "investment", claims.OrgID)
+			return
+		}
 
 		var scopeIDs []string
 		if scopeID != "" {

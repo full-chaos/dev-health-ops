@@ -19,6 +19,7 @@
 package server
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -30,6 +31,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/heatmap"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/timewindow"
 )
 
 // heatmapOperation is this route's routeswitch operation name -- a
@@ -223,6 +225,10 @@ func newHeatmapWorkHandler(client heatmap.QueryClient) http.HandlerFunc {
 
 		resp, err := heatmap.BuildResponse(r.Context(), client, claims.OrgID, params)
 		if err != nil {
+			if errors.Is(err, timewindow.ErrOverflow) {
+				writeTimeWindowOverflow(w, r, "heatmap", claims.OrgID)
+				return
+			}
 			if reqErr, ok := heatmap.AsRequestError(err); ok {
 				writeRESTError(w, r, "heatmap", claims.OrgID, reqErr.Status, reqErr.Message)
 				return

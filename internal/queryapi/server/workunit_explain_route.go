@@ -306,7 +306,11 @@ func newWorkUnitExplainHandler(
 			return
 		}
 
-		startTS, endTS := timeWindow(drilldownTimeFilterMap(parsed.rangeDays, parsed.startDate, parsed.endDate))
+		startTS, endTS, windowErr := timeWindow(drilldownTimeFilterMap(parsed.rangeDays, parsed.startDate, parsed.endDate))
+		if windowErr != nil {
+			writeTimeWindowOverflow(w, r, "work_unit_explain", claims.OrgID)
+			return
+		}
 
 		var scopeIDs []string
 		if parsed.scopeID != "" {

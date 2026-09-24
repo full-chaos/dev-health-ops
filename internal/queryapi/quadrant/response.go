@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/timewindow"
 	"sort"
 	"time"
 )
@@ -134,21 +135,11 @@ func normalizeRangeDays(rangeDays int) int {
 // timeWindow ports time_window (services/filtering.py:78-92), restricted to
 // the (start_day, end_day) pair build_quadrant_response actually reads --
 // compare_start/compare_end are Python return values this route never uses.
-func timeWindow(rangeDays int, startDate, endDate *time.Time) (startDay, endDay time.Time) {
-	endDay = time.Now().UTC().Truncate(24 * time.Hour)
-	if endDate != nil {
-		endDay = *endDate
-	}
-	endDay = endDay.AddDate(0, 0, 1)
-
-	if startDate != nil {
-		startDay = *startDate
-		if !startDay.Before(endDay) {
-			startDay = endDay.AddDate(0, 0, -1)
-		}
-		return startDay, endDay
-	}
-	return endDay.AddDate(0, 0, -rangeDays), endDay
+func timeWindow(rangeDays int, startDate, endDate *time.Time) (startDay, endDay time.Time, err error) {
+	// compare_days is range_days here (the MetricFilter the service
+	// builds), so the comparison window can overflow too.
+	window, err := timewindow.Compute(rangeDays, rangeDays, startDate, endDate, time.Now().UTC())
+	return window.StartDay, window.EndDay, err
 }
 
 // bucketWindowEnd ports _bucket_window_end (quadrant.py:372-375).
@@ -252,7 +243,10 @@ func BuildResponse(ctx context.Context, client QueryClient, orgID string, params
 	}
 
 	rangeDays := normalizeRangeDays(params.RangeDays)
-	startDay, endDay := timeWindow(rangeDays, params.StartDate, params.EndDate)
+	startDay, endDay, err := timeWindow(rangeDays, params.StartDate, params.EndDate)
+	if err != nil {
+		return nil, err
+	}
 
 	metricSet := metricsByScope[scope]
 	xSpec, ok := metricSet[definition.X.Metric]

@@ -152,7 +152,10 @@ func computeMetricDeltas(ctx context.Context, client QueryClient, f Filters, sta
 // so threading now through is a Go-side testability improvement, not a
 // parity divergence).
 func BuildResponse(ctx context.Context, chClient QueryClient, pgClient PGQueryClient, orgID string, f Filters, now time.Time) (*Response, error) {
-	startDay, endDay, compareStart, compareEnd := TimeWindow(f, now)
+	startDay, endDay, compareStart, compareEnd, err := TimeWindow(f, now)
+	if err != nil {
+		return nil, err
+	}
 
 	var latestSuccessfulSyncAt *time.Time
 	if pgClient != nil {

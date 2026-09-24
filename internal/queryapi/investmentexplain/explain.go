@@ -85,6 +85,11 @@ type ExplainInvestmentMixOptions struct {
 	LLMModel           string
 	ForceRefresh       bool
 	Now                time.Time
+	// WindowErr is the request's report window failing (Python's
+	// OverflowError in time_window). Python meets it inside
+	// build_investment_response, after the LLM check and the cache read,
+	// so ExplainInvestmentMix returns it at that same step.
+	WindowErr error
 }
 
 // ErrUnknownTheme/ErrUnknownSubcategory port explain_investment_mix's
@@ -318,6 +323,10 @@ func (reader *Reader) ExplainInvestmentMix(ctx context.Context, writer *CacheWri
 	// into BreakdownFilters at all, silently ignoring why.work_category for
 	// the top_themes/top_subcategories computation while still applying it
 	// to work units -- caught by codex round 1 (P1).
+	if opts.WindowErr != nil {
+		return InvestmentMixExplanation{}, opts.WindowErr
+	}
+
 	themeFilters, subcategoryFilters := SplitCategoryFilters(opts.WorkCategory)
 
 	breakdownFilter := BreakdownFilters{

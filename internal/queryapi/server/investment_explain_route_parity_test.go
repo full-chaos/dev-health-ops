@@ -84,8 +84,8 @@ func TestTimeWindowHonorsStringRangeDays(t *testing.T) {
 	numeric := map[string]any{"time": map[string]any{"range_days": float64(2), "end_date": "2026-09-01"}}
 	stringly := map[string]any{"time": map[string]any{"range_days": "2", "end_date": "2026-09-01"}}
 
-	numStart, numEnd := timeWindow(numeric)
-	strStart, strEnd := timeWindow(stringly)
+	numStart, numEnd, _ := timeWindow(numeric)
+	strStart, strEnd, _ := timeWindow(stringly)
 
 	if !numStart.Equal(strStart) || !numEnd.Equal(strEnd) {
 		t.Fatalf("timeWindow diverges on numeric vs string range_days: numeric=(%s,%s) string=(%s,%s)",

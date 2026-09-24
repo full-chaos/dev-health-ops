@@ -16,6 +16,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -31,6 +32,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/home"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/timewindow"
 )
 
 const (
@@ -198,6 +200,10 @@ func newHomeGetHandler(client home.QueryClient, pgPool home.PGQueryClient) http.
 
 		resp, err := home.BuildResponse(r.Context(), client, pgPool, claims.OrgID, f, time.Now().UTC())
 		if err != nil {
+			if errors.Is(err, timewindow.ErrOverflow) {
+				writeTimeWindowOverflow(w, r, "home", claims.OrgID)
+				return
+			}
 			// Python's outer `except Exception: raise HTTPException(503,
 			// "Data unavailable")` (main.py:503-518).
 			writeRESTDataUnavailable(w, r, "home", claims.OrgID, err)
@@ -268,6 +274,10 @@ func newHomePostHandler(client home.QueryClient, pgPool home.PGQueryClient) http
 
 		resp, err := home.BuildResponse(r.Context(), client, pgPool, claims.OrgID, f, time.Now().UTC())
 		if err != nil {
+			if errors.Is(err, timewindow.ErrOverflow) {
+				writeTimeWindowOverflow(w, r, "home", claims.OrgID)
+				return
+			}
 			// Python's outer `except Exception: raise HTTPException(503,
 			// "Data unavailable")` (main.py:477-486).
 			writeRESTDataUnavailable(w, r, "home", claims.OrgID, err)

@@ -1538,6 +1538,26 @@ check_live_python_oracles() {
     return 1
   fi
 
+  printf 'go test -count=1: internal/queryapi/timewindow (report window vs live filtering.time_window and people._time_window)\n'
+  if ! (
+    cd "${ROOT}"
+    "${GO_ENV_OFF[@]}" \
+      GOWORK=off \
+      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
+      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
+      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
+      go test -mod=readonly -count=1 -run '^TestComputeMatchesLivePythonTimeWindow$' ./internal/queryapi/timewindow
+  ); then
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  proof_file="${proof_dir}/query-api-time-window"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: the query-api report window live Python oracle measurement did not occur\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+
   printf 'go test -count=1: internal/queryapi/principal (Go verifier vs a REAL Python-issued envelope + JWKS, CHAOS-4366)\n'
   if ! (
     cd "${ROOT}"

@@ -212,7 +212,10 @@ func BuildDrilldownPRsResponse(ctx context.Context, reader *Reader, orgID string
 		return nil, ErrUnavailable
 	}
 
-	startDay, endDay, _, _ := timeWindow(params.Now, params.RangeDays, params.RangeDays)
+	startDay, endDay, _, _, windowErr := timeWindow(params.Now, params.RangeDays, params.RangeDays)
+	if windowErr != nil {
+		return nil, windowErr
+	}
 	limit := boundedDrilldownLimit(params.Limit)
 
 	canonical, aliasList, err := resolveIdentityContext(ctx, reader.client, params.PersonID, orgID)

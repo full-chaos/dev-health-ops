@@ -28,6 +28,7 @@
 package server
 
 import (
+	"errors"
 	"log"
 	"net/http"
 	"strconv"
@@ -39,6 +40,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/people"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/timewindow"
 )
 
 // peopleSummaryPath is the literal path pattern this route mounts --
@@ -211,6 +213,10 @@ func newPeopleSummaryHandler(reader *people.Reader) http.HandlerFunc {
 			Now:         time.Now().UTC(),
 		})
 		if err != nil {
+			if errors.Is(err, timewindow.ErrOverflow) {
+				writeTimeWindowOverflow(w, r, "people_summary", claims.OrgID)
+				return
+			}
 			if reqErr, ok := people.AsRequestError(err); ok {
 				writeRESTError(w, r, "people_summary", claims.OrgID, reqErr.Status, reqErr.Message)
 				return

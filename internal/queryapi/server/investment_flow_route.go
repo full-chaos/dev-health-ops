@@ -279,8 +279,8 @@ func parseInvestmentFlowRequestBody(w http.ResponseWriter, r *http.Request, orgI
 // handlers need out of the parsed body's raw filters map -- shared so the
 // two handlers cannot drift apart on this extraction, same convention as
 // sankey_route.go's own sankeyParamsFromFilters.
-func investmentFlowRequestParams(body investmentFlowRequestBody) (startTS, endTS time.Time, scopeLevel string, scopeIDs, whatRepos, workCategory []string) {
-	startTS, endTS = timeWindow(body.Filters)
+func investmentFlowRequestParams(body investmentFlowRequestBody) (startTS, endTS time.Time, scopeLevel string, scopeIDs, whatRepos, workCategory []string, err error) {
+	startTS, endTS, err = timeWindow(body.Filters)
 	scope, _ := body.Filters["scope"].(map[string]any)
 	scopeLevel, _ = scope["level"].(string)
 	if scopeLevel == "" {
@@ -291,7 +291,7 @@ func investmentFlowRequestParams(body investmentFlowRequestBody) (startTS, endTS
 	whatRepos = stringsFromAny(what["repos"])
 	why, _ := body.Filters["why"].(map[string]any)
 	workCategory = stringsFromAny(why["work_category"])
-	return startTS, endTS, scopeLevel, scopeIDs, whatRepos, workCategory
+	return startTS, endTS, scopeLevel, scopeIDs, whatRepos, workCategory, nil
 }
 
 // newInvestmentFlowHandler is the routeswitch-registered handler for
@@ -310,7 +310,11 @@ func newInvestmentFlowHandler(client investmentflow.QueryClient) http.HandlerFun
 			return
 		}
 
-		startTS, endTS, scopeLevel, scopeIDs, whatRepos, workCategory := investmentFlowRequestParams(body)
+		startTS, endTS, scopeLevel, scopeIDs, whatRepos, workCategory, windowErr := investmentFlowRequestParams(body)
+		if windowErr != nil {
+			writeTimeWindowOverflow(w, r, "investment_flow", claims.OrgID)
+			return
+		}
 
 		resp, err := investmentflow.BuildFlowResponse(r.Context(), client, investmentflow.Params{
 			OrgID: claims.OrgID, StartTS: startTS, EndTS: endTS,
@@ -356,7 +360,11 @@ func newInvestmentFlowRepoTeamHandler(client investmentflow.QueryClient) http.Ha
 			return
 		}
 
-		startTS, endTS, scopeLevel, scopeIDs, whatRepos, workCategory := investmentFlowRequestParams(body)
+		startTS, endTS, scopeLevel, scopeIDs, whatRepos, workCategory, windowErr := investmentFlowRequestParams(body)
+		if windowErr != nil {
+			writeTimeWindowOverflow(w, r, "investment_flow", claims.OrgID)
+			return
+		}
 
 		resp, err := investmentflow.BuildRepoTeamFlowResponse(r.Context(), client, investmentflow.RepoTeamParams{
 			OrgID: claims.OrgID, StartTS: startTS, EndTS: endTS,

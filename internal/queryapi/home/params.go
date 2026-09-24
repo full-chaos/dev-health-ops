@@ -7,7 +7,11 @@
 // a Filters value is ever built.
 package home
 
-import "time"
+import (
+	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/timewindow"
+)
 
 // TimeFilter ports TimeFilter (api/models/filters.py:9-13).
 type TimeFilter struct {
@@ -58,34 +62,7 @@ func DefaultFilters() Filters {
 // TimeWindow ports time_window (api/services/filtering.py:78-92)
 // exactly: (start_day, end_day, compare_start, compare_end), each a UTC
 // midnight instant.
-func TimeWindow(f Filters, now time.Time) (startDay, endDay, compareStart, compareEnd time.Time) {
-	rangeDays := f.Time.RangeDays
-	if rangeDays < 1 {
-		rangeDays = 1
-	}
-	compareDays := f.Time.CompareDays
-	if compareDays < 1 {
-		compareDays = 1
-	}
-
-	var endDate time.Time
-	if f.Time.EndDate != nil {
-		endDate = *f.Time.EndDate
-	} else {
-		endDate = now.UTC().Truncate(24 * time.Hour)
-	}
-	endDay = endDate.AddDate(0, 0, 1)
-
-	if f.Time.StartDate != nil {
-		startDay = *f.Time.StartDate
-		if !startDay.Before(endDay) {
-			startDay = endDay.AddDate(0, 0, -1)
-		}
-	} else {
-		startDay = endDay.AddDate(0, 0, -rangeDays)
-	}
-
-	compareEnd = startDay
-	compareStart = compareEnd.AddDate(0, 0, -compareDays)
-	return startDay, endDay, compareStart, compareEnd
+func TimeWindow(f Filters, now time.Time) (startDay, endDay, compareStart, compareEnd time.Time, err error) {
+	window, err := timewindow.Compute(f.Time.RangeDays, f.Time.CompareDays, f.Time.StartDate, f.Time.EndDate, now)
+	return window.StartDay, window.EndDay, window.CompareStart, window.CompareEnd, err
 }

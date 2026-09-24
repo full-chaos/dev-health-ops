@@ -150,7 +150,7 @@ func TestTimeWindowMatchesPython(t *testing.T) {
 	end := time.Date(2026, 3, 10, 0, 0, 0, 0, time.UTC)
 
 	t.Run("range_days only", func(t *testing.T) {
-		start, endDay := timeWindow(30, nil, &end)
+		start, endDay, _ := timeWindow(30, nil, &end)
 		if !endDay.Equal(time.Date(2026, 3, 11, 0, 0, 0, 0, time.UTC)) {
 			t.Fatalf("endDay = %v", endDay)
 		}
@@ -161,7 +161,7 @@ func TestTimeWindowMatchesPython(t *testing.T) {
 
 	t.Run("explicit start_date before end", func(t *testing.T) {
 		start := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
-		gotStart, gotEnd := timeWindow(30, &start, &end)
+		gotStart, gotEnd, _ := timeWindow(30, &start, &end)
 		if !gotEnd.Equal(time.Date(2026, 3, 11, 0, 0, 0, 0, time.UTC)) {
 			t.Fatalf("endDay = %v", gotEnd)
 		}
@@ -172,7 +172,7 @@ func TestTimeWindowMatchesPython(t *testing.T) {
 
 	t.Run("explicit start_date not before end_day clamps to end_day-1", func(t *testing.T) {
 		start := time.Date(2026, 3, 11, 0, 0, 0, 0, time.UTC)
-		gotStart, gotEnd := timeWindow(30, &start, &end)
+		gotStart, gotEnd, _ := timeWindow(30, &start, &end)
 		if !gotEnd.Equal(time.Date(2026, 3, 11, 0, 0, 0, 0, time.UTC)) {
 			t.Fatalf("endDay = %v", gotEnd)
 		}

@@ -22,7 +22,7 @@
 //
 // Upgrade decides from the database's own state:
 //   - no alembic_version table and no object (relation, function or type)
-//     in public: apply the baseline,
+//     in any non-system schema: apply the baseline,
 //     schema then data, in ONE transaction, so an interrupted run leaves
 //     nothing behind;
 //   - alembic_version holds every baseline head and no later revision, but
@@ -32,7 +32,7 @@
 //     alembic_version update;
 //   - alembic_version without every baseline head: below the head, refused,
 //     naming what the database holds and what is required;
-//   - objects in public but no alembic_version: a database this migrator
+//   - objects but no alembic_version: a database this migrator
 //     did not create, refused.
 package pgmigrate
 
@@ -174,13 +174,13 @@ func LoadChain() ([]ChainFile, error) {
 type State int
 
 const (
-	// StateEmpty: no alembic_version and no object in public.
+	// StateEmpty: no alembic_version and no object in a non-system schema.
 	StateEmpty State = iota
 	// StateAtHead: every baseline head (or a chain revision after it) is recorded.
 	StateAtHead
 	// StateBelowHead: alembic_version lacks a baseline head.
 	StateBelowHead
-	// StateForeign: objects in public but no alembic_version.
+	// StateForeign: objects but no alembic_version.
 	StateForeign
 	// StateSchemaMismatch: alembic_version records the baseline heads and no
 	// later revision, but tables the baseline creates are absent.
@@ -191,10 +191,10 @@ const (
 type Observation struct {
 	HasVersionTable bool
 	Versions        []string
-	// PublicObjects counts the relations, functions and types in public;
-	// an index, a sequence owned by nothing, a function or an enum each
-	// makes the database not empty.
-	PublicObjects int
+	// Objects counts the relations, functions and types outside the system
+	// schemas and outside extensions; an index, a sequence, a function, an
+	// enum or a River table each makes the database not empty.
+	Objects int
 	// PublicTables names the ordinary and partitioned tables in public.
 	PublicTables []string
 }
@@ -228,7 +228,7 @@ const cutoverRevision = "0066"
 // Decide classifies a database.
 func Decide(observation Observation, baseline Baseline, chain []ChainFile) Plan {
 	if !observation.HasVersionTable {
-		if observation.PublicObjects == 0 {
+		if observation.Objects == 0 {
 			return Plan{State: StateEmpty, ApplicationHead: applicationHead(baseline), Pending: chain}
 		}
 		return Plan{State: StateForeign}
@@ -303,7 +303,7 @@ func (e BelowHeadError) Error() string {
 type ForeignDatabaseError struct{ Objects int }
 
 func (e ForeignDatabaseError) Error() string {
-	return fmt.Sprintf("the public schema holds %d object(s) (relations, functions or types) but no alembic_version table; refusing to apply the head over a database this migrator did not create", e.Objects)
+	return fmt.Sprintf("the database holds %d object(s) (relations, functions or types, in any schema but the system ones) but no public.alembic_version table; refusing to apply the head over a database this migrator did not create", e.Objects)
 }
 
 // SchemaMismatchError is the refusal for a database whose alembic_version

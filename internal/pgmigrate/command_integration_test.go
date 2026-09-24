@@ -73,6 +73,17 @@ func TestCommandEndToEnd(t *testing.T) {
 		return count
 	}
 
+	t.Run("an extension's objects alone", func(t *testing.T) {
+		uri := databaseURI(t, instance.URI, scratchDatabase(t, admin))
+		conn := connect(t, uri)
+		if _, err := conn.Exec(ctx, "CREATE EXTENSION pgcrypto"); err != nil {
+			t.Fatal(err)
+		}
+		if code, out, _ := verb("status", uri); code != cli.ExitOK || out["state"] != "empty" {
+			t.Fatalf("status with only an extension = %d %v, want empty", code, out)
+		}
+	})
+
 	t.Run("an empty database", func(t *testing.T) {
 		uri := databaseURI(t, instance.URI, scratchDatabase(t, admin))
 		conn := connect(t, uri)
@@ -106,11 +117,16 @@ func TestCommandEndToEnd(t *testing.T) {
 		},
 		"only a function": {
 			"CREATE FUNCTION public.foreign_marker() RETURNS int LANGUAGE sql AS 'SELECT 1'",
-			"foreign", "foreign_database", "no alembic_version table",
+			"foreign", "foreign_database", "no public.alembic_version table",
 		},
 		"only an enum type": {
 			"CREATE TYPE public.foreign_mood AS ENUM ('a')",
-			"foreign", "foreign_database", "no alembic_version table",
+			"foreign", "foreign_database", "no public.alembic_version table",
+		},
+		"only a River job row": {
+			"CREATE SCHEMA river; CREATE TABLE river.river_job (id bigserial PRIMARY KEY, kind text NOT NULL); " +
+				"INSERT INTO river.river_job (kind) VALUES ('metrics.remaining.extra_metrics')",
+			"foreign", "foreign_database", "no public.alembic_version table",
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -132,5 +148,73 @@ func TestCommandEndToEnd(t *testing.T) {
 				t.Fatalf("the refused upgrade changed the table count from %d to %d", before, after)
 			}
 		})
+	}
+}
+
+// TestChainRevision applies a revision after the head through the same path
+// a checked-in sql/ file takes: on a database at the head it runs the SQL and
+// moves the application head in alembic_version, keeping the cutover head; a
+// re-run applies nothing; a revision that fails leaves neither its objects
+// nor a moved head behind.
+func TestChainRevision(t *testing.T) {
+	ctx := context.Background()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatalf("start postgres: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := instance.Close(context.Background()); err != nil {
+			t.Errorf("close postgres: %v", err)
+		}
+	})
+	admin := connect(t, instance.URI)
+	baseline, err := pgmigrate.LoadBaseline()
+	if err != nil {
+		t.Fatal(err)
+	}
+	versions := func(conn *pgx.Conn) []string {
+		t.Helper()
+		rows, err := conn.Query(ctx, "SELECT version_num FROM alembic_version ORDER BY version_num")
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	exists := func(conn *pgx.Conn, table string) bool {
+		t.Helper()
+		var found bool
+		if err := conn.QueryRow(ctx, "SELECT to_regclass($1) IS NOT NULL", "public."+table).Scan(&found); err != nil {
+			t.Fatal(err)
+		}
+		return found
+	}
+
+	conn := connect(t, databaseURI(t, instance.URI, scratchDatabase(t, admin)))
+	if _, err := pgmigrate.Upgrade(ctx, conn, baseline, nil); err != nil {
+		t.Fatalf("apply the baseline: %v", err)
+	}
+	good := []pgmigrate.ChainFile{{Revision: "0139", Name: "0139_probe.sql", SQL: "CREATE TABLE chain_probe (id int PRIMARY KEY);"}}
+	result, err := pgmigrate.Upgrade(ctx, conn, baseline, good)
+	if err != nil || result.Action != "chain_applied" || strings.Join(result.Applied, ",") != "0139" {
+		t.Fatalf("the chain revision = %+v, %v; want chain_applied [0139]", result, err)
+	}
+	if got := strings.Join(versions(conn), ","); got != "0066,0139" || !exists(conn, "chain_probe") {
+		t.Fatalf("after the revision alembic_version = %s, chain_probe present %v; want 0066,0139 and present", got, exists(conn, "chain_probe"))
+	}
+	again, err := pgmigrate.Upgrade(ctx, conn, baseline, good)
+	if err != nil || again.Action != "up_to_date" || len(again.Applied) != 0 {
+		t.Fatalf("re-run = %+v, %v; want up_to_date", again, err)
+	}
+
+	bad := append(good, pgmigrate.ChainFile{Revision: "0140", Name: "0140_broken.sql", SQL: "CREATE TABLE chain_broken (id int); SELECT 1/0;"})
+	if _, err := pgmigrate.Upgrade(ctx, conn, baseline, bad); err == nil || !strings.Contains(err.Error(), "0140_broken.sql") {
+		t.Fatalf("a failing revision = %v, want an error naming 0140_broken.sql", err)
+	}
+	if got := strings.Join(versions(conn), ","); got != "0066,0139" || exists(conn, "chain_broken") {
+		t.Fatalf("after the failed revision alembic_version = %s, chain_broken present %v; want 0066,0139 and absent", got, exists(conn, "chain_broken"))
 	}
 }

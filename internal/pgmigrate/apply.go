@@ -34,7 +34,7 @@ func Upgrade(ctx context.Context, conn *pgx.Conn, baseline Baseline, chain []Cha
 		plan = Decide(observation, baseline, chain)
 		switch plan.State {
 		case StateForeign:
-			return ForeignDatabaseError{Objects: observation.PublicObjects}
+			return ForeignDatabaseError{Objects: observation.Objects}
 		case StateSchemaMismatch:
 			return SchemaMismatchError{Recorded: observation.Versions, MissingTables: plan.MissingTables}
 		case StateBelowHead:
@@ -133,6 +133,15 @@ func ReadStatus(ctx context.Context, conn *pgx.Conn, baseline Baseline, chain []
 	return status, err
 }
 
+// userObject is the WHERE clause selecting the rows of catalog (aliased o,
+// its namespace aliased n) that are not in a system schema and not owned by
+// an extension.
+func userObject(catalog string) string {
+	return "n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname NOT LIKE 'pg\\_toast%' " +
+		"AND n.nspname NOT LIKE 'pg\\_temp\\_%' AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = '" + catalog +
+		"'::regclass AND d.objid = o.oid AND d.deptype = 'e')"
+}
+
 // observe reads the state Decide needs.
 func observe(ctx context.Context, tx pgx.Tx) (Observation, error) {
 	var observation Observation
@@ -141,13 +150,16 @@ func observe(ctx context.Context, tx pgx.Tx) (Observation, error) {
 	}
 	// Every relation kind (indexes and composite types included), every
 	// function or procedure, and every type that is not an array or a
-	// relation's row type.
+	// relation's row type, in every schema but the system ones -- a River
+	// schema holds job rows the Python chain checks, so a database with only
+	// River in it is not empty. Objects an extension owns are not counted:
+	// they are the extension's, not a schema this migrator would collide with.
 	if err := tx.QueryRow(ctx, "SELECT "+
-		"(SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public') + "+
-		"(SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public') + "+
-		"(SELECT count(*) FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace "+
-		"WHERE n.nspname = 'public' AND t.typrelid = 0 AND t.typcategory <> 'A')").Scan(&observation.PublicObjects); err != nil {
-		return observation, fmt.Errorf("count public objects: %w", err)
+		"(SELECT count(*) FROM pg_class o JOIN pg_namespace n ON n.oid = o.relnamespace WHERE "+userObject("pg_class")+") + "+
+		"(SELECT count(*) FROM pg_proc o JOIN pg_namespace n ON n.oid = o.pronamespace WHERE "+userObject("pg_proc")+") + "+
+		"(SELECT count(*) FROM pg_type o JOIN pg_namespace n ON n.oid = o.typnamespace "+
+		"WHERE "+userObject("pg_type")+" AND o.typrelid = 0 AND o.typcategory <> 'A')").Scan(&observation.Objects); err != nil {
+		return observation, fmt.Errorf("count objects: %w", err)
 	}
 	tables, err := tx.Query(ctx, "SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "+
 		"WHERE n.nspname = 'public' AND c.relkind IN ('r','p') ORDER BY c.relname")

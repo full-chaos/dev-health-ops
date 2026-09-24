@@ -259,15 +259,19 @@ func TestAcceptBatchAgainstFaultsAndEdgeCases(t *testing.T) {
 		for range 125 {
 			statuses[do(deps.handleGetBatch(), "/api/v1/external-ingest/batches/"+unknown+"?errorOffset="+huge, unknown)]++
 		}
-		if statuses[http.StatusNotFound] != 120 || statuses[http.StatusTooManyRequests] != 5 {
-			t.Fatalf("GET /batches/{id} oversized errorOffset x125 answered %v, want 120x404 then 5x429", statuses)
+		// The limiter is a token bucket that refills while the burst runs, so
+		// the exact split is timing-dependent (CI answered 124x404 then 429);
+		// what matters is that every request was charged: the first 120 pass
+		// as 404s, later ones are limited, and none reaches the 500.
+		if statuses[http.StatusNotFound] < 120 || statuses[http.StatusTooManyRequests] < 1 || statuses[http.StatusNotFound]+statuses[http.StatusTooManyRequests] != 125 {
+			t.Fatalf("GET /batches/{id} oversized errorOffset x125 answered %v, want >=120x404 then 429s only", statuses)
 		}
 		statuses = map[int]int{}
 		for range 125 {
 			statuses[do(deps.handleListBatches(), "/api/v1/external-ingest/batches?offset="+huge, "")]++
 		}
-		if statuses[http.StatusInternalServerError] != 120 || statuses[http.StatusTooManyRequests] != 5 {
-			t.Fatalf("GET /batches oversized offset x125 answered %v, want 120x500 then 5x429", statuses)
+		if statuses[http.StatusInternalServerError] < 120 || statuses[http.StatusTooManyRequests] < 1 || statuses[http.StatusInternalServerError]+statuses[http.StatusTooManyRequests] != 125 {
+			t.Fatalf("GET /batches oversized offset x125 answered %v, want >=120x500 then 429s only", statuses)
 		}
 	})
 

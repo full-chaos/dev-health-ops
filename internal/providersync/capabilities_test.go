@@ -189,3 +189,23 @@ func TestCapabilityReturnsDefensiveCopies(t *testing.T) {
 		t.Fatalf("registry mutation escaped: %+v", second)
 	}
 }
+
+// TestDatasetKeyOrderCoversTheRegistry pins that PlannerDatasetKeys can
+// list every registered dataset: a key missing from datasetKeyOrder would
+// be silently dropped from a planner-managed config's datasets.
+func TestDatasetKeyOrderCoversTheRegistry(t *testing.T) {
+	ordered := map[string]bool{}
+	for _, key := range datasetKeyOrder {
+		if ordered[key] {
+			t.Fatalf("datasetKeyOrder lists %q twice", key)
+		}
+		ordered[key] = true
+	}
+	for provider, datasets := range datasetCapabilities {
+		for dataset := range datasets {
+			if !ordered[dataset] {
+				t.Errorf("%s dataset %q is not in datasetKeyOrder", provider, dataset)
+			}
+		}
+	}
+}

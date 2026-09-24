@@ -79,7 +79,7 @@ func overflowCases() []overflowCase {
 		{"work item storyPoints 1e308 (float64 max region)", [][3]string{wi("wi-big", "1e308")}},
 		{"two pull requests, one past int64", [][3]string{pr("pr-a", "7"), pr("pr-b", "9223372036854775808")}},
 		{"mixed kinds, bad pull request", [][3]string{pr("pr-c", "7"), pr("pr-d", "9223372036854775808"), wi("wi-c", "3")}},
-		{"mixed kinds, bad work item", [][3]string{pr("pr-e", "7"), wi("wi-d", "1e1000"), wi("wi-e", "3")}},
+		{"mixed kinds, work item with a float past range (stored as inf, batch succeeds)", [][3]string{pr("pr-e", "7"), wi("wi-d", "1e1000"), wi("wi-e", "3")}},
 		{"work item storyPoints 1.5 (control)", [][3]string{wi("wi-f", "1.5")}},
 		{"work item storyPoints -1e1000", [][3]string{wi("wi-g", "-1e1000")}},
 		{"work item storyPoints 1e-1000 (underflow)", [][3]string{wi("wi-h", "1e-1000")}},

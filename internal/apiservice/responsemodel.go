@@ -49,6 +49,7 @@ var responseModelRoutes = map[string]bool{
 	"DELETE /api/v1/admin/orgs/{org_id}/feature-overrides/{override_id}":  false,
 	"DELETE /api/v1/admin/orgs/{org_id}/members/{user_id}":                true,
 	"DELETE /api/v1/admin/retention-policies/{policy_id}":                 true,
+	"DELETE /api/v1/admin/llm-settings":                                   true,
 	"DELETE /api/v1/admin/settings/{category}/{key}":                      true,
 	"DELETE /api/v1/admin/teams/{team_id}":                                true,
 	"DELETE /api/v1/admin/users/{user_id}":                                true,
@@ -81,6 +82,7 @@ var responseModelRoutes = map[string]bool{
 	"GET /api/v1/admin/retention-policies":                                true,
 	"GET /api/v1/admin/retention-policies/resource-types":                 true,
 	"GET /api/v1/admin/retention-policies/{policy_id}":                    true,
+	"GET /api/v1/admin/llm-settings":                                      true,
 	"GET /api/v1/admin/settings/categories":                               true,
 	"GET /api/v1/admin/settings/{category}":                               true,
 	"GET /api/v1/admin/settings/{category}/{key}":                         true,
@@ -167,6 +169,7 @@ var responseModelRoutes = map[string]bool{
 	"POST /api/v1/webhooks/gitlab":                                        true,
 	"POST /api/v1/webhooks/jira":                                          true,
 	"POST /api/v1/webhooks/pagerduty/{binding_id}":                        false,
+	"PUT /api/v1/admin/llm-settings":                                      true,
 	"PUT /api/v1/admin/settings/{category}/{key}":                         true,
 }
 

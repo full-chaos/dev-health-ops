@@ -340,14 +340,14 @@ func (h handlers) discoverTeams(w http.ResponseWriter, r *http.Request) {
 		policy.WriteJSON(w, http.StatusUnprocessableEntity, discoverMissingProviderDetail(), nil)
 		return
 	}
-	provider := query.Get("provider")
+	provider := httpapi.QueryLast(query, "provider")
 	if !discoverProviderPattern.MatchString(provider) {
 		policy.WriteJSON(w, http.StatusUnprocessableEntity, discoverInvalidProviderDetail(provider), nil)
 		return
 	}
 	ctx := r.Context()
 	orgID := orgIDOf(ctx)
-	credential, err := h.credentials.resolve(ctx, orgID, provider, query.Get("credential_id"), query.Get("credential_name"))
+	credential, err := h.credentials.resolve(ctx, orgID, provider, httpapi.QueryLast(query, "credential_id"), httpapi.QueryLast(query, "credential_name"))
 	if err != nil {
 		var ambiguous *providerfoundation.CredentialAmbiguousError
 		switch {
@@ -394,8 +394,8 @@ func (h handlers) discoverTeams(w http.ResponseWriter, r *http.Request) {
 		// deduped by provider_team_id (_dedupe_teams, teams.py:82-92).
 		var orgNames []string
 		switch {
-		case query.Get("org") != "":
-			orgNames = []string{query.Get("org")}
+		case httpapi.QueryLast(query, "org") != "":
+			orgNames = []string{httpapi.QueryLast(query, "org")}
 		case credential.Config["org"] != "":
 			orgNames = []string{credential.Config["org"]}
 		default:
@@ -426,8 +426,8 @@ func (h handlers) discoverTeams(w http.ResponseWriter, r *http.Request) {
 		// fallback shape as github above, option keys ("group", "owner").
 		var groupPaths []string
 		switch {
-		case query.Get("group") != "":
-			groupPaths = []string{query.Get("group")}
+		case httpapi.QueryLast(query, "group") != "":
+			groupPaths = []string{httpapi.QueryLast(query, "group")}
 		case credential.Config["group"] != "":
 			groupPaths = []string{credential.Config["group"]}
 		default:

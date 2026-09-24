@@ -8,6 +8,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
@@ -15,13 +16,16 @@ import (
 // live: Starlette/FastAPI resolve `?limit=0&limit=1`, `?active_only=false&
 // active_only=true` and `?role=owner&role=member` all to the LAST one, for
 // every scalar query type. A live round found Go picking the FIRST
-// duplicate instead, here and on the users `q` search route.
+// duplicate instead, here and on the users `q` search route. The logic
+// itself is httpapi.QueryLastPtr -- the one shared implementation
+// (CHAOS-6585); this keeps the (value, present) shape this package's
+// queryInt/queryBool/querySearch already expect.
 func queryLastValue(values url.Values, name string) (value string, present bool) {
-	raw, present := values[name]
-	if !present || len(raw) == 0 {
-		return "", present
+	ptr := httpapi.QueryLastPtr(values, name)
+	if ptr == nil {
+		return "", false
 	}
-	return raw[len(raw)-1], true
+	return *ptr, true
 }
 
 // queryInt is a `limit`/`offset`-shaped query param: ABSENT means

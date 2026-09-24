@@ -203,3 +203,36 @@ func TestDiscoverTeamsNoCredentialConfigured(t *testing.T) {
 		t.Errorf("body = %s, want %s", rec.Body.String(), want)
 	}
 }
+
+// TestDiscoverTeamsRepeatedProviderLastWins is TestRepeatedDayCountLastWins'
+// sibling for this route (CHAOS-6585): discoverTeams read query.Get
+// directly for provider/credential_id/credential_name/org/group -- Go's
+// FIRST of a repeated key, not FastAPI's LAST. A repeated provider with an
+// invalid FIRST value and a valid LAST value must still pass validation
+// (and reach the 404 "No credentials found" path, same as
+// TestDiscoverTeamsNoCredentialConfigured); the reverse must still 422 on
+// the LAST (invalid) value.
+func TestDiscoverTeamsRepeatedProviderLastWins(t *testing.T) {
+	h := handlers{store: Store{}, credentials: discoverCredentials{Decryptor: noopDecryptor{}}, logger: slog.Default()}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/teams/discover?provider=bitbucket&provider=jira", nil)
+	req.SetPathValue("team_id", "discover")
+	req = req.WithContext(policy.WithUser(req.Context(), &policy.User{OrgID: "org-1"}))
+	rec := httptest.NewRecorder()
+	h.getTeam(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("provider=bitbucket then provider=jira: got %d, want 404 (last value jira wins)\nbody: %s", rec.Code, rec.Body.String())
+	}
+	want := `{"detail":"No credentials found for provider 'jira'"}`
+	if rec.Body.String() != want {
+		t.Errorf("body = %s, want %s", rec.Body.String(), want)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/admin/teams/discover?provider=jira&provider=bitbucket", nil)
+	req.SetPathValue("team_id", "discover")
+	rec = httptest.NewRecorder()
+	h.getTeam(rec, req)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("provider=jira then provider=bitbucket: got %d, want 422 (last value bitbucket wins)\nbody: %s", rec.Code, rec.Body.String())
+	}
+}

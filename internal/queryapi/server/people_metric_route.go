@@ -156,7 +156,7 @@ func newPeopleMetricHandler(reader *people.Reader) http.HandlerFunc {
 		query := r.URL.Query()
 		var validationErrors []pydanticErrorDetail
 
-		metric := query.Get("metric")
+		metric := lastQueryValue(query, "metric")
 		if !query.Has("metric") {
 			validationErrors = append(validationErrors, missingFieldError([]any{"query", "metric"}, nil))
 		}

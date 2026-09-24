@@ -179,15 +179,15 @@ func newFlameAggregatedWorkHandler(client aggflame.QueryClient) http.HandlerFunc
 		if !query.Has("mode") {
 			validationErrors = append(validationErrors, missingFieldError([]any{"query", "mode"}, nil))
 		}
-		mode := query.Get("mode")
+		mode := lastQueryValue(query, "mode")
 
-		startDate, startPresent, startOK := parseISODateQueryParam(query.Get("start_date"))
+		startDate, startPresent, startOK := parseISODateQueryParam(lastQueryValue(query, "start_date"))
 		if startPresent && !startOK {
-			validationErrors = append(validationErrors, dateQueryParamError([]any{"query", "start_date"}, query.Get("start_date")))
+			validationErrors = append(validationErrors, dateQueryParamError([]any{"query", "start_date"}, lastQueryValue(query, "start_date")))
 		}
-		endDate, endPresent, endOK := parseISODateQueryParam(query.Get("end_date"))
+		endDate, endPresent, endOK := parseISODateQueryParam(lastQueryValue(query, "end_date"))
 		if endPresent && !endOK {
-			validationErrors = append(validationErrors, dateQueryParamError([]any{"query", "end_date"}, query.Get("end_date")))
+			validationErrors = append(validationErrors, dateQueryParamError([]any{"query", "end_date"}, lastQueryValue(query, "end_date")))
 		}
 
 		rangeDays := 30
@@ -202,7 +202,7 @@ func newFlameAggregatedWorkHandler(client aggflame.QueryClient) http.HandlerFunc
 
 		limit := 500
 		if query.Has("limit") {
-			raw := query.Get("limit")
+			raw := lastQueryValue(query, "limit")
 			if parsed, err := strconv.Atoi(raw); err == nil {
 				limit = parsed
 			} else {
@@ -212,7 +212,7 @@ func newFlameAggregatedWorkHandler(client aggflame.QueryClient) http.HandlerFunc
 
 		minValue := 1
 		if query.Has("min_value") {
-			raw := query.Get("min_value")
+			raw := lastQueryValue(query, "min_value")
 			if parsed, err := strconv.Atoi(raw); err == nil {
 				minValue = parsed
 			} else {
@@ -272,10 +272,10 @@ func newFlameAggregatedWorkHandler(client aggflame.QueryClient) http.HandlerFunc
 			Mode:        mode,
 			StartDay:    startDay,
 			EndDay:      endDay,
-			TeamID:      query.Get("team_id"),
-			RepoID:      query.Get("repo_id"),
-			Provider:    query.Get("provider"),
-			WorkScopeID: query.Get("work_scope_id"),
+			TeamID:      lastQueryValue(query, "team_id"),
+			RepoID:      lastQueryValue(query, "repo_id"),
+			Provider:    lastQueryValue(query, "provider"),
+			WorkScopeID: lastQueryValue(query, "work_scope_id"),
 			Limit:       limit,
 			MinValue:    minValue,
 		})

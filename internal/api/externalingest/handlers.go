@@ -17,6 +17,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
+	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 	"github.com/google/uuid"
 )
@@ -558,7 +559,8 @@ func (d Deps) handleGetBatch() http.HandlerFunc {
 // (status.py:1123-1124), never the same pair.
 func pageParams(r *http.Request, limitParam, offsetParam string) (limit, offset int) {
 	limit, offset = 50, 0
-	if v, err := strconv.Atoi(r.URL.Query().Get(limitParam)); err == nil {
+	query := r.URL.Query()
+	if v, err := strconv.Atoi(httpapi.QueryLast(query, limitParam)); err == nil {
 		limit = v
 	}
 	if limit < 1 {
@@ -567,7 +569,7 @@ func pageParams(r *http.Request, limitParam, offsetParam string) (limit, offset 
 	if limit > 200 {
 		limit = 200
 	}
-	if v, err := strconv.Atoi(r.URL.Query().Get(offsetParam)); err == nil && v >= 0 {
+	if v, err := strconv.Atoi(httpapi.QueryLast(query, offsetParam)); err == nil && v >= 0 {
 		offset = v
 	}
 	return limit, offset

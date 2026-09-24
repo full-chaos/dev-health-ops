@@ -345,11 +345,11 @@ func newWorkUnitsGetHandler(reader *investmentexplain.Reader) http.HandlerFunc {
 		// for scope_type -- str fields have no FastAPI-side empty-string
 		// rejection the way an int/bool/date field does, so this loses
 		// nothing a real caller would notice.
-		scopeType := query.Get("scope_type")
+		scopeType := lastQueryValue(query, "scope_type")
 		if scopeType == "" {
 			scopeType = "org"
 		}
-		scopeID := query.Get("scope_id")
+		scopeID := lastQueryValue(query, "scope_id")
 
 		var validationErrors []pydanticErrorDetail
 
@@ -370,18 +370,18 @@ func newWorkUnitsGetHandler(reader *investmentexplain.Reader) http.HandlerFunc {
 			}
 		}
 
-		startDate, startPresent, startOK := parseISODateQueryParam(query.Get("start_date"))
+		startDate, startPresent, startOK := parseISODateQueryParam(lastQueryValue(query, "start_date"))
 		if startPresent && !startOK {
-			validationErrors = append(validationErrors, dateQueryParamError([]any{"query", "start_date"}, query.Get("start_date")))
+			validationErrors = append(validationErrors, dateQueryParamError([]any{"query", "start_date"}, lastQueryValue(query, "start_date")))
 		}
-		endDate, endPresent, endOK := parseISODateQueryParam(query.Get("end_date"))
+		endDate, endPresent, endOK := parseISODateQueryParam(lastQueryValue(query, "end_date"))
 		if endPresent && !endOK {
-			validationErrors = append(validationErrors, dateQueryParamError([]any{"query", "end_date"}, query.Get("end_date")))
+			validationErrors = append(validationErrors, dateQueryParamError([]any{"query", "end_date"}, lastQueryValue(query, "end_date")))
 		}
 
 		limit := 200
 		if query.Has("limit") {
-			raw := query.Get("limit")
+			raw := lastQueryValue(query, "limit")
 			parsed, err := strconv.Atoi(raw)
 			if err != nil {
 				validationErrors = append(validationErrors, intQueryParamError([]any{"query", "limit"}, raw))
@@ -392,7 +392,7 @@ func newWorkUnitsGetHandler(reader *investmentexplain.Reader) http.HandlerFunc {
 
 		includeTextual := true
 		if query.Has("include_textual") {
-			raw := query.Get("include_textual")
+			raw := lastQueryValue(query, "include_textual")
 			// coerceBoolBodyField's string branch (pydantic_metric_filter.go)
 			// reproduces the identical lenient-bool string set Pydantic's
 			// `bool` field type accepts, confirmed live to behave the same

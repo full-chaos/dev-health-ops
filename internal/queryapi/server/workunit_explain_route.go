@@ -187,11 +187,11 @@ type workUnitExplainQuery struct {
 func parseWorkUnitExplainQuery(r *http.Request) (workUnitExplainQuery, []pydanticErrorDetail) {
 	query := r.URL.Query()
 	parsed := workUnitExplainQuery{
-		scopeType:   query.Get("scope_type"),
-		scopeID:     query.Get("scope_id"),
+		scopeType:   lastQueryValue(query, "scope_type"),
+		scopeID:     lastQueryValue(query, "scope_id"),
 		rangeDays:   14,
-		llmProvider: query.Get("llm_provider"),
-		llmModel:    query.Get("llm_model"),
+		llmProvider: lastQueryValue(query, "llm_provider"),
+		llmModel:    lastQueryValue(query, "llm_model"),
 	}
 	if parsed.scopeType == "" {
 		parsed.scopeType = "org"
@@ -210,15 +210,15 @@ func parseWorkUnitExplainQuery(r *http.Request) (workUnitExplainQuery, []pydanti
 			parsed.rangeDays = value
 		}
 	}
-	startDate, startPresent, startOK := parseISODateQueryParam(query.Get("start_date"))
+	startDate, startPresent, startOK := parseISODateQueryParam(lastQueryValue(query, "start_date"))
 	if startPresent && !startOK {
-		validationErrors = append(validationErrors, dateQueryParamError([]any{"query", "start_date"}, query.Get("start_date")))
+		validationErrors = append(validationErrors, dateQueryParamError([]any{"query", "start_date"}, lastQueryValue(query, "start_date")))
 	} else if startPresent {
 		parsed.startDate = &startDate
 	}
-	endDate, endPresent, endOK := parseISODateQueryParam(query.Get("end_date"))
+	endDate, endPresent, endOK := parseISODateQueryParam(lastQueryValue(query, "end_date"))
 	if endPresent && !endOK {
-		validationErrors = append(validationErrors, dateQueryParamError([]any{"query", "end_date"}, query.Get("end_date")))
+		validationErrors = append(validationErrors, dateQueryParamError([]any{"query", "end_date"}, lastQueryValue(query, "end_date")))
 	} else if endPresent {
 		parsed.endDate = &endDate
 	}

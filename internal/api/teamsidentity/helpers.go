@@ -8,6 +8,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
@@ -24,7 +25,7 @@ func queryBoolDefaultTrue(r *http.Request, name string) (bool, *pybody.Error) {
 	if !query.Has(name) {
 		return true, nil
 	}
-	raw := query.Get(name)
+	raw := httpapi.QueryLast(query, name)
 	switch strings.ToLower(raw) {
 	case "true", "1", "yes", "y", "on", "t":
 		return true, nil

@@ -422,11 +422,11 @@ func newInvestmentExplainWorkHandler(
 			return
 		}
 
-		llmProvider := r.URL.Query().Get("llm_provider")
+		llmProvider := lastQueryValue(r.URL.Query(), "llm_provider")
 		if llmProvider == "" {
 			llmProvider = "auto"
 		}
-		forceRefresh, _ := strconv.ParseBool(r.URL.Query().Get("force_refresh"))
+		forceRefresh, _ := strconv.ParseBool(lastQueryValue(r.URL.Query(), "force_refresh"))
 
 		opts, buildErr := buildExplainOptions(r.Context(), reader, claims.OrgID, reqBody, llmProvider, forceRefresh)
 		if buildErr != nil {

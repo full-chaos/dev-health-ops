@@ -189,8 +189,8 @@ func newFlameWorkHandler(client flame.QueryClient) http.HandlerFunc {
 		}
 
 		resp, err := flame.BuildResponse(r.Context(), client, claims.OrgID, flame.Params{
-			EntityType: query.Get("entity_type"),
-			EntityID:   query.Get("entity_id"),
+			EntityType: lastQueryValue(query, "entity_type"),
+			EntityID:   lastQueryValue(query, "entity_id"),
 		})
 		if err != nil {
 			if reqErr, ok := flame.AsRequestError(err); ok {

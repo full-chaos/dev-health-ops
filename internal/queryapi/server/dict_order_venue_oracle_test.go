@@ -28,6 +28,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/explain"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/investment"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/investmentexplain"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/people"
 	chclickhouse "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
@@ -54,6 +55,9 @@ from dev_health_ops.api.services.investment import build_investment_response
 from dev_health_ops.api.services.investment_flow import build_investment_flow_response
 from dev_health_ops.api.services.aggregated_flame import build_aggregated_flame_response
 from dev_health_ops.api.services.people import build_person_summary_response
+from dev_health_ops.api.services.work_units import build_work_unit_investments
+from dev_health_ops.api.services.work_unit_explain import explain_work_unit
+from dev_health_ops.llm import get_provider
 
 routes = {}
 for route in app.routes:
@@ -81,6 +85,14 @@ async def call(case):
             team_id=args.get("team_id"), repo_id=args.get("repo_id"), provider=args.get("provider"), work_scope_id=args.get("work_scope_id"))
     if kind == "people_summary":
         return await build_person_summary_response(db_url=db_url, person_id=args["person_id"], range_days=args["range_days"], compare_days=args["compare_days"], org_id=org_id)
+    if kind == "work_units":
+        return await build_work_unit_investments(db_url=db_url, filters=MetricFilter(**args["filters"]), org_id=org_id, limit=args["limit"], include_text=True)
+    if kind == "work_unit_explain":
+        investments = await build_work_unit_investments(db_url=db_url, filters=MetricFilter(**args["filters"]), org_id=org_id, limit=1, include_text=True, work_unit_id=args["work_unit_id"])
+        if not investments:
+            raise LookupError("work unit not found")
+        provider = get_provider("mock", model=None, org_id=org_id)
+        return await explain_work_unit(investment=investments[0], llm_provider="mock", llm_model=None, provider=provider, org_id=org_id, db_url=db_url)
     raise SystemExit("unknown case kind " + kind)
 
 out = []
@@ -189,6 +201,40 @@ func TestVenueOracleQueryAPIDictOrder(t *testing.T) {
 		_ = conn.Close()
 	}
 
+	// One work unit whose dicts are not in sorted order: its theme and
+	// subcategory maps, its stored structural JSON (nested too) and one
+	// evidence quote. The Python services keep each of those orders.
+	workUnitID := "wu-dict-order"
+	seedNow := time.Now().UTC()
+	fromTS := seedNow.AddDate(0, 0, -3).Format("2006-01-02 15:04:05")
+	toTS := seedNow.AddDate(0, 0, -1).Format("2006-01-02 15:04:05")
+	for _, database := range []string{venue.PythonClickHouseDB, venue.GoClickHouseDB} {
+		conn, err := chclickhouse.Open(ctx, chclickhouse.DefaultConfig(venue.AdminClickHouseURI(t, database)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, statement := range []string{
+			fmt.Sprintf(`INSERT INTO work_unit_investments
+				(work_unit_id, work_unit_type, work_unit_name, from_ts, to_ts, repo_id, provider,
+				 effort_metric, effort_value, theme_distribution_json, subcategory_distribution_json,
+				 structural_evidence_json, evidence_quality, evidence_quality_band, categorization_status,
+				 categorization_errors_json, categorization_model_version, categorization_input_hash,
+				 categorization_run_id, computed_at, org_id)
+			VALUES ('%s', 'issue', 'Dict order unit', toDateTime64('%s',3), toDateTime64('%s',3), NULL, 'github',
+				 'churn_loc', 10.0, map('quality', 0.6, 'feature_delivery', 0.4),
+				 map('quality.bugfix', 0.6, 'feature_delivery.customer', 0.4),
+				 '{"work_items":["b-2","a-1"],"prs":[],"summary":{"zeta":1,"alpha":2.5}}',
+				 0.5, 'moderate', 'ok', '', 'v1', 'hash', 'run-1', now64(3), '%s')`, workUnitID, fromTS, toTS, orgID),
+			fmt.Sprintf(`INSERT INTO work_unit_investment_quotes (work_unit_id, quote, source_type, source_id, computed_at, categorization_run_id, org_id)
+			VALUES ('%s', 'Fix the flaky login test.', 'pr_body', 'pr-7', now64(3), 'run-1', '%s')`, workUnitID, orgID),
+		} {
+			if err := conn.Exec(ctx, statement); err != nil {
+				t.Fatalf("seed %s: %v\n%s", database, err, statement)
+			}
+		}
+		_ = conn.Close()
+	}
+
 	// The Go side reads with the admin login: the venue provisions the api
 	// login with the dho api's grants, not the query-api's.
 	client, err := dhclickhouse.NewClickHouseQueryClientWithOptions(newUnrestrictedReadClickHouseOptions(venue.AdminClickHouseURI(t, venue.GoClickHouseDB)))
@@ -209,18 +255,25 @@ func TestVenueOracleQueryAPIDictOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	workUnitsReader, err := investmentexplain.NewReader(client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LLM_PROVIDER", "mock")
 	peopleReader, err := people.NewReader(client)
 	if err != nil {
 		t.Fatal(err)
 	}
 	mux := http.NewServeMux()
 	for pattern, handler := range map[string]http.HandlerFunc{
-		"GET /api/v1/explain":                    newExplainGetHandler(explainReader),
-		"GET /api/v1/home":                       newHomeGetHandler(client, pgPool),
-		"GET /api/v1/investment":                 newInvestmentGetHandler(investmentReader),
-		"POST /api/v1/investment/flow":           newInvestmentFlowHandler(client),
-		"GET /api/v1/flame/aggregated":           newFlameAggregatedWorkHandler(client),
-		"GET /api/v1/people/{person_id}/summary": newPeopleSummaryHandler(peopleReader),
+		"GET /api/v1/explain":                            newExplainGetHandler(explainReader),
+		"GET /api/v1/home":                               newHomeGetHandler(client, pgPool),
+		"GET /api/v1/investment":                         newInvestmentGetHandler(investmentReader),
+		"POST /api/v1/investment/flow":                   newInvestmentFlowHandler(client),
+		"GET /api/v1/flame/aggregated":                   newFlameAggregatedWorkHandler(client),
+		"GET /api/v1/people/{person_id}/summary":         newPeopleSummaryHandler(peopleReader),
+		"GET /api/v1/work-units":                         newWorkUnitsGetHandler(workUnitsReader),
+		"POST /api/v1/work-units/{work_unit_id}/explain": newWorkUnitExplainHandler(workUnitsReader, nil, nil),
 	} {
 		key, handler := pattern, handler
 		mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
@@ -239,7 +292,7 @@ func TestVenueOracleQueryAPIDictOrder(t *testing.T) {
 			Args: map[string]any{"metric": "cycle_time", "filters": window}, method: http.MethodGet, path: "/api/v1/explain?metric=cycle_time&range_days=7"},
 		{Name: "home tiles", Route: "GET /api/v1/home", Kind: "home",
 			Args: map[string]any{"filters": window}, method: http.MethodGet, path: "/api/v1/home?range_days=7"},
-		{Name: "investment band_counts", Route: "GET /api/v1/investment", Kind: "investment",
+		{Name: "investment band_counts and distributions", Route: "GET /api/v1/investment", Kind: "investment",
 			Args: map[string]any{"filters": window}, method: http.MethodGet, path: "/api/v1/investment?range_days=7"},
 		{Name: "investment flow coverage", Route: "POST /api/v1/investment/flow", Kind: "flow",
 			Args: map[string]any{"filters": window, "flow_mode": "team_category_repo"}, method: http.MethodPost, path: "/api/v1/investment/flow",
@@ -254,6 +307,14 @@ func TestVenueOracleQueryAPIDictOrder(t *testing.T) {
 			Args:   map[string]any{"person_id": personID, "range_days": 7, "compare_days": 7},
 			method: http.MethodGet, path: "/api/v1/people/" + personID + "/summary?range_days=7&compare_days=7"},
 	}
+	workUnitWindow := map[string]any{"time": map[string]any{"range_days": 7, "compare_days": 7}}
+	cases = append(cases,
+		dictOrderCase{Name: "work units themes and evidence", Route: "GET /api/v1/work-units", Kind: "work_units",
+			Args: map[string]any{"filters": workUnitWindow, "limit": 200}, method: http.MethodGet, path: "/api/v1/work-units?range_days=7"},
+		dictOrderCase{Name: "work unit explain category_rationale", Route: "POST /api/v1/work-units/{work_unit_id}/explain", Kind: "work_unit_explain",
+			Args:   map[string]any{"filters": workUnitWindow, "work_unit_id": workUnitID},
+			method: http.MethodPost, path: "/api/v1/work-units/" + workUnitID + "/explain?range_days=7&llm_provider=mock"},
+	)
 	for index := range cases {
 		cases[index].OrgID = orgID
 	}

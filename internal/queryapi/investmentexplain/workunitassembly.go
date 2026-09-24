@@ -36,6 +36,11 @@ type WorkUnitEvidenceOutput struct {
 	Textual    []map[string]any
 	Structural []map[string]any
 	Contextual []map[string]any
+	// StructuralPayload is the stored structural_evidence_json the
+	// Structural entry was parsed from. A Go map loses the document's key
+	// order, which work_units.py keeps (`{"type": ..., **parsed}`); the
+	// route writes the entry from this text.
+	StructuralPayload string
 }
 
 // InvestmentBreakdownOutput ports api/models/schemas.py's
@@ -328,6 +333,8 @@ func (reader *Reader) BuildWorkUnitInvestments(ctx context.Context, opts BuildWo
 				Textual:    textualEvidence,
 				Structural: structuralEvidence,
 				Contextual: contextualEvidence,
+
+				StructuralPayload: structuralPayload,
 			},
 		})
 	}

@@ -29,6 +29,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"sort"
 	"strconv"
 	"time"
 
@@ -195,14 +196,73 @@ type evidenceQualityWire struct {
 }
 
 type investmentBreakdownWire struct {
-	Themes        map[string]float64 `json:"themes"`
-	Subcategories map[string]float64 `json:"subcategories"`
+	Themes        pyjson.OrderedMap[float64] `json:"themes"`
+	Subcategories pyjson.OrderedMap[float64] `json:"subcategories"`
 }
 
+// workUnitEvidenceWire's entries are Python dicts, written in the order
+// work_units.py builds them (see orderedEvidence).
 type workUnitEvidenceWire struct {
-	Textual    []map[string]any `json:"textual"`
-	Structural []map[string]any `json:"structural"`
-	Contextual []map[string]any `json:"contextual"`
+	Textual    []any `json:"textual"`
+	Structural []any `json:"structural"`
+	Contextual []any `json:"contextual"`
+}
+
+// evidenceKeyOrder is the key order work_units.py builds each fixed-shape
+// evidence dict in, by its "type".
+var evidenceKeyOrder = map[string][]string{
+	"evidence_quote": {"type", "quote", "source", "id"},
+	"time_range":     {"type", "start", "end", "span_days"},
+	"repo_scope":     {"type", "repo_ids"},
+	"team_scope":     {"type", "team_ids", "team_names"},
+}
+
+// orderedEvidence writes each evidence entry in Python's key order: the
+// fixed-shape entries by evidenceKeyOrder, and the work_unit_nodes entry as
+// work_units.py builds it, "type" first and then the stored JSON's own
+// members in document order (payload is that JSON). An entry of another
+// shape keeps its keys in sorted order after the known ones.
+func orderedEvidence(entries []map[string]any, payload string) ([]any, error) {
+	out := make([]any, 0, len(entries))
+	for _, entry := range entries {
+		kind, _ := entry["type"].(string)
+		if kind == "work_unit_nodes" && payload != "" {
+			decoded, err := pyjson.Decode([]byte(payload))
+			if err != nil {
+				return nil, err
+			}
+			parsed, ok := decoded.(*pyjson.Object)
+			if !ok {
+				return nil, fmt.Errorf("structural_evidence_json is not an object")
+			}
+			object := pyjson.NewObject()
+			object.Set("type", "work_unit_nodes")
+			for _, key := range parsed.Keys() {
+				value, _ := parsed.Get(key)
+				object.Set(key, value)
+			}
+			out = append(out, object)
+			continue
+		}
+		ordered := pyjson.NewOrderedMap[any]()
+		for _, key := range evidenceKeyOrder[kind] {
+			if value, ok := entry[key]; ok {
+				ordered.Set(key, value)
+			}
+		}
+		rest := make([]string, 0, len(entry))
+		for key := range entry {
+			if _, seen := ordered.Get(key); !seen {
+				rest = append(rest, key)
+			}
+		}
+		sort.Strings(rest)
+		for _, key := range rest {
+			ordered.Set(key, entry[key])
+		}
+		out = append(out, ordered)
+	}
+	return out, nil
 }
 
 type workUnitInvestmentWire struct {
@@ -247,27 +307,27 @@ func formatWorkUnitTimestamp(t time.Time) string {
 // matching WorkUnitEvidence's own Field(default_factory=list) -- Go's
 // encoding/json renders a nil slice as `null`, and Python's response
 // never does.
-func toWorkUnitInvestmentWire(investment investmentexplain.WorkUnitInvestment) workUnitInvestmentWire {
-	themes := map[string]float64{}
+func toWorkUnitInvestmentWire(investment investmentexplain.WorkUnitInvestment) (workUnitInvestmentWire, error) {
+	themes := pyjson.NewOrderedMap[float64]()
 	for _, kv := range investment.Investment.Themes {
-		themes[kv.Key] = kv.Value
+		themes.Set(kv.Key, kv.Value)
 	}
-	subcategories := map[string]float64{}
+	subcategories := pyjson.NewOrderedMap[float64]()
 	for _, kv := range investment.Investment.Subcategories {
-		subcategories[kv.Key] = kv.Value
+		subcategories.Set(kv.Key, kv.Value)
 	}
 
-	textual := investment.Evidence.Textual
-	if textual == nil {
-		textual = []map[string]any{}
+	textual, err := orderedEvidence(investment.Evidence.Textual, "")
+	if err != nil {
+		return workUnitInvestmentWire{}, err
 	}
-	structural := investment.Evidence.Structural
-	if structural == nil {
-		structural = []map[string]any{}
+	structural, err := orderedEvidence(investment.Evidence.Structural, investment.Evidence.StructuralPayload)
+	if err != nil {
+		return workUnitInvestmentWire{}, err
 	}
-	contextual := investment.Evidence.Contextual
-	if contextual == nil {
-		contextual = []map[string]any{}
+	contextual, err := orderedEvidence(investment.Evidence.Contextual, "")
+	if err != nil {
+		return workUnitInvestmentWire{}, err
 	}
 
 	var band *string
@@ -301,7 +361,7 @@ func toWorkUnitInvestmentWire(investment investmentexplain.WorkUnitInvestment) w
 			Structural: structural,
 			Contextual: contextual,
 		},
-	}
+	}, nil
 }
 
 // writeWorkUnitsResponse writes investments as the final 200 JSON body --
@@ -314,7 +374,14 @@ func toWorkUnitInvestmentWire(investment investmentexplain.WorkUnitInvestment) w
 func writeWorkUnitsResponse(w http.ResponseWriter, r *http.Request, orgID string, investments []investmentexplain.WorkUnitInvestment) {
 	wire := make([]workUnitInvestmentWire, 0, len(investments))
 	for _, investment := range investments {
-		wire = append(wire, toWorkUnitInvestmentWire(investment))
+		converted, err := toWorkUnitInvestmentWire(investment)
+		if err != nil {
+			log.Printf("query-api: work_units: evidence not writable: org_id=%s request_id=%s work_unit_id=%s err=%v",
+				orgID, envelopeRequestID(r), investment.WorkUnitID, err)
+			writeModelFailure(w)
+			return
+		}
+		wire = append(wire, converted)
 	}
 	if encodeErr := writeModelResponse(w, wire); encodeErr != nil {
 		log.Printf("query-api: work_units: encode response failed: org_id=%s request_id=%s err=%v",

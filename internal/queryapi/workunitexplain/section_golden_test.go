@@ -1,6 +1,8 @@
 package workunitexplain
 
 import (
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+
 	"bytes"
 	"encoding/json"
 	"os"
@@ -37,10 +39,10 @@ type sectionGoldenDocument struct {
 		Result  string `json:"result"`
 	} `json:"first_paragraphs"`
 	CategoryRationale []struct {
-		Name       string             `json:"name"`
-		Text       string             `json:"text"`
-		Categories map[string]float64 `json:"categories"`
-		Result     map[string]string  `json:"result"`
+		Name       string                     `json:"name"`
+		Text       string                     `json:"text"`
+		Categories pyjson.OrderedMap[float64] `json:"categories"`
+		Result     pyjson.OrderedMap[string]  `json:"result"`
 	} `json:"category_rationale"`
 	EvidenceHighlights []struct {
 		Name   string   `json:"name"`
@@ -110,14 +112,11 @@ func TestExtractFirstParagraphMatchesPythonGolden(t *testing.T) {
 func TestCategoryRationaleMatchesPythonGolden(t *testing.T) {
 	for _, testCase := range loadSectionGolden(t).CategoryRationale {
 		t.Run(testCase.Name, func(t *testing.T) {
-			keys := make([]string, 0, len(testCase.Categories))
-			for key := range testCase.Categories {
-				keys = append(keys, key)
-			}
-			sort.Strings(keys)
-			themes := make([]ThemeWeight, 0, len(keys))
-			for _, key := range keys {
-				themes = append(themes, ThemeWeight{Key: key, Value: testCase.Categories[key]})
+			// The categories in the golden's document order, as Python
+			// iterates them.
+			themes := make([]ThemeWeight, 0, testCase.Categories.Len())
+			for key, value := range testCase.Categories.All() {
+				themes = append(themes, ThemeWeight{Key: key, Value: value})
 			}
 			value := 0.5
 			band := "moderate"

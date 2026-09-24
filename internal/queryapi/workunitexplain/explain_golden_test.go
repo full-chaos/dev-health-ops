@@ -1,12 +1,13 @@
 package workunitexplain
 
 import (
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+
 	"bytes"
 	"context"
 	"encoding/json"
 	"os"
 	"reflect"
-	"sort"
 	"testing"
 	"time"
 
@@ -48,8 +49,8 @@ type goldenWorkUnit struct {
 		Value  float64 `json:"value"`
 	} `json:"effort"`
 	Investment struct {
-		Themes        map[string]float64 `json:"themes"`
-		Subcategories map[string]float64 `json:"subcategories"`
+		Themes        pyjson.OrderedMap[float64] `json:"themes"`
+		Subcategories map[string]float64         `json:"subcategories"`
 	} `json:"investment"`
 	EvidenceQuality struct {
 		Value *float64 `json:"value"`
@@ -78,14 +79,11 @@ func (g goldenWorkUnit) toWorkUnit(t *testing.T) WorkUnit {
 		t.Fatalf("parse time_range.end %q: %v", g.TimeRange.End, err)
 	}
 
-	keys := make([]string, 0, len(g.Investment.Themes))
-	for key := range g.Investment.Themes {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	themes := make([]ThemeWeight, 0, len(keys))
-	for _, key := range keys {
-		themes = append(themes, ThemeWeight{Key: key, Value: g.Investment.Themes[key]})
+	// The work unit's themes in the golden's document order: Python keeps
+	// that order, and category_rationale follows it.
+	themes := make([]ThemeWeight, 0, g.Investment.Themes.Len())
+	for key, value := range g.Investment.Themes.All() {
+		themes = append(themes, ThemeWeight{Key: key, Value: value})
 	}
 
 	return WorkUnit{

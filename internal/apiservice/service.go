@@ -210,7 +210,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 	if deps.Pool != nil && deps.Guard != nil {
 		routes = append(routes, billing.Routes(billing.Deps{
 			Pool: deps.Pool, Guard: deps.Guard, Stripe: deps.Stripe, Config: deps.BillingConfig, Logger: logger,
-			WebhookSecret: deps.StripeWebhookSecret, LicensePrivateKey: deps.LicensePrivateKey,
+			WebhookSecret: deps.StripeWebhookSecret, LicensePrivateKey: deps.LicensePrivateKey, Producer: deps.Producer,
 		})...)
 		routes = append(routes, admin.Routes(admin.Deps{
 			Pool:          deps.Pool,

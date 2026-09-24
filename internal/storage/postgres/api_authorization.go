@@ -214,12 +214,17 @@ func apiPosture() RolePosture {
 			// deleted via a subquery on their own owning row's org_id
 			// (invoices/subscriptions respectively). invoices also takes
 			// the void route's status write (CHAOS-6257); refunds and
-			// line items are only read by the billing routes.
+			// line items are only read by the billing routes. The Stripe
+			// webhook's subscription events (CHAOS-6518) insert and update
+			// subscriptions and insert their subscription_events row, and
+			// queue billing_notifications intents (the key-conflict
+			// fallback is a SELECT, always implicit).
 			{"refunds", false, false, true},
 			{"invoice_line_items", false, false, true},
 			{"invoices", false, true, true},
-			{"subscription_events", false, false, true},
-			{"subscriptions", false, false, true},
+			{"subscription_events", true, false, true},
+			{"subscriptions", true, true, true},
+			{"billing_notifications", true, false, false},
 			// Sync state.
 			{"metric_checkpoints", false, false, true},
 			{"sync_compute_checkpoints", false, false, true},

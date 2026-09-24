@@ -72,6 +72,19 @@ var webhookOrgs = []string{
 	"77777777-0000-4000-8000-000000000005", "77777777-0000-4000-8000-000000000006",
 }
 
+// webhookSubOrgs are the subscription cases' own orgs (each a lifecycle
+// whose final license and tier the rows must show); webhookSubOrgs[2] is
+// managed by hand.
+var webhookSubOrgs = []string{
+	"88888888-0000-4000-8000-000000000001", "88888888-0000-4000-8000-000000000002",
+	"88888888-0000-4000-8000-000000000003", "88888888-0000-4000-8000-000000000004",
+	"88888888-0000-4000-8000-000000000005", "88888888-0000-4000-8000-000000000006",
+	"88888888-0000-4000-8000-000000000007", "88888888-0000-4000-8000-000000000008",
+}
+
+// webhookUnknownOrg is a well-formed org id no organizations row has.
+const webhookUnknownOrg = "99999999-0000-4000-8000-000000000001"
+
 func webhookRequests(t *testing.T, f billingFixture) []venueoracle.Request {
 	t.Helper()
 	stamp := time.Now().Unix() + 200
@@ -150,6 +163,8 @@ func webhookRequests(t *testing.T, f billingFixture) []venueoracle.Request {
 	invoice("invoice.paid: with org", "invoice.paid", map[string]any{"org_id": orgA})
 	invoice("invoice.finalized: no org", "invoice.finalized", map[string]any{})
 
+	subscriptionRequests(t, f, event, func(name string, body []byte) { signed(name, body) })
+
 	// Types this slice does not handle yet (named in the PR) and unknown
 	// ones: logged only.
 	event("unhandled type", "invoice.paid.json", "customer.created", nil)
@@ -213,11 +228,13 @@ func webhookEnv() map[string]string {
 	return env
 }
 
-// TestVenueOracleBillingWebhook is the Stripe webhook differential (slice
-// a1): signature and payload handling, checkout.session.completed to a
-// signed, persisted license, and the invoice branch's shared 500. The
-// Python plane gets the verified event as plain dicts (the handlers'
-// intended input; see CHAOS-6525).
+// TestVenueOracleBillingWebhook is the Stripe webhook differential:
+// signature and payload handling, checkout.session.completed to a signed,
+// persisted license, the invoice branch's shared 500, and the
+// customer.subscription.* events (subscription rows, the license sync,
+// license re-sign and revoke, and the notification intents with their job
+// outbox handoffs). The Python handlers the deployed StripeObject breaks
+// get the plain-dict input they were written against (CHAOS-6525).
 func TestVenueOracleBillingWebhook(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
@@ -227,8 +244,13 @@ func TestVenueOracleBillingWebhook(t *testing.T) {
 	t.Cleanup(pyStripe.Close)
 	t.Cleanup(goStripe.Close)
 	env := webhookEnv()
-	pythonEnv := []string{"VENUE_STRIPE_API_BASE=" + pyStripe.URL, "VENUE_STRIPE_EVENT_AS_DICT=1",
-		"VENUE_STRIPE_SESSION_LINE_ITEMS=1", "VENUE_PY_TRACEBACKS=1"}
+	// Checkout and invoice events reach their handlers as plain dicts
+	// (CHAOS-6525); subscription events keep the deployed StripeObject for
+	// SubscriptionService.process_event, and only the router's three
+	// subscription handlers get the dict view.
+	pythonEnv := []string{"VENUE_STRIPE_API_BASE=" + pyStripe.URL,
+		"VENUE_STRIPE_EVENT_AS_DICT=checkout.session.completed,invoice.paid,invoice.payment_failed,invoice.finalized",
+		"VENUE_STRIPE_SUBSCRIPTION_HANDLERS_AS_DICT=1", "VENUE_STRIPE_SESSION_LINE_ITEMS=1", "VENUE_PY_TRACEBACKS=1", "VENUE_PY_LOGGING=1"}
 	for key, value := range env {
 		pythonEnv = append(pythonEnv, key+"="+value)
 	}
@@ -247,6 +269,7 @@ func TestVenueOracleBillingWebhook(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
+			subscriptionSeed(t, ctx, admin, seed)
 			return seed.tokenSpecs()
 		},
 	})
@@ -299,15 +322,19 @@ func TestVenueOracleBillingWebhook(t *testing.T) {
 		sort.Strings(out)
 		return strings.Join(out, "\n")
 	}
-	tables := map[string]func(string) string{
+	tables := subscriptionTables(t, ctx, start)
+	for name, read := range map[string]func(string) string{
 		"org_licenses": licenses,
 		"organizations": func(uri string) string {
 			return venueoracle.TableRows(t, ctx, uri, `SELECT id::text, tier, managed_by FROM organizations ORDER BY id`)
 		},
 		"org_licenses timestamps": func(uri string) string {
 			return venueoracle.TableRows(t, ctx, uri, `SELECT org_id::text, last_validated_at IS NOT NULL, created_at IS NOT NULL, updated_at IS NOT NULL,
-				features_override::text, limits_override::text, licensed_users IS NULL, issued_at IS NULL, validation_error IS NULL FROM org_licenses ORDER BY org_id`)
+				features_override::text, limits_override::text, licensed_users IS NULL, issued_at IS NULL, validation_error IS NULL,
+				`+webhookTimestamp("expires_at", start)+` FROM org_licenses ORDER BY org_id`)
 		},
+	} {
+		tables[name] = read
 	}
 	names := make([]string, 0, len(tables))
 	for name := range tables {
@@ -323,6 +350,7 @@ func TestVenueOracleBillingWebhook(t *testing.T) {
 			t.Errorf("%s rows differ (or are empty):\n python %s\n go     %s", name, pyRows, goRows)
 		}
 	}
+	measureSubscriptions(t, ctx, venue.AdminURI(t, venue.GoDB))
 	goLicenses := licenses(venue.AdminURI(t, venue.GoDB))
 	if !strings.Contains(goLicenses, "valid=true") || !strings.Contains(goLicenses, `"tier":"enterprise"`) {
 		t.Errorf("the Go plane stored no verified enterprise license: the checkout path measured nothing\n%s", goLicenses)

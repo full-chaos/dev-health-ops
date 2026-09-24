@@ -20,6 +20,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
@@ -36,7 +37,11 @@ type Deps struct {
 	// LICENSE_PRIVATE_KEY (the Stripe webhook's two secrets).
 	WebhookSecret     secrets.Value
 	LicensePrivateKey secrets.Value
-	Logger            *slog.Logger
+	// Producer publishes the billing notification handoffs the webhook
+	// queues (nil: an enqueue fails and is logged, as a route failure is
+	// in Python).
+	Producer *joboutbox.Producer
+	Logger   *slog.Logger
 	// Now is the clock (nil = time.Now).
 	Now func() time.Time
 }
@@ -47,6 +52,7 @@ type handlers struct {
 	config        config.BillingConfig
 	webhookSecret secrets.Value
 	licenseKey    secrets.Value
+	producer      *joboutbox.Producer
 	logger        *slog.Logger
 	now           func() time.Time
 }
@@ -56,7 +62,7 @@ type handlers struct {
 // is the method its 405 reports.
 func Routes(deps Deps) []httpapi.Route {
 	h := handlers{pool: deps.Pool, stripe: deps.Stripe, config: deps.Config, webhookSecret: deps.WebhookSecret,
-		licenseKey: deps.LicensePrivateKey, logger: deps.Logger, now: deps.Now}
+		licenseKey: deps.LicensePrivateKey, producer: deps.Producer, logger: deps.Logger, now: deps.Now}
 	if h.logger == nil {
 		h.logger = slog.Default()
 	}

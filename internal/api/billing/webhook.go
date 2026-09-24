@@ -33,6 +33,10 @@ var errWebhookEvent = errors.New("billing: stripe webhook event unreadable")
 // (CHAOS-6526, a data-model decision). Parity: the same bare 500.
 var errInvoiceDedupe = errors.New("billing: invoice webhook dedupe is broken on the Python plane (CHAOS-6526); parity 500")
 
+// errWebhookCustomer is a truthy customer that is not a string reaching
+// org_licenses.customer_id (a text column): the flush fails.
+var errWebhookCustomer = errors.New("billing: customer id is not a string")
+
 var webhookOK = func() *pyjson.Object {
 	out := pyjson.NewObject()
 	out.Set("status", "ok")
@@ -105,10 +109,25 @@ func (h handlers) stripeWebhook(w http.ResponseWriter, r *http.Request) {
 			h.internal(w, r, "stripe webhook", err)
 			return
 		}
+	case eventType == "customer.subscription.created":
+		h.processSubscriptionEvent(ctx, event, eventType, dataObject)
+	case eventType == "customer.subscription.updated":
+		h.processSubscriptionEvent(ctx, event, eventType, dataObject)
+		if err := h.subscriptionUpdated(ctx, dataObject); err != nil {
+			h.internal(w, r, "stripe webhook", err)
+			return
+		}
+	case eventType == "customer.subscription.deleted":
+		h.processSubscriptionEvent(ctx, event, eventType, dataObject)
+		h.subscriptionDeleted(ctx, dataObject)
+	case eventType == "customer.subscription.trial_will_end":
+		if err := h.trialWillEnd(ctx, dataObject); err != nil {
+			h.internal(w, r, "stripe webhook", err)
+			return
+		}
 	default:
-		// customer.subscription.*, charge.refund* and the rest: the later
-		// slices of this port (CHAOS-6518, CHAOS-6519); unhandled types log
-		// only, as Python does.
+		// charge.refund* and the rest: the later slice of this port
+		// (CHAOS-6519); unhandled types log only, as Python does.
 		h.logger.DebugContext(ctx, "Unhandled Stripe event", "type", eventType)
 	}
 	h.write(w, ok(webhookOK))
@@ -208,16 +227,37 @@ func (h handlers) checkoutTier(ctx context.Context, client *stripe.Client, sessi
 		}
 		priceIDs = append(priceIDs, attr(price, "id", nil))
 	}
+	tier, err := h.lineItemsTier(ctx, priceIDs)
+	if err != nil {
+		h.logger.ErrorContext(ctx, "Failed to retrieve line items, defaulting to TEAM")
+		return "team"
+	}
+	return tier
+}
+
+// errUnhashablePrice is the price map's dict lookup of a truthy price id
+// that is a dict or a list: Python's TypeError (unhashable type).
+var errUnhashablePrice = errors.New("billing: price id is unhashable")
+
+// lineItemsTier is get_tier_from_line_items over the items' price ids: the
+// first truthy id the price map knows, else team.
+func (h handlers) lineItemsTier(ctx context.Context, priceIDs []pyjson.Value) (string, error) {
 	for _, id := range priceIDs {
-		// `if price_id:`: an empty id never matches a configured price.
-		if text, isText := id.(string); isText {
-			if tier, known := h.priceTier(text); known {
-				return tier
+		// `if price_id:`: an empty id never reaches the map.
+		if !pyjson.Truthy(id) {
+			continue
+		}
+		switch typed := id.(type) {
+		case string:
+			if tier, known := h.priceTier(typed); known {
+				return tier, nil
 			}
+		case *pyjson.Object, []pyjson.Value:
+			return "", errUnhashablePrice
 		}
 	}
 	h.logger.WarnContext(ctx, "No recognized price ID in line items, defaulting to TEAM")
-	return "team"
+	return "team", nil
 }
 
 // checkoutCompleted is _handle_checkout_completed over a plain dict: no
@@ -299,6 +339,11 @@ func (h handlers) persistLicense(ctx context.Context, orgID, tier, license strin
 			}
 		}
 		customerText, customerSet := customer.(string)
+		if !customerSet && pyjson.Truthy(customer) {
+			// `org_license.customer_id = customer_id` with a value that is
+			// not a str: the text column refuses it at flush.
+			return errWebhookCustomer
+		}
 		customerSet = customerSet && customerText != ""
 		if !licenseFound {
 			var storedCustomer *string

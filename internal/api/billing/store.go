@@ -142,12 +142,16 @@ func loadBundles(ctx context.Context, q querier, planID uuid.UUID) ([]bundleRow,
 }
 
 // normalizeTier is normalize_billing_tier with its "team" default.
-func normalizeTier(value string) string {
+func normalizeTier(value string) string { return normalizeBillingTier(value, "team") }
+
+// normalizeBillingTier is normalize_billing_tier: the stripped, lowered
+// tier when it is one of the three, else fallback.
+func normalizeBillingTier(value, fallback string) string {
 	switch lowered := pythonparity.Lower(pythonparity.Strip(value)); lowered {
 	case "community", "team", "enterprise":
 		return lowered
 	}
-	return "team"
+	return fallback
 }
 
 // ensureDict is ensure_dict: a JSON object as is, anything else {}.

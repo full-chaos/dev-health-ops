@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -263,4 +264,67 @@ func TestKeyedRateLimitUsesTheDefaultErrorWriter(t *testing.T) {
 	if body := second.Body.String(); body == "" {
 		t.Fatal("KeyedRateLimit's default writer produced an empty body")
 	}
+}
+
+// TestValidateThenLimitSpendsNoAllowanceOnAFailedValidation is the class
+// property behind CHAOS-6435: requests the validator refuses cost nothing;
+// only requests that pass it count, and the limit still holds for those.
+func TestValidateThenLimitSpendsNoAllowanceOnAFailedValidation(t *testing.T) {
+	now := time.Now()
+	limiter := NewKeyedLimiter(2, time.Hour, func() time.Time { return now })
+	type marker struct{}
+	validate := func(w http.ResponseWriter, r *http.Request) (*http.Request, bool) {
+		if r.Header.Get("X-Valid") != "yes" {
+			http.Error(w, "invalid", http.StatusUnprocessableEntity)
+			return nil, false
+		}
+		return r.WithContext(context.WithValue(r.Context(), marker{}, "validated")), true
+	}
+	reached := 0
+	handler := ValidateThenLimit(validate, limiter, func(*http.Request) string { return "admin" }, WriteError)(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			reached++
+			if r.Context().Value(marker{}) != "validated" {
+				t.Error("the validator's request did not reach the handler")
+			}
+			w.WriteHeader(http.StatusOK)
+		}))
+	call := func(valid bool) int {
+		request := httptest.NewRequest(http.MethodPost, "/route", nil)
+		if valid {
+			request.Header.Set("X-Valid", "yes")
+		}
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, request)
+		return recorder.Code
+	}
+
+	for i := range 10 {
+		if got := call(false); got != http.StatusUnprocessableEntity {
+			t.Fatalf("invalid call %d = %d, want 422", i+1, got)
+		}
+	}
+	for i := range 2 {
+		if got := call(true); got != http.StatusOK {
+			t.Fatalf("valid call %d after ten invalid ones = %d, want 200 (invalid calls must cost nothing)", i+1, got)
+		}
+	}
+	if got := call(true); got != http.StatusTooManyRequests {
+		t.Fatalf("third valid call = %d, want 429 (the limit still holds for valid calls)", got)
+	}
+	if got := call(false); got != http.StatusUnprocessableEntity {
+		t.Fatalf("an invalid call once the allowance is spent = %d, want 422 (validation answers before the limiter)", got)
+	}
+	if reached != 2 {
+		t.Fatalf("handler reached %d times, want 2", reached)
+	}
+}
+
+func TestValidateThenLimitRequiresAValidator(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("a nil validator was accepted; it would limit first and silently reintroduce the divergence")
+		}
+	}()
+	ValidateThenLimit(nil, NewKeyedLimiter(1, time.Hour, nil), func(*http.Request) string { return "" }, WriteError)
 }

@@ -165,3 +165,46 @@ func KeyedRateLimitWith(limiter *KeyedLimiter, keyFunc KeyFunc, write ErrorWrite
 		})
 	}
 }
+
+// RequestValidator is a route's request validation: the checks FastAPI runs
+// BEFORE it calls the endpoint (a pydantic body model's field constraints).
+// On failure it writes the response itself and returns false; on success it
+// returns the request to hand on, which may carry the parsed values in its
+// context so the handler does not parse twice.
+type RequestValidator func(w http.ResponseWriter, r *http.Request) (*http.Request, bool)
+
+// ValidateThenLimit is the one implementation of the order every
+// Python-limited route with a body model has: validate, THEN spend allowance,
+// then run the handler. On the Python api, FastAPI validates the body before
+// the endpoint runs and slowapi's @limiter.limit wraps the endpoint, so a
+// request that fails validation is a 422 that costs the caller nothing
+// against the limit. Validating inside the handler, behind KeyedRateLimit,
+// spends one allowance per malformed request instead -- measured against the
+// live Python api on set_user_password: five malformed bodies then six valid
+// ones is 200 x5 then 429 on Python, and 429 on every valid call on the old
+// Go wiring.
+//
+// Only the pydantic-level validation belongs in validate. What Python does
+// INSIDE the endpoint (password-policy checks, org-access checks) runs after
+// the limiter there and must stay in the handler, where it keeps counting.
+//
+// validate is required: a route with no validation stage has no reason to
+// use this wrapper (use KeyedRateLimitWith), and a nil validator that
+// silently limited first would reintroduce exactly the divergence this
+// exists to end.
+func ValidateThenLimit(validate RequestValidator, limiter *KeyedLimiter, keyFunc KeyFunc, write ErrorWriter) func(http.Handler) http.Handler {
+	if validate == nil {
+		panic("httpapi: ValidateThenLimit needs a validator")
+	}
+	limit := KeyedRateLimitWith(limiter, keyFunc, write)
+	return func(next http.Handler) http.Handler {
+		limited := limit(next)
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			checked, ok := validate(w, r)
+			if !ok {
+				return
+			}
+			limited.ServeHTTP(w, checked)
+		})
+	}
+}

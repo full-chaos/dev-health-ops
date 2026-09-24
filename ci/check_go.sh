@@ -356,18 +356,20 @@ check_live_python_oracles() {
       DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
       PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
       go test -mod=readonly -count=1 \
-        -run '^TestFernetCipherMatchesLivePythonCustomSalt$' \
+        -run '^(TestFernetCipherMatchesLivePythonCustomSalt|TestFernetCipherMatchesLivePythonDefaultSalt|TestFernetRefusesWithoutKeyLikePython)$' \
         ./internal/providerfoundation/...
   ); then
     rm -rf -- "${proof_dir}"
     return 1
   fi
-  proof_file="${proof_dir}/providerfoundation-credentials"
-  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
-    printf 'ERROR: providerfoundation live Python encryption measurement did not occur\n' >&2
-    rm -rf -- "${proof_dir}"
-    return 1
-  fi
+  for proof_name in providerfoundation-credentials providerfoundation-credentials-default-salt providerfoundation-credentials-no-key; do
+    proof_file="${proof_dir}/${proof_name}"
+    if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+      printf 'ERROR: providerfoundation live Python encryption measurement %s did not occur\n' "${proof_name}" >&2
+      rm -rf -- "${proof_dir}"
+      return 1
+    fi
+  done
 
   printf 'go test -count=1: internal/edgetokenmint (Go-minted edge access token vs the live Python edge validator)\n'
   if ! (
@@ -515,7 +517,7 @@ check_live_python_oracles() {
       DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
       PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
       go test -mod=readonly -count=1 \
-        -run '^(TestStrReprMatchesLivePython|TestDecodeUTF8ReplaceMatchesLivePython|TestURLSplitMatchesLivePython|TestIDNAEncodeMatchesLivePython)$' \
+        -run '^(TestStrReprMatchesLivePython|TestDecodeUTF8ReplaceMatchesLivePython|TestURLSplitMatchesLivePython|TestIDNAEncodeMatchesLivePython|TestSequenceRatioMatchesLivePython|TestSanitizeErrorTextMatchesLivePython)$' \
         ./internal/pythonparity
   ); then
     rm -rf -- "${proof_dir}"
@@ -656,7 +658,7 @@ check_live_python_oracles() {
     rm -rf -- "${proof_dir}"
     return 1
   fi
-  for proof_name in api-policy-principal api-pyjson api-pyjson-dumps api-pyjson-model api-pyjson-syntax-error-text api-orgs-registry api-pytime api-pytime-date api-pytime-fromisoformat api-pytime-pydantic api-health-revisions api-pybody-queryint api-pybody-querybool api-pybody-bodyint api-pybody-emailstr pythonparity-pyunicodedata pythonparity-pyunicodedata-nfc pythonparity-pyidna-tables pythonparity-pyidna-behaviour pythonparity-emailvalidator pythonparity-strrepr pythonparity-utf8-replace pythonparity-urlsplit pythonparity-idna llmorgsettings-validate-base-url httpapi-forwarded-scheme api-customerpush-schema api-customerpush-bodies api-pybody-queryuuid api-billing-bodies api-billing-helpers api-billing-stripe-version api-licensing-registry; do
+  for proof_name in api-policy-principal api-pyjson api-pyjson-dumps api-pyjson-model api-pyjson-syntax-error-text api-orgs-registry api-pytime api-pytime-date api-pytime-fromisoformat api-pytime-pydantic api-health-revisions api-pybody-queryint api-pybody-querybool api-pybody-bodyint api-pybody-emailstr pythonparity-pyunicodedata pythonparity-pyunicodedata-nfc pythonparity-pyidna-tables pythonparity-pyidna-behaviour pythonparity-emailvalidator pythonparity-strrepr pythonparity-utf8-replace pythonparity-seqratio pythonparity-sanitize pythonparity-urlsplit pythonparity-idna llmorgsettings-validate-base-url httpapi-forwarded-scheme api-customerpush-schema api-customerpush-bodies api-pybody-queryuuid api-billing-bodies api-billing-helpers api-billing-stripe-version api-licensing-registry; do
     proof_file="${proof_dir}/${proof_name}"
     if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
       printf 'ERROR: api live Python oracle %s did not run\n' "${proof_name}" >&2

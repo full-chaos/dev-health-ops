@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -258,16 +259,21 @@ func TestWebhookIntakeVenueOracleGitHubGitLabJiraHealth(t *testing.T) {
 	// delivery ids inside are random per plane: each plane's stored
 	// webhook_deliveries ids are labelled first, in the delivery rows'
 	// order, so an args id must name that plane's persisted delivery (an
-	// id that joins no delivery gets a label of its own). Go stores the
-	// canonical job-contract text (indented), Python json.dumps text: that
-	// named gap is ticketed with the job outbox owner.
+	// id that joins no delivery gets a label of its own). Both planes store
+	// json.dumps text, so the rows are compared exactly.
 	argsQuery := `SELECT coalesce(string_agg(args::text, E'\x1e' ORDER BY job_kind, dedupe_key), '') FROM worker_job_outbox`
 	deliveryIDs := `SELECT coalesce(string_agg(id::text, ' ' ORDER BY provider, delivery_key), '') FROM webhook_deliveries`
 	planeArgs := func(uri string) []string {
 		return blankedJSONRows(venueoracle.TableRows(t, ctx, uri, argsQuery), strings.Fields(venueoracle.TableRows(t, ctx, uri, deliveryIDs)))
 	}
-	venueoracle.CompareJSONSpacingGap(t, "worker_job_outbox.args",
-		planeArgs(venue.AdminURI(t, venue.SourceDB)), planeArgs(venue.AdminURI(t, venue.GoDB)))
+	pythonArgs := planeArgs(venue.AdminURI(t, venue.SourceDB))
+	goArgs := planeArgs(venue.AdminURI(t, venue.GoDB))
+	if len(pythonArgs) == 0 {
+		t.Error("worker_job_outbox.args: no rows compared; the check measured nothing")
+	}
+	if !slices.Equal(pythonArgs, goArgs) {
+		t.Errorf("worker_job_outbox.args differs:\n python: %q\n go:     %q", pythonArgs, goArgs)
+	}
 	// venueoracle.Start already wrote this test's own proof file (by
 	// t.Name()) once the venue genuinely built -- nothing to do here.
 }

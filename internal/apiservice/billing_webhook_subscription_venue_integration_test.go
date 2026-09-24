@@ -168,6 +168,7 @@ func subscriptionRequests(t *testing.T, f billingFixture, event webhookEventFunc
 	// an empty customer is refused; a missing status is "incomplete".
 	// Cancelled, and the handler's license persist refused (a customer that
 	// is not a str): the sync's invalid community license stays.
+	sub("sub.created: active (org 5)", created, "sub_s5", with(metadata(org[4]), fields{"customer": "cus_s5"}), price("price_team_cfg"))
 	sub("sub.updated: canceled, customer an int (org 5)", updated, "sub_s5", with(metadata(org[4]), fields{"customer": 5,
 		"status": "canceled"}), price("price_team_cfg"))
 	sub("sub.created: customer null, fractional trial end, empty-object flag (org 6)", created, "sub_s6", with(metadata(org[5]),

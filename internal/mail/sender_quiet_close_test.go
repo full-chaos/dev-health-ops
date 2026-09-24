@@ -3,6 +3,7 @@ package mail
 import (
 	"bytes"
 	"context"
+	"errors"
 	"log/slog"
 	"net"
 	"strconv"
@@ -68,4 +69,35 @@ func TestSMTPSendHonoursContextAfterDial(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("send outlived its 150ms context by more than 1.8s")
 	}
+}
+
+// A non-ASCII envelope address is refused before any connection, matching
+// smtplib (UnicodeEncodeError, nothing sent). Display names are unaffected.
+func TestSMTPSenderRefusesNonASCIIEnvelopeAddresses(t *testing.T) {
+	server := startCaptureSMTPServer(t)
+	host, port := server.hostPort(t)
+	for _, tc := range []struct {
+		name, from, to string
+		refused        bool
+	}{
+		{"recipient", "billing@example.test", "jörg@example.test", true},
+		{"recipient with a display name", "billing@example.test", "Jorg <jörg@example.test>", true},
+		{"sender", "dév@example.test", "to@example.test", true},
+		{"non-ascii display name only", "Dév <billing@example.test>", "to@example.test", false},
+	} {
+		sender := &smtpSender{from: tc.from, host: host, port: port}
+		err := sender.Send(context.Background(), Message{To: tc.to, Subject: "s", HTML: "<p>x</p>"})
+		if tc.refused {
+			if !errors.Is(err, errEnvelopeNotASCII) {
+				t.Errorf("%s: err = %v, want errEnvelopeNotASCII", tc.name, err)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("%s: %v", tc.name, err)
+			continue
+		}
+		server.take(t)
+	}
+	server.assertNone(t)
 }

@@ -2,6 +2,8 @@ package syncreconciler
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"strconv"
 	"strings"
@@ -9,6 +11,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
+	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )
@@ -161,6 +164,50 @@ func TestReclaimEnvelopeRebindsOnlyTheIdempotencyKey(t *testing.T) {
 	}
 	if !strings.HasPrefix(hash, "sha256:") || len(hash) != 71 {
 		t.Errorf("payload hash %q does not satisfy ck_worker_job_outbox_payload_hash", hash)
+	}
+}
+
+// TestReclaimEnvelopeStoresPythonJSONTextAndHashesTheCanonicalForm: the repair
+// writes worker_job_outbox.args like every other writer of the column, in the
+// text joboutbox.StoredArgsText spells (Python's json.dumps), while payload_hash
+// stays sha256 of the canonical bytes -- the hash the relay re-derives from
+// Decode + MarshalCanonical before it will deliver the row.
+func TestReclaimEnvelopeStoresPythonJSONTextAndHashesTheCanonicalForm(t *testing.T) {
+	organization := "70d529e0-3c06-4597-8480-794fd02328b6"
+	base := jobcontract.KindSyncProviderUnit + ":" + testUnitID
+	source := jobcontract.Envelope{
+		ContractVersion: jobcontract.ContractVersionV1,
+		OrganizationID:  &organization,
+		CorrelationID:   "sync-run:1410329c-51aa-5895-89c7-b36442da361e",
+		IdempotencyKey:  base,
+		Domain:          jobcontract.DomainLink{Type: "sync_run_unit", ID: testUnitID},
+		Payload:         jobcontract.ProviderUnitPayload{UnitID: testUnitID},
+	}
+	encoded, err := jobcontract.MarshalCanonical(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, hash, err := reclaimEnvelope(string(encoded), base+"/reclaim/1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := jobcontract.Decode(jobcontract.KindSyncProviderUnit, []byte(stored))
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical, err := jobcontract.MarshalCanonical(decoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(stored, "\n") || stored == string(canonical) {
+		t.Fatalf("stored args is not the one-line json.dumps form: %q", stored)
+	}
+	if want, err := joboutbox.StoredArgsText(canonical); err != nil || stored != want {
+		t.Fatalf("stored args = %q, want joboutbox.StoredArgsText's %q (err %v)", stored, want, err)
+	}
+	digest := sha256.Sum256(canonical)
+	if want := "sha256:" + hex.EncodeToString(digest[:]); hash != want {
+		t.Fatalf("payload hash = %s, want sha256 of the canonical bytes %s", hash, want)
 	}
 }
 

@@ -745,5 +745,5 @@ func (h handlers) discoverMembers(w http.ResponseWriter, r *http.Request) {
 		h.internal(w, r, "match members", err)
 		return
 	}
-	policy.WriteJSON(w, http.StatusOK, membersDiscoverJSON(teamID, provider, matches), nil)
+	policy.WriteModel(w, http.StatusOK, membersDiscoverJSON(teamID, provider, matches), nil)
 }

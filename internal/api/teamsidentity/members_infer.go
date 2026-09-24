@@ -430,7 +430,7 @@ func (h handlers) inferMembers(w http.ResponseWriter, r *http.Request) {
 			members[index].Email = matched.Email
 		}
 	}
-	policy.WriteJSON(w, http.StatusOK, inferResponseJSON(teamID, projectKey, days, members), nil)
+	policy.WriteModel(w, http.StatusOK, inferResponseJSON(teamID, projectKey, days, members), nil)
 }
 
 func findJiraIdentity(identities []Identity, accountID string) *Identity {

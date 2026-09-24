@@ -333,7 +333,7 @@ func (h handlers) confirmMembers(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	policy.WriteJSON(w, http.StatusOK, confirmResponse(linked, created, skipped), nil)
+	policy.WriteModel(w, http.StatusOK, confirmResponse(linked, created, skipped), nil)
 }
 
 // confirmInferredMembers is POST /teams/{team_id}/confirm-inferred-members.
@@ -458,5 +458,5 @@ func (h handlers) confirmInferredMembers(w http.ResponseWriter, r *http.Request)
 			return
 		}
 	}
-	policy.WriteJSON(w, http.StatusOK, confirmResponse(linked, created, skipped), nil)
+	policy.WriteModel(w, http.StatusOK, confirmResponse(linked, created, skipped), nil)
 }

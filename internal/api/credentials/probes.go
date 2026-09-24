@@ -188,15 +188,20 @@ func (r response) text() string { return strings.ToValidUTF8(string(r.body), "ï¿
 // not a JSON object raises in Python (JSONDecodeError or AttributeError) and
 // the route shows its message.
 func (r response) jsonObject() (*pyjson.Object, error) {
-	if message, status := pythonparity.PythonJSONDecode(r.body); status == pythonparity.JSONDecodeError {
-		return nil, errors.New(message)
-	}
-	value, err := pyjson.DecodeString(string(r.body))
+	document, err := pyjson.DecodeBody(r.body)
 	if err != nil {
-		// A body Python's json.loads accepts (NaN) or cannot decode as text
-		// (a non-UTF-8 encoding) and the Go decoder refuses: the message
-		// stays the generic first-character one.
+		// A body that is not text in its detected encoding: Python raises
+		// UnicodeDecodeError, whose text is not modelled.
 		return nil, errors.New("Expecting value: line 1 column 1 (char 0)")
+	}
+	value, err := pyjson.DecodeString(document)
+	if err != nil {
+		var syntax *pyjson.SyntaxError
+		if errors.As(err, &syntax) {
+			return nil, errors.New(syntax.Text(document))
+		}
+		// The integer digit limit: json.loads raises a ValueError.
+		return nil, err
 	}
 	object, ok := value.(*pyjson.Object)
 	if !ok {

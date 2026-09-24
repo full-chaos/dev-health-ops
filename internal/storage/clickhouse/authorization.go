@@ -69,6 +69,12 @@ func APIPosture(database string) Posture {
 		{Database: database, Table: "user_metrics_daily", AllowSelect: true},
 		{Database: database, Table: "team_metrics_daily", AllowSelect: true},
 		{Database: database, Table: "work_item_metrics_daily", AllowSelect: true},
+		// GET /backfill-jobs/{job_id} (CHAOS-6439) reads the backfill
+		// window's metrics diagnostics: repos with data per day (from
+		// repo_metrics_daily, granted above) and the latest repo-scope
+		// complexity and compounding-risk rows. Read-only.
+		{Database: database, Table: "repo_complexity_daily", AllowSelect: true},
+		{Database: database, Table: "compounding_risk_daily", AllowSelect: true},
 	}}
 }
 

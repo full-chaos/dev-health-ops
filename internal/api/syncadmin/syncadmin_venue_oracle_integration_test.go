@@ -5,6 +5,7 @@ package syncadmin_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http/httptest"
@@ -23,6 +24,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/apiservice"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
+	chclickhouse "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
@@ -43,6 +45,7 @@ type venueIDs struct {
 	jobSync, jobMetrics, jobB, jobBadList, jobInf               uuid.UUID
 	runP1, runP2, runB, runBadResult, runNullResult             uuid.UUID
 	runRich, runBadUnit, srcNoFull, runBadFlags                 uuid.UUID
+	bfP1, bfNone, bfBad, bfB, bfEdge, bfOneDay, bfBackward      uuid.UUID
 }
 
 func newVenueIDs() venueIDs {
@@ -57,6 +60,7 @@ func newVenueIDs() venueIDs {
 		&ids.cfgBadOptionsIntKey, &ids.cfgBadOptionsTrue, &ids.cfgSurrogate, &ids.jobSync, &ids.jobMetrics, &ids.jobB, &ids.jobBadList,
 		&ids.jobInf, &ids.runP1, &ids.runP2, &ids.runB, &ids.runBadResult, &ids.runNullResult,
 		&ids.runRich, &ids.runBadUnit, &ids.srcNoFull, &ids.runBadFlags,
+		&ids.bfP1, &ids.bfNone, &ids.bfBad, &ids.bfB, &ids.bfEdge, &ids.bfOneDay, &ids.bfBackward,
 	} {
 		*target = uuid.New()
 	}
@@ -87,9 +91,10 @@ func TestSyncAdminReadsVenueOracle(t *testing.T) {
 		Root:      root,
 		JWTKey:    jwtKey,
 		PythonEnv: []string{"HIDE_MIGRATED_CHILD_CONFIGS= On ", "SYNC_INCREMENTAL_HEAVY_MAX_WINDOW_DAYS=5", "SYNC_WATERMARK_OVERLAP=3600"},
-		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
+		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, venue *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
 			seedSyncAdmin(t, ctx, admin, ids)
+			seedBackfillDiagnostics(t, ctx, venue, ids)
 			return map[string]map[string]any{
 				"adminA":     {"user_id": ids.adminA.String(), "email": "admin-a@example.com", "org_id": ids.orgA.String(), "role": "admin"},
 				"memberA":    {"user_id": ids.memberA.String(), "email": "member-a@example.com", "org_id": ids.orgA.String(), "role": "member"},
@@ -104,6 +109,7 @@ func TestSyncAdminReadsVenueOracle(t *testing.T) {
 
 	requests := syncAdminRequests(venue, ids)
 	python := venue.ServePython(t, requests)
+	inspectDiagnostics := inspectBackfillDiagnostics(t)
 	receipt := venueoracle.Diff(t, base, requests, python, venueoracle.DiffOptions{
 		// lag_seconds is now minus the watermark at request time, and the
 		// two planes answer minutes apart: the digits are blanked on both.
@@ -119,6 +125,7 @@ func TestSyncAdminReadsVenueOracle(t *testing.T) {
 		// The seed must reach every freshness state it was built for, or a
 		// SAME on the rich run could be two empty lists agreeing.
 		Inspect: func(request venueoracle.Request, goResponse venueoracle.Response) {
+			inspectDiagnostics(request, goResponse)
 			if request.Name != "run units rich " {
 				return
 			}
@@ -152,6 +159,7 @@ func syncAdminRequests(venue *venueoracle.Venue, ids venueIDs) []venueoracle.Req
 		"/sync-configs/" + ids.cfgPlanner.String(), "/sync-configs/" + ids.cfgPlanner.String() + "/repositories",
 		"/sync-configs/" + ids.cfgPlanner.String() + "/jobs", "/backfill-jobs", "/sync-runs/" + ids.runP1.String(),
 		"/sync-configs/" + ids.cfgPlanner.String() + "/coverage", "/sync-runs/" + ids.runRich.String() + "/units",
+		"/sync-configs/" + ids.cfgPlanner.String() + "/coverage", "/backfill-jobs/" + ids.bfP1.String(),
 	}
 	// The guard domain, on every route: no credential, a malformed and a
 	// wrong-key credential, a member, an admin and a superuser without an
@@ -263,6 +271,25 @@ func syncAdminRequests(venue *venueoracle.Venue, ids venueIDs) []venueoracle.Req
 		requests = append(requests, get("backfill jobs "+query, "/backfill-jobs"+query, a))
 	}
 	requests = append(requests, get("backfill jobs other org", "/backfill-jobs", b), get("backfill jobs empty org", "/backfill-jobs", c))
+
+	// get_backfill_job: every sync_run marker shape, the diagnostics windows
+	// over the seeded ClickHouse rows, another org's job, an unknown id,
+	// and id spellings uuid.UUID() reads or refuses (a refused one is the
+	// api's unhandled 500).
+	for name, id := range map[string]uuid.UUID{
+		"linked run": ids.bfP1, "no run": ids.bfNone, "bad marker": ids.bfBad, "month edge": ids.bfEdge,
+		"one day": ids.bfOneDay, "backward window": ids.bfBackward, "other org": ids.bfB, "unknown": uuid.New(),
+	} {
+		requests = append(requests, get("backfill job "+name, "/backfill-jobs/"+id.String(), a))
+	}
+	for _, spelling := range []string{
+		strings.ToUpper(ids.bfP1.String()), "{" + ids.bfP1.String() + "}", "urn:uuid:" + ids.bfP1.String(),
+		strings.ReplaceAll(ids.bfP1.String(), "-", ""), "not-a-uuid", "%20" + ids.bfP1.String(),
+	} {
+		requests = append(requests, get("backfill job spelling "+spelling, "/backfill-jobs/"+spelling, a))
+	}
+	requests = append(requests, get("backfill job as other org", "/backfill-jobs/"+ids.bfB.String(), b),
+		get("backfill job member", "/backfill-jobs/"+ids.bfP1.String(), bearer("memberA")))
 
 	// get_sync_run: found, another org's, unknown, spellings, a result the
 	// response model refuses, a null result.
@@ -540,24 +567,33 @@ VALUES ($1, $2, $3, $4::timestamptz, $5::timestamptz, $6, $7::json, $8, 'manual'
 	jobRun(ids.jobBadList, 2, nil, nil, nil, `[1, 2]`, nil, "2026-06-01 00:00:15+00")
 	jobRun(ids.jobInf, 2, nil, nil, nil, `{"items_synced": 1e400}`, nil, "2026-06-01 00:00:16+00")
 
-	backfill := func(org uuid.UUID, task any, status string, total, completed, failed int, errorMessage any, created string) {
+	window := [2]string{"2026-01-01", "2026-01-31"}
+	backfill := func(id, org uuid.UUID, task any, status string, total, completed, failed int, errorMessage any, created string) {
 		exec(`INSERT INTO backfill_jobs (id, org_id, sync_config_id, celery_task_id, status, since_date, before_date, total_chunks,
 completed_chunks, failed_chunks, error_message, started_at, completed_at, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $5, '2026-01-01', '2026-01-31', $6, $7, $8, $9, '2026-02-01 00:00:00+00', NULL, $10::timestamptz, $10::timestamptz + interval '1 second')`,
-			uuid.New(), org.String(), ids.cfgPlanner, task, status, total, completed, failed, errorMessage, created)
+VALUES ($1, $2, $3, $4, $5, $11::date, $12::date, $6, $7, $8, $9, '2026-02-01 00:00:00+00', NULL, $10::timestamptz, $10::timestamptz + interval '1 second')`,
+			id, org.String(), ids.cfgPlanner, task, status, total, completed, failed, errorMessage, created, window[0], window[1])
 	}
-	backfill(ids.orgA, "sync_run:"+ids.runP1.String(), "pending", 0, 0, 0, nil, "2026-07-01 00:00:01+00")
-	backfill(ids.orgA, nil, "running", 3, 1, 0, nil, "2026-07-01 00:00:02+00")
-	backfill(ids.orgA, "x sync_run:not-a-uuid", "failed", 2, 0, 2, "bad", "2026-07-01 00:00:03+00")
-	backfill(ids.orgA, "sync_run:", "pending", 0, 0, 0, nil, "2026-07-01 00:00:04+00")
-	backfill(ids.orgA, "a:sync_run:"+ids.runB.String(), "pending", 1, 1, 0, nil, "2026-07-01 00:00:05+00")
-	backfill(ids.orgA, "sync_run:{"+ids.runP2.String()+"}", "pending", 4, 0, 0, "old", "2026-07-01 00:00:06+00")
-	backfill(ids.orgA, "sync_run:"+uuid.NewString()+"sync_run:"+ids.runP1.String(), "done", 7, 7, 0, nil, "2026-07-01 00:00:07.123456+00")
+	backfill(ids.bfP1, ids.orgA, "sync_run:"+ids.runP1.String(), "pending", 0, 0, 0, nil, "2026-07-01 00:00:01+00")
+	backfill(ids.bfNone, ids.orgA, nil, "running", 3, 1, 0, nil, "2026-07-01 00:00:02+00")
+	backfill(ids.bfBad, ids.orgA, "x sync_run:not-a-uuid", "failed", 2, 0, 2, "bad", "2026-07-01 00:00:03+00")
+	backfill(uuid.New(), ids.orgA, "sync_run:", "pending", 0, 0, 0, nil, "2026-07-01 00:00:04+00")
+	backfill(uuid.New(), ids.orgA, "a:sync_run:"+ids.runB.String(), "pending", 1, 1, 0, nil, "2026-07-01 00:00:05+00")
+	backfill(uuid.New(), ids.orgA, "sync_run:{"+ids.runP2.String()+"}", "pending", 4, 0, 0, "old", "2026-07-01 00:00:06+00")
+	backfill(uuid.New(), ids.orgA, "sync_run:"+uuid.NewString()+"sync_run:"+ids.runP1.String(), "done", 7, 7, 0, nil, "2026-07-01 00:00:07.123456+00")
 	// progress_pct in the ranges where json.dumps and pydantic-core write
 	// a float differently (this route has no response model: json.dumps).
-	backfill(ids.orgA, nil, "running", 2000000000, 1, 0, nil, "2026-07-01 00:00:08+00")
-	backfill(ids.orgA, nil, "running", 9000000, 1, 0, nil, "2026-07-01 00:00:09+00")
-	backfill(ids.orgB, nil, "pending", 0, 0, 0, nil, "2026-07-01 00:00:10+00")
+	backfill(uuid.New(), ids.orgA, nil, "running", 2000000000, 1, 0, nil, "2026-07-01 00:00:08+00")
+	backfill(uuid.New(), ids.orgA, nil, "running", 9000000, 1, 0, nil, "2026-07-01 00:00:09+00")
+	backfill(ids.bfB, ids.orgB, nil, "pending", 0, 0, 0, nil, "2026-07-01 00:00:10+00")
+	// The detail route's diagnostics windows: across a month end, one day,
+	// and an end before the start (no days).
+	window = [2]string{"2026-01-30", "2026-02-02"}
+	backfill(ids.bfEdge, ids.orgA, nil, "running", 1, 0, 0, nil, "2026-06-30 00:00:01+00")
+	window = [2]string{"2026-01-15", "2026-01-15"}
+	backfill(ids.bfOneDay, ids.orgA, nil, "running", 1, 0, 0, nil, "2026-06-30 00:00:02+00")
+	window = [2]string{"2026-01-15", "2026-01-14"}
+	backfill(ids.bfBackward, ids.orgA, nil, "running", 1, 0, 0, nil, "2026-06-30 00:00:03+00")
 
 	projection := func(org uuid.UUID, configID uuid.UUID, lookback, version int, invalidated bool, payload string) {
 		exec(`INSERT INTO sync_coverage_projections (id, org_id, sync_config_id, history_lookback_days, projection_version,
@@ -651,7 +687,15 @@ func startGoServer(t *testing.T, ctx context.Context, venue *venueoracle.Venue, 
 	if err != nil {
 		t.Fatalf("config.Load: %v", err)
 	}
-	routes := apiservice.Routes(apiservice.Deps{Pool: pool, Auth: auth, Guard: policy.NewGuard(auth, logger)}, logger)
+	// The api's own ClickHouse login (clickhouse.APIPosture), as production
+	// wires API_CLICKHOUSE_URI; Python's plane reads the same rows through
+	// its CLICKHOUSE_URI.
+	clickHouse, err := chclickhouse.Open(ctx, chclickhouse.DefaultConfig(venue.GoAPIClickHouseURI(t)))
+	if err != nil {
+		t.Fatalf("go clickhouse: %v", err)
+	}
+	t.Cleanup(func() { _ = clickHouse.Close() })
+	routes := apiservice.Routes(apiservice.Deps{Pool: pool, ClickHouse: clickHouse, Auth: auth, Guard: policy.NewGuard(auth, logger)}, logger)
 	scope := policy.NewScope(auth, logger)
 	server, err := apiservice.NewServer(cfg, logger, routes, scope.OrgScope, scope.Impersonation)
 	if err != nil {
@@ -679,5 +723,99 @@ func repoRoot(t *testing.T) string {
 			t.Fatalf("no src/dev_health_ops above %s", file)
 		}
 		directory = parent
+	}
+}
+
+// seedBackfillDiagnostics writes the same ClickHouse rows into both
+// planes' databases for get_backfill_job's diagnostics: repos per day with
+// a repeated repo and a recomputed row, another org's and out-of-window
+// days, and compounding-risk rows with a recomputed (argMax) row, a team
+// scope row, unknown severity, and each missing input.
+func seedBackfillDiagnostics(t *testing.T, ctx context.Context, venue *venueoracle.Venue, ids venueIDs) {
+	t.Helper()
+	orgA, orgB := ids.orgA.String(), ids.orgB.String()
+	repo1, repo2 := uuid.NewString(), uuid.NewString()
+	statements := []string{
+		`INSERT INTO repo_metrics_daily (org_id, repo_id, day, computed_at) VALUES
+('` + orgA + `', '` + repo1 + `', '2026-01-01', '2026-02-01 00:00:00'),
+('` + orgA + `', '` + repo1 + `', '2026-01-01', '2026-02-02 00:00:00'),
+('` + orgA + `', '` + repo2 + `', '2026-01-01', '2026-02-01 00:00:00'),
+('` + orgA + `', '` + repo2 + `', '2026-01-31', '2026-02-01 00:00:00'),
+('` + orgA + `', '` + repo1 + `', '2026-02-01', '2026-02-01 00:00:00'),
+('` + orgA + `', '` + repo1 + `', '2026-01-15', '2026-02-01 00:00:00'),
+('` + orgA + `', '` + repo1 + `', '2025-12-31', '2026-02-01 00:00:00'),
+('` + orgB + `', '` + repo1 + `', '2026-01-02', '2026-02-01 00:00:00')`,
+		`INSERT INTO repo_complexity_daily (org_id, repo_id, day, computed_at) VALUES
+('` + orgA + `', '` + repo1 + `', '2026-01-02', '2026-02-01 00:00:00'),
+('` + orgA + `', '` + repo2 + `', '2026-01-30', '2026-02-01 00:00:00'),
+('` + orgA + `', '` + repo2 + `', '2026-02-02', '2026-02-01 00:00:00'),
+('` + orgB + `', '` + repo2 + `', '2026-01-02', '2026-02-01 00:00:00')`,
+		`INSERT INTO compounding_risk_daily (org_id, day, scope, scope_id, compounding_risk, severity, rework_churn,
+complexity_delta, single_owner_ratio, ownership_gini, review_latency_p90h, w_churn, w_complexity, w_ownership, w_review,
+threshold_elevated, threshold_high, computed_at) VALUES
+('` + orgA + `', '2026-01-01', 'repo', 'r1', NULL, 'unknown', NULL, 1, NULL, NULL, NULL, 0, 0, 0, 0, 0, 0, '2026-02-01 00:00:00'),
+('` + orgA + `', '2026-01-01', 'repo', 'r1', 0.5, 'elevated', 1, 1, 0.1, NULL, 2, 0, 0, 0, 0, 0, 0, '2026-02-02 00:00:00'),
+('` + orgA + `', '2026-01-01', 'repo', 'r2', NULL, 'unknown', NULL, NULL, NULL, NULL, NULL, 0, 0, 0, 0, 0, 0, '2026-02-01 00:00:00'),
+('` + orgA + `', '2026-01-01', 'team', 't1', NULL, 'unknown', NULL, NULL, NULL, NULL, NULL, 0, 0, 0, 0, 0, 0, '2026-02-01 00:00:00'),
+('` + orgA + `', '2026-01-15', 'repo', 'r1', 0.9, 'high', 1, NULL, NULL, 0.3, 5, 0, 0, 0, 0, 0, 0, '2026-02-01 00:00:00'),
+('` + orgA + `', '2026-02-01', 'repo', 'r1', NULL, 'unknown', NULL, NULL, NULL, NULL, NULL, 0, 0, 0, 0, 0, 0, '2026-02-01 00:00:00'),
+('` + orgB + `', '2026-01-01', 'repo', 'r1', NULL, 'unknown', NULL, NULL, NULL, NULL, NULL, 0, 0, 0, 0, 0, 0, '2026-02-01 00:00:00')`,
+	}
+	for _, database := range []string{venue.PythonClickHouseDB, venue.GoClickHouseDB} {
+		conn, err := chclickhouse.Open(ctx, chclickhouse.DefaultConfig(venue.AdminClickHouseURI(t, database)))
+		if err != nil {
+			t.Fatalf("seed clickhouse %s: %v", database, err)
+		}
+		for _, statement := range statements {
+			if err := conn.Exec(ctx, statement); err != nil {
+				_ = conn.Close()
+				t.Fatalf("seed clickhouse %s: %v\n%s", database, err, statement)
+			}
+		}
+		_ = conn.Close()
+	}
+}
+
+// inspectBackfillDiagnostics checks that the seeded ClickHouse rows reach
+// the detail responses, so SAME is not two planes agreeing on zeros:
+// each window's aggregate (the per-day sum after DISTINCT repo_id, the
+// latest repo-scope compounding-risk row, org and window filters) and its
+// day count.
+func inspectBackfillDiagnostics(t *testing.T) func(venueoracle.Request, venueoracle.Response) {
+	want := map[string]string{
+		"backfill job linked run": `31 {"repo_metrics_rows":4,"repo_complexity_rows":1,"compounding_risk_rows":3,"compounding_risk_non_null_rows":2,` +
+			`"compounding_risk_unknown_rows":1,"reason_counts":{"missing_rework_churn":1,"missing_complexity_delta":2,"missing_review_latency":1,"missing_ownership_signal":1}}`,
+		"backfill job month edge": `4 {"repo_metrics_rows":2,"repo_complexity_rows":2,"compounding_risk_rows":1,"compounding_risk_non_null_rows":0,` +
+			`"compounding_risk_unknown_rows":1,"reason_counts":{"missing_rework_churn":1,"missing_complexity_delta":1,"missing_review_latency":1,"missing_ownership_signal":1}}`,
+		"backfill job one day": `1 {"repo_metrics_rows":1,"repo_complexity_rows":0,"compounding_risk_rows":1,"compounding_risk_non_null_rows":1,` +
+			`"compounding_risk_unknown_rows":0,"reason_counts":{"missing_rework_churn":0,"missing_complexity_delta":1,"missing_review_latency":0,"missing_ownership_signal":0}}`,
+		"backfill job backward window": `0 {"repo_metrics_rows":0,"repo_complexity_rows":0,"compounding_risk_rows":0,"compounding_risk_non_null_rows":0,` +
+			`"compounding_risk_unknown_rows":0,"reason_counts":{"missing_rework_churn":0,"missing_complexity_delta":0,"missing_review_latency":0,"missing_ownership_signal":0}}`,
+	}
+	seen := 0
+	t.Cleanup(func() {
+		if seen != len(want) {
+			t.Errorf("inspected %d of %d backfill diagnostics responses", seen, len(want))
+		}
+	})
+	return func(request venueoracle.Request, response venueoracle.Response) {
+		expected, ok := want[request.Name]
+		if !ok {
+			return
+		}
+		seen++
+		var body struct {
+			Diagnostics struct {
+				Aggregate json.RawMessage   `json:"aggregate"`
+				PerDay    []json.RawMessage `json:"per_day"`
+			} `json:"metrics_diagnostics"`
+		}
+		if err := json.Unmarshal([]byte(response.Body), &body); err != nil {
+			t.Errorf("%s: %v: %s", request.Name, err, response.Body)
+			return
+		}
+		if got := fmt.Sprintf("%d %s", len(body.Diagnostics.PerDay), body.Diagnostics.Aggregate); got != expected {
+			t.Errorf("%s: diagnostics\n got  %s\n want %s", request.Name, got, expected)
+		}
 	}
 }

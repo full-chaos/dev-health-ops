@@ -12,6 +12,7 @@ import (
 	"os"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -40,6 +41,7 @@ type fakeStripe struct {
 	mu       sync.Mutex
 	calls    map[string][]string
 	counters map[string]int
+	refunds  int
 }
 
 func newFakeStripe() *fakeStripe {
@@ -319,6 +321,33 @@ func (f *fakeStripe) serve(plane string, w http.ResponseWriter, r *http.Request)
 		fmt.Fprint(w, page(lines, idOf, r.URL.Query().Get("starting_after"), path))
 	case r.Method == http.MethodGet && path == "/v1/invoices/in_more_fail/lines":
 		stripeFail(w, "lines refused")
+	case r.Method == http.MethodGet && path == "/v1/invoice_payments":
+		// The invoice's payments (CHAOS-6478's refund path): a payment
+		// intent, a bare charge, or none.
+		payment := map[string]string{
+			"in_pi":     `{"type": "payment_intent", "payment_intent": "pi_listed"}`,
+			"in_pi_bad": `{"type": "payment_intent", "payment_intent": "pi_fail"}`,
+			"in_charge": `{"type": "charge", "charge": "ch_bare"}`,
+		}[r.URL.Query().Get("invoice")]
+		data := ""
+		if payment != "" {
+			data = `{"id": "inpay_1", "object": "invoice_payment", "status": "paid", "payment": ` + payment + `}`
+		}
+		fmt.Fprintf(w, `{"object": "list", "url": "/v1/invoice_payments", "has_more": false, "data": [%s]}`, data)
+	case r.Method == http.MethodPost && path == "/v1/refunds":
+		if form.Get("payment_intent") == "pi_fail" {
+			stripeFail(w, "Charge ch_x has already been refunded.")
+			return
+		}
+		charge, intent := form.Get("charge"), form.Get("payment_intent")
+		intentJSON := "null"
+		if intent != "" {
+			charge, intentJSON = "ch_of_"+intent, strconv.Quote(intent)
+		}
+		f.refunds++
+		fmt.Fprintf(w, `{"id": "re_%d", "object": "refund", "amount": %s, "charge": %q, "payment_intent": %s, "currency": "usd",
+			"status": "succeeded", "metadata": {"invoice_id": %q, "org_id": %q}}`,
+			f.refunds, form.Get("amount"), charge, intentJSON, form.Get("metadata[invoice_id]"), form.Get("metadata[org_id]"))
 	default:
 		w.WriteHeader(http.StatusNotFound)
 		fmt.Fprint(w, `{"error": {"message": "unrouted fake call", "type": "invalid_request_error"}}`)

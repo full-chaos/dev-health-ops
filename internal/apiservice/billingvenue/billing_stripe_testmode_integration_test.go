@@ -4,6 +4,7 @@ package billingvenue
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"regexp"
@@ -246,7 +247,6 @@ func TestStripeTestModeBillingDifferential(t *testing.T) {
 		request("void open invoice", "POST", "/api/v1/billing/invoices/"+openInvoice.String()+"/void", "", "owner"),
 		request("void paid invoice (Stripe refuses)", "POST", "/api/v1/billing/invoices/"+paidInvoice.String()+"/void", "", "owner"),
 		request("invoices after void", "GET", "/api/v1/billing/invoices", "", "owner"),
-		request("refund (the Python 500)", "POST", "/api/v1/billing/refunds", `{"invoice_id":"`+paidInvoice.String()+`"}`, "super"),
 		request("reconcile org", "POST", "/api/v1/billing/reconcile?org_id="+org.String(), "", "super"),
 	})
 
@@ -305,6 +305,47 @@ func TestStripeTestModeBillingDifferential(t *testing.T) {
 		if pyRows != goRows {
 			t.Errorf("rows differ for %s:\n python %s\n go     %s", table, pyRows, goRows)
 		}
+	}
+	// A real refund on the Go plane's paid test-mode invoice (Go-only: the
+	// Python route raises on the missing invoice column). The payment intent
+	// comes from Stripe's invoice payments and is stored back; the refund is
+	// read back from Stripe.
+	goAdmin, err = pgxpool.New(ctx, venue.AdminURI(t, venue.GoDB))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer goAdmin.Close()
+	if _, err := goAdmin.Exec(ctx, `UPDATE invoices SET status = 'paid', amount_paid = 1000, payment_intent_id = NULL WHERE id = $1`, paidInvoice); err != nil {
+		t.Fatal(err)
+	}
+	refundCall := func(name, body string) (int, map[string]any) {
+		response := venueoracle.Do(t, base, request(name, "POST", "/api/v1/billing/refunds", body, "super"))
+		var out map[string]any
+		_ = json.Unmarshal([]byte(response.Body), &out)
+		fmt.Fprintf(&receipt, "%-50s go=%d\n", name, response.Status)
+		return response.Status, out
+	}
+	status, refunded := refundCall("refund part of the paid invoice", `{"invoice_id":"`+paidInvoice.String()+`","amount":400,"reason":"requested_by_customer"}`)
+	if status != 200 || refunded["amount"] != float64(400) || refunded["status"] != "succeeded" {
+		t.Fatalf("refund: go answered %d %v", status, refunded)
+	}
+	if status, out := refundCall("refund over the balance", `{"invoice_id":"`+paidInvoice.String()+`","amount":700}`); status != 400 ||
+		out["detail"] != "Refund amount exceeds refundable balance" {
+		t.Errorf("over-balance refund: go answered %d %v", status, out)
+	}
+	stripeRefund, err := client.V1Refunds.Retrieve(ctx, refunded["stripe_refund_id"].(string), nil)
+	if err != nil {
+		t.Fatalf("retrieve refund: %v", err)
+	}
+	intent := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), `SELECT payment_intent_id FROM invoices WHERE id = '`+paidInvoice.String()+`'`)
+	readBack := fmt.Sprintf("%d %s %s %s", stripeRefund.Amount, stripeRefund.Status, stripeRefund.Metadata["invoice_id"], stripeRefund.Reason)
+	want := fmt.Sprintf("400 succeeded %s requested_by_customer", paidInvoice)
+	fmt.Fprintf(&receipt, "stripe refund read back: %s %s\n", readBack, venueoracle.Mark(readBack == want))
+	if readBack != want {
+		t.Errorf("stripe refund: %s, want %s", readBack, want)
+	}
+	if stripeRefund.PaymentIntent == nil || intent != stripeRefund.PaymentIntent.ID || refunded["stripe_payment_intent_id"] != intent {
+		t.Errorf("payment intent: stored %q, response %v, stripe %v", intent, refunded["stripe_payment_intent_id"], stripeRefund.PaymentIntent)
 	}
 	if path := os.Getenv("DEV_HEALTH_VENUE_RECEIPT"); path != "" {
 		_ = os.WriteFile(path, []byte(receipt.String()), 0o600)

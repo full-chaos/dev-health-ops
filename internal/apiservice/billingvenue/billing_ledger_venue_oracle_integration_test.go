@@ -201,11 +201,8 @@ func ledgerRequests(f billingFixture, tokens map[string]string) []venueoracle.Re
 	// Refunds.
 	m("refund create: anon", "POST", rf, `{"invoice_id":"x"}`, headers(""))
 	m("refund create: invalid", "POST", rf, `{"amount":0,"reason":"because","description":5}`, headers("memberA"))
-	m("refund create: bool amount", "POST", rf, `{"invoice_id":"`+invPaidA+`","amount":true}`, headers("super"))
 	m("refund create: member", "POST", rf, `{"invoice_id":"`+invPaidA+`"}`, headers("memberA"))
 	m("refund create: bad id", "POST", rf, `{"invoice_id":"nope"}`, headers("super"))
-	m("refund create: super", "POST", rf, `{"invoice_id":"`+invPaidA+`","amount":100,"reason":"duplicate"}`, headers("super"))
-	m("refund create: missing invoice", "POST", rf, `{"invoice_id":"`+missing+`","amount":null,"reason":null}`, headers("super"))
 	m("refund list: member", "GET", rf, none, headers("memberA"))
 	m("refund list: super", "GET", rf, none, headers("super"))
 	m("refund list: clamped", "GET", rf+"?limit=0&offset=-3", none, headers("super"))

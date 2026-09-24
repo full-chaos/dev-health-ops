@@ -647,8 +647,9 @@ func (e *Errors) DefaultedBoundedInt(object *pyjson.Object, name string, minValu
 // empirically against a live pydantic model) -- a JSON integer passes
 // through; a JSON float with no fractional part coerces, a fractional one
 // is "int_from_float"; a string that parses cleanly as a base-10 integer
-// (ASCII whitespace trimmed) coerces, one that does not is "int_parsing";
-// any other JSON type is "int_type" -- then bounds-checked.
+// (ASCII whitespace trimmed) coerces, one that does not is "int_parsing"; a
+// boolean is 0 or 1; any other JSON type is "int_type" -- then bounds-checked
+// (intField).
 //
 // r2 (CHAOS-6310) P1: this used to coerce straight to int64 (v.Int64() on
 // pyjson.Int's *big.Int, or int64(f) on a float) BEFORE the bounds check.
@@ -664,48 +665,106 @@ func (e *Errors) DefaultedBoundedInt(object *pyjson.Object, name string, minValu
 // same pattern QueryInt (queryint.go) already uses for query-parameter
 // bounds -- one comparison rule, not two that can disagree at the edges.
 func (e *Errors) boundedInt(raw pyjson.Value, name string, minValue, maxValue int64) (int64, bool) {
+	value, ok := e.intField(raw, name, minValue, &maxValue)
+	if !ok {
+		return 0, false
+	}
+	// value.Int64() is exact: it is bounds-checked against minValue/
+	// maxValue above, both of which are int64 by signature.
+	return value.Int64(), true
+}
+
+// OptionalMinInt is OptionalBoundedInt for a field with a `ge` bound and no
+// upper bound (`Field(None, ge=1)`): pydantic's int is unbounded, so the
+// value comes back exact as a *big.Int and the caller decides what a value
+// past its own storage range means.
+func (e *Errors) OptionalMinInt(object *pyjson.Object, name string, minValue int64) (*big.Int, bool) {
+	raw, ok := object.Get(name)
+	if !ok || raw == nil {
+		return nil, false
+	}
+	return e.intField(raw, name, minValue, nil)
+}
+
+// DefaultedMinInt is OptionalMinInt's create-shaped counterpart (no `| None`
+// in the pydantic model): absent is present=false, an explicit null is an
+// "int_type" error.
+func (e *Errors) DefaultedMinInt(object *pyjson.Object, name string, minValue int64) (*big.Int, bool) {
+	raw, ok := object.Get(name)
+	if !ok {
+		return nil, false
+	}
+	if raw == nil {
+		*e = append(*e, Error{Type: "int_type", Loc: []pyjson.Value{"body", name}, Msg: "Input should be a valid integer", Input: nil})
+		return nil, false
+	}
+	return e.intField(raw, name, minValue, nil)
+}
+
+// intField coerces raw as pydantic's lax `int` does and checks the `ge`
+// bound and, when maxValue is non-nil, the `le` bound, all with math/big so a
+// value outside the int64 range is still compared exactly. A JSON boolean is
+// the integer 0 or 1 (lax int accepts a bool; verified against pydantic
+// 2.13: {"a": true} with `a: int = Field(90, ge=1)` validates as 1, and
+// false fails the `ge` bound, not the type).
+func (e *Errors) intField(raw pyjson.Value, name string, minValue int64, maxValue *int64) (*big.Int, bool) {
 	loc := []pyjson.Value{"body", name}
 	var value *big.Int
 	switch v := raw.(type) {
 	case pyjson.Int:
 		value = v.Int
+	case bool:
+		value = big.NewInt(0)
+		if v {
+			value = big.NewInt(1)
+		}
 	case pyjson.Float:
 		f := float64(v)
+		if math.IsInf(f, 0) || math.IsNaN(f) {
+			*e = append(*e, Error{Type: "finite_number", Loc: loc, Input: raw, Msg: "Input should be a finite number"})
+			return nil, false
+		}
 		if f != math.Trunc(f) {
 			*e = append(*e, Error{Type: "int_from_float", Loc: loc, Input: raw,
 				Msg: "Input should be a valid integer, got a number with a fractional part"})
-			return 0, false
+			return nil, false
 		}
 		value, _ = big.NewFloat(f).Int(nil)
+		// pydantic converts a float through a machine integer: one at or
+		// beyond +-2**63 (the lower edge included) is a size error, before
+		// any bound is looked at.
+		if f >= 9223372036854775808.0 || f <= -9223372036854775808.0 {
+			*e = append(*e, Error{Type: "int_parsing_size", Loc: loc, Input: raw,
+				Msg: "Unable to parse input string as an integer, exceeded maximum size"})
+			return nil, false
+		}
 	case string:
 		parsed, failure := ParsePydanticInt(v)
 		if failure != nil {
 			failure.Loc, failure.Input = loc, raw
 			*e = append(*e, *failure)
-			return 0, false
+			return nil, false
 		}
 		value = parsed
 	default:
 		*e = append(*e, Error{Type: "int_type", Loc: loc, Msg: "Input should be a valid integer", Input: raw})
-		return 0, false
+		return nil, false
 	}
 	if value.Cmp(big.NewInt(minValue)) < 0 {
 		ctx := pyjson.NewObject()
 		ctx.Set("ge", minValue)
 		*e = append(*e, Error{Type: "greater_than_equal", Loc: loc, Input: raw, Ctx: ctx,
 			Msg: "Input should be greater than or equal to " + strconv.FormatInt(minValue, 10)})
-		return 0, false
+		return nil, false
 	}
-	if value.Cmp(big.NewInt(maxValue)) > 0 {
+	if maxValue != nil && value.Cmp(big.NewInt(*maxValue)) > 0 {
 		ctx := pyjson.NewObject()
-		ctx.Set("le", maxValue)
+		ctx.Set("le", *maxValue)
 		*e = append(*e, Error{Type: "less_than_equal", Loc: loc, Input: raw, Ctx: ctx,
-			Msg: "Input should be less than or equal to " + strconv.FormatInt(maxValue, 10)})
-		return 0, false
+			Msg: "Input should be less than or equal to " + strconv.FormatInt(*maxValue, 10)})
+		return nil, false
 	}
-	// value.Int64() is now exact: it is bounds-checked against minValue/
-	// maxValue above, both of which are int64 by signature.
-	return value.Int64(), true
+	return value, true
 }
 
 // undecodableBytes stands for request bytes that are not UTF-8.

@@ -483,11 +483,11 @@ services:
     # built today. Two consequences, both deliberate: with no pin and no
     # prior build there is nothing for `--no-build` to run, and `:local`
     # is shared across compose projects on one host.
-    image: ${DEV_HEALTH_GO_OPERATOR_IMAGE:-ghcr.io/full-chaos/dev-health-go-operator:local}
+    image: ${DEV_HEALTH_GO_DHO_IMAGE:-ghcr.io/full-chaos/dev-health-go-dho:local}
     build:
       context: .
       dockerfile: docker/go-worker.Dockerfile
-      target: operator
+      target: dho
       args:
         COMMIT: ${COMMIT:-unknown}
         BUILD_TIME: ${BUILD_TIME:-1970-01-01T00:00:00Z}

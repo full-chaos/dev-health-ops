@@ -408,7 +408,7 @@ func validatePostgresBudget(budget PostgresBudget) error {
 }
 
 func validateMigrationJob(job MigrationJob, budget PostgresBudget) error {
-	if !namePattern.MatchString(job.Name) || job.Binary != "dev-hops" {
+	if !namePattern.MatchString(job.Name) || job.Binary != "dho" {
 		return errors.New("migration job identity is invalid")
 	}
 	if job.MaxConnections < 1 || job.MaxConnections > 4 || job.MaxConnections > budget.ServerReservedConnections {

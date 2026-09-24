@@ -31,3 +31,26 @@ func TestResolveMigrationDatabaseNormalizesDriverSchemes(t *testing.T) {
 		}
 	}
 }
+
+// Compose passes MIGRATION_DATABASE_URI="" when the operator sets none: an
+// empty value is not configured, so POSTGRES_URI resolves (and the River
+// step, which needs MIGRATION_DATABASE_URI, stays off) -- what the old shell
+// entrypoints did by unsetting the empty variable.
+func TestResolveMigrationDatabaseTreatsAnEmptyMigrationURIAsUnset(t *testing.T) {
+	lookup := func(key string) (string, bool) {
+		switch key {
+		case "MIGRATION_DATABASE_URI":
+			return "", true
+		case "POSTGRES_URI":
+			return "postgresql://u:p@h/db", true
+		}
+		return "", false
+	}
+	got, source, ok := ResolveMigrationDatabase(lookup, io.Discard, true)
+	if !ok || source != "POSTGRES_URI" || got.Reveal() != "postgresql://u:p@h/db" {
+		t.Fatalf("resolved %q from %s (ok %v), want POSTGRES_URI", got.Reveal(), source, ok)
+	}
+	if _, configured, err := ResolveDSN(lookup, "MIGRATION_DATABASE_URI", MigrationDatabaseSpec); configured || err != nil {
+		t.Fatalf("an empty MIGRATION_DATABASE_URI is configured=%v err=%v, want neither", configured, err)
+	}
+}

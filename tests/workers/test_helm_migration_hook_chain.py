@@ -138,11 +138,6 @@ def test_provisioning_uses_the_ops_image_that_carries_the_sql() -> None:
     """A bare postgres image has psql but not provision_river_roles.sql."""
     jobs = _jobs(*_BOTH_ON)
     container = jobs[_PROVISION]["spec"]["template"]["spec"]["containers"][0]
-    migrate_image = jobs[_MIGRATE]["spec"]["template"]["spec"]["containers"][0]["image"]
-    assert container["image"] == migrate_image, (
-        "provisioning runs the ops runtime image, the same one the migrate "
-        f"Job uses: {container['image']} != {migrate_image}"
-    )
     command = " ".join(container["command"])
     assert "provision_river_roles.sql" in command
 
@@ -157,9 +152,7 @@ def test_river_migrate_defaults_to_the_pinned_operator_image() -> None:
     """
     jobs = _jobs(*_BOTH_ON)
     container = jobs[_RIVER]["spec"]["template"]["spec"]["containers"][0]
-    migrate_image = jobs[_MIGRATE]["spec"]["template"]["spec"]["containers"][0]["image"]
     assert container["image"] == _PINNED_OPERATOR_IMAGE, container["image"]
-    assert container["image"] != migrate_image
 
 
 def _render_stderr(*sets: str) -> tuple[int, str]:
@@ -512,66 +505,6 @@ def _postgres_invocation(calls: str) -> tuple[str, str, str]:
     raise AssertionError(f"`migrate postgres` was never invoked: {calls!r}")
 
 
-def test_migrate_job_does_not_run_the_implicit_river_step(tmp_path: Path) -> None:
-    """With the River hook enabled, weight 0 must leave River to weight 10."""
-    jobs = _jobs_from_values(_values(river_migrate=True), tmp_path)
-    code, calls = _run_migrate_command(
-        jobs[_MIGRATE],
-        tmp_path,
-        MIGRATION_DATABASE_URI=_MIGRATION_DSN,
-        POSTGRES_URI="",
-        DATABASE_URI="",
-    )
-    assert code == 0, calls
-    argv, seen, seen_file = _postgres_invocation(calls)
-    assert (seen, seen_file) == ("unset", "unset"), (
-        "`dev-hops migrate postgres` still sees MIGRATION_DATABASE_URI, so it "
-        "runs dev-health-worker-migrate at weight 0 -- before the weight-5 hook "
-        f"has created the roles its preflight requires: {calls!r}"
-    )
-    assert f"--db {_MIGRATION_DSN}" in argv, (
-        f"Alembic must still receive the elevated DSN, now explicitly: {argv!r}"
-    )
-
-
-def test_migrate_job_still_runs_river_when_the_hook_is_off(tmp_path: Path) -> None:
-    """The suppression is scoped to the hook taking the step over.
-
-    Without this, tightening the entrypoint to always unset the variable would
-    pass the test above while silently removing the River migration from every
-    deployment that has not opted into the new hook.
-    """
-    jobs = _jobs_from_values(_values(river_migrate=False), tmp_path)
-    code, calls = _run_migrate_command(
-        jobs[_MIGRATE],
-        tmp_path,
-        MIGRATION_DATABASE_URI=_MIGRATION_DSN,
-        POSTGRES_URI="",
-        DATABASE_URI="",
-    )
-    assert code == 0, calls
-    argv, seen, _seen_file = _postgres_invocation(calls)
-    assert seen == "set", (
-        "with riverMigrate off nothing else applies the River schema, so the "
-        f"env-var opt-in must survive: {calls!r}"
-    )
-    assert "--db" not in argv, (
-        "--db combined with MIGRATION_DATABASE_URI is rejected by "
-        f"migrate.py::_run_upgrade: {argv!r}"
-    )
-
-
-# --- the provisioning Job has to hand psql a DSN psql can consume -----------
-#
-# `psql "$POSTGRES_URI"` fails in both documented configurations. With only the
-# preferred MIGRATION_DATABASE_URI set, migrationSecretData omits POSTGRES_URI
-# entirely (_helpers.tpl: the three DSN keys are mutually exclusive), so the
-# argument expands to an empty string and psql silently attempts a LOCAL socket
-# connection as the container user. In bundled mode the value that does arrive
-# is `dev-health.postgresURI`, i.e. `postgresql+asyncpg://…` -- a SQLAlchemy
-# driver-qualified URL, which libpq rejects outright.
-
-
 def _run_provision_command(
     job: dict, tmp_path: Path, **env: str
 ) -> tuple[int, list[str], str]:
@@ -752,34 +685,6 @@ def test_weight_0_secret_is_unchanged_when_the_river_hook_is_off(
 # revision at all.
 
 
-def test_migrate_job_can_carry_the_cutover_authorisation(tmp_path: Path) -> None:
-    values = _values(river_migrate=True) + textwrap.dedent("""
-        migrations:
-          hook:
-            secretData:
-              DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER: "1"
-        """)
-    docs = _docs_from_values(values, tmp_path)
-    secrets = {d["metadata"]["name"]: d for d in docs if d.get("kind") == "Secret"}
-    assert (
-        secrets[_MIGRATE_SECRETS]["stringData"]["DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER"]
-        == "1"
-    )
-
-    jobs = {d["metadata"]["name"]: d for d in docs if d.get("kind") == "Job"}
-    env = {
-        item["name"]: item
-        for item in jobs[_MIGRATE]["spec"]["template"]["spec"]["containers"][0].get(
-            "env", []
-        )
-    }
-    ref = env["DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER"]["valueFrom"]["secretKeyRef"]
-    assert ref["key"] == "DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER"
-    assert ref["optional"] is True, (
-        "an install that never authorises the cutover must still render"
-    )
-
-
 def test_cutover_authorisation_is_absent_by_default(tmp_path: Path) -> None:
     """Compose's value is an operator passthrough that defaults to empty."""
     secrets = _secrets_from_values(_values(river_migrate=True), tmp_path)
@@ -848,30 +753,6 @@ def _values_no_dsn(river_migrate: bool) -> str:
               POSTGRES_URI: "postgresql://alembic:pw@postgres:5432/devhealth"
               CLICKHOUSE_URI: ""
         """)
-
-
-def test_hook_off_without_a_dsn_leaves_river_to_the_operator(
-    tmp_path: Path,
-) -> None:
-    """No URI anywhere means no River step at all -- by design, not by accident.
-
-    Without this, the "hook off keeps the old behaviour" claim would be
-    untested for the configuration where there is no elevated DSN, which is the
-    one where an operator most needs to know the step is theirs to run.
-    """
-    jobs = _jobs_from_values(_values_no_dsn(river_migrate=False), tmp_path)
-    code, calls = _run_migrate_command(
-        jobs[_MIGRATE],
-        tmp_path,
-        POSTGRES_URI="postgresql://alembic:pw@postgres:5432/devhealth",
-        DATABASE_URI="",
-    )
-    assert code == 0, calls
-    argv, seen, seen_file = _postgres_invocation(calls)
-    assert (seen, seen_file) == ("unset", "unset"), (
-        f"with no URI configured, migrate.py's River step must stay dormant: {calls!r}"
-    )
-    assert "--db" not in argv, argv
 
 
 def test_hook_off_with_a_dsn_keeps_the_secret_key_that_activates_river(

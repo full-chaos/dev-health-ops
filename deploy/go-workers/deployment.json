@@ -21,7 +21,7 @@
   },
   "migration_job": {
     "name": "go-worker-migrations",
-    "binary": "dev-hops",
+    "binary": "dho",
     "max_connections": 2,
     "config_env": [
       "RIVER_DATABASE_SCHEMA",

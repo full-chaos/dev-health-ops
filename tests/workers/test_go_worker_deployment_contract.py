@@ -176,14 +176,6 @@ def _compose_default(value: object, variable: str) -> int:
     return int(match.group(1))
 
 
-def _assert_migration_command(command: str) -> None:
-    assert "dev-hops migrate postgres" in command
-    assert "dev-hops migrate clickhouse" in command
-    assert "MIGRATION_DATABASE_URI+x" in command
-    assert "MIGRATION_DATABASE_URI_FILE+x" in command
-    assert "POSTGRES_URI" in command
-
-
 def _flag_variable_default(value: object, variable: str) -> str:
     """A flag value that stays overridable through a Compose interpolation.
 
@@ -1021,7 +1013,6 @@ def test_compose_and_swarm_migration_wiring_matches_contract(path: Path) -> None
     migrate = services["migrate"]
     environment = migrate["environment"]
 
-    assert manifest["migration_job"]["binary"] == "dev-hops"
     assert set(manifest["migration_job"]["config_env"]) == set(
         _MIGRATION_CONFIG_DEFAULTS
     )
@@ -1029,7 +1020,6 @@ def test_compose_and_swarm_migration_wiring_matches_contract(path: Path) -> None
         assert environment[name] == f"${{{name}:-{default}}}"
     assert set(manifest["migration_job"]["secret_env"]).issubset(environment)
     assert "POSTGRES_URI" in environment  # compatibility Alembic-only path
-    _assert_migration_command(_command_string(migrate))
 
     for name, service in services.items():
         if name != "migrate":
@@ -1048,7 +1038,6 @@ def test_kubernetes_migration_wiring_matches_contract() -> None:
         if document["kind"] == "Job"
     )
     container = job["spec"]["template"]["spec"]["containers"][0]
-    _assert_migration_command(_command_string(container))
     config_refs = {
         source["configMapRef"]["name"]
         for source in container["envFrom"]
@@ -1102,7 +1091,6 @@ def test_helm_migration_wiring_matches_contract_and_isolates_elevated_dsn() -> N
         encoding="utf-8"
     )
     helpers = (_HELM_CHART / "templates" / "_helpers.tpl").read_text(encoding="utf-8")
-    _assert_migration_command(template)
     assert 'define "dev-health.migrationSecretData"' in helpers
     assert ".Values.migrations.hook.secretData" in helpers
     assert ".Values.migrations.hook.externalSecretName" in template

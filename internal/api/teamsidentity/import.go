@@ -67,7 +67,12 @@ func parseDiscoveredTeam(raw pyjson.Value, loc []pyjson.Value) (discoveredTeam, 
 	providerTeamID, _ := element.RequiredString(object, "provider_team_id", 1, 0)
 	name, _ := element.RequiredString(object, "name", 1, 0)
 	description, hasDescription := element.OptionalString(object, "description", 0, 0)
-	memberCountValue, hasMemberCount := element.OptionalLaxInt(object, "member_count")
+	// member_count is validated exactly as pydantic's `int | None` does (an
+	// integer of any size is valid) but its value is NOT carried: an import
+	// never reads it back (only the discover routes echo a member count,
+	// from the provider's own response), and int64 cannot hold every value
+	// pydantic accepts, so narrowing it would silently corrupt it.
+	element.OptionalLaxInt(object, "member_count")
 	// associations: `dict[str, Any] = Field(default_factory=dict)` --
 	// absent is {}, an explicit null (or any non-dict) is a dict_type
 	// error, never silently replaced by {} (schemas_flat.py:578-585).
@@ -90,13 +95,6 @@ func parseDiscoveredTeam(raw pyjson.Value, loc []pyjson.Value) (discoveredTeam, 
 	}
 	if hasDescription {
 		team.Description = &description
-	}
-	if hasMemberCount {
-		// member_count is only echoed by the discover routes; an import
-		// never reads it back, so a value past int64 (which pydantic
-		// accepts) is kept as its low 64 bits rather than refused.
-		memberCount := memberCountValue.Int64()
-		team.MemberCount = &memberCount
 	}
 	return team, nil
 }

@@ -368,22 +368,6 @@ func (e *Errors) DefaultedBool(object *pyjson.Object, name string) (bool, bool) 
 	return value, true
 }
 
-// OptionalInt validates one `int | None` field. present is false when the
-// field is absent or null; a non-integer present value is an "int_type"
-// pydantic error.
-func (e *Errors) OptionalInt(object *pyjson.Object, name string) (int64, bool) {
-	raw, ok := object.Get(name)
-	if !ok || raw == nil {
-		return 0, false
-	}
-	value, isInt := raw.(pyjson.Int)
-	if !isInt {
-		*e = append(*e, Error{Type: "int_type", Loc: []pyjson.Value{"body", name}, Msg: "Input should be a valid integer", Input: raw})
-		return 0, false
-	}
-	return value.Int64(), true
-}
-
 func plural(n int) string {
 	if n == 1 {
 		return ""

@@ -62,9 +62,12 @@ func TestSubscriptionEventsResolveTheOwningOrg(t *testing.T) {
 	stamp := time.Now().Unix() + 200
 	orgA := seed.orgA.String()
 	receipt := ""
-	send := func(name, eventID, eventType string, edit func(object map[string]any)) {
+	sendAt := func(name, eventID, eventType string, created int64, edit func(object map[string]any)) {
 		value := loadWebhookFixture(t, subscriptionFixture)
 		value["type"], value["id"] = eventType, eventID
+		if created != 0 {
+			value["created"] = created
+		}
 		object := value["data"].(map[string]any)["object"].(map[string]any)
 		object["metadata"] = map[string]any{}
 		edit(object)
@@ -76,6 +79,9 @@ func TestSubscriptionEventsResolveTheOwningOrg(t *testing.T) {
 		if response.Status != 200 {
 			t.Errorf("%s: go answered %d %s", name, response.Status, response.Body)
 		}
+	}
+	send := func(name, eventID, eventType string, edit func(object map[string]any)) {
+		sendAt(name, eventID, eventType, 0, edit)
 	}
 	trialEnd := time.Now().Add(3*24*time.Hour + 12*time.Hour).Unix()
 	// A new subscription for the customer of org A's license (cus_A).
@@ -94,6 +100,16 @@ func TestSubscriptionEventsResolveTheOwningOrg(t *testing.T) {
 	send("deleted: no metadata, stored subscription", "evt_own_deleted", "customer.subscription.deleted", func(object map[string]any) {
 		object["id"], object["customer"], object["status"] = "sub_own_new", "cus_other", "canceled"
 		setPrice(object, "price_seed_y")
+	})
+	// The cancellation redelivered, then an update older than it: neither
+	// changes the subscription, the license or the notifications.
+	send("deleted: redelivered", "evt_own_deleted", "customer.subscription.deleted", func(object map[string]any) {
+		object["id"], object["customer"], object["status"] = "sub_own_new", "cus_other", "canceled"
+		setPrice(object, "price_seed_y")
+	})
+	sendAt("updated: older than the cancellation", "evt_own_late", "customer.subscription.updated", 1000, func(object map[string]any) {
+		object["id"], object["customer"], object["status"] = "sub_own_new", "cus_A", "active"
+		setPrice(object, "price_ent_y")
 	})
 	send("created: no metadata, nobody owns it", "evt_own_none", "customer.subscription.created", func(object map[string]any) {
 		object["id"], object["customer"], object["status"] = "sub_own_none", "cus_nobody", "active"
@@ -117,6 +133,12 @@ func TestSubscriptionEventsResolveTheOwningOrg(t *testing.T) {
 	expect("the cancellation and the trial end are queued for org A",
 		`SELECT string_agg(notification_type, ',' ORDER BY notification_type) FROM billing_notifications
 			WHERE org_id = '`+orgA+`' AND notification_type IN ('subscription_cancelled', 'trial_expiring')`, "subscription_cancelled,trial_expiring")
+	expect("the late update is recorded, not applied",
+		`SELECT count(*)::text || ' ' || min(new_status) FROM subscription_events WHERE stripe_event_id = 'evt_own_late'`, "1 canceled")
+	expect("one cancellation notification despite the redelivery",
+		`SELECT count(*)::text FROM billing_notifications WHERE org_id = '`+orgA+`' AND notification_type = 'subscription_cancelled'`, "1")
+	expect("no license re-signed after the cancellation",
+		`SELECT count(*)::text FROM billing_notifications WHERE org_id = '`+orgA+`' AND notification_type = 'subscription_changed'`, "0")
 	expect("a subscription nobody owns is not recorded",
 		`SELECT count(*)::text FROM subscriptions WHERE stripe_subscription_id = 'sub_own_none'`, "0")
 	t.Log("\n" + receipt)

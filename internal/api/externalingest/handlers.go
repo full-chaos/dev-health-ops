@@ -478,14 +478,15 @@ func (d Deps) handleListBatches() http.HandlerFunc {
 			policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(problems), nil)
 			return
 		}
-		// pydantic's int is unbounded; asyncpg refuses an offset past int64
-		// when it binds the page query, Python's unhandled 500.
-		if !offset.IsInt64() {
-			writeIngestError(w, unhandledError())
-			return
-		}
 		if err := rateLimitedOrTooManyRequests(d.routeLimiters.listBatches, ingestTokenRateLimitKey(authCtx.TokenID)); err != nil {
 			writeIngestError(w, err)
+			return
+		}
+		// pydantic's int is unbounded; asyncpg refuses an offset past int64
+		// when it binds the page query, Python's unhandled 500. That happens
+		// after the limiter has charged the request.
+		if !offset.IsInt64() {
+			writeIngestError(w, unhandledError())
 			return
 		}
 		batches, total, err := ListBatches(r.Context(), d.Pool, authCtx.OrgID, BatchQuery{
@@ -535,12 +536,6 @@ func (d Deps) handleGetBatch() http.HandlerFunc {
 			policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(problems), nil)
 			return
 		}
-		// pydantic's int is unbounded; asyncpg refuses an offset past int64
-		// when it binds the page query, Python's unhandled 500.
-		if !errorOffset.IsInt64() {
-			writeIngestError(w, unhandledError())
-			return
-		}
 		if err := rateLimitedOrTooManyRequests(d.routeLimiters.getBatch, ingestTokenRateLimitKey(authCtx.TokenID)); err != nil {
 			writeIngestError(w, err)
 			return
@@ -552,6 +547,13 @@ func (d Deps) handleGetBatch() http.HandlerFunc {
 		}
 		if batch == nil {
 			writeIngestError(w, newIngestError(http.StatusNotFound, "not_found", "ingestion batch not found"))
+			return
+		}
+		// pydantic's int is unbounded; asyncpg refuses an offset past int64
+		// when it binds the rejection page query, Python's unhandled 500. That
+		// happens after the limiter charge and the batch lookup (404 first).
+		if !errorOffset.IsInt64() {
+			writeIngestError(w, unhandledError())
 			return
 		}
 		limit, offset := int(errorLimit.Int64()), int(errorOffset.Int64())

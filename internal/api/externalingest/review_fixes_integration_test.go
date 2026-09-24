@@ -230,6 +230,47 @@ func TestAcceptBatchAgainstFaultsAndEdgeCases(t *testing.T) {
 		}
 	})
 
+	// An offset past int64 is a valid pydantic int. Python's limiter charges
+	// the request first; the 500 comes later, when asyncpg binds the page
+	// query (after the batch lookup on GET /batches/{id}). So a burst of
+	// them exhausts the read limit (measured against the real FastAPI
+	// router: 120 answered, then 429), and an unknown batch answers 404.
+	t.Run("an offset past int64 is charged to the limiter before its 500", func(t *testing.T) {
+		orgID := uuid.New().String()
+		const token = "fcpush_int64_offset_limiter_token"
+		seedIngestToken(t, ctx, pool, orgID, "github", "acme/repo", token)
+		deps := newTestDeps(t, pool, client)
+		const huge = "9223372036854775808"
+		calls := 0
+		do := func(handler http.HandlerFunc, target, id string) int {
+			req := httptest.NewRequest(http.MethodGet, target, nil)
+			calls++
+			req.RemoteAddr = fmt.Sprintf("10.8.%d.%d:4000", calls/250, calls%250)
+			if id != "" {
+				req.SetPathValue("ingestion_id", id)
+			}
+			req.Header.Set("Authorization", "Bearer "+token)
+			recorder := httptest.NewRecorder()
+			handler(recorder, req)
+			return recorder.Code
+		}
+		unknown := uuid.New().String()
+		statuses := map[int]int{}
+		for range 125 {
+			statuses[do(deps.handleGetBatch(), "/api/v1/external-ingest/batches/"+unknown+"?errorOffset="+huge, unknown)]++
+		}
+		if statuses[http.StatusNotFound] != 120 || statuses[http.StatusTooManyRequests] != 5 {
+			t.Fatalf("GET /batches/{id} oversized errorOffset x125 answered %v, want 120x404 then 5x429", statuses)
+		}
+		statuses = map[int]int{}
+		for range 125 {
+			statuses[do(deps.handleListBatches(), "/api/v1/external-ingest/batches?offset="+huge, "")]++
+		}
+		if statuses[http.StatusInternalServerError] != 120 || statuses[http.StatusTooManyRequests] != 5 {
+			t.Fatalf("GET /batches oversized offset x125 answered %v, want 120x500 then 5x429", statuses)
+		}
+	})
+
 	// Python's limiter wraps the endpoint AFTER FastAPI's parameter
 	// validation, and POST /validate and POST /batches have no parameter to
 	// validate: the body is read inside the limited function. So a malformed

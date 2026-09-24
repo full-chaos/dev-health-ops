@@ -219,9 +219,10 @@ func TestVenueOracleDiscoverGitHubMatchesPython(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	previousClient := discoveryHTTPClient
+	previousClient, previousExchange := discoveryHTTPClient, discoveryAppExchangeClient
 	discoveryHTTPClient = &http.Client{Transport: rewriteHostTransport{target: stubURL}}
-	t.Cleanup(func() { discoveryHTTPClient = previousClient })
+	discoveryAppExchangeClient = discoveryHTTPClient
+	t.Cleanup(func() { discoveryHTTPClient, discoveryAppExchangeClient = previousClient, previousExchange })
 
 	goTeams, err := discoverGitHub(t.Context(), credential, org)
 	if err != nil {

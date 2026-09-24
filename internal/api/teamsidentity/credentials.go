@@ -7,7 +7,6 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/full-chaos/dev-health-ops/internal/api/externalurl"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
@@ -63,4 +62,4 @@ func (d discoverCredentials) resolve(ctx context.Context, orgID, provider, crede
 const discoveryPerAttemptTimeout = 30 * time.Second
 
 // discoveryHTTPClient is the *http.Client every discovery call shares.
-var discoveryHTTPClient providerfoundation.HTTPDoer = &http.Client{Timeout: discoveryPerAttemptTimeout, Transport: externalurl.GuardedTransport()}
+var discoveryHTTPClient providerfoundation.HTTPDoer = &http.Client{Timeout: discoveryPerAttemptTimeout}

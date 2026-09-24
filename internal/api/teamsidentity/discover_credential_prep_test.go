@@ -22,9 +22,9 @@ func (d *recordingDoer) Do(request *http.Request) (*http.Response, error) {
 
 func withDiscoveryClient(t *testing.T, doer providerfoundation.HTTPDoer) {
 	t.Helper()
-	previous := discoveryHTTPClient
-	discoveryHTTPClient = doer
-	t.Cleanup(func() { discoveryHTTPClient = previous })
+	previous, previousExchange := discoveryHTTPClient, discoveryAppExchangeClient
+	discoveryHTTPClient, discoveryAppExchangeClient = doer, doer
+	t.Cleanup(func() { discoveryHTTPClient, discoveryAppExchangeClient = previous, previousExchange })
 }
 
 func withHostLookup(t *testing.T, lookup func(context.Context, string) ([]netip.Addr, error)) {

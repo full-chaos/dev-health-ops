@@ -231,7 +231,9 @@ def test_integration_coverage_inventory_completes_and_stays_nonempty() -> None:
     # against them.
     # CHAOS-6368 added internal/auth/ratelimitvalkey (87 -> 88): the shared
     # rate-limit store against a real Valkey.
-    assert "88 package(s) discovered, 0 denylisted, 88 will run" in result.stdout
+    # internal/api/externalurl (88 -> 89): the external URL guard's venue
+    # differential oracle against the real Python guard.
+    assert "89 package(s) discovered, 0 denylisted, 89 will run" in result.stdout
     # Name the package explicitly (SET MEMBERSHIP), not just the count --
     # a bare count is exactly what let CHAOS-4643's own literal drift
     # 31 -> 32 -> 33 unnoticed.

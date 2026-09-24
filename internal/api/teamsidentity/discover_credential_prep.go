@@ -26,6 +26,14 @@ const defaultGitHubAPIBase = "https://api.github.com"
 // discoveryHostLookup resolves a hostname for the SSRF guard; tests replace it.
 var discoveryHostLookup func(context.Context, string) ([]netip.Addr, error) = externalurl.ResolveHostAddrs
 
+// discoveryAppExchangeClient carries the GitHub App installation-token
+// exchange, the one discovery call Python guards with its SSRF check: the
+// credential's base_url is validated, and this client then dials only an
+// address that check's classification allows (no re-resolution to an
+// internal address). Every other discovery call keeps discoveryHTTPClient,
+// as Python leaves those provider URLs unguarded. Tests replace it.
+var discoveryAppExchangeClient providerfoundation.HTTPDoer = &http.Client{Timeout: discoveryPerAttemptTimeout, Transport: externalurl.GuardedTransport()}
+
 // prepareDiscoveryCredential turns a resolved stored credential into the
 // credential discovery is allowed to send to a provider, applying
 // teams.py's per-provider rules (teams.py:189-316) in the same order:
@@ -93,7 +101,7 @@ func prepareGitHubDiscovery(ctx context.Context, credential providerfoundation.C
 		return providerfoundation.Credential{}, &discoveryStatusError{http.StatusBadRequest, detail}
 	}
 	unauthorized := &discoveryStatusError{http.StatusUnauthorized, "GitHub App authentication failed"}
-	auth, err := providerfoundation.NewGitHubAppAuth(credential, base, discoveryHTTPClient)
+	auth, err := providerfoundation.NewGitHubAppAuth(credential, base, discoveryAppExchangeClient)
 	if err != nil {
 		return providerfoundation.Credential{}, unauthorized
 	}

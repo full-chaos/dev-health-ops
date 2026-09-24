@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// TestDiscoveryClientRefusesAnInternalDial: the client discovery uses for a
+// TestDiscoveryClientRefusesAnInternalDial: the client discovery uses for the token exchange of a
 // GitHub App credential (an installation token exchange against the
 // credential's base_url) must not connect to an internal address, whatever
 // the URL check resolved earlier.
@@ -21,7 +21,7 @@ func TestDiscoveryClientRefusesAnInternalDial(t *testing.T) {
 		t.Fatal(err)
 	}
 	request.Header.Set("Authorization", "Bearer app-jwt")
-	response, err := discoveryHTTPClient.Do(request)
+	response, err := discoveryAppExchangeClient.Do(request)
 	if err == nil {
 		response.Body.Close()
 		t.Fatalf("the discovery client connected to %s (status %d)", server.URL, response.StatusCode)

@@ -112,6 +112,7 @@ EXPECTED_PACKAGES = {
     # violation) against a real Postgres.
     "internal/api/audit",
     "internal/api/externalingest",
+    "internal/api/externalurl",
     "internal/api/licensing",
     # The api's protected-route policy read path: provision, migrate, api
     # readiness and an authenticated request on a real Postgres.

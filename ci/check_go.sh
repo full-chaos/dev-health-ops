@@ -504,7 +504,7 @@ check_live_python_oracles() {
       DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
       PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
       go test -mod=readonly -count=1 \
-        -run '^(TestQueryIntMatchesLivePydantic|TestQueryBoolMatchesLivePydantic|TestBodyIntMatchesLivePydantic|TestQueryUUIDMatchesLivePydantic|TestEmailStrMatchesLiveFastAPI)$' \
+        -run '^(TestQueryIntMatchesLivePydantic|TestQueryBoolMatchesLivePydantic|TestBodyIntMatchesLivePydantic|TestQueryUUIDMatchesLivePydantic|TestEmailStrMatchesLiveFastAPI|TestStringMatchesLivePydantic)$' \
         ./internal/api/pybody
   ); then
     rm -rf -- "${proof_dir}"
@@ -660,7 +660,7 @@ check_live_python_oracles() {
     rm -rf -- "${proof_dir}"
     return 1
   fi
-  for proof_name in api-policy-principal api-pyjson api-pyjson-dumps api-pyjson-model api-pyjson-syntax-error-text api-orgs-registry api-pytime api-pytime-date api-pytime-fromisoformat api-pytime-pydantic api-health-revisions api-pybody-queryint api-pybody-querybool api-pybody-bodyint api-pybody-emailstr pythonparity-pyunicodedata pythonparity-pyunicodedata-nfc pythonparity-pyidna-tables pythonparity-pyidna-behaviour pythonparity-emailvalidator pythonparity-strrepr pythonparity-utf8-replace pythonparity-seqratio pythonparity-sanitize pythonparity-urlsplit pythonparity-idna llmorgsettings-validate-base-url httpapi-forwarded-scheme api-customerpush-schema api-customerpush-bodies api-pybody-queryuuid api-billing-bodies api-billing-helpers api-billing-stripe-version api-licensing-registry; do
+  for proof_name in api-policy-principal api-pyjson api-pyjson-dumps api-pyjson-model api-pyjson-syntax-error-text api-orgs-registry api-pytime api-pytime-date api-pytime-fromisoformat api-pytime-pydantic api-health-revisions api-pybody-queryint api-pybody-querybool api-pybody-bodyint api-pybody-string api-pybody-emailstr pythonparity-pyunicodedata pythonparity-pyunicodedata-nfc pythonparity-pyidna-tables pythonparity-pyidna-behaviour pythonparity-emailvalidator pythonparity-strrepr pythonparity-utf8-replace pythonparity-seqratio pythonparity-sanitize pythonparity-urlsplit pythonparity-idna llmorgsettings-validate-base-url httpapi-forwarded-scheme api-customerpush-schema api-customerpush-bodies api-pybody-queryuuid api-billing-bodies api-billing-helpers api-billing-stripe-version api-licensing-registry; do
     proof_file="${proof_dir}/${proof_name}"
     if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
       printf 'ERROR: api live Python oracle %s did not run\n' "${proof_name}" >&2

@@ -62,7 +62,9 @@ func TestErrorsMatchPydantic(t *testing.T) {
 	}
 	errs.OptionalString(object, "name", 1, 255)
 	errs.OptionalString(object, "d", 0, 0)
-	if value, ok := errs.OptionalString(object, "s", 1, 1); !ok || pyjson.Len(value) != 1 {
+	// Unbounded, a lone surrogate is kept, one character long; a bounded
+	// field refuses it (TestBoundedStringRefusesLoneSurrogate).
+	if value, ok := errs.OptionalString(object, "s", 0, 0); !ok || pyjson.Len(value) != 1 {
 		t.Errorf("a lone surrogate is one character: %q %v", value, ok)
 	}
 	errs.Object(Body{Missing: true})
@@ -246,4 +248,27 @@ func TestOptionalBoolLaxCoercionMatchesPydantic(t *testing.T) {
 			}
 		}
 	}
+}
+
+// A length-bounded str refuses a lone surrogate (string_unicode) before
+// any length check; an unbounded one keeps it (TestStringMatchesLivePydantic
+// is the live check).
+func TestBoundedStringRefusesLoneSurrogate(t *testing.T) {
+	object := objectWithV(pyjson.FromRunes([]rune{'a', 0xd800}))
+	for _, bounds := range [][2]int{{1, 0}, {0, 128}, {0, 1}} {
+		var errs Errors
+		if _, ok := errs.RequiredString(object, "v", bounds[0], bounds[1]); ok || len(errs) != 1 || errs[0].Type != "string_unicode" {
+			t.Errorf("bounds %v: %+v", bounds, errs)
+		}
+	}
+	var errs Errors
+	if text, ok := errs.RequiredString(object, "v", 0, 0); !ok || len(errs) != 0 || pyjson.Len(text) != 2 {
+		t.Errorf("unbounded: %q %+v", text, errs)
+	}
+}
+
+func objectWithV(value string) *pyjson.Object {
+	object := pyjson.NewObject()
+	object.Set("v", value)
+	return object
 }

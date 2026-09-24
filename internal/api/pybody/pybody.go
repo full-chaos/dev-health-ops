@@ -179,6 +179,14 @@ func (e *Errors) validateStringValue(raw pyjson.Value, loc []pyjson.Value, minLe
 		*e = append(*e, Error{Type: "string_type", Loc: loc, Msg: "Input should be a valid string", Input: raw})
 		return "", false
 	}
+	// A length bound makes pydantic-core read the str as UTF-8 first; a
+	// lone surrogate cannot be, and is refused before any length check. A
+	// field without a bound keeps the surrogate.
+	if (minLength > 0 || maxLength > 0) && pyjson.HasSurrogate(text) {
+		*e = append(*e, Error{Type: "string_unicode", Loc: loc, Input: text,
+			Msg: "Input should be a valid string, unable to parse raw data as a unicode string"})
+		return "", false
+	}
 	length := pyjson.Len(text)
 	if minLength > 0 && length < minLength {
 		ctx := pyjson.NewObject()

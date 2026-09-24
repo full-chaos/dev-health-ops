@@ -403,6 +403,30 @@ smoke_migrate_river() {
     || die "${tag}: dho migrate river --apply-and-check did not report the missing-DSN refusal: ${output}"
 }
 
+# smoke_migrate_clickhouse runs `dho migrate clickhouse status` from the
+# image: without production's ordering contract it must refuse before
+# connecting and name the mismatch; with contract 2 and no database configured
+# it must reach the DSN check and fail closed (exit 1) with the JSON
+# configuration error naming CLICKHOUSE_URI -- never an unknown command
+# (exit 2) or a missing baseline.
+smoke_migrate_clickhouse() {
+  local tag="$1" output code
+  set +e
+  output="$(docker run --rm "${CONTAINER_SECURITY_ARGS[@]}" "${tag}" migrate clickhouse status 2>&1 >/dev/null)"
+  code=$?
+  set -e
+  [ "${code}" = "1" ] && printf '%s' "${output}" | grep -F 'operational ordering contract 2 expected' >/dev/null \
+    || die "${tag}: dho migrate clickhouse status without the contract did not name the mismatch (exit ${code}): ${output}"
+  set +e
+  output="$(docker run --rm "${CONTAINER_SECURITY_ARGS[@]}" --env OPERATIONAL_ORDERING_CONTRACT=2 "${tag}" migrate clickhouse status 2>&1 >/dev/null)"
+  code=$?
+  set -e
+  [ "${code}" = "1" ] || die "${tag}: dho migrate clickhouse status without a DSN exited ${code}, want 1: ${output}"
+  printf '%s' "${output}" | grep -v '^{"time"' \
+    | jq -e '.error.code == "configuration_error" and (.error.detail | contains("CLICKHOUSE_URI"))' >/dev/null \
+    || die "${tag}: dho migrate clickhouse status did not report the missing CLICKHOUSE_URI: ${output}"
+}
+
 # smoke_workers_vertical runs `dho workers status` with no database
 # configured: the verb tree must be reached and fail closed with the JSON
 # configuration error naming the first missing DSN (exit 1), not an unknown
@@ -436,6 +460,7 @@ smoke_dho() {
     | grep -F '"version":"phase1-ci"' >/dev/null \
     || die "dho did not report injected version metadata"
   smoke_migrate_river "${tag}"
+  smoke_migrate_clickhouse "${tag}"
 
   ACTIVE_CONTAINER="${container_name}"
   docker run --detach \

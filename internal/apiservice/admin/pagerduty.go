@@ -300,9 +300,15 @@ func (h *handlers) preflightPagerDuty(w http.ResponseWriter, r *http.Request) {
 		writeValidation(w, errs)
 		return
 	}
+	// set(enabled_datasets).difference(...): each unknown name once.
 	var unknown []string
+	seenUnknown := map[string]struct{}{}
 	for _, dataset := range enabledDatasets {
-		if _, known := pagerDutyDatasetFamilies[dataset]; !known {
+		if _, known := pagerDutyDatasetFamilies[dataset]; known {
+			continue
+		}
+		if _, dup := seenUnknown[dataset]; !dup {
+			seenUnknown[dataset] = struct{}{}
 			unknown = append(unknown, dataset)
 		}
 	}

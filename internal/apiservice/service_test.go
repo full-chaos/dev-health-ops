@@ -596,6 +596,14 @@ func TestCORSAppendsOriginToEveryHandlerVary(t *testing.T) {
 			t.Errorf("origin=%v vary=%v: Vary %q ACAO %q, want %q %q", tc.origin, tc.vary, values, got.Get("Access-Control-Allow-Origin"), tc.want, tc.echo)
 		}
 	}
+	// An allowed list holding "" (NewCORS takes any list) never echoes a
+	// request that sent no Origin: Starlette's origin is None, not "".
+	emptyAllowed := NewCORS([]string{"", "https://a.example"}).Wrap(http.NotFoundHandler())
+	absent := httptest.NewRecorder()
+	emptyAllowed.ServeHTTP(absent, httptest.NewRequest(http.MethodGet, "/", nil))
+	if got := absent.Result().Header; len(got.Values("Access-Control-Allow-Origin")) != 0 || got.Get("Vary") != "Origin" {
+		t.Errorf("no Origin with \"\" allowed: ACAO %q Vary %q", got.Values("Access-Control-Allow-Origin"), got.Get("Vary"))
+	}
 	request := httptest.NewRequest(http.MethodOptions, "/", nil)
 	request.Header.Set("Origin", "https://a.example")
 	request.Header.Set("Access-Control-Request-Method", "GET")

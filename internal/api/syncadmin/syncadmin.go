@@ -68,6 +68,7 @@ func Routes(deps Deps) []httpapi.Route {
 	}
 	h := &handlers{
 		store:     store{pool: deps.Pool},
+		writes:    store{pool: deps.Pool},
 		features:  licensing.PostgresStore{Pool: deps.Pool},
 		logger:    logger,
 		lookupEnv: lookup,
@@ -82,6 +83,7 @@ func Routes(deps Deps) []httpapi.Route {
 		{Method: http.MethodGet, Pattern: prefix + "/sync-targets", Handler: wrap(h.syncTargets)},
 		{Method: http.MethodGet, Pattern: prefix + "/sync-configs", Handler: wrap(h.listSyncConfigs)},
 		{Method: http.MethodGet, Pattern: prefix + "/sync-configs/{config_id}", Handler: wrap(h.getSyncConfig)},
+		{Method: http.MethodDelete, Pattern: prefix + "/sync-configs/{config_id}", Handler: wrap(h.deleteSyncConfig)},
 		{Method: http.MethodGet, Pattern: prefix + "/sync-configs/{config_id}/repositories", Handler: wrap(h.getRepositories)},
 		{Method: http.MethodGet, Pattern: prefix + "/sync-configs/{config_id}/jobs", Handler: wrap(h.listJobs)},
 		{Method: http.MethodGet, Pattern: prefix + "/sync-configs/{config_id}/coverage", Handler: wrap(h.getCoverage)},
@@ -94,6 +96,7 @@ func Routes(deps Deps) []httpapi.Route {
 
 type handlers struct {
 	store     reader
+	writes    writer
 	features  licensing.Store
 	logger    *slog.Logger
 	lookupEnv func(string) (string, bool)

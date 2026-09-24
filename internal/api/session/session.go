@@ -21,6 +21,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/audit"
+	"github.com/full-chaos/dev-health-ops/internal/api/authmail"
 	"github.com/full-chaos/dev-health-ops/internal/api/oauthprovider"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
@@ -44,18 +45,27 @@ type Deps struct {
 	// means httpapi.WriteError.
 	Write httpapi.ErrorWriter
 	OAuth *oauthprovider.Client
-	// Getenv reads the social-login client settings on every request, as
-	// the Python route does (os.environ.get); nil means os.Getenv.
-	Getenv  func(string) string
-	Audit   audit.Writer
-	Now     func() time.Time
-	NewUUID func() uuid.UUID
-	Logger  *slog.Logger
+	// Getenv reads the social-login client settings and
+	// AUTH_AUTO_CREATE_ORG_ON_REGISTER on every request, as the Python
+	// routes do (os.environ.get); nil means os.Getenv.
+	Getenv func(string) string
+	// Mail is the link-mail configuration verification and password reset
+	// send with (token secret, APP_BASE_URL, sender); the zero value sends
+	// nothing.
+	Mail authmail.Config
+	// RegisterLimit is AUTH_REGISTER_LIMIT as read at startup; the zero
+	// value is its default, 3/hour.
+	RegisterLimit httpapi.Limit
+	Audit         audit.Writer
+	Now           func() time.Time
+	NewUUID       func() uuid.UUID
+	Logger        *slog.Logger
 }
 
 type handlers struct {
 	Deps
-	loginLimiter, refreshLimiter, validateLimiter *httpapi.KeyedLimiter
+	loginLimiter, refreshLimiter, validateLimiter                *httpapi.KeyedLimiter
+	registerLimiter, verifyLimiter, resendLimiter, forgotLimiter *httpapi.KeyedLimiter
 }
 
 func (d Deps) withDefaults() Deps {
@@ -83,10 +93,14 @@ func (d Deps) withDefaults() Deps {
 	if d.Write == nil {
 		d.Write = httpapi.WriteError
 	}
+	if d.RegisterLimit == (httpapi.Limit{}) {
+		d.RegisterLimit = DefaultRegisterLimit
+	}
 	return d
 }
 
-// Routes mounts the eight session routes. It returns nothing unless the
+// Routes mounts the session, registration, verification, password reset,
+// invite and onboarding routes. It returns nothing unless the
 // protected-route runtime and the token keys are configured.
 func Routes(deps Deps) []httpapi.Route {
 	if deps.Pool == nil || deps.Guard == nil || deps.Auth == nil || deps.Verifier == nil || deps.Signer == nil {
@@ -97,6 +111,10 @@ func Routes(deps Deps) []httpapi.Route {
 		loginLimiter:    httpapi.NewKeyedLimiter(defaults.Limits, loginLimit),
 		refreshLimiter:  httpapi.NewKeyedLimiter(defaults.Limits, refreshLimit),
 		validateLimiter: httpapi.NewKeyedLimiter(defaults.Limits, validateLimit),
+		registerLimiter: httpapi.NewKeyedLimiter(defaults.Limits, defaults.RegisterLimit),
+		verifyLimiter:   httpapi.NewKeyedLimiter(defaults.Limits, verifyLimit),
+		resendLimiter:   httpapi.NewKeyedLimiter(defaults.Limits, resendLimit),
+		forgotLimiter:   httpapi.NewKeyedLimiter(defaults.Limits, forgotLimit),
 	}
 	guard := h.Guard
 	return []httpapi.Route{
@@ -111,6 +129,19 @@ func Routes(deps Deps) []httpapi.Route {
 		{Method: http.MethodPost, Pattern: "/api/v1/auth/validate", Handler: guard.BodyFirst(policy.Public,
 			httpapi.ValidateThenLimit(h.validateTokenBody, h.validateLimiter, validateLimitKey, h.Write)(http.HandlerFunc(h.validate)))},
 		{Method: http.MethodPost, Pattern: "/api/v1/auth/logout", Handler: guard.BodyFirst(policy.Public, http.HandlerFunc(h.logout))},
+		{Method: http.MethodPost, Pattern: "/api/v1/auth/register", Handler: guard.BodyFirst(policy.Public,
+			httpapi.ValidateThenLimit(validateRegister, h.registerLimiter, forwardedIPKey, h.Write)(http.HandlerFunc(h.register)))},
+		{Method: http.MethodGet, Pattern: "/api/v1/auth/verify", Handler: guard.Wrap(policy.Public,
+			httpapi.ValidateThenLimit(validateVerify, h.verifyLimiter, queryAuthKey, h.Write)(http.HandlerFunc(h.verify)))},
+		{Method: http.MethodPost, Pattern: "/api/v1/auth/resend-verification", Handler: guard.BodyFirst(policy.Public,
+			httpapi.ValidateThenLimit(validateEmailBody, h.resendLimiter, bodyAuthKey, h.Write)(http.HandlerFunc(h.resendVerification)))},
+		{Method: http.MethodPost, Pattern: "/api/v1/auth/forgot-password", Handler: guard.BodyFirst(policy.Public,
+			httpapi.ValidateThenLimit(validateEmailBody, h.forgotLimiter, bodyAuthKey, h.Write)(http.HandlerFunc(h.forgotPassword)))},
+		{Method: http.MethodPost, Pattern: "/api/v1/auth/reset-password", Handler: guard.BodyFirst(policy.Public, http.HandlerFunc(h.resetPassword))},
+		{Method: http.MethodPost, Pattern: "/api/v1/auth/accept-invite", Handler: guard.BodyFirst(policy.Authenticated, http.HandlerFunc(h.acceptInviteRoute))},
+		{Method: http.MethodPost, Pattern: "/api/v1/auth/onboard", Handler: guard.BodyFirst(policy.Authenticated, http.HandlerFunc(h.onboard))},
+		{Method: http.MethodGet, Pattern: "/api/v1/auth/onboarding/state", Handler: guard.Wrap(policy.Authenticated, http.HandlerFunc(h.onboardingStateRoute))},
+		{Method: http.MethodPost, Pattern: "/api/v1/auth/onboarding/skip-integration", Handler: guard.Wrap(policy.Authenticated, http.HandlerFunc(h.skipIntegration))},
 	}
 }
 

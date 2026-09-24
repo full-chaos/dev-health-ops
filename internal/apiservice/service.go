@@ -199,6 +199,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 		Pool: deps.Pool, Guard: deps.Guard, Auth: deps.Auth, Verifier: deps.Verifier, Signer: deps.Signer,
 		// The api's own ClickHouse login: organization activity.
 		ClickHouse: deps.ClickHouse, Limits: limits, Write: WriteError, OAuth: deps.SessionOAuth, Logger: logger,
+		Mail: deps.Invites, RegisterLimit: deps.RegisterLimit,
 	})...)
 	if deps.Guard != nil {
 		routes = append(routes, orgs.Routes(deps.Pool, deps.Guard, logger)...)
@@ -313,6 +314,11 @@ func configureWith(
 	deps.Invites = inviteConfig(cfg, logger, os.LookupEnv)
 	deps.GitHubApp = GitHubAppConfig(os.LookupEnv)
 	deps.GitHubStateSigner = githubapp.Signer{Secret: cfg.APIJWTSecret.Reveal(), Issuer: cfg.APIJWTIssuer, Audience: cfg.APIJWTAudience}
+	deps.RegisterLimit, err = registerLimit(os.LookupEnv)
+	if err != nil {
+		closeComponents(depComponents)
+		return nil, dependencyFailure(ctx, logger, "api_server", "api_register_limit_invalid", err)
+	}
 	if adjust != nil {
 		adjust(&deps)
 	}

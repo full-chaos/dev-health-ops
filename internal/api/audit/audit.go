@@ -34,15 +34,20 @@ const (
 	ActionLogin              Action = "login"
 	ActionLogout             Action = "logout"
 	ActionLoginFailed        Action = "login_failed"
+	ActionCreate             Action = "create"
+	ActionPasswordReset      Action = "password_reset"
+	ActionPasswordResetAsked Action = "password_reset_requested"
+	ActionMemberJoined       Action = "member_joined"
 )
 
 // ResourceType is models/audit.py AuditResourceType's value.
 type ResourceType string
 
 const (
-	ResourceMembership ResourceType = "membership"
-	ResourceUser       ResourceType = "user"
-	ResourceSession    ResourceType = "session"
+	ResourceMembership   ResourceType = "membership"
+	ResourceUser         ResourceType = "user"
+	ResourceSession      ResourceType = "session"
+	ResourceOrganization ResourceType = "organization"
 )
 
 // Entry is one audit_logs row, in the column order and nullability of

@@ -19,7 +19,30 @@ var (
 	loginLimit    = httpapi.Limit{ID: "auth_login_ip", Count: 20, Window: 15 * time.Minute}
 	refreshLimit  = httpapi.Limit{ID: "auth_refresh", Count: 10, Window: 15 * time.Minute}
 	validateLimit = httpapi.Limit{ID: "auth_validate", Count: 30, Window: 15 * time.Minute}
+	// verify.py and password_reset.py's literal limits, keyed by
+	// get_auth_key; reset-password has none.
+	verifyLimit = httpapi.Limit{ID: "auth_verify", Count: 10, Window: time.Hour}
+	resendLimit = httpapi.Limit{ID: "auth_resend_verification", Count: 3, Window: time.Hour}
+	forgotLimit = httpapi.Limit{ID: "auth_forgot_password", Count: 3, Window: time.Hour}
 )
+
+// RegisterLimitID names the register route's counter; AUTH_REGISTER_LIMIT
+// sets its count and window.
+const RegisterLimitID = "auth_register"
+
+// DefaultRegisterLimit is AUTH_REGISTER_LIMIT's default, "3/hour", keyed by
+// get_forwarded_ip.
+var DefaultRegisterLimit = httpapi.Limit{ID: RegisterLimitID, Count: 3, Window: time.Hour}
+
+// bodyAuthKey is get_auth_key for a route whose JSON body FastAPI read.
+func bodyAuthKey(r *http.Request) string {
+	body, _ := policy.BodyFrom(r.Context())
+	return authKey(r, body.Value)
+}
+
+// queryAuthKey is get_auth_key for a GET route: no body was read, so only
+// the query parameter can name the e-mail.
+func queryAuthKey(r *http.Request) string { return authKey(r, nil) }
 
 type (
 	loginInputKey    struct{}

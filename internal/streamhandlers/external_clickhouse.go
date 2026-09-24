@@ -6,7 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
-	"github.com/full-chaos/dev-health-ops/internal/storedversion"
+	"math"
 	"net"
 	"net/url"
 	"slices"
@@ -16,6 +16,8 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/full-chaos/dev-health-ops/internal/projectmembership"
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
+	"github.com/full-chaos/dev-health-ops/internal/storedversion"
 	"github.com/full-chaos/dev-health-ops/internal/streamrunner"
 	"github.com/google/uuid"
 )
@@ -234,11 +236,15 @@ func externalRecordValues(
 		}
 		scope.RepoIDs = append(scope.RepoIDs, repoID.String())
 		trackExternalTime(scope, authorWhen)
+		parents, err := externalUint32Default(payload, "parents", 1, "git_commits.parents UInt32")
+		if err != nil {
+			return nil, err
+		}
 		return []any{
 			repoID, stringField(payload, "hash"), externalNullableString(payload, "message"),
 			externalNullableString(payload, "authorName"), externalNullableString(payload, "authorEmail"), authorWhen,
 			externalNullableString(payload, "committerName"), externalNullableString(payload, "committerEmail"), committerWhen,
-			uint32(externalIntegerDefault(payload, "parents", 1)), now, source.SourceID, orgID,
+			parents, now, source.SourceID, orgID,
 		}, nil
 	case "pull_request.v1":
 		repoID := externalRepoUUID(system, instance, stringField(payload, "repositoryExternalId"))
@@ -248,17 +254,43 @@ func externalRecordValues(
 		}
 		scope.RepoIDs = append(scope.RepoIDs, repoID.String())
 		trackExternalTime(scope, createdAt)
+		number, err := externalUint32Default(payload, "number", 0, "git_pull_requests.number UInt32")
+		if err != nil {
+			return nil, err
+		}
+		additions, err := externalNullableUint(payload, "additions", "git_pull_requests.additions Nullable(UInt32)")
+		if err != nil {
+			return nil, err
+		}
+		deletions, err := externalNullableUint(payload, "deletions", "git_pull_requests.deletions Nullable(UInt32)")
+		if err != nil {
+			return nil, err
+		}
+		changedFiles, err := externalNullableUint(payload, "changedFiles", "git_pull_requests.changed_files Nullable(UInt32)")
+		if err != nil {
+			return nil, err
+		}
+		changesRequestedCount, err := externalUint32Default(payload, "changesRequestedCount", 0, "git_pull_requests.changes_requested_count UInt32")
+		if err != nil {
+			return nil, err
+		}
+		reviewsCount, err := externalUint32Default(payload, "reviewsCount", 0, "git_pull_requests.reviews_count UInt32")
+		if err != nil {
+			return nil, err
+		}
+		commentsCount, err := externalUint32Default(payload, "commentsCount", 0, "git_pull_requests.comments_count UInt32")
+		if err != nil {
+			return nil, err
+		}
 		return []any{
-			repoID, uint32(externalIntegerDefault(payload, "number", 0)),
+			repoID, number,
 			externalNullableString(payload, "title"), externalNullableString(payload, "body"), stringField(payload, "state"),
 			externalNullableString(payload, "authorName"), externalNullableString(payload, "authorEmail"), createdAt,
 			externalNullableTime(payload, "mergedAt"), externalNullableTime(payload, "closedAt"),
 			externalNullableString(payload, "headBranch"), externalNullableString(payload, "baseBranch"),
-			externalNullableUint(payload, "additions"), externalNullableUint(payload, "deletions"), externalNullableUint(payload, "changedFiles"),
+			additions, deletions, changedFiles,
 			externalNullableTime(payload, "firstReviewAt"), externalNullableTime(payload, "firstCommentAt"),
-			uint32(externalIntegerDefault(payload, "changesRequestedCount", 0)),
-			uint32(externalIntegerDefault(payload, "reviewsCount", 0)),
-			uint32(externalIntegerDefault(payload, "commentsCount", 0)), now, source.SourceID, orgID,
+			changesRequestedCount, reviewsCount, commentsCount, now, source.SourceID, orgID,
 		}, nil
 	case "review.v1":
 		repoID := externalRepoUUID(system, instance, stringField(payload, "repositoryExternalId"))
@@ -268,8 +300,12 @@ func externalRecordValues(
 		}
 		scope.RepoIDs = append(scope.RepoIDs, repoID.String())
 		trackExternalTime(scope, submittedAt)
+		pullRequestNumber, err := externalUint32Default(payload, "pullRequestNumber", 0, "git_pull_request_reviews.number UInt32")
+		if err != nil {
+			return nil, err
+		}
 		return []any{
-			repoID, uint32(externalIntegerDefault(payload, "pullRequestNumber", 0)),
+			repoID, pullRequestNumber,
 			stringField(payload, "reviewId"), stringField(payload, "reviewer"), stringField(payload, "state"),
 			submittedAt, now, source.SourceID, orgID,
 		}, nil
@@ -373,6 +409,10 @@ func externalWorkItemValues(source externalSinkBatch, payload map[string]any, no
 	if raw := stringField(payload, "reporter"); raw != "" {
 		reporter = externalIdentity(system, raw)
 	}
+	storyPoints, err := externalNullableNumber(payload, "storyPoints", "work_items.story_points Nullable(Float64)")
+	if err != nil {
+		return nil, err
+	}
 	return []any{
 		repoID, workItemID, system, stringField(payload, "title"),
 		externalStringDefault(payload, "type", "unknown"),
@@ -380,7 +420,7 @@ func externalWorkItemValues(source externalSinkBatch, payload map[string]any, no
 		nativeTeamKey, projectName, assignees, reporter, createdAt, updatedAt,
 		externalNullableTime(payload, "startedAt"), externalNullableTime(payload, "completedAt"),
 		externalNullableTime(payload, "closedAt"), stringArrayField(payload, "labels"),
-		externalNullableNumber(payload, "storyPoints"), stringField(payload, "sprintId"),
+		storyPoints, stringField(payload, "sprintId"),
 		stringField(payload, "sprintName"), stringField(payload, "parentId"), stringField(payload, "epicId"),
 		stringField(payload, "url"), now, source.Pointer.OrgID, source.SourceID,
 	}, nil
@@ -574,6 +614,10 @@ func externalOperationalValues(source externalSinkBatch, record externalSinkReco
 		return nil, err
 	}
 	sourceID := source.SourceID
+	relationshipConfidence, err := externalNumberPointer(payload, "relationshipConfidence", "relationship_confidence Nullable(Float64)")
+	if err != nil {
+		return nil, err
+	}
 	base := operationalBase{
 		orgID: source.Pointer.OrgID, provider: provider, providerInstanceID: instance,
 		sourceEntityType: "external_push." + strings.TrimSuffix(record.Kind, ".v1"),
@@ -597,7 +641,7 @@ func externalOperationalValues(source externalSinkBatch, record externalSinkReco
 		normalizedSeverity:     externalStringPointer(payload, "normalizedSeverity"),
 		normalizedPriority:     externalStringPointer(payload, "normalizedPriority"),
 		relationshipProvenance: externalStringPointer(payload, "relationshipProvenance"),
-		relationshipConfidence: externalNumberPointer(payload, "relationshipConfidence"),
+		relationshipConfidence: relationshipConfidence,
 	}
 	entity, err := externalOperationalEntityFields(source, record, provider, instance)
 	if err != nil {
@@ -698,11 +742,15 @@ func externalOperationalEntityFields(
 			{"deleted_at", externalNullableTime(payload, "deletedAt")},
 		}, nil
 	case "on_call_assignment.v1":
+		escalationLevel, err := externalNullableInt32(payload, "escalationLevel", "operational_on_call_assignments.escalation_level Nullable(Int32)")
+		if err != nil {
+			return nil, err
+		}
 		return []operationalField{
 			{"schedule_id", ref("operational_on_call_schedule", "scheduleExternalId")},
 			{"user_id", ref("operational_user", "userExternalId")},
 			{"escalation_policy_id", ref("operational_escalation_policy", "escalationPolicyExternalId")},
-			{"escalation_level", externalNullableInt32(payload, "escalationLevel")},
+			{"escalation_level", escalationLevel},
 			{"starts_at", externalNullableTime(payload, "startsAt")},
 			{"ends_at", externalNullableTime(payload, "endsAt")},
 		}, nil
@@ -853,7 +901,21 @@ func externalPythonJSONWithSeparators(value any, itemSeparator, keySeparator str
 			}
 			output.WriteString(typed.String())
 		case float64:
-			output.WriteString(strconv.FormatFloat(typed, 'g', -1, 64))
+			// Python's json.dumps: float.__repr__ for finite values (1.0
+			// stays 1.0, -0.0 stays -0.0), and its non-spec NaN/Infinity/
+			// -Infinity spellings otherwise. strconv.FormatFloat would write
+			// 1, -0 and +Inf: different JSON numeric types, and text no JSON
+			// parser accepts.
+			switch {
+			case math.IsNaN(typed):
+				output.WriteString("NaN")
+			case math.IsInf(typed, 1):
+				output.WriteString("Infinity")
+			case math.IsInf(typed, -1):
+				output.WriteString("-Infinity")
+			default:
+				output.WriteString(pythonparity.Repr(typed))
+			}
 		case int:
 			output.WriteString(strconv.Itoa(typed))
 		case []string:
@@ -1010,33 +1072,100 @@ func externalStringPointer(payload map[string]any, key string) *string {
 	return &value
 }
 
-func externalNumberPointer(payload map[string]any, key string) *float64 {
-	value, ok := numberField(payload, key)
+// externalNumericOverflow names the field and its destination column type
+// for a value the sink cannot represent. A substituted value is never
+// written to ClickHouse for a value that does not fit -- the whole batch
+// write fails instead (today's Write() contract), with an error naming
+// what failed and why, so the failure is loud and attributable rather than
+// a silent 0/null/1 landing in a real column. Confirmed live before this
+// fix existed: pull_request.v1.number = 9223372036854775808 (past int64,
+// let alone the UInt32 column) landed as a stored 0; storyPoints = 1e1000
+// (Python keeps as inf; Go's own float parse overflows) landed as null.
+func externalNumericOverflow(key, columnType string) error {
+	return fmt.Errorf("payload.%s does not fit the destination column (%s)", key, columnType)
+}
+
+// externalIntChecked reads payload[key] as an int64, checked against
+// [min, max] -- the destination column's own storable range, not just
+// "parses as an int64". present is false ONLY when the key is absent or
+// explicitly null; a PRESENT value that fails to parse as an integer, or
+// parses but falls outside [min, max], is an error -- never silently
+// treated the same as absent (that conflation is exactly the bug: the old
+// helpers this replaces could not tell "producer sent nothing" from
+// "producer sent a number too large to store" and answered both the same
+// fallback value).
+func externalIntChecked(payload map[string]any, key string, min, max int64, columnType string) (value int64, present bool, err error) {
+	raw, ok := payload[key]
+	if !ok || raw == nil {
+		return 0, false, nil
+	}
+	value, ok = integerField(payload, key)
+	if !ok || value < min || value > max {
+		return 0, true, externalNumericOverflow(key, columnType)
+	}
+	return value, true, nil
+}
+
+// externalFloatChecked reads payload[key] as a float64. present is false
+// ONLY when the key is absent or explicitly null; a PRESENT value that
+// fails to parse as a finite float64 -- including numberField's own
+// overflow-to-Inf and NaN exclusions -- is an error, matching Ruling 21's
+// instruction to fail closed rather than pass a Python-side inf through
+// or null it out silently.
+func externalFloatChecked(payload map[string]any, key, columnType string) (value float64, present bool, err error) {
+	raw, ok := payload[key]
+	if !ok || raw == nil {
+		return 0, false, nil
+	}
+	value, ok = numberField(payload, key)
 	if !ok {
-		return nil
+		return 0, true, externalNumericOverflow(key, columnType)
 	}
-	return &value
+	return value, true, nil
 }
 
-func externalNullableNumber(payload map[string]any, key string) any {
-	if value, ok := numberField(payload, key); ok {
-		return value
+func externalNumberPointer(payload map[string]any, key, columnType string) (*float64, error) {
+	value, present, err := externalFloatChecked(payload, key, columnType)
+	if err != nil {
+		return nil, err
 	}
-	return nil
+	if !present {
+		return nil, nil
+	}
+	return &value, nil
 }
 
-func externalNullableUint(payload map[string]any, key string) any {
-	if value, ok := integerField(payload, key); ok {
-		return uint32(value)
+func externalNullableNumber(payload map[string]any, key, columnType string) (any, error) {
+	value, present, err := externalFloatChecked(payload, key, columnType)
+	if err != nil {
+		return nil, err
 	}
-	return nil
+	if !present {
+		return nil, nil
+	}
+	return value, nil
 }
 
-func externalIntegerDefault(payload map[string]any, key string, fallback int64) int64 {
-	if value, ok := integerField(payload, key); ok {
-		return value
+func externalNullableUint(payload map[string]any, key, columnType string) (any, error) {
+	value, present, err := externalIntChecked(payload, key, 0, math.MaxUint32, columnType)
+	if err != nil {
+		return nil, err
 	}
-	return fallback
+	if !present {
+		return nil, nil
+	}
+	return uint32(value), nil
+}
+
+func externalUint32Default(payload map[string]any, key string, fallback uint32, columnType string) (uint32, error) {
+	value, present, err := externalIntChecked(payload, key, 0, math.MaxUint32, columnType)
+	if err != nil {
+		return 0, err
+	}
+	if !present {
+		return fallback, nil
+	}
+	return uint32(value), nil
 }
 
 func externalStringDefault(payload map[string]any, key, fallback string) string {
@@ -1062,11 +1191,15 @@ func externalBool(payload map[string]any, key string, fallback bool) bool {
 	return value
 }
 
-func externalNullableInt32(payload map[string]any, key string) any {
-	if value, ok := integerField(payload, key); ok {
-		return int32(value)
+func externalNullableInt32(payload map[string]any, key, columnType string) (any, error) {
+	value, present, err := externalIntChecked(payload, key, math.MinInt32, math.MaxInt32, columnType)
+	if err != nil {
+		return nil, err
 	}
-	return nil
+	if !present {
+		return nil, nil
+	}
+	return int32(value), nil
 }
 
 func objectField(payload map[string]any, key string) map[string]any {

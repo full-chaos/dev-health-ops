@@ -105,8 +105,16 @@ func TestExternalIngestRefusesUnregisteredKindRatherThanDroppingIt(t *testing.T)
 	if completion.Accepted != 1 || completion.Rejected != 1 || len(completion.Rejections) != 1 {
 		t.Fatalf("unregistered kind was not refused: %#v", completion)
 	}
+	// CHAOS-6345: shape validation (recordvalidation.ValidateRecords) now
+	// runs BEFORE unsupported_kind_for_system, matching normalize.py's own
+	// precedence (validate_records' shape errors always win). A kind
+	// unregistered EVERYWHERE -- Go's externalAllowedKinds and Python's
+	// RECORD_KIND_MODELS alike, exactly what this test's fake kind name
+	// guarantees -- is caught there first, as unknown_kind, not
+	// unsupported_kind_for_system. Still a REFUSAL either way -- the
+	// property this test guards (refused, not dropped) is unchanged.
 	rejection := completion.Rejections[0]
-	if rejection.Code != "unsupported_kind_for_system" || rejection.Kind != "project_membership_teleport.v1" ||
+	if rejection.Code != "unknown_kind" || rejection.Kind != "project_membership_teleport.v1" ||
 		rejection.ExternalID != "never-registered-1" {
 		t.Fatalf("refusal is not attributable to the record: %#v", rejection)
 	}

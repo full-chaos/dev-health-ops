@@ -46,8 +46,7 @@ type RecordInput struct {
 // otherwise every pydantic error of model.model_validate(payload) (python
 // mode, see validateModel) becomes one item, in pydantic's order. The api's
 // record validation (the data plane's /validate and the admin validate
-// route) uses only this. The Go ingest worker (internal/streamhandlers)
-// still runs its own separate rules; moving it onto this is CHAOS-6345.
+// route) and the Go ingest worker (internal/streamhandlers) use only this.
 func ValidateRecords(records []RecordInput) []ValidationErrorItem {
 	var items []ValidationErrorItem
 	for index, record := range records {

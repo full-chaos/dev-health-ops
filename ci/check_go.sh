@@ -1607,25 +1607,35 @@ check_live_python_oracles() {
 # ci/requirements-live-python-oracles.txt closure. It is invoked ONLY from
 # the dedicated venue-oracles CI job, never from `ci`/`fast`/`all`.
 #
-# Discovery is every top-level test function in every *_test.go that imports
-# internal/testsupport/venueoracle -- the harness import is the marker, not
-# the test's name (a name-based grep once ran 2 of the 13 admin oracles),
-# and never a hardcoded list: a new venue-oracle test anywhere in the tree
-# is picked up the next time this runs, with no edit here. The one opt-out
-# is VENUE_ORACLE_LOCAL_ONLY_MARKER directly above a test, logged by name;
-# a package whose every oracle test is opted out fails the verb. Tests are grouped
-# by their containing directory and run one `go test` invocation per package
-# (team-lead's shape, CHAOS-6314) -- today that is exactly one package
-# (internal/apiservice), but the grouping does not assume that stays true.
+# Discovery is by the harness, never by a test's name or a hardcoded list:
+# in every package that has a *_test.go importing
+# internal/testsupport/venueoracle, every top-level Test function (TestMain
+# aside) whose code reaches the harness -- a `venueoracle.` reference in its
+# own body, or a name (function, var, const or type) of the same package's
+# test files that reaches it, followed to a fixed point -- is discovered,
+# whatever its parameter is called, however its signature is wrapped, and
+# in whichever file of the package its helpers live (a name-based grep once
+# ran 2 of the 13 admin oracles; a one-line `(t *testing.T)` pattern missed
+# wrapped signatures and cross-file helpers). The match is by name within
+# the package, so it can only err towards discovering too much, and a
+# wrongly discovered test fails the verb loudly (no proof), never silently.
+# The one opt-out is VENUE_ORACLE_LOCAL_ONLY_MARKER directly above a test,
+# logged by name and counted in the summary; a harness package that runs
+# no test at all fails the verb. Tests run one `go test` invocation per
+# package.
 #
-# Each discovered test's own venueoracle.Diff writes a proof file (its own
-# t.Name()) into DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR once it has
-# actually sent a request to both planes and compared them -- NOT Start,
-# which only proves the venue was built, not that anything was compared.
-# This verb fails loudly, rule-4-style, if that file is missing for ANY
-# discovered name after every invocation completes, or if discovery itself
-# found zero tests (the discovery mechanism is broken, not a genuinely
-# oracle-free tree).
+# Each discovered test's own venueoracle.Diff (or WriteProof) writes a proof
+# file (its own t.Name()) into DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR once it
+# has actually sent a request to both planes and compared them -- NOT Start,
+# which only proves the venue was built, not that anything was compared. A
+# test that compares no Python response (Go against a recorded Python truth,
+# or a property of the venue) writes a Go-only proof instead
+# (venueoracle.WriteGoOnlyProof, "go-only: <reason>"): accepted, but counted
+# apart and named with its reason in the summary, so it never reads as a
+# parity comparison. This verb fails loudly, rule-4-style, if a proof is
+# missing for ANY discovered name after every invocation completes, or if
+# discovery itself found zero tests (the discovery mechanism is broken, not
+# a genuinely oracle-free tree).
 #
 # Two same-named VenueOracle tests in one directory (an internal test
 # package and an external `_test` package can both declare the identical
@@ -1651,22 +1661,80 @@ check_live_python_oracles() {
 # skips without it. The marker is named in the log, never silent.
 VENUE_ORACLE_LOCAL_ONLY_MARKER='//venueoracle:local-only'
 
-# venue_oracle_test_names prints every top-level `func TestX(t *testing.T)`
-# in file, except one whose previous line is the local-only marker (that one
-# is reported on stderr).
-venue_oracle_test_names() {
-  awk -v marker="${VENUE_ORACLE_LOCAL_ONLY_MARKER}" -v file="$1" '
-    /^func Test[A-Za-z0-9_]+\(t \*testing\.T\)/ {
-      name = $2; sub(/\(.*/, "", name)
-      if (index(previous, marker) == 1) {
-        printf "venue-oracles: %s in %s is marked local-only and is not run here\n", name, file > "/dev/stderr"
-      } else {
-        print name
+# venue_oracle_package_tests reads one package's *_test.go files (its
+# arguments) and prints "RUN <Test>" for each discovered test and "LOCAL
+# <Test> <file>" for one carrying the local-only marker (see Discovery
+# above).
+venue_oracle_package_tests() {
+  awk -v marker="${VENUE_ORACLE_LOCAL_ONLY_MARKER}" "${VENUE_ORACLE_DISCOVERY_AWK}" "$@"
+}
+
+VENUE_ORACLE_DISCOVERY_AWK=$(cat <<'AWK'
+function flush() {
+  if (decl != "") { body[decl] = text; decl = "" ; text = "" }
+}
+FNR == 1 { flush(); prev = "" }
+/^(func|var|const|type|import)([ (]|$)/ {
+  flush()
+  if ($0 ~ /^import/) { skipping = 1; prev = $0; next }
+  skipping = 0
+  ndecl++; decl = ndecl
+  line = $0; gsub(/"([^"\\]|\\.)*"/, "\"\"", line); sub(/\/\/.*/, "", line)
+  text = line
+  block = 0
+  if (line ~ /^func \(/) {
+    # A method is reached through a value of its type (whose name
+    # propagates), never by its bare name.
+    names[decl] = ""
+  } else if (line ~ /^func /) {
+    n = line; sub(/^func /, "", n); sub(/[^A-Za-z0-9_].*/, "", n)
+    names[decl] = n
+    if (line ~ /^func Test[A-Za-z0-9_]*[(\[]/ && n != "TestMain") {
+      test[decl] = n; testfile[decl] = FILENAME
+      if (index(prev, marker) == 1) local[decl] = 1
+    }
+  } else if (line ~ /^(var|const|type) \(/) {
+    names[decl] = ""; block = 1
+  } else {
+    n = line; sub(/^(var|const|type) /, "", n); sub(/[^A-Za-z0-9_].*/, "", n)
+    names[decl] = n; block = 0
+  }
+  prev = $0; next
+}
+{
+  if (!skipping && decl != "") {
+    code = $0; gsub(/"([^"\\]|\\.)*"/, "\"\"", code); sub(/\/\/.*/, "", code)
+    text = text "\n" code
+    if ($0 ~ /^\)/) block = 0
+    if (block && $0 ~ /^\t[A-Za-z_][A-Za-z0-9_]*/) {
+      n = $0; sub(/^\t/, "", n); sub(/[^A-Za-z0-9_].*/, "", n); names[decl] = names[decl] " " n
+    }
+  }
+  prev = $0
+}
+END {
+  flush()
+  for (d in body) if (index(body[d], "venueoracle.")) uses[d] = 1
+  do {
+    changed = 0
+    for (d in uses) { split(names[d], ns, " "); for (i in ns) if (ns[i] != "") used[ns[i]] = 1 }
+    for (d in body) {
+      if (d in uses) continue
+      b = body[d]
+      b = " " b
+      while (match(b, /[^.A-Za-z0-9_][A-Za-z_][A-Za-z0-9_]*/)) {
+        tok = substr(b, RSTART + 1, RLENGTH - 1); b = substr(b, RSTART + RLENGTH)
+        if ((tok in used) && tok != names[d]) { uses[d] = 1; changed = 1; break }
       }
     }
-    { previous = $0 }
-  ' "$1"
+  } while (changed)
+  for (d in test) if (d in uses) {
+    if (d in local) print "LOCAL " test[d] " " testfile[d]
+    else print "RUN " test[d]
+  }
 }
+AWK
+)
 
 check_venue_oracles() {
   [ "${DEV_HEALTH_LIVE_PYTHON_ORACLES:-}" = "1" ] \
@@ -1674,55 +1742,34 @@ check_venue_oracles() {
   command -v jq >/dev/null 2>&1 \
     || die "venue-oracles requires jq to read go test -json status events (a text-line grep cannot see a subtest skip or tell captured output from a real status line)"
 
-  local proof_dir file dir names name total=0
-  local -a vo_dirs=() vo_names=() vo_declared_dirs=()
+  local proof_dir dir kind name file names total=0
+  local -a vo_dirs=() vo_names=() local_only=()
   proof_dir="$(mktemp -d "${TMPDIR:-/tmp}/dev-health-venue-oracles.XXXXXX")"
 
-  while IFS= read -r file; do
-    dir="$(dirname "${file}")"
+  while IFS= read -r dir; do
     names=""
-    while IFS= read -r name; do
-      names="${names:+${names}|}${name}"
-      total=$((total + 1))
-    done < <(venue_oracle_test_names "${file}")
+    while read -r kind name file; do
+      case "${kind}" in
+        RUN)
+          names="${names:+${names}|}${name}"
+          total=$((total + 1))
+          ;;
+        LOCAL)
+          printf 'venue-oracles: %s in %s is marked local-only and is not run here\n' "${name}" "${file}" >&2
+          local_only+=("${name}")
+          ;;
+      esac
+    done < <(venue_oracle_package_tests "${dir}"/*_test.go | LC_ALL=C sort)
     if [ -z "${names}" ]; then
-      # A file that imports the harness and declares tests, all of them
-      # marked local-only, contributes nothing; a helper-only file declares
-      # none. Either way, record the directory so an oracle package whose
-      # tests all vanished is caught below.
-      if grep -qE '^func Test[A-Za-z0-9_]+\(t \*testing\.T\)' "${file}"; then
-        vo_declared_dirs+=("${dir}")
-      fi
-      continue
-    fi
-    local found=0 index
-    for index in "${!vo_dirs[@]}"; do
-      if [ "${vo_dirs[${index}]}" = "${dir}" ]; then
-        vo_names[index]="${vo_names[${index}]}|${names}"
-        found=1
-        break
-      fi
-    done
-    if [ "${found}" -eq 0 ]; then
-      vo_dirs+=("${dir}")
-      vo_names+=("${names}")
-    fi
-  done < <(grep -rlF --include='*_test.go' '"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"' "${ROOT}" | LC_ALL=C sort)
-
-  # An oracle package whose every test is marked local-only (or whose
-  # discovery otherwise yielded nothing) would run zero comparisons while
-  # reading as covered: refuse it.
-  local declared seen_dir
-  for declared in "${vo_declared_dirs[@]}"; do
-    seen_dir=0
-    for index in "${!vo_dirs[@]}"; do
-      [ "${vo_dirs[${index}]}" = "${declared}" ] && seen_dir=1
-    done
-    if [ "${seen_dir}" -eq 0 ]; then
+      # A package that imports the harness and runs no test through it --
+      # every oracle opted out, or a helper nothing calls -- runs zero
+      # comparisons while reading as covered: refuse it.
       rm -rf -- "${proof_dir}"
-      die "venue-oracles: ${declared} holds venue-oracle tests but none is run here (all marked ${VENUE_ORACLE_LOCAL_ONLY_MARKER}) -- an oracle package that runs zero comparisons must not read as covered"
+      die "venue-oracles: ${dir} imports the venue harness but no test there is run by this verb (local-only: ${#local_only[@]} so far) -- an oracle package that runs zero comparisons must not read as covered"
     fi
-  done
+    vo_dirs+=("${dir}")
+    vo_names+=("${names}")
+  done < <(grep -rlF --include='*_test.go' '"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"' "${ROOT}" | xargs -n1 dirname | LC_ALL=C sort -u)
 
   if [ "${total}" -eq 0 ]; then
     rm -rf -- "${proof_dir}"
@@ -1740,7 +1787,8 @@ check_venue_oracles() {
 
   printf 'venue-oracles: %d test(s) discovered across %d package(s)\n' "${total}" "${#vo_dirs[@]}"
 
-  local rel pattern pkg_proof_dir json_log stderr_log go_test_status failed=0
+  local rel pattern pkg_proof_dir json_log stderr_log go_test_status proof failed=0
+  local -a compared=() go_only=()
   for index in "${!vo_dirs[@]}"; do
     rel="./${vo_dirs[${index}]#"${ROOT}"/}"
     pattern="^(${vo_names[${index}]})\$"
@@ -1759,7 +1807,7 @@ check_venue_oracles() {
         DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
         DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${pkg_proof_dir}" \
         PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
-        go test -mod=readonly -tags=integration -count=1 -timeout=20m \
+        go test -mod=readonly -tags=integration -count=1 -timeout=40m \
           -run "${pattern}" -json "${rel}"
     ) >"${json_log}" 2>"${stderr_log}" || go_test_status=$?
 
@@ -1783,15 +1831,29 @@ check_venue_oracles() {
           "${json_log}" >/dev/null 2>&1; then
         printf 'ERROR: venue oracle %s (or one of its subtests) reported SKIP -- a discovered venue oracle test must never skip under this verb; no real comparison ran\n' "${name}" >&2
         failed=1
-      elif [ ! -f "${pkg_proof_dir}/${name}" ] || [ "$(cat "${pkg_proof_dir}/${name}")" != "executed" ]; then
+      elif [ ! -f "${pkg_proof_dir}/${name}" ]; then
         printf 'ERROR: venue oracle %s did not run a real comparison (no proof file in its own package directory -- venueoracle.Diff was likely never reached)\n' "${name}" >&2
         failed=1
+      else
+        proof="$(cat "${pkg_proof_dir}/${name}")"
+        case "${proof}" in
+          executed) compared+=("${name}") ;;
+          "go-only: "?*) go_only+=("${name} (${proof#go-only: })") ;;
+          *)
+            printf 'ERROR: venue oracle %s left an unknown proof %q\n' "${name}" "${proof}" >&2
+            failed=1
+            ;;
+        esac
       fi
     done
     rm -f -- "${json_log}"
   done
 
   rm -rf -- "${proof_dir}"
+  printf 'venue-oracles summary: %d discovered; %d compared both planes; %d Go-only (no Python plane); %d local-only (not run here)\n' \
+    "${total}" "${#compared[@]}" "${#go_only[@]}" "${#local_only[@]}"
+  for name in "${go_only[@]}"; do printf '  go-only:    %s\n' "${name}"; done
+  for name in "${local_only[@]}"; do printf '  local-only: %s\n' "${name}"; done
   [ "${failed}" -eq 0 ] || return 1
 }
 

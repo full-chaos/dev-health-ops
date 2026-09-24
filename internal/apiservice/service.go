@@ -32,6 +32,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"os"
 	"time"
 
@@ -134,6 +135,15 @@ func Command() cli.Command {
 	}
 }
 
+// credentialProbeClient and credentialHostLookup are the credential
+// connection test's outbound seams: nil in production (a client that follows
+// no redirects, the system resolver); the venue oracle replaces them to reach
+// a stub provider through the same SSRF guard.
+var (
+	credentialProbeClient *http.Client
+	credentialHostLookup  func(context.Context, string) ([]netip.Addr, error)
+)
+
 // Routes is the route set the api mounts, built from deps (the shared
 // Postgres pool and Valkey client every area package is handed rather than
 // opening its own). deps.Pool is nil when APIDatabaseURI is not configured;
@@ -181,7 +191,8 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 		routes = append(routes, telemetry.Routes(deps.Pool, deps.Guard, deps.Auth, deps.Telemetry.Endpoint, logger)...)
 		routes = append(routes, customerpush.Routes(customerpush.Deps{Pool: deps.Pool, Guard: deps.Guard, Logger: logger})...)
 		routes = append(routes, syncadmin.Routes(syncadmin.Deps{Pool: deps.Pool, Guard: deps.Guard, Logger: logger})...)
-		routes = append(routes, credentials.Routes(credentials.Deps{Pool: deps.Pool, Guard: deps.Guard, Encryptor: deps.Decryptor, Logger: logger, Now: deps.Now})...)
+		routes = append(routes, credentials.Routes(credentials.Deps{Pool: deps.Pool, Guard: deps.Guard, Cipher: deps.Decryptor, Logger: logger, Now: deps.Now,
+			HTTPClient: credentialProbeClient, HostLookup: credentialHostLookup})...)
 		if deps.ClickHouse != nil {
 			routes = append(routes, teamsidentity.Routes(deps.ClickHouse, deps.Guard, logger, deps.Pool, deps.Decryptor)...)
 		}

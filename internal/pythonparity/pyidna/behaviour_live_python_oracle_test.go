@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity/pyunicodedata"
@@ -111,6 +112,11 @@ func behaviourCorpus() []behaviourCall {
 		"\u30fb\u3042", "\u30fb\u4e00", "\u30fb\u30a2", "\u0669\u06f9", "\u0660", "\u06f0", "\u0669\u0661", "\u06f9\u06f1",
 		"\u0915\u200d", "\u200d", "\u200c\u0628", "\u0628\u200c", "\u0628\u064e\u200c\u0628", "\u0628\u200c\u0627",
 		"\ua872\u200c\u0628", "\u0628\u200c\u0628\u064e", "\u0915\u094d\u200c\u0915",
+		// 254 characters without a trailing period (one over encode's
+		// limit), and 253 with one (inside it).
+		strings.Repeat(strings.Repeat("a", 63)+".", 3) + strings.Repeat("a", 62),
+		strings.Repeat(strings.Repeat("a", 63)+".", 3) + strings.Repeat("a", 61) + ".",
+		strings.Repeat(strings.Repeat("a", 63)+".", 3) + strings.Repeat("a", 62) + ".",
 	} {
 		for _, fn := range []string{"remap", "alabel", "ulabel", "encode", "decode"} {
 			add(fn, []rune(text))

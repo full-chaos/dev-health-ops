@@ -96,9 +96,11 @@ func compose(text []rune) []rune {
 	lastClass := -1
 	for _, r := range text {
 		class := Combining(r)
-		// A starter (class 0) after a kept mark is blocked: lastClass is then
-		// at least 1, never below 0.
-		if starter >= 0 && (lastClass == -1 || lastClass < class) {
+		// lastClass is -1 right after the starter (nothing between them,
+		// never blocked: -1 is below every class) or the class, at least 1,
+		// of the last mark kept after it (blocking a starter and any mark of
+		// the same or a lower class).
+		if starter >= 0 && lastClass < class {
 			if composite, ok := composePair(out[starter], r); ok {
 				out[starter] = composite
 				continue

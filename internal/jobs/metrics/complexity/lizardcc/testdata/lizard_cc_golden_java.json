@@ -226,20 +226,58 @@
       "loc": 9,
       "very_high_complexity_functions": 0
     },
+    "underscore_record_keyword_catch.java.txt": {
+      "cyclomatic_avg": 0.0,
+      "cyclomatic_total": 0,
+      "functions": [],
+      "functions_count": 0,
+      "high_complexity_functions": 0,
+      "loc": 5,
+      "very_high_complexity_functions": 0
+    },
+    "underscore_record_keyword_switch.java.txt": {
+      "cyclomatic_avg": 0.0,
+      "cyclomatic_total": 0,
+      "functions": [],
+      "functions_count": 0,
+      "high_complexity_functions": 0,
+      "loc": 5,
+      "very_high_complexity_functions": 0
+    },
+    "underscore_record_keyword_synchronized.java.txt": {
+      "cyclomatic_avg": 0.0,
+      "cyclomatic_total": 0,
+      "functions": [],
+      "functions_count": 0,
+      "high_complexity_functions": 0,
+      "loc": 5,
+      "very_high_complexity_functions": 0
+    },
+    "underscore_record_keyword_while.java.txt": {
+      "cyclomatic_avg": 0.0,
+      "cyclomatic_total": 0,
+      "functions": [],
+      "functions_count": 0,
+      "high_complexity_functions": 0,
+      "loc": 5,
+      "very_high_complexity_functions": 0
+    },
     "underscore_record_name.java.txt": {
-      "cyclomatic_avg": 1.0,
-      "cyclomatic_total": 1,
-      "functions": [
-        {
-          "complexity": 1,
-          "lineno": 17,
-          "long_name": "if( x>0)",
-          "name": "if"
-        }
-      ],
-      "functions_count": 1,
+      "cyclomatic_avg": 0.0,
+      "cyclomatic_total": 0,
+      "functions": [],
+      "functions_count": 0,
       "high_complexity_functions": 0,
       "loc": 7,
+      "very_high_complexity_functions": 0
+    },
+    "underscore_record_statement_keywords.java.txt": {
+      "cyclomatic_avg": 0.0,
+      "cyclomatic_total": 0,
+      "functions": [],
+      "functions_count": 0,
+      "high_complexity_functions": 0,
+      "loc": 70,
       "very_high_complexity_functions": 0
     },
     "very_high.java.txt": {
@@ -265,5 +303,5 @@
       "very_high_complexity_functions": 1
     }
   },
-  "lizard_version": "1.23.0"
+  "lizard_version": "1.24.0"
 }

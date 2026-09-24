@@ -55,7 +55,7 @@ func TestGoldenPinnedToLockedLizardObjC(t *testing.T) {
 }
 
 // TestGoMatchesLizardGoldenObjC proves numeric equality with real lizard
-// 1.23.0 for this package's Objective-C analyzer, including
+// 1.24.0 for this package's Objective-C analyzer, including
 // const_qualifier_quirk.m.txt -- a deliberately isolated fixture proving
 // ObjCStates' own restart-on-any-non-brace-token bug (objc.go's
 // stateDecToImp doc) is reproduced exactly: the real "realFn" declaration

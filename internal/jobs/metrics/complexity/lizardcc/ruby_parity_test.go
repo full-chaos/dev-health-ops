@@ -56,7 +56,7 @@ func TestGoldenPinnedToLockedLizardRuby(t *testing.T) {
 }
 
 // TestGoMatchesLizardGoldenRuby proves numeric equality with real lizard
-// 1.23.0 for this package's Ruby analyzer.
+// 1.24.0 for this package's Ruby analyzer.
 func TestGoMatchesLizardGoldenRuby(t *testing.T) {
 	doc := loadRubyGolden(t)
 

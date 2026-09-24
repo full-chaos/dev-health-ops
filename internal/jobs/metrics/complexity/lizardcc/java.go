@@ -298,9 +298,22 @@ func (m *javaMachine) javaStateGlobal(tok string) {
 	if m.tryStartAClass(tok) {
 		return
 	}
+	if javaStatementKeywords[tok] {
+		return
+	}
 	if !m.inRecordConstructor {
 		m.clikeStateGlobal(tok)
 	}
+}
+
+// javaStatementKeywords is lizard's _JAVA_STATEMENT_KEYWORDS: statement
+// keywords that can never begin a function declaration, skipped in the
+// global state so they are not taken for a function name.
+var javaStatementKeywords = map[string]bool{
+	"if": true, "else": true, "for": true, "while": true, "do": true,
+	"switch": true, "catch": true, "try": true, "finally": true,
+	"synchronized": true, "return": true, "throw": true, "assert": true,
+	"break": true, "continue": true, "instanceof": true,
 }
 
 // clikeStateGlobal ports CLikeStates._state_global (clike.go's

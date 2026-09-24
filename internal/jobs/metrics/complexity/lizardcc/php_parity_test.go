@@ -55,7 +55,7 @@ func TestGoldenPinnedToLockedLizardPHP(t *testing.T) {
 }
 
 // TestGoMatchesLizardGoldenPHP proves numeric equality with real lizard
-// 1.23.0 for this package's PHP analyzer, including
+// 1.24.0 for this package's PHP analyzer, including
 // interface_return_type_quirk.php.txt -- a deliberately isolated fixture
 // proving PHPLanguageStates' own stuck-state bug (php.go's
 // stateFunctionBodyOrReturnType doc) is reproduced exactly, down to

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http/httptest"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -17,6 +18,13 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
+
+// sortedJoin is the rows' text in idempotency-key order (the keys hold
+// per-run org ids).
+func sortedJoin(rows ...string) string {
+	sort.Slice(rows, func(i, j int) bool { return strings.Fields(rows[i])[1] < strings.Fields(rows[j])[1] })
+	return strings.Join(rows, " | ")
+}
 
 // invoiceWebhookSubscription is the Stripe subscription id of the real
 // test-mode invoice fixture; the test seeds a local subscription with it.
@@ -123,6 +131,21 @@ func TestInvoiceWebhookAppliesTestModeEvents(t *testing.T) {
 	send("paid after void", "evt_in_submeta_paid", "invoice.paid", invoice("in_submeta", "paid", 1790241700,
 		map[string]any{"type": "subscription_details", "subscription_details": map[string]any{"subscription": "sub_unknown", "metadata": map[string]any{"org_id": orgA}}},
 		map[string]any{}, "cus_other"))
+	// A draft event arriving after payment_failed does not move it back.
+	send("metadata org: older draft after failure", "evt_in_meta_created", "invoice.created", invoice("in_meta", "draft", nil, unknownParent, map[string]any{"org_id": orgD}, "cus_other"))
+	// payment_failed never replaces a terminal status in the payload.
+	send("payment failed on an uncollectible payload", "evt_in_pfu", "invoice.payment_failed", invoice("in_pfu", "uncollectible", nil, unknownParent, map[string]any{"org_id": orgD}, "cus_other"))
+	// The pre-2025 API shape: the subscription at the top level.
+	send("legacy top-level subscription", "evt_in_legacy", "invoice.finalized", func(object map[string]any) {
+		invoice("in_legacy", "open", nil, nil, map[string]any{}, "cus_other")(object)
+		object["subscription"] = invoiceWebhookSubscription
+	})
+	// Paid clears what remains; voided is void whatever the payload says.
+	send("paid clears amount_remaining", "evt_in_rem", "invoice.paid", func(object map[string]any) {
+		invoice("in_rem", "paid", 1790241482, unknownParent, map[string]any{"org_id": orgD}, "cus_other")(object)
+		object["amount_remaining"] = 400
+	})
+	send("voided with an open payload", "evt_in_vopen", "invoice.voided", invoice("in_vopen", "open", nil, unknownParent, map[string]any{"org_id": orgD}, "cus_other"))
 	// No org anywhere: nothing written.
 	send("no org", "evt_in_none", "invoice.paid", invoice("in_none", "paid", 1790241482, unknownParent, map[string]any{}, "cus_other"))
 	send("org not a uuid", "evt_in_bad", "invoice.finalized", invoice("in_bad", "open", nil, unknownParent, map[string]any{"org_id": "org-abc"}, "cus_other"))
@@ -174,23 +197,30 @@ func TestInvoiceWebhookAppliesTestModeEvents(t *testing.T) {
 	expect("in_sub: line items replaced, price from pricing.price_details", row(`SELECT count(*), min(stripe_price_id), min(amount)
 		FROM invoice_line_items l JOIN invoices i ON i.id = l.invoice_id WHERE i.stripe_invoice_id = 'in_sub'`),
 		"1 price_1UJ8muEIXptJX86eoKRExtq0 1000")
-	expect("in_meta: payment_failed, org from metadata", row(`SELECT org_id::text, status FROM invoices WHERE stripe_invoice_id = 'in_meta'`),
+	expect("in_meta: payment_failed, org from metadata, older draft ignored", row(`SELECT org_id::text, status FROM invoices WHERE stripe_invoice_id = 'in_meta'`),
 		orgD+" payment_failed")
 	expect("in_submeta: void, org from subscription metadata, paid after void ignored", row(`SELECT org_id::text, status, voided_at IS NOT NULL,
 		paid_at IS NULL FROM invoices WHERE stripe_invoice_id = 'in_submeta'`), orgA+" void true true")
 	expect("in_cust: org from the license customer", row(`SELECT org_id::text, status FROM invoices WHERE stripe_invoice_id = 'in_cust'`), orgA+" open")
 	expect("in_fall: unknown metadata org falls through", row(`SELECT org_id::text FROM invoices WHERE stripe_invoice_id = 'in_fall'`), orgA)
 	expect("in_unc: uncollectible then paid", row(`SELECT status, amount_remaining FROM invoices WHERE stripe_invoice_id = 'in_unc'`), "paid 0")
+	expect("in_pfu: payment_failed keeps an uncollectible payload", row(`SELECT status FROM invoices WHERE stripe_invoice_id = 'in_pfu'`), "uncollectible")
+	expect("in_legacy: org and link from a top-level subscription", row(`SELECT org_id::text, subscription_id::text FROM invoices WHERE stripe_invoice_id = 'in_legacy'`),
+		orgB+" 11111111-0000-4000-8000-0000000000aa")
+	expect("in_rem: paid clears amount_remaining", row(`SELECT status, amount_remaining FROM invoices WHERE stripe_invoice_id = 'in_rem'`), "paid 0")
+	expect("in_vopen: voided is void", row(`SELECT status, voided_at IS NOT NULL FROM invoices WHERE stripe_invoice_id = 'in_vopen'`), "void true")
 	expect("no org, org not a uuid: nothing written", row(`SELECT count(*) FROM invoices WHERE stripe_invoice_id IN ('in_none', 'in_bad')`), "0")
 	expect("notifications: one receipt per paid event, one failure", row(`SELECT notification_type, idempotency_key FROM billing_notifications
 		WHERE notification_type IN ('invoice_receipt', 'payment_failed') ORDER BY idempotency_key`),
-		strings.Join([]string{
-			"invoice_receipt billing:invoice_receipt:" + orgB + ":evt_in_sub_paid",
-			"invoice_receipt billing:invoice_receipt:" + orgB + ":evt_in_unc_paid",
-			"payment_failed billing:payment_failed:" + orgD + ":evt_in_meta_failed",
-		}, " | "))
+		sortedJoin(
+			"invoice_receipt billing:invoice_receipt:"+orgB+":evt_in_sub_paid",
+			"invoice_receipt billing:invoice_receipt:"+orgB+":evt_in_unc_paid",
+			"invoice_receipt billing:invoice_receipt:"+orgD+":evt_in_rem",
+			"payment_failed billing:payment_failed:"+orgD+":evt_in_meta_failed",
+			"payment_failed billing:payment_failed:"+orgD+":evt_in_pfu",
+		))
 	expect("outbox: one handoff per notification", row(`SELECT count(*) FROM worker_job_outbox o JOIN billing_notifications n
-		ON n.idempotency_key = o.dedupe_key WHERE n.notification_type IN ('invoice_receipt', 'payment_failed')`), "3")
+		ON n.idempotency_key = o.dedupe_key WHERE n.notification_type IN ('invoice_receipt', 'payment_failed')`), "5")
 	expect("receipt attributes", row(`SELECT attributes::text FROM billing_notifications WHERE idempotency_key = $1`,
 		"billing:invoice_receipt:"+orgB+":evt_in_sub_paid"), `{"amount_cents": 1000, "currency": "usd", "invoice_url": "https://invoice.stripe.test/venue"}`)
 

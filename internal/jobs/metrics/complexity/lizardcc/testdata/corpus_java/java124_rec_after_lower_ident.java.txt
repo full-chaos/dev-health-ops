@@ -1,0 +1,1 @@
+class C { foo record; void f() { if (record != null) {} } }

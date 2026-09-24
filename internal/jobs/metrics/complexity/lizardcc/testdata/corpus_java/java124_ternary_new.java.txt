@@ -1,0 +1,1 @@
+class C { Object f() { return a ? new X<Y>() : new Z<W>() { void q() { if (b) {} } }; } }

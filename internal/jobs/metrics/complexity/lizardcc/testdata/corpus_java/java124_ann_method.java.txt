@@ -1,0 +1,1 @@
+class C { @Override public int f() { if (a) return 1; return 2; } @A(x=1) int g() { if (b) return 1; return 2; } }

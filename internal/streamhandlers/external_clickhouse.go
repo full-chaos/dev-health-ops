@@ -1107,21 +1107,35 @@ func externalIntChecked(payload map[string]any, key string, min, max int64, colu
 }
 
 // externalFloatChecked reads payload[key] as a float64. present is false
-// ONLY when the key is absent or explicitly null; a PRESENT value that
-// fails to parse as a finite float64 -- including numberField's own
-// overflow-to-Inf and NaN exclusions -- is an error, matching Ruling 21's
-// instruction to fail closed rather than pass a Python-side inf through
-// or null it out silently.
+// ONLY when the key is absent or explicitly null. Every float64 is storable:
+// Float64 holds +/-Inf and NaN, and Python's sink writes them as they come
+// (json.loads reads 1e1000 as +inf and the NaN/Infinity tokens as nan/inf;
+// measured against the real Python sink on a real ClickHouse, CHAOS-6415),
+// so failing the batch for them was stricter than Python. A json.Number here
+// is always an INTEGER literal (a float literal decodes to float64 first):
+// one past float64's range is a value Python's own validation refuses for a
+// float field ("Input should be a valid number") and never stores, so it
+// stays an error rather than becoming +Inf.
 func externalFloatChecked(payload map[string]any, key, columnType string) (value float64, present bool, err error) {
 	raw, ok := payload[key]
 	if !ok || raw == nil {
 		return 0, false, nil
 	}
-	value, ok = numberField(payload, key)
-	if !ok {
-		return 0, true, externalNumericOverflow(key, columnType)
+	switch typed := raw.(type) {
+	case float64:
+		return typed, true, nil
+	case json.Number:
+		parsed, parseErr := strconv.ParseFloat(typed.String(), 64)
+		if parseErr != nil || math.IsInf(parsed, 0) {
+			return 0, true, externalNumericOverflow(key, columnType)
+		}
+		return parsed, true, nil
+	case int:
+		return float64(typed), true, nil
+	case int64:
+		return float64(typed), true, nil
 	}
-	return value, true, nil
+	return 0, true, externalNumericOverflow(key, columnType)
 }
 
 func externalNumberPointer(payload map[string]any, key, columnType string) (*float64, error) {

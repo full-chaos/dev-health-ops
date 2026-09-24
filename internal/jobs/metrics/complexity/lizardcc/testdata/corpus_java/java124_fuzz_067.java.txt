@@ -1,0 +1,2 @@
+@A
+record TR(int z) { Object o6 = new int[] {1,2}; Object o7 = new Foo<Bar>(1, g(2)); enum EN { A, B; void em() { if (this == A) {} } } static record S(int x) { int g() { if (x>0) return 1; return 2; } } void ann() { @SuppressWarnings("x") int q = 1; if (q > 0) {} } }

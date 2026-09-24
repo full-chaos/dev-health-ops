@@ -380,15 +380,43 @@ func (h handlers) create(w http.ResponseWriter, r *http.Request) {
 
 // set is IntegrationCredentialsService.set inside one transaction.
 func (h handlers) set(ctx context.Context, orgID, provider, name string, credentials, config *pyjson.Object, isActive bool) (credential, error) {
-	sealed, err := h.seal(normalizeCredentialKeys(provider, credentials))
-	if err != nil {
-		return credential{}, err
-	}
 	tx, err := h.pool.Begin(ctx)
 	if err != nil {
 		return credential{}, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	saved, err := h.setIn(ctx, tx, orgID, provider, name, credentials, config, isActive)
+	if err != nil {
+		return credential{}, err
+	}
+	return saved, tx.Commit(ctx)
+}
+
+// Saver is IntegrationCredentialsService.set for another admin route that
+// saves a credential inside its own transaction (the GitHub App install
+// callback writes the installation row and the credential in one).
+type Saver struct{ handlers }
+
+// NewSaver builds a Saver over the api's credential cipher.
+func NewSaver(cipher Cipher, now func() time.Time) Saver {
+	if now == nil {
+		now = time.Now
+	}
+	return Saver{handlers{cipher: cipher, now: now}}
+}
+
+// Set upserts the (org, provider, name) credential on tx; the caller commits.
+func (s Saver) Set(ctx context.Context, tx pgx.Tx, orgID, provider, name string, credentials, config *pyjson.Object, isActive bool) error {
+	_, err := s.setIn(ctx, tx, orgID, provider, name, credentials, config, isActive)
+	return err
+}
+
+// setIn is set on a transaction the caller owns and commits.
+func (h handlers) setIn(ctx context.Context, tx pgx.Tx, orgID, provider, name string, credentials, config *pyjson.Object, isActive bool) (credential, error) {
+	sealed, err := h.seal(normalizeCredentialKeys(provider, credentials))
+	if err != nil {
+		return credential{}, err
+	}
 	now := h.now().UTC().Truncate(time.Microsecond)
 	existing, err := h.load(ctx, tx, orgID, provider, name, true)
 	if err != nil {
@@ -412,7 +440,7 @@ func (h handlers) set(ctx context.Context, orgID, provider, name string, credent
 			created.ID, orgID, provider, name, isActive, sealed, text, now, updatedAt); err != nil {
 			return credential{}, err
 		}
-		return created, tx.Commit(ctx)
+		return created, nil
 	}
 	// An UPDATE always follows: the fresh ciphertext is a change. config is
 	// written only when given and not equal to the stored value (SQLAlchemy
@@ -438,7 +466,7 @@ func (h handlers) set(ctx context.Context, orgID, provider, name string, credent
 	if _, err := tx.Exec(ctx, `UPDATE integration_credentials SET `+join(sets)+` WHERE id = $`+itoa(len(args)), args...); err != nil {
 		return credential{}, err
 	}
-	return response, tx.Commit(ctx)
+	return response, nil
 }
 
 // update is PATCH /credentials/{provider}/{name}.

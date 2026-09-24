@@ -116,6 +116,10 @@ EXPECTED_PACKAGES = {
     "internal/api/billing",
     "internal/api/externalingest",
     "internal/api/externalurl",
+    # The GitHub App install routes' venue differential oracle against the
+    # real Python api (its own package: internal/apiservice is at its time
+    # budget).
+    "internal/api/githubapp",
     "internal/api/licensing",
     # The api's protected-route policy read path: provision, migrate, api
     # readiness and an authenticated request on a real Postgres.

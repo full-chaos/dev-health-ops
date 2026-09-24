@@ -84,6 +84,7 @@ internal/api/audit	10
 internal/api/billing	6
 internal/api/externalingest	10
 internal/api/externalurl	10
+internal/api/githubapp	130
 internal/api/licensing	6
 internal/api/policy	5
 internal/api/session	50

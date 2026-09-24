@@ -5,10 +5,14 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/stripe/stripe-go/v86"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/licensing"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
@@ -88,8 +92,8 @@ func (h handlers) stripeWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	eventID := attr(event, "id", nil)
-	switch {
-	case len(eventType) >= len("invoice.") && eventType[:len("invoice.")] == "invoice.":
+	switch stripeEventRoute(eventType) {
+	case "invoice.":
 		if eventType == "invoice.payment_failed" && !invoiceHasOrgID(dataObject) {
 			h.logger.WarnContext(ctx, "Payment failed", "customer", pyStr(attr(dataObject, "customer", nil)))
 			h.write(w, ok(webhookOK))
@@ -104,33 +108,93 @@ func (h handlers) stripeWebhook(w http.ResponseWriter, r *http.Request) {
 		// it answers the same 500 as every other invoice event.
 		h.internal(w, r, "stripe webhook", errInvoiceDedupe)
 		return
-	case eventType == "checkout.session.completed":
+	case "checkout.session.completed":
 		if err := h.checkoutCompleted(ctx, client, dataObject); err != nil {
 			h.internal(w, r, "stripe webhook", err)
 			return
 		}
-	case eventType == "customer.subscription.created":
+	case "customer.subscription.created":
 		h.processSubscriptionEvent(ctx, event, eventType, dataObject)
-	case eventType == "customer.subscription.updated":
+	case "customer.subscription.updated":
 		h.processSubscriptionEvent(ctx, event, eventType, dataObject)
 		if err := h.subscriptionUpdated(ctx, dataObject); err != nil {
 			h.internal(w, r, "stripe webhook", err)
 			return
 		}
-	case eventType == "customer.subscription.deleted":
+	case "customer.subscription.deleted":
 		h.processSubscriptionEvent(ctx, event, eventType, dataObject)
 		h.subscriptionDeleted(ctx, dataObject)
-	case eventType == "customer.subscription.trial_will_end":
+	case "customer.subscription.trial_will_end":
 		if err := h.trialWillEnd(ctx, dataObject); err != nil {
 			h.internal(w, r, "stripe webhook", err)
 			return
 		}
 	default:
-		// charge.refund* and the rest: the later slice of this port
-		// (CHAOS-6519); unhandled types log only, as Python does.
-		h.logger.DebugContext(ctx, "Unhandled Stripe event", "type", eventType)
+		h.unhandledEvent(ctx, eventType, eventID)
 	}
 	h.write(w, ok(webhookOK))
+}
+
+// stripeEventRoutes are the event types stripe_webhook dispatches by name;
+// every "invoice." type goes to the invoice branch. A type Python applies
+// and this port does not is listed in stripeEventGaps instead, and
+// TestStripeEventRoutesCoverPythonDispatch holds both lists to router.py.
+var stripeEventRoutes = map[string]bool{
+	"checkout.session.completed":           true,
+	"customer.subscription.created":        true,
+	"customer.subscription.updated":        true,
+	"customer.subscription.deleted":        true,
+	"customer.subscription.trial_will_end": true,
+}
+
+// stripeEventGaps are the event types the Python route applies that this
+// port answers 200 without applying (named gaps): the refund events
+// (refund_service.process_webhook), CHAOS-6519. The route does not move to
+// Go while this list is non-empty.
+var stripeEventGaps = map[string]string{
+	"charge.refunded":       "refund_service.process_webhook (CHAOS-6519)",
+	"charge.refund.updated": "refund_service.process_webhook (CHAOS-6519)",
+}
+
+// stripeEventRoute is the branch an event type takes: "invoice." for every
+// invoice type, the type itself for one dispatched by name, "" for a type
+// the route does not handle.
+func stripeEventRoute(eventType string) string {
+	switch {
+	case strings.HasPrefix(eventType, "invoice."):
+		return "invoice."
+	case stripeEventRoutes[eventType]:
+		return eventType
+	}
+	return ""
+}
+
+// unhandledEvents counts the verified events the route answers 200 without
+// applying, by type for a named gap and "other" for the rest (Stripe's type
+// list is long; the log line carries the exact type and event id).
+var unhandledEvents = func() metric.Int64Counter {
+	counter, err := otel.Meter("github.com/full-chaos/dev-health-ops/internal/api/billing").Int64Counter(
+		"dev_health_api_stripe_webhook_unhandled_events_total",
+		metric.WithDescription("Verified Stripe webhook events answered 200 without being applied, by event type"))
+	if err != nil {
+		counter, _ = otel.GetMeterProvider().Meter("noop").Int64Counter("dev_health_api_stripe_webhook_unhandled_events_total")
+	}
+	return counter
+}()
+
+// unhandledEvent logs and counts an event the route does not apply. Python
+// logs these at debug only; a type Python applies (a named gap) is a warning
+// here, so a dropped event is never a silent 200.
+func (h handlers) unhandledEvent(ctx context.Context, eventType string, eventID pyjson.Value) {
+	label, applied := "other", stripeEventGaps[eventType]
+	if applied != "" {
+		label = eventType
+		h.logger.WarnContext(ctx, "Stripe event not applied: the Python route applies it and this port does not yet",
+			"type", eventType, "event_id", pyStr(eventID), "python_handler", applied)
+	} else {
+		h.logger.InfoContext(ctx, "Unhandled Stripe event", "type", eventType, "event_id", pyStr(eventID))
+	}
+	unhandledEvents.Add(ctx, 1, metric.WithAttributes(attribute.String("event_type", label)))
 }
 
 // readWebhookEvent is Webhook.construct_event's parse and the route's

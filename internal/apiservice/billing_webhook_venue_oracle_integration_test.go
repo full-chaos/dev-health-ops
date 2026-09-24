@@ -302,9 +302,13 @@ func TestVenueOracleBillingWebhook(t *testing.T) {
 	fake.mu.Lock()
 	pyCalls, goCalls := append([]string(nil), fake.calls["py"]...), append([]string(nil), fake.calls["go"]...)
 	fake.mu.Unlock()
-	callsSame := strings.Join(pyCalls, "\n") == strings.Join(goCalls, "\n") && len(goCalls) > 0
+	// The line-items reads both planes made on the run that fixed this
+	// number: a change in how many checkout cases reach Stripe has to change
+	// it knowingly, not pass as long as the two lists agree.
+	const wantStripeCalls = 15
+	callsSame := strings.Join(pyCalls, "\n") == strings.Join(goCalls, "\n") && len(goCalls) == wantStripeCalls
 	if !callsSame {
-		t.Errorf("stripe calls differ (or none):\n python %s\n go     %s", strings.Join(pyCalls, "\n        "), strings.Join(goCalls, "\n        "))
+		t.Errorf("stripe calls differ (or are not %d):\n python %s\n go     %s", wantStripeCalls, strings.Join(pyCalls, "\n        "), strings.Join(goCalls, "\n        "))
 	}
 	receipt += fmt.Sprintf("stripe calls (%d): %s\n", len(goCalls), venueoracle.Mark(callsSame))
 

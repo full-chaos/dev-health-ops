@@ -1,0 +1,2 @@
+fun <K, V> m(k: K, v: V) { while (true) { if (k == v) break } }
+fun h<T>() { if (a) {} }

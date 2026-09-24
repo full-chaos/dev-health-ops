@@ -1,0 +1,3 @@
+package p
+func Nest[T any, S ~[]T](s S) int { if len(s) > 0 { return 1 }; return 0 }
+func After() { if a { } }

@@ -8,19 +8,15 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"golang.org/x/crypto/bcrypt"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/audit"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/auth/passwordhash"
 	"github.com/full-chaos/dev-health-ops/internal/auth/passwordpolicy"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
-
-// bcryptCost is bcrypt.gensalt()'s default, the cost every Python hashpw
-// call in the auth routes uses.
-const bcryptCost = 12
 
 // verificationTTL is create_email_verification_token's ttl_hours=24.
 const verificationTTL = 24 * time.Hour
@@ -68,14 +64,6 @@ func (h handlers) autoCreateOrg() bool {
 	default:
 		return true
 	}
-}
-
-// hashPassword is bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).
-// bcrypt 5 raises ValueError past 72 bytes, as Go's bcrypt refuses them, so
-// both planes fail such a request.
-func hashPassword(password string) (string, error) {
-	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcryptCost)
-	return string(hash), err
 }
 
 // refuseViolations writes error_detail(message, errors=violations).
@@ -143,7 +131,7 @@ func (h handlers) register(w http.ResponseWriter, r *http.Request) {
 		refuse(w, http.StatusBadRequest, "Email already registered")
 		return
 	}
-	hash, err := hashPassword(input.password)
+	hash, err := passwordhash.Hash(input.password)
 	if err != nil {
 		h.fail(w, r, "hash password", err)
 		return

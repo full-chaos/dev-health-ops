@@ -13,6 +13,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/auth/passwordhash"
 	"github.com/full-chaos/dev-health-ops/internal/auth/passwordpolicy"
 )
 
@@ -255,13 +256,12 @@ func (h *handlers) createUser(w http.ResponseWriter, r *http.Request) {
 		in.AuthProviderID = &authProviderID
 	}
 	if password != "" {
-		hash, hashErr := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+		hashed, hashErr := passwordhash.Hash(password)
 		if hashErr != nil {
 			h.logger.ErrorContext(ctx, "admin: password hash failed", "error", hashErr)
 			policy.WriteInternal(w)
 			return
 		}
-		hashed := string(hash)
 		in.PasswordHash = &hashed
 	}
 
@@ -452,7 +452,7 @@ func (h *handlers) setUserPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	newHash, hashErr := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
+	newHash, hashErr := passwordhash.Hash(newPassword)
 	if hashErr != nil {
 		h.logger.ErrorContext(ctx, "admin: password hash failed", "error", hashErr)
 		policy.WriteInternal(w)
@@ -479,7 +479,7 @@ func (h *handlers) setUserPassword(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	success, err := h.store.setUserPassword(ctx, tx, targetID, string(newHash))
+	success, err := h.store.setUserPassword(ctx, tx, targetID, newHash)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "admin: set password failed", "error", err)
 		policy.WriteInternal(w)

@@ -137,10 +137,16 @@ func apiPosture() RolePosture {
 			// (services/login_attempts.py): read, insert the first failure,
 			// update the count and lock, delete on a successful login.
 			{"login_attempts", true, true, true},
-			// org_invites: create_org_invite (CHAOS-6391) checks for a
-			// pending invite (read) and inserts one; a purge target, delete
-			// added. Never updated by this role.
-			{"org_invites", true, false, true},
+			// org_invites: create_org_invite checks for a pending invite
+			// (read) and inserts one; accept-invite and onboard's join_org
+			// mark it accepted (UPDATE). A purge target, delete added.
+			{"org_invites", true, true, true},
+			// The single-use link tokens of e-mail verification and
+			// password reset: every issue deletes the user's earlier tokens
+			// and inserts one, and redeeming one deletes them all. Never
+			// updated.
+			{"email_verification_tokens", true, false, true},
+			{"password_reset_tokens", true, false, true},
 			// CHAOS-6303 (admin impersonation routes) is the first route
 			// area over this principal to WRITE the impersonation session
 			// it reads: start_impersonation ends any prior open session

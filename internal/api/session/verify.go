@@ -12,6 +12,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/auth/passwordhash"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
@@ -225,7 +226,7 @@ func (h handlers) resetPassword(w http.ResponseWriter, r *http.Request) {
 		refuse(w, http.StatusBadRequest, "Invalid or expired token")
 		return
 	}
-	hash, err := hashPassword(input.password)
+	hash, err := passwordhash.Hash(input.password)
 	if err != nil {
 		h.fail(w, r, "hash password", err)
 		return

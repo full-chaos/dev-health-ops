@@ -97,6 +97,7 @@ internal/apiservice/acr	6
 internal/admincli	40
 internal/apiservice/admin	2
 internal/apiservice/sessionvenue	1
+internal/apiservice/authflowvenue	1
 internal/apiservice/billingvenue	2
 internal/apiservice/externalingestvenue	190
 internal/auth/ratelimitvalkey	11

@@ -150,3 +150,30 @@ func TestFinalRunReportFailsADHOAPIRunThatAdmittedNothing(t *testing.T) {
 		t.Fatalf("query-api run changed behaviour: %q %v", report.ExitCause, err)
 	}
 }
+
+func TestCredentialsForSendsThePushTokenOnBothLegsOnlyForIngestEntries(t *testing.T) {
+	push := goapiproof.StaticCredential("Authorization", "push bearer", "fcpush_x")
+	runCand := goapiproof.StaticCredential("Authorization", "candidate bearer", "a.b.c")
+	runBase := goapiproof.StaticCredential("Authorization", "baseline bearer", "d.e.f")
+
+	c, b := credentialsFor(goapiproof.RESTEndpointSpec{Credential: goapiproof.RESTCredentialPushToken}, push, runCand, runBase)
+	if c != push || b != push {
+		t.Fatal("a push-token entry must send the push token on BOTH legs and never the run's bearers")
+	}
+	c, b = credentialsFor(goapiproof.RESTEndpointSpec{}, push, runCand, runBase)
+	if c != runCand || b != runBase {
+		t.Fatal("every other entry must keep the run's own bearers")
+	}
+}
+
+func TestRunRefusesAPushTokenCorpusWithoutATokenFile(t *testing.T) {
+	f, err := parseFlags(serviceArgs("-service", "dho-api", "-dho-api-url", "http://127.0.0.1:1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.pushTokenFile = ""
+	err = run(f)
+	if err == nil || !strings.Contains(err.Error(), "-push-token-file") {
+		t.Fatalf("a dho-api run planning ingest entries needs -push-token-file, got %v", err)
+	}
+}

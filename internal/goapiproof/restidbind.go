@@ -317,6 +317,9 @@ func ResolveRESTIDBindings(specPath string, request RESTRequest, produced map[st
 		resolvedQuery[key] = append([]string(nil), values...)
 	}
 	resolvedBody = request.Body
+	for name, value := range request.PathLiterals {
+		resolvedPath = strings.ReplaceAll(resolvedPath, "{"+name+"}", value)
+	}
 	boundIDs := make(map[string]string, len(request.IDBindings))
 	for _, binding := range request.IDBindings {
 		id, ok := produced[binding.Producer]

@@ -1,0 +1,1 @@
+enum E { A { void f() { if (x) {} } }, B; }

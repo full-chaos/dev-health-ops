@@ -1,0 +1,1 @@
+class C { @record void f() { if (a) {} } }

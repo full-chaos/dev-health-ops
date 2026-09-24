@@ -1,0 +1,1 @@
+class C { void f() { list.forEach(System.out::println); if (a) {} } }

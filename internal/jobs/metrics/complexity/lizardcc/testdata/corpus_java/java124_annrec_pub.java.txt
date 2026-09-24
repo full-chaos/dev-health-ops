@@ -1,0 +1,5 @@
+@Deprecated
+public record R(int x) {
+  public R { if (x > 0) x = 1; }
+  int f() { if (x>0) return 1; return 2; }
+}

@@ -68,7 +68,7 @@ func TestNewExplainGetHandlerRequiresAuthContext(t *testing.T) {
 	handler := newExplainGetHandler(newEmptyRowsExplainReader(t))
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/explain?metric=cycle_time", nil)
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
@@ -90,7 +90,7 @@ func TestNewExplainGetHandlerHappyPathSetsDeprecatedHeader(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/explain?metric=cycle_time&scope_type=repo&scope_id=repo-a&range_days=7", nil)
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
 	}
@@ -125,7 +125,7 @@ func TestNewExplainPostHandlerRequiresAuthContext(t *testing.T) {
 	handler := newExplainPostHandler(newEmptyRowsExplainReader(t))
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/explain", bytes.NewReader([]byte(`{"metric":"cycle_time","filters":{}}`)))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
@@ -142,7 +142,7 @@ func TestNewExplainPostHandlerHappyPathNoDeprecatedHeader(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/explain", bytes.NewReader([]byte(body)))
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
 	}

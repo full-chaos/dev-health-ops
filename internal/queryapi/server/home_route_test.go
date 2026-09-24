@@ -74,7 +74,7 @@ func TestNewHomeGetHandlerRequiresAuthContext(t *testing.T) {
 	handler := newHomeGetHandler(emptyRowsHomeClient{}, nil)
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/home", nil)
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
@@ -87,7 +87,7 @@ func TestNewHomePostHandlerRequiresAuthContext(t *testing.T) {
 	handler := newHomePostHandler(emptyRowsHomeClient{}, nil)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/home", strings.NewReader(`{"filters":{}}`))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
@@ -101,7 +101,7 @@ func TestNewHomeGetHandlerBadRangeDaysIs422(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/home?range_days=abc", nil)
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnprocessableEntity)
 	}
@@ -128,7 +128,7 @@ func TestNewHomeGetHandlerBadCompareDaysIs422(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/home?compare_days=xyz", nil)
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnprocessableEntity)
 	}
@@ -150,7 +150,7 @@ func TestNewHomeGetHandlerInvalidScopeTypeIs503(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/home?scope_type=bogus", nil)
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
 	}
@@ -167,7 +167,7 @@ func TestNewHomeGetHandlerHappyPathShape(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/home?scope_type=org", nil)
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
 	}
@@ -191,7 +191,7 @@ func TestNewHomePostHandlerMissingBodyIs422(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/home", nil)
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnprocessableEntity)
 	}
@@ -214,7 +214,7 @@ func TestNewHomePostHandlerMissingFiltersIs422(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/home", strings.NewReader(`{}`))
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnprocessableEntity)
 	}
@@ -238,7 +238,7 @@ func TestNewHomePostHandlerInvalidScopeLevelIs422(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/home", strings.NewReader(`{"filters":{"scope":{"level":"bogus"}}}`))
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusUnprocessableEntity, rec.Body.String())
 	}
@@ -260,7 +260,7 @@ func TestNewHomePostHandlerBodyTooLargeIs413(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/home", strings.NewReader(`{"filters":{"why":{"work_category":["`+oversized+`"]}}}`))
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusRequestEntityTooLarge)
 	}
@@ -273,7 +273,7 @@ func TestNewHomePostHandlerHappyPathShape(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/home", strings.NewReader(`{"filters":{}}`))
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
 	}

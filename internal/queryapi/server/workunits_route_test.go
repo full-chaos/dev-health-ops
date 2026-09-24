@@ -96,7 +96,7 @@ func TestNewWorkUnitsGetHandlerRequiresAuthContext(t *testing.T) {
 	handler := newWorkUnitsGetHandler(newTestWorkUnitsReader(t))
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/work-units", nil)
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
@@ -113,7 +113,7 @@ func TestNewWorkUnitsGetHandlerBadRangeDaysIs422(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/work-units?range_days=abc", nil)
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusUnprocessableEntity, rec.Body.String())
 	}
@@ -144,7 +144,7 @@ func TestNewWorkUnitsGetHandlerEmptyRangeDaysIs422(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/work-units?range_days=", nil)
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusUnprocessableEntity, rec.Body.String())
 	}
@@ -160,7 +160,7 @@ func TestNewWorkUnitsGetHandlerBadIncludeTextualIs422(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/work-units?include_textual=maybe", nil)
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusUnprocessableEntity, rec.Body.String())
 	}
@@ -181,7 +181,7 @@ func TestNewWorkUnitsGetHandlerHappyPathShape(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/work-units", nil)
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
 	}
@@ -191,7 +191,7 @@ func TestNewWorkUnitsGetHandlerHappyPathShape(t *testing.T) {
 	if got, want := rec.Header().Get("X-DevHealth-Deprecated"), "use POST with filters"; got != want {
 		t.Fatalf("X-DevHealth-Deprecated = %q, want %q", got, want)
 	}
-	if got, want := rec.Body.String(), "[]\n"; got != want {
+	if got, want := rec.Body.String(), "[]"; got != want {
 		t.Fatalf("body = %q, want %q (empty result must render as a JSON array, not null)", got, want)
 	}
 }
@@ -202,7 +202,7 @@ func TestNewWorkUnitsPostHandlerRequiresAuthContext(t *testing.T) {
 	handler := newWorkUnitsPostHandler(newTestWorkUnitsReader(t))
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/work-units", nil)
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
@@ -217,7 +217,7 @@ func TestNewWorkUnitsPostHandlerMissingFiltersIs422(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/work-units", strings.NewReader(`{}`))
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusUnprocessableEntity, rec.Body.String())
 	}
@@ -243,7 +243,7 @@ func TestNewWorkUnitsPostHandlerEmptyBodyIs422(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/work-units", nil)
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusUnprocessableEntity, rec.Body.String())
 	}
@@ -263,7 +263,7 @@ func TestNewWorkUnitsPostHandlerHappyPathShape(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/work-units", strings.NewReader(`{"filters":{}}`))
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
 	}
@@ -273,7 +273,7 @@ func TestNewWorkUnitsPostHandlerHappyPathShape(t *testing.T) {
 	if got := rec.Header().Get("X-DevHealth-Deprecated"); got != "" {
 		t.Fatalf("X-DevHealth-Deprecated = %q, want empty (POST never sets it)", got)
 	}
-	if got, want := rec.Body.String(), "[]\n"; got != want {
+	if got, want := rec.Body.String(), "[]"; got != want {
 		t.Fatalf("body = %q, want %q", got, want)
 	}
 }
@@ -297,7 +297,7 @@ func TestBuildWorkUnitsRouteEntryHandlerRejectsUnsupportedMethod(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodDelete, "/api/v1/work-units", nil)
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
 	}
@@ -724,7 +724,7 @@ func TestNewWorkUnitsGetHandlerTeamScopePushesConditionIntoTheWorkUnitQuery(t *t
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/work-units?scope_type=team&scope_id=team-42", nil)
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
 	}
@@ -830,7 +830,7 @@ func TestNewWorkUnitsPostHandlerWorkCategoryFilterNarrowsResults(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/work-units", strings.NewReader(`{"filters":{"why":{"work_category":["feature_delivery"]}}}`))
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
 	}

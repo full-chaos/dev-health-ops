@@ -82,7 +82,7 @@ func TestNewPeopleSearchHandlerRequiresAuthContext(t *testing.T) {
 	handler := newPeopleSearchHandler(newEmptyRowsPeopleReader(t))
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/people?q=ali", nil)
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
@@ -99,7 +99,7 @@ func TestNewPeopleSearchHandlerHappyPathEmptyResult(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/people?q=ali", nil)
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
 	}
@@ -125,12 +125,12 @@ func TestNewPeopleSearchHandlerEmptyQueryNeverTouchesClickHouse(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/people", nil)
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
 	}
-	if rec.Body.String() != "[]\n" {
-		t.Fatalf("body = %q, want []\\n", rec.Body.String())
+	if rec.Body.String() != "[]" {
+		t.Fatalf("body = %q, want [] (pydantic dump_json, no trailing newline)", rec.Body.String())
 	}
 }
 
@@ -144,7 +144,7 @@ func TestNewPeopleSearchHandlerDataUnavailable(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/people?q=ali", nil)
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
 	}
@@ -173,7 +173,7 @@ func TestNewPeopleSearchHandlerRejectsComparativeParams(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/people?q=ali&"+key+"=x", nil)
 			req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 			rec := httptest.NewRecorder()
-			handler(rec, req)
+			serveRoute(t, handler, rec, req)
 			if rec.Code != http.StatusBadRequest {
 				t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
 			}
@@ -202,7 +202,7 @@ func TestNewPeopleSearchHandlerLimitValidationBeatsComparativeParamRejection(t *
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/people?limit=not-a-number&compare_to=x", nil)
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusUnprocessableEntity, rec.Body.String())
 	}
@@ -237,7 +237,7 @@ func TestNewPeopleSearchHandlerNonNumericLimitValidationError(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/people?limit=not-a-number", nil)
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusUnprocessableEntity, rec.Body.String())
 	}
@@ -283,7 +283,7 @@ func TestBuildPeopleSearchRouteEntryHandlerRejectsNonGET(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/people", nil)
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
 	}

@@ -111,7 +111,7 @@ func TestNewPeopleSummaryHandlerRequiresAuthContext(t *testing.T) {
 	handler := newPeopleSummaryHandler(newPeopleDetailNotFoundReader(t))
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/people/abc/summary", nil)
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
@@ -131,7 +131,7 @@ func TestNewPeopleSummaryHandlerHappyPath(t *testing.T) {
 	req.SetPathValue("person_id", "anything")
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
 	}
@@ -158,7 +158,7 @@ func TestNewPeopleSummaryHandlerPersonNotFound(t *testing.T) {
 	req.SetPathValue("person_id", "nobody")
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusNotFound, rec.Body.String())
 	}
@@ -180,7 +180,7 @@ func TestNewPeopleSummaryHandlerDataUnavailable(t *testing.T) {
 	req.SetPathValue("person_id", "anyone")
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
 	}
@@ -203,7 +203,7 @@ func TestNewPeopleSummaryHandlerRejectsComparativeParams(t *testing.T) {
 			req.SetPathValue("person_id", "anyone")
 			req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 			rec := httptest.NewRecorder()
-			handler(rec, req)
+			serveRoute(t, handler, rec, req)
 			if rec.Code != http.StatusBadRequest {
 				t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
 			}
@@ -228,7 +228,7 @@ func TestNewPeopleSummaryHandlerNonNumericRangeDaysValidationError(t *testing.T)
 	req.SetPathValue("person_id", "anyone")
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusUnprocessableEntity, rec.Body.String())
 	}
@@ -261,7 +261,7 @@ func TestBuildPeopleSummaryRouteEntryHandlerRejectsNonGET(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/people/anyone/summary", nil)
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
 	}

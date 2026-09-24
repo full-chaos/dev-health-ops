@@ -386,14 +386,12 @@ func newWorkUnitExplainHandler(
 			return
 		}
 
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		// The encoder writes straight to the ResponseWriter, so a failure
-		// here is already a partially written 200 -- logged, never turned
-		// into a status this response has passed the point of sending.
-		if err := workunitexplain.WriteJSON(w, explanation); err != nil {
+		// The success body is the route's response_model, written as
+		// pydantic-core dump_json writes it (writeModelResponse).
+		if err := writeModelResponse(w, explanation); err != nil {
 			log.Printf("query-api: work_unit_explain: write response failed: org_id=%s request_id=%s err=%v",
 				claims.OrgID, envelopeRequestID(r), err)
+			writeModelFailure(w)
 		}
 	}
 }

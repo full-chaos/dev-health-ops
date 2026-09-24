@@ -22,7 +22,6 @@
 package server
 
 import (
-	"encoding/json"
 	"log"
 	"net/http"
 	"strconv"
@@ -151,11 +150,10 @@ func buildPeopleSearchRoute(getenv getenvFunc) (handler http.HandlerFunc, cleanu
 // json.NewEncoder(w).Encode -- this repo's JSON-response path, never a
 // raw w.Write of pre-marshalled bytes.
 func writePeopleSearchResponse(w http.ResponseWriter, r *http.Request, orgID string, resp []people.SearchResult) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	if encodeErr := json.NewEncoder(w).Encode(resp); encodeErr != nil {
+	if encodeErr := writeModelResponse(w, resp); encodeErr != nil {
 		log.Printf("query-api: people: encode response failed: org_id=%s request_id=%s err=%v",
 			orgID, envelopeRequestID(r), encodeErr)
+		writeModelFailure(w)
 	}
 }
 

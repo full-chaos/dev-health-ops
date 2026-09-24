@@ -53,7 +53,7 @@ func TestNewFlameWorkHandlerRequiresAuthContext(t *testing.T) {
 	handler := newFlameWorkHandler(emptyRowsFlameClient{})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/flame?entity_type=issue&entity_id=abc", nil)
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
@@ -73,7 +73,7 @@ func TestNewFlameWorkHandlerRequiresEntityTypeAndEntityID(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/flame", nil)
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnprocessableEntity)
 	}
@@ -97,7 +97,7 @@ func TestNewFlameWorkHandlerMissingEntityTypeOnly(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/flame?entity_id=abc", nil)
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnprocessableEntity)
 	}
@@ -124,7 +124,7 @@ func TestNewFlameWorkHandlerValidationRunsBeforeComparativeParamCheck(t *testing
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/flame?entity_id=abc&compare_to=1", nil)
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want %d (validation must win over the comparative-param check)", rec.Code, http.StatusUnprocessableEntity)
 	}
@@ -139,7 +139,7 @@ func TestNewFlameWorkHandlerComparativeParamRejected(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/flame?entity_type=issue&entity_id=abc&rank=1", nil)
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
 	}
@@ -155,7 +155,7 @@ func TestNewFlameWorkHandlerUnknownEntityTypeIs404(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/flame?entity_type=bogus&entity_id=abc", nil)
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
 	}
@@ -171,7 +171,7 @@ func TestNewFlameWorkHandlerInvalidRepoPrefixIs400(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/flame?entity_type=pr&entity_id=not-prefixed", nil)
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
 	}
@@ -187,7 +187,7 @@ func TestNewFlameWorkHandlerIssueNotFoundIs404(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/flame?entity_type=issue&entity_id=missing", nil)
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
 	}
@@ -223,7 +223,7 @@ func TestBuildFlameRouteEntryHandlerRejectsNonGET(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/flame", nil)
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
 	}

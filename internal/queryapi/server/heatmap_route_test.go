@@ -96,7 +96,7 @@ func TestNewHeatmapWorkHandlerRequiresAuthContext(t *testing.T) {
 	handler := newHeatmapWorkHandler(emptyRowsHeatmapClient{})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/heatmap?type=temporal_load&metric=review_wait_density", nil)
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
@@ -113,7 +113,7 @@ func TestNewHeatmapWorkHandlerRequiresTypeAndMetric(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/heatmap", nil)
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnprocessableEntity)
 	}
@@ -137,7 +137,7 @@ func TestNewHeatmapWorkHandlerAggregatesMultipleValidationErrors(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/heatmap?range_days=abc&start_date=bad&limit=abc", nil)
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnprocessableEntity)
 	}
@@ -167,7 +167,7 @@ func TestNewHeatmapWorkHandlerComparativeParamRejected(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/heatmap?type=temporal_load&metric=review_wait_density&rank=1", nil)
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
 	}
@@ -185,7 +185,7 @@ func TestNewHeatmapWorkHandlerValidationBeforeComparativeReject(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/heatmap?rank=1", nil)
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want %d (validation must win over the comparative-param reject)", rec.Code, http.StatusUnprocessableEntity)
 	}
@@ -198,7 +198,7 @@ func TestNewHeatmapWorkHandlerUnknownMetricIs404(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/heatmap?type=temporal_load&metric=not_a_real_metric", nil)
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
 	}
@@ -215,7 +215,7 @@ func TestNewHeatmapWorkHandlerInvalidScopeTypeIs400(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/heatmap?type=temporal_load&metric=review_wait_density&scope_type=bogus", nil)
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
 	}
@@ -231,7 +231,7 @@ func TestNewHeatmapWorkHandlerIndividualRequiresDeveloperScope(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/heatmap?type=individual&metric=active_hours&scope_type=org", nil)
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
 	}
@@ -247,7 +247,7 @@ func TestNewHeatmapWorkHandlerDeveloperScopeRequiresIndividual(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/heatmap?type=temporal_load&metric=review_wait_density&scope_type=developer", nil)
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
 	}
@@ -263,7 +263,7 @@ func TestNewHeatmapWorkHandlerIndividualRequiresScopeID(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/heatmap?type=individual&metric=active_hours&scope_type=developer", nil)
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
 	}
@@ -280,7 +280,7 @@ func TestNewHeatmapWorkHandlerHappyPathShape(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/heatmap?type=context_switch&metric=repo_touchpoints&scope_type=repo", nil)
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d (body=%s)", rec.Code, http.StatusOK, rec.Body.String())
 	}

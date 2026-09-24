@@ -13,7 +13,6 @@
 package server
 
 import (
-	"encoding/json"
 	"log"
 	"net/http"
 	"strconv"
@@ -119,11 +118,10 @@ func buildPeopleDrilldownIssuesRoute(getenv getenvFunc) (handler http.HandlerFun
 // body via json.NewEncoder(w).Encode -- this repo's JSON-response path,
 // never a raw w.Write of pre-marshalled bytes.
 func writePeopleDrilldownIssuesResponse(w http.ResponseWriter, r *http.Request, orgID string, resp *people.DrilldownIssuesResponse) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	if encodeErr := json.NewEncoder(w).Encode(resp); encodeErr != nil {
+	if encodeErr := writeModelResponse(w, resp); encodeErr != nil {
 		log.Printf("query-api: people_drilldown_issues: encode response failed: org_id=%s request_id=%s err=%v",
 			orgID, envelopeRequestID(r), encodeErr)
+		writeModelFailure(w)
 	}
 }
 

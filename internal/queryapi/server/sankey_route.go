@@ -28,7 +28,6 @@
 package server
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -144,11 +143,10 @@ var sankeyValidScopeLevels = map[string]bool{
 var sankeyModeValues = []string{"investment", "expense", "state", "hotspot"}
 
 func writeSankeyResponse(w http.ResponseWriter, r *http.Request, orgID string, resp *sankey.Response) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	if encodeErr := json.NewEncoder(w).Encode(resp); encodeErr != nil {
+	if encodeErr := writeModelResponse(w, resp); encodeErr != nil {
 		log.Printf("query-api: sankey: encode response failed: org_id=%s request_id=%s err=%v",
 			orgID, envelopeRequestID(r), encodeErr)
+		writeModelFailure(w)
 	}
 }
 

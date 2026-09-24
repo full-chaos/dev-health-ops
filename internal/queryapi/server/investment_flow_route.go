@@ -29,7 +29,6 @@
 package server
 
 import (
-	"encoding/json"
 	"io"
 	"log"
 	"net/http"
@@ -168,11 +167,10 @@ type investmentFlowRequestBody struct {
 // JSON shape both routes emit -- same Content-Type/encode-error-log
 // convention as sankey_route.go's own writeSankeyResponse.
 func writeInvestmentFlowResponse(w http.ResponseWriter, r *http.Request, component, orgID string, resp *sankey.Response) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	if encodeErr := json.NewEncoder(w).Encode(resp); encodeErr != nil {
+	if encodeErr := writeModelResponse(w, resp); encodeErr != nil {
 		log.Printf("query-api: %s: encode response failed: org_id=%s request_id=%s err=%v",
 			component, orgID, envelopeRequestID(r), encodeErr)
+		writeModelFailure(w)
 	}
 }
 

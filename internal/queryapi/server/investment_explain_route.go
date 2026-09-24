@@ -47,6 +47,7 @@ import (
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
@@ -342,35 +343,17 @@ func writeKeepAliveJSON(ctx context.Context, w http.ResponseWriter, work func(co
 				return
 			}
 			// result.body is EncodeInvestmentMixExplanation's own JSON
-			// text -- a Python-dict-spaced ("key": value) encoding built
-			// for BYTE-EXACT parity with the investment_explanations
-			// cache column (investmentexplain's own golden test asserts
-			// that), NOT with this route's own wire response: Python's
-			// real HTTP chunk is `result.model_dump_json()`
-			// (keep_alive_wrapper, api/main.py), and Pydantic's
-			// model_dump_json is COMPACT -- no space after `:`/`,` --
-			// confirmed live (`InvestmentMixExplanation(**golden_result)
-			// .model_dump_json()` against this package's own golden
-			// fixture byte-for-byte equals json.Compact(result.body)).
-			// json.NewEncoder(w).Encode(json.RawMessage(result.body))
-			// compacts result.body the same way -- via
-			// encoding/json's own internal compact step for a
-			// json.Marshaler's output, not a hand-rolled one -- so this
-			// call is BOTH this repo's standard JSON-response path
-			// (no raw w.Write of pre-marshalled bytes, matching every
-			// other route) AND a genuine byte-parity fix this route did
-			// not have before: the previous raw w.Write(result.body)
-			// sent Python's CACHE-format spacing over the wire, which
-			// Python's own client never actually sends.
-			//
-			// The one byte this does NOT match: Encode appends a
-			// trailing '\n' Python's chunk does not have. Treated as
-			// insignificant JSON whitespace (RFC 8259 §2), the same
-			// tolerance this function's own leading keep-alive " " ticks
-			// already rely on for the wire body as a whole -- not a
-			// value or shape difference, and no compliant JSON parser
-			// treats it as one.
-			if encodeErr := json.NewEncoder(w).Encode(json.RawMessage(result.body)); encodeErr != nil {
+			// text, built for byte parity with the investment_explanations
+			// cache column (Python-dict spacing, json.dumps float
+			// spelling). Python's HTTP chunk is result.model_dump_json():
+			// compact, with pydantic-core's float spelling. So the body is
+			// read back (pyjson.Decode keeps key order and float-ness)
+			// and written with pyjson.MarshalModel, then sent through an
+			// encoder that keeps it as is (SetEscapeHTML(false): a
+			// json.RawMessage's text is only compacted). The encoder's
+			// trailing '\n' is the one byte Python's chunk lacks, JSON
+			// whitespace like the keep-alive " " ticks before it.
+			if encodeErr := writeStreamedModelBody(w, result.body); encodeErr != nil {
 				log.Printf("query-api: investment/explain: encode response failed: err=%v", encodeErr)
 			}
 			if flusher != nil {
@@ -731,4 +714,24 @@ func legacyNumber(f float64) pyjson.Value {
 		return pyjson.IntOf(int64(f))
 	}
 	return pyjson.Float(f)
+}
+
+// writeStreamedModelBody writes an already-started streamed response's
+// final JSON body in pydantic-core's model_dump_json spelling.
+func writeStreamedModelBody(w io.Writer, body []byte) error {
+	decoded, err := pyjson.Decode(body)
+	if err != nil {
+		return err
+	}
+	model, err := pyjson.MarshalModel(decoded)
+	if err != nil {
+		return err
+	}
+	encoder := json.NewEncoder(w)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(json.RawMessage(model)); err != nil {
+		return err
+	}
+	policy.MarkModelBody(w)
+	return nil
 }

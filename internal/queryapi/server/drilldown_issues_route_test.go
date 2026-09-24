@@ -69,7 +69,7 @@ func TestNewDrilldownIssuesGetHandlerRequiresAuthContext(t *testing.T) {
 	handler := newDrilldownIssuesGetHandler(newEmptyRowsDrilldownIssuesReader(t))
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/drilldown/issues", nil)
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
@@ -87,7 +87,7 @@ func TestNewDrilldownIssuesGetHandlerHappyPathSetsDeprecatedHeader(t *testing.T)
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/drilldown/issues?scope_type=team&scope_id=team-a&range_days=7", nil)
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
 	}
@@ -127,7 +127,7 @@ func TestNewDrilldownIssuesGetHandlerDefaultOrgScopeNoTeamFilter(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/drilldown/issues", nil)
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
 	}
@@ -139,7 +139,7 @@ func TestNewDrilldownIssuesPostHandlerRequiresAuthContext(t *testing.T) {
 	handler := newDrilldownIssuesPostHandler(newEmptyRowsDrilldownIssuesReader(t))
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/drilldown/issues", bytes.NewReader([]byte(`{"filters":{}}`)))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
@@ -158,7 +158,7 @@ func TestNewDrilldownIssuesPostHandlerHappyPathNoDeprecatedHeader(t *testing.T) 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/drilldown/issues", bytes.NewReader([]byte(body)))
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
 	}
@@ -188,7 +188,7 @@ func TestNewDrilldownIssuesPostHandlerLimitFallback(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/drilldown/issues", bytes.NewReader([]byte(body)))
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
 	}
@@ -217,7 +217,7 @@ func TestNewDrilldownIssuesPostHandlerNonTeamScopeIgnoresIDs(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/drilldown/issues", bytes.NewReader([]byte(body)))
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
 	}
@@ -231,7 +231,7 @@ func TestNewDrilldownIssuesGetHandlerClickHouseFailureIs503(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/drilldown/issues", nil)
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
 	}
@@ -247,7 +247,7 @@ func TestNewDrilldownIssuesPostHandlerClickHouseFailureIs503(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/drilldown/issues", bytes.NewReader([]byte(`{"filters":{}}`)))
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
 	}
@@ -280,7 +280,7 @@ func TestBuildDrilldownIssuesRouteEntryHandlerRejectsUnknownMethod(t *testing.T)
 
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/drilldown/issues", nil)
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
 	}

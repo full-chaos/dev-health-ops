@@ -106,7 +106,7 @@ func TestNewFlameAggregatedWorkHandlerRequiresAuthContext(t *testing.T) {
 	handler := newFlameAggregatedWorkHandler(emptyRowsFlameAggregatedClient{})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/flame/aggregated?mode=throughput", nil)
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
@@ -123,7 +123,7 @@ func TestNewFlameAggregatedWorkHandlerRequiresMode(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/flame/aggregated", nil)
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnprocessableEntity)
 	}
@@ -152,7 +152,7 @@ func TestNewFlameAggregatedWorkHandlerAggregatesMultipleValidationErrors(t *test
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/flame/aggregated?start_date=bad&range_days=abc&limit=xyz&min_value=nope", nil)
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnprocessableEntity)
 	}
@@ -183,7 +183,7 @@ func TestNewFlameAggregatedWorkHandlerComparativeParamIs400(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/flame/aggregated?mode=throughput&rank=1", nil)
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
 	}
@@ -199,7 +199,7 @@ func TestNewFlameAggregatedWorkHandlerUnknownModeIs400(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/flame/aggregated?mode=not_a_real_mode", nil)
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
 	}
@@ -216,7 +216,7 @@ func TestNewFlameAggregatedWorkHandlerHappyPathShape(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/flame/aggregated?mode=throughput", nil)
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
 	}
@@ -246,7 +246,7 @@ func TestNewFlameAggregatedWorkHandlerClampsLimitAndMinValue(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/flame/aggregated?mode=code_hotspots&limit=5000&min_value=-5", nil)
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
 	}

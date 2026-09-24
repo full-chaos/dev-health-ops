@@ -34,7 +34,6 @@
 package server
 
 import (
-	"encoding/json"
 	"io"
 	"log"
 	"net/http"
@@ -172,10 +171,9 @@ func buildExplainRoute(getenv getenvFunc) (handler http.HandlerFunc, cleanup fun
 // json.NewEncoder(w).Encode -- never a raw w.Write of pre-marshalled
 // bytes, matching writeDrilldownPRsResponse's own established path.
 func writeExplainResponse(w http.ResponseWriter, orgID, requestID string, resp *explain.Response) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	if err := json.NewEncoder(w).Encode(resp); err != nil {
+	if err := writeModelResponse(w, resp); err != nil {
 		log.Printf("query-api: explain: encode response failed: org_id=%s request_id=%s err=%v", orgID, requestID, err)
+		writeModelFailure(w)
 	}
 }
 

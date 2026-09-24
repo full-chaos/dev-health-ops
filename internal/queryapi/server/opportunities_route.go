@@ -24,7 +24,6 @@
 package server
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -272,10 +271,9 @@ func newOpportunitiesPostHandler(client home.QueryClient) http.HandlerFunc {
 // never a raw w.Write of pre-marshalled bytes, matching every other
 // route in this binary.
 func writeOpportunitiesResponse(w http.ResponseWriter, r *http.Request, orgID string, resp *opportunities.Response) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	if encodeErr := json.NewEncoder(w).Encode(resp); encodeErr != nil {
+	if encodeErr := writeModelResponse(w, resp); encodeErr != nil {
 		log.Printf("query-api: opportunities: encode response failed: org_id=%s request_id=%s err=%v",
 			orgID, envelopeRequestID(r), encodeErr)
+		writeModelFailure(w)
 	}
 }

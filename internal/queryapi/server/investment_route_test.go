@@ -165,7 +165,7 @@ func TestNewInvestmentGetHandlerRequiresAuthContext(t *testing.T) {
 	handler := newInvestmentGetHandler(newEmptyRowsInvestmentReader(t))
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/investment", nil)
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
@@ -178,7 +178,7 @@ func TestNewInvestmentPostHandlerRequiresAuthContext(t *testing.T) {
 	handler := newInvestmentPostHandler(newEmptyRowsInvestmentReader(t))
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/investment", bytes.NewReader([]byte(`{"filters":{}}`)))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
@@ -188,7 +188,7 @@ func TestNewInvestmentSunburstGetHandlerRequiresAuthContext(t *testing.T) {
 	handler := newInvestmentSunburstGetHandler(newEmptyRowsInvestmentReader(t))
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/investment/sunburst", nil)
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
@@ -204,7 +204,7 @@ func TestNewInvestmentGetHandlerHappyPathSetsDeprecatedHeader(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/investment?scope_type=repo&scope_id=repo-a&range_days=7", nil)
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
 	}
@@ -235,7 +235,7 @@ func TestNewInvestmentPostHandlerHappyPathNoDeprecatedHeader(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/investment", bytes.NewReader([]byte(body)))
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
 	}
@@ -252,7 +252,7 @@ func TestNewInvestmentPostHandlerMissingFiltersIs422(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/investment", bytes.NewReader([]byte(`{}`)))
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusUnprocessableEntity, rec.Body.String())
 	}
@@ -266,7 +266,7 @@ func TestNewInvestmentPostHandlerInvalidScopeLevelIs422(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/investment", bytes.NewReader([]byte(body)))
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusUnprocessableEntity, rec.Body.String())
 	}
@@ -279,7 +279,7 @@ func TestNewInvestmentGetHandlerInvalidRangeDaysIs422(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/investment?range_days=not-a-number", nil)
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusUnprocessableEntity, rec.Body.String())
 	}
@@ -293,7 +293,7 @@ func TestNewInvestmentGetHandlerClickHouseFailureIs503(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/investment", nil)
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusServiceUnavailable, rec.Body.String())
 	}
@@ -310,7 +310,7 @@ func TestNewInvestmentSunburstGetHandlerHappyPathBareArray(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/investment/sunburst", nil)
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
 	}
@@ -335,7 +335,7 @@ func TestNewInvestmentSunburstGetHandlerInvalidLimitIs422(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/investment/sunburst?limit=not-a-number", nil)
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusUnprocessableEntity, rec.Body.String())
 	}

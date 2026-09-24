@@ -40,3 +40,19 @@ func TestMaskAPIKey(t *testing.T) {
 		}
 	}
 }
+
+// TestBudgetLockKeyMatchesPython pins the advisory-lock key against values
+// computed by llm/budget.py's _acquire_advisory_lock formula
+// (int.from_bytes(sha256("byo-llm-budget:<org>")[:8], "big") & (1<<63)-1), so
+// a Go writer and a Python reservation contend on the same lock.
+func TestBudgetLockKeyMatchesPython(t *testing.T) {
+	for org, want := range map[string]int64{
+		"00000000-0000-0000-0000-000000000000": 734291639604921375,
+		"70d529e0-0000-4000-8000-000000000001": 4899195206064546492,
+		"3f2b8c1e-5a7d-4e9a-9b1c-2d4e6f8a0b1c": 9008887641742855183,
+	} {
+		if got := budgetLockKey(org); got != want {
+			t.Errorf("budgetLockKey(%s) = %d, python %d", org, got, want)
+		}
+	}
+}

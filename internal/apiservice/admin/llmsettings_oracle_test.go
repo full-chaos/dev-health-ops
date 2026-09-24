@@ -6,13 +6,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/apiservice"
+	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
@@ -366,4 +369,75 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, '2026-02-01T00:00:00+00:00', '2026-02-01T00:
 	compare("settings rows", `SELECT org_id, category, key, is_encrypted, (CASE WHEN is_encrypted AND value LIKE 'v1:%' THEN 'v1:<token>' ELSE value END),
 	description, (updated_at > '2026-06-01')::text
 FROM settings ORDER BY org_id, category, key`)
+
+	if withKey {
+		checkBudgetLockSerializes(t, ctx, venue, goBase, orgs["empty"].id, venue.Tokens["empty"])
+	}
+}
+
+// checkBudgetLockSerializes proves the PUT takes the per-org budget advisory
+// lock: while another transaction holds that lock, a budget write must wait,
+// and it completes once the lock is released. A handler that skipped the lock
+// (or took a different key) answers at once and fails the first check. The
+// venue's requests are serial, so this is the only place a missing lock shows.
+func checkBudgetLockSerializes(t *testing.T, ctx context.Context, venue *venueoracle.Venue, goBase string, org uuid.UUID, token string) {
+	t.Helper()
+	pool, err := pgxpool.New(ctx, venue.AdminURI(t, venue.GoDB))
+	if err != nil {
+		t.Fatalf("lock pool: %v", err)
+	}
+	defer pool.Close()
+	holder, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	released := false
+	defer func() {
+		if !released {
+			_ = holder.Rollback(ctx)
+		}
+	}()
+	if _, err := holder.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, admin.BudgetLockKey(org.String())); err != nil {
+		t.Fatalf("hold budget lock: %v", err)
+	}
+	type answer struct {
+		status int
+		err    error
+	}
+	done := make(chan answer, 1)
+	go func() {
+		request, _ := http.NewRequest(http.MethodPut, goBase+"/api/v1/admin/llm-settings",
+			strings.NewReader(`{"provider":"openai","budget_limit_micro_usd":1234}`))
+		request.Header.Set("Authorization", "Bearer "+token)
+		request.Header.Set("Content-Type", "application/json")
+		response, err := http.DefaultClient.Do(request)
+		if err != nil {
+			done <- answer{err: err}
+			return
+		}
+		response.Body.Close()
+		done <- answer{status: response.StatusCode}
+	}()
+	select {
+	case got := <-done:
+		t.Fatalf("budget PUT answered (%d, %v) while another transaction held the per-org budget lock", got.status, got.err)
+	case <-time.After(2 * time.Second):
+	}
+	if err := holder.Rollback(ctx); err != nil {
+		t.Fatalf("release budget lock: %v", err)
+	}
+	released = true
+	select {
+	case got := <-done:
+		if got.err != nil || got.status != http.StatusOK {
+			t.Fatalf("budget PUT after the lock was released: status %d, err %v", got.status, got.err)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("budget PUT did not finish after the lock was released")
+	}
+	var limit string
+	if err := pool.QueryRow(ctx, `SELECT value FROM settings WHERE org_id = $1 AND category = 'llm_budget' AND key = 'limit_micro_usd'`,
+		org.String()).Scan(&limit); err != nil || limit != "1234" {
+		t.Fatalf("budget row after the released write: %q, %v", limit, err)
+	}
 }

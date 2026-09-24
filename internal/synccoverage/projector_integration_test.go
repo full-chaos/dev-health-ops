@@ -176,6 +176,77 @@ func TestProjectorPostgresLifecycle(t *testing.T) {
 		}
 	})
 
+	// A family unit whose processor_flags is a truthy non-object makes
+	// Python's _effective_dataset_keys raise (processor_flags.get), so the
+	// rebuild fails for that config instead of treating the unit as its
+	// raw composite key.
+	t.Run("list-shaped family flags fail the rebuild", func(t *testing.T) {
+		resetProjectorTables(t, ctx, pool)
+		fixture := seedProjectorFixture(t, ctx, pool, "org-list-flags", now)
+		if _, err := pool.Exec(ctx, `UPDATE sync_configurations SET sync_targets='["git","work-items"]' WHERE id=$1`, fixture.ConfigID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pool.Exec(ctx, `INSERT INTO sync_run_units (id,org_id,sync_run_id,integration_id,source_id,provider,dataset_key,processor_flags,since_at,before_at,status,created_at,updated_at)
+VALUES ($1,$2,$3,$4,$5,'github','work-items','["x"]',$6,$7,'success',$8,$8)`,
+			uuid.New(), fixture.OrgID, fixture.RunID, fixture.IntegrationID, fixture.SourceID, now.Add(-24*time.Hour), now.Add(-time.Hour), now.Add(-time.Hour)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := projector.Rebuild(ctx, fixture.OrgID, fixture.ConfigID); err == nil || !strings.Contains(err.Error(), "not a dict") {
+			t.Fatalf("rebuild over list-shaped family flags: err = %v, want the processor_flags error", err)
+		}
+		if _, err := pool.Exec(ctx, `UPDATE sync_run_units SET processor_flags='[]' WHERE dataset_key='work-items'`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := projector.Rebuild(ctx, fixture.OrgID, fixture.ConfigID); err != nil {
+			t.Fatalf("rebuild over empty-list (falsy) family flags: %v", err)
+		}
+	})
+
+	// Each of the projector's three expansions fails the rebuild alone: a
+	// planned unit with no window reaches only the active-pairs read, and a
+	// backfill-linked run on another integration reaches only the linked
+	// backfill units read.
+	t.Run("list-shaped flags fail the rebuild from each read", func(t *testing.T) {
+		for _, seed := range []struct {
+			name string
+			sql  func(fixture projectorFixture) (string, []any)
+		}{
+			{"active pair", func(fixture projectorFixture) (string, []any) {
+				return `WITH run AS (
+  INSERT INTO sync_runs (id,org_id,integration_id,status,created_at) VALUES ($3,$2,$4,'running',$6) RETURNING id
+)
+INSERT INTO sync_run_units (id,org_id,sync_run_id,integration_id,source_id,provider,dataset_key,processor_flags,status,created_at,updated_at)
+SELECT $1,$2,run.id,$4,$5,'github','work-items','["x"]','planned',$6,$6 FROM run`,
+					[]any{uuid.New(), fixture.OrgID, uuid.New(), fixture.IntegrationID, fixture.SourceID, now}
+			}},
+			{"linked backfill unit", func(fixture projectorFixture) (string, []any) {
+				otherRun := uuid.New()
+				return `WITH run AS (
+  INSERT INTO sync_runs (id,org_id,integration_id,status,created_at) VALUES ($1,$2,$3,'success',$6) RETURNING id
+), job AS (
+  INSERT INTO backfill_jobs (id,org_id,sync_config_id,celery_task_id,since_date,before_date) VALUES ($7,$2,$8,'sync_run:' || $1::text,$9::date,$10::date) RETURNING id
+)
+INSERT INTO sync_run_units (id,org_id,sync_run_id,integration_id,source_id,provider,dataset_key,processor_flags,since_at,before_at,status,created_at,updated_at)
+VALUES ($4,$2,$1,$3,$5,'github','work-items','["x"]',$9,$10,'success',$6,$6)`,
+					[]any{otherRun, fixture.OrgID, uuid.New(), uuid.New(), fixture.SourceID, now, uuid.New(), fixture.ConfigID,
+						now.Add(-48 * time.Hour), now.Add(-24 * time.Hour)}
+			}},
+		} {
+			resetProjectorTables(t, ctx, pool)
+			fixture := seedProjectorFixture(t, ctx, pool, "org-list-flags-"+strings.ReplaceAll(seed.name, " ", "-"), now)
+			if _, err := pool.Exec(ctx, `UPDATE sync_configurations SET sync_targets='["git","work-items"]' WHERE id=$1`, fixture.ConfigID); err != nil {
+				t.Fatal(err)
+			}
+			statement, args := seed.sql(fixture)
+			if _, err := pool.Exec(ctx, statement, args...); err != nil {
+				t.Fatalf("%s: %v", seed.name, err)
+			}
+			if _, err := projector.Rebuild(ctx, fixture.OrgID, fixture.ConfigID); err == nil || !strings.Contains(err.Error(), "not a dict") {
+				t.Fatalf("%s: rebuild err = %v, want the processor_flags error", seed.name, err)
+			}
+		}
+	})
+
 	t.Run("invalidated refresh clears marker", func(t *testing.T) {
 		resetProjectorTables(t, ctx, pool)
 		fixture := seedProjectorFixture(t, ctx, pool, "org-invalidated", now)

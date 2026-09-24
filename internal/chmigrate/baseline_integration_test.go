@@ -22,6 +22,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
 	"github.com/full-chaos/dev-health-ops/internal/chmigrate"
+	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
@@ -215,6 +216,47 @@ func TestBaselineIsTheExecutedPythonChain(t *testing.T) {
 	}
 	if count := objectCount(t, ctx, foreignConn, foreignDB); count != 1 {
 		t.Fatalf("a refused upgrade left %d objects, want the 1 it found", count)
+	}
+
+	// `status --check`, the wait-for-migrations probe, through the command:
+	// exit 0 only at the head, 1 for anything else, the JSON printed either
+	// way, and nothing written.
+	emptyDB := scratchDatabase(t, admin)
+	for _, testCase := range []struct {
+		database, state string
+		code            int
+	}{
+		{resumeDB, "at_head", cli.ExitOK},
+		{foreignDB, "foreign", cli.ExitFailure},
+		{emptyDB, "empty", cli.ExitFailure},
+	} {
+		dsn, err := url.Parse(instance.URI)
+		if err != nil {
+			t.Fatal(err)
+		}
+		dsn.Path = "/" + testCase.database
+		var run func(context.Context, cli.Env) int
+		for _, child := range chmigrate.Command().Children {
+			if child.Name == "status" {
+				run = child.Run
+			}
+		}
+		var stdout, stderr strings.Builder
+		lookup := func(key string) (string, bool) {
+			value, ok := map[string]string{chmigrate.ClickHouseURIKey: dsn.String(), chmigrate.OrderingContractEnv: "2"}[key]
+			return value, ok
+		}
+		conn := openDatabase(t, instance.URI, testCase.database)
+		objectsBefore := objectCount(t, ctx, conn, testCase.database)
+		code := run(ctx, cli.Env{Args: []string{"--check"}, Lookup: lookup, Stdout: &stdout, Stderr: &stderr})
+		var status chmigrate.Status
+		if err := json.Unmarshal([]byte(stdout.String()), &status); err != nil || status.State != testCase.state || code != testCase.code {
+			t.Fatalf("%s: status --check exit %d, stdout %q (%v), stderr %q; want %s and exit %d",
+				testCase.database, code, stdout.String(), err, stderr.String(), testCase.state, testCase.code)
+		}
+		if after := objectCount(t, ctx, conn, testCase.database); after != objectsBefore {
+			t.Fatalf("%s: status --check changed the object count from %d to %d", testCase.database, objectsBefore, after)
+		}
 	}
 }
 

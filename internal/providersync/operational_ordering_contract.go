@@ -150,7 +150,8 @@ func (cache *operationalTableContracts) resolve(
 			slog.String("env_value", configuredRaw),
 			slog.Int("env_contract", int(configured)),
 			slog.Int("table_contract", int(contract)),
-			slog.String("used", "table"))
+			slog.String("used", "table"),
+			slog.String("remedy", "every topology defaults to contract 2: run the migrate Job (`dho migrate upgrade`) to bring ClickHouse to the head; a contract-1 table needs migration 067 applied first (deploy/go-workers/README.md)"))
 	}
 	cache.store(table, contract)
 	return contract, nil

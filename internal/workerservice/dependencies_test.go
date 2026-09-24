@@ -3541,3 +3541,19 @@ func TestWorkerRefusesToStartWithAnUnusableRecomputeCap(t *testing.T) {
 		t.Fatalf("startup refusal = %v, want a dependency refusal", err)
 	}
 }
+
+// A contract mismatch at boot names the remedy: the migrate Job's verb, and
+// the path for a contract-1 database it refuses.
+func TestDORARefusalRemedyNamesTheMigrateVerb(t *testing.T) {
+	remedy := doraRefusalRemedy(jobruntime.DORARefusedOrderingContractMismatch)
+	for _, want := range []string{"dho migrate upgrade", "contract 2", "067", "dho migrate clickhouse status"} {
+		if !strings.Contains(remedy, want) {
+			t.Fatalf("remedy %q does not name %q", remedy, want)
+		}
+	}
+	for _, reason := range []string{jobruntime.DORARefusedContractUnparseable, jobruntime.DORARefusedUnknownSchema, jobruntime.DORARefusedInspectFailed} {
+		if doraRefusalRemedy(reason) == "" || strings.Contains(doraRefusalRemedy(reason), "dho migrate upgrade") {
+			t.Fatalf("reason %s: remedy %q", reason, doraRefusalRemedy(reason))
+		}
+	}
+}

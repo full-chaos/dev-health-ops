@@ -61,6 +61,10 @@ func run(ctx context.Context, verb string, env cli.Env) int {
 			"  DEV_HEALTH_CH_HOST, _PORT, _USER, _PASSWORD, _DB   component form, exclusive with CLICKHOUSE_URI\n"+
 			"  OPERATIONAL_ORDERING_CONTRACT   must be 2: the head is production's contract-2 schema\n")
 	}
+	var check *bool
+	if verb == "status" {
+		check = flags.Bool("check", false, "exit 1 unless the database is at the head, with nothing pending (read-only; the JSON status is still printed)")
+	}
 	if err := flags.Parse(env.Args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return cli.ExitOK
@@ -114,7 +118,13 @@ func run(ctx context.Context, verb string, env cli.Env) int {
 		if err != nil {
 			return writeError(env.Stderr, "status_failed", boundary.Redact(err).Error())
 		}
-		return writeResult(env.Stdout, env.Stderr, status)
+		code := writeResult(env.Stdout, env.Stderr, status)
+		if code == cli.ExitOK && *check && (status.State != "at_head" || len(status.Pending) > 0) {
+			// The wait-for-migrations probe: anything but a database at the
+			// head with nothing pending is "not yet".
+			return cli.ExitFailure
+		}
+		return code
 	}
 	result, err := Upgrade(ctx, db, baseline, chain)
 	if err != nil {

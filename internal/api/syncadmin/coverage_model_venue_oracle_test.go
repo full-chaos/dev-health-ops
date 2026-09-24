@@ -76,12 +76,15 @@ var coverageProbeValues = []any{
 	nil, true, false, 0, 1, 2, 5.0, 5.5, -1, 1e20, "5", " 5 ", "5_0", "x", "", "true", "off",
 	[]any{}, []any{"a"}, []any{1}, map[string]any{},
 	"healthy", "HEALTHY", "stale", "not_enabled", "running", "planner", "legacy", "lookback_limit", "gap", "failed",
+	"paused", "not_scheduled", "gaps", "insufficient_data",
 	"2026-01-01", "2026-01-01T00:00:00", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00+00:00",
 	"2026-01-01T05:30:00+05:30", "2026-01-01T00:00:00-00:00", "2026-01-01 00:00:00", "2026-01-01T00:00",
 	"2026-01-01T00:00:00.5Z", "2026-01-01T00:00:00.1234567Z", "2026-01-01T00:00:00,5Z", "2026-01-01T24:00:00Z",
 	"20260101", "20260101T000000Z", "2026-W01-1", "2026-001", "2026-01-01T00:00:00+0530",
 	"2026-01-01T00:00:00+05", "2026-01-01T00:00:00.000Z", "2026-02-30T00:00:00Z", "1767225600", "1767225600000",
 	1767225600, 1767225600000, 1767225600.5, -1.5, "  2026-01-01T00:00:00Z", "2026-01-01t00:00:00z",
+	"2026-01-01T00:00:00.1234567", "2026-01-01T00:00:00.123456789", "2026-01-01T00:00:00,5", "2026-01-01_00:00:00",
+	"2026-01-01T00", "2026-01-01T00:00:00.", "2026-01-01T00:00:60", "2026-01-01T00:00:00 ",
 }
 
 // coverageFieldPaths names every field of the model tree, as a path from
@@ -229,8 +232,8 @@ func TestCoverageModelVenueOracleMatchesLivePydantic(t *testing.T) {
 			t.Errorf("%s:\n go     %s %v\n python %s %s", c.Name, got, goErr, want[index].OK, want[index].Error)
 		}
 	}
-	if len(cases) != 3249 || limited != len(fromISOFormatLimit) || accepted+refused+limited != len(cases) {
-		t.Fatalf("compared %d of 3249 cases: %d accepted, %d refused, %d of %d named limits",
+	if len(cases) != 3897 || limited != len(fromISOFormatLimit) || accepted+refused+limited != len(cases) {
+		t.Fatalf("compared %d of 3897 cases: %d accepted, %d refused, %d of %d named limits",
 			len(cases), accepted, refused, limited, len(fromISOFormatLimit))
 	}
 	t.Logf("%d cases: %d accepted, %d refused on both planes, %d named limits", len(cases), accepted, refused, limited)

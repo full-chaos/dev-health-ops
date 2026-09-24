@@ -427,14 +427,21 @@ smoke_migrate_clickhouse() {
     || die "${tag}: dho migrate clickhouse status did not report the missing CLICKHOUSE_URI: ${output}"
 }
 
-# smoke_migrate_postgres runs `dho migrate postgres status` with no database
-# configured: the verb must be reached, load the embedded head baselines, and
-# fail closed (exit 1) with the migration-DSN refusal the River verb prints --
-# not an unknown command (exit 2) or a missing baseline.
+# smoke_migrate_postgres runs `dho migrate postgres status` from the image:
+# without production's settings it must refuse before connecting and name the
+# mismatch; with them and no database configured it must reach the DSN
+# resolver and fail closed (exit 1) with the migration-DSN refusal the River
+# verb prints -- never an unknown command (exit 2) or a missing baseline.
 smoke_migrate_postgres() {
   local tag="$1" output code
   set +e
   output="$(docker run --rm "${CONTAINER_SECURITY_ARGS[@]}" "${tag}" migrate postgres status 2>&1 >/dev/null)"
+  code=$?
+  set -e
+  [ "${code}" = "1" ] && printf '%s' "${output}" | grep -F 'River cutover (revision 0066) applied is expected' >/dev/null \
+    || die "${tag}: dho migrate postgres status without the cutover setting did not name the mismatch (exit ${code}): ${output}"
+  set +e
+  output="$(docker run --rm "${CONTAINER_SECURITY_ARGS[@]}" --env DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1 "${tag}" migrate postgres status 2>&1 >/dev/null)"
   code=$?
   set -e
   [ "${code}" = "1" ] || die "${tag}: dho migrate postgres status without a DSN exited ${code}, want 1: ${output}"

@@ -56,7 +56,8 @@ func run(ctx context.Context, verb string, resolve ResolveDSN, env cli.Env) int 
 		fmt.Fprint(env.Stderr, "\nEnvironment:\n"+
 			"  MIGRATION_DATABASE_URI (or _FILE, or the DEV_HEALTH_MIGRATION_PG_* component form)   elevated DSN, direct to PostgreSQL\n"+
 			"  POSTGRES_URI (or _FILE)                   used when MIGRATION_DATABASE_URI is not configured\n"+
-			"  DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER     1 selects the cutover head (revision 0066 as a second head)\n")
+			"  DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER     must be 1: the head has the River cutover (0066) applied, as production does\n"+
+			"  RIVER_DATABASE_SCHEMA                     must be the head's River schema (river), as production's\n")
 	}
 	if err := flags.Parse(env.Args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -69,10 +70,12 @@ func run(ctx context.Context, verb string, resolve ResolveDSN, env cli.Env) int 
 		return cli.ExitUsage
 	}
 
-	raw, present := env.Lookup(CutoverEnv)
-	baseline, err := LoadBaseline(CutoverAuthorized(raw, present))
+	baseline, err := LoadBaseline()
 	if err != nil {
 		return writeError(env.Stderr, "baseline_unavailable", err.Error())
+	}
+	if err := CheckSettings(ReadSettings(env.Lookup), baseline); err != nil {
+		return writeError(env.Stderr, "settings_mismatch", err.Error())
 	}
 	chain, err := LoadChain()
 	if err != nil {

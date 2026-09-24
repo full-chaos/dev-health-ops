@@ -53,11 +53,50 @@ func TestDecide(t *testing.T) {
 }
 
 func TestBelowHeadErrorNamesTheWayOut(t *testing.T) {
-	text := BelowHeadError{Cutover: true, Recorded: []string{"0138"}, Missing: []string{"0066"}}.Error()
-	for _, want := range []string{"below the cutover head", "[0138]", "[0066]", "dev-hops migrate postgres", CutoverEnv + "=1"} {
+	text := BelowHeadError{Recorded: []string{"0138"}, Missing: []string{"0066"}}.Error()
+	for _, want := range []string{"below the head", "[0138]", "[0066]", "River cutover (revision 0066) is expected", "dev-hops migrate postgres"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("%q does not name %q", text, want)
 		}
+	}
+}
+
+// A setting that differs from production's is refused before any database
+// is touched, and the refusal names each mismatch.
+func TestCheckSettings(t *testing.T) {
+	baseline := Baseline{Cutover: true, RiverSchema: "river"}
+	for name, testCase := range map[string]struct {
+		env  map[string]string
+		want []string
+	}{
+		"production's settings":   {map[string]string{CutoverEnv: "1"}, nil},
+		"an explicit river":       {map[string]string{CutoverEnv: "1", RiverSchemaEnv: "river"}, nil},
+		"a blank schema is river": {map[string]string{CutoverEnv: "1", RiverSchemaEnv: "  "}, nil},
+		"no cutover":              {map[string]string{}, []string{"River cutover (revision 0066) applied is expected, " + CutoverEnv + "=unset found"}},
+		"another schema":          {map[string]string{CutoverEnv: "1", RiverSchemaEnv: "worker_queue"}, []string{`River schema "river" expected, "worker_queue" found`}},
+		"both": {map[string]string{CutoverEnv: "0", RiverSchemaEnv: "worker_queue"}, []string{
+			"River cutover (revision 0066) applied is expected", `River schema "river" expected, "worker_queue" found`}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := CheckSettings(ReadSettings(func(key string) (string, bool) {
+				value, ok := testCase.env[key]
+				return value, ok
+			}), baseline)
+			if len(testCase.want) == 0 {
+				if err != nil {
+					t.Fatalf("refused production's settings: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatal("accepted a mismatching environment")
+			}
+			for _, want := range testCase.want {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("%q does not name %q", err, want)
+				}
+			}
+		})
 	}
 }
 
@@ -69,39 +108,18 @@ func TestSanitizeDump(t *testing.T) {
 	}
 }
 
-func TestCutoverAuthorized(t *testing.T) {
-	for _, testCase := range []struct {
-		raw     string
-		present bool
-		want    bool
-	}{{"1", true, true}, {"", false, false}, {"", true, false}, {"true", true, false}, {"0", true, false}} {
-		if got := CutoverAuthorized(testCase.raw, testCase.present); got != testCase.want {
-			t.Fatalf("CutoverAuthorized(%q, %v) = %v", testCase.raw, testCase.present, got)
-		}
-	}
-}
-
-// Both heads load: the application head is one revision, the cutover head is
-// the same revision plus 0066, and the two schemas are the same.
-func TestBaselinesLoad(t *testing.T) {
-	application, err := LoadBaseline(false)
+// The head loads with production's settings and heads.
+func TestBaselineLoads(t *testing.T) {
+	baseline, err := LoadBaseline()
 	if err != nil {
 		t.Fatal(err)
 	}
-	cutover, err := LoadBaseline(true)
-	if err != nil {
-		t.Fatal(err)
+	if !baseline.Cutover || baseline.RiverSchema != "river" || !reflect.DeepEqual(baseline.Heads, []string{"0066", "0138"}) {
+		t.Fatalf("baseline settings cutover=%v schema=%q heads %v; want production's (true, river, [0066 0138])",
+			baseline.Cutover, baseline.RiverSchema, baseline.Heads)
 	}
-	if len(application.Heads) != 1 || !reflect.DeepEqual(cutover.Heads, []string{"0066", application.Heads[0]}) {
-		t.Fatalf("heads: application %v, cutover %v", application.Heads, cutover.Heads)
-	}
-	if application.Schema != cutover.Schema {
-		t.Fatal("the cutover changes data only, but the two baseline schemas differ")
-	}
-	for _, baseline := range []Baseline{application, cutover} {
-		if strings.Contains(baseline.Schema, `\restrict`) || strings.Contains(baseline.Data, `\restrict`) {
-			t.Fatalf("the %s baseline still holds a psql meta-command", Variant(baseline.Cutover))
-		}
+	if strings.Contains(baseline.Schema, `\restrict`) || strings.Contains(baseline.Data, `\restrict`) {
+		t.Fatal("the baseline still holds a psql meta-command")
 	}
 }
 
@@ -127,12 +145,12 @@ func TestBaselineHeadIsTheAlembicHead(t *testing.T) {
 	if latest == "" {
 		t.Fatalf("found no alembic revision in %s", directory)
 	}
-	baseline, err := LoadBaseline(false)
+	baseline, err := LoadBaseline()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if baseline.Heads[0] != latest {
-		t.Fatalf("the alembic chain ends at %s but the baseline head is %s: regenerate the baseline", latest, baseline.Heads[0])
+	if head := applicationHead(baseline); head != latest {
+		t.Fatalf("the alembic chain ends at %s but the baseline head is %s: regenerate the baseline", latest, head)
 	}
 }
 
@@ -141,13 +159,13 @@ func TestChainNames(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	baseline, err := LoadBaseline(false)
+	baseline, err := LoadBaseline()
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, file := range chain {
-		if file.Revision <= baseline.Heads[0] {
-			t.Fatalf("%s is not after the baseline head %s", file.Name, baseline.Heads[0])
+		if file.Revision <= applicationHead(baseline) {
+			t.Fatalf("%s is not after the baseline head %s", file.Name, applicationHead(baseline))
 		}
 	}
 }
@@ -160,7 +178,12 @@ func TestCommandRefusesBeforeConnecting(t *testing.T) {
 		return secrets.Value{}, "", false
 	}
 	var stdout, stderr bytes.Buffer
-	env := cli.Env{Args: []string{"extra"}, Stdout: &stdout, Stderr: &stderr, Lookup: func(string) (string, bool) { return "", false }}
+	env := cli.Env{Args: []string{"extra"}, Stdout: &stdout, Stderr: &stderr, Lookup: func(key string) (string, bool) {
+		if key == CutoverEnv {
+			return "1", true
+		}
+		return "", false
+	}}
 	if code := run(context.Background(), "upgrade", ResolveDSN(resolve), env); code != cli.ExitUsage {
 		t.Fatalf("a positional argument exited %d, want %d", code, cli.ExitUsage)
 	}
@@ -171,5 +194,13 @@ func TestCommandRefusesBeforeConnecting(t *testing.T) {
 	}
 	if stdout.Len() != 0 {
 		t.Fatalf("stdout = %q", stdout.String())
+	}
+	stderr.Reset()
+	env.Lookup = func(string) (string, bool) { return "", false }
+	if code := run(context.Background(), "upgrade", ResolveDSN(func(secrets.LookupEnv, io.Writer) (secrets.Value, string, bool) {
+		t.Fatal("the resolver ran for an environment that does not match the baseline")
+		return secrets.Value{}, "", false
+	}), env); code != cli.ExitFailure || !strings.Contains(stderr.String(), "settings_mismatch") {
+		t.Fatalf("a mismatching environment exited %d with %q", code, stderr.String())
 	}
 }

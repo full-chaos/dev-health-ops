@@ -16,7 +16,6 @@ const lockKey int64 = 0x64686f5f7067 // "dho_pg"
 
 // Result is what one upgrade did.
 type Result struct {
-	Variant string   `json:"variant"`
 	Action  string   `json:"action"`
 	Heads   []string `json:"heads"`
 	Applied []string `json:"applied,omitempty"`
@@ -25,7 +24,7 @@ type Result struct {
 // Upgrade brings the database behind conn to the head of baseline, then
 // applies every chain revision after it.
 func Upgrade(ctx context.Context, conn *pgx.Conn, baseline Baseline, chain []ChainFile) (Result, error) {
-	result := Result{Variant: Variant(baseline.Cutover), Heads: baseline.Heads}
+	result := Result{Heads: baseline.Heads}
 	var plan Plan
 	err := inTransaction(ctx, conn, func(tx pgx.Tx) error {
 		observation, err := observe(ctx, tx)
@@ -37,13 +36,13 @@ func Upgrade(ctx context.Context, conn *pgx.Conn, baseline Baseline, chain []Cha
 		case StateForeign:
 			return ForeignDatabaseError{Relations: observation.PublicRelations}
 		case StateBelowHead:
-			return BelowHeadError{Cutover: baseline.Cutover, Recorded: observation.Versions, Missing: plan.Missing}
+			return BelowHeadError{Recorded: observation.Versions, Missing: plan.Missing}
 		case StateEmpty:
 			if _, err := tx.Exec(ctx, baseline.Schema); err != nil {
-				return fmt.Errorf("apply the %s baseline schema: %w", Variant(baseline.Cutover), err)
+				return fmt.Errorf("apply the baseline schema: %w", err)
 			}
 			if _, err := tx.Exec(ctx, baseline.Data); err != nil {
-				return fmt.Errorf("apply the %s baseline data: %w", Variant(baseline.Cutover), err)
+				return fmt.Errorf("apply the baseline data: %w", err)
 			}
 			// pg_dump's preamble empties search_path for the whole session;
 			// put it back so the chain revisions below run as they were written.
@@ -57,7 +56,7 @@ func Upgrade(ctx context.Context, conn *pgx.Conn, baseline Baseline, chain []Cha
 				return err
 			}
 			if !sameSet(after.Versions, baseline.Heads) {
-				return fmt.Errorf("the %s baseline recorded alembic_version %v, want %v", Variant(baseline.Cutover), after.Versions, baseline.Heads)
+				return fmt.Errorf("the baseline recorded alembic_version %v, want %v", after.Versions, baseline.Heads)
 			}
 			result.Action = "baseline_applied"
 		default:
@@ -102,7 +101,6 @@ func applyChainFile(ctx context.Context, tx pgx.Tx, file ChainFile, previous str
 
 // Status is the read-only view of a database.
 type Status struct {
-	Variant  string   `json:"variant"`
 	State    string   `json:"state"`
 	Heads    []string `json:"heads"`
 	Recorded []string `json:"recorded"`
@@ -112,7 +110,7 @@ type Status struct {
 
 // ReadStatus reports where the database stands without changing it.
 func ReadStatus(ctx context.Context, conn *pgx.Conn, baseline Baseline, chain []ChainFile) (Status, error) {
-	status := Status{Variant: Variant(baseline.Cutover), Heads: baseline.Heads}
+	status := Status{Heads: baseline.Heads}
 	err := readOnlyTransaction(ctx, conn, func(tx pgx.Tx) error {
 		observation, err := observe(ctx, tx)
 		if err != nil {

@@ -3,7 +3,10 @@ package syncadmin
 import (
 	"errors"
 	"fmt"
+	"log/slog"
+	"math"
 	"net/http"
+	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
@@ -30,6 +33,13 @@ func (h *handlers) getCoverage(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// build_sync_coverage_summary's Info events, same names and fields.
+	started := time.Now()
+	logContext := []any{
+		slog.String("org_id", orgID(r)), slog.String("sync_config_id", config.ID.String()),
+		slog.Int("history_lookback_days", synccoverage.HistoryLookbackDays),
+	}
+	h.logger.InfoContext(r.Context(), "sync_coverage_summary_waiting", logContext...)
 	projection, err := h.store.coverageProjection(r.Context(), orgID(r), config.ID,
 		synccoverage.HistoryLookbackDays, coverageProjectionVersion)
 	if err != nil {
@@ -37,6 +47,7 @@ func (h *handlers) getCoverage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if projection == nil {
+		h.logger.InfoContext(r.Context(), "sync_coverage_projection_pending", logContext...)
 		detail := pyjson.NewObject()
 		detail.Set("code", "sync_coverage_projection_pending")
 		detail.Set("message", "Coverage is being prepared. Retry shortly.")
@@ -56,6 +67,16 @@ func (h *handlers) getCoverage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	payload.Set("projection_refreshing", projection.Invalidated)
+	// The completed event reads payload["overall"]["gap_count"],
+	// ["failed_range_count"] and payload["projection_version"] before the
+	// model runs: a payload without them raises there, with no event.
+	fields, err := coverageCompletedFields(payload)
+	if err != nil {
+		h.fail(w, r, "coverage_log_fields", err)
+		return
+	}
+	h.logger.InfoContext(r.Context(), "sync_coverage_summary_completed", append(append(logContext,
+		slog.Float64("elapsed_seconds", math.Round(time.Since(started).Seconds()*1000)/1000)), fields...)...)
 	body, err := coverageSummary(payload)
 	if err != nil {
 		h.fail(w, r, "coverage_model", err)
@@ -386,4 +407,45 @@ func (m *model) awareBoundary(name string) {
 		return
 	}
 	m.out.Set(name, pytime.Pydantic(parsed))
+}
+
+// coverageCompletedFields reads the completed event's payload fields as
+// build_sync_coverage_summary subscripts them; a missing key or a
+// non-dict overall is the KeyError/TypeError Python raises.
+func coverageCompletedFields(payload *pyjson.Object) ([]any, error) {
+	overallValue, _ := payload.Get("overall")
+	overall, ok := overallValue.(*pyjson.Object)
+	if !ok {
+		return nil, fmt.Errorf("payload overall is %s, not a dict", pyjson.Repr(overallValue))
+	}
+	gaps, hasGaps := overall.Get("gap_count")
+	failed, hasFailed := overall.Get("failed_range_count")
+	version, hasVersion := payload.Get("projection_version")
+	if !hasGaps || !hasFailed || !hasVersion {
+		return nil, errors.New("payload lacks overall.gap_count, overall.failed_range_count or projection_version")
+	}
+	refreshing, _ := payload.Get("projection_refreshing")
+	return []any{
+		logValue("gap_count", gaps), logValue("failed_range_count", failed),
+		logValue("projection_version", version), logValue("projection_refreshing", refreshing),
+	}, nil
+}
+
+// logValue is a stored JSON value as a log attribute: numbers, strings and
+// bools as themselves, anything else as its Python repr.
+func logValue(key string, value pyjson.Value) slog.Attr {
+	switch typed := value.(type) {
+	case pyjson.Int:
+		if typed.IsInt64() {
+			return slog.Int64(key, typed.Int64())
+		}
+		return slog.String(key, typed.String())
+	case pyjson.Float:
+		return slog.Float64(key, float64(typed))
+	case string:
+		return slog.String(key, typed)
+	case bool:
+		return slog.Bool(key, typed)
+	}
+	return slog.String(key, pyjson.Repr(value))
 }

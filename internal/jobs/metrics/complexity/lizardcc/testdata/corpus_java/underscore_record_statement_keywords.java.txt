@@ -1,0 +1,74 @@
+// A record whose name starts with an underscore never captures its class
+// name, so its compact constructor body is scanned by the global state.
+// Each record below holds one statement keyword form that must not be taken
+// for a function name there; the expected result is lizard's own.
+record _K0(int x) {
+    _K0 {
+        if (x > 0) { x = 1; }
+    }
+}
+record _K1(int x) {
+    _K1 {
+        if (x > 0) { x = 1; } else { x = 2; }
+    }
+}
+record _K2(int x) {
+    _K2 {
+        for (int i = 0; i < x; i++) { x = i; }
+    }
+}
+record _K3(int x) {
+    _K3 {
+        while (x > 3) { x = x - 1; }
+    }
+}
+record _K4(int x) {
+    _K4 {
+        do { x = x + 1; } while (x < 0);
+    }
+}
+record _K5(int x) {
+    _K5 {
+        switch (x) { case 1: break; default: break; }
+    }
+}
+record _K6(int x) {
+    _K6 {
+        try { x = 1; } catch (RuntimeException e) { x = 2; } finally { x = 3; }
+    }
+}
+record _K7(int x) {
+    _K7 {
+        synchronized (this) { x = 4; }
+    }
+}
+record _K8(int x) {
+    _K8 {
+        return (x);
+    }
+}
+record _K9(int x) {
+    _K9 {
+        throw (new IllegalStateException());
+    }
+}
+record _K10(int x) {
+    _K10 {
+        assert (x > 0);
+    }
+}
+record _K11(int x) {
+    _K11 {
+        break (x);
+    }
+}
+record _K12(int x) {
+    _K12 {
+        continue (x);
+    }
+}
+record _K13(int x) {
+    _K13 {
+        x = (x instanceof (Integer) ? 1 : 2);
+    }
+}

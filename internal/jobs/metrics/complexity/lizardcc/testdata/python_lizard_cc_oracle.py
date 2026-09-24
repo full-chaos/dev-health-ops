@@ -16,7 +16,7 @@ said, so a disagreement in the Go parity test is always the Go side's to
 explain. Nothing here reimplements a single complexity rule.
 
 VERSION PROVENANCE. The oracle version of record is ``uv.lock`` (lizard
-1.23.0), not whatever happens to be importable in an ambient environment --
+1.24.0), not whatever happens to be importable in an ambient environment --
 pyproject.toml's ``lizard>=1.17.10`` is a FLOOR, not a pin. The emitted
 ``lizard_version`` field is what lets the Go rot-guard fail loudly when the
 installed lizard moves off that lock, rather than silently absorbing a

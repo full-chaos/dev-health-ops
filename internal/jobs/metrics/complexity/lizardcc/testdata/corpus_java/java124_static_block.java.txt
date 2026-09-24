@@ -1,0 +1,4 @@
+class C {
+ static { if (x) { y(); } }
+ static int f() { if (a) return 1; return 2; }
+}

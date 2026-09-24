@@ -56,7 +56,7 @@ func TestGoldenPinnedToLockedLizardLua(t *testing.T) {
 }
 
 // TestGoMatchesLizardGoldenLua proves numeric equality with real lizard
-// 1.23.0 for this package's Lua analyzer.
+// 1.24.0 for this package's Lua analyzer.
 func TestGoMatchesLizardGoldenLua(t *testing.T) {
 	doc := loadLuaGolden(t)
 

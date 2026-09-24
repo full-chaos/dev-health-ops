@@ -1,0 +1,1 @@
+class C<T extends Comparable<T>> { <U> U f(U u) { if (u != null) return u; return null; } }

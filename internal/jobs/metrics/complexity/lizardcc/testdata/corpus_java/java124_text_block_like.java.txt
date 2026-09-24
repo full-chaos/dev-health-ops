@@ -1,0 +1,1 @@
+class C { String s = "if (x) {"; void f() { if (a) {} } }

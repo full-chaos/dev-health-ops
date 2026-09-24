@@ -1,0 +1,3 @@
+class C {
+ Object c() { return new a.b.Box<X>() { void m() { if (a) {} } }; }
+}

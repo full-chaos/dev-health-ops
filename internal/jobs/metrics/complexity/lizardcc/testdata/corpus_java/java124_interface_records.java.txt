@@ -1,0 +1,1 @@
+interface I { record R(int x) { R { if (x>0) throw new E(); } } void g(); }

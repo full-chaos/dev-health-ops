@@ -1,0 +1,1 @@
+interface TI { static { @A int t = 1; } void gen() { List<String> l = new ArrayList<String>(); if (l != null) {} } Object o4 = new Box<>() { void x() { if (a) {} } }; int record(int x) { if (x > 0) return 1; return 2; } @A Foo record; }

@@ -1,0 +1,1 @@
+class C { void f(@A int x, @B(1) int y) { if (x > 0) {} } int g() { if (b) return 1; return 2; } }

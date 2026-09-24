@@ -53,7 +53,7 @@ func TestGoldenPinnedToLockedLizardJava(t *testing.T) {
 }
 
 // TestGoMatchesLizardGoldenJava proves numeric equality with real lizard
-// 1.23.0 for this package's Java analyzer, the same contract every other
+// 1.24.0 for this package's Java analyzer, the same contract every other
 // reader in this port holds. Complexities are compared as a MULTISET, not
 // declaration order, for the same reason jvmswift_parity_test.go does:
 // javaMachine's sub_state recursion (java.go) can close a nested function

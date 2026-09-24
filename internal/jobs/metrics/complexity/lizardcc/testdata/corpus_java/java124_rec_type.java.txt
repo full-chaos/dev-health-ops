@@ -1,0 +1,4 @@
+class C {
+  public record Pt(int x, int y) { int s() { if (x>0) return x; return y; } }
+  int h() { return 1; }
+}

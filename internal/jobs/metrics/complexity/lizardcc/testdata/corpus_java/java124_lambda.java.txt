@@ -1,0 +1,1 @@
+class C { int f() { Function<Integer,Integer> g = x -> { if (x > 0) return 1; return 2; }; return g.apply(1); } }

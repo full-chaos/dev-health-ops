@@ -45,6 +45,10 @@ var timestampFieldPattern = regexp.MustCompile(`"(created_at|updated_at|last_dri
 // all carry a fixed 2026-09-01 date and stay compared exactly.
 var importedDiscoveredAtPattern = regexp.MustCompile(`"discovered_at":"(?:2026-09-(?:0[2-9]|[1-3][0-9])|2026-1[0-2]|2027|202[89]|20[3-9][0-9])[^"]*"`)
 
+// venueEncryptionKey is the one SETTINGS_ENCRYPTION_KEY both planes share:
+// the Python plane encrypts the seeded credentials, the Go plane decrypts.
+const venueEncryptionKey = "venue-protected-routes-settings-encryption-key"
+
 func venueRoot() string {
 	_, file, _, _ := runtime.Caller(0)
 	return filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
@@ -58,10 +62,11 @@ func TestVenueOracleProtectedRoutes(t *testing.T) {
 	endpoint := httptest.NewServer(sent)
 	t.Cleanup(endpoint.Close)
 	var seed venueFixture
+	members := newMembersStub(t)
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Root: venueRoot(), JWTKey: venueKey, Logger: quietLogger(),
-		PythonEnv: []string{"EXPECTED_WORKER_GROUPS=" + venueWorkerGroups, "TELEMETRY_ENDPOINT=" + endpoint.URL + "/py"},
-		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
+		PythonEnv: []string{"EXPECTED_WORKER_GROUPS=" + venueWorkerGroups, "TELEMETRY_ENDPOINT=" + endpoint.URL + "/py", "SETTINGS_ENCRYPTION_KEY=" + venueEncryptionKey},
+		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, venue *venueoracle.Venue) map[string]map[string]any {
 			// Python's collect_usage_stats counts a Postgres repos table the
 			// Alembic schema does not create; a stand-in lets its /report run
 			// at all, so the rest of the report path can be compared.
@@ -69,6 +74,7 @@ func TestVenueOracleProtectedRoutes(t *testing.T) {
 				t.Fatal(err)
 			}
 			seed = venueSeed(t, ctx, admin)
+			seedMemberCredentials(t, ctx, admin, venue, seed.orgA, members.server.URL)
 			return seed.tokenSpecs()
 		},
 	})
@@ -78,9 +84,10 @@ func TestVenueOracleProtectedRoutes(t *testing.T) {
 		APIDatabaseURI:   secrets.NewValue(venue.GoAPIDatabaseURI(t)),
 		APIClickHouseURI: secrets.NewValue(venue.GoAPIClickHouseURI(t)),
 		APIJWTSecret:     secrets.NewValue(venueKey), APIJWTIssuer: "dev-health-ops", APIJWTAudience: "dev-health-api",
-		CORSAllowedOrigins: []string{"http://localhost:3000"},
-		ValkeyURI:          secrets.NewValue(venue.ValkeyURI),
-		TelemetryEndpoint:  endpoint.URL + "/go",
+		CORSAllowedOrigins:    []string{"http://localhost:3000"},
+		ValkeyURI:             secrets.NewValue(venue.ValkeyURI),
+		TelemetryEndpoint:     endpoint.URL + "/go",
+		SettingsEncryptionKey: secrets.NewValue(venueEncryptionKey),
 	}
 	groups := venueGroupList()
 	cfg.APIExpectedWorkerGroups = &groups
@@ -108,7 +115,9 @@ func TestVenueOracleProtectedRoutes(t *testing.T) {
 
 	requests := venueRequests(seed, venue.Tokens)
 	var receipt strings.Builder
-	receipt.WriteString(venueoracle.Diff(t, base, requests, venue.ServePython(t, requests), venueoracle.DiffOptions{
+	pythonResponses := venue.ServePython(t, requests)
+	pythonProviderRequests := members.take()
+	receipt.WriteString(venueoracle.Diff(t, base, requests, pythonResponses, venueoracle.DiffOptions{
 		// Composes TWO independent normalizations, each scoped to its own
 		// known cause: normalizeRuled's own rules, and the team/identity
 		// admin timestamp blanking (CHAOS-6310 -- each plane mints its own
@@ -136,6 +145,15 @@ func TestVenueOracleProtectedRoutes(t *testing.T) {
 			return request.Method == http.MethodHead && (request.Path == "/health" || request.Path == "/health/workers")
 		},
 	}))
+	// The provider traffic the member routes caused: the same requests
+	// (method, path, sorted query) reached the stub from both planes.
+	goProviderRequests := members.take()
+	providerSame := strings.Join(pythonProviderRequests, "\n") == strings.Join(goProviderRequests, "\n") && len(goProviderRequests) > 0
+	if !providerSame {
+		t.Errorf("member-route provider requests differ:\n python:\n%s\n go:\n%s",
+			strings.Join(pythonProviderRequests, "\n"), strings.Join(goProviderRequests, "\n"))
+	}
+	fmt.Fprintf(&receipt, "member-route provider requests (%d): %s\n", len(goProviderRequests), venueoracle.Mark(providerSame))
 	// The rows the writes touched are identical on both copies.
 	compareRows(t, ctx, venue, &receipt, "organizations", `SELECT id::text, slug, name, coalesce(description, '<null>'), tier, is_active,
 		updated_at > created_at, settings::text FROM organizations ORDER BY slug`)
@@ -191,10 +209,75 @@ func TestVenueOracleProtectedRoutes(t *testing.T) {
 		`SELECT canonical_id, coalesce(display_name, '<null>'), coalesce(email, '<null>'),
 			provider_identities, team_ids, is_active FROM identities FINAL
 		WHERE org_id != '' ORDER BY canonical_id`)
+	// Last, since they break both planes' database: the acr store made
+	// unusable.
+	receipt.WriteString(venueACRStoreDown(t, ctx, venue, base, seed.orgA.String()))
 	if path := os.Getenv("DEV_HEALTH_VENUE_RECEIPT"); path != "" {
 		_ = os.WriteFile(path, []byte(receipt.String()), 0o600)
 	}
 	t.Log("\n" + receipt.String())
+}
+
+func venueACRStoreDown(t *testing.T, ctx context.Context, venue *venueoracle.Venue, base, orgID string) string {
+	t.Helper()
+	admin, err := pgxpool.New(ctx, venue.AdminURI(t, "postgres"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+	auth := map[string]string{"Authorization": "Bearer " + venueACRToken}
+	health := venueoracle.Request{Name: "acr store unreadable: health", Method: http.MethodGet, Path: "/api/v1/internal/acr/health", Headers: auth}
+
+	// 1. The table each plane's health reads is gone: Python reads acr's
+	// credential row, Go the organizations table the entitlement route
+	// reads first. Both answer 503.
+	for database, table := range map[string]string{venue.SourceDB: "internal_service_credentials", venue.GoDB: "organizations"} {
+		conn, err := pgxpool.New(ctx, venue.AdminURI(t, database))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := conn.Exec(ctx, fmt.Sprintf(`ALTER TABLE %q RENAME TO %q`, table, table+"_gone")); err != nil {
+			t.Fatal(err)
+		}
+		conn.Close()
+	}
+	requests := []venueoracle.Request{health}
+	out := venueoracle.Diff(t, base, requests, venue.ServePython(t, requests), venueoracle.DiffOptions{
+		Inspect: func(request venueoracle.Request, goResponse venueoracle.Response) {
+			// SAME alone would also hold if both planes answered 200.
+			if goResponse.Status != http.StatusServiceUnavailable {
+				t.Errorf("%s: go answered %d, want 503", request.Name, goResponse.Status)
+			}
+		},
+	})
+
+	// 2. Postgres unreachable: the Go database refuses connections and its
+	// open ones are ended. Python answers this with an unhandled 500 (a
+	// crash in its credential lookup, not a contract), so only the Go
+	// answer is checked: 503 with Python's handled body on both routes.
+	if _, err := admin.Exec(ctx, fmt.Sprintf(`ALTER DATABASE %q ALLOW_CONNECTIONS false`, venue.GoDB)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(ctx, `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()`, venue.GoDB); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/api/v1/internal/acr/health", "/api/v1/internal/acr/entitlements/" + orgID} {
+		response, err := http.Get(base + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err := io.ReadAll(response.Body)
+		_ = response.Body.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		same := response.StatusCode == http.StatusServiceUnavailable && string(body) == `{"detail":"Service unavailable"}`
+		if !same {
+			t.Errorf("acr store unreachable: GET %s: go answered %d %q, want 503 {\"detail\":\"Service unavailable\"}", path, response.StatusCode, body)
+		}
+		out += fmt.Sprintf("acr store unreachable: GET %s go=%d %s\n", path, response.StatusCode, venueoracle.Mark(same))
+	}
+	return out
 }
 
 // startVenueAPI runs configure() as a deploy does and returns the api's

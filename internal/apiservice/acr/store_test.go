@@ -29,3 +29,9 @@ func TestPostgresEntitlementStoreLookupWithNilPoolAndValidOrgID(t *testing.T) {
 		t.Fatalf("Lookup(valid, nil pool) error = %v, want ErrUnavailable", err)
 	}
 }
+
+func TestPostgresEntitlementStoreReadyWithNilPoolIsUnavailable(t *testing.T) {
+	if err := (PostgresEntitlementStore{Pool: nil}).Ready(context.Background()); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("Ready(nil pool) error = %v, want ErrUnavailable", err)
+	}
+}

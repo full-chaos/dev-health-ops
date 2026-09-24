@@ -105,8 +105,10 @@ func apiPosture() RolePosture {
 			// CHAOS-6319: the customer-push ownership check reads a managed
 			// integration's credential row (provider and plain config only;
 			// the encrypted payload is never read or decrypted here). A
-			// purge target, delete added.
-			{"integration_credentials", false, false, true},
+			// purge target, delete added. CHAOS-6449 (credential admin
+			// writes) creates rows (INSERT) and updates them (UPDATE),
+			// widened in place.
+			{"integration_credentials", true, true, true},
 			// The protected-route principal (internal/api/policy): the users
 			// row behind every access token, org membership behind
 			// X-Org-Id, and the active impersonation session of a superuser.

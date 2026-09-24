@@ -224,6 +224,232 @@
       "loc": 27,
       "very_high_complexity_functions": 0
     },
+    "golike124_k_arrays.kt.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 4,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 1,
+          "long_name": "a x : Array < Int >",
+          "name": "a"
+        },
+        {
+          "complexity": 2,
+          "lineno": 2,
+          "long_name": "b l : List < String >",
+          "name": "b"
+        }
+      ],
+      "functions_count": 2,
+      "high_complexity_functions": 0,
+      "loc": 2,
+      "very_high_complexity_functions": 0
+    },
+    "golike124_k_generic.kt.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 4,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 1,
+          "long_name": "f x : T",
+          "name": "f"
+        },
+        {
+          "complexity": 2,
+          "lineno": 5,
+          "long_name": "g a : Int",
+          "name": "g"
+        }
+      ],
+      "functions_count": 2,
+      "high_complexity_functions": 0,
+      "loc": 5,
+      "very_high_complexity_functions": 0
+    },
+    "golike124_k_generic2.kt.txt": {
+      "cyclomatic_avg": 2.5,
+      "cyclomatic_total": 5,
+      "functions": [
+        {
+          "complexity": 3,
+          "lineno": 1,
+          "long_name": "m k : K , v : V",
+          "name": "m"
+        },
+        {
+          "complexity": 2,
+          "lineno": 2,
+          "long_name": "h",
+          "name": "h"
+        }
+      ],
+      "functions_count": 2,
+      "high_complexity_functions": 0,
+      "loc": 2,
+      "very_high_complexity_functions": 0
+    },
+    "golike124_s_apply.scala.txt": {
+      "cyclomatic_avg": 0.0,
+      "cyclomatic_total": 0,
+      "functions": [],
+      "functions_count": 0,
+      "high_complexity_functions": 0,
+      "loc": 1,
+      "very_high_complexity_functions": 0
+    },
+    "golike124_s_bound.scala.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 2,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 2,
+          "long_name": "m xs : Seq [ T ]",
+          "name": "m"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 3,
+      "very_high_complexity_functions": 0
+    },
+    "golike124_s_generic1.scala.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 4,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 2,
+          "long_name": "f x : T",
+          "name": "f"
+        },
+        {
+          "complexity": 2,
+          "lineno": 5,
+          "long_name": "g y : Int",
+          "name": "g"
+        }
+      ],
+      "functions_count": 2,
+      "high_complexity_functions": 0,
+      "loc": 6,
+      "very_high_complexity_functions": 0
+    },
+    "golike124_s_generic2.scala.txt": {
+      "cyclomatic_avg": 3.0,
+      "cyclomatic_total": 3,
+      "functions": [
+        {
+          "complexity": 3,
+          "lineno": 2,
+          "long_name": "f x : A",
+          "name": "f"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 6,
+      "very_high_complexity_functions": 0
+    },
+    "golike124_s_nested.scala.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 4,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 2,
+          "long_name": "f x : A",
+          "name": "f"
+        },
+        {
+          "complexity": 2,
+          "lineno": 3,
+          "long_name": "h",
+          "name": "h"
+        }
+      ],
+      "functions_count": 2,
+      "high_complexity_functions": 0,
+      "loc": 4,
+      "very_high_complexity_functions": 0
+    },
+    "golike124_s_plain.scala.txt": {
+      "cyclomatic_avg": 0.0,
+      "cyclomatic_total": 0,
+      "functions": [],
+      "functions_count": 0,
+      "high_complexity_functions": 0,
+      "loc": 1,
+      "very_high_complexity_functions": 0
+    },
+    "golike124_w_array.swift.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 4,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 1,
+          "long_name": "a _ x : [ Int ]",
+          "name": "a"
+        },
+        {
+          "complexity": 2,
+          "lineno": 2,
+          "long_name": "b",
+          "name": "b"
+        }
+      ],
+      "functions_count": 2,
+      "high_complexity_functions": 0,
+      "loc": 2,
+      "very_high_complexity_functions": 0
+    },
+    "golike124_w_generic.swift.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 4,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 1,
+          "long_name": "f _ x : T",
+          "name": "f"
+        },
+        {
+          "complexity": 2,
+          "lineno": 5,
+          "long_name": "g _ a : Int",
+          "name": "g"
+        }
+      ],
+      "functions_count": 2,
+      "high_complexity_functions": 0,
+      "loc": 5,
+      "very_high_complexity_functions": 0
+    },
+    "golike124_w_generic2.swift.txt": {
+      "cyclomatic_avg": 2.5,
+      "cyclomatic_total": 5,
+      "functions": [
+        {
+          "complexity": 3,
+          "lineno": 1,
+          "long_name": "m k : K , v : V",
+          "name": "m"
+        },
+        {
+          "complexity": 2,
+          "lineno": 4,
+          "long_name": "z",
+          "name": "z"
+        }
+      ],
+      "functions_count": 2,
+      "high_complexity_functions": 0,
+      "loc": 4,
+      "very_high_complexity_functions": 0
+    },
     "try_catch_coverage.cs.txt": {
       "cyclomatic_avg": 2.0,
       "cyclomatic_total": 2,
@@ -339,5 +565,5 @@
       "very_high_complexity_functions": 1
     }
   },
-  "lizard_version": "1.23.0"
+  "lizard_version": "1.24.0"
 }

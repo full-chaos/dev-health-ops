@@ -1,0 +1,11 @@
+[
+  {"canonical_id": "c1", "identity_uuid": "11111111-1111-5111-8111-111111111111", "display_name": "Member One", "email": null,
+   "provider_identities": {"github": ["member-1"], "linear": ["lin-a@example.invalid"]}, "team_ids": ["t"], "is_active": true,
+   "updated_at": "2026-09-01T00:00:00+00:00", "org_id": "o"},
+  {"canonical_id": "c2", "identity_uuid": "22222222-2222-5222-8222-222222222222", "display_name": "Member 2x", "email": "member-2@example.invalid",
+   "provider_identities": {}, "team_ids": [], "is_active": true, "updated_at": "2026-09-01T00:00:00+00:00", "org_id": "o"},
+  {"canonical_id": "c3", "identity_uuid": "33333333-3333-5333-8333-333333333333", "display_name": null, "email": "lin-b@example.invalid",
+   "provider_identities": {"github": []}, "team_ids": [], "is_active": true, "updated_at": "2026-09-01T00:00:00+00:00", "org_id": "o"},
+  {"canonical_id": "c4", "identity_uuid": "44444444-4444-5444-8444-444444444444", "display_name": "Linear Carol", "email": null,
+   "provider_identities": {}, "team_ids": [], "is_active": true, "updated_at": "2026-09-01T00:00:00+00:00", "org_id": "o"}
+]

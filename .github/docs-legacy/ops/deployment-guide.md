@@ -129,7 +129,6 @@ deploy/kubernetes/
 ├── redis.yaml              # Redis Deployment
 ├── api.yaml                # API Deployment + HPA
 ├── go-workers.yaml         # Go/River worker Deployments + HPAs (CHAOS-4195: replaced Celery worker.yaml/beat.yaml)
-├── cronjobs.yaml           # Scheduled sync jobs
 └── ingress.yaml            # Ingress + NetworkPolicy
 ```
 
@@ -410,16 +409,9 @@ mongodb://host:27017
 
 ## Scheduled Sync Jobs
 
-### Kubernetes CronJobs
+### Kubernetes
 
-CronJobs are defined in `deploy/kubernetes/cronjobs.yaml`:
-
-| Job | Schedule | Description |
-|-----|----------|-------------|
-| daily-metrics | 0 2 * * * | Compute daily metrics |
-| sync-github | 0 */6 * * * | Sync GitHub work items |
-| sync-gitlab | 30 */6 * * * | Sync GitLab work items |
-| sync-jira | 0 */4 * * * | Sync Jira work items |
+No CronJobs are shipped: neither the Helm chart nor `deploy/kubernetes` defines one. The Go scheduler service owns the daily metrics computation and the provider syncs, so a Kubernetes install needs no external schedule for them.
 
 ### Docker Compose / Swarm
 

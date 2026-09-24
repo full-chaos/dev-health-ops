@@ -1,0 +1,4 @@
+class C {
+  Record record;
+  int f() { if (record != null) return 1; return 0; }
+}

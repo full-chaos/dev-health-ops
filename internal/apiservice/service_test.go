@@ -564,3 +564,60 @@ func TestUnhandledErrorsCarryOnlyContentHeaders(t *testing.T) {
 		}
 	}
 }
+
+// TestCORSAppendsOriginToEveryHandlerVary pins starlette 1.7.0's simple
+// response: every Vary value the handler set, in order, then "Origin", as one
+// Vary header -- with no Origin, an empty one, a foreign one, or an allowed
+// one (the allowed one also echoed). A preflight carries its own four-part
+// Vary instead.
+func TestCORSAppendsOriginToEveryHandlerVary(t *testing.T) {
+	cors := NewCORS([]string{"https://a.example"})
+	for _, tc := range []struct {
+		origin *string
+		vary   []string
+		want   string
+		echo   string
+	}{
+		{nil, nil, "Origin", ""},
+		{nil, []string{"Accept-Encoding"}, "Accept-Encoding, Origin", ""},
+		{nil, []string{"Accept-Encoding", "X-Two"}, "Accept-Encoding, X-Two, Origin", ""},
+		{ptr(""), []string{"X-Two"}, "X-Two, Origin", ""},
+		{ptr("https://evil.example"), nil, "Origin", ""},
+		{ptr("https://a.example"), []string{"Accept-Encoding", "X-Two"}, "Accept-Encoding, X-Two, Origin", "https://a.example"},
+	} {
+		vary := tc.vary
+		handler := cors.Wrap(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			for _, value := range vary {
+				w.Header().Add("Vary", value)
+			}
+			w.WriteHeader(http.StatusNotFound)
+		}))
+		request := httptest.NewRequest(http.MethodGet, "/", nil)
+		if tc.origin != nil {
+			request.Header.Set("Origin", *tc.origin)
+		}
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, request)
+		got := recorder.Result().Header
+		if values := got.Values("Vary"); len(values) != 1 || values[0] != tc.want || got.Get("Access-Control-Allow-Origin") != tc.echo {
+			t.Errorf("origin=%v vary=%v: Vary %q ACAO %q, want %q %q", tc.origin, tc.vary, values, got.Get("Access-Control-Allow-Origin"), tc.want, tc.echo)
+		}
+	}
+	// An allowed list holding "" (NewCORS takes any list) never echoes a
+	// request that sent no Origin: Starlette's origin is None, not "".
+	emptyAllowed := NewCORS([]string{"", "https://a.example"}).Wrap(http.NotFoundHandler())
+	absent := httptest.NewRecorder()
+	emptyAllowed.ServeHTTP(absent, httptest.NewRequest(http.MethodGet, "/", nil))
+	if got := absent.Result().Header; len(got.Values("Access-Control-Allow-Origin")) != 0 || got.Get("Vary") != "Origin" {
+		t.Errorf("no Origin with \"\" allowed: ACAO %q Vary %q", got.Values("Access-Control-Allow-Origin"), got.Get("Vary"))
+	}
+	request := httptest.NewRequest(http.MethodOptions, "/", nil)
+	request.Header.Set("Origin", "https://a.example")
+	request.Header.Set("Access-Control-Request-Method", "GET")
+	recorder := httptest.NewRecorder()
+	cors.Wrap(http.NotFoundHandler()).ServeHTTP(recorder, request)
+	if got := recorder.Result().Header.Values("Vary"); len(got) != 1 ||
+		got[0] != "Origin, Access-Control-Request-Method, Access-Control-Request-Headers, Access-Control-Request-Private-Network" {
+		t.Errorf("preflight Vary %q", got)
+	}
+}

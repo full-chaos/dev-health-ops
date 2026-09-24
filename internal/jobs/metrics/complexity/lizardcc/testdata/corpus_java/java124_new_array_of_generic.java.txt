@@ -1,0 +1,1 @@
+class C { void f() { List<String>[] a = new List[3]; if (a != null) {} } }

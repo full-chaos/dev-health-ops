@@ -1,0 +1,6 @@
+package p
+func Sum[T interface{ ~int | ~float64 }](xs []T) T {
+	var s T
+	for _, x := range xs { if x > 0 { s += x } }
+	return s
+}

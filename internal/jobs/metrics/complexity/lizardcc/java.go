@@ -1,5 +1,10 @@
 package lizardcc
 
+import (
+	"strings"
+	"unicode"
+)
+
 // This file ports lizard_languages/java.py in full: JavaReader, JavaStates,
 // JavaFunctionBodyStates and JavaClassBodyStates.
 //
@@ -100,12 +105,26 @@ type javaMachine struct {
 	// globalState is the per-spawn hook described above.
 	globalState state
 
-	// JavaFunctionBodyStates-only (java.py:163).
-	ignoreTokens bool
+	// afterUnqualifiedAnnotation is set when the token after a plain
+	// `@Name` (no arguments) is read, so a following `record` is taken for a
+	// type declaration whatever precedes it. newGenericDepth counts the
+	// unclosed `<` of the type being instantiated after `new`.
+	afterUnqualifiedAnnotation bool
+	newGenericDepth            int
 
-	// JavaClassBodyStates-only (java.py:210-214).
+	// JavaFunctionBodyStates-only: ignoreTokens, plus the two ways a body
+	// machine ends -- by its own brace depth (a method or static block), or
+	// by the shared bracket count reaching zero (the argument list of a
+	// `new X(...)`).
+	ignoreTokens       bool
+	exitWithBraceDepth bool
+	javaBlockBrace     int
+
+	// JavaClassBodyStates-only: afterStaticKeyword, and the depth of the
+	// braces that reach this machine (the class's own, plus field
+	// initializers and the blocks whose bodies are sub-machines).
 	afterStaticKeyword bool
-	bodyBraceDepth     int
+	classBodyBrace     int
 	firstCall          bool // true only before this instance's first feed
 	lastToken          string
 }
@@ -121,8 +140,8 @@ func newJavaMachine(ctx *Context) *javaMachine {
 // newJavaFunctionBodyMachine spawns a JavaFunctionBodyStates instance
 // (java.py:159-163): a JavaStates whose in_method_body starts true and
 // whose _state_global is the combined-bracket-tracking one.
-func newJavaFunctionBodyMachine(ctx *Context) *javaMachine {
-	m := &javaMachine{ctx: ctx, inMethodBody: true, firstCall: true}
+func newJavaFunctionBodyMachine(ctx *Context, exitWithBraceDepth bool) *javaMachine {
+	m := &javaMachine{ctx: ctx, inMethodBody: true, firstCall: true, exitWithBraceDepth: exitWithBraceDepth}
 	m.globalState = m.javaFunctionBodyStateGlobal
 	m.state = m.globalState
 	return m
@@ -250,10 +269,56 @@ func (m *javaMachine) tryNewFunction(tok string) {
 	m.state = m.stateFunction
 }
 
-// tryStartAClass ports _try_start_a_class (java.py:74-90).
-func (m *javaMachine) tryStartAClass(tok string) bool {
+// Java's reserved words that cannot start a declaration name, and the
+// modifiers and primitive types that decide whether `record` opens a type.
+var javaClassModifiers = map[string]bool{
+	"public": true, "private": true, "protected": true, "static": true, "final": true,
+	"strictfp": true, "abstract": true, "synchronized": true, "native": true,
+	"default": true, "transient": true, "volatile": true, "sealed": true, "non-sealed": true,
+}
+
+var javaTypeKeywords = map[string]bool{
+	"void": true, "boolean": true, "byte": true, "char": true, "short": true,
+	"int": true, "long": true, "float": true, "double": true, "var": true,
+}
+
+// javaRecordBeginsTypeDeclaration ports _java_record_begins_type_declaration:
+// `record` is a keyword only where it cannot be the name in `Type name`.
+// hasLast is false before the machine's first token.
+func javaRecordBeginsTypeDeclaration(last string, hasLast, afterUnqualifiedAnnotation bool) bool {
+	if afterUnqualifiedAnnotation || !hasLast {
+		return true
+	}
+	if javaTypeKeywords[last] {
+		return false
+	}
+	if last == "]" || last == ">" {
+		return false
+	}
+	first := firstByte(last)
+	if first == '_' || first == '{' || first == '$' {
+		return false
+	}
+	if isAlpha(first) {
+		if unicode.IsLower(first) && javaClassModifiers[last] {
+			return true
+		}
+		if unicode.IsUpper(first) {
+			return false
+		}
+	}
+	switch last {
+	case "{", "}", ";", ")", "@":
+		return true
+	}
+	return false
+}
+
+// tryStartAClass ports _try_start_a_class (java.py:113-138).
+func (m *javaMachine) tryStartAClass(tok string, afterUnqualifiedAnnotation bool) bool {
 	switch tok {
 	case "class", "enum":
+		m.afterUnqualifiedAnnotation = false
 		m.className = ""
 		m.isRecord = false
 		m.inRecordConstructor = false
@@ -263,25 +328,18 @@ func (m *javaMachine) tryStartAClass(tok string) bool {
 		if m.inMethodBody {
 			return false
 		}
-		m.state = m.stateAfterRecordKeyword
-		return true
-	}
-	return false
-}
-
-// stateAfterRecordKeyword ports _state_after_record_keyword (java.py:92-101).
-func (m *javaMachine) stateAfterRecordKeyword(tok string) {
-	b := firstByte(tok)
-	if b == '_' || isAlpha(b) {
+		if !javaRecordBeginsTypeDeclaration(m.lastToken, !m.firstCall, afterUnqualifiedAnnotation) {
+			m.afterUnqualifiedAnnotation = false
+			return false
+		}
+		m.afterUnqualifiedAnnotation = false
 		m.className = ""
 		m.isRecord = true
 		m.inRecordConstructor = false
 		m.state = m.stateClassDeclaration
-		m.stateClassDeclaration(tok)
-		return
+		return true
 	}
-	m.tryNewFunction("record")
-	m.state(tok)
+	return false
 }
 
 // javaStateGlobal ports JavaStates._state_global (java.py:103-112): the
@@ -291,16 +349,33 @@ func (m *javaMachine) javaStateGlobal(tok string) {
 	if m.consumeJavaExpressionTokens(tok) {
 		return
 	}
+	useAfterAnnotation := m.afterUnqualifiedAnnotation
+	if tok != "record" {
+		m.afterUnqualifiedAnnotation = false
+	}
 	if tok == "@" {
 		m.state = m.stateDecorator
 		return
 	}
-	if m.tryStartAClass(tok) {
+	if m.tryStartAClass(tok, useAfterAnnotation) {
+		return
+	}
+	if javaStatementKeywords[tok] {
 		return
 	}
 	if !m.inRecordConstructor {
 		m.clikeStateGlobal(tok)
 	}
+}
+
+// javaStatementKeywords is lizard's _JAVA_STATEMENT_KEYWORDS: statement
+// keywords that can never begin a function declaration, skipped in the
+// global state so they are not taken for a function name.
+var javaStatementKeywords = map[string]bool{
+	"if": true, "else": true, "for": true, "while": true, "do": true,
+	"switch": true, "catch": true, "try": true, "finally": true,
+	"synchronized": true, "return": true, "throw": true, "assert": true,
+	"break": true, "continue": true, "instanceof": true,
 }
 
 // clikeStateGlobal ports CLikeStates._state_global (clike.go's
@@ -339,8 +414,11 @@ func (m *javaMachine) statePostDecorator(tok string) {
 		m.state = m.stateAnnotationArguments
 		m.stateAnnotationArguments(tok)
 	default:
+		// A plain `@Name`: the name is not a method or class, so a `record`
+		// that follows is a type declaration. The token itself is not
+		// re-dispatched.
+		m.afterUnqualifiedAnnotation = true
 		m.state = m.globalState
-		m.globalState(tok)
 	}
 }
 
@@ -357,12 +435,9 @@ func (m *javaMachine) stateAnnotationArguments(tok string) {
 // round -- independently confirmed against real lizard 1.23.0 before
 // fixing, not merely argued): this branch used to accept firstByte(tok)
 // == '_' as well as isAlpha, but java.py's own _state_class_declaration
-// only checks `token[0].isalpha()` -- NO underscore acceptance here,
-// unlike _state_after_record_keyword's OWN predicate two states earlier
-// (java.py:92-101 / this file's stateAfterRecordKeyword), which
-// deliberately DOES accept '_' and is untouched by this fix. The two
-// states have genuinely different predicates in the real reader; porting
-// the wrong one into stateClassDeclaration made `record _R(int x) { _R
+// only checks `token[0].isalpha()` -- NO underscore acceptance here. A
+// record named with a leading underscore therefore never captures its
+// name, and porting the wrong predicate into stateClassDeclaration made `record _R(int x) { _R
 // {...} }` silently exempt itself from scoring (a compact constructor
 // match requires tok == m.className, which only fires when className was
 // actually captured) -- real lizard never captures "_R" as class_name
@@ -370,6 +445,9 @@ func (m *javaMachine) stateAnnotationArguments(tok string) {
 // instead. Measured directly: this exact fixture went from Go=0 functions
 // to Go=1 function (matching lizard's own 1, complexity 1) after this
 // fix.
+// (Historical, measured under lizard 1.23.0: lizard 1.24.0 also skips the
+// statement keyword there, so that fixture now has no function at all -- see
+// javaStatementKeywords.)
 func (m *javaMachine) stateClassDeclaration(tok string) {
 	switch {
 	case tok == "{":
@@ -632,36 +710,64 @@ func (m *javaMachine) stateOldCParams(tok string) {
 // `sub_state(state, callback, token)` -- unlike golike.go's
 // stateFunctionImpl, which deliberately does NOT feed its opening brace;
 // the two families differ here because Java's sub-machine needs to see
-// its own '{' to seed _handle_class_body_brace-style bookkeeping the same
-// way JavaClassBodyStates does, whereas GoLikeStates' clone has no such
+// its own '{' to seed its brace bookkeeping the same way
+// JavaClassBodyStates does, whereas GoLikeStates' clone has no such
 // bookkeeping to seed).
 func (m *javaMachine) stateEnteringImp(tok string) {
 	m.ctx.ConfirmNewFunction()
 	m.inMethodBody = true
-	m.subStateTok(newJavaFunctionBodyMachine(m.ctx), func() {
+	m.subStateTok(newJavaFunctionBodyMachine(m.ctx, true), func() {
 		m.inMethodBody = false
 		m.state = m.globalState
 	}, tok)
 }
 
 // ---------------------------------------------------------------------
-// JavaFunctionBodyStates (java.py:159-203)
+// JavaFunctionBodyStates (java_body_states.py)
 // ---------------------------------------------------------------------
 
+// javaBraceDelta is _JAVA_BRACE_COUNT: only braces, not parentheses.
+func javaBraceDelta(tok string) (int, bool) {
+	switch tok {
+	case "{":
+		return 1, true
+	case "}":
+		return -1, true
+	}
+	return 0, false
+}
+
 // javaFunctionBodyStateGlobal ports JavaFunctionBodyStates._state_global's
-// raw body (java.py:167-185), combining BOTH decorators' bracket tracking
-// (java.py:165-166 track "{}" and "()" together into ONE shared br_count)
-// into a single delta per token, applied before the body runs -- matching
-// the decorator chain's actual order (outer's delta, then inner's delta,
-// then the raw body). The decorators' own "_state_dummy" transition is NOT
-// ported: it only ever fires in the SAME call statemachine_return() does
-// (both check br_count==0), and by then this sub-machine is being
-// discarded by its caller (stateEnteringImp above) regardless of what
-// _state is left pointing at.
+// raw body, combining BOTH decorators' bracket tracking (the "{}" and "()"
+// readers share ONE br_count) into a single delta per token, applied before
+// the body runs -- matching the decorator chain's order. After the body the
+// decorators park the machine in _state_dummy whenever br_count is zero, which
+// is what leaves a machine that reached zero without returning (a block that
+// ends by brace depth while the shared count is already zero) swallowing every
+// later token.
 func (m *javaMachine) javaFunctionBodyStateGlobal(tok string) {
 	m.brCount += bracketDelta(tok, "(", ")") + bracketDelta(tok, "{", "}")
+	m.javaFunctionBodyRaw(tok)
+	if m.brCount == 0 {
+		m.state = m.stateDummy
+	}
+}
 
+func (m *javaMachine) stateDummy(string) {}
+
+func (m *javaMachine) javaFunctionBodyRaw(tok string) {
 	if m.consumeJavaExpressionTokens(tok) {
+		return
+	}
+	useAfterAnnotation := m.afterUnqualifiedAnnotation
+	if tok != "record" {
+		m.afterUnqualifiedAnnotation = false
+	}
+	if tok == "@" {
+		m.state = m.stateDecorator
+		return
+	}
+	if m.tryStartAClass(tok, useAfterAnnotation) {
 		return
 	}
 	if m.ignoreTokens {
@@ -672,28 +778,44 @@ func (m *javaMachine) javaFunctionBodyStateGlobal(tok string) {
 		m.state = m.stateNew
 		return
 	}
-	if m.tryStartAClass(tok) {
-		return
-	}
-	if m.brCount == 0 {
+	if m.exitWithBraceDepth {
+		if d, ok := javaBraceDelta(tok); ok {
+			m.javaBlockBrace += d
+			if m.javaBlockBrace == 0 {
+				m.statemachineReturn()
+			}
+		}
+	} else if m.brCount == 0 {
 		m.statemachineReturn()
 	}
 }
 
-func (m *javaMachine) stateNew(tok string) { m.state = m.stateNewParameters }
+// stateNew ports _state_new: the token after `new` (the start of the type
+// name) is consumed here, not re-dispatched.
+func (m *javaMachine) stateNew(string) {
+	m.newGenericDepth = 0
+	m.state = m.stateNewParameters
+}
 
-// stateNewParameters ports _state_new_parameters (java.py:193-202): `new
-// Foo(...)` (a plain constructor call -- its arguments are read by ANOTHER
-// function-body-shaped sub-machine, matching Python exactly) or `new
-// Foo(...) { ... }` (an anonymous class body).
+// stateNewParameters ports _state_new_parameters: `new Foo<...>(...)` (a plain
+// constructor call -- its arguments are read by ANOTHER function-body-shaped
+// sub-machine) or `new Foo<...>(...) { ... }` (an anonymous class body). The
+// instantiated type's own generic arguments are skipped so they do not end the
+// search for `(` or `{`.
 func (m *javaMachine) stateNewParameters(tok string) {
-	switch tok {
-	case "(":
-		m.subStateTok(newJavaFunctionBodyMachine(m.ctx), nil, tok)
-	case "{":
+	if m.newGenericDepth > 0 || len(tok) > 0 && tok[0] == '<' {
+		m.newGenericDepth += strings.Count(tok, "<") - strings.Count(tok, ">")
+		return
+	}
+	switch {
+	case tok == "(":
+		m.subStateTok(newJavaFunctionBodyMachine(m.ctx, false), nil, tok)
+	case tok == "{":
 		m.subStateTok(newJavaClassBodyMachine(m.ctx, "(anonymous)", false), func() {
 			m.state = m.globalState
 		}, tok)
+	case tok == "." || isAlpha(firstByte(tok)) || tok[0] == '_':
+		// a segment of an unqualified or qualified type name before `(`/`{`
 	default:
 		m.state = m.globalState
 		m.globalState(tok)
@@ -701,44 +823,25 @@ func (m *javaMachine) stateNewParameters(tok string) {
 }
 
 // ---------------------------------------------------------------------
-// JavaClassBodyStates (java.py:205-253)
+// JavaClassBodyStates (java_body_states.py)
 // ---------------------------------------------------------------------
 
-// handleClassBodyBrace ports _handle_class_body_brace (java.py:216-227):
-// reports whether tok closes THIS class body, tracking nested (unhandled,
-// e.g. field-initializer) braces separately. firstCall stands in for
-// Python's `self.last_token is None` (true only before this instance's own
-// first token, which is always its own opening '{', fed by whichever
-// caller spawned it -- stateClassDeclaration/stateNewParameters above).
-func (m *javaMachine) handleClassBodyBrace(tok string) bool {
-	switch tok {
-	case "{":
-		if !m.firstCall {
-			m.bodyBraceDepth++
-		}
-		return false
-	case "}":
-		if m.bodyBraceDepth > 0 {
-			m.bodyBraceDepth--
-			return false
-		}
-		return true
-	}
-	return false
-}
-
-// javaClassBodyStateGlobal ports JavaClassBodyStates._state_global
-// (java.py:229-252).
+// javaClassBodyStateGlobal ports JavaClassBodyStates._state_global. The
+// machine counts the braces that reach it -- its own, field initializers, and
+// one extra for each static or instance block whose body is a sub-machine (its
+// closing brace is not seen at this level, so the count is balanced in that
+// block's callback) -- and returns when the class's own closing brace arrives.
 func (m *javaMachine) javaClassBodyStateGlobal(tok string) {
 	if m.afterStaticKeyword {
 		m.afterStaticKeyword = false
 		if tok == "{" {
-			m.subStateTok(newJavaFunctionBodyMachine(m.ctx), func() {}, tok)
+			m.classBodyBrace++
+			m.subStateTok(newJavaFunctionBodyMachine(m.ctx, true), func() { m.classBodyBrace-- }, tok)
 			return
 		}
 		m.javaStateGlobal("static")
 		m.javaStateGlobal(tok)
-		if m.handleClassBodyBrace(tok) {
+		if tok == "}" && m.classBodyBrace == 0 {
 			m.statemachineReturn()
 		}
 		return
@@ -749,13 +852,25 @@ func (m *javaMachine) javaClassBodyStateGlobal(tok string) {
 		return
 	}
 
-	if tok == "{" && oneOf(m.lastToken, "{};") {
-		m.subStateTok(newJavaFunctionBodyMachine(m.ctx), func() {}, tok)
+	if tok == "{" && oneOf(m.lastToken, "{};") && !m.firstCall {
+		m.classBodyBrace++
+		m.subStateTok(newJavaFunctionBodyMachine(m.ctx, true), func() { m.classBodyBrace-- }, tok)
+		return
+	}
+
+	if tok == "new" {
+		// A field initializer may instantiate an anonymous class; handling it
+		// here keeps the field from being parsed as a method while the
+		// anonymous body's own methods are still counted.
+		m.state = m.stateNew
 		return
 	}
 
 	m.javaStateGlobal(tok)
-	if m.handleClassBodyBrace(tok) {
+	if d, ok := javaBraceDelta(tok); ok {
+		m.classBodyBrace += d
+	}
+	if tok == "}" && m.classBodyBrace == 0 {
 		m.statemachineReturn()
 	}
 }

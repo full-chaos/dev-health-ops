@@ -251,14 +251,12 @@ func TestResendSenderMatchesLivePythonResendProvider(t *testing.T) {
 		{"non-JSON 500", 500, "text/html", `<html>bad gateway</html>`},
 		{"JSON 500 with no statusCode field", 500, "", `{"message":"upstream exploded"}`},
 	}
-	// Where the planes deliberately disagree: Python's SDK never consults the
-	// HTTP status, only a `statusCode` field in the body, so a non-2xx reply
-	// whose JSON carries none is a "sent" to it. Go treats every non-2xx as a
-	// failure. (Resend's own error bodies always carry statusCode, so real
-	// traffic never reaches this shape; Go is the safe side of it.)
-	resendKnownOutcomeDivergences := map[string]string{
-		"JSON 500 with no statusCode field": "python: sent (never checks the HTTP status); go: failed (5xx)",
-	}
+	// Where the planes deliberately disagree: nowhere for the deployed
+	// resend 2.47.0. Up to 2.30.0 the Python SDK never consulted the HTTP
+	// status (only a `statusCode` in the body), so a non-2xx JSON reply with
+	// none was a "sent" there; 2.47.0's Request.perform raises on any status
+	// >= 400, so the planes agree. A new divergence is listed here again.
+	resendKnownOutcomeDivergences := map[string]string{}
 
 	// Outcome CLASS. Python has one failure kind (it raises); Go splits it in
 	// two: a definite rejection, and an ambiguous outcome (the request may have

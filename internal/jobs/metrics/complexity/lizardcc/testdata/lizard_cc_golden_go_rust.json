@@ -130,6 +130,280 @@
       "loc": 7,
       "very_high_complexity_functions": 0
     },
+    "golike124_g_closure.go.txt": {
+      "cyclomatic_avg": 1.5,
+      "cyclomatic_total": 3,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 2,
+          "long_name": "",
+          "name": ""
+        },
+        {
+          "complexity": 1,
+          "lineno": 2,
+          "long_name": "F x T",
+          "name": "F"
+        }
+      ],
+      "functions_count": 2,
+      "high_complexity_functions": 0,
+      "loc": 2,
+      "very_high_complexity_functions": 0
+    },
+    "golike124_g_constraint.go.txt": {
+      "cyclomatic_avg": 3.0,
+      "cyclomatic_total": 3,
+      "functions": [
+        {
+          "complexity": 3,
+          "lineno": 2,
+          "long_name": "Sum xs [ ] T",
+          "name": "Sum"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 6,
+      "very_high_complexity_functions": 0
+    },
+    "golike124_g_generic1.go.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 4,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 2,
+          "long_name": "Map xs [ ] T",
+          "name": "Map"
+        },
+        {
+          "complexity": 2,
+          "lineno": 8,
+          "long_name": "Plain x int",
+          "name": "Plain"
+        }
+      ],
+      "functions_count": 2,
+      "high_complexity_functions": 0,
+      "loc": 8,
+      "very_high_complexity_functions": 0
+    },
+    "golike124_g_generic2.go.txt": {
+      "cyclomatic_avg": 3.0,
+      "cyclomatic_total": 3,
+      "functions": [
+        {
+          "complexity": 3,
+          "lineno": 2,
+          "long_name": "Pair k K , v V",
+          "name": "Pair"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 7,
+      "very_high_complexity_functions": 0
+    },
+    "golike124_g_index_call.go.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 4,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 2,
+          "long_name": "C",
+          "name": "C"
+        },
+        {
+          "complexity": 2,
+          "lineno": 3,
+          "long_name": "D",
+          "name": "D"
+        }
+      ],
+      "functions_count": 2,
+      "high_complexity_functions": 0,
+      "loc": 3,
+      "very_high_complexity_functions": 0
+    },
+    "golike124_g_method.go.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 4,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 3,
+          "long_name": "(s S[T])M x T",
+          "name": "M"
+        },
+        {
+          "complexity": 2,
+          "lineno": 4,
+          "long_name": "(s*S[T])N",
+          "name": "N"
+        }
+      ],
+      "functions_count": 2,
+      "high_complexity_functions": 0,
+      "loc": 4,
+      "very_high_complexity_functions": 0
+    },
+    "golike124_g_nested.go.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 4,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 2,
+          "long_name": "Nest s S",
+          "name": "Nest"
+        },
+        {
+          "complexity": 2,
+          "lineno": 3,
+          "long_name": "After",
+          "name": "After"
+        }
+      ],
+      "functions_count": 2,
+      "high_complexity_functions": 0,
+      "loc": 3,
+      "very_high_complexity_functions": 0
+    },
+    "golike124_g_plain_arrays.go.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 4,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 2,
+          "long_name": "A x [ 3 ] int",
+          "name": "A"
+        },
+        {
+          "complexity": 2,
+          "lineno": 4,
+          "long_name": "B",
+          "name": "B"
+        }
+      ],
+      "functions_count": 2,
+      "high_complexity_functions": 0,
+      "loc": 4,
+      "very_high_complexity_functions": 0
+    },
+    "golike124_g_struct_generic.go.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 2,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 3,
+          "long_name": "NewBox v T",
+          "name": "NewBox"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 3,
+      "very_high_complexity_functions": 0
+    },
+    "golike124_g_two.go.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 6,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 2,
+          "long_name": "G1",
+          "name": "G1"
+        },
+        {
+          "complexity": 2,
+          "lineno": 3,
+          "long_name": "G2",
+          "name": "G2"
+        },
+        {
+          "complexity": 2,
+          "lineno": 4,
+          "long_name": "G3",
+          "name": "G3"
+        }
+      ],
+      "functions_count": 3,
+      "high_complexity_functions": 0,
+      "loc": 4,
+      "very_high_complexity_functions": 0
+    },
+    "golike124_r_array.rs.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 4,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 1,
+          "long_name": "a x : [ i32 ; 3 ]",
+          "name": "a"
+        },
+        {
+          "complexity": 2,
+          "lineno": 2,
+          "long_name": "b",
+          "name": "b"
+        }
+      ],
+      "functions_count": 2,
+      "high_complexity_functions": 0,
+      "loc": 2,
+      "very_high_complexity_functions": 0
+    },
+    "golike124_r_generic.rs.txt": {
+      "cyclomatic_avg": 2.3333333333333335,
+      "cyclomatic_total": 7,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 1,
+          "long_name": "f x : T",
+          "name": "f"
+        },
+        {
+          "complexity": 2,
+          "lineno": 5,
+          "long_name": "g a : i32",
+          "name": "g"
+        },
+        {
+          "complexity": 3,
+          "lineno": 6,
+          "long_name": "h t : T , u : U",
+          "name": "h"
+        }
+      ],
+      "functions_count": 3,
+      "high_complexity_functions": 0,
+      "loc": 6,
+      "very_high_complexity_functions": 0
+    },
+    "golike124_r_impl.rs.txt": {
+      "cyclomatic_avg": 2.0,
+      "cyclomatic_total": 2,
+      "functions": [
+        {
+          "complexity": 2,
+          "lineno": 3,
+          "long_name": "m & self",
+          "name": "m"
+        }
+      ],
+      "functions_count": 1,
+      "high_complexity_functions": 0,
+      "loc": 4,
+      "very_high_complexity_functions": 0
+    },
     "question_token_coverage.go.txt": {
       "cyclomatic_avg": 3.0,
       "cyclomatic_total": 3,
@@ -223,5 +497,5 @@
       "very_high_complexity_functions": 0
     }
   },
-  "lizard_version": "1.23.0"
+  "lizard_version": "1.24.0"
 }

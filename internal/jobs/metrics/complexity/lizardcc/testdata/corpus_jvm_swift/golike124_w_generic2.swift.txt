@@ -1,0 +1,4 @@
+func m<K: Hashable, V>(k: K, v: V) {
+  for i in 0..<3 { if i > 1 { print(i) } }
+}
+struct S<T> { func z() { if true { print(1) } } }

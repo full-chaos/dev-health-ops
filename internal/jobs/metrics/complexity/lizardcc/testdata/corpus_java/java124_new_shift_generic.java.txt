@@ -1,0 +1,1 @@
+class C { void f() { Object o = new A<B<C<D>>>() { void q() { if (a) {} } }; } }

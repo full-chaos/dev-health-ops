@@ -82,6 +82,9 @@ func venueSeed(t *testing.T, ctx context.Context, pool *pgxpool.Pool) venueFixtu
 			FROM feature_flags JOIN (VALUES ('api_access', false, NULL::timestamptz),
 				('work_graph', true, now() - interval '1 day'),
 				('ask_dev', true, now() + interval '1 day')) AS v(key, enabled, expires) USING (key)`, []any{f.orgA}},
+		// agent_context_runtime on for orgB, so one acr entitlement answer is true.
+		{`INSERT INTO org_feature_overrides (id, org_id, feature_id, is_enabled, expires_at, created_at, updated_at)
+			SELECT gen_random_uuid(), $1, id, true, NULL, now(), now() FROM feature_flags WHERE key = 'agent_context_runtime'`, []any{f.orgB}},
 		{`INSERT INTO users (id, email, is_superuser) VALUES ($1, 'imp@x', true)`, []any{f.impersonator}},
 		{`INSERT INTO impersonation_sessions (id, admin_user_id, target_user_id, target_org_id, target_role, expires_at)
 			VALUES (gen_random_uuid(), $1, $2, $3, 'member', now() + interval '1 hour')`, []any{f.impersonator, f.member, f.orgA}},
@@ -106,6 +109,13 @@ func venueSeed(t *testing.T, ctx context.Context, pool *pgxpool.Pool) venueFixtu
 			(gen_random_uuid(), $4, 'telemetry', 'telemetry_last_report_at', '2026-09-01T10:00:00Z', false, NULL, now(), now()),
 			(gen_random_uuid(), $4, 'telemetry', 'telemetry_opt_in', 'true', false, 'Controls voluntary telemetry reporting.', now() - interval '1 day', now() - interval '1 day')`,
 			[]any{f.orgA.String(), f.orgB.String(), f.orgFree.String(), f.orgNoLicense.String()}},
+		// acr's service credential: Python's internal acr routes answer only
+		// a live svc_acr_ bearer with the entitlements:read scope. The Go
+		// routes do not check it (the network boundary is the control), so
+		// the venue compares the authorised answers only.
+		{`INSERT INTO internal_service_credentials (id, service_name, token_hash, token_prefix, scopes, created_at)
+			VALUES (gen_random_uuid(), 'acr', encode(sha256(convert_to($1, 'UTF8')), 'hex'), left($1, 12), '["entitlements:read"]', now())`,
+			[]any{venueACRToken}},
 		{`INSERT INTO feature_flags (id, key, name, min_tier, is_enabled, created_at, updated_at) VALUES
 			(gen_random_uuid(),'stored_only','Stored','team',true,now(),now()),
 			(gen_random_uuid(),'bad_tier','Bad','platinum',true,now(),now()),
@@ -118,6 +128,10 @@ func venueSeed(t *testing.T, ctx context.Context, pool *pgxpool.Pool) venueFixtu
 	}
 	return f
 }
+
+// venueACRToken is the fixed acr service token the venue seeds (as its
+// sha256) and sends.
+const venueACRToken = "svc_acr_venue-fixed-token"
 
 func b64(text string) *string { return venueoracle.B64(text) }
 
@@ -154,6 +168,21 @@ func venueRequests(f venueFixture, tokens map[string]string) []venueoracle.Reque
 	add("me: HEAD", "HEAD", me, bearer("member"), nil)
 	add("me: PUT", "PUT", me, bearer("member"), nil)
 	add("me: DELETE anonymous", "DELETE", me, nil, nil)
+	// CORS as a browser meets it (starlette 1.7.0): no Origin, an empty one,
+	// the allowed one, a foreign one; a simple request, a refused one, an
+	// unknown path, and preflights. Every answer carries Vary: Origin; only
+	// the allowed Origin is echoed.
+	add("cors: member allowed origin", "GET", me, with(bearer("member"), "Origin", "http://localhost:3000"), nil)
+	add("cors: member foreign origin", "GET", me, with(bearer("member"), "Origin", "https://evil.example"), nil)
+	add("cors: anonymous empty origin", "GET", me, map[string]string{"Origin": ""}, nil)
+	add("cors: anonymous allowed origin", "GET", me, map[string]string{"Origin": "http://localhost:3000"}, nil)
+	add("cors: unknown path allowed origin", "GET", "/api/v1/nope-cors", map[string]string{"Origin": "http://localhost:3000"}, nil)
+	add("cors: unknown path no origin", "GET", "/api/v1/nope-cors", nil, nil)
+	add("cors: preflight allowed", "OPTIONS", me, map[string]string{"Origin": "http://localhost:3000",
+		"Access-Control-Request-Method": "PATCH", "Access-Control-Request-Headers": "authorization, content-type"}, nil)
+	add("cors: preflight foreign", "OPTIONS", me, map[string]string{"Origin": "https://evil.example",
+		"Access-Control-Request-Method": "GET"}, nil)
+	add("cors: OPTIONS without request method", "OPTIONS", me, map[string]string{"Origin": "http://localhost:3000"}, nil)
 	// PATCH /orgs/me: decode before auth, validation after auth, role gate.
 	add("patch: anonymous bad json", "PATCH", me, json(nil), b64("{"))
 	add("patch: anonymous valid", "PATCH", me, json(nil), b64(`{"name":"x"}`))
@@ -217,6 +246,21 @@ func venueRequests(f venueFixture, tokens map[string]string) []venueoracle.Reque
 	add("ent: anonymous encoded slash", "GET", ent+"not-a%2Fuuid", nil, nil)
 	add("ent: member encoded slash", "GET", ent+"a%2fb", bearer("member"), nil)
 	add("ent: acr encoded slash", "GET", "/api/v1/internal/acr/entitlements/not-a%2Fuuid", nil, nil)
+	// Internal acr routes, with the credential Python requires.
+	acrAuth := map[string]string{"Authorization": "Bearer " + venueACRToken}
+	acrEnt := "/api/v1/internal/acr/entitlements/"
+	add("acr: health", "GET", "/api/v1/internal/acr/health", acrAuth, nil)
+	add("acr: team org", "GET", acrEnt+f.orgA.String(), acrAuth, nil)
+	add("acr: enterprise org", "GET", acrEnt+f.orgB.String(), acrAuth, nil)
+	add("acr: free org", "GET", acrEnt+f.orgFree.String(), acrAuth, nil)
+	add("acr: no license org", "GET", acrEnt+f.orgNoLicense.String(), acrAuth, nil)
+	add("acr: uppercase", "GET", acrEnt+upper(f.orgA.String()), acrAuth, nil)
+	add("acr: braces", "GET", acrEnt+"{"+f.orgA.String()+"}", acrAuth, nil)
+	add("acr: urn", "GET", acrEnt+"urn:uuid:"+f.orgA.String(), acrAuth, nil)
+	add("acr: no hyphens", "GET", acrEnt+strings.ReplaceAll(f.orgA.String(), "-", ""), acrAuth, nil)
+	add("acr: unknown org", "GET", acrEnt+"00000000-0000-4000-8000-000000000000", acrAuth, nil)
+	add("acr: not uuid", "GET", acrEnt+"nope", acrAuth, nil)
+	add("acr: POST", "POST", acrEnt+f.orgA.String(), acrAuth, nil)
 	add("ent: POST", "POST", ent+f.orgA.String(), bearer("member"), nil)
 	add("ent: HEAD", "HEAD", ent+f.orgA.String(), bearer("member"), nil)
 	// Telemetry settings and the instance report.
@@ -488,6 +532,137 @@ func venueRequests(f venueFixture, tokens map[string]string) []venueoracle.Reque
 	add("drift: dismiss all", "POST", dec("dismiss", "qa"), json(bearer("admin")), b64(`{"dismiss_all":true}`))
 	add("drift: pending after dismiss_all", "GET", pend, bearer("admin"), nil)
 	add("drift: approve_all with nothing pending", "POST", dec("approve", "qa"), json(bearer("admin")), b64(`{"approve_all":true}`))
+	// Member confirm routes (CHAOS-6313): pure ClickHouse, both planes.
+	cm := func(team string) string { return teams + "/" + team + "/confirm-members" }
+	ci := func(team string) string { return teams + "/" + team + "/confirm-inferred-members" }
+	adm := json(bearer("admin"))
+	add("members: confirm anonymous", "POST", cm("design"), json(nil), b64(`{"team_id":"design","links":[]}`))
+	add("members: confirm non-admin", "POST", cm("design"), json(bearer("member")), b64(`{"team_id":"design","links":[]}`))
+	add("members: confirm body not an object", "POST", cm("design"), adm, b64(`[1]`))
+	add("members: confirm empty object", "POST", cm("design"), adm, b64(`{}`))
+	add("members: confirm links not a list", "POST", cm("design"), adm, b64(`{"team_id":"design","links":"x"}`))
+	add("members: confirm link not an object", "POST", cm("design"), adm, b64(`{"team_id":"design","links":[1,"a"]}`))
+	add("members: confirm link fields missing", "POST", cm("design"), adm, b64(`{"team_id":"design","links":[{}]}`))
+	add("members: confirm link bad provider and action", "POST", cm("design"), adm,
+		b64(`{"team_id":"design","links":[{"provider_identity":"x","provider":"linear","canonical_id":"c","action":"merge"}]}`))
+	add("members: confirm link wrong types", "POST", cm("design"), adm,
+		b64(`{"team_id":5,"links":[{"provider_identity":1,"provider":null,"canonical_id":[],"action":true}]}`))
+	add("members: confirm team_id mismatch", "POST", cm("design"), adm, b64(`{"team_id":"qa","links":[]}`))
+	add("members: confirm unknown team", "POST", cm("nope"), adm, b64(`{"team_id":"nope","links":[]}`))
+	add("members: confirm link to missing identity", "POST", cm("design"), adm,
+		b64(`{"team_id":"design","links":[{"provider_identity":"x","provider":"github","canonical_id":"ghost","action":"link"}]}`))
+	add("members: confirm intra-batch conflict", "POST", cm("design"), adm,
+		b64(`{"team_id":"design","links":[{"provider_identity":"dup","provider":"gitlab","canonical_id":"one","action":"create"},{"provider_identity":"dup","provider":"gitlab","canonical_id":"two","action":"create"}]}`))
+	add("members: confirm all skipped", "POST", cm("design"), adm,
+		b64(`{"team_id":"design","links":[{"provider_identity":"x","provider":"github","canonical_id":"c","action":"skip"}]}`))
+	add("members: confirm empty list", "POST", cm("design"), adm, b64(`{"team_id":"design","links":[]}`))
+	add("members: confirm create new identity", "POST", cm("design"), adm,
+		b64(`{"team_id":"design","links":[{"provider_identity":"gina-gh","provider":"github","canonical_id":"gina","action":"create"}]}`))
+	add("members: confirm same link again is idempotent", "POST", cm("design"), adm,
+		b64(`{"team_id":"design","links":[{"provider_identity":"gina-gh","provider":"github","canonical_id":"gina","action":"create"}]}`))
+	add("members: confirm provider identity owned by another canonical", "POST", cm("design"), adm,
+		b64(`{"team_id":"design","links":[{"provider_identity":"gina-gh","provider":"github","canonical_id":"zed","action":"create"}]}`))
+	add("members: confirm link existing identity adds a provider and team", "POST", cm("qa"), adm,
+		b64(`{"team_id":"qa","links":[{"provider_identity":"alice-gl","provider":"gitlab","canonical_id":"alice","action":"link"},{"provider_identity":"h1","provider":"jira","canonical_id":"hank","action":"create"},{"provider_identity":"s","provider":"github","canonical_id":"skipme","action":"skip"}]}`))
+	add("members: confirm empty provider identity", "POST", cm("qa"), adm,
+		b64(`{"team_id":"qa","links":[{"provider_identity":"","provider":"jira","canonical_id":"ivy","action":"create"}]}`))
+	add("members: confirm failed batch writes nothing", "POST", cm("qa"), adm,
+		b64(`{"team_id":"qa","links":[{"provider_identity":"early","provider":"jira","canonical_id":"early-c","action":"create"},{"provider_identity":"gina-gh","provider":"github","canonical_id":"zed","action":"create"}]}`))
+	add("members: get design after confirm", "GET", teams+"/design", bearer("admin"), nil)
+	add("members: get qa after confirm", "GET", teams+"/qa", bearer("admin"), nil)
+	add("members: identities after confirm", "GET", identities, bearer("admin"), nil)
+
+	add("members: confirm-inferred anonymous", "POST", ci("design"), json(nil), b64(`{"team_id":"design"}`))
+	add("members: confirm-inferred non-admin", "POST", ci("design"), json(bearer("member")), b64(`{"team_id":"design"}`))
+	add("members: confirm-inferred body not an object", "POST", ci("design"), adm, b64(`"x"`))
+	add("members: confirm-inferred empty object", "POST", ci("design"), adm, b64(`{}`))
+	add("members: confirm-inferred members null", "POST", ci("design"), adm, b64(`{"team_id":"design","members":null}`))
+	add("members: confirm-inferred members not a list", "POST", ci("design"), adm, b64(`{"team_id":"design","members":{}}`))
+	add("members: confirm-inferred member fields missing", "POST", ci("design"), adm, b64(`{"team_id":"design","members":[{}]}`))
+	add("members: confirm-inferred bad action and types", "POST", ci("design"), adm,
+		b64(`{"team_id":"design","members":[{"account_id":1,"action":"merge","canonical_id":5,"display_name":[],"email":true}]}`))
+	add("members: confirm-inferred action null", "POST", ci("design"), adm, b64(`{"team_id":"design","members":[{"account_id":"a","action":null}]}`))
+	add("members: confirm-inferred team_id mismatch", "POST", ci("design"), adm, b64(`{"team_id":"qa"}`))
+	add("members: confirm-inferred unknown team", "POST", ci("nope"), adm, b64(`{"team_id":"nope"}`))
+	add("members: confirm-inferred default members", "POST", ci("design"), adm, b64(`{"team_id":"design"}`))
+	add("members: confirm-inferred explicit canonical missing", "POST", ci("design"), adm,
+		b64(`{"team_id":"design","members":[{"account_id":"a1","action":"add","canonical_id":"ghost"}]}`))
+	add("members: confirm-inferred account owned by another canonical", "POST", ci("design"), adm,
+		b64(`{"team_id":"design","members":[{"account_id":"h1","action":"add","canonical_id":"gina"}]}`))
+	add("members: confirm-inferred intra-batch conflict", "POST", ci("design"), adm,
+		b64(`{"team_id":"design","members":[{"account_id":"z1","action":"add"},{"account_id":"z1","action":"add","canonical_id":"gina"}]}`))
+	add("members: confirm-inferred add mints jira canonical", "POST", ci("design"), adm,
+		b64(`{"team_id":"design","members":[{"account_id":"acc-1","action":"add","display_name":"Acc One","email":"acc1@example.com"},{"account_id":"acc-2","action":"skip"},{"account_id":"","action":"add"}]}`))
+	add("members: confirm-inferred again is idempotent", "POST", ci("design"), adm,
+		b64(`{"team_id":"design","members":[{"account_id":"acc-1","action":"add","display_name":"Other","email":"other@example.com"}]}`))
+	add("members: confirm-inferred explicit canonical keeps stored email", "POST", ci("qa"), adm,
+		b64(`{"team_id":"qa","members":[{"account_id":"acc-3","action":"add","canonical_id":"alice","display_name":"Alice Inferred","email":"inferred@example.com"}]}`))
+	add("members: confirm-inferred empty canonical mints", "POST", ci("qa"), adm,
+		b64(`{"team_id":"qa","members":[{"account_id":"acc-4","action":"add","canonical_id":""}]}`))
+	add("members: get design after inferred", "GET", teams+"/design", bearer("admin"), nil)
+	add("members: get qa after inferred", "GET", teams+"/qa", bearer("admin"), nil)
+	add("members: identities after inferred", "GET", identities, bearer("admin"), nil)
+
+	// Member discovery and inference (CHAOS-6313): provider traffic goes to
+	// the shared stub (membersStub); credentials are seeded per name.
+	dm := func(team, query string) string { return teams + "/" + team + "/discover-members" + query }
+	im := func(team, query string) string { return teams + "/" + team + "/infer-members" + query }
+	for _, id := range []string{"leademail", "leadless", "naive", "empty", "gl:design", "jira:design", "IMP", "badactor", "objactor", "numactor"} {
+		add("members: create team "+id, "POST", teams, adm, b64(`{"team_id":"`+id+`","name":"`+id+`"}`))
+	}
+	add("members: discover anonymous", "GET", dm("design", "?provider=jira"), nil, nil)
+	add("members: discover non-admin", "GET", dm("design", "?provider=jira"), bearer("member"), nil)
+	add("members: discover no provider", "GET", dm("design", ""), bearer("admin"), nil)
+	add("members: discover bad provider", "GET", dm("design", "?provider=bitbucket"), bearer("admin"), nil)
+	add("members: discover empty provider", "GET", dm("design", "?provider="), bearer("admin"), nil)
+	add("members: discover repeated provider takes the last", "GET", dm("design", "?provider=jira&provider=bogus"), bearer("admin"), nil)
+	add("members: discover unknown team", "GET", dm("nope", "?provider=jira"), bearer("admin"), nil)
+	add("members: discover no linear credential", "GET", dm("design", "?provider=linear"), bearer("admin"), nil)
+	add("members: discover jira ambiguous credentials", "GET", dm("design", "?provider=jira"), bearer("admin"), nil)
+	add("members: discover jira unknown credential name", "GET", dm("design", "?provider=jira&credential_name=ghost"), bearer("admin"), nil)
+	add("members: discover jira unknown credential id", "GET", dm("design", "?provider=jira&credential_id=00000000-0000-0000-0000-000000000000"), bearer("admin"), nil)
+	add("members: discover jira malformed credential id", "GET", dm("design", "?provider=jira&credential_id=not-a-uuid"), bearer("admin"), nil)
+	add("members: discover jira credential without url", "GET", dm("design", "?provider=jira&credential_name=jira-no-url"), bearer("admin"), nil)
+	add("members: discover jira credential without email", "GET", dm("design", "?provider=jira&credential_name=jira-no-email"), bearer("admin"), nil)
+	add("members: discover jira lead matched by provider identity", "GET", dm("design", "?provider=jira&credential_name=jira-ok"), bearer("admin"), nil)
+	add("members: discover jira lead matched by name", "GET", dm("qa", "?provider=jira&credential_name=jira-ok"), bearer("admin"), nil)
+	add("members: discover jira lead matched by email", "GET", dm("dr-team", "?provider=jira&credential_name=jira-ok"), bearer("admin"), nil)
+	add("members: discover jira lead with only an email", "GET", dm("leademail", "?provider=jira&credential_name=jira-ok"), bearer("admin"), nil)
+	add("members: discover jira project without a lead", "GET", dm("leadless", "?provider=jira&credential_name=jira-ok"), bearer("admin"), nil)
+	add("members: discover jira unknown project is a provider failure", "GET", dm("IMP", "?provider=jira&credential_name=jira-ok"), bearer("admin"), nil)
+	add("members: discover jira prefixed team id uses the part after the colon", "GET", dm("jira:design", "?provider=jira&credential_name=jira-ok"), bearer("admin"), nil)
+	add("members: discover gitlab ambiguous credentials", "GET", dm("design", "?provider=gitlab"), bearer("admin"), nil)
+	add("members: discover gitlab credential without token", "GET", dm("design", "?provider=gitlab&credential_name=gl-no-token"), bearer("admin"), nil)
+	add("members: discover gitlab group members", "GET", dm("design", "?provider=gitlab&credential_name=gl-ok"), bearer("admin"), nil)
+	add("members: discover gitlab prefixed team id", "GET", dm("gl:design", "?provider=gitlab&credential_name=gl-ok"), bearer("admin"), nil)
+	add("members: discover gitlab empty group", "GET", dm("dr-team", "?provider=gitlab&credential_name=gl-ok"), bearer("admin"), nil)
+	add("members: discover gitlab unknown group is a provider failure", "GET", dm("qa", "?provider=gitlab&credential_name=gl-ok"), bearer("admin"), nil)
+	add("members: discover github ambiguous credentials", "GET", dm("design", "?provider=github"), bearer("admin"), nil)
+	add("members: discover github credential without org", "GET", dm("design", "?provider=github&credential_name=gh-no-org"), bearer("admin"), nil)
+	add("members: discover github app credential", "GET", dm("design", "?provider=github&credential_name=gh-app"), bearer("admin"), nil)
+
+	add("members: infer anonymous", "GET", im("design", ""), nil, nil)
+	add("members: infer non-admin", "GET", im("design", ""), bearer("member"), nil)
+	add("members: infer window_days zero", "GET", im("design", "?window_days=0"), bearer("admin"), nil)
+	add("members: infer window_days too large", "GET", im("design", "?window_days=366"), bearer("admin"), nil)
+	add("members: infer window_days not an int", "GET", im("design", "?window_days=abc"), bearer("admin"), nil)
+	add("members: infer window_days validated before the team", "GET", im("nope", "?window_days=0"), bearer("admin"), nil)
+	add("members: infer unknown team", "GET", im("nope", ""), bearer("admin"), nil)
+	add("members: infer team without a project key", "GET", im("gl:design", ""), bearer("admin"), nil)
+	add("members: infer ambiguous credentials", "GET", im("design", ""), bearer("admin"), nil)
+	add("members: infer credential without url", "GET", im("design", "?credential_name=jira-no-url"), bearer("admin"), nil)
+	add("members: infer credential without email", "GET", im("design", "?credential_name=jira-no-email"), bearer("admin"), nil)
+	add("members: infer paged issues", "GET", im("design", "?credential_name=jira-ok"), bearer("admin"), nil)
+	add("members: infer window_days 1", "GET", im("design", "?credential_name=jira-ok&window_days=1"), bearer("admin"), nil)
+	add("members: infer window_days 365", "GET", im("qa", "?credential_name=jira-ok&window_days=365"), bearer("admin"), nil)
+	add("members: infer window_days padded int", "GET", im("qa", "?credential_name=jira-ok&window_days=%2030%20"), bearer("admin"), nil)
+	add("members: infer naive and aware timestamps", "GET", im("naive", "?credential_name=jira-ok"), bearer("admin"), nil)
+	add("members: infer a list account id is unhashable", "GET", im("badactor", "?credential_name=jira-ok"), bearer("admin"), nil)
+	add("members: infer an object account id is unhashable", "GET", im("objactor", "?credential_name=jira-ok"), bearer("admin"), nil)
+	add("members: infer numeric and boolean account ids stay distinct keys", "GET", im("numactor", "?credential_name=jira-ok"), bearer("admin"), nil)
+	add("members: infer no issues", "GET", im("empty", "?credential_name=jira-ok"), bearer("admin"), nil)
+	add("members: infer unknown project is a provider failure", "GET", im("IMP", "?credential_name=jira-ok"), bearer("admin"), nil)
+
 	add("teams: PUT is not a route (Allow header of the pattern's first route)", "PUT", teams+"/eng", json(bearer("admin")), b64(`{}`))
 	add("teams import: POST to another team id with a malformed body is still a 405", "POST", teams+"/eng", json(bearer("admin")), b64(`{not json`))
 	add("teams import: POST to another team id is not a route", "POST", teams+"/eng", json(bearer("admin")), b64(`{}`))

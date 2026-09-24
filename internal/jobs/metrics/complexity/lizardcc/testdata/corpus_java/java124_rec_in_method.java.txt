@@ -1,0 +1,1 @@
+class C { void f() { int record = 1; if (record > 0) {} } }

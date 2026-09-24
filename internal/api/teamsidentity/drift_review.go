@@ -148,7 +148,7 @@ func (h handlers) pendingChanges(w http.ResponseWriter, r *http.Request) {
 	out := pyjson.NewObject()
 	out.Set("changes", changes)
 	out.Set("total", int64(len(rows)))
-	policy.WriteJSON(w, http.StatusOK, out, nil)
+	policy.WriteModel(w, http.StatusOK, out, nil)
 }
 
 func (h handlers) approveChanges(w http.ResponseWriter, r *http.Request) { h.decideChanges(w, r, true) }
@@ -208,7 +208,7 @@ func (h handlers) decideChanges(w http.ResponseWriter, r *http.Request, approve 
 	out := pyjson.NewObject()
 	out.Set(countKey, int64(len(rows)))
 	out.Set("change_ids", ids)
-	policy.WriteJSON(w, http.StatusOK, out, nil)
+	policy.WriteModel(w, http.StatusOK, out, nil)
 }
 
 // insertDecisionRows is _insert_status_rows: one status row per decided

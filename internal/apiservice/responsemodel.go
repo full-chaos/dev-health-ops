@@ -12,12 +12,15 @@ import (
 // and keeps the default response class, so FastAPI writes the body with
 // pydantic-core dump_json, not json.dumps. Keys are the Go route's
 // "METHOD pattern", plus the literal paths a wildcard route dispatches
-// itself (GET /teams/discover, POST /teams/import, POST
-// /ip-allowlist/check). Handlers write a true route's success bodies with
+// itself (GET /teams/discover, GET /teams/pending-changes, POST
+// /teams/import, POST /ip-allowlist/check). Handlers write a true route's success bodies with
 // policy.WriteModel and every other body with policy.WriteJSON.
 // TestVenueOracleRouteResponseModels pins this table against the live
 // FastAPI app.
 var responseModelRoutes = map[string]bool{
+	"GET /api/v1/admin/teams/pending-changes":                             true,
+	"POST /api/v1/admin/teams/{team_id}/approve-changes":                  true,
+	"POST /api/v1/admin/teams/{team_id}/dismiss-changes":                  true,
 	"DELETE /api/v1/admin/ip-allowlist/{entry_id}":                        true,
 	"DELETE /api/v1/admin/orgs/{org_id}":                                  true,
 	"DELETE /api/v1/admin/orgs/{org_id}/feature-overrides/{override_id}":  false,

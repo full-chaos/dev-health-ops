@@ -49,6 +49,7 @@ var goRoutesWithoutPython = map[string]string{
 	"POST /api/v1/admin/orgs/{org_id}/transfer-ownership": "Go serves the web's shape; the ruled intentional divergence",
 	"POST /api/v1/admin/teams/{team_id}":                  "dispatches POST /api/v1/admin/teams/import; any other id is 405",
 	"POST /api/v1/admin/ip-allowlist/{entry_id}":          "dispatches POST /api/v1/admin/ip-allowlist/check; any other id is 405",
+	"GET /buildinfo": "Go-only build stamp; the Python api has no such route",
 }
 
 var routeParameter = regexp.MustCompile(`\{[^}]+\}`)

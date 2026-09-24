@@ -48,7 +48,7 @@ func TestValidateBaseURL_AcceptsValid(t *testing.T) {
 		"https://unresolvable.example.test/v1",
 	} {
 		t.Run(url, func(t *testing.T) {
-			ok, reason := validateBaseURL(context.Background(), url, hermeticResolver)
+			ok, reason := validateBaseURLText(context.Background(), url, hermeticResolver)
 			if !ok {
 				t.Fatalf("expected accept, got reject: %q", reason)
 			}
@@ -83,7 +83,7 @@ func TestValidateBaseURL_RejectsUnsafe(t *testing.T) {
 		"https://my-gateway.example.com:65536/v1",
 	} {
 		t.Run(url, func(t *testing.T) {
-			ok, reason := validateBaseURL(context.Background(), url, hermeticResolver)
+			ok, reason := validateBaseURLText(context.Background(), url, hermeticResolver)
 			if ok {
 				t.Fatalf("expected reject, got accept")
 			}
@@ -112,7 +112,7 @@ func TestValidateBaseURL_RejectsOutOfRangePort(t *testing.T) {
 		{"https://my-gateway.example.com:99999/v1", false},
 	} {
 		t.Run(tc.url, func(t *testing.T) {
-			ok, reason := validateBaseURL(context.Background(), tc.url, hermeticResolver)
+			ok, reason := validateBaseURLText(context.Background(), tc.url, hermeticResolver)
 			if ok != tc.want {
 				t.Fatalf("validateBaseURL(%q) ok=%v reason=%q, want ok=%v", tc.url, ok, reason, tc.want)
 			}
@@ -128,4 +128,14 @@ func TestValidateBaseURL_PublicEntrypointUsesRealResolver(t *testing.T) {
 	if !ok || reason != "" {
 		t.Fatalf("expected accept with empty reason, got ok=%v reason=%q", ok, reason)
 	}
+}
+
+// validateBaseURLText is validateBaseURL with an escaped ValueError folded
+// into the refusal text, for the table tests that only read (ok, reason).
+func validateBaseURLText(ctx context.Context, url string, resolve resolver) (bool, string) {
+	ok, reason, err := validateBaseURL(ctx, url, resolve)
+	if err != nil {
+		return false, err.Error()
+	}
+	return ok, reason
 }

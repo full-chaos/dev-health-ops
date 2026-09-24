@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 )
@@ -144,5 +145,28 @@ func TestPythonProviderIdentitiesJSONMatchesJSONDumpsSpacing(t *testing.T) {
 				t.Errorf("pythonProviderIdentitiesJSON = %s, want %s", got, tc.want)
 			}
 		})
+	}
+}
+
+// TestNaiveDatetimeMatchesPydanticNaive pins the wire form of the naive
+// created_at/updated_at columns: pydantic-core's naive datetime, six
+// microsecond digits when non-zero (trailing zeros kept), no fraction when
+// zero, never a zone. The live venue (adminstampvenue) compares the same
+// rendering against the real Python api.
+func TestNaiveDatetimeMatchesPydanticNaive(t *testing.T) {
+	for _, tc := range []struct {
+		micro int
+		want  string
+	}{
+		{895620, "2026-09-21T11:37:05.895620"},
+		{895335, "2026-09-21T11:37:05.895335"},
+		{1, "2026-09-21T11:37:05.000001"},
+		{100000, "2026-09-21T11:37:05.100000"},
+		{0, "2026-09-21T11:37:05"},
+	} {
+		at := time.Date(2026, 9, 21, 11, 37, 5, tc.micro*1000, time.UTC)
+		if got := naiveDatetime(at); got != tc.want {
+			t.Errorf("micro %d: got %q want %q", tc.micro, got, tc.want)
+		}
 	}
 }

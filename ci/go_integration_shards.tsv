@@ -89,6 +89,7 @@ internal/api/policy	5
 internal/api/session	50
 internal/api/syncadmin	1
 internal/api/teamsidentity	65
+internal/api/teamsidentity/adminstampvenue	1
 internal/api/webhookintake	13
 internal/apiservice	37
 internal/apiservice/acr	6

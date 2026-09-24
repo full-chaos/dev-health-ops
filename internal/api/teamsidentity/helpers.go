@@ -8,6 +8,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
@@ -37,11 +38,12 @@ func queryBoolDefaultTrue(r *http.Request, name string) (bool, *pybody.Error) {
 	}
 }
 
-// pytimeRFC3339 renders a UTC time the way Pydantic/FastAPI's jsonable_encoder
-// serializes a datetime: ISO-8601 with a literal "Z" for UTC (matching
-// AwareDatetime's default JSON encoding for a tz-aware UTC value).
-func pytimeRFC3339(value time.Time) string {
-	return value.UTC().Format("2006-01-02T15:04:05.999999") + "Z"
+// naiveDatetime renders a NAIVE datetime column (ClickHouse DateTime64(6)
+// without a zone) the way pydantic-core serializes a naive Python datetime:
+// no zone, ".ffffff" only when the microseconds are non-zero. One shared
+// implementation (pytime.Pydantic) owns the wire form (R299).
+func naiveDatetime(value time.Time) string {
+	return pytime.Pydantic(pytime.DateTime{Time: value.UTC(), Aware: false})
 }
 
 func sortedKeysBool(m map[string]bool) []string {

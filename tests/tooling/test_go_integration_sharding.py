@@ -135,6 +135,9 @@ EXPECTED_PACKAGES = {
     # round trips and the identity POST route's 404/409/facet-reconciliation
     # logic, against a real server (testcontainers).
     "internal/api/teamsidentity",
+    # The admin teams/identities naive-timestamp venue differential (skips
+    # without the live Python env), in its own package for its own budget.
+    "internal/api/teamsidentity/adminstampvenue",
     # CHAOS-6247: GitHub/GitLab/Jira webhook intake against a real Postgres
     # (durable delivery row + job outbox publish), PagerDuty intake against
     # a real Postgres and a real Valkey (binding lookup, replay claim/

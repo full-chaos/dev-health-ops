@@ -15,6 +15,9 @@ type DB interface {
 	// AppliedVersions returns the versions recorded in schema_migrations,
 	// or an empty set when the table does not exist.
 	AppliedVersions(ctx context.Context) (map[string]bool, error)
+	// Objects lists the tables and views of the database, without a
+	// materialized view's .inner table.
+	Objects(ctx context.Context) ([]string, error)
 	// ObjectCreate returns an object's CREATE statement with the current
 	// database's name removed, and whether the object exists.
 	ObjectCreate(ctx context.Context, name string) (string, bool, error)
@@ -35,15 +38,16 @@ type Result struct {
 // Upgrade brings the database behind db to the head for contract, then
 // applies every chain file after the head.
 func Upgrade(ctx context.Context, db DB, baseline Baseline, chain []ChainFile) (Result, error) {
-	result := Result{Contract: baseline.Contract, Head: baseline.Versions[len(baseline.Versions)-1]}
-	applied, err := db.AppliedVersions(ctx)
+	result := Result{Contract: baseline.Contract, Head: HeadVersion(baseline)}
+	plan, err := readPlan(ctx, db, baseline, chain)
 	if err != nil {
-		return result, fmt.Errorf("read applied versions: %w", err)
+		return result, err
 	}
-	plan := Decide(applied, baseline, chain)
 	switch plan.State {
 	case StateBelowHead:
 		return result, BelowHeadError{Contract: baseline.Contract, Missing: plan.Missing}
+	case StateForeign:
+		return result, ForeignDatabaseError{Objects: plan.Foreign}
 	case StateEmpty:
 		created, seeded, err := applyBaseline(ctx, db, baseline)
 		result.Created, result.Seeded = created, seeded
@@ -64,6 +68,34 @@ func Upgrade(ctx context.Context, db DB, baseline Baseline, chain []ChainFile) (
 		result.Action = "chain_applied"
 	}
 	return result, nil
+}
+
+// HeadVersion is the last migration the baseline records. The Python runner
+// also records "__init__.py", which sorts after every numbered name, so it is
+// skipped.
+func HeadVersion(baseline Baseline) string {
+	head := ""
+	for _, version := range baseline.Versions {
+		if version != "__init__.py" && version > head {
+			head = version
+		}
+	}
+	return head
+}
+
+// readPlan reads the database's state and decides.
+func readPlan(ctx context.Context, db DB, baseline Baseline, chain []ChainFile) (Plan, error) {
+	applied, err := db.AppliedVersions(ctx)
+	if err != nil {
+		return Plan{}, fmt.Errorf("read applied versions: %w", err)
+	}
+	var objects []string
+	if len(applied) == 0 {
+		if objects, err = db.Objects(ctx); err != nil {
+			return Plan{}, fmt.Errorf("list objects: %w", err)
+		}
+	}
+	return Decide(applied, objects, baseline, chain), nil
 }
 
 // applyBaseline creates the head in an empty (or partly baselined) database.
@@ -191,19 +223,23 @@ type Status struct {
 	Head     string   `json:"head"`
 	Applied  int      `json:"applied"`
 	Missing  []string `json:"missing,omitempty"`
+	Foreign  []string `json:"foreign,omitempty"`
 	Pending  []string `json:"pending,omitempty"`
 }
 
 // ReadStatus reports where the database stands without changing it.
 func ReadStatus(ctx context.Context, db DB, baseline Baseline, chain []ChainFile) (Status, error) {
-	status := Status{Contract: baseline.Contract, Head: baseline.Versions[len(baseline.Versions)-1]}
+	status := Status{Contract: baseline.Contract, Head: HeadVersion(baseline)}
 	applied, err := db.AppliedVersions(ctx)
 	if err != nil {
 		return status, fmt.Errorf("read applied versions: %w", err)
 	}
 	status.Applied = len(applied)
-	plan := Decide(applied, baseline, chain)
-	status.Missing = plan.Missing
+	plan, err := readPlan(ctx, db, baseline, chain)
+	if err != nil {
+		return status, err
+	}
+	status.Missing, status.Foreign = plan.Missing, plan.Foreign
 	for _, file := range plan.Pending {
 		status.Pending = append(status.Pending, file.Version)
 	}
@@ -212,6 +248,8 @@ func ReadStatus(ctx context.Context, db DB, baseline Baseline, chain []ChainFile
 		status.State = "empty"
 	case StateBelowHead:
 		status.State = "below_head"
+	case StateForeign:
+		status.State = "foreign"
 	default:
 		status.State = "at_head"
 	}

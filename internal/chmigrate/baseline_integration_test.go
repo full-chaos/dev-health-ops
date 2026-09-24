@@ -27,24 +27,31 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 )
 
-// updateEnv, set to 1, rewrites baseline/contract<N>.json from the executed
-// chain instead of comparing against it. Only a person regenerating the head
-// sets it; CI never does, so there the capture is a drift check.
+// updateEnv, set to 1, rewrites baseline/head.json from the executed chain
+// instead of comparing against it. Only a person regenerating the head sets
+// it; CI never does, so there the capture is a drift check.
 const updateEnv = "DHO_CH_BASELINE_UPDATE"
 
+// productionContract is the ordering contract the head is captured with:
+// the one production runs (read from prod, 2026-09-24).
+const productionContract = 2
+
 // TestBaselineIsTheExecutedPythonChain is the head's provenance and the
-// differential oracle, for each ordering contract:
+// differential oracle:
 //
-//  1. capture: run the REAL Python chain on a fresh database and read back
-//     every table and view, the seeded rows and the recorded versions. The
-//     checked-in baseline must equal that capture (drift check, by
-//     execution: nothing here reads a digest).
-//  2. oracle: `chmigrate.Upgrade` on a second fresh database must produce
-//     exactly what the Python chain produced -- same CREATE statements, same
-//     seeded rows, same versions.
+//  1. capture: run the REAL Python chain, with production's contract, on a
+//     fresh database and read back every table and view, the seeded rows and
+//     the recorded versions.
+//  2. oracle and drift check: `chmigrate.Upgrade` -- the baseline plus every
+//     chain file after it -- on a second fresh database must produce exactly
+//     what the Python chain produced: the same CREATE statements, seeded rows
+//     and versions. With no chain file after the head that also means the
+//     checked-in baseline equals the capture. This is by execution; nothing
+//     here reads a digest.
 //  3. a second Upgrade applies nothing; a database missing one baseline
-//     version is refused as below the head; a contract-1 head read under
-//     contract 2 is below the head by migration 067.
+//     version is refused as below the head; an interrupted baseline resumes;
+//     an unversioned database holding an unrelated table is refused as
+//     foreign; status reads every one of these states without writing.
 func TestBaselineIsTheExecutedPythonChain(t *testing.T) {
 	ctx := context.Background()
 	instance, err := containers.StartClickHouse(ctx)
@@ -61,106 +68,161 @@ func TestBaselineIsTheExecutedPythonChain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Setenv(chmigrate.OrderingContractEnv, fmt.Sprint(productionContract))
 
-	var contractOneHead string
-	for _, contract := range []int{1, 2} {
-		t.Run(fmt.Sprintf("contract%d", contract), func(t *testing.T) {
-			t.Setenv(chmigrate.OrderingContractEnv, fmt.Sprint(contract))
+	pythonDB := scratchDatabase(t, admin)
+	chschema.ApplyChain(ctx, t, httpDSN(t, ctx, instance, pythonDB))
+	captured := capture(t, ctx, openDatabase(t, instance.URI, pythonDB), pythonDB, productionContract)
 
-			pythonDB := scratchDatabase(t, admin)
-			chschema.ApplyChain(ctx, t, httpDSN(t, ctx, instance, pythonDB))
-			captured := capture(t, ctx, openDatabase(t, instance.URI, pythonDB), pythonDB, contract)
-			if captured.Contract != contract {
-				t.Fatalf("captured contract %d, want %d", captured.Contract, contract)
-			}
-
-			updating := os.Getenv(updateEnv) == "1"
-			checkedIn := captured
-			if updating {
-				writeBaseline(t, captured)
-			} else if checkedIn, err = chmigrate.LoadBaseline(contract); err != nil {
-				t.Fatal(err)
-			}
-			if diff := compare(captured, checkedIn); diff != "" {
-				t.Fatalf("baseline/contract%d.json is not what the Python chain builds today (%s); "+
-					"regenerate it with %s=1 go test -tags=integration -run TestBaselineIsTheExecutedPythonChain ./internal/chmigrate",
-					contract, diff, updateEnv)
-			}
-
-			goDB := scratchDatabase(t, admin)
-			goConn := openDatabase(t, instance.URI, goDB)
-			db, database, err := chmigrate.NewConnDB(ctx, goConn)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if database != goDB {
-				t.Fatalf("connection migrates %q, want %q", database, goDB)
-			}
-			result, err := chmigrate.Upgrade(ctx, db, checkedIn, chain)
-			if err != nil {
-				t.Fatalf("upgrade a fresh database: %v", err)
-			}
-			if result.Action != "baseline_applied" || len(result.Created) != len(checkedIn.Objects) {
-				t.Fatalf("fresh upgrade = %+v, want baseline_applied creating %d objects", result, len(checkedIn.Objects))
-			}
-			if diff := compare(capture(t, ctx, goConn, goDB, contract), captured); diff != "" {
-				t.Fatalf("dho migrate clickhouse built a different database than the Python chain: %s", diff)
-			}
-
-			again, err := chmigrate.Upgrade(ctx, db, checkedIn, chain)
-			if err != nil {
-				t.Fatalf("re-run: %v", err)
-			}
-			if again.Action != "up_to_date" || len(again.Created) != 0 || len(again.Seeded) != 0 || len(again.Applied) != 0 {
-				t.Fatalf("re-run changed the database: %+v", again)
-			}
-
-			if contract == 1 {
-				contractOneHead = goDB
-			}
-			if contract == 1 && !updating {
-				contractTwo, err := chmigrate.LoadBaseline(2)
-				if err != nil {
-					t.Fatal(err)
-				}
-				_, err = chmigrate.Upgrade(ctx, db, contractTwo, chain)
-				var below chmigrate.BelowHeadError
-				if !errors.As(err, &below) || !reflect.DeepEqual(below.Missing, []string{"067_operational_ordering_contract.py"}) {
-					t.Fatalf("a contract-1 head upgraded under contract 2 = %v, want below the head by 067 only", err)
-				}
-			}
-
-			dropped := checkedIn.Versions[len(checkedIn.Versions)/2]
-			if err := goConn.Exec(ctx, "ALTER TABLE schema_migrations DELETE WHERE version = ? SETTINGS mutations_sync = 2", dropped); err != nil {
-				t.Fatal(err)
-			}
-			_, err = chmigrate.Upgrade(ctx, db, checkedIn, chain)
-			var below chmigrate.BelowHeadError
-			if !errors.As(err, &below) || !reflect.DeepEqual(below.Missing, []string{dropped}) {
-				t.Fatalf("upgrade with %s unrecorded = %v, want below the head naming it", dropped, err)
-			}
-
-			// An interrupted baseline leaves every object but no version. The
-			// resume must read each object back from the real server, find it
-			// identical to the baseline, create nothing and record the versions.
-			if err := goConn.Exec(ctx, "TRUNCATE TABLE schema_migrations"); err != nil {
-				t.Fatal(err)
-			}
-			resumed, err := chmigrate.Upgrade(ctx, db, checkedIn, chain)
-			if err != nil {
-				t.Fatalf("resume over a complete baseline: %v", err)
-			}
-			if resumed.Action != "baseline_applied" || len(resumed.Created) != 0 || len(resumed.Seeded) != 0 {
-				t.Fatalf("resume = %+v, want the baseline recorded with nothing created", resumed)
-			}
-			if diff := compare(capture(t, ctx, goConn, goDB, contract), captured); diff != "" {
-				t.Fatalf("the resumed database differs from the Python chain's: %s", diff)
-			}
-		})
+	var checkedIn chmigrate.Baseline
+	if os.Getenv(updateEnv) == "1" {
+		if len(chain) != 0 {
+			t.Fatalf("the baseline is the head before the chain; regenerate it only while internal/chmigrate/sql holds no migration (it holds %d)", len(chain))
+		}
+		writeBaseline(t, captured)
+		checkedIn = captured
+	} else if checkedIn, err = chmigrate.LoadBaseline(); err != nil {
+		t.Fatal(err)
 	}
-	if contractOneHead == "" {
-		t.Fatal("the contract-1 case did not run")
+	if len(chain) == 0 {
+		if diff := compare(captured, checkedIn); diff != "" {
+			t.Fatalf("baseline/head.json is not what the Python chain builds today (%s); "+
+				"regenerate it with %s=1 go test -tags=integration -run TestBaselineIsTheExecutedPythonChain ./internal/chmigrate",
+				diff, updateEnv)
+		}
 	}
+
+	goDB := scratchDatabase(t, admin)
+	goConn := openDatabase(t, instance.URI, goDB)
+	db, database, err := chmigrate.NewConnDB(ctx, goConn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if database != goDB {
+		t.Fatalf("connection migrates %q, want %q", database, goDB)
+	}
+	requireStatus(t, ctx, goConn, goDB, db, checkedIn, chain, "empty")
+	result, err := chmigrate.Upgrade(ctx, db, checkedIn, chain)
+	if err != nil {
+		t.Fatalf("upgrade a fresh database: %v", err)
+	}
+	if result.Action != "baseline_applied" || len(result.Created) != len(checkedIn.Objects) || len(result.Applied) != len(chain) {
+		t.Fatalf("fresh upgrade = %+v, want baseline_applied creating %d objects and applying %d chain files", result, len(checkedIn.Objects), len(chain))
+	}
+	if diff := compare(capture(t, ctx, goConn, goDB, productionContract), captured); diff != "" {
+		t.Fatalf("dho migrate clickhouse built a different database than the Python chain: %s", diff)
+	}
+	requireStatus(t, ctx, goConn, goDB, db, checkedIn, chain, "at_head")
+
+	again, err := chmigrate.Upgrade(ctx, db, checkedIn, chain)
+	if err != nil {
+		t.Fatalf("re-run: %v", err)
+	}
+	if again.Action != "up_to_date" || len(again.Created) != 0 || len(again.Seeded) != 0 || len(again.Applied) != 0 {
+		t.Fatalf("re-run changed the database: %+v", again)
+	}
+
+	dropped := checkedIn.Versions[len(checkedIn.Versions)/2]
+	if err := goConn.Exec(ctx, "ALTER TABLE schema_migrations DELETE WHERE version = ? SETTINGS mutations_sync = 2", dropped); err != nil {
+		t.Fatal(err)
+	}
+	requireStatus(t, ctx, goConn, goDB, db, checkedIn, chain, "below_head")
+	_, err = chmigrate.Upgrade(ctx, db, checkedIn, chain)
+	var below chmigrate.BelowHeadError
+	if !errors.As(err, &below) || !reflect.DeepEqual(below.Missing, []string{dropped}) {
+		t.Fatalf("upgrade with %s unrecorded = %v, want below the head naming it", dropped, err)
+	}
+
+	// An interrupted baseline leaves every baseline object but no version
+	// (the chain runs only after the versions are recorded, so none of its
+	// objects exist yet). The resume must read each object back from the real
+	// server, find it identical to the baseline, create nothing and record
+	// the versions.
+	resumeDB := scratchDatabase(t, admin)
+	resumeConn := openDatabase(t, instance.URI, resumeDB)
+	resumeStore, _, err := chmigrate.NewConnDB(ctx, resumeConn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := chmigrate.Upgrade(ctx, resumeStore, checkedIn, nil); err != nil {
+		t.Fatalf("apply the baseline alone: %v", err)
+	}
+	if err := resumeConn.Exec(ctx, "TRUNCATE TABLE schema_migrations"); err != nil {
+		t.Fatal(err)
+	}
+	resumed, err := chmigrate.Upgrade(ctx, resumeStore, checkedIn, nil)
+	if err != nil {
+		t.Fatalf("resume over a complete baseline: %v", err)
+	}
+	if resumed.Action != "baseline_applied" || len(resumed.Created) != 0 || len(resumed.Seeded) != 0 {
+		t.Fatalf("resume = %+v, want the baseline recorded with nothing created", resumed)
+	}
+	if diff := compare(capture(t, ctx, resumeConn, resumeDB, productionContract), checkedIn); diff != "" {
+		t.Fatalf("the resumed database differs from the baseline: %s", diff)
+	}
+
+	// An unversioned database holding a table the baseline does not create
+	// is not dho's to migrate.
+	foreignDB := scratchDatabase(t, admin)
+	foreignConn := openDatabase(t, instance.URI, foreignDB)
+	if err := foreignConn.Exec(ctx, "CREATE TABLE unrelated_sentinel (x Int8) ENGINE = Memory"); err != nil {
+		t.Fatal(err)
+	}
+	foreignStore, _, err := chmigrate.NewConnDB(ctx, foreignConn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireStatus(t, ctx, foreignConn, foreignDB, foreignStore, checkedIn, chain, "foreign")
+	_, err = chmigrate.Upgrade(ctx, foreignStore, checkedIn, chain)
+	var foreign chmigrate.ForeignDatabaseError
+	if !errors.As(err, &foreign) || !reflect.DeepEqual(foreign.Objects, []string{"unrelated_sentinel"}) {
+		t.Fatalf("upgrade over an unrelated table = %v, want a foreign-database refusal naming it", err)
+	}
+	if count := objectCount(t, ctx, foreignConn, foreignDB); count != 1 {
+		t.Fatalf("a refused upgrade left %d objects, want the 1 it found", count)
+	}
+}
+
+// requireStatus reads the status of the database and requires the state,
+// and that reading it changed neither its objects nor its versions.
+func requireStatus(t *testing.T, ctx context.Context, conn driver.Conn, database string, db chmigrate.DB, baseline chmigrate.Baseline, chain []chmigrate.ChainFile, want string) {
+	t.Helper()
+	objectsBefore, versionsBefore := objectCount(t, ctx, conn, database), versionCount(t, ctx, conn, database)
+	status, err := chmigrate.ReadStatus(ctx, db, baseline, chain)
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	if status.State != want {
+		t.Fatalf("status = %+v, want state %s", status, want)
+	}
+	if objects, versions := objectCount(t, ctx, conn, database), versionCount(t, ctx, conn, database); objects != objectsBefore || versions != versionsBefore {
+		t.Fatalf("status changed the database: objects %d -> %d, versions %d -> %d", objectsBefore, objects, versionsBefore, versions)
+	}
+}
+
+func objectCount(t *testing.T, ctx context.Context, conn driver.Conn, database string) uint64 {
+	t.Helper()
+	var count uint64
+	if err := conn.QueryRow(ctx, "SELECT count() FROM system.tables WHERE database = ?", database).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	return count
+}
+
+func versionCount(t *testing.T, ctx context.Context, conn driver.Conn, database string) uint64 {
+	t.Helper()
+	var exists uint64
+	if err := conn.QueryRow(ctx, "SELECT count() FROM system.tables WHERE database = ? AND name = 'schema_migrations'", database).Scan(&exists); err != nil {
+		t.Fatal(err)
+	}
+	if exists == 0 {
+		return 0
+	}
+	var count uint64
+	if err := conn.QueryRow(ctx, "SELECT count() FROM `"+database+"`.schema_migrations").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	return count
 }
 
 func scratchDatabase(t *testing.T, admin driver.Conn) string {
@@ -368,7 +430,7 @@ func writeBaseline(t *testing.T, baseline chmigrate.Baseline) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join("baseline", fmt.Sprintf("contract%d.json", baseline.Contract))
+	path := filepath.Join("baseline", "head.json")
 	if err := os.WriteFile(path, append(data, '\n'), 0o644); err != nil {
 		t.Fatal(err)
 	}

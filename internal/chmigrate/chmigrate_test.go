@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"sort"
 	"strings"
 	"testing"
 
@@ -17,7 +18,7 @@ import (
 
 func testBaseline() Baseline {
 	return Baseline{
-		Contract: 1,
+		Contract: 2,
 		Versions: []string{"000_a.sql", "001_b.py"},
 		Objects: []Object{
 			{Name: "schema_migrations", Engine: "MergeTree", Create: "CREATE TABLE schema_migrations (version String) ENGINE = MergeTree ORDER BY version"},
@@ -34,22 +35,22 @@ func TestDecide(t *testing.T) {
 	chain := []ChainFile{{Version: "002_c.sql"}, {Version: "003_d.sql"}}
 	for name, testCase := range map[string]struct {
 		applied map[string]bool
+		objects []string
 		want    Plan
 	}{
-		"empty":          {map[string]bool{}, Plan{State: StateEmpty, Pending: chain}},
-		"below the head": {map[string]bool{"000_a.sql": true}, Plan{State: StateBelowHead, Missing: []string{"001_b.py"}}},
-		"at the head":    {map[string]bool{"000_a.sql": true, "001_b.py": true}, Plan{State: StateAtHead, Pending: chain}},
-		"part of the chain applied": {
-			map[string]bool{"000_a.sql": true, "001_b.py": true, "002_c.sql": true},
-			Plan{State: StateAtHead, Pending: chain[1:]},
-		},
+		"empty":                     {map[string]bool{}, nil, Plan{State: StateEmpty, Pending: chain}},
+		"a baseline half applied":   {map[string]bool{}, []string{"schema_migrations", "t"}, Plan{State: StateEmpty, Pending: chain}},
+		"a foreign object":          {map[string]bool{}, []string{"t", "unrelated"}, Plan{State: StateForeign, Foreign: []string{"unrelated"}}},
+		"below the head":            {map[string]bool{"000_a.sql": true}, nil, Plan{State: StateBelowHead, Missing: []string{"001_b.py"}}},
+		"at the head":               {map[string]bool{"000_a.sql": true, "001_b.py": true}, nil, Plan{State: StateAtHead, Pending: chain}},
+		"part of the chain applied": {map[string]bool{"000_a.sql": true, "001_b.py": true, "002_c.sql": true}, nil, Plan{State: StateAtHead, Pending: chain[1:]}},
 		"an unknown extra version": {
-			map[string]bool{"000_a.sql": true, "001_b.py": true, "067_x.py": true, "002_c.sql": true, "003_d.sql": true},
+			map[string]bool{"000_a.sql": true, "001_b.py": true, "067_x.py": true, "002_c.sql": true, "003_d.sql": true}, nil,
 			Plan{State: StateAtHead},
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if got := Decide(testCase.applied, baseline, chain); !reflect.DeepEqual(got, testCase.want) {
+			if got := Decide(testCase.applied, testCase.objects, baseline, chain); !reflect.DeepEqual(got, testCase.want) {
 				t.Fatalf("Decide = %+v, want %+v", got, testCase.want)
 			}
 		})
@@ -95,6 +96,15 @@ func (f *fakeDB) AppliedVersions(context.Context) (map[string]bool, error) {
 		out[version] = true
 	}
 	return out, nil
+}
+
+func (f *fakeDB) Objects(context.Context) ([]string, error) {
+	names := make([]string, 0, len(f.objects))
+	for name := range f.objects {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names, nil
 }
 
 func (f *fakeDB) ObjectCreate(_ context.Context, name string) (string, bool, error) {
@@ -171,6 +181,23 @@ func TestUpgradeRefusesAnObjectItDidNotCreate(t *testing.T) {
 	}
 }
 
+func TestUpgradeRefusesAForeignDatabase(t *testing.T) {
+	db := newFakeDB()
+	db.objects["unrelated_sentinel"] = "CREATE TABLE unrelated_sentinel (x Int8) ENGINE = Memory"
+	_, err := Upgrade(context.Background(), db, testBaseline(), nil)
+	var foreign ForeignDatabaseError
+	if !errors.As(err, &foreign) || !reflect.DeepEqual(foreign.Objects, []string{"unrelated_sentinel"}) {
+		t.Fatalf("upgrade over an unrelated table = %v, want a foreign-database refusal naming it", err)
+	}
+	if len(db.executed) != 0 {
+		t.Fatalf("a refused upgrade executed %q", db.executed)
+	}
+	status, err := ReadStatus(context.Background(), db, testBaseline(), nil)
+	if err != nil || status.State != "foreign" || !reflect.DeepEqual(status.Foreign, []string{"unrelated_sentinel"}) {
+		t.Fatalf("status = %+v, %v; want foreign naming the table", status, err)
+	}
+}
+
 func TestUpgradeRefusesADatabaseBelowTheHead(t *testing.T) {
 	db := newFakeDB()
 	db.versions["000_a.sql"] = true
@@ -179,7 +206,7 @@ func TestUpgradeRefusesADatabaseBelowTheHead(t *testing.T) {
 	if !errors.As(err, &below) || !reflect.DeepEqual(below.Missing, []string{"001_b.py"}) {
 		t.Fatalf("upgrade below the head = %v", err)
 	}
-	for _, want := range []string{"below the head for ordering contract 1", "001_b.py", "OPERATIONAL_ORDERING_CONTRACT=1"} {
+	for _, want := range []string{"below the head (ordering contract 2)", "001_b.py", "OPERATIONAL_ORDERING_CONTRACT=2"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("refusal %q does not name %q", err, want)
 		}
@@ -220,36 +247,48 @@ func TestParseContract(t *testing.T) {
 	}
 }
 
-// The checked-in heads load, and contract 2 is contract 1 plus migration 067,
-// the one migration the contract changes.
-func TestBaselinesLoad(t *testing.T) {
-	one, err := LoadBaseline(1)
+// The head loads with production's contract, and records migration 067,
+// which only contract 2 applies.
+func TestBaselineLoads(t *testing.T) {
+	baseline, err := LoadBaseline()
 	if err != nil {
 		t.Fatal(err)
 	}
-	two, err := LoadBaseline(2)
+	recorded := map[string]bool{}
+	for _, version := range baseline.Versions {
+		recorded[version] = true
+	}
+	if baseline.Contract != 2 || !recorded["067_operational_ordering_contract.py"] {
+		t.Fatalf("baseline contract %d, 067 recorded %v; want production's contract 2 with 067", baseline.Contract, recorded["067_operational_ordering_contract.py"])
+	}
+	for _, object := range baseline.Objects {
+		if strings.Contains(object.Create, "dho_ch_baseline_") {
+			t.Fatalf("object %s still names its capture database", object.Name)
+		}
+	}
+}
+
+func TestHeadVersionSkipsTheInitFile(t *testing.T) {
+	baseline, err := LoadBaseline()
 	if err != nil {
 		t.Fatal(err)
 	}
-	extra := map[string]bool{}
-	for _, version := range two.Versions {
-		extra[version] = true
+	if head := HeadVersion(baseline); head == "__init__.py" || !strings.HasSuffix(head, ".sql") && !strings.HasSuffix(head, ".py") || head[0] < '0' || head[0] > '9' {
+		t.Fatalf("HeadVersion = %q, want the last numbered migration", head)
 	}
-	for _, version := range one.Versions {
-		if !extra[version] {
-			t.Fatalf("contract 1 records %s, contract 2 does not", version)
-		}
-		delete(extra, version)
+	if got := HeadVersion(Baseline{Versions: []string{"000_a.sql", "098_b.sql", "__init__.py"}}); got != "098_b.sql" {
+		t.Fatalf("HeadVersion = %q, want 098_b.sql", got)
 	}
-	if !reflect.DeepEqual(extra, map[string]bool{"067_operational_ordering_contract.py": true}) {
-		t.Fatalf("contract 2 adds %v, want only 067", extra)
+}
+
+func TestCheckContract(t *testing.T) {
+	baseline := Baseline{Contract: 2}
+	if err := CheckContract(2, baseline); err != nil {
+		t.Fatalf("refused production's contract: %v", err)
 	}
-	for _, baseline := range []Baseline{one, two} {
-		for _, object := range baseline.Objects {
-			if strings.Contains(object.Create, "dho_ch_baseline_") {
-				t.Fatalf("contract %d object %s still names its capture database", baseline.Contract, object.Name)
-			}
-		}
+	err := CheckContract(1, baseline)
+	if err == nil || !strings.Contains(err.Error(), "operational ordering contract 2 expected, OPERATIONAL_ORDERING_CONTRACT=1 found") {
+		t.Fatalf("CheckContract(1) = %v, want the mismatch named", err)
 	}
 }
 
@@ -265,15 +304,13 @@ func TestChainAfterHeadMatchesThePythonChain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	baseline, err := LoadBaseline()
+	if err != nil {
+		t.Fatal(err)
+	}
 	head := map[string]bool{}
-	for _, contract := range []int{1, 2} {
-		baseline, err := LoadBaseline(contract)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, version := range baseline.Versions {
-			head[version] = true
-		}
+	for _, version := range baseline.Versions {
+		head[version] = true
 	}
 	chain, err := LoadChain()
 	if err != nil {
@@ -289,8 +326,8 @@ func TestChainAfterHeadMatchesThePythonChain(t *testing.T) {
 		if entry.IsDir() || name == "__init__.py" || (!strings.HasSuffix(name, ".sql") && !strings.HasSuffix(name, ".py")) {
 			continue
 		}
-		seen++
 		if head[name] {
+			seen++
 			continue
 		}
 		if !strings.HasSuffix(name, ".sql") {
@@ -310,9 +347,10 @@ func TestChainAfterHeadMatchesThePythonChain(t *testing.T) {
 		t.Errorf("internal/chmigrate/sql/%s is not in the Python chain", name)
 	}
 	// The Python runner globs *.py, so it records __init__.py as a version;
-	// every other head version is a file of the chain.
+	// every other head version must be a file of the chain. Files after the
+	// head are checked above and do not count here.
 	if !head["__init__.py"] || seen != len(head)-1 {
-		t.Fatalf("read %d migrations from %s for %d head versions (with __init__.py: %v): the walk is broken", seen, pythonDir, len(head), head["__init__.py"])
+		t.Fatalf("found %d of the %d head versions as files in %s (with __init__.py: %v): the walk is broken", seen, len(head)-1, pythonDir, head["__init__.py"])
 	}
 }
 
@@ -334,7 +372,9 @@ func TestCommandRefusesBeforeConnecting(t *testing.T) {
 	}{
 		"a positional argument": {[]string{"extra"}, nil, cli.ExitUsage, "positional arguments"},
 		"a bad contract":        {nil, map[string]string{OrderingContractEnv: "3"}, cli.ExitFailure, `"code":"configuration_error"`},
-		"no DSN":                {nil, nil, cli.ExitFailure, "CLICKHOUSE_URI is required"},
+		"another contract":      {nil, map[string]string{OrderingContractEnv: "1"}, cli.ExitFailure, `"code":"settings_mismatch"`},
+		"an unset contract":     {nil, nil, cli.ExitFailure, "contract 2 expected, OPERATIONAL_ORDERING_CONTRACT=1 found"},
+		"no DSN":                {nil, map[string]string{OrderingContractEnv: "2"}, cli.ExitFailure, "CLICKHOUSE_URI is required"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer

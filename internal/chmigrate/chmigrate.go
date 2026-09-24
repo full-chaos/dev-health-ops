@@ -6,15 +6,20 @@
 // Python migrations that rebuild tables and move rows, and only a database
 // below the head needs them. So the head is a BASELINE: the end state of a
 // fresh database after the real Python chain has run, captured by executing
-// that chain (baseline_capture_integration_test.go) and checked in as
-// baseline/contract<N>.json -- every table and view with its CREATE statement,
-// the rows the chain seeds, and the schema_migrations versions it records.
-// There is one baseline per operational ordering contract, because migration
-// 067 builds a different table shape (and records itself) only under
-// contract 2.
+// that chain (baseline_integration_test.go) and checked in as
+// baseline/head.json -- every table and view with its CREATE statement, the
+// rows the chain seeds, and the schema_migrations versions it records.
+//
+// The chain's end state depends on OPERATIONAL_ORDERING_CONTRACT: migration
+// 067 builds a different table shape, and records itself, only under contract
+// 2. The baseline is the combination production runs (read from prod,
+// 2026-09-24): contract 2. Any other environment runs contract 2 too or is
+// re-created from the baseline; dho refuses another contract, naming it,
+// before it touches a database.
 //
 // Upgrade decides from the database's own state:
-//   - no applied versions: apply the baseline for the configured contract.
+//   - no applied versions and no object the baseline does not create: apply
+//     the baseline.
 //     Each object is created only if absent (an existing object must match
 //     the baseline exactly), seed rows go only into empty tables, and the
 //     versions are recorded last, so an interrupted run resumes;
@@ -22,7 +27,9 @@
 //     (sql/), each recorded only after all its statements succeed;
 //   - some versions applied but not all baseline versions: the database is
 //     below the head and is refused, naming what is missing. It needs the
-//     Python chain, which stays until the Python CLI is deleted.
+//     Python chain, which stays until the Python CLI is deleted;
+//   - no applied versions but an object the baseline does not create: a
+//     database this migrator did not create, refused.
 package chmigrate
 
 import (
@@ -39,13 +46,13 @@ import (
 // Python runner creates; the baseline carries its CREATE statement.
 const SchemaMigrationsTable = "schema_migrations"
 
-// OrderingContractEnv selects the baseline, as it selects migration 067's
-// behaviour in the Python chain: unset or "1" is the legacy contract, "2" the
-// current one, anything else a configuration error.
+// OrderingContractEnv selects migration 067's behaviour in the Python chain:
+// unset or "1" is the legacy contract, "2" the current one, anything else a
+// configuration error. The baseline is contract 2.
 const OrderingContractEnv = "OPERATIONAL_ORDERING_CONTRACT"
 
-//go:embed baseline/*.json
-var baselineFiles embed.FS
+//go:embed baseline/head.json
+var baselineFile []byte
 
 //go:embed sql
 var chainFiles embed.FS
@@ -89,21 +96,35 @@ func ParseContract(raw string, present bool) (int, error) {
 	return 0, fmt.Errorf("%s must be 1 or 2, got %q", OrderingContractEnv, raw)
 }
 
-// LoadBaseline returns the checked-in head for contract.
-func LoadBaseline(contract int) (Baseline, error) {
-	data, err := baselineFiles.ReadFile(fmt.Sprintf("baseline/contract%d.json", contract))
-	if err != nil {
-		return Baseline{}, fmt.Errorf("no baseline for ordering contract %d: %w", contract, err)
-	}
+// LoadBaseline returns the checked-in head.
+func LoadBaseline() (Baseline, error) {
 	var baseline Baseline
-	if err := json.Unmarshal(data, &baseline); err != nil {
-		return Baseline{}, fmt.Errorf("decode baseline for ordering contract %d: %w", contract, err)
+	if err := json.Unmarshal(baselineFile, &baseline); err != nil {
+		return Baseline{}, fmt.Errorf("decode the baseline: %w", err)
 	}
-	if baseline.Contract != contract || len(baseline.Versions) == 0 || len(baseline.Objects) == 0 {
-		return Baseline{}, fmt.Errorf("baseline for ordering contract %d is malformed (contract %d, %d versions, %d objects)",
-			contract, baseline.Contract, len(baseline.Versions), len(baseline.Objects))
+	if baseline.Contract == 0 || len(baseline.Versions) == 0 || len(baseline.Objects) == 0 {
+		return Baseline{}, fmt.Errorf("the baseline is malformed (contract %d, %d versions, %d objects)",
+			baseline.Contract, len(baseline.Versions), len(baseline.Objects))
 	}
 	return baseline, nil
+}
+
+// ContractMismatchError is the refusal for an environment whose ordering
+// contract differs from the baseline's.
+type ContractMismatchError struct{ Expected, Found int }
+
+func (e ContractMismatchError) Error() string {
+	return fmt.Sprintf("the environment does not match the ClickHouse head baseline (production's settings): "+
+		"operational ordering contract %d expected, %s=%d found. Run with production's settings, or re-create this database from the baseline",
+		e.Expected, OrderingContractEnv, e.Found)
+}
+
+// CheckContract refuses a contract other than the baseline's.
+func CheckContract(contract int, baseline Baseline) error {
+	if contract != baseline.Contract {
+		return ContractMismatchError{Expected: baseline.Contract, Found: contract}
+	}
+	return nil
 }
 
 // LoadChain returns the migrations after the head, in apply order (file name
@@ -132,7 +153,8 @@ func LoadChain() ([]ChainFile, error) {
 type State int
 
 const (
-	// StateEmpty: no version is applied. The baseline is applied (or resumed).
+	// StateEmpty: no version is applied and no object is foreign. The
+	// baseline is applied (or resumed).
 	StateEmpty State = iota
 	// StateAtHead: every baseline version is applied. Chain files after the
 	// head that are not applied yet are applied.
@@ -140,6 +162,9 @@ const (
 	// StateBelowHead: some versions are applied but not every baseline
 	// version. Refused.
 	StateBelowHead
+	// StateForeign: no version is applied but the database holds an object
+	// the baseline does not create. Refused.
+	StateForeign
 )
 
 // Plan is the decision Upgrade acts on.
@@ -147,13 +172,31 @@ type Plan struct {
 	State State
 	// Missing lists the baseline versions a below-head database lacks.
 	Missing []string
+	// Foreign lists the objects of an unversioned database the baseline does
+	// not create.
+	Foreign []string
 	// Pending lists the chain files to apply, in order.
 	Pending []ChainFile
 }
 
-// Decide classifies a database from its applied versions.
-func Decide(applied map[string]bool, baseline Baseline, chain []ChainFile) Plan {
+// Decide classifies a database from its applied versions and, when none is
+// applied, the objects it holds.
+func Decide(applied map[string]bool, objects []string, baseline Baseline, chain []ChainFile) Plan {
 	if len(applied) == 0 {
+		known := map[string]bool{}
+		for _, object := range baseline.Objects {
+			known[object.Name] = true
+		}
+		var foreign []string
+		for _, name := range objects {
+			if !known[name] {
+				foreign = append(foreign, name)
+			}
+		}
+		if len(foreign) > 0 {
+			sort.Strings(foreign)
+			return Plan{State: StateForeign, Foreign: foreign}
+		}
 		return Plan{State: StateEmpty, Pending: chain}
 	}
 	var missing []string
@@ -174,6 +217,19 @@ func Decide(applied map[string]bool, baseline Baseline, chain []ChainFile) Plan 
 	return Plan{State: StateAtHead, Pending: pending}
 }
 
+// ForeignDatabaseError is the refusal for an unversioned database that holds
+// objects the baseline does not create.
+type ForeignDatabaseError struct{ Objects []string }
+
+func (e ForeignDatabaseError) Error() string {
+	shown, suffix := e.Objects, ""
+	if len(shown) > 5 {
+		shown, suffix = shown[:5], fmt.Sprintf(" and %d more", len(e.Objects)-5)
+	}
+	return fmt.Sprintf("the database records no schema_migrations version but holds %d object(s) the baseline does not create (%s%s); "+
+		"refusing to apply the head over a database this migrator did not create", len(e.Objects), strings.Join(shown, ", "), suffix)
+}
+
 // BelowHeadError is the refusal for a database below the head.
 type BelowHeadError struct {
 	Contract int
@@ -186,7 +242,7 @@ func (e BelowHeadError) Error() string {
 	if len(shown) > 5 {
 		shown, suffix = shown[:5], fmt.Sprintf(" and %d more", len(e.Missing)-5)
 	}
-	return fmt.Sprintf("the ClickHouse schema is below the head for ordering contract %d: %d baseline version(s) are not applied (%s%s). "+
+	return fmt.Sprintf("the ClickHouse schema is below the head (ordering contract %d): %d baseline version(s) are not applied (%s%s). "+
 		"dho applies the head only to an empty database; run the Python chain (`dev-hops migrate clickhouse upgrade`) with %s=%d first",
 		e.Contract, len(e.Missing), strings.Join(shown, ", "), suffix, OrderingContractEnv, e.Contract)
 }

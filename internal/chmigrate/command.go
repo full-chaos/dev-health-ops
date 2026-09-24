@@ -59,7 +59,7 @@ func run(ctx context.Context, verb string, env cli.Env) int {
 		fmt.Fprint(env.Stderr, "\nEnvironment:\n"+
 			"  CLICKHOUSE_URI (or _FILE)       ClickHouse DSN (native protocol); the database it names is migrated\n"+
 			"  DEV_HEALTH_CH_HOST, _PORT, _USER, _PASSWORD, _DB   component form, exclusive with CLICKHOUSE_URI\n"+
-			"  OPERATIONAL_ORDERING_CONTRACT   1 (default) or 2; selects the head baseline\n")
+			"  OPERATIONAL_ORDERING_CONTRACT   must be 2: the head is production's contract-2 schema\n")
 	}
 	if err := flags.Parse(env.Args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -77,9 +77,12 @@ func run(ctx context.Context, verb string, env cli.Env) int {
 	if err != nil {
 		return writeError(env.Stderr, "configuration_error", err.Error())
 	}
-	baseline, err := LoadBaseline(contract)
+	baseline, err := LoadBaseline()
 	if err != nil {
 		return writeError(env.Stderr, "baseline_unavailable", err.Error())
+	}
+	if err := CheckContract(contract, baseline); err != nil {
+		return writeError(env.Stderr, "settings_mismatch", err.Error())
 	}
 	chain, err := LoadChain()
 	if err != nil {
@@ -116,8 +119,12 @@ func run(ctx context.Context, verb string, env cli.Env) int {
 	result, err := Upgrade(ctx, db, baseline, chain)
 	if err != nil {
 		var below BelowHeadError
-		if errors.As(err, &below) {
+		var foreign ForeignDatabaseError
+		switch {
+		case errors.As(err, &below):
 			return writeError(env.Stderr, "below_head", err.Error())
+		case errors.As(err, &foreign):
+			return writeError(env.Stderr, "foreign_database", err.Error())
 		}
 		writeResultQuietly(env.Stderr, result)
 		return writeError(env.Stderr, "migration_failed", boundary.Redact(err).Error())

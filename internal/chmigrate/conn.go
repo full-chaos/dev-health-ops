@@ -53,6 +53,23 @@ func (c *connDB) AppliedVersions(ctx context.Context) (map[string]bool, error) {
 	return applied, rows.Err()
 }
 
+func (c *connDB) Objects(ctx context.Context) ([]string, error) {
+	rows, err := c.conn.Query(ctx, "SELECT name FROM system.tables WHERE database = currentDatabase() AND name NOT LIKE '.inner%' ORDER BY name")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var names []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		names = append(names, name)
+	}
+	return names, rows.Err()
+}
+
 func (c *connDB) ObjectCreate(ctx context.Context, name string) (string, bool, error) {
 	rows, err := c.conn.Query(ctx,
 		"SELECT create_table_query FROM system.tables WHERE database = currentDatabase() AND name = ?", name)

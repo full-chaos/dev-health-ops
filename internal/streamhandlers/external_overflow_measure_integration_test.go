@@ -36,7 +36,15 @@ type overflowCase struct {
 // then write_batch against the real ClickHouse (no retry ladder: one attempt,
 // the ladder only re-runs the same call). It prints one JSON row per case.
 const pythonSinkProgram = `
-import asyncio, json, sys, uuid
+import asyncio, json, os, sys, types, uuid
+# The integration shards install only the migration chain's Python closure, and
+# importing dev_health_ops.api.external_ingest runs its __init__ (the whole
+# FastAPI router and its middleware). The models this needs are in
+# .schemas: register the package without running its __init__.
+import dev_health_ops
+package = types.ModuleType("dev_health_ops.api.external_ingest")
+package.__path__ = [os.path.join(os.path.dirname(dev_health_ops.__file__), "api", "external_ingest")]
+sys.modules["dev_health_ops.api.external_ingest"] = package
 from dev_health_ops.api.external_ingest.schemas import RecordEnvelope
 from dev_health_ops.external_ingest.normalize import normalize_batch
 from dev_health_ops.external_ingest.sinks import write_batch
@@ -79,7 +87,7 @@ func overflowCases() []overflowCase {
 		{"work item storyPoints 1e308 (float64 max region)", [][3]string{wi("wi-big", "1e308")}},
 		{"two pull requests, one past int64", [][3]string{pr("pr-a", "7"), pr("pr-b", "9223372036854775808")}},
 		{"mixed kinds, bad pull request", [][3]string{pr("pr-c", "7"), pr("pr-d", "9223372036854775808"), wi("wi-c", "3")}},
-		{"mixed kinds, bad work item", [][3]string{pr("pr-e", "7"), wi("wi-d", "1e1000"), wi("wi-e", "3")}},
+		{"mixed kinds, work item with a float past range (stored as inf, batch succeeds)", [][3]string{pr("pr-e", "7"), wi("wi-d", "1e1000"), wi("wi-e", "3")}},
 		{"work item storyPoints 1.5 (control)", [][3]string{wi("wi-f", "1.5")}},
 		{"work item storyPoints -1e1000", [][3]string{wi("wi-g", "-1e1000")}},
 		{"work item storyPoints 1e-1000 (underflow)", [][3]string{wi("wi-h", "1e-1000")}},
@@ -111,11 +119,9 @@ func overflowRecords(raw [][3]string) ([]externalSinkRecord, error) {
 // through the real Python sink (normalize_batch + write_batch) and the Go sink
 // against the same real ClickHouse schema (CHAOS-6415), logs both outcomes as
 // data, and asserts: a batch fails on one plane exactly when it fails on the
-// other, and where both succeed the stored rows are equal.
+// other, and the stored rows are equal (a failing kind is skipped whole and
+// every other kind is written, on both planes).
 func TestExternalSinkOutcomesMatchPythonAgainstClickHouse(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
-		t.Skip("needs the live Python sink (fastapi, pydantic, clickhouse_connect); run with DEV_HEALTH_LIVE_PYTHON_ORACLES=1 -tags=integration")
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	instance, err := containers.StartClickHouse(ctx)
@@ -231,10 +237,9 @@ func TestExternalSinkOutcomesMatchPythonAgainstClickHouse(t *testing.T) {
 			t.Errorf("%s: python failed=%v, go failed=%v (err %v)", item.Name, pythonFailed, goFailed, writeErr)
 			continue
 		}
-		// Both failed: what each plane wrote BEFORE failing may differ (Python
-		// writes its kinds in its own fixed order, Go in sorted order); the batch
-		// is retried whole either way and the writes are idempotent upserts.
-		if !pythonFailed && pythonStored != goStored {
+		// Python isolates per kind and Go does the same, so what is stored
+		// must be equal whether or not the batch failed.
+		if pythonStored != goStored {
 			t.Errorf("%s: stored rows differ: python %s, go %s", item.Name, pythonStored, goStored)
 		}
 	}

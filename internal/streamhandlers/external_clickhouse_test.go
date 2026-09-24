@@ -598,3 +598,69 @@ func TestClickHouseExternalSinkFailsClosedOnNumericOverflow(t *testing.T) {
 		}
 	})
 }
+
+// Python's sink isolates per kind (a failed kind is skipped whole, every
+// other kind is written, then the batch fails and is retried whole). Go
+// aborted at the first failing kind in sorted order, so a bad
+// pull_request.v1 (sorts first) kept the work items after it from being
+// written: measured on a real ClickHouse against the real Python sink
+// (TestExternalSinkOutcomesMatchPythonAgainstClickHouse, CHAOS-6415).
+func TestClickHouseExternalSinkIsolatesAFailingKind(t *testing.T) {
+	pointer := externalTestPointer()
+	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
+	badPullRequest := externalSinkFixture("pull_request.v1", map[string]any{
+		"repositoryExternalId": pointer.SourceInstance, "number": json.Number("9223372036854775808"),
+		"state": "open", "createdAt": "2026-07-22T12:00:00Z",
+	})
+	badPullRequest.Index = 0
+	goodWorkItem := externalSinkFixture("work_item.v1", map[string]any{
+		"externalKey": "7", "provider": "github", "title": "Issue", "type": "issue", "status": "todo",
+		"createdAt": "2026-07-22T10:00:00Z", "repositoryExternalId": pointer.SourceInstance,
+	})
+	goodWorkItem.Index = 1
+
+	t.Run("a failing kind does not stop the kinds after it, and the batch still fails", func(t *testing.T) {
+		connection := &productSink{batch: &productBatch{}}
+		sink, err := NewClickHouseExternalBatchSink(connection)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sink.now = func() time.Time { return now }
+		_, err = sink.Write(context.Background(), externalSinkBatch{
+			Pointer: pointer, SourceID: uuid.New(), Records: []externalSinkRecord{badPullRequest, goodWorkItem},
+		})
+		if err == nil || !strings.Contains(err.Error(), "git_pull_requests.number") {
+			t.Fatalf("Write error = %v, want the batch to fail naming the pull request column", err)
+		}
+		if !connection.batch.sent || len(connection.batch.rows) != 1 {
+			t.Fatalf("work item batch sent=%v rows=%d, want the good kind written (one row)", connection.batch.sent, len(connection.batch.rows))
+		}
+		if len(connection.queries) != 1 || !strings.Contains(connection.queries[0], "work_items") {
+			t.Fatalf("queries = %v, want only the work_items insert (the bad kind writes nothing)", connection.queries)
+		}
+	})
+
+	t.Run("every failing kind is reported", func(t *testing.T) {
+		badWorkItem := externalSinkFixture("work_item.v1", map[string]any{
+			"externalKey": "8", "provider": "github", "title": "Issue", "type": "issue", "status": "todo",
+			"createdAt": "2026-07-22T10:00:00Z", "repositoryExternalId": pointer.SourceInstance,
+			"storyPoints": "not a number",
+		})
+		badWorkItem.Index = 1
+		connection := &productSink{batch: &productBatch{}}
+		sink, err := NewClickHouseExternalBatchSink(connection)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sink.now = func() time.Time { return now }
+		_, err = sink.Write(context.Background(), externalSinkBatch{
+			Pointer: pointer, SourceID: uuid.New(), Records: []externalSinkRecord{badPullRequest, badWorkItem},
+		})
+		if err == nil || !strings.Contains(err.Error(), "git_pull_requests.number") || !strings.Contains(err.Error(), "work_items.story_points") {
+			t.Fatalf("Write error = %v, want both failing kinds named", err)
+		}
+		if connection.batch.sent {
+			t.Fatal("nothing should have been sent")
+		}
+	})
+}

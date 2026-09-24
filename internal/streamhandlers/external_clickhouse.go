@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"net"
@@ -57,10 +58,15 @@ func (s *ClickHouseExternalBatchSink) Write(ctx context.Context, source external
 		kinds = append(kinds, kind)
 	}
 	slices.Sort(kinds)
-	for _, kind := range kinds {
+	// One kind failing must not stop the others being written: Python's
+	// sink isolates per kind (a failed kind is skipped whole, every other kind
+	// is written, then the batch fails and is retried whole; measured on a
+	// real ClickHouse, CHAOS-6415). Every failure is kept and joined; the
+	// batch still fails. A cancelled context stops at once.
+	writeKind := func(kind string) error {
 		query, err := externalInsertQuery(kind)
 		if err != nil {
-			return ExternalRecomputeScope{}, err
+			return err
 		}
 		// CHAOS-4321 (team-lead ruling, 2026-08-26): "an admin-override
 		// column that one write path can erase is not shippable." Read the
@@ -85,21 +91,21 @@ func (s *ClickHouseExternalBatchSink) Write(ctx context.Context, source external
 			}
 			existingManualMembers, err = s.preserveExistingManualMembers(ctx, source.Pointer.OrgID, teamIDs)
 			if err != nil {
-				return ExternalRecomputeScope{}, fmt.Errorf("preserve existing team.v1 manual_members: %w", err)
+				return fmt.Errorf("preserve existing team.v1 manual_members: %w", err)
 			}
 		}
 		rows := make([]storedversion.Row, 0, len(grouped[kind]))
 		for _, record := range grouped[kind] {
 			values, err := externalRecordValues(source, record, now, &scope, existingManualMembers)
 			if err != nil {
-				return ExternalRecomputeScope{}, fmt.Errorf("translate external %s record %d: %w", kind, record.Index, err)
+				return fmt.Errorf("translate external %s record %d: %w", kind, record.Index, err)
 			}
 			rows = append(rows, storedversion.Row{Values: values})
 		}
 		if contract, ok := externalContract(kind, source.Pointer.SourceSystem); ok && contract.Reads() {
 			extended, appended, err := withContractColumns(query, contract)
 			if err != nil {
-				return ExternalRecomputeScope{}, fmt.Errorf("carry external %s: %w", kind, err)
+				return fmt.Errorf("carry external %s: %w", kind, err)
 			}
 			query = extended
 			for i, record := range grouped[kind] {
@@ -107,22 +113,36 @@ func (s *ClickHouseExternalBatchSink) Write(ctx context.Context, source external
 				rows[i].Carry = externalCarry(contract, record.Payload)
 			}
 			if err := applyContract(ctx, s.conn, contract, source.Pointer.OrgID, query, rows); err != nil {
-				return ExternalRecomputeScope{}, fmt.Errorf("carry external %s: %w", kind, err)
+				return fmt.Errorf("carry external %s: %w", kind, err)
 			}
 		}
 		batch, err := s.conn.PrepareBatch(ctx, query)
 		if err != nil {
-			return ExternalRecomputeScope{}, fmt.Errorf("prepare external %s sink: %w", kind, err)
+			return fmt.Errorf("prepare external %s sink: %w", kind, err)
 		}
 		for _, row := range rows {
 			if err := batch.Append(row.Values...); err != nil {
-				return ExternalRecomputeScope{}, fmt.Errorf("append external %s: %w", kind, err)
+				_ = batch.Abort() // the connection is reused for the next kind
+				return fmt.Errorf("append external %s: %w", kind, err)
 			}
 		}
 		if err := batch.Send(); err != nil {
-			return ExternalRecomputeScope{}, fmt.Errorf("persist external %s: %w", kind, err)
+			return fmt.Errorf("persist external %s: %w", kind, err)
 		}
 		scope.RecordKinds = append(scope.RecordKinds, kind)
+		return nil
+	}
+	var kindErrors []error
+	for _, kind := range kinds {
+		if err := writeKind(kind); err != nil {
+			if ctx.Err() != nil {
+				return ExternalRecomputeScope{}, err
+			}
+			kindErrors = append(kindErrors, err)
+		}
+	}
+	if len(kindErrors) > 0 {
+		return ExternalRecomputeScope{}, errors.Join(kindErrors...)
 	}
 	scope.RepoIDs = sortedExternalStrings(scope.RepoIDs)
 	scope.TeamIDs = sortedExternalStrings(scope.TeamIDs)

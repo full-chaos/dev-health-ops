@@ -3,10 +3,12 @@ package billing
 import (
 	"context"
 	"errors"
+	"math/big"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/stripe/stripe-go/v86"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
@@ -23,9 +25,15 @@ import (
 //     are replaced, in one transaction, so a redelivered event writes the
 //     same state again instead of a second one. Notification intents are
 //     keyed by the Stripe event id, so a redelivery reuses its intent.
-//   - Status moves forward only (draft, open, then paid, void or
-//     uncollectible; paid and void are final, uncollectible may still be
-//     paid): an event that would move it back changes nothing.
+//   - Status moves forward only (draft, open, payment_failed, then paid,
+//     void or uncollectible; paid and void are final, uncollectible may
+//     still be paid): an event that would move it back changes nothing, so
+//     an older or retried "open" never hides a failed payment.
+//   - An invoice with more lines than the event carries (lines.has_more)
+//     has its full line list read from Stripe; a failed read answers 500 so
+//     Stripe retries, never a partial list.
+//   - An amount the int4 columns cannot hold is refused with an error log,
+//     never stored as another number.
 //   - The org is the first of: the invoice's metadata.org_id, the
 //     subscription's metadata.org_id (parent.subscription_details), the local
 //     subscription row for the Stripe subscription id, the license whose
@@ -37,8 +45,10 @@ import (
 func invoiceStatusRank(status string) int {
 	switch status {
 	case "paid", "void", "uncollectible":
+		return 3
+	case "payment_failed":
 		return 2
-	case "open", "payment_failed":
+	case "open":
 		return 1
 	}
 	return 0
@@ -52,7 +62,7 @@ func invoiceStatusFollows(stored, status string) bool {
 	switch {
 	case invoiceStatusRank(status) < invoiceStatusRank(stored):
 		return false
-	case invoiceStatusRank(stored) < 2 || stored == status:
+	case invoiceStatusRank(stored) < 3 || stored == status:
 		return true
 	}
 	return stored == "uncollectible" && status == "paid"
@@ -82,13 +92,82 @@ func stripeRef(value pyjson.Value) string {
 }
 
 // intField is an integer field (fallback when absent, null or not an
-// integer that fits int32, the column type).
+// integer). invoiceAmountsFit has refused any amount outside int32, the
+// column type, before a value reaches here.
 func intField(value pyjson.Value, name string, fallback int64) int64 {
 	number, isInt := attr(value, name, nil).(pyjson.Int)
-	if !isInt || !number.IsInt64() || number.Int64() > 1<<31-1 || number.Int64() < -1<<31 {
+	if !isInt || !fitsInt4(number) {
 		return fallback
 	}
 	return number.Int64()
+}
+
+func fitsInt4(number pyjson.Int) bool {
+	return number.IsInt64() && number.Int64() <= 1<<31-1 && number.Int64() >= -1<<31
+}
+
+// invoiceAmountsFit reports the first invoice or line amount an int4
+// column cannot hold ("" when all fit).
+func invoiceAmountsFit(invoice pyjson.Value, lines []pyjson.Value) string {
+	for _, name := range []string{"amount_due", "amount_paid", "amount_remaining", "attempt_count"} {
+		if number, isInt := attr(invoice, name, nil).(pyjson.Int); isInt && !fitsInt4(number) {
+			return name
+		}
+	}
+	for _, line := range lines {
+		for _, name := range []string{"amount", "quantity"} {
+			if number, isInt := attr(line, name, nil).(pyjson.Int); isInt && !fitsInt4(number) {
+				return "lines." + name
+			}
+		}
+	}
+	return ""
+}
+
+// invoiceLines is the invoice's line list: the event's own, or, when the
+// event says there are more (has_more), every line read from Stripe.
+// isList is false when the event carries no line list.
+func (h handlers) invoiceLines(ctx context.Context, invoice pyjson.Value, stripeInvoiceID string) (lines []pyjson.Value, isList bool, err error) {
+	list := attr(invoice, "lines", nil)
+	lines, isList = attr(list, "data", nil).([]pyjson.Value)
+	if more, _ := attr(list, "has_more", nil).(bool); !isList || !more {
+		return lines, isList, nil
+	}
+	client, err := h.stripe.Client()
+	if err != nil {
+		return nil, false, err
+	}
+	lines = nil
+	for item, err := range client.V1Invoices.ListLines(ctx, &stripe.InvoiceListLinesParams{Invoice: stripe.String(stripeInvoiceID)}).All(ctx) {
+		if err != nil {
+			return nil, false, err
+		}
+		line := pyjson.NewObject()
+		line.Set("id", item.ID)
+		if item.Description != "" {
+			line.Set("description", item.Description)
+		}
+		line.Set("amount", pyjson.Int{Int: big.NewInt(item.Amount)})
+		// The SDK reads a null quantity as 0; the event's null reads as 1.
+		if item.Quantity != 0 {
+			line.Set("quantity", pyjson.Int{Int: big.NewInt(item.Quantity)})
+		}
+		if item.Pricing != nil && item.Pricing.PriceDetails != nil && item.Pricing.PriceDetails.Price != nil {
+			details := pyjson.NewObject()
+			details.Set("price", item.Pricing.PriceDetails.Price.ID)
+			pricing := pyjson.NewObject()
+			pricing.Set("price_details", details)
+			line.Set("pricing", pricing)
+		}
+		if item.Period != nil {
+			period := pyjson.NewObject()
+			period.Set("start", pyjson.Int{Int: big.NewInt(item.Period.Start)})
+			period.Set("end", pyjson.Int{Int: big.NewInt(item.Period.End)})
+			line.Set("period", period)
+		}
+		lines = append(lines, line)
+	}
+	return lines, true, nil
 }
 
 // unixField is a Unix-seconds field as a UTC time (nil when absent or not a
@@ -121,6 +200,21 @@ func (h handlers) invoiceEvent(ctx context.Context, eventType string, eventID py
 	}
 	customer := stripeRef(attr(invoice, "customer", nil))
 	metadata := ensureDict(attr(invoice, "metadata", nil))
+	var lines []pyjson.Value
+	hasLines := false
+	if invoiceLineEvents[eventType] {
+		var err error
+		if lines, hasLines, err = h.invoiceLines(ctx, invoice, stripeInvoiceID); err != nil {
+			h.logger.ErrorContext(ctx, "Invoice webhook event: reading the invoice lines from Stripe failed", "type", eventType,
+				"invoice", stripeInvoiceID, "error", pyStripeError(err))
+			return err
+		}
+	}
+	if field := invoiceAmountsFit(invoice, lines); field != "" {
+		h.logger.ErrorContext(ctx, "Refusing invoice webhook event: an amount exceeds the stored integer range", "type", eventType,
+			"invoice", stripeInvoiceID, "field", field)
+		return nil
+	}
 	now := h.nowUTC()
 	var org uuid.UUID
 	resolved, applied := false, false
@@ -178,7 +272,7 @@ func (h handlers) invoiceEvent(ctx context.Context, eventType string, eventID py
 			return nil
 		}
 		var err error
-		applied, err = h.upsertInvoice(ctx, tx, eventType, invoice, stripeInvoiceID, org, localSubscription, customer, metadata, now)
+		applied, err = h.upsertInvoice(ctx, tx, eventType, invoice, lines, hasLines, stripeInvoiceID, org, localSubscription, customer, metadata, now)
 		return err
 	})
 	if err != nil {
@@ -200,7 +294,7 @@ func (h handlers) invoiceEvent(ctx context.Context, eventType string, eventID py
 // upsertInvoice writes the invoice row (status forward only) and, for the
 // events that carry them, its line items; applied is false for an event
 // older than the stored status, which writes nothing.
-func (h handlers) upsertInvoice(ctx context.Context, tx pgx.Tx, eventType string, invoice pyjson.Value, stripeInvoiceID string,
+func (h handlers) upsertInvoice(ctx context.Context, tx pgx.Tx, eventType string, invoice pyjson.Value, lines []pyjson.Value, hasLines bool, stripeInvoiceID string,
 	org uuid.UUID, subscription *uuid.UUID, customer string, metadata *pyjson.Object, now time.Time) (applied bool, err error) {
 	var invoiceID uuid.UUID
 	var storedStatus string
@@ -293,11 +387,7 @@ func (h handlers) upsertInvoice(ctx context.Context, tx pgx.Tx, eventType string
 		unixField(transitions, "finalized_at"), paidAt, voidedAt, intField(invoice, "attempt_count", 0), metadataText, now); err != nil {
 		return false, err
 	}
-	if !invoiceLineEvents[eventType] {
-		return true, nil
-	}
-	lines, isList := attr(attr(invoice, "lines", nil), "data", nil).([]pyjson.Value)
-	if !isList {
+	if !hasLines {
 		return true, nil
 	}
 	if _, err := tx.Exec(ctx, `DELETE FROM invoice_line_items WHERE invoice_id = $1`, invoiceID); err != nil {

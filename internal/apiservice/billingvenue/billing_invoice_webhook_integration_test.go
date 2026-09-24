@@ -132,6 +132,7 @@ func TestInvoiceWebhookAppliesTestModeEvents(t *testing.T) {
 		map[string]any{"type": "subscription_details", "subscription_details": map[string]any{"subscription": "sub_unknown", "metadata": map[string]any{"org_id": orgA}}},
 		map[string]any{}, "cus_other"))
 	// A draft event arriving after payment_failed does not move it back.
+	send("metadata org: older open update after failure", "evt_in_meta_open", "invoice.updated", invoice("in_meta", "open", nil, unknownParent, map[string]any{"org_id": orgD}, "cus_other"))
 	send("metadata org: older draft after failure", "evt_in_meta_created", "invoice.created", invoice("in_meta", "draft", nil, unknownParent, map[string]any{"org_id": orgD}, "cus_other"))
 	// payment_failed never replaces a terminal status in the payload.
 	send("payment failed on an uncollectible payload", "evt_in_pfu", "invoice.payment_failed", invoice("in_pfu", "uncollectible", nil, unknownParent, map[string]any{"org_id": orgD}, "cus_other"))
@@ -146,6 +147,27 @@ func TestInvoiceWebhookAppliesTestModeEvents(t *testing.T) {
 		object["amount_remaining"] = 400
 	})
 	send("voided with an open payload", "evt_in_vopen", "invoice.voided", invoice("in_vopen", "open", nil, unknownParent, map[string]any{"org_id": orgD}, "cus_other"))
+	// Amounts beyond the int4 columns (a large JPY invoice, a large line)
+	// are refused, never stored as another number; one that fits is kept.
+	send("amount beyond int4", "evt_in_large", "invoice.finalized", func(object map[string]any) {
+		invoice("in_large", "open", nil, unknownParent, map[string]any{"org_id": orgD}, "cus_other")(object)
+		object["currency"], object["amount_due"], object["amount_remaining"] = "jpy", 2147483648, 2147483648
+	})
+	send("line amount beyond int4", "evt_in_large_line", "invoice.finalized", func(object map[string]any) {
+		invoice("in_large_line", "open", nil, unknownParent, map[string]any{"org_id": orgD}, "cus_other")(object)
+		object["lines"].(map[string]any)["data"].([]any)[0].(map[string]any)["amount"] = 2147483648
+	})
+	send("amount at the int4 limit", "evt_in_int4", "invoice.finalized", func(object map[string]any) {
+		invoice("in_int4", "open", nil, unknownParent, map[string]any{"org_id": orgD}, "cus_other")(object)
+		object["amount_due"], object["amount_remaining"] = 2147483647, 2147483647
+	})
+	// An event that carries only the first of five lines: all five are read
+	// from Stripe.
+	send("lines beyond the event (has_more)", "evt_in_more", "invoice.finalized", func(object map[string]any) {
+		invoice("in_more", "open", nil, unknownParent, map[string]any{"org_id": orgD}, "cus_other")(object)
+		object["lines"].(map[string]any)["has_more"] = true
+		object["lines"].(map[string]any)["total_count"] = 5
+	})
 	// No org anywhere: nothing written.
 	send("no org", "evt_in_none", "invoice.paid", invoice("in_none", "paid", 1790241482, unknownParent, map[string]any{}, "cus_other"))
 	send("org not a uuid", "evt_in_bad", "invoice.finalized", invoice("in_bad", "open", nil, unknownParent, map[string]any{"org_id": "org-abc"}, "cus_other"))
@@ -158,6 +180,18 @@ func TestInvoiceWebhookAppliesTestModeEvents(t *testing.T) {
 			t.Errorf("%s: go answered %d %s", request.Name, response.Status, response.Body)
 		}
 	}
+	// A line list Stripe refuses to read: 500, so Stripe retries, and no
+	// partial row.
+	send("lines Stripe refuses to read", "evt_in_more_fail", "invoice.finalized", func(object map[string]any) {
+		invoice("in_more_fail", "open", nil, unknownParent, map[string]any{"org_id": orgD}, "cus_other")(object)
+		object["lines"].(map[string]any)["has_more"] = true
+	})
+	refused := requests[len(requests)-1]
+	requests = requests[:len(requests)-1]
+	if response := venueoracle.Do(t, base, refused); response.Status != 500 {
+		t.Errorf("%s: go answered %d %s, want 500", refused.Name, response.Status, response.Body)
+	}
+	receipt += fmt.Sprintf("%-55s go=500 expected\n", refused.Name)
 	goURI := venue.AdminURI(t, venue.GoDB)
 	row := func(query string, args ...any) string {
 		pool, err := pgxpool.New(ctx, goURI)
@@ -209,6 +243,11 @@ func TestInvoiceWebhookAppliesTestModeEvents(t *testing.T) {
 		orgB+" 11111111-0000-4000-8000-0000000000aa")
 	expect("in_rem: paid clears amount_remaining", row(`SELECT status, amount_remaining FROM invoices WHERE stripe_invoice_id = 'in_rem'`), "paid 0")
 	expect("in_vopen: voided is void", row(`SELECT status, voided_at IS NOT NULL FROM invoices WHERE stripe_invoice_id = 'in_vopen'`), "void true")
+	expect("amounts beyond int4 refused, the limit kept", row(`SELECT string_agg(stripe_invoice_id || '=' || amount_due::text, ',' ORDER BY stripe_invoice_id)
+		FROM invoices WHERE stripe_invoice_id IN ('in_large', 'in_large_line', 'in_int4')`), "in_int4=2147483647")
+	expect("in_more: every line read from Stripe", row(`SELECT count(*), sum(l.amount), sum(l.quantity), min(l.stripe_price_id), count(l.period_start)
+		FROM invoice_line_items l JOIN invoices i ON i.id = l.invoice_id WHERE i.stripe_invoice_id = 'in_more'`), "5 1500 15 price_more 5")
+	expect("in_more_fail: nothing written", row(`SELECT count(*) FROM invoices WHERE stripe_invoice_id = 'in_more_fail'`), "0")
 	expect("no org, org not a uuid: nothing written", row(`SELECT count(*) FROM invoices WHERE stripe_invoice_id IN ('in_none', 'in_bad')`), "0")
 	expect("notifications: one receipt per paid event, one failure", row(`SELECT notification_type, idempotency_key FROM billing_notifications
 		WHERE notification_type IN ('invoice_receipt', 'payment_failed') ORDER BY idempotency_key`),

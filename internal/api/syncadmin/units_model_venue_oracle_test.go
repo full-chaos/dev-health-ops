@@ -197,13 +197,23 @@ func unitsOracleInput() (responses []unitsCase, rollups [][]unitsCase, lags []ma
 			CostClass: "light", Status: status, DurationSeconds: &d})
 	}
 	rollups = append(rollups, many)
+	// Over the 100 failed-id cap, and a success-only run (no partial
+	// summary).
+	var overCap, successOnly []unitsCase
+	for index := range 103 {
+		overCap = append(overCap, unitsCase{ID: next(), SourceID: id(9200 + index%3), DatasetKey: "d", CostClass: "light", Status: "failed"})
+	}
+	for range 3 {
+		successOnly = append(successOnly, unitsCase{ID: next(), SourceID: id(9300), DatasetKey: "d", CostClass: "light", Status: "success"})
+	}
+	rollups = append(rollups, overCap, successOnly)
 
 	now := "2026-06-01T12:00:00.000500+00:00"
 	for _, cost := range []string{"heavy", "medium", "light", "HEAVY"} {
 		for _, watermark := range []any{nil, now, "2026-06-01T12:00:00.000499+00:00", "2026-06-01T12:00:00.000501+00:00",
 			"2026-05-25T12:00:00.000500+00:00", "2026-05-25T12:00:00.000499+00:00", "2026-05-25T12:00:01+00:00",
 			"2026-01-01T00:00:00+00:00", "1900-01-01T00:00:00+00:00", "2030-01-01T00:00:00+00:00",
-			"2026-06-01T14:00:00.5+02:00"} {
+			"2026-06-01T14:00:00.5+02:00", "2026-05-25T12:00:00.000501+00:00", "2026-01-01T00:00:00.999999+00:00"} {
 			for _, capNet := range [][2]int64{{7, 604800}, {7, 1}, {0, 0}, {-3, -5}, {1, 86400 - 3600}, {30, 2592000}} {
 				lags = append(lags, map[string]any{"cost_class": cost, "watermark_at": watermark, "now": now,
 					"cap": capNet[0], "net": capNet[1]})
@@ -394,9 +404,9 @@ func TestRunUnitsModelVenueOracleMatchesLivePython(t *testing.T) {
 		compared++
 	}
 
-	const wantCompared = 396 + 5 + 4 + 264 + 90 + 0 + 80
+	const wantCompared = 396 + 5 + 6 + 312 + 90 + 0 + 80
 	registryCount := len(registry)
-	if compared != wantCompared+registryCount || len(responses) != 401 || len(rollups) != 4 || len(lags) != 264 ||
+	if compared != wantCompared+registryCount || len(responses) != 401 || len(rollups) != 6 || len(lags) != 312 ||
 		len(resolves) != 90 || len(envCases) != 80 {
 		t.Fatalf("compared %d (responses %d, rollups %d, lags %d, resolves %d, registry %d, env %d)", compared,
 			len(responses), len(rollups), len(lags), len(resolves), registryCount, len(envCases))

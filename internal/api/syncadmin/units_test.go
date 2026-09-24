@@ -3,6 +3,7 @@ package syncadmin
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"log/slog"
 	"math/big"
 	"net/http"
@@ -131,5 +132,60 @@ func TestRunUnitsAnswers(t *testing.T) {
 	}
 	if strings.Count(body, `"sync_run_id"`) != 1 {
 		t.Errorf("limit=-1 of 2 units listed %d units", strings.Count(body, `"sync_run_id"`))
+	}
+}
+
+// TestRunUnitsCountsAndFreshnessRules pins the route's own counting and
+// freshness rules: next_retry_at is the earliest available_at of a
+// retrying unit only; retry-exhausted counts a literal true flag or the
+// worker-lost category; budget-blocked needs retrying and budget_deferred;
+// one freshness entry per (source, dataset), first unit wins; a source's
+// label is its full name, else its name; entries sort by label, then
+// source id.
+func TestRunUnitsCountsAndFreshnessRules(t *testing.T) {
+	unsetForTest(t, "SYNC_INCREMENTAL_HEAVY_MAX_WINDOW_DAYS")
+	unsetForTest(t, "SYNC_WATERMARK_OVERLAP")
+	now := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	t0, t1, t2 := now.Add(time.Hour), now.Add(2*time.Hour), now.Add(3*time.Hour)
+	str := func(text string) *string { return &text }
+	idA, idB, idC := uuid.MustParse("00000000-0000-0000-0000-00000000000a"), uuid.MustParse("00000000-0000-0000-0000-00000000000b"), uuid.MustParse("00000000-0000-0000-0000-00000000000c")
+	unit := func(source uuid.UUID, name, full, dataset, status string, available *time.Time, result string) runUnit {
+		return runUnit{ID: uuid.New(), SyncRunID: faultRunID, SourceID: source, OrgID: "org", Provider: "github",
+			DatasetKey: dataset, CostClass: "medium", Mode: "incremental", Status: status, AvailableAt: available,
+			Result: str(result), CreatedAt: now, UpdatedAt: now, HasSource: true, SourceName: str(name),
+			SourceFullName: str(full), SourceExternalID: str(name)}
+	}
+	units := []runUnit{
+		unit(idB, "b", "", "commits", "failed", &t0, `{"retry_exhausted": "yes", "error_category": "budget_deferred"}`),
+		unit(idB, "b", "", "commits", "retrying", &t2, `{"retry_exhausted": true}`),
+		unit(idC, "a", "", "commits", "retrying", &t1, `{"error_category": "budget_deferred"}`),
+		unit(idA, "x", "a", "commits", "success", nil, `{"error_category": "worker_lost_retry_exhausted"}`),
+	}
+	reader := &unitsReader{faultReader: &faultReader{}, units: units}
+	_, status, body := serveUnits(t, reader, "", now)
+	if status != http.StatusOK {
+		t.Fatalf("%d %s", status, body)
+	}
+	var summary map[string]any
+	if err := json.Unmarshal([]byte(body), &summary); err != nil {
+		t.Fatal(err)
+	}
+	if summary["next_retry_at"] != "2026-06-01T14:00:00Z" {
+		t.Errorf("summary next_retry_at = %v, want the earliest retrying unit's 2026-06-01T14:00:00Z", summary["next_retry_at"])
+	}
+	for _, want := range []string{
+		`"retry_exhausted_unit_count":2,"budget_blocked_unit_count":1,`,
+		`"dataset_freshness":[{"source_id":"00000000-0000-0000-0000-00000000000a","source_name":"a",` +
+			`"dataset_key":"commits","cost_class":"medium","watermark_at":null,"lag_seconds":null,"catching_up":false,` +
+			`"ticks_behind":null,"window_cap_days":7},{"source_id":"00000000-0000-0000-0000-00000000000c","source_name":"a",` +
+			`"dataset_key":"commits","cost_class":"medium","watermark_at":null,"lag_seconds":null,"catching_up":false,` +
+			`"ticks_behind":null,"window_cap_days":7},{"source_id":"00000000-0000-0000-0000-00000000000b","source_name":"b",`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body lacks %s:\n%s", want, body)
+		}
+	}
+	if got := strings.Count(body, `"source_name":"b","dataset_key"`); got != 1 {
+		t.Errorf("source b has %d freshness entries, want 1 (first unit wins)", got)
 	}
 }

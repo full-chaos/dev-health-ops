@@ -1181,6 +1181,14 @@ func run(f flags) (err error) {
 	if goapiproof.PlansPushTokenEntries(f.service) && f.pushTokenFile == "" {
 		return fmt.Errorf("the -service=%s corpus has external-ingest entries that authenticate with the push token: pass -push-token-file", f.service)
 	}
+	// ...and a file that is missing, unreadable or not a push token refuses
+	// here too, before any setup request is sent (the credential itself only
+	// reads the file when an ingest request uses it).
+	if goapiproof.PlansPushTokenEntries(f.service) {
+		if err := goapiproof.CheckPushTokenFile(f.pushTokenFile); err != nil {
+			return err
+		}
+	}
 	// A run that plans nothing measured nothing; it must not read as a pass.
 	if len(goapiproof.RESTRunOrderFor(f.service)) == 0 {
 		return fmt.Errorf("the REST corpus has no entry that targets -service=%s, so this run would send nothing", f.service)

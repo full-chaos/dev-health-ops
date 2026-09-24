@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -205,6 +206,34 @@ func TestResolveSingleShotRequestFillsPathLiteralsWithoutIDBindings(t *testing.T
 	for _, sent := range *paths {
 		if strings.Contains(sent, "{") || strings.Contains(sent, "%7B") {
 			t.Fatalf("a placeholder reached the wire: %q", sent)
+		}
+	}
+}
+
+// TestRunRefusesAnUnreadablePushTokenFileBeforeSendingAnything: a supplied
+// token file that is missing, or does not hold a push token, must refuse at
+// startup -- not after the build-identity and principal setup requests.
+func TestRunRefusesAnUnreadablePushTokenFileBeforeSendingAnything(t *testing.T) {
+	var hits atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { hits.Add(1) }))
+	defer server.Close()
+	notAToken := filepath.Join(t.TempDir(), "not-a-token")
+	if err := os.WriteFile(notAToken, []byte("definitely-not-a-push-token-SECRETVALUE"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for name, file := range map[string]string{"missing": filepath.Join(t.TempDir(), "absent"), "wrong shape": notAToken} {
+		args := serviceArgs("-service", "dho-api", "-dho-api-url", server.URL, "-push-token-file", file)
+		args = append(args, "-artifact-dir", t.TempDir())
+		f, err := parseFlags(args)
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = run(f)
+		if err == nil || !strings.Contains(err.Error(), "push token") || strings.Contains(err.Error(), "SECRETVALUE") {
+			t.Fatalf("%s: want a push-token-file refusal that does not leak the content, got %v", name, err)
+		}
+		if hits.Load() != 0 {
+			t.Fatalf("%s: a run with an unusable token file sent %d request(s) before refusing", name, hits.Load())
 		}
 	}
 }

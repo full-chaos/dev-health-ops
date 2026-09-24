@@ -42,6 +42,21 @@ func TestDHOAPICorpusPinsItsRoutes(t *testing.T) {
 			t.Errorf("%s targets %s", operation, spec.EffectiveService())
 		}
 	}
+	// The validate entry's request cases and the statuses both planes must give.
+	validate, err := SpecForREST("REST:POST:/api/v1/external-ingest/validate")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantValidate := map[string]int{"bigint_4301_digits": 500, "float_1e1000": 200}
+	if len(validate.Requests) != len(wantValidate) {
+		t.Fatalf("validate has %d request cases, want %d", len(validate.Requests), len(wantValidate))
+	}
+	for _, request := range validate.Requests {
+		status, ok := wantValidate[request.Name]
+		if !ok || request.WantCandidateStatus != status || request.WantBaselineStatus != status {
+			t.Errorf("validate case %q: statuses %d/%d, want %d/%d (listed=%v)", request.Name, request.WantCandidateStatus, request.WantBaselineStatus, status, status, ok)
+		}
+	}
 	if !restOperatorSuppliedProducers[dhoAPIOrgIDProducer] {
 		t.Errorf("%s must be an operator-supplied producer: the entitlements path binds it", dhoAPIOrgIDProducer)
 	}

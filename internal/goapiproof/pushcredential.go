@@ -42,3 +42,17 @@ func ValidatePushTokenShape(value string) error {
 	}
 	return nil
 }
+
+// CheckPushTokenFile reads the token file once and checks its shape, so a run
+// can refuse before it sends anything when the file is missing, unreadable or
+// not a push token. The value is never included in the error.
+func CheckPushTokenFile(path string) error {
+	raw, err := os.ReadFile(path) // #nosec G304 -- operator-supplied token file path, by design
+	if err != nil {
+		return fmt.Errorf("read the push token file: %w", err)
+	}
+	if err := ValidatePushTokenShape(strings.TrimSpace(string(raw))); err != nil {
+		return fmt.Errorf("the push token file does not hold a push token: %w", err)
+	}
+	return nil
+}

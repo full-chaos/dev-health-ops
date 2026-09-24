@@ -15,6 +15,7 @@ type KeyFunc func(*http.Request) string
 // fixedWindowEntry is one (key, path) pair's current window: when it
 // started and how many hits it has counted so far, including refused ones.
 type fixedWindowEntry struct {
+	key   string
 	start time.Time
 	count int
 }
@@ -35,6 +36,20 @@ type fixedWindowEntry struct {
 // process memory (a fixedWindowEntry plus its map overhead is on the
 // order of 100 bytes).
 const maxKeyedLimiterEntries = 100_000
+
+// maxKeyedLimiterEntriesPerKey bounds how many live (key, path) pairs ONE
+// key may hold. A route whose path carries a caller-chosen id lets an
+// authenticated caller mint unlimited distinct paths (the handler validates
+// the id only AFTER this limiter runs, as Python does); with only the global
+// cap above, one admin filling it made every OTHER admin's first request a
+// 429 for the rest of the window (reproduced by the review round on the
+// invite route with 100,000 distinct paths from one admin). Bounding each
+// key means an admin that exhausts its own allowance of distinct paths is
+// refused for NEW paths and nobody else is. 1,000 distinct paths per admin
+// per window is far above any real use (an admin touching a handful of
+// users or orgs an hour), and 100 such keys reach the global backstop, which
+// stays as the bound against many-keys growth.
+const maxKeyedLimiterEntriesPerKey = 1_000
 
 // KeyedLimiter is a fixed-window rate limiter scoped per (key, exact request
 // path) -- the Go equivalent of Python's slowapi default strategy (the
@@ -76,6 +91,29 @@ type KeyedLimiter struct {
 	// case (reproduced live: 5,000 distinct paths inside one window, all
 	// still present, no sweep yet due).
 	entries map[string]*fixedWindowEntry
+	// keyPaths holds each key's entry keys (a key's live pairs), for
+	// maxKeyedLimiterEntriesPerKey. It is a set, not a counter, so a key at
+	// its bound can be re-checked against ITS OWN entries' expiry in
+	// O(bound) without waiting for the periodic full sweep: a counter kept
+	// only by that sweep let expired-but-unswept entries hold an admin's
+	// allowance for up to a window (found by review of the first version).
+	keyPaths map[string]map[string]struct{}
+	// perKeyBound and globalBound are the two caps above; fields so a test
+	// can exercise the same logic at a small size.
+	perKeyBound, globalBound int
+	// globalNextExpiry and keyNextExpiry are LOWER BOUNDS on when the
+	// earliest entry (overall, and per key) can expire; the zero time means
+	// "unknown, scan". A forced sweep or a key scan runs only once now has
+	// reached the bound, i.e. only when something HAS expired, so it always
+	// frees at least one entry and never runs pointlessly -- and, unlike a
+	// time-based cooldown, it can never be skipped while an expired entry
+	// is still holding a cap (a cooldown did exactly that for up to a second
+	// in review of the second version). A rollover only moves an entry's
+	// expiry later, so a stored bound is never later than the truth.
+	globalNextExpiry time.Time
+	keyNextExpiry    map[string]time.Time
+	// fullSweeps and keyScans count the on-demand passes, for tests.
+	fullSweeps, keyScans int
 	// lastSweep is when entries was last swept for expired windows.
 	lastSweep time.Time
 }
@@ -91,7 +129,8 @@ func NewKeyedLimiter(limit int, window time.Duration, now func() time.Time) *Key
 	if now == nil {
 		now = time.Now
 	}
-	return &KeyedLimiter{limit: limit, window: window, now: now, entries: map[string]*fixedWindowEntry{}}
+	return &KeyedLimiter{limit: limit, window: window, now: now, entries: map[string]*fixedWindowEntry{}, keyPaths: map[string]map[string]struct{}{}, keyNextExpiry: map[string]time.Time{},
+		perKeyBound: maxKeyedLimiterEntriesPerKey, globalBound: maxKeyedLimiterEntries}
 }
 
 // Allow reports whether the (key, path) pair may proceed, counting this call
@@ -111,14 +150,42 @@ func (l *KeyedLimiter) Allow(key, path string) bool {
 	entry := l.entries[entryKey]
 	isNewPair := entry == nil
 	if entry == nil || now.Sub(entry.start) >= l.window {
-		if isNewPair && len(l.entries) >= maxKeyedLimiterEntries {
+		if isNewPair {
+			// A key that already holds its share of entries is refused for
+			// NEW paths only: the cost of minting paths falls on the minter,
+			// never on another caller. Expired entries of THAT key are
+			// reclaimed first, so a key never stays locked out by entries
+			// whose windows have already ended.
+			if len(l.keyPaths[key]) >= l.perKeyBound {
+				l.expireKey(key, now)
+				if len(l.keyPaths[key]) >= l.perKeyBound {
+					return false
+				}
+			}
 			// The map is saturated and this pair has never been seen: fail
-			// closed rather than grow past the cap. An existing pair (a
-			// window rollover, not a brand-new key) is never refused this
-			// way -- only admission of a NEW entry is capped.
-			return false
+			// closed rather than grow past the cap -- after a full sweep of
+			// expired entries (rate limited), so stale entries do not hold
+			// the cap either. An existing pair (a window rollover, not a
+			// brand-new key) is never refused this way -- only admission of
+			// a NEW entry is capped.
+			if len(l.entries) >= l.globalBound {
+				l.forceSweep(now)
+				if len(l.entries) >= l.globalBound {
+					return false
+				}
+			}
+			if l.keyPaths[key] == nil {
+				l.keyPaths[key] = map[string]struct{}{}
+			}
+			l.keyPaths[key][entryKey] = struct{}{}
+			if len(l.keyPaths[key]) == 1 {
+				l.keyNextExpiry[key] = now.Add(l.window)
+			}
+			if len(l.entries) == 0 {
+				l.globalNextExpiry = now.Add(l.window)
+			}
 		}
-		entry = &fixedWindowEntry{start: now}
+		entry = &fixedWindowEntry{key: key, start: now}
 		l.entries[entryKey] = entry
 	}
 	entry.count++
@@ -134,10 +201,80 @@ func (l *KeyedLimiter) sweep(now time.Time) {
 	if !l.lastSweep.IsZero() && now.Sub(l.lastSweep) < l.window {
 		return
 	}
+	l.sweepAll(now)
+}
+
+// sweepAll deletes every expired entry, from the entry map and from its
+// key's set, and recomputes the next-expiry bounds exactly.
+func (l *KeyedLimiter) sweepAll(now time.Time) {
 	l.lastSweep = now
-	for key, entry := range l.entries {
+	var globalNext time.Time
+	keyNext := map[string]time.Time{}
+	for entryKey, entry := range l.entries {
 		if now.Sub(entry.start) >= l.window {
-			delete(l.entries, key)
+			l.drop(entryKey, entry)
+			continue
+		}
+		expiry := entry.start.Add(l.window)
+		if globalNext.IsZero() || expiry.Before(globalNext) {
+			globalNext = expiry
+		}
+		if current, ok := keyNext[entry.key]; !ok || expiry.Before(current) {
+			keyNext[entry.key] = expiry
+		}
+	}
+	l.globalNextExpiry, l.keyNextExpiry = globalNext, keyNext
+}
+
+// forceSweep is sweepAll for a saturated map, run only once something can
+// have expired.
+func (l *KeyedLimiter) forceSweep(now time.Time) {
+	if !l.globalNextExpiry.IsZero() && now.Before(l.globalNextExpiry) {
+		return
+	}
+	l.fullSweeps++
+	l.sweepAll(now)
+}
+
+// expireKey deletes the expired entries of one key: O(that key's bound), run
+// only once something of the key's can have expired.
+func (l *KeyedLimiter) expireKey(key string, now time.Time) {
+	if next, ok := l.keyNextExpiry[key]; ok && now.Before(next) {
+		return
+	}
+	l.keyScans++
+	var next time.Time
+	for entryKey := range l.keyPaths[key] {
+		entry := l.entries[entryKey]
+		if entry == nil || now.Sub(entry.start) >= l.window {
+			l.drop(entryKey, entry)
+			if entry == nil {
+				delete(l.keyPaths[key], entryKey)
+			}
+			continue
+		}
+		if expiry := entry.start.Add(l.window); next.IsZero() || expiry.Before(next) {
+			next = expiry
+		}
+	}
+	if next.IsZero() {
+		delete(l.keyNextExpiry, key)
+	} else {
+		l.keyNextExpiry[key] = next
+	}
+}
+
+// drop removes one entry from the map and from its key's set.
+func (l *KeyedLimiter) drop(entryKey string, entry *fixedWindowEntry) {
+	delete(l.entries, entryKey)
+	if entry == nil {
+		return
+	}
+	if set := l.keyPaths[entry.key]; set != nil {
+		delete(set, entryKey)
+		if len(set) == 0 {
+			delete(l.keyPaths, entry.key)
+			delete(l.keyNextExpiry, entry.key)
 		}
 	}
 }

@@ -123,6 +123,13 @@ type RESTRequest struct {
 	DedupListPath  string
 	DedupKeyFields []string
 
+	// PathLiterals substitutes fixed, non-secret values into the route's own
+	// {placeholders} (for example the one schema version, or an id that must
+	// not exist), where no earlier response produces the value and an
+	// operator-supplied -bind would only restate a constant. Every key must
+	// be a placeholder of the entry's Path (ValidateRESTCorpus checks it).
+	PathLiterals map[string]string
+
 	// Produces lists ids this request's BASELINE response makes
 	// available to a LATER request's own IDBindings -- see
 	// restidbind.go's package doc comment. Empty for every request that
@@ -172,6 +179,9 @@ type RESTEndpointSpec struct {
 	// Service is the Go service the candidate leg is sent to. Empty means
 	// query-api; see RESTService.
 	Service RESTService
+	// Credential is which bearer this entry's legs send; empty means the
+	// run's own. See RESTCredentialKind.
+	Credential RESTCredentialKind
 }
 
 // investmentBaselineDefects is shared by GET and POST /api/v1/investment

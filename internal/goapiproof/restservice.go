@@ -3,6 +3,7 @@ package goapiproof
 import (
 	"fmt"
 	"sort"
+	"strings"
 )
 
 // RESTService names the Go service a corpus entry's candidate leg is sent
@@ -17,6 +18,20 @@ const (
 	RESTServiceQueryAPI RESTService = "query-api"
 	// RESTServiceDHOAPI is the dho api service (internal/apiservice).
 	RESTServiceDHOAPI RESTService = "dho-api"
+)
+
+// RESTCredentialKind says which credential a corpus entry's legs send. The
+// default is the run's own pair of bearers (-candidate/-baseline-bearer-exec);
+// a push-token entry sends the external-ingest push token from
+// -push-token-file on BOTH legs, because that API owns its own bearer
+// authentication and accepts nothing else.
+type RESTCredentialKind string
+
+const (
+	// RESTCredentialRun is the default: the run's own bearers.
+	RESTCredentialRun RESTCredentialKind = ""
+	// RESTCredentialPushToken is the external-ingest push token.
+	RESTCredentialPushToken RESTCredentialKind = "push_token"
 )
 
 // ParseRESTService resolves a -service flag value; the empty string is
@@ -79,6 +94,9 @@ func KnownRESTPathsFor(service RESTService) []string {
 // versa only for non-default services: a dho-api entry that is never run
 // would read as covered while measuring nothing.
 func validateRESTServices() error {
+	if err := validateRESTCredentialKinds(); err != nil {
+		return err
+	}
 	inOrder := map[string]bool{}
 	for _, operation := range restRunOrder {
 		inOrder[operation] = true
@@ -89,6 +107,46 @@ func validateRESTServices() error {
 		}
 		if spec.EffectiveService() != RESTServiceQueryAPI && !inOrder[operation] {
 			return fmt.Errorf("goapiproof: REST corpus entry %q targets %s but is absent from restRunOrder, so no run would ever send it", operation, spec.EffectiveService())
+		}
+	}
+	return nil
+}
+
+// PlansPushTokenEntries says whether a run of service sends any entry that
+// needs the push token, so a run without -push-token-file can refuse at
+// startup instead of failing request by request.
+func PlansPushTokenEntries(service RESTService) bool {
+	for _, operation := range RESTRunOrderFor(service) {
+		if restEndpointSpecs[operation].Credential == RESTCredentialPushToken {
+			return true
+		}
+	}
+	return false
+}
+
+// validateRESTCredentialKinds refuses an unknown credential kind, a push
+// token entry outside the dho api (only that service authenticates it), and a
+// PathLiterals key that is not a {placeholder} of the entry's path.
+func validateRESTCredentialKinds() error {
+	for operation, spec := range restEndpointSpecs {
+		switch spec.Credential {
+		case RESTCredentialRun:
+		case RESTCredentialPushToken:
+			if spec.EffectiveService() != RESTServiceDHOAPI {
+				return fmt.Errorf("goapiproof: REST corpus entry %q sends the push token but targets %s, not %s", operation, spec.EffectiveService(), RESTServiceDHOAPI)
+			}
+			if spec.PublicNoAuth {
+				return fmt.Errorf("goapiproof: REST corpus entry %q is both PublicNoAuth and a push-token entry", operation)
+			}
+		default:
+			return fmt.Errorf("goapiproof: REST corpus entry %q has an unknown credential kind %q", operation, spec.Credential)
+		}
+		for _, request := range spec.Requests {
+			for name := range request.PathLiterals {
+				if !strings.Contains(spec.Path, "{"+name+"}") {
+					return fmt.Errorf("goapiproof: REST corpus entry %q request %q gives a PathLiterals value for {%s}, which is not a placeholder of %s", operation, request.Name, name, spec.Path)
+				}
+			}
 		}
 	}
 	return nil

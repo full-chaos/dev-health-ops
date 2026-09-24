@@ -144,6 +144,8 @@ const postgresURIEnvVar = "POSTGRES_URI"
 type flags struct {
 	queryAPIURL    string
 	dhoAPIURL      string
+	pushTokenFile  string
+	pushCredential *goapiproof.Credential
 	serviceName    string
 	service        goapiproof.RESTService
 	pythonAPIURL   string
@@ -222,6 +224,7 @@ func registerFlags() (*flag.FlagSet, *flags) {
 	})
 	fs.StringVar(&f.queryAPIURL, "query-api-url", "http://localhost:8090", "query-api's OWN in-cluster address -- the candidate leg. Never an edge or ingress URL: every request this tool sends goes DIRECTLY to this service")
 	fs.StringVar(&f.dhoAPIURL, "dho-api-url", "", "the dho api service's OWN in-cluster address -- the candidate leg when -service=dho-api (required then, ignored otherwise). Never an edge or ingress URL")
+	fs.StringVar(&f.pushTokenFile, "push-token-file", "", "path to a file holding the external-ingest push token (fcpush_...), sent on BOTH legs of every corpus entry that authenticates with it (the external-ingest routes of -service=dho-api). Required when the run plans such entries. The token is read from the file on every use and is never taken from argv, printed or written to a receipt")
 	fs.StringVar(&f.serviceName, "service", string(goapiproof.RESTServiceQueryAPI), "which Go service this run measures: query-api (default) or dho-api. One run measures one service; the build every receipt names is read from that service's /buildinfo, and only that service's corpus entries are sent")
 	fs.StringVar(&f.pythonAPIURL, "python-api-url", "", "the Python api service's OWN in-cluster address -- the baseline leg (required). Never an edge or ingress URL, for the same reason as -query-api-url")
 	fs.BoolVar(&f.pythonForwarderOff, "python-forwarder-off", false, "attest that the Python app's forwarding switch for every endpoint it can forward to query-api (RESTEndpointSpec.PythonForwarder: POST /api/v1/investment/explain) is OFF for this whole run, so a 200 baseline there is Python's own answer and is compared. The Python app relays query-api's answer without any header that marks it, so nothing on the response can show which plane computed it: without this flag such a 200 baseline is refused by name, and with it every receipt for such an endpoint records the attestation")
@@ -1173,6 +1176,19 @@ func run(f flags) (err error) {
 	if err := goapiproof.ValidateRESTCorpus(); err != nil {
 		return err
 	}
+	// A run that plans push-token entries without a token file would refuse
+	// each of them one request at a time; name the missing flag once, first.
+	if goapiproof.PlansPushTokenEntries(f.service) && f.pushTokenFile == "" {
+		return fmt.Errorf("the -service=%s corpus has external-ingest entries that authenticate with the push token: pass -push-token-file", f.service)
+	}
+	// ...and a file that is missing, unreadable or not a push token refuses
+	// here too, before any setup request is sent (the credential itself only
+	// reads the file when an ingest request uses it).
+	if goapiproof.PlansPushTokenEntries(f.service) {
+		if err := goapiproof.CheckPushTokenFile(f.pushTokenFile); err != nil {
+			return err
+		}
+	}
 	// A run that plans nothing measured nothing; it must not read as a pass.
 	if len(goapiproof.RESTRunOrderFor(f.service)) == 0 {
 		return fmt.Errorf("the REST corpus has no entry that targets -service=%s, so this run would send nothing", f.service)
@@ -1199,6 +1215,9 @@ func run(f flags) (err error) {
 	baselineCredential, err := buildCredential("Authorization", "baseline bearer", "-baseline-bearer-exec", f.baselineBearerExec)
 	if err != nil {
 		return err
+	}
+	if f.pushTokenFile != "" {
+		f.pushCredential = goapiproof.PushTokenFileCredential(f.pushTokenFile)
 	}
 
 	// No client-level Timeout: Go's http.Client re-derives its own
@@ -1353,7 +1372,7 @@ func resolveSingleShotRequest(
 	resolvedSpec := spec
 	resolvedRequest := request
 	var boundIDs map[string]string
-	if len(request.IDBindings) > 0 {
+	if len(request.IDBindings) > 0 || len(request.PathLiterals) > 0 {
 		resolvedPath, resolvedQuery, resolvedBody, unresolved := goapiproof.ResolveRESTIDBindings(spec.Path, request, produced)
 		if len(unresolved) > 0 {
 			// An entry whose id does not resolve is refused by name and
@@ -1613,7 +1632,19 @@ func candidateHasNoData(refusal string) bool {
 	return false
 }
 
-func runMeasurement(ctx context.Context, client *goapiproof.LegClient, f flags, candidateCredential, baselineCredential *goapiproof.Credential, builds goapiproof.ProverBuild, pgPool receiptWriter, artifacts *goapiproof.ArtifactStore) error {
+// credentialsFor picks the credentials one corpus entry's legs send: the
+// run's own pair, or -- for an entry that authenticates with the external-
+// ingest push token -- that one token on BOTH legs (the ingest API owns its
+// own bearer authentication on either plane and accepts nothing else, and
+// the run's bearers are never sent to it).
+func credentialsFor(spec goapiproof.RESTEndpointSpec, push, runCandidate, runBaseline *goapiproof.Credential) (candidate, baseline *goapiproof.Credential) {
+	if spec.Credential == goapiproof.RESTCredentialPushToken {
+		return push, push
+	}
+	return runCandidate, runBaseline
+}
+
+func runMeasurement(ctx context.Context, client *goapiproof.LegClient, f flags, runCandidateCredential, runBaselineCredential *goapiproof.Credential, builds goapiproof.ProverBuild, pgPool receiptWriter, artifacts *goapiproof.ArtifactStore) error {
 	namedBuild := builds.Candidate
 	if f.gapDelay > 0 {
 		f.gapReread = newGapRereadState(f.gapDelay, f.gapBudget)
@@ -1690,6 +1721,7 @@ requestLoop:
 
 		var attempt resolvedAttempt
 		var err error
+		candidateCredential, baselineCredential := credentialsFor(spec, f.pushCredential, runCandidateCredential, runBaselineCredential)
 		if iterating, ok := findIteratingBinding(request.IDBindings); ok {
 			attempt, err = resolveIteratingRequest(ctx, client, f, operation, spec, request, iterating, produced, producedCandidates, candidateCredential, baselineCredential, namedBuild, auth, observedAt, pgPool, artifacts)
 		} else {

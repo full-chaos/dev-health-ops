@@ -1,12 +1,15 @@
 package restprove
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/goapiproof"
 )
@@ -148,5 +151,89 @@ func TestFinalRunReportFailsADHOAPIRunThatAdmittedNothing(t *testing.T) {
 	// query-api keeps its per-case refusal semantics.
 	if report, err := finalRunReport(flags{}, refused, nil, nil, nil, nil, nil); err != nil || report.ExitCause != exitCompleted {
 		t.Fatalf("query-api run changed behaviour: %q %v", report.ExitCause, err)
+	}
+}
+
+func TestCredentialsForSendsThePushTokenOnBothLegsOnlyForIngestEntries(t *testing.T) {
+	push := goapiproof.StaticCredential("Authorization", "push bearer", "fcpush_x")
+	runCand := goapiproof.StaticCredential("Authorization", "candidate bearer", "a.b.c")
+	runBase := goapiproof.StaticCredential("Authorization", "baseline bearer", "d.e.f")
+
+	c, b := credentialsFor(goapiproof.RESTEndpointSpec{Credential: goapiproof.RESTCredentialPushToken}, push, runCand, runBase)
+	if c != push || b != push {
+		t.Fatal("a push-token entry must send the push token on BOTH legs and never the run's bearers")
+	}
+	c, b = credentialsFor(goapiproof.RESTEndpointSpec{}, push, runCand, runBase)
+	if c != runCand || b != runBase {
+		t.Fatal("every other entry must keep the run's own bearers")
+	}
+}
+
+func TestRunRefusesAPushTokenCorpusWithoutATokenFile(t *testing.T) {
+	f, err := parseFlags(serviceArgs("-service", "dho-api", "-dho-api-url", "http://127.0.0.1:1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.pushTokenFile = ""
+	err = run(f)
+	if err == nil || !strings.Contains(err.Error(), "-push-token-file") {
+		t.Fatalf("a dho-api run planning ingest entries needs -push-token-file, got %v", err)
+	}
+}
+
+// TestResolveSingleShotRequestFillsPathLiteralsWithoutIDBindings drives the
+// prover's own request path for an entry that declares PathLiterals and no
+// IDBindings: the placeholder must be filled before either leg is sent (a
+// literal "{placeholder}" on the wire is a 404/422, not a measurement).
+func TestResolveSingleShotRequestFillsPathLiteralsWithoutIDBindings(t *testing.T) {
+	const build = "abc123def456"
+	candidateURL, baselineURL, paths := iteratingFixtureServers(t, build, nil, map[string]string{"/things/known/x": `[{"a":1}]`})
+	f := flags{queryAPIURL: candidateURL, pythonAPIURL: baselineURL, org: "org-1", recordedBy: "chris", reviewEvidence: "test"}
+	spec := goapiproof.RESTEndpointSpec{Method: http.MethodGet, Path: "/things/{name}/x"}
+	request := goapiproof.RESTRequest{
+		Name: "literal", PathLiterals: map[string]string{"name": "known"},
+		WantCandidateStatus: 200, WantBaselineStatus: 200, BodyMode: goapiproof.RESTBodyModeStatusOnly,
+	}
+	attempt, err := resolveSingleShotRequest(context.Background(), goapiproof.NewLegClient(0), f, "REST:GET:/things/{name}/x",
+		spec, request, map[string]string{},
+		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), &fakeReceiptWriter{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if attempt.spec.Path != "/things/known/x" || !attempt.legsSent {
+		t.Fatalf("resolved path = %q (legsSent %v), want /things/known/x with legs sent", attempt.spec.Path, attempt.legsSent)
+	}
+	for _, sent := range *paths {
+		if strings.Contains(sent, "{") || strings.Contains(sent, "%7B") {
+			t.Fatalf("a placeholder reached the wire: %q", sent)
+		}
+	}
+}
+
+// TestRunRefusesAnUnreadablePushTokenFileBeforeSendingAnything: a supplied
+// token file that is missing, or does not hold a push token, must refuse at
+// startup -- not after the build-identity and principal setup requests.
+func TestRunRefusesAnUnreadablePushTokenFileBeforeSendingAnything(t *testing.T) {
+	var hits atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { hits.Add(1) }))
+	defer server.Close()
+	notAToken := filepath.Join(t.TempDir(), "not-a-token")
+	if err := os.WriteFile(notAToken, []byte("definitely-not-a-push-token-SECRETVALUE"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for name, file := range map[string]string{"missing": filepath.Join(t.TempDir(), "absent"), "wrong shape": notAToken} {
+		args := serviceArgs("-service", "dho-api", "-dho-api-url", server.URL, "-push-token-file", file)
+		args = append(args, "-artifact-dir", t.TempDir())
+		f, err := parseFlags(args)
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = run(f)
+		if err == nil || !strings.Contains(err.Error(), "push token") || strings.Contains(err.Error(), "SECRETVALUE") {
+			t.Fatalf("%s: want a push-token-file refusal that does not leak the content, got %v", name, err)
+		}
+		if hits.Load() != 0 {
+			t.Fatalf("%s: a run with an unusable token file sent %d request(s) before refusing", name, hits.Load())
+		}
 	}
 }

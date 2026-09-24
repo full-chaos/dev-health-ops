@@ -10,7 +10,7 @@ alembic==1.20.0
 amqp==5.4.0
 annotated-doc==0.0.5
 annotated-types==0.8.0
-anyio==4.15.1
+anyio==4.14.2
 atlassian-gen-client==0.1.0b3
 bcrypt==5.0.0
 billiard==4.3.0
@@ -29,7 +29,7 @@ dnspython==2.8.0
 email-validator==2.3.0
 fastapi==0.136.3
 gitdb==4.0.12
-GitPython==3.1.62
+GitPython==3.1.59
 graphql-core==3.2.12
 greenlet==3.5.6
 h11==0.16.0

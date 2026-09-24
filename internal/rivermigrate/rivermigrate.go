@@ -19,7 +19,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/chmigrate"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
-	"github.com/full-chaos/dev-health-ops/internal/pgmigrate"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	platformsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
@@ -36,18 +35,23 @@ const (
 	defaultAPIRole         = "devhealth_api"
 )
 
-// Command is `dho migrate`: the `postgres` group (the application schema
-// head, internal/pgmigrate) and the `river` verb.
+// Command is `dho migrate`: the `postgres` and `clickhouse` groups (each
+// schema's head, internal/pgmigrate and internal/chmigrate), the `upgrade`
+// verb that runs the migrate Job's steps in order, and the `river` verb.
 func Command() cli.Command {
 	return cli.Command{
 		Name:    "migrate",
 		Summary: "apply or check database schemas",
 		Kind:    cli.Group,
 		Children: []cli.Command{
-			pgmigrate.Command(func(lookup platformsecrets.LookupEnv, stderr io.Writer) (platformsecrets.Value, string, bool) {
-				return resolveMigrationDatabaseURI(lookup, stderr, true)
-			}),
+			migrationPostgresCommand(),
 			chmigrate.Command(),
+			{
+				Name:    "upgrade",
+				Summary: "run the migrate Job's steps in order: postgres upgrade, features seed, clickhouse upgrade",
+				Kind:    cli.Verb,
+				Run:     runUpgrade,
+			},
 			{
 				Name:    "river",
 				Summary: "apply the pinned River schema and runtime grant posture, or check it (--check, --apply-and-check)",

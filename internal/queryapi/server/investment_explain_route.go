@@ -331,14 +331,7 @@ func writeKeepAliveJSON(ctx context.Context, w http.ResponseWriter, work func(co
 				// run, not assumed. Caught by codex round 1 (P1); the two
 				// error bodies never carry attacker-controlled data, so a
 				// hand-written literal is safe and exact, not a shortcut.
-				_, _ = w.Write([]byte(`{"error": "Streaming error", "detail": "An internal error has occurred."}`))
-				if flusher != nil {
-					flusher.Flush()
-				}
-				_, _ = w.Write([]byte(`{"error": "Streaming error", "detail": "An internal streaming error occurred."}`))
-				if flusher != nil {
-					flusher.Flush()
-				}
+				writeStreamErrorChunks(w, flusher)
 				log.Printf("query-api: investment/explain streaming error: %v", result.err)
 				return
 			}
@@ -734,4 +727,21 @@ func writeStreamedModelBody(w io.Writer, body []byte) error {
 	}
 	policy.MarkModelBody(w)
 	return nil
+}
+
+// writeStreamErrorChunks writes Python's keep_alive_wrapper error chunks
+// (two json.dumps objects, default spacing) on an already-started 200. The
+// body is the route's own Python shape, not its response_model, so it is
+// marked as such (policy.MarkStreamedBody) and not counted as a wrong
+// writer.
+func writeStreamErrorChunks(w http.ResponseWriter, flusher http.Flusher) {
+	policy.MarkStreamedBody(w)
+	_, _ = w.Write([]byte(`{"error": "Streaming error", "detail": "An internal error has occurred."}`))
+	if flusher != nil {
+		flusher.Flush()
+	}
+	_, _ = w.Write([]byte(`{"error": "Streaming error", "detail": "An internal streaming error occurred."}`))
+	if flusher != nil {
+		flusher.Flush()
+	}
 }

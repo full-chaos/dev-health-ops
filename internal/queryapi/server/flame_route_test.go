@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
@@ -245,5 +246,56 @@ func TestBuildFlameRouteMissingConfigStaysUnmounted(t *testing.T) {
 	}
 	if handler != nil || cleanup != nil {
 		t.Fatal("buildFlameRoute: expected nil handler/cleanup when not configured")
+	}
+}
+
+// oneIssueFlameClient answers the issue lookup with one row, so the flame
+// route reaches its success writer.
+type oneIssueFlameClient struct{}
+
+func (oneIssueFlameClient) Query(context.Context, string, []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+	return &oneIssueFlameScanner{}, nil
+}
+
+type oneIssueFlameScanner struct{ done bool }
+
+func (s *oneIssueFlameScanner) Next() bool {
+	if s.done {
+		return false
+	}
+	s.done = true
+	return true
+}
+
+func (s *oneIssueFlameScanner) Scan(dest ...any) error {
+	created := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	started := created.Add(90 * time.Minute)
+	for index, target := range dest {
+		switch typed := target.(type) {
+		case **string:
+			value := []string{"jira", "story", "done"}[index]
+			*typed = &value
+		case *time.Time:
+			*typed = created
+		case **time.Time:
+			*typed = &started
+		}
+	}
+	return nil
+}
+func (*oneIssueFlameScanner) Err() error   { return nil }
+func (*oneIssueFlameScanner) Close() error { return nil }
+
+// TestNewFlameWorkHandlerSuccessIsAResponseModelBody drives the flame
+// route to a 200 through serveRoute, so a success body left off
+// writeModelResponse fails here.
+func TestNewFlameWorkHandlerSuccessIsAResponseModelBody(t *testing.T) {
+	handler := newFlameWorkHandler(oneIssueFlameClient{})
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/flame?entity_type=issue&entity_id=ISSUE-1", nil)
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	rec := httptest.NewRecorder()
+	serveRoute(t, handler, rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body=%s", rec.Code, rec.Body.String())
 	}
 }

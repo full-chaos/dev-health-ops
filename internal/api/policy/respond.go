@@ -141,6 +141,13 @@ func routeResponseModel(w http.ResponseWriter) (responseModel bool, key string, 
 
 var writerViolations atomic.Int64
 
+// MarkStreamedBody tells w's route that its 2xx body was written in the
+// Python api's own shape outside the response_model path: a
+// StreamingResponse's error chunks, which FastAPI never renders through the
+// model. It marks the body as MarkModelBody does, so the route is not
+// counted as a wrong writer.
+func MarkStreamedBody(w io.Writer) { MarkModelBody(w) }
+
 // RecordMissingModelBody counts a 2xx response on a response_model route
 // whose body did not go through WriteModel (or MarkModelBody): a handler
 // that wrote it another way, which FastAPI never does.

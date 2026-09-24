@@ -50,7 +50,11 @@ def serve(app) -> int:
     probe.bind(("127.0.0.1", 0))
     port = probe.getsockname()[1]
     probe.close()
-    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, http="auto", log_level="warning"))
+    server = uvicorn.Server(
+        uvicorn.Config(
+            app, host="127.0.0.1", port=port, http="auto", log_level="warning"
+        )
+    )
     threading.Thread(target=server.run, daemon=True).start()
     for _ in range(200):
         if server.started:

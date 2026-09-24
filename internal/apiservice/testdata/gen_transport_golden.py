@@ -19,11 +19,18 @@ import itertools
 import json
 import os
 import sys
+from typing import Any
 
-AXES = {
+AXES: dict[str, list[Any]] = {
     "config": ["default", "list", "star"],
     "method": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    "origin": [None, "", "https://a.example", "http://localhost:3000", "https://evil.example"],
+    "origin": [
+        None,
+        "",
+        "https://a.example",
+        "http://localhost:3000",
+        "https://evil.example",
+    ],
     "access_control_request_method": [None, "", "POST", "post", "TRACE"],
     "access_control_request_headers": [
         None,
@@ -36,7 +43,11 @@ AXES = {
     ],
     "access_control_request_private_network": [None, "true"],
 }
-CONFIGS = {"default": None, "list": "https://a.example, https://b.example,,", "star": "*"}
+CONFIGS = {
+    "default": None,
+    "list": "https://a.example, https://b.example,,",
+    "star": "*",
+}
 HEADER_NAMES = {
     "origin": "Origin",
     "access_control_request_method": "Access-Control-Request-Method",
@@ -98,7 +109,11 @@ def main() -> None:
                 recorded.setdefault(key.lower(), []).append(value)
             if "x-request-id" in recorded:
                 recorded["x-request-id"] = ["<generated>"]
-            entry = {"body": response.text, "headers": dict(sorted(recorded.items())), "status": response.status_code}
+            entry = {
+                "body": response.text,
+                "headers": dict(sorted(recorded.items())),
+                "status": response.status_code,
+            }
             key = json.dumps(entry, sort_keys=True)
             if key not in index:
                 index[key] = len(responses)

@@ -355,7 +355,7 @@ func newWorkUnitsGetHandler(reader *investmentexplain.Reader) http.HandlerFunc {
 
 		rangeDays := 14
 		if query.Has("range_days") {
-			raw := query.Get("range_days")
+			raw := lastQueryValue(query, "range_days")
 			parsed, parseErr := parseQueryInt([]any{"query", "range_days"}, raw)
 			if parseErr != nil {
 				// Confirmed live: an explicit-but-empty value ALSO fails

@@ -169,7 +169,7 @@ func newQuadrantWorkHandler(client quadrant.QueryClient) http.HandlerFunc {
 		}
 		rangeDays := 30
 		if query.Has("range_days") {
-			raw := query.Get("range_days")
+			raw := lastQueryValue(query, "range_days")
 			if parsed, parseErr := parseQueryInt([]any{"query", "range_days"}, raw); parseErr == nil {
 				rangeDays = parsed
 			} else {

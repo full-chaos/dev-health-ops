@@ -36,6 +36,7 @@ import (
 	"math"
 	"math/big"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"time"
@@ -445,6 +446,15 @@ func coerceIntBodyField(loc []any, value pyjson.Value) (n int, detail *pydanticE
 		return 0, &pydanticErrorDetail{Type: kind, Loc: loc, Msg: msg, Input: value}
 	}
 	return saturatedInt(number), nil
+}
+
+// lastQueryValue is the value FastAPI reads for a scalar query parameter:
+// the LAST of repeated values (pybody.LastQueryValue), "" when absent.
+func lastQueryValue(query url.Values, name string) string {
+	if value := pybody.LastQueryValue(query, name); value != nil {
+		return *value
+	}
+	return ""
 }
 
 // parseQueryInt reads an int query parameter as FastAPI does (pydantic's

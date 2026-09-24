@@ -164,7 +164,7 @@ func newPeopleMetricHandler(reader *people.Reader) http.HandlerFunc {
 		rangeDays := 14
 		// An explicit empty value is still parsed (pydantic: int_parsing).
 		if query.Has("range_days") {
-			raw := query.Get("range_days")
+			raw := lastQueryValue(query, "range_days")
 			parsed, parseErr := parseQueryInt([]any{"query", "range_days"}, raw)
 			if parseErr != nil {
 				validationErrors = append(validationErrors, *parseErr)
@@ -175,7 +175,7 @@ func newPeopleMetricHandler(reader *people.Reader) http.HandlerFunc {
 		compareDays := 14
 		// An explicit empty value is still parsed (pydantic: int_parsing).
 		if query.Has("compare_days") {
-			raw := query.Get("compare_days")
+			raw := lastQueryValue(query, "compare_days")
 			parsed, parseErr := parseQueryInt([]any{"query", "compare_days"}, raw)
 			if parseErr != nil {
 				validationErrors = append(validationErrors, *parseErr)

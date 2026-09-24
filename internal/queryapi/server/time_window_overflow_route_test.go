@@ -125,3 +125,32 @@ func TestEmptyDayCountIsA422(t *testing.T) {
 		}
 	}
 }
+
+// TestRepeatedDayCountLastWins: FastAPI reads the LAST of repeated scalar
+// query values, so the window is built from it.
+func TestRepeatedDayCountLastWins(t *testing.T) {
+	for target, want := range map[string]int{
+		"/api/v1/drilldown/prs?scope_type=repo&scope_id=repo-a&range_days=14&range_days=1000000000": http.StatusServiceUnavailable,
+		"/api/v1/drilldown/prs?scope_type=repo&scope_id=repo-a&range_days=1000000000&range_days=14": http.StatusOK,
+	} {
+		req := httptest.NewRequest(http.MethodGet, target, nil)
+		req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+		rec := httptest.NewRecorder()
+		newDrilldownPRsGetHandler(newEmptyRowsDrilldownReader(t))(rec, req)
+		if rec.Code != want {
+			t.Errorf("%s: got %d %s, want %d", target, rec.Code, rec.Body.String(), want)
+		}
+	}
+	for target, want := range map[string]int{
+		"/api/v1/home?compare_days=14&compare_days=1000000000": http.StatusServiceUnavailable,
+		"/api/v1/home?compare_days=1000000000&compare_days=14": http.StatusOK,
+	} {
+		req := httptest.NewRequest(http.MethodGet, target, nil)
+		req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+		rec := httptest.NewRecorder()
+		newHomeGetHandler(emptyRowsHomeClient{}, nil)(rec, req)
+		if rec.Code != want {
+			t.Errorf("%s: got %d %s, want %d", target, rec.Code, rec.Body.String(), want)
+		}
+	}
+}

@@ -67,3 +67,28 @@ func TestABasicISODateIsNeverAUnixTimestamp(t *testing.T) {
 		t.Fatalf("pydantic's parse of 20260101 = %v %v; the ordering pin assumes it reads Unix seconds", lax, failure)
 	}
 }
+
+// TestPydanticWritesOffsetsAsPydanticCore pins pydantic-core's offset form:
+// the offset rounded to whole seconds (half away from zero), Z when that is
+// zero, else the sign and whole hours:minutes.
+func TestPydanticWritesOffsetsAsPydanticCore(t *testing.T) {
+	at := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		offset, offsetMicro int
+		want                string
+	}{
+		{0, 0, "Z"}, {0, 499999, "Z"}, {0, -499999, "Z"}, {0, 500000, "+00:00"}, {0, -500000, "-00:00"},
+		{59, 0, "+00:00"}, {-59, 0, "-00:00"}, {59, 500000, "+00:01"}, {-59, -500000, "-00:01"},
+		{19815, 0, "+05:30"}, {-19815, -500000, "-05:30"}, {86399, 500000, "+24:00"}, {86399, 499999, "+23:59"},
+		{3600, 0, "+01:00"}, {-3600, 0, "-01:00"},
+	} {
+		value := DateTime{Time: at.Add(-time.Duration(tc.offset)*time.Second - time.Duration(tc.offsetMicro)*time.Microsecond),
+			Aware: true, Offset: tc.offset, OffsetMicro: tc.offsetMicro}
+		if got := Pydantic(value); got != "2026-01-01T00:00:00"+tc.want {
+			t.Errorf("offset %ds %dus: %s, want %s", tc.offset, tc.offsetMicro, got, "2026-01-01T00:00:00"+tc.want)
+		}
+	}
+	if got := Pydantic(DateTime{Time: at}); got != "2026-01-01T00:00:00" {
+		t.Errorf("naive: %s", got)
+	}
+}

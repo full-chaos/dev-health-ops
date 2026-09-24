@@ -15,7 +15,7 @@ reaching a real environment.
 CHAOS-4696 PR2 made ``internal/queryapi/digest.Schema`` the ONE
 canonical algorithm (``sha256:<hex of raw contracts/graphql/v1/
 schema.graphql bytes>``), shared code both a running ``query-api``
-process and ``cmd/query-api/tools/registrydump -schema-digest`` call.
+process and ``cmd/registrydump -schema-digest`` call.
 
 **CHAOS-5013 (2026-09-04) removed ``GO_API_SCHEMA_DIGEST`` and the
 startup verification against it** (chris: "you version a schema, but to
@@ -43,7 +43,7 @@ import subprocess
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-REGISTRYDUMP_DIR = REPO_ROOT / "cmd" / "query-api" / "tools" / "registrydump"
+REGISTRYDUMP_DIR = REPO_ROOT / "cmd" / "registrydump"
 
 
 @functools.lru_cache(maxsize=1)

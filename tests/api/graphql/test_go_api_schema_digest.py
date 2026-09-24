@@ -41,7 +41,7 @@ from dev_health_ops.api.graphql.go_api_schema_digest import (
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SDL_PATH = REPO_ROOT / "contracts" / "graphql" / "v1" / "schema.graphql"
 PIN_PATH = REPO_ROOT / "contracts" / "graphql" / "v1" / "schema-digest.json"
-REGISTRYDUMP_DIR = REPO_ROOT / "cmd" / "query-api" / "tools" / "registrydump"
+REGISTRYDUMP_DIR = REPO_ROOT / "cmd" / "registrydump"
 
 
 def test_digest_is_sha256_of_the_raw_sdl_bytes() -> None:

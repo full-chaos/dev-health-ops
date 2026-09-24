@@ -12,12 +12,15 @@ package server
 // text.
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	otelprometheus "go.opentelemetry.io/otel/exporters/prometheus"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/resource"
+	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 )
 
 // newPrometheusMeterProvider builds an OTel SDK MeterProvider backed by a
@@ -38,12 +41,30 @@ func newPrometheusMeterProvider(extraReaders ...sdkmetric.Reader) (*sdkmetric.Me
 		return nil, nil, err
 	}
 
-	opts := make([]sdkmetric.Option, 0, len(extraReaders)+1)
-	opts = append(opts, sdkmetric.WithReader(exporter))
+	res, err := meterResource()
+	if err != nil {
+		return nil, nil, err
+	}
+	opts := make([]sdkmetric.Option, 0, len(extraReaders)+2)
+	opts = append(opts, sdkmetric.WithResource(res), sdkmetric.WithReader(exporter))
 	for _, reader := range extraReaders {
 		opts = append(opts, sdkmetric.WithReader(reader))
 	}
 	return sdkmetric.NewMeterProvider(opts...), registry, nil
+}
+
+// meterResource is the metrics resource: service.name is otelServiceName,
+// the name the traces and the startup Info log carry, unless
+// OTEL_SERVICE_NAME or OTEL_RESOURCE_ATTRIBUTES sets it (WithFromEnv runs
+// after WithAttributes, so the environment wins, as it does for traces).
+// Without it the SDK default is "unknown_service:<executable>", so the
+// metrics identity would follow the binary's file name, which is dho.
+func meterResource() (*resource.Resource, error) {
+	return resource.New(context.Background(),
+		resource.WithTelemetrySDK(),
+		resource.WithAttributes(semconv.ServiceName(otelServiceName)),
+		resource.WithFromEnv(),
+	)
 }
 
 // metricsHandler renders registry's collected series as Prometheus

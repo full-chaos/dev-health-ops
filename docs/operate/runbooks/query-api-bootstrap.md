@@ -18,30 +18,32 @@ Query-api provides the schema digest, routing tables, and proof harness for the 
 - **Image registry credentials** — `ghcr-pull` Secret with `write:packages` scope.
 - **PostgreSQL query role** — `devhealth` user via pgbouncer-transaction (not direct `:5432` in this design, though current prod still uses direct due to chart limitations — see section **"Registry DSN"** below).
 
-## Step 1: Build and push query-api image
+## Step 1: Build and push the dho image
+
+query-api runs as `dho query-api` from the dho image (the `dho` target of `docker/go-worker.Dockerfile`). CI publishes that image on every merge to main; build it by hand only for a commit CI has not published.
 
 ### Build the image
 
-Build `query-api` at a known Git commit:
+Build the dho image at a known Git commit:
 ```bash
-docker build --tag ghcr.io/full-chaos/dev-health-query-api:sha-<COMMIT_SHA> \
-  --tag ghcr.io/full-chaos/dev-health-query-api:latest \
-  -f Dockerfile.query-api .
+docker build --target dho \
+  --tag ghcr.io/full-chaos/dev-health-go-dho:sha-<COMMIT_SHA> \
+  -f docker/go-worker.Dockerfile .
 ```
 
 ### Multi-arch build (optional but recommended for prod)
 
 ```bash
-docker buildx build --tag ghcr.io/full-chaos/dev-health-query-api:sha-<COMMIT_SHA> \
+docker buildx build --target dho \
+  --tag ghcr.io/full-chaos/dev-health-go-dho:sha-<COMMIT_SHA> \
   --platform linux/amd64,linux/arm64 \
-  -f Dockerfile.query-api --push .
+  -f docker/go-worker.Dockerfile --push .
 ```
 
 ### Push to GHCR
 
 ```bash
-docker push ghcr.io/full-chaos/dev-health-query-api:sha-<COMMIT_SHA>
-docker push ghcr.io/full-chaos/dev-health-query-api:latest
+docker push ghcr.io/full-chaos/dev-health-go-dho:sha-<COMMIT_SHA>
 ```
 
 Record the manifest-list sha256 from the push output.
@@ -98,7 +100,7 @@ Digest pairing is verified automatically when routing is enabled (end of step 7)
 ### Manifest values
 
 Manifest applies with:
-- Image: `ghcr.io/full-chaos/dev-health-query-api:<sha-COMMIT>@sha256:<manifest-list-sha>`
+- Image: `ghcr.io/full-chaos/dev-health-go-dho:<sha-COMMIT>@sha256:<manifest-list-sha>`, with `args: [query-api]`
 - `imagePullSecrets: ghcr-pull`
 - Environment from `dev-health-query-api-envelope` Secret by `secretKeyRef` (never flags/argv — Trap #121, R167).
 - Registry PostgreSQL DSN: **currently direct `:5432` form** (see section below).

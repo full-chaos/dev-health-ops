@@ -291,8 +291,11 @@ queryApi:
   replicas: 1
   port: 8090
   image:
-    # -- Non-local profiles (prod/kiac) pin `repository@sha256:<digest>` explicitly; this bare-tag default is for local/dev use only.
-    repository: ghcr.io/full-chaos/dev-health-query-api
+    # -- The dho image (docker/go-worker.Dockerfile target `dho`); the
+    #    Deployment runs `dho query-api`. Non-local profiles (prod/kiac) pin
+    #    `repository@sha256:<digest>` explicitly; this bare-tag default is for
+    #    local/dev use only. The retired dev-health-query-api image is refused.
+    repository: ghcr.io/full-chaos/dev-health-go-dho
     # -- Empty defaults to Chart.appVersion. A `repo@sha256:...` digest (with or
     #    without a readable tag in front) is accepted in `repository` and used
     #    verbatim, the same rule image/webImage follow.

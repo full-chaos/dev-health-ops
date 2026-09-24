@@ -97,7 +97,7 @@ func TestMountedRouteLogMessage_EmptyMapNamesNoOperations(t *testing.T) {
 // src/dev_health_ops/api/graphql/go_api_operations.json -- the CHECKED-IN
 // catalog test_go_api_operation_catalog.py's
 // test_checked_in_catalog_has_not_drifted_from_registrydump already keeps
-// byte-for-byte in sync with cmd/query-api/tools/registrydump's independent
+// byte-for-byte in sync with cmd/registrydump's independent
 // static parse of THIS package's digestByOperation literal. Comparing
 // against that file (rather than a second hand-typed operation list here)
 // means this test cannot itself become the next stale list: if a document

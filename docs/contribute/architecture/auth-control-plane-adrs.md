@@ -123,7 +123,7 @@ Select, and record here as pinned versions at Wave 1 start:
 4. **Algorithm: Ed25519/EdDSA for every asymmetric platform token.** Not RS256.
    This is already the reconciled platform position and the JWKS verifier
    enforces it.
-5. **PostgreSQL:** `pgx/v5` (already in use, `cmd/query-api` builds a
+5. **PostgreSQL:** `pgx/v5` (already in use: query-api's server package builds a
    `pgxpool.Pool`). Migrations continue through the repository's existing
    alembic-owned schema until ADR-04 transfers ownership.
 6. **OAuth/OIDC, SAML, and password hashing: DEFERRED to a named Wave 1

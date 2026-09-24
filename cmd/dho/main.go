@@ -17,6 +17,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/contractcheck"
 	"github.com/full-chaos/dev-health-ops/internal/goapicli"
 	"github.com/full-chaos/dev-health-ops/internal/mintcli"
+	"github.com/full-chaos/dev-health-ops/internal/queryapiservice"
 	"github.com/full-chaos/dev-health-ops/internal/reconcilerservice"
 	"github.com/full-chaos/dev-health-ops/internal/rivermigrate"
 	"github.com/full-chaos/dev-health-ops/internal/schedulerservice"
@@ -34,6 +35,7 @@ func commands() []cli.Command {
 		contractcheck.Command(),
 		goapicli.Command(),
 		mintcli.Command(),
+		queryapiservice.Command(),
 		reconcilerservice.Command(),
 		rivermigrate.Command(),
 		schedulerservice.Command(),

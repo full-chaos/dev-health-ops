@@ -20,14 +20,13 @@ import (
 // (.github/workflows/docker-images.yml); the rest are third-party images
 // pulled verbatim from their own upstream registries.
 var publishedImageRepositories = map[string]bool{
-	"ghcr.io/full-chaos/dev-hops-api":         true,
-	"ghcr.io/full-chaos/dev-health-web":       true,
-	"ghcr.io/full-chaos/dev-health-query-api": true,
-	"ghcr.io/full-chaos/dev-health-go-dho":    true,
-	"valkey/valkey":                           true,
-	"clickhouse/clickhouse-server":            true,
-	"postgres":                                true,
-	"edoburu/pgbouncer":                       true,
+	"ghcr.io/full-chaos/dev-hops-api":      true,
+	"ghcr.io/full-chaos/dev-health-web":    true,
+	"ghcr.io/full-chaos/dev-health-go-dho": true,
+	"valkey/valkey":                        true,
+	"clickhouse/clickhouse-server":         true,
+	"postgres":                             true,
+	"edoburu/pgbouncer":                    true,
 }
 
 // repositoryOf strips a trailing ":tag" and/or "@sha256:<digest>" from a

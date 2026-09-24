@@ -100,7 +100,7 @@ type buildInfoResponse = version.Info
 // envelope /query requires.
 //
 // The values come from internal/platform/version, which
-// docker/query-api.Dockerfile already stamps via -ldflags (VERSION,
+// docker/go-worker.Dockerfile already stamps into dho via -ldflags (VERSION,
 // COMMIT, BUILD_TIME) and which falls back to Go's own VCS build
 // settings. So this route reports what was actually built; it does not
 // take the answer from the environment at run time, where a wrong value

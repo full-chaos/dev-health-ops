@@ -38,7 +38,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 QUERY_ROUTE_GO = REPO_ROOT / "internal" / "queryapi" / "server" / "query_route.go"
-REGISTRYDUMP_DIR = REPO_ROOT / "cmd" / "query-api" / "tools" / "registrydump"
+REGISTRYDUMP_DIR = REPO_ROOT / "cmd" / "registrydump"
 CATALOG_PATH = (
     REPO_ROOT / "src" / "dev_health_ops" / "api" / "graphql" / "go_api_operations.json"
 )

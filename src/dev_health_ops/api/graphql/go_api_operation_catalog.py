@@ -12,9 +12,9 @@ Loaded from ``go_api_operations.json``, a CHECKED-IN artifact regenerated
 by ``scripts/go_api/generate_operation_catalog.py`` from query-api's own
 ``registrydump`` tool -- never hand-maintained (CHAOS-4466/CHAOS-4495 is
 the drift class that produces). It is NOT regenerated at runtime: the
-production Python edge image has no Go toolchain (query-api ships from a
-separate, distroless-based image build -- see ``docker/query-api.Dockerfile``
-vs ``docker/Dockerfile``), so shelling out to ``go run`` at process
+production Python edge image has no Go toolchain (query-api ships as
+``dho query-api`` in a separate, distroless-based image build -- see
+``docker/go-worker.Dockerfile`` vs ``docker/Dockerfile``), so shelling out to ``go run`` at process
 startup is not an option here the way it is for a test harness.
 ``tests/api/graphql/test_go_api_operation_catalog.py`` is the drift check
 that keeps the checked-in file honest, the same shape as

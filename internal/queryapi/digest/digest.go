@@ -2,7 +2,7 @@
 // digests are computed.
 //
 // CHAOS-4696 PR1 pulled document-digesting out of query_route.go's private
-// digestHex helper so cmd/query-api/tools/registrydump could compute the
+// digestHex helper so cmd/registrydump could compute the
 // EXACT SAME digest a running query-api process would, by importing it
 // instead of re-typing the algorithm in a different binary and hoping the
 // two copies never drift. PR2 added Schema for the same reason one level

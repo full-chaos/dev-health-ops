@@ -83,7 +83,12 @@ func (h handlers) orgTier(ctx context.Context, orgID pyjson.Value) *string {
 // items' prices, then for an org in the metadata a license signed for that
 // tier and persisted; a changed tier queues subscription_changed. An items
 // data value that cannot be iterated is the route's 500, as in Python.
-func (h handlers) subscriptionUpdated(ctx context.Context, subscription pyjson.Value) error {
+//
+// oldTier is the org's tier read before the event's plan sync ran
+// (read in the route before processSubscriptionEvent): read after it, it is already the new tier and no
+// upgrade or downgrade would ever be announced (the Python order's gap,
+// CHAOS-6525).
+func (h handlers) subscriptionUpdated(ctx context.Context, subscription pyjson.Value, oldTier *string) error {
 	customer := attr(subscription, "customer", nil)
 	itemsData := attr(subscription, "items", nil)
 	if !pyjson.Truthy(itemsData) {
@@ -108,7 +113,6 @@ func (h handlers) subscriptionUpdated(ctx context.Context, subscription pyjson.V
 		h.logger.InfoContext(ctx, "subscription.updated without org_id metadata", "customer", pyStr(customer))
 		return nil
 	}
-	oldTier := h.orgTier(ctx, orgID)
 	orgText, isText := orgID.(string)
 	key := h.licenseKey.Reveal()
 	if !isText || key == "" {

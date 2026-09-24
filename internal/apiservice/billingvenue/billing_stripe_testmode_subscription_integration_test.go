@@ -230,6 +230,14 @@ func TestStripeTestModeSubscriptionLifecycle(t *testing.T) {
 	if !strings.Contains(first, "subscription_cancelled") || !strings.Contains(first, "invoice_receipt") {
 		t.Errorf("the cancellation or the receipt was not queued: %s", first)
 	}
+	if strings.Count(first, "subscription_changed") != 1 {
+		t.Errorf("the upgrade (team to enterprise) was not announced exactly once: %s", first)
+	}
+	changed := venueoracle.TableRows(t, ctx, goURI, `SELECT attributes::text FROM billing_notifications
+		WHERE org_id = '`+org+`' AND notification_type = 'subscription_changed'`)
+	if changed != `{"old_tier": "team", "new_tier": "enterprise"}` {
+		t.Errorf("the upgrade announcement names %s, want team to enterprise", changed)
+	}
 	if second != first {
 		t.Errorf("the redelivery changed state:\n first  %s\n second %s", first, second)
 	}

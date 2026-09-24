@@ -100,8 +100,10 @@ func (h handlers) stripeWebhook(w http.ResponseWriter, r *http.Request) {
 	case "customer.subscription.created":
 		h.processSubscriptionEvent(ctx, event, eventType, dataObject)
 	case "customer.subscription.updated":
+		// The org's tier before the plan sync changes it.
+		priorTier := h.orgTier(ctx, h.handlerOrgID(ctx, dataObject))
 		if replayed := h.processSubscriptionEvent(ctx, event, eventType, dataObject); !replayed {
-			if err := h.subscriptionUpdated(ctx, dataObject); err != nil {
+			if err := h.subscriptionUpdated(ctx, dataObject, priorTier); err != nil {
 				h.internal(w, r, "stripe webhook", err)
 				return
 			}

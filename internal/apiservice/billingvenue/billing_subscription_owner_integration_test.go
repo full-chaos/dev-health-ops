@@ -40,6 +40,12 @@ func TestSubscriptionEventsResolveTheOwningOrg(t *testing.T) {
 		Root: venueRoot(), JWTKey: venueKey, Logger: quietLogger(), PythonEnv: pythonEnv,
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
 			seed = billingSeed(t, ctx, admin)
+			// The configured enterprise price, mapped to the enterprise plan.
+			if _, err := admin.Exec(ctx, `INSERT INTO billing_prices (id, plan_id, interval, amount, currency, is_active, stripe_price_id,
+				created_at, updated_at) VALUES (gen_random_uuid(), $1, 'monthly', 5100, 'usd', true, 'price_ent_cfg', now(), now())`,
+				seed.planEnterprise); err != nil {
+				t.Fatal(err)
+			}
 			return seed.tokenSpecs()
 		},
 	})
@@ -95,6 +101,13 @@ func TestSubscriptionEventsResolveTheOwningOrg(t *testing.T) {
 		object["id"], object["customer"], object["status"] = "sub_A", "cus_other", "active"
 		setPrice(object, "price_seed_y")
 	})
+	// An upgrade of the stored subscription to the configured enterprise
+	// price: the plan sync moves org A to enterprise, and the upgrade is
+	// announced once, from the tier before the sync.
+	send("updated: upgrade to enterprise", "evt_own_upgrade", "customer.subscription.updated", func(object map[string]any) {
+		object["id"], object["customer"], object["status"] = "sub_A", "cus_other", "active"
+		setPrice(object, "price_ent_cfg")
+	})
 	send("trial_will_end: no metadata, license customer", "evt_own_trial", "customer.subscription.trial_will_end", func(object map[string]any) {
 		object["id"], object["customer"], object["trial_end"] = "sub_own_new", "cus_A", trialEnd
 	})
@@ -138,8 +151,9 @@ func TestSubscriptionEventsResolveTheOwningOrg(t *testing.T) {
 		`SELECT count(*)::text || ' ' || min(new_status) FROM subscription_events WHERE stripe_event_id = 'evt_own_late'`, "1 canceled")
 	expect("one cancellation notification despite the redelivery",
 		`SELECT count(*)::text FROM billing_notifications WHERE org_id = '`+orgA+`' AND notification_type = 'subscription_cancelled'`, "1")
-	expect("no license re-signed after the cancellation",
-		`SELECT count(*)::text FROM billing_notifications WHERE org_id = '`+orgA+`' AND notification_type = 'subscription_changed'`, "0")
+	expect("the upgrade announced once, team to enterprise; nothing for the late update",
+		`SELECT count(*)::text || ' ' || min(attributes::text) FROM billing_notifications WHERE org_id = '`+orgA+`' AND notification_type = 'subscription_changed'`,
+		`1 {"old_tier": "team", "new_tier": "enterprise"}`)
 	expect("a subscription nobody owns is not recorded",
 		`SELECT count(*)::text FROM subscriptions WHERE stripe_subscription_id = 'sub_own_none'`, "0")
 	// Org A subscribes again; then the old cancellation is redelivered. It

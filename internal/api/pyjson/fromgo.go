@@ -27,10 +27,13 @@ func FromGo(value any) (Value, error) {
 }
 
 // FromGoModel is FromGo for a response_model body: a nil slice is an empty
-// list and a nil map an empty object. A pydantic model's list or dict field
-// is never None unless the model declares it Optional, and the Go ports
-// hold "no rows" as a nil slice; FastAPI writes it as []. (A Go field that
-// means an Optional list is a pointer, which stays null when nil.)
+// list and a nil map an empty object, except on a struct field tagged
+// `pyjson:"nullable"`, where nil stays null. A pydantic model's list or
+// dict field is never None unless the model declares it Optional, and the
+// Go ports hold "no rows" as a nil slice; FastAPI writes that as []. A
+// field the model declares Optional (a list or dict that may be None)
+// carries the tag, and the query-api's live oracle checks every such
+// field's tag against the model. A pointer field stays null when nil.
 func FromGoModel(value any) (Value, error) {
 	return fromGoConverter{nilAsEmpty: true}.fromGo(reflect.ValueOf(value))
 }
@@ -202,6 +205,10 @@ func (c fromGoConverter) fromStruct(value reflect.Value) (Value, error) {
 		if field.omitZero && isZeroValue(fieldValue) {
 			continue
 		}
+		if c.nilAsEmpty && field.nullable && (fieldValue.Kind() == reflect.Slice || fieldValue.Kind() == reflect.Map) && fieldValue.IsNil() {
+			out.Set(field.name, nil)
+			continue
+		}
 		converted, err := c.fromGo(fieldValue)
 		if err != nil {
 			return nil, err
@@ -272,6 +279,9 @@ type goField struct {
 	index                       []int
 	tagged                      bool
 	omitEmpty, omitZero, quoted bool
+	// nullable is the `pyjson:"nullable"` tag: under FromGoModel a nil
+	// slice or map on this field is null, not empty.
+	nullable bool
 }
 
 var structFieldCache sync.Map
@@ -337,7 +347,7 @@ func structFields(t reflect.Type) []goField {
 				all = append(all, goField{
 					name: name, index: index, tagged: tagged,
 					omitEmpty: hasOption(options, "omitempty"), omitZero: hasOption(options, "omitzero"),
-					quoted: quoted,
+					quoted: quoted, nullable: field.Tag.Get("pyjson") == "nullable",
 				})
 			}
 		}

@@ -223,3 +223,23 @@ func TestFromGoModelWritesNilListsAndMapsAsEmpty(t *testing.T) {
 		}
 	}
 }
+
+func TestFromGoModelKeepsNullableNilsNull(t *testing.T) {
+	type sample struct {
+		Optional    map[string]int `json:"optional" pyjson:"nullable"`
+		OptionalSet []int          `json:"optional_set" pyjson:"nullable"`
+		Required    map[string]int `json:"required"`
+		Filled      []int          `json:"filled" pyjson:"nullable"`
+	}
+	converted, err := FromGoModel(sample{Filled: []int{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := MarshalModel(converted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `{"optional":null,"optional_set":null,"required":{},"filled":[]}`; string(body) != want {
+		t.Fatalf("FromGoModel = %s, want %s", body, want)
+	}
+}

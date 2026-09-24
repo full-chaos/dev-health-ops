@@ -4,9 +4,12 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/investment"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/sankey"
 )
 
 // TestMarkResponseModelRoutesCountsAWrongWriter drives the production
@@ -74,5 +77,28 @@ func TestStreamErrorChunksAreNotAWrongWriter(t *testing.T) {
 	}
 	if want := ` {"error": "Streaming error", "detail": "An internal error has occurred."}{"error": "Streaming error", "detail": "An internal streaming error occurred."}`; recorder.Body.String() != want {
 		t.Fatalf("body = %q, want %q", recorder.Body.String(), want)
+	}
+}
+
+// TestModelWriterKeepsOptionalDictsNull: the investment and sankey
+// builders leave their Optional dicts nil, which FastAPI writes as null
+// (a review repro wrote them as {}).
+func TestModelWriterKeepsOptionalDictsNull(t *testing.T) {
+	for name, test := range map[string]struct {
+		value any
+		want  []string
+	}{
+		"investment": {&investment.Response{}, []string{`"evidence_quality_distribution":null`, `"edges":null`, `"theme_distribution":{}`}},
+		"sankey":     {&sankey.Response{}, []string{`"coverage":null`, `"unassigned_reasons":null`, `"nodes":[]`}},
+	} {
+		recorder := httptest.NewRecorder()
+		if err := writeModelResponse(recorder, test.value); err != nil {
+			t.Fatal(err)
+		}
+		for _, want := range test.want {
+			if !strings.Contains(recorder.Body.String(), want) {
+				t.Errorf("%s body lacks %s: %s", name, want, recorder.Body.String())
+			}
+		}
 	}
 }

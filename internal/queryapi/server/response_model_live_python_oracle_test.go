@@ -249,6 +249,19 @@ func TestVenueOracleQueryAPIResponseModels(t *testing.T) {
 		t.Fatalf("empty comparison: %d served paths, %d FastAPI routes", len(served), len(table.Routes))
 	}
 
+	// A nil slice or map means null only on a field the model declares
+	// Optional: every plain slice or map field's pyjson:"nullable" tag must
+	// say what the model says (FromGoModel writes nil as empty otherwise).
+	nullableFields := 0
+	for _, key := range keys {
+		if schema := table.Schemas[key]; schema != nil {
+			nullableFields += checkNullableTags(t, key, reflect.TypeOf(oracleRoutes[key].response), schema, &schemaFiller{defs: definitions(schema)}, 0)
+		}
+	}
+	if nullableFields == 0 {
+		t.Fatalf("no field the models declare as an Optional list or dict was found; the nullable check compared nothing")
+	}
+
 	// The bytes.
 	type pair struct {
 		key     string
@@ -687,4 +700,56 @@ func withNonFiniteSentinels(value pyjson.Value) pyjson.Value {
 		return out
 	}
 	return value
+}
+
+// checkNullableTags walks a Go response type beside its pydantic schema and
+// fails on a plain slice or map field whose pyjson:"nullable" tag differs
+// from the schema's nullability. It returns how many nullable fields it
+// matched.
+func checkNullableTags(t *testing.T, path string, goType reflect.Type, schema map[string]any, filler *schemaFiller, depth int) int {
+	t.Helper()
+	if depth > 12 || goType == nil {
+		return 0
+	}
+	resolved := filler.resolve(schema)
+	switch goType.Kind() {
+	case reflect.Pointer:
+		return checkNullableTags(t, path, goType.Elem(), schema, filler, depth+1)
+	case reflect.Slice, reflect.Array:
+		items, _ := resolved["items"].(map[string]any)
+		return checkNullableTags(t, path+"[]", goType.Elem(), items, filler, depth+1)
+	case reflect.Map:
+		values, _ := resolved["additionalProperties"].(map[string]any)
+		return checkNullableTags(t, path+"{}", goType.Elem(), values, filler, depth+1)
+	case reflect.Struct:
+		properties, _ := resolved["properties"].(map[string]any)
+		count := 0
+		for index := range goType.NumField() {
+			field := goType.Field(index)
+			if !field.IsExported() {
+				continue
+			}
+			name, _, _ := strings.Cut(field.Tag.Get("json"), ",")
+			if name == "-" {
+				continue
+			}
+			if name == "" {
+				name = field.Name
+			}
+			fieldSchema, _ := properties[name].(map[string]any)
+			kind := field.Type.Kind()
+			if (kind == reflect.Slice || kind == reflect.Map) && fieldSchema != nil {
+				tagged := field.Tag.Get("pyjson") == "nullable"
+				if tagged != nullable(fieldSchema) {
+					t.Errorf("%s.%s: pyjson:\"nullable\" tag is %v, the model's nullability is %v", path, name, tagged, nullable(fieldSchema))
+				}
+				if tagged {
+					count++
+				}
+			}
+			count += checkNullableTags(t, path+"."+name, field.Type, fieldSchema, filler, depth+1)
+		}
+		return count
+	}
+	return 0
 }

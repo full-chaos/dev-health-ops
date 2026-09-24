@@ -45,7 +45,7 @@ type Point struct {
 	WindowStart  string            `json:"window_start"`
 	WindowEnd    string            `json:"window_end"`
 	EvidenceLink string            `json:"evidence_link"`
-	Trajectory   []PointTrajectory `json:"trajectory"`
+	Trajectory   []PointTrajectory `json:"trajectory" pyjson:"nullable"`
 }
 
 // Annotation is the wire shape of QuadrantAnnotation (schemas.py:536-540).

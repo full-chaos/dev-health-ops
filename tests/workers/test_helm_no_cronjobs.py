@@ -1,4 +1,4 @@
-"""The chart renders no CronJob, and its values carry no `cronjobs` block.
+"""No CronJob remains in the deployable definitions: not in the chart, not in `deploy/kubernetes`.
 
 Daily metrics and provider sync are owned by the Go scheduler. The two default
 CronJobs the chart used to ship ran verbs that no longer exist in the image they
@@ -18,6 +18,7 @@ import yaml
 
 _CHART = Path(__file__).resolve().parents[2] / "deploy" / "helm" / "dev-health"
 _RELEASE = "no-cronjobs"
+_KUSTOMIZE = Path(__file__).resolve().parents[2] / "deploy" / "kubernetes"
 
 _VALUE_SETS = {
     "default": [],
@@ -62,3 +63,19 @@ def test_chart_values_carry_no_cronjobs_block(filename: str) -> None:
     assert "cronjobs" not in values, (
         f"{filename} still has a `cronjobs` block; no template reads it"
     )
+
+
+def test_kustomize_base_defines_no_cronjob_and_has_no_dangling_resource() -> None:
+    kustomization = yaml.safe_load((_KUSTOMIZE / "kustomization.yaml").read_text())
+    resources = kustomization["resources"]
+    dangling = [name for name in resources if not (_KUSTOMIZE / name).is_file()]
+    assert not dangling, f"kustomization lists files that do not exist: {dangling}"
+
+    cronjobs = []
+    for manifest in sorted(_KUSTOMIZE.glob("*.yaml")):
+        if manifest.name == "kustomization.yaml":
+            continue
+        for doc in yaml.safe_load_all(manifest.read_text()):
+            if doc and doc.get("kind") == "CronJob":
+                cronjobs.append(f"{manifest.name}:{doc['metadata']['name']}")
+    assert not cronjobs, f"deploy/kubernetes defines CronJobs: {cronjobs}"

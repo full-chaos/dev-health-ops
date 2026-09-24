@@ -1,4 +1,4 @@
-package operational
+package mail
 
 import (
 	"bytes"
@@ -29,6 +29,7 @@ func TestResendMessageIDReachesLogsOnlyInTheProviderIDShape(t *testing.T) {
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(testCase.status)
 				_, _ = w.Write([]byte(`{"id":` + quoteJSON(testCase.id) + `}`))
 			}))
@@ -39,8 +40,8 @@ func TestResendMessageIDReachesLogsOnlyInTheProviderIDShape(t *testing.T) {
 			slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
 			t.Cleanup(func() { slog.SetDefault(previous) })
 
-			sender := &resendEmailSender{from: "billing@example.test", apiKey: "k", client: server.Client()}
-			err := sender.Send(context.Background(), EmailMessage{To: "owner@example.test", Subject: "s", HTML: "<p>h</p>"})
+			sender := &resendSender{from: "billing@example.test", apiKey: "k", client: server.Client()}
+			err := sender.Send(context.Background(), Message{To: "owner@example.test", Subject: "s", HTML: "<p>h</p>"})
 			if testCase.status == http.StatusOK {
 				if err != nil {
 					t.Fatalf("Send() = %v", err)

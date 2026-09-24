@@ -1,18 +1,36 @@
-package operational
+// Package mail is the Go api's and workers' one outbound-mail transport: the
+// console, SMTP and Resend senders, chosen once at construction by the same
+// environment variables `dev_health_ops.api.services.email` reads --
+// EMAIL_PROVIDER, EMAIL_FROM_ADDRESS, EMAIL_API_KEY/RESEND_API_KEY,
+// SMTP_HOST/PORT/USERNAME/PASSWORD/USE_TLS. It began as the billing-mail
+// transport (CHAOS-5353/5399/5400/5401) and was extracted here so every Go
+// caller (billing notifications, the org-invite route) shares one
+// implementation rather than each growing its own.
+//
+// Parity of NAMES, not of every accepted VALUE. Two deliberate tightenings,
+// both fail-closed, both called out in the PR body rather than left implied:
+// a variable that is SET BUT EMPTY is refused instead of silently taking its
+// default (see configuredValue), and SMTP_PORT outside 1-65535 is refused at
+// startup where Python's int() accepted 0, -1 and 65536 and stored them
+// unvalidated. Any configuration that was VALID under Python keeps working
+// unchanged; configurations that were silently broken now fail loudly.
+//
+// The Python service itself SURVIVES for every route not yet ported --
+// verification, welcome and password-reset mail still go through it -- so
+// this package is an additional consumer of the same configuration, not a
+// replacement for it.
+package mail
 
 import (
 	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
-	"mime"
-	"mime/multipart"
 	"net"
 	"net/http"
 	"net/http/httptrace"
@@ -26,28 +44,13 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 )
 
-// CHAOS-5353: the email transport `dev_health_ops.api.services.email` provided
-// to the Python billing path, ported to Go under the SAME environment variable
-// names -- EMAIL_PROVIDER, EMAIL_FROM_ADDRESS, EMAIL_API_KEY/RESEND_API_KEY,
-// SMTP_HOST/PORT/USERNAME/PASSWORD/USE_TLS. This is deliberate parity, not a
-// new abstraction.
-//
-// Parity of NAMES, not of every accepted VALUE. Two deliberate tightenings,
-// both fail-closed, both called out in the PR body rather than left implied:
-// a variable that is SET BUT EMPTY is refused instead of silently taking its
-// default (see configuredValue), and SMTP_PORT outside 1-65535 is refused at
-// startup where Python's int() accepted 0, -1 and 65536 and stored them
-// unvalidated. Any configuration that was VALID under Python keeps working
-// unchanged; configurations that were silently broken now fail loudly.
-//
-// The Python service itself SURVIVES --
-// verification, invite, welcome and password-reset mail still go through it --
-// so this file is an additional consumer of the same configuration, not a
-// replacement for it.
+// maxResponseBytes bounds how much of a provider HTTP response this package
+// ever reads into memory.
+const maxResponseBytes = 4 * 1024
 
-// ErrEmailProviderUnsupported is a configuration fault, not a per-message one:
+// ErrProviderUnsupported is a configuration fault, not a per-message one:
 // the process is set up to send mail it cannot send.
-var ErrEmailProviderUnsupported = errors.New("operational email provider is unsupported")
+var ErrProviderUnsupported = errors.New("mail provider is unsupported")
 
 // AmbiguousSendError marks a Send failure where the message may already have
 // reached the recipient's mail infrastructure despite the caller never
@@ -80,22 +83,22 @@ type AmbiguousSendError struct {
 func (e *AmbiguousSendError) Error() string { return e.Err.Error() }
 func (e *AmbiguousSendError) Unwrap() error { return e.Err }
 
-// EmailMessage is one outbound message.
-type EmailMessage struct {
+// Message is one outbound message.
+type Message struct {
 	To      string
 	Subject string
 	HTML    string
 }
 
-// EmailSender delivers one rendered message. Implementations are chosen by
+// Sender delivers one rendered message. Implementations are chosen by
 // EMAIL_PROVIDER at construction, never per message.
-type EmailSender interface {
+type Sender interface {
 	// Name is the provider label used in logs.
 	Name() string
-	Send(ctx context.Context, message EmailMessage) error
+	Send(ctx context.Context, message Message) error
 }
 
-// NewEmailSenderFromEnv mirrors Python's `get_email_service()` selection:
+// NewSenderFromEnv mirrors Python's `get_email_service()` selection:
 // EMAIL_PROVIDER in {console, resend, smtp}, default console; an unknown value
 // is an error rather than a silent fallback.
 // configuredValue distinguishes an ABSENT variable from an explicitly EMPTY
@@ -112,7 +115,7 @@ func configuredValue(name string) (string, bool) {
 	return strings.TrimSpace(raw), present
 }
 
-func NewEmailSenderFromEnv(client *http.Client) (EmailSender, error) {
+func NewSenderFromEnv(client *http.Client) (Sender, error) {
 	provider, providerSet := configuredValue("EMAIL_PROVIDER")
 	if !providerSet {
 		provider = "console"
@@ -121,9 +124,9 @@ func NewEmailSenderFromEnv(client *http.Client) (EmailSender, error) {
 	if provider == "" {
 		// Set-but-empty. Python raised here; so do we, rather than sending
 		// every billing email to a logger.
-		slog.Error("billing notification email provider is configured but empty",
+		slog.Error("mail provider is configured but empty",
 			"variable", "EMAIL_PROVIDER")
-		return nil, fmt.Errorf("%w: EMAIL_PROVIDER is set but empty", ErrEmailProviderUnsupported)
+		return nil, fmt.Errorf("%w: EMAIL_PROVIDER is set but empty", ErrProviderUnsupported)
 	}
 	from, fromSet := configuredValue("EMAIL_FROM_ADDRESS")
 	if !fromSet {
@@ -134,13 +137,13 @@ func NewEmailSenderFromEnv(client *http.Client) (EmailSender, error) {
 		// deliberately STRICTER: a blank envelope sender is rejected or
 		// silently dropped by most relays, which is the same invisible
 		// mail loss in a different place.
-		slog.Error("billing notification from-address is configured but empty",
+		slog.Error("mail from-address is configured but empty",
 			"variable", "EMAIL_FROM_ADDRESS")
 		return nil, errors.New("EMAIL_FROM_ADDRESS is set but empty")
 	}
 	switch provider {
 	case "console":
-		return &consoleEmailSender{from: from}, nil
+		return &consoleSender{from: from}, nil
 	case "resend":
 		// Python accepted either name, preferring EMAIL_API_KEY.
 		key := strings.TrimSpace(os.Getenv("EMAIL_API_KEY"))
@@ -148,7 +151,7 @@ func NewEmailSenderFromEnv(client *http.Client) (EmailSender, error) {
 			key = strings.TrimSpace(os.Getenv("RESEND_API_KEY"))
 		}
 		if key == "" {
-			slog.Error("billing notification resend API key is missing or empty",
+			slog.Error("mail resend API key is missing or empty",
 				"variables", "EMAIL_API_KEY,RESEND_API_KEY")
 			return nil, errors.New(
 				"EMAIL_API_KEY (or RESEND_API_KEY) is required when EMAIL_PROVIDER=resend")
@@ -156,7 +159,7 @@ func NewEmailSenderFromEnv(client *http.Client) (EmailSender, error) {
 		if client == nil {
 			client = &http.Client{Timeout: 30 * time.Second}
 		}
-		return &resendEmailSender{from: from, apiKey: key, client: client}, nil
+		return &resendSender{from: from, apiKey: key, client: client}, nil
 	case "smtp":
 		port := 1025
 		if raw, set := configuredValue("SMTP_PORT"); set {
@@ -164,7 +167,7 @@ func NewEmailSenderFromEnv(client *http.Client) (EmailSender, error) {
 			// on a set-but-empty value; so does this.
 			parsed, err := strconv.Atoi(raw)
 			if err != nil || parsed <= 0 || parsed > 65535 {
-				slog.Error("billing notification SMTP port is not a valid port",
+				slog.Error("mail SMTP port is not a valid port",
 					"variable", "SMTP_PORT")
 				return nil, fmt.Errorf("SMTP_PORT is not a valid port: %q", raw)
 			}
@@ -177,7 +180,7 @@ func NewEmailSenderFromEnv(client *http.Client) (EmailSender, error) {
 		if host == "" {
 			// Python kept "" and failed later, at connect time, once per
 			// notification. Refusing at startup is stricter and fails closed.
-			slog.Error("billing notification SMTP host is configured but empty",
+			slog.Error("mail SMTP host is configured but empty",
 				"variable", "SMTP_HOST")
 			return nil, errors.New("SMTP_HOST is set but empty")
 		}
@@ -217,7 +220,7 @@ func NewEmailSenderFromEnv(client *http.Client) (EmailSender, error) {
 		tlsServerName := host
 		if override, set := configuredValue("SMTP_TLS_SERVER_NAME"); set {
 			if override == "" {
-				slog.Error("billing notification SMTP TLS server name is configured but empty",
+				slog.Error("mail SMTP TLS server name is configured but empty",
 					"variable", "SMTP_TLS_SERVER_NAME")
 				return nil, errors.New("SMTP_TLS_SERVER_NAME is set but empty")
 			}
@@ -225,7 +228,7 @@ func NewEmailSenderFromEnv(client *http.Client) (EmailSender, error) {
 		}
 		caFile, caFileSet := configuredValue("SMTP_TLS_CA_FILE")
 		if caFileSet && caFile == "" {
-			slog.Error("billing notification SMTP TLS CA file is configured but empty",
+			slog.Error("mail SMTP TLS CA file is configured but empty",
 				"variable", "SMTP_TLS_CA_FILE")
 			return nil, errors.New("SMTP_TLS_CA_FILE is set but empty")
 		}
@@ -235,14 +238,14 @@ func NewEmailSenderFromEnv(client *http.Client) (EmailSender, error) {
 			if caFileSet {
 				pool, err := loadSMTPTLSCAPool(caFile)
 				if err != nil {
-					slog.Error("billing notification SMTP TLS CA file is invalid",
+					slog.Error("mail SMTP TLS CA file is invalid",
 						"variable", "SMTP_TLS_CA_FILE", "value", caFile, "error", err)
 					return nil, fmt.Errorf("SMTP_TLS_CA_FILE is invalid: %w", err)
 				}
 				tlsConfig.RootCAs = pool
 			}
 		}
-		return &smtpEmailSender{
+		return &smtpSender{
 			from:      from,
 			host:      host,
 			port:      port,
@@ -252,18 +255,18 @@ func NewEmailSenderFromEnv(client *http.Client) (EmailSender, error) {
 			tlsConfig: tlsConfig,
 		}, nil
 	default:
-		slog.Error("billing notification email provider is unsupported",
+		slog.Error("mail provider is unsupported",
 			"variable", "EMAIL_PROVIDER", "value", provider)
-		return nil, fmt.Errorf("%w: %q", ErrEmailProviderUnsupported, provider)
+		return nil, fmt.Errorf("%w: %q", ErrProviderUnsupported, provider)
 	}
 }
 
-type consoleEmailSender struct{ from string }
+type consoleSender struct{ from string }
 
-func (sender *consoleEmailSender) Name() string { return "console" }
+func (sender *consoleSender) Name() string { return "console" }
 
-func (sender *consoleEmailSender) Send(ctx context.Context, message EmailMessage) error {
-	slog.InfoContext(ctx, "billing notification: console email provider",
+func (sender *consoleSender) Send(ctx context.Context, message Message) error {
+	slog.InfoContext(ctx, "mail: console provider",
 		"from", sender.from,
 		"to", message.To,
 		"subject", message.Subject,
@@ -272,15 +275,15 @@ func (sender *consoleEmailSender) Send(ctx context.Context, message EmailMessage
 	return nil
 }
 
-type resendEmailSender struct {
+type resendSender struct {
 	from   string
 	apiKey string
 	client *http.Client
 }
 
-func (sender *resendEmailSender) Name() string { return "resend" }
+func (sender *resendSender) Name() string { return "resend" }
 
-func (sender *resendEmailSender) Send(ctx context.Context, message EmailMessage) error {
+func (sender *resendSender) Send(ctx context.Context, message Message) error {
 	body, err := json.Marshal(map[string]any{
 		"from":    sender.from,
 		"to":      []string{message.To},
@@ -297,6 +300,10 @@ func (sender *resendEmailSender) Send(ctx context.Context, message EmailMessage)
 	}
 	request.Header.Set("Authorization", "Bearer "+sender.apiKey)
 	request.Header.Set("Content-Type", "application/json")
+	// The Python SDK sends this on every call; Resend's API answers JSON
+	// regardless, but matching it keeps the two planes' requests identical.
+	request.Header.Set("Accept", "application/json")
+	request.Header.Set("User-Agent", resendUserAgent)
 
 	// CHAOS-5399 r1 (codex P1): pattern-matching specific transport error
 	// SHAPES (a *net.OpError with Op=="dial", a *net.DNSError) to decide
@@ -394,9 +401,18 @@ func (sender *resendEmailSender) Send(ctx context.Context, message EmailMessage)
 			ProviderMessageIDDropped: messageIDDropped,
 		}
 	}
+	// The Python SDK refuses any reply whose Content-Type is not JSON before
+	// it reads the body (resend/request.py make_request), so a 2xx that is not
+	// declared JSON is not trusted as an acceptance here either: the request
+	// reached Resend and was answered 2xx, but what the answer said cannot be
+	// read -- ambiguous, like an undecodable body.
+	if !strings.Contains(strings.ToLower(response.Header.Get("Content-Type")), "application/json") {
+		return &AmbiguousSendError{Err: errors.New("resend API response is not JSON")}
+	}
 	var decoded struct {
-		ID    string          `json:"id"`
-		Error json.RawMessage `json:"error"`
+		ID         string          `json:"id"`
+		Error      json.RawMessage `json:"error"`
+		StatusCode json.RawMessage `json:"statusCode"`
 	}
 	if err := json.Unmarshal(raw, &decoded); err != nil {
 		// A 2xx status with an unparseable body: the transport-level send
@@ -404,15 +420,40 @@ func (sender *resendEmailSender) Send(ctx context.Context, message EmailMessage)
 		// success.
 		return &AmbiguousSendError{Err: fmt.Errorf("resend API response invalid: %w", logging.DecodeFailure(err))}
 	}
-	if len(decoded.Error) > 0 && string(decoded.Error) != "null" {
-		// A 2xx wrapping an explicit error object IS a definite rejection --
-		// Resend told us, unambiguously, that it did not send.
+	if len(decoded.Error) > 0 {
+		// The Python provider rejects any reply that HAS an "error" key
+		// (`"error" in response`), a JSON null value included; a 2xx
+		// wrapping one IS a definite rejection -- Resend told us,
+		// unambiguously, that it did not send.
 		return errors.New("resend API returned an error object")
 	}
+	if bodyStatusIsAnError(decoded.StatusCode) {
+		// The SDK raises for a body carrying a statusCode other than 200
+		// (Request.perform), whatever the HTTP status was: the same explicit
+		// refusal, delivered in the body.
+		return errors.New("resend API returned an error status in the body")
+	}
 	acceptedID, acceptedIDDropped := logging.ProviderAssignedID(decoded.ID)
-	slog.InfoContext(ctx, "billing notification: resend accepted the message",
+	slog.InfoContext(ctx, "mail: resend accepted the message",
 		"message_id", acceptedID, "id_dropped", acceptedIDDropped, "subject", message.Subject)
 	return nil
+}
+
+// resendUserAgent is what the pinned Resend Python SDK (2.30.0) sends.
+const resendUserAgent = "resend-python:2.30.0"
+
+// bodyStatusIsAnError mirrors `data.get("statusCode") not in (None, 200)`: a
+// statusCode that is absent or JSON null is fine, a number equal to 200 is
+// fine, anything else (another number, a string, an object) is an error.
+func bodyStatusIsAnError(raw json.RawMessage) bool {
+	if len(raw) == 0 || string(raw) == "null" {
+		return false
+	}
+	var number float64
+	if err := json.Unmarshal(raw, &number); err == nil {
+		return number != 200
+	}
+	return true
 }
 
 // bestEffortResendMessageID extracts an "id" field from a raw Resend
@@ -429,7 +470,7 @@ func bestEffortResendMessageID(raw []byte) string {
 	return partial.ID
 }
 
-func (sender *resendEmailSender) endpoint() string {
+func (sender *resendSender) endpoint() string {
 	if override := strings.TrimSpace(os.Getenv("RESEND_API_BASE_URL")); override != "" {
 		return strings.TrimRight(override, "/") + "/emails"
 	}
@@ -457,7 +498,7 @@ func loadSMTPTLSCAPool(path string) (*x509.CertPool, error) {
 	return pool, nil
 }
 
-type smtpEmailSender struct {
+type smtpSender struct {
 	from      string
 	host      string
 	port      int
@@ -467,9 +508,9 @@ type smtpEmailSender struct {
 	tlsConfig *tls.Config // built at construction; nil is fine when useTLS is false
 }
 
-func (sender *smtpEmailSender) Name() string { return "smtp" }
+func (sender *smtpSender) Name() string { return "smtp" }
 
-func (sender *smtpEmailSender) Send(ctx context.Context, message EmailMessage) error {
+func (sender *smtpSender) Send(ctx context.Context, message Message) error {
 	payload, err := sender.compose(message)
 	if err != nil {
 		return err
@@ -480,26 +521,42 @@ func (sender *smtpEmailSender) Send(ctx context.Context, message EmailMessage) e
 	if err != nil {
 		return fmt.Errorf("smtp server unreachable: %w", err)
 	}
+	// DialContext honours ctx only while connecting. Bound the whole exchange
+	// by it too: a relay that accepts TCP and then goes quiet must not hold
+	// the caller past its deadline or cancellation.
+	if deadline, ok := ctx.Deadline(); ok {
+		if err := conn.SetDeadline(deadline); err != nil {
+			slog.WarnContext(ctx, "mail: smtp deadline not applied", "error", err)
+		}
+	}
+	stopWatch := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stopWatch()
 	client, err := smtp.NewClient(conn, sender.host)
 	if err != nil {
 		// The dialled connection is not owned by a client yet, so it is this
 		// function's to close -- otherwise every failure here leaks a socket.
 		if closeErr := conn.Close(); closeErr != nil {
-			slog.WarnContext(ctx, "billing notification: smtp connection close failed",
+			slog.WarnContext(ctx, "mail: smtp connection close failed",
 				"error", closeErr)
 		}
 		return fmt.Errorf("smtp handshake failed: %w", err)
 	}
+	quitDone := false
 	defer func() {
+		if quitDone {
+			// QUIT already closed the connection; closing again only
+			// reports "use of closed network connection".
+			return
+		}
 		if closeErr := client.Close(); closeErr != nil {
-			slog.WarnContext(ctx, "billing notification: smtp client close failed",
+			slog.WarnContext(ctx, "mail: smtp client close failed",
 				"error", closeErr)
 		}
 	}()
 	if sender.useTLS {
 		// CHAOS-5400: verification stays ON (matching Python's
 		// smtplib.starttls() being upgraded, not weakened) -- sender.tlsConfig
-		// is built once at construction (NewEmailSenderFromEnv), honoring
+		// is built once at construction (NewSenderFromEnv), honoring
 		// SMTP_TLS_CA_FILE/SMTP_TLS_SERVER_NAME when set. A direct struct
 		// literal with useTLS set but no tlsConfig still verifies against
 		// the system roots and sender.host, the same default this file
@@ -519,10 +576,10 @@ func (sender *smtpEmailSender) Send(ctx context.Context, message EmailMessage) e
 			return fmt.Errorf("smtp authentication failed: %w", err)
 		}
 	}
-	if err := client.Mail(sender.from); err != nil {
+	if err := client.Mail(envelopeAddress(sender.from)); err != nil {
 		return fmt.Errorf("smtp MAIL FROM rejected: %w", err)
 	}
-	if err := client.Rcpt(message.To); err != nil {
+	if err := client.Rcpt(envelopeAddress(message.To)); err != nil {
 		return fmt.Errorf("smtp RCPT TO rejected: %w", err)
 	}
 	writer, err := client.Data()
@@ -531,7 +588,7 @@ func (sender *smtpEmailSender) Send(ctx context.Context, message EmailMessage) e
 	}
 	if _, err := writer.Write(payload); err != nil {
 		if closeErr := writer.Close(); closeErr != nil {
-			slog.WarnContext(ctx, "billing notification: smtp data close failed after a write error",
+			slog.WarnContext(ctx, "mail: smtp data close failed after a write error",
 				"error", closeErr)
 		}
 		// Unlike a failed Close below, a failed Write means the terminating
@@ -564,93 +621,20 @@ func (sender *smtpEmailSender) Send(ctx context.Context, message EmailMessage) e
 			Err: fmt.Errorf("smtp response to the message was not received: %w", err),
 		}
 	}
-	if err := client.Quit(); err != nil {
+	quitErr := client.Quit()
+	quitDone = quitErr == nil
+	if err := quitErr; err != nil {
 		// The message is already committed by the successful DATA close
 		// above, so a QUIT failure is a teardown nuisance, not a send
 		// failure -- logging it keeps it visible without duplicating mail.
-		slog.WarnContext(ctx, "billing notification: smtp QUIT failed after the message was accepted",
+		slog.WarnContext(ctx, "mail: smtp QUIT failed after the message was accepted",
 			"error", err)
 	}
 	return nil
 }
 
-// compose builds the same multipart/alternative message Python's
-// MIMEMultipart("alternative") produced: a single HTML part, since the billing
-// path never supplied text_content.
-func (sender *smtpEmailSender) compose(message EmailMessage) ([]byte, error) {
-	var buffer bytes.Buffer
-	writer := multipart.NewWriter(&buffer)
-	headers := []string{
-		"From: " + sender.from,
-		"To: " + message.To,
-		// RFC 2047 encoding keeps non-ASCII subjects (they exist: org and
-		// tier names reach the subject line) legible instead of mangled.
-		"Subject: " + mime.QEncoding.Encode("utf-8", message.Subject),
-		"MIME-Version: 1.0",
-		`Content-Type: multipart/alternative; boundary="` + writer.Boundary() + `"`,
-	}
-	var out bytes.Buffer
-	out.WriteString(strings.Join(headers, "\r\n"))
-	out.WriteString("\r\n\r\n")
-
-	// CHAOS-5401: Python's MIMEText(html, "html") picks its body encoding
-	// from an auto-detected charset -- us-ascii (7bit-safe, sent as-is) when
-	// every character fits, utf-8 (BASE64 body encoding, always, for that
-	// charset) the moment it doesn't. A body that is not 7-bit-safe must be
-	// base64-encoded here too, not sent raw under Content-Transfer-Encoding:
-	// 8bit -- a relay that never advertised 8BITMIME could reject it.
-	partHeaders := textproto.MIMEHeader{}
-	partHeaders.Set("Content-Type", `text/html; charset="utf-8"`)
-	htmlBytes := []byte(message.HTML)
-	if is7BitSafe(message.HTML) {
-		partHeaders.Set("Content-Transfer-Encoding", "8bit")
-	} else {
-		partHeaders.Set("Content-Transfer-Encoding", "base64")
-		htmlBytes = base64MIMEBody(htmlBytes)
-	}
-	part, err := writer.CreatePart(partHeaders)
-	if err != nil {
-		return nil, fmt.Errorf("smtp message construction failed: %w", err)
-	}
-	if _, err := part.Write(htmlBytes); err != nil {
-		return nil, fmt.Errorf("smtp message construction failed: %w", err)
-	}
-	if err := writer.Close(); err != nil {
-		return nil, fmt.Errorf("smtp message construction failed: %w", err)
-	}
-	out.Write(buffer.Bytes())
-	return out.Bytes(), nil
-}
-
-// is7BitSafe reports whether every byte of s is a 7-bit US-ASCII octet
-// (< 0x80), matching the check Python's email package effectively applies
-// when it picks between an ASCII-safe charset and utf-8 for MIMEText's body
-// encoding (CHAOS-5401).
-func is7BitSafe(s string) bool {
-	for i := 0; i < len(s); i++ {
-		if s[i] > 0x7F {
-			return false
-		}
-	}
-	return true
-}
-
-// base64MIMEBody base64-encodes data and hard-wraps it at 76 characters per
-// line, CRLF-terminated -- RFC 2045 §6.8's line-length limit for the base64
-// Content-Transfer-Encoding, matching Python email.base64mime's output
-// shape (a single unwrapped line is technically non-conformant and some
-// relays reject or mangle it).
-func base64MIMEBody(data []byte) []byte {
-	const lineLength = 76
-	encoded := base64.StdEncoding.EncodeToString(data)
-	var out bytes.Buffer
-	for i := 0; i < len(encoded); i += lineLength {
-		end := i + lineLength
-		if end > len(encoded) {
-			end = len(encoded)
-		}
-		out.WriteString(encoded[i:end])
-		out.WriteString("\r\n")
-	}
-	return out.Bytes()
+// compose builds the message bytes Python's SmtpEmailProvider._send would put
+// on the wire for the same inputs -- see mime.go.
+func (sender *smtpSender) compose(message Message) ([]byte, error) {
+	return composeMIME(sender.from, message.To, message.Subject, message.HTML)
 }

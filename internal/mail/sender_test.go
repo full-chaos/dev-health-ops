@@ -1,4 +1,4 @@
-package operational
+package mail
 
 import (
 	"bufio"
@@ -43,34 +43,48 @@ func TestResendSenderClassifiesHTTPStatusOutcomes(t *testing.T) {
 	for _, test := range []struct {
 		name          string
 		status        int
+		contentType   string // "" means application/json, what Resend sends
 		body          string
 		wantErr       bool
 		wantAmbiguous bool
 	}{
-		{"2xx with no error object is a clean send", http.StatusOK, `{"id":"em_1"}`, false, false},
+		{"2xx with no error object is a clean send", http.StatusOK, "", `{"id":"em_1"}`, false, false},
 		{"2xx with an explicit error object is a clean rejection",
-			http.StatusOK, `{"error":{"message":"invalid recipient"}}`, true, false},
+			http.StatusOK, "", `{"error":{"message":"invalid recipient"}}`, true, false},
+		{"2xx with a null error key is a clean rejection, as the Python provider treats it",
+			http.StatusOK, "", `{"id":"em_1","error":null}`, true, false},
+		{"2xx carrying an error statusCode in the body is a clean rejection",
+			http.StatusOK, "", `{"statusCode":422,"name":"validation_error","message":"nope"}`, true, false},
+		{"2xx carrying statusCode 200 is a clean send", http.StatusOK, "", `{"statusCode":200,"id":"em_1"}`, false, false},
+		{"2xx carrying a null statusCode is a clean send", http.StatusOK, "", `{"statusCode":null,"id":"em_1"}`, false, false},
+		{"2xx that is not declared JSON is ambiguous (the SDK refuses it too)",
+			http.StatusOK, "text/plain", `{"id":"em_1"}`, true, true},
 		{"2xx with an unparseable body is ambiguous",
-			http.StatusOK, `not json`, true, true},
-		{"4xx is a clean rejection", http.StatusUnprocessableEntity, `{"message":"bad request"}`, true, false},
-		{"429 is a clean rejection, not ambiguous", http.StatusTooManyRequests, `{}`, true, false},
-		{"500 is ambiguous", http.StatusInternalServerError, `{}`, true, true},
-		{"503 is ambiguous", http.StatusServiceUnavailable, `{}`, true, true},
+			http.StatusOK, "", `not json`, true, true},
+		{"4xx is a clean rejection", http.StatusUnprocessableEntity, "", `{"message":"bad request"}`, true, false},
+		{"429 is a clean rejection, not ambiguous", http.StatusTooManyRequests, "", `{}`, true, false},
+		{"500 is ambiguous", http.StatusInternalServerError, "", `{}`, true, true},
+		{"503 is ambiguous", http.StatusServiceUnavailable, "", `{}`, true, true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(
 				func(w http.ResponseWriter, r *http.Request) {
+					contentType := test.contentType
+					if contentType == "" {
+						contentType = "application/json"
+					}
+					w.Header().Set("Content-Type", contentType)
 					w.WriteHeader(test.status)
 					_, _ = w.Write([]byte(test.body))
 				}))
 			defer server.Close()
 			t.Setenv("RESEND_API_BASE_URL", server.URL)
 
-			sender := &resendEmailSender{
+			sender := &resendSender{
 				from: "billing@example.test", apiKey: "k",
 				client: &http.Client{Timeout: 5 * time.Second},
 			}
-			err := sender.Send(context.Background(), EmailMessage{
+			err := sender.Send(context.Background(), Message{
 				To: "owner@example.test", Subject: "s", HTML: "<p>h</p>",
 			})
 			if !test.wantErr {
@@ -107,11 +121,11 @@ func TestResendSenderTreatsAResponseTimeoutAsAmbiguous(t *testing.T) {
 	defer server.Close()
 	t.Setenv("RESEND_API_BASE_URL", server.URL)
 
-	sender := &resendEmailSender{
+	sender := &resendSender{
 		from: "billing@example.test", apiKey: "k",
 		client: &http.Client{Timeout: 50 * time.Millisecond},
 	}
-	err := sender.Send(context.Background(), EmailMessage{
+	err := sender.Send(context.Background(), Message{
 		To: "owner@example.test", Subject: "s", HTML: "<p>h</p>",
 	})
 	select {
@@ -145,11 +159,11 @@ func TestResendSenderTreatsAConnectionRefusalAsDefinitelyNotSent(t *testing.T) {
 	}
 	t.Setenv("RESEND_API_BASE_URL", "http://"+addr)
 
-	sender := &resendEmailSender{
+	sender := &resendSender{
 		from: "billing@example.test", apiKey: "k",
 		client: &http.Client{Timeout: 2 * time.Second},
 	}
-	sendErr := sender.Send(context.Background(), EmailMessage{
+	sendErr := sender.Send(context.Background(), Message{
 		To: "owner@example.test", Subject: "s", HTML: "<p>h</p>",
 	})
 	if sendErr == nil {
@@ -193,7 +207,7 @@ func newFakeSMTPServer(t *testing.T, behavior string) *fakeSMTPServer {
 }
 
 // newFakeSTARTTLSSMTPServer is newFakeSMTPServer plus a STARTTLS extension
-// backed by cert -- CHAOS-5400: proves smtpEmailSender's STARTTLS handshake
+// backed by cert -- CHAOS-5400: proves smtpSender's STARTTLS handshake
 // against a real certificate chain, not a stubbed-out tls.Config.
 func newFakeSTARTTLSSMTPServer(t *testing.T, behavior string, cert tls.Certificate) *fakeSMTPServer {
 	t.Helper()
@@ -308,8 +322,8 @@ func TestSMTPSenderTreatsALostConnectionAfterDataAsAmbiguous(t *testing.T) {
 	defer server.listener.Close()
 	host, port := splitHostPort(t, server.addr())
 
-	sender := &smtpEmailSender{from: "billing@example.test", host: host, port: port}
-	err := sender.Send(context.Background(), EmailMessage{
+	sender := &smtpSender{from: "billing@example.test", host: host, port: port}
+	err := sender.Send(context.Background(), Message{
 		To: "owner@example.test", Subject: "s", HTML: "<p>h</p>",
 	})
 	if err == nil {
@@ -326,8 +340,8 @@ func TestSMTPSenderTreatsAnOrdinaryAcknowledgementAsSent(t *testing.T) {
 	defer server.listener.Close()
 	host, port := splitHostPort(t, server.addr())
 
-	sender := &smtpEmailSender{from: "billing@example.test", host: host, port: port}
-	if err := sender.Send(context.Background(), EmailMessage{
+	sender := &smtpSender{from: "billing@example.test", host: host, port: port}
+	if err := sender.Send(context.Background(), Message{
 		To: "owner@example.test", Subject: "s", HTML: "<p>h</p>",
 	}); err != nil {
 		t.Fatalf("Send() = %v, want nil", err)
@@ -344,8 +358,8 @@ func TestSMTPSenderTreatsAConnectionRefusalAsDefinitelyNotSent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	sender := &smtpEmailSender{from: "billing@example.test", host: host, port: port}
-	sendErr := sender.Send(context.Background(), EmailMessage{
+	sender := &smtpSender{from: "billing@example.test", host: host, port: port}
+	sendErr := sender.Send(context.Background(), Message{
 		To: "owner@example.test", Subject: "s", HTML: "<p>h</p>",
 	})
 	if sendErr == nil {
@@ -433,7 +447,7 @@ func writeCAFile(t *testing.T, pemBytes []byte) string {
 	return path
 }
 
-// smtpEnv sets exactly the env vars NewEmailSenderFromEnv reads for
+// smtpEnv sets exactly the env vars NewSenderFromEnv reads for
 // EMAIL_PROVIDER=smtp, isolating each test from whatever the ambient
 // process environment happens to hold.
 func smtpEnv(t *testing.T, host string, port int, extra map[string]string) {
@@ -441,7 +455,7 @@ func smtpEnv(t *testing.T, host string, port int, extra map[string]string) {
 	t.Setenv("EMAIL_PROVIDER", "smtp")
 	t.Setenv("SMTP_HOST", host)
 	t.Setenv("SMTP_PORT", fmt.Sprintf("%d", port))
-	// Explicitly unset every other SMTP_* var NewEmailSenderFromEnv reads --
+	// Explicitly unset every other SMTP_* var NewSenderFromEnv reads --
 	// isolates each test from whatever the ambient process environment
 	// happens to hold, not just from earlier t.Setenv calls in this same
 	// test binary (those already self-revert via t.Cleanup).
@@ -469,11 +483,11 @@ func TestSMTPSenderRejectsSelfSignedCertificateWithoutConfiguredCA(t *testing.T)
 	host, port := splitHostPort(t, server.addr())
 
 	smtpEnv(t, host, port, map[string]string{"SMTP_USE_TLS": "true"})
-	sender, err := NewEmailSenderFromEnv(nil)
+	sender, err := NewSenderFromEnv(nil)
 	if err != nil {
-		t.Fatalf("NewEmailSenderFromEnv: %v", err)
+		t.Fatalf("NewSenderFromEnv: %v", err)
 	}
-	sendErr := sender.Send(context.Background(), EmailMessage{
+	sendErr := sender.Send(context.Background(), Message{
 		To: "owner@example.test", Subject: "s", HTML: "<p>h</p>",
 	})
 	if sendErr == nil {
@@ -485,7 +499,7 @@ func TestSMTPSenderRejectsSelfSignedCertificateWithoutConfiguredCA(t *testing.T)
 // this fix, an operator running against a private/self-signed relay had NO
 // way to make STARTTLS succeed short of an insecure-skip-verify escape hatch
 // this fix deliberately never adds. SMTP_TLS_CA_FILE lets the relay's own CA
-// be trusted explicitly, end to end through NewEmailSenderFromEnv -- not by
+// be trusted explicitly, end to end through NewSenderFromEnv -- not by
 // injecting a struct field directly.
 func TestSMTPSenderTrustsExplicitlyConfiguredCA(t *testing.T) {
 	cert, certPEM := generateSelfSignedSMTPCert(t, "127.0.0.1")
@@ -498,11 +512,11 @@ func TestSMTPSenderTrustsExplicitlyConfiguredCA(t *testing.T) {
 		"SMTP_USE_TLS":     "true",
 		"SMTP_TLS_CA_FILE": caFile,
 	})
-	sender, err := NewEmailSenderFromEnv(nil)
+	sender, err := NewSenderFromEnv(nil)
 	if err != nil {
-		t.Fatalf("NewEmailSenderFromEnv: %v", err)
+		t.Fatalf("NewSenderFromEnv: %v", err)
 	}
-	if err := sender.Send(context.Background(), EmailMessage{
+	if err := sender.Send(context.Background(), Message{
 		To: "owner@example.test", Subject: "s", HTML: "<p>h</p>",
 	}); err != nil {
 		t.Fatalf("Send() = %v, want nil -- SMTP_TLS_CA_FILE explicitly trusts this relay's CA", err)
@@ -519,8 +533,8 @@ func TestSMTPSenderRefusesAnUnreadableCAFile(t *testing.T) {
 		"SMTP_USE_TLS":     "true",
 		"SMTP_TLS_CA_FILE": filepath.Join(t.TempDir(), "does-not-exist.pem"),
 	})
-	if _, err := NewEmailSenderFromEnv(nil); err == nil {
-		t.Fatal("NewEmailSenderFromEnv() = nil error, want a refusal for an unreadable SMTP_TLS_CA_FILE")
+	if _, err := NewSenderFromEnv(nil); err == nil {
+		t.Fatal("NewSenderFromEnv() = nil error, want a refusal for an unreadable SMTP_TLS_CA_FILE")
 	}
 }
 
@@ -549,12 +563,12 @@ func TestSMTPSenderRefusesSetButEmptyTLSConfig(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			smtpEnv(t, "127.0.0.1", 1025, test.extra)
-			_, err := NewEmailSenderFromEnv(nil)
+			_, err := NewSenderFromEnv(nil)
 			if err == nil {
-				t.Fatalf("NewEmailSenderFromEnv() = nil error, want a refusal naming %s", test.wantErr)
+				t.Fatalf("NewSenderFromEnv() = nil error, want a refusal naming %s", test.wantErr)
 			}
 			if !strings.Contains(err.Error(), test.wantErr) {
-				t.Fatalf("NewEmailSenderFromEnv() error = %v, want it to name %s", err, test.wantErr)
+				t.Fatalf("NewSenderFromEnv() error = %v, want it to name %s", err, test.wantErr)
 			}
 		})
 	}
@@ -562,8 +576,11 @@ func TestSMTPSenderRefusesSetButEmptyTLSConfig(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // CHAOS-5401: MIME transfer-encoding matches Python's charset-driven choice
-// -- base64 for a body that is not 7-bit-safe, unchanged (8bit) for one that
-// already is.
+// -- base64 for a body that is not 7-bit-safe, 7bit for one that already is.
+// (An earlier version of this file pinned "8bit" for the ASCII case; the live
+// Python oracle, TestSMTPSenderMatchesLivePythonSMTPProvider, showed Python
+// sends 7bit + charset us-ascii there, and the wire bytes are now compared
+// against Python's directly.)
 // ---------------------------------------------------------------------------
 
 func TestSMTPComposeChoosesTransferEncodingBySevenBitSafety(t *testing.T) {
@@ -572,14 +589,14 @@ func TestSMTPComposeChoosesTransferEncodingBySevenBitSafety(t *testing.T) {
 		html    string
 		wantCTE string
 	}{
-		{"pure ASCII body keeps 8bit", "<p>hello world</p>", "8bit"},
+		{"pure ASCII body is 7bit", "<p>hello world</p>", "7bit"},
 		{"non-ASCII body uses base64", "<p>café costs €3 ☃</p>", "base64"},
 		{"single non-ASCII byte at the very start", "é" + strings.Repeat("x", 40), "base64"},
 		{"single non-ASCII byte at the very end", strings.Repeat("x", 40) + "é", "base64"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			sender := &smtpEmailSender{from: "billing@example.test"}
-			raw, err := sender.compose(EmailMessage{To: "owner@example.test", Subject: "s", HTML: test.html})
+			sender := &smtpSender{from: "billing@example.test"}
+			raw, err := sender.compose(Message{To: "owner@example.test", Subject: "s", HTML: test.html})
 			if err != nil {
 				t.Fatalf("compose: %v", err)
 			}
@@ -608,8 +625,8 @@ func TestSMTPComposeChoosesTransferEncodingBySevenBitSafety(t *testing.T) {
 // exactly 76, every line CRLF-terminated, and decode back byte-identical.
 func TestSMTPComposeBase64WrapsAt76CharsAndDecodesIdentically(t *testing.T) {
 	html := "<p>" + strings.Repeat("café ", 200) + "</p>" // well over 76 base64 chars per line
-	sender := &smtpEmailSender{from: "billing@example.test"}
-	raw, err := sender.compose(EmailMessage{To: "owner@example.test", Subject: "s", HTML: html})
+	sender := &smtpSender{from: "billing@example.test"}
+	raw, err := sender.compose(Message{To: "owner@example.test", Subject: "s", HTML: html})
 	if err != nil {
 		t.Fatalf("compose: %v", err)
 	}

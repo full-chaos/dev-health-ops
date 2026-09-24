@@ -1,4 +1,4 @@
-package operational
+package mail
 
 import (
 	"bufio"
@@ -40,8 +40,8 @@ func TestResendMalformedResponsesYieldNoResponseContent(t *testing.T) {
 				_, _ = connection.Write([]byte(reply))
 			}()
 			t.Setenv("RESEND_API_BASE_URL", "http://"+listener.Addr().String()+"/v1?token=canary-query")
-			sender := &resendEmailSender{from: "billing@example.test", apiKey: "k", client: &http.Client{Timeout: 5 * time.Second}}
-			err = sender.Send(context.Background(), EmailMessage{To: "owner@example.test", Subject: "s", HTML: "<p>h</p>"})
+			sender := &resendSender{from: "billing@example.test", apiKey: "k", client: &http.Client{Timeout: 5 * time.Second}}
+			err = sender.Send(context.Background(), Message{To: "owner@example.test", Subject: "s", HTML: "<p>h</p>"})
 			if err == nil {
 				t.Fatal("Send() = nil")
 			}

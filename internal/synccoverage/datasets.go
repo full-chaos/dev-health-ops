@@ -172,6 +172,6 @@ func containsString(values []string, target string) bool {
 // EffectiveDatasetKeys is effectiveDatasetKeys for callers outside the
 // package: api/services/integrations.py's build_dataset_freshness expands
 // a unit's dataset key with this same helper.
-func EffectiveDatasetKeys(dataset string, processorFlags json.RawMessage) []string {
+func EffectiveDatasetKeys(dataset string, processorFlags json.RawMessage) ([]string, error) {
 	return effectiveDatasetKeys(dataset, processorFlags)
 }

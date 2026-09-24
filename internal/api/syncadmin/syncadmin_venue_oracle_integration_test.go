@@ -42,7 +42,7 @@ type venueIDs struct {
 	cfgSurrogate                                                uuid.UUID
 	jobSync, jobMetrics, jobB, jobBadList, jobInf               uuid.UUID
 	runP1, runP2, runB, runBadResult, runNullResult             uuid.UUID
-	runRich, runBadUnit, srcNoFull                              uuid.UUID
+	runRich, runBadUnit, srcNoFull, runBadFlags                 uuid.UUID
 }
 
 func newVenueIDs() venueIDs {
@@ -56,7 +56,7 @@ func newVenueIDs() venueIDs {
 		&ids.cfgBadTargetsInt, &ids.cfgBadTargetsNumber, &ids.cfgBadTargetsTrue, &ids.cfgBadOptionsString,
 		&ids.cfgBadOptionsIntKey, &ids.cfgBadOptionsTrue, &ids.cfgSurrogate, &ids.jobSync, &ids.jobMetrics, &ids.jobB, &ids.jobBadList,
 		&ids.jobInf, &ids.runP1, &ids.runP2, &ids.runB, &ids.runBadResult, &ids.runNullResult,
-		&ids.runRich, &ids.runBadUnit, &ids.srcNoFull,
+		&ids.runRich, &ids.runBadUnit, &ids.srcNoFull, &ids.runBadFlags,
 	} {
 		*target = uuid.New()
 	}
@@ -287,7 +287,8 @@ func syncAdminRequests(venue *venueoracle.Venue, ids venueIDs) []venueoracle.Req
 	for name, raw := range map[string]string{
 		"planner run": ids.runP1.String(), "idle run": ids.runP2.String(), "other org": ids.runB.String(),
 		"unknown": uuid.NewString(), "not a uuid": "zzz", "uppercase": strings.ToUpper(ids.runRich.String()),
-		"refused unit": ids.runBadUnit.String(),
+		"refused unit":             ids.runBadUnit.String(),
+		"list-shaped family flags": ids.runBadFlags.String(),
 	} {
 		requests = append(requests, get("run units "+name, "/sync-runs/"+raw+"/units", a))
 	}
@@ -494,6 +495,10 @@ $9::timestamptz, $10, $11::json, $12::json, 1, 3, 'e', '2026-05-01 10:00:00+00',
 	richUnit(ids.runRich, ids.src5, "files", "heavy", "success", nil, 90, `null`, nil)
 	richUnit(ids.runRich, ids.srcNoFull, "tests", "heavy", "retrying", nil, 1, `{"last_lease_expired_at": 1767225600}`, `[]`)
 	richUnit(ids.runBadUnit, ids.src1, "commits", "medium", "failed", nil, nil, `{"retry_count": "x"}`, nil)
+	// A family unit whose processor_flags is a truthy non-object:
+	// _effective_dataset_keys raises in build_dataset_freshness.
+	syncRun(ids.runBadFlags, ids.orgA, "running", 1, nil, nil, `{}`, nil)
+	richUnit(ids.runBadFlags, ids.src1, "work-items", "medium", "success", nil, nil, `{}`, `["x"]`)
 
 	// Watermarks, relative to seed time so every verdict holds for the
 	// minutes between the planes: the net advance is 5 days less one hour

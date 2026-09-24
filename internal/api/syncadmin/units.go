@@ -296,7 +296,13 @@ func (h *handlers) datasetFreshness(r *http.Request, org string, units []decoded
 		if unit.ProcessorFlags != nil {
 			flags = json.RawMessage(*unit.ProcessorFlags)
 		}
-		for _, dataset := range synccoverage.EffectiveDatasetKeys(unit.DatasetKey, flags) {
+		// _effective_dataset_keys raises on a truthy non-object
+		// processor_flags of a family unit: the route's unhandled 500.
+		datasets, err := synccoverage.EffectiveDatasetKeys(unit.DatasetKey, flags)
+		if err != nil {
+			return nil, 0, err
+		}
+		for _, dataset := range datasets {
 			if providersync.DatasetWatermark(dataset) != providersync.WatermarkIncremental {
 				continue
 			}

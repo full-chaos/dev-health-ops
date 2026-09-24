@@ -91,6 +91,7 @@ var responseModelRoutes = map[string]bool{
 	"GET /api/v1/admin/sync-configs/{config_id}/jobs":                     true,
 	"GET /api/v1/admin/sync-configs/{config_id}/repositories":             true,
 	"GET /api/v1/admin/sync-runs/{run_id}":                                true,
+	"GET /api/v1/admin/sync-runs/{run_id}/units":                          true,
 	"GET /api/v1/admin/sync-targets":                                      true,
 	"GET /api/v1/admin/teams":                                             true,
 	"GET /api/v1/admin/teams/discover":                                    true,

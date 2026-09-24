@@ -86,6 +86,15 @@ func TestRunUnitsAnswers(t *testing.T) {
 		}
 	}
 
+	listFlags := base
+	listFlags.DatasetKey = "work-items"
+	flags := `["x"]`
+	listFlags.ProcessorFlags = &flags
+	if logs, status, _ := serveUnits(t, &unitsReader{faultReader: &faultReader{}, units: []runUnit{listFlags}}, "", now); status != http.StatusInternalServerError ||
+		!strings.Contains(logs.String(), "step=dataset_freshness") || !strings.Contains(logs.String(), "not a dict") {
+		t.Errorf("list-shaped family flags: %d %s", status, logs)
+	}
+
 	noSource := base
 	noSource.HasSource = false
 	noWatermark := base

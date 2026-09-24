@@ -129,12 +129,14 @@ func TestEntitlementHandlerErrorStatusCodes(t *testing.T) {
 			if response.StatusCode != test.wantStatus {
 				t.Fatalf("status = %d, want %d", response.StatusCode, test.wantStatus)
 			}
-			var body map[string]string
-			if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+			raw, err := io.ReadAll(response.Body)
+			if err != nil {
 				t.Fatal(err)
 			}
-			if body["detail"] != test.wantDetail {
-				t.Fatalf("detail = %q, want %q", body["detail"], test.wantDetail)
+			// FastAPI's JSONResponse bytes: compact, no trailing newline.
+			want := `{"detail":"` + test.wantDetail + `"}`
+			if string(raw) != want {
+				t.Fatalf("body = %q, want %q", raw, want)
 			}
 		})
 	}
@@ -163,17 +165,10 @@ func TestRoutesCarryNoCredentialsOrAuthz(t *testing.T) {
 	}
 }
 
-// TestResponseBodyHasNoTrailingBytesAfterTheJSONValue is the regression
-// proof for switching writeJSON from a raw w.Write of pre-marshalled bytes
-// to json.NewEncoder(w).Encode (this repo's own JSON-response convention,
-// avoiding the go.lang.security.audit.xss.no-direct-write-to-responsewriter
-// class): Encode appends a trailing newline the old code never sent. acr's
-// own client decoder (internal/entitlements/response.go in the acr repo,
-// read-only for this change) reads the body with json.Decoder and asserts
-// `decoder.Decode(&struct{}{}) == io.EOF` immediately after the closing
-// brace to reject trailing garbage -- this test proves that check still
-// passes: a json.Decoder skips leading whitespace before deciding EOF, so a
-// single trailing "\n" is accepted exactly like an empty tail was.
+// TestResponseBodyHasNoTrailingBytesAfterTheJSONValue: acr's own client
+// decoder (internal/entitlements/response.go in the acr repo) reads the body
+// with json.Decoder and requires io.EOF right after the value, so no
+// trailing bytes may follow it. The policy writers send none.
 func TestResponseBodyHasNoTrailingBytesAfterTheJSONValue(t *testing.T) {
 	server := newTestServer(nil)
 	defer server.Close()
@@ -194,5 +189,8 @@ func TestResponseBodyHasNoTrailingBytesAfterTheJSONValue(t *testing.T) {
 	}
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		t.Fatalf("acr's own trailing-garbage check (Decode after the value) = %v, want io.EOF -- got body %q", err, raw)
+	}
+	if raw[len(raw)-1] != '}' {
+		t.Fatalf("body %q ends after the JSON value", raw)
 	}
 }

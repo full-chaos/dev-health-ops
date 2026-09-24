@@ -82,6 +82,9 @@ func venueSeed(t *testing.T, ctx context.Context, pool *pgxpool.Pool) venueFixtu
 			FROM feature_flags JOIN (VALUES ('api_access', false, NULL::timestamptz),
 				('work_graph', true, now() - interval '1 day'),
 				('ask_dev', true, now() + interval '1 day')) AS v(key, enabled, expires) USING (key)`, []any{f.orgA}},
+		// agent_context_runtime on for orgB, so one acr entitlement answer is true.
+		{`INSERT INTO org_feature_overrides (id, org_id, feature_id, is_enabled, expires_at, created_at, updated_at)
+			SELECT gen_random_uuid(), $1, id, true, NULL, now(), now() FROM feature_flags WHERE key = 'agent_context_runtime'`, []any{f.orgB}},
 		{`INSERT INTO users (id, email, is_superuser) VALUES ($1, 'imp@x', true)`, []any{f.impersonator}},
 		{`INSERT INTO impersonation_sessions (id, admin_user_id, target_user_id, target_org_id, target_role, expires_at)
 			VALUES (gen_random_uuid(), $1, $2, $3, 'member', now() + interval '1 hour')`, []any{f.impersonator, f.member, f.orgA}},
@@ -106,6 +109,13 @@ func venueSeed(t *testing.T, ctx context.Context, pool *pgxpool.Pool) venueFixtu
 			(gen_random_uuid(), $4, 'telemetry', 'telemetry_last_report_at', '2026-09-01T10:00:00Z', false, NULL, now(), now()),
 			(gen_random_uuid(), $4, 'telemetry', 'telemetry_opt_in', 'true', false, 'Controls voluntary telemetry reporting.', now() - interval '1 day', now() - interval '1 day')`,
 			[]any{f.orgA.String(), f.orgB.String(), f.orgFree.String(), f.orgNoLicense.String()}},
+		// acr's service credential: Python's internal acr routes answer only
+		// a live svc_acr_ bearer with the entitlements:read scope. The Go
+		// routes do not check it (the network boundary is the control), so
+		// the venue compares the authorised answers only.
+		{`INSERT INTO internal_service_credentials (id, service_name, token_hash, token_prefix, scopes, created_at)
+			VALUES (gen_random_uuid(), 'acr', encode(sha256(convert_to($1, 'UTF8')), 'hex'), left($1, 12), '["entitlements:read"]', now())`,
+			[]any{venueACRToken}},
 		{`INSERT INTO feature_flags (id, key, name, min_tier, is_enabled, created_at, updated_at) VALUES
 			(gen_random_uuid(),'stored_only','Stored','team',true,now(),now()),
 			(gen_random_uuid(),'bad_tier','Bad','platinum',true,now(),now()),
@@ -118,6 +128,10 @@ func venueSeed(t *testing.T, ctx context.Context, pool *pgxpool.Pool) venueFixtu
 	}
 	return f
 }
+
+// venueACRToken is the fixed acr service token the venue seeds (as its
+// sha256) and sends.
+const venueACRToken = "svc_acr_venue-fixed-token"
 
 func b64(text string) *string { return venueoracle.B64(text) }
 
@@ -217,6 +231,21 @@ func venueRequests(f venueFixture, tokens map[string]string) []venueoracle.Reque
 	add("ent: anonymous encoded slash", "GET", ent+"not-a%2Fuuid", nil, nil)
 	add("ent: member encoded slash", "GET", ent+"a%2fb", bearer("member"), nil)
 	add("ent: acr encoded slash", "GET", "/api/v1/internal/acr/entitlements/not-a%2Fuuid", nil, nil)
+	// Internal acr routes, with the credential Python requires.
+	acrAuth := map[string]string{"Authorization": "Bearer " + venueACRToken}
+	acrEnt := "/api/v1/internal/acr/entitlements/"
+	add("acr: health", "GET", "/api/v1/internal/acr/health", acrAuth, nil)
+	add("acr: team org", "GET", acrEnt+f.orgA.String(), acrAuth, nil)
+	add("acr: enterprise org", "GET", acrEnt+f.orgB.String(), acrAuth, nil)
+	add("acr: free org", "GET", acrEnt+f.orgFree.String(), acrAuth, nil)
+	add("acr: no license org", "GET", acrEnt+f.orgNoLicense.String(), acrAuth, nil)
+	add("acr: uppercase", "GET", acrEnt+upper(f.orgA.String()), acrAuth, nil)
+	add("acr: braces", "GET", acrEnt+"{"+f.orgA.String()+"}", acrAuth, nil)
+	add("acr: urn", "GET", acrEnt+"urn:uuid:"+f.orgA.String(), acrAuth, nil)
+	add("acr: no hyphens", "GET", acrEnt+strings.ReplaceAll(f.orgA.String(), "-", ""), acrAuth, nil)
+	add("acr: unknown org", "GET", acrEnt+"00000000-0000-4000-8000-000000000000", acrAuth, nil)
+	add("acr: not uuid", "GET", acrEnt+"nope", acrAuth, nil)
+	add("acr: POST", "POST", acrEnt+f.orgA.String(), acrAuth, nil)
 	add("ent: POST", "POST", ent+f.orgA.String(), bearer("member"), nil)
 	add("ent: HEAD", "HEAD", ent+f.orgA.String(), bearer("member"), nil)
 	// Telemetry settings and the instance report.

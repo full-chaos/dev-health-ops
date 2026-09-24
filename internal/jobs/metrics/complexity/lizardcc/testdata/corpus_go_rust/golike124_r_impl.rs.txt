@@ -1,0 +1,4 @@
+struct S<T>(T);
+impl<T> S<T> {
+  fn m(&self) { if true {} }
+}

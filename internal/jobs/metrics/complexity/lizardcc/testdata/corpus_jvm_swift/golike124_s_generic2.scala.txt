@@ -1,0 +1,6 @@
+object O {
+ def f[A, B <: Foo](x: A): B = {
+  for (i <- 1 to 3) { if (i > 1) println(i) }
+  null
+ }
+}

@@ -1,0 +1,2 @@
+fun a(x: Array<Int>): Int { if (x[0] > 0) return 1; return 0 }
+fun b(l: List<String>) { if (l[0] == "") {} }

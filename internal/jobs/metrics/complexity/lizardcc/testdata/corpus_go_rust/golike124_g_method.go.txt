@@ -1,0 +1,4 @@
+package p
+type S[T any] struct{}
+func (s S[T]) M(x T) T { if true { return x }; return x }
+func (s *S[T]) N() { for {} }

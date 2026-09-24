@@ -43,6 +43,11 @@ type goLike struct {
 
 	lastToken string
 	brCount   int
+
+	// typeParamOpen and typeParamClose are the bracket pair of the type-parameter
+	// list being skipped, chosen by the token that opens it.
+	typeParamOpen  string
+	typeParamClose string
 }
 
 func newGoLike(ctx *Context, funcKeyword string, extraGlobal func(string) bool, clone func() subMachine) *goLike {
@@ -148,18 +153,32 @@ func (g *goLike) stateExpectFunctionDec(tok string) {
 	case "(":
 		g.state = g.stateFunctionDec
 		g.stateFunctionDec(tok)
-	case "<":
-		g.state = g.stateGeneralize
-		g.stateGeneralize(tok)
+	case "<", "[":
+		g.state = g.stateSkipTypeParameters
+		g.stateSkipTypeParameters(tok)
 	default:
 		g.state = g.stateGlobal
 	}
 }
 
-// stateGeneralize ports _generalize (golike.py:58-60): skip `<...>` generic
-// constraints on a function name.
-func (g *goLike) stateGeneralize(tok string) {
-	g.brCount += bracketDelta(tok, "<", ">")
+// stateSkipTypeParameters ports _skip_type_parameters (golike.py:65-74): skip a
+// type-parameter list on a function name -- `<T>` (Rust, Kotlin, Swift) or
+// `[T]` (Go, Scala). The bracket pair is chosen by the token that opens the
+// list.
+func (g *goLike) stateSkipTypeParameters(tok string) {
+	if g.brCount == 0 {
+		g.typeParamOpen = tok
+		g.typeParamClose = "]"
+		if tok == "<" {
+			g.typeParamClose = ">"
+		}
+	}
+	switch tok {
+	case g.typeParamOpen:
+		g.brCount++
+	case g.typeParamClose:
+		g.brCount--
+	}
 	if g.brCount == 0 {
 		g.state = g.stateExpectFunctionDec
 	}

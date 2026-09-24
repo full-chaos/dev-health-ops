@@ -1,0 +1,4 @@
+package p
+func A(x [3]int) int { if x[0] > 0 { return 1 }; return 0 }
+var v = []int{1,2}
+func B() { if v[0] > 0 {} }

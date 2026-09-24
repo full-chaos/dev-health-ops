@@ -1,0 +1,2 @@
+package p
+func F[T any](x T) func() int { return func() int { if true { return 1 }; return 2 } }

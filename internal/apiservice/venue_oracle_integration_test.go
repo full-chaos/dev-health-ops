@@ -209,10 +209,75 @@ func TestVenueOracleProtectedRoutes(t *testing.T) {
 		`SELECT canonical_id, coalesce(display_name, '<null>'), coalesce(email, '<null>'),
 			provider_identities, team_ids, is_active FROM identities FINAL
 		WHERE org_id != '' ORDER BY canonical_id`)
+	// Last, since they break both planes' database: the acr store made
+	// unusable.
+	receipt.WriteString(venueACRStoreDown(t, ctx, venue, base, seed.orgA.String()))
 	if path := os.Getenv("DEV_HEALTH_VENUE_RECEIPT"); path != "" {
 		_ = os.WriteFile(path, []byte(receipt.String()), 0o600)
 	}
 	t.Log("\n" + receipt.String())
+}
+
+func venueACRStoreDown(t *testing.T, ctx context.Context, venue *venueoracle.Venue, base, orgID string) string {
+	t.Helper()
+	admin, err := pgxpool.New(ctx, venue.AdminURI(t, "postgres"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+	auth := map[string]string{"Authorization": "Bearer " + venueACRToken}
+	health := venueoracle.Request{Name: "acr store unreadable: health", Method: http.MethodGet, Path: "/api/v1/internal/acr/health", Headers: auth}
+
+	// 1. The table each plane's health reads is gone: Python reads acr's
+	// credential row, Go the organizations table the entitlement route
+	// reads first. Both answer 503.
+	for database, table := range map[string]string{venue.SourceDB: "internal_service_credentials", venue.GoDB: "organizations"} {
+		conn, err := pgxpool.New(ctx, venue.AdminURI(t, database))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := conn.Exec(ctx, fmt.Sprintf(`ALTER TABLE %q RENAME TO %q`, table, table+"_gone")); err != nil {
+			t.Fatal(err)
+		}
+		conn.Close()
+	}
+	requests := []venueoracle.Request{health}
+	out := venueoracle.Diff(t, base, requests, venue.ServePython(t, requests), venueoracle.DiffOptions{
+		Inspect: func(request venueoracle.Request, goResponse venueoracle.Response) {
+			// SAME alone would also hold if both planes answered 200.
+			if goResponse.Status != http.StatusServiceUnavailable {
+				t.Errorf("%s: go answered %d, want 503", request.Name, goResponse.Status)
+			}
+		},
+	})
+
+	// 2. Postgres unreachable: the Go database refuses connections and its
+	// open ones are ended. Python answers this with an unhandled 500 (a
+	// crash in its credential lookup, not a contract), so only the Go
+	// answer is checked: 503 with Python's handled body on both routes.
+	if _, err := admin.Exec(ctx, fmt.Sprintf(`ALTER DATABASE %q ALLOW_CONNECTIONS false`, venue.GoDB)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(ctx, `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()`, venue.GoDB); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/api/v1/internal/acr/health", "/api/v1/internal/acr/entitlements/" + orgID} {
+		response, err := http.Get(base + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err := io.ReadAll(response.Body)
+		_ = response.Body.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		same := response.StatusCode == http.StatusServiceUnavailable && string(body) == `{"detail":"Service unavailable"}`
+		if !same {
+			t.Errorf("acr store unreachable: GET %s: go answered %d %q, want 503 {\"detail\":\"Service unavailable\"}", path, response.StatusCode, body)
+		}
+		out += fmt.Sprintf("acr store unreachable: GET %s go=%d %s\n", path, response.StatusCode, venueoracle.Mark(same))
+	}
+	return out
 }
 
 // startVenueAPI runs configure() as a deploy does and returns the api's

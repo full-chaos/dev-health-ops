@@ -1,0 +1,1 @@
+object O { def q() = { val x = List[Int](1); if (x.isEmpty) 0 else 1 } }

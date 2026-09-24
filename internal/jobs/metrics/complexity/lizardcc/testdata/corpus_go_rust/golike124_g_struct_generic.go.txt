@@ -1,0 +1,3 @@
+package p
+type Box[T any] struct { v T }
+func NewBox[T any](v T) Box[T] { if false { return Box[T]{} }; return Box[T]{v} }

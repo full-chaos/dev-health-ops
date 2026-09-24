@@ -168,7 +168,7 @@ func (h *handlers) listRetentionPolicies(w http.ResponseWriter, r *http.Request)
 	out.Set("total", total)
 	out.Set("limit", limit)
 	out.Set("offset", offset)
-	policy.WriteJSON(w, http.StatusOK, out, nil)
+	policy.WriteModel(w, http.StatusOK, out, nil)
 }
 
 func containsString(values []string, want string) bool {
@@ -256,7 +256,7 @@ VALUES ($1, $2, $3, $4, $5, true, $6, $7, $7)`,
 		h.internalError(ctx, w, "insert retention policy", err)
 		return
 	}
-	policy.WriteJSON(w, http.StatusCreated, retentionPolicyObject(created), nil)
+	policy.WriteModel(w, http.StatusCreated, retentionPolicyObject(created), nil)
 }
 
 // loadRetentionPolicy is RetentionService.get_policy for the route's
@@ -296,7 +296,7 @@ func (h *handlers) getRetentionPolicy(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	policy.WriteJSON(w, http.StatusOK, retentionPolicyObject(found), nil)
+	policy.WriteModel(w, http.StatusOK, retentionPolicyObject(found), nil)
 }
 
 // updateRetentionPolicy is retention.py's update_retention_policy.
@@ -358,7 +358,7 @@ WHERE id = $1`, found.ID, found.RetentionDays, found.Description, found.IsActive
 		h.internalError(ctx, w, "update retention policy", err)
 		return
 	}
-	policy.WriteJSON(w, http.StatusOK, retentionPolicyObject(found), nil)
+	policy.WriteModel(w, http.StatusOK, retentionPolicyObject(found), nil)
 }
 
 // deleteRetentionPolicy is retention.py's delete_retention_policy.
@@ -378,7 +378,7 @@ func (h *handlers) deleteRetentionPolicy(w http.ResponseWriter, r *http.Request)
 	}
 	out := pyjson.NewObject()
 	out.Set("deleted", true)
-	policy.WriteJSON(w, http.StatusOK, out, nil)
+	policy.WriteModel(w, http.StatusOK, out, nil)
 }
 
 // executeRetentionPolicy is retention.py's execute_retention_policy and
@@ -449,7 +449,7 @@ func (h *handlers) executeRetentionPolicy(w http.ResponseWriter, r *http.Request
 	out := pyjson.NewObject()
 	out.Set("deleted_count", count)
 	out.Set("error", optionalString(message))
-	policy.WriteJSON(w, http.StatusOK, out, nil)
+	policy.WriteModel(w, http.StatusOK, out, nil)
 }
 
 // applyRetention counts (dry run) or deletes the org's audit_logs older than

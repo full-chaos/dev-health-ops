@@ -21,35 +21,35 @@
 # forbids.
 
 # --- shared with the live-oracle closure ---
-annotated-types==0.7.0
-anyio==4.13.0
-certifi==2026.4.22
+annotated-types==0.8.0
+anyio==4.15.1
+certifi==2026.7.22
 defusedxml==0.7.1
 gitdb==4.0.12
-GitPython==3.1.54
-greenlet==3.5.0
+GitPython==3.1.62
+greenlet==3.5.6
 h11==0.16.0
 httpcore==1.0.9
 httpx==0.28.1
-idna==3.15
-pydantic==2.13.4
-pydantic-core==2.46.4
+idna==3.20
+pydantic==2.13.5
+pydantic-core==2.46.5
 PyYAML==6.0.3
 smmap==5.0.3
-SQLAlchemy==2.0.49
-typing-extensions==4.15.0
-typing-inspection==0.4.2
+SQLAlchemy==2.0.54
+typing-extensions==4.16.0
+typing-inspection==0.4.4
 
 # --- additionally required to import the migration entrypoint ---
 # dev_health_ops.metrics.sinks -> models -> licensing.gating imports FastAPI,
 # and licensing.validator imports nacl. Both are on the import path of the
 # migration runner even though a migration performs no HTTP and verifies no
 # signature.
-annotated-doc==0.0.4
+annotated-doc==0.0.5
 fastapi==0.136.3
-starlette==1.3.1
+starlette==1.7.0
 pynacl==1.6.2
-cffi==2.0.0
+cffi==2.1.1
 pycparser==3.0
 
 # --- CHAOS-6306: org_deletion.py's own import closure ---
@@ -59,12 +59,12 @@ pycparser==3.0
 # resolver. org_deletion.py imports dev_health_ops.core.encryption for
 # decrypt_value, which imports cryptography.fernet. cffi is already listed
 # above for pynacl; cryptography needs no other transitive.
-cryptography==50.0.0
+cryptography==50.0.1
 
 # --- ClickHouse client used to APPLY the migrations ---
 clickhouse-connect==0.15.1
 lz4==4.4.5
-urllib3==2.7.0
+urllib3==2.8.0
 zstandard==0.25.0
 # pytz is required by clickhouse-connect 0.15.1's tzutil at IMPORT time; the
 # --no-deps install is what surfaced it.
@@ -75,10 +75,10 @@ pytz==2026.2
 # runs the real alembic migrations that shape worker_operator_audits (0047,
 # 0136, 0137) through alembic's Operations against its Postgres container.
 # Same job, same no-deps install; versions from uv.lock.
-alembic==1.18.4
-Mako==1.3.12
+alembic==1.20.0
+Mako==1.4.3
 MarkupSafe==3.0.3
-psycopg2-binary==2.9.12
+psycopg2-binary==2.9.13
 
 # --- the full Postgres alembic upgrade (dho migrate postgres oracle) ---
 # internal/pgmigrate's TestBaselineIsTheExecutedPythonUpgrade runs the whole

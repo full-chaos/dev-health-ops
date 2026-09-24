@@ -56,37 +56,25 @@ Both hooks run on **`pre-install` and `pre-upgrade`**. Running provisioning only
 on install would leave grant drift unrepaired, and re-running it is safe — see
 [Provisioning cannot revoke what the migrator grants](#provisioning-cannot-revoke-what-the-migrator-grants).
 
-## One DSN, two variable names
+## The weight-0 Job and the River step
 
-`dev-hops migrate postgres` does not only run Alembic. When
-`MIGRATION_DATABASE_URI` (or `MIGRATION_DATABASE_URI_FILE`) is set, it also runs
-`dev-health-worker-migrate` itself, as a second fail-closed step. That binary
-is a thin main over the code `dho migrate river` runs; it stays in the Python
-image for this path until spec S10.
+The weight-0 Job runs `dho migrate upgrade` from the dho image: the PostgreSQL
+head, the standard feature flags, then the ClickHouse head, each exactly as its
+own `dho` verb. It reads the database from `MIGRATION_DATABASE_URI` (or its
+`_FILE` or `DEV_HEALTH_MIGRATION_PG_*` form), else `POSTGRES_URI`. An empty
+`MIGRATION_DATABASE_URI` counts as not configured.
 
-The test is presence, not truthiness: `migrate.py` checks `is not None`, so
-`MIGRATION_DATABASE_URI=""` still runs the migrator. **Absent and empty are
-different**, which is why Compose's migrate entrypoint *unsets* an empty value
-rather than passing it through, and why an empty-string override cannot be used
-to suppress the step.
+`--river` adds `dho migrate river --apply-and-check` right after the PostgreSQL
+step, and only when `MIGRATION_DATABASE_URI` is configured -- what the Python
+`dev-hops migrate postgres` did. The chart passes `--river` exactly when the
+River hook is off.
 
-That matters because the weight-0 Job runs before provisioning. If the elevated
-DSN reaches it on a fresh database, the River preflight fails there — before
-anything has created the roles it requires — and Helm aborts the release.
-
-Compose avoids this by never letting the two DSNs share a variable: its
-`migrate` service reads `MIGRATION_DATABASE_URI`, while the River step reads
-`GO_WORKER_MIGRATION_DATABASE_URI`. The chart keeps the same separation:
-
-- **Chart-owned credentials** (`secrets.create=true`): the migration Secret
-  carries the DSN as `POSTGRES_URI`, and the River hook gets its own Secret
-  carrying `MIGRATION_DATABASE_URI`. `get_postgres_uri()` normalises the value to
-  the async driver form, so Alembic is unaffected by which dialect it was written
-  in.
-- **Operator-owned credentials** (`secrets.create=false`): one Secret serves both
-  Jobs and the chart cannot restructure its keys, so the weight-0 entrypoint
-  unsets the variable and passes the DSN to Alembic as `--db` instead. This is
-  what Compose and the raw Kubernetes manifests already do.
+That matters because the weight-0 Job runs before provisioning. If the River
+step runs there on a fresh database, its preflight fails before anything has
+created the roles it requires, and Helm aborts the release. With the hook on,
+the weight-0 Job never runs River: the chart-owned migration Secret carries the
+DSN as `POSTGRES_URI`, and an operator-owned Secret's `MIGRATION_DATABASE_URI`
+reaches only the PostgreSQL step, because the Job runs without `--river`.
 
 ### What `riverMigrate.enabled=false` means
 
@@ -96,7 +84,7 @@ the Secret's contents decide which one a deployment is on:
 | `riverMigrate.enabled` | Elevated DSN configured | What applies the River schema |
 | --- | --- | --- |
 | `true` | yes | the weight-10 hook, after provisioning — the only ordering a fresh install survives |
-| `false` | yes | `dev-hops migrate postgres` itself, inside the weight-0 Job. Compose-equivalent, and safe only where the roles already exist — an upgrade, never a fresh install |
+| `false` | yes | `dho migrate upgrade --river`, inside the weight-0 Job. Compose-equivalent, and safe only where the roles already exist — an upgrade, never a fresh install |
 | `false` | no | nothing. The operator runs `dho migrate river --apply-and-check` out of band |
 
 ## Which credential each step reads
@@ -154,13 +142,17 @@ design:
 Observed across three consecutive production passes: 116 grants, then 119 (a new
 table), then 119 again — no revoke at any point.
 
-## Cutover authorisation
+## Production's settings
 
-`dev-hops migrate postgres` deliberately defers the Celery-to-River route-table
-cutover revision unless `DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1`: without it the
-upgrade targets the application-schema branch head instead of every head. The
-chart carries the variable on the weight-0 Job as an optional Secret key,
-defaulting to unset — the same operator passthrough Compose ships.
+`dho migrate upgrade` applies production's heads: the PostgreSQL schema with the
+Celery-to-River route-table cutover (revision 0066) applied, and the ClickHouse
+schema under operational ordering contract 2. It refuses, naming the value, any
+`DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER` other than `1` and any
+`OPERATIONAL_ORDERING_CONTRACT` other than `2`. The chart sets both on the
+weight-0 Job (`migrations.hook.celeryRiverCutover`,
+`goWorkers.operationalOrderingContract`), and both default to production's
+values; a database built under other settings must be re-created from the
+head.
 
 ## Drain and rollout safety
 

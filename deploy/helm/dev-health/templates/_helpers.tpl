@@ -343,15 +343,11 @@ values for existing installations.
 {{- define "dev-health.migrationSecretData" -}}
 {{- /*
 CHAOS-4428: when the weight-10 river-migrate hook owns the River step, this
-Secret -- which the weight-0 migrate Job envFroms -- must not carry
-MIGRATION_DATABASE_URI at all. `dev-hops migrate postgres` runs
-dev-health-worker-migrate whenever that variable is SET
-(migrate.py::_run_river_upgrade tests `is not None`, so an empty string is not
-enough to suppress it), and at weight 0 that preflight runs before the weight-5
-hook has created the roles it requires. Compose keeps the two DSNs in two
-different variables for the same reason; here the same DSN reaches Alembic
-under the POSTGRES_URI compatibility alias, which db.py::get_postgres_uri
-normalises to the async driver form.
+Secret -- which the weight-0 migrate Job envFroms -- does not carry
+MIGRATION_DATABASE_URI: the same DSN reaches the Job under POSTGRES_URI,
+which dho's migration resolver takes when MIGRATION_DATABASE_URI is not
+configured. The Job then runs `dho migrate upgrade` without --river, and the
+River step waits for the weight-5 hook that creates the roles it requires.
 */}}
 {{- $riverHookOwnsRiver := .Values.migrations.hook.riverMigrate.enabled }}
 {{- range $key, $value := .Values.migrations.hook.secretData }}
@@ -359,10 +355,21 @@ normalises to the async driver form.
 {{ $key }}: {{ $value | quote }}
 {{- end }}
 {{- end }}
-{{- if and (not (index .Values.migrations.hook.secretData "CLICKHOUSE_URI")) (index .Values.secrets.data "CLICKHOUSE_URI") }}
+{{- /*
+The migrate Job runs dho, which speaks ClickHouse's native protocol (9000):
+an explicit migrations.hook.secretData.CLICKHOUSE_URI wins (it must be
+native), else the Go runtimes' URI (goWorkers.clickhouseURI, else the bundled
+ClickHouse addressed natively), else the shared secrets.data.CLICKHOUSE_URI,
+which the Python api reads over HTTP -- with an external ClickHouse, set
+goWorkers.clickhouseURI, as the Go workers already require.
+*/}}
+{{- if not (index .Values.migrations.hook.secretData "CLICKHOUSE_URI") }}
+{{- $nativeClickhouseURI := include "dev-health.goWorkerClickhouseURI" . }}
+{{- if $nativeClickhouseURI }}
+CLICKHOUSE_URI: {{ $nativeClickhouseURI | quote }}
+{{- else if (index .Values.secrets.data "CLICKHOUSE_URI") }}
 CLICKHOUSE_URI: {{ index .Values.secrets.data "CLICKHOUSE_URI" | quote }}
-{{- else if and (not (index .Values.migrations.hook.secretData "CLICKHOUSE_URI")) .Values.clickhouse.enabled }}
-CLICKHOUSE_URI: {{ include "dev-health.clickhouseURI" . | quote }}
+{{- end }}
 {{- end }}
 {{- $hasDedicatedMigrationURI := index .Values.migrations.hook.secretData "MIGRATION_DATABASE_URI" }}
 {{- $hasHookPostgresURI := index .Values.migrations.hook.secretData "POSTGRES_URI" }}

@@ -13,8 +13,9 @@
 {{- /*
 Database migration hook (CHAOS-2304).
 
-Runs PostgreSQL (Alembic plus opt-in River) + ClickHouse migrations as configured
-by migrations.hook.events. Production defaults remain pre-install/pre-upgrade so
+Runs `dho migrate upgrade` -- the PostgreSQL head, the standard feature flags,
+the ClickHouse head, plus River when no River hook runs -- as configured by
+migrations.hook.events. Production defaults remain pre-install/pre-upgrade so
 schema changes complete before workloads deploy. The explicit local bundled
 PostgreSQL mode uses post-install/pre-upgrade and waits for the bundled database.
 App pods run with AUTO_RUN_MIGRATIONS=false (see configmap.yaml) and never
@@ -56,6 +57,30 @@ type: Opaque
 stringData:
   {{- include "dev-health.migrationSecretData" . | trim | nindent 2 }}
 {{- end }}
+{{- /*
+The Job runs `dho migrate upgrade`, so its image must carry dho as the
+entrypoint: migrations.hook.image, else routeActivate.image (the operator
+image the River and route-activate hooks run), else the chart's dho image
+(goApi.image, as the query-api Deployment defaults). An image set in either
+value must follow the hooks' pin rule: repo@sha256:<digest>,
+repo:sha-<12 hex>, or repo:local with pullPolicy Never or IfNotPresent. The
+chart-default dho image is for local renders; production values pin one
+(CHAOS-6488 tracks the unpinned default). The Python image is refused by
+name; a repository name is not proof of an image's contents (CHAOS-6488).
+*/}}
+{{- $migrateImageSet := .Values.migrations.hook.image | default .Values.migrations.hook.routeActivate.image }}
+{{- $migrateImage := $migrateImageSet | default (include "dev-health.goApiImage" .) }}
+{{- $migratePullPolicy := .Values.migrations.hook.pullPolicy | default .Values.migrations.hook.routeActivate.pullPolicy | default .Values.goApi.image.pullPolicy }}
+{{- if regexMatch "(^|/)dev-hops-api([:@]|$)" $migrateImage }}
+{{- fail (printf "the migrate Job image %q is the Python image; the Job runs `dho migrate upgrade` and needs the dho (operator) image: set migrations.hook.image or migrations.hook.routeActivate.image" $migrateImage) }}
+{{- end }}
+{{- $migrateImageIsDigestPinned := and $migrateImage (contains "@sha256:" $migrateImage) }}
+{{- $migrateImageIsImmutableTag := and $migrateImage (regexMatch "^.+:sha-[0-9a-f]{12}$" $migrateImage) }}
+{{- $migrateImageIsSideloadedLocal := and $migrateImage (regexMatch "^.+:local$" $migrateImage) (or (eq $migratePullPolicy "Never") (eq $migratePullPolicy "IfNotPresent")) }}
+{{- if and $migrateImageSet (not (or $migrateImageIsDigestPinned $migrateImageIsImmutableTag $migrateImageIsSideloadedLocal)) }}
+{{- fail (printf "the migrate Job image %q (migrations.hook.image, else migrations.hook.routeActivate.image) is not a pinned dho image. The Job runs `dho migrate upgrade`: set it to repo@sha256:<digest> or repo:sha-<12 hex>; repo:local is accepted only with pullPolicy Never or IfNotPresent." $migrateImage) }}
+{{- end }}
+{{- include "dev-health.lockstepImageCheck" (dict "context" . "image" $migrateImage "labelWithValue" (printf "the migrate Job image (migrations.hook.image, else migrations.hook.routeActivate.image: %s)" $migrateImage) "reason" "`dho migrate upgrade` must run the same build as the application it is migrating for.") }}
 ---
 apiVersion: batch/v1
 kind: Job
@@ -103,60 +128,27 @@ spec:
       {{- end }}
       containers:
         - name: migrate
-          image: {{ include "dev-health.image" . }}
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          image: {{ $migrateImage | quote }}
+          imagePullPolicy: {{ $migratePullPolicy }}
           securityContext:
             allowPrivilegeEscalation: false
-          # MIGRATION_DATABASE_URI (preferred), POSTGRES_URI, or DATABASE_URI
-          # must point DIRECTLY at Postgres (5432), never at a transaction-mode
-          # pooler. The dedicated URI opts into the River step; the legacy
-          # aliases remain Alembic-only compatible. See
+          # `dho migrate upgrade` runs the migrate Job's steps in order, each
+          # exactly as its own verb: `migrate postgres upgrade`, `admin
+          # features seed`, `migrate clickhouse upgrade`. Exec form, no shell:
+          # the image is distroless. MIGRATION_DATABASE_URI (preferred, or its
+          # _FILE or DEV_HEALTH_MIGRATION_PG_* form) or POSTGRES_URI must point
+          # DIRECTLY at Postgres (5432), never at a transaction-mode pooler;
+          # dho does not read DATABASE_URI. See
           # docs/operate/configure/databases-and-storage.md.
-          command:
-            - sh
-            - -c
-            - |
-              if [ -z "${MIGRATION_DATABASE_URI:-}" ]; then unset MIGRATION_DATABASE_URI; fi
-              MIGRATION_DB=""
-              MIGRATION_DB_SET=""
-              if [ "${MIGRATION_DATABASE_URI+x}" = x ]; then
-                MIGRATION_DB="$MIGRATION_DATABASE_URI"
-                MIGRATION_DB_SET=1
-              elif [ "${MIGRATION_DATABASE_URI_FILE+x}" = x ]; then
-                MIGRATION_DB="$(cat "$MIGRATION_DATABASE_URI_FILE")"
-                MIGRATION_DB_SET=1
-              fi
-              ALEMBIC_DB_FLAG=""
-              {{- if .Values.migrations.hook.riverMigrate.enabled }}
-              # CHAOS-4428: the weight-10 river-migrate hook owns the River step,
-              # so this Job must not also run it. `dev-hops migrate postgres`
-              # invokes dev-health-worker-migrate itself whenever
-              # MIGRATION_DATABASE_URI is set (migrate.py::_run_river_upgrade),
-              # and at weight 0 that lands BEFORE the weight-5 provisioning hook
-              # has created the runtime logins River's preflight requires
-              # (internal/storage/river/migrate.go:142-186) -- on a fresh
-              # database it fails and Helm aborts the release. Compose keeps the
-              # two DSNs in separate variables (its `migrate` service never
-              # carries the River DSN; go-river-migrate reads
-              # GO_WORKER_MIGRATION_DATABASE_URI). Both Jobs here share one
-              # migration Secret, so the same separation is applied where
-              # Compose already applies it -- in this entrypoint.
-              if [ -n "$MIGRATION_DB_SET" ]; then ALEMBIC_DB_FLAG=1; fi
-              unset MIGRATION_DATABASE_URI MIGRATION_DATABASE_URI_FILE
-              {{- end }}
-              if [ -n "$POSTGRES_URI" ] || [ -n "$DATABASE_URI" ] || [ -n "$MIGRATION_DB_SET" ]; then
-                if [ -n "$ALEMBIC_DB_FLAG" ]; then
-                  dev-hops --db "$MIGRATION_DB" migrate postgres
-                else
-                  dev-hops migrate postgres
-                fi \
-                  && if [ -n "$POSTGRES_URI" ] || [ -n "$DATABASE_URI" ]; then
-                    dev-hops admin features seed
-                  else
-                    dev-hops --db "$MIGRATION_DB" admin features seed
-                  fi
-              fi \
-                && dev-hops migrate clickhouse
+          {{- if .Values.migrations.hook.riverMigrate.enabled }}
+          # The weight-10 river-migrate hook owns the River step (CHAOS-4428).
+          args: ["migrate", "upgrade", "--river=false"]
+          {{- else }}
+          # No River hook: this Job applies the River schema itself right
+          # after the PostgreSQL step, when MIGRATION_DATABASE_URI is
+          # configured -- what `dev-hops migrate postgres` did.
+          args: ["migrate", "upgrade", "--river"]
+          {{- end }}
           envFrom:
             - configMapRef:
                 name: {{ include "dev-health.fullname" . }}-migrate-config
@@ -168,36 +160,16 @@ spec:
               {{- end }}
           env:
             {{- /*
-            The fresh-database Celery->River route-table cutover. Without
-            DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1,
-            `_effective_postgres_upgrade_revision` applies the safe branch head
-            instead of `heads` and defers revision 0066
-            (migrate.py:216-231, gate at :176-177). Compose carries it on its
-            migrate service as an operator passthrough (compose.yml:198,
-            compose.production.yml:95) and the kustomize Job carries it as an
-            optional secretKeyRef (deploy/kubernetes/migrate-job.yaml:72-78);
-            the chart carried it nowhere, so a fresh install could not reach
-            that revision at all. Optional, so an install that never authorises
-            the cutover still renders.
+            The PostgreSQL and ClickHouse heads dho applies are production's:
+            the Celery->River route-table cutover (revision 0066) applied, and
+            operational ordering contract 2. dho refuses any other value, naming
+            it, before it connects; a database built under other settings must
+            be re-created from the head.
             */}}
             - name: DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER
-              valueFrom:
-                secretKeyRef:
-                  {{- if .Values.secrets.create }}
-                  name: {{ include "dev-health.fullname" . }}-migrate-secrets
-                  {{- else }}
-                  name: {{ default (include "dev-health.secretName" .) .Values.migrations.hook.externalSecretName }}
-                  {{- end }}
-                  key: DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER
-                  optional: true
-            # CHAOS-4587 (codex delta round 2, P1): migration 067 checks
-            # this same variable to decide whether to apply the
-            # ordering-contract cutover -- reuses goWorkers.operationalOrderingContract
-            # (go-workers.yaml) so there is exactly one values.yaml knob
-            # that moves this Job and every go-* worker together, rather
-            # than two that could drift out of sync at cutover.
+              value: {{ .Values.migrations.hook.celeryRiverCutover | quote }}
             - name: OPERATIONAL_ORDERING_CONTRACT
-              value: {{ .Values.goWorkers.operationalOrderingContract | default "1" | quote }}
+              value: {{ .Values.goWorkers.operationalOrderingContract | quote }}
             {{- with .Values.migrations.hook.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

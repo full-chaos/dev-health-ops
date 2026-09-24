@@ -452,6 +452,24 @@ smoke_migrate_postgres() {
 # smoke_admin_features_seed runs `dho admin features seed` with no database
 # configured: the verb must be reached and fail closed (exit 1) with the
 # migration-DSN refusal -- not an unknown command (exit 2).
+# smoke_migrate_upgrade runs `dho migrate upgrade --river` from the image the
+# way the migrate Job does, with no database configured: its first step must
+# refuse (exit 1) naming the missing setting, and the composite must name the
+# failing step and the steps it did not run -- never an unknown command
+# (exit 2).
+smoke_migrate_upgrade() {
+  local tag="$1" output code
+  set +e
+  output="$(docker run --rm "${CONTAINER_SECURITY_ARGS[@]}" --env DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1 --env OPERATIONAL_ORDERING_CONTRACT=2 "${tag}" migrate upgrade --river 2>&1 >/dev/null)"
+  code=$?
+  set -e
+  [ "${code}" = "1" ] || die "${tag}: dho migrate upgrade without a database exited ${code}, want 1: ${output}"
+  printf '%s' "${output}" | grep -F '"code":"step_failed"' | grep -F '"step":"migrate postgres upgrade"' >/dev/null \
+    || die "${tag}: dho migrate upgrade did not name the failing step: ${output}"
+  printf '%s' "${output}" | grep -F 'neither MIGRATION_DATABASE_URI nor POSTGRES_URI is set' >/dev/null \
+    || die "${tag}: dho migrate upgrade did not report the missing database: ${output}"
+}
+
 smoke_admin_features_seed() {
   local tag="$1" output code
   set +e
@@ -499,6 +517,7 @@ smoke_dho() {
   smoke_migrate_clickhouse "${tag}"
   smoke_migrate_postgres "${tag}"
   smoke_admin_features_seed "${tag}"
+  smoke_migrate_upgrade "${tag}"
 
   ACTIVE_CONTAINER="${container_name}"
   docker run --detach \

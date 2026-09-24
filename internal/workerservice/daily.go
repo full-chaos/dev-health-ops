@@ -465,6 +465,7 @@ func buildDailyWorker(
 						"Every other remaining kind is unaffected.",
 					"error", executorErr,
 					"reason", doraRefusalReason(executorErr),
+					"remedy", doraRefusalRemedy(doraRefusalReason(executorErr)),
 				)
 				if refusalObserver, ok := observer.(doraRefusalObserver); ok {
 					_ = refusalObserver.ObserveDORARefused(doraRefusalReason(executorErr))
@@ -1400,6 +1401,26 @@ func doraRefusalReason(err error) string {
 		return jobruntime.DORARefusedUnknownSchema
 	default:
 		return jobruntime.DORARefusedInspectFailed
+	}
+}
+
+// doraRefusalRemedy is what an operator does about each refusal reason, logged
+// with the boot refusal so the log line names the fix, not only the fault.
+func doraRefusalRemedy(reason string) string {
+	switch reason {
+	case jobruntime.DORARefusedOrderingContractMismatch:
+		return "OPERATIONAL_ORDERING_CONTRACT and the ClickHouse operational tables disagree. " +
+			"Every topology now defaults to contract 2, production's: run the migrate Job " +
+			"(`dho migrate upgrade`) to bring ClickHouse to the head. A contract-1 database is " +
+			"below the head and `dho migrate upgrade` refuses it by name: apply migration 067 " +
+			"with the Python chain first, or re-create it from the head (deploy/go-workers/README.md). " +
+			"`dho migrate clickhouse status` reports where the database stands."
+	case jobruntime.DORARefusedContractUnparseable:
+		return "set OPERATIONAL_ORDERING_CONTRACT to 1 or 2"
+	case jobruntime.DORARefusedUnknownSchema:
+		return "an operational table's sorting key matches no contract; something changed it outside the migration chain"
+	default:
+		return "inspect ClickHouse: the operational tables could not be read"
 	}
 }
 

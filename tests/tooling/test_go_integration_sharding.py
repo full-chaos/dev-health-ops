@@ -244,6 +244,9 @@ EXPECTED_PACKAGES = {
     "internal/platform/config",
     "internal/providerfoundation",
     "internal/providersync",
+    # CHAOS-6464: `dho migrate upgrade` run end to end on real PostgreSQL and
+    # ClickHouse.
+    "internal/rivermigrate",
     "internal/scheduler/fixed",
     "internal/scheduler/sync",
     # The ClickHouse posture manifest (CHAOS-6310): SHOW GRANTS FOR

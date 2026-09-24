@@ -274,9 +274,6 @@ def test_production_compose_has_one_shot_migrate_service() -> None:
     migrate = services.get("migrate")
     assert migrate is not None, "compose.production.yml must define a migrate service"
     assert migrate.get("restart") == "no"
-    entrypoint = " ".join(str(p) for p in migrate["entrypoint"])
-    assert "dev-hops migrate clickhouse" in entrypoint
-    assert "dev-hops migrate postgres" in entrypoint
 
 
 def test_production_compose_app_services_gate_on_migrate() -> None:
@@ -311,9 +308,6 @@ def test_legacy_compose_has_one_shot_migrate_service() -> None:
     migrate = services.get("migrate")
     assert migrate is not None, "compose.yml must define a migrate service"
     assert migrate.get("restart") == "no"
-    entrypoint = " ".join(str(p) for p in migrate["entrypoint"])
-    assert "dev-hops migrate clickhouse" in entrypoint
-    assert "dev-hops migrate postgres" in entrypoint
 
 
 def test_legacy_compose_migrate_waits_for_postgres_health() -> None:
@@ -390,23 +384,6 @@ def test_every_buildable_service_declares_an_overridable_image() -> None:
             f"runs THAT image instead of building this tree, and a start "
             f"silently mixes revisions across the fleet"
         )
-
-
-def test_legacy_compose_migrate_runs_the_same_image_as_api() -> None:
-    """`migrate` applies the schema the `api` process then serves. If the two
-    ever resolve to different builds of the same tree, the schema applied and
-    the code reading it disagree, and nothing in the bring-up says so. They
-    must therefore share BOTH halves of their image identity: the same local
-    build block, and the same pin variable so an operator override moves them
-    together or not at all.
-    """
-    services = _load_yaml(_LEGACY_COMPOSE)["services"]
-    migrate = services["migrate"]
-    api = services["api"]
-
-    assert isinstance(migrate.get("build"), dict)
-    assert migrate["build"] == api["build"]
-    assert migrate["image"] == api["image"]
 
 
 def test_local_postgres_bootstraps_distinct_go_runtime_roles() -> None:
@@ -796,28 +773,9 @@ def test_swarm_stack_has_migrate_service_and_disables_ambient_migrations() -> No
     assert migrate is not None, "stack.yml must define a migrate service"
     restart = migrate["deploy"]["restart_policy"]["condition"]
     assert restart == "none", "swarm migrate must be one-shot (restart: none)"
-    entrypoint = " ".join(str(p) for p in migrate["entrypoint"])
-    assert "dev-hops migrate clickhouse" in entrypoint
     for name in ("api",):
         env = services[name].get("environment") or {}
         assert env.get("AUTO_RUN_MIGRATIONS") == "false"
-
-
-@pytest.mark.parametrize(
-    "manifest",
-    [_LEGACY_COMPOSE, _PROD_COMPOSE, _SWARM_STACK],
-)
-def test_compose_migration_jobs_remove_empty_dedicated_uri(manifest: Path) -> None:
-    """Compose interpolation creates an empty-but-present value by default.
-
-    The migration CLI deliberately treats an explicitly empty elevated DSN as
-    a configuration error, so each compatibility entrypoint must remove that
-    placeholder before running the legacy POSTGRES_URI-only Alembic path.
-    """
-    migrate = _load_yaml(manifest)["services"]["migrate"]
-    entrypoint = " ".join(str(part) for part in migrate["entrypoint"])
-    assert "unset MIGRATION_DATABASE_URI" in entrypoint
-    assert "MIGRATION_DATABASE_URI_FILE+x" in entrypoint
 
 
 def test_kubernetes_manifests_run_migrations_as_job() -> None:
@@ -832,10 +790,6 @@ def test_kubernetes_manifests_run_migrations_as_job() -> None:
     assert len(jobs) == 1
     pod_spec = jobs[0]["spec"]["template"]["spec"]
     assert pod_spec["restartPolicy"] == "Never"
-    command = " ".join(pod_spec["containers"][0]["command"])
-    assert "dev-hops migrate clickhouse" in command
-    assert "unset MIGRATION_DATABASE_URI" in command
-    assert "MIGRATION_DATABASE_URI_FILE+x" in command
 
     config = _load_yaml(_K8S_DIR / "configmap.yaml")
     assert config["data"]["AUTO_RUN_MIGRATIONS"] == "false"
@@ -952,10 +906,6 @@ def test_helm_chart_runs_migrations_as_pre_upgrade_hook() -> None:
     )
     assert 'helm.sh/hook: {{ join "," $hookEvents }}' in template
     assert "helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded" in template
-    assert "dev-hops migrate clickhouse" in template
-    assert "dev-hops admin features seed" in template
-    assert "unset MIGRATION_DATABASE_URI" in template
-    assert "MIGRATION_DATABASE_URI_FILE+x" in template
 
     helpers = (_HELM_DIR / "templates" / "_helpers.tpl").read_text(encoding="utf-8")
     assert "AUTO_RUN_MIGRATIONS" in helpers
@@ -1996,19 +1946,6 @@ def test_kubernetes_go_workers_wire_operational_ordering_contract() -> None:
     processes = [p["name"] for p in _load_yaml(_DEPLOYMENT_JSON)["processes"]]
     docs = _k8s_docs("go-workers.yaml")
 
-    config = next(
-        d
-        for d in docs
-        if d.get("kind") == "ConfigMap"
-        and d["metadata"]["name"] == "dev-health-go-worker-config"
-    )
-    # Default stays "1" (rollout-safe, matches the binary's own omitted
-    # default) -- a codex-caught regression during this PR's own review
-    # defaulted this to "2" unconditionally, which crash-loops any
-    # environment that has not yet applied migration 067. Never flip this
-    # back without also reading deploy/go-workers/README.md's rollout note.
-    assert config["data"].get("OPERATIONAL_ORDERING_CONTRACT") == "1"
-
     deployments = {
         d["metadata"]["name"]: d for d in docs if d.get("kind") == "Deployment"
     }
@@ -2042,11 +1979,6 @@ def test_helm_go_workers_wire_operational_ordering_contract() -> None:
     template = (_HELM_DIR / "templates" / "go-workers.yaml").read_text(encoding="utf-8")
     assert "name: OPERATIONAL_ORDERING_CONTRACT" in template
     assert ".Values.goWorkers.operationalOrderingContract" in template
-
-    values = _load_yaml(_HELM_DIR / "values.yaml")
-    # Same rollout-safe-default regression guard as the Kubernetes ConfigMap
-    # assertion above.
-    assert values["goWorkers"]["operationalOrderingContract"] == "1"
 
 
 def test_migrate_jobs_can_also_receive_operational_ordering_contract() -> None:
@@ -2097,31 +2029,6 @@ def test_migrate_jobs_can_also_receive_operational_ordering_contract() -> None:
         "(one knob for migrate + every worker), not a second, driftable value"
     )
 
-
-def test_readme_documents_the_kubernetes_cutover_has_no_shell_export() -> None:
-    """Unlike Compose/Swarm/Helm, the raw
-    Kubernetes manifests have no shell-interpolation surface -- exporting
-    OPERATIONAL_ORDERING_CONTRACT=2 before `kubectl apply` silently does
-    nothing, because the ConfigMap value is a literal. The only correct
-    cutover mechanism there is editing the ConfigMap value directly. This
-    guards against the rollout note quietly reverting to a single
-    "export the env var" instruction that is actually false for this one
-    topology.
-    """
-    readme = (_REPO_ROOT / "deploy" / "go-workers" / "README.md").read_text(
-        encoding="utf-8"
-    )
-    assert (
-        "no shell-interpolation surface" in readme
-        or "no environment to export into" in readme
-    )
-    assert "dev-health-go-worker-config" in readme
-    assert 'from `"1"` to `"2"`' in readme
-
-
-# ---------------------------------------------------------------------------
-# CHAOS-5471: compose.yml must pass COMMIT and BUILD_TIME as build args.
-# ---------------------------------------------------------------------------
 
 _DOCKERFILE = _REPO_ROOT / "docker" / "Dockerfile"
 _PROVENANCE_BUILD_ARGS = ("COMMIT", "BUILD_TIME")

@@ -19,7 +19,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/chmigrate"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
-	"github.com/full-chaos/dev-health-ops/internal/pgmigrate"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	platformsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
@@ -36,18 +35,23 @@ const (
 	defaultAPIRole         = "devhealth_api"
 )
 
-// Command is `dho migrate`: the `postgres` group (the application schema
-// head, internal/pgmigrate) and the `river` verb.
+// Command is `dho migrate`: the `postgres` and `clickhouse` groups (each
+// schema's head, internal/pgmigrate and internal/chmigrate), the `upgrade`
+// verb that runs the migrate Job's steps in order, and the `river` verb.
 func Command() cli.Command {
 	return cli.Command{
 		Name:    "migrate",
 		Summary: "apply or check database schemas",
 		Kind:    cli.Group,
 		Children: []cli.Command{
-			pgmigrate.Command(func(lookup platformsecrets.LookupEnv, stderr io.Writer) (platformsecrets.Value, string, bool) {
-				return resolveMigrationDatabaseURI(lookup, stderr, true)
-			}),
+			migrationPostgresCommand(),
 			chmigrate.Command(),
+			{
+				Name:    "upgrade",
+				Summary: "run the migrate Job's steps in order: postgres upgrade, features seed, clickhouse upgrade",
+				Kind:    cli.Verb,
+				Run:     runUpgrade,
+			},
 			{
 				Name:    "river",
 				Summary: "apply the pinned River schema and runtime grant posture, or check it (--check, --apply-and-check)",
@@ -67,8 +71,7 @@ func Main() {
 
 // noMigrationDatabaseMessage is the refusal the chart hook's shell wrapper
 // printed, verbatim, when --apply-and-check finds neither DSN.
-const noMigrationDatabaseMessage = "river-migrate: neither MIGRATION_DATABASE_URI nor POSTGRES_URI is set in the migration Secret; " +
-	"this Job needs an ELEVATED DSN pointed DIRECTLY at PostgreSQL (5432), never at a transaction pooler"
+const noMigrationDatabaseMessage = config.NoMigrationDatabaseMessage
 
 func execute(parent context.Context, args []string, lookup platformsecrets.LookupEnv, stdout, stderr io.Writer) int {
 	return Execute(parent, "dev-health-worker-migrate", args, lookup, stdout, stderr)
@@ -376,70 +379,19 @@ func requiredName(key string, lookup platformsecrets.LookupEnv, stderr io.Writer
 	return value, true
 }
 
-// resolveMigrationDatabaseURI is CHAOS-5560's component alternative to a
-// pre-built MIGRATION_DATABASE_URI: compose.yml's own entrypoint already
-// assembles a fallback DSN by raw shell interpolation
-// (postgresql://$POSTGRES_USER:$POSTGRES_PASSWORD@$POSTGRES_HOST:5432/$POSTGRES_DB)
-// when MIGRATION_DATABASE_URI is unset -- exactly the unescaped-password
-// class this ticket fixes, just one shell layer further out.
-//
-// The component var names are deliberately NOT POSTGRES_HOST/_PORT/_USER/
-// _PASSWORD/_DB: deploy/docker-compose/compose.go-workers.yml (not touched
-// by this PR) already sets every one of those, unconditionally, for its own
-// pre-existing shell fallback -- reusing those names would make this
-// function activate every time that compose
-// service ran, silently discarding a perfectly valid, already-working
-// MIGRATION_DATABASE_URI override. DEV_HEALTH_MIGRATION_PG_* is a prefix
-// swept against compose.yml, both overlays, deploy/helm, and docs before
-// being chosen (zero hits) so setting it can never collide with anything
-// today, deployed or documented. See config.ResolveDSN for the shared
-// mutual-exclusion contract this now defers to instead of picking a
-// precedence winner.
-// migrationDatabaseSpec is the ONE ComponentSpec for MIGRATION_DATABASE_URI,
-// shared by resolveMigrationDatabaseURI and execute's own Info-resolution
-// record (config.ComponentDatabaseIdentity) so the two never risk drifting
-// into two different definitions of "the migration database's component
-// form".
-var migrationDatabaseSpec = config.ComponentSpec{
-	HostKey: "DEV_HEALTH_MIGRATION_PG_HOST", PortKey: "DEV_HEALTH_MIGRATION_PG_PORT", DefaultPort: "5432",
-	UserKey: "DEV_HEALTH_MIGRATION_PG_USER", PasswordKey: "DEV_HEALTH_MIGRATION_PG_PASSWORD",
-	DBKey: "DEV_HEALTH_MIGRATION_PG_DB", DefaultDB: "postgres", Scheme: "postgresql",
-}
-
-// resolveMigrationDatabaseURI resolves the elevated migration DSN and names
-// its source. MIGRATION_DATABASE_URI (or _FILE, or the
-// DEV_HEALTH_MIGRATION_PG_* components) always wins. Only when it is not
-// configured and fallbackToPostgres is set (--apply-and-check) does
-// POSTGRES_URI (or _FILE) stand in, exactly as the hook's shell wrapper did;
-// with neither, the wrapper's own message is printed.
+// resolveMigrationDatabaseURI resolves the elevated migration DSN; the rules
+// live in config.ResolveMigrationDatabase, shared with every migrate step.
 func resolveMigrationDatabaseURI(
 	lookup platformsecrets.LookupEnv,
 	stderr io.Writer,
 	fallbackToPostgres bool,
 ) (platformsecrets.Value, string, bool) {
-	value, configured, err := config.ResolveDSN(lookup, "MIGRATION_DATABASE_URI", migrationDatabaseSpec)
-	if err != nil {
-		config.WriteConfigError(stderr, err)
-		return platformsecrets.Value{}, "", false
-	}
-	if configured {
-		return value, "MIGRATION_DATABASE_URI", true
-	}
-	if !fallbackToPostgres {
-		config.WriteConfigError(stderr, errors.New("MIGRATION_DATABASE_URI is required"))
-		return platformsecrets.Value{}, "", false
-	}
-	postgres, configured, err := platformsecrets.Resolve("POSTGRES_URI", lookup)
-	if err != nil {
-		config.WriteConfigError(stderr, err)
-		return platformsecrets.Value{}, "", false
-	}
-	if !configured || strings.TrimSpace(postgres.Reveal()) == "" {
-		fmt.Fprintln(stderr, noMigrationDatabaseMessage)
-		return platformsecrets.Value{}, "", false
-	}
-	return postgres, "POSTGRES_URI", true
+	return config.ResolveMigrationDatabase(lookup, stderr, fallbackToPostgres)
 }
+
+// migrationDatabaseSpec is config's one ComponentSpec for
+// MIGRATION_DATABASE_URI, named here for execute's Info record.
+var migrationDatabaseSpec = config.MigrationDatabaseSpec
 
 // coordinatorGrants derives the coordinator role's GRANT set from
 // postgresstore.CoordinatorPosture() — the same declaration
@@ -484,12 +436,4 @@ func postureGrants(posture postgresstore.RolePosture) ([]riverstore.TableGrant, 
 		})
 	}
 	return grants, columns, append([]string(nil), posture.RequiredSequences...)
-}
-
-// ResolveMigrationDatabase finds the DSN a one-shot migration step uses:
-// MIGRATION_DATABASE_URI (or its component form), else POSTGRES_URI. The
-// migrate Job runs every step against the same database this way. ok=false
-// means the error is already written to stderr.
-func ResolveMigrationDatabase(lookup platformsecrets.LookupEnv, stderr io.Writer) (platformsecrets.Value, string, bool) {
-	return resolveMigrationDatabaseURI(lookup, stderr, true)
 }

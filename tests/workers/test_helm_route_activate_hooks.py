@@ -315,28 +315,6 @@ def test_route_activate_operator_image_override_is_honoured() -> None:
         assert image == "ghcr.io/example/custom-operator:sha-abc123456789", image
 
 
-def test_route_dsn_uses_the_ops_image_that_has_a_shell_and_python(
-    tmp_path: Path,
-) -> None:
-    """codex review (r1, P1 -- executed): the operator image is built FROM
-    gcr.io/distroless/static-debian12:nonroot and has no /bin/sh at all --
-    confirmed executing `docker run --entrypoint /bin/sh <operator image>`,
-    `exec: "/bin/sh": stat /bin/sh: no such file or directory`. DSN
-    construction (which needs a shell plus python3 for percent-encoding)
-    must therefore run in the ops runtime image, never the operator image."""
-    jobs = _jobs(*_FULL_CHAIN_ON)
-    init_containers = {
-        c["name"]: c
-        for c in jobs[_ROUTE_ACTIVATE]["spec"]["template"]["spec"]["initContainers"]
-    }
-    dsn_image = init_containers["route-dsn"]["image"]
-    migrate_image = jobs[_MIGRATE]["spec"]["template"]["spec"]["containers"][0]["image"]
-    assert dsn_image == migrate_image, (
-        f"route-dsn must use the ops runtime image, not the operator image: "
-        f"{dsn_image} != {migrate_image}"
-    )
-
-
 @pytest.mark.parametrize("kind", _KINDS)
 def test_route_activate_containers_never_invoke_a_shell(kind: str) -> None:
     """Regression pin for the P1 above: no route-activate-* container may

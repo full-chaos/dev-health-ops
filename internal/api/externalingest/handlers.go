@@ -63,9 +63,10 @@ func (d Deps) handleGetSchema() http.HandlerFunc {
 			w.WriteHeader(http.StatusNotModified)
 			return
 		}
-		w.Header().Set("ETag", etag)
-		w.Header().Set("Cache-Control", "public, max-age=3600, must-revalidate")
-		writeUnorderedJSON(w, http.StatusOK, document)
+		policy.WriteJSON(w, http.StatusOK, document, http.Header{
+			"Etag":          {etag},
+			"Cache-Control": {"public, max-age=3600, must-revalidate"},
+		})
 	}
 }
 

@@ -1,7 +1,6 @@
 package externalingest
 
 import (
-	"encoding/json"
 	"github.com/full-chaos/dev-health-ops/internal/api/recordvalidation"
 	"log/slog"
 	"net/http"
@@ -73,21 +72,6 @@ func writeIngestError(w http.ResponseWriter, err *ingestError) {
 		extra = http.Header{policy.UnhandledErrorHeader: {"1"}}
 	}
 	policy.WriteJSON(w, err.Status, body, extra)
-}
-
-// writeUnorderedJSON is the ONE remaining stdlib-map writer in this package,
-// used solely by GET /schemas/{schema_version}'s schema-bundle document
-// (handlers.go): that body is a generated JSON Schema document
-// (pydantic.json_schema.models_json_schema(), arbitrary $defs depth), not a
-// hand-declared response shape with a known field order to preserve, and
-// nothing here re-derives Python's live dict-insertion order from the
-// checked-in golden fixture (which was itself written with sort_keys=True
-// for content-addressed storage, not to record wire order). NAMED LIMIT,
-// not fixed by this change -- see bundle.go's schemaDocument doc comment.
-func writeUnorderedJSON(w http.ResponseWriter, status int, body any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(body)
 }
 
 // recoverToIngestError wraps a handler so a panic on this route group still

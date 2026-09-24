@@ -105,7 +105,7 @@ func TestParseWeekRange(t *testing.T) {
 }
 
 func TestTimeWindowDefaultsToRangeDaysBeforeToday(t *testing.T) {
-	startDay, endDay := timeWindow(14, nil, nil)
+	startDay, endDay, _ := timeWindow(14, nil, nil)
 	if endDay.Sub(startDay) != 14*24*time.Hour {
 		t.Fatalf("window = %v, want 14 days", endDay.Sub(startDay))
 	}
@@ -114,7 +114,7 @@ func TestTimeWindowDefaultsToRangeDaysBeforeToday(t *testing.T) {
 func TestTimeWindowExplicitDates(t *testing.T) {
 	start := day(2024, 1, 1)
 	end := day(2024, 1, 10)
-	gotStart, gotEnd := timeWindow(14, &start, &end)
+	gotStart, gotEnd, _ := timeWindow(14, &start, &end)
 	if !gotStart.Equal(start) {
 		t.Fatalf("start = %v, want %v", gotStart, start)
 	}
@@ -126,7 +126,7 @@ func TestTimeWindowExplicitDates(t *testing.T) {
 func TestTimeWindowStartNotBeforeEndClampsToOneDay(t *testing.T) {
 	start := day(2024, 1, 15)
 	end := day(2024, 1, 10)
-	gotStart, gotEnd := timeWindow(14, &start, &end)
+	gotStart, gotEnd, _ := timeWindow(14, &start, &end)
 	wantEnd := day(2024, 1, 11)
 	wantStart := day(2024, 1, 10)
 	if !gotStart.Equal(wantStart) || !gotEnd.Equal(wantEnd) {

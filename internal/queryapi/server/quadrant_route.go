@@ -21,6 +21,7 @@
 package server
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -32,6 +33,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/quadrant"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/timewindow"
 )
 
 // quadrantOperation is this route's routeswitch operation name -- a
@@ -167,11 +169,11 @@ func newQuadrantWorkHandler(client quadrant.QueryClient) http.HandlerFunc {
 		}
 		rangeDays := 30
 		if query.Has("range_days") {
-			raw := query.Get("range_days")
-			if parsed, err := strconv.Atoi(raw); err == nil {
+			raw := lastQueryValue(query, "range_days")
+			if parsed, parseErr := parseQueryInt([]any{"query", "range_days"}, raw); parseErr == nil {
 				rangeDays = parsed
 			} else {
-				validationErrors = append(validationErrors, intQueryParamError([]any{"query", "range_days"}, raw))
+				validationErrors = append(validationErrors, *parseErr)
 			}
 		}
 
@@ -217,6 +219,10 @@ func newQuadrantWorkHandler(client quadrant.QueryClient) http.HandlerFunc {
 
 		resp, err := quadrant.BuildResponse(r.Context(), client, claims.OrgID, params)
 		if err != nil {
+			if errors.Is(err, timewindow.ErrOverflow) {
+				writeTimeWindowOverflow(w, r, "quadrant", claims.OrgID)
+				return
+			}
 			if reqErr, ok := quadrant.AsRequestError(err); ok {
 				writeRESTError(w, r, "quadrant", claims.OrgID, reqErr.Status, reqErr.Message)
 				return

@@ -33,21 +33,36 @@ from dev_health_ops.api.models.filters import (
     DrilldownRequest, ExplainRequest, HomeRequest, InvestmentExplainRequest,
     InvestmentFlowRequest, SankeyRequest, WorkUnitRequest,
 )
+from fastapi import HTTPException
+from dev_health_ops.api.services.filtering import time_window
+from dev_health_ops.api.services.sankey import _apply_window_to_filters
 app = FastAPI()
+# Each real route's first step after validation is time_window(filters),
+# inside its try: ... except Exception: raise HTTPException(503, "Data
+# unavailable"). Investment explain computes it inside its stream (a 200).
+def window(payload, filters=None):
+    try:
+        time_window(filters if filters is not None else payload.filters)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="Data unavailable") from exc
+    return {"ok": True}
 @app.post("/DrilldownRequest")
-def drilldown(payload: DrilldownRequest): return {"ok": True}
+def drilldown(payload: DrilldownRequest): return window(payload)
 @app.post("/ExplainRequest")
-def explain(payload: ExplainRequest): return {"ok": True}
+def explain(payload: ExplainRequest): return window(payload)
 @app.post("/HomeRequest")
-def home(payload: HomeRequest): return {"ok": True}
+def home(payload: HomeRequest): return window(payload)
 @app.post("/InvestmentExplainRequest")
 def investment_explain(payload: InvestmentExplainRequest): return {"ok": True}
 @app.post("/InvestmentFlowRequest")
-def investment_flow(payload: InvestmentFlowRequest): return {"ok": True}
+def investment_flow(payload: InvestmentFlowRequest): return window(payload)
 @app.post("/SankeyRequest")
-def sankey(payload: SankeyRequest): return {"ok": True}
+def sankey(payload: SankeyRequest):
+    # build_sankey_response applies window_start/window_end to the filters
+    # first (services/sankey.py _apply_window_to_filters).
+    return window(payload, _apply_window_to_filters(payload.filters, payload.window_start, payload.window_end))
 @app.post("/WorkUnitRequest")
-def work_units(payload: WorkUnitRequest): return {"ok": True}
+def work_units(payload: WorkUnitRequest): return window(payload)
 client = TestClient(app, raise_server_exceptions=False)
 out = []
 for model, body in json.loads(sys.stdin.read()):
@@ -303,6 +318,8 @@ func TestQueryAPIBodiesMatchLiveFastAPI(t *testing.T) {
 				problem = "422 document"
 			case wantStatus == 500 && status != 500:
 				problem = "python 500"
+			case wantStatus == 503 && (status != 503 || canonicalJSON(text) != canonicalJSON(wantText)):
+				problem = "python 503 (report window)"
 			}
 			if wantStatus == 422 && status == 422 && strings.TrimSpace(text) != wantText && canonicalJSON(text) == canonicalJSON(wantText) {
 				byteDiffs++

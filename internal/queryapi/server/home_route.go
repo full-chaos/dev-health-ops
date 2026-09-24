@@ -16,6 +16,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -31,6 +32,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/home"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/timewindow"
 )
 
 const (
@@ -139,19 +141,23 @@ func newHomeGetHandler(client home.QueryClient, pgPool home.PGQueryClient) http.
 		var validationErrors []pydanticErrorDetail
 
 		rangeDays := 14
-		if raw := query.Get("range_days"); raw != "" {
-			if parsed, err := strconv.Atoi(raw); err == nil {
+		// An explicit empty value is still parsed (pydantic: int_parsing).
+		if query.Has("range_days") {
+			raw := lastQueryValue(query, "range_days")
+			if parsed, parseErr := parseQueryInt([]any{"query", "range_days"}, raw); parseErr == nil {
 				rangeDays = parsed
 			} else {
-				validationErrors = append(validationErrors, intQueryParamError([]any{"query", "range_days"}, raw))
+				validationErrors = append(validationErrors, *parseErr)
 			}
 		}
 		compareDays := 14
-		if raw := query.Get("compare_days"); raw != "" {
-			if parsed, err := strconv.Atoi(raw); err == nil {
+		// An explicit empty value is still parsed (pydantic: int_parsing).
+		if query.Has("compare_days") {
+			raw := lastQueryValue(query, "compare_days")
+			if parsed, parseErr := parseQueryInt([]any{"query", "compare_days"}, raw); parseErr == nil {
 				compareDays = parsed
 			} else {
-				validationErrors = append(validationErrors, intQueryParamError([]any{"query", "compare_days"}, raw))
+				validationErrors = append(validationErrors, *parseErr)
 			}
 		}
 		startDate, startPresent, startOK := parseISODateQueryParam(query.Get("start_date"))
@@ -198,6 +204,10 @@ func newHomeGetHandler(client home.QueryClient, pgPool home.PGQueryClient) http.
 
 		resp, err := home.BuildResponse(r.Context(), client, pgPool, claims.OrgID, f, time.Now().UTC())
 		if err != nil {
+			if errors.Is(err, timewindow.ErrOverflow) {
+				writeTimeWindowOverflow(w, r, "home", claims.OrgID)
+				return
+			}
 			// Python's outer `except Exception: raise HTTPException(503,
 			// "Data unavailable")` (main.py:503-518).
 			writeRESTDataUnavailable(w, r, "home", claims.OrgID, err)
@@ -268,6 +278,10 @@ func newHomePostHandler(client home.QueryClient, pgPool home.PGQueryClient) http
 
 		resp, err := home.BuildResponse(r.Context(), client, pgPool, claims.OrgID, f, time.Now().UTC())
 		if err != nil {
+			if errors.Is(err, timewindow.ErrOverflow) {
+				writeTimeWindowOverflow(w, r, "home", claims.OrgID)
+				return
+			}
 			// Python's outer `except Exception: raise HTTPException(503,
 			// "Data unavailable")` (main.py:477-486).
 			writeRESTDataUnavailable(w, r, "home", claims.OrgID, err)

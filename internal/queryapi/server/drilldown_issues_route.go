@@ -177,14 +177,16 @@ func newDrilldownIssuesGetHandler(reader *drilldown.Reader) http.HandlerFunc {
 		var validationErrors []pydanticErrorDetail
 
 		rangeDays := 14
-		if raw := query.Get("range_days"); raw != "" {
-			parsed, err := strconv.Atoi(raw)
-			if err != nil {
+		// An explicit empty value is still parsed (pydantic: int_parsing).
+		if query.Has("range_days") {
+			raw := lastQueryValue(query, "range_days")
+			parsed, parseErr := parseQueryInt([]any{"query", "range_days"}, raw)
+			if parseErr != nil {
 				// Python's `range_days: int = 14` is FastAPI/Pydantic
 				// query-param validation, not a handler-level try/except --
 				// same confirmed-live contract drilldown_prs_route.go's own
 				// GET handler documents.
-				validationErrors = append(validationErrors, intQueryParamError([]any{"query", "range_days"}, raw))
+				validationErrors = append(validationErrors, *parseErr)
 			} else {
 				rangeDays = parsed
 			}
@@ -212,7 +214,11 @@ func newDrilldownIssuesGetHandler(reader *drilldown.Reader) http.HandlerFunc {
 			endDatePtr = &endDate
 		}
 
-		startTS, endTS := timeWindow(drilldownTimeFilterMap(rangeDays, startDatePtr, endDatePtr))
+		startTS, endTS, windowErr := timeWindow(drilldownTimeFilterMap(rangeDays, startDatePtr, endDatePtr))
+		if windowErr != nil {
+			writeTimeWindowOverflow(w, r, "drilldown_issues", claims.OrgID)
+			return
+		}
 
 		var scopeIDs []string
 		if scopeID != "" {
@@ -338,7 +344,11 @@ func newDrilldownIssuesPostHandler(reader *drilldown.Reader) http.HandlerFunc {
 		}
 		scopeIDs := stringsFromAny(scope["ids"])
 
-		startTS, endTS := timeWindow(filters)
+		startTS, endTS, windowErr := timeWindow(filters)
+		if windowErr != nil {
+			writeTimeWindowOverflow(w, r, "drilldown_issues", claims.OrgID)
+			return
+		}
 
 		params := drilldown.IssueParams{
 			StartDay:   startTS,

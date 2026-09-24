@@ -355,16 +355,16 @@ func newWorkUnitsGetHandler(reader *investmentexplain.Reader) http.HandlerFunc {
 
 		rangeDays := 14
 		if query.Has("range_days") {
-			raw := query.Get("range_days")
-			parsed, err := strconv.Atoi(raw)
-			if err != nil {
+			raw := lastQueryValue(query, "range_days")
+			parsed, parseErr := parseQueryInt([]any{"query", "range_days"}, raw)
+			if parseErr != nil {
 				// Confirmed live: an explicit-but-empty value ALSO fails
 				// int parsing (FastAPI does not treat "" as absent for an
 				// int query param), unlike a bare string field -- query.Has
 				// (not a raw != "" check) is what lets an empty value reach
 				// strconv.Atoi and fail here instead of silently keeping
 				// the default.
-				validationErrors = append(validationErrors, intQueryParamError([]any{"query", "range_days"}, raw))
+				validationErrors = append(validationErrors, *parseErr)
 			} else {
 				rangeDays = parsed
 			}
@@ -426,7 +426,11 @@ func newWorkUnitsGetHandler(reader *investmentexplain.Reader) http.HandlerFunc {
 		// range-days/start/end triple -- the SAME time_window computation
 		// _filters_from_query (api/main.py:178-199) feeds into for this
 		// route's own GET handler in Python, reused rather than re-built.
-		startTS, endTS := timeWindow(drilldownTimeFilterMap(rangeDays, startDatePtr, endDatePtr))
+		startTS, endTS, windowErr := timeWindow(drilldownTimeFilterMap(rangeDays, startDatePtr, endDatePtr))
+		if windowErr != nil {
+			writeTimeWindowOverflow(w, r, "work_units", claims.OrgID)
+			return
+		}
 
 		var scopeIDs []string
 		if scopeID != "" {
@@ -588,7 +592,11 @@ func newWorkUnitsPostHandler(reader *investmentexplain.Reader) http.HandlerFunc 
 			rawLimit = 200
 		}
 
-		startTS, endTS := timeWindow(filters)
+		startTS, endTS, windowErr := timeWindow(filters)
+		if windowErr != nil {
+			writeTimeWindowOverflow(w, r, "work_units", claims.OrgID)
+			return
+		}
 
 		// scopeRepoFilter (investment_explain_route.go) already ports
 		// resolve_repo_filter_ids's full team-scope branch over a raw

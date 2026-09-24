@@ -61,6 +61,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/timewindow"
 	chclickhouse "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 )
 
@@ -496,10 +497,19 @@ func buildExplainOptions(ctx context.Context, reader *investmentexplain.Reader, 
 	// built from the request filters alone, so a cached explanation is served
 	// for its whole TTL across an ownership change.
 	now := time.Now().UTC()
-	startTS, endTS := timeWindow(body.Filters)
-	repoIDs, teamCondition, teamBindings, err := scopeRepoFilter(ctx, reader, body.Filters, orgID, now)
-	if err != nil {
-		return investmentexplain.ExplainInvestmentMixOptions{}, err
+	// A window Python cannot hold fails inside the stream, where
+	// build_investment_response computes it (ExplainInvestmentMix returns
+	// WindowErr there), and before any scope is resolved.
+	startTS, endTS, windowErr := timeWindow(body.Filters)
+	var repoIDs []string
+	var teamCondition string
+	var teamBindings []dhclickhouse.Binding
+	if windowErr == nil {
+		var err error
+		repoIDs, teamCondition, teamBindings, err = scopeRepoFilter(ctx, reader, body.Filters, orgID, now)
+		if err != nil {
+			return investmentexplain.ExplainInvestmentMixOptions{}, err
+		}
 	}
 	scope, _ := body.Filters["scope"].(map[string]any)
 	scopeLevel, _ := scope["level"].(string)
@@ -556,6 +566,7 @@ func buildExplainOptions(ctx context.Context, reader *investmentexplain.Reader, 
 		LLMModel:           llmModel,
 		ForceRefresh:       forceRefresh,
 		Now:                now,
+		WindowErr:          windowErr,
 	}, nil
 }
 
@@ -569,32 +580,40 @@ func buildExplainOptions(ctx context.Context, reader *investmentexplain.Reader, 
 // time.min, tzinfo=utc)), matching build_investment_response/
 // build_work_unit_investments' own conversion from time_window's
 // start_day/end_day.
-func timeWindow(filters map[string]any) (startTS, endTS time.Time) {
+func timeWindow(filters map[string]any) (startTS, endTS time.Time, err error) {
+	window, err := filtersTimeWindow(filters)
+	return window.StartDay, window.EndDay, err
+}
+
+// filtersTimeWindow is time_window (api/services/filtering.py:78-92) over
+// a request's filters map, with Python's OverflowError where its date or
+// timedelta arithmetic raises one (timewindow.ErrOverflow): the route then
+// answers its own 503, as the Python route's except clause does
+// (writeTimeWindowOverflow).
+func filtersTimeWindow(filters map[string]any) (timewindow.Window, error) {
 	timeFilter, _ := filters["time"].(map[string]any)
-
-	rangeDays := intFromAny(timeFilter["range_days"], 14)
-	if rangeDays < 1 {
-		rangeDays = 1
+	var startDate, endDate *time.Time
+	if parsed, ok := dateFromAny(timeFilter["start_date"]); ok {
+		startDate = &parsed
 	}
-
-	endDate, hasEndDate := dateFromAny(timeFilter["end_date"])
-	if !hasEndDate {
-		endDate = time.Now().UTC().Truncate(24 * time.Hour)
+	if parsed, ok := dateFromAny(timeFilter["end_date"]); ok {
+		endDate = &parsed
 	}
-	endDay := endDate.AddDate(0, 0, 1)
+	return timewindow.Compute(intFromAny(timeFilter["range_days"], 14), intFromAny(timeFilter["compare_days"], 14),
+		startDate, endDate, time.Now().UTC())
+}
 
-	startDate, hasStartDate := dateFromAny(timeFilter["start_date"])
-	var startDay time.Time
-	if hasStartDate {
-		startDay = startDate
-		if !startDay.Before(endDay) {
-			startDay = endDay.AddDate(0, 0, -1)
-		}
-	} else {
-		startDay = endDay.AddDate(0, 0, -rangeDays)
+// writeTimeWindowOverflow answers a request whose report window Python's
+// date arithmetic cannot hold. Every Python route computes the window
+// inside its `try: ... except Exception: raise HTTPException(503, ...)`, so
+// the OverflowError there is the route's own 503: "Explanation
+// unavailable" for work-unit explain, "Data unavailable" for the rest.
+func writeTimeWindowOverflow(w http.ResponseWriter, r *http.Request, component, orgID string) {
+	if component == "work_unit_explain" {
+		writeWorkUnitExplainUnavailable(w, r, orgID, timewindow.ErrOverflow)
+		return
 	}
-
-	return startDay, endDay
+	writeRESTDataUnavailable(w, r, component, orgID, timewindow.ErrOverflow)
 }
 
 // repoScopeColumn is the repo-id column both this route's breakdown query

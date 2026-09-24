@@ -189,7 +189,7 @@ func applySankeyWindow(filters map[string]any, windowStart, windowEnd *time.Time
 // map and StartDay/EndDay out of timeWindow's own return, building
 // sankey.Params -- the shared shape both the GET and POST handlers below
 // hand to sankey.BuildResponse.
-func sankeyParamsFromFilters(mode string, filters map[string]any) sankey.Params {
+func sankeyParamsFromFilters(mode string, filters map[string]any) (sankey.Params, error) {
 	scope, _ := filters["scope"].(map[string]any)
 	scopeLevel, _ := scope["level"].(string)
 	if scopeLevel == "" {
@@ -201,7 +201,10 @@ func sankeyParamsFromFilters(mode string, filters map[string]any) sankey.Params 
 	why, _ := filters["why"].(map[string]any)
 	workCategory := stringsFromAny(why["work_category"])
 
-	startTS, endTS := timeWindow(filters)
+	startTS, endTS, err := timeWindow(filters)
+	if err != nil {
+		return sankey.Params{}, err
+	}
 
 	return sankey.Params{
 		Mode:         mode,
@@ -211,7 +214,7 @@ func sankeyParamsFromFilters(mode string, filters map[string]any) sankey.Params 
 		WorkCategory: workCategory,
 		StartDay:     startTS,
 		EndDay:       endTS,
-	}
+	}, nil
 }
 
 // newSankeyGetHandler is the routeswitch-registered handler for
@@ -239,10 +242,12 @@ func newSankeyGetHandler(client sankey.QueryClient) http.HandlerFunc {
 		var validationErrors []pydanticErrorDetail
 
 		rangeDays := 30
-		if raw := query.Get("range_days"); raw != "" {
-			parsed, err := strconv.Atoi(raw)
-			if err != nil {
-				validationErrors = append(validationErrors, intQueryParamError([]any{"query", "range_days"}, raw))
+		// An explicit empty value is still parsed (pydantic: int_parsing).
+		if query.Has("range_days") {
+			raw := lastQueryValue(query, "range_days")
+			parsed, parseErr := parseQueryInt([]any{"query", "range_days"}, raw)
+			if parseErr != nil {
+				validationErrors = append(validationErrors, *parseErr)
 			} else {
 				rangeDays = parsed
 			}
@@ -308,7 +313,11 @@ func newSankeyGetHandler(client sankey.QueryClient) http.HandlerFunc {
 		}
 		filters = applySankeyWindow(filters, windowStartPtr, windowEndPtr)
 
-		params := sankeyParamsFromFilters(mode, filters)
+		params, windowErr := sankeyParamsFromFilters(mode, filters)
+		if windowErr != nil {
+			writeTimeWindowOverflow(w, r, "sankey", claims.OrgID)
+			return
+		}
 
 		resp, err := sankey.BuildResponse(r.Context(), client, claims.OrgID, params)
 		if err != nil {
@@ -428,7 +437,11 @@ func newSankeyPostHandler(client sankey.QueryClient) http.HandlerFunc {
 		}
 		filters = applySankeyWindow(filters, windowStartPtr, windowEndPtr)
 
-		params := sankeyParamsFromFilters(mode, filters)
+		params, windowErr := sankeyParamsFromFilters(mode, filters)
+		if windowErr != nil {
+			writeTimeWindowOverflow(w, r, "sankey", claims.OrgID)
+			return
+		}
 
 		resp, err := sankey.BuildResponse(r.Context(), client, claims.OrgID, params)
 		if err != nil {

@@ -202,10 +202,10 @@ func parseWorkUnitExplainQuery(r *http.Request) (workUnitExplainQuery, []pydanti
 
 	var validationErrors []pydanticErrorDetail
 	if query.Has("range_days") {
-		raw := query.Get("range_days")
-		value, err := strconv.Atoi(raw)
-		if err != nil {
-			validationErrors = append(validationErrors, intQueryParamError([]any{"query", "range_days"}, raw))
+		raw := lastQueryValue(query, "range_days")
+		value, parseErr := parseQueryInt([]any{"query", "range_days"}, raw)
+		if parseErr != nil {
+			validationErrors = append(validationErrors, *parseErr)
 		} else {
 			parsed.rangeDays = value
 		}
@@ -306,7 +306,11 @@ func newWorkUnitExplainHandler(
 			return
 		}
 
-		startTS, endTS := timeWindow(drilldownTimeFilterMap(parsed.rangeDays, parsed.startDate, parsed.endDate))
+		startTS, endTS, windowErr := timeWindow(drilldownTimeFilterMap(parsed.rangeDays, parsed.startDate, parsed.endDate))
+		if windowErr != nil {
+			writeTimeWindowOverflow(w, r, "work_unit_explain", claims.OrgID)
+			return
+		}
 
 		var scopeIDs []string
 		if parsed.scopeID != "" {

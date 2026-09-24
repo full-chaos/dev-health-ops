@@ -28,6 +28,7 @@
 package server
 
 import (
+	"errors"
 	"log"
 	"net/http"
 	"strconv"
@@ -39,6 +40,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/people"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/timewindow"
 )
 
 // peopleSummaryPath is the literal path pattern this route mounts --
@@ -171,19 +173,23 @@ func newPeopleSummaryHandler(reader *people.Reader) http.HandlerFunc {
 		var validationErrors []pydanticErrorDetail
 
 		rangeDays := 14
-		if raw := query.Get("range_days"); raw != "" {
-			parsed, err := strconv.Atoi(raw)
-			if err != nil {
-				validationErrors = append(validationErrors, intQueryParamError([]any{"query", "range_days"}, raw))
+		// An explicit empty value is still parsed (pydantic: int_parsing).
+		if query.Has("range_days") {
+			raw := lastQueryValue(query, "range_days")
+			parsed, parseErr := parseQueryInt([]any{"query", "range_days"}, raw)
+			if parseErr != nil {
+				validationErrors = append(validationErrors, *parseErr)
 			} else {
 				rangeDays = parsed
 			}
 		}
 		compareDays := 14
-		if raw := query.Get("compare_days"); raw != "" {
-			parsed, err := strconv.Atoi(raw)
-			if err != nil {
-				validationErrors = append(validationErrors, intQueryParamError([]any{"query", "compare_days"}, raw))
+		// An explicit empty value is still parsed (pydantic: int_parsing).
+		if query.Has("compare_days") {
+			raw := lastQueryValue(query, "compare_days")
+			parsed, parseErr := parseQueryInt([]any{"query", "compare_days"}, raw)
+			if parseErr != nil {
+				validationErrors = append(validationErrors, *parseErr)
 			} else {
 				compareDays = parsed
 			}
@@ -211,6 +217,10 @@ func newPeopleSummaryHandler(reader *people.Reader) http.HandlerFunc {
 			Now:         time.Now().UTC(),
 		})
 		if err != nil {
+			if errors.Is(err, timewindow.ErrOverflow) {
+				writeTimeWindowOverflow(w, r, "people_summary", claims.OrgID)
+				return
+			}
 			if reqErr, ok := people.AsRequestError(err); ok {
 				writeRESTError(w, r, "people_summary", claims.OrgID, reqErr.Status, reqErr.Message)
 				return

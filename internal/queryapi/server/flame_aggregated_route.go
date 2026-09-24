@@ -35,6 +35,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/timewindow"
 )
 
 // flameAggregatedOperation is this route's routeswitch operation name --
@@ -191,11 +192,11 @@ func newFlameAggregatedWorkHandler(client aggflame.QueryClient) http.HandlerFunc
 
 		rangeDays := 30
 		if query.Has("range_days") {
-			raw := query.Get("range_days")
-			if parsed, err := strconv.Atoi(raw); err == nil {
+			raw := lastQueryValue(query, "range_days")
+			if parsed, parseErr := parseQueryInt([]any{"query", "range_days"}, raw); parseErr == nil {
 				rangeDays = parsed
 			} else {
-				validationErrors = append(validationErrors, intQueryParamError([]any{"query", "range_days"}, raw))
+				validationErrors = append(validationErrors, *parseErr)
 			}
 		}
 
@@ -240,9 +241,19 @@ func newFlameAggregatedWorkHandler(client aggflame.QueryClient) http.HandlerFunc
 		if endPresent {
 			endDay = endDate
 		}
-		startDay := endDay.AddDate(0, 0, -rangeDays)
-		if startPresent {
-			startDay = startDate
+		// Python computes this before its try block, so a range its date
+		// arithmetic cannot hold is an unhandled OverflowError: the api's
+		// generic 500, not the route's 503.
+		startDay := startDate
+		if !startPresent {
+			computed, windowErr := timewindow.AddDays(endDay, -rangeDays)
+			if windowErr != nil {
+				log.Printf("query-api: flame_aggregated: report window out of Python's date range: org_id=%s request_id=%s",
+					claims.OrgID, envelopeRequestID(r))
+				writeRESTError(w, r, "flame_aggregated", claims.OrgID, http.StatusInternalServerError, "Internal Server Error")
+				return
+			}
+			startDay = computed
 		}
 
 		// main.py:867-868's own clamps, applied here (the route layer),

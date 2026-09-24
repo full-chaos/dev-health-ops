@@ -128,19 +128,23 @@ func newOpportunitiesGetHandler(client home.QueryClient) http.HandlerFunc {
 		var validationErrors []pydanticErrorDetail
 
 		rangeDays := 14
-		if raw := query.Get("range_days"); raw != "" {
-			if parsed, err := strconv.Atoi(raw); err == nil {
+		// An explicit empty value is still parsed (pydantic: int_parsing).
+		if query.Has("range_days") {
+			raw := lastQueryValue(query, "range_days")
+			if parsed, parseErr := parseQueryInt([]any{"query", "range_days"}, raw); parseErr == nil {
 				rangeDays = parsed
 			} else {
-				validationErrors = append(validationErrors, intQueryParamError([]any{"query", "range_days"}, raw))
+				validationErrors = append(validationErrors, *parseErr)
 			}
 		}
 		compareDays := 14
-		if raw := query.Get("compare_days"); raw != "" {
-			if parsed, err := strconv.Atoi(raw); err == nil {
+		// An explicit empty value is still parsed (pydantic: int_parsing).
+		if query.Has("compare_days") {
+			raw := lastQueryValue(query, "compare_days")
+			if parsed, parseErr := parseQueryInt([]any{"query", "compare_days"}, raw); parseErr == nil {
 				compareDays = parsed
 			} else {
-				validationErrors = append(validationErrors, intQueryParamError([]any{"query", "compare_days"}, raw))
+				validationErrors = append(validationErrors, *parseErr)
 			}
 		}
 		startDate, startPresent, startOK := parseISODateQueryParam(query.Get("start_date"))

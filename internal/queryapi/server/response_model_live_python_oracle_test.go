@@ -35,6 +35,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/sankey"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/workunitexplain"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
 // pythonResponseModelProgram reads the live FastAPI app. "table" prints
@@ -366,10 +367,10 @@ func TestVenueOracleQueryAPIResponseModels(t *testing.T) {
 		t.Fatalf("no body compared equal")
 	}
 	t.Logf("%d routes, %d bodies byte-identical to FastAPI's response_model path", len(keys), same)
-	if proof := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR"); proof != "" && !t.Failed() {
-		if err := os.WriteFile(filepath.Join(proof, t.Name()), []byte("executed"), 0o600); err != nil {
-			t.Fatal(err)
-		}
+	// The venue-oracles verb discovers this test by its call to the
+	// venueoracle proof writer and fails when no proof file is left.
+	if !t.Failed() {
+		venueoracle.WriteProof(t)
 	}
 }
 

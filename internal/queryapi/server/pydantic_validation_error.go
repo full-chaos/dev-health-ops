@@ -36,6 +36,7 @@ import (
 	"math"
 	"math/big"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"time"
@@ -447,7 +448,34 @@ func coerceIntBodyField(loc []any, value pyjson.Value) (n int, detail *pydanticE
 	return saturatedInt(number), nil
 }
 
-// saturatedInt is number as a Go int, clamped to the int range.
+// lastQueryValue is the value FastAPI reads for a scalar query parameter:
+// the LAST of repeated values (pybody.LastQueryValue), "" when absent.
+func lastQueryValue(query url.Values, name string) string {
+	if value := pybody.LastQueryValue(query, name); value != nil {
+		return *value
+	}
+	return ""
+}
+
+// parseQueryInt reads an int query parameter as FastAPI does (pydantic's
+// lax int from a string, pybody.ParsePydanticInt): an int past the Go int
+// range is accepted and clamped (see saturatedInt), and a failure is the
+// 422 entry pydantic writes for it.
+func parseQueryInt(loc []any, raw string) (int, *pydanticErrorDetail) {
+	number, perr := pybody.ParsePydanticInt(raw)
+	if perr != nil {
+		return 0, &pydanticErrorDetail{Type: perr.Type, Loc: loc, Msg: perr.Msg, Input: raw}
+	}
+	return saturatedInt(number), nil
+}
+
+// saturatedInt is number as a Go int, clamped to the int range. Clamping
+// gives Python's answer for every use of these fields: a day count past
+// 999999999 already fails Python's timedelta, and timewindow.Compute fails
+// on the clamped value the same way (the route's 503); max(1, n) is
+// 1 for any negative n; and a limit or top-N count only caps a list, which
+// the clamped value caps the same. The one use it does not cover is a
+// ClickHouse LIMIT of 2^64 or more, whose Python answer is not measured.
 func saturatedInt(number *big.Int) int {
 	switch {
 	case number.Cmp(big.NewInt(math.MaxInt)) > 0:

@@ -185,37 +185,9 @@ func writeExplainResponse(w http.ResponseWriter, orgID, requestID string, resp *
 // plus the driver delta), so this is a parallel implementation over the
 // same `filters["time"]` map shape, additionally reading compare_days
 // (default 14, same floor-at-1 rule as range_days).
-func explainTimeWindow(filters map[string]any) (startDay, endDay, compareStart, compareEnd time.Time) {
-	timeFilter, _ := filters["time"].(map[string]any)
-
-	rangeDays := intFromAny(timeFilter["range_days"], 14)
-	if rangeDays < 1 {
-		rangeDays = 1
-	}
-	compareDays := intFromAny(timeFilter["compare_days"], 14)
-	if compareDays < 1 {
-		compareDays = 1
-	}
-
-	endDate, hasEndDate := dateFromAny(timeFilter["end_date"])
-	if !hasEndDate {
-		endDate = time.Now().UTC().Truncate(24 * time.Hour)
-	}
-	endDay = endDate.AddDate(0, 0, 1)
-
-	startDate, hasStartDate := dateFromAny(timeFilter["start_date"])
-	if hasStartDate {
-		startDay = startDate
-		if !startDay.Before(endDay) {
-			startDay = endDay.AddDate(0, 0, -1)
-		}
-	} else {
-		startDay = endDay.AddDate(0, 0, -rangeDays)
-	}
-
-	compareEnd = startDay
-	compareStart = compareEnd.AddDate(0, 0, -compareDays)
-	return startDay, endDay, compareStart, compareEnd
+func explainTimeWindow(filters map[string]any) (startDay, endDay, compareStart, compareEnd time.Time, err error) {
+	window, err := filtersTimeWindow(filters)
+	return window.StartDay, window.EndDay, window.CompareStart, window.CompareEnd, err
 }
 
 // explainTimeFilterMap adapts GET's own query-param inputs into the
@@ -225,8 +197,8 @@ func explainTimeWindow(filters map[string]any) (startDay, endDay, compareStart, 
 // it).
 func explainTimeFilterMap(rangeDays, compareDays int, startDate, endDate *time.Time) map[string]any {
 	timeFilter := map[string]any{
-		"range_days":   float64(rangeDays),
-		"compare_days": float64(compareDays),
+		"range_days":   int64(rangeDays),
+		"compare_days": int64(compareDays),
 	}
 	if startDate != nil {
 		timeFilter["start_date"] = startDate.Format("2006-01-02")
@@ -273,20 +245,24 @@ func newExplainGetHandler(reader *explain.Reader) http.HandlerFunc {
 		scopeID := query.Get("scope_id")
 
 		rangeDays := 14
-		if raw := query.Get("range_days"); raw != "" {
-			parsed, err := strconv.Atoi(raw)
-			if err != nil {
-				validationErrors = append(validationErrors, intQueryParamError([]any{"query", "range_days"}, raw))
+		// An explicit empty value is still parsed (pydantic: int_parsing).
+		if query.Has("range_days") {
+			raw := lastQueryValue(query, "range_days")
+			parsed, parseErr := parseQueryInt([]any{"query", "range_days"}, raw)
+			if parseErr != nil {
+				validationErrors = append(validationErrors, *parseErr)
 			} else {
 				rangeDays = parsed
 			}
 		}
 
 		compareDays := 14
-		if raw := query.Get("compare_days"); raw != "" {
-			parsed, err := strconv.Atoi(raw)
-			if err != nil {
-				validationErrors = append(validationErrors, intQueryParamError([]any{"query", "compare_days"}, raw))
+		// An explicit empty value is still parsed (pydantic: int_parsing).
+		if query.Has("compare_days") {
+			raw := lastQueryValue(query, "compare_days")
+			parsed, parseErr := parseQueryInt([]any{"query", "compare_days"}, raw)
+			if parseErr != nil {
+				validationErrors = append(validationErrors, *parseErr)
 			} else {
 				compareDays = parsed
 			}
@@ -314,7 +290,11 @@ func newExplainGetHandler(reader *explain.Reader) http.HandlerFunc {
 			endDatePtr = &endDate
 		}
 
-		startDay, endDay, compareStart, compareEnd := explainTimeWindow(explainTimeFilterMap(rangeDays, compareDays, startDatePtr, endDatePtr))
+		startDay, endDay, compareStart, compareEnd, windowErr := explainTimeWindow(explainTimeFilterMap(rangeDays, compareDays, startDatePtr, endDatePtr))
+		if windowErr != nil {
+			writeTimeWindowOverflow(w, r, "explain", claims.OrgID)
+			return
+		}
 
 		var scopeIDs []string
 		if scopeID != "" {
@@ -430,7 +410,11 @@ func newExplainPostHandler(reader *explain.Reader) http.HandlerFunc {
 		what, _ := filters["what"].(map[string]any)
 		whatRepos := stringsFromAny(what["repos"])
 
-		startDay, endDay, compareStart, compareEnd := explainTimeWindow(filters)
+		startDay, endDay, compareStart, compareEnd, windowErr := explainTimeWindow(filters)
+		if windowErr != nil {
+			writeTimeWindowOverflow(w, r, "explain", claims.OrgID)
+			return
+		}
 
 		params := explain.Params{
 			Metric:       metric,

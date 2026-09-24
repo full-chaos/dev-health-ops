@@ -17,6 +17,7 @@ import (
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/quadrant"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/timewindow"
 )
 
 // safeFloat ports safe_float (api/utils/numeric.py:22-36) specialized to
@@ -624,18 +625,9 @@ func fetchPersonCollaboration(ctx context.Context, client QueryClient, identitie
 }
 
 // timeWindow ports _time_window (services/people.py:249-256).
-func timeWindow(now time.Time, rangeDays, compareDays int) (startDay, endDay, compareStart, compareEnd time.Time) {
-	endDay = now.Truncate(24*time.Hour).AddDate(0, 0, 1)
-	if rangeDays < 1 {
-		rangeDays = 1
-	}
-	if compareDays < 1 {
-		compareDays = 1
-	}
-	startDay = endDay.AddDate(0, 0, -rangeDays)
-	compareEnd = startDay
-	compareStart = compareEnd.AddDate(0, 0, -compareDays)
-	return startDay, endDay, compareStart, compareEnd
+func timeWindow(now time.Time, rangeDays, compareDays int) (startDay, endDay, compareStart, compareEnd time.Time, err error) {
+	window, err := timewindow.Compute(rangeDays, compareDays, nil, nil, now)
+	return window.StartDay, window.EndDay, window.CompareStart, window.CompareEnd, err
 }
 
 // metricLink ports _metric_link (services/people.py:316-322).
@@ -706,7 +698,10 @@ func BuildSummaryResponse(ctx context.Context, reader *Reader, orgID string, par
 		return SummaryResponse{}, ErrUnavailable
 	}
 
-	startDay, endDay, compareStart, compareEnd := timeWindow(params.Now, params.RangeDays, params.CompareDays)
+	startDay, endDay, compareStart, compareEnd, windowErr := timeWindow(params.Now, params.RangeDays, params.CompareDays)
+	if windowErr != nil {
+		return SummaryResponse{}, windowErr
+	}
 
 	canonical, aliasList, err := resolveIdentityContext(ctx, reader.client, params.PersonID, orgID)
 	if err != nil {

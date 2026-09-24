@@ -53,6 +53,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/timewindow"
 	"strconv"
 	"time"
 
@@ -144,21 +145,11 @@ func normalizeRangeDays(rangeDays int) int {
 // -- same restriction quadrant.go's own copy of this Python function
 // applies, for the identical reason (compare_start/compare_end are never
 // read by this route either).
-func timeWindow(rangeDays int, startDate, endDate *time.Time) (startDay, endDay time.Time) {
-	endDay = time.Now().UTC().Truncate(24 * time.Hour)
-	if endDate != nil {
-		endDay = *endDate
-	}
-	endDay = endDay.AddDate(0, 0, 1)
-
-	if startDate != nil {
-		startDay = *startDate
-		if !startDay.Before(endDay) {
-			startDay = endDay.AddDate(0, 0, -1)
-		}
-		return startDay, endDay
-	}
-	return endDay.AddDate(0, 0, -rangeDays), endDay
+func timeWindow(rangeDays int, startDate, endDate *time.Time) (startDay, endDay time.Time, err error) {
+	// compare_days is range_days here (the MetricFilter the service
+	// builds), so the comparison window can overflow too.
+	window, err := timewindow.Compute(rangeDays, rangeDays, startDate, endDate, time.Now().UTC())
+	return window.StartDay, window.EndDay, err
 }
 
 // clampLimit ports the plain `min(max(limit, 1), 200)` clamp
@@ -256,7 +247,10 @@ func BuildResponse(ctx context.Context, client QueryClient, orgID string, params
 	}
 
 	rangeDays := normalizeRangeDays(params.RangeDays)
-	startDay, endDay := timeWindow(rangeDays, params.StartDate, params.EndDate)
+	startDay, endDay, err := timeWindow(rangeDays, params.StartDate, params.EndDate)
+	if err != nil {
+		return nil, err
+	}
 	startTS := startDay
 	endTS := endDay
 

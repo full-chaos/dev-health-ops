@@ -69,8 +69,8 @@ type healthResponse struct {
 // acr's client reads it. Python's health route reads Postgres on every call
 // (its credential lookup, api/internal/acr.py:93-103) and answers 503
 // "Service unavailable" when that read fails, so the Go route makes the
-// entitlement store's first read (EntitlementStore.Ready): a nil store or a
-// failed read is that 503, anything else the static success body. No credential is checked (see the package comment).
+// entitlement store's decision read (EntitlementStore.Ready): a nil store
+// or a failed read is that 503, anything else the static success body. No credential is checked (see the package comment).
 func healthHandler(store EntitlementStore, logger *slog.Logger) http.Handler {
 	response := healthResponse{
 		SchemaVersion: healthSchemaVersion, Service: "dev-health-ops", Status: "ok",

@@ -94,17 +94,20 @@ func (store PostgresEntitlementStore) Lookup(ctx context.Context, orgID string) 
 // prompt 503 rather than a hung probe.
 const readyTimeout = 2 * time.Second
 
-// Ready makes the first read the entitlement route makes (the organizations
-// table), with no rows returned. So it fails when Postgres is unreachable
-// and when that table cannot be read, as Python's health read fails in both
-// cases.
+// Ready makes the entitlement route's decision read (licensing.LoadState,
+// which reads feature_flags, org_feature_overrides, org_licenses and
+// organizations in one statement) for the nil org id, which matches no org
+// row. So it fails when Postgres is unreachable and when any table the
+// entitlement route reads cannot be read, as Python's health read fails in
+// both cases.
 func (store PostgresEntitlementStore) Ready(ctx context.Context) error {
 	if store.Pool == nil {
 		return ErrUnavailable
 	}
 	ctx, cancel := context.WithTimeout(ctx, readyTimeout)
 	defer cancel()
-	if _, err := store.Pool.Exec(ctx, `SELECT 1 FROM organizations LIMIT 0`); err != nil {
+	decisionStore := licensing.PostgresStore{Pool: store.Pool, Now: store.Now}
+	if _, err := decisionStore.Decide(ctx, uuid.Nil.String(), agentContextRuntimeFeatureKey); err != nil {
 		return fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
 	return nil

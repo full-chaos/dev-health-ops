@@ -2,6 +2,7 @@ package devhealth_test
 
 import (
 	"os/exec"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -80,18 +81,22 @@ func TestInternalACRRoutesStayOffThePublicIngress(t *testing.T) {
 	if len(reachGoAPI) == 0 {
 		t.Fatalf("no Service selects the go-api pods; the render cannot show what routes to them")
 	}
-	publicKinds := map[string]bool{"Ingress": true, "IngressRoute": true, "Gateway": true, "HTTPRoute": true, "GRPCRoute": true, "TCPRoute": true, "TLSRoute": true}
 	ingresses := 0
 	for _, document := range documents {
 		kind := documentKind(document)
-		if !publicKinds[kind] {
+		// Every routing kind: Ingress, Gateway API routes, Traefik's
+		// IngressRoute, OpenShift's Route.
+		if !strings.Contains(kind, "Ingress") && !strings.Contains(kind, "Route") && !strings.Contains(kind, "Gateway") {
 			continue
 		}
 		if kind == "Ingress" {
 			ingresses++
 		}
 		for _, name := range reachGoAPI {
-			if strings.Contains(document, "name: "+name+"\n") {
+			// A YAML scalar, plain or quoted, as a backend's name or
+			// (older Ingress) serviceName.
+			reference := regexp.MustCompile(`(?m)^\s*(- )?(name|serviceName):\s*["']?` + regexp.QuoteMeta(name) + `["']?\s*$`)
+			if reference.MatchString(document) {
 				t.Errorf("a %s routes to Service %s, which reaches the Go api; the Go api serves /api/v1/internal/acr/* with no credential check:\n%s", kind, name, document)
 			}
 		}

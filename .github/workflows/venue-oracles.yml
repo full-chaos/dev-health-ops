@@ -31,10 +31,12 @@ permissions:
   packages: read
 
 concurrency:
-  # One run per commit and event, never cancelled: a run on main is the
-  # record for that commit, and a newer push must not erase it.
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.sha }}
-  cancel-in-progress: false
+  # Same fleet-wide shape as go-quality.yml/go.yml (CHAOS-4906 fleet audit):
+  # group by PR number on pull_request, by ref on a push to a non-main
+  # branch, by commit sha on a push to main or on merge_group (never
+  # cancelled).
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || ((github.ref == 'refs/heads/main' || github.event_name == 'merge_group') && github.sha) || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref != 'refs/heads/main') }}
 
 jobs:
   venue-oracles:

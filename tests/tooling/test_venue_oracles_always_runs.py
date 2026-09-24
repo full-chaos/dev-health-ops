@@ -188,7 +188,10 @@ def test_a_dispatch_run_runs_the_full_suite() -> None:
         "reads the diff"
     )
     branch = script[script.index(guard) : script.index("fi", script.index(guard))]
-    assert "printf 'relevant=true\\n' >> \"${GITHUB_OUTPUT}\"" in branch and "exit 0" in branch, (
+    assert (
+        "printf 'relevant=true\\n' >> \"${GITHUB_OUTPUT}\"" in branch
+        and "exit 0" in branch
+    ), (
         "the workflow_dispatch branch of the relevance step must write "
         "relevant=true and stop, so the full suite runs"
     )

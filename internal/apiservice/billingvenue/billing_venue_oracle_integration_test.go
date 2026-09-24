@@ -184,6 +184,18 @@ func (f *fakeStripe) serve(plane string, w http.ResponseWriter, r *http.Request)
 	if r.Header.Get("Authorization") == "Bearer "+fakeStripeKey {
 		auth = "fake-key"
 	}
+	// Named divergence (CHAOS-6525): Go's checkout session also puts the
+	// org on the subscription it creates, subscription_data[metadata][org_id]
+	// equal to the session's metadata[org_id]. That field is checked here and
+	// then left out, so the rest of the call is compared as before.
+	if plane == "go" && r.Method == http.MethodPost && path == "/v1/checkout/sessions" {
+		_, present := form["subscription_data[metadata][org_id]"]
+		if got, want := form.Get("subscription_data[metadata][org_id]"), form.Get("metadata[org_id]"); !present || got != want {
+			form.Set("subscription_data[metadata][org_id]", "MISSING-OR-WRONG:"+got)
+		} else {
+			form.Del("subscription_data[metadata][org_id]")
+		}
+	}
 	f.calls[plane] = append(f.calls[plane], fmt.Sprintf("%s %s | query=%s | form=%s | version=%s | idempotency=%s | auth=%s",
 		r.Method, path, sortedForm(r.URL.Query()), sortedForm(form), r.Header.Get("Stripe-Version"), idempotency, auth))
 	w.Header().Set("Content-Type", "application/json")

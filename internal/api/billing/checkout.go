@@ -155,12 +155,17 @@ func (h handlers) checkout(w http.ResponseWriter, r *http.Request) {
 			Metadata:          map[string]string{"org_id": user.OrgID},
 			ClientReferenceID: stripe.String(user.OrgID),
 		}
+		// The subscription the session creates names its org too (a named
+		// divergence from the Python call, CHAOS-6525): Stripe does not copy
+		// the session's metadata onto the subscription, and every
+		// customer.subscription.* event reads the org from there.
+		params.SubscriptionData = &stripe.CheckoutSessionCreateSubscriptionDataParams{
+			Metadata: map[string]string{"org_id": user.OrgID},
+		}
 		if trial {
-			params.SubscriptionData = &stripe.CheckoutSessionCreateSubscriptionDataParams{
-				TrialSettings: &stripe.CheckoutSessionCreateSubscriptionDataTrialSettingsParams{
-					EndBehavior: &stripe.CheckoutSessionCreateSubscriptionDataTrialSettingsEndBehaviorParams{
-						MissingPaymentMethod: stripe.String("cancel"),
-					},
+			params.SubscriptionData.TrialSettings = &stripe.CheckoutSessionCreateSubscriptionDataTrialSettingsParams{
+				EndBehavior: &stripe.CheckoutSessionCreateSubscriptionDataTrialSettingsEndBehaviorParams{
+					MissingPaymentMethod: stripe.String("cancel"),
 				},
 			}
 		}

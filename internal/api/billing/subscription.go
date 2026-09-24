@@ -120,13 +120,26 @@ func (h handlers) subscriptionEventTx(ctx context.Context, tx pgx.Tx, event pyjs
 	}
 	metadata := asDict(attr(subscription, "metadata", pyjson.NewObject()))
 	orgValue, _ := metadata.Get("org_id")
-	if !pyjson.Truthy(orgValue) {
-		h.logger.WarnContext(ctx, "Subscription event has no org_id in metadata, skipping", "event_id", eventID)
-		return nil
-	}
-	org, err := pythonparity.ParseUUID(pyjson.Str(orgValue))
-	if err != nil {
-		return errSubscriptionMalformed
+	var org uuid.UUID
+	if pyjson.Truthy(orgValue) {
+		if org, err = pythonparity.ParseUUID(pyjson.Str(orgValue)); err != nil {
+			return errSubscriptionMalformed
+		}
+	} else {
+		// No org in the metadata (every subscription a checkout created
+		// before it set subscription_data.metadata): the org that owns the
+		// Stripe subscription or customer, a named divergence (CHAOS-6525).
+		subscriptionID, _ := attr(subscription, "id", "").(string)
+		customer, _ := attr(subscription, "customer", "").(string)
+		owner, _, err := stripeOwnerOrg(ctx, tx, subscriptionID, customer)
+		if err != nil {
+			return err
+		}
+		if owner == nil {
+			h.logger.WarnContext(ctx, "Subscription event names no org and none owns its subscription or customer, skipping", "event_id", eventID)
+			return nil
+		}
+		org = *owner
 	}
 	var previousStatus *string
 	if rawID := attr(subscription, "id", ""); stripeTruthy(rawID) {

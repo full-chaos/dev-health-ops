@@ -278,14 +278,7 @@ func decodeJSON(body []byte) (pyjson.Value, error) {
 	var syntax *pyjson.SyntaxError
 	if errors.As(err, &syntax) {
 		text, _ := pyjson.DecodeBody(body)
-		runes := []rune(text)
-		pos := min(syntax.Pos, len(runes))
-		line := 1 + strings.Count(string(runes[:pos]), "\n")
-		column := pos + 1
-		if index := strings.LastIndex(string(runes[:pos]), "\n"); index >= 0 {
-			column = pos - len([]rune(string(runes[:pos])[:index]))
-		}
-		return nil, &Error{"JSONDecodeError", fmt.Sprintf("%s: line %d column %d (char %d)", syntax.Msg, line, column, syntax.Pos)}
+		return nil, &Error{"JSONDecodeError", syntax.Text(text)}
 	}
 	return nil, &Error{"ValueError", err.Error()}
 }

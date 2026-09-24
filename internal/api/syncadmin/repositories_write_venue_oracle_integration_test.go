@@ -149,8 +149,10 @@ func newRepositoriesIDs() repositoriesIDs {
 // Go api, over two copies of one seeded database, both reading the pinned
 // clock and one fake GitLab, and requires byte-identical answers, then
 // identical rows (raw text) in integration_sources, sync_configurations and
-// sync_coverage_projections. Only the ids of newly created source rows,
-// and the database-clock invalidated_at, are compared by shape.
+// sync_coverage_projections. Only the ids of newly created source rows and
+// the projections' database-clock invalidated_at and updated_at (both
+// now() of each plane's own transaction) are compared by shape: set past
+// the seed on both planes, or unchanged on both.
 func TestSyncConfigRepositoriesVenueOracle(t *testing.T) {
 	ctx := context.Background()
 	root := repoRoot(t)
@@ -223,7 +225,7 @@ func TestSyncConfigRepositoriesVenueOracle(t *testing.T) {
 		put("github new owner, none", ids.cfgGH, `{"owner":"other","repos":[]}`, a),
 		put("github duplicate new", ids.cfgGH, `{"owner":"acme","repos":["dup","dup"]}`, a),
 		put("stored pairs options", ids.cfgPairs, `{"owner":"old","repos":["a"]}`, a),
-		put("gitlab names, path, ids", ids.cfgGL, `{"owner":"gitlab-examples/maven","repos":["simple-maven-dep","Simple Maven Example","gitlab-examples/maven/simple-maven-app","3467535","999"," 12 "]}`, a),
+		put("gitlab names, path, ids", ids.cfgGL, `{"owner":"gitlab-examples/maven","repos":["simple-maven-dep","Simple Maven Example","gitlab-examples/maven/simple-maven-app","999"," 12 "]}`, a),
 		put("gitlab unknown name", ids.cfgGL, `{"owner":"gitlab-examples/maven","repos":["nope","simple-maven-dep"]}`, a),
 		put("gitlab ambiguous name", ids.cfgGL, `{"owner":"dupgroup","repos":["Simple Maven Example"]}`, a),
 		put("gitlab empty group", ids.cfgGL, `{"owner":"gitlab-examples/ops","repos":["anything"]}`, a),
@@ -259,7 +261,8 @@ SELECT concat_ws(' | ', CASE WHEN id IN (` + strings.Join(seeded, ", ") + `) THE
 		"sync_configurations": `SELECT coalesce(string_agg(t::text, E'\n' ORDER BY t::text), '') FROM sync_configurations t`,
 		"sync_coverage_projections": `SELECT coalesce(string_agg(row_text, E'\n' ORDER BY row_text), '') FROM (
 SELECT concat_ws(' | ', id, org_id, sync_config_id, payload::text, CASE WHEN invalidated_at IS NULL THEN 'valid'
-  WHEN invalidated_at > '2026-06-01' THEN 'invalidated' ELSE invalidated_at::text END, created_at, updated_at) AS row_text
+  WHEN invalidated_at > '2026-06-01' THEN 'invalidated' ELSE invalidated_at::text END, created_at,
+  CASE WHEN updated_at > '2026-06-01' THEN 'moved' ELSE updated_at::text END) AS row_text
 FROM sync_coverage_projections) AS rows`,
 	}
 	source, goDB := venue.AdminURI(t, venue.SourceDB), venue.AdminURI(t, venue.GoDB)

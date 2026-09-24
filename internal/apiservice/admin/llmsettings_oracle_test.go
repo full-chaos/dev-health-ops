@@ -238,11 +238,17 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, '2026-02-01T00:00:00+00:00', '2026-02-01T00:
 		put("W put model number", "write", `{"provider":"openai","model":5}`),
 		put("W put several errors", "write", `{"provider":"","concurrency":0,"budget_limit_micro_usd":-1}`),
 		// ---- PUT: base_url -------------------------------------------------------
-		// Named limit (CHAOS-6502): base_url cases whose urlsplit error text or
-		// outcome differs between the planes (port out of range or not a
-		// number, an unbalanced or invalid IPv6 bracket, a percent sign in
-		// the host, an over-long host label) are not in this list; the
-		// shared validator owns them.
+		put("W base_url port range", "write", `{"provider":"openai","base_url":"https://example.invalid:65536/v1"}`),
+		put("W base_url open bracket", "write", `{"provider":"openai","base_url":"https://[::1/v1"}`),
+		put("W base_url text port", "write", `{"provider":"openai","base_url":"https://example.invalid:abc/v1"}`),
+		put("W base_url negative port", "write", `{"provider":"openai","base_url":"https://example.invalid:-1/v1"}`),
+		put("W base_url percent host", "write", `{"provider":"openai","base_url":"https://exa%mple.invalid/v1"}`),
+		put("W base_url percent suffix host", "write", `{"provider":"openai","base_url":"https://example%.invalid/v1"}`),
+		put("W base_url bad ipv6 literal", "write", `{"provider":"openai","base_url":"https://[zz::1]/v1"}`),
+		put("W base_url long label", "write", fmt.Sprintf(`{"provider":"openai","base_url":"https://%s.invalid/v1"}`, strings.Repeat("a", 70))),
+		put("W base_url fullwidth private address", "write", `{"provider":"openai","base_url":"https://\uff10.\uff10.\uff10.\uff10/v1"}`),
+		put("W base_url fullwidth loopback address", "write", `{"provider":"openai","base_url":"https://\uff11\uff12\uff17.\uff10.\uff10.\uff11/v1"}`),
+		put("W base_url ideographic dot address", "write", `{"provider":"openai","base_url":"https://127\u30020\u30020\u30021/v1"}`),
 		put("W base_url empty", "write", `{"provider":"openai","base_url":""}`),
 		put("W base_url null", "write", `{"provider":"openai","base_url":null}`),
 		put("W base_url http", "write", `{"provider":"openai","base_url":"http://example.invalid/v1"}`),

@@ -326,7 +326,13 @@ func (h *handlers) putLLMSettings(w http.ResponseWriter, r *http.Request) {
 	if baseURL != nil {
 		baseURLText = *baseURL
 	}
-	if valid, reason := llmorgsettings.ValidateBaseURL(ctx, baseURLText); !valid {
+	valid, reason, splitErr := llmorgsettings.ValidateBaseURLChecked(ctx, baseURLText)
+	if splitErr != nil {
+		// urlsplit's ValueError escapes validate_llm_base_url: an unhandled 500.
+		h.internalError(ctx, w, "validate base url", splitErr)
+		return
+	}
+	if !valid {
 		if reason == "" {
 			reason = "Invalid LLM base_url"
 		}

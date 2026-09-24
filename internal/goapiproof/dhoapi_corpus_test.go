@@ -128,6 +128,26 @@ func TestPushTokenFileCredentialReadsTheFileEachTimeAndNeverLeaksIt(t *testing.T
 	if err == nil || strings.Contains(err.Error(), "SECRETVALUE") {
 		t.Fatalf("want a shape refusal that does not leak the file content, got %v", err)
 	}
+	// One credential, the file rotated between two requests: the second request
+	// must carry the new token (nothing is cached across uses).
+	rotating := PushTokenFileCredential(path)
+	if err := os.WriteFile(path, []byte("fcpush_before\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	send := func() string {
+		request, _ := http.NewRequest(http.MethodGet, "http://example.invalid/x", nil)
+		if err := rotating.Apply(context.Background(), request); err != nil {
+			t.Fatal(err)
+		}
+		return request.Header.Get("Authorization")
+	}
+	first := send()
+	if err := os.WriteFile(path, []byte("fcpush_after\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if second := send(); first != "Bearer fcpush_before" || second != "Bearer fcpush_after" {
+		t.Fatalf("a rotated token file must be picked up by the next request: first=%q second=%q", first, second)
+	}
 	if _, err := PushTokenFileCredential(filepath.Join(t.TempDir(), "absent")).value(context.Background()); err == nil {
 		t.Fatal("a missing token file must be an error, never an empty credential")
 	}

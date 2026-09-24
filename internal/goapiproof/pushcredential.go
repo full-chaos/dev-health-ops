@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"time"
 )
 
 // PushTokenPrefix is what every external-ingest (customer push) bearer starts
@@ -16,11 +15,12 @@ const PushTokenPrefix = "fcpush_"
 
 // PushTokenFileCredential builds the credential for corpus entries that
 // authenticate with an external-ingest push token. The token is read from
-// path on every mint (so a rotated file is picked up), trimmed, and checked
-// for shape; the file's content never appears in an error, a log or a
-// receipt, only what is wrong with it.
+// path on EVERY use (a zero freshness window: nothing is cached, so a token
+// rotated or revoked during a run is picked up by the next request), trimmed,
+// and checked for shape; the file's content never appears in an error, a log
+// or a receipt, only what is wrong with it.
 func PushTokenFileCredential(path string) *Credential {
-	return MintedCredential("Authorization", "push bearer", 25*time.Second, func(context.Context) (string, error) {
+	return MintedCredential("Authorization", "push bearer", 0, func(context.Context) (string, error) {
 		raw, err := os.ReadFile(path) // #nosec G304 -- operator-supplied token file path, by design
 		if err != nil {
 			return "", fmt.Errorf("read the push token file: %w", err)

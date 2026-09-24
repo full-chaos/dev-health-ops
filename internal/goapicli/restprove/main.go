@@ -1364,7 +1364,7 @@ func resolveSingleShotRequest(
 	resolvedSpec := spec
 	resolvedRequest := request
 	var boundIDs map[string]string
-	if len(request.IDBindings) > 0 {
+	if len(request.IDBindings) > 0 || len(request.PathLiterals) > 0 {
 		resolvedPath, resolvedQuery, resolvedBody, unresolved := goapiproof.ResolveRESTIDBindings(spec.Path, request, produced)
 		if len(unresolved) > 0 {
 			// An entry whose id does not resolve is refused by name and

@@ -1,12 +1,14 @@
 package restprove
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/goapiproof"
 )
@@ -175,5 +177,34 @@ func TestRunRefusesAPushTokenCorpusWithoutATokenFile(t *testing.T) {
 	err = run(f)
 	if err == nil || !strings.Contains(err.Error(), "-push-token-file") {
 		t.Fatalf("a dho-api run planning ingest entries needs -push-token-file, got %v", err)
+	}
+}
+
+// TestResolveSingleShotRequestFillsPathLiteralsWithoutIDBindings drives the
+// prover's own request path for an entry that declares PathLiterals and no
+// IDBindings: the placeholder must be filled before either leg is sent (a
+// literal "{placeholder}" on the wire is a 404/422, not a measurement).
+func TestResolveSingleShotRequestFillsPathLiteralsWithoutIDBindings(t *testing.T) {
+	const build = "abc123def456"
+	candidateURL, baselineURL, paths := iteratingFixtureServers(t, build, nil, map[string]string{"/things/known/x": `[{"a":1}]`})
+	f := flags{queryAPIURL: candidateURL, pythonAPIURL: baselineURL, org: "org-1", recordedBy: "chris", reviewEvidence: "test"}
+	spec := goapiproof.RESTEndpointSpec{Method: http.MethodGet, Path: "/things/{name}/x"}
+	request := goapiproof.RESTRequest{
+		Name: "literal", PathLiterals: map[string]string{"name": "known"},
+		WantCandidateStatus: 200, WantBaselineStatus: 200, BodyMode: goapiproof.RESTBodyModeStatusOnly,
+	}
+	attempt, err := resolveSingleShotRequest(context.Background(), goapiproof.NewLegClient(0), f, "REST:GET:/things/{name}/x",
+		spec, request, map[string]string{},
+		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), &fakeReceiptWriter{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if attempt.spec.Path != "/things/known/x" || !attempt.legsSent {
+		t.Fatalf("resolved path = %q (legsSent %v), want /things/known/x with legs sent", attempt.spec.Path, attempt.legsSent)
+	}
+	for _, sent := range *paths {
+		if strings.Contains(sent, "{") || strings.Contains(sent, "%7B") {
+			t.Fatalf("a placeholder reached the wire: %q", sent)
+		}
 	}
 }

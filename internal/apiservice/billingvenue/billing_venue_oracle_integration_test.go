@@ -1,6 +1,6 @@
 //go:build integration
 
-package apiservice
+package billingvenue
 
 import (
 	"context"
@@ -23,7 +23,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/billing/stripeclient"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
-	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
@@ -687,39 +686,6 @@ func sortRecordKeys(body string) string {
 		return body
 	}
 	return string(encoded)
-}
-
-// startBillingVenueAPI is startVenueAPI with the Go plane's Stripe client
-// pointed at the fake server.
-func startBillingVenueAPI(t *testing.T, ctx context.Context, cfg config.Config, venue *venueoracle.Venue, stripeBase string) string {
-	t.Helper()
-	registry := health.NewRegistry(5 * time.Second)
-	components, err := configureWith(ctx, cfg, registry, quietLogger(), func(deps *Deps) {
-		deps.Stripe = stripeclient.New(stripeclient.Options{Key: cfg.StripeSecretKey.Reveal(), BaseURL: stripeBase})
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, component := range components {
-		if err := component.Start(ctx); err != nil {
-			t.Fatal(err)
-		}
-	}
-	t.Cleanup(func() {
-		for index := len(components) - 1; index >= 0; index-- {
-			_ = components[index].Shutdown(context.Background())
-		}
-	})
-	if ready := registry.CheckRequired(ctx); !ready.Ready {
-		t.Fatalf("dho api not ready as the api role: %+v %s", ready, venue.DiagnoseAPIRole(t, ctx))
-	}
-	for _, component := range components {
-		if server, ok := component.(interface{ Address() string }); ok {
-			return "http://" + server.Address()
-		}
-	}
-	t.Fatal("configure started no HTTP server")
-	return ""
 }
 
 // billingEnv is the billing configuration both planes run with.

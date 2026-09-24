@@ -1,6 +1,6 @@
 //go:build integration
 
-package apiservice
+package billingvenue
 
 import (
 	"bytes"

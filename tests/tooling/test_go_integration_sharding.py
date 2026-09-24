@@ -151,6 +151,10 @@ EXPECTED_PACKAGES = {
     # build either side.
     "internal/admincli",
     "internal/apiservice/admin",
+    # The billing venue oracles (plans, checkout, portal, ledger, the Stripe
+    # webhook) in a package of their own, out of internal/apiservice's venue
+    # time budget; each skips without DEV_HEALTH_LIVE_PYTHON_ORACLES=1.
+    "internal/apiservice/billingvenue",
     # CHAOS-6368: the shared rate-limit store against a real Valkey (limit held
     # across two clients, the fixed window, the per-caller path bound, TTLs).
     "internal/auth/ratelimitvalkey",

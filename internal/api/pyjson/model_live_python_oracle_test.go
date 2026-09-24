@@ -66,7 +66,9 @@ func TestMarshalModelAndReprMatchLivePydantic(t *testing.T) {
 	for len(floats) < 20000 {
 		floats = append(floats, math.Float64frombits(random.Uint64()))
 	}
-	floats = append(floats, math.Inf(1), math.Inf(-1), math.NaN(), 1e-5, -1.5212603486793025e-05)
+	floats = append(floats, math.Inf(1), math.Inf(-1), math.NaN(), 1e-5, -1.5212603486793025e-05,
+		// The positional band's two edges and their neighbours, both signs.
+		9.99e-6, 9.999999999999999e-06, -1e-5, -9.99e-6, 1e16, 9999999999999998.0, -1e16, 1e-4, 9.9999e-05)
 	bits := make([]string, len(floats))
 	for index, value := range floats {
 		var buffer [8]byte

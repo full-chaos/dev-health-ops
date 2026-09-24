@@ -32,7 +32,7 @@ func (d Deps) handleListSchemas() http.HandlerFunc {
 		body.Set("schemaVersions", []string{schemaVersion})
 		body.Set("recordKinds", recordvalidation.RecordKinds())
 		body.Set("limits", limitsPayload(d.limits()))
-		policy.WriteJSON(w, http.StatusOK, body, nil)
+		policy.WriteModel(w, http.StatusOK, body, nil)
 	}
 }
 
@@ -121,7 +121,7 @@ func (d Deps) handleAvailability() http.HandlerFunc {
 		body.Set("features", features)
 		body.Set("availableRecordKinds", sortedSet(available))
 		body.Set("unavailableRecordKinds", sortedSet(unavailable))
-		policy.WriteJSON(w, http.StatusOK, body, nil)
+		policy.WriteModel(w, http.StatusOK, body, nil)
 	}
 }
 
@@ -193,7 +193,7 @@ func (d Deps) handleValidate() http.HandlerFunc {
 		body.Set("itemsAccepted", len(envelope.Records)-len(rejectedIndices))
 		body.Set("itemsRejected", len(rejectedIndices))
 		body.Set("errors", errorValues)
-		policy.WriteJSON(w, http.StatusOK, body, nil)
+		policy.WriteModel(w, http.StatusOK, body, nil)
 	}
 }
 
@@ -507,7 +507,7 @@ func (d Deps) handleListBatches() http.HandlerFunc {
 		body.Set("total", total)
 		body.Set("limit", limit.Int64())
 		body.Set("offset", offset.Int64())
-		policy.WriteJSON(w, http.StatusOK, body, nil)
+		policy.WriteModel(w, http.StatusOK, body, nil)
 	}
 }
 
@@ -548,7 +548,7 @@ func (d Deps) handleGetBatch() http.HandlerFunc {
 			writeIngestError(w, newIngestError(http.StatusInternalServerError, "internal_error", "failed to load recompute jobs"))
 			return
 		}
-		policy.WriteJSON(w, http.StatusOK, batchStatusResponse(batch, rejections, jobs, total, limit, offset), nil)
+		policy.WriteModel(w, http.StatusOK, batchStatusResponse(batch, rejections, jobs, total, limit, offset), nil)
 	}
 }
 

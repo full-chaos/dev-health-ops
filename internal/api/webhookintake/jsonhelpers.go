@@ -124,7 +124,7 @@ func respondForEvent(w http.ResponseWriter, r *http.Request, d Deps, event webho
 	if event.EventType == eventUnknown {
 		d.logger().Debug("Ignoring unsupported webhook event",
 			"provider", event.Provider, "raw_event_type", sanitizeForLog(rawLabel))
-		policy.WriteJSON(w, http.StatusOK, webhookResponseBody(
+		policy.WriteModel(w, http.StatusOK, webhookResponseBody(
 			"accepted", uuid.New().String(), "Event type '"+sanitizeForLog(rawLabel)+"' not processed",
 		), nil)
 		return
@@ -142,7 +142,7 @@ func respondForEvent(w http.ResponseWriter, r *http.Request, d Deps, event webho
 	// successfully would be invisible without turning on debug logging.
 	d.logger().Info("Dispatched webhook event",
 		"provider", event.Provider, "event_type", string(event.EventType), "delivery_id", deliveryID.String())
-	policy.WriteJSON(w, http.StatusOK, webhookResponseBody(
+	policy.WriteModel(w, http.StatusOK, webhookResponseBody(
 		"accepted", deliveryID.String(), "Processing "+string(event.EventType)+" event",
 	), nil)
 }

@@ -140,7 +140,7 @@ func (h *handlers) listUsers(w http.ResponseWriter, r *http.Request) {
 	for i, u := range users {
 		list[i] = userResponseObject(u)
 	}
-	policy.WriteJSON(w, http.StatusOK, list, nil)
+	policy.WriteModel(w, http.StatusOK, list, nil)
 }
 
 // getUser is users.py's get_user.
@@ -174,7 +174,7 @@ func (h *handlers) getUser(w http.ResponseWriter, r *http.Request) {
 	if !h.ensureUserInScope(ctx, w, user, orgID, targetID) {
 		return
 	}
-	policy.WriteJSON(w, http.StatusOK, userResponseObject(target), nil)
+	policy.WriteModel(w, http.StatusOK, userResponseObject(target), nil)
 }
 
 // createUser is users.py's create_user: unauthenticated by design in the
@@ -253,7 +253,7 @@ func (h *handlers) createUser(w http.ResponseWriter, r *http.Request) {
 		policy.WriteInternal(w)
 		return
 	}
-	policy.WriteJSON(w, http.StatusCreated, userResponseObject(created), nil)
+	policy.WriteModel(w, http.StatusCreated, userResponseObject(created), nil)
 }
 
 // updateUser is users.py's update_user.
@@ -337,7 +337,7 @@ func (h *handlers) updateUser(w http.ResponseWriter, r *http.Request) {
 		policy.WriteDetail(w, http.StatusNotFound, "User not found", nil)
 		return
 	}
-	policy.WriteJSON(w, http.StatusOK, userResponseObject(updated), nil)
+	policy.WriteModel(w, http.StatusOK, userResponseObject(updated), nil)
 }
 
 // setUserPassword is users.py's set_user_password: rate-limited
@@ -496,7 +496,7 @@ func (h *handlers) setUserPassword(w http.ResponseWriter, r *http.Request) {
 
 	out := pyjson.NewObject()
 	out.Set("success", true)
-	policy.WriteJSON(w, http.StatusOK, out, nil)
+	policy.WriteModel(w, http.StatusOK, out, nil)
 }
 
 // deleteUser is users.py's delete_user.
@@ -542,5 +542,5 @@ func (h *handlers) deleteUser(w http.ResponseWriter, r *http.Request) {
 	}
 	out := pyjson.NewObject()
 	out.Set("deleted", true)
-	policy.WriteJSON(w, http.StatusOK, out, nil)
+	policy.WriteModel(w, http.StatusOK, out, nil)
 }

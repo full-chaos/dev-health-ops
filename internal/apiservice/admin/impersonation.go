@@ -236,7 +236,7 @@ func (h *handlers) startImpersonation(w http.ResponseWriter, r *http.Request) {
 	targetObject.Set("role", membership.Role)
 	response.Set("target_user", targetObject)
 	response.Set("expires_at", pyTimeString(expiresAt))
-	policy.WriteJSON(w, http.StatusOK, response, nil)
+	policy.WriteModel(w, http.StatusOK, response, nil)
 }
 
 // stopImpersonation is impersonation.py's stop_impersonation.
@@ -296,7 +296,7 @@ func (h *handlers) stopImpersonation(w http.ResponseWriter, r *http.Request) {
 
 	response := pyjson.NewObject()
 	response.Set("status", "stopped")
-	policy.WriteJSON(w, http.StatusOK, response, nil)
+	policy.WriteModel(w, http.StatusOK, response, nil)
 }
 
 // impersonationStatus is impersonation.py's impersonation_status: reads
@@ -319,7 +319,7 @@ func (h *handlers) impersonationStatus(w http.ResponseWriter, r *http.Request) {
 		return response
 	}
 	if !user.IsSuperuser {
-		policy.WriteJSON(w, http.StatusOK, notImpersonating(), nil)
+		policy.WriteModel(w, http.StatusOK, notImpersonating(), nil)
 		return
 	}
 	// _parse_uuid raises 400 on a garbage user_id claim -- cache keys are
@@ -339,7 +339,7 @@ func (h *handlers) impersonationStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if active == nil || !active.ExpiresAt.After(h.now().UTC()) {
-		policy.WriteJSON(w, http.StatusOK, notImpersonating(), nil)
+		policy.WriteModel(w, http.StatusOK, notImpersonating(), nil)
 		return
 	}
 
@@ -353,7 +353,7 @@ func (h *handlers) impersonationStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	response.Set("target_org_id", active.TargetOrgID)
 	response.Set("expires_at", pyTimeString(active.ExpiresAt))
-	policy.WriteJSON(w, http.StatusOK, response, nil)
+	policy.WriteModel(w, http.StatusOK, response, nil)
 }
 
 // impersonationAuditMetadata is AuditService.log's OWN metadata

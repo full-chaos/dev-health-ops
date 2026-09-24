@@ -132,7 +132,7 @@ func (h *handlers) deleteOrganization(w http.ResponseWriter, r *http.Request) {
 
 	h.orgDeletionPurgeClickHouse(ctx, orgIDStr, dryRun, result)
 
-	policy.WriteJSON(w, http.StatusOK, result.json(), nil)
+	policy.WriteModel(w, http.StatusOK, result.json(), nil)
 }
 
 // orgDeletionResult mirrors DeletionResult/DeletionResultResponse, field

@@ -15,6 +15,8 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/policy"
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 )
 
@@ -62,12 +64,6 @@ type healthResponse struct {
 	Status        string `json:"status"`
 }
 
-type entitlementResponse struct {
-	SchemaVersion       string `json:"schema_version"`
-	OrgID               string `json:"org_id"`
-	AgentContextRuntime bool   `json:"agent_context_runtime"`
-}
-
 // healthHandler is unconditional and dependency-free: with no credential
 // check on this route, the Python success body
 // (ACRServiceHealthResponse's field defaults, api/internal/acr.py:40-46) was
@@ -78,7 +74,11 @@ func healthHandler() http.Handler {
 		SchemaVersion: healthSchemaVersion, Service: "dev-health-ops", Status: "ok",
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, r, slog.Default(), http.StatusOK, response)
+		body := pyjson.NewObject()
+		body.Set("schema_version", response.SchemaVersion)
+		body.Set("service", response.Service)
+		body.Set("status", response.Status)
+		writeModel(w, http.StatusOK, body)
 	})
 }
 
@@ -94,11 +94,11 @@ func entitlementHandler(store EntitlementStore, logger *slog.Logger) http.Handle
 		entitlement, err := store.Lookup(r.Context(), orgID)
 		switch {
 		case err == nil:
-			writeJSON(w, r, logger, http.StatusOK, entitlementResponse{
-				SchemaVersion:       entitlementSchemaVersion,
-				OrgID:               entitlement.OrgID,
-				AgentContextRuntime: entitlement.AgentContextRuntime,
-			})
+			body := pyjson.NewObject()
+			body.Set("schema_version", entitlementSchemaVersion)
+			body.Set("org_id", entitlement.OrgID)
+			body.Set("agent_context_runtime", entitlement.AgentContextRuntime)
+			writeModel(w, http.StatusOK, body)
 		case errors.Is(err, ErrOrgNotFound):
 			writeDetail(w, r, logger, http.StatusNotFound, "Not found")
 		case errors.Is(err, ErrUnavailable):
@@ -121,6 +121,13 @@ func entitlementHandler(store EntitlementStore, logger *slog.Logger) http.Handle
 // 200 { return errUnavailable }"), so only the status code is load-bearing
 // for that caller; the body shape is kept 1:1 for any other caller and for
 // parity testing.
+// writeModel writes a success body as FastAPI writes the route's
+// response_model (policy.WriteModel), keeping this route family's nosniff
+// header.
+func writeModel(w http.ResponseWriter, status int, body *pyjson.Object) {
+	policy.WriteModel(w, status, body, http.Header{"X-Content-Type-Options": {"nosniff"}})
+}
+
 func writeDetail(w http.ResponseWriter, r *http.Request, logger *slog.Logger, status int, detail string) {
 	writeJSON(w, r, logger, status, map[string]string{"detail": detail})
 }

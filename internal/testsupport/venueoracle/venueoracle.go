@@ -51,6 +51,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	valkeygo "github.com/valkey-io/valkey-go"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	chclickhouse "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
@@ -612,6 +613,13 @@ func Diff(t *testing.T, goBase string, requests []Request, python []Response, op
 			t.Errorf("%s:\n python %d %s %v\n go     %d %s %v", request.Name, python[index].Status, pyShown.Body,
 				pick(pyShown.Headers, compared), goResponse.Status, goShown.Body, pick(goShown.Headers, compared))
 		}
+	}
+	// Every Go handler must have written each body with the writer its
+	// route's ResponseModel flag allows (policy.WriteModel for a FastAPI
+	// response_model success body, WriteJSON otherwise). The count is
+	// process-wide, so any violation in this package's venues fails here.
+	if violations := policy.WriterViolations(); violations > 0 {
+		t.Errorf("%d body writes used the wrong writer for their route (see the policy ERROR logs naming each route)", violations)
 	}
 	writeProof(t)
 	return receipt.String()

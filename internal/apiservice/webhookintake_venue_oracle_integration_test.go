@@ -17,7 +17,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/api/webhookintake"
 	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
@@ -70,31 +69,14 @@ func githubVenueSign(secret string, body []byte) string {
 // position), so only the two blanked VALUES change; every other byte,
 // including key order, still round-trips untouched.
 func blankVenueEventID(_ venueoracle.Request, body string) string {
-	decoded, err := pyjson.DecodeString(body)
-	if err != nil {
-		return body
-	}
-	object, ok := decoded.(*pyjson.Object)
-	if !ok {
-		return body
-	}
-	changed := false
-	if _, ok := object.Get("event_id"); ok {
-		object.Set("event_id", "<event_id>")
-		changed = true
-	}
-	if _, ok := object.Get("celery_available"); ok {
-		object.Set("celery_available", "<celery_available>")
-		changed = true
-	}
-	if !changed {
-		return body
-	}
-	rewritten, err := pyjson.Marshal(object)
-	if err != nil {
-		return body
-	}
-	return string(rewritten)
+	// Replaced in the raw text, so every other byte stays as the plane
+	// wrote it (venueoracle.RedactJSON).
+	return venueoracle.RedactJSON(body, func(path []string, _ string) (string, bool) {
+		if len(path) == 1 && (path[0] == "event_id" || path[0] == "celery_available") {
+			return `"<` + path[0] + `>"`, true
+		}
+		return "", false
+	})
 }
 
 // TestWebhookIntakeVenueOracleGitHubGitLabJiraHealth is the write-route

@@ -291,7 +291,7 @@ func investmentFlowRequestParams(body investmentFlowRequestBody) (startTS, endTS
 	whatRepos = stringsFromAny(what["repos"])
 	why, _ := body.Filters["why"].(map[string]any)
 	workCategory = stringsFromAny(why["work_category"])
-	return startTS, endTS, scopeLevel, scopeIDs, whatRepos, workCategory, nil
+	return startTS, endTS, scopeLevel, scopeIDs, whatRepos, workCategory, err
 }
 
 // newInvestmentFlowHandler is the routeswitch-registered handler for

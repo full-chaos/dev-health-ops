@@ -3,7 +3,9 @@
 // _time_window, the same arithmetic with no start or end date), with
 // Python's date limits: a date is 0001-01-01..9999-12-31 and a timedelta
 // holds at most 999999999 days, and passing either limit raises
-// OverflowError, which the Python api answers as its unhandled 500.
+// OverflowError. Every Python route computes the window inside its
+// `except Exception: raise HTTPException(503, ...)`, so a route answers
+// ErrOverflow with its own 503.
 package timewindow
 
 import (
@@ -12,8 +14,8 @@ import (
 )
 
 // ErrOverflow is the window's OverflowError: a day count past 999999999,
-// or a date outside 0001-01-01..9999-12-31. A route answers it as the
-// Python api's unhandled-exception 500.
+// or a date outside 0001-01-01..9999-12-31. A route answers it with its
+// own 503, as the Python route's except clause does.
 var ErrOverflow = errors.New("time window: date value out of range (Python OverflowError)")
 
 // maxTimedeltaDays is datetime.timedelta.max.days.

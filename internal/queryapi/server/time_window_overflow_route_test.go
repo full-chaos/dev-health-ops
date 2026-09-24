@@ -9,13 +9,14 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 )
 
-// TestReportWindowOverflowIsThePython500 drives each route family to a
+// TestReportWindowOverflowIsThePython503 drives each route family to a
 // report window Python's time_window cannot hold (a day count past
 // timedelta's 999999999, or a date past 9999-12-31) and checks the Python
-// api's unhandled-exception answer: 500 {"detail":"Internal Server Error"}.
+// route's answer: each computes the window inside `except Exception:
+// raise HTTPException(503, "Data unavailable")`.
 // Before, the day counts were clamped to the Go int range and the dates
 // wrapped, so these were 200s over a nonsense window.
-func TestReportWindowOverflowIsThePython500(t *testing.T) {
+func TestReportWindowOverflowIsThePython503(t *testing.T) {
 	t.Setenv("IDENTITY_MAPPING_PATH", t.TempDir()+"/missing.yaml")
 	cases := []struct {
 		name    string
@@ -37,6 +38,10 @@ func TestReportWindowOverflowIsThePython500(t *testing.T) {
 			method: http.MethodGet, target: "/api/v1/drilldown/prs?scope_type=repo&scope_id=repo-a&range_days=99999999999999999999"},
 		{name: "home GET compare_days past int64", handler: newHomeGetHandler(emptyRowsHomeClient{}, nil),
 			method: http.MethodGet, target: "/api/v1/home?compare_days=99999999999999999999"},
+		{name: "investment flow POST range_days past the Go int range", handler: newInvestmentFlowHandler(emptyRowsInvestmentFlowClient{}),
+			method: http.MethodPost, target: "/api/v1/investment/flow", body: `{"filters":{"time":{"range_days":9223372036854775807}}}`},
+		{name: "investment flow repo-team POST compare_days past timedelta", handler: newInvestmentFlowRepoTeamHandler(emptyRowsInvestmentFlowClient{}),
+			method: http.MethodPost, target: "/api/v1/investment/flow/repo-team", body: `{"filters":{"time":{"compare_days":1000000000}}}`},
 		{name: "explain GET compare window past year 1", handler: newExplainGetHandler(newEmptyRowsExplainReader(t)),
 			method: http.MethodGet, target: "/api/v1/explain?metric=cycle_time&scope_type=repo&scope_id=repo-a&end_date=0001-01-10&range_days=5"},
 		{name: "home POST range_days past timedelta", handler: newHomePostHandler(emptyRowsHomeClient{}, nil),
@@ -60,8 +65,8 @@ func TestReportWindowOverflowIsThePython500(t *testing.T) {
 			req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 			rec := httptest.NewRecorder()
 			test.handler(rec, req)
-			if rec.Code != http.StatusInternalServerError || strings.TrimSpace(rec.Body.String()) != `{"detail":"Internal Server Error"}` {
-				t.Fatalf("got %d %q, want 500 {\"detail\":\"Internal Server Error\"}", rec.Code, rec.Body.String())
+			if rec.Code != http.StatusServiceUnavailable || strings.TrimSpace(rec.Body.String()) != `{"detail":"Data unavailable"}` {
+				t.Fatalf("got %d %q, want 503 {\"detail\":\"Data unavailable\"}", rec.Code, rec.Body.String())
 			}
 		})
 	}

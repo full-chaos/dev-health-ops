@@ -462,7 +462,7 @@ func parseQueryInt(loc []any, raw string) (int, *pydanticErrorDetail) {
 // saturatedInt is number as a Go int, clamped to the int range. Clamping
 // gives Python's answer for every use of these fields: a day count past
 // 999999999 already fails Python's timedelta, and timewindow.Compute fails
-// on the clamped value the same way (Python's unhandled 500); max(1, n) is
+// on the clamped value the same way (the route's 503); max(1, n) is
 // 1 for any negative n; and a limit or top-N count only caps a list, which
 // the clamped value caps the same. The one use it does not cover is a
 // ClickHouse LIMIT of 2^64 or more, whose Python answer is not measured.

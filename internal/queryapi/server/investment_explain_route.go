@@ -588,7 +588,8 @@ func timeWindow(filters map[string]any) (startTS, endTS time.Time, err error) {
 // filtersTimeWindow is time_window (api/services/filtering.py:78-92) over
 // a request's filters map, with Python's OverflowError where its date or
 // timedelta arithmetic raises one (timewindow.ErrOverflow): the route then
-// answers the Python api's unhandled 500 (writeTimeWindowOverflow).
+// answers its own 503, as the Python route's except clause does
+// (writeTimeWindowOverflow).
 func filtersTimeWindow(filters map[string]any) (timewindow.Window, error) {
 	timeFilter, _ := filters["time"].(map[string]any)
 	var startDate, endDate *time.Time
@@ -603,12 +604,16 @@ func filtersTimeWindow(filters map[string]any) (timewindow.Window, error) {
 }
 
 // writeTimeWindowOverflow answers a request whose report window Python's
-// date arithmetic cannot hold: an unhandled OverflowError there, the
-// Python api's generic 500.
+// date arithmetic cannot hold. Every Python route computes the window
+// inside its `try: ... except Exception: raise HTTPException(503, ...)`, so
+// the OverflowError there is the route's own 503: "Explanation
+// unavailable" for work-unit explain, "Data unavailable" for the rest.
 func writeTimeWindowOverflow(w http.ResponseWriter, r *http.Request, component, orgID string) {
-	log.Printf("query-api: %s: report window out of Python's date range: org_id=%s request_id=%s",
-		component, orgID, envelopeRequestID(r))
-	writeRESTError(w, r, component, orgID, http.StatusInternalServerError, "Internal Server Error")
+	if component == "work_unit_explain" {
+		writeWorkUnitExplainUnavailable(w, r, orgID, timewindow.ErrOverflow)
+		return
+	}
+	writeRESTDataUnavailable(w, r, component, orgID, timewindow.ErrOverflow)
 }
 
 // repoScopeColumn is the repo-id column both this route's breakdown query

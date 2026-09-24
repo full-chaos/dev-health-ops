@@ -1,6 +1,7 @@
 package emailvalidator
 
 import (
+	"regexp"
 	"strings"
 	"unicode/utf8"
 
@@ -16,10 +17,10 @@ type Validated struct {
 	LocalPart []rune
 }
 
-// nfcFirstDiffers reports unicodedata.normalize("NFC", text[i:])[0] != text[i].
+// nfcFirstDiffers reports unicodedata.normalize("NFC", text[i:])[0] != text[i]
+// (the NFC of a non-empty text is never empty).
 func nfcFirstDiffers(text []rune, i int) bool {
-	normalized := pyunicodedata.NFC(text[i:])
-	return len(normalized) == 0 || normalized[0] != text[i]
+	return pyunicodedata.NFC(text[i:])[0] != text[i]
 }
 
 // splitAtUnquotedSpecial is split_email's split_string_at_unquoted_special.
@@ -97,14 +98,6 @@ func unquoteQuotedString(text []rune) ([]rune, bool, *SyntaxError) {
 	return value, quoted, nil
 }
 
-func rstripSpaces(text []rune) []rune {
-	end := len(text)
-	for end > 0 && text[end-1] == ' ' {
-		end--
-	}
-	return text[:end]
-}
-
 func rstripChar(text []rune, char rune) []rune {
 	end := len(text)
 	for end > 0 && text[end-1] == char {
@@ -120,14 +113,18 @@ func splitEmail(email []rune) (displayName []rune, hasDisplayName bool, local, d
 	if err != nil {
 		return nil, false, nil, nil, false, err
 	}
-	if len(right) > 0 && right[0] == '<' {
+	// right is never empty: it starts at the special that ended left.
+	if right[0] == '<' {
 		left = rstripSpace(left)
 		name, nameQuoted, err := unquoteQuotedString(left)
 		if err != nil {
 			return nil, false, nil, nil, false, err
 		}
 		if !nameQuoted {
-			if bad := displaySet(name, func(c rune) bool { return (!atextOrDot(c) && c != ' ') || c == '.' }); bad != "" {
+			// (not ATEXT_RE.match(c) and c != ' ') or c == '.': ATEXT_RE
+			// is ATEXT plus the period, which the second clause takes back
+			// out, so the allowed set is ATEXT and the space.
+			if bad := displaySet(name, func(c rune) bool { return !isATEXT(c) && c != ' ' }); bad != "" {
 				return nil, false, nil, nil, false, syntaxError("The display name contains invalid characters when not quoted: %s.", bad)
 			}
 		}
@@ -137,7 +134,7 @@ func splitEmail(email []rune) (displayName []rune, hasDisplayName bool, local, d
 		if !containsRune(right, '>') {
 			return nil, false, nil, nil, false, syntaxError("An open angle bracket at the start of the email address has to be followed by a close angle bracket at the end.")
 		}
-		right = rstripSpaces(right)
+		right = rstripChar(right, ' ')
 		if right[len(right)-1] != '>' {
 			return nil, false, nil, nil, false, syntaxError("There can't be anything after the email address.")
 		}
@@ -150,9 +147,9 @@ func splitEmail(email []rune) (displayName []rune, hasDisplayName bool, local, d
 	} else {
 		local, domain = left, right
 	}
-	if len(domain) > 0 && domain[0] == '@' {
-		domain = domain[1:]
-	}
+	// Python strips a leading "@" when there is one; both splits above
+	// always hand back the domain part starting at its "@".
+	domain = domain[1:]
 	local, quotedLocal, err = unquoteQuotedString(local)
 	if err != nil {
 		return nil, false, nil, nil, false, err
@@ -169,10 +166,12 @@ func containsRune(text []rune, want rune) bool {
 	return false
 }
 
+// localPartResult is LocalPartValidationResult. Python's ascii_local_part
+// is the local part itself exactly when smtputf8 is false, so the flag
+// carries it.
 type localPartResult struct {
-	localPart      []rune
-	asciiLocalPart []rune // nil = None
-	smtputf8       bool
+	localPart []rune
+	smtputf8  bool
 }
 
 // validateLocalPart is validate_email_local_part with allow_smtputf8=True,
@@ -182,22 +181,14 @@ func validateLocalPart(local []rune, quoted bool) (localPartResult, *SyntaxError
 		return localPartResult{}, syntaxError("There must be something before the @-sign.")
 	}
 	if dotAtom(local, isATEXT) {
-		return localPartResult{localPart: local, asciiLocalPart: local}, nil
+		return localPartResult{localPart: local}, nil
 	}
 	valid := ""
-	requiresSMTPUTF8 := false
 	if dotAtom(local, isATEXTIntl) {
 		valid = "dot-atom"
-		requiresSMTPUTF8 = true
 	} else if quoted {
 		if bad := displaySet(local, func(c rune) bool { return !qtextIntl(c) }); bad != "" {
 			return localPartResult{}, syntaxError("The email address contains invalid characters in quotes before the @-sign: %s.", bad)
-		}
-		for _, c := range local {
-			if c < 32 || c > 126 {
-				requiresSMTPUTF8 = true
-				break
-			}
 		}
 		valid = "quoted"
 	}
@@ -210,21 +201,11 @@ func validateLocalPart(local []rune, quoted bool) (localPartResult, *SyntaxError
 				return localPartResult{}, syntaxError("The email address contains an invalid character.")
 			}
 		}
-		if valid == "quoted" {
-			escapedLocal := []rune{'"'}
-			for _, c := range local {
-				if c == '"' || c == '\\' {
-					escapedLocal = append(escapedLocal, '\\')
-				}
-				escapedLocal = append(escapedLocal, c)
-			}
-			local = append(escapedLocal, '"')
-		}
-		result := localPartResult{localPart: local, smtputf8: requiresSMTPUTF8}
-		if !requiresSMTPUTF8 {
-			result.asciiLocalPart = local
-		}
-		return result, nil
+		// Python also re-quotes a quoted local part and works out whether
+		// it needs SMTPUTF8; a quoted local part is always refused before
+		// either is read (allow_quoted_local is false), so neither is
+		// computed here.
+		return localPartResult{localPart: local, smtputf8: true}, nil
 	}
 	if bad := displaySet(local, func(c rune) bool { return !atextIntlOrDot(c) }); bad != "" {
 		return localPartResult{}, syntaxError("The email address contains invalid characters before the @-sign: %s.", bad)
@@ -235,39 +216,30 @@ func validateLocalPart(local []rune, quoted bool) (localPartResult, *SyntaxError
 	return localPartResult{}, syntaxError("The email address contains invalid characters before the @-sign.")
 }
 
-// isUTS46ValidChar is uts46_valid_char.
+// isUTS46ValidChar is uts46_valid_char for the code points that reach it:
+// validateDomainName calls it only after checkUnsafeChars has refused
+// every code point of category C* or Z*. Over the rest (all of Unicode
+// 16.0.0, checked against the live function), uts46_valid_char is true
+// exactly for U+FF0E and for a code point whose decomposition does not hold
+// U+002E; its C0/C1, Cf/Cn/Co/Cs and space-separator branches decide only
+// code points that cannot get here.
 func isUTS46ValidChar(r rune) bool {
-	switch {
-	case r >= 0x80 && r <= 0x9f:
-		return false
-	case (r >= 0x2010 && r <= 0x2060 && !(r >= 0x2024 && r <= 0x2026) && !(r >= 0x2028 && r <= 0x202e)) ||
-		r == 0x00ad || r == 0x2064 || r == 0xff0e ||
-		(r >= 0x200b && r <= 0x200d) ||
-		(r >= 0x1bca0 && r <= 0x1bca3):
-		return true
-	}
-	switch pyunicodedata.Category(r) {
-	case "Cf", "Cn", "Co", "Cs", "Zs", "Zl", "Zp":
-		return false
-	}
-	return !pyunicodedata.DecompositionHasFullStop(r)
+	return r == 0xff0e || !pyunicodedata.DecompositionHasFullStop(r)
 }
 
-// twoLettersTwoDashes is re.match(r"(?!xn)..--", label, re.I).
+// twoLettersTwoDashes is re.match(r"(?!xn)..--", label, re.I) for a label
+// of hostname characters (no newline, which "." would not match, can be in
+// one here).
 func twoLettersTwoDashes(label []rune) bool {
-	if len(label) < 4 || label[2] != '-' || label[3] != '-' || label[0] == '\n' || label[1] == '\n' {
+	if len(label) < 4 || label[2] != '-' || label[3] != '-' {
 		return false
 	}
 	return !((label[0] == 'x' || label[0] == 'X') && (label[1] == 'n' || label[1] == 'N'))
 }
 
-func endsWithASCIILetter(text []rune) bool {
-	if len(text) == 0 {
-		return false
-	}
-	last := text[len(text)-1]
-	return (last >= 'a' && last <= 'z') || (last >= 'A' && last <= 'Z')
-}
+// domainNameRegex is DOMAIN_NAME_REGEX (used with search): the domain ends
+// in an ASCII letter.
+var domainNameRegex = regexp.MustCompile(`[A-Za-z]\z`)
 
 type domainResult struct{ asciiDomain, domain []rune }
 
@@ -339,11 +311,13 @@ func validateDomainName(domain []rune) (domainResult, *SyntaxError) {
 	if !containsRune(asciiDomain, '.') {
 		return domainResult{}, syntaxError("The part after the @-sign is not valid. It should have a period.")
 	}
-	if !endsWithASCIILetter(asciiDomain) {
+	if !domainNameRegex.MatchString(string(asciiDomain)) {
 		return domainResult{}, syntaxError("The part after the @-sign is not valid. It is not within a valid top-level domain.")
 	}
 	for _, name := range specialUseDomainNames {
-		if string(asciiDomain) == name || hasSuffix(asciiDomain, "."+name) {
+		// Python also refuses the bare name; every special-use name has no
+		// period, and a domain without one was refused just above.
+		if hasSuffix(asciiDomain, "."+name) {
 			return domainResult{}, syntaxError("The part after the @-sign is a special-use or reserved name that cannot be used with email.")
 		}
 	}
@@ -454,7 +428,7 @@ func Validate(email []rune) (Validated, *SyntaxError) {
 	if err != nil {
 		return Validated{}, err
 	}
-	localPart, asciiLocalPart := info.localPart, info.asciiLocalPart
+	localPart := info.localPart
 	if normalizedLocal := pyunicodedata.NFC(localPart); !equalRunes(normalizedLocal, localPart) {
 		if _, err := validateLocalPart(normalizedLocal, quotedLocal); err != nil {
 			return Validated{}, syntaxError("After Unicode normalization: %s", err.Reason)
@@ -464,8 +438,9 @@ func Validate(email []rune) (Validated, *SyntaxError) {
 	if quotedLocal {
 		return Validated{}, syntaxError("Quoting the part before the @-sign is not allowed here.")
 	}
-	if asciiLocalPart != nil && caseInsensitiveMailboxNames[strings.ToLower(string(asciiLocalPart))] {
-		asciiLocalPart = []rune(strings.ToLower(string(asciiLocalPart)))
+	// ascii_local_part is set (and equal to the local part, which NFC
+	// leaves unchanged when it is ASCII) exactly when smtputf8 is false.
+	if !info.smtputf8 && caseInsensitiveMailboxNames[strings.ToLower(string(localPart))] {
 		localPart = []rune(strings.ToLower(string(localPart)))
 	}
 
@@ -487,13 +462,9 @@ func Validate(email []rune) (Validated, *SyntaxError) {
 	}
 
 	normalized := append(append(append([]rune{}, localPart...), '@'), domain...)
-	var asciiForm []rune
-	if asciiLocalPart != nil {
-		asciiForm = append(asciiForm, asciiLocalPart...)
-	} else {
-		asciiForm = append(asciiForm, localPart...)
-	}
-	asciiForm = append(append(asciiForm, '@'), asciiDomain...)
+	// (ascii_local_part or local_part): the two are equal whenever the
+	// first is set.
+	asciiForm := append(append(append([]rune{}, localPart...), '@'), asciiDomain...)
 	if err := validateLength(original, normalized, asciiForm); err != nil {
 		return Validated{}, err
 	}

@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
-	"unicode/utf16"
 	"unicode/utf8"
 
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
@@ -31,8 +30,9 @@ var prettyEmail = func() *regexp.Regexp {
 }()
 
 // classFromPredicate renders every code point pred accepts as regexp class
-// ranges (without the brackets). Surrogates are left out: the matcher
-// never sees one (see ValidateEmail).
+// ranges (without the brackets). pred is IsWord or IsSpace, neither of which
+// holds for a surrogate, so no surrogate (which a regexp class cannot
+// name) is ever written.
 func classFromPredicate(pred func(rune) bool) string {
 	var out strings.Builder
 	start := rune(-1)
@@ -47,7 +47,7 @@ func classFromPredicate(pred func(rune) bool) string {
 		start = -1
 	}
 	for r := rune(0); r <= 0x10ffff; r++ {
-		if utf16.IsSurrogate(r) || !pred(r) {
+		if !pred(r) {
 			flush(r - 1)
 			continue
 		}
@@ -87,7 +87,7 @@ func prettyEmailAddress(value []rune) ([]rune, bool) {
 	offsets := make([]int, 0, len(value)+1)
 	for _, r := range value {
 		offsets = append(offsets, text.Len())
-		if utf16.IsSurrogate(r) || !utf8.ValidRune(r) {
+		if !utf8.ValidRune(r) { // a lone surrogate is not a valid rune
 			r = utf8.RuneError
 		}
 		text.WriteRune(r)

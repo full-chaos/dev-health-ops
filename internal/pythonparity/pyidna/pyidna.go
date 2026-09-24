@@ -74,13 +74,15 @@ func joiningType(r rune) string {
 }
 
 // combiningClass is _combining_class: ok is false where Python raises
-// ValueError("Unknown character in unicodedata").
+// ValueError("Unknown character in unicodedata") -- a code point with class
+// 0 and no name. Every code point with a non-zero class has a name
+// (unicodedata 16.0.0, checked over all code points), so the refusal is
+// exactly "no name".
 func combiningClass(r rune) (int, bool) {
-	value := pyunicodedata.Combining(r)
-	if value == 0 && !pyunicodedata.HasName(r) {
+	if !pyunicodedata.HasName(r) {
 		return 0, false
 	}
-	return value, true
+	return pyunicodedata.Combining(r), true
 }
 
 func isScript(r rune, script string) bool {
@@ -144,17 +146,14 @@ func checkBidi(label []rune) *Error {
 				}
 			}
 		} else {
+			// A left-to-right label only gets here because it holds an R, AL
+			// or AN code point (bidiLabel), none of which this list allows,
+			// so the loop always refuses it before the end: Python's
+			// valid-ending bookkeeping for this branch never decides anything.
 			switch direction {
 			case "L", "EN", "ES", "CS", "ET", "ON", "BN", "NSM":
 			default:
 				return idnaError(KindBidi, "Invalid direction for codepoint at position %d in a left-to-right label", index+1)
-			}
-			switch direction {
-			case "L", "EN":
-				validEnding = true
-			case "NSM":
-			default:
-				validEnding = false
 			}
 		}
 	}
@@ -231,7 +230,8 @@ func validContextO(label []rune, pos int) bool {
 	case r == 0x00b7:
 		return pos > 0 && pos < len(label)-1 && label[pos-1] == 0x6c && label[pos+1] == 0x6c
 	case r == 0x0375:
-		if pos < len(label)-1 && len(label) > 1 {
+		// Python also tests len(label) > 1, which pos < len(label)-1 implies.
+		if pos < len(label)-1 {
 			return isScript(label[pos+1], "Greek")
 		}
 		return false

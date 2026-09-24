@@ -75,6 +75,12 @@ func handPicked() []string {
 		"a@" + long("\u00fc", 30) + "." + long("\u00fc", 30) + ".com", long("\u00fc", 60) + "@" + long("b", 60) + "." + long("c", 60) + ".com",
 		long("a", 2048), long("a", 2049), long("a", 2040) + "@b.com", "a" + long("\u0301", 40) + "@b.com", "a@x" + long("\u0301", 40) + ".com",
 		"a@b.c\u00f6m", "a@b.xn--c", "a@\u00df.com", "a@\u03c2.com", "a@\u0130.com", "a@K.com", "a@\u212a.com",
+		"a@[1.2.3.x]", "a@[IPv6:::1.2.3.x]", "a@[0.0.0.0]", "a@[IPv6:1:2:3:4:5:6:7:8:9:10:1.2.3.4]", "a@[IPv6:::1%a%b]",
+		"a@[IPv6:1::]", "a@[IPv6:1::2:]", "a@[IPv6:1::g]", "\"a\x01b\"@x.com", "\"a\x7fb\"@x.com", "a<\u0338b@x.com",
+		"N<\u0338 <a@x.com>", "\"a\\\\\"@x.com", "\"a\\\\\\\"b\"@x.com", "mar\u212aeting@x.com", "INFO@x.com ",
+		"x@" + strings.Repeat(long("a", 55)+"\u00fc.", 3) + long("b", 58) + ".com",
+		"x@" + strings.Repeat(long("a", 55)+"\u00fc.", 3) + long("b", 59) + ".com",
+		long("a", 70) + "@" + long("a", 55) + "\u00fc." + long("a", 55) + "\u00fc." + long("a", 55) + "\u00fc.com",
 	}
 	return cases
 }
@@ -195,6 +201,7 @@ func TestValidateEmailMatchesLivePydantic(t *testing.T) {
 		t.Fatalf("%d differences", differences)
 	}
 	checkGolden(t, selectGolden(corpus, want))
+	checkDotAtomMatchesLivePython(t, python)
 	if os.Getenv("DEV_HEALTH_REGENERATE_TABLES") == "1" {
 		return
 	}
@@ -309,4 +316,56 @@ func describe(v verdict) string {
 		return "ok " + codepoints(v.Email)
 	}
 	return fmt.Sprintf("refused %q", v.Reason)
+}
+
+const dotAtomProgram = `
+import json, sys
+from email_validator.syntax import check_dot_atom
+from email_validator.exceptions import EmailSyntaxError
+out = []
+for call in json.load(sys.stdin):
+    try:
+        check_dot_atom("".join(map(chr, call["label"] or [])), "start {}", "end {}", call["hostname"])
+        out.append("")
+    except EmailSyntaxError as exc:
+        out.append(str(exc))
+json.dump(out, sys.stdout)
+`
+
+// checkDotAtomMatchesLivePython calls check_dot_atom directly, on labels
+// no full address can hand it (an empty one included).
+func checkDotAtomMatchesLivePython(t *testing.T, python string) {
+	t.Helper()
+	type call struct {
+		Label    []rune `json:"label"`
+		Hostname bool   `json:"hostname"`
+	}
+	var calls []call
+	for _, label := range []string{"", ".", "-", "a", "a.", ".a", "a..b", "a-", "-a", "a.-b", "a-.b", "a--b", "-.", ".-", "\u00e9-", "..", "--"} {
+		for _, hostname := range []bool{false, true} {
+			calls = append(calls, call{Label: []rune(label), Hostname: hostname})
+		}
+	}
+	payload, _ := json.Marshal(calls)
+	command := exec.Command(python, "-c", dotAtomProgram)
+	command.Stdin = bytes.NewReader(payload)
+	var stderr bytes.Buffer
+	command.Stderr = &stderr
+	output, err := command.Output()
+	if err != nil {
+		t.Fatalf("live python: %v", pyoracle.RunError(python, err, stderr.Bytes()))
+	}
+	var want []string
+	if err := json.Unmarshal(output, &want); err != nil {
+		t.Fatal(err)
+	}
+	for index, c := range calls {
+		got := ""
+		if err := checkDotAtom(c.Label, "start %s", "end %s", c.Hostname); err != nil {
+			got = err.Reason
+		}
+		if got != want[index] {
+			t.Errorf("check_dot_atom(%q, hostname=%v): go %q, python %q", string(c.Label), c.Hostname, got, want[index])
+		}
+	}
 }

@@ -26,9 +26,26 @@ def run(fn, arg):
     except idna.IDNAError as exc:
         return {"kind": type(exc).__name__, "message": str(exc)}
 
+def direct(call, text):
+    pos = call.get("pos", 0)
+    try:
+        if call["fn"] == "contextj":
+            return {"ok": [1 if idna.core.valid_contextj(text, pos) else 0]}
+        if call["fn"] == "contexto":
+            return {"ok": [1 if idna.core.valid_contexto(text, pos) else 0]}
+        idna.core.check_bidi(text)
+        return {"ok": [1]}
+    except idna.IDNAError as exc:
+        return {"kind": type(exc).__name__, "message": str(exc)}
+    except ValueError as exc:
+        return {"kind": "ValueError", "message": str(exc)}
+
 out = []
 for call in json.load(sys.stdin):
     text = "".join(map(chr, call["text"] or []))
+    if call["fn"] in ("contextj", "contexto", "bidi"):
+        out.append(direct(call, text))
+        continue
     if call["fn"] == "decode":
         text = text.encode("ascii")
     fn = {
@@ -45,6 +62,8 @@ json.dump(out, sys.stdout)
 type behaviourCall struct {
 	Fn   string `json:"fn"`
 	Text []rune `json:"text"`
+	// Pos is the position the contextj/contexto calls ask about.
+	Pos int `json:"pos,omitempty"`
 }
 
 type behaviourResult struct {
@@ -86,9 +105,32 @@ func behaviourCorpus() []behaviourCall {
 		"xn--mnchen-3ya", "xn--mnchen-3ya.de.", "a。b", "a．b｡c", "ab--c", "-ab", "ab-", "l·l", "·l",
 		"͵α", "א׳", "・ア", "・", "١۱", "١٢", "x‌y", "क्‌",
 		"ب‌ب", "́a", "é", "é", "אa", "א1", "1א", "ا١۱", "aא",
+		"xn--a[b", "xn--ab_c", "xn--zz{", "xn--a:b", "xn--@", "xn--ZZ[", "xn--mnchen-3ya.", "a.b.", "A.", "\u05d0-\u05d1", "\u05d01-2",
+		"\u05d0\u0661\u0662", "\u05d01\u0661", "\u05d0\u0661\u0031", "\u0627\u06f1\u0661", "\u05d0\u05b0", "\u05d0,\u05d1", "\u05d0%\u05d1",
+		"a-1", "a1-", "ab\u0301", "a\u00b7", "l\u00b7", "\u0375", "\u0375\u03b1", "\u03b1\u0375", "\u05f3", "\u05d0\u05f4",
+		"\u30fb\u3042", "\u30fb\u4e00", "\u30fb\u30a2", "\u0669\u06f9", "\u0660", "\u06f0", "\u0669\u0661", "\u06f9\u06f1",
+		"\u0915\u200d", "\u200d", "\u200c\u0628", "\u0628\u200c", "\u0628\u064e\u200c\u0628", "\u0628\u200c\u0627",
+		"\ua872\u200c\u0628", "\u0628\u200c\u0628\u064e", "\u0915\u094d\u200c\u0915",
 	} {
 		for _, fn := range []string{"remap", "alabel", "ulabel", "encode", "decode"} {
 			add(fn, []rune(text))
+		}
+	}
+	// check_bidi, valid_contextj and valid_contexto on their own, over every
+	// code point below U+30000 in the positions their rules read.
+	contexto := []rune{0x00b7, 0x0375, 0x05f3, 0x05f4, 0x30fb, 0x0661, 0x06f1}
+	for r := rune(0); r < 0x30000; r++ {
+		calls = append(calls,
+			behaviourCall{Fn: "contexto", Text: []rune{r}},
+			behaviourCall{Fn: "contextj", Text: []rune{r, 0x200c, 0x0628}, Pos: 1},
+			behaviourCall{Fn: "contextj", Text: []rune{0x0628, 0x200c, r}, Pos: 1},
+			behaviourCall{Fn: "contextj", Text: []rune{r, 0x200d}, Pos: 1},
+			behaviourCall{Fn: "bidi", Text: []rune{0x05d0, r}},
+			behaviourCall{Fn: "bidi", Text: []rune{r, 0x05d0}},
+			behaviourCall{Fn: "bidi", Text: []rune{'a', r, 0x05d0}},
+		)
+		for _, c := range contexto {
+			calls = append(calls, behaviourCall{Fn: "contexto", Text: []rune{r, c, r}, Pos: 1})
 		}
 	}
 	random := rand.New(rand.NewSource(3180))
@@ -118,6 +160,22 @@ func sweepProbe(call behaviourCall) (string, rune, bool) {
 		return "alef_", t[1], true
 	case call.Fn == "alabel" && len(t) == 3 && t[0] == 0x0915 && t[1] == 0x094d:
 		return "virama_", t[2], true
+	case call.Fn == "contexto" && len(t) == 1:
+		return "_", t[0], true
+	case call.Fn == "contexto" && len(t) == 3:
+		return "_" + string(t[1]) + "_", t[0], true
+	case call.Fn == "contextj" && len(t) == 3 && t[0] == 0x0628:
+		return "beh_zwnj_", t[2], true
+	case call.Fn == "contextj" && len(t) == 3:
+		return "_zwnj_beh", t[0], true
+	case call.Fn == "contextj" && len(t) == 2:
+		return "_zwj", t[0], true
+	case call.Fn == "bidi" && len(t) == 2 && t[0] == 0x05d0:
+		return "alef_", t[1], true
+	case call.Fn == "bidi" && len(t) == 2:
+		return "_alef", t[0], true
+	case call.Fn == "bidi" && len(t) == 3:
+		return "a_alef", t[1], true
 	}
 	return "", 0, false
 }
@@ -140,6 +198,21 @@ func goBehaviour(call behaviourCall) behaviourResult {
 		out = asciiToRunes(encoded)
 	case "decode":
 		out, err = Decode(call.Text)
+	case "contextj":
+		valid, ok := validContextJ(call.Text, call.Pos)
+		if !ok {
+			// unicodedata.name raises this ValueError inside
+			// _combining_class; check_label turns it into an IDNAError.
+			return behaviourResult{Kind: "ValueError", Message: "no such name"}
+		}
+		return behaviourResult{OK: boolRunes(valid)}
+	case "contexto":
+		return behaviourResult{OK: boolRunes(validContextO(call.Text, call.Pos))}
+	case "bidi":
+		err = checkBidi(call.Text)
+		if err == nil {
+			out = []rune{1}
+		}
 	}
 	if err != nil {
 		return behaviourResult{Kind: kindNames[err.Kind], Message: err.Message}
@@ -148,6 +221,13 @@ func goBehaviour(call behaviourCall) behaviourResult {
 		out = []rune{}
 	}
 	return behaviourResult{OK: out}
+}
+
+func boolRunes(value bool) []rune {
+	if value {
+		return []rune{1}
+	}
+	return []rune{0}
 }
 
 // TestBehaviourMatchesLivePython compares UTS46Remap, Alabel, Ulabel,
@@ -197,6 +277,9 @@ func TestBehaviourMatchesLivePython(t *testing.T) {
 	for index, call := range calls {
 		expected := want[index]
 		class := call.Fn + "|ok"
+		if call.Fn == "contextj" || call.Fn == "contexto" || call.Fn == "bidi" {
+			class += fmt.Sprint(expected.OK)
+		}
 		if expected.Kind != "" {
 			class = call.Fn + "|" + expected.Kind + "|" + messageClass(expected.Message)
 		}

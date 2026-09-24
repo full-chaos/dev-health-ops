@@ -10,6 +10,7 @@ package emailvalidator
 
 import (
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -54,9 +55,6 @@ func isATEXT(r rune) bool {
 
 func isATEXTIntl(r rune) bool { return isATEXT(r) || r >= 0x80 }
 
-// ATEXT_RE: ATEXT plus the period.
-func atextOrDot(r rune) bool { return r == '.' || isATEXT(r) }
-
 // ATEXT_INTL_DOT_RE.
 func atextIntlOrDot(r rune) bool { return r == '.' || isATEXTIntl(r) }
 
@@ -95,25 +93,16 @@ func dotAtom(text []rune, atext func(rune) bool) bool {
 	return !previousDot
 }
 
-func isAlnumASCII(r rune) bool {
-	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')
-}
+// hostnameLabel and dotAtomTextHostname are rfc_constants.HOSTNAME_LABEL
+// and DOT_ATOM_TEXT_HOSTNAME, matched against the whole text (.match with
+// a trailing \Z).
+const hostnameLabel = `(?:(?:[a-zA-Z0-9][a-zA-Z0-9\-]*)?[a-zA-Z0-9])`
 
-// dotAtomHostname is DOT_ATOM_TEXT_HOSTNAME: labels of ASCII letters,
-// digits and inner hyphens, joined by single periods, over the whole text.
+var dotAtomTextHostname = regexp.MustCompile(`\A` + hostnameLabel + `(?:\.` + hostnameLabel + `)*\z`)
+
+// dotAtomHostname is DOT_ATOM_TEXT_HOSTNAME.match(text).
 func dotAtomHostname(text []rune) bool {
-	labels := splitRunes(text, '.')
-	for _, label := range labels {
-		if len(label) == 0 || !isAlnumASCII(label[0]) || !isAlnumASCII(label[len(label)-1]) {
-			return false
-		}
-		for _, r := range label {
-			if !isAlnumASCII(r) && r != '-' {
-				return false
-			}
-		}
-	}
-	return true
+	return dotAtomTextHostname.MatchString(string(text))
 }
 
 func splitRunes(text []rune, sep rune) [][]rune {

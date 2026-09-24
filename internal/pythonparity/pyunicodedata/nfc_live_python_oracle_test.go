@@ -33,6 +33,12 @@ func nfcCorpus() [][]rune {
 			corpus = append(corpus, []rune{'e', r, 0x0301})
 		}
 	}
+	// Hangul: the code points just past the syllable block that are
+	// multiples of the trailing-consonant count from its start, each
+	// followed by a trailing consonant (not a composition in Python).
+	for _, first := range []rune{0xd7a4, 0xd7c0, 0xd7dc, 0xabff, 0xac00, 0xd7a3} {
+		corpus = append(corpus, []rune{first, 0x11a8}, []rune{first, 0x1161}, []rune{0x1100, first})
+	}
 	marks := []rune{0x0301, 0x0327, 0x0316, 0x05b0, 0x0345, 0x093c, 0x094d, 0x3099, 0x1d165, 0x0e38, 0x0f71, 0x0f72}
 	bases := []rune{'a', 'e', 'A', 'o', 0x00e7, 0x0915, 0x304b, 0x0391, 0x03b1, 0x1100, 0x1161, 0x11a8, 0xac00, 0x0b47, 0x1025}
 	for n := 25; n <= 70; n += 3 {

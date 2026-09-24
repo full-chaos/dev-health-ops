@@ -42,6 +42,9 @@ type Entitlement struct {
 // EntitlementStore looks up one org's agent_context_runtime entitlement.
 type EntitlementStore interface {
 	Lookup(ctx context.Context, orgID string) (Entitlement, error)
+	// Ready reports whether the store can be read now; the health route
+	// answers 503 when it cannot.
+	Ready(ctx context.Context) error
 }
 
 // PostgresEntitlementStore is the production EntitlementStore. Unlike
@@ -85,6 +88,26 @@ func (store PostgresEntitlementStore) Lookup(ctx context.Context, orgID string) 
 		return Entitlement{}, fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
 	return Entitlement{OrgID: orgID, AgentContextRuntime: decision.Allowed}, nil
+}
+
+// readyTimeout bounds the health route's ping, so an unreachable store is a
+// prompt 503 rather than a hung probe.
+const readyTimeout = 2 * time.Second
+
+// Ready makes the first read the entitlement route makes (the organizations
+// table), with no rows returned. So it fails when Postgres is unreachable
+// and when that table cannot be read, as Python's health read fails in both
+// cases.
+func (store PostgresEntitlementStore) Ready(ctx context.Context) error {
+	if store.Pool == nil {
+		return ErrUnavailable
+	}
+	ctx, cancel := context.WithTimeout(ctx, readyTimeout)
+	defer cancel()
+	if _, err := store.Pool.Exec(ctx, `SELECT 1 FROM organizations LIMIT 0`); err != nil {
+		return fmt.Errorf("%w: %w", ErrUnavailable, err)
+	}
+	return nil
 }
 
 type existsQueryer interface {

@@ -18,8 +18,11 @@ import (
 type fakeStore struct {
 	entitlement Entitlement
 	err         error
+	readyErr    error
 	gotOrgID    string
 }
+
+func (f *fakeStore) Ready(context.Context) error { return f.readyErr }
 
 func (f *fakeStore) Lookup(_ context.Context, orgID string) (Entitlement, error) {
 	f.gotOrgID = orgID
@@ -34,8 +37,8 @@ func newTestServer(store EntitlementStore) *httptest.Server {
 	return httptest.NewServer(mux)
 }
 
-func TestHealthHandlerIsStaticAndUnconditional(t *testing.T) {
-	server := newTestServer(nil)
+func TestHealthHandlerReadyStoreIsTheStaticBody(t *testing.T) {
+	server := newTestServer(&fakeStore{})
 	defer server.Close()
 
 	response, err := http.Get(server.URL + "/api/v1/internal/acr/health")
@@ -65,6 +68,34 @@ func TestHealthHandlerIsStaticAndUnconditional(t *testing.T) {
 	}
 	if response.Header.Get("Content-Type") != "application/json" {
 		t.Fatalf("Content-Type = %q", response.Header.Get("Content-Type"))
+	}
+}
+
+// TestHealthHandlerUnusableStoreIsServiceUnavailable: Python's health route
+// answers 503 when its Postgres read fails, and acr reads a non-200 health
+// as "entitlements unavailable".
+func TestHealthHandlerUnusableStoreIsServiceUnavailable(t *testing.T) {
+	for name, store := range map[string]EntitlementStore{
+		"nil store":      nil,
+		"ping fails":     &fakeStore{readyErr: errors.Join(errors.New("connection refused"), ErrUnavailable)},
+		"any ping error": &fakeStore{readyErr: errors.New("boom")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			server := newTestServer(store)
+			defer server.Close()
+			response, err := http.Get(server.URL + "/api/v1/internal/acr/health")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer response.Body.Close()
+			raw, err := io.ReadAll(response.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if response.StatusCode != http.StatusServiceUnavailable || string(raw) != `{"detail":"Service unavailable"}` {
+				t.Fatalf("health = %d %q, want 503 {\"detail\":\"Service unavailable\"}", response.StatusCode, raw)
+			}
+		})
 	}
 }
 
@@ -170,7 +201,7 @@ func TestRoutesCarryNoCredentialsOrAuthz(t *testing.T) {
 // with json.Decoder and requires io.EOF right after the value, so no
 // trailing bytes may follow it. The policy writers send none.
 func TestResponseBodyHasNoTrailingBytesAfterTheJSONValue(t *testing.T) {
-	server := newTestServer(nil)
+	server := newTestServer(&fakeStore{})
 	defer server.Close()
 
 	response, err := http.Get(server.URL + "/api/v1/internal/acr/health")

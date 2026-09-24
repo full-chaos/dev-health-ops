@@ -43,7 +43,7 @@ func Routes(deps Deps) []httpapi.Route {
 		logger = slog.Default()
 	}
 	return []httpapi.Route{
-		{Method: http.MethodGet, Pattern: "/api/v1/internal/acr/health", Handler: healthHandler()},
+		{Method: http.MethodGet, Pattern: "/api/v1/internal/acr/health", Handler: healthHandler(deps.Store, logger)},
 		{
 			Method: http.MethodGet, Pattern: "/api/v1/internal/acr/entitlements/{org_id}",
 			Handler: entitlementHandler(deps.Store, logger),
@@ -65,16 +65,27 @@ type healthResponse struct {
 	Status        string `json:"status"`
 }
 
-// healthHandler is unconditional and dependency-free: with no credential
-// check on this route, the Python success body
-// (ACRServiceHealthResponse's field defaults, api/internal/acr.py:40-46) was
-// already static regardless of database state, so this route stays exactly
-// as cheap.
-func healthHandler() http.Handler {
+// healthHandler answers whether the entitlement service is usable, as
+// acr's client reads it. Python's health route reads Postgres on every call
+// (its credential lookup, api/internal/acr.py:93-103) and answers 503
+// "Service unavailable" when that read fails, so the Go route makes the
+// entitlement store's first read (EntitlementStore.Ready): a nil store or a
+// failed read is that 503, anything else the static success body. No credential is checked (see the package comment).
+func healthHandler(store EntitlementStore, logger *slog.Logger) http.Handler {
 	response := healthResponse{
 		SchemaVersion: healthSchemaVersion, Service: "dev-health-ops", Status: "ok",
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if store == nil {
+			logger.ErrorContext(r.Context(), "acr health: no entitlement store configured")
+			writeDetail(w, http.StatusServiceUnavailable, "Service unavailable")
+			return
+		}
+		if err := store.Ready(r.Context()); err != nil {
+			logger.ErrorContext(r.Context(), "acr health: entitlement store unreachable", slog.Any("error", err))
+			writeDetail(w, http.StatusServiceUnavailable, "Service unavailable")
+			return
+		}
 		body := pyjson.NewObject()
 		body.Set("schema_version", response.SchemaVersion)
 		body.Set("service", response.Service)

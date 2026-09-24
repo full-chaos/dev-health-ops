@@ -28,6 +28,7 @@ type reader interface {
 	backfillJobs(ctx context.Context, orgID string, limit, offset int64) ([]backfillJob, error)
 	unitActivity(ctx context.Context, orgID string, runID uuid.UUID) (*time.Time, *time.Time, error)
 	runStatusCounts(ctx context.Context, orgID string, runID uuid.UUID) (map[string]int64, error)
+	coverageProjection(ctx context.Context, orgID string, configID uuid.UUID, lookbackDays, version int) (*coverageProjection, error)
 }
 
 var _ reader = store{}
@@ -454,4 +455,29 @@ func (s store) runStatusCounts(ctx context.Context, orgID string, runID uuid.UUI
 		counts[status] = count
 	}
 	return counts, rows.Err()
+}
+
+// coverageProjection is one sync_coverage_projections row as
+// build_sync_coverage_summary reads it: the stored payload text and whether
+// invalidated_at is set.
+type coverageProjection struct {
+	Payload     string
+	Invalidated bool
+}
+
+// coverageProjection is build_sync_coverage_summary's select: the org's row
+// for the config at the lookback and projection version, nil when none.
+func (s store) coverageProjection(ctx context.Context, orgID string, configID uuid.UUID, lookbackDays, version int) (*coverageProjection, error) {
+	var out coverageProjection
+	err := s.pool.QueryRow(ctx, `SELECT payload::text, invalidated_at IS NOT NULL
+FROM sync_coverage_projections
+WHERE org_id = $1 AND sync_config_id = $2 AND history_lookback_days = $3 AND projection_version = $4`,
+		orgID, configID, lookbackDays, version).Scan(&out.Payload, &out.Invalidated)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &out, nil
 }

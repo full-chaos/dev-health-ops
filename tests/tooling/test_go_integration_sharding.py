@@ -111,6 +111,9 @@ EXPECTED_PACKAGES = {
     # columns, the changes/request_metadata "{}" coercion, the org_id FK
     # violation) against a real Postgres.
     "internal/api/audit",
+    # The Stripe webhook dispatch oracle: executes the real Python route per
+    # event type (skips without DEV_HEALTH_LIVE_PYTHON_ORACLES=1).
+    "internal/api/billing",
     "internal/api/externalingest",
     "internal/api/externalurl",
     "internal/api/licensing",

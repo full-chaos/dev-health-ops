@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -141,6 +142,27 @@ func TestSubscriptionEventsResolveTheOwningOrg(t *testing.T) {
 		`SELECT count(*)::text FROM billing_notifications WHERE org_id = '`+orgA+`' AND notification_type = 'subscription_changed'`, "0")
 	expect("a subscription nobody owns is not recorded",
 		`SELECT count(*)::text FROM subscriptions WHERE stripe_subscription_id = 'sub_own_none'`, "0")
+	// Org A subscribes again; then the old cancellation is redelivered. It
+	// was applied once already, so it must not revoke the new license.
+	send("created: a new subscription after the cancellation", "evt_own_next", "customer.subscription.created", func(object map[string]any) {
+		object["id"], object["customer"], object["status"] = "sub_own_next", "cus_A", "active"
+		setPrice(object, "price_seed_y")
+	})
+	// The checkout that created it issues the license (checkout.session.completed,
+	// outside this test): set here as that route leaves it.
+	if got := venueoracle.TableRows(t, ctx, goURI, `UPDATE org_licenses SET tier = 'team', is_valid = true WHERE org_id = '`+orgA+`' RETURNING org_id::text`); got != orgA {
+		t.Fatalf("license reissue: %s", got)
+	}
+	before := venueoracle.TableRows(t, ctx, goURI, `SELECT tier || ' ' || is_valid::text FROM org_licenses WHERE org_id = '`+orgA+`'`)
+	send("deleted: redelivered after the new subscription", "evt_own_deleted", "customer.subscription.deleted", func(object map[string]any) {
+		object["id"], object["customer"], object["status"] = "sub_own_new", "cus_other", "canceled"
+		setPrice(object, "price_seed_y")
+	})
+	if !strings.HasSuffix(before, " true") {
+		t.Errorf("the new subscription did not validate org A's license: %s", before)
+	}
+	expect("the redelivered cancellation leaves the new license as it was",
+		`SELECT tier || ' ' || is_valid::text FROM org_licenses WHERE org_id = '`+orgA+`'`, before)
 	t.Log("\n" + receipt)
 	venueoracle.WriteGoOnlyProof(t, "Go resolves the org of subscription events without org metadata from the stored subscription or the license customer; the Python plane skips them (CHAOS-6525)")
 }

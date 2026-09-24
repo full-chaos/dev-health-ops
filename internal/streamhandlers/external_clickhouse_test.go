@@ -532,16 +532,41 @@ func TestClickHouseExternalSinkFailsClosedOnNumericOverflow(t *testing.T) {
 	// nan for the NaN token -- and Float64 stores them, so the Go sink must
 	// too (measured on a real ClickHouse: TestMeasureExternalSinkOverflowAgainstPython,
 	// CHAOS-6415). Failing the whole batch for them was stricter than Python.
+	// A json.Number is an integer literal (float literals decode to float64).
+	// One past float64's range is what Python's validation refuses for a
+	// float field, so the sink must not store it as +Inf (found by review:
+	// Go's own validator accepts it today, so the sink is the last guard).
+	t.Run("an integer literal past float64 range is still refused, never stored as +Inf", func(t *testing.T) {
+		connection := &productSink{batch: &productBatch{}}
+		sink, err := NewClickHouseExternalBatchSink(connection)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sink.now = func() time.Time { return now }
+		_, err = sink.Write(context.Background(), externalSinkBatch{
+			Pointer: pointer, SourceID: uuid.New(),
+			Records: []externalSinkRecord{externalSinkFixture("work_item.v1", map[string]any{
+				"externalKey": "7", "provider": "github", "title": "Issue", "type": "issue", "status": "todo",
+				"createdAt": "2026-07-22T10:00:00Z", "repositoryExternalId": pointer.SourceInstance,
+				"storyPoints": json.Number("1" + strings.Repeat("0", 400)),
+			})},
+		})
+		if err == nil || !strings.Contains(err.Error(), "work_items.story_points") {
+			t.Fatalf("Write error = %v, want the story_points overflow refusal", err)
+		}
+		if connection.batch.sent {
+			t.Fatal("nothing should have been sent")
+		}
+	})
+
 	t.Run("a float that overflows float64 is stored as +/-Inf like Python's, never null or a failure", func(t *testing.T) {
 		for name, item := range map[string]struct {
 			points any
 			want   func(float64) bool
 		}{
-			"json.Number 1e1000":  {json.Number("1e1000"), func(v float64) bool { return math.IsInf(v, 1) }},
-			"float64 +Inf":        {math.Inf(1), func(v float64) bool { return math.IsInf(v, 1) }},
-			"json.Number -1e1000": {json.Number("-1e1000"), func(v float64) bool { return math.IsInf(v, -1) }},
-			"float64 -Inf":        {math.Inf(-1), func(v float64) bool { return math.IsInf(v, -1) }},
-			"float64 NaN":         {math.NaN(), math.IsNaN},
+			"float64 +Inf": {math.Inf(1), func(v float64) bool { return math.IsInf(v, 1) }},
+			"float64 -Inf": {math.Inf(-1), func(v float64) bool { return math.IsInf(v, -1) }},
+			"float64 NaN":  {math.NaN(), math.IsNaN},
 		} {
 			connection := &productSink{batch: &productBatch{}}
 			sink, err := NewClickHouseExternalBatchSink(connection)

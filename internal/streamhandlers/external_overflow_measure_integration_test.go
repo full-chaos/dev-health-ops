@@ -217,8 +217,10 @@ func TestExternalSinkOutcomesMatchPythonAgainstClickHouse(t *testing.T) {
 		t.Logf("go     %-55s err=%v stored: %s", item.Name, writeErr, goStored)
 
 		// A record Python's own shape validation rejects never reaches its
-		// sink; the Go plane rejects it in recordvalidation (its oracle), so
-		// the sink comparison does not apply.
+		// sink, so there is no sink outcome to compare. Go's validator does
+		// not yet reject every such record (an integer past float64 range in
+		// a float field: CHAOS-6491), so this comparison skips them rather
+		// than claim they agree; the sink still refuses that value.
 		if rejections, _ := results[i]["rejections"].([]any); len(rejections) > 0 {
 			continue
 		}

@@ -174,6 +174,12 @@ func (s *membersStub) jiraSearch(w http.ResponseWriter, query url.Values, write 
 			issue("2026-09-05T08:00:00", actor("acc-7", "Seven", ""), "null", "null")+","+
 			issue("2026-09-06T08:00:00+0000", actor("acc-7", "", ""), "null", "null")+
 			`],"isLast":true}`, nil)
+	case strings.Contains(strings.ToLower(jql), "project = 'badactor'"):
+		write(200, `{"issues":[{"key":"B-1","fields":{"assignee":{"accountId":["acc-odd"],"displayName":"Odd"}}}],"isLast":true}`, nil)
+	case strings.Contains(strings.ToLower(jql), "project = 'objactor'"):
+		write(200, `{"issues":[{"key":"B-2","fields":{"assignee":{"accountId":{"k":1}}}},{"key":"B-3","fields":{"assignee":{"accountId":[]}}}],"isLast":true}`, nil)
+	case strings.Contains(strings.ToLower(jql), "project = 'numactor'"):
+		write(200, `{"issues":[{"key":"B-4","fields":{"assignee":{"accountId":12,"displayName":"Num"},"reporter":{"accountId":"12"},"creator":{"accountId":true}}}],"isLast":true}`, nil)
 	case strings.Contains(strings.ToLower(jql), "project = 'empty'"):
 		write(200, `{"issues":[]}`, nil)
 	default:

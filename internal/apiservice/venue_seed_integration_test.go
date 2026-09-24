@@ -563,7 +563,7 @@ func venueRequests(f venueFixture, tokens map[string]string) []venueoracle.Reque
 	// the shared stub (membersStub); credentials are seeded per name.
 	dm := func(team, query string) string { return teams + "/" + team + "/discover-members" + query }
 	im := func(team, query string) string { return teams + "/" + team + "/infer-members" + query }
-	for _, id := range []string{"leademail", "leadless", "naive", "empty", "gl:design", "jira:design", "IMP"} {
+	for _, id := range []string{"leademail", "leadless", "naive", "empty", "gl:design", "jira:design", "IMP", "badactor", "objactor", "numactor"} {
 		add("members: create team "+id, "POST", teams, adm, b64(`{"team_id":"`+id+`","name":"`+id+`"}`))
 	}
 	add("members: discover anonymous", "GET", dm("design", "?provider=jira"), nil, nil)
@@ -613,6 +613,9 @@ func venueRequests(f venueFixture, tokens map[string]string) []venueoracle.Reque
 	add("members: infer window_days 365", "GET", im("qa", "?credential_name=jira-ok&window_days=365"), bearer("admin"), nil)
 	add("members: infer window_days padded int", "GET", im("qa", "?credential_name=jira-ok&window_days=%2030%20"), bearer("admin"), nil)
 	add("members: infer naive and aware timestamps", "GET", im("naive", "?credential_name=jira-ok"), bearer("admin"), nil)
+	add("members: infer a list account id is unhashable", "GET", im("badactor", "?credential_name=jira-ok"), bearer("admin"), nil)
+	add("members: infer an object account id is unhashable", "GET", im("objactor", "?credential_name=jira-ok"), bearer("admin"), nil)
+	add("members: infer numeric and boolean account ids stay distinct keys", "GET", im("numactor", "?credential_name=jira-ok"), bearer("admin"), nil)
 	add("members: infer no issues", "GET", im("empty", "?credential_name=jira-ok"), bearer("admin"), nil)
 	add("members: infer unknown project is a provider failure", "GET", im("IMP", "?credential_name=jira-ok"), bearer("admin"), nil)
 

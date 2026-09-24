@@ -236,6 +236,13 @@ func inferJiraMembers(ctx context.Context, credential providerfoundation.Credent
 		if !truthy(idValue) {
 			return
 		}
+		// Python keys the map by the raw value: a list or an object is
+		// unhashable (TypeError, a 500 on the route).
+		switch idValue.(type) {
+		case []pyjson.Value, *pyjson.Object:
+			comparisonErr = fmt.Errorf("unhashable type: accountId is %T", idValue)
+			return
+		}
 		// Python keys the map by the raw value, so 12 and "12" stay apart.
 		key := fmt.Sprintf("%T:%s", idValue, pythonStr(idValue))
 		current := activity[key]

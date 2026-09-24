@@ -211,23 +211,42 @@ func (c *StoreErrors) WritePrometheus(w io.Writer) error {
 	return nil
 }
 
+// Declare makes the limiter's store-error series exist at zero, so an alert
+// can be written against the absence of failure. LimitWith does it for the
+// limiters it wraps; a handler that calls AllowCounted itself calls it once at
+// construction.
+func (l *KeyedLimiter) Declare() {
+	if l != nil {
+		RateLimitStoreErrors.declare(l.limit.ID)
+	}
+}
+
+// AllowCounted is Allow for a caller that has already resolved its key (a
+// handler that authenticates first): a store error is logged with the limit's
+// ID (never the caller key or path) and counted in RateLimitStoreErrors, then
+// returned; the caller answers the Python api's unhandled-error 500.
+func (l *KeyedLimiter) AllowCounted(ctx context.Context, key, path string) (bool, error) {
+	allowed, err := l.Allow(ctx, key, path)
+	if err != nil {
+		id := l.ID()
+		slog.ErrorContext(ctx, "rate limit store failed; answering 500",
+			slog.String("limit", id), slog.String("backend", l.Backend()), slog.String("error", err.Error()))
+		RateLimitStoreErrors.inc(id)
+	}
+	return allowed, err
+}
+
 // LimitWith rejects a request once its (keyFunc(r), r.URL.Path) pair
 // exceeds its limiter, rendering the refusal with write. A store error is
 // the Python api's unhandled-error 500 (slowapi has no swallow_errors), never
 // a silent pass: it is logged with the limit's ID (never the caller key or
 // path) and counted in RateLimitStoreErrors.
 func LimitWith(limiter *KeyedLimiter, keyFunc KeyFunc, write ErrorWriter) func(http.Handler) http.Handler {
-	id := limiter.ID()
-	if limiter != nil {
-		RateLimitStoreErrors.declare(id)
-	}
+	limiter.Declare()
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			allowed, err := limiter.Allow(r.Context(), keyFunc(r), r.URL.Path)
+			allowed, err := limiter.AllowCounted(r.Context(), keyFunc(r), r.URL.Path)
 			if err != nil {
-				slog.ErrorContext(r.Context(), "rate limit store failed; answering 500",
-					slog.String("limit", id), slog.String("backend", limiter.Backend()), slog.String("error", err.Error()))
-				RateLimitStoreErrors.inc(id)
 				write(w, r, CodeInternal)
 				return
 			}

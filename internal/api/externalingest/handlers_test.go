@@ -10,7 +10,7 @@ import (
 // TestHandleGetSchema exercises router.py's get_schema directly -- no
 // database needed, since schema discovery is unauthenticated.
 func TestHandleGetSchema(t *testing.T) {
-	deps := Deps{routeLimiters: newRouteLimiters(nil)}
+	deps := Deps{routeLimiters: newRouteLimiters(nil, nil)}
 	handler := deps.handleGetSchema()
 
 	t.Run("unknown version is 404", func(t *testing.T) {

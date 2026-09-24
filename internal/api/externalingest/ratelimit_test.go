@@ -1,10 +1,15 @@
 package externalingest
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 )
 
 func TestKeyedBucketAllowsUpToBurstThenBlocks(t *testing.T) {
@@ -44,11 +49,11 @@ func TestKeyedBucketTestDoesNotConsume(t *testing.T) {
 
 func TestRouteLimitersEnforceThePerMinuteCeilings(t *testing.T) {
 	now := time.Unix(0, 0)
-	limiters := newRouteLimiters(func() time.Time { return now })
+	limiters := newRouteLimiters(nil, func() time.Time { return now })
 
 	cases := []struct {
 		name   string
-		bucket *keyedBucket
+		bucket *httpapi.KeyedLimiter
 		ceil   int
 	}{
 		{"schemasList", limiters.schemasList, ingestReadLimitPerMinute},
@@ -62,17 +67,17 @@ func TestRouteLimitersEnforceThePerMinuteCeilings(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			key := "k"
 			for i := 0; i < c.ceil; i++ {
-				if err := rateLimitedOrTooManyRequests(c.bucket, key); err != nil {
+				if err := rateLimitedOrTooManyRequests(ctx, c.bucket, key, "/p"); err != nil {
 					t.Fatalf("request %d/%d unexpectedly rate-limited: %v", i+1, c.ceil, err)
 				}
 			}
-			err := rateLimitedOrTooManyRequests(c.bucket, key)
+			err := rateLimitedOrTooManyRequests(ctx, c.bucket, key, "/p")
 			if err == nil || err.Status != 429 || err.Code != "rate_limited" {
 				t.Fatalf("request %d must be rate-limited, got %v", c.ceil+1, err)
 			}
 			// A different key has its own budget -- per-caller keying, not
 			// one bucket shared by every caller of a route.
-			if err := rateLimitedOrTooManyRequests(c.bucket, "different-key"); err != nil {
+			if err := rateLimitedOrTooManyRequests(ctx, c.bucket, "different-key", "/p"); err != nil {
 				t.Fatalf("a different key must not share an exhausted bucket: %v", err)
 			}
 		})
@@ -80,7 +85,7 @@ func TestRouteLimitersEnforceThePerMinuteCeilings(t *testing.T) {
 }
 
 func TestRateLimitedOrTooManyRequestsWithANilBucketAlwaysAllows(t *testing.T) {
-	if err := rateLimitedOrTooManyRequests(nil, "k"); err != nil {
+	if err := rateLimitedOrTooManyRequests(ctx, nil, "k", "/p"); err != nil {
 		t.Fatalf("a nil bucket (unrate-limited route, e.g. availability) must never refuse: %v", err)
 	}
 }
@@ -112,5 +117,74 @@ func TestForwardedIPUsesPeerUnlessTrusted(t *testing.T) {
 	trusted.Header.Set("X-Forwarded-For", "198.51.100.9, 10.0.0.1")
 	if got := forwardedIP(trusted); got != "198.51.100.9" {
 		t.Errorf("trusted peer: got %q, want the forwarded header's first hop", got)
+	}
+}
+
+// slowapi buckets by (key, exact path): requests for different URLs never
+// share a budget (CHAOS-6480: 125 lookups of 125 distinct batch ids were
+// 125x404 in Python and 120x404 + 5x429 when Go kept one bucket per token).
+func TestRouteLimitersBucketPerPath(t *testing.T) {
+	now := time.Unix(0, 0)
+	limiters := newRouteLimiters(nil, func() time.Time { return now })
+	for i := 0; i < 3*ingestReadLimitPerMinute; i++ {
+		path := "/api/v1/external-ingest/batches/" + string(rune('a'+i%26)) + string(rune('a'+i/26))
+		if err := rateLimitedOrTooManyRequests(ctx, limiters.getBatch, "token", path); err != nil {
+			t.Fatalf("request %d on its own path was refused: %v", i, err)
+		}
+	}
+	for i := 0; i < ingestReadLimitPerMinute; i++ {
+		if err := rateLimitedOrTooManyRequests(ctx, limiters.getBatch, "token", "/same"); err != nil {
+			t.Fatalf("request %d on a fresh path was refused: %v", i, err)
+		}
+	}
+	if err := rateLimitedOrTooManyRequests(ctx, limiters.getBatch, "token", "/same"); err == nil {
+		t.Fatal("the 121st request on one path must be refused")
+	}
+}
+
+// slowapi's default strategy is a fixed window that starts at the first hit
+// and is not refilled meanwhile (the token bucket refilled during a burst:
+// CI answered 124x404 then 429 for a 125-request burst).
+func TestRouteLimitersFixedWindowDoesNotRefillWithinTheWindow(t *testing.T) {
+	now := time.Unix(0, 0)
+	limiters := newRouteLimiters(nil, func() time.Time { return now })
+	for i := 0; i < ingestReadLimitPerMinute; i++ {
+		if err := rateLimitedOrTooManyRequests(ctx, limiters.getBatch, "token", "/p"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	now = now.Add(30 * time.Second)
+	if err := rateLimitedOrTooManyRequests(ctx, limiters.getBatch, "token", "/p"); err == nil {
+		t.Fatal("half a window later the budget must still be spent")
+	}
+	now = now.Add(31 * time.Second)
+	if err := rateLimitedOrTooManyRequests(ctx, limiters.getBatch, "token", "/p"); err != nil {
+		t.Fatalf("a full window after the first hit the budget is new: %v", err)
+	}
+}
+
+var ctx = context.Background()
+
+// A store that cannot answer is the Python api's unhandled 500, never a
+// request let through, and the limiter counts it (a scrape can alert on it).
+type failingCounters struct{ httpapi.CounterStore }
+
+func (failingCounters) Increment(context.Context, httpapi.Hit) (int64, error) {
+	return 0, errors.New("valkey down")
+}
+func (failingCounters) Backend() string { return "redis" }
+
+func TestRouteLimitersAStoreErrorIsTheUnhandled500(t *testing.T) {
+	limiters := newRouteLimiters(failingCounters{}, nil)
+	err := rateLimitedOrTooManyRequests(ctx, limiters.getBatch, "token", "/p")
+	if err == nil || err.Status != http.StatusInternalServerError {
+		t.Fatalf("a store error must answer the unhandled 500, got %v", err)
+	}
+	var out strings.Builder
+	if writeErr := httpapi.RateLimitStoreErrors.WritePrometheus(&out); writeErr != nil {
+		t.Fatal(writeErr)
+	}
+	if !strings.Contains(out.String(), `dev_health_api_rate_limit_store_errors_total{limit="external_ingest_batches_get"} 1`) {
+		t.Fatalf("the store error must be counted against its limit id:\n%s", out.String())
 	}
 }

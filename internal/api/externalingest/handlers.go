@@ -23,7 +23,7 @@ import (
 // handleListSchemas is router.py's list_schemas (GET /schemas).
 func (d Deps) handleListSchemas() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if err := rateLimitedOrTooManyRequests(d.routeLimiters.schemasList, forwardedIP(r)); err != nil {
+		if err := rateLimitedOrTooManyRequests(r.Context(), d.routeLimiters.schemasList, forwardedIP(r), r.URL.Path); err != nil {
 			writeIngestError(w, err)
 			return
 		}
@@ -38,7 +38,7 @@ func (d Deps) handleListSchemas() http.HandlerFunc {
 // handleGetSchema is router.py's get_schema (GET /schemas/{schema_version}).
 func (d Deps) handleGetSchema() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if err := rateLimitedOrTooManyRequests(d.routeLimiters.schemasGet, forwardedIP(r)); err != nil {
+		if err := rateLimitedOrTooManyRequests(r.Context(), d.routeLimiters.schemasGet, forwardedIP(r), r.URL.Path); err != nil {
 			writeIngestError(w, err)
 			return
 		}
@@ -141,7 +141,7 @@ func (d Deps) handleValidate() http.HandlerFunc {
 			writeIngestError(w, authErr)
 			return
 		}
-		if err := rateLimitedOrTooManyRequests(d.routeLimiters.validate, ingestTokenRateLimitKey(authCtx.TokenID)); err != nil {
+		if err := rateLimitedOrTooManyRequests(r.Context(), d.routeLimiters.validate, ingestTokenRateLimitKey(authCtx.TokenID), r.URL.Path); err != nil {
 			writeIngestError(w, err)
 			return
 		}
@@ -221,7 +221,7 @@ func (d Deps) handleAcceptBatch() http.HandlerFunc {
 			writeIngestError(w, authErr)
 			return
 		}
-		if err := rateLimitedOrTooManyRequests(d.routeLimiters.batches, ingestTokenRateLimitKey(authCtx.TokenID)); err != nil {
+		if err := rateLimitedOrTooManyRequests(r.Context(), d.routeLimiters.batches, ingestTokenRateLimitKey(authCtx.TokenID), r.URL.Path); err != nil {
 			writeIngestError(w, err)
 			return
 		}
@@ -478,7 +478,7 @@ func (d Deps) handleListBatches() http.HandlerFunc {
 			policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(problems), nil)
 			return
 		}
-		if err := rateLimitedOrTooManyRequests(d.routeLimiters.listBatches, ingestTokenRateLimitKey(authCtx.TokenID)); err != nil {
+		if err := rateLimitedOrTooManyRequests(r.Context(), d.routeLimiters.listBatches, ingestTokenRateLimitKey(authCtx.TokenID), r.URL.Path); err != nil {
 			writeIngestError(w, err)
 			return
 		}
@@ -533,7 +533,7 @@ func (d Deps) handleGetBatch() http.HandlerFunc {
 			policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(problems), nil)
 			return
 		}
-		if err := rateLimitedOrTooManyRequests(d.routeLimiters.getBatch, ingestTokenRateLimitKey(authCtx.TokenID)); err != nil {
+		if err := rateLimitedOrTooManyRequests(r.Context(), d.routeLimiters.getBatch, ingestTokenRateLimitKey(authCtx.TokenID), r.URL.Path); err != nil {
 			writeIngestError(w, err)
 			return
 		}

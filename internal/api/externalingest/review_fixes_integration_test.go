@@ -104,7 +104,7 @@ func TestAcceptBatchAgainstFaultsAndEdgeCases(t *testing.T) {
 		// deps.Valkey is nil: enqueueBatch always fails closed
 		// (errStreamUnavailable), forcing the markStreamUnavailableTx path,
 		// which the CHECK constraint above then also fails.
-		deps := Deps{Pool: pool, limiters: newAuthLimiters(nil), routeLimiters: newRouteLimiters(nil)}
+		deps := Deps{Pool: pool, limiters: newAuthLimiters(nil), routeLimiters: newRouteLimiters(nil, nil)}
 		body := `{
 			"schemaVersion": "external-ingest.v1",
 			"idempotencyKey": "batch-mark-fault",
@@ -259,19 +259,18 @@ func TestAcceptBatchAgainstFaultsAndEdgeCases(t *testing.T) {
 		for range 125 {
 			statuses[do(deps.handleGetBatch(), "/api/v1/external-ingest/batches/"+unknown+"?errorOffset="+huge, unknown)]++
 		}
-		// The limiter is a token bucket that refills while the burst runs, so
-		// the exact split is timing-dependent (CI answered 124x404 then 429);
-		// what matters is that every request was charged: the first 120 pass
-		// as 404s, later ones are limited, and none reaches the 500.
-		if statuses[http.StatusNotFound] < 120 || statuses[http.StatusTooManyRequests] < 1 || statuses[http.StatusNotFound]+statuses[http.StatusTooManyRequests] != 125 {
-			t.Fatalf("GET /batches/{id} oversized errorOffset x125 answered %v, want >=120x404 then 429s only", statuses)
+		// The limiter is slowapi's fixed window (per token and exact path): the
+		// first 120 pass as 404s and the rest are limited, however long the
+		// burst takes inside the window.
+		if statuses[http.StatusNotFound] != 120 || statuses[http.StatusTooManyRequests] != 5 {
+			t.Fatalf("GET /batches/{id} oversized errorOffset x125 answered %v, want 120x404 then 5x429", statuses)
 		}
 		statuses = map[int]int{}
 		for range 125 {
 			statuses[do(deps.handleListBatches(), "/api/v1/external-ingest/batches?offset="+huge, "")]++
 		}
-		if statuses[http.StatusInternalServerError] < 120 || statuses[http.StatusTooManyRequests] < 1 || statuses[http.StatusInternalServerError]+statuses[http.StatusTooManyRequests] != 125 {
-			t.Fatalf("GET /batches oversized offset x125 answered %v, want >=120x500 then 429s only", statuses)
+		if statuses[http.StatusInternalServerError] != 120 || statuses[http.StatusTooManyRequests] != 5 {
+			t.Fatalf("GET /batches oversized offset x125 answered %v, want 120x500 then 5x429", statuses)
 		}
 	})
 

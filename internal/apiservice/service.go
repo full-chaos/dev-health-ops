@@ -172,9 +172,10 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 	var routes []httpapi.Route
 	routes = append(routes, acr.Routes(acr.Deps{Store: store, Logger: logger})...)
 	routes = append(routes, externalingest.Routes(externalingest.Deps{
-		Pool:   deps.Pool,
-		Valkey: deps.Valkey,
-		Logger: logger,
+		Pool:     deps.Pool,
+		Valkey:   deps.Valkey,
+		Logger:   logger,
+		Counters: limits,
 	})...)
 	var legacyStore legacyingest.Store
 	if deps.Valkey != nil {

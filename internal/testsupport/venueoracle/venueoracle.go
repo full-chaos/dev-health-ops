@@ -111,6 +111,20 @@ elif mode == "serve":
             return dataclasses.replace(config, revoke_url=_pd_revoke_override)
 
         _pd_oauth.PagerDutyOAuthConfig.from_env = classmethod(_pd_patched_from_env)
+    # Test-runner-only monkeypatch, same rule as above: when set, every
+    # StripeClient the app builds talks to this base instead of Stripe, so
+    # a venue test can record what each plane asks of Stripe on one fake
+    # server. The production get_stripe_client gains no knob.
+    _stripe_api_base = os.environ.get("VENUE_STRIPE_API_BASE")
+    if _stripe_api_base:
+        import stripe as _stripe
+        _stripe_original_init = _stripe.StripeClient.__init__
+
+        def _stripe_patched_init(self, *args, **kwargs):
+            kwargs["base_addresses"] = {"api": _stripe_api_base}
+            _stripe_original_init(self, *args, **kwargs)
+
+        _stripe.StripeClient.__init__ = _stripe_patched_init
     from fastapi.testclient import TestClient
     from dev_health_ops.api.main import app
     client = TestClient(app, raise_server_exceptions=False, follow_redirects=False)

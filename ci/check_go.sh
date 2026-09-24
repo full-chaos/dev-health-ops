@@ -500,7 +500,7 @@ check_live_python_oracles() {
       DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
       PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
       go test -mod=readonly -count=1 \
-        -run '^(TestQueryIntMatchesLivePydantic|TestQueryBoolMatchesLivePydantic|TestBodyIntMatchesLivePydantic)$' \
+        -run '^(TestQueryIntMatchesLivePydantic|TestQueryBoolMatchesLivePydantic|TestBodyIntMatchesLivePydantic|TestQueryUUIDMatchesLivePydantic)$' \
         ./internal/api/pybody
   ); then
     rm -rf -- "${proof_dir}"
@@ -551,7 +551,37 @@ check_live_python_oracles() {
     rm -rf -- "${proof_dir}"
     return 1
   fi
-  for proof_name in api-policy-principal api-pyjson api-pyjson-dumps api-pyjson-model api-orgs-registry api-pytime api-pytime-date api-health-revisions api-pybody-queryint api-pybody-querybool api-pybody-bodyint pythonparity-strrepr pythonparity-utf8-replace httpapi-forwarded-scheme api-customerpush-schema api-customerpush-bodies; do
+  printf 'go test -count=1: internal/api/billing (billing request models vs live FastAPI)\n'
+  if ! (
+    cd "${ROOT}"
+    "${GO_ENV_OFF[@]}" \
+      GOWORK=off \
+      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
+      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
+      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
+      go test -mod=readonly -count=1 \
+        -run '^(TestBillingBodiesMatchLiveFastAPI|TestBillingHelpersMatchLivePython)$' \
+        ./internal/api/billing
+  ); then
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  printf 'go test -count=1: internal/api/billing/stripeclient (Stripe API version vs the live Python SDK)\n'
+  if ! (
+    cd "${ROOT}"
+    "${GO_ENV_OFF[@]}" \
+      GOWORK=off \
+      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
+      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
+      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
+      go test -mod=readonly -count=1 \
+        -run '^(TestPinnedAPIVersionMatchesPythonSDK)$' \
+        ./internal/api/billing/stripeclient
+  ); then
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  for proof_name in api-policy-principal api-pyjson api-pyjson-dumps api-pyjson-model api-orgs-registry api-pytime api-pytime-date api-health-revisions api-pybody-queryint api-pybody-querybool api-pybody-bodyint pythonparity-strrepr pythonparity-utf8-replace httpapi-forwarded-scheme api-customerpush-schema api-customerpush-bodies api-pybody-queryuuid api-billing-bodies api-billing-helpers api-billing-stripe-version; do
     proof_file="${proof_dir}/${proof_name}"
     if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
       printf 'ERROR: api live Python oracle %s did not run\n' "${proof_name}" >&2

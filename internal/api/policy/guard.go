@@ -22,6 +22,13 @@ const (
 	// AdminOrg is Depends(get_admin_org_id): Admin, plus the caller's own
 	// org (the token's org_id claim) must be non-empty.
 	AdminOrg
+	// Optional is Depends(get_current_user_optional): the caller is
+	// authenticated when a usable bearer token is sent and anonymous
+	// otherwise. A missing, non-Bearer or refused token never refuses the
+	// request; only a store failure does (503 when the database is
+	// temporarily unavailable, else 500), as in Python. UserFrom is nil for
+	// an anonymous caller.
+	Optional
 )
 
 func (a Authz) String() string {
@@ -36,6 +43,8 @@ func (a Authz) String() string {
 		return "superuser"
 	case AdminOrg:
 		return "admin_org"
+	case Optional:
+		return "optional"
 	default:
 		return "unknown"
 	}
@@ -85,6 +94,18 @@ func (g *Guard) Wrap(level Authz, next http.Handler) http.Handler {
 	if level == Public {
 		return next
 	}
+	if level == Optional {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			user, ok := g.optionalUser(w, r)
+			if !ok {
+				return
+			}
+			if user != nil {
+				r = r.WithContext(WithUser(r.Context(), user))
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		user, ok := g.currentUser(w, r)
 		if !ok {
@@ -132,4 +153,25 @@ func (g *Guard) currentUser(w http.ResponseWriter, r *http.Request) (*User, bool
 		return nil, false
 	}
 	return user, true
+}
+
+// optionalUser is get_current_user_optional. It writes the refusal itself
+// (store failures only); a nil user with ok=true is an anonymous caller.
+func (g *Guard) optionalUser(w http.ResponseWriter, r *http.Request) (*User, bool) {
+	token, ok := BearerToken(r.Header.Get("Authorization"))
+	if !ok {
+		return nil, true
+	}
+	user, err := g.auth.Authenticate(r.Context(), token)
+	switch {
+	case err == nil:
+		return user, true
+	case isRefusal(err):
+		return nil, true
+	default:
+		g.logger.ErrorContext(r.Context(), "api optional authentication: user lookup failed",
+			slog.String("path", r.URL.Path), slog.Bool("unavailable", isUnavailable(err)))
+		authFailure(w, "", err)
+		return nil, false
+	}
 }

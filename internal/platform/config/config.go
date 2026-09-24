@@ -266,6 +266,9 @@ type Config struct {
 	SettingsEncryptionSalt  secrets.Value
 	PagerDutyOAuthClientID  secrets.Value
 	PagerDutyOAuthSecret    secrets.Value
+	// StripeSecretKey is STRIPE_SECRET_KEY, the Stripe API key the billing
+	// routes of dho api call Stripe with (the Python api's same variable).
+	StripeSecretKey secrets.Value
 
 	QueueDatabaseMode           QueueControlMode
 	CoordinatorDatabaseMode     QueueControlMode
@@ -332,6 +335,9 @@ type Config struct {
 	// fleet declared), else its comma-separated, trimmed, non-empty entries
 	// -- possibly none, which the route treats as a misconfiguration.
 	APIExpectedWorkerGroups *[]string
+	// APIBilling is the billing routes' non-secret configuration (dho api
+	// only), read from the variables the Python api reads.
+	APIBilling BillingConfig
 	// OperationalBridgeTimeout is CHAOS-6279's sole survivor from the
 	// deleted worker-operational-bridge trio (URL/Token/AllowInsecure) --
 	// nothing sends a bridge call any more (CHAOS-5320 deleted the Python
@@ -540,6 +546,7 @@ func Load(spec Spec) (Config, error) {
 		{name: "SETTINGS_ENCRYPTION_SALT", target: &cfg.SettingsEncryptionSalt},
 		{name: "PAGER_DUTY_CLIENT_ID", target: &cfg.PagerDutyOAuthClientID},
 		{name: "PAGER_DUTY_SECRET", target: &cfg.PagerDutyOAuthSecret},
+		{name: "STRIPE_SECRET_KEY", target: &cfg.StripeSecretKey},
 	}
 	for _, item := range secretTargets {
 		value, _, resolveErr := secrets.Resolve(item.name, lookup)
@@ -882,6 +889,7 @@ func Load(spec Spec) (Config, error) {
 			}
 			cfg.APIExpectedWorkerGroups = &groups
 		}
+		cfg.APIBilling = loadBillingConfig(lookup)
 		cfg.APIJWTIssuer = envOrDefault(lookup, "JWT_ISSUER", defaultJWTIssuer)
 		cfg.APIJWTAudience = envOrDefault(lookup, "JWT_AUDIENCE", defaultJWTAudience)
 	}
@@ -960,6 +968,7 @@ func (c Config) SafeAttrs() []slog.Attr {
 		slog.Bool("settings_encryption_salt_configured", c.SettingsEncryptionSalt.Configured()),
 		slog.Bool("pagerduty_oauth_client_id_configured", c.PagerDutyOAuthClientID.Configured()),
 		slog.Bool("pagerduty_oauth_secret_configured", c.PagerDutyOAuthSecret.Configured()),
+		slog.Bool("stripe_api_configured", c.StripeSecretKey.Configured()),
 	}
 	if c.Profile != "" {
 		attrs = append(attrs, slog.String("profile", c.Profile))

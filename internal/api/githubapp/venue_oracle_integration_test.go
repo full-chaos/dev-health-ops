@@ -260,6 +260,34 @@ func githubAppRequests(t *testing.T, tokens map[string]string, org, otherOrg, py
 	callback("callback: numeric audience", claims(func(c jwt.MapClaims) { c["aud"] = 5 }), 101, "denied", "")
 	callback("callback: audience list of numbers", claims(func(c jwt.MapClaims) { c["aud"] = []int{1} }), 101, "denied", "")
 	callback("callback: fractional expiry", claims(func(c jwt.MapClaims) { c["exp"] = float64(now.Add(time.Hour).Unix()) + 0.5 }), 101, "denied", "")
+	// Time claims Python reads through int(): numeric strings (with the
+	// whitespace, sign and underscore forms int() takes), booleans and other
+	// JSON types, on each of exp, nbf and iat.
+	future := now.Add(time.Hour).Unix()
+	for _, claim := range []string{"exp", "nbf", "iat"} {
+		value := func(v any) func(jwt.MapClaims) { return func(c jwt.MapClaims) { c[claim] = v } }
+		callback("callback: numeric-string "+claim, claims(value(fmt.Sprint(now.Unix()-60))), 101, "denied", "")
+		callback("callback: padded numeric-string "+claim, claims(value(fmt.Sprintf(" \t%d\n ", now.Unix()-60))), 101, "denied", "")
+		callback("callback: signed numeric-string "+claim, claims(value(fmt.Sprintf("+%d", now.Unix()-60))), 101, "denied", "")
+		callback("callback: underscored numeric-string "+claim, claims(value("1_0")), 101, "denied", "")
+		callback("callback: fractional numeric-string "+claim, claims(value(fmt.Sprintf("%d.5", now.Unix()-60))), 101, "denied", "")
+		callback("callback: exponent numeric-string "+claim, claims(value("1e3")), 101, "denied", "")
+		callback("callback: empty string "+claim, claims(value("")), 101, "denied", "")
+		callback("callback: true "+claim, claims(value(true)), 101, "denied", "")
+		callback("callback: false "+claim, claims(value(false)), 101, "denied", "")
+		callback("callback: null "+claim, claims(value(nil)), 101, "denied", "")
+		callback("callback: list "+claim, claims(value([]int{1})), 101, "denied", "")
+		callback("callback: object "+claim, claims(value(map[string]int{"a": 1})), 101, "denied", "")
+	}
+	callback("callback: zero expiry", claims(func(c jwt.MapClaims) { c["exp"] = 0 }), 101, "denied", "")
+	callback("callback: zero-string expiry", claims(func(c jwt.MapClaims) { c["exp"] = "0" }), 101, "denied", "")
+	callback("callback: negative-string expiry", claims(func(c jwt.MapClaims) { c["exp"] = "-5" }), 101, "denied", "")
+	callback("callback: zero not-before", claims(func(c jwt.MapClaims) { c["nbf"] = 0 }), 101, "denied", "")
+	callback("callback: zero issued-at", claims(func(c jwt.MapClaims) { c["iat"] = 0 }), 101, "denied", "")
+	callback("callback: numeric-string expiry in the future", claims(func(c jwt.MapClaims) { c["exp"] = fmt.Sprint(future) }), 101, "denied", "")
+	callback("callback: numeric-string expiry just passed", claims(func(c jwt.MapClaims) { c["exp"] = fmt.Sprint(now.Unix() - 1) }), 101, "denied", "")
+	callback("callback: numeric-string not-before in the future", claims(func(c jwt.MapClaims) { c["nbf"] = fmt.Sprint(future) }), 101, "denied", "")
+	callback("callback: numeric-string issued-at in the future", claims(func(c jwt.MapClaims) { c["iat"] = fmt.Sprint(future) }), 101, "denied", "")
 	callback("callback: expiry just passed", claims(func(c jwt.MapClaims) { c["exp"] = now.Unix() - 1 }), 101, "denied", "")
 	callback("callback: other algorithm", signGitHubState(t, jwt.SigningMethodHS512, githubStateSecret, githubStateClaims(org, now)), 101, "good", "")
 	callback("callback: signed with another secret", signGitHubState(t, jwt.SigningMethodHS256, []byte("another-venue-secret-another-venue-secret"), githubStateClaims(org, now)), 101, "good", "")

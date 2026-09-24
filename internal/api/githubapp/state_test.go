@@ -112,3 +112,56 @@ func TestCanonicalizeReturnTo(t *testing.T) {
 		t.Errorf("canonicalizeReturnTo(nil) = %q", got)
 	}
 }
+
+// TestVerifyReadsTimeClaimsLikePyJWT pins the int() reading of exp, nbf and
+// iat: numeric strings (whitespace, sign, underscores), booleans and an exp
+// of zero (the epoch, expired) behave as PyJWT does; the venue oracle
+// compares the same shapes against the real Python api.
+func TestVerifyReadsTimeClaimsLikePyJWT(t *testing.T) {
+	signer := Signer{Secret: "unit-secret-unit-secret-unit-secret-1", Issuer: "iss", Audience: "aud"}
+	now := time.Unix(1_800_000_000, 0)
+	sign := func(mutate func(jwt.MapClaims)) string {
+		claims := jwt.MapClaims{"org_id": "org", "jti": "j", "purpose": installPurpose, "iss": "iss", "aud": "aud",
+			"iat": now.Unix() - 10, "exp": now.Unix() + 600}
+		mutate(claims)
+		token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(signer.Secret))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return token
+	}
+	for _, tc := range []struct {
+		name   string
+		claim  string
+		value  any
+		accept bool
+	}{
+		{"exp numeric string", "exp", "1800000600", true},
+		{"exp padded string", "exp", " \t1800000600\n", true},
+		{"exp underscored string", "exp", "1_800_000_600", true},
+		{"exp signed string", "exp", "+1800000600", true},
+		{"exp huge string", "exp", "99999999999999999999999999", true},
+		{"exp past string", "exp", "1799999999", false},
+		{"exp zero", "exp", 0, false},
+		{"exp zero string", "exp", "0", false},
+		{"exp false", "exp", false, false},
+		{"exp negative string", "exp", "-5", false},
+		{"exp fractional string", "exp", "1800000600.5", false},
+		{"exp exponent string", "exp", "1e10", false},
+		{"exp double underscore", "exp", "1__0", false},
+		{"exp leading underscore", "exp", "_10", false},
+		{"nbf numeric string", "nbf", "1799999990", true},
+		{"nbf true", "nbf", true, true},
+		{"nbf future string", "nbf", "1800000600", false},
+		{"iat numeric string", "iat", "1799999990", true},
+		{"iat false", "iat", false, true},
+		{"iat future string", "iat", "1800000600", false},
+		{"nbf null", "nbf", nil, false},
+		{"iat list", "iat", []int{1}, false},
+	} {
+		_, err := signer.Verify(sign(func(c jwt.MapClaims) { c[tc.claim] = tc.value }), now)
+		if (err == nil) != tc.accept {
+			t.Errorf("%s: accepted=%v, want %v (err %v)", tc.name, err == nil, tc.accept, err)
+		}
+	}
+}

@@ -7,6 +7,8 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"math"
+	"math/big"
 	"net/url"
 	"strings"
 	"time"
@@ -85,15 +87,34 @@ func (s Signer) Mint(orgID string, returnTo *string, now time.Time) (string, err
 // then the purpose, org_id and jti claims. Every token-level failure is one
 // message.
 func (s Signer) Verify(state string, now time.Time) (State, error) {
-	parser := jwt.NewParser(
+	// The signature and algorithm are checked first, with the library's claim
+	// validation off: PyJWT reads exp, nbf and iat through int(), which takes
+	// numeric strings and booleans the library refuses as a type error, so
+	// those three claims are normalised before the same validator runs.
+	options := []jwt.ParserOption{
 		jwt.WithValidMethods([]string{"HS256"}),
 		jwt.WithIssuer(s.Issuer),
 		jwt.WithAudience(s.Audience),
 		jwt.WithIssuedAt(),
 		jwt.WithTimeFunc(func() time.Time { return now }),
-	)
+	}
 	var claims jwt.MapClaims
+	parser := jwt.NewParser(append(options, jwt.WithoutClaimsValidation())...)
 	if _, err := parser.ParseWithClaims(state, &claims, func(*jwt.Token) (any, error) { return []byte(s.Secret), nil }); err != nil {
+		return State{}, errInvalidState
+	}
+	for _, name := range []string{"exp", "nbf", "iat"} {
+		if value, present := claims[name]; present {
+			converted := pyIntClaim(value)
+			// The library reads an exp of 0 as "no expiry"; PyJWT reads it as
+			// the epoch, which is expired.
+			if zero, isNumber := converted.(float64); isNumber && zero == 0 && name == "exp" {
+				converted = float64(-1)
+			}
+			claims[name] = converted
+		}
+	}
+	if err := jwt.NewValidator(options...).Validate(claims); err != nil {
 		return State{}, errInvalidState
 	}
 	// PyJWT refuses a jti or sub that is present and not a string, as a token
@@ -144,3 +165,50 @@ func queryQuote(value string) string { return url.QueryEscape(value) }
 func pathQuote(value string) string {
 	return strings.ReplaceAll(url.QueryEscape(value), "+", "%20")
 }
+
+// pyIntClaim is what PyJWT's int(payload[claim]) makes of a time claim when
+// Python would convert it: a boolean is 0 or 1, and a string is read by
+// int(str) (surrounding whitespace, one optional sign, ASCII digits with
+// single underscores between them). Every other value, and a string int()
+// refuses, is returned as it is, for the validator to refuse as it does a
+// malformed claim.
+func pyIntClaim(value any) any {
+	switch typed := value.(type) {
+	case bool:
+		if typed {
+			return float64(1)
+		}
+		return float64(0)
+	case string:
+		text := strings.TrimSpace(typed)
+		negative := false
+		if text != "" && (text[0] == '+' || text[0] == '-') {
+			negative = text[0] == '-'
+			text = text[1:]
+		}
+		if text == "" || text[0] == '_' || text[len(text)-1] == '_' || strings.Contains(text, "__") {
+			return value
+		}
+		digits := strings.ReplaceAll(text, "_", "")
+		number := new(big.Int)
+		for _, r := range digits {
+			if r < '0' || r > '9' {
+				return value
+			}
+		}
+		if _, ok := number.SetString(digits, 10); !ok {
+			return value
+		}
+		if negative {
+			number.Neg(number)
+		}
+		result, _ := new(big.Float).SetInt(number).Float64()
+		// Python compares an arbitrary-size int; a time.Time cannot hold one,
+		// and every value past this bound orders against now the same way.
+		return math.Max(-timeClaimBound, math.Min(timeClaimBound, result))
+	}
+	return value
+}
+
+// timeClaimBound bounds a converted time claim to what a time.Time holds.
+const timeClaimBound = 1e15

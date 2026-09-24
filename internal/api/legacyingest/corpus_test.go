@@ -10,7 +10,13 @@ var (
 	dtPool  = []string{`"2026-01-01T00:00:00Z"`, `"2026-01-01T00:00:00"`, `"2026-01-01"`, `"2026-01-01T00:00:00.123456+02:00"`, `"2026-01-01 00:00:00-05:30"`,
 		`1767225600`, `1767225600.5`, `"1767225600"`, `1e20`, `true`, `null`, `""`, `"garbage"`, `[]`, `-1`, `"2026-13-01"`, `"2026-01-01T25:00:00Z"`, `{}`}
 	intPool   = []string{`1`, `0`, `-1`, `"5"`, `5.0`, `5.5`, `true`, `null`, `"x"`, `1e3`, `9223372036854775808`, `"٣"`, `[]`, `"_1"`, `" 7 "`}
-	floatPool = []string{`0.5`, `1`, `"0.5"`, `"nan"`, `1e999`, `"inf"`, `true`, `null`, `[]`, `-0.0`, `"1e5"`, `2.5e-7`, `100000000000000000000.0`, `1e16`}
+	floatPool = []string{`0.5`, `1`, `"0.5"`, `"nan"`, `1e999`, `"inf"`, `true`, `null`, `[]`, `-0.0`, `"1e5"`, `2.5e-7`, `100000000000000000000.0`, `1e16`,
+		// A 309-digit integer literal: its nearest float64 is +Inf, and
+		// pydantic-core refuses it as float_type rather than storing inf
+		// (CHAOS-6491's shared PydanticFloat fix; distinct from the 1e999
+		// exponent-form case above, which json.loads/jiter already parse as
+		// inf before pydantic ever sees a value).
+		strings.Repeat("9", 309)}
 )
 
 type modelField struct {

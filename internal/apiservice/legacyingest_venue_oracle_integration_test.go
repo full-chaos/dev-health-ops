@@ -149,6 +149,10 @@ func TestLegacyIngestVenueOracle(t *testing.T) {
 		signed("validation error only after credentials", "commits", `{}`, map[string]string{"X-API-Key": "nope"}),
 		signed("validation error", "commits", `{}`, nil),
 		signed("shape errors", "deployments", `{"org_id":1,"repo_url":null,"items":[{"deployment_id":1},{"status":"x","environment":"e","deployment_id":"d","started_at":"nope","pull_request_number":"x","release_ref_confidence":"inf"}]}`, nil),
+		// CHAOS-6491: a 309-digit integer's nearest float64 is +Inf;
+		// pydantic-core refuses it (float_type) rather than storing inf.
+		signed("overflow integer in float field", "deployments",
+			body(`{"deployment_id":"d2","status":"ok","environment":"prod","release_ref_confidence":`+strings.Repeat("9", 309)+`}`), nil),
 		signed("empty items", "incidents", body(``), nil),
 		signed("integer past jiter and json.loads digit limits", "commits", `{"org_id":"o","repo_url":"r","items":[`+commit+`],"n":`+strings.Repeat("1", 4301)+`}`, nil),
 		// Idempotency: a repeat is a 409 and is not streamed; an invalid request

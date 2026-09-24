@@ -14,6 +14,8 @@ import (
 
 	"github.com/google/uuid"
 
+	schedsync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
+
 	"github.com/full-chaos/dev-health-ops/internal/api/licensing"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 )
@@ -108,6 +110,12 @@ func (f *faultReader) runStatusCounts(context.Context, string, uuid.UUID) (map[s
 	return map[string]int64{}, f.hit("runStatusCounts")
 }
 
+func (f *faultReader) runUnits(context.Context, string, uuid.UUID) ([]runUnit, error) {
+	return nil, f.hit("runUnits")
+}
+func (f *faultReader) watermarkRows(context.Context, string, []string, []string) ([]schedsync.WatermarkRow, error) {
+	return nil, f.hit("watermarkRows")
+}
 func (f *faultReader) coverageProjection(context.Context, string, uuid.UUID, int, int) (*coverageProjection, error) {
 	return &coverageProjection{Payload: "{}"}, f.hit("coverageProjection")
 }

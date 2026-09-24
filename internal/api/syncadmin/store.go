@@ -8,6 +8,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	schedsync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
 )
 
 // reader is every read the handlers make; store is the Postgres one.
@@ -28,6 +30,8 @@ type reader interface {
 	backfillJobs(ctx context.Context, orgID string, limit, offset int64) ([]backfillJob, error)
 	unitActivity(ctx context.Context, orgID string, runID uuid.UUID) (*time.Time, *time.Time, error)
 	runStatusCounts(ctx context.Context, orgID string, runID uuid.UUID) (map[string]int64, error)
+	runUnits(ctx context.Context, orgID string, runID uuid.UUID) ([]runUnit, error)
+	watermarkRows(ctx context.Context, orgID string, sourceKeys, lookupValues []string) ([]schedsync.WatermarkRow, error)
 	coverageProjection(ctx context.Context, orgID string, configID uuid.UUID, lookbackDays, version int) (*coverageProjection, error)
 }
 

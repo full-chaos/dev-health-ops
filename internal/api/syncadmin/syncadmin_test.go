@@ -76,6 +76,7 @@ func TestEveryRouteIsGuardedAtAdminOrg(t *testing.T) {
 		"GET /api/v1/admin/sync-configs/{config_id}/coverage",
 		"GET /api/v1/admin/backfill-jobs",
 		"GET /api/v1/admin/sync-runs/{run_id}",
+		"GET /api/v1/admin/sync-runs/{run_id}/units",
 	}
 	if len(routes) != len(want) {
 		t.Fatalf("%d routes, want %d", len(routes), len(want))

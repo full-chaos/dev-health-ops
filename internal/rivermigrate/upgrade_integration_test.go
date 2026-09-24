@@ -87,7 +87,7 @@ func TestUpgradeRunsTheJobEndToEnd(t *testing.T) {
 	}
 	code, results, stderr = runUpgrade(t, fallback, "--river")
 	if code != cli.ExitOK || len(results) != 3 ||
-		!strings.Contains(stderr, `"msg":"migrate step skipped","step":"migrate river --apply-and-check","reason":"MIGRATION_DATABASE_URI is not configured"`) {
+		!strings.Contains(stderr, `"level":"WARN","msg":"migrate step skipped","step":"migrate river --apply-and-check","reason":"MIGRATION_DATABASE_URI is not configured"`) {
 		t.Fatalf("--river without MIGRATION_DATABASE_URI: exit %d, results %v, stderr:\n%s", code, results, stderr)
 	}
 

@@ -1,6 +1,7 @@
 package externalingest
 
 import (
+	"bytes"
 	"github.com/full-chaos/dev-health-ops/internal/api/recordvalidation"
 	"testing"
 
@@ -36,7 +37,8 @@ func TestSchemaDocumentEmbedsLiveLimits(t *testing.T) {
 	if err != nil {
 		t.Fatalf("schemaDocument: %v", err)
 	}
-	got, ok := document["limits"].(*pyjson.Object)
+	limitsValue, _ := document.Get("limits")
+	got, ok := limitsValue.(*pyjson.Object)
 	if !ok {
 		t.Fatalf("no limits key: %+v", document)
 	}
@@ -85,25 +87,53 @@ func TestComputeETagIsStableAndSensitiveToLimits(t *testing.T) {
 }
 
 func TestRecordKindsMatchesTheGoldenBundle(t *testing.T) {
-	document, err := decodeGolden()
+	document, err := schemaDocument(DefaultLimits)
 	if err != nil {
 		t.Fatal(err)
 	}
-	index, ok := document["recordKinds"].(map[string]any)
+	indexValue, _ := document.Get("recordKinds")
+	index, ok := indexValue.(*pyjson.Object)
 	if !ok {
 		t.Fatalf("golden bundle has no recordKinds: %+v", document)
 	}
-	if len(index) != len(recordvalidation.RecordKinds()) {
-		t.Fatalf("golden bundle has %d record kinds, recordvalidation has %d", len(index), len(recordvalidation.RecordKinds()))
+	if index.Len() != len(recordvalidation.RecordKinds()) {
+		t.Fatalf("golden bundle has %d record kinds, recordvalidation has %d", index.Len(), len(recordvalidation.RecordKinds()))
 	}
-	for kind := range index {
+	for _, kind := range index.Keys() {
 		if !recordvalidation.KnownKind(kind) {
 			t.Errorf("golden bundle has kind %q with no Go model", kind)
 		}
 	}
 	for _, kind := range recordvalidation.RecordKinds() {
-		if _, ok := index[kind]; !ok {
+		if _, ok := index.Get(kind); !ok {
 			t.Errorf("recordvalidation has kind %q missing from the golden bundle", kind)
 		}
+	}
+}
+
+// TestSchemaDocumentKeepsPythonsKeyOrderAndRendersWithoutANewline pins the
+// wire shape GET /schemas/{version} serves: Python's live dict order
+// ($schema and $id lead, the live limits are appended last), compact
+// separators, and no trailing newline. The byte-for-byte proof against the
+// live api is TestSchemaBundleMatchesLivePython and the venue oracle; this
+// keeps the two properties visible without a Python process.
+func TestSchemaDocumentKeepsPythonsKeyOrderAndRendersWithoutANewline(t *testing.T) {
+	document, err := schemaDocument(DefaultLimits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := document.Keys()
+	if len(keys) < 3 || keys[0] != "$schema" || keys[1] != "$id" || keys[len(keys)-1] != "limits" {
+		t.Fatalf("keys = %v, want $schema, $id first and limits last", keys)
+	}
+	body, err := pyjson.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.HasPrefix(body, []byte(`{"$schema":"https://json-schema.org/draft/2020-12/schema","$id":`)) {
+		t.Fatalf("body starts %.80s", body)
+	}
+	if bytes.HasSuffix(body, []byte("\n")) {
+		t.Fatal("body ends with a newline; Python's JSONResponse writes none")
 	}
 }

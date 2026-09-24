@@ -1,10 +1,8 @@
 package externalingest
 
 import (
-	"bytes"
 	"crypto/sha256"
 	_ "embed"
-	"encoding/json"
 	"fmt"
 	"sort"
 
@@ -28,7 +26,12 @@ const schemaVersion = "external-ingest.v1"
 //	   from dev_health_ops.api.external_ingest.schemas import SCHEMA_VERSION; \
 //	   json.dump(get_bundle(SCHEMA_VERSION).document, \
 //	     open("internal/api/externalingest/testdata/schema_bundle.v1.json","w"), \
-//	     sort_keys=True, separators=(",", ":"))'
+//	     separators=(",", ":"))'
+//
+// No sort_keys: the key order in the file is Python's live dict order
+// ($schema, $id, ... $defs), because GET /schemas/{version} serves the
+// document in that order and its body is compared byte for byte against the
+// live api (TestSchemaBundleMatchesLivePython, the venue oracle).
 //
 // bundleGoldenRecordKinds is RECORD_KIND_MODELS' keys, sorted -- pinned
 // separately (rather than derived from the JSON) so a golden regenerated
@@ -49,44 +52,26 @@ func limitsPayload(cfg Limits) *pyjson.Object {
 
 // schemaDocument returns the served GET /schemas/{version} body: the golden
 // bundle plus the live limits, exactly as router.py's
-// `{**bundle.document, "limits": _limits_payload()}` does.
-//
-// NAMED LIMIT: stays map[string]any and is written by writeUnorderedJSON
-// (errors.go), not converted to an ordered *pyjson.Object like every other
-// writer in this package. bundle.document is a generated JSON Schema
-// document (pydantic.json_schema.models_json_schema(), $defs and all), and
-// the checked-in golden fixture this decodes was written with
-// sort_keys=True for content-addressed storage (this file's own regenerate
-// comment) -- that is NOT necessarily Python's live dict-insertion order,
-// which Starlette's default JSONResponse preserves un-sorted. Reproducing
-// this golden's order faithfully would not prove it matches the live
-// response; only running the real interpreter and comparing would, and
-// that is out of this change's scope. limitsPayload above (called from here
-// AND from handleListSchemas) is fixed like every other writer -- only the
-// bundle.document merge itself is left as the documented exception.
-func schemaDocument(cfg Limits) (map[string]any, error) {
-	document, err := decodeGolden()
+// `{**bundle.document, "limits": _limits_payload()}` does -- an ordered
+// *pyjson.Object in the bundle's own key order, "limits" appended (or
+// replaced in place, as a dict spread does).
+func schemaDocument(cfg Limits) (*pyjson.Object, error) {
+	value, err := pyjson.Decode(bundleGolden)
 	if err != nil {
-		return nil, err
-	}
-	document["limits"] = limitsPayload(cfg)
-	return document, nil
-}
-
-func decodeGolden() (map[string]any, error) {
-	decoder := json.NewDecoder(bytes.NewReader(bundleGolden))
-	decoder.UseNumber() // preserve the golden's exact digit text on re-marshal
-	var document map[string]any
-	if err := decoder.Decode(&document); err != nil {
 		return nil, fmt.Errorf("decode embedded schema bundle: %w", err)
 	}
+	document, ok := value.(*pyjson.Object)
+	if !ok {
+		return nil, fmt.Errorf("decode embedded schema bundle: not an object")
+	}
+	document.Set("limits", limitsPayload(cfg))
 	return document, nil
 }
 
 // computeETag replicates schema_registry.compute_etag: a quoted sha256 over
 // json.dumps(document, sort_keys=True, separators=(",", ":"),
 // ensure_ascii=True).
-func computeETag(document map[string]any) (string, error) {
+func computeETag(document *pyjson.Object) (string, error) {
 	canonical, err := canonicalMarshal(document)
 	if err != nil {
 		return "", err

@@ -268,13 +268,9 @@ func seededListItemField(t *testing.T, body, ingestionID, field string) string {
 // render through policy.WriteJSON + an ordered *pyjson.Object instead of a
 // map[string]any.
 //
-// GET /schemas/{version}'s document body is NOT diffed here: that response
-// stays a stdlib map[string]any writer by design (bundle.go's schemaDocument
-// doc comment, a NAMED LIMIT this change does not touch), so a byte-for-byte
-// diff against it would only prove the two planes' JSON Schema GENERATORS
-// agree, not anything this PR changed. The route is still called, once, to
-// prove it answers 200 with a matching ETag on both planes (the cheap,
-// relevant half of that route this PR's scope covers).
+// GET /schemas/{version}'s document is diffed here like every other route:
+// the body is compared as raw text (key order, separators, no trailing
+// newline), so it fails on any byte the two planes render differently.
 func TestExternalIngestVenueOracle(t *testing.T) {
 	ctx := context.Background()
 	root := webhookintakeRepoRoot(t)
@@ -333,6 +329,7 @@ func TestExternalIngestVenueOracle(t *testing.T) {
 
 	requests := []venueoracle.Request{
 		{Name: "list schemas", Method: "GET", Path: "/api/v1/external-ingest/schemas"},
+		{Name: "get schema known version", Method: "GET", Path: "/api/v1/external-ingest/schemas/external-ingest.v1"},
 		{Name: "get schema unknown version", Method: "GET", Path: "/api/v1/external-ingest/schemas/external-ingest.v99"},
 		// pythonRepr's quote-delimiter switch (round 1 review, reproduced
 		// live): a version containing a single quote and no double quote
@@ -432,22 +429,6 @@ func TestExternalIngestVenueOracle(t *testing.T) {
 	python := venue.ServePython(t, requests)
 	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{Normalize: blankExternalIngestVolatileFields})
 	t.Log(receipt)
-
-	// GET /schemas/{version}'s document body is a NAMED LIMIT (bundle.go's
-	// schemaDocument doc comment): it stays a stdlib map[string]any writer,
-	// so a full-body Diff would only prove the two planes' JSON Schema
-	// GENERATORS produce the same document, not anything this PR touched.
-	// This checks the relevant half instead: both planes answer 200 with a
-	// matching ETag for the identical request.
-	schemaRequest := venueoracle.Request{Name: "get schema known version", Method: "GET", Path: "/api/v1/external-ingest/schemas/external-ingest.v1"}
-	schemaPython := venue.ServePython(t, []venueoracle.Request{schemaRequest})[0]
-	schemaGo := venueoracle.Do(t, goBase, schemaRequest)
-	if schemaPython.Status != schemaGo.Status {
-		t.Errorf("get schema known version: status python=%d go=%d", schemaPython.Status, schemaGo.Status)
-	}
-	if schemaPython.Headers["etag"] != schemaGo.Headers["etag"] || schemaPython.Headers["etag"] == "" {
-		t.Errorf("get schema known version: etag python=%q go=%q", schemaPython.Headers["etag"], schemaGo.Headers["etag"])
-	}
 
 	// batchListItem's own createdAt formatting (handlers.go, separate from
 	// batchStatusResponse's) is only reached through GET /batches -- and

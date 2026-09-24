@@ -24,10 +24,12 @@ import (
 // exception). The header bytes reach it latin-1 decoded, as Starlette
 // hands them over.
 const pythonSignatureProgram = `
-import base64, json, sys
+import base64, json, sys, time
 from stripe import SignatureVerificationError
 from stripe._webhook import WebhookSignature, Webhook
 cases = json.loads(sys.stdin.read())
+# Both planes judge the tolerance at the same instant.
+time.time = lambda: cases["now"]
 out = []
 for payload, header in cases["cases"]:
     try:
@@ -59,6 +61,10 @@ func TestStripeSignatureMatchesLivePython(t *testing.T) {
 	python := pyoracle.Resolve(t, root)
 	const secret = "whsec_venue_oracle"
 	now := time.Now().Unix()
+	// The reference instant both planes judge the tolerance at, half a
+	// second past a whole second: t = now-300 is then too old (the float
+	// comparison), t = now-299 is not.
+	reference := time.Unix(now, 500_000_000)
 	body := []byte(`{"id":"evt_1","object":"event","type":"invoice.paid","data":{"object":{"id":"in_1","metadata":{"org_id":"x"}}}}`)
 	good := func(ts int64) string { return sign(secret, fmt.Sprint(ts), body) }
 	fresh, old, future := now, now-1000, now+1000
@@ -71,7 +77,8 @@ func TestStripeSignatureMatchesLivePython(t *testing.T) {
 		{body, fmt.Sprintf("t=%d,v1=%s", old, good(old))},
 		{body, fmt.Sprintf("t=%d,v1=%s", future, good(future))},
 		{body, fmt.Sprintf("t=%d,v1=%s", now-299, good(now-299))},
-		{body, fmt.Sprintf("t=%d,v1=%s", now-310, good(now-310))},
+		{body, fmt.Sprintf("t=%d,v1=%s", now-300, good(now-300))},
+		{body, fmt.Sprintf("t=%d,v1=%s", now-301, good(now-301))},
 		{body, fmt.Sprintf("v1=%s,t=%d", good(fresh), fresh)},
 		{body, fmt.Sprintf("t=%d,v1=deadbeef,v1=%s", fresh, good(fresh))},
 		{body, fmt.Sprintf("t=%d,v0=%s", fresh, good(fresh))},
@@ -104,11 +111,10 @@ func TestStripeSignatureMatchesLivePython(t *testing.T) {
 	for index, c := range cases {
 		encoded[index] = [2]string{base64.StdEncoding.EncodeToString(c.payload), base64.StdEncoding.EncodeToString([]byte(c.header))}
 	}
-	input, _ := json.Marshal(map[string]any{"cases": encoded, "secret": secret})
+	input, _ := json.Marshal(map[string]any{"cases": encoded, "secret": secret, "now": float64(now) + 0.5})
 	command := exec.Command(python, "-c", pythonSignatureProgram)
 	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"))
 	command.Stdin = strings.NewReader(string(input))
-	checkedAt := time.Now()
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("live python: %v", pyoracle.RunError(python, err, output))
@@ -124,7 +130,7 @@ func TestStripeSignatureMatchesLivePython(t *testing.T) {
 	verdicts := map[string]int{}
 	for index, c := range cases {
 		got := "ok"
-		switch err := verifyStripeSignature(c.payload, c.header, secret, checkedAt); err {
+		switch err := verifyStripeSignature(c.payload, c.header, secret, reference); err {
 		case nil:
 		case errSignature:
 			got = "sig"

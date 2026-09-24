@@ -134,7 +134,37 @@ func page(items []string, idOf func(string) string, startingAfter, url string) s
 
 var fakeID = regexp.MustCompile(`"id": "([^"]+)"`)
 
-func idOf(item string) string { return fakeID.FindStringSubmatch(item)[1] }
+func idOf(item string) string {
+	if match := fakeID.FindStringSubmatch(item); match != nil {
+		return match[1]
+	}
+	return ""
+}
+
+// fakeLists are what the reconciliation lists, in Stripe's order: a status
+// that differs from the stored one, a null status, an object with no id
+// (skipped by both planes) placed first on its page, and objects no local
+// row holds.
+var fakeLists = map[string][]string{
+	"/v1/subscriptions": {
+		`{"id": "sub_A", "object": "subscription", "status": "past_due"}`,
+		`{"id": "sub_A2", "object": "subscription", "status": "trialing"}`,
+		`{"object": "subscription", "status": "active"}`,
+		`{"id": "sub_C", "object": "subscription", "status": null}`,
+		`{"id": "sub_stripe_only", "object": "subscription", "status": "active"}`,
+	},
+	"/v1/invoices": {
+		`{"id": "in_A1", "object": "invoice", "status": "void"}`,
+		`{"id": "in_A2", "object": "invoice", "status": "paid"}`,
+		`{"id": "in_B1", "object": "invoice", "status": "uncollectible"}`,
+		`{"id": "in_stripe_only", "object": "invoice", "status": "open"}`,
+	},
+	"/v1/refunds": {
+		`{"id": "re_A1", "object": "refund", "status": "succeeded"}`,
+		`{"id": "re_B1", "object": "refund", "status": "succeeded"}`,
+		`{"id": "re_stripe_only", "object": "refund", "status": "pending"}`,
+	},
+}
 
 // plane is one plane's view of the fake.
 func (f *fakeStripe) plane(name string) http.Handler {
@@ -201,6 +231,15 @@ func (f *fakeStripe) serve(plane string, w http.ResponseWriter, r *http.Request)
 		}
 		id := f.next(plane, "bps")
 		fmt.Fprintf(w, `{"id": %q, "object": "billing_portal.session", "url": "https://portal.venue.test/%s"}`, id, id)
+	case r.Method == http.MethodGet && fakeLists[path] != nil:
+		after := r.URL.Query().Get("starting_after")
+		// The second refund listing of each plane fails: that reconcile
+		// run reads no Stripe refunds.
+		if path == "/v1/refunds" && after == "" && f.next(plane, "refund_list") == "refund_list_venue_2" {
+			stripeFail(w, "refund list refused")
+			return
+		}
+		fmt.Fprint(w, page(fakeLists[path], idOf, after, path))
 	case r.Method == http.MethodPost && strings.HasPrefix(path, "/v1/invoices/") && strings.HasSuffix(path, "/void"):
 		id := strings.TrimSuffix(strings.TrimPrefix(path, "/v1/invoices/"), "/void")
 		if id == "in_err" {

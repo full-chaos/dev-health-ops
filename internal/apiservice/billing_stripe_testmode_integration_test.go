@@ -115,7 +115,9 @@ func TestStripeTestModeBillingDifferential(t *testing.T) {
 	org, owner, superuser, plan, price, barePlan := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	openInvoice, paidInvoice := uuid.New(), uuid.New()
 	env := map[string]string{"STRIPE_SECRET_KEY": key, "STRIPE_PRICE_ID_TEAM": priceA.ID, "APP_BASE_URL": "https://app.venue.test"}
-	var pythonEnv []string
+	// The Python reconciliation's Stripe list call is patched to the call
+	// it was written to make (a named divergence: unpatched it raises).
+	pythonEnv := []string{"VENUE_STRIPE_LIST_KWARGS=1"}
 	for name, value := range env {
 		pythonEnv = append(pythonEnv, name+"="+value)
 	}
@@ -141,7 +143,8 @@ func TestStripeTestModeBillingDifferential(t *testing.T) {
 				// The paid invoice is stored as open, so the void reaches
 				// Stripe and Stripe refuses it.
 				{`INSERT INTO invoices (id, org_id, stripe_invoice_id, stripe_customer_id, status, amount_due, currency, metadata, created_at, updated_at)
-					VALUES ($1, $3, $4, $6, 'open', 500, 'usd', '{}', now(), now()), ($2, $3, $5, $6, 'open', 1000, 'usd', '{}', now(), now())`,
+					VALUES ($1, $3, $4, $6, 'open', 500, 'usd', '{}', now(), now()),
+						($2, $3, $5, $6, 'open', 1000, 'usd', '{}', now() - interval '1 minute', now() - interval '1 minute')`,
 					[]any{openInvoice, paidInvoice, org, planes["py"].openInvoice, planes["py"].paidInvoice, planes["py"].customer}},
 			} {
 				if _, err := admin.Exec(ctx, statement.sql, statement.args...); err != nil {
@@ -201,7 +204,16 @@ func TestStripeTestModeBillingDifferential(t *testing.T) {
 		`cs_test_[A-Za-z0-9]+`, `https://checkout\.stripe\.com/[^"]+`, `https://billing\.stripe\.com/[^"]+`,
 		`prod_[A-Za-z0-9]+`, `price_[A-Za-z0-9]+`, `in_[A-Za-z0-9]+`, `req_[A-Za-z0-9]+`,
 	}, "|"))
-	normalize := func(_ venueoracle.Request, body string) string {
+	// The reconciliation lists the whole shared test account, and the
+	// planes run minutes apart (the Go plane's subscription is still active
+	// while Python lists), so only that list of Stripe objects no local row
+	// holds is blanked; the mismatches, the counts and missing_stripe are
+	// compared.
+	accountWide := regexp.MustCompile(`"missing_local":\[[^\]]*\]`)
+	normalize := func(request venueoracle.Request, body string) string {
+		if request.Name == "reconcile org" {
+			body = accountWide.ReplaceAllString(body, `"missing_local":"<account-wide>"`)
+		}
 		body = perPlane.ReplaceAllString(body, "<stripe>")
 		return billingNormalizer(map[string]bool{org.String(): true, plan.String(): true, price.String(): true, barePlan.String(): true,
 			openInvoice.String(): true, paidInvoice.String(): true},

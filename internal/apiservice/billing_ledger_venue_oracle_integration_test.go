@@ -284,7 +284,9 @@ func TestVenueOracleBillingLedger(t *testing.T) {
 	pyStripe, goStripe := httptest.NewServer(fake.plane("py")), httptest.NewServer(fake.plane("go"))
 	t.Cleanup(pyStripe.Close)
 	t.Cleanup(goStripe.Close)
-	pythonEnv := []string{"VENUE_STRIPE_API_BASE=" + pyStripe.URL}
+	// The Python reconciliation's Stripe list call is patched to the call
+	// it was written to make (a named divergence: unpatched it raises).
+	pythonEnv := []string{"VENUE_STRIPE_API_BASE=" + pyStripe.URL, "VENUE_STRIPE_LIST_KWARGS=1"}
 	for key, value := range billingEnv {
 		pythonEnv = append(pythonEnv, key+"="+value)
 	}
@@ -319,9 +321,35 @@ func TestVenueOracleBillingLedger(t *testing.T) {
 	requests := ledgerRequests(seed, venue.Tokens)
 	python := venue.ServePython(t, requests)
 	normalize := billingNormalizer(seeded, start)
+	// The reconciliation must have read the fake Stripe lists: a
+	// comparison of two empty Stripe sides would also read SAME.
+	reconcileWants := map[string][]string{
+		"reconcile: org A": {`"stripe_id":"sub_A","field":"status","local_value":"active","stripe_value":"past_due"`,
+			`"sub_stripe_only"`, `"in_stripe_only"`, `"re_stripe_only"`},
+		// The second refund listing fails: no Stripe refunds that run.
+		"reconcile: org D (nothing)": {`"missing_local":["sub_A","sub_A2","sub_C","sub_stripe_only","in_A1","in_A2","in_B1","in_stripe_only"]`},
+		"reconcile: all orgs": {`"stripe_id":"in_B1","field":"status","local_value":"void","stripe_value":"uncollectible"`,
+			`"stripe_id":"sub_C","field":"status","local_value":"active","stripe_value":null`, `"re_stripe_only"`},
+	}
+	inspected := 0
 	receipt := venueoracle.Diff(t, base, requests, python, venueoracle.DiffOptions{
 		Normalize: func(_ venueoracle.Request, body string) string { return normalize(body) },
+		Inspect: func(request venueoracle.Request, goResponse venueoracle.Response) {
+			wants, ok := reconcileWants[request.Name]
+			if !ok {
+				return
+			}
+			inspected++
+			for _, want := range wants {
+				if !strings.Contains(goResponse.Body, want) {
+					t.Errorf("%s: go body lacks %s:\n%s", request.Name, want, goResponse.Body)
+				}
+			}
+		},
 	})
+	if inspected != len(reconcileWants) {
+		t.Errorf("inspected %d reconcile answers, want %d", inspected, len(reconcileWants))
+	}
 
 	fake.mu.Lock()
 	pyCalls, goCalls := append([]string(nil), fake.calls["py"]...), append([]string(nil), fake.calls["go"]...)

@@ -272,7 +272,7 @@ func mountQueryRoute(mux *http.ServeMux, query http.HandlerFunc) {
 // the rest onto one option registry is the shell-lifecycle port.
 func Run(ctx context.Context, args []string, lookup func(string) (string, bool), stdout, stderr io.Writer) int {
 	if len(args) == 1 && (args[0] == "-h" || args[0] == "--help") {
-		fmt.Fprint(stdout, usage)
+		_, _ = io.WriteString(stdout, usage)
 		return exitOK
 	}
 	getenv := getenvFunc(func(key string) string {

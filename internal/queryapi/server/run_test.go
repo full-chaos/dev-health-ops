@@ -162,3 +162,22 @@ func TestRunReadsItsSettingsFromTheLookupNotTheProcessEnvironment(t *testing.T) 
 		t.Fatalf("Run returned %d, want %d", code, exitOK)
 	}
 }
+
+// -h and --help print the usage and return 0 without serving.
+func TestRunHelpPrintsUsageWithoutServing(t *testing.T) {
+	for _, flag := range []string{"-h", "--help"} {
+		var stdout, stderr bytes.Buffer
+		addr := freeAddr(t)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		code := Run(ctx, []string{flag}, lookupOf(map[string]string{"QUERY_API_ADDR": addr}), &stdout, &stderr)
+		cancel()
+		if code != exitOK || stdout.String() != usage {
+			t.Fatalf("Run(%s) = %d, stdout %q; want 0 and the usage", flag, code, stdout.String())
+		}
+		if listener, err := net.Listen("tcp", addr); err != nil {
+			t.Fatalf("Run(%s) left %s bound: %v", flag, addr, err)
+		} else {
+			_ = listener.Close()
+		}
+	}
+}

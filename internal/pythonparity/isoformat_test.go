@@ -96,8 +96,8 @@ func TestIsoformatUTCDiffersFromRFC3339(t *testing.T) {
 // Gated like the repo's other live-oracle tests: it needs an interpreter, and
 // every CI leg does not have one.
 func TestIsoformatUTCMatchesLivePython(t *testing.T) {
-	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE") == "" {
-		t.Skip("live Python oracle runs only through the uncached live-oracle gate")
+	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
+		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
 	}
 	python := pyoracle.Resolve(t, parityRepositoryRoot(t))
 
@@ -128,5 +128,21 @@ func TestIsoformatUTCMatchesLivePython(t *testing.T) {
 		if got[key] != want {
 			t.Errorf("input %q: python %q, go %q", key, got[key], want)
 		}
+	}
+	if !t.Failed() {
+		writeLiveProof(t, "pythonparity-isoformat")
+	}
+}
+
+// writeLiveProof records that a live-Python oracle executed, for the
+// proof-file check in ci/check_go.sh live-python-oracles.
+func writeLiveProof(t *testing.T, name string) {
+	t.Helper()
+	proof := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
+	if proof == "" {
+		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
+	}
+	if err := os.WriteFile(filepath.Join(proof, name), []byte("executed"), 0o600); err != nil {
+		t.Fatal(err)
 	}
 }

@@ -2,6 +2,10 @@ package pyidna
 
 import "sort"
 
+// PunycodeEncode is CPython's str.encode("punycode"), the codec
+// encodings.idna calls after nameprep.
+func PunycodeEncode(text []rune) []byte { return punycodeEncode(text) }
+
 // punycodeEncode is CPython's str.encode("punycode") (encodings.punycode,
 // RFC 3492 as that codec implements it).
 func punycodeEncode(text []rune) []byte {

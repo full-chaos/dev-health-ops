@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity/pyidna"
 )
 
 // resolver looks up the IP addresses a hostname resolves to, mirroring
@@ -136,7 +137,7 @@ func normalizeHost(host string) (string, string) {
 	if lowered == "localhost" {
 		return lowered, ""
 	}
-	normalized, err := pythonparity.IDNAEncode(lowered)
+	normalized, err := pyidna.CodecEncode(lowered)
 	if err != nil {
 		return "", "LLM base_url host is not valid IDNA"
 	}

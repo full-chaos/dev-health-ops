@@ -41,6 +41,32 @@ def ranges(pred):
     return out
 
 word = re.compile(r"\w")
+u32 = unicodedata.ucd_3_2_0
+
+def overrides32():
+    out = []
+    for cp in range(0x110000):
+        c = chr(cp)
+        if 0xD800 <= cp <= 0xDFFF or u32.category(c) == "Cn":
+            continue
+        old = u32.normalize("NFKD", c)
+        if old != unicodedata.normalize("NFKD", c):
+            out.append([cp, [ord(x) for x in old]])
+    return out
+
+def decompositions(module, compat):
+    out = []
+    for cp in range(0x110000):
+        d = module.decomposition(chr(cp))
+        if not d:
+            continue
+        tagged = d.startswith("<")
+        if tagged != compat:
+            continue
+        parts = d.split()[1:] if tagged else d.split()
+        out.append([cp, [int(x, 16) for x in parts]])
+    return out
+
 print(json.dumps({
     "version": unicodedata.unidata_version,
     "python": sys.version.split()[0],
@@ -59,6 +85,9 @@ print(json.dumps({
                    for cp, d in ((cp, unicodedata.decomposition(chr(cp))) for cp in range(0x110000))
                    if d and not d.startswith("<") and len(d.split()) == 2
                    and unicodedata.normalize("NFC", chr(int(d.split()[0], 16)) + chr(int(d.split()[1], 16))) == chr(cp)],
+    "compat": decompositions(unicodedata, True),
+    "unassigned32": ranges(lambda c: u32.category(c) == "Cn"),
+    "decomp32": overrides32(),
 }))
 `
 
@@ -74,6 +103,9 @@ type tablesDump struct {
 	Word          [][2]rune            `json:"word"`
 	CanonicalRaw  [][2]json.RawMessage `json:"canonical"`
 	Composites    [][3]rune            `json:"composites"`
+	Compat        [][2]json.RawMessage `json:"compat"`
+	Unassigned32  [][2]rune            `json:"unassigned32"`
+	Decomp32      [][2]json.RawMessage `json:"decomp32"`
 }
 
 // TestUnicodeDataTablesMatchLivePython regenerates tables.go from the live
@@ -226,26 +258,10 @@ func renderTables(t *testing.T, dump tablesDump) []byte {
 	}
 	out.WriteString("}\n\n")
 	renderRanges(&out, "wordRanges", dump.Word)
-	out.WriteString("var canonicalDecompositions = [...]decomposition{\n")
-	for _, entry := range dump.CanonicalRaw {
-		var r rune
-		var mapping []rune
-		if err := json.Unmarshal(entry[0], &r); err != nil {
-			t.Fatal(err)
-		}
-		if err := json.Unmarshal(entry[1], &mapping); err != nil {
-			t.Fatal(err)
-		}
-		fmt.Fprintf(&out, "\t{0x%x, []rune{", r)
-		for i, part := range mapping {
-			if i > 0 {
-				out.WriteString(", ")
-			}
-			fmt.Fprintf(&out, "0x%x", part)
-		}
-		out.WriteString("}},\n")
-	}
-	out.WriteString("}\n\n")
+	renderDecompositions(t, &out, "canonicalDecompositions", dump.CanonicalRaw)
+	renderDecompositions(t, &out, "compatDecompositions", dump.Compat)
+	renderRanges(&out, "unassigned32Ranges", dump.Unassigned32)
+	renderDecompositions(t, &out, "decompositionOverrides32", dump.Decomp32)
 	out.WriteString("var primaryComposites = [...][3]rune{\n")
 	for _, entry := range dump.Composites {
 		fmt.Fprintf(&out, "\t{0x%x, 0x%x, 0x%x},\n", entry[0], entry[1], entry[2])
@@ -293,6 +309,32 @@ func renderRanges(out *strings.Builder, name string, ranges [][2]rune) {
 	fmt.Fprintf(out, "var %s = [...][2]rune{\n", name)
 	for _, entry := range ranges {
 		fmt.Fprintf(out, "\t{0x%x, 0x%x},\n", entry[0], entry[1])
+	}
+	out.WriteString("}\n\n")
+}
+
+// renderDecompositions writes one decomposition table: entries of a code
+// point and the code points its mapping holds.
+func renderDecompositions(t *testing.T, out *strings.Builder, name string, entries [][2]json.RawMessage) {
+	t.Helper()
+	fmt.Fprintf(out, "var %s = [...]decomposition{\n", name)
+	for _, entry := range entries {
+		var r rune
+		var mapping []rune
+		if err := json.Unmarshal(entry[0], &r); err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(entry[1], &mapping); err != nil {
+			t.Fatal(err)
+		}
+		fmt.Fprintf(out, "\t{0x%x, []rune{", r)
+		for i, part := range mapping {
+			if i > 0 {
+				out.WriteString(", ")
+			}
+			fmt.Fprintf(out, "0x%x", part)
+		}
+		out.WriteString("}},\n")
 	}
 	out.WriteString("}\n\n")
 }

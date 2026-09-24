@@ -1,4 +1,4 @@
-package pythonparity
+package pyidna
 
 import (
 	"encoding/json"
@@ -49,15 +49,15 @@ func idnaCorpus() []string {
 	return corpus
 }
 
-// TestIDNAEncodeMatchesLivePython compares IDNAEncode with str.encode("idna")
+// TestCodecEncodeMatchesLivePython compares CodecEncode with str.encode("idna")
 // for every code point on its own and between two letters, and for a corpus
 // of bidirectional, mapping and length cases.
-func TestIDNAEncodeMatchesLivePython(t *testing.T) {
+func TestCodecEncodeMatchesLivePython(t *testing.T) {
 	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
 		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
 	}
 	_, file, _, _ := runtime.Caller(0)
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
+	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
 	python := pyoracle.Resolve(t, root)
 	corpus := idnaCorpus()
 	input, _ := json.Marshal(corpus)
@@ -76,7 +76,7 @@ func TestIDNAEncodeMatchesLivePython(t *testing.T) {
 	mismatches, total := 0, 0
 	check := func(text, expected string) {
 		total++
-		got, err := IDNAEncode(text)
+		got, err := CodecEncode(text)
 		if err != nil {
 			got = "!"
 		}

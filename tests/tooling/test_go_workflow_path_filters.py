@@ -1286,3 +1286,51 @@ def test_an_empty_tracked_list_for_the_repo_root_fails_loudly(
     finally:
         monkeypatch.undo()
         _tracked_paths.cache_clear()
+
+
+def _closures_installed_by_workflows() -> set[str]:
+    """Every `ci/requirements-*.txt` a workflow installs with `pip install -r`.
+
+    Both workflow extensions are read, and a shell line continuation
+    (`\\` + newline) between the command and the `-r` flag does not hide the
+    install.
+    """
+    workflows = sorted((REPO_ROOT / ".github/workflows").glob("*.y*ml"))
+    installed: set[str] = set()
+    for workflow in workflows:
+        text = re.sub(r"\\\n\s*", " ", workflow.read_text())
+        for match in re.finditer(
+            r"pip install[^\n]*?-r\s+(ci/requirements-[\w.-]+\.txt)", text
+        ):
+            installed.add(match.group(1))
+    return installed
+
+
+@pytest.mark.parametrize("event", ["push", "pull_request"])
+def test_every_ci_closure_a_workflow_installs_triggers_the_go_workflow(
+    event: str,
+) -> None:
+    """A change to a pinned closure must select the jobs that install it.
+
+    The closures are installed with `pip install --no-deps`, so a re-pin changes
+    what those jobs run against. The list of files was maintained by hand and the
+    ClickHouse-migrations closure was missing from it: a PR that changed only that
+    file selected no storage shard, and the jobs that consume it never ran. The
+    closures are derived from the workflows' own install steps, so a new closure
+    that a job installs is covered without editing this test.
+    """
+    closures = _closures_installed_by_workflows()
+    assert {
+        "ci/requirements-live-python-oracles.txt",
+        "ci/requirements-clickhouse-migrations.txt",
+    } <= closures, (
+        f"the workflow scan found {sorted(closures)}; it must find both known "
+        "closures, or this test would pass vacuously"
+    )
+
+    go_paths = (_on_block(_load(GO_WORKFLOW)).get(event) or {}).get("paths") or []
+    unmatched = sorted(path for path in closures if not _matches_any(path, go_paths))
+    assert not unmatched, (
+        f"closure(s) installed by a workflow match no {event} path filter in "
+        f"go.yml, so a PR changing only one of them selects no Go job: {unmatched}"
+    )

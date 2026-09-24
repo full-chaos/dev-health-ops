@@ -52,6 +52,8 @@ func credentialSeedRows(f venueFixture) []credentialSeedRow {
 		{org: f.orgA, provider: "jira", name: "null-config", secrets: map[string]any{"email": "a@example.test", "api_token": "t"}, config: "", isActive: true},
 		{org: f.orgA, provider: "jira", name: "null-config2", secrets: map[string]any{"email": "b@example.test", "api_token": "t"}, config: "", isActive: true},
 		{org: f.orgA, provider: "github", name: "repos", secrets: map[string]any{"token": "gh_repos"}, config: `{"org": "shadowed"}`, isActive: true},
+		// 1e400 is valid JSON (Postgres json keeps it) that decodes to inf.
+		{org: f.orgA, provider: "github", name: "infinite", secrets: map[string]any{"token": "gh_inf"}, config: `{"limit": 1e400, "floor": -1e400}`, isActive: true},
 		{org: f.orgA, provider: "pagerduty", name: "default", secrets: map[string]any{"auth_mode": "api_token", "api_token": "x", "subdomain": "s", "region": "us"}, config: `{"auth_mode": "api_token"}`, isActive: true},
 		{org: f.orgB, provider: "github", name: "other-org", secrets: map[string]any{"token": "ghp_other"}, config: `{}`, isActive: true},
 	}
@@ -198,6 +200,9 @@ func credentialRequests(f venueFixture, tokens map[string]string) []venueoracle.
 	add("patch: credentials only leaves an inactive row inactive", "PATCH", one("gitlab", "inactive2"), jsonH("admin"), b64(`{"credentials":{"token":"z"}}`))
 	add("patch: same is_active on an untouched row", "PATCH", one("gitlab", "noop-a"), jsonH("admin"), b64(`{"is_active":false}`))
 	add("patch: equal config on an untouched row", "PATCH", one("github", "noop-b"), jsonH("admin"), b64(`{"config":{"y":2,"x":1.0}}`))
+	// inf == inf: an equal config holding infinities writes nothing.
+	add("patch: equal config with infinities", "PATCH", one("github", "infinite"), jsonH("admin"), b64(`{"config":{"floor":-1e400,"limit":1e400}}`))
+	add("patch: credentials with an equal infinite config", "PATCH", one("github", "infinite"), jsonH("admin"), b64(`{"credentials":{"token":"gh_inf2"},"config":{"limit":1e400,"floor":-1e400}}`))
 	add("get: an equal config leaves the stored order", "GET", one("github", "noop-b"), bearer("admin"), nil)
 	add("create: equal config replace on an untouched row", "POST", base, jsonH("admin"), b64(`{"provider":"github","name":"eq-create","credentials":{"token":"gh_eq2"},"config":{"alpha":[1,2],"org":"acme","zeta":1.0}}`))
 	add("get: an equal config on create leaves the stored order", "GET", one("github", "eq-create"), bearer("admin"), nil)

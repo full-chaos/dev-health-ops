@@ -66,6 +66,14 @@ func TestPyEqual(t *testing.T) {
 		{`{"a":12345678901234567890}`, `{"a":12345678901234567890}`, true},
 		{`{"a":{"b":[{"c":1}]}}`, `{"a":{"b":[{"c":true}]}}`, true},
 		{`{"a":"x"}`, `{"a":"y"}`, false},
+		// 1e400 is valid JSON (Postgres json stores it) and decodes to
+		// inf, and Python's inf == inf is True; an infinity equals no
+		// finite number and no infinity of the other sign.
+		{`{"a":1e400}`, `{"a":1e400}`, true},
+		{`{"a":-1e400}`, `{"a":-1e400}`, true},
+		{`{"a":1e400}`, `{"a":-1e400}`, false},
+		{`{"a":1e400}`, `{"a":1e308}`, false},
+		{`{"a":1e400}`, `{"a":true}`, false},
 	}
 	for _, c := range cases {
 		if got := pyEqual(decodeObject(t, c.a), decodeObject(t, c.b)); got != c.equal {

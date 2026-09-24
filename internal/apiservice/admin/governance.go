@@ -27,6 +27,7 @@ func (h *handlers) governanceRoutes() []httpapi.Route {
 	out = append(out, h.ipAllowlistRoutes()...)
 	out = append(out, h.retentionRoutes()...)
 	out = append(out, h.settingsRoutes()...)
+	out = append(out, h.llmSettingsRoutes()...)
 	return out
 }
 

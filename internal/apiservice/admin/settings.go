@@ -80,8 +80,14 @@ func (s pgStore) settingsByCategory(ctx context.Context, orgID, category string)
 }
 
 func (s pgStore) settingByKey(ctx context.Context, orgID, category, key string) (*setting, error) {
+	return settingByKeyOn(ctx, s.Pool, orgID, category, key)
+}
+
+// settingByKeyOn reads one settings row over db (the pool or an open
+// transaction).
+func settingByKeyOn(ctx context.Context, db pgExecer, orgID, category, key string) (*setting, error) {
 	var row setting
-	err := s.Pool.QueryRow(ctx,
+	err := db.QueryRow(ctx,
 		`SELECT id, key, value, is_encrypted, description FROM settings WHERE org_id = $1 AND category = $2 AND key = $3`,
 		orgID, category, key).Scan(&row.ID, &row.Key, &row.Value, &row.IsEncrypted, &row.Description)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -216,39 +222,41 @@ func (h *handlers) getSetting(w http.ResponseWriter, r *http.Request) {
 	policy.WriteDetail(w, http.StatusNotFound, "Setting not found", nil)
 }
 
-// setSetting is SettingsService.set: it encrypts a non-empty value when asked
-// (Python raises RuntimeError without the key), stores the flag whatever the
-// value, and keeps the old description when none is sent.
-func (h *handlers) setSetting(ctx context.Context, w http.ResponseWriter, orgID, category, key string, value *string, encrypt bool, description *string) (*setting, bool) {
+// errEncryptionKeyMissing is Python's RuntimeError when SETTINGS_ENCRYPTION_KEY
+// is not configured: an unhandled 500.
+var errEncryptionKeyMissing = errors.New("SETTINGS_ENCRYPTION_KEY is not configured")
+
+// upsertSetting is SettingsService.set over db (the pool or an open
+// transaction): it encrypts a non-empty value when asked, stores the flag
+// whatever the value, and keeps the old description when none is sent. The
+// returned row is what the ORM object holds after the flush (an encrypted
+// value is its ciphertext).
+func (h *handlers) upsertSetting(ctx context.Context, db pgExecer, orgID, category, key string, value *string, encrypt bool, description *string) (*setting, error) {
 	stored := value
 	if encrypt && value != nil && *value != "" {
 		if !h.encryptionConfigured() {
-			h.internalError(ctx, w, "encrypt setting", errors.New("SETTINGS_ENCRYPTION_KEY is not configured"))
-			return nil, false
+			return nil, errEncryptionKeyMissing
 		}
 		sealed, err := h.decryptor.Encrypt([]byte(*value))
 		if err != nil {
-			h.internalError(ctx, w, "encrypt setting", err)
-			return nil, false
+			return nil, err
 		}
 		text := revealSecret(sealed)
 		stored = &text
 	}
-	existing, err := h.store.settingByKey(ctx, orgID, category, key)
+	existing, err := settingByKeyOn(ctx, db, orgID, category, key)
 	if err != nil {
-		h.internalError(ctx, w, "look up setting", err)
-		return nil, false
+		return nil, err
 	}
 	now := h.store.now().UTC()
 	if existing == nil {
 		row := &setting{ID: uuid.New(), Key: key, Value: stored, IsEncrypted: encrypt, Description: description}
-		if _, err := h.store.Pool.Exec(ctx, `
+		if _, err := db.Exec(ctx, `
 INSERT INTO settings (id, org_id, category, key, value, is_encrypted, description, created_at, updated_at)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)`, row.ID, orgID, category, key, stored, encrypt, description, now); err != nil {
-			h.internalError(ctx, w, "insert setting", err)
-			return nil, false
+			return nil, err
 		}
-		return row, true
+		return row, nil
 	}
 	changed := !sameOptionalString(existing.Value, stored) || existing.IsEncrypted != encrypt
 	existing.Value, existing.IsEncrypted = stored, encrypt
@@ -261,14 +269,23 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)`, row.ID, orgID, category, key, stor
 	// The ORM only UPDATEs (and fires updated_at's onupdate) when an assigned
 	// attribute really differs from the loaded one.
 	if changed {
-		if _, err := h.store.Pool.Exec(ctx, `
+		if _, err := db.Exec(ctx, `
 UPDATE settings SET value = $2, is_encrypted = $3, description = $4, updated_at = $5 WHERE id = $1`,
 			existing.ID, existing.Value, existing.IsEncrypted, existing.Description, now); err != nil {
-			h.internalError(ctx, w, "update setting", err)
-			return nil, false
+			return nil, err
 		}
 	}
-	return existing, true
+	return existing, nil
+}
+
+// setSetting answers the 500 for a failed upsertSetting.
+func (h *handlers) setSetting(ctx context.Context, w http.ResponseWriter, orgID, category, key string, value *string, encrypt bool, description *string) (*setting, bool) {
+	row, err := h.upsertSetting(ctx, h.store.Pool, orgID, category, key, value, encrypt, description)
+	if err != nil {
+		h.internalError(ctx, w, "set setting", err)
+		return nil, false
+	}
+	return row, true
 }
 
 func sameOptionalString(a, b *string) bool {

@@ -6,6 +6,7 @@ import (
 	"net/netip"
 	"strings"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/externalurl"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
@@ -23,7 +24,7 @@ func (e *discoveryStatusError) Error() string { return e.Detail }
 const defaultGitHubAPIBase = "https://api.github.com"
 
 // discoveryHostLookup resolves a hostname for the SSRF guard; tests replace it.
-var discoveryHostLookup func(context.Context, string) ([]netip.Addr, error) = resolveHostAddrs
+var discoveryHostLookup func(context.Context, string) ([]netip.Addr, error) = externalurl.ResolveHostAddrs
 
 // prepareDiscoveryCredential turns a resolved stored credential into the
 // credential discovery is allowed to send to a provider, applying
@@ -88,7 +89,7 @@ func prepareGitHubDiscovery(ctx context.Context, credential providerfoundation.C
 	if value, ok := credential.Secret("base_url"); ok && value.Configured() {
 		base = value.Reveal()
 	}
-	if valid, detail := validateExternalURL(ctx, base, discoveryHostLookup); !valid {
+	if valid, detail := externalurl.Validate(ctx, base, discoveryHostLookup); !valid {
 		return providerfoundation.Credential{}, &discoveryStatusError{http.StatusBadRequest, detail}
 	}
 	unauthorized := &discoveryStatusError{http.StatusUnauthorized, "GitHub App authentication failed"}

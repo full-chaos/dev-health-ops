@@ -1,6 +1,6 @@
 //go:build integration
 
-package teamsidentity
+package externalurl
 
 import (
 	"context"
@@ -16,7 +16,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
-// TestValidateExternalURLVenueOracle runs the Go validateExternalURL and the
+// TestValidateExternalURLVenueOracle runs the Go Validate and the
 // real Python _validate_external_url over the same URLs and requires the
 // same (ok, error) answer for every one. IP literals keep DNS out of it; the
 // list covers every branch (scheme, hostname, userinfo, blocked names) and
@@ -67,7 +67,7 @@ func TestValidateExternalURLVenueOracle(t *testing.T) {
 		t.Fatalf("python answered %d for %d urls", len(want), len(urls))
 	}
 	for i, rawURL := range urls {
-		ok, detail := validateExternalURL(context.Background(), rawURL, resolveHostAddrs)
+		ok, detail := Validate(context.Background(), rawURL, ResolveHostAddrs)
 		wantOK, _ := want[i][0].(bool)
 		wantDetail, _ := want[i][1].(string)
 		if ok != wantOK || detail != wantDetail {

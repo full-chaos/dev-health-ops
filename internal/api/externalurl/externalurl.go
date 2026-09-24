@@ -1,4 +1,6 @@
-package teamsidentity
+// Package externalurl is the SSRF guard the credential and team admin routes
+// apply to a stored provider URL before any outbound call.
+package externalurl
 
 import (
 	"context"
@@ -8,7 +10,7 @@ import (
 	"strings"
 )
 
-// validateExternalURL ports _validate_external_url
+// Validate ports _validate_external_url
 // (src/dev_health_ops/api/admin/routers/credentials.py:466-501), the SSRF
 // guard Python's discover route applies to a GitHub App credential's
 // base_url before minting an installation token against it. It returns the
@@ -19,7 +21,7 @@ import (
 // `_reserved_network(s)`, link-local) rather than approximated from Go's
 // net/netip predicates, which cover a strict subset of them (netip
 // IsPrivate is RFC 1918 / fc00::/7 only).
-func validateExternalURL(ctx context.Context, rawURL string, lookup func(context.Context, string) ([]netip.Addr, error)) (bool, string) {
+func Validate(ctx context.Context, rawURL string, lookup func(context.Context, string) ([]netip.Addr, error)) (bool, string) {
 	parsed, err := url.Parse(rawURL)
 	if err != nil {
 		// urlparse never raises for these inputs; an unparseable value has
@@ -57,7 +59,9 @@ func validateExternalURL(ctx context.Context, rawURL string, lookup func(context
 	return true, ""
 }
 
-func resolveHostAddrs(ctx context.Context, host string) ([]netip.Addr, error) {
+// ResolveHostAddrs is the system resolver, the lookup Validate uses in
+// production.
+func ResolveHostAddrs(ctx context.Context, host string) ([]netip.Addr, error) {
 	ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
 	if err != nil {
 		return nil, err

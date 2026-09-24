@@ -1,6 +1,9 @@
 # The venue-oracles discovery of ci/check_go.sh (see "Discovery" there): reads
 # one package's *_test.go files and prints "RUN <Test>" for each top-level test
-# whose code reaches internal/testsupport/venueoracle, and "LOCAL <Test> <file>"
+# whose code reaches a harness entry point of internal/testsupport/venueoracle
+# (Start, Diff, WriteProof, WriteGoOnlyProof: what builds a venue or writes a
+# proof; a pure helper such as RedactJSON or Mark does not make a unit test an
+# oracle), and "LOCAL <Test> <file>"
 # for such a test carrying the local-only marker (-v marker=...) on the line
 # directly above it. A file, not a here-document: a here-document over the
 # measured pipe budget can wedge (tests/tooling/test_local_validate_heredocs.py).
@@ -48,7 +51,7 @@ FNR == 1 { flush(); prev = "" }
 }
 END {
   flush()
-  for (d in body) if (index(body[d], "venueoracle.")) uses[d] = 1
+  for (d in body) if (body[d] ~ /venueoracle\.(Start|Diff|WriteProof|WriteGoOnlyProof)\(/) uses[d] = 1
   do {
     changed = 0
     for (d in uses) { split(names[d], ns, " "); for (i in ns) if (ns[i] != "") used[ns[i]] = 1 }

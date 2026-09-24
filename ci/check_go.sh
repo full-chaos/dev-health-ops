@@ -84,8 +84,8 @@ usage() {
          containers AND the whole real FastAPI app, a heavier requirement
          than any live-python-oracles block above -- needs the FULL project
          Python environment (`uv sync`), never the narrow
-         ci/requirements-live-python-oracles.txt closure. Discovery is a
-         every test in a *_test.go importing the venueoracle harness (a
+         ci/requirements-live-python-oracles.txt closure. Discovery is
+         every test reaching a venueoracle harness entry point (a
          test marked //venueoracle:local-only is named and left out),
          never a hardcoded list. Fails if
          any discovered test has no proof file afterward (a skip, never a
@@ -1610,9 +1610,11 @@ check_live_python_oracles() {
 # Discovery is by the harness, never by a test's name or a hardcoded list:
 # in every package that has a *_test.go importing
 # internal/testsupport/venueoracle, every top-level Test function (TestMain
-# aside) whose code reaches the harness -- a `venueoracle.` reference in its
-# own body, or a name (function, var, const or type) of the same package's
-# test files that reaches it, followed to a fixed point -- is discovered,
+# aside) whose code reaches a harness entry point -- a call of
+# venueoracle.Start, Diff, WriteProof or WriteGoOnlyProof in its own body,
+# or a name (function, var, const or type) of the same package's test files
+# that reaches one, followed to a fixed point -- is discovered (a unit test
+# that only reaches a pure helper such as venueoracle.RedactJSON is not),
 # whatever its parameter is called, however its signature is wrapped, and
 # in whichever file of the package its helpers live (a name-based grep once
 # ran 2 of the 13 admin oracles; a one-line `(t *testing.T)` pattern missed

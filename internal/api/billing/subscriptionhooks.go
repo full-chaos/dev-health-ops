@@ -113,7 +113,7 @@ func (h handlers) subscriptionUpdated(ctx context.Context, subscription pyjson.V
 		attributes.Set("old_tier", *oldTier)
 		attributes.Set("new_tier", tier)
 		if err := h.enqueueBillingNotification(ctx, "subscription_changed", orgID, attributes); err != nil {
-			h.logger.DebugContext(ctx, "Failed to enqueue subscription changed email", "org_id", orgText, "error", err.Error())
+			h.logger.WarnContext(ctx, "Failed to enqueue subscription changed email", "org_id", orgText, "error", err.Error())
 		}
 	}
 	return nil
@@ -138,7 +138,7 @@ func (h handlers) subscriptionDeleted(ctx context.Context, subscription pyjson.V
 	attributes := pyjson.NewObject()
 	attributes.Set("tier", currentTier)
 	if err := h.enqueueBillingNotification(ctx, "subscription_cancelled", orgID, attributes); err != nil {
-		h.logger.DebugContext(ctx, "Failed to enqueue subscription cancelled email", "org_id", pyStr(orgID), "error", err.Error())
+		h.logger.WarnContext(ctx, "Failed to enqueue subscription cancelled email", "org_id", pyStr(orgID), "error", err.Error())
 	}
 }
 
@@ -224,7 +224,7 @@ func (h handlers) trialWillEnd(ctx context.Context, subscription pyjson.Value) e
 	attributes.Set("days_remaining", pyjson.IntOf(days))
 	attributes.Set("trial_end_date", trialEnd.Format(time.DateOnly))
 	if err := h.enqueueBillingNotification(ctx, "trial_expiring", orgID, attributes); err != nil {
-		h.logger.DebugContext(ctx, "Failed to enqueue trial expiring email", "org_id", pyStr(orgID), "error", err.Error())
+		h.logger.WarnContext(ctx, "Failed to enqueue trial expiring email", "org_id", pyStr(orgID), "error", err.Error())
 		return nil
 	}
 	h.logger.InfoContext(ctx, "Trial ending soon", "org_id", pyStr(orgID), "customer", pyStr(customer), "days_remaining", days)

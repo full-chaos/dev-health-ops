@@ -39,7 +39,7 @@ for text in json.loads(sys.stdin.read()):
             row[name] = {"ok": str(model.model_validate({"v": json.loads(text)}).v)}
         except ValidationError as exc:
             err = exc.errors()[0]
-            row[name] = {"type": err["type"], "msg": err["msg"]}
+            row[name] = {"type": err["type"], "msg": err["msg"], "input": json.dumps(err["input"])}
     out.append(row)
 print(json.dumps(out))
 `
@@ -62,7 +62,7 @@ func TestBodyIntMatchesLivePydantic(t *testing.T) {
 		t.Fatalf("live pydantic: %v", pyoracle.RunError(python, err, output))
 	}
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
-	var want []map[string]struct{ OK, Type, Msg string }
+	var want []map[string]struct{ OK, Type, Msg, Input string }
 	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &want); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -73,7 +73,11 @@ func TestBodyIntMatchesLivePydantic(t *testing.T) {
 		if ok {
 			return "ok:" + value
 		}
-		return errs[0].Type + "|" + errs[0].Msg
+		echoed, err := pyjson.Dumps(errs[0].Input)
+		if err != nil {
+			t.Fatalf("encode echoed input: %v", err)
+		}
+		return errs[0].Type + "|" + errs[0].Msg + "|" + echoed
 	}
 	for index, text := range bodyIntCorpus {
 		value, err := pyjson.DecodeString(text)
@@ -105,7 +109,7 @@ func TestBodyIntMatchesLivePydantic(t *testing.T) {
 			expected := want[index][name]
 			wantText := "ok:" + expected.OK
 			if expected.OK == "" {
-				wantText = expected.Type + "|" + expected.Msg
+				wantText = expected.Type + "|" + expected.Msg + "|" + expected.Input
 			}
 			if got != wantText {
 				t.Errorf("%s %s: go %q, python %q", name, text, got, wantText)

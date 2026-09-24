@@ -3,6 +3,7 @@ package licensing
 import (
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -49,13 +50,21 @@ for case in json.loads(sys.stdin.read()):
         except Exception as exc:
             result["limit"] = "raise " + type(exc).__name__
         checks = []
-        for current in case["currents"]:
+        for current in case["currents"] or []:
             try:
                 allowed, reason = service.check_limit(org, case["key"], current)
                 checks.append([allowed, reason])
             except Exception as exc:
                 checks.append("raise " + type(exc).__name__)
         result["checks"] = checks
+        backfills = []
+        for requested in case.get("requested") or []:
+            try:
+                allowed, reason = service.check_backfill_limit(org, int(requested))
+                backfills.append([allowed, reason])
+            except Exception as exc:
+                backfills.append("raise " + type(exc).__name__)
+        result["backfills"] = backfills
     out.append(result)
 print(json.dumps(out))
 `
@@ -67,6 +76,9 @@ type tierLimitCase struct {
 	Rows     [][2]*string      `json:"rows"`
 	Key      string            `json:"key"`
 	Currents []int64           `json:"currents"`
+	// Requested are check_backfill_limit's requested_days, as decimal text
+	// so an int past 64 bits reaches both planes exactly.
+	Requested []string `json:"requested,omitempty"`
 }
 
 type tierLimitLicense struct {
@@ -107,6 +119,22 @@ func tierLimitCases() []tierLimitCase {
 			tierLimitCase{OrgTier: text("team"), RowTier: "community", Rows: [][2]*string{{text("max_repos"), value}}, Key: "max_repos", Currents: currents},
 		)
 	}
+	// check_backfill_limit: backfill_days from the tier defaults, from
+	// every override number shape, and from tier_limits text.
+	requested := []string{"-1", "0", "1", "29", "30", "31", "90", "91", "365", "366", "3650", "123456789012345678901234567890"}
+	for _, tier := range []*string{nil, text("community"), text("team"), text("enterprise"), text("gold")} {
+		cases = append(cases, tierLimitCase{OrgTier: tier, RowTier: "team", Key: "backfill_days", Requested: requested})
+	}
+	for _, override := range []*string{text(`{"backfill_days": null}`), text(`{"backfill_days": true}`), text(`{"backfill_days": false}`),
+		text(`{"backfill_days": 30}`), text(`{"backfill_days": 30.5}`), text(`{"backfill_days": 1e400}`), text(`{"backfill_days": NaN}`),
+		text(`{"backfill_days": 123456789012345678901234567890}`), text(`{"backfill_days": "30"}`), text(`{"backfill_days": 0}`)} {
+		cases = append(cases, tierLimitCase{OrgTier: text("team"), License: &tierLimitLicense{Tier: "team", Override: override},
+			RowTier: "team", Key: "backfill_days", Requested: requested})
+	}
+	for _, value := range values {
+		cases = append(cases, tierLimitCase{OrgTier: text("team"), RowTier: "team", Rows: [][2]*string{{text("backfill_days"), value}},
+			Key: "backfill_days", Requested: requested})
+	}
 	// A row for a key the defaults do not carry, and asking for it.
 	cases = append(cases,
 		tierLimitCase{OrgTier: text("enterprise"), RowTier: "enterprise", Rows: [][2]*string{{text("custom"), text("4")}}, Key: "custom", Currents: currents},
@@ -140,28 +168,16 @@ func TestTierLimitsVenueOracleMatchesLivePython(t *testing.T) {
 	}
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
 	var want []struct {
-		Limit  string            `json:"limit"`
-		Checks []json.RawMessage `json:"checks"`
+		Limit     string            `json:"limit"`
+		Checks    []json.RawMessage `json:"checks"`
+		Backfills []json.RawMessage `json:"backfills"`
 	}
 	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &want); err != nil || len(want) != len(cases) {
 		t.Fatalf("decode: %v (%d of %d)\n%s", err, len(want), len(cases), output)
 	}
 	raised := 0
 	for index, c := range cases {
-		inputs := TierLimitInputs{OrgTier: c.OrgTier, TierRows: func(tier string) ([]TierLimitRow, error) {
-			if tier != c.RowTier {
-				return nil, nil
-			}
-			var rows []TierLimitRow
-			for _, row := range c.Rows {
-				rows = append(rows, TierLimitRow{Key: *row[0], Value: row[1]})
-			}
-			return rows, nil
-		}}
-		if c.License != nil {
-			inputs.License = &LicenseRow{Tier: text(c.License.Tier), LimitsOverride: c.License.Override}
-			inputs.OrgTier = nil
-		}
+		inputs := caseInputs(c)
 		limit, err := GetLimitFrom(inputs, c.Key)
 		got := pyjson.Repr(limit)
 		if err != nil {
@@ -191,8 +207,57 @@ func TestTierLimitsVenueOracleMatchesLivePython(t *testing.T) {
 	if raised == 0 {
 		t.Error("no case reached the OverflowError path")
 	}
+	backfillRefusals := 0
+	for index, c := range cases {
+		inputs := caseInputs(c)
+		for position, text := range c.Requested {
+			requested, ok := new(big.Int).SetString(text, 10)
+			if !ok {
+				t.Fatalf("requested %q", text)
+			}
+			allowed, reason, err := CheckBackfillLimitFrom(inputs, requested)
+			var goCheck string
+			if err != nil {
+				goCheck = `"raise ` + map[bool]string{true: "OverflowError", false: err.Error()}[err == ErrTierLimitOverflow] + `"`
+			} else {
+				encoded, _ := json.Marshal([]any{allowed, map[bool]any{true: nil, false: reason}[reason == "" && allowed]})
+				goCheck = string(encoded)
+				if !allowed {
+					backfillRefusals++
+				}
+			}
+			var pythonCheck any
+			_ = json.Unmarshal(want[index].Backfills[position], &pythonCheck)
+			compact, _ := json.Marshal(pythonCheck)
+			if goCheck != string(compact) {
+				t.Errorf("case %d %+v requested %s: check_backfill_limit go %s, python %s", index, describe(c), text, goCheck, want[index].Backfills[position])
+			}
+		}
+	}
+	if backfillRefusals == 0 {
+		t.Error("no case reached a backfill refusal")
+	}
 	t.Logf("%d cases compared, %d raising", len(cases), raised)
 	venueoracle.WriteProof(t)
+}
+
+// caseInputs is a case's stored rows as GetLimitFrom reads them.
+func caseInputs(c tierLimitCase) TierLimitInputs {
+	inputs := TierLimitInputs{OrgTier: c.OrgTier, TierRows: func(tier string) ([]TierLimitRow, error) {
+		if tier != c.RowTier {
+			return nil, nil
+		}
+		var rows []TierLimitRow
+		for _, row := range c.Rows {
+			rows = append(rows, TierLimitRow{Key: *row[0], Value: row[1]})
+		}
+		return rows, nil
+	}}
+	if c.License != nil {
+		inputs.License = &LicenseRow{Tier: text(c.License.Tier), LimitsOverride: c.License.Override}
+		inputs.OrgTier = nil
+	}
+	return inputs
 }
 
 func describe(c tierLimitCase) string {

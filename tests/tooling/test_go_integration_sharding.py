@@ -215,6 +215,10 @@ EXPECTED_PACKAGES = {
     # feature_flags/org_feature_overrides/org_licenses/organizations/
     # settings precedence matrix runs against a real Postgres container.
     "internal/llmorgsettings",
+    # CHAOS-6462: the PostgreSQL head baseline is re-derived by executing the
+    # real Python upgrade on a fresh PostgreSQL, and dho's migrator is checked
+    # against that database -- only a real engine can build either side.
+    "internal/pgmigrate",
     "internal/platform/config",
     "internal/providerfoundation",
     "internal/providersync",

@@ -14,6 +14,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/billing/stripeclient"
 	"github.com/full-chaos/dev-health-ops/internal/api/webhookintake"
+	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
 	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
@@ -133,6 +134,9 @@ type Deps struct {
 	// warning, matching org_deletion.py's own behavior when its ClickHouse
 	// client cannot connect.
 	ClickHouseDSN string
+	// Invites is create_org_invite's token secret, accept-link base and email
+	// sender (CHAOS-6391); the zero value sends no email.
+	Invites admin.InviteConfig
 	// Now is injectable so a test can drive an area's own clock (e.g.
 	// admin's keyed rate limiter, CHAOS-6357). Nil means time.Now, the
 	// same "nil is the production default" contract every other Now field

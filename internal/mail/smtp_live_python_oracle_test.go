@@ -1,25 +1,21 @@
 package mail
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"testing"
-	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/smtpcapture"
 )
 
 // smtpOracleProgram drives the REAL Python mail path
@@ -44,151 +40,6 @@ async def run():
 
 asyncio.run(run())
 `
-
-// capturedMail is one message as an SMTP server saw it on the wire: the
-// envelope arguments exactly as sent (everything after "MAIL FROM:" /
-// "RCPT TO:") and the DATA payload, dot-unstuffed, CRLF preserved.
-type capturedMail struct {
-	MailFrom string
-	RcptTo   []string
-	Data     string
-}
-
-// captureSMTPServer is a minimal in-process SMTP server that records every
-// message byte-for-byte. It is the oracle's mail sink: both planes send the
-// same message to it and the raw wire bytes are compared, which is strictly
-// more precise than reading either back through a mail catcher's parsed view.
-type captureSMTPServer struct {
-	listener net.Listener
-	mu       sync.Mutex
-	mails    []capturedMail
-}
-
-func startCaptureSMTPServer(t *testing.T) *captureSMTPServer {
-	t.Helper()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	server := &captureSMTPServer{listener: listener}
-	t.Cleanup(func() { _ = listener.Close() })
-	go func() {
-		for {
-			conn, err := listener.Accept()
-			if err != nil {
-				return
-			}
-			go server.serve(conn)
-		}
-	}()
-	return server
-}
-
-func (server *captureSMTPServer) hostPort(t *testing.T) (string, int) {
-	t.Helper()
-	host, port, err := net.SplitHostPort(server.listener.Addr().String())
-	if err != nil {
-		t.Fatal(err)
-	}
-	number, err := strconv.Atoi(port)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return host, number
-}
-
-func (server *captureSMTPServer) take(t *testing.T) capturedMail {
-	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		server.mu.Lock()
-		if len(server.mails) > 0 {
-			mail := server.mails[0]
-			server.mails = server.mails[1:]
-			server.mu.Unlock()
-			return mail
-		}
-		server.mu.Unlock()
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatal("the capture SMTP server never received a message")
-	return capturedMail{}
-}
-
-// assertNone fails when the server received (or is about to receive) a
-// message: it waits long enough for one already in flight to land.
-func (server *captureSMTPServer) assertNone(t *testing.T) {
-	t.Helper()
-	time.Sleep(300 * time.Millisecond)
-	server.mu.Lock()
-	defer server.mu.Unlock()
-	if len(server.mails) != 0 {
-		t.Fatalf("the SMTP server received a message that must have been refused: %q", server.mails[0].Data)
-	}
-}
-
-func (server *captureSMTPServer) serve(conn net.Conn) {
-	defer conn.Close()
-	reader := bufio.NewReader(conn)
-	reply := func(line string) { _, _ = conn.Write([]byte(line + "\r\n")) }
-	reply("220 capture.smtp.test ESMTP")
-	var current capturedMail
-	for {
-		line, err := reader.ReadString('\n')
-		if err != nil {
-			return
-		}
-		trimmed := strings.TrimRight(line, "\r\n")
-		upper := strings.ToUpper(trimmed)
-		switch {
-		case strings.HasPrefix(upper, "EHLO"), strings.HasPrefix(upper, "HELO"):
-			reply("250 capture.smtp.test")
-		case strings.HasPrefix(upper, "MAIL FROM:"):
-			current = capturedMail{MailFrom: trimmed[len("MAIL FROM:"):]}
-			reply("250 OK")
-		case strings.HasPrefix(upper, "RCPT TO:"):
-			current.RcptTo = append(current.RcptTo, trimmed[len("RCPT TO:"):])
-			reply("250 OK")
-		case upper == "DATA":
-			reply("354 go ahead")
-			var data bytes.Buffer
-			for {
-				dataLine, err := reader.ReadString('\n')
-				if err != nil {
-					return
-				}
-				if dataLine == ".\r\n" {
-					break
-				}
-				data.WriteString(strings.TrimPrefix(dataLine, ".")) // dot-unstuff
-			}
-			current.Data = data.String()
-			server.mu.Lock()
-			server.mails = append(server.mails, current)
-			server.mu.Unlock()
-			current = capturedMail{}
-			reply("250 OK queued")
-		case upper == "QUIT":
-			reply("221 bye")
-			return
-		default:
-			reply("250 OK")
-		}
-	}
-}
-
-var boundaryPattern = regexp.MustCompile(`boundary="([^"]+)"`)
-
-// normalizeMail replaces the random MIME boundary (Python: "===============
-// 123456789==", Go: a hex string) with a fixed token, everywhere it appears.
-// The boundary is the only wire byte that is random by design.
-func normalizeMail(mail capturedMail) capturedMail {
-	match := boundaryPattern.FindStringSubmatch(mail.Data)
-	if match != nil {
-		mail.Data = strings.ReplaceAll(mail.Data, match[1], "BOUNDARY")
-	}
-	return mail
-}
 
 type smtpOracleCase struct {
 	Name     string
@@ -335,8 +186,8 @@ func TestSMTPSenderMatchesLivePythonSMTPProvider(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.Name, func(t *testing.T) {
-			server := startCaptureSMTPServer(t)
-			host, port := server.hostPort(t)
+			server := smtpcapture.Start(t)
+			host, port := server.HostPort(t)
 
 			pythonErr := runPythonSMTP(t, interpreter, root, host, port, c)
 			html := c.HTML
@@ -351,21 +202,21 @@ func TestSMTPSenderMatchesLivePythonSMTPProvider(t *testing.T) {
 				if pythonErr == nil {
 					t.Fatal("Python sent a message the case says must be refused")
 				}
-				server.assertNone(t)
+				server.AssertNone(t)
 				if err := runGoSMTP(t, host, port, c, html); err == nil {
 					t.Fatal("Go sent a message the case says must be refused")
 				}
-				server.assertNone(t)
+				server.AssertNone(t)
 				return
 			}
 			if pythonErr != nil {
 				t.Fatalf("%v", pythonErr)
 			}
-			python := normalizeMail(server.take(t))
+			python := smtpcapture.Normalize(server.Take(t))
 			if err := runGoSMTP(t, host, port, c, html); err != nil {
 				t.Fatalf("Go send: %v", err)
 			}
-			goMail := normalizeMail(server.take(t))
+			goMail := smtpcapture.Normalize(server.Take(t))
 
 			if python.MailFrom != goMail.MailFrom {
 				t.Errorf("MAIL FROM differs:\n python: %q\n go:     %q", python.MailFrom, goMail.MailFrom)

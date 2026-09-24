@@ -17,7 +17,7 @@ import (
 
 // pythonGolden is testdata/python_transport_golden.json: every response the
 // REAL Python api middleware stack (register_middleware +
-// register_exception_handlers on a route-less FastAPI app, starlette 1.3.1)
+// register_exception_handlers on a route-less FastAPI app, starlette 1.7.0)
 // gave for the request matrix in Axes. It was produced by running that Python
 // code, never written by hand; the command is in the file's generated_by field.
 type pythonGolden struct {

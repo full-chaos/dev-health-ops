@@ -106,9 +106,11 @@ type Credentials struct {
 // those cases rather than raising (CHAOS-2550 decision #1,
 // "silent-but-missing > crashing"); this package leaves that logging to
 // its caller, which has the request/route context this pure resolver
-// does not. An error return here is ONLY the fail-closed case: the
-// byo_llm feature-flag state for a BYO-configured org could not be
-// determined at all (see loadGatedSettings).
+// does not. An error return here is the fail-closed case -- the byo_llm
+// feature-flag state for a BYO-configured org could not be determined at
+// all (see loadGatedSettings) -- or the ValueError urllib.parse.urlsplit
+// raises for a stored base_url with a malformed IPv6 bracket, which
+// Python does not catch either.
 func (s Store) ResolveUsableProvider(ctx context.Context, orgID string) (string, error) {
 	settings, err := s.loadGatedSettings(ctx, orgID)
 	if err != nil {
@@ -145,9 +147,9 @@ func (s Store) ResolveUsableProvider(ctx context.Context, orgID string) (string,
 // that provider (or configured none at all -- an empty stored "provider"
 // key matches any request, same as Python's `if configured_provider and
 // ...`) with a complete, SSRF-safe bundle. ok=false covers every
-// not-usable case Python falls back on; err is non-nil ONLY for the
-// fail-closed feature-flag-lookup failure, same contract as
-// ResolveUsableProvider.
+// not-usable case Python falls back on; err is non-nil for the
+// fail-closed feature-flag-lookup failure and for the urlsplit ValueError,
+// same contract as ResolveUsableProvider.
 func (s Store) Credentials(ctx context.Context, orgID, provider string) (Credentials, bool, error) {
 	settings, err := s.loadGatedSettings(ctx, orgID)
 	if err != nil {

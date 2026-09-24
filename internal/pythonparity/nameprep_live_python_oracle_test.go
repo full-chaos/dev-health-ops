@@ -35,7 +35,7 @@ func idnaCorpus() []string {
 		"\u2100", "예", "例え.jp", "例え。jp", "例え．jp", "例え｡jp", "xn--a.b", "xn--é", "Xn--é", "é.xn--a", "a.é.b", "éé", "é。", "\u05d0", "\u05d0a", "a\u05d0",
 		"\u05d0\u05d1", "\u05d01", "1\u05d0", "\u05d01\u05d0", "\u0627ل", "\u0627a", "\u0627\u0661", "\u06f1\u0627", "a\u0301", "\u0301", "\ufb1d", "\ufeff", "\u1806",
 		"a\u2028b", "a\ue000b", "a\ufffdb", "a\u0341b", "\U0001d7ce", "\U0001f600", "\U000e0001", "\U0010ffff", strings.Repeat("é", 20), strings.Repeat("é", 30),
-		strings.Repeat("a", 63) + "é", strings.Repeat("a", 64) + "é", strings.Repeat("é", 63), strings.Repeat("ａ", 63), strings.Repeat("ａ", 64), strings.Repeat("a", 63) + ".é",
+		strings.Repeat("a", 63), strings.Repeat("a", 64), strings.Repeat("a", 63) + ".b", strings.Repeat("a", 64) + ".b", strings.Repeat("a", 63) + "é", strings.Repeat("a", 64) + "é", strings.Repeat("é", 63), strings.Repeat("ａ", 63), strings.Repeat("ａ", 64), strings.Repeat("a", 63) + ".é",
 	}
 	pool := []rune{'a', 'B', '1', '-', '.', '。', 'é', 'ß', 'ａ', '０', '\u05d0', '\u05d1', '\u0627', '\u0661', '\u200d', '\u00ad', '\u2028', '\ufb1d', '\u0301', '\ufeff', '\u1806', '\u2100', 'İ', 'ǅ', 'ﬃ', '例', '\U0001d7ce'}
 	random := rand.New(rand.NewSource(6513))

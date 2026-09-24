@@ -156,6 +156,12 @@ func TestBaselineIsTheExecutedPythonUpgrade(t *testing.T) {
 	pythonCanonical := roundTrip(t, ctx, instance, admin, captured)
 	goCapture := capture(t, ctx, instance, goDB, goWindow)
 	goCapture.Cutover, goCapture.RiverSchema = productionSettings.Cutover, productionSettings.RiverSchema
+	// The raw schema dumps may differ ONLY by Postgres's re-parse forms.
+	diff, differing := reparseOnlyDiff(captured.Schema, goCapture.Schema)
+	if diff != "" {
+		t.Fatalf("the raw schema dumps differ beyond the known re-parse forms: %s", diff)
+	}
+	t.Logf("raw schema dumps: %d line(s) differ, every one a known re-parse form", differing)
 	goCanonical := roundTrip(t, ctx, instance, admin, goCapture)
 	if diff := compare(goCanonical, pythonCanonical); diff != "" {
 		t.Fatalf("dho migrate postgres built a different database than the Python upgrade: %s", diff)

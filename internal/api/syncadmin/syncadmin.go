@@ -8,6 +8,7 @@
 //	GET /api/v1/admin/sync-configs/{config_id}
 //	GET /api/v1/admin/sync-configs/{config_id}/repositories
 //	GET /api/v1/admin/sync-configs/{config_id}/jobs
+//	GET /api/v1/admin/sync-configs/{config_id}/coverage
 //	GET /api/v1/admin/backfill-jobs
 //	GET /api/v1/admin/sync-runs/{run_id}
 //
@@ -71,6 +72,7 @@ func Routes(deps Deps) []httpapi.Route {
 		{Method: http.MethodGet, Pattern: prefix + "/sync-configs/{config_id}", Handler: wrap(h.getSyncConfig)},
 		{Method: http.MethodGet, Pattern: prefix + "/sync-configs/{config_id}/repositories", Handler: wrap(h.getRepositories)},
 		{Method: http.MethodGet, Pattern: prefix + "/sync-configs/{config_id}/jobs", Handler: wrap(h.listJobs)},
+		{Method: http.MethodGet, Pattern: prefix + "/sync-configs/{config_id}/coverage", Handler: wrap(h.getCoverage)},
 		{Method: http.MethodGet, Pattern: prefix + "/backfill-jobs", Handler: wrap(h.listBackfillJobs)},
 		{Method: http.MethodGet, Pattern: prefix + "/sync-runs/{run_id}", Handler: wrap(h.getSyncRun)},
 	}

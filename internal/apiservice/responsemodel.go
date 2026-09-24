@@ -55,6 +55,7 @@ var responseModelRoutes = map[string]bool{
 	"GET /api/v1/admin/sync-configs":                                      true,
 	"GET /api/v1/admin/sync-configs/auto-import-capabilities":             true,
 	"GET /api/v1/admin/sync-configs/{config_id}":                          true,
+	"GET /api/v1/admin/sync-configs/{config_id}/coverage":                 true,
 	"GET /api/v1/admin/sync-configs/{config_id}/jobs":                     true,
 	"GET /api/v1/admin/sync-configs/{config_id}/repositories":             true,
 	"GET /api/v1/admin/sync-runs/{run_id}":                                true,

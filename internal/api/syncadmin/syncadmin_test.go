@@ -73,6 +73,7 @@ func TestEveryRouteIsGuardedAtAdminOrg(t *testing.T) {
 		"GET /api/v1/admin/sync-configs/{config_id}",
 		"GET /api/v1/admin/sync-configs/{config_id}/repositories",
 		"GET /api/v1/admin/sync-configs/{config_id}/jobs",
+		"GET /api/v1/admin/sync-configs/{config_id}/coverage",
 		"GET /api/v1/admin/backfill-jobs",
 		"GET /api/v1/admin/sync-runs/{run_id}",
 	}

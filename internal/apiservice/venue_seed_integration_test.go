@@ -154,6 +154,21 @@ func venueRequests(f venueFixture, tokens map[string]string) []venueoracle.Reque
 	add("me: HEAD", "HEAD", me, bearer("member"), nil)
 	add("me: PUT", "PUT", me, bearer("member"), nil)
 	add("me: DELETE anonymous", "DELETE", me, nil, nil)
+	// CORS as a browser meets it (starlette 1.7.0): no Origin, an empty one,
+	// the allowed one, a foreign one; a simple request, a refused one, an
+	// unknown path, and preflights. Every answer carries Vary: Origin; only
+	// the allowed Origin is echoed.
+	add("cors: member allowed origin", "GET", me, with(bearer("member"), "Origin", "http://localhost:3000"), nil)
+	add("cors: member foreign origin", "GET", me, with(bearer("member"), "Origin", "https://evil.example"), nil)
+	add("cors: anonymous empty origin", "GET", me, map[string]string{"Origin": ""}, nil)
+	add("cors: anonymous allowed origin", "GET", me, map[string]string{"Origin": "http://localhost:3000"}, nil)
+	add("cors: unknown path allowed origin", "GET", "/api/v1/nope-cors", map[string]string{"Origin": "http://localhost:3000"}, nil)
+	add("cors: unknown path no origin", "GET", "/api/v1/nope-cors", nil, nil)
+	add("cors: preflight allowed", "OPTIONS", me, map[string]string{"Origin": "http://localhost:3000",
+		"Access-Control-Request-Method": "PATCH", "Access-Control-Request-Headers": "authorization, content-type"}, nil)
+	add("cors: preflight foreign", "OPTIONS", me, map[string]string{"Origin": "https://evil.example",
+		"Access-Control-Request-Method": "GET"}, nil)
+	add("cors: OPTIONS without request method", "OPTIONS", me, map[string]string{"Origin": "http://localhost:3000"}, nil)
 	// PATCH /orgs/me: decode before auth, validation after auth, role gate.
 	add("patch: anonymous bad json", "PATCH", me, json(nil), b64("{"))
 	add("patch: anonymous valid", "PATCH", me, json(nil), b64(`{"name":"x"}`))

@@ -19,10 +19,10 @@ var (
 	corsAllowCredential = true
 )
 
-// CORS reproduces Starlette's CORSMiddleware (starlette 1.3.1, the version
-// uv.lock pins) for the Python api's parameters, so a browser sees the same
-// headers from either plane. Each branch below names the Starlette line it
-// mirrors.
+// CORS reproduces Starlette's CORSMiddleware (starlette 1.7.0, the version
+// uv.lock pins and the deployed Python api runs) for the Python api's
+// parameters, so a browser and a cache see the same headers from either
+// plane. Each branch below names the Starlette line it mirrors.
 type CORS struct {
 	allowOrigins      []string
 	allowAllOrigins   bool
@@ -50,9 +50,11 @@ func NewCORS(allowOrigins []string) *CORS {
 		c.simpleHeaders = append(c.simpleHeaders, [2]string{"Access-Control-Expose-Headers", strings.Join(corsExposeHeaders, ", ")})
 	}
 
-	if c.explicitPreflight {
-		c.preflightHeaders = append(c.preflightHeaders, [2]string{"Vary", "Origin"})
-	} else {
+	// preflight_headers always opens with this Vary; the allow-origin "*"
+	// only when the preflight need not echo the origin.
+	c.preflightHeaders = append(c.preflightHeaders, [2]string{"Vary",
+		"Origin, Access-Control-Request-Method, Access-Control-Request-Headers, Access-Control-Request-Private-Network"})
+	if !c.explicitPreflight {
 		c.preflightHeaders = append(c.preflightHeaders, [2]string{"Access-Control-Allow-Origin", "*"})
 	}
 	c.preflightHeaders = append(c.preflightHeaders,
@@ -89,21 +91,22 @@ func (c *CORS) isAllowedOrigin(origin string) bool {
 // Wrap is the middleware (CORSMiddleware.__call__).
 func (c *CORS) Wrap(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// origin = headers.get("origin"); None means no CORS at all. A
-		// present-but-empty Origin is NOT None in Starlette, so presence is
-		// what counts here, not emptiness.
+		// origin = headers.get("origin"): the first Origin, or None when
+		// absent. A present-but-empty Origin is NOT None in Starlette, so
+		// presence is what counts here, not emptiness. A request without
+		// one is still a simple response: its Vary gains "Origin".
 		origins := r.Header.Values("Origin")
-		if len(origins) == 0 {
-			next.ServeHTTP(w, r)
-			return
+		hasOrigin := len(origins) > 0
+		var origin string
+		if hasOrigin {
+			origin = origins[0]
 		}
-		origin := origins[0]
-		if r.Method == http.MethodOptions && len(r.Header.Values("Access-Control-Request-Method")) > 0 {
+		if hasOrigin && r.Method == http.MethodOptions && len(r.Header.Values("Access-Control-Request-Method")) > 0 {
 			c.preflight(w, r, origin)
 			return
 		}
 		writer := &headerWriter{ResponseWriter: w, commit: func(header http.Header) {
-			c.applySimple(header, origin)
+			c.applySimple(header, hasOrigin, origin)
 		}}
 		next.ServeHTTP(writer, r)
 		writer.ensureCommitted()
@@ -151,27 +154,34 @@ func (c *CORS) preflight(w http.ResponseWriter, r *http.Request, origin string) 
 	writeFixedBody(w, []byte(body))
 }
 
-// applySimple mirrors CORSMiddleware.send for http.response.start.
-func (c *CORS) applySimple(header http.Header, origin string) {
-	for _, pair := range c.simpleHeaders {
-		header.Set(pair[0], pair[1])
+// applySimple mirrors CORSMiddleware.send for http.response.start: the
+// simple headers only with an Origin; the Origin echoed (with Vary) when it
+// may be; otherwise Vary still gains "Origin", with or without one.
+func (c *CORS) applySimple(header http.Header, hasOrigin bool, origin string) {
+	if hasOrigin {
+		for _, pair := range c.simpleHeaders {
+			header.Set(pair[0], pair[1])
+		}
 	}
 	switch {
-	case c.allowAllOrigins && corsAllowCredential:
+	case hasOrigin && c.allowAllOrigins && corsAllowCredential:
 		allowExplicitOrigin(header, origin)
-	case !c.allowAllOrigins && c.isAllowedOrigin(origin):
+	case hasOrigin && !c.allowAllOrigins && c.isAllowedOrigin(origin):
 		allowExplicitOrigin(header, origin)
+	default:
+		addVaryOrigin(header)
 	}
 }
 
-// allowExplicitOrigin mirrors CORSMiddleware.allow_explicit_origin and
-// MutableHeaders.add_vary_header: the existing FIRST Vary value, if any, is
-// joined with "Origin" and replaces every Vary entry.
+// allowExplicitOrigin mirrors CORSMiddleware.allow_explicit_origin.
 func allowExplicitOrigin(header http.Header, origin string) {
 	header.Set("Access-Control-Allow-Origin", origin)
-	vary := "Origin"
-	if existing := header.Values("Vary"); len(existing) > 0 {
-		vary = existing[0] + ", Origin"
-	}
-	header.Set("Vary", vary)
+	addVaryOrigin(header)
+}
+
+// addVaryOrigin is `headers["Vary"] = ", ".join([*headers.getlist("Vary"),
+// "Origin"])`: every Vary value the handler set, in order, then "Origin",
+// as one Vary header.
+func addVaryOrigin(header http.Header) {
+	header.Set("Vary", strings.Join(append(header.Values("Vary"), "Origin"), ", "))
 }

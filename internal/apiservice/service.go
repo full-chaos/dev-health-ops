@@ -42,6 +42,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/credentials"
 	"github.com/full-chaos/dev-health-ops/internal/api/externalingest"
 	healthroutes "github.com/full-chaos/dev-health-ops/internal/api/health"
+	"github.com/full-chaos/dev-health-ops/internal/api/legacyingest"
 	"github.com/full-chaos/dev-health-ops/internal/api/orgs"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/producttelemetry"
@@ -175,6 +176,11 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 		Valkey: deps.Valkey,
 		Logger: logger,
 	})...)
+	var legacyStore legacyingest.Store
+	if deps.Valkey != nil {
+		legacyStore = legacyingest.ValkeyStore{Client: deps.Valkey}
+	}
+	routes = append(routes, legacyingest.Routes(legacyingest.Deps{Store: legacyStore, Logger: logger})...)
 	routes = append(routes, healthroutes.Routes(healthroutes.Deps{
 		// deps.ClickHouse is the api's own dedicated ClickHouse login
 		// (CHAOS-6310), the SAME connection internal/api/teamsidentity's

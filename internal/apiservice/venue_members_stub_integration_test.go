@@ -160,7 +160,14 @@ func (s *membersStub) jiraSearch(w http.ResponseWriter, query url.Values, write 
 		}
 		write(200, `{"issues":[`+
 			issue("2026-09-05T08:00:00.000+0000", actor("acc-3", "", ""), actor("acc-3", "", ""), actor("acc-3", "", ""))+","+
-			issue("2026-09-06T08:00:00.000+0000", actor("acc-3", "", ""), actor("acc-3", "", ""), actor("acc-3", "", ""))+
+			issue("2026-09-06T08:00:00.000+0000", actor("acc-3", "", ""), actor("acc-3", "", ""), actor("acc-3", "", ""))+","+
+			// A fractional-second UTC offset: CPython parses it and pydantic
+			// prints only its hours and minutes.
+			issue("2026-09-07T10:00:00+05:30:15.5", actor("acc-3", "", ""), "null", "null")+","+
+			// Later wall clock, earlier instant: activity is ordered by the
+			// moment, not the clock reading.
+			issue("2026-09-06T08:00:00.000+0000", actor("acc-8", "", ""), "null", "null")+","+
+			issue("2026-09-06T10:00:00+14:00", actor("acc-8", "", ""), "null", "null")+
 			`]}`, nil)
 	case strings.Contains(strings.ToLower(jql), "project = 'naive'"):
 		write(200, `{"issues":[`+

@@ -119,11 +119,13 @@ func TestConfidenceForCount(t *testing.T) {
 
 func TestParseJiraDatetimeAndStampJSON(t *testing.T) {
 	cases := map[string]string{
-		"2026-09-01T10:00:00.000+0000": "2026-09-01T10:00:00Z",
-		"2026-09-01T10:00:00Z":         "2026-09-01T10:00:00Z",
-		"2026-09-01T10:00:00.5+05:30":  "2026-09-01T10:00:00.500000+05:30",
-		"2026-09-01T10:00:00-0130":     "2026-09-01T10:00:00-01:30",
-		"2026-09-01T10:00:00":          "2026-09-01T10:00:00",
+		"2026-09-01T10:00:00.000+0000":        "2026-09-01T10:00:00Z",
+		"2026-09-01T10:00:00Z":                "2026-09-01T10:00:00Z",
+		"2026-09-01T10:00:00.5+05:30":         "2026-09-01T10:00:00.500000+05:30",
+		"2026-09-01T10:00:00-0130":            "2026-09-01T10:00:00-01:30",
+		"2026-09-01T10:00:00":                 "2026-09-01T10:00:00",
+		"2026-09-01T10:00:00+05:30:15.5":      "2026-09-01T10:00:00+05:30",
+		"2026-09-01T10:00:00-00:00:00.000001": "2026-09-01T10:00:00Z",
 	}
 	for in, want := range cases {
 		stamp := parseJiraDatetime(in)
@@ -206,5 +208,19 @@ func TestBatchClaimDetectsADivergentCanonical(t *testing.T) {
 	}
 	if detail := ownership.claim("two", "gitlab", "acc"); detail != "" {
 		t.Errorf("the same identity under another provider is a different key: %s", detail)
+	}
+}
+
+func TestJiraStampInstantOrdersByTheMomentNotTheClock(t *testing.T) {
+	later := parseJiraDatetime("2026-09-06T08:00:00+0000")
+	earlier := parseJiraDatetime("2026-09-06T10:00:00+14:00")
+	if later == nil || earlier == nil {
+		t.Fatal("both timestamps parse")
+	}
+	if !earlier.Wall.After(later.Wall) {
+		t.Fatal("the fixture needs the later wall clock on the earlier instant")
+	}
+	if !later.Instant().After(earlier.Instant()) {
+		t.Errorf("08:00Z must be after 10:00+14:00: %v vs %v", later.Instant(), earlier.Instant())
 	}
 }

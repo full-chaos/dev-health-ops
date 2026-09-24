@@ -164,7 +164,7 @@ func (h *handlers) listFeatureFlags(w http.ResponseWriter, r *http.Request) {
 		h.internalError(ctx, w, "list feature flags", err)
 		return
 	}
-	policy.WriteJSON(w, http.StatusOK, list, nil)
+	policy.WriteModel(w, http.StatusOK, list, nil)
 }
 
 // listFeatureOverrides is features.py's list_feature_overrides.
@@ -201,7 +201,7 @@ WHERE o.org_id = $1 ORDER BY o.created_at DESC`, orgID)
 		h.internalError(ctx, w, "list feature overrides", err)
 		return
 	}
-	policy.WriteJSON(w, http.StatusOK, list, nil)
+	policy.WriteModel(w, http.StatusOK, list, nil)
 }
 
 // optionalDatetimeField is a `datetime | None = None` body field: absent and
@@ -330,7 +330,7 @@ VALUES ($1, $2, $3, $4, $5, $6::json, $7, $8, $9, $9)`,
 		h.internalError(ctx, w, "encode feature override", err)
 		return
 	}
-	policy.WriteJSON(w, http.StatusCreated, object2, nil)
+	policy.WriteModel(w, http.StatusCreated, object2, nil)
 }
 
 // updateFeatureOverride is features.py's update_feature_override.
@@ -437,7 +437,7 @@ WHERE id = $1`, current.ID, current.IsEnabled, expiresAt, string(configText), cu
 		h.internalError(ctx, w, "encode feature override", err)
 		return
 	}
-	policy.WriteJSON(w, http.StatusOK, encoded, nil)
+	policy.WriteModel(w, http.StatusOK, encoded, nil)
 }
 
 // sameDatetime is Python's == on two datetimes: an aware and a naive value
@@ -530,5 +530,5 @@ UPDATE feature_flags SET is_enabled = $2, is_beta = $3, is_deprecated = $4, upda
 			return
 		}
 	}
-	policy.WriteJSON(w, http.StatusOK, featureFlagObject(flag), nil)
+	policy.WriteModel(w, http.StatusOK, featureFlagObject(flag), nil)
 }

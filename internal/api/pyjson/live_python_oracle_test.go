@@ -26,7 +26,14 @@ var corpus = []string{
 	``, ` `, `{`, `}`, `[`, `]`, `{"a"`, `{"a":`, `{"a":1`, `{"a":1,`, `{"a":1,}`, `[1,]`, `[1 2]`, `{"a" 1}`,
 	`{a:1}`, `{"a":1 "b":2}`, `"abc`, "\"a\tb\"", `"a\qb"`, `"\u12"`, `"\u12G4"`, `"\ud800"`, `"\ud83d\ude00x"`,
 	`nul`, `tru`, `-`, `-a`, `01`, `1.`, `1.e5`, `1e`, `.5`, `+1`, `1 2`, `[1] x`, `NaN`, `-Infinity`, `[NaN,1]`,
-	`{"a":[1,{"b":}]}`, `é`, `"é\u00e9"`, `[1,,2]`, `{,}`, `{"a":1,,}`, "\t[\n1\r]\n", `Infinityx`, `nullx`,
+	`{"a":[1,{"b":}]}`,
+	// The int literal digit limit: a ValueError at 4301 digits, none for a float.
+	strings.Repeat("1", 4300), strings.Repeat("1", 4301), "-" + strings.Repeat("1", 4300), "-" + strings.Repeat("1", 4301),
+	"[" + strings.Repeat("1", 4301) + "]", `{"a":` + strings.Repeat("1", 4301) + `}`, `[1,[2,` + strings.Repeat("9", 4301) + `]]`,
+	strings.Repeat("1", 4301) + ".0", strings.Repeat("1", 4301) + "e0", "1e" + strings.Repeat("1", 5000), "1." + strings.Repeat("1", 5000),
+	"[" + strings.Repeat("1", 4301), "[" + strings.Repeat("1", 4301) + ",", `{"a":` + strings.Repeat("1", 4301),
+	"[1,]" + strings.Repeat("1", 4301), "[," + strings.Repeat("1", 4301) + "]", `{"a":x,"b":` + strings.Repeat("1", 4301) + `}`,
+	strings.Repeat("1", 4301) + " x", `"` + strings.Repeat("1", 4301) + `"`, "0", "-0", "-" + strings.Repeat("0", 3), `é`, `"é\u00e9"`, `[1,,2]`, `{,}`, `{"a":1,,}`, "\t[\n1\r]\n", `Infinityx`, `nullx`,
 }
 
 const pythonDumpsProgram = `
@@ -37,6 +44,11 @@ for text in json.loads(sys.stdin.read()):
         value = json.loads(text)
     except json.JSONDecodeError as exc:
         out.append("JSONDecodeError:%s:%d" % (exc.msg, exc.pos))
+        continue
+    except ValueError as exc:
+        # An integer literal past sys.get_int_max_str_digits(): a ValueError,
+        # not a JSONDecodeError.
+        out.append("IntLimit:%s" % exc)
         continue
     try:
         # Starlette's JSONResponse.render encodes the dump as UTF-8.
@@ -69,9 +81,12 @@ func TestMarshalMatchesLivePythonJSONDumps(t *testing.T) {
 		gotText := "ValueError"
 		value, err := Decode([]byte(text))
 		var syntax *SyntaxError
+		var limit *IntLimitError
 		switch {
 		case errors.As(err, &syntax):
 			gotText = fmt.Sprintf("JSONDecodeError:%s:%d", syntax.Msg, syntax.Pos)
+		case errors.As(err, &limit):
+			gotText = "IntLimit:" + limit.Error()
 		case err != nil:
 			gotText = "decode: " + err.Error()
 		default:
@@ -100,6 +115,11 @@ for text in json.loads(sys.stdin.read()):
         value = json.loads(text)
     except json.JSONDecodeError as exc:
         out.append("JSONDecodeError:%s:%d" % (exc.msg, exc.pos))
+        continue
+    except ValueError as exc:
+        # An integer literal past sys.get_int_max_str_digits(): a ValueError,
+        # not a JSONDecodeError.
+        out.append("IntLimit:%s" % exc)
         continue
     try:
         # NO keyword arguments at all -- json.dumps' own bare defaults
@@ -144,9 +164,12 @@ func TestDumpsMatchesLivePythonJSONDumpsDefault(t *testing.T) {
 		gotText := "ValueError"
 		value, err := Decode([]byte(text))
 		var syntax *SyntaxError
+		var limit *IntLimitError
 		switch {
 		case errors.As(err, &syntax):
 			gotText = fmt.Sprintf("JSONDecodeError:%s:%d", syntax.Msg, syntax.Pos)
+		case errors.As(err, &limit):
+			gotText = "IntLimit:" + limit.Error()
 		case err != nil:
 			gotText = "decode: " + err.Error()
 		default:

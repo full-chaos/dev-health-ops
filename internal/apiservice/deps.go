@@ -12,6 +12,7 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/billing/stripeclient"
 	"github.com/full-chaos/dev-health-ops/internal/api/webhookintake"
 	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
@@ -114,6 +115,11 @@ type Deps struct {
 	// venue test overrides it to reach a fake revoke endpoint from the Go
 	// plane too.
 	HTTPDoer providerfoundation.HTTPDoer
+	// Stripe builds the billing routes' Stripe client (STRIPE_SECRET_KEY);
+	// its zero value refuses every call the way the Python api does without
+	// the key. BillingConfig is the rest of their configuration.
+	Stripe        *stripeclient.Provider
+	BillingConfig config.BillingConfig
 	// ClickHouseDSN is the org-deletion route's analytics-table purge
 	// connection (CHAOS-6306), sourced from CLICKHOUSE_URI -- the same
 	// broadly-privileged, unrestricted-posture credential

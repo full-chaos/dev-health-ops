@@ -2,9 +2,11 @@ package synccoverage
 
 import (
 	"encoding/json"
+	"fmt"
 	"sort"
 	"strings"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/providerfamilycontract"
 )
 
@@ -76,26 +78,43 @@ func datasetsForTargets(provider string, targets []string) []string {
 // planner (internal/scheduler/sync/planner.go) admits claims against --
 // instead of hand-maintaining a second list. Mirrors
 // “_effective_dataset_keys“ in “api/services/sync_coverage.py“.
-func effectiveDatasetKeys(dataset string, processorFlags json.RawMessage) []string {
+func effectiveDatasetKeys(dataset string, processorFlags json.RawMessage) ([]string, error) {
 	members, ok := providerfamilycontract.FamilyMembers(dataset)
 	if !ok {
-		return []string{dataset}
+		return []string{dataset}, nil
 	}
-	var flags map[string]bool
-	if len(processorFlags) == 0 || json.Unmarshal(processorFlags, &flags) != nil {
-		return []string{dataset}
+	// dataset_keys_from_flags: `flags = processor_flags or {}`, then each
+	// member's family_dataset_* flag counts only when it `is True`. A falsy
+	// value (NULL, {}, [], "", 0, false) reads as no flags; any other
+	// non-object value raises AttributeError on .get in Python, returned
+	// here as an error for the caller to fail on.
+	var flags *pyjson.Object
+	if len(processorFlags) > 0 {
+		value, err := pyjson.DecodeString(string(processorFlags))
+		if err != nil {
+			return nil, fmt.Errorf("decode processor_flags: %w", err)
+		}
+		if pyjson.Truthy(value) {
+			object, isObject := value.(*pyjson.Object)
+			if !isObject {
+				return nil, fmt.Errorf("processor_flags of %s is %s, not a dict", dataset, pyjson.Repr(value))
+			}
+			flags = object
+		}
 	}
 	keys := make([]string, 0)
 	for _, key := range members {
-		flag := "family_dataset_" + strings.ReplaceAll(key, "-", "_")
-		if flags[flag] {
+		if flags == nil {
+			break
+		}
+		if value, _ := flags.Get("family_dataset_" + strings.ReplaceAll(key, "-", "_")); value == true {
 			keys = append(keys, key)
 		}
 	}
 	if len(keys) == 0 {
-		return []string{dataset}
+		return []string{dataset}, nil
 	}
-	return keys
+	return keys, nil
 }
 
 // recordFoldedKeyResolution records ONE genuine alias-fold coverage

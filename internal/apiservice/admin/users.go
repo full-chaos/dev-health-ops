@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"context"
 	"net/http"
 	"time"
 
@@ -31,6 +32,29 @@ func adminUserKey(r *http.Request) string {
 	return "admin-user:" + user.ID.String()
 }
 
+// setPasswordInput is UserSetPassword after validation.
+type setPasswordInput struct{ AdminPassword, Password string }
+
+type setPasswordInputKey struct{}
+
+// validateSetPasswordBody is UserSetPassword's pydantic validation (both
+// fields 8 to 128 characters), run BEFORE the keyed rate limiter as FastAPI
+// does: a malformed body is a 422 that costs no allowance (CHAOS-6435).
+func validateSetPasswordBody(w http.ResponseWriter, r *http.Request) (*http.Request, bool) {
+	var errs pybody.Errors
+	object, ok := errs.Object(bodyFromContext(r.Context()))
+	var input setPasswordInput
+	if ok {
+		input.AdminPassword, _ = errs.RequiredString(object, "admin_password", 8, 128)
+		input.Password, _ = errs.RequiredString(object, "password", 8, 128)
+	}
+	if len(errs) > 0 {
+		policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(errs), nil)
+		return nil, false
+	}
+	return r.WithContext(context.WithValue(r.Context(), setPasswordInputKey{}, input)), true
+}
+
 func (h *handlers) userRoutes() []httpapi.Route {
 	return []httpapi.Route{
 		{Method: http.MethodGet, Pattern: usersPrefix + "/users", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.listUsers))},
@@ -39,7 +63,7 @@ func (h *handlers) userRoutes() []httpapi.Route {
 		{Method: http.MethodPatch, Pattern: usersPrefix + "/users/{user_id}", Handler: h.bodyFirst(policy.Admin, http.HandlerFunc(h.updateUser))},
 		{Method: http.MethodPost, Pattern: usersPrefix + "/users/{user_id}/password",
 			Handler: h.bodyFirst(policy.Admin,
-				httpapi.KeyedRateLimitWith(h.adminPasswordRateLimit, adminUserKey, h.write)(http.HandlerFunc(h.setUserPassword)))},
+				httpapi.ValidateThenLimit(validateSetPasswordBody, h.adminPasswordRateLimit, adminUserKey, h.write)(http.HandlerFunc(h.setUserPassword)))},
 		{Method: http.MethodDelete, Pattern: usersPrefix + "/users/{user_id}", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.deleteUser))},
 	}
 }
@@ -140,7 +164,7 @@ func (h *handlers) listUsers(w http.ResponseWriter, r *http.Request) {
 	for i, u := range users {
 		list[i] = userResponseObject(u)
 	}
-	policy.WriteJSON(w, http.StatusOK, list, nil)
+	policy.WriteModel(w, http.StatusOK, list, nil)
 }
 
 // getUser is users.py's get_user.
@@ -174,7 +198,7 @@ func (h *handlers) getUser(w http.ResponseWriter, r *http.Request) {
 	if !h.ensureUserInScope(ctx, w, user, orgID, targetID) {
 		return
 	}
-	policy.WriteJSON(w, http.StatusOK, userResponseObject(target), nil)
+	policy.WriteModel(w, http.StatusOK, userResponseObject(target), nil)
 }
 
 // createUser is users.py's create_user: unauthenticated by design in the
@@ -253,7 +277,7 @@ func (h *handlers) createUser(w http.ResponseWriter, r *http.Request) {
 		policy.WriteInternal(w)
 		return
 	}
-	policy.WriteJSON(w, http.StatusCreated, userResponseObject(created), nil)
+	policy.WriteModel(w, http.StatusCreated, userResponseObject(created), nil)
 }
 
 // updateUser is users.py's update_user.
@@ -337,7 +361,7 @@ func (h *handlers) updateUser(w http.ResponseWriter, r *http.Request) {
 		policy.WriteDetail(w, http.StatusNotFound, "User not found", nil)
 		return
 	}
-	policy.WriteJSON(w, http.StatusOK, userResponseObject(updated), nil)
+	policy.WriteModel(w, http.StatusOK, userResponseObject(updated), nil)
 }
 
 // setUserPassword is users.py's set_user_password: rate-limited
@@ -356,18 +380,10 @@ func (h *handlers) setUserPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	body := bodyFromContext(ctx)
-	var errs pybody.Errors
-	object, ok := errs.Object(body)
-	var adminPassword, newPassword string
-	if ok {
-		adminPassword, _ = errs.RequiredString(object, "admin_password", 8, 128)
-		newPassword, _ = errs.RequiredString(object, "password", 8, 128)
-	}
-	if len(errs) > 0 {
-		policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(errs), nil)
-		return
-	}
+	// UserSetPassword's field constraints were validated by
+	// validateSetPasswordBody before the rate limiter ran.
+	input, _ := ctx.Value(setPasswordInputKey{}).(setPasswordInput)
+	adminPassword, newPassword := input.AdminPassword, input.Password
 
 	if violations := validatePassword(newPassword); len(violations) > 0 {
 		detail := pyjson.NewObject()
@@ -496,7 +512,7 @@ func (h *handlers) setUserPassword(w http.ResponseWriter, r *http.Request) {
 
 	out := pyjson.NewObject()
 	out.Set("success", true)
-	policy.WriteJSON(w, http.StatusOK, out, nil)
+	policy.WriteModel(w, http.StatusOK, out, nil)
 }
 
 // deleteUser is users.py's delete_user.
@@ -542,5 +558,5 @@ func (h *handlers) deleteUser(w http.ResponseWriter, r *http.Request) {
 	}
 	out := pyjson.NewObject()
 	out.Set("deleted", true)
-	policy.WriteJSON(w, http.StatusOK, out, nil)
+	policy.WriteModel(w, http.StatusOK, out, nil)
 }

@@ -115,7 +115,7 @@ func (h *handlers) listOrganizations(w http.ResponseWriter, r *http.Request) {
 		}
 		list[i] = obj
 	}
-	policy.WriteJSON(w, http.StatusOK, list, nil)
+	policy.WriteModel(w, http.StatusOK, list, nil)
 }
 
 // getOrganization is orgs.py's get_organization.
@@ -142,7 +142,7 @@ func (h *handlers) getOrganization(w http.ResponseWriter, r *http.Request) {
 		policy.WriteInternal(w)
 		return
 	}
-	policy.WriteJSON(w, http.StatusOK, obj, nil)
+	policy.WriteModel(w, http.StatusOK, obj, nil)
 }
 
 // createOrganization is orgs.py's create_organization.
@@ -280,7 +280,7 @@ func (h *handlers) createOrganization(w http.ResponseWriter, r *http.Request) {
 		policy.WriteInternal(w)
 		return
 	}
-	policy.WriteJSON(w, http.StatusCreated, obj, nil)
+	policy.WriteModel(w, http.StatusCreated, obj, nil)
 }
 
 // updateOrganization is orgs.py's update_organization.
@@ -339,7 +339,7 @@ func (h *handlers) updateOrganization(w http.ResponseWriter, r *http.Request) {
 		policy.WriteInternal(w)
 		return
 	}
-	policy.WriteJSON(w, http.StatusOK, obj, nil)
+	policy.WriteModel(w, http.StatusOK, obj, nil)
 }
 
 // listMembers is orgs.py's list_members.
@@ -371,7 +371,7 @@ func (h *handlers) listMembers(w http.ResponseWriter, r *http.Request) {
 	for i, m := range members {
 		list[i] = membershipResponseObject(m)
 	}
-	policy.WriteJSON(w, http.StatusOK, list, nil)
+	policy.WriteModel(w, http.StatusOK, list, nil)
 }
 
 // addMember is orgs.py's add_member.
@@ -441,7 +441,7 @@ func (h *handlers) addMember(w http.ResponseWriter, r *http.Request) {
 		policy.WriteInternal(w)
 		return
 	}
-	policy.WriteJSON(w, http.StatusCreated, membershipResponseObject(created), nil)
+	policy.WriteModel(w, http.StatusCreated, membershipResponseObject(created), nil)
 }
 
 // updateMemberRole is orgs.py's update_member_role.
@@ -486,7 +486,7 @@ func (h *handlers) updateMemberRole(w http.ResponseWriter, r *http.Request) {
 		policy.WriteDetail(w, http.StatusNotFound, "Membership not found", nil)
 		return
 	}
-	policy.WriteJSON(w, http.StatusOK, membershipResponseObject(updated), nil)
+	policy.WriteModel(w, http.StatusOK, membershipResponseObject(updated), nil)
 }
 
 // removeMember is orgs.py's remove_member.
@@ -522,7 +522,7 @@ func (h *handlers) removeMember(w http.ResponseWriter, r *http.Request) {
 	}
 	out := pyjson.NewObject()
 	out.Set("deleted", true)
-	policy.WriteJSON(w, http.StatusOK, out, nil)
+	policy.WriteModel(w, http.StatusOK, out, nil)
 }
 
 // transferOwnership is orgs.py's transfer_ownership, INTENTIONALLY

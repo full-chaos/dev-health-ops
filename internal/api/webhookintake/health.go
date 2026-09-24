@@ -28,6 +28,6 @@ func (d Deps) handleHealth() http.HandlerFunc {
 		body.Set("status", "ok")
 		body.Set("secrets_configured", secretsConfigured)
 		body.Set("celery_available", false)
-		policy.WriteJSON(w, http.StatusOK, body, nil)
+		policy.WriteModel(w, http.StatusOK, body, nil)
 	}
 }

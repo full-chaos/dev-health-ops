@@ -35,6 +35,8 @@ import (
 	"os"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/billing"
+	"github.com/full-chaos/dev-health-ops/internal/api/billing/stripeclient"
 	"github.com/full-chaos/dev-health-ops/internal/api/buildinfo"
 	"github.com/full-chaos/dev-health-ops/internal/api/externalingest"
 	healthroutes "github.com/full-chaos/dev-health-ops/internal/api/health"
@@ -179,6 +181,9 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 	// configured); with no pool these paths are simply absent from the mux,
 	// same as any other not-yet-ported area.
 	if deps.Pool != nil && deps.Guard != nil {
+		routes = append(routes, billing.Routes(billing.Deps{
+			Pool: deps.Pool, Guard: deps.Guard, Stripe: deps.Stripe, Config: deps.BillingConfig, Logger: logger,
+		})...)
 		routes = append(routes, admin.Routes(admin.Deps{
 			Pool:          deps.Pool,
 			Valkey:        deps.Valkey,
@@ -199,7 +204,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 		Decryptor: deps.Decryptor,
 		Logger:    logger,
 	})...)
-	return routes
+	return markResponseModels(routes)
 }
 
 func configure(
@@ -207,6 +212,19 @@ func configure(
 	cfg config.Config,
 	registry *health.Registry,
 	logger *slog.Logger,
+) ([]lifecycle.Component, error) {
+	return configureWith(ctx, cfg, registry, logger, nil)
+}
+
+// configureWith is configure with adjust applied to the built Deps before
+// the routes are composed. Only a test passes adjust (to point a client at
+// a fake external service); production always runs configure.
+func configureWith(
+	ctx context.Context,
+	cfg config.Config,
+	registry *health.Registry,
+	logger *slog.Logger,
+	adjust func(*Deps),
 ) ([]lifecycle.Component, error) {
 	deps, depComponents, err := buildDeps(ctx, cfg, registry, logger)
 	if err != nil {
@@ -233,11 +251,16 @@ func configure(
 	// ever mounted at all. PagerDuty is the org-deletion route's own
 	// dependency (CHAOS-6306): the OAuth client config used to revoke a
 	// stored token.
+	deps.Stripe = stripeclient.New(stripeclient.Options{Key: cfg.StripeSecretKey.Reveal()})
+	deps.BillingConfig = cfg.APIBilling
 	deps.PagerDuty = providerfoundation.PagerDutyRevokeConfig{ClientID: cfg.PagerDutyOAuthClientID.Reveal()}
 	// deps.ClickHouseDSN: see Deps' own doc comment for why this is
 	// CLICKHOUSE_URI, never API_CLICKHOUSE_URI.
 	if cfg.ClickHouseURI.Configured() {
 		deps.ClickHouseDSN = cfg.ClickHouseURI.Reveal()
+	}
+	if adjust != nil {
+		adjust(&deps)
 	}
 	server, err := NewServer(cfg, logger, Routes(deps, logger), scope...)
 	if err != nil {

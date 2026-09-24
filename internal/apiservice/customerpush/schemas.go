@@ -64,7 +64,7 @@ func (h *handlers) listSchemas(w http.ResponseWriter, r *http.Request) {
 	out.Set("schemaVersions", []pyjson.Value{externalingest.SchemaVersion})
 	out.Set("recordKinds", list)
 	out.Set("limits", limits)
-	policy.WriteJSON(w, http.StatusOK, out, nil)
+	policy.WriteModel(w, http.StatusOK, out, nil)
 }
 
 func (h *handlers) getSchema(w http.ResponseWriter, r *http.Request) {
@@ -99,5 +99,5 @@ func (h *handlers) getSchema(w http.ResponseWriter, r *http.Request) {
 	out.Set("envelope", envelope)
 	out.Set("recordKinds", kinds)
 	out.Set("limits", limits)
-	policy.WriteJSON(w, http.StatusOK, out, nil)
+	policy.WriteModel(w, http.StatusOK, out, nil)
 }

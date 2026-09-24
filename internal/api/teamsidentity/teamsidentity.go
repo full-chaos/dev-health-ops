@@ -231,7 +231,7 @@ func (h handlers) listTeams(w http.ResponseWriter, r *http.Request) {
 	for index, team := range teams {
 		out[index] = teamJSON(team)
 	}
-	policy.WriteJSON(w, http.StatusOK, out, nil)
+	policy.WriteModel(w, http.StatusOK, out, nil)
 }
 
 func (h handlers) createOrUpdateTeam(w http.ResponseWriter, r *http.Request) {
@@ -274,7 +274,7 @@ func (h handlers) createOrUpdateTeam(w http.ResponseWriter, r *http.Request) {
 		h.internal(w, r, "create or update team", err)
 		return
 	}
-	policy.WriteJSON(w, http.StatusOK, teamJSON(team), nil)
+	policy.WriteModel(w, http.StatusOK, teamJSON(team), nil)
 }
 
 func (h handlers) deleteTeam(w http.ResponseWriter, r *http.Request) {
@@ -290,7 +290,7 @@ func (h handlers) deleteTeam(w http.ResponseWriter, r *http.Request) {
 	}
 	out := pyjson.NewObject()
 	out.Set("deleted", true)
-	policy.WriteJSON(w, http.StatusOK, out, nil)
+	policy.WriteModel(w, http.StatusOK, out, nil)
 }
 
 // discoverProviderPattern is FastAPI's own Query(..., pattern=
@@ -454,7 +454,7 @@ func (h handlers) discoverTeams(w http.ResponseWriter, r *http.Request) {
 		h.internal(w, r, "discover teams", err)
 		return
 	}
-	policy.WriteJSON(w, http.StatusOK, teamDiscoverResponseJSON(provider, teams, truncated, warnings), nil)
+	policy.WriteModel(w, http.StatusOK, teamDiscoverResponseJSON(provider, teams, truncated, warnings), nil)
 }
 
 func (h handlers) getTeam(w http.ResponseWriter, r *http.Request) {
@@ -476,7 +476,7 @@ func (h handlers) getTeam(w http.ResponseWriter, r *http.Request) {
 		policy.WriteDetail(w, http.StatusNotFound, "Team not found", nil)
 		return
 	}
-	policy.WriteJSON(w, http.StatusOK, teamJSON(*team), nil)
+	policy.WriteModel(w, http.StatusOK, teamJSON(*team), nil)
 }
 
 // postTeamRoute is the handler for POST /teams/{team_id}: the only POST path
@@ -556,7 +556,7 @@ func (h handlers) updateTeam(w http.ResponseWriter, r *http.Request) {
 		h.internal(w, r, "update team", err)
 		return
 	}
-	policy.WriteJSON(w, http.StatusOK, teamJSON(updated), nil)
+	policy.WriteModel(w, http.StatusOK, teamJSON(updated), nil)
 }
 
 func (h handlers) listIdentities(w http.ResponseWriter, r *http.Request) {
@@ -574,7 +574,7 @@ func (h handlers) listIdentities(w http.ResponseWriter, r *http.Request) {
 	for index, identity := range identities {
 		out[index] = identityJSON(identity)
 	}
-	policy.WriteJSON(w, http.StatusOK, out, nil)
+	policy.WriteModel(w, http.StatusOK, out, nil)
 }
 
 // storedFacets is member_facets applied to a STORED record -- email union
@@ -740,5 +740,5 @@ func (h handlers) createOrUpdateIdentity(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
-	policy.WriteJSON(w, http.StatusOK, identityJSON(stored), nil)
+	policy.WriteModel(w, http.StatusOK, identityJSON(stored), nil)
 }

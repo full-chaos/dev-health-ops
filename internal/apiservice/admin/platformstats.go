@@ -40,7 +40,7 @@ func (h *handlers) platformStats(w http.ResponseWriter, r *http.Request) {
 	out.Set("active_sync_configs", stats.activeSyncConfigs)
 	out.Set("recent_syncs_success", stats.recentSyncsSuccess)
 	out.Set("recent_syncs_failed", stats.recentSyncsFailed)
-	policy.WriteJSON(w, http.StatusOK, out, nil)
+	policy.WriteModel(w, http.StatusOK, out, nil)
 }
 
 type tierCount struct {

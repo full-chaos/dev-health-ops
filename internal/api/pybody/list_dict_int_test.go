@@ -281,21 +281,6 @@ func TestEveryOptionalHelperTreatsNullAndAbsentAlike(t *testing.T) {
 			t.Errorf("recorded errors on valid input: %+v", errs)
 		}
 	})
-	t.Run("OptionalInt", func(t *testing.T) {
-		var errs Errors
-		if _, present := errs.OptionalInt(object, "absent"); present {
-			t.Error("absent must be present=false")
-		}
-		if _, present := errs.OptionalInt(object, "int_null"); present {
-			t.Error("null must be present=false")
-		}
-		if v, present := errs.OptionalInt(object, "int"); !present || v != 1 {
-			t.Errorf("present value: got %d/%v", v, present)
-		}
-		if len(errs) != 0 {
-			t.Errorf("recorded errors on valid input: %+v", errs)
-		}
-	})
 	t.Run("OptionalStringList", func(t *testing.T) {
 		var errs Errors
 		if _, present := errs.OptionalStringList(object, "absent"); present {

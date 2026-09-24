@@ -122,7 +122,7 @@ func (h handlers) getOwnOrg(w http.ResponseWriter, r *http.Request) {
 		policy.WriteDetail(w, http.StatusNotFound, "Organization not found", nil)
 		return
 	}
-	writeJSON(w, http.StatusOK, profile.json())
+	policy.WriteModel(w, http.StatusOK, profile.json(), nil)
 }
 
 // decodeFirst reads the body before authentication, as FastAPI does: a
@@ -202,7 +202,7 @@ func (h handlers) updateOwnOrg(w http.ResponseWriter, r *http.Request) {
 		h.internal(w, r, "commit", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, profile.json())
+	policy.WriteModel(w, http.StatusOK, profile.json(), nil)
 }
 
 // entitlements is licensing/router.py get_entitlements.
@@ -303,7 +303,7 @@ func (h handlers) entitlements(w http.ResponseWriter, r *http.Request) {
 	}
 	out.Set("is_valid", license == nil || license.IsValid)
 	out.Set("limits", limits)
-	writeJSON(w, http.StatusOK, out)
+	policy.WriteModel(w, http.StatusOK, out, nil)
 }
 
 func optionalInt(license *LicenseRow, field func(*LicenseRow) *int64) pyjson.Value {

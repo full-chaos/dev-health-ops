@@ -300,6 +300,7 @@ func TestGuardDecisionTable(t *testing.T) {
 		status int
 		body   string
 		bearer bool
+		anon   bool
 	}{
 		{name: "public anonymous", level: Public, status: 200},
 		{name: "no header", level: Authenticated, status: 401, body: `{"detail":{"message":"Not authenticated"}}`, bearer: true},
@@ -320,6 +321,15 @@ func TestGuardDecisionTable(t *testing.T) {
 		{name: "admin org without org", level: AdminOrg, auth: "valid", claims: func(c jwt.MapClaims) { c["role"] = "admin"; delete(c, "org_id") }, status: 403, body: `{"detail":"Organization context required"}`},
 		{name: "admin org", level: AdminOrg, auth: "valid", claims: func(c jwt.MapClaims) { c["role"] = "admin" }, status: 200},
 		{name: "admin org as member", level: AdminOrg, auth: "valid", status: 403, body: `{"detail":"Admin access required"}`},
+		{name: "optional no header", level: Optional, status: 200, anon: true},
+		{name: "optional empty header", level: Optional, auth: " ", status: 200, anon: true},
+		{name: "optional basic scheme", level: Optional, auth: "Basic x", status: 200, anon: true},
+		{name: "optional three parts", level: Optional, auth: "Bearer a b", status: 200, anon: true},
+		{name: "optional bad token", level: Optional, auth: "Bearer x.y.z", status: 200, anon: true},
+		{name: "optional inactive user", level: Optional, auth: "valid", store: func(s *fakeStore) { s.users[userID] = UserState{IsActive: false} }, status: 200, anon: true},
+		{name: "optional valid", level: Optional, auth: "valid", status: 200},
+		{name: "optional db unavailable", level: Optional, auth: "valid", store: func(s *fakeStore) { s.errUser = errors.Join(ErrUnavailable, errors.New("x")) }, status: 503, body: `{"detail":{"message":"Database temporarily unavailable"}}`},
+		{name: "optional db other", level: Optional, auth: "valid", store: func(s *fakeStore) { s.errUser = errors.New("x") }, status: 500, body: `{"detail":"Internal Server Error"}`},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
@@ -346,12 +356,15 @@ func TestGuardDecisionTable(t *testing.T) {
 			if (got.header.Get("WWW-Authenticate") == "Bearer") != test.bearer {
 				t.Fatalf("WWW-Authenticate %q", got.header.Get("WWW-Authenticate"))
 			}
-			if test.status == 200 && test.level != Public && !strings.Contains(got.body, "user="+userID.String()) {
+			if test.status == 200 && test.level != Public && !test.anon && !strings.Contains(got.body, "user="+userID.String()) {
 				t.Fatalf("route did not see the user: %s", got.body)
+			}
+			if test.anon && !strings.Contains(got.body, "user=-") {
+				t.Fatalf("anonymous caller reached the route as a user: %s", got.body)
 			}
 		})
 	}
-	for level := Public; level <= AdminOrg+1; level++ {
+	for level := Public; level <= Optional+1; level++ {
 		if level.String() == "" {
 			t.Errorf("level %d has no name", level)
 		}

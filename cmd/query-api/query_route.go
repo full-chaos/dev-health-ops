@@ -33,6 +33,8 @@ import (
 	"github.com/vektah/gqlparser/v2/gqlerror"
 
 	schemav1 "github.com/full-chaos/dev-health-ops/contracts/graphql/v1"
+	"github.com/full-chaos/dev-health-ops/internal/api/policy"
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/analytics"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/digest"
@@ -2778,6 +2780,16 @@ func newDocumentDispatchHandler(routeMux *routeswitch.Mux, operationByDigest map
 		}
 		if len(bodyBytes) > limit {
 			http.Error(w, "GraphQL request body exceeds size limit", http.StatusRequestEntityTooLarge)
+			return
+		}
+
+		// The Python edge reads this body with json.loads, which refuses an
+		// integer literal past 4300 digits with a ValueError -- an unhandled
+		// exception, the generic 500 -- wherever the literal sits (the
+		// variables included, which this decode into {query} would not see).
+		var intLimit *pyjson.IntLimitError
+		if _, decodeErr := pyjson.Decode(bodyBytes); errors.As(decodeErr, &intLimit) {
+			policy.WriteDetail(w, http.StatusInternalServerError, "Internal Server Error", nil)
 			return
 		}
 

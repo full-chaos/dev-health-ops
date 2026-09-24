@@ -120,7 +120,11 @@ ORDER BY COALESCE(run.completed_at, run.started_at, run.created_at), unit.id`,
 		if !since.Before(before) {
 			continue
 		}
-		for _, effectiveKey := range effectiveDatasetKeys(dataset, flags) {
+		effectiveKeys, err := effectiveDatasetKeys(dataset, flags)
+		if err != nil {
+			return nil, nil, rowCount, fmt.Errorf("expand sync coverage unit window: %w", err)
+		}
+		for _, effectiveKey := range effectiveKeys {
 			if !containsString(scope.DatasetKeys, effectiveKey) {
 				continue
 			}
@@ -198,7 +202,11 @@ WHERE run.org_id = $1 AND run.integration_id = $2
 		if err := rows.Scan(&sourceID, &dataset, &flags); err != nil {
 			return nil, fmt.Errorf("scan active sync coverage pair: %w", err)
 		}
-		for _, effectiveKey := range effectiveDatasetKeys(dataset, flags) {
+		effectiveKeys, err := effectiveDatasetKeys(dataset, flags)
+		if err != nil {
+			return nil, fmt.Errorf("expand active sync coverage pair: %w", err)
+		}
+		for _, effectiveKey := range effectiveKeys {
 			if containsString(scope.DatasetKeys, effectiveKey) {
 				recordFoldedKeyResolution(dataset, effectiveKey)
 				pairs[sourceID.String()+"\x00"+effectiveKey] = struct{}{}
@@ -313,7 +321,11 @@ WHERE org_id = $1 AND sync_run_id = $2
 		if err := rows.Scan(&sourceID, &dataset, &flags, &since, &before); err != nil {
 			return nil, fmt.Errorf("scan linked backfill unit: %w", err)
 		}
-		for _, effectiveKey := range effectiveDatasetKeys(dataset, flags) {
+		effectiveKeys, err := effectiveDatasetKeys(dataset, flags)
+		if err != nil {
+			return nil, fmt.Errorf("expand linked backfill unit: %w", err)
+		}
+		for _, effectiveKey := range effectiveKeys {
 			if !containsString(scopeDatasetKeys, effectiveKey) {
 				continue
 			}

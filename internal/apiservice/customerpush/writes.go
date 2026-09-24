@@ -320,7 +320,7 @@ func (h *handlers) createSource(w http.ResponseWriter, r *http.Request) {
 	if h.answer(w, r, "create source", failed, err) {
 		return
 	}
-	policy.WriteJSON(w, http.StatusCreated, response, nil)
+	policy.WriteModel(w, http.StatusCreated, response, nil)
 }
 
 func (h *handlers) patchSource(w http.ResponseWriter, r *http.Request) {
@@ -415,7 +415,7 @@ func (h *handlers) patchSource(w http.ResponseWriter, r *http.Request) {
 	if h.answer(w, r, "patch source", failed, err) {
 		return
 	}
-	policy.WriteJSON(w, http.StatusOK, response, nil)
+	policy.WriteModel(w, http.StatusOK, response, nil)
 }
 
 // newToken is one IngestToken to insert, and the create response's fields.
@@ -536,7 +536,7 @@ func (h *handlers) createSourceToken(w http.ResponseWriter, r *http.Request) {
 	if h.answer(w, r, "create source token", failed, err) {
 		return
 	}
-	policy.WriteJSON(w, http.StatusCreated, response, nil)
+	policy.WriteModel(w, http.StatusCreated, response, nil)
 }
 
 func (h *handlers) createOrgToken(w http.ResponseWriter, r *http.Request) {
@@ -565,7 +565,7 @@ func (h *handlers) createOrgToken(w http.ResponseWriter, r *http.Request) {
 	if h.answer(w, r, "create org token", failed, err) {
 		return
 	}
-	policy.WriteJSON(w, http.StatusCreated, response, nil)
+	policy.WriteModel(w, http.StatusCreated, response, nil)
 }
 
 // lockToken is _get_org_token(for_update=True) inside tx.
@@ -646,7 +646,7 @@ func (h *handlers) rotateToken(w http.ResponseWriter, r *http.Request) {
 	if h.answer(w, r, "rotate token", failed, err) {
 		return
 	}
-	policy.WriteJSON(w, http.StatusOK, response, nil)
+	policy.WriteModel(w, http.StatusOK, response, nil)
 }
 
 func (h *handlers) revokeToken(w http.ResponseWriter, r *http.Request) {
@@ -687,5 +687,5 @@ func (h *handlers) revokeToken(w http.ResponseWriter, r *http.Request) {
 	if h.answer(w, r, "revoke token", failed, err) {
 		return
 	}
-	policy.WriteJSON(w, http.StatusOK, response, nil)
+	policy.WriteModel(w, http.StatusOK, response, nil)
 }

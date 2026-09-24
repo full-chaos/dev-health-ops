@@ -120,6 +120,10 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, uuid.New(), orgID, newMembe
 		// -- a present object is stored verbatim, never dropped.
 		{Name: "create org with settings", Method: "POST", Path: "/api/v1/admin/orgs", Headers: jsonHeaders("super"),
 			Body: venueoracle.B64(`{"name":"Org With Settings","settings":{"flag":true}}`)},
+		// A response_model body renders floats as pydantic-core dump_json
+		// does (1e-7, 0.00001, 1e+21), not as json.dumps (1e-07, 1e-05).
+		{Name: "create org with float settings", Method: "POST", Path: "/api/v1/admin/orgs", Headers: jsonHeaders("super"),
+			Body: venueoracle.B64(`{"name":"Org With Float Settings","settings":{"tiny":1e-7,"edge":0.00001,"below":9.99e-6,"big":1e21,"neg":-2.5e-9,"whole":3.0}}`)},
 		// validate_name: pydantic strips the name and rejects an
 		// all-whitespace result -- a live round found Go accepting this.
 		{Name: "create org whitespace name", Method: "POST", Path: "/api/v1/admin/orgs", Headers: jsonHeaders("super"),

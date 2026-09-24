@@ -78,6 +78,18 @@ func stringPtrField(object *pyjson.Object, name string) *string {
 	return &text
 }
 
+// writeIntLimit answers the Python api's unhandled ValueError for an integer
+// literal past the 4300-digit limit: the routes catch only
+// json.JSONDecodeError, so json.loads' ValueError is a generic 500.
+func writeIntLimit(w http.ResponseWriter, err error) bool {
+	var limit *pyjson.IntLimitError
+	if !errors.As(err, &limit) {
+		return false
+	}
+	policy.WriteInternal(w)
+	return true
+}
+
 // decodeJSONBody applies pyjson's json.loads-compatible pre-decode (BOM/
 // UTF-16/UTF-32 detection) then parses, the way pybody.Read does for the
 // JSON content-type branch -- either failure means "invalid JSON payload"
@@ -124,7 +136,7 @@ func respondForEvent(w http.ResponseWriter, r *http.Request, d Deps, event webho
 	if event.EventType == eventUnknown {
 		d.logger().Debug("Ignoring unsupported webhook event",
 			"provider", event.Provider, "raw_event_type", sanitizeForLog(rawLabel))
-		policy.WriteJSON(w, http.StatusOK, webhookResponseBody(
+		policy.WriteModel(w, http.StatusOK, webhookResponseBody(
 			"accepted", uuid.New().String(), "Event type '"+sanitizeForLog(rawLabel)+"' not processed",
 		), nil)
 		return
@@ -142,7 +154,7 @@ func respondForEvent(w http.ResponseWriter, r *http.Request, d Deps, event webho
 	// successfully would be invisible without turning on debug logging.
 	d.logger().Info("Dispatched webhook event",
 		"provider", event.Provider, "event_type", string(event.EventType), "delivery_id", deliveryID.String())
-	policy.WriteJSON(w, http.StatusOK, webhookResponseBody(
+	policy.WriteModel(w, http.StatusOK, webhookResponseBody(
 		"accepted", deliveryID.String(), "Processing "+string(event.EventType)+" event",
 	), nil)
 }

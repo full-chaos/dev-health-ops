@@ -3,13 +3,10 @@
 package telemetry
 
 import (
-	"bytes"
 	"context"
 	"errors"
-	"io"
 	"log/slog"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -209,15 +206,7 @@ func (h handlers) respond(w http.ResponseWriter, r *http.Request, tx pgx.Tx, org
 	out := pyjson.NewObject()
 	out.Set("opted_in", *opted)
 	out.Set("last_report_at", h.lastReportAt(ctx, value, found, orgID))
-	payload, err := pyjson.Marshal(out)
-	if err != nil {
-		h.internal(w, r, "render", err)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
-	w.WriteHeader(http.StatusOK)
-	_, _ = io.Copy(w, bytes.NewReader(payload))
+	policy.WriteModel(w, http.StatusOK, out, nil)
 }
 
 func (h handlers) status(w http.ResponseWriter, r *http.Request) {

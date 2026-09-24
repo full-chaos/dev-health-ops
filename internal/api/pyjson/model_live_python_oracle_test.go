@@ -31,7 +31,8 @@ out = {"docs": [], "floats": []}
 for text in payload["docs"]:
     try:
         value = json.loads(text)
-    except json.JSONDecodeError:
+    except ValueError:
+        # JSONDecodeError, or an integer literal past the int digit limit.
         out["docs"].append(None)
         continue
     try:
@@ -99,7 +100,8 @@ func TestMarshalModelAndReprMatchLivePydantic(t *testing.T) {
 		value, err := DecodeString(text)
 		if want.Docs[index] == nil {
 			var syntax *SyntaxError
-			if !errors.As(err, &syntax) {
+			var limit *IntLimitError
+			if !errors.As(err, &syntax) && !errors.As(err, &limit) {
 				t.Errorf("%s: Go decoded, Python refused", text)
 			}
 			continue

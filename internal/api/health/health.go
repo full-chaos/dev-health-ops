@@ -15,6 +15,7 @@ import (
 	chdriver "github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/storage/valkey"
@@ -118,7 +119,14 @@ func (d Deps) health(w http.ResponseWriter, r *http.Request) {
 		status = http.StatusServiceUnavailable
 		d.Logger.WarnContext(r.Context(), "api health down", slog.Any("services", servicesAttr(results)))
 	}
-	write(w, status, object("status", overall, "services", services))
+	body := object("status", overall, "services", services)
+	if status == http.StatusOK {
+		// FastAPI writes the HealthResponse model (dump_json); the 503 is a
+		// JSONResponse (json.dumps).
+		policy.WriteModel(w, status, body, nil)
+		return
+	}
+	write(w, status, body)
 }
 
 func servicesAttr(results [][2]string) map[string]string {

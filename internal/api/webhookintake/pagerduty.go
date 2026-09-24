@@ -365,6 +365,10 @@ var pagerDutyEventTypes = map[string]bool{
 func parsePagerDutyWebhook(body []byte) (pagerDutyV3Webhook, error) {
 	value, err := decodeJSONBody(body)
 	if err != nil {
+		var limit *pyjson.IntLimitError
+		if errors.As(err, &limit) {
+			return pagerDutyV3Webhook{}, err
+		}
 		return pagerDutyV3Webhook{}, errMalformedJSON
 	}
 	object, _ := value.(*pyjson.Object)
@@ -514,6 +518,9 @@ func (d Deps) handlePagerDutyWebhook() http.HandlerFunc {
 		}
 		webhook, err := parsePagerDutyWebhook(body)
 		if err != nil {
+			if writeIntLimit(w, err) {
+				return
+			}
 			status := http.StatusBadRequest
 			policy.WriteDetail(w, status, err.Error(), nil)
 			return

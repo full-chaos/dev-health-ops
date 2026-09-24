@@ -72,6 +72,9 @@ _CREDENTIALS = frozenset(
         # The access-token signing key the api (dho api) verifies with, the
         # same Secret key the Python api and web read.
         "JWT_SECRET_KEY",
+        # The Stripe API key the api's billing routes call Stripe with, the
+        # same Secret key the Python api reads.
+        "STRIPE_SECRET_KEY",
     }
 )
 

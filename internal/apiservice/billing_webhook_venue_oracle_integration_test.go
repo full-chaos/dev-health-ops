@@ -74,12 +74,14 @@ var webhookOrgs = []string{
 
 // webhookSubOrgs are the subscription cases' own orgs (each a lifecycle
 // whose final license and tier the rows must show); webhookSubOrgs[2] is
-// managed by hand.
+// managed by hand, [8] has an empty tier, and [9]'s license (not the org)
+// is managed by hand.
 var webhookSubOrgs = []string{
 	"88888888-0000-4000-8000-000000000001", "88888888-0000-4000-8000-000000000002",
 	"88888888-0000-4000-8000-000000000003", "88888888-0000-4000-8000-000000000004",
 	"88888888-0000-4000-8000-000000000005", "88888888-0000-4000-8000-000000000006",
 	"88888888-0000-4000-8000-000000000007", "88888888-0000-4000-8000-000000000008",
+	"88888888-0000-4000-8000-000000000009", "88888888-0000-4000-8000-00000000000a",
 }
 
 // webhookUnknownOrg is a well-formed org id no organizations row has.

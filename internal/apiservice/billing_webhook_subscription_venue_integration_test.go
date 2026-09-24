@@ -29,8 +29,13 @@ func subscriptionSeed(t *testing.T, ctx context.Context, admin *pgxpool.Pool, f 
 	t.Helper()
 	for index, id := range webhookSubOrgs {
 		managedBy, tier := "stripe", "community"
-		if index == 2 {
+		switch index {
+		case 2:
 			managedBy, tier = "manual", "team"
+		case 8:
+			tier = ""
+		case 9:
+			tier = "team"
 		}
 		if _, err := admin.Exec(ctx, `INSERT INTO organizations (id, slug, name, tier, managed_by) VALUES ($1, $2, $2, $3, $4)`,
 			id, fmt.Sprintf("webhook-sub-%d", index), tier, managedBy); err != nil {
@@ -41,6 +46,8 @@ func subscriptionSeed(t *testing.T, ctx context.Context, admin *pgxpool.Pool, f 
 		sql  string
 		args []any
 	}{
+		{`INSERT INTO org_licenses (id, org_id, tier, is_valid, managed_by, created_at, updated_at)
+			VALUES (gen_random_uuid(), $1, 'enterprise', true, 'manual', now(), now())`, []any{webhookSubOrgs[9]}},
 		{`INSERT INTO feature_bundles (id, key, name, description, features, created_at, updated_at) VALUES
 			('22222222-0000-4000-8000-000000000001', 'c-api', 'Api', NULL, '["webhooks", "api_access", "not_a_feature", 3, "api_access"]', now(), now()),
 			('22222222-0000-4000-8000-000000000002', 'd-sso', 'Sso', NULL, '{"sso_saml": true, "zz_unknown": 1, "webhooks": false}', now(), now())`, nil},
@@ -159,8 +166,12 @@ func subscriptionRequests(t *testing.T, f billingFixture, event webhookEventFunc
 
 	// Customer and status shapes: str() of an int and of None are stored;
 	// an empty customer is refused; a missing status is "incomplete".
-	sub("sub.updated: customer an int (org 5)", updated, "sub_s5", with(metadata(org[4]), fields{"customer": 5}), price("price_team_cfg"))
-	sub("sub.created: customer null (org 6)", created, "sub_s6", with(metadata(org[5]), fields{"customer": nil}), price("price_team_cfg"))
+	// Cancelled, and the handler's license persist refused (a customer that
+	// is not a str): the sync's invalid community license stays.
+	sub("sub.updated: canceled, customer an int (org 5)", updated, "sub_s5", with(metadata(org[4]), fields{"customer": 5,
+		"status": "canceled"}), price("price_team_cfg"))
+	sub("sub.created: customer null, fractional trial end, empty-object flag (org 6)", created, "sub_s6", with(metadata(org[5]),
+		fields{"customer": nil, "trial_end": 1790241482.25, "cancel_at_period_end": map[string]any{}}), price("price_team_cfg"))
 	sub("sub.created: customer empty", created, "sub_s6b", with(metadata(org[5]), fields{"customer": ""}), price("price_team_cfg"))
 	sub("sub.created: no status, braced org, bad period end (org 7)", created, "sub_s7", fields{
 		"metadata": map[string]any{"org_id": "{" + strings.ToUpper(org[6]) + "}"}, "customer": "cus_s7", "status": "<absent>",
@@ -200,6 +211,8 @@ func subscriptionRequests(t *testing.T, f billingFixture, event webhookEventFunc
 
 	sub("sub.deleted: no org_id", deleted, "sub_d1", fields{"metadata": map[string]any{}, "customer": "cus_d"}, nil)
 	sub("sub.deleted: org not a uuid", deleted, "sub_d2", with(metadata("org-abc"), fields{"customer": "cus_d"}), nil)
+	sub("sub.deleted: empty org tier (org 9)", deleted, "sub_d4", with(metadata(org[8]), fields{"customer": "cus_d"}), nil)
+	sub("sub.deleted: license managed by hand (org 10)", deleted, "sub_d5", with(metadata(org[9]), fields{"customer": "cus_d"}), nil)
 	sub("sub.deleted: unknown org", deleted, "sub_d3", with(metadata(webhookUnknownOrg), fields{"customer": "cus_d"}), nil)
 
 	// trial_will_end: no subscription write; the intent carries the days

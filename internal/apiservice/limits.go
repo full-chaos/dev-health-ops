@@ -8,19 +8,19 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/ratelimitvalkey"
 )
 
-// limitStore is the HitStore every limited route counts through: an explicit
+// limitStore is the CounterStore every limited route counts through: an explicit
 // Deps.Limits (a test), else the shared Valkey-backed store when the api has
 // a Valkey client (so a limit holds across api replicas, as it does on the
 // Python api through REDIS_URL), else the in-process store (development and
 // tests; per process, so per replica).
-func limitStore(deps Deps) (httpapi.HitStore, error) {
+func limitStore(deps Deps) (httpapi.CounterStore, error) {
 	if deps.Limits != nil {
 		return deps.Limits, nil
 	}
 	if deps.Valkey != nil {
 		return ratelimitvalkey.New(deps.Valkey)
 	}
-	return httpapi.NewMemoryStore(deps.Now), nil
+	return httpapi.NewMemoryCounters(deps.Now), nil
 }
 
 // developmentEnvironment is rate_limit.py's _is_dev_or_test: ENVIRONMENT,

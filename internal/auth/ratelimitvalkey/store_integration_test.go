@@ -54,9 +54,9 @@ func newStore(t *testing.T, client valkeygo.Client) *ratelimitvalkey.Store {
 
 func hit(t *testing.T, store *ratelimitvalkey.Store, limit httpapi.Limit, key, path string) bool {
 	t.Helper()
-	allowed, err := store.Hit(context.Background(), limit, key, path)
+	allowed, err := httpapi.NewKeyedLimiter(store, limit).Allow(context.Background(), key, path)
 	if err != nil {
-		t.Fatalf("Hit(%s, %s, %s): %v", limit.ID, key, path, err)
+		t.Fatalf("Allow(%s, %s, %s): %v", limit.ID, key, path, err)
 	}
 	return allowed
 }
@@ -182,9 +182,9 @@ func TestStoreErrorIsReturnedNotSwallowed(t *testing.T) {
 	client, _ := startValkey(t)
 	store := newStore(t, client)
 	client.Close()
-	allowed, err := store.Hit(context.Background(), httpapi.Limit{ID: "down", Count: 5, Window: time.Hour}, "k", "/p")
+	allowed, err := httpapi.NewKeyedLimiter(store, httpapi.Limit{ID: "down", Count: 5, Window: time.Hour}).Allow(context.Background(), "k", "/p")
 	if err == nil || allowed {
-		t.Fatalf("Hit on a closed client = (%v, %v), want (false, error)", allowed, err)
+		t.Fatalf("Allow on a closed client = (%v, %v), want (false, error)", allowed, err)
 	}
 }
 

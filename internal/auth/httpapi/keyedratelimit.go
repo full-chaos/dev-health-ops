@@ -51,7 +51,7 @@ const maxKeyedLimiterEntries = 100_000
 // stays as the bound against many-keys growth.
 const maxKeyedLimiterEntriesPerKey = 1_000
 
-// KeyedLimiter is a fixed-window rate limiter scoped per (key, exact request
+// windowCounters is the in-process fixed-window counter set, scoped per (key, exact request
 // path) -- the Go equivalent of Python's slowapi default strategy (the
 // `limits` package's FixedWindowRateLimiter over MemoryStorage). Confirmed
 // live against a real slowapi-backed FastAPI route (CHAOS-6357's PR body
@@ -72,8 +72,7 @@ const maxKeyedLimiterEntriesPerKey = 1_000
 // resolved (wrapped around the handler a Guard passes to its own `next`),
 // never at the mux level routeChain wraps every route with -- routeChain
 // runs before any route-specific authentication.
-type KeyedLimiter struct {
-	limit  int
+type windowCounters struct {
 	window time.Duration
 	now    func() time.Time
 
@@ -118,29 +117,26 @@ type KeyedLimiter struct {
 	lastSweep time.Time
 }
 
-// NewKeyedLimiter returns a limiter allowing at most limit hits per window,
-// per (key, path). A non-positive limit or window yields a nil limiter,
-// which Allow treats as "no limit" -- the same degenerate-configuration
-// contract NewBucket uses.
-func NewKeyedLimiter(limit int, window time.Duration, now func() time.Time) *KeyedLimiter {
-	if limit <= 0 || window <= 0 {
+// newWindowCounters returns counters for one limit's window. A non-positive
+// window yields nil; callers never hit a nil set (the KeyedLimiter treats a
+// degenerate limit as "no limit" before it reaches a store).
+func newWindowCounters(window time.Duration, now func() time.Time) *windowCounters {
+	if window <= 0 {
 		return nil
 	}
 	if now == nil {
 		now = time.Now
 	}
-	return &KeyedLimiter{limit: limit, window: window, now: now, entries: map[string]*fixedWindowEntry{}, keyPaths: map[string]map[string]struct{}{}, keyNextExpiry: map[string]time.Time{},
+	return &windowCounters{window: window, now: now, entries: map[string]*fixedWindowEntry{}, keyPaths: map[string]map[string]struct{}{}, keyNextExpiry: map[string]time.Time{},
 		perKeyBound: maxKeyedLimiterEntriesPerKey, globalBound: maxKeyedLimiterEntries}
 }
 
-// Allow reports whether the (key, path) pair may proceed, counting this call
-// toward its window's total either way -- matching slowapi/limits' own
-// atomic increment-then-compare: a refused call is still a hit, and it does
-// not start a new window early.
-func (l *KeyedLimiter) Allow(key, path string) bool {
-	if l == nil {
-		return true
-	}
+// hit counts one hit for the (key, path) pair in its window and returns the
+// window's total so far. A refused hit still counts -- slowapi/limits' own
+// atomic increment-then-compare -- and never starts a new window early.
+// admitted is false when the pair is NEW and a cardinality bound refuses it:
+// nothing is counted then.
+func (l *windowCounters) hit(key, path string) (count int, admitted bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
@@ -159,7 +155,7 @@ func (l *KeyedLimiter) Allow(key, path string) bool {
 			if len(l.keyPaths[key]) >= l.perKeyBound {
 				l.expireKey(key, now)
 				if len(l.keyPaths[key]) >= l.perKeyBound {
-					return false
+					return 0, false
 				}
 			}
 			// The map is saturated and this pair has never been seen: fail
@@ -171,7 +167,7 @@ func (l *KeyedLimiter) Allow(key, path string) bool {
 			if len(l.entries) >= l.globalBound {
 				l.forceSweep(now)
 				if len(l.entries) >= l.globalBound {
-					return false
+					return 0, false
 				}
 			}
 			if l.keyPaths[key] == nil {
@@ -189,7 +185,7 @@ func (l *KeyedLimiter) Allow(key, path string) bool {
 		l.entries[entryKey] = entry
 	}
 	entry.count++
-	return entry.count <= l.limit
+	return entry.count, true
 }
 
 // sweep deletes every entry whose window has fully expired, at most once
@@ -197,7 +193,7 @@ func (l *KeyedLimiter) Allow(key, path string) bool {
 // bounds the sweep's own O(n) cost to once per window rather than every
 // call, while guaranteeing an entry outlives its window by at most one
 // window's length before it is reclaimed.
-func (l *KeyedLimiter) sweep(now time.Time) {
+func (l *windowCounters) sweep(now time.Time) {
 	if !l.lastSweep.IsZero() && now.Sub(l.lastSweep) < l.window {
 		return
 	}
@@ -206,7 +202,7 @@ func (l *KeyedLimiter) sweep(now time.Time) {
 
 // sweepAll deletes every expired entry, from the entry map and from its
 // key's set, and recomputes the next-expiry bounds exactly.
-func (l *KeyedLimiter) sweepAll(now time.Time) {
+func (l *windowCounters) sweepAll(now time.Time) {
 	l.lastSweep = now
 	var globalNext time.Time
 	keyNext := map[string]time.Time{}
@@ -228,7 +224,7 @@ func (l *KeyedLimiter) sweepAll(now time.Time) {
 
 // forceSweep is sweepAll for a saturated map, run only once something can
 // have expired.
-func (l *KeyedLimiter) forceSweep(now time.Time) {
+func (l *windowCounters) forceSweep(now time.Time) {
 	if !l.globalNextExpiry.IsZero() && now.Before(l.globalNextExpiry) {
 		return
 	}
@@ -238,7 +234,7 @@ func (l *KeyedLimiter) forceSweep(now time.Time) {
 
 // expireKey deletes the expired entries of one key: O(that key's bound), run
 // only once something of the key's can have expired.
-func (l *KeyedLimiter) expireKey(key string, now time.Time) {
+func (l *windowCounters) expireKey(key string, now time.Time) {
 	if next, ok := l.keyNextExpiry[key]; ok && now.Before(next) {
 		return
 	}
@@ -265,7 +261,7 @@ func (l *KeyedLimiter) expireKey(key string, now time.Time) {
 }
 
 // drop removes one entry from the map and from its key's set.
-func (l *KeyedLimiter) drop(entryKey string, entry *fixedWindowEntry) {
+func (l *windowCounters) drop(entryKey string, entry *fixedWindowEntry) {
 	delete(l.entries, entryKey)
 	if entry == nil {
 		return
@@ -305,11 +301,11 @@ type RequestValidator func(w http.ResponseWriter, r *http.Request) (*http.Reques
 // use this wrapper (use LimitWith), and a nil validator that
 // silently limited first would reintroduce exactly the divergence this
 // exists to end.
-func ValidateThenLimit(validate RequestValidator, store HitStore, limit Limit, keyFunc KeyFunc, write ErrorWriter) func(http.Handler) http.Handler {
+func ValidateThenLimit(validate RequestValidator, limiter *KeyedLimiter, keyFunc KeyFunc, write ErrorWriter) func(http.Handler) http.Handler {
 	if validate == nil {
 		panic("httpapi: ValidateThenLimit needs a validator")
 	}
-	limitWith := LimitWith(store, limit, keyFunc, write)
+	limitWith := LimitWith(limiter, keyFunc, write)
 	return func(next http.Handler) http.Handler {
 		limited := limitWith(next)
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

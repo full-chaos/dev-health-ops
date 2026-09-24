@@ -64,7 +64,7 @@ type Deps struct {
 	// through: the shared Valkey-backed store in a real deployment (so a limit
 	// holds across api replicas), the in-process one otherwise. Nil means an
 	// in-process store on Now, for a test that does not care.
-	Limits httpapi.HitStore
+	Limits httpapi.CounterStore
 	// Invites configures create_org_invite's token signing, accept link and
 	// email sender; see InviteConfig. The zero value works (no email sent).
 	Invites InviteConfig
@@ -88,25 +88,26 @@ func Routes(deps Deps) []httpapi.Route {
 	}
 	limits := deps.Limits
 	if limits == nil {
-		limits = httpapi.NewMemoryStore(deps.Now)
+		limits = httpapi.NewMemoryCounters(deps.Now)
 	}
 	write := deps.Write
 	if write == nil {
 		write = httpapi.WriteError
 	}
 	area := &handlers{
-		store:         store,
-		audit:         auditWriter,
-		cache:         cache,
-		guard:         deps.Guard,
-		logger:        logger,
-		clickHouseDSN: deps.ClickHouseDSN,
-		decryptor:     deps.Decryptor,
-		pagerDuty:     deps.PagerDuty,
-		httpDoer:      httpDoer,
-		write:         write,
-		limits:        limits,
-		invites:       deps.Invites,
+		store:           store,
+		audit:           auditWriter,
+		cache:           cache,
+		guard:           deps.Guard,
+		logger:          logger,
+		clickHouseDSN:   deps.ClickHouseDSN,
+		decryptor:       deps.Decryptor,
+		pagerDuty:       deps.PagerDuty,
+		httpDoer:        httpDoer,
+		write:           write,
+		passwordLimiter: httpapi.NewKeyedLimiter(limits, passwordLimit),
+		inviteLimiter:   httpapi.NewKeyedLimiter(limits, inviteLimit),
+		invites:         deps.Invites,
 	}
 	return area.routes()
 }
@@ -139,10 +140,11 @@ type handlers struct {
 	// write renders this area's own directly-written errors (the keyed
 	// rate limiter's 429) in the same wire shape every other error uses.
 	write httpapi.ErrorWriter
-	// limits is where every limited route's hits are counted (see
-	// Deps.Limits); the limits themselves are passwordLimit and inviteLimit.
-	limits  httpapi.HitStore
-	invites InviteConfig
+	// One KeyedLimiter per limited route, all over Deps.Limits: the limits
+	// themselves are passwordLimit and inviteLimit.
+	passwordLimiter *httpapi.KeyedLimiter
+	inviteLimiter   *httpapi.KeyedLimiter
+	invites         InviteConfig
 }
 
 // passwordLimit is users.py's `@limiter.limit(ADMIN_PASSWORD_LIMIT =

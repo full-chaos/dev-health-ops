@@ -138,7 +138,7 @@ type Deps struct {
 	// Limits is the rate-limit store every limited route counts through
 	// (see limitStore); nil means the Valkey-backed store when Valkey is
 	// configured, else an in-process one.
-	Limits httpapi.HitStore
+	Limits httpapi.CounterStore
 	// Invites is create_org_invite's token secret, accept-link base and email
 	// sender (CHAOS-6391); the zero value sends no email.
 	Invites admin.InviteConfig

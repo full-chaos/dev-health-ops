@@ -161,7 +161,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 		// Only a nil Valkey client can fail it and that path is not taken; keep
 		// the process up on the in-process store rather than mount no limits.
 		logger.Error("api: shared rate limiter unavailable; using the in-process limiter", "error", err)
-		limits = httpapi.NewMemoryStore(deps.Now)
+		limits = httpapi.NewMemoryCounters(deps.Now)
 	}
 	var store acr.EntitlementStore
 	if deps.Pool != nil {

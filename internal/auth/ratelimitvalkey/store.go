@@ -1,4 +1,4 @@
-// Package ratelimitvalkey is the shared, Valkey-backed httpapi.HitStore: the
+// Package ratelimitvalkey is the shared, Valkey-backed httpapi.CounterStore: the
 // rate-limit counters live in the one Valkey every api replica already
 // talks to (the backend the Python api reaches through REDIS_URL), so a
 // limit holds across replicas instead of being counted per process.
@@ -84,13 +84,13 @@ end
 return n
 `
 
-// Store is the Valkey HitStore.
+// Store is the Valkey CounterStore.
 type Store struct {
 	client valkeygo.Client
 	script *valkeygo.Lua
 }
 
-var _ httpapi.HitStore = (*Store)(nil)
+var _ httpapi.CounterStore = (*Store)(nil)
 
 // New returns a store over client (which must be the api's Valkey client,
 // database 1).
@@ -101,25 +101,22 @@ func New(client valkeygo.Client) (*Store, error) {
 	return &Store{client: client, script: valkeygo.NewLuaScriptNoSha(hitScript)}, nil
 }
 
-// Backend implements httpapi.HitStore: Python reports "redis" for the same
+// Backend implements httpapi.CounterStore: Python reports "redis" for the same
 // role, so the /health bodies match.
 func (s *Store) Backend() string { return "redis" }
 
-// Hit implements httpapi.HitStore.
-func (s *Store) Hit(ctx context.Context, limit httpapi.Limit, key, path string) (bool, error) {
-	if limit.ID == "" || limit.Count <= 0 || limit.Window <= 0 {
-		// The in-process limiter treats a degenerate limit as "no limit".
-		return true, nil
-	}
+// Increment implements httpapi.CounterStore.
+func (s *Store) Increment(ctx context.Context, hit httpapi.Hit) (int64, error) {
+	limit := hit.Limit
 	result := s.script.Exec(ctx, s.client,
-		[]string{CounterKey(limit, key, path), PathsKey(limit, key)},
-		[]string{strconv.FormatInt(limit.Window.Milliseconds(), 10), strconv.Itoa(MaxPathsPerKey), digest(path)})
+		[]string{CounterKey(limit, hit.Key, hit.Path), PathsKey(limit, hit.Key)},
+		[]string{strconv.FormatInt(limit.Window.Milliseconds(), 10), strconv.Itoa(MaxPathsPerKey), digest(hit.Path)})
 	count, err := result.AsInt64()
 	if err != nil {
-		return false, fmt.Errorf("rate limit script for %q: %w", limit.ID, err)
+		return 0, fmt.Errorf("rate limit script for %q: %w", limit.ID, err)
 	}
 	if count < 0 {
-		return false, nil
+		return 0, httpapi.ErrPathBound
 	}
-	return count <= int64(limit.Count), nil
+	return count, nil
 }

@@ -15,9 +15,26 @@ import (
 // TestKeyedLimiterFixedWindowRefusesTheNthPlusOneHit is the same-key
 // exhaustion case: a single (key, path) pair may make `limit` calls inside
 // one window; the next one is refused.
+// windowLimiter is the window counters plus a count limit: the shape the
+// limiter had before the store seam, kept so the window and cardinality
+// tests exercise the counters directly.
+type windowLimiter struct {
+	*windowCounters
+	limit int
+}
+
+func newWindowLimiter(limit int, window time.Duration, now func() time.Time) *windowLimiter {
+	return &windowLimiter{windowCounters: newWindowCounters(window, now), limit: limit}
+}
+
+func (w *windowLimiter) Allow(key, path string) bool {
+	count, admitted := w.hit(key, path)
+	return admitted && count <= w.limit
+}
+
 func TestKeyedLimiterFixedWindowRefusesTheNthPlusOneHit(t *testing.T) {
 	now := time.Now()
-	limiter := NewKeyedLimiter(5, time.Hour, func() time.Time { return now })
+	limiter := newWindowLimiter(5, time.Hour, func() time.Time { return now })
 
 	for attempt := range 5 {
 		if !limiter.Allow("admin-user:a", "/x") {
@@ -36,7 +53,7 @@ func TestKeyedLimiterFixedWindowRefusesTheNthPlusOneHit(t *testing.T) {
 // Only a request AFTER the full window has elapsed sees a fresh bucket.
 func TestKeyedLimiterWindowDoesNotRollOverEarly(t *testing.T) {
 	now := time.Now()
-	limiter := NewKeyedLimiter(5, time.Hour, func() time.Time { return now })
+	limiter := newWindowLimiter(5, time.Hour, func() time.Time { return now })
 
 	for range 5 {
 		if !limiter.Allow("admin-user:a", "/x") {
@@ -59,7 +76,7 @@ func TestKeyedLimiterWindowDoesNotRollOverEarly(t *testing.T) {
 // (key, path) pair gets its own budget.
 func TestKeyedLimiterIsIndependentPerKeyAndPath(t *testing.T) {
 	now := time.Now()
-	limiter := NewKeyedLimiter(1, time.Hour, func() time.Time { return now })
+	limiter := newWindowLimiter(1, time.Hour, func() time.Time { return now })
 
 	if !limiter.Allow("admin-user:a", "/users/target-1/password") {
 		t.Fatal("admin a, target 1: first call refused")
@@ -83,7 +100,7 @@ func TestKeyedLimiterIsIndependentPerKeyAndPath(t *testing.T) {
 // distinct paths must not survive past their own window forever.
 func TestKeyedLimiterEvictsExpiredEntries(t *testing.T) {
 	now := time.Now()
-	limiter := NewKeyedLimiter(5, time.Hour, func() time.Time { return now })
+	limiter := newWindowLimiter(5, time.Hour, func() time.Time { return now })
 
 	// 5,000 distinct pairs, spread over five keys so each stays inside its
 	// own per-key bound.
@@ -210,15 +227,22 @@ func TestKeyedLimiterPerKeyCountFollowsSweep(t *testing.T) {
 }
 
 func TestKeyedLimiterZeroConfigurationIsUnlimited(t *testing.T) {
-	if NewKeyedLimiter(0, time.Hour, nil) != nil {
-		t.Fatal("limit=0 should yield a nil limiter")
+	store := NewMemoryCounters(nil)
+	for _, limit := range []Limit{
+		{ID: "t", Count: 0, Window: time.Hour},
+		{ID: "t", Count: 5, Window: 0},
+		{ID: "", Count: 5, Window: time.Hour},
+	} {
+		if NewKeyedLimiter(store, limit) != nil {
+			t.Fatalf("limit %+v should yield a nil limiter", limit)
+		}
 	}
-	if NewKeyedLimiter(5, 0, nil) != nil {
-		t.Fatal("window=0 should yield a nil limiter")
+	if NewKeyedLimiter(nil, Limit{ID: "t", Count: 5, Window: time.Hour}) != nil {
+		t.Fatal("a nil store should yield a nil limiter")
 	}
 	var nilLimiter *KeyedLimiter
-	if !nilLimiter.Allow("k", "/p") {
-		t.Fatal("a nil *KeyedLimiter must allow every call")
+	if ok, err := nilLimiter.Allow(context.Background(), "k", "/p"); !ok || err != nil {
+		t.Fatalf("a nil *KeyedLimiter must allow every call, got %v, %v", ok, err)
 	}
 }
 
@@ -227,7 +251,7 @@ func TestKeyedLimiterZeroConfigurationIsUnlimited(t *testing.T) {
 // than `limit` allowed calls.
 func TestKeyedLimiterIsSafeUnderConcurrency(t *testing.T) {
 	const limit = 50
-	limiter := NewKeyedLimiter(limit, time.Hour, nil)
+	limiter := newWindowLimiter(limit, time.Hour, nil)
 
 	var allowed int
 	var mu sync.Mutex
@@ -254,7 +278,7 @@ func TestKeyedLimiterIsSafeUnderConcurrency(t *testing.T) {
 // and a refusal renders through the configured ErrorWriter.
 func TestLimitWithRefusesOverTheKeyedBudget(t *testing.T) {
 	now := time.Now()
-	store := NewMemoryStore(func() time.Time { return now })
+	store := NewMemoryCounters(func() time.Time { return now })
 	limit := Limit{ID: "test", Count: 2, Window: time.Hour}
 	var reached int
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -267,7 +291,7 @@ func TestLimitWithRefusesOverTheKeyedBudget(t *testing.T) {
 		w.WriteHeader(http.StatusTooManyRequests)
 	}
 	keyFunc := func(r *http.Request) string { return r.Header.Get("X-Test-Admin") }
-	handler := LimitWith(store, limit, keyFunc, write)(inner)
+	handler := LimitWith(NewKeyedLimiter(store, limit), keyFunc, write)(inner)
 
 	call := func(admin string) int {
 		request := httptest.NewRequest(http.MethodPost, "/x", nil)
@@ -300,10 +324,10 @@ func TestLimitWithRefusesOverTheKeyedBudget(t *testing.T) {
 // TestLimitWithRendersThroughTheGivenErrorWriter proves a refusal renders
 // through the ErrorWriter the caller passes (here this package's own).
 func TestLimitWithRendersThroughTheGivenErrorWriter(t *testing.T) {
-	store := NewMemoryStore(nil)
+	store := NewMemoryCounters(nil)
 	limit := Limit{ID: "test", Count: 1, Window: time.Hour}
 	keyFunc := func(r *http.Request) string { return "k" }
-	handler := LimitWith(store, limit, keyFunc, WriteError)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := LimitWith(NewKeyedLimiter(store, limit), keyFunc, WriteError)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 
@@ -331,9 +355,9 @@ func TestLimitWithRendersThroughTheGivenErrorWriter(t *testing.T) {
 // must reach the handler, not be refused by the limiter.
 func TestKeyedRateLimitFreshAdminIsNotLockedOutByAnotherAdminsPaths(t *testing.T) {
 	now := time.Now()
-	store := NewMemoryStore(func() time.Time { return now })
+	store := NewMemoryCounters(func() time.Time { return now })
 	limit := Limit{ID: "cap_probe", Count: 10, Window: time.Hour}
-	handler := LimitWith(store, limit, func(r *http.Request) string { return r.Header.Get("X-Admin") }, WriteError)(
+	handler := LimitWith(NewKeyedLimiter(store, limit), func(r *http.Request) string { return r.Header.Get("X-Admin") }, WriteError)(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusForbidden) }))
 	call := func(admin, path string) int {
 		request := httptest.NewRequest(http.MethodPost, path, nil)
@@ -346,7 +370,7 @@ func TestKeyedRateLimitFreshAdminIsNotLockedOutByAnotherAdminsPaths(t *testing.T
 	// test fast under the race detector (the middleware's own wiring is what
 	// the final request below exercises).
 	for i := range 100_000 {
-		if _, err := store.Hit(context.Background(), limit, "admin-a", fmt.Sprintf("/api/v1/admin/orgs/%d/invites", i)); err != nil {
+		if _, err := store.Increment(context.Background(), Hit{Limit: limit, Key: "admin-a", Path: fmt.Sprintf("/api/v1/admin/orgs/%d/invites", i)}); err != nil && !errors.Is(err, ErrPathBound) {
 			t.Fatal(err)
 		}
 	}
@@ -363,10 +387,10 @@ const (
 	smallGlobal = 100
 )
 
-// smallLimiter is a KeyedLimiter with the per-key and global bounds shrunk so
+// smallLimiter is window counters with the per-key and global bounds shrunk so
 // the saturation logic is exercised without 100,000 calls.
-func smallLimiter(now *time.Time) *KeyedLimiter {
-	limiter := NewKeyedLimiter(5, time.Hour, func() time.Time { return *now })
+func smallLimiter(now *time.Time) *windowLimiter {
+	limiter := newWindowLimiter(5, time.Hour, func() time.Time { return *now })
 	limiter.perKeyBound, limiter.globalBound = smallPerKey, smallGlobal
 	return limiter
 }
@@ -427,7 +451,7 @@ func TestKeyedLimiterGlobalCapIgnoresExpiredButUnsweptEntries(t *testing.T) {
 // only requests that pass it count, and the limit still holds for those.
 func TestValidateThenLimitSpendsNoAllowanceOnAFailedValidation(t *testing.T) {
 	now := time.Now()
-	store := NewMemoryStore(func() time.Time { return now })
+	store := NewMemoryCounters(func() time.Time { return now })
 	limit := Limit{ID: "test", Count: 2, Window: time.Hour}
 	type marker struct{}
 	validate := func(w http.ResponseWriter, r *http.Request) (*http.Request, bool) {
@@ -438,7 +462,7 @@ func TestValidateThenLimitSpendsNoAllowanceOnAFailedValidation(t *testing.T) {
 		return r.WithContext(context.WithValue(r.Context(), marker{}, "validated")), true
 	}
 	reached := 0
-	handler := ValidateThenLimit(validate, store, limit, func(*http.Request) string { return "admin" }, WriteError)(
+	handler := ValidateThenLimit(validate, NewKeyedLimiter(store, limit), func(*http.Request) string { return "admin" }, WriteError)(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			reached++
 			if r.Context().Value(marker{}) != "validated" {
@@ -483,14 +507,14 @@ func TestValidateThenLimitRequiresAValidator(t *testing.T) {
 			t.Fatal("a nil validator was accepted; it would limit first and silently reintroduce the divergence")
 		}
 	}()
-	ValidateThenLimit(nil, NewMemoryStore(nil), Limit{ID: "t", Count: 1, Window: time.Hour}, func(*http.Request) string { return "" }, WriteError)
+	ValidateThenLimit(nil, NewKeyedLimiter(NewMemoryCounters(nil), Limit{ID: "t", Count: 1, Window: time.Hour}), func(*http.Request) string { return "" }, WriteError)
 }
 
-// failingStore is a HitStore whose backend is down.
+// failingStore is a CounterStore whose backend is down.
 type failingStore struct{}
 
-func (failingStore) Hit(context.Context, Limit, string, string) (bool, error) {
-	return false, errors.New("valkey is down")
+func (failingStore) Increment(context.Context, Hit) (int64, error) {
+	return 0, errors.New("valkey is down")
 }
 func (failingStore) Backend() string { return "redis" }
 
@@ -504,7 +528,7 @@ func TestLimitWithFailsClosedWithA500WhenTheStoreErrors(t *testing.T) {
 		code = c
 		w.WriteHeader(http.StatusInternalServerError)
 	}
-	handler := LimitWith(failingStore{}, Limit{ID: "test", Count: 5, Window: time.Hour}, func(*http.Request) string { return "secret-caller-key" }, write)(
+	handler := LimitWith(NewKeyedLimiter(failingStore{}, Limit{ID: "test", Count: 5, Window: time.Hour}), func(*http.Request) string { return "secret-caller-key" }, write)(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { reached = true }))
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/x", nil))
@@ -518,24 +542,42 @@ func TestLimitWithFailsClosedWithA500WhenTheStoreErrors(t *testing.T) {
 
 // MemoryStore keeps one limiter per limit ID: two limits never share a
 // bucket, and the same limit ID always resolves to the same counters.
-func TestMemoryStoreKeepsLimitsApart(t *testing.T) {
+func TestMemoryCountersKeepLimitsApart(t *testing.T) {
 	now := time.Now()
-	store := NewMemoryStore(func() time.Time { return now })
-	a := Limit{ID: "a", Count: 1, Window: time.Hour}
-	b := Limit{ID: "b", Count: 1, Window: time.Hour}
-	if ok, _ := store.Hit(context.Background(), a, "k", "/p"); !ok {
+	store := NewMemoryCounters(func() time.Time { return now })
+	a := NewKeyedLimiter(store, Limit{ID: "a", Count: 1, Window: time.Hour})
+	b := NewKeyedLimiter(store, Limit{ID: "b", Count: 1, Window: time.Hour})
+	ctx := context.Background()
+	if ok, _ := a.Allow(ctx, "k", "/p"); !ok {
 		t.Fatal("first hit of limit a refused")
 	}
-	if ok, _ := store.Hit(context.Background(), a, "k", "/p"); ok {
+	if ok, _ := a.Allow(ctx, "k", "/p"); ok {
 		t.Fatal("second hit of limit a allowed")
 	}
-	if ok, _ := store.Hit(context.Background(), b, "k", "/p"); !ok {
+	if ok, _ := b.Allow(ctx, "k", "/p"); !ok {
 		t.Fatal("limit b shares limit a's bucket")
 	}
-	if store.Backend() != "memory" {
-		t.Fatalf("Backend() = %q, want memory", store.Backend())
+	if store.Backend() != "memory" || a.Backend() != "memory" {
+		t.Fatalf("Backend() = %q / %q, want memory", store.Backend(), a.Backend())
 	}
 }
+
+// A store that reports ErrPathBound refuses without an error (the caller is
+// at its bound of distinct paths); any other error is returned.
+func TestKeyedLimiterMapsPathBoundToARefusalAndErrorsThrough(t *testing.T) {
+	limit := Limit{ID: "t", Count: 5, Window: time.Hour}
+	if ok, err := NewKeyedLimiter(boundStore{}, limit).Allow(context.Background(), "k", "/p"); ok || err != nil {
+		t.Fatalf("path bound = %v, %v, want refused with nil error", ok, err)
+	}
+	if ok, err := NewKeyedLimiter(failingStore{}, limit).Allow(context.Background(), "k", "/p"); ok || err == nil {
+		t.Fatalf("store error = %v, %v, want refused with the error", ok, err)
+	}
+}
+
+type boundStore struct{}
+
+func (boundStore) Increment(context.Context, Hit) (int64, error) { return 0, ErrPathBound }
+func (boundStore) Backend() string                               { return "test" }
 
 // The store error counter is a metrics source: the series exists at zero as
 // soon as a limit is wired, counts each store error by limit id, and never
@@ -543,7 +585,7 @@ func TestMemoryStoreKeepsLimitsApart(t *testing.T) {
 func TestRateLimitStoreErrorsAreWrittenAsPrometheusSeries(t *testing.T) {
 	before := scrapeStoreErrors(t)
 	limit := Limit{ID: "metrics_probe", Count: 5, Window: time.Hour}
-	handler := LimitWith(failingStore{}, limit, func(*http.Request) string { return "secret-caller-key" }, WriteError)(
+	handler := LimitWith(NewKeyedLimiter(failingStore{}, limit), func(*http.Request) string { return "secret-caller-key" }, WriteError)(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	if got := scrapeStoreErrors(t); !strings.Contains(got, `dev_health_api_rate_limit_store_errors_total{limit="metrics_probe"} 0`) {
 		t.Fatalf("a wired limit has no zero series:\n%s", got)

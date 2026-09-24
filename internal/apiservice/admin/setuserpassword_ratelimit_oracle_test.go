@@ -214,7 +214,7 @@ func TestSetUserPasswordRateLimitWindowDoesNotRollOverEarly(t *testing.T) {
 	// store (a shared Valkey store's windows are the server's real time).
 	goBase, _ := startGoServer(t, ctx, venue, jwtKey, func(deps *apiservice.Deps) {
 		deps.Now = func() time.Time { return now }
-		deps.Limits = httpapi.NewMemoryStore(deps.Now)
+		deps.Limits = httpapi.NewMemoryCounters(deps.Now)
 	})
 
 	headers := map[string]string{"Authorization": "Bearer " + venue.Tokens["admin0"], "Content-Type": "application/json"}

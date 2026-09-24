@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -22,56 +23,137 @@ type Limit struct {
 	Window time.Duration
 }
 
-// HitStore counts hits for a Limit. It is the ONE seam every limited route
-// goes through, so the counters can live in one shared store (Valkey, the
-// backend the Python api uses through REDIS_URL) and the limit holds across
-// api replicas, or in process memory for development.
+// Hit is one request's claim on a counter: the limit it counts against, the
+// caller key and the exact request path. The store scopes the counter to
+// (Limit.ID, Key, Path) and runs the fixed window of Limit.Window.
+type Hit struct {
+	Limit Limit
+	Key   string
+	Path  string
+}
+
+// ErrPathBound is what a CounterStore returns when Key is at its bound of
+// distinct live paths and Path is new to it: the request is refused and
+// nothing is counted, so a caller minting paths pays for it and no other
+// caller is affected.
+var ErrPathBound = errors.New("httpapi: caller at its bound of distinct rate-limited paths")
+
+// CounterStore is the ONE store every rate limiter counts in. The shared
+// implementation (ratelimitvalkey.Store, Valkey -- the backend the Python api
+// reaches through REDIS_URL) holds a limit across api replicas; MemoryCounters
+// is the in-process one for development and tests.
 //
-// Hit records one hit for (limit, key, path) and reports whether it is
-// within the limit. A refused hit still counts (slowapi's atomic
-// increment-then-compare). An error means the store could not say: the
-// middleware answers the Python api's unhandled-error 500 and never lets
-// the request through.
-type HitStore interface {
-	Hit(ctx context.Context, limit Limit, key, path string) (allowed bool, err error)
+// Increment adds one hit and returns the window's count including it. A
+// refused hit still counts (slowapi's atomic increment-then-compare). Any
+// error other than ErrPathBound means the store could not say: the limiter
+// reports it and the middleware answers the Python api's unhandled-error 500,
+// never letting the request through.
+type CounterStore interface {
+	Increment(ctx context.Context, hit Hit) (count int64, err error)
 	// Backend names the store as /health reports it: "redis" for the shared
 	// store (Python's own word for it), "memory" for the in-process one.
 	Backend() string
 }
 
-// MemoryStore is the in-process HitStore: one KeyedLimiter per limit ID. It
-// is per process, so with several api replicas the effective limit is per
-// replica -- acceptable for development and tests, which is why the api
-// refuses to start outside development without the shared store.
-type MemoryStore struct {
+// MemoryCounters is the in-process CounterStore: one set of window counters
+// per limit ID. It is per process, so with several api replicas the effective
+// limit is per replica -- acceptable for development and tests, which is why
+// the api refuses to start outside development without the shared store.
+type MemoryCounters struct {
 	now func() time.Time
 
-	mu       sync.Mutex
-	limiters map[string]*KeyedLimiter
+	mu      sync.Mutex
+	windows map[string]*windowCounters
 }
 
-// NewMemoryStore returns an in-process store; now is injectable for tests
+var _ CounterStore = (*MemoryCounters)(nil)
+
+// NewMemoryCounters returns an in-process store; now is injectable for tests
 // (nil means time.Now).
-func NewMemoryStore(now func() time.Time) *MemoryStore {
-	return &MemoryStore{now: now, limiters: map[string]*KeyedLimiter{}}
+func NewMemoryCounters(now func() time.Time) *MemoryCounters {
+	return &MemoryCounters{now: now, windows: map[string]*windowCounters{}}
 }
 
-// Hit implements HitStore.
-func (m *MemoryStore) Hit(_ context.Context, limit Limit, key, path string) (bool, error) {
+// Increment implements CounterStore.
+func (m *MemoryCounters) Increment(_ context.Context, hit Hit) (int64, error) {
 	m.mu.Lock()
-	limiter, ok := m.limiters[limit.ID]
+	counters, ok := m.windows[hit.Limit.ID]
 	if !ok {
-		limiter = NewKeyedLimiter(limit.Count, limit.Window, m.now)
-		m.limiters[limit.ID] = limiter
+		counters = newWindowCounters(hit.Limit.Window, m.now)
+		if counters == nil {
+			m.mu.Unlock()
+			return 0, errors.New("httpapi: limit has no window")
+		}
+		m.windows[hit.Limit.ID] = counters
 	}
 	m.mu.Unlock()
-	// A nil limiter (non-positive limit or window) allows everything: the
-	// same degenerate-configuration contract NewKeyedLimiter documents.
-	return limiter.Allow(key, path), nil
+	count, admitted := counters.hit(hit.Key, hit.Path)
+	if !admitted {
+		return 0, ErrPathBound
+	}
+	return int64(count), nil
 }
 
-// Backend implements HitStore.
-func (m *MemoryStore) Backend() string { return "memory" }
+// Backend implements CounterStore.
+func (m *MemoryCounters) Backend() string { return "memory" }
+
+// KeyedLimiter is the one rate limiter: a fixed window of Limit.Count hits
+// per Limit.Window per (caller key, exact request path), counted in a
+// CounterStore. It is the Go equivalent of Python's slowapi default strategy
+// (the `limits` package's FixedWindowRateLimiter), confirmed against live
+// slowapi: a window starts on the caller's first hit after the previous one
+// expired and lasts exactly the window -- not epoch-aligned, and not reset by
+// a refused hit. Two (key, path) pairs never share a bucket.
+//
+// It is applied INSIDE a route's handler chain (LimitWith,
+// ValidateThenLimit), after authentication has resolved the key.
+type KeyedLimiter struct {
+	store CounterStore
+	limit Limit
+}
+
+// NewKeyedLimiter returns a limiter over store. A limit with no ID, a
+// non-positive count or a non-positive window yields nil, which allows
+// everything (the degenerate-configuration contract NewBucket uses).
+func NewKeyedLimiter(store CounterStore, limit Limit) *KeyedLimiter {
+	if store == nil || limit.ID == "" || limit.Count <= 0 || limit.Window <= 0 {
+		return nil
+	}
+	return &KeyedLimiter{store: store, limit: limit}
+}
+
+// ID is the limit id, "" for a nil limiter.
+func (l *KeyedLimiter) ID() string {
+	if l == nil {
+		return ""
+	}
+	return l.limit.ID
+}
+
+// Backend names the store the limiter counts in.
+func (l *KeyedLimiter) Backend() string {
+	if l == nil {
+		return "noop"
+	}
+	return l.store.Backend()
+}
+
+// Allow counts one hit for (key, path) and reports whether it is within the
+// limit. A caller at its path bound is refused with a nil error. A store
+// error is returned and the hit must be treated as refused.
+func (l *KeyedLimiter) Allow(ctx context.Context, key, path string) (bool, error) {
+	if l == nil {
+		return true, nil
+	}
+	count, err := l.store.Increment(ctx, Hit{Limit: l.limit, Key: key, Path: path})
+	if errors.Is(err, ErrPathBound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return count <= int64(l.limit.Count), nil
+}
 
 // StoreErrors counts rate-limit store errors per limit id and writes them in
 // the operator endpoint's Prometheus format (it is a health.MetricsSource).
@@ -130,19 +212,22 @@ func (c *StoreErrors) WritePrometheus(w io.Writer) error {
 }
 
 // LimitWith rejects a request once its (keyFunc(r), r.URL.Path) pair
-// exceeds limit in store, rendering the refusal with write. A store error is
+// exceeds its limiter, rendering the refusal with write. A store error is
 // the Python api's unhandled-error 500 (slowapi has no swallow_errors), never
 // a silent pass: it is logged with the limit's ID (never the caller key or
 // path) and counted in RateLimitStoreErrors.
-func LimitWith(store HitStore, limit Limit, keyFunc KeyFunc, write ErrorWriter) func(http.Handler) http.Handler {
-	RateLimitStoreErrors.declare(limit.ID)
+func LimitWith(limiter *KeyedLimiter, keyFunc KeyFunc, write ErrorWriter) func(http.Handler) http.Handler {
+	id := limiter.ID()
+	if limiter != nil {
+		RateLimitStoreErrors.declare(id)
+	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			allowed, err := store.Hit(r.Context(), limit, keyFunc(r), r.URL.Path)
+			allowed, err := limiter.Allow(r.Context(), keyFunc(r), r.URL.Path)
 			if err != nil {
 				slog.ErrorContext(r.Context(), "rate limit store failed; answering 500",
-					slog.String("limit", limit.ID), slog.String("backend", store.Backend()), slog.String("error", err.Error()))
-				RateLimitStoreErrors.inc(limit.ID)
+					slog.String("limit", id), slog.String("backend", limiter.Backend()), slog.String("error", err.Error()))
+				RateLimitStoreErrors.inc(id)
 				write(w, r, CodeInternal)
 				return
 			}

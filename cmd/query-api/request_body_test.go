@@ -2,6 +2,9 @@ package main
 
 import (
 	"math"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
@@ -59,5 +62,23 @@ func TestValidatedIntsRenderAsPythonIntsInTheCacheKey(t *testing.T) {
 	}
 	if _, err := investmentexplain.ComputeCacheKey(investmentexplain.CacheKeyInput{Filters: filters.(map[string]any), OrgID: "org-1"}); err != nil {
 		t.Errorf("ComputeCacheKey: %v", err)
+	}
+}
+
+// TestABodyIntegerPastThe4300DigitLimitIsFastAPIs400 pins the answer for a
+// body json.loads refuses with a ValueError (not a JSONDecodeError):
+// FastAPI's 400 "There was an error parsing the body", not a 422.
+func TestABodyIntegerPastThe4300DigitLimitIsFastAPIs400(t *testing.T) {
+	_, _, detail := decodeRequestBody([]any{"body"}, []byte(`{"limit":`+strings.Repeat("1", 4301)+`}`))
+	if detail == nil {
+		t.Fatal("a 4301-digit integer literal must be refused")
+	}
+	recorder := httptest.NewRecorder()
+	writePydanticValidationError(recorder, httptest.NewRequest("POST", "/x", nil), "org", *detail)
+	if recorder.Code != http.StatusBadRequest || strings.TrimSpace(recorder.Body.String()) != `{"detail":"There was an error parsing the body"}` {
+		t.Fatalf("answered %d %s", recorder.Code, recorder.Body.String())
+	}
+	if _, _, detail := decodeRequestBody([]any{"body"}, []byte(`{"limit":`+strings.Repeat("1", 4300)+`}`)); detail != nil {
+		t.Fatalf("a 4300-digit literal is accepted, got %+v", detail)
 	}
 }

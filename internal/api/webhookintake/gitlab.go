@@ -51,6 +51,9 @@ func (d Deps) handleGitLabWebhook() http.HandlerFunc {
 
 		payload, err := decodeJSONBody(body)
 		if err != nil {
+			if writeIntLimit(w, err) {
+				return
+			}
 			d.logger().Warn("Invalid JSON in GitLab webhook", "error", err)
 			policy.WriteDetail(w, http.StatusBadRequest, "Invalid JSON payload", nil)
 			return

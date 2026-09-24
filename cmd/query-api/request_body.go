@@ -14,6 +14,11 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 )
 
+// bodyParseFailedType marks the one detail decodeRequestBody returns for a
+// body FastAPI cannot parse at all (an integer literal past CPython's digit
+// limit); writePydanticValidationError answers it as the 400 it is.
+const bodyParseFailedType = "body_parse_failed"
+
 // decodeRequestBody decodes a POST body. empty is true for an empty body
 // and for a JSON null (FastAPI reports both as the missing body). A body
 // that is not JSON is FastAPI's json_invalid error at loc + the error's
@@ -24,6 +29,12 @@ func decodeRequestBody(loc []any, body []byte) (value pyjson.Value, empty bool, 
 	}
 	decoded, err := pyjson.Decode(body)
 	if err != nil {
+		var limit *pyjson.IntLimitError
+		if errors.As(err, &limit) {
+			// json.loads raises a ValueError, not a JSONDecodeError: FastAPI
+			// answers 400 "There was an error parsing the body", not a 422.
+			return nil, false, &pydanticErrorDetail{Type: bodyParseFailedType}
+		}
 		var syntax *pyjson.SyntaxError
 		message, position := "Expecting value", 0
 		if errors.As(err, &syntax) {

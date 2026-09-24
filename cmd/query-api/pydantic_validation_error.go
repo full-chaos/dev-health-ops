@@ -72,6 +72,10 @@ type pydanticValidationErrorBody struct {
 // json.dumps cannot render (NaN or an infinity, allow_nan=False) makes
 // FastAPI's handler raise, so the answer is the app's generic 500.
 func writePydanticValidationError(w http.ResponseWriter, r *http.Request, orgID string, details ...pydanticErrorDetail) {
+	if len(details) == 1 && details[0].Type == bodyParseFailedType {
+		policy.WriteDetail(w, http.StatusBadRequest, "There was an error parsing the body", nil)
+		return
+	}
 	list := make([]pyjson.Value, len(details))
 	for index, detail := range details {
 		list[index] = detail.pyjsonObject()

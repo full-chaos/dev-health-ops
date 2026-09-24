@@ -18,6 +18,20 @@ type SyntaxError struct {
 
 func (e *SyntaxError) Error() string { return fmt.Sprintf("%s: char %d", e.Msg, e.Pos) }
 
+// maxIntDigits is CPython's default sys.get_int_max_str_digits().
+const maxIntDigits = 4300
+
+// IntLimitError is the ValueError json.loads raises for an integer literal
+// of more than 4300 digits ("Exceeds the limit (4300 digits) for integer
+// string conversion"): not a JSONDecodeError, so a caller that maps
+// SyntaxError to a JSON-invalid answer must answer differently (FastAPI:
+// 400 "There was an error parsing the body").
+type IntLimitError struct{ Digits int }
+
+func (e *IntLimitError) Error() string {
+	return fmt.Sprintf("Exceeds the limit (%d digits) for integer string conversion: value has %d digits; use sys.set_int_max_str_digits() to increase the limit", maxIntDigits, e.Digits)
+}
+
 // Decode parses text as json.loads(str) does (CPython's C scanner): object
 // key order kept, int and float distinct, NaN/Infinity/-Infinity accepted,
 // and the same error message and position on a malformed document.
@@ -159,6 +173,11 @@ func (p *parser) number(i int) (Value, int, error) {
 			return nil, 0, err
 		}
 		return Float(parsed), j, nil
+	}
+	// json.loads converts an integer literal with int(), whose digit limit
+	// does not count the sign; a float literal has no limit.
+	if digits := len(literal) - strings.Count(literal, "-"); digits > maxIntDigits {
+		return nil, 0, &IntLimitError{Digits: digits}
 	}
 	parsed, _ := new(big.Int).SetString(literal, 10)
 	return Int{parsed}, j, nil

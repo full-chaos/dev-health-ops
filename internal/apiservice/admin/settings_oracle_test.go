@@ -167,6 +167,9 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, '2026-02-01T00:00:00+00:00', '2026-02-01T00:
 		plain("get path post is 405", "POST", "/settings/general/site_name", "adminA"),
 		plain("settings get is 405", "GET", "/settings", "adminA"),
 		// ---- put ------------------------------------------------------------
+		// A no-op write on a seeded row must leave its updated_at alone, as
+		// the ORM does when no attribute changed.
+		send("W put same values on a seeded row", "PUT", "/settings/general/unicode", "adminA", `{"value":"Café 東京"}`),
 		send("W put new plain", "PUT", "/settings/general/put_new", "adminA", `{"value":"v1"}`),
 		send("W put replace plain", "PUT", "/settings/general/site_name", "adminA", `{"value":"Acme2","description":"renamed"}`),
 		send("W put keeps description", "PUT", "/settings/general/site_name", "adminA", `{"value":"Acme3"}`),

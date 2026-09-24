@@ -142,7 +142,7 @@ func (h *handlers) listSettingCategories(w http.ResponseWriter, r *http.Request)
 	for index, name := range settingCategories {
 		list[index] = name
 	}
-	policy.WriteJSON(w, http.StatusOK, list, nil)
+	policy.WriteModel(w, http.StatusOK, list, nil)
 }
 
 // loadCategory is SettingsService.list_by_category's read: every row of the
@@ -189,7 +189,7 @@ func (h *handlers) listSettingsByCategory(w http.ResponseWriter, r *http.Request
 	out := pyjson.NewObject()
 	out.Set("category", category)
 	out.Set("settings", []pyjson.Value{})
-	policy.WriteJSON(w, http.StatusOK, out, nil)
+	policy.WriteModel(w, http.StatusOK, out, nil)
 }
 
 // getSetting is settings.py's get_setting.
@@ -209,7 +209,7 @@ func (h *handlers) getSetting(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, row := range rows {
 		if row.Key == key {
-			policy.WriteJSON(w, http.StatusOK, settingObject(key, category, row.Value, row.IsEncrypted, row.Description), nil)
+			policy.WriteModel(w, http.StatusOK, settingObject(key, category, row.Value, row.IsEncrypted, row.Description), nil)
 			return
 		}
 	}
@@ -317,7 +317,7 @@ func (h *handlers) putSetting(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	policy.WriteJSON(w, http.StatusOK, settingObject(key, category, row.Value, row.IsEncrypted, row.Description), nil)
+	policy.WriteModel(w, http.StatusOK, settingObject(key, category, row.Value, row.IsEncrypted, row.Description), nil)
 }
 
 // postSetting is settings.py's create_setting.
@@ -364,7 +364,7 @@ func (h *handlers) postSetting(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	policy.WriteJSON(w, http.StatusOK, settingObject(*key, category, row.Value, row.IsEncrypted, row.Description), nil)
+	policy.WriteModel(w, http.StatusOK, settingObject(*key, category, row.Value, row.IsEncrypted, row.Description), nil)
 }
 
 // deleteSetting is settings.py's delete_setting.
@@ -393,5 +393,5 @@ func (h *handlers) deleteSetting(w http.ResponseWriter, r *http.Request) {
 	}
 	out := pyjson.NewObject()
 	out.Set("deleted", true)
-	policy.WriteJSON(w, http.StatusOK, out, nil)
+	policy.WriteModel(w, http.StatusOK, out, nil)
 }

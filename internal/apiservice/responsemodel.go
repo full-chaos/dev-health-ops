@@ -49,6 +49,7 @@ var responseModelRoutes = map[string]bool{
 	"DELETE /api/v1/admin/orgs/{org_id}/feature-overrides/{override_id}":  false,
 	"DELETE /api/v1/admin/orgs/{org_id}/members/{user_id}":                true,
 	"DELETE /api/v1/admin/retention-policies/{policy_id}":                 true,
+	"DELETE /api/v1/admin/settings/{category}/{key}":                      true,
 	"DELETE /api/v1/admin/teams/{team_id}":                                true,
 	"DELETE /api/v1/admin/users/{user_id}":                                true,
 	"GET /api/v1/admin/audit-logs":                                        true,
@@ -80,6 +81,9 @@ var responseModelRoutes = map[string]bool{
 	"GET /api/v1/admin/retention-policies":                                true,
 	"GET /api/v1/admin/retention-policies/resource-types":                 true,
 	"GET /api/v1/admin/retention-policies/{policy_id}":                    true,
+	"GET /api/v1/admin/settings/categories":                               true,
+	"GET /api/v1/admin/settings/{category}":                               true,
+	"GET /api/v1/admin/settings/{category}/{key}":                         true,
 	"GET /api/v1/admin/sync-configs":                                      true,
 	"GET /api/v1/admin/sync-configs/auto-import-capabilities":             true,
 	"GET /api/v1/admin/sync-configs/{config_id}":                          true,
@@ -143,6 +147,7 @@ var responseModelRoutes = map[string]bool{
 	"POST /api/v1/admin/orgs/{org_id}/members":                            true,
 	"POST /api/v1/admin/retention-policies":                               true,
 	"POST /api/v1/admin/retention-policies/{policy_id}/execute":           true,
+	"POST /api/v1/admin/settings":                                         true,
 	"POST /api/v1/admin/teams":                                            true,
 	"POST /api/v1/admin/teams/import":                                     true,
 	"POST /api/v1/admin/teams/{team_id}/approve-changes":                  true,
@@ -161,6 +166,7 @@ var responseModelRoutes = map[string]bool{
 	"POST /api/v1/webhooks/gitlab":                                        true,
 	"POST /api/v1/webhooks/jira":                                          true,
 	"POST /api/v1/webhooks/pagerduty/{binding_id}":                        false,
+	"PUT /api/v1/admin/settings/{category}/{key}":                         true,
 }
 
 // jsonResponseRoutes are response_model routes on the FastAPI side whose

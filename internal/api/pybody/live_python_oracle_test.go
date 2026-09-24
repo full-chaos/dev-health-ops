@@ -9,7 +9,6 @@ import (
 	"runtime"
 	"strings"
 	"testing"
-	"unicode"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 )
@@ -57,6 +56,26 @@ func fuzzQueryInts() []string {
 	return out
 }
 
+// exhaustiveQueryInts is every string of up to five characters over the
+// characters that decide where pydantic-core's leading-zero, underscore,
+// sign and fraction rules bite -- the whole boundary, not a sample of it.
+func exhaustiveQueryInts() []string {
+	alphabet := "015-+_."
+	out := []string{""}
+	frontier := []string{""}
+	for range 5 {
+		var next []string
+		for _, prefix := range frontier {
+			for _, character := range alphabet {
+				next = append(next, prefix+string(character))
+			}
+		}
+		out = append(out, next...)
+		frontier = next
+	}
+	return out
+}
+
 func TestQueryIntMatchesLivePydantic(t *testing.T) {
 	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
 		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
@@ -64,7 +83,7 @@ func TestQueryIntMatchesLivePydantic(t *testing.T) {
 	_, file, _, _ := runtime.Caller(0)
 	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
 	python := pyoracle.Resolve(t, root)
-	corpus := append(append([]string(nil), queryIntCorpus...), fuzzQueryInts()...)
+	corpus := append(append(append([]string(nil), queryIntCorpus...), fuzzQueryInts()...), exhaustiveQueryInts()...)
 	input, _ := json.Marshal(corpus)
 	command := exec.Command(python, "-c", pythonQueryIntProgram)
 	command.Stdin = strings.NewReader(string(input))
@@ -81,16 +100,8 @@ func TestQueryIntMatchesLivePydantic(t *testing.T) {
 		t.Fatalf("python answered %d of %d", len(want), len(corpus))
 	}
 	ge, le := int64(1), int64(200)
-	mismatches, limited := 0, 0
+	mismatches := 0
 	for index, text := range corpus {
-		// Named limit: pydantic-core strips a run of leading zeros that is
-		// followed by a minus sign ("0-5" is -5, "0-0" is 0, while "0-05"
-		// and "0-00" are refused). Go refuses the whole family; these
-		// inputs are counted, not compared.
-		if leadingZerosThenMinus(text) {
-			limited++
-			continue
-		}
 		var errs Errors
 		raw := text
 		value, ok := errs.QueryInt("limit", &raw, 50, &ge, &le)
@@ -121,11 +132,5 @@ func TestQueryIntMatchesLivePydantic(t *testing.T) {
 	} else {
 		t.Fatal("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR is required")
 	}
-	t.Logf("%d query ints compared, %d under the leading-zeros-then-minus named limit, %d mismatches", len(corpus)-limited, limited, mismatches)
-}
-
-func leadingZerosThenMinus(text string) bool {
-	trimmed := strings.TrimFunc(text, unicode.IsSpace)
-	rest := strings.TrimLeft(trimmed, "0_")
-	return len(rest) < len(trimmed) && strings.HasPrefix(trimmed, "0") && strings.HasPrefix(rest, "-")
+	t.Logf("%d query ints compared, %d mismatches", len(corpus), mismatches)
 }

@@ -41,6 +41,35 @@ func ParsePydanticInt(raw string) (*big.Int, *Error) {
 	}
 	var digits strings.Builder
 	previousDigit := false
+	if strings.HasPrefix(whole, "0") {
+		// pydantic-core drops a leading run of zeros and underscores before
+		// it reads the number, so "0__5" is 5, "00_0" is 0 and "0_" is
+		// refused (nothing follows a trailing underscore). What follows may
+		// be a minus, but only when no sign came first: "0-5" and "+0-5" are
+		// -5, "-0-5" is refused, and the digits after that minus carry no
+		// leading zero ("0-05" is refused, "0-0" is 0), with one optional
+		// underscore after the minus ("0-_5" is -5).
+		rest := strings.TrimLeft(whole, "0_")
+		prefix := whole[:len(whole)-len(rest)]
+		switch {
+		case rest == "":
+			if prefix[len(prefix)-1] != '0' {
+				return nil, failed
+			}
+			return new(big.Int), nil
+		case rest[0] == '-':
+			if sign != "" {
+				return nil, failed
+			}
+			rest = strings.TrimPrefix(rest[1:], "_")
+			if rest == "" || rest[0] < '0' || rest[0] > '9' || (rest[0] == '0' && len(rest) > 1) {
+				return nil, failed
+			}
+			sign, whole = "-", rest
+		default:
+			whole = rest
+		}
+	}
 	for index := 0; index < len(whole); index++ {
 		switch c := whole[index]; {
 		case c >= '0' && c <= '9':

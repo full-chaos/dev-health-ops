@@ -54,12 +54,25 @@ func TestNoNonTestGoFileImportsAForeignNormalizer(t *testing.T) {
 	}
 }
 
+// plantedNormalizerImports is the planting test's own list, kept apart from
+// forbiddenNormalizerImports on purpose: a test that planted the guard's
+// own table would still pass after a row was dropped from it.
+var plantedNormalizerImports = []string{
+	"golang.org/x/text/unicode/norm",
+	"golang.org/x/net/idna",
+	"golang.org/x/text/secure/precis",
+	"golang.org/x/text/secure/bidirule",
+}
+
 // TestTheNormalizerImportScanDetectsAnImport plants each forbidden import
 // (plain, renamed, blank and inside a grouped block, behind a build tag)
 // in a scratch module and requires the scan to report it, and requires a
 // _test.go file with the same import to pass.
 func TestTheNormalizerImportScanDetectsAnImport(t *testing.T) {
-	for path := range forbiddenNormalizerImports {
+	for _, path := range plantedNormalizerImports {
+		if _, listed := forbiddenNormalizerImports[path]; !listed {
+			t.Errorf("forbiddenNormalizerImports no longer lists %s", path)
+		}
 		for name, source := range map[string]string{
 			"plain.go":   "package p\n\nimport \"" + path + "\"\n",
 			"renamed.go": "package p\n\nimport x \"" + path + "\"\n",

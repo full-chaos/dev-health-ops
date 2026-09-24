@@ -2,6 +2,7 @@ package apiservice
 
 import (
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/api/oauthprovider"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"os"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/billing/stripeclient"
 	"github.com/full-chaos/dev-health-ops/internal/api/webhookintake"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
+	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
@@ -94,6 +96,14 @@ type Deps struct {
 	// Guard to wrap a handler with its authorization level.
 	Auth  *policy.Authenticator
 	Guard *policy.Guard
+	// Verifier and Signer are the access/refresh token keys (JWT_SECRET_KEY),
+	// nil without a pool: the session routes (internal/api/session) mint
+	// and verify with them.
+	Verifier *edgetoken.Verifier
+	Signer   *edgetoken.Signer
+	// SessionOAuth is the social-login profile client; nil means the
+	// providers' real endpoints. A venue test points it at a fake provider.
+	SessionOAuth *oauthprovider.Client
 	// Probes is the configuration the health probes report on.
 	Probes ProbeConfig
 	// Telemetry is the telemetry areas' configuration.

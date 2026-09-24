@@ -88,6 +88,13 @@ func New(secret, issuer, audience string) (*Verifier, error) {
 // could decode (possibly nil) with a *Rejection, so a caller can log which
 // principal was refused without logging the token.
 func (v *Verifier) Verify(tokenString string) (jwt.MapClaims, error) {
+	return v.VerifyType(tokenString, AccessType)
+}
+
+// VerifyType is validate_token(token, tokenType): Verify's rules with the
+// "type" claim required to equal tokenType (RefreshType for a refresh
+// token).
+func (v *Verifier) VerifyType(tokenString, tokenType string) (jwt.MapClaims, error) {
 	var peeked jwt.MapClaims
 	if _, _, err := jwt.NewParser().ParseUnverified(tokenString, &peeked); err != nil {
 		return nil, &Rejection{Reason: ReasonMalformed, Err: err}
@@ -122,8 +129,8 @@ func (v *Verifier) Verify(tokenString string) (jwt.MapClaims, error) {
 	if !ok {
 		return claims, &Rejection{Reason: ReasonMissingType, Err: errors.New("missing type claim")}
 	}
-	if typeValue, _ := typeClaim.(string); typeValue != AccessType {
-		return claims, &Rejection{Reason: ReasonTypeMismatch, Err: fmt.Errorf("type claim is %q, want %q", typeValue, AccessType)}
+	if typeValue, _ := typeClaim.(string); typeValue != tokenType {
+		return claims, &Rejection{Reason: ReasonTypeMismatch, Err: fmt.Errorf("type claim is %q, want %q", typeValue, tokenType)}
 	}
 	return claims, nil
 }

@@ -277,5 +277,9 @@ func Latin1(raw string) string {
 	return builder.String()
 }
 
-func isRefusal(err error) bool     { return errors.Is(err, errRejected) }
+func isRefusal(err error) bool { return errors.Is(err, errRejected) }
+
+// IsRefusal reports whether err is Authenticate's refusal (Python's None),
+// as opposed to a store failure.
+func IsRefusal(err error) bool     { return isRefusal(err) }
 func isUnavailable(err error) bool { return errors.Is(err, ErrUnavailable) }

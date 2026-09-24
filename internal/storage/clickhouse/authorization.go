@@ -62,6 +62,13 @@ func APIPosture(database string) Posture {
 		// applies. Insert only: nothing here reads or deletes these tables.
 		{Database: database, Table: "team_memberships", AllowInsert: true},
 		{Database: database, Table: "manual_attribution_fallbacks", AllowInsert: true},
+		// Organization activity for the login route's active-org choice
+		// and GET /api/v1/auth/me/organizations (_load_org_activity): a
+		// row count and the newest computed_at per org, read only.
+		{Database: database, Table: "repo_metrics_daily", AllowSelect: true},
+		{Database: database, Table: "user_metrics_daily", AllowSelect: true},
+		{Database: database, Table: "team_metrics_daily", AllowSelect: true},
+		{Database: database, Table: "work_item_metrics_daily", AllowSelect: true},
 	}}
 }
 

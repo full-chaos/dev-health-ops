@@ -123,8 +123,14 @@ func apiPosture() RolePosture {
 			{"memberships", true, true, true},
 			// setUserPassword revokes every outstanding refresh token
 			// (refresh_tokens.py's revoke_all_for_user) on a password
-			// change. A purge target, delete added.
-			{"refresh_tokens", false, true, true},
+			// change. A purge target, delete added. The session routes
+			// (login, switch-org, social login, refresh rotation) insert a
+			// row per issued refresh token. Widened in place.
+			{"refresh_tokens", true, true, true},
+			// The login route's failed-attempt lockout
+			// (services/login_attempts.py): read, insert the first failure,
+			// update the count and lock, delete on a successful login.
+			{"login_attempts", true, true, true},
 			// org_invites: create_org_invite (CHAOS-6391) checks for a
 			// pending invite (read) and inserts one; a purge target, delete
 			// added. Never updated by this role.

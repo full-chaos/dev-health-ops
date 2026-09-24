@@ -4,6 +4,9 @@ package apiservice
 
 import (
 	"encoding/json"
+	"github.com/full-chaos/dev-health-ops/internal/api/session"
+	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"io"
 	"log/slog"
 	"net/http/httptest"
@@ -110,6 +113,19 @@ func TestVenueOracleRouteResponseModels(t *testing.T) {
 	// billing mounts only with a pool; its route list needs neither a pool
 	// nor a Stripe client to be built.
 	routes = append(routes, markResponseModels(billing.Routes(billing.Deps{Guard: guard, Logger: logger}))...)
+	// session mounts only with a pool, an authenticator and the token keys;
+	// its route list needs none of them to work.
+	sessionKey := "response-model-registry-signing-key-0123456789"
+	verifier, err := edgetoken.New(sessionKey, "dev-health-ops", "dev-health-api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, err := edgetoken.NewSigner(sessionKey, "dev-health-ops", "dev-health-api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	routes = append(routes, markResponseModels(session.Routes(session.Deps{Pool: &pgxpool.Pool{}, Guard: guard,
+		Auth: &policy.Authenticator{}, Verifier: verifier, Signer: signer}))...)
 	patterns := map[string]httpapi.Route{}
 	for _, route := range routes {
 		patterns[route.Method+" "+route.Pattern] = route

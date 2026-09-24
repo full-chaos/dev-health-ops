@@ -16,7 +16,6 @@ package server
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -316,10 +315,9 @@ func homeFiltersFromMap(filters map[string]any) home.Filters {
 // raw w.Write of pre-marshalled bytes, matching every other route in
 // this binary.
 func writeHomeResponse(w http.ResponseWriter, r *http.Request, orgID string, resp *home.Response) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	if encodeErr := json.NewEncoder(w).Encode(resp); encodeErr != nil {
+	if encodeErr := writeModelResponse(w, resp); encodeErr != nil {
 		log.Printf("query-api: home: encode response failed: org_id=%s request_id=%s err=%v",
 			orgID, envelopeRequestID(r), encodeErr)
+		writeModelFailure(w)
 	}
 }

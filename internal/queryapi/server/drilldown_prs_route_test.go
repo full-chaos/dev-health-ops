@@ -105,7 +105,7 @@ func TestNewDrilldownPRsGetHandlerRequiresAuthContext(t *testing.T) {
 	handler := newDrilldownPRsGetHandler(newEmptyRowsDrilldownReader(t))
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/drilldown/prs", nil)
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
@@ -123,7 +123,7 @@ func TestNewDrilldownPRsGetHandlerHappyPathSetsDeprecatedHeader(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/drilldown/prs?scope_type=repo&scope_id=repo-a&range_days=7", nil)
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
 	}
@@ -150,7 +150,7 @@ func TestNewDrilldownPRsPostHandlerRequiresAuthContext(t *testing.T) {
 	handler := newDrilldownPRsPostHandler(newEmptyRowsDrilldownReader(t))
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/drilldown/prs", bytes.NewReader([]byte(`{"filters":{}}`)))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
@@ -169,7 +169,7 @@ func TestNewDrilldownPRsPostHandlerHappyPathNoDeprecatedHeader(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/drilldown/prs", bytes.NewReader([]byte(body)))
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
 	}
@@ -199,7 +199,7 @@ func TestNewDrilldownPRsPostHandlerLimitFallback(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/drilldown/prs", bytes.NewReader([]byte(body)))
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
 	}
@@ -223,7 +223,7 @@ func TestNewDrilldownPRsGetHandlerClickHouseFailureIs503(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/drilldown/prs", nil)
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
 	}
@@ -239,7 +239,7 @@ func TestNewDrilldownPRsPostHandlerClickHouseFailureIs503(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/drilldown/prs", bytes.NewReader([]byte(`{"filters":{}}`)))
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
 	}
@@ -272,7 +272,7 @@ func TestBuildDrilldownPRsRouteEntryHandlerRejectsUnknownMethod(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/drilldown/prs", nil)
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
 	}

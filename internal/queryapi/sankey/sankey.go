@@ -153,8 +153,8 @@ type Response struct {
 	DistinctTeamTargets *int               `json:"distinct_team_targets"`
 	DistinctRepoTargets *int               `json:"distinct_repo_targets"`
 	ChosenMode          *string            `json:"chosen_mode"`
-	Coverage            map[string]float64 `json:"coverage"`
-	UnassignedReasons   map[string]int     `json:"unassigned_reasons"`
+	Coverage            map[string]float64 `json:"coverage" pyjson:"nullable"`
+	UnassignedReasons   map[string]int     `json:"unassigned_reasons" pyjson:"nullable"`
 	FlowMode            *string            `json:"flow_mode"`
 	DrillCategory       *string            `json:"drill_category"`
 	TopNRepos           *int               `json:"top_n_repos"`

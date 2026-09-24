@@ -64,7 +64,7 @@ func serveTeamRoutes(t *testing.T, handler http.HandlerFunc, method, target, bod
 	req := httptest.NewRequest(method, target, reader)
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: teamRoutesOrg}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("%s %s = HTTP %d: %s", method, target, rec.Code, rec.Body.String())
 	}

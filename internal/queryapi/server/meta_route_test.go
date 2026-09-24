@@ -123,7 +123,7 @@ func TestNewMetaWorkHandlerRequiresNoAuthContext(t *testing.T) {
 	handler := newMetaWorkHandler(fixedVersionMetaClient{version: "24.3.1.2672"})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/meta", nil)
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
 	}
@@ -135,7 +135,7 @@ func TestNewMetaWorkHandlerHappyPathShape(t *testing.T) {
 	handler := newMetaWorkHandler(fixedVersionMetaClient{version: "24.3.1.2672"})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/meta", nil)
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
 	}
@@ -186,7 +186,7 @@ func TestNewMetaWorkHandlerClickHouseFailureIsStill200(t *testing.T) {
 	handler := newMetaWorkHandler(erroringMetaClient{})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/meta", nil)
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
 	}
@@ -219,7 +219,7 @@ func TestBuildMetaRouteEntryHandlerRejectsNonGET(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/meta", nil)
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
 	}

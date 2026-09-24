@@ -61,20 +61,81 @@ type RouteWriter interface {
 	ResponseModelRoute() bool
 	// RouteKey is the route's "METHOD pattern", for diagnostics.
 	RouteKey() string
+	// MarkModelBody records that the body was written as a
+	// response_model body.
+	MarkModelBody()
+	// MissingModelBody reports a 2xx response on a response_model route
+	// whose body was not marked (see policy.RecordMissingModelBody).
+	MissingModelBody() bool
 }
 
 type routeWriter struct {
 	http.ResponseWriter
 	responseModel bool
 	key           string
+	state         *routeWriteState
+}
+
+// routeWriteState is what the handler wrote: the status, and whether the
+// body was marked as a response_model body (policy.MarkModelBody).
+type routeWriteState struct {
+	status    int
+	modelBody bool
 }
 
 func (w routeWriter) ResponseModelRoute() bool { return w.responseModel }
+
+func (w routeWriter) WriteHeader(status int) {
+	if w.state != nil && w.state.status == 0 {
+		w.state.status = status
+	}
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w routeWriter) Write(data []byte) (int, error) {
+	if w.state != nil && w.state.status == 0 {
+		w.state.status = http.StatusOK
+	}
+	return w.ResponseWriter.Write(data)
+}
+
+// Flush passes a flush through, so a streaming handler (the query-api's
+// investment explain keep-alive) still reaches http.Flusher.
+func (w routeWriter) Flush() {
+	flusher, ok := w.ResponseWriter.(http.Flusher)
+	if !ok {
+		return
+	}
+	if w.state != nil && w.state.status == 0 {
+		w.state.status = http.StatusOK
+	}
+	flusher.Flush()
+}
+
+// MarkModelBody records that the body was written as a response_model.
+func (w routeWriter) MarkModelBody() {
+	if w.state != nil {
+		w.state.modelBody = true
+	}
+}
+
+// MissingModelBody reports a 2xx response on a response_model route whose
+// body was not marked as a response_model body.
+func (w routeWriter) MissingModelBody() bool {
+	return w.state != nil && w.responseModel && w.state.status >= 200 && w.state.status < 300 && !w.state.modelBody
+}
 
 func (w routeWriter) RouteKey() string { return w.key }
 
 // Unwrap lets http.ResponseController reach the underlying writer.
 func (w routeWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
+// NewRouteWriter hands w the route flag a server outside this package
+// resolves itself (the query-api's mux), so policy's writer check covers
+// its routes too.
+func NewRouteWriter(w http.ResponseWriter, key string, responseModel bool) RouteWriter {
+	return routeWriter{ResponseWriter: w, responseModel: responseModel, key: key, state: &routeWriteState{}}
+}
 
 func markRoute(route Route) http.Handler {
 	key := route.Method + " " + route.Pattern

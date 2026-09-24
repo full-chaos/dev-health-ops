@@ -99,7 +99,7 @@ func TestNewSankeyGetHandlerRequiresAuthContext(t *testing.T) {
 	handler := newSankeyGetHandler(emptyRowsSankeyClient{})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/sankey", nil)
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
@@ -112,7 +112,7 @@ func TestNewSankeyGetHandlerRangeDaysNotAnInt(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/sankey?range_days=nope", nil)
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusUnprocessableEntity, rec.Body.String())
 	}
@@ -134,7 +134,7 @@ func TestNewSankeyGetHandlerInvalidScopeTypeIs503(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/sankey?scope_type=not-a-level", nil)
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusServiceUnavailable, rec.Body.String())
 	}
@@ -150,7 +150,7 @@ func TestNewSankeyGetHandlerSuccessSetsDeprecatedHeader(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/sankey?mode=hotspot", nil)
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
 	}
@@ -166,7 +166,7 @@ func TestNewSankeyPostHandlerRequiresAuthContext(t *testing.T) {
 	handler := newSankeyPostHandler(emptyRowsSankeyClient{})
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/sankey", bytes.NewReader([]byte(`{}`)))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
@@ -179,7 +179,7 @@ func TestNewSankeyPostHandlerEmptyBodyIsMissing(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/sankey", bytes.NewReader(nil))
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusUnprocessableEntity, rec.Body.String())
 	}
@@ -199,7 +199,7 @@ func TestNewSankeyPostHandlerMissingModeAndFilters(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/sankey", bytes.NewReader([]byte(`{}`)))
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusUnprocessableEntity, rec.Body.String())
 	}
@@ -219,7 +219,7 @@ func TestNewSankeyPostHandlerInvalidModeLiteral(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/sankey", bytes.NewReader([]byte(`{"mode":"nope","filters":{}}`)))
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusUnprocessableEntity, rec.Body.String())
 	}
@@ -239,7 +239,7 @@ func TestNewSankeyPostHandlerSuccessNoDeprecatedHeader(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/sankey", bytes.NewReader([]byte(`{"mode":"state","filters":{}}`)))
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
 	}

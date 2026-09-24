@@ -115,7 +115,7 @@ func TestNewFilterOptionsWorkHandlerRequiresAuthContext(t *testing.T) {
 	handler := newFilterOptionsWorkHandler(emptyRowsFilterOptionsClient{})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/filters/options", nil)
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
@@ -132,7 +132,7 @@ func TestNewFilterOptionsWorkHandlerHappyPathShape(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/filters/options", nil)
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
 	}
@@ -168,7 +168,7 @@ func TestNewFilterOptionsWorkHandlerClickHouseFailureIs503(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/filters/options", nil)
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
 	}
@@ -201,7 +201,7 @@ func TestBuildFilterOptionsRouteEntryHandlerRejectsNonGET(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/filters/options", nil)
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
 	}

@@ -107,7 +107,7 @@ func TestNewInvestmentFlowHandlerRequiresAuthContext(t *testing.T) {
 	handler := newInvestmentFlowHandler(emptyRowsInvestmentFlowClient{})
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/investment/flow", bytes.NewReader([]byte(`{}`)))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
@@ -117,7 +117,7 @@ func TestNewInvestmentFlowRepoTeamHandlerRequiresAuthContext(t *testing.T) {
 	handler := newInvestmentFlowRepoTeamHandler(emptyRowsInvestmentFlowClient{})
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/investment/flow/repo-team", bytes.NewReader([]byte(`{}`)))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
@@ -135,7 +135,7 @@ func TestNewInvestmentFlowHandlerEmptyBodyIsMissing(t *testing.T) {
 	handler := newInvestmentFlowHandler(emptyRowsInvestmentFlowClient{})
 	req := withOrg1(httptest.NewRequest(http.MethodPost, "/api/v1/investment/flow", bytes.NewReader(nil)))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusUnprocessableEntity, rec.Body.String())
 	}
@@ -155,7 +155,7 @@ func TestNewInvestmentFlowHandlerEmptyObjectIsOK(t *testing.T) {
 	handler := newInvestmentFlowHandler(emptyRowsInvestmentFlowClient{})
 	req := withOrg1(httptest.NewRequest(http.MethodPost, "/api/v1/investment/flow", bytes.NewReader([]byte(`{}`))))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
 	}
@@ -171,7 +171,7 @@ func TestNewInvestmentFlowHandlerFiltersNullIs422(t *testing.T) {
 	handler := newInvestmentFlowHandler(emptyRowsInvestmentFlowClient{})
 	req := withOrg1(httptest.NewRequest(http.MethodPost, "/api/v1/investment/flow", bytes.NewReader([]byte(`{"filters":null}`))))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusUnprocessableEntity, rec.Body.String())
 	}
@@ -190,7 +190,7 @@ func TestNewInvestmentFlowHandlerTopNReposNullIs422(t *testing.T) {
 	handler := newInvestmentFlowHandler(emptyRowsInvestmentFlowClient{})
 	req := withOrg1(httptest.NewRequest(http.MethodPost, "/api/v1/investment/flow", bytes.NewReader([]byte(`{"top_n_repos":null}`))))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusUnprocessableEntity, rec.Body.String())
 	}
@@ -209,7 +209,7 @@ func TestNewInvestmentFlowHandlerInvalidFlowModeLiteral(t *testing.T) {
 	handler := newInvestmentFlowHandler(emptyRowsInvestmentFlowClient{})
 	req := withOrg1(httptest.NewRequest(http.MethodPost, "/api/v1/investment/flow", bytes.NewReader([]byte(`{"flow_mode":"nope"}`))))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusUnprocessableEntity, rec.Body.String())
 	}
@@ -229,7 +229,7 @@ func TestNewInvestmentFlowHandlerMissingDrillCategoryIs400(t *testing.T) {
 	handler := newInvestmentFlowHandler(emptyRowsInvestmentFlowClient{})
 	req := withOrg1(httptest.NewRequest(http.MethodPost, "/api/v1/investment/flow", bytes.NewReader([]byte(`{"flow_mode":"team_subcategory_repo"}`))))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
 	}
@@ -248,7 +248,7 @@ func TestNewInvestmentFlowHandlerTeamCategoryRepoOK(t *testing.T) {
 	handler := newInvestmentFlowHandler(emptyRowsInvestmentFlowClient{})
 	req := withOrg1(httptest.NewRequest(http.MethodPost, "/api/v1/investment/flow", bytes.NewReader([]byte(`{"flow_mode":"team_category_repo"}`))))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
 	}
@@ -261,7 +261,7 @@ func TestNewInvestmentFlowRepoTeamHandlerSuccess(t *testing.T) {
 	handler := newInvestmentFlowRepoTeamHandler(emptyRowsInvestmentFlowClient{})
 	req := withOrg1(httptest.NewRequest(http.MethodPost, "/api/v1/investment/flow/repo-team", bytes.NewReader([]byte(`{}`))))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
 	}
@@ -279,7 +279,7 @@ func TestNewInvestmentFlowRepoTeamHandlerNoValueErrorBranch(t *testing.T) {
 	handler := newInvestmentFlowRepoTeamHandler(emptyRowsInvestmentFlowClient{})
 	req := withOrg1(httptest.NewRequest(http.MethodPost, "/api/v1/investment/flow/repo-team", bytes.NewReader([]byte(`{"flow_mode":"team_subcategory_repo"}`))))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
 	}
@@ -308,7 +308,7 @@ func TestNewInvestmentFlowHandlerDataUnavailableIs503(t *testing.T) {
 	handler := newInvestmentFlowHandler(nilRowsErrorClient{})
 	req := withOrg1(httptest.NewRequest(http.MethodPost, "/api/v1/investment/flow", bytes.NewReader([]byte(`{}`))))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusServiceUnavailable, rec.Body.String())
 	}
@@ -325,7 +325,7 @@ func TestNewInvestmentFlowRepoTeamHandlerDataUnavailableIs503(t *testing.T) {
 	handler := newInvestmentFlowRepoTeamHandler(nilRowsErrorClient{})
 	req := withOrg1(httptest.NewRequest(http.MethodPost, "/api/v1/investment/flow/repo-team", bytes.NewReader([]byte(`{}`))))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusServiceUnavailable, rec.Body.String())
 	}

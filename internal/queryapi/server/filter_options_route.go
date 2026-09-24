@@ -25,7 +25,6 @@
 package server
 
 import (
-	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -153,21 +152,12 @@ func newFilterOptionsWorkHandler(client filteroptions.QueryClient) http.HandlerF
 			return
 		}
 
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		// json.NewEncoder(w).Encode is this repo's JSON-response path
-		// (internal/auth/httpapi/envelope.go's WriteError is the
-		// precedent) -- never a raw w.Write of pre-marshalled bytes. The
-		// 200 status is already on the wire by the time Encode runs, so a
-		// failure here cannot change what the client sees -- but it is
-		// NOT silently dropped: it is logged with the same request-scoped
-		// fields query_route.go's digest-miss log line uses (org_id, the
-		// caller-supplied X-Request-Id), so an operator can correlate a
-		// truncated or aborted response back to the request that produced
-		// it instead of it vanishing.
-		if encodeErr := json.NewEncoder(w).Encode(resp); encodeErr != nil {
+		// The success body is the route's response_model, written as
+		// pydantic-core dump_json writes it (writeModelResponse).
+		if encodeErr := writeModelResponse(w, resp); encodeErr != nil {
 			log.Printf("query-api: filteroptions: encode response failed: org_id=%s request_id=%s err=%v",
 				claims.OrgID, envelopeRequestID(r), encodeErr)
+			writeModelFailure(w)
 		}
 	}
 }

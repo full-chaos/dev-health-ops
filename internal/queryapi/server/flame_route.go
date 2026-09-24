@@ -23,7 +23,6 @@
 package server
 
 import (
-	"encoding/json"
 	"log"
 	"net/http"
 	"strconv"
@@ -207,13 +206,12 @@ func newFlameWorkHandler(client flame.QueryClient) http.HandlerFunc {
 			return
 		}
 
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		// json.NewEncoder(w).Encode is this repo's JSON-response path,
-		// never a raw w.Write of pre-marshalled bytes.
-		if encodeErr := json.NewEncoder(w).Encode(resp); encodeErr != nil {
+		// The success body is the route's response_model, written as
+		// pydantic-core dump_json writes it (writeModelResponse).
+		if encodeErr := writeModelResponse(w, resp); encodeErr != nil {
 			log.Printf("query-api: flame: encode response failed: org_id=%s request_id=%s err=%v",
 				claims.OrgID, envelopeRequestID(r), encodeErr)
+			writeModelFailure(w)
 		}
 	}
 }

@@ -25,7 +25,6 @@
 package server
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -317,11 +316,10 @@ func writeWorkUnitsResponse(w http.ResponseWriter, r *http.Request, orgID string
 	for _, investment := range investments {
 		wire = append(wire, toWorkUnitInvestmentWire(investment))
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	if encodeErr := json.NewEncoder(w).Encode(wire); encodeErr != nil {
+	if encodeErr := writeModelResponse(w, wire); encodeErr != nil {
 		log.Printf("query-api: work_units: encode response failed: org_id=%s request_id=%s err=%v",
 			orgID, envelopeRequestID(r), encodeErr)
+		writeModelFailure(w)
 	}
 }
 

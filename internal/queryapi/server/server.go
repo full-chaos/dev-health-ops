@@ -846,7 +846,7 @@ func Run(ctx context.Context, args []string, lookup func(string) (string, bool),
 
 	server := &http.Server{
 		Addr:              addr(getenv),
-		Handler:           analytics.InvestmentMembershipScopeRequestMiddleware(mux),
+		Handler:           analytics.InvestmentMembershipScopeRequestMiddleware(markResponseModelRoutes(mux)),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/people"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -45,7 +46,7 @@ func TestNewPeopleDrilldownPRsHandlerRequiresAuthContext(t *testing.T) {
 	handler := newPeopleDrilldownPRsHandler(newPeopleDetailNotFoundReader(t))
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/people/abc/drilldown/prs", nil)
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
@@ -60,7 +61,7 @@ func TestNewPeopleDrilldownPRsHandlerPersonNotFound(t *testing.T) {
 	req.SetPathValue("person_id", "nobody")
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusNotFound, rec.Body.String())
 	}
@@ -81,7 +82,7 @@ func TestNewPeopleDrilldownPRsHandlerDataUnavailable(t *testing.T) {
 	req.SetPathValue("person_id", "anyone")
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
 	}
@@ -97,7 +98,7 @@ func TestNewPeopleDrilldownPRsHandlerRejectsComparativeParams(t *testing.T) {
 			req.SetPathValue("person_id", "anyone")
 			req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 			rec := httptest.NewRecorder()
-			handler(rec, req)
+			serveRoute(t, handler, rec, req)
 			if rec.Code != http.StatusBadRequest {
 				t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
 			}
@@ -126,7 +127,7 @@ func TestNewPeopleDrilldownPRsHandlerValidationErrorsMatchPython(t *testing.T) {
 			req.SetPathValue("person_id", "anyone")
 			req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 			rec := httptest.NewRecorder()
-			handler(rec, req)
+			serveRoute(t, handler, rec, req)
 
 			if rec.Code != http.StatusUnprocessableEntity {
 				t.Fatalf("status = %d, want 422, body=%s", rec.Code, rec.Body.String())
@@ -161,8 +162,28 @@ func TestBuildPeopleDrilldownPRsRouteEntryHandlerRejectsNonGET(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/people/anyone/drilldown/prs", nil)
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
+	}
+}
+
+// TestNewPeopleDrilldownPRsHandlerSuccessIsAResponseModelBody drives the
+// route to a 200 through serveRoute, so a success body left off
+// writeModelResponse fails here.
+func TestNewPeopleDrilldownPRsHandlerSuccessIsAResponseModelBody(t *testing.T) {
+	client := cursorRoundTripClient{identity: "alice@example.com", capture: &cursorRoundTripCapture{}}
+	reader, err := people.NewReader(client)
+	if err != nil {
+		t.Fatalf("people.NewReader: %v", err)
+	}
+	handler := newPeopleDrilldownPRsHandler(reader)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/people/anyone/drilldown/prs", nil)
+	req.SetPathValue("person_id", "anyone")
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	rec := httptest.NewRecorder()
+	serveRoute(t, handler, rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body=%s", rec.Code, rec.Body.String())
 	}
 }

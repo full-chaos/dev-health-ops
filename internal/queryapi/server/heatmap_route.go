@@ -19,7 +19,6 @@
 package server
 
 import (
-	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -237,11 +236,10 @@ func newHeatmapWorkHandler(client heatmap.QueryClient) http.HandlerFunc {
 			return
 		}
 
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		if encodeErr := json.NewEncoder(w).Encode(resp); encodeErr != nil {
+		if encodeErr := writeModelResponse(w, resp); encodeErr != nil {
 			log.Printf("query-api: heatmap: encode response failed: org_id=%s request_id=%s err=%v",
 				claims.OrgID, envelopeRequestID(r), encodeErr)
+			writeModelFailure(w)
 		}
 	}
 }

@@ -50,7 +50,7 @@ func TestNewPeopleDrilldownIssuesHandlerRequiresAuthContext(t *testing.T) {
 	handler := newPeopleDrilldownIssuesHandler(newPeopleDetailNotFoundReader(t))
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/people/abc/drilldown/issues", nil)
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
@@ -65,7 +65,7 @@ func TestNewPeopleDrilldownIssuesHandlerPersonNotFound(t *testing.T) {
 	req.SetPathValue("person_id", "nobody")
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusNotFound, rec.Body.String())
 	}
@@ -86,7 +86,7 @@ func TestNewPeopleDrilldownIssuesHandlerDataUnavailable(t *testing.T) {
 	req.SetPathValue("person_id", "anyone")
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
 	}
@@ -102,7 +102,7 @@ func TestNewPeopleDrilldownIssuesHandlerRejectsComparativeParams(t *testing.T) {
 			req.SetPathValue("person_id", "anyone")
 			req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 			rec := httptest.NewRecorder()
-			handler(rec, req)
+			serveRoute(t, handler, rec, req)
 			if rec.Code != http.StatusBadRequest {
 				t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
 			}
@@ -131,7 +131,7 @@ func TestNewPeopleDrilldownIssuesHandlerValidationErrorsMatchPython(t *testing.T
 			req.SetPathValue("person_id", "anyone")
 			req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 			rec := httptest.NewRecorder()
-			handler(rec, req)
+			serveRoute(t, handler, rec, req)
 
 			if rec.Code != http.StatusUnprocessableEntity {
 				t.Fatalf("status = %d, want 422, body=%s", rec.Code, rec.Body.String())
@@ -166,7 +166,7 @@ func TestBuildPeopleDrilldownIssuesRouteEntryHandlerRejectsNonGET(t *testing.T) 
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/people/anyone/drilldown/issues", nil)
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
 	}
@@ -263,7 +263,7 @@ func TestPeopleDrilldownIssuesCursorRoundTripsThroughResponseMarshalling(t *test
 	req.SetPathValue("person_id", "anyone")
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200, body=%s", rec.Code, rec.Body.String())
 	}

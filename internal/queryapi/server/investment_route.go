@@ -26,7 +26,6 @@
 package server
 
 import (
-	"encoding/json"
 	"io"
 	"log"
 	"net/http"
@@ -256,11 +255,10 @@ func investmentTimeFilterMap(rangeDays int, startDate, endDate *time.Time) map[s
 // json.NewEncoder(w).Encode -- this repo's JSON-response path, never a
 // raw w.Write of pre-marshalled bytes.
 func writeInvestmentResponse(w http.ResponseWriter, r *http.Request, orgID string, resp *investment.Response) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	if encodeErr := json.NewEncoder(w).Encode(resp); encodeErr != nil {
+	if encodeErr := writeModelResponse(w, resp); encodeErr != nil {
 		log.Printf("query-api: investment: encode response failed: org_id=%s request_id=%s err=%v",
 			orgID, envelopeRequestID(r), encodeErr)
+		writeModelFailure(w)
 	}
 }
 
@@ -270,11 +268,10 @@ func writeInvestmentResponse(w http.ResponseWriter, r *http.Request, orgID strin
 // one): encoding a Go slice directly is already the bare-array wire
 // shape, with no extra wrapping struct in the way.
 func writeInvestmentSunburstResponse(w http.ResponseWriter, r *http.Request, orgID string, resp []investment.SunburstSlice) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	if encodeErr := json.NewEncoder(w).Encode(resp); encodeErr != nil {
+	if encodeErr := writeModelResponse(w, resp); encodeErr != nil {
 		log.Printf("query-api: investment_sunburst: encode response failed: org_id=%s request_id=%s err=%v",
 			orgID, envelopeRequestID(r), encodeErr)
+		writeModelFailure(w)
 	}
 }
 

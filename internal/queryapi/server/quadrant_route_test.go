@@ -109,7 +109,7 @@ func TestNewQuadrantWorkHandlerRequiresAuthContext(t *testing.T) {
 	handler := newQuadrantWorkHandler(emptyRowsQuadrantClient{})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/quadrant?type=wip_throughput", nil)
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
@@ -128,7 +128,7 @@ func TestNewQuadrantWorkHandlerRequiresType(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/quadrant", nil)
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnprocessableEntity)
 	}
@@ -157,7 +157,7 @@ func TestNewQuadrantWorkHandlerAggregatesMultipleValidationErrors(t *testing.T) 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/quadrant?range_days=abc&start_date=bad", nil)
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnprocessableEntity)
 	}
@@ -187,7 +187,7 @@ func TestNewQuadrantWorkHandlerBadRangeDaysIs422(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/quadrant?type=wip_throughput&range_days=abc", nil)
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnprocessableEntity)
 	}
@@ -213,7 +213,7 @@ func TestNewQuadrantWorkHandlerUnknownTypeIs404(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/quadrant?type=not_a_real_type", nil)
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
 	}
@@ -230,7 +230,7 @@ func TestNewQuadrantWorkHandlerHappyPathShape(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/quadrant?type=wip_throughput&scope_type=repo&bucket=week", nil)
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
 	}
@@ -264,7 +264,7 @@ func TestNewQuadrantWorkHandlerPersonScopeRequiresScopeID(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/quadrant?type=wip_throughput&scope_type=person", nil)
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
 	}
@@ -284,7 +284,7 @@ func TestNewQuadrantWorkHandlerPersonScopeIndividualNotFound(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/quadrant?type=wip_throughput&scope_type=person&scope_id=deadbeef", nil)
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
 	}
@@ -317,7 +317,7 @@ func TestBuildQuadrantRouteEntryHandlerRejectsNonGET(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/quadrant", nil)
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
 	}
@@ -337,7 +337,7 @@ func TestNewQuadrantWorkHandlerRejectsComparativeParams(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/quadrant?type=wip_throughput&"+key+"=x", nil)
 			req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 			rec := httptest.NewRecorder()
-			handler(rec, req)
+			serveRoute(t, handler, rec, req)
 			if rec.Code != http.StatusBadRequest {
 				t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
 			}
@@ -358,7 +358,7 @@ func TestNewQuadrantWorkHandlerComparativeParamCheckedAfterValidation(t *testing
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/quadrant?range_days=abc&rank=1", nil)
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
-	handler(rec, req)
+	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusUnprocessableEntity, rec.Body.String())
 	}

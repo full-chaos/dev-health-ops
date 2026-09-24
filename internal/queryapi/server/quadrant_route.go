@@ -21,7 +21,6 @@
 package server
 
 import (
-	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -232,20 +231,12 @@ func newQuadrantWorkHandler(client quadrant.QueryClient) http.HandlerFunc {
 			return
 		}
 
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		// json.NewEncoder(w).Encode is this repo's JSON-response path
-		// (filter_options_route.go's newFilterOptionsWorkHandler is the
-		// precedent this route now matches) -- never a raw w.Write of
-		// pre-marshalled bytes. The 200 status is already on the wire by
-		// the time Encode runs, so a failure here cannot change what the
-		// client sees -- but it is NOT silently dropped: it is logged with
-		// the same request-scoped fields (org_id, the caller-supplied
-		// X-Request-Id) so an operator can correlate a truncated or
-		// aborted response back to the request that produced it.
-		if encodeErr := json.NewEncoder(w).Encode(resp); encodeErr != nil {
+		// The success body is the route's response_model, written as
+		// pydantic-core dump_json writes it (writeModelResponse).
+		if encodeErr := writeModelResponse(w, resp); encodeErr != nil {
 			log.Printf("query-api: quadrant: encode response failed: org_id=%s request_id=%s err=%v",
 				claims.OrgID, envelopeRequestID(r), encodeErr)
+			writeModelFailure(w)
 		}
 	}
 }

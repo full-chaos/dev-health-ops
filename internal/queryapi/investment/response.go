@@ -30,10 +30,10 @@ import (
 type Response struct {
 	ThemeDistribution           map[string]float64    `json:"theme_distribution"`
 	SubcategoryDistribution     map[string]float64    `json:"subcategory_distribution"`
-	EvidenceQualityDistribution map[string]float64    `json:"evidence_quality_distribution"`
+	EvidenceQualityDistribution map[string]float64    `json:"evidence_quality_distribution" pyjson:"nullable"`
 	EvidenceQualityStats        *EvidenceQualityStats `json:"evidence_quality_stats"`
 	Unit                        *string               `json:"unit"`
-	Edges                       []map[string]any      `json:"edges"`
+	Edges                       []map[string]any      `json:"edges" pyjson:"nullable"`
 }
 
 // EvidenceQualityStats is the wire shape of EvidenceQualityStats

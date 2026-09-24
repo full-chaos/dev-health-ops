@@ -46,6 +46,26 @@ func WriteModel(w http.ResponseWriter, status int, body pyjson.Value, extra http
 	}
 	payload, err := pyjson.MarshalModel(body)
 	writePayload(w, status, payload, err, extra)
+	if err == nil {
+		MarkModelBody(w)
+	}
+}
+
+// MarkModelBody tells w's route that its body was written as a
+// response_model (pydantic-core dump_json spelling). policy.WriteModel
+// calls it; a writer that streams such a body itself calls it too.
+func MarkModelBody(w io.Writer) {
+	for w != nil {
+		if route, ok := w.(interface{ MarkModelBody() }); ok {
+			route.MarkModelBody()
+			return
+		}
+		unwrapper, ok := w.(interface{ Unwrap() http.ResponseWriter })
+		if !ok {
+			return
+		}
+		w = unwrapper.Unwrap()
+	}
 }
 
 // writePayload writes a serialized body. A body the Python api could not
@@ -120,6 +140,20 @@ func routeResponseModel(w http.ResponseWriter) (responseModel bool, key string, 
 }
 
 var writerViolations atomic.Int64
+
+// MarkStreamedBody tells w's route that its 2xx body was written in the
+// Python api's own shape outside the response_model path: a
+// StreamingResponse's error chunks, which FastAPI never renders through the
+// model. It marks the body as MarkModelBody does, so the route is not
+// counted as a wrong writer.
+func MarkStreamedBody(w io.Writer) { MarkModelBody(w) }
+
+// RecordMissingModelBody counts a 2xx response on a response_model route
+// whose body did not go through WriteModel (or MarkModelBody): a handler
+// that wrote it another way, which FastAPI never does.
+func RecordMissingModelBody(route string) {
+	recordWriterViolation("a 2xx body on a response_model route was not written as a response_model", route)
+}
 
 func recordWriterViolation(what, route string) {
 	writerViolations.Add(1)

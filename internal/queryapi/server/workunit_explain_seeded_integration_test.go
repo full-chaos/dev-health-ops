@@ -155,7 +155,7 @@ func TestWorkUnitExplainSeededRealClickHouse_TeamScopeRefusesAUnitOutsideTheTeam
 			req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: workUnitsSeededOrgID}))
 
 			rec := httptest.NewRecorder()
-			handler(rec, req)
+			serveRoute(t, handler, rec, req)
 
 			if rec.Code != testCase.wantStatus {
 				t.Fatalf("status = %d, want %d\nbody=%s", rec.Code, testCase.wantStatus, rec.Body.String())

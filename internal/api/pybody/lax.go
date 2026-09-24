@@ -69,6 +69,12 @@ func PydanticFloat(value pyjson.Value) (float64, string, string) {
 		return 0, "", ""
 	case pyjson.Int:
 		f, _ := new(big.Float).SetInt(typed.Int).Float64()
+		// pydantic-core refuses an int whose nearest float is infinite
+		// (float_type, no parse detail), the halfway point above MaxFloat64
+		// included: it rounds to even, to infinity.
+		if math.IsInf(f, 0) {
+			return 0, "float_type", "Input should be a valid number"
+		}
 		return f, "", ""
 	case pyjson.Float:
 		return float64(typed), "", ""

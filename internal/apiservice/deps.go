@@ -14,6 +14,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/billing/stripeclient"
+	"github.com/full-chaos/dev-health-ops/internal/api/legacyingest"
 	"github.com/full-chaos/dev-health-ops/internal/api/webhookintake"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
@@ -80,6 +81,9 @@ func dependencyFailure(ctx context.Context, logger *slog.Logger, dependency, rea
 // package (internal/api/<area>, internal/apiservice/<area>) never opens its
 // own.
 type Deps struct {
+	// LegacyIngestMetrics counts the legacy ingest routes' credential
+	// refusals (registered on the operator metrics endpoint by configure).
+	LegacyIngestMetrics *legacyingest.Metrics
 	// Pool is nil when API_DATABASE_URI is not configured (the CHAOS-6269
 	// bootstrap has not run yet in this environment). A route needing it
 	// answers CodeInternal rather than dereferencing a nil pool; the

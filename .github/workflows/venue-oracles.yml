@@ -1,37 +1,29 @@
-# The required `venue-oracles` check, in ONE always-run workflow.
+# The `venue-oracles` job: every venue differential oracle, on main and on
+# demand. It is NOT a pull request check.
 #
-# WHY. A workflow that is path-filtered can never satisfy a required status
-# check for a diff that touches none of its listed paths: the workflow never
-# triggers at all, so the required context never posts. GitHub then reports
-# the PR as permanently blocked from merging, with every OTHER check green --
-# not pending, not failed, simply never produced, and no rebase fixes it,
-# because the workflow that would produce the context genuinely never runs
-# for that diff.
+# WHEN IT RUNS. On every push to main, and by hand (workflow_dispatch, on
+# any ref). It has no pull_request or merge_group trigger: a PR runs the
+# venue oracle of the package it changes locally, before review, and the
+# merge waits only on the normal CI. The result on main is informational
+# for merges; a red run on main is fixed forward or reverted, and no group
+# roll starts until it is green again.
 #
-# A second, path-filtered "skip" workflow reporting the same context is not
-# the fix either: two workflows producing the same required context race to
-# report it, with no guarantee which one branch protection honours. This
-# workflow has NO path filter (it always runs, on every pull_request, every
-# push to main, and merge_group) and decides relevance INSIDE the job
-# instead, so there is exactly one producer of the `venue-oracles` context
-# and it always reports honestly -- either it ran the real oracle suite, or
-# it says in plain text that it skipped and why.
+# ONE PRODUCER. The job lives only in this workflow (go.yml must not declare
+# it again), so there is exactly one `venue-oracles` context per commit.
 #
-# THE PATTERN LIST IS NOT RESTATED HERE either: relevance is read via
-# `ci/go_relevance.py`, the same decider go-quality.yml already uses, against
-# go.yml's own `on.pull_request.paths`. One list, so it cannot drift -- and it
-# guarantees anything Go-relevant enough to run go-quality is Go-relevant
-# enough to run venue-oracles too. This is a slightly WIDER trigger than the
-# job's previous internal `internal/|src/dev_health_ops/api/`-only check
-# (go.yml's list is a superset of both prefixes), never a narrower one.
+# RELEVANCE. A push to main decides relevance INSIDE the job, not with a
+# trigger path filter: `ci/go_relevance.py` (the decider go-quality.yml
+# uses) against go.yml's own `on.pull_request.paths`, over the push range
+# from `github.event.before`. The job then either runs the real oracle
+# suite or says in plain text that it skipped and why. A path filter on the
+# trigger would skip the run with no record at all. A workflow_dispatch run
+# has no push range and always runs the full suite.
 name: Venue oracles
 
 on:
-  pull_request:
-    branches: ['**']
   push:
     branches: [main]
-  merge_group:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -39,12 +31,10 @@ permissions:
   packages: read
 
 concurrency:
-  # Same fleet-wide shape as go-quality.yml/go.yml (CHAOS-4906 fleet audit):
-  # group by PR number on pull_request, by ref on a push to a non-main
-  # branch, by commit sha on a push to main or on merge_group (never
-  # cancelled).
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || ((github.ref == 'refs/heads/main' || github.event_name == 'merge_group') && github.sha) || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref != 'refs/heads/main') }}
+  # One run per commit and event, never cancelled: a run on main is the
+  # record for that commit, and a newer push must not erase it.
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.sha }}
+  cancel-in-progress: false
 
 jobs:
   venue-oracles:
@@ -90,9 +80,16 @@ jobs:
           # range (ci/go_relevant_diff.sh refuses rather than guess when this
           # value is the all-zeros sentinel or no longer an ancestor of HEAD,
           # which routes into the fail-open branch below).
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+          BASE_SHA: ${{ github.event.before }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
+          if [ "${EVENT_NAME}" = "workflow_dispatch" ]; then
+            # A run by hand has no push range: it always runs the full suite.
+            echo "workflow_dispatch: running the full oracle suite"
+            printf 'relevant=true\n' >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
           bash ci/go_relevant_diff.sh > changed.txt || {
             # Fails OPEN, not closed: relevant=true runs the real gate rather
             # than silently skipping it. An unresolvable range (or the
@@ -110,8 +107,8 @@ jobs:
         run: |
           echo "skipped: no Go-relevant paths in this change set."
           echo "Relevance is decided by ci/go_relevance.py against go.yml's own"
-          echo "on.pull_request.paths list. This job still REPORTS, so the required"
-          echo "check is satisfied honestly rather than by a workflow that never ran."
+          echo "on.pull_request.paths list. The job still reports, so the skip is"
+          echo "on record for this commit rather than a run that never happened."
 
       - name: Set up Go
         if: steps.relevance.outputs.relevant == 'true'

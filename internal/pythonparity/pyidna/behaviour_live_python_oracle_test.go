@@ -106,7 +106,7 @@ func behaviourCorpus() []behaviourCall {
 		"xn--mnchen-3ya", "xn--mnchen-3ya.de.", "a。b", "a．b｡c", "ab--c", "-ab", "ab-", "l·l", "·l",
 		"͵α", "א׳", "・ア", "・", "١۱", "١٢", "x‌y", "क्‌",
 		"ب‌ب", "́a", "é", "é", "אa", "א1", "1א", "ا١۱", "aא",
-		"xn--a[b", "xn--ab_c", "xn--zz{", "xn--a:b", "xn--@", "xn--ZZ[", "xn--mnchen-3ya.", "a.b.", "A.", "\u05d0-\u05d1", "\u05d01-2",
+		"xn--a[b", "xn--mnchen-~ya", "xn--mnchen-{ya", "xn--mnchen-\u007fya", "xn--ab_c", "xn--zz{", "xn--a:b", "xn--@", "xn--ZZ[", "xn--mnchen-3ya.", "a.b.", "A.", "\u05d0-\u05d1", "\u05d01-2",
 		"\u05d0\u0661\u0662", "\u05d01\u0661", "\u05d0\u0661\u0031", "\u0627\u06f1\u0661", "\u05d0\u05b0", "\u05d0,\u05d1", "\u05d0%\u05d1",
 		"a-1", "a1-", "ab\u0301", "a\u00b7", "l\u00b7", "\u0375", "\u0375\u03b1", "\u03b1\u0375", "\u05f3", "\u05d0\u05f4",
 		"\u30fb\u3042", "\u30fb\u4e00", "\u30fb\u30a2", "\u0669\u06f9", "\u0660", "\u06f0", "\u0669\u0661", "\u06f9\u06f1",

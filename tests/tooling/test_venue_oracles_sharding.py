@@ -186,3 +186,36 @@ def test_verdict_table(
 ) -> None:
     got, reason = verdict(plan, shards, relevant, packages, markers)
     assert got is passed, reason
+
+
+def test_an_empty_discovery_fails_the_plan(tmp_path: Path) -> None:
+    """A grep that finds no venue test must fail the plan job, never plan an
+    empty matrix that the required job could read as "every shard green".
+    The verb runs here in a tree with no Go test at all; the plan step's
+    `set -euo pipefail` turns its failure into the plan job's.
+    """
+    (tmp_path / "ci").mkdir()
+    (tmp_path / "ci" / "check_go.sh").write_text(
+        CHECK_GO.read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    (tmp_path / "go.mod").write_text(
+        "module example.com/empty\n\ngo 1.25\n", encoding="utf-8"
+    )
+    result = subprocess.run(
+        ["bash", "ci/check_go.sh", "venue-oracle-packages"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    assert result.returncode != 0, result.stdout
+    assert "discovered zero VenueOracle-named tests" in result.stderr + result.stdout
+    assert not any(
+        line.startswith("packages=") for line in result.stdout.splitlines()
+    ), "an empty discovery must not print a package list"
+    plan_steps = _jobs()["venue-oracles-plan"]["steps"]
+    listing = next(
+        step for step in plan_steps if "venue-oracle-packages" in step.get("run", "")
+    )
+    assert "set -euo pipefail" in listing["run"]

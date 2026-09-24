@@ -71,10 +71,13 @@ def test_kustomize_base_defines_no_cronjob_and_has_no_dangling_resource() -> Non
     dangling = [name for name in resources if not (_KUSTOMIZE / name).is_file()]
     assert not dangling, f"kustomization lists files that do not exist: {dangling}"
 
+    # Every file kustomize will render (whatever its extension) plus any other
+    # manifest sitting in the base.
+    manifests = {_KUSTOMIZE / name for name in resources}
+    manifests |= set(_KUSTOMIZE.glob("*.yaml")) | set(_KUSTOMIZE.glob("*.yml"))
+    manifests -= {_KUSTOMIZE / "kustomization.yaml"}
     cronjobs = []
-    for manifest in sorted(_KUSTOMIZE.glob("*.yaml")):
-        if manifest.name == "kustomization.yaml":
-            continue
+    for manifest in sorted(manifests):
         for doc in yaml.safe_load_all(manifest.read_text()):
             if doc and doc.get("kind") == "CronJob":
                 cronjobs.append(f"{manifest.name}:{doc['metadata']['name']}")

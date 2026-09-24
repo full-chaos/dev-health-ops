@@ -79,6 +79,15 @@ func Apply(ctx context.Context, t *testing.T, instance *containers.Instance) {
 	applyReplayed(ctx, t, dsn, func() { applyMigrationChain(ctx, t, dsn) })
 }
 
+// ApplyChain runs the real migration chain against dsn (a ClickHouse HTTP
+// DSN), with no replay cache: the caller gets the chain's own end state even
+// when another container of the same environment was migrated before. The
+// ClickHouse head baseline (internal/chmigrate) is captured this way.
+func ApplyChain(ctx context.Context, t *testing.T, dsn string) {
+	t.Helper()
+	applyMigrationChain(ctx, t, dsn)
+}
+
 // applyMigrationChain runs the canonical migration entrypoint against dsn.
 func applyMigrationChain(ctx context.Context, t *testing.T, dsn string) {
 	t.Helper()

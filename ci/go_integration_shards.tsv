@@ -86,6 +86,7 @@ internal/apiservice	37
 internal/apiservice/acr	6
 internal/apiservice/admin	2
 internal/cacheinvalidation	2
+internal/chmigrate	60
 internal/externalrecompute	32
 internal/goapiproof	604
 internal/joboperator	9

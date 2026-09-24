@@ -140,6 +140,10 @@ EXPECTED_PACKAGES = {
     # as run), matching internal/api/policy's own live-oracle pattern.
     "internal/apiservice/admin",
     "internal/cacheinvalidation",
+    # CHAOS-6461: the ClickHouse head baseline is re-derived by executing the
+    # real Python chain on a fresh ClickHouse, and dho's migrator is checked
+    # against that database -- only a real engine can build either side.
+    "internal/chmigrate",
     "internal/externalrecompute",
     "internal/joboperator",
     "internal/joboutbox",

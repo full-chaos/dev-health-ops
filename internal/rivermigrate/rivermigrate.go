@@ -16,6 +16,7 @@ import (
 	"time"
 
 	jobsv1 "github.com/full-chaos/dev-health-ops/contracts/jobs/v1"
+	"github.com/full-chaos/dev-health-ops/internal/chmigrate"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
@@ -41,14 +42,17 @@ func Command() cli.Command {
 		Name:    "migrate",
 		Summary: "apply or check database schemas",
 		Kind:    cli.Group,
-		Children: []cli.Command{{
-			Name:    "river",
-			Summary: "apply the pinned River schema and runtime grant posture, or check it (--check, --apply-and-check)",
-			Kind:    cli.Verb,
-			Run: func(ctx context.Context, env cli.Env) int {
-				return Execute(ctx, "dho", env.Args, env.Lookup, env.Stdout, env.Stderr)
+		Children: []cli.Command{
+			chmigrate.Command(),
+			{
+				Name:    "river",
+				Summary: "apply the pinned River schema and runtime grant posture, or check it (--check, --apply-and-check)",
+				Kind:    cli.Verb,
+				Run: func(ctx context.Context, env cli.Env) int {
+					return Execute(ctx, "dho", env.Args, env.Lookup, env.Stdout, env.Stderr)
+				},
 			},
-		}},
+		},
 	}
 }
 

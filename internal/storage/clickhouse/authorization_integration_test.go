@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -66,6 +67,10 @@ func startPostureHarness(t *testing.T) *postureHarness {
 		"CREATE TABLE team_memberships (org_id String, member_id String) ENGINE = ReplacingMergeTree() ORDER BY member_id",
 		"CREATE TABLE manual_attribution_fallbacks (org_id String, scope_id String) ENGINE = ReplacingMergeTree() ORDER BY scope_id",
 		"CREATE TABLE other_table (id String) ENGINE = ReplacingMergeTree() ORDER BY id",
+		"CREATE TABLE repo_metrics_daily (org_id String) ENGINE = ReplacingMergeTree() ORDER BY org_id",
+		"CREATE TABLE user_metrics_daily (org_id String) ENGINE = ReplacingMergeTree() ORDER BY org_id",
+		"CREATE TABLE team_metrics_daily (org_id String) ENGINE = ReplacingMergeTree() ORDER BY org_id",
+		"CREATE TABLE work_item_metrics_daily (org_id String) ENGINE = ReplacingMergeTree() ORDER BY org_id",
 	} {
 		if err := admin.Exec(ctx, statement); err != nil {
 			t.Fatal(err)
@@ -119,10 +124,21 @@ const (
 	grantFallbacksExact   = "GRANT INSERT ON default.manual_attribution_fallbacks"
 )
 
-// importGrants is the exact grant set for the three import tables, appended
-// to each test's teams/identities grants so the whole manifest is met.
+// grantMetricsExact are the read-only metric-table grants of the manifest
+// (organization activity for the session routes), held unchanged by every
+// case below so each one varies a single grant.
+var grantMetricsExact = []string{
+	"GRANT SELECT ON default.repo_metrics_daily",
+	"GRANT SELECT ON default.user_metrics_daily",
+	"GRANT SELECT ON default.team_metrics_daily",
+	"GRANT SELECT ON default.work_item_metrics_daily",
+}
+
+// importGrants is the exact grant set for the three import tables and the
+// metric tables, appended to each test's teams/identities grants so the
+// whole manifest is met.
 func importGrants() []string {
-	return []string{grantSyncPoliciesExact, grantObservationsExact, grantDriftChangesExact, grantMembershipsExact, grantFallbacksExact}
+	return append([]string{grantSyncPoliciesExact, grantObservationsExact, grantDriftChangesExact, grantMembershipsExact, grantFallbacksExact}, grantMetricsExact...)
 }
 
 // TestCheckPostureAcceptsExactMatch proves the happy path: a user granted
@@ -188,6 +204,24 @@ func TestCheckPostureRejectsGrantOption(t *testing.T) {
 	}
 	if !errors.Is(err, ErrPostureMismatch) {
 		t.Fatalf("want ErrPostureMismatch, got: %v", err)
+	}
+}
+
+// TestCheckPostureRejectsMissingMetricsRead is the under-grant control for
+// the read-only tables: dropping one metric table's SELECT fails.
+func TestCheckPostureRejectsMissingMetricsRead(t *testing.T) {
+	h := startPostureHarness(t)
+	// Every other grant of the manifest is present, so the one missing
+	// SELECT is the only reason the check can fail.
+	all := append([]string{grantTeamsExact, grantIdentitiesExact}, importGrants()...)
+	grants := all[:len(all)-1]
+	conn := h.newUser(t, grants...)
+	err := CheckAPIClickHouseAuthorization(h.ctx, conn)
+	if err == nil {
+		t.Fatal("missing SELECT on work_item_metrics_daily must fail the posture check")
+	}
+	if !errors.Is(err, ErrPostureMismatch) || !strings.Contains(err.Error(), "work_item_metrics_daily") {
+		t.Fatalf("want ErrPostureMismatch naming work_item_metrics_daily, got: %v", err)
 	}
 }
 

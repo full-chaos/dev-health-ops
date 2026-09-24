@@ -145,6 +145,26 @@ elif mode == "serve":
 
         for _service in (_SubscriptionService, _InvoiceService, _RefundService):
             _service.list = _stripe_list_kwargs(_service.list)
+    # Test-runner-only monkeypatch, same rule as above: when set, every
+    # httpx call the social-login providers make to GitHub, GitLab or
+    # Google goes to a fake provider instead (the provider URLs are
+    # hard-coded in api/services/oauth.py, the GitHub emails URL inside a
+    # method), so both planes read the SAME fake profile.
+    _oauth_override = os.environ.get("VENUE_OAUTH_PROVIDER_BASE_URL")
+    if _oauth_override:
+        import httpx
+        from dev_health_ops.api.services import oauth as _oauth
+        _hosts = {"https://api.github.com": "/github", "https://gitlab.com": "/gitlab", "https://www.googleapis.com": "/google"}
+
+        class _RedirectedClient(httpx.AsyncClient):
+            async def get(self, url, *args, **kwargs):
+                for host, prefix in _hosts.items():
+                    if str(url).startswith(host):
+                        url = _oauth_override + prefix + str(url)[len(host):]
+                return await super().get(url, *args, **kwargs)
+
+        _oauth.httpx = type("httpx_shim", (), {"AsyncClient": _RedirectedClient, "HTTPStatusError": httpx.HTTPStatusError,
+                                               "RequestError": httpx.RequestError, "Response": httpx.Response})
     from fastapi.testclient import TestClient
     from dev_health_ops.api.main import app
     client = TestClient(app, raise_server_exceptions=False, follow_redirects=False)

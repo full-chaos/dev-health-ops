@@ -121,6 +121,10 @@ EXPECTED_PACKAGES = {
     # and dho api on two copies of one seeded Postgres (skips without the
     # live Python env).
     "internal/api/syncadmin",
+    # The session routes: the Go routes alone replayed against the recorded
+    # Python answers, concurrent refreshes of one token, and the failed-
+    # attempt record on a locked row, against real Postgres and ClickHouse.
+    "internal/api/session",
     # The team + identity admin CRUD store/handlers: real ClickHouse CRUD
     # round trips and the identity POST route's 404/409/facet-reconciliation
     # logic, against a real server (testcontainers).

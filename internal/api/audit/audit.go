@@ -31,6 +31,9 @@ const (
 	ActionPasswordChanged    Action = "password_changed"
 	ActionImpersonationStart Action = "impersonation_start"
 	ActionImpersonationStop  Action = "impersonation_stop"
+	ActionLogin              Action = "login"
+	ActionLogout             Action = "logout"
+	ActionLoginFailed        Action = "login_failed"
 )
 
 // ResourceType is models/audit.py AuditResourceType's value.

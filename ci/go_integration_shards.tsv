@@ -85,6 +85,7 @@ internal/api/externalingest	10
 internal/api/externalurl	10
 internal/api/licensing	6
 internal/api/policy	5
+internal/api/session	50
 internal/api/syncadmin	1
 internal/api/teamsidentity	65
 internal/api/webhookintake	13

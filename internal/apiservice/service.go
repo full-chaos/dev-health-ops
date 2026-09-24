@@ -45,6 +45,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/orgs"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/producttelemetry"
+	"github.com/full-chaos/dev-health-ops/internal/api/session"
 	"github.com/full-chaos/dev-health-ops/internal/api/syncadmin"
 	"github.com/full-chaos/dev-health-ops/internal/api/teamsidentity"
 	"github.com/full-chaos/dev-health-ops/internal/api/telemetry"
@@ -186,6 +187,11 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 	})...)
 	routes = append(routes, producttelemetry.Routes(&producttelemetry.ValkeyStreams{URI: deps.Telemetry.ValkeyURI}, logger)...)
 	routes = append(routes, buildinfo.Routes(deps.Guard, version.Current("api"))...)
+	routes = append(routes, session.Routes(session.Deps{
+		Pool: deps.Pool, Guard: deps.Guard, Auth: deps.Auth, Verifier: deps.Verifier, Signer: deps.Signer,
+		// The api's own ClickHouse login: organization activity.
+		ClickHouse: deps.ClickHouse, Limits: limits, Write: WriteError, OAuth: deps.SessionOAuth, Logger: logger,
+	})...)
 	if deps.Guard != nil {
 		routes = append(routes, orgs.Routes(deps.Pool, deps.Guard, logger)...)
 		routes = append(routes, telemetry.Routes(deps.Pool, deps.Guard, deps.Auth, deps.Telemetry.Endpoint, logger)...)
@@ -261,6 +267,7 @@ func configureWith(
 			return nil, dependencyFailure(ctx, logger, "api_access_token_verifier", "api_protection_config_failed", err)
 		}
 		deps.Auth, deps.Guard = protected.auth, protected.guard
+		deps.Verifier, deps.Signer = protected.verifier, protected.signer
 		scope = []func(http.Handler) http.Handler{protected.scope.OrgScope, protected.scope.Impersonation}
 	}
 	deps.Probes = ProbeConfig{
@@ -309,9 +316,11 @@ func configureWith(
 
 // protection is the protected-route runtime built over the api pool.
 type protection struct {
-	auth  *policy.Authenticator
-	scope *policy.Scope
-	guard *policy.Guard
+	auth     *policy.Authenticator
+	scope    *policy.Scope
+	guard    *policy.Guard
+	verifier *edgetoken.Verifier
+	signer   *edgetoken.Signer
 }
 
 // newProtection builds the principal service. The api verifies the access
@@ -325,11 +334,16 @@ func newProtection(cfg config.Config, pool *pgxpool.Pool, logger *slog.Logger) (
 	if err != nil {
 		return protection{}, fmt.Errorf("access-token verifier: %w", err)
 	}
+	signer, err := edgetoken.NewSigner(cfg.APIJWTSecret.Reveal(), cfg.APIJWTIssuer, cfg.APIJWTAudience)
+	if err != nil {
+		return protection{}, fmt.Errorf("access-token signer: %w", err)
+	}
 	auth, err := policy.NewAuthenticator(verifier, policy.PGStore{Pool: pool}, logger)
 	if err != nil {
 		return protection{}, err
 	}
-	return protection{auth: auth, scope: policy.NewScope(auth, logger), guard: policy.NewGuard(auth, logger)}, nil
+	return protection{auth: auth, scope: policy.NewScope(auth, logger), guard: policy.NewGuard(auth, logger),
+		verifier: verifier, signer: signer}, nil
 }
 
 // closeComponents releases what buildDeps opened when startup fails later.

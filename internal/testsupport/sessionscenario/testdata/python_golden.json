@@ -1,0 +1,1642 @@
+{
+ "answers": [
+  {
+   "name": "login: alice",
+   "status": 200,
+   "body": "{\"access_token\":\"\u003cjwt {\"alg\":\"HS256\",\"typ\":\"JWT\"} {\"sub\":\"10000000-0000-4000-8000-000000000001\",\"email\":\"alice@example.com\",\"org_id\":\"b0000000-0000-4000-8000-00000000000b\",\"role\":\"member\",\"is_superuser\":false,\"type\":\"access\",\"iss\":\"dev-health-ops\",\"aud\":\"dev-health-api\",\"exp\":\"\u003ciat+3600\u003e\",\"iat\":\"\u003ciat\u003e\",\"jti\":\"\u003cjti\u003e\",\"tv\":0,\"username\":\"alice\",\"full_name\":\"Alice Ä\"}\u003e\",\"refresh_token\":\"\u003cjwt {\"alg\":\"HS256\",\"typ\":\"JWT\"} {\"sub\":\"10000000-0000-4000-8000-000000000001\",\"org_id\":\"b0000000-0000-4000-8000-00000000000b\",\"family_id\":\"\u003cfamily_id\u003e\",\"type\":\"refresh\",\"iss\":\"dev-health-ops\",\"aud\":\"dev-health-api\",\"exp\":\"\u003ciat+7 days, to the second or just under\u003e\",\"iat\":\"\u003ciat\u003e\",\"jti\":\"\u003cjti\u003e\"}\u003e\",\"token_type\":\"bearer\",\"expires_in\":3600,\"needs_onboarding\":false,\"user\":{\"id\":\"10000000-0000-4000-8000-000000000001\",\"email\":\"alice@example.com\",\"username\":\"alice\",\"full_name\":\"Alice Ä\",\"org_id\":\"b0000000-0000-4000-8000-00000000000b\",\"role\":\"member\",\"is_superuser\":false}}"
+  },
+  {
+   "name": "login: alice org A",
+   "status": 200,
+   "body": "{\"access_token\":\"\u003cjwt {\"alg\":\"HS256\",\"typ\":\"JWT\"} {\"sub\":\"10000000-0000-4000-8000-000000000001\",\"email\":\"alice@example.com\",\"org_id\":\"a0000000-0000-4000-8000-00000000000a\",\"role\":\"owner\",\"is_superuser\":false,\"type\":\"access\",\"iss\":\"dev-health-ops\",\"aud\":\"dev-health-api\",\"exp\":\"\u003ciat+3600\u003e\",\"iat\":\"\u003ciat\u003e\",\"jti\":\"\u003cjti\u003e\",\"tv\":0,\"username\":\"alice\",\"full_name\":\"Alice Ä\"}\u003e\",\"refresh_token\":\"\u003cjwt {\"alg\":\"HS256\",\"typ\":\"JWT\"} {\"sub\":\"10000000-0000-4000-8000-000000000001\",\"org_id\":\"a0000000-0000-4000-8000-00000000000a\",\"family_id\":\"\u003cfamily_id\u003e\",\"type\":\"refresh\",\"iss\":\"dev-health-ops\",\"aud\":\"dev-health-api\",\"exp\":\"\u003ciat+7 days, to the second or just under\u003e\",\"iat\":\"\u003ciat\u003e\",\"jti\":\"\u003cjti\u003e\"}\u003e\",\"token_type\":\"bearer\",\"expires_in\":3600,\"needs_onboarding\":false,\"user\":{\"id\":\"10000000-0000-4000-8000-000000000001\",\"email\":\"alice@example.com\",\"username\":\"alice\",\"full_name\":\"Alice Ä\",\"org_id\":\"a0000000-0000-4000-8000-00000000000a\",\"role\":\"owner\",\"is_superuser\":false}}"
+  },
+  {
+   "name": "login: alice inactive org C",
+   "status": 200,
+   "body": "{\"access_token\":\"\u003cjwt {\"alg\":\"HS256\",\"typ\":\"JWT\"} {\"sub\":\"10000000-0000-4000-8000-000000000001\",\"email\":\"alice@example.com\",\"org_id\":\"c0000000-0000-4000-8000-00000000000c\",\"role\":\"admin\",\"is_superuser\":false,\"type\":\"access\",\"iss\":\"dev-health-ops\",\"aud\":\"dev-health-api\",\"exp\":\"\u003ciat+3600\u003e\",\"iat\":\"\u003ciat\u003e\",\"jti\":\"\u003cjti\u003e\",\"tv\":0,\"username\":\"alice\",\"full_name\":\"Alice Ä\"}\u003e\",\"refresh_token\":\"\u003cjwt {\"alg\":\"HS256\",\"typ\":\"JWT\"} {\"sub\":\"10000000-0000-4000-8000-000000000001\",\"org_id\":\"c0000000-0000-4000-8000-00000000000c\",\"family_id\":\"\u003cfamily_id\u003e\",\"type\":\"refresh\",\"iss\":\"dev-health-ops\",\"aud\":\"dev-health-api\",\"exp\":\"\u003ciat+7 days, to the second or just under\u003e\",\"iat\":\"\u003ciat\u003e\",\"jti\":\"\u003cjti\u003e\"}\u003e\",\"token_type\":\"bearer\",\"expires_in\":3600,\"needs_onboarding\":false,\"user\":{\"id\":\"10000000-0000-4000-8000-000000000001\",\"email\":\"alice@example.com\",\"username\":\"alice\",\"full_name\":\"Alice Ä\",\"org_id\":\"c0000000-0000-4000-8000-00000000000c\",\"role\":\"admin\",\"is_superuser\":false}}"
+  },
+  {
+   "name": "login: alice not a member of D",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"User is not a member of the selected organization\"}}"
+  },
+  {
+   "name": "login: alice org not a uuid",
+   "status": 200,
+   "body": "{\"access_token\":\"\u003cjwt {\"alg\":\"HS256\",\"typ\":\"JWT\"} {\"sub\":\"10000000-0000-4000-8000-000000000001\",\"email\":\"alice@example.com\",\"org_id\":\"b0000000-0000-4000-8000-00000000000b\",\"role\":\"member\",\"is_superuser\":false,\"type\":\"access\",\"iss\":\"dev-health-ops\",\"aud\":\"dev-health-api\",\"exp\":\"\u003ciat+3600\u003e\",\"iat\":\"\u003ciat\u003e\",\"jti\":\"\u003cjti\u003e\",\"tv\":0,\"username\":\"alice\",\"full_name\":\"Alice Ä\"}\u003e\",\"refresh_token\":\"\u003cjwt {\"alg\":\"HS256\",\"typ\":\"JWT\"} {\"sub\":\"10000000-0000-4000-8000-000000000001\",\"org_id\":\"b0000000-0000-4000-8000-00000000000b\",\"family_id\":\"\u003cfamily_id\u003e\",\"type\":\"refresh\",\"iss\":\"dev-health-ops\",\"aud\":\"dev-health-api\",\"exp\":\"\u003ciat+7 days, to the second or just under\u003e\",\"iat\":\"\u003ciat\u003e\",\"jti\":\"\u003cjti\u003e\"}\u003e\",\"token_type\":\"bearer\",\"expires_in\":3600,\"needs_onboarding\":false,\"user\":{\"id\":\"10000000-0000-4000-8000-000000000001\",\"email\":\"alice@example.com\",\"username\":\"alice\",\"full_name\":\"Alice Ä\",\"org_id\":\"b0000000-0000-4000-8000-00000000000b\",\"role\":\"member\",\"is_superuser\":false}}"
+  },
+  {
+   "name": "login: alice empty org",
+   "status": 200,
+   "body": "{\"access_token\":\"\u003cjwt {\"alg\":\"HS256\",\"typ\":\"JWT\"} {\"sub\":\"10000000-0000-4000-8000-000000000001\",\"email\":\"alice@example.com\",\"org_id\":\"b0000000-0000-4000-8000-00000000000b\",\"role\":\"member\",\"is_superuser\":false,\"type\":\"access\",\"iss\":\"dev-health-ops\",\"aud\":\"dev-health-api\",\"exp\":\"\u003ciat+3600\u003e\",\"iat\":\"\u003ciat\u003e\",\"jti\":\"\u003cjti\u003e\",\"tv\":0,\"username\":\"alice\",\"full_name\":\"Alice Ä\"}\u003e\",\"refresh_token\":\"\u003cjwt {\"alg\":\"HS256\",\"typ\":\"JWT\"} {\"sub\":\"10000000-0000-4000-8000-000000000001\",\"org_id\":\"b0000000-0000-4000-8000-00000000000b\",\"family_id\":\"\u003cfamily_id\u003e\",\"type\":\"refresh\",\"iss\":\"dev-health-ops\",\"aud\":\"dev-health-api\",\"exp\":\"\u003ciat+7 days, to the second or just under\u003e\",\"iat\":\"\u003ciat\u003e\",\"jti\":\"\u003cjti\u003e\"}\u003e\",\"token_type\":\"bearer\",\"expires_in\":3600,\"needs_onboarding\":false,\"user\":{\"id\":\"10000000-0000-4000-8000-000000000001\",\"email\":\"alice@example.com\",\"username\":\"alice\",\"full_name\":\"Alice Ä\",\"org_id\":\"b0000000-0000-4000-8000-00000000000b\",\"role\":\"member\",\"is_superuser\":false}}"
+  },
+  {
+   "name": "login: bob superuser",
+   "status": 200,
+   "body": "{\"access_token\":\"\u003cjwt {\"alg\":\"HS256\",\"typ\":\"JWT\"} {\"sub\":\"10000000-0000-4000-8000-000000000002\",\"email\":\"bob@example.com\",\"org_id\":\"\",\"role\":\"member\",\"is_superuser\":true,\"type\":\"access\",\"iss\":\"dev-health-ops\",\"aud\":\"dev-health-api\",\"exp\":\"\u003ciat+3600\u003e\",\"iat\":\"\u003ciat\u003e\",\"jti\":\"\u003cjti\u003e\",\"tv\":0,\"username\":\"bob\"}\u003e\",\"refresh_token\":\"\u003cjwt {\"alg\":\"HS256\",\"typ\":\"JWT\"} {\"sub\":\"10000000-0000-4000-8000-000000000002\",\"org_id\":\"\",\"family_id\":\"\u003cfamily_id\u003e\",\"type\":\"refresh\",\"iss\":\"dev-health-ops\",\"aud\":\"dev-health-api\",\"exp\":\"\u003ciat+7 days, to the second or just under\u003e\",\"iat\":\"\u003ciat\u003e\",\"jti\":\"\u003cjti\u003e\"}\u003e\",\"token_type\":\"bearer\",\"expires_in\":3600,\"needs_onboarding\":false,\"user\":{\"id\":\"10000000-0000-4000-8000-000000000002\",\"email\":\"bob@example.com\",\"username\":\"bob\",\"full_name\":null,\"org_id\":null,\"role\":\"member\",\"is_superuser\":true}}"
+  },
+  {
+   "name": "login: bob unknown org",
+   "status": 500,
+   "body": "{\"detail\":\"Internal Server Error\"}"
+  },
+  {
+   "name": "login: carol unverified",
+   "status": 200,
+   "body": "{\"status\":\"email_verification_required\",\"email\":\"carol@example.com\",\"message\":\"Please verify your email address before logging in\"}"
+  },
+  {
+   "name": "login: dave inactive",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid credentials\"}}"
+  },
+  {
+   "name": "login: erin no password",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid credentials\"}}"
+  },
+  {
+   "name": "login: frank github no password",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid credentials\"}}"
+  },
+  {
+   "name": "login: heidi null provider unverified",
+   "status": 200,
+   "body": "{\"access_token\":\"\u003cjwt {\"alg\":\"HS256\",\"typ\":\"JWT\"} {\"sub\":\"10000000-0000-4000-8000-000000000008\",\"email\":\"heidi@example.com\",\"org_id\":\"\",\"role\":\"member\",\"is_superuser\":false,\"type\":\"access\",\"iss\":\"dev-health-ops\",\"aud\":\"dev-health-api\",\"exp\":\"\u003ciat+3600\u003e\",\"iat\":\"\u003ciat\u003e\",\"jti\":\"\u003cjti\u003e\",\"tv\":0,\"username\":\"heidi\",\"full_name\":\"Heidi\"}\u003e\",\"refresh_token\":\"\u003cjwt {\"alg\":\"HS256\",\"typ\":\"JWT\"} {\"sub\":\"10000000-0000-4000-8000-000000000008\",\"org_id\":\"\",\"family_id\":\"\u003cfamily_id\u003e\",\"type\":\"refresh\",\"iss\":\"dev-health-ops\",\"aud\":\"dev-health-api\",\"exp\":\"\u003ciat+7 days, to the second or just under\u003e\",\"iat\":\"\u003ciat\u003e\",\"jti\":\"\u003cjti\u003e\"}\u003e\",\"token_type\":\"bearer\",\"expires_in\":3600,\"needs_onboarding\":true,\"user\":{\"id\":\"10000000-0000-4000-8000-000000000008\",\"email\":\"heidi@example.com\",\"username\":\"heidi\",\"full_name\":\"Heidi\",\"org_id\":null,\"role\":\"member\",\"is_superuser\":false}}"
+  },
+  {
+   "name": "login: unknown user",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid credentials\"}}"
+  },
+  {
+   "name": "login: alice wrong password",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid credentials\"}}"
+  },
+  {
+   "name": "login: display-name form, upper case",
+   "status": 200,
+   "body": "{\"access_token\":\"\u003cjwt {\"alg\":\"HS256\",\"typ\":\"JWT\"} {\"sub\":\"10000000-0000-4000-8000-000000000001\",\"email\":\"alice@example.com\",\"org_id\":\"b0000000-0000-4000-8000-00000000000b\",\"role\":\"member\",\"is_superuser\":false,\"type\":\"access\",\"iss\":\"dev-health-ops\",\"aud\":\"dev-health-api\",\"exp\":\"\u003ciat+3600\u003e\",\"iat\":\"\u003ciat\u003e\",\"jti\":\"\u003cjti\u003e\",\"tv\":0,\"username\":\"alice\",\"full_name\":\"Alice Ä\"}\u003e\",\"refresh_token\":\"\u003cjwt {\"alg\":\"HS256\",\"typ\":\"JWT\"} {\"sub\":\"10000000-0000-4000-8000-000000000001\",\"org_id\":\"b0000000-0000-4000-8000-00000000000b\",\"family_id\":\"\u003cfamily_id\u003e\",\"type\":\"refresh\",\"iss\":\"dev-health-ops\",\"aud\":\"dev-health-api\",\"exp\":\"\u003ciat+7 days, to the second or just under\u003e\",\"iat\":\"\u003ciat\u003e\",\"jti\":\"\u003cjti\u003e\"}\u003e\",\"token_type\":\"bearer\",\"expires_in\":3600,\"needs_onboarding\":false,\"user\":{\"id\":\"10000000-0000-4000-8000-000000000001\",\"email\":\"alice@example.com\",\"username\":\"alice\",\"full_name\":\"Alice Ä\",\"org_id\":\"b0000000-0000-4000-8000-00000000000b\",\"role\":\"member\",\"is_superuser\":false}}"
+  },
+  {
+   "name": "login: password over 72 bytes",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid credentials\"}}"
+  },
+  {
+   "name": "login: judy",
+   "status": 200,
+   "body": "{\"access_token\":\"\u003cjwt {\"alg\":\"HS256\",\"typ\":\"JWT\"} {\"sub\":\"10000000-0000-4000-8000-000000000009\",\"email\":\"judy@example.com\",\"org_id\":\"a0000000-0000-4000-8000-00000000000a\",\"role\":\"member\",\"is_superuser\":false,\"type\":\"access\",\"iss\":\"dev-health-ops\",\"aud\":\"dev-health-api\",\"exp\":\"\u003ciat+3600\u003e\",\"iat\":\"\u003ciat\u003e\",\"jti\":\"\u003cjti\u003e\",\"tv\":0,\"username\":\"judy\",\"full_name\":\"Judy\"}\u003e\",\"refresh_token\":\"\u003cjwt {\"alg\":\"HS256\",\"typ\":\"JWT\"} {\"sub\":\"10000000-0000-4000-8000-000000000009\",\"org_id\":\"a0000000-0000-4000-8000-00000000000a\",\"family_id\":\"\u003cfamily_id\u003e\",\"type\":\"refresh\",\"iss\":\"dev-health-ops\",\"aud\":\"dev-health-api\",\"exp\":\"\u003ciat+7 days, to the second or just under\u003e\",\"iat\":\"\u003ciat\u003e\",\"jti\":\"\u003cjti\u003e\"}\u003e\",\"token_type\":\"bearer\",\"expires_in\":3600,\"needs_onboarding\":false,\"user\":{\"id\":\"10000000-0000-4000-8000-000000000009\",\"email\":\"judy@example.com\",\"username\":\"judy\",\"full_name\":\"Judy\",\"org_id\":\"a0000000-0000-4000-8000-00000000000a\",\"role\":\"member\",\"is_superuser\":false}}"
+  },
+  {
+   "name": "login: password with lone surrogate",
+   "status": 500,
+   "body": "{\"detail\":\"Internal Server Error\"}"
+  },
+  {
+   "name": "login: password 129 chars",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"string_too_long\",\"loc\":[\"body\",\"password\"],\"msg\":\"String should have at most 128 characters\",\"input\":\"ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\",\"ctx\":{\"max_length\":128}}]}"
+  },
+  {
+   "name": "login: invalid email",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"value_error\",\"loc\":[\"body\",\"email\"],\"msg\":\"value is not a valid email address: An email address must have an @-sign.\",\"input\":\"not-an-email\",\"ctx\":{\"reason\":\"An email address must have an @-sign.\"}}]}"
+  },
+  {
+   "name": "login: special-use domain",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"value_error\",\"loc\":[\"body\",\"email\"],\"msg\":\"value is not a valid email address: The part after the @-sign is not valid. It should have a period.\",\"input\":\"a@localhost\",\"ctx\":{\"reason\":\"The part after the @-sign is not valid. It should have a period.\"}}]}"
+  },
+  {
+   "name": "login: missing fields",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"email\"],\"msg\":\"Field required\",\"input\":{}},{\"type\":\"missing\",\"loc\":[\"body\",\"password\"],\"msg\":\"Field required\",\"input\":{}}]}"
+  },
+  {
+   "name": "login: null email",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"email\"],\"msg\":\"Input should be a valid string\",\"input\":null},{\"type\":\"string_type\",\"loc\":[\"body\",\"password\"],\"msg\":\"Input should be a valid string\",\"input\":5}]}"
+  },
+  {
+   "name": "login: org_id int",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"org_id\"],\"msg\":\"Input should be a valid string\",\"input\":5}]}"
+  },
+  {
+   "name": "login: body is a list",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"model_attributes_type\",\"loc\":[\"body\"],\"msg\":\"Input should be a valid dictionary or object to extract fields from\",\"input\":[]}]}"
+  },
+  {
+   "name": "login: malformed json",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"json_invalid\",\"loc\":[\"body\",9],\"msg\":\"JSON decode error\",\"input\":{},\"ctx\":{\"error\":\"Expecting value\"}}]}"
+  },
+  {
+   "name": "login: no body",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\"],\"msg\":\"Field required\",\"input\":null}]}"
+  },
+  {
+   "name": "validate: alice seed token",
+   "status": 200,
+   "body": "{\"valid\":true,\"user_id\":\"10000000-0000-4000-8000-000000000001\",\"email\":\"alice@example.com\",\"org_id\":\"a0000000-0000-4000-8000-00000000000a\",\"role\":\"owner\",\"expires_at\":null}"
+  },
+  {
+   "name": "validate: stale token version",
+   "status": 200,
+   "body": "{\"valid\":false,\"user_id\":null,\"email\":null,\"org_id\":null,\"role\":null,\"expires_at\":null}"
+  },
+  {
+   "name": "validate: user not found",
+   "status": 200,
+   "body": "{\"valid\":false,\"user_id\":null,\"email\":null,\"org_id\":null,\"role\":null,\"expires_at\":null}"
+  },
+  {
+   "name": "validate: refresh token",
+   "status": 200,
+   "body": "{\"valid\":false,\"user_id\":null,\"email\":null,\"org_id\":null,\"role\":null,\"expires_at\":null}"
+  },
+  {
+   "name": "validate: expired",
+   "status": 200,
+   "body": "{\"valid\":false,\"user_id\":null,\"email\":null,\"org_id\":null,\"role\":null,\"expires_at\":null}"
+  },
+  {
+   "name": "validate: garbage",
+   "status": 200,
+   "body": "{\"valid\":false,\"user_id\":null,\"email\":null,\"org_id\":null,\"role\":null,\"expires_at\":null}"
+  },
+  {
+   "name": "validate: empty",
+   "status": 200,
+   "body": "{\"valid\":false,\"user_id\":null,\"email\":null,\"org_id\":null,\"role\":null,\"expires_at\":null}"
+  },
+  {
+   "name": "validate: missing",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"token\"],\"msg\":\"Field required\",\"input\":{}}]}"
+  },
+  {
+   "name": "validate: lone surrogate",
+   "status": 500,
+   "body": "{\"detail\":\"Internal Server Error\"}"
+  },
+  {
+   "name": "me: alice",
+   "status": 200,
+   "body": "{\"id\":\"10000000-0000-4000-8000-000000000001\",\"email\":\"alice@example.com\",\"username\":\"alice\",\"full_name\":\"Alice Ä\",\"org_id\":\"a0000000-0000-4000-8000-00000000000a\",\"role\":\"owner\",\"is_superuser\":false,\"permissions\":\u003cset \"analytics:export\",\"analytics:read\",\"git:read\",\"git:sync\",\"integrations:read\",\"integrations:write\",\"members:invite\",\"members:manage\",\"members:read\",\"metrics:compute\",\"metrics:read\",\"org:delete\",\"org:read\",\"org:write\",\"settings:read\",\"settings:write\",\"teams:read\",\"teams:write\",\"work_items:read\",\"work_items:sync\"\u003e}"
+  },
+  {
+   "name": "me: bob superuser",
+   "status": 200,
+   "body": "{\"id\":\"10000000-0000-4000-8000-000000000002\",\"email\":\"bob@example.com\",\"username\":\"bob\",\"full_name\":null,\"org_id\":\"\",\"role\":\"member\",\"is_superuser\":true,\"permissions\":\u003cset \"admin:orgs\",\"admin:users\",\"analytics:export\",\"analytics:read\",\"git:read\",\"git:sync\",\"integrations:read\",\"integrations:write\",\"members:invite\",\"members:manage\",\"members:read\",\"metrics:compute\",\"metrics:read\",\"org:delete\",\"org:read\",\"org:write\",\"settings:read\",\"settings:write\",\"teams:read\",\"teams:write\",\"work_items:read\",\"work_items:sync\"\u003e}"
+  },
+  {
+   "name": "me: carol viewer",
+   "status": 200,
+   "body": "{\"id\":\"10000000-0000-4000-8000-000000000003\",\"email\":\"carol@example.com\",\"username\":null,\"full_name\":null,\"org_id\":\"a0000000-0000-4000-8000-00000000000a\",\"role\":\"viewer\",\"is_superuser\":false,\"permissions\":\u003cset \"analytics:read\",\"git:read\",\"members:read\",\"metrics:read\",\"org:read\",\"settings:read\",\"teams:read\",\"work_items:read\"\u003e}"
+  },
+  {
+   "name": "me: no credential",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
+  },
+  {
+   "name": "me: stale",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid or expired token\"}}"
+  },
+  {
+   "name": "me: expired",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid or expired token\"}}"
+  },
+  {
+   "name": "me organizations: alice",
+   "status": 200,
+   "body": "{\"active_org_id\":\"a0000000-0000-4000-8000-00000000000a\",\"organizations\":[{\"id\":\"a0000000-0000-4000-8000-00000000000a\",\"slug\":\"org-a\",\"name\":\"Org A\",\"tier\":\"community\",\"role\":\"owner\",\"joined_at\":\"2026-07-02T00:00:00Z\",\"has_data\":true,\"last_metrics_at\":\"2026-08-02T11:00:00Z\"},{\"id\":\"b0000000-0000-4000-8000-00000000000b\",\"slug\":\"org-b\",\"name\":\"Org B\",\"tier\":\"enterprise\",\"role\":\"member\",\"joined_at\":\"2026-07-12T00:00:00Z\",\"has_data\":true,\"last_metrics_at\":\"2026-08-05T08:30:00Z\"}]}"
+  },
+  {
+   "name": "me organizations: bob",
+   "status": 200,
+   "body": "{\"active_org_id\":null,\"organizations\":[]}"
+  },
+  {
+   "name": "me organizations: no credential",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
+  },
+  {
+   "name": "switch-org: alice to B",
+   "status": 200,
+   "body": "{\"access_token\":\"\u003cjwt {\"alg\":\"HS256\",\"typ\":\"JWT\"} {\"sub\":\"10000000-0000-4000-8000-000000000001\",\"email\":\"alice@example.com\",\"org_id\":\"b0000000-0000-4000-8000-00000000000b\",\"role\":\"member\",\"is_superuser\":false,\"type\":\"access\",\"iss\":\"dev-health-ops\",\"aud\":\"dev-health-api\",\"exp\":\"\u003ciat+3600\u003e\",\"iat\":\"\u003ciat\u003e\",\"jti\":\"\u003cjti\u003e\",\"tv\":0,\"username\":\"alice\",\"full_name\":\"Alice Ä\"}\u003e\",\"refresh_token\":\"\u003cjwt {\"alg\":\"HS256\",\"typ\":\"JWT\"} {\"sub\":\"10000000-0000-4000-8000-000000000001\",\"org_id\":\"b0000000-0000-4000-8000-00000000000b\",\"family_id\":\"\u003cfamily_id\u003e\",\"type\":\"refresh\",\"iss\":\"dev-health-ops\",\"aud\":\"dev-health-api\",\"exp\":\"\u003ciat+7 days, to the second or just under\u003e\",\"iat\":\"\u003ciat\u003e\",\"jti\":\"\u003cjti\u003e\"}\u003e\",\"token_type\":\"bearer\",\"expires_in\":3600,\"needs_onboarding\":false,\"user\":{\"id\":\"10000000-0000-4000-8000-000000000001\",\"email\":\"alice@example.com\",\"username\":\"alice\",\"full_name\":\"Alice Ä\",\"org_id\":\"b0000000-0000-4000-8000-00000000000b\",\"role\":\"member\",\"is_superuser\":false}}"
+  },
+  {
+   "name": "switch-org: alice to inactive C",
+   "status": 403,
+   "body": "{\"detail\":{\"message\":\"User is not a member of the selected organization\"}}"
+  },
+  {
+   "name": "switch-org: alice to D",
+   "status": 403,
+   "body": "{\"detail\":{\"message\":\"User is not a member of the selected organization\"}}"
+  },
+  {
+   "name": "switch-org: not a uuid",
+   "status": 400,
+   "body": "{\"detail\":{\"message\":\"Invalid organization ID\"}}"
+  },
+  {
+   "name": "switch-org: missing body",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"org_id\"],\"msg\":\"Field required\",\"input\":{}}]}"
+  },
+  {
+   "name": "switch-org: no credential",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
+  },
+  {
+   "name": "switch-org: no credential, bad body",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
+  },
+  {
+   "name": "logout: anonymous garbage",
+   "status": 200,
+   "body": "{\"message\":\"Logout successful\"}"
+  },
+  {
+   "name": "logout: missing body",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"refresh_token\"],\"msg\":\"Field required\",\"input\":{}}]}"
+  },
+  {
+   "name": "logout: alice seed token",
+   "status": 200,
+   "body": "{\"message\":\"Logout successful\"}"
+  },
+  {
+   "name": "logout: expired bearer",
+   "status": 200,
+   "body": "{\"message\":\"Logout successful\"}"
+  },
+  {
+   "name": "logout: signed token, org not a uuid",
+   "status": 200,
+   "body": "{\"message\":\"Logout successful\"}"
+  },
+  {
+   "name": "refresh: garbage",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid or expired refresh token\"}}"
+  },
+  {
+   "name": "refresh: access token",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid or expired refresh token\"}}"
+  },
+  {
+   "name": "refresh: forged, org exists",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid or expired refresh token\"}}"
+  },
+  {
+   "name": "refresh: forged, unknown org",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid or expired refresh token\"}}"
+  },
+  {
+   "name": "refresh: forged, int org",
+   "status": 500,
+   "body": "{\"detail\":\"Internal Server Error\"}"
+  },
+  {
+   "name": "refresh: forged, int sub",
+   "status": 500,
+   "body": "{\"detail\":\"Internal Server Error\"}"
+  },
+  {
+   "name": "refresh: missing",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"refresh_token\"],\"msg\":\"Field required\",\"input\":{}}]}"
+  },
+  {
+   "name": "social: github new user",
+   "status": 200,
+   "body": "{\"access_token\":\"\u003cjwt {\"alg\":\"HS256\",\"typ\":\"JWT\"} {\"sub\":\"\u003crandom-uuid\u003e\",\"email\":\"newgh@example.com\",\"org_id\":\"\",\"role\":\"member\",\"is_superuser\":false,\"type\":\"access\",\"iss\":\"dev-health-ops\",\"aud\":\"dev-health-api\",\"exp\":\"\u003ciat+3600\u003e\",\"iat\":\"\u003ciat\u003e\",\"jti\":\"\u003cjti\u003e\",\"tv\":0,\"username\":\"newgh\",\"full_name\":\"New GH\"}\u003e\",\"refresh_token\":\"\u003cjwt {\"alg\":\"HS256\",\"typ\":\"JWT\"} {\"sub\":\"\u003crandom-uuid\u003e\",\"org_id\":\"\",\"family_id\":\"\u003cfamily_id\u003e\",\"type\":\"refresh\",\"iss\":\"dev-health-ops\",\"aud\":\"dev-health-api\",\"exp\":\"\u003ciat+7 days, to the second or just under\u003e\",\"iat\":\"\u003ciat\u003e\",\"jti\":\"\u003cjti\u003e\"}\u003e\",\"token_type\":\"bearer\",\"expires_in\":3600,\"needs_onboarding\":true,\"user\":{\"id\":\"\u003crandom-uuid\u003e\",\"email\":\"newgh@example.com\",\"username\":\"newgh\",\"full_name\":\"New GH\",\"org_id\":null,\"role\":\"member\",\"is_superuser\":false},\"is_new_user\":true}"
+  },
+  {
+   "name": "social: github existing by provider id",
+   "status": 200,
+   "body": "{\"access_token\":\"\u003cjwt {\"alg\":\"HS256\",\"typ\":\"JWT\"} {\"sub\":\"10000000-0000-4000-8000-000000000006\",\"email\":\"frank@example.com\",\"org_id\":\"b0000000-0000-4000-8000-00000000000b\",\"role\":\"admin\",\"is_superuser\":false,\"type\":\"access\",\"iss\":\"dev-health-ops\",\"aud\":\"dev-health-api\",\"exp\":\"\u003ciat+3600\u003e\",\"iat\":\"\u003ciat\u003e\",\"jti\":\"\u003cjti\u003e\",\"tv\":0,\"username\":\"frank\",\"full_name\":\"Frank\"}\u003e\",\"refresh_token\":\"\u003cjwt {\"alg\":\"HS256\",\"typ\":\"JWT\"} {\"sub\":\"10000000-0000-4000-8000-000000000006\",\"org_id\":\"b0000000-0000-4000-8000-00000000000b\",\"family_id\":\"\u003cfamily_id\u003e\",\"type\":\"refresh\",\"iss\":\"dev-health-ops\",\"aud\":\"dev-health-api\",\"exp\":\"\u003ciat+7 days, to the second or just under\u003e\",\"iat\":\"\u003ciat\u003e\",\"jti\":\"\u003cjti\u003e\"}\u003e\",\"token_type\":\"bearer\",\"expires_in\":3600,\"needs_onboarding\":false,\"user\":{\"id\":\"10000000-0000-4000-8000-000000000006\",\"email\":\"frank@example.com\",\"username\":\"frank\",\"full_name\":\"Frank\",\"org_id\":\"b0000000-0000-4000-8000-00000000000b\",\"role\":\"admin\",\"is_superuser\":false},\"is_new_user\":false}"
+  },
+  {
+   "name": "social: github email of a local user",
+   "status": 200,
+   "body": "{\"access_token\":\"\u003cjwt {\"alg\":\"HS256\",\"typ\":\"JWT\"} {\"sub\":\"10000000-0000-4000-8000-000000000001\",\"email\":\"alice@example.com\",\"org_id\":\"a0000000-0000-4000-8000-00000000000a\",\"role\":\"owner\",\"is_superuser\":false,\"type\":\"access\",\"iss\":\"dev-health-ops\",\"aud\":\"dev-health-api\",\"exp\":\"\u003ciat+3600\u003e\",\"iat\":\"\u003ciat\u003e\",\"jti\":\"\u003cjti\u003e\",\"tv\":0,\"username\":\"alice\",\"full_name\":\"Alice Ä\"}\u003e\",\"refresh_token\":\"\u003cjwt {\"alg\":\"HS256\",\"typ\":\"JWT\"} {\"sub\":\"10000000-0000-4000-8000-000000000001\",\"org_id\":\"a0000000-0000-4000-8000-00000000000a\",\"family_id\":\"\u003cfamily_id\u003e\",\"type\":\"refresh\",\"iss\":\"dev-health-ops\",\"aud\":\"dev-health-api\",\"exp\":\"\u003ciat+7 days, to the second or just under\u003e\",\"iat\":\"\u003ciat\u003e\",\"jti\":\"\u003cjti\u003e\"}\u003e\",\"token_type\":\"bearer\",\"expires_in\":3600,\"needs_onboarding\":false,\"user\":{\"id\":\"10000000-0000-4000-8000-000000000001\",\"email\":\"alice@example.com\",\"username\":\"alice\",\"full_name\":\"Alice Ä\",\"org_id\":\"a0000000-0000-4000-8000-00000000000a\",\"role\":\"owner\",\"is_superuser\":false},\"is_new_user\":false}"
+  },
+  {
+   "name": "social: github private email",
+   "status": 200,
+   "body": "{\"access_token\":\"\u003cjwt {\"alg\":\"HS256\",\"typ\":\"JWT\"} {\"sub\":\"\u003crandom-uuid\u003e\",\"email\":\"private@example.com\",\"org_id\":\"\",\"role\":\"member\",\"is_superuser\":false,\"type\":\"access\",\"iss\":\"dev-health-ops\",\"aud\":\"dev-health-api\",\"exp\":\"\u003ciat+3600\u003e\",\"iat\":\"\u003ciat\u003e\",\"jti\":\"\u003cjti\u003e\",\"tv\":0,\"username\":\"private-gh\"}\u003e\",\"refresh_token\":\"\u003cjwt {\"alg\":\"HS256\",\"typ\":\"JWT\"} {\"sub\":\"\u003crandom-uuid\u003e\",\"org_id\":\"\",\"family_id\":\"\u003cfamily_id\u003e\",\"type\":\"refresh\",\"iss\":\"dev-health-ops\",\"aud\":\"dev-health-api\",\"exp\":\"\u003ciat+7 days, to the second or just under\u003e\",\"iat\":\"\u003ciat\u003e\",\"jti\":\"\u003cjti\u003e\"}\u003e\",\"token_type\":\"bearer\",\"expires_in\":3600,\"needs_onboarding\":true,\"user\":{\"id\":\"\u003crandom-uuid\u003e\",\"email\":\"private@example.com\",\"username\":\"private-gh\",\"full_name\":null,\"org_id\":null,\"role\":\"member\",\"is_superuser\":false},\"is_new_user\":true}"
+  },
+  {
+   "name": "social: github emails not objects",
+   "status": 500,
+   "body": "{\"detail\":\"Internal Server Error\"}"
+  },
+  {
+   "name": "social: github no id",
+   "status": 500,
+   "body": "{\"detail\":\"Internal Server Error\"}"
+  },
+  {
+   "name": "social: github not json",
+   "status": 500,
+   "body": "{\"detail\":\"Internal Server Error\"}"
+  },
+  {
+   "name": "social: github refused token",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid or expired provider token\"}}"
+  },
+  {
+   "name": "social: gitlab email of a github user",
+   "status": 409,
+   "body": "{\"detail\":{\"message\":\"An account with this email already exists. Please sign in with github.\",\"existing_provider\":\"github\"}}"
+  },
+  {
+   "name": "social: gitlab no email",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid or expired provider token\"}}"
+  },
+  {
+   "name": "social: gitlab username taken",
+   "status": 500,
+   "body": "{\"detail\":\"Internal Server Error\"}"
+  },
+  {
+   "name": "social: google not configured",
+   "status": 503,
+   "body": "{\"detail\":{\"message\":\"Social login not configured for google\"}}"
+  },
+  {
+   "name": "social: unknown provider",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"string_pattern_mismatch\",\"loc\":[\"body\",\"provider\"],\"msg\":\"String should match pattern '^(github|gitlab|google)$'\",\"input\":\"bitbucket\",\"ctx\":{\"pattern\":\"^(github|gitlab|google)$\"}}]}"
+  },
+  {
+   "name": "social: missing token",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"provider_access_token\"],\"msg\":\"Field required\",\"input\":{\"provider\":\"github\"}}]}"
+  },
+  {
+   "name": "login: karl unverified, no membership, an existing org",
+   "status": 200,
+   "body": "{\"status\":\"email_verification_required\",\"email\":\"karl@example.com\",\"message\":\"Please verify your email address before logging in\"}"
+  },
+  {
+   "name": "login: lena only in an inactive org, empty org",
+   "status": 200,
+   "body": "{\"access_token\":\"\u003cjwt {\"alg\":\"HS256\",\"typ\":\"JWT\"} {\"sub\":\"10000000-0000-4000-8000-00000000000b\",\"email\":\"lena@example.com\",\"org_id\":\"c0000000-0000-4000-8000-00000000000c\",\"role\":\"member\",\"is_superuser\":false,\"type\":\"access\",\"iss\":\"dev-health-ops\",\"aud\":\"dev-health-api\",\"exp\":\"\u003ciat+3600\u003e\",\"iat\":\"\u003ciat\u003e\",\"jti\":\"\u003cjti\u003e\",\"tv\":0,\"username\":\"lena\",\"full_name\":\"Lena\"}\u003e\",\"refresh_token\":\"\u003cjwt {\"alg\":\"HS256\",\"typ\":\"JWT\"} {\"sub\":\"10000000-0000-4000-8000-00000000000b\",\"org_id\":\"c0000000-0000-4000-8000-00000000000c\",\"family_id\":\"\u003cfamily_id\u003e\",\"type\":\"refresh\",\"iss\":\"dev-health-ops\",\"aud\":\"dev-health-api\",\"exp\":\"\u003ciat+7 days, to the second or just under\u003e\",\"iat\":\"\u003ciat\u003e\",\"jti\":\"\u003cjti\u003e\"}\u003e\",\"token_type\":\"bearer\",\"expires_in\":3600,\"needs_onboarding\":false,\"user\":{\"id\":\"10000000-0000-4000-8000-00000000000b\",\"email\":\"lena@example.com\",\"username\":\"lena\",\"full_name\":\"Lena\",\"org_id\":\"c0000000-0000-4000-8000-00000000000c\",\"role\":\"member\",\"is_superuser\":false}}"
+  },
+  {
+   "name": "login: alice for the rotation race",
+   "status": 200,
+   "body": "{\"access_token\":\"\u003cjwt {\"alg\":\"HS256\",\"typ\":\"JWT\"} {\"sub\":\"10000000-0000-4000-8000-000000000001\",\"email\":\"alice@example.com\",\"org_id\":\"b0000000-0000-4000-8000-00000000000b\",\"role\":\"member\",\"is_superuser\":false,\"type\":\"access\",\"iss\":\"dev-health-ops\",\"aud\":\"dev-health-api\",\"exp\":\"\u003ciat+3600\u003e\",\"iat\":\"\u003ciat\u003e\",\"jti\":\"\u003cjti\u003e\",\"tv\":0,\"username\":\"alice\",\"full_name\":\"Alice Ä\"}\u003e\",\"refresh_token\":\"\u003cjwt {\"alg\":\"HS256\",\"typ\":\"JWT\"} {\"sub\":\"10000000-0000-4000-8000-000000000001\",\"org_id\":\"b0000000-0000-4000-8000-00000000000b\",\"family_id\":\"\u003cfamily_id\u003e\",\"type\":\"refresh\",\"iss\":\"dev-health-ops\",\"aud\":\"dev-health-api\",\"exp\":\"\u003ciat+7 days, to the second or just under\u003e\",\"iat\":\"\u003ciat\u003e\",\"jti\":\"\u003cjti\u003e\"}\u003e\",\"token_type\":\"bearer\",\"expires_in\":3600,\"needs_onboarding\":false,\"user\":{\"id\":\"10000000-0000-4000-8000-000000000001\",\"email\":\"alice@example.com\",\"username\":\"alice\",\"full_name\":\"Alice Ä\",\"org_id\":\"b0000000-0000-4000-8000-00000000000b\",\"role\":\"member\",\"is_superuser\":false}}"
+  },
+  {
+   "name": "login: alice for the aged rotation",
+   "status": 200,
+   "body": "{\"access_token\":\"\u003cjwt {\"alg\":\"HS256\",\"typ\":\"JWT\"} {\"sub\":\"10000000-0000-4000-8000-000000000001\",\"email\":\"alice@example.com\",\"org_id\":\"b0000000-0000-4000-8000-00000000000b\",\"role\":\"member\",\"is_superuser\":false,\"type\":\"access\",\"iss\":\"dev-health-ops\",\"aud\":\"dev-health-api\",\"exp\":\"\u003ciat+3600\u003e\",\"iat\":\"\u003ciat\u003e\",\"jti\":\"\u003cjti\u003e\",\"tv\":0,\"username\":\"alice\",\"full_name\":\"Alice Ä\"}\u003e\",\"refresh_token\":\"\u003cjwt {\"alg\":\"HS256\",\"typ\":\"JWT\"} {\"sub\":\"10000000-0000-4000-8000-000000000001\",\"org_id\":\"b0000000-0000-4000-8000-00000000000b\",\"family_id\":\"\u003cfamily_id\u003e\",\"type\":\"refresh\",\"iss\":\"dev-health-ops\",\"aud\":\"dev-health-api\",\"exp\":\"\u003ciat+7 days, to the second or just under\u003e\",\"iat\":\"\u003ciat\u003e\",\"jti\":\"\u003cjti\u003e\"}\u003e\",\"token_type\":\"bearer\",\"expires_in\":3600,\"needs_onboarding\":false,\"user\":{\"id\":\"10000000-0000-4000-8000-000000000001\",\"email\":\"alice@example.com\",\"username\":\"alice\",\"full_name\":\"Alice Ä\",\"org_id\":\"b0000000-0000-4000-8000-00000000000b\",\"role\":\"member\",\"is_superuser\":false}}"
+  },
+  {
+   "name": "login: alice for the forged subject",
+   "status": 200,
+   "body": "{\"access_token\":\"\u003cjwt {\"alg\":\"HS256\",\"typ\":\"JWT\"} {\"sub\":\"10000000-0000-4000-8000-000000000001\",\"email\":\"alice@example.com\",\"org_id\":\"b0000000-0000-4000-8000-00000000000b\",\"role\":\"member\",\"is_superuser\":false,\"type\":\"access\",\"iss\":\"dev-health-ops\",\"aud\":\"dev-health-api\",\"exp\":\"\u003ciat+3600\u003e\",\"iat\":\"\u003ciat\u003e\",\"jti\":\"\u003cjti\u003e\",\"tv\":0,\"username\":\"alice\",\"full_name\":\"Alice Ä\"}\u003e\",\"refresh_token\":\"\u003cjwt {\"alg\":\"HS256\",\"typ\":\"JWT\"} {\"sub\":\"10000000-0000-4000-8000-000000000001\",\"org_id\":\"b0000000-0000-4000-8000-00000000000b\",\"family_id\":\"\u003cfamily_id\u003e\",\"type\":\"refresh\",\"iss\":\"dev-health-ops\",\"aud\":\"dev-health-api\",\"exp\":\"\u003ciat+7 days, to the second or just under\u003e\",\"iat\":\"\u003ciat\u003e\",\"jti\":\"\u003cjti\u003e\"}\u003e\",\"token_type\":\"bearer\",\"expires_in\":3600,\"needs_onboarding\":false,\"user\":{\"id\":\"10000000-0000-4000-8000-000000000001\",\"email\":\"alice@example.com\",\"username\":\"alice\",\"full_name\":\"Alice Ä\",\"org_id\":\"b0000000-0000-4000-8000-00000000000b\",\"role\":\"member\",\"is_superuser\":false}}"
+  },
+  {
+   "name": "me: own login token",
+   "status": 200,
+   "body": "{\"id\":\"10000000-0000-4000-8000-000000000001\",\"email\":\"alice@example.com\",\"username\":\"alice\",\"full_name\":\"Alice Ä\",\"org_id\":\"b0000000-0000-4000-8000-00000000000b\",\"role\":\"member\",\"is_superuser\":false,\"permissions\":\u003cset \"analytics:export\",\"analytics:read\",\"git:read\",\"members:read\",\"metrics:read\",\"org:read\",\"settings:read\",\"teams:read\",\"work_items:read\"\u003e}"
+  },
+  {
+   "name": "validate: own login token",
+   "status": 200,
+   "body": "{\"valid\":true,\"user_id\":\"10000000-0000-4000-8000-000000000001\",\"email\":\"alice@example.com\",\"org_id\":\"b0000000-0000-4000-8000-00000000000b\",\"role\":\"member\",\"expires_at\":null}"
+  },
+  {
+   "name": "validate: the OTHER plane's login token",
+   "status": 200,
+   "body": "{\"valid\":true,\"user_id\":\"10000000-0000-4000-8000-000000000001\",\"email\":\"alice@example.com\",\"org_id\":\"b0000000-0000-4000-8000-00000000000b\",\"role\":\"member\",\"expires_at\":null}"
+  },
+  {
+   "name": "refresh: alice",
+   "status": 200,
+   "body": "{\"access_token\":\"\u003cjwt {\"alg\":\"HS256\",\"typ\":\"JWT\"} {\"sub\":\"10000000-0000-4000-8000-000000000001\",\"email\":\"alice@example.com\",\"org_id\":\"b0000000-0000-4000-8000-00000000000b\",\"role\":\"member\",\"is_superuser\":false,\"type\":\"access\",\"iss\":\"dev-health-ops\",\"aud\":\"dev-health-api\",\"exp\":\"\u003ciat+3600\u003e\",\"iat\":\"\u003ciat\u003e\",\"jti\":\"\u003cjti\u003e\",\"tv\":0,\"username\":\"alice\",\"full_name\":\"Alice Ä\"}\u003e\",\"refresh_token\":\"\u003cjwt {\"alg\":\"HS256\",\"typ\":\"JWT\"} {\"sub\":\"10000000-0000-4000-8000-000000000001\",\"org_id\":\"b0000000-0000-4000-8000-00000000000b\",\"family_id\":\"\u003cfamily_id\u003e\",\"type\":\"refresh\",\"iss\":\"dev-health-ops\",\"aud\":\"dev-health-api\",\"exp\":\"\u003ciat+7 days, to the second or just under\u003e\",\"iat\":\"\u003ciat\u003e\",\"jti\":\"\u003cjti\u003e\"}\u003e\",\"token_type\":\"bearer\",\"expires_in\":3600,\"user\":{\"id\":\"10000000-0000-4000-8000-000000000001\",\"email\":\"alice@example.com\",\"username\":null,\"full_name\":null,\"org_id\":\"b0000000-0000-4000-8000-00000000000b\",\"role\":\"member\",\"is_superuser\":false}}"
+  },
+  {
+   "name": "refresh: original again inside the grace window",
+   "status": 200,
+   "body": "{\"access_token\":\"\u003cjwt {\"alg\":\"HS256\",\"typ\":\"JWT\"} {\"sub\":\"10000000-0000-4000-8000-000000000001\",\"email\":\"alice@example.com\",\"org_id\":\"b0000000-0000-4000-8000-00000000000b\",\"role\":\"member\",\"is_superuser\":false,\"type\":\"access\",\"iss\":\"dev-health-ops\",\"aud\":\"dev-health-api\",\"exp\":\"\u003ciat+3600\u003e\",\"iat\":\"\u003ciat\u003e\",\"jti\":\"\u003cjti\u003e\",\"tv\":0,\"username\":\"alice\",\"full_name\":\"Alice Ä\"}\u003e\",\"refresh_token\":\"\u003cjwt {\"alg\":\"HS256\",\"typ\":\"JWT\"} {\"sub\":\"10000000-0000-4000-8000-000000000001\",\"org_id\":\"b0000000-0000-4000-8000-00000000000b\",\"family_id\":\"\u003cfamily_id\u003e\",\"type\":\"refresh\",\"iss\":\"dev-health-ops\",\"aud\":\"dev-health-api\",\"exp\":\"\u003ciat+7 days, to the second or just under\u003e\",\"iat\":\"\u003ciat\u003e\",\"jti\":\"\u003cjti\u003e\"}\u003e\",\"token_type\":\"bearer\",\"expires_in\":3600,\"user\":{\"id\":\"10000000-0000-4000-8000-000000000001\",\"email\":\"alice@example.com\",\"username\":null,\"full_name\":null,\"org_id\":\"b0000000-0000-4000-8000-00000000000b\",\"role\":\"member\",\"is_superuser\":false}}"
+  },
+  {
+   "name": "refresh: switch-org token",
+   "status": 200,
+   "body": "{\"access_token\":\"\u003cjwt {\"alg\":\"HS256\",\"typ\":\"JWT\"} {\"sub\":\"10000000-0000-4000-8000-000000000001\",\"email\":\"alice@example.com\",\"org_id\":\"b0000000-0000-4000-8000-00000000000b\",\"role\":\"member\",\"is_superuser\":false,\"type\":\"access\",\"iss\":\"dev-health-ops\",\"aud\":\"dev-health-api\",\"exp\":\"\u003ciat+3600\u003e\",\"iat\":\"\u003ciat\u003e\",\"jti\":\"\u003cjti\u003e\",\"tv\":0,\"username\":\"alice\",\"full_name\":\"Alice Ä\"}\u003e\",\"refresh_token\":\"\u003cjwt {\"alg\":\"HS256\",\"typ\":\"JWT\"} {\"sub\":\"10000000-0000-4000-8000-000000000001\",\"org_id\":\"b0000000-0000-4000-8000-00000000000b\",\"family_id\":\"\u003cfamily_id\u003e\",\"type\":\"refresh\",\"iss\":\"dev-health-ops\",\"aud\":\"dev-health-api\",\"exp\":\"\u003ciat+7 days, to the second or just under\u003e\",\"iat\":\"\u003ciat\u003e\",\"jti\":\"\u003cjti\u003e\"}\u003e\",\"token_type\":\"bearer\",\"expires_in\":3600,\"user\":{\"id\":\"10000000-0000-4000-8000-000000000001\",\"email\":\"alice@example.com\",\"username\":null,\"full_name\":null,\"org_id\":\"b0000000-0000-4000-8000-00000000000b\",\"role\":\"member\",\"is_superuser\":false}}"
+  },
+  {
+   "name": "refresh: social frank",
+   "status": 200,
+   "body": "{\"access_token\":\"\u003cjwt {\"alg\":\"HS256\",\"typ\":\"JWT\"} {\"sub\":\"10000000-0000-4000-8000-000000000006\",\"email\":\"frank@example.com\",\"org_id\":\"b0000000-0000-4000-8000-00000000000b\",\"role\":\"admin\",\"is_superuser\":false,\"type\":\"access\",\"iss\":\"dev-health-ops\",\"aud\":\"dev-health-api\",\"exp\":\"\u003ciat+3600\u003e\",\"iat\":\"\u003ciat\u003e\",\"jti\":\"\u003cjti\u003e\",\"tv\":0,\"username\":\"frank\",\"full_name\":\"Frank\"}\u003e\",\"refresh_token\":\"\u003cjwt {\"alg\":\"HS256\",\"typ\":\"JWT\"} {\"sub\":\"10000000-0000-4000-8000-000000000006\",\"org_id\":\"b0000000-0000-4000-8000-00000000000b\",\"family_id\":\"\u003cfamily_id\u003e\",\"type\":\"refresh\",\"iss\":\"dev-health-ops\",\"aud\":\"dev-health-api\",\"exp\":\"\u003ciat+7 days, to the second or just under\u003e\",\"iat\":\"\u003ciat\u003e\",\"jti\":\"\u003cjti\u003e\"}\u003e\",\"token_type\":\"bearer\",\"expires_in\":3600,\"user\":{\"id\":\"10000000-0000-4000-8000-000000000006\",\"email\":\"frank@example.com\",\"username\":null,\"full_name\":null,\"org_id\":\"b0000000-0000-4000-8000-00000000000b\",\"role\":\"admin\",\"is_superuser\":false}}"
+  },
+  {
+   "name": "refresh: social new user (no membership, never stored)",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid or expired refresh token\"}}"
+  },
+  {
+   "name": "refresh: bob no membership",
+   "status": 200,
+   "body": "{\"access_token\":\"\u003cjwt {\"alg\":\"HS256\",\"typ\":\"JWT\"} {\"sub\":\"10000000-0000-4000-8000-000000000002\",\"email\":\"bob@example.com\",\"org_id\":\"\",\"role\":\"member\",\"is_superuser\":true,\"type\":\"access\",\"iss\":\"dev-health-ops\",\"aud\":\"dev-health-api\",\"exp\":\"\u003ciat+3600\u003e\",\"iat\":\"\u003ciat\u003e\",\"jti\":\"\u003cjti\u003e\",\"tv\":0,\"username\":\"bob\"}\u003e\",\"refresh_token\":\"\u003cjwt {\"alg\":\"HS256\",\"typ\":\"JWT\"} {\"sub\":\"10000000-0000-4000-8000-000000000002\",\"org_id\":\"\",\"family_id\":\"\u003cfamily_id\u003e\",\"type\":\"refresh\",\"iss\":\"dev-health-ops\",\"aud\":\"dev-health-api\",\"exp\":\"\u003ciat+7 days, to the second or just under\u003e\",\"iat\":\"\u003ciat\u003e\",\"jti\":\"\u003cjti\u003e\"}\u003e\",\"token_type\":\"bearer\",\"expires_in\":3600,\"user\":{\"id\":\"10000000-0000-4000-8000-000000000002\",\"email\":\"bob@example.com\",\"username\":null,\"full_name\":null,\"org_id\":\"\",\"role\":\"member\",\"is_superuser\":true}}"
+  },
+  {
+   "name": "refresh: rotation race, first rotation",
+   "status": 200,
+   "body": "{\"access_token\":\"\u003cjwt {\"alg\":\"HS256\",\"typ\":\"JWT\"} {\"sub\":\"10000000-0000-4000-8000-000000000001\",\"email\":\"alice@example.com\",\"org_id\":\"b0000000-0000-4000-8000-00000000000b\",\"role\":\"member\",\"is_superuser\":false,\"type\":\"access\",\"iss\":\"dev-health-ops\",\"aud\":\"dev-health-api\",\"exp\":\"\u003ciat+3600\u003e\",\"iat\":\"\u003ciat\u003e\",\"jti\":\"\u003cjti\u003e\",\"tv\":0,\"username\":\"alice\",\"full_name\":\"Alice Ä\"}\u003e\",\"refresh_token\":\"\u003cjwt {\"alg\":\"HS256\",\"typ\":\"JWT\"} {\"sub\":\"10000000-0000-4000-8000-000000000001\",\"org_id\":\"b0000000-0000-4000-8000-00000000000b\",\"family_id\":\"\u003cfamily_id\u003e\",\"type\":\"refresh\",\"iss\":\"dev-health-ops\",\"aud\":\"dev-health-api\",\"exp\":\"\u003ciat+7 days, to the second or just under\u003e\",\"iat\":\"\u003ciat\u003e\",\"jti\":\"\u003cjti\u003e\"}\u003e\",\"token_type\":\"bearer\",\"expires_in\":3600,\"user\":{\"id\":\"10000000-0000-4000-8000-000000000001\",\"email\":\"alice@example.com\",\"username\":null,\"full_name\":null,\"org_id\":\"b0000000-0000-4000-8000-00000000000b\",\"role\":\"member\",\"is_superuser\":false}}"
+  },
+  {
+   "name": "refresh: aged rotation",
+   "status": 200,
+   "body": "{\"access_token\":\"\u003cjwt {\"alg\":\"HS256\",\"typ\":\"JWT\"} {\"sub\":\"10000000-0000-4000-8000-000000000001\",\"email\":\"alice@example.com\",\"org_id\":\"b0000000-0000-4000-8000-00000000000b\",\"role\":\"member\",\"is_superuser\":false,\"type\":\"access\",\"iss\":\"dev-health-ops\",\"aud\":\"dev-health-api\",\"exp\":\"\u003ciat+3600\u003e\",\"iat\":\"\u003ciat\u003e\",\"jti\":\"\u003cjti\u003e\",\"tv\":0,\"username\":\"alice\",\"full_name\":\"Alice Ä\"}\u003e\",\"refresh_token\":\"\u003cjwt {\"alg\":\"HS256\",\"typ\":\"JWT\"} {\"sub\":\"10000000-0000-4000-8000-000000000001\",\"org_id\":\"b0000000-0000-4000-8000-00000000000b\",\"family_id\":\"\u003cfamily_id\u003e\",\"type\":\"refresh\",\"iss\":\"dev-health-ops\",\"aud\":\"dev-health-api\",\"exp\":\"\u003ciat+7 days, to the second or just under\u003e\",\"iat\":\"\u003ciat\u003e\",\"jti\":\"\u003cjti\u003e\"}\u003e\",\"token_type\":\"bearer\",\"expires_in\":3600,\"user\":{\"id\":\"10000000-0000-4000-8000-000000000001\",\"email\":\"alice@example.com\",\"username\":null,\"full_name\":null,\"org_id\":\"b0000000-0000-4000-8000-00000000000b\",\"role\":\"member\",\"is_superuser\":false}}"
+  },
+  {
+   "name": "refresh: successor",
+   "status": 200,
+   "body": "{\"access_token\":\"\u003cjwt {\"alg\":\"HS256\",\"typ\":\"JWT\"} {\"sub\":\"10000000-0000-4000-8000-000000000001\",\"email\":\"alice@example.com\",\"org_id\":\"b0000000-0000-4000-8000-00000000000b\",\"role\":\"member\",\"is_superuser\":false,\"type\":\"access\",\"iss\":\"dev-health-ops\",\"aud\":\"dev-health-api\",\"exp\":\"\u003ciat+3600\u003e\",\"iat\":\"\u003ciat\u003e\",\"jti\":\"\u003cjti\u003e\",\"tv\":0,\"username\":\"alice\",\"full_name\":\"Alice Ä\"}\u003e\",\"refresh_token\":\"\u003cjwt {\"alg\":\"HS256\",\"typ\":\"JWT\"} {\"sub\":\"10000000-0000-4000-8000-000000000001\",\"org_id\":\"b0000000-0000-4000-8000-00000000000b\",\"family_id\":\"\u003cfamily_id\u003e\",\"type\":\"refresh\",\"iss\":\"dev-health-ops\",\"aud\":\"dev-health-api\",\"exp\":\"\u003ciat+7 days, to the second or just under\u003e\",\"iat\":\"\u003ciat\u003e\",\"jti\":\"\u003cjti\u003e\"}\u003e\",\"token_type\":\"bearer\",\"expires_in\":3600,\"user\":{\"id\":\"10000000-0000-4000-8000-000000000001\",\"email\":\"alice@example.com\",\"username\":null,\"full_name\":null,\"org_id\":\"b0000000-0000-4000-8000-00000000000b\",\"role\":\"member\",\"is_superuser\":false}}"
+  },
+  {
+   "name": "refresh: rotation race, successor rotated",
+   "status": 200,
+   "body": "{\"access_token\":\"\u003cjwt {\"alg\":\"HS256\",\"typ\":\"JWT\"} {\"sub\":\"10000000-0000-4000-8000-000000000001\",\"email\":\"alice@example.com\",\"org_id\":\"b0000000-0000-4000-8000-00000000000b\",\"role\":\"member\",\"is_superuser\":false,\"type\":\"access\",\"iss\":\"dev-health-ops\",\"aud\":\"dev-health-api\",\"exp\":\"\u003ciat+3600\u003e\",\"iat\":\"\u003ciat\u003e\",\"jti\":\"\u003cjti\u003e\",\"tv\":0,\"username\":\"alice\",\"full_name\":\"Alice Ä\"}\u003e\",\"refresh_token\":\"\u003cjwt {\"alg\":\"HS256\",\"typ\":\"JWT\"} {\"sub\":\"10000000-0000-4000-8000-000000000001\",\"org_id\":\"b0000000-0000-4000-8000-00000000000b\",\"family_id\":\"\u003cfamily_id\u003e\",\"type\":\"refresh\",\"iss\":\"dev-health-ops\",\"aud\":\"dev-health-api\",\"exp\":\"\u003ciat+7 days, to the second or just under\u003e\",\"iat\":\"\u003ciat\u003e\",\"jti\":\"\u003cjti\u003e\"}\u003e\",\"token_type\":\"bearer\",\"expires_in\":3600,\"user\":{\"id\":\"10000000-0000-4000-8000-000000000001\",\"email\":\"alice@example.com\",\"username\":null,\"full_name\":null,\"org_id\":\"b0000000-0000-4000-8000-00000000000b\",\"role\":\"member\",\"is_superuser\":false}}"
+  },
+  {
+   "name": "refresh: rotation race, original inside the window",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Refresh token reuse detected\"}}"
+  },
+  {
+   "name": "refresh: live jti, subject no user",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"User not found\"}}"
+  },
+  {
+   "name": "refresh: original outside the grace window (reuse)",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Refresh token reuse detected\"}}"
+  },
+  {
+   "name": "refresh: aged rotation, original outside the window",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Refresh token reuse detected\"}}"
+  },
+  {
+   "name": "refresh: latest after its family was revoked",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Refresh token reuse detected\"}}"
+  },
+  {
+   "name": "refresh: judy deactivated",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Account is disabled\"}}"
+  },
+  {
+   "name": "logout: bob with his tokens",
+   "status": 200,
+   "body": "{\"message\":\"Logout successful\"}"
+  },
+  {
+   "name": "logout: alice with her org token",
+   "status": 200,
+   "body": "{\"message\":\"Logout successful\"}"
+  },
+  {
+   "name": "refresh: bob's logged-out token",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Refresh token reuse detected\"}}"
+  },
+  {
+   "name": "me: token issued before the version bump",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid or expired token\"}}"
+  },
+  {
+   "name": "lockout: wrong password 1",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid credentials\"}}"
+  },
+  {
+   "name": "lockout: wrong password 2",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid credentials\"}}"
+  },
+  {
+   "name": "lockout: wrong password 3",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid credentials\"}}"
+  },
+  {
+   "name": "lockout: wrong password 4",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid credentials\"}}"
+  },
+  {
+   "name": "lockout: wrong password 5",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid credentials\"}}"
+  },
+  {
+   "name": "lockout: wrong password 6",
+   "status": 429,
+   "body": "{\"detail\":{\"message\":\"Too many failed login attempts. Please try again later.\",\"retry_after_seconds\":\"\u003cabout 900\u003e\"}}"
+  },
+  {
+   "name": "lockout: right password while locked",
+   "status": 429,
+   "body": "{\"detail\":{\"message\":\"Too many failed login attempts. Please try again later.\",\"retry_after_seconds\":\"\u003cabout 900\u003e\"}}"
+  },
+  {
+   "name": "lockout: unknown user wrong 1",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid credentials\"}}"
+  },
+  {
+   "name": "lockout: unknown user wrong 2",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid credentials\"}}"
+  },
+  {
+   "name": "lockout: unknown user wrong 3",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid credentials\"}}"
+  },
+  {
+   "name": "lockout: unknown user wrong 4",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid credentials\"}}"
+  },
+  {
+   "name": "lockout: unknown user wrong 5",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid credentials\"}}"
+  },
+  {
+   "name": "lockout: right password after the lock expired",
+   "status": 200,
+   "body": "{\"access_token\":\"\u003cjwt {\"alg\":\"HS256\",\"typ\":\"JWT\"} {\"sub\":\"10000000-0000-4000-8000-000000000007\",\"email\":\"Grace@Example.COM\",\"org_id\":\"d0000000-0000-4000-8000-00000000000d\",\"role\":\"member\",\"is_superuser\":false,\"type\":\"access\",\"iss\":\"dev-health-ops\",\"aud\":\"dev-health-api\",\"exp\":\"\u003ciat+3600\u003e\",\"iat\":\"\u003ciat\u003e\",\"jti\":\"\u003cjti\u003e\",\"tv\":0,\"username\":\"grace\",\"full_name\":\"Grace\"}\u003e\",\"refresh_token\":\"\u003cjwt {\"alg\":\"HS256\",\"typ\":\"JWT\"} {\"sub\":\"10000000-0000-4000-8000-000000000007\",\"org_id\":\"d0000000-0000-4000-8000-00000000000d\",\"family_id\":\"\u003cfamily_id\u003e\",\"type\":\"refresh\",\"iss\":\"dev-health-ops\",\"aud\":\"dev-health-api\",\"exp\":\"\u003ciat+7 days, to the second or just under\u003e\",\"iat\":\"\u003ciat\u003e\",\"jti\":\"\u003cjti\u003e\"}\u003e\",\"token_type\":\"bearer\",\"expires_in\":3600,\"needs_onboarding\":false,\"user\":{\"id\":\"10000000-0000-4000-8000-000000000007\",\"email\":\"Grace@Example.COM\",\"username\":\"grace\",\"full_name\":\"Grace\",\"org_id\":\"d0000000-0000-4000-8000-00000000000d\",\"role\":\"member\",\"is_superuser\":false}}"
+  },
+  {
+   "name": "lockout: unknown user wrong again after the lock expired",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid credentials\"}}"
+  },
+  {
+   "name": "lockout: second unknown user wrong 1",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid credentials\"}}"
+  },
+  {
+   "name": "lockout: second unknown user wrong 2",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid credentials\"}}"
+  },
+  {
+   "name": "lockout: second unknown user wrong 3",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid credentials\"}}"
+  },
+  {
+   "name": "lockout: second unknown user wrong 4",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid credentials\"}}"
+  },
+  {
+   "name": "lockout: second unknown user wrong 5",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid credentials\"}}"
+  },
+  {
+   "name": "rate limit: login 1",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid credentials\"}}"
+  },
+  {
+   "name": "rate limit: login 2",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid credentials\"}}"
+  },
+  {
+   "name": "rate limit: login 3",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid credentials\"}}"
+  },
+  {
+   "name": "rate limit: login 4",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid credentials\"}}"
+  },
+  {
+   "name": "rate limit: login 5",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid credentials\"}}"
+  },
+  {
+   "name": "rate limit: login 6",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid credentials\"}}"
+  },
+  {
+   "name": "rate limit: login 7",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid credentials\"}}"
+  },
+  {
+   "name": "rate limit: login 8",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid credentials\"}}"
+  },
+  {
+   "name": "rate limit: login 9",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid credentials\"}}"
+  },
+  {
+   "name": "rate limit: login 10",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid credentials\"}}"
+  },
+  {
+   "name": "rate limit: login 11",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid credentials\"}}"
+  },
+  {
+   "name": "rate limit: login 12",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid credentials\"}}"
+  },
+  {
+   "name": "rate limit: login 13",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid credentials\"}}"
+  },
+  {
+   "name": "rate limit: login 14",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid credentials\"}}"
+  },
+  {
+   "name": "rate limit: login 15",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid credentials\"}}"
+  },
+  {
+   "name": "rate limit: login 16",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid credentials\"}}"
+  },
+  {
+   "name": "rate limit: login 17",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid credentials\"}}"
+  },
+  {
+   "name": "rate limit: login 18",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid credentials\"}}"
+  },
+  {
+   "name": "rate limit: login 19",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid credentials\"}}"
+  },
+  {
+   "name": "rate limit: login 20",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid credentials\"}}"
+  },
+  {
+   "name": "rate limit: login 21",
+   "status": 429,
+   "body": "{\"detail\":{\"message\":\"Rate limit exceeded. Please try again later.\"}}"
+  },
+  {
+   "name": "rate limit: refresh 1",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid or expired refresh token\"}}"
+  },
+  {
+   "name": "rate limit: refresh 2",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid or expired refresh token\"}}"
+  },
+  {
+   "name": "rate limit: refresh 3",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid or expired refresh token\"}}"
+  },
+  {
+   "name": "rate limit: refresh 4",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid or expired refresh token\"}}"
+  },
+  {
+   "name": "rate limit: refresh 5",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid or expired refresh token\"}}"
+  },
+  {
+   "name": "rate limit: refresh 6",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid or expired refresh token\"}}"
+  },
+  {
+   "name": "rate limit: refresh 7",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid or expired refresh token\"}}"
+  },
+  {
+   "name": "rate limit: refresh 8",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid or expired refresh token\"}}"
+  },
+  {
+   "name": "rate limit: refresh 9",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid or expired refresh token\"}}"
+  },
+  {
+   "name": "rate limit: refresh 10",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid or expired refresh token\"}}"
+  },
+  {
+   "name": "rate limit: refresh 11",
+   "status": 429,
+   "body": "{\"detail\":{\"message\":\"Rate limit exceeded. Please try again later.\"}}"
+  },
+  {
+   "name": "rate limit: validate 1",
+   "status": 200,
+   "body": "{\"valid\":false,\"user_id\":null,\"email\":null,\"org_id\":null,\"role\":null,\"expires_at\":null}"
+  },
+  {
+   "name": "rate limit: validate 2",
+   "status": 200,
+   "body": "{\"valid\":false,\"user_id\":null,\"email\":null,\"org_id\":null,\"role\":null,\"expires_at\":null}"
+  },
+  {
+   "name": "rate limit: validate 3",
+   "status": 200,
+   "body": "{\"valid\":false,\"user_id\":null,\"email\":null,\"org_id\":null,\"role\":null,\"expires_at\":null}"
+  },
+  {
+   "name": "rate limit: validate 4",
+   "status": 200,
+   "body": "{\"valid\":false,\"user_id\":null,\"email\":null,\"org_id\":null,\"role\":null,\"expires_at\":null}"
+  },
+  {
+   "name": "rate limit: validate 5",
+   "status": 200,
+   "body": "{\"valid\":false,\"user_id\":null,\"email\":null,\"org_id\":null,\"role\":null,\"expires_at\":null}"
+  },
+  {
+   "name": "rate limit: validate 6",
+   "status": 200,
+   "body": "{\"valid\":false,\"user_id\":null,\"email\":null,\"org_id\":null,\"role\":null,\"expires_at\":null}"
+  },
+  {
+   "name": "rate limit: validate 7",
+   "status": 200,
+   "body": "{\"valid\":false,\"user_id\":null,\"email\":null,\"org_id\":null,\"role\":null,\"expires_at\":null}"
+  },
+  {
+   "name": "rate limit: validate 8",
+   "status": 200,
+   "body": "{\"valid\":false,\"user_id\":null,\"email\":null,\"org_id\":null,\"role\":null,\"expires_at\":null}"
+  },
+  {
+   "name": "rate limit: validate 9",
+   "status": 200,
+   "body": "{\"valid\":false,\"user_id\":null,\"email\":null,\"org_id\":null,\"role\":null,\"expires_at\":null}"
+  },
+  {
+   "name": "rate limit: validate 10",
+   "status": 200,
+   "body": "{\"valid\":false,\"user_id\":null,\"email\":null,\"org_id\":null,\"role\":null,\"expires_at\":null}"
+  },
+  {
+   "name": "rate limit: validate 11",
+   "status": 200,
+   "body": "{\"valid\":false,\"user_id\":null,\"email\":null,\"org_id\":null,\"role\":null,\"expires_at\":null}"
+  },
+  {
+   "name": "rate limit: validate 12",
+   "status": 200,
+   "body": "{\"valid\":false,\"user_id\":null,\"email\":null,\"org_id\":null,\"role\":null,\"expires_at\":null}"
+  },
+  {
+   "name": "rate limit: validate 13",
+   "status": 200,
+   "body": "{\"valid\":false,\"user_id\":null,\"email\":null,\"org_id\":null,\"role\":null,\"expires_at\":null}"
+  },
+  {
+   "name": "rate limit: validate 14",
+   "status": 200,
+   "body": "{\"valid\":false,\"user_id\":null,\"email\":null,\"org_id\":null,\"role\":null,\"expires_at\":null}"
+  },
+  {
+   "name": "rate limit: validate 15",
+   "status": 200,
+   "body": "{\"valid\":false,\"user_id\":null,\"email\":null,\"org_id\":null,\"role\":null,\"expires_at\":null}"
+  },
+  {
+   "name": "rate limit: validate 16",
+   "status": 200,
+   "body": "{\"valid\":false,\"user_id\":null,\"email\":null,\"org_id\":null,\"role\":null,\"expires_at\":null}"
+  },
+  {
+   "name": "rate limit: validate 17",
+   "status": 200,
+   "body": "{\"valid\":false,\"user_id\":null,\"email\":null,\"org_id\":null,\"role\":null,\"expires_at\":null}"
+  },
+  {
+   "name": "rate limit: validate 18",
+   "status": 200,
+   "body": "{\"valid\":false,\"user_id\":null,\"email\":null,\"org_id\":null,\"role\":null,\"expires_at\":null}"
+  },
+  {
+   "name": "rate limit: validate 19",
+   "status": 200,
+   "body": "{\"valid\":false,\"user_id\":null,\"email\":null,\"org_id\":null,\"role\":null,\"expires_at\":null}"
+  },
+  {
+   "name": "rate limit: validate 20",
+   "status": 200,
+   "body": "{\"valid\":false,\"user_id\":null,\"email\":null,\"org_id\":null,\"role\":null,\"expires_at\":null}"
+  },
+  {
+   "name": "rate limit: validate 21",
+   "status": 200,
+   "body": "{\"valid\":false,\"user_id\":null,\"email\":null,\"org_id\":null,\"role\":null,\"expires_at\":null}"
+  },
+  {
+   "name": "rate limit: validate 22",
+   "status": 200,
+   "body": "{\"valid\":false,\"user_id\":null,\"email\":null,\"org_id\":null,\"role\":null,\"expires_at\":null}"
+  },
+  {
+   "name": "rate limit: validate 23",
+   "status": 200,
+   "body": "{\"valid\":false,\"user_id\":null,\"email\":null,\"org_id\":null,\"role\":null,\"expires_at\":null}"
+  },
+  {
+   "name": "rate limit: validate 24",
+   "status": 200,
+   "body": "{\"valid\":false,\"user_id\":null,\"email\":null,\"org_id\":null,\"role\":null,\"expires_at\":null}"
+  },
+  {
+   "name": "rate limit: validate 25",
+   "status": 200,
+   "body": "{\"valid\":false,\"user_id\":null,\"email\":null,\"org_id\":null,\"role\":null,\"expires_at\":null}"
+  },
+  {
+   "name": "rate limit: validate 26",
+   "status": 200,
+   "body": "{\"valid\":false,\"user_id\":null,\"email\":null,\"org_id\":null,\"role\":null,\"expires_at\":null}"
+  },
+  {
+   "name": "rate limit: validate 27",
+   "status": 200,
+   "body": "{\"valid\":false,\"user_id\":null,\"email\":null,\"org_id\":null,\"role\":null,\"expires_at\":null}"
+  },
+  {
+   "name": "rate limit: validate 28",
+   "status": 200,
+   "body": "{\"valid\":false,\"user_id\":null,\"email\":null,\"org_id\":null,\"role\":null,\"expires_at\":null}"
+  },
+  {
+   "name": "rate limit: validate 29",
+   "status": 200,
+   "body": "{\"valid\":false,\"user_id\":null,\"email\":null,\"org_id\":null,\"role\":null,\"expires_at\":null}"
+  },
+  {
+   "name": "rate limit: validate 30",
+   "status": 200,
+   "body": "{\"valid\":false,\"user_id\":null,\"email\":null,\"org_id\":null,\"role\":null,\"expires_at\":null}"
+  },
+  {
+   "name": "rate limit: validate 31",
+   "status": 429,
+   "body": "{\"detail\":{\"message\":\"Rate limit exceeded. Please try again later.\"}}"
+  },
+  {
+   "name": "rate limit: validate, another token",
+   "status": 200,
+   "body": "{\"valid\":false,\"user_id\":null,\"email\":null,\"org_id\":null,\"role\":null,\"expires_at\":null}"
+  },
+  {
+   "name": "burst: login invalid 1",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"value_error\",\"loc\":[\"body\",\"email\"],\"msg\":\"value is not a valid email address: An email address must have an @-sign.\",\"input\":\"not-an-email\",\"ctx\":{\"reason\":\"An email address must have an @-sign.\"}}]}"
+  },
+  {
+   "name": "burst: login invalid 2",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"value_error\",\"loc\":[\"body\",\"email\"],\"msg\":\"value is not a valid email address: An email address must have an @-sign.\",\"input\":\"not-an-email\",\"ctx\":{\"reason\":\"An email address must have an @-sign.\"}}]}"
+  },
+  {
+   "name": "burst: login invalid 3",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"value_error\",\"loc\":[\"body\",\"email\"],\"msg\":\"value is not a valid email address: An email address must have an @-sign.\",\"input\":\"not-an-email\",\"ctx\":{\"reason\":\"An email address must have an @-sign.\"}}]}"
+  },
+  {
+   "name": "burst: login invalid 4",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"value_error\",\"loc\":[\"body\",\"email\"],\"msg\":\"value is not a valid email address: An email address must have an @-sign.\",\"input\":\"not-an-email\",\"ctx\":{\"reason\":\"An email address must have an @-sign.\"}}]}"
+  },
+  {
+   "name": "burst: login invalid 5",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"value_error\",\"loc\":[\"body\",\"email\"],\"msg\":\"value is not a valid email address: An email address must have an @-sign.\",\"input\":\"not-an-email\",\"ctx\":{\"reason\":\"An email address must have an @-sign.\"}}]}"
+  },
+  {
+   "name": "burst: login invalid 6",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"value_error\",\"loc\":[\"body\",\"email\"],\"msg\":\"value is not a valid email address: An email address must have an @-sign.\",\"input\":\"not-an-email\",\"ctx\":{\"reason\":\"An email address must have an @-sign.\"}}]}"
+  },
+  {
+   "name": "burst: login invalid 7",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"value_error\",\"loc\":[\"body\",\"email\"],\"msg\":\"value is not a valid email address: An email address must have an @-sign.\",\"input\":\"not-an-email\",\"ctx\":{\"reason\":\"An email address must have an @-sign.\"}}]}"
+  },
+  {
+   "name": "burst: login invalid 8",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"value_error\",\"loc\":[\"body\",\"email\"],\"msg\":\"value is not a valid email address: An email address must have an @-sign.\",\"input\":\"not-an-email\",\"ctx\":{\"reason\":\"An email address must have an @-sign.\"}}]}"
+  },
+  {
+   "name": "burst: login invalid 9",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"value_error\",\"loc\":[\"body\",\"email\"],\"msg\":\"value is not a valid email address: An email address must have an @-sign.\",\"input\":\"not-an-email\",\"ctx\":{\"reason\":\"An email address must have an @-sign.\"}}]}"
+  },
+  {
+   "name": "burst: login invalid 10",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"value_error\",\"loc\":[\"body\",\"email\"],\"msg\":\"value is not a valid email address: An email address must have an @-sign.\",\"input\":\"not-an-email\",\"ctx\":{\"reason\":\"An email address must have an @-sign.\"}}]}"
+  },
+  {
+   "name": "burst: login invalid 11",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"value_error\",\"loc\":[\"body\",\"email\"],\"msg\":\"value is not a valid email address: An email address must have an @-sign.\",\"input\":\"not-an-email\",\"ctx\":{\"reason\":\"An email address must have an @-sign.\"}}]}"
+  },
+  {
+   "name": "burst: login invalid 12",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"value_error\",\"loc\":[\"body\",\"email\"],\"msg\":\"value is not a valid email address: An email address must have an @-sign.\",\"input\":\"not-an-email\",\"ctx\":{\"reason\":\"An email address must have an @-sign.\"}}]}"
+  },
+  {
+   "name": "burst: login invalid 13",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"value_error\",\"loc\":[\"body\",\"email\"],\"msg\":\"value is not a valid email address: An email address must have an @-sign.\",\"input\":\"not-an-email\",\"ctx\":{\"reason\":\"An email address must have an @-sign.\"}}]}"
+  },
+  {
+   "name": "burst: login invalid 14",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"value_error\",\"loc\":[\"body\",\"email\"],\"msg\":\"value is not a valid email address: An email address must have an @-sign.\",\"input\":\"not-an-email\",\"ctx\":{\"reason\":\"An email address must have an @-sign.\"}}]}"
+  },
+  {
+   "name": "burst: login invalid 15",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"value_error\",\"loc\":[\"body\",\"email\"],\"msg\":\"value is not a valid email address: An email address must have an @-sign.\",\"input\":\"not-an-email\",\"ctx\":{\"reason\":\"An email address must have an @-sign.\"}}]}"
+  },
+  {
+   "name": "burst: login invalid 16",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"value_error\",\"loc\":[\"body\",\"email\"],\"msg\":\"value is not a valid email address: An email address must have an @-sign.\",\"input\":\"not-an-email\",\"ctx\":{\"reason\":\"An email address must have an @-sign.\"}}]}"
+  },
+  {
+   "name": "burst: login invalid 17",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"value_error\",\"loc\":[\"body\",\"email\"],\"msg\":\"value is not a valid email address: An email address must have an @-sign.\",\"input\":\"not-an-email\",\"ctx\":{\"reason\":\"An email address must have an @-sign.\"}}]}"
+  },
+  {
+   "name": "burst: login invalid 18",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"value_error\",\"loc\":[\"body\",\"email\"],\"msg\":\"value is not a valid email address: An email address must have an @-sign.\",\"input\":\"not-an-email\",\"ctx\":{\"reason\":\"An email address must have an @-sign.\"}}]}"
+  },
+  {
+   "name": "burst: login invalid 19",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"value_error\",\"loc\":[\"body\",\"email\"],\"msg\":\"value is not a valid email address: An email address must have an @-sign.\",\"input\":\"not-an-email\",\"ctx\":{\"reason\":\"An email address must have an @-sign.\"}}]}"
+  },
+  {
+   "name": "burst: login invalid 20",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"value_error\",\"loc\":[\"body\",\"email\"],\"msg\":\"value is not a valid email address: An email address must have an @-sign.\",\"input\":\"not-an-email\",\"ctx\":{\"reason\":\"An email address must have an @-sign.\"}}]}"
+  },
+  {
+   "name": "burst: login invalid 21",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"value_error\",\"loc\":[\"body\",\"email\"],\"msg\":\"value is not a valid email address: An email address must have an @-sign.\",\"input\":\"not-an-email\",\"ctx\":{\"reason\":\"An email address must have an @-sign.\"}}]}"
+  },
+  {
+   "name": "burst: login invalid 22",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"value_error\",\"loc\":[\"body\",\"email\"],\"msg\":\"value is not a valid email address: An email address must have an @-sign.\",\"input\":\"not-an-email\",\"ctx\":{\"reason\":\"An email address must have an @-sign.\"}}]}"
+  },
+  {
+   "name": "burst: login invalid 23",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"value_error\",\"loc\":[\"body\",\"email\"],\"msg\":\"value is not a valid email address: An email address must have an @-sign.\",\"input\":\"not-an-email\",\"ctx\":{\"reason\":\"An email address must have an @-sign.\"}}]}"
+  },
+  {
+   "name": "burst: login invalid 24",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"value_error\",\"loc\":[\"body\",\"email\"],\"msg\":\"value is not a valid email address: An email address must have an @-sign.\",\"input\":\"not-an-email\",\"ctx\":{\"reason\":\"An email address must have an @-sign.\"}}]}"
+  },
+  {
+   "name": "burst: login invalid 25",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"value_error\",\"loc\":[\"body\",\"email\"],\"msg\":\"value is not a valid email address: An email address must have an @-sign.\",\"input\":\"not-an-email\",\"ctx\":{\"reason\":\"An email address must have an @-sign.\"}}]}"
+  },
+  {
+   "name": "burst: login valid 1",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid credentials\"}}"
+  },
+  {
+   "name": "burst: login valid 2",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid credentials\"}}"
+  },
+  {
+   "name": "burst: login valid 3",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid credentials\"}}"
+  },
+  {
+   "name": "burst: login valid 4",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid credentials\"}}"
+  },
+  {
+   "name": "burst: login valid 5",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid credentials\"}}"
+  },
+  {
+   "name": "burst: login valid 6",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid credentials\"}}"
+  },
+  {
+   "name": "burst: login valid 7",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid credentials\"}}"
+  },
+  {
+   "name": "burst: login valid 8",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid credentials\"}}"
+  },
+  {
+   "name": "burst: login valid 9",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid credentials\"}}"
+  },
+  {
+   "name": "burst: login valid 10",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid credentials\"}}"
+  },
+  {
+   "name": "burst: login valid 11",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid credentials\"}}"
+  },
+  {
+   "name": "burst: login valid 12",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid credentials\"}}"
+  },
+  {
+   "name": "burst: login valid 13",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid credentials\"}}"
+  },
+  {
+   "name": "burst: login valid 14",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid credentials\"}}"
+  },
+  {
+   "name": "burst: login valid 15",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid credentials\"}}"
+  },
+  {
+   "name": "burst: login valid 16",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid credentials\"}}"
+  },
+  {
+   "name": "burst: login valid 17",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid credentials\"}}"
+  },
+  {
+   "name": "burst: login valid 18",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid credentials\"}}"
+  },
+  {
+   "name": "burst: login valid 19",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid credentials\"}}"
+  },
+  {
+   "name": "burst: login valid 20",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid credentials\"}}"
+  },
+  {
+   "name": "burst: login valid 21",
+   "status": 429,
+   "body": "{\"detail\":{\"message\":\"Rate limit exceeded. Please try again later.\"}}"
+  },
+  {
+   "name": "burst: refresh invalid 1",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"refresh_token\"],\"msg\":\"Field required\",\"input\":{}}]}"
+  },
+  {
+   "name": "burst: refresh invalid 2",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"refresh_token\"],\"msg\":\"Field required\",\"input\":{}}]}"
+  },
+  {
+   "name": "burst: refresh invalid 3",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"refresh_token\"],\"msg\":\"Field required\",\"input\":{}}]}"
+  },
+  {
+   "name": "burst: refresh invalid 4",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"refresh_token\"],\"msg\":\"Field required\",\"input\":{}}]}"
+  },
+  {
+   "name": "burst: refresh invalid 5",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"refresh_token\"],\"msg\":\"Field required\",\"input\":{}}]}"
+  },
+  {
+   "name": "burst: refresh invalid 6",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"refresh_token\"],\"msg\":\"Field required\",\"input\":{}}]}"
+  },
+  {
+   "name": "burst: refresh invalid 7",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"refresh_token\"],\"msg\":\"Field required\",\"input\":{}}]}"
+  },
+  {
+   "name": "burst: refresh invalid 8",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"refresh_token\"],\"msg\":\"Field required\",\"input\":{}}]}"
+  },
+  {
+   "name": "burst: refresh invalid 9",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"refresh_token\"],\"msg\":\"Field required\",\"input\":{}}]}"
+  },
+  {
+   "name": "burst: refresh invalid 10",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"refresh_token\"],\"msg\":\"Field required\",\"input\":{}}]}"
+  },
+  {
+   "name": "burst: refresh invalid 11",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"refresh_token\"],\"msg\":\"Field required\",\"input\":{}}]}"
+  },
+  {
+   "name": "burst: refresh invalid 12",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"refresh_token\"],\"msg\":\"Field required\",\"input\":{}}]}"
+  },
+  {
+   "name": "burst: refresh valid 1",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid or expired refresh token\"}}"
+  },
+  {
+   "name": "burst: refresh valid 2",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid or expired refresh token\"}}"
+  },
+  {
+   "name": "burst: refresh valid 3",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid or expired refresh token\"}}"
+  },
+  {
+   "name": "burst: refresh valid 4",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid or expired refresh token\"}}"
+  },
+  {
+   "name": "burst: refresh valid 5",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid or expired refresh token\"}}"
+  },
+  {
+   "name": "burst: refresh valid 6",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid or expired refresh token\"}}"
+  },
+  {
+   "name": "burst: refresh valid 7",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid or expired refresh token\"}}"
+  },
+  {
+   "name": "burst: refresh valid 8",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid or expired refresh token\"}}"
+  },
+  {
+   "name": "burst: refresh valid 9",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid or expired refresh token\"}}"
+  },
+  {
+   "name": "burst: refresh valid 10",
+   "status": 401,
+   "body": "{\"detail\":{\"message\":\"Invalid or expired refresh token\"}}"
+  },
+  {
+   "name": "burst: refresh valid 11",
+   "status": 429,
+   "body": "{\"detail\":{\"message\":\"Rate limit exceeded. Please try again later.\"}}"
+  },
+  {
+   "name": "burst: validate invalid 1",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"token\"],\"msg\":\"Input should be a valid string\",\"input\":5}]}"
+  },
+  {
+   "name": "burst: validate invalid 2",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"token\"],\"msg\":\"Input should be a valid string\",\"input\":5}]}"
+  },
+  {
+   "name": "burst: validate invalid 3",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"token\"],\"msg\":\"Input should be a valid string\",\"input\":5}]}"
+  },
+  {
+   "name": "burst: validate invalid 4",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"token\"],\"msg\":\"Input should be a valid string\",\"input\":5}]}"
+  },
+  {
+   "name": "burst: validate invalid 5",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"token\"],\"msg\":\"Input should be a valid string\",\"input\":5}]}"
+  },
+  {
+   "name": "burst: validate invalid 6",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"token\"],\"msg\":\"Input should be a valid string\",\"input\":5}]}"
+  },
+  {
+   "name": "burst: validate invalid 7",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"token\"],\"msg\":\"Input should be a valid string\",\"input\":5}]}"
+  },
+  {
+   "name": "burst: validate invalid 8",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"token\"],\"msg\":\"Input should be a valid string\",\"input\":5}]}"
+  },
+  {
+   "name": "burst: validate invalid 9",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"token\"],\"msg\":\"Input should be a valid string\",\"input\":5}]}"
+  },
+  {
+   "name": "burst: validate invalid 10",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"token\"],\"msg\":\"Input should be a valid string\",\"input\":5}]}"
+  },
+  {
+   "name": "burst: validate invalid 11",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"token\"],\"msg\":\"Input should be a valid string\",\"input\":5}]}"
+  },
+  {
+   "name": "burst: validate invalid 12",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"token\"],\"msg\":\"Input should be a valid string\",\"input\":5}]}"
+  },
+  {
+   "name": "burst: validate invalid 13",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"token\"],\"msg\":\"Input should be a valid string\",\"input\":5}]}"
+  },
+  {
+   "name": "burst: validate invalid 14",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"token\"],\"msg\":\"Input should be a valid string\",\"input\":5}]}"
+  },
+  {
+   "name": "burst: validate invalid 15",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"token\"],\"msg\":\"Input should be a valid string\",\"input\":5}]}"
+  },
+  {
+   "name": "burst: validate invalid 16",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"token\"],\"msg\":\"Input should be a valid string\",\"input\":5}]}"
+  },
+  {
+   "name": "burst: validate invalid 17",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"token\"],\"msg\":\"Input should be a valid string\",\"input\":5}]}"
+  },
+  {
+   "name": "burst: validate invalid 18",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"token\"],\"msg\":\"Input should be a valid string\",\"input\":5}]}"
+  },
+  {
+   "name": "burst: validate invalid 19",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"token\"],\"msg\":\"Input should be a valid string\",\"input\":5}]}"
+  },
+  {
+   "name": "burst: validate invalid 20",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"token\"],\"msg\":\"Input should be a valid string\",\"input\":5}]}"
+  },
+  {
+   "name": "burst: validate invalid 21",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"token\"],\"msg\":\"Input should be a valid string\",\"input\":5}]}"
+  },
+  {
+   "name": "burst: validate invalid 22",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"token\"],\"msg\":\"Input should be a valid string\",\"input\":5}]}"
+  },
+  {
+   "name": "burst: validate invalid 23",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"token\"],\"msg\":\"Input should be a valid string\",\"input\":5}]}"
+  },
+  {
+   "name": "burst: validate invalid 24",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"token\"],\"msg\":\"Input should be a valid string\",\"input\":5}]}"
+  },
+  {
+   "name": "burst: validate invalid 25",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"token\"],\"msg\":\"Input should be a valid string\",\"input\":5}]}"
+  },
+  {
+   "name": "burst: validate invalid 26",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"token\"],\"msg\":\"Input should be a valid string\",\"input\":5}]}"
+  },
+  {
+   "name": "burst: validate invalid 27",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"token\"],\"msg\":\"Input should be a valid string\",\"input\":5}]}"
+  },
+  {
+   "name": "burst: validate invalid 28",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"token\"],\"msg\":\"Input should be a valid string\",\"input\":5}]}"
+  },
+  {
+   "name": "burst: validate invalid 29",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"token\"],\"msg\":\"Input should be a valid string\",\"input\":5}]}"
+  },
+  {
+   "name": "burst: validate invalid 30",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"token\"],\"msg\":\"Input should be a valid string\",\"input\":5}]}"
+  },
+  {
+   "name": "burst: validate invalid 31",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"token\"],\"msg\":\"Input should be a valid string\",\"input\":5}]}"
+  },
+  {
+   "name": "burst: validate invalid 32",
+   "status": 422,
+   "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"token\"],\"msg\":\"Input should be a valid string\",\"input\":5}]}"
+  },
+  {
+   "name": "burst: validate valid 1",
+   "status": 200,
+   "body": "{\"valid\":false,\"user_id\":null,\"email\":null,\"org_id\":null,\"role\":null,\"expires_at\":null}"
+  },
+  {
+   "name": "burst: validate valid 2",
+   "status": 200,
+   "body": "{\"valid\":false,\"user_id\":null,\"email\":null,\"org_id\":null,\"role\":null,\"expires_at\":null}"
+  },
+  {
+   "name": "burst: validate valid 3",
+   "status": 200,
+   "body": "{\"valid\":false,\"user_id\":null,\"email\":null,\"org_id\":null,\"role\":null,\"expires_at\":null}"
+  },
+  {
+   "name": "burst: validate valid 4",
+   "status": 200,
+   "body": "{\"valid\":false,\"user_id\":null,\"email\":null,\"org_id\":null,\"role\":null,\"expires_at\":null}"
+  },
+  {
+   "name": "burst: validate valid 5",
+   "status": 200,
+   "body": "{\"valid\":false,\"user_id\":null,\"email\":null,\"org_id\":null,\"role\":null,\"expires_at\":null}"
+  },
+  {
+   "name": "burst: validate valid 6",
+   "status": 200,
+   "body": "{\"valid\":false,\"user_id\":null,\"email\":null,\"org_id\":null,\"role\":null,\"expires_at\":null}"
+  },
+  {
+   "name": "burst: validate valid 7",
+   "status": 200,
+   "body": "{\"valid\":false,\"user_id\":null,\"email\":null,\"org_id\":null,\"role\":null,\"expires_at\":null}"
+  },
+  {
+   "name": "burst: validate valid 8",
+   "status": 200,
+   "body": "{\"valid\":false,\"user_id\":null,\"email\":null,\"org_id\":null,\"role\":null,\"expires_at\":null}"
+  },
+  {
+   "name": "burst: validate valid 9",
+   "status": 200,
+   "body": "{\"valid\":false,\"user_id\":null,\"email\":null,\"org_id\":null,\"role\":null,\"expires_at\":null}"
+  },
+  {
+   "name": "burst: validate valid 10",
+   "status": 200,
+   "body": "{\"valid\":false,\"user_id\":null,\"email\":null,\"org_id\":null,\"role\":null,\"expires_at\":null}"
+  },
+  {
+   "name": "burst: validate valid 11",
+   "status": 200,
+   "body": "{\"valid\":false,\"user_id\":null,\"email\":null,\"org_id\":null,\"role\":null,\"expires_at\":null}"
+  },
+  {
+   "name": "burst: validate valid 12",
+   "status": 200,
+   "body": "{\"valid\":false,\"user_id\":null,\"email\":null,\"org_id\":null,\"role\":null,\"expires_at\":null}"
+  },
+  {
+   "name": "burst: validate valid 13",
+   "status": 200,
+   "body": "{\"valid\":false,\"user_id\":null,\"email\":null,\"org_id\":null,\"role\":null,\"expires_at\":null}"
+  },
+  {
+   "name": "burst: validate valid 14",
+   "status": 200,
+   "body": "{\"valid\":false,\"user_id\":null,\"email\":null,\"org_id\":null,\"role\":null,\"expires_at\":null}"
+  },
+  {
+   "name": "burst: validate valid 15",
+   "status": 200,
+   "body": "{\"valid\":false,\"user_id\":null,\"email\":null,\"org_id\":null,\"role\":null,\"expires_at\":null}"
+  },
+  {
+   "name": "burst: validate valid 16",
+   "status": 200,
+   "body": "{\"valid\":false,\"user_id\":null,\"email\":null,\"org_id\":null,\"role\":null,\"expires_at\":null}"
+  },
+  {
+   "name": "burst: validate valid 17",
+   "status": 200,
+   "body": "{\"valid\":false,\"user_id\":null,\"email\":null,\"org_id\":null,\"role\":null,\"expires_at\":null}"
+  },
+  {
+   "name": "burst: validate valid 18",
+   "status": 200,
+   "body": "{\"valid\":false,\"user_id\":null,\"email\":null,\"org_id\":null,\"role\":null,\"expires_at\":null}"
+  },
+  {
+   "name": "burst: validate valid 19",
+   "status": 200,
+   "body": "{\"valid\":false,\"user_id\":null,\"email\":null,\"org_id\":null,\"role\":null,\"expires_at\":null}"
+  },
+  {
+   "name": "burst: validate valid 20",
+   "status": 200,
+   "body": "{\"valid\":false,\"user_id\":null,\"email\":null,\"org_id\":null,\"role\":null,\"expires_at\":null}"
+  },
+  {
+   "name": "burst: validate valid 21",
+   "status": 200,
+   "body": "{\"valid\":false,\"user_id\":null,\"email\":null,\"org_id\":null,\"role\":null,\"expires_at\":null}"
+  },
+  {
+   "name": "burst: validate valid 22",
+   "status": 200,
+   "body": "{\"valid\":false,\"user_id\":null,\"email\":null,\"org_id\":null,\"role\":null,\"expires_at\":null}"
+  },
+  {
+   "name": "burst: validate valid 23",
+   "status": 200,
+   "body": "{\"valid\":false,\"user_id\":null,\"email\":null,\"org_id\":null,\"role\":null,\"expires_at\":null}"
+  },
+  {
+   "name": "burst: validate valid 24",
+   "status": 200,
+   "body": "{\"valid\":false,\"user_id\":null,\"email\":null,\"org_id\":null,\"role\":null,\"expires_at\":null}"
+  },
+  {
+   "name": "burst: validate valid 25",
+   "status": 200,
+   "body": "{\"valid\":false,\"user_id\":null,\"email\":null,\"org_id\":null,\"role\":null,\"expires_at\":null}"
+  },
+  {
+   "name": "burst: validate valid 26",
+   "status": 200,
+   "body": "{\"valid\":false,\"user_id\":null,\"email\":null,\"org_id\":null,\"role\":null,\"expires_at\":null}"
+  },
+  {
+   "name": "burst: validate valid 27",
+   "status": 200,
+   "body": "{\"valid\":false,\"user_id\":null,\"email\":null,\"org_id\":null,\"role\":null,\"expires_at\":null}"
+  },
+  {
+   "name": "burst: validate valid 28",
+   "status": 200,
+   "body": "{\"valid\":false,\"user_id\":null,\"email\":null,\"org_id\":null,\"role\":null,\"expires_at\":null}"
+  },
+  {
+   "name": "burst: validate valid 29",
+   "status": 200,
+   "body": "{\"valid\":false,\"user_id\":null,\"email\":null,\"org_id\":null,\"role\":null,\"expires_at\":null}"
+  },
+  {
+   "name": "burst: validate valid 30",
+   "status": 200,
+   "body": "{\"valid\":false,\"user_id\":null,\"email\":null,\"org_id\":null,\"role\":null,\"expires_at\":null}"
+  },
+  {
+   "name": "burst: validate valid 31",
+   "status": 429,
+   "body": "{\"detail\":{\"message\":\"Rate limit exceeded. Please try again later.\"}}"
+  },
+  {
+   "name": "social: github email of a github user with another id",
+   "status": 200,
+   "body": "{\"access_token\":\"\u003cjwt {\"alg\":\"HS256\",\"typ\":\"JWT\"} {\"sub\":\"10000000-0000-4000-8000-000000000006\",\"email\":\"frank@example.com\",\"org_id\":\"b0000000-0000-4000-8000-00000000000b\",\"role\":\"admin\",\"is_superuser\":false,\"type\":\"access\",\"iss\":\"dev-health-ops\",\"aud\":\"dev-health-api\",\"exp\":\"\u003ciat+3600\u003e\",\"iat\":\"\u003ciat\u003e\",\"jti\":\"\u003cjti\u003e\",\"tv\":0,\"username\":\"frank\",\"full_name\":\"Frank\"}\u003e\",\"refresh_token\":\"\u003cjwt {\"alg\":\"HS256\",\"typ\":\"JWT\"} {\"sub\":\"10000000-0000-4000-8000-000000000006\",\"org_id\":\"b0000000-0000-4000-8000-00000000000b\",\"family_id\":\"\u003cfamily_id\u003e\",\"type\":\"refresh\",\"iss\":\"dev-health-ops\",\"aud\":\"dev-health-api\",\"exp\":\"\u003ciat+7 days, to the second or just under\u003e\",\"iat\":\"\u003ciat\u003e\",\"jti\":\"\u003cjti\u003e\"}\u003e\",\"token_type\":\"bearer\",\"expires_in\":3600,\"needs_onboarding\":false,\"user\":{\"id\":\"10000000-0000-4000-8000-000000000006\",\"email\":\"frank@example.com\",\"username\":\"frank\",\"full_name\":\"Frank\",\"org_id\":\"b0000000-0000-4000-8000-00000000000b\",\"role\":\"admin\",\"is_superuser\":false},\"is_new_user\":false}"
+  },
+  {
+   "name": "social: github email of a github user without an id",
+   "status": 200,
+   "body": "{\"access_token\":\"\u003cjwt {\"alg\":\"HS256\",\"typ\":\"JWT\"} {\"sub\":\"10000000-0000-4000-8000-00000000000c\",\"email\":\"olga@example.com\",\"org_id\":\"\",\"role\":\"member\",\"is_superuser\":false,\"type\":\"access\",\"iss\":\"dev-health-ops\",\"aud\":\"dev-health-api\",\"exp\":\"\u003ciat+3600\u003e\",\"iat\":\"\u003ciat\u003e\",\"jti\":\"\u003cjti\u003e\",\"tv\":0,\"username\":\"olga\",\"full_name\":\"Olga\"}\u003e\",\"refresh_token\":\"\u003cjwt {\"alg\":\"HS256\",\"typ\":\"JWT\"} {\"sub\":\"10000000-0000-4000-8000-00000000000c\",\"org_id\":\"\",\"family_id\":\"\u003cfamily_id\u003e\",\"type\":\"refresh\",\"iss\":\"dev-health-ops\",\"aud\":\"dev-health-api\",\"exp\":\"\u003ciat+7 days, to the second or just under\u003e\",\"iat\":\"\u003ciat\u003e\",\"jti\":\"\u003cjti\u003e\"}\u003e\",\"token_type\":\"bearer\",\"expires_in\":3600,\"needs_onboarding\":true,\"user\":{\"id\":\"10000000-0000-4000-8000-00000000000c\",\"email\":\"olga@example.com\",\"username\":\"olga\",\"full_name\":\"Olga\",\"org_id\":null,\"role\":\"member\",\"is_superuser\":false},\"is_new_user\":false}"
+  }
+ ],
+ "rows": [
+  {
+   "name": "users",
+   "rows": "Grace@Example.COMgraceGracelocal\u003cnull\u003etrue true false 0 true true false | alice@example.comaliceAlice Älocal\u003cnull\u003etrue true false 1 true true false | bob@example.combob\u003cnull\u003elocal\u003cnull\u003etrue true true 0 true true false | carol@example.comcarolCarollocal\u003cnull\u003etrue false false 0 false true false | dave@example.comdaveDavelocal\u003cnull\u003efalse true false 0 false true false | erin@example.comerinErinlocal\u003cnull\u003etrue true false 0 false true true | frank@example.comfrankFrankgithub101true true false 0 true true true | heidi@example.comheidiHeidi\u003cnull\u003e\u003cnull\u003etrue false false 0 true true false | judy@example.comjudyJudylocal\u003cnull\u003efalse true false 0 true true false | karl@example.comkarlKarllocal\u003cnull\u003etrue false false 0 false true false | lena@example.comlenaLenalocal\u003cnull\u003etrue true false 0 true true false | newgh@example.comnewghNew GHgithub555true true false 0 true true true | olga@example.comolgaOlgagithub300true true false 0 true true true | private@example.comprivate-gh\u003cnull\u003egithub888true true false 0 true true true"
+  },
+  {
+   "name": "login_attempts",
+   "rows": "burst10@example.com1 true true false false true | burst11@example.com1 true true false false true | burst12@example.com1 true true false false true | burst13@example.com1 true true false false true | burst14@example.com1 true true false false true | burst15@example.com1 true true false false true | burst16@example.com1 true true false false true | burst17@example.com1 true true false false true | burst18@example.com1 true true false false true | burst19@example.com1 true true false false true | burst1@example.com1 true true false false true | burst20@example.com1 true true false false true | burst2@example.com1 true true false false true | burst3@example.com1 true true false false true | burst4@example.com1 true true false false true | burst5@example.com1 true true false false true | burst6@example.com1 true true false false true | burst7@example.com1 true true false false true | burst8@example.com1 true true false false true | burst9@example.com1 true true false false true | dave@example.com1 true true false false true | erin@example.com1 true true false false true | frank@example.com1 true true false false true | mallory@example.com1 true false false false true | nobody@example.com1 true true false false true | rl10@example.com1 true true false false true | rl11@example.com1 true true false false true | rl12@example.com1 true true false false true | rl13@example.com1 true true false false true | rl14@example.com1 true true false false true | rl15@example.com1 true true false false true | rl16@example.com1 true true false false true | rl17@example.com1 true true false false true | rl18@example.com1 true true false false true | rl19@example.com1 true true false false true | rl1@example.com1 true true false false true | rl20@example.com1 true true false false true | rl2@example.com1 true true false false true | rl3@example.com1 true true false false true | rl4@example.com1 true true false false true | rl5@example.com1 true true false false true | rl6@example.com1 true true false false true | rl7@example.com1 true true false false true | rl8@example.com1 true true false false true | rl9@example.com1 true true false false true | trent@example.com5 true true true true true"
+  },
+  {
+   "name": "refresh_tokens",
+   "rows": "alice@example.comorg-btrue true true true true 3 true truevenue-oracle/1 | alice@example.comorg-atrue false false false false 1 true truevenue-oracle/1 | alice@example.comorg-cfalse false false false false 1 true truevenue-oracle/1 | alice@example.comorg-bfalse false false false false 1 true truevenue-oracle/1 | alice@example.comorg-bfalse false false false false 1 true truevenue-oracle/1 | bob@example.com\u003cnull\u003etrue true true true true 2 true truevenue-oracle/1 | heidi@example.com\u003cnull\u003efalse false false false false 1 true truevenue-oracle/1 | alice@example.comorg-bfalse false false false false 1 true truevenue-oracle/1 | judy@example.comorg-atrue false false false false 1 true truevenue-oracle/1 | alice@example.comorg-btrue true true true true 2 true truevenue-oracle/1 | frank@example.comorg-btrue true true true true 2 true truevenue-oracle/1 | alice@example.comorg-afalse false false false false 1 true truevenue-oracle/1 | lena@example.comorg-cfalse false false false false 1 true truevenue-oracle/1 | alice@example.comorg-btrue true true true true 3 true truevenue-oracle/1 | alice@example.comorg-btrue true true true true 2 true truevenue-oracle/1 | alice@example.comorg-bfalse false false false false 1 true truevenue-oracle/1 | alice@example.comorg-btrue true true true true 3 true truevenue-oracle/1 | alice@example.comorg-bfalse false false false false 2 true truevenue-oracle/1 | frank@example.comorg-bfalse false false false false 2 true truevenue-oracle/1 | bob@example.com\u003cnull\u003etrue false false false false 2 true truevenue-oracle/1 | alice@example.comorg-btrue true true true true 3 true truevenue-oracle/1 | alice@example.comorg-btrue false false false false 2 true truevenue-oracle/1 | alice@example.comorg-btrue false false false false 3 true truevenue-oracle/1 | alice@example.comorg-btrue false false false false 3 true truevenue-oracle/1 | Grace@Example.COMorg-dfalse false false false false 1 true truevenue-oracle/1 | frank@example.comorg-bfalse false false false false 1 true truevenue-oracle/1"
+  },
+  {
+   "name": "audit_logs",
+   "rows": "org-balice@example.comloginsessionalice@example.comUser logged in{}{\"ip_address\": \"203.0.113.7\", \"user_agent\": \"venue-oracle/1\"}success\u003cnull\u003e | org-aalice@example.comloginsessionalice@example.comUser logged in{}{\"ip_address\": \"203.0.113.7\", \"user_agent\": \"venue-oracle/1\"}success\u003cnull\u003e | org-calice@example.comloginsessionalice@example.comUser logged in{}{\"ip_address\": \"203.0.113.7\", \"user_agent\": \"venue-oracle/1\"}success\u003cnull\u003e | org-dalice@example.comlogin_failedsessionalice@example.comLogin failed: not a member of the selected organization{\"email\": \"alice@example.com\", \"requested_org_id\": \"d0000000-0000-4000-8000-00000000000d\"}{\"ip_address\": \"203.0.113.7\", \"user_agent\": \"venue-oracle/1\"}failureUser is not a member of the selected organization | org-balice@example.comloginsessionalice@example.comUser logged in{}{\"ip_address\": \"203.0.113.7\", \"user_agent\": \"venue-oracle/1\"}success\u003cnull\u003e | org-balice@example.comloginsessionalice@example.comUser logged in{}{\"ip_address\": \"203.0.113.7\", \"user_agent\": \"venue-oracle/1\"}success\u003cnull\u003e | org-acarol@example.comlogin_failedsessioncarol@example.comLogin blocked: email not verified{\"email\": \"carol@example.com\"}{\"ip_address\": \"203.0.113.7\", \"user_agent\": \"venue-oracle/1\"}failureEmail not verified | org-adave@example.comlogin_failedsessiondave@example.comLogin failed: account is disabled{\"email\": \"dave@example.com\"}{\"ip_address\": \"203.0.113.7\", \"user_agent\": \"venue-oracle/1\"}failureAccount is disabled | org-aerin@example.comlogin_failedsessionerin@example.comLogin failed: password login unavailable{\"email\": \"erin@example.com\"}{\"ip_address\": \"203.0.113.7\", \"user_agent\": \"venue-oracle/1\"}failurePassword login not available for this account | org-bfrank@example.comlogin_failedsessionfrank@example.comLogin failed: password login unavailable{\"email\": \"frank@example.com\"}{\"ip_address\": \"203.0.113.7\", \"user_agent\": \"venue-oracle/1\"}failurePassword login not available for this account | org-aalice@example.comlogin_failedsessionalice@example.comLogin failed: invalid credentials{\"email\": \"alice@example.com\"}{\"ip_address\": \"203.0.113.7\", \"user_agent\": \"venue-oracle/1\"}failureInvalid credentials | org-balice@example.comloginsessionalice@example.comUser logged in{}{\"ip_address\": \"203.0.113.7\", \"user_agent\": \"venue-oracle/1\"}success\u003cnull\u003e | org-aalice@example.comlogin_failedsessionalice@example.comLogin failed: invalid credentials{\"email\": \"alice@example.com\"}{\"ip_address\": \"203.0.113.7\", \"user_agent\": \"venue-oracle/1\"}failureInvalid credentials | org-ajudy@example.comloginsessionjudy@example.comUser logged in{}{\"ip_address\": \"203.0.113.7\", \"user_agent\": \"venue-oracle/1\"}success\u003cnull\u003e | org-balice@example.comloginsessionalice@example.comUser switched active organization{}{\"ip_address\": \"203.0.113.7\", \"user_agent\": \"venue-oracle/1\"}success\u003cnull\u003e | org-aalice@example.comlogoutsessionalice@example.comUser logged out{}{\"ip_address\": \"203.0.113.7\", \"user_agent\": \"venue-oracle/1\"}success\u003cnull\u003e | org-aalice@example.comlogin_failedsessionalice@example.comRefresh token validation failed{}{\"ip_address\": \"203.0.113.7\", \"user_agent\": \"venue-oracle/1\"}failureInvalid or expired refresh token | org-aalice@example.comlogin_failedsessionalice@example.comRefresh token validation failed{}{\"ip_address\": \"203.0.113.7\", \"user_agent\": \"venue-oracle/1\"}failureInvalid or expired refresh token | org-dkarl@example.comlogin_failedsessionkarl@example.comLogin blocked: email not verified{\"email\": \"karl@example.com\"}{\"ip_address\": \"203.0.113.7\", \"user_agent\": \"venue-oracle/1\"}failureEmail not verified | org-clena@example.comloginsessionlena@example.comUser logged in{}{\"ip_address\": \"203.0.113.7\", \"user_agent\": \"venue-oracle/1\"}success\u003cnull\u003e | org-balice@example.comloginsessionalice@example.comUser logged in{}{\"ip_address\": \"203.0.113.7\", \"user_agent\": \"venue-oracle/1\"}success\u003cnull\u003e | org-balice@example.comloginsessionalice@example.comUser logged in{}{\"ip_address\": \"203.0.113.7\", \"user_agent\": \"venue-oracle/1\"}success\u003cnull\u003e | org-balice@example.comloginsessionalice@example.comUser logged in{}{\"ip_address\": \"203.0.113.7\", \"user_agent\": \"venue-oracle/1\"}success\u003cnull\u003e | org-balice@example.comloginsessionalice@example.comAccess token refreshed{}{\"ip_address\": \"203.0.113.7\", \"user_agent\": \"venue-oracle/1\"}success\u003cnull\u003e | org-balice@example.comloginsessionalice@example.comAccess token refreshed{}{\"ip_address\": \"203.0.113.7\", \"user_agent\": \"venue-oracle/1\"}success\u003cnull\u003e | org-bfrank@example.comloginsessionfrank@example.comAccess token refreshed{}{\"ip_address\": \"203.0.113.7\", \"user_agent\": \"venue-oracle/1\"}success\u003cnull\u003e | org-balice@example.comloginsessionalice@example.comAccess token refreshed{}{\"ip_address\": \"203.0.113.7\", \"user_agent\": \"venue-oracle/1\"}success\u003cnull\u003e | org-balice@example.comloginsessionalice@example.comAccess token refreshed{}{\"ip_address\": \"203.0.113.7\", \"user_agent\": \"venue-oracle/1\"}success\u003cnull\u003e | org-balice@example.comloginsessionalice@example.comAccess token refreshed{}{\"ip_address\": \"203.0.113.7\", \"user_agent\": \"venue-oracle/1\"}success\u003cnull\u003e | org-balice@example.comloginsessionalice@example.comAccess token refreshed{}{\"ip_address\": \"203.0.113.7\", \"user_agent\": \"venue-oracle/1\"}success\u003cnull\u003e | org-a\u003cnull\u003elogin_failedsession10000000-0000-4000-8000-0000000000ffToken refresh failed: user not found{}{\"ip_address\": \"203.0.113.7\", \"user_agent\": \"venue-oracle/1\"}failureUser not found | org-ajudy@example.comlogin_failedsessionjudy@example.comToken refresh failed: user deactivated{}{\"ip_address\": \"203.0.113.7\", \"user_agent\": \"venue-oracle/1\"}failureAccount is disabled | org-aalice@example.comlogoutsessionalice@example.comUser logged out{}{\"ip_address\": \"203.0.113.7\", \"user_agent\": \"venue-oracle/1\"}success\u003cnull\u003e | org-dGrace@Example.COMlogin_failedsessionGrace@Example.COMLogin failed: invalid credentials{\"email\": \"grace@example.com\"}{\"ip_address\": \"203.0.113.7\", \"user_agent\": \"venue-oracle/1\"}failureInvalid credentials | org-dGrace@Example.COMlogin_failedsessionGrace@Example.COMLogin failed: invalid credentials{\"email\": \"grace@example.com\"}{\"ip_address\": \"203.0.113.7\", \"user_agent\": \"venue-oracle/1\"}failureInvalid credentials | org-dGrace@Example.COMlogin_failedsessionGrace@Example.COMLogin failed: invalid credentials{\"email\": \"grace@example.com\"}{\"ip_address\": \"203.0.113.7\", \"user_agent\": \"venue-oracle/1\"}failureInvalid credentials | org-dGrace@Example.COMlogin_failedsessionGrace@Example.COMLogin failed: invalid credentials{\"email\": \"grace@example.com\"}{\"ip_address\": \"203.0.113.7\", \"user_agent\": \"venue-oracle/1\"}failureInvalid credentials | org-dGrace@Example.COMlogin_failedsessionGrace@Example.COMLogin failed: invalid credentials{\"email\": \"grace@example.com\"}{\"ip_address\": \"203.0.113.7\", \"user_agent\": \"venue-oracle/1\"}failureInvalid credentials | org-dGrace@Example.COMlogin_failedsessiongrace@example.comLogin failed: account locked{\"email\": \"grace@example.com\"}{\"ip_address\": \"203.0.113.7\", \"user_agent\": \"venue-oracle/1\"}failureAccount temporarily locked due to failed login attempts | org-dGrace@Example.COMlogin_failedsessiongrace@example.comLogin failed: account locked{\"email\": \"grace@example.com\"}{\"ip_address\": \"203.0.113.7\", \"user_agent\": \"venue-oracle/1\"}failureAccount temporarily locked due to failed login attempts | org-dGrace@Example.COMloginsessionGrace@Example.COMUser logged in{}{\"ip_address\": \"203.0.113.7\", \"user_agent\": \"venue-oracle/1\"}success\u003cnull\u003e"
+  }
+ ]
+}

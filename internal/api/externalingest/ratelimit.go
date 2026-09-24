@@ -3,12 +3,11 @@ package externalingest
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"net"
 	"net/http"
-	"os"
-	"strings"
 	"sync"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/api/ratelimit"
 )
 
 // keyedBucket is a per-key token bucket, the same algorithm as
@@ -79,42 +78,9 @@ func (b *keyedBucket) reserve(key string, consume bool) bool {
 	return true
 }
 
-// forwardedIP mirrors rate_limit.py's get_forwarded_ip: the TCP peer,
-// unless it is a configured trusted proxy AND the request carries
-// X-Forwarded-For, in which case the first hop of that header wins.
-// TRUSTED_PROXIES is read fresh (not cached) to match os.getenv's own
-// per-call behavior in the Python original.
-func forwardedIP(r *http.Request) string {
-	peer := "unknown"
-	if r.RemoteAddr != "" {
-		if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
-			peer = host
-		} else {
-			peer = r.RemoteAddr
-		}
-	}
-	forwarded := r.Header.Get("X-Forwarded-For")
-	if forwarded == "" {
-		return peer
-	}
-	trusted := trustedProxies()
-	if !trusted[peer] {
-		return peer
-	}
-	first := strings.SplitN(forwarded, ",", 2)[0]
-	return strings.TrimSpace(first)
-}
-
-func trustedProxies() map[string]bool {
-	raw := os.Getenv("TRUSTED_PROXIES")
-	set := make(map[string]bool)
-	for _, part := range strings.Split(raw, ",") {
-		if trimmed := strings.TrimSpace(part); trimmed != "" {
-			set[trimmed] = true
-		}
-	}
-	return set
-}
+// forwardedIP is rate_limit.py's get_forwarded_ip, the api's one copy
+// (ratelimit.ForwardedIP).
+func forwardedIP(r *http.Request) string { return ratelimit.ForwardedIP(r) }
 
 // routeLimiters is one keyedBucket per rate_limit.py @limiter.limit
 // decorator this package ports: each route gets its OWN counter (slowapi

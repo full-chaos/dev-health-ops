@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"net/http/httptest"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -347,9 +348,54 @@ func TestVenueOracleBillingWebhook(t *testing.T) {
 		names = append(names, name)
 	}
 	sort.Strings(names)
+	// Named divergence: Go keys a trial_expiring intent by the Stripe event
+	// id, so a redelivery on another day reuses it; Python keys it by the
+	// attributes' hash. Every Go trial key must end in its event id (or its
+	// sha256 when the id holds a character the job outbox refuses); the key
+	// is then blanked on both planes and the rows compared in sorted order.
+	trialKey := regexp.MustCompile(`billing:trial_expiring:([0-9a-f-]{36}):[^\s"¦]+`)
+	blankTrialKeys := func(rows string) string {
+		lines := strings.Split(trialKey.ReplaceAllString(rows, "billing:trial_expiring:$1:<trial key>"), "\n")
+		sort.Strings(lines)
+		return strings.Join(lines, "\n")
+	}
+	goTrialKeys := trialKey.FindAllString(tables["billing_notifications"](venue.AdminURI(t, venue.GoDB)), -1)
+	var trialEventIDs []string
+	for _, request := range requests {
+		if request.Body == nil {
+			continue
+		}
+		raw, _ := base64.StdEncoding.DecodeString(*request.Body)
+		var sent struct{ ID, Type string }
+		if json.Unmarshal(raw, &sent) == nil && sent.Type == "customer.subscription.trial_will_end" {
+			trialEventIDs = append(trialEventIDs, sent.ID)
+		}
+	}
+	eventSuffixes := map[string]bool{}
+	for _, id := range trialEventIDs {
+		if regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]*$`).MatchString(id) {
+			eventSuffixes[id] = true
+		} else {
+			digest := sha256.Sum256([]byte(id))
+			eventSuffixes[hex.EncodeToString(digest[:])] = true
+		}
+	}
+	trialKeysByEvent := len(goTrialKeys) > 0
+	for _, key := range goTrialKeys {
+		if !eventSuffixes[key[strings.LastIndex(key, ":")+1:]] {
+			trialKeysByEvent = false
+		}
+	}
+	receipt += fmt.Sprintf("trial_expiring keys by event id (go, %d): %s\n", len(goTrialKeys), venueoracle.Mark(trialKeysByEvent))
+	if !trialKeysByEvent {
+		t.Errorf("go trial_expiring keys are not keyed by the Stripe event id: %v", goTrialKeys)
+	}
 	for _, name := range names {
 		pyRows := normalize(tables[name](venue.AdminURI(t, venue.SourceDB)))
 		goRows := normalize(tables[name](venue.AdminURI(t, venue.GoDB)))
+		if name == "billing_notifications" || name == "worker_job_outbox" {
+			pyRows, goRows = blankTrialKeys(pyRows), blankTrialKeys(goRows)
+		}
 		same := pyRows == goRows && pyRows != ""
 		receipt += fmt.Sprintf("%s rows after the events: %s\n", name, venueoracle.Mark(same))
 		if !same {

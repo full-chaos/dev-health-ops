@@ -41,9 +41,31 @@ func TestAuthFailureNamesNeitherPasswordNorLoginName(t *testing.T) {
 		t.Fatalf("the container login name %q is too short to prove anything: a short name matches unrelated text", user)
 	}
 	const wrongPassword = "not-the-password-8f31"
-	parsed.User = url.UserPassword(user, wrongPassword)
-	dsn := parsed.String()
+	// Every DSN form that puts the login where the driver reads it: the userinfo,
+	// the query ("username=", which the driver prefers over the userinfo), and both
+	// at once (the query one is the effective login; the userinfo one is decoy).
+	base := *parsed
+	forms := map[string]string{}
+	{
+		dsn := base
+		dsn.User = url.UserPassword(user, wrongPassword)
+		forms["userinfo"] = dsn.String()
+		query := base
+		query.User = nil
+		query.RawQuery = url.Values{"username": {user}, "password": {wrongPassword}}.Encode()
+		forms["query username"] = query.String()
+		both := base
+		both.User = url.UserPassword("decoy-login-unused", wrongPassword)
+		both.RawQuery = url.Values{"username": {user}}.Encode()
+		forms["query overrides userinfo"] = both.String()
+	}
+	for name, dsn := range forms {
+		t.Run(name, func(t *testing.T) { checkAuthFailure(t, ctx, dsn, user, wrongPassword) })
+	}
+}
 
+func checkAuthFailure(t *testing.T, ctx context.Context, dsn, user, wrongPassword string) {
+	t.Helper()
 	// The vector exists: the raw driver error carries the login name. Without
 	// this the assertions below would pass on a server that never says it.
 	options, err := clickhouse.ParseDSN(dsn)

@@ -37,6 +37,17 @@ func TestCredentialComponents_LoginName(t *testing.T) {
 		"keyword quoted":          {"host=h user = 'bob l\\'ogin' password=pw-k", []string{"bob l'ogin", "pw-k"}, nil},
 		"keyword first":           {"user=first-login host=h", []string{"first-login"}, nil},
 		"not another parameter":   {"host=h superuser=nope db_user=nope2 password=pw-k", []string{"pw-k"}, []string{"nope", "nope2"}},
+		// The effective login is not always the userinfo or the first keyword:
+		// clickhouse-go reads "username=" from the query, pgx lets a query "user"
+		// override the userinfo and keeps the LAST duplicate keyword.
+		"query username":             {"clickhouse://host:9000/db?username=query-login&password=pw-q", []string{"query-login", "pw-q"}, nil},
+		"query user overrides":       {"postgres://info-login:pw@host/db?user=query-login", []string{"info-login", "query-login"}, nil},
+		"query key case":             {"clickhouse://host/db?USERNAME=upper-login", []string{"upper-login"}, nil},
+		"query repeated":             {"postgres://host/db?user=first-login&user=last-login", []string{"first-login", "last-login"}, nil},
+		"query encoded":              {"postgres://host/db?user=us%40er", []string{"us@er"}, nil},
+		"keyword duplicate user":     {"host=h user=first-login user=last-login password=pw", []string{"first-login", "last-login", "pw"}, nil},
+		"keyword username":           {"host=h username=alt-login", []string{"alt-login"}, nil},
+		"keyword duplicate password": {"host=h password=pw-one password=pw-two", []string{"pw-one", "pw-two"}, nil},
 	} {
 		got := CredentialComponents(tc.dsn)
 		for _, want := range tc.want {

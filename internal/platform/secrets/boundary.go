@@ -17,10 +17,12 @@ const RedactedMarker = "[REDACTED]"
 // backslashes inside the quotes).
 var keywordPasswordPattern = regexp.MustCompile(`(?i)\bpassword\s*=\s*('(?:\\.|[^'\\])*'|[^'\s]+)`)
 
-// keywordUserPattern matches the same conninfo string's user parameter, the
-// value quoted or bare exactly as for the password. The word boundary keeps it
-// from matching inside another parameter's name (a "superuser=" or "db_user=").
-var keywordUserPattern = regexp.MustCompile(`(?i)(?:^|\s)user\s*=\s*('(?:\\.|[^'\\])*'|[^'\s]+)`)
+// keywordUserPattern matches every user (or username) parameter of a
+// conninfo string, the value quoted or bare exactly as for the password. The
+// boundary keeps it from matching inside another parameter's name ("superuser="
+// or "db_user="). Every occurrence is used, not the first: pgx keeps the last
+// duplicate, so the effective login may be any of them.
+var keywordUserPattern = regexp.MustCompile(`(?i)(?:^|\s)user(?:name)?\s*=\s*('(?:\\.|[^'\\])*'|[^'\s]+)`)
 
 // CredentialComponents returns every substring of dsn that is, on its
 // own, as sensitive as dsn itself: dsn's own bytes, and, separately, its
@@ -42,24 +44,32 @@ func CredentialComponents(dsn string) []string {
 		return nil
 	}
 	out := []string{dsn}
-	if u, err := url.Parse(dsn); err == nil && u.User != nil {
-		if pw, ok := u.User.Password(); ok && pw != "" {
-			out = append(out, pw)
+	if u, err := url.Parse(dsn); err == nil {
+		if u.User != nil {
+			if pw, ok := u.User.Password(); ok && pw != "" {
+				out = append(out, pw)
+			}
+			if name := u.User.Username(); name != "" {
+				out = append(out, name)
+			}
 		}
-		if name := u.User.Username(); name != "" {
-			out = append(out, name)
+		// The drivers also take the login from the query (clickhouse-go
+		// "username=", pgx "user="), where it overrides the userinfo.
+		for key, values := range u.Query() {
+			if strings.EqualFold(key, "user") || strings.EqualFold(key, "username") {
+				for _, value := range values {
+					if value != "" {
+						out = append(out, value)
+					}
+				}
+			}
 		}
 	}
-	for _, pattern := range []*regexp.Regexp{keywordPasswordPattern, keywordUserPattern} {
-		if m := pattern.FindStringSubmatch(dsn); m != nil {
-			value := m[1]
-			if len(value) >= 2 && strings.HasPrefix(value, "'") && strings.HasSuffix(value, "'") {
-				value = strings.NewReplacer(`\'`, `'`, `\\`, `\`).Replace(value[1 : len(value)-1])
-			}
-			if value != "" {
-				out = append(out, value)
-			}
-		}
+	for _, m := range keywordPasswordPattern.FindAllStringSubmatch(dsn, -1) {
+		out = appendKeywordValue(out, m[1])
+	}
+	for _, m := range keywordUserPattern.FindAllStringSubmatch(dsn, -1) {
+		out = appendKeywordValue(out, m[1])
 	}
 	return out
 }
@@ -129,4 +139,16 @@ func WithRedactedCause(sentinel error, dsn string, cause error) error {
 		return sentinel
 	}
 	return redactedCauseError{sentinel: sentinel, cause: RedactValues(cause.Error(), CredentialComponents(dsn)...)}
+}
+
+// appendKeywordValue adds a conninfo value, unquoted (libpq's quoting:
+// backslash-escaped quotes and backslashes inside single quotes).
+func appendKeywordValue(out []string, value string) []string {
+	if len(value) >= 2 && strings.HasPrefix(value, "'") && strings.HasSuffix(value, "'") {
+		value = strings.NewReplacer(`\'`, `'`, `\\`, `\`).Replace(value[1 : len(value)-1])
+	}
+	if value == "" {
+		return out
+	}
+	return append(out, value)
 }

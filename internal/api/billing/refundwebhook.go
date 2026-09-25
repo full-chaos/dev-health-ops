@@ -172,8 +172,25 @@ func (h handlers) upsertStripeRefund(ctx context.Context, tx pgx.Tx, event pyjso
 	if org == nil && found {
 		org = &stored.org
 	}
+	// An event with no org in its metadata (a refund made in Stripe's
+	// dashboard) still names the payment: the invoice paid by that payment
+	// intent gives the org and the link.
+	var intentInvoice *uuid.UUID
 	if org == nil {
-		return nil
+		intent := ""
+		if ref := refundRef(event, "payment_intent", nil); ref != nil {
+			intent = *ref
+		}
+		invoices, err := h.invoicesOfPayment(ctx, tx, intent)
+		if err != nil {
+			return err
+		}
+		if len(invoices) != 1 {
+			h.logger.WarnContext(ctx, "Refund webhook event names no organization and no single invoice; not recorded",
+				"stripe_refund_id", stripeRefundID, "payment_intent", intent, "invoices_found", len(invoices))
+			return nil
+		}
+		org, intentInvoice = &invoices[0].org, &invoices[0].id
 	}
 
 	stripeCharge := chargeID
@@ -199,6 +216,9 @@ func (h handlers) upsertStripeRefund(ctx context.Context, tx pgx.Tx, event pyjso
 			return nil
 		}
 		invoice := metaInvoice
+		if invoice == nil {
+			invoice = intentInvoice
+		}
 		if invoice != nil {
 			if exists, err := rowExists(ctx, tx, `SELECT EXISTS (SELECT 1 FROM invoices WHERE id = $1)`, *invoice); err != nil {
 				return err
@@ -262,11 +282,14 @@ func (h handlers) upsertStripeRefund(ctx context.Context, tx pgx.Tx, event pyjso
 	if newCurrency == "" {
 		newCurrency = "usd"
 	}
+	// A settled refund is never moved back by an event that says it is not
+	// settled (pending, requires_action): Stripe orders no events.
+	stale := terminalRefundStatus(stored.status) && status != "" && !terminalRefundStatus(status)
 	newStatus, newFailure := stored.status, stored.failure
-	if status != "" && !(terminalRefundStatus(stored.status) && status == "pending") {
+	if status != "" && !stale {
 		newStatus = status
 	}
-	if !(terminalRefundStatus(stored.status) && status == "pending") {
+	if !stale {
 		if failure, valid := refundText(event, "failure_reason", stored.failure); valid {
 			newFailure = failure
 		}
@@ -280,6 +303,9 @@ func (h handlers) upsertStripeRefund(ctx context.Context, tx pgx.Tx, event pyjso
 		newDescription = &text
 	}
 	newInvoice := stored.invoice
+	if newInvoice == nil && metaInvoice == nil {
+		newInvoice = intentInvoice
+	}
 	if newInvoice == nil && metaInvoice != nil {
 		if exists, err := rowExists(ctx, tx, `SELECT EXISTS (SELECT 1 FROM invoices WHERE id = $1)`, *metaInvoice); err != nil {
 			return err
@@ -300,4 +326,29 @@ func rowExists(ctx context.Context, tx pgx.Tx, sql string, id uuid.UUID) (bool, 
 	var exists bool
 	err := tx.QueryRow(ctx, sql, id).Scan(&exists)
 	return exists, err
+}
+
+// paymentInvoice is an invoice found by its payment intent.
+type paymentInvoice struct{ id, org uuid.UUID }
+
+// invoicesOfPayment is the invoices paid by a payment intent (at most two
+// are read: one is a match, two are ambiguous).
+func (h handlers) invoicesOfPayment(ctx context.Context, tx pgx.Tx, intent string) ([]paymentInvoice, error) {
+	if intent == "" {
+		return nil, nil
+	}
+	rows, err := tx.Query(ctx, `SELECT id, org_id FROM invoices WHERE payment_intent_id = $1 ORDER BY created_at LIMIT 2`, intent)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []paymentInvoice
+	for rows.Next() {
+		var invoice paymentInvoice
+		if err := rows.Scan(&invoice.id, &invoice.org); err != nil {
+			return nil, err
+		}
+		out = append(out, invoice)
+	}
+	return out, rows.Err()
 }

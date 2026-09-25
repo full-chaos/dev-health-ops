@@ -456,8 +456,9 @@ func (h handlers) completeRefund(ctx context.Context, tx pgx.Tx, pending pending
 		return reply{}, err
 	}
 	if _, err := tx.Exec(ctx, `UPDATE refunds SET stripe_refund_id = $2, stripe_charge_id = $3, stripe_payment_intent_id = $4,
-		status = CASE WHEN status IN ('succeeded', 'failed', 'canceled') AND $5 = 'pending' THEN status ELSE $5 END,
-		failure_reason = $6, metadata = $7::json, updated_at = $8 WHERE id = $1`,
+		status = CASE WHEN status IN ('succeeded', 'failed', 'canceled') AND $5 NOT IN ('succeeded', 'failed', 'canceled') THEN status ELSE $5 END,
+		failure_reason = CASE WHEN status IN ('succeeded', 'failed', 'canceled') AND $5 NOT IN ('succeeded', 'failed', 'canceled') THEN failure_reason ELSE $6 END,
+		metadata = $7::json, updated_at = $8 WHERE id = $1`,
 		pending.id, refund.ID, chargeID, refundIntent, refundStatus, failure, metadataText, h.nowUTC()); err != nil {
 		return reply{}, err
 	}

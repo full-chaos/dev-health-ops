@@ -128,14 +128,19 @@ func TestRefundWebhookWriteFirstAndOrder(t *testing.T) {
 	orgA, orgB := seed.orgA.String(), seed.orgB.String()
 	const invAdopt, invRace, invOrder, invRow = "bbbbbbbb-0000-4000-8000-000000000001", "bbbbbbbb-0000-4000-8000-000000000002",
 		"bbbbbbbb-0000-4000-8000-000000000003", "bbbbbbbb-0000-4000-8000-000000000004"
+	const invRace2, invPI = "bbbbbbbb-0000-4000-8000-000000000005", "bbbbbbbb-0000-4000-8000-000000000006"
 	const waitingA, waitingB = "cccccccc-0000-4000-8000-000000000001", "cccccccc-0000-4000-8000-000000000002"
 	exec(`INSERT INTO invoices (id, org_id, stripe_invoice_id, stripe_customer_id, status, amount_due, amount_paid, currency,
 		payment_intent_id, metadata, created_at, updated_at) VALUES
 		($1, $5, 'in_adopt', 'cus_A', 'paid', 1000, 1000, 'usd', 'pi_adopt', '{}', now(), now()),
 		($2, $5, 'in_race_wf', 'cus_A', 'paid', 800, 800, 'usd', 'pi_race', '{}', now(), now()),
 		($3, $5, 'in_order', 'cus_A', 'paid', 600, 600, 'usd', 'pi_order', '{}', now(), now()),
-		($4, $5, 'in_rowless', 'cus_A', 'paid', 400, 400, 'usd', 'pi_rowless', '{}', now(), now())`,
-		invAdopt, invRace, invOrder, invRow, orgA)
+		($4, $5, 'in_rowless', 'cus_A', 'paid', 400, 400, 'usd', 'pi_rowless', '{}', now(), now()),
+		($6, $5, 'in_race2', 'cus_A', 'paid', 900, 900, 'usd', 'pi_race2', '{}', now(), now()),
+		($7, $5, 'in_pi', 'cus_A', 'paid', 700, 700, 'usd', 'pi_of_dashboard', '{}', now(), now()),
+		(gen_random_uuid(), $5, 'in_twice_1', 'cus_A', 'paid', 100, 100, 'usd', 'pi_twice', '{}', now(), now()),
+		(gen_random_uuid(), $5, 'in_twice_2', 'cus_A', 'paid', 100, 100, 'usd', 'pi_twice', '{}', now(), now())`,
+		invAdopt, invRace, invOrder, invRow, orgA, invRace2, invPI)
 	exec(`INSERT INTO refunds (id, org_id, invoice_id, stripe_refund_id, stripe_charge_id, amount, currency, status, metadata, created_at, updated_at) VALUES
 		($1, $3, $4, NULL, NULL, 300, 'usd', 'pending', '{}', now(), now()),
 		($2, $5, NULL, NULL, NULL, 200, 'usd', 'pending', '{}', now(), now())`,
@@ -196,12 +201,55 @@ func TestRefundWebhookWriteFirstAndOrder(t *testing.T) {
 	expect("race: one row for the invoice, settled, holding the Stripe id",
 		row(`SELECT count(*)::text || ' ' || min(status) || ' ' || (min(stripe_refund_id) LIKE 're_%')::text FROM refunds WHERE invoice_id = '`+invRace+`'`), "1 succeeded true")
 
+	// The same race with a refund Stripe reports as failed: the route's
+	// "pending" answer keeps neither the status nor the failure reason away.
+	hookMu.Lock()
+	hook = func(rowID, stripeID string) {
+		deliver("race: the failure beats the completion", stripeID, "failed", func(object map[string]any) {
+			object["metadata"] = map[string]any{"org_id": orgA, "invoice_id": invRace2, "refund_id": rowID}
+			object["failure_reason"] = "lost_or_stolen_card"
+		})
+	}
+	hookMu.Unlock()
+	response = venueoracle.Do(t, base, venueoracle.Request{Name: "race: create, then failed", Method: "POST", Path: "/api/v1/billing/refunds",
+		Headers: map[string]string{"Authorization": "Bearer " + venue.Tokens["super"], "Content-Type": "application/json"},
+		Body:    venueoracle.B64(`{"invoice_id":"` + invRace2 + `","amount":900}`)})
+	hookMu.Lock()
+	hook = nil
+	hookMu.Unlock()
+	expect("race failed: the create answered", fmt.Sprint(response.Status), "200")
+	expect("race failed: the row keeps the failure and its reason",
+		row(`SELECT count(*)::text || ' ' || min(status) || ' ' || coalesce(min(failure_reason), '<null>') FROM refunds WHERE invoice_id = '`+invRace2+`'`), "1 failed lost_or_stolen_card")
+
+	// A refund made in Stripe's dashboard has no org in its metadata: the
+	// invoice its payment intent paid gives the org and the link. A payment
+	// intent no invoice holds records nothing.
+	answer = deliver("dashboard: payment intent of an invoice", "re_dashboard", "succeeded", func(object map[string]any) {
+		object["metadata"], object["payment_intent"] = map[string]any{}, "pi_of_dashboard"
+	})
+	expect("dashboard: answered", fmt.Sprint(answer.Status), "200")
+	expect("dashboard: recorded under the invoice's org, linked to it",
+		row(`SELECT org_id::text || ' ' || coalesce(invoice_id::text, '<null>') || ' ' || status FROM refunds WHERE stripe_refund_id = 're_dashboard'`), orgA+" "+invPI+" succeeded")
+	answer = deliver("dashboard: payment intent no invoice holds", "re_stranger", "succeeded", func(object map[string]any) {
+		object["metadata"], object["payment_intent"] = map[string]any{}, "pi_nobody_holds"
+	})
+	expect("dashboard: unknown payment intent answered", fmt.Sprint(answer.Status), "200")
+	expect("dashboard: unknown payment intent recorded nothing", row(`SELECT count(*)::text FROM refunds WHERE stripe_refund_id = 're_stranger'`), "0")
+	answer = deliver("dashboard: payment intent two invoices hold", "re_twice", "succeeded", func(object map[string]any) {
+		object["metadata"], object["payment_intent"] = map[string]any{}, "pi_twice"
+	})
+	expect("dashboard: ambiguous payment intent answered", fmt.Sprint(answer.Status), "200")
+	expect("dashboard: ambiguous payment intent recorded nothing", row(`SELECT count(*)::text FROM refunds WHERE stripe_refund_id = 're_twice'`), "0")
+
 	// 3. Order: a late pending event never moves a settled refund back, and
 	// an earlier pending one is moved on by the settled one.
 	deliver("order: created succeeded", "re_order", "succeeded", metadata(map[string]any{"org_id": orgA, "invoice_id": invOrder}))
 	answer = deliver("order: late pending", "re_order", "pending", metadata(map[string]any{"org_id": orgA, "invoice_id": invOrder}))
 	expect("order: the late pending event answered", fmt.Sprint(answer.Status), "200")
 	expect("order: the refund stays succeeded", row(`SELECT status FROM refunds WHERE stripe_refund_id = 're_order'`), "succeeded")
+	answer = deliver("order: late requires_action", "re_order", "requires_action", metadata(map[string]any{"org_id": orgA, "invoice_id": invOrder}))
+	expect("order: the late requires_action event answered", fmt.Sprint(answer.Status), "200")
+	expect("order: the refund stays succeeded after a late requires_action", row(`SELECT status FROM refunds WHERE stripe_refund_id = 're_order'`), "succeeded")
 	deliver("order: pending first", "re_order2", "pending", metadata(map[string]any{"org_id": orgA, "invoice_id": invOrder}))
 	deliver("order: then succeeded", "re_order2", "succeeded", metadata(map[string]any{"org_id": orgA, "invoice_id": invOrder}))
 	expect("order: pending then succeeded ends succeeded", row(`SELECT status FROM refunds WHERE stripe_refund_id = 're_order2'`), "succeeded")
@@ -213,6 +261,14 @@ func TestRefundWebhookWriteFirstAndOrder(t *testing.T) {
 	})
 	expect("order: a failed refund keeps its status and reason",
 		row(`SELECT status || ' ' || coalesce(failure_reason, '<null>') FROM refunds WHERE stripe_refund_id = 're_order3'`), "failed lost_or_stolen_card")
+	// An event with no status at all still updates the other fields of a
+	// settled refund (Python assigns whatever the event carries).
+	deliver("order: settled refund, event without a status", "re_order3", "failed", func(object map[string]any) {
+		delete(object, "status")
+		object["metadata"], object["failure_reason"] = map[string]any{"org_id": orgA}, "expired_or_canceled_card"
+	})
+	expect("order: an event without a status updates the failure reason and keeps the status",
+		row(`SELECT status || ' ' || coalesce(failure_reason, '<null>') FROM refunds WHERE stripe_refund_id = 're_order3'`), "failed expired_or_canceled_card")
 
 	// 4. Two first deliveries of one refund at once: the pending one is
 	// held inside its insert; the succeeded one arrives during the hold.

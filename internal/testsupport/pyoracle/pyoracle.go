@@ -86,14 +86,20 @@ const (
 	DeployedMinor = 14
 )
 
-// DeployedInterpreterError reports why python is not at least the deployed
-// interpreter, or nil when it is. It runs the interpreter to read its
-// version rather than trusting the path, so a bare "python3" that resolves to
-// a hosted runner's 3.12 is refused by what it IS.
-func DeployedInterpreterError(python string) error {
-	output, err := exec.Command(python, "-c", "import sys; print('%d.%d' % sys.version_info[:2])").Output()
-	if err != nil {
-		return fmt.Errorf("read the interpreter version of %s: %w", python, err)
+// VersionProbeArgs are the arguments that make an interpreter print its
+// "major.minor" version. The caller runs them (exec of the resolved
+// interpreter stays in test files, where every oracle already does it) and
+// hands the output to RequireDeployed.
+var VersionProbeArgs = []string{"-c", "import sys; print('%d.%d' % sys.version_info[:2])"}
+
+// DeployedVersionError reports why an interpreter that answered the version
+// probe with output (or failed with runErr) is not at least the deployed
+// release, or nil when it is. It judges what the interpreter SAID, never its
+// path, so a bare "python3" that resolves to a hosted runner's 3.12 is
+// refused by what it is.
+func DeployedVersionError(python string, output []byte, runErr error) error {
+	if runErr != nil {
+		return fmt.Errorf("read the interpreter version of %s: %w", python, runErr)
 	}
 	version := strings.TrimSpace(string(output))
 	var major, minor int
@@ -105,12 +111,13 @@ func DeployedInterpreterError(python string) error {
 	return nil
 }
 
-// RequireDeployed fails (never skips) the test when python is older than the
-// deployed interpreter. Call it right after Resolve in every oracle whose
-// answer depends on the Python release.
-func RequireDeployed(t *testing.T, python string) {
+// RequireDeployed fails (never skips) the test when the interpreter is older
+// than the deployed release. Call it right after Resolve in every oracle
+// whose answer depends on the Python release, passing the output of
+// exec.Command(python, VersionProbeArgs...).Output().
+func RequireDeployed(t *testing.T, python string, versionOutput []byte, runErr error) {
 	t.Helper()
-	if err := DeployedInterpreterError(python); err != nil {
+	if err := DeployedVersionError(python, versionOutput, runErr); err != nil {
 		t.Fatalf("pyoracle: %v", err)
 	}
 }

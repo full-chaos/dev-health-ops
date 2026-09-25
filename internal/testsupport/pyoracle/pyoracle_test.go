@@ -132,54 +132,35 @@ type fakeExitError struct{ msg string }
 
 func (e *fakeExitError) Error() string { return e.msg }
 
-// fakeInterpreter writes an executable that answers the version probe with
-// output (or exits non-zero when output is empty).
-func fakeInterpreter(t *testing.T, output string) string {
-	t.Helper()
-	path := filepath.Join(t.TempDir(), "python")
-	script := "#!/bin/sh\nexit 1\n"
-	if output != "" {
-		script = "#!/bin/sh\necho '" + output + "'\n"
-	}
-	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	return path
-}
-
-// TestDeployedInterpreterError pins the version gate at its boundary: the
+// TestDeployedVersionError pins the version gate at its boundary: the
 // deployed release and newer pass; the release before it, an older major, an
-// unparsable answer and an interpreter that cannot run are all refused.
-func TestDeployedInterpreterError(t *testing.T) {
+// unparsable answer and a probe that failed to run are all refused.
+func TestDeployedVersionError(t *testing.T) {
 	cases := []struct {
 		name    string
 		output  string
+		runErr  error
 		wantErr bool
 	}{
-		{"deployed release", "3.14", false},
-		{"newer minor", "3.15", false},
-		{"newer major", "4.0", false},
-		{"one minor before", "3.13", true},
-		{"hosted runner release", "3.12", true},
-		{"older major", "2.7", true},
-		{"unparsable", "not-a-version", true},
-		{"cannot run", "", true},
+		{"deployed release", "3.14\n", nil, false},
+		{"newer minor", "3.15\n", nil, false},
+		{"newer major", "4.0\n", nil, false},
+		{"one minor before", "3.13\n", nil, true},
+		{"hosted runner release", "3.12\n", nil, true},
+		{"older major", "2.7\n", nil, true},
+		{"unparsable", "not-a-version\n", nil, true},
+		{"empty answer", "", nil, true},
+		{"probe failed", "3.14\n", os.ErrNotExist, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := DeployedInterpreterError(fakeInterpreter(t, tc.output))
+			err := DeployedVersionError("/x/python", []byte(tc.output), tc.runErr)
 			if (err != nil) != tc.wantErr {
 				t.Fatalf("output %q: err = %v, wantErr %v", tc.output, err, tc.wantErr)
 			}
-			if err != nil && !strings.Contains(err.Error(), "python") {
+			if err != nil && !strings.Contains(err.Error(), "/x/python") {
 				t.Fatalf("error %q does not name the interpreter", err)
 			}
 		})
-	}
-}
-
-func TestDeployedInterpreterErrorMissingBinary(t *testing.T) {
-	if err := DeployedInterpreterError(filepath.Join(t.TempDir(), "no-such-python")); err == nil {
-		t.Fatal("a missing interpreter must be refused")
 	}
 }

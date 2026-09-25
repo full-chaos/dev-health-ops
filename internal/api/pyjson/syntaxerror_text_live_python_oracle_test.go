@@ -98,7 +98,8 @@ func TestSyntaxErrorTextMatchesLivePython(t *testing.T) {
 	_, file, _, _ := runtime.Caller(0)
 	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
 	python := pyoracle.Resolve(t, root)
-	pyoracle.RequireDeployed(t, python)
+	probe, probeErr := exec.Command(python, pyoracle.VersionProbeArgs...).Output()
+	pyoracle.RequireDeployed(t, python, probe, probeErr)
 	corpus := syntaxTextCorpus()
 	encoded := make([]string, len(corpus))
 	for i, body := range corpus {

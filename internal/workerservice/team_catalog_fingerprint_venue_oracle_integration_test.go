@@ -242,6 +242,20 @@ func seedTeamCatalogFingerprintCases(
 		{"github", `{"token": "ghp_abc", "base_url": " https://ghe.example.com/api/v3/ "}`, `{}`, ""},
 		{"github", `{"app_id": 12, "installation_id": 34, "private_key": "-----BEGIN KEY-----"}`, `{}`, ""},
 		{"github", `{"app_id": "12", "installation_id": "34", "private_key": "pem", "token": ""}`, `{"base_url": "https://ghe/"}`, ""},
+		// CHAOS-6737: a float identifier renders as Python's str() does; a
+		// numeric zero is Python-falsy, so it is absent to the shape check
+		// (a PAT beside app_id 0 stays a PAT; an App triple with app_id 0 is
+		// incomplete in both planes: Python's builder returns None and Go's
+		// client build refuses it, so only the stamp is compared here).
+		{"github", `{"app_id": 12.0, "installation_id": 34, "private_key": "-----BEGIN KEY-----"}`, `{}`, ""},
+		{"github", `{"token": "ghp_abc", "app_id": 0}`, `{}`, ""},
+		{"github", `{"app_id": 0, "installation_id": 34, "private_key": "-----BEGIN KEY-----"}`, `{}`, ""},
+		// Named residual divergence (CHAOS-6737 scopes the App identifiers
+		// only): Python str()-coerces a numeric secret for these providers, Go
+		// still refuses every other non-string value.
+		{"github", `{"token": 12}`, `{}`, "a numeric GitHub token (Python keeps it; only the App identifiers are widened)"},
+		{"gitlab", `{"token": 12}`, `{}`, "a numeric GitLab token (Python str()-coerces it; only the App identifiers are widened)"},
+		{"jira", `{"email": "e@example.com", "api_token": 12, "base_url": "https://x.atlassian.net/"}`, `{}`, "a numeric Jira api_token (Python str()-coerces it; only the App identifiers are widened)"},
 		{"gitlab", `{"token": "glpat-x"}`, `{"url": "https://gitlab.example.com", "group_id": 9}`, ""},
 		{"gitlab", `{"private_token": "p", "project_id": 7}`, `{"base_url": "https://gl.example/"}`, "a GitLab private_token without token"},
 		{"jira", `{"email": "e@example.com", "api_token": "t<&>", "base_url": "https://x.atlassian.net/"}`, `{"cloud_id": "c-1"}`, ""},

@@ -15,6 +15,7 @@ import (
 	"math"
 	"math/big"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -30,10 +31,10 @@ const (
 	maxRetries = 5
 	// perPage is list_projects' per_page default.
 	perPage = 100
-	// maxItems is list_projects' max_items without max_projects.
-	maxItems = 1_000_000
-	// timeout is _DEFAULT_TIMEOUT_SECONDS.
-	timeout = 15 * time.Second
+	// maxItemsDefault is list_projects' max_items without max_projects.
+	maxItemsDefault = 1_000_000
+	// DefaultTimeout is _DEFAULT_TIMEOUT_SECONDS.
+	DefaultTimeout = 15 * time.Second
 )
 
 // The core's backoff: _DEFAULT_INITIAL_BACKOFF_SECONDS doubling up to
@@ -46,6 +47,10 @@ type Project struct {
 	ID *big.Int
 	// Name is Repository.name; FullName is Repository.full_name.
 	Name, FullName string
+	// Description and URL are the project's raw description and web_url
+	// (Repository.description, Repository.url): any JSON value, nil when
+	// the key is absent.
+	Description, URL pyjson.Value
 }
 
 // Client lists a GitLab group's projects.
@@ -70,21 +75,65 @@ type Error struct {
 
 func (e *Error) Error() string { return e.Message }
 
-const operation = "project:GET /groups/{id}/projects"
+const (
+	groupOperation    = "project:GET /groups/{id}/projects"
+	projectsOperation = "project:GET /projects"
+)
+
+// ListOptions are list_projects' keyword arguments: Group nil is
+// group_name=None (the /projects listing); Search is sent only when
+// non-empty; Pattern is fnmatch-ed against the lowered full name; Membership
+// asks for the caller's projects; MaxProjects nil is max_projects=None.
+type ListOptions struct {
+	Group       *string
+	Search      string
+	Pattern     string
+	Membership  bool
+	MaxProjects *big.Int
+}
 
 // ListGroupProjects is GitLabCodeClient.list_projects(group_name=group):
 // every page of /groups/{quote(group, safe="")}/projects, the dict items
 // mapped by _map_project and _project_to_repository.
 func (c Client) ListGroupProjects(ctx context.Context, group string) ([]Project, error) {
+	return c.ListProjects(ctx, ListOptions{Group: &group})
+}
+
+// ListProjects is GitLabCodeClient.list_projects: the fetch cap is
+// max_projects (1,000,000 without one, or with a pattern), pages are fetched
+// until the cap's page count, the dict items are cut to it (a Python slice,
+// so a negative cap drops items from the end), then mapped one at a time,
+// filtered by the pattern, until max_projects have been kept.
+func (c Client) ListProjects(ctx context.Context, opts ListOptions) ([]Project, error) {
 	root := strings.TrimRight(c.BaseURL, "/") + "/api/v4"
-	path := "/groups/" + pythonparity.Quote(group, "") + "/projects"
+	path, operation := "/projects", projectsOperation
+	if opts.Group != nil {
+		path, operation = "/groups/"+pythonparity.Quote(*opts.Group, "")+"/projects", groupOperation
+	}
+	var query strings.Builder
+	if opts.Search != "" {
+		query.WriteString("search=" + url.QueryEscape(opts.Search) + "&")
+	}
+	if opts.Membership {
+		query.WriteString("membership=true&")
+	}
+	maxItems := big.NewInt(maxItemsDefault)
+	if opts.MaxProjects != nil && opts.MaxProjects.Sign() != 0 && opts.Pattern == "" {
+		maxItems = opts.MaxProjects
+	}
+	// max_pages = max(1, (max_items + per_page - 1) // per_page); the
+	// divisor is positive, so big.Int's Euclidean quotient is the floor.
+	maxPages := new(big.Int).Div(new(big.Int).Add(maxItems, big.NewInt(perPage-1)), big.NewInt(perPage))
+	if maxPages.Sign() < 1 {
+		maxPages = big.NewInt(1)
+	}
 	var items []pyjson.Value
 	page := big.NewInt(1)
-	for pages := 0; ; pages++ {
-		if pages >= (maxItems+perPage-1)/perPage {
+	for pages := int64(0); ; pages++ {
+		if maxPages.Cmp(big.NewInt(pages)) <= 0 {
 			break
 		}
-		response, body, err := c.request(ctx, root+path, page)
+		response, body, err := c.request(ctx, root+path, operation, query.String(), page)
 		if err != nil {
 			return nil, err
 		}
@@ -106,22 +155,45 @@ func (c Client) ListGroupProjects(ctx context.Context, group string) ([]Project,
 		}
 		page = next
 	}
-	var out []Project
+	var dicts []*pyjson.Object
 	for _, item := range items {
-		object, ok := item.(*pyjson.Object)
-		if !ok {
-			continue
+		if object, ok := item.(*pyjson.Object); ok {
+			dicts = append(dicts, object)
 		}
-		if len(out) >= maxItems {
-			break
-		}
+	}
+	dicts = sliceTo(dicts, maxItems)
+	lowered := pythonparity.Lower(opts.Pattern)
+	var out []Project
+	for _, object := range dicts {
 		project, err := mapProject(object)
 		if err != nil {
 			return nil, err
 		}
+		if opts.Pattern != "" && !pythonparity.FnMatch(pythonparity.Lower(project.FullName), lowered) {
+			continue
+		}
 		out = append(out, project)
+		if opts.MaxProjects != nil && big.NewInt(int64(len(out))).Cmp(opts.MaxProjects) >= 0 {
+			break
+		}
 	}
 	return out, nil
+}
+
+// sliceTo is items[:limit] for a Python int limit: a negative one counts
+// from the end, one past the length keeps everything.
+func sliceTo[T any](items []T, limit *big.Int) []T {
+	length := big.NewInt(int64(len(items)))
+	if limit.Sign() < 0 {
+		limit = new(big.Int).Add(limit, length)
+		if limit.Sign() < 0 {
+			return nil
+		}
+	}
+	if limit.Cmp(length) >= 0 {
+		return items
+	}
+	return items[:limit.Int64()]
 }
 
 // nextPage is _next_page_param: a non-empty X-Next-Page read by int()
@@ -149,16 +221,16 @@ func nextPage(headers http.Header, current *big.Int, count int) (*big.Int, bool)
 // a timeout or refused connection, on 429/500/502/503/504 and on a
 // rate-limit-qualified 403, then classified by _classify_error and
 // _raise_for_status.
-func (c Client) request(ctx context.Context, url string, page *big.Int) (*http.Response, []byte, error) {
+func (c Client) request(ctx context.Context, target, operation, extra string, page *big.Int) (*http.Response, []byte, error) {
 	httpClient := c.HTTP
 	if httpClient == nil {
-		httpClient = &http.Client{Timeout: timeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+		httpClient = &http.Client{Timeout: DefaultTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	}
 	sleep := c.Sleep
 	if sleep == nil {
 		sleep = sleepContext
 	}
-	full := fmt.Sprintf("%s?page=%s&per_page=%d", url, page.String(), perPage)
+	full := fmt.Sprintf("%s?%spage=%s&per_page=%d", target, extra, page.String(), perPage)
 	delay := initialBackoff
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		request, err := http.NewRequestWithContext(ctx, http.MethodGet, full, nil)
@@ -205,7 +277,7 @@ func (c Client) request(ctx context.Context, url string, page *big.Int) (*http.R
 			delay = min(delay*2, maxBackoff)
 			continue
 		}
-		return nil, nil, raiseForStatus(status, response.Header, body, full)
+		return nil, nil, raiseForStatus(status, response.Header, body, full, operation)
 	}
 	return nil, nil, &Error{"APIException", fmt.Sprintf("gitlab request failed on %s: unknown error", operation)}
 }
@@ -241,7 +313,7 @@ func retryAfter(headers http.Header) time.Duration {
 }
 
 // raiseForStatus is _classify_error then _raise_for_status.
-func raiseForStatus(status int, headers http.Header, body []byte, url string) error {
+func raiseForStatus(status int, headers http.Header, body []byte, target, operation string) error {
 	text := responseText(body, headers)
 	switch {
 	case status == 403 && rateLimitedForbidden(headers):
@@ -251,7 +323,7 @@ func raiseForStatus(status int, headers http.Header, body []byte, url string) er
 	case status == 401:
 		return &Error{"AuthenticationException", "gitlab authentication failed on " + operation}
 	case status == 404:
-		return &Error{"NotFoundException", fmt.Sprintf("gitlab resource not found on %s: %s", operation, url)}
+		return &Error{"NotFoundException", fmt.Sprintf("gitlab resource not found on %s: %s", operation, target)}
 	case status == 429:
 		return &Error{"RateLimitException", "gitlab rate limit exceeded on " + operation}
 	case status >= 500:
@@ -362,7 +434,7 @@ func mapProject(object *pyjson.Object) (Project, error) {
 			return Project{}, err
 		}
 	}
-	return Project{ID: id, Name: name, FullName: fullName}, nil
+	return Project{ID: id, Name: name, FullName: fullName, Description: get("description"), URL: get("web_url")}, nil
 }
 
 func sleepContext(ctx context.Context, wait time.Duration) error {

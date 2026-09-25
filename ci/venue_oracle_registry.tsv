@@ -44,6 +44,7 @@ internal/apiservice	TestLegacyIngestTelemetryVenueOracle	run
 internal/apiservice	TestLegacyIngestVenueOracle	run
 internal/apiservice	TestVenueOracleCredentialAdmin	run
 internal/apiservice	TestVenueOracleCredentialConnectionTest	run
+internal/apiservice	TestVenueOracleCredentialRepos	run
 internal/apiservice	TestVenueOracleCustomerPushReads	run
 internal/apiservice	TestVenueOracleCustomerPushValidate	run
 internal/apiservice	TestVenueOracleCustomerPushWrites	run

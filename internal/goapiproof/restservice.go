@@ -137,10 +137,25 @@ func PlansCredentialKind(service RESTService, kind RESTCredentialKind) bool {
 	return false
 }
 
+// adminPersistNothingPOSTs are the only POST operations an admin credential may
+// carry: each was read in the Python handler to persist nothing and call
+// nothing outside the process (the GitHub install-url route only signs a state
+// and builds a URL), so a case is a read in effect, like the external-ingest
+// validate case. Anything else that is not a GET is a write: real use only
+// (R402/R406), never a synthetic corpus case.
+// restIngestPathPrefix is where the external-ingest API lives; the push token
+// authenticates there and nowhere else.
+const restIngestPathPrefix = "/api/v1/external-ingest/"
+
+var adminPersistNothingPOSTs = map[string]bool{
+	"REST:POST:/api/v1/admin/integrations/github/install-url": true,
+}
+
 // validateRESTCredentialKinds refuses an unknown credential kind, a file-fed
 // credential entry outside the dho api (only that service authenticates it), an
-// admin credential on anything but a GET, and a
-// PathLiterals key that is not a {placeholder} of the entry's path.
+// admin credential on anything but a GET (bar the persist-nothing allowlist,
+// judged on the method and path an entry really sends, which must equal its
+// key), and a PathLiterals key that is not a {placeholder} of the entry's path.
 func validateRESTCredentialKinds() error {
 	for operation, spec := range restEndpointSpecs {
 		switch spec.Credential {
@@ -154,11 +169,38 @@ func validateRESTCredentialKinds() error {
 			if spec.PublicNoAuth {
 				return fmt.Errorf("goapiproof: REST corpus entry %q is both PublicNoAuth and a %s-credential entry", operation, spec.Credential)
 			}
-			if spec.Credential != RESTCredentialPushToken && spec.Method != "GET" {
-				return fmt.Errorf("goapiproof: REST corpus entry %q sends the %s credential on a %s request; admin credentials are for read-only GETs (R402/R406)", operation, spec.Credential, spec.Method)
+			if spec.Credential != RESTCredentialPushToken {
+				// The request an admin entry sends is its Method and Path, not
+				// its registry key: the allowlist is judged on the identity those
+				// two make, and the key must equal it, so a key cannot borrow the
+				// allowlisted name for a different route.
+				identity := "REST:" + spec.Method + ":" + spec.Path
+				if operation != identity {
+					return fmt.Errorf("goapiproof: REST corpus entry %q sends the %s credential but its key does not match its method and path (%s)", operation, spec.Credential, identity)
+				}
+				if spec.Method != "GET" && !adminPersistNothingPOSTs[identity] {
+					return fmt.Errorf("goapiproof: REST corpus entry %q sends the %s credential on a %s request; admin credentials are for read-only GETs (R402/R406)", operation, spec.Credential, spec.Method)
+				}
 			}
 		default:
 			return fmt.Errorf("goapiproof: REST corpus entry %q has an unknown credential kind %q", operation, spec.Credential)
+		}
+		// The dho api is where a corpus request can change state, so its
+		// non-read entries are held to one rule whatever credential they name:
+		// the run's own bearers (RESTCredentialRun) are edge tokens that can
+		// belong to an org admin just as an admin kind can, so a persisting
+		// request cannot be smuggled in under them. The only non-GET/HEAD
+		// entries are the external-ingest ones (push token, and only under the
+		// ingest prefix) and the persist-nothing allowlist.
+		if spec.EffectiveService() == RESTServiceDHOAPI && spec.Method != "GET" && spec.Method != "HEAD" {
+			identity := "REST:" + spec.Method + ":" + spec.Path
+			ingest := spec.Credential == RESTCredentialPushToken && strings.HasPrefix(spec.Path, restIngestPathPrefix)
+			if !ingest && !adminPersistNothingPOSTs[identity] {
+				return fmt.Errorf("goapiproof: REST corpus entry %q is a %s on the dho api with the %q credential: only external-ingest entries under %s (push token) and the persist-nothing allowlist may be non-GET (R402/R406)", operation, spec.Method, spec.Credential, restIngestPathPrefix)
+			}
+		}
+		if spec.Credential == RESTCredentialPushToken && !strings.HasPrefix(spec.Path, restIngestPathPrefix) {
+			return fmt.Errorf("goapiproof: REST corpus entry %q sends the push token to %s, outside %s (the only API that authenticates it)", operation, spec.Path, restIngestPathPrefix)
 		}
 		for _, request := range spec.Requests {
 			for name := range request.PathLiterals {

@@ -266,8 +266,8 @@ func startDomainRoleHarness(
 func TestNativeReferenceDiscoveryExecutesEntirelyAsTheDomainRole(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	admin, domain, denials, _ := startDomainRoleHarness(t, ctx, createReferenceDiscoveryTables)
-	seedDiscoveryRoute(t, ctx, admin)
+	admin, domain, denials, _ := startDomainRoleHarness(t, ctx, createReferenceDiscoveryTablesLegacy)
+	seedDiscoveryRouteLegacy(t, ctx, admin)
 
 	executor := &fakeDiscoveryExecutor{summary: map[string]any{"reference_team_keys": []string{"ENG"}}}
 	service, err := NewNativeReferenceDiscoveryService(domain, nil, executor)
@@ -399,8 +399,8 @@ VALUES ('00000000-0000-4000-8000-0000000000da',$1,$2,'github','commits',
 func TestNativeFinalizeSyncRunExecutesEntirelyAsTheDomainRole(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	admin, domain, denials, _ := startDomainRoleHarness(t, ctx, createFinalizeTables)
-	seedFinalizeRoute(t, ctx, admin)
+	admin, domain, denials, _ := startDomainRoleHarness(t, ctx, createFinalizeTablesProbe)
+	seedFinalizeRouteProbe(t, ctx, admin)
 
 	jobRunID := "00000000-0000-4000-8000-0000000000f8"
 	for _, seed := range []struct {
@@ -515,8 +515,8 @@ func TestNativeFinalizeSyncRunExecutesEntirelyAsTheDomainRole(t *testing.T) {
 func TestDomainRoleDenialRecorderActuallyRecords(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	admin, domain, denials, domainRole := startDomainRoleHarness(t, ctx, createReferenceDiscoveryTables)
-	seedDiscoveryRoute(t, ctx, admin)
+	admin, domain, denials, domainRole := startDomainRoleHarness(t, ctx, createReferenceDiscoveryTablesLegacy)
+	seedDiscoveryRouteLegacy(t, ctx, admin)
 
 	if _, err := admin.Exec(ctx,
 		"REVOKE INSERT ON TABLE public.sync_run_reference_discoveries FROM "+domainRole); err != nil {
@@ -584,7 +584,7 @@ func TestDomainRoleDenialRecorderActuallyRecords(t *testing.T) {
 // but it would still be measuring nothing.
 func createBoundaryTables(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
-	createFinalizeTables(t, ctx, pool)
+	createFinalizeTablesProbe(t, ctx, pool)
 	if _, err := pool.Exec(ctx, `
 CREATE TABLE sync_run_reference_discoveries (
  id uuid PRIMARY KEY, sync_run_id uuid NOT NULL UNIQUE, org_id text NOT NULL,
@@ -775,7 +775,7 @@ func createDispatchTables(t *testing.T, ctx context.Context, pool *pgxpool.Pool)
 	t.Helper()
 	// organizations/org_licenses/tier_limits are created by
 	// createReferenceDiscoveryTables above (CHAOS-6286 merged them there).
-	createReferenceDiscoveryTables(t, ctx, pool)
+	createReferenceDiscoveryTablesLegacy(t, ctx, pool)
 	if _, err := pool.Exec(ctx, `
 CREATE TABLE public.worker_job_outbox (
 	id uuid PRIMARY KEY,
@@ -969,5 +969,213 @@ func assertSingleRow(
 	if count != 1 {
 		t.Errorf("%s: rows=%d want 1 -- the service never reached this table, so its privileges were not measured",
 			what, count)
+	}
+}
+
+// The finalize privilege venue keeps its own hand-built relations: the grants under test are
+// applied on top of them (tables first, migration second -- see startDomainRoleHarness), so this
+// probe cannot share the migrated-schema fixture the other finalize tests use (CHAOS-6794).
+func createFinalizeTablesProbe(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+	t.Helper()
+	_, err := pool.Exec(ctx, `
+CREATE TABLE sync_dispatch_transport_routes (
+ kind text PRIMARY KEY, transport text NOT NULL, generation bigint NOT NULL,
+ paused boolean NOT NULL, rollback_transport text NOT NULL
+);
+CREATE TABLE sync_dispatch_outbox (
+ id uuid PRIMARY KEY, sync_run_id uuid NOT NULL, org_id text NOT NULL, kind text NOT NULL,
+ status text NOT NULL, available_at timestamptz NOT NULL, attempts int NOT NULL DEFAULT 0,
+ dispatched_at timestamptz NULL, dispatched_transport text NULL, dispatched_route_generation bigint NULL,
+ transport_job_id text NULL, claim_token text NULL, claim_transport text NULL,
+ claim_route_generation bigint NULL, claim_expires_at timestamptz NULL, last_error text NULL,
+ created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL,
+ UNIQUE (sync_run_id, kind)
+);
+CREATE TABLE sync_runs (
+ id uuid PRIMARY KEY, org_id text NOT NULL, integration_id uuid NOT NULL,
+ status text NOT NULL, total_units int NOT NULL DEFAULT 0, completed_units int NOT NULL DEFAULT 0,
+ failed_units int NOT NULL DEFAULT 0, completed_at timestamptz NULL, result json NULL, error text NULL
+);
+CREATE TABLE sync_run_units (
+ id uuid PRIMARY KEY, org_id text NOT NULL, sync_run_id uuid NOT NULL, provider text NOT NULL,
+ dataset_key text NOT NULL, source_id uuid NOT NULL, status text NOT NULL,
+ since_at timestamptz NULL, before_at timestamptz NULL,
+ cost_class text NOT NULL DEFAULT 'medium', mode text NOT NULL DEFAULT 'incremental',
+ error text NULL, result json NULL, processor_flags json NULL
+);
+CREATE TABLE integrations (
+ id uuid PRIMARY KEY, provider text NOT NULL
+);
+CREATE TABLE sync_configurations (
+ id uuid PRIMARY KEY, org_id text NOT NULL, integration_id uuid NOT NULL, parent_id uuid NULL,
+ sync_options json NOT NULL, created_at timestamptz NOT NULL,
+ last_sync_at timestamptz NULL, last_sync_success boolean NULL, last_sync_error text NULL,
+ last_sync_stats json NULL
+);
+CREATE TABLE backfill_jobs (
+ id uuid PRIMARY KEY, org_id text NOT NULL, celery_task_id text NULL, status text NOT NULL,
+ total_chunks int NOT NULL DEFAULT 0, completed_chunks int NOT NULL DEFAULT 0,
+ failed_chunks int NOT NULL DEFAULT 0, error_message text NULL, completed_at timestamptz NULL
+);
+CREATE TABLE scheduled_jobs (
+ id uuid PRIMARY KEY
+);
+CREATE TABLE job_runs (
+ id uuid PRIMARY KEY, job_id uuid NOT NULL REFERENCES scheduled_jobs(id),
+ status int NOT NULL, completed_at timestamptz NULL, result json NULL, error text NULL
+);
+CREATE TABLE integration_sources (
+ id uuid PRIMARY KEY
+);
+CREATE TABLE sync_compute_checkpoints (
+ id uuid PRIMARY KEY, org_id text NOT NULL, sync_run_id uuid NOT NULL, sync_run_unit_id uuid NOT NULL,
+ source_id uuid NULL REFERENCES integration_sources(id), provider text NOT NULL, dataset_key text NOT NULL,
+ compute_type text NOT NULL,
+ status text NOT NULL, window_start timestamptz NULL, window_end timestamptz NULL,
+ checkpointed_at timestamptz NOT NULL, metadata json NULL,
+ created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL,
+ CONSTRAINT uq_sync_compute_checkpoint_unit_type UNIQUE (sync_run_id, sync_run_unit_id, compute_type)
+);
+CREATE TABLE sync_run_post_dispatches (
+ id uuid PRIMARY KEY, org_id text NOT NULL, sync_run_id uuid NOT NULL, kind text NOT NULL,
+ dispatched_at timestamptz NOT NULL,
+ UNIQUE (sync_run_id, kind)
+);
+CREATE TABLE sync_coverage_projections (
+ org_id text NOT NULL, sync_config_id uuid NOT NULL, invalidated_at timestamptz NULL,
+ updated_at timestamptz NOT NULL DEFAULT '2000-01-01 00:00:00+00',
+ PRIMARY KEY (org_id, sync_config_id)
+)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func seedFinalizeRouteProbe(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+	t.Helper()
+	statements := []string{
+		`INSERT INTO sync_dispatch_transport_routes (kind,transport,generation,paused,rollback_transport)
+		 VALUES ('finalize_sync_run','river',3,false,'celery')`,
+		`INSERT INTO sync_dispatch_outbox
+		    (id,sync_run_id,org_id,kind,status,available_at,dispatched_transport,dispatched_route_generation,created_at,updated_at)
+		 VALUES ('` + finalizeTestOutbox + `','` + finalizeTestRun + `','` + finalizeTestOrg + `',
+		         'finalize_sync_run','dispatched',now(),'river',3,now(),now())`,
+		`INSERT INTO integrations (id, provider) VALUES ('` + finalizeTestIntegration + `','github')`,
+		`INSERT INTO sync_configurations (id,org_id,integration_id,parent_id,sync_options,created_at)
+		 VALUES ('` + finalizeTestSyncConfig + `','` + finalizeTestOrg + `','` + finalizeTestIntegration + `',
+		         NULL,'{}'::json, now())`,
+	}
+	for _, statement := range statements {
+		if _, err := pool.Exec(ctx, statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// The hand-built reference-discovery relations, kept for the two dispatch fixtures and the domain-role
+// privilege venue that build extra hand tables on top of them (CHAOS-6794 and the dispatch slice of
+// CHAOS-6789 convert them); the discovery tests themselves now use the migrated schema.
+func createReferenceDiscoveryTablesLegacy(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+	t.Helper()
+	_, err := pool.Exec(ctx, `
+CREATE TABLE sync_dispatch_transport_routes (
+ kind text PRIMARY KEY, transport text NOT NULL, generation bigint NOT NULL,
+ paused boolean NOT NULL, rollback_transport text NOT NULL
+);
+CREATE TABLE sync_dispatch_outbox (
+ id uuid PRIMARY KEY, sync_run_id uuid NOT NULL, org_id text NOT NULL, kind text NOT NULL,
+ status text NOT NULL, available_at timestamptz NOT NULL, attempts int NOT NULL DEFAULT 0,
+ dispatched_at timestamptz NULL, dispatched_transport text NULL, dispatched_route_generation bigint NULL,
+ transport_job_id text NULL, claim_token text NULL, claim_transport text NULL,
+ claim_route_generation bigint NULL, claim_expires_at timestamptz NULL, last_error text NULL,
+ created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL,
+ UNIQUE (sync_run_id, kind)
+);
+CREATE TABLE sync_runs (
+ id uuid PRIMARY KEY, org_id text NOT NULL, integration_id uuid NOT NULL,
+ status text NOT NULL DEFAULT 'dispatching', total_units int NOT NULL DEFAULT 0,
+ completed_units int NOT NULL DEFAULT 0, failed_units int NOT NULL DEFAULT 0,
+ started_at timestamptz NULL, completed_at timestamptz NULL, result json NULL, error text NULL
+);
+CREATE TABLE sync_run_units (
+ id uuid PRIMARY KEY, org_id text NOT NULL, sync_run_id uuid NOT NULL, provider text NOT NULL,
+ dataset_key text NOT NULL, source_id uuid NOT NULL, status text NOT NULL,
+ cost_class text NOT NULL DEFAULT 'standard',
+ integration_id uuid NOT NULL DEFAULT '00000000-0000-4000-8000-000000000010',
+ since_at timestamptz NULL, before_at timestamptz NULL,
+ available_at timestamptz NULL, error text NULL, result json NULL, lease_owner text NULL, lease_expires_at timestamptz NULL,
+ last_heartbeat_at timestamptz NULL, updated_at timestamptz NOT NULL DEFAULT now(),
+ rate_limit_deferrals int NOT NULL DEFAULT 0, rate_limit_first_seen_at timestamptz NULL,
+ budget_deferrals int NOT NULL DEFAULT 0, budget_first_deferred_at timestamptz NULL,
+ first_blocked_at timestamptz NULL, last_retry_reason text NULL, processor_flags json NULL
+);
+CREATE TABLE integrations (
+ id uuid PRIMARY KEY, org_id text NOT NULL, provider text NOT NULL
+);
+CREATE TABLE integration_datasets (
+ id uuid PRIMARY KEY, integration_id uuid NOT NULL, dataset_key text NOT NULL, is_enabled boolean NOT NULL
+);
+CREATE TABLE feature_flags (
+ id uuid PRIMARY KEY, key text NOT NULL UNIQUE, min_tier text NOT NULL, is_enabled boolean NOT NULL
+);
+CREATE TABLE org_feature_overrides (
+ id uuid PRIMARY KEY, org_id uuid NOT NULL, feature_id uuid NOT NULL,
+ is_enabled boolean NOT NULL, expires_at timestamptz NULL, config json NULL,
+ UNIQUE (org_id, feature_id)
+);
+CREATE TABLE organizations (
+ id uuid PRIMARY KEY, tier text NULL
+);
+CREATE TABLE org_licenses (
+ org_id uuid PRIMARY KEY, tier text NULL, features_override json NULL, limits_override jsonb NULL
+);
+CREATE TABLE tier_limits (
+ tier text NOT NULL, limit_key text NOT NULL, limit_value text NULL, PRIMARY KEY (tier, limit_key)
+);
+CREATE TABLE backfill_jobs (
+ id uuid PRIMARY KEY, org_id text NOT NULL, celery_task_id text NULL, status text NOT NULL,
+ total_chunks int NOT NULL DEFAULT 0, completed_chunks int NOT NULL DEFAULT 0,
+ failed_chunks int NOT NULL DEFAULT 0, error_message text NULL, completed_at timestamptz NULL
+);
+CREATE TABLE scheduled_jobs (
+ id uuid PRIMARY KEY
+);
+CREATE TABLE job_runs (
+ id uuid PRIMARY KEY, job_id uuid NOT NULL REFERENCES scheduled_jobs(id),
+ status int NOT NULL, completed_at timestamptz NULL, result json NULL, error text NULL
+);
+CREATE TABLE sync_run_reference_discoveries (
+ id uuid PRIMARY KEY, sync_run_id uuid NOT NULL UNIQUE, org_id text NOT NULL,
+ status text NOT NULL, attempts int NOT NULL DEFAULT 0, available_at timestamptz NOT NULL,
+ lease_owner text NULL, lease_expires_at timestamptz NULL, last_heartbeat_at timestamptz NULL,
+ completed_at timestamptz NULL, error text NULL, result json NULL,
+ created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now()
+)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func seedDiscoveryRouteLegacy(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+	t.Helper()
+	statements := []string{
+		`INSERT INTO sync_dispatch_transport_routes (kind,transport,generation,paused,rollback_transport)
+		 VALUES ('reference_discovery','river',3,false,'celery')`,
+		`INSERT INTO sync_dispatch_outbox
+		    (id,sync_run_id,org_id,kind,status,available_at,dispatched_transport,dispatched_route_generation,created_at,updated_at)
+		 VALUES ('` + discoveryTestOutbox + `','` + discoveryTestRun + `','` + discoveryTestOrg + `',
+		         'reference_discovery','dispatched',now(),'river',3,now(),now())`,
+		`INSERT INTO sync_runs (id,org_id,integration_id) VALUES ('` + discoveryTestRun + `','` +
+			discoveryTestOrg + `','` + discoveryTestIntegration + `')`,
+		// resolveAuthoritativeProvider (CHAOS-4175 round 2) joins sync_runs to
+		// integrations for every Discover() call now, not just the
+		// feature-gate tests -- every test in this file needs a real
+		// integrations row to reach the claimed-lease path at all.
+		`INSERT INTO integrations (id,org_id,provider) VALUES ('` + discoveryTestIntegration + `','` + discoveryTestOrg + `','github')`,
+	}
+	for _, statement := range statements {
+		if _, err := pool.Exec(ctx, statement); err != nil {
+			t.Fatal(err)
+		}
 	}
 }

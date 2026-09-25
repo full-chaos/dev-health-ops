@@ -11,6 +11,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchcontract"
 	"github.com/full-chaos/dev-health-ops/internal/syncreconciler"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
@@ -90,22 +91,6 @@ func TestReadyFinalizeRecoveryDrivesTheRunToTerminal(t *testing.T) {
 	t.Cleanup(pool.Close)
 
 	createFinalizeTables(t, ctx, pool)
-	// The reconciler reads three coordinator relations the finalize fixture
-	// has no reason to carry, and one column pair on sync_runs. Shapes are
-	// taken from internal/syncreconciler's own materializer fixture, which is
-	// the venue that owns this predicate; nothing here is invented.
-	if _, err := pool.Exec(ctx, `
-CREATE EXTENSION IF NOT EXISTS pgcrypto;
-ALTER TABLE sync_runs ADD COLUMN triggered_by text NOT NULL DEFAULT 'manual';
-ALTER TABLE sync_runs ADD COLUMN created_at timestamptz NOT NULL DEFAULT now();
-ALTER TABLE sync_run_units ADD COLUMN updated_at timestamptz NOT NULL DEFAULT now();
-CREATE TABLE scheduled_sync_occurrences (
-    occurrence_id text PRIMARY KEY, sync_run_id uuid, job_run_id uuid, reconcile_status text NOT NULL);
-CREATE TABLE sync_run_reference_discoveries (
-    id uuid PRIMARY KEY DEFAULT gen_random_uuid(), sync_run_id uuid NOT NULL UNIQUE,
-    status text NOT NULL, available_at timestamptz NOT NULL, lease_expires_at timestamptz)`); err != nil {
-		t.Fatal(err)
-	}
 	if _, err := pool.Exec(ctx, `CREATE SCHEMA river`); err != nil {
 		t.Fatal(err)
 	}
@@ -120,21 +105,13 @@ CREATE TABLE sync_run_reference_discoveries (
 	now := time.Date(2026, time.September, 8, 12, 0, 0, 0, time.UTC)
 	staleAt := now.Add(-30 * time.Hour)
 	seedFinalizeRoute(t, ctx, pool)
-	if _, err := pool.Exec(ctx, `
-INSERT INTO sync_runs (id,org_id,integration_id,status,total_units,completed_units,failed_units)
-VALUES ($1,$2,$3,'dispatching',1,0,0)`, finalizeTestRun, finalizeTestOrg, finalizeTestIntegration); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := pool.Exec(ctx, `INSERT INTO integration_sources (id) VALUES ($1)`, finalizeTestSource); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := pool.Exec(ctx, `
-INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status,since_at,before_at,cost_class,mode)
-VALUES ($1,$2,$3,'github','commits',$4,'success',$5,$6,'heavy','incremental')`,
-		finalizeTestUnit, finalizeTestOrg, finalizeTestRun, finalizeTestSource,
-		time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 7, 2, 0, 0, 0, 0, time.UTC)); err != nil {
-		t.Fatal(err)
-	}
+	insertFinalizeRun(t, ctx, pool, 1, "", "")
+	pgseed.EnsureSyncIntegration(ctx, t, pool, finalizeTestOrg, finalizeTestIntegration, finalizeTestSource)
+	since, before := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 7, 2, 0, 0, 0, 0, time.UTC)
+	pgseed.InsertSyncRunUnit(ctx, t, pool, pgseed.SyncRunUnit{
+		ID: finalizeTestUnit, RunID: finalizeTestRun, OrgID: finalizeTestOrg, IntegrationID: finalizeTestIntegration,
+		SourceID: finalizeTestSource, Status: "success", SinceAt: &since, BeforeAt: &before, CostClass: "heavy",
+	})
 
 	// The stranded shape: River ran the finalize delivery to COMPLETED (or a
 	// later cleaner reaped the row) while the run stayed non-terminal.
@@ -144,7 +121,7 @@ VALUES ($1,$2,$3,'github','commits',$4,'success',$5,$6,'heavy','incremental')`,
 	}
 	deadDelivery, err := riverClient.Insert(ctx, FinalizeSyncRunArgs{TransportArgs: TransportArgs{
 		Version: ContractVersionV1, OrgID: finalizeTestOrg, RunID: finalizeTestRun,
-		DispatchOutbox: finalizeTestOutbox, DeliveryAttempt: 38, RouteGeneration: 1,
+		DispatchOutbox: finalizeTestOutbox, DeliveryAttempt: 38, RouteGeneration: finalizeRouteGeneration,
 	}}, &river.InsertOpts{Queue: "sync"})
 	if err != nil {
 		t.Fatal(err)
@@ -155,8 +132,8 @@ VALUES ($1,$2,$3,'github','commits',$4,'success',$5,$6,'heavy','incremental')`,
 	}
 	if _, err := pool.Exec(ctx, `
 UPDATE sync_dispatch_outbox SET status='dispatched',attempts=38,dispatched_at=$2,
-    dispatched_transport='river',dispatched_route_generation=1,transport_job_id=$3,updated_at=$2
-WHERE id=$1`, finalizeTestOutbox, staleAt, strconv.FormatInt(deadDelivery.Job.ID, 10)); err != nil {
+    dispatched_transport='river',dispatched_route_generation=$4,transport_job_id=$3,updated_at=$2
+WHERE id=$1`, finalizeTestOutbox, staleAt, strconv.FormatInt(deadDelivery.Job.ID, 10), int64(finalizeRouteGeneration)); err != nil {
 		t.Fatal(err)
 	}
 

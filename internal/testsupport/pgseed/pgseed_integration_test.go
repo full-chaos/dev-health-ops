@@ -5,6 +5,7 @@ package pgseed_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -48,6 +49,17 @@ func TestEveryHelperInsertsIntoTheMigratedSchema(t *testing.T) {
 	pgseed.EnsureSyncRun(ctx, t, pool, pgseed.SyncRun{ID: run, TotalUnits: 1})
 	pgseed.EnsureSyncRun(ctx, t, pool, pgseed.SyncRun{ID: run}) // idempotent
 	pgseed.InsertSyncRunUnit(ctx, t, pool, pgseed.SyncRunUnit{ID: unit, RunID: run, Status: "planned", ResultJSON: `{}`})
+	if got := pgseed.SyncTransportRoute(ctx, t, pool, "post_sync", "river", 3, false, "celery"); got != 3 {
+		t.Fatalf("route generation = %d, want 3 (seeded 2, changed state)", got)
+	}
+	if got := pgseed.SyncTransportRoute(ctx, t, pool, "post_sync", "river", 3, false, "celery"); got != 3 {
+		t.Fatalf("unchanged route generation = %d, want 3 (idempotent)", got)
+	}
+	outbox, config, job, jobRun := uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString()
+	pgseed.SyncDispatchOutbox(ctx, t, pool, outbox, run, org, "post_sync", "dispatched", "river", 3)
+	pgseed.SyncConfiguration(ctx, t, pool, config, org, pgseed.DefaultSyncIntegrationID, `{"auto_import_teams":true}`, time.Now())
+	pgseed.ScheduledJob(ctx, t, pool, job, org)
+	pgseed.JobRun(ctx, t, pool, jobRun, job, 0, `{"sync_run_id":"`+run+`"}`)
 	pgseed.TierLimit(ctx, t, pool, "community", "max_sync_units", "3")
 	pgseed.TierLimit(ctx, t, pool, "community", "max_sync_units", "4") // the upsert path
 
@@ -66,6 +78,9 @@ func TestEveryHelperInsertsIntoTheMigratedSchema(t *testing.T) {
 		{"integration_credentials", `SELECT count(*) FROM integration_credentials WHERE id = '` + credential + `'`, 1},
 		{"sync_runs", `SELECT count(*) FROM sync_runs WHERE id = '` + run + `' AND total_units = 1`, 1},
 		{"sync_run_units", `SELECT count(*) FROM sync_run_units WHERE id = '` + unit + `' AND sync_run_id = '` + run + `'`, 1},
+		{"sync_dispatch_outbox", `SELECT count(*) FROM sync_dispatch_outbox WHERE id = '` + outbox + `' AND dispatched_transport = 'river' AND dispatched_route_generation = 3`, 1},
+		{"sync_configurations", `SELECT count(*) FROM sync_configurations WHERE id = '` + config + `'`, 1},
+		{"job_runs", `SELECT count(*) FROM job_runs WHERE id = '` + jobRun + `' AND job_id = '` + job + `'`, 1},
 		{"tier_limits", `SELECT count(*) FROM tier_limits WHERE tier = 'community' AND limit_key = 'max_sync_units' AND limit_value = '4'`, 1},
 		{"go_api_routing_state", `SELECT count(*) FROM go_api_routing_state WHERE mode = 'primary'`, 1},
 	} {

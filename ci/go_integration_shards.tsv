@@ -157,6 +157,7 @@ internal/pgmigrate	45
 internal/platform/config	14
 internal/providerfoundation	16
 internal/providersync	2337
+internal/pushcli	20
 internal/rivermigrate	20
 internal/scheduler/fixed	151
 internal/scheduler/sync	156

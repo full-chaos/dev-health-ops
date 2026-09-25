@@ -1,0 +1,11 @@
+{
+  "id": "team-platform",
+  "name": "Platform",
+  "description": "Core platform engineering team",
+  "members": ["acme-user-42"],
+  "projectKeys": ["ABC"],
+  "repoPatterns": ["acme/*"],
+  "isActive": true,
+  "updatedAt": "2026-06-25T00:00:00Z",
+  "nativeTeamKey": "PLAT"
+}

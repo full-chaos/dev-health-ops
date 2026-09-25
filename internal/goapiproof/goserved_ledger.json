@@ -210,25 +210,31 @@
     },
     {
       "operation": "savedReports",
-      "unproven_reason": "production holds no saved reports, so the data-bearing savedReports cases answered empty on both planes (vacuous_empty_legs) and only the empty-page cases matched; no two-plane run compared a leaf; record deploy-156/r156/r155g/prove-report-step155.json",
+      "two_plane_ops_sha": "65fffb90e78942571e8a76ae65e4188bdecaeeca",
+      "enable_limit": "production holds no saved reports, so a deployed-executed proof at a production build compares empty legs on both planes (vacuous_empty_legs) and can never record a data-bearing receipt; the two-plane evidence is the isolated seeded run at 65fffb90 (record 6841-prove-report-65fffb90.json)",
       "guards": [
         {"file": "internal/queryapi/reports/reports_test.go", "test": "TestList_StatementsAndArguments"},
+        {"file": "internal/queryapi/server/reports_route_integration_test.go", "test": "TestSavedReportRoutes_ThroughTheSignedEnvelope"},
         {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_symbols_are_not_redefined"}
       ]
     },
     {
       "operation": "savedReport",
-      "unproven_reason": "production holds no saved report to name and the operation was not routed to Go in the last two-plane run (operation_not_routed_to_go), so no two-plane run compared any leaf; record deploy-156/r156/r155g/prove-report-step155.json",
+      "two_plane_ops_sha": "65fffb90e78942571e8a76ae65e4188bdecaeeca",
+      "enable_limit": "production holds no saved report to name, so a deployed-executed proof at a production build can never record the FOUND variant (operation_needs_an_instance_identifier); the two-plane evidence is the isolated seeded run at 65fffb90 (record 6841-prove-report-65fffb90.json)",
       "guards": [
         {"file": "internal/queryapi/reports/reports_test.go", "test": "TestGet_StatementIdNormalizedAndOrgBound"},
+        {"file": "internal/queryapi/server/reports_route_integration_test.go", "test": "TestSavedReportRoutes_ThroughTheSignedEnvelope"},
         {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_symbols_are_not_redefined"}
       ]
     },
     {
       "operation": "reportRuns",
-      "unproven_reason": "production holds no saved report to name and the operation was not routed to Go in the last two-plane run (operation_not_routed_to_go), so no two-plane run compared any leaf; record deploy-156/r156/r155g/prove-report-step155.json",
+      "two_plane_ops_sha": "65fffb90e78942571e8a76ae65e4188bdecaeeca",
+      "enable_limit": "production holds no saved report with runs to name, so a deployed-executed proof at a production build can never record the RUNS variants (operation_needs_an_instance_identifier); the two-plane evidence is the isolated seeded run at 65fffb90 (record 6841-prove-report-65fffb90.json)",
       "guards": [
         {"file": "internal/queryapi/reports/reports_test.go", "test": "TestRuns_StatementsAndMapping"},
+        {"file": "internal/queryapi/server/reports_route_integration_test.go", "test": "TestSavedReportRoutes_ThroughTheSignedEnvelope"},
         {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_symbols_are_not_redefined"}
       ]
     },
@@ -412,6 +418,7 @@
       "guards": [
         {"file": "internal/queryapi/analytics/resolve_test.go", "test": "TestResolve_HappyPath_TimeseriesAndBreakdown"},
         {"file": "internal/queryapi/analytics/timeseries_test.go", "test": "TestExecuteTimeseries_AllNullBucketYieldsNilValue_NotZero"},
+        {"file": "internal/queryapi/analytics/timeseries_featureflag_seeded_integration_test.go", "test": "TestFeatureFlagTimeseries_SeededRealClickHouse_ExactBuckets"},
         {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
       ]
     },

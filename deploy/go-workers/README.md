@@ -232,8 +232,9 @@ missing is two check FAMILIES no existing dependency probe reproduced:
    the class of failure that stayed silent for two hours: the pool was
    reachable and the grants were intact, only the pooled connection's
    transaction path had gone stale.
-2. **`execution_liveness`** (`dev-health-worker`, `dev-health-reconciler`,
-   `dev-health-scheduler`) — TWO required facts, not one:
+2. **`execution_liveness`** (`dev-health-worker` ONLY since CHAOS-6800; the
+   reconciler and the scheduler run `domain_transaction`, below) — TWO required
+   facts, not one:
    - A ticking DB self-probe (`internal/platform/selfprobe`) that opens and
      rolls back its own transaction against the domain pool on a fixed clock
      (20s interval, 60s staleness by default — three misses before readiness
@@ -268,6 +269,22 @@ missing is two check FAMILIES no existing dependency probe reproduced:
    to "now" treats admission as the starting gun and gives the real consumer
    a full staleness window to make its first claim before the signal can ever
    fail — see `newClaimLiveness`'s doc comment.
+
+**`domain_transaction` (`dev-health-reconciler`, `dev-health-scheduler`; CHAOS-6800,
+replaces their `execution_liveness`).** A bounded BEGIN/rollback on the
+process's dedicated one-connection READINESS pool (`RuntimePools.DomainProbe`, the
+same pool `domain_postgres` and `posture_manifest_lockstep` use), checked
+synchronously on every readiness poll. The ticking `selfprobe` monitor on the
+shared WORK pool that these two services used to run is removed: with no claim or
+work evidence to prove liveness from, it could not tell "the work pool is busy"
+from "the transaction path is broken" without a heuristic over shared-pool
+contention, and three review rounds found a new hole in every such heuristic.
+Work-pool saturation is now an operator signal only:
+`scheduler_database_pool_saturation_ratio{pool="domain"}` /
+`reconciler_database_pool_saturation_ratio{pool="domain"}` (plus `_acquired_conns`
+and `_max_conns`) and a rate-limited warning log; it never decides ready/not-ready.
+The `scheduler_execution_liveness` / `reconciler_execution_liveness` self-probe
+metrics and `self-probe-*` lifecycle components no longer exist for these two.
 
 Both `idempotency_backend` and the DB half of `execution_liveness` fail closed
 with reason `never_proven` before their first sample completes — absence of a

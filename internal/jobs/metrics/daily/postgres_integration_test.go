@@ -13,6 +13,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -1166,108 +1167,8 @@ func assertLeaseHeld[T any](t *testing.T, what string, claim *T, err error, want
 // executed those statements.
 func createDailyTables(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
-	_, err := pool.Exec(ctx, `
-CREATE TABLE daily_metrics_runs (
- id uuid PRIMARY KEY, org_id uuid NOT NULL, target_day date NOT NULL, generation text NOT NULL,
- status varchar(16) NOT NULL, finalization_status varchar(16) NOT NULL, finalization_claim_token uuid NULL,
- finalization_lease_expires_at timestamptz NULL, finalized_at timestamptz NULL,
- created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL,
- blocked_at timestamptz NULL, blocked_reason varchar(64) NULL,
- CONSTRAINT ck_daily_metrics_run_status CHECK (status IN ('pending', 'running', 'succeeded', 'failed', 'canceled', 'no_repositories')),
- CONSTRAINT ck_daily_metrics_finalize_status CHECK (finalization_status IN ('pending', 'running', 'succeeded', 'failed')),
- CONSTRAINT ck_daily_metrics_run_blocked_marker_paired CHECK ((blocked_at IS NULL) = (blocked_reason IS NULL))
-);
-CREATE TABLE daily_metrics_partitions (
- id uuid PRIMARY KEY, run_id uuid NOT NULL REFERENCES daily_metrics_runs(id), ordinal integer NOT NULL,
- repo_ids jsonb NOT NULL, status varchar(16) NOT NULL, claim_token uuid NULL, lease_expires_at timestamptz NULL,
- attempt_count integer NOT NULL, completed_at timestamptz NULL, created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL,
- failure_reason varchar(64) NULL,
- CONSTRAINT ck_daily_metrics_partition_failure_reason_scope CHECK (failure_reason IS NULL OR status IN ('failed', 'failed_permanent')),
- CONSTRAINT ck_daily_metrics_partition_failed_permanent_has_reason CHECK (status <> 'failed_permanent' OR failure_reason IS NOT NULL),
- -- Mirrors production's ck_daily_metrics_partition_lease (0057). Added after
- -- codex review round 2 on #2224: without it this fixture accepted a 'running'
- -- partition carrying NO claim_token and NO lease, a row production forbids --
- -- and a blocked-marker test case was asserting behaviour for exactly that
- -- impossible shape. A fixture that is laxer than production lets a test pass
- -- for a state that cannot occur.
- CONSTRAINT ck_daily_metrics_partition_lease CHECK ((status = 'running' AND claim_token IS NOT NULL AND lease_expires_at IS NOT NULL) OR (status <> 'running' AND claim_token IS NULL AND lease_expires_at IS NULL))
-);
-CREATE TABLE worker_job_outbox (
- id uuid PRIMARY KEY, dedupe_key varchar(256) NOT NULL UNIQUE,
- job_kind varchar(96) NOT NULL, contract_version integer NOT NULL,
- args json NOT NULL, payload_hash varchar(71) NOT NULL,
- queue varchar(96) NOT NULL, priority smallint NOT NULL,
- max_attempts smallint NOT NULL, scheduled_at timestamptz NOT NULL,
- status varchar(16) NOT NULL, attempt_count integer NOT NULL,
- next_attempt_at timestamptz NOT NULL, prerequisite_completion_key text NULL,
- river_job_id bigint NULL,
- created_at timestamptz NOT NULL,
- updated_at timestamptz NOT NULL
-) ;
-CREATE TABLE worker_job_completion_fences (
- completion_key text PRIMARY KEY,
- completed_at timestamptz NOT NULL DEFAULT statement_timestamp()
-);
-CREATE TABLE worker_job_delivery_abandonments (
- dedupe_key varchar(256) PRIMARY KEY,
- job_kind varchar(96) NOT NULL,
- abandoned_at timestamptz NOT NULL,
- attempt_count integer NOT NULL,
- last_error_code varchar(64)
-);
-CREATE TABLE daily_metrics_finalize_redrive_events (
- id uuid PRIMARY KEY, run_id uuid NOT NULL, org_id uuid NOT NULL, target_day date NOT NULL,
- prior_status varchar(16) NOT NULL, prior_finalization_status varchar(16) NOT NULL,
- actor varchar(32) NOT NULL, reason text NOT NULL, nonce varchar(64) NOT NULL,
- created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
- status varchar(16) NOT NULL DEFAULT 'open', closed_at timestamptz NULL,
- CONSTRAINT ck_dfre_actor CHECK (actor IN ('finalize-redrive')),
- CONSTRAINT ck_dfre_prior_status CHECK (prior_status <> ''),
- CONSTRAINT ck_dfre_prior_finalization_status CHECK (prior_finalization_status <> ''),
- CONSTRAINT ck_dfre_reason CHECK (reason <> ''),
- CONSTRAINT ck_dfre_status CHECK (status IN ('open', 'closed_succeeded', 'closed_failed', 'closed_orphaned')),
- CONSTRAINT ck_dfre_closed_at_matches_status CHECK ((status = 'open') = (closed_at IS NULL))
-);
-CREATE TABLE daily_metrics_partition_recompute_events (
- id uuid PRIMARY KEY, run_id uuid NOT NULL, org_id uuid NOT NULL, target_day date NOT NULL,
- family varchar(64) NOT NULL, prior_status varchar(16) NOT NULL, prior_generation text NOT NULL,
- actor varchar(32) NOT NULL, reason text NOT NULL, nonce varchar(64) NOT NULL,
- created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
- CONSTRAINT ck_dpre_actor CHECK (actor IN ('partition-recompute')),
- CONSTRAINT ck_dpre_family CHECK (family <> ''),
- CONSTRAINT ck_dpre_prior_status CHECK (prior_status <> ''),
- CONSTRAINT ck_dpre_prior_generation CHECK (prior_generation <> ''),
- CONSTRAINT ck_dpre_reason CHECK (reason <> '')
-);
-CREATE TABLE metric_compatibility_executions (
- id uuid PRIMARY KEY,
- worker_kind text NOT NULL CHECK (worker_kind IN ('daily', 'remaining')),
- operation text NOT NULL CHECK (operation IN ('partition', 'finalize')),
- run_id uuid NOT NULL,
- partition_id uuid NULL,
- family text NOT NULL CHECK (length(family) BETWEEN 1 AND 64),
- generation text NOT NULL CHECK (length(generation) BETWEEN 1 AND 128),
- scope_digest text NOT NULL CHECK (length(scope_digest) = 64 AND scope_digest ~ '^[0-9a-f]{64}$'),
- claim_token uuid NOT NULL,
- state text NOT NULL CHECK (state IN ('executing', 'succeeded', 'ambiguous', 'retry_authorized')),
- attempt_count integer NOT NULL DEFAULT 1 CHECK (attempt_count >= 1),
- output_evidence jsonb NULL,
- failure_detail text NULL CHECK (failure_detail IS NULL OR length(failure_detail) BETWEEN 1 AND 1024),
- created_at timestamptz NOT NULL DEFAULT statement_timestamp(),
- last_attempt_at timestamptz NOT NULL DEFAULT statement_timestamp(),
- completed_at timestamptz NULL,
- CONSTRAINT ck_mce_partition_scope CHECK (
-     (operation = 'partition' AND partition_id IS NOT NULL)
-     OR (operation = 'finalize' AND partition_id IS NULL)
- ),
- CONSTRAINT ck_mce_succeeded_has_evidence CHECK (
-     (state = 'succeeded' AND completed_at IS NOT NULL AND output_evidence IS NOT NULL)
-     OR (state <> 'succeeded' AND completed_at IS NULL)
- )
-)`)
-	if err != nil {
-		t.Fatal(err)
-	}
+	// The migrated schema, not hand-written tables (CHAOS-6769 ledger).
+	pgschema.Apply(ctx, t, pool)
 }
 
 // insertCompatibilityLedgerRow inserts one metric_compatibility_executions
@@ -1448,8 +1349,8 @@ func TestRedriveStrandedPartitionsReachesDispatchablePartitions(t *testing.T) {
 				queue, priority, max_attempts, scheduled_at, status, attempt_count,
 				next_attempt_at, created_at, updated_at
 			) VALUES (
-				$1, $2, 'metrics.daily_partition', 1, '{}', 'sha256:0',
-				'metrics', 1, 5, $3, 'discarded', 5, $3, $3, $3
+				$1, $2, 'metrics.daily_partition', 1, '{}', 'sha256:' || repeat('0', 64),
+				'metrics', 1, 5, $3, 'dead', 5, $3, $3, $3
 			)`,
 			uuid.New().String(), "metrics.daily_partition:"+partitionID, now,
 		); err != nil {

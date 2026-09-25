@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -17,30 +19,8 @@ func createBudgetCandidatesTables(t *testing.T, ctx context.Context, pool *pgxpo
 	// sync_runs backs bumpSyncRunRollup's seam (CHAOS-4586): every mechanism
 	// that terminalizes a sync_run_units row in this package recomputes this
 	// row's completed_units/failed_units in the same transaction.
-	if _, err := pool.Exec(ctx, `
-CREATE TABLE public.sync_runs (
- id uuid PRIMARY KEY, completed_units int NOT NULL DEFAULT 0,
- failed_units int NOT NULL DEFAULT 0, total_units int NOT NULL DEFAULT 0
-);
-INSERT INTO public.sync_runs (id, total_units) VALUES ('`+budgetCandidatesRunID+`', 0);`); err != nil {
-		t.Fatal(err)
-	}
-	_, err := pool.Exec(ctx, `
-CREATE TABLE public.sync_run_units (
- id uuid PRIMARY KEY, sync_run_id uuid NOT NULL, org_id text NOT NULL,
- integration_id uuid NOT NULL, source_id uuid NOT NULL, provider text NOT NULL,
- dataset_key text NOT NULL, cost_class text NOT NULL,
- since_at timestamptz NULL, before_at timestamptz NULL,
- status text NOT NULL, available_at timestamptz NULL,
- updated_at timestamptz NOT NULL DEFAULT now(), error text NULL, result json NULL,
- lease_owner text NULL, lease_expires_at timestamptz NULL, last_heartbeat_at timestamptz NULL,
- rate_limit_deferrals int NOT NULL DEFAULT 0, rate_limit_first_seen_at timestamptz NULL,
- budget_deferrals int NOT NULL DEFAULT 0, budget_first_deferred_at timestamptz NULL,
- first_blocked_at timestamptz NULL, last_retry_reason text NULL, processor_flags json NULL
-)`)
-	if err != nil {
-		t.Fatal(err)
-	}
+	pgschema.Apply(ctx, t, pool)
+	pgseed.EnsureSyncRun(ctx, t, pool, pgseed.SyncRun{ID: budgetCandidatesRunID, OrgID: "org-1"})
 }
 
 const budgetCandidatesRunID = "00000000-0000-4000-8000-0000000001a0"
@@ -97,21 +77,13 @@ func insertCandidateUnit(t *testing.T, ctx context.Context, pool *pgxpool.Pool, 
 	if f.datasetKey != "" {
 		datasetKey = f.datasetKey
 	}
-	var processorFlagsJSON *string
-	if f.processorFlagsJSON != "" {
-		processorFlagsJSON = &f.processorFlagsJSON
-	}
-	if _, err := pool.Exec(ctx, `
-INSERT INTO public.sync_run_units
- (id, sync_run_id, org_id, integration_id, source_id, provider, dataset_key, cost_class,
-  status, available_at, updated_at, result, budget_first_deferred_at, first_blocked_at, processor_flags)
-VALUES ($1::uuid, $2::uuid, $3, $4::uuid, $5::uuid, 'github', $12, 'rest_core',
-        $6, $7, $8, $9::json, $10, $11, $13::json)`,
-		f.id, budgetCandidatesRunID, orgID, integrationID, sourceID,
-		f.status, f.availableAt, f.updatedAt, f.resultJSON, f.budgetFirstDefAt, f.firstBlockedAt,
-		datasetKey, processorFlagsJSON); err != nil {
-		t.Fatal(err)
-	}
+	updatedAt := f.updatedAt
+	pgseed.InsertSyncRunUnit(ctx, t, pool, pgseed.SyncRunUnit{
+		ID: f.id, RunID: budgetCandidatesRunID, OrgID: orgID, IntegrationID: integrationID, SourceID: sourceID,
+		DatasetKey: datasetKey, Status: f.status, AvailableAt: f.availableAt, UpdatedAt: &updatedAt,
+		ResultJSON: f.resultJSON, BudgetFirstDeferredAt: f.budgetFirstDefAt, FirstBlockedAt: f.firstBlockedAt,
+		ProcessorFlagsJSON: f.processorFlagsJSON,
+	})
 }
 
 func idsOf(units []budgetUnit) map[string]bool {

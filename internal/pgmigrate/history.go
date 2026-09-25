@@ -96,28 +96,50 @@ func chainDoc(file ChainFile) string {
 	return strings.ToUpper(words[:1]) + words[1:] + "."
 }
 
-// WithChain is the walk when the chain after the baseline is not empty: the chain
-// revisions come newest first ahead of the application branch, the application
-// head stops being a head, and the first chain revision descends from it. A chain
+// WithChain is the walk when the chain after the baseline holds a revision the
+// embedded walk does not have. A chain revision that is an Alembic revision (it is in
+// the walk: every revision of the Python scripts is) is already there, with its own
+// branch label and marks; only a chain revision of a release with no Alembic script
+// is added: it prints newest first ahead of the application branch, the branch's top
+// stops being a head, and the first added revision descends from it. An added
 // revision has no branch label or marks (it is not an Alembic script).
 func WithChain(entries []HistoryEntry, baseline Baseline, chain []ChainFile) []HistoryEntry {
-	if len(chain) == 0 {
+	known := map[string]bool{}
+	for _, entry := range entries {
+		known[entry.Revision] = true
+	}
+	var added []ChainFile
+	for _, file := range chain {
+		if !known[file.Revision] {
+			added = append(added, file)
+		}
+	}
+	if len(added) == 0 {
 		return entries
 	}
-	application := applicationHead(baseline)
+	// The application branch's top: the real head that is not the cutover head.
+	top := ""
+	for _, entry := range entries {
+		if entry.RealHead && entry.Revision != cutoverRevision {
+			top = entry.Revision
+		}
+	}
+	if top == "" {
+		top = applicationHead(baseline)
+	}
 	var out []HistoryEntry
 	for _, entry := range entries {
-		if entry.Revision == application {
-			for index := len(chain) - 1; index >= 0; index-- {
-				down := application
+		if entry.Revision == top {
+			for index := len(added) - 1; index >= 0; index-- {
+				down := top
 				if index > 0 {
-					down = chain[index-1].Revision
+					down = added[index-1].Revision
 				}
-				added := HistoryEntry{Revision: chain[index].Revision, Down: down, Doc: chainDoc(chain[index])}
-				if index == len(chain)-1 {
-					added.RealHead, added.Head = true, true
+				extra := HistoryEntry{Revision: added[index].Revision, Down: down, Doc: chainDoc(added[index])}
+				if index == len(added)-1 {
+					extra.RealHead, extra.Head = true, true
 				}
-				out = append(out, added)
+				out = append(out, extra)
 			}
 			entry.RealHead, entry.Head = false, false
 		}

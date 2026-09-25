@@ -412,6 +412,11 @@ func LoadCatalog(path string) (Catalog, error) {
 	var entries []struct {
 		Operation string `json:"operation"`
 		Digest    string `json:"digest"`
+		// Kind is present only for a mutation document. The edge's loader
+		// (go_api_operation_catalog._load) accepts "query" and "mutation" and
+		// refuses anything else, including an explicit null; a raw message
+		// tells an absent key from a null one.
+		Kind json.RawMessage `json:"kind"`
 	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
@@ -420,6 +425,9 @@ func LoadCatalog(path string) (Catalog, error) {
 	}
 	pairs := make([][2]string, 0, len(entries))
 	for _, entry := range entries {
+		if entry.Kind != nil && string(entry.Kind) != `"query"` && string(entry.Kind) != `"mutation"` {
+			return Catalog{}, fmt.Errorf("%s: operation %q has kind %s, want \"query\" or \"mutation\"", path, entry.Operation, entry.Kind)
+		}
 		pairs = append(pairs, [2]string{entry.Operation, entry.Digest})
 	}
 	catalog, err := NewCatalog(pairs)

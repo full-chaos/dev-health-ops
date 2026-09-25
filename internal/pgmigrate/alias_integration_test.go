@@ -64,7 +64,7 @@ const aliasGolden = "testdata/alias_golden.json"
 // The producer is deleted with the Python CLI, so this is a rot guard: the file is
 // only rewritten by TestAliasesVenueOracleMatchesTheFlatVerbs with
 // DHO_ALIAS_GOLDEN_UPDATE=1, then this digest is updated.
-const aliasGoldenSHA256 = "a1c8f0b6fb42b23e05d4fcb0f75f85a21d79c72e600f547d8cf5a347a2f8b27a"
+const aliasGoldenSHA256 = "bed39a72aad8e880055899e1e30136b28f858eee9cc2562aa977577d1e37c18f"
 
 type aliasResult struct {
 	Name   string `json:"name"`
@@ -90,18 +90,22 @@ func aliasSetup(t *testing.T, statement string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
+	chain, err := pgmigrate.LoadChain()
+	if err != nil {
+		t.Fatal(err)
+	}
 	entries, err := pgmigrate.LoadHistory()
 	if err != nil {
 		t.Fatal(err)
 	}
 	var app string
-	for _, head := range baseline.Heads {
+	for _, head := range pgmigrate.Heads(baseline, chain) {
 		if head != "0066" {
 			app = head
 		}
 	}
 	var below string
-	for _, entry := range entries {
+	for _, entry := range pgmigrate.WithChain(entries, baseline, chain) {
 		if entry.Revision == app {
 			below = entry.Down
 		}

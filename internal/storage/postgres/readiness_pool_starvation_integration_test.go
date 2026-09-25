@@ -10,7 +10,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
+	"github.com/full-chaos/dev-health-ops/internal/platform/selfprobe"
 )
 
 // CHAOS-6771. A worker's domain pool is small (4 connections by default) and
@@ -119,6 +122,36 @@ func TestReadinessPoolAnswersWhileTheWorkPoolIsExhausted(t *testing.T) {
 	defer cachedCancel()
 	if err := cached.Check(cachedCtx); err != nil {
 		t.Fatalf("cached posture check on the readiness pool while the work pool is exhausted = %v", err)
+	}
+	// The bounded BEGIN/rollback the scheduler and reconciler run for readiness
+	// (domain_transaction, CHAOS-6800): on the READINESS pool it passes while the
+	// work pool is exhausted; the same probe on the WORK pool (what the old
+	// execution_liveness self-probe did) times out. And a wedged readiness pool
+	// (its only connection held by a session that does not return) fails it.
+	probeOn := func(pool *pgxpool.Pool) error {
+		probeCtx, probeCancel := context.WithTimeout(ctx, budget)
+		defer probeCancel()
+		return selfprobe.Once(probeCtx, selfprobe.NewPool(pool))
+	}
+	if err := probeOn(pools.ReadinessPool()); err != nil {
+		t.Fatalf("domain_transaction probe on the readiness pool while the work pool is exhausted = %v", err)
+	}
+	if err := probeOn(pools.Domain); err == nil {
+		t.Fatal("control: the same probe on the exhausted WORK pool passed")
+	}
+	wedgeCtx, wedgeCancel := context.WithCancel(ctx)
+	var wedge sync.WaitGroup
+	wedge.Add(1)
+	go func() {
+		defer wedge.Done()
+		_, _ = pools.ReadinessPool().Exec(wedgeCtx, "SELECT pg_sleep(600)")
+	}()
+	t.Cleanup(func() { wedgeCancel(); wedge.Wait() })
+	for pools.ReadinessPool().Stat().AcquiredConns() < 1 {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := probeOn(pools.ReadinessPool()); err == nil {
+		t.Fatal("a wedged readiness pool (its only connection held) passed domain_transaction")
 	}
 	// The work pool's own numbers are untouched by the readiness checks.
 	if acquired := pools.Domain.Stat().AcquiredConns(); acquired != 4 {

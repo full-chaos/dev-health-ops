@@ -104,6 +104,10 @@ func (database *fakeSchedulerDatabase) DomainReady(context.Context) error {
 	return nil
 }
 
+// DomainTransactionReady is healthy by default; tests that exercise the probe
+// pool wrap the fake and override it.
+func (database *fakeSchedulerDatabase) DomainTransactionReady(context.Context) error { return nil }
+
 func (database *fakeSchedulerDatabase) QueueReady(context.Context) error {
 	database.queueCalls.Add(1)
 	return nil

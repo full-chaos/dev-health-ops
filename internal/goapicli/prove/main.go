@@ -129,6 +129,7 @@ type flags struct {
 	audience             string
 	keyID                string
 	dryRun               bool
+	adminPrincipal       bool
 	timeout              time.Duration
 	window               goapiproof.Window
 	reportPath           string
@@ -192,6 +193,7 @@ func registerFlags() (*flag.FlagSet, *flags) {
 	fs.StringVar(&f.audience, "audience", "query-api", "envelope audience, part of the auth-context shape")
 	fs.StringVar(&f.keyID, "key-id", "", "envelope signing key id (kid) -- a public identifier, and the value that silently broke routing three times on 2026-09-07")
 	fs.BoolVar(&f.dryRun, "dry-run", false, "execute and compare, but write NO receipts")
+	fs.BoolVar(&f.adminPrincipal, "admin-principal", false, "mint the org-admin proof principal's edge token (mint edge-token -principal admin-proof) for the operations on the closed operator-gated allowlist (internal/goapiproof/principal.go); without it those operations are refused by name, never measured as the read-level principal. Read-only queries only: a document that is not a query is refused")
 	fs.DurationVar(&f.timeout, "timeout", 60*time.Second, "per-request timeout")
 	fs.StringVar(&f.reportPath, "report", "", "write the full JSON report here in addition to stdout")
 	f.instanceIDs = instanceIDFlag{}
@@ -317,6 +319,10 @@ func run(args []string) (err error) {
 	// a request.
 	edgeCredential.BindOrg(f.orgID)
 	proofCredential.BindOrg(f.orgID)
+	adminEdgeCredential := adminEdgeCredentialFor(f)
+	if adminEdgeCredential != nil {
+		adminEdgeCredential.BindOrg(f.orgID)
+	}
 
 	registry, err := goapiproof.FetchRegistry(ctx, client, f.registryURL)
 	if err != nil {
@@ -357,6 +363,15 @@ func run(args []string) (err error) {
 	cancelPrincipal()
 	if err != nil {
 		return err
+	}
+	if adminEdgeCredential != nil {
+		// The widened credential gets the same check before any case: the Python app resolves it to -org, with no impersonation session.
+		adminCtx, cancelAdmin := boundedCtx()
+		err = goapiproof.VerifyReferencePrincipal(adminCtx, client, originOf(f.edgeURL), adminEdgeCredential, f.orgID)
+		cancelAdmin()
+		if err != nil {
+			return err
+		}
 	}
 
 	documents, err := goapiproof.LoadDocuments(f.documentsPath)
@@ -411,17 +426,18 @@ func run(args []string) (err error) {
 		Routing:   routing,
 		Artifacts: artifacts,
 		Config: goapiproof.Config{
-			OrgID:           f.orgID,
-			Window:          f.window,
-			PythonEdgeURL:   f.edgeURL,
-			GoProofURL:      f.proofURL,
-			EdgeCredential:  edgeCredential,
-			ProofCredential: proofCredential,
-			Auth:            authContextFor(f),
-			RecordedBy:      f.recordedBy,
-			ReviewEvidence:  f.reviewEvidence,
-			Timeout:         f.timeout,
-			InstanceIDs:     map[string]string(f.instanceIDs),
+			OrgID:               f.orgID,
+			Window:              f.window,
+			PythonEdgeURL:       f.edgeURL,
+			GoProofURL:          f.proofURL,
+			EdgeCredential:      edgeCredential,
+			AdminEdgeCredential: adminEdgeCredential,
+			ProofCredential:     proofCredential,
+			Auth:                authContextFor(f),
+			RecordedBy:          f.recordedBy,
+			ReviewEvidence:      f.reviewEvidence,
+			Timeout:             f.timeout,
+			InstanceIDs:         map[string]string(f.instanceIDs),
 		},
 	}
 
@@ -857,6 +873,19 @@ func credentials(f flags) (edge, proof *goapiproof.Credential, err error) {
 			}).WithShapeValidator(goapiproof.ValidateEnvelopeShape)
 	}
 	return edge, proof, nil
+}
+
+// adminEdgeCredentialFor is the org-admin proof principal's edge access token, minted in process the same way the read-level one is
+// (the existing mint-edge-token verb with -principal admin-proof: the row must exist, hold exactly the admin role and not be a superuser,
+// all checked by the minter by name). nil unless -admin-principal was given: no flag, no widened credential exists in the run.
+func adminEdgeCredentialFor(f flags) *goapiproof.Credential {
+	if !f.adminPrincipal {
+		return nil
+	}
+	return goapiproof.MintedCredential("Authorization", "org-admin proof principal edge access token", edgeCredentialFreshness,
+		func(ctx context.Context) (string, error) {
+			return mintCredential(ctx, "mint-edge-token", []string{"-org", f.orgID, "-principal", "admin-proof"})
+		}).WithShapeValidator(goapiproof.ValidateEnvelopeShape)
 }
 
 // labelledProofURL renders a proof URL safely, passing through the

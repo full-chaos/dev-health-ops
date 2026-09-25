@@ -56,6 +56,11 @@
     "digest": "d069072e06541e799679f355cb343a6408d660d17f1e7a33659063b423017fba"
   },
   {
+    "operation": "cloneSavedReport",
+    "digest": "0db93d48c1faea4909edfa9dec53c159c9f3238c2abc59cd7fdd06bba1ceeb63",
+    "kind": "mutation"
+  },
+  {
     "operation": "cognitiveLoad",
     "digest": "dcdfb2692addf52ed6117162963c698b628af37d01d08e4a8724f90388d8427d"
   },
@@ -72,8 +77,18 @@
     "digest": "0e43d67d571539081b2006ae8b2148dd4ea31c959be22be1db9e927083060baa"
   },
   {
+    "operation": "createSavedReport",
+    "digest": "2834bc84c1a065ef44dff96e02f6e5d2ca55608053f96a52366eac429aafc0f0",
+    "kind": "mutation"
+  },
+  {
     "operation": "dataHealthIdentity",
     "digest": "a31987266aad8c1e9eb7cb1b572cc45aecc417f566773e9b5ba6e1bf10ec1a94"
+  },
+  {
+    "operation": "deleteSavedReport",
+    "digest": "fe44dd6224b877667edab9f8420bde4fe70239e95e9311ca2d541522296c0207",
+    "kind": "mutation"
   },
   {
     "operation": "experiments",
@@ -182,6 +197,16 @@
   {
     "operation": "throughputForecast",
     "digest": "fc08dea094ec832290b4f528141eacb5bbc463beea45794cf205fe43952379f9"
+  },
+  {
+    "operation": "triggerReport",
+    "digest": "5f66c4926885418905c7418445bfbaef1bf8c4847ebb37252026a7e98e44d047",
+    "kind": "mutation"
+  },
+  {
+    "operation": "updateSavedReport",
+    "digest": "276ea75cf12ec0ecde5a75bdbfbb0a8a11c4ec9fc613a0f80fcd6b7a8ccc050f",
+    "kind": "mutation"
   },
   {
     "operation": "workGraphArtifacts",

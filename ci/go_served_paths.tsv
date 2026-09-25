@@ -1,0 +1,72 @@
+# The REST paths the DEPLOYED ingress routes to a Go service (CHAOS-6813).
+#
+# A Python route body may be reduced to the 'served by Go' refusal stub only for
+# a path listed here: the ingress routes by PATH (no HTTP method), and a stubbed
+# route still reached on the Python plane answers 500 in production.
+# ci/check_go_served_paths.py (run by tests/test_go_served_paths_guard.py) fails
+# a stubbed route whose path is absent, and a row that names no served Python route.
+#
+# Kept by prod-ops, per release: append the rows of the new rev from the read-only
+# ingress dump (kubectl get ingress); rewrite a row only when the ingress drops it.
+# rev    = the release label the path was first observed Go-routed
+# plane  = go-api | query-api (the Go service the ingress sends the path to)
+# path   = the ingress path with every path parameter written {} (no regex, no trailing slash)
+#
+# rev186 = helm revision 187, dumped 2026-09-25T20:30:50Z. Admin routes are NOT here:
+# at rev186 no /api/v1/admin/* path is Go-routed (the '/' catch-all is the Python api).
+rev186	go-api	/api/v1/billing/audit
+rev186	go-api	/api/v1/billing/audit/{}
+rev186	go-api	/api/v1/billing/audit/{}/resolve
+rev186	go-api	/api/v1/billing/checkout
+rev186	go-api	/api/v1/billing/entitlements/{}
+rev186	go-api	/api/v1/billing/invoices
+rev186	go-api	/api/v1/billing/invoices/{}
+rev186	go-api	/api/v1/billing/invoices/{}/void
+rev186	go-api	/api/v1/billing/plans
+rev186	go-api	/api/v1/billing/plans/{}
+rev186	go-api	/api/v1/billing/plans/{}/sync-stripe
+rev186	go-api	/api/v1/billing/portal
+rev186	go-api	/api/v1/billing/reconcile
+rev186	go-api	/api/v1/billing/refunds
+rev186	go-api	/api/v1/billing/refunds/{}
+rev186	go-api	/api/v1/billing/subscriptions
+rev186	go-api	/api/v1/billing/subscriptions/cancel
+rev186	go-api	/api/v1/billing/subscriptions/change-plan
+rev186	go-api	/api/v1/billing/subscriptions/history
+rev186	go-api	/api/v1/billing/subscriptions/list
+rev186	go-api	/api/v1/billing/subscriptions/reactivate
+rev186	go-api	/api/v1/external-ingest/availability
+rev186	go-api	/api/v1/external-ingest/batches
+rev186	go-api	/api/v1/external-ingest/batches/{}
+rev186	go-api	/api/v1/external-ingest/schemas
+rev186	go-api	/api/v1/external-ingest/schemas/{}
+rev186	go-api	/api/v1/external-ingest/validate
+rev186	go-api	/api/v1/webhooks/github
+rev186	go-api	/api/v1/webhooks/gitlab
+rev186	go-api	/api/v1/webhooks/health
+rev186	go-api	/api/v1/webhooks/jira
+rev186	go-api	/api/v1/webhooks/pagerduty/{}
+rev186	query-api	/api/v1/drilldown/issues
+rev186	query-api	/api/v1/drilldown/prs
+rev186	query-api	/api/v1/explain
+rev186	query-api	/api/v1/filters/options
+rev186	query-api	/api/v1/flame
+rev186	query-api	/api/v1/flame/aggregated
+rev186	query-api	/api/v1/heatmap
+rev186	query-api	/api/v1/home
+rev186	query-api	/api/v1/investment
+rev186	query-api	/api/v1/investment/explain
+rev186	query-api	/api/v1/investment/flow
+rev186	query-api	/api/v1/investment/flow/repo-team
+rev186	query-api	/api/v1/investment/sunburst
+rev186	query-api	/api/v1/meta
+rev186	query-api	/api/v1/opportunities
+rev186	query-api	/api/v1/people
+rev186	query-api	/api/v1/people/{}/drilldown/issues
+rev186	query-api	/api/v1/people/{}/drilldown/prs
+rev186	query-api	/api/v1/people/{}/metric
+rev186	query-api	/api/v1/people/{}/summary
+rev186	query-api	/api/v1/quadrant
+rev186	query-api	/api/v1/sankey
+rev186	query-api	/api/v1/work-units
+rev186	query-api	/api/v1/work-units/{}/explain

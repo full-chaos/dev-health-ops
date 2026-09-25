@@ -17,22 +17,22 @@
  {
   "name": "status at the head",
   "exit": 0,
-  "stdout": "Current PostgreSQL revision heads: 0142, 0066\nRequired PostgreSQL revisions: 0142, 0066\nPostgreSQL application schema is current.\n"
+  "stdout": "Current PostgreSQL revision heads: 0066, 0142\nRequired PostgreSQL revisions: 0142, 0066\nPostgreSQL application schema is current.\n"
  },
  {
   "name": "status at the head without the cutover",
   "exit": 0,
-  "stdout": "Current PostgreSQL revision heads: 0142, 0066\nRequired PostgreSQL revisions: 0142\nPostgreSQL application schema is current.\n"
+  "stdout": "Current PostgreSQL revision heads: 0066, 0142\nRequired PostgreSQL revisions: 0142\nPostgreSQL application schema is current.\n"
  },
  {
   "name": "status check at the head",
   "exit": 0,
-  "stdout": "Current PostgreSQL revision heads: 0142, 0066\nRequired PostgreSQL revisions: 0142, 0066\nPostgreSQL application schema is current.\n"
+  "stdout": "Current PostgreSQL revision heads: 0066, 0142\nRequired PostgreSQL revisions: 0142, 0066\nPostgreSQL application schema is current.\n"
  },
  {
   "name": "status check at the head without the cutover",
   "exit": 0,
-  "stdout": "Current PostgreSQL revision heads: 0142, 0066\nRequired PostgreSQL revisions: 0142\nPostgreSQL application schema is current.\n"
+  "stdout": "Current PostgreSQL revision heads: 0066, 0142\nRequired PostgreSQL revisions: 0142\nPostgreSQL application schema is current.\n"
  },
  {
   "name": "status without the cutover head",

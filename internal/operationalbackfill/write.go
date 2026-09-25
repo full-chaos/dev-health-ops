@@ -198,7 +198,11 @@ func insertRows(ctx context.Context, conn driver.Conn, rows []Row, contract Cont
 		return nil
 	}
 	columns := rows[0].columns(contract)
-	batch, err := conn.PrepareBatch(ctx, "INSERT INTO "+rows[0].Table+" ("+strings.Join(columns, ", ")+")")
+	statement, err := insertPrefix(rows[0].Table)
+	if err != nil {
+		return err
+	}
+	batch, err := conn.PrepareBatch(ctx, statement+strings.Join(columns, ", ")+")")
 	if err != nil {
 		return err
 	}
@@ -209,6 +213,21 @@ func insertRows(ctx context.Context, conn driver.Conn, rows []Row, contract Cont
 		}
 	}
 	return batch.Send()
+}
+
+// insertPrefix is the start of the table's INSERT statement, each written out
+// in full: the module's writer inventory (internal/storedversion) reads the
+// statements, and a table name built at run time would be unresolvable there.
+func insertPrefix(table string) (string, error) {
+	switch table {
+	case tableIncidents:
+		return "INSERT INTO operational_incidents (", nil
+	case tableAlerts:
+		return "INSERT INTO operational_alerts (", nil
+	case tableSchedules:
+		return "INSERT INTO operational_on_call_schedules (", nil
+	}
+	return "", fmt.Errorf("no canonical writer for table %q", table)
 }
 
 // Write persists a batch as write_operational_batch does: incidents, then

@@ -107,7 +107,9 @@ func apiPosture() RolePosture {
 			{"integration_sources", true, true, true},
 			// CHAOS-6597 (the sync config create path) creates the
 			// planner-managed integration (INSERT); the integration admin routes
-			// create and update integrations.
+			// create and update integrations, and CHAOS-6643 (the sync config
+			// update path) writes a GitHub integration's work-item runtime
+			// options into its config (UPDATE).
 			{"integrations", true, true, true},
 			// CHAOS-6319: the customer-push ownership check reads a managed
 			// integration's credential row (provider and plain config only;

@@ -3,6 +3,7 @@ package goapiproof
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -11,11 +12,11 @@ import (
 // request leaves the runner, in every serving mode.
 func TestRunRefusesADocumentThatIsNotAQueryBeforeSendingAnything(t *testing.T) {
 	body := `{"data":{"featureFlags":[]}}`
-	for _, tc := range []struct{ name, document string }{
-		{"mutation", "mutation Touch { featureFlags { key } }"},
-		{"subscription", "subscription Watch { featureFlags { key } }"},
-		{"unparseable", "query Broken {"},
-		{"two operations", "query A { featureFlags { key } } mutation M { featureFlags { key } }"},
+	for _, tc := range []struct{ name, document, detail string }{
+		{"mutation", "mutation Touch { featureFlags { key } }", `kind is "mutation"`},
+		{"subscription", "subscription Watch { featureFlags { key } }", "cannot be stated"},
+		{"unparseable", "query Broken {", "cannot be stated"},
+		{"two operations", "query A { featureFlags { key } } mutation M { featureFlags { key } }", "cannot be stated"},
 	} {
 		for _, mode := range []string{"canary", "primary", "shadow"} {
 			t.Run(tc.name+"/mode="+mode, func(t *testing.T) {
@@ -31,8 +32,11 @@ func TestRunRefusesADocumentThatIsNotAQueryBeforeSendingAnything(t *testing.T) {
 				if outcomes[0].RefusalReason != RefusalNotAQueryDocument {
 					t.Fatalf("expected %s, got %s (%s)", RefusalNotAQueryDocument, outcomes[0].RefusalReason, outcomes[0].RefusalDetail)
 				}
-				if outcomes[0].RefusalDetail == "" {
-					t.Fatal("a refusal must carry a detail an operator can act on")
+				if outcomes[0].TerminalState != TerminalStateUnsupported {
+					t.Fatalf("terminal state %q, want %q: this document cannot be proven, it is not a failed proof", outcomes[0].TerminalState, TerminalStateUnsupported)
+				}
+				if !strings.Contains(outcomes[0].RefusalDetail, tc.detail) {
+					t.Fatalf("refusal detail %q does not say %q", outcomes[0].RefusalDetail, tc.detail)
 				}
 				if len(edge.seen) != 0 {
 					t.Fatalf("a refused document must send nothing, but the edge saw %v", edge.seen)

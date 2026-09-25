@@ -42,6 +42,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/workgraph"
+	postgresstore "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 )
 
 // registeredFeatureFlagsDocument is the ONE query document query-api
@@ -2408,7 +2409,11 @@ func buildQueryRoute(getenv getenvFunc, cfg queryRouteConfig) (queryRouteHandler
 		BuildInfo: newBuildInfoHandler(verifier),
 	}
 	cleanup := func() { pgPool.Close() }
-	ready := readinessCheck(chClient, pgPool, verifier)
+	// CHAOS-6803: the saved-report mutations write to Postgres, so a deployment
+	// that names query-api's role (QUERY_API_DATABASE_ROLE) is not ready until
+	// that role holds the write grants the migration leg applies. A deployment
+	// that names none has not opted in and is checked for nothing extra.
+	ready := readinessCheck(chClient, pgPool, verifier, writeGrantsCheck(getenv, pgPool))
 	return handlers, ready, cleanup, nil
 }
 
@@ -2441,7 +2446,7 @@ func buildQueryRoute(getenv getenvFunc, cfg queryRouteConfig) (queryRouteHandler
 // authenticated request 401'd. verifier.CheckJWKS() closes that -- see
 // its own doc comment for why calling it here, uncached, on every probe,
 // preserves the no-restart rotation contract rather than defeating it.
-func readinessCheck(chClient *dhclickhouse.Client, pgPool *pgxpool.Pool, verifier *principal.Verifier) func(context.Context) error {
+func readinessCheck(chClient *dhclickhouse.Client, pgPool *pgxpool.Pool, verifier *principal.Verifier, writeGrants func(context.Context) error) func(context.Context) error {
 	return func(ctx context.Context) error {
 		if err := chClient.Ping(ctx); err != nil {
 			return &readyzDependencyError{Class: readyzClassClickHouse, Cause: err}
@@ -2452,8 +2457,34 @@ func readinessCheck(chClient *dhclickhouse.Client, pgPool *pgxpool.Pool, verifie
 		if err := verifier.CheckJWKS(); err != nil {
 			return &readyzDependencyError{Class: readyzClassJWKS, Cause: err}
 		}
+		return writeGrantsReadiness(ctx, writeGrants)
+	}
+}
+
+// writeGrantsCheck returns the readiness check for query-api's write grants,
+// or nil when the deployment names no query-api role (QUERY_API_DATABASE_ROLE
+// unset or blank): such a deployment has not opted in and is checked for
+// nothing extra.
+func writeGrantsCheck(getenv getenvFunc, pgPool *pgxpool.Pool) func(context.Context) error {
+	role := strings.TrimSpace(getenv("QUERY_API_DATABASE_ROLE"))
+	if role == "" {
 		return nil
 	}
+	return func(ctx context.Context) error {
+		return postgresstore.CheckQueryAPIWriteGrants(ctx, pgPool, role)
+	}
+}
+
+// writeGrantsReadiness runs the optional write-grants check and classes its
+// failure so /readyz names WHICH dependency failed without echoing the cause.
+func writeGrantsReadiness(ctx context.Context, writeGrants func(context.Context) error) error {
+	if writeGrants == nil {
+		return nil
+	}
+	if err := writeGrants(ctx); err != nil {
+		return &readyzDependencyError{Class: readyzClassWriteGrants, Cause: err}
+	}
+	return nil
 }
 
 // The three dependency classes readinessCheck can fail on. These are the
@@ -2464,6 +2495,10 @@ const (
 	readyzClassClickHouse = "clickhouse"
 	readyzClassPostgres   = "postgres"
 	readyzClassJWKS       = "jwks"
+	// readyzClassWriteGrants: the query-api role does not hold the write
+	// grants its mutations need (CHAOS-6803). Only checked when
+	// QUERY_API_DATABASE_ROLE names a role.
+	readyzClassWriteGrants = "postgres_write_grants"
 )
 
 // readyzDependencyError names WHICH of /query's three live dependencies
@@ -2852,10 +2887,10 @@ func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, op
 
 		if !servesMutations {
 			kind, kindErr := digest.DocumentKind(parsed.Query)
-			if kindErr != nil || kind != digest.KindQuery {
-				// A registered document whose kind cannot be stated is refused
-				// like a mutation: only a document proven to be a query
-				// reaches the measurement-only route.
+			if kind != digest.KindQuery {
+				// DocumentKind answers "" for a document whose kind cannot be
+				// stated, so that case is refused here too: only a document
+				// proven to be a query reaches the measurement-only route.
 				log.Printf("query-api: proof route refused a non-query document: operation=%s kind=%q err=%v", operation, kind, kindErr)
 				http.Error(w, "this route serves query documents only", http.StatusMethodNotAllowed)
 				return

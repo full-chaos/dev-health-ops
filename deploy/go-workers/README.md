@@ -1035,6 +1035,29 @@ silently skips grant re-application, so revoking privileges by hand and
 re-running the migrate binary does not restore them; re-run
 `provision_river_roles.sql` instead, or start from a fresh database.
 
+### query-api write grants: `QUERY_API_DATABASE_ROLE` (opt-in, additive)
+
+query-api is the read plane, and today it connects with
+`GO_API_REGISTRY_POSTGRES_URI`, the DSN of the role that owns the registry
+tables. The saved-report GraphQL mutations (CHAOS-6098) are its first writes,
+so `internal/storage/postgres/query_api_authorization.go` declares the exact
+write privileges they need (`QueryAPIWritePosture`).
+
+Setting `QUERY_API_DATABASE_ROLE` to an existing role, on BOTH the migrate Job
+and the query-api Deployment, does two things and nothing else:
+
+- `dho migrate river` issues plain `GRANT` statements for that manifest. This
+  leg never revokes and never requires a least-privilege login, so a role that
+  already reads the whole query plane keeps reading it. A role that does not
+  exist yet is skipped with a warning, like the api role.
+- query-api's `/readyz` is not ready (`postgres_write_grants`) until the pool's
+  login IS that role and the role holds every declared write. A role that holds
+  more is accepted: this is not a "hold exactly" posture.
+
+Leaving the variable unset changes nothing. Enforcing a full least-privilege
+posture for query-api (every relation it reads, off the owner DSN) is a
+separate piece of work (CHAOS-6804).
+
 ### `post_sync` needs the `sync` queue too — `--queues=metrics` alone leaves the fanout job stuck `available` forever
 
 A worker selecting only `--queues=metrics` starts cleanly, passes readiness,

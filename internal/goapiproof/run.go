@@ -919,7 +919,9 @@ func (r *Runner) proveRequest(ctx context.Context, operation string, variantName
 	if !ok {
 		return refuse(RefusalDocumentDigestDrift, "this checkout enumerates no document for the operation the running process registers")
 	}
-	if kind, err := goapidigest.DocumentKind(document); err != nil || kind != goapidigest.KindQuery {
+	// DocumentKind answers "" when the kind cannot be stated, so that case is
+	// refused by the same comparison; the error only shapes the detail.
+	if kind, err := goapidigest.DocumentKind(document); kind != goapidigest.KindQuery {
 		detail := fmt.Sprintf("the registered document's kind is %q, and a two-plane proof applies to query documents only: it would run a write on both planes", kind)
 		if err != nil {
 			detail = "the registered document's kind cannot be stated: " + err.Error()

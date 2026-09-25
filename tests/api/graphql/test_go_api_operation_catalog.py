@@ -180,3 +180,31 @@ def test_checked_in_catalog_kinds_are_known():
         "query",
         "mutation",
     }
+
+
+def _generator():
+    sys.path.insert(0, str(GENERATE_SCRIPT.parent))
+    try:
+        module = importlib.import_module("generate_operation_catalog")
+        return importlib.reload(module)
+    finally:
+        sys.path.remove(str(GENERATE_SCRIPT.parent))
+
+
+def test_generator_writes_kind_only_for_a_mutation_document():
+    """The kind comes from registrydump's parsed operation type; a query entry
+    stays exactly ``{operation, digest}``, so the checked-in catalog only
+    changes when a mutation is registered."""
+    generator = _generator()
+    base = {"operation": "op", "digest": "d", "document": "x", "const_name": "c"}
+    assert generator._entry({**base, "kind": "query"}) == {
+        "operation": "op",
+        "digest": "d",
+    }
+    assert generator._entry({**base, "kind": "mutation"}) == {
+        "operation": "op",
+        "digest": "d",
+        "kind": "mutation",
+    }
+    with pytest.raises(RuntimeError, match="unexpected document kind"):
+        generator._entry({**base, "kind": "subscription"})

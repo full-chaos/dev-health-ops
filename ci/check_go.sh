@@ -55,6 +55,27 @@ INTEGRATION_CONTAINER_HARNESS="${ROOT}/internal/testsupport/containers/harness.g
 # able to change which suite a verb runs.
 GO_ENV_OFF=(env -u GO_PROVIDER_ROUTES -u DEV_HEALTH_ENV -u GOFLAGS -u GOEXPERIMENT)
 
+# INTEGRATION_TEST_ENV (CHAOS-6634): environment for the MULTI-PACKAGE
+# `go test -tags=integration pkgA pkgB ...` invocations below (integration and
+# the integration-shard packages target). testcontainers-go derives its session
+# id from the PARENT pid, so every test binary of one such invocation shares ONE
+# session and ONE Ryuk reaper. When one package's process exits, Ryuk reaps the
+# session's containers after its 10 s reconnection timeout -- including a
+# SIBLING package's live container. Seen on shard 3: internal/admincli
+# TestSeedMatchesPython lost its Postgres ~10 s after internal/api/externalingest
+# exited (`unexpected postmaster exit`, `No such container`, then the Python
+# leg's `Connect call failed`). Reproduced with two throwaway packages in one
+# `go test -p 2` run: the long-lived one is refused ~10 s after the short one
+# exits, and survives with TESTCONTAINERS_RYUK_DISABLED=true.
+# In CI (hosted runners are discarded, and every harness container has its own
+# t.Cleanup Terminate) the reaper is off for those invocations. A value the
+# caller already set wins. Outside CI the reaper stays on (orphan safety on a
+# workstation), so a local multi-package run keeps the cross-package hazard.
+INTEGRATION_TEST_ENV=()
+if [ "${CI:-}" = "true" ] && [ -z "${TESTCONTAINERS_RYUK_DISABLED+x}" ]; then
+  INTEGRATION_TEST_ENV=(TESTCONTAINERS_RYUK_DISABLED=true)
+fi
+
 usage() {
   # Backticks in the literal help text document commands; they are not substitutions.
   # shellcheck disable=SC2016
@@ -2700,7 +2721,7 @@ check_integration_package_shard() {
     fi
     (
       cd "${ROOT}/${module_dir}"
-      "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -tags=integration -count=1 -timeout=30m "${run_pkgs[@]}"
+      "${GO_ENV_OFF[@]}" GOWORK=off ${INTEGRATION_TEST_ENV[@]+"${INTEGRATION_TEST_ENV[@]}"} go test -mod=readonly -tags=integration -count=1 -timeout=30m "${run_pkgs[@]}"
     )
   done
 
@@ -2798,7 +2819,7 @@ check_integration() {
     printf 'go test integration: %s -> %s\n' "${module_dir}" "${run_pkgs[*]}"
     (
       cd "${ROOT}/${module_dir}"
-      "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -tags=integration -count=1 -timeout=30m "${run_pkgs[@]}"
+      "${GO_ENV_OFF[@]}" GOWORK=off ${INTEGRATION_TEST_ENV[@]+"${INTEGRATION_TEST_ENV[@]}"} go test -mod=readonly -tags=integration -count=1 -timeout=30m "${run_pkgs[@]}"
     )
   done
 }

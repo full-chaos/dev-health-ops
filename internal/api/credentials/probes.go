@@ -348,7 +348,7 @@ func (h handlers) probeGitHub(ctx context.Context, creds *pyjson.Object) (bool, 
 // network failure is transient and retried up to three attempts, one and two
 // seconds apart (retry_with_backoff), every other failure at once.
 func (h handlers) installationToken(ctx context.Context, gc *githubCredentials, base string) (string, error) {
-	delay := time.Second
+	delay := installationTokenRetryDelay
 	for attempt := 1; ; attempt++ {
 		token, err := h.mintInstallationToken(ctx, gc, base)
 		if err == nil || attempt == installationTokenAttempts || !transientTokenError(err) {
@@ -368,6 +368,15 @@ func (h handlers) installationToken(ctx context.Context, gc *githubCredentials, 
 // installationTokenAttempts is the exchange's TOKEN_EXCHANGE_MAX_RETRIES.
 const installationTokenAttempts = 3
 
+// The exchange's request timeout (requests.post timeout, 30 s: a timeout is
+// a transient failure and retried) and the first retry delay
+// (TOKEN_EXCHANGE_INITIAL_DELAY_SECONDS). Variables so a test can shorten
+// them; nothing else assigns them.
+var (
+	installationTokenTimeout    = 30 * time.Second
+	installationTokenRetryDelay = time.Second
+)
+
 // transientTokenError is GitHubAppTransientError: the exchange failed on the
 // network or the provider answered 5xx.
 func transientTokenError(err error) bool {
@@ -379,6 +388,11 @@ func transientTokenError(err error) bool {
 }
 
 func (h handlers) mintInstallationToken(ctx context.Context, gc *githubCredentials, base string) (string, error) {
+	// The credentials client sets no timeout of its own: one attempt gets
+	// the exchange's, and running out of it is the transient failure the
+	// retry covers.
+	ctx, cancel := context.WithTimeout(ctx, installationTokenTimeout)
+	defer cancel()
 	credential := providerfoundation.NewCredential("github", "admin-test", nil, map[string]secrets.Value{
 		"app_id": secrets.NewValue(gc.appID), "private_key": secrets.NewValue(gc.privateKey), "installation_id": secrets.NewValue(gc.installationID),
 	})

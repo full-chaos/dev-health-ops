@@ -129,7 +129,13 @@ func normalizeURL(raw string) string {
 	if userinfo != "" {
 		out.WriteString(quote(userinfo, userinfoSafe) + "@")
 	}
-	out.WriteString(quote(strings.ToLower(host), hostSafe))
+	if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
+		// An IPv6 literal: httpx validates it and keeps it, in its brackets,
+		// as it was written.
+		out.WriteString(host)
+	} else {
+		out.WriteString(quote(strings.ToLower(host), hostSafe))
+	}
 	defaults := map[string]string{"ftp": "21", "http": "80", "https": "443", "ws": "80", "wss": "443"}
 	if port != "" && port != defaults[strings.ToLower(scheme)] {
 		out.WriteString(":" + port)

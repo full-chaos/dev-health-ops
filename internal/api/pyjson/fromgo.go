@@ -49,6 +49,9 @@ func (c fromGoConverter) fromGo(value reflect.Value) (Value, error) {
 	if !value.IsValid() {
 		return nil, nil
 	}
+	if value.Kind() != reflect.Pointer && value.Type().Implements(orderedMapperType) {
+		return c.fromOrderedMap(value.Interface().(orderedMapper))
+	}
 	if marshaled, ok, err := fromMarshaler(value); ok {
 		return marshaled, err
 	}
@@ -144,6 +147,40 @@ func (c fromGoConverter) fromList(value reflect.Value) (Value, error) {
 	return out, nil
 }
 
+// fromOrderedMap writes an OrderedMap in insertion order; a nil one is a
+// nil map.
+func (c fromGoConverter) fromOrderedMap(ordered orderedMapper) (Value, error) {
+	keys, valueOf, isNil := ordered.orderedEntries()
+	if isNil {
+		if c.nilAsEmpty {
+			return NewObject(), nil
+		}
+		return nil, nil
+	}
+	out := NewObject()
+	for _, key := range keys {
+		converted, err := c.fromGo(valueOf(key))
+		if err != nil {
+			return nil, err
+		}
+		out.Set(key, converted)
+	}
+	return out, nil
+}
+
+// isNilCollection is a nil slice, a nil map or a nil OrderedMap.
+func isNilCollection(value reflect.Value) bool {
+	switch value.Kind() {
+	case reflect.Slice, reflect.Map:
+		return value.IsNil()
+	}
+	if value.Kind() != reflect.Pointer && value.Type().Implements(orderedMapperType) {
+		_, _, isNil := value.Interface().(orderedMapper).orderedEntries()
+		return isNil
+	}
+	return false
+}
+
 func (c fromGoConverter) fromMap(value reflect.Value) (Value, error) {
 	type entry struct {
 		key   string
@@ -205,7 +242,7 @@ func (c fromGoConverter) fromStruct(value reflect.Value) (Value, error) {
 		if field.omitZero && isZeroValue(fieldValue) {
 			continue
 		}
-		if c.nilAsEmpty && field.nullable && (fieldValue.Kind() == reflect.Slice || fieldValue.Kind() == reflect.Map) && fieldValue.IsNil() {
+		if c.nilAsEmpty && field.nullable && isNilCollection(fieldValue) {
 			out.Set(field.name, nil)
 			continue
 		}

@@ -37,6 +37,8 @@
 package sankey
 
 import (
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+
 	"context"
 	"errors"
 	"time"
@@ -142,22 +144,22 @@ func normalizeMode(mode string) string {
 // default (non-exclude_none) response_model serialization -- so every
 // field below is a nilable type with no `omitempty`.
 type Response struct {
-	Mode                string             `json:"mode"`
-	Nodes               []Node             `json:"nodes"`
-	Links               []Link             `json:"links"`
-	Unit                *string            `json:"unit"`
-	Label               *string            `json:"label"`
-	Description         *string            `json:"description"`
-	TeamCoverage        *float64           `json:"team_coverage"`
-	RepoCoverage        *float64           `json:"repo_coverage"`
-	DistinctTeamTargets *int               `json:"distinct_team_targets"`
-	DistinctRepoTargets *int               `json:"distinct_repo_targets"`
-	ChosenMode          *string            `json:"chosen_mode"`
-	Coverage            map[string]float64 `json:"coverage" pyjson:"nullable"`
-	UnassignedReasons   map[string]int     `json:"unassigned_reasons" pyjson:"nullable"`
-	FlowMode            *string            `json:"flow_mode"`
-	DrillCategory       *string            `json:"drill_category"`
-	TopNRepos           *int               `json:"top_n_repos"`
+	Mode                string                     `json:"mode"`
+	Nodes               []Node                     `json:"nodes"`
+	Links               []Link                     `json:"links"`
+	Unit                *string                    `json:"unit"`
+	Label               *string                    `json:"label"`
+	Description         *string                    `json:"description"`
+	TeamCoverage        *float64                   `json:"team_coverage"`
+	RepoCoverage        *float64                   `json:"repo_coverage"`
+	DistinctTeamTargets *int                       `json:"distinct_team_targets"`
+	DistinctRepoTargets *int                       `json:"distinct_repo_targets"`
+	ChosenMode          *string                    `json:"chosen_mode"`
+	Coverage            pyjson.OrderedMap[float64] `json:"coverage" pyjson:"nullable"`
+	UnassignedReasons   pyjson.OrderedMap[int]     `json:"unassigned_reasons" pyjson:"nullable"`
+	FlowMode            *string                    `json:"flow_mode"`
+	DrillCategory       *string                    `json:"drill_category"`
+	TopNRepos           *int                       `json:"top_n_repos"`
 }
 
 // Node is the wire shape of SankeyNode (schemas.py:549-552). Value is

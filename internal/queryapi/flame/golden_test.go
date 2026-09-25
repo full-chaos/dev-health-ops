@@ -433,18 +433,18 @@ func TestIssueEntityNeverCarriesTeamAttributionFields(t *testing.T) {
 		t.Fatalf("BuildResponse: %v", err)
 	}
 	wantKeys := map[string]bool{"work_item_id": true, "provider": true, "type": true, "status": true}
-	if len(got.Entity) != len(wantKeys) {
-		t.Fatalf("entity has %d keys, want %d: %+v", len(got.Entity), len(wantKeys), got.Entity)
+	if got.Entity.Len() != len(wantKeys) {
+		t.Fatalf("entity has %d keys, want %d: %+v", got.Entity.Len(), len(wantKeys), got.Entity.Keys())
 	}
-	for key := range got.Entity {
+	for key := range got.Entity.All() {
 		if !wantKeys[key] {
-			t.Fatalf("entity carries unexpected key %q (team-attribution leak?): %+v", key, got.Entity)
+			t.Fatalf("entity carries unexpected key %q (team-attribution leak?): %+v", key, got.Entity.Keys())
 		}
 	}
-	if _, ok := got.Entity["team_id"]; ok {
+	if _, ok := got.Entity.Get("team_id"); ok {
 		t.Fatal("entity must never carry team_id -- the team-attribution join is dead code and is not ported")
 	}
-	if _, ok := got.Entity["work_scope_id"]; ok {
+	if _, ok := got.Entity.Get("work_scope_id"); ok {
 		t.Fatal("entity must never carry work_scope_id -- it is never read by _build_issue_flame_response")
 	}
 }

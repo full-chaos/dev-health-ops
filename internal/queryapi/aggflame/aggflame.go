@@ -92,6 +92,8 @@
 package aggflame
 
 import (
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+
 	"context"
 	"errors"
 	"fmt"
@@ -180,11 +182,11 @@ type ApproximationInfo struct {
 // and Notes are always non-nil so they serialise as `{}`/`[]`, matching
 // Python's `filters: dict = {}` / `notes: list = []` defaults.
 type Meta struct {
-	WindowStart   string            `json:"window_start"`
-	WindowEnd     string            `json:"window_end"`
-	Filters       map[string]string `json:"filters"`
-	Notes         []string          `json:"notes"`
-	Approximation ApproximationInfo `json:"approximation"`
+	WindowStart   string                    `json:"window_start"`
+	WindowEnd     string                    `json:"window_end"`
+	Filters       pyjson.OrderedMap[string] `json:"filters"`
+	Notes         []string                  `json:"notes"`
+	Approximation ApproximationInfo         `json:"approximation"`
 }
 
 // Response is AggregatedFlameResponse's wire shape (schemas.py:624-628).
@@ -214,7 +216,7 @@ func BuildResponse(ctx context.Context, client QueryClient, orgID string, params
 	}
 }
 
-func windowMeta(params Params, filters map[string]string, notes []string, approx ApproximationInfo) Meta {
+func windowMeta(params Params, filters pyjson.OrderedMap[string], notes []string, approx ApproximationInfo) Meta {
 	return Meta{
 		WindowStart:   params.StartDay.Format("2006-01-02"),
 		WindowEnd:     params.EndDay.Format("2006-01-02"),
@@ -260,15 +262,16 @@ func buildCycleBreakdown(ctx context.Context, client QueryClient, orgID string, 
 		root = buildCycleBreakdownTree(rows)
 	}
 
-	filters := map[string]string{}
+	// aggregated_flame.py fills filters_used in this order.
+	filters := pyjson.NewOrderedMap[string]()
 	if params.TeamID != "" {
-		filters["team_id"] = params.TeamID
+		filters.Set("team_id", params.TeamID)
 	}
 	if params.Provider != "" {
-		filters["provider"] = params.Provider
+		filters.Set("provider", params.Provider)
 	}
 	if params.WorkScopeID != "" {
-		filters["work_scope_id"] = params.WorkScopeID
+		filters.Set("work_scope_id", params.WorkScopeID)
 	}
 
 	return &Response{
@@ -308,9 +311,10 @@ func buildCodeHotspots(ctx context.Context, client QueryClient, orgID string, pa
 		root = buildCodeHotspotsTree(rows, repoNames)
 	}
 
-	filters := map[string]string{}
+	// aggregated_flame.py fills filters_used in this order.
+	filters := pyjson.NewOrderedMap[string]()
 	if params.RepoID != "" {
-		filters["repo_id"] = params.RepoID
+		filters.Set("repo_id", params.RepoID)
 	}
 
 	return &Response{
@@ -353,12 +357,13 @@ func buildThroughput(ctx context.Context, client QueryClient, orgID string, para
 		root = buildThroughputTree(rows)
 	}
 
-	filters := map[string]string{}
+	// aggregated_flame.py fills filters_used in this order.
+	filters := pyjson.NewOrderedMap[string]()
 	if params.TeamID != "" {
-		filters["team_id"] = params.TeamID
+		filters.Set("team_id", params.TeamID)
 	}
 	if params.RepoID != "" {
-		filters["repo_id"] = params.RepoID
+		filters.Set("repo_id", params.RepoID)
 	}
 
 	return &Response{

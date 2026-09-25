@@ -3,6 +3,7 @@ package explain
 import (
 	"context"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"strings"
 	"time"
 
@@ -215,10 +216,11 @@ func BuildExplainResponse(ctx context.Context, reader *Reader, orgID string, par
 		DeltaPct:     pctChange,
 		Drivers:      driverModels,
 		Contributors: contributorModels,
-		DrilldownLinks: map[string]string{
-			"prs":    fmt.Sprintf("/api/v1/drilldown/prs?metric=%s", params.Metric),
-			"issues": fmt.Sprintf("/api/v1/drilldown/issues?metric=%s", params.Metric),
-		},
+		// explain.py builds prs, then issues; a Python dict keeps that order.
+		DrilldownLinks: pyjson.OrderedMapOf(
+			pyjson.KeyValue[string]{Key: "prs", Value: fmt.Sprintf("/api/v1/drilldown/prs?metric=%s", params.Metric)},
+			pyjson.KeyValue[string]{Key: "issues", Value: fmt.Sprintf("/api/v1/drilldown/issues?metric=%s", params.Metric)},
+		),
 	}, nil
 }
 

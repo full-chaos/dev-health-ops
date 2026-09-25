@@ -8,6 +8,8 @@
 package people
 
 import (
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+
 	"context"
 	"fmt"
 	"math"
@@ -82,10 +84,10 @@ type Coverage struct {
 // always present with a null value (no `omitempty`), matching Pydantic's
 // `model_dump(mode="json")` for an explicit None field.
 type Freshness struct {
-	LastIngestedAt         *time.Time        `json:"last_ingested_at"`
-	LatestSuccessfulSyncAt *time.Time        `json:"latest_successful_sync_at"`
-	Sources                map[string]string `json:"sources"`
-	Coverage               Coverage          `json:"coverage"`
+	LastIngestedAt         *time.Time                `json:"last_ingested_at"`
+	LatestSuccessfulSyncAt *time.Time                `json:"latest_successful_sync_at"`
+	Sources                pyjson.OrderedMap[string] `json:"sources"`
+	Coverage               Coverage                  `json:"coverage"`
 }
 
 // SparkPoint ports SparkPoint (api/models/schemas.py:22-24).
@@ -734,12 +736,13 @@ func BuildSummaryResponse(ctx context.Context, reader *Reader, orgID string, par
 	if lastIngested != nil {
 		status = "ok"
 	}
-	sources := map[string]string{
-		"github": status,
-		"gitlab": status,
-		"jira":   status,
-		"ci":     status,
-	}
+	// people.py builds sources in this order.
+	sources := pyjson.OrderedMapOf(
+		pyjson.KeyValue[string]{Key: "github", Value: status},
+		pyjson.KeyValue[string]{Key: "gitlab", Value: status},
+		pyjson.KeyValue[string]{Key: "jira", Value: status},
+		pyjson.KeyValue[string]{Key: "ci", Value: status},
+	)
 
 	coverageSources, err := fetchIdentityCoverage(ctx, reader.client, identityInputs, orgID)
 	if err != nil {

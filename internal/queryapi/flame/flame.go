@@ -79,6 +79,8 @@
 package flame
 
 import (
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+
 	"context"
 	"fmt"
 	"sort"
@@ -124,9 +126,9 @@ type Frame struct {
 // varies by entity_type (pr/issue/deployment each build their own dict in
 // Python), so it is a plain map here rather than a fixed struct.
 type Response struct {
-	Entity   map[string]any `json:"entity"`
-	Timeline Timeline       `json:"timeline"`
-	Frames   []Frame        `json:"frames"`
+	Entity   pyjson.OrderedMap[any] `json:"entity"`
+	Timeline Timeline               `json:"timeline"`
+	Frames   []Frame                `json:"frames"`
 }
 
 // RequestError carries an HTTP status the way Python's HTTPException does,
@@ -414,12 +416,13 @@ func buildPRFlameResponse(repoID string, number int, pr pullRequestRow, reviews 
 		return nil, unprocessable("Flame frames have gaps")
 	}
 
-	entity := map[string]any{
-		"repo_id": repoID,
-		"number":  number,
-		"title":   nullableString(pr.Title),
-		"state":   nullableString(pr.State),
-	}
+	// flame.py builds the entity dict in this order.
+	entity := pyjson.OrderedMapOf(
+		pyjson.KeyValue[any]{Key: "repo_id", Value: repoID},
+		pyjson.KeyValue[any]{Key: "number", Value: number},
+		pyjson.KeyValue[any]{Key: "title", Value: nullableString(pr.Title)},
+		pyjson.KeyValue[any]{Key: "state", Value: nullableString(pr.State)},
+	)
 	return &Response{Entity: entity, Timeline: timeline, Frames: frames}, nil
 }
 
@@ -454,12 +457,13 @@ func buildIssueFlameResponse(entityID string, issue issueRow) (*Response, error)
 		return nil, unprocessable("Flame frames have gaps")
 	}
 
-	entity := map[string]any{
-		"work_item_id": issue.WorkItemID,
-		"provider":     nullableString(issue.Provider),
-		"type":         nullableString(issue.Type),
-		"status":       nullableString(issue.Status),
-	}
+	// flame.py builds the entity dict in this order.
+	entity := pyjson.OrderedMapOf(
+		pyjson.KeyValue[any]{Key: "work_item_id", Value: issue.WorkItemID},
+		pyjson.KeyValue[any]{Key: "provider", Value: nullableString(issue.Provider)},
+		pyjson.KeyValue[any]{Key: "type", Value: nullableString(issue.Type)},
+		pyjson.KeyValue[any]{Key: "status", Value: nullableString(issue.Status)},
+	)
 	return &Response{Entity: entity, Timeline: timeline, Frames: frames}, nil
 }
 
@@ -530,12 +534,13 @@ func buildDeploymentFlameResponse(repoID, deploymentID string, deployment deploy
 		return nil, unprocessable("Flame frames have gaps")
 	}
 
-	entity := map[string]any{
-		"repo_id":       repoID,
-		"deployment_id": deploymentID,
-		"status":        nullableString(deployment.Status),
-		"environment":   nullableString(deployment.Environment),
-	}
+	// flame.py builds the entity dict in this order.
+	entity := pyjson.OrderedMapOf(
+		pyjson.KeyValue[any]{Key: "repo_id", Value: repoID},
+		pyjson.KeyValue[any]{Key: "deployment_id", Value: deploymentID},
+		pyjson.KeyValue[any]{Key: "status", Value: nullableString(deployment.Status)},
+		pyjson.KeyValue[any]{Key: "environment", Value: nullableString(deployment.Environment)},
+	)
 	return &Response{Entity: entity, Timeline: timeline, Frames: frames}, nil
 }
 

@@ -2,6 +2,7 @@ package investment
 
 import (
 	"context"
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"log"
 	"strings"
 	"time"
@@ -28,22 +29,22 @@ import (
 // edges=[]) leaving those two fields at their own Pydantic defaults
 // (None) rather than populating them.
 type Response struct {
-	ThemeDistribution           map[string]float64    `json:"theme_distribution"`
-	SubcategoryDistribution     map[string]float64    `json:"subcategory_distribution"`
-	EvidenceQualityDistribution map[string]float64    `json:"evidence_quality_distribution" pyjson:"nullable"`
-	EvidenceQualityStats        *EvidenceQualityStats `json:"evidence_quality_stats"`
-	Unit                        *string               `json:"unit"`
-	Edges                       []map[string]any      `json:"edges" pyjson:"nullable"`
+	ThemeDistribution           map[string]float64         `json:"theme_distribution"`
+	SubcategoryDistribution     map[string]float64         `json:"subcategory_distribution"`
+	EvidenceQualityDistribution pyjson.OrderedMap[float64] `json:"evidence_quality_distribution" pyjson:"nullable"`
+	EvidenceQualityStats        *EvidenceQualityStats      `json:"evidence_quality_stats"`
+	Unit                        *string                    `json:"unit"`
+	Edges                       []map[string]any           `json:"edges" pyjson:"nullable"`
 }
 
 // EvidenceQualityStats is the wire shape of EvidenceQualityStats
 // (api/models/schemas.py:312-319).
 type EvidenceQualityStats struct {
-	Mean           *float64       `json:"mean"`
-	Stddev         *float64       `json:"stddev"`
-	Total          int            `json:"total"`
-	BandCounts     map[string]int `json:"band_counts"`
-	QualityDrivers []string       `json:"quality_drivers"`
+	Mean           *float64               `json:"mean"`
+	Stddev         *float64               `json:"stddev"`
+	Total          int                    `json:"total"`
+	BandCounts     pyjson.OrderedMap[int] `json:"band_counts"`
+	QualityDrivers []string               `json:"quality_drivers"`
 }
 
 // SunburstSlice is the wire shape of InvestmentSunburstSlice
@@ -233,9 +234,11 @@ func BuildResponse(ctx context.Context, reader *Reader, orgID string, params Par
 	}
 
 	qualityStats := computeQualityStats(qualityRow, found)
-	evidenceQualityDistribution := make(map[string]float64, len(qualityStats.BandCounts))
-	for band, count := range qualityStats.BandCounts {
-		evidenceQualityDistribution[band] = float64(count)
+	// investment.py builds this dict from band_counts.items(), so it keeps
+	// band_counts' order.
+	evidenceQualityDistribution := pyjson.NewOrderedMap[float64]()
+	for band, count := range qualityStats.BandCounts.All() {
+		evidenceQualityDistribution.Set(band, float64(count))
 	}
 
 	return &Response{
@@ -343,15 +346,20 @@ func BuildSunburstResponse(ctx context.Context, reader *Reader, orgID string, pa
 // the five-key zeroed map the populated branch below builds.
 func computeQualityStats(row QualityStatsRow, found bool) EvidenceQualityStats {
 	if !found {
-		return EvidenceQualityStats{BandCounts: map[string]int{}, QualityDrivers: []string{}}
+		return EvidenceQualityStats{BandCounts: pyjson.NewOrderedMap[int](), QualityDrivers: []string{}}
 	}
 
-	bandCounts := map[string]int{
-		"high":     row.HighCount,
-		"moderate": row.ModerateCount,
-		"low":      row.LowCount,
-		"very_low": row.VeryLowCount,
-		"unknown":  row.UnknownCount,
+	// _compute_quality_stats builds band_counts in this order.
+	bandCounts := pyjson.OrderedMapOf(
+		pyjson.KeyValue[int]{Key: "high", Value: row.HighCount},
+		pyjson.KeyValue[int]{Key: "moderate", Value: row.ModerateCount},
+		pyjson.KeyValue[int]{Key: "low", Value: row.LowCount},
+		pyjson.KeyValue[int]{Key: "very_low", Value: row.VeryLowCount},
+		pyjson.KeyValue[int]{Key: "unknown", Value: row.UnknownCount},
+	)
+	band := func(name string) int {
+		count, _ := bandCounts.Get(name)
+		return count
 	}
 
 	var mean, stddev *float64
@@ -362,13 +370,13 @@ func computeQualityStats(row QualityStatsRow, found bool) EvidenceQualityStats {
 
 	totalCount := row.Total
 	if totalCount == 0 {
-		for _, count := range bandCounts {
+		for _, count := range bandCounts.All() {
 			totalCount += count
 		}
 	}
 
 	drivers := []string{}
-	if totalCount > 0 && float64(bandCounts["unknown"])/float64(totalCount) > 0.3 {
+	if totalCount > 0 && float64(band("unknown"))/float64(totalCount) > 0.3 {
 		drivers = append(drivers, "missing_evidence_metadata")
 	}
 	if mean != nil && *mean < 0.4 {
@@ -377,7 +385,7 @@ func computeQualityStats(row QualityStatsRow, found bool) EvidenceQualityStats {
 	if stddev != nil && *stddev > 0.25 {
 		drivers = append(drivers, "high_uncertainty_spread")
 	}
-	lowPlus := bandCounts["low"] + bandCounts["very_low"]
+	lowPlus := band("low") + band("very_low")
 	if totalCount > 0 && float64(lowPlus)/float64(totalCount) > 0.5 {
 		drivers = append(drivers, "weak_cross_links")
 	}

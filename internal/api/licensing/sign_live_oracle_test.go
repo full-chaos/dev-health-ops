@@ -252,3 +252,90 @@ func TestPythonB64DecodeMatchesLivePython(t *testing.T) {
 		}
 	}
 }
+
+// pythonVerifyProgram runs the real LicenseValidator over each license text on
+// stdin (a JSON list) with the public key of the seed in argv[1] and a fixed
+// clock: each answer is [valid, error, payload JSON, in_grace_period].
+const pythonVerifyProgram = `
+import base64, json, sys
+from nacl.signing import SigningKey
+from dev_health_ops.licensing.validator import LicenseValidator
+seed = base64.b64decode(sys.argv[1])
+public = base64.b64encode(bytes(SigningKey(seed).verify_key)).decode()
+validator = LicenseValidator(public)
+out = []
+for text in json.loads(sys.stdin.read()):
+    result = validator.validate(text, current_time=1790200000)
+    out.append([result.valid, result.error, result.payload.model_dump_json() if result.payload else None, result.in_grace_period])
+print(json.dumps(out))
+`
+
+// TestBigDurationLicensesVerifyIdenticallyGoSignedAndPythonSigned: a license
+// whose expiry is beyond 64 bits is a capability only if the verifier accepts
+// it. The Go-signed and the Python-signed license text is byte-identical, and the
+// real Python LicenseValidator (the only license verifier: the Go api refuses
+// LICENSE_KEY) gives the same verdict, payload and grace flag for both.
+func TestBigDurationLicensesVerifyIdenticallyGoSignedAndPythonSigned(t *testing.T) {
+	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
+		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
+	}
+	_, file, _, _ := runtime.Caller(0)
+	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
+	python := pyoracle.Resolve(t, root)
+	zero := base64.StdEncoding.EncodeToString(make([]byte, 32))
+	days := []string{"365", "106751991167301", "9223372036854775808", "1" + strings.Repeat("0", 40)}
+	var signInput [][]any
+	var goSigned []string
+	for _, d := range days {
+		duration, _ := new(big.Int).SetString(d, 10)
+		license, err := SignLicense(zero, LicenseRequest{OrgID: "o", Tier: "team", IssuedAt: 1790000000, LicenseID: "l", DurationDays: duration})
+		if err != nil {
+			t.Fatalf("%s days: %v", d, err)
+		}
+		goSigned = append(goSigned, license)
+		signInput = append(signInput, []any{zero, "o", "team", 1790000000, "l", d})
+	}
+	run := func(program string, stdin any, args ...string) [][]any {
+		raw, _ := json.Marshal(stdin)
+		command := exec.Command(python, append([]string{"-c", program}, args...)...)
+		command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"))
+		command.Stdin = strings.NewReader(string(raw))
+		output, err := command.CombinedOutput()
+		if err != nil {
+			t.Fatalf("live python: %v", pyoracle.RunError(python, err, output))
+		}
+		lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+		var answers [][]any
+		if err := json.Unmarshal([]byte(lines[len(lines)-1]), &answers); err != nil {
+			// The sign program answers a flat list of strings.
+			answers = nil
+			var flat []any
+			if err := json.Unmarshal([]byte(lines[len(lines)-1]), &flat); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			for _, item := range flat {
+				answers = append(answers, []any{item})
+			}
+		}
+		return answers
+	}
+	pythonSigned := run(pythonSignProgram, signInput)
+	var pythonTexts []string
+	for index, answer := range pythonSigned {
+		text, _ := answer[0].(string)
+		if text != goSigned[index] {
+			t.Errorf("%s days: go-signed and python-signed license text differ", days[index])
+		}
+		pythonTexts = append(pythonTexts, text)
+	}
+	forGo := run(pythonVerifyProgram, goSigned, zero)
+	forPython := run(pythonVerifyProgram, pythonTexts, zero)
+	for index, d := range days {
+		if fmt.Sprint(forGo[index]) != fmt.Sprint(forPython[index]) {
+			t.Errorf("%s days: verifier verdict differs: go-signed %v, python-signed %v", d, forGo[index], forPython[index])
+		}
+		if forGo[index][0] != true {
+			t.Errorf("%s days: the Python verifier refused the license: %v", d, forGo[index])
+		}
+	}
+}

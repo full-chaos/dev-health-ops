@@ -54,13 +54,23 @@ func (h handlers) decryptPayload(ciphertext string) (creds *pyjson.Object, ok bo
 	return object, true, nil
 }
 
-// decryptValue is decrypt_value + json.loads, the decoded value whatever
-// its type (nil for JSON null), with decryptPayload's ok and error rules.
+// decryptValue is DecryptStoredValue on the handlers' cipher.
 func (h handlers) decryptValue(ciphertext string) (decoded pyjson.Value, ok bool, err error) {
-	if !h.cipher.Configured() {
+	return DecryptStoredValue(h.cipher, ciphertext)
+}
+
+// DecryptStoredValue is decrypt_value + json.loads, the decoded value
+// whatever its type (nil for JSON null), with decryptPayload's ok and error
+// rules: ok is false where Python's ValueError / JSONDecodeError is caught
+// (a wrong key, a malformed token, a payload that is not JSON) and a missing
+// key is Python's RuntimeError, not caught, returned as an error. It is the
+// one implementation of the stored-payload read, shared by every route that
+// reads integration_credentials.credentials_encrypted.
+func DecryptStoredValue(cipher Cipher, ciphertext string) (decoded pyjson.Value, ok bool, err error) {
+	if cipher == nil || !cipher.Configured() {
 		return nil, false, errors.New("SETTINGS_ENCRYPTION_KEY environment variable is required for encryption")
 	}
-	plain, decryptErr := h.cipher.Decrypt(secrets.NewValue(ciphertext))
+	plain, decryptErr := cipher.Decrypt(secrets.NewValue(ciphertext))
 	if decryptErr != nil {
 		return nil, false, nil
 	}

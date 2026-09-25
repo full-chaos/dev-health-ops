@@ -177,6 +177,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 	var routes []httpapi.Route
 	routes = append(routes, acr.Routes(acr.Deps{Store: store, Logger: logger})...)
 	routes = append(routes, externalingest.Routes(externalingest.Deps{
+		Cipher:   deps.Decryptor,
 		Pool:     deps.Pool,
 		Valkey:   deps.Valkey,
 		Logger:   logger,
@@ -214,7 +215,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 	if deps.Guard != nil {
 		routes = append(routes, orgs.Routes(deps.Pool, deps.Guard, logger)...)
 		routes = append(routes, telemetry.Routes(deps.Pool, deps.Guard, deps.Auth, deps.Telemetry.Endpoint, logger)...)
-		routes = append(routes, customerpush.Routes(customerpush.Deps{Pool: deps.Pool, Guard: deps.Guard, Logger: logger})...)
+		routes = append(routes, customerpush.Routes(customerpush.Deps{Pool: deps.Pool, Guard: deps.Guard, Logger: logger, Cipher: deps.Decryptor})...)
 		routes = append(routes, syncadmin.Routes(syncadmin.Deps{Pool: deps.Pool, ClickHouse: deps.ClickHouse, Guard: deps.Guard, Logger: logger, Decryptor: deps.Decryptor, Now: deps.Now, JiraHTTP: deps.SyncJiraHTTP})...)
 		routes = append(routes, credentials.Routes(credentials.Deps{Pool: deps.Pool, Guard: deps.Guard, Cipher: deps.Decryptor, Logger: logger, Now: deps.Now,
 			HTTPClient: credentialProbeClient, HostLookup: credentialHostLookup})...)

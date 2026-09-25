@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // effectiveMode mirrors ownership.py's EffectiveMode.
@@ -134,45 +133,23 @@ func candidateSet(values ...string) map[string]bool {
 }
 
 // findActiveManagedOwner ports ownership.py's find_active_managed_owner:
-// the managed integration_sources row (if any) that actively owns
-// (org, system, instance) -- enabled row under an active integration.
-func findActiveManagedOwner(ctx context.Context, pool *pgxpool.Pool, orgID, system, instance, entityFamily string) (bool, error) {
-	if system == "custom" {
-		return false, nil
-	}
-	rows, err := pool.Query(ctx, `
-		SELECT source.external_id, source.full_name, source.name, source.metadata,
-		       source.is_enabled, integration.is_active, integration.config
-		FROM integration_sources AS source
-		JOIN integrations AS integration ON integration.id = source.integration_id
-		WHERE source.org_id = $1 AND lower(source.provider) = $2
-	`, orgID, system)
+// whether a managed integration_sources row (enabled, under an active
+// integration) actively owns (org, system, instance), through the one
+// find_matching_managed_sources port shared with customer-push registration
+// (FindMatchingManagedSources: the host an operational github/gitlab source
+// is compared on comes from its integration's config, its credential or the
+// environment).
+func findActiveManagedOwner(ctx context.Context, d Deps, orgID, system, instance, entityFamily string) (bool, error) {
+	matches, err := FindMatchingManagedSources(ctx, d.Pool, d.getenv(), d.Cipher, orgID, system, instance, entityFamily)
 	if err != nil {
 		return false, err
 	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var (
-			externalID, fullName, name string
-			metadataJSON, configJSON   []byte
-			enabled, active            bool
-		)
-		if err := rows.Scan(&externalID, &fullName, &name, &metadataJSON, &enabled, &active, &configJSON); err != nil {
-			return false, err
-		}
-		if !enabled || !active {
-			continue
-		}
-		source := integrationSource{
-			ExternalID: externalID, FullName: fullName, Name: name,
-			Metadata: decodeMetadata(metadataJSON), Enabled: enabled, Active: active,
-		}
-		if matchesInstance(system, instance, source, entityFamily, decodeMetadata(configJSON)) {
+	for _, match := range matches {
+		if match.Enabled && match.IntegrationActive {
 			return true, nil
 		}
 	}
-	return false, rows.Err()
+	return false, nil
 }
 
 func decodeMetadata(raw []byte) map[string]any {
@@ -188,18 +165,18 @@ func decodeMetadata(raw []byte) map[string]any {
 // precedence exactly (an explicit external_ingest_sources row wins unless a
 // managed source actively owns the same instance; with no explicit row, an
 // active managed owner implies fullchaos_sync; otherwise unclaimed).
-func resolveEffectiveMode(ctx context.Context, pool *pgxpool.Pool, orgID, system, instance, entityFamily string) (effectiveMode, error) {
+func resolveEffectiveMode(ctx context.Context, d Deps, orgID, system, instance, entityFamily string) (effectiveMode, error) {
 	var (
 		enabled bool
 		mode    string
 	)
-	err := pool.QueryRow(ctx, `
+	err := d.Pool.QueryRow(ctx, `
 		SELECT enabled, mode FROM external_ingest_sources
 		WHERE org_id = $1 AND system = $2 AND instance = $3 AND entity_family = $4
 	`, orgID, system, instance, entityFamily).Scan(&enabled, &mode)
 	switch {
 	case err == pgx.ErrNoRows:
-		owned, ownerErr := findActiveManagedOwner(ctx, pool, orgID, system, instance, entityFamily)
+		owned, ownerErr := findActiveManagedOwner(ctx, d, orgID, system, instance, entityFamily)
 		if ownerErr != nil {
 			return "", ownerErr
 		}
@@ -217,7 +194,7 @@ func resolveEffectiveMode(ctx context.Context, pool *pgxpool.Pool, orgID, system
 	if mode == "fullchaos_sync" {
 		return modeFullchaosSync, nil
 	}
-	owned, err := findActiveManagedOwner(ctx, pool, orgID, system, instance, entityFamily)
+	owned, err := findActiveManagedOwner(ctx, d, orgID, system, instance, entityFamily)
 	if err != nil {
 		return "", err
 	}

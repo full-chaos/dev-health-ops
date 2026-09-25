@@ -13,6 +13,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/credentials"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 )
@@ -29,6 +30,9 @@ type Deps struct {
 	// Getenv reads EXTERNAL_INGEST_MAX_RECORDS/_MAX_BODY_BYTES; nil means
 	// os.LookupEnv. Python reads them per request.
 	Getenv func(string) (string, bool)
+	// Cipher reads a managed integration's credential payload for the
+	// operational ownership check; nil is a process without a key.
+	Cipher credentials.Cipher
 }
 
 type handlers struct {
@@ -37,13 +41,14 @@ type handlers struct {
 	logger *slog.Logger
 	now    func() time.Time
 	getenv func(string) (string, bool)
+	cipher credentials.Cipher
 }
 
 // Routes returns the area's routes. A path's Allow value is the methods of
 // the first route FastAPI declares for it, which Starlette reports on a
 // 405.
 func Routes(deps Deps) []httpapi.Route {
-	h := &handlers{pool: deps.Pool, guard: deps.Guard, logger: deps.Logger, now: deps.Now, getenv: deps.Getenv}
+	h := &handlers{pool: deps.Pool, guard: deps.Guard, logger: deps.Logger, now: deps.Now, getenv: deps.Getenv, cipher: deps.Cipher}
 	if h.logger == nil {
 		h.logger = slog.Default()
 	}

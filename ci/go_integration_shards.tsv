@@ -105,6 +105,7 @@ internal/apiservice/metricsvenue	1
 internal/apiservice/adminsetupvenue	1
 internal/apiservice/adminllmvenue	1
 internal/apiservice/adminllmspendvenue	1
+internal/apiservice/ownershipvenue	1
 internal/apiservice/sessionvenue	1
 internal/apiservice/authflowvenue	1
 internal/apiservice/ssovenue	1

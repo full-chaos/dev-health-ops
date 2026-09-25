@@ -117,3 +117,38 @@ func TestAdminUnservedLLMSettingsReadsStayOut(t *testing.T) {
 		}
 	}
 }
+
+// TestAdminAllowlistIsJudgedOnTheRealRequestNotTheRegistryKey (r1 question: can
+// the allowlist admit a persisting POST?): an admin entry that is keyed with the
+// allowlisted name but sends another route, or is keyed with another name but
+// sends the allowlisted one, is refused; so is any admin entry whose key differs
+// from its method and path; and a platform-superadmin POST to a non-allowlisted
+// route is refused like an org-admin one.
+func TestAdminAllowlistIsJudgedOnTheRealRequestNotTheRegistryKey(t *testing.T) {
+	const allowed = "REST:POST:/api/v1/admin/integrations/github/install-url"
+	request := []RESTRequest{{Name: "case", WantCandidateStatus: 200, WantBaselineStatus: 200, BodyMode: RESTBodyModeStatusOnly}}
+	for name, tc := range map[string]struct {
+		key  string
+		spec RESTEndpointSpec
+	}{
+		"allowlisted key, persisting route": {allowed, RESTEndpointSpec{Method: "POST", Path: "/api/v1/admin/users", Service: RESTServiceDHOAPI, Credential: RESTCredentialOrgAdmin}},
+		"other key, allowlisted route":      {"REST:POST:/api/v1/admin/other", RESTEndpointSpec{Method: "POST", Path: "/api/v1/admin/integrations/github/install-url", Service: RESTServiceDHOAPI, Credential: RESTCredentialOrgAdmin}},
+		"allowlisted key, wrong method":     {allowed, RESTEndpointSpec{Method: "DELETE", Path: "/api/v1/admin/integrations/github/install-url", Service: RESTServiceDHOAPI, Credential: RESTCredentialOrgAdmin}},
+		"get entry, mismatched key":         {"REST:GET:/api/v1/admin/x", RESTEndpointSpec{Method: "GET", Path: "/api/v1/admin/y", Service: RESTServiceDHOAPI, Credential: RESTCredentialOrgAdmin}},
+		"platform kind, persisting POST":    {"REST:POST:/api/v1/admin/orgs", RESTEndpointSpec{Method: "POST", Path: "/api/v1/admin/orgs", Service: RESTServiceDHOAPI, Credential: RESTCredentialPlatformSuperadmin}},
+	} {
+		spec := tc.spec
+		spec.Requests = request
+		original, existed := restEndpointSpecs[tc.key] // the real allowlisted entry shares a key with two cases
+		restEndpointSpecs[tc.key] = spec
+		err := validateRESTCredentialKinds()
+		if existed {
+			restEndpointSpecs[tc.key] = original
+		} else {
+			delete(restEndpointSpecs, tc.key)
+		}
+		if err == nil {
+			t.Errorf("%s: must be refused", name)
+		}
+	}
+}

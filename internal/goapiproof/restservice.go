@@ -149,8 +149,9 @@ var adminPersistNothingPOSTs = map[string]bool{
 
 // validateRESTCredentialKinds refuses an unknown credential kind, a file-fed
 // credential entry outside the dho api (only that service authenticates it), an
-// admin credential on anything but a GET, and a
-// PathLiterals key that is not a {placeholder} of the entry's path.
+// admin credential on anything but a GET (bar the persist-nothing allowlist,
+// judged on the method and path an entry really sends, which must equal its
+// key), and a PathLiterals key that is not a {placeholder} of the entry's path.
 func validateRESTCredentialKinds() error {
 	for operation, spec := range restEndpointSpecs {
 		switch spec.Credential {
@@ -164,8 +165,18 @@ func validateRESTCredentialKinds() error {
 			if spec.PublicNoAuth {
 				return fmt.Errorf("goapiproof: REST corpus entry %q is both PublicNoAuth and a %s-credential entry", operation, spec.Credential)
 			}
-			if spec.Credential != RESTCredentialPushToken && spec.Method != "GET" && !adminPersistNothingPOSTs[operation] {
-				return fmt.Errorf("goapiproof: REST corpus entry %q sends the %s credential on a %s request; admin credentials are for read-only GETs (R402/R406)", operation, spec.Credential, spec.Method)
+			if spec.Credential != RESTCredentialPushToken {
+				// The request an admin entry sends is its Method and Path, not
+				// its registry key: the allowlist is judged on the identity those
+				// two make, and the key must equal it, so a key cannot borrow the
+				// allowlisted name for a different route.
+				identity := "REST:" + spec.Method + ":" + spec.Path
+				if operation != identity {
+					return fmt.Errorf("goapiproof: REST corpus entry %q sends the %s credential but its key does not match its method and path (%s)", operation, spec.Credential, identity)
+				}
+				if spec.Method != "GET" && !adminPersistNothingPOSTs[identity] {
+					return fmt.Errorf("goapiproof: REST corpus entry %q sends the %s credential on a %s request; admin credentials are for read-only GETs (R402/R406)", operation, spec.Credential, spec.Method)
+				}
 			}
 		default:
 			return fmt.Errorf("goapiproof: REST corpus entry %q has an unknown credential kind %q", operation, spec.Credential)

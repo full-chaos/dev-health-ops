@@ -291,7 +291,8 @@ type callbackOrg struct {
 
 func TestPagerDutyCallbackAndManualVenueOracle(t *testing.T) {
 	ctx := context.Background()
-	root := repoRoot(t)
+	golden := venueoracle.OpenGolden(t, pagerDutyGolden("callback", "TestPagerDutyCallbackAndManualVenueOracle", "1bc28cf82eab71c3782dac2399197a2dc332683439de8491730db127e6b97093"))
+	root := golden.PythonRoot(t, repoRoot(t))
 	const jwtKey = "venue-oracle-test-secret-key-for-pagerduty-callback-32-b"
 
 	fake := &fakePagerDuty{failRevoke: map[string]bool{"old-fail-rt": true, "rt-missing-refused": true, "rt-noaccount-refused": true, "rt-corrupt-refused": true},
@@ -310,9 +311,9 @@ func TestPagerDutyCallbackAndManualVenueOracle(t *testing.T) {
 	orgSlugs := []string{"fresh", "replacefail", "variants", "failures", "corrupt", "off", "cc", "ccoauth", "cccorrupt", "tok", "ccoff", "refmissing", "refnoacct", "refcorrupt", "refredirect"}
 	orgs := map[string]uuid.UUID{}
 	for _, slug := range orgSlugs {
-		orgs[slug] = uuid.New()
+		orgs[slug] = uuid.MustParse(venueoracle.StableUUID("pd-cb-org-" + slug))
 	}
-	adminID, memberID, superID := uuid.New(), uuid.New(), uuid.New()
+	adminID, memberID, superID := uuid.MustParse(venueoracle.StableUUID("pd-cb-admin")), uuid.MustParse(venueoracle.StableUUID("pd-cb-member")), uuid.MustParse(venueoracle.StableUUID("pd-cb-super"))
 
 	// state -> (org, verifier, expired)
 	type stateSpec struct {
@@ -592,8 +593,11 @@ VALUES ($1, 'pagerduty', 'default', 'garbage-not-fernet', 1, now(), now(), false
 	if err != nil {
 		t.Fatalf("build decryptor: %v", err)
 	}
-	python := venue.ServePython(t, requests)
-	pythonCalls := fake.take()
+	python := golden.Python(t, venue, requests)
+	// What the Python plane sent upstream is part of what its executed build
+	// answered: frozen with the golden, compared with the Go plane's calls.
+	pythonCallsText := golden.Rows(t, "upstream calls of the Python plane", func() string { return strings.Join(fake.take(), "\n") })
+	fake.take()
 	goBase, _ := startGoServer(t, ctx, venue, jwtKey, func(deps *apiservice.Deps) {
 		deps.Decryptor = decryptor
 		deps.PagerDuty = providerfoundation.PagerDutyRevokeConfig{
@@ -601,14 +605,14 @@ VALUES ($1, 'pagerduty', 'default', 'garbage-not-fernet', 1, now(), now(), false
 			RevokeURL: upstream.URL + "/revoke", TokenURL: upstream.URL + "/token", APIBaseOverride: upstream.URL,
 		}
 	})
-	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{})
+	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{Golden: golden})
 	t.Log(receipt)
 	goCalls := fake.take()
 
 	// What each plane asked PagerDuty, in order: the exchange's form, the
 	// region and credentials of every live read, every revoke.
-	if strings.Join(pythonCalls, "\n") != strings.Join(goCalls, "\n") {
-		t.Errorf("upstream calls differ:\n python (%d):\n%s\n go (%d):\n%s", len(pythonCalls), strings.Join(pythonCalls, "\n"), len(goCalls), strings.Join(goCalls, "\n"))
+	if pythonCallsText != strings.Join(goCalls, "\n") {
+		t.Errorf("upstream calls differ:\n python:\n%s\n go (%d):\n%s", pythonCallsText, len(goCalls), strings.Join(goCalls, "\n"))
 	}
 	// The redirected revoke must reach the redirect target on NEITHER plane.
 	fake.mu.Lock()
@@ -617,13 +621,15 @@ VALUES ($1, 'pagerduty', 'default', 'garbage-not-fernet', 1, now(), now(), false
 	if captured != 0 {
 		t.Errorf("a revoke redirect was followed and delivered a token: %d request(s) reached the redirect target", captured)
 	}
-	if len(pythonCalls) < 60 {
-		t.Errorf("the fake upstream saw only %d calls from the Python plane", len(pythonCalls))
+	if pythonCalls := strings.Count(pythonCallsText, "\n") + 1; pythonCalls < 60 {
+		t.Errorf("the fake upstream saw only %d calls from the Python plane", pythonCalls)
 	}
 
 	compare := func(name, query string) {
 		t.Helper()
-		source := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), query)
+		source := golden.Rows(t, name, func() string {
+			return venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), query)
+		})
 		goRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), query)
 		if source != goRows {
 			t.Errorf("%s differs after the writes:\n python: %s\n go:     %s", name, source, goRows)
@@ -717,12 +723,13 @@ FROM provider_oauth_revocations WHERE purpose <> 'setup' ORDER BY org_id, creden
 		}
 		return out
 	}
-	pythonSecrets, goSecrets := opened(venue.SourceDB), opened(venue.GoDB)
-	if strings.Join(pythonSecrets, "\n") != strings.Join(goSecrets, "\n") {
-		t.Errorf("stored secrets differ:\n python:\n%s\n go:\n%s", strings.Join(pythonSecrets, "\n"), strings.Join(goSecrets, "\n"))
+	pythonSecrets := golden.Rows(t, "stored secrets opened", func() string { return strings.Join(opened(venue.SourceDB), "\n") })
+	goSecrets := strings.Join(opened(venue.GoDB), "\n")
+	if pythonSecrets != goSecrets {
+		t.Errorf("stored secrets differ:\n python:\n%s\n go:\n%s", pythonSecrets, goSecrets)
 	}
-	if len(pythonSecrets) < 20 {
-		t.Errorf("only %d stored secrets to compare", len(pythonSecrets))
+	if count := strings.Count(pythonSecrets, "\n") + 1; count < 20 {
+		t.Errorf("only %d stored secrets to compare", count)
 	}
 
 	// ---- CHAOS-6631: what the Go plane keeps that Python drops ---------------
@@ -781,8 +788,9 @@ FROM provider_oauth_revocations WHERE purpose = 'setup' ORDER BY org_id`)
 		}
 		return out
 	}
-	if rows := setupRows(venue.SourceDB); len(rows) != 0 {
-		t.Errorf("the Python plane kept setup revocations (%v); it used to keep none: this is a decision, not an accident", rows)
+	pythonSetupRows := golden.Rows(t, "python setup revocation rows", func() string { return fmt.Sprint(setupRows(venue.SourceDB)) })
+	if pythonSetupRows != fmt.Sprint(map[string]string{}) {
+		t.Errorf("the Python plane kept setup revocations (%v); it used to keep none: this is a decision, not an accident", pythonSetupRows)
 	}
 	goRows := setupRows(venue.GoDB)
 	for _, want := range refused {
@@ -1017,4 +1025,5 @@ CREATE TRIGGER pd_setup_record_refused BEFORE INSERT ON provider_oauth_revocatio
 	if calls := strings.Join(fake.take(), "\n"); !strings.Contains(calls, "POST /revoke") || !strings.Contains(calls, "token=rt-slow") {
 		t.Errorf("the record left by the deadline was not revoked by the next callback:\n%s", calls)
 	}
+	golden.Finish(t)
 }

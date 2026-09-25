@@ -1,0 +1,1730 @@
+{
+  "header": {
+    "test": "TestPagerDutyCallbackAndManualVenueOracle",
+    "python_build": "9642a8da15bb47d7400cef13cc93547b46e5f67a",
+    "recipe": "git worktree add --detach $DIR 9642a8da15bb47d7400cef13cc93547b46e5f67a; then from the repository root: DHO_VENUE_GOLDEN_UPDATE=1 DHO_VENUE_GOLDEN_PYTHON_ROOT=$DIR DEV_HEALTH_LIVE_PYTHON_ORACLES=1 go test -tags=integration -count=1 -run '^TestPagerDutyCallbackAndManualVenueOracle$' ./internal/apiservice/admin/ (it fails once by design and prints the digest to pin)"
+  },
+  "requests": [
+    {
+      "name": "W callback fresh connect",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/callback",
+      "body_sha256": "fc01eed84253904d59f46fed668af76fdb6a391e6fd6fb93a0e7aeceaadd71fb",
+      "status": 200,
+      "headers": {
+        "content-length": "216",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "72e56469-dd81-4f68-945b-02fdf43ea35e"
+      },
+      "body": "{\"connected\":true,\"credential_name\":\"Acme Co\",\"region\":\"us\",\"subdomain\":\"acme\",\"granted_scopes\":[\"escalation_policies.read\",\"incidents.read\",\"oncalls.read\",\"schedules.read\",\"services.read\",\"teams.read\",\"users.read\"]}"
+    },
+    {
+      "name": "W callback replace grant, old one revoked",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/callback",
+      "body_sha256": "3f97f19bb3c0adfad1a1e765990a888fe3072fb0d29810211026c3ac4637f181",
+      "status": 200,
+      "headers": {
+        "content-length": "216",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "05e701d2-e7e5-4eff-9c11-5e3e493a6196"
+      },
+      "body": "{\"connected\":true,\"credential_name\":\"Acme Co\",\"region\":\"us\",\"subdomain\":\"acme\",\"granted_scopes\":[\"escalation_policies.read\",\"incidents.read\",\"oncalls.read\",\"schedules.read\",\"services.read\",\"teams.read\",\"users.read\"]}"
+    },
+    {
+      "name": "W callback replace grant, old revoke refused stays pending",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/callback",
+      "body_sha256": "8469a7938f5ae9db86aca682816b75ed5376d95750e49b4f55e2b2f8ab3eaf82",
+      "status": 200,
+      "headers": {
+        "content-length": "216",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "61c96e51-d723-400a-a50c-a624e0498aed"
+      },
+      "body": "{\"connected\":true,\"credential_name\":\"Acme Co\",\"region\":\"us\",\"subdomain\":\"acme\",\"granted_scopes\":[\"escalation_policies.read\",\"incidents.read\",\"oncalls.read\",\"schedules.read\",\"services.read\",\"teams.read\",\"users.read\"]}"
+    },
+    {
+      "name": "W callback second replace retries the pending revoke",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/callback",
+      "body_sha256": "fdd7765805654f3ba9dd5dd4a5fd6f94f306c30a9289cf5e8f3009ce88cee6af",
+      "status": 200,
+      "headers": {
+        "content-length": "216",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "aee7aec3-34b8-4af7-b417-1f559bdf54e2"
+      },
+      "body": "{\"connected\":true,\"credential_name\":\"Acme Co\",\"region\":\"us\",\"subdomain\":\"acme\",\"granted_scopes\":[\"escalation_policies.read\",\"incidents.read\",\"oncalls.read\",\"schedules.read\",\"services.read\",\"teams.read\",\"users.read\"]}"
+    },
+    {
+      "name": "W callback no refresh token, string expires_in",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/callback",
+      "body_sha256": "e9747d94f023bb01c6b142ad09ec834b8276fe8d56c23a1c6ad8201b2b443116",
+      "status": 200,
+      "headers": {
+        "content-length": "216",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "1b1c7006-116b-4ead-b069-123879532aba"
+      },
+      "body": "{\"connected\":true,\"credential_name\":\"Acme Co\",\"region\":\"us\",\"subdomain\":\"acme\",\"granted_scopes\":[\"escalation_policies.read\",\"incidents.read\",\"oncalls.read\",\"schedules.read\",\"services.read\",\"teams.read\",\"users.read\"]}"
+    },
+    {
+      "name": "W callback eu region found after us refuses",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/callback",
+      "body_sha256": "3e29e4fe69e66b5d06823fc3a7a4f46a7bdadfaf04ec324cf30e00e4c983d7e9",
+      "status": 200,
+      "headers": {
+        "content-length": "219",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "653e47c7-8a84-46b3-a093-c0476343df48"
+      },
+      "body": "{\"connected\":true,\"credential_name\":\"Acme EU\",\"region\":\"eu\",\"subdomain\":\"acme-eu\",\"granted_scopes\":[\"escalation_policies.read\",\"incidents.read\",\"oncalls.read\",\"schedules.read\",\"services.read\",\"teams.read\",\"users.read\"]}"
+    },
+    {
+      "name": "W callback identity from the service html_url",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/callback",
+      "body_sha256": "4107ed1e6027af15d769cafa37599fd3eddb0fcd2694f779521e0956a19e5294",
+      "status": 200,
+      "headers": {
+        "content-length": "221",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "9b516992-1e7e-4f67-8fd2-25b579af12d6"
+      },
+      "body": "{\"connected\":true,\"credential_name\":\"htmlacct\",\"region\":\"us\",\"subdomain\":\"htmlacct\",\"granted_scopes\":[\"escalation_policies.read\",\"incidents.read\",\"oncalls.read\",\"schedules.read\",\"services.read\",\"teams.read\",\"users.read\"]}"
+    },
+    {
+      "name": "W callback account without a name uses the subdomain",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/callback",
+      "body_sha256": "ec204031a8d8e0b4f8de8a201a47892d203fcdd16c54389f7b1ee3ebebe83792",
+      "status": 200,
+      "headers": {
+        "content-length": "217",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "dd32fedd-f257-448e-86e6-c488d9c58355"
+      },
+      "body": "{\"connected\":true,\"credential_name\":\"nodisp\",\"region\":\"us\",\"subdomain\":\"nodisp\",\"granted_scopes\":[\"escalation_policies.read\",\"incidents.read\",\"oncalls.read\",\"schedules.read\",\"services.read\",\"teams.read\",\"users.read\"]}"
+    },
+    {
+      "name": "W callback float expires_in means an hour",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/callback",
+      "body_sha256": "e789cb95d2a6221ca23410d7d6b51d115b0222b2c813551bb17c3efcaba6c2f4",
+      "status": 200,
+      "headers": {
+        "content-length": "221",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "608bc8fb-32d5-40b4-a406-3ccf62586c63"
+      },
+      "body": "{\"connected\":true,\"credential_name\":\"Float Co\",\"region\":\"us\",\"subdomain\":\"float-co\",\"granted_scopes\":[\"escalation_policies.read\",\"incidents.read\",\"oncalls.read\",\"schedules.read\",\"services.read\",\"teams.read\",\"users.read\"]}"
+    },
+    {
+      "name": "W callback negative expires_in is not clamped",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/callback",
+      "body_sha256": "0008c8df8c9b4e0e1709134da27b8aa95a77382833dc8d5fd71dbe97d277d812",
+      "status": 200,
+      "headers": {
+        "content-length": "217",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "0ba85e37-508e-45a8-9af4-6c742cd3af93"
+      },
+      "body": "{\"connected\":true,\"credential_name\":\"Neg Co\",\"region\":\"us\",\"subdomain\":\"neg-co\",\"granted_scopes\":[\"escalation_policies.read\",\"incidents.read\",\"oncalls.read\",\"schedules.read\",\"services.read\",\"teams.read\",\"users.read\"]}"
+    },
+    {
+      "name": "W callback feature flag off does not gate the callback",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/callback",
+      "body_sha256": "1fe2ce1fafde70b9f76085990981752dd906da0e320b97af86e3feb237bf1839",
+      "status": 200,
+      "headers": {
+        "content-length": "216",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "fa25a465-59de-472c-9347-3d1190602b26"
+      },
+      "body": "{\"connected\":true,\"credential_name\":\"Acme Co\",\"region\":\"us\",\"subdomain\":\"acme\",\"granted_scopes\":[\"escalation_policies.read\",\"incidents.read\",\"oncalls.read\",\"schedules.read\",\"services.read\",\"teams.read\",\"users.read\"]}"
+    },
+    {
+      "name": "W callback undecryptable existing grant, new grant revoked",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/callback",
+      "body_sha256": "622e98a06fbd6ad376822917bc884d6fc83c72565fe00e14103e3f7d44b82f07",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "W callback scopes missing",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/callback",
+      "body_sha256": "ab76b8ca1c336612d5d23cc8bd3dd2467b48b7694b0366252748c4f1055debf5",
+      "status": 400,
+      "headers": {
+        "content-length": "132",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "6f7ad589-4cfe-4e3f-a93d-31d48665b78c"
+      },
+      "body": "{\"detail\":\"Missing required PagerDuty OAuth scopes: escalation_policies.read, oncalls.read, schedules.read, teams.read, users.read\"}"
+    },
+    {
+      "name": "W callback no account for the token",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/callback",
+      "body_sha256": "ef6e12d28fad4005f3be50235877dabc9154c4730da4c54ffc922afb046dee78",
+      "status": 400,
+      "headers": {
+        "content-length": "54",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "b7b98df3-5091-485e-ab6e-ece19652cbe4"
+      },
+      "body": "{\"detail\":\"PagerDuty OAuth account validation failed\"}"
+    },
+    {
+      "name": "W callback live read refused",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/callback",
+      "body_sha256": "d9e8f179fb9caeab4100c8c453900294890716842fa0f4a60aa5cd3df510de7a",
+      "status": 400,
+      "headers": {
+        "content-length": "54",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "77af5994-7727-4601-b89c-4e4a1b9ae960"
+      },
+      "body": "{\"detail\":\"PagerDuty OAuth account validation failed\"}"
+    },
+    {
+      "name": "W callback code rejected 400",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/callback",
+      "body_sha256": "44e06779e4d353c390b4f0c611c3bdda63f2c4051d7c0c451df3ff9e317da901",
+      "status": 400,
+      "headers": {
+        "content-length": "60",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "133faae6-5012-4a84-9379-5fdb31eec25d"
+      },
+      "body": "{\"detail\":\"PagerDuty OAuth authorization code was rejected\"}"
+    },
+    {
+      "name": "W callback code rejected 403",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/callback",
+      "body_sha256": "b3d16c1a972f2638be36a79fe8ea1963eb343f38bc174efc22998149e1d8ad1e",
+      "status": 400,
+      "headers": {
+        "content-length": "60",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "5d860684-6e3e-4c9a-81dd-29a1af2c6498"
+      },
+      "body": "{\"detail\":\"PagerDuty OAuth authorization code was rejected\"}"
+    },
+    {
+      "name": "W callback service 500",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/callback",
+      "body_sha256": "8047a80378c1141489b72c7d053d8773056e84c36bd8a7eafa3725551aa0d4a1",
+      "status": 502,
+      "headers": {
+        "content-length": "51",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "81caaa32-4534-4d9d-ac41-455ba5ea9ee1"
+      },
+      "body": "{\"detail\":\"PagerDuty OAuth service is unavailable\"}"
+    },
+    {
+      "name": "W callback service redirect",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/callback",
+      "body_sha256": "d017ec68b68bf5fa5347133e7ca62c349ba8f5bf03b50d2e37d5d398c8cfd047",
+      "status": 502,
+      "headers": {
+        "content-length": "51",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "163a65d0-0637-451b-9792-15c4ca7180ad"
+      },
+      "body": "{\"detail\":\"PagerDuty OAuth service is unavailable\"}"
+    },
+    {
+      "name": "W callback token body cut short is a transport error",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/callback",
+      "body_sha256": "f460ddefe38b042519d4391d2e9475c59e7feaaf2f545c4ed7fc8ecd3c04269b",
+      "status": 503,
+      "headers": {
+        "content-length": "51",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "e075f3ef-a3ca-49c9-b05e-35a723875de5"
+      },
+      "body": "{\"detail\":\"PagerDuty OAuth service is unavailable\"}"
+    },
+    {
+      "name": "W callback error status body cut short is a transport error",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/callback",
+      "body_sha256": "85837910a52fcc36f105e55c63d1da6d066eef6a5d835c57b7194c135dac02a1",
+      "status": 503,
+      "headers": {
+        "content-length": "51",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "77df44fb-f3f6-4e14-8ef5-0101b6d937e7"
+      },
+      "body": "{\"detail\":\"PagerDuty OAuth service is unavailable\"}"
+    },
+    {
+      "name": "W callback compensating revoke refused after missing scopes",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/callback",
+      "body_sha256": "d986d2066f408c1d9a3c9c5d1719b8979dae22e97efbcd1b59c2fa530f37f24f",
+      "status": 400,
+      "headers": {
+        "content-length": "132",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "e2ba8790-4f08-490a-8ddc-cd0f261c9a75"
+      },
+      "body": "{\"detail\":\"Missing required PagerDuty OAuth scopes: escalation_policies.read, oncalls.read, schedules.read, teams.read, users.read\"}"
+    },
+    {
+      "name": "W callback compensating revoke refused after no account",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/callback",
+      "body_sha256": "fa14b6a576d3a0863ce7efa0b66bd97cacf5fee610b47cc17c49c5214d46c638",
+      "status": 400,
+      "headers": {
+        "content-length": "54",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "0ca9f21a-2a9a-4303-8362-4ef413329adb"
+      },
+      "body": "{\"detail\":\"PagerDuty OAuth account validation failed\"}"
+    },
+    {
+      "name": "W callback compensating revoke refused after a failed local write",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/callback",
+      "body_sha256": "bf7e0dfeea2d76470954417f606332e2df2bafb48115663a72a76271df23405e",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "W callback compensating revoke redirected is not followed",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/callback",
+      "body_sha256": "ebaa29c903cb923e38876250019dc2bf0c6a1523f2eb7479e328a30d315246ea",
+      "status": 400,
+      "headers": {
+        "content-length": "147",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "b8620a2f-7c41-454b-af6e-b282da7a52f8"
+      },
+      "body": "{\"detail\":\"Missing required PagerDuty OAuth scopes: escalation_policies.read, oncalls.read, schedules.read, services.read, teams.read, users.read\"}"
+    },
+    {
+      "name": "W callback token body not json",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/callback",
+      "body_sha256": "dd07657a6720bbacdb1fea6cd7681965ccd767ed96f4802194fbf0fc9786d1ca",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "W callback token body without access_token",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/callback",
+      "body_sha256": "3c858931e1e61ef341c60c33cbfb144f737bc4734be458ff0010e7eb8c133a7f",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "W callback expires_in not an integer",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/callback",
+      "body_sha256": "5088de2e921c25eaaf305696128c2f090e7ce8249d26c58b7b25a37cd2cc7513",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "W callback error from provider",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/callback",
+      "body_sha256": "fb93f2614e29a9adf32d6282f71c17a4f017f3f785feace5c625a625aaf971bd",
+      "status": 400,
+      "headers": {
+        "content-length": "70",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "36a4d33a-cf80-4c16-9914-49517c8b4a99"
+      },
+      "body": "{\"detail\":\"PagerDuty OAuth callback returned an error: access_denied\"}"
+    },
+    {
+      "name": "W callback code missing",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/callback",
+      "body_sha256": "e04acd7a275d48f0a2b6e80ca85b9670073fbaf430595349abb2eb7d541ba8b3",
+      "status": 400,
+      "headers": {
+        "content-length": "54",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "9dc63bd6-a2e7-43e8-acfe-eb08476ac7f3"
+      },
+      "body": "{\"detail\":\"PagerDuty OAuth callback code is required\"}"
+    },
+    {
+      "name": "W callback code empty",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/callback",
+      "body_sha256": "b81c82308906c109bbb09fc604496caab355b162c123c8b176bb037feaca38da",
+      "status": 400,
+      "headers": {
+        "content-length": "54",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "1d07c85a-1357-46fd-bbaf-97db5f90bc3a"
+      },
+      "body": "{\"detail\":\"PagerDuty OAuth callback code is required\"}"
+    },
+    {
+      "name": "W callback empty error does not count",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/callback",
+      "body_sha256": "a38d66df7d2e9e84210892fc4f273c3e902e8316b60d3fbd475cec99986c4b55",
+      "status": 400,
+      "headers": {
+        "content-length": "60",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "e82f4484-5aa4-487d-9ec2-e99cecd0ba8a"
+      },
+      "body": "{\"detail\":\"PagerDuty OAuth authorization code was rejected\"}"
+    },
+    {
+      "name": "W callback state used once",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/callback",
+      "body_sha256": "ce5a3b41f69af93348054ef4e04ba4246db24686beee05bba1d8d39e65af3984",
+      "status": 400,
+      "headers": {
+        "content-length": "60",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "34052be0-a904-43e0-b35f-bc31ea35d949"
+      },
+      "body": "{\"detail\":\"PagerDuty OAuth authorization code was rejected\"}"
+    },
+    {
+      "name": "W callback state used twice",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/callback",
+      "body_sha256": "ce5a3b41f69af93348054ef4e04ba4246db24686beee05bba1d8d39e65af3984",
+      "status": 400,
+      "headers": {
+        "content-length": "53",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "1df6ff6f-8c9c-4449-bd91-c1c4ae16c073"
+      },
+      "body": "{\"detail\":\"Invalid or expired PagerDuty OAuth state\"}"
+    },
+    {
+      "name": "W callback state unknown",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/callback",
+      "body_sha256": "b4b08d04aed7c214c9595d03a5d927e52c1c366cb5e5a5005523c4c1c0d3ba78",
+      "status": 400,
+      "headers": {
+        "content-length": "53",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "6ccdb261-65fa-4d17-af93-d782d08c2a46"
+      },
+      "body": "{\"detail\":\"Invalid or expired PagerDuty OAuth state\"}"
+    },
+    {
+      "name": "W callback state expired",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/callback",
+      "body_sha256": "f4572caabd89c565e3f41796e4c941c9adf18adc7a4bae5598ffc72b8feb4c3a",
+      "status": 400,
+      "headers": {
+        "content-length": "53",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "b8c05bf0-5b99-45fb-ad3a-cda4320504c9"
+      },
+      "body": "{\"detail\":\"Invalid or expired PagerDuty OAuth state\"}"
+    },
+    {
+      "name": "W callback state of another org",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/callback",
+      "body_sha256": "8e4ee236d91bb396acfefce4a932ff07f680d2af41ab4f7d006eb14649aaca7b",
+      "status": 400,
+      "headers": {
+        "content-length": "53",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "662e7de9-ae9f-4508-898c-9faafea58a60"
+      },
+      "body": "{\"detail\":\"Invalid or expired PagerDuty OAuth state\"}"
+    },
+    {
+      "name": "W callback extra field",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/callback",
+      "body_sha256": "7d2f287286889aca45203f99cbf049b4a02f5022b192afa5626803b7688bcfc6",
+      "status": 422,
+      "headers": {
+        "content-length": "107",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "c50d4991-cc90-42d3-9bfb-761ea4c47417"
+      },
+      "body": "{\"detail\":[{\"type\":\"extra_forbidden\",\"loc\":[\"body\",\"x\"],\"msg\":\"Extra inputs are not permitted\",\"input\":1}]}"
+    },
+    {
+      "name": "W callback state missing",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/callback",
+      "body_sha256": "690fe0c4cbb8a83a713d9367004398dc2bb74cdf282bf02c123fdca15242b15b",
+      "status": 422,
+      "headers": {
+        "content-length": "101",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "57feddd1-9bfb-4c8b-aac2-8c2eaa27a063"
+      },
+      "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"state\"],\"msg\":\"Field required\",\"input\":{\"code\":\"c-ok\"}}]}"
+    },
+    {
+      "name": "W callback state empty",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/callback",
+      "body_sha256": "2c7025b73ad7766796ab9362e36cf970280ed300f4cc5c48a1c734e461a62e65",
+      "status": 422,
+      "headers": {
+        "content-length": "145",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "d437e716-93ca-4f2b-8397-a8f366670495"
+      },
+      "body": "{\"detail\":[{\"type\":\"string_too_short\",\"loc\":[\"body\",\"state\"],\"msg\":\"String should have at least 1 character\",\"input\":\"\",\"ctx\":{\"min_length\":1}}]}"
+    },
+    {
+      "name": "W callback state number",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/callback",
+      "body_sha256": "f869fc90a24d0e478eead4e45ea63228ba9e6a6524e87d8b295062ea1838b7a2",
+      "status": 422,
+      "headers": {
+        "content-length": "297",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "052a1fcd-323e-4489-bc1d-a45a05161326"
+      },
+      "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"state\"],\"msg\":\"Input should be a valid string\",\"input\":5},{\"type\":\"string_type\",\"loc\":[\"body\",\"code\"],\"msg\":\"Input should be a valid string\",\"input\":5},{\"type\":\"string_type\",\"loc\":[\"body\",\"error\"],\"msg\":\"Input should be a valid string\",\"input\":[]}]}"
+    },
+    {
+      "name": "W callback several errors and extras",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/callback",
+      "body_sha256": "82347271f273539662658d86d6ded079c71fc67888119e35d36ba52f2c5b5063",
+      "status": 422,
+      "headers": {
+        "content-length": "392",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "d6ffa542-8692-41ca-8613-f46a068f30b0"
+      },
+      "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"state\"],\"msg\":\"Field required\",\"input\":{\"code\":7,\"z\":1,\"a\":2}},{\"type\":\"string_type\",\"loc\":[\"body\",\"code\"],\"msg\":\"Input should be a valid string\",\"input\":7},{\"type\":\"extra_forbidden\",\"loc\":[\"body\",\"z\"],\"msg\":\"Extra inputs are not permitted\",\"input\":1},{\"type\":\"extra_forbidden\",\"loc\":[\"body\",\"a\"],\"msg\":\"Extra inputs are not permitted\",\"input\":2}]}"
+    },
+    {
+      "name": "W callback body list",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/callback",
+      "body_sha256": "0efe8c9a1a45511fe53ad47b02b82b32f480d1819874e6fb6d37c54cf9a2f5ea",
+      "status": 422,
+      "headers": {
+        "content-length": "147",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "229add3f-0247-4289-9fb6-bbd1d378d593"
+      },
+      "body": "{\"detail\":[{\"type\":\"model_attributes_type\",\"loc\":[\"body\"],\"msg\":\"Input should be a valid dictionary or object to extract fields from\",\"input\":[]}]}"
+    },
+    {
+      "name": "W callback body null",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/callback",
+      "body_sha256": "bb99e5bb3a756453730056b900774c14cb31358abd79a0903bf0e0349d0ade7a",
+      "status": 422,
+      "headers": {
+        "content-length": "82",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "dd0fdf48-6746-4638-b345-4f3ab1bfc393"
+      },
+      "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\"],\"msg\":\"Field required\",\"input\":null}]}"
+    },
+    {
+      "name": "W callback invalid json",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/callback",
+      "body_sha256": "28e9bafc45d8e9d77bb0a8df443097a32dd967a6099b003712d0ef3725b43c5e",
+      "status": 422,
+      "headers": {
+        "content-length": "158",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "3f7ae1b9-7dea-4a30-b04d-ea07a4c81ca6"
+      },
+      "body": "{\"detail\":[{\"type\":\"json_invalid\",\"loc\":[\"body\",1],\"msg\":\"JSON decode error\",\"input\":{},\"ctx\":{\"error\":\"Expecting property name enclosed in double quotes\"}}]}"
+    },
+    {
+      "name": "W callback unauthenticated",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/callback",
+      "body_sha256": "ae5cea946d59cfe62ef7a3bd2cbfbc07e368f657fdfc784df13578cc12215f64",
+      "status": 401,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "www-authenticate": "Bearer",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "252a9dfa-8927-4999-b758-7d459bd00496"
+      },
+      "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
+    },
+    {
+      "name": "W callback member refused",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/callback",
+      "body_sha256": "ae5cea946d59cfe62ef7a3bd2cbfbc07e368f657fdfc784df13578cc12215f64",
+      "status": 403,
+      "headers": {
+        "content-length": "34",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "4b4decfe-54c4-4e95-a335-4da33eaae8c3"
+      },
+      "body": "{\"detail\":\"Admin access required\"}"
+    },
+    {
+      "name": "W callback superuser without org",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/callback",
+      "body_sha256": "ae5cea946d59cfe62ef7a3bd2cbfbc07e368f657fdfc784df13578cc12215f64",
+      "status": 403,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "b7e368ee-66fd-4564-9750-9c93a5562a1e"
+      },
+      "body": "{\"detail\":\"Organization context required\"}"
+    },
+    {
+      "name": "callback get is 405",
+      "method": "GET",
+      "path": "/api/v1/admin/integrations/pagerduty/callback",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 405,
+      "headers": {
+        "allow": "POST",
+        "content-length": "31",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "0d455fae-699d-4bf0-abb5-7452fbe6f2ac"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "name": "W client-credentials connect",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/client-credentials",
+      "body_sha256": "416ff2a4a8c17436cc692eecad4665a874e5ba55621e110277e3ecebcbfe2689",
+      "status": 200,
+      "headers": {
+        "content-length": "112",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "e19d9bfc-39d8-45c9-9cbc-5e16746d9224"
+      },
+      "body": "{\"connected\":true,\"credential_name\":\"default\",\"auth_mode\":\"client_credentials\",\"region\":\"us\",\"subdomain\":\"acme\"}"
+    },
+    {
+      "name": "W client-credentials replaces itself",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/client-credentials",
+      "body_sha256": "416ff2a4a8c17436cc692eecad4665a874e5ba55621e110277e3ecebcbfe2689",
+      "status": 200,
+      "headers": {
+        "content-length": "112",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "4cc59bdd-a557-4c14-b2a6-a7574e5db12c"
+      },
+      "body": "{\"connected\":true,\"credential_name\":\"default\",\"auth_mode\":\"client_credentials\",\"region\":\"us\",\"subdomain\":\"acme\"}"
+    },
+    {
+      "name": "W client-credentials subdomain case-insensitive, padded",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/client-credentials",
+      "body_sha256": "2c24e1bbb602d99b0e896282c2e95f6f84fadae78feb1e5921d9a04240314711",
+      "status": 200,
+      "headers": {
+        "content-length": "116",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "12a9432a-6680-4ce2-ac55-2e8d6c937ed0"
+      },
+      "body": "{\"connected\":true,\"credential_name\":\"padded name\",\"auth_mode\":\"client_credentials\",\"region\":\"us\",\"subdomain\":\"acme\"}"
+    },
+    {
+      "name": "W client-credentials eu region",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/client-credentials",
+      "body_sha256": "3cb2db6f8613f2b35206d7fd1286b03d001799be2db39a73ef0282cce05e980a",
+      "status": 200,
+      "headers": {
+        "content-length": "110",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "3ecd9aa2-f5ef-48ba-89c0-644593309ff7"
+      },
+      "body": "{\"connected\":true,\"credential_name\":\"eu\",\"auth_mode\":\"client_credentials\",\"region\":\"eu\",\"subdomain\":\"acme-eu\"}"
+    },
+    {
+      "name": "W client-credentials other account",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/client-credentials",
+      "body_sha256": "b2d55f75d2dae507cd3be73176672a36cb01a7ec2c850e27a777ebd354c3615d",
+      "status": 400,
+      "headers": {
+        "content-length": "64",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "394dea3d-0acb-4860-9897-ecf2d4b46c75"
+      },
+      "body": "{\"detail\":\"PagerDuty credential belongs to a different account\"}"
+    },
+    {
+      "name": "W client-credentials rejected",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/client-credentials",
+      "body_sha256": "2033d08bb5e71cdce36a3999800373b366b015f1d9c1201a5ad4d103a8f31581",
+      "status": 400,
+      "headers": {
+        "content-length": "51",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "212c9691-f316-45c8-aeab-c5637381e4bf"
+      },
+      "body": "{\"detail\":\"PagerDuty credential validation failed\"}"
+    },
+    {
+      "name": "W client-credentials token body cut short",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/client-credentials",
+      "body_sha256": "110b6b4cc8b61c80efc4e90858d1f948ca927cfe347828d67300fc8cd6f98c48",
+      "status": 400,
+      "headers": {
+        "content-length": "51",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "e1a72a1d-d6c1-4fbe-9ccd-cf34aec0d7d1"
+      },
+      "body": "{\"detail\":\"PagerDuty credential validation failed\"}"
+    },
+    {
+      "name": "W client-credentials token body not json",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/client-credentials",
+      "body_sha256": "fc8f89e1c9b6d53db53b64e56ada204ba8b1e4f32f92ab0174e50797a2685d4b",
+      "status": 400,
+      "headers": {
+        "content-length": "51",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "029cd8da-ebb9-4226-a9e1-af2301922af5"
+      },
+      "body": "{\"detail\":\"PagerDuty credential validation failed\"}"
+    },
+    {
+      "name": "W client-credentials token body a list",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/client-credentials",
+      "body_sha256": "6b78396e464710659a294f9af0d488fa9460455003c936e5086d1f3e3c11c746",
+      "status": 400,
+      "headers": {
+        "content-length": "51",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "fbc15c2c-3921-41f6-83c8-74eba539e45c"
+      },
+      "body": "{\"detail\":\"PagerDuty credential validation failed\"}"
+    },
+    {
+      "name": "W client-credentials token without access_token",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/client-credentials",
+      "body_sha256": "e3bba0028ea90b6c8721caa4758258ef1a5115afa19965b7877c3712a3014f5c",
+      "status": 400,
+      "headers": {
+        "content-length": "51",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "d7bf1b9f-d38a-4142-a4e4-5f4dbca3f91c"
+      },
+      "body": "{\"detail\":\"PagerDuty credential validation failed\"}"
+    },
+    {
+      "name": "W client-credentials scope not a string",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/client-credentials",
+      "body_sha256": "c95d7249dc633e3ccc4297819f9e917ebc56466b615ff2a4beb02eaa8f71ba99",
+      "status": 400,
+      "headers": {
+        "content-length": "51",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "84894301-d528-4523-938e-575e2f9bbc23"
+      },
+      "body": "{\"detail\":\"PagerDuty credential validation failed\"}"
+    },
+    {
+      "name": "W client-credentials scopes missing",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/client-credentials",
+      "body_sha256": "54d7a662103cb2ed1824fb72597de2ffe88c23b4da87012f9cb99303d5677640",
+      "status": 400,
+      "headers": {
+        "content-length": "51",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "4c385e9d-d1eb-4fe1-a708-db0c29cd1e87"
+      },
+      "body": "{\"detail\":\"PagerDuty credential validation failed\"}"
+    },
+    {
+      "name": "W client-credentials retires an OAuth binding and revokes it",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/client-credentials",
+      "body_sha256": "416ff2a4a8c17436cc692eecad4665a874e5ba55621e110277e3ecebcbfe2689",
+      "status": 200,
+      "headers": {
+        "content-length": "112",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "0dbe2b39-2624-43e2-8c20-aaa55b3e8367"
+      },
+      "body": "{\"connected\":true,\"credential_name\":\"default\",\"auth_mode\":\"client_credentials\",\"region\":\"us\",\"subdomain\":\"acme\"}"
+    },
+    {
+      "name": "W client-credentials retires an unreadable binding without a revoke",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/client-credentials",
+      "body_sha256": "416ff2a4a8c17436cc692eecad4665a874e5ba55621e110277e3ecebcbfe2689",
+      "status": 200,
+      "headers": {
+        "content-length": "112",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "4cda7cdd-18e2-4c41-b358-3df8d294662c"
+      },
+      "body": "{\"connected\":true,\"credential_name\":\"default\",\"auth_mode\":\"client_credentials\",\"region\":\"us\",\"subdomain\":\"acme\"}"
+    },
+    {
+      "name": "W client-credentials feature off refused",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/client-credentials",
+      "body_sha256": "416ff2a4a8c17436cc692eecad4665a874e5ba55621e110277e3ecebcbfe2689",
+      "status": 403,
+      "headers": {
+        "content-length": "78",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "92739e26-f411-4557-a2f1-127b02167eea"
+      },
+      "body": "{\"detail\":\"Canonical incident ingestion is not enabled for this organization\"}"
+    },
+    {
+      "name": "W client-credentials invalid body wins over the feature gate",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/client-credentials",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "status": 422,
+      "headers": {
+        "content-length": "256",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "3003248e-a7c9-4c52-935d-c0c8f1f4bc18"
+      },
+      "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"client_id\"],\"msg\":\"Field required\",\"input\":{}},{\"type\":\"missing\",\"loc\":[\"body\",\"client_secret\"],\"msg\":\"Field required\",\"input\":{}},{\"type\":\"missing\",\"loc\":[\"body\",\"subdomain\"],\"msg\":\"Field required\",\"input\":{}}]}"
+    },
+    {
+      "name": "W client-credentials fields missing",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/client-credentials",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "status": 422,
+      "headers": {
+        "content-length": "256",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "82cddc6f-028d-47e3-9b37-6dfe849e085f"
+      },
+      "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"client_id\"],\"msg\":\"Field required\",\"input\":{}},{\"type\":\"missing\",\"loc\":[\"body\",\"client_secret\"],\"msg\":\"Field required\",\"input\":{}},{\"type\":\"missing\",\"loc\":[\"body\",\"subdomain\"],\"msg\":\"Field required\",\"input\":{}}]}"
+    },
+    {
+      "name": "W client-credentials fields empty",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/client-credentials",
+      "body_sha256": "a1dfc81a1b0245f2c317620f6ef843c9c994577ae06798c7bf05c3f10fcf9a28",
+      "status": 422,
+      "headers": {
+        "content-length": "427",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "52a931db-d1d7-42ef-8386-e4918fca9863"
+      },
+      "body": "{\"detail\":[{\"type\":\"string_too_short\",\"loc\":[\"body\",\"client_id\"],\"msg\":\"String should have at least 1 character\",\"input\":\"\",\"ctx\":{\"min_length\":1}},{\"type\":\"string_too_short\",\"loc\":[\"body\",\"client_secret\"],\"msg\":\"String should have at least 1 character\",\"input\":\"\",\"ctx\":{\"min_length\":1}},{\"type\":\"string_too_short\",\"loc\":[\"body\",\"subdomain\"],\"msg\":\"String should have at least 1 character\",\"input\":\"\",\"ctx\":{\"min_length\":1}}]}"
+    },
+    {
+      "name": "W client-credentials blank subdomain and name",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/client-credentials",
+      "body_sha256": "9488e658f653319c4bf19676cacf5b6e4e942caf1b10fe5eabcd10f3538c6226",
+      "status": 422,
+      "headers": {
+        "content-length": "273",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "2e39fc29-bb9d-40ed-bad5-5cfbb09693fe"
+      },
+      "body": "{\"detail\":[{\"type\":\"value_error\",\"loc\":[\"body\",\"credential_name\"],\"msg\":\"Value error, value must not be blank\",\"input\":\"  \",\"ctx\":{\"error\":{}}},{\"type\":\"value_error\",\"loc\":[\"body\",\"subdomain\"],\"msg\":\"Value error, value must not be blank\",\"input\":\"   \",\"ctx\":{\"error\":{}}}]}"
+    },
+    {
+      "name": "W client-credentials region invalid",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/client-credentials",
+      "body_sha256": "86f51a3bf8a99ddf0c9a9953887760c33372ae5e545431af19b6b560e288a2b4",
+      "status": 422,
+      "headers": {
+        "content-length": "145",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "76f8cdc3-3b7a-4909-aa71-866a1901ff60"
+      },
+      "body": "{\"detail\":[{\"type\":\"literal_error\",\"loc\":[\"body\",\"region\"],\"msg\":\"Input should be 'us' or 'eu'\",\"input\":\"ap\",\"ctx\":{\"expected\":\"'us' or 'eu'\"}}]}"
+    },
+    {
+      "name": "W client-credentials region null",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/client-credentials",
+      "body_sha256": "019b080fb188aa5c0f940d301e914bb5a68c198e715276783d8515202f357d59",
+      "status": 422,
+      "headers": {
+        "content-length": "145",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "ee298ea9-1384-47a7-ae11-1af0acf86b0a"
+      },
+      "body": "{\"detail\":[{\"type\":\"literal_error\",\"loc\":[\"body\",\"region\"],\"msg\":\"Input should be 'us' or 'eu'\",\"input\":null,\"ctx\":{\"expected\":\"'us' or 'eu'\"}}]}"
+    },
+    {
+      "name": "W client-credentials name null",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/client-credentials",
+      "body_sha256": "26967a5c722dd04681c0198c3f18efa9b9548c88d80a17de0a3d2a1cb85a3c82",
+      "status": 422,
+      "headers": {
+        "content-length": "120",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "194e6c68-9cad-491a-b27b-6c1a013c7e55"
+      },
+      "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"credential_name\"],\"msg\":\"Input should be a valid string\",\"input\":null}]}"
+    },
+    {
+      "name": "W client-credentials types wrong",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/client-credentials",
+      "body_sha256": "3c2cb9445bd62388511d7fa126cca1c12cbe7eb0a6c1df2de9833ef4cbbbad1a",
+      "status": 422,
+      "headers": {
+        "content-length": "553",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "24746592-8f0b-475e-abbd-2cd4e3569518"
+      },
+      "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"credential_name\"],\"msg\":\"Input should be a valid string\",\"input\":true},{\"type\":\"string_type\",\"loc\":[\"body\",\"client_id\"],\"msg\":\"Input should be a valid string\",\"input\":1},{\"type\":\"string_type\",\"loc\":[\"body\",\"client_secret\"],\"msg\":\"Input should be a valid string\",\"input\":[]},{\"type\":\"string_type\",\"loc\":[\"body\",\"subdomain\"],\"msg\":\"Input should be a valid string\",\"input\":{}},{\"type\":\"literal_error\",\"loc\":[\"body\",\"region\"],\"msg\":\"Input should be 'us' or 'eu'\",\"input\":3,\"ctx\":{\"expected\":\"'us' or 'eu'\"}}]}"
+    },
+    {
+      "name": "W client-credentials extra fields",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/client-credentials",
+      "body_sha256": "9dc398b5ca3a4cee2bb7f6cb874575c65af2a5e7ee530a6ca3cb4420046790b0",
+      "status": 422,
+      "headers": {
+        "content-length": "202",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "7f424cb0-c2d2-4601-8036-d331bd98c953"
+      },
+      "body": "{\"detail\":[{\"type\":\"extra_forbidden\",\"loc\":[\"body\",\"z\"],\"msg\":\"Extra inputs are not permitted\",\"input\":1},{\"type\":\"extra_forbidden\",\"loc\":[\"body\",\"a\"],\"msg\":\"Extra inputs are not permitted\",\"input\":2}]}"
+    },
+    {
+      "name": "W client-credentials body list",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/client-credentials",
+      "body_sha256": "0efe8c9a1a45511fe53ad47b02b82b32f480d1819874e6fb6d37c54cf9a2f5ea",
+      "status": 422,
+      "headers": {
+        "content-length": "147",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "d39bdc1c-9455-417d-b663-814e7983ec1e"
+      },
+      "body": "{\"detail\":[{\"type\":\"model_attributes_type\",\"loc\":[\"body\"],\"msg\":\"Input should be a valid dictionary or object to extract fields from\",\"input\":[]}]}"
+    },
+    {
+      "name": "W client-credentials member refused",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/client-credentials",
+      "body_sha256": "416ff2a4a8c17436cc692eecad4665a874e5ba55621e110277e3ecebcbfe2689",
+      "status": 403,
+      "headers": {
+        "content-length": "34",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "7b7e897f-542b-479b-8bb4-f814b9c12502"
+      },
+      "body": "{\"detail\":\"Admin access required\"}"
+    },
+    {
+      "name": "W client-credentials unauthenticated",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/client-credentials",
+      "body_sha256": "416ff2a4a8c17436cc692eecad4665a874e5ba55621e110277e3ecebcbfe2689",
+      "status": 401,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "www-authenticate": "Bearer",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "3819f09d-c9f3-4f16-a039-b6ccd5e05e97"
+      },
+      "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
+    },
+    {
+      "name": "W api-token connect",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/api-token",
+      "body_sha256": "56dfdbbe0f4aae76a30df35bc5ffa9c8a7e5e5453a3d9d9c93eccd204a36689c",
+      "status": 200,
+      "headers": {
+        "content-length": "103",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "9bd6e40e-7702-441f-8f93-1df2faba8fee"
+      },
+      "body": "{\"connected\":true,\"credential_name\":\"default\",\"auth_mode\":\"api_token\",\"region\":\"us\",\"subdomain\":\"acme\"}"
+    },
+    {
+      "name": "W api-token named credential, eu",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/api-token",
+      "body_sha256": "f386cb88b03b24d90d0db9a125ca33829419f7f2ebe0414357828c75bbbbbc5a",
+      "status": 200,
+      "headers": {
+        "content-length": "102",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "5a2facef-d7eb-461a-8675-1f74aad30090"
+      },
+      "body": "{\"connected\":true,\"credential_name\":\"second\",\"auth_mode\":\"api_token\",\"region\":\"eu\",\"subdomain\":\"acme\"}"
+    },
+    {
+      "name": "W api-token identity from html_url",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/api-token",
+      "body_sha256": "81f96b4304fff265e9597ed4ac38c088e0cc3811ab38ccaccdd5250ff0d381fd",
+      "status": 200,
+      "headers": {
+        "content-length": "104",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "e96c4ef8-84d8-499c-9049-5e0a7ba768c1"
+      },
+      "body": "{\"connected\":true,\"credential_name\":\"html\",\"auth_mode\":\"api_token\",\"region\":\"us\",\"subdomain\":\"htmlacct\"}"
+    },
+    {
+      "name": "W api-token html_url on the api host has no subdomain",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/api-token",
+      "body_sha256": "2ea57940a1621ebf2c5c4eb3c5d9e7325beaacaf9e26981f5fcec835718e0846",
+      "status": 400,
+      "headers": {
+        "content-length": "51",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "01856040-f124-4f3c-930f-524a2ce922f9"
+      },
+      "body": "{\"detail\":\"PagerDuty credential validation failed\"}"
+    },
+    {
+      "name": "W api-token other account",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/api-token",
+      "body_sha256": "f8fa05a2cd760fbd840c8af7cc65b742ecf08850ed7285d4a257c4020b4aaadd",
+      "status": 400,
+      "headers": {
+        "content-length": "64",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "ffa815dc-710b-4091-af7d-e3ce366082fc"
+      },
+      "body": "{\"detail\":\"PagerDuty credential belongs to a different account\"}"
+    },
+    {
+      "name": "W api-token rejected",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/api-token",
+      "body_sha256": "fa504a830a8b956f474a9d0fa93d7805ddfb9d1ed15dae5399f9eba1e05ccce9",
+      "status": 400,
+      "headers": {
+        "content-length": "51",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "82d6ccd9-aab4-4148-9ccf-7ddf2cf147bf"
+      },
+      "body": "{\"detail\":\"PagerDuty credential validation failed\"}"
+    },
+    {
+      "name": "W api-token services body a list",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/api-token",
+      "body_sha256": "b9f47611510690405b9c538515eb1c842c727f6b4c33de4aff21058753616b2e",
+      "status": 400,
+      "headers": {
+        "content-length": "51",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "ee0d8559-e52d-4c17-a0b6-5f2a2ace205c"
+      },
+      "body": "{\"detail\":\"PagerDuty credential validation failed\"}"
+    },
+    {
+      "name": "W api-token services not a list",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/api-token",
+      "body_sha256": "52d41086f8c957ce46d8fea54b8548fbf82b70958cd7e3f5870df4b65623d6fb",
+      "status": 400,
+      "headers": {
+        "content-length": "51",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "bb751ccd-6374-4a65-9513-764738be5e0d"
+      },
+      "body": "{\"detail\":\"PagerDuty credential validation failed\"}"
+    },
+    {
+      "name": "W api-token fields missing",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/api-token",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "status": 422,
+      "headers": {
+        "content-length": "172",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "5b120cbb-9e24-4108-8b4b-8468f8843b0d"
+      },
+      "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"api_token\"],\"msg\":\"Field required\",\"input\":{}},{\"type\":\"missing\",\"loc\":[\"body\",\"subdomain\"],\"msg\":\"Field required\",\"input\":{}}]}"
+    },
+    {
+      "name": "W api-token extra field",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/api-token",
+      "body_sha256": "e639d0d06c53d5e29865ce985cc156b86f976bf773d7daceaf867efdfa231e56",
+      "status": 422,
+      "headers": {
+        "content-length": "117",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "92f3479a-6eb6-43b2-ab70-6936a431604e"
+      },
+      "body": "{\"detail\":[{\"type\":\"extra_forbidden\",\"loc\":[\"body\",\"client_id\"],\"msg\":\"Extra inputs are not permitted\",\"input\":\"x\"}]}"
+    },
+    {
+      "name": "W api-token blank subdomain",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/api-token",
+      "body_sha256": "d0398d3cc7348a5d660f3a5bd61a56fa5af64ede2f4e28ac3a4eaa6c6dfe5f0a",
+      "status": 422,
+      "headers": {
+        "content-length": "138",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "699d6aea-71da-4054-8eda-91815c9d3361"
+      },
+      "body": "{\"detail\":[{\"type\":\"value_error\",\"loc\":[\"body\",\"subdomain\"],\"msg\":\"Value error, value must not be blank\",\"input\":\" \",\"ctx\":{\"error\":{}}}]}"
+    },
+    {
+      "name": "W api-token region invalid",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/api-token",
+      "body_sha256": "1530269ee5df9e4b3eab25ffcd54913911ad2a121aa4ed05a9483b56c8fc6301",
+      "status": 422,
+      "headers": {
+        "content-length": "145",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "a5a80437-5701-45c1-9089-da1bad2cfa49"
+      },
+      "body": "{\"detail\":[{\"type\":\"literal_error\",\"loc\":[\"body\",\"region\"],\"msg\":\"Input should be 'us' or 'eu'\",\"input\":\"US\",\"ctx\":{\"expected\":\"'us' or 'eu'\"}}]}"
+    },
+    {
+      "name": "W api-token member refused",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/api-token",
+      "body_sha256": "56dfdbbe0f4aae76a30df35bc5ffa9c8a7e5e5453a3d9d9c93eccd204a36689c",
+      "status": 403,
+      "headers": {
+        "content-length": "34",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "026395d8-f0cc-4323-bd53-d433e5ae8ab5"
+      },
+      "body": "{\"detail\":\"Admin access required\"}"
+    },
+    {
+      "name": "W api-token superuser without org",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/api-token",
+      "body_sha256": "56dfdbbe0f4aae76a30df35bc5ffa9c8a7e5e5453a3d9d9c93eccd204a36689c",
+      "status": 403,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "5472bda7-8889-40eb-82bd-e33d3eac0f4a"
+      },
+      "body": "{\"detail\":\"Organization context required\"}"
+    },
+    {
+      "name": "api-token get is 405",
+      "method": "GET",
+      "path": "/api/v1/admin/integrations/pagerduty/api-token",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 405,
+      "headers": {
+        "allow": "POST",
+        "content-length": "31",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "8d53d015-6c22-4d04-8eb8-da2b2347e39b"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    }
+  ],
+  "rows": {
+    "authorization requests left": {
+      "rows": "410d9923-3f71-55cd-97fd-80e11d7c13f4030a947727af28e63a8161d4e73bbb0063c7aee614599396ed22fdcf396493e3 | 410d9923-3f71-55cd-97fd-80e11d7c13f48019b8e945f36aff9f7a17255240a1845776825c8abfa8e47d56c8da564b0a4c | 410d9923-3f71-55cd-97fd-80e11d7c13f4bb4f735943fe1f991059f3d5080059b0766e56737ccb281783e027d816143fba | 410d9923-3f71-55cd-97fd-80e11d7c13f4faaf2362a89da58d0b429a78ee6962a6027019e24511b36a8f06e5d82583251a | 443fc1e8-ff56-5472-9bb8-af43cc64e03ee24c7b99d76c3c578befd364930be9e05bd7f09301025addb4383ac2436b7942 | 86291fcc-a525-5307-a9d6-7d1726cb6632f54eac575fb1e84bb584efdf6c64b9f4877398202fc17cbf80d6d0d19456acce | d6fb0035-6b69-584f-811a-46fc93ccb1c70167350092b3201e18a12911761a94b851b5d63a78a55a63e8cdf900fde92ed6 | d6fb0035-6b69-584f-811a-46fc93ccb1c72a7252e32f0a35e1f766aa5c9248485b6bfee267e4c1118d1dbf194776deb7e5"
+    },
+    "integration_credentials rows (config as stored text)": {
+      "rows": "294af554-631b-5b6b-a981-e3d66a455822defaulttrue{\"auth_mode\": \"client_credentials\", \"region\": \"us\", \"subdomain\": \"acme\", \"account_id\": \"ACC1\", \"account_display\": \"Acme Co\"}true\u003cnil\u003efalse | 4c81ca7d-739d-56d4-994c-acec4f229544defaulttrue{\"auth_mode\": \"client_credentials\", \"region\": \"us\", \"subdomain\": \"acme\", \"account_id\": \"ACC1\", \"account_display\": \"Acme Co\"}true\u003cnil\u003efalse | 4c81ca7d-739d-56d4-994c-acec4f229544eutrue{\"auth_mode\": \"client_credentials\", \"region\": \"eu\", \"subdomain\": \"acme-eu\", \"account_id\": \"ACCEU\", \"account_display\": \"Acme EU\"}true\u003cnil\u003efalse | 4c81ca7d-739d-56d4-994c-acec4f229544padded nametrue{\"auth_mode\": \"client_credentials\", \"region\": \"us\", \"subdomain\": \"acme\", \"account_id\": \"ACC1\", \"account_display\": \"Acme Co\"}true\u003cnil\u003efalse | 81528e5d-a460-56f5-96c0-3368f9a5798edefaulttrue{\"auth_mode\": \"client_credentials\", \"region\": \"us\", \"subdomain\": \"acme\", \"account_id\": \"ACC1\", \"account_display\": \"Acme Co\"}true\u003cnil\u003efalse | 86291fcc-a525-5307-a9d6-7d1726cb6632Acme Cotrue{\"auth_mode\": \"oauth\", \"region\": \"us\", \"subdomain\": \"acme\", \"account_id\": \"ACC1\", \"account_display\": \"Acme Co\", \"granted_scopes\": [\"escalation_policies.read\", \"incidents.read\", \"oncalls.read\", \"schedules.read\", \"services.read\", \"teams.read\", \"users.read\"]}\u003cnil\u003e \u003cnil\u003etrue | 86291fcc-a525-5307-a9d6-7d1726cb6632Acme EUtrue{\"auth_mode\": \"oauth\", \"region\": \"eu\", \"subdomain\": \"acme-eu\", \"account_id\": \"ACCEU\", \"account_display\": \"Acme EU\", \"granted_scopes\": [\"escalation_policies.read\", \"incidents.read\", \"oncalls.read\", \"schedules.read\", \"services.read\", \"teams.read\", \"users.read\"]}\u003cnil\u003e \u003cnil\u003etrue | 86291fcc-a525-5307-a9d6-7d1726cb6632Float Cotrue{\"auth_mode\": \"oauth\", \"region\": \"us\", \"subdomain\": \"float-co\", \"account_id\": \"ACCF\", \"account_display\": \"Float Co\", \"granted_scopes\": [\"escalation_policies.read\", \"incidents.read\", \"oncalls.read\", \"schedules.read\", \"services.read\", \"teams.read\", \"users.read\"]}\u003cnil\u003e \u003cnil\u003etrue | 86291fcc-a525-5307-a9d6-7d1726cb6632Neg Cotrue{\"auth_mode\": \"oauth\", \"region\": \"us\", \"subdomain\": \"neg-co\", \"account_id\": \"ACCN\", \"account_display\": \"Neg Co\", \"granted_scopes\": [\"escalation_policies.read\", \"incidents.read\", \"oncalls.read\", \"schedules.read\", \"services.read\", \"teams.read\", \"users.read\"]}\u003cnil\u003e \u003cnil\u003etrue | 86291fcc-a525-5307-a9d6-7d1726cb6632htmlaccttrue{\"auth_mode\": \"oauth\", \"region\": \"us\", \"subdomain\": \"htmlacct\", \"account_id\": \"htmlacct\", \"account_display\": \"htmlacct\", \"granted_scopes\": [\"escalation_policies.read\", \"incidents.read\", \"oncalls.read\", \"schedules.read\", \"services.read\", \"teams.read\", \"users.read\"]}\u003cnil\u003e \u003cnil\u003etrue | 86291fcc-a525-5307-a9d6-7d1726cb6632nodisptrue{\"auth_mode\": \"oauth\", \"region\": \"us\", \"subdomain\": \"nodisp\", \"account_id\": \"ACCD\", \"account_display\": \"nodisp\", \"granted_scopes\": [\"escalation_policies.read\", \"incidents.read\", \"oncalls.read\", \"schedules.read\", \"services.read\", \"teams.read\", \"users.read\"]}\u003cnil\u003e \u003cnil\u003etrue | a8b2b5d7-7ed2-5d6a-b3c3-5be22107a68dAcme Cotrue{\"auth_mode\": \"oauth\", \"region\": \"us\", \"subdomain\": \"acme\", \"account_id\": \"ACC1\", \"account_display\": \"Acme Co\", \"granted_scopes\": [\"escalation_policies.read\", \"incidents.read\", \"oncalls.read\", \"schedules.read\", \"services.read\", \"teams.read\", \"users.read\"]}\u003cnil\u003e \u003cnil\u003etrue | dbb61179-1b21-5a1e-9255-54cf5bbee99adefaulttrue{\"auth_mode\": \"api_token\", \"region\": \"us\", \"subdomain\": \"acme\", \"account_id\": \"ACC1\", \"account_display\": \"Acme Co\"}true\u003cnil\u003efalse | dbb61179-1b21-5a1e-9255-54cf5bbee99ahtmltrue{\"auth_mode\": \"api_token\", \"region\": \"us\", \"subdomain\": \"htmlacct\", \"account_id\": \"htmlacct\", \"account_display\": \"htmlacct\"}true\u003cnil\u003efalse | dbb61179-1b21-5a1e-9255-54cf5bbee99asecondtrue{\"auth_mode\": \"api_token\", \"region\": \"eu\", \"subdomain\": \"acme\", \"account_id\": \"ACC1\", \"account_display\": \"Acme Co\"}true\u003cnil\u003efalse | ec0d33df-31bc-5196-a021-932aa15337daAcme Cotrue{\"auth_mode\": \"oauth\", \"region\": \"us\", \"subdomain\": \"acme\", \"account_id\": \"ACC1\", \"account_display\": \"Acme Co\", \"granted_scopes\": [\"escalation_policies.read\", \"incidents.read\", \"oncalls.read\", \"schedules.read\", \"services.read\", \"teams.read\", \"users.read\"]}\u003cnil\u003e \u003cnil\u003etrue | f9a9950e-5dde-5b0a-b5f8-3dbd3870ebd4Acme Cotrue{\"auth_mode\": \"oauth\", \"region\": \"us\", \"subdomain\": \"acme\", \"account_id\": \"ACC1\", \"account_display\": \"Acme Co\", \"granted_scopes\": [\"escalation_policies.read\", \"incidents.read\", \"oncalls.read\", \"schedules.read\", \"services.read\", \"teams.read\", \"users.read\"]}\u003cnil\u003e \u003cnil\u003etrue"
+    },
+    "provider_oauth_credentials metadata": {
+      "rows": "21f248d2-b3a8-560e-98bd-2215c23b4002Acme Co1 false \u003cnil\u003e \u003cnil\u003e \u003cnil\u003e \u003cnil\u003e \u003cnil\u003e | 552035b2-46fd-52a6-95d4-9d0da20b5e26Acme Co1 false \u003cnil\u003e \u003cnil\u003e \u003cnil\u003e \u003cnil\u003e \u003cnil\u003e | 86291fcc-a525-5307-a9d6-7d1726cb6632Acme Co1 false[\"escalation_policies.read\", \"incidents.read\", \"oncalls.read\", \"schedules.read\", \"services.read\", \"teams.read\", \"users.read\"]ACC1Acme Cotrue{12 1 false finite true} | 86291fcc-a525-5307-a9d6-7d1726cb6632Acme EU1 true[\"escalation_policies.read\", \"incidents.read\", \"oncalls.read\", \"schedules.read\", \"services.read\", \"teams.read\", \"users.read\"]ACCEUAcme EUtrue{36 2 false finite true} | 86291fcc-a525-5307-a9d6-7d1726cb6632Float Co1 true[\"escalation_policies.read\", \"incidents.read\", \"oncalls.read\", \"schedules.read\", \"services.read\", \"teams.read\", \"users.read\"]ACCFFloat Cotrue{36 2 false finite true} | 86291fcc-a525-5307-a9d6-7d1726cb6632Neg Co1 true[\"escalation_policies.read\", \"incidents.read\", \"oncalls.read\", \"schedules.read\", \"services.read\", \"teams.read\", \"users.read\"]ACCNNeg Cotrue{-3 1 false finite true} | 86291fcc-a525-5307-a9d6-7d1726cb6632htmlacct1 true[\"escalation_policies.read\", \"incidents.read\", \"oncalls.read\", \"schedules.read\", \"services.read\", \"teams.read\", \"users.read\"]htmlaccthtmlaccttrue{36 2 false finite true} | 86291fcc-a525-5307-a9d6-7d1726cb6632nodisp1 true[\"escalation_policies.read\", \"incidents.read\", \"oncalls.read\", \"schedules.read\", \"services.read\", \"teams.read\", \"users.read\"]ACCDnodisptrue{36 2 false finite true} | a8b2b5d7-7ed2-5d6a-b3c3-5be22107a68dAcme Co1 true[\"escalation_policies.read\", \"incidents.read\", \"oncalls.read\", \"schedules.read\", \"services.read\", \"teams.read\", \"users.read\"]ACC1Acme Cotrue{36 2 false finite true} | ec0d33df-31bc-5196-a021-932aa15337daAcme Co6 true[\"escalation_policies.read\", \"incidents.read\", \"oncalls.read\", \"schedules.read\", \"services.read\", \"teams.read\", \"users.read\"]ACC1Acme Cotrue{36 2 false finite true} | f9a9950e-5dde-5b0a-b5f8-3dbd3870ebd4Acme Co2 true[\"escalation_policies.read\", \"incidents.read\", \"oncalls.read\", \"schedules.read\", \"services.read\", \"teams.read\", \"users.read\"]ACC1Acme Cotrue{36 2 false finite true}"
+    },
+    "provider_oauth_revocations metadata": {
+      "rows": "ec0d33df-31bc-5196-a021-932aa15337daAcme Coreplacementpending2remote_revoke_failedv1"
+    },
+    "python setup revocation rows": {
+      "rows": "map[]"
+    },
+    "stored secrets opened": {
+      "rows": "credentials 294af554-631b-5b6b-a981-e3d66a455822/default =\u003e {\"auth_mode\": \"client_credentials\", \"client_id\": \"cc-ok\", \"client_secret\": \"shh-cc-ok\", \"subdomain\": \"acme\", \"region\": \"us\"}\ncredentials 4c81ca7d-739d-56d4-994c-acec4f229544/default =\u003e {\"auth_mode\": \"client_credentials\", \"client_id\": \"cc-ok\", \"client_secret\": \"shh-cc-ok\", \"subdomain\": \"acme\", \"region\": \"us\"}\ncredentials 4c81ca7d-739d-56d4-994c-acec4f229544/eu =\u003e {\"auth_mode\": \"client_credentials\", \"client_id\": \"cc-eu\", \"client_secret\": \"shh-cc-eu\", \"subdomain\": \"acme-eu\", \"region\": \"eu\"}\ncredentials 4c81ca7d-739d-56d4-994c-acec4f229544/padded name =\u003e {\"auth_mode\": \"client_credentials\", \"client_id\": \"cc-ok\", \"client_secret\": \"shh-cc-ok\", \"subdomain\": \"acme\", \"region\": \"us\"}\ncredentials 81528e5d-a460-56f5-96c0-3368f9a5798e/default =\u003e {\"auth_mode\": \"client_credentials\", \"client_id\": \"cc-ok\", \"client_secret\": \"shh-cc-ok\", \"subdomain\": \"acme\", \"region\": \"us\"}\ncredentials 86291fcc-a525-5307-a9d6-7d1726cb6632/Acme Co =\u003e {\"auth_mode\": \"oauth\", \"oauth_credential_name\": \"Acme Co\", \"oauth_binding_id\": \"\u003cid\u003e\", \"subdomain\": \"acme\", \"region\": \"us\", \"account_id\": \"ACC1\"}\ncredentials 86291fcc-a525-5307-a9d6-7d1726cb6632/Acme EU =\u003e {\"auth_mode\": \"oauth\", \"oauth_credential_name\": \"Acme EU\", \"oauth_binding_id\": \"\u003cid\u003e\", \"subdomain\": \"acme-eu\", \"region\": \"eu\", \"account_id\": \"ACCEU\"}\ncredentials 86291fcc-a525-5307-a9d6-7d1726cb6632/Float Co =\u003e {\"auth_mode\": \"oauth\", \"oauth_credential_name\": \"Float Co\", \"oauth_binding_id\": \"\u003cid\u003e\", \"subdomain\": \"float-co\", \"region\": \"us\", \"account_id\": \"ACCF\"}\ncredentials 86291fcc-a525-5307-a9d6-7d1726cb6632/Neg Co =\u003e {\"auth_mode\": \"oauth\", \"oauth_credential_name\": \"Neg Co\", \"oauth_binding_id\": \"\u003cid\u003e\", \"subdomain\": \"neg-co\", \"region\": \"us\", \"account_id\": \"ACCN\"}\ncredentials 86291fcc-a525-5307-a9d6-7d1726cb6632/htmlacct =\u003e {\"auth_mode\": \"oauth\", \"oauth_credential_name\": \"htmlacct\", \"oauth_binding_id\": \"\u003cid\u003e\", \"subdomain\": \"htmlacct\", \"region\": \"us\", \"account_id\": \"htmlacct\"}\ncredentials 86291fcc-a525-5307-a9d6-7d1726cb6632/nodisp =\u003e {\"auth_mode\": \"oauth\", \"oauth_credential_name\": \"nodisp\", \"oauth_binding_id\": \"\u003cid\u003e\", \"subdomain\": \"nodisp\", \"region\": \"us\", \"account_id\": \"ACCD\"}\ncredentials a8b2b5d7-7ed2-5d6a-b3c3-5be22107a68d/Acme Co =\u003e {\"auth_mode\": \"oauth\", \"oauth_credential_name\": \"Acme Co\", \"oauth_binding_id\": \"\u003cid\u003e\", \"subdomain\": \"acme\", \"region\": \"us\", \"account_id\": \"ACC1\"}\ncredentials dbb61179-1b21-5a1e-9255-54cf5bbee99a/default =\u003e {\"auth_mode\": \"api_token\", \"api_token\": \"tok-acme\", \"subdomain\": \"acme\", \"region\": \"us\"}\ncredentials dbb61179-1b21-5a1e-9255-54cf5bbee99a/html =\u003e {\"auth_mode\": \"api_token\", \"api_token\": \"tok-html\", \"subdomain\": \"htmlacct\", \"region\": \"us\"}\ncredentials dbb61179-1b21-5a1e-9255-54cf5bbee99a/second =\u003e {\"auth_mode\": \"api_token\", \"api_token\": \"tok-acme\", \"subdomain\": \"acme\", \"region\": \"eu\"}\ncredentials ec0d33df-31bc-5196-a021-932aa15337da/Acme Co =\u003e {\"auth_mode\": \"oauth\", \"oauth_credential_name\": \"Acme Co\", \"oauth_binding_id\": \"\u003cid\u003e\", \"subdomain\": \"acme\", \"region\": \"us\", \"account_id\": \"ACC1\"}\ncredentials f9a9950e-5dde-5b0a-b5f8-3dbd3870ebd4/Acme Co =\u003e {\"auth_mode\": \"oauth\", \"oauth_credential_name\": \"Acme Co\", \"oauth_binding_id\": \"\u003cid\u003e\", \"subdomain\": \"acme\", \"region\": \"us\", \"account_id\": \"ACC1\"}\noauth token 86291fcc-a525-5307-a9d6-7d1726cb6632/Acme Co =\u003e access=at-norefresh refresh=\u003cnone\u003e scopes=escalation_policies.read,incidents.read,oncalls.read,schedules.read,services.read,teams.read,users.read\noauth token 86291fcc-a525-5307-a9d6-7d1726cb6632/Acme EU =\u003e access=at-eu refresh=rt-eu scopes=escalation_policies.read,incidents.read,oncalls.read,schedules.read,services.read,teams.read,users.read\noauth token 86291fcc-a525-5307-a9d6-7d1726cb6632/Float Co =\u003e access=at-float refresh=rt-float scopes=escalation_policies.read,incidents.read,oncalls.read,schedules.read,services.read,teams.read,users.read\noauth token 86291fcc-a525-5307-a9d6-7d1726cb6632/Neg Co =\u003e access=at-neg refresh=rt-neg scopes=escalation_policies.read,incidents.read,oncalls.read,schedules.read,services.read,teams.read,users.read\noauth token 86291fcc-a525-5307-a9d6-7d1726cb6632/htmlacct =\u003e access=at-htmlurl refresh=rt-htmlurl scopes=escalation_policies.read,incidents.read,oncalls.read,schedules.read,services.read,teams.read,users.read\noauth token 86291fcc-a525-5307-a9d6-7d1726cb6632/nodisp =\u003e access=at-nodisp refresh=rt-nodisp scopes=escalation_policies.read,incidents.read,oncalls.read,schedules.read,services.read,teams.read,users.read\noauth token a8b2b5d7-7ed2-5d6a-b3c3-5be22107a68d/Acme Co =\u003e access=at-ok refresh=rt-ok scopes=escalation_policies.read,incidents.read,oncalls.read,schedules.read,services.read,teams.read,users.read\noauth token ec0d33df-31bc-5196-a021-932aa15337da/Acme Co =\u003e access=at-ok2 refresh=rt-ok2 scopes=escalation_policies.read,incidents.read,oncalls.read,schedules.read,services.read,teams.read,users.read\noauth token f9a9950e-5dde-5b0a-b5f8-3dbd3870ebd4/Acme Co =\u003e access=at-ok2 refresh=rt-ok2 scopes=escalation_policies.read,incidents.read,oncalls.read,schedules.read,services.read,teams.read,users.read\nrevocation ec0d33df-31bc-5196-a021-932aa15337da/Acme Co/replacement/2 =\u003e old-fail-rt"
+    },
+    "upstream calls of the Python plane": {
+      "rows": "POST /token client_id=venue-pd-callback-client-id\u0026client_secret=venue-pd-callback-client-secret\u0026code=c-ok\u0026code_verifier=verifier-for-s-fresh-1\u0026grant_type=authorization_code\u0026redirect_uri=https://app.example.test/oauth/pagerduty/callback\nGET /us/services?limit=1 auth=\"Bearer at-ok\" accept=\"application/vnd.pagerduty+json;version=2\"\nPOST /token client_id=venue-pd-callback-client-id\u0026client_secret=venue-pd-callback-client-secret\u0026code=c-ok2\u0026code_verifier=verifier-for-s-fresh-2\u0026grant_type=authorization_code\u0026redirect_uri=https://app.example.test/oauth/pagerduty/callback\nGET /us/services?limit=1 auth=\"Bearer at-ok2\" accept=\"application/vnd.pagerduty+json;version=2\"\nPOST /revoke client_id=venue-pd-callback-client-id\u0026token=rt-ok\nPOST /token client_id=venue-pd-callback-client-id\u0026client_secret=venue-pd-callback-client-secret\u0026code=c-ok\u0026code_verifier=verifier-for-s-rf-1\u0026grant_type=authorization_code\u0026redirect_uri=https://app.example.test/oauth/pagerduty/callback\nGET /us/services?limit=1 auth=\"Bearer at-ok\" accept=\"application/vnd.pagerduty+json;version=2\"\nPOST /revoke client_id=venue-pd-callback-client-id\u0026token=old-fail-rt\nPOST /token client_id=venue-pd-callback-client-id\u0026client_secret=venue-pd-callback-client-secret\u0026code=c-ok2\u0026code_verifier=verifier-for-s-rf-2\u0026grant_type=authorization_code\u0026redirect_uri=https://app.example.test/oauth/pagerduty/callback\nGET /us/services?limit=1 auth=\"Bearer at-ok2\" accept=\"application/vnd.pagerduty+json;version=2\"\nPOST /revoke client_id=venue-pd-callback-client-id\u0026token=old-fail-rt\nPOST /revoke client_id=venue-pd-callback-client-id\u0026token=rt-ok\nPOST /token client_id=venue-pd-callback-client-id\u0026client_secret=venue-pd-callback-client-secret\u0026code=c-norefresh\u0026code_verifier=verifier-for-s-var-norefresh\u0026grant_type=authorization_code\u0026redirect_uri=https://app.example.test/oauth/pagerduty/callback\nGET /us/services?limit=1 auth=\"Bearer at-norefresh\" accept=\"application/vnd.pagerduty+json;version=2\"\nPOST /token client_id=venue-pd-callback-client-id\u0026client_secret=venue-pd-callback-client-secret\u0026code=c-eu\u0026code_verifier=verifier-for-s-var-eu\u0026grant_type=authorization_code\u0026redirect_uri=https://app.example.test/oauth/pagerduty/callback\nGET /us/services?limit=1 auth=\"Bearer at-eu\" accept=\"application/vnd.pagerduty+json;version=2\"\nGET /eu/services?limit=1 auth=\"Bearer at-eu\" accept=\"application/vnd.pagerduty+json;version=2\"\nPOST /token client_id=venue-pd-callback-client-id\u0026client_secret=venue-pd-callback-client-secret\u0026code=c-htmlurl\u0026code_verifier=verifier-for-s-var-html\u0026grant_type=authorization_code\u0026redirect_uri=https://app.example.test/oauth/pagerduty/callback\nGET /us/services?limit=1 auth=\"Bearer at-htmlurl\" accept=\"application/vnd.pagerduty+json;version=2\"\nPOST /token client_id=venue-pd-callback-client-id\u0026client_secret=venue-pd-callback-client-secret\u0026code=c-nodisplay\u0026code_verifier=verifier-for-s-var-nodisp\u0026grant_type=authorization_code\u0026redirect_uri=https://app.example.test/oauth/pagerduty/callback\nGET /us/services?limit=1 auth=\"Bearer at-nodisp\" accept=\"application/vnd.pagerduty+json;version=2\"\nPOST /token client_id=venue-pd-callback-client-id\u0026client_secret=venue-pd-callback-client-secret\u0026code=c-expfloat\u0026code_verifier=verifier-for-s-var-float\u0026grant_type=authorization_code\u0026redirect_uri=https://app.example.test/oauth/pagerduty/callback\nGET /us/services?limit=1 auth=\"Bearer at-float\" accept=\"application/vnd.pagerduty+json;version=2\"\nPOST /token client_id=venue-pd-callback-client-id\u0026client_secret=venue-pd-callback-client-secret\u0026code=c-expneg\u0026code_verifier=verifier-for-s-var-neg\u0026grant_type=authorization_code\u0026redirect_uri=https://app.example.test/oauth/pagerduty/callback\nGET /us/services?limit=1 auth=\"Bearer at-neg\" accept=\"application/vnd.pagerduty+json;version=2\"\nPOST /token client_id=venue-pd-callback-client-id\u0026client_secret=venue-pd-callback-client-secret\u0026code=c-ok\u0026code_verifier=verifier-for-s-off\u0026grant_type=authorization_code\u0026redirect_uri=https://app.example.test/oauth/pagerduty/callback\nGET /us/services?limit=1 auth=\"Bearer at-ok\" accept=\"application/vnd.pagerduty+json;version=2\"\nPOST /token client_id=venue-pd-callback-client-id\u0026client_secret=venue-pd-callback-client-secret\u0026code=c-ok\u0026code_verifier=verifier-for-s-corrupt\u0026grant_type=authorization_code\u0026redirect_uri=https://app.example.test/oauth/pagerduty/callback\nGET /us/services?limit=1 auth=\"Bearer at-ok\" accept=\"application/vnd.pagerduty+json;version=2\"\nPOST /revoke client_id=venue-pd-callback-client-id\u0026token=rt-ok\nPOST /token client_id=venue-pd-callback-client-id\u0026client_secret=venue-pd-callback-client-secret\u0026code=c-missing-scopes\u0026code_verifier=verifier-for-s-fail-missing\u0026grant_type=authorization_code\u0026redirect_uri=https://app.example.test/oauth/pagerduty/callback\nPOST /revoke client_id=venue-pd-callback-client-id\u0026token=rt-missing\nPOST /token client_id=venue-pd-callback-client-id\u0026client_secret=venue-pd-callback-client-secret\u0026code=c-noaccount\u0026code_verifier=verifier-for-s-fail-noaccount\u0026grant_type=authorization_code\u0026redirect_uri=https://app.example.test/oauth/pagerduty/callback\nGET /us/services?limit=1 auth=\"Bearer at-noaccount\" accept=\"application/vnd.pagerduty+json;version=2\"\nGET /eu/services?limit=1 auth=\"Bearer at-noaccount\" accept=\"application/vnd.pagerduty+json;version=2\"\nPOST /revoke client_id=venue-pd-callback-client-id\u0026token=rt-noaccount\nPOST /token client_id=venue-pd-callback-client-id\u0026client_secret=venue-pd-callback-client-secret\u0026code=c-readfails\u0026code_verifier=verifier-for-s-fail-readfails\u0026grant_type=authorization_code\u0026redirect_uri=https://app.example.test/oauth/pagerduty/callback\nGET /us/services?limit=1 auth=\"Bearer at-readfails\" accept=\"application/vnd.pagerduty+json;version=2\"\nGET /eu/services?limit=1 auth=\"Bearer at-readfails\" accept=\"application/vnd.pagerduty+json;version=2\"\nPOST /revoke client_id=venue-pd-callback-client-id\u0026token=rt-readfails\nPOST /token client_id=venue-pd-callback-client-id\u0026client_secret=venue-pd-callback-client-secret\u0026code=c-rejected\u0026code_verifier=verifier-for-s-fail-rejected\u0026grant_type=authorization_code\u0026redirect_uri=https://app.example.test/oauth/pagerduty/callback\nPOST /token client_id=venue-pd-callback-client-id\u0026client_secret=venue-pd-callback-client-secret\u0026code=c-forbidden\u0026code_verifier=verifier-for-s-fail-forbidden\u0026grant_type=authorization_code\u0026redirect_uri=https://app.example.test/oauth/pagerduty/callback\nPOST /token client_id=venue-pd-callback-client-id\u0026client_secret=venue-pd-callback-client-secret\u0026code=c-server-error\u0026code_verifier=verifier-for-s-fail-server\u0026grant_type=authorization_code\u0026redirect_uri=https://app.example.test/oauth/pagerduty/callback\nPOST /token client_id=venue-pd-callback-client-id\u0026client_secret=venue-pd-callback-client-secret\u0026code=c-redirect\u0026code_verifier=verifier-for-s-fail-redirect\u0026grant_type=authorization_code\u0026redirect_uri=https://app.example.test/oauth/pagerduty/callback\nPOST /token client_id=venue-pd-callback-client-id\u0026client_secret=venue-pd-callback-client-secret\u0026code=c-truncated\u0026code_verifier=verifier-for-s-fail-truncated\u0026grant_type=authorization_code\u0026redirect_uri=https://app.example.test/oauth/pagerduty/callback\nPOST /token client_id=venue-pd-callback-client-id\u0026client_secret=venue-pd-callback-client-secret\u0026code=c-truncated-403\u0026code_verifier=verifier-for-s-fail-truncated403\u0026grant_type=authorization_code\u0026redirect_uri=https://app.example.test/oauth/pagerduty/callback\nPOST /token client_id=venue-pd-callback-client-id\u0026client_secret=venue-pd-callback-client-secret\u0026code=c-missing-refused\u0026code_verifier=verifier-for-s-refm-1\u0026grant_type=authorization_code\u0026redirect_uri=https://app.example.test/oauth/pagerduty/callback\nPOST /revoke client_id=venue-pd-callback-client-id\u0026token=rt-missing-refused\nPOST /token client_id=venue-pd-callback-client-id\u0026client_secret=venue-pd-callback-client-secret\u0026code=c-noaccount-refused\u0026code_verifier=verifier-for-s-refn-1\u0026grant_type=authorization_code\u0026redirect_uri=https://app.example.test/oauth/pagerduty/callback\nGET /us/services?limit=1 auth=\"Bearer at-noaccount\" accept=\"application/vnd.pagerduty+json;version=2\"\nGET /eu/services?limit=1 auth=\"Bearer at-noaccount\" accept=\"application/vnd.pagerduty+json;version=2\"\nPOST /revoke client_id=venue-pd-callback-client-id\u0026token=rt-noaccount-refused\nPOST /token client_id=venue-pd-callback-client-id\u0026client_secret=venue-pd-callback-client-secret\u0026code=c-corrupt-refused\u0026code_verifier=verifier-for-s-refc-1\u0026grant_type=authorization_code\u0026redirect_uri=https://app.example.test/oauth/pagerduty/callback\nGET /us/services?limit=1 auth=\"Bearer at-ok\" accept=\"application/vnd.pagerduty+json;version=2\"\nPOST /revoke client_id=venue-pd-callback-client-id\u0026token=rt-corrupt-refused\nPOST /token client_id=venue-pd-callback-client-id\u0026client_secret=venue-pd-callback-client-secret\u0026code=c-missing-redirect\u0026code_verifier=verifier-for-s-refr-1\u0026grant_type=authorization_code\u0026redirect_uri=https://app.example.test/oauth/pagerduty/callback\nPOST /revoke client_id=venue-pd-callback-client-id\u0026token=rt-redirect\nPOST /token client_id=venue-pd-callback-client-id\u0026client_secret=venue-pd-callback-client-secret\u0026code=c-badjson\u0026code_verifier=verifier-for-s-fail-badjson\u0026grant_type=authorization_code\u0026redirect_uri=https://app.example.test/oauth/pagerduty/callback\nPOST /token client_id=venue-pd-callback-client-id\u0026client_secret=venue-pd-callback-client-secret\u0026code=c-noaccess\u0026code_verifier=verifier-for-s-fail-noaccess\u0026grant_type=authorization_code\u0026redirect_uri=https://app.example.test/oauth/pagerduty/callback\nPOST /token client_id=venue-pd-callback-client-id\u0026client_secret=venue-pd-callback-client-secret\u0026code=c-badexpires\u0026code_verifier=verifier-for-s-fail-badexpires\u0026grant_type=authorization_code\u0026redirect_uri=https://app.example.test/oauth/pagerduty/callback\nPOST /token client_id=venue-pd-callback-client-id\u0026client_secret=venue-pd-callback-client-secret\u0026code=c-rejected\u0026code_verifier=verifier-for-s-fail-errorempty\u0026grant_type=authorization_code\u0026redirect_uri=https://app.example.test/oauth/pagerduty/callback\nPOST /token client_id=venue-pd-callback-client-id\u0026client_secret=venue-pd-callback-client-secret\u0026code=c-rejected\u0026code_verifier=verifier-for-s-fail-reuse\u0026grant_type=authorization_code\u0026redirect_uri=https://app.example.test/oauth/pagerduty/callback\nPOST /token client_id=cc-ok\u0026client_secret=shh-cc-ok\u0026grant_type=client_credentials\u0026region=us\u0026scope=escalation_policies.read incidents.read oncalls.read schedules.read services.read teams.read users.read\u0026subdomain=acme\nGET /us/services?limit=1 auth=\"Bearer at-cc-ok\" accept=\"application/vnd.pagerduty+json;version=2\"\nPOST /token client_id=cc-ok\u0026client_secret=shh-cc-ok\u0026grant_type=client_credentials\u0026region=us\u0026scope=escalation_policies.read incidents.read oncalls.read schedules.read services.read teams.read users.read\u0026subdomain=acme\nGET /us/services?limit=1 auth=\"Bearer at-cc-ok\" accept=\"application/vnd.pagerduty+json;version=2\"\nPOST /token client_id=cc-ok\u0026client_secret=shh-cc-ok\u0026grant_type=client_credentials\u0026region=us\u0026scope=escalation_policies.read incidents.read oncalls.read schedules.read services.read teams.read users.read\u0026subdomain=ACME\nGET /us/services?limit=1 auth=\"Bearer at-cc-ok\" accept=\"application/vnd.pagerduty+json;version=2\"\nPOST /token client_id=cc-eu\u0026client_secret=shh-cc-eu\u0026grant_type=client_credentials\u0026region=eu\u0026scope=escalation_policies.read incidents.read oncalls.read schedules.read services.read teams.read users.read\u0026subdomain=acme-eu\nGET /eu/services?limit=1 auth=\"Bearer at-cc-eu\" accept=\"application/vnd.pagerduty+json;version=2\"\nPOST /token client_id=cc-other\u0026client_secret=shh-cc-other\u0026grant_type=client_credentials\u0026region=us\u0026scope=escalation_policies.read incidents.read oncalls.read schedules.read services.read teams.read users.read\u0026subdomain=acme\nGET /us/services?limit=1 auth=\"Bearer at-cc-other\" accept=\"application/vnd.pagerduty+json;version=2\"\nPOST /token client_id=cc-rejected\u0026client_secret=shh-cc-rejected\u0026grant_type=client_credentials\u0026region=us\u0026scope=escalation_policies.read incidents.read oncalls.read schedules.read services.read teams.read users.read\u0026subdomain=acme\nPOST /token client_id=cc-truncated\u0026client_secret=shh-cc-truncated\u0026grant_type=client_credentials\u0026region=us\u0026scope=escalation_policies.read incidents.read oncalls.read schedules.read services.read teams.read users.read\u0026subdomain=acme\nPOST /token client_id=cc-badjson\u0026client_secret=shh-cc-badjson\u0026grant_type=client_credentials\u0026region=us\u0026scope=escalation_policies.read incidents.read oncalls.read schedules.read services.read teams.read users.read\u0026subdomain=acme\nPOST /token client_id=cc-list\u0026client_secret=shh-cc-list\u0026grant_type=client_credentials\u0026region=us\u0026scope=escalation_policies.read incidents.read oncalls.read schedules.read services.read teams.read users.read\u0026subdomain=acme\nPOST /token client_id=cc-noaccess\u0026client_secret=shh-cc-noaccess\u0026grant_type=client_credentials\u0026region=us\u0026scope=escalation_policies.read incidents.read oncalls.read schedules.read services.read teams.read users.read\u0026subdomain=acme\nPOST /token client_id=cc-badscope\u0026client_secret=shh-cc-badscope\u0026grant_type=client_credentials\u0026region=us\u0026scope=escalation_policies.read incidents.read oncalls.read schedules.read services.read teams.read users.read\u0026subdomain=acme\nPOST /token client_id=cc-missing\u0026client_secret=shh-cc-missing\u0026grant_type=client_credentials\u0026region=us\u0026scope=escalation_policies.read incidents.read oncalls.read schedules.read services.read teams.read users.read\u0026subdomain=acme\nPOST /token client_id=cc-ok\u0026client_secret=shh-cc-ok\u0026grant_type=client_credentials\u0026region=us\u0026scope=escalation_policies.read incidents.read oncalls.read schedules.read services.read teams.read users.read\u0026subdomain=acme\nGET /us/services?limit=1 auth=\"Bearer at-cc-ok\" accept=\"application/vnd.pagerduty+json;version=2\"\nPOST /revoke client_id=venue-pd-callback-client-id\u0026token=old-cc-rt\nPOST /token client_id=cc-ok\u0026client_secret=shh-cc-ok\u0026grant_type=client_credentials\u0026region=us\u0026scope=escalation_policies.read incidents.read oncalls.read schedules.read services.read teams.read users.read\u0026subdomain=acme\nGET /us/services?limit=1 auth=\"Bearer at-cc-ok\" accept=\"application/vnd.pagerduty+json;version=2\"\nGET /us/services?limit=1 auth=\"Token token=tok-acme\" accept=\"application/vnd.pagerduty+json;version=2\"\nGET /eu/services?limit=1 auth=\"Token token=tok-acme\" accept=\"application/vnd.pagerduty+json;version=2\"\nGET /us/services?limit=1 auth=\"Token token=tok-html\" accept=\"application/vnd.pagerduty+json;version=2\"\nGET /us/services?limit=1 auth=\"Token token=tok-html2\" accept=\"application/vnd.pagerduty+json;version=2\"\nGET /us/services?limit=1 auth=\"Token token=tok-other\" accept=\"application/vnd.pagerduty+json;version=2\"\nGET /us/services?limit=1 auth=\"Token token=tok-bad\" accept=\"application/vnd.pagerduty+json;version=2\"\nGET /us/services?limit=1 auth=\"Token token=tok-list\" accept=\"application/vnd.pagerduty+json;version=2\"\nGET /us/services?limit=1 auth=\"Token token=tok-noservices\" accept=\"application/vnd.pagerduty+json;version=2\""
+    }
+  }
+}

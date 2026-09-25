@@ -312,7 +312,21 @@ func buildProviderSyncHandlerWithRuntimeDependencies(
 				readback       providersync.EffectReadback
 				effectsFactory providersync.CompleteRouteEffectsFactory
 			)
+			// The git-family routes (github|gitlab repo-metadata, commits, commit-stats,
+			// files, blame, prs, cicd, tests, deployments, security, gitlab incidents and
+			// feature-flags) come from ONE shared selector, the same one
+			// `dho sync <target>` uses in-process, so the two never disagree about the
+			// sink a dataset writes through.
+			gitRoute, gitFamily := providersync.SelectGitFamilyRoute(
+				session.Claim.Provider, session.Claim.Dataset,
+				providersync.GitFamilyDeps{
+					Conn: clickhouseConnection, Lease: session,
+					GitHubTestsMaxArtifactBytes: githubTestsMaxArtifactBytes,
+				},
+			)
 			switch {
+			case gitFamily:
+				routeHandler, sink, readback = gitRoute.Handler, gitRoute.Sink, gitRoute.Readback
 			case session.Claim.Provider == "launchdarkly" &&
 				session.Claim.Dataset == "feature-flags":
 				ldSink := providersync.LaunchDarklyClickHouseEffects{
@@ -324,13 +338,6 @@ func buildProviderSyncHandlerWithRuntimeDependencies(
 					},
 				}
 				sink, readback = ldSink, ldSink
-			case session.Claim.Provider == "github" &&
-				session.Claim.Dataset == "repo-metadata":
-				ghSink := providersync.GitHubRepositoryClickHouseEffects{
-					Conn: clickhouseConnection, Lease: session,
-				}
-				routeHandler = providersync.GitHubRepositoryRouteHandler{}
-				sink, readback = ghSink, ghSink
 			case session.Claim.Provider == "github" &&
 				session.Claim.Dataset == "work-items":
 				if !workItemsRuntime.configured() {
@@ -432,142 +439,6 @@ func buildProviderSyncHandlerWithRuntimeDependencies(
 					Derived: linearDeriver,
 				}
 				sink, readback = linearSink, linearSink
-			case session.Claim.Provider == "gitlab" &&
-				session.Claim.Dataset == "repo-metadata":
-				glSink := providersync.GitLabRepositoryClickHouseEffects{
-					Conn: clickhouseConnection, Lease: session,
-				}
-				routeHandler = providersync.GitLabRepositoryRouteHandler{}
-				sink, readback = glSink, glSink
-			case session.Claim.Provider == "gitlab" &&
-				session.Claim.Dataset == "commits":
-				glCommitsSink := providersync.GitLabCommitsClickHouseEffects{
-					Conn: clickhouseConnection, Lease: session,
-				}
-				routeHandler = providersync.GitLabCommitsRouteHandler{}
-				sink, readback = glCommitsSink, glCommitsSink
-			case session.Claim.Provider == "gitlab" &&
-				session.Claim.Dataset == "commit-stats":
-				glCommitStatsSink := providersync.GitLabCommitStatsClickHouseEffects{
-					Conn: clickhouseConnection, Lease: session,
-				}
-				routeHandler = providersync.GitLabCommitStatsRouteHandler{}
-				sink, readback = glCommitStatsSink, glCommitStatsSink
-			case session.Claim.Provider == "gitlab" &&
-				(session.Claim.Dataset == "cicd" || session.Claim.Dataset == "tests"):
-				glTestsSink := providersync.TestOpsClickHouseEffects{
-					Conn: clickhouseConnection, Lease: session,
-				}
-				routeHandler = providersync.GitLabTestsRouteHandler{}
-				sink, readback = glTestsSink, glTestsSink
-			case session.Claim.Provider == "gitlab" &&
-				session.Claim.Dataset == "incidents":
-				glIncidentsSink := providersync.GitLabIncidentsClickHouseEffects{
-					Conn: clickhouseConnection, Lease: session,
-				}
-				routeHandler = providersync.GitLabIncidentsRouteHandler{}
-				sink, readback = glIncidentsSink, glIncidentsSink
-			case session.Claim.Provider == "gitlab" &&
-				session.Claim.Dataset == "deployments":
-				glDeploymentsSink := providersync.GitLabDeploymentsClickHouseEffects{
-					Conn: clickhouseConnection, Lease: session,
-				}
-				routeHandler = providersync.GitLabDeploymentsRouteHandler{}
-				sink, readback = glDeploymentsSink, glDeploymentsSink
-			case session.Claim.Provider == "gitlab" &&
-				session.Claim.Dataset == "feature-flags":
-				glFeatureFlagsSink := providersync.GitLabFeatureFlagsClickHouseEffects{
-					Conn: clickhouseConnection, Lease: session,
-				}
-				routeHandler = providersync.GitLabFeatureFlagsRouteHandler{}
-				sink, readback = glFeatureFlagsSink, glFeatureFlagsSink
-			case session.Claim.Provider == "gitlab" &&
-				session.Claim.Dataset == "files":
-				glFilesSink := providersync.GitLabFilesClickHouseEffects{
-					Conn: clickhouseConnection, Lease: session,
-				}
-				routeHandler = providersync.GitLabFilesRouteHandler{}
-				sink, readback = glFilesSink, glFilesSink
-			case session.Claim.Provider == "gitlab" &&
-				session.Claim.Dataset == "blame":
-				glBlameSink := providersync.GitLabBlameClickHouseEffects{
-					Conn: clickhouseConnection, Lease: session,
-				}
-				routeHandler = providersync.GitLabBlameRouteHandler{
-					Coverage: providersync.GitLabBlameClickHouseCoverage{
-						Conn: clickhouseConnection, Lease: session,
-					},
-				}
-				sink, readback = glBlameSink, glBlameSink
-			case session.Claim.Provider == "gitlab" &&
-				(session.Claim.Dataset == "prs" ||
-					session.Claim.Dataset == "pr-reviews" ||
-					session.Claim.Dataset == "pr-comments"):
-				glPRSink := providersync.GitLabPullRequestSocialClickHouseEffects{
-					Conn: clickhouseConnection, Lease: session,
-				}
-				routeHandler = providersync.GitLabPullRequestRouteHandler{}
-				sink, readback = glPRSink, glPRSink
-			case session.Claim.Provider == "gitlab" &&
-				session.Claim.Dataset == "security":
-				glSecuritySink := providersync.GitLabSecurityClickHouseEffects{
-					Conn: clickhouseConnection, Lease: session,
-				}
-				routeHandler = providersync.GitLabSecurityRouteHandler{}
-				sink, readback = glSecuritySink, glSecuritySink
-			case session.Claim.Provider == "github" &&
-				(session.Claim.Dataset == "prs" ||
-					session.Claim.Dataset == "pr-reviews" ||
-					session.Claim.Dataset == "pr-comments"):
-				ghPRSink := providersync.GitHubPullRequestSocialClickHouseEffects{
-					Conn: clickhouseConnection, Lease: session,
-				}
-				routeHandler = providersync.GitHubPullRequestSocialRouteHandler{}
-				sink, readback = ghPRSink, ghPRSink
-			case session.Claim.Provider == "github" &&
-				session.Claim.Dataset == "cicd":
-				ghCICDSink := providersync.GitHubTestsClickHouseEffects{
-					Conn: clickhouseConnection, Lease: session,
-				}
-				routeHandler = providersync.GitHubTestsRouteHandler{
-					MaxArtifactBytes: githubTestsMaxArtifactBytes,
-				}
-				sink, readback = ghCICDSink, ghCICDSink
-			case session.Claim.Provider == "github" &&
-				session.Claim.Dataset == "commits":
-				ghCommitsSink := providersync.GitHubCommitsClickHouseEffects{
-					Conn: clickhouseConnection, Lease: session,
-				}
-				routeHandler = providersync.GitHubCommitsRouteHandler{}
-				sink, readback = ghCommitsSink, ghCommitsSink
-			case session.Claim.Provider == "github" &&
-				session.Claim.Dataset == "deployments":
-				ghDeploymentsSink := providersync.GitHubDeploymentsClickHouseEffects{
-					Conn: clickhouseConnection, Lease: session,
-				}
-				routeHandler = providersync.GitHubDeploymentsRouteHandler{}
-				sink, readback = ghDeploymentsSink, ghDeploymentsSink
-			case session.Claim.Provider == "github" &&
-				session.Claim.Dataset == "security":
-				ghSecuritySink := providersync.GitHubSecurityClickHouseEffects{
-					Conn: clickhouseConnection, Lease: session,
-				}
-				routeHandler = providersync.GitHubSecurityRouteHandler{}
-				sink, readback = ghSecuritySink, ghSecuritySink
-			case session.Claim.Provider == "github" &&
-				session.Claim.Dataset == "files":
-				ghFilesSink := providersync.GitHubFilesClickHouseEffects{
-					Conn: clickhouseConnection, Lease: session,
-				}
-				routeHandler = providersync.GitHubFilesRouteHandler{}
-				sink, readback = ghFilesSink, ghFilesSink
-			case session.Claim.Provider == "github" &&
-				session.Claim.Dataset == "commit-stats":
-				ghCommitStatsSink := providersync.GitHubCommitStatsClickHouseEffects{
-					Conn: clickhouseConnection, Lease: session,
-				}
-				routeHandler = providersync.GitHubCommitStatsRouteHandler{}
-				sink, readback = ghCommitStatsSink, ghCommitStatsSink
 			case session.Claim.Provider == "jira" &&
 				session.Claim.Dataset == "incidents":
 				if incidentEntitlement == nil {
@@ -585,26 +456,6 @@ func buildProviderSyncHandlerWithRuntimeDependencies(
 					Entitlement: incidentEntitlement,
 				}
 				sink, readback = jiraSink, jiraReadback
-			case session.Claim.Provider == "github" &&
-				session.Claim.Dataset == "blame":
-				ghBlameSink := providersync.GitHubBlameClickHouseEffects{
-					Conn: clickhouseConnection, Lease: session,
-				}
-				routeHandler = providersync.GitHubBlameRouteHandler{
-					Coverage: providersync.GitHubBlameClickHouseCoverage{
-						Conn: clickhouseConnection, Lease: session,
-					},
-				}
-				sink, readback = ghBlameSink, ghBlameSink
-			case session.Claim.Provider == "github" &&
-				session.Claim.Dataset == "tests":
-				ghTestsSink := providersync.GitHubTestsClickHouseEffects{
-					Conn: clickhouseConnection, Lease: session,
-				}
-				routeHandler = providersync.GitHubTestsRouteHandler{
-					MaxArtifactBytes: githubTestsMaxArtifactBytes,
-				}
-				sink, readback = ghTestsSink, ghTestsSink
 			case session.Claim.Provider == "pagerduty":
 				// Every PagerDuty dataset is canonical-incident gated
 				// (sync/datasets.py _GATED_SYNC_TARGETS), so the same

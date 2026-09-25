@@ -735,6 +735,14 @@ func optionalStringValue(s *string) any {
 // requested lone surrogate, a non-finite float) is this route group's own
 // unhandled-exception answer (the external-ingest error envelope, api/_errors.py),
 // not the framework's generic {"detail": ...}: policy answers the latter.
+//
+// Named divergence (D2438, CHAOS-6766 r2): pydantic-core's serializer refuses a
+// body nested 255 containers deep ("Circular reference detected (depth
+// exceeded)": measured with pydantic 2.13.5), and Python answers the same
+// envelope; pyjson.MarshalModel has no such bound, so a stored value nested that
+// deep (error_summary is written by the platform's own workers in fixed shapes;
+// no caller controls its depth) is answered 200 with the value here. Not ported,
+// not pinned: a depth bound would copy a Rust guard's constant.
 func writeIngestModel(w http.ResponseWriter, status int, body pyjson.Value, extra http.Header) {
 	if _, err := pyjson.MarshalModel(body); err != nil {
 		writeIngestError(w, unhandledError())

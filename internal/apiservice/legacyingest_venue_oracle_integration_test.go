@@ -129,6 +129,9 @@ func TestLegacyIngestVenueOracle(t *testing.T) {
 		}
 		return venueoracle.Request{Name: name, Method: "POST", Path: "/api/v1/ingest/" + route, Headers: all, Body: venueoracle.B64(text)}
 	}
+	pullRequest := `{"number":"12","title":"t","body":null,"state":"merged","author_name":"a","created_at":"2026-01-01T00:00:00Z","merged_at":1767225600,"additions":3,"reviews":[{"review_id":"r1","reviewer":"u","state":"APPROVED","submitted_at":"2026-01-01T00:00:00.25Z"},{"review_id":"r2","reviewer":"v","state":"COMMENTED","submitted_at":"2026-01-01T01:00:00+05:30"}]}`
+	workItem := `{"work_item_id":"jira:ABC-1","provider":"jira","title":"t","labels":["x","y"],"story_points":"2.5","created_at":"2026-01-01T00:00:00Z","url":"https://example.test/i"}`
+	workItemsBody := func(items string) string { return `{"org_id":"org-venue","items":[` + items + `]}` }
 	unicodeBody := `{"org_id":"org-é😀","repo_url":"r","items":[{"incident_id":"é\u0000😀","status":"open","started_at":"2026-01-01T00:00:00Z"}]}`
 	requests := []venueoracle.Request{
 		signed("commits accepted", "commits", body(commit), nil),
@@ -136,6 +139,13 @@ func TestLegacyIngestVenueOracle(t *testing.T) {
 		signed("incidents accepted", "incidents", body(incident), nil),
 		signed("two items, defaults", "commits", body(commit+`,{"hash":"h2","message":"","author_name":"","author_email":"","author_when":"2026-01-01"}`), nil),
 		signed("unicode org and text", "incidents", unicodeBody, nil),
+		signed("pull requests accepted", "pull-requests", body(pullRequest), nil),
+		signed("pull request without reviews, defaults", "pull-requests", body(`{"number":1,"title":"t","state":"open","author_name":"a","created_at":"2026-01-01"}`), nil),
+		signed("pull request shape errors", "pull-requests", body(`{"number":"x","reviews":[{"review_id":1},"y"],"created_at":"2026-13-01"}`), nil),
+		signed("work items accepted", "work-items", workItemsBody(workItem), nil),
+		signed("work item defaults", "work-items", workItemsBody(`{"work_item_id":"w","provider":"github","title":"t","created_at":"2026-01-01T00:00:00Z"}`), nil),
+		signed("work item enum errors", "work-items", workItemsBody(`{"work_item_id":"w","provider":"bitbucket","title":"t","type":"Bug","status":"open","created_at":"2026-01-01T00:00:00Z"}`), nil),
+		signed("work items need no repo_url", "work-items", `{"org_id":"o","items":[`+workItem+`]}`, nil),
 		signed("no api key", "commits", body(commit), map[string]string{"X-API-Key": ""}),
 		signed("wrong api key", "commits", body(commit), map[string]string{"X-API-Key": "nope"}),
 		signed("second key of the list", "commits", body(commit), map[string]string{"X-API-Key": "other-key"}),

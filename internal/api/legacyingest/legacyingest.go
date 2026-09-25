@@ -89,6 +89,8 @@ type route struct {
 
 var routes = []route{
 	{"commits", "commits", batchParser(true, parseCommit)},
+	{"pull-requests", "pull-requests", batchParser(true, parsePullRequest)},
+	{"work-items", "work-items", batchParser(false, parseWorkItem)},
 	{"deployments", "deployments", batchParser(true, parseDeployment)},
 	{"incidents", "incidents", batchParser(true, parseIncident)},
 }

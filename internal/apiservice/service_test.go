@@ -269,6 +269,8 @@ func TestRoutesMountsEveryArea(t *testing.T) {
 		"POST /api/v1/ingest/commits":                          false,
 		"POST /api/v1/ingest/deployments":                      false,
 		"POST /api/v1/ingest/incidents":                        false,
+		"POST /api/v1/ingest/pull-requests":                    false,
+		"POST /api/v1/ingest/work-items":                       false,
 		"GET /health":                                          false,
 		"HEAD /health":                                         false,
 		"GET /ready":                                           false,

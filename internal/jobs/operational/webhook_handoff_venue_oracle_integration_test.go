@@ -115,7 +115,9 @@ func TestWebhookHandoffVenueOracleMatchesLivePython(t *testing.T) {
 	}
 	t.Cleanup(pool.Close)
 	store := &PostgresStore{pool: pool}
-	deliveredAt := time.Date(2026, 9, 25, 12, 0, 0, 0, time.UTC)
+	// Relative to the run: the scheduler's age bound (24h) is measured against
+	// its own clock, so a fixed date would make this oracle expire.
+	deliveredAt := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
 	for index, c := range cases {
 		payload := fmt.Sprintf(`{"installation":{"id":%s},"repository":{"id":%s,"full_name":%q}}`, c.installation, c.repoID, c.fullName)
 		result, err := store.TriggerScopedSync(ctx, uuid.NewString(), "github", "push", []byte(payload), deliveredAt.Add(time.Duration(index)*time.Second))

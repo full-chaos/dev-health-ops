@@ -139,8 +139,18 @@ FOR UPDATE SKIP LOCKED`, now).Scan(&request.deliveryID, &request.orgID, &request
 		return true, minter.refuse(ctx, tx, request, now,
 			fmt.Sprintf("stale: delivery older than %s", minter.maxAge))
 	}
+	// The savepoint covers every read and write after the claim: a
+	// PostgreSQL error aborts the whole transaction, and fail() must still be
+	// able to record the attempt and the backoff on the claimed row (the row
+	// lock taken by the claim survives a rollback to the savepoint).
+	if _, err := tx.Exec(ctx, `SAVEPOINT webhook_sync_request_mint`); err != nil {
+		return true, fmt.Errorf("webhook sync request savepoint: %w", err)
+	}
 	config, err := synchandoff.LoadConfig(ctx, tx, request.syncConfigID)
 	if err != nil {
+		if _, rollbackErr := tx.Exec(ctx, `ROLLBACK TO SAVEPOINT webhook_sync_request_mint`); rollbackErr != nil {
+			return true, fmt.Errorf("webhook sync request rollback: %w", rollbackErr)
+		}
 		return true, minter.fail(ctx, tx, request, now, "load_config", err)
 	}
 	if config == nil {
@@ -150,9 +160,6 @@ FOR UPDATE SKIP LOCKED`, now).Scan(&request.deliveryID, &request.orgID, &request
 		return true, minter.refuse(ctx, tx, request, now, "sync configuration belongs to another organization")
 	}
 
-	if _, err := tx.Exec(ctx, `SAVEPOINT webhook_sync_request_mint`); err != nil {
-		return true, fmt.Errorf("webhook sync request savepoint: %w", err)
-	}
 	scheduledFor := request.scheduledFor
 	mode, datasetKeys := syncNowSelection(config, request.mode)
 	var trigger synchandoff.Trigger
@@ -196,7 +203,7 @@ UPDATE public.webhook_sync_requests SET minted_at = $2, occurrence_id = $3 WHERE
 	slog.InfoContext(ctx, "sync.webhook_request.minted",
 		slog.String("delivery_id", request.deliveryID), slog.String("org_id", request.orgID),
 		slog.String("sync_config_id", request.syncConfigID), slog.String("occurrence_id", trigger.OccurrenceID),
-		slog.String("mode", mode), slog.Int("source_count", len(request.sourceIDs)), slog.Int("dataset_key_count", len(datasetKeys)),
+		slog.String("mode", mode), slog.Int("source_count", len(request.sourceIDs)), slog.Int("dataset_key_count", len(datasetKeys)), slog.Any("dataset_keys", datasetKeys),
 		slog.Time("scheduled_for", scheduledFor), slog.Bool("instant_bumped", !scheduledFor.Equal(request.scheduledFor)))
 	return true, nil
 }

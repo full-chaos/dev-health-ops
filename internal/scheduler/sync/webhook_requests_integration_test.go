@@ -380,3 +380,57 @@ func TestWebhookRequestMinterRefusesADeliveryOlderThanTheAgeBound(t *testing.T) 
 		t.Fatalf("occurrences = %d, want only the fresh delivery's", occurrences)
 	}
 }
+
+// TestWebhookRequestMinterRecordsAConfigReadFailure (r3): a PostgreSQL error
+// while reading the configuration aborts the claim transaction; the failure
+// must still be recorded (attempt, backoff, stage-named SQLSTATE) and must not
+// stall the requests behind it. A table lock held by another session with a
+// short lock_timeout produces the error on the real schema.
+func TestWebhookRequestMinterRecordsAConfigReadFailure(t *testing.T) {
+	fixture := startWebhookRequestFixture(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	first := fixture.request(t, fixture.org, "incremental", now.Add(-2*time.Minute), now.Add(-2*time.Minute))
+	second := fixture.request(t, fixture.org, "incremental", now.Add(-time.Minute), now.Add(-time.Minute))
+
+	poolConfig := fixture.pool.Config().Copy()
+	poolConfig.ConnConfig.RuntimeParams["lock_timeout"] = "150ms"
+	impatient, err := pgxpool.NewWithConfig(ctx, poolConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(impatient.Close)
+
+	holder, err := fixture.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := holder.Exec(ctx, `LOCK TABLE sync_configurations IN ACCESS EXCLUSIVE MODE`); err != nil {
+		t.Fatal(err)
+	}
+	minter := &webhookRequestMinter{pool: impatient, maxAge: webhookRequestMaxAge}
+	if err := minter.mintPending(ctx, now, 10); err != nil {
+		_ = holder.Rollback(ctx)
+		t.Fatalf("a config read failure stopped the window: %v", err)
+	}
+	for name, id := range map[string]string{"first": first, "second": second} {
+		row := fixture.row(t, id)
+		if !row.exists || row.attempts != 1 || row.lastError == nil || *row.lastError != "load_config: sqlstate 55P03" ||
+			row.nextAttempt == nil || row.mintedAt != nil || row.refusedAt != nil {
+			_ = holder.Rollback(ctx)
+			t.Fatalf("%s request = %+v (last_error %v), want attempt 1, 'load_config: sqlstate 55P03' and a backoff", name, row, deref(row.lastError))
+		}
+	}
+	if err := holder.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// Past the backoff, with the lock gone, both mint.
+	if err := minter.mintPending(ctx, now.Add(webhookRequestBaseBackoff+time.Second), 10); err != nil {
+		t.Fatal(err)
+	}
+	for name, id := range map[string]string{"first": first, "second": second} {
+		if row := fixture.row(t, id); row.mintedAt == nil {
+			t.Fatalf("%s request was not minted after the lock cleared: %+v", name, row)
+		}
+	}
+}

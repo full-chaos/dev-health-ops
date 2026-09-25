@@ -319,6 +319,23 @@ def _get_http_client() -> httpx.AsyncClient:
     return _http_client
 
 
+_internal_http_client: httpx.AsyncClient | None = None
+
+
+def _get_internal_http_client() -> httpx.AsyncClient:
+    """The client for the internal identity carrier: it never reads the
+    process's proxy environment (HTTP_PROXY / NO_PROXY / SSL_CERT_* ...): a
+    proxy in the path would receive the identity headers, and this call must go
+    straight to the in-cluster Service. Redirects are not followed (httpx's
+    default), so a 30x cannot carry the headers elsewhere."""
+    global _internal_http_client
+    if _internal_http_client is None:
+        _internal_http_client = httpx.AsyncClient(
+            trust_env=False, follow_redirects=False
+        )
+    return _internal_http_client
+
+
 def _dispatch_timeout_seconds() -> float:
     raw = os.getenv("GO_API_DISPATCH_TIMEOUT_SECONDS")
     if not raw:
@@ -758,7 +775,12 @@ class GoApiDispatchRouter(GraphQLRouter[_Context, _RootValue]):
             return self._fallback(selected_operation, "build_outbound_body_error")
 
         return await self._forward_to_go(
-            target_url, selected_operation, doc_digest, carrier_headers, outbound_body
+            target_url,
+            selected_operation,
+            doc_digest,
+            carrier_headers,
+            outbound_body,
+            internal_carrier=internal_url is not None,
         )
 
     async def _forward_to_go(
@@ -768,10 +790,11 @@ class GoApiDispatchRouter(GraphQLRouter[_Context, _RootValue]):
         doc_digest: str,
         carrier_headers: dict[str, str],
         outbound_body: bytes,
+        internal_carrier: bool = False,
     ) -> Response:
         timeout = _dispatch_timeout_seconds()
         started = time.monotonic()
-        client = _get_http_client()
+        client = _get_internal_http_client() if internal_carrier else _get_http_client()
         # UTF-8 bytes, not str: httpx encodes a str header value as ASCII, and
         # query-api reads the raw bytes (the same string the envelope carried as
         # JSON), so a non-ASCII org or role must pass through.

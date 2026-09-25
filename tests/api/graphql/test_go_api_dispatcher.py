@@ -493,6 +493,9 @@ def _capture_outbound(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     monkeypatch.setattr(
         go_api_dispatcher, "_get_http_client", lambda: _mock_transport(handler)
     )
+    monkeypatch.setattr(
+        go_api_dispatcher, "_get_internal_http_client", lambda: _mock_transport(handler)
+    )
     return seen
 
 
@@ -1811,3 +1814,42 @@ async def test_every_go_failure_reason_is_classified_for_writes():
     classified = go_api_dispatcher._WRITE_OUTCOME_UNKNOWN_REASONS | _NEVER_RAN_A_WRITE
     assert reasons == classified
     assert not go_api_dispatcher._WRITE_OUTCOME_UNKNOWN_REASONS & _NEVER_RAN_A_WRITE
+||||||| parent of 7dd27e3a69 (fix(api): CHAOS-6758 the header carrier uses a client that never reads the proxy environment or follows redirects)
+
+
+
+def test_the_internal_carrier_client_ignores_the_proxy_environment(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A proxy in the path would receive the identity headers: the client the
+    header carrier uses must not read HTTP_PROXY / NO_PROXY, and must not follow
+    redirects; the envelope client is unchanged."""
+    monkeypatch.setattr(go_api_dispatcher, "_internal_http_client", None)
+    monkeypatch.setenv("HTTP_PROXY", "http://proxy.example.test:3128")
+    monkeypatch.setenv("http_proxy", "http://proxy.example.test:3128")
+    client = go_api_dispatcher._get_internal_http_client()
+    assert client.trust_env is False
+    assert client.follow_redirects is False
+    assert not client._mounts  # no proxy transport was mounted from the environment
+    monkeypatch.setattr(go_api_dispatcher, "_internal_http_client", None)
+
+
+async def test_the_header_carrier_never_uses_the_envelope_client(
+    router: GoApiDispatchRouter,
+    routing_row_mode,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    routing_row_mode("primary")
+    monkeypatch.setenv("QUERY_API_INTERNAL_URL", "http://query-api-internal:8091")
+    seen = _capture_outbound(monkeypatch)
+
+    def _envelope_client_must_not_be_used():
+        raise AssertionError("the header carrier used the proxy-trusting client")
+
+    monkeypatch.setattr(
+        go_api_dispatcher, "_get_http_client", _envelope_client_must_not_be_used
+    )
+    context = _context(user=_sample_user(), tier=None, licensed_features=None)
+    result = await router._maybe_dispatch_to_go(_post_request(TEST_QUERY), context)
+    assert result is not None and result.status_code == 200
+    assert seen["url"] == "http://query-api-internal:8091/query"

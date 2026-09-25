@@ -322,7 +322,7 @@ func TestPagerDutyWebhookAcceptedEndToEnd(t *testing.T) {
 	decryptor := newTestDecryptor(t)
 	bindingID := seedPagerDutyBinding(t, ctx, pool, decryptor, orgID, "active", "sub-1", "pd-secret")
 
-	deps := Deps{Pool: pool, Valkey: client, Decryptor: decryptor, limiters: newRateLimiters(nil)}
+	deps := Deps{Pool: pool, Valkey: client, Decryptor: decryptor, limiters: newRateLimiters(nil, nil)}
 	handler := deps.handlePagerDutyWebhook()
 
 	body := []byte(`{"event":{"id":"E1","event_type":"incident.triggered","occurred_at":"2026-01-01T00:00:00Z","data":{"incident":{"id":"I1"}}}}`)
@@ -383,7 +383,7 @@ func TestPagerDutyWebhookReplayReturnsSameOutcomeNoSecondStreamEntry(t *testing.
 	decryptor := newTestDecryptor(t)
 	bindingID := seedPagerDutyBinding(t, ctx, pool, decryptor, orgID, "active", "sub-2", "pd-secret-2")
 
-	deps := Deps{Pool: pool, Valkey: client, Decryptor: decryptor, limiters: newRateLimiters(nil)}
+	deps := Deps{Pool: pool, Valkey: client, Decryptor: decryptor, limiters: newRateLimiters(nil, nil)}
 	handler := deps.handlePagerDutyWebhook()
 
 	body := []byte(`{"event":{"id":"E-replay","event_type":"incident.triggered","occurred_at":"2026-01-01T00:00:00Z","data":{}}}`)

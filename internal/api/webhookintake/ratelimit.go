@@ -1,11 +1,9 @@
 package webhookintake
 
 import (
-	"net"
-	"net/http"
-	"strings"
-	"sync"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 )
 
 // pagerdutyLimitPerMinute is rate_limit.py's "60/minute" on pagerduty_webhook
@@ -14,60 +12,26 @@ import (
 // matching router.py, which has no @limiter.limit decorator on any of them).
 const pagerdutyLimitPerMinute = 60
 
-// keyedBucket is a per-key fixed-window counter: ceil requests per key per
-// window, reset at the window boundary. Sized for a single process; every
-// caller of a route shares the api Service's one instance.
-type keyedBucket struct {
-	mu       sync.Mutex
-	ceil     int
-	window   time.Duration
-	now      func() time.Time
-	counts   map[string]int
-	resetsAt map[string]time.Time
-}
+// pagerdutyLimit is the limit's identity in the shared store, in logs and on
+// the operator /metrics store-error series.
+var pagerdutyLimit = httpapi.Limit{ID: "webhook_pagerduty", Count: pagerdutyLimitPerMinute, Window: time.Minute}
 
-func newKeyedBucket(ceil int, window time.Duration, now func() time.Time) *keyedBucket {
-	if now == nil {
-		now = time.Now
-	}
-	return &keyedBucket{ceil: ceil, window: window, now: now, counts: map[string]int{}, resetsAt: map[string]time.Time{}}
-}
-
-// Allow reports whether key may proceed, incrementing its counter either way
-// so a caller cannot probe the ceiling for free.
-func (b *keyedBucket) Allow(key string) bool {
-	if b == nil {
-		return true
-	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	now := b.now()
-	if resetAt, ok := b.resetsAt[key]; !ok || !now.Before(resetAt) {
-		b.counts[key] = 0
-		b.resetsAt[key] = now.Add(b.window)
-	}
-	b.counts[key]++
-	return b.counts[key] <= b.ceil
-}
-
+// rateLimiters holds this area's limiters. The PagerDuty one is an
+// httpapi.KeyedLimiter, the api's one keyed limiter: a fixed window per
+// (client IP, exact request path) -- so per binding, as slowapi keys it -- in
+// the shared counter store, so the limit holds across api replicas.
 type rateLimiters struct {
-	pagerduty *keyedBucket
+	pagerduty *httpapi.KeyedLimiter
 }
 
-func newRateLimiters(now func() time.Time) *rateLimiters {
-	return &rateLimiters{pagerduty: newKeyedBucket(pagerdutyLimitPerMinute, time.Minute, now)}
-}
-
-// forwardedIP ports get_forwarded_ip's shape: the first X-Forwarded-For
-// entry when present, else the connection's own remote address.
-func forwardedIP(r *http.Request) string {
-	if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
-		first, _, _ := strings.Cut(forwarded, ",")
-		return strings.TrimSpace(first)
+// newRateLimiters counts in store; nil means an in-process store on now
+// (development and tests). The limiter's store-error series is declared at
+// zero.
+func newRateLimiters(store httpapi.CounterStore, now func() time.Time) *rateLimiters {
+	if store == nil {
+		store = httpapi.NewMemoryCounters(now)
 	}
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
+	limiter := httpapi.NewKeyedLimiter(store, pagerdutyLimit)
+	limiter.Declare()
+	return &rateLimiters{pagerduty: limiter}
 }

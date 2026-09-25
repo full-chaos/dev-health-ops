@@ -42,6 +42,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/workgraph"
+	postgresstore "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 )
 
 // registeredFeatureFlagsDocument is the ONE query document query-api
@@ -2408,7 +2409,11 @@ func buildQueryRoute(getenv getenvFunc, cfg queryRouteConfig) (queryRouteHandler
 		BuildInfo: newBuildInfoHandler(verifier),
 	}
 	cleanup := func() { pgPool.Close() }
-	ready := readinessCheck(chClient, pgPool, verifier)
+	// CHAOS-6803: the saved-report mutations write to Postgres, so a deployment
+	// that names query-api's role (QUERY_API_DATABASE_ROLE) is not ready until
+	// that role holds the write grants the migration leg applies. A deployment
+	// that names none has not opted in and is checked for nothing extra.
+	ready := readinessCheck(chClient, pgPool, verifier, writeGrantsCheck(getenv, pgPool))
 	return handlers, ready, cleanup, nil
 }
 
@@ -2441,7 +2446,7 @@ func buildQueryRoute(getenv getenvFunc, cfg queryRouteConfig) (queryRouteHandler
 // authenticated request 401'd. verifier.CheckJWKS() closes that -- see
 // its own doc comment for why calling it here, uncached, on every probe,
 // preserves the no-restart rotation contract rather than defeating it.
-func readinessCheck(chClient *dhclickhouse.Client, pgPool *pgxpool.Pool, verifier *principal.Verifier) func(context.Context) error {
+func readinessCheck(chClient *dhclickhouse.Client, pgPool *pgxpool.Pool, verifier *principal.Verifier, writeGrants func(context.Context) error) func(context.Context) error {
 	return func(ctx context.Context) error {
 		if err := chClient.Ping(ctx); err != nil {
 			return &readyzDependencyError{Class: readyzClassClickHouse, Cause: err}
@@ -2452,8 +2457,34 @@ func readinessCheck(chClient *dhclickhouse.Client, pgPool *pgxpool.Pool, verifie
 		if err := verifier.CheckJWKS(); err != nil {
 			return &readyzDependencyError{Class: readyzClassJWKS, Cause: err}
 		}
+		return writeGrantsReadiness(ctx, writeGrants)
+	}
+}
+
+// writeGrantsCheck returns the readiness check for query-api's write grants,
+// or nil when the deployment names no query-api role (QUERY_API_DATABASE_ROLE
+// unset or blank): such a deployment has not opted in and is checked for
+// nothing extra.
+func writeGrantsCheck(getenv getenvFunc, pgPool *pgxpool.Pool) func(context.Context) error {
+	role := strings.TrimSpace(getenv("QUERY_API_DATABASE_ROLE"))
+	if role == "" {
 		return nil
 	}
+	return func(ctx context.Context) error {
+		return postgresstore.CheckQueryAPIWriteGrants(ctx, pgPool, role)
+	}
+}
+
+// writeGrantsReadiness runs the optional write-grants check and classes its
+// failure so /readyz names WHICH dependency failed without echoing the cause.
+func writeGrantsReadiness(ctx context.Context, writeGrants func(context.Context) error) error {
+	if writeGrants == nil {
+		return nil
+	}
+	if err := writeGrants(ctx); err != nil {
+		return &readyzDependencyError{Class: readyzClassWriteGrants, Cause: err}
+	}
+	return nil
 }
 
 // The three dependency classes readinessCheck can fail on. These are the
@@ -2464,6 +2495,10 @@ const (
 	readyzClassClickHouse = "clickhouse"
 	readyzClassPostgres   = "postgres"
 	readyzClassJWKS       = "jwks"
+	// readyzClassWriteGrants: the query-api role does not hold the write
+	// grants its mutations need (CHAOS-6803). Only checked when
+	// QUERY_API_DATABASE_ROLE names a role.
+	readyzClassWriteGrants = "postgres_write_grants"
 )
 
 // readyzDependencyError names WHICH of /query's three live dependencies
@@ -2510,18 +2545,13 @@ func (e *readyzDependencyError) Unwrap() error { return e.Cause }
 // each gated by its own go_api_routing_state row: enabling featureFlags
 // does not enable reviewEdges and vice versa.
 //
-// Inherited, pre-existing gap this wave does NOT close (codex review,
-// 2026-08-28, re-raising it against this route -- it is PostgresSwitch's
-// own documented gap #2, not something introduced here): eligible_orgs
-// and rollout_percentage are not enforced. Mode=canary/primary is
-// reachable for every authenticated org once dispatched here, because
-// Switch.Enabled(operation string) takes no org argument at all -- see
-// PostgresSwitch's doc comment in internal/routeswitch/postgres_switch.go
-// for why (threading org through Enabled is a later wave's job, the same
-// wave that would also verify request document identity, gap #1). Both
-// waves are local dual-run proof only (plan §5 stage 2); org-scoped
-// canary enforcement is a stage-5 concern this PR does not claim to
-// satisfy.
+// eligible_orgs and rollout_percentage are inert by design (CHAOS-6807; it is
+// PostgresSwitch's documented point 2): Mode=canary/primary is reachable for
+// every authenticated org once dispatched here, because Switch.Enabled(operation
+// string) takes no org argument, the Python edge that decides delegation does
+// not enforce them, and these operations have no Python resolver for an org
+// outside a cohort to fall back to. `dho goapi routing enable` refuses a
+// partial rollout and `status` flags a row that records one.
 // maxUnwrapChainLogBytes bounds the CHAOS-4647 unwrap-chain log line
 // (codex review, merge-gate round, P3 ARGUED): the deepest cause is
 // frequently a ClickHouse *proto.Exception, whose Message field is
@@ -2742,8 +2772,8 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 		proofMux.Register(operation, gqlHandler)
 	}
 
-	return newDocumentDispatchHandler(getenv, routeMux, operationByDigest, verifier),
-		newDocumentDispatchHandler(getenv, proofMux, operationByDigest, verifier),
+	return newDocumentDispatchHandler(getenv, routeMux, operationByDigest, verifier, true),
+		newDocumentDispatchHandler(getenv, proofMux, operationByDigest, verifier, false),
 		registryHandler
 }
 
@@ -2755,7 +2785,16 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 // It takes the Mux rather than the Switch so the two routes cannot drift
 // in anything EXCEPT reachability -- the property the proof route exists
 // to vary, and the only one it is allowed to.
-func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, operationByDigest map[string]string, verifier *principal.Verifier) http.HandlerFunc {
+//
+// servesMutations says whether a registered MUTATION document may execute
+// here. /query serves them; /query/proof never does: it exists to measure an
+// operation without exposing it to real traffic, and a mutation cannot be
+// measured that way -- running it would apply a real write, and a
+// two-plane comparison would apply it twice. The refusal is decided from the
+// registered document itself (digest.DocumentKind), after the request is
+// authenticated and resolved to a registered operation, and before the Mux is
+// reached, so no switch state can let a write through this door.
+func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, operationByDigest map[string]string, verifier *principal.Verifier, servesMutations bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -2839,6 +2878,18 @@ func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, op
 			)
 			http.NotFound(w, r)
 			return
+		}
+
+		if !servesMutations {
+			kind, kindErr := digest.DocumentKind(parsed.Query)
+			if kind != digest.KindQuery {
+				// DocumentKind answers "" for a document whose kind cannot be
+				// stated, so that case is refused here too: only a document
+				// proven to be a query reaches the measurement-only route.
+				log.Printf("query-api: proof route refused a non-query document: operation=%s kind=%q err=%v", operation, kind, kindErr)
+				http.Error(w, "this route serves query documents only", http.StatusMethodNotAllowed)
+				return
+			}
 		}
 
 		r = r.WithContext(authctx.WithClaims(r.Context(), claims))

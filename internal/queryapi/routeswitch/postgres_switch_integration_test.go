@@ -103,6 +103,28 @@ func TestPostgresSwitch_ModeDrivesReachability(t *testing.T) {
 	}
 }
 
+// TestPostgresSwitch_RolloutAndEligibleOrgsAreInert pins CHAOS-6807: the
+// switch reads the mode and nothing else, so canary and primary are both "on
+// for every authenticated org" whatever rollout_percentage and eligible_orgs
+// record. `dho goapi routing enable` refuses a partial rollout and `status`
+// flags such a row, precisely because this is what the rows really do.
+func TestPostgresSwitch_RolloutAndEligibleOrgsAreInert(t *testing.T) {
+	pool := startRoutingStatePostgres(t)
+
+	for _, mode := range []string{"canary", "primary"} {
+		operation, documentDigest := "inert_"+mode, "doc-inert-"+mode
+		insertRoutingState(t, pool, documentDigest, operation, mode)
+		if _, err := pool.Exec(context.Background(),
+			`UPDATE go_api_routing_state SET rollout_percentage = 0, eligible_orgs = '["org-x"]'::json WHERE selected_operation = $1`, operation); err != nil {
+			t.Fatalf("record a cohort on %s: %v", operation, err)
+		}
+		sw := NewPostgresSwitch(pool, testSchemaDigest, map[string]string{operation: documentDigest})
+		if !sw.Enabled(operation) {
+			t.Errorf("mode=%s with rollout 0 and a one-org allowlist is not reachable: the switch now obeys a control every plane, the CLI and the docs say is inert", mode)
+		}
+	}
+}
+
 // TestPostgresSwitch_UnregisteredOperationIsUnreachable: an operation with
 // no row in go_api_routing_state at all (never registered) must resolve
 // to unreachable, the same safe default as StaticSwitch/DynamicSwitch --

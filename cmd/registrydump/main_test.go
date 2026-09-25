@@ -371,3 +371,53 @@ const registeredFooDocument = "query Foo { foo }"
 		t.Errorf("enumerate: error %q does not explain the missing-assignment problem", err.Error())
 	}
 }
+
+// TestEnumerate_KindField pins CHAOS-6803: each row carries the registered
+// document's operation type, read from the parsed document, and a document
+// whose kind cannot be stated fails the enumeration instead of counting as a
+// query.
+func TestEnumerate_KindField(t *testing.T) {
+	src := `package main
+
+const registeredReadDocument = "query Read { read }"
+const registeredWriteDocument = "mutation Write($x: Int!) { write(x: $x) }"
+
+func newQueryHandler() {
+	digestByOperation := map[string]string{
+		"read":  digestHex(registeredReadDocument),
+		"write": digestHex(registeredWriteDocument),
+	}
+	_ = digestByOperation
+}
+`
+	docs, err := enumerate(writeFixture(t, src))
+	if err != nil {
+		t.Fatalf("enumerate: %v", err)
+	}
+	kinds := map[string]string{}
+	for _, d := range docs {
+		kinds[d.Operation] = d.Kind
+	}
+	if kinds["read"] != "query" || kinds["write"] != "mutation" || len(kinds) != 2 {
+		t.Fatalf("kinds = %v, want read=query write=mutation", kinds)
+	}
+
+	for name, document := range map[string]string{
+		"subscription": "subscription S { s }",
+		"unparseable":  "mutation {",
+		"two ops":      "query A { a } mutation B { b }",
+	} {
+		bad := `package main
+
+const registeredBadDocument = "` + document + `"
+
+func newQueryHandler() {
+	digestByOperation := map[string]string{"bad": digestHex(registeredBadDocument)}
+	_ = digestByOperation
+}
+`
+		if _, err := enumerate(writeFixture(t, bad)); err == nil {
+			t.Errorf("%s: enumerate accepted a document whose kind cannot be stated", name)
+		}
+	}
+}

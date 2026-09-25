@@ -88,7 +88,7 @@ func iaDispatch(t *testing.T, verifier *principal.Verifier) (http.HandlerFunc, *
 		*seen = append(*seen, claims)
 		w.WriteHeader(http.StatusOK)
 	}))
-	handler := newDocumentDispatchHandler(os.Getenv, mux, map[string]string{digestHex(iaDocument): "probe"}, verifier)
+	handler := newDocumentDispatchHandler(os.Getenv, mux, map[string]string{digestHex(iaDocument): "probe"}, verifier, true)
 	return handler, seen
 }
 

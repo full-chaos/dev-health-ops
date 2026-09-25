@@ -40,6 +40,7 @@ __all__ = [
     "known_operations",
     "catalog_entries",
     "catalog_loaded_successfully",
+    "is_mutation_operation",
 ]
 
 _CATALOG_PATH = Path(__file__).parent / "go_api_operations.json"
@@ -52,6 +53,12 @@ _catalog_loaded = False
 #: whole change exists to stop (codex r1, P2).
 _catalog_load_ok = False
 _digest_to_operation: dict[str, str] = {}
+#: Operations whose registered document is a GraphQL mutation. An entry with
+#: no ``kind`` is a query; the generator writes ``"kind": "mutation"`` only for
+#: a document whose text starts with the ``mutation`` keyword.
+_mutation_operations: set[str] = set()
+
+_ENTRY_KINDS = frozenset({"query", "mutation"})
 
 
 def _load() -> None:
@@ -65,9 +72,15 @@ def _load() -> None:
         if not isinstance(entries, list) or not entries:
             raise ValueError("catalog must be a non-empty JSON array")
         mapping: dict[str, str] = {}
+        mutations: set[str] = set()
         for entry in entries:
             operation = entry["operation"]
             digest = entry["digest"]
+            kind = entry.get("kind", "query")
+            if kind not in _ENTRY_KINDS:
+                raise ValueError(f"operation {operation!r} has unknown kind {kind!r}")
+            if kind == "mutation":
+                mutations.add(operation)
             if digest in mapping:
                 raise ValueError(
                     f"duplicate digest {digest!r} for operations "
@@ -75,6 +88,7 @@ def _load() -> None:
                 )
             mapping[digest] = operation
         _digest_to_operation.update(mapping)
+        _mutation_operations.update(mutations)
         global _catalog_load_ok
         _catalog_load_ok = True
         logger.info(
@@ -98,6 +112,15 @@ def operation_for_digest(document_digest: str) -> str | None:
     """
     _load()
     return _digest_to_operation.get(document_digest)
+
+
+def is_mutation_operation(operation: str) -> bool:
+    """Whether the catalog registers ``operation``'s document as a mutation.
+
+    ``False`` for an unknown operation and for a catalog that failed to load.
+    """
+    _load()
+    return operation in _mutation_operations
 
 
 def known_operations() -> frozenset[str]:

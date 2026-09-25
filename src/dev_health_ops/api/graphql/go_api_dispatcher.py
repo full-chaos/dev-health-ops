@@ -32,17 +32,35 @@ the measured Python/Go whitespace divergence this guards against.
 GET, CHAOS-4706) where a body must be constructed at all, and why that
 construction is not the GraphQL-reprint defect class CHAOS-4696 documents.
 
-**No fallback after Go was asked.** Every operation reachable through this
-dispatcher is a read-only GraphQL *query* whose Python resolver has no body
-(it raises "no Python implementation"). So once query-api has been asked and
-timed out, refused the connection or answered non-200, :meth:`_go_failed`
-answers a typed GraphQL error naming the operation, reason and elapsed ms;
-running the Python resolver would only replace the real cause with a
-misleading one. Decisions made BEFORE query-api is asked (no routing row, a
-non-reachable mode, no principal) still return ``None`` and let Strawberry
-run: there the Python resolver's "dispatcher did not intercept" error is
-accurate. Do not extend this dispatcher to mutations without re-deciding
-that -- see CHAOS-4697's brief, "Wave 7".
+**No fallback after Go was asked.** For a routed *query* the Python resolver
+has no body (it raises "no Python implementation"). So once query-api has been
+asked and timed out, refused the connection or answered non-200,
+:meth:`_go_failed` answers a typed GraphQL error naming the operation, reason
+and elapsed ms; running the Python resolver would only replace the real cause
+with a misleading one. Decisions made BEFORE query-api is asked (no routing
+row, a non-reachable mode, no principal) still return ``None`` and let
+Strawberry run: there the Python resolver's "dispatcher did not intercept"
+error is accurate.
+
+**Mutations (CHAOS-6803, R322).** A catalog entry with ``"kind": "mutation"``
+is dispatched by the same path, with three differences, each a decision made
+here and not left to fall out of the query rules:
+
+* The same no-fallback rule applies, and for a write it matters more: the
+  Python resolver has a body, so a fallback after Go was asked would run the
+  write a second time. A failure after the request may have reached query-api
+  (timeout, request error, 5xx, an unreadable or unexpected answer) leaves the
+  outcome of the write UNKNOWN; the typed error says so
+  (``extensions.writeOutcome = "unknown"``) and the edge never retries. A
+  connection that was never made (``go_connection_error``), a digest miss (404)
+  and a 405 mean nothing ran, and carry no such marker.
+* A mutation document is never dispatched on GET. GraphQL forbids a mutation
+  over GET and Strawberry answers it with a client error; the edge always
+  forwards as POST, so dispatching a GET would turn that refusal into an
+  executed write. Such a request stays on Python (fallback reason
+  ``mutation_over_get``).
+* There is no idempotency key: a client that retries after an unknown outcome
+  repeats the write, exactly as it does against Python.
 
 **rollout_percentage / eligible_orgs are NOT enforced here**, matching
 ``routeswitch.PostgresSwitch.Enabled`` on the Go side (it takes no org
@@ -106,7 +124,7 @@ from .go_api_dispatch_telemetry import (
     GO_API_DISPATCH_SERVED_GO_TOTAL,
 )
 from .go_api_document_digest import document_digest
-from .go_api_operation_catalog import operation_for_digest
+from .go_api_operation_catalog import is_mutation_operation, operation_for_digest
 from .go_api_registry import lookup_routing_state
 from .go_api_schema_digest import current_schema_digest
 from .principal_envelope import issue_effective_principal_envelope
@@ -356,6 +374,20 @@ class _GoFailureResponse(Response):
     that produced these bytes (the Python edge), not the one that failed."""
 
 
+#: Failure reasons after which a write may already have been applied by
+#: query-api: the request was sent, so its outcome is unknown. The others
+#: (never connected, unregistered digest, method refused) ran nothing.
+_WRITE_OUTCOME_UNKNOWN_REASONS = frozenset(
+    {
+        "go_timeout",
+        "go_request_error",
+        "go_5xx",
+        "go_invalid_response",
+        "go_unexpected_status",
+    }
+)
+
+
 def _go_failure_response(
     operation: str, reason: str, elapsed_ms: int, status: int | None
 ) -> Response:
@@ -376,17 +408,13 @@ def _go_failure_response(
     }
     if status is not None:
         extensions["status"] = status
+    message = f"query-api did not serve {operation}: {reason} after {elapsed_ms} ms"
+    if is_mutation_operation(operation) and reason in _WRITE_OUTCOME_UNKNOWN_REASONS:
+        extensions["writeOutcome"] = "unknown"
+        message += "; the write may have been applied"
     payload = {
         "data": None,
-        "errors": [
-            {
-                "message": (
-                    f"query-api did not serve {operation}: {reason} "
-                    f"after {elapsed_ms} ms"
-                ),
-                "extensions": extensions,
-            }
-        ],
+        "errors": [{"message": message, "extensions": extensions}],
     }
     return _GoFailureResponse(
         content=json.dumps(payload),
@@ -500,6 +528,11 @@ class GoApiDispatchRouter(GraphQLRouter[_Context, _RootValue]):
             # overwhelming majority of GraphQL traffic. Not a fallback;
             # there was never a Go candidate here.
             return None
+
+        if request.method == "GET" and is_mutation_operation(selected_operation):
+            # See the module docstring: the edge forwards every request as a
+            # POST, so a mutation over GET must never reach query-api.
+            return self._fallback(selected_operation, "mutation_over_get")
 
         GO_API_DISPATCH_ATTEMPTED_TOTAL.labels(operation=selected_operation).inc()
 

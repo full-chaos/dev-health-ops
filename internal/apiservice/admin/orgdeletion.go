@@ -332,52 +332,94 @@ func (h *handlers) orgDeletionRevokePagerDuty(ctx context.Context, orgIDStr stri
 // expires_at is accepted as an RFC 3339 string, a date-time without an
 // offset, a date, or a JSON number; pydantic accepts a few more spellings.
 func pagerDutyRevokeToken(plaintext []byte) (string, error) {
+	tokens, err := parsePagerDutyOAuthTokens(plaintext)
+	if err != nil {
+		return "", err
+	}
+	if tokens.Refresh != "" {
+		return tokens.Refresh, nil
+	}
+	return tokens.Access, nil
+}
+
+// pagerDutyStoredTokens is OAuthTokens as validated from a stored payload.
+type pagerDutyStoredTokens struct {
+	Access, Refresh string
+	HasRefresh      bool
+	ExpiresAt       time.Time
+	// ExpiresNaive is an expires_at without an offset, which Python reads as
+	// a naive datetime (and fails to compare with an aware one).
+	ExpiresNaive bool
+	Scopes       []string
+}
+
+// parsePagerDutyOAuthTokens is OAuthTokens.model_validate_json.
+func parsePagerDutyOAuthTokens(plaintext []byte) (pagerDutyStoredTokens, error) {
+	var out pagerDutyStoredTokens
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(plaintext, &fields); err != nil || fields == nil {
-		return "", errors.New("pagerduty oauth tokens: not a JSON object")
+		return out, errors.New("pagerduty oauth tokens: not a JSON object")
 	}
 	for key := range fields {
 		switch key {
 		case "access_token", "refresh_token", "expires_at", "granted_scopes":
 		default:
-			return "", errors.New("pagerduty oauth tokens: extra field")
+			return out, errors.New("pagerduty oauth tokens: extra field")
 		}
 	}
-	var access string
-	if raw, ok := fields["access_token"]; !ok || json.Unmarshal(raw, &access) != nil || string(raw) == "null" {
-		return "", errors.New("pagerduty oauth tokens: access_token")
+	if raw, ok := fields["access_token"]; !ok || json.Unmarshal(raw, &out.Access) != nil || string(raw) == "null" {
+		return out, errors.New("pagerduty oauth tokens: access_token")
 	}
 	var refresh *string
 	if raw, ok := fields["refresh_token"]; ok && json.Unmarshal(raw, &refresh) != nil {
-		return "", errors.New("pagerduty oauth tokens: refresh_token")
+		return out, errors.New("pagerduty oauth tokens: refresh_token")
 	}
-	if raw, ok := fields["expires_at"]; !ok || !pagerDutyTokenExpiryValid(raw) {
-		return "", errors.New("pagerduty oauth tokens: expires_at")
+	if refresh != nil {
+		out.Refresh, out.HasRefresh = *refresh, true
 	}
+	raw, ok := fields["expires_at"]
+	if !ok {
+		return out, errors.New("pagerduty oauth tokens: expires_at")
+	}
+	expires, naive, valid := pagerDutyTokenExpiry(raw)
+	if !valid {
+		return out, errors.New("pagerduty oauth tokens: expires_at")
+	}
+	out.ExpiresAt, out.ExpiresNaive = expires, naive
 	if raw, ok := fields["granted_scopes"]; ok {
-		var scopes []string
-		if json.Unmarshal(raw, &scopes) != nil || string(raw) == "null" {
-			return "", errors.New("pagerduty oauth tokens: granted_scopes")
+		if json.Unmarshal(raw, &out.Scopes) != nil || string(raw) == "null" {
+			return out, errors.New("pagerduty oauth tokens: granted_scopes")
 		}
 	}
-	if refresh != nil && *refresh != "" {
-		return *refresh, nil
-	}
-	return access, nil
+	return out, nil
 }
 
-func pagerDutyTokenExpiryValid(raw json.RawMessage) bool {
+// pagerDutyTokenExpiry reads an expires_at: an RFC 3339 string, a date-time
+// without an offset (naive), a date, or a JSON number (epoch seconds).
+func pagerDutyTokenExpiry(raw json.RawMessage) (at time.Time, naive, ok bool) {
 	var text string
 	if json.Unmarshal(raw, &text) == nil {
-		for _, layout := range []string{time.RFC3339Nano, "2006-01-02T15:04:05.999999999", "2006-01-02 15:04:05.999999999Z07:00", "2006-01-02 15:04:05.999999999", "2006-01-02"} {
-			if _, err := time.Parse(layout, text); err == nil {
-				return true
+		if parsed, err := time.Parse(time.RFC3339Nano, text); err == nil {
+			return parsed.UTC(), false, true
+		}
+		for _, layout := range []string{"2006-01-02 15:04:05.999999999Z07:00"} {
+			if parsed, err := time.Parse(layout, text); err == nil {
+				return parsed.UTC(), false, true
 			}
 		}
-		return false
+		for _, layout := range []string{"2006-01-02T15:04:05.999999999", "2006-01-02 15:04:05.999999999", "2006-01-02"} {
+			if parsed, err := time.Parse(layout, text); err == nil {
+				return parsed.UTC(), true, true
+			}
+		}
+		return time.Time{}, false, false
 	}
 	var number float64
-	return json.Unmarshal(raw, &number) == nil && string(raw) != "null"
+	if json.Unmarshal(raw, &number) == nil && string(raw) != "null" {
+		whole := int64(number)
+		return time.Unix(whole, int64((number-float64(whole))*1e9)).UTC(), false, true
+	}
+	return time.Time{}, false, false
 }
 
 // orgDeletionPurgePostgres disables every scheduled job for the org, then

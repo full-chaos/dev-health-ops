@@ -29,6 +29,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/pgmigrate"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
 const (
@@ -351,12 +352,16 @@ func TestFinalizeSyntheticWritesTheFrozenPythonRows(t *testing.T) {
 // app), so it runs by hand, not in a CI shard:
 //
 //	DEV_HEALTH_LIVE_PYTHON_ORACLES=1 DEV_HEALTH_PYTHON=<full venv python> \
-//	  go test -tags=integration -run TestFinalizeSyntheticMatchesTheLivePythonProducer ./internal/fixturescli
+//	  go test -tags=integration -run TestFinalizeSyntheticVenueOracleMatchesThePythonProducer ./internal/fixturescli
+//
+// CI runs it in the venue-oracles job (ci/check_go.sh venue-oracles discovers it
+// through venueoracle.WriteProof, which it calls only after the comparison
+// passed).
 //
 // DHO_SYNTHETIC_FINALIZE_GOLDEN_UPDATE=1 rewrites the golden from the
 // producer's rows. It is not a freshness check of the golden: the producer is
 // deleted with the Python CLI (S10i).
-func TestFinalizeSyntheticMatchesTheLivePythonProducer(t *testing.T) {
+func TestFinalizeSyntheticVenueOracleMatchesThePythonProducer(t *testing.T) {
 	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
 		t.Skip("the live Python producer runs only with DEV_HEALTH_LIVE_PYTHON_ORACLES=1 and the full project Python environment")
 	}
@@ -391,6 +396,7 @@ func TestFinalizeSyntheticMatchesTheLivePythonProducer(t *testing.T) {
 	if !reflect.DeepEqual(goRows, pythonRows) {
 		t.Fatalf("the Go verb wrote different rows than the live Python producer:\n%s", diffTables(pythonRows, goRows))
 	}
+	venueoracle.WriteProof(t)
 }
 
 // assertRelations checks what masking hides: every foreign key column points

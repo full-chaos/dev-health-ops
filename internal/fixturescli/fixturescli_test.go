@@ -19,7 +19,7 @@ import (
 // PostgreSQL head database. The producer is deleted with the Python CLI, so
 // this is a rot guard, not a freshness check: it fails when the committed file
 // changes without this digest, and the file is only ever rewritten from the
-// live producer (see TestFinalizeSyntheticMatchesTheLivePythonProducer).
+// live producer (see TestFinalizeSyntheticVenueOracleMatchesThePythonProducer).
 const goldenSHA256 = "d5e5d19fc136376877f52adb3db5385f4444b5ddb1f4a0b9240ecefa532f9570"
 
 func TestGoldenIsTheFileTheDigestPins(t *testing.T) {
@@ -30,7 +30,7 @@ func TestGoldenIsTheFileTheDigestPins(t *testing.T) {
 	sum := sha256.Sum256(raw)
 	if got := hex.EncodeToString(sum[:]); got != goldenSHA256 {
 		t.Fatalf("testdata/finalize_synthetic_golden.json digest = %s, want %s: the golden changed without its digest. It is only rewritten from the live Python producer "+
-			"(DEV_HEALTH_LIVE_PYTHON_ORACLES=1 DHO_SYNTHETIC_FINALIZE_GOLDEN_UPDATE=1 go test -tags=integration -run TestFinalizeSyntheticMatchesTheLivePythonProducer ./internal/fixturescli), then update goldenSHA256", got, goldenSHA256)
+			"(the venue oracle test's doc comment, with DHO_SYNTHETIC_FINALIZE_GOLDEN_UPDATE=1), then update goldenSHA256", got, goldenSHA256)
 	}
 	for _, name := range []string{"\"producer\": \"", "\"sync_run_units\"", "\"sync_executed_proof_ledger\"", "\"sync_run_post_dispatches\"", "\"sync_dispatch_outbox\""} {
 		if !strings.Contains(string(raw), name) {

@@ -18,6 +18,17 @@ package goapiproof
 //     and an unknown dataset (400), each with an identical body on the capture.
 //     Its body needs enabled_datasets; valid names are the keys of the Python
 //     DATASET_OAUTH_FAMILIES map.
+//
+// Named limit (r1 P1): "missing_credential" names the credential "zz-missing"
+// and ASSUMES the org has no stored PagerDuty credential of that name. If one
+// exists, both planes answer connected:true from the stored descriptor and
+// OAuth metadata (still no decryption, no PagerDuty call, no write) and the
+// case reads SAME without exercising the missing branch. Parity still holds;
+// only the branch differs. The corpus compares planes, not content, so it
+// cannot detect this; the bigboy pass records the actual body (connected:false
+// on the Fixture Org), and the name was chosen to be one no operator has a
+// reason to create. The status read (adminPagerDutyMissingName) has the same
+// assumption.
 
 var dhoAPIAdminSetupRunOrder = []string{
 	"REST:GET:/api/v1/admin/setup/status",

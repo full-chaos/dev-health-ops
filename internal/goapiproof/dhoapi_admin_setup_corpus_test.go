@@ -1,6 +1,9 @@
 package goapiproof
 
-import "testing"
+import (
+	"slices"
+	"testing"
+)
 
 // TestAdminSetupCorpusPinsSetupStatusAndThePreflightRequests pins the setup
 // status read and the two PagerDuty preflight requests (CHAOS-6702) with the
@@ -25,6 +28,13 @@ func TestAdminSetupCorpusPinsSetupStatusAndThePreflightRequests(t *testing.T) {
 		body, ok := request.Body.(map[string]any)
 		if !ok || body["credential_name"] != "zz-missing" {
 			t.Errorf("preflight %q body = %v: only the missing credential name may be used (no real credential is ever probed)", request.Name, request.Body)
+		}
+		// The datasets are what make each request the case it is named for: two
+		// valid names give 200, one unknown name gives 400 (r1 P3).
+		datasets := map[string][]string{"missing_credential": {"incidents", "services"}, "unknown_dataset": {"zz-unknown"}}[request.Name]
+		got, _ := body["enabled_datasets"].([]string)
+		if !slices.Equal(got, datasets) {
+			t.Errorf("preflight %q enabled_datasets = %v, want %v", request.Name, got, datasets)
 		}
 	}
 }

@@ -702,6 +702,167 @@ def test_internal_url_target_is_the_normalised_form_httpx_targets(
     assert go_api_dispatcher._internal_url_target(value, None) == (expected, None)
 
 
+@pytest.mark.parametrize(
+    ("public_url", "internal_url"),
+    [
+        # r3 reviewer reproductions: the same listener under another spelling.
+        ("http://172.17.0.101", "http://172.17.0.101:0"),
+        ("http://172.17.0.101:80", "http://172.17.0.101:0"),
+        ("http://[0:0:0:0:0:0:0:1]:8090", "http://[::1]:8090"),
+        ("http://[::1]:8090", "http://[0000:0000:0000:0000:0000:0000:0000:0001]:8090"),
+        ("http://127.0.0.1:8090", "http://[::ffff:127.0.0.1]:8090"),
+        ("http://127.0.0.1:8090", "http://[::ffff:7f00:1]:8090"),
+        ("http://2130706433:8090", "http://127.0.0.1:8090"),
+        ("http://0x7f.1:8090", "http://127.0.0.1:8090"),
+        ("http://0177.0.0.1:8090", "http://127.0.0.1:8090"),
+        ("http://query-api.:8090", "http://query-api:8090"),
+        ("http://QUERY-API:8090", "http://query-api.:8090"),
+    ],
+)
+async def test_the_same_endpoint_under_another_spelling_is_still_the_public_origin(
+    router: GoApiDispatchRouter,
+    routing_row_mode,
+    monkeypatch: pytest.MonkeyPatch,
+    public_url: str,
+    internal_url: str,
+):
+    routing_row_mode("primary")
+    monkeypatch.setenv("GO_API_QUERY_API_URL", public_url)
+    monkeypatch.setenv("QUERY_API_INTERNAL_URL", internal_url)
+    seen = _capture_outbound(monkeypatch)
+    context = _context(user=_sample_user(), tier=None, licensed_features=None)
+
+    result = await router._maybe_dispatch_to_go(_post_request(TEST_QUERY), context)
+
+    _assert_go_failure(result, reason="go_internal_url_refused")
+    assert "url" not in seen
+
+
+_HOST_SPELLINGS = {
+    # spelling -> what the OS resolver (getaddrinfo, numeric) says it is, or the
+    # lower-cased name. The oracle is the OS, not this module.
+    "127.0.0.1": [
+        "127.0.0.1",
+        "2130706433",
+        "0x7f000001",
+        "0177.0.0.1",
+        "127.1",
+        "0x7f.1",
+    ],
+    "127.0.0.1/mapped": [
+        "[::ffff:127.0.0.1]",
+        "[::ffff:7f00:1]",
+        "[0:0:0:0:0:ffff:127.0.0.1]",
+    ],
+    "::1": [
+        "[::1]",
+        "[0:0:0:0:0:0:0:1]",
+        "[0000:0000:0000:0000:0000:0000:0000:0001]",
+        "[::0001]",
+    ],
+    "10.1.2.3": ["10.1.2.3", "0xa010203", "167838211", "012.1.2.3"],
+    "query-api": ["query-api", "QUERY-API", "query-api.", "Query-Api."],
+    "other-svc": ["other-svc", "other-svc."],
+}
+_PORT_SPELLINGS = ["", ":80", ":0080", ":8090", ":08090", ":8091"]
+#: spellings an INTERNAL url may use: only what is accepted as an internal host.
+_INTERNAL_SPELLINGS = {
+    "127.0.0.1": ["127.0.0.1"],
+    "127.0.0.1/mapped": ["[::ffff:127.0.0.1]", "[::ffff:7f00:1]"],
+    "::1": ["[::1]", "[0000:0000:0000:0000:0000:0000:0000:0001]"],
+    "10.1.2.3": ["10.1.2.3"],
+    "query-api": ["query-api", "QUERY-API"],
+    "other-svc": ["other-svc"],
+}
+
+
+def _os_endpoint(host_spelling: str, port_spelling: str) -> tuple[str, int]:
+    """What connecting to this spelling means, per the operating system's own
+    numeric-host parser; names by their lower-case form. Port: none or 0 dials
+    the http default."""
+    import ipaddress
+    import socket
+
+    bare = host_spelling.strip("[]")
+    port = int(port_spelling[1:]) if port_spelling else 80
+    port = port or 80
+    try:
+        info = socket.getaddrinfo(
+            bare,
+            port,
+            type=socket.SOCK_STREAM,
+            flags=socket.AI_NUMERICHOST | socket.AI_NUMERICSERV,
+        )[0][4]
+        address = ipaddress.ip_address(info[0].split("%")[0])
+        if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped:
+            address = address.ipv4_mapped
+        return (str(address), port)
+    except socket.gaierror:
+        return (bare.lower().rstrip("."), port)
+
+
+def test_origin_equality_is_the_endpoint_the_socket_dials_over_every_spelling():
+    """The class closed by construction (r2, r3): for every spelling of one
+    endpoint as the public URL against every accepted spelling of another as the
+    internal URL, the internal URL is refused as the public origin EXACTLY when
+    the operating system reads both spellings as the same endpoint, and is
+    accepted exactly when it does not (so the refusal is not blanket)."""
+    checked = {"same": 0, "different": 0, "malformed": 0}
+    for public_key, public_hosts in _HOST_SPELLINGS.items():
+        for internal_key, internal_hosts in _INTERNAL_SPELLINGS.items():
+            for public_host in public_hosts:
+                for public_port in _PORT_SPELLINGS:
+                    for internal_host in internal_hosts:
+                        for internal_port in _PORT_SPELLINGS:
+                            public_url = f"http://{public_host}{public_port}"
+                            internal_url = f"http://{internal_host}{internal_port}"
+                            target, reason = go_api_dispatcher._internal_url_target(
+                                internal_url, public_url
+                            )
+                            try:
+                                httpx.URL(public_url)
+                            except httpx.InvalidURL:
+                                # An origin httpx cannot read cannot be shown to
+                                # differ: refused, whatever the internal spelling.
+                                assert (target, reason) == (
+                                    None,
+                                    "public_url_malformed",
+                                ), (public_url, internal_url, target, reason)
+                                checked["malformed"] += 1
+                                continue
+                            same = _os_endpoint(
+                                public_host, public_port
+                            ) == _os_endpoint(internal_host, internal_port)
+                            if same:
+                                checked["same"] += 1
+                                assert (target, reason) == (
+                                    None,
+                                    "same_as_public_url",
+                                ), (
+                                    public_url,
+                                    internal_url,
+                                    target,
+                                    reason,
+                                )
+                            else:
+                                checked["different"] += 1
+                                assert reason is None and target is not None, (
+                                    public_url,
+                                    internal_url,
+                                    reason,
+                                )
+    # Both directions must have been exercised in volume, or the property is vacuous.
+    assert checked["same"] > 200 and checked["different"] > 200, checked
+
+
+@pytest.mark.parametrize("port", [":0", ":00", ":000", ":65536", ":99999"])
+def test_an_internal_url_with_an_impossible_port_is_refused(port: str):
+    target, reason = go_api_dispatcher._internal_url_target(
+        f"http://query-api-internal{port}", None
+    )
+    assert target is None and reason is not None
+
+
 _HOSTILE_INTERNAL_URLS = [
     "http://attacker\u3002com",
     "http://attacker\u3002com:8091",
@@ -1916,7 +2077,14 @@ async def test_query_failure_carries_no_write_outcome_marker(
 # Every reason the dispatcher can fail a request with after query-api was asked,
 # each classified: did the request possibly reach query-api and run the write?
 _NEVER_RAN_A_WRITE = frozenset(
-    {"go_connection_error", "go_404_digest_miss", "go_405_method_not_allowed"}
+    {
+        "go_connection_error",
+        "go_404_digest_miss",
+        "go_405_method_not_allowed",
+        # CHAOS-6758: refused before any request is built or sent.
+        "go_internal_url_refused",
+        "go_identity_not_header_safe",
+    }
 )
 
 
@@ -1942,8 +2110,6 @@ async def test_every_go_failure_reason_is_classified_for_writes():
     classified = go_api_dispatcher._WRITE_OUTCOME_UNKNOWN_REASONS | _NEVER_RAN_A_WRITE
     assert reasons == classified
     assert not go_api_dispatcher._WRITE_OUTCOME_UNKNOWN_REASONS & _NEVER_RAN_A_WRITE
-||||||| parent of 7dd27e3a69 (fix(api): CHAOS-6758 the header carrier uses a client that never reads the proxy environment or follows redirects)
-
 
 
 def test_the_internal_carrier_client_ignores_the_proxy_environment(

@@ -106,6 +106,7 @@ import logging
 import math
 import os
 import re
+import socket
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -202,8 +203,32 @@ def _host(url: httpx.URL) -> str:
     return url.raw_host.decode("ascii").lower()
 
 
-def _origin(url: httpx.URL) -> tuple[str, str, int | None]:
-    return (url.scheme, _host(url), url.port)
+_DEFAULT_PORTS = {"http": 80, "https": 443}
+
+
+def _canonical_host(host: str) -> str:
+    """``host`` as the resolver reads it, so two spellings of one machine compare
+    equal: an IPv6 literal compressed, an IPv4-mapped one unmapped, the legacy
+    numeric IPv4 forms glibc's resolver accepts (``2130706433``, ``0x7f.1``,
+    ``127.1``) written dotted, a single trailing dot on a name dropped."""
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        try:
+            return socket.inet_ntoa(socket.inet_aton(host))
+        except OSError:
+            return host[:-1] if host.endswith(".") else host
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped:
+        address = address.ipv4_mapped
+    return str(address)
+
+
+def _origin(url: httpx.URL) -> tuple[str, str, int]:
+    """The endpoint a connection to ``url`` dials: scheme, canonical host and the
+    EFFECTIVE port (no port, or port 0 which the transport also dials as the
+    scheme default, is the default)."""
+    port = url.port or _DEFAULT_PORTS.get(url.scheme, 0)
+    return (url.scheme, _canonical_host(_host(url)), port)
 
 
 def _internal_host(host: str) -> bool:
@@ -240,6 +265,11 @@ def _internal_url_target(
         return None, "malformed"
     if url.scheme != "http" or not _host(url):
         return None, "scheme_or_host"
+    if url.port is not None and not 1 <= url.port <= 65535:
+        # Port 0 is not a listener (httpcore dials the scheme's default instead,
+        # so the URL would not name the endpoint it says) and nothing above 65535
+        # exists.
+        return None, "malformed"
     if url.userinfo:
         return None, "userinfo"
     if url.query or url.fragment:
@@ -248,7 +278,11 @@ def _internal_url_target(
         return None, "public_host"
     if public_url:
         public = _normalized_url(public_url)
-        if public is not None and _origin(public) == _origin(url):
+        if public is None:
+            # Fail closed: an origin that cannot be read cannot be shown to differ
+            # from this one (and the public leg itself could not connect to it).
+            return None, "public_url_malformed"
+        if _origin(public) == _origin(url):
             return None, "same_as_public_url"
     return str(url), None
 

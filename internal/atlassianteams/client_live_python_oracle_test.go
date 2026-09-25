@@ -48,15 +48,17 @@ const (
 func str(value string) *string { return &value }
 
 // teamPage is one teamSearchV2 answer: the generated TeamSearchConnection in
-// gen.TeamSearchV2Data's envelope, plus
+// the generated gen.TeamSearchV2Data envelope, plus
 // top-level GraphQL errors when errs is set.
 func teamPage(nodes []gen.TeamNode, hasNext bool, cursor *string, errs bool) []byte {
 	connection := &gen.TeamSearchConnection{PageInfo: gen.TeamPageInfo{HasNextPage: hasNext, EndCursor: cursor}}
 	for index := range nodes {
 		connection.Nodes = append(connection.Nodes, gen.TeamSearchResultNode{Team: &nodes[index]})
 	}
-	// gen.TeamSearchV2Data's envelope: {"team": {"teamSearchV2": <connection>}}.
-	return envelope(map[string]any{"team": map[string]any{"teamSearchV2": connection}}, errs)
+	data := gen.TeamSearchV2Data{Team: &struct {
+		Search *gen.TeamSearchConnection `json:"teamSearchV2"`
+	}{Search: connection}}
+	return envelope(data, errs)
 }
 
 // value flattens a generated Cypher value union into the JSON the gateway

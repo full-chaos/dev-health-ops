@@ -70,6 +70,9 @@ EXPECTED_PACKAGES = {
     # (see readers_seeded_integration_test.go's own header comment).
     "internal/queryapi/home",
     "internal/queryapi/hotspots",
+    # The people summary naive-timestamp venue differential (skips without
+    # the live Python env), in its own package for its own time budget.
+    "internal/queryapi/people/summaryvenue",
     # CHAOS-4977 step 7: the recurrence guard for FetchWorkUnitInvestments'
     # real Map(String, Float64) theme/subcategory columns -- a fake
     # RowScanner double can hand back any Go type its author declares, so

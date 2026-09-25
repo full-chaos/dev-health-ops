@@ -287,16 +287,11 @@ func loadSummaryGolden(t *testing.T) SummaryResponse {
 // clickhouse_client/utc_today) via a one-off `uv run python3`
 // invocation -- see this PR's own TEST-EVIDENCE for the exact script.
 //
-// ONE DECLARED DIVERGENCE (same class as this binary's own established
-// datetime-wire-format precedent for a similar naive-vs-canonical gap):
-// every
-// spark.ts value is a ClickHouse `Date` (day only, no time zone) coerced
-// by Pydantic's `datetime` field into a NAIVE datetime -- the captured
-// Python JSON carries "2024-06-10T00:00:00" (no "Z"/offset). This port's
-// SparkPoint.Ts is a real time.Time, which Go's encoding/json always
-// renders RFC3339 ("...Z"): the committed golden fixture has "Z" appended
-// to every spark.ts value from the raw capture, matching Go's own
-// (canonical) output rather than Python's naive-datetime baseline defect.
+// Every spark.ts value is a ClickHouse `Date` (day only, no time zone)
+// coerced by Pydantic's `datetime` field into a NAIVE datetime, and the
+// fixture carries it as Python wrote it: "2024-06-10T00:00:00", no zone
+// (pytime.NaiveDateTime; the live summaryvenue oracle compares the same wire
+// text against the real Python service).
 func TestGoldenBuildSummaryResponse(t *testing.T) {
 	t.Setenv("IDENTITY_MAPPING_PATH", t.TempDir()+"/missing.yaml")
 

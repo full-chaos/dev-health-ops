@@ -70,6 +70,7 @@ internal/queryapi/explain	60
 internal/queryapi/featureflags	21
 internal/queryapi/home	57
 internal/queryapi/hotspots	46
+internal/queryapi/people/summaryvenue	1
 internal/queryapi/investmentexplain	75
 internal/queryapi/investmentflow	14
 internal/queryapi/operatingreview	56

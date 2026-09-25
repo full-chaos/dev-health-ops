@@ -2761,11 +2761,6 @@ func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, op
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		// Two carriers can name two identities: refuse before any body or
-		// document work, so no later 4xx/404 can answer an ambiguous request.
-		if refuseAmbiguousCarrier(w, r) {
-			return
-		}
 		// Same body-size contract the Python edge's
 		// GraphQLQuerySizeLimitMiddleware enforces for /graphql
 		// (security.py's GRAPHQL_MAX_QUERY_BYTES, default 16 KiB) --
@@ -2805,6 +2800,21 @@ func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, op
 			return
 		}
 
+		// Authenticate BEFORE the document lookup, so every carrier outcome
+		// (ambiguous, none, malformed, invalid, accepted) is decided before the
+		// unregistered-document 404 can answer (CHAOS-6757 r1: an ambiguous or
+		// unauthenticated request for an unregistered document got 404).
+		// Python parity: the edge's GraphQLRouter resolves get_context (401
+		// "Authentication required") before it picks an operation. The body
+		// refusals above stay where they were: the size 413 and the 4300-digit
+		// 500 are documented above as Python-edge behaviour that precedes this
+		// route; the malformed-JSON 400 keeps its old position and is NOT
+		// verified against Python's order.
+		claims, ok := authenticateInternalRequest(w, r, verifier)
+		if !ok {
+			return
+		}
+
 		operation, ok := operationForDocument(parsed.Query, operationByDigest)
 		if !ok {
 			// Unregistered document: plan §5's safe default ("unregistered
@@ -2828,11 +2838,6 @@ func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, op
 				digestHex(parsed.Query), truncateForLog(parsed.Query, maxUnwrapChainLogBytes),
 			)
 			http.NotFound(w, r)
-			return
-		}
-
-		claims, ok := authenticateInternalRequest(w, r, verifier)
-		if !ok {
 			return
 		}
 

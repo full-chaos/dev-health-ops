@@ -306,28 +306,56 @@ func sameSet(a, b map[string]bool) bool {
 	return true
 }
 
-// r1 P1 (CHAOS-6757): an ambiguous request must be 401 even when the document
-// is one this router would 404 (unregistered). Before the fix the document
-// lookup ran first, so both carriers + an unregistered document answered 404.
-func TestQueryRefusesAmbiguousCarriersBeforeTheDocumentLookup(t *testing.T) {
+// r1 P1 (CHAOS-6757): every carrier outcome is decided before the document
+// lookup, so a refused request is 401 even for a document this router would
+// 404 (unregistered). Before the fix the lookup ran first: both carriers, no
+// carrier or an invalid envelope plus an unregistered document answered 404.
+func TestQueryDecidesTheCarrierBeforeTheDocumentLookup(t *testing.T) {
 	verifier, priv := iaVerifier(t)
 	handler, seen := iaDispatch(t, verifier)
 	token := iaEnvelope(t, priv, principal.Claims{OrgID: "org-1", Role: "member"})
+	carriers := map[string]func(*http.Request){
+		"both": func(r *http.Request) {
+			r.Header.Set("Authorization", "Bearer "+token)
+			iaHeaders("org-1", "member", false, false)(r)
+		},
+		"none":             func(*http.Request) {},
+		"invalid envelope": func(r *http.Request) { r.Header.Set("Authorization", "Bearer not-a-token") },
+		"partial headers":  func(r *http.Request) { r.Header.Set(internalidentity.HeaderOrgID, "org-1") },
+	}
 	for _, document := range []string{iaDocument, "query { notRegistered { id } }"} {
-		body, err := json.Marshal(map[string]string{"query": document})
-		if err != nil {
-			t.Fatal(err)
-		}
-		req := httptest.NewRequest(http.MethodPost, "/query", bytes.NewReader(body))
-		req.Header.Set("Authorization", "Bearer "+token)
-		iaHeaders("org-1", "member", false, false)(req)
-		rec := httptest.NewRecorder()
-		handler(rec, req)
-		if rec.Code != http.StatusUnauthorized || rec.Body.String() != "unauthorized\n" {
-			t.Fatalf("document %q with both carriers: status=%d body=%q, want 401 bare unauthorized", document, rec.Code, rec.Body.String())
+		for name, mutate := range carriers {
+			body, err := json.Marshal(map[string]string{"query": document})
+			if err != nil {
+				t.Fatal(err)
+			}
+			req := httptest.NewRequest(http.MethodPost, "/query", bytes.NewReader(body))
+			mutate(req)
+			rec := httptest.NewRecorder()
+			handler(rec, req)
+			if rec.Code != http.StatusUnauthorized || rec.Body.String() != "unauthorized\n" {
+				t.Fatalf("carrier %q, document %q: status=%d body=%q, want 401 bare unauthorized", name, document, rec.Code, rec.Body.String())
+			}
 		}
 	}
 	if len(*seen) != 0 {
-		t.Fatalf("resolver ran %d times for an ambiguous request", len(*seen))
+		t.Fatalf("resolver ran %d times for a refused request", len(*seen))
+	}
+}
+
+// An accepted request for an unregistered document is still the 404 it was.
+func TestQueryStillAnswers404ForAnUnregisteredDocumentOnceAuthenticated(t *testing.T) {
+	verifier, _ := iaVerifier(t)
+	handler, _ := iaDispatch(t, verifier)
+	body, err := json.Marshal(map[string]string{"query": "query { notRegistered { id } }"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/query", bytes.NewReader(body))
+	iaHeaders("org-1", "member", false, false)(req)
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("authenticated unregistered document: status=%d, want 404", rec.Code)
 	}
 }

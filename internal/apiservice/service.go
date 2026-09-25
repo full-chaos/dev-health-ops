@@ -222,7 +222,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 			Logger: logger, Now: deps.Now, Config: deps.GitHubApp, Signer: deps.GitHubStateSigner,
 			HTTPClient: deps.GitHubAppHTTPClient, GitHubURL: deps.GitHubAppURL, GitHubAPIURL: deps.GitHubAppAPIURL})...)
 		routes = append(routes, integrationsadmin.Routes(integrationsadmin.Deps{Pool: deps.Pool, Guard: deps.Guard, Logger: logger, Now: deps.Now,
-			Discovery: integrationDiscovery(deps, logger)})...)
+			Discovery: integrationDiscovery(deps, logger), HandoffWait: deps.IntegrationHandoffWait})...)
 		if deps.ClickHouse != nil {
 			routes = append(routes, teamsidentity.Routes(deps.ClickHouse, deps.Guard, logger, deps.Pool, deps.Decryptor)...)
 		}

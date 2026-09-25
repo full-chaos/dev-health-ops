@@ -110,7 +110,8 @@ type MintInput struct {
 	Mode string
 	// Since and Before bound the window (nil: none).
 	Since, Before *time.Time
-	// SourceIDs and DatasetKeys scope the run (nil: the scheduler's default).
+	// SourceIDs and DatasetKeys scope the run (nil: the scheduler's default;
+	// non-nil and empty: nothing).
 	SourceIDs, DatasetKeys []string
 	// TriggeredBy is "manual" or "backfill" (the table's CHECK constraint).
 	TriggeredBy string
@@ -131,8 +132,10 @@ VALUES ($1, $2, $3, $4::uuid, $5::uuid, $6)`,
 		occurrenceID, occurrenceIdentityVersion, config.OrgID, config.ID, jobID, scheduledFor); err != nil {
 		return Trigger{}, fmt.Errorf("write the scheduled occurrence: %w", err)
 	}
+	// nil is NULL (the scheduler's default selection); an empty, non-nil list
+	// is an explicit empty selection, which plans nothing.
 	var keys any
-	if len(input.DatasetKeys) > 0 {
+	if input.DatasetKeys != nil {
 		keys = input.DatasetKeys
 	}
 	if _, err := tx.Exec(ctx, `

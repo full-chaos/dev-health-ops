@@ -1,6 +1,9 @@
 package externalingest
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // pyConfig reads a config the way Python does: lazily, per field, skipping the
 // values that are not the wanted type. Python's json.loads parses 1e400 as inf
@@ -77,5 +80,58 @@ func TestDecodeMetadataKeepsStringKeysBesideAnOverflowNumber(t *testing.T) {
 	metadata := decodeMetadata([]byte(`{"path_with_namespace":"group/project","weight":1e400}`))
 	if got, _ := metadata["path_with_namespace"].(string); got != "group/project" {
 		t.Fatalf("path_with_namespace = %q, want it kept beside 1e400 (metadata %v)", got, metadata)
+	}
+}
+
+// A stored document nested deeper than encoding/json's limit (10000) is read by
+// Python; pyConfig scans it iteratively and reads the string keys beside it
+// (CHAOS-6748 r3). 1100 levels matched on both APIs before; 10001 did not.
+func TestPyConfigReadsBesideAnUnusedDeepValue(t *testing.T) {
+	deep := strings.Repeat("[", 10001) + "0" + strings.Repeat("]", 10001)
+	config, err := decodePyConfig([]byte(`{"a":"x","unused":` + deep + `,"github_url":"https://ghe.acme.test","s":"]}[\"{"}`))
+	if err != nil {
+		t.Fatalf("deep unused value must not fail the config: %v", err)
+	}
+	if got, ok := config.str("github_url"); !ok || got != "https://ghe.acme.test" {
+		t.Fatalf("github_url = (%q, %t)", got, ok)
+	}
+	if got, ok := config.str("s"); !ok || got != `]}["{` {
+		t.Fatalf("brackets inside a string are not structure: got (%q, %t)", got, ok)
+	}
+	if !config.truthy("unused") {
+		t.Fatalf("a non-empty deep array is truthy")
+	}
+	top, err := decodePyConfig([]byte(deep))
+	if top != nil || err != errCredentialConfigNotObject {
+		t.Fatalf("a deep truthy non-object config is the typed refusal: got (%v, %v)", top, err)
+	}
+	for raw, wantTruthy := range map[string]bool{`[]`: false, `[ ]`: false, `{}`: false, `{ }`: false, `[[]]`: true, `[1]`: true, `{"a":1}`: true} {
+		if got, err := rawTruthy([]byte(raw)); err != nil || got != wantTruthy {
+			t.Errorf("rawTruthy(%s) = (%v, %v), want %v", raw, got, err, wantTruthy)
+		}
+	}
+}
+
+// Python reads a source's metadata (`metadata_ or {}` then .get) only in the
+// gitlab and linear branches: a truthy non-object raises there and nowhere else.
+func TestMatchesInstanceMetadataReadOnlyWhereItIsRead(t *testing.T) {
+	for _, test := range []struct {
+		system, metadata string
+		wantErr          bool
+	}{
+		{"gitlab", `["bad"]`, true}, {"linear", `["bad"]`, true}, {"gitlab", `[]`, false}, {"gitlab", ``, false},
+		{"github", `["bad"]`, false}, {"jira", `["bad"]`, false},
+	} {
+		source := integrationSource{ExternalID: "acme/managed", FullName: "Acme/Managed", MetadataRaw: []byte(test.metadata)}
+		_, err := matchesInstance(test.system, "acme/managed", source, legacyEntityFamily, nil, "")
+		if (err != nil) != test.wantErr {
+			t.Errorf("%s metadata %q: err = %v, want error %v", test.system, test.metadata, err, test.wantErr)
+		}
+	}
+	deep := strings.Repeat("[", 10001) + "0" + strings.Repeat("]", 10001)
+	source := integrationSource{FullName: "x", MetadataRaw: []byte(`{"path_with_namespace":"group/private","unused":` + deep + `}`)}
+	matched, err := matchesInstance("gitlab", "group/private", source, legacyEntityFamily, nil, "")
+	if err != nil || !matched {
+		t.Fatalf("an owned path beside a deep unused value must still match: got (%v, %v)", matched, err)
 	}
 }

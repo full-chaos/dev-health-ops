@@ -19,13 +19,13 @@ func TestMatchesInstance(t *testing.T) {
 		{"github no match", "github", "acme/api",
 			integrationSource{ExternalID: "other/repo"}, legacyEntityFamily, "", false},
 		{"gitlab path_with_namespace", "gitlab", "group/sub/project",
-			integrationSource{Metadata: map[string]any{"path_with_namespace": "group/sub/project"}}, legacyEntityFamily, "", true},
+			integrationSource{MetadataRaw: []byte(`{"path_with_namespace":"group/sub/project"}`)}, legacyEntityFamily, "", true},
 		{"gitlab numeric external_id", "gitlab", "123",
 			integrationSource{ExternalID: "123"}, legacyEntityFamily, "", true},
 		{"linear org-wide placeholder literal", "linear", "any-team-uuid",
 			integrationSource{ExternalID: "linear"}, legacyEntityFamily, "", true},
 		{"linear org-wide placeholder metadata flag", "linear", "any-team-uuid",
-			integrationSource{Metadata: map[string]any{"org_wide_placeholder": true}}, legacyEntityFamily, "", true},
+			integrationSource{MetadataRaw: []byte(`{"org_wide_placeholder":true}`)}, legacyEntityFamily, "", true},
 		{"linear specific team id", "linear", "team-uuid-1",
 			integrationSource{ExternalID: "team-uuid-1"}, legacyEntityFamily, "", true},
 		{"custom system never matches", "custom", "x", integrationSource{ExternalID: "x"}, legacyEntityFamily, "", false},
@@ -45,29 +45,10 @@ func TestMatchesInstance(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := matchesInstance(c.system, c.instance, c.source, c.family, mustPyConfig(t, c.config)); got != c.want {
-				t.Errorf("got %v, want %v", got, c.want)
+			if got, err := matchesInstance(c.system, c.instance, c.source, c.family, mustPyConfig(t, c.config), ""); err != nil || got != c.want {
+				t.Errorf("got %v (err %v), want %v", got, err, c.want)
 			}
 		})
-	}
-}
-
-func TestNormalizedOperationalHost(t *testing.T) {
-	cases := []struct {
-		system, raw, want string
-	}{
-		{"github", "github.com", "github.com"},
-		{"github", "api.github.com", "github.com"},
-		{"github", "https://GitHub.com/", "github.com"},
-		{"gitlab", "gitlab.example.org", "gitlab.example.org"},
-		{"gitlab", "https://gitlab.example.org:443", "gitlab.example.org"},
-		{"gitlab", "gitlab.example.org:8443", "gitlab.example.org:8443"},
-		{"github", "", ""},
-	}
-	for _, c := range cases {
-		if got := normalizedOperationalHost(c.system, c.raw); got != c.want {
-			t.Errorf("normalizedOperationalHost(%q, %q) = %q, want %q", c.system, c.raw, got, c.want)
-		}
 	}
 }
 

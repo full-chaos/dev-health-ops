@@ -99,7 +99,7 @@ func FindMatchingManagedSources(
 		}
 		c.source = integrationSource{
 			ExternalID: deref(externalID), FullName: deref(fullName), Name: deref(name),
-			Metadata: decodeMetadata(metadataJSON), Enabled: c.match.Enabled, Active: c.match.IntegrationActive,
+			MetadataRaw: metadataJSON, Enabled: c.match.Enabled, Active: c.match.IntegrationActive,
 		}
 		c.configRaw = configJSON
 		candidates = append(candidates, c)
@@ -125,67 +125,56 @@ func FindMatchingManagedSources(
 		if err != nil {
 			return nil, err
 		}
-		if !operational {
-			if matchesInstance(system, instance, c.source, entityFamily, integrationConfig) {
-				matches = append(matches, c.match)
-			}
-			continue
-		}
-		managedHost := defaultHost
-		configured, hasConfigured := configuredHost(integrationConfig, system)
-		switch {
-		case hasConfigured:
-			managedHost = configured
-		case c.credentialID != nil:
-			// One resolution per credential per call, as Python's
-			// credential_hosts cache: a credential shared by several sources
-			// is read (and, later, counted when unreadable) once.
-			host, cached := hosts[*c.credentialID]
-			if !cached {
-				base, resolved, err := credentialHost(ctx, q, cipher, orgID, system, *c.credentialID)
-				if err != nil {
-					return nil, err
+		// credentialBaseURL is find_matching_managed_sources' credential_base_url:
+		// set only for an operational github/gitlab row whose integration config
+		// names no host, from its linked credential or (no credential) the
+		// environment.
+		credentialBaseURL := ""
+		if _, named := configuredHost(integrationConfig, system); operational && !named {
+			switch {
+			case c.credentialID != nil:
+				// One resolution per credential per call, as Python's
+				// credential_hosts cache: a credential shared by several sources
+				// is read (and, later, counted when unreadable) once.
+				host, cached := hosts[*c.credentialID]
+				if !cached {
+					base, resolved, err := credentialHost(ctx, q, cipher, orgID, system, *c.credentialID)
+					if err != nil {
+						return nil, err
+					}
+					host = resolvedHost{base: base, resolved: resolved}
+					hosts[*c.credentialID] = host
 				}
-				host = resolvedHost{base: base, resolved: resolved}
-				hosts[*c.credentialID] = host
-			}
-			base, resolved := host.base, host.resolved
-			if !resolved {
-				instanceHost, ok := OperationalProviderInstance(system, instance)
-				if !ok {
-					return nil, ErrInvalidOperationalInstance
-				}
-				defaultNormalized, _ := OperationalProviderInstance(system, defaultHost)
-				if instanceHost != defaultNormalized && c.match.Enabled && c.match.IntegrationActive {
-					return nil, ErrOwnershipResolutionUnavailable
-				}
-			} else {
-				managedHost = base
-			}
-		default:
-			base, set := getenv(environmentBaseURLVariable(system))
-			if set && pythonparity.Strip(base) != "" {
-				if _, ok := OperationalProviderInstance(system, base); !ok {
-					if c.match.Enabled && c.match.IntegrationActive {
+				if host.resolved {
+					credentialBaseURL = host.base
+				} else {
+					instanceHost, ok := OperationalProviderInstance(system, instance)
+					if !ok {
+						return nil, ErrInvalidOperationalInstance
+					}
+					defaultNormalized, _ := OperationalProviderInstance(system, defaultHost)
+					if instanceHost != defaultNormalized && c.match.Enabled && c.match.IntegrationActive {
 						return nil, ErrOwnershipResolutionUnavailable
 					}
-				} else {
-					managedHost = base
+				}
+			default:
+				base, set := getenv(environmentBaseURLVariable(system))
+				if set && pythonparity.Strip(base) != "" {
+					if _, ok := OperationalProviderInstance(system, base); !ok {
+						if c.match.Enabled && c.match.IntegrationActive {
+							return nil, ErrOwnershipResolutionUnavailable
+						}
+					} else {
+						credentialBaseURL = base
+					}
 				}
 			}
 		}
-		if pythonparity.Strip(instance) == "" {
-			continue
+		matched, err := matchesInstance(system, instance, c.source, entityFamily, integrationConfig, credentialBaseURL)
+		if err != nil {
+			return nil, err
 		}
-		left, ok := OperationalProviderInstance(system, instance)
-		if !ok {
-			return nil, ErrInvalidOperationalInstance
-		}
-		right, ok := OperationalProviderInstance(system, managedHost)
-		if !ok {
-			return nil, ErrInvalidOperationalInstance
-		}
-		if left == right {
+		if matched {
 			matches = append(matches, c.match)
 		}
 	}
@@ -264,10 +253,15 @@ func credentialHost(ctx context.Context, q RowsQueryer, cipher credentials.Ciphe
 	if err := rows.Err(); err != nil {
 		return "", false, err
 	}
-	if !found || pythonparity.Fold(provider) != system {
+	if !found {
 		return "", false, nil
 	}
-	var values *pyjson.Object
+	// get_decrypted_credentials_by_id decrypts BEFORE Python compares the
+	// credential's provider, so an unreadable payload is counted (labelled with
+	// the credential's own provider), and a missing key raises, even when the
+	// credential belongs to another provider (CHAOS-6748 r3).
+	var payload any
+	var payloadReadable bool
 	if ciphertext != nil && *ciphertext != "" {
 		decoded, readable, err := credentials.DecryptStoredValue(cipher, *ciphertext)
 		if err != nil {
@@ -278,14 +272,19 @@ func credentialHost(ctx context.Context, q RowsQueryer, cipher credentials.Ciphe
 			// one unreadable stored credential, labelled with its provider.
 			credentials.RecordDecryptFailed(ctx, provider)
 		}
-		if readable {
-			switch typed := decoded.(type) {
-			case nil:
-			case *pyjson.Object:
-				values = typed
-			default:
-				return "", false, nil
-			}
+		payload, payloadReadable = decoded, readable
+	}
+	if pythonparity.Fold(provider) != system {
+		return "", false, nil
+	}
+	var values *pyjson.Object
+	if payloadReadable {
+		switch typed := payload.(type) {
+		case nil:
+		case *pyjson.Object:
+			values = typed
+		default:
+			return "", false, nil
 		}
 	}
 	// `credential.config or {}` then `.get(...)`: a config that is truthy and not

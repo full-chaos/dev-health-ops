@@ -77,6 +77,32 @@ type scenario struct {
 	// host is the host the credential would resolve to ("" = none): the
 	// instance that matches when the credential is read.
 	host string
+	// family is the entity family asked about ("" = operational) and metadata
+	// the managed source's metadata JSON ("" = {}): the gitlab and linear
+	// matchers of the legacy family read it.
+	family, metadata string
+}
+
+func (s scenario) entityFamily() string {
+	if s.family == "" {
+		return "operational"
+	}
+	return s.family
+}
+
+func (s scenario) sourceMetadata() string {
+	if s.metadata == "" {
+		return "{}"
+	}
+	return s.metadata
+}
+
+// recordKind is a record the entity family accepts.
+func (s scenario) recordKind() string {
+	if s.entityFamily() == "legacy" {
+		return "repository.v1"
+	}
+	return "operational_service.v1"
 }
 
 func scenarios() []scenario {
@@ -140,6 +166,30 @@ func scenarios() []scenario {
 		gh("config underflow number, garbled payload", `1e-400`, garbled, ""),
 		gh("config negative zero, garbled payload", `-0.0`, garbled, ""),
 	)
+	// A stored document nested deeper than encoding/json's limit (10000) is
+	// still read by Python; a reader only wants a few string keys of it (r3).
+	deep := strings.Repeat("[", 10001) + "0" + strings.Repeat("]", 10001)
+	list = append(list,
+		scenario{name: "integration config with an unused 10001-deep value", system: "github", credProvider: "", intConfig: `{"github_url":"https://ghe-depth.acme.test","unused":` + deep + `}`,
+			sourceOn: true, intActive: true, host: "ghe-depth.acme.test"},
+		gh("credential config with an unused 10001-deep value", `{"url":"https://ghe-cdepth.acme.test","unused":`+deep+`}`, noPayload, "ghe-cdepth.acme.test"),
+		// The gitlab matcher reads source metadata (legacy family): a hidden owned
+		// path must not disappear behind an unused deep value, and a truthy
+		// non-object metadata raises where Python raises (gitlab and linear read it,
+		// github and jira do not).
+		scenario{name: "gitlab metadata with an unused 10001-deep value", system: "gitlab", family: "legacy", intConfig: "{}", sourceOn: true, intActive: true,
+			metadata: `{"path_with_namespace":"group/private","unused":` + deep + `}`, host: "group/private"},
+		scenario{name: "gitlab metadata array", system: "gitlab", family: "legacy", intConfig: "{}", sourceOn: true, intActive: true, metadata: `["bad"]`, host: "acme/managed"},
+		scenario{name: "gitlab metadata empty array", system: "gitlab", family: "legacy", intConfig: "{}", sourceOn: true, intActive: true, metadata: `[]`, host: "acme/managed"},
+		scenario{name: "linear metadata array", system: "linear", family: "legacy", intConfig: "{}", sourceOn: true, intActive: true, metadata: `["bad"]`, host: "acme/managed"},
+		scenario{name: "linear metadata org wide placeholder", system: "linear", family: "legacy", intConfig: "{}", sourceOn: true, intActive: true, metadata: `{"org_wide_placeholder":true}`},
+		scenario{name: "github metadata array is never read", system: "github", family: "legacy", intConfig: "{}", sourceOn: true, intActive: true, metadata: `["bad"]`, host: "acme/managed"},
+		// Python decrypts the linked credential BEFORE it compares the credential's
+		// provider: an unreadable payload is counted (labelled with the credential's
+		// own provider) even when it belongs to another provider.
+		scenario{name: "another provider's credential, garbled payload", system: "github", credProvider: "gitlab", credConfig: "{}", cred: garbled,
+			intConfig: "{}", sourceOn: true, intActive: true},
+	)
 	// The integration's own config is read first, for every candidate: a truthy
 	// non-object raises whatever the credential holds; a falsy one is `{}`.
 	for _, shape := range []struct{ name, config string }{
@@ -158,6 +208,9 @@ func scenarios() []scenario {
 	inactive := gh("garbled payload, integration inactive", "{}", garbled, "")
 	inactive.intActive = false
 	list = append(list, unreadable, inactive)
+	// The class-wide guard: seeded random JSON shapes at every place the decision
+	// reads (ownership_venue_generated_integration_test.go).
+	list = append(list, generatedScenarios(40)...)
 	return list
 }
 
@@ -211,10 +264,17 @@ func TestOwnershipVenueNoKeyOracle(t *testing.T) {
 		cred: garbled, intConfig: "{}", sourceOn: true, intActive: true}
 	noPayloadGitHub := scenario{name: "no key, no stored payload", system: "github", credProvider: "github",
 		credConfig: `{"url":"https://cfg-nokey.acme.test"}`, cred: noPayload, intConfig: "{}", sourceOn: true, intActive: true, host: "cfg-nokey.acme.test"}
-	runOwnership(t, []scenario{garbledGitHub, noPayloadGitHub}, false)
+	// The key check comes before the provider check in Python too.
+	otherProvider := scenario{name: "no key, another provider's stored payload", system: "github", credProvider: "gitlab", credConfig: "{}",
+		cred: garbled, intConfig: "{}", sourceOn: true, intActive: true}
+	runOwnership(t, []scenario{garbledGitHub, noPayloadGitHub, otherProvider}, false)
 }
 
 func runOwnership(t *testing.T, cases []scenario, withKey bool) {
+	// The peer is the loopback address (Go plane) or the FastAPI TestClient host
+	// (Python plane): trust it as a proxy so
+	// each scenario's X-Forwarded-For is its own rate-limit bucket.
+	t.Setenv("TRUSTED_PROXIES", "127.0.0.1,::1,testclient")
 	ctx := context.Background()
 	root := repoRoot(t)
 	const jwtKey = "venue-oracle-test-secret-key-for-ownership-32-bytes!"
@@ -279,8 +339,8 @@ VALUES ($1, $2, $3, 'cred', true, $4, $5::json, now(), now())`, credentialID, or
 					exec(`INSERT INTO integrations (id, org_id, provider, credential_id, name, config, is_active, created_at, updated_at)
 VALUES ($1, $2, $3, $4, 'managed', $5::json, $6, now(), now())`, integrationID, org.String(), c.system, credential, c.intConfig, c.intActive)
 					exec(`INSERT INTO integration_sources (id, org_id, integration_id, provider, source_type, external_id, name, full_name, metadata, is_enabled, discovered_at, last_seen_at)
-VALUES (gen_random_uuid(), $1, $2, $3, 'repository', 'acme/managed', 'managed', 'Acme/Managed', '{}'::json, $4, now(), now())`,
-						org.String(), integrationID, c.system, c.sourceOn)
+VALUES (gen_random_uuid(), $1, $2, $3, 'repository', 'acme/managed', 'managed', 'Acme/Managed', $5::json, $4, now(), now())`,
+						org.String(), integrationID, c.system, c.sourceOn, c.sourceMetadata())
 				}
 				// The push organization's admin.
 				email := fmt.Sprintf("own-admin-%d@example.com", i)
@@ -293,7 +353,7 @@ VALUES ($1, $2, $3, 'admin', now(), now(), now())`, uuid.New(), id.pushOrg, id.p
 				for j, host := range c.hosts() {
 					sourceID := uuid.New()
 					exec(`INSERT INTO external_ingest_sources (id, org_id, system, instance, entity_family, mode, enabled, created_at, updated_at)
-VALUES ($1, $2, $3, $4, 'operational', 'customer_push', true, now(), now())`, sourceID, id.batchOrg.String(), c.system, host)
+VALUES ($1, $2, $3, $4, $5, 'customer_push', true, now(), now())`, sourceID, id.batchOrg.String(), c.system, host, c.entityFamily())
 					token := fmt.Sprintf("fcpush_own%d_%d_%s", i, j, uuid.NewString()[:8])
 					exec(`INSERT INTO external_ingest_tokens (id, org_id, source_id, name, token_hash, token_prefix, scopes, created_at)
 VALUES ($1, $2, $3, 'venue', $4, 'fcpush_venue', $5::jsonb, now())`, uuid.New(), id.batchOrg.String(), sourceID, tokenHash(token), `["schema:read","ingest:write","ingest:status"]`)
@@ -307,7 +367,7 @@ VALUES ($1, $2, $3, 'venue', $4, 'fcpush_venue', $5::jsonb, now())`, uuid.New(),
 	var requests []venueoracle.Request
 	for i, c := range cases {
 		for _, host := range c.hosts() {
-			body := fmt.Sprintf(`{"system":%q,"instance":%q,"entity_family":"operational"}`, c.system, host)
+			body := fmt.Sprintf(`{"system":%q,"instance":%q,"entity_family":%q}`, c.system, host, c.entityFamily())
 			requests = append(requests, venueoracle.Request{
 				Name: fmt.Sprintf("register %s: %s @ %s", c.name, c.system, host), Method: "POST", Path: "/api/v1/admin/customer-push/sources",
 				Headers: map[string]string{"Authorization": "Bearer " + venue.Tokens[fmt.Sprintf("admin%d", i)], "Content-Type": "application/json"},
@@ -315,13 +375,17 @@ VALUES ($1, $2, $3, 'venue', $4, 'fcpush_venue', $5::jsonb, now())`, uuid.New(),
 			})
 		}
 		for j, source := range batchTokens[i] {
-			body := fmt.Sprintf(`{"schemaVersion":"external-ingest.v1","idempotencyKey":"own-%d-%d","source":{"system":%q,"instance":%q,"entityFamily":"operational"},`+
-				`"records":[{"kind":"operational_service.v1","externalId":"svc-1","payload":{"externalId":"svc-1","sourceSystem":%q,"name":"Service"}}]}`,
-				i, j, c.system, source.host, c.system)
+			body := fmt.Sprintf(`{"schemaVersion":"external-ingest.v1","idempotencyKey":"own-%d-%d","source":{"system":%q,"instance":%q,"entityFamily":%q},`+
+				`"records":[{"kind":%q,"externalId":"svc-1","payload":{"externalId":"svc-1","sourceSystem":%q,"name":"Service"}}]}`,
+				i, j, c.system, source.host, c.entityFamily(), c.recordKind(), c.system)
 			requests = append(requests, venueoracle.Request{
 				Name: fmt.Sprintf("batch %s: %s @ %s", c.name, c.system, source.host), Method: "POST", Path: "/api/v1/external-ingest/batches",
-				Headers: map[string]string{"Authorization": "Bearer " + source.token, "Content-Type": "application/json"},
-				Body:    venueoracle.B64(body),
+				// Every scenario is its own client address: the ingest-auth ceiling
+				// is 100 attempts a minute per address and the suite sends more than
+				// that (the Go plane counts it, the Python venue does not).
+				Headers: map[string]string{"Authorization": "Bearer " + source.token, "Content-Type": "application/json",
+					"X-Forwarded-For": fmt.Sprintf("10.%d.%d.%d", i/65025, (i/255)%255, i%255+1)},
+				Body: venueoracle.B64(body),
 			})
 		}
 	}

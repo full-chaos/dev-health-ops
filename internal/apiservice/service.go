@@ -206,6 +206,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 		Pool: deps.Pool, Guard: deps.Guard, Auth: deps.Auth, Verifier: deps.Verifier, Signer: deps.Signer,
 		// The api's own ClickHouse login: organization activity.
 		ClickHouse: deps.ClickHouse, Limits: limits, Write: WriteError, OAuth: deps.SessionOAuth, Logger: logger,
+		Mail: deps.Invites, RegisterLimit: deps.RegisterLimit,
 	})...)
 	if deps.Guard != nil {
 		routes = append(routes, orgs.Routes(deps.Pool, deps.Guard, logger)...)
@@ -322,6 +323,11 @@ func configureWith(
 	deps.Invites = inviteConfig(cfg, logger, os.LookupEnv)
 	deps.GitHubApp = GitHubAppConfig(os.LookupEnv)
 	deps.GitHubStateSigner = githubapp.Signer{Secret: cfg.APIJWTSecret.Reveal(), Issuer: cfg.APIJWTIssuer, Audience: cfg.APIJWTAudience}
+	deps.RegisterLimit, err = registerLimit(os.LookupEnv)
+	if err != nil {
+		closeComponents(depComponents)
+		return nil, dependencyFailure(ctx, logger, "api_server", "api_register_limit_invalid", err)
+	}
 	if adjust != nil {
 		adjust(&deps)
 	}
@@ -390,8 +396,8 @@ func closeComponents(components []lifecycle.Component) {
 // every handler-chain layer so no response it produces, scope rejection or
 // unhandled error, lacks it),
 // request id, panic recovery, then scope (the
-// org scope and impersonation middlewares, when given), security headers,
-// CORS, then the mux (and, per route, recovery, deadline, body bound). It
+// org scope and impersonation middlewares, when given), the register
+// route's origin check, security headers, CORS, then the mux (and, per route, recovery, deadline, body bound). It
 // matches the Python api's request order (src/dev_health_ops/api/
 // _middleware.py registers in reverse): OrgIdMiddleware and
 // ImpersonationMiddleware run outside SecurityHeadersMiddleware and
@@ -403,7 +409,7 @@ func NewServer(
 	scope ...func(http.Handler) http.Handler,
 ) (*httpapi.Server, error) {
 	middleware := append([]func(http.Handler) http.Handler{buildinfo.Stamp(version.Current("api")), UnhandledErrorShape, CloseHTTP10, DecodedPathRouting}, scope...)
-	middleware = append(middleware, SecurityHeaders, NewCORS(cfg.CORSAllowedOrigins).Wrap)
+	middleware = append(middleware, NewOriginValidation(cfg.CORSAllowedOrigins).Wrap, SecurityHeaders, NewCORS(cfg.CORSAllowedOrigins).Wrap)
 	return httpapi.NewServer(httpapi.ServerOptions{
 		Name:           "api-http",
 		Address:        cfg.APIAddress,

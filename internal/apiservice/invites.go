@@ -7,7 +7,9 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/session"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
+	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/mail"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 )
@@ -54,4 +56,15 @@ func (s unusableSender) Name() string { return "unusable" }
 
 func (s unusableSender) Send(context.Context, mail.Message) error {
 	return errors.Join(errors.New("email provider is unusable"), s.err)
+}
+
+// registerLimit is rate_limit.py's AUTH_REGISTER_LIMIT, read once at
+// startup as Python reads it at import: unset is the route's default
+// (3/hour); a value this api cannot serve the same way stops startup.
+func registerLimit(lookup func(string) (string, bool)) (httpapi.Limit, error) {
+	text, set := lookup("AUTH_REGISTER_LIMIT")
+	if !set {
+		return session.DefaultRegisterLimit, nil
+	}
+	return httpapi.ParseLimit(session.RegisterLimitID, text)
 }

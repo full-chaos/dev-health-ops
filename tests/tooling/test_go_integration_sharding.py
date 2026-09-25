@@ -133,6 +133,9 @@ EXPECTED_PACKAGES = {
     # The generic integration admin routes' venue differential (skips
     # without the live Python env), in its own package for its own budget.
     "internal/api/integrationsadmin/integrationsvenue",
+    # The integration discover route's venue differential (skips without the live
+    # Python env), in its own package for its own budget.
+    "internal/api/integrationsadmin/discoveryvenue",
     "internal/api/syncadmin",
     # The session routes: the Go routes alone replayed against the recorded
     # Python answers, concurrent refreshes of one token, and the failed-

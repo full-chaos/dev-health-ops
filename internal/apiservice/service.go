@@ -66,6 +66,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/shell"
 	"github.com/full-chaos/dev-health-ops/internal/platform/version"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	schedsync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -219,7 +220,8 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 		routes = append(routes, githubapp.Routes(githubapp.Deps{Pool: deps.Pool, Guard: deps.Guard, Valkey: deps.Valkey, Cipher: deps.Decryptor,
 			Logger: logger, Now: deps.Now, Config: deps.GitHubApp, Signer: deps.GitHubStateSigner,
 			HTTPClient: deps.GitHubAppHTTPClient, GitHubURL: deps.GitHubAppURL, GitHubAPIURL: deps.GitHubAppAPIURL})...)
-		routes = append(routes, integrationsadmin.Routes(integrationsadmin.Deps{Pool: deps.Pool, Guard: deps.Guard, Logger: logger, Now: deps.Now})...)
+		routes = append(routes, integrationsadmin.Routes(integrationsadmin.Deps{Pool: deps.Pool, Guard: deps.Guard, Logger: logger, Now: deps.Now,
+			Discovery: integrationDiscovery(deps, logger)})...)
 		if deps.ClickHouse != nil {
 			routes = append(routes, teamsidentity.Routes(deps.ClickHouse, deps.Guard, logger, deps.Pool, deps.Decryptor)...)
 		}
@@ -463,4 +465,23 @@ func forwardedAllowIPs() *string {
 		return nil
 	}
 	return &value
+}
+
+// integrationDiscovery builds the source discovery the integration discover
+// route runs, the one implementation the sync config create path shares, on
+// the api pool. nil without a pool or a decryptor.
+func integrationDiscovery(deps Deps, logger *slog.Logger) schedsync.SourceDiscoveryExecutor {
+	if deps.Pool == nil {
+		return nil
+	}
+	var client providerfoundation.HTTPDoer
+	if deps.SyncJiraHTTP != nil {
+		client = deps.SyncJiraHTTP
+	}
+	discovery, err := schedsync.NewAPISourceDiscovery(deps.Pool, deps.Decryptor, client, logger, deps.Now)
+	if err != nil {
+		logger.Error("integration discover: source discovery is unavailable", "error", err)
+		return nil
+	}
+	return discovery
 }

@@ -87,6 +87,7 @@ internal/api/externalingest	10
 internal/api/externalurl	10
 internal/api/githubapp	130
 internal/api/integrationsadmin/integrationsvenue	1
+internal/api/integrationsadmin/discoveryvenue	1
 internal/api/licensing	6
 internal/api/policy	5
 internal/api/session	50

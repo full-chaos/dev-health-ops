@@ -10,9 +10,9 @@
 //	PATCH /api/v1/admin/integrations/{integration_id}/sources/{source_id}
 //	GET   /api/v1/admin/integrations/{integration_id}/datasets
 //	PATCH /api/v1/admin/integrations/{integration_id}/datasets
+//	POST  /api/v1/admin/integrations/{integration_id}/discover
 //
-// Discovery, sync and backfill triggers are separate routes on the same
-// prefix. Every route is Depends(get_admin_org_id): policy.AdminOrg, and the
+// The sync and backfill triggers are separate routes on the same prefix. Every route is Depends(get_admin_org_id): policy.AdminOrg, and the
 // org is the caller's own org_id claim. The write routes validate a pydantic
 // body first (FastAPI validates the body before any dependency), and run in
 // one transaction that rolls back on any refusal, as get_postgres_session
@@ -38,7 +38,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
-	syncplanner "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
+	schedsync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
 	"github.com/full-chaos/dev-health-ops/internal/synclimits"
 )
 
@@ -49,6 +49,9 @@ type Deps struct {
 	Pool   *pgxpool.Pool
 	Guard  *policy.Guard
 	Logger *slog.Logger
+	// Discovery is the source discovery the discover route runs (nil: the
+	// route answers its 503, as a Python discovery that cannot run does).
+	Discovery schedsync.SourceDiscoveryExecutor
 	// Now is the clock of the row timestamps Python takes from
 	// datetime.now(timezone.utc) (nil: time.Now).
 	Now func() time.Time
@@ -76,6 +79,7 @@ func Routes(deps Deps) []httpapi.Route {
 		{Method: http.MethodPatch, Pattern: prefix + "/{integration_id}/sources/{source_id}", Handler: write(h.updateSource)},
 		{Method: http.MethodGet, Pattern: prefix + "/{integration_id}/datasets", Handler: read(h.listDatasets)},
 		{Method: http.MethodPatch, Pattern: prefix + "/{integration_id}/datasets", Handler: write(h.updateDatasets)},
+		{Method: http.MethodPost, Pattern: prefix + "/{integration_id}/discover", Handler: read(h.discover)},
 	}
 }
 
@@ -690,7 +694,7 @@ func (h handlers) applyDataset(ctx context.Context, tx pgx.Tx, orgID, provider s
 			return nil, err
 		}
 		if existing == nil {
-			if !syncplanner.SupportsDataset(provider, item.key) {
+			if !schedsync.SupportsDataset(provider, item.key) {
 				return nil, refuse(http.StatusNotFound, fmt.Sprintf("Dataset '%s' not found", item.key))
 			}
 			// IntegrationDatasetService.create: a concurrent insert of the

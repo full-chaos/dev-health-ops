@@ -922,6 +922,8 @@ func createKernelIntegrationFixture(
 		"CREATE TABLE public.integration_datasets (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.integration_credentials (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.provider_oauth_credentials (id uuid PRIMARY KEY)",
+		"CREATE TABLE public.github_app_installations (id uuid PRIMARY KEY, installation_id bigint, account_login text, account_type text, org_id text, suspended_at timestamptz, created_at timestamptz, updated_at timestamptz)",
+		"CREATE TABLE public.webhook_sync_requests (delivery_id uuid PRIMARY KEY, org_id text, sync_config_id uuid, mode text, source_ids text[], scheduled_for timestamptz, created_at timestamptz, attempts int, next_attempt_at timestamptz, last_error text, refused_at timestamptz, refused_reason text)",
 		"CREATE TABLE public.sync_runs (id uuid PRIMARY KEY, status text NOT NULL)",
 		"CREATE INDEX ix_sync_runs_status_id ON public.sync_runs (status, id)",
 		// worker_job_routes is coordinator-exclusive under the Option B split

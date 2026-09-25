@@ -75,6 +75,8 @@ func TestRuntimeAuthorizationBindsSeparateLeastPrivilegeRolePools(t *testing.T) 
 		"CREATE TABLE public.integration_datasets (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.integration_credentials (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.provider_oauth_credentials (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.github_app_installations (id bigint PRIMARY KEY, installation_id bigint, account_login text, account_type text, org_id text, suspended_at timestamptz, created_at timestamptz, updated_at timestamptz)",
+		"CREATE TABLE public.webhook_sync_requests (delivery_id bigint PRIMARY KEY, org_id text, sync_config_id uuid, mode text, source_ids text[], scheduled_for timestamptz, created_at timestamptz, attempts int, next_attempt_at timestamptz, last_error text, refused_at timestamptz, refused_reason text)",
 		"CREATE TABLE public.sync_runs (id bigint PRIMARY KEY)",
 		// worker_job_routes is coordinator-exclusive under the Option B split
 		// (role-partition manifest, removed in e23ede618; see git history at
@@ -169,6 +171,8 @@ func TestRuntimeAuthorizationBindsSeparateLeastPrivilegeRolePools(t *testing.T) 
 		"GRANT SELECT ON TABLE public.integrations, public.integration_credentials, public.sync_dispatch_transport_routes, public.feature_flags, public.org_feature_overrides, public.scheduled_report_occurrences, public.organizations, public.users, public.billing_notifications, public.external_ingest_sources, public.org_licenses, public.tier_limits, public.webhook_deliveries TO " + runtimeAuthorizationDomainRole,
 		"GRANT SELECT, UPDATE ON TABLE public.scheduled_jobs TO " + runtimeAuthorizationDomainRole,
 		"GRANT SELECT, UPDATE ON TABLE public.provider_oauth_credentials TO " + runtimeAuthorizationDomainRole,
+		"GRANT SELECT, INSERT, UPDATE ON TABLE public.github_app_installations TO " + runtimeAuthorizationDomainRole,
+		"GRANT SELECT, INSERT ON TABLE public.webhook_sync_requests TO " + runtimeAuthorizationDomainRole,
 		"GRANT SELECT, INSERT, UPDATE ON TABLE public.integration_sources, public.integration_datasets, public.sync_runs, public.sync_run_units TO " + runtimeAuthorizationDomainRole,
 		"GRANT SELECT, UPDATE ON TABLE public.report_runs, public.saved_reports TO " + runtimeAuthorizationDomainRole,
 		// CHAOS-4209: observeTerminalSyncRun terminalizes the backfill and

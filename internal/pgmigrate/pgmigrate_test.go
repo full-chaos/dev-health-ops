@@ -131,8 +131,8 @@ func TestBaselineLoads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !baseline.Cutover || baseline.RiverSchema != "river" || !reflect.DeepEqual(baseline.Heads, []string{"0066", "0141"}) {
-		t.Fatalf("baseline settings cutover=%v schema=%q heads %v; want production's (true, river, [0066 0141])",
+	if !baseline.Cutover || baseline.RiverSchema != "river" || !reflect.DeepEqual(baseline.Heads, []string{"0066", "0142"}) {
+		t.Fatalf("baseline settings cutover=%v schema=%q heads %v; want production's (true, river, [0066 0142])",
 			baseline.Cutover, baseline.RiverSchema, baseline.Heads)
 	}
 	if strings.Contains(baseline.Schema, `\restrict`) || strings.Contains(baseline.Data, `\restrict`) {

@@ -832,6 +832,56 @@ class SyncManualTrigger(Base):
     )
 
 
+class WebhookSyncRequest(Base):
+    """A webhook delivery's request for a scoped sync (CHAOS-6695, alembic 0139).
+
+    Written by the Go webhook worker on the domain role; claimed by the Go
+    scheduler on the coordinator role, which mints the occurrence and deletes
+    the row, or refuses it and records why.
+    """
+
+    __tablename__ = "webhook_sync_requests"
+
+    delivery_id: Mapped[uuid.UUID] = mapped_column(GUID, primary_key=True)
+    org_id: Mapped[str] = mapped_column(Text, nullable=False)
+    sync_config_id: Mapped[uuid.UUID] = mapped_column(
+        GUID,
+        ForeignKey("sync_configurations.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    mode: Mapped[str] = mapped_column(Text, nullable=False)
+    source_ids: Mapped[list[str] | None] = mapped_column(
+        postgresql.ARRAY(Text()).with_variant(JSON(), "sqlite"), nullable=True
+    )
+    scheduled_for: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP"),
+    )
+    attempts: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    next_attempt_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    refused_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    refused_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (
+        Index(
+            "ix_webhook_sync_requests_pending",
+            "created_at",
+            postgresql_where=text("refused_at IS NULL"),
+        ),
+    )
+
+
 class SyncWatermark(Base):
     """Per-source/dataset sync watermarks for incremental sync.
 

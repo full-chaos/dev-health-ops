@@ -411,7 +411,14 @@ var productionSchedulerRuntimeSources = schedulerRuntimeSources{
 				"attempts", executedProofStartupAttempts,
 			)
 		}
-		return schedulersync.NewOccurrenceReconciler(coordinatorPool, materializer)
+		reconciler, err := schedulersync.NewOccurrenceReconciler(coordinatorPool, materializer)
+		if err != nil {
+			return nil, err
+		}
+		// CHAOS-6695: each window first mints the webhook worker's pending
+		// scoped-sync requests on this coordinator pool, so their occurrences
+		// are consumed in the same window.
+		return reconciler.WithWebhookRequests(), nil
 	},
 }
 

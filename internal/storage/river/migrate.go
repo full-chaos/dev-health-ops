@@ -740,6 +740,11 @@ func runtimeGrantStatements(options MigrationOptions) []string {
 		"DO $$ BEGIN IF to_regclass('public.integration_sources') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.integration_sources TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.integration_datasets') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.integration_datasets TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.integration_credentials') IS NOT NULL THEN GRANT SELECT ON TABLE public.integration_credentials TO " + domainRole + "; END IF; END $$",
+		// CHAOS-6695: the webhook worker's installation routing read and
+		// installation upsert, and its scoped-sync request row. Each flag list
+		// is exactly what domainPosture() declares.
+		"DO $$ BEGIN IF to_regclass('public.github_app_installations') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.github_app_installations TO " + domainRole + "; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.webhook_sync_requests') IS NOT NULL THEN GRANT SELECT, INSERT ON TABLE public.webhook_sync_requests TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.provider_oauth_credentials') IS NOT NULL THEN GRANT SELECT, UPDATE ON TABLE public.provider_oauth_credentials TO " + domainRole + "; END IF; END $$",
 		// worker_job_routes, scheduled_sync_occurrences, and
 		// fixed_schedule_occurrences are coordinator-exclusive under the

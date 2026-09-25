@@ -76,7 +76,11 @@ def encrypt(spec):
     set_env(spec.get("env") or {})
     if spec.get("legacy"):
         digest = hashlib.sha256(os.environ["SETTINGS_ENCRYPTION_KEY"].encode()).digest()
-        return Fernet(base64.urlsafe_b64encode(digest)).encrypt(spec["payload"].encode()).decode()
+        return (
+            Fernet(base64.urlsafe_b64encode(digest))
+            .encrypt(spec["payload"].encode())
+            .decode()
+        )
     return encryption.encrypt_value(spec["payload"])
 
 
@@ -86,7 +90,7 @@ async def seed(db_url, request):
     async with factory() as session:
         await session.execute(delete(IntegrationCredential))
         await session.execute(delete(Organization))
-        for org in (request.get("orgs") or []):
+        for org in request.get("orgs") or []:
             session.add(
                 Organization(
                     id=uuid.UUID(org["id"]),
@@ -95,7 +99,7 @@ async def seed(db_url, request):
                     created_at=datetime.fromisoformat(org["created_at"]),
                 )
             )
-        for cred in (request.get("creds") or []):
+        for cred in request.get("creds") or []:
             ciphertext = cred.get("raw")
             if cred.get("payload") is not None:
                 ciphertext = encrypt(cred)

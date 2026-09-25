@@ -53,7 +53,7 @@ envelope (Bearer token) during the migration; both at once is a 401. The
 headers are trusted only on `/query`, `/query/proof` (the same dispatch
 handler, differing only in reachability and the shadow-inclusive switch) and
 `/buildinfo`, which no Ingress reaches, and only while the Ingress strips those four names on every host;
-REST routes never read them (`_records/6144/invariant.md`). GraphQL eligibility is
+REST routes never read them (`_records/6144/invariant.md`). CHAOS-6780: the headers are honoured only for a request that arrived on the INTERNAL listener, `QUERY_API_INTERNAL_ADDR` (a second `http.Server` over the same handlers, on a port no Ingress routes to; unset = no internal listener = honoured nowhere). The public listener (`QUERY_API_ADDR`) deletes the four headers in its outermost middleware before any handler runs, and says so: a log line (path class and header names, never a value; at most one per second) and `devhealth_query_api_internal_headers_dropped_total{path_class}`; `/query` keeps working there through the envelope bearer. A handler reached without either listener middleware refuses the headers (`headers_off_internal_listener`). GraphQL eligibility is
 registered-documents-only (`query_route.go`'s
 `registeredFeatureFlagsDocument` / `registeredReviewEdgesDocument` /
 `registeredCognitiveLoadDocument` / `registeredComplexityTimeseriesDocument` /

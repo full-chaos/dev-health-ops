@@ -1,1 +1,3 @@
-ci/venue_oracle_registry.tsv merge=union
+
+# Use bd merge for beads JSONL files
+.beads/issues.jsonl merge=beads

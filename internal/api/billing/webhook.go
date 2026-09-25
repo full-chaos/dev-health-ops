@@ -121,6 +121,11 @@ func (h handlers) stripeWebhook(w http.ResponseWriter, r *http.Request) {
 			h.internal(w, r, "stripe webhook", err)
 			return
 		}
+	case "charge.refunded", "charge.refund.updated", "refund.created", "refund.updated", "refund.failed":
+		if err := h.refundEvent(ctx, eventType, eventID, dataObject); err != nil {
+			h.internal(w, r, "stripe webhook", err)
+			return
+		}
 	default:
 		h.unhandledEvent(ctx, eventType, eventID)
 	}
@@ -138,16 +143,29 @@ var stripeEventRoutes = map[string]bool{
 	"customer.subscription.updated":        true,
 	"customer.subscription.deleted":        true,
 	"customer.subscription.trial_will_end": true,
+	"charge.refunded":                      true,
+	"charge.refund.updated":                true,
+	"refund.created":                       true,
+	"refund.updated":                       true,
+	"refund.failed":                        true,
+}
+
+// stripeEventExtensions are routed types the Python route does not apply
+// (Go-only widenings, named): Stripe's own refund events, sent for every
+// refund where charge.refund.updated is only for selected payment methods.
+// TestVenueOracleStripeEventDispatch holds this list to the executed Python
+// route: an entry must be a type Python drops.
+var stripeEventExtensions = map[string]string{
+	"refund.created": "the refund itself, as charge.refund.updated",
+	"refund.updated": "the refund itself, as charge.refund.updated",
+	"refund.failed":  "the refund itself, as charge.refund.updated",
 }
 
 // stripeEventGaps are the event types the Python route applies that this
-// port answers 200 without applying (named gaps): the refund events
-// (refund_service.process_webhook), CHAOS-6519. The route does not move to
-// Go while this list is non-empty.
-var stripeEventGaps = map[string]string{
-	"charge.refunded":       "refund_service.process_webhook (CHAOS-6519)",
-	"charge.refund.updated": "refund_service.process_webhook (CHAOS-6519)",
-}
+// port answers 200 without applying (named gaps). It is empty: the refund
+// events (refund_service.process_webhook) were the last. The route does not
+// move to Go while this list is non-empty.
+var stripeEventGaps = map[string]string{}
 
 // stripeEventRoute is the branch an event type takes: "invoice." for every
 // invoice type, the type itself for one dispatched by name, "" for a type

@@ -14,6 +14,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	valkeystore "github.com/full-chaos/dev-health-ops/internal/storage/valkey"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 	"github.com/jackc/pgx/v5/pgxpool"
 	valkeygo "github.com/valkey-io/valkey-go"
 )
@@ -38,21 +39,13 @@ func coverageCacheInvalidationCount(t *testing.T, collector *jobruntime.MetricsC
 
 func seedSuccessfulUnitRun(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
-	if _, err := pool.Exec(ctx, `
-INSERT INTO sync_runs (id,org_id,integration_id,status,total_units,completed_units,failed_units)
-VALUES ($1,$2,$3,'dispatching',1,0,0)`, finalizeTestRun, finalizeTestOrg, finalizeTestIntegration); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := pool.Exec(ctx, `INSERT INTO integration_sources (id) VALUES ($1)`, finalizeTestSource); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := pool.Exec(ctx, `
-INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status,since_at,before_at,cost_class,mode)
-VALUES ($1,$2,$3,'github','commits',$4,'success',$5,$6,'heavy','incremental')`,
-		finalizeTestUnit, finalizeTestOrg, finalizeTestRun, finalizeTestSource,
-		time.Date(2026, 8, 22, 0, 0, 0, 0, time.UTC), time.Date(2026, 8, 23, 0, 0, 0, 0, time.UTC)); err != nil {
-		t.Fatal(err)
-	}
+	insertFinalizeRun(t, ctx, pool, 1, "", "")
+	pgseed.EnsureSyncIntegration(ctx, t, pool, finalizeTestOrg, finalizeTestIntegration, finalizeTestSource)
+	since, before := time.Date(2026, 8, 22, 0, 0, 0, 0, time.UTC), time.Date(2026, 8, 23, 0, 0, 0, 0, time.UTC)
+	pgseed.InsertSyncRunUnit(ctx, t, pool, pgseed.SyncRunUnit{
+		ID: finalizeTestUnit, RunID: finalizeTestRun, OrgID: finalizeTestOrg, IntegrationID: finalizeTestIntegration,
+		SourceID: finalizeTestSource, Status: "success", SinceAt: &since, BeforeAt: &before, CostClass: "heavy",
+	})
 }
 
 func startFinalizePostgres(t *testing.T, ctx context.Context) *pgxpool.Pool {

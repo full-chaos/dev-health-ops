@@ -8,22 +8,13 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func createCooldownTables(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
-	_, err := pool.Exec(ctx, `
-CREATE TABLE public.provider_rate_limit_observations (
- id uuid PRIMARY KEY, org_id text NOT NULL, provider text NOT NULL, host text NULL,
- integration_id uuid NOT NULL, sync_run_id uuid NOT NULL, sync_run_unit_id uuid NOT NULL,
- route_family text NULL, route_family_attribution text NULL, dimension text NULL,
- retry_after_seconds double precision NULL, reset_at timestamptz NULL, reason text NULL,
- request_id text NULL, observed_at timestamptz NOT NULL
-)`)
-	if err != nil {
-		t.Fatal(err)
-	}
+	pgschema.Apply(ctx, t, pool)
 }
 
 const (

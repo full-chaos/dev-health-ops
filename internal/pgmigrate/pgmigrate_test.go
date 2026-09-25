@@ -131,8 +131,8 @@ func TestBaselineLoads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !baseline.Cutover || baseline.RiverSchema != "river" || !reflect.DeepEqual(baseline.Heads, []string{"0066", "0141"}) {
-		t.Fatalf("baseline settings cutover=%v schema=%q heads %v; want production's (true, river, [0066 0141])",
+	if !baseline.Cutover || baseline.RiverSchema != "river" || !reflect.DeepEqual(baseline.Heads, []string{"0066", "0138"}) {
+		t.Fatalf("baseline settings cutover=%v schema=%q heads %v; want production's (true, river, [0066 0138]): the baseline is frozen at 0138",
 			baseline.Cutover, baseline.RiverSchema, baseline.Heads)
 	}
 	if strings.Contains(baseline.Schema, `\restrict`) || strings.Contains(baseline.Data, `\restrict`) {
@@ -142,10 +142,10 @@ func TestBaselineLoads(t *testing.T) {
 
 var alembicRevision = regexp.MustCompile(`^([0-9]{4})_[a-z0-9_]+\.py$`)
 
-// The baseline is the alembic chain's head. An alembic revision added after
-// it must regenerate the baseline in the same change, or the database dho
-// builds would lack it; the integration drift check proves the content, this
-// proves the head without a database.
+// The baseline plus its chain reach the alembic chain's head. An alembic revision
+// added after the baseline needs its sql/ file in the same change, or the database
+// dho builds would lack it; TestChainCoversEveryAlembicRevision proves each file,
+// the integration oracle proves the content, this proves the head without a database.
 func TestBaselineHeadIsTheAlembicHead(t *testing.T) {
 	_, file, _, _ := runtime.Caller(0)
 	directory := filepath.Join(filepath.Dir(file), "..", "..", "src", "dev_health_ops", "alembic", "versions")
@@ -166,8 +166,16 @@ func TestBaselineHeadIsTheAlembicHead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if head := applicationHead(baseline); head != latest {
-		t.Fatalf("the alembic chain ends at %s but the baseline head is %s: regenerate the baseline", latest, head)
+	chain, err := LoadChain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	head := applicationHead(baseline)
+	if len(chain) > 0 {
+		head = chain[len(chain)-1].Revision
+	}
+	if head != latest {
+		t.Fatalf("the alembic chain ends at %s but the baseline and its chain end at %s: add the missing sql/ file", latest, head)
 	}
 }
 

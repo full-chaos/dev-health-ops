@@ -2,12 +2,14 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"strings"
 	"testing"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
 )
@@ -97,21 +99,53 @@ func TestProofRouteRefusesAMutationOnlyAfterAuthentication(t *testing.T) {
 	}
 }
 
-// The real handler pair: newQueryHandler passes servesMutations=true to /query
-// and false to /query/proof. A source pin, because the flag is the only thing
-// standing between the measurement-only route and a real write.
-func TestNewQueryHandlerWiresTheMutationFlagPerRoute(t *testing.T) {
-	src, err := os.ReadFile("query_route.go")
+// The real handler pair newQueryHandler builds, over the real registered
+// documents: an authenticated registered MUTATION document is refused by the
+// measurement-only handler before anything runs (405), and is not refused that
+// way by the serving handler (its routing switch, which cannot reach the
+// registry here, answers 404 instead); a registered QUERY document is not
+// refused by either. The flag is the only thing standing between the
+// measurement-only route and a real write, so it is measured on the handlers
+// that serve, not on a copy of their wiring.
+func TestNewQueryHandlerPairTreatsARegisteredMutationDifferently(t *testing.T) {
+	t.Parallel()
+	verifier, _ := iaVerifier(t)
+	// A lazy pool pointed nowhere: the switch reads its registry through it,
+	// cannot, and so answers "not enabled", which is a 404.
+	pool, err := pgxpool.New(context.Background(), "postgres://nobody:none@127.0.0.1:1/none?connect_timeout=1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	text := string(src)
-	for _, want := range []string{
-		"newDocumentDispatchHandler(getenv, routeMux, operationByDigest, verifier, true)",
-		"newDocumentDispatchHandler(getenv, proofMux, operationByDigest, verifier, false)",
+	t.Cleanup(pool.Close)
+	serve, proof, _ := newQueryHandler(nil, pool, verifier, "schema-digest", os.Getenv)
+
+	for _, tc := range []struct {
+		name         string
+		document     string
+		serveRefuses bool // 405
+		proofRefuses bool
+	}{
+		{"registered query", registeredSavedReportsDocument, false, false},
+		{"registered mutation", registeredCreateSavedReportDocument, false, true},
+		{"registered mutation with no orgId in reach", registeredTriggerReportDocument, false, true},
 	} {
-		if strings.Count(text, want) != 1 {
-			t.Fatalf("query_route.go must contain exactly one %q", want)
+		for route, handler := range map[string]http.HandlerFunc{"serve": serve, "proof": proof} {
+			body, err := json.Marshal(map[string]any{"query": tc.document, "variables": map[string]any{"orgId": "org-1"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			req := httptest.NewRequest(http.MethodPost, "/query", bytes.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			iaHeaders("org-1", "admin", false, false)(req)
+			rec := httptest.NewRecorder()
+			handler(rec, req)
+			want := tc.serveRefuses
+			if route == "proof" {
+				want = tc.proofRefuses
+			}
+			if got := rec.Code == http.StatusMethodNotAllowed; got != want {
+				t.Errorf("%s on the %s handler: status %d, refused-as-405=%v, want %v", tc.name, route, rec.Code, got, want)
+			}
 		}
 	}
 }

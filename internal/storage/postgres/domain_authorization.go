@@ -614,6 +614,15 @@ func domainPosture() RolePosture {
 			{"integration_sources", true, true, false},
 			{"integration_datasets", true, true, false},
 			{"integration_credentials", false, false, false},
+			// CHAOS-6695: the webhook worker routes a GitHub delivery through
+			// its installation's org (SELECT) and upserts the installation on
+			// installation/marketplace events (INSERT ... ON CONFLICT DO
+			// NOTHING, then UPDATE). Not a coordinator table.
+			{"github_app_installations", true, true, false},
+			// CHAOS-6695: the webhook worker records one scoped-sync request
+			// per delivery (INSERT ... ON CONFLICT (delivery_id) DO NOTHING);
+			// the scheduler, on the coordinator role, mints and deletes it.
+			{"webhook_sync_requests", true, false, false},
 			// Provider-sync workers resolve tokenless PagerDuty OAuth descriptors
 			// through this encrypted token row and atomically rotate an expiring
 			// token. They need no INSERT or DELETE authority.
@@ -947,17 +956,23 @@ func coordinatorPosture() RolePosture {
 			{"sync_run_reference_discoveries", true, false, false},
 			{"sync_run_post_dispatches", false, false, false},
 			{"worker_job_routes", false, true, false},
-			{"scheduled_jobs", false, true, false},
+			// scheduled_jobs gains INSERT (CHAOS-6695): the scheduler mints a
+			// webhook delivery's occurrence through synchandoff.Mint, which
+			// creates the config's sync marker job when it has none.
+			{"scheduled_jobs", true, true, false},
 			{"scheduled_sync_occurrences", true, true, false},
-			// sync_manual_triggers (CHAOS-4602): SELECT-only. This table's
-			// only writer is Python's create_sync_execution_trigger, on its
-			// own separate application DB login -- not this Go role system
-			// at all. The coordinator only ever reads it, joined by
-			// occurrence_id, to learn the mode/BackfillSelector override for
-			// a manual/backfill occurrence before materializing it
-			// (loadMaterializationPlan). No Go process ever inserts,
-			// updates, or deletes a row here.
-			{"sync_manual_triggers", false, false, false},
+			// sync_manual_triggers: the materializer reads it, joined by
+			// occurrence_id, for a manual/backfill occurrence's mode and
+			// selector (loadMaterializationPlan). INSERT as of CHAOS-6695: the
+			// scheduler writes a webhook delivery's trigger payload through
+			// synchandoff.Mint. No UPDATE or DELETE.
+			{"sync_manual_triggers", true, false, false},
+			// webhook_sync_requests (CHAOS-6695): the scheduler claims a
+			// webhook worker's request (FOR UPDATE SKIP LOCKED), records a
+			// failed attempt or a refusal (UPDATE), and deletes it in the
+			// transaction that mints its occurrence (DELETE). No INSERT: the
+			// domain-role webhook worker is the only writer of new rows.
+			{"webhook_sync_requests", false, true, true},
 			{"fixed_schedule_occurrences", true, true, false},
 			// The fixed-schedule report producer (internal/scheduler/fixed/reports.go)
 			// runs entirely on the coordinator pool, so every table its SQL touches

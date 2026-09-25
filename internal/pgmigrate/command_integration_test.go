@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -97,11 +98,31 @@ func TestCommandEndToEnd(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got, want := tables(conn), len(baseline.Tables()); got != want {
-			t.Fatalf("upgrade created %d tables, want the baseline's %d", got, want)
+		chain, err := pgmigrate.LoadChain()
+		if err != nil {
+			t.Fatal(err)
+		}
+		// The baseline's tables, plus the ones the chain revisions after it
+		// create (CREATE TABLE at the start of a statement) and minus the ones
+		// they drop: an upgrade on an empty database applies the whole chain.
+		want := len(baseline.Tables())
+		for _, file := range chain {
+			for _, line := range strings.Split(file.SQL, "\n") {
+				switch {
+				case strings.HasPrefix(line, "CREATE TABLE "):
+					want++
+				case strings.HasPrefix(line, "DROP TABLE "):
+					want--
+				}
+			}
+		}
+		if got := tables(conn); got != want {
+			t.Fatalf("upgrade created %d tables, want the baseline's %d plus what the chain creates (%d)", got, len(baseline.Tables()), want)
 		}
 		if code, out, _ := verb("status", uri); code != cli.ExitOK || out["state"] != "at_head" {
 			t.Fatalf("status after upgrade = %d %v", code, out)
+		} else if want := strings.Join(pgmigrate.Heads(baseline, chain), " "); want != anyStrings(out["heads"]) {
+			t.Fatalf("status reports heads %v, want the chain's %s", out["heads"], want)
 		}
 		if code, out, _ := verb("upgrade", uri); code != cli.ExitOK || out["action"] != "up_to_date" {
 			t.Fatalf("second upgrade = %d %v", code, out)
@@ -112,7 +133,7 @@ func TestCommandEndToEnd(t *testing.T) {
 		setup, state, code, detail string
 	}{
 		"the heads recorded over no schema": {
-			"CREATE TABLE alembic_version (version_num varchar(32) PRIMARY KEY); INSERT INTO alembic_version VALUES ('0066'), ('0141')",
+			"CREATE TABLE alembic_version (version_num varchar(32) PRIMARY KEY); INSERT INTO alembic_version VALUES ('0066'), ('0138')",
 			"schema_mismatch", "schema_mismatch", "table(s) the head creates are absent",
 		},
 		"only a function": {
@@ -217,4 +238,13 @@ func TestChainRevision(t *testing.T) {
 	if got := strings.Join(versions(conn), ","); got != "0066,0142" || exists(conn, "chain_broken") {
 		t.Fatalf("after the failed revision alembic_version = %s, chain_broken present %v; want 0066,0142 and absent", got, exists(conn, "chain_broken"))
 	}
+}
+
+func anyStrings(value any) string {
+	items, _ := value.([]any)
+	parts := make([]string, 0, len(items))
+	for _, item := range items {
+		parts = append(parts, fmt.Sprint(item))
+	}
+	return strings.Join(parts, " ")
 }

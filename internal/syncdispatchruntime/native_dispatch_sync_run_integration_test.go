@@ -58,8 +58,8 @@ func TestReferenceDiscoverySucceededIsFalseForAnyNonSuccessStatus(t *testing.T) 
 		t.Run(status, func(t *testing.T) {
 			withDispatchGatePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
 				if _, err := pool.Exec(ctx, `
-INSERT INTO sync_run_reference_discoveries (id,sync_run_id,org_id,status,attempts,available_at)
-VALUES ($1,$2,$3,$4,1,now())`,
+INSERT INTO sync_run_reference_discoveries (id,sync_run_id,org_id,status,attempts,available_at,created_at,updated_at)
+VALUES ($1,$2,$3,$4,1,now(),now(),now())`,
 					"00000000-0000-4000-8000-0000000000d9", discoveryTestRun, discoveryTestOrg, status); err != nil {
 					t.Fatal(err)
 				}
@@ -85,8 +85,8 @@ VALUES ($1,$2,$3,$4,1,now())`,
 func TestReferenceDiscoverySucceededIsTrueForASuccessLedger(t *testing.T) {
 	withDispatchGatePool(t, func(ctx context.Context, pool *pgxpool.Pool) {
 		if _, err := pool.Exec(ctx, `
-INSERT INTO sync_run_reference_discoveries (id,sync_run_id,org_id,status,attempts,available_at)
-VALUES ($1,$2,$3,$4,1,now())`,
+INSERT INTO sync_run_reference_discoveries (id,sync_run_id,org_id,status,attempts,available_at,created_at,updated_at)
+VALUES ($1,$2,$3,$4,1,now(),now(),now())`,
 			"00000000-0000-4000-8000-0000000000da", discoveryTestRun, discoveryTestOrg, discoveryStatusSuccess); err != nil {
 			t.Fatal(err)
 		}
@@ -168,8 +168,8 @@ func TestEnsureReferenceDiscoveryWakeupDoesNotPullAnExistingBackoffEarlier(t *te
 		now := time.Now().UTC().Truncate(time.Microsecond)
 		futureAvailableAt := now.Add(10 * time.Minute)
 		if _, err := pool.Exec(ctx, `
-INSERT INTO sync_run_reference_discoveries (id,sync_run_id,org_id,status,attempts,available_at)
-VALUES ($1,$2,$3,$4,2,$5)`,
+INSERT INTO sync_run_reference_discoveries (id,sync_run_id,org_id,status,attempts,available_at,created_at,updated_at)
+VALUES ($1,$2,$3,$4,2,$5,now(),now())`,
 			"00000000-0000-4000-8000-0000000000db", discoveryTestRun, discoveryTestOrg, discoveryStatusRetrying, futureAvailableAt); err != nil {
 			t.Fatal(err)
 		}

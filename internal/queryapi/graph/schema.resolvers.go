@@ -64,27 +64,27 @@ func (r *dataHealthResolver) MetricLineage(ctx context.Context, obj *model.DataH
 
 // CreateSavedReport is the resolver for the createSavedReport field.
 func (r *mutationResolver) CreateSavedReport(ctx context.Context, orgID string, input model.CreateSavedReportInput) (*model.SavedReportType, error) {
-	panic(fmt.Errorf("not implemented: CreateSavedReport - createSavedReport"))
+	return r.createSavedReport(ctx, orgID, input)
 }
 
 // UpdateSavedReport is the resolver for the updateSavedReport field.
 func (r *mutationResolver) UpdateSavedReport(ctx context.Context, orgID string, reportID string, input model.UpdateSavedReportInput) (*model.SavedReportType, error) {
-	panic(fmt.Errorf("not implemented: UpdateSavedReport - updateSavedReport"))
+	return r.updateSavedReport(ctx, orgID, reportID, input)
 }
 
 // DeleteSavedReport is the resolver for the deleteSavedReport field.
 func (r *mutationResolver) DeleteSavedReport(ctx context.Context, orgID string, reportID string) (bool, error) {
-	panic(fmt.Errorf("not implemented: DeleteSavedReport - deleteSavedReport"))
+	return r.deleteSavedReport(ctx, orgID, reportID)
 }
 
 // CloneSavedReport is the resolver for the cloneSavedReport field.
 func (r *mutationResolver) CloneSavedReport(ctx context.Context, orgID string, input model.CloneSavedReportInput) (*model.SavedReportType, error) {
-	panic(fmt.Errorf("not implemented: CloneSavedReport - cloneSavedReport"))
+	return r.cloneSavedReport(ctx, orgID, input)
 }
 
 // TriggerReport is the resolver for the triggerReport field.
 func (r *mutationResolver) TriggerReport(ctx context.Context, orgID string, reportID string) (*model.ReportRunType, error) {
-	panic(fmt.Errorf("not implemented: TriggerReport - triggerReport"))
+	return r.triggerReport(ctx, orgID, reportID)
 }
 
 // DevScopeSearch is the resolver for the devScopeSearch field.

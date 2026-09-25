@@ -25,7 +25,7 @@ from dev_health_ops.api.external_ingest.errors import (
 from dev_health_ops.api.external_ingest.status import (
     status_router as external_ingest_status_router,
 )
-from dev_health_ops.api.go_served import _raise_served_by_go_api
+from dev_health_ops.api.go_served import raise_served_by_go_api
 from dev_health_ops.api.internal import router as internal_acr_router
 from dev_health_ops.api.middleware.rate_limit import limiter
 from dev_health_ops.api.product_telemetry import router as product_telemetry_router
@@ -296,6 +296,12 @@ async def keep_alive_wrapper(coro):
                 "detail": "An internal streaming error occurred.",
             }
         )
+
+
+# The 32 query-api stubs below keep the private name CHAOS-6241 gave the
+# refusal (ci/check_go_served_paths.py recognises it); it is the one definition
+# in api/go_served.py.
+_raise_served_by_go_api = raise_served_by_go_api
 
 
 # --- CHAOS-6241: the 32 REST routes below are served by query-api. Each

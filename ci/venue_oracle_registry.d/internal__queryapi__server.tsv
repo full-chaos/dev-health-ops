@@ -1,6 +1,7 @@
 internal/queryapi/server	TestQueryParamValidationVenueOracle	run
 internal/queryapi/server	TestSavedReportMutationsCronDialectVenueOracle	run
 internal/queryapi/server	TestSavedReportMutationsVenueOracle	run
+internal/queryapi/server	TestSavedReportWriteProofBaselinesVenueOracle	run
 internal/queryapi/server	TestVenueOracleQueryAPIDictOrder	run
 internal/queryapi/server	TestVenueOracleQueryAPIResponseModels	run
 internal/queryapi/server	TestVenueOracleWorkUnitExplainProviderResolution	run

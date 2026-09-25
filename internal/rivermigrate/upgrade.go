@@ -70,9 +70,13 @@ func migrationDatabaseConfigured(lookup platformsecrets.LookupEnv) (bool, string
 // migrationPostgresCommand is `dho migrate postgres`, resolving the database
 // the way every migrate step does.
 func migrationPostgresCommand() cli.Command {
-	return pgmigrate.Command(func(lookup platformsecrets.LookupEnv, stderr io.Writer) (platformsecrets.Value, string, bool) {
-		return config.ResolveMigrationDatabase(lookup, stderr, true)
-	})
+	return pgmigrate.Command(migrationDatabaseResolver)
+}
+
+// migrationDatabaseResolver finds the elevated migration DSN the way every
+// migrate step does (MIGRATION_DATABASE_URI, then POSTGRES_URI).
+func migrationDatabaseResolver(lookup platformsecrets.LookupEnv, stderr io.Writer) (platformsecrets.Value, string, bool) {
+	return config.ResolveMigrationDatabase(lookup, stderr, true)
 }
 
 // verbRun finds the verb at path under group. A path that names no verb is a

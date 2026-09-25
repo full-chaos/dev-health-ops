@@ -19,6 +19,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/chmigrate"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
+	"github.com/full-chaos/dev-health-ops/internal/pgmigrate"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	platformsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
@@ -37,13 +38,14 @@ const (
 
 // Command is `dho migrate`: the `postgres` and `clickhouse` groups (each
 // schema's head, internal/pgmigrate and internal/chmigrate), the `upgrade`
-// verb that runs the migrate Job's steps in order, and the `river` verb.
+// verb that runs the migrate Job's steps in order, the `river` verb, and the flat
+// aliases of the Alembic verbs the Python CLI registers directly under `migrate`.
 func Command() cli.Command {
 	return cli.Command{
 		Name:    "migrate",
 		Summary: "apply or check database schemas",
 		Kind:    cli.Group,
-		Children: []cli.Command{
+		Children: append([]cli.Command{
 			migrationPostgresCommand(),
 			chmigrate.Command(),
 			{
@@ -60,7 +62,9 @@ func Command() cli.Command {
 					return Execute(ctx, "dho", env.Args, env.Lookup, env.Stdout, env.Stderr)
 				},
 			},
-		},
+			// The Python CLI's flat aliases of the Alembic verbs (dev-hops migrate
+			// current|heads|history|status|downgrade).
+		}, pgmigrate.Aliases(migrationDatabaseResolver)...),
 	}
 }
 

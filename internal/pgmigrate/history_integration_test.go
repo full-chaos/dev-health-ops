@@ -119,17 +119,25 @@ func TestHistoryMatchesTheFrozenAlembicOutput(t *testing.T) {
 
 func pythonMigrate(t *testing.T, env []string, uri string, args ...string) (int, string) {
 	t.Helper()
+	return pythonCLI(t, env, uri, append([]string{"migrate", "postgres"}, args...)...)
+}
+
+// pythonCLI runs `dev-hops ARGS` (the real entry point, in process) and returns its
+// exit code and stdout.
+func pythonCLI(t *testing.T, env []string, uri string, cliArgs ...string) (int, string) {
+	t.Helper()
 	root, err := filepath.Abs(filepath.Join("..", ".."))
 	if err != nil {
 		t.Fatal(err)
 	}
 	python := pyoracle.Resolve(t, root)
 	program := "import sys\nfrom dev_health_ops import cli\nraise SystemExit(cli.main(sys.argv[1:]))\n"
-	command := exec.Command(python, append([]string{"-c", program, "migrate", "postgres"}, args...)...)
+	command := exec.Command(python, append([]string{"-c", program}, cliArgs...)...)
 	command.Env = removeEnv(removeEnv(os.Environ(), "MIGRATION_DATABASE_URI"), "DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER")
 	command.Env = append(command.Env, "PYTHONPATH="+filepath.Join(root, "src"), "OTEL_ENABLED=false")
 	if uri != "" {
-		pyURI := strings.Replace(uri, "postgres://", "postgresql://", 1)
+		// The async engine (migrate status) takes asyncpg's own query names.
+		pyURI := strings.Replace(strings.Replace(uri, "postgres://", "postgresql+asyncpg://", 1), "sslmode=", "ssl=", 1)
 		command.Env = append(command.Env, "POSTGRES_URI="+pyURI, "DATABASE_URI="+pyURI)
 	}
 	command.Env = append(command.Env, env...)

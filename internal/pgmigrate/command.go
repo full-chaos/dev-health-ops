@@ -204,22 +204,33 @@ func revisions(ctx context.Context, verb string, resolve ResolveDSN, env cli.Env
 		}
 		return cli.ExitOK
 	}
-	dsn, _, ok := resolve(env.Lookup, env.Stderr)
+	recorded, code, ok := recordedRevisions(ctx, resolve, env)
 	if !ok {
-		return cli.ExitFailure
-	}
-	boundary := secrets.NewBoundary(dsn.Reveal())
-	conn, err := pgx.Connect(ctx, dsn.Reveal())
-	if err != nil {
-		return writeError(env.Stderr, "postgres_unavailable", boundary.Redact(err).Error())
-	}
-	defer conn.Close(context.Background())
-	recorded, err := Recorded(ctx, conn)
-	if err != nil {
-		return writeError(env.Stderr, "current_failed", boundary.Redact(err).Error())
+		return code
 	}
 	if err := WriteCurrent(env.Stdout, recorded, baseline, chain); err != nil {
 		return cli.ExitFailure
 	}
 	return cli.ExitOK
+}
+
+// recordedRevisions connects to the elevated migration database and reads the
+// revisions alembic_version records (sorted). ok false means the error is printed
+// and code is the exit code. `current` and the flat `status` alias both read this way.
+func recordedRevisions(ctx context.Context, resolve ResolveDSN, env cli.Env) (recorded []string, code int, ok bool) {
+	dsn, _, resolved := resolve(env.Lookup, env.Stderr)
+	if !resolved {
+		return nil, cli.ExitFailure, false
+	}
+	boundary := secrets.NewBoundary(dsn.Reveal())
+	conn, err := pgx.Connect(ctx, dsn.Reveal())
+	if err != nil {
+		return nil, writeError(env.Stderr, "postgres_unavailable", boundary.Redact(err).Error()), false
+	}
+	defer conn.Close(context.Background())
+	recorded, err = Recorded(ctx, conn)
+	if err != nil {
+		return nil, writeError(env.Stderr, "current_failed", boundary.Redact(err).Error()), false
+	}
+	return recorded, cli.ExitOK, true
 }

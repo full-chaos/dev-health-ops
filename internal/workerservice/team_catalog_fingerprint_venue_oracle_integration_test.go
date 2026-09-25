@@ -240,7 +240,7 @@ func seedTeamCatalogFingerprintCases(
 		{"linear", `{"api_key": "lin_api_y"}`, `{"team_id": "t-1", "base_url": "https://api.linear.app/"}`, ""},
 		{"github", `{"token": "ghp_abc"}`, `{}`, ""},
 		{"github", `{"token": "ghp_abc", "base_url": " https://ghe.example.com/api/v3/ "}`, `{}`, ""},
-		{"github", `{"app_id": 12, "installation_id": 34, "private_key": "-----BEGIN KEY-----"}`, `{}`, "numeric GitHub App identifiers"},
+		{"github", `{"app_id": 12, "installation_id": 34, "private_key": "-----BEGIN KEY-----"}`, `{}`, ""},
 		{"github", `{"app_id": "12", "installation_id": "34", "private_key": "pem", "token": ""}`, `{"base_url": "https://ghe/"}`, ""},
 		{"gitlab", `{"token": "glpat-x"}`, `{"url": "https://gitlab.example.com", "group_id": 9}`, ""},
 		{"gitlab", `{"private_token": "p", "project_id": 7}`, `{"base_url": "https://gl.example/"}`, "a GitLab private_token without token"},

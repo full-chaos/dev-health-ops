@@ -1,0 +1,11 @@
+[
+ {"provider": "jira", "method": "GET", "path": "/rest/api/3/project/search", "status": 200,
+  "body": {"values": [{"id": "10001", "key": "ZZ", "name": "ZZ Venue", "projectTypeKey": "software"},
+                       {"id": "10002", "key": "OT", "name": "Other Team", "projectTypeKey": "business"}],
+           "isLast": true, "total": 2}},
+ {"provider": "jira", "method": "GET", "path": "/rest/api/3/project", "status": 200,
+  "body": [{"id": "10001", "key": "ZZ", "name": "ZZ Venue", "projectTypeKey": "software"},
+           {"id": "10002", "key": "OT", "name": "Other Team", "projectTypeKey": "business"}]},
+ {"provider": "jira", "method": "GET", "path": "/rest/api/3/myself", "status": 200,
+  "body": {"emailAddress": "stub@venue.invalid", "displayName": "Stub Jira"}}
+]

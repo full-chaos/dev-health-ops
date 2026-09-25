@@ -1,11 +1,5 @@
 # Hand-written test DDL that differs from the migrated Postgres schema (CHAOS-6769).
 # file<TAB>table<TAB>kind<TAB>invented columns. A ratchet: it only shrinks. See the test's doc comment.
-internal/api/audit/audit_integration_test.go	organizations	SUBSET	
-internal/api/audit/audit_integration_test.go	users	SUBSET	
-internal/api/licensing/store_integration_test.go	feature_flags	SUBSET	
-internal/api/licensing/store_integration_test.go	org_feature_overrides	SUBSET	
-internal/api/licensing/store_integration_test.go	org_licenses	SUBSET	
-internal/api/licensing/store_integration_test.go	organizations	SUBSET	
 internal/api/policy/store_integration_test.go	audit_logs	SUBSET	
 internal/api/policy/store_integration_test.go	feature_flags	SUBSET	
 internal/api/policy/store_integration_test.go	impersonation_sessions	SUBSET	
@@ -17,17 +11,6 @@ internal/api/policy/store_integration_test.go	settings	SUBSET
 internal/api/policy/store_integration_test.go	sync_configurations	SUBSET	
 internal/api/policy/store_integration_test.go	users	SUBSET	
 internal/api/policy/store_integration_test.go	worker_instances	PROBE	id
-internal/api/syncadmin/config_delete_integration_test.go	sync_configurations	SUBSET	
-internal/api/webhookintake/webhookintake_integration_test.go	feature_flags	SUBSET	
-internal/api/webhookintake/webhookintake_integration_test.go	org_feature_overrides	SUBSET	
-internal/api/webhookintake/webhookintake_integration_test.go	org_licenses	SUBSET	
-internal/api/webhookintake/webhookintake_integration_test.go	organizations	SUBSET	
-internal/api/webhookintake/webhookintake_integration_test.go	pagerduty_webhook_bindings	SUBSET	
-internal/api/webhookintake/webhookintake_integration_test.go	worker_job_outbox	SUBSET	
-internal/apiservice/acr/store_integration_test.go	feature_flags	SUBSET	
-internal/apiservice/acr/store_integration_test.go	org_feature_overrides	SUBSET	
-internal/apiservice/acr/store_integration_test.go	org_licenses	SUBSET	
-internal/apiservice/acr/store_integration_test.go	organizations	SUBSET	
 internal/joboperator/postgres_integration_test.go	audit_logs	SUBSET	
 internal/joboperator/postgres_integration_test.go	backfill_jobs	SUBSET	
 internal/joboperator/postgres_integration_test.go	billing_notifications	SUBSET	
@@ -126,22 +109,11 @@ internal/jobs/system/retention_postgres_integration_test.go	provider_rate_limit_
 internal/jobs/system/retention_postgres_integration_test.go	worker_job_outbox	SUBSET	
 internal/jobs/workgraph/coalesce_integration_test.go	worker_job_outbox	SUBSET	
 internal/jobs/workgraph/postgres_integration_test.go	worker_job_outbox	SUBSET	
-internal/llmorgsettings/settings_integration_test.go	feature_flags	SUBSET	
-internal/llmorgsettings/settings_integration_test.go	org_feature_overrides	SUBSET	
-internal/llmorgsettings/settings_integration_test.go	org_licenses	SUBSET	
-internal/llmorgsettings/settings_integration_test.go	organizations	SUBSET	
-internal/llmorgsettings/settings_integration_test.go	settings	SUBSET	
 internal/providerfoundation/pagerduty_oauth_postgres_integration_test.go	provider_oauth_credentials	SUBSET	
 internal/providersync/incident_entitlement_integration_test.go	feature_flags	SUBSET	
 internal/providersync/incident_entitlement_integration_test.go	org_feature_overrides	SUBSET	
 internal/providersync/incident_entitlement_integration_test.go	org_licenses	SUBSET	
 internal/providersync/incident_entitlement_integration_test.go	organizations	SUBSET	
-internal/queryapi/routeswitch/postgres_switch_integration_test.go	go_api_routing_state	SUBSET	
-internal/queryapi/server/datahealth_seeded_integration_test.go	job_runs	SUBSET	
-internal/queryapi/server/datahealth_seeded_integration_test.go	scheduled_jobs	SUBSET	
-internal/queryapi/server/datahealth_seeded_integration_test.go	sync_configurations	SUBSET	
-internal/queryapi/server/query_route_integration_test.go	go_api_routing_state	SUBSET	
-internal/queryapi/server/reports_route_integration_test.go	report_runs	SUBSET	
 internal/reconcilerservice/sync_dispatch_reference_integration_test.go	sync_dispatch_outbox	SUBSET	
 internal/reconcilerservice/sync_dispatch_reference_integration_test.go	sync_runs	SUBSET	
 internal/scheduler/fixed/ask_dev_admission_integration_test.go	dev_conversations	SUBSET	

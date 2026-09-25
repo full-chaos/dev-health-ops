@@ -1,0 +1,96 @@
+{
+  "header": {
+    "test": "TestPagerDutyDisconnectWithoutClientIDVenueOracle",
+    "python_build": "9642a8da15bb47d7400cef13cc93547b46e5f67a",
+    "recipe": "git worktree add --detach $DIR 9642a8da15bb47d7400cef13cc93547b46e5f67a; then from the repository root: DHO_VENUE_GOLDEN_UPDATE=1 DHO_VENUE_GOLDEN_PYTHON_ROOT=$DIR DEV_HEALTH_LIVE_PYTHON_ORACLES=1 go test -tags=integration -count=1 -run '^TestPagerDutyDisconnectWithoutClientIDVenueOracle$' ./internal/apiservice/admin/ (it fails once by design and prints the digest to pin)"
+  },
+  "requests": [
+    {
+      "name": "W disconnect with a stored token and no client id (pending retry)",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/disconnect",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "status": 503,
+      "headers": {
+        "content-length": "57",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "ae9611d2-ccc7-4a98-bf1f-d196f891ea66"
+      },
+      "body": "{\"detail\":\"PagerDuty remote revocation is pending retry\"}"
+    },
+    {
+      "name": "W disconnect again once nothing is stored",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/disconnect",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "status": 200,
+      "headers": {
+        "content-length": "49",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "ce2a2ac6-945e-4c87-aeab-dd20ceb416aa"
+      },
+      "body": "{\"disconnected\":true,\"credential_name\":\"default\"}"
+    },
+    {
+      "name": "W disconnect with an undecryptable token and no client id",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/disconnect",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "status": 200,
+      "headers": {
+        "content-length": "49",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "1e16c7d8-0507-41d3-b927-6203561b4d23"
+      },
+      "body": "{\"disconnected\":true,\"credential_name\":\"default\"}"
+    },
+    {
+      "name": "W disconnect with no credential and no client id",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/disconnect",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "status": 200,
+      "headers": {
+        "content-length": "49",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "76e98dd1-dc58-4b05-89b3-525bc80e7387"
+      },
+      "body": "{\"disconnected\":true,\"credential_name\":\"default\"}"
+    }
+  ],
+  "rows": {
+    "python revocations of the connected org": {
+      "rows": "0"
+    },
+    "rows: integration_credentials": {
+      "rows": "9e80272e-8785-5f67-9ea6-9d6436fd9ca4pagerdutydefaulttruetrue | d63f4834-fc80-5f13-a6ee-c98e41880b04pagerdutydefaultfalsetrue | fb550dbe-4e77-5dbe-a582-b76ebeb3cb8fpagerdutydefaultfalsetrue"
+    },
+    "rows: provider_oauth_credential": {
+      "rows": "9e80272e-8785-5f67-9ea6-9d6436fd9ca4pagerdutydefault"
+    }
+  }
+}

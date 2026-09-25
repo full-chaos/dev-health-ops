@@ -45,8 +45,14 @@ VALUES ($1, $2, true, true, false, 0, $3, $3)`, user.id, user.email, at)
 VALUES ($1, 'disc-noorg@example.com', true, true, false, 0, $2, $2)`, v.adminNoOrg, at)
 
 	var calls []venueoracle.PythonCall
-	for _, token := range []string{"good-token", "bad-token"} {
-		encoded, _ := json.Marshal(map[string]any{"email": "venue@example.com", "api_token": token, "base_url": jiraURL})
+	for _, mapping := range []map[string]any{
+		{"email": "venue@example.com", "api_token": "good-token", "base_url": jiraURL},
+		{"email": "venue@example.com", "api_token": "bad-token", "base_url": jiraURL},
+		// Mappings jira_credentials_from_mapping refuses: no base URL, no email.
+		{"email": "venue@example.com", "api_token": "good-token"},
+		{"api_token": "good-token", "base_url": jiraURL},
+	} {
+		encoded, _ := json.Marshal(mapping)
 		calls = append(calls, venueoracle.PythonCall{Target: "dev_health_ops.core.encryption:encrypt_value", Args: []any{string(encoded)}})
 	}
 	var ciphertexts []string
@@ -65,6 +71,8 @@ VALUES ($1, $2, 'jira', $3, true, $4, '{}'::json, $5, $5)`, id, org.String(), na
 	credential(v.credBad, v.orgA, "jira bad", ciphertexts[1])
 	credential(v.credGoodB, v.orgB, "jira good b", ciphertexts[0])
 	credential(v.credGoodC, v.orgC, "jira good c", ciphertexts[0])
+	credential(v.credNoURL, v.orgA, "jira no base url", ciphertexts[2])
+	credential(v.credNoEmail, v.orgA, "jira no email", ciphertexts[3])
 
 	integration := func(id, org uuid.UUID, provider string, credential any, name, config string) {
 		exec(`INSERT INTO integrations (id, org_id, provider, credential_id, name, config, is_active, created_at, updated_at)
@@ -94,6 +102,10 @@ VALUES ($1, $2, $3, $4, 'project', $5, $6, $5, $7::json, $8, $9::timestamptz, $9
 	source(v.srcDupLower, v.orgA, v.intConfigScoped, "jira", "aerogear", "lower", `{}`, true, "2026-02-03 00:00:00+00")
 	source(v.srcDupUpper, v.orgA, v.intConfigScoped, "JIRA", "AEROGEAR", "upper", `{"x": 1}`, false, "2026-02-04 00:00:00+00")
 	integration(v.intBad, v.orgA, "jira", v.credBad, "disc-jira-bad", `{}`)
+	// Stored credentials the resolver refuses: an empty listing, not an error.
+	integration(v.intNoURL, v.orgA, "jira", v.credNoURL, "disc-jira-no-url", `{}`)
+	planner(v.cfgNoURL, v.orgA, v.intNoURL, `{}`)
+	integration(v.intNoEmail, v.orgA, "jira", v.credNoEmail, "disc-jira-no-email", `{}`)
 	integration(v.intNoCred, v.orgA, "jira", nil, "disc-jira-nocred", `{}`)
 	integration(v.intLinear, v.orgA, "linear", nil, "disc-linear", `{}`)
 	integration(v.intEmpty, v.orgA, "jira", v.credGood, "disc-jira-empty", `{"project_key": "NOSUCHPROJECT"}`)
@@ -132,6 +144,8 @@ func discoverRequests(venue *venueoracle.Venue, v ids) []venueoracle.Request {
 	post("linear has no discovery", v.intLinear.String(), "adminA")
 	post("no credential", v.intNoCred.String(), "adminA")
 	post("provider refuses the credential", v.intBad.String(), "adminA")
+	post("stored credential without a base url, planner-managed", v.intNoURL.String(), "adminA")
+	post("stored credential without an email, no planner parent", v.intNoEmail.String(), "adminA")
 	post("unbounded planner-managed: first discovery", v.intJira.String(), "adminA")
 	post("unbounded planner-managed: rediscovery", v.intJira.String(), "adminA")
 	post("path spelling is echoed (upper-case uuid)", strings.ToUpper(v.intJira.String()), "adminA")

@@ -73,3 +73,11 @@ func mappingComplete(fields []MappingField) bool {
 	}
 	return true
 }
+
+// JiraMappingIncomplete reports whether jira_credentials_from_mapping would
+// refuse the credential: its API token, email or base URL is absent. Python's
+// discovery reads that refusal as "no usable credential" (an empty listing),
+// where any other client failure is an error.
+func JiraMappingIncomplete(credential Credential) bool {
+	return !mappingComplete(jiraMappingFields(credential))
+}

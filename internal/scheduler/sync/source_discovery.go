@@ -376,8 +376,15 @@ func (service *NativeSourceDiscoveryService) Discover(ctx context.Context, args 
 		service.telemetry.observe(provider, SourceDiscoveryOutcomeSkipped)
 		if provider == "jira" {
 			// Python reads the JIRA_* environment for such an integration and,
-			// with none set, discovers nothing and counts a zero discovery
-			// (sync/discovery.py); this service discovers nothing here too.
+			// with none set, its mapping is refused (an absent token, the
+			// first required field) and it discovers nothing, counting a zero
+			// discovery (sync/discovery.py, discovery/repos.py). This service
+			// has no environment credential path (a named limit: with JIRA_*
+			// set Python discovers projects) and discovers nothing here too.
+			providerfoundation.RecordCredentialMappingRejected(ctx, "jira",
+				providerfoundation.MappingField{Name: "api_token"},
+				providerfoundation.MappingField{Name: "email"},
+				providerfoundation.MappingField{Name: "base_url"})
 			recordJiraProjectDiscovery(ctx, 0, 0, 0, 0, 0, args.PlannerManaged)
 		}
 		return SourceDiscoveryReport{Outcome: SourceDiscoveryOutcomeSkipped}, nil
@@ -857,6 +864,13 @@ func (service *NativeSourceDiscoveryService) discoverGitLab(ctx context.Context,
 func (service *NativeSourceDiscoveryService) discoverJira(ctx context.Context, credential providerfoundation.Credential, syncOptions map[string]any) ([]discoveredSource, error) {
 	client, err := providerfoundation.NewJiraClient(credential, service.doer, service.retry, sourceDiscoveryLease{})
 	if err != nil {
+		// discovery/repos.py: a mapping jira_credentials_from_mapping refuses (an
+		// absent token, email or base URL) is "no usable credential", and the
+		// answer is an empty listing, never an exception (CHAOS-4584); the
+		// constructor has already counted the rejection.
+		if providerfoundation.JiraMappingIncomplete(credential) {
+			return nil, nil
+		}
 		return nil, err
 	}
 	page, err := providerfoundation.CollectJiraTokenOffsetPages(ctx, client, providerfoundation.JiraPageOptions{

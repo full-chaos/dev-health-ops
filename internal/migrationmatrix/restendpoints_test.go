@@ -136,8 +136,45 @@ func TestLoadQueryAPIMuxRoutesResolvesTheBuilderFunctionDefinition(t *testing.T)
 	if len(routes) != 1 || routes[0].Path != "/api/v1/quadrant" {
 		t.Fatalf("got %+v, want exactly one /api/v1/quadrant route", routes)
 	}
-	if !strings.HasSuffix(routes[0].HandlerLoc, "quadrant_route.go:5") {
-		t.Fatalf("HandlerLoc = %q, want it to resolve to buildQuadrantRoute's definition (quadrant_route.go:5)", routes[0].HandlerLoc)
+	if want := "internal/queryapi/server/quadrant_route.go#buildQuadrantRoute"; routes[0].HandlerLoc != want {
+		t.Fatalf("HandlerLoc = %q, want %q (the builder's symbol, never a line)", routes[0].HandlerLoc, want)
+	}
+}
+
+// The citation must not depend on where in the file the builder sits: an
+// unrelated edit above it shifts every later line and, when the citation was a
+// line number, failed the doc-drift check on PRs that did not touch a route
+// (CHAOS-6633). Renaming the builder is a real mapping change and must still
+// change the citation, so the drift check keeps failing for it.
+func TestLoadQueryAPIMuxRoutesCitationIgnoresLineShiftsButNotRenames(t *testing.T) {
+	cite := func(t *testing.T, routeFile string) string {
+		t.Helper()
+		dir := t.TempDir()
+		writeTempFile(t, dir, "main.go", fixtureQueryAPIMain)
+		writeTempFile(t, dir, "quadrant_route.go", routeFile)
+		routes, err := LoadQueryAPIMuxRoutes(dir)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(routes) != 1 {
+			t.Fatalf("got %+v, want exactly one route", routes)
+		}
+		return routes[0].HandlerLoc
+	}
+	base := cite(t, fixtureQuadrantRoute)
+	shifted := cite(t, strings.Replace(fixtureQuadrantRoute, "import \"net/http\"\n",
+		"import \"net/http\"\n\n// an unrelated edit above the builder\n// adds these lines\nvar unrelated = 1\n", 1))
+	if shifted != base {
+		t.Fatalf("shifting the builder down changed the citation: %q -> %q", base, shifted)
+	}
+	if strings.ContainsAny(base[strings.LastIndex(base, "#"):], "0123456789") {
+		t.Fatalf("citation %q carries a digit after '#': a line number crept back in", base)
+	}
+	// A rename is a mapping change: main.go now names a builder no file
+	// defines, so the citation falls back to the mount, and differs from base.
+	renamed := cite(t, strings.ReplaceAll(fixtureQuadrantRoute, "buildQuadrantRoute", "buildQuadrantRoute2"))
+	if renamed == base {
+		t.Fatalf("renaming the builder left the citation unchanged (%q): a stale mapping would pass the drift check", base)
 	}
 }
 
@@ -162,8 +199,8 @@ func inlineHandler() http.HandlerFunc { return nil }
 	if len(routes) != 1 {
 		t.Fatalf("got %+v, want exactly one route", routes)
 	}
-	if !strings.Contains(routes[0].HandlerLoc, "main.go:") {
-		t.Fatalf("HandlerLoc = %q, want a main.go fallback location", routes[0].HandlerLoc)
+	if want := `internal/queryapi/server/main.go#HandleFunc(/api/v1/quadrant)`; routes[0].HandlerLoc != want {
+		t.Fatalf("HandlerLoc = %q, want the mux registration named by its route, %q", routes[0].HandlerLoc, want)
 	}
 }
 
@@ -249,8 +286,8 @@ func buildPeopleSummaryRoute(getenv func(string) string) (handler http.HandlerFu
 	if row.Status != RESTPorted {
 		t.Fatalf("row.Status = %q, want %q -- a {person_id}-shaped path must match its identically-spelled Go mux registration", row.Status, RESTPorted)
 	}
-	if !strings.Contains(row.GoHandler, "people_summary_route.go:5") {
-		t.Fatalf("row.GoHandler = %q, want it to resolve to buildPeopleSummaryRoute's definition (people_summary_route.go:5)", row.GoHandler)
+	if want := "internal/queryapi/server/people_summary_route.go#buildPeopleSummaryRoute"; row.GoHandler != want {
+		t.Fatalf("row.GoHandler = %q, want %q", row.GoHandler, want)
 	}
 }
 

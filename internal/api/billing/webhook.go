@@ -107,14 +107,14 @@ func (h handlers) stripeWebhook(w http.ResponseWriter, r *http.Request) {
 		// The org's tier before the plan sync changes it.
 		priorTier := h.orgTier(ctx, h.handlerOrgID(ctx, dataObject))
 		if replayed := h.processSubscriptionEvent(ctx, event, eventType, dataObject); !replayed {
-			if err := h.subscriptionUpdated(ctx, dataObject, priorTier); err != nil {
+			if err := h.subscriptionUpdated(ctx, eventID, dataObject, priorTier); err != nil {
 				h.internal(w, r, "stripe webhook", err)
 				return
 			}
 		}
 	case "customer.subscription.deleted":
 		if replayed := h.processSubscriptionEvent(ctx, event, eventType, dataObject); !replayed {
-			h.subscriptionDeleted(ctx, dataObject)
+			h.subscriptionDeleted(ctx, eventID, dataObject)
 		}
 	case "customer.subscription.trial_will_end":
 		if err := h.trialWillEnd(ctx, eventID, dataObject); err != nil {
@@ -301,7 +301,11 @@ func (h handlers) lineItemsTier(ctx context.Context, priceIDs []pyjson.Value) (s
 			return "", errUnhashablePrice
 		}
 	}
-	h.logger.WarnContext(ctx, "No recognized price ID in line items, defaulting to TEAM")
+	received := make([]string, 0, len(priceIDs))
+	for _, id := range priceIDs {
+		received = append(received, pyStr(id))
+	}
+	h.logger.WarnContext(ctx, "No recognized price ID in line items, defaulting to TEAM", "price_ids", received)
 	return "team", nil
 }
 

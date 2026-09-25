@@ -89,7 +89,7 @@ func (h handlers) orgTier(ctx context.Context, orgID pyjson.Value) *string {
 // (read in the route before processSubscriptionEvent): read after it, it is already the new tier and no
 // upgrade or downgrade would ever be announced (the Python order's gap,
 // CHAOS-6525).
-func (h handlers) subscriptionUpdated(ctx context.Context, subscription pyjson.Value, oldTier *string) error {
+func (h handlers) subscriptionUpdated(ctx context.Context, eventID pyjson.Value, subscription pyjson.Value, oldTier *string) error {
 	customer := attr(subscription, "customer", nil)
 	itemsData := attr(subscription, "items", nil)
 	if !pyjson.Truthy(itemsData) {
@@ -111,7 +111,8 @@ func (h handlers) subscriptionUpdated(ctx context.Context, subscription pyjson.V
 	}
 	orgID := h.handlerOrgID(ctx, subscription)
 	if !pyjson.Truthy(orgID) {
-		h.logger.InfoContext(ctx, "subscription.updated without org_id metadata", "customer", pyStr(customer))
+		h.logger.InfoContext(ctx, "subscription.updated without org_id metadata",
+			subscriptionLogFields(eventID, "customer.subscription.updated", subscription)...)
 		return nil
 	}
 	orgText, isText := orgID.(string)
@@ -142,11 +143,12 @@ func (h handlers) subscriptionUpdated(ctx context.Context, subscription pyjson.V
 // subscriptionDeleted is _handle_subscription_deleted: for an org in the
 // metadata, its current tier read, its license revoked, and
 // subscription_cancelled queued with that tier.
-func (h handlers) subscriptionDeleted(ctx context.Context, subscription pyjson.Value) {
+func (h handlers) subscriptionDeleted(ctx context.Context, eventID pyjson.Value, subscription pyjson.Value) {
 	orgID := h.handlerOrgID(ctx, subscription)
 	customer := attr(subscription, "customer", nil)
 	if !pyjson.Truthy(orgID) {
-		h.logger.InfoContext(ctx, "subscription.deleted without org_id metadata", "customer", pyStr(customer))
+		h.logger.InfoContext(ctx, "subscription.deleted without org_id metadata",
+			subscriptionLogFields(eventID, "customer.subscription.deleted", subscription)...)
 		return
 	}
 	h.logger.InfoContext(ctx, "Subscription deleted; org reverts to COMMUNITY", "org_id", pyStr(orgID), "customer", pyStr(customer))
@@ -219,7 +221,8 @@ func (h handlers) trialWillEnd(ctx context.Context, eventID pyjson.Value, subscr
 	orgID := h.handlerOrgID(ctx, subscription)
 	customer := attr(subscription, "customer", nil)
 	if !pyjson.Truthy(orgID) {
-		h.logger.InfoContext(ctx, "subscription.trial_will_end without org_id metadata", "customer", pyStr(customer))
+		h.logger.InfoContext(ctx, "subscription.trial_will_end without org_id metadata",
+			subscriptionLogFields(eventID, "customer.subscription.trial_will_end", subscription)...)
 		return nil
 	}
 	raw := attr(subscription, "trial_end", nil)

@@ -71,6 +71,7 @@ func TestEveryRouteIsGuardedAtAdminOrg(t *testing.T) {
 		"GET /api/v1/admin/sync-targets",
 		"GET /api/v1/admin/sync-configs",
 		"POST /api/v1/admin/sync-configs",
+		"POST /api/v1/admin/sync-configs/batch",
 		"GET /api/v1/admin/sync-configs/{config_id}",
 		"DELETE /api/v1/admin/sync-configs/{config_id}",
 		"GET /api/v1/admin/sync-configs/{config_id}/repositories",

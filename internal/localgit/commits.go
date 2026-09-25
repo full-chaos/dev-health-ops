@@ -1,0 +1,169 @@
+package localgit
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
+)
+
+// Commit is a GitPython Commit as processors/local.py reads it.
+type Commit struct {
+	Hash           string
+	Message        string
+	AuthorName     *string
+	AuthorEmail    *string
+	CommitterName  *string
+	CommitterEmail *string
+	// CommittedAt is committed_datetime: the instant, in UTC.
+	CommittedAt time.Time
+	Parents     []string
+}
+
+// IterCommitsSince is list(iter_commits_since(repo, since)): `git rev-list HEAD
+// --` (Repo.iter_commits with rev=None is head.commit), each commit parsed the
+// way Commit._deserialize does, and the walk STOPS at the first commit whose
+// committed time is before since (it is `break`, not a filter: a commit with a
+// skewed date ends the list). An unborn HEAD is Python's uncaught ValueError.
+func (r Repo) IterCommitsSince(ctx context.Context, since *time.Time) ([]Commit, error) {
+	head, err := r.run(ctx, "rev-parse", "--verify", "HEAD")
+	if err != nil {
+		return nil, fmt.Errorf("head has no commit: %w", err)
+	}
+	_ = head
+	out, err := r.run(ctx, "rev-list", "HEAD", "--")
+	if err != nil {
+		return nil, err
+	}
+	hashes := strings.Fields(string(out))
+	commits, err := r.readCommits(ctx, hashes)
+	if err != nil {
+		return nil, err
+	}
+	var kept []Commit
+	for _, commit := range commits {
+		if since != nil && commit.CommittedAt.Before(*since) {
+			break
+		}
+		kept = append(kept, commit)
+	}
+	return kept, nil
+}
+
+// readCommits parses every commit object with one `git cat-file --batch`.
+func (r Repo) readCommits(ctx context.Context, hashes []string) ([]Commit, error) {
+	if len(hashes) == 0 {
+		return nil, nil
+	}
+	bin := r.Git
+	if bin == "" {
+		bin = "git"
+	}
+	command := exec.CommandContext(ctx, bin, "cat-file", "--batch")
+	command.Dir = r.Root
+	command.Env = append(os.Environ(), "LANGUAGE=C", "LC_ALL=C")
+	command.Stdin = strings.NewReader(strings.Join(hashes, "\n") + "\n")
+	stdout, err := command.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	if err := command.Start(); err != nil {
+		return nil, err
+	}
+	reader := bufio.NewReaderSize(stdout, 1<<20)
+	commits := make([]Commit, 0, len(hashes))
+	for range hashes {
+		header, err := reader.ReadString('\n')
+		if err != nil {
+			_ = command.Wait()
+			return nil, fmt.Errorf("git cat-file: %w", err)
+		}
+		fields := strings.Fields(header)
+		if len(fields) != 3 || fields[1] != "commit" {
+			_ = command.Wait()
+			return nil, fmt.Errorf("git cat-file: unexpected object header %q", strings.TrimSpace(header))
+		}
+		size, err := strconv.Atoi(fields[2])
+		if err != nil {
+			_ = command.Wait()
+			return nil, err
+		}
+		body := make([]byte, size+1) // the object, then one newline
+		if _, err := io.ReadFull(reader, body); err != nil {
+			_ = command.Wait()
+			return nil, err
+		}
+		commits = append(commits, parseCommit(fields[0], body[:size]))
+	}
+	if err := command.Wait(); err != nil {
+		return nil, fmt.Errorf("git cat-file: %w", err)
+	}
+	return commits, nil
+}
+
+var (
+	reActorEpoch = regexp.MustCompile(`^.+? (.*) (\d+) ([+-]\d+).*$`)
+	reOnlyActor  = regexp.MustCompile(`^.+? (.*)$`)
+)
+
+// parseCommit is Commit._deserialize followed by parse_actor_and_date.
+func parseCommit(hash string, raw []byte) Commit {
+	commit := Commit{Hash: hash}
+	head, message, _ := bytes.Cut(raw, []byte("\n\n"))
+	lines := bytes.Split(head, []byte("\n"))
+	var authorLine, committerLine []byte
+	for _, line := range lines {
+		switch {
+		case bytes.HasPrefix(line, []byte("parent")):
+			fields := bytes.Fields(line)
+			commit.Parents = append(commit.Parents, string(fields[len(fields)-1]))
+		case bytes.HasPrefix(line, []byte("author ")) && authorLine == nil:
+			authorLine = line
+		case bytes.HasPrefix(line, []byte("committer ")) && committerLine == nil:
+			committerLine = line
+		}
+	}
+	commit.Message = pythonparity.DecodeUTF8Replace(string(message))
+	name, email, _ := parseActorAndDate(string(authorLine))
+	commit.AuthorName, commit.AuthorEmail = name, email
+	name, email, epoch := parseActorAndDate(string(committerLine))
+	commit.CommitterName, commit.CommitterEmail = name, email
+	commit.CommittedAt = time.Unix(epoch, 0).UTC()
+	return commit
+}
+
+// parseActorAndDate is objects/util.py parse_actor_and_date + Actor.from_string.
+func parseActorAndDate(line string) (name, email *string, epoch int64) {
+	line = pythonparity.DecodeUTF8Replace(line)
+	actor := ""
+	if match := reActorEpoch.FindStringSubmatch(line); match != nil {
+		actor = match[1]
+		epoch, _ = strconv.ParseInt(match[2], 10, 64)
+	} else if match := reOnlyActor.FindStringSubmatch(line); match != nil {
+		actor = match[1]
+	} else {
+		actor = line
+	}
+	first, _, _ := strings.Cut(actor, "\n")
+	left := strings.Index(first, "<")
+	right := -1
+	if left >= 0 {
+		if at := strings.Index(first[left+1:], ">"); at >= 0 {
+			right = left + 1 + at
+		}
+	}
+	if left >= 0 && right >= 0 {
+		n, e := pythonparity.RStrip(first[:left]), first[left+1:right]
+		return &n, &e, epoch
+	}
+	return &actor, nil, epoch
+}

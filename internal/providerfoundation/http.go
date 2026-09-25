@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
@@ -113,6 +114,49 @@ func (c *HTTPClient) resolveTarget(path string) (*url.URL, error) {
 	return target, nil
 }
 
+// sameOrigin reports whether u is on the scheme and host (with port) of base.
+func sameOrigin(u, base *url.URL) bool {
+	return u != nil && base != nil && u.Scheme == base.Scheme && u.Host == base.Host
+}
+
+// originGuardedDoer makes the credential origin a property of HTTPClient, not
+// of whichever Doer was injected. A stock http.Client follows redirects and
+// copies custom auth headers (GitLab's PRIVATE-TOKEN) to the new origin, so for
+// an *http.Client the returned Doer is a shallow copy whose CheckRedirect stops
+// at the first hop that leaves target's origin (the original policy still
+// decides every same-origin hop) and sets the returned flag. Any other Doer is
+// returned as is; responseLeftOrigin still detects a redirect it followed.
+func originGuardedDoer(doer HTTPDoer, target *url.URL) (HTTPDoer, *atomic.Bool) {
+	left := new(atomic.Bool)
+	hc, ok := doer.(*http.Client)
+	if !ok || hc == nil {
+		return doer, left
+	}
+	guarded := *hc
+	inner := hc.CheckRedirect
+	guarded.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if !sameOrigin(req.URL, target) {
+			left.Store(true)
+			return http.ErrUseLastResponse
+		}
+		if inner != nil {
+			return inner(req, via)
+		}
+		if len(via) >= 10 {
+			return errors.New("stopped after 10 redirects")
+		}
+		return nil
+	}
+	return &guarded, left
+}
+
+// responseLeftOrigin is the after-the-fact check for a Doer that followed a
+// redirect off the credential origin by itself: response.Request is the last
+// request it sent.
+func responseLeftOrigin(response *http.Response, target *url.URL) bool {
+	return response != nil && response.Request != nil && !sameOrigin(response.Request.URL, target)
+}
+
 func (c *HTTPClient) Do(ctx context.Context, method, path string, body io.Reader) (response *http.Response, err error) {
 	if c == nil || c.BaseURL == nil {
 		return nil, ErrCredentialInvalid
@@ -184,7 +228,19 @@ func (c *HTTPClient) Do(ctx context.Context, method, path string, body io.Reader
 			return nil, err
 		}
 		var requestErr error
-		response, requestErr = c.Doer.Do(request)
+		guarded, leftOrigin := originGuardedDoer(c.Doer, target)
+		response, requestErr = guarded.Do(request)
+		if leftOrigin.Load() || (requestErr == nil && responseLeftOrigin(response, target)) {
+			// A redirect took the authenticated request off the credential's
+			// origin. The header may already have been sent by the Doer, so
+			// this is never retried and the response is never returned.
+			if response != nil && response.Body != nil {
+				_ = response.Body.Close()
+			}
+			response = nil
+			c.observe(ErrorPermanent)
+			return nil, ErrCredentialInvalid
+		}
 		if requestErr != nil {
 			last = &ProviderError{Class: ErrorTransient}
 			c.observe(last.Class)

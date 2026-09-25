@@ -96,7 +96,7 @@ func TestPagerDutyDisconnectVenueOracle(t *testing.T) {
 
 	type orgSpec struct{ id uuid.UUID }
 	orgs := map[string]*orgSpec{}
-	for _, slug := range []string{"connected", "empty", "bad-cipher", "with-binding", "revoke-fails", "revoke-redirects"} {
+	for _, slug := range []string{"connected", "empty", "bad-cipher", "with-binding", "revoke-fails", "revoke-redirects", "malformed-json", "extra-key"} {
 		orgs[slug] = &orgSpec{id: uuid.New()}
 	}
 	adminID, memberID := uuid.New(), uuid.New()
@@ -160,8 +160,23 @@ VALUES ($1, 'pagerduty', 'default', 'garbage-not-fernet', 1, now(), now(), false
 			oauthTokens("revoke-fails", "venue-pd-disc-fails-token")
 			fake.mu.Lock()
 			fake.failTokens["venue-pd-disc-fails-token"] = true
+			// The fake refuses the empty token and the extra-key payload's
+			// token: a plane that revokes either answers 503 and keeps a
+			// pending row, where Python (model validation fails) answers 200.
+			fake.failTokens[""] = true
+			fake.failTokens["venue-pd-disc-extra-token"] = true
 			fake.mu.Unlock()
 
+			// Decryptable but not an OAuthTokens object: Python's model
+			// validation fails, so it revokes nothing; a partial JSON decode
+			// would read an empty token and queue a revocation for it.
+			credential("malformed-json")
+			exec(`INSERT INTO provider_oauth_credentials (org_id, provider, credential_name, token_encrypted, version, created_at, updated_at, has_refresh_token)
+VALUES ($1, 'pagerduty', 'default', $2, 1, now(), now(), false)`, orgs["malformed-json"].id.String(), encrypt(`{}`))
+			credential("extra-key")
+			exec(`INSERT INTO provider_oauth_credentials (org_id, provider, credential_name, token_encrypted, version, created_at, updated_at, has_refresh_token)
+VALUES ($1, 'pagerduty', 'default', $2, 1, now(), now(), false)`, orgs["extra-key"].id.String(),
+				encrypt(`{"access_token":"venue-pd-disc-extra-token","expires_at":"2099-01-01T00:00:00Z","surprise":true}`))
 			credential("revoke-redirects")
 			oauthTokens("revoke-redirects", "venue-pd-disc-redirect-token")
 
@@ -183,6 +198,8 @@ VALUES ($1, $2, $3, $4, 'sub-1', $5, 'v1', 'active', now(), now())`,
 				"admin_empty":            {"user_id": adminID.String(), "email": "pd-disc-admin@example.com", "org_id": orgs["empty"].id.String(), "role": "admin"},
 				"admin_bad_cipher":       {"user_id": adminID.String(), "email": "pd-disc-admin@example.com", "org_id": orgs["bad-cipher"].id.String(), "role": "admin"},
 				"admin_with_binding":     {"user_id": adminID.String(), "email": "pd-disc-admin@example.com", "org_id": orgs["with-binding"].id.String(), "role": "admin"},
+				"admin_malformed_json":   {"user_id": adminID.String(), "email": "pd-disc-admin@example.com", "org_id": orgs["malformed-json"].id.String(), "role": "admin"},
+				"admin_extra_key":        {"user_id": adminID.String(), "email": "pd-disc-admin@example.com", "org_id": orgs["extra-key"].id.String(), "role": "admin"},
 				"admin_revoke_redirects": {"user_id": adminID.String(), "email": "pd-disc-admin@example.com", "org_id": orgs["revoke-redirects"].id.String(), "role": "admin"},
 				"admin_revoke_fails":     {"user_id": adminID.String(), "email": "pd-disc-admin@example.com", "org_id": orgs["revoke-fails"].id.String(), "role": "admin"},
 				"member":                 {"user_id": memberID.String(), "email": "pd-disc-member@example.com", "org_id": orgs["connected"].id.String(), "role": "member"},
@@ -206,6 +223,8 @@ VALUES ($1, $2, $3, $4, 'sub-1', $5, 'v1', 'active', now(), now())`,
 		disconnect("W disconnect detaches webhook binding", "admin_with_binding", `{}`),
 		disconnect("W disconnect revoke fails, pending retry", "admin_revoke_fails", `{}`),
 		disconnect("W disconnect revoke redirected is a failure, not followed", "admin_revoke_redirects", `{}`),
+		disconnect("W disconnect token JSON is not an OAuthTokens object", "admin_malformed_json", `{}`),
+		disconnect("W disconnect token JSON with an extra key", "admin_extra_key", `{}`),
 		disconnect("W disconnect credential_name blank", "admin_empty", `{"credential_name":"  "}`),
 		disconnect("W disconnect extra field", "admin_empty", `{"bogus":1}`),
 		disconnect("W disconnect body list", "admin_empty", `[]`),

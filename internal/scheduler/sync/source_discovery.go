@@ -155,6 +155,30 @@ type SourceDiscoveryReport struct {
 	Outcome  string
 	Created  int
 	Existing int
+	// SourceIDs are the ids of the integration_sources rows this run upserted
+	// (new and updated), one per discovered source in discovery order, as
+	// discover_sources_for_integration returns its `upserted` list: a row
+	// the run matched twice appears twice. The integration admin discover
+	// route renders them.
+	SourceIDs []string
+}
+
+// sourceIDCollector records the row each discovered source landed on, for
+// Discover's report. It rides the context so the upsert functions keep their
+// signatures.
+type sourceIDCollector struct{ ids []string }
+
+type sourceIDCollectorKey struct{}
+
+func withSourceIDCollector(ctx context.Context) (context.Context, *sourceIDCollector) {
+	collector := &sourceIDCollector{}
+	return context.WithValue(ctx, sourceIDCollectorKey{}, collector), collector
+}
+
+func recordUpsertedSource(ctx context.Context, id string) {
+	if collector, ok := ctx.Value(sourceIDCollectorKey{}).(*sourceIDCollector); ok {
+		collector.ids = append(collector.ids, id)
+	}
 }
 
 // SourceDiscoveryExecutor is the native-Go per-occurrence source-discovery
@@ -359,6 +383,7 @@ func (service *NativeSourceDiscoveryService) Discover(ctx context.Context, args 
 		service.telemetry.observe(provider, SourceDiscoveryOutcomeError)
 		return SourceDiscoveryReport{}, fmt.Errorf("resolve %s credential for source discovery: %w", provider, err)
 	}
+	ctx, collector := withSourceIDCollector(ctx)
 	var discovered []discoveredSource
 	switch provider {
 	case "github":
@@ -444,7 +469,7 @@ func (service *NativeSourceDiscoveryService) Discover(ctx context.Context, args 
 	if created > 0 {
 		outcome = SourceDiscoveryOutcomeCreated
 	}
-	return SourceDiscoveryReport{Outcome: outcome, Created: created, Existing: existing}, nil
+	return SourceDiscoveryReport{Outcome: outcome, Created: created, Existing: existing, SourceIDs: collector.ids}, nil
 }
 
 // recordSourceDiscoveryOutcome observes one telemetry point per created/
@@ -996,44 +1021,66 @@ func (service *NativeSourceDiscoveryService) upsertSources(
 	// changes based on what has or hasn't been tagged before, so it can't
 	// regress once any row happens to already carry the tag.
 	stampNewRows := plannerManaged && configID != "" && unbounded
+	// Read, merge and write as discover_sources_for_integration does: an
+	// existing row keeps its own metadata keys (their order and spelling) and
+	// the fresh keys win, and the column holds json.dumps text. A single
+	// jsonb-merging upsert would reorder the keys and write non-ASCII
+	// unescaped, so the stored text would differ from Python's.
+	existingRows, err := fetchExistingSourceRows(ctx, tx, orgID, integrationID)
+	if err != nil {
+		return 0, 0, err
+	}
 	for _, source := range sources {
 		metadata := source.Metadata
+		if metadata == nil {
+			metadata = pyjson.NewObject()
+		}
 		if stampNewRows {
 			metadata = cloneMetadata(metadata)
 			metadata.Set("planner_managed_sync_config_id", configID)
 		}
-		metadataJSON, marshalErr := json.Marshal(metadata)
-		if marshalErr != nil {
-			return 0, 0, fmt.Errorf("encode %s source metadata: %w", provider, marshalErr)
+		var row *existingSourceRow
+		for _, candidate := range existingRows {
+			if candidate.Provider == provider && candidate.ExternalID == source.ExternalID {
+				row = candidate
+				break
+			}
 		}
-		// integration_sources.metadata is a plain `json` column (alembic 0015
-		// `sa.JSON()`, not JSONB) -- the `||` merge operator only exists for
-		// jsonb, so both sides are cast to jsonb for the merge and the result
-		// is cast back to json for storage. Fresh discovery keys win, keys
-		// the fresh payload lacks (e.g. a manually-added
-		// planner_managed_sync_config_id) are preserved, matching
-		// discover_sources_for_integration's own merge contract exactly.
-		var inserted bool
-		scanErr := tx.QueryRow(ctx, `
-INSERT INTO public.integration_sources
- (id,org_id,integration_id,provider,source_type,external_id,name,full_name,metadata,is_enabled,discovered_at,last_seen_at)
-VALUES ($1::uuid,$2,$3::uuid,$4,$5,$6,$7,$8,$9::json,TRUE,$10,$10)
-ON CONFLICT (org_id,integration_id,provider,external_id) DO UPDATE
-SET name=EXCLUDED.name, full_name=EXCLUDED.full_name,
-    metadata=(public.integration_sources.metadata::jsonb || EXCLUDED.metadata::jsonb)::json,
-    last_seen_at=EXCLUDED.last_seen_at
-RETURNING (xmax = 0)`,
-			uuid.New().String(), orgID, integrationID, provider, source.SourceType,
-			source.ExternalID, source.Name, source.FullName, metadataJSON, now,
-		).Scan(&inserted)
-		if scanErr != nil {
-			return 0, 0, fmt.Errorf("upsert %s source %s: %w", provider, source.ExternalID, scanErr)
-		}
-		if inserted {
-			created++
-		} else {
+		if row != nil {
+			merged := cloneMetadata(row.Metadata)
+			for _, key := range metadata.Keys() {
+				value, _ := metadata.Get(key)
+				merged.Set(key, value)
+			}
+			if err := updateExistingSourceRow(ctx, tx, row.ID, source.Name, source.FullName, merged, now, false); err != nil {
+				return 0, 0, err
+			}
+			row.Metadata = merged
+			recordUpsertedSource(ctx, row.ID)
 			existing++
+			continue
 		}
+		newID, discoveredAt, insertErr := insertNewSourceRow(ctx, tx, orgID, integrationID, provider, source.SourceType, source.ExternalID, source.Name, source.FullName, metadata, now)
+		if errors.Is(insertErr, errSourceInsertConflict) {
+			// A concurrent discovery inserted this exact key first: the row is there.
+			var winnerID string
+			if err := tx.QueryRow(ctx, `SELECT id::text FROM public.integration_sources
+WHERE org_id=$1 AND integration_id=$2::uuid AND provider=$3 AND external_id=$4`, orgID, integrationID, provider, source.ExternalID).Scan(&winnerID); err != nil {
+				return 0, 0, fmt.Errorf("read the source a concurrent discovery inserted: %w", err)
+			}
+			recordUpsertedSource(ctx, winnerID)
+			existing++
+			continue
+		}
+		if insertErr != nil {
+			return 0, 0, insertErr
+		}
+		recordUpsertedSource(ctx, newID)
+		created++
+		existingRows = append(existingRows, &existingSourceRow{
+			ID: newID, Provider: provider, ExternalID: source.ExternalID,
+			IsEnabled: true, DiscoveredAt: discoveredAt, Metadata: metadata,
+		})
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return 0, 0, fmt.Errorf("commit source discovery domain transaction: %w", err)
@@ -1377,18 +1424,27 @@ func (service *NativeSourceDiscoveryService) upsertJiraSources(
 			if reenable {
 				survivor.IsEnabled = true
 			}
+			recordUpsertedSource(ctx, survivor.ID)
 			existingCount++
 			continue
 		}
 
 		newID, discoveredAt, insertErr := insertNewSourceRow(ctx, tx, orgID, integrationID, "jira", "project", source.ExternalID, source.Name, source.FullName, metadata, now)
 		if errors.Is(insertErr, errSourceInsertConflict) {
+			// A concurrent insert of this exact key won: the row is there.
+			var winnerID string
+			if err := tx.QueryRow(ctx, `SELECT id::text FROM public.integration_sources
+WHERE org_id=$1 AND integration_id=$2::uuid AND provider=$3 AND external_id=$4`, orgID, integrationID, "jira", source.ExternalID).Scan(&winnerID); err != nil {
+				return 0, 0, nil, nil, 0, fmt.Errorf("read the source a concurrent discovery inserted: %w", err)
+			}
+			recordUpsertedSource(ctx, winnerID)
 			existingCount++
 			continue
 		}
 		if insertErr != nil {
 			return 0, 0, nil, nil, 0, insertErr
 		}
+		recordUpsertedSource(ctx, newID)
 		created++
 		createdLower[normalizedKey] = struct{}{}
 		existingRows = append(existingRows, &existingSourceRow{

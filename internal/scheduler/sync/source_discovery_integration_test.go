@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"strings"
 	"testing"
 	"time"
 
@@ -983,5 +984,56 @@ func TestJiraDiscoveryRebalanceFailureRollsBackTheWholeUpsertAtomically(t *testi
 	}
 	if total != 0 {
 		t.Fatalf("GREEN did not hold: %d rows persisted after rollback, want 0 -- a rebalance failure must roll back the upsert atomically, not leave it committed uncapped", total)
+	}
+}
+
+// TestUpsertSourcesWritesPythonJSONTextAndReportsTheUpsertedRows pins two things
+// the integration discover route relies on: a new github/gitlab row's metadata
+// column holds the text Python's json.dumps writes (spaced separators, ASCII
+// escapes), not encoding/json's compact form, and the ids recorded for the
+// report are the rows the run upserted, in discovery order, a repeated source
+// naming its row twice.
+func TestUpsertSourcesWritesPythonJSONTextAndReportsTheUpsertedRows(t *testing.T) {
+	fixture, integrationID := startSourceDiscoveryPostgres(t)
+	service := &NativeSourceDiscoveryService{domainPool: fixture.pool, telemetry: newSourceDiscoveryTelemetry(), now: time.Now}
+	ctx, collector := withSourceIDCollector(context.Background())
+	orgID := fixture.occurrence.OrgID
+
+	metadata := metadataOf("owner", "acmé")
+	metadata.Set("n", pyjson.IntOf(2))
+	sources := []discoveredSource{
+		{ExternalID: "acme/one", SourceType: "repository", Name: "one", FullName: "acme/one", Metadata: metadata},
+		{ExternalID: "acme/two", SourceType: "repository", Name: "two", FullName: "acme/two", Metadata: metadataOf("owner", "acme")},
+		{ExternalID: "acme/one", SourceType: "repository", Name: "one", FullName: "acme/one", Metadata: metadata},
+	}
+	created, existing, err := service.upsertSources(ctx, orgID, integrationID, "github", sources, time.Now().UTC(), "", false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created != 2 || existing != 1 {
+		t.Fatalf("upsertSources() = created=%d existing=%d, want 2,1", created, existing)
+	}
+	ids := map[string]string{}
+	rows, err := fixture.pool.Query(context.Background(), `SELECT external_id, id::text, metadata::text FROM public.integration_sources WHERE org_id=$1 AND integration_id=$2::uuid`, orgID, integrationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	texts := map[string]string{}
+	for rows.Next() {
+		var external, id, text string
+		if err := rows.Scan(&external, &id, &text); err != nil {
+			t.Fatal(err)
+		}
+		ids[external], texts[external] = id, text
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if want := "{\"owner\": \"acm\\u00e9\", \"n\": 2}"; texts["acme/one"] != want {
+		t.Errorf("metadata column = %s, want %s", texts["acme/one"], want)
+	}
+	if want := []string{ids["acme/one"], ids["acme/two"], ids["acme/one"]}; strings.Join(collector.ids, ",") != strings.Join(want, ",") {
+		t.Errorf("recorded ids = %v, want %v", collector.ids, want)
 	}
 }

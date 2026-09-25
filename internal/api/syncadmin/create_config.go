@@ -387,26 +387,21 @@ func (h *handlers) discoverJiraProjects(ctx context.Context, org string, created
 		"created", report.Created, "existing", report.Existing)
 }
 
-// newCreateDiscovery builds the create path's discovery on the api pool:
-// the stored credential through the api's decryptor, the given (or the
-// scheduler's default) HTTP client. nil without a pool or a decryptor.
+// newCreateDiscovery builds the create path's discovery on the api pool (the
+// shared api discovery: the stored credential through the api's decryptor,
+// the given or a default HTTP client). nil without a pool or a decryptor.
 func newCreateDiscovery(deps Deps, logger *slog.Logger, clock func() time.Time) schedsync.SourceDiscoveryExecutor {
 	if deps.Pool == nil || deps.Decryptor == nil {
 		return nil
 	}
-	client := deps.JiraHTTP
-	if client == nil {
-		client = &http.Client{Timeout: 45 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse
-		}}
+	var client providerfoundation.HTTPDoer
+	if deps.JiraHTTP != nil {
+		client = deps.JiraHTTP
 	}
-	discovery, err := schedsync.NewNativeSourceDiscoveryService(deps.Pool, providerfoundation.CredentialResolver{
-		Repository: providerfoundation.PostgresCredentialRepository{Pool: deps.Pool},
-		Decryptor:  deps.Decryptor,
-	}, client, logger)
+	discovery, err := schedsync.NewAPISourceDiscovery(deps.Pool, deps.Decryptor, client, logger, clock)
 	if err != nil {
 		logger.Error("sync_config_create: jira project discovery is unavailable", "error", err)
 		return nil
 	}
-	return discovery.WithClock(clock)
+	return discovery
 }

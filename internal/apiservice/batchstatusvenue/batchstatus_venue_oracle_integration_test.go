@@ -62,6 +62,10 @@ var values = []string{
 	`"2026-09-01T00:00:00Z"`, `"2026-09-01T00:00:00+05:30"`, `"2026-09-01T00:00:00.123400+05:30"`, `"2026-09-01T00:00:00"`,
 	`"2026-09-01"`, `"2026-09-01 12:00:00"`, `"20260901T000000"`, `"garbage"`, `"0001-01-01T00:00:00"`, `"9999-12-31T23:59:59Z"`,
 	`"2026-13-01"`, `"2026-09-01T25:00:00"`,
+	// A lone surrogate escape: a json column keeps it as text, Python's json keeps
+	// it as a surrogate, and a response holding one cannot be serialized (Python
+	// answers this route group's own unhandled-exception envelope).
+	`"\ud800"`, `"a\udc00b"`, `["\ud800"]`,
 }
 
 // fixed are the shapes one column's stored value takes at top level.
@@ -84,6 +88,7 @@ var fixed = []shape{
 	{name: "huge number", text: `1e400`},
 	{name: "object", text: `{"repoIds":["r1"],"teamIds":["t1"],"windowStartedAt":"2026-09-01T00:00:00Z","windowEndedAt":"2026-09-08T00:00:00Z","cappedDays":true,"cappedRepos":false}`},
 	{name: "object with unrelated keys", text: `{"x":1,"y":[1,2,{"z":null}]}`},
+	{name: "object holding a lone surrogate", text: `{"reason":"\ud800","repoIds":["r1"]}`},
 }
 
 func repoRoot(t *testing.T) string {
@@ -191,7 +196,7 @@ VALUES ($1::uuid, $2, $3::uuid, 'venue oracle token', $4, 'fcpush_venue', $5::js
 				}
 				exec(`INSERT INTO external_ingest_batches (ingestion_id, org_id, idempotency_key, payload_hash, source_system, source_instance, schema_version,
 	items_received, status, record_counts, error_summary, recompute_status, recompute_scope, producer, created_at, updated_at)
-VALUES ($1::uuid, $2, $3, $4, 'github', 'acme/venue-repo', 'external-ingest.v1', 1, 'accepted', $5::jsonb, $6::jsonb, 'pending', $7::jsonb, $8,
+VALUES ($1::uuid, $2, $3, $4, 'github', 'acme/venue-repo', 'external-ingest.v1', 1, 'accepted', $5::json, $6::json, 'pending', $7::json, $8,
 	'2026-09-15T08:30:22.254860+00:00'::timestamptz, '2026-09-15T08:30:22.254860+00:00'::timestamptz)`,
 					sc.id, orgID, fmt.Sprintf("shape-%03d", i), fmt.Sprintf("hash-%03d", i),
 					cols[recordCounts], cols[errorSummary], cols[recomputeScope], fmt.Sprintf("p-%03d", i))

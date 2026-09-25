@@ -2,6 +2,9 @@ package externalingest
 
 import (
 	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
@@ -96,5 +99,30 @@ func TestRecomputeScopeResponseLikeStatusPy(t *testing.T) {
 	}
 	if value, err := recomputeScopeResponse(nil); value != nil || err != nil {
 		t.Errorf("no scope is None: got (%v, %v)", value, err)
+	}
+}
+
+// A success body Python cannot serialize (a lone surrogate) is this route group's
+// own unhandled-exception envelope, at every write site (CHAOS-6766 r1).
+func TestWriteIngestBodiesThatCannotBeSerializedAreTheIngestEnvelope(t *testing.T) {
+	body := pyjson.NewObject()
+	body.Set("value", pyjson.FromRunes([]rune{0xD800}))
+	for name, write := range map[string]func(http.ResponseWriter){
+		"model": func(w http.ResponseWriter) { writeIngestModel(w, http.StatusOK, body, nil) },
+		"json":  func(w http.ResponseWriter) { writeIngestJSON(w, http.StatusAccepted, body, nil) },
+	} {
+		recorder := httptest.NewRecorder()
+		write(recorder)
+		if recorder.Code != http.StatusInternalServerError || !strings.Contains(recorder.Body.String(), `"code":"internal_error"`) ||
+			strings.Contains(recorder.Body.String(), `"detail"`) {
+			t.Errorf("%s: got %d %s, want 500 with the ingest error envelope", name, recorder.Code, recorder.Body.String())
+		}
+	}
+	ok := httptest.NewRecorder()
+	fine := pyjson.NewObject()
+	fine.Set("value", "x")
+	writeIngestModel(ok, http.StatusOK, fine, nil)
+	if ok.Code != http.StatusOK {
+		t.Errorf("a serializable body is written as before: %d", ok.Code)
 	}
 }

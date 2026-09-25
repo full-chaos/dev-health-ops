@@ -31,7 +31,7 @@ func (d Deps) handleListSchemas() http.HandlerFunc {
 		body.Set("schemaVersions", []string{schemaVersion})
 		body.Set("recordKinds", recordvalidation.RecordKinds())
 		body.Set("limits", limitsPayload(d.limits()))
-		policy.WriteModel(w, http.StatusOK, body, nil)
+		writeIngestModel(w, http.StatusOK, body, nil)
 	}
 }
 
@@ -63,7 +63,7 @@ func (d Deps) handleGetSchema() http.HandlerFunc {
 			w.WriteHeader(http.StatusNotModified)
 			return
 		}
-		policy.WriteModel(w, http.StatusOK, document, http.Header{
+		writeIngestModel(w, http.StatusOK, document, http.Header{
 			"Etag":          {etag},
 			"Cache-Control": {"public, max-age=3600, must-revalidate"},
 		})
@@ -120,7 +120,7 @@ func (d Deps) handleAvailability() http.HandlerFunc {
 		body.Set("features", features)
 		body.Set("availableRecordKinds", sortedSet(available))
 		body.Set("unavailableRecordKinds", sortedSet(unavailable))
-		policy.WriteModel(w, http.StatusOK, body, nil)
+		writeIngestModel(w, http.StatusOK, body, nil)
 	}
 }
 
@@ -192,7 +192,7 @@ func (d Deps) handleValidate() http.HandlerFunc {
 		body.Set("itemsAccepted", len(envelope.Records)-len(rejectedIndices))
 		body.Set("itemsRejected", len(rejectedIndices))
 		body.Set("errors", errorValues)
-		policy.WriteModel(w, http.StatusOK, body, nil)
+		writeIngestModel(w, http.StatusOK, body, nil)
 	}
 }
 
@@ -364,7 +364,7 @@ func (d Deps) handleAcceptBatch() http.HandlerFunc {
 		body.Set("status", "accepted")
 		body.Set("itemsReceived", len(envelope.Records))
 		body.Set("stream", stream)
-		policy.WriteJSON(w, http.StatusAccepted, body, nil)
+		writeIngestJSON(w, http.StatusAccepted, body, nil)
 	}
 }
 
@@ -471,7 +471,7 @@ func (d Deps) writeReplayStatus(w http.ResponseWriter, ctx context.Context, orgI
 		writeIngestError(w, unhandledError())
 		return
 	}
-	policy.WriteJSON(w, http.StatusOK, response, nil)
+	writeIngestJSON(w, http.StatusOK, response, nil)
 }
 
 func int64Pointer(value int64) *int64 { return &value }
@@ -528,7 +528,7 @@ func (d Deps) handleListBatches() http.HandlerFunc {
 		body.Set("total", total)
 		body.Set("limit", limit.Int64())
 		body.Set("offset", offset.Int64())
-		policy.WriteModel(w, http.StatusOK, body, nil)
+		writeIngestModel(w, http.StatusOK, body, nil)
 	}
 }
 
@@ -594,7 +594,7 @@ func (d Deps) handleGetBatch() http.HandlerFunc {
 			writeIngestError(w, unhandledError())
 			return
 		}
-		policy.WriteModel(w, http.StatusOK, response, nil)
+		writeIngestModel(w, http.StatusOK, response, nil)
 	}
 }
 
@@ -728,4 +728,25 @@ func optionalStringValue(s *string) any {
 		return nil
 	}
 	return *s
+}
+
+// writeIngestModel and writeIngestJSON write a success body the way policy does,
+// except that a body the Python api could not serialize either (a stored or
+// requested lone surrogate, a non-finite float) is this route group's own
+// unhandled-exception answer (the external-ingest error envelope, api/_errors.py),
+// not the framework's generic {"detail": ...}: policy answers the latter.
+func writeIngestModel(w http.ResponseWriter, status int, body pyjson.Value, extra http.Header) {
+	if _, err := pyjson.MarshalModel(body); err != nil {
+		writeIngestError(w, unhandledError())
+		return
+	}
+	policy.WriteModel(w, status, body, extra)
+}
+
+func writeIngestJSON(w http.ResponseWriter, status int, body pyjson.Value, extra http.Header) {
+	if _, err := pyjson.Marshal(body); err != nil {
+		writeIngestError(w, unhandledError())
+		return
+	}
+	policy.WriteJSON(w, status, body, extra)
 }

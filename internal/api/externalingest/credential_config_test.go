@@ -2,6 +2,7 @@ package externalingest
 
 import (
 	"errors"
+	"reflect"
 	"testing"
 )
 
@@ -33,7 +34,7 @@ func TestCredentialConfig(t *testing.T) {
 			t.Errorf("%s: err = %v, refused want %v", c.name, err, c.refused)
 			continue
 		}
-		if len(got) != len(c.want) {
+		if !reflect.DeepEqual(got, c.want) && !(len(got) == 0 && len(c.want) == 0) {
 			t.Errorf("%s: config = %v, want %v", c.name, got, c.want)
 		}
 	}

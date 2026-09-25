@@ -129,6 +129,17 @@ func scenarios() []scenario {
 		gh("config array with another provider's credential", `["bad"]`, encrypted(`{"url":"https://x.acme.test"}`), ""),
 	)
 	list[len(list)-1].credProvider = "gitlab"
+	// The integration's own config is read first, for every candidate: a truthy
+	// non-object raises whatever the credential holds; a falsy one is `{}`.
+	for _, shape := range []struct{ name, config string }{
+		{"array", `["bad"]`}, {"string", `"just text"`}, {"number", `5`}, {"true", `true`},
+		{"empty array", `[]`}, {"zero", `0`}, {"null", `null`},
+	} {
+		list = append(list, scenario{name: "integration config " + shape.name + ", decrypted host", system: "github", credProvider: "github",
+			credConfig: "{}", cred: encrypted(`{"url":"https://ghe-intcfg.acme.test"}`), intConfig: shape.config,
+			sourceOn: true, intActive: true, host: "ghe-intcfg.acme.test"})
+	}
+	list = append(list, scenario{name: "integration config array, no credential", system: "github", intConfig: `["bad"]`, sourceOn: true, intActive: true})
 	// An unreadable credential only raises for an enabled source under an
 	// active integration.
 	unreadable := gh("garbled payload, source disabled", "{}", garbled, "")

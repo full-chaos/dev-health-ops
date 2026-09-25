@@ -82,7 +82,7 @@ func FindMatchingManagedSources(
 	type candidate struct {
 		match        ManagedSourceMatch
 		source       integrationSource
-		config       map[string]any
+		configRaw    []byte
 		credentialID *uuid.UUID
 	}
 	var candidates []candidate
@@ -102,7 +102,7 @@ func FindMatchingManagedSources(
 			ExternalID: deref(externalID), FullName: deref(fullName), Name: deref(name),
 			Metadata: decodeMetadata(metadataJSON), Enabled: c.match.Enabled, Active: c.match.IntegrationActive,
 		}
-		c.config = decodeMetadata(configJSON)
+		c.configRaw = configJSON
 		candidates = append(candidates, c)
 	}
 	rows.Close()
@@ -119,14 +119,21 @@ func FindMatchingManagedSources(
 	hosts := map[uuid.UUID]resolvedHost{}
 	var matches []ManagedSourceMatch
 	for _, c := range candidates {
+		// `config = integration.config or {}` opens Python's loop body for every
+		// row, so a truthy non-object integration config raises (AttributeError,
+		// unhandled) at this row, in loop order, before anything else is read.
+		integrationConfig, err := credentialConfig(c.configRaw)
+		if err != nil {
+			return nil, err
+		}
 		if !operational {
-			if matchesInstance(system, instance, c.source, entityFamily, c.config) {
+			if matchesInstance(system, instance, c.source, entityFamily, integrationConfig) {
 				matches = append(matches, c.match)
 			}
 			continue
 		}
 		managedHost := defaultHost
-		configured, hasConfigured := configuredHost(c.config, system)
+		configured, hasConfigured := configuredHost(integrationConfig, system)
 		switch {
 		case hasConfigured:
 			managedHost = configured
@@ -335,8 +342,9 @@ func credentialHost(ctx context.Context, q RowsQueryer, cipher credentials.Ciphe
 }
 
 // errCredentialConfigNotObject stands for the AttributeError Python raises
-// reading `.get` on a credential config that is truthy and not a dict.
-var errCredentialConfigNotObject = errors.New("credential config not an object")
+// reading `.get` on an integration or credential config that is truthy and not
+// a dict.
+var errCredentialConfigNotObject = errors.New("config not an object")
 
 // credentialConfig is `credential.config or {}` as a mapping: an absent, null
 // or falsy config (an empty object, list or string, zero, false) is empty; a

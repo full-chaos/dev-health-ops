@@ -75,10 +75,13 @@ func newGateway(t *testing.T, respond func(request) (int, any)) *gateway {
 }
 
 func (g *gateway) client() *graph.Client {
+	// As the verb builds it: strict about GraphQL errors, and refusing a page
+	// that promises a next page without a cursor.
 	return &graph.Client{
 		BaseURL: g.server.URL + "/gateway/api",
 		Auth:    atlassian.BasicAPITokenAuth{Email: "sync@example.test", Token: "gateway-secret"},
-		Sleep:   func(time.Duration) {},
+		Strict:  true, HTTPClient: &http.Client{Transport: CompletePagesOnly(nil)},
+		Sleep: func(time.Duration) {},
 	}
 }
 
@@ -417,5 +420,75 @@ func TestAnAtlassianTeamOutranksTheProjectAsTeamOwnerInTheCascade(t *testing.T) 
 	}
 	if OwnershipSpecificity <= projectTeamSpecificity {
 		t.Errorf("Atlassian ownership specificity %d must exceed the project-as-team %d", OwnershipSpecificity, projectTeamSpecificity)
+	}
+}
+
+// r2 finding: GraphQL errors next to VALID partial data were accepted as a
+// complete snapshot (the client only fails when decoding fails).
+func TestCollectRefusesGraphQLErrorsNextToPartialData(t *testing.T) {
+	partial := func(req request) (int, any) {
+		status, body := standard(req)
+		if req.Operation == "TeamworkGraph_teamUsers" && req.Variables["teamId"] == teamA && req.Variables["after"] == nil {
+			doc := body.(map[string]any)
+			doc["errors"] = []any{map[string]any{"message": "a field failed", "extensions": map[string]any{"classification": "DataFetchingException"}}}
+		}
+		return status, body
+	}
+	g := newGateway(t, partial)
+	rows, err := Collect(context.Background(), g.client(), params(everything))
+	if err == nil || !strings.Contains(err.Error(), "read members of team aaaaaaaa-0000-4000-8000-000000000001") {
+		t.Fatalf("err = %v, want the partial answer refused", err)
+	}
+	if len(rows.Teams)+len(rows.Memberships)+len(rows.Ownership) != 0 {
+		t.Fatalf("a refused run returned rows: %+v", rows)
+	}
+}
+
+// r2 finding: hasNextPage=true without an endCursor silently ended the list.
+func TestCollectRefusesAPageThatPromisesMoreWithoutACursor(t *testing.T) {
+	for name, tamper := range map[string]func(request, any){
+		"team search": func(req request, body any) {
+			if req.Operation == "TeamSearchV2" && req.Variables["after"] == nil {
+				info := body.(map[string]any)["data"].(map[string]any)["team"].(map[string]any)["teamSearchV2"].(map[string]any)["pageInfo"].(map[string]any)
+				delete(info, "endCursor")
+			}
+		},
+		"team users": func(req request, body any) {
+			if req.Operation == "TeamworkGraph_teamUsers" && req.Variables["teamId"] == teamA && req.Variables["after"] == nil {
+				info := body.(map[string]any)["data"].(map[string]any)["teamworkGraph_teamUsers"].(map[string]any)["pageInfo"].(map[string]any)
+				info["endCursor"] = "  "
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			g := newGateway(t, func(req request) (int, any) {
+				status, body := standard(req)
+				tamper(req, body)
+				return status, body
+			})
+			rows, err := Collect(context.Background(), g.client(), params(everything))
+			if err == nil || !strings.Contains(err.Error(), "hasNextPage without an endCursor") {
+				t.Fatalf("err = %v, want the incomplete page refused", err)
+			}
+			if len(rows.Teams)+len(rows.Memberships)+len(rows.Ownership) != 0 {
+				t.Fatalf("a refused run returned rows: %+v", rows)
+			}
+		})
+	}
+}
+
+func TestIncompletePageFindsANestedPageInfo(t *testing.T) {
+	var doc any
+	if err := json.Unmarshal([]byte(`{"data":{"a":[{"pageInfo":{"hasNextPage":true}}]}}`), &doc); err != nil {
+		t.Fatal(err)
+	}
+	if at := incompletePage(doc, "$"); at != "$.data.a[0].pageInfo" {
+		t.Errorf("path = %q", at)
+	}
+	if err := json.Unmarshal([]byte(`{"pageInfo":{"hasNextPage":true,"endCursor":"c"},"x":{"hasNextPage":false}}`), &doc); err != nil {
+		t.Fatal(err)
+	}
+	if at := incompletePage(doc, "$"); at != "" {
+		t.Errorf("a complete page was refused at %q", at)
 	}
 }

@@ -53,7 +53,7 @@ func TestSyncTeamsWritesThroughTheVerbAgainstClickHouse(t *testing.T) {
 	if code != cli.ExitOK {
 		t.Fatalf("exit %d: %s", code, stderr)
 	}
-	if strings.TrimSpace(stdout) != "teams=1 memberships=1 project_links=1 expired_memberships=0 expired_project_links=0" {
+	if strings.TrimSpace(stdout) != "teams=1 memberships=1 project_links=1 expired_memberships=0 expired_project_links=0 deactivated_teams=0" {
 		t.Fatalf("stdout = %q", stdout)
 	}
 
@@ -70,5 +70,42 @@ func TestSyncTeamsWritesThroughTheVerbAgainstClickHouse(t *testing.T) {
 		if got != want {
 			t.Errorf("%s rows = %d, want %d", table, got, want)
 		}
+	}
+}
+
+type noTeams struct{ oneTeam }
+
+func (noTeams) SearchTeams(context.Context, string, string, string, int) ([]atlassian.AtlassianTeam, error) {
+	return nil, nil
+}
+
+// r2 finding: the opt-in path of an empty answer was never exercised.
+func TestAnEmptyAnswerRunsWithAllowEmptyAgainstClickHouse(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	instance, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer closeCancel()
+		_ = instance.Close(closeCtx)
+	})
+	chschema.Apply(ctx, t, instance)
+
+	env := validEnv()
+	env["CLICKHOUSE_URI"] = instance.URI
+	d := defaultDeps()
+	d.newClient = func(string, atlassian.AuthProvider) atlassianteams.Client { return noTeams{} }
+	if code, _, stderr := run(t, env, d, "--provider", "jira", "--org", "org-1"); code != cli.ExitFailure || !strings.Contains(stderr, "empty_result") {
+		t.Fatalf("without the flag: exit %d: %s", code, stderr)
+	}
+	code, stdout, stderr := run(t, env, d, "--provider", "jira", "--org", "org-1", "--allow-empty")
+	if code != cli.ExitOK {
+		t.Fatalf("with --allow-empty: exit %d: %s", code, stderr)
+	}
+	if strings.TrimSpace(stdout) != "teams=0 memberships=0 project_links=0 expired_memberships=0 expired_project_links=0 deactivated_teams=0" {
+		t.Fatalf("stdout = %q", stdout)
 	}
 }

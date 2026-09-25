@@ -203,8 +203,12 @@ func TestARunRetractsWhatTheSnapshotNoLongerHas(t *testing.T) {
 	}
 	result := run(first.Add(time.Hour), shrunk)
 	// alice-1 (team A), carol-3 (team C, no longer returned) = 2 members; PLAT (team A) = 1 link.
-	if result.ExpiredMemberships != 2 || result.ExpiredOwnership != 1 {
-		t.Fatalf("retracted %+v, want 2 memberships and 1 project link", result)
+	if result.ExpiredMemberships != 2 || result.ExpiredOwnership != 1 || result.DeactivatedTeams != 1 {
+		t.Fatalf("retracted %+v, want 2 memberships, 1 project link and 1 deactivated team", result)
+	}
+	// r2 finding: a team deleted upstream stayed active in the catalog.
+	if got := lines(t, conn, `SELECT concat(id, '|', toString(is_active), '|', name, '|', ifNull(native_team_key, '')) FROM teams FINAL WHERE org_id = 'org-1' AND provider = 'jira' AND id IN ('`+idA+`', '`+idC+`') ORDER BY id`); strings.Join(got, ",") != idA+"|1|Platform|"+teamA+","+idC+"|0|Data|"+teamC {
+		t.Fatalf("catalog after the deletion = %v, want team A active and the deleted team C inactive (name and ARI kept)", got)
 	}
 	for _, table := range []string{"team_memberships", "team_project_ownership"} {
 		exec(t, conn, "OPTIMIZE TABLE "+table+" FINAL")

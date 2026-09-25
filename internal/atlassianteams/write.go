@@ -8,6 +8,7 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 )
@@ -28,10 +29,16 @@ const (
 type Result struct {
 	ExpiredMemberships int
 	ExpiredOwnership   int
+	// DeactivatedTeams counts catalog rows of Atlassian teams the snapshot no
+	// longer returns (deleted upstream), rewritten inactive.
+	DeactivatedTeams int
 }
 
 const (
 	atlassianTeamARIPrefix = "ari:cloud:identity::team/"
+
+	activeMissingTeamsQuery = "SELECT id, team_uuid, name, description, members, manual_members, project_keys, repo_patterns, native_team_key, parent_team_id " +
+		"FROM teams FINAL WHERE org_id = {org_id:String} AND provider = {provider:String} AND is_active = 1 AND id IN {team_ids:Array(String)}"
 
 	knownTeamsQuery      = "SELECT id FROM teams FINAL WHERE org_id = {org_id:String} AND provider = {provider:String} AND startsWith(ifNull(native_team_key, ''), {ari_prefix:String})"
 	openMembershipsQuery = "SELECT team_id, member_id, raw_provider_user_id, raw_email, identity_facets, toString(source), is_primary, specificity, priority, valid_from " +
@@ -63,9 +70,15 @@ func Write(ctx context.Context, conn driver.Conn, orgID string, rows Rows, selec
 	if conn == nil || orgID == "" {
 		return result, ErrConfiguration
 	}
-	scope, err := teamsInScope(ctx, conn, orgID, rows.Teams)
+	scope, missing, err := teamsInScope(ctx, conn, orgID, rows.Teams)
 	if err != nil {
 		return result, fmt.Errorf("read known atlassian teams: %w", err)
+	}
+	var deactivate []inactiveTeam
+	if selections.Structure {
+		if deactivate, err = planDeactivations(ctx, conn, orgID, missing); err != nil {
+			return result, fmt.Errorf("read the teams the snapshot no longer has: %w", err)
+		}
 	}
 	var memberships []MembershipRow
 	var expiredMemberships []openMembership
@@ -110,19 +123,20 @@ func Write(ctx context.Context, conn driver.Conn, orgID string, rows Rows, selec
 		result.ExpiredOwnership = len(expiredOwnership)
 		done = append(done, "team project ownership")
 	}
-	if selections.Structure && len(rows.Teams) > 0 {
-		if err := writeTeams(ctx, conn, orgID, rows.Teams, !selections.Projects); err != nil {
+	if selections.Structure && (len(rows.Teams) > 0 || len(deactivate) > 0) {
+		if err := writeTeams(ctx, conn, orgID, rows.Teams, deactivate, now, !selections.Projects); err != nil {
 			return fail("write teams", err)
 		}
+		result.DeactivatedTeams = len(deactivate)
 	}
 	return result, nil
 }
 
 // teamsInScope is every Atlassian team this run answers for: the ones the
-// snapshot returned and the ones already in the catalog.
-func teamsInScope(ctx context.Context, conn driver.Conn, orgID string, teams []TeamRow) ([]string, error) {
+// snapshot returned and the ones already in the catalog; missing is the second
+// group minus the first (teams deleted upstream).
+func teamsInScope(ctx context.Context, conn driver.Conn, orgID string, teams []TeamRow) (ids, missing []string, err error) {
 	seen := map[string]bool{}
-	var ids []string
 	for _, team := range teams {
 		if !seen[team.ID] {
 			seen[team.ID] = true
@@ -132,20 +146,54 @@ func teamsInScope(ctx context.Context, conn driver.Conn, orgID string, teams []T
 	result, err := conn.Query(ctx, knownTeamsQuery,
 		clickhouse.Named("org_id", orgID), clickhouse.Named("provider", Provider), clickhouse.Named("ari_prefix", atlassianTeamARIPrefix))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer result.Close()
 	for result.Next() {
 		var id string
 		if err := result.Scan(&id); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if !seen[id] {
 			seen[id] = true
 			ids = append(ids, id)
+			missing = append(missing, id)
 		}
 	}
-	return ids, result.Err()
+	return ids, missing, result.Err()
+}
+
+type inactiveTeam struct {
+	id                                                string
+	teamUUID                                          uuid.UUID
+	name                                              string
+	description                                       *string
+	members, manualMembers, projectKeys, repoPatterns []string
+	nativeTeamKey, parentTeamID                       *string
+}
+
+// planDeactivations reads the still-active catalog rows of the Atlassian teams
+// the snapshot no longer returns, to rewrite them inactive.
+func planDeactivations(ctx context.Context, conn driver.Conn, orgID string, missing []string) ([]inactiveTeam, error) {
+	if len(missing) == 0 {
+		return nil, nil
+	}
+	result, err := conn.Query(ctx, activeMissingTeamsQuery,
+		clickhouse.Named("org_id", orgID), clickhouse.Named("provider", Provider), clickhouse.Named("team_ids", missing))
+	if err != nil {
+		return nil, err
+	}
+	defer result.Close()
+	var out []inactiveTeam
+	for result.Next() {
+		var row inactiveTeam
+		if err := result.Scan(&row.id, &row.teamUUID, &row.name, &row.description, &row.members, &row.manualMembers,
+			&row.projectKeys, &row.repoPatterns, &row.nativeTeamKey, &row.parentTeamID); err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, result.Err()
 }
 
 type openMembership struct {
@@ -268,7 +316,7 @@ func planOwnership(ctx context.Context, conn driver.Conn, orgID string, scope []
 	return out, expired, nil
 }
 
-func writeTeams(ctx context.Context, conn driver.Conn, orgID string, teams []TeamRow, keepProjectKeys bool) error {
+func writeTeams(ctx context.Context, conn driver.Conn, orgID string, teams []TeamRow, deactivate []inactiveTeam, now time.Time, keepProjectKeys bool) error {
 	ids := make([]string, len(teams))
 	for i, team := range teams {
 		ids[i] = team.ID
@@ -304,6 +352,14 @@ func writeTeams(ctx context.Context, conn driver.Conn, orgID string, teams []Tea
 		if err := batch.Append(
 			team.ID, team.TeamUUID, team.Name, team.Description, []string{}, manualMembers, keys, []string{},
 			team.IsActive, team.UpdatedAt, team.OrgID, team.Provider, &nativeKey, (*string)(nil),
+		); err != nil {
+			return err
+		}
+	}
+	for _, team := range deactivate {
+		if err := batch.Append(
+			team.id, team.teamUUID, team.name, team.description, team.members, team.manualMembers, team.projectKeys, team.repoPatterns,
+			uint8(0), now, orgID, Provider, team.nativeTeamKey, team.parentTeamID,
 		); err != nil {
 			return err
 		}

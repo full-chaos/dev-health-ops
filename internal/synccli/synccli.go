@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"net/url"
 	"strings"
 	"time"
@@ -81,7 +82,13 @@ type deps struct {
 func defaultDeps() deps {
 	return deps{
 		newClient: func(gatewayURL string, auth atlassian.AuthProvider) atlassianteams.Client {
-			return &graph.Client{BaseURL: gatewayURL, Auth: auth}
+			// Strict: GraphQL errors next to partial data fail the read (the
+			// client otherwise returns the partial data). CompletePagesOnly: a
+			// page that promises a next page without a cursor fails it too.
+			return &graph.Client{
+				BaseURL: gatewayURL, Auth: auth, Strict: true,
+				HTTPClient: &http.Client{Timeout: 30 * time.Second, Transport: atlassianteams.CompletePagesOnly(nil)},
+			}
 		},
 		openStore: func(ctx context.Context, dsn string) (driver.Conn, error) {
 			return clickhousestore.Open(ctx, clickhousestore.DefaultConfig(dsn))
@@ -171,9 +178,9 @@ func runTeams(ctx context.Context, env cli.Env, d deps) int {
 	}
 	logger.Info("atlassian teams synced", "org_id", orgID, "teams", len(rows.Teams), "memberships", len(rows.Memberships),
 		"project_links", len(rows.Ownership), "skipped_project_links", rows.SkippedProjects,
-		"expired_memberships", result.ExpiredMemberships, "expired_project_links", result.ExpiredOwnership, "duration_ms", time.Since(started).Milliseconds())
-	if _, err := fmt.Fprintf(env.Stdout, "teams=%d memberships=%d project_links=%d expired_memberships=%d expired_project_links=%d\n",
-		len(rows.Teams), len(rows.Memberships), len(rows.Ownership), result.ExpiredMemberships, result.ExpiredOwnership); err != nil {
+		"expired_memberships", result.ExpiredMemberships, "expired_project_links", result.ExpiredOwnership, "deactivated_teams", result.DeactivatedTeams, "duration_ms", time.Since(started).Milliseconds())
+	if _, err := fmt.Fprintf(env.Stdout, "teams=%d memberships=%d project_links=%d expired_memberships=%d expired_project_links=%d deactivated_teams=%d\n",
+		len(rows.Teams), len(rows.Memberships), len(rows.Ownership), result.ExpiredMemberships, result.ExpiredOwnership, result.DeactivatedTeams); err != nil {
 		return cli.ExitFailure
 	}
 	return cli.ExitOK

@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -234,5 +237,27 @@ func TestAnEmptyResultIsRefusedUnlessAllowed(t *testing.T) {
 	code, stdout, stderr := run(t, validEnv(), stubDeps(rec, emptyClient{}, nil), "--provider", "jira", "--org", "o")
 	if code != cli.ExitFailure || !strings.Contains(stderr, `"code":"empty_result"`) || stdout != "" {
 		t.Fatalf("exit %d, stdout %q, stderr %s", code, stdout, stderr)
+	}
+}
+
+// The production client (not a test double) must refuse a partial answer and a
+// page that promises more without a cursor: the sync retracts against what it reads.
+func TestTheProductionClientRefusesIncompleteAnswers(t *testing.T) {
+	for name, body := range map[string]string{
+		"graphql errors next to data": `{"data":{"team":{"teamSearchV2":{"pageInfo":{"hasNextPage":false},"nodes":[]}}},"errors":[{"message":"a field failed"}]}`,
+		"next page without a cursor":  `{"data":{"team":{"teamSearchV2":{"pageInfo":{"hasNextPage":true},"nodes":[]}}}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, body)
+			}))
+			defer server.Close()
+			client := defaultDeps().newClient(server.URL+"/gateway/api", atlassian.BasicAPITokenAuth{Email: "e@example.test", Token: tokenValue})
+			teams, err := client.SearchTeams(context.Background(), "org", "site", "", 50)
+			if err == nil {
+				t.Fatalf("answer accepted as complete: %v", teams)
+			}
+		})
 	}
 }

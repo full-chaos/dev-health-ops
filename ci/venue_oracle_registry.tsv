@@ -52,6 +52,7 @@ internal/apiservice	TestVenueOracleRouteResponseModels	run
 internal/apiservice	TestWebhookIntakeVenueOracleGitHubGitLabJiraHealth	run
 internal/apiservice	TestWebhookIntakeVenueOraclePagerDuty	run
 internal/apiservice/admin	TestCreateOrgInviteVenueOracle	run
+internal/apiservice/admin	TestCredentialDeleteVenueOracle	run
 internal/apiservice/admin	TestGovernanceRoutesVenueOracle	run
 internal/apiservice/admin	TestImpersonationStartStopMatchesThePythonAPI	run
 internal/apiservice/admin	TestImpersonationTTLConfigMatchesThePythonAPI	run

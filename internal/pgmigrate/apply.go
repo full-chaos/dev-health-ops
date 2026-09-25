@@ -85,9 +85,9 @@ func Upgrade(ctx context.Context, conn *pgx.Conn, baseline Baseline, chain []Cha
 // one; the loop's decisions are tested against a stub.
 type chainSteps interface {
 	// step plans again under the migration lock and applies the first pending
-	// revision in its own transaction. applied is nil when nothing was pending;
-	// attempted is nil when the step failed before it chose a revision.
-	step(ctx context.Context) (applied, attempted *ChainFile, err error)
+	// revision in its own transaction. applied is "" when nothing was pending;
+	// attempted is "" when the step failed before it chose a revision.
+	step(ctx context.Context) (applied, attempted string, err error)
 	// recorded reports, from a fresh read, whether the database now records the
 	// revision (or a later one).
 	recorded(ctx context.Context, revision string) bool
@@ -108,15 +108,15 @@ func applyChain(ctx context.Context, steps chainSteps) ([]string, error) {
 			// is where this run wants it. When the revision is now recorded, carry
 			// on with a fresh plan; any other failure is the step's own, and so is
 			// a failure before a revision was chosen.
-			if attempted == nil || !steps.recorded(ctx, attempted.Revision) {
+			if attempted == "" || !steps.recorded(ctx, attempted) {
 				return applied, err
 			}
 			continue
 		}
-		if done == nil {
+		if done == "" {
 			return applied, nil
 		}
-		applied = append(applied, done.Revision)
+		applied = append(applied, done)
 	}
 }
 
@@ -127,8 +127,9 @@ type dbChain struct {
 	chain    []ChainFile
 }
 
-func (d dbChain) step(ctx context.Context) (applied, attempted *ChainFile, err error) {
-	err = inTransaction(ctx, d.conn, func(tx pgx.Tx) error {
+func (d dbChain) step(ctx context.Context) (string, string, error) {
+	var progress stepProgress
+	err := inTransaction(ctx, d.conn, func(tx pgx.Tx) error {
 		observation, err := observe(ctx, tx)
 		if err != nil {
 			return err
@@ -141,15 +142,19 @@ func (d dbChain) step(ctx context.Context) (applied, attempted *ChainFile, err e
 			return nil
 		}
 		file := current.Pending[0]
-		attempted = &file
+		progress.attempted = file.Revision
 		if err := applyChainFile(ctx, tx, file, current.ApplicationHead); err != nil {
 			return err
 		}
-		applied = &file
+		progress.applied = file.Revision
 		return nil
 	})
-	return applied, attempted, err
+	return progress.applied, progress.attempted, err
 }
+
+// stepProgress is what one step got to: the revision it tried and the one it
+// committed (revision numbers, never pointers: a step that failed early has none).
+type stepProgress struct{ applied, attempted string }
 
 func (d dbChain) recorded(ctx context.Context, revision string) bool {
 	return revisionRecordedSince(ctx, d.conn, d.baseline, d.chain, revision)

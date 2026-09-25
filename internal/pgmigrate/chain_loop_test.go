@@ -23,21 +23,14 @@ type stubStep struct {
 	err                error
 }
 
-func file(revision string) *ChainFile {
-	if revision == "" {
-		return nil
-	}
-	return &ChainFile{Revision: revision}
-}
-
-func (s *stubSteps) step(context.Context) (*ChainFile, *ChainFile, error) {
+func (s *stubSteps) step(context.Context) (string, string, error) {
 	s.t.Helper()
 	if s.called >= len(s.script) {
 		s.t.Fatalf("the loop asked for step %d of %d: it does not stop", s.called+1, len(s.script))
 	}
 	outcome := s.script[s.called]
 	s.called++
-	return file(outcome.applied), file(outcome.attempted), outcome.err
+	return outcome.applied, outcome.attempted, outcome.err
 }
 
 func (s *stubSteps) recorded(_ context.Context, revision string) bool {

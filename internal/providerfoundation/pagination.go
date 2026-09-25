@@ -212,6 +212,17 @@ type GitHubPageOptions struct {
 	// no such boundary (e.g. an unbounded backfill), which reproduces the
 	// unmodified fetch-every-page behavior exactly.
 	StopAt func(json.RawMessage) bool
+	// Keep, when set, filters items as they are read: an item it reports false
+	// for is dropped and pagination continues. It runs before MaxItems,
+	// StopAfter and the append, so those count only kept items.
+	Keep func(json.RawMessage) bool
+	// StopAfter, when set, is evaluated for each item AFTER it has been kept:
+	// the first item it reports true for is included in Items and pagination
+	// stops immediately, without requesting a next page even when the current
+	// response advertises one. It models a caller that returns the moment it
+	// has collected what it needs (a listing capped at N matches), so the cap
+	// costs no speculative request. Leave nil for the unmodified behavior.
+	StopAfter func(json.RawMessage) bool
 }
 
 // CollectGitHubLinkPages mirrors the Python InstrumentedRESTCore contract:
@@ -251,7 +262,7 @@ func CollectGitHubLinkPages(
 			return result, decodeErr
 		}
 		result.Pages++
-		if options.StopAt == nil && options.MaxItems == 0 {
+		if options.StopAt == nil && options.StopAfter == nil && options.Keep == nil && options.MaxItems == 0 {
 			result.Items = append(result.Items, items...)
 			next = githubNextLink(response.Header.Get("Link"))
 			continue
@@ -262,9 +273,15 @@ func CollectGitHubLinkPages(
 				crossedBoundary = true
 				break
 			}
+			if options.Keep != nil && !options.Keep(item) {
+				continue
+			}
 			result.Items = append(result.Items, item)
 			if options.MaxItems > 0 && len(result.Items) >= options.MaxItems {
 				result.ItemCapReached = true
+				return result, nil
+			}
+			if options.StopAfter != nil && options.StopAfter(item) {
 				return result, nil
 			}
 		}

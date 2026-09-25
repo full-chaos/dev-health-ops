@@ -1767,6 +1767,17 @@ check_live_python_oracles() {
     return 1
   fi
 
+  # TestRepoListingMatchesLivePython is run by the unfiltered
+  # ./internal/providersync/... invocation at the top of this function (with the
+  # oracle env and proof dir), so it is not run a second time here; only its
+  # proof marker is required.
+  proof_file="${proof_dir}/repo-listing"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: the --search batch repository listing live Python oracle measurement did not occur\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+
   printf 'go test -count=1: internal/queryapi/principal (Go verifier vs a REAL Python-issued envelope + JWKS, CHAOS-4366)\n'
   if ! (
     cd "${ROOT}"

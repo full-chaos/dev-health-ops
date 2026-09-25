@@ -15,6 +15,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/testops"
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
@@ -76,17 +77,11 @@ func TestNativeTestopsPushdownMatchesRowLoadersAgainstRealClickHouse(t *testing.
 	}
 	defer conn.Close()
 
-	// Sorting keys carry org_id FIRST, matching production after migration
-	// 042 (042_rmt_org_id_dedup_keys.py) -- NOT 029's original
-	// (repo_id, ...) keys. The native readers GROUP BY exactly these tuples,
-	// so a fixture on the pre-042 keys would be testing a shape that no
-	// longer exists. Shared with the executor test below via
-	// testopsDifferentialSchema so the two can never drift apart.
-	for _, statement := range testopsDifferentialSchema() {
-		if err := conn.Exec(ctx, statement); err != nil {
-			t.Fatal(err)
-		}
-	}
+	// The versioned schema, applied by the real migration chain, not a
+	// hand-typed copy (CHAOS-5152, Trap #412): the native readers GROUP BY the
+	// production sorting keys (org_id first, migration 042), and a copy has
+	// no mechanism keeping it in sync with them.
+	chschema.Apply(ctx, t, clickhouseInstance)
 
 	for _, table := range []string{"ci_pipeline_runs", "test_suite_results", "test_case_results", "coverage_snapshots"} {
 		if err := conn.Exec(ctx, "SYSTEM STOP MERGES "+table); err != nil {
@@ -291,11 +286,7 @@ func TestNativeTestopsExecutorsWriteTheirTablesAgainstRealClickHouse(t *testing.
 	}
 	defer conn.Close()
 
-	for _, statement := range testopsDifferentialSchema() {
-		if err := conn.Exec(ctx, statement); err != nil {
-			t.Fatal(err)
-		}
-	}
+	chschema.Apply(ctx, t, clickhouseInstance)
 
 	const orgID = "00000000-0000-4000-8000-000000000009"
 	repoID := uuid.MustParse("00000000-0000-4000-8000-0000000000a1")
@@ -322,10 +313,18 @@ func TestNativeTestopsExecutorsWriteTheirTablesAgainstRealClickHouse(t *testing.
 		name     string
 		executor NativeFamilyExecutor
 		table    string
+		// collapsesToOneRow pins a KNOWN production defect (CHAOS-6774): the
+		// pipeline executor returns one row per (team, service) group of a
+		// repo/day, but the real table is ReplacingMergeTree ORDER BY
+		// (org_id, repo_id, day) (migration 096), so the rows of one run collapse
+		// to one and which survives is arbitrary. The hand-typed MergeTree DDL
+		// this test used to carry hid it. The pin fails when the collapse is
+		// fixed (or worsens), so the fix removes the flag.
+		collapsesToOneRow bool
 	}{
-		{"testops_pipeline", pipelineExecutor, "testops_pipeline_metrics_daily"},
-		{"testops_test", testExecutor, "testops_test_metrics_daily"},
-		{"testops_coverage", coverageExecutor, "testops_coverage_metrics_daily"},
+		{"testops_pipeline", pipelineExecutor, "testops_pipeline_metrics_daily", true},
+		{"testops_test", testExecutor, "testops_test_metrics_daily", false},
+		{"testops_coverage", coverageExecutor, "testops_coverage_metrics_daily", false},
 	} {
 		written, err := spec.executor.ComputeFamily(ctx, run, partition)
 		if err != nil {
@@ -344,77 +343,15 @@ func TestNativeTestopsExecutorsWriteTheirTablesAgainstRealClickHouse(t *testing.
 		).Scan(&stored); err != nil {
 			t.Fatalf("%s readback: %v", spec.name, err)
 		}
+		if spec.collapsesToOneRow {
+			if written <= 1 || stored != 1 {
+				t.Fatalf("%s: CHAOS-6774 pin: want several rows reported and exactly 1 stored (the sorting-key collapse), got wrote %d reported %d; if the collapse was fixed, drop collapsesToOneRow", spec.name, stored, written)
+			}
+			continue
+		}
 		if stored != uint64(written) {
 			t.Fatalf("%s wrote %d rows but reported %d", spec.name, stored, written)
 		}
-	}
-}
-
-// testopsDifferentialSchema is the DDL both tests above use. Kept as one
-// function so the two can never drift into testing different table shapes.
-func testopsDifferentialSchema() []string {
-	return []string{
-		`CREATE TABLE teams (
-    id String, name String, members Array(String), repo_patterns Array(String), org_id String
-) ENGINE = ReplacingMergeTree ORDER BY (id)`,
-		`CREATE TABLE ci_pipeline_runs (
-    repo_id UUID, run_id String, status Nullable(String),
-    queued_at Nullable(DateTime64(3, 'UTC')), started_at DateTime64(3, 'UTC'),
-    finished_at Nullable(DateTime64(3, 'UTC')), last_synced DateTime64(3, 'UTC'),
-    pipeline_name Nullable(String), provider LowCardinality(String) DEFAULT '',
-    duration_seconds Nullable(Float64), queue_seconds Nullable(Float64),
-    retry_count UInt32 DEFAULT 0, cancel_reason Nullable(String), trigger_source Nullable(String),
-    commit_hash Nullable(String), branch Nullable(String), pr_number Nullable(UInt32),
-    team_id Nullable(String), service_id Nullable(String), org_id LowCardinality(String) DEFAULT ''
-) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, run_id)`,
-		`CREATE TABLE test_suite_results (
-    repo_id UUID, run_id String, suite_id String, suite_name String,
-    framework Nullable(String), environment Nullable(String),
-    total_count UInt32, passed_count UInt32, failed_count UInt32, skipped_count UInt32,
-    error_count UInt32 DEFAULT 0, quarantined_count UInt32 DEFAULT 0, retried_count UInt32 DEFAULT 0,
-    duration_seconds Nullable(Float64), started_at Nullable(DateTime64(3, 'UTC')),
-    finished_at Nullable(DateTime64(3, 'UTC')), team_id Nullable(String), service_id Nullable(String),
-    org_id LowCardinality(String) DEFAULT '', last_synced DateTime64(3, 'UTC')
-) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, run_id, suite_id)`,
-		`CREATE TABLE test_case_results (
-    repo_id UUID, run_id String, suite_id String, case_id String, case_name String,
-    class_name Nullable(String), status LowCardinality(String), duration_seconds Nullable(Float64),
-    retry_attempt UInt32 DEFAULT 0, failure_message Nullable(String), failure_type Nullable(String),
-    stack_trace Nullable(String), is_quarantined UInt8 DEFAULT 0,
-    org_id LowCardinality(String) DEFAULT '', last_synced DateTime64(3, 'UTC')
-) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, run_id, suite_id, case_id)`,
-		`CREATE TABLE coverage_snapshots (
-    repo_id UUID, run_id String, snapshot_id String, report_format Nullable(String),
-    lines_total Nullable(UInt32), lines_covered Nullable(UInt32), line_coverage_pct Nullable(Float64),
-    branches_total Nullable(UInt32), branches_covered Nullable(UInt32), branch_coverage_pct Nullable(Float64),
-    functions_total Nullable(UInt32), functions_covered Nullable(UInt32),
-    commit_hash Nullable(String), branch Nullable(String), pr_number Nullable(UInt32),
-    team_id Nullable(String), service_id Nullable(String), org_id LowCardinality(String) DEFAULT '',
-    last_synced DateTime64(3, 'UTC')
-) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, run_id, snapshot_id)`,
-		`CREATE TABLE testops_pipeline_metrics_daily (
-    repo_id UUID, day Date, pipelines_count UInt32, success_count UInt32, failure_count UInt32,
-    cancelled_count UInt32, success_rate Float64, failure_rate Float64, cancel_rate Float64,
-    rerun_rate Float64, median_duration_seconds Nullable(Float64), p95_duration_seconds Nullable(Float64),
-    avg_queue_seconds Nullable(Float64), p95_queue_seconds Nullable(Float64),
-    team_id Nullable(String), service_id Nullable(String), org_id LowCardinality(String) DEFAULT '',
-    computed_at DateTime('UTC')
-) ENGINE MergeTree PARTITION BY toYYYYMM(day) ORDER BY (repo_id, day)`,
-		`CREATE TABLE testops_test_metrics_daily (
-    repo_id UUID, day Date, total_cases UInt32, passed_count UInt32, failed_count UInt32,
-    skipped_count UInt32, quarantined_count UInt32, pass_rate Float64, failure_rate Float64,
-    flake_rate Float64, retry_dependency_rate Float64, total_suites UInt32,
-    suite_duration_p50_seconds Nullable(Float64), suite_duration_p95_seconds Nullable(Float64),
-    failure_recurrence_score Float64, team_id Nullable(String), service_id Nullable(String),
-    org_id LowCardinality(String) DEFAULT '', computed_at DateTime('UTC')
-) ENGINE MergeTree PARTITION BY toYYYYMM(day) ORDER BY (repo_id, day)`,
-		`CREATE TABLE testops_coverage_metrics_daily (
-    repo_id UUID, day Date, line_coverage_pct Nullable(Float64), branch_coverage_pct Nullable(Float64),
-    lines_total Nullable(UInt32), lines_covered Nullable(UInt32), coverage_delta_pct Nullable(Float64),
-    uncovered_files_count UInt32, coverage_regression_count UInt32,
-    team_id Nullable(String), service_id Nullable(String), org_id LowCardinality(String) DEFAULT '',
-    computed_at DateTime('UTC')
-) ENGINE MergeTree PARTITION BY toYYYYMM(day) ORDER BY (repo_id, day)`,
 	}
 }
 

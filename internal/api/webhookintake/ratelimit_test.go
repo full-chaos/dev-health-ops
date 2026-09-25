@@ -104,6 +104,9 @@ type failingCounters struct{}
 func (failingCounters) Increment(context.Context, httpapi.Hit) (int64, error) {
 	return 0, errors.New("dial tcp 10.0.0.9:6379: connection refused")
 }
+func (failingCounters) Peek(context.Context, httpapi.Hit) (int64, error) {
+	return 0, errors.New("dial tcp 10.0.0.9:6379: connection refused")
+}
 func (failingCounters) Backend() string { return "redis" }
 
 // A store that cannot answer is the Python api's unhandled 500 (slowapi has

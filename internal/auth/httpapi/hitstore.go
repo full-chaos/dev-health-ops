@@ -32,11 +32,15 @@ type Hit struct {
 	Path  string
 }
 
-// ErrPathBound is what a CounterStore returns when Key is at its bound of
-// distinct live paths and Path is new to it: the request is refused and
-// nothing is counted, so a caller minting paths pays for it and no other
-// caller is affected.
-var ErrPathBound = errors.New("httpapi: caller at its bound of distinct rate-limited paths")
+// ErrPathBound is what a CounterStore returns when it cannot admit a
+// BRAND-NEW (key, path) counter: the request is refused and nothing is
+// counted. Only MemoryCounters returns it, at its global entry cap
+// (maxKeyedLimiterEntries), a memory-safety backstop for the in-process store
+// that no deployment counts in. The shared store never returns it: nothing
+// bounds how many distinct paths a caller may count there, exactly as
+// slowapi bounds nothing (a per-caller bound refused a client Python serves,
+// CHAOS-6624).
+var ErrPathBound = errors.New("httpapi: in-process rate-limit counter set is full")
 
 // CounterStore is the ONE store every rate limiter counts in. The shared
 // implementation (ratelimitvalkey.Store, Valkey -- the backend the Python api

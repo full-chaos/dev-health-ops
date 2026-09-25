@@ -130,30 +130,45 @@ func TestPairsAndLimitsAreIndependent(t *testing.T) {
 	}
 }
 
-// The per-key path bound: one caller minting distinct paths is refused for
-// new paths past the bound and nobody else is affected; its tracked paths
-// keep counting.
-func TestOneCallerCannotMintUnboundedPathsOrStarveAnother(t *testing.T) {
+// CHAOS-6624: nothing bounds how many distinct paths one caller may count.
+// slowapi keeps one counter per (caller, exact path) and bounds nothing; a
+// per-caller bound on distinct paths (this store had one of 1,000) refused a
+// caller's 1,001st distinct path in a window where Python answers. 1,500
+// distinct paths from one caller are all admitted, each on its own budget;
+// the keyspace is exactly one counter per path (no path set), each with a TTL.
+func TestACallerIsNeverRefusedForTheNumberOfDistinctPaths(t *testing.T) {
 	client, _ := startValkey(t)
 	store := newStore(t, client)
 	limit := httpapi.Limit{ID: "paths", Count: 5, Window: time.Hour}
-	for i := range ratelimitvalkey.MaxPathsPerKey {
-		if !hit(t, store, limit, "minter", fmt.Sprintf("/orgs/%d/invites", i)) {
-			t.Fatalf("path %d within the bound was refused", i)
+	const distinct = 1500
+	for i := range distinct {
+		if !hit(t, store, limit, "walker", fmt.Sprintf("/orgs/%d/invites", i)) {
+			t.Fatalf("distinct path %d of one caller was refused, want admitted (no per-caller bound)", i+1)
 		}
 	}
-	if hit(t, store, limit, "minter", "/orgs/one-too-many/invites") {
-		t.Fatal("a new path past the per-key bound was allowed")
+	// Each path is still its own bucket.
+	for range 4 {
+		hit(t, store, limit, "walker", "/orgs/0/invites")
 	}
-	if !hit(t, store, limit, "other", "/orgs/one-too-many/invites") {
-		t.Fatal("another caller was refused after the minter filled its own bound")
+	if hit(t, store, limit, "walker", "/orgs/0/invites") {
+		t.Fatal("the sixth hit on one path was allowed, want refused (5/window)")
 	}
-	if !hit(t, store, limit, "minter", "/orgs/0/invites") {
-		t.Fatal("an already-tracked path of the minter was refused")
+	ctx := context.Background()
+	keys, err := client.Do(ctx, client.B().Keys().Pattern("dho:rl:*").Build()).AsStrSlice()
+	if err != nil {
+		t.Fatal(err)
 	}
-	// A refused new path counts nothing: it never created a counter.
-	if !hit(t, store, httpapi.Limit{ID: "paths", Count: 1, Window: time.Hour}, "another-minter", "/orgs/a/invites") {
-		t.Fatal("unrelated first hit refused")
+	if len(keys) != distinct {
+		t.Fatalf("keyspace holds %d keys, want exactly one counter per distinct path (%d) and no path set", len(keys), distinct)
+	}
+	for _, key := range keys {
+		ttl, err := client.Do(ctx, client.B().Pttl().Key(key).Build()).AsInt64()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ttl <= 0 || ttl > limit.Window.Milliseconds() {
+			t.Fatalf("PTTL(%s) = %dms, want within (0, %dms]: a counter without a TTL is an unbounded keyspace", key, ttl, limit.Window.Milliseconds())
+		}
 	}
 }
 
@@ -166,7 +181,7 @@ func TestEveryCounterHasATTLNoLongerThanTheWindow(t *testing.T) {
 	hit(t, store, limit, "k", "/p")
 	hit(t, store, limit, "k", "/p")
 	ctx := context.Background()
-	for _, key := range []string{ratelimitvalkey.CounterKey(limit, "k", "/p"), ratelimitvalkey.PathsKey(limit, "k")} {
+	for _, key := range []string{ratelimitvalkey.CounterKey(limit, "k", "/p")} {
 		ttl, err := client.Do(ctx, client.B().Pttl().Key(key).Build()).AsInt64()
 		if err != nil {
 			t.Fatal(err)
@@ -217,24 +232,14 @@ func TestCallerKeyAndPathAreNotStoredInCleartext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(keys) != 2 {
-		t.Fatalf("keys = %q, want the counter and the path set", keys)
+	if len(keys) != 1 {
+		t.Fatalf("keys = %q, want the one counter", keys)
 	}
 	for _, key := range keys {
 		for _, secret := range []string{"11111111", "admin-user", "99999999", "/api/v1", "invites"} {
 			if strings.Contains(key, secret) {
 				t.Fatalf("Valkey key %q carries %q in clear", key, secret)
 			}
-		}
-	}
-	// The path set's members are stored too: they must not carry the path.
-	members, err := client.Do(ctx, client.B().Smembers().Key(ratelimitvalkey.PathsKey(limit, callerKey)).Build()).AsStrSlice()
-	if err != nil || len(members) != 1 {
-		t.Fatalf("path set members = %q (%v), want one", members, err)
-	}
-	for _, secret := range []string{"99999999", "/api/v1", "invites"} {
-		if strings.Contains(members[0], secret) {
-			t.Fatalf("path set member %q carries %q in clear", members[0], secret)
 		}
 	}
 	// Still deterministic and per pair: the same pair is one counter, another

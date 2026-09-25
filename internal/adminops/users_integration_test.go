@@ -329,6 +329,7 @@ func goVerbEnv(t *testing.T, db *database, extra map[string]string, args []strin
 		"llm-settings get": runLLMGet, "llm-settings set": runLLMSet, "llm-settings delete": runLLMDelete,
 		"licenses keygen": runLicensesKeygen, "licenses create": runLicensesCreate,
 		"bundles create": runBundlesCreate, "bundles list": runBundlesList, "bundles assign-plan": runBundlesAssignPlan, "bundles assign-org": runBundlesAssignOrg,
+		"billing seed": runBillingSeed, "billing list": runBillingList,
 	}
 	run, ok := runs[args[0]+" "+args[1]]
 	if !ok {

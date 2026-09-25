@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/apimetrics"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
@@ -321,6 +322,17 @@ func Execute(
 		tracingComponent = tracing.Init(logger)
 	}
 	registry := health.NewRegistry(cfg.HealthCheckTimeout)
+	// Every binary exports the OTel instruments its code declares (the
+	// counters ported from the Python api, the coverage and ingest families
+	// declared through otel.Meter) on its own /metrics, as the api and the
+	// query-api already do; before this, only those two installed a
+	// MeterProvider, so an instrument recorded in a scheduler, worker,
+	// reconciler or stream runner process was dropped. Fails soft like
+	// tracing: a broken exporter leaves the instruments unexported, it never
+	// stops the process.
+	if err := apimetrics.Register(registry); err != nil {
+		logger.Warn("register OTel instruments on the operator /metrics", "error", err)
+	}
 	operatorHTTP, err := health.NewServer(health.ServerOptions{
 		Address:  cfg.HTTPAddress,
 		Registry: registry,

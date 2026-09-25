@@ -371,7 +371,7 @@ func fetchGitHubFileContents(
 		if err != nil {
 			return nil, providerfoundation.ErrNormalizationInvalid
 		}
-		response, err := client.Do(ctx, "POST", gitHubGraphQLPath(client), bytes.NewReader(body))
+		response, err := client.Do(ctx, "POST", gitHubGraphQLURL(client), bytes.NewReader(body))
 		if err != nil {
 			return nil, err
 		}
@@ -433,6 +433,14 @@ func gitHubBlobTextsQuery(ref string, paths []string) string {
 	return "query($owner: String!, $repo: String!) {\n  repository(owner: $owner, name: $repo) {\n" + strings.Join(fields, "\n") + "\n  }\n}"
 }
 
+// gitHubGraphQLURL is the GraphQL endpoint as an absolute URL: it sits BESIDE a
+// GitHub Enterprise /api/v3 base (/api/graphql), so it cannot be a path joined
+// under the base path.
+func gitHubGraphQLURL(client *providerfoundation.HTTPClient) string {
+	return (&url.URL{Scheme: client.BaseURL.Scheme, Host: client.BaseURL.Host}).String() + gitHubGraphQLPath(client)
+}
+
+// gitHubGraphQLPath is that endpoint's path on the base URL's host.
 func gitHubGraphQLPath(client *providerfoundation.HTTPClient) string {
 	base := strings.TrimSuffix(client.BaseURL.EscapedPath(), "/")
 	if strings.HasSuffix(base, "/api/v3") {

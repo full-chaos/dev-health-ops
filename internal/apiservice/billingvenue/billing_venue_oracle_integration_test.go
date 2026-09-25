@@ -43,10 +43,15 @@ type fakeStripe struct {
 	counters    map[string]int
 	refunds     int
 	refundByKey map[string]string
+	// createdRefunds is every refund the fake made, in order (append-only).
+	createdRefunds []string
+	// losing names payment intents whose refund answers are lost (500)
+	// while set: the refund is made, the caller sees only an error.
+	losing map[string]bool
 }
 
 func newFakeStripe() *fakeStripe {
-	return &fakeStripe{calls: map[string][]string{}, counters: map[string]int{}, refundByKey: map[string]string{}}
+	return &fakeStripe{calls: map[string][]string{}, counters: map[string]int{}, refundByKey: map[string]string{}, losing: map[string]bool{}}
 }
 
 // sortedForm renders form or query values as sorted key=value pairs: both
@@ -275,6 +280,19 @@ func (f *fakeStripe) serve(plane string, w http.ResponseWriter, r *http.Request)
 			items = []string{item(`{"id": "price_team_cfg", "object": "price"}`)}
 		}
 		fmt.Fprintf(w, `{"object": "list", "url": %q, "has_more": false, "data": [%s]}`, path, strings.Join(items, ", "))
+	// The refunds made for one payment (the route's lookup before it
+	// resumes a pending refund), newest first as Stripe lists them.
+	case r.Method == http.MethodGet && path == "/v1/refunds" && (r.URL.Query().Get("payment_intent") != "" || r.URL.Query().Get("charge") != ""):
+		var matched []string
+		for index := len(f.createdRefunds) - 1; index >= 0; index-- {
+			made := f.createdRefunds[index]
+			if intent := r.URL.Query().Get("payment_intent"); intent != "" && strings.Contains(made, fmt.Sprintf(`"payment_intent": %q`, intent)) {
+				matched = append(matched, made)
+			} else if charge := r.URL.Query().Get("charge"); charge != "" && strings.Contains(made, fmt.Sprintf(`"charge": %q`, charge)) {
+				matched = append(matched, made)
+			}
+		}
+		fmt.Fprintf(w, `{"object": "list", "url": "/v1/refunds", "has_more": false, "data": [%s]}`, strings.Join(matched, ", "))
 	case r.Method == http.MethodGet && fakeLists[path] != nil:
 		after := r.URL.Query().Get("starting_after")
 		if after == "" {
@@ -354,6 +372,9 @@ func (f *fakeStripe) serve(plane string, w http.ResponseWriter, r *http.Request)
 		// made, and makes no second one.
 		key := r.Header.Get("Idempotency-Key")
 		lost := map[string]int{"pi_lost500": http.StatusInternalServerError, "pi_lost408": http.StatusRequestTimeout}[form.Get("payment_intent")]
+		if f.losing[form.Get("payment_intent")] {
+			lost = http.StatusInternalServerError
+		}
 		if made, seen := f.refundByKey[key]; seen && key != "" {
 			if lost != 0 {
 				w.WriteHeader(lost)
@@ -388,6 +409,7 @@ func (f *fakeStripe) serve(plane string, w http.ResponseWriter, r *http.Request)
 		if key != "" {
 			f.refundByKey[key] = made
 		}
+		f.createdRefunds = append(f.createdRefunds, made)
 		// Accepted, then the answer is lost: the refund exists, the caller
 		// sees only an error, on every attempt.
 		if lost != 0 {
@@ -711,6 +733,7 @@ func billingRequests(f billingFixture, tokens map[string]string) (main, deviatio
 	d("deviation: list org C", "GET", s+"/list?org_id="+f.orgC.String(), none, headers("memberA"))
 	d("deviation: history org A", "GET", s+"/history?org_id="+f.orgA.String(), none, headers("adminC"))
 	d("deviation: cancel org C", "POST", s+"/cancel?org_id="+f.orgC.String(), `{}`, headers("ownerA"))
+	d("deviation: change plan org C", "POST", s+"/change-plan?org_id="+f.orgC.String(), `{"price_id":"price_x"}`, headers("ownerA"))
 	return main, deviations
 }
 
@@ -900,8 +923,11 @@ func TestVenueOracleBillingPlansCheckout(t *testing.T) {
 	if len(pyCalls) >= len(goCalls) {
 		extra = pyCalls[len(goCalls):]
 	}
-	if len(extra) != 1 || !strings.HasPrefix(extra[0], "POST /v1/subscriptions/sub_C") {
-		t.Errorf("python's deviation Stripe calls = %q, want one update of sub_C", extra)
+	// cancel org C updates sub_C; change-plan org C reads sub_C (Python then
+	// answers 400 for its missing item, but it already reached org C's
+	// subscription in Stripe).
+	if len(extra) != 2 || !strings.HasPrefix(extra[0], "POST /v1/subscriptions/sub_C") || !strings.HasPrefix(extra[1], "GET /v1/subscriptions/sub_C") {
+		t.Errorf("python's deviation Stripe calls = %q, want an update then a read of sub_C", extra)
 	}
 
 	// Stored rows, raw text, generated ids and clock times blanked.

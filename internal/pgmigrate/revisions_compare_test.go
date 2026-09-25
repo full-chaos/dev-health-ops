@@ -1,28 +1,37 @@
 package pgmigrate_test
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 	"testing"
 )
 
-// compareRevisionText compares dho's `current`/`heads` text with what Alembic
-// printed for the same state. Two rules, and the reason for each:
+// compareRevisionText compares dho's text for one verb with what Alembic printed
+// for the same state. Rules, and the reason for each:
 //
-//   - Alembic's LINE ORDER is not a contract. `alembic current` and `alembic
-//     heads` iterate a set of Script objects, so with two heads the order
-//     changes between processes (12 fresh processes over the two real heads
-//     printed "0066 0138" 11 times and "0138 0066" once). An exact text compare
-//     against the live producer therefore flakes; the lines are compared as a
-//     multiset.
-//   - dho's order IS a contract, and it is pinned exactly here: dho's lines are
+//   - `heads`: exact. Alembic lists them from the script directory's sorted head
+//     tuple (30 fresh processes over the two real heads printed the same order
+//     every time), so a wrong order between two heads must fail.
+//   - `current`: Alembic's LINE ORDER is not a contract. `alembic current` iterates
+//     a set of Script objects, so with two recorded heads the order changes
+//     between processes (12 fresh processes over the two real heads printed
+//     "0066 0138" 11 times and "0138 0066" once). An exact text compare against
+//     the live producer therefore flakes; the lines are compared as a multiset.
+//   - dho's order IS a contract, and it is pinned exactly for both: dho's lines are
 //     compared, unsorted, with Alembic's lines sorted by revision, so dho must
 //     print them sorted by revision. The frozen golden
 //     (TestRevisionsMatchTheFrozenAlembicOutput) pins the same order byte for
 //     byte, so a swap of dho's two heads fails there and here.
 //
 // It returns "" when the text agrees, else a description of the difference.
-func compareRevisionText(got, want string) string {
+func compareRevisionText(verb, got, want string) string {
+	if verb == "heads" {
+		if got != want {
+			return fmt.Sprintf("dho printed %q, Alembic printed %q", got, want)
+		}
+		return ""
+	}
 	gotLines, wantLines := splitLines(got), splitLines(want)
 	sortedWant := append([]string(nil), wantLines...)
 	sort.Strings(sortedWant)
@@ -44,23 +53,27 @@ func TestCompareRevisionText(t *testing.T) {
 	const swapped = "0138 (head)\n0066 (head)\n"
 	tests := []struct {
 		name      string
+		verb      string
 		got, want string
 		ok        bool
 	}{
-		{"same text", sorted, sorted, true},
-		{"Alembic printed the heads in the other order", sorted, swapped, true},
-		{"dho printed the heads swapped", swapped, sorted, false},
-		{"dho printed the heads swapped, Alembic too", swapped, swapped, false},
-		{"a different line", "0066 (head)\n0137\n", sorted, false},
-		{"a missing line", "0138 (head)\n", sorted, false},
-		{"an extra line", sorted + "0139\n", sorted, false},
-		{"both empty", "", "", true},
-		{"dho empty, Alembic not", "", sorted, false},
+		{"same text", "current", sorted, sorted, true},
+		{"Alembic printed the heads in the other order", "current", sorted, swapped, true},
+		{"dho printed the heads swapped", "current", swapped, sorted, false},
+		{"dho printed the heads swapped, Alembic too", "current", swapped, swapped, false},
+		{"a different line", "current", "0066 (head)\n0137\n", sorted, false},
+		{"a missing line", "current", "0138 (head)\n", sorted, false},
+		{"an extra line", "current", sorted + "0139\n", sorted, false},
+		{"both empty", "current", "", "", true},
+		{"dho empty, Alembic not", "current", "", sorted, false},
+		{"heads: same text", "heads", sorted, sorted, true},
+		{"heads: Alembic printed the other order", "heads", sorted, swapped, false},
+		{"heads: dho printed the other order", "heads", swapped, sorted, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if diff := compareRevisionText(tt.got, tt.want); (diff == "") != tt.ok {
-				t.Fatalf("compareRevisionText(%q, %q) = %q, want ok=%v", tt.got, tt.want, diff, tt.ok)
+			if diff := compareRevisionText(tt.verb, tt.got, tt.want); (diff == "") != tt.ok {
+				t.Fatalf("compareRevisionText(%q, %q, %q) = %q, want ok=%v", tt.verb, tt.got, tt.want, diff, tt.ok)
 			}
 		})
 	}

@@ -200,7 +200,7 @@ func TestRevisionsVenueOracleMatchesAlembic(t *testing.T) {
 		}
 		want := pythonRevisions(t, uri, scenario.verb)
 		got := goRevisions(t, uri, scenario.verb)
-		if diff := compareRevisionText(got, want); diff != "" {
+		if diff := compareRevisionText(scenario.verb, got, want); diff != "" {
 			t.Errorf("%s: %s", scenario.name, diff)
 		}
 		frozen = append(frozen, revisionResult{Name: scenario.name, Stdout: want})

@@ -338,3 +338,136 @@ def test_the_invoking_checkout_is_left_untouched(
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert _git(repo, "status", "--porcelain").stdout == before
     assert _git(repo, "rev-parse", "HEAD").stdout == head_before
+
+
+# --- where the Go build cache and the scratch tree go -----------------------
+# A /tmp Go cache once reached 33.5 GB on a shared host. The stages are stubbed
+# (a check_go.sh that records what it was given), so these tests need no Go.
+
+PROBE_CHECK_GO = """#!/usr/bin/env bash
+printf '%s\\n%s\\n' "${DEV_HEALTH_GO_CACHE-}" "$(pwd -P)" >> "${PROBE_FILE}"
+exit 0
+"""
+
+
+def _probe_run(
+    repo: Path,
+    tmp_path: Path,
+    probe_env: dict[str, str],
+    unset: tuple[str, ...] = (),
+) -> tuple[subprocess.CompletedProcess[str], list[str]]:
+    _branch(repo, "probe")
+    _write(repo, "ci/check_go.sh", PROBE_CHECK_GO)
+    _commit(repo, "stub check_go.sh")
+    probe = tmp_path / "probe.txt"
+    env = {k: v for k, v in os.environ.items() if k not in unset}
+    env.update({"PROBE_FILE": str(probe), "GIT_CONFIG_GLOBAL": os.devnull, **probe_env})
+    proc = subprocess.run(
+        [
+            "bash",
+            str(repo / "ci" / "merge-tree-vet.sh"),
+            "--base",
+            "main0",
+            "--head",
+            "probe",
+        ],
+        cwd=repo,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    return proc, probe.read_text(encoding="utf-8").splitlines()
+
+
+def _fake_go(tmp_path: Path, cache: str) -> str:
+    """A PATH prefix whose `go env GOCACHE` prints `cache`."""
+    bindir = tmp_path / "fakebin"
+    bindir.mkdir(exist_ok=True)
+    go = bindir / "go"
+    go.write_text(f'#!/usr/bin/env bash\n[ "$*" = "env GOCACHE" ] && echo {cache}\n')
+    go.chmod(0o755)
+    return f"{bindir}{os.pathsep}{os.environ['PATH']}"
+
+
+def test_default_go_cache_is_the_invokers_gocache_not_tmp(
+    repo: Path, tmp_path: Path
+) -> None:
+    scratch_tmp = tmp_path / "tmp"
+    scratch_tmp.mkdir()
+    _, seen = _probe_run(
+        repo,
+        tmp_path,
+        {"TMPDIR": str(scratch_tmp), "GOCACHE": str(tmp_path / "mine")},
+        unset=("DEV_HEALTH_GO_CACHE",),
+    )
+    assert seen[0] == str(tmp_path / "mine")
+    assert not (scratch_tmp / "merge-tree-vet-gocache").exists()
+
+
+def test_default_go_cache_falls_back_to_go_env_gocache(
+    repo: Path, tmp_path: Path
+) -> None:
+    scratch_tmp = tmp_path / "tmp"
+    scratch_tmp.mkdir()
+    _, seen = _probe_run(
+        repo,
+        tmp_path,
+        {
+            "TMPDIR": str(scratch_tmp),
+            "PATH": _fake_go(tmp_path, str(tmp_path / "goenv")),
+        },
+        unset=("DEV_HEALTH_GO_CACHE", "GOCACHE"),
+    )
+    assert seen[0] == str(tmp_path / "goenv")
+
+
+def test_explicit_dev_health_go_cache_beats_gocache(repo: Path, tmp_path: Path) -> None:
+    _, seen = _probe_run(
+        repo,
+        tmp_path,
+        {
+            "DEV_HEALTH_GO_CACHE": str(tmp_path / "explicit"),
+            "GOCACHE": str(tmp_path / "mine"),
+        },
+    )
+    assert seen[0] == str(tmp_path / "explicit")
+
+
+def test_go_cache_uses_the_scratch_root_only_when_go_names_none(
+    repo: Path, tmp_path: Path
+) -> None:
+    scratch_root = tmp_path / "scratch"
+    bindir = tmp_path / "nogo"
+    bindir.mkdir()
+    go = bindir / "go"
+    go.write_text("#!/usr/bin/env bash\nexit 1\n")
+    go.chmod(0o755)
+    _, seen = _probe_run(
+        repo,
+        tmp_path,
+        {
+            "DEV_HEALTH_SCRATCH": str(scratch_root),
+            "PATH": f"{bindir}{os.pathsep}{os.environ['PATH']}",
+        },
+        unset=("DEV_HEALTH_GO_CACHE", "GOCACHE"),
+    )
+    assert seen[0] == str(scratch_root / "merge-tree-vet-gocache")
+
+
+def test_scratch_tree_honours_dev_health_scratch_over_tmpdir(
+    repo: Path, tmp_path: Path
+) -> None:
+    scratch_tmp = tmp_path / "tmp"
+    scratch_tmp.mkdir()
+    scratch_root = tmp_path / "lane-scratch" / "nested"  # must be created
+    _, seen = _probe_run(
+        repo,
+        tmp_path,
+        {"TMPDIR": str(scratch_tmp), "DEV_HEALTH_SCRATCH": str(scratch_root)},
+    )
+    assert seen[1].startswith(str(scratch_root.resolve()) + os.sep + "merge-tree-vet.")
+    assert _leftovers(tmp_path) == []
+    assert list(scratch_root.glob("merge-tree-vet.*")) == []  # removed on exit

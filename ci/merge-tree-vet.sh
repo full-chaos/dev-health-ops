@@ -24,8 +24,15 @@
 # a missing stage script fails, it does not skip.
 #
 # It never touches the invoking checkout's working tree, index or config: the
-# tree is read with `git archive` into `mktemp -d` (its own throwaway git repo) under ${TMPDIR:-/tmp} and
-# removed on exit. Run it from a lane worktree (never from a shared checkout).
+# tree is read with `git archive` into `mktemp -d` (its own throwaway git repo) under
+# ${DEV_HEALTH_SCRATCH:-${TMPDIR:-/tmp}} and removed on exit. Run it from a lane worktree (never from a
+# shared checkout).
+#
+# Where the bytes go (a /tmp Go cache once reached 33.5 GB on a shared host):
+#   scratch tree   ${DEV_HEALTH_SCRATCH:-${TMPDIR:-/tmp}}   (throwaway, removed on exit)
+#   Go build cache DEV_HEALTH_GO_CACHE, else ${GOCACHE}, else `go env GOCACHE` (the user's own
+#                  warm cache, off /tmp), else <scratch root>/merge-tree-vet-gocache only when Go
+#                  cannot name one. It is never placed under /tmp while any of the first three exists.
 set -euo pipefail
 
 usage() {
@@ -86,7 +93,9 @@ fi
 tree="$(printf '%s\n' "${merged}" | head -n1)"
 [ -n "${tree}" ] || { echo "merge-tree-vet: git merge-tree printed no tree" >&2; exit 2; }
 
-scratch="$(mktemp -d "${TMPDIR:-/tmp}/merge-tree-vet.XXXXXX")"
+scratch_root="${DEV_HEALTH_SCRATCH:-${TMPDIR:-/tmp}}"
+mkdir -p "${scratch_root}"
+scratch="$(mktemp -d "${scratch_root}/merge-tree-vet.XXXXXX")"
 cleanup() { rm -rf -- "${scratch}"; }
 trap cleanup EXIT
 git archive "${tree}" | tar -x -C "${scratch}"
@@ -102,8 +111,12 @@ git archive "${tree}" | tar -x -C "${scratch}"
     commit -q -m "merge-tree of ${base_sha} and ${head_sha}"
 )
 
-# One warm Go build cache across runs on this host; check_go.sh honours it.
-export DEV_HEALTH_GO_CACHE="${DEV_HEALTH_GO_CACHE:-${TMPDIR:-/tmp}/merge-tree-vet-gocache}"
+# One warm Go build cache across runs on this host; check_go.sh honours it. Default to the
+# invoker's own Go cache, not a fresh copy under the scratch root (see the header).
+default_go_cache="${GOCACHE:-}"
+[ -n "${default_go_cache}" ] || default_go_cache="$(go env GOCACHE 2>/dev/null || true)"
+[ -n "${default_go_cache}" ] || default_go_cache="${scratch_root}/merge-tree-vet-gocache"
+export DEV_HEALTH_GO_CACHE="${DEV_HEALTH_GO_CACHE:-${default_go_cache}}"
 
 failed=0
 run_stage() { # run_stage <name> <script relative to the tree> [args...]

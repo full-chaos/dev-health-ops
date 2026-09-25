@@ -125,7 +125,7 @@ on:
       # CHAOS-6584: the venue-oracles registry and what validates it. The
       # venue-oracles job decides relevance from this list, so a registry-only
       # change must count as Go-relevant or it is never validated on main.
-      - 'ci/venue_oracle_registry.tsv'
+      - 'ci/venue_oracle_registry.d/**'
       # CHAOS-6690: the go-quality race shards read these; a change to either
       # alone must run go-quality.
       - 'ci/go_race_shard.awk'
@@ -290,7 +290,7 @@ on:
       # CHAOS-6584: the venue-oracles registry and what validates it. The
       # venue-oracles job decides relevance from this list, so a registry-only
       # change must count as Go-relevant or it is never validated on main.
-      - 'ci/venue_oracle_registry.tsv'
+      - 'ci/venue_oracle_registry.d/**'
       # CHAOS-6690: the go-quality race shards read these; a change to either
       # alone must run go-quality.
       - 'ci/go_race_shard.awk'

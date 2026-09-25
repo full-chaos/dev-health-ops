@@ -115,7 +115,8 @@ usage() {
          verb does not set it itself. NOT in `fast`/`ci`/`all`: it runs only
          from the dedicated venue-oracles CI job, which is the one place
          with the full Python environment this verb needs.
-         WHAT RUNS is ci/venue_oracle_registry.tsv (CHAOS-6584): the verb
+         WHAT RUNS is ci/venue_oracle_registry.d/ (CHAOS-6584, one file per
+         package since CHAOS-6724): the verb
          validates it against discovery and against every Test*VenueOracle*
          by name before starting anything.
          The static half of that validation is ci/check_venue_oracle_registry.sh
@@ -1869,7 +1870,8 @@ check_live_python_oracles() {
 # ci/requirements-live-python-oracles.txt closure. It is invoked ONLY from
 # the dedicated venue-oracles CI job, never from `ci`/`fast`/`all`.
 #
-# WHAT RUNS is ci/venue_oracle_registry.tsv (CHAOS-6584, Trap #392), one row
+# WHAT RUNS is ci/venue_oracle_registry.d/ (CHAOS-6584, Trap #392; one file per
+# package, ci/venue_oracle_registry.d/<package with / as __>.tsv, CHAOS-6724), one row
 # per venue test. Discovery (below) is the CROSS-CHECK that keeps the registry
 # honest: the verb fails before running anything when a test found by
 # structure or by a Test*VenueOracle* name is not registered, or a registered
@@ -1960,7 +1962,7 @@ check_venue_oracles() {
   # The registry is what runs (CHAOS-6584): validate it against discovery and
   # against every Test*VenueOracle* by name FIRST, so a venue test nothing
   # registers fails here, before any container starts.
-  check_venue_oracle_registry >&2 || die "venue-oracles: ci/venue_oracle_registry.tsv disagrees with the tree (see above)"
+  check_venue_oracle_registry >&2 || die "venue-oracles: ci/venue_oracle_registry.d/ disagrees with the tree (see above)"
 
   local proof_dir dir kind name file names="" total=0 prev_pkg="" index
   local run_index=0 pkg_has_run=0 registered_runs=0

@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"os"
 	"time"
 
 	clickhousego "github.com/ClickHouse/clickhouse-go/v2"
@@ -186,12 +187,7 @@ func StartClickHouse(ctx context.Context) (*Instance, error) {
 	container, host, mappedPort, err := start(ctx, testcontainers.ContainerRequest{
 		Image:        ClickHouseImage,
 		ExposedPorts: []string{port, httpPort},
-		Env: map[string]string{
-			"CLICKHOUSE_USER":                      user,
-			"CLICKHOUSE_PASSWORD":                  password,
-			"CLICKHOUSE_DB":                        database,
-			"CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT": "1",
-		},
+		Env:          clickHouseEnv(user, password, database),
 		// The HTTP ping only proves port 8123 is serving; every caller of
 		// this harness dials the native protocol on 9000. Under heavy host
 		// contention the two ports' Docker NAT rules do not land atomically,
@@ -399,4 +395,23 @@ func start(
 		return nil, "", "", err
 	}
 	return container, host, mappedPort.Port(), nil
+}
+
+// ClickHouseTimezoneEnv names an optional server timezone for the container
+// (a tz database name such as America/Los_Angeles). ClickHouse reads it as
+// its default zone, which decides how DateTime64 columns without an explicit
+// zone are read by the drivers; unset keeps the image's UTC.
+const ClickHouseTimezoneEnv = "DEV_HEALTH_VENUE_CLICKHOUSE_TZ"
+
+func clickHouseEnv(user, password, database string) map[string]string {
+	env := map[string]string{
+		"CLICKHOUSE_USER":                      user,
+		"CLICKHOUSE_PASSWORD":                  password,
+		"CLICKHOUSE_DB":                        database,
+		"CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT": "1",
+	}
+	if zone := os.Getenv(ClickHouseTimezoneEnv); zone != "" {
+		env["TZ"] = zone
+	}
+	return env
 }

@@ -180,8 +180,8 @@ func teamJSON(team Team) *pyjson.Object {
 	out.Set("flagged_changes", nil)
 	out.Set("last_drift_sync_at", nil)
 	out.Set("is_active", team.IsActive)
-	out.Set("created_at", pytimeRFC3339(team.UpdatedAt))
-	out.Set("updated_at", pytimeRFC3339(team.UpdatedAt))
+	out.Set("created_at", naiveDatetime(team.UpdatedAt))
+	out.Set("updated_at", naiveDatetime(team.UpdatedAt))
 	return out
 }
 
@@ -201,8 +201,8 @@ func identityJSON(identity Identity) *pyjson.Object {
 	out.Set("provider_identities", providers)
 	out.Set("team_ids", stringsToValues(identity.TeamIDs))
 	out.Set("is_active", identity.IsActive)
-	out.Set("created_at", pytimeRFC3339(identity.UpdatedAt))
-	out.Set("updated_at", pytimeRFC3339(identity.UpdatedAt))
+	out.Set("created_at", naiveDatetime(identity.UpdatedAt))
+	out.Set("updated_at", naiveDatetime(identity.UpdatedAt))
 	return out
 }
 

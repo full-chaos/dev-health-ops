@@ -8,6 +8,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
@@ -37,11 +38,20 @@ func queryBoolDefaultTrue(r *http.Request, name string) (bool, *pybody.Error) {
 	}
 }
 
-// pytimeRFC3339 renders a UTC time the way Pydantic/FastAPI's jsonable_encoder
-// serializes a datetime: ISO-8601 with a literal "Z" for UTC (matching
-// AwareDatetime's default JSON encoding for a tz-aware UTC value).
-func pytimeRFC3339(value time.Time) string {
-	return value.UTC().Format("2006-01-02T15:04:05.999999") + "Z"
+// naiveDatetime renders a DateTime64(6) column without an explicit zone the
+// way the Python api serializes what its driver returns for it: clickhouse-
+// connect hands back a naive datetime when the server zone is UTC and an
+// aware one in the server zone otherwise, and pydantic-core prints a naive
+// value with no zone and an aware one with its offset ("Z" for zero). The
+// Go driver reports the column in the server zone the same way (time.UTC for
+// a UTC server), so the location decides. One shared implementation
+// (pytime.Pydantic) owns the wire form (R299).
+func naiveDatetime(value time.Time) string {
+	if value.Location() == time.UTC {
+		return pytime.Pydantic(pytime.DateTime{Time: value.UTC()})
+	}
+	_, offset := value.Zone()
+	return pytime.Pydantic(pytime.DateTime{Time: value.UTC(), Aware: true, Offset: offset})
 }
 
 func sortedKeysBool(m map[string]bool) []string {

@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 )
@@ -144,5 +145,50 @@ func TestPythonProviderIdentitiesJSONMatchesJSONDumpsSpacing(t *testing.T) {
 				t.Errorf("pythonProviderIdentitiesJSON = %s, want %s", got, tc.want)
 			}
 		})
+	}
+}
+
+// TestNaiveDatetimeMatchesPydanticNaive pins the wire form of the naive
+// created_at/updated_at columns: pydantic-core's naive datetime, six
+// microsecond digits when non-zero (trailing zeros kept), no fraction when
+// zero, never a zone. The live venue (adminstampvenue) compares the same
+// rendering against the real Python api.
+func TestNaiveDatetimeMatchesPydanticNaive(t *testing.T) {
+	for _, tc := range []struct {
+		micro int
+		want  string
+	}{
+		{895620, "2026-09-21T11:37:05.895620"},
+		{895335, "2026-09-21T11:37:05.895335"},
+		{1, "2026-09-21T11:37:05.000001"},
+		{100000, "2026-09-21T11:37:05.100000"},
+		{0, "2026-09-21T11:37:05"},
+	} {
+		at := time.Date(2026, 9, 21, 11, 37, 5, tc.micro*1000, time.UTC)
+		if got := naiveDatetime(at); got != tc.want {
+			t.Errorf("micro %d: got %q want %q", tc.micro, got, tc.want)
+		}
+	}
+}
+
+// TestNaiveDatetimeInServerZone pins the non-UTC server-zone form: the
+// driver reports the stored instant in the server zone and the Python api
+// prints that wall clock with its offset (observed live: a 18:37:05Z
+// instant read from a America/Los_Angeles server prints
+// 2026-09-21T11:37:05.895620-07:00). The live venue runs both zones.
+func TestNaiveDatetimeInServerZone(t *testing.T) {
+	pacific := time.FixedZone("PDT", -7*3600)
+	at := time.Date(2026, 9, 21, 18, 37, 5, 895620000, time.UTC).In(pacific)
+	if got, want := naiveDatetime(at), "2026-09-21T11:37:05.895620-07:00"; got != want {
+		t.Errorf("got %q want %q", got, want)
+	}
+	whole := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC).In(time.FixedZone("IST", 5*3600+1800))
+	if got, want := naiveDatetime(whole), "2026-01-02T08:34:05+05:30"; got != want {
+		t.Errorf("got %q want %q", got, want)
+	}
+	// A zero-offset zone that is not UTC is aware, so "Z".
+	london := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC).In(time.FixedZone("GMT", 0))
+	if got, want := naiveDatetime(london), "2026-01-02T03:04:05Z"; got != want {
+		t.Errorf("got %q want %q", got, want)
 	}
 }

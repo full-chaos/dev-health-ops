@@ -11,13 +11,8 @@ package goapiproof
 //
 // What a case does NOT show, by design:
 //
-//   - GET admin/teams/{team_id}, admin/teams/{team_id}/discover-members and
-//     .../infer-members are NOT in this file yet: the Go routes reached main
-//     after this stack's base, so the mounted-route test refuses an entry for
-//     them here. Their cases are added once the stack is on main, and
-//     discover/infer-members get a MISSING-team case only: Python answers 404
-//     for a missing team before any credential lookup or provider call, while
-//     a real team could reach a provider API.
+//   - admin/teams/{team_id} and the discover-members / infer-members routes are in
+//     dhoapi_admin_teams_corpus.go (missing-team cases only).
 //   - The proof org has no sync configuration, so the {config_id} routes
 //     (config, coverage, jobs, repositories) have only their missing case, and
 //     there is no produced-id case: none can reach provider-side data.

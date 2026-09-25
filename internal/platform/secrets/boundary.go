@@ -107,6 +107,21 @@ func NewBoundary(dsn string) Boundary {
 	return Boundary{values: CredentialComponents(dsn)}
 }
 
+// NewBoundaryWith is NewBoundary for a driver that resolves credentials from
+// more than the DSN (a PostgreSQL client reads PGUSER, PGPASSWORD, a password
+// file and service files): the caller passes the login and password the driver
+// settled on, and they are redacted with the DSN's own components. A DSN alone
+// cannot name a credential the DSN does not carry.
+func NewBoundaryWith(dsn string, resolved ...string) Boundary {
+	values := CredentialComponents(dsn)
+	for _, value := range resolved {
+		if value != "" {
+			values = append(values, value)
+		}
+	}
+	return Boundary{values: values}
+}
+
 // Redact returns err with every occurrence of the boundary's values
 // replaced by RedactedMarker, or err unchanged if it is nil or contains
 // none of them.
@@ -120,6 +135,15 @@ func (b Boundary) Redact(err error) error {
 		return err
 	}
 	return errors.New(redacted)
+}
+
+// RedactText returns text with every occurrence of the boundary's values replaced
+// by RedactedMarker: Redact for a message that is already a string.
+func (b Boundary) RedactText(text string) string {
+	if len(b.values) == 0 {
+		return text
+	}
+	return RedactValues(text, b.values...)
 }
 
 // redactedCauseError is a stable sentinel plus a driver cause whose text has

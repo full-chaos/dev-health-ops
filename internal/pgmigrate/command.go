@@ -12,6 +12,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
+	pgstorage "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 )
 
 // ResolveDSN finds the elevated migration DSN. The migrate group passes the
@@ -113,7 +114,7 @@ func run(ctx context.Context, verb string, resolve ResolveDSN, env cli.Env) int 
 	if !ok {
 		return cli.ExitFailure
 	}
-	boundary := secrets.NewBoundary(dsn.Reveal())
+	boundary := pgstorage.Boundary(dsn.Reveal())
 	conn, err := pgx.Connect(ctx, dsn.Reveal())
 	if err != nil {
 		return writeError(env.Stderr, "postgres_unavailable", boundary.Redact(err).Error())
@@ -222,7 +223,7 @@ func recordedRevisions(ctx context.Context, resolve ResolveDSN, env cli.Env) (re
 	if !resolved {
 		return nil, cli.ExitFailure, false
 	}
-	boundary := secrets.NewBoundary(dsn.Reveal())
+	boundary := pgstorage.Boundary(dsn.Reveal())
 	conn, err := pgx.Connect(ctx, dsn.Reveal())
 	if err != nil {
 		return nil, writeError(env.Stderr, "postgres_unavailable", boundary.Redact(err).Error()), false

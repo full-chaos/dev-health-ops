@@ -200,8 +200,8 @@ func TestRevisionsVenueOracleMatchesAlembic(t *testing.T) {
 		}
 		want := pythonRevisions(t, uri, scenario.verb)
 		got := goRevisions(t, uri, scenario.verb)
-		if got != want {
-			t.Errorf("%s: dho printed %q, Alembic printed %q", scenario.name, got, want)
+		if diff := compareRevisionText(got, want); diff != "" {
+			t.Errorf("%s: %s", scenario.name, diff)
 		}
 		frozen = append(frozen, revisionResult{Name: scenario.name, Stdout: want})
 		exec("DROP TABLE IF EXISTS alembic_version")

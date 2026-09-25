@@ -82,6 +82,7 @@ func TestTheWriteVerbEndToEndAgainstARealDatabase(t *testing.T) {
 	// name when told to, and stamps its build on the response.
 	var posts int
 	divergent := false
+	omitBuild := false
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		raw, _ := io.ReadAll(r.Body)
 		var body struct {
@@ -103,7 +104,9 @@ func TestTheWriteVerbEndToEndAgainstARealDatabase(t *testing.T) {
 		if _, err := pool.Exec(r.Context(), `INSERT INTO wp_verb (org, run, name) SELECT org, run, $1 FROM wp_verb WHERE run=$2 LIMIT 1`, name, run); err != nil {
 			t.Errorf("mutation effect: %v", err)
 		}
-		w.Header().Set("x-dev-health-build", build)
+		if !omitBuild {
+			w.Header().Set("x-dev-health-build", build)
+		}
 		_, _ = w.Write([]byte(`{"data":{"syntheticCreate":{"id":"11111111-1111-4111-8111-111111111111"}}}`))
 	}))
 	t.Cleanup(server.Close)
@@ -172,7 +175,7 @@ func TestTheWriteVerbEndToEndAgainstARealDatabase(t *testing.T) {
 	// The receipt admits the mutation for canary and not for primary.
 	admit := func(mode string) bool {
 		found, err := goapiproof.OperationsWithEnablementProofByKind(ctx, pool, "sha256:verbschema", build, mode,
-			map[string]string{"syntheticCreate": digest}, map[string]bool{"syntheticCreate": true})
+			map[string]string{"syntheticCreate": digest}, map[string]string{"syntheticCreate": goapiproof.OperationKindMutation})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -209,6 +212,24 @@ func TestTheWriteVerbEndToEndAgainstARealDatabase(t *testing.T) {
 	if n := count(`SELECT count(*) FROM wp_verb WHERE run NOT LIKE 'gwc-wp-probe-%'`); n == 0 {
 		t.Fatal("a mismatch must keep the dataset for forensics")
 	}
+
+	// 3b. r1 P1: a response without the candidate build header is never a match:
+	// the verb fails, the dataset is KEPT and no receipt can admit the operation.
+	omitBuild = true
+	posts = 0
+	receiptsBefore := count(`SELECT count(*) FROM go_api_proof_run WHERE terminal_state='match'`)
+	keptBefore := count(`SELECT count(*) FROM wp_verb WHERE run NOT LIKE 'gwc-wp-probe-%'`)
+	out = captureStdout(t, func() { runErr = runWrite(args(viaQueryAPI, "verb-match")) })
+	if runErr == nil || posts != 1 {
+		t.Fatalf("a response with no build header must fail the verb after one post: err=%v posts=%d", runErr, posts)
+	}
+	if got := count(`SELECT count(*) FROM go_api_proof_run WHERE terminal_state='match'`); got != receiptsBefore {
+		t.Fatalf("no new match receipt may exist, got %d more", got-receiptsBefore)
+	}
+	if kept := count(`SELECT count(*) FROM wp_verb WHERE run NOT LIKE 'gwc-wp-probe-%'`); kept <= keptBefore {
+		t.Fatalf("the dataset must be kept when the write is not tied to the build (%d -> %d)\n%s", keptBefore, kept, out)
+	}
+	omitBuild = false
 
 	// 4. A dry run writes no receipt.
 	before := count(`SELECT count(*) FROM go_api_proof_run`)

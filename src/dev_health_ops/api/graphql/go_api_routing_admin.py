@@ -32,7 +32,7 @@ subsystem exists to tell apart (the same reasoning
 from __future__ import annotations
 
 import json
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, cast
@@ -47,7 +47,11 @@ from sqlalchemy.sql.elements import ColumnElement
 
 from dev_health_ops.models.go_api_registry import ProofRun, RoutingState
 
-from .go_api_operation_catalog import is_mutation_operation
+from .go_api_operation_catalog import (
+    OPERATION_KIND_MUTATION,
+    OPERATION_KIND_QUERY,
+    operation_kind,
+)
 from .go_api_registry import register_candidate_build
 
 __all__ = [
@@ -524,7 +528,7 @@ async def operations_with_enablement_proof(
     candidate_build: str,
     operations: Mapping[str, str],
     target_mode: str,
-    mutation_operations: Collection[str] | None = None,
+    operation_kinds: Mapping[str, str] | None = None,
 ) -> frozenset[str]:
     """Which of ``operations`` have a ``deployed_executed``/``match``
     proof run for EXACTLY this ``(schema_digest, candidate_build)``.
@@ -546,7 +550,7 @@ async def operations_with_enablement_proof(
             candidate_build=candidate_build,
             operations=operations,
             target_mode=target_mode,
-            mutation_operations=mutation_operations,
+            operation_kinds=operation_kinds,
         )
     )
     return frozenset(result.scalars().all())
@@ -679,7 +683,7 @@ def build_enablement_proof_select(
     candidate_build: str,
     operations: Mapping[str, str],
     target_mode: str,
-    mutation_operations: Collection[str] | None = None,
+    operation_kinds: Mapping[str, str] | None = None,
 ) -> Select[tuple[str]]:
     """The SELECT :func:`operations_with_enablement_proof` executes.
 
@@ -709,7 +713,7 @@ def build_enablement_proof_select(
                 candidate_build=candidate_build,
                 operations=operations,
                 target_mode=target_mode,
-                mutation_operations=mutation_operations,
+                operation_kinds=operation_kinds,
             )
         )
         .distinct()
@@ -739,7 +743,7 @@ def _enablement_proof_conditions(
     candidate_build: str,
     operations: Mapping[str, str],
     target_mode: str,
-    mutation_operations: Collection[str] | None = None,
+    operation_kinds: Mapping[str, str] | None = None,
 ) -> list[ColumnElement[bool]]:
     """The WHERE clauses of the rule -- ONE list, read by both selects.
 
@@ -750,14 +754,21 @@ def _enablement_proof_conditions(
     Each operation carries the rule of its document KIND (CHAOS-6810): a query
     needs a ``deployed_executed`` two-plane receipt, a mutation a
     ``write_executed`` single-plane one, and neither form admits the other's
-    operations. ``mutation_operations`` names the mutations; ``None`` reads the
-    catalog (``is_mutation_operation``).
+    operations. ``operation_kinds`` maps each operation to ``"query"`` or
+    ``"mutation"``; ``None`` reads the catalog (``operation_kind``). An operation
+    whose kind is UNKNOWN (absent from the map, absent from the catalog, or any
+    other value) is admitted by nothing: defaulting it to ``query`` would let a
+    ``deployed_executed`` receipt authorize an operation that is in fact a
+    mutation.
     """
-    mutations = (
-        frozenset(mutation_operations)
-        if mutation_operations is not None
-        else frozenset(op for op in operations if is_mutation_operation(op))
-    )
+    kinds: dict[str, str | None] = {
+        operation: (
+            operation_kinds.get(operation)
+            if operation_kinds is not None
+            else operation_kind(operation)
+        )
+        for operation in operations
+    }
     # The key is FOUR columns, and `document_digest` is not optional --
     # it was missing, so a proof recorded against a
     # DIFFERENT registered document could authorize an enablement.
@@ -788,7 +799,7 @@ def _enablement_proof_conditions(
                             ProofRun.stage == ENABLEMENT_WRITE_PROOF_STAGE,
                             _write_receipt_admits(),
                         )
-                        if operation in mutations
+                        if kinds[operation] == OPERATION_KIND_MUTATION
                         else (
                             ProofRun.stage == ENABLEMENT_PROOF_STAGE,
                             _admissible_terminal_state(),
@@ -797,6 +808,7 @@ def _enablement_proof_conditions(
                     _admissible_route(target_mode),
                 )
                 for operation, document_digest in operations.items()
+                if kinds[operation] in (OPERATION_KIND_QUERY, OPERATION_KIND_MUTATION)
             ),
         ),
     ]
@@ -937,7 +949,7 @@ def build_enablement_receipt_select(
     candidate_build: str,
     operations: Mapping[str, str],
     target_mode: str,
-    mutation_operations: Collection[str] | None = None,
+    operation_kinds: Mapping[str, str] | None = None,
 ) -> Select[Any]:
     """The newest admissible receipt per operation, under the SAME rule.
 
@@ -967,7 +979,7 @@ def build_enablement_receipt_select(
                 candidate_build=candidate_build,
                 operations=operations,
                 target_mode=target_mode,
-                mutation_operations=mutation_operations,
+                operation_kinds=operation_kinds,
             )
         )
         .order_by(
@@ -986,7 +998,7 @@ async def enablement_receipts(
     candidate_build: str,
     operations: Mapping[str, str],
     target_mode: str,
-    mutation_operations: Collection[str] | None = None,
+    operation_kinds: Mapping[str, str] | None = None,
 ) -> dict[str, AuthorizingReceipt]:
     """``{operation: the receipt that authorizes it}`` -- the proven set
     :func:`operations_with_enablement_proof` returns, plus WHICH receipt."""
@@ -998,7 +1010,7 @@ async def enablement_receipts(
             candidate_build=candidate_build,
             operations=operations,
             target_mode=target_mode,
-            mutation_operations=mutation_operations,
+            operation_kinds=operation_kinds,
         )
     )
     receipts: dict[str, AuthorizingReceipt] = {}

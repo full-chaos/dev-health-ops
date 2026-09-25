@@ -112,7 +112,7 @@ func TestEnablementPredicateMatchesTheSharedAdmissionTable(t *testing.T) {
 			found, err := OperationsWithEnablementProofByKind(ctx, pool,
 				run.askKey.SchemaDigest, run.askKey.CandidateBuild, run.targetMode,
 				map[string]string{run.askKey.SelectedOperation: run.askKey.DocumentDigest},
-				map[string]bool{run.askKey.SelectedOperation: run.mutation})
+				map[string]string{run.askKey.SelectedOperation: run.kind})
 			if err != nil {
 				t.Fatalf("OperationsWithEnablementProof: %v", err)
 			}
@@ -167,16 +167,26 @@ type admissionRun struct {
 	admits     bool
 	why        string
 	control    bool
-	// mutation is the operation's document kind (CHAOS-6810): it decides which
-	// receipt form the enablement predicate accepts.
-	mutation bool
+	// kind is the operation's document kind (CHAOS-6810): OperationKindQuery,
+	// OperationKindMutation, or "" for a kind the ask does not know (the fixture's
+	// "unknown"), which must admit nothing. It decides which receipt form the
+	// enablement predicate accepts.
+	kind string
 }
 
 // crossForm reports a case whose receipt is of the OTHER kind's form than the
 // operation it is asked about: a write_executed receipt for a query, or any
 // other stage for a mutation.
 func (r admissionRun) crossForm() bool {
-	return r.mutation != (r.receipt.stage == EnablementWriteProofStage)
+	return r.kind != r.receiptForm()
+}
+
+// receiptForm is the kind whose form of receipt this run's receipt is.
+func (r admissionRun) receiptForm() string {
+	if r.receipt.stage == EnablementWriteProofStage {
+		return OperationKindMutation
+	}
+	return OperationKindQuery
 }
 
 func (r admissionRun) describe() string {
@@ -247,7 +257,7 @@ func admissionRuns(t *testing.T) []admissionRun {
 		runs = append(runs, admissionRun{
 			name: c.Name, targetMode: c.TargetMode, rowKey: rowKey, askKey: askKey,
 			receipt: mergeReceipt(t, merged), admits: c.Admits, why: c.Why,
-			mutation: mutationKind(t, c),
+			kind: operationKind(t, c),
 		})
 
 		control, hasControl := doc.Cases[i]["control"].(map[string]any)
@@ -294,22 +304,35 @@ func admissionRuns(t *testing.T) []admissionRun {
 			rowKey: controlRowKey, askKey: controlAskKey,
 			receipt: mergeReceipt(t, controlReceipt), admits: true,
 			why:     "the control must be admitted: " + c.Why,
-			control: true, mutation: mutationKind(t, c),
+			control: true, kind: controlKind(t, c, control),
 		})
 	}
 	return runs
 }
 
-func mutationKind(t *testing.T, c admissionCase) bool {
+// controlKind is the kind the case's CONTROL asks with: the case's own, unless
+// the control names another ("operation_kind" in the control block: the control
+// of a case refused for an unknown kind supplies the known one).
+func controlKind(t *testing.T, c admissionCase, control map[string]any) string {
+	t.Helper()
+	if override, ok := control["operation_kind"].(string); ok {
+		c.OperationKind = override
+	}
+	return operationKind(t, c)
+}
+
+func operationKind(t *testing.T, c admissionCase) string {
 	t.Helper()
 	switch c.OperationKind {
 	case "", "query":
-		return false
+		return OperationKindQuery
 	case "mutation":
-		return true
+		return OperationKindMutation
+	case "unknown":
+		return ""
 	default:
-		t.Fatalf("case %q has unknown operation_kind %q (want query or mutation)", c.Name, c.OperationKind)
-		return false
+		t.Fatalf("case %q has unknown operation_kind %q (want query, mutation or unknown)", c.Name, c.OperationKind)
+		return ""
 	}
 }
 
@@ -1107,11 +1130,11 @@ func TestTheMatrixClauseJudgesAReceiptByItsOwnForm(t *testing.T) {
 			seedAdmissionRow(ctx, t, pool, run.rowKey, run.receipt)
 			// Enablement's answer for the same row with the kind FLIPPED to the
 			// receipt's own form is what the matrix must give.
-			ownForm := run.receipt.stage == EnablementWriteProofStage
+			ownForm := run.receiptForm()
 			want, err := OperationsWithEnablementProofByKind(ctx, pool,
 				run.askKey.SchemaDigest, run.askKey.CandidateBuild, run.targetMode,
 				map[string]string{run.askKey.SelectedOperation: run.askKey.DocumentDigest},
-				map[string]bool{run.askKey.SelectedOperation: ownForm})
+				map[string]string{run.askKey.SelectedOperation: ownForm})
 			if err != nil {
 				t.Fatalf("OperationsWithEnablementProofByKind: %v", err)
 			}

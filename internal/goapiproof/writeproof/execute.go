@@ -20,6 +20,19 @@ const (
 	StateProofFailed = "proof_failed"
 )
 
+// Option adjusts one Execute call.
+type Option func(*settings)
+
+type settings struct{ requiredBuild string }
+
+// WithRequiredBuild requires the mutation's response to carry exactly this build
+// in its x-dev-health-build header (the build of the process that served it). A
+// response without it can never be a match: the run is proof_failed and the
+// dataset is KEPT, because nothing has tied the write to the candidate build.
+func WithRequiredBuild(build string) Option {
+	return func(s *settings) { s.requiredBuild = build }
+}
+
 // Response is what the posted mutation answered.
 type Response struct {
 	Status int
@@ -75,7 +88,11 @@ type Result struct {
 // document is the mutation's registered text (from the running build's
 // registry, verified by the caller). A dataset is removed only after a match;
 // after anything else it is kept and named in Result.Kept.
-func Execute(ctx context.Context, db goapiproof.Querier, org string, c Case, run RunTag, document string, post Poster) (Result, error) {
+func Execute(ctx context.Context, db goapiproof.Querier, org string, c Case, run RunTag, document string, post Poster, options ...Option) (Result, error) {
+	var settings settings
+	for _, option := range options {
+		option(&settings)
+	}
 	if err := c.Validate(); err != nil {
 		return Result{}, fmt.Errorf("%w: %w", ErrNotExecuted, err)
 	}
@@ -112,6 +129,12 @@ func Execute(ctx context.Context, db goapiproof.Querier, org string, c Case, run
 		parsed, problem := parseResponse(response)
 		if problem != "" {
 			detail = append(detail, problem)
+		}
+		if settings.requiredBuild != "" && response.Build != settings.requiredBuild {
+			// Which build wrote is not established by this response: whatever it
+			// persisted is no evidence for the candidate build, and the dataset is
+			// the only remaining evidence of what ran, so it is kept.
+			detail = append(detail, fmt.Sprintf("the mutation's response does not carry the candidate build in x-dev-health-build (got %q): which build performed the write is not established", response.Build))
 		}
 		if response.WireAttempts > 1 {
 			detail = append(detail, fmt.Sprintf("the transport used %d connections for one post: the mutation may have been sent more than once", response.WireAttempts))

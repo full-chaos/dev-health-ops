@@ -246,15 +246,19 @@ type routingStateRow struct {
 // a guard whose removal changes nothing observable is a guard that reads
 // as coverage without being any.
 func RoutingStatusRows(ctx context.Context, db Querier, liveSchemaDigest, pendingSchemaDigest string, catalog map[string]string) ([]OperationStatus, error) {
-	return RoutingStatusRowsWithKinds(ctx, db, liveSchemaDigest, pendingSchemaDigest, catalog, nil)
+	// A caller of THIS reader declares its catalog all queries, by calling it.
+	kinds := make(map[string]string, len(catalog))
+	for operation := range catalog {
+		kinds[operation] = OperationKindQuery
+	}
+	return RoutingStatusRowsWithKinds(ctx, db, liveSchemaDigest, pendingSchemaDigest, catalog, kinds)
 }
 
 // RoutingStatusRowsWithKinds is RoutingStatusRows for a catalog that carries
-// GraphQL mutations (CHAOS-6810): an operation named in mutationOperations is
-// judged PROVEN only by a write_executed write receipt, every other operation by
-// a deployed_executed one, the same rule `enable` applies. Nil judges every
-// operation as a query.
-func RoutingStatusRowsWithKinds(ctx context.Context, db Querier, liveSchemaDigest, pendingSchemaDigest string, catalog map[string]string, mutationOperations map[string]bool) ([]OperationStatus, error) {
+// GraphQL mutations (CHAOS-6810): an operation of kind mutation is judged PROVEN
+// only by a write_executed write receipt, a query by a deployed_executed one, the
+// same rule `enable` applies; an operation with no known kind is never PROVEN.
+func RoutingStatusRowsWithKinds(ctx context.Context, db Querier, liveSchemaDigest, pendingSchemaDigest string, catalog map[string]string, operationKinds map[string]string) ([]OperationStatus, error) {
 	if db == nil {
 		return nil, errors.New("goapiproof: nil database handle")
 	}
@@ -374,7 +378,7 @@ func RoutingStatusRowsWithKinds(ctx context.Context, db Querier, liveSchemaDiges
 		return keys[i].targetMode < keys[j].targetMode
 	})
 	for _, key := range keys {
-		found, err := OperationsWithEnablementProofByKind(ctx, db, liveSchemaDigest, key.build, key.targetMode, buildsWanted[key], mutationOperations)
+		found, err := OperationsWithEnablementProofByKind(ctx, db, liveSchemaDigest, key.build, key.targetMode, buildsWanted[key], operationKinds)
 		if err != nil {
 			return nil, err
 		}

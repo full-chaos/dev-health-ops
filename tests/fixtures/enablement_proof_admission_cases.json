@@ -1091,6 +1091,36 @@
       "why": "The edge route satisfies the stricter promotion too."
     },
     {
+      "name": "unknown_kind_with_a_query_receipt_refused",
+      "target_mode": "canary",
+      "operation_kind": "unknown",
+      "receipt": {
+        "terminal_state": "match",
+        "measurement_route": "edge"
+      },
+      "admits": false,
+      "why": "An operation whose kind is not known is admitted by NOTHING. Defaulting it to `query` would let a deployed_executed receipt authorize an operation that is in fact a mutation (r1 P1: the missing-kind path failed open).",
+      "control": {
+        "operation_kind": "query"
+      }
+    },
+    {
+      "name": "unknown_kind_with_a_write_receipt_refused",
+      "target_mode": "canary",
+      "operation_kind": "unknown",
+      "receipt": {
+        "stage": "write_executed",
+        "terminal_state": "match",
+        "measurement_route": "edge",
+        "side_effect_digest": "sha256:6810write00000000000000000000000000000000000000000000000000000000"
+      },
+      "admits": false,
+      "why": "The mirror: an unknown kind is not `mutation` either, so a well-formed write receipt does not admit it.",
+      "control": {
+        "operation_kind": "mutation"
+      }
+    },
+    {
       "name": "write_match_proof_canary",
       "target_mode": "canary",
       "operation_kind": "mutation",

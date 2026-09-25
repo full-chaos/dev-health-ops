@@ -87,7 +87,7 @@ func runEnable(argv []string) error {
 	if err != nil {
 		return err
 	}
-	catalog, mutations, err := goapiproof.LoadOperationCatalogWithKinds(common.catalogPath)
+	catalog, kinds, err := goapiproof.LoadOperationCatalogWithKinds(common.catalogPath)
 	if err != nil {
 		return refuse("%v -- refusing to enable anything on a catalog this process cannot read", err)
 	}
@@ -237,15 +237,15 @@ func runEnable(argv []string) error {
 
 	// --- Preflight 4 (inside Enable) + the write, one transaction ------
 	outcomes, err := goapiproof.Enable(ctx, pool, goapiproof.EnableRequest{
-		SchemaDigest:       registry.SchemaDigest,
-		RunningBuild:       running,
-		Operations:         operations,
-		MutationOperations: mutations,
-		DocumentDigest:     registry.DocumentDigest,
-		Mode:               mode,
-		RolloutPercentage:  rollout,
-		RecordedBy:         common.recordedBy,
-		ReviewEvidence:     common.reviewEvidence,
+		SchemaDigest:      registry.SchemaDigest,
+		RunningBuild:      running,
+		Operations:        operations,
+		OperationKinds:    kinds,
+		DocumentDigest:    registry.DocumentDigest,
+		Mode:              mode,
+		RolloutPercentage: rollout,
+		RecordedBy:        common.recordedBy,
+		ReviewEvidence:    common.reviewEvidence,
 		// CHAOS-5505: WHO THE CREDENTIAL SAYS is acting. Distinct from
 		// -recorded-by, which is what the operator typed about themselves.
 		PrincipalID: principalID,

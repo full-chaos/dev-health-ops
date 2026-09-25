@@ -194,15 +194,15 @@ func TestAMatchProvesAndCleansUpAndAdmitsTheMutation(t *testing.T) {
 		t.Fatalf("the database refused the write receipt: %v", err)
 	}
 	docs := map[string]string{"syntheticCreate": "sha256:d"}
-	asMutation, err := goapiproof.OperationsWithEnablementProofByKind(ctx, pool, "sha256:s", "b1", goapiproof.TargetModeCanary, docs, map[string]bool{"syntheticCreate": true})
+	asMutation, err := goapiproof.OperationsWithEnablementProofByKind(ctx, pool, "sha256:s", "b1", goapiproof.TargetModeCanary, docs, map[string]string{"syntheticCreate": goapiproof.OperationKindMutation})
 	if err != nil || !asMutation["syntheticCreate"] {
 		t.Fatalf("canary must admit the mutation on a proof-route write receipt: %v %v", asMutation, err)
 	}
-	asPrimary, err := goapiproof.OperationsWithEnablementProofByKind(ctx, pool, "sha256:s", "b1", goapiproof.TargetModePrimary, docs, map[string]bool{"syntheticCreate": true})
+	asPrimary, err := goapiproof.OperationsWithEnablementProofByKind(ctx, pool, "sha256:s", "b1", goapiproof.TargetModePrimary, docs, map[string]string{"syntheticCreate": goapiproof.OperationKindMutation})
 	if err != nil || asPrimary["syntheticCreate"] {
 		t.Fatalf("primary must NOT admit a proof-route write receipt: %v %v", asPrimary, err)
 	}
-	asQuery, err := goapiproof.OperationsWithEnablementProofByKind(ctx, pool, "sha256:s", "b1", goapiproof.TargetModeCanary, docs, nil)
+	asQuery, err := goapiproof.OperationsWithEnablementProofByKind(ctx, pool, "sha256:s", "b1", goapiproof.TargetModeCanary, docs, map[string]string{"syntheticCreate": goapiproof.OperationKindQuery})
 	if err != nil || asQuery["syntheticCreate"] {
 		t.Fatalf("a write receipt must never admit the operation as a query: %v %v", asQuery, err)
 	}
@@ -330,5 +330,55 @@ func TestAPostTheTransportMayHaveSentTwiceIsNeverAMatch(t *testing.T) {
 	// about the wire, not about what was persisted.
 	if result.Digest != committed.Digest {
 		t.Fatalf("the effects should equal the baseline (only the wire count differs): %s vs %s", result.Digest, committed.Digest)
+	}
+}
+
+// r1 P1: a response that does not carry the candidate build establishes nothing
+// about which build wrote: never a match, and the dataset (the only evidence of
+// what ran) is kept.
+func TestAResponseWithoutTheCandidateBuildIsNeverAMatchAndKeepsTheDataset(t *testing.T) {
+	raw, _ := os.ReadFile("testdata/synthetic_baseline.json")
+	var committed struct {
+		Digest string `json:"digest"`
+	}
+	_ = json.Unmarshal(raw, &committed)
+
+	for name, build := range map[string]string{"absent": "", "another build": "0000other"} {
+		t.Run(name, func(t *testing.T) {
+			pool := startPool(t) // a kept dataset holds the synthetic seed's fixed id
+			run := RunTag("gwc-wp-build-" + fmt.Sprint(len(name)))
+			calls := 0
+			inner := posterInserting(t, pool, "org-fixture", run, "", &calls)
+			post := func(ctx context.Context, d, v string) (Response, error) {
+				resp, err := inner(ctx, d, v)
+				resp.Build = build
+				return resp, err
+			}
+			result, err := Execute(context.Background(), pool, "org-fixture", syntheticCase(committed.Digest), run, "mutation M { x }", post, WithRequiredBuild("abc123"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.TerminalState != StateProofFailed || result.Kept == nil || rowsFor(t, pool, "org-fixture", run) == 0 {
+				t.Fatalf("want proof_failed with the dataset kept, got %s kept=%v (%s)", result.TerminalState, result.Kept, result.Detail)
+			}
+			if result.Digest != committed.Digest {
+				t.Fatalf("the effects equal the baseline (only the build tie is missing): %s vs %s", result.Digest, committed.Digest)
+			}
+		})
+	}
+
+	// And with the right build the same run IS a match.
+	pool := startPool(t)
+	run := RunTag("gwc-wp-build-ok")
+	calls := 0
+	inner := posterInserting(t, pool, "org-fixture", run, "", &calls)
+	post := func(ctx context.Context, d, v string) (Response, error) {
+		resp, err := inner(ctx, d, v)
+		resp.Build = "abc123"
+		return resp, err
+	}
+	result, err := Execute(context.Background(), pool, "org-fixture", syntheticCase(committed.Digest), run, "mutation M { x }", post, WithRequiredBuild("abc123"))
+	if err != nil || result.TerminalState != StateMatch {
+		t.Fatalf("the control must match: %v %+v", err, result)
 	}
 }

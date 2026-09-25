@@ -675,16 +675,30 @@ func OperationsWithEnablementProof(
 	targetMode string,
 	documentDigestByOperation map[string]string,
 ) (map[string]bool, error) {
-	return OperationsWithEnablementProofByKind(ctx, db, schemaDigest, candidateBuild, targetMode, documentDigestByOperation, nil)
+	// The caller of THIS reader declares every operation a query, by calling it:
+	// it is the two-plane (deployed_executed) reader. A mutation asked about here
+	// is judged as a query and, having no such receipt, is not admitted.
+	kinds := make(map[string]string, len(documentDigestByOperation))
+	for operation := range documentDigestByOperation {
+		kinds[operation] = OperationKindQuery
+	}
+	return OperationsWithEnablementProofByKind(ctx, db, schemaDigest, candidateBuild, targetMode, documentDigestByOperation, kinds)
 }
 
+// Operation document kinds, as the catalog and the running build's registry state
+// them.
+const (
+	OperationKindQuery    = "query"
+	OperationKindMutation = "mutation"
+)
+
 // OperationsWithEnablementProofByKind is OperationsWithEnablementProof for
-// operations of both document kinds (CHAOS-6810): an operation named in
-// mutationOperations needs a `write_executed` write receipt, every other
-// operation a two-plane `deployed_executed` receipt, and neither form admits the
-// other's operations. Callers that pass no kinds judge every operation as a
-// query, so a mutation is REFUSED (it can never have that receipt): forgetting
-// the kind fails closed.
+// operations of both document kinds (CHAOS-6810): an operation whose kind is
+// "mutation" needs a `write_executed` write receipt, one whose kind is "query" a
+// two-plane `deployed_executed` receipt, and neither form admits the other's
+// operations. An operation with NO known kind (absent from operationKinds, or any
+// other value) is admitted by NOTHING: an unknown kind must not default to the
+// query rule, which would let a query receipt authorize a mutation.
 func OperationsWithEnablementProofByKind(
 	ctx context.Context,
 	db Querier,
@@ -692,7 +706,7 @@ func OperationsWithEnablementProofByKind(
 	candidateBuild string,
 	targetMode string,
 	documentDigestByOperation map[string]string,
-	mutationOperations map[string]bool,
+	operationKinds map[string]string,
 ) (map[string]bool, error) {
 	queryClause, err := EnablementProofClause("p", targetMode)
 	if err != nil {
@@ -710,24 +724,28 @@ func OperationsWithEnablementProofByKind(
 
 	operations := make([]string, 0, len(documentDigestByOperation))
 	digests := make([]string, 0, len(documentDigestByOperation))
-	mutations := make([]bool, 0, len(documentDigestByOperation))
+	kinds := make([]string, 0, len(documentDigestByOperation))
 	for operation, digest := range documentDigestByOperation {
 		operations = append(operations, operation)
 		digests = append(digests, digest)
-		mutations = append(mutations, mutationOperations[operation])
+		kind := operationKinds[operation]
+		if kind != OperationKindQuery && kind != OperationKindMutation {
+			kind = "" // unknown: matches neither arm below
+		}
+		kinds = append(kinds, kind)
 	}
 
 	rows, err := db.Query(ctx,
 		`SELECT DISTINCT p.selected_operation
 		   FROM go_api_proof_run AS p
-		   JOIN unnest($3::text[], $4::text[], $5::boolean[]) AS want(operation, document_digest, is_mutation)
+		   JOIN unnest($3::text[], $4::text[], $5::text[]) AS want(operation, document_digest, kind)
 		     ON want.operation = p.selected_operation
 		    AND want.document_digest = p.document_digest
 		  WHERE p.schema_digest = $1
 		    AND p.candidate_build = $2
-		    AND ((NOT want.is_mutation AND (`+queryClause+`))
-		      OR (want.is_mutation AND (`+writeClause+`)))`,
-		schemaDigest, candidateBuild, operations, digests, mutations,
+		    AND ((want.kind = '`+OperationKindQuery+`' AND (`+queryClause+`))
+		      OR (want.kind = '`+OperationKindMutation+`' AND (`+writeClause+`)))`,
+		schemaDigest, candidateBuild, operations, digests, kinds,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("goapiproof: read enablement proof: %w", err)

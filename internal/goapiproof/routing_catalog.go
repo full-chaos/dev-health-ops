@@ -169,13 +169,13 @@ func LoadOperationCatalog(path string) (map[string]string, error) {
 	return byOperation, err
 }
 
-// LoadOperationCatalogWithKinds is LoadOperationCatalog plus the set of
-// operations whose registered document is a GraphQL MUTATION (CHAOS-6810): the
-// kind decides which receipt form authorizes enabling an operation. The kind is
+// LoadOperationCatalogWithKinds is LoadOperationCatalog plus each operation's
+// document kind (OperationKindQuery or OperationKindMutation, one entry per
+// catalog operation, CHAOS-6810): the kind decides which receipt form authorizes enabling an operation. The kind is
 // read exactly as the Python loader reads it: absent means query, "query" and
 // "mutation" are the only values, anything else makes the whole catalog
 // unusable.
-func LoadOperationCatalogWithKinds(path string) (map[string]string, map[string]bool, error) {
+func LoadOperationCatalogWithKinds(path string) (map[string]string, map[string]string, error) {
 	raw, err := os.ReadFile(path) //nolint:gosec // operator-supplied path to the checked-in catalog
 	if err != nil {
 		return nil, nil, fmt.Errorf("%w: read %s: %w", ErrCatalogUnusable, path, err)
@@ -251,7 +251,7 @@ func LoadOperationCatalogWithKinds(path string) (map[string]string, map[string]b
 	}
 
 	byOperation := make(map[string]string, len(entries))
-	mutations := map[string]bool{}
+	kinds := make(map[string]string, len(entries))
 	// A duplicate DIGEST is rejected as well as a duplicate operation.
 	// go_api_operation_catalog.py keys its dispatch map BY DIGEST, so two
 	// operations sharing one digest make the edge's mapping ambiguous --
@@ -270,11 +270,12 @@ func LoadOperationCatalogWithKinds(path string) (map[string]string, map[string]b
 		}
 		byOperation[entry.Operation] = entry.Digest
 		byDigest[entry.Digest] = entry.Operation
+		kinds[entry.Operation] = OperationKindQuery
 		if entry.Mutation {
-			mutations[entry.Operation] = true
+			kinds[entry.Operation] = OperationKindMutation
 		}
 	}
-	return byOperation, mutations, nil
+	return byOperation, kinds, nil
 }
 
 // CatalogOperations returns the catalog's operation names, sorted.

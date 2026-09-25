@@ -74,3 +74,21 @@ func TestPostMutationSendsTheVariablesVerbatimExactlyOnce(t *testing.T) {
 		t.Fatalf("response fields not carried: %+v", response)
 	}
 }
+
+// r1 P3: a backquoted word in a flag's usage text is taken by the flag package as
+// the flag's argument name, which rendered `-via proof`.
+func TestTheWriteVerbHelpNamesTheRealViaValues(t *testing.T) {
+	var out strings.Builder
+	original := flagOutput
+	flagOutput = &out
+	t.Cleanup(func() { flagOutput = original })
+	fs, _ := registerWriteFlags()
+	fs.PrintDefaults()
+	help := out.String()
+	if strings.Contains(help, "-via proof") {
+		t.Fatalf("the help names a -via value the parser refuses:\n%s", help)
+	}
+	if !strings.Contains(help, "-via string") {
+		t.Fatalf("expected the -via flag rendered as a string flag:\n%s", help)
+	}
+}

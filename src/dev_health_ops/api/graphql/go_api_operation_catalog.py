@@ -123,6 +123,23 @@ def is_mutation_operation(operation: str) -> bool:
     return operation in _mutation_operations
 
 
+OPERATION_KIND_QUERY = "query"
+OPERATION_KIND_MUTATION = "mutation"
+
+
+def operation_kind(operation: str) -> str | None:
+    """``"mutation"`` or ``"query"`` for an operation the catalog registers, and
+    ``None`` for one it does not (or for a catalog that failed to load). Unlike
+    :func:`is_mutation_operation`, an unknown operation is NOT a query: callers
+    that authorize something by kind (enablement) must refuse ``None``."""
+    _load()
+    if operation in _mutation_operations:
+        return OPERATION_KIND_MUTATION
+    if operation in _digest_to_operation.values():
+        return OPERATION_KIND_QUERY
+    return None
+
+
 def known_operations() -> frozenset[str]:
     """The full set of operation names currently in the catalog. Used by
     tests and diagnostics; never by per-request dispatch logic."""

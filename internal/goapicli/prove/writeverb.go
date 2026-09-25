@@ -87,7 +87,7 @@ func registerWriteFlags() (*flag.FlagSet, *writeFlags) {
 	fs.StringVar(&f.buildInfoURL, "buildinfo-url", "http://localhost:8090/buildinfo", "GET /buildinfo on the DEPLOYED query-api: the ONLY source of the build identity the receipt names")
 	fs.StringVar(&f.queryURL, "query-url", "http://localhost:8090/query", "query-api's POST /query, used with -via query-api")
 	fs.StringVar(&f.edgeURL, "edge-url", "http://localhost:8000/graphql", "the product GraphQL edge, used with -via edge")
-	fs.StringVar(&f.via, "via", viaQueryAPI, "how the mutation is reached: query-api (a direct POST to /query; receipt route `proof`, admits canary) or edge (the product edge; receipt route `edge`, needed for primary)")
+	fs.StringVar(&f.via, "via", viaQueryAPI, "how the mutation is reached: query-api (a direct POST to /query; the receipt records route proof, which admits canary) or edge (the product edge; the receipt records route edge, needed for primary)")
 	fs.StringVar(&f.documentsPath, "documents", "", "path to `registrydump` JSON output (required)")
 	secrets.BindFlag(fs, &f.postgresURI, "postgres-uri", postgresURIEnvVar, "domain Postgres DSN holding the case's tables and go_api_proof_run")
 	fs.StringVar(&f.orgID, "org", "", "the Fixture Org id; must equal $"+fixtureOrgEnvVar+" (required)")
@@ -231,7 +231,7 @@ func runWrite(args []string) (err error) {
 	post := func(ctx context.Context, doc, variablesJSON string) (writeproof.Response, error) {
 		return postMutation(ctx, client, target, credential, doc, variablesJSON, f.timeout)
 	}
-	result, execErr := writeproof.Execute(ctx, pool, f.orgID, c, run, document, post)
+	result, execErr := writeproof.Execute(ctx, pool, f.orgID, c, run, document, post, writeproof.WithRequiredBuild(registry.BuildIdentity))
 	if execErr != nil {
 		return execErr
 	}

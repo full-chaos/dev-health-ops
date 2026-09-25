@@ -2,7 +2,8 @@
 # files (the registry's `run` packages plus every file importing the harness,
 # so a helper package is included) and prints "PROOF <package dir> <Test>" for
 # every top-level Test function that can reach a proof writer:
-# venueoracle.Diff (writes the "executed" proof), venueoracle.WriteProof or
+# venueoracle.Diff (writes the "executed" proof), venueoracle.DiffRecorded (Go-only
+# proof against a frozen recording, CHAOS-6817), venueoracle.WriteProof or
 # venueoracle.WriteGoOnlyProof. Reach = the function's body names a proof
 # call, or names another top-level function that does (resolved in the same
 # package first, then by name in any scanned package; a name shared by two
@@ -39,7 +40,7 @@ cur != "" {
   if (!finish && $0 ~ /^\}[ \t]*$/) finish = 1
   if (finish) {
     text = body; gsub(/\/\/[^\n]*/, "", text)
-    re = "(^|[^A-Za-z0-9_.])" alias "[ \t\n]*\\.[ \t\n]*(Diff|WriteProof|WriteGoOnlyProof)[ \t\n]*\\("
+    re = "(^|[^A-Za-z0-9_.])" alias "[ \t\n]*\\.[ \t\n]*(Diff|DiffRecorded|WriteProof|WriteGoOnlyProof)[ \t\n]*\\("
     if (text ~ re) direct[cur] = 1
     gsub(/[^A-Za-z0-9_]/, " ", text); toks[cur] = " " text " "
     cur = ""; body = ""; finish = 0

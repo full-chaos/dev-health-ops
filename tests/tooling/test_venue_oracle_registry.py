@@ -530,6 +530,9 @@ def test_the_go_only_proof_and_the_exported_proof_both_count(tree: Path) -> None
     assert _run(tree).returncode == 0
     _proofless(tree, proof="\tvenueoracle.WriteProof(t)\n")
     assert _run(tree).returncode == 0
+    # a frozen-recording comparison (CHAOS-6817) writes the Go-only proof itself
+    _proofless(tree, proof='\tvenueoracle.DiffRecorded(t, "", nil, nil, opts, "why")\n')
+    assert _run(tree).returncode == 0
 
 
 def test_a_proof_written_by_a_helper_the_test_calls_counts(tree: Path) -> None:

@@ -137,6 +137,16 @@ func PlansCredentialKind(service RESTService, kind RESTCredentialKind) bool {
 	return false
 }
 
+// adminPersistNothingPOSTs are the only POST operations an admin credential may
+// carry: each was read in the Python handler to persist nothing and call
+// nothing outside the process (the GitHub install-url route only signs a state
+// and builds a URL), so a case is a read in effect, like the external-ingest
+// validate case. Anything else that is not a GET is a write: real use only
+// (R402/R406), never a synthetic corpus case.
+var adminPersistNothingPOSTs = map[string]bool{
+	"REST:POST:/api/v1/admin/integrations/github/install-url": true,
+}
+
 // validateRESTCredentialKinds refuses an unknown credential kind, a file-fed
 // credential entry outside the dho api (only that service authenticates it), an
 // admin credential on anything but a GET, and a
@@ -154,7 +164,7 @@ func validateRESTCredentialKinds() error {
 			if spec.PublicNoAuth {
 				return fmt.Errorf("goapiproof: REST corpus entry %q is both PublicNoAuth and a %s-credential entry", operation, spec.Credential)
 			}
-			if spec.Credential != RESTCredentialPushToken && spec.Method != "GET" {
+			if spec.Credential != RESTCredentialPushToken && spec.Method != "GET" && !adminPersistNothingPOSTs[operation] {
 				return fmt.Errorf("goapiproof: REST corpus entry %q sends the %s credential on a %s request; admin credentials are for read-only GETs (R402/R406)", operation, spec.Credential, spec.Method)
 			}
 		default:

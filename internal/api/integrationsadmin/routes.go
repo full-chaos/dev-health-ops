@@ -11,8 +11,9 @@
 //	GET   /api/v1/admin/integrations/{integration_id}/datasets
 //	PATCH /api/v1/admin/integrations/{integration_id}/datasets
 //	POST  /api/v1/admin/integrations/{integration_id}/discover
+//	POST  /api/v1/admin/integrations/{integration_id}/sync
 //
-// The sync and backfill triggers are separate routes on the same prefix. Every route is Depends(get_admin_org_id): policy.AdminOrg, and the
+// The sync and backfill triggers hand the run to the scheduler (synchandoff, handoff.go). Every route is Depends(get_admin_org_id): policy.AdminOrg, and the
 // org is the caller's own org_id claim. The write routes validate a pydantic
 // body first (FastAPI validates the body before any dependency), and run in
 // one transaction that rolls back on any refusal, as get_postgres_session
@@ -55,6 +56,9 @@ type Deps struct {
 	// Now is the clock of the row timestamps Python takes from
 	// datetime.now(timezone.utc) (nil: time.Now).
 	Now func() time.Time
+	// HandoffWait and HandoffPoll bound the wait for the scheduler to plan a
+	// sync or backfill trigger (0: 30 s and 250 ms).
+	HandoffWait, HandoffPoll time.Duration
 }
 
 type handlers struct{ Deps }
@@ -80,6 +84,7 @@ func Routes(deps Deps) []httpapi.Route {
 		{Method: http.MethodGet, Pattern: prefix + "/{integration_id}/datasets", Handler: read(h.listDatasets)},
 		{Method: http.MethodPatch, Pattern: prefix + "/{integration_id}/datasets", Handler: write(h.updateDatasets)},
 		{Method: http.MethodPost, Pattern: prefix + "/{integration_id}/discover", Handler: read(h.discover)},
+		{Method: http.MethodPost, Pattern: prefix + "/{integration_id}/sync", Handler: write(h.syncTrigger)},
 	}
 }
 

@@ -232,6 +232,12 @@ func apiPosture() RolePosture {
 			// CHAOS-6597: the create path adds the config's sync job anchor
 			// (INSERT), widened in place.
 			{"scheduled_jobs", true, true, true},
+			// CHAOS-6673: the integration sync and backfill triggers hand a
+			// run to the scheduler: they write one occurrence and its manual
+			// trigger (INSERT), and read them and the planned run back (the
+			// SELECT is implicit). The scheduler owns every later write.
+			{"scheduled_sync_occurrences", true, false, false},
+			{"sync_manual_triggers", true, false, false},
 			{"backfill_jobs", false, false, true},
 			// Billing: invoice_line_items/subscription_events are each
 			// deleted via a subquery on their own owning row's org_id

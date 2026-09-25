@@ -189,6 +189,9 @@ type Deps struct {
 	// same "nil is the production default" contract every other Now field
 	// in this codebase uses.
 	Now func() time.Time
+	// IntegrationHandoffWait bounds how long the integration sync and
+	// backfill routes wait for the scheduler to plan a run (0: 30 s).
+	IntegrationHandoffWait time.Duration
 }
 
 // TelemetryConfig is TELEMETRY_ENDPOINT (where /telemetry/report sends) and

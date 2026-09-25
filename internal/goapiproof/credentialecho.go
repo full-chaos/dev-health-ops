@@ -3,6 +3,7 @@ package goapiproof
 import (
 	"bytes"
 	"encoding/base64"
+	"encoding/json"
 	"net/http"
 	"strings"
 )
@@ -22,10 +23,10 @@ import (
 //   - any run of echoWindowLen consecutive bytes of the value, so a value split
 //     into pieces of at least that length (two JSON fields, say) is still seen.
 //
-// The last two forms skip a JWT's HEADER part: it names only the algorithm and
-// type, so every token of that algorithm shares it, and a route that honestly
-// returns some OTHER token (a login or token-mint route) must not be refused
-// for it. The payload and signature parts are the credential.
+// For a JWT the last two forms are narrowed (see add): its header names only the
+// algorithm, its payload's claims are shared by tokens issued to one principal,
+// so a route that honestly returns ANOTHER token (login, refresh) must not be
+// refused for them; the signature is what makes a token this one.
 //
 // What it does NOT recognise, stated so nobody reads more into it: a value cut
 // into pieces shorter than echoWindowLen, or transformed some other way (hex,
@@ -74,26 +75,44 @@ func SecretsOnRequest(header http.Header) SentSecrets {
 	return out
 }
 
-// guardedTail is the part of a value whose parts and runs are searched: the
-// whole value, or, for a JWT (three dot-separated parts, the first the base64
-// of a JSON object), everything after its header part.
-func guardedTail(secret []byte) []byte {
-	if bytes.Count(secret, []byte(".")) == 2 && bytes.HasPrefix(secret, []byte("eyJ")) {
-		_, tail, _ := bytes.Cut(secret, []byte("."))
-		return tail
+// splitJWT splits a value that is a JWT: three dot-separated parts whose first
+// is the base64url of a JSON object (a real header, not just a lookalike
+// prefix). ok is false for anything else, which is then treated as opaque.
+func splitJWT(secret []byte) (payload, signature []byte, ok bool) {
+	parts := bytes.Split(secret, []byte("."))
+	if len(parts) != 3 {
+		return nil, nil, false
 	}
-	return secret
+	header, err := base64.RawURLEncoding.DecodeString(string(parts[0]))
+	if err != nil || len(header) == 0 || header[0] != '{' || !json.Valid(header) {
+		return nil, nil, false
+	}
+	return parts[1], parts[2], true
 }
 
 func (s *SentSecrets) add(secret []byte) {
 	s.secrets = append(s.secrets, secret)
 	s.needles = append(s.needles, secret)
-	tail := guardedTail(secret)
-	s.windowed = append(s.windowed, tail)
 	for _, encoding := range []*base64.Encoding{base64.StdEncoding, base64.RawStdEncoding, base64.URLEncoding, base64.RawURLEncoding} {
 		s.needles = append(s.needles, []byte(encoding.EncodeToString(secret)))
 	}
-	for _, part := range bytes.Split(tail, []byte(".")) {
+	if payload, signature, ok := splitJWT(secret); ok {
+		// A JWT: the header is shared by every token of the algorithm, the
+		// payload's claims by tokens issued to one principal, and only the
+		// signature is unique to this token (a fragment without it cannot
+		// authenticate). So the runs are searched over the signature alone, and
+		// the payload counts only as a whole part.
+		if len(payload) >= echoPartMinLen {
+			s.needles = append(s.needles, payload)
+		}
+		if len(signature) >= echoPartMinLen {
+			s.needles = append(s.needles, signature)
+		}
+		s.windowed = append(s.windowed, signature)
+		return
+	}
+	s.windowed = append(s.windowed, secret)
+	for _, part := range bytes.Split(secret, []byte(".")) {
 		if len(part) >= echoPartMinLen {
 			s.needles = append(s.needles, part)
 		}

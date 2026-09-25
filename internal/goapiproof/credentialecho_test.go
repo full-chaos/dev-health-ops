@@ -238,3 +238,40 @@ func TestGraphQLPostNeverStoresAReflectedCredential(t *testing.T) {
 		t.Fatalf("an honest response must still be stored: %v %+v", err, observation)
 	}
 }
+
+// TestSentSecretsNarrowingIsForRealJWTsOnly (r2 P1s): (a) a newly issued token
+// for the SAME principal shares long payload runs with the request's token, so
+// it must pass (a refresh route answers exactly that); (b) a value that merely
+// LOOKS like a JWT (starts "eyJ", two dots) but whose first part is not a JSON
+// header is opaque, so a 24-byte fragment of it is still a reflection.
+func TestSentSecretsNarrowingIsForRealJWTsOnly(t *testing.T) {
+	claims := func(iat, exp string) string {
+		return base64.RawURLEncoding.EncodeToString([]byte(`{"sub":"proof-principal","org":"org-one","role":"admin","iat":` + iat + `,"exp":` + exp + `}`))
+	}
+	sign := func(seed string) string {
+		return base64.RawURLEncoding.EncodeToString([]byte(strings.Repeat(seed, 8)))
+	}
+	own := jwtLike(claims("1800000000", "1800003600"), sign("sig-a-"))
+	renewed := jwtLike(claims("1800000900", "1800004500"), sign("sig-b-"))
+	secrets := secretsFor(own)
+	if secrets.ReflectedIn([]byte(`{"access_token":"` + renewed + `"}`)) {
+		t.Fatal("a newly issued token for the same principal was refused: a refresh route could not be proved")
+	}
+	if !secrets.ReflectedIn([]byte(`{"access_token":"` + own + `"}`)) {
+		t.Fatal("the request's own token must still be refused")
+	}
+
+	// A JWT whose signature part is shorter than the run length is still seen
+	// by the part rule.
+	shortSig := jwtLike(claims("1800000000", "1800003600"), strings.Repeat("Sq", 9))
+	if !secretsFor(shortSig).ReflectedIn([]byte(`{"s":"` + strings.Repeat("Sq", 9) + `"}`)) {
+		t.Fatal("a short signature part reflected alone must be refused")
+	}
+
+	opaque := "eyJ" + strings.Repeat("Ab1", 12) + "." + strings.Repeat("Cd2", 12) + "." + strings.Repeat("Ef3", 12) // not a JWT: first part is not a JSON header
+	opaqueSecrets := secretsFor(opaque)
+	fragment := opaque[:echoWindowLen]
+	if !opaqueSecrets.ReflectedIn([]byte(`{"x":"` + fragment + `"}`)) {
+		t.Fatal("a 24-byte fragment of an opaque bearer that merely starts with eyJ was not refused")
+	}
+}

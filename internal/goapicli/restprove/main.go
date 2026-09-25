@@ -613,7 +613,7 @@ func doREST(ctx context.Context, client *goapiproof.LegClient, baseURL, method, 
 	// naming the target and never the value; see goapiproof.SentSecrets for the
 	// forms it recognises and the ones it does not.
 	if sentSecrets.ReflectedIn(raw) || sentSecrets.HeaderReflects(resp.Header) {
-		return goapiproof.RESTLeg{}, fmt.Errorf("%s answered with a body or header that contains the credential this request sent; refused so the credential is never stored or printed as response evidence", target)
+		return goapiproof.RESTLeg{}, fmt.Errorf("%s answered with a body or header that contains the credential this request sent; refused so the credential is never stored or printed as response evidence", goapiproof.EndpointLabel(target))
 	}
 	return goapiproof.RESTLeg{
 		StatusCode:    resp.StatusCode,

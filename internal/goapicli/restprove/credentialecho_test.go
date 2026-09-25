@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -135,5 +136,25 @@ func TestDoRESTRefusesTransformedAndHeaderEchoes(t *testing.T) {
 			}
 		}
 		server.Close()
+	}
+}
+
+// TestDoRESTRefusalNeverRepeatsACredentialFromTheRequestQuery (r2 P1): the
+// refusal names the endpoint by host only, so a bearer that also travelled in
+// the request URL's query never reaches the error the CLI prints.
+func TestDoRESTRefusalNeverRepeatsACredentialFromTheRequestQuery(t *testing.T) {
+	token := strings.Join([]string{strings.Repeat("Hd", 15), strings.Repeat("Pl", 25), strings.Repeat("Sg", 30)}, ".")
+	credential := goapiproof.StaticCredential("Authorization", "org-admin bearer", token)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Debug", strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer server.Close()
+	_, err := doREST(context.Background(), goapiproof.NewLegClient(0), server.URL, http.MethodGet, "/x", url.Values{"access_token": {token}}, nil, credential, false, time.Second)
+	if err == nil {
+		t.Fatal("the header echo must be refused")
+	}
+	if strings.Contains(err.Error(), token) || strings.Contains(err.Error(), "access_token") {
+		t.Fatalf("the refusal repeats the request query: %v", err)
 	}
 }

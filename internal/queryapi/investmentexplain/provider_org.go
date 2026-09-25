@@ -21,7 +21,9 @@ package investmentexplain
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 	"log"
 	"net/url"
 	"os"
@@ -87,6 +89,34 @@ func IsLLMAvailableForOrg(ctx context.Context, requested, orgID string, orgSetti
 	}
 	_, ok, err := orgSettings.Credentials(ctx, orgID, string(kind))
 	return err == nil && ok
+}
+
+// ProviderValueError reports the ValueError Python's get_provider lets
+// escape while it resolves a provider for orgID, with its str(exc) text:
+// urllib.parse.urlsplit's, for an org's stored BYO base_url it cannot
+// parse (a malformed IPv6 bracket). err is the error ResolveProviderKindForOrg
+// returned, if any; otherwise kind's org credentials are resolved as
+// _provider_has_required_config does (resolve_llm_credentials takes an
+// org's BYO bundle before any platform credential, and that function
+// catches only LLMAuthError). mock and none never reach a credential.
+// A legacy row can hold such a value: the llm-settings routes refuse it.
+func ProviderValueError(
+	ctx context.Context, err error, kind categorize.ProviderKind, orgID string, orgSettings llmorgsettings.Resolver,
+) (string, bool) {
+	var valueErr *pythonparity.URLValueError
+	if err != nil {
+		if errors.As(err, &valueErr) {
+			return valueErr.Message, true
+		}
+		return "", false
+	}
+	if orgSettings == nil || kind == categorize.ProviderKindMock || kind == categorize.ProviderKindNone {
+		return "", false
+	}
+	if _, _, credErr := orgSettings.Credentials(ctx, orgID, string(kind)); errors.As(credErr, &valueErr) {
+		return valueErr.Message, true
+	}
+	return "", false
 }
 
 // ResolveUnsupportedProviderKindForOrg is ResolveUnsupportedProviderKind

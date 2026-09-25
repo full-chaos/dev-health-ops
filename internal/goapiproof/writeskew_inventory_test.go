@@ -82,6 +82,8 @@ var writeSkewRefusalPlaces = map[string]string{
 	"RefusalInvalidBaselineDefect":      "not an axis: GraphQL prover only",
 	"RefusalInvalidStochasticLeafClass": "not an axis: GraphQL prover only",
 	"RefusalNeedsInstanceID":            "not an axis: GraphQL prover only",
+	"RefusalAdminPrincipalUnavailable":  "not an axis: GraphQL prover only",
+	"RefusalPrincipalMutationDocument":  "not an axis: GraphQL prover only",
 	"RefusalNonFinite":                  "not an axis: GraphQL prover only",
 	"RefusalNoPayload":                  "not an axis: GraphQL prover only",
 	"RefusalNonSuccessStatus":           "not an axis: GraphQL prover only",

@@ -96,6 +96,14 @@ const (
 	// two-plane comparison.
 	RefusalNotAQueryDocument = "document_is_not_a_query"
 
+	// RefusalAdminPrincipalUnavailable: the operation is on the operator-gated allowlist (principal.go) and the run supplied
+	// no admin-proof credential (-admin-principal). It never falls back to the read-level principal: that would only
+	// measure the AUTHORIZATION_ERROR and read as a result.
+	RefusalAdminPrincipalUnavailable = "admin_principal_not_supplied_for_an_operator_gated_operation"
+	// RefusalPrincipalMutationDocument: an allowlisted operation's registered document is not a pure query. No request
+	// is sent; the widened principal never reaches a mutation or a subscription.
+	RefusalPrincipalMutationDocument = "widened_principal_refused_a_document_that_is_not_a_query"
+
 	// RefusalLegsDoNotOverlap and RefusalVacuousEmptyLegs are CHAOS-5661's
 	// two structural refusals, computed by Compare (compare.go's
 	// structuralAgreementFailure / bodySizeDisagreement / vacuousEmptyLegs)
@@ -263,7 +271,10 @@ type Outcome struct {
 	// outcomes can share Operation when an operation declares Variants --
 	// this is what a reader tells them apart by; it plays no part in
 	// routing or document lookup, which stay keyed by Operation alone.
-	Variant        string `json:"variant,omitempty"`
+	Variant string `json:"variant,omitempty"`
+	// Principal is the widened principal this operation's requests carried (PrincipalAdminProof), empty for the default
+	// read-level principal. Part of the request identity, so a widened run never shares an identity with a viewer run.
+	Principal      string `json:"principal,omitempty"`
 	DocumentDigest string `json:"document_digest"`
 	Mode           string `json:"mode"`
 	Executed       bool   `json:"executed"`
@@ -365,6 +376,7 @@ type Outcome struct {
 // constructor, writer or receipt reads that view. TestSealedOutcomeHasNoExportedFields
 // fails if anyone adds one.
 type sealedOutcome struct {
+	principal       string
 	operation       string
 	variant         string
 	documentDigest  string
@@ -490,6 +502,10 @@ type Config struct {
 	// (JOB 4). Two fields make that a compile-time
 	// distinction rather than a runtime discovery.
 	EdgeCredential *Credential
+
+	// AdminEdgeCredential is the edge access token of the org-admin proof principal (PrincipalAdminProof). Used ONLY for the
+	// operations in principal.go's allowlist, on both legs; nil means those operations are refused by name.
+	AdminEdgeCredential *Credential
 
 	// ProofCredential authenticates the Go plane's own routes --
 	// /buildinfo and /query/proof. On the deployed stack this is an
@@ -662,6 +678,16 @@ func (r *Runner) Run(ctx context.Context) ([]Outcome, Summary, error) {
 	return outcomes, summary, nil
 }
 
+// authFor is the auth-context SHAPE a request was made with: the run's own, plus the principal name when the operation was
+// widened, so a widened receipt's identity differs from a read-level one and every other identity is unchanged.
+func (r *Runner) authFor(principal string) AuthContext {
+	auth := r.Config.Auth
+	if principal != "" {
+		auth.PrincipalKind += "+" + principal
+	}
+	return auth
+}
+
 // ReceiptsFor turns the buffered outcomes into the receipts they justify.
 //
 // Only ADMITTED outcomes produce a receipt: a refusal is a measurement that
@@ -687,7 +713,7 @@ func (r *Runner) ReceiptsFor(observedAt time.Time) ([]Receipt, error) {
 		if citationsAreUnprovenGoOnly(sealed.baselineDefects) {
 			continue
 		}
-		identity, err := RequestIdentity(sealed.orgID, r.Config.Auth, sealed.variables)
+		identity, err := RequestIdentity(sealed.orgID, r.authFor(sealed.principal), sealed.variables)
 		if err != nil {
 			return nil, err
 		}
@@ -748,7 +774,7 @@ func (r *Runner) RefusalReceipts(observedAt time.Time, cause string) ([]Receipt,
 		if !sealed.executed || !sealed.admitted {
 			continue
 		}
-		identity, err := RequestIdentity(sealed.orgID, r.Config.Auth, sealed.variables)
+		identity, err := RequestIdentity(sealed.orgID, r.authFor(sealed.principal), sealed.variables)
 		if err != nil {
 			return nil, err
 		}
@@ -932,6 +958,20 @@ func (r *Runner) proveRequest(ctx context.Context, operation string, variantName
 		return refuse(RefusalInvalidStochasticLeafClass, err.Error())
 	}
 
+	// The edge credential this operation's requests carry: the default read-level principal's, or, for an operation on
+	// principal.go's closed allowlist, the admin-proof principal's on BOTH legs (candidate and baseline share the edge).
+	edgeCredential := r.Config.EdgeCredential
+	if principal := PrincipalFor(operation); principal != "" {
+		if isMutationDocument(document) {
+			return refuse(RefusalPrincipalMutationDocument, "the registered document for "+operation+" names a mutation or subscription: no request is sent with a widened principal")
+		}
+		if r.Config.AdminEdgeCredential == nil {
+			return refuse(RefusalAdminPrincipalUnavailable, operation+" is refused to the read-level proof principal (AUTHORIZATION_ERROR); run with -admin-principal, which mints the org-admin proof principal's edge token")
+		}
+		edgeCredential = r.Config.AdminEdgeCredential
+		outcome.Principal = principal
+	}
+
 	// The candidate leg's URL is decided by the operation's MODE, because
 	// the production route switch admits canary/primary only
 	// (routeswitch.PostgresSwitch.reachableModes). A shadow operation sent
@@ -946,7 +986,7 @@ func (r *Runner) proveRequest(ctx context.Context, operation string, variantName
 	switch row.Mode {
 	case "canary", "primary":
 		candidateURL = r.Config.PythonEdgeURL
-		candidateCredential = r.Config.EdgeCredential
+		candidateCredential = edgeCredential
 		outcome.Route = RouteEdge
 	case "shadow":
 		outcome.Route = RouteProof
@@ -993,7 +1033,7 @@ func (r *Runner) proveRequest(ctx context.Context, operation string, variantName
 
 	// The baseline ALWAYS goes through the Python edge, whatever route
 	// the candidate took, so it always uses the edge credential.
-	baseline, err := r.post(ctx, r.Config.PythonEdgeURL, document+baselineComment, r.Config.EdgeCredential, variables)
+	baseline, err := r.post(ctx, r.Config.PythonEdgeURL, document+baselineComment, edgeCredential, variables)
 	if err != nil {
 		return refuse(RefusalTransport, "baseline leg: "+err.Error())
 	}
@@ -1261,6 +1301,7 @@ func (r *Runner) proveRequest(ctx context.Context, operation string, variantName
 // and none of it can be reached again from outside this package.
 func (r *Runner) seal(outcome Outcome, variables map[string]any) sealedOutcome {
 	return sealedOutcome{
+		principal:                        outcome.Principal,
 		variables:                        variables,
 		operation:                        outcome.Operation,
 		variant:                          outcome.Variant,

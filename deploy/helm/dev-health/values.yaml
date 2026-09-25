@@ -1152,12 +1152,15 @@ clickhouse:
     password: "ch"
     database: "default"
   # Extra ClickHouse users.d files, as a map of filename -> XML content
-  # (CHAOS-6181). Each renders into one ConfigMap key and is mounted with a
-  # subPath at /etc/clickhouse-server/users.d/<filename>, so the image's own
-  # users.d files stay. Empty (default) renders nothing extra. Use
-  # <password_sha256_hex>, never a plaintext <password>. Changing this restarts
-  # the ClickHouse pod (subPath mounts do not hot-reload). Do not name a file
-  # default-user.xml: the image entrypoint writes that file itself.
+  # (CHAOS-6181). Each renders into one ConfigMap key. The ConfigMap is mounted as
+  # a DIRECTORY at /etc/clickhouse-server/usersd-cm and an initContainer links each
+  # file into users.d (an emptyDir, so the image's own default-user.xml, written by
+  # its entrypoint, stays). Changing a file's CONTENT (a grant list, say) is
+  # delivered by kubelet's in-place ConfigMap refresh (about a minute) and reloaded
+  # by ClickHouse: NO pod restart (CHAOS-6474). Adding or removing a filename rolls
+  # the pod (the initContainer creates the links). Empty (default) renders nothing
+  # extra. Use <password_sha256_hex>, never a plaintext <password>. Do not name a
+  # file default-user.xml: the image entrypoint writes that file itself.
   #   usersd:
   #     ro_user.xml: |
   #       <clickhouse><users>...</users></clickhouse>

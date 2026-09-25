@@ -18,9 +18,35 @@ spec:
         {{- include "dev-health.componentSelectorLabels" (dict "component" "clickhouse" "context" $) | nindent 8 }}
       {{- if .Values.clickhouse.usersd }}
       annotations:
-        checksum/clickhouse-usersd: {{ toYaml .Values.clickhouse.usersd | sha256sum }}
+        {{- /* CHAOS-6474: the FILE SET, never the content. Content is delivered through a
+               directory-mounted ConfigMap that kubelet refreshes in place and ClickHouse
+               reloads without a restart; only a new/removed filename needs the initContainer
+               to run again (it creates the users.d symlinks), so only that rolls the pod. */}}
+        checksum/clickhouse-usersd-files: {{ keys (.Values.clickhouse.usersd | default dict) | sortAlpha | toJson | sha256sum }}
       {{- end }}
     spec:
+      {{- if .Values.clickhouse.usersd }}
+      initContainers:
+        {{- /* CHAOS-6474: users.d is an emptyDir (the image entrypoint still writes its own
+               default-user.xml into it) holding one symlink per usersd file, pointing at the
+               directory-mounted ConfigMap. kubelet swaps that directory's ..data symlink
+               atomically on a ConfigMap change (a per-file subPath mount is never refreshed),
+               and ClickHouse reloads the changed users.d file on its own: grant changes need
+               no pod restart. File names are passed as arguments, never interpolated. */}}
+        - name: clickhouse-usersd-links
+          image: {{ .Values.clickhouse.image.repository }}:{{ .Values.clickhouse.image.tag }}
+          command:
+            - sh
+            - -c
+            - 'for n in "$@"; do ln -sfn "../usersd-cm/$n" "/links/$n"; done'
+            - --
+            {{- range $name := keys (.Values.clickhouse.usersd | default dict) | sortAlpha }}
+            - {{ $name | quote }}
+            {{- end }}
+          volumeMounts:
+            - name: clickhouse-usersd-links
+              mountPath: /links
+      {{- end }}
       containers:
         - name: clickhouse
           image: {{ .Values.clickhouse.image.repository }}:{{ .Values.clickhouse.image.tag }}
@@ -46,11 +72,11 @@ spec:
             - name: clickhouse-data
               mountPath: /var/lib/clickhouse
             {{- end }}
-            {{- /* One subPath mount per file so the image's own users.d files stay. */}}
-            {{- range $name := keys (.Values.clickhouse.usersd | default dict) | sortAlpha }}
+            {{- if .Values.clickhouse.usersd }}
+            - name: clickhouse-usersd-links
+              mountPath: /etc/clickhouse-server/users.d
             - name: clickhouse-usersd
-              mountPath: {{ printf "/etc/clickhouse-server/users.d/%s" $name | quote }}
-              subPath: {{ $name | quote }}
+              mountPath: /etc/clickhouse-server/usersd-cm
               readOnly: true
             {{- end }}
           {{- end }}
@@ -71,6 +97,8 @@ spec:
         - name: clickhouse-usersd
           configMap:
             name: {{ include "dev-health.fullname" . }}-clickhouse-usersd
+        - name: clickhouse-usersd-links
+          emptyDir: {}
       {{- end }}
   {{- if .Values.clickhouse.persistence.enabled }}
   volumeClaimTemplates:

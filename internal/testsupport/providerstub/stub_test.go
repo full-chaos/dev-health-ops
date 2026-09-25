@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"io"
 	"net"
 	"net/http"
@@ -233,5 +234,155 @@ func TestTLSEndToEndWithAHostsOverrideAndTheIssuedCA(t *testing.T) {
 	}
 	if n := len(stub.Requests()); n != 2 {
 		t.Fatalf("recorded %d requests, want 2", n)
+	}
+}
+
+// ---- r1 (CHAOS-6718) findings: each test fails on the pre-fix stub ----
+
+func TestRecorderAndUnstubbedBodyNeverCarryATokenInThePath(t *testing.T) {
+	stub, _ := New(Fixture{Provider: "gitlab", Method: "GET", Path: "/api/v4/jobs/*", Status: 200, Body: json.RawMessage(`{}`)})
+	canary := "review-path-canary-not-a-real-credential"
+	miss := get(t, stub, "gitlab.com", "POST", "/api/v4/runners/"+canary, nil)
+	if miss.Code != 599 || strings.Contains(miss.Body.String(), canary) {
+		t.Fatalf("unstubbed body echoes the path token: %d %s", miss.Code, miss.Body.String())
+	}
+	hit := get(t, stub, "gitlab.com", "GET", "/api/v4/jobs/"+canary, nil)
+	if hit.Code != 200 {
+		t.Fatalf("matched status = %d", hit.Code)
+	}
+	raw, _ := json.Marshal(stub.Requests())
+	if strings.Contains(string(raw), canary) {
+		t.Fatalf("recorder kept the path token: %s", raw)
+	}
+	// the operator still learns WHICH endpoint was unstubbed: the vocabulary segments survive
+	if !strings.Contains(string(raw), "/api/v4/runners/") {
+		t.Fatalf("recorder lost the endpoint shape: %s", raw)
+	}
+}
+
+func TestPrefixFixturesRefuseTraversalAndDoubledSlashPaths(t *testing.T) {
+	stub, _ := New(Fixture{Provider: "gitlab", Method: "GET", Path: "/api/v4/groups/*", Status: 202, Body: json.RawMessage(`{"fixture":"prefix"}`)})
+	if got := get(t, stub, "gitlab.com", "GET", "/api/v4/groups/7", nil); got.Code != 202 {
+		t.Fatalf("plain path = %d", got.Code)
+	}
+	for _, target := range []string{"/api/v4/groups/../admin", "/api/v4/groups/%2e%2e/admin", "/api/v4/groups//admin", "/api/v4/groups/./x", "/api/v4/groups/a%2Fb"} {
+		if got := get(t, stub, "gitlab.com", "GET", target, nil); got.Code != 599 {
+			t.Errorf("%s answered %d, want 599", target, got.Code)
+		}
+	}
+}
+
+func TestADuplicateQueryKeyCannotSmuggleAValuePastAFixture(t *testing.T) {
+	stub, _ := New(Fixture{Provider: "github", Method: "GET", Path: "/x", Query: map[string]string{"scope": "read"}, Status: 201, Body: json.RawMessage(`{}`)})
+	if got := get(t, stub, "api.github.com", "GET", "/x?scope=read", nil); got.Code != 201 {
+		t.Fatalf("exact query = %d", got.Code)
+	}
+	for _, target := range []string{"/x?scope=read&scope=admin", "/x?scope=admin&scope=read"} {
+		if got := get(t, stub, "api.github.com", "GET", target, nil); got.Code != 599 {
+			t.Errorf("%s answered %d, want 599", target, got.Code)
+		}
+	}
+}
+
+func TestMethodMatchingIsCaseSensitive(t *testing.T) {
+	stub, _ := New(Fixture{Provider: "github", Method: "GET", Path: "/x", Status: 200, Body: json.RawMessage(`{}`)})
+	if got := get(t, stub, "api.github.com", "get", "/x", nil); got.Code != 599 {
+		t.Fatalf("lowercase method answered %d, want 599", got.Code)
+	}
+	if _, err := New(Fixture{Provider: "github", Method: "get", Path: "/x", Status: 200}); err == nil {
+		t.Fatal("a lowercase fixture method must be refused")
+	}
+}
+
+func TestOnlyAValidTLSPortSelectsAProvider(t *testing.T) {
+	for host, want := range map[string]string{"api.github.com": "github", "api.github.com:443": "github", "api.github.com:notaport": "", "api.github.com:8443": "", "api.github.com:": "", "API.GITHUB.COM": "github"} {
+		if got := ProviderFor(host); got != want {
+			t.Errorf("ProviderFor(%q) = %q, want %q", host, got, want)
+		}
+	}
+}
+
+func TestFixtureStatusMustBeAFinalStatus(t *testing.T) {
+	for _, status := range []int{0, 99, 100, 101, 199, 599, 600} {
+		if _, err := New(Fixture{Provider: "github", Method: "GET", Path: "/x", Status: status}); err == nil {
+			t.Errorf("status %d must be refused", status)
+		}
+	}
+	if _, err := New(Fixture{Provider: "github", Method: "GET", Path: "/x", Status: 200}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestBodyFileCannotLeaveTheFixtureDirectory(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "fx")
+	_ = os.Mkdir(dir, 0o755)
+	_ = os.WriteFile(filepath.Join(root, "outside.raw"), []byte("outside-marker"), 0o600)
+	_ = os.WriteFile(filepath.Join(dir, "inside.raw"), []byte("inside-marker"), 0o600)
+	load := func(bodyFile string) error {
+		fixture := `[{"provider":"github","method":"GET","path":"/x","status":200,"body_file":"` + bodyFile + `"}]`
+		if err := os.WriteFile(filepath.Join(dir, "a.json"), []byte(fixture), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_, err := LoadDir(dir)
+		return err
+	}
+	if err := load("inside.raw"); err != nil {
+		t.Fatalf("a body_file inside the directory must load: %v", err)
+	}
+	if err := load("../outside.raw"); err == nil {
+		t.Error("../outside.raw must be refused")
+	}
+	if err := load(filepath.Join(root, "outside.raw")); err == nil {
+		t.Error("an absolute body_file must be refused")
+	}
+	if err := os.Symlink(filepath.Join(root, "outside.raw"), filepath.Join(dir, "link.raw")); err == nil {
+		if err := load("link.raw"); err == nil {
+			t.Error("a symlink out of the directory must be refused")
+		}
+	}
+}
+
+func TestRecorderStoresNoUnknownHostOrOpaqueAuthScheme(t *testing.T) {
+	stub, _ := New()
+	get(t, stub, "leak-host-canary.example", "GET", "/x", map[string]string{"Authorization": "canary-scheme-not-a-credential value"})
+	get(t, stub, "gitlab.com", "CANARYMETHOD", "/x", nil)
+	raw, _ := json.Marshal(stub.Requests())
+	if strings.Contains(string(raw), "CANARYMETHOD") || !strings.Contains(string(raw), `"method":"OTHER"`) {
+		t.Fatalf("recorder kept a non-HTTP method token: %s", raw)
+	}
+	if strings.Contains(string(raw), "leak-host-canary") || strings.Contains(string(raw), "canary-scheme") {
+		t.Fatalf("recorder kept an unvetted header value: %s", raw)
+	}
+}
+
+func TestEveryRequestIsLoggedWithoutPathOrValues(t *testing.T) {
+	stub, _ := New()
+	var lines []string
+	stub.Log = func(line string) { lines = append(lines, line) }
+	get(t, stub, "gitlab.com", "GET", "/api/v4/x/secret-canary-value?token=q-canary", map[string]string{"PRIVATE-TOKEN": "h-canary"})
+	if len(lines) != 1 || !strings.Contains(lines[0], "599") || !strings.Contains(lines[0], "gitlab") {
+		t.Fatalf("log lines = %q", lines)
+	}
+	for _, canary := range []string{"secret-canary-value", "q-canary", "h-canary"} {
+		if strings.Contains(lines[0], canary) {
+			t.Fatalf("log line carries %s: %s", canary, lines[0])
+		}
+	}
+}
+
+func TestIssueServerCoversOnlyProviderHostsAndJiraTenants(t *testing.T) {
+	ca, _ := NewCA(time.Hour)
+	if _, _, err := ca.IssueServer([]string{"api.github.com", "example.com"}, time.Hour); err == nil {
+		t.Fatal("a host that is not a provider host or Jira tenant must be refused")
+	}
+	certPEM, _, err := ca.IssueServer([]string{"api.github.com", "zz-venue.atlassian.net"}, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, _ := pem.Decode(certPEM)
+	cert, _ := x509.ParseCertificate(block.Bytes)
+	if len(cert.IPAddresses) != 0 {
+		t.Fatalf("the certificate must not carry IP SANs: %v", cert.IPAddresses)
 	}
 }

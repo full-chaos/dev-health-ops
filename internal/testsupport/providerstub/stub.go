@@ -30,6 +30,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -52,7 +53,12 @@ var providerHosts = map[string]string{
 // exact provider hosts above, and any tenant host under .atlassian.net (Jira).
 func ProviderFor(host string) string {
 	host = strings.ToLower(host)
-	if h, _, err := net.SplitHostPort(host); err == nil {
+	if strings.Contains(host, ":") {
+		// only the TLS port selects a provider: a bad or other port is not a provider request
+		h, port, err := net.SplitHostPort(host)
+		if err != nil || port != "443" {
+			return ""
+		}
 		host = h
 	}
 	if provider, ok := providerHosts[host]; ok {
@@ -94,7 +100,7 @@ type Fixture struct {
 }
 
 func (f *Fixture) matches(provider, method, path string, query map[string][]string) bool {
-	if f.Provider != provider || !strings.EqualFold(f.Method, method) {
+	if f.Provider != provider || f.Method != method {
 		return false
 	}
 	if strings.HasSuffix(f.Path, "*") {
@@ -105,13 +111,16 @@ func (f *Fixture) matches(provider, method, path string, query map[string][]stri
 		return false
 	}
 	for key, want := range f.Query {
+		// exactly one value: a duplicate key must not smuggle a second value past the fixture
 		got, ok := query[key]
-		if !ok || len(got) == 0 || got[0] != want {
+		if !ok || len(got) != 1 || got[0] != want {
 			return false
 		}
 	}
 	return true
 }
+
+var validMethods = map[string]bool{"GET": true, "POST": true, "PUT": true, "PATCH": true, "DELETE": true, "HEAD": true, "OPTIONS": true}
 
 // validate refuses a fixture that cannot answer anything sensibly.
 func (f *Fixture) validate(where string) error {
@@ -124,12 +133,12 @@ func (f *Fixture) validate(where string) error {
 	switch {
 	case !known && f.Provider != "jira":
 		return fmt.Errorf("%s: unknown provider %q", where, f.Provider)
-	case f.Method == "":
-		return fmt.Errorf("%s: no method", where)
+	case !validMethods[f.Method]:
+		return fmt.Errorf("%s: method %q must be an uppercase HTTP method", where, f.Method)
 	case !strings.HasPrefix(f.Path, "/"):
 		return fmt.Errorf("%s: path %q must start with /", where, f.Path)
-	case f.Status < 100 || f.Status > 599 || f.Status == 599:
-		return fmt.Errorf("%s: status %d (599 is reserved for unstubbed requests)", where, f.Status)
+	case f.Status < 200 || f.Status > 598:
+		return fmt.Errorf("%s: status %d must be a final status in 200..598 (599 is reserved for unstubbed requests)", where, f.Status)
 	case len(f.Body) > 0 && f.BodyFile != "":
 		return fmt.Errorf("%s: both body and body_file", where)
 	}
@@ -142,7 +151,9 @@ type Recorded struct {
 	Provider string    `json:"provider"`
 	Host     string    `json:"host"`
 	Method   string    `json:"method"`
-	Path     string    `json:"path"`
+	// Path is the path SHAPE: short vocabulary words and api versions are kept, every other segment
+	// (an id, a slug, a token) is "{x}". Never the raw path.
+	Path string `json:"path"`
 	// QueryKeys are the query parameter NAMES, sorted: never their values (some
 	// provider APIs accept a token as a query parameter, so a value can be a
 	// credential).
@@ -159,6 +170,8 @@ type Stub struct {
 	mu       sync.Mutex
 	fixtures []*Fixture
 	recorded []Recorded
+	// Log, when set, receives one line per request (provider, method, status, matched: no path, no values).
+	Log func(string)
 }
 
 // New builds a stub from fixtures already in memory.
@@ -206,7 +219,7 @@ func LoadDir(dir string) (*Stub, error) {
 			}
 			switch {
 			case fixture.BodyFile != "":
-				body, err := os.ReadFile(filepath.Join(filepath.Dir(file), fixture.BodyFile)) // #nosec G304 -- relative to the fixture file
+				body, err := readConfined(filepath.Dir(file), fixture.BodyFile)
 				if err != nil {
 					return nil, fmt.Errorf("providerstub: %s: %w", where, err)
 				}
@@ -223,12 +236,16 @@ func LoadDir(dir string) (*Stub, error) {
 // ServeHTTP answers a provider request: the first matching fixture, else 599.
 func (s *Stub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	provider := ProviderFor(r.Host)
+	host := "(unknown)"
+	if provider != "" {
+		host = strings.ToLower(strings.TrimSuffix(r.Host, ":443"))
+	}
 	record := Recorded{
-		At: time.Now().UTC(), Provider: provider, Host: r.Host, Method: r.Method,
-		Path: r.URL.Path, QueryKeys: queryKeys(r), AuthKind: authKind(r),
+		At: time.Now().UTC(), Provider: provider, Host: host, Method: knownMethod(r.Method),
+		Path: shapePath(r.URL.Path), QueryKeys: queryKeys(r), AuthKind: authKind(r),
 	}
 	var matched *Fixture
-	if provider != "" {
+	if provider != "" && safePath(r) {
 		s.mu.Lock()
 		for _, fixture := range s.fixtures {
 			if fixture.matches(provider, r.Method, r.URL.Path, r.URL.Query()) {
@@ -244,9 +261,10 @@ func (s *Stub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("X-Providerstub", "unstubbed")
 		w.WriteHeader(599)
+		// no path and no query: they can carry a token
 		_ = json.NewEncoder(w).Encode(map[string]string{
-			"error": "providerstub: unstubbed request", "provider": provider, "host": r.Host,
-			"method": r.Method, "path": r.URL.Path,
+			"error": "providerstub: unstubbed request", "provider": provider, "method": record.Method,
+			"path_shape": record.Path,
 		})
 		return
 	}
@@ -265,13 +283,24 @@ func (s *Stub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (s *Stub) record(r Recorded) {
 	s.mu.Lock()
 	s.recorded = append(s.recorded, r)
+	logf := s.Log
 	s.mu.Unlock()
+	if logf != nil {
+		provider := r.Provider
+		if provider == "" {
+			provider = "unknown"
+		}
+		logf(fmt.Sprintf("providerstub request provider=%s method=%s status=%d matched=%t auth=%s", provider, r.Method, r.Status, r.Matched, r.AuthKind))
+	}
 }
 
 // queryKeys returns the sorted query parameter names of a request (never values).
 func queryKeys(r *http.Request) []string {
 	keys := make([]string, 0)
 	for key := range r.URL.Query() {
+		if !keyName.MatchString(key) {
+			key = "{key}"
+		}
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
@@ -283,7 +312,15 @@ func queryKeys(r *http.Request) []string {
 func authKind(r *http.Request) string {
 	if v := r.Header.Get("Authorization"); v != "" {
 		if scheme, _, ok := strings.Cut(v, " "); ok {
-			return scheme
+			switch strings.ToLower(scheme) {
+			case "bearer":
+				return "Bearer"
+			case "basic":
+				return "Basic"
+			case "token":
+				return "token"
+			}
+			return "other"
 		}
 		return "opaque"
 	}
@@ -335,4 +372,71 @@ func writeJSON(w http.ResponseWriter, v any) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+// readConfined reads name from dir, refusing an absolute name, a name that
+// climbs out of dir, and a symlink that resolves outside it.
+func readConfined(dir, name string) ([]byte, error) {
+	if !filepath.IsLocal(name) {
+		return nil, fmt.Errorf("body_file %q must be a relative path inside the fixture directory", name)
+	}
+	root, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return nil, err
+	}
+	resolved, err := filepath.EvalSymlinks(filepath.Join(dir, name))
+	if err != nil {
+		return nil, err
+	}
+	if rel, err := filepath.Rel(root, resolved); err != nil || !filepath.IsLocal(rel) {
+		return nil, fmt.Errorf("body_file %q resolves outside the fixture directory", name)
+	}
+	return os.ReadFile(resolved) // #nosec G304 -- confined to the fixture directory above
+}
+
+var (
+	wordSegment    = regexp.MustCompile(`^[A-Za-z][A-Za-z_-]{0,23}$`)
+	versionSegment = regexp.MustCompile(`^v?[0-9]{1,2}$`)
+	keyName        = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_.\[\]-]{0,31}$`)
+)
+
+// safePath reports whether the request path can be matched at all: no dot
+// segments, no doubled slash, no encoded slash or backslash (each could reach
+// a fixture prefix through a path the client did not really mean).
+func safePath(r *http.Request) bool {
+	path := r.URL.Path
+	if !strings.HasPrefix(path, "/") || strings.Contains(path, "\\") {
+		return false
+	}
+	escaped := strings.ToLower(r.URL.EscapedPath())
+	if strings.Contains(escaped, "%2f") || strings.Contains(escaped, "%5c") {
+		return false
+	}
+	segments := strings.Split(path[1:], "/")
+	for i, segment := range segments {
+		if segment == "." || segment == ".." || (segment == "" && i != len(segments)-1) {
+			return false
+		}
+	}
+	return true
+}
+
+// shapePath keeps only the vocabulary of a path (short words, api versions):
+// every other segment (an id, a slug, a token) becomes {x}, so the recorder can
+// name the endpoint that was hit without ever holding a credential.
+func shapePath(path string) string {
+	segments := strings.Split(path, "/")
+	for i, segment := range segments {
+		if segment != "" && !wordSegment.MatchString(segment) && !versionSegment.MatchString(segment) {
+			segments[i] = "{x}"
+		}
+	}
+	return strings.Join(segments, "/")
+}
+
+func knownMethod(method string) string {
+	if validMethods[method] {
+		return method
+	}
+	return "OTHER"
 }

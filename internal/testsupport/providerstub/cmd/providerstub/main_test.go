@@ -51,3 +51,23 @@ func TestServeRefusesMissingFlags(t *testing.T) {
 		t.Fatal("serve without -cert and -key must be refused")
 	}
 }
+
+func TestCertsRefusesANonJiraHostAndTightensAnExistingKeyFile(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "certs")
+	if err := certs([]string{"-out", dir, "-jira-host", "example.com"}); err == nil {
+		t.Fatal("-jira-host example.com must be refused: only *.atlassian.net tenants")
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "server.key"), []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := certs([]string{"-out", dir, "-jira-host", "zz-venue.atlassian.net"}); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(filepath.Join(dir, "server.key"))
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("server.key mode = %v, %v; want 0600 even when the file pre-existed 0644", info, err)
+	}
+}

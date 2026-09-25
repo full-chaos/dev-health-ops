@@ -75,7 +75,12 @@ func certs(args []string) error {
 		if name == "server.key" {
 			mode = 0o600
 		}
-		if err := os.WriteFile(filepath.Join(*out, name), data, mode); err != nil {
+		path := filepath.Join(*out, name)
+		if err := os.WriteFile(path, data, mode); err != nil {
+			return err
+		}
+		// WriteFile leaves the mode of a file that already exists: set it explicitly
+		if err := os.Chmod(path, mode); err != nil {
 			return err
 		}
 	}
@@ -100,6 +105,7 @@ func serve(args []string) error {
 	if err != nil {
 		return err
 	}
+	stub.Log = func(line string) { fmt.Println(line) } // one line per request, no path, no values
 	cert, err := tls.LoadX509KeyPair(*certFile, *keyFile)
 	if err != nil {
 		return err

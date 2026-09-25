@@ -9,7 +9,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"math/big"
-	"net"
+	"strings"
 	"time"
 )
 
@@ -50,10 +50,16 @@ func NewCA(lifetime time.Duration) (*CA, error) {
 }
 
 // IssueServer issues a server certificate and key (both PEM) for the given DNS
-// names (and 127.0.0.1 for tests).
+// names. Every name must be a provider host or a Jira tenant (*.atlassian.net):
+// the certificate never covers anything else, and carries no IP address.
 func (ca *CA) IssueServer(hosts []string, lifetime time.Duration) (certPEM, keyPEM []byte, err error) {
 	if len(hosts) == 0 {
 		return nil, nil, fmt.Errorf("providerstub: no hosts for the server certificate")
+	}
+	for _, host := range hosts {
+		if strings.Contains(host, ":") || host != strings.ToLower(host) || ProviderFor(host) == "" {
+			return nil, nil, fmt.Errorf("providerstub: %q is not a provider host or a Jira tenant (*.atlassian.net)", host)
+		}
 	}
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -67,7 +73,7 @@ func (ca *CA) IssueServer(hosts []string, lifetime time.Duration) (certPEM, keyP
 		SerialNumber: serial, Subject: pkix.Name{CommonName: hosts[0]},
 		NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(lifetime),
 		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		DNSNames: hosts, IPAddresses: []net.IP{net.ParseIP("127.0.0.1")},
+		DNSNames: hosts,
 	}
 	der, err := x509.CreateCertificate(rand.Reader, template, ca.Cert, &key.PublicKey, ca.key)
 	if err != nil {

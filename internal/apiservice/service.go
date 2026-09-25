@@ -282,11 +282,7 @@ func configure(
 // declared under the Python counter name, as one fragment, and the
 // legacy-ingest refusal counter, which it sets on deps, as another.
 func RegisterOperatorMetrics(registry *health.Registry, deps *Deps) error {
-	source, err := apimetrics.Install()
-	if err != nil {
-		return err
-	}
-	if err := registry.RegisterMetrics("api_instruments", source); err != nil {
+	if err := apimetrics.Register(registry); err != nil {
 		return err
 	}
 	deps.LegacyIngestMetrics = legacyingest.NewMetrics()

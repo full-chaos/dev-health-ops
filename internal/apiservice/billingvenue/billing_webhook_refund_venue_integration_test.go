@@ -120,7 +120,7 @@ func refundRequests(t *testing.T, event webhookEventFunc) {
 		object["id"] = "ch_listed"
 		object["refunds"] = map[string]any{"object": "list", "data": []any{
 			map[string]any{"id": "re_evt_list_1", "object": "refund", "amount": 250, "currency": "usd", "status": "succeeded",
-				"reason": nil, "charge": "ch_listed", "payment_intent": "pi_listed", "metadata": map[string]any{"org_id": org[1], "invoice_id": invoice}},
+				"reason": nil, "charge": "ch_listed", "payment_intent": "pi_listed", "metadata": map[string]any{"org_id": org[0], "invoice_id": invoice}},
 			map[string]any{"id": "re_seeded", "object": "refund", "amount": 500, "currency": "usd", "status": "succeeded", "metadata": map[string]any{}},
 		}}
 	})

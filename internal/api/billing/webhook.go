@@ -121,7 +121,7 @@ func (h handlers) stripeWebhook(w http.ResponseWriter, r *http.Request) {
 			h.internal(w, r, "stripe webhook", err)
 			return
 		}
-	case "charge.refunded", "charge.refund.updated":
+	case "charge.refunded", "charge.refund.updated", "refund.created", "refund.updated", "refund.failed":
 		if err := h.refundEvent(ctx, eventType, dataObject); err != nil {
 			h.internal(w, r, "stripe webhook", err)
 			return
@@ -145,6 +145,20 @@ var stripeEventRoutes = map[string]bool{
 	"customer.subscription.trial_will_end": true,
 	"charge.refunded":                      true,
 	"charge.refund.updated":                true,
+	"refund.created":                       true,
+	"refund.updated":                       true,
+	"refund.failed":                        true,
+}
+
+// stripeEventExtensions are routed types the Python route does not apply
+// (Go-only widenings, named): Stripe's own refund events, sent for every
+// refund where charge.refund.updated is only for selected payment methods.
+// TestVenueOracleStripeEventDispatch holds this list to the executed Python
+// route: an entry must be a type Python drops.
+var stripeEventExtensions = map[string]string{
+	"refund.created": "the refund itself, as charge.refund.updated",
+	"refund.updated": "the refund itself, as charge.refund.updated",
+	"refund.failed":  "the refund itself, as charge.refund.updated",
 }
 
 // stripeEventGaps are the event types the Python route applies that this

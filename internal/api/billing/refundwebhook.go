@@ -13,7 +13,10 @@ import (
 )
 
 // refundEvent is RefundService.process_webhook for charge.refunded (every
-// refund the charge lists) and charge.refund.updated (the refund itself).
+// refund the charge lists) and charge.refund.updated (the refund itself),
+// and, as a Go-only widening, for Stripe's own refund.created, refund.updated
+// and refund.failed (the refund itself): the events Stripe sends for every
+// refund, where charge.refund.updated is only for selected payment methods.
 // The refunds land in one transaction; a redelivery upserts the same rows.
 //
 // Two named deviations from Python, both from the write-first refund route
@@ -168,29 +171,35 @@ func (h handlers) upsertStripeRefund(ctx context.Context, tx pgx.Tx, event pyjso
 		}
 	}
 
-	org := metaOrg
-	if org == nil && found {
-		org = &stored.org
+	// The org and the invoice. A row already stored keeps its own org. For a
+	// refund not stored yet, the invoice paid by the event's payment intent
+	// (exactly one) owns it, whatever the metadata says; with no such invoice
+	// the metadata's org counts, and its invoice only when that invoice
+	// belongs to that org.
+	intent := ""
+	if ref := refundRef(event, "payment_intent", nil); ref != nil {
+		intent = *ref
 	}
-	// An event with no org in its metadata (a refund made in Stripe's
-	// dashboard) still names the payment: the invoice paid by that payment
-	// intent gives the org and the link.
-	var intentInvoice *uuid.UUID
-	if org == nil {
-		intent := ""
-		if ref := refundRef(event, "payment_intent", nil); ref != nil {
-			intent = *ref
-		}
+	var org, intentInvoice *uuid.UUID
+	if !found {
 		invoices, err := h.invoicesOfPayment(ctx, tx, intent)
 		if err != nil {
 			return err
 		}
-		if len(invoices) != 1 {
+		switch {
+		case len(invoices) == 1:
+			org, intentInvoice = &invoices[0].org, &invoices[0].id
+			if metaOrg != nil && *metaOrg != *org {
+				h.logger.WarnContext(ctx, "Refund webhook event's org metadata names another org than its payment's invoice; the payment's org is used",
+					"stripe_refund_id", stripeRefundID, "payment_intent", intent, "org_id_received", metaOrg.String(), "org_id", org.String())
+			}
+		case metaOrg != nil:
+			org = metaOrg
+		default:
 			h.logger.WarnContext(ctx, "Refund webhook event names no organization and no single invoice; not recorded",
 				"stripe_refund_id", stripeRefundID, "payment_intent", intent, "invoices_found", len(invoices))
 			return nil
 		}
-		org, intentInvoice = &invoices[0].org, &invoices[0].id
 	}
 
 	stripeCharge := chargeID
@@ -215,17 +224,15 @@ func (h handlers) upsertStripeRefund(ctx context.Context, tx pgx.Tx, event pyjso
 				"stripe_refund_id", stripeRefundID, "org_id", org.String())
 			return nil
 		}
-		invoice := metaInvoice
-		if invoice == nil {
-			invoice = intentInvoice
-		}
-		if invoice != nil {
-			if exists, err := rowExists(ctx, tx, `SELECT EXISTS (SELECT 1 FROM invoices WHERE id = $1)`, *invoice); err != nil {
+		invoice := intentInvoice
+		if invoice == nil && metaInvoice != nil {
+			if owned, err := invoiceOfOrg(ctx, tx, *metaInvoice, *org); err != nil {
 				return err
-			} else if !exists {
-				h.logger.WarnContext(ctx, "Refund webhook event names an invoice that does not exist; stored without it",
-					"stripe_refund_id", stripeRefundID, "invoice_id", invoice.String())
-				invoice = nil
+			} else if owned {
+				invoice = metaInvoice
+			} else {
+				h.logger.WarnContext(ctx, "Refund webhook event names an invoice that is not this org's; stored without it",
+					"stripe_refund_id", stripeRefundID, "invoice_id", metaInvoice.String(), "org_id", org.String())
 			}
 		}
 		if currency == "" {
@@ -290,7 +297,9 @@ func (h handlers) upsertStripeRefund(ctx context.Context, tx pgx.Tx, event pyjso
 		newStatus = status
 	}
 	if !stale {
-		if failure, valid := refundText(event, "failure_reason", stored.failure); valid {
+		// A null (or absent) failure reason is a sparser snapshot, not a
+		// retraction: a reason once recorded is kept.
+		if failure, valid := refundText(event, "failure_reason", stored.failure); valid && (failure != nil || stored.failure == nil) {
 			newFailure = failure
 		}
 	}
@@ -303,13 +312,10 @@ func (h handlers) upsertStripeRefund(ctx context.Context, tx pgx.Tx, event pyjso
 		newDescription = &text
 	}
 	newInvoice := stored.invoice
-	if newInvoice == nil && metaInvoice == nil {
-		newInvoice = intentInvoice
-	}
 	if newInvoice == nil && metaInvoice != nil {
-		if exists, err := rowExists(ctx, tx, `SELECT EXISTS (SELECT 1 FROM invoices WHERE id = $1)`, *metaInvoice); err != nil {
+		if owned, err := invoiceOfOrg(ctx, tx, *metaInvoice, stored.org); err != nil {
 			return err
-		} else if exists {
+		} else if owned {
 			newInvoice = metaInvoice
 		}
 	}
@@ -351,4 +357,11 @@ func (h handlers) invoicesOfPayment(ctx context.Context, tx pgx.Tx, intent strin
 		out = append(out, invoice)
 	}
 	return out, rows.Err()
+}
+
+// invoiceOfOrg reports whether an invoice exists and belongs to the org.
+func invoiceOfOrg(ctx context.Context, tx pgx.Tx, invoice, org uuid.UUID) (bool, error) {
+	var owned bool
+	err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM invoices WHERE id = $1 AND org_id = $2)`, invoice, org).Scan(&owned)
+	return owned, err
 }

@@ -131,7 +131,7 @@ func TestRefundWebhookWriteFirstAndOrder(t *testing.T) {
 	const invAdopt, invRace, invOrder, invRow = "bbbbbbbb-0000-4000-8000-000000000001", "bbbbbbbb-0000-4000-8000-000000000002",
 		"bbbbbbbb-0000-4000-8000-000000000003", "bbbbbbbb-0000-4000-8000-000000000004"
 	const invRace2, invPI = "bbbbbbbb-0000-4000-8000-000000000005", "bbbbbbbb-0000-4000-8000-000000000006"
-	const invRace3 = "bbbbbbbb-0000-4000-8000-000000000007"
+	const invRace3, invOwnerB, invRace4 = "bbbbbbbb-0000-4000-8000-000000000007", "bbbbbbbb-0000-4000-8000-000000000008", "bbbbbbbb-0000-4000-8000-000000000009"
 	const waitingA, waitingB = "cccccccc-0000-4000-8000-000000000001", "cccccccc-0000-4000-8000-000000000002"
 	exec(`INSERT INTO invoices (id, org_id, stripe_invoice_id, stripe_customer_id, status, amount_due, amount_paid, currency,
 		payment_intent_id, metadata, created_at, updated_at) VALUES
@@ -141,19 +141,21 @@ func TestRefundWebhookWriteFirstAndOrder(t *testing.T) {
 		($4, $5, 'in_rowless', 'cus_A', 'paid', 400, 400, 'usd', 'pi_rowless', '{}', now(), now()),
 		($6, $5, 'in_race2', 'cus_A', 'paid', 900, 900, 'usd', 'pi_race2', '{}', now(), now()),
 		($7, $5, 'in_pi', 'cus_A', 'paid', 700, 700, 'usd', 'pi_of_dashboard', '{}', now(), now()),
+		($9, $10, 'in_owner_b', 'cus_B', 'paid', 300, 300, 'usd', 'pi_owner_b', '{}', now(), now()),
+		($11, $5, 'in_race4', 'cus_A', 'paid', 450, 450, 'usd', 'pi_race4', '{}', now(), now()),
 		($8, $5, 'in_race3', 'cus_A', 'paid', 350, 350, 'usd', 'pi_race3', '{}', now(), now()),
 		(gen_random_uuid(), $5, 'in_twice_1', 'cus_A', 'paid', 100, 100, 'usd', 'pi_twice', '{}', now(), now()),
 		(gen_random_uuid(), $5, 'in_twice_2', 'cus_A', 'paid', 100, 100, 'usd', 'pi_twice', '{}', now(), now())`,
-		invAdopt, invRace, invOrder, invRow, orgA, invRace2, invPI, invRace3)
+		invAdopt, invRace, invOrder, invRow, orgA, invRace2, invPI, invRace3, invOwnerB, orgB, invRace4)
 	exec(`INSERT INTO refunds (id, org_id, invoice_id, stripe_refund_id, stripe_charge_id, amount, currency, status, metadata, created_at, updated_at) VALUES
 		($1, $3, $4, NULL, NULL, 300, 'usd', 'pending', '{}', now(), now()),
 		($2, $5, NULL, NULL, NULL, 200, 'usd', 'pending', '{}', now(), now())`,
 		waitingA, waitingB, orgA, invAdopt, orgB)
 
 	stamp := time.Now().Unix() + 200
-	deliver := func(name, refundID, status string, edit func(object map[string]any)) venueoracle.Response {
+	deliverAs := func(name, eventType, refundID, status string, edit func(object map[string]any)) venueoracle.Response {
 		value := loadWebhookFixture(t, "charge.refund.updated.json")
-		value["type"], value["id"] = "charge.refund.updated", "evt_"+strings.NewReplacer(" ", "_", ":", "").Replace(name)
+		value["type"], value["id"] = eventType, "evt_"+strings.NewReplacer(" ", "_", ":", "").Replace(name)
 		object := value["data"].(map[string]any)["object"].(map[string]any)
 		object["id"], object["status"] = refundID, status
 		if edit != nil {
@@ -163,6 +165,9 @@ func TestRefundWebhookWriteFirstAndOrder(t *testing.T) {
 		return venueoracle.Do(t, base, venueoracle.Request{Name: name, Method: "POST", Path: webhookPath,
 			Headers: map[string]string{"Stripe-Signature": webhookSignature(webhookVenueSecret, stamp, body), "Content-Type": "application/json"},
 			Body:    venueoracle.B64(string(body))})
+	}
+	deliver := func(name, refundID, status string, edit func(object map[string]any)) venueoracle.Response {
+		return deliverAs(name, "charge.refund.updated", refundID, status, edit)
 	}
 	metadata := func(fields map[string]any) func(map[string]any) {
 		return func(object map[string]any) { object["metadata"] = fields }
@@ -242,6 +247,63 @@ func TestRefundWebhookWriteFirstAndOrder(t *testing.T) {
 	expect("race requires_action: the row stays succeeded",
 		row(`SELECT count(*)::text || ' ' || min(status) FROM refunds WHERE invoice_id = '`+invRace3+`'`), "1 succeeded")
 
+	// And with the route told "failed" without a reason: the event's reason stays.
+	hookMu.Lock()
+	routeStatus = "failed"
+	hook = func(rowID, stripeID string) {
+		deliver("race: the failure with a reason beats a failed completion", stripeID, "failed", func(object map[string]any) {
+			object["metadata"] = map[string]any{"org_id": orgA, "invoice_id": invRace4, "refund_id": rowID}
+			object["failure_reason"] = "lost_or_stolen_card"
+		})
+	}
+	hookMu.Unlock()
+	response = venueoracle.Do(t, base, venueoracle.Request{Name: "race: create, then failed without a reason", Method: "POST", Path: "/api/v1/billing/refunds",
+		Headers: map[string]string{"Authorization": "Bearer " + venue.Tokens["super"], "Content-Type": "application/json"},
+		Body:    venueoracle.B64(`{"invoice_id":"` + invRace4 + `","amount":450}`)})
+	hookMu.Lock()
+	hook, routeStatus = nil, "pending"
+	hookMu.Unlock()
+	expect("race failed without reason: the create answered", fmt.Sprint(response.Status), "200")
+	expect("race failed without reason: the event's reason remains with the failed status",
+		row(`SELECT count(*)::text || ' ' || min(status) || ' ' || coalesce(min(failure_reason), '<null>') FROM refunds WHERE invoice_id = '`+invRace4+`'`), "1 failed lost_or_stolen_card")
+
+	// The payment's own invoice decides the org and the invoice, whatever the
+	// metadata says: metadata for org A on a payment intent org B's invoice
+	// was paid by. A metadata invoice that is not the org's is not linked.
+	answer = deliver("owner: metadata org A, payment of org B", "re_owner", "succeeded", func(object map[string]any) {
+		object["metadata"] = map[string]any{"org_id": orgA, "invoice_id": invAdopt}
+		object["payment_intent"] = "pi_owner_b"
+	})
+	expect("owner: answered", fmt.Sprint(answer.Status), "200")
+	expect("owner: the refund is attached to the payment owner's org and invoice",
+		row(`SELECT org_id::text || ' ' || coalesce(invoice_id::text, '<null>') FROM refunds WHERE stripe_refund_id = 're_owner'`), orgB+" "+invOwnerB)
+	answer = deliver("owner: metadata invoice of another org", "re_foreign_invoice", "succeeded", func(object map[string]any) {
+		object["metadata"] = map[string]any{"org_id": orgB, "invoice_id": invAdopt}
+		object["payment_intent"] = "pi_nobody_holds_either"
+	})
+	expect("owner: foreign invoice answered", fmt.Sprint(answer.Status), "200")
+	expect("owner: a metadata invoice of another org is not linked",
+		row(`SELECT org_id::text || ' ' || coalesce(invoice_id::text, '<null>') FROM refunds WHERE stripe_refund_id = 're_foreign_invoice'`), orgB+" <null>")
+
+	// A waiting row completed by an event whose metadata names an invoice of
+	// another org: the row keeps having no invoice.
+	answer = deliver("owner: waiting row, metadata invoice of another org", "re_waiting_b", "succeeded", func(object map[string]any) {
+		object["metadata"] = map[string]any{"org_id": orgB, "invoice_id": invAdopt, "refund_id": waitingB}
+		object["payment_intent"] = "pi_nobody_holds_at_all"
+	})
+	expect("owner: waiting row completed", fmt.Sprint(answer.Status), "200")
+	expect("owner: the completed row has its Stripe id and no foreign invoice",
+		row(`SELECT coalesce(stripe_refund_id, '<null>') || ' ' || coalesce(invoice_id::text, '<null>') FROM refunds WHERE id = '`+waitingB+`'`), "re_waiting_b <null>")
+
+	// Stripe's own refund events (refund.created, .updated, .failed) are
+	// recorded as charge.refund.updated is.
+	for _, eventType := range []string{"refund.created", "refund.updated", "refund.failed"} {
+		refundID := "re_" + strings.ReplaceAll(eventType, ".", "_")
+		answer = deliverAs("stripe's own: "+eventType, eventType, refundID, "succeeded", metadata(map[string]any{"org_id": orgA, "invoice_id": invAdopt}))
+		expect(eventType+": answered", fmt.Sprint(answer.Status), "200")
+		expect(eventType+": recorded", row(`SELECT count(*)::text || ' ' || min(status) FROM refunds WHERE stripe_refund_id = '`+refundID+`'`), "1 succeeded")
+	}
+
 	// A refund made in Stripe's dashboard has no org in its metadata: the
 	// invoice its payment intent paid gives the org and the link. A payment
 	// intent no invoice holds records nothing.
@@ -281,6 +343,11 @@ func TestRefundWebhookWriteFirstAndOrder(t *testing.T) {
 		object["metadata"], object["failure_reason"] = map[string]any{"org_id": orgA}, nil
 	})
 	expect("order: a failed refund keeps its status and reason",
+		row(`SELECT status || ' ' || coalesce(failure_reason, '<null>') FROM refunds WHERE stripe_refund_id = 're_order3'`), "failed lost_or_stolen_card")
+	deliver("order: failed again, no reason", "re_order3", "failed", func(object map[string]any) {
+		object["metadata"], object["failure_reason"] = map[string]any{"org_id": orgA}, nil
+	})
+	expect("order: a later failed event without a reason keeps the recorded one",
 		row(`SELECT status || ' ' || coalesce(failure_reason, '<null>') FROM refunds WHERE stripe_refund_id = 're_order3'`), "failed lost_or_stolen_card")
 	// An event with no status at all still updates the other fields of a
 	// settled refund (Python assigns whatever the event carries).

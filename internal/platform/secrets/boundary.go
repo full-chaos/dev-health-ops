@@ -137,6 +137,15 @@ func (b Boundary) Redact(err error) error {
 	return errors.New(redacted)
 }
 
+// RedactText returns text with every occurrence of the boundary's values replaced
+// by RedactedMarker: Redact for a message that is already a string.
+func (b Boundary) RedactText(text string) string {
+	if len(b.values) == 0 {
+		return text
+	}
+	return RedactValues(text, b.values...)
+}
+
 // redactedCauseError is a stable sentinel plus a driver cause whose text has
 // had every credential component of a DSN removed. It unwraps to the sentinel
 // only: the raw cause is not kept, so no later %+v or errors.Unwrap can reach

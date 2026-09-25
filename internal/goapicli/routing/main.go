@@ -71,6 +71,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/goapiproof"
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	pgstorage "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 )
 
@@ -114,12 +115,18 @@ func Command() cli.Command {
 			stderr = env.Stderr
 			verbFlagOutput = env.Stderr
 			if err := run(env.Args); err != nil {
-				fmt.Fprintf(stderr, "go-api-routing: %v\n", err)
+				printError(err)
 				return exitCodeFor(err)
 			}
 			return cli.ExitOK
 		},
 	}
+}
+
+// printError is the command's one error print: whatever a verb returned, a
+// credential of the run's database never reaches stderr.
+func printError(err error) {
+	fmt.Fprintf(stderr, "go-api-routing: %s\n", redactCredentials(err.Error()))
 }
 
 // errRefused marks a REFUSAL -- a state the operator must resolve --
@@ -182,12 +189,45 @@ func exitCodeFor(err error) int {
 	}
 }
 
+// credentialBoundary redacts the login and password the driver resolved for the
+// database this run connects to: from the DSN, PGUSER, PGPASSWORD, a password file
+// or a service file (CHAOS-6665). connectPostgres sets it before it dials, so every
+// message of an error a later statement raises (a server can echo the login and
+// password in any error) passes through it: refuse and internal build their text
+// through it, status redacts the DB errors it reports, and the command's top-level
+// error print applies it once more. One command runs one verb, so a package value
+// is the whole state.
+var credentialBoundary secrets.Boundary //nolint:gochecknoglobals // see the comment above
+
+func redactCredentials(text string) string { return credentialBoundary.RedactText(text) }
+
+// redactedFailure is an error whose text has been redacted; it still unwraps to
+// the error it was built from, so errors.Is and errors.As keep working.
+type redactedFailure struct {
+	text  string
+	cause error
+}
+
+func (e *redactedFailure) Error() string { return e.text }
+func (e *redactedFailure) Unwrap() error { return e.cause }
+
+// redacted applies credentialBoundary to an error's text.
+func redacted(err error) error {
+	if err == nil {
+		return nil
+	}
+	if text := redactCredentials(err.Error()); text != err.Error() {
+		return &redactedFailure{text: text, cause: err}
+	}
+	return err
+}
+
 func refuse(format string, args ...any) error {
-	return fmt.Errorf("%w: "+format, append([]any{errRefused}, args...)...)
+	return redacted(fmt.Errorf("%w: "+format, append([]any{errRefused}, args...)...))
 }
 
 func internal(format string, args ...any) error {
-	return fmt.Errorf("%w: "+format, append([]any{errInternal}, args...)...)
+	return redacted(fmt.Errorf("%w: "+format, append([]any{errInternal}, args...)...))
 }
 
 // classifyWriteError distinguishes a genuine INTERNAL database failure --
@@ -242,6 +282,8 @@ func classifyWriteError(err error) error {
 }
 
 func run(argv []string) error {
+	// One run, one database: nothing of an earlier run's credentials is redacted here.
+	credentialBoundary = secrets.Boundary{}
 	verb, rest := splitVerb(argv)
 	switch verb {
 	case "repoint":
@@ -864,6 +906,7 @@ func sanitizeEndpointURL(flagName, raw string) (string, error) {
 // that claims a bound it does not have is how this defect existed at
 // all.
 func connectPostgres(ctx context.Context, uri string, timeout time.Duration) (*pgxpool.Pool, error) {
+	credentialBoundary = pgstorage.Boundary(uri)
 	config, err := pgxpool.ParseConfig(uri)
 	if err != nil {
 		// Same rule as pgxpool.New's parse failure below: pgx's message
@@ -916,7 +959,7 @@ func connectPostgres(ctx context.Context, uri string, timeout time.Duration) (*p
 		// echo the password, and the login and password may come from PGUSER,
 		// PGPASSWORD, a password file or a service file rather than from the DSN
 		// (CHAOS-6665), so the boundary is built from the resolved configuration.
-		return nil, internal("Postgres did not answer within %s: %w", timeout, pgstorage.Boundary(uri).Redact(err))
+		return nil, internal("Postgres did not answer within %s: %w", timeout, err)
 	}
 	return pool, nil
 }

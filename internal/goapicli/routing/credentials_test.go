@@ -3,10 +3,14 @@ package routing
 import (
 	"bytes"
 	"context"
+	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
+	pgstorage "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakepg"
 )
 
@@ -50,5 +54,57 @@ func TestVerbsPrintNoCredentialsFromTheEnvironment(t *testing.T) {
 		if leaks := refusing.Leaks(text); len(leaks) > 0 {
 			t.Errorf("%s: the output carries %v:\n%s", name, leaks, text)
 		}
+	}
+}
+
+// A server whose login works and whose statements fail with an error echoing the
+// login and password: what a later query error can carry. `status` reports it in
+// its report, `disable` returns it through classifyWriteError (r2 of CHAOS-6665).
+func TestVerbsPrintNoCredentialsInLaterQueryErrors(t *testing.T) {
+	t.Setenv(bearerEnvVar, "")
+	catalog := filepath.Join("..", "..", "..", "src", "dev_health_ops", "api", "graphql", "go_api_operations.json")
+	for name, argv := range map[string][]string{
+		"status":  {"status", "-timeout", "3s"},
+		"disable": {"disable", "-mode", "python", "-timeout", "3s", "-catalog", catalog},
+	} {
+		echoing := fakepg.StartEchoing(t)
+		argv = append(argv, "-postgres-uri", echoing.URI)
+		savedOut, savedErr := stdout, stderr
+		var out, errOut bytes.Buffer
+		stdout, stderr = &out, &errOut
+		err := run(argv)
+		stdout, stderr = savedOut, savedErr
+		echoing.RequireConnected(t)
+		text := out.String() + errOut.String()
+		if err != nil {
+			text += err.Error()
+		}
+		if !strings.Contains(text, "server echo") {
+			t.Errorf("%s: the server's statement error never reached the output (the test measures nothing):\n%s", name, text)
+		}
+		if leaks := echoing.Leaks(text); len(leaks) > 0 {
+			t.Errorf("%s: the output carries %v:\n%s", name, leaks, text)
+		}
+	}
+}
+
+// The command's own error print applies the boundary to whatever a verb returns.
+func TestTopLevelErrorPrintRedactsCredentials(t *testing.T) {
+	credentialBoundary = pgstorage.Boundary("postgres://someone:hunter2secret@127.0.0.1:1/db")
+	t.Cleanup(func() { credentialBoundary = secrets.Boundary{} })
+	if got := redactCredentials("failed for someone with hunter2secret"); strings.Contains(got, "hunter2secret") || strings.Contains(got, "someone") {
+		t.Errorf("redactCredentials left a credential: %q", got)
+	}
+	var printed bytes.Buffer
+	saved := stderr
+	stderr = &printed
+	printError(errors.New("a raw driver error: hunter2secret for someone"))
+	stderr = saved
+	if strings.Contains(printed.String(), "hunter2secret") || strings.Contains(printed.String(), "someone") || !strings.Contains(printed.String(), "go-api-routing: ") {
+		t.Errorf("printError left a credential or lost its prefix: %q", printed.String())
+	}
+	err := refuse("the driver said %v", errors.New("password hunter2secret for someone"))
+	if strings.Contains(err.Error(), "hunter2secret") || !errors.Is(err, errRefused) {
+		t.Errorf("refuse: %q (errors.Is refused: %v)", err.Error(), errors.Is(err, errRefused))
 	}
 }

@@ -417,15 +417,12 @@ VALUES (
 RETURNING id`, now).Scan(&riverJobID); err != nil {
 		t.Fatal(err)
 	}
-	// The hand-rolled test DDL (createDailyTables) is a simplified subset of
-	// the real worker_job_outbox migration and does not carry delivered_at
-	// (or several other columns the real schema's delivery-state check
-	// constraint pins) -- setting status/river_job_id is all this function
-	// reads.
+	// The real delivery-state check constraint requires delivered_at with
+	// status/river_job_id.
 	dedupeKey := "metrics.daily_finalize:redrive:" + runID + ":orphan-nonce-discarded"
 	if _, err := pool.Exec(ctx, `
 UPDATE worker_job_outbox
-SET status = 'delivered', river_job_id = $1
+SET status = 'delivered', river_job_id = $1, delivered_at = now()
 WHERE dedupe_key = $2`, riverJobID, dedupeKey); err != nil {
 		t.Fatal(err)
 	}

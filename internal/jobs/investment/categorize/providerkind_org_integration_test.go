@@ -12,6 +12,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -44,24 +46,9 @@ func TestResolveProviderKindForOrg_UsesRealOrgSettings(t *testing.T) {
 	}
 	t.Cleanup(pool.Close)
 
-	for _, statement := range []string{
-		`CREATE TABLE settings (
-		   org_id text NOT NULL, category text NOT NULL, key text NOT NULL,
-		   value text, is_encrypted boolean NOT NULL DEFAULT false)`,
-		`CREATE TABLE organizations (id uuid PRIMARY KEY, tier text NOT NULL)`,
-		`CREATE TABLE feature_flags (
-		   id uuid PRIMARY KEY, key text UNIQUE NOT NULL, min_tier text NOT NULL,
-		   is_enabled boolean NOT NULL)`,
-		`CREATE TABLE org_feature_overrides (
-		   org_id uuid NOT NULL, feature_id uuid NOT NULL, is_enabled boolean NOT NULL,
-		   expires_at timestamptz, PRIMARY KEY (org_id, feature_id))`,
-		`CREATE TABLE org_licenses (
-		   org_id uuid PRIMARY KEY, tier text NOT NULL, features_override json)`,
-	} {
-		if _, err := pool.Exec(ctx, statement); err != nil {
-			t.Fatal(err)
-		}
-	}
+	// The migrated schema (CHAOS-6769 ledger): the hand-written tables lacked the real tables' NOT NULL
+	// columns, and the migrations already register the shipped feature flags.
+	pgschema.Apply(ctx, t, pool)
 
 	decryptor, err := providerfoundation.NewFernetDecryptor(secrets.NewValue("test-master-key"), "")
 	if err != nil {
@@ -70,25 +57,14 @@ func TestResolveProviderKindForOrg_UsesRealOrgSettings(t *testing.T) {
 	store := llmorgsettings.Store{Pool: pool, Decryptor: decryptor}
 
 	featureID := uuid.New()
-	if _, err := pool.Exec(ctx,
-		`INSERT INTO feature_flags (id, key, min_tier, is_enabled) VALUES ($1, 'byo_llm', 'team', true)`,
-		featureID); err != nil {
-		t.Fatal(err)
-	}
+	pgseed.SetFeatureFlag(ctx, t, pool, featureID.String(), "byo_llm", "team", true)
 	orgID := uuid.New()
-	if _, err := pool.Exec(ctx,
-		`INSERT INTO organizations (id, tier) VALUES ($1, 'enterprise')`, orgID); err != nil {
-		t.Fatal(err)
-	}
+	pgseed.Org(ctx, t, pool, orgID.String(), "enterprise")
 	for _, row := range []struct{ key, value string }{
 		{"provider", "ollama"},
 		{"base_url", "https://my-gateway.example.com/v1"},
 	} {
-		if _, err := pool.Exec(ctx,
-			`INSERT INTO settings (org_id, category, key, value, is_encrypted) VALUES ($1, 'llm', $2, $3, false)`,
-			orgID.String(), row.key, row.value); err != nil {
-			t.Fatal(err)
-		}
+		pgseed.Setting(ctx, t, pool, orgID.String(), "llm", row.key, row.value, false)
 	}
 
 	// A platform LLM_PROVIDER env pointing elsewhere must still lose to

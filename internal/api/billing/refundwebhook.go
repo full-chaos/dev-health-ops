@@ -28,6 +28,8 @@ import (
 // that arrives late.
 func (h handlers) refundEvent(ctx context.Context, eventType string, eventID pyjson.Value, dataObject pyjson.Value) error {
 	if dataObject == nil {
+		h.logger.WarnContext(ctx, "Refund webhook event has no data object; not recorded", "event_id", pyStr(eventID), "event_type", eventType)
+		countRefundDecision(ctx, skipNoDataObject)
 		return nil
 	}
 	var refunds []pyjson.Value
@@ -42,6 +44,7 @@ func (h handlers) refundEvent(ctx context.Context, eventType string, eventID pyj
 			h.logger.InfoContext(ctx, "charge.refunded carries no refund list; its refunds are recorded from the refund events",
 				"event_id", pyStr(eventID), "charge", chargeID)
 			unhandledEvents.Add(ctx, 1, metric.WithAttributes(attribute.String("event_type", eventType)))
+			countRefundDecision(ctx, skipChargeWithoutRefund)
 			return nil
 		}
 		refunds = list
@@ -135,6 +138,8 @@ func refundRef(event pyjson.Value, name string, stored *string) *string {
 func (h handlers) upsertStripeRefund(ctx context.Context, tx pgx.Tx, event pyjson.Value, chargeID string) error {
 	stripeRefundID := pyTextOrEmpty(attr(event, "id", nil))
 	if stripeRefundID == "" {
+		h.logger.WarnContext(ctx, "Refund webhook event names no refund id; not recorded")
+		countRefundDecision(ctx, skipNoRefundID)
 		return nil
 	}
 	var amount *int64
@@ -142,12 +147,14 @@ func (h handlers) upsertStripeRefund(ctx context.Context, tx pgx.Tx, event pyjso
 		if !fitsInt4(number) {
 			h.logger.ErrorContext(ctx, "Refusing refund webhook event: the amount exceeds the stored integer range",
 				"stripe_refund_id", stripeRefundID)
+			countRefundDecision(ctx, skipAmount)
 			return nil
 		}
 		value := number.Int64()
 		amount = &value
 	} else if raw := attr(event, "amount", nil); raw != nil {
 		h.logger.ErrorContext(ctx, "Refusing refund webhook event: the amount is not an integer", "stripe_refund_id", stripeRefundID)
+		countRefundDecision(ctx, skipAmount)
 		return nil
 	}
 	metadata := ensureDict(attr(event, "metadata", nil))
@@ -174,58 +181,39 @@ func (h handlers) upsertStripeRefund(ctx context.Context, tx pgx.Tx, event pyjso
 		return err
 	}
 
-	// Who owns a refund not stored yet is one rule. The invoices paid by the
-	// event's payment intent decide: none, and the metadata's org counts;
-	// exactly one, and it owns the refund (org and invoice link) whatever the
-	// metadata says; several, and no org is chosen for it, so the event is
-	// skipped (an ambiguous payment never lets metadata pick an owner).
+	// Who owns a refund not stored yet is decideRefundOwner's one rule.
 	var org, intentInvoice *uuid.UUID
 	if !found {
 		invoices, err := h.invoicesOfPayment(ctx, tx, intent)
 		if err != nil {
 			return err
 		}
-		switch {
-		case len(invoices) > 1:
-			h.logger.WarnContext(ctx, "Refund webhook event's payment is held by several invoices; not recorded",
-				"stripe_refund_id", stripeRefundID, "payment_intent", intent, "invoices_found", len(invoices))
-			return nil
-		case len(invoices) == 1:
-			org, intentInvoice = &invoices[0].org, &invoices[0].id
-			if metaOrg != nil && *metaOrg != *org {
-				h.logger.WarnContext(ctx, "Refund webhook event's org metadata names another org than its payment's invoice; the payment's org is used",
-					"stripe_refund_id", stripeRefundID, "payment_intent", intent, "org_id_received", metaOrg.String(), "org_id", org.String())
-			}
-		case metaOrg != nil:
-			org = metaOrg
-		}
-
-		// The write-first row this refund was made for (still without a
-		// Stripe id), named by its `refund_id` metadata: completed when it
-		// fits the owner above, never duplicated, and never adopted by an
-		// event that names another org's payment. A row that names it and
-		// does not fit stops the event: a second row would collide with the
-		// row's own completion.
+		var waiting *storedRefund
 		if metaRow != nil {
 			switch row, err := scanStoredRefund(tx.QueryRow(ctx, `SELECT `+storedRefundColumns+` FROM refunds
 				WHERE id = $1 AND stripe_refund_id IS NULL FOR UPDATE`, *metaRow)); {
 			case err == nil:
-				fits := (org == nil || row.org == *org) && (intentInvoice == nil || row.invoice == nil || *row.invoice == *intentInvoice)
-				if !fits {
-					h.logger.ErrorContext(ctx, "Refund webhook event names a waiting refund that does not fit its payment or org; not recorded",
-						"stripe_refund_id", stripeRefundID, "refund_id", metaRow.String(), "payment_intent", intent,
-						"org_id_received", pyStr(attr(metadata, "org_id", nil)))
-					return nil
-				}
-				stored, found = row, true
+				waiting = &row
 			case !errors.Is(err, pgx.ErrNoRows):
 				return err
 			}
 		}
-		if !found && org == nil {
-			h.logger.WarnContext(ctx, "Refund webhook event names no organization and no single invoice; not recorded",
-				"stripe_refund_id", stripeRefundID, "payment_intent", intent, "invoices_found", 0)
+		decision := decideRefundOwner(refundOwnerInput{Invoices: invoices, MetaOrg: metaOrg, Waiting: waiting})
+		if decision.Skip != "" {
+			h.logSkippedRefund(ctx, decision.Skip, stripeRefundID, intent, len(invoices), metadata, metaRow)
+			countRefundDecision(ctx, decision.Skip)
 			return nil
+		}
+		if decision.Note != "" {
+			countRefundDecision(ctx, decision.Note)
+		}
+		if decision.Note == noteOverriddenByPayment {
+			h.logger.WarnContext(ctx, "Refund webhook event's org metadata names another org than its payment's invoice; the payment's org is used",
+				"stripe_refund_id", stripeRefundID, "payment_intent", intent, "org_id_received", metaOrg.String(), "org_id", decision.Org.String())
+		}
+		org, intentInvoice = decision.Org, decision.Invoice
+		if decision.Adopt {
+			stored, found = *waiting, true
 		}
 	}
 
@@ -249,6 +237,7 @@ func (h handlers) upsertStripeRefund(ctx context.Context, tx pgx.Tx, event pyjso
 		} else if !exists {
 			h.logger.ErrorContext(ctx, "Refusing refund webhook event: the refund names an organization that does not exist",
 				"stripe_refund_id", stripeRefundID, "org_id", org.String())
+			countRefundDecision(ctx, skipOrgMissing)
 			return nil
 		}
 		invoice := intentInvoice
@@ -260,6 +249,7 @@ func (h handlers) upsertStripeRefund(ctx context.Context, tx pgx.Tx, event pyjso
 			} else {
 				h.logger.WarnContext(ctx, "Refund webhook event names an invoice that is not this org's; stored without it",
 					"stripe_refund_id", stripeRefundID, "invoice_id", metaInvoice.String(), "org_id", org.String())
+				countRefundDecision(ctx, noteInvoiceNotOrgs)
 			}
 		}
 		if currency == "" {
@@ -391,4 +381,21 @@ func invoiceOfOrg(ctx context.Context, tx pgx.Tx, invoice, org uuid.UUID) (bool,
 	var owned bool
 	err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM invoices WHERE id = $1 AND org_id = $2)`, invoice, org).Scan(&owned)
 	return owned, err
+}
+
+// logSkippedRefund is the log line of a skip decideRefundOwner made.
+func (h handlers) logSkippedRefund(ctx context.Context, reason, stripeRefundID, intent string, invoicesFound int, metadata *pyjson.Object, waiting *uuid.UUID) {
+	fields := []any{"reason", reason, "stripe_refund_id", stripeRefundID, "payment_intent", intent, "invoices_found", invoicesFound,
+		"org_id_received", pyStr(attr(metadata, "org_id", nil))}
+	if waiting != nil {
+		fields = append(fields, "refund_id", waiting.String())
+	}
+	switch reason {
+	case skipWaitingRowMisfit:
+		h.logger.ErrorContext(ctx, "Refund webhook event names a waiting refund that does not fit its payment or org; not recorded", fields...)
+	case skipSeveralInvoices:
+		h.logger.WarnContext(ctx, "Refund webhook event's payment is held by several invoices; not recorded", fields...)
+	default:
+		h.logger.WarnContext(ctx, "Refund webhook event names no organization and no single invoice; not recorded", fields...)
+	}
 }

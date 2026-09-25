@@ -76,8 +76,8 @@ func TestHistoryWithAChain(t *testing.T) {
 	}
 	application := applicationHead(baseline)
 	chain := []ChainFile{
-		{Revision: "0141", Name: "0141_add_widget_table.sql"},
-		{Revision: "0142", Name: "0142_widget_index.sql"},
+		{Revision: "0142", Name: "0142_add_widget_table.sql"},
+		{Revision: "0143", Name: "0143_widget_index.sql"},
 	}
 	var out bytes.Buffer
 	if err := WriteHistory(&out, WithChain(entries, baseline, chain)); err != nil {
@@ -86,7 +86,7 @@ func TestHistoryWithAChain(t *testing.T) {
 	lines := strings.Split(out.String(), "\n")
 	var top []string
 	for index, line := range lines {
-		if strings.Contains(line, " -> 0142") {
+		if strings.Contains(line, " -> 0143") {
 			top = lines[index : index+3]
 			break
 		}
@@ -94,10 +94,10 @@ func TestHistoryWithAChain(t *testing.T) {
 	if len(top) == 0 {
 		t.Fatalf("no line for the new head:\n%s", out.String())
 	}
-	if top[0] != "0141 -> 0142 (head), Widget index." || top[1] != application+" -> 0141, Add widget table." {
+	if top[0] != "0142 -> 0143 (head), Widget index." || top[1] != application+" -> 0142, Add widget table." {
 		t.Errorf("chain lines = %q", top[:2])
 	}
-	if !strings.HasPrefix(top[2], "0139 -> "+application+" (application_schema), ") || strings.Contains(top[2], "(head)") {
+	if !strings.HasPrefix(top[2], "0140 -> "+application+" (application_schema), ") || strings.Contains(top[2], "(head)") {
 		t.Errorf("the old application head line = %q, want no head mark", top[2])
 	}
 	if !strings.HasPrefix(lines[0], "0065 -> 0066 (river_cutover) (head), ") {

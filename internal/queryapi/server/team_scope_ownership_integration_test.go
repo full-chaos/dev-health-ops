@@ -9,6 +9,8 @@
 package server
 
 import (
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+
 	"context"
 	"testing"
 	"time"
@@ -407,9 +409,9 @@ func TestTeamScopeOwnership_InvestmentRoutesNarrowToTheOwnedRepos(t *testing.T) 
 	}
 }
 
-func totalThemeEffort(distribution map[string]float64) float64 {
+func totalThemeEffort(distribution pyjson.OrderedMap[float64]) float64 {
 	total := 0.0
-	for _, value := range distribution {
+	for _, value := range distribution.All() {
 		total += value
 	}
 	return total

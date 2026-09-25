@@ -1,6 +1,8 @@
 package workunitexplain
 
 import (
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,19 +14,16 @@ import (
 // below are the Python attribute names, and FastAPI serialises a model's
 // members in declaration order.
 //
-// CategoryRationale is a plain Go map, so Go writes its members sorted
-// where Python writes them in the order the themes were inserted. A JSON
-// object's member order is not a comparable property (RFC 8259 s6) and no
-// decode-based comparison can observe the difference -- the same reasoning
-// GET /api/v1/work-units' own themes/subcategories maps already carry.
+// CategoryRationale keeps insertion order: Python fills the dict in the
+// work unit's theme order, and pydantic writes it in that order.
 type Explanation struct {
-	WorkUnitID            string            `json:"work_unit_id"`
-	AIGenerated           bool              `json:"ai_generated"`
-	Summary               string            `json:"summary"`
-	CategoryRationale     map[string]string `json:"category_rationale"`
-	EvidenceHighlights    []string          `json:"evidence_highlights"`
-	UncertaintyDisclosure string            `json:"uncertainty_disclosure"`
-	EvidenceQualityLimits string            `json:"evidence_quality_limits"`
+	WorkUnitID            string                    `json:"work_unit_id"`
+	AIGenerated           bool                      `json:"ai_generated"`
+	Summary               string                    `json:"summary"`
+	CategoryRationale     pyjson.OrderedMap[string] `json:"category_rationale"`
+	EvidenceHighlights    []string                  `json:"evidence_highlights"`
+	UncertaintyDisclosure string                    `json:"uncertainty_disclosure"`
+	EvidenceQualityLimits string                    `json:"evidence_quality_limits"`
 }
 
 // nonAIExplanation is explain_work_unit's early return for a provider that
@@ -38,7 +37,7 @@ func nonAIExplanation(workUnitID string) Explanation {
 		WorkUnitID:            workUnitID,
 		AIGenerated:           false,
 		Summary:               "",
-		CategoryRationale:     map[string]string{},
+		CategoryRationale:     pyjson.NewOrderedMap[string](),
 		EvidenceHighlights:    []string{},
 		UncertaintyDisclosure: "",
 		EvidenceQualityLimits: "",

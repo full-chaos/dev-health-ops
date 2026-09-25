@@ -29,8 +29,8 @@ import (
 // edges=[]) leaving those two fields at their own Pydantic defaults
 // (None) rather than populating them.
 type Response struct {
-	ThemeDistribution           map[string]float64         `json:"theme_distribution"`
-	SubcategoryDistribution     map[string]float64         `json:"subcategory_distribution"`
+	ThemeDistribution           pyjson.OrderedMap[float64] `json:"theme_distribution"`
+	SubcategoryDistribution     pyjson.OrderedMap[float64] `json:"subcategory_distribution"`
 	EvidenceQualityDistribution pyjson.OrderedMap[float64] `json:"evidence_quality_distribution" pyjson:"nullable"`
 	EvidenceQualityStats        *EvidenceQualityStats      `json:"evidence_quality_stats"`
 	Unit                        *string                    `json:"unit"`
@@ -152,8 +152,8 @@ type Params struct {
 
 func emptyResponse() *Response {
 	return &Response{
-		ThemeDistribution:       map[string]float64{},
-		SubcategoryDistribution: map[string]float64{},
+		ThemeDistribution:       pyjson.NewOrderedMap[float64](),
+		SubcategoryDistribution: pyjson.NewOrderedMap[float64](),
 		Edges:                   []map[string]any{},
 	}
 }
@@ -222,14 +222,20 @@ func BuildResponse(ctx context.Context, reader *Reader, orgID string, params Par
 		return nil, err
 	}
 
-	themeDistribution := map[string]float64{}
-	subcategoryDistribution := map[string]float64{}
+	// investment.py adds to a dict per row, so each key sits where its
+	// first row put it: the breakdown query's own row order.
+	themeDistribution := pyjson.NewOrderedMap[float64]()
+	subcategoryDistribution := pyjson.NewOrderedMap[float64]()
+	addTo := func(distribution *pyjson.OrderedMap[float64], key string, value float64) {
+		current, _ := distribution.Get(key)
+		distribution.Set(key, current+value)
+	}
 	for _, row := range rows {
 		if row.Theme != "" && row.Value > 0 {
-			themeDistribution[row.Theme] += row.Value
+			addTo(&themeDistribution, row.Theme, row.Value)
 		}
 		if strings.Contains(row.Subcategory, ".") && row.Value > 0 {
-			subcategoryDistribution[row.Subcategory] += row.Value
+			addTo(&subcategoryDistribution, row.Subcategory, row.Value)
 		}
 	}
 

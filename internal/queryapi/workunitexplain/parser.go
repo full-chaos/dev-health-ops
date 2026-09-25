@@ -1,6 +1,8 @@
 package workunitexplain
 
 import (
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+
 	"fmt"
 	"regexp"
 	"strings"
@@ -190,7 +192,7 @@ func parseLLMResponse(rawResponse string, unit WorkUnit) (Explanation, error) {
 		rationaleSource = rawResponse
 	}
 
-	categoryRationale := map[string]string{}
+	categoryRationale := pyjson.NewOrderedMap[string]()
 	analysisSection := extractSectionByHeader(rationaleSource, "Category Analysis", "")
 	for _, theme := range unit.Themes {
 		// `rf"{re.escape(category)}[^.]*\."` -- the category name followed by
@@ -204,14 +206,14 @@ func parseLLMResponse(rawResponse string, unit WorkUnit) (Explanation, error) {
 		// (it requires a literal period), but keying on the index rather
 		// than the text keeps that independent of the pattern.
 		if location := pattern.FindStringIndex(rationaleSource); location != nil {
-			categoryRationale[theme.Key] = pythonparity.Strip(rationaleSource[location[0]:location[1]])
+			categoryRationale.Set(theme.Key, pythonparity.Strip(rationaleSource[location[0]:location[1]]))
 			continue
 		}
 		if analysisSection != "" {
-			categoryRationale[theme.Key] = "Category appears in overall analysis."
+			categoryRationale.Set(theme.Key, "Category appears in overall analysis.")
 			continue
 		}
-		categoryRationale[theme.Key] = "Category leaning based on structural evidence."
+		categoryRationale.Set(theme.Key, "Category leaning based on structural evidence.")
 	}
 
 	band := ""

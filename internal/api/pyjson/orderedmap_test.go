@@ -111,3 +111,55 @@ func TestOrderedMapJSONRoundTripKeepsDocumentOrder(t *testing.T) {
 		t.Fatal("Unmarshal([1]) succeeded, want an error")
 	}
 }
+
+// TestOrderedMapPointerTakesTheOrderedPath pins that a non-nil
+// *OrderedMap is written like the value: through the ordered path, so a
+// float stays a Float (the MarshalJSON round trip would turn 3.0 into 3).
+func TestOrderedMapPointerTakesTheOrderedPath(t *testing.T) {
+	m := OrderedMapOf(KeyValue[float64]{"b", 3}, KeyValue[float64]{"a", 1.5})
+	for name, input := range map[string]any{"value": m, "pointer": &m} {
+		value, err := FromGo(input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out, err := Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := `{"b":3.0,"a":1.5}`; string(out) != want {
+			t.Errorf("%s: FromGo = %s, want %s", name, out, want)
+		}
+	}
+}
+
+// TestOrderedMapOmitEmptyLikeAMap pins omitempty on an OrderedMap field to
+// encoding/json's rule for a map: a nil or empty one is omitted.
+func TestOrderedMapOmitEmptyLikeAMap(t *testing.T) {
+	type body struct {
+		Field OrderedMap[int] `json:"field,omitempty"`
+		Other int             `json:"other"`
+	}
+	for name, input := range map[string]body{
+		"nil":   {},
+		"empty": {Field: NewOrderedMap[int]()},
+	} {
+		value, err := FromGo(input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out, err := Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := `{"other":0}`; string(out) != want {
+			t.Errorf("%s: FromGo = %s, want %s", name, out, want)
+		}
+	}
+	value, err := FromGo(body{Field: OrderedMapOf(KeyValue[int]{"k", 1})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out, _ := Marshal(value); string(out) != `{"field":{"k":1},"other":0}` {
+		t.Errorf("non-empty: FromGo = %s", out)
+	}
+}

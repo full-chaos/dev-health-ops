@@ -49,6 +49,12 @@ func (c fromGoConverter) fromGo(value reflect.Value) (Value, error) {
 	if !value.IsValid() {
 		return nil, nil
 	}
+	// An OrderedMap, or a non-nil pointer to one, is written in order.
+	// The pointer type has MarshalJSON too; its round trip through Decode
+	// would turn a float64 3.0 into the int 3.
+	if value.Kind() == reflect.Pointer && !value.IsNil() && value.Elem().Type().Implements(orderedMapperType) {
+		value = value.Elem()
+	}
 	if value.Kind() != reflect.Pointer && value.Type().Implements(orderedMapperType) {
 		return c.fromOrderedMap(value.Interface().(orderedMapper))
 	}
@@ -290,6 +296,11 @@ func fieldByIndex(value reflect.Value, index []int) (reflect.Value, bool) {
 }
 
 func isEmptyValue(value reflect.Value) bool {
+	// omitempty drops a nil or empty OrderedMap, as it drops such a map.
+	if value.Kind() != reflect.Pointer && value.Type().Implements(orderedMapperType) {
+		keys, _, _ := value.Interface().(orderedMapper).orderedEntries()
+		return len(keys) == 0
+	}
 	switch value.Kind() {
 	case reflect.Array, reflect.Map, reflect.Slice, reflect.String:
 		return value.Len() == 0

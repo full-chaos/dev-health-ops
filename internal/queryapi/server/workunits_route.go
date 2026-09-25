@@ -29,6 +29,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"sort"
 	"strconv"
 	"time"
 
@@ -195,14 +196,53 @@ type evidenceQualityWire struct {
 }
 
 type investmentBreakdownWire struct {
-	Themes        map[string]float64 `json:"themes"`
-	Subcategories map[string]float64 `json:"subcategories"`
+	Themes        pyjson.OrderedMap[float64] `json:"themes"`
+	Subcategories pyjson.OrderedMap[float64] `json:"subcategories"`
 }
 
+// workUnitEvidenceWire's entries are Python dicts, written in the order
+// work_units.py builds them (see orderedEvidence).
 type workUnitEvidenceWire struct {
-	Textual    []map[string]any `json:"textual"`
-	Structural []map[string]any `json:"structural"`
-	Contextual []map[string]any `json:"contextual"`
+	Textual    []any `json:"textual"`
+	Structural []any `json:"structural"`
+	Contextual []any `json:"contextual"`
+}
+
+// evidenceKeyOrder is the key order work_units.py builds each fixed-shape
+// evidence dict in, by its "type".
+var evidenceKeyOrder = map[string][]string{
+	"evidence_quote": {"type", "quote", "source", "id"},
+	"time_range":     {"type", "start", "end", "span_days"},
+	"repo_scope":     {"type", "repo_ids"},
+	"team_scope":     {"type", "team_ids", "team_names"},
+}
+
+// orderedEvidence writes each fixed-shape evidence entry in the key order
+// work_units.py builds it (evidenceKeyOrder, by "type"). An entry of
+// another shape keeps its keys in sorted order after the known ones.
+func orderedEvidence(entries []map[string]any) []any {
+	out := make([]any, 0, len(entries))
+	for _, entry := range entries {
+		kind, _ := entry["type"].(string)
+		ordered := pyjson.NewOrderedMap[any]()
+		for _, key := range evidenceKeyOrder[kind] {
+			if value, ok := entry[key]; ok {
+				ordered.Set(key, value)
+			}
+		}
+		rest := make([]string, 0, len(entry))
+		for key := range entry {
+			if _, seen := ordered.Get(key); !seen {
+				rest = append(rest, key)
+			}
+		}
+		sort.Strings(rest)
+		for _, key := range rest {
+			ordered.Set(key, entry[key])
+		}
+		out = append(out, ordered)
+	}
+	return out
 }
 
 type workUnitInvestmentWire struct {
@@ -248,27 +288,23 @@ func formatWorkUnitTimestamp(t time.Time) string {
 // encoding/json renders a nil slice as `null`, and Python's response
 // never does.
 func toWorkUnitInvestmentWire(investment investmentexplain.WorkUnitInvestment) workUnitInvestmentWire {
-	themes := map[string]float64{}
+	themes := pyjson.NewOrderedMap[float64]()
 	for _, kv := range investment.Investment.Themes {
-		themes[kv.Key] = kv.Value
+		themes.Set(kv.Key, kv.Value)
 	}
-	subcategories := map[string]float64{}
+	subcategories := pyjson.NewOrderedMap[float64]()
 	for _, kv := range investment.Investment.Subcategories {
-		subcategories[kv.Key] = kv.Value
+		subcategories.Set(kv.Key, kv.Value)
 	}
 
-	textual := investment.Evidence.Textual
-	if textual == nil {
-		textual = []map[string]any{}
+	textual := orderedEvidence(investment.Evidence.Textual)
+	// The structural entries were built in Python's order when they were
+	// assembled (from the stored JSON, which a map would not keep).
+	structural := make([]any, 0, len(investment.Evidence.StructuralOrdered))
+	for _, entry := range investment.Evidence.StructuralOrdered {
+		structural = append(structural, entry)
 	}
-	structural := investment.Evidence.Structural
-	if structural == nil {
-		structural = []map[string]any{}
-	}
-	contextual := investment.Evidence.Contextual
-	if contextual == nil {
-		contextual = []map[string]any{}
-	}
+	contextual := orderedEvidence(investment.Evidence.Contextual)
 
 	var band *string
 	if investment.EvidenceQuality.Band != nil {

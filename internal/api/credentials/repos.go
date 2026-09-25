@@ -51,7 +51,7 @@ func (h handlers) lookupForRepos(ctx context.Context, orgID, credentialID string
 		return nil, err
 	}
 	if !readable {
-		recordDecryptFailed(ctx, provider)
+		RecordDecryptFailed(ctx, provider)
 		return nil, nil
 	}
 	if decrypted == nil {

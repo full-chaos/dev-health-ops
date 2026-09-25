@@ -25,9 +25,9 @@ var decryptFailed = func() metric.Int64Counter {
 	return counter
 }()
 
-// recordDecryptFailed counts one unreadable stored credential, labelled as
+// RecordDecryptFailed counts one unreadable stored credential (exported: the one implementation every reader of a stored credential payload calls), labelled as
 // Python labels it: provider=sanitize_for_log(provider).
-func recordDecryptFailed(ctx context.Context, provider string) {
+func RecordDecryptFailed(ctx context.Context, provider string) {
 	decryptFailed.Add(ctx, 1, metric.WithAttributes(attribute.String("provider", sanitizeForLog(provider))))
 }
 

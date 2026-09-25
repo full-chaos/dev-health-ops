@@ -212,11 +212,9 @@ func pythonLevel(name string) slog.Level {
 	}
 }
 
-// levelName is the spelling the services' --log-level takes for a level. A
-// service has no level above error: CRITICAL is handed over as "critical" and
-// refused by the service, never lowered to error (Python's CRITICAL silences
-// ERROR records, so a service that logged them would not be the run the operator
-// asked for).
+// levelName is the spelling the services' --log-level takes for a level (they
+// take Python's CRITICAL as "critical", above error, so ERROR records are
+// silenced there as in dev-hops; nothing is lowered).
 func levelName(level slog.Level) string {
 	switch {
 	case level <= slog.LevelDebug:

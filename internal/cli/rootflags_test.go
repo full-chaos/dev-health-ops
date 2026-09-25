@@ -63,7 +63,7 @@ func TestRootFlagsReachTheCommandsThatListThem(t *testing.T) {
 		{"a flag typed after the command comes after the root one (and wins)", []string{"--org", "R", "org", "--org", "L"}, call{"org", []string{"--org=R", "--org", "L"}}},
 		{"a service utility verb", []string{"--org", "O", "--log-level", "debug", "svc", "probe"}, call{"svc probe", []string{"--org=O"}}},
 		{"a service that lists the level", []string{"--org", "O", "--log-level", "WARNING", "svc"}, call{"svc", []string{"--log-level=warn", "--org=O"}}},
-		{"a level a service cannot express is handed over as itself, for the service to refuse", []string{"--log-level", "CRITICAL", "svc"}, call{"svc", []string{"--log-level=critical"}}},
+		{"CRITICAL is handed over as itself (a service takes it above error)", []string{"--log-level", "CRITICAL", "svc"}, call{"svc", []string{"--log-level=critical"}}},
 		{"an unknown level name is the default", []string{"--log-level", "nope", "svc"}, call{"svc", []string{"--log-level=info"}}},
 		{"through a group", []string{"--org", "O", "--db", "D", "grp", "leaf", "x"}, call{"grp leaf", []string{"--db=D", "--org=O", "x"}}},
 		{"after `--`", []string{"--org", "O", "--", "org"}, call{"org", []string{"--org=O"}}},

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/cli"
+	platformconfig "github.com/full-chaos/dev-health-ops/internal/platform/config"
 )
 
 // leaves lists the path of every command that runs (a verb or a service).
@@ -108,6 +109,15 @@ func TestRootFlagsAreNeverDroppedSilentlyByAnyVertical(t *testing.T) {
 				t.Errorf("%s: its help names --org, but `--org=X` before the command gives exit %d", l.name(), code)
 			}
 		}
+		if l.lists(cli.RootLogLevel) {
+			// Every level dev-hops's root parser takes, Python's CRITICAL and
+			// FATAL included, must be one the command takes.
+			for _, level := range []string{"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL", "FATAL"} {
+				if out, code := help(t, tree, l.path, "--log-level", level); code != cli.ExitOK {
+					t.Errorf("%s: `--log-level %s` before the command gives exit %d (%.120q)", l.name(), level, code, out)
+				}
+			}
+		}
 		if names(text, "log-?level") != l.lists(cli.RootLogLevel) {
 			t.Errorf("%s: help names --log-level: %v, lists RootLogLevel: %v", l.name(), names(text, "log-?level"), l.lists(cli.RootLogLevel))
 		}
@@ -120,5 +130,31 @@ func TestRootFlagsAreNeverDroppedSilentlyByAnyVertical(t *testing.T) {
 	}
 	if ignoring == 0 {
 		t.Error("no command declares IgnoresArguments: the tree changed, so this test no longer covers the refusal it exists for")
+	}
+}
+
+// TestEveryRootLogLevelIsAcceptedByTheServices links the two halves: the value
+// the dispatcher hands a service for each level name dev-hops's root parser
+// takes (Python's logging level names, any case) must load in the services'
+// own config, so a --log-level dev-hops accepts never fails a dho service.
+func TestEveryRootLogLevelIsAcceptedByTheServices(t *testing.T) {
+	for _, level := range []string{"DEBUG", "debug", "INFO", "WARNING", "WARN", "ERROR", "CRITICAL", "FATAL", "NOTSET", "nonsense", ""} {
+		var handed []string
+		tree := []cli.Command{{Name: "svc", Summary: "spy", Kind: cli.Service, RootFlags: []cli.RootFlag{cli.RootLogLevel},
+			Run: func(_ context.Context, env cli.Env) int { handed = env.Args; return cli.ExitOK }}}
+		code := cli.Execute(context.Background(), "dho", tree, cli.Env{Args: []string{"--log-level", level, "svc"}, Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}})
+		if code != cli.ExitOK || len(handed) != 1 || !strings.HasPrefix(handed[0], "--log-level=") {
+			t.Fatalf("%q: exit %d, handed %q", level, code, handed)
+		}
+		value := strings.TrimPrefix(handed[0], "--log-level=")
+		_, err := platformconfig.Load(platformconfig.Spec{Service: "dev-health-worker", LookupEnv: func(key string) (string, bool) {
+			if key == "DEV_HEALTH_LOG_LEVEL" {
+				return value, true
+			}
+			return "", false
+		}})
+		if err != nil {
+			t.Errorf("--log-level %q is handed to a service as %q, which its config refuses: %v", level, value, err)
+		}
 	}
 }

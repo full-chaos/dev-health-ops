@@ -8,7 +8,6 @@ for each argv, {"stage": "ok", "ns": {...}} with every root dest tagged
 "error: " on stderr}.
 """
 
-import argparse
 import contextlib
 import io
 import json

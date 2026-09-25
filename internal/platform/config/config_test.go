@@ -1,7 +1,9 @@
 package config
 
 import (
+	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/url"
@@ -233,6 +235,35 @@ func TestLoadDefaultsAndTypedOverrides(t *testing.T) {
 	}
 	if cfg.HealthCheckTimeout != 750*time.Millisecond || cfg.LogLevel != slog.LevelDebug {
 		t.Fatalf("unexpected health/log config: %#v", cfg.SafeAttrs())
+	}
+}
+
+// TestLogLevelTakesPythonsCriticalAboveError pins that a service takes the
+// level names dev-hops's root --log-level takes: critical and fatal are above
+// error (ERROR records silenced, as Python's logging.CRITICAL does), and a
+// name outside the set is refused, naming the accepted ones.
+func TestLogLevelTakesPythonsCriticalAboveError(t *testing.T) {
+	t.Parallel()
+	for name, want := range map[string]slog.Level{
+		"debug": slog.LevelDebug, "INFO": slog.LevelInfo, "warning": slog.LevelWarn, "error": slog.LevelError,
+		"critical": slog.LevelError + 4, "FATAL": slog.LevelError + 4,
+	} {
+		cfg, err := Load(workerSpec(map[string]string{"DEV_HEALTH_LOG_LEVEL": name}))
+		if err != nil || cfg.LogLevel != want {
+			t.Errorf("%q: level %v, err %v; want %v", name, cfg.LogLevel, err, want)
+		}
+	}
+	cfg, err := Load(workerSpec(map[string]string{"DEV_HEALTH_LOG_LEVEL": "critical"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: cfg.LogLevel})
+	if handler.Enabled(context.Background(), slog.LevelError) || !handler.Enabled(context.Background(), slog.LevelError+4) {
+		t.Error("a logger at the critical level must silence ERROR and keep CRITICAL")
+	}
+	_, err = Load(workerSpec(map[string]string{"DEV_HEALTH_LOG_LEVEL": "nope"}))
+	if err == nil || !strings.Contains(err.Error(), "debug, info, warn, error, or critical") {
+		t.Errorf("an unknown level: %v", err)
 	}
 }
 

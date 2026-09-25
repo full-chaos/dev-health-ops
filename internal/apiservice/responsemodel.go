@@ -62,6 +62,7 @@ var responseModelRoutes = map[string]bool{
 	"POST /api/v1/auth/onboard":                                                        true,
 	"GET /api/v1/auth/onboarding/state":                                                true,
 	"POST /api/v1/auth/onboarding/skip-integration":                                    true,
+	"DELETE /api/v1/admin/credentials/{provider}/{name}":                               true,
 	"DELETE /api/v1/admin/ip-allowlist/{entry_id}":                                     true,
 	"DELETE /api/v1/admin/orgs/{org_id}":                                               true,
 	"DELETE /api/v1/admin/orgs/{org_id}/feature-overrides/{override_id}":               false,

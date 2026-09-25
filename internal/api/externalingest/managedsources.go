@@ -81,7 +81,7 @@ func FindMatchingManagedSources(
 	type candidate struct {
 		match        ManagedSourceMatch
 		source       integrationSource
-		config       map[string]any
+		configRaw    []byte
 		credentialID *uuid.UUID
 	}
 	var candidates []candidate
@@ -99,9 +99,9 @@ func FindMatchingManagedSources(
 		}
 		c.source = integrationSource{
 			ExternalID: deref(externalID), FullName: deref(fullName), Name: deref(name),
-			Metadata: decodeMetadata(metadataJSON), Enabled: c.match.Enabled, Active: c.match.IntegrationActive,
+			MetadataRaw: metadataJSON, Enabled: c.match.Enabled, Active: c.match.IntegrationActive,
 		}
-		c.config = decodeMetadata(configJSON)
+		c.configRaw = configJSON
 		candidates = append(candidates, c)
 	}
 	rows.Close()
@@ -118,67 +118,63 @@ func FindMatchingManagedSources(
 	hosts := map[uuid.UUID]resolvedHost{}
 	var matches []ManagedSourceMatch
 	for _, c := range candidates {
-		if !operational {
-			if matchesInstance(system, instance, c.source, entityFamily, c.config) {
-				matches = append(matches, c.match)
-			}
-			continue
+		// `config = integration.config or {}` opens Python's loop body for every
+		// row, so a truthy non-object integration config raises (AttributeError,
+		// unhandled) at this row, in loop order, before anything else is read.
+		integrationConfig, err := decodePyConfig(c.configRaw)
+		if err != nil {
+			return nil, err
 		}
-		managedHost := defaultHost
-		configured, hasConfigured := configuredHost(c.config, system)
-		switch {
-		case hasConfigured:
-			managedHost = configured
-		case c.credentialID != nil:
-			// One resolution per credential per call, as Python's
-			// credential_hosts cache: a credential shared by several sources
-			// is read (and, later, counted when unreadable) once.
-			host, cached := hosts[*c.credentialID]
-			if !cached {
-				base, resolved, err := credentialHost(ctx, q, cipher, orgID, system, *c.credentialID)
-				if err != nil {
-					return nil, err
+		// credentialBaseURL is find_matching_managed_sources' credential_base_url:
+		// set only for an operational github/gitlab row whose integration config
+		// names no host, from its linked credential or (no credential) the
+		// environment.
+		credentialBaseURL := ""
+		if _, named := configuredHost(integrationConfig, system); operational && !named {
+			switch {
+			case c.credentialID != nil:
+				// One resolution per credential per call, as Python's
+				// credential_hosts cache: a credential shared by several sources
+				// is read (and, later, counted when unreadable) once.
+				host, cached := hosts[*c.credentialID]
+				if !cached {
+					base, resolved, err := credentialHost(ctx, q, cipher, orgID, system, *c.credentialID)
+					if err != nil {
+						return nil, err
+					}
+					host = resolvedHost{base: base, resolved: resolved}
+					hosts[*c.credentialID] = host
 				}
-				host = resolvedHost{base: base, resolved: resolved}
-				hosts[*c.credentialID] = host
-			}
-			base, resolved := host.base, host.resolved
-			if !resolved {
-				instanceHost, ok := OperationalProviderInstance(system, instance)
-				if !ok {
-					return nil, ErrInvalidOperationalInstance
-				}
-				defaultNormalized, _ := OperationalProviderInstance(system, defaultHost)
-				if instanceHost != defaultNormalized && c.match.Enabled && c.match.IntegrationActive {
-					return nil, ErrOwnershipResolutionUnavailable
-				}
-			} else {
-				managedHost = base
-			}
-		default:
-			base, set := getenv(environmentBaseURLVariable(system))
-			if set && pythonparity.Strip(base) != "" {
-				if _, ok := OperationalProviderInstance(system, base); !ok {
-					if c.match.Enabled && c.match.IntegrationActive {
+				if host.resolved {
+					credentialBaseURL = host.base
+				} else {
+					instanceHost, ok := OperationalProviderInstance(system, instance)
+					if !ok {
+						return nil, ErrInvalidOperationalInstance
+					}
+					defaultNormalized, _ := OperationalProviderInstance(system, defaultHost)
+					if instanceHost != defaultNormalized && c.match.Enabled && c.match.IntegrationActive {
 						return nil, ErrOwnershipResolutionUnavailable
 					}
-				} else {
-					managedHost = base
+				}
+			default:
+				base, set := getenv(environmentBaseURLVariable(system))
+				if set && pythonparity.Strip(base) != "" {
+					if _, ok := OperationalProviderInstance(system, base); !ok {
+						if c.match.Enabled && c.match.IntegrationActive {
+							return nil, ErrOwnershipResolutionUnavailable
+						}
+					} else {
+						credentialBaseURL = base
+					}
 				}
 			}
 		}
-		if pythonparity.Strip(instance) == "" {
-			continue
+		matched, err := matchesInstance(system, instance, c.source, entityFamily, integrationConfig, credentialBaseURL)
+		if err != nil {
+			return nil, err
 		}
-		left, ok := OperationalProviderInstance(system, instance)
-		if !ok {
-			return nil, ErrInvalidOperationalInstance
-		}
-		right, ok := OperationalProviderInstance(system, managedHost)
-		if !ok {
-			return nil, ErrInvalidOperationalInstance
-		}
-		if left == right {
+		if matched {
 			matches = append(matches, c.match)
 		}
 	}
@@ -195,36 +191,16 @@ type resolvedHost struct {
 // config.get(f"{system}_url")`, kept only when it is a str that is not
 // blank: the first key wins whenever its value is truthy, even when that
 // value is not a str.
-func configuredHost(config map[string]any, system string) (string, bool) {
-	value := config[system+"_instance_url"]
-	if !truthy(value) {
-		value = config[system+"_url"]
+func configuredHost(config pyConfig, system string) (string, bool) {
+	key := system + "_instance_url"
+	if !config.truthy(key) {
+		key = system + "_url"
 	}
-	text, ok := value.(string)
+	text, ok := config.str(key)
 	if !ok || pythonparity.Strip(text) == "" {
 		return "", false
 	}
 	return text, true
-}
-
-// truthy is Python's bool() of a JSON-decoded value.
-func truthy(value any) bool {
-	switch typed := value.(type) {
-	case nil:
-		return false
-	case bool:
-		return typed
-	case string:
-		return typed != ""
-	case float64:
-		return typed != 0
-	case []any:
-		return len(typed) > 0
-	case map[string]any:
-		return len(typed) > 0
-	default:
-		return true
-	}
 }
 
 // environmentBaseURLVariable is credentials/resolver.py PROVIDER_ENV_VARS'
@@ -277,10 +253,15 @@ func credentialHost(ctx context.Context, q RowsQueryer, cipher credentials.Ciphe
 	if err := rows.Err(); err != nil {
 		return "", false, err
 	}
-	if !found || pythonparity.Fold(provider) != system {
+	if !found {
 		return "", false, nil
 	}
-	var values *pyjson.Object
+	// get_decrypted_credentials_by_id decrypts BEFORE Python compares the
+	// credential's provider, so an unreadable payload is counted (labelled with
+	// the credential's own provider), and a missing key raises, even when the
+	// credential belongs to another provider (CHAOS-6748 r3).
+	var payload any
+	var payloadReadable bool
 	if ciphertext != nil && *ciphertext != "" {
 		decoded, readable, err := credentials.DecryptStoredValue(cipher, *ciphertext)
 		if err != nil {
@@ -291,15 +272,26 @@ func credentialHost(ctx context.Context, q RowsQueryer, cipher credentials.Ciphe
 			// one unreadable stored credential, labelled with its provider.
 			credentials.RecordDecryptFailed(ctx, provider)
 		}
-		if readable {
-			switch typed := decoded.(type) {
-			case nil:
-			case *pyjson.Object:
-				values = typed
-			default:
-				return "", false, nil
-			}
+		payload, payloadReadable = decoded, readable
+	}
+	if pythonparity.Fold(provider) != system {
+		return "", false, nil
+	}
+	var values *pyjson.Object
+	if payloadReadable {
+		switch typed := payload.(type) {
+		case nil:
+		case *pyjson.Object:
+			values = typed
+		default:
+			return "", false, nil
 		}
+	}
+	// `credential.config or {}` then `.get(...)`: a config that is truthy and not
+	// a JSON object raises AttributeError, unhandled, once the loop is reached.
+	config, err := decodePyConfig(configJSON)
+	if err != nil {
+		return "", false, err
 	}
 	candidates := make([]any, 0, 6)
 	keys := []string{system + "_url", "url", "base_url"}
@@ -312,9 +304,8 @@ func credentialHost(ctx context.Context, q RowsQueryer, cipher credentials.Ciphe
 		}
 		candidates = append(candidates, candidate)
 	}
-	config := decodeMetadata(configJSON)
 	for _, key := range keys {
-		candidates = append(candidates, config[key])
+		candidates = append(candidates, config.strOrNil(key))
 	}
 	for _, candidate := range candidates {
 		text, ok := candidate.(string)

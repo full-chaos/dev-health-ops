@@ -58,6 +58,7 @@ const (
 	OrgFromFlag    = "flag"
 	OrgFromEnv     = "env"
 	OrgFromDBFirst = "db-first" // none given: the executor resolves the first org in Postgres
+	OrgFromDB      = "db"       // the executor resolved it (the plan's Org is then set)
 )
 
 // Credential modes of a GitHub plan.

@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"sort"
 	"strings"
@@ -76,6 +77,10 @@ func (h *handlers) completePagerDutyAuthorization(w http.ResponseWriter, r *http
 		return
 	}
 
+	// A revoke PagerDuty refused for an earlier setup is retried before this
+	// one starts; it never changes this request's answer.
+	h.drainPagerDutySetupRevocations(ctx, orgID)
+
 	verifier, found, err := h.consumePagerDutyAuthorization(ctx, orgID, state)
 	if err != nil {
 		h.internalError(ctx, w, "consume pagerduty authorization request", err)
@@ -120,14 +125,40 @@ func (h *handlers) completePagerDutyAuthorization(w http.ResponseWriter, r *http
 		return
 	}
 
+	// Until the grant is stored or revoked, the token is on record: a crash or
+	// a refused revoke below must not leave it live and untracked. If it
+	// cannot be recorded it is revoked at once and the setup fails loudly.
+	setupID, err := h.enqueuePagerDutySetupRevocation(ctx, orgID, tokens)
+	if err != nil {
+		// Named limit: with the record store itself failing there is nowhere
+		// to keep a refused revoke, so the token can stay live at PagerDuty
+		// (Python drops it the same way). Say so loudly.
+		if revokeErr := providerfoundation.RevokePagerDutyOAuthToken(ctx, h.httpDoer, h.pagerDuty, tokens.RevocationToken()); revokeErr != nil {
+			kind := "access_token"
+			if tokens.RefreshToken != "" {
+				kind = "refresh_token"
+			}
+			h.logger.ErrorContext(ctx, "admin: a pagerduty token could be neither recorded nor revoked; it stays live at PagerDuty",
+				slog.String("token_kind", kind), slog.String("record_error", err.Error()), slog.String("revoke_error", revokeErr.Error()))
+		}
+		h.internalError(ctx, w, "record pagerduty setup revocation", err)
+		return
+	}
+
+	// From here the callback lives under a deadline shorter than the cutoff
+	// after which a later callback treats its setup row as abandoned, so a
+	// live callback's token is never drained under it.
+	ctx, cancelSetup := context.WithTimeout(ctx, setupCallbackTimeout)
+	defer cancelSetup()
+
 	if missing := missingPagerDutyReadScopes(tokens.GrantedScopes); len(missing) > 0 {
-		h.revokePagerDutyTokens(ctx, tokens)
+		h.revokePagerDutySetupToken(ctx, setupID, tokens)
 		policy.WriteDetail(w, http.StatusBadRequest, "Missing required PagerDuty OAuth scopes: "+strings.Join(missing, ", "), nil)
 		return
 	}
 	validated, region, err := h.validatePagerDutyOAuthIdentity(ctx, tokens)
 	if err != nil {
-		h.revokePagerDutyTokens(ctx, tokens)
+		h.revokePagerDutySetupToken(ctx, setupID, tokens)
 		var validation *providerfoundation.PagerDutyValidationError
 		if errors.As(err, &validation) {
 			policy.WriteDetail(w, http.StatusBadRequest, "PagerDuty OAuth account validation failed", nil)
@@ -141,10 +172,16 @@ func (h *handlers) completePagerDutyAuthorization(w http.ResponseWriter, r *http
 	if credentialName == "" {
 		credentialName = "default"
 	}
-	if err := h.persistPagerDutyOAuthBinding(ctx, orgID, credentialName, tokens, validated, region); err != nil {
+	if err := h.persistPagerDutyOAuthBinding(ctx, orgID, credentialName, setupID, tokens, validated, region); err != nil {
+		if errors.Is(err, errPagerDutySetupSuperseded) {
+			// A later callback's drain already revoked this token and removed
+			// its record: nothing was stored, nothing is left to revoke.
+			h.internalError(ctx, w, "persist pagerduty oauth binding", err)
+			return
+		}
 		// The local state was rolled back; the grant PagerDuty just issued
 		// must not outlive the failed setup.
-		h.revokePagerDutyTokens(ctx, tokens)
+		h.revokePagerDutySetupToken(ctx, setupID, tokens)
 		h.internalError(ctx, w, "persist pagerduty oauth binding", err)
 		return
 	}
@@ -222,12 +259,6 @@ func (h *handlers) consumePagerDutyAuthorization(ctx context.Context, orgID, sta
 	return string(verifier), true, nil
 }
 
-// revokePagerDutyTokens is _revoke_tokens: best effort, never obscuring the
-// setup outcome.
-func (h *handlers) revokePagerDutyTokens(ctx context.Context, tokens providerfoundation.PagerDutyOAuthTokens) {
-	_ = providerfoundation.RevokePagerDutyOAuthToken(ctx, h.httpDoer, h.pagerDuty, tokens.RevocationToken())
-}
-
 // validatePagerDutyOAuthIdentity is _validate_oauth_identity: the account is
 // looked up in each server-controlled region in order; the first proof wins
 // and the last failure is the answer when none does.
@@ -249,12 +280,22 @@ func (h *handlers) validatePagerDutyOAuthIdentity(ctx context.Context, tokens pr
 // PagerDutyOAuthCredentialRepository.replace_and_capture, the replaced
 // grant's durable revocation, and IntegrationCredentialsService.set, all
 // committed together or not at all.
-func (h *handlers) persistPagerDutyOAuthBinding(ctx context.Context, orgID, credentialName string, tokens providerfoundation.PagerDutyOAuthTokens, validated providerfoundation.ValidatedPagerDutyCredential, region string) error {
+func (h *handlers) persistPagerDutyOAuthBinding(ctx context.Context, orgID, credentialName string, setupID uuid.UUID, tokens providerfoundation.PagerDutyOAuthTokens, validated providerfoundation.ValidatedPagerDutyCredential, region string) error {
 	tx, err := h.store.Pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	// Take the setup record first: a drain (which locks the same row for the
+	// length of its revoke) that judged this callback dead holds it until the
+	// token is revoked and the row gone. Finding the row gone means that
+	// happened: the token is no longer good, so the grant must not be stored.
+	var held int
+	if err := tx.QueryRow(ctx, `SELECT 1 FROM provider_oauth_revocations WHERE id = $1 FOR UPDATE`, setupID).Scan(&held); errors.Is(err, pgx.ErrNoRows) {
+		return errPagerDutySetupSuperseded
+	} else if err != nil {
+		return err
+	}
 	now := h.store.now().UTC()
 	bindingID := strings.ReplaceAll(uuid.NewString(), "-", "")
 
@@ -339,6 +380,11 @@ VALUES ($1, $2, 'pagerduty', $3, 'replacement', $4, 'v1', 'pending', 0, $5, $5)`
 	config.Set("account_display", validated.AccountDisplay)
 	config.Set("granted_scopes", stringValues(tokens.GrantedScopes))
 	if err := credentials.NewSaver(h.decryptor, h.store.now).Set(ctx, tx, orgID, "pagerduty", credentialName, credentialsObject, config, true); err != nil {
+		return err
+	}
+	// The grant is stored: the setup record for its token goes with it, in
+	// the same commit.
+	if _, err := tx.Exec(ctx, `DELETE FROM provider_oauth_revocations WHERE id = $1`, setupID); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)

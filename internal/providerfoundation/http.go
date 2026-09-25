@@ -152,9 +152,13 @@ func originGuardedDoer(doer HTTPDoer, target *url.URL) (HTTPDoer, *atomic.Bool) 
 
 // responseLeftOrigin is the after-the-fact check for a Doer that followed a
 // redirect off the credential origin by itself: response.Request is the last
-// request it sent.
+// request it sent. Only a request that a redirect created counts
+// (response.Request.Response is the redirect response that caused it, which
+// net/http sets): a transport that clones the request and rewrites its host
+// (a proxy, a test stub) also changes response.Request.URL, with no redirect.
 func responseLeftOrigin(response *http.Response, target *url.URL) bool {
-	return response != nil && response.Request != nil && !sameOrigin(response.Request.URL, target)
+	return response != nil && response.Request != nil && response.Request.Response != nil &&
+		!sameOrigin(response.Request.URL, target)
 }
 
 func (c *HTTPClient) Do(ctx context.Context, method, path string, body io.Reader) (response *http.Response, err error) {

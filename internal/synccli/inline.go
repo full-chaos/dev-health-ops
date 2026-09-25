@@ -25,9 +25,9 @@ import (
 //
 // What it deliberately does not do, each as a named refusal so a script never
 // mistakes it for a sync:
-//   - credentials from the database and the first organization in Postgres
-//     (both are Postgres reads): pass --auth/--github-app-* (or GITHUB_TOKEN /
-//     GITLAB_TOKEN) and --org (or ORG_ID);
+//   - a sync for which Postgres holds no organization (dblookup.go: the first
+//     organization and the GitHub credential are read from Postgres like
+//     Python does; with no organization at all the sync is refused);
 //   - the chunked targets cicd and tests (they need a chunk store the
 //     in-process ledger does not implement yet);
 //   - --provider local|synthetic (their own tickets).
@@ -52,6 +52,10 @@ type InlineDeps struct {
 	Run       func(ctx context.Context, run providersync.InProcessRun) (providersync.CompleteRouteExecutionResult, error)
 	List      func(ctx context.Context, run providersync.InProcessRun, listing providersync.InProcessListing) ([]providersync.ListedRepository, error)
 	Now       func() time.Time
+
+	// The two Postgres reads (CHAOS-6710); nil uses the real ones.
+	FirstOrg         func(ctx context.Context, dbURL string) (string, bool)
+	GitHubCredential func(ctx context.Context, dbURL, orgID string, env cli.Env) (*GitHubCredentials, error)
 }
 
 func defaultInlineDeps() InlineDeps {
@@ -62,6 +66,9 @@ func defaultInlineDeps() InlineDeps {
 		Run:  providersync.RunInProcess,
 		List: providersync.ListInProcess,
 		Now:  time.Now,
+
+		FirstOrg:         firstOrganization,
+		GitHubCredential: githubCredentialFromDB,
 	}
 }
 
@@ -81,8 +88,19 @@ func InlineExecutor(deps InlineDeps) Executor {
 	if deps.Now == nil {
 		deps.Now = defaults.Now
 	}
+	if deps.FirstOrg == nil {
+		deps.FirstOrg = defaults.FirstOrg
+	}
+	if deps.GitHubCredential == nil {
+		deps.GitHubCredential = defaults.GitHubCredential
+	}
+	lookups := dbLookups{FirstOrg: deps.FirstOrg, GitHubCredential: deps.GitHubCredential}
 	return func(ctx context.Context, plan Plan, env cli.Env) error {
 		datasets, refusal := inlineDatasets(plan)
+		if refusal != nil {
+			return refusal
+		}
+		plan, refusal = resolveDBLookups(ctx, lookups, plan, env)
 		if refusal != nil {
 			return refusal
 		}
@@ -186,7 +204,7 @@ func contains(values []string, want string) bool {
 
 // inlineRun builds the provider-neutral part of the run from the plan.
 func inlineRun(plan Plan, now time.Time) (providersync.InProcessRun, *Refusal) {
-	if plan.OrgSource == OrgFromDBFirst || plan.Org == nil || *plan.Org == "" {
+	if plan.Org == nil || *plan.Org == "" {
 		return providersync.InProcessRun{}, notYet(plan, "resolving the organization from PostgreSQL (pass --org or set ORG_ID)", ticketDBLookups)
 	}
 	run := providersync.InProcessRun{

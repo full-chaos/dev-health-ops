@@ -102,8 +102,8 @@ func TestBaselineIsTheExecutedPythonUpgrade(t *testing.T) {
 	}
 	captured := capture(t, ctx, instance, pythonDB, window{pythonStarted, time.Now()})
 	captured.Cutover, captured.RiverSchema = productionSettings.Cutover, productionSettings.RiverSchema
-	if !reflect.DeepEqual(captured.Heads, []string{"0066", "0140"}) {
-		t.Fatalf("the Python upgrade with production's settings recorded heads %v, want [0066 0140]", captured.Heads)
+	if !reflect.DeepEqual(captured.Heads, []string{"0066", "0141"}) {
+		t.Fatalf("the Python upgrade with production's settings recorded heads %v, want [0066 0141]", captured.Heads)
 	}
 
 	checkedIn := captured
@@ -172,7 +172,7 @@ func TestBaselineIsTheExecutedPythonUpgrade(t *testing.T) {
 		t.Fatalf("re-run = %+v, %v; want up_to_date with nothing applied", again, err)
 	}
 
-	for _, missing := range []string{"0066", "0140"} {
+	for _, missing := range []string{"0066", "0141"} {
 		if _, err := goConn.Exec(ctx, "DELETE FROM alembic_version WHERE version_num = $1", missing); err != nil {
 			t.Fatal(err)
 		}

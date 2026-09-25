@@ -112,7 +112,7 @@ func TestCommandEndToEnd(t *testing.T) {
 		setup, state, code, detail string
 	}{
 		"the heads recorded over no schema": {
-			"CREATE TABLE alembic_version (version_num varchar(32) PRIMARY KEY); INSERT INTO alembic_version VALUES ('0066'), ('0140')",
+			"CREATE TABLE alembic_version (version_num varchar(32) PRIMARY KEY); INSERT INTO alembic_version VALUES ('0066'), ('0141')",
 			"schema_mismatch", "schema_mismatch", "table(s) the head creates are absent",
 		},
 		"only a function": {
@@ -197,24 +197,24 @@ func TestChainRevision(t *testing.T) {
 	if _, err := pgmigrate.Upgrade(ctx, conn, baseline, nil); err != nil {
 		t.Fatalf("apply the baseline: %v", err)
 	}
-	good := []pgmigrate.ChainFile{{Revision: "0141", Name: "0141_probe.sql", SQL: "CREATE TABLE chain_probe (id int PRIMARY KEY);"}}
+	good := []pgmigrate.ChainFile{{Revision: "0142", Name: "0142_probe.sql", SQL: "CREATE TABLE chain_probe (id int PRIMARY KEY);"}}
 	result, err := pgmigrate.Upgrade(ctx, conn, baseline, good)
-	if err != nil || result.Action != "chain_applied" || strings.Join(result.Applied, ",") != "0141" {
-		t.Fatalf("the chain revision = %+v, %v; want chain_applied [0141]", result, err)
+	if err != nil || result.Action != "chain_applied" || strings.Join(result.Applied, ",") != "0142" {
+		t.Fatalf("the chain revision = %+v, %v; want chain_applied [0142]", result, err)
 	}
-	if got := strings.Join(versions(conn), ","); got != "0066,0141" || !exists(conn, "chain_probe") {
-		t.Fatalf("after the revision alembic_version = %s, chain_probe present %v; want 0066,0141 and present", got, exists(conn, "chain_probe"))
+	if got := strings.Join(versions(conn), ","); got != "0066,0142" || !exists(conn, "chain_probe") {
+		t.Fatalf("after the revision alembic_version = %s, chain_probe present %v; want 0066,0142 and present", got, exists(conn, "chain_probe"))
 	}
 	again, err := pgmigrate.Upgrade(ctx, conn, baseline, good)
 	if err != nil || again.Action != "up_to_date" || len(again.Applied) != 0 {
 		t.Fatalf("re-run = %+v, %v; want up_to_date", again, err)
 	}
 
-	bad := append(good, pgmigrate.ChainFile{Revision: "0142", Name: "0142_broken.sql", SQL: "CREATE TABLE chain_broken (id int); SELECT 1/0;"})
-	if _, err := pgmigrate.Upgrade(ctx, conn, baseline, bad); err == nil || !strings.Contains(err.Error(), "0142_broken.sql") {
-		t.Fatalf("a failing revision = %v, want an error naming 0142_broken.sql", err)
+	bad := append(good, pgmigrate.ChainFile{Revision: "0143", Name: "0143_broken.sql", SQL: "CREATE TABLE chain_broken (id int); SELECT 1/0;"})
+	if _, err := pgmigrate.Upgrade(ctx, conn, baseline, bad); err == nil || !strings.Contains(err.Error(), "0143_broken.sql") {
+		t.Fatalf("a failing revision = %v, want an error naming 0143_broken.sql", err)
 	}
-	if got := strings.Join(versions(conn), ","); got != "0066,0141" || exists(conn, "chain_broken") {
-		t.Fatalf("after the failed revision alembic_version = %s, chain_broken present %v; want 0066,0141 and absent", got, exists(conn, "chain_broken"))
+	if got := strings.Join(versions(conn), ","); got != "0066,0142" || exists(conn, "chain_broken") {
+		t.Fatalf("after the failed revision alembic_version = %s, chain_broken present %v; want 0066,0142 and absent", got, exists(conn, "chain_broken"))
 	}
 }

@@ -152,8 +152,6 @@ func TestInlineRefusesWhatItCannotRunWithoutOpeningAnything(t *testing.T) {
 		{"tests", "tests", gl, inlineEnv, ticketChunked},
 		{"first org from Postgres", "git", gh, map[string]string{"CLICKHOUSE_URI": inlineEnv["CLICKHOUSE_URI"]}, ticketDBLookups},
 		{"an empty ORG_ID is not an org", "git", gh, map[string]string{"CLICKHOUSE_URI": inlineEnv["CLICKHOUSE_URI"], "ORG_ID": ""}, ticketDBLookups},
-		{"credentials from the database", "git", []string{"--provider", "github", "--owner", "a", "--repo", "b"},
-			map[string]string{"CLICKHOUSE_URI": inlineEnv["CLICKHOUSE_URI"], "ORG_ID": "o", "POSTGRES_URI": "postgresql://p"}, ticketDBLookups},
 		{"synthetic", "git", []string{"--provider", "synthetic"}, inlineEnv, "chris-pending"},
 	}
 	for _, tc := range cases {

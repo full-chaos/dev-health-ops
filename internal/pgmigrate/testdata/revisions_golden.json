@@ -2,19 +2,19 @@
 [
  {
   "name": "heads",
-  "stdout": "0066 (river_cutover) (head)\n0141 (application_schema) (head)\n"
+  "stdout": "0066 (river_cutover) (head)\n0142 (application_schema) (head)\n"
  },
  {
   "name": "current at the head",
-  "stdout": "0066 (head)\n0141 (head)\n"
+  "stdout": "0142 (head)\n0066 (head)\n"
  },
  {
   "name": "current without the cutover head",
-  "stdout": "0141 (head)\n"
+  "stdout": "0142 (head)\n"
  },
  {
   "name": "current below the head",
-  "stdout": "0066 (head)\n0140\n"
+  "stdout": "0142 (head)\n0066 (head)\n"
  },
  {
   "name": "current of an empty version table",

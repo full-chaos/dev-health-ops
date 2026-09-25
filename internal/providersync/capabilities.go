@@ -265,6 +265,26 @@ func PlannerDatasetKeys(provider string, syncTargets []string) ([]string, error)
 	if (providerKey == "github" || providerKey == "gitlab") && targets["git"] {
 		targets["blame"] = true
 	}
+	return datasetKeysMeeting(providerKey, targets), nil
+}
+
+// DatasetKeysForTargets is sync/trigger_routing.py's _dataset_keys_for_config
+// mapping: the provider's datasets (in DatasetKey order) whose legacy targets
+// meet the selection, with none of PlannerDatasetKeys' provider rules (no
+// git-implies-blame, no PagerDuty check). A child configuration's "Sync Now"
+// trigger names these datasets.
+func DatasetKeysForTargets(provider string, syncTargets []string) []string {
+	targets := map[string]bool{}
+	for _, target := range syncTargets {
+		targets[target] = true
+	}
+	return datasetKeysMeeting(pythonparity.Lower(provider), targets)
+}
+
+// datasetKeysMeeting is supported_datasets(provider) filtered by
+// targets.intersection(spec.legacy_targets), the one mapping both callers
+// share.
+func datasetKeysMeeting(providerKey string, targets map[string]bool) []string {
 	keys := []string{}
 	for _, dataset := range datasetKeyOrder {
 		capability, ok := datasetCapabilities[providerKey][dataset]
@@ -278,7 +298,7 @@ func PlannerDatasetKeys(provider string, syncTargets []string) ([]string, error)
 			}
 		}
 	}
-	return keys, nil
+	return keys
 }
 
 // operatorSelectableSyncTargets is sync/datasets.py's

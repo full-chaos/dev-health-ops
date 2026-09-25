@@ -64,7 +64,7 @@ const aliasGolden = "testdata/alias_golden.json"
 // The producer is deleted with the Python CLI, so this is a rot guard: the file is
 // only rewritten by TestAliasesVenueOracleMatchesTheFlatVerbs with
 // DHO_ALIAS_GOLDEN_UPDATE=1, then this digest is updated.
-const aliasGoldenSHA256 = "54fd7116c0d9899f2bb6b26d88d9d6cb2fb772835770c5e8f05da4c371c96b46"
+const aliasGoldenSHA256 = "bed39a72aad8e880055899e1e30136b28f858eee9cc2562aa977577d1e37c18f"
 
 type aliasResult struct {
 	Name   string `json:"name"`

@@ -102,8 +102,22 @@ func TestCommandEndToEnd(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got, want := tables(conn), len(baseline.Tables()); got != want {
-			t.Fatalf("upgrade created %d tables, want the baseline's %d", got, want)
+		// The baseline's tables, plus the ones the chain revisions after it
+		// create (CREATE TABLE at the start of a statement) and minus the ones
+		// they drop: an upgrade on an empty database applies the whole chain.
+		want := len(baseline.Tables())
+		for _, file := range chain {
+			for _, line := range strings.Split(file.SQL, "\n") {
+				switch {
+				case strings.HasPrefix(line, "CREATE TABLE "):
+					want++
+				case strings.HasPrefix(line, "DROP TABLE "):
+					want--
+				}
+			}
+		}
+		if got := tables(conn); got != want {
+			t.Fatalf("upgrade created %d tables, want the baseline's %d plus what the chain creates (%d)", got, len(baseline.Tables()), want)
 		}
 		if code, out, _ := verb("status", uri); code != cli.ExitOK || out["state"] != "at_head" {
 			t.Fatalf("status after upgrade = %d %v", code, out)

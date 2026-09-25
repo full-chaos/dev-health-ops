@@ -15,11 +15,11 @@ func TestOccurrenceIdentityIsThePythonIdentity(t *testing.T) {
 
 func TestTruthyIsPythonTruthiness(t *testing.T) {
 	for value, want := range map[string]bool{"": false, "x": true} {
-		if got := truthy(value); got != want {
-			t.Errorf("truthy(%q) = %v, want %v", value, got, want)
+		if got := Truthy(value); got != want {
+			t.Errorf("Truthy(%q) = %v, want %v", value, got, want)
 		}
 	}
-	if truthy(nil) || truthy(false) || truthy(float64(0)) || truthy([]any{}) || truthy(map[string]any{}) || !truthy(float64(1)) || !truthy([]any{1}) {
+	if Truthy(nil) || Truthy(false) || Truthy(float64(0)) || Truthy([]any{}) || Truthy(map[string]any{}) || !Truthy(float64(1)) || !Truthy([]any{1}) {
 		t.Error("truthy disagrees with Python")
 	}
 }

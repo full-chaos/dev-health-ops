@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -177,6 +178,21 @@ type OccurrenceReconciler struct {
 	pool         *pgxpool.Pool
 	materializer Materializer
 	limit        int
+	// webhookRequests mints webhook scoped-sync requests at the start of each
+	// window (CHAOS-6695); nil until WithWebhookRequests.
+	webhookRequests *webhookRequestMinter
+}
+
+// WithWebhookRequests makes each Reconcile window first mint the pending
+// webhook_sync_requests (on this reconciler's coordinator pool) so their
+// occurrences are consumed in the same window. The production scheduler
+// composition turns it on; a reconciler built for a schema without the
+// table leaves it off.
+func (reconciler *OccurrenceReconciler) WithWebhookRequests() *OccurrenceReconciler {
+	if reconciler != nil {
+		reconciler.webhookRequests = &webhookRequestMinter{pool: reconciler.pool, maxAge: webhookRequestMaxAge}
+	}
+	return reconciler
 }
 
 // NewOccurrenceReconciler constructs the reconciler. A nil materializer is
@@ -214,6 +230,11 @@ type prometheusWriter interface {
 func (reconciler *OccurrenceReconciler) WritePrometheus(output io.Writer) error {
 	if reconciler == nil {
 		return nil
+	}
+	if reconciler.webhookRequests != nil {
+		if err := reconciler.webhookRequests.writePrometheus(output); err != nil {
+			return err
+		}
 	}
 	source, ok := reconciler.materializer.(prometheusWriter)
 	if !ok {
@@ -276,6 +297,15 @@ func (reconciler *OccurrenceReconciler) Reconcile(
 		limit = occurrenceReconcileMaxLimit
 	}
 	now = now.UTC()
+
+	// A request that cannot be claimed at all (the table unreachable) must not
+	// stop the window from consuming the occurrences already pending: it is
+	// logged loudly and retried next window.
+	if reconciler.webhookRequests != nil {
+		if err := reconciler.webhookRequests.mintPending(ctx, now, limit); err != nil {
+			slog.ErrorContext(ctx, "sync.webhook_request.claim_failed", slog.String("error", err.Error()))
+		}
+	}
 
 	keys, err := reconciler.dueOccurrenceKeys(ctx, now, limit)
 	if err != nil {

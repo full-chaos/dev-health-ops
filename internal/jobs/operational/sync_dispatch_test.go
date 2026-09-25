@@ -25,7 +25,7 @@ type fakeSyncDispatchStore struct {
 }
 
 func (store *fakeSyncDispatchStore) TriggerScopedSync(
-	_ context.Context, provider, eventType string, _ []byte, _ time.Time,
+	_ context.Context, _ string, provider, eventType string, _ []byte, _ time.Time,
 ) (SyncDispatchResult, error) {
 	store.calls++
 	store.provider = provider
@@ -231,25 +231,5 @@ func TestWebhookHandlerIgnoresUnrecognisedGithubEvent(t *testing.T) {
 	}
 	if !*recorded {
 		t.Fatal("expected the ignore path for an unrecognised github event type")
-	}
-}
-
-func TestScheduledSyncOccurrenceIdentityIsDeterministic(t *testing.T) {
-	scheduledFor := time.Date(2026, 9, 6, 12, 0, 0, 123456000, time.UTC)
-	first := scheduledSyncOccurrenceIdentity("11111111-1111-1111-1111-111111111111", scheduledFor)
-	second := scheduledSyncOccurrenceIdentity("11111111-1111-1111-1111-111111111111", scheduledFor)
-	if first != second {
-		t.Fatalf("identity must be a pure function of (configID, scheduledFor): %q != %q", first, second)
-	}
-	if !strings.HasPrefix(first, "sha256:") {
-		t.Fatalf("identity = %q, want a sha256: prefix", first)
-	}
-	other := scheduledSyncOccurrenceIdentity("22222222-2222-2222-2222-222222222222", scheduledFor)
-	if first == other {
-		t.Fatal("identity must differ for a different config_id")
-	}
-	laterTime := scheduledSyncOccurrenceIdentity("11111111-1111-1111-1111-111111111111", scheduledFor.Add(time.Second))
-	if first == laterTime {
-		t.Fatal("identity must differ for a different scheduled_for")
 	}
 }

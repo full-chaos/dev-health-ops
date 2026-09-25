@@ -2,8 +2,6 @@ package operational
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,7 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/synchandoff"
 )
 
 // ErrWebhookSyncUnroutable is wrapped into the Permanent error Work returns
@@ -90,7 +88,7 @@ func isNativeSyncDispatchEvent(provider, eventType string) bool {
 // dispatcher.
 type SyncDispatchWriter interface {
 	TriggerScopedSync(
-		ctx context.Context, provider, eventType string, payload []byte, deliveredAt time.Time,
+		ctx context.Context, deliveryID, provider, eventType string, payload []byte, deliveredAt time.Time,
 	) (SyncDispatchResult, error)
 }
 
@@ -104,36 +102,6 @@ type SyncDispatchResult struct {
 
 var errSyncDispatchStoreUnavailable = errors.New("sync dispatch store is unavailable")
 
-const syncOccurrenceIdentityVersion = "sync_scheduler_occurrence_v1"
-
-// scheduledSyncOccurrenceIdentity ports
-// scheduled_sync_occurrence_identity (src/dev_health_ops/sync/
-// execution_trigger.py:127) byte-for-byte: the occurrence_id must be
-// bit-identical to what Python's admin "Sync Now" button would mint for the
-// same (config_id, scheduled_for), since both producers feed the SAME
-// scheduled_sync_occurrences table and Go's scheduler/materializer key off
-// this string as the row's primary key.
-func scheduledSyncOccurrenceIdentity(configID string, scheduledFor time.Time) string {
-	scheduledFor = scheduledFor.UTC()
-	fields := [][2]string{
-		{"identity_version", syncOccurrenceIdentityVersion},
-		{"config_id", configID},
-		// Python: scheduled_for.strftime("%Y-%m-%dT%H:%M:%S.%f") + "000Z" --
-		// %f is always 6 zero-padded digits, matching Go's ".000000".
-		{"scheduled_for", scheduledFor.Format("2006-01-02T15:04:05.000000") + "000Z"},
-	}
-	digest := sha256.New()
-	for _, field := range fields {
-		name, value := []byte(field[0]), []byte(field[1])
-		fmt.Fprintf(digest, "%d:", len(name))
-		digest.Write(name)
-		fmt.Fprintf(digest, "%d:", len(value))
-		digest.Write(value)
-		digest.Write([]byte("\n"))
-	}
-	return "sha256:" + hex.EncodeToString(digest.Sum(nil))
-}
-
 // TriggerScopedSync resolves the tenant-scoped child SyncConfiguration this
 // webhook event belongs to and mints its native "Sync Now" occurrence --
 // see this file's package doc comment for the full design. It never calls
@@ -141,7 +109,7 @@ func scheduledSyncOccurrenceIdentity(configID string, scheduledFor time.Time) st
 // global token (team-lead ruling, CHAOS-5319): a repo with no matching
 // child config fails loud via SyncDispatchResult.Reason instead.
 func (store *PostgresStore) TriggerScopedSync(
-	ctx context.Context, provider, eventType string, rawPayload []byte, deliveredAt time.Time,
+	ctx context.Context, deliveryID, provider, eventType string, rawPayload []byte, deliveredAt time.Time,
 ) (SyncDispatchResult, error) {
 	if store == nil || store.pool == nil {
 		return SyncDispatchResult{}, errSyncDispatchStoreUnavailable
@@ -157,17 +125,12 @@ func (store *PostgresStore) TriggerScopedSync(
 		return SyncDispatchResult{Reason: "webhook_sync_unroutable:" + cause}, nil
 	}
 
-	configID, syncOptions, isActive, cause, err := lookupSyncConfig(ctx, store.pool, orgID, provider, sourceID)
+	configID, _, _, cause, err := lookupSyncConfig(ctx, store.pool, orgID, provider, sourceID)
 	if err != nil {
 		return SyncDispatchResult{}, err
 	}
 	if cause != "" {
 		return SyncDispatchResult{Reason: "webhook_sync_unroutable:" + cause}, nil
-	}
-
-	jobID, err := ensureScheduledJobForSyncConfig(ctx, store.pool, orgID, configID, provider, syncOptions, isActive)
-	if err != nil {
-		return SyncDispatchResult{}, err
 	}
 
 	scheduledFor := deliveredAt.UTC()
@@ -177,15 +140,24 @@ func (store *PostgresStore) TriggerScopedSync(
 		// occurrence_id across every such delivery.
 		scheduledFor = time.Now().UTC()
 	}
-	occurrenceID := scheduledSyncOccurrenceIdentity(configID, scheduledFor)
-
-	if err := insertScheduledSyncOccurrence(ctx, store.pool, occurrenceID, orgID, configID, jobID, scheduledFor); err != nil {
-		return SyncDispatchResult{}, err
+	scheduledFor = scheduledFor.Truncate(time.Microsecond)
+	// CHAOS-6695 (decision D2487, option C): the scheduling writes (the
+	// marker job, the occurrence, its manual trigger) are coordinator-owned
+	// under Option B, and this worker runs on the domain role. It records one
+	// request per delivery; the scheduler claims it on the coordinator role
+	// and mints through synchandoff.Mint with this scheduled_for, so the
+	// occurrence identity reported below is the one it mints unless another
+	// delivery already holds that instant (the scheduler then moves this one
+	// by a microsecond). The row is kept after the mint, so a retried job
+	// finds its own row and writes nothing, whatever the routing is by then.
+	if _, err := store.pool.Exec(ctx, `
+INSERT INTO public.webhook_sync_requests (delivery_id, org_id, sync_config_id, mode, source_ids, scheduled_for)
+VALUES ($1::uuid, $2, $3::uuid, 'incremental', $4, $5)
+ON CONFLICT (delivery_id) DO NOTHING`, deliveryID, orgID, configID, []string{sourceID}, scheduledFor); err != nil {
+		return SyncDispatchResult{}, fmt.Errorf("record the webhook sync request: %w", err)
 	}
-	if err := insertSyncManualTrigger(ctx, store.pool, occurrenceID, sourceID); err != nil {
-		return SyncDispatchResult{}, err
-	}
-	slog.InfoContext(ctx, "webhook sync dispatch: routed to native sync",
+	occurrenceID := synchandoff.OccurrenceIdentity(configID, scheduledFor)
+	slog.InfoContext(ctx, "webhook sync dispatch: requested native sync",
 		"org_id", orgID, "provider", provider, "source_id", sourceID,
 		"sync_config_id", configID, "occurrence_id", occurrenceID)
 	return SyncDispatchResult{
@@ -496,135 +468,4 @@ func scanOneSyncConfig(
 		syncOptions = map[string]any{}
 	}
 	return configID, syncOptions, isActive, count, nil
-}
-
-// ensureScheduledJobForSyncConfig ports _ensure_scheduled_job_for_config
-// (src/dev_health_ops/sync/execution_trigger.py:234) verbatim, including its
-// ACTIVE-only-with-an-explicit-cron status rule: a webhook-created child
-// config almost never carries sync_options.schedule_cron, so the freshly
-// minted job lands PAUSED -- deliberately, matching Python, so wiring a
-// webhook never silently starts a new recurring hourly cron sync. This is
-// safe for our own occurrence because a sync_manual_triggers-backed
-// occurrence bypasses the job-status eligibility gate entirely
-// (internal/scheduler/sync/materializer.go:638, `manualTrigger == nil &&
-// occurrence.JobStatus != 0`).
-func ensureScheduledJobForSyncConfig(
-	ctx context.Context, pool *pgxpool.Pool, orgID, configID, provider string, syncOptions map[string]any, isActive bool,
-) (string, error) {
-	var jobID string
-	err := pool.QueryRow(ctx, `
-SELECT id::text FROM public.scheduled_jobs
-WHERE org_id = $1 AND sync_config_id = $2 AND job_type = 'sync'`, orgID, configID,
-	).Scan(&jobID)
-	if err == nil {
-		return jobID, nil
-	}
-	if !errors.Is(err, pgx.ErrNoRows) {
-		return "", err
-	}
-
-	explicitCron, _ := syncOptions["schedule_cron"].(string)
-	cron := explicitCron
-	if cron == "" {
-		cron = "0 * * * *"
-	}
-	tz, _ := syncOptions["timezone"].(string)
-	if tz == "" {
-		tz = "UTC"
-	}
-	status := jobStatusPaused
-	if isActive && explicitCron != "" {
-		status = jobStatusActive
-	}
-	// job_config is stored as the ORM writes a JSON column: json.dumps of
-	// {"provider": ..., "sync_config_id": ...}, in that key order.
-	config := pyjson.NewObject()
-	config.Set("provider", provider)
-	config.Set("sync_config_id", configID)
-	jobConfig, err := pyjson.Dumps(config)
-	if err != nil {
-		return "", err
-	}
-
-	// Every NOT NULL column the ScheduledJob model fills from its Python-side
-	// defaults (is_running, run_count, failure_count, created_at, updated_at)
-	// is written here, as the ORM writes them. created_at and updated_at have
-	// no server default, so omitting them fails with 23502; the other three
-	// carry server defaults and are written only to match the ORM's insert.
-	now := time.Now().UTC()
-	err = pool.QueryRow(ctx, `
-INSERT INTO public.scheduled_jobs
-	(id, org_id, name, job_type, provider, schedule_cron, timezone, job_config, sync_config_id, status,
-	 is_running, run_count, failure_count, created_at, updated_at)
-VALUES (gen_random_uuid(), $1, $2, 'sync', $3, $4, $5, $6::json, $7, $8, false, 0, 0, $9, $9)
-ON CONFLICT DO NOTHING
-RETURNING id::text`,
-		orgID, fmt.Sprintf("sync-config-%s", configID), provider, cron, tz, jobConfig, configID, status, now,
-	).Scan(&jobID)
-	if err == nil {
-		return jobID, nil
-	}
-	if !errors.Is(err, pgx.ErrNoRows) {
-		return "", err
-	}
-	// A concurrent webhook delivery for the same never-before-scheduled
-	// config won the INSERT race -- read back the row it created. The
-	// conflict clause has no target on purpose: the table has two unique
-	// keys, (org_id, sync_config_id, job_type) and (org_id, provider, name),
-	// and the name is derived from the config id, so a racing insert
-	// collides on both and the arbiter Postgres checks first is not ours to
-	// pick. A targeted clause raised 23505 on the name key.
-	if err := pool.QueryRow(ctx, `
-SELECT id::text FROM public.scheduled_jobs
-WHERE org_id = $1 AND sync_config_id = $2 AND job_type = 'sync'`, orgID, configID,
-	).Scan(&jobID); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return "", fmt.Errorf("scheduled job name %q is held by a row for another sync config", fmt.Sprintf("sync-config-%s", configID))
-		}
-		return "", err
-	}
-	return jobID, nil
-}
-
-const (
-	jobStatusActive = 0 // JobStatus.ACTIVE (src/dev_health_ops/models/settings.py:64)
-	jobStatusPaused = 1 // JobStatus.PAUSED
-)
-
-// insertScheduledSyncOccurrence is idempotent on retry: occurrence_id is a
-// pure function of (configID, scheduledFor), and scheduledFor is this
-// delivery's own stable created_at, so ON CONFLICT DO NOTHING here means "a
-// prior attempt at this exact delivery already scheduled it" rather than a
-// collision between two different deliveries.
-func insertScheduledSyncOccurrence(
-	ctx context.Context, pool *pgxpool.Pool, occurrenceID, orgID, configID, jobID string, scheduledFor time.Time,
-) error {
-	_, err := pool.Exec(ctx, `
-INSERT INTO public.scheduled_sync_occurrences
-	(occurrence_id, identity_version, org_id, sync_config_id, scheduled_job_id, scheduled_for)
-VALUES ($1, $2, $3, $4, $5, $6)
-ON CONFLICT (occurrence_id) DO NOTHING`,
-		occurrenceID, syncOccurrenceIdentityVersion, orgID, configID, jobID, scheduledFor,
-	)
-	return err
-}
-
-// insertSyncManualTrigger ports the SyncManualTrigger row
-// _create_go_manual_sync_execution_trigger inserts (execution_trigger.py:
-// 502): mode "incremental", since/before/dataset_keys all NULL (NULL
-// dataset_keys means "all enabled datasets", the column's own documented
-// fallback -- a deliberate simplification vs. Python's per-event-type
-// sync_git/sync_prs/... flags; see this PR's RISK-NOTES), triggered_by
-// "manual" (the CHECK constraint only allows 'manual'/'backfill' -- there is
-// no third "webhook" value to carry this trigger's true origin, so "manual"
-// is the closest fit, same as every other non-cron, non-backfill trigger
-// path today), and source_ids scoped to exactly this repo's source.
-func insertSyncManualTrigger(ctx context.Context, pool *pgxpool.Pool, occurrenceID, sourceID string) error {
-	_, err := pool.Exec(ctx, `
-INSERT INTO public.sync_manual_triggers (occurrence_id, mode, source_ids, triggered_by)
-VALUES ($1, 'incremental', $2, 'manual')
-ON CONFLICT (occurrence_id) DO NOTHING`,
-		occurrenceID, []string{sourceID},
-	)
-	return err
 }

@@ -179,3 +179,5 @@ internal/testsupport/chschema	160
 internal/testsupport/containers	14
 internal/testsupport/pgseed	8
 internal/testsupport/venueoracle	4
+internal/synchandoff	12
+internal/schedulerservice	12

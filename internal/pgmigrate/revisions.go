@@ -15,11 +15,21 @@ import (
 // and "(head)" for a head. The venue oracle compares the text with the real
 // Alembic while the Python chain exists.
 
-// branchLabels are the branch labels of the Alembic scripts that carry one. A
-// chain revision after the head has none: a label belongs to its script only.
-var branchLabels = map[string]string{
-	"0066": "river_cutover",
-	"0140": "application_schema",
+// headLabel is the branch label `alembic heads` shows on a head. The cutover
+// head carries river_cutover (0066 declares it). The application head is the
+// head of the branch 0067 labels application_schema, whatever its number: the
+// baseline holds exactly the cutover head and the application head
+// (TestBaselineHoldsOnlyTheCutoverAndApplicationHeads pins it), so the
+// application head is the baseline head that is not the cutover head. A chain
+// revision after the baseline has none: it is not an Alembic script.
+func headLabel(baseline Baseline, revision string) string {
+	switch {
+	case revision == cutoverRevision:
+		return "river_cutover"
+	case revision == applicationHead(baseline):
+		return "application_schema"
+	}
+	return ""
 }
 
 // Heads is the set of head revisions: the baseline's heads, with the application
@@ -37,11 +47,11 @@ func Heads(baseline Baseline, chain []ChainFile) []string {
 	return heads
 }
 
-// FormatRevision is one line of `alembic heads` (branch label shown) or
-// `alembic current` (not shown).
-func FormatRevision(revision string, isHead, withBranch bool) string {
+// FormatRevision is one line of `alembic heads` (its branch label, when it
+// has one) or `alembic current` (label "").
+func FormatRevision(revision string, isHead bool, label string) string {
 	line := revision
-	if label, ok := branchLabels[revision]; ok && withBranch {
+	if label != "" {
 		line += " (" + label + ")"
 	}
 	if isHead {
@@ -53,7 +63,7 @@ func FormatRevision(revision string, isHead, withBranch bool) string {
 // WriteHeads prints the heads.
 func WriteHeads(out io.Writer, baseline Baseline, chain []ChainFile) error {
 	for _, head := range Heads(baseline, chain) {
-		if _, err := fmt.Fprintln(out, FormatRevision(head, true, true)); err != nil {
+		if _, err := fmt.Fprintln(out, FormatRevision(head, true, headLabel(baseline, head))); err != nil {
 			return err
 		}
 	}
@@ -61,7 +71,8 @@ func WriteHeads(out io.Writer, baseline Baseline, chain []ChainFile) error {
 }
 
 // Recorded reads the revisions alembic_version records (none when the table
-// does not exist), sorted.
+// does not exist), sorted: Alembic's own order for two heads is not stable
+// across runs, so dho prints a deterministic one.
 func Recorded(ctx context.Context, conn *pgx.Conn) ([]string, error) {
 	var recorded []string
 	err := readOnlyTransaction(ctx, conn, func(tx pgx.Tx) error {
@@ -98,7 +109,7 @@ func WriteCurrent(out io.Writer, recorded []string, baseline Baseline, chain []C
 		isHead[head] = true
 	}
 	for _, revision := range recorded {
-		if _, err := fmt.Fprintln(out, FormatRevision(revision, isHead[revision], false)); err != nil {
+		if _, err := fmt.Fprintln(out, FormatRevision(revision, isHead[revision], "")); err != nil {
 			return err
 		}
 	}

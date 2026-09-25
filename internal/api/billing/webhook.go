@@ -88,7 +88,11 @@ func (h handlers) stripeWebhook(w http.ResponseWriter, r *http.Request) {
 	eventID := attr(event, "id", nil)
 	switch stripeEventRoute(eventType) {
 	case "invoice.":
-		if err := h.invoiceEvent(ctx, eventType, eventID, dataObject); err != nil {
+		var created int64
+		if value, isInt := attr(event, "created", nil).(pyjson.Int); isInt && value.IsInt64() {
+			created = value.Int64()
+		}
+		if err := h.invoiceEvent(ctx, eventType, eventID, created, dataObject); err != nil {
 			h.internal(w, r, "stripe webhook", err)
 			return
 		}

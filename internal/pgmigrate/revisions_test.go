@@ -66,3 +66,33 @@ func TestRevisionVerbsRefuseVerboseAndArguments(t *testing.T) {
 		}
 	}
 }
+
+// TestHeadsLabelTheApplicationHeadWhateverItsNumber: `alembic heads` shows
+// application_schema on the application head of any number (0067 declares the
+// label for the branch), not on one fixed revision.
+func TestHeadsLabelTheApplicationHeadWhateverItsNumber(t *testing.T) {
+	for _, application := range []string{"0138", "0139", "0140", "0200"} {
+		var out bytes.Buffer
+		if err := pgmigrate.WriteHeads(&out, pgmigrate.Baseline{Heads: []string{application, "0066"}}, nil); err != nil {
+			t.Fatal(err)
+		}
+		want := "0066 (river_cutover) (head)\n" + application + " (application_schema) (head)\n"
+		if out.String() != want {
+			t.Errorf("heads with application head %s printed %q, want %q", application, out.String(), want)
+		}
+	}
+}
+
+// TestBaselineHoldsOnlyTheCutoverAndApplicationHeads pins what the label rule
+// assumes: the checked-in baseline has exactly the cutover head and one
+// application head. A third head fails here, and the rule must then follow the
+// revision graph instead.
+func TestBaselineHoldsOnlyTheCutoverAndApplicationHeads(t *testing.T) {
+	baseline, err := pgmigrate.LoadBaseline()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(baseline.Heads) != 2 || (baseline.Heads[0] != "0066" && baseline.Heads[1] != "0066") {
+		t.Fatalf("baseline heads %v, want the cutover head 0066 and one application head", baseline.Heads)
+	}
+}

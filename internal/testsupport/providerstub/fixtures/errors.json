@@ -1,0 +1,250 @@
+[
+ {
+  "provider": "github",
+  "method": "GET",
+  "path": "/orgs/zz-429",
+  "status": 429,
+  "body": {
+   "message": "rate limited"
+  },
+  "headers": {
+   "Retry-After": "1"
+  }
+ },
+ {
+  "provider": "github",
+  "method": "GET",
+  "path": "/orgs/zz-429/repos",
+  "status": 429,
+  "body": {
+   "message": "rate limited"
+  },
+  "headers": {
+   "Retry-After": "1"
+  }
+ },
+ {
+  "provider": "github",
+  "method": "GET",
+  "path": "/users/zz-429",
+  "status": 429,
+  "body": {
+   "message": "rate limited"
+  },
+  "headers": {
+   "Retry-After": "1"
+  }
+ },
+ {
+  "provider": "github",
+  "method": "GET",
+  "path": "/users/zz-429/repos",
+  "status": 429,
+  "body": {
+   "message": "rate limited"
+  },
+  "headers": {
+   "Retry-After": "1"
+  }
+ },
+ {
+  "provider": "github",
+  "method": "GET",
+  "path": "/orgs/zz-500",
+  "status": 500,
+  "body": {
+   "message": "upstream failure"
+  }
+ },
+ {
+  "provider": "github",
+  "method": "GET",
+  "path": "/orgs/zz-500/repos",
+  "status": 500,
+  "body": {
+   "message": "upstream failure"
+  }
+ },
+ {
+  "provider": "github",
+  "method": "GET",
+  "path": "/users/zz-500",
+  "status": 500,
+  "body": {
+   "message": "upstream failure"
+  }
+ },
+ {
+  "provider": "github",
+  "method": "GET",
+  "path": "/users/zz-500/repos",
+  "status": 500,
+  "body": {
+   "message": "upstream failure"
+  }
+ },
+ {
+  "provider": "github",
+  "method": "GET",
+  "path": "/orgs/zz-403",
+  "status": 403,
+  "body": {
+   "message": "API rate limit exceeded for user ID 1."
+  },
+  "headers": {
+   "X-RateLimit-Limit": "5000",
+   "X-RateLimit-Remaining": "0",
+   "X-RateLimit-Reset": "4102444800"
+  }
+ },
+ {
+  "provider": "github",
+  "method": "GET",
+  "path": "/orgs/zz-403/repos",
+  "status": 403,
+  "body": {
+   "message": "API rate limit exceeded for user ID 1."
+  },
+  "headers": {
+   "X-RateLimit-Limit": "5000",
+   "X-RateLimit-Remaining": "0",
+   "X-RateLimit-Reset": "4102444800"
+  }
+ },
+ {
+  "provider": "github",
+  "method": "GET",
+  "path": "/users/zz-403",
+  "status": 403,
+  "body": {
+   "message": "API rate limit exceeded for user ID 1."
+  },
+  "headers": {
+   "X-RateLimit-Limit": "5000",
+   "X-RateLimit-Remaining": "0",
+   "X-RateLimit-Reset": "4102444800"
+  }
+ },
+ {
+  "provider": "github",
+  "method": "GET",
+  "path": "/users/zz-403/repos",
+  "status": 403,
+  "body": {
+   "message": "API rate limit exceeded for user ID 1."
+  },
+  "headers": {
+   "X-RateLimit-Limit": "5000",
+   "X-RateLimit-Remaining": "0",
+   "X-RateLimit-Reset": "4102444800"
+  }
+ },
+ {
+  "provider": "github",
+  "method": "GET",
+  "path": "/orgs/zz-secondary",
+  "status": 403,
+  "body": {
+   "message": "You have exceeded a secondary rate limit. Please wait a few minutes before you try again."
+  },
+  "headers": {
+   "Retry-After": "1"
+  }
+ },
+ {
+  "provider": "github",
+  "method": "GET",
+  "path": "/orgs/zz-secondary/repos",
+  "status": 403,
+  "body": {
+   "message": "You have exceeded a secondary rate limit. Please wait a few minutes before you try again."
+  },
+  "headers": {
+   "Retry-After": "1"
+  }
+ },
+ {
+  "provider": "github",
+  "method": "GET",
+  "path": "/users/zz-secondary",
+  "status": 403,
+  "body": {
+   "message": "You have exceeded a secondary rate limit. Please wait a few minutes before you try again."
+  },
+  "headers": {
+   "Retry-After": "1"
+  }
+ },
+ {
+  "provider": "github",
+  "method": "GET",
+  "path": "/users/zz-secondary/repos",
+  "status": 403,
+  "body": {
+   "message": "You have exceeded a secondary rate limit. Please wait a few minutes before you try again."
+  },
+  "headers": {
+   "Retry-After": "1"
+  }
+ },
+ {
+  "provider": "gitlab",
+  "method": "GET",
+  "path": "/api/v4/groups/zz-429",
+  "status": 429,
+  "body": {
+   "message": "rate limited"
+  },
+  "headers": {
+   "Retry-After": "1"
+  }
+ },
+ {
+  "provider": "gitlab",
+  "method": "GET",
+  "path": "/api/v4/groups/zz-429/projects",
+  "status": 429,
+  "body": {
+   "message": "rate limited"
+  },
+  "headers": {
+   "Retry-After": "1"
+  }
+ },
+ {
+  "provider": "gitlab",
+  "method": "GET",
+  "path": "/api/v4/groups/zz-500",
+  "status": 500,
+  "body": {
+   "message": "upstream failure"
+  }
+ },
+ {
+  "provider": "gitlab",
+  "method": "GET",
+  "path": "/api/v4/groups/zz-500/projects",
+  "status": 500,
+  "body": {
+   "message": "upstream failure"
+  }
+ },
+ {
+  "provider": "gitlab",
+  "method": "GET",
+  "path": "/api/v4/groups/zz-403",
+  "status": 403,
+  "body": {
+   "message": "403 Forbidden"
+  }
+ },
+ {
+  "provider": "gitlab",
+  "method": "GET",
+  "path": "/api/v4/groups/zz-403/projects",
+  "status": 403,
+  "body": {
+   "message": "403 Forbidden"
+  }
+ }
+]

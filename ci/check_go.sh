@@ -94,6 +94,12 @@ usage() {
          verb does not set it itself. NOT in `fast`/`ci`/`all`: it runs only
          from the dedicated venue-oracles CI job, which is the one place
          with the full Python environment this verb needs.
+         WHAT RUNS is ci/venue_oracle_registry.tsv (CHAOS-6584): the verb
+         validates it against discovery and against every Test*VenueOracle*
+         by name before starting anything.
+         The static half of that validation is ci/check_venue_oracle_registry.sh
+         (no Go toolchain, containers or Python), run on every PR by
+         tests/tooling/test_venue_oracle_registry.py.
   build  Run go build ./... in every Go module.
   contract
          Validate the job contract tree and, when DEV_HEALTH_CONTRACT_BASE is
@@ -1665,6 +1671,12 @@ check_live_python_oracles() {
 # ci/requirements-live-python-oracles.txt closure. It is invoked ONLY from
 # the dedicated venue-oracles CI job, never from `ci`/`fast`/`all`.
 #
+# WHAT RUNS is ci/venue_oracle_registry.tsv (CHAOS-6584, Trap #392), one row
+# per venue test. Discovery (below) is the CROSS-CHECK that keeps the registry
+# honest: the verb fails before running anything when a test found by
+# structure or by a Test*VenueOracle* name is not registered, or a registered
+# test does not exist (ci/lib/venue_oracle_registry.sh).
+#
 # Discovery is by the harness, never by a test's name or a hardcoded list:
 # in every package that has a *_test.go importing
 # internal/testsupport/venueoracle, every top-level Test function (TestMain
@@ -1719,16 +1731,12 @@ check_live_python_oracles() {
 # function, keeps that one test out of this verb: it is for a test that
 # needs something hosted CI does not hold (a real Stripe test-mode key) and
 # skips without it. The marker is named in the log, never silent.
-VENUE_ORACLE_LOCAL_ONLY_MARKER='//venueoracle:local-only'
-
-# venue_oracle_package_tests reads one package's *_test.go files (its
-# arguments) and prints "RUN <Test>" for each discovered test and "LOCAL
-# <Test> <file>" for one carrying the local-only marker (see Discovery
-# above).
-venue_oracle_package_tests() {
-  awk -v marker="${VENUE_ORACLE_LOCAL_ONLY_MARKER}" -f "${ROOT}/ci/venue_oracle_discovery.awk" "$@"
-}
-
+# The registry functions (VENUE_ORACLE_LOCAL_ONLY_MARKER, discovery,
+# check_venue_oracle_registry) live in ci/lib/venue_oracle_registry.sh so the
+# static check runs on a host with no Go toolchain (ci/check_venue_oracle_
+# registry.sh, called by tests/tooling/test_venue_oracle_registry.py).
+# shellcheck source=ci/lib/venue_oracle_registry.sh
+. "${ROOT}/ci/lib/venue_oracle_registry.sh"
 
 check_venue_oracles() {
   [ "${DEV_HEALTH_LIVE_PYTHON_ORACLES:-}" = "1" ] \
@@ -1736,50 +1744,51 @@ check_venue_oracles() {
   command -v jq >/dev/null 2>&1 \
     || die "venue-oracles requires jq to read go test -json status events (a text-line grep cannot see a subtest skip or tell captured output from a real status line)"
 
-  local proof_dir dir kind name file names total=0
+  # The registry is what runs (CHAOS-6584): validate it against discovery and
+  # against every Test*VenueOracle* by name FIRST, so a venue test nothing
+  # registers fails here, before any container starts.
+  check_venue_oracle_registry >&2 || die "venue-oracles: ci/venue_oracle_registry.tsv disagrees with the tree (see above)"
+
+  local proof_dir dir kind name file names="" total=0 prev_pkg="" index
   local -a vo_dirs=() vo_names=() local_only=()
   proof_dir="$(mktemp -d "${TMPDIR:-/tmp}/dev-health-venue-oracles.XXXXXX")"
 
-  while IFS= read -r dir; do
-    names=""
-    while read -r kind name file; do
-      case "${kind}" in
-        RUN)
-          names="${names:+${names}|}${name}"
-          total=$((total + 1))
-          ;;
-        LOCAL)
-          printf 'venue-oracles: %s in %s is marked local-only and is not run here\n' "${name}" "${file}" >&2
-          local_only+=("${name}")
-          ;;
-      esac
-    done < <(venue_oracle_package_tests "${dir}"/*_test.go | LC_ALL=C sort)
-    if [ -z "${names}" ]; then
-      # A package that imports the harness and runs no test through it --
-      # every oracle opted out, or a helper nothing calls -- runs zero
-      # comparisons while reading as covered: refuse it.
-      rm -rf -- "${proof_dir}"
-      die "venue-oracles: ${dir} imports the venue harness but no test there is run by this verb (local-only: ${#local_only[@]} so far) -- an oracle package that runs zero comparisons must not read as covered"
+  # Registry rows are sorted by package, so one package's rows are adjacent.
+  # A trailing sentinel row flushes the last package.
+  while read -r dir name kind; do
+    if [ "${dir}" != "${prev_pkg}" ]; then
+      if [ -n "${prev_pkg}" ]; then
+        if [ -z "${names}" ]; then
+          # A package whose every registered test is local-only runs zero
+          # comparisons while reading as covered: refuse it.
+          rm -rf -- "${proof_dir}"
+          die "venue-oracles: ${prev_pkg} is registered but no test there is run by this verb (local-only: ${#local_only[@]} so far) -- an oracle package that runs zero comparisons must not read as covered"
+        fi
+        vo_dirs+=("${ROOT}/${prev_pkg}")
+        vo_names+=("${names}")
+      fi
+      prev_pkg="${dir}"
+      names=""
     fi
-    vo_dirs+=("${dir}")
-    vo_names+=("${names}")
-  done < <(grep -rlF --include='*_test.go' '"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"' "${ROOT}" | xargs -n1 dirname | LC_ALL=C sort -u)
+    case "${kind}" in
+      run)
+        names="${names:+${names}|}${name}"
+        total=$((total + 1))
+        ;;
+      local)
+        file="$(grep -lE "^func ${name}[(\[]" "${ROOT}/${dir}"/*_test.go | head -n1)"
+        printf 'venue-oracles: %s in %s is marked local-only and is not run here\n' "${name}" "${file#"${ROOT}"/}" >&2
+        local_only+=("${name}")
+        ;;
+    esac
+  done < <(venue_oracle_registry_rows | LC_ALL=C sort -k1,1 -k2,2; printf '\001 \001 end\n')
 
   if [ "${total}" -eq 0 ]; then
     rm -rf -- "${proof_dir}"
-    die "venue-oracles: discovered zero venue-oracle tests -- the discovery mechanism itself is almost certainly broken, not a genuinely oracle-free tree"
+    die "venue-oracles: the registry holds zero runnable venue-oracle tests -- the registry itself is broken, not a genuinely oracle-free tree"
   fi
 
-  local index dup_names
-  for index in "${!vo_names[@]}"; do
-    dup_names="$(printf '%s\n' "${vo_names[${index}]//|/$'\n'}" | LC_ALL=C sort | uniq -d)"
-    if [ -n "${dup_names}" ]; then
-      rm -rf -- "${proof_dir}"
-      die "venue-oracles: duplicate VenueOracle test name(s) in ${vo_dirs[${index}]}: ${dup_names} -- go test cannot tell which declaration ran, so this must be renamed before the verb can trust its own signal"
-    fi
-  done
-
-  printf 'venue-oracles: %d test(s) discovered across %d package(s)\n' "${total}" "${#vo_dirs[@]}"
+  printf 'venue-oracles: %d registered test(s) across %d package(s)\n' "${total}" "${#vo_dirs[@]}"
 
   local rel pattern pkg_proof_dir json_log stderr_log go_test_status proof failed=0
   local -a compared=() go_only=()

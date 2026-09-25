@@ -1,0 +1,77 @@
+# Every venue differential oracle test, one row per test (CHAOS-6584, Trap #392).
+# Columns (TAB separated): <package dir relative to the repo root> <test function> <run|local>
+#   run   = ci/check_go.sh venue-oracles runs it and requires its proof file.
+#   local = carries //venueoracle:local-only directly above it (needs something
+#           hosted CI does not hold); named in the log, not run there.
+# Sorted under LC_ALL=C by (package, test), no duplicates. Add a row in the SAME
+# PR that adds the test: `ci/check_venue_oracle_registry.sh` (run on every PR
+# by tests/tooling/test_venue_oracle_registry.py) fails on a venue test that is
+# missing here and on a row with no test.
+internal/api/billing	TestVenueOracleStripeEventDispatch	run
+internal/api/externalurl	TestValidateExternalURLVenueOracle	run
+internal/api/githubapp	TestVenueOracleGitHubAppInstall	run
+internal/api/gitlabcode	TestListProjectsVenueOracleMatchesLivePython	run
+internal/api/licensing	TestOrgFeatureVenueOracleMatchesLivePython	run
+internal/api/licensing	TestTierLimitsVenueOracleMatchesLivePython	run
+internal/api/syncadmin	TestBackfillDiagnosticsVenueOracleMatchesLivePython	run
+internal/api/syncadmin	TestCoverageModelVenueOracleMatchesLivePydantic	run
+internal/api/syncadmin	TestCreateValidationVenueOracleMatchesLivePython	run
+internal/api/syncadmin	TestRunUnitsModelVenueOracleMatchesLivePython	run
+internal/api/syncadmin	TestSyncAdminReadsVenueOracle	run
+internal/api/syncadmin	TestSyncConfigDeleteVenueOracle	run
+internal/api/syncadmin	TestSyncConfigRepositoriesVenueOracle	run
+internal/api/teamsidentity	TestJiraDatetimeParseMatchesPython	run
+internal/api/teamsidentity	TestListFieldVenueOracle	run
+internal/api/teamsidentity	TestVenueOracleDiscoverGitHubMatchesPython	run
+internal/api/teamsidentity	TestVenueOracleDiscoverGitHubMembersMatchesPython	run
+internal/api/teamsidentity	TestVenueOracleDiscoverLinearMembersMatchesPython	run
+internal/api/teamsidentity/adminstampvenue	TestAdminTimestampServerZoneVenueOracle	run
+internal/api/teamsidentity/adminstampvenue	TestAdminTimestampVenueOracle	run
+internal/apiservice	TestCORSVenueOracleMatchesLiveStarlette	run
+internal/apiservice	TestExternalIngestPayloadHashVenueOracle	run
+internal/apiservice	TestExternalIngestVenueOracle	run
+internal/apiservice	TestLegacyIngestVenueOracle	run
+internal/apiservice	TestVenueOracleCredentialAdmin	run
+internal/apiservice	TestVenueOracleCredentialConnectionTest	run
+internal/apiservice	TestVenueOracleCustomerPushReads	run
+internal/apiservice	TestVenueOracleCustomerPushValidate	run
+internal/apiservice	TestVenueOracleCustomerPushWrites	run
+internal/apiservice	TestVenueOracleProtectedRoutes	run
+internal/apiservice	TestVenueOracleRouteResponseModels	run
+internal/apiservice	TestWebhookIntakeVenueOracleGitHubGitLabJiraHealth	run
+internal/apiservice	TestWebhookIntakeVenueOraclePagerDuty	run
+internal/apiservice/admin	TestCreateOrgInviteVenueOracle	run
+internal/apiservice/admin	TestGovernanceRoutesVenueOracle	run
+internal/apiservice/admin	TestImpersonationStartStopMatchesThePythonAPI	run
+internal/apiservice/admin	TestImpersonationTTLConfigMatchesThePythonAPI	run
+internal/apiservice/admin	TestLLMSettingsRoutesVenueOracle	run
+internal/apiservice/admin	TestLLMSettingsRoutesWithoutEncryptionKeyVenueOracle	run
+internal/apiservice/admin	TestOrgCRUDMatchesThePythonAPI	run
+internal/apiservice/admin	TestOrgDeletionMatchesThePythonAPI	run
+internal/apiservice/admin	TestOrgDeletionPurgesEveryDiscoveredClickHouseTable	run
+internal/apiservice/admin	TestOrgDeletionRevokesPagerDutyOnBothPlanes	run
+internal/apiservice/admin	TestPagerDutyStatusAndPreflightVenueOracle	run
+internal/apiservice/admin	TestRetentionRoutesVenueOracle	run
+internal/apiservice/admin	TestSetUserPasswordRateLimitIsIndependentPerTargetAndAdmin	run
+internal/apiservice/admin	TestSetUserPasswordRateLimitMatchesThePythonAPI	run
+internal/apiservice/admin	TestSetUserPasswordRateLimitWindowDoesNotRollOverEarly	run
+internal/apiservice/admin	TestSetUserPasswordValidationBeforeLimitVenueOracle	run
+internal/apiservice/admin	TestSettingsRoutesVenueOracle	run
+internal/apiservice/admin	TestSettingsRoutesWithoutEncryptionKeyVenueOracle	run
+internal/apiservice/admin	TestSharedRateLimitAcrossReplicasVenueOracle	run
+internal/apiservice/admin	TestUserCRUDAndPasswordChangeMatchesThePythonAPI	run
+internal/apiservice/billingvenue	TestInvoiceWebhookAppliesTestModeEvents	run
+internal/apiservice/billingvenue	TestStripeTestModeBillingDifferential	local
+internal/apiservice/billingvenue	TestStripeTestModeInvoiceEvents	local
+internal/apiservice/billingvenue	TestStripeTestModeSubscriptionLifecycle	local
+internal/apiservice/billingvenue	TestSubscriptionEventsResolveTheOwningOrg	run
+internal/apiservice/billingvenue	TestVenueOracleBillingLedger	run
+internal/apiservice/billingvenue	TestVenueOracleBillingPlansCheckout	run
+internal/apiservice/billingvenue	TestVenueOracleBillingWebhook	run
+internal/apiservice/billingvenue	TestVenueOracleBillingWithoutStripeKey	run
+internal/apiservice/sessionvenue	TestSessionVenueOracle	run
+internal/fixturescli	TestFinalizeSyntheticVenueOracleMatchesThePythonProducer	run
+internal/queryapi/server	TestVenueOracleQueryAPIDictOrder	run
+internal/queryapi/server	TestVenueOracleQueryAPIResponseModels	run
+internal/scheduler/sync	TestJiraDiscoveryRowsVenueOracleMatchesLivePython	run
+internal/synccoverage	TestEffectiveDatasetKeysVenueOracleMatchesLivePython	run

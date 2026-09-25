@@ -119,40 +119,56 @@ type Fixture struct {
 	body []byte
 }
 
+// matchResult is the outcome of testing one fixture against a request.
+type matchResult int
+
+const (
+	noMatch matchResult = iota
+	matchYes
+	// matchRefuse: every other selector matched, but this fixture selects on the request body and the body could not be
+	// read in full (over the limit, a read error, the read deadline). The stub cannot know which fixture the request
+	// belongs to, so the request is answered 599 and no later (less specific) fixture may answer it.
+	matchRefuse
+)
+
 // matches reports whether the request selects this fixture. body is called at most once per request, and only when every other
 // selector already matched and this fixture has a body_contains: a fixture with no body selector never waits on the request body.
-func (f *Fixture) matches(provider, method, path string, query map[string][]string, header http.Header, body func() ([]byte, bool)) bool {
+// Header values are compared as net/http parsed them (surrounding whitespace is already stripped on the wire).
+func (f *Fixture) matches(provider, method, path string, query map[string][]string, header http.Header, body func() ([]byte, bool)) matchResult {
 	if f.Provider != provider || f.Method != method {
-		return false
+		return noMatch
 	}
 	if strings.HasSuffix(f.Path, "*") {
 		if !strings.HasPrefix(path, strings.TrimSuffix(f.Path, "*")) {
-			return false
+			return noMatch
 		}
 	} else if f.Path != path {
-		return false
+		return noMatch
 	}
 	for key, want := range f.Query {
 		// exactly one value: a duplicate key must not smuggle a second value past the fixture
 		got, ok := query[key]
 		if !ok || len(got) != 1 || got[0] != want {
-			return false
+			return noMatch
 		}
 	}
 	for name, want := range f.RequestHeaders {
 		// exactly one value, like a query key: a repeated header must not smuggle a second value past the fixture.
 		// Values canonicalizes the name.
 		if got := header.Values(name); len(got) != 1 || got[0] != want {
-			return false
+			return noMatch
 		}
 	}
 	if f.BodyContains != "" {
 		raw, complete := body()
-		if !complete || !strings.Contains(string(raw), f.BodyContains) {
-			return false // a body that was cut short (over the limit or a read error) never matches: its tail is unseen
+		if !complete {
+			return matchRefuse // its tail is unseen: never a match, and never an answer from a less specific fixture either
+		}
+		if !strings.Contains(string(raw), f.BodyContains) {
+			return noMatch
 		}
 	}
-	return true
+	return matchYes
 }
 
 // maxMatchBody bounds the request body the stub reads to decide a body_contains match; a longer body never matches one.
@@ -188,6 +204,9 @@ func (f *Fixture) validate(where string) error {
 		if name == "" || value == "" {
 			return fmt.Errorf("%s: request_headers needs a non-empty header name and value", where)
 		}
+		if !validHeaderName(name) {
+			return fmt.Errorf("%s: request_headers name %q is not a valid HTTP field name, so no request could carry it", where, name)
+		}
 		// net/http keeps these out of the request header map (Host in r.Host, the framing in r.TransferEncoding), so a
 		// fixture naming one could never match.
 		switch strings.ToLower(name) {
@@ -198,10 +217,23 @@ func (f *Fixture) validate(where string) error {
 	return nil
 }
 
+// validHeaderName reports whether name is an RFC 9110 field-name token.
+func validHeaderName(name string) bool {
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		if c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || strings.IndexByte("!#$%&'*+-.^_`|~", c) >= 0 {
+			continue
+		}
+		return false
+	}
+	return name != ""
+}
+
 // matchBodyTimeout bounds how long the stub waits for a request body it needs for a body_contains match.
 const matchBodyTimeout = 5 * time.Second
 
-// readMatchBody reads at most maxMatchBody bytes of the request body, and reports whether that was ALL of it: a read error
+// readMatchBody reads at most maxMatchBody bytes of the request body (plus one sentinel byte, read only to tell "exactly at
+// the limit" from "over it"), and reports whether the body was ALL read and within the limit: a read error
 // (a stalled or broken client, the read deadline) or a body over the limit reports false, so it never matches.
 func readMatchBody(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
 	if r.Body == nil {
@@ -340,9 +372,12 @@ func (s *Stub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		query := r.URL.Query()
 		for _, fixture := range s.fixtures {
-			if fixture.matches(provider, r.Method, r.URL.Path, query, r.Header, lazyBody) {
+			result := fixture.matches(provider, r.Method, r.URL.Path, query, r.Header, lazyBody)
+			if result == matchYes {
 				matched = fixture
-				break
+			}
+			if result != noMatch {
+				break // matchRefuse ends the walk with no answer: 599
 			}
 		}
 	}

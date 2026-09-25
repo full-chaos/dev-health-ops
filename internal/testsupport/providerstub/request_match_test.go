@@ -99,6 +99,8 @@ func TestRequestMatchFieldValidation(t *testing.T) {
 		"empty header name":     func(f *Fixture) { f.RequestHeaders = map[string]string{"": "x"} },
 		"empty header value":    func(f *Fixture) { f.RequestHeaders = map[string]string{"Authorization": ""} },
 		"oversized body needle": func(f *Fixture) { f.BodyContains = strings.Repeat("n", maxMatchBody+1) },
+		"space in header name":  func(f *Fixture) { f.RequestHeaders = map[string]string{"Bad Header": "x"} },
+		"colon in header name":  func(f *Fixture) { f.RequestHeaders = map[string]string{"X-A:B": "x"} },
 		"Host header selector":  func(f *Fixture) { f.RequestHeaders = map[string]string{"Host": "api.linear.app"} },
 		"host (lowercase)":      func(f *Fixture) { f.RequestHeaders = map[string]string{"host": "api.linear.app"} },
 		"Transfer-Encoding":     func(f *Fixture) { f.RequestHeaders = map[string]string{"Transfer-Encoding": "chunked"} },
@@ -191,6 +193,48 @@ func TestADuplicatedRequestHeaderNeverMatches(t *testing.T) {
 		stub.ServeHTTP(recorder, request)
 		if recorder.Code != 200 {
 			t.Errorf("Authorization %v answered %d, want the general 200 (a repeated header never selects a header fixture)", values, recorder.Code)
+		}
+	}
+}
+
+// A body selector that could not be decided (body cut short) is terminal: the path-only fallback after it must not answer.
+func TestAnUndecidableBodyNeverFallsThroughToALessSpecificFixture(t *testing.T) {
+	stub, _ := New(
+		Fixture{Provider: "linear", Method: "POST", Path: "/graphql", BodyContains: "viewer", Status: 201, Body: json.RawMessage(`{"which":"viewer"}`)},
+		Fixture{Provider: "linear", Method: "POST", Path: "/graphql", Status: 200, Body: json.RawMessage(`{"which":"fallback"}`)},
+	)
+	// a complete body that does not select the body fixture DOES reach the fallback (the intended fall-through)
+	if got := send(t, stub, "api.linear.app", "POST", "/graphql", `{"query":"teams"}`, nil); got.Code != 200 {
+		t.Fatalf("a decided body miss answered %d, want the fallback 200", got.Code)
+	}
+	for name, body := range map[string]*failingBody{
+		"read error":  {first: `{"query":"viewer"}`, err: io.ErrUnexpectedEOF},
+		"stalled":     {first: `{"query":"viewer"`, err: errors.New("i/o timeout")},
+		"early error": {first: "", err: errors.New("broken")},
+	} {
+		if got := sendReader(stub, "POST", "/graphql", body); got.Code != 599 {
+			t.Errorf("%s answered %d, want 599 (never the fallback's 200)", name, got.Code)
+		}
+	}
+	if got := send(t, stub, "api.linear.app", "POST", "/graphql", `{"query":"viewer"}`+strings.Repeat("a", maxMatchBody), nil); got.Code != 599 {
+		t.Errorf("over limit answered %d, want 599 (never the fallback's 200)", got.Code)
+	}
+	// the same through the checked-in fixture table: the starter Linear teams fixture must not answer a cut-short viewer body
+	real, err := LoadDir("fixtures")
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest("POST", "/graphql", &failingBody{first: `{"query":"{ viewer { id } }"}`, err: io.ErrUnexpectedEOF})
+	request.Host = "api.linear.app"
+	request.Header.Set("Authorization", "stub-linear-key-401")
+	recorder := httptest.NewRecorder()
+	real.ServeHTTP(recorder, request)
+	if recorder.Code != 599 {
+		t.Errorf("real fixtures: cut-short viewer body answered %d, want 599", recorder.Code)
+	}
+	for _, r := range real.Requests() {
+		if r.Matched {
+			t.Errorf("a refused request was recorded matched=true: %+v", r)
 		}
 	}
 }

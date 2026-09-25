@@ -52,23 +52,6 @@ func TestAdminSyncCorpusPinsItsRoutesAndCapturedStatuses(t *testing.T) {
 	}
 }
 
-// TestAdminTeamMemberRoutesAreNotHereYet: at this stack's base the Go dho api
-// does not mount these routes (they reached main later), so a case would be
-// refused by the mounted-route test in internal/apiservice. They are added,
-// missing-team only for discover-members / infer-members, once the stack is on
-// main; delete this test with that change.
-func TestAdminTeamMemberRoutesAreNotHereYet(t *testing.T) {
-	for _, operation := range []string{
-		"REST:GET:/api/v1/admin/teams/{team_id}",
-		"REST:GET:/api/v1/admin/teams/{team_id}/discover-members",
-		"REST:GET:/api/v1/admin/teams/{team_id}/infer-members",
-	} {
-		if _, err := SpecForREST(operation); err == nil {
-			t.Errorf("%s is registered but the Go dho api does not mount it at this base", operation)
-		}
-	}
-}
-
 // TestAdminHeldOutRowsStayOutUntilTheTimestampFix: teams (list), a real team
 // and identities (list) are red on the capture only by the datetime render,
 // and a corpus row known red on main fails every STEP run, so they are not

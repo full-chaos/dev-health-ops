@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/goapiproof"
@@ -76,13 +77,18 @@ type statusReport struct {
 // DeployedDocumentDigest (what the DEPLOYED plane, not just this row,
 // actually reports).
 type statusReportOperation struct {
-	Operation                  string   `json:"operation"`
-	DocumentDigest             string   `json:"document_digest"`
-	DigestState                string   `json:"digest_state"`
-	PendingDigests             []string `json:"pending_digests"`
-	Mode                       *string  `json:"mode"`
-	CurrentCandidateBuild      *string  `json:"current_candidate_build"`
-	RolloutPercentage          *int     `json:"rollout_percentage"`
+	Operation             string   `json:"operation"`
+	DocumentDigest        string   `json:"document_digest"`
+	DigestState           string   `json:"digest_state"`
+	PendingDigests        []string `json:"pending_digests"`
+	Mode                  *string  `json:"mode"`
+	CurrentCandidateBuild *string  `json:"current_candidate_build"`
+	RolloutPercentage     *int     `json:"rollout_percentage"`
+	// NotEnforced names the routing controls this reachable row records that
+	// no plane obeys (a rollout_percentage other than 100, a non-empty
+	// eligible_orgs): the row is on for every authenticated org regardless.
+	// Go-only; [] when there is none.
+	NotEnforced                []string `json:"not_enforced"`
 	Owner                      *string  `json:"owner"`
 	UpdatedAt                  *string  `json:"updated_at"`
 	ReviewEvidence             *string  `json:"review_evidence"`
@@ -490,6 +496,9 @@ func printStatusText(report statusReport, local string) {
 		// exact comparison `enable`'s preflight makes before it will write
 		// a row, now surfaced here too so this diagnostic cannot look
 		// healthier than a write verb would treat the same operation.
+		if len(operation.NotEnforced) > 0 {
+			fmt.Fprintf(stdout, "    !! NOT ENFORCED: %s -- neither plane obeys these; this row is on for EVERY authenticated org (only the mode turns it off)\n", strings.Join(operation.NotEnforced, ", "))
+		}
 		switch operation.DeployedDigestState {
 		case "MISMATCH":
 			fmt.Fprintf(stdout, "    !! DEPLOYED document digest MISMATCH: catalog=%s go=%s -- enable would refuse this operation right now\n", operation.DocumentDigest, derefOr(operation.DeployedDocumentDigest, "unknown"))
@@ -510,6 +519,7 @@ func toReportOperation(status goapiproof.OperationStatus, deployedDigests map[st
 		Proven:                     status.Proven,
 		NamedLimit:                 status.NamedLimit,
 		VenueProof:                 status.VenueProof,
+		NotEnforced:                []string{},
 	}
 	if reported.StaleDigests == nil {
 		reported.StaleDigests = []string{}
@@ -622,6 +632,7 @@ func toReportOperation(status goapiproof.OperationStatus, deployedDigests map[st
 	reported.Mode = stringPtr(status.Mode)
 	reported.CurrentCandidateBuild = stringPtr(status.CurrentCandidateBuild)
 	reported.RolloutPercentage = status.RolloutPercentage
+	reported.NotEnforced = status.UnenforcedControls()
 	reported.Owner = stringPtr(status.Owner)
 	reported.ReviewEvidence = stringPtr(status.ReviewEvidence)
 	reported.RecordedBy = stringPtr(status.RecordedBy)

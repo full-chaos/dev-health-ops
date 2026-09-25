@@ -88,9 +88,8 @@ def test_migration_0136_allows_the_operator_principal_and_is_reversible():
     )
     assert migration.revision == "0136"
     assert migration.down_revision == "0135"
-    # 0139 (refunds: write-first, idempotency key) supersedes the head
-    # check: derived, not typed (tests/_alembic_heads.py); the next migration
-    # author moves it.
+    # 0140 (revocation setup purpose) supersedes the head check: derived, not
+    # typed (tests/_alembic_heads.py); the next migration author moves it.
     action_check = importlib.import_module(
         "dev_health_ops.alembic.versions.0137_worker_operator_audits_action_check"
     )
@@ -103,7 +102,11 @@ def test_migration_0136_allows_the_operator_principal_and_is_reversible():
         "dev_health_ops.alembic.versions.0139_refunds_write_first_idempotency_key"
     )
     assert refunds_write_first.down_revision == direct_write_check.revision
-    assert refunds_write_first.revision == application_schema_head()
+    setup_purpose = importlib.import_module(
+        "dev_health_ops.alembic.versions.0140_provider_oauth_revocations_setup_purpose"
+    )
+    assert setup_purpose.down_revision == refunds_write_first.revision
+    assert setup_purpose.revision == application_schema_head()
 
     engine = sa.create_engine("sqlite:///:memory:")
     metadata = sa.MetaData()

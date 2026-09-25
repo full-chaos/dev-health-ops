@@ -35,7 +35,7 @@ var revisionScenarios = []revisionScenario{
 	{name: "heads", verb: "heads"},
 	{name: "current at the head", verb: "current"},
 	{name: "current without the cutover head", setup: "DELETE FROM alembic_version WHERE version_num = '0066'", verb: "current"},
-	{name: "current below the head", setup: "UPDATE alembic_version SET version_num = '0137' WHERE version_num = '0138'", verb: "current"},
+	{name: "current below the head", setup: "UPDATE alembic_version SET version_num = '0139' WHERE version_num = '0140'", verb: "current"},
 	{name: "current of an empty version table", setup: "DELETE FROM alembic_version", verb: "current"},
 	{name: "current without a version table", setup: "DROP TABLE alembic_version", verb: "current"},
 }
@@ -48,7 +48,7 @@ const revisionsGolden = "testdata/revisions_golden.json"
 // freshness check: the file is only rewritten by
 // TestRevisionsVenueOracleMatchesAlembic with DHO_REVISIONS_GOLDEN_UPDATE=1,
 // then this digest is updated.
-const revisionsGoldenSHA256 = "0dfb6924865d8a188d40ee81d51e8b1b2fdb6691e8fce0567810efd055b2bfd7"
+const revisionsGoldenSHA256 = "1936c0fee36018ab4d1199e36779fe789fc499335a292edc22f45bbaf0be7fa4"
 
 type revisionResult struct {
 	Name   string `json:"name"`

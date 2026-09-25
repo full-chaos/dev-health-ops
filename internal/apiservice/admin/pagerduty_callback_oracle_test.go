@@ -152,6 +152,12 @@ func (f *fakePagerDuty) handler() http.Handler {
 			w.Header().Set("Content-Length", "500")
 			w.WriteHeader(403)
 			_, _ = io.WriteString(w, `{"err`)
+		case "c-missing-refused":
+			reply(200, token("at-missing-refused", "rt-missing-refused", "incidents.read services.read", "3600"))
+		case "c-noaccount-refused":
+			reply(200, token("at-noaccount", "rt-noaccount-refused", pagerDutyAllReadScopes, "3600"))
+		case "c-corrupt-refused":
+			reply(200, token("at-ok", "rt-corrupt-refused", pagerDutyAllReadScopes, "3600"))
 		case "c-missing-redirect":
 			reply(200, token("at-missing-redirect", "rt-redirect", "incidents.read", "3600"))
 		case "c-rejected":
@@ -269,7 +275,7 @@ func TestPagerDutyCallbackAndManualVenueOracle(t *testing.T) {
 	root := repoRoot(t)
 	const jwtKey = "venue-oracle-test-secret-key-for-pagerduty-callback-32-b"
 
-	fake := &fakePagerDuty{failRevoke: map[string]bool{"old-fail-rt": true}}
+	fake := &fakePagerDuty{failRevoke: map[string]bool{"old-fail-rt": true, "rt-missing-refused": true, "rt-noaccount-refused": true, "rt-corrupt-refused": true}}
 	upstream := httptest.NewServer(fake.handler())
 	t.Cleanup(upstream.Close)
 	capture := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -281,7 +287,7 @@ func TestPagerDutyCallbackAndManualVenueOracle(t *testing.T) {
 	t.Cleanup(capture.Close)
 	fake.redirectTo = capture.URL
 
-	orgSlugs := []string{"fresh", "replacefail", "variants", "failures", "corrupt", "off", "cc", "ccoauth", "cccorrupt", "tok", "ccoff"}
+	orgSlugs := []string{"fresh", "replacefail", "variants", "failures", "corrupt", "off", "cc", "ccoauth", "cccorrupt", "tok", "ccoff", "refmissing", "refnoacct", "refcorrupt", "refredirect"}
 	orgs := map[string]uuid.UUID{}
 	for _, slug := range orgSlugs {
 		orgs[slug] = uuid.New()
@@ -307,8 +313,13 @@ func TestPagerDutyCallbackAndManualVenueOracle(t *testing.T) {
 		{"s-fail-missing", "failures"}, {"s-fail-noaccount", "failures"}, {"s-fail-readfails", "failures"}, {"s-fail-rejected", "failures"},
 		{"s-fail-forbidden", "failures"}, {"s-fail-server", "failures"}, {"s-fail-redirect", "failures"}, {"s-fail-badjson", "failures"},
 		{"s-fail-noaccess", "failures"}, {"s-fail-badexpires", "failures"}, {"s-fail-error", "failures"}, {"s-fail-nocode", "failures"},
-		{"s-fail-emptycode", "failures"}, {"s-fail-truncated", "failures"}, {"s-fail-truncated403", "failures"}, {"s-fail-redirect-revoke", "failures"}, {"s-fail-errorempty", "failures"}, {"s-fail-reuse", "failures"}, {"s-fail-extra", "failures"},
+		{"s-fail-emptycode", "failures"}, {"s-fail-truncated", "failures"}, {"s-fail-truncated403", "failures"}, {"s-fail-errorempty", "failures"}, {"s-fail-reuse", "failures"}, {"s-fail-extra", "failures"},
 		{"s-corrupt", "corrupt"}, {"s-off", "off"},
+		// A compensating revoke PagerDuty refuses (CHAOS-6631): the first state
+		// of each org runs on both planes, the second only on the Go plane
+		// once the fake accepts revokes again.
+		{"s-refm-1", "refmissing"}, {"s-refm-2", "refmissing"}, {"s-refm-3", "refmissing"}, {"s-refn-1", "refnoacct"}, {"s-refn-2", "refnoacct"}, {"s-refn-3", "refnoacct"},
+		{"s-refc-1", "refcorrupt"}, {"s-refc-2", "refcorrupt"}, {"s-refr-1", "refredirect"}, {"s-refr-2", "refredirect"},
 	} {
 		addState(spec.name, spec.org)
 	}
@@ -417,6 +428,8 @@ VALUES ($1, $2, 'pagerduty', $3, false, NULL, '{"region": "us", "auth_mode": "oa
 			exec(`INSERT INTO provider_oauth_credentials (org_id, provider, credential_name, token_encrypted, version, created_at, updated_at, has_refresh_token)
 VALUES ($1, 'pagerduty', 'Acme Co', 'garbage-not-fernet', 1, now(), now(), false)`, orgs["corrupt"].String())
 			exec(`INSERT INTO provider_oauth_credentials (org_id, provider, credential_name, token_encrypted, version, created_at, updated_at, has_refresh_token)
+VALUES ($1, 'pagerduty', 'Acme Co', 'garbage-not-fernet', 1, now(), now(), false)`, orgs["refcorrupt"].String())
+			exec(`INSERT INTO provider_oauth_credentials (org_id, provider, credential_name, token_encrypted, version, created_at, updated_at, has_refresh_token)
 VALUES ($1, 'pagerduty', 'default', 'garbage-not-fernet', 1, now(), now(), false)`, orgs["cccorrupt"].String())
 			integration("cccorrupt", "default")
 
@@ -469,7 +482,12 @@ VALUES ($1, 'pagerduty', 'default', 'garbage-not-fernet', 1, now(), now(), false
 		cb("service redirect", "admin_failures", "s-fail-redirect", "c-redirect"),
 		cb("token body cut short is a transport error", "admin_failures", "s-fail-truncated", "c-truncated"),
 		cb("error status body cut short is a transport error", "admin_failures", "s-fail-truncated403", "c-truncated-403"),
-		cb("compensating revoke redirected is not followed", "admin_failures", "s-fail-redirect-revoke", "c-missing-redirect"),
+		// A compensating revoke PagerDuty refuses (CHAOS-6631): the answers are
+		// Python's on both planes; what the Go plane also keeps is asserted below.
+		cb("compensating revoke refused after missing scopes", "admin_refmissing", "s-refm-1", "c-missing-refused"),
+		cb("compensating revoke refused after no account", "admin_refnoacct", "s-refn-1", "c-noaccount-refused"),
+		cb("compensating revoke refused after a failed local write", "admin_refcorrupt", "s-refc-1", "c-corrupt-refused"),
+		cb("compensating revoke redirected is not followed", "admin_refredirect", "s-refr-1", "c-missing-redirect"),
 		cb("token body not json", "admin_failures", "s-fail-badjson", "c-badjson"),
 		cb("token body without access_token", "admin_failures", "s-fail-noaccess", "c-noaccess"),
 		cb("expires_in not an integer", "admin_failures", "s-fail-badexpires", "c-badexpires"),
@@ -590,14 +608,21 @@ VALUES ($1, 'pagerduty', 'default', 'garbage-not-fernet', 1, now(), now(), false
 			t.Errorf("%s differs after the writes:\n python: %s\n go:     %s", name, source, goRows)
 		}
 	}
-	compare("authorization requests left", `SELECT org_id, state_hash FROM pagerduty_oauth_authorization_requests ORDER BY org_id, state_hash`)
+	// The states only the Go plane's follow-up callbacks consume are not part
+	// of the two-plane comparison.
+	var goOnlyStates []string
+	for _, name := range []string{"s-refm-2", "s-refm-3", "s-refn-2", "s-refn-3", "s-refc-2", "s-refr-2"} {
+		digest := sha256.Sum256([]byte(name))
+		goOnlyStates = append(goOnlyStates, "'"+hex.EncodeToString(digest[:])+"'")
+	}
+	compare("authorization requests left", `SELECT org_id, state_hash FROM pagerduty_oauth_authorization_requests WHERE state_hash NOT IN (`+strings.Join(goOnlyStates, ",")+`) ORDER BY org_id, state_hash`)
 	compare("integration_credentials rows (config as stored text)", `SELECT org_id, name, is_active, config::text, last_test_success::text, last_test_error, (last_test_at IS NULL)::text
 FROM integration_credentials ORDER BY org_id, name`)
 	compare("provider_oauth_credentials metadata", `SELECT org_id, credential_name, version, has_refresh_token, granted_scopes::text, account_id, account_display,
 	(binding_id ~ '^[0-9a-f]{32}$')::text, round(EXTRACT(EPOCH FROM (expires_at - updated_at)) / 10) * 10
 FROM provider_oauth_credentials ORDER BY org_id, credential_name`)
 	compare("provider_oauth_revocations metadata", `SELECT org_id, credential_name, purpose, status, attempts, last_error, token_key_version
-FROM provider_oauth_revocations ORDER BY org_id, credential_name, purpose, attempts`)
+FROM provider_oauth_revocations WHERE purpose <> 'setup' ORDER BY org_id, credential_name, purpose, attempts`)
 
 	// Ciphertexts differ by construction; what they hold must not. Each
 	// plane's stored secrets are opened with Python's own decrypt_value and
@@ -617,7 +642,7 @@ FROM provider_oauth_revocations ORDER BY org_id, credential_name, purpose, attem
 		for _, query := range []struct{ label, sql string }{
 			{"credentials", `SELECT org_id || '/' || name, credentials_encrypted FROM integration_credentials WHERE credentials_encrypted IS NOT NULL ORDER BY org_id, name`},
 			{"oauth token", `SELECT org_id || '/' || credential_name, token_encrypted FROM provider_oauth_credentials WHERE token_encrypted <> 'garbage-not-fernet' ORDER BY org_id, credential_name`},
-			{"revocation", `SELECT org_id || '/' || credential_name || '/' || purpose || '/' || attempts, token_encrypted FROM provider_oauth_revocations ORDER BY org_id, credential_name, purpose, attempts`},
+			{"revocation", `SELECT org_id || '/' || credential_name || '/' || purpose || '/' || attempts, token_encrypted FROM provider_oauth_revocations WHERE purpose <> 'setup' ORDER BY org_id, credential_name, purpose, attempts`},
 		} {
 			rows, err := pool.Query(ctx, query.sql)
 			if err != nil {
@@ -677,5 +702,179 @@ FROM provider_oauth_revocations ORDER BY org_id, credential_name, purpose, attem
 	}
 	if len(pythonSecrets) < 20 {
 		t.Errorf("only %d stored secrets to compare", len(pythonSecrets))
+	}
+
+	// ---- CHAOS-6631: what the Go plane keeps that Python drops ---------------
+	// A compensating revoke PagerDuty refuses leaves the issued token live and
+	// untracked in Python (no row, both planes used to match). The Go plane
+	// keeps a pending 'setup' revocation for it and retries it at the next
+	// callback of the org. The answers above are equal; this is the one
+	// difference, asserted on each side so a change to either is a decision.
+	refused := []struct{ slug, token string }{
+		{"refmissing", "rt-missing-refused"}, {"refnoacct", "rt-noaccount-refused"}, {"refcorrupt", "rt-corrupt-refused"}, {"refredirect", "rt-redirect"},
+	}
+	setupRows := func(dbName string) map[string]string {
+		t.Helper()
+		pool, err := pgxpool.New(ctx, venue.AdminURI(t, dbName))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer pool.Close()
+		rows, err := pool.Query(ctx, `SELECT org_id, credential_name || '/' || status || '/' || attempts || '/' || coalesce(last_error, '<null>'), token_encrypted
+FROM provider_oauth_revocations WHERE purpose = 'setup' ORDER BY org_id`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rows.Close()
+		out := map[string]string{}
+		var ciphertexts []string
+		var keys []string
+		for rows.Next() {
+			var org, summary, ciphertext string
+			if err := rows.Scan(&org, &summary, &ciphertext); err != nil {
+				t.Fatal(err)
+			}
+			slug := org
+			for name, id := range orgs {
+				if id.String() == org {
+					slug = name
+				}
+			}
+			keys = append(keys, slug)
+			out[slug] = summary
+			ciphertexts = append(ciphertexts, ciphertext)
+		}
+		if len(ciphertexts) == 0 {
+			return out
+		}
+		calls := make([]venueoracle.PythonCall, len(ciphertexts))
+		for i, ciphertext := range ciphertexts {
+			calls[i] = venueoracle.PythonCall{Target: "dev_health_ops.core.encryption:decrypt_value", Args: []any{ciphertext}}
+		}
+		for i, raw := range venue.CallPython(t, calls...) {
+			var plain string
+			if err := json.Unmarshal(raw, &plain); err != nil {
+				t.Fatal(err)
+			}
+			out[keys[i]] += "/" + plain
+		}
+		return out
+	}
+	if rows := setupRows(venue.SourceDB); len(rows) != 0 {
+		t.Errorf("the Python plane kept setup revocations (%v); it used to keep none: this is a decision, not an accident", rows)
+	}
+	goRows := setupRows(venue.GoDB)
+	for _, want := range refused {
+		if got, wantRow := goRows[want.slug], "/pending/1/remote_revoke_failed/"+want.token; got != wantRow {
+			t.Errorf("Go plane setup revocation for %s = %q, want %q", want.slug, got, wantRow)
+		}
+	}
+	if len(goRows) != len(refused) {
+		t.Errorf("Go plane kept %d setup revocations, want %d: %v", len(goRows), len(refused), goRows)
+	}
+
+	// PagerDuty accepts revokes again. Each org's next callback retries its
+	// pending revoke first; the redirected one is refused again and stays.
+	fake.mu.Lock()
+	for _, token := range []string{"rt-missing-refused", "rt-noaccount-refused", "rt-corrupt-refused"} {
+		delete(fake.failRevoke, token)
+	}
+	fake.mu.Unlock()
+	fake.take()
+	for _, followUp := range []struct {
+		name, org, state string
+		status           int
+	}{
+		{"refmissing", "admin_refmissing", "s-refm-2", 200}, {"refnoacct", "admin_refnoacct", "s-refn-2", 200},
+		{"refcorrupt", "admin_refcorrupt", "s-refc-2", 500}, {"refredirect", "admin_refredirect", "s-refr-2", 200},
+	} {
+		response := venueoracle.Do(t, goBase, cb("follow-up "+followUp.name, followUp.org, followUp.state, "c-ok3"))
+		if response.Status != followUp.status {
+			t.Errorf("follow-up callback for %s answered %d %s, want %d", followUp.name, response.Status, response.Body, followUp.status)
+		}
+	}
+	retried := strings.Join(fake.take(), "\n")
+	for _, token := range []string{"rt-missing-refused", "rt-noaccount-refused", "rt-corrupt-refused", "rt-redirect"} {
+		if !strings.Contains(retried, "POST /revoke") && strings.Contains(retried, "token="+token) {
+			t.Errorf("the next callback did not retry the revoke of %s:\n%s", token, retried)
+		}
+	}
+	after := setupRows(venue.GoDB)
+	if len(after) != 1 || after["refredirect"] != "/pending/2/remote_revoke_failed/rt-redirect" {
+		t.Errorf("after the retries the Go plane should keep only the redirected token's row (attempts 2): %v", after)
+	}
+	fake.mu.Lock()
+	captured = fake.captured
+	fake.mu.Unlock()
+	if captured != 0 {
+		t.Errorf("a retried revoke followed a redirect: %d request(s) reached the redirect target", captured)
+	}
+
+	// Which rows a callback retries: a refused revoke (attempts > 0) and a row
+	// old enough that its callback died without an outcome, never a young row
+	// whose callback may still be running (revoking it would revoke a grant
+	// about to be stored).
+	goPool, err := pgxpool.New(ctx, venue.AdminURI(t, venue.GoDB))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer goPool.Close()
+	insertSetup := func(org, token string, attempts int, age string) {
+		t.Helper()
+		var sealed string
+		if err := json.Unmarshal(venue.CallPython(t, venueoracle.PythonCall{Target: "dev_health_ops.core.encryption:encrypt_value", Args: []any{token}})[0], &sealed); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := goPool.Exec(ctx, `INSERT INTO provider_oauth_revocations (id, org_id, provider, credential_name, purpose, token_encrypted, token_key_version, status, attempts, created_at, updated_at)
+VALUES ($1, $2, 'pagerduty', '', 'setup', $3, 'v1', 'pending', $4, now() - $5::interval, now())`, uuid.New(), orgs[org].String(), sealed, attempts, age); err != nil {
+			t.Fatal(err)
+		}
+	}
+	insertSetup("refmissing", "rt-inflight", 0, "1 minute")
+	insertSetup("refmissing", "rt-stale", 0, "16 minutes")
+	insertSetup("refmissing", "rt-failed-young", 1, "0 seconds")
+	fake.take()
+	if response := venueoracle.Do(t, goBase, cb("follow-up drain selection", "admin_refmissing", "s-refm-3", "c-ok3")); response.Status != 200 {
+		t.Errorf("drain-selection callback answered %d %s", response.Status, response.Body)
+	}
+	drained := strings.Join(fake.take(), "\n")
+	for token, want := range map[string]bool{"rt-inflight": false, "rt-stale": true, "rt-failed-young": true} {
+		if got := strings.Contains(drained, "token="+token); got != want {
+			t.Errorf("callback retried the revoke of %s = %v, want %v:\n%s", token, got, want, drained)
+		}
+	}
+	var inflight int
+	if err := goPool.QueryRow(ctx, `SELECT count(*) FROM provider_oauth_revocations WHERE purpose = 'setup' AND org_id = $1`, orgs["refmissing"].String()).Scan(&inflight); err != nil || inflight != 1 {
+		t.Errorf("after the drain the refmissing org should keep only the young row (%d rows, %v)", inflight, err)
+	}
+
+	// A disconnect retries the org's refused setup revokes too, and answers
+	// as it always did.
+	insertSetup("refnoacct", "rt-disc-failed", 1, "0 seconds")
+	fake.take()
+	disconnect := venueoracle.Do(t, goBase, post("follow-up disconnect", "/disconnect", "admin_refnoacct", `{"credential_name":"nothing-connected"}`))
+	if disconnect.Status != http.StatusOK {
+		t.Errorf("disconnect answered %d %s, want 200", disconnect.Status, disconnect.Body)
+	}
+	if calls := strings.Join(fake.take(), "\n"); !strings.Contains(calls, "token=rt-disc-failed") {
+		t.Errorf("a disconnect did not retry the org's refused setup revoke:\n%s", calls)
+	}
+
+	// A token that cannot be recorded is revoked at once and the setup fails
+	// loudly: the record is written before anything else touches the grant.
+	if _, err := goPool.Exec(ctx, `CREATE FUNCTION pd_setup_record_refused() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'setup record refused'; END $$;
+CREATE TRIGGER pd_setup_record_refused BEFORE INSERT ON provider_oauth_revocations FOR EACH ROW WHEN (NEW.purpose = 'setup') EXECUTE FUNCTION pd_setup_record_refused()`); err != nil {
+		t.Fatal(err)
+	}
+	fake.take()
+	unrecorded := venueoracle.Do(t, goBase, cb("follow-up record refused", "admin_refnoacct", "s-refn-3", "c-ok3"))
+	if unrecorded.Status != http.StatusInternalServerError {
+		t.Errorf("a callback whose setup record could not be written answered %d %s, want 500", unrecorded.Status, unrecorded.Body)
+	}
+	if calls := strings.Join(fake.take(), "\n"); !strings.Contains(calls, "POST /revoke") || !strings.Contains(calls, "token=rt-ok3") {
+		t.Errorf("a token that could not be recorded was not revoked:\n%s", calls)
+	}
+	if _, err := goPool.Exec(ctx, `DROP TRIGGER pd_setup_record_refused ON provider_oauth_revocations; DROP FUNCTION pd_setup_record_refused()`); err != nil {
+		t.Fatal(err)
 	}
 }

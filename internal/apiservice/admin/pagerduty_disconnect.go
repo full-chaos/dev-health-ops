@@ -85,6 +85,10 @@ func (h *handlers) disconnectPagerDuty(w http.ResponseWriter, r *http.Request) {
 // existed" (Python's None, itself never a failure), else whether the
 // revocation queue finished draining.
 func (h *handlers) disconnectPagerDutyCredential(ctx context.Context, orgID, credentialName string) (*bool, error) {
+	// A revoke PagerDuty refused for an earlier OAuth setup is retried too;
+	// it never changes this disconnect's answer.
+	h.drainPagerDutySetupRevocations(ctx, orgID)
+
 	tx, err := h.store.Pool.Begin(ctx)
 	if err != nil {
 		return nil, err
@@ -188,6 +192,13 @@ VALUES ($1, $2, 'pagerduty', $3, 'disconnect', $4, 'v1', 'pending', 0, now(), no
 // call is retained (attempts incremented, is_complete=false) rather than
 // raised, matching Python's `except (ValueError, httpx.HTTPError)`.
 func (h *handlers) retryPagerDutyRevocations(ctx context.Context, orgID, credentialName string) (bool, error) {
+	return h.retryPagerDutyRevocationRows(ctx, orgID, `SELECT id, token_encrypted FROM provider_oauth_revocations WHERE org_id = $1 AND provider = 'pagerduty' AND credential_name = $2 AND status = 'pending' ORDER BY created_at FOR UPDATE`, credentialName)
+}
+
+// retryPagerDutyRevocationRows is retryPagerDutyRevocations over the rows a
+// query selects (id, token_encrypted; $1 is the organisation, further
+// arguments follow).
+func (h *handlers) retryPagerDutyRevocationRows(ctx context.Context, orgID, query string, args ...any) (bool, error) {
 	tx, err := h.store.Pool.Begin(ctx)
 	if err != nil {
 		return false, err
@@ -203,9 +214,7 @@ func (h *handlers) retryPagerDutyRevocations(ctx context.Context, orgID, credent
 		id        uuid.UUID
 		encrypted string
 	}
-	rows, err := tx.Query(ctx,
-		`SELECT id, token_encrypted FROM provider_oauth_revocations WHERE org_id = $1 AND provider = 'pagerduty' AND credential_name = $2 AND status = 'pending' ORDER BY created_at FOR UPDATE`,
-		orgID, credentialName)
+	rows, err := tx.Query(ctx, query, append([]any{orgID}, args...)...)
 	if err != nil {
 		return false, err
 	}

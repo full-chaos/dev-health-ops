@@ -19,7 +19,7 @@ import (
 // chain revision after the head has none: a label belongs to its script only.
 var branchLabels = map[string]string{
 	"0066": "river_cutover",
-	"0138": "application_schema",
+	"0140": "application_schema",
 }
 
 // Heads is the set of head revisions: the baseline's heads, with the application

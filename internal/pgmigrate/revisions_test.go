@@ -14,9 +14,9 @@ import (
 
 func TestHeadsReplaceTheApplicationHeadWithTheLastChainRevision(t *testing.T) {
 	baseline := pgmigrate.Baseline{Heads: []string{"0138", "0066"}}
-	chain := []pgmigrate.ChainFile{{Revision: "0139"}, {Revision: "0140"}}
+	chain := []pgmigrate.ChainFile{{Revision: "0140"}, {Revision: "0141"}}
 	got := pgmigrate.Heads(baseline, chain)
-	if strings.Join(got, ",") != "0066,0140" {
+	if strings.Join(got, ",") != "0066,0141" {
 		t.Fatalf("heads = %v, want the cutover head and the last chain revision", got)
 	}
 	if got := pgmigrate.Heads(baseline, nil); strings.Join(got, ",") != "0066,0138" {
@@ -27,20 +27,20 @@ func TestHeadsReplaceTheApplicationHeadWithTheLastChainRevision(t *testing.T) {
 	if err := pgmigrate.WriteHeads(&out, baseline, chain); err != nil {
 		t.Fatal(err)
 	}
-	if want := "0066 (river_cutover) (head)\n0140 (head)\n"; out.String() != want {
+	if want := "0066 (river_cutover) (head)\n0141 (head)\n"; out.String() != want {
 		t.Fatalf("heads printed %q, want %q", out.String(), want)
 	}
 }
 
 func TestCurrentMarksAHeadAndOnlyAHead(t *testing.T) {
 	baseline := pgmigrate.Baseline{Heads: []string{"0138", "0066"}}
-	chain := []pgmigrate.ChainFile{{Revision: "0139"}}
+	chain := []pgmigrate.ChainFile{{Revision: "0140"}}
 	var out bytes.Buffer
-	if err := pgmigrate.WriteCurrent(&out, []string{"0066", "0138", "0139"}, baseline, chain); err != nil {
+	if err := pgmigrate.WriteCurrent(&out, []string{"0066", "0139", "0140"}, baseline, chain); err != nil {
 		t.Fatal(err)
 	}
 	// 0138 is the application head the chain replaced: no longer a head.
-	if want := "0066 (head)\n0138\n0139 (head)\n"; out.String() != want {
+	if want := "0066 (head)\n0139\n0140 (head)\n"; out.String() != want {
 		t.Fatalf("current printed %q, want %q", out.String(), want)
 	}
 }

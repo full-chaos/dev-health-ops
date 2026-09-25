@@ -29,6 +29,7 @@ func TestUserCRUDAndPasswordChangeMatchesThePythonAPI(t *testing.T) {
 	orgID := uuid.New()
 	adminID := uuid.New()
 	memberID := uuid.New()
+	dottedID := uuid.New()
 
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Root:   root,
@@ -51,6 +52,12 @@ VALUES ($1, 'venue-users-org', 'Venue Users Org', 'community', 'stripe', true, n
 VALUES ($1, 'venue-uadmin@example.com', $2, true, true, false, 0, now(), now())`, adminID, string(adminHash))
 			exec(`INSERT INTO users (id, email, is_active, is_verified, is_superuser, token_version, created_at, updated_at)
 VALUES ($1, 'venue-umember@example.com', true, true, false, 0, now(), now())`, memberID)
+			// CHAOS-6731: a user whose email holds U+0130 (dotted capital I), so a
+			// list search with U+0130 in ?q= has a row to find or to miss.
+			exec(`INSERT INTO users (id, email, is_active, is_verified, is_superuser, token_version, created_at, updated_at)
+VALUES ($1, 'venue-İstanbul@example.com', true, true, false, 0, now(), now())`, dottedID)
+			exec(`INSERT INTO memberships (id, org_id, user_id, role, joined_at, created_at, updated_at)
+VALUES ($1, $2, $3, 'member', now(), now(), now())`, uuid.New(), orgID, dottedID)
 			exec(`INSERT INTO memberships (id, org_id, user_id, role, joined_at, created_at, updated_at)
 VALUES ($1, $2, $3, 'admin', now(), now(), now())`, uuid.New(), orgID, adminID)
 			exec(`INSERT INTO memberships (id, org_id, user_id, role, joined_at, created_at, updated_at)
@@ -66,6 +73,17 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, uuid.New(), orgID, memberID
 
 	requests := []venueoracle.Request{
 		{Name: "list users by org", Method: "GET", Path: "/api/v1/admin/users",
+			Headers: map[string]string{"Authorization": "Bearer " + venue.Tokens["admin"], "X-Org-Id": orgID.String()}},
+		// CHAOS-6731: Python's str.lower() turns U+0130 into two code points
+		// ("i" and a combining dot), Go's does not; ?q= is stripped (with
+		// Python's whitespace set) and lowered before it is matched.
+		{Name: "list users search dotted capital I", Method: "GET", Path: "/api/v1/admin/users?q=%C4%B0",
+			Headers: map[string]string{"Authorization": "Bearer " + venue.Tokens["admin"], "X-Org-Id": orgID.String()}},
+		{Name: "list users search dotted capital I word", Method: "GET", Path: "/api/v1/admin/users?q=%C4%B0stanbul",
+			Headers: map[string]string{"Authorization": "Bearer " + venue.Tokens["admin"], "X-Org-Id": orgID.String()}},
+		{Name: "list users search padded dotted capital I", Method: "GET", Path: "/api/v1/admin/users?q=%1C%C4%B0%1F",
+			Headers: map[string]string{"Authorization": "Bearer " + venue.Tokens["admin"], "X-Org-Id": orgID.String()}},
+		{Name: "list users search lowered dotted i", Method: "GET", Path: "/api/v1/admin/users?q=i%CC%87stanbul",
 			Headers: map[string]string{"Authorization": "Bearer " + venue.Tokens["admin"], "X-Org-Id": orgID.String()}},
 		// A repeated query key resolves to FastAPI's LAST value, never Go's
 		// stdlib url.Values.Get's first -- a live round found this

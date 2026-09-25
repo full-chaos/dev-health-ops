@@ -42,12 +42,9 @@ func signDataHealthEnvelope(t *testing.T, priv ed25519.PrivateKey, claims princi
 
 func TestDataHealthRoute_OperatorGateThroughTheSignedEnvelope(t *testing.T) {
 	pool := startTestRegistryPostgres(t)
-	if _, err := pool.Exec(t.Context(), dataHealthPostgresDDL); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := pool.Exec(t.Context(), `INSERT INTO sync_configurations (id, org_id, name, provider) VALUES
-		('aaaaaaaa-0000-0000-0000-000000000001', 'org-1', 'gh-main', 'github'),
-		('aaaaaaaa-0000-0000-0000-000000000002', 'org-2', 'foreign', 'jira')`); err != nil {
+	if _, err := pool.Exec(t.Context(), `INSERT INTO sync_configurations (id, org_id, name, provider, created_at, updated_at) VALUES
+		('aaaaaaaa-0000-0000-0000-000000000001', 'org-1', 'gh-main', 'github', now(), now()),
+		('aaaaaaaa-0000-0000-0000-000000000002', 'org-2', 'foreign', 'jira', now(), now())`); err != nil {
 		t.Fatal(err)
 	}
 

@@ -295,6 +295,15 @@ type RuntimePools struct {
 	Domain       *pgxpool.Pool
 	QueueControl *pgxpool.Pool
 	Coordinator  *pgxpool.Pool
+	// DomainProbe is a one-connection pool on the SAME domain login, for
+	// readiness checks only (CHAOS-6771). The work pool is small (4 by
+	// default) and a worker's own jobs can hold every connection for minutes;
+	// a readiness check that had to queue behind them ran into its deadline
+	// without ever reaching the database, so a replica doing plenty of work
+	// read as not ready. It is not instrumented (the acquire metric is about
+	// the work pools) and never used for job traffic. Nil in hand-built
+	// RuntimePools: callers go through ReadinessPool, which falls back.
+	DomainProbe *pgxpool.Pool
 
 	// domainAcquire/queueAcquire back worker_database_pool_acquire_seconds.
 	// Coordinator is intentionally not instrumented: the metric's pool
@@ -361,18 +370,30 @@ func NewRuntimePools(ctx context.Context, runtimeConfig RuntimeConfig) (*Runtime
 		return nil, fmt.Errorf("open domain pool: %w", err)
 	}
 
+	// One connection, none held idle: through the transaction pooler it costs a
+	// pgbouncer client slot, not a server connection, while no check runs.
+	probeConfig := DefaultConfig(runtimeConfig.DomainURI)
+	probeConfig.MaxConns = 1
+	probeConfig.MinConns = 0
+	domainProbePool, err := New(ctx, probeConfig)
+	if err != nil {
+		domainPool.Close()
+		return nil, fmt.Errorf("open domain readiness pool: %w", err)
+	}
+
 	queueTracer := newPoolAcquireTracer("queue_control")
 	queueConfig := DefaultConfig(runtimeConfig.QueueControlURI)
 	queueConfig.MaxConns = runtimeConfig.QueueMaxConns
 	queueConfig.Tracer = queueTracer
 	queuePool, err := New(ctx, queueConfig)
 	if err != nil {
+		domainProbePool.Close()
 		domainPool.Close()
 		return nil, fmt.Errorf("open queue-control pool: %w", err)
 	}
 
 	pools := &RuntimePools{
-		Domain: domainPool, QueueControl: queuePool,
+		Domain: domainPool, QueueControl: queuePool, DomainProbe: domainProbePool,
 		domainAcquire: domainTracer, queueAcquire: queueTracer,
 	}
 	if runtimeConfig.RequireCoordinator {
@@ -381,6 +402,7 @@ func NewRuntimePools(ctx context.Context, runtimeConfig RuntimeConfig) (*Runtime
 		coordinatorPool, err := New(ctx, coordinatorConfig)
 		if err != nil {
 			queuePool.Close()
+			domainProbePool.Close()
 			domainPool.Close()
 			return nil, fmt.Errorf("open coordinator pool: %w", err)
 		}
@@ -419,7 +441,23 @@ func (p *RuntimePools) Close() {
 	if p.QueueControl != nil {
 		p.QueueControl.Close()
 	}
+	if p.DomainProbe != nil {
+		p.DomainProbe.Close()
+	}
 	if p.Domain != nil {
 		p.Domain.Close()
 	}
+}
+
+// ReadinessPool is the pool the domain role's readiness checks run on:
+// DomainProbe when it exists, else the work pool (hand-built RuntimePools that
+// never opened a probe pool keep their old behaviour).
+func (p *RuntimePools) ReadinessPool() *pgxpool.Pool {
+	if p == nil {
+		return nil
+	}
+	if p.DomainProbe != nil {
+		return p.DomainProbe
+	}
+	return p.Domain
 }

@@ -5,6 +5,7 @@ package admin_test
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"testing"
 
 	"github.com/google/uuid"
@@ -20,6 +21,9 @@ import (
 // seeds users directly by SQL only as membership targets. DELETE
 // /orgs/{org_id} has its own oracle test, CHAOS-6306's
 // orgdeletion_oracle_test.go.
+// slugSuffix matches a slug that carries the random suffix of a taken slug.
+var slugSuffix = regexp.MustCompile(`"slug":"([^"]*?)-[0-9a-f]{8}"`)
+
 func TestOrgCRUDMatchesThePythonAPI(t *testing.T) {
 	ctx := context.Background()
 	root := repoRoot(t)
@@ -162,6 +166,26 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, uuid.New(), orgID, newMembe
 			Body: venueoracle.B64(`{"name":"Left\u001cRight"}`)},
 		{Name: "create org dotted capital I name", Method: "POST", Path: "/api/v1/admin/orgs", Headers: jsonHeaders("super"),
 			Body: venueoracle.B64(`{"name":"\u001c\u0130stanbul\u001f"}`)},
+		// CHAOS-6731: the slug of the name above (U+0130 lowers to two code points
+		// in Python) is what the duplicate check binds; the same names again find the
+		// existing org, in a different spelling of the same slug too.
+		{Name: "create org dotted capital I name again", Method: "POST", Path: "/api/v1/admin/orgs", Headers: jsonHeaders("super"),
+			Body: venueoracle.B64(`{"name":"\u001c\u0130stanbul\u001f"}`)},
+		{Name: "create org dotted capital I name padded again", Method: "POST", Path: "/api/v1/admin/orgs", Headers: jsonHeaders("super"),
+			Body: venueoracle.B64(`{"name":"\u001f\u001e\u0130STANBUL\u001c"}`)},
+		{Name: "create org lowered dotted i name", Method: "POST", Path: "/api/v1/admin/orgs", Headers: jsonHeaders("super"),
+			Body: venueoracle.B64(`{"name":"i\u0307stanbul"}`)},
+		// An explicit slug is stored as given and looked up by Python's lower() of it
+		// (orgBySlug's bind): the same slug again, and its lowered spelling
+		// ("i" plus a combining dot), are looked up against the stored one.
+		{Name: "create org explicit dotted capital I slug", Method: "POST", Path: "/api/v1/admin/orgs", Headers: jsonHeaders("super"),
+			Body: venueoracle.B64(`{"name":"Explicit Slug Org","slug":"\u0130stanbul-explicit"}`)},
+		{Name: "create org explicit dotted capital I slug again", Method: "POST", Path: "/api/v1/admin/orgs", Headers: jsonHeaders("super"),
+			Body: venueoracle.B64(`{"name":"Explicit Slug Org Two","slug":"\u0130stanbul-explicit"}`)},
+		{Name: "create org explicit lowered dotted i slug", Method: "POST", Path: "/api/v1/admin/orgs", Headers: jsonHeaders("super"),
+			Body: venueoracle.B64(`{"name":"Explicit Slug Org Three","slug":"i\u0307stanbul-explicit"}`)},
+		{Name: "create org explicit plain i slug", Method: "POST", Path: "/api/v1/admin/orgs", Headers: jsonHeaders("super"),
+			Body: venueoracle.B64(`{"name":"Explicit Slug Org Four","slug":"istanbul-explicit"}`)},
 		{Name: "patch org", Method: "PATCH", Path: "/api/v1/admin/orgs/" + orgID.String(), Headers: jsonHeaders("super"),
 			Body: venueoracle.B64(`{"description":"updated description"}`)},
 		{Name: "patch org not found", Method: "PATCH", Path: "/api/v1/admin/orgs/" + uuid.New().String(), Headers: jsonHeaders("super"),
@@ -221,6 +245,9 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, uuid.New(), orgID, newMembe
 			for _, field := range []string{"id", "created_at", "updated_at", "expires_at", "joined_at"} {
 				body = redactField(t, body, field)
 			}
+			// CHAOS-6731: when a slug is already taken the service appends 8 random
+			// hex digits; the slug's base is compared, its suffix is per-plane random.
+			body = slugSuffix.ReplaceAllString(body, `"slug":"$1-<suffix>"`)
 			return body
 		},
 	})

@@ -10,6 +10,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -40,24 +42,10 @@ func newTestStore(t *testing.T) (Store, *pgxpool.Pool) {
 	}
 	t.Cleanup(pool.Close)
 
-	for _, statement := range []string{
-		`CREATE TABLE settings (
-		   org_id text NOT NULL, category text NOT NULL, key text NOT NULL,
-		   value text, is_encrypted boolean NOT NULL DEFAULT false)`,
-		`CREATE TABLE organizations (id uuid PRIMARY KEY, tier text NOT NULL)`,
-		`CREATE TABLE feature_flags (
-		   id uuid PRIMARY KEY, key text UNIQUE NOT NULL, min_tier text NOT NULL,
-		   is_enabled boolean NOT NULL)`,
-		`CREATE TABLE org_feature_overrides (
-		   org_id uuid NOT NULL, feature_id uuid NOT NULL, is_enabled boolean NOT NULL,
-		   expires_at timestamptz, PRIMARY KEY (org_id, feature_id))`,
-		`CREATE TABLE org_licenses (
-		   org_id uuid PRIMARY KEY, tier text NOT NULL, features_override json)`,
-	} {
-		if _, err := pool.Exec(ctx, statement); err != nil {
-			t.Fatal(err)
-		}
-	}
+	// The migrated schema: the hand-written settings/organizations/feature_flags/
+	// org_feature_overrides/org_licenses tables lacked the real tables' NOT NULL columns and keys
+	// (CHAOS-6769 ledger).
+	pgschema.Apply(ctx, t, pool)
 
 	decryptor, err := providerfoundation.NewFernetDecryptor(secrets.NewValue("test-master-key"), "")
 	if err != nil {
@@ -70,30 +58,24 @@ func newTestStore(t *testing.T) (Store, *pgxpool.Pool) {
 func seedByoLLMFeature(ctx context.Context, t *testing.T, pool *pgxpool.Pool, minTier string, globallyEnabled bool) uuid.UUID {
 	t.Helper()
 	id := uuid.New()
-	if _, err := pool.Exec(ctx, `
-INSERT INTO feature_flags (id, key, min_tier, is_enabled) VALUES ($1, 'byo_llm', $2, $3)`,
-		id, minTier, globallyEnabled); err != nil {
+	// The migrations already register byo_llm; each test chooses its own floor and enabled state.
+	if _, err := pool.Exec(ctx, `DELETE FROM feature_flags WHERE key = 'byo_llm'`); err != nil {
 		t.Fatal(err)
 	}
+	pgseed.FeatureFlag(ctx, t, pool, id.String(), "byo_llm", minTier, globallyEnabled)
 	return id
 }
 
 func seedOrg(ctx context.Context, t *testing.T, pool *pgxpool.Pool, tier string) uuid.UUID {
 	t.Helper()
 	id := uuid.New()
-	if _, err := pool.Exec(ctx, `INSERT INTO organizations (id, tier) VALUES ($1, $2)`, id, tier); err != nil {
-		t.Fatal(err)
-	}
+	pgseed.Org(ctx, t, pool, id.String(), tier)
 	return id
 }
 
 func insertSetting(ctx context.Context, t *testing.T, pool *pgxpool.Pool, orgID uuid.UUID, key, value string) {
 	t.Helper()
-	if _, err := pool.Exec(ctx,
-		`INSERT INTO settings (org_id, category, key, value, is_encrypted) VALUES ($1, 'llm', $2, $3, false)`,
-		orgID.String(), key, value); err != nil {
-		t.Fatal(err)
-	}
+	pgseed.Setting(ctx, t, pool, orgID.String(), "llm", key, value, false)
 }
 
 func insertEncryptedSetting(ctx context.Context, t *testing.T, store Store, pool *pgxpool.Pool, orgID uuid.UUID, key, plaintext string) {
@@ -102,11 +84,7 @@ func insertEncryptedSetting(ctx context.Context, t *testing.T, store Store, pool
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := pool.Exec(ctx,
-		`INSERT INTO settings (org_id, category, key, value, is_encrypted) VALUES ($1, 'llm', $2, $3, true)`,
-		orgID.String(), key, ciphertext.Reveal()); err != nil {
-		t.Fatal(err)
-	}
+	pgseed.Setting(ctx, t, pool, orgID.String(), "llm", key, ciphertext.Reveal(), true)
 }
 
 // TestResolveUsableProvider_PrecedenceMatrix is the bigboy proof team-lead
@@ -166,11 +144,7 @@ func TestResolveUsableProvider_PrecedenceMatrix(t *testing.T) {
 		store, pool := newTestStore(t)
 		featureID := seedByoLLMFeature(ctx, t, pool, "team", true)
 		orgID := seedOrg(ctx, t, pool, "community")
-		if _, err := pool.Exec(ctx, `
-INSERT INTO org_feature_overrides (org_id, feature_id, is_enabled) VALUES ($1, $2, true)`,
-			orgID, featureID); err != nil {
-			t.Fatal(err)
-		}
+		pgseed.OrgOverride(ctx, t, pool, orgID.String(), featureID.String(), true)
 		insertSetting(ctx, t, pool, orgID, "provider", "openai")
 		insertSetting(ctx, t, pool, orgID, "api_key", "sk-org")
 		got, err := store.ResolveUsableProvider(ctx, orgID.String())
@@ -186,11 +160,7 @@ INSERT INTO org_feature_overrides (org_id, feature_id, is_enabled) VALUES ($1, $
 		store, pool := newTestStore(t)
 		featureID := seedByoLLMFeature(ctx, t, pool, "team", true)
 		orgID := seedOrg(ctx, t, pool, "team")
-		if _, err := pool.Exec(ctx, `
-INSERT INTO org_feature_overrides (org_id, feature_id, is_enabled) VALUES ($1, $2, false)`,
-			orgID, featureID); err != nil {
-			t.Fatal(err)
-		}
+		pgseed.OrgOverride(ctx, t, pool, orgID.String(), featureID.String(), false)
 		insertSetting(ctx, t, pool, orgID, "provider", "openai")
 		insertSetting(ctx, t, pool, orgID, "api_key", "sk-org")
 		got, err := store.ResolveUsableProvider(ctx, orgID.String())
@@ -221,10 +191,7 @@ INSERT INTO org_feature_overrides (org_id, feature_id, is_enabled) VALUES ($1, $
 		store, pool := newTestStore(t)
 		seedByoLLMFeature(ctx, t, pool, "team", true)
 		orgID := seedOrg(ctx, t, pool, "enterprise")
-		if _, err := pool.Exec(ctx,
-			`INSERT INTO org_licenses (org_id, tier) VALUES ($1, 'community')`, orgID); err != nil {
-			t.Fatal(err)
-		}
+		pgseed.OrgLicense(ctx, t, pool, orgID.String(), "community", `{}`)
 		insertSetting(ctx, t, pool, orgID, "provider", "openai")
 		insertSetting(ctx, t, pool, orgID, "api_key", "sk-org")
 		got, err := store.ResolveUsableProvider(ctx, orgID.String())
@@ -411,7 +378,7 @@ func TestCredentials_WhitespaceOnlyRequestedProviderNeverMatches(t *testing.T) {
 func TestResolveUsableProvider_NoFeatureFlagsTable(t *testing.T) {
 	ctx := context.Background()
 	store, pool := newTestStore(t)
-	if _, err := pool.Exec(ctx, `DROP TABLE feature_flags`); err != nil {
+	if _, err := pool.Exec(ctx, `DROP TABLE feature_flags CASCADE`); err != nil {
 		t.Fatal(err)
 	}
 	orgID := seedOrg(ctx, t, pool, "community")

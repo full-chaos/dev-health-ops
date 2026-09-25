@@ -212,7 +212,21 @@ func (database *postgresWorkerDatabase) DomainReady(ctx context.Context) error {
 	if database == nil || database.pools == nil || database.pools.Domain == nil {
 		return errWorkerDependencyUnavailable
 	}
-	return postgres.CheckDomainAuthorization(ctx, database.pools.Domain, database.domainRole, database.riverSchema)
+	// CHAOS-6771: on the readiness pool, never queued behind the work pool.
+	return postgres.CheckDomainAuthorization(ctx, database.pools.ReadinessPool(), database.domainRole, database.riverSchema)
+}
+
+// DomainPostureCheck is DomainReady as a bounded, single-flight, cached check
+// (postgres.CachedPostureCheck, CHAOS-6765) on the readiness pool. The worker
+// binds it once it has a logger, so each real execution logs its duration.
+func (database *postgresWorkerDatabase) DomainPostureCheck(logger *slog.Logger) health.CheckFunc {
+	if database == nil || database.pools == nil || database.pools.Domain == nil {
+		return nil
+	}
+	return postgres.NewCachedPostureCheck(
+		database.pools.ReadinessPool(), database.domainRole, database.riverSchema, postgres.DomainPosture(),
+		postgres.PostureCheckOptions{Logger: logger},
+	).Check
 }
 
 // GitHubProjectsV2Configured reports whether any enabled GitHub integration
@@ -260,7 +274,7 @@ func (database *postgresWorkerDatabase) PostureManifestLockstep(
 	if database == nil || database.pools == nil || database.pools.Domain == nil {
 		return postgres.PostureManifestLockstepResult{}, errWorkerDependencyUnavailable
 	}
-	return postgres.CheckPostureManifestLockstep(ctx, database.pools.Domain, binaryDigest)
+	return postgres.CheckPostureManifestLockstep(ctx, database.pools.ReadinessPool(), binaryDigest)
 }
 
 func (database *postgresWorkerDatabase) PoolSaturation() (float64, float64) {
@@ -452,6 +466,46 @@ type workerDependencies struct {
 	// postureManifestLockstepReady reports unavailable in that case, exactly
 	// like every other database-backed check here.
 	postureGuard *postureguard.Guard
+	// domainPosture is the cached domain_postgres check (CHAOS-6771), bound on
+	// first use because the logger is assigned after construction. nil when the
+	// database offers none (test fakes), in which case domainReady calls the
+	// database directly as before.
+	domainPosture     health.CheckFunc
+	domainPostureOnce sync.Once
+	// progressGuard is the claim-liveness check (CHAOS-6771's "work is
+	// progressing" evidence for a busy pool); nil until the checks are built.
+	progressGuard health.CheckFunc
+	busy          *readinessBusy
+}
+
+// domainPostureCheckProvider is the optional capability a workerDatabase has
+// when it can hand out the cached domain posture check.
+type domainPostureCheckProvider interface {
+	DomainPostureCheck(logger *slog.Logger) health.CheckFunc
+}
+
+// busyTolerantDomainTxOpener wraps the domain pool's TxOpener for one named
+// probe. A nil opener stays nil.
+func (dependencies *workerDependencies) busyTolerantDomainTxOpener(check string) selfprobe.TxOpener {
+	opener := dependencies.database.DomainTxOpener()
+	if opener == nil {
+		return nil
+	}
+	return busyTolerantOpener{
+		inner: opener,
+		check: check,
+		saturated: func() bool {
+			domain, _ := dependencies.database.PoolSaturation()
+			return domain >= 1
+		},
+		progress: func(ctx context.Context) error {
+			if dependencies.progressGuard == nil {
+				return errWorkerDependencyUnavailable
+			}
+			return dependencies.progressGuard(ctx)
+		},
+		busy: dependencies.busy,
+	}
 }
 
 type preclaimReadinessComponent struct {
@@ -915,6 +969,11 @@ func configureWorkerDependenciesWithSources(
 			return nil, err
 		}
 	}
+	dependencies.busy = newReadinessBusy(logger)
+	if err := registry.RegisterMetrics("worker_readiness_busy", dependencies.busy); err != nil {
+		dependencies.close()
+		return nil, err
+	}
 	// worker_database_pool_acquire_seconds needs the collector, which is why
 	// this happens here rather than at pool construction: NewRuntimePools
 	// freezes its pgxpool tracer before dependencies.metrics exists.
@@ -947,6 +1006,7 @@ func configureWorkerDependenciesWithSources(
 		newClaim = newClaimLiveness
 	}
 	claim := newClaim(time.Now(), cfg.Queues)
+	dependencies.progressGuard = dependencies.claimLivenessReady(claim)
 	checks := []struct {
 		name  string
 		check health.CheckFunc
@@ -1061,7 +1121,7 @@ func configureWorkerDependenciesWithSources(
 	// dependencies.database is confirmed non-nil, so it has a real domain pool
 	// to probe. Assigning the already-captured livenessMonitor variable makes
 	// the execution_liveness check registered above start resolving to it.
-	livenessMonitor = selfprobe.New("worker_execution_liveness", dependencies.database.DomainTxOpener(), logger)
+	livenessMonitor = selfprobe.New("worker_execution_liveness", dependencies.busyTolerantDomainTxOpener("execution_liveness"), logger)
 	if livenessMonitor != nil {
 		// Probe synchronously now, not only when the lifecycle runtime later
 		// calls Start on the returned component. Every other required check
@@ -1913,7 +1973,16 @@ func (dependencies *workerDependencies) domainReady(ctx context.Context) error {
 	if dependencies == nil || dependencies.databaseErr != nil || dependencies.database == nil {
 		return errWorkerDependencyUnavailable
 	}
-	if err := dependencies.database.DomainReady(ctx); err != nil {
+	dependencies.domainPostureOnce.Do(func() {
+		if provider, ok := dependencies.database.(domainPostureCheckProvider); ok {
+			dependencies.domainPosture = provider.DomainPostureCheck(dependencies.logger)
+		}
+	})
+	domainCheck := dependencies.database.DomainReady
+	if dependencies.domainPosture != nil {
+		domainCheck = dependencies.domainPosture
+	}
+	if err := domainCheck(ctx); err != nil {
 		dependencies.logDependencyCheckFailure(ctx, "domain_postgres", err)
 		return dependencyCheckFailed(err)
 	}
@@ -1986,7 +2055,7 @@ func (dependencies *workerDependencies) idempotencyBackendReady(ctx context.Cont
 	if dependencies == nil || dependencies.databaseErr != nil || dependencies.database == nil {
 		return errWorkerDependencyUnavailable
 	}
-	if err := selfprobe.Once(ctx, dependencies.database.DomainTxOpener()); err != nil {
+	if err := selfprobe.Once(ctx, dependencies.busyTolerantDomainTxOpener("idempotency_backend")); err != nil {
 		dependencies.logDependencyCheckFailure(ctx, "idempotency_backend", err)
 		return dependencyCheckFailed(err)
 	}

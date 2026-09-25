@@ -69,6 +69,12 @@ func pathClass(path string) string {
 	}
 }
 
+// DropLogNamesKey is the log field carrying the dropped header NAMES. It must
+// not be a key the production logger redacts (internal/platform/logging: a key
+// containing "header" is protected, so the first spelling, `headers`, printed
+// [REDACTED]); the test pins that.
+const DropLogNamesKey = "dropped_names"
+
 // dropLogGate lets the drop line through at most once a second, so a request
 // flood cannot become a log flood; the counter still counts every request.
 var dropLogGate atomic.Int64
@@ -94,8 +100,8 @@ func Public(next http.Handler) http.Handler {
 		if len(names) > 0 {
 			droppedCounter.Add(r.Context(), 1, metric.WithAttributes(attribute.String("path_class", pathClass(r.URL.Path))))
 			if last, now := dropLogGate.Load(), time.Now().UnixNano(); now-last >= int64(time.Second) && dropLogGate.CompareAndSwap(last, now) {
-				log.Printf("query-api: dropped internal identity headers on the public listener: path_class=%s headers=%s",
-					pathClass(r.URL.Path), strings.Join(names, ","))
+				log.Printf("query-api: dropped internal identity headers on the public listener: path_class=%s %s=%s",
+					pathClass(r.URL.Path), DropLogNamesKey, strings.Join(names, ","))
 			}
 		}
 		next.ServeHTTP(w, r)

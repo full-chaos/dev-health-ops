@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 )
 
 // The three drift outcomes, against a REAL Postgres table.
@@ -23,13 +25,7 @@ import (
 
 func seedRoutingRowAtDigest(t *testing.T, pool *pgxpool.Pool, schemaDigest, operation string) {
 	t.Helper()
-	if _, err := pool.Exec(context.Background(), `
-		INSERT INTO go_api_routing_state (schema_digest, document_digest, selected_operation, mode)
-		VALUES ($1, $2, $3, 'canary')
-		ON CONFLICT (schema_digest, document_digest, selected_operation) DO NOTHING
-	`, schemaDigest, "document-digest-for-"+operation, operation); err != nil {
-		t.Fatal(err)
-	}
+	pgseed.RoutingState(context.Background(), t, pool, schemaDigest, "document-digest-for-"+operation, operation, "canary")
 }
 
 func TestLogRoutingStateDrift_EmptyTableIsNotAnIncident(t *testing.T) {

@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -46,32 +48,15 @@ func startRoutingStatePostgres(t *testing.T) *pgxpool.Pool {
 	}
 	t.Cleanup(pool.Close)
 
-	// Minimal shape of go_api_routing_state (alembic 0114) -- only the
-	// columns PostgresSwitch actually reads/needs for its PK, not the
-	// full FK to go_api_candidate_build (out of scope for this test: it
-	// exercises the Switch, not the whole registry schema).
-	if _, err := pool.Exec(ctx, `
-		CREATE TABLE go_api_routing_state (
-			schema_digest TEXT NOT NULL,
-			document_digest TEXT NOT NULL,
-			selected_operation TEXT NOT NULL,
-			mode TEXT NOT NULL,
-			PRIMARY KEY (schema_digest, document_digest, selected_operation)
-		)
-	`); err != nil {
-		t.Fatal(err)
-	}
+	// The migrated schema (CHAOS-6769 ledger): the hand-written go_api_routing_state dropped the
+	// real table's NOT NULL columns and its foreign key to go_api_candidate_build.
+	pgschema.Apply(ctx, t, pool)
 	return pool
 }
 
 func insertRoutingState(t *testing.T, pool *pgxpool.Pool, documentDigest, operation, mode string) {
 	t.Helper()
-	if _, err := pool.Exec(context.Background(), `
-		INSERT INTO go_api_routing_state (schema_digest, document_digest, selected_operation, mode)
-		VALUES ($1, $2, $3, $4)
-	`, testSchemaDigest, documentDigest, operation, mode); err != nil {
-		t.Fatal(err)
-	}
+	pgseed.RoutingState(context.Background(), t, pool, testSchemaDigest, documentDigest, operation, mode)
 }
 
 // TestPostgresSwitch_ModeDrivesReachability is the registry-backed

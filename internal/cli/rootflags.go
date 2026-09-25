@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"unicode"
 
 	"github.com/full-chaos/dev-health-ops/internal/pyargparse"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
@@ -129,15 +130,42 @@ func refusedRootFlag(root rootParse) (RootFlag, bool) {
 	return "", false
 }
 
-// pythonRepr is repr(str) for the plain values an argument error quotes.
+// pythonRepr is repr(str): the quote Python picks, backslash, \t \n \r and
+// the other control or unprintable code points as \xNN, \uNNNN or \UNNNNNNNN,
+// printable text kept, so an argument error reads as argparse's does and never
+// carries a raw control sequence to the operator's terminal.
 func pythonRepr(text string) string {
-	if !strings.Contains(text, "'") {
-		return "'" + strings.ReplaceAll(text, `\`, `\\`) + "'"
+	quote := '\''
+	if strings.ContainsRune(text, '\'') && !strings.ContainsRune(text, '"') {
+		quote = '"'
 	}
-	if !strings.Contains(text, `"`) {
-		return `"` + strings.ReplaceAll(text, `\`, `\\`) + `"`
+	var out strings.Builder
+	out.WriteRune(quote)
+	for _, r := range text {
+		switch {
+		case r == quote || r == '\\':
+			out.WriteByte('\\')
+			out.WriteRune(r)
+		case r == '\t':
+			out.WriteString(`\t`)
+		case r == '\n':
+			out.WriteString(`\n`)
+		case r == '\r':
+			out.WriteString(`\r`)
+		case r < ' ' || r == 0x7f:
+			fmt.Fprintf(&out, `\x%02x`, r)
+		case r < 0x7f || unicode.IsPrint(r):
+			out.WriteRune(r)
+		case r <= 0xff:
+			fmt.Fprintf(&out, `\x%02x`, r)
+		case r <= 0xffff:
+			fmt.Fprintf(&out, `\u%04x`, r)
+		default:
+			fmt.Fprintf(&out, `\U%08x`, r)
+		}
 	}
-	return "'" + strings.NewReplacer(`\`, `\\`, `'`, `\'`).Replace(text) + "'"
+	out.WriteRune(quote)
+	return out.String()
 }
 
 // handOver returns args with the root flags the command lists in front, each as
@@ -184,7 +212,11 @@ func pythonLevel(name string) slog.Level {
 	}
 }
 
-// levelName is the spelling the services' --log-level takes for a level.
+// levelName is the spelling the services' --log-level takes for a level. A
+// service has no level above error: CRITICAL is handed over as "critical" and
+// refused by the service, never lowered to error (Python's CRITICAL silences
+// ERROR records, so a service that logged them would not be the run the operator
+// asked for).
 func levelName(level slog.Level) string {
 	switch {
 	case level <= slog.LevelDebug:
@@ -193,7 +225,9 @@ func levelName(level slog.Level) string {
 		return "info"
 	case level <= slog.LevelWarn:
 		return "warn"
-	default:
+	case level <= slog.LevelError:
 		return "error"
+	default:
+		return "critical"
 	}
 }

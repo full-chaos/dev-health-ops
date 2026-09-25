@@ -4,7 +4,8 @@ Reads a JSON list of argv lists from stdin. For each it runs the REAL Python
 producer, build_parser().parse_args(argv) followed by main()'s _resolve_org,
 with the environment the root defaults read cleared, and prints one JSON line:
 for each argv, {"stage": "ok", "ns": {...}} with every root dest tagged
-{"t": type, "v": string}, or {"stage": "exit", "code": N}.
+{"t": type, "v": string}, or {"stage": "exit", "code": N, "msg": the text after
+"error: " on stderr}.
 """
 
 import argparse
@@ -62,7 +63,15 @@ def run_case(argv):
         with contextlib.redirect_stderr(sink), contextlib.redirect_stdout(sink):
             ns = parser.parse_args(argv)
     except SystemExit as exit_:
-        return {"stage": "exit", "code": tag(exit_.code if exit_.code is not None else 0)}
+        message = ""
+        for line in sink.getvalue().splitlines():
+            if ": error: " in line:
+                message = line.split(": error: ", 1)[1]
+        return {
+            "stage": "exit",
+            "code": tag(exit_.code if exit_.code is not None else 0),
+            "msg": tag(message),
+        }
     devhops_cli._resolve_org(ns)
     return {
         "stage": "ok",

@@ -46,6 +46,11 @@ func rootCorpus() [][]string {
 		with("--llm-concurrency", "3"), with("--llm-concurrency", " 7 "), with("--llm-concurrency", "1_0"),
 		with("--llm-concurrency", "\u0663"), with("--llm-concurrency", "-5"), with("--llm-concurrency", "x"),
 		with("--llm-concurrency", "1.5"), with("--llm-concurrency", ""),
+		// the quoted value of an argument error is repr(value), control characters escaped
+		with("--llm-concurrency", "\x1b[2J"), with("--llm-concurrency", "a\tb\nc\rd"), with("--llm-concurrency", "\x00\x7f"),
+		with("--llm-concurrency", "it's"), with("--llm-concurrency", `say "hi"`), with("--llm-concurrency", `both ' and "`),
+		with("--llm-concurrency", `back\slash`), with("--llm-concurrency", "é"), with("--llm-concurrency", "\u00a0x"),
+		with("--llm-concurrency", "\u200bx"), with("--llm-concurrency", "\U0001F600"), with("--llm-concurrency", "\U000e0001"),
 		with("--org", "R", "--db", "D", "--analytics-db", "A", "--log-level", "INFO", "-l", "L", "-m", "M"),
 		// missing values and option-like values
 		with("--org"), {"--org"}, {"--org", "R"}, {"--org", "--db", "x", "fixtures", "generate"},
@@ -70,7 +75,12 @@ func rootResult(argv []string) map[string]any {
 	parsed, err := parseRootFlags(argv)
 	switch {
 	case err != nil:
-		return map[string]any{"stage": "exit", "code": tagged("int", "2")}
+		result := map[string]any{"stage": "exit", "code": tagged("int", "2")}
+		if strings.HasPrefix(err.Msg, "argument --llm-concurrency: invalid int value: ") {
+			// The one message dho words itself: the oracle compares its bytes.
+			result["msg"] = tagged("str", err.Msg)
+		}
+		return result
 	case parsed.help:
 		return map[string]any{"stage": "exit", "code": tagged("int", "0")}
 	case len(parsed.rest) == 0 || parsed.rest[0] != "fixtures":
@@ -147,6 +157,10 @@ func TestRootFlagsMatchLivePython(t *testing.T) {
 	mismatches := 0
 	for index, argv := range corpus {
 		got := rootResult(argv)
+		if _, compared := got["msg"]; !compared {
+			// dho's other refusals are worded by its own dispatcher; only the exit code is compared.
+			delete(want[index], "msg")
+		}
 		gotJSON, _ := json.Marshal(got)
 		wantJSON, _ := json.Marshal(want[index])
 		stages[fmt.Sprint(got["stage"])]++

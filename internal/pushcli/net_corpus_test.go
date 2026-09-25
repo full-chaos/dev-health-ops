@@ -190,6 +190,24 @@ func netCorpus(t *testing.T) []netCase {
 	recordsOnly = add("batch schema max records equals one record", batch(), valid, accepted("ing-l"))
 	recordsOnly.Schema = limitsOf(`{"limits":{"maxRecordsPerBatch":1}}`)
 
+	// A URL with userinfo: httpx replaces the Authorization header with Basic.
+	userinfo := add("batch url with userinfo", batch(), valid, accepted("ing-u"))
+	userinfo.Env["FULLCHAOS_API_URL"] = "{userurl}"
+	userinfo = add("batch url with userinfo json flag", []string{"batch", "{file}", "--api-url", "{userurl}", "--json"}, valid, accepted("ing-u"))
+	userinfo.Schema = limitsOf(`{"limits":{"maxRecordsPerBatch":5}}`)
+	add("batch url with login only", []string{"batch", "{file}", "--api-url", "{loginurl}"}, valid, accepted("ing-u"))
+	add("batch url with password only", []string{"batch", "{file}", "--api-url", "{passurl}"}, valid, accepted("ing-u"))
+	add("batch url with empty userinfo", []string{"batch", "{file}", "--api-url", "{emptyurl}"}, valid, accepted("ing-u"))
+	add("status url with userinfo", []string{"status", "ing-1", "--api-url", "{userurl}"}, "", statusStep("ing-1", "queued", 0, 0))
+	add("status url with userinfo retried", []string{"status", "ing-1", "--api-url", "{userurl}"}, "", jsonStep(503, `{"error":{"code":"x","message":"y"}}`, "Retry-After", "0"), statusStep("ing-1", "queued", 0, 0))
+
+	// A response that goes silent: httpx's 30 s read timeout is per read, and a
+	// timeout is a retryable network error whose text is empty.
+	stall := add("status body stalls then answers", []string{"status", "ing-1"}, "", statusStep("ing-1", "queued", 0, 0))
+	stall.Steps = []netStep{{Status: 200, Body: `{"ingestionId":"ing-1","status":"queued"}`, BodyDelayMs: 30500}, statusStep("ing-1", "queued", 0, 0)}
+	stall = add("batch body stalls then accepted", batch("--json"), valid, accepted("ing-s"))
+	stall.Steps = []netStep{{Status: 202, Body: `{"ingestionId":"ing-s","status":"queued"}`, BodyDelayMs: 30500}, accepted("ing-s")}
+
 	// batch: configuration and arguments.
 	missing := func(name string, env map[string]string, args ...string) {
 		c := add(name, args, valid, accepted("x"))

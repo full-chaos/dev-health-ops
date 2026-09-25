@@ -2747,6 +2747,209 @@
    ]
   },
   {
+   "name": "batch url with userinfo",
+   "args": [
+    "batch",
+    "{file}"
+   ],
+   "env": {
+    "FULLCHAOS_API_URL": "{userurl}",
+    "FULLCHAOS_INGEST_TOKEN": "fcpush_test_token_abc-123",
+    "FULLCHAOS_ORG_ID": "org-1"
+   },
+   "file": "{\"idempotencyKey\":\"k-1\",\"records\":[{\"externalId\":\"acme/api@9fceb02d0ae598e95dc970b74767f19372d61af8\",\"kind\":\"commit.v1\",\"payload\":{\"authorEmail\":\"alice@acme.example\",\"authorName\":\"Alice Doe\",\"authorWhen\":\"2026-06-21T09:55:00Z\",\"committerEmail\":\"alice@acme.example\",\"committerName\":\"Alice Doe\",\"committerWhen\":\"2026-06-21T09:55:00Z\",\"hash\":\"9fceb02d0ae598e95dc970b74767f19372d61af8\",\"message\":\"fix: resolve login redirect loop\",\"parents\":1,\"repositoryExternalId\":\"acme/api\"}}],\"schemaVersion\":\"external-ingest.v1\",\"source\":{\"instance\":\"acme/api\",\"system\":\"github\",\"type\":\"customer_push\"},\"window\":{\"endedAt\":\"2026-06-26T00:00:00Z\",\"startedAt\":\"2026-06-20T00:00:00Z\"}}",
+   "steps": [
+    {
+     "status": 202,
+     "body": "{\"ingestionId\":\"ing-u\",\"status\":\"queued\",\"itemsReceived\":1}"
+    }
+   ]
+  },
+  {
+   "name": "batch url with userinfo json flag",
+   "args": [
+    "batch",
+    "{file}",
+    "--api-url",
+    "{userurl}",
+    "--json"
+   ],
+   "env": {
+    "FULLCHAOS_API_URL": "{url}",
+    "FULLCHAOS_INGEST_TOKEN": "fcpush_test_token_abc-123",
+    "FULLCHAOS_ORG_ID": "org-1"
+   },
+   "file": "{\"idempotencyKey\":\"k-1\",\"records\":[{\"externalId\":\"acme/api@9fceb02d0ae598e95dc970b74767f19372d61af8\",\"kind\":\"commit.v1\",\"payload\":{\"authorEmail\":\"alice@acme.example\",\"authorName\":\"Alice Doe\",\"authorWhen\":\"2026-06-21T09:55:00Z\",\"committerEmail\":\"alice@acme.example\",\"committerName\":\"Alice Doe\",\"committerWhen\":\"2026-06-21T09:55:00Z\",\"hash\":\"9fceb02d0ae598e95dc970b74767f19372d61af8\",\"message\":\"fix: resolve login redirect loop\",\"parents\":1,\"repositoryExternalId\":\"acme/api\"}}],\"schemaVersion\":\"external-ingest.v1\",\"source\":{\"instance\":\"acme/api\",\"system\":\"github\",\"type\":\"customer_push\"},\"window\":{\"endedAt\":\"2026-06-26T00:00:00Z\",\"startedAt\":\"2026-06-20T00:00:00Z\"}}",
+   "schema": {
+    "status": 200,
+    "body": "{\"limits\":{\"maxRecordsPerBatch\":5}}"
+   },
+   "steps": [
+    {
+     "status": 202,
+     "body": "{\"ingestionId\":\"ing-u\",\"status\":\"queued\",\"itemsReceived\":1}"
+    }
+   ]
+  },
+  {
+   "name": "batch url with login only",
+   "args": [
+    "batch",
+    "{file}",
+    "--api-url",
+    "{loginurl}"
+   ],
+   "env": {
+    "FULLCHAOS_API_URL": "{url}",
+    "FULLCHAOS_INGEST_TOKEN": "fcpush_test_token_abc-123",
+    "FULLCHAOS_ORG_ID": "org-1"
+   },
+   "file": "{\"idempotencyKey\":\"k-1\",\"records\":[{\"externalId\":\"acme/api@9fceb02d0ae598e95dc970b74767f19372d61af8\",\"kind\":\"commit.v1\",\"payload\":{\"authorEmail\":\"alice@acme.example\",\"authorName\":\"Alice Doe\",\"authorWhen\":\"2026-06-21T09:55:00Z\",\"committerEmail\":\"alice@acme.example\",\"committerName\":\"Alice Doe\",\"committerWhen\":\"2026-06-21T09:55:00Z\",\"hash\":\"9fceb02d0ae598e95dc970b74767f19372d61af8\",\"message\":\"fix: resolve login redirect loop\",\"parents\":1,\"repositoryExternalId\":\"acme/api\"}}],\"schemaVersion\":\"external-ingest.v1\",\"source\":{\"instance\":\"acme/api\",\"system\":\"github\",\"type\":\"customer_push\"},\"window\":{\"endedAt\":\"2026-06-26T00:00:00Z\",\"startedAt\":\"2026-06-20T00:00:00Z\"}}",
+   "steps": [
+    {
+     "status": 202,
+     "body": "{\"ingestionId\":\"ing-u\",\"status\":\"queued\",\"itemsReceived\":1}"
+    }
+   ]
+  },
+  {
+   "name": "batch url with password only",
+   "args": [
+    "batch",
+    "{file}",
+    "--api-url",
+    "{passurl}"
+   ],
+   "env": {
+    "FULLCHAOS_API_URL": "{url}",
+    "FULLCHAOS_INGEST_TOKEN": "fcpush_test_token_abc-123",
+    "FULLCHAOS_ORG_ID": "org-1"
+   },
+   "file": "{\"idempotencyKey\":\"k-1\",\"records\":[{\"externalId\":\"acme/api@9fceb02d0ae598e95dc970b74767f19372d61af8\",\"kind\":\"commit.v1\",\"payload\":{\"authorEmail\":\"alice@acme.example\",\"authorName\":\"Alice Doe\",\"authorWhen\":\"2026-06-21T09:55:00Z\",\"committerEmail\":\"alice@acme.example\",\"committerName\":\"Alice Doe\",\"committerWhen\":\"2026-06-21T09:55:00Z\",\"hash\":\"9fceb02d0ae598e95dc970b74767f19372d61af8\",\"message\":\"fix: resolve login redirect loop\",\"parents\":1,\"repositoryExternalId\":\"acme/api\"}}],\"schemaVersion\":\"external-ingest.v1\",\"source\":{\"instance\":\"acme/api\",\"system\":\"github\",\"type\":\"customer_push\"},\"window\":{\"endedAt\":\"2026-06-26T00:00:00Z\",\"startedAt\":\"2026-06-20T00:00:00Z\"}}",
+   "steps": [
+    {
+     "status": 202,
+     "body": "{\"ingestionId\":\"ing-u\",\"status\":\"queued\",\"itemsReceived\":1}"
+    }
+   ]
+  },
+  {
+   "name": "batch url with empty userinfo",
+   "args": [
+    "batch",
+    "{file}",
+    "--api-url",
+    "{emptyurl}"
+   ],
+   "env": {
+    "FULLCHAOS_API_URL": "{url}",
+    "FULLCHAOS_INGEST_TOKEN": "fcpush_test_token_abc-123",
+    "FULLCHAOS_ORG_ID": "org-1"
+   },
+   "file": "{\"idempotencyKey\":\"k-1\",\"records\":[{\"externalId\":\"acme/api@9fceb02d0ae598e95dc970b74767f19372d61af8\",\"kind\":\"commit.v1\",\"payload\":{\"authorEmail\":\"alice@acme.example\",\"authorName\":\"Alice Doe\",\"authorWhen\":\"2026-06-21T09:55:00Z\",\"committerEmail\":\"alice@acme.example\",\"committerName\":\"Alice Doe\",\"committerWhen\":\"2026-06-21T09:55:00Z\",\"hash\":\"9fceb02d0ae598e95dc970b74767f19372d61af8\",\"message\":\"fix: resolve login redirect loop\",\"parents\":1,\"repositoryExternalId\":\"acme/api\"}}],\"schemaVersion\":\"external-ingest.v1\",\"source\":{\"instance\":\"acme/api\",\"system\":\"github\",\"type\":\"customer_push\"},\"window\":{\"endedAt\":\"2026-06-26T00:00:00Z\",\"startedAt\":\"2026-06-20T00:00:00Z\"}}",
+   "steps": [
+    {
+     "status": 202,
+     "body": "{\"ingestionId\":\"ing-u\",\"status\":\"queued\",\"itemsReceived\":1}"
+    }
+   ]
+  },
+  {
+   "name": "status url with userinfo",
+   "args": [
+    "status",
+    "ing-1",
+    "--api-url",
+    "{userurl}"
+   ],
+   "env": {
+    "FULLCHAOS_API_URL": "{url}",
+    "FULLCHAOS_INGEST_TOKEN": "fcpush_test_token_abc-123",
+    "FULLCHAOS_ORG_ID": "org-1"
+   },
+   "steps": [
+    {
+     "status": 200,
+     "body": "{\"ingestionId\":\"ing-1\",\"status\":\"queued\",\"itemsReceived\":0,\"itemsAccepted\":0,\"itemsRejected\":0}"
+    }
+   ]
+  },
+  {
+   "name": "status url with userinfo retried",
+   "args": [
+    "status",
+    "ing-1",
+    "--api-url",
+    "{userurl}"
+   ],
+   "env": {
+    "FULLCHAOS_API_URL": "{url}",
+    "FULLCHAOS_INGEST_TOKEN": "fcpush_test_token_abc-123",
+    "FULLCHAOS_ORG_ID": "org-1"
+   },
+   "steps": [
+    {
+     "status": 503,
+     "headers": {
+      "Retry-After": "0"
+     },
+     "body": "{\"error\":{\"code\":\"x\",\"message\":\"y\"}}"
+    },
+    {
+     "status": 200,
+     "body": "{\"ingestionId\":\"ing-1\",\"status\":\"queued\",\"itemsReceived\":0,\"itemsAccepted\":0,\"itemsRejected\":0}"
+    }
+   ]
+  },
+  {
+   "name": "status body stalls then answers",
+   "args": [
+    "status",
+    "ing-1"
+   ],
+   "env": {
+    "FULLCHAOS_API_URL": "{url}",
+    "FULLCHAOS_INGEST_TOKEN": "fcpush_test_token_abc-123",
+    "FULLCHAOS_ORG_ID": "org-1"
+   },
+   "steps": [
+    {
+     "status": 200,
+     "body": "{\"ingestionId\":\"ing-1\",\"status\":\"queued\"}",
+     "bodyDelayMs": 30500
+    },
+    {
+     "status": 200,
+     "body": "{\"ingestionId\":\"ing-1\",\"status\":\"queued\",\"itemsReceived\":0,\"itemsAccepted\":0,\"itemsRejected\":0}"
+    }
+   ]
+  },
+  {
+   "name": "batch body stalls then accepted",
+   "args": [
+    "batch",
+    "{file}",
+    "--json"
+   ],
+   "env": {
+    "FULLCHAOS_API_URL": "{url}",
+    "FULLCHAOS_INGEST_TOKEN": "fcpush_test_token_abc-123",
+    "FULLCHAOS_ORG_ID": "org-1"
+   },
+   "file": "{\"idempotencyKey\":\"k-1\",\"records\":[{\"externalId\":\"acme/api@9fceb02d0ae598e95dc970b74767f19372d61af8\",\"kind\":\"commit.v1\",\"payload\":{\"authorEmail\":\"alice@acme.example\",\"authorName\":\"Alice Doe\",\"authorWhen\":\"2026-06-21T09:55:00Z\",\"committerEmail\":\"alice@acme.example\",\"committerName\":\"Alice Doe\",\"committerWhen\":\"2026-06-21T09:55:00Z\",\"hash\":\"9fceb02d0ae598e95dc970b74767f19372d61af8\",\"message\":\"fix: resolve login redirect loop\",\"parents\":1,\"repositoryExternalId\":\"acme/api\"}}],\"schemaVersion\":\"external-ingest.v1\",\"source\":{\"instance\":\"acme/api\",\"system\":\"github\",\"type\":\"customer_push\"},\"window\":{\"endedAt\":\"2026-06-26T00:00:00Z\",\"startedAt\":\"2026-06-20T00:00:00Z\"}}",
+   "steps": [
+    {
+     "status": 202,
+     "body": "{\"ingestionId\":\"ing-s\",\"status\":\"queued\"}",
+     "bodyDelayMs": 30500
+    },
+    {
+     "status": 202,
+     "body": "{\"ingestionId\":\"ing-s\",\"status\":\"queued\",\"itemsReceived\":1}"
+    }
+   ]
+  },
+  {
    "name": "batch no config",
    "args": [
     "batch",
@@ -5578,7 +5781,7 @@
    "exit": 0,
    "stdout": "ingestion_id: ing-1\nstatus: queued\nitems_received: 1\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
    ]
   },
@@ -5586,7 +5789,7 @@
    "exit": 0,
    "stdout": "{\"ingestionId\": \"ing-1\", \"itemsReceived\": 1, \"status\": \"queued\"}\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
    ]
   },
@@ -5594,7 +5797,7 @@
    "exit": 0,
    "stdout": "ingestion_id: ing-2\nstatus: queued\nitems_received: 1\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_flag | org=org-flag | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
    ]
   },
@@ -5602,7 +5805,7 @@
    "exit": 0,
    "stdout": "ingestion_id: ing-3\nstatus: queued\nitems_received: 1\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
    ]
   },
@@ -5617,7 +5820,7 @@
    "exit": 0,
    "stdout": "ingestion_id: ing-5\nstatus: queued\nitems_received: 1\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
    ]
   },
@@ -5632,7 +5835,7 @@
    "exit": 0,
    "stdout": "ingestion_id: ing-7\nstatus: queued\nitems_received: 1\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=5ef12ec136d4"
    ]
   },
@@ -5640,7 +5843,7 @@
    "exit": 0,
    "stdout": "ingestion_id: ing-8\nstatus: completed\nitems_received: 1\nitems_accepted: 1\nitems_rejected: 0\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
    ]
   },
@@ -5648,7 +5851,7 @@
    "exit": 0,
    "stdout": "ingestion_id: ing-9\nstatus: queued\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
    ]
   },
@@ -5656,7 +5859,7 @@
    "exit": 0,
    "stdout": "ingestion_id: None\nstatus: queued\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
    ]
   },
@@ -5664,7 +5867,7 @@
    "exit": 0,
    "stdout": "ingestion_id: fallback\nstatus: None\nitems_received: None\nitems_accepted: 1.5\nitems_rejected: [1, 'a']\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
    ]
   },
@@ -5673,7 +5876,7 @@
    "stdout": "",
    "stderr": "AttributeError: 'list' object has no attribute 'get'\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
    ]
   },
@@ -5681,7 +5884,7 @@
    "exit": 0,
    "stdout": "[1, {\"a\": 2, \"b\": 1}]\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
    ]
   },
@@ -5689,7 +5892,7 @@
    "exit": 0,
    "stdout": "\"ok\"\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
    ]
   },
@@ -5698,7 +5901,7 @@
    "stdout": "",
    "stderr": "AttributeError: 'NoneType' object has no attribute 'get'\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
    ]
   },
@@ -5707,7 +5910,7 @@
    "stdout": "",
    "stderr": "JSONDecodeError: Expecting value: line 1 column 1 (char 0)\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
    ]
   },
@@ -5716,7 +5919,7 @@
    "stdout": "",
    "stderr": "JSONDecodeError: Expecting value: line 1 column 1 (char 0)\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
    ]
   },
@@ -5725,7 +5928,7 @@
    "stdout": "",
    "stderr": "JSONDecodeError: Expecting value: line 1 column 1 (char 0)\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
    ]
   },
@@ -5733,7 +5936,7 @@
    "exit": 0,
    "stdout": "{\"big\": 123456789012345678901234567890, \"f\": Infinity, \"ingestionId\": \"\\u00e9-1\", \"s\": \"\\u00e9\\ud83d\\ude00\", \"status\": \"q\", \"x\": NaN}\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
    ]
   },
@@ -5742,7 +5945,7 @@
    "stdout": "",
    "stderr": "error: HTTP 400 some_code: the server said no\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
    ]
   },
@@ -5750,7 +5953,7 @@
    "exit": 3,
    "stdout": "{\"error\": {\"code\": \"some_code\", \"errors\": [], \"message\": \"the server said no\"}}\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
    ]
   },
@@ -5759,7 +5962,7 @@
    "stdout": "",
    "stderr": "error: HTTP 401 some_code: the server said no\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
    ]
   },
@@ -5767,7 +5970,7 @@
    "exit": 3,
    "stdout": "{\"error\": {\"code\": \"some_code\", \"errors\": [], \"message\": \"the server said no\"}}\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
    ]
   },
@@ -5776,7 +5979,7 @@
    "stdout": "",
    "stderr": "error: HTTP 403 some_code: the server said no\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
    ]
   },
@@ -5784,7 +5987,7 @@
    "exit": 3,
    "stdout": "{\"error\": {\"code\": \"some_code\", \"errors\": [], \"message\": \"the server said no\"}}\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
    ]
   },
@@ -5793,7 +5996,7 @@
    "stdout": "",
    "stderr": "error: HTTP 404 some_code: the server said no\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
    ]
   },
@@ -5801,7 +6004,7 @@
    "exit": 3,
    "stdout": "{\"error\": {\"code\": \"some_code\", \"errors\": [], \"message\": \"the server said no\"}}\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
    ]
   },
@@ -5810,7 +6013,7 @@
    "stdout": "",
    "stderr": "error: HTTP 409 some_code: the server said no\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
    ]
   },
@@ -5818,7 +6021,7 @@
    "exit": 3,
    "stdout": "{\"error\": {\"code\": \"some_code\", \"errors\": [], \"message\": \"the server said no\"}}\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
    ]
   },
@@ -5827,7 +6030,7 @@
    "stdout": "",
    "stderr": "error: HTTP 413 some_code: the server said no\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
    ]
   },
@@ -5835,7 +6038,7 @@
    "exit": 3,
    "stdout": "{\"error\": {\"code\": \"some_code\", \"errors\": [], \"message\": \"the server said no\"}}\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
    ]
   },
@@ -5844,7 +6047,7 @@
    "stdout": "",
    "stderr": "error: HTTP 422 some_code: the server said no\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
    ]
   },
@@ -5852,7 +6055,7 @@
    "exit": 3,
    "stdout": "{\"error\": {\"code\": \"some_code\", \"errors\": [], \"message\": \"the server said no\"}}\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
    ]
   },
@@ -5861,7 +6064,7 @@
    "stdout": "",
    "stderr": "error: HTTP 500 some_code: the server said no\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
    ]
   },
@@ -5869,7 +6072,7 @@
    "exit": 3,
    "stdout": "{\"error\": {\"code\": \"some_code\", \"errors\": [], \"message\": \"the server said no\"}}\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
    ]
   },
@@ -5878,7 +6081,7 @@
    "stdout": "",
    "stderr": "error: HTTP 502 some_code: the server said no\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
    ]
   },
@@ -5886,7 +6089,7 @@
    "exit": 3,
    "stdout": "{\"error\": {\"code\": \"some_code\", \"errors\": [], \"message\": \"the server said no\"}}\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
    ]
   },
@@ -5895,7 +6098,7 @@
    "stdout": "4 error(s):\n  - records[0] (records[0].payload.sha) kind=commit.v1 [invalid_record] bad field\n  - envelope [invalid_envelope] envelope\n  - records[True] (7) kind=x [5] None\n  - envelope [None] m\n",
    "stderr": "error: HTTP 400 invalid_batch: batch rejected\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
    ]
   },
@@ -5903,7 +6106,7 @@
    "exit": 3,
    "stdout": "{\"error\": {\"code\": \"invalid_batch\", \"errors\": [{\"code\": \"invalid_record\", \"index\": 0, \"kind\": \"commit.v1\", \"message\": \"bad field\", \"path\": \"records[0].payload.sha\"}, {\"code\": \"invalid_envelope\", \"index\": -1, \"message\": \"envelope\"}, {\"code\": 5, \"index\": true, \"kind\": \"x\", \"message\": null, \"path\": 7}, {\"index\": 1.5, \"message\": \"m\"}], \"message\": \"batch rejected\"}}\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
    ]
   },
@@ -5912,7 +6115,7 @@
    "stdout": "1 error(s):\n  - envelope (fcpush_[REDACTED]) [None] Bearer [REDACTED]\n",
    "stderr": "error: HTTP 400 echo fcpush_[REDACTED]: Authorization: Bearer [REDACTED] and Bearer [REDACTED]\tx and fcpush_[REDACTED]\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
    ]
   },
@@ -5920,7 +6123,7 @@
    "exit": 3,
    "stdout": "{\"error\": {\"code\": \"echo fcpush_[REDACTED]\", \"errors\": [{\"Authorization: Bearer [REDACTED]\": \"v2\", \"message\": \"Bearer [REDACTED]\", \"nested\": [{\"fcpush_[REDACTED]\": \"Bearer [REDACTED]\"}], \"path\": \"fcpush_[REDACTED]\"}], \"message\": \"Authorization: Bearer [REDACTED] and Bearer [REDACTED]\\tx and fcpush_[REDACTED]\"}}\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
    ]
   },
@@ -5929,7 +6132,7 @@
    "stdout": "",
    "stderr": "error: HTTP 500 unknown_error: \u003chtml\u003e\u003cbody\u003eBad gateway xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
    ]
   },
@@ -5937,7 +6140,7 @@
    "exit": 3,
    "stdout": "{\"error\": {\"code\": \"unknown_error\", \"errors\": [], \"message\": \"\u003chtml\u003eoops\u003c/html\u003e\"}}\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
    ]
   },
@@ -5946,7 +6149,7 @@
    "stdout": "",
    "stderr": "error: HTTP 500 unknown_error: Internal Server Error\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
    ]
   },
@@ -5955,7 +6158,7 @@
    "stdout": "",
    "stderr": "error: HTTP 400 c: {\"error\":{\"code\":\"c\",\"message\":\"\",\"errors\":\"nope\"}}\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
    ]
   },
@@ -5963,7 +6166,7 @@
    "exit": 3,
    "stdout": "{\"error\": {\"code\": \"unknown_error\", \"errors\": [{\"a\": \"Bearer [REDACTED]\"}], \"message\": \"m\"}}\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
    ]
   },
@@ -5972,7 +6175,7 @@
    "stdout": "",
    "stderr": "error: HTTP 400 unknown_error: {\"error\":\"plain\"}\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
    ]
   },
@@ -5981,7 +6184,7 @@
    "stdout": "",
    "stderr": "error: HTTP 400 unknown_error: [1]\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
    ]
   },
@@ -5990,7 +6193,7 @@
    "stdout": "",
    "stderr": "error: HTTP 400 é: ünï 😀 text\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
    ]
   },
@@ -5998,7 +6201,7 @@
    "exit": 0,
    "stdout": "ingestion_id: ing-r1\nstatus: queued\nitems_received: 1\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
    ]
@@ -6007,7 +6210,7 @@
    "exit": 0,
    "stdout": "{\"ingestionId\": \"ing-r2\", \"itemsReceived\": 1, \"status\": \"queued\"}\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
    ]
@@ -6016,7 +6219,7 @@
    "exit": 0,
    "stdout": "ingestion_id: ing-r3\nstatus: queued\nitems_received: 1\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
    ]
@@ -6026,7 +6229,7 @@
    "stdout": "",
    "stderr": "error: transport_error: 503 stream_unavailable: down\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb",
@@ -6038,7 +6241,7 @@
    "exit": 3,
    "stdout": "{\"error\": {\"code\": \"transport_error\", \"message\": \"503 auth_not_configured: down\"}}\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb",
@@ -6050,7 +6253,7 @@
    "exit": 0,
    "stdout": "ingestion_id: ing-r4\nstatus: queued\nitems_received: 1\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
    ]
@@ -6060,7 +6263,7 @@
    "stdout": "",
    "stderr": "error: transport_error: 503 unknown_error: \u003chtml\u003e\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb",
@@ -6073,7 +6276,7 @@
    "stdout": "",
    "stderr": "error: transport_error: 503 ingest_temporarily_unavailable: down\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb",
@@ -6086,7 +6289,7 @@
    "stdout": "",
    "stderr": "error: HTTP 400 bad: no\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
    ]
@@ -6110,140 +6313,140 @@
    "stdout": "",
    "stderr": "error: cannot read payload: [Errno 2] No such file or directory: '\u003cdir\u003e/no-such-file.json'\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas"
+    "GET /api/v1/external-ingest/schemas | auth="
    ]
   },
   {
    "exit": 1,
    "stdout": "1 error(s):\n  - envelope [invalid_envelope] Malformed JSON: Expecting value: line 1 column 6 (char 5)\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas"
+    "GET /api/v1/external-ingest/schemas | auth="
    ]
   },
   {
    "exit": 1,
    "stdout": "{\"errors\": [{\"code\": \"invalid_envelope\", \"index\": -1, \"kind\": null, \"message\": \"Malformed JSON: Expecting value: line 1 column 6 (char 5)\", \"path\": null}], \"itemsAccepted\": 0, \"itemsRejected\": 1, \"valid\": false}\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas"
+    "GET /api/v1/external-ingest/schemas | auth="
    ]
   },
   {
    "exit": 1,
    "stdout": "1 error(s):\n  - envelope [invalid_envelope] Malformed JSON: Expecting value: line 1 column 1 (char 0)\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas"
+    "GET /api/v1/external-ingest/schemas | auth="
    ]
   },
   {
    "exit": 1,
    "stdout": "1 error(s):\n  - envelope [invalid_envelope] Input should be a valid dictionary or instance of BatchEnvelope\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas"
+    "GET /api/v1/external-ingest/schemas | auth="
    ]
   },
   {
    "exit": 1,
    "stdout": "1 error(s):\n  - envelope (schemaVersion) [unsupported_schema_version] Unsupported schemaVersion: 'external-ingest.v2'\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas"
+    "GET /api/v1/external-ingest/schemas | auth="
    ]
   },
   {
    "exit": 1,
    "stdout": "{\"errors\": [{\"code\": \"unsupported_schema_version\", \"index\": -1, \"kind\": null, \"message\": \"Unsupported schemaVersion: 'external-ingest.v2'\", \"path\": \"schemaVersion\"}], \"itemsAccepted\": 0, \"itemsRejected\": 1, \"valid\": false}\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas"
+    "GET /api/v1/external-ingest/schemas | auth="
    ]
   },
   {
    "exit": 1,
    "stdout": "1 error(s):\n  - envelope (idempotencyKey) [invalid_envelope] Field required\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas"
+    "GET /api/v1/external-ingest/schemas | auth="
    ]
   },
   {
    "exit": 1,
    "stdout": "{\"errors\": [{\"code\": \"invalid_envelope\", \"index\": -1, \"kind\": null, \"message\": \"Field required\", \"path\": \"idempotencyKey\"}], \"itemsAccepted\": 0, \"itemsRejected\": 1, \"valid\": false}\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas"
+    "GET /api/v1/external-ingest/schemas | auth="
    ]
   },
   {
    "exit": 1,
    "stdout": "1 error(s):\n  - envelope (idempotencyKey) [invalid_envelope] String should have at least 1 character\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas"
+    "GET /api/v1/external-ingest/schemas | auth="
    ]
   },
   {
    "exit": 1,
    "stdout": "{\"errors\": [{\"code\": \"invalid_envelope\", \"index\": -1, \"kind\": null, \"message\": \"String should have at least 1 character\", \"path\": \"idempotencyKey\"}], \"itemsAccepted\": 0, \"itemsRejected\": 1, \"valid\": false}\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas"
+    "GET /api/v1/external-ingest/schemas | auth="
    ]
   },
   {
    "exit": 1,
    "stdout": "1 error(s):\n  - envelope (idempotencyKey) [invalid_envelope] String should have at most 255 characters\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas"
+    "GET /api/v1/external-ingest/schemas | auth="
    ]
   },
   {
    "exit": 1,
    "stdout": "{\"errors\": [{\"code\": \"invalid_envelope\", \"index\": -1, \"kind\": null, \"message\": \"String should have at most 255 characters\", \"path\": \"idempotencyKey\"}], \"itemsAccepted\": 0, \"itemsRejected\": 1, \"valid\": false}\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas"
+    "GET /api/v1/external-ingest/schemas | auth="
    ]
   },
   {
    "exit": 1,
    "stdout": "1 error(s):\n  - envelope (records) [invalid_envelope] List should have at least 1 item after validation, not 0\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas"
+    "GET /api/v1/external-ingest/schemas | auth="
    ]
   },
   {
    "exit": 1,
    "stdout": "{\"errors\": [{\"code\": \"invalid_envelope\", \"index\": -1, \"kind\": null, \"message\": \"List should have at least 1 item after validation, not 0\", \"path\": \"records\"}], \"itemsAccepted\": 0, \"itemsRejected\": 1, \"valid\": false}\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas"
+    "GET /api/v1/external-ingest/schemas | auth="
    ]
   },
   {
    "exit": 1,
    "stdout": "1 error(s):\n  - envelope (surprise) [invalid_envelope] Extra inputs are not permitted\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas"
+    "GET /api/v1/external-ingest/schemas | auth="
    ]
   },
   {
    "exit": 1,
    "stdout": "{\"errors\": [{\"code\": \"invalid_envelope\", \"index\": -1, \"kind\": null, \"message\": \"Extra inputs are not permitted\", \"path\": \"surprise\"}], \"itemsAccepted\": 0, \"itemsRejected\": 1, \"valid\": false}\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas"
+    "GET /api/v1/external-ingest/schemas | auth="
    ]
   },
   {
    "exit": 1,
    "stdout": "2 error(s):\n  - records[0] (records[0].kind) kind=nope.v1 [unknown_record_kind] Unknown record kind at index 0: 'nope.v1'\n  - records[1] (records[1].kind) kind=commit [unknown_record_kind] Unknown record kind at index 1: 'commit'\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas"
+    "GET /api/v1/external-ingest/schemas | auth="
    ]
   },
   {
    "exit": 1,
    "stdout": "{\"errors\": [{\"code\": \"unknown_record_kind\", \"index\": 0, \"kind\": \"nope.v1\", \"message\": \"Unknown record kind at index 0: 'nope.v1'\", \"path\": \"records[0].kind\"}, {\"code\": \"unknown_record_kind\", \"index\": 1, \"kind\": \"commit\", \"message\": \"Unknown record kind at index 1: 'commit'\", \"path\": \"records[1].kind\"}], \"itemsAccepted\": 0, \"itemsRejected\": 2, \"valid\": false}\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas"
+    "GET /api/v1/external-ingest/schemas | auth="
    ]
   },
   {
    "exit": 0,
    "stdout": "ingestion_id: ing-m\nstatus: queued\nitems_received: 1\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk | body=bf8aaa459d78"
    ]
   },
@@ -6251,7 +6454,7 @@
    "exit": 0,
    "stdout": "{\"ingestionId\": \"ing-m\", \"itemsReceived\": 1, \"status\": \"queued\"}\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk | body=bf8aaa459d78"
    ]
   },
@@ -6260,14 +6463,14 @@
    "stdout": "",
    "stderr": "error: transport_error: transport error: Illegal header value b'  spaced key  '\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas"
+    "GET /api/v1/external-ingest/schemas | auth="
    ]
   },
   {
    "exit": 3,
    "stdout": "{\"error\": {\"code\": \"transport_error\", \"message\": \"transport error: Illegal header value b'  spaced key  '\"}}\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas"
+    "GET /api/v1/external-ingest/schemas | auth="
    ]
   },
   {
@@ -6275,7 +6478,7 @@
    "stdout": "",
    "stderr": "UnicodeEncodeError: 'ascii' codec can't encode character '\\xe9' in position 2: ordinal not in range(128)\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas"
+    "GET /api/v1/external-ingest/schemas | auth="
    ]
   },
   {
@@ -6283,14 +6486,14 @@
    "stdout": "",
    "stderr": "UnicodeEncodeError: 'ascii' codec can't encode character '\\xe9' in position 2: ordinal not in range(128)\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas"
+    "GET /api/v1/external-ingest/schemas | auth="
    ]
   },
   {
    "exit": 0,
    "stdout": "ingestion_id: ing-m\nstatus: queued\nitems_received: 1\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=tab\tkey | body=7e3204ace9c7"
    ]
   },
@@ -6298,7 +6501,7 @@
    "exit": 0,
    "stdout": "{\"ingestionId\": \"ing-m\", \"itemsReceived\": 1, \"status\": \"queued\"}\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=tab\tkey | body=7e3204ace9c7"
    ]
   },
@@ -6307,21 +6510,21 @@
    "stdout": "",
    "stderr": "error: transport_error: transport error: Illegal header value b'line\\nbreak'\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas"
+    "GET /api/v1/external-ingest/schemas | auth="
    ]
   },
   {
    "exit": 3,
    "stdout": "{\"error\": {\"code\": \"transport_error\", \"message\": \"transport error: Illegal header value b'line\\\\nbreak'\"}}\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas"
+    "GET /api/v1/external-ingest/schemas | auth="
    ]
   },
   {
    "exit": 0,
    "stdout": "ingestion_id: ing-m\nstatus: queued\nitems_received: 1\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=a2d14f50aeb2"
    ]
   },
@@ -6329,7 +6532,7 @@
    "exit": 0,
    "stdout": "{\"ingestionId\": \"ing-m\", \"itemsReceived\": 1, \"status\": \"queued\"}\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=a2d14f50aeb2"
    ]
   },
@@ -6337,49 +6540,49 @@
    "exit": 1,
    "stdout": "1 error(s):\n  - envelope (records) [batch_too_large] Batch has 2 records; max is 1\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas"
+    "GET /api/v1/external-ingest/schemas | auth="
    ]
   },
   {
    "exit": 1,
    "stdout": "{\"errors\": [{\"code\": \"batch_too_large\", \"index\": -1, \"kind\": null, \"message\": \"Batch has 2 records; max is 1\", \"path\": \"records\"}], \"itemsAccepted\": 0, \"itemsRejected\": 1, \"valid\": false}\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas"
+    "GET /api/v1/external-ingest/schemas | auth="
    ]
   },
   {
    "exit": 1,
    "stdout": "1 error(s):\n  - envelope [payload_too_large] payload exceeds 200 bytes\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas"
+    "GET /api/v1/external-ingest/schemas | auth="
    ]
   },
   {
    "exit": 1,
    "stdout": "{\"errors\": [{\"code\": \"payload_too_large\", \"index\": -1, \"kind\": null, \"message\": \"payload exceeds 200 bytes\", \"path\": null}], \"itemsAccepted\": 0, \"itemsRejected\": 1, \"valid\": false}\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas"
+    "GET /api/v1/external-ingest/schemas | auth="
    ]
   },
   {
    "exit": 1,
    "stdout": "1 error(s):\n  - envelope [payload_too_large] payload exceeds True bytes\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas"
+    "GET /api/v1/external-ingest/schemas | auth="
    ]
   },
   {
    "exit": 1,
    "stdout": "{\"errors\": [{\"code\": \"payload_too_large\", \"index\": -1, \"kind\": null, \"message\": \"payload exceeds True bytes\", \"path\": null}], \"itemsAccepted\": 0, \"itemsRejected\": 1, \"valid\": false}\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas"
+    "GET /api/v1/external-ingest/schemas | auth="
    ]
   },
   {
    "exit": 0,
    "stdout": "ingestion_id: ing-l\nstatus: queued\nitems_received: 1\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=5ef12ec136d4"
    ]
   },
@@ -6387,7 +6590,7 @@
    "exit": 0,
    "stdout": "{\"ingestionId\": \"ing-l\", \"itemsReceived\": 1, \"status\": \"queued\"}\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=5ef12ec136d4"
    ]
   },
@@ -6395,7 +6598,7 @@
    "exit": 0,
    "stdout": "ingestion_id: ing-l\nstatus: queued\nitems_received: 1\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=5ef12ec136d4"
    ]
   },
@@ -6403,7 +6606,7 @@
    "exit": 0,
    "stdout": "{\"ingestionId\": \"ing-l\", \"itemsReceived\": 1, \"status\": \"queued\"}\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=5ef12ec136d4"
    ]
   },
@@ -6411,7 +6614,7 @@
    "exit": 0,
    "stdout": "ingestion_id: ing-l\nstatus: queued\nitems_received: 1\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=5ef12ec136d4"
    ]
   },
@@ -6419,7 +6622,7 @@
    "exit": 0,
    "stdout": "{\"ingestionId\": \"ing-l\", \"itemsReceived\": 1, \"status\": \"queued\"}\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=5ef12ec136d4"
    ]
   },
@@ -6427,7 +6630,7 @@
    "exit": 0,
    "stdout": "ingestion_id: ing-l\nstatus: queued\nitems_received: 1\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=5ef12ec136d4"
    ]
   },
@@ -6435,7 +6638,7 @@
    "exit": 0,
    "stdout": "{\"ingestionId\": \"ing-l\", \"itemsReceived\": 1, \"status\": \"queued\"}\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=5ef12ec136d4"
    ]
   },
@@ -6443,7 +6646,7 @@
    "exit": 0,
    "stdout": "ingestion_id: ing-l\nstatus: queued\nitems_received: 1\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=5ef12ec136d4"
    ]
   },
@@ -6451,7 +6654,7 @@
    "exit": 0,
    "stdout": "{\"ingestionId\": \"ing-l\", \"itemsReceived\": 1, \"status\": \"queued\"}\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=5ef12ec136d4"
    ]
   },
@@ -6459,7 +6662,7 @@
    "exit": 0,
    "stdout": "ingestion_id: ing-l\nstatus: queued\nitems_received: 1\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=5ef12ec136d4"
    ]
   },
@@ -6467,7 +6670,7 @@
    "exit": 0,
    "stdout": "{\"ingestionId\": \"ing-l\", \"itemsReceived\": 1, \"status\": \"queued\"}\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=5ef12ec136d4"
    ]
   },
@@ -6475,7 +6678,7 @@
    "exit": 0,
    "stdout": "ingestion_id: ing-l\nstatus: queued\nitems_received: 1\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=5ef12ec136d4"
    ]
   },
@@ -6483,7 +6686,7 @@
    "exit": 0,
    "stdout": "{\"ingestionId\": \"ing-l\", \"itemsReceived\": 1, \"status\": \"queued\"}\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=5ef12ec136d4"
    ]
   },
@@ -6491,7 +6694,7 @@
    "exit": 0,
    "stdout": "ingestion_id: ing-l\nstatus: queued\nitems_received: 1\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=5ef12ec136d4"
    ]
   },
@@ -6499,7 +6702,7 @@
    "exit": 0,
    "stdout": "{\"ingestionId\": \"ing-l\", \"itemsReceived\": 1, \"status\": \"queued\"}\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=5ef12ec136d4"
    ]
   },
@@ -6507,7 +6710,7 @@
    "exit": 0,
    "stdout": "ingestion_id: ing-l\nstatus: queued\nitems_received: 1\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=5ef12ec136d4"
    ]
   },
@@ -6515,7 +6718,7 @@
    "exit": 0,
    "stdout": "{\"ingestionId\": \"ing-l\", \"itemsReceived\": 1, \"status\": \"queued\"}\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=5ef12ec136d4"
    ]
   },
@@ -6523,7 +6726,7 @@
    "exit": 0,
    "stdout": "ingestion_id: ing-l\nstatus: queued\nitems_received: 1\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=5ef12ec136d4"
    ]
   },
@@ -6531,7 +6734,7 @@
    "exit": 0,
    "stdout": "{\"ingestionId\": \"ing-l\", \"itemsReceived\": 1, \"status\": \"queued\"}\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=5ef12ec136d4"
    ]
   },
@@ -6539,7 +6742,7 @@
    "exit": 0,
    "stdout": "ingestion_id: ing-l\nstatus: queued\nitems_received: 1\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=5ef12ec136d4"
    ]
   },
@@ -6547,7 +6750,7 @@
    "exit": 0,
    "stdout": "{\"ingestionId\": \"ing-l\", \"itemsReceived\": 1, \"status\": \"queued\"}\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=5ef12ec136d4"
    ]
   },
@@ -6555,35 +6758,35 @@
    "exit": 1,
    "stdout": "1 error(s):\n  - envelope (records) [batch_too_large] Batch has 2 records; max is 1\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas"
+    "GET /api/v1/external-ingest/schemas | auth="
    ]
   },
   {
    "exit": 1,
    "stdout": "{\"errors\": [{\"code\": \"batch_too_large\", \"index\": -1, \"kind\": null, \"message\": \"Batch has 2 records; max is 1\", \"path\": \"records\"}], \"itemsAccepted\": 0, \"itemsRejected\": 1, \"valid\": false}\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas"
+    "GET /api/v1/external-ingest/schemas | auth="
    ]
   },
   {
    "exit": 1,
    "stdout": "1 error(s):\n  - envelope [payload_too_large] payload exceeds 50 bytes\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas"
+    "GET /api/v1/external-ingest/schemas | auth="
    ]
   },
   {
    "exit": 1,
    "stdout": "{\"errors\": [{\"code\": \"payload_too_large\", \"index\": -1, \"kind\": null, \"message\": \"payload exceeds 50 bytes\", \"path\": null}], \"itemsAccepted\": 0, \"itemsRejected\": 1, \"valid\": false}\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas"
+    "GET /api/v1/external-ingest/schemas | auth="
    ]
   },
   {
    "exit": 0,
    "stdout": "ingestion_id: ing-e\nstatus: queued\nitems_received: 1\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
    ]
   },
@@ -6591,28 +6794,28 @@
    "exit": 1,
    "stdout": "1 error(s):\n  - envelope [payload_too_large] payload exceeds 665 bytes\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas"
+    "GET /api/v1/external-ingest/schemas | auth="
    ]
   },
   {
    "exit": 1,
    "stdout": "1 error(s):\n  - envelope (records) [batch_too_large] Batch has 2 records; max is True\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas"
+    "GET /api/v1/external-ingest/schemas | auth="
    ]
   },
   {
    "exit": 1,
    "stdout": "{\"errors\": [{\"code\": \"batch_too_large\", \"index\": -1, \"kind\": null, \"message\": \"Batch has 2 records; max is True\", \"path\": \"records\"}], \"itemsAccepted\": 0, \"itemsRejected\": 1, \"valid\": false}\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas"
+    "GET /api/v1/external-ingest/schemas | auth="
    ]
   },
   {
    "exit": 0,
    "stdout": "ingestion_id: ing-l\nstatus: queued\nitems_received: 1\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=5ef12ec136d4"
    ]
   },
@@ -6620,7 +6823,79 @@
    "exit": 0,
    "stdout": "ingestion_id: ing-l\nstatus: queued\nitems_received: 1\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
+    "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
+   ]
+  },
+  {
+   "exit": 0,
+   "stdout": "ingestion_id: ing-u\nstatus: queued\nitems_received: 1\n",
+   "requests": [
+    "GET /api/v1/external-ingest/schemas | auth=Basic YW5uOnNAY3JldA==",
+    "POST /api/v1/external-ingest/batches | auth=Basic YW5uOnNAY3JldA== | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
+   ]
+  },
+  {
+   "exit": 0,
+   "stdout": "{\"ingestionId\": \"ing-u\", \"itemsReceived\": 1, \"status\": \"queued\"}\n",
+   "requests": [
+    "GET /api/v1/external-ingest/schemas | auth=Basic YW5uOnNAY3JldA==",
+    "POST /api/v1/external-ingest/batches | auth=Basic YW5uOnNAY3JldA== | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
+   ]
+  },
+  {
+   "exit": 0,
+   "stdout": "ingestion_id: ing-u\nstatus: queued\nitems_received: 1\n",
+   "requests": [
+    "GET /api/v1/external-ingest/schemas | auth=Basic YW5uOg==",
+    "POST /api/v1/external-ingest/batches | auth=Basic YW5uOg== | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
+   ]
+  },
+  {
+   "exit": 0,
+   "stdout": "ingestion_id: ing-u\nstatus: queued\nitems_received: 1\n",
+   "requests": [
+    "GET /api/v1/external-ingest/schemas | auth=Basic OnNAY3JldA==",
+    "POST /api/v1/external-ingest/batches | auth=Basic OnNAY3JldA== | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
+   ]
+  },
+  {
+   "exit": 0,
+   "stdout": "ingestion_id: ing-u\nstatus: queued\nitems_received: 1\n",
+   "requests": [
+    "GET /api/v1/external-ingest/schemas | auth=",
+    "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
+   ]
+  },
+  {
+   "exit": 0,
+   "stdout": "ingestion_id: ing-1\nstatus: queued\nitems_received: 0\nitems_accepted: 0\nitems_rejected: 0\n",
+   "requests": [
+    "GET /api/v1/external-ingest/batches/ing-1 | auth=Basic YW5uOnNAY3JldA== | org=org-1 | ua=dev-hops-push-cli | ct= | idem= | body=-"
+   ]
+  },
+  {
+   "exit": 0,
+   "stdout": "ingestion_id: ing-1\nstatus: queued\nitems_received: 0\nitems_accepted: 0\nitems_rejected: 0\n",
+   "requests": [
+    "GET /api/v1/external-ingest/batches/ing-1 | auth=Basic YW5uOnNAY3JldA== | org=org-1 | ua=dev-hops-push-cli | ct= | idem= | body=-",
+    "GET /api/v1/external-ingest/batches/ing-1 | auth=Basic YW5uOnNAY3JldA== | org=org-1 | ua=dev-hops-push-cli | ct= | idem= | body=-"
+   ]
+  },
+  {
+   "exit": 0,
+   "stdout": "ingestion_id: ing-1\nstatus: queued\nitems_received: 0\nitems_accepted: 0\nitems_rejected: 0\n",
+   "requests": [
+    "GET /api/v1/external-ingest/batches/ing-1 | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct= | idem= | body=-",
+    "GET /api/v1/external-ingest/batches/ing-1 | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct= | idem= | body=-"
+   ]
+  },
+  {
+   "exit": 0,
+   "stdout": "{\"ingestionId\": \"ing-s\", \"itemsReceived\": 1, \"status\": \"queued\"}\n",
+   "requests": [
+    "GET /api/v1/external-ingest/schemas | auth=",
+    "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
    ]
   },
@@ -6668,7 +6943,7 @@
    "exit": 0,
    "stdout": "ingestion_id: x\nstatus: queued\nitems_received: 1\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_legacy | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
    ]
   },
@@ -6676,7 +6951,7 @@
    "exit": 0,
    "stdout": "ingestion_id: x\nstatus: queued\nitems_received: 1\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_primary | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
    ]
   },
@@ -6684,7 +6959,7 @@
    "exit": 0,
    "stdout": "ingestion_id: x\nstatus: queued\nitems_received: 1\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
    ]
   },
@@ -6692,7 +6967,7 @@
    "exit": 0,
    "stdout": "ingestion_id: x\nstatus: queued\nitems_received: 1\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_f | org=o-f | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
    ]
   },
@@ -6715,7 +6990,7 @@
    "exit": 0,
    "stdout": "ingestion_id: ing-p\nstatus: completed\nitems_received: 1\nitems_accepted: 1\nitems_rejected: 0\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb",
     "GET /api/v1/external-ingest/batches/ing-p | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct= | idem= | body=-"
    ]
@@ -6729,7 +7004,7 @@
    "exit": 0,
    "stdout": "ingestion_id: ing-p\nstatus: queued\nitems_received: 1\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
    ]
   },
@@ -6797,7 +7072,7 @@
    "exit": 0,
    "stdout": "ingestion_id: ing-p\nstatus: queued\nitems_received: 1\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
    ]
   },
@@ -6805,7 +7080,7 @@
    "exit": 0,
    "stdout": "ingestion_id: ing-p\nstatus: queued\nitems_received: 1\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
    ]
   },
@@ -6813,7 +7088,7 @@
    "exit": 0,
    "stdout": "ingestion_id: ing-p\nstatus: queued\nitems_received: 1\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
    ]
   },
@@ -6821,7 +7096,7 @@
    "exit": 0,
    "stdout": "ingestion_id: ing-p\nstatus: queued\nitems_received: 1\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
    ]
   },
@@ -6844,7 +7119,7 @@
    "exit": 0,
    "stdout": "ingestion_id: ing-p\nstatus: queued\nitems_received: 1\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
    ]
   },
@@ -6852,7 +7127,7 @@
    "exit": 0,
    "stdout": "ingestion_id: ing-p\nstatus: queued\nitems_received: 1\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
    ]
   },
@@ -6860,7 +7135,7 @@
    "exit": 0,
    "stdout": "ingestion_id: ing-p\nstatus: queued\nitems_received: 1\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
    ]
   },
@@ -6868,7 +7143,7 @@
    "exit": 0,
    "stdout": "ingestion_id: ing-1\nstatus: completed\nitems_received: 1\nitems_accepted: 1\nitems_rejected: 0\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb",
     "GET /api/v1/external-ingest/batches/ing-1 | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct= | idem= | body=-",
     "GET /api/v1/external-ingest/batches/ing-1 | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct= | idem= | body=-",
@@ -6879,7 +7154,7 @@
    "exit": 0,
    "stdout": "{\"ingestionId\": \"ing-1\", \"itemsAccepted\": 1, \"itemsReceived\": 1, \"itemsRejected\": 0, \"status\": \"completed\"}\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb",
     "GET /api/v1/external-ingest/batches/ing-1 | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct= | idem= | body=-",
     "GET /api/v1/external-ingest/batches/ing-1 | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct= | idem= | body=-"
@@ -6889,7 +7164,7 @@
    "exit": 1,
    "stdout": "ingestion_id: ing-1\nstatus: completed\nitems_received: 2\nitems_accepted: 1\nitems_rejected: 1\n1 error(s):\n  - records[1] (records[1].payload) kind=commit.v1 [invalid_record] bad\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb",
     "GET /api/v1/external-ingest/batches/ing-1 | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct= | idem= | body=-"
    ]
@@ -6898,7 +7173,7 @@
    "exit": 1,
    "stdout": "ingestion_id: ing-1\nstatus: partial\nitems_received: 2\nitems_accepted: 1\nitems_rejected: 1\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb",
     "GET /api/v1/external-ingest/batches/ing-1 | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct= | idem= | body=-"
    ]
@@ -6907,7 +7182,7 @@
    "exit": 1,
    "stdout": "ingestion_id: ing-1\nstatus: partial\nitems_received: 1\nitems_accepted: 1\nitems_rejected: 0\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb",
     "GET /api/v1/external-ingest/batches/ing-1 | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct= | idem= | body=-"
    ]
@@ -6916,7 +7191,7 @@
    "exit": 1,
    "stdout": "{\"ingestionId\": \"ing-1\", \"itemsAccepted\": 0, \"itemsReceived\": 1, \"itemsRejected\": 1, \"status\": \"failed\"}\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb",
     "GET /api/v1/external-ingest/batches/ing-1 | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct= | idem= | body=-"
    ]
@@ -6925,7 +7200,7 @@
    "exit": 0,
    "stdout": "ingestion_id: ing-1\nstatus: completed\nitems_rejected: None\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb",
     "GET /api/v1/external-ingest/batches/ing-1 | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct= | idem= | body=-"
    ]
@@ -6934,7 +7209,7 @@
    "exit": 1,
    "stdout": "ingestion_id: ing-1\nstatus: completed\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb",
     "GET /api/v1/external-ingest/batches/ing-1 | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct= | idem= | body=-"
    ]
@@ -6943,7 +7218,7 @@
    "exit": 0,
    "stdout": "ingestion_id: ing-1\nstatus: completed\nitems_rejected: 0.0\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb",
     "GET /api/v1/external-ingest/batches/ing-1 | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct= | idem= | body=-"
    ]
@@ -6952,7 +7227,7 @@
    "exit": 1,
    "stdout": "ingestion_id: ing-1\nstatus: completed\nitems_rejected: 0\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb",
     "GET /api/v1/external-ingest/batches/ing-1 | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct= | idem= | body=-"
    ]
@@ -6962,7 +7237,7 @@
    "stdout": "ingestion_id: ing-1\nstatus: stream_unavailable\nitems_received: 1\n",
    "stderr": "re-run `push batch` (same idempotency key re-enqueues)\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb",
     "GET /api/v1/external-ingest/batches/ing-1 | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct= | idem= | body=-"
    ]
@@ -6971,7 +7246,7 @@
    "exit": 3,
    "stdout": "{\"hint\": \"re-run `push batch` (same idempotency key re-enqueues)\", \"ingestionId\": \"ing-1\", \"status\": \"stream_unavailable\"}\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb",
     "GET /api/v1/external-ingest/batches/ing-1 | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct= | idem= | body=-"
    ]
@@ -6981,7 +7256,7 @@
    "stdout": "ingestion_id: ing-1\nstatus: stream_unavailable\n",
    "stderr": "re-run `push batch` (same idempotency key re-enqueues)\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb",
     "GET /api/v1/external-ingest/batches/ing-1 | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct= | idem= | body=-"
    ]
@@ -6991,7 +7266,7 @@
    "stdout": "ingestion_id: ing-1\nstatus: processing\nitems_received: 0\nitems_accepted: 0\nitems_rejected: 0\n",
    "stderr": "poll timed out; re-run `push status \u003cingestion_id\u003e --poll` rather than resubmitting\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb",
     "GET /api/v1/external-ingest/batches/ing-1 | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct= | idem= | body=-",
     "GET /api/v1/external-ingest/batches/ing-1 | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct= | idem= | body=-",
@@ -7002,7 +7277,7 @@
    "exit": 4,
    "stdout": "{\"hint\": \"poll timed out; re-run `push status \u003cingestion_id\u003e --poll` rather than resubmitting\", \"ingestionId\": \"ing-1\", \"itemsAccepted\": 0, \"itemsReceived\": 0, \"itemsRejected\": 0, \"status\": \"queued\"}\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb",
     "GET /api/v1/external-ingest/batches/ing-1 | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct= | idem= | body=-",
     "GET /api/v1/external-ingest/batches/ing-1 | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct= | idem= | body=-",
@@ -7013,7 +7288,7 @@
    "exit": 0,
    "stdout": "ingestion_id: ing-1\nstatus: completed\nitems_received: 1\nitems_accepted: 1\nitems_rejected: 0\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
    ]
   },
@@ -7021,7 +7296,7 @@
    "exit": 1,
    "stdout": "ingestion_id: ing-1\nstatus: failed\nitems_rejected: 1\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
    ]
   },
@@ -7029,7 +7304,7 @@
    "exit": 0,
    "stdout": "ingestion_id: ing-1\nstatus: completed\nitems_received: 1\nitems_accepted: 1\nitems_rejected: 0\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb",
     "GET /api/v1/external-ingest/batches/ing-1 | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct= | idem= | body=-"
    ]
@@ -7038,7 +7313,7 @@
    "exit": 0,
    "stdout": "ingestion_id: ing-1\nstatus: completed\nitems_received: 1\nitems_accepted: 1\nitems_rejected: 0\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb",
     "GET /api/v1/external-ingest/batches/ing-1 | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct= | idem= | body=-"
    ]
@@ -7048,7 +7323,7 @@
    "stdout": "",
    "stderr": "error: transport_error: server response is missing ingestionId: {'status': 'queued'}\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
    ]
   },
@@ -7056,7 +7331,7 @@
    "exit": 3,
    "stdout": "{\"error\": {\"code\": \"transport_error\", \"message\": \"server response is missing ingestionId: {'ingestionId': 7, 'status': 'queued'}\"}}\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
    ]
   },
@@ -7064,7 +7339,7 @@
    "exit": 0,
    "stdout": "ingestion_id: ing-s\nstatus: completed\nitems_received: 1\nitems_accepted: 1\nitems_rejected: 0\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb",
     "GET /api/v1/external-ingest/batches/ing-s | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct= | idem= | body=-"
    ]
@@ -7073,7 +7348,7 @@
    "exit": 0,
    "stdout": "ingestion_id: ing-t\nstatus: completed\nitems_received: 1\nitems_accepted: 1\nitems_rejected: 0\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb",
     "GET /api/v1/external-ingest/batches/ing-t | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct= | idem= | body=-"
    ]
@@ -7083,7 +7358,7 @@
    "stdout": "",
    "stderr": "error: HTTP 404 not_found: no such batch\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb",
     "GET /api/v1/external-ingest/batches/ing-1 | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct= | idem= | body=-"
    ]
@@ -7092,7 +7367,7 @@
    "exit": 3,
    "stdout": "{\"error\": {\"code\": \"not_found\", \"errors\": [], \"message\": \"no such batch\"}}\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb",
     "GET /api/v1/external-ingest/batches/ing-1 | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct= | idem= | body=-",
     "GET /api/v1/external-ingest/batches/ing-1 | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct= | idem= | body=-"
@@ -7102,7 +7377,7 @@
    "exit": 0,
    "stdout": "ingestion_id: ing-1\nstatus: completed\nitems_received: 1\nitems_accepted: 1\nitems_rejected: 0\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb",
     "GET /api/v1/external-ingest/batches/ing-1 | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct= | idem= | body=-",
     "GET /api/v1/external-ingest/batches/ing-1 | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct= | idem= | body=-"
@@ -7113,7 +7388,7 @@
    "stdout": "",
    "stderr": "JSONDecodeError: Expecting value: line 1 column 1 (char 0)\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb",
     "GET /api/v1/external-ingest/batches/ing-1 | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct= | idem= | body=-"
    ]
@@ -7123,7 +7398,7 @@
    "stdout": "",
    "stderr": "AttributeError: 'list' object has no attribute 'get'\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb",
     "GET /api/v1/external-ingest/batches/ing-1 | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct= | idem= | body=-"
    ]
@@ -7133,7 +7408,7 @@
    "stdout": "",
    "stderr": "TypeError: cannot use 'list' as a set element (unhashable type: 'list')\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb",
     "GET /api/v1/external-ingest/batches/ing-1 | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct= | idem= | body=-"
    ]
@@ -7143,7 +7418,7 @@
    "stdout": "ingestion_id: None\nstatus: 5\n",
    "stderr": "poll timed out; re-run `push status \u003cingestion_id\u003e --poll` rather than resubmitting\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb",
     "GET /api/v1/external-ingest/batches/ing-1 | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct= | idem= | body=-",
     "GET /api/v1/external-ingest/batches/ing-1 | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct= | idem= | body=-",
@@ -7155,7 +7430,7 @@
    "stdout": "ingestion_id: None\nstatus: None\n",
    "stderr": "poll timed out; re-run `push status \u003cingestion_id\u003e --poll` rather than resubmitting\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb",
     "GET /api/v1/external-ingest/batches/ing-1 | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct= | idem= | body=-",
     "GET /api/v1/external-ingest/batches/ing-1 | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct= | idem= | body=-",
@@ -7166,7 +7441,7 @@
    "exit": 0,
    "stdout": "ingestion_id: ing-u\nstatus: completed\nitems_received: 1\nitems_accepted: 1\nitems_rejected: 0\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb",
     "GET /api/v1/external-ingest/batches/ing-u | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct= | idem= | body=-"
    ]
@@ -7176,7 +7451,7 @@
    "stdout": "",
    "stderr": "TypeError: cannot use 'dict' as a set element (unhashable type: 'dict')\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
    ]
   },
@@ -7185,7 +7460,7 @@
    "stdout": "",
    "stderr": "AttributeError: 'list' object has no attribute 'get'\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
    ]
   },
@@ -7194,7 +7469,7 @@
    "stdout": "ingestion_id: ing-1\nstatus: completed\nitems_rejected: 1\n4 error(s):\n",
    "stderr": "AttributeError: 'str' object has no attribute 'get'\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb",
     "GET /api/v1/external-ingest/batches/ing-1 | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct= | idem= | body=-"
    ]
@@ -7204,7 +7479,7 @@
    "stdout": "ingestion_id: ing-1\nstatus: completed\nitems_rejected: 1\n2 error(s):\n  - records[0] [a] b\n",
    "stderr": "AttributeError: 'int' object has no attribute 'get'\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb",
     "GET /api/v1/external-ingest/batches/ing-1 | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct= | idem= | body=-"
    ]
@@ -7214,7 +7489,7 @@
    "stdout": "ingestion_id: ing-1\nstatus: completed\nitems_rejected: 1\n",
    "stderr": "TypeError: object of type 'int' has no len()\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb",
     "GET /api/v1/external-ingest/batches/ing-1 | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct= | idem= | body=-"
    ]
@@ -7224,7 +7499,7 @@
    "stdout": "ingestion_id: ing-1\nstatus: completed\nitems_rejected: 1\n1 error(s):\n",
    "stderr": "AttributeError: 'str' object has no attribute 'get'\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb",
     "GET /api/v1/external-ingest/batches/ing-1 | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct= | idem= | body=-"
    ]
@@ -7233,7 +7508,7 @@
    "exit": 0,
    "stdout": "ingestion_id: ing-1\nstatus: completed\nitems_rejected: 0\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb",
     "GET /api/v1/external-ingest/batches/ing-1 | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct= | idem= | body=-"
    ]
@@ -7242,7 +7517,7 @@
    "exit": 0,
    "stdout": "ingestion_id: i\nstatus: queued\n4 error(s):\n  - records[0] [c] m\n  - envelope [d] n\n  - envelope [e] None\n  - records[False] ({'p': 1}) kind=['k'] [{'a': 1}] [1, 2]\n",
    "requests": [
-    "GET /api/v1/external-ingest/schemas",
+    "GET /api/v1/external-ingest/schemas | auth=",
     "POST /api/v1/external-ingest/batches | auth=Bearer fcpush_test_token_abc-123 | org=org-1 | ua=dev-hops-push-cli | ct=application/json | idem=k-1 | body=febd4c6facbb"
    ]
   },

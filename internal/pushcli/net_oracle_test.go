@@ -22,6 +22,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
@@ -40,6 +41,8 @@ type netStep struct {
 	Status  int               `json:"status"`
 	Headers map[string]string `json:"headers,omitempty"`
 	Body    string            `json:"body,omitempty"`
+	// BodyDelayMs holds the body back after the headers are sent (a stalled read).
+	BodyDelayMs int `json:"bodyDelayMs,omitempty"`
 }
 
 type netCase struct {
@@ -90,37 +93,7 @@ func (f *netFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	index, _ := strconv.Atoi(match[1])
 	body, _ := io.ReadAll(r.Body)
 	target = strings.TrimPrefix(target, "/c"+match[1])
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	c := f.cases[index]
-	var step netStep
-	if strings.HasSuffix(r.URL.Path, "/api/v1/external-ingest/schemas") && r.Method == http.MethodGet {
-		f.logged[index] = append(f.logged[index], "GET "+target)
-		if c.Schema == nil {
-			step = netStep{Status: 404, Body: `{"error":{"code":"not_found","message":"no schemas"}}`}
-		} else {
-			step = *c.Schema
-		}
-	} else {
-		sum := "-"
-		if len(body) > 0 {
-			digest := sha256.Sum256(body)
-			sum = hex.EncodeToString(digest[:6])
-		}
-		f.logged[index] = append(f.logged[index], fmt.Sprintf("%s %s | auth=%s | org=%s | ua=%s | ct=%s | idem=%s | body=%s",
-			r.Method, target, r.Header.Get("Authorization"), r.Header.Get("X-Org-Id"), r.Header.Get("User-Agent"),
-			r.Header.Get("Content-Type"), r.Header.Get("Idempotency-Key"), sum))
-		if len(c.Steps) == 0 {
-			step = netStep{Status: 500, Body: `{"error":{"code":"unscripted","message":"no step"}}`}
-		} else {
-			position := f.next[index]
-			if position >= len(c.Steps) {
-				position = len(c.Steps) - 1
-			}
-			step = c.Steps[position]
-			f.next[index]++
-		}
-	}
+	step := f.record(index, r, target, body)
 	for key, value := range step.Headers {
 		w.Header().Set(key, value)
 	}
@@ -128,7 +101,45 @@ func (f *netFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 	}
 	w.WriteHeader(step.Status)
+	if step.BodyDelayMs > 0 {
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		time.Sleep(time.Duration(step.BodyDelayMs) * time.Millisecond)
+	}
 	_, _ = io.WriteString(w, step.Body)
+}
+
+// record logs a request and picks the scripted answer (under the lock; the answer
+// is written outside it, so a delayed body does not hold up other cases).
+func (f *netFake) record(index int, r *http.Request, target string, body []byte) netStep {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	c := f.cases[index]
+	if strings.HasSuffix(r.URL.Path, "/api/v1/external-ingest/schemas") && r.Method == http.MethodGet {
+		f.logged[index] = append(f.logged[index], "GET "+target+" | auth="+r.Header.Get("Authorization"))
+		if c.Schema == nil {
+			return netStep{Status: 404, Body: `{"error":{"code":"not_found","message":"no schemas"}}`}
+		}
+		return *c.Schema
+	}
+	sum := "-"
+	if len(body) > 0 {
+		digest := sha256.Sum256(body)
+		sum = hex.EncodeToString(digest[:6])
+	}
+	f.logged[index] = append(f.logged[index], fmt.Sprintf("%s %s | auth=%s | org=%s | ua=%s | ct=%s | idem=%s | body=%s",
+		r.Method, target, r.Header.Get("Authorization"), r.Header.Get("X-Org-Id"), r.Header.Get("User-Agent"),
+		r.Header.Get("Content-Type"), r.Header.Get("Idempotency-Key"), sum))
+	if len(c.Steps) == 0 {
+		return netStep{Status: 500, Body: `{"error":{"code":"unscripted","message":"no step"}}`}
+	}
+	position := f.next[index]
+	if position >= len(c.Steps) {
+		position = len(c.Steps) - 1
+	}
+	f.next[index]++
+	return c.Steps[position]
 }
 
 func (f *netFake) requests(index int) []string {
@@ -176,6 +187,12 @@ func netFilePath(dir string, index int) string {
 	return filepath.Join(dir, fmt.Sprintf("net-%04d.json", index))
 }
 
+// userURL is the case's URL with userinfo (the login is "ann", the password
+// "s@cret" percent-encoded; the token puts the login or the password alone).
+func userURL(url, userinfo string) string {
+	return strings.Replace(url, "://", "://"+userinfo+"@", 1)
+}
+
 func (c netCase) resolve(base, dir string, index int) []string {
 	url := base + fmt.Sprintf("/c%d", index)
 	if c.BaseURL != "" {
@@ -184,6 +201,10 @@ func (c netCase) resolve(base, dir string, index int) []string {
 	args := make([]string, len(c.Args))
 	for position, arg := range c.Args {
 		arg = strings.ReplaceAll(strings.ReplaceAll(arg, "{url}", url), "{dir}", dir)
+		arg = strings.ReplaceAll(arg, "{userurl}", userURL(url, "ann:s%40cret"))
+		arg = strings.ReplaceAll(arg, "{loginurl}", userURL(url, "ann"))
+		arg = strings.ReplaceAll(arg, "{passurl}", userURL(url, ":s%40cret"))
+		arg = strings.ReplaceAll(arg, "{emptyurl}", userURL(url, ""))
 		args[position] = strings.ReplaceAll(arg, "{file}", netFilePath(dir, index))
 	}
 	return args
@@ -206,7 +227,9 @@ func (c netCase) env(base string, index int) map[string]string {
 	}
 	out := map[string]string{}
 	for key, value := range c.Env {
-		out[key] = strings.ReplaceAll(value, "{url}", url)
+		value = strings.ReplaceAll(value, "{url}", url)
+		value = strings.ReplaceAll(value, "{userurl}", userURL(url, "ann:s%40cret"))
+		out[key] = value
 	}
 	return out
 }
@@ -370,7 +393,7 @@ const netGolden = "testdata/push_net_golden.json"
 // for every case. The producer is deleted with the Python CLI, so this is a rot
 // guard: the file is only rewritten by TestPushNetVenueOracleMatchesThePythonProducer
 // with DHO_PUSHNET_GOLDEN_UPDATE=1, then this digest is updated.
-const netGoldenSHA256 = "c93ef2f55de6857121554d600fa926467632b55d8027196a60ebe149a723940b"
+const netGoldenSHA256 = "2458f39dc54898a68daf7e0ea91c90d3a15e5974b0433723bb8920d54363b14a"
 
 func TestPushNetGoldenIsTheFileTheDigestPins(t *testing.T) {
 	raw, err := os.ReadFile(netGolden)

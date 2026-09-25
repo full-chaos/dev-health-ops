@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
@@ -199,21 +200,30 @@ func raiseForResponse(resp *response) error {
 type ingestClient struct {
 	http  *http.Client
 	sleep func(seconds float64)
+	// readTimeout is how long a response may stay silent (headers, then each read
+	// of the body) before the attempt fails as a network error.
+	readTimeout time.Duration
 }
 
-func newIngestClient() *ingestClient {
+func newIngestClient() *ingestClient { return newIngestClientWithReadTimeout(requestTimeout) }
+
+func newIngestClientWithReadTimeout(readTimeout time.Duration) *ingestClient {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.DialContext = (&net.Dialer{Timeout: requestTimeout}).DialContext
 	transport.TLSHandshakeTimeout = requestTimeout
-	transport.ResponseHeaderTimeout = requestTimeout
+	transport.ResponseHeaderTimeout = readTimeout
 	return &ingestClient{
+		readTimeout: readTimeout,
 		http: &http.Client{
 			Transport:     transport,
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		},
-		sleep: func(seconds float64) { time.Sleep(secondsToDuration(seconds)) },
+		sleep: func(seconds float64) { pause(seconds) },
 	}
 }
+
+// pause waits for the given seconds; a test replaces it to skip the retry waits.
+var pause = func(seconds float64) { time.Sleep(secondsToDuration(seconds)) }
 
 // secondsToDuration is a wait in seconds as a Duration, never overflowing.
 func secondsToDuration(seconds float64) time.Duration {
@@ -269,12 +279,10 @@ func bytesRepr(value string) string {
 	return out.String()
 }
 
-// checkHeaders is what building and writing the request does to its headers:
-// a value with a character outside ASCII cannot be encoded (the client raises
-// before anything is sent, a crash), and a value h11 finds illegal (a control
-// character, a leading or trailing space) is a protocol error, retried like any
-// network failure.
-func checkHeaders(headers [][2]string) error {
+// checkHeadersASCII is what building the request does to its headers: a value
+// with a character outside ASCII cannot be encoded, and the client raises before
+// anything is sent (a crash).
+func checkHeadersASCII(headers [][2]string) error {
 	for _, header := range headers {
 		for index := 0; index < len(header[1]); index++ {
 			if header[1][index] >= 0x80 {
@@ -282,6 +290,13 @@ func checkHeaders(headers [][2]string) error {
 			}
 		}
 	}
+	return nil
+}
+
+// checkHeadersH11 is what writing the request does: a value h11 finds illegal (a
+// control character, a leading or trailing space) is a protocol error, retried
+// like any network failure.
+func checkHeadersH11(headers [][2]string) error {
 	for _, header := range headers {
 		value := header[1]
 		illegal := false
@@ -301,6 +316,50 @@ func checkHeaders(headers [][2]string) error {
 	return nil
 }
 
+// withBasicAuth is httpx's BasicAuth flow: the userinfo of the URL replaces the
+// Authorization header the request carries.
+func withBasicAuth(headers [][2]string, basic string) [][2]string {
+	if basic == "" {
+		return headers
+	}
+	out := make([][2]string, 0, len(headers)+1)
+	replaced := false
+	for _, header := range headers {
+		if strings.EqualFold(header[0], "Authorization") {
+			out = append(out, [2]string{"Authorization", basic})
+			replaced = true
+			continue
+		}
+		out = append(out, header)
+	}
+	if !replaced {
+		out = append(out, [2]string{"Authorization", basic})
+	}
+	return out
+}
+
+// stallReader is httpx's per-read timeout on a response body: a read that gets
+// no bytes for the timeout ends the request (its context is cancelled) with
+// errReadTimeout.
+type stallReader struct {
+	body    io.Reader
+	timeout time.Duration
+	cancel  context.CancelFunc
+}
+
+var errReadTimeout = errors.New("read timeout")
+
+func (r *stallReader) Read(p []byte) (int, error) {
+	var fired atomic.Bool
+	timer := time.AfterFunc(r.timeout, func() { fired.Store(true); r.cancel() })
+	n, err := r.body.Read(p)
+	timer.Stop()
+	if err != nil && err != io.EOF && fired.Load() {
+		return n, errReadTimeout
+	}
+	return n, err
+}
+
 // attempt is one request, without retries. A network failure is a
 // *transientError; a status of 400 or more is raised as raiseForResponse does.
 func (c *ingestClient) attempt(ctx context.Context, method, target string, headers [][2]string, body []byte) (*response, error) {
@@ -308,19 +367,24 @@ func (c *ingestClient) attempt(ctx context.Context, method, target string, heade
 	if err != nil {
 		return nil, err
 	}
-	if err := checkHeaders(headers); err != nil {
+	if err := checkHeadersASCII(headers); err != nil {
+		return nil, err
+	}
+	headers = withBasicAuth(headers, parsed.basic)
+	if err := checkHeadersH11(headers); err != nil {
 		var transient *transientError
-		if !errors.As(err, &transient) {
-			return nil, err
-		}
-		if problem := schemeProblem(parsed.scheme); problem != "" {
-			return nil, &transientError{message: "transport error: " + problem}
+		if errors.As(err, &transient) {
+			if problem := schemeProblem(parsed.scheme); problem != "" {
+				return nil, &transientError{message: "transport error: " + problem}
+			}
 		}
 		return nil, err
 	}
 	if problem := schemeProblem(parsed.scheme); problem != "" {
 		return nil, &transientError{message: "transport error: " + problem}
 	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	var reader io.Reader
 	if body != nil {
 		reader = bytes.NewReader(body)
@@ -341,11 +405,19 @@ func (c *ingestClient) attempt(ctx context.Context, method, target string, heade
 		if errors.As(err, &urlErr) {
 			err = urlErr.Err
 		}
+		// httpx's ReadTimeout has no text: waiting for the answer for the whole
+		// limit is "transport error: " and nothing after it.
+		if strings.Contains(err.Error(), "timeout awaiting response headers") {
+			return nil, &transientError{message: "transport error: "}
+		}
 		return nil, &transientError{message: "transport error: " + err.Error()}
 	}
 	defer resp.Body.Close()
-	data, err := io.ReadAll(resp.Body)
+	data, err := io.ReadAll(&stallReader{body: resp.Body, timeout: c.readTimeout, cancel: cancel})
 	if err != nil {
+		if errors.Is(err, errReadTimeout) {
+			return nil, &transientError{message: "transport error: "}
+		}
 		return nil, &transientError{message: "transport error: " + err.Error()}
 	}
 	reason := strings.TrimSpace(strings.TrimPrefix(resp.Status, fmt.Sprintf("%d", resp.StatusCode)))
@@ -440,6 +512,9 @@ func (c *ingestClient) schemaDocument(ctx context.Context, apiURL string) *pyjso
 	proxy, _ := http.ProxyFromEnvironment(req)
 	req.URL = parsed.requestURL(proxy != nil)
 	req.Host = ""
+	if parsed.basic != "" {
+		req.Header.Set("Authorization", parsed.basic)
+	}
 	resp, err := c.http.Do(req)
 	if err != nil {
 		slog.Debug("GET /schemas limits pre-check failed; using local defaults")

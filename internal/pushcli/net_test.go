@@ -3,13 +3,16 @@ package pushcli
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 )
@@ -171,6 +174,126 @@ func TestRequestTargets(t *testing.T) {
 		server.Close()
 		if target != want {
 			t.Errorf("id %q: request target %q, want %q", id, target, want)
+		}
+	}
+}
+
+// A URL's userinfo is httpx's BasicAuth: the header replaces the Bearer one, on
+// every request (the limits pre-flight included), percent-decoded, and only when
+// the login or the password is not empty.
+func TestURLUserinfoIsBasicAuth(t *testing.T) {
+	for userinfo, want := range map[string]string{
+		"ann:s%40cret": "Basic " + base64.StdEncoding.EncodeToString([]byte("ann:s@cret")),
+		"ann":          "Basic " + base64.StdEncoding.EncodeToString([]byte("ann:")),
+		":pw":          "Basic " + base64.StdEncoding.EncodeToString([]byte(":pw")),
+		"%C3%A9:x":     "Basic " + base64.StdEncoding.EncodeToString([]byte("é:x")),
+		"a%zz:b":       "Basic " + base64.StdEncoding.EncodeToString([]byte("a%zz:b")),
+		"":             "Bearer tok",
+		":":            "Bearer tok",
+	} {
+		var auths []string
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			auths = append(auths, r.Header.Get("Authorization"))
+			_, _ = w.Write([]byte(`{}`))
+		}))
+		base := strings.Replace(server.URL, "://", "://"+userinfo+"@", 1)
+		client, _ := recordingClient()
+		client.schemaDocument(context.Background(), base)
+		if _, err := client.getBatchStatus(context.Background(), clientConfig{apiURL: base, token: "tok", orgID: "o"}, "id"); err != nil {
+			t.Errorf("%q: %v", userinfo, err)
+		}
+		server.Close()
+		schemasWant := want
+		if want == "Bearer tok" {
+			schemasWant = "" // the limits pre-flight sends no token of its own
+		}
+		if len(auths) != 2 || auths[0] != schemasWant || auths[1] != want {
+			t.Errorf("userinfo %q: Authorization %q, want the schemas call and the request to carry %q", userinfo, auths, want)
+		}
+	}
+}
+
+// A response that goes silent for the read timeout is a retryable network error
+// with no text after "transport error: ", whether the headers or the body stall.
+func TestSilentResponseIsARetryableReadTimeout(t *testing.T) {
+	for name, stallBody := range map[string]bool{"headers": false, "body": true} {
+		server, calls := serverAnswering(t, func(call int32, w http.ResponseWriter) {
+			if call == 1 {
+				if stallBody {
+					w.WriteHeader(http.StatusOK)
+					w.(http.Flusher).Flush()
+				}
+				time.Sleep(400 * time.Millisecond)
+			}
+			_, _ = w.Write([]byte(`{"status":"queued"}`))
+		})
+		client := newIngestClientWithReadTimeout(150 * time.Millisecond)
+		var waits []float64
+		client.sleep = func(seconds float64) { waits = append(waits, seconds) }
+		body, err := client.getBatchStatus(context.Background(), clientConfig{apiURL: server.URL, token: "t", orgID: "o"}, "id")
+		if err != nil || body == nil {
+			t.Errorf("%s stall: err %v body %v, want the retry to succeed", name, err, body)
+		}
+		if *calls != 2 || !reflect.DeepEqual(waits, []float64{1}) {
+			t.Errorf("%s stall: %d attempts, waits %v, want 2 attempts and one 1 s wait", name, *calls, waits)
+		}
+	}
+	// Always silent: five attempts, then the error text is empty.
+	server, calls := serverAnswering(t, func(_ int32, w http.ResponseWriter) {
+		w.WriteHeader(http.StatusOK)
+		w.(http.Flusher).Flush()
+		time.Sleep(300 * time.Millisecond)
+	})
+	client := newIngestClientWithReadTimeout(100 * time.Millisecond)
+	client.sleep = func(float64) {}
+	_, err := client.getBatchStatus(context.Background(), clientConfig{apiURL: server.URL, token: "t", orgID: "o"}, "id")
+	var transient *transientError
+	if !errors.As(err, &transient) || transient.message != "transport error: " || *calls != 5 {
+		t.Errorf("always silent: err %v after %d attempts, want \"transport error: \" after 5", err, *calls)
+	}
+}
+
+// The credential in an API URL's userinfo never reaches stdout, stderr or a log,
+// whatever goes wrong with the URL or the connection (and never as its Basic
+// header value either).
+func TestURLUserinfoNeverReachesOutputOrLogs(t *testing.T) {
+	const password = "PWSECRET-5x9"
+	basic := base64.StdEncoding.EncodeToString([]byte("ann:" + password))
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	waited := pause
+	pause = func(float64) {}
+	t.Cleanup(func() { pause = waited })
+	refusing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":{"code":"bad","message":"refused"}}`))
+	}))
+	t.Cleanup(refusing.Close)
+	urls := map[string]string{
+		"connection refused": "http://ann:" + password + "@127.0.0.1:1",
+		"invalid port":       "http://ann:" + password + "@127.0.0.1:notaport",
+		"invalid ipv4":       "http://ann:" + password + "@999.1.1.1",
+		"non-ascii host":     "http://ann:" + password + "@hôst.example",
+		"unsupported scheme": "ftp://ann:" + password + "@127.0.0.1",
+		"control character":  "http://ann:" + password + "@127.0.0.1/\x01",
+		"a 400 answer":       strings.Replace(refusing.URL, "://", "://ann:"+password+"@", 1),
+	}
+	for name, apiURL := range urls {
+		for _, args := range [][]string{
+			{"push", "status", "id", "--api-url", apiURL, "--token", "t", "--org", "o", "--json"},
+			{"push", "status", "id", "--api-url", apiURL, "--token", "t", "--org", "o"},
+		} {
+			var stdout, stderr bytes.Buffer
+			code := cli.Execute(context.Background(), "dho", []cli.Command{Command()}, cli.Env{Args: args, Stdout: &stdout, Stderr: &stderr})
+			text := stdout.String() + stderr.String() + logs.String()
+			if strings.Contains(text, password) || strings.Contains(text, basic) {
+				t.Errorf("%s (exit %d): the credential is in the output or logs:\n%s", name, code, text)
+			}
+			if code == exitOK {
+				t.Errorf("%s: exit 0", name)
+			}
 		}
 	}
 }

@@ -1,6 +1,7 @@
 package pushcli
 
 import (
+	"encoding/base64"
 	"fmt"
 	"net/netip"
 	"net/url"
@@ -8,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
 // The push client sends what httpx (0.28) sends for a URL: the path with its dot
@@ -99,6 +102,10 @@ type httpxURL struct {
 	rawPath  string
 	rawQuery string
 	hasQuery bool
+	// basic is the Authorization header value httpx sets from the URL's userinfo
+	// ("Basic ..."), "" when the URL has none: httpx's BasicAuth replaces any
+	// Authorization header the request carries.
+	basic string
 }
 
 // parseHTTPXURL is httpx.URL(raw) for what the transport needs; an error is
@@ -127,6 +134,12 @@ func parseHTTPXURL(raw string) (*httpxURL, error) {
 	host, port, hasUserinfo, err := splitAuthority(authority)
 	if err != nil {
 		return nil, err
+	}
+	if at := strings.LastIndex(authority, "@"); at > 0 {
+		name, password, _ := strings.Cut(authority[:at], ":")
+		if user, pass := pyUnquote(name), pyUnquote(password); user != "" || pass != "" {
+			result.basic = "Basic " + base64.StdEncoding.EncodeToString([]byte(user+":"+pass))
+		}
 	}
 	if hasUserinfo || host != "" || port != "" {
 		if port != "" {
@@ -204,4 +217,27 @@ func (u *httpxURL) requestURL(viaProxy bool) *url.URL {
 	}
 	result.Opaque = u.rawPath
 	return result
+}
+
+// pyUnquote is urllib.parse.unquote: %XX escapes decoded as UTF-8 bytes, an
+// undecodable byte replaced, a "%" that starts no escape kept.
+func pyUnquote(text string) string {
+	if !strings.Contains(text, "%") {
+		return text
+	}
+	var raw []byte
+	for index := 0; index < len(text); index++ {
+		if text[index] == '%' && index+2 < len(text) && isHex(text[index+1]) && isHex(text[index+2]) {
+			value, _ := strconv.ParseUint(text[index+1:index+3], 16, 8)
+			raw = append(raw, byte(value))
+			index += 2
+			continue
+		}
+		raw = append(raw, text[index])
+	}
+	return pythonparity.DecodeUTF8Replace(string(raw))
+}
+
+func isHex(c byte) bool {
+	return c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F'
 }

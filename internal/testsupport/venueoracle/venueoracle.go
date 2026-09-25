@@ -809,6 +809,10 @@ type DiffOptions struct {
 	// Inspect sees each raw Go response before normalization, for checks of
 	// a ruled value against another source.
 	Inspect func(request Request, goResponse Response)
+	// Golden, when set, says the Python answers Diff compares against come
+	// from a frozen golden, not a live Python plane: Diff then writes no
+	// both-planes proof (Golden.Finish writes the Go-only one).
+	Golden *Golden
 }
 
 // Diff sends each request to the Go api at goBase, compares it with the
@@ -847,7 +851,9 @@ func Diff(t *testing.T, goBase string, requests []Request, python []Response, op
 	if violations := policy.WriterViolations(); violations > 0 {
 		t.Errorf("%d body writes used the wrong writer for their route (see the policy ERROR logs naming each route)", violations)
 	}
-	writeProof(t)
+	if options.Golden == nil {
+		writeProof(t)
+	}
 	return receipt.String()
 }
 

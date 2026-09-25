@@ -514,3 +514,114 @@ func TestTimezoneOffsetsPastATimedelta(t *testing.T) {
 		t.Errorf("the author offset is never read, got %d", author.TimeClass)
 	}
 }
+
+// gitDirFixture is a bare-bones git directory: objects/, refs/ and the given HEAD.
+func gitDirFixture(t *testing.T, head string) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "gd")
+	for _, sub := range []string{"objects", "refs"} {
+		if err := os.MkdirAll(filepath.Join(dir, sub), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, "HEAD"), []byte(head), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+// is_git_dir accepts a HEAD that is `ref: refs/...` or a 40/64 hex sha, and nothing else
+// (mutation E4: a git dir with a garbage HEAD must not be a repository).
+func TestIsGitDirValidatesHEADLikeGitPython(t *testing.T) {
+	sha := strings.Repeat("a", 40)
+	for head, want := range map[string]bool{
+		"ref: refs/heads/main\n": true,
+		"ref:refs/heads/main\n":  true,
+		sha + "\n":               true,
+		strings.Repeat("B", 64):  true,
+		"garbage\n":              false,
+		"ref: heads/main\n":      false,
+		"":                       false,
+		strings.Repeat("a", 39):  false,
+	} {
+		if got := isGitDir(gitDirFixture(t, head)); got != want {
+			t.Errorf("isGitDir(HEAD=%q) = %v, want %v", head, got, want)
+		}
+	}
+}
+
+// An empty GIT_COMMON_DIR rejects every directory (mutation E6), even where the
+// process directory happens to hold objects/ and refs/ that a join("", ...) would find.
+func TestEmptyGitCommonDirRejectsEveryGitDir(t *testing.T) {
+	dir := gitDirFixture(t, "ref: refs/heads/main\n")
+	cwd := t.TempDir()
+	for _, sub := range []string{"objects", "refs"} {
+		if err := os.MkdirAll(filepath.Join(cwd, sub), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Chdir(cwd)
+	if !isGitDir(dir) {
+		t.Fatal("control: the fixture is a git dir")
+	}
+	t.Setenv("GIT_COMMON_DIR", "")
+	if isGitDir(dir) {
+		t.Fatal("an empty GIT_COMMON_DIR must reject every directory")
+	}
+}
+
+// A gitfile is `gitdir: <path>` and nothing else: the same length of any other 8
+// characters is no gitfile (mutation E17).
+func TestGitfileNeedsTheGitdirPrefix(t *testing.T) {
+	real := gitDirFixture(t, "ref: refs/heads/main\n")
+	for content, want := range map[string]bool{
+		"gitdir: " + real + "\n": true,
+		"12345678" + real + "\n": false,
+		"GITDIR: " + real + "\n": false,
+	} {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, ".git"), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, got := (Repo{Root: dir}).gitDir(); got != want {
+			t.Errorf("gitDir with .git = %q: %v, want %v", content, got, want)
+		}
+	}
+}
+
+// Repo.__init__ makes GIT_OBJECT_DIRECTORY absolute against the PROCESS directory:
+// the subprocess (which runs in the working tree) reads the same objects
+// (mutation E3). The GIT_DIR / GIT_COMMON_DIR pinning is covered by the differential
+// oracle (mutations E1, E2), because Python reads refs through an ambient
+// GIT_COMMON_DIR too, so a unit test cannot say what "this repository" means there.
+func TestObjectDirectoryIsMadeAbsoluteAgainstTheProcessDirectory(t *testing.T) {
+	// Deeper than the process directory, so the ../ run of the relative path lands
+	// somewhere else when it is resolved from the working tree.
+	deep := filepath.Join(t.TempDir(), "a", "b", "c", "d", "e", "f", "g", "h", "i")
+	if err := os.MkdirAll(deep, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitIn(t, deep, "init", "-q", "-b", "main")
+	gitIn(t, deep, "commit", "-q", "--allow-empty", "-m", "first")
+	self, err := Open(deep)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := self.IterCommitsSince(context.Background(), nil)
+	if err != nil || len(want) != 1 {
+		t.Fatalf("control: %v, %d commits", err, len(want))
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	relative, err := filepath.Rel(cwd, filepath.Join(self.Root, ".git", "objects"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GIT_OBJECT_DIRECTORY", relative)
+	got, err := self.IterCommitsSince(context.Background(), nil)
+	if err != nil || len(got) != 1 || got[0].Hash != want[0].Hash {
+		t.Fatalf("%v, %v", err, got)
+	}
+}

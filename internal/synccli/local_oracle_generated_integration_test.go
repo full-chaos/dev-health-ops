@@ -256,12 +256,34 @@ func repositoryStateScenarios() []localScenario {
 			f.t.Fatal(err)
 		}
 	}, "")
+	add(".git has a garbage HEAD", func(f *fixture) {
+		basic(f)
+		f.write(".git/HEAD", "garbage\n", 0o644)
+	}, "")
 	add(".git is an empty file", func(f *fixture) {
 		basic(f)
 		if err := os.RemoveAll(filepath.Join(f.dir, ".git")); err != nil {
 			f.t.Fatal(err)
 		}
 		f.write(".git", "", 0o644)
+	}, "")
+	add(".git is a gitfile without the gitdir prefix", func(f *fixture) {
+		basic(f)
+		real := move(f)
+		f.write(".git", "notgitdir: "+real+"\n", 0o644)
+	}, "")
+	add(".git is a gitfile with a different prefix case", func(f *fixture) {
+		basic(f)
+		real := move(f)
+		f.write(".git", "GITDIR: "+real+"\n", 0o644)
+	}, "")
+	add("a linked worktree ahead of the main tree", func(f *fixture) {
+		basic(f)
+		linked := filepath.Join(filepath.Dir(f.dir), filepath.Base(f.dir)+"-ahead")
+		f.git("worktree", "add", "-q", "-b", "ahead", linked)
+		f.dir = linked
+		f.write("ahead.txt", "ahead\n", 0o644)
+		f.commit("ahead\n")
 	}, "")
 	add("a linked worktree", func(f *fixture) {
 		basic(f)
@@ -623,6 +645,21 @@ func ambientGitEnvScenarios() []localScenario {
 		}},
 		{"GIT_OBJECT_DIRECTORY does not exist", one("GIT_OBJECT_DIRECTORY", "/nonexistent/objects")},
 		{"GIT_OBJECT_DIRECTORY is relative", one("GIT_OBJECT_DIRECTORY", ".git/objects")},
+		{"GIT_OBJECT_DIRECTORY is relative to the process directory", func(self, other string) map[string]string {
+			cwd, err := os.Getwd()
+			if err != nil {
+				panic(err)
+			}
+			rel, err := filepath.Rel(cwd, other+"/.git/objects")
+			if err != nil {
+				panic(err)
+			}
+			return map[string]string{"GIT_OBJECT_DIRECTORY": rel}
+		}},
+		{"GIT_COMMON_DIR is empty", one("GIT_COMMON_DIR", "")},
+		{"GIT_COMMON_DIR names this repository", func(self, other string) map[string]string {
+			return map[string]string{"GIT_COMMON_DIR": self + "/.git"}
+		}},
 		{"GIT_ALTERNATE_OBJECT_DIRECTORIES names another repository", func(self, other string) map[string]string {
 			return map[string]string{"GIT_ALTERNATE_OBJECT_DIRECTORIES": other + "/.git/objects"}
 		}},
@@ -682,6 +719,9 @@ func ambientGitEnvScenarios() []localScenario {
 				richRepository(f, "12")
 				b := newFixture(f.t, "other-repository")
 				richRepository(b, "99")
+				// The other repository's index differs from this one's: the diff of a root
+				// commit is taken against the working tree through the index of the git dir.
+				b.git("rm", "-q", "--cached", "seed.txt")
 				other = b.dir
 			},
 			envFn: func(f *fixture) map[string]string { return c.vars(f.dir, other) },

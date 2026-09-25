@@ -38,7 +38,7 @@ def tag(value):
     return {"t": "str", "v": str(value)}
 
 
-_SET_BY_REQUEST = set()
+_SET_BY_REQUEST: set[str] = set()
 
 
 def run(request):

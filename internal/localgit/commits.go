@@ -94,11 +94,7 @@ func (r Repo) readCommits(ctx context.Context, hashes []string) ([]Commit, error
 	if len(hashes) == 0 {
 		return nil, nil
 	}
-	bin := r.Git
-	if bin == "" {
-		bin = "git"
-	}
-	command := exec.CommandContext(ctx, bin, "cat-file", "--batch")
+	command := exec.CommandContext(ctx, "git", "cat-file", "--batch")
 	command.Dir = r.Root
 	command.Env = r.env()
 	command.Stdin = strings.NewReader(strings.Join(hashes, "\n") + "\n")

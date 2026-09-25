@@ -28,8 +28,6 @@ var ErrNoRepository = errors.New("no git repository found")
 type Repo struct {
 	// Root is Path(repo_path).resolve(): absolute, symlinks resolved.
 	Root string
-	// Git is the git binary; empty means "git" on PATH.
-	Git string
 }
 
 // Open resolves path like pathlib.Path(path).resolve() and checks for .git.
@@ -56,11 +54,7 @@ func (r Repo) Name() string { return filepath.Base(r.Root) }
 // (LANGUAGE=C, LC_ALL=C: git's own messages are not read, but a decimal
 // separator or quoting locale must not change the output shape).
 func (r Repo) run(ctx context.Context, args ...string) ([]byte, error) {
-	bin := r.Git
-	if bin == "" {
-		bin = "git"
-	}
-	command := exec.CommandContext(ctx, bin, args...)
+	command := exec.CommandContext(ctx, "git", args...)
 	command.Dir = r.Root
 	command.Env = r.env()
 	var stdout, stderr bytes.Buffer

@@ -501,7 +501,7 @@ func (materializer *NativeMaterializer) Materialize(
 	if len(units) > loaded.totalUnitCap {
 		return PlanResult{}, fmt.Errorf("%w: plan has %d units over cap %d", ErrInvalidPlan, len(units), loaded.totalUnitCap)
 	}
-	if len(units) > 0 && loaded.terminalReason == "" {
+	if (len(units) > 0 || zeroUnitPlanNeedsCredentialStamp(loaded.provider)) && loaded.terminalReason == "" {
 		if err := resolveCredentialStamp(ctx, coordinatorTx, &loaded); err != nil {
 			return PlanResult{}, err
 		}
@@ -913,6 +913,17 @@ func resolveCredentialStamp(ctx context.Context, tx pgx.Tx, loaded *loadedMateri
 	loaded.credentialID = &credential
 	loaded.authSource = &auth
 	return nil
+}
+
+// zeroUnitPlanNeedsCredentialStamp is planner.py's
+// _zero_unit_plan_needs_credential_stamp (CHAOS-4593): a Jira plan with no
+// units still arms reference discovery, and Jira's strict populate needs
+// the frozen credential, so the run is stamped anyway. Jira only, as in
+// Python: every other provider's zero-unit plan stays unstamped (and a
+// credential-less PagerDuty plan must not reach resolveCredentialStamp's
+// refusal). provider is lower(integration.provider), as loaded.
+func zeroUnitPlanNeedsCredentialStamp(provider string) bool {
+	return provider == "jira"
 }
 
 // stampCredentialFingerprint is the credential_fingerprint half of

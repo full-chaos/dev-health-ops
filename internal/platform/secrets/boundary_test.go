@@ -9,8 +9,64 @@ import (
 func TestCredentialComponents_URLForm(t *testing.T) {
 	dsn := "postgres://user:" + marker + "@host/db"
 	got := CredentialComponents(dsn)
-	if len(got) != 2 || got[0] != dsn || got[1] != marker {
-		t.Fatalf("CredentialComponents(%q) = %v, want [dsn, password]", dsn, got)
+	if len(got) != 3 || got[0] != dsn || got[1] != marker || got[2] != "user" {
+		t.Fatalf("CredentialComponents(%q) = %v, want [dsn, password, login name]", dsn, got)
+	}
+}
+
+func contains(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
+func TestCredentialComponents_LoginName(t *testing.T) {
+	for name, tc := range map[string]struct {
+		dsn  string
+		want []string // must be among the components
+		not  []string // must not be
+	}{
+		"URL without a password":  {"clickhouse://alice-login@host:9000/db", []string{"alice-login"}, nil},
+		"percent-encoded login":   {"clickhouse://ali%40ce:pw-x@host/db", []string{"ali@ce", "pw-x"}, nil},
+		"empty login, a password": {"postgres://:pw-only@host/db", []string{"pw-only"}, []string{""}},
+		"URL without userinfo":    {"clickhouse://host:9000/db", nil, []string{"host"}},
+		"keyword bare":            {"host=h user=bob-login password=pw-k dbname=d", []string{"bob-login", "pw-k"}, nil},
+		"keyword quoted":          {"host=h user = 'bob l\\'ogin' password=pw-k", []string{"bob l'ogin", "pw-k"}, nil},
+		"keyword first":           {"user=first-login host=h", []string{"first-login"}, nil},
+		"not another parameter":   {"host=h superuser=nope db_user=nope2 password=pw-k", []string{"pw-k"}, []string{"nope", "nope2"}},
+	} {
+		got := CredentialComponents(tc.dsn)
+		for _, want := range tc.want {
+			if !contains(got, want) {
+				t.Errorf("%s: CredentialComponents(%q) = %q, want %q among them", name, tc.dsn, got, want)
+			}
+		}
+		for _, not := range tc.not {
+			if contains(got, not) {
+				t.Errorf("%s: CredentialComponents(%q) = %q, must not contain %q", name, tc.dsn, got, not)
+			}
+		}
+	}
+}
+
+// TestBoundary_RedactsTheLoginNameTheServerEchoes is the shape of ClickHouse's
+// own authentication-failure text: the login name leads it.
+func TestBoundary_RedactsTheLoginNameTheServerEchoes(t *testing.T) {
+	dsn := "clickhouse://worker-login:" + marker + "@host:9000/db"
+	err := errors.New("code: 516, message: worker-login: Authentication failed: password is incorrect, or there is no user with such name")
+	for name, redacted := range map[string]error{
+		"Boundary":          NewBoundary(dsn).Redact(err),
+		"WithRedactedCause": WithRedactedCause(errors.New("clickhouse unavailable"), dsn, err),
+	} {
+		if strings.Contains(redacted.Error(), "worker-login") {
+			t.Errorf("%s left the login name in: %v", name, redacted)
+		}
+		if !strings.Contains(redacted.Error(), "Authentication failed") {
+			t.Errorf("%s lost the failure's own text: %v", name, redacted)
+		}
 	}
 }
 

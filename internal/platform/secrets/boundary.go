@@ -17,14 +17,24 @@ const RedactedMarker = "[REDACTED]"
 // backslashes inside the quotes).
 var keywordPasswordPattern = regexp.MustCompile(`(?i)\bpassword\s*=\s*('(?:\\.|[^'\\])*'|[^'\s]+)`)
 
+// keywordUserPattern matches the same conninfo string's user parameter, the
+// value quoted or bare exactly as for the password. The word boundary keeps it
+// from matching inside another parameter's name (a "superuser=" or "db_user=").
+var keywordUserPattern = regexp.MustCompile(`(?i)(?:^|\s)user\s*=\s*('(?:\\.|[^'\\])*'|[^'\s]+)`)
+
 // CredentialComponents returns every substring of dsn that is, on its
 // own, as sensitive as dsn itself: dsn's own bytes, and, separately, its
-// password component -- extracted from a URL-form DSN
-// (postgres://user:PASSWORD@host/db) or a keyword-form one (host=...
-// password=PASSWORD ...), whichever shape dsn has. The password is
+// password and login-name components -- extracted from a URL-form DSN
+// (postgres://USER:PASSWORD@host/db) or a keyword-form one (host=...
+// user=USER password=PASSWORD ...), whichever shape dsn has. Each is
 // listed on its own, independent of dsn's literal text, because a
 // downstream error can reformat, re-quote, or otherwise fail to echo dsn
-// byte-for-byte while still carrying the password bytes unchanged.
+// byte-for-byte while still carrying the password or login-name bytes
+// unchanged (ClickHouse's authentication-failure text names the login
+// name). A login name is redacted wherever it appears, so a very common
+// one ("postgres", "default") also replaces the same word where it is not
+// the login name (a database of that name): a redaction that cannot leak
+// is chosen over a diagnostic that reads better.
 // Returns nil for an empty dsn (a legal, no-op input -- -dry-run runs
 // with no DSN at all).
 func CredentialComponents(dsn string) []string {
@@ -36,14 +46,19 @@ func CredentialComponents(dsn string) []string {
 		if pw, ok := u.User.Password(); ok && pw != "" {
 			out = append(out, pw)
 		}
-	}
-	if m := keywordPasswordPattern.FindStringSubmatch(dsn); m != nil {
-		pw := m[1]
-		if len(pw) >= 2 && strings.HasPrefix(pw, "'") && strings.HasSuffix(pw, "'") {
-			pw = strings.NewReplacer(`\'`, `'`, `\\`, `\`).Replace(pw[1 : len(pw)-1])
+		if name := u.User.Username(); name != "" {
+			out = append(out, name)
 		}
-		if pw != "" {
-			out = append(out, pw)
+	}
+	for _, pattern := range []*regexp.Regexp{keywordPasswordPattern, keywordUserPattern} {
+		if m := pattern.FindStringSubmatch(dsn); m != nil {
+			value := m[1]
+			if len(value) >= 2 && strings.HasPrefix(value, "'") && strings.HasSuffix(value, "'") {
+				value = strings.NewReplacer(`\'`, `'`, `\\`, `\`).Replace(value[1 : len(value)-1])
+			}
+			if value != "" {
+				out = append(out, value)
+			}
 		}
 	}
 	return out

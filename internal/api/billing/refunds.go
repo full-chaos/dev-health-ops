@@ -222,8 +222,9 @@ func (row refundRow) unresolved() bool { return row.status == "pending" && row.r
 
 // sameRequest reports whether request is the one that made row: the same
 // invoice, amount as sent (an amount left out is not an amount given),
-// reason and description. A row from before the requested amount was
-// kept compares the amount only when the request gives one.
+// reason and description. A row from before the requested amount was kept
+// matches only a request that gives the row's amount: a request that
+// leaves it out cannot be told from a first request that gave one.
 func (row refundRow) sameRequest(invoiceID uuid.UUID, request refundRequest) bool {
 	if row.invoice == nil || *row.invoice != invoiceID || !sameText(request.reason, row.reason) || !sameText(request.description, row.description) {
 		return false
@@ -231,7 +232,7 @@ func (row refundRow) sameRequest(invoiceID uuid.UUID, request refundRequest) boo
 	if row.requested != nil {
 		return *row.requested == requestedAmount(request)
 	}
-	return request.amount == nil || (request.amount.IsInt64() && request.amount.Int64() == row.amount)
+	return request.amount != nil && request.amount.IsInt64() && request.amount.Int64() == row.amount
 }
 
 // resume is the pending refund for a row reserved by an earlier request.

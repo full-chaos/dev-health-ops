@@ -149,6 +149,17 @@ func TestRefundWriteFirstAndIdempotent(t *testing.T) {
 	code, out := refund("retry: the key reused for another amount", "key-idem-1", `{"invoice_id":"`+invIdem+`","amount":200}`)
 	expect("retry: the key reused for another amount is refused", fmt.Sprint(code, " ", out["detail"]), "409 Idempotency-Key was used for a different refund request")
 	expect("retry: still one refund row", row(`SELECT count(*)::text FROM refunds WHERE invoice_id = '`+invIdem+`'`), "1")
+	// A row made before the requested amount was kept (no requested_amount
+	// in its metadata): a key reused with the amount left out cannot be told
+	// from the first request, which gave one, so it is refused; the same
+	// amount still answers the first refund.
+	exec(`UPDATE refunds SET metadata = (metadata::jsonb - 'requested_amount')::json WHERE invoice_id = '` + invIdem + `'`)
+	expect("legacy row: the requested amount is gone from its metadata", row(`SELECT (metadata::jsonb ? 'requested_amount')::text FROM refunds WHERE invoice_id = '`+invIdem+`'`), "false")
+	code, out = refund("legacy row: the key reused with the amount left out", "key-idem-1", `{"invoice_id":"`+invIdem+`"}`)
+	expect("legacy row: the key reused with the amount left out is refused", fmt.Sprint(code, " ", out["detail"]), "409 Idempotency-Key was used for a different refund request")
+	code, out = refund("legacy row: the key reused with the same amount", "key-idem-1", `{"invoice_id":"`+invIdem+`","amount":300}`)
+	expect("legacy row: the same amount answers the first refund", fmt.Sprintf("%d %t", code, out["id"] == first["id"] && first["id"] != nil), "200 true")
+	expect("legacy row: still one refund row", row(`SELECT count(*)::text FROM refunds WHERE invoice_id = '`+invIdem+`'`), "1")
 	code, out = refund("retry: the key reused with the amount left out", "key-idem-1", `{"invoice_id":"`+invIdem+`"}`)
 	expect("retry: the key reused with the amount left out is refused", fmt.Sprint(code, " ", out["detail"]), "409 Idempotency-Key was used for a different refund request")
 	code, out = refund("retry: the key reused with another reason", "key-idem-1", `{"invoice_id":"`+invIdem+`","amount":300,"reason":"fraudulent"}`)

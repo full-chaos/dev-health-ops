@@ -602,3 +602,36 @@ func TestVerifyReportsEveryMissingIncident(t *testing.T) {
 		t.Fatalf("Verify after the write = %+v, %v", result, err)
 	}
 }
+
+// TestBackfillOperationalPartialWriteIsNamedAndRerunnable is the named
+// limitation of a writer with no cross-table transaction: when the last stage
+// fails the error names it, the stages before it stay written, and running again
+// writes the same identities (nothing doubles).
+func TestBackfillOperationalPartialWriteIsNamedAndRerunnable(t *testing.T) {
+	ch := startClickHouse(t, "")
+	seedLegacy(t, ch)
+	create := ch.do(t, "SHOW CREATE TABLE operational_on_call_schedules")
+	ch.do(t, "DROP TABLE operational_on_call_schedules")
+	s := scenarios[0]
+	code, _, stderr, _ := goRun(t, ch, s)
+	if code != 1 || !strings.Contains(stderr, "write stage operational_on_call_schedules failed") ||
+		!strings.Contains(stderr, "stages before it are written") {
+		t.Fatalf("exit %d, stderr does not name the failed stage:\n%s", code, stderr)
+	}
+	count := func(table string) string {
+		return strings.TrimSpace(ch.do(t, "SELECT count() FROM "+table+" FINAL WHERE org_id = '"+orgMain+"'"))
+	}
+	if count("operational_incidents") != "13" || count("operational_alerts") != "8" {
+		t.Fatalf("the stages before the failure were not written: incidents %s alerts %s", count("operational_incidents"), count("operational_alerts"))
+	}
+	// Restore the table and run again: the same identities, no duplicates.
+	statement := strings.TrimSpace(strings.NewReplacer(`\n`, "\n", `\'`, "'").Replace(create))
+	ch.do(t, statement)
+	code, stdout, stderr, _ := goRun(t, ch, s)
+	if code != 0 {
+		t.Fatalf("re-run exit %d:\n%s", code, stderr)
+	}
+	if !strings.Contains(stdout, "incidents=13, alerts=8, schedules=2") || count("operational_incidents") != "13" || count("operational_alerts") != "8" || count("operational_on_call_schedules") != "2" {
+		t.Fatalf("re-run left %s incidents, %s alerts, %s schedules\n%s", count("operational_incidents"), count("operational_alerts"), count("operational_on_call_schedules"), stdout)
+	}
+}

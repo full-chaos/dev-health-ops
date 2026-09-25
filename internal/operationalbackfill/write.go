@@ -212,11 +212,18 @@ func insertRows(ctx context.Context, conn driver.Conn, rows []Row, contract Cont
 }
 
 // Write persists a batch as write_operational_batch does: incidents, then
-// alerts, then schedules (this migration has no services or mappings).
+// alerts, then schedules (this migration has no services or mappings). The
+// three inserts are separate statements with no transaction across them: a
+// failure names the failed stage, the stages before it stay written, and a
+// re-run writes the same identities again (the tables are ReplacingMergeTree).
 func Write(ctx context.Context, conn driver.Conn, batch Batch, contract Contract) error {
 	for _, rows := range [][]Row{batch.Incidents, batch.Alerts, batch.Schedules} {
 		if err := insertRows(ctx, conn, rows, contract); err != nil {
-			return err
+			table := "operational rows"
+			if len(rows) > 0 {
+				table = rows[0].Table
+			}
+			return fmt.Errorf("write stage %s failed (stages before it are written; re-running writes the same identities again): %w", table, err)
 		}
 	}
 	return nil
@@ -320,14 +327,18 @@ func Verify(ctx context.Context, conn driver.Conn, orgID string, batch Batch, co
 func Run(ctx context.Context, conn driver.Conn, orgID, instance string, contract Contract, now func() time.Time) (Result, error) {
 	legacy, err := LoadLegacy(ctx, conn, orgID)
 	if err != nil {
-		return Result{}, err
+		return Result{}, fmt.Errorf("read stage (nothing written): %w", err)
 	}
 	batch, err := Map(orgID, instance, legacy, now())
 	if err != nil {
-		return Result{}, err
+		return Result{}, fmt.Errorf("map stage (nothing written): %w", err)
 	}
 	if err := Write(ctx, conn, batch, contract); err != nil {
 		return Result{}, err
 	}
-	return Verify(ctx, conn, orgID, batch, contract)
+	result, err := Verify(ctx, conn, orgID, batch, contract)
+	if err != nil {
+		return result, fmt.Errorf("verify stage (all rows written): %w", err)
+	}
+	return result, nil
 }

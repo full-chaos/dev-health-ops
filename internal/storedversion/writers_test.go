@@ -43,6 +43,9 @@ var contractedWriters = map[string]string{
 	"internal/providersync/stored_version.go|repos":                                   "provider sync repositories (github, gitlab)",
 	"internal/providersync/stored_version.go|git_commits":                             "provider sync commits",
 	"internal/providersync/stored_version.go|deployments":                             "provider sync deployments (github, gitlab)",
+	"internal/localgit/stored_version.go|repos":                                       "local sync repositories (dho sync git|prs|blame --provider local)",
+	"internal/localgit/stored_version.go|git_commits":                                 "local sync commits",
+	"internal/localgit/stored_version.go|git_pull_requests":                           "local sync pull requests (inferred from merge commits and refs)",
 }
 
 // outOfScopeWriters write operational_* tables: revisioned snapshots under

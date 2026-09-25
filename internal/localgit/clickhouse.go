@@ -3,7 +3,6 @@ package localgit
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
@@ -29,17 +28,27 @@ func (w Writer) now() time.Time {
 	return time.Now().UTC()
 }
 
-func (w Writer) insert(ctx context.Context, table string, columns []string, rows [][]any) error {
+// Statements of the tables the stored-version invariant does not cover:
+// plain inserts, with org_id appended only when there is one (`_insert_rows`),
+// so a run with no organization gets the column default.
+const (
+	commitStatsInsert = `INSERT INTO git_commit_stats (repo_id, commit_hash, file_path, additions, deletions, old_file_mode, new_file_mode, last_synced)`
+	commitStatsOrgIn  = `INSERT INTO git_commit_stats (repo_id, commit_hash, file_path, additions, deletions, old_file_mode, new_file_mode, last_synced, org_id)`
+)
+
+// insert writes rows with the statement that fits: plain, or with org_id.
+func (w Writer) insert(ctx context.Context, table, plain, withOrg string, rows [][]any) error {
 	if len(rows) == 0 {
 		return nil
 	}
+	statement := plain
 	if w.OrgID != "" {
-		columns = append(append([]string{}, columns...), "org_id")
+		statement = withOrg
 		for i := range rows {
 			rows[i] = append(rows[i], w.OrgID)
 		}
 	}
-	batch, err := w.Conn.PrepareBatch(ctx, fmt.Sprintf("INSERT INTO %s (%s)", table, strings.Join(columns, ", ")))
+	batch, err := w.Conn.PrepareBatch(ctx, statement)
 	if err != nil {
 		return fmt.Errorf("prepare %s: %w", table, err)
 	}
@@ -57,9 +66,8 @@ func (w Writer) insert(ctx context.Context, table string, columns []string, rows
 // is the sync time (build_repository_insert_row); tags are the repository's tag names (TagsJSON).
 func (w Writer) InsertRepo(ctx context.Context, id uuid.UUID, name, tagsJSON string) error {
 	synced := w.now()
-	return w.insert(ctx, "repos",
-		[]string{"id", "repo", "ref", "created_at", "settings", "tags", "provider", "last_synced", "source_id"},
-		[][]any{{id, name, nil, synced, nil, tagsJSON, "local", synced, nil}})
+	return w.writeContracted(ctx, repositoryContract, repoInsert,
+		[][]any{{id, w.effectiveOrg(), name, nil, synced, nil, tagsJSON, "local", synced}})
 }
 
 func nullable(text *string) any {
@@ -75,12 +83,10 @@ func (w Writer) InsertCommits(ctx context.Context, repoID uuid.UUID, commits []C
 	synced := w.now()
 	rows := make([][]any, 0, len(commits))
 	for _, c := range commits {
-		rows = append(rows, []any{repoID, c.Hash, c.Message, nullable(c.AuthorName), nullable(c.AuthorEmail), c.CommittedAt,
-			nullable(c.CommitterName), nullable(c.CommitterEmail), c.CommittedAt, uint32(len(c.Parents)), synced, nil})
+		rows = append(rows, []any{w.effectiveOrg(), repoID, c.Hash, c.Message, nullable(c.AuthorName), nullable(c.AuthorEmail), c.CommittedAt,
+			nullable(c.CommitterName), nullable(c.CommitterEmail), c.CommittedAt, uint32(len(c.Parents)), synced})
 	}
-	return w.insert(ctx, "git_commits",
-		[]string{"repo_id", "hash", "message", "author_name", "author_email", "author_when", "committer_name", "committer_email", "committer_when", "parents", "last_synced", "source_id"},
-		rows)
+	return w.writeContracted(ctx, commitContract, commitInsert, rows)
 }
 
 // InsertCommitStats is insert_git_commit_stats.
@@ -90,9 +96,7 @@ func (w Writer) InsertCommitStats(ctx context.Context, repoID uuid.UUID, stats [
 	for _, s := range stats {
 		rows = append(rows, []any{repoID, s.CommitHash, s.FilePath, int32(s.Additions), int32(s.Deletions), s.OldFileMode, s.NewFileMode, synced})
 	}
-	return w.insert(ctx, "git_commit_stats",
-		[]string{"repo_id", "commit_hash", "file_path", "additions", "deletions", "old_file_mode", "new_file_mode", "last_synced"},
-		rows)
+	return w.insert(ctx, "git_commit_stats", commitStatsInsert, commitStatsOrgIn, rows)
 }
 
 // InsertPullRequests is insert_git_pull_requests for the inferred rows: no
@@ -106,10 +110,7 @@ func (w Writer) InsertPullRequests(ctx context.Context, repoID uuid.UUID, prs []
 			merged = *p.MergedAt
 		}
 		rows = append(rows, []any{repoID, uint32(p.Number), nullable(p.Title), nil, p.State, nullable(p.AuthorName), nullable(p.AuthorEmail),
-			p.CreatedAt, merged, nil, nullable(p.HeadBranch), nil, nil, nil, nil, nil, nil, uint32(0), uint32(0), uint32(0), synced, nil})
+			p.CreatedAt, merged, nil, nullable(p.HeadBranch), nil, nil, nil, nil, nil, nil, uint32(0), uint32(0), uint32(0), synced, nil, w.effectiveOrg()})
 	}
-	return w.insert(ctx, "git_pull_requests",
-		[]string{"repo_id", "number", "title", "body", "state", "author_name", "author_email", "created_at", "merged_at", "closed_at", "head_branch", "base_branch",
-			"additions", "deletions", "changed_files", "first_review_at", "first_comment_at", "changes_requested_count", "reviews_count", "comments_count", "last_synced", "source_id"},
-		rows)
+	return w.writeContracted(ctx, pullRequestContract, pullRequestInsert, rows)
 }

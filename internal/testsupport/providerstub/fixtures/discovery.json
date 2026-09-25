@@ -1,20 +1,234 @@
 [
-  {"provider": "github", "method": "GET", "path": "/c/ok/user/repos", "status": 200,
-   "body": [{"name": "zz-repo", "full_name": "zz-venue/zz-repo", "owner": {"login": "zz-venue"}},
-            {"name": "other-repo", "full_name": "other-org/other-repo", "owner": {"login": "other-org"}}]},
-  {"provider": "github", "method": "GET", "path": "/c/ok/orgs/zz-venue/repos", "status": 200,
-   "body": [{"name": "zz-repo", "full_name": "zz-venue/zz-repo", "owner": {"login": "zz-venue"}}]},
-  {"provider": "github", "method": "GET", "path": "/c/401/user/repos", "status": 401,
-   "body": {"message": "Bad credentials"}},
-  {"provider": "github", "method": "GET", "path": "/c/fallback/orgs/zz-venue/repos", "status": 404,
-   "body": {"message": "Not Found"}},
-  {"provider": "github", "method": "GET", "path": "/c/fallback/users/zz-venue/repos", "status": 200,
-   "body": [{"name": "zz-user-repo", "full_name": "zz-venue/zz-user-repo", "owner": {"login": "zz-venue"}}]},
-  {"provider": "gitlab", "method": "GET", "path": "/c/ok/api/v4/projects", "query": {"membership": "true"}, "status": 200,
-   "body": [{"id": 101, "name": "zz-project", "path_with_namespace": "zz-venue/zz-project"},
-            {"id": 102, "name": "other-project", "path_with_namespace": "other-group/other-project"}]},
-  {"provider": "gitlab", "method": "GET", "path": "/c/ok/api/v4/groups/zz-venue/projects", "status": 200,
-   "body": [{"id": 101, "name": "zz-project", "path_with_namespace": "zz-venue/zz-project"}]},
-  {"provider": "gitlab", "method": "GET", "path": "/c/401/api/v4/projects", "query": {"membership": "true"}, "status": 401,
-   "body": {"message": "401 Unauthorized"}}
+ {
+  "provider": "github",
+  "method": "GET",
+  "path": "/user/repos",
+  "status": 200,
+  "body": [
+   {
+    "name": "zz-repo",
+    "full_name": "zz-venue/zz-repo",
+    "owner": {
+     "login": "zz-venue"
+    }
+   },
+   {
+    "name": "other-repo",
+    "full_name": "other-org/other-repo",
+    "owner": {
+     "login": "other-org"
+    }
+   }
+  ]
+ },
+ {
+  "provider": "github",
+  "method": "GET",
+  "path": "/orgs/zz-venue",
+  "status": 200,
+  "body": {
+   "login": "zz-venue",
+   "type": "Organization"
+  }
+ },
+ {
+  "provider": "github",
+  "method": "GET",
+  "path": "/orgs/zz-venue/repos",
+  "status": 200,
+  "body": [
+   {
+    "name": "zz-repo",
+    "full_name": "zz-venue/zz-repo",
+    "owner": {
+     "login": "zz-venue"
+    }
+   }
+  ]
+ },
+ {
+  "provider": "github",
+  "method": "GET",
+  "path": "/orgs/zz-401",
+  "status": 401,
+  "body": {
+   "message": "Bad credentials"
+  }
+ },
+ {
+  "provider": "github",
+  "method": "GET",
+  "path": "/orgs/zz-401/repos",
+  "status": 401,
+  "body": {
+   "message": "Bad credentials"
+  }
+ },
+ {
+  "provider": "github",
+  "method": "GET",
+  "path": "/users/zz-401",
+  "status": 401,
+  "body": {
+   "message": "Bad credentials"
+  }
+ },
+ {
+  "provider": "github",
+  "method": "GET",
+  "path": "/users/zz-401/repos",
+  "status": 401,
+  "body": {
+   "message": "Bad credentials"
+  }
+ },
+ {
+  "provider": "github",
+  "method": "GET",
+  "path": "/orgs/zz-fallback",
+  "status": 404,
+  "body": {
+   "message": "Not Found"
+  }
+ },
+ {
+  "provider": "github",
+  "method": "GET",
+  "path": "/orgs/zz-fallback/repos",
+  "status": 404,
+  "body": {
+   "message": "Not Found"
+  }
+ },
+ {
+  "provider": "github",
+  "method": "GET",
+  "path": "/users/zz-fallback",
+  "status": 200,
+  "body": {
+   "login": "zz-fallback",
+   "type": "User"
+  }
+ },
+ {
+  "provider": "github",
+  "method": "GET",
+  "path": "/users/zz-fallback/repos",
+  "status": 200,
+  "body": [
+   {
+    "name": "zz-user-repo",
+    "full_name": "zz-fallback/zz-user-repo",
+    "owner": {
+     "login": "zz-fallback"
+    }
+   }
+  ]
+ },
+ {
+  "provider": "gitlab",
+  "method": "GET",
+  "path": "/api/v4/projects",
+  "status": 200,
+  "body": [
+   {
+    "id": 101,
+    "name": "zz-project",
+    "path_with_namespace": "zz-venue/zz-project"
+   },
+   {
+    "id": 102,
+    "name": "other-project",
+    "path_with_namespace": "other-group/other-project"
+   }
+  ],
+  "query": {
+   "membership": "true"
+  }
+ },
+ {
+  "provider": "gitlab",
+  "method": "GET",
+  "path": "/api/v4/groups/zz-venue",
+  "status": 200,
+  "body": {
+   "id": 7,
+   "full_path": "zz-venue"
+  }
+ },
+ {
+  "provider": "gitlab",
+  "method": "GET",
+  "path": "/api/v4/groups/zz-venue/projects",
+  "status": 200,
+  "body": [
+   {
+    "id": 101,
+    "name": "zz-project",
+    "path_with_namespace": "zz-venue/zz-project"
+   }
+  ]
+ },
+ {
+  "provider": "gitlab",
+  "method": "GET",
+  "path": "/c/ok/api/v4/projects",
+  "status": 200,
+  "body": [
+   {
+    "id": 101,
+    "name": "zz-project",
+    "path_with_namespace": "zz-venue/zz-project"
+   },
+   {
+    "id": 102,
+    "name": "other-project",
+    "path_with_namespace": "other-group/other-project"
+   }
+  ],
+  "query": {
+   "membership": "true"
+  }
+ },
+ {
+  "provider": "gitlab",
+  "method": "GET",
+  "path": "/c/ok/api/v4/groups/zz-venue",
+  "status": 200,
+  "body": {
+   "id": 7,
+   "full_path": "zz-venue"
+  }
+ },
+ {
+  "provider": "gitlab",
+  "method": "GET",
+  "path": "/c/ok/api/v4/groups/zz-venue/projects",
+  "status": 200,
+  "body": [
+   {
+    "id": 101,
+    "name": "zz-project",
+    "path_with_namespace": "zz-venue/zz-project"
+   }
+  ]
+ },
+ {
+  "provider": "gitlab",
+  "method": "GET",
+  "path": "/api/v4/groups/zz-401",
+  "status": 401,
+  "body": {
+   "message": "401 Unauthorized"
+  }
+ },
+ {
+  "provider": "gitlab",
+  "method": "GET",
+  "path": "/api/v4/groups/zz-401/projects",
+  "status": 401,
+  "body": {
+   "message": "401 Unauthorized"
+  }
+ }
 ]

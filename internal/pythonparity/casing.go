@@ -1,7 +1,10 @@
 package pythonparity
 
 import (
+	"strings"
 	"sync"
+	"unicode"
+	"unicode/utf8"
 
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
@@ -51,41 +54,111 @@ import (
 // package-level Caser, internal/jobs/workgraph/units/telemetrylabels.go
 // constructed one per call. Both now call this; the copies are deleted.
 //
-// # A MEASURED, BOUNDED DIVERGENCE -- READ THIS BEFORE RELYING ON Lower
+// # Final sigma: decided here, not by x/text
 //
-// x/text is NOT a complete substitute for str.lower(). Its Final_Sigma
-// lookahead is BOUNDED where CPython's is not, and the boundary is exactly 31
-// case-ignorable runes (measured by lane-pathb-go via a codex round, carried
-// here verbatim from telemetrylabels.go's doc comment rather than rediscovered):
+// x/text's own Final_Sigma lookahead is BOUNDED where CPython's is not: it
+// gives up after 31 case-ignorable runes and concludes "no following cased
+// letter" (measured by lane-pathb-go via a codex round):
 //
 //	("AΣ" + "." * n + "B").lower()      n <= 30      n >= 31
 //	  CPython 3.14.7                          sigma        sigma      (medial)
-//	  x/text cases.Lower(Und)                 sigma        FINAL      <- differs
+//	  x/text cases.Lower(Und)                 sigma        FINAL
 //
-// Final_Sigma says a capital sigma is final only when it is NOT followed by a
-// cased letter, skipping case-ignorable characters in between. CPython sees the
-// following "B" at any distance; x/text's scan gives up past 31 and concludes
-// "no following cased letter".
+// So Lower does not let x/text map a capital sigma. It hands x/text only the
+// sigma-free segments between them -- every other lowercase mapping is
+// context-free, so a segment lowers exactly as it would inside the whole
+// string -- and maps each U+03A3 itself with CPython's own rule
+// (Objects/unicodeobject.c handle_capital_sigma): final (U+03C2) when a cased
+// character precedes it and none follows, skipping case-ignorable characters
+// in both directions at any distance; otherwise medial (U+03C3).
 //
-// TestLowerAndUpperMatchLivePythonOnEveryMultiRuneMapping CANNOT see this: it
-// enumerates single code points, and this divergence needs a 33+ rune input.
-// TestFinalSigmaLookaheadBoundaryIsWhereWeMeasuredIt pins it directly.
-//
-// This is a SHARED helper, so the containment argument that made the divergence
-// acceptable inside telemetrylabels (every allow-list entry and prefix there is
-// ASCII, so both sigma spellings land in the same bucket) does NOT
-// automatically transfer to a new caller. Before using Lower on a value where a
-// medial-vs-final sigma could change the ANSWER -- an equality test against a
-// non-ASCII literal, a persisted key, a hash input -- either prove the same
-// containment for your call site or implement Final_Sigma directly. Callers
-// whose comparands are all ASCII are contained by construction.
+// Cased and Case_Ignorable come from Go's unicode tables, which may be a
+// newer Unicode version than the running CPython's. A character assigned or
+// re-categorised after CPython's version can be decided differently; the
+// exhaustive oracle (TestSigmaPropertiesMatchLivePythonOnEveryCodePoint)
+// names that set rather than hiding it.
 func Lower(value string) string {
 	if value == "" {
 		return ""
 	}
 	caser := lowerPool.Get().(*cases.Caser)
 	defer lowerPool.Put(caser)
-	return caser.String(value)
+	if !strings.ContainsRune(value, capitalSigma) {
+		return caser.String(value)
+	}
+	var out strings.Builder
+	out.Grow(len(value))
+	start := 0
+	for index, r := range value {
+		if r != capitalSigma {
+			continue
+		}
+		out.WriteString(caser.String(value[start:index]))
+		if finalSigma(value, index) {
+			out.WriteRune(finalSmallSigma)
+		} else {
+			out.WriteRune(smallSigma)
+		}
+		start = index + utf8.RuneLen(capitalSigma)
+	}
+	out.WriteString(caser.String(value[start:]))
+	return out.String()
+}
+
+const (
+	capitalSigma    = '\u03a3'
+	smallSigma      = '\u03c3'
+	finalSmallSigma = '\u03c2'
+)
+
+// finalSigma is CPython's handle_capital_sigma for the capital sigma at byte
+// offset index: \p{cased} \p{case-ignorable}* U+03A3 !(\p{case-ignorable}*
+// \p{cased}), with no bound on either scan.
+func finalSigma(value string, index int) bool {
+	before := value[:index]
+	for before != "" {
+		r, size := utf8.DecodeLastRuneInString(before)
+		if caseIgnorable(r) {
+			before = before[:len(before)-size]
+			continue
+		}
+		if !cased(r) {
+			return false
+		}
+		after := value[index+utf8.RuneLen(capitalSigma):]
+		for after != "" {
+			r, size := utf8.DecodeRuneInString(after)
+			if caseIgnorable(r) {
+				after = after[size:]
+				continue
+			}
+			return !cased(r)
+		}
+		return true
+	}
+	return false
+}
+
+// cased is Unicode's Cased property: Lowercase (Ll + Other_Lowercase),
+// Uppercase (Lu + Other_Uppercase) or Lt.
+func cased(r rune) bool {
+	return unicode.IsLower(r) || unicode.IsUpper(r) || unicode.IsTitle(r) ||
+		unicode.Is(unicode.Other_Lowercase, r) || unicode.Is(unicode.Other_Uppercase, r)
+}
+
+// caseIgnorable is Unicode's Case_Ignorable property: Mn, Me, Cf, Lm, Sk, or
+// Word_Break MidLetter, MidNumLet or Single_Quote (listed below; Go has no
+// Word_Break tables).
+func caseIgnorable(r rune) bool {
+	if unicode.In(r, unicode.Mn, unicode.Me, unicode.Cf, unicode.Lm, unicode.Sk) {
+		return true
+	}
+	switch r {
+	case '\'', '.', ':', '\u00b7', '\u0387', '\u055f', '\u05f4', '\u2018', '\u2019',
+		'\u2024', '\u2027', '\ufe13', '\ufe52', '\ufe55', '\uff07', '\uff0e', '\uff1a':
+		return true
+	}
+	return false
 }
 
 // Upper is CPython's `str.upper()`. See Lower's doc comment -- same full-case

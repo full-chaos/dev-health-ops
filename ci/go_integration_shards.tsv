@@ -100,6 +100,7 @@ internal/api/webhookintake	13
 internal/apiservice	37
 internal/apiservice/acr	6
 internal/admincli	40
+internal/adminops	120
 internal/apiservice/admin	2
 internal/apiservice/metricsvenue	1
 internal/apiservice/adminsetupvenue	1

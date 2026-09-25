@@ -7,6 +7,7 @@
 # PR that adds the test: `ci/check_venue_oracle_registry.sh` (run on every PR
 # by tests/tooling/test_venue_oracle_registry.py) fails on a venue test that is
 # missing here and on a row with no test.
+internal/adminops	TestBillingVenueOracleMatchesThePythonProducer	run
 internal/adminops	TestBundlesVenueOracleMatchesThePythonProducer	run
 internal/adminops	TestLLMSettingsVenueOracleMatchesThePythonProducer	run
 internal/adminops	TestOrgsDeleteVenueOracleMatchesThePythonProducer	run

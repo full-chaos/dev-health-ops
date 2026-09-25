@@ -116,8 +116,22 @@ func TestFrozenGoldenRefusesWhatItCannotTrust(t *testing.T) {
 			}
 		})
 	}
-	if _, err := golden.frozenAnswers(sampleRequests()[:1]); err == nil || !strings.Contains(err.Error(), "holds 2 answers for 1 requests") {
+	// A shorter request list is served, and the answer it leaves unused is
+	// what Finish refuses; a longer one asks for more than the file holds.
+	if _, err := golden.frozenAnswers(sampleRequests()[:1]); err != nil {
 		t.Fatalf("a shorter request list: error = %v", err)
+	}
+	if err := golden.unusedAnswers(); err == nil || !strings.Contains(err.Error(), "holds 2 answers but the test used 1") {
+		t.Fatalf("an unused frozen answer: error = %v", err)
+	}
+	if _, err := golden.frozenAnswers(sampleRequests()); err == nil || !strings.Contains(err.Error(), "the test asks for 2 more") {
+		t.Fatalf("more requests than answers left: error = %v", err)
+	}
+	if _, err := golden.frozenAnswers(sampleRequests()[1:]); err != nil {
+		t.Fatalf("the remaining request: error = %v", err)
+	}
+	if err := golden.unusedAnswers(); err != nil {
+		t.Fatalf("every answer used: error = %v", err)
 	}
 	if _, err := golden.frozenRows("nope"); err == nil || !strings.Contains(err.Error(), `no row comparison "nope"`) {
 		t.Fatalf("an unknown row comparison: error = %v", err)

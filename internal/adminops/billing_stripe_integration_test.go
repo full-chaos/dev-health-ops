@@ -118,12 +118,14 @@ func clone(value map[string]any) map[string]any {
 
 // fakeStripe is one plane's Stripe API: it records each request and answers from
 // the SDK-built fixtures. A product named "FAIL-PRODUCT" and a price of 424242
-// cents are refused, and prod_err's prices list fails.
+// cents are refused, prod_err's prices list fails, and while listFails is set the
+// product list itself is refused.
 type fakeStripe struct {
-	mu       sync.Mutex
-	fixtures fixtureSet
-	calls    []string
-	counters map[string]int
+	mu        sync.Mutex
+	listFails bool
+	fixtures  fixtureSet
+	calls     []string
+	counters  map[string]int
 }
 
 func stripeFail(w http.ResponseWriter, message string) {
@@ -179,6 +181,10 @@ func (f *fakeStripe) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	switch {
 	case r.Method == http.MethodGet && r.URL.Path == "/v1/products":
+		if f.listFails {
+			stripeFail(w, "product listing refused")
+			return
+		}
 		page(f.fixtures.Products, "/v1/products")
 	case r.Method == http.MethodGet && r.URL.Path == "/v1/prices":
 		product := r.URL.Query().Get("product")
@@ -228,6 +234,8 @@ type stripeStep struct {
 	noKey bool
 	sql   string
 	seed  bool
+	// listFails makes the fake refuse the product list for this step.
+	listFails bool
 }
 
 func ss(args ...string) stripeStep { return stripeStep{args: args} }
@@ -265,6 +273,9 @@ SELECT gen_random_uuid(), id, 'yearly', 1, 'usd', true, 'price_new_y' FROM billi
 	ss("billing", "pull-stripe"),
 	ss("billing", "pull-stripe"),
 	ss("billing", "list"),
+	// The product list itself is refused: a real pull and a dry run both report it.
+	{args: []string{"billing", "pull-stripe"}, listFails: true},
+	{args: []string{"billing", "pull-stripe", "--dry-run"}, listFails: true},
 	ss("billing", "pull-stripe", "--extra"),
 	ss("billing", "sync-stripe", "x"),
 }
@@ -353,6 +364,7 @@ func stripeSession(t *testing.T, python bool) []stripeResult {
 		}
 		fake.mu.Lock()
 		fake.calls = nil
+		fake.listFails = s.listFails
 		fake.mu.Unlock()
 		var code int
 		var stdout string
@@ -383,7 +395,7 @@ const stripeGolden = "testdata/stripe_golden.json"
 // Stripe for every step. The producer is deleted with the Python CLI, so this is a
 // rot guard: the file is only rewritten by TestStripeVenueOracleMatchesThePythonProducer
 // with DHO_STRIPE_GOLDEN_UPDATE=1, then this digest is updated.
-const stripeGoldenSHA256 = "4b645adbce76585d74119682b09fca6362148741324356bc2721edb6dedfa4bf"
+const stripeGoldenSHA256 = "02e477bab12d5a65713c51fd36d829df64c54b50b456c399009d8d84a43ad4dc"
 
 func digestOf(t *testing.T, path string) string {
 	t.Helper()

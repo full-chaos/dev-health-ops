@@ -179,6 +179,31 @@
  {
   "args": [
    "billing",
+   "pull-stripe"
+  ],
+  "exit": 1,
+  "stdout": "Error: Request req_oracle: product listing refused\n",
+  "state": "{\"plans\":[\"community|Community|c|community|true|0|prod_slug|{}\",\"enterprise|Enterprise|\\u003cnull\\u003e|enterprise|true|2|prod_existing|{}\",\"failprice|Fail Price|fp|team|true|4|prod_fake_3|{}\",\"inactive|Inactive|\\u003cnull\\u003e|team|false|5|\\u003cnull\\u003e|{}\",\"last-plan|Last One|the last|team|true|0|prod_last|{\\\"plan_key\\\": \\\"last-plan\\\", \\\"tier\\\": \\\" Team \\\"}\",\"n_code_pro|Ünïcode Pro!||enterprise|true|0|prod_new|{\\\"tier\\\": \\\"Enterprise\\\", \\\"x\\\": \\\"1\\\"}\",\"team|Basic|team plan|team|true|1|prod_basic|{}\"],\"prices\":[\"community|monthly|0|usd|true|price_comm_m\",\"community|yearly|0|usd|false|price_comm_y\",\"enterprise|monthly|5200|usd|true|price_ent_m\",\"enterprise|yearly|52000|usd|true|price_ent_y\",\"failprice|monthly|1000|usd|true|\\u003cnull\\u003e\",\"failprice|yearly|424242|usd|true|\\u003cnull\\u003e\",\"inactive|monthly|5|usd|true|\\u003cnull\\u003e\",\"last-plan|monthly|300|usd|true|price_last_m\",\"n_code_pro|yearly|9900|eur|true|price_new_y\",\"team|monthly|1000|usd|true|price_basic_m\",\"team|yearly|11500|usd|true|price_have_y\"]}",
+  "calls": [
+   "GET /v1/products | query=active=true\u0026limit=100 | form= | version=2026-08-26.dahlia | auth=fake-key"
+  ]
+ },
+ {
+  "args": [
+   "billing",
+   "pull-stripe",
+   "--dry-run"
+  ],
+  "exit": 1,
+  "stdout": "Error: Request req_oracle: product listing refused\n",
+  "state": "{\"plans\":[\"community|Community|c|community|true|0|prod_slug|{}\",\"enterprise|Enterprise|\\u003cnull\\u003e|enterprise|true|2|prod_existing|{}\",\"failprice|Fail Price|fp|team|true|4|prod_fake_3|{}\",\"inactive|Inactive|\\u003cnull\\u003e|team|false|5|\\u003cnull\\u003e|{}\",\"last-plan|Last One|the last|team|true|0|prod_last|{\\\"plan_key\\\": \\\"last-plan\\\", \\\"tier\\\": \\\" Team \\\"}\",\"n_code_pro|Ünïcode Pro!||enterprise|true|0|prod_new|{\\\"tier\\\": \\\"Enterprise\\\", \\\"x\\\": \\\"1\\\"}\",\"team|Basic|team plan|team|true|1|prod_basic|{}\"],\"prices\":[\"community|monthly|0|usd|true|price_comm_m\",\"community|yearly|0|usd|false|price_comm_y\",\"enterprise|monthly|5200|usd|true|price_ent_m\",\"enterprise|yearly|52000|usd|true|price_ent_y\",\"failprice|monthly|1000|usd|true|\\u003cnull\\u003e\",\"failprice|yearly|424242|usd|true|\\u003cnull\\u003e\",\"inactive|monthly|5|usd|true|\\u003cnull\\u003e\",\"last-plan|monthly|300|usd|true|price_last_m\",\"n_code_pro|yearly|9900|eur|true|price_new_y\",\"team|monthly|1000|usd|true|price_basic_m\",\"team|yearly|11500|usd|true|price_have_y\"]}",
+  "calls": [
+   "GET /v1/products | query=active=true\u0026limit=100 | form= | version=2026-08-26.dahlia | auth=fake-key"
+  ]
+ },
+ {
+  "args": [
+   "billing",
    "pull-stripe",
    "--extra"
   ],

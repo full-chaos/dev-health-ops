@@ -15,104 +15,71 @@ type KeyFunc func(*http.Request) string
 // fixedWindowEntry is one (key, path) pair's current window: when it
 // started and how many hits it has counted so far, including refused ones.
 type fixedWindowEntry struct {
-	key   string
 	start time.Time
 	count int
 }
 
-// maxKeyedLimiterEntries hard-caps a KeyedLimiter's live entry count. sweep
-// only reclaims an entry once its OWN window has fully elapsed -- it has no
-// power to shrink the set of entries still inside their current window, so
-// it cannot bound how many an authenticated caller creates within a single
-// window by hitting many distinct paths before that window ever expires
-// (reproduced live: 5,000 distinct paths from one caller, all still
-// present, sweep not yet due). This cap is the backstop for exactly that
-// window: once reached, a BRAND-NEW (key, path) pair is refused outright
-// rather than admitted, so the map can never grow past it -- fail closed
-// on cardinality, never fail open. It never affects an already-tracked
-// pair's own counting. 100,000 is far above any real admin population x
-// real rate-limited admin path count (see KeyedLimiter's own doc comment
-// on that expected cardinality), and far below what would pressure
-// process memory (a fixedWindowEntry plus its map overhead is on the
-// order of 100 bytes).
+// maxKeyedLimiterEntries hard-caps the in-process counter set's live entry
+// count. It exists only because this store lives in process memory: the
+// shared store (ratelimitvalkey) bounds nothing, its counters expire by TTL,
+// and slowapi bounds nothing either. sweep only reclaims an entry once its
+// OWN window has fully elapsed, so it cannot bound how many pairs a caller
+// creates within one window; without a cap, one authenticated caller hitting
+// a route whose path carries a caller-chosen id could grow this map without
+// limit inside a window (reproduced live: 5,000 distinct paths from one
+// caller, all present, sweep not yet due). Once the cap is reached a
+// BRAND-NEW (key, path) pair is refused outright rather than admitted -- fail
+// closed, never fail open -- and an already-tracked pair is never affected.
+//
+// This is a NAMED, MEMORY-STORE-ONLY divergence from Python: the api refuses
+// to start outside development without the shared store, so a deployment
+// never counts here. There is deliberately NO per-caller bound: a per-caller
+// cap on distinct paths refused a legitimate client Python serves (its 1,001st
+// distinct path in a window, CHAOS-6624), the same defect the shared store had.
+// 100,000 is far above any real caller population x real limited-path
+// count, and far below what would pressure process memory (a
+// fixedWindowEntry plus its map overhead is on the order of 100 bytes).
 const maxKeyedLimiterEntries = 100_000
 
-// maxKeyedLimiterEntriesPerKey bounds how many live (key, path) pairs ONE
-// key may hold. A route whose path carries a caller-chosen id lets an
-// authenticated caller mint unlimited distinct paths (the handler validates
-// the id only AFTER this limiter runs, as Python does); with only the global
-// cap above, one admin filling it made every OTHER admin's first request a
-// 429 for the rest of the window (reproduced by the review round on the
-// invite route with 100,000 distinct paths from one admin). Bounding each
-// key means an admin that exhausts its own allowance of distinct paths is
-// refused for NEW paths and nobody else is. 1,000 distinct paths per admin
-// per window is far above any real use (an admin touching a handful of
-// users or orgs an hour), and 100 such keys reach the global backstop, which
-// stays as the bound against many-keys growth.
-const maxKeyedLimiterEntriesPerKey = 1_000
-
-// windowCounters is the in-process fixed-window counter set, scoped per (key, exact request
-// path) -- the Go equivalent of Python's slowapi default strategy (the
-// `limits` package's FixedWindowRateLimiter over MemoryStorage). Confirmed
-// live against a real slowapi-backed FastAPI route (CHAOS-6357's PR body
-// carries the executed proof): a window starts on the caller's first hit
-// after the previous window expired and lasts exactly `window` from that
-// moment -- NOT epoch-aligned, and NOT reset early by a refused hit. A
-// caller's 6th request inside a "5/hour" window, even at t=12m, is still
-// refused; the window only rolls over once `window` has elapsed since it
-// started. Two different (key, path) pairs never share a bucket: the same
-// admin hitting two different target paths, or two different admins
-// hitting the same path, each get their own independent budget.
-//
-// Unlike Bucket (this package's per-ROUTE, unauthenticated token bucket --
-// see its own doc comment: "Per-caller quota ... needs an authenticated
-// principal, which this dormant wave does not have"), KeyedLimiter IS that
-// later wave: it needs an authenticated principal for its key, so it is
-// applied INSIDE a route's handler chain, after authentication has already
-// resolved (wrapped around the handler a Guard passes to its own `next`),
-// never at the mux level routeChain wraps every route with -- routeChain
-// runs before any route-specific authentication.
+// windowCounters is the in-process fixed-window counter set, scoped per (key,
+// exact request path) -- the Go equivalent of Python's slowapi default
+// strategy (the `limits` package's FixedWindowRateLimiter over
+// MemoryStorage). Confirmed live against a real slowapi-backed FastAPI route
+// (CHAOS-6357's PR body carries the executed proof): a window starts on the
+// caller's first hit after the previous window expired and lasts exactly
+// `window` from that moment -- NOT epoch-aligned, and NOT reset early by a
+// refused hit. A caller's 6th request inside a "5/hour" window, even at
+// t=12m, is still refused; the window only rolls over once `window` has
+// elapsed since it started. Two different (key, path) pairs never share a
+// bucket: the same admin hitting two different target paths, or two
+// different admins hitting the same path, each get their own independent
+// budget.
 type windowCounters struct {
 	window time.Duration
 	now    func() time.Time
 
 	mu sync.Mutex
-	// entries' key includes the exact request PATH, which for a route
-	// like /users/{user_id}/password carries a caller-supplied target id
-	// -- NOT a small fixed route set. An authenticated caller sending
-	// distinct target ids (the handler validates the target only AFTER
-	// this limiter runs) can otherwise grow this map. sweep (below)
-	// evicts every expired entry at most once per window, bounding
-	// steady-state memory to callers active within the last window; it
-	// CANNOT bound growth from many distinct pairs created within a
-	// single window, since none of them have expired yet for sweep to
-	// reclaim -- maxKeyedLimiterEntries is the hard backstop for that
-	// case (reproduced live: 5,000 distinct paths inside one window, all
-	// still present, no sweep yet due).
+	// entries' key includes the exact request PATH, which for a route like
+	// /users/{user_id}/password carries a caller-supplied target id -- NOT a
+	// small fixed route set. sweep (below) evicts every expired entry at
+	// most once per window, bounding steady-state memory to callers active
+	// within the last window; it CANNOT bound growth from many distinct pairs
+	// created within a single window, since none of them have expired yet --
+	// globalBound is the hard backstop for that case.
 	entries map[string]*fixedWindowEntry
-	// keyPaths holds each key's entry keys (a key's live pairs), for
-	// maxKeyedLimiterEntriesPerKey. It is a set, not a counter, so a key at
-	// its bound can be re-checked against ITS OWN entries' expiry in
-	// O(bound) without waiting for the periodic full sweep: a counter kept
-	// only by that sweep let expired-but-unswept entries hold an admin's
-	// allowance for up to a window (found by review of the first version).
-	keyPaths map[string]map[string]struct{}
-	// perKeyBound and globalBound are the two caps above; fields so a test
-	// can exercise the same logic at a small size.
-	perKeyBound, globalBound int
-	// globalNextExpiry and keyNextExpiry are LOWER BOUNDS on when the
-	// earliest entry (overall, and per key) can expire; the zero time means
-	// "unknown, scan". A forced sweep or a key scan runs only once now has
-	// reached the bound, i.e. only when something HAS expired, so it always
-	// frees at least one entry and never runs pointlessly -- and, unlike a
-	// time-based cooldown, it can never be skipped while an expired entry
-	// is still holding a cap (a cooldown did exactly that for up to a second
-	// in review of the second version). A rollover only moves an entry's
-	// expiry later, so a stored bound is never later than the truth.
+	// globalBound is maxKeyedLimiterEntries; a field so a test can exercise
+	// the same logic at a small size.
+	globalBound int
+	// globalNextExpiry is a LOWER BOUND on when the earliest entry can
+	// expire; the zero time means "unknown, scan". A forced sweep runs only
+	// once now has reached the bound, i.e. only when something HAS expired,
+	// so it always frees at least one entry and never runs pointlessly --
+	// and, unlike a time-based cooldown, it can never be skipped while an
+	// expired entry is still holding the cap. A rollover only moves an
+	// entry's expiry later, so a stored bound is never later than the truth.
 	globalNextExpiry time.Time
-	keyNextExpiry    map[string]time.Time
-	// fullSweeps and keyScans count the on-demand passes, for tests.
-	fullSweeps, keyScans int
+	// fullSweeps counts the forced passes, for tests.
+	fullSweeps int
 	// lastSweep is when entries was last swept for expired windows.
 	lastSweep time.Time
 }
@@ -127,14 +94,13 @@ func newWindowCounters(window time.Duration, now func() time.Time) *windowCounte
 	if now == nil {
 		now = time.Now
 	}
-	return &windowCounters{window: window, now: now, entries: map[string]*fixedWindowEntry{}, keyPaths: map[string]map[string]struct{}{}, keyNextExpiry: map[string]time.Time{},
-		perKeyBound: maxKeyedLimiterEntriesPerKey, globalBound: maxKeyedLimiterEntries}
+	return &windowCounters{window: window, now: now, entries: map[string]*fixedWindowEntry{}, globalBound: maxKeyedLimiterEntries}
 }
 
 // hit counts one hit for the (key, path) pair in its window and returns the
 // window's total so far. A refused hit still counts -- slowapi/limits' own
 // atomic increment-then-compare -- and never starts a new window early.
-// admitted is false when the pair is NEW and a cardinality bound refuses it:
+// admitted is false only when the pair is NEW and the set is at its cap:
 // nothing is counted then.
 func (l *windowCounters) hit(key, path string) (count int, admitted bool) {
 	l.mu.Lock()
@@ -144,44 +110,23 @@ func (l *windowCounters) hit(key, path string) (count int, admitted bool) {
 	l.sweep(now)
 	entryKey := key + "\x00" + path
 	entry := l.entries[entryKey]
-	isNewPair := entry == nil
 	if entry == nil || now.Sub(entry.start) >= l.window {
-		if isNewPair {
-			// A key that already holds its share of entries is refused for
-			// NEW paths only: the cost of minting paths falls on the minter,
-			// never on another caller. Expired entries of THAT key are
-			// reclaimed first, so a key never stays locked out by entries
-			// whose windows have already ended.
-			if len(l.keyPaths[key]) >= l.perKeyBound {
-				l.expireKey(key, now)
-				if len(l.keyPaths[key]) >= l.perKeyBound {
-					return 0, false
-				}
-			}
-			// The map is saturated and this pair has never been seen: fail
+		if entry == nil {
+			// The set is saturated and this pair has never been seen: fail
 			// closed rather than grow past the cap -- after a full sweep of
-			// expired entries (rate limited), so stale entries do not hold
-			// the cap either. An existing pair (a window rollover, not a
-			// brand-new key) is never refused this way -- only admission of
-			// a NEW entry is capped.
+			// expired entries, so stale entries do not hold the cap either.
+			// An existing pair (a window rollover) is never refused this way.
 			if len(l.entries) >= l.globalBound {
 				l.forceSweep(now)
 				if len(l.entries) >= l.globalBound {
 					return 0, false
 				}
 			}
-			if l.keyPaths[key] == nil {
-				l.keyPaths[key] = map[string]struct{}{}
-			}
-			l.keyPaths[key][entryKey] = struct{}{}
-			if len(l.keyPaths[key]) == 1 {
-				l.keyNextExpiry[key] = now.Add(l.window)
-			}
 			if len(l.entries) == 0 {
 				l.globalNextExpiry = now.Add(l.window)
 			}
 		}
-		entry = &fixedWindowEntry{key: key, start: now}
+		entry = &fixedWindowEntry{start: now}
 		l.entries[entryKey] = entry
 	}
 	entry.count++
@@ -200,26 +145,21 @@ func (l *windowCounters) sweep(now time.Time) {
 	l.sweepAll(now)
 }
 
-// sweepAll deletes every expired entry, from the entry map and from its
-// key's set, and recomputes the next-expiry bounds exactly.
+// sweepAll deletes every expired entry and recomputes the next-expiry bound
+// exactly.
 func (l *windowCounters) sweepAll(now time.Time) {
 	l.lastSweep = now
-	var globalNext time.Time
-	keyNext := map[string]time.Time{}
+	var next time.Time
 	for entryKey, entry := range l.entries {
 		if now.Sub(entry.start) >= l.window {
-			l.drop(entryKey, entry)
+			delete(l.entries, entryKey)
 			continue
 		}
-		expiry := entry.start.Add(l.window)
-		if globalNext.IsZero() || expiry.Before(globalNext) {
-			globalNext = expiry
-		}
-		if current, ok := keyNext[entry.key]; !ok || expiry.Before(current) {
-			keyNext[entry.key] = expiry
+		if expiry := entry.start.Add(l.window); next.IsZero() || expiry.Before(next) {
+			next = expiry
 		}
 	}
-	l.globalNextExpiry, l.keyNextExpiry = globalNext, keyNext
+	l.globalNextExpiry = next
 }
 
 // forceSweep is sweepAll for a saturated map, run only once something can
@@ -230,49 +170,6 @@ func (l *windowCounters) forceSweep(now time.Time) {
 	}
 	l.fullSweeps++
 	l.sweepAll(now)
-}
-
-// expireKey deletes the expired entries of one key: O(that key's bound), run
-// only once something of the key's can have expired.
-func (l *windowCounters) expireKey(key string, now time.Time) {
-	if next, ok := l.keyNextExpiry[key]; ok && now.Before(next) {
-		return
-	}
-	l.keyScans++
-	var next time.Time
-	for entryKey := range l.keyPaths[key] {
-		entry := l.entries[entryKey]
-		if entry == nil || now.Sub(entry.start) >= l.window {
-			l.drop(entryKey, entry)
-			if entry == nil {
-				delete(l.keyPaths[key], entryKey)
-			}
-			continue
-		}
-		if expiry := entry.start.Add(l.window); next.IsZero() || expiry.Before(next) {
-			next = expiry
-		}
-	}
-	if next.IsZero() {
-		delete(l.keyNextExpiry, key)
-	} else {
-		l.keyNextExpiry[key] = next
-	}
-}
-
-// drop removes one entry from the map and from its key's set.
-func (l *windowCounters) drop(entryKey string, entry *fixedWindowEntry) {
-	delete(l.entries, entryKey)
-	if entry == nil {
-		return
-	}
-	if set := l.keyPaths[entry.key]; set != nil {
-		delete(set, entryKey)
-		if len(set) == 0 {
-			delete(l.keyPaths, entry.key)
-			delete(l.keyNextExpiry, entry.key)
-		}
-	}
 }
 
 // RequestValidator is a route's request validation: the checks FastAPI runs

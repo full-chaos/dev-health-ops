@@ -111,9 +111,9 @@ func runPeopleSummaryVenue(t *testing.T) {
 	}
 	// The raw text of every timestamp-bearing fragment is compared: each
 	// deltas[].spark array and freshness.last_ingested_at. The rest of the
-	// body (dict key order in freshness.sources and the collaboration
-	// sections) differs between the planes for a separate reason, the
-	// query-api dict-order defect, and is that oracle's to compare.
+	// body differs between the planes only in the engine-chosen
+	// row order of the unordered UNION ALL result sets in sections (the
+	// corpus declares them order-insensitive), and is that oracle's to compare.
 	if got, want := timestampFragments(string(goBody)), timestampFragments(pythonBody); strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Errorf("timestamp text differs\n python: %s\n go:     %s", strings.Join(want, "\n"), strings.Join(got, "\n"))
 	}

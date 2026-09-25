@@ -1,1 +1,2 @@
+internal/pgmigrate	TestHistoryVenueOracleMatchesAlembic	run
 internal/pgmigrate	TestRevisionsVenueOracleMatchesAlembic	run

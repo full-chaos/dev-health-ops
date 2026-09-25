@@ -30,6 +30,14 @@ func authenticateInternalRequest(w http.ResponseWriter, r *http.Request, verifie
 		return authctx.Claims{}, false
 	}
 	if internalidentity.Present(r.Header) {
+		// The public listener deletes these headers before any handler runs
+		// (CHAOS-6780), so a request reaching here with them off the internal
+		// listener means the handler was wired without that middleware: refuse
+		// rather than trust a header no listener vouched for.
+		if !internalidentity.OnInternalListener(r.Context()) {
+			refuseInternal(w, r, "headers_off_internal_listener", "headers")
+			return authctx.Claims{}, false
+		}
 		claims, err := internalidentity.FromHeader(r.Header)
 		if err != nil {
 			refuseInternal(w, r, internalidentity.ReasonOf(err), "headers")

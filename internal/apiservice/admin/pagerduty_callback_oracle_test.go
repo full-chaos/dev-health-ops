@@ -23,6 +23,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/apiservice"
+	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
@@ -235,9 +236,14 @@ func (f *fakePagerDuty) handler() http.Handler {
 		region := r.PathValue("region")
 		authorization := r.Header.Get("Authorization")
 		f.record("GET /%s/services?%s auth=%q accept=%q", region, r.URL.RawQuery, authorization, r.Header.Get("Accept"))
-		if authorization == "Bearer at-slow" && f.slowStarted != nil {
-			close(f.slowStarted)
-			<-f.slowRelease
+		if authorization == "Bearer at-slow" {
+			f.mu.Lock()
+			started, release := f.slowStarted, f.slowRelease
+			f.mu.Unlock()
+			if started != nil {
+				close(started)
+				<-release
+			}
 		}
 		accountKey := map[string]string{
 			"Bearer at-slow": "acme", "Bearer at-ok": "acme", "Bearer at-ok2": "acme", "Bearer at-ok3": "acme", "Bearer at-norefresh": "acme",
@@ -334,7 +340,7 @@ func TestPagerDutyCallbackAndManualVenueOracle(t *testing.T) {
 		// once the fake accepts revokes again.
 		{"s-refm-1", "refmissing"}, {"s-refm-2", "refmissing"}, {"s-refm-3", "refmissing"}, {"s-refn-1", "refnoacct"}, {"s-refn-2", "refnoacct"}, {"s-refn-3", "refnoacct"},
 		{"s-refc-1", "refcorrupt"}, {"s-refc-2", "refcorrupt"}, {"s-refr-1", "refredirect"}, {"s-refr-2", "refredirect"},
-		{"s-refn-4", "refnoacct"}, {"s-race-1", "refmissing"}, {"s-race-2", "refmissing"},
+		{"s-refn-4", "refnoacct"}, {"s-race-1", "refmissing"}, {"s-race-2", "refmissing"}, {"s-dl-1", "refmissing"}, {"s-dl-2", "refmissing"},
 	} {
 		addState(spec.name, spec.org)
 	}
@@ -956,5 +962,59 @@ CREATE TRIGGER pd_setup_record_refused BEFORE INSERT ON provider_oauth_revocatio
 	}
 	if grant.RefreshToken != "rt-ok3" {
 		t.Errorf("the active grant holds refresh token %q; it must be the draining callback's rt-ok3, never the revoked rt-slow", grant.RefreshToken)
+	}
+
+	// A callback stops on its own deadline, which is what makes the drain's
+	// age cutoff safe: one held past it fails, cannot revoke its token (its
+	// own deadline has passed), and leaves the pending record for the drain.
+	fake.mu.Lock()
+	fake.slowStarted, fake.slowRelease = make(chan struct{}), make(chan struct{})
+	deadlineStarted, deadlineRelease := fake.slowStarted, fake.slowRelease
+	fake.mu.Unlock()
+	restoreTimeout := admin.SetSetupCallbackTimeout(3 * time.Second)
+	t.Cleanup(restoreTimeout)
+	t.Cleanup(func() {
+		select {
+		case <-deadlineRelease:
+		default:
+			close(deadlineRelease)
+		}
+	})
+	expiredDone := make(chan venueoracle.Response, 1)
+	go func() {
+		expiredDone <- venueoracle.Do(t, goBase, cb("callback held past its deadline", "admin_refmissing", "s-dl-1", "c-slow"))
+	}()
+	select {
+	case <-deadlineStarted:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the callback was never held at PagerDuty's identity read")
+	}
+	var expired venueoracle.Response
+	select {
+	case expired = <-expiredDone:
+	case <-time.After(30 * time.Second):
+		t.Fatal("a callback held at PagerDuty's identity read never stopped on its deadline")
+	}
+	restoreTimeout()
+	close(deadlineRelease)
+	// The identity read failing on the deadline is answered like any failed
+	// account validation (400), as before this change.
+	if expired.Status != http.StatusBadRequest {
+		t.Errorf("a callback held past its deadline answered %d %s, want 400", expired.Status, expired.Body)
+	}
+	var pendingAttempts int
+	if err := goPool.QueryRow(ctx, `SELECT attempts FROM provider_oauth_revocations WHERE org_id = $1 AND purpose = 'setup' AND status = 'pending'`, orgs["refmissing"].String()).Scan(&pendingAttempts); err != nil {
+		t.Fatalf("the callback that hit its deadline left no pending setup record: %v", err)
+	}
+	if pendingAttempts < 1 {
+		t.Errorf("the pending record has attempts %d, want the refused (expired) compensating revoke counted", pendingAttempts)
+	}
+	fake.take()
+	retryDrain := venueoracle.Do(t, goBase, cb("callback that drains the record left by the deadline", "admin_refmissing", "s-dl-2", "c-ok3"))
+	if retryDrain.Status != http.StatusOK {
+		t.Errorf("the draining callback answered %d %s, want 200", retryDrain.Status, retryDrain.Body)
+	}
+	if calls := strings.Join(fake.take(), "\n"); !strings.Contains(calls, "POST /revoke") || !strings.Contains(calls, "token=rt-slow") {
+		t.Errorf("the record left by the deadline was not revoked by the next callback:\n%s", calls)
 	}
 }

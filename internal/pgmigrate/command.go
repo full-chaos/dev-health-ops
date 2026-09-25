@@ -59,6 +59,18 @@ func Command(resolve ResolveDSN) cli.Command {
 					return revisions(ctx, "heads", resolve, env)
 				},
 			},
+			{
+				Name:    "history",
+				Summary: "print the revision history, as `alembic history` does",
+				Kind:    cli.Verb,
+				Run:     history,
+			},
+			{
+				Name:    "downgrade",
+				Summary: "refused: the PostgreSQL migrator is forward-only",
+				Kind:    cli.Verb,
+				Run:     downgrade,
+			},
 		},
 	}
 }
@@ -149,7 +161,7 @@ func writeError(stderr io.Writer, code, detail string) int {
 // revisions is `current` and `heads`. The verbose forms of `alembic current` and
 // `alembic heads` print each script's docstring and path, which dho does not
 // carry (the Go migrator has the head baseline, not the Alembic scripts):
-// --verbose is refused, and `history` and `downgrade` stay with Alembic.
+// --verbose is refused.
 func revisions(ctx context.Context, verb string, resolve ResolveDSN, env cli.Env) int {
 	flags := flag.NewFlagSet("dho migrate postgres "+verb, flag.ContinueOnError)
 	flags.SetOutput(env.Stderr)

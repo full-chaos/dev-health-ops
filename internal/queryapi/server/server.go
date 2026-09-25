@@ -43,6 +43,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/version"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/analytics"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/internalidentity"
 )
 
 // otelServiceName is this binary's OTEL_SERVICE_NAME fallback (CHAOS-5408) --
@@ -98,6 +99,28 @@ func addr(getenv getenvFunc) string {
 		return v
 	}
 	return defaultAddr
+}
+
+// newListenerServers builds the public server and, when internalAddr is set,
+// the internal one over the same handler (CHAOS-6780). The public server
+// deletes the X-DH-Internal-* identity headers before any handler sees them;
+// only the internal server, on a port no Ingress routes to, marks requests as
+// allowed to carry them. internalAddr empty = no internal server (nil): the
+// headers are honoured nowhere.
+func newListenerServers(publicAddr, internalAddr string, base http.Handler) (public, internal *http.Server) {
+	public = &http.Server{
+		Addr:              publicAddr,
+		Handler:           analytics.InvestmentMembershipScopeRequestMiddleware(internalidentity.Public(base)),
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+	if internalAddr != "" {
+		internal = &http.Server{
+			Addr:              internalAddr,
+			Handler:           analytics.InvestmentMembershipScopeRequestMiddleware(internalidentity.Internal(base)),
+			ReadHeaderTimeout: 5 * time.Second,
+		}
+	}
+	return public, internal
 }
 
 func healthzHandler() http.HandlerFunc {
@@ -844,10 +867,10 @@ func Run(ctx context.Context, args []string, lookup func(string) (string, bool),
 		writeRESTError(w, r, "api_v1", "", http.StatusNotFound, "Not Found")
 	})
 
-	server := &http.Server{
-		Addr:              addr(getenv),
-		Handler:           analytics.InvestmentMembershipScopeRequestMiddleware(markResponseModelRoutes(mux)),
-		ReadHeaderTimeout: 5 * time.Second,
+	base := markResponseModelRoutes(mux)
+	server, internalServer := newListenerServers(addr(getenv), getenv("QUERY_API_INTERNAL_ADDR"), base)
+	if internalServer == nil {
+		log.Printf("query-api: QUERY_API_INTERNAL_ADDR is unset: no internal listener, so X-DH-Internal-* identity headers are honoured nowhere")
 	}
 
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
@@ -861,6 +884,15 @@ func Run(ctx context.Context, args []string, lookup func(string) (string, bool),
 		}
 	}()
 
+	if internalServer != nil {
+		go func() {
+			log.Printf("query-api internal listener on %s", internalServer.Addr)
+			if err := internalServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				listenErr <- err
+			}
+		}()
+	}
+
 	code := exitOK
 	select {
 	case <-ctx.Done():
@@ -872,6 +904,11 @@ func Run(ctx context.Context, args []string, lookup func(string) (string, bool),
 	defer cancel()
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Printf("query-api: graceful shutdown error: %v", err)
+	}
+	if internalServer != nil {
+		if err := internalServer.Shutdown(shutdownCtx); err != nil {
+			log.Printf("query-api: internal listener graceful shutdown error: %v", err)
+		}
 	}
 
 	// Shut down tracing LAST, after the server has stopped accepting new

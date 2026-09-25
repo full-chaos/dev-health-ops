@@ -3,7 +3,9 @@ package admin
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -25,11 +27,25 @@ import (
 // moment it would store its grant, so a drain revoked the token first.
 var errPagerDutySetupSuperseded = errors.New("pagerduty setup revocation superseded: the token was revoked before the grant was stored")
 
-// setupRevocationStaleInterval is how old a setup row that never failed a
+// setupRevocationStaleAfter is how old a setup row that never failed a
 // revoke (its request died between the exchange and the outcome) must be
-// before a later callback retries it: an in-flight callback's row is younger
-// and must not be revoked under it.
-const setupRevocationStaleInterval = "15 minutes"
+// before a later callback retries it. A callback stops on its own deadline
+// (setupCallbackDeadline, from the moment the row is written), so a row
+// older than a few deadlines belongs to a request that is gone: an in-flight
+// callback's token is never revoked under it. The constant expression below
+// fails to compile if the cutoff is ever shortened below twice the deadline.
+const (
+	setupRevocationStaleAfter = 15 * time.Minute
+	setupCallbackDeadline     = 5 * time.Minute
+	_                         = uint(setupRevocationStaleAfter - 2*setupCallbackDeadline)
+)
+
+// setupCallbackTimeout is the deadline a callback runs under after its setup
+// row is written; a var only so a test can shorten it.
+var setupCallbackTimeout = setupCallbackDeadline
+
+// setupRevocationStaleInterval is the cutoff as the SQL interval.
+var setupRevocationStaleInterval = fmt.Sprintf("%d seconds", int64(setupRevocationStaleAfter/time.Second))
 
 // enqueuePagerDutySetupRevocation durably records a token PagerDuty just
 // issued, in its own transaction, before the callback does anything else

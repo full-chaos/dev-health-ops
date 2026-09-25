@@ -28,13 +28,14 @@ func seed(t *testing.T, ctx context.Context, admin *pgxpool.Pool, venue *venueor
 	}
 	const at = "2026-01-01 00:00:00+00"
 	exec(`INSERT INTO organizations (id, slug, name, settings, tier, is_active, created_at, updated_at) VALUES
-($1, 'disc-a', 'disc-a', '{}', 'enterprise', true, $3, $3), ($2, 'disc-b', 'disc-b', '{}', 'community', true, $3, $3)`, v.orgA, v.orgB, at)
+($1, 'disc-a', 'disc-a', '{}', 'enterprise', true, $3, $3), ($2, 'disc-b', 'disc-b', '{}', 'community', true, $3, $3),
+($4, 'disc-c', 'disc-c', '{}', 'community', true, $3, $3)`, v.orgA, v.orgB, at, v.orgC)
 	for _, user := range []struct {
 		id, org uuid.UUID
 		email   string
 		role    string
 	}{{v.adminA, v.orgA, "disc-admin-a@example.com", "admin"}, {v.memberA, v.orgA, "disc-member-a@example.com", "member"},
-		{v.adminB, v.orgB, "disc-admin-b@example.com", "admin"}} {
+		{v.adminB, v.orgB, "disc-admin-b@example.com", "admin"}, {v.adminC, v.orgC, "disc-admin-c@example.com", "admin"}} {
 		exec(`INSERT INTO users (id, email, is_active, is_verified, is_superuser, token_version, created_at, updated_at)
 VALUES ($1, $2, true, true, false, 0, $3, $3)`, user.id, user.email, at)
 		exec(`INSERT INTO memberships (id, user_id, org_id, role, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $5)`,
@@ -63,6 +64,7 @@ VALUES ($1, $2, 'jira', $3, true, $4, '{}'::json, $5, $5)`, id, org.String(), na
 	credential(v.credGood, v.orgA, "jira good", ciphertexts[0])
 	credential(v.credBad, v.orgA, "jira bad", ciphertexts[1])
 	credential(v.credGoodB, v.orgB, "jira good b", ciphertexts[0])
+	credential(v.credGoodC, v.orgC, "jira good c", ciphertexts[0])
 
 	integration := func(id, org uuid.UUID, provider string, credential any, name, config string) {
 		exec(`INSERT INTO integrations (id, org_id, provider, credential_id, name, config, is_active, created_at, updated_at)
@@ -98,6 +100,11 @@ VALUES ($1, $2, $3, $4, 'project', $5, $6, $5, $7::json, $8, $9::timestamptz, $9
 	// Community org at max_repos 3: the discovered projects are capped.
 	integration(v.intB, v.orgB, "jira", v.credGoodB, "disc-jira-b", `{}`)
 	planner(v.cfgB, v.orgB, v.intB, `{}`)
+	// Community org with headroom under max_repos 3 and a source an earlier
+	// discovery disabled at the cap: rediscovery reconfirms it and re-enables it.
+	integration(v.intRecover, v.orgC, "jira", v.credGoodC, "disc-jira-recover", `{"project_key": "ignored-by-planner"}`)
+	planner(v.cfgRecover, v.orgC, v.intRecover, `{"project_key": "ACM"}`)
+	source(v.srcRecover, v.orgC, v.intRecover, "jira", "ACM", "Capped ACM", `{"capped_by_repo_limit": true, "planner_managed_sync_config_id": "`+v.cfgRecover.String()+`"}`, false, "2026-02-05 00:00:00+00")
 }
 
 func discoverRequests(venue *venueoracle.Venue, v ids) []venueoracle.Request {
@@ -134,5 +141,7 @@ func discoverRequests(venue *venueoracle.Venue, v ids) []venueoracle.Request {
 	post("scoped by the integration config, again", v.intConfigScoped.String(), "adminA")
 	post("community org over its repo limit", v.intB.String(), "adminB")
 	post("community org over its repo limit, again", v.intB.String(), "adminB")
+	post("a source disabled at the repo limit is recovered", v.intRecover.String(), "adminC")
+	post("a recovered source is not recovered again", v.intRecover.String(), "adminC")
 	return out
 }

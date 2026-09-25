@@ -374,6 +374,12 @@ func (service *NativeSourceDiscoveryService) Discover(ctx context.Context, args 
 		// risk discovering against the wrong account; already-existing
 		// sources still plan normally.
 		service.telemetry.observe(provider, SourceDiscoveryOutcomeSkipped)
+		if provider == "jira" {
+			// Python reads the JIRA_* environment for such an integration and,
+			// with none set, discovers nothing and counts a zero discovery
+			// (sync/discovery.py); this service discovers nothing here too.
+			recordJiraProjectDiscovery(ctx, 0, 0, 0, 0, 0, args.PlannerManaged)
+		}
 		return SourceDiscoveryReport{Outcome: SourceDiscoveryOutcomeSkipped}, nil
 	}
 	credential, err := service.credentials.Resolve(ctx, sourceDiscoveryLease{}, providerfoundation.TenantScope{
@@ -465,6 +471,9 @@ func (service *NativeSourceDiscoveryService) Discover(ctx context.Context, args 
 	}
 	service.telemetry.observeN(provider, SourceDiscoveryOutcomeSuperseded, superseded)
 	recordSourceDiscoveryOutcome(service.telemetry, provider, created, existing)
+	if provider == "jira" {
+		recordJiraProjectDiscovery(ctx, len(discovered), created, superseded, capped, recovered, args.PlannerManaged)
+	}
 	outcome := SourceDiscoveryOutcomeExisting
 	if created > 0 {
 		outcome = SourceDiscoveryOutcomeCreated
@@ -493,6 +502,36 @@ func recordSourceDiscoveryOutcome(telemetry *sourceDiscoveryTelemetry, provider 
 	}
 	if created == 0 && existing == 0 {
 		telemetry.observe(provider, SourceDiscoveryOutcomeExisting)
+	}
+}
+
+// recordJiraProjectDiscovery is sync/discovery.py's jira_project_discovery_total
+// emission for one committed Jira discovery: _record_jira_project_discovery's
+// discovered/created/existing (or discovered_zero) and
+// skipped_no_planner_parent, plus the superseded, capped and recovered counts
+// of the steps that ran in the same pass. existing is Python's
+// `len(source_dicts) - created_count`.
+func recordJiraProjectDiscovery(ctx context.Context, discovered, created, superseded, capped, recovered int, plannerManaged bool) {
+	if superseded > 0 {
+		providerfoundation.RecordJiraProjectDiscovery(ctx, providerfoundation.JiraDiscoverySuperseded, superseded)
+	}
+	if capped > 0 {
+		providerfoundation.RecordJiraProjectDiscovery(ctx, providerfoundation.JiraDiscoveryCapped, capped)
+	}
+	if recovered > 0 {
+		providerfoundation.RecordJiraProjectDiscovery(ctx, providerfoundation.JiraDiscoveryRecoveredFromCap, recovered)
+	}
+	if discovered == 0 {
+		providerfoundation.RecordJiraProjectDiscovery(ctx, providerfoundation.JiraDiscoveryZero, 1)
+	} else {
+		providerfoundation.RecordJiraProjectDiscovery(ctx, providerfoundation.JiraDiscoveryDiscovered, discovered)
+		providerfoundation.RecordJiraProjectDiscovery(ctx, providerfoundation.JiraDiscoveryCreated, created)
+		if existing := discovered - created; existing > 0 {
+			providerfoundation.RecordJiraProjectDiscovery(ctx, providerfoundation.JiraDiscoveryExisting, existing)
+		}
+	}
+	if !plannerManaged {
+		providerfoundation.RecordJiraProjectDiscovery(ctx, providerfoundation.JiraDiscoverySkippedNoPlanner, 1)
 	}
 }
 

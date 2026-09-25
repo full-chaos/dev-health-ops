@@ -14,6 +14,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"runtime"
 	"sort"
@@ -24,11 +25,14 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/prometheus/common/expfmt"
+	"github.com/prometheus/common/model"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
+	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
@@ -41,9 +45,10 @@ const (
 )
 
 type ids struct {
-	orgA, orgB                                             uuid.UUID
-	adminA, memberA, adminB, adminNoOrg                    uuid.UUID
-	credGood, credBad, credGoodB                           uuid.UUID
+	orgA, orgB, orgC                                       uuid.UUID
+	adminA, memberA, adminB, adminC, adminNoOrg            uuid.UUID
+	credGood, credBad, credGoodB, credGoodC                uuid.UUID
+	intRecover, cfgRecover, srcRecover                     uuid.UUID
 	intJira, intScoped, intConfigScoped, intBad, intNoCred uuid.UUID
 	intLinear, intB, intEmpty, intRename                   uuid.UUID
 	cfgJira, cfgScoped, cfgB                               uuid.UUID
@@ -52,7 +57,7 @@ type ids struct {
 
 func newIDs() ids {
 	var v ids
-	for _, target := range []*uuid.UUID{&v.orgA, &v.orgB, &v.adminA, &v.memberA, &v.adminB, &v.adminNoOrg, &v.credGood, &v.credBad,
+	for _, target := range []*uuid.UUID{&v.orgA, &v.orgB, &v.orgC, &v.adminC, &v.credGoodC, &v.intRecover, &v.cfgRecover, &v.srcRecover, &v.adminA, &v.memberA, &v.adminB, &v.adminNoOrg, &v.credGood, &v.credBad,
 		&v.credGoodB, &v.intJira, &v.intScoped, &v.intConfigScoped, &v.intBad, &v.intNoCred, &v.intLinear, &v.intB, &v.intEmpty,
 		&v.cfgJira, &v.cfgScoped, &v.cfgB, &v.intRename, &v.srcAcm, &v.srcOld, &v.srcDupLower, &v.srcDupUpper, &v.srcRename} {
 		*target = uuid.New()
@@ -175,6 +180,7 @@ func TestIntegrationDiscoverVenueOracle(t *testing.T) {
 				"adminA":     token(v.adminA, v.orgA, "disc-admin-a@example.com", "admin"),
 				"memberA":    token(v.memberA, v.orgA, "disc-member-a@example.com", "member"),
 				"adminB":     token(v.adminB, v.orgB, "disc-admin-b@example.com", "admin"),
+				"adminC":     token(v.adminC, v.orgC, "disc-admin-c@example.com", "admin"),
 				"adminNoOrg": {"user_id": v.adminNoOrg.String(), "email": "disc-noorg@example.com", "org_id": "", "role": "admin"},
 			}
 		},
@@ -189,16 +195,34 @@ func TestIntegrationDiscoverVenueOracle(t *testing.T) {
 	}
 	jiraClient := jira.Client()
 	jiraClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	// The dho api's operator /metrics, the Go api's scrape surface: the
+	// discovery counter is read from it after the requests.
+	registry := health.NewRegistry(0)
 	base := startGoServer(t, ctx, venue, jwtKey, func(deps *apiservice.Deps) {
 		deps.Now = func() time.Time { return pinned }
 		deps.Decryptor = decryptor
 		deps.SyncJiraHTTP = jiraClient
+		if err := apiservice.RegisterOperatorMetrics(registry, deps); err != nil {
+			t.Fatal(err)
+		}
 	})
+	operatorServer, err := health.NewServer(health.ServerOptions{Address: "127.0.0.1:0", Registry: registry, Service: "api"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	operator := httptest.NewServer(operatorServer.Handler())
+	t.Cleanup(operator.Close)
 
 	requests := discoverRequests(venue, v)
-	python := venue.ServePython(t, requests)
-	receipt := venueoracle.Diff(t, base, requests, python, venueoracle.DiffOptions{Normalize: normalize})
+	scrape := venueoracle.Request{Name: "metrics", Method: http.MethodGet, Path: "/metrics"}
+	python := venue.ServePython(t, append(append([]venueoracle.Request{}, requests...), scrape))
+	pythonMetrics := python[len(python)-1]
+	if pythonMetrics.Status != http.StatusOK {
+		t.Fatalf("python /metrics answered %d", pythonMetrics.Status)
+	}
+	receipt := venueoracle.Diff(t, base, requests, python[:len(requests)], venueoracle.DiffOptions{Normalize: normalize})
 	t.Logf("receipt (%d requests):\n%s", len(requests), receipt)
+	compareDiscoveryCounter(t, pythonMetrics.Body, scrapeOperator(t, operator.URL))
 
 	// integration_sources as raw column text; a created row's id is random on
 	// each plane, so rows are compared by their identity columns.
@@ -215,6 +239,78 @@ FROM integration_sources ORDER BY org_id, integration_id, provider, external_id`
 	if rows := strings.Count(pythonRows, " | ") + 1; rows < 300 {
 		t.Errorf("only %d source rows compared", rows)
 	}
+}
+
+// scrapeOperator reads the Go api's operator /metrics.
+func scrapeOperator(t *testing.T, base string) string {
+	t.Helper()
+	response, err := http.Get(base + "/metrics")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("operator /metrics answered %d: %s", response.StatusCode, body)
+	}
+	return string(body)
+}
+
+// discoveryCounts reads jira_project_discovery_total out of a Prometheus text
+// exposition: outcome -> value. A zero sample is no movement (prometheus_client
+// exposes a series it created with inc(0)), so it is left out.
+func discoveryCounts(t *testing.T, exposition string) map[string]float64 {
+	t.Helper()
+	parser := expfmt.NewTextParser(model.UTF8Validation)
+	families, err := parser.TextToMetricFamilies(strings.NewReader(exposition))
+	if err != nil {
+		t.Fatalf("parse exposition: %v", err)
+	}
+	out := map[string]float64{}
+	family := families["jira_project_discovery_total"]
+	if family == nil {
+		family = families["jira_project_discovery"]
+	}
+	if family == nil {
+		return out
+	}
+	for _, metric := range family.GetMetric() {
+		var outcome string
+		for _, label := range metric.GetLabel() {
+			if label.GetName() == "outcome" {
+				outcome = label.GetValue()
+			}
+		}
+		if value := metric.GetCounter().GetValue(); value != 0 {
+			out[outcome] = value
+		}
+	}
+	return out
+}
+
+// compareDiscoveryCounter requires jira_project_discovery_total to have moved
+// by the same amount on both planes, outcome by outcome, over the whole run:
+// every outcome the discoveries produced, and the same outcomes on both.
+func compareDiscoveryCounter(t *testing.T, python, goExposition string) {
+	t.Helper()
+	pythonCounts, goCounts := discoveryCounts(t, python), discoveryCounts(t, goExposition)
+	// Every outcome the discovery emits (rejected_at_enable_repo_limit is the
+	// enable route's, compared by TestCounterParityVenueOracle) must have moved
+	// on the Python plane, or SAME would be two planes agreeing on nothing.
+	for _, outcome := range []string{"discovered", "created", "existing", "discovered_zero", "skipped_no_planner_parent",
+		"superseded_by_scope_change", "capped_by_repo_limit", "recovered_from_repo_limit_cap"} {
+		if pythonCounts[outcome] == 0 {
+			t.Errorf("the Python api did not move outcome %s (%v); the run does not exercise it", outcome, pythonCounts)
+		}
+	}
+	if !reflect.DeepEqual(pythonCounts, goCounts) {
+		t.Errorf("jira_project_discovery_total: DIFF\n python %v\n go     %v", pythonCounts, goCounts)
+		return
+	}
+	t.Logf("jira_project_discovery_total: SAME %v", goCounts)
 }
 
 var anyUUID = regexp.MustCompile(`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`)

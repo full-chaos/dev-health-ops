@@ -127,7 +127,7 @@ CREATE TABLE go_api_proof_run (
 		CHECK (measurement_route IS NULL OR measurement_route IN ('edge', 'proof')),
 	CONSTRAINT ck_go_api_proof_run_write_executed_shape
 		CHECK (stage <> 'write_executed' OR
-			(side_effect_digest IS NOT NULL AND measurement_route IS NOT NULL AND measurement_route = 'edge'))
+			(side_effect_digest IS NOT NULL AND measurement_route IS NOT NULL))
 );
 
 CREATE TABLE go_api_rest_proof_run (

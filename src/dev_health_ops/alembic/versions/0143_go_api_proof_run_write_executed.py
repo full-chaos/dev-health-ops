@@ -12,7 +12,11 @@ mutation only on such a receipt and a query only on a ``deployed_executed`` one.
 
 This widens ``ck_go_api_proof_run_stage`` with ``write_executed`` and adds
 ``ck_go_api_proof_run_write_executed_shape``: a write proof carries its digest
-and was measured through the edge (only the edge serves a mutation). No data
+and records a route (``edge``, or ``proof`` = a direct POST to query-api's /query:
+the /query/proof route refuses a mutation and an operation not yet routed to Go
+cannot reach the Go build through the edge, so an edge-only rule would make the
+first enablement impossible; the admission predicate still requires ``edge`` for
+primary). No data
 changes; no existing row can violate the new check (no row has that stage).
 
 ``go_api_rest_proof_run`` (0134) keeps its four stages: a REST route has no write
@@ -51,7 +55,7 @@ def upgrade() -> None:
         batch_op.create_check_constraint(
             _SHAPE_CHECK,
             "stage <> 'write_executed' OR "
-            "(side_effect_digest IS NOT NULL AND measurement_route IS NOT NULL AND measurement_route = 'edge')",
+            "(side_effect_digest IS NOT NULL AND measurement_route IS NOT NULL)",
         )
 
 

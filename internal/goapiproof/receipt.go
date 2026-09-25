@@ -310,8 +310,12 @@ func validateVocabulary(receipt Receipt) error {
 		if NamesNothing(receipt.SideEffectDigest) {
 			return fmt.Errorf("goapiproof: a write_executed receipt requires a side-effect digest that names something (nothing was compared without it)")
 		}
-		if receipt.MeasurementRoute != RouteEdge {
-			return fmt.Errorf("goapiproof: a write_executed receipt must be measured through the edge (only the edge serves a mutation), got route %q", receipt.MeasurementRoute)
+		// Both routes are legal: RouteProof is a direct POST to query-api's /query
+		// (the /query/proof route refuses a mutation), and the only way a mutation
+		// not yet routed to Go can be measured at all. Primary still requires
+		// RouteEdge (the admission predicate).
+		if receipt.MeasurementRoute != RouteEdge && receipt.MeasurementRoute != RouteProof {
+			return fmt.Errorf("goapiproof: a write_executed receipt must record its measurement route (%q or %q), got %q", RouteEdge, RouteProof, receipt.MeasurementRoute)
 		}
 	} else if receipt.SideEffectDigest != "" {
 		return fmt.Errorf("goapiproof: only a write_executed receipt carries a side-effect digest (stage %q)", receipt.Stage)

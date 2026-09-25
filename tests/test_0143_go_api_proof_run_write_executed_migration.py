@@ -2,11 +2,11 @@
 
 0143 widens ``ck_go_api_proof_run_stage`` with ``write_executed`` and adds
 ``ck_go_api_proof_run_write_executed_shape`` (a write proof carries its
-``side_effect_digest`` and was measured through the ``edge``). What a
+``side_effect_digest`` and records a measurement route). What a
 schema-only smoke test would miss, and what this pins:
 
-* a ``write_executed`` receipt with no digest, or measured through the
-  ``proof`` route, is REFUSED by the database (not only by the writers);
+* a ``write_executed`` receipt with no digest, or with no recorded route, is
+  REFUSED by the database (not only by the writers);
 * a well-formed one is accepted, and every pre-existing stage still is;
 * an unknown stage is still refused;
 * ``go_api_rest_proof_run`` keeps its four stages (a REST route has no write
@@ -146,14 +146,13 @@ def test_the_database_refuses_a_malformed_write_receipt(migrated: Engine) -> Non
 
     with pytest.raises(IntegrityError):  # no digest
         _insert_receipt(migrated, stage="write_executed", digest=None, route="edge")
-    with pytest.raises(IntegrityError):  # measured through the proof route
-        _insert_receipt(migrated, stage="write_executed", digest="d", route="proof")
     with pytest.raises(IntegrityError):  # no route at all
         _insert_receipt(migrated, stage="write_executed", digest="d", route=None)
     with pytest.raises(IntegrityError):  # an unknown stage is still refused
         _insert_receipt(migrated, stage="write_proof", digest="d", route="edge")
 
     _insert_receipt(migrated, stage="write_executed", digest="d", route="edge")
+    _insert_receipt(migrated, stage="write_executed", digest="d", route="proof")
     # Every earlier stage keeps its old shape (no digest required).
     _insert_receipt(migrated, stage="deployed_executed", digest=None, route="edge")
 

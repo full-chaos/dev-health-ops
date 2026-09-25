@@ -1091,6 +1091,37 @@
       "why": "The edge route satisfies the stricter promotion too."
     },
     {
+      "name": "write_match_proof_canary",
+      "target_mode": "canary",
+      "operation_kind": "mutation",
+      "receipt": {
+        "stage": "write_executed",
+        "terminal_state": "match",
+        "measurement_route": "proof",
+        "side_effect_digest": "sha256:6810write00000000000000000000000000000000000000000000000000000000"
+      },
+      "admits": true,
+      "why": "The first enablement of a mutation: /query/proof refuses a mutation and an operation not yet routed to Go cannot reach the Go build through the edge, so the write proof is measured by a direct POST to query-api's /query and recorded as route proof, which canary accepts (as it does for a query)."
+    },
+    {
+      "name": "write_match_proof_primary_refused",
+      "target_mode": "primary",
+      "operation_kind": "mutation",
+      "receipt": {
+        "stage": "write_executed",
+        "terminal_state": "match",
+        "measurement_route": "proof",
+        "side_effect_digest": "sha256:6810write00000000000000000000000000000000000000000000000000000000"
+      },
+      "admits": false,
+      "why": "Primary needs evidence the deployed edge served it, for a write as for a query: a direct query-api execution says the build CAN serve, not that the edge DOES.",
+      "control": {
+        "receipt": {
+          "measurement_route": "edge"
+        }
+      }
+    },
+    {
       "name": "write_blank_digest_refused",
       "target_mode": "canary",
       "operation_kind": "mutation",

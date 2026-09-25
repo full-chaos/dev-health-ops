@@ -337,13 +337,18 @@ class ProofRun(Base):
             "stage <> 'shadow' OR data_watermark IS NOT NULL",
             name="ck_go_api_proof_run_shadow_requires_watermark",
         ),
-        # A write proof records ONE execution's persisted effects and only the
-        # deployed edge can serve a mutation: without the digest there is
-        # nothing to compare, and a proof-route receipt says the build CAN
-        # serve, not that the edge DOES (CHAOS-6810, alembic 0143).
+        # A write proof records ONE execution's persisted effects: without the
+        # digest there is nothing to compare, and without a recorded route the
+        # provenance is unknown. ``proof`` here is the measurement-only route
+        # for a mutation: a direct POST to query-api's /query (the
+        # /query/proof route refuses a mutation, and an operation not yet
+        # routed to Go cannot reach the Go build through the edge, so requiring
+        # ``edge`` would make the first enablement impossible). The admission
+        # predicate keeps the difference: canary accepts either route, primary
+        # only ``edge`` (CHAOS-6810, alembic 0143).
         CheckConstraint(
             "stage <> 'write_executed' OR "
-            "(side_effect_digest IS NOT NULL AND measurement_route IS NOT NULL AND measurement_route = 'edge')",
+            "(side_effect_digest IS NOT NULL AND measurement_route IS NOT NULL)",
             name="ck_go_api_proof_run_write_executed_shape",
         ),
         # Closed, small vocabulary: a receipt whose route is neither of

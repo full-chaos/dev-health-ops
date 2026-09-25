@@ -95,8 +95,28 @@ func TestReliablePrice(t *testing.T) {
 	}
 }
 
+// DEFAULT_MODEL_BY_PROVIDER, every entry (llm/providers/base.py).
 func TestDefaultModelByProvider(t *testing.T) {
-	if DefaultModelByProvider["openai"] != "gpt-5-mini" || DefaultModelByProvider[""] != "" || len(DefaultModelByProvider) != 9 {
-		t.Fatalf("DefaultModelByProvider = %v", DefaultModelByProvider)
+	want := map[string]string{
+		"openai":        "gpt-5-mini",
+		"anthropic":     "claude-3-haiku-20240307",
+		"gemini":        "gemini-3",
+		"local":         "llama3.2",
+		"ollama":        "llama3.2",
+		"lmstudio":      "local-model",
+		"qwen":          "qwen-plus",
+		"qwen-local":    "qwen2.5:7b",
+		"qwen-lmstudio": "local-model",
+	}
+	if len(DefaultModelByProvider) != len(want) {
+		t.Fatalf("DefaultModelByProvider has %d entries, want %d: %v", len(DefaultModelByProvider), len(want), DefaultModelByProvider)
+	}
+	for provider, model := range want {
+		if got := DefaultModelByProvider[provider]; got != model {
+			t.Errorf("DefaultModelByProvider[%q] = %q, want %q", provider, got, model)
+		}
+	}
+	if got, present := DefaultModelByProvider[""]; present || got != "" {
+		t.Errorf("an empty provider has a default model %q", got)
 	}
 }

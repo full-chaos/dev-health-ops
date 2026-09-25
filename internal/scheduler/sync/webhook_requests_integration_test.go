@@ -355,3 +355,28 @@ func TestWebhookRequestMinterFailsWhenEveryCandidateInstantIsTaken(t *testing.T)
 		t.Fatalf("occurrences = %d, want %d", occurrences, webhookRequestMaxInstantBumps+1)
 	}
 }
+
+// TestWebhookRequestMinterRefusesADeliveryOlderThanTheAgeBound (r2): the age
+// bound applies to the DELIVERY time, not only to the request row's age, so a
+// replay of an old delivery (whose minted row was pruned) is refused.
+func TestWebhookRequestMinterRefusesADeliveryOlderThanTheAgeBound(t *testing.T) {
+	fixture := startWebhookRequestFixture(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	// The row is brand new; the delivery it stands for is 25 hours old.
+	old := fixture.request(t, fixture.org, "incremental", now.Add(-25*time.Hour), now)
+	inside := fixture.request(t, fixture.org, "incremental", now.Add(-23*time.Hour), now)
+	minter := &webhookRequestMinter{pool: fixture.pool, maxAge: webhookRequestMaxAge}
+	if err := minter.mintPending(ctx, now, 10); err != nil {
+		t.Fatal(err)
+	}
+	if row := fixture.row(t, old); row.mintedAt != nil || row.refused == nil || *row.refused != "stale: delivery older than 24h0m0s" {
+		t.Fatalf("a 25h-old delivery = %+v (refused %v), want refused as a stale delivery", row, deref(row.refused))
+	}
+	if row := fixture.row(t, inside); row.mintedAt == nil {
+		t.Fatalf("a 23h-old delivery was not minted: %+v", row)
+	}
+	if occurrences := fixture.count(t, "scheduled_sync_occurrences"); occurrences != 1 {
+		t.Fatalf("occurrences = %d, want only the fresh delivery's", occurrences)
+	}
+}

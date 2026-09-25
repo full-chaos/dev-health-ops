@@ -680,7 +680,9 @@ func triggerAndMint(
 	if err != nil || !result.Processed {
 		return result, err
 	}
-	if err := schedsync.MintWebhookSyncRequests(ctx, coordinator, time.Now().UTC(), 10); err != nil {
+	// The scheduler runs shortly after the delivery: its clock is the delivery
+	// time plus a minute, so a fixed historical deliveredAt is not "stale".
+	if err := schedsync.MintWebhookSyncRequests(ctx, coordinator, deliveredAt.UTC().Add(time.Minute), 10); err != nil {
 		t.Fatalf("mint the webhook sync request: %v", err)
 	}
 	return result, nil
@@ -764,5 +766,49 @@ func TestTriggerScopedSyncDistinctDeliveriesAtOneInstantEachGetAnOccurrence(t *t
 	var distinct int
 	if err := pool.QueryRow(ctx, `SELECT count(DISTINCT occurrence_id) FROM public.webhook_sync_requests WHERE minted_at IS NOT NULL`).Scan(&distinct); err != nil || distinct != 3 {
 		t.Fatalf("distinct minted occurrence ids = %d (%v), want 3", distinct, err)
+	}
+}
+
+// TestTriggerScopedSyncReplayAfterRetentionMintsNothing (r2): the exact repro
+// -- a delivery is minted, its row ages past the retention and is pruned, then
+// the SAME delivery is replayed. The replay must not start a second occurrence.
+func TestTriggerScopedSyncReplayAfterRetentionMintsNothing(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	pool, domain, coordinator := startSyncDispatchDatabase(ctx, t)
+	store := &PostgresStore{pool: domain}
+
+	insertGithubInstallation(ctx, t, pool, 555, "org-1")
+	sourceID := insertIntegrationSource(ctx, t, pool, "org-1", "github", "42", "full-chaos/dev-health")
+	insertSyncConfiguration(ctx, t, pool, "org-1", "github", sourceID, `{}`)
+
+	deliveredAt := time.Date(2026, 9, 6, 12, 0, 0, 0, time.UTC)
+	payload := []byte(`{"installation":{"id":555},"repository":{"id":42,"full_name":"full-chaos/dev-health"}}`)
+	if _, err := triggerAndMint(ctx, t, store, coordinator, "github", "push", payload, deliveredAt); err != nil {
+		t.Fatal(err)
+	}
+	// Eight days later the scheduler's window prunes the minted row ...
+	later := deliveredAt.Add(8 * 24 * time.Hour)
+	if err := schedsync.MintWebhookSyncRequests(ctx, coordinator, later, 10); err != nil {
+		t.Fatal(err)
+	}
+	if got := countRows(ctx, t, pool, "public.webhook_sync_requests"); got != 0 {
+		t.Fatalf("the minted row was not pruned after eight days: %d rows", got)
+	}
+	// ... and the same delivery is replayed.
+	deliveryID := uuid.NewSHA1(uuid.NameSpaceOID,
+		[]byte("github\x00push\x00"+deliveredAt.UTC().Format(time.RFC3339Nano)+"\x00"+string(payload))).String()
+	if _, err := store.TriggerScopedSync(ctx, deliveryID, "github", "push", payload, deliveredAt); err != nil {
+		t.Fatal(err)
+	}
+	if err := schedsync.MintWebhookSyncRequests(ctx, coordinator, later, 10); err != nil {
+		t.Fatal(err)
+	}
+	if got := countRows(ctx, t, pool, "public.scheduled_sync_occurrences"); got != 1 {
+		t.Fatalf("a same-delivery replay after retention minted %d occurrences, want 1", got)
+	}
+	var reason *string
+	if err := pool.QueryRow(ctx, `SELECT refused_reason FROM public.webhook_sync_requests`).Scan(&reason); err != nil || reason == nil || *reason != "stale: delivery older than 24h0m0s" {
+		t.Fatalf("the replayed request = %v (%v), want refused as a stale delivery", reason, err)
 	}
 }

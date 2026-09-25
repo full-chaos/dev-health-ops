@@ -38,10 +38,11 @@ import (
 // different configuration, and it survives its configuration being deleted (no
 // foreign key), so a request is never dropped without a recorded outcome.
 const (
-	// webhookRequestMaxAge bounds how old a request may be when it is minted.
-	// An older request is refused with a reason rather than starting a sync
-	// for a delivery that stale: the configuration's own schedule has had
-	// ample time to cover it.
+	// webhookRequestMaxAge bounds how old a request, and the delivery it
+	// stands for, may be when it is minted. An older one is refused with a
+	// reason rather than starting a sync for a delivery that stale: the
+	// configuration's own schedule has had ample time to cover it. It is also
+	// the acceptance window that webhookRequestMintedRetention must exceed.
 	webhookRequestMaxAge = 24 * time.Hour
 	// webhookRequestMaxAttempts bounds retries of a failing mint; the row is
 	// then refused with the last stage-named error kept.
@@ -129,6 +130,14 @@ FOR UPDATE SKIP LOCKED`, now).Scan(&request.deliveryID, &request.orgID, &request
 	if now.Sub(request.createdAt) > minter.maxAge {
 		return true, minter.refuse(ctx, tx, request, now,
 			fmt.Sprintf("stale: older than %s", minter.maxAge))
+	}
+	// The idempotency window must exceed the acceptance window: a delivery
+	// older than the age bound is refused here whether or not its request row
+	// still exists, so a replay of a delivery whose minted row was pruned
+	// (webhookRequestMintedRetention) can never mint a second occurrence.
+	if now.Sub(request.scheduledFor) > minter.maxAge {
+		return true, minter.refuse(ctx, tx, request, now,
+			fmt.Sprintf("stale: delivery older than %s", minter.maxAge))
 	}
 	config, err := synchandoff.LoadConfig(ctx, tx, request.syncConfigID)
 	if err != nil {

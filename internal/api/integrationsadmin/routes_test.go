@@ -19,6 +19,11 @@ func TestStoredDictIsDictOfValueOrEmpty(t *testing.T) {
 		{`""`, `{}`, false},
 		{`0`, `{}`, false},
 		{`false`, `{}`, false},
+		{`[["k", "v"], ["n", 1]]`, `{"k":"v","n":1}`, false},
+		{`["ab"]`, `{"a":"b"}`, false},
+		{`[[1, "v"]]`, ``, true},
+		{`[[["a"], 1]]`, ``, true},
+		{`[["only-one"]]`, ``, true},
 		{`[1]`, ``, true},
 		{`"x"`, ``, true},
 		{`5`, ``, true},
@@ -71,5 +76,27 @@ func TestLimitIntTruncatesLikeInt(t *testing.T) {
 	}
 	if _, err := limitInt("x"); err == nil {
 		t.Error("a string limit is refused")
+	}
+}
+
+func TestJiraKeyMatchesPythonStripAndLower(t *testing.T) {
+	// U+0130 lower-cases to "i" + U+0307 in Python, and str.strip() removes
+	// U+001C to U+001F.
+	if jiraKey("J\u0130RA") == "jira" {
+		t.Error("a capital I with dot is not a plain i")
+	}
+	if got := jiraKey("\x1fJira\x1c"); got != "jira" {
+		t.Errorf("separators are stripped: %q", got)
+	}
+	if got := jiraKey("\u00a0jira\u2003"); got != "jira" {
+		t.Errorf("unicode spaces are stripped: %q", got)
+	}
+}
+
+func TestMarkerMetadataIsGetOfValueOrEmpty(t *testing.T) {
+	for text, wantErr := range map[string]bool{`{"a":1}`: false, `{}`: false, `null`: false, `[]`: false, `[["a", 1]]`: true, `"x"`: true, `5`: true} {
+		if _, err := markerMetadata(text); (err != nil) != wantErr {
+			t.Errorf("%s: error %v, want %v", text, err, wantErr)
+		}
 	}
 }

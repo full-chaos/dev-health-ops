@@ -1,36 +1,23 @@
 package integrationsadmin
 
 import (
-	"errors"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/pydict"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
 )
 
-// errStoredJSON is a stored JSON column that Python's dict(value or {}) does
-// not turn into a dict the way a JSON object does (a non-empty list or
-// scalar): the Python route answers its unhandled 500 for most such values.
-// A row like that is only writable outside the api (CHAOS-6286 is the same
-// class in the sync admin).
-var errStoredJSON = errors.New("stored JSON column is not an object")
-
-// storedDict is dict(getattr(row, column) or {}) over the column's JSON
-// text: an object is itself, a falsy value is {}.
+// storedDict is dict(getattr(row, column) or {}) over the column's JSON text,
+// validated as the response model's dict[str, Any] (api/pydict).
 func storedDict(text string) (*pyjson.Object, error) {
 	value, err := pyjson.DecodeString(text)
 	if err != nil {
 		return nil, err
 	}
-	if object, ok := value.(*pyjson.Object); ok {
-		return object, nil
-	}
-	if !pyjson.Truthy(value) {
-		return pyjson.NewObject(), nil
-	}
-	return nil, errStoredJSON
+	return pydict.Dict(value)
 }
 
 func timeText(at time.Time) string { return pytime.Pydantic(pytime.UTC(at)) }

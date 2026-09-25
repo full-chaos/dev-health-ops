@@ -49,6 +49,7 @@ func TestIntegrationsAdminVenueOracle(t *testing.T) {
 				"memberA":    {"user_id": v.memberA.String(), "email": "member-a@example.com", "org_id": v.orgA.String(), "role": "member"},
 				"adminB":     {"user_id": v.adminB.String(), "email": "admin-b@example.com", "org_id": v.orgB.String(), "role": "admin"},
 				"adminC":     {"user_id": v.adminC.String(), "email": "admin-c@example.com", "org_id": v.orgC.String(), "role": "admin"},
+				"adminD":     {"user_id": v.adminD.String(), "email": "admin-d@example.com", "org_id": v.orgD.String(), "role": "admin"},
 				"adminNoOrg": {"user_id": v.adminNoOrg.String(), "email": "admin-noorg@example.com", "org_id": "", "role": "admin"},
 				"superNoOrg": {"user_id": v.superNoOrg.String(), "email": "super-noorg@example.com", "org_id": "", "role": "member", "is_superuser": true},
 			}
@@ -86,17 +87,26 @@ FROM integration_datasets ORDER BY integration_id, dataset_key`},
 }
 
 var (
-	createdID   = regexp.MustCompile(`"id":"[0-9a-f-]{36}"`)
+	anyUUID     = regexp.MustCompile(`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`)
 	createdTime = regexp.MustCompile(`"(created_at|updated_at)":"[^"]*"`)
 )
 
-// normalize blanks what differs by construction: a created row's random id and
-// its creation and update times (each plane reads its own clock).
+// normalize blanks what differs by construction in a "clock: " request: the
+// random ids of the rows it created and the times each plane read from its
+// own clock. Each distinct uuid becomes "<uuid#N>" by its first appearance,
+// so the same row named twice in one body still reads as the same row, and
+// two different rows never do.
 func normalize(request venueoracle.Request, body string) string {
 	if !strings.HasPrefix(request.Name, "clock: ") {
 		return body
 	}
-	body = createdID.ReplaceAllString(body, `"id":"<uuid>"`)
+	seen := map[string]int{}
+	body = anyUUID.ReplaceAllStringFunc(body, func(id string) string {
+		if _, ok := seen[id]; !ok {
+			seen[id] = len(seen) + 1
+		}
+		return fmt.Sprintf("<uuid#%d>", seen[id])
+	})
 	return createdTime.ReplaceAllString(body, `"$1":"<time>"`)
 }
 

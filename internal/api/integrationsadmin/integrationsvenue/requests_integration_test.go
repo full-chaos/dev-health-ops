@@ -226,8 +226,24 @@ func integrationRequests(venue *venueoracle.Venue, v ids) []venueoracle.Request 
 	get("sources after writes B", "/"+id(v.intB)+"/sources", "adminB")
 	get("sources after writes C", "/"+id(v.intC)+"/sources", "adminC")
 
-	// --- datasets -----------------------------------------------------------
 	dsPath := func(integration uuid.UUID) string { return "/" + id(integration) + "/datasets" }
+	// --- stored JSON that dict() reads as a list of pairs -------------------
+	get("pairs list org D (one row cannot be rendered)", "", "adminD")
+	get("pairs config row", "/"+id(v.intPairs), "adminD")
+	get("pairs config row with a non-string key", "/"+id(v.intBadPairs), "adminD")
+	get("pairs sources", "/"+id(v.intPairs)+"/sources", "adminD")
+	get("pairs datasets", "/"+id(v.intPairs)+"/datasets", "adminD")
+	send("clock: pairs update renders the pair config", "PATCH", "/"+id(v.intPairs), "adminD", `{"name":"seed-d-pairs-renamed"}`)
+	send("pairs update of the unrenderable row rolls back", "PATCH", "/"+id(v.intBadPairs), "adminD", `{"name":"seed-d-bad-pairs-renamed"}`)
+	send("clock: pairs update of the unrenderable row with a config", "PATCH", "/"+id(v.intBadPairs), "adminD", `{"config":{"fixed":true}}`)
+	send("pairs source enable (metadata has no get)", "PATCH", source(v.intPairs, v.srcPairsMeta), "adminD", `{"is_enabled":true}`)
+	send("pairs dataset patch renders the pair options", "PATCH", dsPath(v.intPairs), "adminD", `{"datasets":[{"dataset_key":"commits","is_enabled":false}]}`)
+	get("clock: pairs list org D after the rollbacks", "", "adminD")
+	// The provider names Python's strip() and lower() treat differently from Go's defaults.
+	send("source capital-I-with-dot provider enable (not jira: no limit)", "PATCH", source(v.intJira, v.srcTurkish), "adminA", `{"is_enabled":true}`)
+	send("source separator-padded provider enable (jira: over the limit)", "PATCH", source(v.intJira, v.srcSep), "adminA", `{"is_enabled":true}`)
+
+	// --- datasets -----------------------------------------------------------
 	for name, body := range map[string]string{
 		"missing datasets": `{}`, "null datasets": `{"datasets":null}`, "datasets dict": `{"datasets":{}}`, "datasets string": `{"datasets":"a"}`,
 		"item not object": `{"datasets":[1]}`, "item null": `{"datasets":[null]}`, "item missing key": `{"datasets":[{"is_enabled":true}]}`,
@@ -261,16 +277,22 @@ func integrationRequests(venue *venueoracle.Venue, v ids) []venueoracle.Request 
 		`{"datasets":[{"dataset_key":"work-items","is_enabled":false},{"dataset_key":"incidents","is_enabled":true},{"dataset_key":"work-item-history","is_enabled":true}]}`)
 	send("datasets jira key not in the jira registry", "PATCH", dsPath(v.intJira), "adminA", `{"datasets":[{"dataset_key":"commits","is_enabled":true}]}`)
 	send("clock: datasets upper-case provider registry lookup", "PATCH", dsPath(v.intUpper), "adminA", `{"datasets":[{"dataset_key":"work-items","is_enabled":true}]}`)
-	send("clock: datasets linear", "PATCH", dsPath(v.intLinear), "adminA", `{"datasets":[{"dataset_key":"work-item-comments","is_enabled":true},{"dataset_key":"incidents","is_enabled":true}]}`)
-	send("clock: datasets pagerduty", "PATCH", dsPath(v.intPagerDuty), "adminA", `{"datasets":[{"dataset_key":"on-calls","is_enabled":true},{"dataset_key":"incidents","is_enabled":true},{"dataset_key":"commits","is_enabled":true}]}`)
+	send("clock: datasets linear valid keys", "PATCH", dsPath(v.intLinear), "adminA", `{"datasets":[{"dataset_key":"work-item-comments","is_enabled":true},{"dataset_key":"work-items","is_enabled":false}]}`)
+	send("datasets linear key it lacks", "PATCH", dsPath(v.intLinear), "adminA", `{"datasets":[{"dataset_key":"incidents","is_enabled":true}]}`)
+	send("clock: datasets pagerduty valid keys", "PATCH", dsPath(v.intPagerDuty), "adminA", `{"datasets":[{"dataset_key":"on-calls","is_enabled":true},{"dataset_key":"incidents","is_enabled":true},{"dataset_key":"incident-notes","is_enabled":false}]}`)
+	send("datasets pagerduty key it lacks", "PATCH", dsPath(v.intPagerDuty), "adminA", `{"datasets":[{"dataset_key":"commits","is_enabled":true}]}`)
 	send("clock: datasets gitlab", "PATCH", dsPath(v.intGitLab), "adminA", `{"datasets":[{"dataset_key":"feature-flags","is_enabled":true},{"dataset_key":"incidents","is_enabled":true}]}`)
 	send("datasets gitlab key only github has", "PATCH", dsPath(v.intGitLab), "adminA", `{"datasets":[{"dataset_key":"nope","is_enabled":true}]}`)
-	send("clock: datasets provider with no registry entry", "PATCH", dsPath(v.intEmpty), "adminA", `{"datasets":[{"dataset_key":"commits","is_enabled":true},{"dataset_key":"security","is_enabled":true}]}`)
+	send("clock: datasets gitlab keys created", "PATCH", dsPath(v.intEmpty), "adminA", `{"datasets":[{"dataset_key":"commits","is_enabled":true},{"dataset_key":"security","is_enabled":true}]}`)
+	send("datasets provider with no registry entry", "PATCH", dsPath(v.intCustom), "adminA", `{"datasets":[{"dataset_key":"commits","is_enabled":true}]}`)
+	send("datasets provider with no registry entry, empty batch", "PATCH", dsPath(v.intCustom), "adminA", `{"datasets":[]}`)
 	get("clock: datasets after writes github", "/"+id(v.intGitHub)+"/datasets", "adminA")
 	get("clock: datasets after writes jira", "/"+id(v.intJira)+"/datasets", "adminA")
 	get("clock: datasets after writes upper", "/"+id(v.intUpper)+"/datasets", "adminA")
 	get("clock: datasets after writes linear", "/"+id(v.intLinear)+"/datasets", "adminA")
 	get("clock: datasets after writes gitlab", "/"+id(v.intGitLab)+"/datasets", "adminA")
+	get("clock: datasets after writes gitlab keys created", "/"+id(v.intEmpty)+"/datasets", "adminA")
+	get("datasets after writes custom", "/"+id(v.intCustom)+"/datasets", "adminA")
 	_ = fmt.Sprint
 	return out
 }

@@ -27,6 +27,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -244,7 +245,7 @@ func (h handlers) create(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, "encode config", err)
 		return
 	}
-	var created integration
+	var object *pyjson.Object
 	err = h.inTx(r.Context(), func(tx pgx.Tx) error {
 		var credential *uuid.UUID
 		if request.credentialID != nil {
@@ -254,7 +255,7 @@ func (h handlers) create(w http.ResponseWriter, r *http.Request) {
 			}
 			credential = &id
 		}
-		created, err = scanIntegration(tx.QueryRow(r.Context(), `
+		created, err := scanIntegration(tx.QueryRow(r.Context(), `
 INSERT INTO public.integrations (id, org_id, provider, credential_id, name, config, is_active, schedule_cron, timezone, created_at, updated_at)
 VALUES ($1, $2, $3, $4, $5, $6::json, $7, $8, $9, $10, $11) RETURNING `+integrationColumns,
 			uuid.New(), orgID, request.provider, credential, request.name, config, request.isActive,
@@ -262,15 +263,14 @@ VALUES ($1, $2, $3, $4, $5, $6::json, $7, $8, $9, $10, $11) RETURNING `+integrat
 		if err != nil {
 			return fmt.Errorf("insert integration: %w", err)
 		}
-		return nil
+		// The response is built before the commit: a row the response model
+		// cannot render rolls the write back, as the Python route's raise
+		// inside the session does.
+		object, err = integrationObject(created)
+		return err
 	})
 	if err != nil {
 		h.fail(w, r, "create integration", err)
-		return
-	}
-	object, err := integrationObject(created)
-	if err != nil {
-		h.fail(w, r, "render integration", err)
 		return
 	}
 	policy.WriteModel(w, http.StatusCreated, object, nil)
@@ -312,17 +312,16 @@ func (h handlers) update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	orgID := orgOf(r)
-	var updated integration
-	// The response is the ORM object in memory: it carries every value the
-	// request set, whether or not an UPDATE was needed to store it.
-	var view *pyjson.Object
+	var object *pyjson.Object
 	err := h.inTx(r.Context(), func(tx pgx.Tx) error {
 		current, id, err := requireIntegration(r.Context(), tx, orgID, r.PathValue("integration_id"))
 		if err != nil {
 			return err
 		}
-		updated = *current
-		view = request.config
+		updated := *current
+		// The response is the ORM object in memory: it carries every value
+		// the request set, whether or not an UPDATE was needed to store it.
+		view := request.config
 		// SQLAlchemy writes only the attributes whose value changed, and
 		// stamps updated_at only when it writes: an update that sets every
 		// field to its current value emits no UPDATE at all.
@@ -379,7 +378,8 @@ func (h handlers) update(w http.ResponseWriter, r *http.Request) {
 			updated.Timezone = request.timezone
 		}
 		if len(sets) == 0 {
-			return nil
+			object, err = integrationObjectWith(updated, view)
+			return err
 		}
 		args = append(args, h.Now().UTC())
 		sets = append(sets, fmt.Sprintf("updated_at=$%d", len(args)+1))
@@ -389,15 +389,11 @@ func (h handlers) update(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return fmt.Errorf("update integration: %w", err)
 		}
-		return nil
+		object, err = integrationObjectWith(updated, view)
+		return err
 	})
 	if err != nil {
 		h.fail(w, r, "update integration", err)
-		return
-	}
-	object, err := integrationObjectWith(updated, view)
-	if err != nil {
-		h.fail(w, r, "render integration", err)
 		return
 	}
 	policy.WriteModel(w, http.StatusOK, object, nil)
@@ -439,7 +435,13 @@ func parseSourceUpdate(body pybody.Body) (bool, pybody.Errors) {
 }
 
 // jiraKey is discovery/repos.py jira_key_norm: .strip().lower().
-func jiraKey(value string) string { return strings.ToLower(strings.TrimSpace(value)) }
+func jiraKey(value string) string {
+	// str.strip() also strips the four ASCII separators U+001C to U+001F, and
+	// str.lower() expands U+0130 (capital I with dot) to "i" and a combining
+	// dot instead of Go's simple mapping to "i".
+	stripped := strings.TrimFunc(value, func(r rune) bool { return unicode.IsSpace(r) || (r >= 0x1c && r <= 0x1f) })
+	return strings.ToLower(strings.ReplaceAll(stripped, "\u0130", "i\u0307"))
+}
 
 // systemMarkers are the discovery bookkeeping keys an explicit enable or
 // disable supersedes.
@@ -453,7 +455,7 @@ func (h handlers) updateSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	orgID := orgOf(r)
-	var updated source
+	var object *pyjson.Object
 	err := h.inTx(r.Context(), func(tx pgx.Tx) error {
 		_, integrationID, err := requireIntegration(r.Context(), tx, orgID, r.PathValue("integration_id"))
 		if err != nil {
@@ -470,16 +472,15 @@ func (h handlers) updateSource(w http.ResponseWriter, r *http.Request) {
 		if current == nil {
 			return refuse(http.StatusNotFound, "Source not found")
 		}
-		updated, err = h.setSourceEnabled(r.Context(), tx, orgID, *current, enabled)
+		updated, err := h.setSourceEnabled(r.Context(), tx, orgID, *current, enabled)
+		if err != nil {
+			return err
+		}
+		object, err = sourceObject(updated)
 		return err
 	})
 	if err != nil {
 		h.fail(w, r, "update source", err)
-		return
-	}
-	object, err := sourceObject(updated)
-	if err != nil {
-		h.fail(w, r, "render source", err)
 		return
 	}
 	policy.WriteModel(w, http.StatusOK, object, nil)
@@ -528,7 +529,9 @@ func (h handlers) setSourceEnabled(ctx context.Context, tx pgx.Tx, orgID string,
 		args = append(args, enabled)
 		sets = append(sets, fmt.Sprintf("is_enabled=$%d", len(args)+1))
 	}
-	metadata, err := storedDict(current.Metadata)
+	// `metadata = source.metadata_ or {}` then metadata.get(...): a stored
+	// value that is truthy and not an object has no .get (AttributeError).
+	metadata, err := markerMetadata(current.Metadata)
 	if err != nil {
 		return current, err
 	}
@@ -559,6 +562,20 @@ func (h handlers) setSourceEnabled(ctx context.Context, tx pgx.Tx, orgID string,
 		return current, fmt.Errorf("update source: %w", err)
 	}
 	return updated, nil
+}
+
+func markerMetadata(text string) (*pyjson.Object, error) {
+	value, err := pyjson.DecodeString(text)
+	if err != nil {
+		return nil, err
+	}
+	if object, ok := value.(*pyjson.Object); ok {
+		return object, nil
+	}
+	if !pyjson.Truthy(value) {
+		return pyjson.NewObject(), nil
+	}
+	return nil, fmt.Errorf("stored metadata is not an object")
 }
 
 func hasMarker(metadata *pyjson.Object) bool {
@@ -636,7 +653,7 @@ func (h handlers) updateDatasets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	orgID := orgOf(r)
-	var updated []*dataset
+	var out []pyjson.Value
 	err := h.inTx(r.Context(), func(tx pgx.Tx) error {
 		current, integrationID, err := requireIntegration(r.Context(), tx, orgID, r.PathValue("integration_id"))
 		if err != nil {
@@ -645,6 +662,7 @@ func (h handlers) updateDatasets(w http.ResponseWriter, r *http.Request) {
 		// One row object per key: a key repeated in the batch is the same ORM
 		// row twice, and the response shows its final state both times.
 		rows := map[string]*dataset{}
+		var updated []*dataset
 		for _, item := range items {
 			row, err := h.applyDataset(r.Context(), tx, orgID, current.Provider, integrationID, item, rows)
 			if err != nil {
@@ -652,20 +670,20 @@ func (h handlers) updateDatasets(w http.ResponseWriter, r *http.Request) {
 			}
 			updated = append(updated, row)
 		}
+		// Rendered before the commit, from each row's final state.
+		out = make([]pyjson.Value, 0, len(updated))
+		for _, row := range updated {
+			object, err := datasetObject(*row)
+			if err != nil {
+				return err
+			}
+			out = append(out, object)
+		}
 		return nil
 	})
 	if err != nil {
 		h.fail(w, r, "update datasets", err)
 		return
-	}
-	out := make([]pyjson.Value, 0, len(updated))
-	for _, row := range updated {
-		object, err := datasetObject(*row)
-		if err != nil {
-			h.fail(w, r, "render dataset", err)
-			return
-		}
-		out = append(out, object)
 	}
 	policy.WriteModel(w, http.StatusOK, out, nil)
 }

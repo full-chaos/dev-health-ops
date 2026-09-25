@@ -23,6 +23,9 @@ type ids struct {
 	srcB, srcC1, srcC2, srcCEnabled                  uuid.UUID
 	dsCommits, dsPrs, dsJiraItems, dsUnavailable     uuid.UUID
 	cfgA1, cfgA2, cfgA3, cfgC1, cfgCPlanner          uuid.UUID
+	orgD, adminD                                     uuid.UUID
+	intPairs, intBadPairs, intCustom                 uuid.UUID
+	srcTurkish, srcSep, srcPairsMeta, dsPairs        uuid.UUID
 }
 
 func newIDs() ids {
@@ -33,7 +36,8 @@ func newIDs() ids {
 		&v.intPagerDuty, &v.intEmpty, &v.intB, &v.intC, &v.intGitLab, &v.intUpper, &v.srcCapped, &v.srcUpper,
 		&v.srcSpaced, &v.srcFalsy, &v.srcGit, &v.srcEnabledMarked, &v.srcOther, &v.srcB, &v.srcC1, &v.srcC2,
 		&v.srcCEnabled, &v.dsCommits, &v.dsPrs, &v.dsJiraItems, &v.dsUnavailable, &v.cfgA1, &v.cfgA2, &v.cfgA3,
-		&v.cfgC1, &v.cfgCPlanner,
+		&v.cfgC1, &v.cfgCPlanner, &v.orgD, &v.adminD, &v.intPairs, &v.intBadPairs, &v.intCustom, &v.srcTurkish, &v.srcSep,
+		&v.srcPairsMeta, &v.dsPairs,
 	} {
 		*target = uuid.New()
 	}
@@ -56,7 +60,7 @@ func seed(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v ids) {
 		id   uuid.UUID
 		slug string
 		tier string
-	}{{v.orgA, "integ-a", "community"}, {v.orgB, "integ-b", "enterprise"}, {v.orgC, "integ-c", "community"}} {
+	}{{v.orgA, "integ-a", "community"}, {v.orgB, "integ-b", "enterprise"}, {v.orgC, "integ-c", "community"}, {v.orgD, "integ-d", "community"}} {
 		exec(`INSERT INTO organizations (id, slug, name, settings, tier, is_active, created_at, updated_at)
 VALUES ($1, $2, $2, '{}', $3, true, now(), now())`, org.id, org.slug, org.tier)
 	}
@@ -68,6 +72,7 @@ VALUES ($1, $2, $2, '{}', $3, true, now(), now())`, org.id, org.slug, org.tier)
 		{v.adminA, "admin-a@example.com", false}, {v.memberA, "member-a@example.com", false},
 		{v.adminB, "admin-b@example.com", false}, {v.adminC, "admin-c@example.com", false},
 		{v.adminNoOrg, "admin-noorg@example.com", false}, {v.superNoOrg, "super-noorg@example.com", true},
+		{v.adminD, "admin-d@example.com", false},
 	} {
 		exec(`INSERT INTO users (id, email, is_active, is_verified, is_superuser, token_version, created_at, updated_at)
 VALUES ($1, $2, true, true, $3, 0, now(), now())`, user.id, user.email, user.super)
@@ -75,7 +80,7 @@ VALUES ($1, $2, true, true, $3, 0, now(), now())`, user.id, user.email, user.sup
 	for _, member := range []struct {
 		org, user uuid.UUID
 		role      string
-	}{{v.orgA, v.adminA, "admin"}, {v.orgA, v.memberA, "member"}, {v.orgB, v.adminB, "admin"}, {v.orgC, v.adminC, "admin"}} {
+	}{{v.orgA, v.adminA, "admin"}, {v.orgA, v.memberA, "member"}, {v.orgB, v.adminB, "admin"}, {v.orgC, v.adminC, "admin"}, {v.orgD, v.adminD, "admin"}} {
 		exec(`INSERT INTO memberships (id, user_id, org_id, role, created_at, updated_at) VALUES ($1, $2, $3, $4, now(), now())`,
 			uuid.New(), member.user, member.org, member.role)
 	}
@@ -105,6 +110,11 @@ VALUES ($1, $2, $3, $4, $5, $6::json, $7, $8, $9, $10::timestamptz, $10::timesta
 	integration(v.intGitLab, v.orgA, "gitlab", nil, "seed-a-gitlab-datasets", `{}`, true, nil, nil, "2026-03-07 00:00:00+00")
 	integration(v.intB, v.orgB, "jira", nil, "seed-b-jira", `{"b": true}`, true, nil, nil, "2026-03-08 00:00:00+00")
 	integration(v.intC, v.orgC, "jira", nil, "seed-c-jira", `{}`, true, nil, nil, "2026-03-09 00:00:00+00")
+	integration(v.intCustom, v.orgA, "custom", nil, "seed-a-custom", `{}`, true, nil, nil, "2026-03-10 00:00:00+00")
+	// dict(value) reads a list of pairs; a pair whose key is not a string
+	// cannot be rendered (the response model is dict[str, Any]).
+	integration(v.intPairs, v.orgD, "github", nil, "seed-d-pairs", `[["k", "v"], ["n", 1], "ab"]`, true, nil, nil, "2026-03-11 00:00:00+00")
+	integration(v.intBadPairs, v.orgD, "github", nil, "seed-d-bad-pairs", `[[1, "v"]]`, true, nil, nil, "2026-03-12 00:00:00+00")
 
 	source := func(id, org, integrationID uuid.UUID, provider, externalID, name, fullName, metadata string, enabled bool, syncedAt any, success any, syncError any) {
 		exec(`INSERT INTO integration_sources (id, org_id, integration_id, provider, source_type, external_id, name, full_name,
@@ -118,6 +128,9 @@ VALUES ($1, $2, $3, $4, 'repository', $5, $6, $7, $8::json, $9, '2026-02-01 00:0
 	source(v.srcSpaced, v.orgA, v.intJira, " jira ", "P3", "P3", "Proj Three", `{}`, false, "2026-02-03 04:05:06.789012+00", false, "boom")
 	source(v.srcFalsy, v.orgA, v.intJira, "jira", "P4", "P4", "Proj Four", `{"capped_by_repo_limit": false, "superseded_by_scope_change": "", "z": 1}`, false, nil, nil, nil)
 	source(v.srcEnabledMarked, v.orgA, v.intJira, "jira", "P5", "P5", "Proj Five", `{"superseded_by_scope_change": true, "k": 2}`, true, "2026-02-04 00:00:00+00", true, nil)
+	source(v.srcTurkish, v.orgA, v.intJira, "J\u0130RA", "P6", "P6", "Proj Six", `{}`, false, nil, nil, nil)
+	source(v.srcSep, v.orgA, v.intJira, "\x1fjira\x1c", "P7", "P7", "Proj Seven", `{"capped_by_repo_limit": true}`, false, nil, nil, nil)
+	source(v.srcPairsMeta, v.orgD, v.intPairs, "github", "d/repo", "repo", "d/repo", `[["m", 1]]`, false, nil, nil, nil)
 	source(v.srcGit, v.orgA, v.intGitHub, "github", "acme/repo", "repo", "acme/repo", `{"private": false}`, false, nil, nil, nil)
 	source(v.srcOther, v.orgA, v.intGitHub, "github", "acme/other", "other", "acme/other", `{}`, true, nil, nil, nil)
 	source(v.srcB, v.orgB, v.intB, "jira", "B1", "B1", "B Proj", `{"capped_by_repo_limit": true, "b": 1}`, false, nil, nil, nil)
@@ -129,6 +142,7 @@ VALUES ($1, $2, $3, $4, 'repository', $5, $6, $7, $8::json, $9, '2026-02-01 00:0
 		exec(`INSERT INTO integration_datasets (id, org_id, integration_id, dataset_key, is_enabled, options, unavailable_reason, unavailable_since, unavailable_last_seen_at)
 VALUES ($1, $2, $3, $4, $5, $6::json, $7, $8::timestamptz, $9::timestamptz)`, id, org.String(), integrationID, key, enabled, options, reason, since, seen)
 	}
+	dataset(v.dsPairs, v.orgD, v.intPairs, "commits", true, `[["o", true]]`, nil, nil, nil)
 	dataset(v.dsCommits, v.orgA, v.intGitHub, "commits", true, `{"depth": 30}`, nil, nil, nil)
 	dataset(v.dsPrs, v.orgA, v.intGitHub, "prs", false, `{}`, "provider_dataset_unavailable", "2026-04-01 00:00:00.000001+00", "2026-04-02 00:00:00+00")
 	dataset(v.dsJiraItems, v.orgA, v.intJira, "work-items", true, `{}`, nil, nil, nil)

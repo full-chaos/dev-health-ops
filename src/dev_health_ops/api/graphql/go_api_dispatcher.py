@@ -1,6 +1,8 @@
 """The Python edge dispatcher (CHAOS-4697) -- the hop that decides, per
-``/graphql`` request, whether query-api (Go) owns the operation, mints a
-signed effective-principal envelope, forwards, and falls back to Python
+``/graphql`` request, whether query-api (Go) owns the operation, proves the
+authenticated identity (a signed effective-principal envelope, or, when
+``QUERY_API_INTERNAL_URL`` is set, four internal identity headers to
+query-api's internal listener: CHAOS-6144 P3), forwards, and falls back to Python
 answers a typed error on a Go-plane failure. Without this module, ``go_api_routing_state`` rows
 enable nothing: ``PostgresSwitch`` is only consulted *inside* query-api,
 and nothing routed a request there before this.
@@ -98,10 +100,13 @@ both independent of OTel posture:
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import logging
 import math
 import os
+import re
+import socket
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -127,9 +132,14 @@ from .go_api_document_digest import document_digest
 from .go_api_operation_catalog import is_mutation_operation, operation_for_digest
 from .go_api_registry import lookup_routing_state
 from .go_api_schema_digest import current_schema_digest
-from .principal_envelope import issue_effective_principal_envelope
+from .principal_envelope import (
+    effective_principal_identity,
+    issue_effective_principal_envelope,
+)
 
 if TYPE_CHECKING:
+    from dev_health_ops.api.services.auth import AuthenticatedUser
+
     from .context import GraphQLContext
 
 logger = logging.getLogger(__name__)
@@ -137,6 +147,172 @@ logger = logging.getLogger(__name__)
 __all__ = ["GoApiDispatchRouter"]
 
 _DEFAULT_DISPATCH_TIMEOUT_SECONDS = 5.0
+
+#: CHAOS-6144 P3. When set, the edge states the identity it authenticated as the
+#: four internal identity headers and sends them to THIS URL: query-api's
+#: INTERNAL listener (its own Service port that no Ingress names), which alone
+#: honours them. Unset (or blank) = the signed envelope to GO_API_QUERY_API_URL,
+#: as before: the gate that lets this ship before the deploy half. Never point
+#: it at an Ingress host: the ingress strips the headers, and query-api refuses a
+#: request carrying neither carrier (401).
+_INTERNAL_URL_ENV = "QUERY_API_INTERNAL_URL"
+
+#: The internal identity header names: a cross-repo contract with query-api
+#: (``internal/queryapi/internalidentity``), which honours them only on its
+#: internal listener, and with the ingress, which strips them from every inbound
+#: request. Do not rename without the deploy change.
+_INTERNAL_ORG_ID_HEADER = "X-DH-Internal-Org-Id"
+_INTERNAL_ROLE_HEADER = "X-DH-Internal-Role"
+_INTERNAL_SUPERUSER_HEADER = "X-DH-Internal-Superuser"
+_INTERNAL_IMPERSONATION_ACTIVE_HEADER = "X-DH-Internal-Impersonation-Active"
+
+
+def _internal_query_api_url() -> str | None:
+    value = (os.getenv(_INTERNAL_URL_ENV) or "").strip()
+    return value or None
+
+
+#: Host classes that can be a query-api INTERNAL Service: a single-label name
+#: (compose / a Service in the same namespace), an in-cluster DNS name, a
+#: loopback / private / link-local address. Anything else (a public DNS name)
+#: is refused: the identity headers must never leave the cluster network.
+_CLUSTER_HOST_SUFFIXES = (".svc", ".svc.cluster.local", ".cluster.local")
+
+
+#: A DNS label: what a query-api Service host may consist of. A single-label
+#: host must also start with a letter, so a numeric IPv4 spelling such as
+#: ``2130706433`` or ``0x7f000001`` is never mistaken for a Service name.
+_DNS_LABEL = re.compile(r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?")
+
+
+def _normalized_url(value: str) -> httpx.URL | None:
+    """``value`` as httpx will target it: IDNA-normalised host (an ideographic
+    full stop becomes a dot), a default port dropped. Every host or origin
+    decision below is taken on THIS form and THIS form is what is sent, so what
+    was validated is what is contacted. None when httpx cannot parse it."""
+    try:
+        url = httpx.URL(value)
+        _host(url)  # IDNA-decoding a malformed A-label raises
+        return url
+    except (httpx.InvalidURL, ValueError):
+        return None
+
+
+def _host(url: httpx.URL) -> str:
+    """The ASCII (A-label) host httpx puts on the wire, lower-cased."""
+    return url.raw_host.decode("ascii").lower()
+
+
+_DEFAULT_PORTS = {"http": 80, "https": 443}
+
+
+def _canonical_host(host: str) -> str:
+    """``host`` as the resolver reads it, so two spellings of one machine compare
+    equal: an IPv6 literal compressed, an IPv4-mapped one unmapped, the legacy
+    numeric IPv4 forms glibc's resolver accepts (``2130706433``, ``0x7f.1``,
+    ``127.1``) written dotted, a single trailing dot on a name dropped."""
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        try:
+            return socket.inet_ntoa(socket.inet_aton(host))
+        except OSError:
+            return host[:-1] if host.endswith(".") else host
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped:
+        address = address.ipv4_mapped
+    return str(address)
+
+
+def _origin(url: httpx.URL) -> tuple[str, str, int]:
+    """The endpoint a connection to ``url`` dials: scheme, canonical host and the
+    EFFECTIVE port (no port, or port 0 which the transport also dials as the
+    scheme default, is the default)."""
+    port = url.port or _DEFAULT_PORTS.get(url.scheme, 0)
+    return (url.scheme, _canonical_host(_host(url)), port)
+
+
+def _internal_host(host: str) -> bool:
+    if not host:
+        return False
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        labels = host.split(".")
+        if not all(_DNS_LABEL.fullmatch(label) for label in labels):
+            return False
+        if len(labels) == 1:
+            return labels[0][0].isalpha()
+        return host.endswith(_CLUSTER_HOST_SUFFIXES)
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped:
+        address = address.ipv4_mapped
+    return (
+        address.is_loopback or address.is_private or address.is_link_local
+    ) and not address.is_unspecified
+
+
+def _internal_url_target(
+    value: str, public_url: str | None
+) -> tuple[str | None, str | None]:
+    """``(url_to_send_to, None)`` when ``value`` may receive the internal
+    identity headers, else ``(None, reason)``. Fail closed: the edge sends
+    nothing to a URL it cannot tell is internal. The returned URL is httpx's
+    normalised form of ``value``; the caller must send to exactly that string.
+    Refused: a scheme other than plain http (an Ingress host is https),
+    userinfo, a query or fragment, a public-looking host, and the very origin of
+    GO_API_QUERY_API_URL (the public listener, which strips the headers)."""
+    url = _normalized_url(value)
+    if url is None:
+        return None, "malformed"
+    if url.scheme != "http" or not _host(url):
+        return None, "scheme_or_host"
+    if url.port is not None and not 1 <= url.port <= 65535:
+        # Port 0 is not a listener (httpcore dials the scheme's default instead,
+        # so the URL would not name the endpoint it says) and nothing above 65535
+        # exists.
+        return None, "malformed"
+    if url.userinfo:
+        return None, "userinfo"
+    if url.query or url.fragment:
+        return None, "query_or_fragment"
+    if not _internal_host(_host(url)):
+        return None, "public_host"
+    if public_url:
+        public = _normalized_url(public_url)
+        if public is None:
+            # Fail closed: an origin that cannot be read cannot be shown to differ
+            # from this one (and the public leg itself could not connect to it).
+            return None, "public_url_malformed"
+        if _origin(public) == _origin(url):
+            return None, "same_as_public_url"
+    return str(url), None
+
+
+def _internal_identity_headers(user: AuthenticatedUser) -> dict[str, str]:
+    """The four internal identity headers for ``user``: exactly the fields the
+    effective-principal envelope carries and query-api reads (org, role,
+    superuser, impersonation active), derived by the ONE function the envelope
+    issuer also uses, so the two carriers cannot disagree. The two flags are
+    exactly ``true`` or ``false``: query-api refuses anything else."""
+    identity = effective_principal_identity(user)
+    for value in (identity.org_id, identity.role):
+        # A value that cannot travel as an HTTP header field and arrive as the
+        # same string is refused, never sent altered: a control character
+        # (header injection, NUL, CR/LF; a tab inside a value is legal HTTP but
+        # never an identity) and leading or trailing whitespace (an HTTP server
+        # trims it, so the reader would see a different string than the envelope
+        # carried).
+        if any(ord(char) < 0x20 or ord(char) == 0x7F for char in value) or (
+            value != value.strip(" \t")
+        ):
+            raise ValueError("identity value is not header safe")
+    return {
+        _INTERNAL_ORG_ID_HEADER: identity.org_id,
+        _INTERNAL_ROLE_HEADER: identity.role,
+        _INTERNAL_SUPERUSER_HEADER: "true" if user.is_superuser else "false",
+        _INTERNAL_IMPERSONATION_ACTIVE_HEADER: (
+            "true" if identity.impersonation_active else "false"
+        ),
+    }
 
 
 #: The canonical schema digest producer, now shared (CHAOS go-api routing
@@ -208,6 +384,23 @@ def _get_http_client() -> httpx.AsyncClient:
     if _http_client is None:
         _http_client = httpx.AsyncClient()
     return _http_client
+
+
+_internal_http_client: httpx.AsyncClient | None = None
+
+
+def _get_internal_http_client() -> httpx.AsyncClient:
+    """The client for the internal identity carrier: it never reads the
+    process's proxy environment (HTTP_PROXY / NO_PROXY / SSL_CERT_* ...): a
+    proxy in the path would receive the identity headers, and this call must go
+    straight to the in-cluster Service. Redirects are not followed (httpx's
+    default), so a 30x cannot carry the headers elsewhere."""
+    global _internal_http_client
+    if _internal_http_client is None:
+        _internal_http_client = httpx.AsyncClient(
+            trust_env=False, follow_redirects=False
+        )
+    return _internal_http_client
 
 
 def _dispatch_timeout_seconds() -> float:
@@ -585,25 +778,60 @@ class GoApiDispatchRouter(GraphQLRouter[_Context, _RootValue]):
         if context.user is None:
             # Never forward unauthenticated -- fail closed to Python.
             return self._fallback(selected_operation, "unauthenticated")
-        if context.tier is None or context.licensed_features is None:
-            # Best-effort resolution in get_context can legitimately fail
-            # (see context.py's docstring); the envelope issuer requires
-            # both as non-optional kwargs, so this is fail-closed, not a
-            # bug to paper over with a default tier/empty feature list.
-            return self._fallback(selected_operation, "envelope_inputs_missing")
+        internal_url = _internal_query_api_url()
+        if internal_url is not None:
+            # The internal identity carrier (CHAOS-6144 P3): plain headers to
+            # the internal listener; nothing is signed, and tier /
+            # licensed_features are not part of the identity query-api reads.
+            internal_target, problem = _internal_url_target(
+                internal_url, os.getenv("GO_API_QUERY_API_URL")
+            )
+            if problem is not None or internal_target is None:
+                # Fail closed and LOUD: nothing is sent to a URL that is not
+                # provably internal (a public host would receive the identity).
+                logger.error(
+                    "go_api_dispatch.internal_url_refused",
+                    extra={
+                        "operation": selected_operation,
+                        "reason": problem or "unknown",
+                    },
+                )
+                return self._go_failed(
+                    selected_operation, "go_internal_url_refused", 0.0
+                )
+            try:
+                carrier_headers = _internal_identity_headers(context.user)
+            except ValueError:
+                logger.error(
+                    "go_api_dispatch.identity_not_header_safe",
+                    extra={"operation": selected_operation},
+                )
+                return self._go_failed(
+                    selected_operation, "go_identity_not_header_safe", 0.0
+                )
+            target_url = internal_target
+        else:
+            if context.tier is None or context.licensed_features is None:
+                # Best-effort resolution in get_context can legitimately fail
+                # (see context.py's docstring); the envelope issuer requires
+                # both as non-optional kwargs, so this is fail-closed, not a
+                # bug to paper over with a default tier/empty feature list.
+                return self._fallback(selected_operation, "envelope_inputs_missing")
 
-        try:
-            envelope = issue_effective_principal_envelope(
-                context.user,
-                tier=context.tier,
-                licensed_features=context.licensed_features,
-            )
-        except Exception:
-            logger.exception(
-                "go_api_dispatch.envelope_signing_failed",
-                extra={"operation": selected_operation},
-            )
-            return self._fallback(selected_operation, "envelope_signing_error")
+            try:
+                envelope = issue_effective_principal_envelope(
+                    context.user,
+                    tier=context.tier,
+                    licensed_features=context.licensed_features,
+                )
+            except Exception:
+                logger.exception(
+                    "go_api_dispatch.envelope_signing_failed",
+                    extra={"operation": selected_operation},
+                )
+                return self._fallback(selected_operation, "envelope_signing_error")
+            target_url = base_url
+            carrier_headers = {"Authorization": f"Bearer {envelope}"}
 
         try:
             outbound_body = await _build_outbound_body(
@@ -617,7 +845,12 @@ class GoApiDispatchRouter(GraphQLRouter[_Context, _RootValue]):
             return self._fallback(selected_operation, "build_outbound_body_error")
 
         return await self._forward_to_go(
-            base_url, selected_operation, doc_digest, envelope, outbound_body
+            target_url,
+            selected_operation,
+            doc_digest,
+            carrier_headers,
+            outbound_body,
+            internal_carrier=internal_url is not None,
         )
 
     async def _forward_to_go(
@@ -625,20 +858,28 @@ class GoApiDispatchRouter(GraphQLRouter[_Context, _RootValue]):
         base_url: str,
         selected_operation: str,
         doc_digest: str,
-        envelope: str,
+        carrier_headers: dict[str, str],
         outbound_body: bytes,
+        internal_carrier: bool = False,
     ) -> Response:
         timeout = _dispatch_timeout_seconds()
         started = time.monotonic()
-        client = _get_http_client()
+        client = _get_internal_http_client() if internal_carrier else _get_http_client()
+        # UTF-8 bytes, not str: httpx encodes a str header value as ASCII, and
+        # query-api reads the raw bytes (the same string the envelope carried as
+        # JSON), so a non-ASCII org or role must pass through.
+        outbound_headers: list[tuple[bytes, bytes]] = [
+            (name.encode("ascii"), value.encode("utf-8"))
+            for name, value in (
+                *carrier_headers.items(),
+                ("Content-Type", "application/json"),
+            )
+        ]
         try:
             resp = await client.post(
                 f"{base_url.rstrip('/')}/query",
                 content=outbound_body,
-                headers={
-                    "Authorization": f"Bearer {envelope}",
-                    "Content-Type": "application/json",
-                },
+                headers=outbound_headers,
                 timeout=timeout,
             )
         except httpx.TimeoutException:

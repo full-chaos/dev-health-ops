@@ -29,9 +29,14 @@ import (
 //
 // and every tolerated probe is loud: a log line and a counter.
 const (
-	// busyGuardTimeout bounds the claim-liveness read made after the probe's own
-	// deadline has already passed; it runs on a fresh context for that reason.
+	// busyGuardTimeout bounds the claim-liveness read, and is the time reserved
+	// for it inside the probe's own deadline (see acquireContext).
 	busyGuardTimeout = 2 * time.Second
+	// busyAcquireWait is how long a probe waits for a connection when the pool
+	// is ALREADY fully acquired: a healthy pool frees one in milliseconds, so
+	// waiting out the whole check budget only delays the (busy) answer to the
+	// kubelet. When the pool is not saturated the probe keeps the full budget.
+	busyAcquireWait = time.Second
 	// busyLogInterval limits the busy log line per check; the counter counts all.
 	busyLogInterval = 30 * time.Second
 )
@@ -104,16 +109,50 @@ type busyTx struct{}
 
 func (busyTx) Rollback(context.Context) error { return nil }
 
+// acquireContext bounds the acquire so time is left inside the caller's own
+// deadline for the claim-liveness guard and the busy pass to reach the caller:
+// the health registry gives up on a check at ITS deadline, and a pass that only
+// arrives after it is counted but never seen (CHAOS-6771 r1 P1). The reserve is
+// busyGuardTimeout, capped at half of what remains so a short budget still gets
+// an acquire. A context with no deadline is used as is.
+func acquireContext(ctx context.Context, saturated bool) (context.Context, context.CancelFunc) {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		if saturated {
+			return context.WithTimeout(ctx, busyAcquireWait)
+		}
+		return ctx, func() {}
+	}
+	reserve := busyGuardTimeout
+	if half := time.Until(deadline) / 2; reserve > half {
+		reserve = half
+	}
+	acquireBy := deadline.Add(-reserve)
+	if saturated {
+		if capped := time.Now().Add(busyAcquireWait); capped.Before(acquireBy) {
+			acquireBy = capped
+		}
+	}
+	return context.WithDeadline(ctx, acquireBy)
+}
+
 func (o busyTolerantOpener) Begin(ctx context.Context) (selfprobe.Tx, error) {
-	tx, err := o.inner.Begin(ctx)
+	acquireCtx, cancelAcquire := acquireContext(ctx, o.saturated != nil && o.saturated())
+	defer cancelAcquire()
+	tx, err := o.inner.Begin(acquireCtx)
 	if err == nil {
 		return tx, nil
+	}
+	// The caller's own deadline is gone too: there is no time left to prove
+	// progress, and the caller has already given up on this probe.
+	if ctx.Err() != nil {
+		return nil, err
 	}
 	if !errors.Is(err, context.DeadlineExceeded) || o.saturated == nil || o.progress == nil || !o.saturated() {
 		return nil, err
 	}
-	guardCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), busyGuardTimeout)
-	defer cancel()
+	guardCtx, cancelGuard := context.WithTimeout(ctx, busyGuardTimeout)
+	defer cancelGuard()
 	if o.progress(guardCtx) != nil {
 		return nil, err
 	}

@@ -112,6 +112,23 @@ func scenarios() []scenario {
 		{name: "integration config names the host", system: "github", credProvider: "github", credConfig: "{}", cred: garbled,
 			intConfig: `{"github_instance_url":"https://cfg-int.acme.test"}`, sourceOn: true, intActive: true, host: "cfg-int.acme.test"},
 	}
+	// A credential config that is truthy and not a JSON object raises in
+	// Python's `.get` (500) once the host is read, whatever the payload holds;
+	// a falsy one is `{}`.
+	list = append(list,
+		gh("config array, no payload", `["bad"]`, noPayload, ""),
+		gh("config array with a decrypted host", `["bad"]`, encrypted(`{"url":"https://ghe-cfgarr.acme.test"}`), "ghe-cfgarr.acme.test"),
+		gh("config string, garbled payload", `"just text"`, garbled, ""),
+		gh("config number, garbled payload", `5`, garbled, ""),
+		gh("config true, garbled payload", `true`, garbled, ""),
+		gh("config empty array, garbled payload", `[]`, garbled, ""),
+		gh("config empty string, garbled payload", `""`, garbled, ""),
+		gh("config zero, garbled payload", `0`, garbled, ""),
+		gh("config false, garbled payload", `false`, garbled, ""),
+		gh("config null, garbled payload", `null`, garbled, ""),
+		gh("config array with another provider's credential", `["bad"]`, encrypted(`{"url":"https://x.acme.test"}`), ""),
+	)
+	list[len(list)-1].credProvider = "gitlab"
 	// An unreadable credential only raises for an enabled source under an
 	// active integration.
 	unreadable := gh("garbled payload, source disabled", "{}", garbled, "")
@@ -160,11 +177,25 @@ func normalize(_ venueoracle.Request, body string) string {
 // per credential state (an organization's managed sources are all compared, so
 // one unreadable credential decides every request in it), each asked about the
 // host its credential resolves to, another host and the default host.
-func TestOwnershipVenueOracle(t *testing.T) {
+func TestOwnershipVenueOracle(t *testing.T) { runOwnership(t, scenarios(), true) }
+
+// TestOwnershipVenueNoKeyOracle runs a credential whose stored payload cannot
+// be decrypted because neither api holds SETTINGS_ENCRYPTION_KEY: Python's
+// decrypt_value raises RuntimeError, unhandled, before it looks at the token,
+// so both operations answer the generic 500 (a batch accept's error envelope
+// included).
+func TestOwnershipVenueNoKeyOracle(t *testing.T) {
+	garbledGitHub := scenario{name: "no key, stored payload", system: "github", credProvider: "github", credConfig: "{}",
+		cred: garbled, intConfig: "{}", sourceOn: true, intActive: true}
+	noPayloadGitHub := scenario{name: "no key, no stored payload", system: "github", credProvider: "github",
+		credConfig: `{"url":"https://cfg-nokey.acme.test"}`, cred: noPayload, intConfig: "{}", sourceOn: true, intActive: true, host: "cfg-nokey.acme.test"}
+	runOwnership(t, []scenario{garbledGitHub, noPayloadGitHub}, false)
+}
+
+func runOwnership(t *testing.T, cases []scenario, withKey bool) {
 	ctx := context.Background()
 	root := repoRoot(t)
 	const jwtKey = "venue-oracle-test-secret-key-for-ownership-32-bytes!"
-	cases := scenarios()
 	all := make([]ids, len(cases))
 	for i := range cases {
 		all[i] = ids{pushOrg: uuid.New(), batchOrg: uuid.New(), pushAdmin: uuid.New(),
@@ -175,7 +206,7 @@ func TestOwnershipVenueOracle(t *testing.T) {
 
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Root: root, JWTKey: jwtKey,
-		PythonEnv: []string{"SETTINGS_ENCRYPTION_KEY=" + encryptionKey},
+		PythonEnv: pythonEnv(withKey),
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
 			exec := func(sql string, args ...any) {
 				t.Helper()
@@ -279,10 +310,12 @@ VALUES ($1, $2, $3, 'venue', $4, 'fcpush_venue', $5::jsonb, now())`, uuid.New(),
 		t.Fatalf("python /metrics answered %d", pythonMetrics.Status)
 	}
 
-	goBase, operator := startGoServer(t, ctx, venue, jwtKey)
+	goBase, operator := startGoServer(t, ctx, venue, jwtKey, withKey)
 	receipt := venueoracle.Diff(t, goBase, requests, python[:len(requests)], venueoracle.DiffOptions{Normalize: normalize})
 	t.Log(receipt)
-	compareDecryptFailed(t, pythonMetrics.Body, operator())
+	if withKey {
+		compareDecryptFailed(t, pythonMetrics.Body, operator())
+	}
 }
 
 // decryptFailedCounts reads devhealth_integration_credential_decrypt_failed_total
@@ -336,7 +369,14 @@ func compareDecryptFailed(t *testing.T, python, goExposition string) {
 
 // startGoServer serves the dho api and returns its base URL and a reader of
 // its operator /metrics, the Go api's scrape surface.
-func startGoServer(t *testing.T, ctx context.Context, venue *venueoracle.Venue, jwtKey string) (string, func() string) {
+func pythonEnv(withKey bool) []string {
+	if withKey {
+		return []string{"SETTINGS_ENCRYPTION_KEY=" + encryptionKey}
+	}
+	return nil
+}
+
+func startGoServer(t *testing.T, ctx context.Context, venue *venueoracle.Venue, jwtKey string, withKey bool) (string, func() string) {
 	t.Helper()
 	pool, err := pgxpool.New(ctx, venue.GoAPIDatabaseURI(t))
 	if err != nil {
@@ -358,9 +398,13 @@ func startGoServer(t *testing.T, ctx context.Context, venue *venueoracle.Venue, 
 		t.Fatalf("valkey: %v", err)
 	}
 	t.Cleanup(client.Close)
-	decryptor, err := providerfoundation.NewFernetDecryptor(secrets.NewValue(encryptionKey), "")
-	if err != nil {
-		t.Fatalf("decryptor: %v", err)
+	var decryptor providerfoundation.FernetDecryptor
+	if withKey {
+		var err error
+		decryptor, err = providerfoundation.NewFernetDecryptor(secrets.NewValue(encryptionKey), "")
+		if err != nil {
+			t.Fatalf("decryptor: %v", err)
+		}
 	}
 	cfg, err := config.Load(config.Spec{Service: config.APIServiceName, LookupEnv: func(string) (string, bool) { return "", false }})
 	if err != nil {

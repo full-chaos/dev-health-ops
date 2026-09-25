@@ -2,6 +2,7 @@ package externalingest
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 
 	"github.com/google/uuid"
@@ -301,6 +302,12 @@ func credentialHost(ctx context.Context, q RowsQueryer, cipher credentials.Ciphe
 			}
 		}
 	}
+	// `credential.config or {}` then `.get(...)`: a config that is truthy and not
+	// a JSON object raises AttributeError, unhandled, once the loop is reached.
+	config, err := credentialConfig(configJSON)
+	if err != nil {
+		return "", false, err
+	}
 	candidates := make([]any, 0, 6)
 	keys := []string{system + "_url", "url", "base_url"}
 	for _, key := range keys {
@@ -312,7 +319,6 @@ func credentialHost(ctx context.Context, q RowsQueryer, cipher credentials.Ciphe
 		}
 		candidates = append(candidates, candidate)
 	}
-	config := decodeMetadata(configJSON)
 	for _, key := range keys {
 		candidates = append(candidates, config[key])
 	}
@@ -326,4 +332,28 @@ func credentialHost(ctx context.Context, q RowsQueryer, cipher credentials.Ciphe
 		}
 	}
 	return "", false, nil
+}
+
+// errCredentialConfigNotObject stands for the AttributeError Python raises
+// reading `.get` on a credential config that is truthy and not a dict.
+var errCredentialConfigNotObject = errors.New("credential config not an object")
+
+// credentialConfig is `credential.config or {}` as a mapping: an absent, null
+// or falsy config (an empty object, list or string, zero, false) is empty; a
+// JSON object is itself; any other value is errCredentialConfigNotObject.
+func credentialConfig(raw []byte) (map[string]any, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	var decoded any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return nil, err
+	}
+	if object, ok := decoded.(map[string]any); ok {
+		return object, nil
+	}
+	if !truthy(decoded) {
+		return nil, nil
+	}
+	return nil, errCredentialConfigNotObject
 }

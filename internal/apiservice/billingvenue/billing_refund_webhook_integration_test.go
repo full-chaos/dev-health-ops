@@ -49,10 +49,12 @@ func TestRefundWebhookWriteFirstAndOrder(t *testing.T) {
 	// hook runs between Stripe's answer to a refund create and the route
 	// writing it: the refund event that beats the route's completion.
 	var hook func(refundRowID, stripeRefundID string)
+	// routeStatus is the status the route is told Stripe's create answered.
+	routeStatus := "pending"
 	var hookMu sync.Mutex
 	goStripe := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hookMu.Lock()
-		run := hook
+		run, told := hook, routeStatus
 		hookMu.Unlock()
 		if r.Method != http.MethodPost || r.URL.Path != "/v1/refunds" || run == nil {
 			inner.ServeHTTP(w, r)
@@ -67,7 +69,7 @@ func TestRefundWebhookWriteFirstAndOrder(t *testing.T) {
 		_ = json.Unmarshal(recorded.Body.Bytes(), &made)
 		run(form.Get("metadata[refund_id]"), made.ID)
 		// The route sees the refund as Stripe first reports a new one.
-		answer := strings.Replace(recorded.Body.String(), `"status": "succeeded"`, `"status": "pending"`, 1)
+		answer := strings.Replace(recorded.Body.String(), `"status": "succeeded"`, `"status": "`+told+`"`, 1)
 		for key, values := range recorded.Header() {
 			w.Header()[key] = values
 		}
@@ -129,6 +131,7 @@ func TestRefundWebhookWriteFirstAndOrder(t *testing.T) {
 	const invAdopt, invRace, invOrder, invRow = "bbbbbbbb-0000-4000-8000-000000000001", "bbbbbbbb-0000-4000-8000-000000000002",
 		"bbbbbbbb-0000-4000-8000-000000000003", "bbbbbbbb-0000-4000-8000-000000000004"
 	const invRace2, invPI = "bbbbbbbb-0000-4000-8000-000000000005", "bbbbbbbb-0000-4000-8000-000000000006"
+	const invRace3 = "bbbbbbbb-0000-4000-8000-000000000007"
 	const waitingA, waitingB = "cccccccc-0000-4000-8000-000000000001", "cccccccc-0000-4000-8000-000000000002"
 	exec(`INSERT INTO invoices (id, org_id, stripe_invoice_id, stripe_customer_id, status, amount_due, amount_paid, currency,
 		payment_intent_id, metadata, created_at, updated_at) VALUES
@@ -138,9 +141,10 @@ func TestRefundWebhookWriteFirstAndOrder(t *testing.T) {
 		($4, $5, 'in_rowless', 'cus_A', 'paid', 400, 400, 'usd', 'pi_rowless', '{}', now(), now()),
 		($6, $5, 'in_race2', 'cus_A', 'paid', 900, 900, 'usd', 'pi_race2', '{}', now(), now()),
 		($7, $5, 'in_pi', 'cus_A', 'paid', 700, 700, 'usd', 'pi_of_dashboard', '{}', now(), now()),
+		($8, $5, 'in_race3', 'cus_A', 'paid', 350, 350, 'usd', 'pi_race3', '{}', now(), now()),
 		(gen_random_uuid(), $5, 'in_twice_1', 'cus_A', 'paid', 100, 100, 'usd', 'pi_twice', '{}', now(), now()),
 		(gen_random_uuid(), $5, 'in_twice_2', 'cus_A', 'paid', 100, 100, 'usd', 'pi_twice', '{}', now(), now())`,
-		invAdopt, invRace, invOrder, invRow, orgA, invRace2, invPI)
+		invAdopt, invRace, invOrder, invRow, orgA, invRace2, invPI, invRace3)
 	exec(`INSERT INTO refunds (id, org_id, invoice_id, stripe_refund_id, stripe_charge_id, amount, currency, status, metadata, created_at, updated_at) VALUES
 		($1, $3, $4, NULL, NULL, 300, 'usd', 'pending', '{}', now(), now()),
 		($2, $5, NULL, NULL, NULL, 200, 'usd', 'pending', '{}', now(), now())`,
@@ -220,6 +224,23 @@ func TestRefundWebhookWriteFirstAndOrder(t *testing.T) {
 	expect("race failed: the create answered", fmt.Sprint(response.Status), "200")
 	expect("race failed: the row keeps the failure and its reason",
 		row(`SELECT count(*)::text || ' ' || min(status) || ' ' || coalesce(min(failure_reason), '<null>') FROM refunds WHERE invoice_id = '`+invRace2+`'`), "1 failed lost_or_stolen_card")
+
+	// And with the route told "requires_action": still not a settled status.
+	hookMu.Lock()
+	routeStatus = "requires_action"
+	hook = func(rowID, stripeID string) {
+		deliver("race: succeeded beats a requires_action completion", stripeID, "succeeded", metadata(map[string]any{"org_id": orgA, "invoice_id": invRace3, "refund_id": rowID}))
+	}
+	hookMu.Unlock()
+	response = venueoracle.Do(t, base, venueoracle.Request{Name: "race: create, then requires_action", Method: "POST", Path: "/api/v1/billing/refunds",
+		Headers: map[string]string{"Authorization": "Bearer " + venue.Tokens["super"], "Content-Type": "application/json"},
+		Body:    venueoracle.B64(`{"invoice_id":"` + invRace3 + `","amount":350}`)})
+	hookMu.Lock()
+	hook, routeStatus = nil, "pending"
+	hookMu.Unlock()
+	expect("race requires_action: the create answered", fmt.Sprint(response.Status), "200")
+	expect("race requires_action: the row stays succeeded",
+		row(`SELECT count(*)::text || ' ' || min(status) FROM refunds WHERE invoice_id = '`+invRace3+`'`), "1 succeeded")
 
 	// A refund made in Stripe's dashboard has no org in its metadata: the
 	// invoice its payment intent paid gives the org and the link. A payment

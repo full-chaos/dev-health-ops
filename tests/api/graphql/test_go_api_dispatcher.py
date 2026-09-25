@@ -1571,3 +1571,34 @@ async def test_query_failure_carries_no_write_outcome_marker(
 
     assert "writeOutcome" not in error["extensions"]
     assert "may have been applied" not in error["message"]
+
+
+# Every reason the dispatcher can fail a request with after query-api was asked,
+# each classified: did the request possibly reach query-api and run the write?
+_NEVER_RAN_A_WRITE = frozenset(
+    {"go_connection_error", "go_404_digest_miss", "go_405_method_not_allowed"}
+)
+
+
+async def test_every_go_failure_reason_is_classified_for_writes():
+    """The reasons come from the dispatcher's own source (its ``_go_failed``
+    call sites), not a list kept here: a new reason is unclassified, and this
+    goes red until it is placed in the may-have-run set or the never-ran set."""
+    import ast
+    import inspect
+
+    tree = ast.parse(inspect.getsource(go_api_dispatcher))
+    reasons: set[str] = set()
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "_go_failed"
+        ):
+            literal = node.args[1]
+            assert isinstance(literal, ast.Constant) and isinstance(literal.value, str)
+            reasons.add(literal.value)
+    assert reasons, "found no _go_failed call sites: the detector is stale"
+    classified = go_api_dispatcher._WRITE_OUTCOME_UNKNOWN_REASONS | _NEVER_RAN_A_WRITE
+    assert reasons == classified
+    assert not go_api_dispatcher._WRITE_OUTCOME_UNKNOWN_REASONS & _NEVER_RAN_A_WRITE

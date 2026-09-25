@@ -24,17 +24,34 @@ const (
 	resetTokens        = "password_reset_tokens"
 )
 
+// linkTokenSQL is each link-token table's statements, written out in full
+// so every INSERT names its table in the literal (the stored-version writer
+// scan resolves writers by the literal).
+var linkTokenSQL = map[string]struct{ deleteByUser, insert, userByHash string }{
+	verificationTokens: {
+		deleteByUser: `DELETE FROM email_verification_tokens WHERE user_id = $1::uuid`,
+		insert: `INSERT INTO email_verification_tokens (id, user_id, token_hash, expires_at, created_at)
+VALUES ($1, $2, $3, $4, $5)`,
+		userByHash: `SELECT user_id FROM email_verification_tokens WHERE token_hash = $1::text AND expires_at >= $2`,
+	},
+	resetTokens: {
+		deleteByUser: `DELETE FROM password_reset_tokens WHERE user_id = $1::uuid`,
+		insert: `INSERT INTO password_reset_tokens (id, user_id, token_hash, expires_at, created_at)
+VALUES ($1, $2, $3, $4, $5)`,
+		userByHash: `SELECT user_id FROM password_reset_tokens WHERE token_hash = $1::text AND expires_at >= $2`,
+	},
+}
+
 // replaceLinkToken is create_email_verification_token /
 // create_password_reset_token: every earlier token of the user is deleted
 // and a new one, valid for ttl, is stored by its hash. It returns the token.
 func (h handlers) replaceLinkToken(ctx context.Context, tx pgx.Tx, table string, userID uuid.UUID, now time.Time, ttl time.Duration) (string, error) {
 	id := h.NewUUID()
 	token, tokenHash := signedtoken.Build(id, h.Mail.Secret())
-	if _, err := tx.Exec(ctx, `DELETE FROM `+table+` WHERE user_id = $1::uuid`, userID); err != nil {
+	if _, err := tx.Exec(ctx, linkTokenSQL[table].deleteByUser, userID); err != nil {
 		return "", err
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO `+table+` (id, user_id, token_hash, expires_at, created_at)
-VALUES ($1, $2, $3, $4, $5)`, id, userID, tokenHash, now.Add(ttl).UTC(), now.UTC()); err != nil {
+	if _, err := tx.Exec(ctx, linkTokenSQL[table].insert, id, userID, tokenHash, now.Add(ttl).UTC(), now.UTC()); err != nil {
 		return "", err
 	}
 	return token, nil
@@ -51,8 +68,7 @@ func (h handlers) redeemLinkToken(ctx context.Context, tx pgx.Tx, table, token s
 		return nil, err
 	}
 	var userID uuid.UUID
-	err = tx.QueryRow(ctx, `SELECT user_id FROM `+table+` WHERE token_hash = $1::text AND expires_at >= $2`,
-		signedtoken.Hash(token), now.UTC()).Scan(&userID)
+	err = tx.QueryRow(ctx, linkTokenSQL[table].userByHash, signedtoken.Hash(token), now.UTC()).Scan(&userID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -66,7 +82,7 @@ func (h handlers) redeemLinkToken(ctx context.Context, tx pgx.Tx, table, token s
 }
 
 func deleteLinkTokens(ctx context.Context, tx pgx.Tx, table string, userID uuid.UUID) error {
-	_, err := tx.Exec(ctx, `DELETE FROM `+table+` WHERE user_id = $1::uuid`, userID)
+	_, err := tx.Exec(ctx, linkTokenSQL[table].deleteByUser, userID)
 	return err
 }
 

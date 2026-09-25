@@ -103,16 +103,6 @@ func pyStrOrEmpty(object *pyjson.Object, key string) string {
 	return pyjson.Str(value)
 }
 
-// clientBasePath is the client's base URL path without a trailing slash: a
-// GitLab client's base is the instance host (the listing adds /api/v4), a
-// GitHub Enterprise one ends in /api/v3.
-func clientBasePath(client *providerfoundation.HTTPClient) string {
-	if client == nil || client.BaseURL == nil {
-		return ""
-	}
-	return strings.TrimSuffix(client.BaseURL.EscapedPath(), "/")
-}
-
 // ListGitHubRepositories lists repositories the way GitHubCodeClient.
 // list_repositories does for a batch: /orgs/{org}/repos, else
 // /users/{user}/repos, else /user/repos, 100 per page, at most 100 pages (a
@@ -121,12 +111,14 @@ func clientBasePath(client *providerfoundation.HTTPClient) string {
 // at the MaxRepos-th match without requesting another page.
 func ListGitHubRepositories(ctx context.Context, client *providerfoundation.HTTPClient, listing GitHubListing) ([]ListedRepository, error) {
 	org, user := effectiveGitHubOwner(listing)
-	path := clientBasePath(client) + "/user/repos"
+	// Paths are relative to the client's base URL; HTTPClient.Do joins them under
+	// the base path (a GitHub Enterprise /api/v3 prefix).
+	path := "/user/repos"
 	switch {
 	case org != "":
-		path = clientBasePath(client) + "/orgs/" + pythonparity.Quote(org, "") + "/repos"
+		path = "/orgs/" + pythonparity.Quote(org, "") + "/repos"
 	case user != "":
-		path = clientBasePath(client) + "/users/" + pythonparity.Quote(user, "") + "/repos"
+		path = "/users/" + pythonparity.Quote(user, "") + "/repos"
 	}
 	matched := 0
 	keep := func(raw json.RawMessage) bool {
@@ -197,10 +189,11 @@ func effectiveGitLabGroup(listing GitLabListing) string {
 // (only an uncapped, patternless listing bounds the page count by MaxProjects),
 // then each project kept when its lower-cased path_with_namespace matches.
 func ListGitLabProjects(ctx context.Context, client *providerfoundation.HTTPClient, listing GitLabListing) ([]ListedRepository, error) {
-	// The client's base is the instance host (providerfoundation.NewGitLabClient),
-	// and Python's GitLabCodeClient joins /api/v4 onto it (gitlab_rest_base_url:
-	// host with a trailing slash trimmed, then /api/v4, always).
-	root := clientBasePath(client) + gitLabRESTPrefix
+	// The client's base is the instance host plus any sub-path
+	// (providerfoundation.NewGitLabClient), and Python's GitLabCodeClient joins
+	// /api/v4 onto it (gitlab_rest_base_url: base with a trailing slash trimmed,
+	// then /api/v4, always); Do joins the request path under the base path.
+	root := gitLabRESTPrefix
 	path := root + "/projects"
 	if group := effectiveGitLabGroup(listing); group != "" {
 		path = root + "/groups/" + pythonparity.Quote(group, "") + "/projects"

@@ -3,6 +3,7 @@ package providersync
 import (
 	"fmt"
 	"net/url"
+	"strings"
 )
 
 func intPtr(n int) *int { return &n }
@@ -192,5 +193,36 @@ func repoListingCorpus() []listingCase {
 	add("gl 404", "gitlab", map[string]any{"group": "acme"}, []listingScriptEntry{})
 	add("gl non-list", "gitlab", map[string]any{"group": "acme"}, []listingScriptEntry{{URI: "/api/v4/groups/acme/projects?page=1&per_page=100", Body: map[string]any{"message": "x"}}})
 	add("gl empty", "gitlab", map[string]any{}, []listingScriptEntry{{URI: "/api/v4/projects?page=1&per_page=100", Body: []any{}}})
-	return corpus
+	return append(corpus, withBasePaths(corpus)...)
+}
+
+// withBasePaths re-runs a spread of the corpus against a credential base URL
+// that carries a path (CHAOS-6752): every request must keep the prefix, on the
+// first page and on every followed next-page link, on both providers, with and
+// without a trailing slash on the base.
+func withBasePaths(corpus []listingCase) []listingCase {
+	var out []listingCase
+	for index, kase := range corpus {
+		if index%4 != 0 {
+			continue
+		}
+		prefix, base := "/c/ok", "/c/ok"
+		if kase.Provider == "github" {
+			prefix, base = "/api/v3", "/api/v3"
+		}
+		if index%8 == 0 {
+			base += "/"
+		}
+		variant := kase
+		variant.Name += " [base path " + base + "]"
+		variant.BasePath = base
+		variant.Script = make([]listingScriptEntry, len(kase.Script))
+		for i, entry := range kase.Script {
+			entry.URI = prefix + entry.URI
+			entry.Link = strings.ReplaceAll(entry.Link, "https://api.github.com/", "https://api.github.com"+prefix+"/")
+			variant.Script[i] = entry
+		}
+		out = append(out, variant)
+	}
+	return out
 }

@@ -80,6 +80,39 @@ func NewHTTPClient(provider, base string, doer HTTPDoer, auth Auth, retry RetryP
 	return &HTTPClient{Provider: strings.ToLower(provider), BaseURL: parsed, Doer: doer, Auth: auth, Retry: retry, Lease: lease, entropy: rand.Reader}, nil
 }
 
+// resolveTarget is the URL a request path names under the client's base URL.
+//
+// A path (with or without a leading slash) is joined UNDER the base URL's own
+// path, the way Python's httpx merges a base_url with a request path: a
+// self-hosted GitLab at https://host/gitlab or a GitHub Enterprise base
+// https://host/api/v3 keeps its prefix for every request. (url.URL.Parse would
+// treat a leading-slash path as absolute and drop the prefix.) An absolute URL
+// -- a Link rel="next" cursor, a page URL -- is taken as it is; either way the
+// result must stay on the base URL's scheme and host, so a credential is never
+// sent to another origin. A caller that needs a path outside the base path (a
+// GraphQL endpoint beside a /api/v3 base) passes an absolute URL.
+func (c *HTTPClient) resolveTarget(path string) (*url.URL, error) {
+	ref, err := url.Parse(path)
+	if err != nil {
+		return nil, err
+	}
+	target := ref
+	if ref.Scheme == "" && ref.Host == "" {
+		joined := *c.BaseURL
+		basePath, baseRaw := c.BaseURL.Path, c.BaseURL.EscapedPath()
+		if ref.Path != "" {
+			joined.Path = strings.TrimRight(basePath, "/") + "/" + strings.TrimLeft(ref.Path, "/")
+			joined.RawPath = strings.TrimRight(baseRaw, "/") + "/" + strings.TrimLeft(ref.EscapedPath(), "/")
+		}
+		joined.RawQuery, joined.Fragment, joined.RawFragment = ref.RawQuery, ref.Fragment, ref.RawFragment
+		target = &joined
+	}
+	if target.Host != c.BaseURL.Host || target.Scheme != c.BaseURL.Scheme {
+		return nil, ErrCredentialInvalid
+	}
+	return target, nil
+}
+
 func (c *HTTPClient) Do(ctx context.Context, method, path string, body io.Reader) (response *http.Response, err error) {
 	if c == nil || c.BaseURL == nil {
 		return nil, ErrCredentialInvalid
@@ -134,8 +167,8 @@ func (c *HTTPClient) Do(ctx context.Context, method, path string, body io.Reader
 			err = errors.Join(err, releaseErr)
 		}()
 	}
-	target, err := c.BaseURL.Parse(path)
-	if err != nil || target.Host != c.BaseURL.Host || target.Scheme != c.BaseURL.Scheme {
+	target, err := c.resolveTarget(path)
+	if err != nil {
 		return nil, ErrCredentialInvalid
 	}
 	var last *ProviderError

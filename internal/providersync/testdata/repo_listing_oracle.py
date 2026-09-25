@@ -56,7 +56,10 @@ def run_github(case, requests):
 
     def client_from_connector(_connector):
         return GitHubCodeClient(
-            auth=GitHubAuth(token="t", base_url="https://api.github.com"),
+            auth=GitHubAuth(
+                token="t",
+                base_url="https://api.github.com" + case.get("base_path", ""),
+            ),
             transport=transport,
         )
 
@@ -80,7 +83,9 @@ async def gitlab_list(case, transport):
         listing.get("group") or None, listing.get("pattern") or None
     )
     client = GitLabCodeClient(
-        private_token="t", base_url="https://gitlab.com", transport=transport
+        private_token="t",
+        base_url="https://gitlab.com" + case.get("base_path", ""),
+        transport=transport,
     )
     try:
         repos = await client.list_projects(

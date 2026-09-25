@@ -11,6 +11,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/streamhandlers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -48,8 +49,8 @@ func TestPostgresCompatibilityBridgeIsDeterministicAndDoesNotDuplicateBatchStatu
 		if _, err := pool.Exec(ctx, `
 			INSERT INTO external_ingest_batches (
 				ingestion_id, org_id, source_system, source_instance,
-				recompute_status, recompute_scope, updated_at
-			) VALUES ($1,'org-1','github','Acme/API','pending',$2,now())
+				recompute_status, recompute_scope, updated_at, idempotency_key, payload_hash, schema_version
+			) VALUES ($1,'org-1','github','Acme/API','pending',$2,now(), gen_random_uuid()::text, 'sha256:test', 'external-ingest.v1')
 		`, ingestionID, initialScope); err != nil {
 			t.Fatal(err)
 		}
@@ -124,8 +125,8 @@ func TestPostgresCompatibilityBridgeIsDeterministicAndDoesNotDuplicateBatchStatu
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO external_ingest_batches (
 			ingestion_id, org_id, source_system, source_instance,
-			recompute_status, recompute_scope, updated_at
-		) VALUES ($1,'org-2','gitlab','Acme/Web','pending',$2,now())
+			recompute_status, recompute_scope, updated_at, idempotency_key, payload_hash, schema_version
+		) VALUES ($1,'org-2','gitlab','Acme/Web','pending',$2,now(), gen_random_uuid()::text, 'sha256:test', 'external-ingest.v1')
 	`, thirdID, initialScope); err != nil {
 		t.Fatal(err)
 	}
@@ -173,8 +174,8 @@ func TestDispatchAlwaysWritesUTCWindowsWithAZuluOffset(t *testing.T) {
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO external_ingest_batches (
 			ingestion_id, org_id, source_system, source_instance,
-			recompute_status, recompute_scope, updated_at
-		) VALUES ($1,'org-1','github','Acme/API','pending','{}'::jsonb,now())
+			recompute_status, recompute_scope, updated_at, idempotency_key, payload_hash, schema_version
+		) VALUES ($1,'org-1','github','Acme/API','pending','{}'::jsonb,now(), gen_random_uuid()::text, 'sha256:test', 'external-ingest.v1')
 	`, ingestionID); err != nil {
 		t.Fatal(err)
 	}
@@ -233,35 +234,10 @@ func TestDispatchAlwaysWritesUTCWindowsWithAZuluOffset(t *testing.T) {
 	}
 }
 
+// createCompatibilityTables applies the migrated schema (the external-ingest
+// tables these tests read and write are the real ones, not hand-written
+// subsets; CHAOS-6769).
 func createCompatibilityTables(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
-	_, err := pool.Exec(ctx, `
-		CREATE TABLE external_ingest_batches (
-			ingestion_id uuid PRIMARY KEY,
-			org_id text NOT NULL,
-			source_system text NOT NULL,
-			source_instance text NOT NULL,
-			recompute_status text NOT NULL,
-			recompute_scope jsonb NULL,
-			recompute_dispatched_at timestamptz NULL,
-			recompute_completed_at timestamptz NULL,
-			recompute_error text NULL,
-			updated_at timestamptz NOT NULL
-		);
-		CREATE TABLE external_ingest_recompute_jobs (
-			id uuid PRIMARY KEY,
-			org_id text NOT NULL,
-			source_system text NOT NULL,
-			source_instance text NOT NULL,
-			celery_task_name text NOT NULL,
-			celery_task_id text NULL,
-			queue text NOT NULL,
-			repo_id text NULL,
-			status text NOT NULL,
-			dispatched_at timestamptz NOT NULL
-		)
-	`)
-	if err != nil {
-		t.Fatal(err)
-	}
+	pgschema.Apply(ctx, t, pool)
 }

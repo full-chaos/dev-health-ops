@@ -57,3 +57,30 @@ func TestParseHandTablesKeepsAColumnItCannotReadInsteadOfDroppingIt(t *testing.T
 		t.Fatalf("want an unbalanced-parenthesis error, got %v", err)
 	}
 }
+
+func TestClassifyHandTableKeepsShellsApartFromTheBacklog(t *testing.T) {
+	venue := "internal/storage/postgres/runtime_authorization_integration_test.go"
+	if _, ok := probeVenues[venue]; !ok {
+		t.Fatalf("test premise: %s must be a probe venue", venue)
+	}
+	other := "internal/somewhere/else_integration_test.go"
+	for _, c := range []struct {
+		name     string
+		file     string
+		columns  []string
+		invented []string
+		want     string
+	}{
+		{"venue shell with a probe column", venue, []string{"id", "state"}, []string{"state"}, "PROBE"},
+		{"venue shell that only omits columns", venue, []string{"id"}, nil, "PROBE"},
+		{"venue shell at the size limit", venue, []string{"id", "a", "b"}, nil, "PROBE"},
+		{"venue table past the shell size that invents", venue, []string{"id", "a", "b", "c"}, []string{"c"}, "INVENTED"},
+		{"venue table past the shell size that omits", venue, []string{"id", "a", "b", "c"}, nil, "SUBSET"},
+		{"same shell outside a venue that omits", other, []string{"id"}, nil, "SUBSET"},
+		{"same shell outside a venue that invents", other, []string{"id", "state"}, []string{"state"}, "INVENTED"},
+	} {
+		if got := classifyHandTable(c.file, c.columns, c.invented); got != c.want {
+			t.Errorf("%s: classifyHandTable = %q, want %q", c.name, got, c.want)
+		}
+	}
+}

@@ -288,3 +288,36 @@ func TestLLMSettingsVenueOracleMatchesThePythonProducer(t *testing.T) {
 		venueoracle.WriteProof(t)
 	}
 }
+
+// A refusal Python prints can carry text the operator typed: an unparsable base
+// URL's diagnostic names its port. The API key given on the same command line
+// (and the credentials of the base URL) must never reach the output, even when
+// the operator typed the same text in both places (the review round's probe).
+func TestLLMSettingsRefusalDoesNotPrintTheAPIKey(t *testing.T) {
+	db := startDatabase(t)
+	db.reset(t)
+	ctx := context.Background()
+	if _, err := db.conn.Exec(ctx, "TRUNCATE settings, feature_flags CASCADE"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.conn.Exec(ctx, fmt.Sprintf(`INSERT INTO organizations (id, slug, name, tier, managed_by, is_active, created_at, updated_at)
+VALUES ('%s', 'team-org', 'Team', 'team', 'manual', true, now(), now())`, teamOrg)); err != nil {
+		t.Fatal(err)
+	}
+	canary := "sk-" + "canary-" + "0123456789abcdef"
+	password := "pa55" + "w0rd" + "canary"
+	for name, args := range map[string][]string{
+		"the key typed as the port": {"llm-settings", "set", "--org", teamOrg, "--provider", "openai", "--api-key", canary, "--base-url", "https://host:" + canary + "/v1"},
+		"a password in the URL":     {"llm-settings", "set", "--org", teamOrg, "--provider", "openai", "--api-key", "other-key-value", "--base-url", "https://user:" + password + "@host:" + password + "/v1"},
+	} {
+		code, stdout := goVerbEnv(t, db, llmEnv(false), args)
+		if code != 1 || !strings.HasPrefix(stdout, "Error: ") {
+			t.Fatalf("%s: exit %d, stdout %q: the refusal did not happen, the probe measures nothing", name, code, stdout)
+		}
+		for _, secret := range []string{canary, password} {
+			if strings.Contains(stdout, secret) {
+				t.Errorf("%s: stdout carries a credential: %q", name, stdout)
+			}
+		}
+	}
+}

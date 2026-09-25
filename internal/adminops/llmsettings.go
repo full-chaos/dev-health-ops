@@ -57,21 +57,26 @@ func llmSettingsConfig(env cli.Env) (admin.LLMSettingsConfig, func(error) error,
 // finishLLM prints a refusal as Python does ("Error: ..." on stdout, exit 1); a
 // failure Python reports by a fixed text prints that text, and the cause goes to
 // stderr with credentials removed. Any other failure is a structured error.
-func finishLLM(env cli.Env, redact func(error) error, err error) int {
+//
+// secretValues are the credentials the operator typed on this command line (the
+// API key, the credentials of the base URL): a refusal's text can echo part of
+// what was typed (an unparsable port), so they are removed from it. Python
+// printed such text as it was; this is a named difference.
+func finishLLM(env cli.Env, redact func(error) error, err error, secretValues ...string) int {
 	var refusal *admin.OperatorError
 	if errors.As(err, &refusal) {
-		fmt.Fprintf(env.Stdout, "Error: %s\n", refusal.Message)
+		fmt.Fprintf(env.Stdout, "Error: %s\n", secrets.RedactValues(refusal.Message, secretValues...))
 		return cli.ExitFailure
 	}
 	var fixed interface{ FixedText() string }
 	if errors.As(err, &fixed) {
 		fmt.Fprintf(env.Stdout, "Error: %s\n", fixed.FixedText())
 		if cause := errors.Unwrap(err); cause != nil {
-			fmt.Fprintf(env.Stderr, "cause: %s\n", redact(cause))
+			fmt.Fprintf(env.Stderr, "cause: %s\n", secrets.RedactValues(redact(cause).Error(), secretValues...))
 		}
 		return cli.ExitFailure
 	}
-	return writeError(env.Stderr, "admin_failed", redact(err).Error())
+	return writeError(env.Stderr, "admin_failed", secrets.RedactValues(redact(err).Error(), secretValues...))
 }
 
 func printDocument(env cli.Env, document any) int {
@@ -142,7 +147,11 @@ func runLLMSet(ctx context.Context, env cli.Env) int {
 	document, err := op.SetLLMSettings(ctx, orgID, admin.LLMSettingsInput{Provider: provider.value,
 		Model: model.ptr(), APIKey: apiKey.ptr(), BaseURL: baseURL.ptr()}, config)
 	if err != nil {
-		return finishLLM(env, redact, err)
+		typed := secrets.CredentialComponents(baseURL.value)
+		if apiKey.value != "" {
+			typed = append(typed, apiKey.value)
+		}
+		return finishLLM(env, redact, err, typed...)
 	}
 	return printDocument(env, document)
 }

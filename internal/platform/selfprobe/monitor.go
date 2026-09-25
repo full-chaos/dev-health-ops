@@ -85,8 +85,7 @@ func IsAcquireError(err error) bool {
 // itself is not. The connection goes back to the pool when the transaction is
 // rolled back (or when the BEGIN fails).
 type poolOpener struct {
-	pool     *pgxpool.Pool
-	acquired atomic.Int64
+	pool *pgxpool.Pool
 }
 
 // NewPool wraps a real *pgxpool.Pool as a TxOpener. A nil pool is preserved
@@ -99,25 +98,11 @@ func NewPool(pool *pgxpool.Pool) TxOpener {
 	return &poolOpener{pool: pool}
 }
 
-// OwnAcquires reports how many pool connections opener has itself acquired
-// (successfully) since it was built, or 0 for an opener that does not count.
-// A progress signal derived from the pool's acquire count must subtract them:
-// the probe's own acquire is not evidence that the pool's WORK is moving.
-func OwnAcquires(opener TxOpener) int64 {
-	if counting, ok := opener.(interface{ ownAcquires() int64 }); ok {
-		return counting.ownAcquires()
-	}
-	return 0
-}
-
-func (o *poolOpener) ownAcquires() int64 { return o.acquired.Load() }
-
 func (o *poolOpener) Begin(ctx context.Context) (Tx, error) {
 	connection, err := o.pool.Acquire(ctx)
 	if err != nil {
 		return nil, &AcquireError{Err: err}
 	}
-	o.acquired.Add(1)
 	transaction, err := connection.Begin(ctx)
 	if err != nil {
 		connection.Release()

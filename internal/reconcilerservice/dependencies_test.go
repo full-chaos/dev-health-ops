@@ -116,7 +116,7 @@ func TestReconcilerMissingDependenciesStayLiveAndFailReadinessWithoutValues(t *t
 		t.Fatalf("open readiness gate: %v", err)
 	}
 
-	want := []string{"coordinator_postgres", "domain_postgres", "execution_liveness", "job_registry", "posture_manifest_lockstep", "queue_postgres", "reconciler_loop", "river_schema", "sync_dispatch_observer", "sync_dispatch_registry"}
+	want := []string{"coordinator_postgres", "domain_postgres", "domain_transaction", "job_registry", "posture_manifest_lockstep", "queue_postgres", "reconciler_loop", "river_schema", "sync_dispatch_observer", "sync_dispatch_registry"}
 	status := registry.Readiness(context.Background())
 	if status.Ready || !slices.Equal(status.Failed, want) {
 		t.Fatalf("readiness = %#v, want failed %v", status, want)
@@ -128,15 +128,11 @@ func TestReconcilerMissingDependenciesStayLiveAndFailReadinessWithoutValues(t *t
 
 func TestReconcilerComposesNoopLoopInDatabaseThenLoopOrder(t *testing.T) {
 	t.Chdir(filepath.Join("..", ".."))
-	// A real (lazily-dialed, never-connecting) domain pool wires the
-	// CHAOS-4029 execution_liveness self-probe into the composed component
-	// list -- otherwise (a nil pool, every other reconciler test's fixture
-	// shape) the check is never constructed at all, which would let this
-	// test's readiness assertion pass for the wrong reason: not because the
-	// signal works, but because it was never wired. 127.0.0.1:1 has nothing
-	// listening, so the probe genuinely fails, exactly like a real reconciler
-	// whose domain pool cannot open a transaction; that failure is asserted
-	// below, not hidden.
+	// CHAOS-6800: the ticking execution_liveness self-probe (a component on the
+	// work pool) is gone; domain_transaction is a synchronous BEGIN/rollback on
+	// the database's readiness pool, so no self-probe component is composed. The
+	// real (lazily-dialed) domain pool below is the work pool: readiness must not
+	// depend on it (127.0.0.1:1 has nothing listening, and every check is ready).
 	domainPool, err := pgxpool.New(context.Background(), "postgresql://reconciler@127.0.0.1:1/devhealth")
 	if err != nil {
 		t.Fatal(err)
@@ -183,7 +179,7 @@ func TestReconcilerComposesNoopLoopInDatabaseThenLoopOrder(t *testing.T) {
 	}
 	if got := componentNames(components); !slices.Equal(got, []string{
 		"postgres-runtime-pools", "outbox-reconciler-loop", "sync-dispatch-observation-recorder",
-		"sync-dispatch-observer-loop", "self-probe-reconciler_execution_liveness",
+		"sync-dispatch-observer-loop",
 	}) {
 		t.Fatalf("component order = %v", got)
 	}
@@ -204,14 +200,12 @@ func TestReconcilerComposesNoopLoopInDatabaseThenLoopOrder(t *testing.T) {
 	if err := (health.Gate{Registry: registry}).Start(context.Background()); err != nil {
 		t.Fatalf("open readiness gate: %v", err)
 	}
-	// execution_liveness genuinely fails here: domainPool above dials
-	// 127.0.0.1:1, where nothing listens, so this asserts the real behavior
-	// of a reconciler whose domain pool cannot open a transaction, not a
-	// fixture artifact -- every OTHER check (including reconciler_loop and
-	// sync_dispatch_observer, which this test's fake builders drive) is
-	// still fully ready.
-	if status := registry.Readiness(context.Background()); status.Ready || !slices.Equal(status.Failed, []string{"execution_liveness"}) {
-		t.Fatalf("readiness = %#v, want only execution_liveness failed", status)
+	// The work pool (domainPool above) dials 127.0.0.1:1, where nothing
+	// listens: the reconciler is still fully ready, because readiness runs its
+	// checks on the readiness pool and never reasons about the work pool
+	// (CHAOS-6800).
+	if status := registry.Readiness(context.Background()); !status.Ready {
+		t.Fatalf("readiness = %#v, want a fully ready reconciler although the work pool cannot connect", status)
 	}
 	for index := len(components) - 1; index >= 0; index-- {
 		if err := components[index].Shutdown(context.Background()); err != nil {
@@ -610,7 +604,7 @@ func TestReconcilerConstructionFailureClosesDatabaseAndFailsReadiness(t *testing
 	if err := (health.Gate{Registry: registry}).Start(context.Background()); err != nil {
 		t.Fatalf("open readiness gate: %v", err)
 	}
-	want := []string{"coordinator_postgres", "domain_postgres", "execution_liveness", "posture_manifest_lockstep", "queue_postgres", "reconciler_loop", "river_schema", "sync_dispatch_observer"}
+	want := []string{"coordinator_postgres", "domain_postgres", "domain_transaction", "posture_manifest_lockstep", "queue_postgres", "reconciler_loop", "river_schema", "sync_dispatch_observer"}
 	if status := registry.Readiness(context.Background()); status.Ready || !slices.Equal(status.Failed, want) {
 		t.Fatalf("readiness = %#v, want failed %v", status, want)
 	}
@@ -641,7 +635,7 @@ func TestReconcilerSyncRegistryLoadFailureClosesDatabaseAndFailsReadiness(t *tes
 	if err := (health.Gate{Registry: registry}).Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"coordinator_postgres", "domain_postgres", "execution_liveness", "posture_manifest_lockstep", "queue_postgres", "reconciler_loop", "river_schema", "sync_dispatch_observer", "sync_dispatch_registry"}
+	want := []string{"coordinator_postgres", "domain_postgres", "domain_transaction", "posture_manifest_lockstep", "queue_postgres", "reconciler_loop", "river_schema", "sync_dispatch_observer", "sync_dispatch_registry"}
 	if status := registry.Readiness(context.Background()); status.Ready || !slices.Equal(status.Failed, want) {
 		t.Fatalf("readiness = %#v, want failed %v", status, want)
 	}
@@ -675,7 +669,7 @@ func TestReconcilerSyncMutationBuildFailureClosesDatabaseAndFailsReadiness(t *te
 	if err := (health.Gate{Registry: registry}).Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"coordinator_postgres", "domain_postgres", "execution_liveness", "posture_manifest_lockstep", "queue_postgres", "reconciler_loop", "river_schema", "sync_dispatch_observer"}
+	want := []string{"coordinator_postgres", "domain_postgres", "domain_transaction", "posture_manifest_lockstep", "queue_postgres", "reconciler_loop", "river_schema", "sync_dispatch_observer"}
 	if status := registry.Readiness(context.Background()); status.Ready || !slices.Equal(status.Failed, want) {
 		t.Fatalf("readiness = %#v, want failed %v", status, want)
 	}
@@ -780,11 +774,8 @@ func TestReconcilerReadinessCheckFailuresLogTheCheckNameAndUnderlyingError(t *te
 
 func TestReconcilerRouteFenceDriftClosesOnlyRouteFenceReadiness(t *testing.T) {
 	t.Chdir(filepath.Join("..", ".."))
-	// See TestReconcilerComposesNoopLoopInDatabaseThenLoopOrder's identical
-	// comment: a real (never-connecting) domain pool is required to wire the
-	// CHAOS-4029 execution_liveness check at all, and it genuinely fails
-	// here since nothing listens on 127.0.0.1:1 -- asserted below alongside
-	// the route-fence failure this test exists to isolate.
+	// A real (never-connecting) work pool: readiness does not depend on it
+	// (CHAOS-6800), so the route fence is the only failing check.
 	domainPool, err := pgxpool.New(context.Background(), "postgresql://reconciler@127.0.0.1:1/devhealth")
 	if err != nil {
 		t.Fatal(err)
@@ -833,8 +824,8 @@ func TestReconcilerRouteFenceDriftClosesOnlyRouteFenceReadiness(t *testing.T) {
 		t.Fatal(err)
 	}
 	status := registry.Readiness(context.Background())
-	if status.Ready || !slices.Equal(status.Failed, []string{"execution_liveness", "sync_dispatch_route_fence"}) {
-		t.Fatalf("readiness = %#v, want only execution_liveness and route fence failed", status)
+	if status.Ready || !slices.Equal(status.Failed, []string{"sync_dispatch_route_fence"}) {
+		t.Fatalf("readiness = %#v, want only the route fence failed", status)
 	}
 }
 
@@ -868,7 +859,7 @@ func TestReconcilerRouteFenceConstructionFailureFailsClosed(t *testing.T) {
 	if err := (health.Gate{Registry: registry}).Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"coordinator_postgres", "domain_postgres", "execution_liveness", "posture_manifest_lockstep", "queue_postgres", "reconciler_loop", "river_schema", "sync_dispatch_observer", "sync_dispatch_route_fence"}
+	want := []string{"coordinator_postgres", "domain_postgres", "domain_transaction", "posture_manifest_lockstep", "queue_postgres", "reconciler_loop", "river_schema", "sync_dispatch_observer", "sync_dispatch_route_fence"}
 	if status := registry.Readiness(context.Background()); status.Ready || !slices.Equal(status.Failed, want) {
 		t.Fatalf("readiness = %#v, want failed %v", status, want)
 	}
@@ -1026,6 +1017,9 @@ func (database *fakeReconcilerDatabase) DomainPool() *pgxpool.Pool {
 func (database *fakeReconcilerDatabase) DomainReady(context.Context) error {
 	return database.domainErr
 }
+
+// DomainTransactionReady is healthy by default.
+func (database *fakeReconcilerDatabase) DomainTransactionReady(context.Context) error { return nil }
 
 func (database *fakeReconcilerDatabase) QueueReady(context.Context) error {
 	return database.queueErr

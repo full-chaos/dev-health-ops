@@ -11,10 +11,10 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
 	"github.com/full-chaos/dev-health-ops/internal/jobroute"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
-	"github.com/full-chaos/dev-health-ops/internal/platform/busyprobe"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
+	"github.com/full-chaos/dev-health-ops/internal/platform/poolstat"
 	"github.com/full-chaos/dev-health-ops/internal/platform/postureguard"
 	"github.com/full-chaos/dev-health-ops/internal/platform/selfprobe"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
@@ -76,6 +76,8 @@ func dependencyUnavailable(reason string) error { return dependencyFailure{reaso
 // RuntimePools contract.
 type reconcilerDatabase interface {
 	DomainReady(context.Context) error
+	// DomainTransactionReady is a bounded BEGIN/rollback on the readiness pool.
+	DomainTransactionReady(context.Context) error
 	QueueReady(context.Context) error
 	CoordinatorReady(context.Context) error
 	RiverSchemaReady(context.Context, string) error
@@ -88,17 +90,6 @@ type reconcilerDatabase interface {
 	CoordinatorPool() *pgxpool.Pool
 	Close()
 }
-
-// busyProgressWindow is how long the domain pool may go without a completed
-// work acquire before a fully acquired pool stops reading as busy. A movement
-// is dated to the probe that first sees it (one probe per DefaultInterval), so a
-// wedge turns readiness red within window + one interval = 3 x DefaultInterval
-// of the last work acquire. That holds only because readiness is GATED on the
-// work evidence while the monitor's latest success was a busy pass
-// (busyprobe.Liveness.Gate): a busy pass is a success to the monitor, which
-// would otherwise grant its own staleness allowance on top (CHAOS-6800 r3).
-// A var so tests can shrink it.
-var busyProgressWindow = 2 * selfprobe.DefaultInterval
 
 type postgresReconcilerDatabase struct {
 	pools           *postgres.RuntimePools
@@ -145,10 +136,30 @@ func (database *postgresReconcilerDatabase) DomainPostureCheck(logger *slog.Logg
 	).Check
 }
 
+// ReadinessPool is the one-connection probe pool every domain-role readiness
+// check runs on (CHAOS-6771); the work pool is DomainPool.
+func (database *postgresReconcilerDatabase) ReadinessPool() *pgxpool.Pool {
+	if database == nil || database.pools == nil {
+		return nil
+	}
+	return database.pools.ReadinessPool()
+}
+
 // domainPostureCheckProvider is the optional capability a reconcilerDatabase has
 // when it can hand out the cached domain posture check (test fakes do not).
 type domainPostureCheckProvider interface {
 	DomainPostureCheck(logger *slog.Logger) health.CheckFunc
+}
+
+// DomainTransactionReady is domain_transaction (CHAOS-6800, replaces
+// execution_liveness): a bounded BEGIN/rollback on the dedicated READINESS pool.
+// It never looks at the shared work pool: whether that is fully acquired is
+// contention, exposed as a metric and a log line (poolstat), not health.
+func (database *postgresReconcilerDatabase) DomainTransactionReady(ctx context.Context) error {
+	if database == nil || database.pools == nil || database.pools.ReadinessPool() == nil {
+		return errReconcilerDependencyUnavailable
+	}
+	return selfprobe.Once(ctx, selfprobe.NewPool(database.pools.ReadinessPool()))
 }
 
 func (database *postgresReconcilerDatabase) QueueReady(ctx context.Context) error {
@@ -541,12 +552,12 @@ type reconcilerDependencies struct {
 	// logCoordinatorPostureGaps). Neither is a DSN, host, or credential --
 	// coordinatorRole is a checked-in configuration identifier, and logger is
 	// the same structured logger the rest of the process already uses.
-	logger *slog.Logger
+	logger          *slog.Logger
+	coordinatorRole string
 	// domainPosture is the cached domain_postgres check (CHAOS-6771), bound on
 	// first use; nil when the database offers none (test fakes).
 	domainPosture     health.CheckFunc
 	domainPostureOnce sync.Once
-	coordinatorRole   string
 
 	runtimeRegistry *jobruntime.Registry
 	registryErr     error
@@ -599,17 +610,6 @@ func configureReconcilerDependenciesWithActivationSourcesAndLogger(
 	}
 
 	dependencies := buildReconcilerDependencies(ctx, cfg, registry, logger, activation, sources)
-	// livenessMonitor (CHAOS-4029) mirrors internal/workerservice's
-	// execution_liveness signal: a periodic, independent self-probe against
-	// the domain pool, proving the reconciler's OWN loop is still pumping,
-	// immune to an idle relay/sync-dispatch backlog. Registered now
-	// (captured by reference below) so the check name exists unconditionally
-	// like every other check here; resolved once dependencies.database is
-	// confirmed non-nil, below.
-	var livenessMonitor *selfprobe.Monitor
-	// livenessGate is the gated readiness of that monitor (CHAOS-6800 r3): nil
-	// until the monitor is built with a domain pool.
-	var livenessGate func(context.Context) error
 	checks := []struct {
 		name  string
 		check health.CheckFunc
@@ -624,15 +624,7 @@ func configureReconcilerDependenciesWithActivationSourcesAndLogger(
 		{name: "posture_manifest_lockstep", check: dependencies.postureManifestLockstepReady},
 		{name: "river_schema", check: dependencies.riverSchemaReady(cfg.RiverDatabaseSchema)},
 		{name: "sync_dispatch_registry", check: dependencies.syncRegistryReady},
-		{name: "execution_liveness", check: func(ctx context.Context) error {
-			if livenessMonitor == nil {
-				return errReconcilerDependencyUnavailable
-			}
-			if livenessGate != nil {
-				return livenessGate(ctx)
-			}
-			return livenessMonitor.Ready(ctx)
-		}},
+		{name: "domain_transaction", check: dependencies.domainTransactionReady},
 	}
 	// If prerequisite construction failed, the existing domain/registry checks
 	// already close readiness. Once fence construction was attempted, register
@@ -679,41 +671,17 @@ func configureReconcilerDependenciesWithActivationSourcesAndLogger(
 		reconcilerRecorderLifecycle{recorder: dependencies.syncRecorder},
 		dependencies.syncLoop,
 	}
-	// CHAOS-4029: construct the self-probe now that dependencies.database is
-	// confirmed non-nil (it needs a real domain pool -- the same pool
-	// LeaseRepair/the Observer/every domain-pool component above already
-	// depends on). Probe synchronously so execution_liveness is meaningful
-	// the instant this function returns, not only once the lifecycle
-	// runtime later calls Start (see internal/workerservice's identical
-	// reasoning).
-	// CHAOS-6771: a domain pool fully acquired by progressing work is BUSY, not
-	// BROKEN (internal/platform/busyprobe); progress = the pool's own completed
-	// acquires, as for the scheduler.
-	busy := busyprobe.NewCounter("reconciler_readiness_busy_total", []string{"execution_liveness"}, logger)
-	if err := registry.RegisterMetrics("reconciler_readiness_busy", busy); err != nil {
+	// domain_transaction (above) replaces the ticking execution_liveness
+	// self-probe that stood here: the reconciler has no claim or work evidence to
+	// prove liveness from, and a probe on the shared work pool could not tell
+	// contention from a broken transaction path (CHAOS-6800). Work-pool
+	// saturation is a metric plus a loud log line, never a readiness input.
+	if err := registry.RegisterMetrics(
+		"reconciler_domain_pool",
+		poolstat.New("reconciler_database_pool_saturation_ratio", dependencies.database.DomainPool(), logger),
+	); err != nil {
 		dependencies.close()
 		return nil, err
-	}
-	domainPool := dependencies.database.DomainPool()
-	// A nil domain pool (test fixtures only) keeps a nil opener, so no monitor is
-	// constructed and execution_liveness reports unavailable, exactly as before.
-	var livenessOpener selfprobe.TxOpener
-	var liveness *busyprobe.Liveness
-	if domainPool != nil {
-		liveness = busyprobe.NewLiveness(domainPool, "execution_liveness", busyProgressWindow, busy)
-		livenessOpener = liveness.Opener
-	}
-	livenessMonitor = selfprobe.New("reconciler_execution_liveness", livenessOpener, logger)
-	if livenessMonitor != nil && liveness != nil {
-		livenessGate = liveness.Gate(livenessMonitor.Ready)
-	}
-	if livenessMonitor != nil {
-		livenessMonitor.Probe(ctx)
-		components = append(components, livenessMonitor)
-		if err := registry.RegisterMetrics("reconciler_execution_liveness", livenessMonitor); err != nil {
-			dependencies.close()
-			return nil, err
-		}
 	}
 	return components, nil
 }
@@ -914,6 +882,19 @@ func (dependencies *reconcilerDependencies) domainReady(ctx context.Context) err
 	}
 	if err := domainCheck(ctx); err != nil {
 		dependencies.logDependencyCheckFailure(ctx, "domain_postgres", err)
+		return errReconcilerDependencyUnavailable
+	}
+	return nil
+}
+
+// domainTransactionReady is the domain_transaction check: the database's bounded
+// BEGIN/rollback on its readiness pool.
+func (dependencies *reconcilerDependencies) domainTransactionReady(ctx context.Context) error {
+	if dependencies == nil || dependencies.databaseErr != nil || dependencies.database == nil {
+		return errReconcilerDependencyUnavailable
+	}
+	if err := dependencies.database.DomainTransactionReady(ctx); err != nil {
+		dependencies.logDependencyCheckFailure(ctx, "domain_transaction", err)
 		return errReconcilerDependencyUnavailable
 	}
 	return nil

@@ -9,10 +9,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/full-chaos/dev-health-ops/internal/platform/busyprobe"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
+	"github.com/full-chaos/dev-health-ops/internal/platform/poolstat"
 	"github.com/full-chaos/dev-health-ops/internal/platform/postureguard"
 	"github.com/full-chaos/dev-health-ops/internal/platform/selfprobe"
 	"github.com/full-chaos/dev-health-ops/internal/processreadiness"
@@ -23,19 +23,10 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// busyProgressWindow is how long the domain pool may go without a completed
-// work acquire before a fully acquired pool stops reading as busy. A movement
-// is dated to the probe that first sees it (one probe per DefaultInterval), so a
-// wedge turns readiness red within window + one interval = 3 x DefaultInterval
-// of the last work acquire. That holds only because readiness is GATED on the
-// work evidence while the monitor's latest success was a busy pass
-// (busyprobe.Liveness.Gate): a busy pass is a success to the monitor, which
-// would otherwise grant its own staleness allowance on top (CHAOS-6800 r3).
-// A var so tests can shrink it.
-var busyProgressWindow = 2 * selfprobe.DefaultInterval
-
 type schedulerDatabase interface {
 	DomainReady(context.Context) error
+	// DomainTransactionReady is a bounded BEGIN/rollback on the readiness pool.
+	DomainTransactionReady(context.Context) error
 	QueueReady(context.Context) error
 	CoordinatorReady(context.Context) error
 	RiverSchemaReady(context.Context, string) error
@@ -136,10 +127,31 @@ func (database *postgresSchedulerDatabase) DomainPostureCheck(logger *slog.Logge
 	).Check
 }
 
+// ReadinessPool is the one-connection probe pool every domain-role readiness
+// check runs on (CHAOS-6771); the work pool is DomainPool.
+func (database *postgresSchedulerDatabase) ReadinessPool() *pgxpool.Pool {
+	if database == nil || database.pools == nil {
+		return nil
+	}
+	return database.pools.ReadinessPool()
+}
+
 // domainPostureCheckProvider is the optional capability a schedulerDatabase has
 // when it can hand out the cached domain posture check (test fakes do not).
 type domainPostureCheckProvider interface {
 	DomainPostureCheck(logger *slog.Logger) health.CheckFunc
+}
+
+// DomainTransactionReady is domain_transaction (CHAOS-6800, replaces
+// execution_liveness): a bounded BEGIN/rollback on the dedicated READINESS pool,
+// the primitive the loops' domain transactions depend on. It never looks at the
+// shared work pool: whether that is fully acquired is contention, exposed as a
+// metric and a log line (poolstat), not health.
+func (database *postgresSchedulerDatabase) DomainTransactionReady(ctx context.Context) error {
+	if database == nil || database.pools == nil || database.pools.ReadinessPool() == nil {
+		return errSchedulerActivationUnavailable
+	}
+	return selfprobe.Once(ctx, selfprobe.NewPool(database.pools.ReadinessPool()))
 }
 
 func (database *postgresSchedulerDatabase) QueueReady(ctx context.Context) error {
@@ -576,11 +588,11 @@ func buildSchedulerLoopWithSources(
 		//
 		// The same names the goOwnsMarkers gate closes are closed here, so
 		// the externally visible readiness surface does not change shape
-		// depending on WHY the loop is not running. execution_liveness
-		// (CHAOS-4029) joins that set: an unconfigured scheduler has no
-		// domain pool to self-probe, so it must report unavailable rather
-		// than silently omitting the check name a configured scheduler
-		// would otherwise carry.
+		// depending on WHY the loop is not running. domain_transaction
+		// (CHAOS-6800) joins that set: an unconfigured scheduler has no
+		// domain pool to probe, so it must report unavailable rather than
+		// silently omitting the check name a configured scheduler would
+		// otherwise carry.
 		if registerErr := processreadiness.RegisterUnavailable(
 			registry,
 			"domain_postgres",
@@ -589,7 +601,7 @@ func buildSchedulerLoopWithSources(
 			"river_schema",
 			"posture_manifest_lockstep",
 			"scheduler_loop",
-			"execution_liveness",
+			"domain_transaction",
 		); registerErr != nil {
 			return nil, registerErr
 		}
@@ -673,37 +685,25 @@ func buildSchedulerLoopWithSources(
 	if domainPool == nil {
 		return nil, dependencyUnavailable("scheduler_domain_pool_unavailable")
 	}
-	// execution_liveness (CHAOS-4029): the scheduler's own periodic
-	// self-probe against the domain pool, on an independent clock -- the
-	// same signal internal/workerservice and internal/reconcilerservice
-	// register, so a scheduler whose handoff/reconcile loop is wedged (but
-	// whose dependency checks above still pass) goes visibly unhealthy
-	// instead of continuing to report ready while planning nothing. This is
-	// deliberately SEPARATE from executed_proof_evidence below:
-	// executed_proof_evidence proves the CHAOS-4124 evidence gate loaded;
-	// this proves the process's transaction path is still alive at all,
-	// which is the precondition executed_proof_evidence's own refresh
-	// depends on.
-	// CHAOS-6771: a domain pool fully acquired by progressing work is BUSY, not
-	// BROKEN (internal/platform/busyprobe). The scheduler has no queue-claim
-	// signal, so its progress evidence is the pool's own: acquires keep
-	// completing; a pool wedged by stuck work stops advancing and goes red.
-	busy := busyprobe.NewCounter("scheduler_readiness_busy_total", []string{"execution_liveness"}, logger)
-	if err := registry.RegisterMetrics("scheduler_readiness_busy", busy); err != nil {
+	// domain_transaction (CHAOS-6800, replaces execution_liveness): a bounded
+	// BEGIN/rollback on the dedicated READINESS pool, the same primitive the
+	// loops' domain transactions depend on. The scheduler has no claim or work
+	// evidence to prove liveness from, so the ticking self-probe on the work
+	// pool that stood here is removed: it could not tell "the work pool is busy"
+	// from "the transaction path is broken" without a heuristic over shared-pool
+	// contention, and three review rounds found a new hole in every such
+	// heuristic. Work-pool saturation is now a metric plus a loud log line
+	// (poolstat) and never decides readiness.
+	if err := registry.RegisterRequired(
+		"domain_transaction",
+		wrapSchedulerReadinessCheckWithLogging(logger, "domain_transaction", database.DomainTransactionReady),
+	); err != nil {
 		return nil, err
 	}
-	liveness := busyprobe.NewLiveness(domainPool, "execution_liveness", busyProgressWindow, busy)
-	livenessMonitor := selfprobe.New("scheduler_execution_liveness", liveness.Opener, logger)
-	if livenessMonitor != nil {
-		livenessMonitor.Probe(ctx)
-		// Gated: a busy pass is a success to the monitor, which would grant its
-		// own staleness allowance on top of the progress window.
-		if err := registry.RegisterRequired("execution_liveness", liveness.Gate(livenessMonitor.Ready)); err != nil {
-			return nil, err
-		}
-		if err := registry.RegisterMetrics("scheduler_execution_liveness", livenessMonitor); err != nil {
-			return nil, err
-		}
+	if err := registry.RegisterMetrics(
+		"scheduler_domain_pool", poolstat.New("scheduler_database_pool_saturation_ratio", domainPool, logger),
+	); err != nil {
+		return nil, err
 	}
 	repository, err := sources.newRepository(coordinatorPool)
 	if err != nil || repository == nil {
@@ -812,20 +812,18 @@ func buildSchedulerLoopWithSources(
 	}
 	closeOnError = false
 	return schedulerRuntime{
-		database:        database,
-		loop:            loop,
-		fixedLoop:       fixedLoop,
-		fixedGate:       gate,
-		livenessMonitor: livenessMonitor,
+		database:  database,
+		loop:      loop,
+		fixedLoop: fixedLoop,
+		fixedGate: gate,
 	}, nil
 }
 
 type schedulerRuntime struct {
-	database        schedulerDatabase
-	loop            *schedulersync.Loop
-	fixedLoop       fixedScheduleRuntime
-	fixedGate       *fixedScheduleGate
-	livenessMonitor *selfprobe.Monitor
+	database  schedulerDatabase
+	loop      *schedulersync.Loop
+	fixedLoop fixedScheduleRuntime
+	fixedGate *fixedScheduleGate
 }
 
 func (schedulerRuntime) Name() string { return "sync-scheduler-runtime" }
@@ -844,13 +842,6 @@ func (component schedulerRuntime) Start(ctx context.Context) error {
 	}
 	if err := component.loop.Start(ctx); err != nil {
 		return err
-	}
-	// Starting the self-probe's background ticker is best-effort and never
-	// fails Start: Monitor.Start's return is always nil (see its doc
-	// comment), matching queueHealthMonitor's "never block startup on a
-	// dependency that already has its own required check" rule.
-	if component.livenessMonitor != nil {
-		_ = component.livenessMonitor.Start(ctx)
 	}
 	if component.fixedLoop == nil || component.fixedGate == nil {
 		return nil
@@ -874,15 +865,12 @@ func (component schedulerRuntime) Shutdown(ctx context.Context) error {
 	if component.loop == nil {
 		return errSchedulerActivationUnavailable
 	}
-	var fixedErr, livenessErr error
+	var fixedErr error
 	if component.fixedGate != nil {
 		component.fixedGate.detach()
 	}
 	if component.fixedLoop != nil {
 		fixedErr = component.fixedLoop.Shutdown(ctx)
 	}
-	if component.livenessMonitor != nil {
-		livenessErr = component.livenessMonitor.Shutdown(ctx)
-	}
-	return errors.Join(fixedErr, livenessErr, component.loop.Shutdown(ctx))
+	return errors.Join(fixedErr, component.loop.Shutdown(ctx))
 }

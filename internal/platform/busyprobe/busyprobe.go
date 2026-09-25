@@ -1,6 +1,12 @@
-// Package busyprobe is the readiness rule "a work pool fully acquired by
-// progressing work is BUSY, not BROKEN" (CHAOS-6771), shared by every runtime
-// that self-probes its domain pool (worker, scheduler, reconciler).
+// Package busyprobe is the WORKER's readiness rule "a work pool fully acquired
+// by progressing work is BUSY, not BROKEN" (CHAOS-6771, merged in #3193).
+//
+// DEPRECATED design (CHAOS-6800, lead D2588): three review rounds found three
+// new P1s in this heuristic (a stalled BEGIN, stale acquire evidence, the
+// monitor's own staleness allowance stacking on top). The scheduler and the
+// reconciler therefore do NOT use it: their readiness runs on a dedicated probe
+// pool and never reasons about work-pool contention. The worker path is removed
+// the same way in CHAOS-6818; until then this package is the worker's only user.
 //
 // A readiness transaction probe (selfprobe.TxOpener.Begin) that has to queue
 // for a pool connection behind the process's own work runs into its deadline
@@ -28,10 +34,7 @@ import (
 	"io"
 	"log/slog"
 	"sync"
-	"sync/atomic"
 	"time"
-
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/selfprobe"
 )
@@ -121,10 +124,6 @@ type Opener struct {
 	// Progress is the progress guard; nil error = work is provably moving.
 	Progress func(context.Context) error
 	Counter  *Counter
-	// OnOutcome, when set, is told how each Begin ended: busy=true for a busy
-	// pass, busy=false for a real transaction. Liveness uses it to remember
-	// whether the monitor's latest success was earned or tolerated.
-	OnOutcome func(busy bool)
 }
 
 type busyTx struct{}
@@ -163,9 +162,6 @@ func (o Opener) Begin(ctx context.Context) (selfprobe.Tx, error) {
 	defer cancelAcquire()
 	tx, err := o.Inner.Begin(acquireCtx)
 	if err == nil {
-		if o.OnOutcome != nil {
-			o.OnOutcome(false)
-		}
 		return tx, nil
 	}
 	// The caller's own deadline is gone too: there is no time left to prove
@@ -182,150 +178,5 @@ func (o Opener) Begin(ctx context.Context) (selfprobe.Tx, error) {
 		return nil, err
 	}
 	o.Counter.Record(ctx, o.Check)
-	if o.OnOutcome != nil {
-		o.OnOutcome(true)
-	}
 	return busyTx{}, nil
-}
-
-// stat reads a pool's statistics, or nil for a pool that cannot report them (a
-// zero-value *pgxpool.Pool panics in Stat; production pools never are one).
-func stat(pool *pgxpool.Pool) (statistics *pgxpool.Stat) {
-	defer func() {
-		if recover() != nil {
-			statistics = nil
-		}
-	}()
-	return pool.Stat()
-}
-
-// Saturated reports whether every connection of the pool is acquired.
-func Saturated(pool *pgxpool.Pool) bool {
-	if pool == nil {
-		return false
-	}
-	statistics := stat(pool)
-	return statistics != nil && statistics.MaxConns() > 0 && statistics.AcquiredConns() >= statistics.MaxConns()
-}
-
-// PoolProgress is a progress guard derived from the pool itself, for runtimes
-// with no queue-level claim signal: work is moving when connections keep being
-// acquired. A pool wedged by stuck work completes no acquires, so its count
-// stops advancing and, after the window, the guard goes red.
-type PoolProgress struct {
-	acquireCount func() int64
-	window       time.Duration
-	now          func() time.Time
-
-	mu        sync.Mutex
-	lastCount int64
-	lastMove  time.Time
-}
-
-// NewPoolProgress observes pool's completed-acquire count MINUS ownAcquires
-// (the probe's own successful acquires, selfprobe.OwnAcquires; nil = none): the
-// probe acquiring a connection is not evidence that the pool's work is moving,
-// and counting it would let a pool wedged by stuck work read as progressing for
-// as long as probes keep succeeding at acquiring (CHAOS-6771 r1). The clock
-// starts at construction: a new process gets one full window before "no
-// acquires" can read as wedged. A nil pool is never ready.
-func NewPoolProgress(pool *pgxpool.Pool, window time.Duration, ownAcquires func() int64) *PoolProgress {
-	if pool == nil {
-		return newPoolProgress(nil, window, time.Now)
-	}
-	return newPoolProgress(func() int64 {
-		var count int64
-		if statistics := stat(pool); statistics != nil {
-			count = statistics.AcquireCount()
-		}
-		if ownAcquires != nil {
-			count -= ownAcquires()
-		}
-		return count
-	}, window, time.Now)
-}
-
-func newPoolProgress(acquireCount func() int64, window time.Duration, now func() time.Time) *PoolProgress {
-	progress := &PoolProgress{acquireCount: acquireCount, window: window, now: now, lastMove: now()}
-	if acquireCount != nil {
-		// The baseline is the count AT construction: acquires that happened before
-		// this guard existed are not fresh evidence, and reading a large cumulative
-		// count as movement on the first consult reset the clock to that moment
-		// (CHAOS-6800 r2 P1).
-		progress.lastCount = acquireCount()
-	}
-	return progress
-}
-
-// Ready is the guard: nil while an acquire completed within the window.
-func (p *PoolProgress) Ready(context.Context) error {
-	if p == nil || p.acquireCount == nil {
-		return errors.New("busyprobe: no pool to observe")
-	}
-	count := p.acquireCount()
-	now := p.now()
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if count != p.lastCount {
-		p.lastCount, p.lastMove = count, now
-		return nil
-	}
-	// Strictly inside the window: a movement first SEEN at a consult is dated to
-	// that consult, so with one probe per interval it can be up to one interval
-	// older than it looks; callers size the window so window + one interval is
-	// still within the runtime's own staleness bound (see busyProgressWindow).
-	if now.Sub(p.lastMove) < p.window {
-		return nil
-	}
-	return errors.New("busyprobe: no acquire completed within the progress window")
-}
-
-// Liveness is the whole busy-tolerant wiring of a runtime's execution-liveness
-// self-probe on its domain pool, built in ONE place so no caller can hand the
-// progress guard the wrong (or no) own-acquire counter: the opener, and the
-// progress guard reading the very same opener's own acquires.
-//
-// A busy pass is a SUCCESS to the monitor, which then grants its own staleness
-// allowance (60 s by default) on top: bounding the progress window alone left a
-// wedged pool ready for window + interval + staleness (CHAOS-6800 r3: 82 s
-// observed). Gate closes that: while the monitor's latest success was a busy
-// pass, readiness is decided by the work evidence AT READ TIME, so a wedge turns
-// red within the progress window of the last work acquire, whatever the monitor's
-// staleness says.
-type Liveness struct {
-	Opener   Opener
-	Progress *PoolProgress
-
-	lastBusy atomic.Bool
-}
-
-// NewLiveness wires pool's probe opener, the pool-saturation check and a
-// PoolProgress that subtracts that opener's own acquires. pool must not be nil.
-func NewLiveness(pool *pgxpool.Pool, check string, window time.Duration, counter *Counter) *Liveness {
-	probe := selfprobe.NewPool(pool)
-	progress := NewPoolProgress(pool, window, func() int64 { return selfprobe.OwnAcquires(probe) })
-	liveness := &Liveness{Progress: progress}
-	liveness.Opener = Opener{
-		Inner:     probe,
-		Check:     check,
-		Saturated: func() bool { return Saturated(pool) },
-		Progress:  progress.Ready,
-		Counter:   counter,
-		OnOutcome: liveness.lastBusy.Store,
-	}
-	return liveness
-}
-
-// Gate wraps the monitor's readiness check: the monitor must be fresh, and when
-// its latest success was a busy pass the work evidence must be fresh too.
-func (l *Liveness) Gate(monitorReady func(context.Context) error) func(context.Context) error {
-	return func(ctx context.Context) error {
-		if err := monitorReady(ctx); err != nil {
-			return err
-		}
-		if l.lastBusy.Load() {
-			return l.Progress.Ready(ctx)
-		}
-		return nil
-	}
 }

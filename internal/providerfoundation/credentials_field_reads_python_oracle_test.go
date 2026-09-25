@@ -55,11 +55,9 @@ print(json.dumps(out))
 // text of each field the provider reads. Named divergence, not compared: a
 // NON-EMPTY list or object in a field the provider reads (Python carries
 // str(container); Go leaves the field absent and refuses the shape). Also not
-// in the table, pre-existing and independent of the value's type: Python
-// refuses a github mapping that holds a token beside any App field
-// ({"token": "t", "app_id": "12"}) where Go's shape check accepts it, and
-// Python's linear builder reads the apiKey alias where Go's shape check reads
-// only api_key.
+// in the table, pre-existing and independent of the value's type: Python's
+// linear builder reads the apiKey alias where Go's shape check reads only
+// api_key.
 func TestCredentialFieldReadsMatchLivePython(t *testing.T) {
 	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
 		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
@@ -93,6 +91,17 @@ func TestCredentialFieldReadsMatchLivePython(t *testing.T) {
 		{"github", `{"app_id": false, "installation_id": 34, "private_key": "k"}`, github},
 		{"github", `{"app_id": null, "installation_id": 34, "private_key": "k"}`, github},
 		{"github", `{"token": "ghp", "note": null, "extra": [1, {"a": 2}], "n": 1.5}`, github},
+		// CHAOS-6781: a token beside ANY App field is refused by Python.
+		{"github", `{"token": "ghp", "app_id": "12"}`, github},
+		{"github", `{"token": "ghp", "app_id": 12}`, github},
+		{"github", `{"token": "ghp", "installation_id": "1"}`, github},
+		{"github", `{"token": "ghp", "private_key": "k"}`, github},
+		{"github", `{"token": "ghp", "privateKey": "k"}`, github},
+		{"github", `{"token": "ghp", "private_key": ""}`, github},
+		{"github", `{"token": "ghp", "private_key_path": "/nonexistent/key.pem"}`, github},
+		{"github", `{"token": "ghp", "private_key": "", "private_key_path": "/nonexistent/key.pem"}`, github},
+		{"github", `{"token": "ghp", "installation_id": 0, "app_id": false}`, github},
+		{"github", `{"token": "ghp", "app_id": "12", "installation_id": "1", "private_key": "k"}`, github},
 		{"gitlab", `{"token": "glpat-x"}`, gitlab},
 		{"gitlab", `{"token": 12}`, gitlab},
 		{"gitlab", `{"token": 0}`, gitlab},

@@ -289,6 +289,19 @@ func ValidateCredentialShape(credential Credential) error {
 		if token == app {
 			return ErrCredentialInvalid
 		}
+		// CHAOS-6781: GitHubCredentials.__post_init__ raises when a token comes
+		// with ANY App field, not only a complete triple, and the builder then
+		// returns None. private_key_path counts as the key only when there is
+		// no private_key entry (the builder reads the file into it only then).
+		if token {
+			key := has("private_key_path")
+			if _, present := credential.Secret("private_key"); present {
+				key = has("private_key")
+			}
+			if has("app_id") || has("installation_id") || key {
+				return ErrCredentialInvalid
+			}
+		}
 	case "gitlab":
 		if !has("token") {
 			return ErrCredentialInvalid

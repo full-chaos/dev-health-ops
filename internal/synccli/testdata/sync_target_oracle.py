@@ -184,7 +184,7 @@ def run_case(case, keyfile):
         # detect_db_type on a URI that passed the scheme preflight: an
         # uncaught ValueError, a traceback and exit 1.
         return {"stage": tag("error"), "type": tag(type(exc).__name__)}
-    except BaseException as exc:  # a crash is a result, never a skip
+    except Exception as exc:  # a crash is a result, never a skip
         return {"stage": tag("crash"), "message": tag(type(exc).__name__)}
 
     return {

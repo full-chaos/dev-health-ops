@@ -552,7 +552,11 @@ func TestProveOneRESTRequest_LegOrderSweep(t *testing.T) {
 		build  string
 		body   string
 	}
-	start := func(t *testing.T, s legServer, calls *int, mu *sync.Mutex) string {
+	// start returns the server's URL and, for a "closed" leg, a close function
+	// the caller runs only AFTER every server of the cell is up: closing one
+	// before the other starts lets the kernel hand its just-released port to
+	// the next server, so both legs would reach the same server (CHAOS-6623).
+	start := func(t *testing.T, s legServer, calls *int, mu *sync.Mutex) (string, func()) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			mu.Lock()
 			*calls++
@@ -570,11 +574,10 @@ func TestProveOneRESTRequest_LegOrderSweep(t *testing.T) {
 			_, _ = w.Write([]byte(s.body))
 		}))
 		if s.closed {
-			srv.Close()
-		} else {
-			t.Cleanup(srv.Close)
+			return srv.URL, srv.Close
 		}
-		return srv.URL
+		t.Cleanup(srv.Close)
+		return srv.URL, func() {}
 	}
 	good := `{"items":[{"id":"ABC-123"}]}`
 	for _, cell := range []struct {
@@ -595,9 +598,13 @@ func TestProveOneRESTRequest_LegOrderSweep(t *testing.T) {
 		t.Run(cell.name, func(t *testing.T) {
 			var mu sync.Mutex
 			var bCalls, cCalls int
+			baselineURL, closeBaseline := start(t, cell.baseline, &bCalls, &mu)
+			candidateURL, closeCandidate := start(t, cell.candidate, &cCalls, &mu)
+			closeBaseline()
+			closeCandidate()
 			f := flags{
-				pythonAPIURL: start(t, cell.baseline, &bCalls, &mu),
-				queryAPIURL:  start(t, cell.candidate, &cCalls, &mu),
+				pythonAPIURL: baselineURL,
+				queryAPIURL:  candidateURL,
 				org:          "org-1", recordedBy: "chris", reviewEvidence: "test", timeout: 200 * time.Millisecond,
 			}
 			spec := goapiproof.RESTEndpointSpec{Method: http.MethodGet, Path: "/things"}

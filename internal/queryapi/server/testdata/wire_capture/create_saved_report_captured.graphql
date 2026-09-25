@@ -1,0 +1,14 @@
+mutation createSavedReport($orgId: String!, $input: CreateSavedReportInput!) {
+  createSavedReport(orgId: $orgId, input: $input) {
+    id
+    orgId
+    name
+    description
+    reportPlan
+    isTemplate
+    isActive
+    createdAt
+    updatedAt
+    __typename
+  }
+}

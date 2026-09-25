@@ -1,0 +1,3 @@
+mutation deleteSavedReport($orgId: String!, $reportId: String!) {
+  deleteSavedReport(orgId: $orgId, reportId: $reportId)
+}

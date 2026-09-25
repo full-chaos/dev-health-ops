@@ -1,0 +1,10 @@
+mutation triggerReport($orgId: String!, $reportId: String!) {
+  triggerReport(orgId: $orgId, reportId: $reportId) {
+    id
+    reportId
+    status
+    startedAt
+    triggeredBy
+    __typename
+  }
+}

@@ -13,6 +13,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 )
 
 // ErrWebhookSyncUnroutable is wrapped into the Permanent error Work returns
@@ -534,18 +536,28 @@ WHERE org_id = $1 AND sync_config_id = $2 AND job_type = 'sync'`, orgID, configI
 	if isActive && explicitCron != "" {
 		status = jobStatusActive
 	}
-	jobConfig, err := json.Marshal(map[string]string{"provider": provider, "sync_config_id": configID})
+	// job_config is stored as the ORM writes a JSON column: json.dumps of
+	// {"provider": ..., "sync_config_id": ...}, in that key order.
+	config := pyjson.NewObject()
+	config.Set("provider", provider)
+	config.Set("sync_config_id", configID)
+	jobConfig, err := pyjson.Dumps(config)
 	if err != nil {
 		return "", err
 	}
 
+	// Every NOT NULL column the ScheduledJob model fills from its Python-side
+	// defaults (is_running, run_count, failure_count, created_at, updated_at)
+	// is written here too: the table has no server defaults for them.
+	now := time.Now().UTC()
 	err = pool.QueryRow(ctx, `
 INSERT INTO public.scheduled_jobs
-	(id, org_id, name, job_type, provider, schedule_cron, timezone, job_config, sync_config_id, status)
-VALUES (gen_random_uuid(), $1, $2, 'sync', $3, $4, $5, $6::jsonb, $7, $8)
+	(id, org_id, name, job_type, provider, schedule_cron, timezone, job_config, sync_config_id, status,
+	 is_running, run_count, failure_count, created_at, updated_at)
+VALUES (gen_random_uuid(), $1, $2, 'sync', $3, $4, $5, $6::json, $7, $8, false, 0, 0, $9, $9)
 ON CONFLICT (org_id, sync_config_id, job_type) DO NOTHING
 RETURNING id::text`,
-		orgID, fmt.Sprintf("sync-config-%s", configID), provider, cron, tz, jobConfig, configID, status,
+		orgID, fmt.Sprintf("sync-config-%s", configID), provider, cron, tz, jobConfig, configID, status, now,
 	).Scan(&jobID)
 	if err == nil {
 		return jobID, nil

@@ -7,87 +7,35 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/full-chaos/dev-health-ops/internal/pgmigrate"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
-// applySyncDispatchSchema creates the tables TriggerScopedSync reads and
-// writes, matching the SQLAlchemy models in src/dev_health_ops/models/
-// integrations.py (IntegrationSource) and settings.py (SyncConfiguration,
-// ScheduledJob, ScheduledSyncOccurrence, SyncManualTrigger) -- the same
-// "create just what this test touches" pattern
-// github_app_events_integration_test.go's applyGithubAppEventSchema uses,
-// rather than running the full alembic chain against a throwaway container.
-// FK constraints to tables this PR never reads (integrations, job_runs,
-// sync_runs) are deliberately omitted.
+// applySyncDispatchSchema builds the real schema -- the pgmigrate baseline
+// and chain, the same schema the Alembic heads produce -- so every NOT NULL
+// column without a server default, and every foreign key, is enforced
+// exactly as in a deployment. A hand-made subset hid that the scheduled
+// job insert omitted created_at/updated_at (CHAOS-6652).
 func applySyncDispatchSchema(ctx context.Context, t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
-	applyGithubAppEventSchema(ctx, t, pool)
-	statements := []string{
-		`CREATE TABLE public.integration_sources (
-			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-			org_id TEXT NOT NULL,
-			integration_id UUID NOT NULL,
-			provider TEXT NOT NULL,
-			source_type TEXT NOT NULL DEFAULT 'repository',
-			external_id TEXT NOT NULL,
-			name TEXT NOT NULL DEFAULT '',
-			full_name TEXT NOT NULL DEFAULT ''
-		)`,
-		`CREATE TABLE public.sync_configurations (
-			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-			org_id TEXT NOT NULL DEFAULT '',
-			name TEXT NOT NULL,
-			provider TEXT NOT NULL,
-			sync_targets JSONB NOT NULL DEFAULT '[]',
-			sync_options JSONB NOT NULL DEFAULT '{}',
-			is_active BOOLEAN NOT NULL DEFAULT TRUE,
-			planner_managed BOOLEAN NOT NULL DEFAULT FALSE,
-			integration_id UUID,
-			source_id UUID
-		)`,
-		`CREATE TABLE public.scheduled_jobs (
-			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-			org_id TEXT NOT NULL DEFAULT '',
-			name TEXT NOT NULL,
-			job_type TEXT NOT NULL,
-			provider TEXT NOT NULL DEFAULT '',
-			schedule_cron TEXT NOT NULL,
-			timezone TEXT NOT NULL DEFAULT 'UTC',
-			job_config JSONB NOT NULL DEFAULT '{}',
-			sync_config_id UUID,
-			status INTEGER NOT NULL DEFAULT 0,
-			UNIQUE (org_id, sync_config_id, job_type)
-		)`,
-		`CREATE TABLE public.scheduled_sync_occurrences (
-			occurrence_id TEXT PRIMARY KEY,
-			identity_version TEXT NOT NULL,
-			org_id TEXT NOT NULL,
-			sync_config_id UUID NOT NULL,
-			scheduled_job_id UUID NOT NULL,
-			scheduled_for TIMESTAMPTZ NOT NULL,
-			job_run_id UUID,
-			sync_run_id UUID,
-			reconcile_attempt_count INTEGER NOT NULL DEFAULT 0,
-			reconcile_status VARCHAR(16) NOT NULL DEFAULT 'pending',
-			UNIQUE (sync_config_id, scheduled_for)
-		)`,
-		`CREATE TABLE public.sync_manual_triggers (
-			occurrence_id TEXT PRIMARY KEY REFERENCES public.scheduled_sync_occurrences(occurrence_id) ON DELETE CASCADE,
-			mode TEXT NOT NULL,
-			since TIMESTAMPTZ,
-			before TIMESTAMPTZ,
-			source_ids TEXT[],
-			dataset_keys TEXT[],
-			triggered_by TEXT NOT NULL,
-			created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-		)`,
+	conn, err := pgx.Connect(ctx, pool.Config().ConnString())
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, statement := range statements {
-		if _, err := pool.Exec(ctx, statement); err != nil {
-			t.Fatalf("apply schema: %v\n%s", err, statement)
-		}
+	defer conn.Close(context.Background())
+	baseline, err := pgmigrate.LoadBaseline()
+	if err != nil {
+		t.Fatal(err)
+	}
+	chain, err := pgmigrate.LoadChain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pgmigrate.Upgrade(ctx, conn, baseline, chain); err != nil {
+		t.Fatalf("apply the schema: %v", err)
 	}
 }
 
@@ -95,11 +43,21 @@ func insertIntegrationSource(
 	ctx context.Context, t *testing.T, pool *pgxpool.Pool, orgID, provider, externalID, fullName string,
 ) string {
 	t.Helper()
+	var integrationID string
+	now := time.Now().UTC()
+	if err := pool.QueryRow(ctx, `
+INSERT INTO public.integrations (id, org_id, provider, name, config, is_active, created_at, updated_at)
+VALUES (gen_random_uuid(), $1, $2, $3, '{}', true, $4, $4) RETURNING id::text`,
+		orgID, provider, "integration-"+externalID+"-"+fullName, now,
+	).Scan(&integrationID); err != nil {
+		t.Fatalf("insert integration: %v", err)
+	}
 	var id string
 	err := pool.QueryRow(ctx, `
-INSERT INTO public.integration_sources (org_id, integration_id, provider, external_id, full_name)
-VALUES ($1, gen_random_uuid(), $2, $3, $4) RETURNING id::text`,
-		orgID, provider, externalID, fullName,
+INSERT INTO public.integration_sources (id, org_id, integration_id, provider, source_type, external_id, name, full_name, metadata,
+	is_enabled, discovered_at, last_seen_at)
+VALUES (gen_random_uuid(), $1, $2, $3, 'repository', $4, $5, $5, '{}', true, $6, $6) RETURNING id::text`,
+		orgID, integrationID, provider, externalID, fullName, now,
 	).Scan(&id)
 	if err != nil {
 		t.Fatalf("insert integration source: %v", err)
@@ -113,9 +71,10 @@ func insertSyncConfiguration(
 	t.Helper()
 	var id string
 	err := pool.QueryRow(ctx, `
-INSERT INTO public.sync_configurations (org_id, name, provider, source_id, sync_options)
-VALUES ($1, $2, $3, $4, $5::jsonb) RETURNING id::text`,
-		orgID, "webhook-child-"+sourceID, provider, sourceID, syncOptions,
+INSERT INTO public.sync_configurations (id, org_id, name, provider, source_id, sync_targets, sync_options, is_active,
+	planner_managed, created_at, updated_at)
+VALUES (gen_random_uuid(), $1, $2, $3, $4, '[]', $5::json, true, false, $6, $6) RETURNING id::text`,
+		orgID, "webhook-child-"+sourceID, provider, sourceID, syncOptions, time.Now().UTC(),
 	).Scan(&id)
 	if err != nil {
 		t.Fatalf("insert sync configuration: %v", err)
@@ -129,9 +88,10 @@ func insertParentSyncConfig(
 	t.Helper()
 	var id string
 	err := pool.QueryRow(ctx, `
-INSERT INTO public.sync_configurations (org_id, name, provider, planner_managed, is_active, sync_options)
-VALUES ($1, $2, $3, TRUE, $4, '{}'::jsonb) RETURNING id::text`,
-		orgID, "planner-"+provider, provider, isActive,
+INSERT INTO public.sync_configurations (id, org_id, name, provider, sync_targets, planner_managed, is_active, sync_options,
+	created_at, updated_at)
+VALUES (gen_random_uuid(), $1, $2 || '-' || gen_random_uuid()::text, $3, '[]', TRUE, $4, '{}', $5, $5) RETURNING id::text`,
+		orgID, "planner-"+provider, provider, isActive, time.Now().UTC(),
 	).Scan(&id)
 	if err != nil {
 		t.Fatalf("insert parent sync configuration: %v", err)
@@ -220,6 +180,23 @@ SELECT mode, triggered_by, source_ids FROM public.sync_manual_triggers WHERE occ
 	}
 	if jobStatus != jobStatusPaused {
 		t.Fatalf("a freshly created job with no explicit schedule_cron must be PAUSED(%d), got %d", jobStatusPaused, jobStatus)
+	}
+	// The row carries every column the ScheduledJob model fills, as
+	// upsertScheduledJob writes them: job_config in json.dumps form, the
+	// counters zero, both timestamps set.
+	var jobConfig string
+	var running bool
+	var runs, failures int
+	var createdSet, updatedEqual bool
+	if err := pool.QueryRow(ctx, `SELECT job_config::text, is_running, run_count, failure_count,
+created_at IS NOT NULL, created_at = updated_at FROM public.scheduled_jobs WHERE sync_config_id = $1`, configID).
+		Scan(&jobConfig, &running, &runs, &failures, &createdSet, &updatedEqual); err != nil {
+		t.Fatal(err)
+	}
+	wantConfig := `{"provider": "github", "sync_config_id": "` + configID + `"}`
+	if jobConfig != wantConfig || running || runs != 0 || failures != 0 || !createdSet || !updatedEqual {
+		t.Fatalf("scheduled job row = config %s running %v runs %d failures %d created %v updated=created %v; want config %s, idle, zero counters, timestamps set",
+			jobConfig, running, runs, failures, createdSet, updatedEqual, wantConfig)
 	}
 }
 

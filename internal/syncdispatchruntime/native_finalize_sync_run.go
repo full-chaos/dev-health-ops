@@ -151,21 +151,49 @@ func (service *NativeFinalizeSyncRunService) Finalize(ctx context.Context, args 
 	if service == nil || service.pool == nil || ctx == nil || args.valid() != nil {
 		return ErrFinalizeSyncRunUnavailable
 	}
+	return service.finalize(ctx, args.OrganizationID(), args.SyncRunID(), func(ctx context.Context, tx pgx.Tx) (bool, error) {
+		return currentTransportReference(ctx, tx, args, outboxKindFinalizeSyncRun)
+	})
+}
+
+// FinalizeRun finalizes one run by id, as the Python finalize_sync_run(run_id)
+// call does: no dispatch outbox reference is checked, because the caller is
+// not a delivered River job. It is for operator and fixture verbs that
+// complete a run they created themselves (dho fixtures finalize-synthetic-sync);
+// the River worker keeps using Finalize, which refuses a superseded delivery.
+// Both run the same body.
+func (service *NativeFinalizeSyncRunService) FinalizeRun(ctx context.Context, orgID, runID string) error {
+	if service == nil || service.pool == nil || ctx == nil || !uuidPattern.MatchString(runID) || orgID == "" {
+		return ErrFinalizeSyncRunUnavailable
+	}
+	return service.finalize(ctx, orgID, runID, nil)
+}
+
+// finalize is the shared body. current, when set, decides inside the
+// transaction whether the delivery is still the current one; a false result
+// is a committed no-op.
+func (service *NativeFinalizeSyncRunService) finalize(
+	ctx context.Context,
+	orgID, runID string,
+	current func(context.Context, pgx.Tx) (bool, error),
+) error {
 	tx, err := service.pool.Begin(ctx)
 	if err != nil {
 		return ErrFinalizeSyncRunUnavailable
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	current, err := currentTransportReference(ctx, tx, args, outboxKindFinalizeSyncRun)
-	if err != nil {
-		return err
-	}
-	if !current {
-		return nil
+	if current != nil {
+		isCurrent, err := current(ctx, tx)
+		if err != nil {
+			return err
+		}
+		if !isCurrent {
+			return nil
+		}
 	}
 
-	run, err := loadFinalizeRun(ctx, tx, args.OrganizationID(), args.SyncRunID())
+	run, err := loadFinalizeRun(ctx, tx, orgID, runID)
 	if err != nil {
 		return err
 	}

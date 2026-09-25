@@ -421,6 +421,16 @@ func TestExternalIngestVenueOracle(t *testing.T) {
 		// hardcoded to null/[] regardless of what was stored.
 		{Name: "get seeded recompute batch by id", Method: "GET", Path: "/api/v1/external-ingest/batches/" + seed.seededRecomputeBatchID, Headers: auth},
 		{Name: "get batch unknown id", Method: "GET", Path: "/api/v1/external-ingest/batches/" + uuid.New().String(), Headers: auth},
+		{Name: "get batch invalid uuid", Method: "GET", Path: "/api/v1/external-ingest/batches/not-a-uuid", Headers: auth},
+		{Name: "get batch simple uuid form", Method: "GET", Path: "/api/v1/external-ingest/batches/" + strings.ReplaceAll(seed.seededBatchID, "-", ""), Headers: auth},
+		{Name: "get batch braced uuid form", Method: "GET", Path: "/api/v1/external-ingest/batches/{" + seed.seededBatchID + "}", Headers: auth},
+		{Name: "get batch uppercase uuid", Method: "GET", Path: "/api/v1/external-ingest/batches/" + strings.ToUpper(seed.seededBatchID), Headers: auth},
+		{Name: "get batch invalid uuid and bad query", Method: "GET", Path: "/api/v1/external-ingest/batches/not-a-uuid?errorLimit=0&errorOffset=-1", Headers: auth},
+		{Name: "get batch errorLimit zero", Method: "GET", Path: "/api/v1/external-ingest/batches/" + seed.seededBatchID + "?errorLimit=0", Headers: auth},
+		{Name: "get batch errorLimit over the cap", Method: "GET", Path: "/api/v1/external-ingest/batches/" + seed.seededBatchID + "?errorLimit=201", Headers: auth},
+		{Name: "get batch errorOffset not an integer", Method: "GET", Path: "/api/v1/external-ingest/batches/" + seed.seededBatchID + "?errorOffset=abc", Headers: auth},
+		{Name: "get batch errorOffset past int64", Method: "GET", Path: "/api/v1/external-ingest/batches/" + seed.seededBatchID + "?errorOffset=99999999999999999999", Headers: auth},
+		{Name: "get batch errorLimit leading zeros then minus", Method: "GET", Path: "/api/v1/external-ingest/batches/" + seed.seededBatchID + "?errorLimit=0-5", Headers: auth},
 	}
 
 	python := venue.ServePython(t, requests)

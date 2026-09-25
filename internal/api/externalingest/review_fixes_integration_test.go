@@ -5,6 +5,7 @@ package externalingest
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -189,6 +190,113 @@ func TestAcceptBatchAgainstFaultsAndEdgeCases(t *testing.T) {
 			if recorder.Code != http.StatusUnprocessableEntity || strings.TrimSpace(recorder.Body.String()) != want {
 				t.Errorf("?%s: %d %s, want 422 %s", query, recorder.Code, recorder.Body.String(), want)
 			}
+		}
+	})
+
+	t.Run("GET /batches/{id} validates its path and query before the limiter", func(t *testing.T) {
+		orgID := uuid.New().String()
+		const token = "fcpush_get_batch_422_token"
+		seedIngestToken(t, ctx, pool, orgID, "github", "acme/repo", token)
+		deps := newTestDeps(t, pool, client)
+		calls := 0
+		get := func(target string) *httptest.ResponseRecorder {
+			req := httptest.NewRequest(http.MethodGet, target, nil)
+			// Every ingest auth attempt counts against a per-IP limit
+			// (100/minute) before validation runs, in Python too: spread the
+			// burst over addresses so it isolates the read limit.
+			calls++
+			req.RemoteAddr = fmt.Sprintf("10.9.%d.%d:4000", calls/250, calls%250)
+			req.SetPathValue("ingestion_id", strings.SplitN(strings.TrimPrefix(target, "/api/v1/external-ingest/batches/"), "?", 2)[0])
+			req.Header.Set("Authorization", "Bearer "+token)
+			recorder := httptest.NewRecorder()
+			deps.handleGetBatch()(recorder, req)
+			return recorder
+		}
+		want := `{"detail":[{"type":"uuid_parsing","loc":["path","ingestion_id"],"msg":"Input should be a valid UUID, invalid character: found ` + "`n`" + ` at 1","input":"not-a-uuid","ctx":{"error":"invalid character: found ` + "`n`" + ` at 1"}},` +
+			`{"type":"greater_than_equal","loc":["query","errorLimit"],"msg":"Input should be greater than or equal to 1","input":"0","ctx":{"ge":1}}]}`
+		if got := get("/api/v1/external-ingest/batches/not-a-uuid?errorLimit=0"); got.Code != http.StatusUnprocessableEntity || strings.TrimSpace(got.Body.String()) != want {
+			t.Fatalf("invalid id + query: %d %s, want 422 %s", got.Code, got.Body.String(), want)
+		}
+		// 125 invalid requests exceed the 120/minute read limit; none of
+		// them counts, so a valid lookup still reaches the handler (404 for
+		// an unknown id), never 429.
+		for range 125 {
+			if got := get("/api/v1/external-ingest/batches/not-a-uuid"); got.Code != http.StatusUnprocessableEntity {
+				t.Fatalf("invalid uuid answered %d, want 422 every time", got.Code)
+			}
+		}
+		if got := get("/api/v1/external-ingest/batches/" + uuid.New().String()); got.Code != http.StatusNotFound {
+			t.Fatalf("valid unknown id after an invalid burst: %d %s, want 404", got.Code, got.Body.String())
+		}
+	})
+
+	// An offset past int64 is a valid pydantic int. Python's limiter charges
+	// the request first; the 500 comes later, when asyncpg binds the page
+	// query (after the batch lookup on GET /batches/{id}). So a burst of
+	// them exhausts the read limit (measured against the real FastAPI
+	// router: 120 answered, then 429), and an unknown batch answers 404.
+	t.Run("an offset past int64 is charged to the limiter before its 500", func(t *testing.T) {
+		orgID := uuid.New().String()
+		const token = "fcpush_int64_offset_limiter_token"
+		seedIngestToken(t, ctx, pool, orgID, "github", "acme/repo", token)
+		deps := newTestDeps(t, pool, client)
+		const huge = "9223372036854775808"
+		calls := 0
+		do := func(handler http.HandlerFunc, target, id string) int {
+			req := httptest.NewRequest(http.MethodGet, target, nil)
+			calls++
+			req.RemoteAddr = fmt.Sprintf("10.8.%d.%d:4000", calls/250, calls%250)
+			if id != "" {
+				req.SetPathValue("ingestion_id", id)
+			}
+			req.Header.Set("Authorization", "Bearer "+token)
+			recorder := httptest.NewRecorder()
+			handler(recorder, req)
+			return recorder.Code
+		}
+		unknown := uuid.New().String()
+		statuses := map[int]int{}
+		for range 125 {
+			statuses[do(deps.handleGetBatch(), "/api/v1/external-ingest/batches/"+unknown+"?errorOffset="+huge, unknown)]++
+		}
+		// The limiter is a token bucket that refills while the burst runs, so
+		// the exact split is timing-dependent (CI answered 124x404 then 429);
+		// what matters is that every request was charged: the first 120 pass
+		// as 404s, later ones are limited, and none reaches the 500.
+		if statuses[http.StatusNotFound] < 120 || statuses[http.StatusTooManyRequests] < 1 || statuses[http.StatusNotFound]+statuses[http.StatusTooManyRequests] != 125 {
+			t.Fatalf("GET /batches/{id} oversized errorOffset x125 answered %v, want >=120x404 then 429s only", statuses)
+		}
+		statuses = map[int]int{}
+		for range 125 {
+			statuses[do(deps.handleListBatches(), "/api/v1/external-ingest/batches?offset="+huge, "")]++
+		}
+		if statuses[http.StatusInternalServerError] < 120 || statuses[http.StatusTooManyRequests] < 1 || statuses[http.StatusInternalServerError]+statuses[http.StatusTooManyRequests] != 125 {
+			t.Fatalf("GET /batches oversized offset x125 answered %v, want >=120x500 then 429s only", statuses)
+		}
+	})
+
+	// Python's limiter wraps the endpoint AFTER FastAPI's parameter
+	// validation, and POST /validate and POST /batches have no parameter to
+	// validate: the body is read inside the limited function. So a malformed
+	// body DOES consume the limit there (measured against the real app: 60
+	// answered, then 429), the opposite of the two read routes above. A
+	// syntax error is Python's unhandled 500 (json.dumps cannot write the
+	// error's bytes input), so the answered ones are 500s.
+	t.Run("POST /validate counts a malformed body against the limit", func(t *testing.T) {
+		orgID := uuid.New().String()
+		const token = "fcpush_validate_burst_token"
+		seedIngestToken(t, ctx, pool, orgID, "github", "acme/repo", token)
+		deps := newTestDeps(t, pool, client)
+		statuses := map[int]int{}
+		for range 70 {
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/external-ingest/validate", strings.NewReader("{"))
+			req.Header.Set("Authorization", "Bearer "+token)
+			recorder := httptest.NewRecorder()
+			deps.handleValidate()(recorder, req)
+			statuses[recorder.Code]++
+		}
+		if statuses[http.StatusTooManyRequests] != 10 || statuses[http.StatusInternalServerError] != 60 {
+			t.Fatalf("70 malformed validate bodies answered %v, want 60x500 then 10x429", statuses)
 		}
 	})
 

@@ -2,7 +2,6 @@ package externalingest
 
 import (
 	"context"
-	"encoding/json"
 
 	"github.com/jackc/pgx/v5"
 
@@ -129,15 +128,6 @@ func findActiveManagedOwner(ctx context.Context, d Deps, orgID, system, instance
 		}
 	}
 	return false, nil
-}
-
-func decodeMetadata(raw []byte) map[string]any {
-	if len(raw) == 0 {
-		return nil
-	}
-	var m map[string]any
-	_ = json.Unmarshal(raw, &m)
-	return m
 }
 
 // resolveEffectiveMode ports ownership.py's resolve_effective_mode

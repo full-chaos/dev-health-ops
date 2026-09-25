@@ -77,14 +77,13 @@ func TestOpenerOnARealSaturatedPool(t *testing.T) {
 		t.Fatalf("the busy pass took %s, want about %s", elapsed, AcquireWait)
 	}
 	// A wedged pool (no acquire completes within the window) is broken.
-	wedged := NewPoolProgress(pool, time.Nanosecond, func() int64 { return selfprobe.OwnAcquires(probe) })
-	time.Sleep(5 * time.Millisecond)
+	wedged := NewPoolProgress(pool, 40*time.Millisecond, func() int64 { return selfprobe.OwnAcquires(probe) })
 	if err := wedged.Ready(context.Background()); err != nil {
-		t.Fatalf("first observation moves the count: %v", err)
+		t.Fatalf("a new guard gets a full window: %v", err)
 	}
-	time.Sleep(5 * time.Millisecond)
+	time.Sleep(80 * time.Millisecond)
 	if err := wedged.Ready(context.Background()); err == nil {
-		t.Fatal("a pool whose acquire count stopped advancing is green")
+		t.Fatal("a pool whose work acquire count stopped advancing is green")
 	}
 	opener.Progress = wedged.Ready
 	ctx2, cancel2 := context.WithTimeout(context.Background(), 4*time.Second)

@@ -167,7 +167,7 @@ func TestPoolProgressIsGreenOnlyWhileAcquiresKeepCompleting(t *testing.T) {
 	if err := progress.Ready(context.Background()); err != nil {
 		t.Fatalf("inside the window with no acquires = %v, want green", err)
 	}
-	clock = clock.Add(2 * time.Second) // 61 s with no completed acquire
+	clock = clock.Add(2 * time.Second) // 61 s with no completed acquire (window is 60 s, strictly inside)
 	if err := progress.Ready(context.Background()); err == nil {
 		t.Fatal("a pool with no completed acquire for longer than the window is green")
 	}
@@ -187,5 +187,42 @@ func TestPoolProgressIsGreenOnlyWhileAcquiresKeepCompleting(t *testing.T) {
 func TestSaturatedIsFalseForANilOrIdlePool(t *testing.T) {
 	if Saturated(nil) {
 		t.Fatal("a nil pool is saturated")
+	}
+}
+
+// CHAOS-6800 r2 P1 (executed by the reviewer): a work acquire made BEFORE the
+// guard's first consult must not read as fresh progress at that consult, and the
+// guard must go red within window + one probe interval of it.
+func TestPoolProgressDatesAMovementToTheProbeThatSeesIt(t *testing.T) {
+	const interval, window = 20 * time.Second, 40 * time.Second
+	start := time.Unix(1_700_000_000, 0)
+	clock := start
+	var count int64
+	progress := newPoolProgress(func() int64 { return count }, window, func() time.Time { return clock })
+	count = 1 // a work acquire, after construction, before any consult
+	for _, step := range []struct {
+		at      time.Duration
+		wantErr bool
+	}{{interval, false}, {2 * interval, false}, {3 * interval, true}, {4 * interval, true}} {
+		clock = start.Add(step.at)
+		if err := progress.Ready(context.Background()); (err != nil) != step.wantErr {
+			t.Fatalf("consult at +%s = %v, want error=%v (acquire at +0, first seen at +%s)", step.at, err, step.wantErr, interval)
+		}
+	}
+}
+
+// Acquires that happened before the guard existed are the baseline, not movement.
+func TestPoolProgressBaselineIsTheCountAtConstruction(t *testing.T) {
+	start := time.Unix(1_700_000_000, 0)
+	clock := start
+	count := int64(500) // long-running process: a large cumulative count
+	progress := newPoolProgress(func() int64 { return count }, 60*time.Second, func() time.Time { return clock })
+	clock = start.Add(10 * time.Second)
+	if err := progress.Ready(context.Background()); err != nil {
+		t.Fatalf("inside the window after construction: %v", err)
+	}
+	clock = start.Add(65 * time.Second)
+	if err := progress.Ready(context.Background()); err == nil {
+		t.Fatal("a pre-existing cumulative count reset the progress clock at the first consult")
 	}
 }

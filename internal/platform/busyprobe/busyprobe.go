@@ -177,13 +177,24 @@ func (o Opener) Begin(ctx context.Context) (selfprobe.Tx, error) {
 	return busyTx{}, nil
 }
 
+// stat reads a pool's statistics, or nil for a pool that cannot report them (a
+// zero-value *pgxpool.Pool panics in Stat; production pools never are one).
+func stat(pool *pgxpool.Pool) (statistics *pgxpool.Stat) {
+	defer func() {
+		if recover() != nil {
+			statistics = nil
+		}
+	}()
+	return pool.Stat()
+}
+
 // Saturated reports whether every connection of the pool is acquired.
 func Saturated(pool *pgxpool.Pool) bool {
 	if pool == nil {
 		return false
 	}
-	stat := pool.Stat()
-	return stat != nil && stat.MaxConns() > 0 && stat.AcquiredConns() >= stat.MaxConns()
+	statistics := stat(pool)
+	return statistics != nil && statistics.MaxConns() > 0 && statistics.AcquiredConns() >= statistics.MaxConns()
 }
 
 // PoolProgress is a progress guard derived from the pool itself, for runtimes
@@ -212,7 +223,10 @@ func NewPoolProgress(pool *pgxpool.Pool, window time.Duration, ownAcquires func(
 		return newPoolProgress(nil, window, time.Now)
 	}
 	return newPoolProgress(func() int64 {
-		count := pool.Stat().AcquireCount()
+		var count int64
+		if statistics := stat(pool); statistics != nil {
+			count = statistics.AcquireCount()
+		}
 		if ownAcquires != nil {
 			count -= ownAcquires()
 		}
@@ -221,7 +235,15 @@ func NewPoolProgress(pool *pgxpool.Pool, window time.Duration, ownAcquires func(
 }
 
 func newPoolProgress(acquireCount func() int64, window time.Duration, now func() time.Time) *PoolProgress {
-	return &PoolProgress{acquireCount: acquireCount, window: window, now: now, lastMove: now()}
+	progress := &PoolProgress{acquireCount: acquireCount, window: window, now: now, lastMove: now()}
+	if acquireCount != nil {
+		// The baseline is the count AT construction: acquires that happened before
+		// this guard existed are not fresh evidence, and reading a large cumulative
+		// count as movement on the first consult reset the clock to that moment
+		// (CHAOS-6800 r2 P1).
+		progress.lastCount = acquireCount()
+	}
+	return progress
 }
 
 // Ready is the guard: nil while an acquire completed within the window.
@@ -237,7 +259,11 @@ func (p *PoolProgress) Ready(context.Context) error {
 		p.lastCount, p.lastMove = count, now
 		return nil
 	}
-	if now.Sub(p.lastMove) <= p.window {
+	// Strictly inside the window: a movement first SEEN at a consult is dated to
+	// that consult, so with one probe per interval it can be up to one interval
+	// older than it looks; callers size the window so window + one interval is
+	// still within the runtime's own staleness bound (see busyProgressWindow).
+	if now.Sub(p.lastMove) < p.window {
 		return nil
 	}
 	return errors.New("busyprobe: no acquire completed within the progress window")

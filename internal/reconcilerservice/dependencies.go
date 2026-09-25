@@ -90,9 +90,11 @@ type reconcilerDatabase interface {
 }
 
 // busyProgressWindow is how long the domain pool may go without a completed
-// acquire before a fully acquired pool stops reading as busy: the monitor's own
-// staleness window (selfprobe.DefaultStalenessMultiple x DefaultInterval).
-const busyProgressWindow = selfprobe.DefaultStalenessMultiple * selfprobe.DefaultInterval
+// work acquire before a fully acquired pool stops reading as busy. A movement
+// is dated to the probe that first sees it (one probe per DefaultInterval), so a
+// wedge is detected within window + one interval = 3 x DefaultInterval, the
+// monitor's own staleness bound (selfprobe.DefaultStalenessMultiple).
+const busyProgressWindow = 2 * selfprobe.DefaultInterval
 
 type postgresReconcilerDatabase struct {
 	pools           *postgres.RuntimePools

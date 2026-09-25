@@ -394,6 +394,9 @@ func (d Deps) acceptBatchTransaction(
 		return idempotencyOutcome{}, nil, newIngestError(http.StatusServiceUnavailable, "ingest_temporarily_unavailable",
 			"A concurrent request for the same idempotency key is in progress. Retry.")
 	}
+	if errors.Is(err, ErrStoredJSONColumn) {
+		return idempotencyOutcome{}, nil, unhandledError()
+	}
 	if err != nil {
 		return idempotencyOutcome{}, nil, newIngestError(http.StatusInternalServerError, "internal_error", "failed to resolve idempotency")
 	}
@@ -463,7 +466,12 @@ func (d Deps) writeReplayStatus(w http.ResponseWriter, ctx context.Context, orgI
 		writeIngestError(w, newIngestError(http.StatusInternalServerError, "internal_error", "failed to load recompute jobs"))
 		return
 	}
-	policy.WriteJSON(w, http.StatusOK, batchStatusResponse(batch, rejections, jobs, total, 50, 0), nil)
+	response, err := batchStatusResponse(batch, rejections, jobs, total, 50, 0)
+	if err != nil {
+		writeIngestError(w, unhandledError())
+		return
+	}
+	policy.WriteJSON(w, http.StatusOK, response, nil)
 }
 
 func int64Pointer(value int64) *int64 { return &value }
@@ -503,6 +511,10 @@ func (d Deps) handleListBatches() http.HandlerFunc {
 			CreatedAfter: pybody.Instant(createdAfter), CreatedBefore: pybody.Instant(createdBefore),
 			Limit: int(limit.Int64()), Offset: int(offset.Int64()),
 		})
+		if errors.Is(err, ErrStoredJSONColumn) {
+			writeIngestError(w, unhandledError())
+			return
+		}
 		if err != nil {
 			writeIngestError(w, newIngestError(http.StatusInternalServerError, "internal_error", "failed to list batches"))
 			return
@@ -547,6 +559,10 @@ func (d Deps) handleGetBatch() http.HandlerFunc {
 			return
 		}
 		batch, err := getBatch(r.Context(), d.Pool, authCtx.OrgID, ingestionID)
+		if errors.Is(err, ErrStoredJSONColumn) {
+			writeIngestError(w, unhandledError())
+			return
+		}
 		if err != nil {
 			writeIngestError(w, newIngestError(http.StatusInternalServerError, "internal_error", "failed to load batch"))
 			return
@@ -573,74 +589,13 @@ func (d Deps) handleGetBatch() http.HandlerFunc {
 			writeIngestError(w, newIngestError(http.StatusInternalServerError, "internal_error", "failed to load recompute jobs"))
 			return
 		}
-		policy.WriteModel(w, http.StatusOK, batchStatusResponse(batch, rejections, jobs, total, limit, offset), nil)
-	}
-}
-
-// recomputeScopePyJSON builds status.py's RecomputeScopeResponse -- a real
-// Pydantic submodel, so Python serializes it in the MODEL's declared field
-// order (repoIds, teamIds, windowStartedAt, windowEndedAt, cappedDays,
-// cappedRepos) regardless of what order the stored recompute_scope JSONB
-// happens to hold, with the same defaulting _recompute_scope_response
-// applies (missing/falsy list -> [], missing bool -> false). nil in, nil
-// out (recompute.scope is null until a bounded recompute has scoped one).
-func recomputeScopePyJSON(scope map[string]any) pyjson.Value {
-	if scope == nil {
-		return nil
-	}
-	object := pyjson.NewObject()
-	object.Set("repoIds", stringListOrEmpty(scope["repoIds"]))
-	object.Set("teamIds", stringListOrEmpty(scope["teamIds"]))
-	object.Set("windowStartedAt", scopeDatetimeValue(scope["windowStartedAt"]))
-	object.Set("windowEndedAt", scopeDatetimeValue(scope["windowEndedAt"]))
-	object.Set("cappedDays", boolOrFalse(scope["cappedDays"]))
-	object.Set("cappedRepos", boolOrFalse(scope["cappedRepos"]))
-	return object
-}
-
-// stringListOrEmpty ports `list(scope.get(key) or [])`: a missing or falsy
-// (nil, empty list) value becomes [], never null -- RecomputeScopeResponse's
-// repo_ids/team_ids fields are plain lists, not Optional.
-func stringListOrEmpty(raw any) []pyjson.Value {
-	items, _ := raw.([]any)
-	out := make([]pyjson.Value, 0, len(items))
-	for _, item := range items {
-		if s, ok := item.(string); ok {
-			out = append(out, s)
+		response, err := batchStatusResponse(batch, rejections, jobs, total, limit, offset)
+		if err != nil {
+			writeIngestError(w, unhandledError())
+			return
 		}
+		policy.WriteModel(w, http.StatusOK, response, nil)
 	}
-	return out
-}
-
-// boolOrFalse ports `bool(scope.get(key, False))`.
-func boolOrFalse(raw any) bool {
-	b, _ := raw.(bool)
-	return b
-}
-
-// scopeDatetimeValue ports `_parse_dt(scope.get(key))`: an ISO8601 string
-// stored in the scope JSONB, re-serialized through pytime -- NOT
-// formatOptionalRFC3339, which forces UTC and lets Go's RFC3339Nano trim
-// trailing zero microseconds. The stored string can carry a non-UTC offset
-// (the producer writes `scope.window_start.isoformat()`, which preserves
-// whatever aware offset it had) and Pydantic's own datetime serializer
-// never trims a non-zero microsecond field to fewer than six digits --
-// round 2 review reproduced both divergences live (a +05:30 offset forced
-// to Z, and .123400 trimmed to .1234). pytime.FromISOFormat/Pydantic is the
-// same datetime.fromisoformat()/pydantic-JSON pair telemetry.go and
-// customerpush/reads.go already use for this exact contract. A missing,
-// non-string, or unparseable value is null, matching _parse_dt_required's
-// own contract of only ever being called on a value the writer produced.
-func scopeDatetimeValue(raw any) any {
-	s, ok := raw.(string)
-	if !ok || s == "" {
-		return nil
-	}
-	parsed, ok := pytime.FromISOFormat(s)
-	if !ok {
-		return nil
-	}
-	return pytime.Pydantic(parsed)
 }
 
 // recomputeJobPyJSON builds status.py's RecomputeJobResponse field order:
@@ -694,7 +649,7 @@ func batchListItem(row *BatchRow) *pyjson.Object {
 // has no FK to this batch row -- a same-dispatched_at match across the
 // caller's own source_system/source_instance, exactly like Python's
 // _batch_to_recompute_response(row, jobs) split.
-func batchStatusResponse(row *BatchRow, rejections []RejectionRow, jobs []RecomputeJobRow, total, limit, offset int) *pyjson.Object {
+func batchStatusResponse(row *BatchRow, rejections []RejectionRow, jobs []RecomputeJobRow, total, limit, offset int) (*pyjson.Object, error) {
 	errs := make([]pyjson.Value, len(rejections))
 	for i, rej := range rejections {
 		errItem := pyjson.NewObject()
@@ -710,9 +665,14 @@ func batchStatusResponse(row *BatchRow, rejections []RejectionRow, jobs []Recomp
 	for i, job := range jobs {
 		jobItems[i] = recomputeJobPyJSON(job)
 	}
+	// _batch_to_recompute_response raises here on a scope it cannot read.
+	scope, err := recomputeScopeResponse(row.RecomputeScope)
+	if err != nil {
+		return nil, err
+	}
 	recompute := pyjson.NewObject()
 	recompute.Set("status", row.RecomputeStatus)
-	recompute.Set("scope", recomputeScopePyJSON(row.RecomputeScope))
+	recompute.Set("scope", scope)
 	recompute.Set("dispatchedAt", formatOptionalRFC3339(row.RecomputeDispatchedAt))
 	recompute.Set("completedAt", formatOptionalRFC3339(row.RecomputeCompletedAt))
 	recompute.Set("error", optionalStringValue(row.RecomputeError))
@@ -732,13 +692,17 @@ func batchStatusResponse(row *BatchRow, rejections []RejectionRow, jobs []Recomp
 	object.Set("createdAt", pytime.Pydantic(pytime.UTC(row.CreatedAt)))
 	object.Set("updatedAt", pytime.Pydantic(pytime.UTC(row.UpdatedAt)))
 	object.Set("completedAt", formatOptionalRFC3339(row.CompletedAt))
-	object.Set("errorSummary", row.ErrorSummary)
+	if row.ErrorSummary != nil {
+		object.Set("errorSummary", row.ErrorSummary)
+	} else {
+		object.Set("errorSummary", nil)
+	}
 	object.Set("errors", errs)
 	object.Set("errorsTotal", total)
 	object.Set("errorsLimit", limit)
 	object.Set("errorsOffset", offset)
 	object.Set("recompute", recompute)
-	return object
+	return object, nil
 }
 
 // formatOptionalRFC3339 formats a real Postgres timestamptz-sourced instant

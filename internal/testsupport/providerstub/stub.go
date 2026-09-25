@@ -119,7 +119,9 @@ type Fixture struct {
 	body []byte
 }
 
-func (f *Fixture) matches(provider, method, path string, query map[string][]string, header http.Header, body []byte, bodyComplete bool) bool {
+// matches reports whether the request selects this fixture. body is called at most once per request, and only when every other
+// selector already matched and this fixture has a body_contains: a fixture with no body selector never waits on the request body.
+func (f *Fixture) matches(provider, method, path string, query map[string][]string, header http.Header, body func() ([]byte, bool)) bool {
 	if f.Provider != provider || f.Method != method {
 		return false
 	}
@@ -138,12 +140,17 @@ func (f *Fixture) matches(provider, method, path string, query map[string][]stri
 		}
 	}
 	for name, want := range f.RequestHeaders {
-		if header.Get(name) != want { // exact value; Get canonicalizes the name
+		// exactly one value, like a query key: a repeated header must not smuggle a second value past the fixture.
+		// Values canonicalizes the name.
+		if got := header.Values(name); len(got) != 1 || got[0] != want {
 			return false
 		}
 	}
-	if f.BodyContains != "" && (!bodyComplete || !strings.Contains(string(body), f.BodyContains)) {
-		return false // a body longer than the read limit never matches: its tail is unseen
+	if f.BodyContains != "" {
+		raw, complete := body()
+		if !complete || !strings.Contains(string(raw), f.BodyContains) {
+			return false // a body that was cut short (over the limit or a read error) never matches: its tail is unseen
+		}
 	}
 	return true
 }
@@ -181,18 +188,32 @@ func (f *Fixture) validate(where string) error {
 		if name == "" || value == "" {
 			return fmt.Errorf("%s: request_headers needs a non-empty header name and value", where)
 		}
+		// net/http keeps these out of the request header map (Host in r.Host, the framing in r.TransferEncoding), so a
+		// fixture naming one could never match.
+		switch strings.ToLower(name) {
+		case "host", "transfer-encoding":
+			return fmt.Errorf("%s: request_headers cannot select on %q (net/http does not expose it as a header)", where, name)
+		}
 	}
 	return nil
 }
 
-// readMatchBody reads at most maxMatchBody bytes of the request body, and reports whether that was all of it.
-func readMatchBody(r *http.Request) ([]byte, bool) {
+// matchBodyTimeout bounds how long the stub waits for a request body it needs for a body_contains match.
+const matchBodyTimeout = 5 * time.Second
+
+// readMatchBody reads at most maxMatchBody bytes of the request body, and reports whether that was ALL of it: a read error
+// (a stalled or broken client, the read deadline) or a body over the limit reports false, so it never matches.
+func readMatchBody(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
 	if r.Body == nil {
 		return nil, true
 	}
-	raw, _ := io.ReadAll(io.LimitReader(r.Body, maxMatchBody+1))
-	if len(raw) > maxMatchBody {
-		return raw[:maxMatchBody], false
+	_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(matchBodyTimeout)) // best effort: not every writer supports it
+	raw, err := io.ReadAll(io.LimitReader(r.Body, maxMatchBody+1))
+	if err != nil || len(raw) > maxMatchBody {
+		if len(raw) > maxMatchBody {
+			raw = raw[:maxMatchBody]
+		}
+		return raw, false
 	}
 	return raw, true
 }
@@ -302,16 +323,28 @@ func (s *Stub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	var matched *Fixture
 	if provider != "" && safePath(r) {
-		// the request body is read (bounded) only to decide a body_contains match: never recorded, logged or echoed
-		body, complete := readMatchBody(r)
-		s.mu.Lock()
+		// the request body is read (bounded, with a deadline) only when a fixture that matches on everything else has a
+		// body_contains, and once per request: never recorded, logged or echoed. The fixture table is immutable after
+		// New/LoadDir, so no lock is held while a slow client sends its body.
+		var (
+			body     []byte
+			complete bool
+			read     bool
+		)
+		lazyBody := func() ([]byte, bool) {
+			if !read {
+				body, complete = readMatchBody(w, r)
+				read = true
+			}
+			return body, complete
+		}
+		query := r.URL.Query()
 		for _, fixture := range s.fixtures {
-			if fixture.matches(provider, r.Method, r.URL.Path, r.URL.Query(), r.Header, body, complete) {
+			if fixture.matches(provider, r.Method, r.URL.Path, query, r.Header, lazyBody) {
 				matched = fixture
 				break
 			}
 		}
-		s.mu.Unlock()
 	}
 	if matched == nil {
 		record.Status = 599

@@ -11,7 +11,7 @@ Every leaf value is tagged {"t": type, "v": string} so no bare JSON number or
 boolean reaches the comparison.
 """
 
-import asyncio
+import argparse
 import contextlib
 import io
 import json
@@ -33,10 +33,20 @@ TODAY = date(2026, 9, 25)
 utils_cli.utc_today = lambda: TODAY
 
 MANAGED_ENV = [
-    "CLICKHOUSE_URI", "POSTGRES_URI", "DATABASE_URI", "DATABASE_URL", "ORG_ID",
-    "GITHUB_TOKEN", "GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY_PATH",
-    "GITHUB_APP_INSTALLATION_ID", "GITHUB_URL", "GITHUB_BASE_URL",
-    "GITLAB_TOKEN", "GITLAB_URL", "DEV_HEALTH_ALLOW_SYNTHETIC_SYNC_RUN",
+    "CLICKHOUSE_URI",
+    "POSTGRES_URI",
+    "DATABASE_URI",
+    "DATABASE_URL",
+    "ORG_ID",
+    "GITHUB_TOKEN",
+    "GITHUB_APP_ID",
+    "GITHUB_APP_PRIVATE_KEY_PATH",
+    "GITHUB_APP_INSTALLATION_ID",
+    "GITHUB_URL",
+    "GITHUB_BASE_URL",
+    "GITLAB_TOKEN",
+    "GITLAB_URL",
+    "DEV_HEALTH_ALLOW_SYNTHETIC_SYNC_RUN",
 ]
 
 
@@ -52,7 +62,7 @@ def tag(value):
     return {"t": "str", "v": str(value)}
 
 
-_PARSERS = {}
+_PARSERS: dict[tuple[str | None, ...], argparse.ArgumentParser] = {}
 
 
 def fresh_parser():
@@ -81,14 +91,19 @@ def run_case(case, keyfile):
         with contextlib.redirect_stderr(err), contextlib.redirect_stdout(out):
             ns = parser.parse_args(["sync", *args])
     except SystemExit as exc:
-        return {"stage": tag("argparse"), "code": tag(exc.code if exc.code is not None else 0)}
+        return {
+            "stage": tag("argparse"),
+            "code": tag(exc.code if exc.code is not None else 0),
+        }
     # main(): _resolve_org, then the first-org lookup when no org resolved,
     # then the preflight. The lookup is the Postgres read this oracle replaces.
     devhops_cli._resolve_org(ns)
-    org_source = "flag" if ns.org_explicit else ("env" if ns.org is not None else "none")
+    org_source = (
+        "flag" if ns.org_explicit else ("env" if ns.org is not None else "none")
+    )
     if devhops_cli._should_resolve_org(ns):
-        devhops_cli._resolve_first_org_id = lambda db: "FIRST-ORG"
-        ns.org = devhops_cli._resolve_first_org_id(getattr(ns, "db", None))
+        # The first-organization lookup reads Postgres; the oracle answers it.
+        ns.org = "FIRST-ORG"
         org_source = "db-first"
     try:
         with contextlib.redirect_stderr(err), contextlib.redirect_stdout(out):
@@ -172,7 +187,11 @@ def run_case(case, keyfile):
     except BaseException as exc:  # a crash is a result, never a skip
         return {"stage": tag("crash"), "message": tag(type(exc).__name__)}
 
-    return {"stage": tag("ok"), "rc": tag(rc), "run": describe(recorded, ns, org_source)}
+    return {
+        "stage": tag("ok"),
+        "rc": tag(rc),
+        "run": describe(recorded, ns, org_source),
+    }
 
 
 def creds_view(credentials, db_lookup=False):
@@ -221,14 +240,24 @@ def describe(recorded, ns, org_source):
     }
     flags = {}
     for key in (
-        "sync_git", "sync_prs", "sync_cicd", "sync_deployments",
-        "sync_incidents", "sync_security", "sync_tests", "blame_only",
+        "sync_git",
+        "sync_prs",
+        "sync_cicd",
+        "sync_deployments",
+        "sync_incidents",
+        "sync_security",
+        "sync_tests",
+        "blame_only",
     ):
         flags[key] = tag(kw.get(key))
     if call in ("local_repo", "local_blame"):
         result["repo_path"] = tag(kw.get("repo_path"))
         # local_blame carries no flags; local_repo carries sync_git/sync_prs only.
-        flags = {k: tag(kw.get(k)) for k in ("sync_git", "sync_prs")} if call == "local_repo" else {}
+        flags = (
+            {k: tag(kw.get(k)) for k in ("sync_git", "sync_prs")}
+            if call == "local_repo"
+            else {}
+        )
     result["flags"] = flags
     if call == "github_single":
         result["owner"] = tag(kw.get("owner"))
@@ -236,9 +265,18 @@ def describe(recorded, ns, org_source):
         result["max_commits"] = tag(kw.get("max_commits"))
         cred = creds_view(kw.get("credentials"), recorded.get("db_lookup", False))
     elif call == "github_batch":
-        for key in ("org_name", "user_name", "pattern", "batch_size", "max_concurrent",
-                    "rate_limit_delay", "max_repos", "use_async", "max_commits_per_repo",
-                    "backfill_missing"):
+        for key in (
+            "org_name",
+            "user_name",
+            "pattern",
+            "batch_size",
+            "max_concurrent",
+            "rate_limit_delay",
+            "max_repos",
+            "use_async",
+            "max_commits_per_repo",
+            "backfill_missing",
+        ):
             result[key] = tag(kw.get(key))
         cred = creds_view(kw.get("token"), recorded.get("db_lookup", False))
     elif call == "gitlab_single":
@@ -248,9 +286,18 @@ def describe(recorded, ns, org_source):
         result["token"] = tag(kw.get("token"))
         cred = None
     elif call == "gitlab_batch":
-        for key in ("gitlab_url", "group_name", "pattern", "batch_size", "max_concurrent",
-                    "rate_limit_delay", "max_projects", "use_async", "max_commits_per_project",
-                    "backfill_missing"):
+        for key in (
+            "gitlab_url",
+            "group_name",
+            "pattern",
+            "batch_size",
+            "max_concurrent",
+            "rate_limit_delay",
+            "max_projects",
+            "use_async",
+            "max_commits_per_project",
+            "backfill_missing",
+        ):
             result[key] = tag(kw.get(key))
         result["token"] = tag(kw.get("token"))
         cred = None

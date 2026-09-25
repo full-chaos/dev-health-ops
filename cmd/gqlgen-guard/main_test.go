@@ -118,7 +118,7 @@ func newGeneratableFixture(t *testing.T) string {
 		if err != nil {
 			t.Fatalf("read %s: %v", name, err)
 		}
-		write(t, dir, name, string(data))
+		write(t, dir, name, withoutVendoredAtlassian(name, string(data)))
 	}
 	write(t, dir, "gqlgen.yml", fixtureConfig)
 	write(t, dir, "schema.graphql", fixtureSchema)
@@ -776,4 +776,23 @@ func TestGenerateVerbAndItsFlagAreWiredToWhatTheyDocument(t *testing.T) {
 			t.Fatalf("generate -revert-recorded did not write a fresh generation:\n got:\n%s\nwant:\n%s", got, freshGenerated)
 		}
 	})
+}
+
+// withoutVendoredAtlassian drops the require and replace of the vendored
+// atlassian client (third_party/vendor/atlassian, a nested module the fixture
+// does not carry) from a copy of the repository's go.mod: the fixture imports
+// nothing from it, and the guard refuses a replace it cannot resolve inside
+// the copy.
+func withoutVendoredAtlassian(name, content string) string {
+	if name != "go.mod" {
+		return content
+	}
+	var kept []string
+	for _, line := range strings.Split(content, "\n") {
+		if strings.Contains(line, "atlassian") {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	return strings.Join(kept, "\n")
 }

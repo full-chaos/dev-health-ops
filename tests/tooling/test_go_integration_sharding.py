@@ -170,6 +170,12 @@ EXPECTED_PACKAGES = {
     # on databases the real Python upgrade built -- only a real engine can
     # build either side.
     "internal/admincli",
+    # CHAOS-6466: the Atlassian Teams sync writes the team dimensions against a
+    # real ClickHouse (manual members and project keys carried over, the
+    # project-as-team rows untouched, a re-run).
+    "internal/atlassianteams",
+    # CHAOS-6466: the `dho sync teams` verb end to end against a real ClickHouse.
+    "internal/synccli",
     "internal/apiservice/admin",
     # The billing venue oracles (plans, checkout, portal, ledger, the Stripe
     # webhook) in a package of their own, out of internal/apiservice's venue

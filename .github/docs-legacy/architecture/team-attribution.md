@@ -121,6 +121,24 @@ at `unassigned` usually means the ClickHouse `teams` dimension is empty.
 | 6 | `manual_fallback` | `manual_attribution_fallbacks` (repo/project/member/issue_key_prefix) | manual\|low | 7 only | 0–5 | `scope_type, scope_id, reason` |
 | 7 | `unassigned` | — (nothing matched) | none | — (floor) | — | `reason` |
 
+### 0.2a Atlassian Teams (Jira) — real teams beside the project-as-team fallback
+
+Jira has two team models and both live in ClickHouse under `provider = 'jira'`:
+
+| | Project-as-team (fallback) | Atlassian Teams (real teams) |
+|---|---|---|
+| Written by | the Jira team catalog / auto-import | `dho sync teams --provider jira` (`internal/atlassianteams`) |
+| `teams.id` | the Jira project key (`PLAT`) | the uuid of the team's ARI (`ari:cloud:identity::team/<uuid>`), `native_team_key` = the full ARI |
+| Members (`team_memberships`, `source = 'native'`) | the project lead only, 100/10 | every `TEAM_MEMBER` of the team from the Teamwork Graph (`member_id = jira:<lower(accountId)>`, the same id the auto-import uses), 100/10 |
+| Project ownership (`team_project_ownership`, `source = 'native'`) | the project itself, specificity 100, priority 10 | the team's active projects, **specificity 110, priority 10** |
+
+`project_ownership` candidates rank by `is_primary`, then `specificity` (higher first), then `priority` (lower
+first) (`RankDerivationCandidates`). An Atlassian team that works on a project therefore **outranks** the project
+standing in for a team (110 over 100); the project-as-team row stays as the fallback for projects no Atlassian team
+claims. The two id spaces cannot collide (a project key is not a uuid), and the sync never writes the project-as-team
+rows. The source is the existing `native` enum value: `team_*.source` has no room for another value without a
+ClickHouse migration (rule 4.1 above). Asserted by `TestAnAtlassianTeamOutranksTheProjectAsTeamOwnerInTheCascade`.
+
 ### 0.3 Off-the-rails matrix (symptom → diagnosis → fix)
 
 | Symptom | Likely stage | Diagnose | Fix |

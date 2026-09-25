@@ -41,6 +41,9 @@ ENV CGO_ENABLED=0 \
 WORKDIR /src
 
 COPY go.mod go.sum ./
+# go.mod replaces the atlassian client with this vendored module (third_party/vendor/atlassian/PROVENANCE.md);
+# go mod download reads its go.mod, and the build compiles it.
+COPY third_party/vendor/atlassian ./third_party/vendor/atlassian
 # go mod download talks to proxy.golang.org over the network; a transient
 # proxy-side error should not fail the whole image build, so retry a
 # bounded number of times before giving up.

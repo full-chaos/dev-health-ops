@@ -191,7 +191,7 @@ func unixField(value pyjson.Value, name string) *time.Time {
 // invoiceEvent is the invoice branch. An error is infrastructure (the
 // database): the route answers 500 so Stripe retries. Everything the
 // payload decides is logged and answered 200.
-func (h handlers) invoiceEvent(ctx context.Context, eventType string, eventID pyjson.Value, invoice pyjson.Value) error {
+func (h handlers) invoiceEvent(ctx context.Context, eventType string, eventID pyjson.Value, created int64, invoice pyjson.Value) error {
 	stripeInvoiceID := invoiceString(invoice, "id")
 	if stripeInvoiceID == "" {
 		h.logger.WarnContext(ctx, "Skipping invoice webhook event without an invoice id", "type", eventType)
@@ -222,6 +222,9 @@ func (h handlers) invoiceEvent(ctx context.Context, eventType string, eventID py
 	now := h.nowUTC()
 	var org uuid.UUID
 	resolved, applied := false, false
+	// The email intent this event asks for: written with the invoice state,
+	// handed to the outbox after the commit.
+	var handoff *billingIntent
 	err := h.inTxFunc(ctx, func(tx pgx.Tx) error {
 		// The stored subscription is the link whatever names the org.
 		var localSubscription *uuid.UUID
@@ -272,8 +275,31 @@ func (h handlers) invoiceEvent(ctx context.Context, eventType string, eventID py
 			return nil
 		}
 		var err error
-		applied, err = h.upsertInvoice(ctx, tx, eventType, invoice, lines, hasLines, stripeInvoiceID, org, localSubscription, customer, metadata, now)
-		return err
+		applied, err = h.upsertInvoice(ctx, tx, eventType, created, invoice, lines, hasLines, stripeInvoiceID, org, localSubscription, customer, metadata, now)
+		if err != nil {
+			return err
+		}
+		intent, wanted, err := invoiceIntent(eventType, eventID, invoice, org)
+		if err != nil || !wanted {
+			return err
+		}
+		if applied {
+			if err := h.insertBillingIntent(ctx, tx, &intent); err != nil {
+				return err
+			}
+			handoff = &intent
+			return nil
+		}
+		// Not applied (older than the stored state): an intent this event
+		// already wrote on an earlier delivery is handed off again, so a
+		// failed handoff is never lost; an event never applied writes none.
+		switch err := tx.QueryRow(ctx, `SELECT id FROM billing_notifications WHERE idempotency_key = $1`, intent.key).Scan(&intent.id); {
+		case err == nil:
+			handoff = &intent
+		case !errors.Is(err, pgx.ErrNoRows):
+			return err
+		}
+		return nil
 	})
 	if err != nil {
 		return err
@@ -283,22 +309,29 @@ func (h handlers) invoiceEvent(ctx context.Context, eventType string, eventID py
 			"invoice", stripeInvoiceID, "customer", customer)
 		return nil
 	}
-	if !applied {
-		// An event older than the stored status queues nothing either.
+	if applied {
+		h.logger.InfoContext(ctx, "Invoice webhook event applied", "type", eventType, "invoice", stripeInvoiceID, "org_id", org.String())
+	}
+	if handoff == nil {
 		return nil
 	}
-	h.logger.InfoContext(ctx, "Invoice webhook event applied", "type", eventType, "invoice", stripeInvoiceID, "org_id", org.String())
-	return h.invoiceNotification(ctx, eventType, eventID, invoice, org)
+	if err := h.publishBillingIntent(ctx, *handoff); err != nil {
+		h.logger.ErrorContext(ctx, "Failed to hand off invoice email; answering 500 so Stripe retries", "type", handoff.kind,
+			"org_id", org.String(), "error", err.Error())
+		return err
+	}
+	return nil
 }
 
 // upsertInvoice writes the invoice row (status forward only) and, for the
 // events that carry them, its line items; applied is false for an event
 // older than the stored status, which writes nothing.
-func (h handlers) upsertInvoice(ctx context.Context, tx pgx.Tx, eventType string, invoice pyjson.Value, lines []pyjson.Value, hasLines bool, stripeInvoiceID string,
+func (h handlers) upsertInvoice(ctx context.Context, tx pgx.Tx, eventType string, created int64, invoice pyjson.Value, lines []pyjson.Value, hasLines bool, stripeInvoiceID string,
 	org uuid.UUID, subscription *uuid.UUID, customer string, metadata *pyjson.Object, now time.Time) (applied bool, err error) {
 	var invoiceID uuid.UUID
 	var storedStatus string
 	var storedPaidAt, storedVoidedAt *time.Time
+	var storedCreated *int64
 	found := true
 	// One event per invoice at a time: FOR UPDATE cannot lock a row that
 	// is not there yet, so two first deliveries would both see none and the
@@ -306,8 +339,8 @@ func (h handlers) upsertInvoice(ctx context.Context, tx pgx.Tx, eventType string
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('stripe_invoice:' || $1, 0))`, stripeInvoiceID); err != nil {
 		return false, err
 	}
-	switch err := tx.QueryRow(ctx, `SELECT id, status, paid_at, voided_at FROM invoices WHERE stripe_invoice_id = $1 FOR UPDATE`,
-		stripeInvoiceID).Scan(&invoiceID, &storedStatus, &storedPaidAt, &storedVoidedAt); {
+	switch err := tx.QueryRow(ctx, `SELECT id, status, paid_at, voided_at, last_event_created FROM invoices WHERE stripe_invoice_id = $1 FOR UPDATE`,
+		stripeInvoiceID).Scan(&invoiceID, &storedStatus, &storedPaidAt, &storedVoidedAt, &storedCreated); {
 	case errors.Is(err, pgx.ErrNoRows):
 		found = false
 	case err != nil:
@@ -328,6 +361,13 @@ func (h handlers) upsertInvoice(ctx context.Context, tx pgx.Tx, eventType string
 		if invoiceStatusRank(status) < 2 {
 			status = "payment_failed"
 		}
+	}
+	// Event time first: an event created before the newest one applied
+	// changes nothing (one second apart or less: delivery order).
+	if found && created != 0 && storedCreated != nil && created < *storedCreated {
+		h.logger.InfoContext(ctx, "Invoice webhook event older than the newest applied event; not applied",
+			"type", eventType, "invoice", stripeInvoiceID, "event_created", created, "applied_created", *storedCreated)
+		return false, nil
 	}
 	if found && !invoiceStatusFollows(storedStatus, status) {
 		h.logger.InfoContext(ctx, "Invoice webhook event older than the stored status; not applied",
@@ -377,8 +417,8 @@ func (h handlers) upsertInvoice(ctx context.Context, tx pgx.Tx, eventType string
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO invoices (id, org_id, subscription_id, stripe_invoice_id, stripe_customer_id, status,
 		amount_due, amount_paid, amount_remaining, currency, period_start, period_end, hosted_invoice_url, pdf_url,
-		payment_intent_id, finalized_at, paid_at, voided_at, attempt_count, metadata, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20::json, $21, $21)
+		payment_intent_id, finalized_at, paid_at, voided_at, attempt_count, metadata, created_at, updated_at, last_event_created)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20::json, $21, $21, $22)
 		ON CONFLICT (stripe_invoice_id) DO UPDATE SET org_id = EXCLUDED.org_id, subscription_id = EXCLUDED.subscription_id,
 		stripe_customer_id = EXCLUDED.stripe_customer_id, status = EXCLUDED.status, amount_due = EXCLUDED.amount_due,
 		amount_paid = EXCLUDED.amount_paid, amount_remaining = EXCLUDED.amount_remaining, currency = EXCLUDED.currency,
@@ -386,11 +426,12 @@ func (h handlers) upsertInvoice(ctx context.Context, tx pgx.Tx, eventType string
 		hosted_invoice_url = EXCLUDED.hosted_invoice_url, pdf_url = EXCLUDED.pdf_url,
 		payment_intent_id = COALESCE(EXCLUDED.payment_intent_id, invoices.payment_intent_id),
 		finalized_at = EXCLUDED.finalized_at, paid_at = EXCLUDED.paid_at, voided_at = EXCLUDED.voided_at,
-		attempt_count = EXCLUDED.attempt_count, metadata = EXCLUDED.metadata, updated_at = EXCLUDED.updated_at`,
+		attempt_count = EXCLUDED.attempt_count, metadata = EXCLUDED.metadata, updated_at = EXCLUDED.updated_at,
+		last_event_created = GREATEST(invoices.last_event_created, EXCLUDED.last_event_created)`,
 		invoiceID, org, subscription, stripeInvoiceID, customer, status,
 		intField(invoice, "amount_due", 0), intField(invoice, "amount_paid", 0), amountRemaining, currency,
 		unixField(invoice, "period_start"), unixField(invoice, "period_end"), hosted, pdf, paymentIntent,
-		unixField(transitions, "finalized_at"), paidAt, voidedAt, intField(invoice, "attempt_count", 0), metadataText, now); err != nil {
+		unixField(transitions, "finalized_at"), paidAt, voidedAt, intField(invoice, "attempt_count", 0), metadataText, now, eventCreated(created)); err != nil {
 		return false, err
 	}
 	if !hasLines {
@@ -425,12 +466,11 @@ func (h handlers) upsertInvoice(ctx context.Context, tx pgx.Tx, eventType string
 	return true, nil
 }
 
-// invoiceNotification queues invoice_receipt for invoice.paid and
-// payment_failed for invoice.payment_failed, keyed by the event id. A
-// failure is returned, so the route answers 500 and Stripe retries: the
-// invoice state is already committed, the retry writes the same state, and
-// the event-id key keeps the intent single.
-func (h handlers) invoiceNotification(ctx context.Context, eventType string, eventID pyjson.Value, invoice pyjson.Value, org uuid.UUID) error {
+// invoiceIntent is the email intent an invoice event asks for:
+// invoice_receipt for invoice.paid and payment_failed for
+// invoice.payment_failed, keyed by the event id (wanted is false for any
+// other type).
+func invoiceIntent(eventType string, eventID pyjson.Value, invoice pyjson.Value, org uuid.UUID) (billingIntent, bool, error) {
 	attributes := pyjson.NewObject()
 	var notificationType string
 	currency := invoiceString(invoice, "currency")
@@ -453,15 +493,20 @@ func (h handlers) invoiceNotification(ctx context.Context, eventType string, eve
 		attributes.Set("currency", currency)
 		attributes.Set("attempt_count", pyjson.IntOf(attempts))
 	default:
-		return nil
+		return billingIntent{}, false, nil
 	}
 	eventText, _ := eventID.(string)
-	if err := h.enqueueBillingNotificationFor(ctx, notificationType, org.String(), eventText, attributes); err != nil {
-		h.logger.ErrorContext(ctx, "Failed to enqueue invoice email; answering 500 so Stripe retries", "type", notificationType,
-			"org_id", org.String(), "error", err.Error())
-		return err
+	intent, err := newBillingIntent(notificationType, org.String(), eventText, attributes)
+	return intent, err == nil, err
+}
+
+// eventCreated is the event's created time for last_event_created (NULL
+// when the event carries none).
+func eventCreated(created int64) *int64 {
+	if created == 0 {
+		return nil
 	}
-	return nil
+	return &created
 }
 
 // rowQuerier is what the org lookups read through: a pool or a transaction.

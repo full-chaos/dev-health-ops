@@ -159,6 +159,9 @@ func TestSubscriptionEventsResolveTheOwningOrg(t *testing.T) {
 			WHERE org_id = '`+orgA+`' AND notification_type IN ('subscription_cancelled', 'trial_expiring')`, "subscription_cancelled,trial_expiring")
 	expect("one trial email per trial event, a redelivery included",
 		`SELECT count(*)::text FROM billing_notifications WHERE org_id = '`+orgA+`' AND notification_type = 'trial_expiring'`, "2")
+	expect("each trial email handed to the job outbox",
+		`SELECT count(*)::text FROM billing_notifications n JOIN worker_job_outbox o ON o.dedupe_key = n.idempotency_key
+			WHERE n.org_id = '`+orgA+`' AND n.notification_type = 'trial_expiring'`, "2")
 	expect("the late update is recorded, not applied",
 		`SELECT count(*)::text || ' ' || min(new_status) FROM subscription_events WHERE stripe_event_id = 'evt_own_late'`, "1 canceled")
 	expect("one cancellation notification despite the redelivery",

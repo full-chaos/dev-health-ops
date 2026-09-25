@@ -291,7 +291,10 @@ func parseString(text string) (DateTime, *ValidationError) {
 		return parsed, failure
 	}
 	if parsed, ok := parseFull(text); ok {
-		if parsed.Time.Year() == 0 {
+		// speedate's year is the one written in the text, the wall clock
+		// (Time is the UTC instant): 0001-01-01T00:00:00+05:00 is year 1, an
+		// instant in year 0 that Python's datetime accepts.
+		if parsed.Time.Add(time.Duration(parsed.Offset)*time.Second+time.Duration(parsed.OffsetMicro)*time.Microsecond).Year() == 0 {
 			return DateTime{}, &ValidationError{"datetime_parsing", parsingPrefix + "year 0 is out of range"}
 		}
 		return parsed, nil

@@ -537,3 +537,23 @@ func TestRequestLogCarriesTheHostAndPathShape(t *testing.T) {
 		t.Fatalf("log line carries a value: %s", lines[0])
 	}
 }
+
+func TestCredentialTestFixturesAnswerEachCaseOnTheRightProvider(t *testing.T) {
+	fixtures, err := LoadDir("fixtures")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		host, target string
+		want         int
+	}{
+		{"api.github.com", "/c/ok/user", 200}, {"api.github.com", "/c/401/user", 401}, {"api.github.com", "/c/500/user", 500}, {"api.github.com", "/c/array/user", 200},
+		{"gitlab.com", "/c/ok/api/v4/user", 200}, {"gitlab.com", "/c/401/api/v4/user", 401},
+		{"zz-venue.atlassian.net", "/c/ok/rest/api/3/myself", 200}, {"zz-venue.atlassian.net", "/c/401/rest/api/3/myself", 401},
+		{"gitlab.com", "/c/ok/user", 599}, {"api.github.com", "/c/ok/api/v4/user", 599},
+	} {
+		if got := get(t, fixtures, tc.host, "GET", tc.target, nil); got.Code != tc.want {
+			t.Errorf("%s %s answered %d, want %d", tc.host, tc.target, got.Code, tc.want)
+		}
+	}
+}

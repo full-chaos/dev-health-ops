@@ -5,6 +5,7 @@ package admin_test
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"regexp"
 	"strings"
 	"testing"
@@ -162,8 +163,11 @@ VALUES ($1, $2, $3, 'team', 'r', '{}'::json, '{}'::json, 'success', now() - ($4 
 		get("list member refused", "", "member"),
 		{Name: "list unauthenticated", Method: "GET", Path: admin},
 		get("list 422 beats licence", "?limit=0", "comm"),
-		get("resource types", "/resource-types", "ent"),
+		// The entitled callers are a NAMED divergence (CHAOS-6809), run and
+		// asserted apart below: Python's decorator has no org to read and
+		// answers 402 to everyone, Go honours custom_retention.
 		get("resource types community", "/resource-types", "comm"),
+		get("resource types bogus licence tier", "/resource-types", "bogus"),
 		get("resource types superuser without org", "/resource-types", "super"),
 		get("resource types member", "/resource-types", "member"),
 		noBody("resource types post is 405", "POST", "/resource-types", "ent"),
@@ -291,6 +295,27 @@ VALUES ($1, $2, $3, 'team', 'r', '{}'::json, '{}'::json, 'success', now() - ($4 
 	)
 	python := venue.ServePython(t, requests)
 	goBase, goPool := startGoServer(t, ctx, venue, jwtKey)
+
+	// CHAOS-6809, the named divergence: an org that holds custom_retention
+	// (an enterprise licence, a feature override, or the tier alone) gets the
+	// resource types from Go; Python answers every admin 402 because the
+	// route's decorator cannot see the org.
+	entitled := []venueoracle.Request{
+		get("resource types enterprise", "/resource-types", "ent"),
+		get("resource types override grants", "/resource-types", "ovr"),
+		get("resource types tier only", "/resource-types", "tier"),
+	}
+	pythonEntitled := venue.ServePython(t, entitled)
+	const wantResourceTypes = `["audit_logs","metrics_daily","work_items","git_commits","sync_logs"]`
+	for i, request := range entitled {
+		if pythonEntitled[i].Status != http.StatusPaymentRequired {
+			t.Errorf("%s: Python answered %d %s, want its 402 (the defect this divergence names)", request.Name, pythonEntitled[i].Status, pythonEntitled[i].Body)
+		}
+		goResponse := venueoracle.Do(t, goBase, request)
+		if goResponse.Status != http.StatusOK || goResponse.Body != wantResourceTypes {
+			t.Errorf("%s: Go answered %d %s, want 200 %s", request.Name, goResponse.Status, goResponse.Body, wantResourceTypes)
+		}
+	}
 
 	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{
 		Inspect: func(request venueoracle.Request, response venueoracle.Response) {

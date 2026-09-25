@@ -61,13 +61,15 @@ var reachableModes = map[string]bool{
 //     Mux.Dispatch(operation, w, r) doesn't carry one either. Wiring the
 //     exact registered-document-identity contract end to end is a later
 //     wave's job, when Mux is actually mounted on a live route.
-//  2. eligible_orgs / rollout_percentage are NOT enforced. Enabled has no
-//     org/tenant argument (same interface constraint as #1), so a
-//     `canary` row scoped to specific orgs or a partial rollout
-//     percentage is currently treated as fully enabled for every caller.
-//     Real per-tenant gradual rollout requires threading the request's
-//     org through Enabled, which is exactly the interface change #1 also
-//     needs -- both wait for the same later wave.
+//  2. eligible_orgs / rollout_percentage are inert BY DESIGN (CHAOS-6807).
+//     Enabled has no org/tenant argument, the Python edge dispatcher that
+//     decides delegation does not enforce them either, and the delegated
+//     operations have no Python resolver for an org outside a cohort to
+//     fall back to (that org would get an error, not Python's answer). So
+//     canary and primary are both "on for every authenticated org,
+//     revocable only by mode"; a row recording a cohort or a partial
+//     rollout is served to everyone. `dho goapi routing enable` refuses
+//     such a row and `status` flags one that exists (`not_enforced`).
 //  3. current_candidate_build is NOT bound to reachability. Enabled
 //     answers "is this operation's mode canary/primary", not "is THIS
 //     candidate build the one currently live" -- which build actually

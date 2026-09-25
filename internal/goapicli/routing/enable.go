@@ -61,7 +61,7 @@ func runEnable(argv []string) error {
 	set.StringVar(&common.recordedBy, "recorded-by", "", "WHO is running this, recorded on every row touched (required)")
 	set.StringVar(&common.reviewEvidence, "review-evidence", "", "WHY, in your own words, recorded on every row touched (required)")
 	set.StringVar(&mode, "mode", "", "routing mode: canary or primary. Only these two make an operation reachable, so they are the only ones an 'enable' verb offers (required)")
-	set.IntVar(&rollout, "rollout", 100, "rollout_percentage written to the row. NOTE: neither plane enforces this yet -- canary means 'on for everyone, revocable'. Recorded, not obeyed")
+	set.IntVar(&rollout, "rollout", goapiproof.EnforcedRolloutPercentage, "rollout_percentage written to the row. Only 100 is accepted: neither plane enforces rollout_percentage or eligible_orgs, so canary and primary both mean 'on for every authenticated org, revocable only by mode'")
 	set.StringVar(&expectBuild, "expect-build", "", "optional CROSS-CHECK: fail if the running build is not this sha. Never the source of the value written")
 	set.BoolVar(&dryRun, "dry-run", false, "run every preflight and write NOTHING")
 	set.DurationVar(&common.timeout, "timeout", 30*time.Second, "bounds EACH HTTP request, the Postgres dial, and EACH database statement (server-side statement_timeout/lock_timeout) -- never the run as a whole")
@@ -70,6 +70,9 @@ func runEnable(argv []string) error {
 	}
 	if err := common.requirePositiveTimeout(); err != nil {
 		return err
+	}
+	if rollout != goapiproof.EnforcedRolloutPercentage {
+		return refuse("%v", goapiproof.ErrRolloutNotEnforced(rollout))
 	}
 	if mode == "" {
 		return refuse("-mode is required and must be one of %v", goapiproof.EnableModes)

@@ -19,9 +19,11 @@ package goapiproof
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -66,10 +68,12 @@ type OperationStatus struct {
 	Mode                  string
 	CurrentCandidateBuild string
 	RolloutPercentage     *int
-	Owner                 string
-	UpdatedAt             *time.Time
-	ReviewEvidence        string
-	RecordedBy            string
+	// EligibleOrgs is the row's eligible_orgs column as text (nil = SQL NULL).
+	EligibleOrgs   *string
+	Owner          string
+	UpdatedAt      *time.Time
+	ReviewEvidence string
+	RecordedBy     string
 
 	StaleDigests []string
 	Proven       bool
@@ -114,6 +118,55 @@ type OperationStatus struct {
 	// be reached by anything. It is now STALE, and its digest is named
 	// here.
 	UnreachableDocumentDigests []string
+}
+
+// UnenforcedControls names the routing controls a REACHABLE row carries that
+// no plane obeys (CHAOS-6807): a rollout_percentage other than 100 and a
+// non-empty eligible_orgs. canary and primary are both "on for every
+// authenticated org, revocable only by mode": neither the Python edge
+// dispatcher nor PostgresSwitch.Enabled receives an org, and the operations
+// have no Python resolver to fall back to, so a cohort could not be honoured
+// even if one were named. A row that is not reachable (python, disabled,
+// shadow, or no live row) has no such claim to make. NULL, JSON null, [] and
+// {} record no allowlist.
+func (s OperationStatus) UnenforcedControls() []string {
+	controls := []string{}
+	if s.DigestState != DigestMatch || !s.Reachable() {
+		return controls
+	}
+	if s.RolloutPercentage != nil && *s.RolloutPercentage != EnforcedRolloutPercentage {
+		controls = append(controls, fmt.Sprintf("rollout_percentage=%d", *s.RolloutPercentage))
+	}
+	if s.EligibleOrgs != nil && !eligibleOrgsIsEmpty(*s.EligibleOrgs) {
+		controls = append(controls, "eligible_orgs="+strings.TrimSpace(*s.EligibleOrgs))
+	}
+	return controls
+}
+
+// eligibleOrgsIsEmpty reports whether an eligible_orgs column value records no
+// allowlist: SQL text of NULL, JSON null, an empty array or an empty object,
+// however the json column spells them (it keeps insignificant whitespace, so
+// `[ ]` is as empty as `[]`). The value is read as JSON, not compared as text.
+// Text that is not JSON at all is not empty: better a false warning than a
+// hidden cohort.
+func eligibleOrgsIsEmpty(text string) bool {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return true
+	}
+	var decoded any
+	if err := json.Unmarshal([]byte(trimmed), &decoded); err != nil {
+		return false
+	}
+	switch value := decoded.(type) {
+	case nil:
+		return true
+	case []any:
+		return len(value) == 0
+	case map[string]any:
+		return len(value) == 0
+	}
+	return false
 }
 
 // Reachable reports whether a real request would be served by Go right
@@ -166,6 +219,7 @@ type routingStateRow struct {
 	owner          string
 	mode           string
 	rollout        int
+	eligibleOrgs   *string
 	reviewEvidence string
 	recordedBy     string
 	updatedAt      time.Time
@@ -205,7 +259,7 @@ func RoutingStatusRows(ctx context.Context, db Querier, liveSchemaDigest, pendin
 
 	rows, err := db.Query(ctx, `
 		SELECT schema_digest, document_digest, selected_operation, current_candidate_build,
-		       owner, mode, rollout_percentage,
+		       owner, mode, rollout_percentage, eligible_orgs::text,
 		       COALESCE(review_evidence, ''), COALESCE(recorded_by, ''), updated_at
 		  FROM public.go_api_routing_state`)
 	if err != nil {
@@ -215,7 +269,7 @@ func RoutingStatusRows(ctx context.Context, db Querier, liveSchemaDigest, pendin
 	for rows.Next() {
 		var row routingStateRow
 		if err := rows.Scan(&row.schemaDigest, &row.documentDigest, &row.operation, &row.candidateBuild,
-			&row.owner, &row.mode, &row.rollout, &row.reviewEvidence, &row.recordedBy, &row.updatedAt); err != nil {
+			&row.owner, &row.mode, &row.rollout, &row.eligibleOrgs, &row.reviewEvidence, &row.recordedBy, &row.updatedAt); err != nil {
 			rows.Close()
 			return nil, fmt.Errorf("goapiproof: scan routing row: %w", err)
 		}
@@ -349,6 +403,7 @@ func RoutingStatusRows(ctx context.Context, db Querier, liveSchemaDigest, pendin
 			status.Mode = row.mode
 			status.CurrentCandidateBuild = row.candidateBuild
 			status.RolloutPercentage = &rollout
+			status.EligibleOrgs = row.eligibleOrgs
 			status.Owner = row.owner
 			status.UpdatedAt = &updatedAt
 			status.ReviewEvidence = row.reviewEvidence

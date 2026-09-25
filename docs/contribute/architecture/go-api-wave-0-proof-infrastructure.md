@@ -200,6 +200,23 @@ including the rollback direction: flipping `mode` away from
 separate deploy (plan §5: "rollback is a registry change, not an image
 rollback").
 
+### `canary` and `primary` are the same reachability
+
+`eligible_orgs` and `rollout_percentage` on a routing row are inert: no plane
+reads them. `Enabled(operation)` takes no organisation, the Python edge
+dispatcher that decides delegation does not enforce them either, and the
+delegated operations have no Python resolver for an organisation outside a
+cohort to fall back to (that organisation would get an error, not Python's
+answer). So `canary` and `primary` both mean *on for every authenticated
+organisation, revocable only by mode* (`python` or `disabled` turn an
+operation off; `shadow` is not reachable). `dho goapi routing enable`
+refuses any `-rollout` other than 100, and `dho goapi routing status`
+names a reachable row that still records a partial rollout or a non-empty
+`eligible_orgs` (`not_enforced` in the JSON, `!! NOT ENFORCED` in the text).
+A real staged rollout would need the organisation threaded through
+`Enabled` and a served answer for the organisations outside the cohort; that
+is a new design, not a flag.
+
 ## Canonical SDL pin
 
 `contracts/graphql/v1/schema.graphql` is the CI-checked export of the

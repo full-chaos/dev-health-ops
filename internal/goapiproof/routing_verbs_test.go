@@ -217,6 +217,8 @@ func TestEnableRequestRefusesAnUnreachableMode(t *testing.T) {
 		RecordedBy:     "who",
 		ReviewEvidence: "why",
 		PrincipalID:    "user-1",
+		// A valid rollout, so only the mode decides below (CHAOS-6807).
+		RolloutPercentage: EnforcedRolloutPercentage,
 	}
 	for _, mode := range []string{"", "shadow", "python", "disabled", "PRIMARY"} {
 		request := base
@@ -247,6 +249,13 @@ func TestEnableRequestRefusesAWriteWithNoDurableRecord(t *testing.T) {
 		RecordedBy:     "who",
 		ReviewEvidence: "why",
 		PrincipalID:    "user-1",
+		// The one rollout the request accepts (CHAOS-6807); left at the zero
+		// value the base itself would be refused and every case below would
+		// pass for that reason alone.
+		RolloutPercentage: EnforcedRolloutPercentage,
+	}
+	if err := base.validate(); err != nil {
+		t.Fatalf("the base request must be valid for the refusals below to mean anything: %v", err)
 	}
 	for name, mutate := range map[string]func(*EnableRequest){
 		"no recorded-by":     func(r *EnableRequest) { r.RecordedBy = "" },
@@ -257,6 +266,10 @@ func TestEnableRequestRefusesAWriteWithNoDurableRecord(t *testing.T) {
 		"no document digest": func(r *EnableRequest) { r.DocumentDigest = nil },
 		"rollout above 100":  func(r *EnableRequest) { r.RolloutPercentage = 101 },
 		"negative rollout":   func(r *EnableRequest) { r.RolloutPercentage = -1 },
+		// CHAOS-6807: no plane obeys a partial rollout, so none is recorded.
+		"rollout 0":  func(r *EnableRequest) { r.RolloutPercentage = 0 },
+		"rollout 50": func(r *EnableRequest) { r.RolloutPercentage = 50 },
+		"rollout 99": func(r *EnableRequest) { r.RolloutPercentage = 99 },
 		// CHAOS-5505: the audit row must name WHO THE CREDENTIAL SAYS is
 		// acting, which is not the same question as -recorded-by.
 		"no principal id": func(r *EnableRequest) { r.PrincipalID = "" },
@@ -546,14 +559,20 @@ func TestEveryEnableRequestRefusalCarriesTheRefusalSentinel(t *testing.T) {
 		})
 	}
 
-	// The boundaries either side of the rollout range still pass, so the
-	// guard is pinned as a RANGE rather than as "not 100".
-	for _, rollout := range []int{0, 1, 99, 100} {
+	// Only 100 passes: canary and primary are "on for every authenticated
+	// org", and no plane obeys a smaller rollout (CHAOS-6807).
+	for _, rollout := range []int{0, 1, 50, 99} {
 		request := valid
 		request.RolloutPercentage = rollout
-		if err := request.validate(); err != nil {
-			t.Fatalf("rollout %d was refused: %v", rollout, err)
+		err := request.validate()
+		if err == nil || !errors.Is(err, ErrEnableRequestRefused) || !strings.Contains(err.Error(), "neither plane enforces") {
+			t.Fatalf("rollout %d: err = %v, want the named not-enforced refusal", rollout, err)
 		}
+	}
+	request := valid
+	request.RolloutPercentage = EnforcedRolloutPercentage
+	if err := request.validate(); err != nil {
+		t.Fatalf("rollout %d was refused: %v", EnforcedRolloutPercentage, err)
 	}
 }
 
@@ -643,6 +662,8 @@ func TestPrincipalIDAndRecordedByAreSeparateRequiredFields(t *testing.T) {
 		Mode:           "canary",
 		ReviewEvidence: "why",
 		PrincipalID:    "user-1",
+		// A valid rollout, so the refusals below are about the two identities.
+		RolloutPercentage: EnforcedRolloutPercentage,
 	}
 	if err := request.validate(); err == nil {
 		t.Fatal("a principal id must not stand in for -recorded-by")

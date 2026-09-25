@@ -474,6 +474,507 @@ async def test_reachable_modes_forward_and_serve_go_response(
     assert seen["body"] == original_bytes  # verbatim
 
 
+_IDENTITY_HEADERS = (
+    "x-dh-internal-org-id",
+    "x-dh-internal-role",
+    "x-dh-internal-superuser",
+    "x-dh-internal-impersonation-active",
+)
+
+
+def _capture_outbound(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    seen: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["url"] = str(request.url)
+        seen["headers"] = request.headers
+        return httpx.Response(200, json={"data": {"thing": {"id": "1"}}})
+
+    monkeypatch.setattr(
+        go_api_dispatcher, "_get_http_client", lambda: _mock_transport(handler)
+    )
+    monkeypatch.setattr(
+        go_api_dispatcher, "_get_internal_http_client", lambda: _mock_transport(handler)
+    )
+    return seen
+
+
+async def test_internal_url_set_sends_the_four_identity_headers_and_no_bearer(
+    router: GoApiDispatchRouter,
+    routing_row_mode,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """CHAOS-6144 P3: with QUERY_API_INTERNAL_URL set the edge states the
+    identity it authenticated as exactly the four internal headers, each once,
+    to the INTERNAL url, with NO Authorization (query-api refuses both
+    carriers) and no envelope minted (tier/licensed_features are not needed)."""
+    routing_row_mode("primary")
+    monkeypatch.setenv("QUERY_API_INTERNAL_URL", "http://query-api-internal:8091")
+
+    def _must_not_mint(*args, **kwargs):
+        raise AssertionError("the envelope must not be minted on the header carrier")
+
+    monkeypatch.setattr(
+        go_api_dispatcher, "issue_effective_principal_envelope", _must_not_mint
+    )
+    seen = _capture_outbound(monkeypatch)
+    context = _context(user=_sample_user(), tier=None, licensed_features=None)
+
+    result = await router._maybe_dispatch_to_go(_post_request(TEST_QUERY), context)
+
+    assert result is not None and result.status_code == 200
+    assert seen["url"] == "http://query-api-internal:8091/query"
+    headers = seen["headers"]
+    assert headers.get_list("x-dh-internal-org-id") == [
+        "11111111-1111-4111-8111-111111111111"
+    ]
+    assert headers.get_list("x-dh-internal-role") == ["admin"]
+    assert headers.get_list("x-dh-internal-superuser") == ["false"]
+    assert headers.get_list("x-dh-internal-impersonation-active") == ["false"]
+    assert headers.get("authorization") is None
+
+
+@pytest.mark.parametrize("value", [None, "", "   "])
+async def test_internal_url_unset_or_blank_is_todays_envelope_path(
+    router: GoApiDispatchRouter,
+    routing_row_mode,
+    valid_envelope_inputs,
+    monkeypatch: pytest.MonkeyPatch,
+    value: str | None,
+):
+    """The gate: unset (or blank) is unchanged behaviour: the signed envelope as
+    a bearer to GO_API_QUERY_API_URL, and none of the identity headers."""
+    routing_row_mode("primary")
+    if value is None:
+        monkeypatch.delenv("QUERY_API_INTERNAL_URL", raising=False)
+    else:
+        monkeypatch.setenv("QUERY_API_INTERNAL_URL", value)
+    seen = _capture_outbound(monkeypatch)
+    context = _context(user=_sample_user(), tier=LicenseTier.TEAM, licensed_features=[])
+
+    result = await router._maybe_dispatch_to_go(_post_request(TEST_QUERY), context)
+
+    assert result is not None and result.status_code == 200
+    assert seen["url"] == "http://query-api.test:8090/query"
+    assert seen["headers"].get("authorization") == "Bearer fake.envelope.jwt"
+    assert all(seen["headers"].get(name) is None for name in _IDENTITY_HEADERS)
+
+
+async def test_internal_url_alone_does_not_turn_the_dispatcher_on(
+    router: GoApiDispatchRouter,
+    routing_row_mode,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """GO_API_QUERY_API_URL stays the master kill switch."""
+    routing_row_mode("primary")
+    monkeypatch.delenv("GO_API_QUERY_API_URL")
+    monkeypatch.setenv("QUERY_API_INTERNAL_URL", "http://query-api-internal:8091")
+    seen = _capture_outbound(monkeypatch)
+    context = _context(user=_sample_user(), tier=LicenseTier.TEAM, licensed_features=[])
+
+    result = await router._maybe_dispatch_to_go(_post_request(TEST_QUERY), context)
+
+    assert result is None
+    assert "url" not in seen
+
+
+@pytest.mark.parametrize(
+    "internal_url",
+    [
+        "https://query-api-internal:8091",  # an Ingress host is https
+        "http://user:secret@query-api-internal:8091",  # userinfo
+        "http://query-api.example.com:8091",  # a public host
+        "http://query-api-internal:8091/path?x=1",  # query string
+        "http://query-api:8090",  # the origin of GO_API_QUERY_API_URL
+        "ftp://query-api-internal:8091",
+        "query-api-internal:8091",
+        # r2: what httpx contacts is not what the raw string says.
+        "http://attacker\u3002com:8091",  # U+3002 IDNA-normalises to attacker.com
+        "http://attacker\uff0ecom:8091",  # fullwidth full stop, same
+        "http://attacker\uff61com:8091",  # halfwidth ideographic full stop, same
+        "http://QUERY-API.:80",
+        "http://2130706433:8091",  # numeric IPv4 spelling of 127.0.0.1
+        "http://0x7f000001:8091",
+        "http://[::ffff:8.8.8.8]:8091",  # IPv4-mapped public address
+        "http://0.0.0.0:8091",  # unspecified
+        "http://a%2eb:8091",
+    ],
+)
+async def test_internal_url_not_provably_internal_is_refused_and_nothing_is_sent(
+    router: GoApiDispatchRouter,
+    routing_row_mode,
+    monkeypatch: pytest.MonkeyPatch,
+    internal_url: str,
+):
+    """The identity must never leave the cluster network: a QUERY_API_INTERNAL_URL
+    that is https, carries userinfo, names a public host or is the public
+    listener's own origin sends NOTHING and answers a typed, loud failure."""
+    routing_row_mode("primary")
+    monkeypatch.setenv("GO_API_QUERY_API_URL", "http://query-api:8090")
+    monkeypatch.setenv("QUERY_API_INTERNAL_URL", internal_url)
+    seen = _capture_outbound(monkeypatch)
+    context = _context(user=_sample_user(), tier=LicenseTier.TEAM, licensed_features=[])
+
+    result = await router._maybe_dispatch_to_go(_post_request(TEST_QUERY), context)
+
+    _assert_go_failure(result, reason="go_internal_url_refused")
+    assert "url" not in seen  # not one request was made
+
+
+@pytest.mark.parametrize(
+    ("internal_url", "sent"),
+    [
+        ("http://query-api-internal:8091", "http://query-api-internal:8091/query"),
+        ("http://query-api.dev-health.svc:8091", None),
+        ("http://query-api.dev-health.svc.cluster.local:8091", None),
+        ("http://10.1.2.3:8091", None),
+        ("http://127.0.0.1:8091", None),
+        ("http://[::ffff:10.1.2.3]:8091", None),
+        # What is validated is what is sent: httpx's normalised form.
+        ("http://Query-Api-Internal:8091", "http://query-api-internal:8091/query"),
+        ("http://query-api-internal:80", "http://query-api-internal/query"),
+    ],
+)
+async def test_internal_url_classes_that_are_allowed(
+    router: GoApiDispatchRouter,
+    routing_row_mode,
+    monkeypatch: pytest.MonkeyPatch,
+    internal_url: str,
+    sent: str | None,
+):
+    routing_row_mode("primary")
+    monkeypatch.setenv("QUERY_API_INTERNAL_URL", internal_url)
+    seen = _capture_outbound(monkeypatch)
+    context = _context(user=_sample_user(), tier=None, licensed_features=None)
+
+    result = await router._maybe_dispatch_to_go(_post_request(TEST_QUERY), context)
+
+    assert result is not None and result.status_code == 200
+    assert seen["url"] == (sent or f"{internal_url}/query")
+
+
+@pytest.mark.parametrize(
+    ("public_url", "internal_url"),
+    [
+        ("http://query-api", "http://query-api:80"),
+        ("http://query-api:80", "http://query-api"),
+        ("http://query-api:80", "http://QUERY-API:0080"),
+        ("http://Query-Api", "http://query-api:80/"),
+    ],
+)
+async def test_default_port_spelling_cannot_hide_the_public_origin(
+    router: GoApiDispatchRouter,
+    routing_row_mode,
+    monkeypatch: pytest.MonkeyPatch,
+    public_url: str,
+    internal_url: str,
+):
+    """r2: origins are compared after httpx normalisation, so an explicit :80
+    and no port are the same origin (the public listener strips the headers)."""
+    routing_row_mode("primary")
+    monkeypatch.setenv("GO_API_QUERY_API_URL", public_url)
+    monkeypatch.setenv("QUERY_API_INTERNAL_URL", internal_url)
+    seen = _capture_outbound(monkeypatch)
+    context = _context(user=_sample_user(), tier=None, licensed_features=None)
+
+    result = await router._maybe_dispatch_to_go(_post_request(TEST_QUERY), context)
+
+    _assert_go_failure(result, reason="go_internal_url_refused")
+    assert "url" not in seen
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("http://query-api-internal:8091", "http://query-api-internal:8091"),
+        ("http://Query-Api-Internal:80", "http://query-api-internal"),
+        (
+            "http://query-api.dev-health.svc:8091/",
+            "http://query-api.dev-health.svc:8091/",
+        ),
+    ],
+)
+def test_internal_url_target_is_the_normalised_form_httpx_targets(
+    value: str, expected: str
+):
+    """Validated == sent: the accepted URL is returned in httpx's normalised
+    form and the dispatcher sends to exactly that string."""
+    assert go_api_dispatcher._internal_url_target(value, None) == (expected, None)
+
+
+@pytest.mark.parametrize(
+    ("public_url", "internal_url"),
+    [
+        # r3 reviewer reproductions: the same listener under another spelling.
+        ("http://172.17.0.101", "http://172.17.0.101:0"),
+        ("http://172.17.0.101:80", "http://172.17.0.101:0"),
+        ("http://[0:0:0:0:0:0:0:1]:8090", "http://[::1]:8090"),
+        ("http://[::1]:8090", "http://[0000:0000:0000:0000:0000:0000:0000:0001]:8090"),
+        ("http://127.0.0.1:8090", "http://[::ffff:127.0.0.1]:8090"),
+        ("http://127.0.0.1:8090", "http://[::ffff:7f00:1]:8090"),
+        ("http://2130706433:8090", "http://127.0.0.1:8090"),
+        ("http://0x7f.1:8090", "http://127.0.0.1:8090"),
+        ("http://0177.0.0.1:8090", "http://127.0.0.1:8090"),
+        ("http://query-api.:8090", "http://query-api:8090"),
+        ("http://QUERY-API:8090", "http://query-api.:8090"),
+    ],
+)
+async def test_the_same_endpoint_under_another_spelling_is_still_the_public_origin(
+    router: GoApiDispatchRouter,
+    routing_row_mode,
+    monkeypatch: pytest.MonkeyPatch,
+    public_url: str,
+    internal_url: str,
+):
+    routing_row_mode("primary")
+    monkeypatch.setenv("GO_API_QUERY_API_URL", public_url)
+    monkeypatch.setenv("QUERY_API_INTERNAL_URL", internal_url)
+    seen = _capture_outbound(monkeypatch)
+    context = _context(user=_sample_user(), tier=None, licensed_features=None)
+
+    result = await router._maybe_dispatch_to_go(_post_request(TEST_QUERY), context)
+
+    _assert_go_failure(result, reason="go_internal_url_refused")
+    assert "url" not in seen
+
+
+_HOST_SPELLINGS = {
+    # spelling -> what the OS resolver (getaddrinfo, numeric) says it is, or the
+    # lower-cased name. The oracle is the OS, not this module.
+    "127.0.0.1": [
+        "127.0.0.1",
+        "2130706433",
+        "0x7f000001",
+        "0177.0.0.1",
+        "127.1",
+        "0x7f.1",
+    ],
+    "127.0.0.1/mapped": [
+        "[::ffff:127.0.0.1]",
+        "[::ffff:7f00:1]",
+        "[0:0:0:0:0:ffff:127.0.0.1]",
+    ],
+    "::1": [
+        "[::1]",
+        "[0:0:0:0:0:0:0:1]",
+        "[0000:0000:0000:0000:0000:0000:0000:0001]",
+        "[::0001]",
+    ],
+    "10.1.2.3": ["10.1.2.3", "0xa010203", "167838211", "012.1.2.3"],
+    "query-api": ["query-api", "QUERY-API", "query-api.", "Query-Api."],
+    "other-svc": ["other-svc", "other-svc."],
+}
+_PORT_SPELLINGS = ["", ":80", ":0080", ":8090", ":08090", ":8091"]
+#: spellings an INTERNAL url may use: only what is accepted as an internal host.
+_INTERNAL_SPELLINGS = {
+    "127.0.0.1": ["127.0.0.1"],
+    "127.0.0.1/mapped": ["[::ffff:127.0.0.1]", "[::ffff:7f00:1]"],
+    "::1": ["[::1]", "[0000:0000:0000:0000:0000:0000:0000:0001]"],
+    "10.1.2.3": ["10.1.2.3"],
+    "query-api": ["query-api", "QUERY-API"],
+    "other-svc": ["other-svc"],
+}
+
+
+def _os_endpoint(host_spelling: str, port_spelling: str) -> tuple[str, int]:
+    """What connecting to this spelling means, per the operating system's own
+    numeric-host parser; names by their lower-case form. Port: none or 0 dials
+    the http default."""
+    import ipaddress
+    import socket
+
+    bare = host_spelling.strip("[]")
+    port = int(port_spelling[1:]) if port_spelling else 80
+    port = port or 80
+    try:
+        info = socket.getaddrinfo(
+            bare,
+            port,
+            type=socket.SOCK_STREAM,
+            flags=socket.AI_NUMERICHOST | socket.AI_NUMERICSERV,
+        )[0][4]
+        address = ipaddress.ip_address(str(info[0]).split("%")[0])
+        if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped:
+            address = address.ipv4_mapped
+        return (str(address), port)
+    except socket.gaierror:
+        return (bare.lower().rstrip("."), port)
+
+
+def test_origin_equality_is_the_endpoint_the_socket_dials_over_every_spelling():
+    """The class closed by construction (r2, r3): for every spelling of one
+    endpoint as the public URL against every accepted spelling of another as the
+    internal URL, the internal URL is refused as the public origin EXACTLY when
+    the operating system reads both spellings as the same endpoint, and is
+    accepted exactly when it does not (so the refusal is not blanket)."""
+    checked = {"same": 0, "different": 0, "malformed": 0}
+    for public_key, public_hosts in _HOST_SPELLINGS.items():
+        for internal_key, internal_hosts in _INTERNAL_SPELLINGS.items():
+            for public_host in public_hosts:
+                for public_port in _PORT_SPELLINGS:
+                    for internal_host in internal_hosts:
+                        for internal_port in _PORT_SPELLINGS:
+                            public_url = f"http://{public_host}{public_port}"
+                            internal_url = f"http://{internal_host}{internal_port}"
+                            target, reason = go_api_dispatcher._internal_url_target(
+                                internal_url, public_url
+                            )
+                            try:
+                                httpx.URL(public_url)
+                            except httpx.InvalidURL:
+                                # An origin httpx cannot read cannot be shown to
+                                # differ: refused, whatever the internal spelling.
+                                assert (target, reason) == (
+                                    None,
+                                    "public_url_malformed",
+                                ), (public_url, internal_url, target, reason)
+                                checked["malformed"] += 1
+                                continue
+                            same = _os_endpoint(
+                                public_host, public_port
+                            ) == _os_endpoint(internal_host, internal_port)
+                            if same:
+                                checked["same"] += 1
+                                assert (target, reason) == (
+                                    None,
+                                    "same_as_public_url",
+                                ), (
+                                    public_url,
+                                    internal_url,
+                                    target,
+                                    reason,
+                                )
+                            else:
+                                checked["different"] += 1
+                                assert reason is None and target is not None, (
+                                    public_url,
+                                    internal_url,
+                                    reason,
+                                )
+    # Both directions must have been exercised in volume, or the property is vacuous.
+    assert checked["same"] > 200 and checked["different"] > 200, checked
+
+
+@pytest.mark.parametrize("port", [":0", ":00", ":000", ":65536", ":99999"])
+def test_an_internal_url_with_an_impossible_port_is_refused(port: str):
+    target, reason = go_api_dispatcher._internal_url_target(
+        f"http://query-api-internal{port}", None
+    )
+    assert target is None and reason is not None
+
+
+_HOSTILE_INTERNAL_URLS = [
+    "http://attacker\u3002com",
+    "http://attacker\u3002com:8091",
+    "http://attacker\uff0ecom",
+    "http://attacker\uff61com",
+    "http://query-api\u3002example\u3002com",
+    "http://query-api:80",
+    "http://query-api:0080",
+    "http://QUERY-API",
+    "http://query-api.",
+    "http://2130706433",
+    "http://0x7f.1",
+    "http://017700000001",
+    "http://127.1",
+    "http://[::ffff:8.8.8.8]",
+    "http://[::ffff:808:808]",
+    "http://[2001:db8::1]",
+    "http://0.0.0.0",
+    "http://8.8.8.8",
+    "http://a%2eexample%2ecom",
+    "http://query-api%2f@attacker.com",
+    "http://query-api@attacker.com",
+    "http://attacker.com#@query-api",
+    "http://attacker.com?@query-api",
+    "http://query-api\\@attacker.com",
+    "http://query-api .attacker.com",
+    "http://\u2460",
+    "http://xn--",
+    "http://",
+    "http:///query-api",
+    "  http://attacker.com  ",
+]
+
+
+@pytest.mark.parametrize("internal_url", _HOSTILE_INTERNAL_URLS)
+async def test_whatever_httpx_contacts_is_internal_and_not_the_public_origin(
+    router: GoApiDispatchRouter,
+    routing_row_mode,
+    monkeypatch: pytest.MonkeyPatch,
+    internal_url: str,
+):
+    """The property, on what httpx will ACTUALLY target (its own normalisation:
+    IDNA host, default port dropped), not on the raw string: for every hostile
+    spelling either nothing is sent, or the request went to an origin that is
+    internal and is not the public listener's. Validated == contacted."""
+    routing_row_mode("primary")
+    monkeypatch.setenv("GO_API_QUERY_API_URL", "http://query-api:8090")
+    public = httpx.URL("http://query-api:8090")
+    monkeypatch.setenv("QUERY_API_INTERNAL_URL", internal_url)
+    seen = _capture_outbound(monkeypatch)
+    context = _context(user=_sample_user(), tier=None, licensed_features=None)
+
+    await router._maybe_dispatch_to_go(_post_request(TEST_QUERY), context)
+
+    if "url" not in seen:
+        return
+    target = httpx.URL(seen["url"])
+    assert target.scheme == "http" and not target.userinfo
+    assert go_api_dispatcher._internal_host(target.raw_host.decode("ascii").lower()), (
+        seen["url"]
+    )
+    assert (target.raw_host, target.port) != (public.raw_host, public.port)
+
+
+async def test_non_ascii_identity_values_pass_through_as_utf8_bytes(
+    router: GoApiDispatchRouter,
+    routing_row_mode,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """httpx encodes a str header value as ASCII and raised
+    UnicodeEncodeError; query-api reads raw bytes (the string the envelope carried)."""
+    routing_row_mode("primary")
+    monkeypatch.setenv("QUERY_API_INTERNAL_URL", "http://query-api-internal:8091")
+    seen = _capture_outbound(monkeypatch)
+    user = AuthenticatedUser(
+        user_id="22222222-2222-4222-8222-222222222222",
+        email="dev@example.com",
+        org_id="org-\u00fc",
+        role="r\u00f4le",
+        is_superuser=False,
+    )
+    result = await router._maybe_dispatch_to_go(
+        _post_request(TEST_QUERY), _context(user=user)
+    )
+    assert result is not None and result.status_code == 200
+    raw = {name.lower(): value for name, value in seen["headers"].raw}
+    assert raw[b"x-dh-internal-org-id"] == "org-\u00fc".encode()
+    assert raw[b"x-dh-internal-role"] == "r\u00f4le".encode()
+
+
+async def test_control_characters_in_identity_values_are_refused_not_sent(
+    router: GoApiDispatchRouter,
+    routing_row_mode,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    routing_row_mode("primary")
+    monkeypatch.setenv("QUERY_API_INTERNAL_URL", "http://query-api-internal:8091")
+    seen = _capture_outbound(monkeypatch)
+    user = AuthenticatedUser(
+        user_id="22222222-2222-4222-8222-222222222222",
+        email="dev@example.com",
+        org_id="org-1\r\nX-DH-Internal-Superuser: true",
+        role="admin",
+        is_superuser=False,
+    )
+    result = await router._maybe_dispatch_to_go(
+        _post_request(TEST_QUERY), _context(user=user)
+    )
+    _assert_go_failure(result, reason="go_identity_not_header_safe")
+    assert "url" not in seen
+
+
 async def test_go_timeout_answers_typed_error(
     router: GoApiDispatchRouter,
     routing_row_mode,
@@ -1576,7 +2077,14 @@ async def test_query_failure_carries_no_write_outcome_marker(
 # Every reason the dispatcher can fail a request with after query-api was asked,
 # each classified: did the request possibly reach query-api and run the write?
 _NEVER_RAN_A_WRITE = frozenset(
-    {"go_connection_error", "go_404_digest_miss", "go_405_method_not_allowed"}
+    {
+        "go_connection_error",
+        "go_404_digest_miss",
+        "go_405_method_not_allowed",
+        # CHAOS-6758: refused before any request is built or sent.
+        "go_internal_url_refused",
+        "go_identity_not_header_safe",
+    }
 )
 
 
@@ -1602,3 +2110,40 @@ async def test_every_go_failure_reason_is_classified_for_writes():
     classified = go_api_dispatcher._WRITE_OUTCOME_UNKNOWN_REASONS | _NEVER_RAN_A_WRITE
     assert reasons == classified
     assert not go_api_dispatcher._WRITE_OUTCOME_UNKNOWN_REASONS & _NEVER_RAN_A_WRITE
+
+
+def test_the_internal_carrier_client_ignores_the_proxy_environment(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A proxy in the path would receive the identity headers: the client the
+    header carrier uses must not read HTTP_PROXY / NO_PROXY, and must not follow
+    redirects; the envelope client is unchanged."""
+    monkeypatch.setattr(go_api_dispatcher, "_internal_http_client", None)
+    monkeypatch.setenv("HTTP_PROXY", "http://proxy.example.test:3128")
+    monkeypatch.setenv("http_proxy", "http://proxy.example.test:3128")
+    client = go_api_dispatcher._get_internal_http_client()
+    assert client.trust_env is False
+    assert client.follow_redirects is False
+    assert not client._mounts  # no proxy transport was mounted from the environment
+    monkeypatch.setattr(go_api_dispatcher, "_internal_http_client", None)
+
+
+async def test_the_header_carrier_never_uses_the_envelope_client(
+    router: GoApiDispatchRouter,
+    routing_row_mode,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    routing_row_mode("primary")
+    monkeypatch.setenv("QUERY_API_INTERNAL_URL", "http://query-api-internal:8091")
+    seen = _capture_outbound(monkeypatch)
+
+    def _envelope_client_must_not_be_used():
+        raise AssertionError("the header carrier used the proxy-trusting client")
+
+    monkeypatch.setattr(
+        go_api_dispatcher, "_get_http_client", _envelope_client_must_not_be_used
+    )
+    context = _context(user=_sample_user(), tier=None, licensed_features=None)
+    result = await router._maybe_dispatch_to_go(_post_request(TEST_QUERY), context)
+    assert result is not None and result.status_code == 200
+    assert seen["url"] == "http://query-api-internal:8091/query"

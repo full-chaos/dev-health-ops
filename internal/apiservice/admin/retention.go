@@ -104,13 +104,28 @@ func retentionPolicyObject(p *retentionPolicy) *pyjson.Object {
 	return out
 }
 
-// listRetentionResourceTypes is retention.py's list_retention_resource_types.
-// The route is decorated with @require_feature but takes neither `session` nor
-// `org_id`, so the decorator's per-org check has nothing to read and always
-// denies: with no process licence the route answers 402 to every admin,
-// whatever the org's licence. Go answers the same, whatever the org.
+// listRetentionResourceTypes serves retention.py's list_retention_resource_types
+// the way its @require_feature("custom_retention") decorator was meant to
+// gate it (CHAOS-6809). Python's route takes neither `session` nor `org_id`,
+// so the decorator has nothing to read and denies EVERY admin with a 402,
+// whatever the org's licence, which leaves the retention form with no
+// resource types. That is a Python defect, not a contract: Go gates on the
+// caller's own org exactly as the sibling list route does (the org's licence
+// decides, licensing.OrgHasFeature) and answers 200 with the five resource
+// types, in enum order, for an entitled org; an org without the feature, and
+// a caller with no org to evaluate, keep the 402 Python gives. The entitled
+// answer is a named divergence, asserted on each side in the venue test.
 func (h *handlers) listRetentionResourceTypes(w http.ResponseWriter, r *http.Request) {
-	writeFeatureNotLicensed(w, retentionFeature)
+	ctx := r.Context()
+	orgID := policy.UserFrom(ctx).OrgID
+	if orgID == "" {
+		writeFeatureNotLicensed(w, retentionFeature)
+		return
+	}
+	if !h.requireFeature(ctx, w, retentionFeature, orgID) {
+		return
+	}
+	policy.WriteModel(w, http.StatusOK, stringValues(retentionResourceTypes), nil)
 }
 
 // listRetentionPolicies is retention.py's list_retention_policies.

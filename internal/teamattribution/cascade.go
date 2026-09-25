@@ -1309,13 +1309,24 @@ SELECT g.provider, g.team_id, ifNull(nullIf(t.name, ''), g.team_id),
        g.project_id, g.project_key, g.is_primary, g.specificity, g.priority, g.updated_at
 FROM (
   SELECT o.org_id, o.provider, o.project_id, o.team_id,
-         (argMax(tuple(o.project_key), (o.updated_at, o.valid_from))).1 AS project_key,
-         argMax(o.is_primary, (o.updated_at, o.valid_from)) AS is_primary,
-         argMax(o.specificity, (o.updated_at, o.valid_from)) AS specificity,
-         argMax(o.priority, (o.updated_at, o.valid_from)) AS priority,
-         max(o.updated_at) AS updated_at
-  FROM team_project_ownership AS o
-  WHERE o.org_id = ? AND o.valid_from <= ? AND (o.valid_to IS NULL OR o.valid_to > ?)
+         (argMax(tuple(o.project_key), (o.version_at, o.valid_from))).1 AS project_key,
+         argMax(o.is_primary, (o.version_at, o.valid_from)) AS is_primary,
+         argMax(o.specificity, (o.version_at, o.valid_from)) AS specificity,
+         argMax(o.priority, (o.version_at, o.valid_from)) AS priority,
+         max(o.version_at) AS updated_at
+  FROM (
+    SELECT v.org_id, v.provider, v.project_id, v.team_id, v.source, v.valid_from,
+           (argMax(tuple(v.project_key), v.updated_at)).1 AS project_key,
+           (argMax(tuple(v.valid_to), v.updated_at)).1 AS valid_to,
+           argMax(v.is_primary, v.updated_at) AS is_primary,
+           argMax(v.specificity, v.updated_at) AS specificity,
+           argMax(v.priority, v.updated_at) AS priority,
+           max(v.updated_at) AS version_at
+    FROM team_project_ownership AS v
+    WHERE v.org_id = ?
+    GROUP BY v.org_id, v.provider, v.project_id, v.team_id, v.source, v.valid_from
+  ) AS o
+  WHERE o.valid_from <= ? AND (o.valid_to IS NULL OR o.valid_to > ?)
   GROUP BY o.org_id, o.provider, o.project_id, o.team_id
 ) AS g
 LEFT JOIN (
@@ -1378,13 +1389,24 @@ SELECT g.provider, g.team_id, ifNull(nullIf(t.name, ''), g.team_id),
        toString(g.repo_id), g.repo_full_name, g.is_primary, g.specificity, g.priority, g.updated_at
 FROM (
   SELECT o.org_id, o.provider, o.repo_full_name, o.team_id,
-         (argMax(tuple(o.repo_id), (o.updated_at, o.valid_from))).1 AS repo_id,
-         argMax(o.is_primary, (o.updated_at, o.valid_from)) AS is_primary,
-         argMax(o.specificity, (o.updated_at, o.valid_from)) AS specificity,
-         argMax(o.priority, (o.updated_at, o.valid_from)) AS priority,
-         max(o.updated_at) AS updated_at
-  FROM team_repo_ownership AS o
-  WHERE o.org_id = {org_id:String} AND o.valid_from <= {as_of:DateTime64(3, 'UTC')} AND (o.valid_to IS NULL OR o.valid_to > {as_of:DateTime64(3, 'UTC')})
+         (argMax(tuple(o.repo_id), (o.version_at, o.valid_from))).1 AS repo_id,
+         argMax(o.is_primary, (o.version_at, o.valid_from)) AS is_primary,
+         argMax(o.specificity, (o.version_at, o.valid_from)) AS specificity,
+         argMax(o.priority, (o.version_at, o.valid_from)) AS priority,
+         max(o.version_at) AS updated_at
+  FROM (
+    SELECT v.org_id, v.provider, v.repo_full_name, v.team_id, v.source, v.valid_from,
+           (argMax(tuple(v.repo_id), v.updated_at)).1 AS repo_id,
+           (argMax(tuple(v.valid_to), v.updated_at)).1 AS valid_to,
+           argMax(v.is_primary, v.updated_at) AS is_primary,
+           argMax(v.specificity, v.updated_at) AS specificity,
+           argMax(v.priority, v.updated_at) AS priority,
+           max(v.updated_at) AS version_at
+    FROM team_repo_ownership AS v
+    WHERE v.org_id = {org_id:String}
+    GROUP BY v.org_id, v.provider, v.repo_full_name, v.team_id, v.source, v.valid_from
+  ) AS o
+  WHERE o.valid_from <= {as_of:DateTime64(3, 'UTC')} AND (o.valid_to IS NULL OR o.valid_to > {as_of:DateTime64(3, 'UTC')})
   GROUP BY o.org_id, o.provider, o.repo_full_name, o.team_id
 ) AS g
 LEFT JOIN (
@@ -1814,15 +1836,28 @@ SELECT g.provider, g.team_id, ifNull(nullIf(t.name, ''), g.team_id),
        g.is_primary, g.specificity, g.priority, g.updated_at
 FROM (
   SELECT o.org_id, o.provider, o.team_id, o.member_id,
-         (argMax(tuple(o.raw_provider_user_id), (o.updated_at, o.valid_from))).1 AS raw_provider_user_id,
-         (argMax(tuple(o.raw_email), (o.updated_at, o.valid_from))).1 AS raw_email,
-         argMax(o.identity_facets, (o.updated_at, o.valid_from)) AS identity_facets,
-         argMax(o.is_primary, (o.updated_at, o.valid_from)) AS is_primary,
-         argMax(o.specificity, (o.updated_at, o.valid_from)) AS specificity,
-         argMax(o.priority, (o.updated_at, o.valid_from)) AS priority,
-         max(o.updated_at) AS updated_at
-  FROM team_memberships AS o
-  WHERE o.org_id = ? AND o.valid_from <= ? AND (o.valid_to IS NULL OR o.valid_to > ?)
+         (argMax(tuple(o.raw_provider_user_id), (o.version_at, o.valid_from))).1 AS raw_provider_user_id,
+         (argMax(tuple(o.raw_email), (o.version_at, o.valid_from))).1 AS raw_email,
+         argMax(o.identity_facets, (o.version_at, o.valid_from)) AS identity_facets,
+         argMax(o.is_primary, (o.version_at, o.valid_from)) AS is_primary,
+         argMax(o.specificity, (o.version_at, o.valid_from)) AS specificity,
+         argMax(o.priority, (o.version_at, o.valid_from)) AS priority,
+         max(o.version_at) AS updated_at
+  FROM (
+    SELECT v.org_id, v.provider, v.team_id, v.member_id, v.source, v.valid_from,
+           (argMax(tuple(v.raw_provider_user_id), v.updated_at)).1 AS raw_provider_user_id,
+           (argMax(tuple(v.raw_email), v.updated_at)).1 AS raw_email,
+           (argMax(tuple(v.valid_to), v.updated_at)).1 AS valid_to,
+           argMax(v.identity_facets, v.updated_at) AS identity_facets,
+           argMax(v.is_primary, v.updated_at) AS is_primary,
+           argMax(v.specificity, v.updated_at) AS specificity,
+           argMax(v.priority, v.updated_at) AS priority,
+           max(v.updated_at) AS version_at
+    FROM team_memberships AS v
+    WHERE v.org_id = ?
+    GROUP BY v.org_id, v.provider, v.team_id, v.member_id, v.source, v.valid_from
+  ) AS o
+  WHERE o.valid_from <= ? AND (o.valid_to IS NULL OR o.valid_to > ?)
   GROUP BY o.org_id, o.provider, o.team_id, o.member_id
 ) AS g
 LEFT JOIN (

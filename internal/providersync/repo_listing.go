@@ -44,8 +44,11 @@ type GitHubListing struct {
 	Org, User string
 	// Pattern is an fnmatch pattern matched against the lower-cased full name.
 	Pattern string
-	// MaxRepos stops the listing after this many matches; <= 0 means no cap.
-	MaxRepos int
+	// MaxRepos stops the listing after this many matches. nil is no cap; a
+	// pointer to 0 (or a negative value) is a cap too, as in Python where
+	// `max_repos is not None and len(repos) >= max_repos` is true after the
+	// first match.
+	MaxRepos *int
 }
 
 const (
@@ -135,10 +138,10 @@ func ListGitHubRepositories(ctx context.Context, client *providerfoundation.HTTP
 		MaxPages: repoListingMaxPages,
 		Keep:     keep,
 	}
-	if listing.MaxRepos > 0 {
+	if listing.MaxRepos != nil {
 		options.StopAfter = func(json.RawMessage) bool {
 			matched++
-			return matched >= listing.MaxRepos
+			return matched >= *listing.MaxRepos
 		}
 	}
 	page, err := providerfoundation.CollectGitHubLinkPages(ctx, client, options)
@@ -167,8 +170,10 @@ type GitLabListing struct {
 	// Pattern is an fnmatch pattern matched against the lower-cased
 	// path_with_namespace.
 	Pattern string
-	// MaxProjects stops the listing after this many matches; <= 0 means no cap.
-	MaxProjects int
+	// MaxProjects stops the listing after this many matches. nil is no cap; a
+	// pointer to 0 (or a negative value) stops after the first match, as in
+	// Python (`max_projects is not None and len(repos) >= max_projects`).
+	MaxProjects *int
 }
 
 func effectiveGitLabGroup(listing GitLabListing) string {
@@ -192,9 +197,11 @@ func ListGitLabProjects(ctx context.Context, client *providerfoundation.HTTPClie
 	if group := effectiveGitLabGroup(listing); group != "" {
 		path = clientBasePath(client) + "/groups/" + pythonparity.Quote(group, "") + "/projects"
 	}
+	// `1_000_000 if pattern and max_projects is not None else max_projects or
+	// 1_000_000`: a pattern reads everything, and a max of 0 is falsy here.
 	maxItems := 1_000_000
-	if listing.MaxProjects > 0 && listing.Pattern == "" {
-		maxItems = listing.MaxProjects
+	if listing.MaxProjects != nil && listing.Pattern == "" && *listing.MaxProjects != 0 {
+		maxItems = *listing.MaxProjects
 	}
 	maxPages := (maxItems + repoListingPerPage - 1) / repoListingPerPage
 	if maxPages < 1 {
@@ -207,7 +214,14 @@ func ListGitLabProjects(ctx context.Context, client *providerfoundation.HTTPClie
 		return nil, err
 	}
 	raw := page.Items
-	if len(raw) > maxItems {
+	// Python slices `[:max_items]`: a negative value drops that many from the end.
+	if maxItems < 0 {
+		keep := len(raw) + maxItems
+		if keep < 0 {
+			keep = 0
+		}
+		raw = raw[:keep]
+	} else if len(raw) > maxItems {
 		raw = raw[:maxItems]
 	}
 	var repos []ListedRepository
@@ -232,7 +246,7 @@ func ListGitLabProjects(ctx context.Context, client *providerfoundation.HTTPClie
 			continue
 		}
 		repos = append(repos, ListedRepository{Name: name, FullName: fullName, ProjectID: id})
-		if listing.MaxProjects > 0 && len(repos) >= listing.MaxProjects {
+		if listing.MaxProjects != nil && len(repos) >= *listing.MaxProjects {
 			break
 		}
 	}

@@ -67,7 +67,7 @@ def run_github(case, requests):
             org_name=listing.get("org") or None,
             user_name=listing.get("user") or None,
             pattern=listing.get("pattern") or None,
-            max_repos=listing.get("max") or None,
+            max_repos=listing.get("max"),
             usage_sink=None,
         )
     )
@@ -86,7 +86,7 @@ async def gitlab_list(case, transport):
         repos = await client.list_projects(
             group_name=group,
             pattern=listing.get("pattern") or None,
-            max_projects=listing.get("max") or None,
+            max_projects=listing.get("max"),
         )
     finally:
         await client.close()

@@ -5,6 +5,21 @@ import (
 	"net/url"
 )
 
+func intPtr(n int) *int { return &n }
+
+func setMax(listing map[string]any, max *int) {
+	if max != nil {
+		listing["max"] = float64(*max)
+	}
+}
+
+func maxLabel(max *int) string {
+	if max == nil {
+		return "none"
+	}
+	return fmt.Sprint(*max)
+}
+
 func ghItem(name, fullName string) map[string]any {
 	item := map[string]any{"name": name, "full_name": fullName}
 	return item
@@ -77,16 +92,18 @@ func repoListingCorpus() []listingCase {
 		return s
 	}
 	patterns := []string{"", "*", "acme/*", "ACME/WEB*", "acme/web", "*/api", "*/w*", "acme/[wa]*", "acme/?eb", "?cme/*", "acme/[!w]*", "*Tools", "acme/İ*", "acme/i*", "nomatch*", "acme/*/x", "a[", "acme/*[", "  acme/*", "acme/"}
-	maxes := []int{0, 1, 2, 3, 4, 8}
+	// nil is no cap (the key is absent); 0 and negatives are caps in Python too.
+	maxes := []*int{nil, intPtr(0), intPtr(1), intPtr(2), intPtr(3), intPtr(4), intPtr(8), intPtr(-1), intPtr(-5)}
 	owners := []map[string]any{{}, {"org": "acme"}, {"user": "bob"}, {"org": "acme", "user": "bob"}, {"org": "Acme Corp"}, {"user": "a/b"}, {"org": "odd"}}
 	for _, owner := range owners {
 		for _, pattern := range patterns {
 			for _, max := range maxes {
-				listing := map[string]any{"pattern": pattern, "max": float64(max)}
+				listing := map[string]any{"pattern": pattern}
+				setMax(listing, max)
 				for k, v := range owner {
 					listing[k] = v
 				}
-				add(fmt.Sprintf("gh owner=%v pattern=%q max=%d", owner, pattern, max), "github", listing, scriptAll())
+				add(fmt.Sprintf("gh owner=%v pattern=%q max=%s", owner, pattern, maxLabel(max)), "github", listing, scriptAll())
 			}
 		}
 	}
@@ -105,8 +122,10 @@ func repoListingCorpus() []listingCase {
 	for i := 0; i < 101; i++ {
 		long = append(long, []any{ghItem(fmt.Sprintf("r%d", i), fmt.Sprintf("acme/r%d", i))})
 	}
-	for _, max := range []int{0, 50, 100, 101} {
-		add(fmt.Sprintf("gh 101 pages max=%d", max), "github", map[string]any{"org": "acme", "max": float64(max)}, ghPages("/orgs/acme/repos", long))
+	for _, max := range []*int{nil, intPtr(0), intPtr(50), intPtr(100), intPtr(101)} {
+		listing := map[string]any{"org": "acme"}
+		setMax(listing, max)
+		add(fmt.Sprintf("gh 101 pages max=%s", maxLabel(max)), "github", listing, ghPages("/orgs/acme/repos", long))
 	}
 	add("gh 101 pages pattern", "github", map[string]any{"org": "acme", "pattern": "acme/r9*"}, ghPages("/orgs/acme/repos", long))
 	_ = pathFor
@@ -140,11 +159,12 @@ func repoListingCorpus() []listingCase {
 	for _, group := range glGroups {
 		for _, pattern := range glPatterns {
 			for _, max := range maxes {
-				listing := map[string]any{"pattern": pattern, "max": float64(max)}
+				listing := map[string]any{"pattern": pattern}
+				setMax(listing, max)
 				if group != "" {
 					listing["group"] = group
 				}
-				add(fmt.Sprintf("gl group=%q pattern=%q max=%d", group, pattern, max), "gitlab", listing, glScript())
+				add(fmt.Sprintf("gl group=%q pattern=%q max=%s", group, pattern, maxLabel(max)), "gitlab", listing, glScript())
 			}
 		}
 	}
@@ -154,9 +174,13 @@ func repoListingCorpus() []listingCase {
 		full = append(full, proj(1000+i, fmt.Sprintf("p%d", i), fmt.Sprintf("p%d", i), fmt.Sprintf("acme/p%d", i)))
 	}
 	fullPages := [][]any{full, {proj(2000, "tail", "tail", "acme/tail")}}
-	for _, max := range []int{0, 1, 99, 100, 101, 150} {
-		add(fmt.Sprintf("gl full page heuristic max=%d", max), "gitlab", map[string]any{"group": "acme", "max": float64(max)}, glPages("/groups/acme/projects", fullPages, true))
-		add(fmt.Sprintf("gl full page heuristic pattern max=%d", max), "gitlab", map[string]any{"group": "acme", "pattern": "acme/*", "max": float64(max)}, glPages("/groups/acme/projects", fullPages, true))
+	for _, max := range []*int{nil, intPtr(0), intPtr(1), intPtr(99), intPtr(100), intPtr(101), intPtr(150), intPtr(-1), intPtr(-99), intPtr(-150)} {
+		plain := map[string]any{"group": "acme"}
+		setMax(plain, max)
+		add(fmt.Sprintf("gl full page heuristic max=%s", maxLabel(max)), "gitlab", plain, glPages("/groups/acme/projects", fullPages, true))
+		patterned := map[string]any{"group": "acme", "pattern": "acme/*"}
+		setMax(patterned, max)
+		add(fmt.Sprintf("gl full page heuristic pattern max=%s", maxLabel(max)), "gitlab", patterned, glPages("/groups/acme/projects", fullPages, true))
 	}
 	malformed := glPages("/groups/acme/projects", glUniverse, false)
 	malformed[0].Headers = map[string]string{"X-Next-Page": "nope"}

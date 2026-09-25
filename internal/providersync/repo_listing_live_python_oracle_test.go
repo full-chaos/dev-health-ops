@@ -115,7 +115,14 @@ func goListing(kase listingCase) listingOutcome {
 		panic(err)
 	}
 	str := func(key string) string { s, _ := kase.Listing[key].(string); return s }
-	num := func(key string) int { f, _ := kase.Listing[key].(float64); return int(f) }
+	num := func(key string) *int {
+		f, present := kase.Listing[key].(float64)
+		if !present {
+			return nil
+		}
+		n := int(f)
+		return &n
+	}
 	var repos []ListedRepository
 	if kase.Provider == "github" {
 		repos, err = ListGitHubRepositories(context.Background(), client, GitHubListing{Org: str("org"), User: str("user"), Pattern: str("pattern"), MaxRepos: num("max")})

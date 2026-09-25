@@ -40,7 +40,7 @@ func TestAdminSettingsCorpusPinsItsRoutesAndCapturedStatuses(t *testing.T) {
 			}
 			wantMode := RESTBodyModeJSON
 			if spec.Method == http.MethodPost {
-				wantMode = RESTBodyModeStatusOnly // the signed state differs on every call
+				wantMode = RESTBodyModeCandidateShape // the signed state differs on every call; the candidate must still answer a live object
 			}
 			if request.BodyMode != wantMode {
 				t.Errorf("%s/%s: body mode %q, want %q", operation, request.Name, request.BodyMode, wantMode)
@@ -150,5 +150,41 @@ func TestAdminAllowlistIsJudgedOnTheRealRequestNotTheRegistryKey(t *testing.T) {
 		if err == nil {
 			t.Errorf("%s: must be refused", name)
 		}
+	}
+}
+
+// TestDHOAPINonReadEntriesAreIngestOrAllowlistedWhateverTheCredential (r1 P1):
+// a non-GET dho-api entry naming the run's own bearers (RESTCredentialRun, edge
+// tokens that can be an org admin's) or the push token on a non-ingest path
+// must be refused like an admin-credential write; a query-api POST with run
+// bearers and the real ingest/allowlist entries stay valid.
+func TestDHOAPINonReadEntriesAreIngestOrAllowlistedWhateverTheCredential(t *testing.T) {
+	request := []RESTRequest{{Name: "case", WantCandidateStatus: 200, WantBaselineStatus: 200, BodyMode: RESTBodyModeStatusOnly}}
+	for name, tc := range map[string]RESTEndpointSpec{
+		"run bearers, persisting POST":              {Method: "POST", Path: "/api/v1/admin/settings", Service: RESTServiceDHOAPI},
+		"run bearers, DELETE":                       {Method: "DELETE", Path: "/api/v1/admin/settings/{category}/{key}", Service: RESTServiceDHOAPI},
+		"run bearers, POST under the ingest prefix": {Method: "POST", Path: "/api/v1/external-ingest/batches", Service: RESTServiceDHOAPI},
+		"push token outside ingest, GET":            {Method: "GET", Path: "/api/v1/admin/users", Service: RESTServiceDHOAPI, Credential: RESTCredentialPushToken},
+		"push token outside ingest, POST":           {Method: "POST", Path: "/api/v1/admin/settings", Service: RESTServiceDHOAPI, Credential: RESTCredentialPushToken},
+		"push token, ingest prefix lookalike":       {Method: "POST", Path: "/api/v1/external-ingestion/x", Service: RESTServiceDHOAPI, Credential: RESTCredentialPushToken},
+	} {
+		spec := tc
+		spec.Requests = request
+		key := "REST:" + spec.Method + ":" + spec.Path
+		original, existed := restEndpointSpecs[key] // some probes reuse a real entry's key
+		restEndpointSpecs[key] = spec
+		err := validateRESTCredentialKinds()
+		if existed {
+			restEndpointSpecs[key] = original
+		} else {
+			delete(restEndpointSpecs, key)
+		}
+		if err == nil {
+			t.Errorf("%s: must be refused", name)
+		}
+	}
+	// A query-api POST with the run's bearers is the existing shape and stays valid.
+	if err := validateRESTCredentialKinds(); err != nil {
+		t.Fatalf("the committed corpus must validate: %v", err)
 	}
 }

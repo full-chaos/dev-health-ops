@@ -27,8 +27,11 @@ import "net/url"
 //     synthetic case; the bigboy pass script runs them on the Fixture Org.
 //   - Produced-id cases: the Fixture Org has no setting row, sync run or
 //     backfill job, so only missing-id cases exist.
-//   - The GitHub install-url mint is compared on STATUS only: its signed state
-//     differs on every call. It persists nothing (the Python handler signs a
+//   - The GitHub install-url mint is compared on STATUS and on the candidate
+//     answering a live, non-empty JSON object (candidate_shape): its signed
+//     state differs on every call, so the two bodies are not compared, and the
+//     content of install_url (slug, callback) is therefore only in the retained
+//     artifacts. It persists nothing (the Python handler signs a
 //     state and builds a URL), which is why it is on the persist-nothing POST
 //     allowlist (adminPersistNothingPOSTs).
 
@@ -89,7 +92,7 @@ var dhoAPIAdminSettingsEndpointSpecs = map[string]RESTEndpointSpec{
 			Name:                "mint",
 			Body:                map[string]any{},
 			WantCandidateStatus: 200, WantBaselineStatus: 200,
-			BodyMode: RESTBodyModeStatusOnly,
+			BodyMode: RESTBodyModeCandidateShape,
 		}},
 	},
 }

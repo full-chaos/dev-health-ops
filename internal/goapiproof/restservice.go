@@ -143,6 +143,10 @@ func PlansCredentialKind(service RESTService, kind RESTCredentialKind) bool {
 // and builds a URL), so a case is a read in effect, like the external-ingest
 // validate case. Anything else that is not a GET is a write: real use only
 // (R402/R406), never a synthetic corpus case.
+// restIngestPathPrefix is where the external-ingest API lives; the push token
+// authenticates there and nowhere else.
+const restIngestPathPrefix = "/api/v1/external-ingest/"
+
 var adminPersistNothingPOSTs = map[string]bool{
 	"REST:POST:/api/v1/admin/integrations/github/install-url": true,
 }
@@ -180,6 +184,23 @@ func validateRESTCredentialKinds() error {
 			}
 		default:
 			return fmt.Errorf("goapiproof: REST corpus entry %q has an unknown credential kind %q", operation, spec.Credential)
+		}
+		// The dho api is where a corpus request can change state, so its
+		// non-read entries are held to one rule whatever credential they name:
+		// the run's own bearers (RESTCredentialRun) are edge tokens that can
+		// belong to an org admin just as an admin kind can, so a persisting
+		// request cannot be smuggled in under them. The only non-GET/HEAD
+		// entries are the external-ingest ones (push token, and only under the
+		// ingest prefix) and the persist-nothing allowlist.
+		if spec.EffectiveService() == RESTServiceDHOAPI && spec.Method != "GET" && spec.Method != "HEAD" {
+			identity := "REST:" + spec.Method + ":" + spec.Path
+			ingest := spec.Credential == RESTCredentialPushToken && strings.HasPrefix(spec.Path, restIngestPathPrefix)
+			if !ingest && !adminPersistNothingPOSTs[identity] {
+				return fmt.Errorf("goapiproof: REST corpus entry %q is a %s on the dho api with the %q credential: only external-ingest entries under %s (push token) and the persist-nothing allowlist may be non-GET (R402/R406)", operation, spec.Method, spec.Credential, restIngestPathPrefix)
+			}
+		}
+		if spec.Credential == RESTCredentialPushToken && !strings.HasPrefix(spec.Path, restIngestPathPrefix) {
+			return fmt.Errorf("goapiproof: REST corpus entry %q sends the push token to %s, outside %s (the only API that authenticates it)", operation, spec.Path, restIngestPathPrefix)
 		}
 		for _, request := range spec.Requests {
 			for name := range request.PathLiterals {

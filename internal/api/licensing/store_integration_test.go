@@ -8,27 +8,18 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// schemaFor applies the migrated schema: the hand-written organizations, feature_flags,
+// org_feature_overrides and org_licenses this file used to carry lacked the real tables'
+// NOT NULL columns and keys (CHAOS-6769 ledger).
 func schemaFor(ctx context.Context, t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
-	for _, statement := range []string{
-		`CREATE TABLE organizations (id uuid PRIMARY KEY, tier text NOT NULL)`,
-		`CREATE TABLE feature_flags (
-  id uuid PRIMARY KEY, key text UNIQUE NOT NULL, min_tier text NOT NULL,
-  is_enabled boolean NOT NULL)`,
-		`CREATE TABLE org_feature_overrides (
-  org_id uuid NOT NULL, feature_id uuid NOT NULL, is_enabled boolean NOT NULL,
-  expires_at timestamptz, config json, PRIMARY KEY (org_id, feature_id))`,
-		`CREATE TABLE org_licenses (
-  org_id uuid PRIMARY KEY, tier text NOT NULL, features_override json)`,
-	} {
-		if _, err := pool.Exec(ctx, statement); err != nil {
-			t.Fatal(err)
-		}
-	}
+	pgschema.Apply(ctx, t, pool)
 }
 
 // TestPostgresStoreDecideEndToEnd proves the real query against a real
@@ -56,6 +47,12 @@ func TestPostgresStoreDecideEndToEnd(t *testing.T) {
 	}
 	defer pool.Close()
 	schemaFor(ctx, t, pool)
+	// The migrations already register agent_context_runtime as a feature flag. This test walks
+	// the unregistered -> registered -> overridden transitions, so it starts from the state
+	// before the flag existed; the hand-written schema hid that the flag is pre-seeded.
+	if _, err := pool.Exec(ctx, `DELETE FROM feature_flags WHERE key = 'agent_context_runtime'`); err != nil {
+		t.Fatal(err)
+	}
 
 	store := PostgresStore{Pool: pool, Now: func() time.Time { return evaluatedAt }}
 	orgID := uuid.NewString()
@@ -70,17 +67,9 @@ func TestPostgresStoreDecideEndToEnd(t *testing.T) {
 		}
 	})
 
-	if _, err := pool.Exec(ctx,
-		`INSERT INTO organizations (id, tier) VALUES ($1, 'community')`, orgID,
-	); err != nil {
-		t.Fatal(err)
-	}
+	pgseed.Org(ctx, t, pool, orgID, "community")
 	featureID := uuid.NewString()
-	if _, err := pool.Exec(ctx, `
-INSERT INTO feature_flags (id, key, min_tier, is_enabled)
-VALUES ($1, 'agent_context_runtime', 'community', true)`, featureID); err != nil {
-		t.Fatal(err)
-	}
+	pgseed.FeatureFlag(ctx, t, pool, featureID, "agent_context_runtime", "community", true)
 
 	t.Run("registered, enabled, no override: explicit purchase required", func(t *testing.T) {
 		decision, err := store.Decide(ctx, orgID, "agent_context_runtime")
@@ -95,11 +84,7 @@ VALUES ($1, 'agent_context_runtime', 'community', true)`, featureID); err != nil
 		}
 	})
 
-	if _, err := pool.Exec(ctx, `
-INSERT INTO org_feature_overrides (org_id, feature_id, is_enabled)
-VALUES ($1, $2, true)`, orgID, featureID); err != nil {
-		t.Fatal(err)
-	}
+	pgseed.OrgOverride(ctx, t, pool, orgID, featureID, true)
 
 	t.Run("org override enables it", func(t *testing.T) {
 		decision, err := store.Decide(ctx, orgID, "agent_context_runtime")
@@ -132,16 +117,8 @@ VALUES ($1, $2, true)`, orgID, featureID); err != nil {
 	})
 
 	otherOrgID := uuid.NewString()
-	if _, err := pool.Exec(ctx,
-		`INSERT INTO organizations (id, tier) VALUES ($1, 'enterprise')`, otherOrgID,
-	); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := pool.Exec(ctx, `
-INSERT INTO org_licenses (org_id, tier, features_override)
-VALUES ($1, 'enterprise', '{"agent_context_runtime": 1e10000}')`, otherOrgID); err != nil {
-		t.Fatal(err)
-	}
+	pgseed.Org(ctx, t, pool, otherOrgID, "enterprise")
+	pgseed.OrgLicense(ctx, t, pool, otherOrgID, "enterprise", `{"agent_context_runtime": 1e10000}`)
 
 	// The confirmed P1 that reached live Postgres: a features_override
 	// value containing a JSON number that overflows float64 must not error

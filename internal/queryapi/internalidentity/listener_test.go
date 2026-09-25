@@ -1,15 +1,20 @@
 package internalidentity
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"go.opentelemetry.io/otel"
 	noopmetric "go.opentelemetry.io/otel/metric/noop"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 )
 
 func TestPublicDeletesEveryInternalHeaderInEverySpelling(t *testing.T) {
@@ -100,5 +105,31 @@ func TestPublicCountsEveryDroppedRequestByBoundedPathClass(t *testing.T) {
 	}
 	if got["query"] != 2 || got["other"] != 2 || len(got) != 2 {
 		t.Fatalf("dropped counts = %v, want query=2 other=2 and nothing else", got)
+	}
+}
+
+// The production logger redacts protected keys, and a key containing "header"
+// is one: the drop log's names field must survive it (r1 P3 on #3186: the first
+// spelling printed headers=[REDACTED]).
+func TestDropLogNamesSurviveTheProductionLogger(t *testing.T) {
+	if logging.ProtectedKey(DropLogNamesKey) {
+		t.Fatalf("%q is a protected log key: the production logger would print it as [REDACTED]", DropLogNamesKey)
+	}
+	var output bytes.Buffer
+	restore := logging.InstallDefault(logging.NewJSON(&output, slog.LevelInfo))
+	t.Cleanup(restore)
+	dropLogGate.Store(0)
+	req := httptest.NewRequest(http.MethodPost, "/query", nil)
+	req.Header.Set(HeaderRole, "owner")
+	req.Header.Set(HeaderOrgID, "org-secret-value")
+	Public(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})).ServeHTTP(httptest.NewRecorder(), req)
+	logged := output.String()
+	for _, want := range []string{HeaderRole, HeaderOrgID, "path_class=query"} {
+		if !strings.Contains(logged, want) {
+			t.Fatalf("production log %q lacks %q", logged, want)
+		}
+	}
+	if strings.Contains(logged, "[REDACTED]") || strings.Contains(logged, "org-secret-value") {
+		t.Fatalf("production log %q redacted the names or leaked a value", logged)
 	}
 }

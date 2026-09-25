@@ -19,6 +19,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
+	pgstorage "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 )
 
 // Command is the `maintenance` group.
@@ -79,7 +80,7 @@ func open(ctx context.Context, name string, env cli.Env, parse func(*flag.FlagSe
 	if !ok {
 		return exit(cli.ExitFailure)
 	}
-	boundary := secrets.NewBoundary(dsn.Reveal())
+	boundary := pgstorage.Boundary(dsn.Reveal())
 	conn, err := pgx.Connect(ctx, dsn.Reveal())
 	if err != nil {
 		writeError(env.Stderr, "postgres_unavailable", boundary.Redact(err).Error())

@@ -1,6 +1,8 @@
 // Package pushcli is the `push` group of dho: the customer-push external
-// ingestion CLI (Python's `dev-hops push`). Its verbs need no database and no
-// server: validate checks a batch envelope locally with the same record
+// ingestion CLI (Python's `dev-hops push`). Its verbs open no database
+// connection, make no network call and need no server (the record validators
+// they share link the api's JSON-body helpers, which link the auth package's
+// HTTP envelope types; nothing here serves or sends a request): validate checks a batch envelope locally with the same record
 // validators the API runs (internal/api/recordvalidation), sample prints the
 // packaged example batches, and export is the extension point that says it is not
 // implemented.

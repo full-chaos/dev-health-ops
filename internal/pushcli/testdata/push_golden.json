@@ -17630,6 +17630,24 @@
    "fileName": "case-1919.json"
   },
   {
+   "name": "validate abbreviated --json (--j)",
+   "args": [
+    "validate",
+    "{file}",
+    "--j"
+   ],
+   "file": "{}",
+   "fileName": "case-1920.json"
+  },
+  {
+   "name": "validate --help",
+   "args": [
+    "validate",
+    "--help"
+   ],
+   "file": null
+  },
+  {
    "name": "missing file",
    "args": [
     "validate",
@@ -17660,7 +17678,7 @@
     "{file}"
    ],
    "file": null,
-   "fileName": "case-1923.json",
+   "fileName": "case-1925.json",
    "repeat": {
     "text": " ",
     "count": 10000001
@@ -17674,7 +17692,7 @@
     "--json"
    ],
    "file": null,
-   "fileName": "case-1924.json",
+   "fileName": "case-1926.json",
    "repeat": {
     "text": " ",
     "count": 10000001
@@ -17687,7 +17705,7 @@
     "{file}"
    ],
    "file": null,
-   "fileName": "case-1925.json",
+   "fileName": "case-1927.json",
    "repeat": {
     "text": " ",
     "count": 10000000
@@ -25394,6 +25412,14 @@
   {
    "exit": 1,
    "stdout": "{\"errors\": [{\"code\": \"invalid_envelope\", \"index\": -1, \"kind\": null, \"message\": \"Malformed JSON: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)\", \"path\": null}], \"itemsAccepted\": 0, \"itemsRejected\": 0, \"valid\": false}\n"
+  },
+  {
+   "exit": 1,
+   "stdout": "{\"errors\": [{\"code\": \"invalid_envelope\", \"index\": -1, \"kind\": null, \"message\": \"Field required\", \"path\": \"schemaVersion\"}, {\"code\": \"invalid_envelope\", \"index\": -1, \"kind\": null, \"message\": \"Field required\", \"path\": \"idempotencyKey\"}, {\"code\": \"invalid_envelope\", \"index\": -1, \"kind\": null, \"message\": \"Field required\", \"path\": \"source\"}, {\"code\": \"invalid_envelope\", \"index\": -1, \"kind\": null, \"message\": \"Field required\", \"path\": \"records\"}], \"itemsAccepted\": 0, \"itemsRejected\": 0, \"valid\": false}\n"
+  },
+  {
+   "exit": 0,
+   "stdout": "usage: dev-health-ops push validate [-h] [--schema {external-ingest.v1}]\n                                    [--json] [--log-level LOG_LEVEL] [--db DB]\n                                    [--analytics-db ANALYTICS_DB] [--org ORG]\n                                    [-l LLM_PROVIDER] [-m MODEL]\n                                    payload\n\npositional arguments:\n  payload               Path to a batch envelope JSON file, or '-' to read\n                        stdin.\n\noptions:\n  -h, --help            show this help message and exit\n  --schema {external-ingest.v1}\n                        Schema version to validate against. Default/only\n                        supported: external-ingest.v1.\n  --json                Emit machine-readable JSON to stdout.\n  --log-level LOG_LEVEL\n                        (global) Logging level. See root --help.\n  --db DB               (global) PostgreSQL URI. See root --help.\n  --analytics-db ANALYTICS_DB\n                        (global) ClickHouse URI. See root --help.\n  --org ORG             (global) Organization ID for multi-tenant scoping. See\n                        root --help.\n  -l, --llm-provider LLM_PROVIDER\n                        (global) LLM provider. See root --help.\n  -m, --model MODEL     (global) LLM model. See root --help.\n"
   },
   {
    "exit": 2,

@@ -336,6 +336,11 @@ func corpus(t *testing.T) []pushCase {
 		add(fmt.Sprintf("json syntax %d", index), []string{"validate", "{file}"}, text, "")
 		add(fmt.Sprintf("json syntax %d json", index), []string{"validate", "{file}", "--json"}, text, "")
 	}
+	// Named divergences (platform-wide, D2517): argparse abbreviates a unique long
+	// option prefix and prints --help on stdout; every dho verb uses flag.FlagSet,
+	// which does neither.
+	add(abbreviationCase, []string{"validate", "{file}", "--j"}, "{}", "")
+	add(helpCase, []string{"validate", "--help"}, "", "")
 	add("missing file", []string{"validate", "{dir}/no-such-file.json"}, "", "")
 	add("directory", []string{"validate", "{dir}"}, "", "")
 	add("empty stdin", []string{"validate", "-"}, "", "")
@@ -362,7 +367,7 @@ const pushGolden = "testdata/push_golden.json"
 // producer is deleted with the Python CLI, so this is a rot guard: the file is
 // only rewritten by TestPushVenueOracleMatchesThePythonProducer with DHO_PUSH_GOLDEN_UPDATE=1,
 // then this digest is updated.
-const pushGoldenSHA256 = "388516853de1f54215080c80de533afc2ba9f59cd99b61aacb36ebb85e1c4784"
+const pushGoldenSHA256 = "d9d41796b23ebbe1301a9f841006a7268fa142d6acfc5387985cf5d62aabe4ab"
 
 func TestPushGoldenIsTheFileTheDigestPins(t *testing.T) {
 	raw, err := os.ReadFile(pushGolden)
@@ -382,6 +387,40 @@ var namedDivergences = map[string]string{
 	// validator's JSON reader (jiter's rules) refuses it.
 	"json syntax 19":      "lone surrogate escape",
 	"json syntax 19 json": "lone surrogate escape",
+	// argparse's unique-prefix abbreviation and its --help stream/text are not
+	// contracts (D2517): each is asserted explicitly in assertNamedFlagDivergence.
+	abbreviationCase: "argparse long-option prefix abbreviation",
+	helpCase:         "argparse --help text and stream",
+}
+
+const (
+	abbreviationCase = "validate abbreviated --json (--j)"
+	helpCase         = "validate --help"
+)
+
+// assertNamedFlagDivergence pins BOTH sides of the two flag-grammar divergences,
+// so a change on either side is noticed: Python runs the abbreviated command
+// (exit 1: the payload {} is invalid, a JSON report on stdout) where dho refuses
+// the flag (exit 2, nothing on stdout); Python prints its usage on stdout and
+// exits 0 where dho prints its own usage on stderr.
+func assertNamedFlagDivergence(t *testing.T, c pushCase, got, want pushResult, wantName string) {
+	t.Helper()
+	switch c.Name {
+	case abbreviationCase:
+		if want.Exit != 1 || !strings.Contains(want.Stdout, `"valid": false`) {
+			t.Errorf("%s: %s exit %d stdout %q, want exit 1 and a JSON report", c.Name, wantName, want.Exit, truncate(want.Stdout))
+		}
+		if got.Exit != 2 || got.Stdout != "" {
+			t.Errorf("%s: dho exit %d stdout %q, want exit 2 and no stdout", c.Name, got.Exit, truncate(got.Stdout))
+		}
+	case helpCase:
+		if want.Exit != 0 || !strings.HasPrefix(want.Stdout, "usage: ") {
+			t.Errorf("%s: %s exit %d stdout %q, want exit 0 and a usage on stdout", c.Name, wantName, want.Exit, truncate(want.Stdout))
+		}
+		if got.Exit != 0 || got.Stdout != "" || !strings.Contains(got.Stderr, "Usage of") {
+			t.Errorf("%s: dho exit %d stdout %q stderr %q, want exit 0, no stdout, a usage on stderr", c.Name, got.Exit, truncate(got.Stdout), truncate(got.Stderr))
+		}
+	}
 }
 
 // pythonCrash is the exit code the driver reports for a Python traceback.
@@ -390,6 +429,7 @@ const pythonCrash = 70
 func compareResults(t *testing.T, c pushCase, got, want pushResult, wantName string) bool {
 	t.Helper()
 	if _, named := namedDivergences[c.Name]; named {
+		assertNamedFlagDivergence(t, c, got, want, wantName)
 		return true
 	}
 	if want.Exit == pythonCrash {

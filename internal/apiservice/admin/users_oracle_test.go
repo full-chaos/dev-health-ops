@@ -101,6 +101,22 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, uuid.New(), orgID, memberID
 		// Go returning null here.
 		{Name: "create user whitespace username", Method: "POST", Path: "/api/v1/admin/users", Headers: jsonHeaders,
 			Body: venueoracle.B64(`{"email":"venue-username-ws@example.com","username":" "}`)},
+		// CHAOS-6712: str.lower() and str.strip() are Python's, not Go's or
+		// PostgreSQL's. U+0130 lowers to "i" + U+0307 (two code points), so a
+		// second create of the same email, or of its already-lowered spelling, is
+		// a duplicate; U+001C..U+001F are stripped around an email and a username.
+		{Name: "create user dotted capital I email", Method: "POST", Path: "/api/v1/admin/users", Headers: jsonHeaders,
+			Body: venueoracle.B64(`{"email":"\u0130-Venue@Example.com"}`)},
+		{Name: "create user dotted capital I email again", Method: "POST", Path: "/api/v1/admin/users", Headers: jsonHeaders,
+			Body: venueoracle.B64(`{"email":"\u0130-Venue@Example.com"}`)},
+		{Name: "create user already-lowered dotted email", Method: "POST", Path: "/api/v1/admin/users", Headers: jsonHeaders,
+			Body: venueoracle.B64(`{"email":"i\u0307-venue@example.com"}`)},
+		{Name: "create user control whitespace email and username", Method: "POST", Path: "/api/v1/admin/users", Headers: jsonHeaders,
+			Body: venueoracle.B64(`{"email":"\u001cvenue-fs@example.com\u001f","username":"\u001e\u0130Venue\u001c"}`)},
+		{Name: "create user duplicate lowered dotted username", Method: "POST", Path: "/api/v1/admin/users", Headers: jsonHeaders,
+			Body: venueoracle.B64(`{"email":"venue-fs-2@example.com","username":"i\u0307venue"}`)},
+		{Name: "create user duplicate dotted capital I username", Method: "POST", Path: "/api/v1/admin/users", Headers: jsonHeaders,
+			Body: venueoracle.B64(`{"email":"venue-fs-3@example.com","username":"\u0130Venue"}`)},
 		// auth_provider is `str = "local"`, a pydantic DEFAULT, not
 		// Optional: an explicit "" is a valid, present string and is
 		// stored verbatim, never coerced to the default -- a live round
@@ -115,6 +131,11 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, uuid.New(), orgID, memberID
 			Body: venueoracle.B64(`{"email":"venue-nulltyped@example.com","auth_provider":null,"is_verified":null}`)},
 		{Name: "patch user", Method: "PATCH", Path: "/api/v1/admin/users/" + memberID.String(), Headers: jsonHeaders,
 			Body: venueoracle.B64(`{"full_name":"A New Name"}`)},
+		// CHAOS-6712: the same Python str.lower()/str.strip() on the update path.
+		{Name: "patch user dotted capital I email and username", Method: "PATCH", Path: "/api/v1/admin/users/" + memberID.String(), Headers: jsonHeaders,
+			Body: venueoracle.B64(`{"email":"\u001c\u0130-Patched@Example.com\u001f","username":"\u001e\u0130Patched\u001c"}`)},
+		{Name: "patch user same dotted email again", Method: "PATCH", Path: "/api/v1/admin/users/" + memberID.String(), Headers: jsonHeaders,
+			Body: venueoracle.B64(`{"email":"\u0130-Patched@Example.com","username":"i\u0307patched"}`)},
 		// pydantic's bool validator is lax: it coerces the JSON int 1/0 to
 		// True/False, not just a native JSON bool -- a live round found Go
 		// answering 422 bool_type for this.

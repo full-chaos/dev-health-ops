@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
@@ -105,6 +106,19 @@ func TestCredentialFieldReadsMatchLivePython(t *testing.T) {
 		{"gitlab", `{"token": []}`, gitlab},
 		{"gitlab", `{"token": "t", "project_id": 7, "tags": [1, {"a": 2}]}`, gitlab},
 		{"gitlab", `{"private_token": "p", "project_id": 7}`, gitlab},
+		// A null is dropped before alias resolution: it never erases an earlier value.
+		{"github", `{"token": "ghp", "appId": 12, "app_id": null}`, github},
+		{"github", `{"appId": 12, "app_id": null, "installation_id": 34, "private_key": "k"}`, github},
+		{"github", `{"app_id": null, "appId": 12, "installation_id": 34, "private_key": "k"}`, github},
+		{"github", `{"installationId": "9", "installation_id": null, "app_id": 1, "private_key": "k"}`, github},
+		{"github", `{"baseUrl": "https://ghe", "base_url": null, "token": "ghp"}`, github},
+		// private_key_path: the builder reads the file, so its content decides.
+		{"github", `{"token": "ghp", "private_key_path": "@EMPTY@"}`, github},
+		{"github", `{"token": "ghp", "private_key_path": "@BLANK@"}`, github},
+		{"github", `{"token": "ghp", "privateKeyPath": "@KEY@"}`, github},
+		{"github", `{"token": "ghp", "private_key_path": "@MISSING@"}`, github},
+		{"github", `{"token": "ghp", "private_key": "", "private_key_path": "@KEY@"}`, github},
+		{"github", `{"token": "ghp", "private_key": null, "private_key_path": "@EMPTY@"}`, github},
 		// A blank key is a field nobody reads.
 		{"gitlab", `{"token": "fixture", " ": 7}`, gitlab},
 		{"gitlab", `{"token": "fixture", "": "v"}`, gitlab},
@@ -140,6 +154,25 @@ func TestCredentialFieldReadsMatchLivePython(t *testing.T) {
 		{"linear", `{"api_key": null, "apiKey": "alias"}`, linear},
 		{"linear", `{"api_key": "canonical", "apiKey": 0}`, linear},
 		{"linear", `{"apiKey": ""}`, linear},
+	}
+	// The key-file cases name real files: an empty one, a whitespace-only one, a
+	// key, and one that is missing.
+	dir := t.TempDir()
+	files := map[string]string{"@EMPTY@": "", "@BLANK@": " \n", "@KEY@": "-----BEGIN KEY-----", "@MISSING@": ""}
+	for token, content := range files {
+		path := filepath.Join(dir, strings.Trim(token, "@")+".pem")
+		if token != "@MISSING@" {
+			if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		quoted, err := json.Marshal(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for index := range cases {
+			cases[index].Body = strings.ReplaceAll(cases[index].Body, `"`+token+`"`, string(quoted))
+		}
 	}
 	input, err := json.Marshal(cases)
 	if err != nil {

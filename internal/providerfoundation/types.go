@@ -172,7 +172,7 @@ func (c Credential) WithEphemeralSecret(name string, value secrets.Value) (Crede
 	return c, nil
 }
 
-// String, GoString and LogValue keep secret material out of every printed form
+// String, Format and LogValue keep secret material out of every printed form
 // of a Credential: fmt (%v, %+v, %#v) and slog would otherwise reflect over the
 // private field maps and print the values (a secrets.Value's raw text, a
 // decoded non-string value). Only metadata is shown.
@@ -180,7 +180,10 @@ func (c Credential) String() string {
 	return fmt.Sprintf("providerfoundation.Credential{provider=%s fields=%d}", c.Provider, len(c.fields)+len(c.deferred))
 }
 
-func (c Credential) GoString() string { return c.String() }
+// Format redacts for EVERY fmt verb, %#v included: String alone covers only the
+// verbs that ask for a string, while %d, %f, %x and the rest reflect over the
+// private field maps and print the values.
+func (c Credential) Format(state fmt.State, _ rune) { _, _ = fmt.Fprint(state, c.String()) }
 
 func (c Credential) LogValue() slog.Value {
 	return slog.GroupValue(

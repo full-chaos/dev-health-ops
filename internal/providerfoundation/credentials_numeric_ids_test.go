@@ -5,6 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -170,14 +173,94 @@ func TestPythonSecretTextTreatsAnUnsetIntegerAsFalsy(t *testing.T) {
 	}
 }
 
-// The safe field count covers every stored field, string or not.
+// The safe field count covers every stored field (a null is no field), and an
+// alias pair counts once whichever order it is written in.
 func TestCredentialSafeAttributesCountsNonStringFields(t *testing.T) {
-	credential, err := decodeCredential(EncryptedCredential{Provider: "gitlab"}, []byte(`{"token": "t", "project_id": 7, "note": null}`))
+	for _, tc := range []struct {
+		provider, body string
+		want           int
+	}{
+		{"gitlab", `{"token": "t", "project_id": 7, "note": null}`, 2},
+		{"github", `{"app_id": 12, "appId": "a"}`, 1},
+		{"github", `{"appId": "a", "app_id": 12}`, 1},
+		{"github", `{"app_id": "a", "appId": 12}`, 1},
+		{"github", `{"appId": 12, "app_id": "a"}`, 1},
+	} {
+		credential, err := decodeCredential(EncryptedCredential{Provider: tc.provider}, []byte(tc.body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := credential.SafeAttributes()["credential_field_count"]; got != tc.want {
+			t.Errorf("%s: credential_field_count = %v, want %d", tc.body, got, tc.want)
+		}
+	}
+}
+
+// TestGitHubNullNeverErasesAnEarlierField (r3): github_credentials_from_mapping
+// drops None BEFORE resolving aliases, so a null spelling never replaces a
+// value stored under the same canonical name.
+func TestGitHubNullNeverErasesAnEarlierField(t *testing.T) {
+	credential, err := decodeGitHub(t, `{"token": "t", "appId": 12, "app_id": null}`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := credential.SafeAttributes()["credential_field_count"]; got != 3 {
-		t.Errorf("credential_field_count = %v, want 3", got)
+	if got, ok := credential.Secret("app_id"); !ok || got.Reveal() != "12" {
+		t.Errorf("app_id = %q, %v; want the earlier 12 kept", got.Reveal(), ok)
+	}
+	if err := ValidateCredentialShape(credential); err == nil {
+		t.Error("a token beside an App id must be refused (Python builds nothing)")
+	}
+	app, err := decodeGitHub(t, `{"appId": 12, "app_id": null, "installation_id": 34, "private_key": "k"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateCredentialShape(app); err != nil {
+		t.Errorf("the App credential lost its id to a later null: %v", err)
+	}
+	for _, alias := range []string{"appId", "baseUrl", "installationId", "privateKey", "privateKeyPath"} {
+		canonical := githubFieldAliases[alias]
+		c, err := decodeGitHub(t, `{"`+alias+`": "kept", "`+canonical+`": null}`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, ok := c.Secret(canonical); !ok || got.Reveal() != "kept" {
+			t.Errorf("%s then null %s: %q, %v", alias, canonical, got.Reveal(), ok)
+		}
+	}
+}
+
+// TestGitHubShapeReadsThePrivateKeyFileLikePython (r3): with no private_key
+// entry the builder reads private_key_path into it, so the file's CONTENT
+// decides whether a token beside it conflicts: an empty file is no key; a
+// whitespace-only one is a (truthy) key; a missing one makes the builder
+// return None.
+func TestGitHubShapeReadsThePrivateKeyFileLikePython(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, content string) string {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	empty, blank, key := write("empty.pem", ""), write("blank.pem", " \n"), write("key.pem", "-----BEGIN KEY-----")
+	for _, tc := range []struct {
+		name, body string
+		refused    bool
+	}{
+		{"a token beside an empty key file", `{"token": "t", "private_key_path": ` + strconv.Quote(empty) + `}`, false},
+		{"a token beside a whitespace-only key file", `{"token": "t", "private_key_path": ` + strconv.Quote(blank) + `}`, true},
+		{"a token beside a key file", `{"token": "t", "privateKeyPath": ` + strconv.Quote(key) + `}`, true},
+		{"a token beside a missing key file", `{"token": "t", "private_key_path": ` + strconv.Quote(filepath.Join(dir, "missing.pem")) + `}`, true},
+		{"a token beside an empty inline key and a key file", `{"token": "t", "private_key": "", "private_key_path": ` + strconv.Quote(key) + `}`, false},
+	} {
+		credential, err := decodeGitHub(t, tc.body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if refused := errors.Is(ValidateCredentialShape(credential), ErrCredentialInvalid); refused != tc.refused {
+			t.Errorf("%s: refused = %v, want %v", tc.name, refused, tc.refused)
+		}
 	}
 }
 
@@ -207,11 +290,16 @@ func TestCredentialNeverPrintsItsSecrets(t *testing.T) {
 		if want := fmt.Sprintf("fields=%d}", count); !strings.Contains(fmt.Sprintf("%v", credential), want) {
 			t.Errorf("%s: String() = %v, want it to count every stored field (%s)", body, credential, want)
 		}
-		printed := []string{
-			text.String(), jsonOut.String(),
-			fmt.Sprintf("%v", credential), fmt.Sprintf("%+v", credential), fmt.Sprintf("%#v", credential), fmt.Sprintf("%s", credential),
-			fmt.Sprintf("%v", &credential), fmt.Sprintf("%+v", []Credential{credential}), fmt.Sprintf("%+v", map[string]Credential{"c": credential}),
+		// Every verb, not only the string-compatible ones.
+		var printed []string
+		for _, verb := range []string{"v", "+v", "#v", "s", "d", "+d", "f", "x", "X", "#x", "q", "t", "e", "o", "b", "c", "U", "g", "10.3v"} {
+			printed = append(printed, fmt.Sprintf("%"+verb, credential))
 		}
+		printed = append(printed,
+			text.String(), jsonOut.String(),
+			fmt.Sprintf("%v", &credential), fmt.Sprintf("%+v", []Credential{credential}), fmt.Sprintf("%+v", map[string]Credential{"c": credential}),
+			fmt.Sprintf("%d", []Credential{credential}), fmt.Sprintf("%x", map[string]Credential{"c": credential}),
+		)
 		for _, out := range printed {
 			for _, leaked := range []string{"secret-fixture", "987654321", "raw:", "0x"} {
 				if strings.Contains(out, leaked) {

@@ -204,16 +204,22 @@ func decodeCredential(record EncryptedCredential, plaintext []byte) (Credential,
 		value, _ := object.Get(key)
 		// A blank key is a field nobody reads, like any other: Python's builders
 		// ignore it and so does this decode.
+		//
+		// A null is dropped BEFORE alias resolution (github_credentials_from_mapping
+		// filters `if v is not None` first), so it never replaces an earlier
+		// value stored under the same canonical name.
+		if value == nil {
+			continue
+		}
 		if record.Provider == "github" {
 			if canonical, aliased := githubFieldAliases[key]; aliased {
 				key = canonical
 			}
 		}
 		// A key stored twice (an alias and its canonical spelling) keeps the
-		// later one, whichever kind of value each held. A later string
-		// replaces an earlier non-string because Secret reads fields first; a
-		// later non-string must remove an earlier string here.
+		// later one, whichever kind of value each held.
 		delete(fields, key)
+		delete(deferred, key)
 		if text, isString := value.(string); isString {
 			fields[key] = secrets.NewValue(text)
 			continue
@@ -285,12 +291,20 @@ func ValidateCredentialShape(credential Credential) error {
 		}
 		// CHAOS-6781: GitHubCredentials.__post_init__ raises when a token comes
 		// with ANY App field, not only a complete triple, and the builder then
-		// returns None. private_key_path counts as the key only when there is
-		// no private_key entry (the builder reads the file into it only then).
+		// returns None. The key is private_key when that entry exists; with no
+		// entry the builder reads private_key_path into it, so the file's CONTENT
+		// decides (an empty file is no key, an unreadable one makes the builder
+		// return None), exactly as resolver.py:269-276.
 		if token {
-			key := has("private_key_path")
+			key := false
 			if _, present := credential.Secret("private_key"); present {
 				key = has("private_key")
+			} else if path, ok := credential.Secret("private_key_path"); ok && path.Configured() {
+				content, err := readGitHubAppPrivateKeyFile(path.Reveal())
+				if err != nil {
+					return ErrCredentialInvalid
+				}
+				key = content.Configured()
 			}
 			if has("app_id") || has("installation_id") || key {
 				return ErrCredentialInvalid

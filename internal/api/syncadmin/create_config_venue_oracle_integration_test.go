@@ -140,7 +140,12 @@ func basicToken(user, password string) string {
 // Named divergences (lead ruling on the cron domain): a refused cron's 422
 // text is compared by status only, and an expression only croniter accepts
 // (org D, excluded from the row diff) is created by Python and refused by
-// Go, asserted as such.
+// Go, asserted as such. Named divergence (lead ruling, inactive credential):
+// a Jira config linked to an inactive credential is created on both planes
+// with the same answer and rows, but only Python discovers its projects
+// (discover_sources_for_integration loads the credential by id and org);
+// Go's credential resolver refuses an inactive credential. That config's
+// sources are left out of the source diff and asserted per plane.
 func TestSyncConfigCreateVenueOracle(t *testing.T) {
 	ctx := context.Background()
 	root := repoRoot(t)
@@ -298,7 +303,7 @@ func TestSyncConfigCreateVenueOracle(t *testing.T) {
   coalesce(s.last_sync_at::text, '<null>'), coalesce(s.last_sync_success::text, '<null>'), coalesce(s.last_sync_error, '<null>')) AS r
   FROM integration_sources s JOIN integrations i ON i.id = s.integration_id
   LEFT JOIN sync_configurations c ON c.integration_id = s.integration_id AND c.parent_id IS NULL AND c.planner_managed
-  WHERE s.org_id IN (` + orgs + `)) AS rows`,
+  WHERE s.org_id IN (` + orgs + `) AND i.name <> 'jira inactive cred') AS rows`,
 		"integration_datasets": `SELECT coalesce(string_agg(r, E'\n' ORDER BY r), '') FROM (SELECT concat_ws(' | ', d.org_id, i.name, d.dataset_key,
   d.is_enabled, d.options::text, coalesce(d.unavailable_reason, '<null>'), coalesce(d.unavailable_since::text, '<null>'),
   coalesce(d.unavailable_last_seen_at::text, '<null>')) AS r
@@ -316,6 +321,10 @@ func TestSyncConfigCreateVenueOracle(t *testing.T) {
 			t.Errorf("%s rows differ:\n python %s\n go     %s", table, pythonRows, goRows)
 		}
 		t.Logf("%s: %d rows identical", table, strings.Count(goRows, "\n")+map[bool]int{true: 0, false: 1}[goRows == ""])
+	}
+	inactive := `SELECT count(*) FROM integration_sources s JOIN integrations i ON i.id = s.integration_id WHERE i.name = 'jira inactive cred'`
+	if pythonCount, goCount := venueoracle.TableRows(t, ctx, source, inactive), venueoracle.TableRows(t, ctx, goDB, inactive); pythonCount != "292" || goCount != "0" {
+		t.Errorf("inactive credential discovery: python %s sources, go %s; want the documented 292 / 0", pythonCount, goCount)
 	}
 	// The writes happened on the Go plane: discovered Jira projects, the
 	// PagerDuty account source, stamped PagerDuty config, pinned rows.

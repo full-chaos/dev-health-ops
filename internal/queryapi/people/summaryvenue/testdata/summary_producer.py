@@ -1,6 +1,7 @@
 """Runs the real Python person summary service and prints the body FastAPI
 writes for it (the response model's dump_json). argv[1] is a JSON object:
 db_url, person_id, org_id, range_days, compare_days, today (ISO date)."""
+
 import asyncio
 import json
 import sys
@@ -24,7 +25,9 @@ async def main():
         compare_days=args["compare_days"],
         org_id=args["org_id"],
     )
-    sys.stdout.write("BODY " + TypeAdapter(PersonSummaryResponse).dump_json(response).decode() + "\n")
+    sys.stdout.write(
+        "BODY " + TypeAdapter(PersonSummaryResponse).dump_json(response).decode() + "\n"
+    )
 
 
 asyncio.run(main())

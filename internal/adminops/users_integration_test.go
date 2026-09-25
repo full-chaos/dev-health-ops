@@ -318,16 +318,23 @@ func (m *masker) mask(text string) string {
 }
 
 func goVerb(t *testing.T, db *database, args []string) (int, string) {
+	return goVerbEnv(t, db, nil, args)
+}
+
+func goVerbEnv(t *testing.T, db *database, extra map[string]string, args []string) (int, string) {
 	t.Helper()
 	runs := map[string]func(context.Context, cli.Env) int{
 		"users create": runUsersCreate, "users list": runUsersList, "users update": runUsersUpdate,
-		"orgs create": runOrgsCreate, "orgs list": runOrgsList,
+		"orgs create": runOrgsCreate, "orgs list": runOrgsList, "orgs delete": runOrgsDelete,
 	}
 	run, ok := runs[args[0]+" "+args[1]]
 	if !ok {
 		t.Fatalf("no verb %v", args)
 	}
 	env := map[string]string{"MIGRATION_DATABASE_URI": db.uri}
+	for key, value := range extra {
+		env[key] = value
+	}
 	lookup := func(key string) (string, bool) { value, ok := env[key]; return value, ok }
 	var stdout, stderr bytes.Buffer
 	code := run(context.Background(), cli.Env{Args: args[2:], Lookup: lookup, Stdout: &stdout, Stderr: &stderr})
@@ -338,6 +345,10 @@ func goVerb(t *testing.T, db *database, args []string) (int, string) {
 }
 
 func pythonVerb(t *testing.T, db *database, args []string) (int, string) {
+	return pythonVerbEnv(t, db, nil, args)
+}
+
+func pythonVerbEnv(t *testing.T, db *database, extra map[string]string, args []string) (int, string) {
 	t.Helper()
 	root, err := filepath.Abs(filepath.Join("..", ".."))
 	if err != nil {
@@ -348,6 +359,9 @@ func pythonVerb(t *testing.T, db *database, args []string) (int, string) {
 	command := exec.Command(python, append([]string{"-c", program, "admin"}, args...)...)
 	pyURI := strings.Replace(db.uri, "postgres://", "postgresql://", 1)
 	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"), "POSTGRES_URI="+pyURI, "DATABASE_URI="+pyURI, "OTEL_ENABLED=false")
+	for key, value := range extra {
+		command.Env = append(command.Env, key+"="+value)
+	}
 	var stdout, stderr bytes.Buffer
 	command.Stdout, command.Stderr = &stdout, &stderr
 	err = command.Run()

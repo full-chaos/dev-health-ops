@@ -38,6 +38,7 @@ func orgsGroup() cli.Command {
 		Children: []cli.Command{
 			{Name: "create", Summary: "create a new organization", Kind: cli.Verb, Run: runOrgsCreate},
 			{Name: "list", Summary: "list organizations", Kind: cli.Verb, Run: runOrgsList},
+			{Name: "delete", Summary: "delete an organization and all its scoped data", Kind: cli.Verb, Run: runOrgsDelete},
 		},
 	}
 }

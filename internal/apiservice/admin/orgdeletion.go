@@ -78,7 +78,6 @@ func (h *handlers) deleteOrganization(w http.ResponseWriter, r *http.Request) {
 		policy.WriteDetail(w, http.StatusBadRequest, "Invalid organization id", nil)
 		return
 	}
-	orgIDStr := orgUUID.String()
 
 	values, queryErr := url.ParseQuery(r.URL.RawQuery)
 	if queryErr != nil {
@@ -91,6 +90,35 @@ func (h *handlers) deleteOrganization(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	result, err := h.deleteOrganizationData(ctx, orgUUID, dryRun)
+	if err != nil {
+		var step *orgDeletionStepError
+		if errors.As(err, &step) {
+			h.logger.ErrorContext(ctx, "admin: org deletion "+step.step+" failed", "error", step.err)
+		}
+		policy.WriteInternal(w)
+		return
+	}
+
+	policy.WriteModel(w, http.StatusOK, result.json(), nil)
+}
+
+// orgDeletionStepError names which step of an organization deletion failed;
+// the route logs the step, the operator verb prints the cause.
+type orgDeletionStepError struct {
+	step string
+	err  error
+}
+
+func (e *orgDeletionStepError) Error() string { return e.err.Error() }
+func (e *orgDeletionStepError) Unwrap() error { return e.err }
+
+// deleteOrganizationData is org_deletion.py's OrganizationDeletionService.delete
+// after the org id is parsed: the one sequence the route and the operator verb
+// (Operator.DeleteOrg) both run. ClickHouse trouble is a warning in the result,
+// never an error.
+func (h *handlers) deleteOrganizationData(ctx context.Context, orgUUID uuid.UUID, dryRun bool) (*orgDeletionResult, error) {
+	orgIDStr := orgUUID.String()
 	result := &orgDeletionResult{
 		organizationID:     orgIDStr,
 		dryRun:             dryRun,
@@ -100,9 +128,7 @@ func (h *handlers) deleteOrganization(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.orgDeletionCredentialCounts(ctx, orgUUID, orgIDStr, result); err != nil {
-		h.logger.ErrorContext(ctx, "admin: org deletion credential counts failed", "error", err)
-		policy.WriteInternal(w)
-		return
+		return nil, &orgDeletionStepError{"credential counts", err}
 	}
 
 	// PagerDuty is revoked BEFORE the per-target count below (never
@@ -112,29 +138,22 @@ func (h *handlers) deleteOrganization(w http.ResponseWriter, r *http.Request) {
 	// there is 0, not 1, on both planes.
 	if !dryRun {
 		if err := h.orgDeletionRevokePagerDuty(ctx, orgIDStr); err != nil {
-			h.logger.ErrorContext(ctx, "admin: org deletion pagerduty revoke failed", "error", err)
-			policy.WriteInternal(w)
-			return
+			return nil, &orgDeletionStepError{"pagerduty revoke", err}
 		}
 	}
 
 	if err := h.orgDeletionCountTargets(ctx, orgUUID, orgIDStr, result); err != nil {
-		h.logger.ErrorContext(ctx, "admin: org deletion target counts failed", "error", err)
-		policy.WriteInternal(w)
-		return
+		return nil, &orgDeletionStepError{"target counts", err}
 	}
 
 	if !dryRun {
 		if err := h.orgDeletionPurgePostgres(ctx, orgUUID, orgIDStr, result); err != nil {
-			h.logger.ErrorContext(ctx, "admin: org deletion postgres purge failed", "error", err)
-			policy.WriteInternal(w)
-			return
+			return nil, &orgDeletionStepError{"postgres purge", err}
 		}
 	}
 
 	h.orgDeletionPurgeClickHouse(ctx, orgIDStr, dryRun, result)
-
-	policy.WriteModel(w, http.StatusOK, result.json(), nil)
+	return result, nil
 }
 
 // orgDeletionResult mirrors DeletionResult/DeletionResultResponse, field
@@ -290,7 +309,7 @@ func (h *handlers) orgDeletionRevokePagerDuty(ctx context.Context, orgIDStr stri
 		return nil
 	}
 	if h.pagerDuty.ClientID == "" {
-		return fmt.Errorf("pagerduty oauth configuration is unavailable for deletion")
+		return fmt.Errorf("PagerDuty OAuth configuration is unavailable for deletion")
 	}
 
 	for _, row := range credentials {

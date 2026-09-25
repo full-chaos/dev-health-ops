@@ -20,7 +20,7 @@ func TestTheAdminGroupHoldsEveryVerb(t *testing.T) {
 			paths = append(paths, group.Name+" "+child.Name)
 		}
 	}
-	want := "users create,users list,users update,orgs create,orgs list,features seed"
+	want := "users create,users list,users update,orgs create,orgs list,orgs delete,features seed"
 	if command.Name != "admin" || strings.Join(paths, ",") != want {
 		t.Fatalf("the verbs are %v, want %s", paths, want)
 	}
@@ -41,6 +41,8 @@ func TestUsersVerbsRefuseBadArgumentsBeforeConnecting(t *testing.T) {
 		{"update refuses an unknown role", runUsersUpdate, []string{"--email", "a@example.com", "--org", "x", "--role", "root"}},
 		{"list refuses a positional", runUsersList, []string{"x"}},
 		{"orgs list refuses a non-number limit", runOrgsList, []string{"--limit", "many"}},
+		{"orgs delete needs --org-id", runOrgsDelete, nil},
+		{"orgs delete refuses a positional", runOrgsDelete, []string{"--org-id", "x", "y"}},
 	}
 	for _, c := range cases {
 		var stdout, stderr bytes.Buffer

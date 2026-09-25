@@ -84,7 +84,11 @@ func ValidatePagerDutyCredential(ctx context.Context, doer HTTPDoer, config Page
 		return ValidatedPagerDutyCredential{AuthMode: "oauth", AccessToken: candidate.AccessToken, GrantedScopes: pagerDutyScopeSet(candidate.GrantedScopes),
 			AccountID: id, AccountDisplay: display, Subdomain: subdomain}, nil
 	case "client_credentials":
-		access, granted, err := pagerDutyExchangeClientCredentials(ctx, client, config, candidate, requiredScopes)
+		// The token request carries the client secret in its body, which a 307
+		// or 308 replays to the redirect target. httpx (follow_redirects=True)
+		// would follow it; this request does not -- a redirect is a failed
+		// read here, and PagerDuty's token endpoint never redirects.
+		access, granted, err := pagerDutyExchangeClientCredentials(ctx, pagerDutyClient(doer, false, 5*time.Second), config, candidate, requiredScopes)
 		if err != nil {
 			return ValidatedPagerDutyCredential{}, err
 		}

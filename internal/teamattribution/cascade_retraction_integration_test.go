@@ -136,3 +136,62 @@ func TestLoadersHonorARetractionBeforeTheRowPairMerges(t *testing.T) {
 		}
 	}
 }
+
+// A re-open is the retraction's mirror: the newest row under the sort key has
+// valid_to NULL while an older row carries a real valid_to. valid_to is
+// Nullable, so a plain argMax(valid_to, ...) skips the NULL and returns the
+// older, closed date -- re-closing a row the newest version re-opened.
+func TestLoadersHonorAReopenBeforeTheRowPairMerges(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	conn := openTeamAttributionSchema(ctx, t)
+
+	for _, table := range []string{"team_project_ownership", "team_repo_ownership", "team_memberships"} {
+		if err := conn.Exec(ctx, "SYSTEM STOP MERGES "+table); err != nil {
+			t.Fatalf("stop merges on %s: %v", table, err)
+		}
+	}
+	opened := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	closed := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
+	reopened := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	asOf := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	const org = "org-6637-reopen"
+
+	for _, row := range []struct {
+		validTo   any
+		updatedAt time.Time
+	}{{closed, closed}, {nil, reopened}} {
+		if err := conn.Exec(ctx, `INSERT INTO team_project_ownership
+			(org_id, provider, team_id, project_id, project_key, source, is_primary, specificity, priority, valid_from, valid_to, updated_at)
+			VALUES (?, 'jira', 'team-a', 'proj-1', 'KEY', 'native', 1, 110, 10, ?, ?, ?)`,
+			org, opened, row.validTo, row.updatedAt); err != nil {
+			t.Fatalf("insert project ownership: %v", err)
+		}
+		if err := conn.Exec(ctx, `INSERT INTO team_repo_ownership
+			(org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at)
+			VALUES (?, 'jira', 'team-a', NULL, 'acme/api', 'exact', 'native', 1, 110, 10, ?, ?, ?)`,
+			org, opened, row.validTo, row.updatedAt); err != nil {
+			t.Fatalf("insert repo ownership: %v", err)
+		}
+		if err := conn.Exec(ctx, `INSERT INTO team_memberships
+			(org_id, provider, team_id, member_id, raw_provider_user_id, raw_email, source, is_primary, specificity, priority, valid_from, valid_to, updated_at)
+			VALUES (?, 'jira', 'team-a', 'jira:member', NULL, NULL, 'native', 1, 100, 10, ?, ?, ?)`,
+			org, opened, row.validTo, row.updatedAt); err != nil {
+			t.Fatalf("insert membership: %v", err)
+		}
+	}
+
+	source := ClickHouseFactSource{Conn: conn}
+	projects, err := source.LoadProjects(ctx, org, asOf)
+	if err != nil || len(projects) != 1 {
+		t.Errorf("LoadProjects after a re-open: %d facts, err %v; want 1", len(projects), err)
+	}
+	repos, err := source.LoadRepos(ctx, org, asOf)
+	if err != nil || len(repos) != 1 {
+		t.Errorf("LoadRepos after a re-open: %d facts, err %v; want 1", len(repos), err)
+	}
+	members, err := source.LoadProviderMembers(ctx, org, asOf)
+	if err != nil || len(members) != 1 {
+		t.Errorf("LoadProviderMembers after a re-open: %d facts, err %v; want 1", len(members), err)
+	}
+}

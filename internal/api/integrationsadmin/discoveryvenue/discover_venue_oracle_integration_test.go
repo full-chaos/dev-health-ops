@@ -3,6 +3,7 @@
 package discoveryvenue
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -45,10 +46,14 @@ const (
 )
 
 type ids struct {
-	orgA, orgB, orgC                                       uuid.UUID
-	adminA, memberA, adminB, adminC, adminNoOrg            uuid.UUID
-	credGood, credBad, credGoodB, credGoodC                uuid.UUID
-	credForbidden, intForbidden                            uuid.UUID
+	orgA, orgB, orgC                            uuid.UUID
+	adminA, memberA, adminB, adminC, adminNoOrg uuid.UUID
+	credGood, credBad, credGoodB, credGoodC     uuid.UUID
+	credForbidden, intForbidden                 uuid.UUID
+	// GitHub and GitLab integrations whose provider refuses the credential (401,
+	// 403): asserted on the Go api only (CHAOS-6785).
+	credGHBad, credGHForbidden, credGLBad, credGLForbidden uuid.UUID
+	intGHBad, intGHForbidden, intGLBad, intGLForbidden     uuid.UUID
 	intRecover, cfgRecover, srcRecover                     uuid.UUID
 	credNoURL, credNoEmail, intNoURL, intNoEmail, cfgNoURL uuid.UUID
 	intJira, intScoped, intConfigScoped, intBad, intNoCred uuid.UUID
@@ -60,6 +65,7 @@ type ids struct {
 func newIDs() ids {
 	var v ids
 	for _, target := range []*uuid.UUID{&v.credNoURL, &v.credNoEmail, &v.intNoURL, &v.intNoEmail, &v.cfgNoURL, &v.orgA, &v.orgB, &v.orgC, &v.adminC, &v.credGoodC, &v.intRecover, &v.cfgRecover, &v.srcRecover, &v.adminA, &v.memberA, &v.adminB, &v.adminNoOrg, &v.credGood, &v.credBad, &v.credForbidden, &v.intForbidden,
+		&v.credGHBad, &v.credGHForbidden, &v.credGLBad, &v.credGLForbidden, &v.intGHBad, &v.intGHForbidden, &v.intGLBad, &v.intGLForbidden,
 		&v.credGoodB, &v.intJira, &v.intScoped, &v.intConfigScoped, &v.intBad, &v.intNoCred, &v.intLinear, &v.intB, &v.intEmpty,
 		&v.cfgJira, &v.cfgScoped, &v.cfgB, &v.intRename, &v.srcAcm, &v.srcOld, &v.srcDupLower, &v.srcDupUpper, &v.srcRename} {
 		*target = uuid.New()
@@ -257,6 +263,52 @@ func TestIntegrationDiscoverVenueOracle(t *testing.T) {
 		}
 	}
 
+	// The same named divergence for GitHub and GitLab (CHAOS-6785), through the
+	// route: a second Go api whose provider HTTP answers 401 or 403 by token
+	// (Python is not run: its discovery answers the empty 202 there). Each answer
+	// is the 422 naming the provider and its status, the log carries the failure
+	// event with its cause, and neither the token nor the provider's own body
+	// reaches the answer or the log.
+	var logs bytes.Buffer
+	refusing := &http.Client{Transport: refusingProviders{}}
+	refusingBase := startGoServer(t, ctx, venue, jwtKey, func(deps *apiservice.Deps) {
+		deps.Now = func() time.Time { return pinned }
+		deps.Decryptor = decryptor
+		deps.SyncJiraHTTP = refusing
+	}, slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	for _, refusal := range []struct {
+		name, provider string
+		integration    uuid.UUID
+		status         int
+	}{
+		{"github 401", "github", v.intGHBad, 401}, {"github 403", "github", v.intGHForbidden, 403},
+		{"gitlab 401", "gitlab", v.intGLBad, 401}, {"gitlab 403", "gitlab", v.intGLForbidden, 403},
+	} {
+		request := venueoracle.Request{Name: refusal.name, Method: "POST", Path: discoverPath + refusal.integration.String() + "/discover",
+			Headers: map[string]string{"Authorization": "Bearer " + venue.Tokens["adminA"]}}
+		response := venueoracle.Do(t, refusingBase, request)
+		want := fmt.Sprintf(`{"detail":[{"type":"provider_authentication_failed","loc":["path","integration_id"],"msg":"%s rejected the integration's credential (HTTP %d)","input":%q}]}`,
+			refusal.provider, refusal.status, refusal.integration.String())
+		if response.Status != http.StatusUnprocessableEntity || response.Body != want {
+			t.Errorf("%s: go %d %s\n want 422 %s", refusal.name, response.Status, response.Body, want)
+		}
+		if strings.Contains(response.Body, "token") || strings.Contains(response.Body, "stub-secret-body") {
+			t.Errorf("%s: the answer leaks the credential or the provider's body: %s", refusal.name, response.Body)
+		}
+		event := ""
+		for _, line := range strings.Split(logs.String(), "\n") {
+			if strings.Contains(line, "integration_discovery.failed") && strings.Contains(line, refusal.integration.String()) {
+				event = line
+			}
+		}
+		if event == "" || !strings.Contains(event, fmt.Sprintf("%d", refusal.status)) {
+			t.Errorf("%s: no integration_discovery.failed log event naming the integration and the status; log:\n%s", refusal.name, logs.String())
+		}
+	}
+	if strings.Contains(logs.String(), "-token") || strings.Contains(logs.String(), "stub-secret-body") {
+		t.Errorf("the log leaks a credential or a provider body:\n%s", logs.String())
+	}
+
 	// integration_sources as raw column text; a created row's id is random on
 	// each plane, so rows are compared by their identity columns.
 	query := `SELECT org_id, integration_id, provider, source_type, external_id, name, full_name, metadata::text, is_enabled,
@@ -404,7 +456,7 @@ func normalize(_ venueoracle.Request, body string) string {
 	})
 }
 
-func startGoServer(t *testing.T, ctx context.Context, venue *venueoracle.Venue, jwtKey string, adjust func(*apiservice.Deps)) string {
+func startGoServer(t *testing.T, ctx context.Context, venue *venueoracle.Venue, jwtKey string, adjust func(*apiservice.Deps), loggers ...*slog.Logger) string {
 	t.Helper()
 	pool, err := pgxpool.New(ctx, venue.GoAPIDatabaseURI(t))
 	if err != nil {
@@ -416,6 +468,9 @@ func startGoServer(t *testing.T, ctx context.Context, venue *venueoracle.Venue, 
 		t.Fatalf("verifier: %v", err)
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	if len(loggers) > 0 && loggers[0] != nil {
+		logger = loggers[0]
+	}
 	auth, err := policy.NewAuthenticator(verifier, policy.PGStore{Pool: pool}, logger)
 	if err != nil {
 		t.Fatalf("authenticator: %v", err)
@@ -454,4 +509,25 @@ func repoRoot(t *testing.T) string {
 		}
 		directory = parent
 	}
+}
+
+// refusingProviders answers a GitHub or GitLab request with the status its token
+// names (a token ending "bad-token" is 401, "forbidden-token" is 403) and a body
+// that must never reach an answer or a log line.
+type refusingProviders struct{}
+
+func (refusingProviders) RoundTrip(request *http.Request) (*http.Response, error) {
+	credential := request.Header.Get("Authorization") + request.Header.Get("PRIVATE-TOKEN")
+	status := http.StatusNotFound
+	switch {
+	case strings.Contains(credential, "forbidden-token"):
+		status = http.StatusForbidden
+	case strings.Contains(credential, "bad-token"):
+		status = http.StatusUnauthorized
+	}
+	return &http.Response{
+		StatusCode: status, Header: http.Header{"Content-Type": []string{"application/json"}},
+		Body:    io.NopCloser(strings.NewReader(`{"message":"stub-secret-body"}`)),
+		Request: request,
+	}, nil
 }

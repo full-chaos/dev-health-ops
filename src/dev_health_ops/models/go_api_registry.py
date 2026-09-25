@@ -58,8 +58,24 @@ OWNERS = ("python", "go")
 #: the CHECK constraint is the enforcement.
 MODES = ("python", "shadow", "canary", "primary", "disabled")
 
-#: plan §5's five-stage proof gate stage names.
-STAGES = ("dual_run", "deployed_executed", "shadow", "canary")
+#: plan §5's five-stage proof gate stage names for a QUERY operation's
+#: two-plane comparison.
+QUERY_PROOF_STAGES = ("dual_run", "deployed_executed", "shadow", "canary")
+
+#: CHAOS-6810: the receipt kind of a GraphQL MUTATION's single-plane write
+#: proof. A mutation cannot run on both planes (it would write twice), so its
+#: receipt is not a comparison of two responses: it records ONE execution of the
+#: deployed build inside the fixture org, and the digest of the rows and River
+#: outbox payloads that execution persisted (``side_effect_digest``), compared
+#: with the digest the CI oracle (real Python resolver vs real Go, two databases)
+#: committed for the same case. It is a stage of its own so that a query's
+#: ``deployed_executed`` receipt can never admit a mutation and the reverse
+#: (see ``go_api_routing_admin._enablement_proof_conditions``).
+STAGE_WRITE_EXECUTED = "write_executed"
+
+#: Every stage ``go_api_proof_run`` accepts. ``go_api_rest_proof_run`` (0134)
+#: keeps the four query-proof stages: a REST route has no write-proof form.
+STAGES = (*QUERY_PROOF_STAGES, STAGE_WRITE_EXECUTED)
 
 #: plan §5's terminal-state vocabulary. No unclassified equivalent of a
 #: stranded partition is acceptable -- every comparator/proof outcome must
@@ -320,6 +336,15 @@ class ProofRun(Base):
         CheckConstraint(
             "stage <> 'shadow' OR data_watermark IS NOT NULL",
             name="ck_go_api_proof_run_shadow_requires_watermark",
+        ),
+        # A write proof records ONE execution's persisted effects and only the
+        # deployed edge can serve a mutation: without the digest there is
+        # nothing to compare, and a proof-route receipt says the build CAN
+        # serve, not that the edge DOES (CHAOS-6810, alembic 0143).
+        CheckConstraint(
+            "stage <> 'write_executed' OR "
+            "(side_effect_digest IS NOT NULL AND measurement_route IS NOT NULL AND measurement_route = 'edge')",
+            name="ck_go_api_proof_run_write_executed_shape",
         ),
         # Closed, small vocabulary: a receipt whose route is neither of
         # these cannot be interpreted at all. NULL stays legal for the

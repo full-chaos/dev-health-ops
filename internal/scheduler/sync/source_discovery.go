@@ -16,8 +16,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 	"github.com/full-chaos/dev-health-ops/internal/synclimits"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -247,7 +249,7 @@ type discoveredSource struct {
 	SourceType string
 	Name       string
 	FullName   string
-	Metadata   map[string]any
+	Metadata   *pyjson.Object
 }
 
 // NativeSourceDiscoveryService is the production SourceDiscoveryExecutor.
@@ -621,7 +623,7 @@ func (service *NativeSourceDiscoveryService) discoverGitHub(ctx context.Context,
 		}
 		result = append(result, discoveredSource{
 			ExternalID: fullName, SourceType: "repository", Name: repo.Name, FullName: fullName,
-			Metadata: map[string]any{"owner": repo.Owner.Login},
+			Metadata: metadataOf("owner", repo.Owner.Login),
 		})
 	}
 	return result, nil
@@ -746,7 +748,7 @@ func (service *NativeSourceDiscoveryService) discoverGitLab(ctx context.Context,
 		}
 		result = append(result, discoveredSource{
 			ExternalID: project.ID.String(), SourceType: "project", Name: name, FullName: project.PathWithNamespace,
-			Metadata: map[string]any{"path_with_namespace": project.PathWithNamespace},
+			Metadata: metadataOf("path_with_namespace", project.PathWithNamespace),
 		})
 	}
 	return result, nil
@@ -819,59 +821,68 @@ func (service *NativeSourceDiscoveryService) discoverJira(ctx context.Context, c
 	identityIsProjectID := explicitID != ""
 	result := make([]discoveredSource, 0, len(page.Items))
 	for _, raw := range page.Items {
-		var project struct {
-			ID   string `json:"id"`
-			Key  string `json:"key"`
-			Name string `json:"name"`
-		}
-		if err := json.Unmarshal(raw, &project); err != nil {
+		decoded, err := pyjson.DecodeString(string(raw))
+		if err != nil {
 			continue
 		}
-		if project.Key == "" {
+		project, ok := decoded.(*pyjson.Object)
+		if !ok {
 			continue
 		}
+		// discover_jira_projects: key = str(project.get("key") or "").strip(),
+		// project_id likewise, name = str(project.get("name") or key),
+		// project_type_key stripped and lower-cased.
+		field := func(name string) string {
+			value, _ := project.Get(name)
+			if !pyjson.Truthy(value) {
+				return ""
+			}
+			return pyjson.Str(value)
+		}
+		key := pythonparity.Strip(field("key"))
+		if key == "" {
+			continue
+		}
+		projectID := pythonparity.Strip(field("id"))
 		// Filter precedence mirrors discover_jira_projects exactly:
 		// project_id, once present, is the ENTIRE scope (project_key is
 		// ignored, not additionally enforced -- a stale key alongside a
 		// freshly-PATCHed id must not filter every project out).
 		if identityIsProjectID {
-			if project.ID != explicitID {
+			if projectID != explicitID {
 				continue
 			}
-		} else if explicitKey != "" && normalizeSourceKey(project.Key) != explicitKey {
+		} else if explicitKey != "" && normalizeSourceKey(key) != explicitKey {
 			continue
 		}
-		identity := project.Key
-		if identityIsProjectID && project.ID != "" {
-			identity = project.ID
+		name := field("name")
+		if name == "" {
+			name = key
 		}
-		fullName := project.Name
-		if fullName == "" {
-			fullName = project.Key
+		projectTypeKey := pythonparity.Lower(pythonparity.Strip(field("projectTypeKey")))
+		identity := key
+		if identityIsProjectID && projectID != "" {
+			identity = projectID
+		}
+		// _map_jira_tuple(identity, name, project_type_key, project_id):
+		// external_id and full_name are the identity; the metadata is
+		// {project_type_key, discovered_project: True, jira_project_id
+		// (when there is one)}, in that order, and the planner tag follows.
+		//
+		// discovered_project marks every row a real discovery run created:
+		// without it, a real project whose key is literally "JIRA" is
+		// classified as the legacy placeholder shape and plans zero units.
+		// jira_project_id is Jira's immutable numeric id, carried even when
+		// the key is the identity, so a key rename is recognisable as the
+		// same project.
+		metadata := pyjson.NewObject()
+		metadata.Set("project_type_key", projectTypeKey)
+		metadata.Set("discovered_project", true)
+		if projectID != "" {
+			metadata.Set("jira_project_id", projectID)
 		}
 		result = append(result, discoveredSource{
-			ExternalID: identity, SourceType: "project", Name: fullName, FullName: fullName,
-			// Codex review (gate round 10, P2): "discovered_project" mirrors
-			// Python's own real-discovery marker (_map_jira_tuple,
-			// CHAOS-4584 round 5) -- set on EVERY row this discovers,
-			// regardless of what its key happens to be. Without it, a real
-			// project whose key is literally "JIRA" (a live edge case) has
-			// no explicit_project_scope (it wasn't explicitly configured,
-			// it was discovered) and no project_key/project_id in an
-			// unbounded config's sync_options, so isNonProjectJiraSource
-			// falls through to the external_id=="jira" legacy-placeholder
-			// check and wrongly classifies a real, validly-discovered
-			// project as the known-bad shape, silently planning zero units
-			// for it.
-			//
-			// project_id is ALWAYS carried, even when the KEY is the
-			// identity: it is how a project-key RENAME is detected as the
-			// same project rather than a new one (discovery/repos.py's own
-			// rationale, ported verbatim; Go has no rename-migration path of
-			// its own yet, out of CHAOS-4629's scope, but keeping the field
-			// present costs nothing and keeps this row's shape aligned with
-			// Python's for whenever that lands).
-			Metadata: map[string]any{"project_id": project.ID, "discovered_project": true},
+			ExternalID: identity, SourceType: "project", Name: name, FullName: identity, Metadata: metadata,
 		})
 	}
 	return result, nil
@@ -977,12 +988,8 @@ func (service *NativeSourceDiscoveryService) upsertSources(
 	for _, source := range sources {
 		metadata := source.Metadata
 		if stampNewRows {
-			tagged := make(map[string]any, len(metadata)+1)
-			for key, value := range metadata {
-				tagged[key] = value
-			}
-			tagged["planner_managed_sync_config_id"] = configID
-			metadata = tagged
+			metadata = cloneMetadata(metadata)
+			metadata.Set("planner_managed_sync_config_id", configID)
 		}
 		metadataJSON, marshalErr := json.Marshal(metadata)
 		if marshalErr != nil {
@@ -1071,20 +1078,78 @@ type existingSourceRow struct {
 	ExternalID   string
 	IsEnabled    bool
 	DiscoveredAt time.Time
-	Metadata     map[string]any
+	Metadata     *pyjson.Object
 }
 
-func cloneMetadata(metadata map[string]any) map[string]any {
-	clone := make(map[string]any, len(metadata)+1)
-	for key, value := range metadata {
-		clone[key] = value
+// metadataOf is a one-key metadata dict.
+func metadataOf(key string, value pyjson.Value) *pyjson.Object {
+	metadata := pyjson.NewObject()
+	metadata.Set(key, value)
+	return metadata
+}
+
+// decodeSourceMetadata reads a stored metadata column as Python's ORM does:
+// the JSON text's own key order; anything that is not a JSON object reads
+// as {} (the "metadata_ or {}" the Python merges start from).
+func decodeSourceMetadata(text string) *pyjson.Object {
+	value, err := pyjson.DecodeString(text)
+	if err != nil {
+		return pyjson.NewObject()
+	}
+	if object, ok := value.(*pyjson.Object); ok {
+		return object
+	}
+	return pyjson.NewObject()
+}
+
+// cloneMetadata is dict(metadata): the same keys in the same order.
+func cloneMetadata(metadata *pyjson.Object) *pyjson.Object {
+	clone := pyjson.NewObject()
+	if metadata == nil {
+		return clone
+	}
+	for _, key := range metadata.Keys() {
+		value, _ := metadata.Get(key)
+		clone.Set(key, value)
 	}
 	return clone
 }
 
+// withoutMetadataKey is the dict with key removed (dict.pop).
+func withoutMetadataKey(metadata *pyjson.Object, key string) *pyjson.Object {
+	out := pyjson.NewObject()
+	for _, name := range metadata.Keys() {
+		if name == key {
+			continue
+		}
+		value, _ := metadata.Get(name)
+		out.Set(name, value)
+	}
+	return out
+}
+
+// metadataString is metadata.get(key) when it is a str, else "".
+func metadataString(metadata *pyjson.Object, key string) string {
+	value, _ := metadata.Get(key)
+	text, _ := value.(string)
+	return text
+}
+
+// encodeSourceMetadata is the ORM's json.dumps of the metadata column.
+func encodeSourceMetadata(metadata *pyjson.Object) (string, error) {
+	if metadata == nil {
+		metadata = pyjson.NewObject()
+	}
+	text, err := pyjson.Dumps(metadata)
+	if err != nil {
+		return "", fmt.Errorf("encode source metadata: %w", err)
+	}
+	return text, nil
+}
+
 func fetchExistingSourceRows(ctx context.Context, tx pgx.Tx, orgID, integrationID string) ([]*existingSourceRow, error) {
 	rows, err := tx.Query(ctx, `
-SELECT id::text, provider, external_id, is_enabled, discovered_at, metadata::jsonb
+SELECT id::text, provider, external_id, is_enabled, discovered_at, metadata::text
 FROM public.integration_sources WHERE org_id=$1 AND integration_id=$2::uuid`, orgID, integrationID)
 	if err != nil {
 		return nil, fmt.Errorf("load existing integration sources: %w", err)
@@ -1093,11 +1158,11 @@ FROM public.integration_sources WHERE org_id=$1 AND integration_id=$2::uuid`, or
 	var result []*existingSourceRow
 	for rows.Next() {
 		row := &existingSourceRow{}
-		var metadataJSON []byte
-		if err := rows.Scan(&row.ID, &row.Provider, &row.ExternalID, &row.IsEnabled, &row.DiscoveredAt, &metadataJSON); err != nil {
+		var metadataText string
+		if err := rows.Scan(&row.ID, &row.Provider, &row.ExternalID, &row.IsEnabled, &row.DiscoveredAt, &metadataText); err != nil {
 			return nil, fmt.Errorf("scan existing integration source: %w", err)
 		}
-		_ = json.Unmarshal(metadataJSON, &row.Metadata)
+		row.Metadata = decodeSourceMetadata(metadataText)
 		result = append(result, row)
 	}
 	if err := rows.Err(); err != nil {
@@ -1106,10 +1171,10 @@ FROM public.integration_sources WHERE org_id=$1 AND integration_id=$2::uuid`, or
 	return result, nil
 }
 
-func disableSourceRow(ctx context.Context, tx pgx.Tx, id string, metadata map[string]any) error {
-	metadataJSON, err := json.Marshal(metadata)
+func disableSourceRow(ctx context.Context, tx pgx.Tx, id string, metadata *pyjson.Object) error {
+	metadataJSON, err := encodeSourceMetadata(metadata)
 	if err != nil {
-		return fmt.Errorf("encode source metadata: %w", err)
+		return err
 	}
 	if _, err := tx.Exec(ctx, `UPDATE public.integration_sources SET is_enabled=FALSE, metadata=$2::json WHERE id=$1::uuid`, id, metadataJSON); err != nil {
 		return fmt.Errorf("disable integration source %s: %w", id, err)
@@ -1117,10 +1182,10 @@ func disableSourceRow(ctx context.Context, tx pgx.Tx, id string, metadata map[st
 	return nil
 }
 
-func enableSourceRow(ctx context.Context, tx pgx.Tx, id string, metadata map[string]any) error {
-	metadataJSON, err := json.Marshal(metadata)
+func enableSourceRow(ctx context.Context, tx pgx.Tx, id string, metadata *pyjson.Object) error {
+	metadataJSON, err := encodeSourceMetadata(metadata)
 	if err != nil {
-		return fmt.Errorf("encode source metadata: %w", err)
+		return err
 	}
 	if _, err := tx.Exec(ctx, `UPDATE public.integration_sources SET is_enabled=TRUE, metadata=$2::json WHERE id=$1::uuid`, id, metadataJSON); err != nil {
 		return fmt.Errorf("enable integration source %s: %w", id, err)
@@ -1128,10 +1193,10 @@ func enableSourceRow(ctx context.Context, tx pgx.Tx, id string, metadata map[str
 	return nil
 }
 
-func updateExistingSourceRow(ctx context.Context, tx pgx.Tx, id, name, fullName string, metadata map[string]any, now time.Time, reenable bool) error {
-	metadataJSON, err := json.Marshal(metadata)
+func updateExistingSourceRow(ctx context.Context, tx pgx.Tx, id, name, fullName string, metadata *pyjson.Object, now time.Time, reenable bool) error {
+	metadataJSON, err := encodeSourceMetadata(metadata)
 	if err != nil {
-		return fmt.Errorf("encode source metadata: %w", err)
+		return err
 	}
 	sql := `UPDATE public.integration_sources SET name=$2, full_name=$3, metadata=$4::json, last_seen_at=$5`
 	if reenable {
@@ -1146,11 +1211,11 @@ func updateExistingSourceRow(ctx context.Context, tx pgx.Tx, id, name, fullName 
 
 func insertNewSourceRow(
 	ctx context.Context, tx pgx.Tx, orgID, integrationID, provider, sourceType, externalID, name, fullName string,
-	metadata map[string]any, now time.Time,
+	metadata *pyjson.Object, now time.Time,
 ) (id string, discoveredAt time.Time, err error) {
-	metadataJSON, err := json.Marshal(metadata)
+	metadataJSON, err := encodeSourceMetadata(metadata)
 	if err != nil {
-		return "", time.Time{}, fmt.Errorf("encode source metadata: %w", err)
+		return "", time.Time{}, err
 	}
 	var returnedID string
 	err = tx.QueryRow(ctx, `
@@ -1265,7 +1330,7 @@ func (service *NativeSourceDiscoveryService) upsertJiraSources(
 					continue
 				}
 				metadata := cloneMetadata(dup.Metadata)
-				metadata[sourceDuplicateOfKey] = survivor.ExternalID
+				metadata.Set(sourceDuplicateOfKey, survivor.ExternalID)
 				if err := disableSourceRow(ctx, tx, dup.ID, metadata); err != nil {
 					return 0, 0, nil, nil, 0, err
 				}
@@ -1277,20 +1342,21 @@ func (service *NativeSourceDiscoveryService) upsertJiraSources(
 		metadata := source.Metadata
 		if stampNewRows {
 			metadata = cloneMetadata(metadata)
-			metadata["planner_managed_sync_config_id"] = configID
+			metadata.Set("planner_managed_sync_config_id", configID)
 		}
 
 		if survivor != nil {
 			merged := cloneMetadata(survivor.Metadata)
-			for key, value := range metadata {
-				merged[key] = value
+			for _, key := range metadata.Keys() {
+				value, _ := metadata.Get(key)
+				merged.Set(key, value)
 			}
 			reenable := false
-			if _, ok := merged[sourceSupersededMarkerKey]; ok {
+			if _, ok := merged.Get(sourceSupersededMarkerKey); ok {
 				// The project this row was superseded for is reconfirmed by
 				// this discovery run -- undo a system-driven (never an
 				// operator's own) rescope disable.
-				delete(merged, sourceSupersededMarkerKey)
+				merged = withoutMetadataKey(merged, sourceSupersededMarkerKey)
 				reenable = true
 			}
 			if err := updateExistingSourceRow(ctx, tx, survivor.ID, source.Name, source.FullName, merged, now, reenable); err != nil {
@@ -1358,7 +1424,7 @@ func supersedeStaleScopedJiraSources(
 	// through -- chris's ruling (CHAOS-4584 gate round 7): one normalization
 	// implementation, no SQL counterpart left to fall out of sync with it.
 	rows, err := tx.Query(ctx, `
-SELECT id::text, provider, external_id, metadata::jsonb FROM public.integration_sources
+SELECT id::text, provider, external_id, metadata::text FROM public.integration_sources
 WHERE org_id=$1 AND integration_id=$2::uuid AND is_enabled`, orgID, integrationID)
 	if err != nil {
 		return 0, fmt.Errorf("load enabled sources for supersede: %w", err)
@@ -1366,22 +1432,22 @@ WHERE org_id=$1 AND integration_id=$2::uuid AND is_enabled`, orgID, integrationI
 	type candidateRow struct {
 		id         string
 		externalID string
-		metadata   map[string]any
+		metadata   *pyjson.Object
 	}
 	var superseded []candidateRow
 	for rows.Next() {
 		var row candidateRow
 		var provider string
-		var metadataJSON []byte
-		if err := rows.Scan(&row.id, &provider, &row.externalID, &metadataJSON); err != nil {
+		var metadataText string
+		if err := rows.Scan(&row.id, &provider, &row.externalID, &metadataText); err != nil {
 			rows.Close()
 			return 0, err
 		}
 		if normalizeSourceKey(provider) != "jira" {
 			continue
 		}
-		_ = json.Unmarshal(metadataJSON, &row.metadata)
-		tag, _ := row.metadata["planner_managed_sync_config_id"].(string)
+		row.metadata = decodeSourceMetadata(metadataText)
+		tag := metadataString(row.metadata, "planner_managed_sync_config_id")
 		if tag != configID {
 			continue
 		}
@@ -1397,7 +1463,7 @@ WHERE org_id=$1 AND integration_id=$2::uuid AND is_enabled`, orgID, integrationI
 	rows.Close()
 	for _, row := range superseded {
 		metadata := cloneMetadata(row.metadata)
-		metadata[sourceSupersededMarkerKey] = true
+		metadata.Set(sourceSupersededMarkerKey, true)
 		if err := disableSourceRow(ctx, tx, row.id, metadata); err != nil {
 			return 0, err
 		}
@@ -1476,7 +1542,7 @@ WHERE organization.id=$1::uuid`, orgID).Scan(&orgTier, &licenseTier, &overridesJ
 type repoLimitCandidateRow struct {
 	id         string
 	externalID string
-	metadata   map[string]any
+	metadata   *pyjson.Object
 }
 
 // rebalanceJiraSourceRepoLimit ports
@@ -1549,7 +1615,7 @@ LIMIT 1`, integrationID, orgID).Scan(&plannerConfigActive)
 			// or it becomes permanently invisible to capping -- over
 			// max_repos with no candidate left to cap.
 			rows, err := tx.Query(ctx, `
-SELECT id::text, provider, external_id, metadata::jsonb FROM public.integration_sources
+SELECT id::text, provider, external_id, metadata::text FROM public.integration_sources
 WHERE org_id=$1 AND integration_id=$2::uuid AND is_enabled
 ORDER BY external_id DESC`, orgID, integrationID)
 			if err != nil {
@@ -1559,15 +1625,15 @@ ORDER BY external_id DESC`, orgID, integrationID)
 			for rows.Next() {
 				var row repoLimitCandidateRow
 				var provider string
-				var metadataJSON []byte
-				if err := rows.Scan(&row.id, &provider, &row.externalID, &metadataJSON); err != nil {
+				var metadataText string
+				if err := rows.Scan(&row.id, &provider, &row.externalID, &metadataText); err != nil {
 					rows.Close()
 					return 0, 0, err
 				}
 				if normalizeSourceKey(provider) != "jira" {
 					continue
 				}
-				_ = json.Unmarshal(metadataJSON, &row.metadata)
+				row.metadata = decodeSourceMetadata(metadataText)
 				if _, ok := createdLower[normalizeSourceKey(row.externalID)]; ok {
 					createdRows = append(createdRows, row)
 				} else {
@@ -1585,7 +1651,7 @@ ORDER BY external_id DESC`, orgID, integrationID)
 			}
 			for _, row := range cappedRows {
 				metadata := cloneMetadata(row.metadata)
-				metadata[sourceCapMarkerKey] = true
+				metadata.Set(sourceCapMarkerKey, true)
 				if err := disableSourceRow(ctx, tx, row.id, metadata); err != nil {
 					return 0, 0, err
 				}
@@ -1596,7 +1662,7 @@ ORDER BY external_id DESC`, orgID, integrationID)
 
 	// No SQL-side provider filter, same reasoning as the capping query above.
 	rows, err := tx.Query(ctx, `
-SELECT id::text, provider, external_id, metadata::jsonb FROM public.integration_sources
+SELECT id::text, provider, external_id, metadata::text FROM public.integration_sources
 WHERE org_id=$1 AND integration_id=$2::uuid AND NOT is_enabled
 ORDER BY external_id ASC`, orgID, integrationID)
 	if err != nil {
@@ -1606,16 +1672,17 @@ ORDER BY external_id ASC`, orgID, integrationID)
 	for rows.Next() {
 		var row repoLimitCandidateRow
 		var provider string
-		var metadataJSON []byte
-		if err := rows.Scan(&row.id, &provider, &row.externalID, &metadataJSON); err != nil {
+		var metadataText string
+		if err := rows.Scan(&row.id, &provider, &row.externalID, &metadataText); err != nil {
 			rows.Close()
 			return 0, 0, err
 		}
 		if normalizeSourceKey(provider) != "jira" {
 			continue
 		}
-		_ = json.Unmarshal(metadataJSON, &row.metadata)
-		capped, _ := row.metadata[sourceCapMarkerKey].(bool)
+		row.metadata = decodeSourceMetadata(metadataText)
+		cappedValue, _ := row.metadata.Get(sourceCapMarkerKey)
+		capped, _ := cappedValue.(bool)
 		_, discoveredNow := discoveredLower[normalizeSourceKey(row.externalID)]
 		if capped && discoveredNow {
 			recoverable = append(recoverable, row)
@@ -1643,8 +1710,7 @@ ORDER BY external_id ASC`, orgID, integrationID)
 		}
 	}
 	for _, row := range recoverable {
-		metadata := cloneMetadata(row.metadata)
-		delete(metadata, sourceCapMarkerKey)
+		metadata := withoutMetadataKey(row.metadata, sourceCapMarkerKey)
 		if err := enableSourceRow(ctx, tx, row.id, metadata); err != nil {
 			return 0, 0, err
 		}

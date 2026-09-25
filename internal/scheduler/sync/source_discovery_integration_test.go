@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"testing"
 	"time"
 
@@ -270,8 +271,8 @@ func TestUpsertSourcesIsIdempotentAndNeverFlipsIsEnabled(t *testing.T) {
 	orgID := fixture.occurrence.OrgID
 
 	first := []discoveredSource{
-		{ExternalID: "CHAOS", SourceType: "project", Name: "Chaos", FullName: "Chaos Engineering", Metadata: map[string]any{"project_id": "1"}},
-		{ExternalID: "PLAT", SourceType: "project", Name: "Platform", FullName: "Platform", Metadata: map[string]any{"project_id": "2"}},
+		{ExternalID: "CHAOS", SourceType: "project", Name: "Chaos", FullName: "Chaos Engineering", Metadata: metadataOf("project_id", "1")},
+		{ExternalID: "PLAT", SourceType: "project", Name: "Platform", FullName: "Platform", Metadata: metadataOf("project_id", "2")},
 	}
 	const configID = "00000000-0000-4000-8000-000000002001"
 	created, existing, err := service.upsertSources(ctx, orgID, integrationID, "jira", first, time.Now().UTC(), configID, true, true)
@@ -298,8 +299,8 @@ func TestUpsertSourcesIsIdempotentAndNeverFlipsIsEnabled(t *testing.T) {
 
 	// Re-discovery: same two projects, PLAT's name changed upstream.
 	second := []discoveredSource{
-		{ExternalID: "CHAOS", SourceType: "project", Name: "Chaos", FullName: "Chaos Engineering", Metadata: map[string]any{"project_id": "1"}},
-		{ExternalID: "PLAT", SourceType: "project", Name: "Platform Renamed", FullName: "Platform Renamed", Metadata: map[string]any{"project_id": "2"}},
+		{ExternalID: "CHAOS", SourceType: "project", Name: "Chaos", FullName: "Chaos Engineering", Metadata: metadataOf("project_id", "1")},
+		{ExternalID: "PLAT", SourceType: "project", Name: "Platform Renamed", FullName: "Platform Renamed", Metadata: metadataOf("project_id", "2")},
 	}
 	created, existing, err = service.upsertSources(ctx, orgID, integrationID, "jira", second, time.Now().UTC(), configID, true, true)
 	if err != nil {
@@ -347,8 +348,8 @@ func TestUpsertSourcesTagsANewlyVisibleSourceForAnUnboundedConfig(t *testing.T) 
 	const configID = "00000000-0000-4000-8000-000000002002"
 
 	bootstrap := []discoveredSource{
-		{ExternalID: "CHAOS", SourceType: "project", Name: "Chaos", FullName: "Chaos Engineering", Metadata: map[string]any{"project_id": "1"}},
-		{ExternalID: "PLAT", SourceType: "project", Name: "Platform", FullName: "Platform", Metadata: map[string]any{"project_id": "2"}},
+		{ExternalID: "CHAOS", SourceType: "project", Name: "Chaos", FullName: "Chaos Engineering", Metadata: metadataOf("project_id", "1")},
+		{ExternalID: "PLAT", SourceType: "project", Name: "Platform", FullName: "Platform", Metadata: metadataOf("project_id", "2")},
 	}
 	if created, existing, err := service.upsertSources(ctx, orgID, integrationID, "jira", bootstrap, time.Now().UTC(), configID, true, true); err != nil {
 		t.Fatal(err)
@@ -359,9 +360,9 @@ func TestUpsertSourcesTagsANewlyVisibleSourceForAnUnboundedConfig(t *testing.T) 
 	// A new project becomes visible on a later pass. CHAOS/PLAT are already
 	// tagged; NEWPROJ is not.
 	later := []discoveredSource{
-		{ExternalID: "CHAOS", SourceType: "project", Name: "Chaos", FullName: "Chaos Engineering", Metadata: map[string]any{"project_id": "1"}},
-		{ExternalID: "PLAT", SourceType: "project", Name: "Platform", FullName: "Platform", Metadata: map[string]any{"project_id": "2"}},
-		{ExternalID: "NEWPROJ", SourceType: "project", Name: "New Project", FullName: "New Project", Metadata: map[string]any{"project_id": "3"}},
+		{ExternalID: "CHAOS", SourceType: "project", Name: "Chaos", FullName: "Chaos Engineering", Metadata: metadataOf("project_id", "1")},
+		{ExternalID: "PLAT", SourceType: "project", Name: "Platform", FullName: "Platform", Metadata: metadataOf("project_id", "2")},
+		{ExternalID: "NEWPROJ", SourceType: "project", Name: "New Project", FullName: "New Project", Metadata: metadataOf("project_id", "3")},
 	}
 	created, existing, err := service.upsertSources(ctx, orgID, integrationID, "jira", later, time.Now().UTC(), configID, true, true)
 	if err != nil {
@@ -399,7 +400,7 @@ func TestUpsertSourcesNeverTagsANewlyVisibleSourceForABoundedJiraConfig(t *testi
 	const configID = "00000000-0000-4000-8000-000000002007"
 
 	bootstrap := []discoveredSource{
-		{ExternalID: "CHAOS", SourceType: "project", Name: "Chaos", FullName: "Chaos Engineering", Metadata: map[string]any{"project_id": "1"}},
+		{ExternalID: "CHAOS", SourceType: "project", Name: "Chaos", FullName: "Chaos Engineering", Metadata: metadataOf("project_id", "1")},
 	}
 	unbounded := isUnboundedDiscovery("jira", map[string]any{"project_key": "CHAOS"})
 	if unbounded {
@@ -414,8 +415,8 @@ func TestUpsertSourcesNeverTagsANewlyVisibleSourceForABoundedJiraConfig(t *testi
 	// PLAT becomes visible on a later pass -- the credential can now access
 	// it, but this config was never scoped to it.
 	later := []discoveredSource{
-		{ExternalID: "CHAOS", SourceType: "project", Name: "Chaos", FullName: "Chaos Engineering", Metadata: map[string]any{"project_id": "1"}},
-		{ExternalID: "PLAT", SourceType: "project", Name: "Platform", FullName: "Platform", Metadata: map[string]any{"project_id": "2"}},
+		{ExternalID: "CHAOS", SourceType: "project", Name: "Chaos", FullName: "Chaos Engineering", Metadata: metadataOf("project_id", "1")},
+		{ExternalID: "PLAT", SourceType: "project", Name: "Platform", FullName: "Platform", Metadata: metadataOf("project_id", "2")},
 	}
 	created, existing, err := service.upsertSources(ctx, orgID, integrationID, "jira", later, time.Now().UTC(), configID, true, unbounded)
 	if err != nil {
@@ -509,7 +510,7 @@ VALUES (gen_random_uuid(),$1,$2::uuid,'jira','project','eng','Eng (stale)','Eng 
 	}
 
 	discovered := []discoveredSource{
-		{ExternalID: "ENG", SourceType: "project", Name: "Engineering", FullName: "Engineering", Metadata: map[string]any{"project_id": "1"}},
+		{ExternalID: "ENG", SourceType: "project", Name: "Engineering", FullName: "Engineering", Metadata: metadataOf("project_id", "1")},
 	}
 	created, existing, _, _, superseded := mustUpsertJiraSourcesInOwnTx(t, ctx, fixture.pool, service, orgID, integrationID, discovered, time.Now().UTC(), "", false, true)
 	if created != 0 || existing != 1 || superseded != 0 {
@@ -568,7 +569,7 @@ VALUES (gen_random_uuid(),$1,$2::uuid,'jira','project','ENG','Eng (enabled survi
 	}
 
 	discovered := []discoveredSource{
-		{ExternalID: "Eng", SourceType: "project", Name: "Engineering", FullName: "Engineering", Metadata: map[string]any{"project_id": "1"}},
+		{ExternalID: "Eng", SourceType: "project", Name: "Engineering", FullName: "Engineering", Metadata: metadataOf("project_id", "1")},
 	}
 	mustUpsertJiraSourcesInOwnTx(t, ctx, fixture.pool, service, orgID, integrationID, discovered, time.Now().UTC(), "", false, true)
 
@@ -631,10 +632,10 @@ VALUES ($1::uuid,$2,$3::uuid,'jira','project',$4,$4,$4,TRUE,'{}'::jsonb,now(),no
 	}
 
 	discovered := []discoveredSource{
-		{ExternalID: "AAA", SourceType: "project", Name: "AAA", FullName: "AAA", Metadata: map[string]any{}},
-		{ExternalID: "BBB", SourceType: "project", Name: "BBB", FullName: "BBB", Metadata: map[string]any{}},
-		{ExternalID: "CCC", SourceType: "project", Name: "CCC", FullName: "CCC", Metadata: map[string]any{}},
-		{ExternalID: "DDD", SourceType: "project", Name: "DDD", FullName: "DDD", Metadata: map[string]any{}},
+		{ExternalID: "AAA", SourceType: "project", Name: "AAA", FullName: "AAA", Metadata: pyjson.NewObject()},
+		{ExternalID: "BBB", SourceType: "project", Name: "BBB", FullName: "BBB", Metadata: pyjson.NewObject()},
+		{ExternalID: "CCC", SourceType: "project", Name: "CCC", FullName: "CCC", Metadata: pyjson.NewObject()},
+		{ExternalID: "DDD", SourceType: "project", Name: "DDD", FullName: "DDD", Metadata: pyjson.NewObject()},
 	}
 	created, _, createdLower, discoveredLower, _ := mustUpsertJiraSourcesInOwnTx(t, ctx, fixture.pool, service, orgID, integrationID, discovered, time.Now().UTC(), "", false, true)
 	if created != 2 {
@@ -759,7 +760,7 @@ VALUES (gen_random_uuid(),$1,$2::uuid,' JIRA ','project','OLD','Old Project','OL
 	}
 
 	discovered := []discoveredSource{
-		{ExternalID: "NEW", SourceType: "project", Name: "New Project", FullName: "New Project", Metadata: map[string]any{"project_id": "2"}},
+		{ExternalID: "NEW", SourceType: "project", Name: "New Project", FullName: "New Project", Metadata: metadataOf("project_id", "2")},
 	}
 	_, _, _, _, superseded := mustUpsertJiraSourcesInOwnTx(t, ctx, fixture.pool, service, orgID, integrationID, discovered, time.Now().UTC(), configID, true, false)
 	if superseded != 1 {
@@ -838,7 +839,7 @@ VALUES (gen_random_uuid(),$1,$2::uuid,'jira','project','OLD','Old Project','OLD'
 	// discovery pass (already filtered upstream by discoverJira, see
 	// TestDiscoverJiraFiltersToExplicitScope) returns only the NEW project.
 	discovered := []discoveredSource{
-		{ExternalID: "NEW", SourceType: "project", Name: "New Project", FullName: "New Project", Metadata: map[string]any{"project_id": "2"}},
+		{ExternalID: "NEW", SourceType: "project", Name: "New Project", FullName: "New Project", Metadata: metadataOf("project_id", "2")},
 	}
 	created, existing, _, _, superseded := mustUpsertJiraSourcesInOwnTx(t, ctx, fixture.pool, service, orgID, integrationID, discovered, time.Now().UTC(), configID, true, false)
 	if created != 1 || existing != 0 {
@@ -900,7 +901,7 @@ VALUES (gen_random_uuid(),$1,$2::uuid,'jira','project','STALE','Stale Project','
 	}
 
 	discovered := []discoveredSource{
-		{ExternalID: "OTHER", SourceType: "project", Name: "Other Project", FullName: "Other Project", Metadata: map[string]any{}},
+		{ExternalID: "OTHER", SourceType: "project", Name: "Other Project", FullName: "Other Project", Metadata: pyjson.NewObject()},
 	}
 	// unbounded=true: STALE is absent from this pass but must NOT be
 	// superseded -- this is an unscoped "discover everything" config.
@@ -935,10 +936,10 @@ func TestJiraDiscoveryRebalanceFailureRollsBackTheWholeUpsertAtomically(t *testi
 	// org tier 'community' (startSourceDiscoveryPostgres's own seed) -> max_repos=3.
 
 	discovered := []discoveredSource{
-		{ExternalID: "AAA", SourceType: "project", Name: "AAA", FullName: "AAA", Metadata: map[string]any{}},
-		{ExternalID: "BBB", SourceType: "project", Name: "BBB", FullName: "BBB", Metadata: map[string]any{}},
-		{ExternalID: "CCC", SourceType: "project", Name: "CCC", FullName: "CCC", Metadata: map[string]any{}},
-		{ExternalID: "DDD", SourceType: "project", Name: "DDD", FullName: "DDD", Metadata: map[string]any{}},
+		{ExternalID: "AAA", SourceType: "project", Name: "AAA", FullName: "AAA", Metadata: pyjson.NewObject()},
+		{ExternalID: "BBB", SourceType: "project", Name: "BBB", FullName: "BBB", Metadata: pyjson.NewObject()},
+		{ExternalID: "CCC", SourceType: "project", Name: "CCC", FullName: "CCC", Metadata: pyjson.NewObject()},
+		{ExternalID: "DDD", SourceType: "project", Name: "DDD", FullName: "DDD", Metadata: pyjson.NewObject()},
 	}
 
 	// Mirrors Discover()'s own jira branch exactly: ONE transaction shared

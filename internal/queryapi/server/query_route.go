@@ -2742,8 +2742,8 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 		proofMux.Register(operation, gqlHandler)
 	}
 
-	return newDocumentDispatchHandler(getenv, routeMux, operationByDigest, verifier),
-		newDocumentDispatchHandler(getenv, proofMux, operationByDigest, verifier),
+	return newDocumentDispatchHandler(getenv, routeMux, operationByDigest, verifier, true),
+		newDocumentDispatchHandler(getenv, proofMux, operationByDigest, verifier, false),
 		registryHandler
 }
 
@@ -2755,7 +2755,16 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 // It takes the Mux rather than the Switch so the two routes cannot drift
 // in anything EXCEPT reachability -- the property the proof route exists
 // to vary, and the only one it is allowed to.
-func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, operationByDigest map[string]string, verifier *principal.Verifier) http.HandlerFunc {
+//
+// servesMutations says whether a registered MUTATION document may execute
+// here. /query serves them; /query/proof never does: it exists to measure an
+// operation without exposing it to real traffic, and a mutation cannot be
+// measured that way -- running it would apply a real write, and a
+// two-plane comparison would apply it twice. The refusal is decided from the
+// registered document itself (digest.DocumentKind), after the request is
+// authenticated and resolved to a registered operation, and before the Mux is
+// reached, so no switch state can let a write through this door.
+func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, operationByDigest map[string]string, verifier *principal.Verifier, servesMutations bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -2839,6 +2848,18 @@ func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, op
 			)
 			http.NotFound(w, r)
 			return
+		}
+
+		if !servesMutations {
+			kind, kindErr := digest.DocumentKind(parsed.Query)
+			if kindErr != nil || kind != digest.KindQuery {
+				// A registered document whose kind cannot be stated is refused
+				// like a mutation: only a document proven to be a query
+				// reaches the measurement-only route.
+				log.Printf("query-api: proof route refused a non-query document: operation=%s kind=%q err=%v", operation, kind, kindErr)
+				http.Error(w, "this route serves query documents only", http.StatusMethodNotAllowed)
+				return
+			}
 		}
 
 		r = r.WithContext(authctx.WithClaims(r.Context(), claims))

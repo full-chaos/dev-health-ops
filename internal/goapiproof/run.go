@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/goapidigest"
 )
 
 // Stage is always deployed_executed for this command: every request it
@@ -83,6 +85,16 @@ const (
 	// exists to prevent, and it is worse than the missing-spec refusal
 	// because it is silent. Named and refused instead.
 	RefusalNeedsInstanceID = "operation_needs_an_instance_identifier"
+
+	// RefusalNotAQueryDocument is for a registered document that is not a
+	// query: a mutation, or a document whose kind cannot be stated. A
+	// GraphQL proof sends the document to BOTH planes and compares the
+	// answers, so a mutation would apply its write twice (once per plane), and
+	// against a routed deployment it would do so for real. It is refused
+	// before any request is sent. A mutation's proof is its persisted-row
+	// oracle plus one read-back after a single execution -- never this
+	// two-plane comparison.
+	RefusalNotAQueryDocument = "document_is_not_a_query"
 
 	// RefusalLegsDoNotOverlap and RefusalVacuousEmptyLegs are CHAOS-5661's
 	// two structural refusals, computed by Compare (compare.go's
@@ -907,6 +919,13 @@ func (r *Runner) proveRequest(ctx context.Context, operation string, variantName
 	if !ok {
 		return refuse(RefusalDocumentDigestDrift, "this checkout enumerates no document for the operation the running process registers")
 	}
+	if kind, err := goapidigest.DocumentKind(document); err != nil || kind != goapidigest.KindQuery {
+		detail := fmt.Sprintf("the registered document's kind is %q, and a two-plane proof applies to query documents only: it would run a write on both planes", kind)
+		if err != nil {
+			detail = "the registered document's kind cannot be stated: " + err.Error()
+		}
+		return refuse(RefusalNotAQueryDocument, detail)
+	}
 	if err := ValidateStochasticLeafClassAgainstDocument(parity, document); err != nil {
 		return refuse(RefusalInvalidStochasticLeafClass, err.Error())
 	}
@@ -1316,7 +1335,7 @@ func terminalStateForRefusal(reason string) string {
 		return "fallback"
 	case RefusalNonSuccessStatus:
 		return "dependency_failed"
-	case RefusalErroredResponse, RefusalEmptyResponseRoot, RefusalShadowUnmeasurable:
+	case RefusalErroredResponse, RefusalEmptyResponseRoot, RefusalShadowUnmeasurable, RefusalNotAQueryDocument:
 		return TerminalStateUnsupported
 	case RefusalTransport:
 		return "timeout"

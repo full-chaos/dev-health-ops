@@ -85,6 +85,7 @@ var writeSkewRefusalPlaces = map[string]string{
 	"RefusalNonFinite":                  "not an axis: GraphQL prover only",
 	"RefusalNoPayload":                  "not an axis: GraphQL prover only",
 	"RefusalNonSuccessStatus":           "not an axis: GraphQL prover only",
+	"RefusalNotAQueryDocument":          "not an axis: GraphQL prover only",
 	"RefusalNotRouted":                  "not an axis: GraphQL prover only",
 	"RefusalPlaneUnidentified":          "not an axis: GraphQL prover only",
 	"RefusalServedUnderImpersonation":   "not an axis: GraphQL prover only",

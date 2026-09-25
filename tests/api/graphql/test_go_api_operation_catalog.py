@@ -120,3 +120,63 @@ def test_catalog_rejects_duplicate_digests_and_fails_closed(
 
     # Fails closed: the ambiguous entries never get loaded at all.
     assert go_api_operation_catalog.operation_for_digest("same") is None
+
+
+def _load_catalog_from(monkeypatch: pytest.MonkeyPatch, path: Path) -> None:
+    monkeypatch.setattr(go_api_operation_catalog, "_CATALOG_PATH", path)
+    monkeypatch.setattr(go_api_operation_catalog, "_catalog_loaded", False)
+    monkeypatch.setattr(go_api_operation_catalog, "_catalog_load_ok", False)
+    monkeypatch.setattr(go_api_operation_catalog, "_digest_to_operation", {})
+    monkeypatch.setattr(go_api_operation_catalog, "_mutation_operations", set())
+
+
+def test_catalog_kind_marks_mutations_and_defaults_to_query(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+):
+    catalog = tmp_path / "kinds.json"
+    catalog.write_text(
+        json.dumps(
+            [
+                {"operation": "readThing", "digest": "d1"},
+                {"operation": "explicitQuery", "digest": "d2", "kind": "query"},
+                {"operation": "writeThing", "digest": "d3", "kind": "mutation"},
+            ]
+        )
+    )
+    _load_catalog_from(monkeypatch, catalog)
+
+    assert go_api_operation_catalog.catalog_loaded_successfully()
+    assert go_api_operation_catalog.is_mutation_operation("writeThing") is True
+    assert go_api_operation_catalog.is_mutation_operation("readThing") is False
+    assert go_api_operation_catalog.is_mutation_operation("explicitQuery") is False
+    assert go_api_operation_catalog.is_mutation_operation("unknownThing") is False
+
+
+@pytest.mark.parametrize("kind", ["subscription", "Mutation", "", None, 1])
+def test_catalog_fails_closed_on_an_unknown_kind(
+    monkeypatch: pytest.MonkeyPatch, tmp_path, kind
+):
+    """A kind the edge does not understand must not load: every operation stays
+    on Python rather than a mutation being treated as a query."""
+    catalog = tmp_path / "bad-kind.json"
+    catalog.write_text(
+        json.dumps(
+            [
+                {"operation": "readThing", "digest": "d1"},
+                {"operation": "writeThing", "digest": "d2", "kind": kind},
+            ]
+        )
+    )
+    _load_catalog_from(monkeypatch, catalog)
+
+    assert go_api_operation_catalog.operation_for_digest("d1") is None
+    assert go_api_operation_catalog.is_mutation_operation("writeThing") is False
+    assert not go_api_operation_catalog.catalog_loaded_successfully()
+
+
+def test_checked_in_catalog_kinds_are_known():
+    checked_in = json.loads(CATALOG_PATH.read_text())
+    assert {entry.get("kind", "query") for entry in checked_in} <= {
+        "query",
+        "mutation",
+    }

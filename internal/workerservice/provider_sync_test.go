@@ -984,3 +984,52 @@ func TestGitFamilyRoutesAreTheWorkersRoutes(t *testing.T) {
 		t.Fatalf("only %d git-family routes compared; the enumeration went empty", served)
 	}
 }
+
+// TestWorkerWiresItsConnectionLeaseAndCapIntoTheGitFamilySelector closes the
+// gap the type-only parity test leaves: the sinks and handlers the worker
+// builds must equal, field for field, what the shared selector returns for the
+// SAME connection, lease session and artifact cap, so the worker cannot drop or
+// swap one of them (a nil lease guard, a zero cap, no blame coverage) while the
+// types still match.
+func TestWorkerWiresItsConnectionLeaseAndCapIntoTheGitFamilySelector(t *testing.T) {
+	t.Parallel()
+	const artifactCap = int64(12345)
+	conn := &githubWorkItemsBuildExecutorConn{}
+	handler, _ := buildProviderSyncHandlerWithRuntimeDependencies(
+		nil, nil, nil, conn, nil, nil, nil, nil, slog.Default(),
+		workItemsRuntimeConfig{}, artifactCap,
+	)
+	compared := 0
+	for _, provider := range []string{"github", "gitlab"} {
+		for _, capability := range providersync.Capabilities(provider) {
+			dataset := capability.Dataset
+			session := &providersync.LeaseSession{
+				Claim: providersync.Claim{Unit: providersync.Unit{Provider: provider, Dataset: dataset}},
+			}
+			want, ok := providersync.SelectGitFamilyRoute(provider, dataset, providersync.GitFamilyDeps{
+				Conn: conn, Lease: session, GitHubTestsMaxArtifactBytes: artifactCap,
+			})
+			if !ok {
+				continue
+			}
+			executor, err := handler.BuildExecutor(session)
+			if err != nil {
+				t.Errorf("%s/%s: %v", provider, dataset, err)
+				continue
+			}
+			compared++
+			if !reflect.DeepEqual(executor.Handler, want.Handler) {
+				t.Errorf("%s/%s: worker handler %#v differs from the selector's %#v", provider, dataset, executor.Handler, want.Handler)
+			}
+			if !reflect.DeepEqual(executor.Committer.Sink, want.Sink) {
+				t.Errorf("%s/%s: worker sink %#v differs from the selector's %#v", provider, dataset, executor.Committer.Sink, want.Sink)
+			}
+			if !reflect.DeepEqual(executor.Committer.Readback, want.Readback) {
+				t.Errorf("%s/%s: worker readback differs from the selector's", provider, dataset)
+			}
+		}
+	}
+	if compared < 15 {
+		t.Fatalf("only %d git-family routes compared", compared)
+	}
+}

@@ -12,27 +12,9 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 )
-
-// schemaDDL is the slice of the Alembic schema this writer touches, with
-// the column types and nullability of models/audit.py AuditLog.
-var schemaDDL = []string{
-	`CREATE TABLE public.organizations (id uuid PRIMARY KEY, name text NOT NULL)`,
-	`CREATE TABLE public.users (id uuid PRIMARY KEY, email text NOT NULL UNIQUE)`,
-	`CREATE TABLE public.audit_logs (
-		id uuid PRIMARY KEY,
-		org_id uuid NOT NULL REFERENCES public.organizations(id) ON DELETE CASCADE,
-		user_id uuid REFERENCES public.users(id) ON DELETE SET NULL,
-		action text NOT NULL,
-		resource_type text NOT NULL,
-		resource_id text NOT NULL,
-		description text,
-		changes json,
-		request_metadata json,
-		status text NOT NULL DEFAULT 'success',
-		error_message text,
-		created_at timestamptz NOT NULL)`,
-}
 
 func startPool(t *testing.T, ctx context.Context) *pgxpool.Pool {
 	t.Helper()
@@ -46,11 +28,9 @@ func startPool(t *testing.T, ctx context.Context) *pgxpool.Pool {
 		t.Fatalf("connect: %v", err)
 	}
 	t.Cleanup(pool.Close)
-	for _, stmt := range schemaDDL {
-		if _, err := pool.Exec(ctx, stmt); err != nil {
-			t.Fatalf("schema: %v\n%s", err, stmt)
-		}
-	}
+	// The migrated schema, not a hand-written slice (CHAOS-6769 ledger): the slice's
+	// organizations and users lacked the real tables' NOT NULL columns.
+	pgschema.Apply(ctx, t, pool)
 	return pool
 }
 
@@ -64,9 +44,7 @@ func TestWriteInsertsTheDeclaredColumns(t *testing.T) {
 
 	orgID := uuid.New()
 	userID := uuid.New()
-	if _, err := pool.Exec(ctx, `INSERT INTO organizations (id, name) VALUES ($1, 'acme')`, orgID); err != nil {
-		t.Fatalf("seed org: %v", err)
-	}
+	pgseed.Org(ctx, t, pool, orgID.String(), "community")
 	if _, err := pool.Exec(ctx, `INSERT INTO users (id, email) VALUES ($1, 'admin@example.com')`, userID); err != nil {
 		t.Fatalf("seed user: %v", err)
 	}
@@ -166,9 +144,7 @@ func TestWriteWithNilChangesStoresEmptyObject(t *testing.T) {
 	pool := startPool(t, ctx)
 
 	orgID := uuid.New()
-	if _, err := pool.Exec(ctx, `INSERT INTO organizations (id, name) VALUES ($1, 'acme')`, orgID); err != nil {
-		t.Fatalf("seed org: %v", err)
-	}
+	pgseed.Org(ctx, t, pool, orgID.String(), "community")
 
 	writer := PGWriter{}
 	id, err := writer.Write(ctx, pool, Entry{

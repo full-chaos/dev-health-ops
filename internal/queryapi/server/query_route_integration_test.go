@@ -27,6 +27,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/workgraph"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 )
 
 const (
@@ -305,17 +307,9 @@ func startTestRegistryPostgres(t *testing.T) *pgxpool.Pool {
 	}
 	t.Cleanup(pool.Close)
 
-	if _, err := pool.Exec(ctx, `
-		CREATE TABLE go_api_routing_state (
-			schema_digest TEXT NOT NULL,
-			document_digest TEXT NOT NULL,
-			selected_operation TEXT NOT NULL,
-			mode TEXT NOT NULL,
-			PRIMARY KEY (schema_digest, document_digest, selected_operation)
-		)
-	`); err != nil {
-		t.Fatal(err)
-	}
+	// The migrated schema (CHAOS-6769 ledger): the hand-written go_api_routing_state dropped the
+	// real table's NOT NULL columns and its foreign key to go_api_candidate_build.
+	pgschema.Apply(ctx, t, pool)
 	return pool
 }
 
@@ -327,13 +321,7 @@ func startTestRegistryPostgres(t *testing.T) *pgxpool.Pool {
 // independently-gated row.
 func setRoutingMode(t *testing.T, pool *pgxpool.Pool, documentDigest, operation, mode string) {
 	t.Helper()
-	if _, err := pool.Exec(context.Background(), `
-		INSERT INTO go_api_routing_state (schema_digest, document_digest, selected_operation, mode)
-		VALUES ($1, $2, $3, $4)
-		ON CONFLICT (schema_digest, document_digest, selected_operation) DO UPDATE SET mode = $4
-	`, itTestSchemaDigest, documentDigest, operation, mode); err != nil {
-		t.Fatal(err)
-	}
+	pgseed.RoutingState(context.Background(), t, pool, itTestSchemaDigest, documentDigest, operation, mode)
 }
 
 func postGraphQL(t *testing.T, handler http.HandlerFunc, query, bearer string) *httptest.ResponseRecorder {

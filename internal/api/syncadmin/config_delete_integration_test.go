@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 )
 
 // TestDeleteConfigReadsTheRowByNameAgain pins deleteConfig against a
@@ -31,15 +32,12 @@ func TestDeleteConfigReadsTheRowByNameAgain(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	if _, err := pool.Exec(ctx, `CREATE TABLE sync_configurations (
-id uuid PRIMARY KEY, org_id text NOT NULL, name text NOT NULL, provider text NOT NULL,
-parent_id uuid REFERENCES sync_configurations(id) ON DELETE CASCADE,
-UNIQUE (org_id, provider, name))`); err != nil {
-		t.Fatal(err)
-	}
+	// The migrated schema (CHAOS-6769 ledger): the hand-written sync_configurations had different
+	// keys (UNIQUE (org_id, provider, name), parent ON DELETE CASCADE) and lacked created_at/updated_at.
+	pgschema.Apply(ctx, t, pool)
 	insert := func(id uuid.UUID, org, name, provider string, parent any) {
 		t.Helper()
-		if _, err := pool.Exec(ctx, `INSERT INTO sync_configurations (id, org_id, name, provider, parent_id) VALUES ($1, $2, $3, $4, $5)`,
+		if _, err := pool.Exec(ctx, `INSERT INTO sync_configurations (id, org_id, name, provider, parent_id, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, now(), now())`,
 			id, org, name, provider, parent); err != nil {
 			t.Fatal(err)
 		}

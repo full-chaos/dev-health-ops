@@ -34,3 +34,13 @@ var Document = goapidigest.Document
 // Schema returns the canonical schema-digest value for a GraphQL SDL
 // file's RAW bytes. See goapidigest.Schema.
 var Schema = goapidigest.Schema
+
+// DocumentKind reports a registered document's operation type (KindQuery or
+// KindMutation) and refuses anything else. See goapidigest.DocumentKind.
+var DocumentKind = goapidigest.DocumentKind
+
+// The document kinds DocumentKind reports.
+const (
+	KindQuery    = goapidigest.KindQuery
+	KindMutation = goapidigest.KindMutation
+)

@@ -66,6 +66,9 @@ type registeredDocument struct {
 	Document  string `json:"document"`
 	ConstName string `json:"const_name"`
 	Digest    string `json:"digest"`
+	// Kind is the document's operation type, read by digest.DocumentKind
+	// from the registered text itself: "query" or "mutation".
+	Kind string `json:"kind"`
 }
 
 var documentConstPattern = regexp.MustCompile(`^registered.*Document$`)
@@ -305,7 +308,11 @@ func enumerate(filePath string) ([]registeredDocument, error) {
 		if !ok {
 			return nil, fmt.Errorf("digestByOperation[%q] names const %s, which was not found among registered*Document consts", operation, constName)
 		}
-		docs = append(docs, registeredDocument{Operation: operation, Document: text, ConstName: constName, Digest: digest.Document(text)})
+		kind, err := digest.DocumentKind(text)
+		if err != nil {
+			return nil, fmt.Errorf("digestByOperation[%q] (const %s): %w", operation, constName, err)
+		}
+		docs = append(docs, registeredDocument{Operation: operation, Document: text, ConstName: constName, Digest: digest.Document(text), Kind: kind})
 		delete(documentByConstName, constName)
 	}
 	if len(documentByConstName) != 0 {

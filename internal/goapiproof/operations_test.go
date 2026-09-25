@@ -40,6 +40,7 @@ var registeredOperations = []string{
 	"featureFlagEvents", "featureFlags", "flowMatrix", "hotspots",
 	"releaseImpact",
 	"investmentBreakdown", "investmentFull", "operatingReview", "pr",
+	"createSavedReport", "updateSavedReport", "deleteSavedReport", "cloneSavedReport", "triggerReport",
 	"reportRuns", "reviewEdges", "savedReport", "savedReports", "securityAlerts", "securityOverview", "testopsRisk", "throughputForecast", "testOpsCoverage", "testOpsPipeline", "testOpsTest", "featureFlagTimeseries",
 	"workGraphArtifacts", "workGraphEdges", "workGraphFlow",
 	"workUnitTeamAttributions",
@@ -137,6 +138,10 @@ func TestWindowedSpecsUseTheWindow(t *testing.T) {
 		"workGraphFlow":       true,
 
 		"workUnitTeamAttributions": true,
+
+		// The saved-report mutations take no window; the runner refuses them
+		// (RefusalNotAQueryDocument) before sending.
+		"createSavedReport": true, "updateSavedReport": true, "deleteSavedReport": true, "cloneSavedReport": true, "triggerReport": true,
 	}
 
 	for _, operation := range KnownOperations() {

@@ -27,7 +27,7 @@ func TestHeadsReplaceTheApplicationHeadWithTheLastChainRevision(t *testing.T) {
 	if err := pgmigrate.WriteHeads(&out, baseline, chain); err != nil {
 		t.Fatal(err)
 	}
-	if want := "0066 (river_cutover) (head)\n0140 (head)\n"; out.String() != want {
+	if want := "0066 (river_cutover) (head)\n0140 (application_schema) (head)\n"; out.String() != want {
 		t.Fatalf("heads printed %q, want %q", out.String(), want)
 	}
 }

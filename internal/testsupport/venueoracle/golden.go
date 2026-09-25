@@ -265,8 +265,8 @@ func (g *Golden) frozenRows(name string) (string, error) {
 func (g *Golden) Finish(t *testing.T) {
 	t.Helper()
 	if g.recording {
-		if len(g.recorded.Requests) == 0 {
-			t.Fatalf("recording %s: no request was served through the golden", g.spec.Path)
+		if err := g.recordable(t.Failed()); err != nil {
+			t.Fatal(err)
 		}
 		raw, err := json.MarshalIndent(g.recorded, "", "  ")
 		if err != nil {
@@ -316,6 +316,19 @@ func uuidV5(namespace [16]byte, name string) string {
 func (g *Golden) unusedAnswers() error {
 	if g.served != len(g.loaded.Requests) {
 		return fmt.Errorf("golden %s holds %d answers but the test used %d: an unused frozen answer is a comparison that no longer happens; regenerate: %s", g.spec.Path, len(g.loaded.Requests), g.served, g.spec.Recipe)
+	}
+	return nil
+}
+
+// recordable is an error when a recording must not be written: a run that
+// already failed (a plane disagreed, an assertion broke) holds answers nobody
+// checked, and a golden written from it would freeze them as truth.
+func (g *Golden) recordable(failed bool) error {
+	if failed {
+		return fmt.Errorf("recording %s: the run already failed, so nothing was written (a golden is only recorded from a run that passed every check); fix the failure and record again", g.spec.Path)
+	}
+	if len(g.recorded.Requests) == 0 {
+		return fmt.Errorf("recording %s: no request was served through the golden", g.spec.Path)
 	}
 	return nil
 }

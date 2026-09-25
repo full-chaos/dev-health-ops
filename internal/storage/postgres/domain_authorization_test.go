@@ -336,6 +336,43 @@ func TestCoordinatorPostureCarriesTheRepairGrantDelta(t *testing.T) {
 	}
 }
 
+// CHAOS-6695: the webhook scoped-sync hand-off's grants, pinned both ways.
+// The domain worker records a request and routes a GitHub delivery through
+// its installation; the coordinator claims, mints (INSERT on the marker job
+// and the manual trigger, never UPDATE/DELETE on the trigger) and deletes.
+func TestWebhookSyncRequestGrantsAreExactlyTheHandOffs(t *testing.T) {
+	t.Parallel()
+	pick := func(posture RolePosture) map[string]TablePrivilege {
+		tables := map[string]TablePrivilege{}
+		for _, table := range posture.RequiredTables {
+			tables[table.TableName] = table
+		}
+		return tables
+	}
+	want := map[string]map[string]TablePrivilege{
+		"domain": {
+			"github_app_installations": {TableName: "github_app_installations", AllowInsert: true, AllowUpdate: true},
+			"webhook_sync_requests":    {TableName: "webhook_sync_requests", AllowInsert: true},
+		},
+		"coordinator": {
+			"scheduled_jobs":        {TableName: "scheduled_jobs", AllowInsert: true, AllowUpdate: true},
+			"sync_manual_triggers":  {TableName: "sync_manual_triggers", AllowInsert: true},
+			"webhook_sync_requests": {TableName: "webhook_sync_requests", AllowUpdate: true, AllowDelete: true},
+		},
+	}
+	for role, posture := range map[string]RolePosture{"domain": domainPosture(), "coordinator": coordinatorPosture()} {
+		tables := pick(posture)
+		for name, expected := range want[role] {
+			if got, ok := tables[name]; !ok || got != expected {
+				t.Errorf("%s %s = %+v (present=%t), want %+v", role, name, got, ok, expected)
+			}
+		}
+	}
+	if _, ok := pick(coordinatorPosture())["github_app_installations"]; ok {
+		t.Error("the coordinator must not hold github_app_installations")
+	}
+}
+
 func TestWorkerRolePosturesGainNoRepairAuditGrant(t *testing.T) {
 	for name, posture := range map[string]RolePosture{"domain": domainPosture(), "queue": queuePosture()} {
 		for _, table := range posture.RequiredTables {

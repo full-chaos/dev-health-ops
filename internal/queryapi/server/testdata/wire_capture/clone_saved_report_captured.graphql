@@ -1,0 +1,12 @@
+mutation cloneSavedReport($orgId: String!, $input: CloneSavedReportInput!) {
+  cloneSavedReport(orgId: $orgId, input: $input) {
+    id
+    orgId
+    name
+    description
+    isActive
+    createdAt
+    updatedAt
+    __typename
+  }
+}

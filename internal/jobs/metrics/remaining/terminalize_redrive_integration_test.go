@@ -13,6 +13,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -65,22 +66,8 @@ func newRemainingRedriveTestStack(t *testing.T) (*pgxpool.Pool, *PostgresStore, 
 // error.
 func createRemainingOutboxTable(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
-	_, err := pool.Exec(ctx, `
-CREATE TABLE IF NOT EXISTS worker_job_outbox (
- id uuid PRIMARY KEY, dedupe_key varchar(256) NOT NULL UNIQUE,
- job_kind varchar(96) NOT NULL, contract_version integer NOT NULL,
- args json NOT NULL, payload_hash varchar(71) NOT NULL,
- queue varchar(96) NOT NULL, priority smallint NOT NULL,
- max_attempts smallint NOT NULL, scheduled_at timestamptz NOT NULL,
- status varchar(16) NOT NULL, attempt_count integer NOT NULL,
- next_attempt_at timestamptz NOT NULL, prerequisite_completion_key text NULL,
- river_job_id bigint NULL,
- created_at timestamptz NOT NULL,
- updated_at timestamptz NOT NULL
-)`)
-	if err != nil {
-		t.Fatal(err)
-	}
+	// The migrated schema, not hand-written tables (CHAOS-6769 ledger).
+	pgschema.Apply(ctx, t, pool)
 }
 
 func capacityScopeJSON(historyDays int) json.RawMessage {

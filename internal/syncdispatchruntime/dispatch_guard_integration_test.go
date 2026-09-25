@@ -9,33 +9,14 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func createDispatchGuardTables(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
-	_, err := pool.Exec(ctx, `
-CREATE TABLE public.organizations (id uuid PRIMARY KEY, tier text);
-CREATE TABLE public.org_licenses (
- org_id uuid PRIMARY KEY, tier text NOT NULL, limits_override json NOT NULL,
- features_override json NOT NULL
-);
-CREATE TABLE public.tier_limits (
- tier text NOT NULL, limit_key text NOT NULL, limit_value text,
- UNIQUE(tier,limit_key)
-);
-CREATE TABLE public.sync_runs (
- id uuid PRIMARY KEY, org_id text NOT NULL
-);
-CREATE TABLE public.sync_run_units (
- id uuid PRIMARY KEY, org_id text NOT NULL, sync_run_id uuid NOT NULL, provider text NOT NULL,
- cost_class text NOT NULL, status text NOT NULL, available_at timestamptz NULL,
- lease_owner text NULL, lease_expires_at timestamptz NULL,
- updated_at timestamptz NOT NULL DEFAULT now()
-)`)
-	if err != nil {
-		t.Fatal(err)
-	}
+	pgschema.Apply(ctx, t, pool)
 }
 
 const (
@@ -45,22 +26,16 @@ const (
 
 func seedGuardRun(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
-	if _, err := pool.Exec(ctx, `INSERT INTO public.organizations (id, tier) VALUES ($1::uuid, 'community')`, guardTestOrg); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := pool.Exec(ctx, `INSERT INTO public.sync_runs (id, org_id) VALUES ($1::uuid, $2)`, guardTestRun, guardTestOrg); err != nil {
-		t.Fatal(err)
-	}
+	pgseed.Org(ctx, t, pool, guardTestOrg, "community")
+	pgseed.EnsureSyncRun(ctx, t, pool, pgseed.SyncRun{ID: guardTestRun, OrgID: guardTestOrg})
 }
 
 func insertGuardUnit(t *testing.T, ctx context.Context, pool *pgxpool.Pool, id, provider, costClass, status string, updatedAt time.Time, availableAt, leaseExpiresAt *time.Time, leaseOwner *string) {
 	t.Helper()
-	if _, err := pool.Exec(ctx, `
-INSERT INTO public.sync_run_units (id, org_id, sync_run_id, provider, cost_class, status, updated_at, available_at, lease_expires_at, lease_owner)
-VALUES ($1::uuid, $2, $3::uuid, $4, $5, $6, $7, $8, $9, $10)`,
-		id, guardTestOrg, guardTestRun, provider, costClass, status, updatedAt, availableAt, leaseExpiresAt, leaseOwner); err != nil {
-		t.Fatal(err)
-	}
+	pgseed.InsertSyncRunUnit(ctx, t, pool, pgseed.SyncRunUnit{
+		ID: id, RunID: guardTestRun, OrgID: guardTestOrg, Provider: provider, CostClass: costClass, Status: status,
+		UpdatedAt: &updatedAt, AvailableAt: availableAt, LeaseExpiresAt: leaseExpiresAt, LeaseOwner: leaseOwner,
+	})
 }
 
 func withGuardPool(t *testing.T, fn func(ctx context.Context, pool *pgxpool.Pool)) {
@@ -115,9 +90,7 @@ func TestAuthorizeRunAllowsWhenUnderEveryCap(t *testing.T) {
 // tier_limits row is deliberately set below the unit count).
 func TestAuthorizeRunHardDeniesOverTheTotalUnitCap(t *testing.T) {
 	withGuardPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
-		if _, err := pool.Exec(ctx, `INSERT INTO public.tier_limits (tier, limit_key, limit_value) VALUES ('community', 'max_sync_units', '1')`); err != nil {
-			t.Fatal(err)
-		}
+		pgseed.TierLimit(ctx, t, pool, "community", "max_sync_units", "1")
 		now := pgNow()
 		insertGuardUnit(t, ctx, pool, "00000000-0000-4000-8000-0000000000f1", "github", "standard", syncRunUnitStatusPlanned, now, nil, nil, nil)
 		insertGuardUnit(t, ctx, pool, "00000000-0000-4000-8000-0000000000f2", "github", "standard", syncRunUnitStatusPlanned, now, nil, nil, nil)
@@ -155,16 +128,12 @@ func TestAuthorizeRunFallsBackToTheDefaultCapOnAnOrgResolutionFailure(t *testing
 		t.Setenv("SYNC_RUN_MAX_UNITS", "1")
 		missingOrgRun := "00000000-0000-4000-8000-0000000000e9"
 		missingOrg := "00000000-0000-4000-8000-0000000000e8"
-		if _, err := pool.Exec(ctx, `INSERT INTO public.sync_runs (id, org_id) VALUES ($1::uuid, $2)`, missingOrgRun, missingOrg); err != nil {
-			t.Fatal(err)
-		}
+		pgseed.EnsureSyncRun(ctx, t, pool, pgseed.SyncRun{ID: missingOrgRun, OrgID: missingOrg})
 		now := pgNow()
-		if _, err := pool.Exec(ctx, `
-INSERT INTO public.sync_run_units (id, org_id, sync_run_id, provider, cost_class, status, updated_at)
-VALUES ($1::uuid, $2, $3::uuid, 'github', 'standard', $4, $5)`,
-			"00000000-0000-4000-8000-0000000000f3", missingOrg, missingOrgRun, syncRunUnitStatusPlanned, now); err != nil {
-			t.Fatal(err)
-		}
+		pgseed.InsertSyncRunUnit(ctx, t, pool, pgseed.SyncRunUnit{
+			ID: "00000000-0000-4000-8000-0000000000f3", RunID: missingOrgRun, OrgID: missingOrg,
+			CostClass: "standard", Status: syncRunUnitStatusPlanned, UpdatedAt: &now,
+		})
 
 		tx, err := pool.Begin(ctx)
 		if err != nil {

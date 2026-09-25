@@ -12,6 +12,8 @@ import (
 	scheduledsync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
 	"github.com/full-chaos/dev-health-ops/internal/syncrunrollup"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -24,63 +26,11 @@ import (
 // termination mechanics, not on message content.
 var testFeatureDisabledMessage = canonicalIncidentFeatureDisabledMessage(scheduledsync.FeatureDecisionReasonGlobalDisabled)
 
-// createFeatureDisabledTables is a self-contained schema for this file:
-// createFinalizeTables' sync_runs/sync_run_units carry the full column set
-// terminalizeFeatureDisabledRun/Graph need (status, total_units, result,
-// etc.), which the reference-discovery test file's leaner schema does not,
-// so this is its own copy rather than a reuse of either.
+// createFeatureDisabledTables builds the migrated schema: the run/unit/outbox/ledger tables this
+// file drives carry their real columns, foreign keys and check constraints.
 func createFeatureDisabledTables(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
-	_, err := pool.Exec(ctx, `
-CREATE TABLE sync_dispatch_outbox (
- id uuid PRIMARY KEY, sync_run_id uuid NOT NULL, org_id text NOT NULL, kind text NOT NULL,
- status text NOT NULL, available_at timestamptz NOT NULL, attempts int NOT NULL DEFAULT 0,
- dispatched_at timestamptz NULL, dispatched_transport text NULL, dispatched_route_generation bigint NULL,
- transport_job_id text NULL, claim_token text NULL, claim_transport text NULL,
- claim_route_generation bigint NULL, claim_expires_at timestamptz NULL, last_error text NULL,
- created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL,
- UNIQUE (sync_run_id, kind)
-);
-CREATE TABLE sync_runs (
- id uuid PRIMARY KEY, org_id text NOT NULL, integration_id uuid NULL,
- status text NOT NULL, total_units int NOT NULL DEFAULT 0, completed_units int NOT NULL DEFAULT 0,
- failed_units int NOT NULL DEFAULT 0, completed_at timestamptz NULL, result json NULL, error text NULL
-);
-CREATE TABLE sync_run_units (
- id uuid PRIMARY KEY, org_id text NOT NULL, sync_run_id uuid NOT NULL, provider text NOT NULL,
- dataset_key text NOT NULL, source_id uuid NULL, status text NOT NULL,
- cost_class text NOT NULL DEFAULT 'standard',
- available_at timestamptz NULL, lease_owner text NULL, lease_expires_at timestamptz NULL,
- error text NULL, result json NULL, updated_at timestamptz NOT NULL DEFAULT now()
-);
-CREATE TABLE sync_run_reference_discoveries (
- id uuid PRIMARY KEY, sync_run_id uuid NOT NULL UNIQUE, org_id text NOT NULL,
- status text NOT NULL, attempts int NOT NULL DEFAULT 0, available_at timestamptz NOT NULL,
- lease_owner text NULL, lease_expires_at timestamptz NULL, last_heartbeat_at timestamptz NULL,
- completed_at timestamptz NULL, error text NULL, result json NULL,
- created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now()
-);
-CREATE TABLE integrations (
- id uuid PRIMARY KEY, provider text NOT NULL
-);
-CREATE TABLE integration_datasets (
- id uuid PRIMARY KEY, integration_id uuid NOT NULL, dataset_key text NOT NULL, is_enabled boolean NOT NULL
-);
-CREATE TABLE backfill_jobs (
- id uuid PRIMARY KEY, org_id text NOT NULL, celery_task_id text NULL, status text NOT NULL,
- total_chunks int NOT NULL DEFAULT 0, completed_chunks int NOT NULL DEFAULT 0,
- failed_chunks int NOT NULL DEFAULT 0, error_message text NULL, completed_at timestamptz NULL
-);
-CREATE TABLE scheduled_jobs (
- id uuid PRIMARY KEY
-);
-CREATE TABLE job_runs (
- id uuid PRIMARY KEY, job_id uuid NOT NULL REFERENCES scheduled_jobs(id),
- status int NOT NULL, completed_at timestamptz NULL, result json NULL, error text NULL
-)`)
-	if err != nil {
-		t.Fatal(err)
-	}
+	pgschema.Apply(ctx, t, pool)
 }
 
 const (
@@ -121,25 +71,18 @@ func withTx(t *testing.T, ctx context.Context, pool *pgxpool.Pool, fn func(tx pg
 
 func seedFeatureDisabledRun(t *testing.T, ctx context.Context, pool *pgxpool.Pool, totalUnits int) {
 	t.Helper()
-	if _, err := pool.Exec(ctx, `
-INSERT INTO sync_runs (id, org_id, integration_id, status, total_units, completed_units, failed_units)
-VALUES ($1, $2, $3, 'dispatching', $4, 0, 0)`,
-		featureDisabledTestRun, featureDisabledTestOrg, featureDisabledTestIntegration, totalUnits); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := pool.Exec(ctx, `INSERT INTO integrations (id, provider) VALUES ($1, 'github')`, featureDisabledTestIntegration); err != nil {
-		t.Fatal(err)
-	}
+	pgseed.EnsureSyncRun(ctx, t, pool, pgseed.SyncRun{
+		ID: featureDisabledTestRun, OrgID: featureDisabledTestOrg, IntegrationID: featureDisabledTestIntegration,
+		Status: "dispatching", TotalUnits: totalUnits,
+	})
 }
 
 func insertFeatureDisabledUnit(t *testing.T, ctx context.Context, pool *pgxpool.Pool, id, status string, leaseOwner *string) {
 	t.Helper()
-	if _, err := pool.Exec(ctx, `
-INSERT INTO sync_run_units (id, org_id, sync_run_id, provider, dataset_key, status, lease_owner)
-VALUES ($1, $2, $3, 'github', 'prs', $4, $5)`,
-		id, featureDisabledTestOrg, featureDisabledTestRun, status, leaseOwner); err != nil {
-		t.Fatal(err)
-	}
+	pgseed.InsertSyncRunUnit(ctx, t, pool, pgseed.SyncRunUnit{
+		ID: id, RunID: featureDisabledTestRun, OrgID: featureDisabledTestOrg, IntegrationID: featureDisabledTestIntegration,
+		DatasetKey: "prs", CostClass: "standard", Status: status, LeaseOwner: leaseOwner,
+	})
 }
 
 // TestTerminalizeFeatureDisabledRunBulkAndRaceSafeRunning pins
@@ -324,9 +267,10 @@ func TestTerminalizeFeatureDisabledRunWaitsForAConcurrentRollupWriterThenSeesIts
 	// now respects. It never existed before this point, so it was invisible
 	// to (and untouched by) the consumer's own earlier phase-1/phase-2 writes.
 	if _, err := producerTx.Exec(ctx, `
-INSERT INTO sync_run_units (id, org_id, sync_run_id, provider, dataset_key, status)
-VALUES ($1, $2, $3, 'github', 'prs', 'success')`,
-		producerUnit, featureDisabledTestOrg, featureDisabledTestRun); err != nil {
+INSERT INTO sync_run_units (id, org_id, sync_run_id, integration_id, source_id, provider, dataset_key, cost_class,
+	mode, status, attempts, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, 'github', 'prs', 'standard', 'incremental', 'success', 0, now(), now())`,
+		producerUnit, featureDisabledTestOrg, featureDisabledTestRun, featureDisabledTestIntegration, pgseed.DefaultSyncSourceID); err != nil {
 		t.Fatalf("producer insert on its own transaction: %v", err)
 	}
 	if err := producerTx.Commit(ctx); err != nil {
@@ -550,31 +494,23 @@ func TestTerminalizeFeatureDisabledGraphTerminatesLedgerOutboxAndObservers(t *te
 
 	ledgerID := "00000000-0000-4000-8000-0000000001c2"
 	if _, err := pool.Exec(ctx, `
-INSERT INTO sync_run_reference_discoveries (id, sync_run_id, org_id, status, available_at)
-VALUES ($1, $2, $3, 'planned', now())`, ledgerID, featureDisabledTestRun, featureDisabledTestOrg); err != nil {
+INSERT INTO sync_run_reference_discoveries (id, sync_run_id, org_id, status, attempts, available_at, created_at, updated_at)
+VALUES ($1, $2, $3, 'planned', 0, now(), now(), now())`, ledgerID, featureDisabledTestRun, featureDisabledTestOrg); err != nil {
 		t.Fatal(err)
 	}
 	dispatchOutboxID := "00000000-0000-4000-8000-0000000001c3"
-	if _, err := pool.Exec(ctx, `
-INSERT INTO sync_dispatch_outbox (id, sync_run_id, org_id, kind, status, available_at, created_at, updated_at)
-VALUES ($1, $2, $3, 'dispatch_sync_run', 'pending', now(), now(), now())`,
-		dispatchOutboxID, featureDisabledTestRun, featureDisabledTestOrg); err != nil {
-		t.Fatal(err)
-	}
+	pgseed.SyncDispatchOutbox(ctx, t, pool, dispatchOutboxID, featureDisabledTestRun, featureDisabledTestOrg, "dispatch_sync_run", "pending", "", 0)
 	jobID := "00000000-0000-4000-8000-0000000001c4"
-	if _, err := pool.Exec(ctx, `INSERT INTO scheduled_jobs (id) VALUES ($1)`, jobID); err != nil {
-		t.Fatal(err)
-	}
+	pgseed.ScheduledJob(ctx, t, pool, jobID, featureDisabledTestOrg)
 	jobRunID := "00000000-0000-4000-8000-0000000001c5"
-	if _, err := pool.Exec(ctx, `
-INSERT INTO job_runs (id, job_id, status, result) VALUES ($1, $2, $3, $4::json)`,
-		jobRunID, jobID, jobRunStatusRunning, `{"sync_run_id":"`+featureDisabledTestRun+`"}`); err != nil {
-		t.Fatal(err)
-	}
+	pgseed.JobRun(ctx, t, pool, jobRunID, jobID, jobRunStatusRunning, `{"sync_run_id":"`+featureDisabledTestRun+`"}`)
 	backfillID := "00000000-0000-4000-8000-0000000001c6"
+	configID := "00000000-0000-4000-8000-0000000001c7"
+	pgseed.SyncConfiguration(ctx, t, pool, configID, featureDisabledTestOrg, featureDisabledTestIntegration, `{}`, time.Now())
 	if _, err := pool.Exec(ctx, `
-INSERT INTO backfill_jobs (id, org_id, celery_task_id, status) VALUES ($1, $2, $3, 'running')`,
-		backfillID, featureDisabledTestOrg, "sync_run:"+featureDisabledTestRun); err != nil {
+INSERT INTO backfill_jobs (id, org_id, sync_config_id, celery_task_id, status, since_date, before_date)
+VALUES ($1, $2, $3, $4, 'running', '2026-01-01', '2026-01-02')`,
+		backfillID, featureDisabledTestOrg, configID, "sync_run:"+featureDisabledTestRun); err != nil {
 		t.Fatal(err)
 	}
 
@@ -650,12 +586,7 @@ func TestTerminalizeFeatureDisabledGraphUpsertsAnExistingFinalizeRow(t *testing.
 	seedFeatureDisabledRun(t, ctx, pool, 1)
 	insertFeatureDisabledUnit(t, ctx, pool, "00000000-0000-4000-8000-0000000001d1", "planned", nil)
 	existingFinalizeID := "00000000-0000-4000-8000-0000000001d2"
-	if _, err := pool.Exec(ctx, `
-INSERT INTO sync_dispatch_outbox (id, sync_run_id, org_id, kind, status, available_at, created_at, updated_at)
-VALUES ($1, $2, $3, $4, 'pending', now(), now(), now())`,
-		existingFinalizeID, featureDisabledTestRun, featureDisabledTestOrg, outboxKindFinalizeSyncRun); err != nil {
-		t.Fatal(err)
-	}
+	pgseed.SyncDispatchOutbox(ctx, t, pool, existingFinalizeID, featureDisabledTestRun, featureDisabledTestOrg, outboxKindFinalizeSyncRun, "pending", "", 0)
 
 	withTx(t, ctx, pool, func(tx pgx.Tx) {
 		run := &finalizeSyncRun{id: featureDisabledTestRun, orgID: featureDisabledTestOrg}
@@ -732,17 +663,16 @@ func TestSyncRunRequiresCanonicalIncidentFeatureUnitScopeWins(t *testing.T) {
 	ctx, pool := startFeatureDisabledPool(t)
 	createFeatureDisabledTables(t, ctx, pool)
 	seedFeatureDisabledRun(t, ctx, pool, 1)
-	if _, err := pool.Exec(ctx, `
-INSERT INTO sync_run_units (id, org_id, sync_run_id, provider, dataset_key, status)
-VALUES ('00000000-0000-4000-8000-0000000001e1', $1, $2, 'pagerduty', 'incidents', 'planned')`,
-		featureDisabledTestOrg, featureDisabledTestRun); err != nil {
-		t.Fatal(err)
-	}
+	pgseed.InsertSyncRunUnit(ctx, t, pool, pgseed.SyncRunUnit{
+		ID: "00000000-0000-4000-8000-0000000001e1", RunID: featureDisabledTestRun, OrgID: featureDisabledTestOrg,
+		IntegrationID: featureDisabledTestIntegration, Provider: "pagerduty", DatasetKey: "incidents",
+		CostClass: "standard", Status: "planned",
+	})
 	// An integration-level scope that would NOT require the feature, proving
 	// the unit scope -- not this -- decided the answer.
 	if _, err := pool.Exec(ctx, `
-INSERT INTO integration_datasets (id, integration_id, dataset_key, is_enabled)
-VALUES ('00000000-0000-4000-8000-0000000001e2', $1, 'users', true)`, featureDisabledTestIntegration); err != nil {
+INSERT INTO integration_datasets (id, org_id, integration_id, dataset_key, is_enabled, options)
+VALUES ('00000000-0000-4000-8000-0000000001e2', $2, $1, 'users', true, '{}'::json)`, featureDisabledTestIntegration, featureDisabledTestOrg); err != nil {
 		t.Fatal(err)
 	}
 
@@ -768,8 +698,8 @@ func TestSyncRunRequiresCanonicalIncidentFeatureIntegrationFallbackRespectsIsEna
 	createFeatureDisabledTables(t, ctx, pool)
 	seedFeatureDisabledRun(t, ctx, pool, 0)
 	if _, err := pool.Exec(ctx, `
-INSERT INTO integration_datasets (id, integration_id, dataset_key, is_enabled)
-VALUES ('00000000-0000-4000-8000-0000000001f1', $1, 'incidents', false)`, featureDisabledTestIntegration); err != nil {
+INSERT INTO integration_datasets (id, org_id, integration_id, dataset_key, is_enabled, options)
+VALUES ('00000000-0000-4000-8000-0000000001f1', $2, $1, 'incidents', false, '{}'::json)`, featureDisabledTestIntegration, featureDisabledTestOrg); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(ctx, `

@@ -4,14 +4,17 @@ package operational
 
 import (
 	"context"
-	"sync"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/pgmigrate"
+	schedsync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
+	postgresstore "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
+	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
@@ -122,18 +125,8 @@ func countRows(ctx context.Context, t *testing.T, pool *pgxpool.Pool, table stri
 func TestTriggerScopedSyncGithubCreatesOccurrenceAndManualTrigger(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer instance.Close(context.Background())
-	pool, err := pgxpool.New(ctx, instance.URI)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer pool.Close()
-	applySyncDispatchSchema(ctx, t, pool)
-	store := &PostgresStore{pool: pool}
+	pool, domain, coordinator := startSyncDispatchDatabase(ctx, t)
+	store := &PostgresStore{pool: domain}
 
 	insertGithubInstallation(ctx, t, pool, 555, "org-1")
 	sourceID := insertIntegrationSource(ctx, t, pool, "org-1", "github", "42", "full-chaos/dev-health")
@@ -141,7 +134,7 @@ func TestTriggerScopedSyncGithubCreatesOccurrenceAndManualTrigger(t *testing.T) 
 
 	deliveredAt := time.Date(2026, 9, 6, 12, 0, 0, 0, time.UTC)
 	payload := []byte(`{"installation":{"id":555},"repository":{"id":42,"full_name":"full-chaos/dev-health"}}`)
-	result, err := store.TriggerScopedSync(ctx, "github", "push", payload, deliveredAt)
+	result, err := triggerAndMint(ctx, t, store, coordinator, "github", "push", payload, deliveredAt)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,7 +150,7 @@ FROM public.scheduled_sync_occurrences WHERE occurrence_id = $1`, result.Occurre
 	).Scan(&identityVersion, &orgID, &syncConfigID, &scheduledFor); err != nil {
 		t.Fatalf("read occurrence: %v", err)
 	}
-	if identityVersion != syncOccurrenceIdentityVersion || orgID != "org-1" || syncConfigID != configID {
+	if identityVersion != "sync_scheduler_occurrence_v1" || orgID != "org-1" || syncConfigID != configID {
 		t.Fatalf("occurrence = version=%q org=%q config=%q", identityVersion, orgID, syncConfigID)
 	}
 	if !scheduledFor.Equal(deliveredAt) {
@@ -179,8 +172,8 @@ SELECT mode, triggered_by, source_ids FROM public.sync_manual_triggers WHERE occ
 	if err := pool.QueryRow(ctx, `SELECT status FROM public.scheduled_jobs WHERE sync_config_id = $1`, configID).Scan(&jobStatus); err != nil {
 		t.Fatalf("read scheduled job: %v", err)
 	}
-	if jobStatus != jobStatusPaused {
-		t.Fatalf("a freshly created job with no explicit schedule_cron must be PAUSED(%d), got %d", jobStatusPaused, jobStatus)
+	if jobStatus != 1 {
+		t.Fatalf("a freshly created job with no explicit schedule_cron must be PAUSED(1), got %d", jobStatus)
 	}
 	// The row carries every column the ScheduledJob model fills, as
 	// upsertScheduledJob writes them: job_config in json.dumps form, the
@@ -204,25 +197,15 @@ created_at IS NOT NULL, created_at = updated_at FROM public.scheduled_jobs WHERE
 func TestTriggerScopedSyncGitlabCreatesOccurrenceAndManualTrigger(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer instance.Close(context.Background())
-	pool, err := pgxpool.New(ctx, instance.URI)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer pool.Close()
-	applySyncDispatchSchema(ctx, t, pool)
-	store := &PostgresStore{pool: pool}
+	pool, domain, coordinator := startSyncDispatchDatabase(ctx, t)
+	store := &PostgresStore{pool: domain}
 
 	sourceID := insertIntegrationSource(ctx, t, pool, "org-2", "gitlab", "99", "group/project")
 	configID := insertSyncConfiguration(ctx, t, pool, "org-2", "gitlab", sourceID, `{}`)
 
 	deliveredAt := time.Date(2026, 9, 6, 12, 0, 0, 0, time.UTC)
 	payload := []byte(`{"project":{"id":99,"path_with_namespace":"group/project"}}`)
-	result, err := store.TriggerScopedSync(ctx, "gitlab", "merge_request", payload, deliveredAt)
+	result, err := triggerAndMint(ctx, t, store, coordinator, "gitlab", "merge_request", payload, deliveredAt)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -243,18 +226,8 @@ func TestTriggerScopedSyncGitlabCreatesOccurrenceAndManualTrigger(t *testing.T) 
 func TestTriggerScopedSyncNoConfigAtAllIsUnroutable(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer instance.Close(context.Background())
-	pool, err := pgxpool.New(ctx, instance.URI)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer pool.Close()
-	applySyncDispatchSchema(ctx, t, pool)
-	store := &PostgresStore{pool: pool}
+	pool, domain, coordinator := startSyncDispatchDatabase(ctx, t)
+	store := &PostgresStore{pool: domain}
 
 	insertGithubInstallation(ctx, t, pool, 555, "org-1")
 	// An IntegrationSource exists (the repo is discovered) but NO
@@ -263,7 +236,7 @@ func TestTriggerScopedSyncNoConfigAtAllIsUnroutable(t *testing.T) {
 	insertIntegrationSource(ctx, t, pool, "org-1", "github", "42", "full-chaos/dev-health")
 
 	payload := []byte(`{"installation":{"id":555},"repository":{"id":42,"full_name":"full-chaos/dev-health"}}`)
-	result, err := store.TriggerScopedSync(ctx, "github", "push", payload, time.Now().UTC())
+	result, err := triggerAndMint(ctx, t, store, coordinator, "github", "push", payload, time.Now().UTC())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -283,25 +256,15 @@ func TestTriggerScopedSyncNoConfigAtAllIsUnroutable(t *testing.T) {
 func TestTriggerScopedSyncGithubRoutesViaParentConfig(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer instance.Close(context.Background())
-	pool, err := pgxpool.New(ctx, instance.URI)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer pool.Close()
-	applySyncDispatchSchema(ctx, t, pool)
-	store := &PostgresStore{pool: pool}
+	pool, domain, coordinator := startSyncDispatchDatabase(ctx, t)
+	store := &PostgresStore{pool: domain}
 
 	insertGithubInstallation(ctx, t, pool, 555, "org-1")
 	insertIntegrationSource(ctx, t, pool, "org-1", "github", "42", "full-chaos/dev-health")
 	parentConfigID := insertParentSyncConfig(ctx, t, pool, "org-1", "github", true)
 
 	payload := []byte(`{"installation":{"id":555},"repository":{"id":42,"full_name":"full-chaos/dev-health"}}`)
-	result, err := store.TriggerScopedSync(ctx, "github", "push", payload, time.Now().UTC())
+	result, err := triggerAndMint(ctx, t, store, coordinator, "github", "push", payload, time.Now().UTC())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -315,24 +278,14 @@ func TestTriggerScopedSyncGithubRoutesViaParentConfig(t *testing.T) {
 func TestTriggerScopedSyncGitlabRoutesViaParentConfig(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer instance.Close(context.Background())
-	pool, err := pgxpool.New(ctx, instance.URI)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer pool.Close()
-	applySyncDispatchSchema(ctx, t, pool)
-	store := &PostgresStore{pool: pool}
+	pool, domain, coordinator := startSyncDispatchDatabase(ctx, t)
+	store := &PostgresStore{pool: domain}
 
 	insertIntegrationSource(ctx, t, pool, "org-2", "gitlab", "99", "group/project")
 	parentConfigID := insertParentSyncConfig(ctx, t, pool, "org-2", "gitlab", true)
 
 	payload := []byte(`{"project":{"id":99,"path_with_namespace":"group/project"}}`)
-	result, err := store.TriggerScopedSync(ctx, "gitlab", "merge_request", payload, time.Now().UTC())
+	result, err := triggerAndMint(ctx, t, store, coordinator, "gitlab", "merge_request", payload, time.Now().UTC())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -348,24 +301,14 @@ func TestTriggerScopedSyncGitlabRoutesViaParentConfig(t *testing.T) {
 func TestTriggerScopedSyncInactiveParentConfigIsUnroutable(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer instance.Close(context.Background())
-	pool, err := pgxpool.New(ctx, instance.URI)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer pool.Close()
-	applySyncDispatchSchema(ctx, t, pool)
-	store := &PostgresStore{pool: pool}
+	pool, domain, coordinator := startSyncDispatchDatabase(ctx, t)
+	store := &PostgresStore{pool: domain}
 
 	insertIntegrationSource(ctx, t, pool, "org-2", "gitlab", "99", "group/project")
 	insertParentSyncConfig(ctx, t, pool, "org-2", "gitlab", false)
 
 	payload := []byte(`{"project":{"id":99,"path_with_namespace":"group/project"}}`)
-	result, err := store.TriggerScopedSync(ctx, "gitlab", "merge_request", payload, time.Now().UTC())
+	result, err := triggerAndMint(ctx, t, store, coordinator, "gitlab", "merge_request", payload, time.Now().UTC())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -381,25 +324,15 @@ func TestTriggerScopedSyncInactiveParentConfigIsUnroutable(t *testing.T) {
 func TestTriggerScopedSyncTwoActiveParentConfigsIsAmbiguous(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer instance.Close(context.Background())
-	pool, err := pgxpool.New(ctx, instance.URI)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer pool.Close()
-	applySyncDispatchSchema(ctx, t, pool)
-	store := &PostgresStore{pool: pool}
+	pool, domain, coordinator := startSyncDispatchDatabase(ctx, t)
+	store := &PostgresStore{pool: domain}
 
 	insertIntegrationSource(ctx, t, pool, "org-2", "gitlab", "99", "group/project")
 	insertParentSyncConfig(ctx, t, pool, "org-2", "gitlab", true)
 	insertParentSyncConfig(ctx, t, pool, "org-2", "gitlab", true)
 
 	payload := []byte(`{"project":{"id":99,"path_with_namespace":"group/project"}}`)
-	result, err := store.TriggerScopedSync(ctx, "gitlab", "merge_request", payload, time.Now().UTC())
+	result, err := triggerAndMint(ctx, t, store, coordinator, "gitlab", "merge_request", payload, time.Now().UTC())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -417,24 +350,14 @@ func TestTriggerScopedSyncTwoActiveParentConfigsIsAmbiguous(t *testing.T) {
 func TestTriggerScopedSyncJiraRoutesViaParentConfig(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer instance.Close(context.Background())
-	pool, err := pgxpool.New(ctx, instance.URI)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer pool.Close()
-	applySyncDispatchSchema(ctx, t, pool)
-	store := &PostgresStore{pool: pool}
+	pool, domain, coordinator := startSyncDispatchDatabase(ctx, t)
+	store := &PostgresStore{pool: domain}
 
 	insertIntegrationSource(ctx, t, pool, "org-3", "jira", "CHAOS", "Full Chaos")
 	parentConfigID := insertParentSyncConfig(ctx, t, pool, "org-3", "jira", true)
 
 	payload := []byte(`{"issue":{"key":"CHAOS-1","fields":{"project":{"key":"CHAOS","name":"Full Chaos"}}}}`)
-	result, err := store.TriggerScopedSync(ctx, "jira", "issue_updated", payload, time.Now().UTC())
+	result, err := triggerAndMint(ctx, t, store, coordinator, "jira", "issue_updated", payload, time.Now().UTC())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -451,24 +374,14 @@ func TestTriggerScopedSyncJiraRoutesViaParentConfig(t *testing.T) {
 func TestTriggerScopedSyncJiraAmbiguousIntegrationSourceIsUnroutable(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer instance.Close(context.Background())
-	pool, err := pgxpool.New(ctx, instance.URI)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer pool.Close()
-	applySyncDispatchSchema(ctx, t, pool)
-	store := &PostgresStore{pool: pool}
+	pool, domain, coordinator := startSyncDispatchDatabase(ctx, t)
+	store := &PostgresStore{pool: domain}
 
 	insertIntegrationSource(ctx, t, pool, "org-a", "jira", "OPS", "Ops Team A")
 	insertIntegrationSource(ctx, t, pool, "org-b", "jira", "OPS", "Ops Team B")
 
 	payload := []byte(`{"issue":{"key":"OPS-1","fields":{"project":{"key":"OPS","name":"Ops Team A"}}}}`)
-	result, err := store.TriggerScopedSync(ctx, "jira", "issue_created", payload, time.Now().UTC())
+	result, err := triggerAndMint(ctx, t, store, coordinator, "jira", "issue_created", payload, time.Now().UTC())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -484,21 +397,11 @@ func TestTriggerScopedSyncJiraAmbiguousIntegrationSourceIsUnroutable(t *testing.
 func TestTriggerScopedSyncJiraMissingProjectKeyIsUnroutable(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer instance.Close(context.Background())
-	pool, err := pgxpool.New(ctx, instance.URI)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer pool.Close()
-	applySyncDispatchSchema(ctx, t, pool)
-	store := &PostgresStore{pool: pool}
+	_, domain, coordinator := startSyncDispatchDatabase(ctx, t)
+	store := &PostgresStore{pool: domain}
 
 	payload := []byte(`{"issue":{"key":"CHAOS-1","fields":{}}}`)
-	result, err := store.TriggerScopedSync(ctx, "jira", "issue_updated", payload, time.Now().UTC())
+	result, err := triggerAndMint(ctx, t, store, coordinator, "jira", "issue_updated", payload, time.Now().UTC())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -514,18 +417,8 @@ func TestTriggerScopedSyncJiraMissingProjectKeyIsUnroutable(t *testing.T) {
 func TestTriggerScopedSyncChildConfigWinsOverParent(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer instance.Close(context.Background())
-	pool, err := pgxpool.New(ctx, instance.URI)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer pool.Close()
-	applySyncDispatchSchema(ctx, t, pool)
-	store := &PostgresStore{pool: pool}
+	pool, domain, coordinator := startSyncDispatchDatabase(ctx, t)
+	store := &PostgresStore{pool: domain}
 
 	insertGithubInstallation(ctx, t, pool, 555, "org-1")
 	sourceID := insertIntegrationSource(ctx, t, pool, "org-1", "github", "42", "full-chaos/dev-health")
@@ -533,7 +426,7 @@ func TestTriggerScopedSyncChildConfigWinsOverParent(t *testing.T) {
 	insertParentSyncConfig(ctx, t, pool, "org-1", "github", true)
 
 	payload := []byte(`{"installation":{"id":555},"repository":{"id":42,"full_name":"full-chaos/dev-health"}}`)
-	result, err := store.TriggerScopedSync(ctx, "github", "push", payload, time.Now().UTC())
+	result, err := triggerAndMint(ctx, t, store, coordinator, "github", "push", payload, time.Now().UTC())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -545,21 +438,11 @@ func TestTriggerScopedSyncChildConfigWinsOverParent(t *testing.T) {
 func TestTriggerScopedSyncUnknownInstallationIsUnroutable(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer instance.Close(context.Background())
-	pool, err := pgxpool.New(ctx, instance.URI)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer pool.Close()
-	applySyncDispatchSchema(ctx, t, pool)
-	store := &PostgresStore{pool: pool}
+	_, domain, coordinator := startSyncDispatchDatabase(ctx, t)
+	store := &PostgresStore{pool: domain}
 
 	payload := []byte(`{"installation":{"id":999},"repository":{"id":1,"full_name":"a/b"}}`)
-	result, err := store.TriggerScopedSync(ctx, "github", "push", payload, time.Now().UTC())
+	result, err := triggerAndMint(ctx, t, store, coordinator, "github", "push", payload, time.Now().UTC())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -575,25 +458,15 @@ func TestTriggerScopedSyncUnknownInstallationIsUnroutable(t *testing.T) {
 func TestTriggerScopedSyncGithubMatchesByFullNameWhenExternalIDMissing(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer instance.Close(context.Background())
-	pool, err := pgxpool.New(ctx, instance.URI)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer pool.Close()
-	applySyncDispatchSchema(ctx, t, pool)
-	store := &PostgresStore{pool: pool}
+	pool, domain, coordinator := startSyncDispatchDatabase(ctx, t)
+	store := &PostgresStore{pool: domain}
 
 	insertGithubInstallation(ctx, t, pool, 555, "org-1")
 	sourceID := insertIntegrationSource(ctx, t, pool, "org-1", "github", "42", "full-chaos/dev-health")
 	insertSyncConfiguration(ctx, t, pool, "org-1", "github", sourceID, `{}`)
 
 	payload := []byte(`{"installation":{"id":555},"repository":{"full_name":"full-chaos/dev-health"}}`)
-	result, err := store.TriggerScopedSync(ctx, "github", "push", payload, time.Now().UTC())
+	result, err := triggerAndMint(ctx, t, store, coordinator, "github", "push", payload, time.Now().UTC())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -610,25 +483,15 @@ func TestTriggerScopedSyncGithubMatchesByFullNameWhenExternalIDMissing(t *testin
 func TestTriggerScopedSyncGithubAmbiguousIntegrationSourceIsUnroutable(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer instance.Close(context.Background())
-	pool, err := pgxpool.New(ctx, instance.URI)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer pool.Close()
-	applySyncDispatchSchema(ctx, t, pool)
-	store := &PostgresStore{pool: pool}
+	pool, domain, coordinator := startSyncDispatchDatabase(ctx, t)
+	store := &PostgresStore{pool: domain}
 
 	insertGithubInstallation(ctx, t, pool, 555, "org-1")
 	insertIntegrationSource(ctx, t, pool, "org-1", "github", "42", "full-chaos/dev-health")
 	insertIntegrationSource(ctx, t, pool, "org-1", "github", "42", "full-chaos/dev-health-duplicate")
 
 	payload := []byte(`{"installation":{"id":555},"repository":{"id":42,"full_name":"full-chaos/dev-health"}}`)
-	result, err := store.TriggerScopedSync(ctx, "github", "push", payload, time.Now().UTC())
+	result, err := triggerAndMint(ctx, t, store, coordinator, "github", "push", payload, time.Now().UTC())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -647,25 +510,15 @@ func TestTriggerScopedSyncGithubAmbiguousIntegrationSourceIsUnroutable(t *testin
 func TestTriggerScopedSyncCreatesActiveScheduledJobWhenExplicitCronConfigured(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer instance.Close(context.Background())
-	pool, err := pgxpool.New(ctx, instance.URI)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer pool.Close()
-	applySyncDispatchSchema(ctx, t, pool)
-	store := &PostgresStore{pool: pool}
+	pool, domain, coordinator := startSyncDispatchDatabase(ctx, t)
+	store := &PostgresStore{pool: domain}
 
 	insertGithubInstallation(ctx, t, pool, 555, "org-1")
 	sourceID := insertIntegrationSource(ctx, t, pool, "org-1", "github", "42", "full-chaos/dev-health")
 	configID := insertSyncConfiguration(ctx, t, pool, "org-1", "github", sourceID, `{"schedule_cron":"*/15 * * * *","timezone":"America/New_York"}`)
 
 	payload := []byte(`{"installation":{"id":555},"repository":{"id":42,"full_name":"full-chaos/dev-health"}}`)
-	result, err := store.TriggerScopedSync(ctx, "github", "push", payload, time.Now().UTC())
+	result, err := triggerAndMint(ctx, t, store, coordinator, "github", "push", payload, time.Now().UTC())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -677,26 +530,16 @@ func TestTriggerScopedSyncCreatesActiveScheduledJobWhenExplicitCronConfigured(t 
 	if err := pool.QueryRow(ctx, `SELECT status, schedule_cron, timezone FROM public.scheduled_jobs WHERE sync_config_id = $1`, configID).Scan(&status, &cron, &tz); err != nil {
 		t.Fatalf("read scheduled job: %v", err)
 	}
-	if status != jobStatusActive || cron != "*/15 * * * *" || tz != "America/New_York" {
-		t.Fatalf("status=%d cron=%q tz=%q, want ACTIVE(%d) with the config's own cron/timezone", status, cron, tz, jobStatusActive)
+	if status != 0 || cron != "*/15 * * * *" || tz != "America/New_York" {
+		t.Fatalf("status=%d cron=%q tz=%q, want ACTIVE(0) with the config's own cron/timezone", status, cron, tz)
 	}
 }
 
 func TestTriggerScopedSyncAmbiguousIntegrationSourceIsUnroutable(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer instance.Close(context.Background())
-	pool, err := pgxpool.New(ctx, instance.URI)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer pool.Close()
-	applySyncDispatchSchema(ctx, t, pool)
-	store := &PostgresStore{pool: pool}
+	pool, domain, coordinator := startSyncDispatchDatabase(ctx, t)
+	store := &PostgresStore{pool: domain}
 
 	// Two different orgs both track the same external gitlab project id --
 	// deliberately unresolvable by external_id alone; must fail loud rather
@@ -705,7 +548,7 @@ func TestTriggerScopedSyncAmbiguousIntegrationSourceIsUnroutable(t *testing.T) {
 	insertIntegrationSource(ctx, t, pool, "org-b", "gitlab", "99", "group/project-mirror-b")
 
 	payload := []byte(`{"project":{"id":99,"path_with_namespace":"group/project-mirror-a"}}`)
-	result, err := store.TriggerScopedSync(ctx, "gitlab", "push", payload, time.Now().UTC())
+	result, err := triggerAndMint(ctx, t, store, coordinator, "gitlab", "push", payload, time.Now().UTC())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -717,18 +560,8 @@ func TestTriggerScopedSyncAmbiguousIntegrationSourceIsUnroutable(t *testing.T) {
 func TestTriggerScopedSyncIsIdempotentOnRetry(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer instance.Close(context.Background())
-	pool, err := pgxpool.New(ctx, instance.URI)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer pool.Close()
-	applySyncDispatchSchema(ctx, t, pool)
-	store := &PostgresStore{pool: pool}
+	pool, domain, coordinator := startSyncDispatchDatabase(ctx, t)
+	store := &PostgresStore{pool: domain}
 
 	insertGithubInstallation(ctx, t, pool, 555, "org-1")
 	sourceID := insertIntegrationSource(ctx, t, pool, "org-1", "github", "42", "full-chaos/dev-health")
@@ -740,11 +573,11 @@ func TestTriggerScopedSyncIsIdempotentOnRetry(t *testing.T) {
 	deliveredAt := time.Date(2026, 9, 6, 12, 0, 0, 0, time.UTC)
 	payload := []byte(`{"installation":{"id":555},"repository":{"id":42,"full_name":"full-chaos/dev-health"}}`)
 
-	first, err := store.TriggerScopedSync(ctx, "github", "push", payload, deliveredAt)
+	first, err := triggerAndMint(ctx, t, store, coordinator, "github", "push", payload, deliveredAt)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := store.TriggerScopedSync(ctx, "github", "push", payload, deliveredAt)
+	second, err := triggerAndMint(ctx, t, store, coordinator, "github", "push", payload, deliveredAt)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -759,87 +592,223 @@ func TestTriggerScopedSyncIsIdempotentOnRetry(t *testing.T) {
 	}
 }
 
-// TestEnsureScheduledJobConcurrentFirstDeliveriesMintOneJob races several
-// first deliveries for one never-scheduled config. The insert's ON CONFLICT
-// DO NOTHING plus the read-back must give every caller the same job id and
-// leave exactly one scheduled_jobs row -- no 23505, no second job.
-func TestEnsureScheduledJobConcurrentFirstDeliveriesMintOneJob(t *testing.T) {
-	const callers = 12
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
+// startSyncDispatchDatabase builds the real schema and the three runtime
+// roles exactly as a deployment's migration grants them (the river hook for
+// the domain and queue roles, the coordinator posture for the coordinator
+// role), and returns an admin pool (seeding and assertions), a pool logged in
+// as the domain role (the webhook worker's) and one logged in as the
+// coordinator role (the scheduler's). CHAOS-6695: the webhook path must work
+// on exactly these roles.
+func startSyncDispatchDatabase(ctx context.Context, t *testing.T) (admin, domain, coordinator *pgxpool.Pool) {
+	t.Helper()
 	instance, err := containers.StartPostgres(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer instance.Close(context.Background())
+	t.Cleanup(func() { _ = instance.Close(context.Background()) })
 	config, err := pgxpool.ParseConfig(instance.URI)
 	if err != nil {
 		t.Fatal(err)
 	}
-	config.MaxConns = callers + 4
-	pool, err := pgxpool.NewWithConfig(ctx, config)
+	config.MaxConns = 8
+	admin, err = pgxpool.NewWithConfig(ctx, config)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer pool.Close()
-	applySyncDispatchSchema(ctx, t, pool)
-	sourceID := insertIntegrationSource(ctx, t, pool, "org-1", "github", "42", "full-chaos/dev-health")
-	configID := insertSyncConfiguration(ctx, t, pool, "org-1", "github", sourceID, `{}`)
+	t.Cleanup(admin.Close)
+	applySyncDispatchSchema(ctx, t, admin)
 
-	start := make(chan struct{})
-	ids := make([]string, callers)
-	errs := make([]error, callers)
-	var wg sync.WaitGroup
-	for index := 0; index < callers; index++ {
-		wg.Add(1)
-		go func(index int) {
-			defer wg.Done()
-			<-start
-			ids[index], errs[index] = ensureScheduledJobForSyncConfig(ctx, pool, "org-1", configID, "github", map[string]any{}, true)
-		}(index)
-	}
-	// Hold a SHARE lock so every caller passes its initial SELECT (ACCESS
-	// SHARE does not conflict) and then blocks on its INSERT (ROW EXCLUSIVE
-	// does). Releasing the lock only once all of them are waiting forces the
-	// insert race instead of hoping the scheduler produces it.
-	gate, err := pool.Begin(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := gate.Exec(ctx, "LOCK TABLE public.scheduled_jobs IN SHARE MODE"); err != nil {
-		t.Fatal(err)
-	}
-	close(start)
-	deadline := time.Now().Add(30 * time.Second)
-	for {
-		var waiting int
-		if err := pool.QueryRow(ctx, `
-SELECT count(*) FROM pg_stat_activity
-WHERE datname = current_database() AND wait_event_type = 'Lock' AND query LIKE '%INSERT INTO public.scheduled_jobs%'`,
-		).Scan(&waiting); err != nil {
+	roles := map[string]string{}
+	for _, name := range []string{"domain", "queue", "coordinator"} {
+		role, err := containers.RoleName("sync_dispatch_"+name, instance)
+		if err != nil {
 			t.Fatal(err)
 		}
-		if waiting == callers {
-			break
+		roles[name] = role
+		t.Cleanup(func() { containers.DropRole(admin, role, t.Logf) })
+		if _, err := admin.Exec(ctx, "CREATE ROLE "+role+
+			" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD 'sync-dispatch'"); err != nil {
+			t.Fatal(err)
 		}
-		if time.Now().After(deadline) {
-			t.Fatalf("only %d of %d callers reached the INSERT", waiting, callers)
-		}
-		time.Sleep(20 * time.Millisecond)
 	}
-	if err := gate.Rollback(ctx); err != nil {
+	posture := postgresstore.CoordinatorPosture()
+	grants := make([]riverstore.TableGrant, 0, len(posture.RequiredTables))
+	for _, table := range posture.RequiredTables {
+		grants = append(grants, riverstore.TableGrant{TableName: table.TableName,
+			AllowInsert: table.AllowInsert, AllowUpdate: table.AllowUpdate, AllowDelete: table.AllowDelete})
+	}
+	columns := make([]riverstore.ColumnGrant, 0, len(posture.ColumnScoped))
+	for _, column := range posture.ColumnScoped {
+		columns = append(columns, riverstore.ColumnGrant{TableName: column.TableName, ColumnName: column.ColumnName, Privilege: column.Privilege})
+	}
+	if _, err := riverstore.ApplyPinnedMigrations(ctx, admin, riverstore.MigrationOptions{
+		Schema: "river", DomainRole: roles["domain"], QueueRole: roles["queue"],
+		CoordinatorRole: roles["coordinator"], CoordinatorGrants: grants, CoordinatorColumnGrants: columns,
+		CoordinatorSequences: append([]string(nil), posture.RequiredSequences...),
+	}); err != nil {
 		t.Fatal(err)
 	}
-	wg.Wait()
-	for index := 0; index < callers; index++ {
-		if errs[index] != nil {
-			t.Fatalf("caller %d: %v", index, errs[index])
+	connect := func(role string) *pgxpool.Pool {
+		roleConfig, err := pgxpool.ParseConfig(instance.URI)
+		if err != nil {
+			t.Fatal(err)
 		}
-		if ids[index] == "" || ids[index] != ids[0] {
-			t.Fatalf("caller %d got job %q, caller 0 got %q", index, ids[index], ids[0])
+		roleConfig.ConnConfig.User, roleConfig.ConnConfig.Password = role, "sync-dispatch"
+		pool, err := pgxpool.NewWithConfig(ctx, roleConfig)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(pool.Close)
+		return pool
+	}
+	return admin, connect(roles["domain"]), connect(roles["coordinator"])
+}
+
+// triggerAndMint runs one webhook delivery the way production does: the
+// worker's TriggerScopedSync on the domain role records the request, and the
+// scheduler's minter on the coordinator role mints it. The delivery id is
+// derived from the delivery itself, so a retry of the same delivery is the
+// same delivery.
+func triggerAndMint(
+	ctx context.Context, t *testing.T, store *PostgresStore, coordinator *pgxpool.Pool,
+	provider, eventType string, payload []byte, deliveredAt time.Time,
+) (SyncDispatchResult, error) {
+	t.Helper()
+	deliveryID := uuid.NewSHA1(uuid.NameSpaceOID,
+		[]byte(provider+"\x00"+eventType+"\x00"+deliveredAt.UTC().Format(time.RFC3339Nano)+"\x00"+string(payload))).String()
+	result, err := store.TriggerScopedSync(ctx, deliveryID, provider, eventType, payload, deliveredAt)
+	if err != nil || !result.Processed {
+		return result, err
+	}
+	// The scheduler runs shortly after the delivery: its clock is the delivery
+	// time plus a minute, so a fixed historical deliveredAt is not "stale".
+	if err := schedsync.MintWebhookSyncRequests(ctx, coordinator, deliveredAt.UTC().Add(time.Minute), 10); err != nil {
+		t.Fatalf("mint the webhook sync request: %v", err)
+	}
+	return result, nil
+}
+
+// TestTriggerScopedSyncRetriedDeliveryAfterRerouteMintsNothingTwice (r1): the
+// request row is what makes a delivery idempotent, so it is kept after the
+// mint; a retry that would now route to a DIFFERENT configuration finds the
+// row and writes nothing.
+func TestTriggerScopedSyncRetriedDeliveryAfterRerouteMintsNothingTwice(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	pool, domain, coordinator := startSyncDispatchDatabase(ctx, t)
+	store := &PostgresStore{pool: domain}
+
+	insertGithubInstallation(ctx, t, pool, 555, "org-1")
+	sourceID := insertIntegrationSource(ctx, t, pool, "org-1", "github", "42", "full-chaos/dev-health")
+	first := insertSyncConfiguration(ctx, t, pool, "org-1", "github", sourceID, `{}`)
+
+	deliveredAt := time.Date(2026, 9, 6, 12, 0, 0, 0, time.UTC)
+	payload := []byte(`{"installation":{"id":555},"repository":{"id":42,"full_name":"full-chaos/dev-health"}}`)
+	if _, err := triggerAndMint(ctx, t, store, coordinator, "github", "push", payload, deliveredAt); err != nil {
+		t.Fatal(err)
+	}
+	// The routing moves: the first configuration is deactivated and another
+	// child configuration of the same source takes its place.
+	if _, err := pool.Exec(ctx, `UPDATE public.sync_configurations SET is_active = false WHERE id = $1::uuid`, first); err != nil {
+		t.Fatal(err)
+	}
+	var second string
+	if err := pool.QueryRow(ctx, `
+INSERT INTO public.sync_configurations (id, org_id, name, provider, source_id, sync_targets, sync_options, is_active,
+	planner_managed, created_at, updated_at)
+VALUES (gen_random_uuid(), 'org-1', 'rerouted-child', 'github', $1::uuid, '[]', '{}'::json, true, false, now(), now()) RETURNING id::text`,
+		sourceID).Scan(&second); err != nil {
+		t.Fatal(err)
+	}
+	retried, err := triggerAndMint(ctx, t, store, coordinator, "github", "push", payload, deliveredAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := countRows(ctx, t, pool, "public.scheduled_sync_occurrences"); got != 1 {
+		t.Fatalf("a retried delivery after a re-route minted %d occurrences (second config %s, reported %s), want 1", got, second, retried.SyncConfigID)
+	}
+	if got := countRows(ctx, t, pool, "public.webhook_sync_requests"); got != 1 {
+		t.Fatalf("webhook_sync_requests rows = %d, want the one delivery's row kept", got)
+	}
+	var mintedAt *time.Time
+	var occurrenceID *string
+	if err := pool.QueryRow(ctx, `SELECT minted_at, occurrence_id FROM public.webhook_sync_requests`).Scan(&mintedAt, &occurrenceID); err != nil {
+		t.Fatal(err)
+	}
+	if mintedAt == nil || occurrenceID == nil || *occurrenceID == "" {
+		t.Fatalf("the kept row is not marked minted: minted_at=%v occurrence_id=%v", mintedAt, occurrenceID)
+	}
+}
+
+// TestTriggerScopedSyncDistinctDeliveriesAtOneInstantEachGetAnOccurrence (r1):
+// two DIFFERENT deliveries stamped with the same microsecond must not be
+// merged into one occurrence (the second one's sources would be lost).
+func TestTriggerScopedSyncDistinctDeliveriesAtOneInstantEachGetAnOccurrence(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	pool, domain, coordinator := startSyncDispatchDatabase(ctx, t)
+	store := &PostgresStore{pool: domain}
+
+	insertGithubInstallation(ctx, t, pool, 555, "org-1")
+	sourceID := insertIntegrationSource(ctx, t, pool, "org-1", "github", "42", "full-chaos/dev-health")
+	insertSyncConfiguration(ctx, t, pool, "org-1", "github", sourceID, `{}`)
+
+	deliveredAt := time.Date(2026, 9, 6, 12, 0, 0, 123456000, time.UTC)
+	payload := []byte(`{"installation":{"id":555},"repository":{"id":42,"full_name":"full-chaos/dev-health"}}`)
+	for _, event := range []string{"push", "pull_request", "issues"} {
+		if _, err := triggerAndMint(ctx, t, store, coordinator, "github", event, payload, deliveredAt); err != nil {
+			t.Fatal(err)
 		}
 	}
-	if got := countRows(ctx, t, pool, "public.scheduled_jobs"); got != 1 {
-		t.Fatalf("scheduled_jobs rows = %d, want 1", got)
+	if occurrences, triggers := countRows(ctx, t, pool, "public.scheduled_sync_occurrences"), countRows(ctx, t, pool, "public.sync_manual_triggers"); occurrences != 3 || triggers != 3 {
+		t.Fatalf("occurrences=%d triggers=%d, want one of each per distinct delivery (3)", occurrences, triggers)
+	}
+	var distinct int
+	if err := pool.QueryRow(ctx, `SELECT count(DISTINCT occurrence_id) FROM public.webhook_sync_requests WHERE minted_at IS NOT NULL`).Scan(&distinct); err != nil || distinct != 3 {
+		t.Fatalf("distinct minted occurrence ids = %d (%v), want 3", distinct, err)
+	}
+}
+
+// TestTriggerScopedSyncReplayAfterRetentionMintsNothing (r2): the exact repro
+// -- a delivery is minted, its row ages past the retention and is pruned, then
+// the SAME delivery is replayed. The replay must not start a second occurrence.
+func TestTriggerScopedSyncReplayAfterRetentionMintsNothing(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	pool, domain, coordinator := startSyncDispatchDatabase(ctx, t)
+	store := &PostgresStore{pool: domain}
+
+	insertGithubInstallation(ctx, t, pool, 555, "org-1")
+	sourceID := insertIntegrationSource(ctx, t, pool, "org-1", "github", "42", "full-chaos/dev-health")
+	insertSyncConfiguration(ctx, t, pool, "org-1", "github", sourceID, `{}`)
+
+	deliveredAt := time.Date(2026, 9, 6, 12, 0, 0, 0, time.UTC)
+	payload := []byte(`{"installation":{"id":555},"repository":{"id":42,"full_name":"full-chaos/dev-health"}}`)
+	if _, err := triggerAndMint(ctx, t, store, coordinator, "github", "push", payload, deliveredAt); err != nil {
+		t.Fatal(err)
+	}
+	// Eight days later the scheduler's window prunes the minted row ...
+	later := deliveredAt.Add(8 * 24 * time.Hour)
+	if err := schedsync.MintWebhookSyncRequests(ctx, coordinator, later, 10); err != nil {
+		t.Fatal(err)
+	}
+	if got := countRows(ctx, t, pool, "public.webhook_sync_requests"); got != 0 {
+		t.Fatalf("the minted row was not pruned after eight days: %d rows", got)
+	}
+	// ... and the same delivery is replayed.
+	deliveryID := uuid.NewSHA1(uuid.NameSpaceOID,
+		[]byte("github\x00push\x00"+deliveredAt.UTC().Format(time.RFC3339Nano)+"\x00"+string(payload))).String()
+	if _, err := store.TriggerScopedSync(ctx, deliveryID, "github", "push", payload, deliveredAt); err != nil {
+		t.Fatal(err)
+	}
+	if err := schedsync.MintWebhookSyncRequests(ctx, coordinator, later, 10); err != nil {
+		t.Fatal(err)
+	}
+	if got := countRows(ctx, t, pool, "public.scheduled_sync_occurrences"); got != 1 {
+		t.Fatalf("a same-delivery replay after retention minted %d occurrences, want 1", got)
+	}
+	var reason *string
+	if err := pool.QueryRow(ctx, `SELECT refused_reason FROM public.webhook_sync_requests`).Scan(&reason); err != nil || reason == nil || *reason != "stale: delivery older than 24h0m0s" {
+		t.Fatalf("the replayed request = %v (%v), want refused as a stale delivery", reason, err)
 	}
 }

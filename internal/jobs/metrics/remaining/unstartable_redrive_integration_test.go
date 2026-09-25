@@ -68,7 +68,7 @@ INSERT INTO worker_job_outbox (
 ) VALUES (
     $1, $2, 'metrics.remaining.capacity', 1, '{}'::json,
     'sha256:0000000000000000000000000000000000000000000000000000000000000000',
-    'default', 0, 5, now(), $3, 0, now(), $4, now(), now()
+    'default', 2, 5, now(), $3, 0, now(), $4, now(), now()
 )`, uuid.New().String(), "remaining:partition:"+partitionID, status, prerequisite)
 	if err != nil {
 		t.Fatal(err)

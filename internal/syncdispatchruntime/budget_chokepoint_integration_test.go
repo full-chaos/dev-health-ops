@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -16,23 +18,8 @@ func createChokepointTables(t *testing.T, ctx context.Context, pool *pgxpool.Poo
 	// sync_runs backs bumpSyncRunRollup's seam (CHAOS-4586): terminalizeUnit
 	// recomputes this row's completed_units/failed_units in the same
 	// transaction as every terminal write it makes.
-	if _, err := pool.Exec(ctx, `
-CREATE TABLE public.sync_runs (
- id uuid PRIMARY KEY, completed_units int NOT NULL DEFAULT 0,
- failed_units int NOT NULL DEFAULT 0, total_units int NOT NULL DEFAULT 0
-);
-INSERT INTO public.sync_runs (id, total_units) VALUES ('`+chokepointTestRunID+`', 1);`); err != nil {
-		t.Fatal(err)
-	}
-	_, err := pool.Exec(ctx, `
-CREATE TABLE public.sync_run_units (
- id uuid PRIMARY KEY, sync_run_id uuid NOT NULL, status text NOT NULL, available_at timestamptz NULL,
- updated_at timestamptz NOT NULL DEFAULT now(), error text NULL, result json NULL,
- lease_owner text NULL, lease_expires_at timestamptz NULL, last_heartbeat_at timestamptz NULL
-)`)
-	if err != nil {
-		t.Fatal(err)
-	}
+	pgschema.Apply(ctx, t, pool)
+	pgseed.EnsureSyncRun(ctx, t, pool, pgseed.SyncRun{ID: chokepointTestRunID, TotalUnits: 1})
 }
 
 const chokepointTestUnit = "00000000-0000-4000-8000-0000000000e0"
@@ -58,12 +45,8 @@ func withChokepointPool(t *testing.T, fn func(ctx context.Context, pool *pgxpool
 
 func insertChokepointUnit(t *testing.T, ctx context.Context, pool *pgxpool.Pool, status string, resultJSON string) {
 	t.Helper()
-	if _, err := pool.Exec(ctx, `
-INSERT INTO public.sync_run_units (id, sync_run_id, status, available_at, updated_at, result)
-VALUES ($1::uuid, $4::uuid, $2, now(), now(), $3::json)`,
-		chokepointTestUnit, status, resultJSON, chokepointTestRunID); err != nil {
-		t.Fatal(err)
-	}
+	now := time.Now()
+	pgseed.InsertSyncRunUnit(ctx, t, pool, pgseed.SyncRunUnit{ID: chokepointTestUnit, RunID: chokepointTestRunID, Status: status, ResultJSON: resultJSON, AvailableAt: &now, UpdatedAt: &now})
 }
 
 // TestTerminalizeUnitWritesTheVerdict pins the happy path: a well-formed,
@@ -158,12 +141,8 @@ func TestTerminalizeUnitRollupSurvivesConcurrentTerminalizationOfSiblingUnits(t 
 	withChokepointPool(t, func(ctx context.Context, pool *pgxpool.Pool) {
 		secondUnit := "00000000-0000-4000-8000-0000000000e2"
 		insertChokepointUnit(t, ctx, pool, syncRunUnitStatusPlanned, `{}`)
-		if _, err := pool.Exec(ctx, `
-INSERT INTO public.sync_run_units (id, sync_run_id, status, available_at, updated_at, result)
-VALUES ($1::uuid, $2::uuid, $3, now(), now(), '{}'::json)`,
-			secondUnit, chokepointTestRunID, syncRunUnitStatusPlanned); err != nil {
-			t.Fatal(err)
-		}
+		insertedAt := time.Now()
+		pgseed.InsertSyncRunUnit(ctx, t, pool, pgseed.SyncRunUnit{ID: secondUnit, RunID: chokepointTestRunID, Status: syncRunUnitStatusPlanned, ResultJSON: `{}`, AvailableAt: &insertedAt, UpdatedAt: &insertedAt})
 		// The fixture pins total_units=1 (one unit); a second sibling was
 		// just added, so correct it to match reality for this test.
 		if _, err := pool.Exec(ctx, `UPDATE public.sync_runs SET total_units = 2 WHERE id=$1`, chokepointTestRunID); err != nil {

@@ -993,6 +993,44 @@ var operationSpecs = map[string]OperationSpec{
 		},
 		Variants: []Variant{savedReportInstanceVariant("FOUND")},
 	},
+	// The saved-report mutations are registered documents, but a two-plane proof
+	// would apply each write on both planes, so the runner refuses them before
+	// sending anything (RefusalNotAQueryDocument) -- loudly, per operation. The
+	// entries exist so AssertCoverage still names every registered operation;
+	// their variables are never sent.
+	"createSavedReport": {
+		ResponseRoot: "createSavedReport",
+		Variables: func(orgID string, _ Window) map[string]any {
+			return map[string]any{"orgId": orgID, "input": map[string]any{"name": "proof"}}
+		},
+	},
+	"updateSavedReport": {
+		ResponseRoot: "updateSavedReport",
+		RootNullable: true,
+		Variables: func(orgID string, _ Window) map[string]any {
+			return map[string]any{"orgId": orgID, "reportId": "", "input": map[string]any{}}
+		},
+	},
+	"deleteSavedReport": {
+		ResponseRoot: "deleteSavedReport",
+		Variables: func(orgID string, _ Window) map[string]any {
+			return map[string]any{"orgId": orgID, "reportId": ""}
+		},
+	},
+	"cloneSavedReport": {
+		ResponseRoot: "cloneSavedReport",
+		RootNullable: true,
+		Variables: func(orgID string, _ Window) map[string]any {
+			return map[string]any{"orgId": orgID, "input": map[string]any{"sourceReportId": ""}}
+		},
+	},
+	"triggerReport": {
+		ResponseRoot: "triggerReport",
+		RootNullable: true,
+		Variables: func(orgID string, _ Window) map[string]any {
+			return map[string]any{"orgId": orgID, "reportId": ""}
+		},
+	},
 	"savedReports": {
 		ResponseRoot: "savedReports",
 		Variables: func(orgID string, _ Window) map[string]any {

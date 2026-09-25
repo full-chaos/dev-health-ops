@@ -34,7 +34,7 @@ type WebhookDelivery struct {
 	// created_at) -- stable across every retry of this same delivery, unlike
 	// time.Now(). CHAOS-5319's native sync-dispatch path uses it as the
 	// scheduled_sync_occurrences.scheduled_for value so a retried Work()
-	// call recomputes the SAME occurrence_id (scheduledSyncOccurrenceIdentity
+	// call recomputes the SAME occurrence_id (synchandoff.OccurrenceIdentity
 	// is a pure function of (config_id, scheduled_for)) instead of minting a
 	// second, duplicate sync for one delivery.
 	CreatedAt time.Time
@@ -105,7 +105,7 @@ func (handler *WebhookHandler) Work(ctx context.Context, execution *jobruntime.E
 	// -- no Python sync entrypoint is ever called from this branch.
 	if isNativeSyncDispatchEvent(delivery.Provider, delivery.EventType) {
 		if writer, ok := handler.store.(SyncDispatchWriter); ok {
-			result, err := writer.TriggerScopedSync(ctx, delivery.Provider, delivery.EventType, delivery.Payload, delivery.CreatedAt)
+			result, err := writer.TriggerScopedSync(ctx, delivery.ID, delivery.Provider, delivery.EventType, delivery.Payload, delivery.CreatedAt)
 			if err != nil {
 				return jobruntime.Retryable(err)
 			}

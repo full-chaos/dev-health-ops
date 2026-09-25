@@ -42,6 +42,7 @@ CI_FILES = (
     "check_venue_oracle_registry.sh",
     "venue_oracle_discovery.awk",
     "venue_oracle_names.awk",
+    "venue_oracle_proof.awk",
     "lib/venue_oracle_registry.sh",
     "merge-tree-vet.sh",
 )
@@ -85,7 +86,11 @@ VENUE_TEST = """package venue
 
 import "testing"
 
-func TestVenueOracleOne(t *testing.T) {}
+// A compiling stand-in for the harness import: the registry check reads the
+// call, the scratch module has no harness package to import.
+var venueoracle = struct{ WriteProof func(*testing.T) }{func(*testing.T) {}}
+
+func TestVenueOracleOne(t *testing.T) { venueoracle.WriteProof(t) }
 """
 REGISTRY = "internal/venue\tTestVenueOracleOne\trun\n"
 

@@ -66,7 +66,7 @@ func insertFinalizeTestRun(
 	t.Helper()
 	if _, err := pool.Exec(ctx, `
 INSERT INTO daily_metrics_runs (id,org_id,target_day,generation,status,finalization_status,created_at,updated_at)
-VALUES ($1,$2,$3,'post-sync:finalize-gap','running','pending',$4,$4)`,
+VALUES ($1,$2,$3,'post-sync:finalize-gap-' || $1::uuid::text,'running','pending',$4,$4)`,
 		runID, orgID, targetDay, now); err != nil {
 		t.Fatal(err)
 	}

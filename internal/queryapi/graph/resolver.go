@@ -7,6 +7,7 @@ package graph
 import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/datahealth"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/featureflags"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/reports"
 )
 
 // Resolver holds every dependency a field resolver needs. ClickHouse is
@@ -26,4 +27,9 @@ type Resolver struct {
 	// read and the saved-report reads use; without it the connector list is
 	// empty and a saved-report read is an error.
 	Postgres datahealth.PGQuerier
+	// ReportWriter runs the saved-report mutations (createSavedReport,
+	// updateSavedReport, deleteSavedReport, cloneSavedReport, triggerReport).
+	// It is the only write path this service has; without it a mutation is an
+	// error, never a silent no-op.
+	ReportWriter *reports.Writer
 }

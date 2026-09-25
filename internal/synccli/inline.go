@@ -30,7 +30,10 @@ import (
 //     GITLAB_TOKEN) and --org (or ORG_ID);
 //   - the chunked targets cicd and tests (they need a chunk store the
 //     in-process ledger does not implement yet);
-//   - --search batch and --provider local|synthetic (their own tickets).
+//   - --provider local|synthetic (their own tickets).
+//
+// `--search` batch mode is batch.go: the listing, then this same per-dataset
+// run for each listed repository.
 
 // githubIncidentsRefusal is the Python message, verbatim
 // (processors/github.py process_github_repo).
@@ -40,7 +43,6 @@ const githubIncidentsRefusal = "GitHub does not expose a native incident source;
 const (
 	ticketDBLookups = "CHAOS-6710"
 	ticketChunked   = "CHAOS-6711"
-	ticketBatch     = "CHAOS-6684"
 	ticketLocal     = "CHAOS-6685"
 )
 
@@ -48,6 +50,7 @@ const (
 type InlineDeps struct {
 	OpenStore func(ctx context.Context, dsn string) (driver.Conn, error)
 	Run       func(ctx context.Context, run providersync.InProcessRun) (providersync.CompleteRouteExecutionResult, error)
+	List      func(ctx context.Context, run providersync.InProcessRun, listing providersync.InProcessListing) ([]providersync.ListedRepository, error)
 	Now       func() time.Time
 }
 
@@ -56,15 +59,16 @@ func defaultInlineDeps() InlineDeps {
 		OpenStore: func(ctx context.Context, dsn string) (driver.Conn, error) {
 			return clickhousestore.Open(ctx, clickhousestore.DefaultConfig(dsn))
 		},
-		Run: providersync.RunInProcess,
-		Now: time.Now,
+		Run:  providersync.RunInProcess,
+		List: providersync.ListInProcess,
+		Now:  time.Now,
 	}
 }
 
 // InlineExecutor runs the requests it supports and refuses the rest with a
 // message that names where each one lands.
 func InlineExecutor(deps InlineDeps) Executor {
-	if deps.OpenStore == nil || deps.Run == nil || deps.Now == nil {
+	if deps.OpenStore == nil || deps.Run == nil || deps.List == nil || deps.Now == nil {
 		defaults := defaultInlineDeps()
 		if deps.OpenStore == nil {
 			deps.OpenStore = defaults.OpenStore
@@ -93,6 +97,9 @@ func InlineExecutor(deps InlineDeps) Executor {
 			defer func() { _ = closer.Close() }()
 		}
 		run.Conn = conn
+		if plan.Call == CallGitHubBatch || plan.Call == CallGitLabBatch {
+			return runBatch(ctx, deps, plan, datasets, run, env)
+		}
 		for _, dataset := range datasets {
 			run.Dataset = dataset
 			if _, err := deps.Run(ctx, run); err != nil {
@@ -122,9 +129,7 @@ func notYet(plan Plan, what, ticket string) *Refusal {
 // inlineDatasets maps the target to the worker datasets it runs, or refuses.
 func inlineDatasets(plan Plan) ([]string, *Refusal) {
 	switch plan.Call {
-	case CallGitHubSingle, CallGitLabSingle:
-	case CallGitHubBatch, CallGitLabBatch:
-		return nil, notYet(plan, "--search batch mode", ticketBatch)
+	case CallGitHubSingle, CallGitLabSingle, CallGitHubBatch, CallGitLabBatch:
 	case CallLocalRepo, CallLocalBlame:
 		return nil, notYet(plan, "the local provider", ticketLocal)
 	default:
@@ -188,9 +193,11 @@ func inlineRun(plan Plan, now time.Time) (providersync.InProcessRun, *Refusal) {
 		Config: map[string]string{},
 	}
 	switch plan.Call {
-	case CallGitHubSingle:
-		run.SourceExternalID = plan.Owner + "/" + plan.Repo
-		run.SourceName = run.SourceExternalID
+	case CallGitHubSingle, CallGitHubBatch:
+		if plan.Call == CallGitHubSingle {
+			run.SourceExternalID = plan.Owner + "/" + plan.Repo
+			run.SourceName = run.SourceExternalID
+		}
 		creds := plan.GitHub
 		switch {
 		case creds == nil || creds.Mode == CredentialDB:
@@ -203,9 +210,11 @@ func inlineRun(plan Plan, now time.Time) (providersync.InProcessRun, *Refusal) {
 		if creds.BaseURL != nil {
 			run.Config["base_url"] = *creds.BaseURL
 		}
-	case CallGitLabSingle:
-		run.SourceExternalID = plan.ProjectID.String()
-		run.SourceName = run.SourceExternalID
+	case CallGitLabSingle, CallGitLabBatch:
+		if plan.Call == CallGitLabSingle {
+			run.SourceExternalID = plan.ProjectID.String()
+			run.SourceName = run.SourceExternalID
+		}
 		run.Credential = map[string]string{"token": plan.GitLabToken}
 		run.Config["base_url"] = plan.GitLabURL
 	}

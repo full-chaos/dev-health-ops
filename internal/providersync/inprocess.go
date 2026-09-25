@@ -406,15 +406,7 @@ func RunInProcess(ctx context.Context, run InProcessRun) (CompleteRouteExecution
 	if err != nil {
 		return CompleteRouteExecutionResult{}, ErrInvalidConfiguration
 	}
-	doer := run.Doer
-	if doer == nil {
-		doer = &http.Client{
-			Timeout: 45 * time.Second,
-			CheckRedirect: func(*http.Request, []*http.Request) error {
-				return http.ErrUseLastResponse
-			},
-		}
-	}
+	doer := inProcessHTTPDoer(run.Doer)
 	retry := run.Retry
 	if retry.MaxAttempts == 0 {
 		retry = providerfoundation.DefaultRetryPolicy()
@@ -439,4 +431,18 @@ func RunInProcess(ctx context.Context, run InProcessRun) (CompleteRouteExecution
 		HeartbeatInterval: 30 * time.Second, Now: now,
 	}
 	return executor.Execute(ctx, session, descriptor)
+}
+
+// inProcessHTTPDoer is the caller's HTTP client, or the worker's own (45 s timeout,
+// redirects refused).
+func inProcessHTTPDoer(doer providerfoundation.HTTPDoer) providerfoundation.HTTPDoer {
+	if doer != nil {
+		return doer
+	}
+	return &http.Client{
+		Timeout: 45 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
 }

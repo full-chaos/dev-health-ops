@@ -147,7 +147,6 @@ func TestInlineRefusesWhatItCannotRunWithoutOpeningAnything(t *testing.T) {
 		env    map[string]string
 		want   string
 	}{
-		{"batch", "git", []string{"--provider", "github", "-s", "acme/*", "--auth", "tok"}, inlineEnv, ticketBatch},
 		{"local", "git", []string{"--provider", "local"}, inlineEnv, ticketLocal},
 		{"cicd", "cicd", gh, inlineEnv, ticketChunked},
 		{"tests", "tests", gl, inlineEnv, ticketChunked},

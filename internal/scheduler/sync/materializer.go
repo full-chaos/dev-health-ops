@@ -921,15 +921,30 @@ func resolveCredentialStamp(ctx context.Context, tx pgx.Tx, loaded *loadedMateri
 // the stamped credential's {**config, **decrypted} mapping, or over the
 // provider's environment credentials for environment auth. It reads the
 // credential through the domain pool. A credential that cannot be read or
-// decrypted refuses the occurrence, as Python's plan fails.
+// decrypted refuses the occurrence, as Python's plan fails. Environment
+// auth needs no decryptor and is always stamped. A credential-backed run in
+// a process with no decryptor (the cipher failed to load) refuses the
+// occurrence too: Python's plan fails without the key, and a run left
+// unstamped would skip its readers' fail-closed check.
 func (materializer *NativeMaterializer) stampCredentialFingerprint(ctx context.Context, loaded *loadedMaterializationPlan) error {
-	if materializer.fingerprintDecryptor == nil || loaded.authSource == nil {
+	if loaded.authSource == nil {
 		return nil
+	}
+	refuse := func(reason string) error {
+		slog.Default().ErrorContext(ctx, "sync.materializer.credential_fingerprint_failed",
+			slog.String("stage", "credential_fingerprint"),
+			slog.String("org_id", loaded.input.OrgID),
+			slog.String("integration_id", loaded.input.IntegrationID),
+			slog.String("error", reason))
+		return fmt.Errorf("%w: credential fingerprint: %s", ErrOccurrenceIneligible, reason)
+	}
+	if loaded.credentialID != nil && materializer.fingerprintDecryptor == nil {
+		return refuse("no credential decryptor (settings encryption key unavailable)")
 	}
 	loader := syncbudget.Loader{DB: materializer.domainPool, Decryptor: materializer.fingerprintDecryptor, Getenv: os.Getenv}
 	fingerprint, err := loader.PlanFingerprint(ctx, loaded.input.OrgID, loaded.input.IntegrationID, loaded.provider, loaded.credentialID)
 	if err != nil {
-		return fmt.Errorf("%w: credential fingerprint: %v", ErrOccurrenceIneligible, err)
+		return refuse(err.Error())
 	}
 	loaded.credentialFingerprint = &fingerprint
 	return nil

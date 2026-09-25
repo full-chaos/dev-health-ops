@@ -340,9 +340,10 @@ var productionSchedulerRuntimeSources = schedulerRuntimeSources{
 		if cipherErr != nil {
 			slog.Default().Error(
 				"scheduler_source_discovery_cipher_unavailable: native source "+
-					"discovery is disabled for this process, and new sync runs "+
-					"carry no credential_fingerprint; already-discovered "+
-					"sources still plan normally (CHAOS-4602, CHAOS-6679)",
+					"discovery is disabled for this process, and every sync "+
+					"occurrence backed by a stored credential is refused "+
+					"(no credential_fingerprint can be stamped); environment-auth "+
+					"configs still plan (CHAOS-4602, CHAOS-6679)",
 				"error", cipherErr,
 			)
 		} else {

@@ -3,6 +3,7 @@ package internalidentity
 import (
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -87,47 +88,109 @@ func TestHeaderNamesAreTheDeployContract(t *testing.T) {
 	}
 }
 
-// TestFromHeaderReadsWhatThePythonEdgeSends is the cross-language oracle for the
-// carrier: testdata/python_edge_identity_headers.json is produced by the REAL
-// Python edge function (go_api_dispatcher._internal_identity_headers) together
-// with the identity the signed envelope carries for the same principal
+// pythonEdgeGolden is testdata/python_edge_identity_headers.json: produced by the
+// REAL Python edge function (go_api_dispatcher._internal_identity_headers)
+// together with the identity the signed envelope carries for the same principal
 // (tests/api/graphql/test_go_api_internal_identity_headers.py regenerates and
-// compares it by execution). Every header set the Python edge produces must be
-// read by FromHeader as exactly that identity, byte for byte (non-ASCII values
-// included: Go reads the raw bytes the edge sends).
-func TestFromHeaderReadsWhatThePythonEdgeSends(t *testing.T) {
+// compares it by execution).
+type pythonEdgeGolden struct {
+	Cases []struct {
+		Name     string            `json:"name"`
+		Headers  map[string]string `json:"headers"`
+		Expected authctx.Claims    `json:"expected"`
+	} `json:"cases"`
+	Refused []struct {
+		Name  string `json:"name"`
+		OrgID string `json:"org_id"`
+		Role  string `json:"role"`
+	} `json:"refused"`
+}
+
+func loadPythonEdgeGolden(t *testing.T) pythonEdgeGolden {
+	t.Helper()
 	raw, err := os.ReadFile(filepath.Join("testdata", "python_edge_identity_headers.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	var golden struct {
-		Cases []struct {
-			Name     string            `json:"name"`
-			Headers  map[string]string `json:"headers"`
-			Expected authctx.Claims    `json:"expected"`
-		} `json:"cases"`
-	}
+	var golden pythonEdgeGolden
 	if err := json.Unmarshal(raw, &golden); err != nil {
 		t.Fatal(err)
 	}
-	if len(golden.Cases) < 5 {
-		t.Fatalf("the golden holds %d cases: a shrunken oracle proves nothing", len(golden.Cases))
+	if len(golden.Cases) < 10 || len(golden.Refused) < 5 {
+		t.Fatalf("the golden holds %d cases and %d refusals: a shrunken oracle proves nothing", len(golden.Cases), len(golden.Refused))
 	}
+	return golden
+}
+
+// TestFromHeaderReadsWhatThePythonEdgeSends is the cross-language oracle for the
+// carrier: every header set the Python edge produces travels through a REAL
+// net/http server (so its parsing, trimming and canonicalisation apply, not a
+// hand-built http.Header) and FromHeader must read exactly the identity the
+// envelope carries, byte for byte: non-ASCII, four-byte unicode, combining
+// marks, empty, very long, interior spaces and header-looking text included.
+func TestFromHeaderReadsWhatThePythonEdgeSends(t *testing.T) {
+	golden := loadPythonEdgeGolden(t)
+	var (
+		got    authctx.Claims
+		gotErr error
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got, gotErr = FromHeader(r.Header)
+	}))
+	defer server.Close()
 	for _, c := range golden.Cases {
-		h := http.Header{}
-		for name, value := range c.Headers {
-			h[http.CanonicalHeaderKey(name)] = []string{value}
-		}
 		if len(c.Headers) != len(Headers) {
 			t.Errorf("%s: the Python edge sent %d headers, the reader wants %d", c.Name, len(c.Headers), len(Headers))
 		}
-		got, err := FromHeader(h)
+		request, err := http.NewRequest(http.MethodPost, server.URL, nil)
 		if err != nil {
-			t.Errorf("%s: FromHeader refused what the Python edge sends: %v", c.Name, err)
+			t.Fatal(err)
+		}
+		for name, value := range c.Headers {
+			request.Header[http.CanonicalHeaderKey(name)] = []string{value}
+		}
+		got, gotErr = authctx.Claims{}, nil
+		response, err := server.Client().Do(request)
+		if err != nil {
+			t.Errorf("%s: the request could not be sent: %v", c.Name, err)
+			continue
+		}
+		_ = response.Body.Close()
+		if gotErr != nil {
+			t.Errorf("%s: FromHeader refused what the Python edge sends: %v", c.Name, gotErr)
 			continue
 		}
 		if got != c.Expected {
 			t.Errorf("%s: read %+v, the envelope carries %+v", c.Name, got, c.Expected)
+		}
+	}
+}
+
+// TestValuesThePythonEdgeRefusesCannotArriveUnaltered proves the refusal is
+// necessary: each value the edge will not send is either rejected by a Go HTTP
+// client or arrives as a DIFFERENT string than the envelope would have carried.
+func TestValuesThePythonEdgeRefusesCannotArriveUnaltered(t *testing.T) {
+	golden := loadPythonEdgeGolden(t)
+	var received string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		received = r.Header.Get(HeaderOrgID) + "|" + r.Header.Get(HeaderRole) + "|" + r.Header.Get(HeaderSuperuser)
+	}))
+	defer server.Close()
+	for _, c := range golden.Refused {
+		request, err := http.NewRequest(http.MethodPost, server.URL, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header.Set(HeaderOrgID, c.OrgID)
+		request.Header.Set(HeaderRole, c.Role)
+		received = ""
+		response, err := server.Client().Do(request)
+		if err != nil {
+			continue // a Go client refuses it outright
+		}
+		_ = response.Body.Close()
+		if received == c.OrgID+"|"+c.Role+"|" {
+			t.Errorf("%s: a value the Python edge refuses arrived unaltered, the refusal is not needed", c.Name)
 		}
 	}
 }

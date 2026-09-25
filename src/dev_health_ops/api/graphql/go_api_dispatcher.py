@@ -228,8 +228,15 @@ def _internal_identity_headers(user: AuthenticatedUser) -> dict[str, str]:
     exactly ``true`` or ``false``: query-api refuses anything else."""
     identity = effective_principal_identity(user)
     for value in (identity.org_id, identity.role):
-        # A control character in a header value is header injection: refuse.
-        if any(ord(char) < 0x20 or ord(char) == 0x7F for char in value):
+        # A value that cannot travel as an HTTP header field and arrive as the
+        # same string is refused, never sent altered: a control character
+        # (header injection, NUL, CR/LF; a tab inside a value is legal HTTP but
+        # never an identity) and leading or trailing whitespace (an HTTP server
+        # trims it, so the reader would see a different string than the envelope
+        # carried).
+        if any(ord(char) < 0x20 or ord(char) == 0x7F for char in value) or (
+            value != value.strip(" \t")
+        ):
             raise ValueError("identity value is not header safe")
     return {
         _INTERNAL_ORG_ID_HEADER: identity.org_id,

@@ -158,6 +158,23 @@ def go_dispatcher_headers() -> dict[str, str]:
     return go_api_dispatcher._internal_identity_headers(_user())
 
 
+#: Identity values the edge refuses to send: they cannot arrive as the same
+#: string (control characters, NUL, CR/LF injection, edge whitespace an HTTP
+#: server trims). The Go test proves a server would have altered them.
+_REFUSED = [
+    {"name": "nul", "org_id": "org\u0000x", "role": "admin"},
+    {
+        "name": "crlf injection",
+        "org_id": "org-1\r\nX-DH-Internal-Superuser: true",
+        "role": "admin",
+    },
+    {"name": "lf", "org_id": "org\n1", "role": "admin"},
+    {"name": "tab edge", "org_id": "org-1\t", "role": "admin"},
+    {"name": "leading space", "org_id": " org-1", "role": "admin"},
+    {"name": "trailing space role", "org_id": "org-1", "role": "admin "},
+    {"name": "delete char", "org_id": "org\u007f1", "role": "admin"},
+]
+
 _GOLDEN = (
     Path(__file__).resolve().parents[3]
     / "internal"
@@ -184,7 +201,25 @@ def _golden_cases() -> list[dict]:
             {"role": "admin", "org_id": "11111111-1111-4111-8111-111111111111"},
             False,
         ),
-        ("non-ascii org and role", {"role": "rôle-é", "org_id": "org-ü"}, False),
+        (
+            "non-ascii org and role",
+            {"role": "r\u00f4le-\u00e9", "org_id": "org-\u00fc"},
+            False,
+        ),
+        (
+            "four-byte unicode",
+            {"role": "admin", "org_id": "org-\U0001f600-\u4e2d\u6587"},
+            False,
+        ),
+        ("combining marks", {"role": "e\u0301", "org_id": "org-a\u030a"}, False),
+        ("empty org and role", {"role": "", "org_id": ""}, False),
+        ("very long values", {"role": "r" * 8000, "org_id": "o" * 8000}, False),
+        (
+            "interior spaces",
+            {"role": "team lead", "org_id": "org  with  spaces"},
+            False,
+        ),
+        ("header-looking text", {"role": "admin, superuser", "org_id": "a;b=c"}, False),
         ("impersonating", {"role": "admin", "org_id": "org-real"}, True),
     ]
     cases = []
@@ -229,7 +264,17 @@ def test_the_golden_read_by_the_go_reader_is_what_the_python_edge_produces(
     import json
     import os
 
-    current = {"cases": _golden_cases()}
+    current = {"cases": _golden_cases(), "refused": _REFUSED}
     if os.environ.get("REGENERATE_PYTHON_EDGE_GOLDEN") == "1":
         _GOLDEN.write_text(json.dumps(current, indent=2, ensure_ascii=False) + "\n")
     assert json.loads(_GOLDEN.read_text()) == current
+
+
+@pytest.mark.parametrize("case", _REFUSED, ids=lambda case: case["name"])
+def test_values_that_cannot_travel_as_a_header_are_refused_not_altered(
+    case: dict,
+) -> None:
+    with pytest.raises(ValueError):
+        go_api_dispatcher._internal_identity_headers(
+            _user(org_id=case["org_id"], role=case["role"])
+        )

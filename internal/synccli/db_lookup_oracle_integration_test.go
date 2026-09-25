@@ -28,10 +28,10 @@ import (
 var dbLookupOracleProgram string
 
 const upgradeProgram = `
-import argparse, sys
+import argparse, os, sys
 from dev_health_ops.db import normalize_async_postgres_uri
 from dev_health_ops.migrate import _run_upgrade
-sys.exit(_run_upgrade(argparse.Namespace(db=normalize_async_postgres_uri(sys.argv[1]), revision="head")))
+sys.exit(_run_upgrade(argparse.Namespace(db=normalize_async_postgres_uri(os.environ["DHO_ORACLE_DB_URL"]), revision="head")))
 `
 
 type dbOrg struct {
@@ -164,6 +164,24 @@ func dbScenarios(keyFile string) []dbScenario {
 		{"scheme postgresql+pg8000", func(b string) string { return strings.Replace(b, "postgresql+asyncpg://", "postgresql+pg8000://", 1) }},
 		{"scheme mysql", func(b string) string { return strings.Replace(b, "postgresql+asyncpg://", "mysql://", 1) }},
 		{"not a url", plain("not a url")},
+		{"query sslmode=disable", func(b string) string { return b + "?sslmode=disable" }},
+		{"query sslmode=require", func(b string) string { return b + "?sslmode=require" }},
+		{"query sslmode=prefer", func(b string) string { return b + "?sslmode=prefer" }},
+		{"query ssl=disable", func(b string) string { return b + "?ssl=disable" }},
+		{"query ssl=require", func(b string) string { return b + "?ssl=require" }},
+		{"query ssl=prefer", func(b string) string { return b + "?ssl=prefer" }},
+		{"query ssl=false", func(b string) string { return b + "?ssl=false" }},
+		{"query ssl=bogus", func(b string) string { return b + "?ssl=bogus" }},
+		{"query sslmode=bogus", func(b string) string { return b + "?sslmode=bogus" }},
+		{"query connect_timeout=5", func(b string) string { return b + "?connect_timeout=5" }},
+		{"query application_name=x", func(b string) string { return b + "?application_name=x" }},
+		{"query timeout=5", func(b string) string { return b + "?timeout=5" }},
+		{"query command_timeout=5", func(b string) string { return b + "?command_timeout=5" }},
+		{"query statement_cache_size=0", func(b string) string { return b + "?statement_cache_size=0" }},
+		{"query unknown_param=1", func(b string) string { return b + "?unknown_param=1" }},
+		{"query both sslmode and ssl", func(b string) string { return b + "?sslmode=disable&ssl=disable" }},
+		{"empty query", func(b string) string { return b + "?" }},
+		{"fragment", func(b string) string { return b + "#frag" }},
 		{"empty", plain("")},
 		{"closed port", func(b string) string { return "postgresql+asyncpg://nobody:x@127.0.0.1:1/none" }},
 		{"wrong password", func(b string) string {
@@ -198,8 +216,9 @@ func TestDBLookupsMatchLivePython(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = instance.Close(context.Background()) })
 
-	upgrade := exec.Command(python, "-c", upgradeProgram, instance.URI)
-	upgrade.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"))
+	upgrade := exec.Command(python, "-c", upgradeProgram)
+	// The database URL goes by environment, never argv (a process listing shows argv).
+	upgrade.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"), "DHO_ORACLE_DB_URL="+instance.URI)
 	if output, err := upgrade.CombinedOutput(); err != nil {
 		t.Fatalf("python upgrade: %v", pyoracle.RunError(python, err, output))
 	}
@@ -215,8 +234,8 @@ func TestDBLookupsMatchLivePython(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	command := exec.Command(python, "-c", dbLookupOracleProgram, baseURL)
-	command.Env = append(os.Environ(), "PYTHONHASHSEED=0", "PYTHONPATH="+filepath.Join(root, "src"))
+	command := exec.Command(python, "-c", dbLookupOracleProgram)
+	command.Env = append(os.Environ(), "PYTHONHASHSEED=0", "PYTHONPATH="+filepath.Join(root, "src"), "DHO_ORACLE_DB_URL="+baseURL)
 	stdin, err := command.StdinPipe()
 	if err != nil {
 		t.Fatal(err)
@@ -277,6 +296,9 @@ func TestDBLookupsMatchLivePython(t *testing.T) {
 		wantJSON, _ := json.Marshal(want)
 		stage, _ := want["stage"].(map[string]any)
 		stages[fmt.Sprint(stage["v"])]++
+		if strings.HasPrefix(scenario.Name, "url ") {
+			t.Logf("python %-58s stage=%v org=%v", scenario.Name, stage["v"], want["org"])
+		}
 		if canonical(gotJSON) != canonical(wantJSON) {
 			mismatches++
 			t.Errorf("%s: %s", scenario.Name, diffLeaves(got, want))

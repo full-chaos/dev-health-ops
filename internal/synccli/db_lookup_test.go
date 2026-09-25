@@ -218,3 +218,48 @@ func TestBatchUsesTheResolvedOrganizationAndDatabaseCredential(t *testing.T) {
 		t.Fatalf("Postgres was read %d + %d times, want once each", len(h.firstOrgs), len(h.credentials))
 	}
 }
+
+// r1 P1: the two reads use two drivers whose URL options differ (measured
+// against the real Python in TestDBLookupsMatchLivePython).
+func TestSyncPostgresDSNOptions(t *testing.T) {
+	cases := map[string]bool{
+		"postgresql://u:p@h:5432/db":                       true,
+		"postgresql+asyncpg://u:p@h/db?sslmode=disable":    true,
+		"postgresql+psycopg2://u:p@h/db?connect_timeout=5": true,
+		"postgresql://u:p@h/db?application_name=x":         true,
+		"postgresql://u:p@h/db?ssl=disable":                false, // libpq: invalid connection option
+		"postgresql://u:p@h/db?timeout=5":                  false,
+		"postgresql://u:p@h/db?unknown=1":                  false,
+		"postgresql://u:p@h/db#frag":                       false,
+		"postgres://u:p@h/db":                              false,
+	}
+	for in, want := range cases {
+		if _, got := syncPostgresDSN(in); got != want {
+			t.Errorf("syncPostgresDSN(%q) ok = %v, want %v", in, got, want)
+		}
+	}
+}
+
+func TestAsyncpgToPgxOptions(t *testing.T) {
+	cases := []struct {
+		in, want string
+		ok       bool
+	}{
+		{"postgresql+asyncpg://u:p@h/db", "postgresql://u:p@h/db", true},
+		{"postgresql+asyncpg://u:p@h/db?ssl=disable", "postgresql://u:p@h/db?sslmode=disable", true},
+		{"postgresql+asyncpg://u:p@h/db?ssl=verify-full", "postgresql://u:p@h/db?sslmode=verify-full", true},
+		{"postgresql+asyncpg://u:p@h/db?command_timeout=5", "postgresql://u:p@h/db", true},
+		{"postgresql+asyncpg://u:p@h/db?ssl=false", "", false},
+		{"postgresql+asyncpg://u:p@h/db?sslmode=disable", "", false}, // asyncpg.connect(sslmode=...): unexpected keyword
+		{"postgresql+asyncpg://u:p@h/db?connect_timeout=5", "", false},
+		{"postgresql+asyncpg://u:p@h/db?command_timeout=soon", "", false},
+		{"postgresql+asyncpg://u:p@h/db?ssl=disable&ssl=require", "", false},
+		{"postgresql+asyncpg://u:p@h/db#frag", "", false},
+	}
+	for _, tc := range cases {
+		got, ok := asyncpgToPgx(tc.in)
+		if ok != tc.ok || got != tc.want {
+			t.Errorf("asyncpgToPgx(%q) = %q, %v; want %q, %v", tc.in, got, ok, tc.want, tc.ok)
+		}
+	}
+}

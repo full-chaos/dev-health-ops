@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/url"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -43,8 +45,12 @@ import (
 //     the type of a database driver that IS installed in a Python environment
 //     beyond pyproject.toml's (psycopg, pg8000, aiomysql) is not what Python
 //     raises there;
-//   - database URLs with driver-specific query parameters (asyncpg's ssl=...):
-//     Python passes them to SQLAlchemy, this port passes them to pgx.
+//   - database URL query options: the first-organization read accepts libpq's
+//     keywords (an unknown one is "none", as in Python) and the credential
+//     read accepts asyncpg's `ssl` and `command_timeout` only (Python passes
+//     every option to asyncpg.connect, whose other keyword arguments, such as
+//     passfile or direct_tls, would work there and are refused here); an
+//     option valid for both drivers but not modelled reaches neither;
 
 // errNoDBCredential is every "the lookup found nothing usable" outcome.
 var errNoDBCredential = errors.New("no usable database credential")
@@ -64,10 +70,25 @@ func defaultDBLookups() dbLookups {
 	return dbLookups{FirstOrg: defaults.FirstOrg, GitHubCredential: defaults.GitHubCredential}
 }
 
-// postgresDSN is the URL a Python SQLAlchemy sync engine would connect to, or
-// false when create_engine would refuse it (an unknown dialect or a driver that
-// is not psycopg2): _resolve_first_org_id turns that refusal into "no
-// organization".
+// libpqKeywords are the connection options a libpq (psycopg2) URL accepts in
+// its query; SQLAlchemy's psycopg2 dialect hands the rest to libpq, which
+// rejects an unknown one ("invalid connection option") and so ends the
+// first-organization lookup as "none".
+var libpqKeywords = map[string]bool{
+	"application_name": true, "channel_binding": true, "client_encoding": true, "connect_timeout": true,
+	"fallback_application_name": true, "gssencmode": true, "gsslib": true, "hostaddr": true,
+	"keepalives": true, "keepalives_count": true, "keepalives_idle": true, "keepalives_interval": true,
+	"krbsrvname": true, "load_balance_hosts": true, "options": true, "passfile": true, "replication": true,
+	"requirepeer": true, "service": true, "sslcert": true, "sslcompression": true, "sslcrl": true,
+	"sslcrldir": true, "sslkey": true, "sslmode": true, "sslpassword": true, "sslrootcert": true,
+	"sslsni": true, "ssl_max_protocol_version": true, "ssl_min_protocol_version": true,
+	"target_session_attrs": true, "tcp_user_timeout": true,
+}
+
+// syncPostgresDSN is the URL a Python SQLAlchemy sync engine (psycopg2) would
+// connect to, or false when create_engine or libpq would refuse it (an unknown
+// dialect, a driver that is not psycopg2, a fragment, an option libpq does not
+// know): _resolve_first_org_id turns every such failure into "no organization".
 func syncPostgresDSN(dbURL string) (string, bool) {
 	dbURL = strings.Replace(dbURL, "postgresql+asyncpg://", "postgresql://", 1)
 	scheme, rest, found := strings.Cut(dbURL, "://")
@@ -76,9 +97,19 @@ func syncPostgresDSN(dbURL string) (string, bool) {
 	}
 	switch strings.ToLower(scheme) {
 	case "postgresql", "postgresql+psycopg2":
-		return "postgresql://" + rest, true
+	default:
+		return "", false
 	}
-	return "", false
+	parsed, err := url.Parse("postgresql://" + rest)
+	if err != nil || parsed.Fragment != "" || strings.Contains(rest, "#") {
+		return "", false
+	}
+	for key := range parsed.Query() {
+		if !libpqKeywords[key] {
+			return "", false
+		}
+	}
+	return parsed.String(), true
 }
 
 // firstOrganization is _resolve_first_org_id. It never returns a driver error:
@@ -171,10 +202,46 @@ func githubCredentialFromDB(ctx context.Context, dbURL, orgID string, env cli.En
 	return githubCredentialFromJSON(plaintext)
 }
 
-// asyncpgToPgx is the pgx form of a URL asyncEngineRefusal accepted.
+// asyncpgSSLModes are the string values asyncpg accepts for its ssl option,
+// which SQLAlchemy's asyncpg dialect passes through as a keyword argument.
+var asyncpgSSLModes = map[string]bool{"disable": true, "allow": true, "prefer": true, "require": true, "verify-ca": true, "verify-full": true}
+
+// asyncpgToPgx is the pgx form of a URL asyncEngineRefusal accepted. The
+// asyncpg dialect turns every query option into a connect() keyword: `ssl`
+// takes asyncpg's string modes (here pgx's sslmode) and `command_timeout` a
+// number (accepted, no effect on one query); any other option, `sslmode`
+// included, is an unexpected keyword or an invalid value, which Python's
+// lookup swallows as "no credentials" (false here).
 func asyncpgToPgx(dbURL string) (string, bool) {
 	_, rest, found := strings.Cut(dbURL, "://")
-	return "postgresql://" + rest, found
+	if !found || strings.Contains(rest, "#") {
+		return "", false
+	}
+	parsed, err := url.Parse("postgresql://" + rest)
+	if err != nil {
+		return "", false
+	}
+	query := url.Values{}
+	for key, values := range parsed.Query() {
+		if len(values) != 1 {
+			return "", false
+		}
+		switch key {
+		case "ssl":
+			if !asyncpgSSLModes[values[0]] {
+				return "", false
+			}
+			query.Set("sslmode", values[0])
+		case "command_timeout":
+			if _, err := strconv.ParseFloat(values[0], 64); err != nil {
+				return "", false
+			}
+		default:
+			return "", false
+		}
+	}
+	parsed.RawQuery = query.Encode()
+	return parsed.String(), true
 }
 
 func settingsDecryptor(env cli.Env) (providerfoundation.FernetDecryptor, error) {

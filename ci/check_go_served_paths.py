@@ -62,9 +62,7 @@ def covers(template: str, path: str) -> bool:
     ``path`` to its service. The ingress matches a parameter as ``[^/]+``, so a
     template also covers a static sibling: ``/plans/{}`` covers
     ``/plans/pull-stripe``, exactly as the deployed rule does."""
-    if template == path:
-        return True
-    pattern = "^" + "[^/]+".join(re.escape(part) for part in template.split("{}")) + "$"
+    pattern = "[^/]+".join(re.escape(part) for part in template.split("{}"))
     return re.fullmatch(pattern, path) is not None
 
 

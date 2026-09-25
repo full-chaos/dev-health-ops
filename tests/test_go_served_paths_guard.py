@@ -265,3 +265,29 @@ def test_a_template_covers_its_static_sibling_as_the_ingress_does(tree):
         "/a/{}/b", "/a/x/y/b"
     )
     assert checker.covers("/exact", "/exact")
+
+
+def test_a_template_row_is_satisfied_by_a_static_sibling_alone(tree):
+    root, source, _ = tree
+    manifest = {
+        "/api/v1/billing/plans/{}": checker.ManifestRow(
+            "rev1", "go-api", "/api/v1/billing/plans/{}"
+        )
+    }
+    only_static = _route(
+        source, "stubbed", "/api/v1/billing/plans/pull-stripe", method="POST"
+    )
+    assert checker.check([only_static], manifest, root) == []
+    unrelated = _route(source, "stubbed", "/api/v1/billing/other", method="POST")
+    assert (
+        len(checker.check([unrelated], manifest, root)) == 2
+    )  # unlisted stub + orphan row
+
+
+def test_covers_matches_one_non_empty_segment_and_escapes_the_rest():
+    assert not checker.covers(
+        "/a/{}/b", "/a//b"
+    )  # a parameter is at least one character
+    assert not checker.covers("/a.b/{}", "/aXb/x")  # a dot is a dot
+    assert not checker.covers("/a+b/{}", "/aab/x")
+    assert checker.covers("/a.b/{}", "/a.b/x")

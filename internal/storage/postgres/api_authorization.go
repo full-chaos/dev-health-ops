@@ -250,8 +250,9 @@ func apiPosture() RolePosture {
 			// fallback is a SELECT, always implicit). Its invoice events
 			// (CHAOS-6526) upsert invoices (INSERT ... ON CONFLICT DO
 			// UPDATE) and replace their line items (delete, then insert).
-			// The refund route (CHAOS-6478) inserts its refund row.
-			{"refunds", true, false, true},
+			// The refund route (CHAOS-6478) inserts its refund row, pending,
+			// and updates it when Stripe answers (CHAOS-6632).
+			{"refunds", true, true, true},
 			{"invoice_line_items", true, false, true},
 			{"invoices", true, true, true},
 			{"subscription_events", true, false, true},

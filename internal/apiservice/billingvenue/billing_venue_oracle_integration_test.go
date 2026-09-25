@@ -38,14 +38,15 @@ const fakeStripeKey = "sk_test_venue_fake_key"
 // and gets the same answers, so the calls each plane made can be compared
 // one for one and the Stripe ids each plane stored are the same text.
 type fakeStripe struct {
-	mu       sync.Mutex
-	calls    map[string][]string
-	counters map[string]int
-	refunds  int
+	mu          sync.Mutex
+	calls       map[string][]string
+	counters    map[string]int
+	refunds     int
+	refundByKey map[string]string
 }
 
 func newFakeStripe() *fakeStripe {
-	return &fakeStripe{calls: map[string][]string{}, counters: map[string]int{}}
+	return &fakeStripe{calls: map[string][]string{}, counters: map[string]int{}, refundByKey: map[string]string{}}
 }
 
 // sortedForm renders form or query values as sorted key=value pairs: both
@@ -328,6 +329,7 @@ func (f *fakeStripe) serve(plane string, w http.ResponseWriter, r *http.Request)
 			"in_pi":     `{"type": "payment_intent", "payment_intent": "pi_listed"}`,
 			"in_pi_bad": `{"type": "payment_intent", "payment_intent": "pi_fail"}`,
 			"in_charge": `{"type": "charge", "charge": "ch_bare"}`,
+			"in_down":   `{"type": "payment_intent", "payment_intent": "pi_down"}`,
 		}[r.URL.Query().Get("invoice")]
 		if r.URL.Query().Get("status") != "paid" {
 			payment = ""
@@ -342,6 +344,25 @@ func (f *fakeStripe) serve(plane string, w http.ResponseWriter, r *http.Request)
 			stripeFail(w, "Charge ch_x has already been refunded.")
 			return
 		}
+		// Stripe down: a 500 on every attempt, so the outcome is unknown.
+		if form.Get("payment_intent") == "pi_down" {
+			w.WriteHeader(http.StatusInternalServerError)
+			fmt.Fprint(w, `{"error": {"message": "venue: Stripe unavailable", "type": "api_error"}}`)
+			return
+		}
+		// Stripe's idempotency: a key already used answers the refund it
+		// made, and makes no second one.
+		key := r.Header.Get("Idempotency-Key")
+		lost := map[string]int{"pi_lost500": http.StatusInternalServerError, "pi_lost408": http.StatusRequestTimeout}[form.Get("payment_intent")]
+		if made, seen := f.refundByKey[key]; seen && key != "" {
+			if lost != 0 {
+				w.WriteHeader(lost)
+				fmt.Fprint(w, `{"error": {"message": "venue: response lost", "type": "api_error"}}`)
+				return
+			}
+			fmt.Fprint(w, made)
+			return
+		}
 		charge, intent := form.Get("charge"), form.Get("payment_intent")
 		intentJSON := "null"
 		if intent != "" {
@@ -354,9 +375,27 @@ func (f *fakeStripe) serve(plane string, w http.ResponseWriter, r *http.Request)
 			status = `"failure_reason": "lost_or_stolen_card"`
 		}
 		f.refunds++
-		fmt.Fprintf(w, `{"id": "re_%d", "object": "refund", "amount": %s, "charge": %q, "payment_intent": %s, "currency": "usd",
-			%s, "metadata": {"invoice_id": %q, "org_id": %q}}`,
-			f.refunds, form.Get("amount"), charge, intentJSON, status, form.Get("metadata[invoice_id]"), form.Get("metadata[org_id]"))
+		var metadata []string
+		for name := range form {
+			if inner, found := strings.CutPrefix(name, "metadata["); found {
+				metadata = append(metadata, fmt.Sprintf("%q: %q", strings.TrimSuffix(inner, "]"), form.Get(name)))
+			}
+		}
+		sort.Strings(metadata)
+		made := fmt.Sprintf(`{"id": "re_%d", "object": "refund", "amount": %s, "charge": %q, "payment_intent": %s, "currency": "usd",
+			%s, "metadata": {%s}}`,
+			f.refunds, form.Get("amount"), charge, intentJSON, status, strings.Join(metadata, ", "))
+		if key != "" {
+			f.refundByKey[key] = made
+		}
+		// Accepted, then the answer is lost: the refund exists, the caller
+		// sees only an error, on every attempt.
+		if lost != 0 {
+			w.WriteHeader(lost)
+			fmt.Fprint(w, `{"error": {"message": "venue: response lost", "type": "api_error"}}`)
+			return
+		}
+		fmt.Fprint(w, made)
 	default:
 		w.WriteHeader(http.StatusNotFound)
 		fmt.Fprint(w, `{"error": {"message": "unrouted fake call", "type": "invalid_request_error"}}`)

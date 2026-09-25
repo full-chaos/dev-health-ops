@@ -181,3 +181,32 @@ func TestRunHelpPrintsUsageWithoutServing(t *testing.T) {
 		}
 	}
 }
+
+// CHAOS-6780: QUERY_API_INTERNAL_ADDR opens a second listener and both close on
+// shutdown. Unset (no internal server, headers honoured nowhere) is pinned by
+// TestNoInternalListenerWhenTheAddressIsUnset at newListenerServers.
+func TestRunOpensTheInternalListenerWhenItsAddressIsSet(t *testing.T) {
+	publicAddr, internalAddr := freeAddr(t), freeAddr(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done, _ := runInBackground(ctx, nil, lookupOf(map[string]string{
+		"QUERY_API_ADDR": publicAddr, "QUERY_API_INTERNAL_ADDR": internalAddr,
+	}))
+	waitForHealthz(t, publicAddr, done)
+	waitForHealthz(t, internalAddr, done)
+	cancel()
+	select {
+	case code := <-done:
+		if code != exitOK {
+			t.Fatalf("Run returned %d, want %d", code, exitOK)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("Run did not return after its context ended")
+	}
+	for _, addr := range []string{publicAddr, internalAddr} {
+		if connection, err := net.DialTimeout("tcp", addr, time.Second); err == nil {
+			_ = connection.Close()
+			t.Fatalf("%s still accepts connections after shutdown", addr)
+		}
+	}
+}

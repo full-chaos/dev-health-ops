@@ -203,3 +203,17 @@ func TestStableUUIDIsDeterministicDistinctAndWellFormed(t *testing.T) {
 		t.Fatalf("%q is not a version-5 UUID", first)
 	}
 }
+
+func TestARecordingIsNeverWrittenFromAFailedRun(t *testing.T) {
+	golden := &Golden{spec: GoldenSpec{Path: "x.json"}, recording: true}
+	if err := golden.recordable(false); err == nil || !strings.Contains(err.Error(), "no request was served") {
+		t.Fatalf("empty recording: error = %v", err)
+	}
+	golden.recorded.Requests = []goldenRequest{{Name: "a"}}
+	if err := golden.recordable(true); err == nil || !strings.Contains(err.Error(), "already failed") {
+		t.Fatalf("failed run: error = %v", err)
+	}
+	if err := golden.recordable(false); err != nil {
+		t.Fatalf("passing run with answers: error = %v", err)
+	}
+}

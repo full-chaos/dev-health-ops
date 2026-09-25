@@ -246,6 +246,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 		Producer:  deps.Producer,
 		Decryptor: deps.Decryptor,
 		Logger:    logger,
+		Counters:  limits,
 	})...)
 	return markResponseModels(routes)
 }

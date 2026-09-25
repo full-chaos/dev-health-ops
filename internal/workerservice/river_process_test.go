@@ -7,6 +7,7 @@ import (
 	"errors"
 	"log/slog"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -37,6 +38,33 @@ func riverStartSleepAfterCheckTimeout(step time.Duration) func(context.Context, 
 	return func(context.Context, time.Duration) {
 		time.Sleep(step)
 	}
+}
+
+// fakeRetryClock drives startupRetryBudget's loop without the wall clock: sleep
+// advances it by exactly the requested wait, so a test's retry count is a
+// function of the budget and the backoff, never of how long the runner takes to
+// schedule a goroutine (CHAOS-6446, same class as CHAOS-6397). Under -race with
+// a starved CPU a 20 ms real-time budget could be spent before the second
+// attempt began: 1 failure in 200 runs pinned to one core beside 12 busy loops.
+type fakeRetryClock struct {
+	mu  sync.Mutex
+	now time.Time
+}
+
+func newFakeRetryClock() *fakeRetryClock {
+	return &fakeRetryClock{now: time.Date(2026, 9, 25, 0, 0, 0, 0, time.UTC)}
+}
+
+func (clock *fakeRetryClock) Now() time.Time {
+	clock.mu.Lock()
+	defer clock.mu.Unlock()
+	return clock.now
+}
+
+func (clock *fakeRetryClock) Sleep(_ context.Context, wait time.Duration) {
+	clock.mu.Lock()
+	defer clock.mu.Unlock()
+	clock.now = clock.now.Add(wait)
 }
 
 // A fleet-wide roll restarts every worker group's Deployments at once, and
@@ -128,7 +156,9 @@ func TestRiverWorkerProcessExitsAfterBudgetExhaustedOnPersistentStartTimeout(t *
 	var logs bytes.Buffer
 	process.logger = slog.New(slog.NewJSONHandler(&logs, nil))
 	process.budget = budget
-	process.sleep = riverStartSleepAfterCheckTimeout(time.Millisecond)
+	clock := newFakeRetryClock()
+	process.now = clock.Now
+	process.sleep = clock.Sleep
 
 	var attempts atomic.Int32
 	process.startClient = func(context.Context) error {
@@ -139,9 +169,11 @@ func TestRiverWorkerProcessExitsAfterBudgetExhaustedOnPersistentStartTimeout(t *
 	if err := process.Start(context.Background()); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("Start() error = %v, want context.DeadlineExceeded once the budget is spent", err)
 	}
+	// The first backoff (2 s) is clamped to the remaining budget, so the fake
+	// clock lands exactly on the budget after one wait: two attempts, always.
 	finalAttempts := attempts.Load()
-	if finalAttempts < 2 {
-		t.Fatalf("startClient ran %d times, want at least 2 (proof retrying happened before giving up)", finalAttempts)
+	if finalAttempts != 2 {
+		t.Fatalf("startClient ran %d times, want exactly 2 (one retry, then the budget is spent)", finalAttempts)
 	}
 	if count := strings.Count(logs.String(), "river workers start timed out, retrying"); count < 1 {
 		t.Fatalf("retry log count = %d, want at least 1 warn-level retry before giving up", count)

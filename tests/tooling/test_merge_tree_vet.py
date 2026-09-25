@@ -87,7 +87,7 @@ import "testing"
 
 func TestVenueOracleOne(t *testing.T) {}
 """
-REGISTRY = "# scratch\ninternal/venue\tTestVenueOracleOne\trun\n"
+REGISTRY = "internal/venue\tTestVenueOracleOne\trun\n"
 
 
 def _git(
@@ -133,7 +133,7 @@ def repo(tmp_path: Path) -> Path:
     _write(repo, "internal/store/store.go", STORE)
     _write(repo, "internal/store/store_test.go", STORE_TEST)
     _write(repo, "internal/venue/venue_test.go", VENUE_TEST)
-    _write(repo, "ci/venue_oracle_registry.tsv", REGISTRY)
+    _write(repo, "ci/venue_oracle_registry.d/internal__venue.tsv", REGISTRY)
     (repo / "ci" / "lib").mkdir(parents=True, exist_ok=True)
     for name in CI_FILES:
         shutil.copy(ROOT / "ci" / name, repo / "ci" / name)

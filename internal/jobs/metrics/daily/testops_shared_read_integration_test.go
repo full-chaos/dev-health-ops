@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
@@ -61,11 +62,9 @@ func TestTestopsTestAndRiskReadCaseResultsOnceAgainstRealClickHouse(t *testing.T
 	}
 	defer conn.Close()
 
-	for _, statement := range append(testopsDifferentialSchema(), testopsRiskOutputSchema()...) {
-		if err := conn.Exec(ctx, statement); err != nil {
-			t.Fatal(err)
-		}
-	}
+	// The versioned schema from the real migration chain, including the three
+	// testops_risk tables (CHAOS-5152, Trap #412), not hand-typed copies.
+	chschema.Apply(ctx, t, clickhouseInstance)
 	// Merges stay stopped so FINAL has real duplicates to resolve and the
 	// part layout, and with it read_rows, is the same on every run.
 	for _, table := range []string{"ci_pipeline_runs", "test_suite_results", "test_case_results", "coverage_snapshots"} {
@@ -343,30 +342,5 @@ func assertTestopsOutputsMatchGolden(ctx context.Context, t *testing.T, conn dri
 	}
 	if string(want) != got {
 		t.Fatalf("testops_test/testops_risk outputs moved:\n--- golden\n%s\n--- got\n%s", want, got)
-	}
-}
-
-// testopsRiskOutputSchema is the DDL for the three testops_risk tables, in the
-// production column shapes the risk writer targets.
-func testopsRiskOutputSchema() []string {
-	return []string{
-		`CREATE TABLE testops_release_confidence (
-    repo_id UUID, day Date, confidence_score Float64, pipeline_success_factor Float64,
-    test_pass_factor Float64, coverage_factor Float64, flake_penalty Float64, regression_penalty Float64,
-    factors_json String DEFAULT '{}', team_id Nullable(String), service_id Nullable(String),
-    org_id LowCardinality(String) DEFAULT '', computed_at DateTime('UTC')
-) ENGINE MergeTree PARTITION BY toYYYYMM(day) ORDER BY (repo_id, day)`,
-		`CREATE TABLE testops_quality_drag (
-    repo_id UUID, day Date, drag_hours Nullable(Float64), failure_rework_hours Nullable(Float64),
-    flake_investigation_hours Nullable(Float64), queue_wait_hours Nullable(Float64), retry_overhead_hours Nullable(Float64),
-    factors_json String DEFAULT '{}', team_id Nullable(String), service_id Nullable(String),
-    org_id LowCardinality(String) DEFAULT '', computed_at DateTime('UTC')
-) ENGINE MergeTree PARTITION BY toYYYYMM(day) ORDER BY (repo_id, day)`,
-		`CREATE TABLE testops_pipeline_stability (
-    repo_id UUID, day Date, stability_index Float64, success_rate_7d Float64, success_rate_trend Float64,
-    failure_clustering_score Float64, median_recovery_time_seconds Nullable(Float64),
-    team_id Nullable(String), service_id Nullable(String), org_id LowCardinality(String) DEFAULT '',
-    computed_at DateTime('UTC')
-) ENGINE MergeTree PARTITION BY toYYYYMM(day) ORDER BY (repo_id, day)`,
 	}
 }

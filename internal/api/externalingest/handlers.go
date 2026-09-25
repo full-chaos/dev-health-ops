@@ -292,7 +292,12 @@ func (d Deps) handleAcceptBatch() http.HandlerFunc {
 			return
 		}
 		if err != nil {
-			writeIngestError(w, newIngestError(http.StatusInternalServerError, "internal_error", "failed to resolve source ownership"))
+			// An unhandled exception under resolve_effective_mode (an unreadable key, a
+			// stored value of the wrong type) is the app's generic 500 in Python.
+			d.logger().ErrorContext(r.Context(), "external-ingest: resolve source ownership failed", slog.String("error", err.Error()))
+			failure := newIngestError(http.StatusInternalServerError, "internal_error", "Internal Server Error")
+			failure.Unhandled = true
+			writeIngestError(w, failure)
 			return
 		}
 		if mode != modeCustomerPush {

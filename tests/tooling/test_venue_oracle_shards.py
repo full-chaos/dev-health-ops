@@ -106,11 +106,12 @@ def _run_verb(
 
 def _registry_run_rows(tree: Path) -> list[tuple[str, str]]:
     rows = []
-    for line in (tree / "ci" / "venue_oracle_registry.tsv").read_text().splitlines():
-        if line and not line.startswith("#"):
-            pkg, test, mode = line.split("\t")
-            if mode == "run":
-                rows.append((pkg, test))
+    for path in sorted((tree / "ci" / "venue_oracle_registry.d").glob("*.tsv")):
+        for line in path.read_text().splitlines():
+            if line and not line.startswith("#"):
+                pkg, test, mode = line.split("\t")
+                if mode == "run":
+                    rows.append((pkg, test))
     return sorted(rows)
 
 
@@ -129,7 +130,6 @@ def _scratch_tree(tmp_path: Path, packages: dict[str, list[str]], local=()) -> P
     for name in CI_FILES:
         shutil.copy(ROOT / "ci" / name, tmp_path / "ci" / name)
     (tmp_path / "go.mod").write_text("module example.com/x\n", encoding="utf-8")
-    rows = []
     for pkg, tests in sorted(packages.items()):
         directory = tmp_path / pkg
         directory.mkdir(parents=True)
@@ -137,12 +137,15 @@ def _scratch_tree(tmp_path: Path, packages: dict[str, list[str]], local=()) -> P
             _go_test(pkg.rsplit("/", 1)[-1], *tests, local=local[0] if local else ""),
             encoding="utf-8",
         )
-        for test in sorted(tests):
-            mode = "local" if test in local else "run"
-            rows.append(f"{pkg}\t{test}\t{mode}\n")
-    (tmp_path / "ci" / "venue_oracle_registry.tsv").write_text(
-        "# scratch registry\n" + "".join(rows), encoding="utf-8"
-    )
+        registry = tmp_path / "ci" / "venue_oracle_registry.d"
+        registry.mkdir(parents=True, exist_ok=True)
+        (registry / (pkg.replace("/", "__") + ".tsv")).write_text(
+            "".join(
+                f"{pkg}\t{test}\t{'local' if test in local else 'run'}\n"
+                for test in sorted(tests)
+            ),
+            encoding="utf-8",
+        )
     return tmp_path
 
 

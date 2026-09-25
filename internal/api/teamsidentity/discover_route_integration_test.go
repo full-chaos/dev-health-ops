@@ -18,14 +18,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 )
-
-const routeCredentialsDDL = `
-CREATE TABLE public.integration_credentials (
-    id uuid PRIMARY KEY, org_id text NOT NULL DEFAULT 'default', provider text NOT NULL, name text NOT NULL,
-    is_active boolean NOT NULL DEFAULT true, credentials_encrypted text, config json,
-    created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),
-    UNIQUE (org_id, provider, name))`
 
 type discoverRouteFixture struct {
 	t       *testing.T
@@ -52,11 +46,7 @@ func newDiscoverRouteFixture(t *testing.T) *discoverRouteFixture {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	for _, ddl := range []string{routeCredentialsDDL, syncConfigurationsDDL} {
-		if _, err := pool.Exec(ctx, ddl); err != nil {
-			t.Fatal(err)
-		}
-	}
+	pgschema.Apply(ctx, t, pool)
 	crypt, err := providerfoundation.NewFernetDecryptor(secrets.NewValue("route-test-key"), "")
 	if err != nil {
 		t.Fatal(err)
@@ -76,8 +66,8 @@ func (f *discoverRouteFixture) addCredential(id, provider, name, plaintextJSON, 
 		f.t.Fatal(err)
 	}
 	if _, err := f.pool.Exec(context.Background(),
-		`INSERT INTO public.integration_credentials (id, org_id, provider, name, credentials_encrypted, config)
-		 VALUES ($1::uuid, 'org-1', $2, $3, $4, $5::json)`, id, provider, name, ciphertext.Reveal(), configJSON); err != nil {
+		`INSERT INTO public.integration_credentials (id, org_id, provider, name, credentials_encrypted, config, created_at, updated_at)
+		 VALUES ($1::uuid, 'org-1', $2, $3, $4, $5::json, now(), now())`, id, provider, name, ciphertext.Reveal(), configJSON); err != nil {
 		f.t.Fatal(err)
 	}
 }
@@ -148,8 +138,8 @@ func TestDiscoverRouteOrgResolutionAndErrors(t *testing.T) {
 		{"cfg-dup", `{"owner":"acme"}`, true}, {"cfg-off", `{"owner":"param-org"}`, false},
 	} {
 		if _, err := f.pool.Exec(context.Background(),
-			`INSERT INTO public.sync_configurations (id, org_id, name, provider, sync_options, is_active)
-			 VALUES ($1::uuid, 'org-1', $2, 'github', $3::json, $4)`,
+			`INSERT INTO public.sync_configurations (id, org_id, name, provider, sync_options, is_active, created_at, updated_at)
+			 VALUES ($1::uuid, 'org-1', $2, 'github', $3::json, $4, now(), now())`,
 			"00000000-0000-0000-0000-00000000b00"+string(rune('1'+i)), row.name, row.options, row.active); err != nil {
 			t.Fatal(err)
 		}

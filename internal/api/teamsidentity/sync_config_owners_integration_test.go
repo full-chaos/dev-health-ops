@@ -8,31 +8,9 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
-
-// syncConfigurationsDDL is alembic 0001_initial_schema.py's own
-// sync_configurations table, transcribed column for column -- the real
-// table deriveOwnersFromSyncConfigs' SELECT runs against, not a hand-typed
-// stub.
-const syncConfigurationsDDL = `
-CREATE TABLE public.sync_configurations (
-    id uuid PRIMARY KEY,
-    org_id text NOT NULL DEFAULT 'default',
-    name text NOT NULL,
-    provider text NOT NULL,
-    credential_id uuid,
-    sync_targets json NOT NULL DEFAULT '[]',
-    sync_options json NOT NULL DEFAULT '{}',
-    is_active boolean NOT NULL DEFAULT true,
-    last_sync_at timestamptz,
-    last_sync_success boolean,
-    last_sync_error text,
-    last_sync_stats json,
-    created_at timestamptz NOT NULL DEFAULT now(),
-    updated_at timestamptz NOT NULL DEFAULT now(),
-    UNIQUE (org_id, name)
-)`
 
 func startSyncConfigPool(t *testing.T, ctx context.Context) *pgxpool.Pool {
 	t.Helper()
@@ -52,17 +30,18 @@ func startSyncConfigPool(t *testing.T, ctx context.Context) *pgxpool.Pool {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	if _, err := pool.Exec(ctx, syncConfigurationsDDL); err != nil {
-		t.Fatal(err)
-	}
+	// The migrated schema, not a transcription: the hand-written table here
+	// carried a credential_id column the migrated sync_configurations does
+	// not have (CHAOS-6769).
+	pgschema.Apply(ctx, t, pool)
 	return pool
 }
 
 func insertSyncConfig(t *testing.T, ctx context.Context, pool *pgxpool.Pool, id, orgID, name, provider, syncOptionsJSON string, active bool) {
 	t.Helper()
 	if _, err := pool.Exec(ctx,
-		`INSERT INTO public.sync_configurations (id, org_id, name, provider, sync_options, is_active)
-		 VALUES ($1::uuid, $2, $3, $4, $5::json, $6)`,
+		`INSERT INTO public.sync_configurations (id, org_id, name, provider, sync_options, is_active, created_at, updated_at)
+		 VALUES ($1::uuid, $2, $3, $4, $5::json, $6, now(), now())`,
 		id, orgID, name, provider, syncOptionsJSON, active); err != nil {
 		t.Fatal(err)
 	}

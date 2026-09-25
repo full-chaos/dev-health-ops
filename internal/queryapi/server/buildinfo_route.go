@@ -122,14 +122,7 @@ func newBuildInfoHandler(verifier *principal.Verifier) http.HandlerFunc {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		token, ok := bearerToken(r.Header.Get("Authorization"))
-		if !ok {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-		verifyCtx := principal.WithRequestMeta(r.Context(), r.RemoteAddr, envelopeRequestID(r))
-		if _, err := verifier.Verify(verifyCtx, token); err != nil {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
+		if _, ok := authenticateInternalRequest(w, r, verifier); !ok {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")

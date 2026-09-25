@@ -308,9 +308,16 @@ func buildDeps(
 		}
 		deps.Pool = pool
 		components = append(components, &pgxpoolComponent{pool: pool})
-		if err := registry.RegisterRequired(apiDatabaseCheck, func(checkCtx context.Context) error {
-			return postgres.CheckAPIAuthorization(checkCtx, pool, cfg.APIDatabaseRole, cfg.RiverDatabaseSchema)
-		}); err != nil {
+		// CHAOS-6765: the whole-catalog posture query takes 1.4-1.9 s on the
+		// production catalog against the registry's 2 s per-check bound, so a
+		// per-probe check flapped readiness. The cached check runs it
+		// single-flight off the probe's deadline and serves a passing answer
+		// for a bounded window (see postgres.CachedPostureCheck).
+		postureCheck := postgres.NewCachedPostureCheck(
+			pool, cfg.APIDatabaseRole, cfg.RiverDatabaseSchema, postgres.APIPosture(),
+			postgres.PostureCheckOptions{Logger: logger},
+		)
+		if err := registry.RegisterRequired(apiDatabaseCheck, postureCheck.Check); err != nil {
 			return Deps{}, nil, dependencyFailure(ctx, logger, "api_postgres", "api_postgres_check_register_failed", err)
 		}
 

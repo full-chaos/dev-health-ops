@@ -24,6 +24,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -69,66 +70,11 @@ func enqueueTestPool(t *testing.T, ctx context.Context) *pgxpool.Pool {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	createCompatibilityTables(t, ctx, pool)
-	// Column shapes follow the real migrations (0057 for the daily tables, 0046
-	// for the outbox, and the work-graph request table as
-	// internal/workersctl/trigger_integration_test.go declares it), so a
-	// type or length this code cannot actually satisfy fails here rather than
-	// in production.
-	if _, err := pool.Exec(ctx, `
-CREATE TABLE public.daily_metrics_runs (
-    id uuid PRIMARY KEY,
-    org_id uuid NOT NULL,
-    target_day date NOT NULL,
-    generation varchar(64) NOT NULL,
-    status varchar(16) NOT NULL DEFAULT 'pending',
-    finalization_status varchar(16) NOT NULL DEFAULT 'pending',
-    finalization_claim_token uuid NULL,
-    finalization_lease_expires_at timestamptz NULL,
-    finalized_at timestamptz NULL,
-    repository_discovery_required boolean NOT NULL DEFAULT false,
-    blocked_at timestamptz NULL,
-    created_at timestamptz NOT NULL,
-    updated_at timestamptz NOT NULL,
-    CONSTRAINT uq_daily_metrics_run_scope UNIQUE (org_id, target_day, generation)
-);
-CREATE TABLE public.daily_metrics_partitions (
-    id uuid PRIMARY KEY,
-    run_id uuid NOT NULL REFERENCES public.daily_metrics_runs(id) ON DELETE CASCADE,
-    ordinal integer NOT NULL,
-    repo_ids jsonb NOT NULL,
-    status varchar(16) NOT NULL DEFAULT 'pending',
-    claim_token uuid NULL,
-    lease_expires_at timestamptz NULL,
-    attempt_count integer NOT NULL DEFAULT 0,
-    completed_at timestamptz NULL,
-    created_at timestamptz NOT NULL,
-    updated_at timestamptz NOT NULL
-);
-CREATE TABLE public.work_graph_execution_requests (
-    id uuid PRIMARY KEY, org_id uuid NOT NULL, kind text NOT NULL, scope jsonb NOT NULL,
-    model_ref text NULL, prompt_ref text NULL, llm_concurrency integer NOT NULL,
-    spend_limit_microunits bigint NOT NULL, correlation_id text NOT NULL,
-    idempotency_key text NOT NULL UNIQUE, state text NOT NULL,
-    claim_token uuid NULL, lease_expires_at timestamptz NULL,
-    attempt_count integer NOT NULL DEFAULT 0,
-    created_at timestamptz NOT NULL DEFAULT statement_timestamp(),
-    updated_at timestamptz NOT NULL DEFAULT statement_timestamp()
-);
-CREATE TABLE public.worker_job_outbox (
-    id uuid PRIMARY KEY, dedupe_key varchar(256) NOT NULL UNIQUE, job_kind varchar(96) NOT NULL,
-    contract_version integer NOT NULL, args json NOT NULL, payload_hash varchar(71) NOT NULL,
-    queue varchar(96) NOT NULL, priority smallint NOT NULL, max_attempts smallint NOT NULL,
-    scheduled_at timestamptz NOT NULL, status varchar(16) NOT NULL, attempt_count integer NOT NULL,
-    next_attempt_at timestamptz NOT NULL, prerequisite_completion_key text NULL,
-    created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL
-);
-CREATE TABLE public.worker_job_completion_fences (
-    completion_key text PRIMARY KEY,
-    completed_at timestamptz NOT NULL DEFAULT statement_timestamp()
-)`); err != nil {
-		t.Fatal(err)
-	}
+	// The migrated schema, not hand-written tables: the daily_metrics_runs
+	// hand DDL carried repository_discovery_required, a column the real table
+	// does not have (CHAOS-6769), so a shape production cannot satisfy passed
+	// here.
+	pgschema.Apply(ctx, t, pool)
 	return pool
 }
 
@@ -473,8 +419,8 @@ func TestReplayEnqueuesThroughTheSameSeamAsTheDrain(t *testing.T) {
 		if _, err := pool.Exec(ctx, `
 INSERT INTO external_ingest_batches (
     ingestion_id, org_id, source_system, source_instance,
-    recompute_status, recompute_scope, updated_at
-) VALUES ($1,$2,'github','acme/api','pending',$3,now())`,
+    recompute_status, recompute_scope, updated_at, idempotency_key, payload_hash, schema_version
+) VALUES ($1,$2,'github','acme/api','pending',$3,now(), gen_random_uuid()::text, 'sha256:test', 'external-ingest.v1')`,
 			uuid.New(), orgID, scope); err != nil {
 			t.Fatal(err)
 		}

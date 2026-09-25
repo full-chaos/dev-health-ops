@@ -7,8 +7,10 @@
 // without ever reaching the database, and reads as an unavailable database.
 // Opener tolerates that in one narrow shape only:
 //
-//   - the acquire ran into ITS OWN deadline (the driver never got a
-//     transaction, so nothing says the database is broken),
+//   - the acquire ran into ITS OWN deadline while WAITING FOR A POOL
+//     CONNECTION (a selfprobe.AcquireError: no statement was sent, so nothing
+//     says the database is broken; a deadline on the BEGIN itself, after a
+//     connection was acquired, is a stalled database and stays a failure),
 //   - the pool really is fully acquired right now,
 //   - the caller's progress guard is green (work is provably moving), and
 //   - the caller's own deadline still has time left, because the health
@@ -163,7 +165,7 @@ func (o Opener) Begin(ctx context.Context) (selfprobe.Tx, error) {
 	if ctx.Err() != nil {
 		return nil, err
 	}
-	if !errors.Is(err, context.DeadlineExceeded) || o.Saturated == nil || o.Progress == nil || !o.Saturated() {
+	if !errors.Is(err, context.DeadlineExceeded) || !selfprobe.IsAcquireError(err) || o.Saturated == nil || o.Progress == nil || !o.Saturated() {
 		return nil, err
 	}
 	guardCtx, cancelGuard := context.WithTimeout(ctx, GuardTimeout)
@@ -198,14 +200,24 @@ type PoolProgress struct {
 	lastMove  time.Time
 }
 
-// NewPoolProgress observes pool's completed-acquire count. The clock starts at
-// construction: a new process gets one full window before "no acquires" can
-// read as wedged. A nil pool is never ready.
-func NewPoolProgress(pool *pgxpool.Pool, window time.Duration) *PoolProgress {
+// NewPoolProgress observes pool's completed-acquire count MINUS ownAcquires
+// (the probe's own successful acquires, selfprobe.OwnAcquires; nil = none): the
+// probe acquiring a connection is not evidence that the pool's work is moving,
+// and counting it would let a pool wedged by stuck work read as progressing for
+// as long as probes keep succeeding at acquiring (CHAOS-6771 r1). The clock
+// starts at construction: a new process gets one full window before "no
+// acquires" can read as wedged. A nil pool is never ready.
+func NewPoolProgress(pool *pgxpool.Pool, window time.Duration, ownAcquires func() int64) *PoolProgress {
 	if pool == nil {
 		return newPoolProgress(nil, window, time.Now)
 	}
-	return newPoolProgress(func() int64 { return pool.Stat().AcquireCount() }, window, time.Now)
+	return newPoolProgress(func() int64 {
+		count := pool.Stat().AcquireCount()
+		if ownAcquires != nil {
+			count -= ownAcquires()
+		}
+		return count
+	}, window, time.Now)
 }
 
 func newPoolProgress(acquireCount func() int64, window time.Duration, now func() time.Time) *PoolProgress {

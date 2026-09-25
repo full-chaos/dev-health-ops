@@ -29,7 +29,8 @@ func (f fakeInner) Begin(context.Context) (selfprobe.Tx, error) {
 // The tolerance is exactly busy-not-broken: each row plants one way the probe
 // could be wrongly tolerated or wrongly refused.
 func TestOpenerToleratesExactlyBusyNotBroken(t *testing.T) {
-	deadline := fmt.Errorf("acquire: %w", context.DeadlineExceeded)
+	deadline := &selfprobe.AcquireError{Err: fmt.Errorf("acquire: %w", context.DeadlineExceeded)}
+	beginStalled := fmt.Errorf("begin: %w", context.DeadlineExceeded) // a deadline AFTER a connection was acquired
 	refused := errors.New("connection refused")
 	progressing := func(context.Context) error { return nil }
 	wedged := func(context.Context) error { return errors.New("no progress") }
@@ -46,6 +47,8 @@ func TestOpenerToleratesExactlyBusyNotBroken(t *testing.T) {
 		{"acquire deadline, NOT saturated = broken", deadline, false, progressing, false, false},
 		{"acquire deadline, saturated, progress red = broken", deadline, true, wedged, false, false},
 		{"connection error while saturated = broken", refused, true, progressing, false, false},
+		{"deadline on the BEGIN itself (connection acquired) = broken", beginStalled, true, progressing, false, false},
+		{"acquire error that is not a deadline = broken", &selfprobe.AcquireError{Err: refused}, true, progressing, false, false},
 		{"no progress guard = broken", deadline, true, nil, false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -81,7 +84,7 @@ func TestOpenerRefusesABusyPassAfterTheCallersDeadline(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	opener := Opener{
-		Inner:     fakeInner{context.DeadlineExceeded},
+		Inner:     fakeInner{&selfprobe.AcquireError{Err: context.DeadlineExceeded}},
 		Saturated: func() bool { return true }, Progress: func(context.Context) error { return nil },
 		Counter: NewCounter("m", nil, nil),
 	}
@@ -176,7 +179,7 @@ func TestPoolProgressIsGreenOnlyWhileAcquiresKeepCompleting(t *testing.T) {
 	if err := progress.Ready(context.Background()); err != nil {
 		t.Fatalf("30 s after the last acquire = %v, want green", err)
 	}
-	if err := NewPoolProgress(nil, time.Minute).Ready(context.Background()); err == nil {
+	if err := NewPoolProgress(nil, time.Minute, nil).Ready(context.Background()); err == nil {
 		t.Fatal("a nil pool is green")
 	}
 }

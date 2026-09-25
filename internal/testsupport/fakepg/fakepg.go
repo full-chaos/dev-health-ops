@@ -10,15 +10,34 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgproto3"
 )
 
+// Server is a running fake server.
+type Server struct {
+	addr string
+	// stallBegin makes the server accept BEGIN and never answer it: a database
+	// that took the connection and then hangs (CHAOS-6771 r1).
+	stallBegin atomic.Bool
+}
+
+// Addr is the host:port the server listens on.
+func (s *Server) Addr() string { return s.addr }
+
+// StallBegin makes every later BEGIN hang (true) or answer normally (false).
+func (s *Server) StallBegin(stall bool) { s.stallBegin.Store(stall) }
+
 // Serve starts the fake server on a loopback port and returns its address. It
 // stops with the test.
-func Serve(t testing.TB) string {
+func Serve(t testing.TB) string { return Start(t).Addr() }
+
+// Start is Serve with a handle for controlling the server.
+func Start(t testing.TB) *Server {
 	t.Helper()
+	server := &Server{}
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -30,6 +49,7 @@ func Serve(t testing.TB) string {
 		_ = listener.Close()
 		wg.Wait()
 	})
+	server.addr = listener.Addr().String()
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -43,14 +63,14 @@ func Serve(t testing.TB) string {
 				defer wg.Done()
 				defer connection.Close()
 				go func() { <-ctx.Done(); _ = connection.Close() }()
-				serve(connection)
+				server.serve(ctx, connection)
 			}()
 		}
 	}()
-	return listener.Addr().String()
+	return server
 }
 
-func serve(connection net.Conn) {
+func (server *Server) serve(ctx context.Context, connection net.Conn) {
 	backend := pgproto3.NewBackend(connection, connection)
 	for {
 		message, err := backend.ReceiveStartupMessage()
@@ -87,6 +107,9 @@ func serve(connection net.Conn) {
 		case *pgproto3.Query:
 			sql := strings.ToUpper(strings.TrimSpace(typed.String))
 			switch {
+			case strings.HasPrefix(sql, "BEGIN") && server.stallBegin.Load():
+				<-ctx.Done()
+				return
 			case strings.HasPrefix(sql, "BEGIN"):
 				status = 'T'
 				backend.Send(&pgproto3.CommandComplete{CommandTag: []byte("BEGIN")})

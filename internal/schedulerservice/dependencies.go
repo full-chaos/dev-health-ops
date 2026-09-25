@@ -686,12 +686,14 @@ func buildSchedulerLoopWithSources(
 	if err := registry.RegisterMetrics("scheduler_readiness_busy", busy); err != nil {
 		return nil, err
 	}
+	probeOpener := selfprobe.NewPool(domainPool)
 	livenessMonitor := selfprobe.New("scheduler_execution_liveness", busyprobe.Opener{
-		Inner:     selfprobe.NewPool(domainPool),
+		Inner:     probeOpener,
 		Check:     "execution_liveness",
 		Saturated: func() bool { return busyprobe.Saturated(domainPool) },
-		Progress:  busyprobe.NewPoolProgress(domainPool, busyProgressWindow).Ready,
-		Counter:   busy,
+		Progress: busyprobe.NewPoolProgress(domainPool, busyProgressWindow,
+			func() int64 { return selfprobe.OwnAcquires(probeOpener) }).Ready,
+		Counter: busy,
 	}, logger)
 	if livenessMonitor != nil {
 		livenessMonitor.Probe(ctx)

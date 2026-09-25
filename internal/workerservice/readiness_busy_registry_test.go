@@ -35,7 +35,7 @@ type blockingOpener struct{ database *blockingDatabase }
 func (opener blockingOpener) Begin(ctx context.Context) (selfprobe.Tx, error) {
 	if opener.database.exhausted.Load() {
 		<-ctx.Done()
-		return nil, ctx.Err()
+		return nil, &selfprobe.AcquireError{Err: ctx.Err()} // waiting for a pool connection
 	}
 	return fakeTxOpenerTx{}, nil
 }

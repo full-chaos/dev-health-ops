@@ -687,12 +687,14 @@ func configureReconcilerDependenciesWithActivationSourcesAndLogger(
 	// constructed and execution_liveness reports unavailable, exactly as before.
 	var livenessOpener selfprobe.TxOpener
 	if domainPool != nil {
+		probeOpener := selfprobe.NewPool(domainPool)
 		livenessOpener = busyprobe.Opener{
-			Inner:     selfprobe.NewPool(domainPool),
+			Inner:     probeOpener,
 			Check:     "execution_liveness",
 			Saturated: func() bool { return busyprobe.Saturated(domainPool) },
-			Progress:  busyprobe.NewPoolProgress(domainPool, busyProgressWindow).Ready,
-			Counter:   busy,
+			Progress: busyprobe.NewPoolProgress(domainPool, busyProgressWindow,
+				func() int64 { return selfprobe.OwnAcquires(probeOpener) }).Ready,
+			Counter: busy,
 		}
 	}
 	livenessMonitor = selfprobe.New("reconciler_execution_liveness", livenessOpener, logger)

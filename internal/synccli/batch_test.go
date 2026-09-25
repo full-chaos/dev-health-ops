@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"strings"
 	"sync"
@@ -341,5 +343,53 @@ func TestClampIntSaturatesInsteadOfWrapping(t *testing.T) {
 	}
 	if got := clampInt(huge.Neg(huge)); got != -(1 << 31) {
 		t.Fatalf("clampInt(-huge) = %d", got)
+	}
+}
+
+// TestBatchDefaultListingIsWired: the production command is
+// InlineExecutor(InlineDeps{}); a batch through an executor that injects only
+// the store and the run seam must still list, through the default listing
+// against the provider named by GITHUB_URL. (A nil default List panicked in
+// runBatch, and every other batch test injects its own List.)
+func TestBatchDefaultListingIsWired(t *testing.T) {
+	var paths []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path+"|"+r.Header.Get("Authorization"))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[{"name":"api","full_name":"acme/api"},{"name":"web","full_name":"acme/web"},{"name":"x","full_name":"other/x"}]`))
+	}))
+	defer server.Close()
+	h := &batchHarness{}
+	exec := InlineExecutor(InlineDeps{
+		OpenStore: func(context.Context, string) (driver.Conn, error) { return fakeStore{}, nil },
+		Run: func(_ context.Context, run providersync.InProcessRun) (providersync.CompleteRouteExecutionResult, error) {
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			h.runs = append(h.runs, run)
+			return providersync.CompleteRouteExecutionResult{}, nil
+		},
+	})
+	env := map[string]string{"CLICKHOUSE_URI": inlineEnv["CLICKHOUSE_URI"], "ORG_ID": "org-1", "GITHUB_TOKEN": "env-token", "GITHUB_URL": server.URL}
+	code, _, stderr := runVerb(t, "prs", exec, []string{"--provider", "github", "--group", "acme", "-s", "acme/*"}, env)
+	if code != cli.ExitOK {
+		t.Fatalf("exit %d: %s", code, stderr)
+	}
+	if want := []string{"/orgs/acme/repos|token env-token"}; !reflect.DeepEqual(paths, want) {
+		t.Fatalf("listing requests = %q, want %q", paths, want)
+	}
+	if got, want := h.ran(), map[string][]string{"acme/api": {"prs"}, "acme/web": {"prs"}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("ran %v, want %v (the pattern filters other/x out)", got, want)
+	}
+}
+
+// TestEveryInlineDepHasADefault: adding a field to InlineDeps without a default
+// is the defect the wiring test above caught once (a nil List); this fails the
+// build of that mistake for the next field too.
+func TestEveryInlineDepHasADefault(t *testing.T) {
+	defaults := reflect.ValueOf(defaultInlineDeps())
+	for i := 0; i < defaults.NumField(); i++ {
+		if defaults.Field(i).IsNil() {
+			t.Errorf("defaultInlineDeps().%s is nil", defaults.Type().Field(i).Name)
+		}
 	}
 }

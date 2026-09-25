@@ -68,17 +68,18 @@ func defaultInlineDeps() InlineDeps {
 // InlineExecutor runs the requests it supports and refuses the rest with a
 // message that names where each one lands.
 func InlineExecutor(deps InlineDeps) Executor {
-	if deps.OpenStore == nil || deps.Run == nil || deps.List == nil || deps.Now == nil {
-		defaults := defaultInlineDeps()
-		if deps.OpenStore == nil {
-			deps.OpenStore = defaults.OpenStore
-		}
-		if deps.Run == nil {
-			deps.Run = defaults.Run
-		}
-		if deps.Now == nil {
-			deps.Now = defaults.Now
-		}
+	defaults := defaultInlineDeps()
+	if deps.OpenStore == nil {
+		deps.OpenStore = defaults.OpenStore
+	}
+	if deps.Run == nil {
+		deps.Run = defaults.Run
+	}
+	if deps.List == nil {
+		deps.List = defaults.List
+	}
+	if deps.Now == nil {
+		deps.Now = defaults.Now
 	}
 	return func(ctx context.Context, plan Plan, env cli.Env) error {
 		datasets, refusal := inlineDatasets(plan)

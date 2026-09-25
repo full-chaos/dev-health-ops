@@ -521,3 +521,25 @@ func RunAuthFingerprint(credentials any, credentialID *string, integrationID str
 	}
 	return fingerprintOf(scope), nil
 }
+
+// PlanFingerprint is the credential_fingerprint sync/planner.py's
+// _resolve_credential_stamp stamps on a new sync run: over the
+// provider's environment credentials when the integration has no
+// credential (credential_id None), else over the org's credential row's
+// {**config, **decrypted} mapping. The one implementation of Python's
+// fingerprint (RunAuthFingerprint), so a stamp written here verifies
+// against the same function that later reads it back. A credential that
+// cannot be loaded or decrypted is an error, as Python's plan fails.
+func (loader Loader) PlanFingerprint(ctx context.Context, orgID, integrationID, provider string, credentialID *string) (string, error) {
+	if credentialID == nil {
+		return RunAuthFingerprint(loader.environmentCredentials(provider), nil, integrationID)
+	}
+	if loader.DB == nil || loader.Decryptor == nil {
+		return "", errors.New("syncbudget: plan fingerprint needs a database and a decryptor")
+	}
+	row, err := loader.credential(ctx, credentialCache{}, *credentialID, orgID)
+	if err != nil {
+		return "", err
+	}
+	return RunAuthFingerprint(row.mapping, credentialID, integrationID)
+}

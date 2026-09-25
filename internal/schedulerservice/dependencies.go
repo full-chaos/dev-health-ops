@@ -334,41 +334,50 @@ var productionSchedulerRuntimeSources = schedulerRuntimeSources{
 		// coverage; a scheduler that cannot read the encryption key can
 		// still plan and run every already-discovered source exactly as
 		// before CHAOS-4602.
-		if decryptor, cipherErr := providerfoundation.NewFernetDecryptor(
+		decryptor, cipherErr := providerfoundation.NewFernetDecryptor(
 			cfg.SettingsEncryptionKey, cfg.SettingsEncryptionSalt.Reveal(),
-		); cipherErr != nil {
+		)
+		if cipherErr != nil {
 			slog.Default().Error(
 				"scheduler_source_discovery_cipher_unavailable: native source "+
-					"discovery is disabled for this process; already-discovered "+
-					"sources still plan normally (CHAOS-4602)",
+					"discovery is disabled for this process, and new sync runs "+
+					"carry no credential_fingerprint; already-discovered "+
+					"sources still plan normally (CHAOS-4602, CHAOS-6679)",
 				"error", cipherErr,
 			)
-		} else if discovery, discoveryErr := schedulersync.NewNativeSourceDiscoveryService(
-			domainPool,
-			providerfoundation.CredentialResolver{
-				Repository: providerfoundation.PostgresCredentialRepository{Pool: domainPool},
-				Decryptor:  decryptor,
-			},
-			&http.Client{
-				Timeout: 45 * time.Second,
-				CheckRedirect: func(*http.Request, []*http.Request) error {
-					return http.ErrUseLastResponse
-				},
-			},
-			nil,
-		); discoveryErr != nil {
-			slog.Default().Error(
-				"scheduler_source_discovery_unavailable: native source discovery "+
-					"is disabled for this process (CHAOS-4602)",
-				"error", discoveryErr,
-			)
 		} else {
-			// NativeMaterializer.WritePrometheus (registered by the caller as
-			// scheduler_executed_proof_gate, keyed off *OccurrenceReconciler
-			// forwarding to it) already folds in provider_source_discovery_total
-			// once a discovery service is attached -- no separate registration
-			// needed here.
-			materializer.WithSourceDiscovery(discovery)
+			// CHAOS-6679: stamp sync_runs.credential_fingerprint as Python's
+			// planner does, so the workers' run-auth freeze keeps its
+			// secret-edit check for runs this scheduler plans.
+			materializer.WithCredentialFingerprint(decryptor)
+			discovery, discoveryErr := schedulersync.NewNativeSourceDiscoveryService(
+				domainPool,
+				providerfoundation.CredentialResolver{
+					Repository: providerfoundation.PostgresCredentialRepository{Pool: domainPool},
+					Decryptor:  decryptor,
+				},
+				&http.Client{
+					Timeout: 45 * time.Second,
+					CheckRedirect: func(*http.Request, []*http.Request) error {
+						return http.ErrUseLastResponse
+					},
+				},
+				nil,
+			)
+			if discoveryErr != nil {
+				slog.Default().Error(
+					"scheduler_source_discovery_unavailable: native source discovery "+
+						"is disabled for this process (CHAOS-4602)",
+					"error", discoveryErr,
+				)
+			} else {
+				// NativeMaterializer.WritePrometheus (registered by the caller as
+				// scheduler_executed_proof_gate, keyed off *OccurrenceReconciler
+				// forwarding to it) already folds in provider_source_discovery_total
+				// once a discovery service is attached -- no separate registration
+				// needed here.
+				materializer.WithSourceDiscovery(discovery)
+			}
 		}
 		// CHAOS-4060/CHAOS-4114/CHAOS-4124: load the executed-proof snapshot
 		// at process startup. A failed load is not fatal to the PROCESS --

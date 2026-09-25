@@ -1,11 +1,14 @@
 // Package pushcli is the `push` group of dho: the customer-push external
-// ingestion CLI (Python's `dev-hops push`). Its verbs open no database
-// connection, make no network call and need no server (the record validators
-// they share link the api's JSON-body helpers, which link the auth package's
-// HTTP envelope types; nothing here serves or sends a request): validate checks a batch envelope locally with the same record
-// validators the API runs (internal/api/recordvalidation), sample prints the
-// packaged example batches, and export is the extension point that says it is not
-// implemented.
+// ingestion CLI (Python's `dev-hops push`). validate, sample and export open no
+// database connection and make no network call: validate checks a batch envelope
+// locally with the same record validators the API runs
+// (internal/api/recordvalidation; they link the api's JSON-body helpers, which
+// link the auth package's HTTP envelope types, nothing here serves a request),
+// sample prints the packaged example batches, and export is the extension point
+// that says it is not implemented. batch and status are the HTTP verbs: they send
+// the batch (or read its status) to the external-ingest API with the ingest token,
+// retry 429 and 503 and network errors as the Python client does, and with --poll
+// wait for a terminal status. They open no database connection either.
 package pushcli
 
 import (
@@ -17,7 +20,8 @@ import (
 )
 
 // Exit codes of the push verbs (output.py): 0 success, 1 data-level failure
-// (invalid payload), 2 usage error, 3 transport error, 4 poll timeout.
+// (invalid payload), 2 usage error; 3 (transport error) and 4 (poll timeout) are
+// in batch.go.
 const (
 	exitOK          = 0
 	exitDataFailure = 1
@@ -39,6 +43,8 @@ func Command() cli.Command {
 		Name: "push", Summary: "customer-push external ingestion", Kind: cli.Group,
 		Children: []cli.Command{
 			{Name: "validate", Summary: "validate a batch payload locally (no network call)", Kind: cli.Verb, Run: runValidate},
+			{Name: "batch", Summary: "submit a batch payload to the external-ingest API", Kind: cli.Verb, Run: runBatch},
+			{Name: "status", Summary: "fetch (and optionally poll) a batch's ingestion status", Kind: cli.Verb, Run: runStatus},
 			{Name: "sample", Summary: "print a canonical sample batch envelope", Kind: cli.Verb, Run: runSample},
 			{Name: "export", Summary: "provider export helpers (not implemented; extension point)", Kind: cli.Verb, Run: runExport},
 		},

@@ -101,9 +101,11 @@ func (h handlers) processSubscriptionEvent(ctx context.Context, event pyjson.Val
 	case errors.Is(err, errSubscriptionConflict):
 		replayed = true
 	case errors.Is(err, errSubscriptionMalformed):
-		h.logger.WarnContext(ctx, "Skipping malformed subscription event", "error", err.Error())
+		h.logger.WarnContext(ctx, "Skipping malformed subscription event",
+			append([]any{"error", err.Error()}, subscriptionLogFields(attr(event, "id", nil), eventType, subscription)...)...)
 	default:
-		h.logger.ErrorContext(ctx, "Failed to process subscription event", "error", err.Error())
+		h.logger.ErrorContext(ctx, "Failed to process subscription event",
+			append([]any{"error", err.Error()}, subscriptionLogFields(attr(event, "id", nil), eventType, subscription)...)...)
 	}
 	return replayed
 }
@@ -149,7 +151,8 @@ func (h handlers) subscriptionEventTx(ctx context.Context, tx pgx.Tx, event pyjs
 			return false, err
 		}
 		if owner == nil {
-			h.logger.WarnContext(ctx, "Subscription event names no org and none owns its subscription or customer, skipping", "event_id", eventID)
+			h.logger.WarnContext(ctx, "Subscription event names no org and none owns its subscription or customer, skipping",
+				subscriptionLogFields(attr(event, "id", nil), eventType, subscription)...)
 			return false, nil
 		}
 		org = *owner
@@ -184,7 +187,8 @@ func (h handlers) subscriptionEventTx(ctx context.Context, tx pgx.Tx, event pyjs
 			return false, err
 		}
 		if newest != nil && created.IsInt64() && created.Int64() < *newest {
-			h.logger.InfoContext(ctx, "Subscription event older than the newest recorded; recorded, not applied", "event_id", eventID)
+			h.logger.InfoContext(ctx, "Subscription event older than the newest recorded; recorded, not applied",
+				subscriptionLogFields(attr(event, "id", nil), eventType, subscription)...)
 			_, err := tx.Exec(ctx, `INSERT INTO subscription_events (id, subscription_id, stripe_event_id, event_type, previous_status, new_status, payload)
 				VALUES ($1, $2, $3, $4, $5, $5, $6::json)`, uuid.New(), stored, eventID, eventType, *previousStatus, payload)
 			if err != nil {
@@ -613,4 +617,21 @@ func planFeatureKeys(ctx context.Context, tx pgx.Tx, plan uuid.UUID) ([]string, 
 	}
 	sort.Strings(keys)
 	return keys, nil
+}
+
+// subscriptionLogFields is what a subscription event's skip and failure log
+// lines carry so a decision can be rebuilt from the log alone: the Stripe
+// event and its type, the Stripe subscription and customer, the org exactly
+// as the metadata gave it ("None" when absent), and the first price id.
+func subscriptionLogFields(eventID pyjson.Value, eventType string, subscription pyjson.Value) []any {
+	received := pyjson.Value(nil)
+	if metadata, isObject := attr(subscription, "metadata", nil).(*pyjson.Object); isObject {
+		received, _ = metadata.Get("org_id")
+	}
+	priceID, _ := subscriptionPriceID(subscription)
+	return []any{
+		"event_id", pyStr(eventID), "event_type", eventType,
+		"stripe_subscription_id", pyStr(attr(subscription, "id", nil)), "customer", pyStr(attr(subscription, "customer", nil)),
+		"org_id_received", pyStr(received), "price_id", priceID,
+	}
 }

@@ -85,11 +85,14 @@ on:
       - 'src/dev_health_ops/__init__.py'
       - 'src/dev_health_ops/cli.py'
       - 'src/dev_health_ops/storage/repository_rows.py'
-      # internal/joboperator's tests read the worker_operator_audits
-      # migrations: the unit test parses 0137's action tuple against
-      # AuditedActions, and the Postgres integration test applies 0047, 0136
-      # and 0137. A migration of that table changes what those tests assert.
-      - 'src/dev_health_ops/alembic/versions/*worker_operator_audits*.py'
+      # The Alembic chain is a Go input: internal/pgmigrate embeds a baseline captured from it and
+      # its executed differential (hook_upgrade_integration_test.go) upgrades an old production
+      # database with the migrate hook's verb and compares the result with the real Alembic
+      # upgrade; internal/joboperator's tests also read the worker_operator_audits revisions.
+      # Revisions 0139 to 0141 were Python-only PRs that this list did not match, so the Go
+      # integration shards never ran on them and rev 186's migrate hook failed (CHAOS-6801).
+      # tests/tooling/test_go_workflow_path_filters.py asserts every Alembic file matches.
+      - 'src/dev_health_ops/alembic/**'
       - 'src/dev_health_ops/sync/**'
       - 'src/dev_health_ops/workers/**'
       - 'src/dev_health_ops/workers/job_contracts/**'
@@ -250,11 +253,14 @@ on:
       - 'src/dev_health_ops/__init__.py'
       - 'src/dev_health_ops/cli.py'
       - 'src/dev_health_ops/storage/repository_rows.py'
-      # internal/joboperator's tests read the worker_operator_audits
-      # migrations: the unit test parses 0137's action tuple against
-      # AuditedActions, and the Postgres integration test applies 0047, 0136
-      # and 0137. A migration of that table changes what those tests assert.
-      - 'src/dev_health_ops/alembic/versions/*worker_operator_audits*.py'
+      # The Alembic chain is a Go input: internal/pgmigrate embeds a baseline captured from it and
+      # its executed differential (hook_upgrade_integration_test.go) upgrades an old production
+      # database with the migrate hook's verb and compares the result with the real Alembic
+      # upgrade; internal/joboperator's tests also read the worker_operator_audits revisions.
+      # Revisions 0139 to 0141 were Python-only PRs that this list did not match, so the Go
+      # integration shards never ran on them and rev 186's migrate hook failed (CHAOS-6801).
+      # tests/tooling/test_go_workflow_path_filters.py asserts every Alembic file matches.
+      - 'src/dev_health_ops/alembic/**'
       - 'src/dev_health_ops/sync/**'
       - 'src/dev_health_ops/workers/**'
       - 'src/dev_health_ops/workers/job_contracts/**'

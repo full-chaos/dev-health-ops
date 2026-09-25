@@ -20,6 +20,11 @@ func pipelineRun(repoID uuid.UUID, hour int, status string, seconds int, team, s
 	}
 }
 
+func withQueue(row PipelineRunRow, seconds float64) PipelineRunRow {
+	row.QueueSeconds = &seconds
+	return row
+}
+
 func finishRepoDay(t *testing.T, rows ...PipelineRunRow) *PipelineMetric {
 	t.Helper()
 	acc := NewPipelineAccumulator(rows[0].RepoID, "acme/widgets", nil)
@@ -92,6 +97,27 @@ func TestFinishRepoDayMergesGroupsFromSumsAndTheUnionOfSamples(t *testing.T) {
 	}
 	if got.OrgID != "org-1" {
 		t.Errorf("org = %q", got.OrgID)
+	}
+}
+
+func TestFinishRepoDayPoolsTheQueueSamplesOfEveryGroup(t *testing.T) {
+	repoID := uuid.New()
+	got := finishRepoDay(t,
+		withQueue(pipelineRun(repoID, 1, "success", 60, strPtr("t1"), strPtr("a"), 0), 1),
+		withQueue(pipelineRun(repoID, 2, "success", 60, strPtr("t1"), strPtr("a"), 0), 3),
+		withQueue(pipelineRun(repoID, 3, "success", 60, strPtr("t1"), strPtr("b"), 0), 5),
+	)
+	if got == nil {
+		t.Fatal("FinishRepoDay() = nil")
+	}
+	// pooled samples 1, 3, 5: mean 3, p95 = 3 + 0.9*(5-3) = 4.8. The groups' own
+	// means are 2 and 5, so an average of the groups (3.5), or the first
+	// group's alone (2), would be wrong.
+	if got.AvgQueueSeconds == nil || math.Abs(*got.AvgQueueSeconds-3) > 1e-9 {
+		t.Errorf("avg queue = %v, want 3 over the pooled samples", got.AvgQueueSeconds)
+	}
+	if got.P95QueueSeconds == nil || math.Abs(*got.P95QueueSeconds-4.8) > 1e-9 {
+		t.Errorf("p95 queue = %v, want 4.8 over the pooled samples", got.P95QueueSeconds)
 	}
 }
 

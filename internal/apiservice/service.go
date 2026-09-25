@@ -43,6 +43,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/externalingest"
 	"github.com/full-chaos/dev-health-ops/internal/api/githubapp"
 	healthroutes "github.com/full-chaos/dev-health-ops/internal/api/health"
+	"github.com/full-chaos/dev-health-ops/internal/api/integrationsadmin"
 	"github.com/full-chaos/dev-health-ops/internal/api/legacyingest"
 	"github.com/full-chaos/dev-health-ops/internal/api/orgs"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
@@ -210,6 +211,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 		routes = append(routes, githubapp.Routes(githubapp.Deps{Pool: deps.Pool, Guard: deps.Guard, Valkey: deps.Valkey, Cipher: deps.Decryptor,
 			Logger: logger, Now: deps.Now, Config: deps.GitHubApp, Signer: deps.GitHubStateSigner,
 			HTTPClient: deps.GitHubAppHTTPClient, GitHubURL: deps.GitHubAppURL, GitHubAPIURL: deps.GitHubAppAPIURL})...)
+		routes = append(routes, integrationsadmin.Routes(integrationsadmin.Deps{Pool: deps.Pool, Guard: deps.Guard, Logger: logger, Now: deps.Now})...)
 		if deps.ClickHouse != nil {
 			routes = append(routes, teamsidentity.Routes(deps.ClickHouse, deps.Guard, logger, deps.Pool, deps.Decryptor)...)
 		}

@@ -1,9 +1,14 @@
-"""CHAOS-6181: clickhouse.usersd renders a users.d ConfigMap + subPath mounts.
+"""CHAOS-6181/CHAOS-6474: clickhouse.usersd renders a users.d ConfigMap, a directory mount and symlinks.
 
 The bundled ClickHouse StatefulSet used to mount only /var/lib/clickhouse, so
 a read-only user (acr_ro) could only exist as a one-off file written into the
 pod and lost on restart. `clickhouse.usersd` (filename -> XML) makes it
 durable. Unset must render exactly what the chart rendered before.
+
+CHAOS-6474: the ConfigMap is mounted as a DIRECTORY (kubelet refreshes it in
+place; a per-file subPath mount is never refreshed) and an initContainer links
+each file into an emptyDir users.d, so a grant change reloads without a pod
+restart. Only the FILE SET rolls the pod.
 """
 
 import json
@@ -49,7 +54,7 @@ def test_default_renders_no_usersd_objects() -> None:
     assert [m["mountPath"] for m in mounts] == ["/var/lib/clickhouse"]
 
 
-def test_usersd_renders_configmap_volume_and_subpath_mount() -> None:
+def test_usersd_renders_configmap_directory_mount_and_link_initcontainer() -> None:
     docs = _docs(f"clickhouse.usersd.acr_ro\\.xml={_XML}")
     cm = next(d for d in docs if d["kind"] == "ConfigMap")
     assert cm["metadata"]["name"] == "t-dev-health-clickhouse-usersd"
@@ -60,24 +65,42 @@ def test_usersd_renders_configmap_volume_and_subpath_mount() -> None:
         {
             "name": "clickhouse-usersd",
             "configMap": {"name": "t-dev-health-clickhouse-usersd"},
-        }
+        },
+        {"name": "clickhouse-usersd-links", "emptyDir": {}},
     ]
     mounts = {m["mountPath"]: m for m in pod["spec"]["containers"][0]["volumeMounts"]}
-    # data mount stays; users.d is per-file (subPath), never the whole directory,
-    # so the image's own users.d files are not shadowed.
     assert "/var/lib/clickhouse" in mounts
-    mount = mounts["/etc/clickhouse-server/users.d/acr_ro.xml"]
-    assert mount["subPath"] == "acr_ro.xml" and mount["readOnly"] is True
-    assert "/etc/clickhouse-server/users.d" not in mounts
-    # content change must roll the pod (subPath mounts never hot-update)
-    assert pod["metadata"]["annotations"]["checksum/clickhouse-usersd"]
+    # never a per-file subPath (kubelet does not refresh those): the ConfigMap is a
+    # directory mount, users.d is the emptyDir the links live in.
+    assert not any("subPath" in m for m in mounts.values())
+    cm_mount = mounts["/etc/clickhouse-server/usersd-cm"]
+    assert cm_mount["name"] == "clickhouse-usersd" and cm_mount["readOnly"] is True
+    assert mounts["/etc/clickhouse-server/users.d"]["name"] == "clickhouse-usersd-links"
+
+    (init,) = pod["spec"]["initContainers"]
+    assert init["name"] == "clickhouse-usersd-links"
+    assert init["image"] == pod["spec"]["containers"][0]["image"]
+    assert init["command"][-2:] == ["--", "acr_ro.xml"]
+    assert "../usersd-cm/$n" in init["command"][2]
+    assert init["volumeMounts"] == [
+        {"name": "clickhouse-usersd-links", "mountPath": "/links"}
+    ]
 
 
-def test_usersd_checksum_tracks_content() -> None:
+def test_usersd_content_change_does_not_roll_the_pod() -> None:
     a = _sts(_docs(f"clickhouse.usersd.a\\.xml={_XML}"))["spec"]["template"]["metadata"]
     b = _sts(_docs(f"clickhouse.usersd.a\\.xml={_XML}x"))["spec"]["template"][
         "metadata"
     ]
+    assert a["annotations"] == b["annotations"]
+    assert "checksum/clickhouse-usersd" not in a["annotations"]
+
+
+def test_usersd_file_set_change_rolls_the_pod() -> None:
+    a = _sts(_docs(f"clickhouse.usersd.a\\.xml={_XML}"))["spec"]["template"]["metadata"]
+    b = _sts(
+        _docs(f"clickhouse.usersd.a\\.xml={_XML}", f"clickhouse.usersd.b\\.xml={_XML}")
+    )["spec"]["template"]["metadata"]
     assert a["annotations"] != b["annotations"]
 
 
@@ -86,7 +109,10 @@ def test_usersd_works_without_persistence() -> None:
         "clickhouse.persistence.enabled=false", f"clickhouse.usersd.a\\.xml={_XML}"
     )
     mounts = _sts(docs)["spec"]["template"]["spec"]["containers"][0]["volumeMounts"]
-    assert [m["mountPath"] for m in mounts] == ["/etc/clickhouse-server/users.d/a.xml"]
+    assert [m["mountPath"] for m in mounts] == [
+        "/etc/clickhouse-server/users.d",
+        "/etc/clickhouse-server/usersd-cm",
+    ]
 
 
 def _docs_json(usersd_json: str) -> list[dict]:
@@ -118,6 +144,5 @@ def test_usersd_leading_whitespace_and_numeric_filename_round_trip() -> None:
     docs = _docs_json(json.dumps({"123": content, "b.xml": content}))
     cm = next(d for d in docs if d["kind"] == "ConfigMap")
     assert cm["data"] == {"123": content, "b.xml": content}
-    mounts = _sts(docs)["spec"]["template"]["spec"]["containers"][0]["volumeMounts"]
-    sub = {m["subPath"] for m in mounts if "subPath" in m}
-    assert sub == {"123", "b.xml"}
+    (init,) = _sts(docs)["spec"]["template"]["spec"]["initContainers"]
+    assert init["command"][3:] == ["--", "123", "b.xml"]

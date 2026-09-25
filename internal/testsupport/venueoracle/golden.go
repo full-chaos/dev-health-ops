@@ -60,6 +60,10 @@ type Golden struct {
 	recording bool
 	loaded    goldenFile
 	recorded  goldenFile
+	// served counts the frozen answers handed out so far: a test may ask for
+	// the Python plane's answers in several calls (one per batch of requests),
+	// and the frozen file holds them in the order they were asked.
+	served int
 }
 
 // The environment variables that switch a test to recording.
@@ -209,19 +213,20 @@ func (g *Golden) Python(t *testing.T, v *Venue, requests []Request) []Response {
 }
 
 func (g *Golden) frozenAnswers(requests []Request) ([]Response, error) {
-	if len(g.loaded.Requests) != len(requests) {
-		return nil, fmt.Errorf("golden %s holds %d answers for %d requests; regenerate: %s", g.spec.Path, len(g.loaded.Requests), len(requests), g.spec.Recipe)
+	if g.served+len(requests) > len(g.loaded.Requests) {
+		return nil, fmt.Errorf("golden %s holds %d answers, %d already served, the test asks for %d more; regenerate: %s", g.spec.Path, len(g.loaded.Requests), g.served, len(requests), g.spec.Recipe)
 	}
 	out := make([]Response, len(requests))
 	for index, request := range requests {
 		want := requestKey(request)
-		got := g.loaded.Requests[index]
+		got := g.loaded.Requests[g.served+index]
 		if got.Name != want.Name || got.Method != want.Method || got.Path != want.Path || got.BodySHA256 != want.BodySHA256 {
 			return nil, fmt.Errorf("golden %s request %d is %q %s %s (body %s..); the test sends %q %s %s (body %s..); regenerate: %s",
-				g.spec.Path, index, got.Name, got.Method, got.Path, got.BodySHA256[:8], want.Name, want.Method, want.Path, want.BodySHA256[:8], g.spec.Recipe)
+				g.spec.Path, g.served+index, got.Name, got.Method, got.Path, got.BodySHA256[:8], want.Name, want.Method, want.Path, want.BodySHA256[:8], g.spec.Recipe)
 		}
 		out[index] = Response{Status: got.Status, Headers: got.Headers, Body: got.Body}
 	}
+	g.served += len(requests)
 	return out, nil
 }
 
@@ -278,6 +283,9 @@ func (g *Golden) Finish(t *testing.T) {
 		t.Fatalf("recorded %s on build %s: pin SHA256 %s in the test and re-run without %s (a recording run is not a proof)",
 			g.spec.Path, g.spec.PythonBuild, hex.EncodeToString(sum[:]), goldenUpdateEnv)
 	}
+	if err := g.unusedAnswers(); err != nil {
+		t.Fatal(err)
+	}
 	WriteGoOnlyProof(t, "Go against the Python plane's answers executed on build "+g.spec.PythonBuild+" (frozen golden "+filepath.Base(g.spec.Path)+")")
 }
 
@@ -301,4 +309,13 @@ func uuidV5(namespace [16]byte, name string) string {
 	u[6] = (u[6] & 0x0f) | 0x50
 	u[8] = (u[8] & 0x3f) | 0x80
 	return fmt.Sprintf("%x-%x-%x-%x-%x", u[0:4], u[4:6], u[6:8], u[8:10], u[10:16])
+}
+
+// unusedAnswers is an error when the frozen file holds answers the test never
+// asked for: an unused answer is a comparison that no longer happens.
+func (g *Golden) unusedAnswers() error {
+	if g.served != len(g.loaded.Requests) {
+		return fmt.Errorf("golden %s holds %d answers but the test used %d: an unused frozen answer is a comparison that no longer happens; regenerate: %s", g.spec.Path, len(g.loaded.Requests), g.served, g.spec.Recipe)
+	}
+	return nil
 }

@@ -16,6 +16,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 	"golang.org/x/crypto/pbkdf2"
 )
 
@@ -173,6 +174,36 @@ var githubFieldAliases = map[string]string{
 	"privateKeyPath": "private_key_path",
 }
 
+// githubNumericIdentifiers are the GitHub App identifier fields Python accepts
+// as JSON numbers (CHAOS-6737): github_credentials_from_mapping passes the
+// value through untouched and the client renders it with str(), so a row
+// stored as {"app_id": 12, "installation_id": 34} authenticates. Every other
+// field, and every other non-string value, stays refused.
+var githubNumericIdentifiers = map[string]bool{"app_id": true, "installation_id": true}
+
+// pythonNumberText is str() of a decoded JSON number: the decimal digits of an
+// integer and repr() of a float. A zero is Python-falsy, which the App-auth
+// shape check treats as absent, so it renders as "" (not configured). A value
+// that is not a number reports false.
+func pythonNumberText(value any) (string, bool) {
+	switch number := value.(type) {
+	case pyjson.Int:
+		if number.Int == nil {
+			return "", false
+		}
+		if number.Sign() == 0 {
+			return "", true
+		}
+		return number.String(), true
+	case pyjson.Float:
+		if number == 0 {
+			return "", true
+		}
+		return pythonparity.Repr(float64(number)), true
+	}
+	return "", false
+}
+
 func decodeCredential(record EncryptedCredential, plaintext []byte) (Credential, error) {
 	decoded, err := pyjson.DecodeString(string(plaintext))
 	if err != nil {
@@ -185,14 +216,20 @@ func decodeCredential(record EncryptedCredential, plaintext []byte) (Credential,
 	fields := make(map[string]secrets.Value, object.Len())
 	for _, key := range object.Keys() {
 		value, _ := object.Get(key)
-		text, ok := value.(string)
-		if !ok || strings.TrimSpace(key) == "" {
+		if strings.TrimSpace(key) == "" {
 			return Credential{}, ErrCredentialInvalid
 		}
 		if record.Provider == "github" {
 			if canonical, aliased := githubFieldAliases[key]; aliased {
 				key = canonical
 			}
+		}
+		text, ok := value.(string)
+		if !ok && record.Provider == "github" && githubNumericIdentifiers[key] {
+			text, ok = pythonNumberText(value)
+		}
+		if !ok {
+			return Credential{}, ErrCredentialInvalid
 		}
 		fields[key] = secrets.NewValue(text)
 	}

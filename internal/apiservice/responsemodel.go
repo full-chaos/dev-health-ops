@@ -17,6 +17,10 @@ import (
 // policy.WriteModel and every other body with policy.WriteJSON.
 // TestVenueOracleRouteResponseModels pins this table against the live
 // FastAPI app.
+//
+// NEW routes: do not edit this literal. Add them to a per-family file
+// (responsemodel_<family>.go) through registerResponseModelRoutes, called from
+// that file's init() (see responsemodel_register.go, CHAOS-6722).
 var responseModelRoutes = map[string]bool{
 	"DELETE /api/v1/billing/plans/{plan_id}":                                           true,
 	"GET /api/v1/billing/audit":                                                        true,

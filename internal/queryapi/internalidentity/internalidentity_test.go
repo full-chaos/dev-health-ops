@@ -1,7 +1,10 @@
 package internalidentity
 
 import (
+	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
@@ -80,6 +83,51 @@ func TestHeaderNamesAreTheDeployContract(t *testing.T) {
 	for i := range want {
 		if Headers[i] != want[i] {
 			t.Fatalf("header %d = %q, want %q", i, Headers[i], want[i])
+		}
+	}
+}
+
+// TestFromHeaderReadsWhatThePythonEdgeSends is the cross-language oracle for the
+// carrier: testdata/python_edge_identity_headers.json is produced by the REAL
+// Python edge function (go_api_dispatcher._internal_identity_headers) together
+// with the identity the signed envelope carries for the same principal
+// (tests/api/graphql/test_go_api_internal_identity_headers.py regenerates and
+// compares it by execution). Every header set the Python edge produces must be
+// read by FromHeader as exactly that identity, byte for byte (non-ASCII values
+// included: Go reads the raw bytes the edge sends).
+func TestFromHeaderReadsWhatThePythonEdgeSends(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("testdata", "python_edge_identity_headers.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var golden struct {
+		Cases []struct {
+			Name     string            `json:"name"`
+			Headers  map[string]string `json:"headers"`
+			Expected authctx.Claims    `json:"expected"`
+		} `json:"cases"`
+	}
+	if err := json.Unmarshal(raw, &golden); err != nil {
+		t.Fatal(err)
+	}
+	if len(golden.Cases) < 5 {
+		t.Fatalf("the golden holds %d cases: a shrunken oracle proves nothing", len(golden.Cases))
+	}
+	for _, c := range golden.Cases {
+		h := http.Header{}
+		for name, value := range c.Headers {
+			h[http.CanonicalHeaderKey(name)] = []string{value}
+		}
+		if len(c.Headers) != len(Headers) {
+			t.Errorf("%s: the Python edge sent %d headers, the reader wants %d", c.Name, len(c.Headers), len(Headers))
+		}
+		got, err := FromHeader(h)
+		if err != nil {
+			t.Errorf("%s: FromHeader refused what the Python edge sends: %v", c.Name, err)
+			continue
+		}
+		if got != c.Expected {
+			t.Errorf("%s: read %+v, the envelope carries %+v", c.Name, got, c.Expected)
 		}
 	}
 }

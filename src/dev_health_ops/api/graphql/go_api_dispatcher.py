@@ -100,12 +100,14 @@ both independent of OTel posture:
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import logging
 import math
 import os
 import time
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlsplit
 
 import httpx
 from starlette.requests import Request
@@ -169,6 +171,55 @@ def _internal_query_api_url() -> str | None:
     return value or None
 
 
+#: Host classes that can be a query-api INTERNAL Service: a single-label name
+#: (compose / a Service in the same namespace), an in-cluster DNS name, a
+#: loopback / private / link-local address. Anything else (a public DNS name)
+#: is refused: the identity headers must never leave the cluster network.
+_CLUSTER_HOST_SUFFIXES = (".svc", ".svc.cluster.local", ".cluster.local")
+
+
+def _origin(url: str) -> tuple[str, str, int | None] | None:
+    try:
+        parts = urlsplit(url)
+        return (parts.scheme, (parts.hostname or "").lower(), parts.port)
+    except ValueError:
+        return None
+
+
+def _internal_url_problem(value: str, public_url: str | None) -> str | None:
+    """Why ``value`` may not receive the internal identity headers, or None.
+    Fail closed: the edge sends nothing to a URL it cannot tell is internal.
+    Refused: a scheme other than plain http (an Ingress host is https), userinfo,
+    a query or fragment, a public-looking host, and the very origin of
+    GO_API_QUERY_API_URL (the public listener, which strips the headers)."""
+    try:
+        parts = urlsplit(value)
+        hostname = (parts.hostname or "").lower()
+        parts.port  # noqa: B018 -- raises ValueError on a malformed port
+    except ValueError:
+        return "malformed"
+    if parts.scheme != "http" or not hostname:
+        return "scheme_or_host"
+    if parts.username is not None or parts.password is not None:
+        return "userinfo"
+    if parts.query or parts.fragment:
+        return "query_or_fragment"
+    internal_host = "." not in hostname or hostname.endswith(_CLUSTER_HOST_SUFFIXES)
+    if not internal_host:
+        try:
+            address = ipaddress.ip_address(hostname)
+            internal_host = (
+                address.is_loopback or address.is_private or address.is_link_local
+            )
+        except ValueError:
+            internal_host = False
+    if not internal_host:
+        return "public_host"
+    if public_url and _origin(value) == _origin(public_url):
+        return "same_as_public_url"
+    return None
+
+
 def _internal_identity_headers(user: AuthenticatedUser) -> dict[str, str]:
     """The four internal identity headers for ``user``: exactly the fields the
     effective-principal envelope carries and query-api reads (org, role,
@@ -176,6 +227,10 @@ def _internal_identity_headers(user: AuthenticatedUser) -> dict[str, str]:
     issuer also uses, so the two carriers cannot disagree. The two flags are
     exactly ``true`` or ``false``: query-api refuses anything else."""
     identity = effective_principal_identity(user)
+    for value in (identity.org_id, identity.role):
+        # A control character in a header value is header injection: refuse.
+        if any(ord(char) < 0x20 or ord(char) == 0x7F for char in value):
+            raise ValueError("identity value is not header safe")
     return {
         _INTERNAL_ORG_ID_HEADER: identity.org_id,
         _INTERNAL_ROLE_HEADER: identity.role,
@@ -637,8 +692,30 @@ class GoApiDispatchRouter(GraphQLRouter[_Context, _RootValue]):
             # The internal identity carrier (CHAOS-6144 P3): plain headers to
             # the internal listener; nothing is signed, and tier /
             # licensed_features are not part of the identity query-api reads.
+            problem = _internal_url_problem(
+                internal_url, os.getenv("GO_API_QUERY_API_URL")
+            )
+            if problem is not None:
+                # Fail closed and LOUD: nothing is sent to a URL that is not
+                # provably internal (a public host would receive the identity).
+                logger.error(
+                    "go_api_dispatch.internal_url_refused",
+                    extra={"operation": selected_operation, "reason": problem},
+                )
+                return self._go_failed(
+                    selected_operation, "go_internal_url_refused", 0.0
+                )
+            try:
+                carrier_headers = _internal_identity_headers(context.user)
+            except ValueError:
+                logger.error(
+                    "go_api_dispatch.identity_not_header_safe",
+                    extra={"operation": selected_operation},
+                )
+                return self._go_failed(
+                    selected_operation, "go_identity_not_header_safe", 0.0
+                )
             target_url = internal_url
-            carrier_headers = _internal_identity_headers(context.user)
         else:
             if context.tier is None or context.licensed_features is None:
                 # Best-effort resolution in get_context can legitimately fail
@@ -688,14 +765,21 @@ class GoApiDispatchRouter(GraphQLRouter[_Context, _RootValue]):
         timeout = _dispatch_timeout_seconds()
         started = time.monotonic()
         client = _get_http_client()
+        # UTF-8 bytes, not str: httpx encodes a str header value as ASCII, and
+        # query-api reads the raw bytes (the same string the envelope carried as
+        # JSON), so a non-ASCII org or role must pass through.
+        outbound_headers: list[tuple[bytes, bytes]] = [
+            (name.encode("ascii"), value.encode("utf-8"))
+            for name, value in (
+                *carrier_headers.items(),
+                ("Content-Type", "application/json"),
+            )
+        ]
         try:
             resp = await client.post(
                 f"{base_url.rstrip('/')}/query",
                 content=outbound_body,
-                headers={
-                    **carrier_headers,
-                    "Content-Type": "application/json",
-                },
+                headers=outbound_headers,
                 timeout=timeout,
             )
         except httpx.TimeoutException:

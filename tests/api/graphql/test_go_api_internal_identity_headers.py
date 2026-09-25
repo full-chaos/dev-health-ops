@@ -5,6 +5,8 @@ effective-principal envelope carries, from the SAME derivation
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import jwt
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
@@ -154,3 +156,80 @@ def test_the_header_names_equal_the_go_constants_query_api_reads() -> None:
 
 def go_dispatcher_headers() -> dict[str, str]:
     return go_api_dispatcher._internal_identity_headers(_user())
+
+
+_GOLDEN = (
+    Path(__file__).resolve().parents[3]
+    / "internal"
+    / "queryapi"
+    / "internalidentity"
+    / "testdata"
+    / "python_edge_identity_headers.json"
+)
+
+
+def _golden_cases() -> list[dict]:
+    """The headers the REAL Python edge function produces for each principal, and
+    the identity the signed envelope carries for the same principal (the
+    differential oracle: the Go reader must read the former as the latter)."""
+    shapes: list[tuple[str, dict, bool]] = [
+        ("member", {"role": "member", "org_id": "org-1"}, False),
+        (
+            "superuser",
+            {"role": "owner", "is_superuser": True, "org_id": "org-1"},
+            False,
+        ),
+        (
+            "admin",
+            {"role": "admin", "org_id": "11111111-1111-4111-8111-111111111111"},
+            False,
+        ),
+        ("non-ascii org and role", {"role": "rôle-é", "org_id": "org-ü"}, False),
+        ("impersonating", {"role": "admin", "org_id": "org-real"}, True),
+    ]
+    cases = []
+    for name, overrides, impersonating in shapes:
+        user = _user(**overrides)
+        token_ctx = None
+        if impersonating:
+            token_ctx = set_impersonation_context(
+                target_user_id="33333333-3333-4333-8333-333333333333",
+                target_org_id="org-target",
+                target_role="viewer",
+                real_user_id=user.user_id,
+            )
+        try:
+            headers = go_api_dispatcher._internal_identity_headers(user)
+            claims = _claims(user)
+        finally:
+            if token_ctx is not None:
+                _impersonation_ctx.reset(token_ctx)
+        cases.append(
+            {
+                "name": name,
+                "headers": headers,
+                "expected": {
+                    "OrgID": claims["org_id"],
+                    "Role": claims["role"],
+                    "IsSuperuser": claims["is_superuser"],
+                    "ImpersonationActive": claims["impersonation_active"],
+                },
+            }
+        )
+    return cases
+
+
+def test_the_golden_read_by_the_go_reader_is_what_the_python_edge_produces(
+    signing_key: None,
+) -> None:
+    """Freshness by execution: the golden file the Go test feeds to
+    ``internalidentity.FromHeader`` is regenerated here from the real Python
+    function and the real envelope and must equal the checked-in file
+    (REGENERATE_PYTHON_EDGE_GOLDEN=1 rewrites it)."""
+    import json
+    import os
+
+    current = {"cases": _golden_cases()}
+    if os.environ.get("REGENERATE_PYTHON_EDGE_GOLDEN") == "1":
+        _GOLDEN.write_text(json.dumps(current, indent=2, ensure_ascii=False) + "\n")
+    assert json.loads(_GOLDEN.read_text()) == current

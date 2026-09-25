@@ -274,7 +274,7 @@ func TestSchedulerProductionFactoryBuildsReviewedRuntime(t *testing.T) {
 			return fixedLoop, nil
 		},
 	}
-	registry := health.NewRegistry(100 * time.Millisecond)
+	registry := health.NewRegistry(readinessTestCheckTimeout)
 	component, err := buildSchedulerLoopWithSources(
 		context.Background(),
 		config.Config{RiverDatabaseSchema: "river"},
@@ -356,7 +356,7 @@ func TestSchedulerProductionFactoryClosesDatabaseOnCompositionFailure(t *testing
 func TestSyncLoopAndOccurrenceReconcilerRunWithoutTheFixedScheduler(t *testing.T) {
 	database := &fakeSchedulerDatabase{pool: &pgxpool.Pool{}, coordinatorPool: &pgxpool.Pool{}}
 	steps := atomic.Int64{}
-	registry := health.NewRegistry(100 * time.Millisecond)
+	registry := health.NewRegistry(readinessTestCheckTimeout)
 	component, err := buildSchedulerLoopWithSources(
 		context.Background(),
 		config.Config{RiverDatabaseSchema: "river"},
@@ -416,7 +416,7 @@ func TestFixedSchedulerStartFailureDoesNotStopTheSyncLoop(t *testing.T) {
 	component, err := buildSchedulerLoopWithSources(
 		context.Background(),
 		config.Config{RiverDatabaseSchema: "river"},
-		health.NewRegistry(100*time.Millisecond),
+		health.NewRegistry(readinessTestCheckTimeout),
 		schedulerRuntimeSources{
 			openDatabase: func(context.Context, config.Config) (schedulerDatabase, error) {
 				return database, nil
@@ -466,7 +466,7 @@ func TestFixedSchedulerStartFailureDoesNotStopTheSyncLoop(t *testing.T) {
 func TestFixedLoopConstructorFailureAfterClaimingReadinessNamesStillStartsTheSyncLoop(t *testing.T) {
 	database := &fakeSchedulerDatabase{pool: &pgxpool.Pool{}, coordinatorPool: &pgxpool.Pool{}}
 	steps := atomic.Int64{}
-	registry := health.NewRegistry(100 * time.Millisecond)
+	registry := health.NewRegistry(readinessTestCheckTimeout)
 	var readinessAttempts, readinessRejected int
 
 	component, err := buildSchedulerLoopWithSources(

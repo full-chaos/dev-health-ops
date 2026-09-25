@@ -3,6 +3,8 @@ package server
 import (
 	"context"
 	"errors"
+	"os"
+	"strings"
 	"testing"
 )
 
@@ -52,5 +54,21 @@ func TestWriteGrantsReadinessClassesAFailureAndPassesOtherwise(t *testing.T) {
 	}
 	if got := readyzDependencyClass(err); got != readyzClassWriteGrants {
 		t.Fatalf("/readyz would report class %q, want %q", got, readyzClassWriteGrants)
+	}
+}
+
+// buildQueryRoute needs a live ClickHouse to run, so the wiring of the check
+// into /readyz is pinned at the call site: the readiness func it hands back
+// must be built WITH the write-grants check, or naming QUERY_API_DATABASE_ROLE
+// would gate nothing.
+func TestBuildQueryRouteWiresTheWriteGrantsCheckIntoReadiness(t *testing.T) {
+	t.Parallel()
+	src, err := os.ReadFile("query_route.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const call = "readinessCheck(chClient, pgPool, verifier, writeGrantsCheck(getenv, pgPool))"
+	if strings.Count(string(src), call) != 1 {
+		t.Fatalf("query_route.go must build its readiness check exactly once, with %q", call)
 	}
 }

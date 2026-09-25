@@ -247,7 +247,19 @@ func decodeCredential(record EncryptedCredential, plaintext []byte) (Credential,
 	for key, value := range record.Config {
 		config[key] = value
 	}
-	return Credential{Provider: record.Provider, ID: record.ID, Name: record.Name, Config: config, fields: fields, deferred: deferred}, nil
+	credential := Credential{Provider: record.Provider, ID: record.ID, Name: record.Name, Config: config, fields: fields, deferred: deferred}
+	// CHAOS-6782: linear_credentials_from_mapping reads
+	// `str(api_key or apiKey or "")`: the canonical spelling wins when it is
+	// truthy (not by document order, unlike GitHub's aliases), otherwise the
+	// camelCase spelling the web wrote.
+	if record.Provider == "linear" {
+		if canonical, ok := credential.Secret("api_key"); !ok || !canonical.Configured() {
+			if alias, ok := credential.Secret("apiKey"); ok && alias.Configured() {
+				fields["api_key"] = alias
+			}
+		}
+	}
+	return credential, nil
 }
 
 // jiraAPITokenAliases lists the spellings a stored Jira credential may use for

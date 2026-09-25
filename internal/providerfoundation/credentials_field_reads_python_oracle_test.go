@@ -54,10 +54,7 @@ print(json.dumps(out))
 // ValidateCredentialShape, and compares whether a credential is built and the
 // text of each field the provider reads. Named divergence, not compared: a
 // NON-EMPTY list or object in a field the provider reads (Python carries
-// str(container); Go leaves the field absent and refuses the shape). Also not
-// in the table, pre-existing and independent of the value's type: Python's
-// linear builder reads the apiKey alias where Go's shape check reads only
-// api_key.
+// str(container); Go leaves the field absent and refuses the shape).
 func TestCredentialFieldReadsMatchLivePython(t *testing.T) {
 	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
 		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
@@ -121,6 +118,16 @@ func TestCredentialFieldReadsMatchLivePython(t *testing.T) {
 		{"linear", `{"api_key": 12}`, linear},
 		{"linear", `{"api_key": 0}`, linear},
 		{"linear", `{"api_key": "k", "workspace_id": 9}`, linear},
+		// CHAOS-6782: the apiKey alias, canonical first when truthy.
+		{"linear", `{"apiKey": "k"}`, linear},
+		{"linear", `{"apiKey": 12.5}`, linear},
+		{"linear", `{"api_key": "canonical", "apiKey": "alias"}`, linear},
+		{"linear", `{"apiKey": "alias", "api_key": "canonical"}`, linear},
+		{"linear", `{"api_key": "", "apiKey": "alias"}`, linear},
+		{"linear", `{"api_key": 0, "apiKey": "alias"}`, linear},
+		{"linear", `{"api_key": null, "apiKey": "alias"}`, linear},
+		{"linear", `{"api_key": "canonical", "apiKey": 0}`, linear},
+		{"linear", `{"apiKey": ""}`, linear},
 	}
 	input, err := json.Marshal(cases)
 	if err != nil {

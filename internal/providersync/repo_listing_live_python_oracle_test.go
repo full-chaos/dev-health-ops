@@ -40,6 +40,10 @@ type listingCase struct {
 	Provider string               `json:"provider"`
 	Listing  map[string]any       `json:"listing"`
 	Script   []listingScriptEntry `json:"script"`
+	// BasePath is a path prefix on the credential's base URL (a GitHub
+	// Enterprise /api/v3, a self-hosted GitLab /c/ok, with or without a trailing
+	// slash); the script URIs carry it.
+	BasePath string `json:"base_path,omitempty"`
 }
 
 type listingOutcome struct {
@@ -107,7 +111,7 @@ func goListing(kase listingCase) listingOutcome {
 	if kase.Provider == "gitlab" {
 		base = "https://gitlab.com" // the production shape: providerfoundation.NewGitLabClient takes the instance host
 	}
-	client, err := providerfoundation.NewHTTPClient(kase.Provider, base, doer,
+	client, err := providerfoundation.NewHTTPClient(kase.Provider, base+kase.BasePath, doer,
 		func(*http.Request) error { return nil },
 		providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond},
 		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))

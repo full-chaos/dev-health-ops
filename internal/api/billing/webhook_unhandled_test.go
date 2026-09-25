@@ -25,8 +25,12 @@ import (
 
 // TestUnhandledStripeEventIsLoggedAndCounted sends signed events of a gap
 // type and of an unknown type through the route: each is a 200 that logs
-// its type and event id and increments the counter.
+// its type and event id and increments the counter. The gap list is empty
+// (every type Python applies is routed), so the test names one of its own.
 func TestUnhandledStripeEventIsLoggedAndCounted(t *testing.T) {
+	const gapType = "test.gap_unit"
+	stripeEventGaps[gapType] = "a gap named by this test"
+	t.Cleanup(func() { delete(stripeEventGaps, gapType) })
 	reader := sdkmetric.NewManualReader()
 	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
 	otel.SetMeterProvider(provider)
@@ -47,13 +51,13 @@ func TestUnhandledStripeEventIsLoggedAndCounted(t *testing.T) {
 		h.stripeWebhook(recorder, request)
 		return recorder.Code
 	}
-	if code := send("charge.refunded", "evt_gap_unit"); code != http.StatusOK {
-		t.Fatalf("charge.refunded answered %d", code)
+	if code := send(gapType, "evt_gap_unit"); code != http.StatusOK {
+		t.Fatalf("gap type answered %d", code)
 	}
 	if code := send("customer.created", "evt_other_unit"); code != http.StatusOK {
 		t.Fatalf("customer.created answered %d", code)
 	}
-	for _, want := range []string{`"type":"charge.refunded"`, `"event_id":"evt_gap_unit"`, `"level":"WARN"`,
+	for _, want := range []string{`"type":"` + gapType + `"`, `"event_id":"evt_gap_unit"`, `"level":"WARN"`,
 		`"type":"customer.created"`, `"event_id":"evt_other_unit"`} {
 		if !strings.Contains(logs.String(), want) {
 			t.Errorf("log lacks %s:\n%s", want, logs.String())
@@ -75,7 +79,7 @@ func TestUnhandledStripeEventIsLoggedAndCounted(t *testing.T) {
 			}
 		}
 	}
-	if counts["charge.refunded"] != 1 || counts["other"] != 1 {
-		t.Errorf("counter by event_type = %v, want charge.refunded=1 other=1", counts)
+	if counts[gapType] != 1 || counts["other"] != 1 {
+		t.Errorf("counter by event_type = %v, want the gap type=1 other=1", counts)
 	}
 }

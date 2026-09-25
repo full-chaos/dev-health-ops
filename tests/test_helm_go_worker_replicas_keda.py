@@ -72,3 +72,18 @@ def test_disabling_autoscaling_restores_fixed_replicas() -> None:
         if n not in scaled and d["spec"].get("replicas") == 3
     ]
     assert unscaled_three, (workers.keys(), scaled)
+
+
+def test_autoscaled_group_with_a_minimum_above_one_is_refused() -> None:
+    """r1 P1: a fresh install of `replicas: 3, minReplicas: 3` started at 1 replica (below its minimum) until KEDA reconciled."""
+    groups = yaml.safe_load((_CHART / "values.yaml").read_text())["goWorkers"]["groups"]
+    groups[0] = {
+        **groups[0],
+        "replicas": 3,
+        "autoscaling": {**groups[0]["autoscaling"], "minReplicas": 3, "maxReplicas": 4},
+    }
+    args = ["helm", "template", "t", str(_CHART), "--set-json"]
+    args.append(f"goWorkers.groups={json.dumps(groups)}")
+    result = run(args, capture_output=True, text=True)
+    assert result.returncode != 0
+    assert "would run below its own minimum" in result.stderr, result.stderr

@@ -4,6 +4,7 @@ package operational
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -755,5 +756,90 @@ func TestTriggerScopedSyncIsIdempotentOnRetry(t *testing.T) {
 	}
 	if countRows(ctx, t, pool, "public.sync_manual_triggers") != 1 {
 		t.Fatal("a retried delivery must never mint a second manual-trigger row")
+	}
+}
+
+// TestEnsureScheduledJobConcurrentFirstDeliveriesMintOneJob races several
+// first deliveries for one never-scheduled config. The insert's ON CONFLICT
+// DO NOTHING plus the read-back must give every caller the same job id and
+// leave exactly one scheduled_jobs row -- no 23505, no second job.
+func TestEnsureScheduledJobConcurrentFirstDeliveriesMintOneJob(t *testing.T) {
+	const callers = 12
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	config, err := pgxpool.ParseConfig(instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.MaxConns = callers + 4
+	pool, err := pgxpool.NewWithConfig(ctx, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	applySyncDispatchSchema(ctx, t, pool)
+	sourceID := insertIntegrationSource(ctx, t, pool, "org-1", "github", "42", "full-chaos/dev-health")
+	configID := insertSyncConfiguration(ctx, t, pool, "org-1", "github", sourceID, `{}`)
+
+	start := make(chan struct{})
+	ids := make([]string, callers)
+	errs := make([]error, callers)
+	var wg sync.WaitGroup
+	for index := 0; index < callers; index++ {
+		wg.Add(1)
+		go func(index int) {
+			defer wg.Done()
+			<-start
+			ids[index], errs[index] = ensureScheduledJobForSyncConfig(ctx, pool, "org-1", configID, "github", map[string]any{}, true)
+		}(index)
+	}
+	// Hold a SHARE lock so every caller passes its initial SELECT (ACCESS
+	// SHARE does not conflict) and then blocks on its INSERT (ROW EXCLUSIVE
+	// does). Releasing the lock only once all of them are waiting forces the
+	// insert race instead of hoping the scheduler produces it.
+	gate, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gate.Exec(ctx, "LOCK TABLE public.scheduled_jobs IN SHARE MODE"); err != nil {
+		t.Fatal(err)
+	}
+	close(start)
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		var waiting int
+		if err := pool.QueryRow(ctx, `
+SELECT count(*) FROM pg_stat_activity
+WHERE datname = current_database() AND wait_event_type = 'Lock' AND query LIKE '%INSERT INTO public.scheduled_jobs%'`,
+		).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting == callers {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("only %d of %d callers reached the INSERT", waiting, callers)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if err := gate.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	wg.Wait()
+	for index := 0; index < callers; index++ {
+		if errs[index] != nil {
+			t.Fatalf("caller %d: %v", index, errs[index])
+		}
+		if ids[index] == "" || ids[index] != ids[0] {
+			t.Fatalf("caller %d got job %q, caller 0 got %q", index, ids[index], ids[0])
+		}
+	}
+	if got := countRows(ctx, t, pool, "public.scheduled_jobs"); got != 1 {
+		t.Fatalf("scheduled_jobs rows = %d, want 1", got)
 	}
 }

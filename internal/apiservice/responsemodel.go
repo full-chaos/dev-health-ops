@@ -172,6 +172,7 @@ var responseModelRoutes = map[string]bool{
 	"POST /api/v1/admin/retention-policies/{policy_id}/execute":           true,
 	"POST /api/v1/admin/settings":                                         true,
 	"POST /api/v1/admin/sync-configs":                                     true,
+	"POST /api/v1/admin/sync-configs/batch":                               true,
 	"POST /api/v1/admin/teams":                                            true,
 	"POST /api/v1/admin/teams/import":                                     true,
 	"POST /api/v1/admin/teams/{team_id}/approve-changes":                  true,

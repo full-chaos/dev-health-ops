@@ -108,6 +108,8 @@ func Routes(deps Deps) []httpapi.Route {
 		{Method: http.MethodGet, Pattern: prefix + "/sync-configs", Handler: wrap(h.listSyncConfigs)},
 		{Method: http.MethodPost, Pattern: prefix + "/sync-configs",
 			Handler: deps.Guard.BodyFirst(policy.AdminOrg, http.HandlerFunc(h.createSyncConfig))},
+		{Method: http.MethodPost, Pattern: prefix + "/sync-configs/batch",
+			Handler: deps.Guard.BodyFirst(policy.AdminOrg, http.HandlerFunc(h.batchCreateSyncConfigs))},
 		{Method: http.MethodGet, Pattern: prefix + "/sync-configs/{config_id}", Handler: wrap(h.getSyncConfig)},
 		{Method: http.MethodDelete, Pattern: prefix + "/sync-configs/{config_id}", Handler: wrap(h.deleteSyncConfig)},
 		{Method: http.MethodGet, Pattern: prefix + "/sync-configs/{config_id}/repositories", Handler: wrap(h.getRepositories)},

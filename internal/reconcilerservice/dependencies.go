@@ -683,13 +683,19 @@ func configureReconcilerDependenciesWithActivationSourcesAndLogger(
 		return nil, err
 	}
 	domainPool := dependencies.database.DomainPool()
-	livenessMonitor = selfprobe.New("reconciler_execution_liveness", busyprobe.Opener{
-		Inner:     selfprobe.NewPool(domainPool),
-		Check:     "execution_liveness",
-		Saturated: func() bool { return busyprobe.Saturated(domainPool) },
-		Progress:  busyprobe.NewPoolProgress(domainPool, busyProgressWindow).Ready,
-		Counter:   busy,
-	}, logger)
+	// A nil domain pool (test fixtures only) keeps a nil opener, so no monitor is
+	// constructed and execution_liveness reports unavailable, exactly as before.
+	var livenessOpener selfprobe.TxOpener
+	if domainPool != nil {
+		livenessOpener = busyprobe.Opener{
+			Inner:     selfprobe.NewPool(domainPool),
+			Check:     "execution_liveness",
+			Saturated: func() bool { return busyprobe.Saturated(domainPool) },
+			Progress:  busyprobe.NewPoolProgress(domainPool, busyProgressWindow).Ready,
+			Counter:   busy,
+		}
+	}
+	livenessMonitor = selfprobe.New("reconciler_execution_liveness", livenessOpener, logger)
 	if livenessMonitor != nil {
 		livenessMonitor.Probe(ctx)
 		components = append(components, livenessMonitor)

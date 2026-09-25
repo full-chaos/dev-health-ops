@@ -2,6 +2,7 @@ package schedulerservice
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"testing"
 	"time"
@@ -94,4 +95,74 @@ func TestExecutionLivenessSamplePassesAsBusyOnAFullyAcquiredDomainPool(t *testin
 	if status := registry.CheckRequired(ctx); containsString(status.Failed, "execution_liveness") {
 		t.Fatalf("a busy sample left execution_liveness failed: %v", status.Failed)
 	}
+}
+
+// cachedPostureDatabase is a fake that offers a cached domain posture check.
+type cachedPostureDatabase struct {
+	*fakeSchedulerDatabase
+	check health.CheckFunc
+}
+
+func (database *cachedPostureDatabase) DomainPostureCheck(*slog.Logger) health.CheckFunc {
+	return database.check
+}
+
+// CHAOS-6771 (r1 pin): domain_postgres must run the CACHED posture check when
+// the database offers one, and only fall back to DomainReady when it does not.
+// The provider check fails while DomainReady would pass, so a registration that
+// ignored the provider reads as ready and fails this test.
+func TestDomainPostgresRunsTheCachedPostureCheckWhenOffered(t *testing.T) {
+	build := func(t *testing.T, database schedulerDatabase, fake *fakeSchedulerDatabase) *health.Registry {
+		t.Helper()
+		ctx := context.Background()
+		fake.pool, _ = pgxpool.New(ctx, "postgresql://domain@127.0.0.1:1/devhealth")
+		fake.coordinatorPool, _ = pgxpool.New(ctx, "postgresql://coordinator@127.0.0.1:1/devhealth")
+		t.Cleanup(fake.pool.Close)
+		t.Cleanup(fake.coordinatorPool.Close)
+		sources := schedulerRuntimeSources{
+			openDatabase: func(context.Context, config.Config) (schedulerDatabase, error) { return database, nil },
+			newRepository: func(*pgxpool.Pool) (schedulersync.HandoffStepper, error) {
+				return schedulerHandoffStepperFunc(func(
+					context.Context, time.Time, int, schedulersync.Coordinator,
+				) (schedulersync.HandoffResult, error) {
+					return schedulersync.HandoffResult{}, nil
+				}), nil
+			},
+			newCoordinator: schedulersync.NewOccurrenceCoordinator,
+			newLoop:        schedulersync.NewLoop,
+			newOccurrences: stubOccurrenceSource,
+			newFixedLoop: func(*pgxpool.Pool, *health.Registry, *slog.Logger) (fixedScheduleRuntime, error) {
+				return &fakeFixedLoop{}, nil
+			},
+		}
+		registry := health.NewRegistry(readinessTestCheckTimeout)
+		if _, err := buildSchedulerLoopWithSources(ctx, config.Config{}, registry, sources, slog.Default()); err != nil {
+			t.Fatalf("buildSchedulerLoopWithSources() error = %v", err)
+		}
+		return registry
+	}
+	t.Run("provider check used", func(t *testing.T) {
+		fake := &fakeSchedulerDatabase{}
+		database := &cachedPostureDatabase{fakeSchedulerDatabase: fake, check: func(context.Context) error {
+			return errors.New("cached posture refused")
+		}}
+		status := build(t, database, fake).CheckRequired(context.Background())
+		if !containsString(status.Failed, "domain_postgres") {
+			t.Fatalf("domain_postgres ignored the provider's cached check: failed=%v", status.Failed)
+		}
+		if fake.domainCalls.Load() != 0 {
+			t.Fatalf("DomainReady ran %d times although a cached check was offered", fake.domainCalls.Load())
+		}
+	})
+	t.Run("no provider check falls back to DomainReady", func(t *testing.T) {
+		fake := &fakeSchedulerDatabase{}
+		database := &cachedPostureDatabase{fakeSchedulerDatabase: fake, check: nil}
+		status := build(t, database, fake).CheckRequired(context.Background())
+		if containsString(status.Failed, "domain_postgres") {
+			t.Fatalf("the fallback DomainReady (healthy) failed: %v", status.Failed)
+		}
+		if fake.domainCalls.Load() == 0 {
+			t.Fatal("DomainReady was not consulted when no cached check was offered")
+		}
+	})
 }

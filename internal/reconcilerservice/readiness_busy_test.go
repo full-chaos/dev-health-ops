@@ -2,6 +2,8 @@ package reconcilerservice
 
 import (
 	"context"
+	"errors"
+	"log/slog"
 	"path/filepath"
 	"slices"
 	"testing"
@@ -106,4 +108,89 @@ func TestExecutionLivenessSamplePassesAsBusyOnAFullyAcquiredDomainPool(t *testin
 	if status := registry.Readiness(ctx); slices.Contains(status.Failed, "execution_liveness") {
 		t.Fatalf("a busy sample left execution_liveness failed: %v", status.Failed)
 	}
+}
+
+// cachedPostureDatabase is a fake that offers a cached domain posture check.
+type cachedPostureDatabase struct {
+	*fakeReconcilerDatabase
+	check health.CheckFunc
+}
+
+func (database *cachedPostureDatabase) DomainPostureCheck(*slog.Logger) health.CheckFunc {
+	return database.check
+}
+
+// CHAOS-6771 (r1 pin): domain_postgres must run the CACHED posture check when
+// the database offers one, and only fall back to DomainReady when it does not.
+// The provider check fails while DomainReady would pass, so a registration that
+// ignored the provider reads as ready and fails this test.
+func TestDomainPostgresRunsTheCachedPostureCheckWhenOffered(t *testing.T) {
+	t.Chdir(filepath.Join("..", ".."))
+	// The composition whose only failing check is execution_liveness (a lazy,
+	// never-connecting domain pool), so domain_postgres reflects the check under
+	// test and nothing else.
+	newSources := func(t *testing.T, database reconcilerDatabase) reconcilerDependencySources {
+		t.Helper()
+		sources := reconcilerSourcesForTest(t, database)
+		sources.buildRelay = func(*pgxpool.Pool, *pgxpool.Pool, *pgxpool.Pool, string, *jobruntime.Registry) (joboutbox.RelayStepper, error) {
+			return reconcilerStepFunc(func(context.Context, time.Time, int) (joboutbox.StepResult, error) {
+				return joboutbox.StepResult{}, nil
+			}), nil
+		}
+		sources.buildSyncMutation = func(
+			*pgxpool.Pool, *pgxpool.Pool, *pgxpool.Pool, string,
+			*syncdispatchcontract.Registry, config.Config, *health.Registry,
+		) (syncreconciler.Stepper, error) {
+			return syncStepFunc(func(context.Context, time.Time, int) (syncreconciler.Observation, error) {
+				return syncreconciler.Observation{}, nil
+			}), nil
+		}
+		return sources
+	}
+	lazyPool := func(t *testing.T) *pgxpool.Pool {
+		t.Helper()
+		pool, err := pgxpool.New(context.Background(), "postgresql://reconciler@127.0.0.1:1/devhealth")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(pool.Close)
+		return pool
+	}
+	readinessOf := func(t *testing.T, database reconcilerDatabase) []string {
+		t.Helper()
+		registry := health.NewRegistry(readinessTestCheckTimeout)
+		if _, err := configureReconcilerDependenciesWithSourcesAndLogger(
+			context.Background(), config.Config{RiverDatabaseSchema: "river"}, registry,
+			reconcilerTestLogger(), newSources(t, database),
+		); err != nil {
+			t.Fatalf("configureReconcilerDependenciesWithSourcesAndLogger() error = %v", err)
+		}
+		if err := (health.Gate{Registry: registry}).Start(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		return registry.Readiness(context.Background()).Failed
+	}
+	t.Run("provider check used", func(t *testing.T) {
+		fake := &fakeReconcilerDatabase{domainPool: lazyPool(t)} // DomainReady passes
+		database := &cachedPostureDatabase{fakeReconcilerDatabase: fake, check: func(context.Context) error {
+			return errors.New("cached posture refused")
+		}}
+		if failed := readinessOf(t, database); !slices.Contains(failed, "domain_postgres") {
+			t.Fatalf("domain_postgres ignored the provider's cached check: failed=%v", failed)
+		}
+	})
+	t.Run("healthy provider check leaves domain_postgres ready", func(t *testing.T) {
+		fake := &fakeReconcilerDatabase{domainPool: lazyPool(t), domainErr: errors.New("DomainReady must not run")}
+		database := &cachedPostureDatabase{fakeReconcilerDatabase: fake, check: func(context.Context) error { return nil }}
+		if failed := readinessOf(t, database); slices.Contains(failed, "domain_postgres") {
+			t.Fatalf("a healthy cached check still failed domain_postgres (DomainReady ran?): failed=%v", failed)
+		}
+	})
+	t.Run("no provider check falls back to DomainReady", func(t *testing.T) {
+		fake := &fakeReconcilerDatabase{domainPool: lazyPool(t), domainErr: errors.New("domain refused")}
+		database := &cachedPostureDatabase{fakeReconcilerDatabase: fake, check: nil}
+		if failed := readinessOf(t, database); !slices.Contains(failed, "domain_postgres") {
+			t.Fatalf("the fallback DomainReady (refusing) did not fail domain_postgres: failed=%v", failed)
+		}
+	})
 }

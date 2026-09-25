@@ -5179,7 +5179,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/pagerduty.py",
-        "line": 264,
+        "line": 221,
         "router_local_path": "/integrations/pagerduty/authorize"
       },
       "gaps": [],
@@ -5244,7 +5244,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/pagerduty.py",
-        "line": 291,
+        "line": 233,
         "router_local_path": "/integrations/pagerduty/callback"
       },
       "gaps": [],
@@ -5309,7 +5309,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/pagerduty.py",
-        "line": 542,
+        "line": 252,
         "router_local_path": "/integrations/pagerduty/status"
       },
       "gaps": [],
@@ -5374,7 +5374,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/pagerduty.py",
-        "line": 598,
+        "line": 264,
         "router_local_path": "/integrations/pagerduty/disconnect"
       },
       "gaps": [],
@@ -5439,7 +5439,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/pagerduty.py",
-        "line": 621,
+        "line": 276,
         "router_local_path": "/integrations/pagerduty/preflight"
       },
       "gaps": [],
@@ -5504,7 +5504,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/pagerduty.py",
-        "line": 676,
+        "line": 288,
         "router_local_path": "/integrations/pagerduty/client-credentials"
       },
       "gaps": [],
@@ -5569,7 +5569,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/pagerduty.py",
-        "line": 739,
+        "line": 302,
         "router_local_path": "/integrations/pagerduty/api-token"
       },
       "gaps": [],
@@ -5634,7 +5634,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/pagerduty_bindings.py",
-        "line": 83,
+        "line": 38,
         "router_local_path": "/integrations/pagerduty/webhook-bindings"
       },
       "gaps": [],
@@ -5699,7 +5699,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/pagerduty_bindings.py",
-        "line": 102,
+        "line": 52,
         "router_local_path": "/integrations/pagerduty/webhook-bindings/{binding_id}/rotate"
       },
       "gaps": [],
@@ -5764,7 +5764,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/pagerduty_bindings.py",
-        "line": 126,
+        "line": 67,
         "router_local_path": "/integrations/pagerduty/webhook-bindings/{binding_id}/activate"
       },
       "gaps": [],
@@ -5829,7 +5829,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/pagerduty_bindings.py",
-        "line": 145,
+        "line": 81,
         "router_local_path": "/integrations/pagerduty/webhook-bindings/{binding_id}/revoke"
       },
       "gaps": [],
@@ -5894,7 +5894,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/pagerduty_bindings.py",
-        "line": 161,
+        "line": 95,
         "router_local_path": "/integrations/pagerduty/webhook-bindings/{binding_id}"
       },
       "gaps": [],
@@ -5959,7 +5959,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/pagerduty_services.py",
-        "line": 137,
+        "line": 28,
         "router_local_path": "/integrations/pagerduty/services"
       },
       "gaps": [],

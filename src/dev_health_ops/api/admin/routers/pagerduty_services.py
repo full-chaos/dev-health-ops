@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, ConfigDict
 
 from dev_health_ops.api.admin.middleware import get_admin_org_id
-from dev_health_ops.api.go_served import _raise_served_by_go_api
+from dev_health_ops.api.go_served import GO_API, raise_served_by_go_api
 
 router = APIRouter()
 
@@ -33,4 +33,4 @@ async def list_pagerduty_services(
     credential_name: str = Query(default="default", min_length=1),
     org_id: str = Depends(get_admin_org_id),
 ) -> PagerDutyServicesResponse:
-    _raise_served_by_go_api("/api/v1/admin/integrations/pagerduty/services")
+    raise_served_by_go_api("/api/v1/admin/integrations/pagerduty/services", GO_API)

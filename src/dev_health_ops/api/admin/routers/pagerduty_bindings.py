@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel, ConfigDict, Field
 
 from dev_health_ops.api.admin.middleware import get_admin_org_id
-from dev_health_ops.api.go_served import _raise_served_by_go_api
+from dev_health_ops.api.go_served import GO_API, raise_served_by_go_api
 
 router = APIRouter()
 
@@ -44,7 +44,9 @@ async def create_pagerduty_webhook_binding(
     body: PagerDutyWebhookBindingRequest,
     org_id: str = Depends(get_admin_org_id),
 ) -> PagerDutyWebhookBindingResponse:
-    _raise_served_by_go_api("/api/v1/admin/integrations/pagerduty/webhook-bindings")
+    raise_served_by_go_api(
+        "/api/v1/admin/integrations/pagerduty/webhook-bindings", GO_API
+    )
 
 
 @router.post(
@@ -56,8 +58,9 @@ async def rotate_pagerduty_webhook_binding(
     body: PagerDutyWebhookBindingRequest,
     org_id: str = Depends(get_admin_org_id),
 ) -> PagerDutyWebhookBindingResponse:
-    _raise_served_by_go_api(
-        "/api/v1/admin/integrations/pagerduty/webhook-bindings/{binding_id}/rotate"
+    raise_served_by_go_api(
+        "/api/v1/admin/integrations/pagerduty/webhook-bindings/{binding_id}/rotate",
+        GO_API,
     )
 
 
@@ -69,8 +72,9 @@ async def activate_pagerduty_webhook_binding(
     binding_id: UUID,
     org_id: str = Depends(get_admin_org_id),
 ) -> PagerDutyWebhookBindingResponse:
-    _raise_served_by_go_api(
-        "/api/v1/admin/integrations/pagerduty/webhook-bindings/{binding_id}/activate"
+    raise_served_by_go_api(
+        "/api/v1/admin/integrations/pagerduty/webhook-bindings/{binding_id}/activate",
+        GO_API,
     )
 
 
@@ -82,8 +86,9 @@ async def revoke_pagerduty_webhook_binding(
     binding_id: UUID,
     org_id: str = Depends(get_admin_org_id),
 ) -> PagerDutyWebhookBindingResponse:
-    _raise_served_by_go_api(
-        "/api/v1/admin/integrations/pagerduty/webhook-bindings/{binding_id}/revoke"
+    raise_served_by_go_api(
+        "/api/v1/admin/integrations/pagerduty/webhook-bindings/{binding_id}/revoke",
+        GO_API,
     )
 
 
@@ -95,6 +100,6 @@ async def get_pagerduty_webhook_binding(
     binding_id: UUID,
     org_id: str = Depends(get_admin_org_id),
 ) -> PagerDutyWebhookBindingResponse:
-    _raise_served_by_go_api(
-        "/api/v1/admin/integrations/pagerduty/webhook-bindings/{binding_id}"
+    raise_served_by_go_api(
+        "/api/v1/admin/integrations/pagerduty/webhook-bindings/{binding_id}", GO_API
     )

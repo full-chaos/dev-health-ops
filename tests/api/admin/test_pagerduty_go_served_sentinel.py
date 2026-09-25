@@ -4,7 +4,7 @@ Their Python handlers keep the route mounted (path, methods, parameters,
 ``Depends`` gates, ``response_model``) with the body reduced to the Go-served
 refusal (``api/go_served.py``). A request that reaches one on the Python plane
 is ingress skew, never a request the Python side can answer: it gets the
-diagnostic 500 and the ``rest.route_served_by_query_api`` event, after the
+diagnostic 500 and the ``rest.route_served_by_go_api`` event, after the
 admin gate has run. The behaviour these routes had (setup, callback, status,
 preflight, disconnect, manual credentials, webhook bindings, services) is
 owned and proven by the Go api's venue oracles against the real Python plane,
@@ -126,12 +126,13 @@ def test_the_python_handler_answers_the_go_served_refusal(
         response = _client.request(method, url, json=body)
     assert response.status_code == 500, response.text
     detail = response.json().get("detail", "")
-    assert template in detail and "query-api" in detail, detail
+    assert template in detail and "served by go-api" in detail, detail
     assert any(
-        record.message == "rest.route_served_by_query_api"
+        record.message == "rest.route_served_by_go_api"
         and getattr(record, "path", None) == template
+        and getattr(record, "plane", None) == "go-api"
         for record in caplog.records
-    ), f"{method} {url} did not emit rest.route_served_by_query_api for {template}"
+    ), f"{method} {url} did not emit rest.route_served_by_go_api for {template}"
 
 
 def test_every_pagerduty_admin_route_the_go_api_serves_is_a_stub() -> None:

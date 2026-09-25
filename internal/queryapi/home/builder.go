@@ -11,6 +11,7 @@ package home
 import (
 	"context"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
 	"math"
 	"strings"
 	"sync"
@@ -39,7 +40,7 @@ func sparkPoints(rows []dayValueRow, transform func(float64) float64) []SparkPoi
 	points := make([]SparkPoint, 0, len(rows))
 	for _, row := range rows {
 		value := safeFloat(row.Value)
-		points = append(points, SparkPoint{TS: NaiveDateTime(row.Day), Value: safeFloat(transform(value))})
+		points = append(points, SparkPoint{TS: pytime.NaiveDay(row.Day), Value: safeFloat(transform(value))})
 	}
 	return points
 }
@@ -320,7 +321,7 @@ func BuildResponse(ctx context.Context, chClient QueryClient, pgClient PGQueryCl
 
 	return &Response{
 		Freshness: Freshness{
-			LastIngestedAt:         (*NaiveDateTime)(lastIngested),
+			LastIngestedAt:         (*pytime.NaiveDateTime)(lastIngested),
 			LatestSuccessfulSyncAt: (*MicroDateTime)(latestSuccessfulSyncAt),
 			Sources:                sources,
 			Coverage: Coverage{

@@ -1378,3 +1378,227 @@ async def test_the_plane_header_passes_through_when_the_flag_is_on(
     assert result is not None
     assert result.headers.get("x-dev-health-plane") == "go"
     assert result.headers.get("x-dev-health-build") == "build-A"
+
+
+# ---------------------------------------------------------------------------
+# Mutation documents (CHAOS-6803, R322)
+# ---------------------------------------------------------------------------
+
+TEST_MUTATION = "mutation Test { doThing { id } }"
+
+
+@pytest.fixture
+def mutation_catalog(monkeypatch: pytest.MonkeyPatch):
+    """The catalog registers ``TEST_OPERATION`` as a mutation document."""
+    monkeypatch.setattr(
+        go_api_dispatcher,
+        "is_mutation_operation",
+        lambda operation: operation == TEST_OPERATION,
+    )
+
+
+def _failure_error(result: Response | None) -> dict[str, Any]:
+    assert result is not None
+    (error,) = json.loads(bytes(result.body))["errors"]
+    return error
+
+
+async def test_mutation_document_over_get_stays_on_python_and_reaches_no_go(
+    router: GoApiDispatchRouter,
+    routing_row_mode,
+    valid_envelope_inputs,
+    mutation_catalog,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """The edge forwards every request as a POST, so dispatching a GET would
+    turn GraphQL's refusal of a mutation over GET into an executed write."""
+    routing_row_mode("canary")
+    calls: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(200, json={"data": {}})
+
+    monkeypatch.setattr(
+        go_api_dispatcher, "_get_http_client", lambda: _mock_transport(handler)
+    )
+    fallbacks: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        go_api_dispatcher.GoApiDispatchRouter,
+        "_fallback",
+        staticmethod(lambda operation, reason: fallbacks.append((operation, reason))),
+    )
+    context = _context(user=_sample_user(), tier=LicenseTier.TEAM, licensed_features=[])
+
+    result = await router._maybe_dispatch_to_go(_get_request(TEST_MUTATION), context)
+
+    assert result is None
+    assert calls == []
+    assert fallbacks == [(TEST_OPERATION, "mutation_over_get")]
+
+
+async def test_query_document_over_get_is_still_dispatched(
+    router: GoApiDispatchRouter,
+    routing_row_mode,
+    valid_envelope_inputs,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    routing_row_mode("canary")
+    calls: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(200, json={"data": {"thing": None}})
+
+    monkeypatch.setattr(
+        go_api_dispatcher, "_get_http_client", lambda: _mock_transport(handler)
+    )
+    context = _context(user=_sample_user(), tier=LicenseTier.TEAM, licensed_features=[])
+
+    result = await router._maybe_dispatch_to_go(_get_request(TEST_QUERY), context)
+
+    assert result is not None and result.status_code == 200
+    assert len(calls) == 1 and calls[0].method == "POST"
+
+
+async def test_mutation_document_over_post_is_forwarded_verbatim(
+    router: GoApiDispatchRouter,
+    routing_row_mode,
+    valid_envelope_inputs,
+    mutation_catalog,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    routing_row_mode("canary")
+    calls: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(200, json={"data": {"doThing": {"id": "1"}}})
+
+    monkeypatch.setattr(
+        go_api_dispatcher, "_get_http_client", lambda: _mock_transport(handler)
+    )
+    request = _post_request(TEST_MUTATION, {"x": 1})
+    original = await request.body()
+    context = _context(user=_sample_user(), tier=LicenseTier.TEAM, licensed_features=[])
+
+    result = await router._maybe_dispatch_to_go(request, context)
+
+    assert result is not None and result.status_code == 200
+    assert len(calls) == 1 and calls[0].content == original
+
+
+@pytest.mark.parametrize(
+    "outcome, reason, marked",
+    [
+        ("timeout", "go_timeout", True),
+        ("request_error", "go_request_error", True),
+        ("5xx", "go_5xx", True),
+        ("unexpected_status", "go_unexpected_status", True),
+        ("html_200", "go_invalid_response", True),
+        ("connect_error", "go_connection_error", False),
+        ("404", "go_404_digest_miss", False),
+        ("405", "go_405_method_not_allowed", False),
+    ],
+)
+async def test_mutation_failure_after_go_was_asked_never_runs_python_and_marks_unknown_writes(
+    router: GoApiDispatchRouter,
+    routing_row_mode,
+    valid_envelope_inputs,
+    mutation_catalog,
+    monkeypatch: pytest.MonkeyPatch,
+    outcome: str,
+    reason: str,
+    marked: bool,
+):
+    """No Python re-run after Go was asked: the Python resolver has a body and
+    would apply the write a second time. A failure after the request was sent
+    leaves the write's outcome unknown, and the error says so; one that
+    provably ran nothing does not."""
+    routing_row_mode("canary")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if outcome == "timeout":
+            raise httpx.TimeoutException("timed out", request=request)
+        if outcome == "request_error":
+            raise httpx.ReadError("reset", request=request)
+        if outcome == "connect_error":
+            raise httpx.ConnectError("refused", request=request)
+        if outcome == "html_200":
+            return httpx.Response(
+                200, text="<html></html>", headers={"content-type": "text/html"}
+            )
+        return httpx.Response(
+            {"5xx": 503, "unexpected_status": 418, "404": 404, "405": 405}[outcome]
+        )
+
+    monkeypatch.setattr(
+        go_api_dispatcher, "_get_http_client", lambda: _mock_transport(handler)
+    )
+    context = _context(user=_sample_user(), tier=LicenseTier.TEAM, licensed_features=[])
+
+    result = await router._maybe_dispatch_to_go(_post_request(TEST_MUTATION), context)
+
+    error = _failure_error(result)  # never None: Python did not run
+    assert error["extensions"]["code"] == reason
+    if marked:
+        assert error["extensions"]["writeOutcome"] == "unknown"
+        assert "the write may have been applied" in error["message"]
+    else:
+        assert "writeOutcome" not in error["extensions"]
+        assert "may have been applied" not in error["message"]
+
+
+async def test_query_failure_carries_no_write_outcome_marker(
+    router: GoApiDispatchRouter,
+    routing_row_mode,
+    valid_envelope_inputs,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    routing_row_mode("canary")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.TimeoutException("timed out", request=request)
+
+    monkeypatch.setattr(
+        go_api_dispatcher, "_get_http_client", lambda: _mock_transport(handler)
+    )
+    context = _context(user=_sample_user(), tier=LicenseTier.TEAM, licensed_features=[])
+
+    error = _failure_error(
+        await router._maybe_dispatch_to_go(_post_request(TEST_QUERY), context)
+    )
+
+    assert "writeOutcome" not in error["extensions"]
+    assert "may have been applied" not in error["message"]
+
+
+# Every reason the dispatcher can fail a request with after query-api was asked,
+# each classified: did the request possibly reach query-api and run the write?
+_NEVER_RAN_A_WRITE = frozenset(
+    {"go_connection_error", "go_404_digest_miss", "go_405_method_not_allowed"}
+)
+
+
+async def test_every_go_failure_reason_is_classified_for_writes():
+    """The reasons come from the dispatcher's own source (its ``_go_failed``
+    call sites), not a list kept here: a new reason is unclassified, and this
+    goes red until it is placed in the may-have-run set or the never-ran set."""
+    import ast
+    import inspect
+
+    tree = ast.parse(inspect.getsource(go_api_dispatcher))
+    reasons: set[str] = set()
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "_go_failed"
+        ):
+            literal = node.args[1]
+            assert isinstance(literal, ast.Constant) and isinstance(literal.value, str)
+            reasons.add(literal.value)
+    assert reasons, "found no _go_failed call sites: the detector is stale"
+    classified = go_api_dispatcher._WRITE_OUTCOME_UNKNOWN_REASONS | _NEVER_RAN_A_WRITE
+    assert reasons == classified
+    assert not go_api_dispatcher._WRITE_OUTCOME_UNKNOWN_REASONS & _NEVER_RAN_A_WRITE

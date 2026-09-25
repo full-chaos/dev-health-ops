@@ -304,7 +304,7 @@ func configureWith(
 	deps.BillingConfig = cfg.APIBilling
 	deps.StripeWebhookSecret = cfg.StripeWebhookSecret
 	deps.LicensePrivateKey = cfg.LicensePrivateKey
-	deps.PagerDuty = providerfoundation.PagerDutyRevokeConfig{ClientID: cfg.PagerDutyOAuthClientID.Reveal()}
+	deps.PagerDuty = providerfoundation.PagerDutyRevokeConfig{ClientID: cfg.PagerDutyOAuthClientID.Reveal(), RedirectURI: cfg.PagerDutyOAuthRedirectURI}
 	// deps.ClickHouseDSN: see Deps' own doc comment for why this is
 	// CLICKHOUSE_URI, never API_CLICKHOUSE_URI.
 	if cfg.ClickHouseURI.Configured() {

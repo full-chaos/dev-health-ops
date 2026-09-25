@@ -210,6 +210,10 @@ var optionRegistry = []Option{
 		Usage: "comma-separated CORS allow-list for the api (same format as the Python api)",
 	},
 	{
+		Flag: "pagerduty-oauth-redirect-uri", Env: "PAGER_DUTY_REDIRECT_URI", Kind: KindString, Services: []string{APIServiceName}, Group: GroupRuntime,
+		Usage: "public callback URL PagerDuty OAuth redirects back to (the Python api's own PAGER_DUTY_REDIRECT_URI, unset: empty string, unused by the client-credentials flow)",
+	},
+	{
 		Flag: "expected-worker-groups", Env: "EXPECTED_WORKER_GROUPS", Kind: KindString, Services: []string{APIServiceName}, Group: GroupRuntime,
 		Usage: "comma-separated worker groups /health/workers requires a live heartbeat from (unset: no Go fleet declared)",
 	},

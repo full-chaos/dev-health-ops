@@ -56,9 +56,13 @@ func TestUnhandledStripeEventIsLoggedAndCounted(t *testing.T) {
 	}
 	if code := send("customer.created", "evt_other_unit"); code != http.StatusOK {
 		t.Fatalf("customer.created answered %d", code)
+	} // A charge.refunded whose charge carries no refund list (every current
+	// Stripe API version) writes nothing, so it is logged and counted too.
+	if code := send("charge.refunded", "evt_no_list_unit"); code != http.StatusOK {
+		t.Fatalf("charge.refunded answered %d", code)
 	}
 	for _, want := range []string{`"type":"` + gapType + `"`, `"event_id":"evt_gap_unit"`, `"level":"WARN"`,
-		`"type":"customer.created"`, `"event_id":"evt_other_unit"`} {
+		`"type":"customer.created"`, `"event_id":"evt_other_unit"`, `"event_id":"evt_no_list_unit"`, "no refund list"} {
 		if !strings.Contains(logs.String(), want) {
 			t.Errorf("log lacks %s:\n%s", want, logs.String())
 		}
@@ -79,7 +83,7 @@ func TestUnhandledStripeEventIsLoggedAndCounted(t *testing.T) {
 			}
 		}
 	}
-	if counts[gapType] != 1 || counts["other"] != 1 {
-		t.Errorf("counter by event_type = %v, want the gap type=1 other=1", counts)
+	if counts[gapType] != 1 || counts["other"] != 1 || counts["charge.refunded"] != 1 {
+		t.Errorf("counter by event_type = %v, want the gap type=1 other=1 charge.refunded=1", counts)
 	}
 }

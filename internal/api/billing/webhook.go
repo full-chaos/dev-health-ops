@@ -122,7 +122,7 @@ func (h handlers) stripeWebhook(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	case "charge.refunded", "charge.refund.updated", "refund.created", "refund.updated", "refund.failed":
-		if err := h.refundEvent(ctx, eventType, dataObject); err != nil {
+		if err := h.refundEvent(ctx, eventType, eventID, dataObject); err != nil {
 			h.internal(w, r, "stripe webhook", err)
 			return
 		}

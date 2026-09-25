@@ -7,6 +7,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
@@ -24,7 +26,7 @@ import (
 // found by its `refund_id` metadata and completed, never inserted a second
 // time; and a terminal status is never moved back to pending by an event
 // that arrives late.
-func (h handlers) refundEvent(ctx context.Context, eventType string, dataObject pyjson.Value) error {
+func (h handlers) refundEvent(ctx context.Context, eventType string, eventID pyjson.Value, dataObject pyjson.Value) error {
 	if dataObject == nil {
 		return nil
 	}
@@ -34,6 +36,12 @@ func (h handlers) refundEvent(ctx context.Context, eventType string, dataObject 
 		chargeID = pyTextOrEmpty(attr(dataObject, "id", nil))
 		list, isList := attr(attr(dataObject, "refunds", nil), "data", nil).([]pyjson.Value)
 		if !isList {
+			// Current Stripe API versions leave the refund list off the
+			// charge: its refunds arrive as refund events. The event is
+			// counted with the unapplied ones so this stays visible.
+			h.logger.InfoContext(ctx, "charge.refunded carries no refund list; its refunds are recorded from the refund events",
+				"event_id", pyStr(eventID), "charge", chargeID)
+			unhandledEvents.Add(ctx, 1, metric.WithAttributes(attribute.String("event_type", eventType)))
 			return nil
 		}
 		refunds = list
@@ -152,8 +160,12 @@ func (h handlers) upsertStripeRefund(ctx context.Context, tx pgx.Tx, event pyjso
 		}
 	}
 
-	// The row: by its Stripe id, else the write-first row this refund was
-	// made for (still without a Stripe id).
+	intent := ""
+	if ref := refundRef(event, "payment_intent", nil); ref != nil {
+		intent = *ref
+	}
+
+	// The row: by its Stripe id.
 	stored, found := storedRefund{}, false
 	switch row, err := scanStoredRefund(tx.QueryRow(ctx, `SELECT `+storedRefundColumns+` FROM refunds WHERE stripe_refund_id = $1 FOR UPDATE`, stripeRefundID)); {
 	case err == nil:
@@ -161,25 +173,12 @@ func (h handlers) upsertStripeRefund(ctx context.Context, tx pgx.Tx, event pyjso
 	case !errors.Is(err, pgx.ErrNoRows):
 		return err
 	}
-	if !found && metaRow != nil {
-		switch row, err := scanStoredRefund(tx.QueryRow(ctx, `SELECT `+storedRefundColumns+` FROM refunds
-			WHERE id = $1 AND stripe_refund_id IS NULL AND ($2::uuid IS NULL OR org_id = $2) FOR UPDATE`, *metaRow, metaOrg)); {
-		case err == nil:
-			stored, found = row, true
-		case !errors.Is(err, pgx.ErrNoRows):
-			return err
-		}
-	}
 
-	// The org and the invoice. A row already stored keeps its own org. For a
-	// refund not stored yet, the invoice paid by the event's payment intent
-	// (exactly one) owns it, whatever the metadata says; with no such invoice
-	// the metadata's org counts, and its invoice only when that invoice
-	// belongs to that org.
-	intent := ""
-	if ref := refundRef(event, "payment_intent", nil); ref != nil {
-		intent = *ref
-	}
+	// Who owns a refund not stored yet is one rule. The invoices paid by the
+	// event's payment intent decide: none, and the metadata's org counts;
+	// exactly one, and it owns the refund (org and invoice link) whatever the
+	// metadata says; several, and no org is chosen for it, so the event is
+	// skipped (an ambiguous payment never lets metadata pick an owner).
 	var org, intentInvoice *uuid.UUID
 	if !found {
 		invoices, err := h.invoicesOfPayment(ctx, tx, intent)
@@ -187,6 +186,10 @@ func (h handlers) upsertStripeRefund(ctx context.Context, tx pgx.Tx, event pyjso
 			return err
 		}
 		switch {
+		case len(invoices) > 1:
+			h.logger.WarnContext(ctx, "Refund webhook event's payment is held by several invoices; not recorded",
+				"stripe_refund_id", stripeRefundID, "payment_intent", intent, "invoices_found", len(invoices))
+			return nil
 		case len(invoices) == 1:
 			org, intentInvoice = &invoices[0].org, &invoices[0].id
 			if metaOrg != nil && *metaOrg != *org {
@@ -195,9 +198,33 @@ func (h handlers) upsertStripeRefund(ctx context.Context, tx pgx.Tx, event pyjso
 			}
 		case metaOrg != nil:
 			org = metaOrg
-		default:
+		}
+
+		// The write-first row this refund was made for (still without a
+		// Stripe id), named by its `refund_id` metadata: completed when it
+		// fits the owner above, never duplicated, and never adopted by an
+		// event that names another org's payment. A row that names it and
+		// does not fit stops the event: a second row would collide with the
+		// row's own completion.
+		if metaRow != nil {
+			switch row, err := scanStoredRefund(tx.QueryRow(ctx, `SELECT `+storedRefundColumns+` FROM refunds
+				WHERE id = $1 AND stripe_refund_id IS NULL FOR UPDATE`, *metaRow)); {
+			case err == nil:
+				fits := (org == nil || row.org == *org) && (intentInvoice == nil || row.invoice == nil || *row.invoice == *intentInvoice)
+				if !fits {
+					h.logger.ErrorContext(ctx, "Refund webhook event names a waiting refund that does not fit its payment or org; not recorded",
+						"stripe_refund_id", stripeRefundID, "refund_id", metaRow.String(), "payment_intent", intent,
+						"org_id_received", pyStr(attr(metadata, "org_id", nil)))
+					return nil
+				}
+				stored, found = row, true
+			case !errors.Is(err, pgx.ErrNoRows):
+				return err
+			}
+		}
+		if !found && org == nil {
 			h.logger.WarnContext(ctx, "Refund webhook event names no organization and no single invoice; not recorded",
-				"stripe_refund_id", stripeRefundID, "payment_intent", intent, "invoices_found", len(invoices))
+				"stripe_refund_id", stripeRefundID, "payment_intent", intent, "invoices_found", 0)
 			return nil
 		}
 	}

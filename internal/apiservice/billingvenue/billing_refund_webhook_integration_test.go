@@ -133,7 +133,8 @@ func TestRefundWebhookWriteFirstAndOrder(t *testing.T) {
 		"bbbbbbbb-0000-4000-8000-000000000003", "bbbbbbbb-0000-4000-8000-000000000004"
 	const invRace2, invPI = "bbbbbbbb-0000-4000-8000-000000000005", "bbbbbbbb-0000-4000-8000-000000000006"
 	const invRace3, invOwnerB, invRace4 = "bbbbbbbb-0000-4000-8000-000000000007", "bbbbbbbb-0000-4000-8000-000000000008", "bbbbbbbb-0000-4000-8000-000000000009"
-	const waitingA, waitingB = "cccccccc-0000-4000-8000-000000000001", "cccccccc-0000-4000-8000-000000000002"
+	const waitingA, waitingB, waitingC, waitingD = "cccccccc-0000-4000-8000-000000000001", "cccccccc-0000-4000-8000-000000000002", "cccccccc-0000-4000-8000-000000000003", "cccccccc-0000-4000-8000-000000000004"
+	const invRace5 = "bbbbbbbb-0000-4000-8000-00000000000a"
 	exec(`INSERT INTO invoices (id, org_id, stripe_invoice_id, stripe_customer_id, status, amount_due, amount_paid, currency,
 		payment_intent_id, metadata, created_at, updated_at) VALUES
 		($1, $5, 'in_adopt', 'cus_A', 'paid', 1000, 1000, 'usd', 'pi_adopt', '{}', now(), now()),
@@ -143,15 +144,18 @@ func TestRefundWebhookWriteFirstAndOrder(t *testing.T) {
 		($6, $5, 'in_race2', 'cus_A', 'paid', 900, 900, 'usd', 'pi_race2', '{}', now(), now()),
 		($7, $5, 'in_pi', 'cus_A', 'paid', 700, 700, 'usd', 'pi_of_dashboard', '{}', now(), now()),
 		($9, $10, 'in_owner_b', 'cus_B', 'paid', 300, 300, 'usd', 'pi_owner_b', '{}', now(), now()),
+		($12, $5, 'in_race5', 'cus_A', 'paid', 250, 250, 'usd', 'pi_race5', '{}', now(), now()),
 		($11, $5, 'in_race4', 'cus_A', 'paid', 450, 450, 'usd', 'pi_race4', '{}', now(), now()),
 		($8, $5, 'in_race3', 'cus_A', 'paid', 350, 350, 'usd', 'pi_race3', '{}', now(), now()),
 		(gen_random_uuid(), $5, 'in_twice_1', 'cus_A', 'paid', 100, 100, 'usd', 'pi_twice', '{}', now(), now()),
 		(gen_random_uuid(), $5, 'in_twice_2', 'cus_A', 'paid', 100, 100, 'usd', 'pi_twice', '{}', now(), now())`,
-		invAdopt, invRace, invOrder, invRow, orgA, invRace2, invPI, invRace3, invOwnerB, orgB, invRace4)
+		invAdopt, invRace, invOrder, invRow, orgA, invRace2, invPI, invRace3, invOwnerB, orgB, invRace4, invRace5)
 	exec(`INSERT INTO refunds (id, org_id, invoice_id, stripe_refund_id, stripe_charge_id, amount, currency, status, metadata, created_at, updated_at) VALUES
 		($1, $3, $4, NULL, NULL, 300, 'usd', 'pending', '{}', now(), now()),
-		($2, $5, NULL, NULL, NULL, 200, 'usd', 'pending', '{}', now(), now())`,
-		waitingA, waitingB, orgA, invAdopt, orgB)
+		($2, $5, NULL, NULL, NULL, 200, 'usd', 'pending', '{}', now(), now()),
+		($6, $3, $7, NULL, NULL, 120, 'usd', 'pending', '{}', now(), now()),
+		($8, $3, $7, NULL, NULL, 130, 'usd', 'pending', '{}', now(), now())`,
+		waitingA, waitingB, orgA, invAdopt, orgB, waitingC, invRow, waitingD)
 
 	stamp := time.Now().Unix() + 200
 	deliverAs := func(name, eventType, refundID, status string, edit func(object map[string]any)) venueoracle.Response {
@@ -193,7 +197,7 @@ func TestRefundWebhookWriteFirstAndOrder(t *testing.T) {
 	expect("adopt: another org's row, answered", fmt.Sprint(answer.Status), "200")
 	expect("adopt: another org's waiting row is untouched",
 		row(`SELECT coalesce(stripe_refund_id, '<null>') || ' ' || status FROM refunds WHERE id = '`+waitingB+`'`), "<null> pending")
-	expect("adopt: the event made its own row", row(`SELECT org_id::text FROM refunds WHERE stripe_refund_id = 're_other_org'`), orgA)
+	expect("adopt: the event names another org's waiting row and makes no row of its own", row(`SELECT count(*)::text FROM refunds WHERE stripe_refund_id = 're_other_org'`), "0")
 
 	// 2. The event beats the route's completion: the refund route creates
 	// the refund in Stripe, the event (succeeded) is delivered before the
@@ -292,6 +296,48 @@ func TestRefundWebhookWriteFirstAndOrder(t *testing.T) {
 	expect("owner: a metadata invoice of another org is not linked",
 		row(`SELECT org_id::text || ' ' || coalesce(invoice_id::text, '<null>') FROM refunds WHERE stripe_refund_id = 're_foreign_invoice'`), orgB+" <null>")
 
+	// Conflicting org metadata on the route's own refund: the payment decides,
+	// so the reserved row is completed, not duplicated, and the route's own
+	// completion is not broken by a second row.
+	hookMu.Lock()
+	hook = func(rowID, stripeID string) {
+		deliver("race: conflicting org metadata", stripeID, "succeeded", func(object map[string]any) {
+			object["metadata"] = map[string]any{"org_id": orgB, "invoice_id": invOwnerB, "refund_id": rowID}
+			object["payment_intent"] = "pi_race5"
+		})
+	}
+	hookMu.Unlock()
+	response = venueoracle.Do(t, base, venueoracle.Request{Name: "race: create, then conflicting org metadata", Method: "POST", Path: "/api/v1/billing/refunds",
+		Headers: map[string]string{"Authorization": "Bearer " + venue.Tokens["super"], "Content-Type": "application/json"},
+		Body:    venueoracle.B64(`{"invoice_id":"` + invRace5 + `","amount":250}`)})
+	hookMu.Lock()
+	hook = nil
+	hookMu.Unlock()
+	expect("race conflicting org: the create answered", fmt.Sprint(response.Status), "200")
+	expect("race conflicting org: one row for the invoice, under its own org, settled",
+		row(`SELECT count(*)::text || ' ' || min(org_id::text) || ' ' || min(status) FROM refunds WHERE invoice_id = '`+invRace5+`'`), "1 "+orgA+" succeeded")
+
+	// The reverse: an event naming an org-A waiting row but paid on org B's
+	// invoice does not adopt it, and makes no row.
+	answer = deliver("reverse: waiting row, payment of another org", "re_reverse", "succeeded", func(object map[string]any) {
+		object["metadata"] = map[string]any{"org_id": orgA, "invoice_id": invRow, "refund_id": waitingC}
+		object["payment_intent"] = "pi_owner_b"
+	})
+	expect("reverse: answered", fmt.Sprint(answer.Status), "200")
+	expect("reverse: the waiting row is not adopted and no row is made",
+		row(`SELECT coalesce(stripe_refund_id, '<null>') FROM refunds WHERE id = '`+waitingC+`'`)+" "+row(`SELECT count(*)::text FROM refunds WHERE stripe_refund_id = 're_reverse'`), "<null> 0")
+
+	// Same org, another invoice: an event naming an org-A waiting row that is
+	// linked to one invoice, paid on another invoice of the same org, does not
+	// adopt it either.
+	answer = deliver("mismatch: waiting row, payment of another invoice of the org", "re_mismatch", "succeeded", func(object map[string]any) {
+		object["metadata"] = map[string]any{"org_id": orgA, "invoice_id": invOrder, "refund_id": waitingD}
+		object["payment_intent"] = "pi_order"
+	})
+	expect("mismatch: answered", fmt.Sprint(answer.Status), "200")
+	expect("mismatch: the waiting row is not adopted and no row is made",
+		row(`SELECT coalesce(stripe_refund_id, '<null>') FROM refunds WHERE id = '`+waitingD+`'`)+" "+row(`SELECT count(*)::text FROM refunds WHERE stripe_refund_id = 're_mismatch'`), "<null> 0")
+
 	// A waiting row completed by an event whose metadata names an invoice of
 	// another org: the row keeps having no invoice.
 	answer = deliver("owner: waiting row, metadata invoice of another org", "re_waiting_b", "succeeded", func(object map[string]any) {
@@ -330,6 +376,14 @@ func TestRefundWebhookWriteFirstAndOrder(t *testing.T) {
 	})
 	expect("dashboard: ambiguous payment intent answered", fmt.Sprint(answer.Status), "200")
 	expect("dashboard: ambiguous payment intent recorded nothing", row(`SELECT count(*)::text FROM refunds WHERE stripe_refund_id = 're_twice'`), "0")
+	// Two invoices of one org hold the payment and the metadata names another
+	// org and its invoice: metadata does not choose an owner for an ambiguous payment.
+	answer = deliver("dashboard: ambiguous payment, metadata names another org", "re_twice_meta", "succeeded", func(object map[string]any) {
+		object["metadata"] = map[string]any{"org_id": orgB, "invoice_id": invOwnerB}
+		object["payment_intent"] = "pi_twice"
+	})
+	expect("dashboard: ambiguous payment with org metadata answered", fmt.Sprint(answer.Status), "200")
+	expect("dashboard: ambiguous payment with org metadata recorded nothing", row(`SELECT count(*)::text FROM refunds WHERE stripe_refund_id = 're_twice_meta'`), "0")
 
 	// 3. Order: a late pending event never moves a settled refund back, and
 	// an earlier pending one is moved on by the settled one.

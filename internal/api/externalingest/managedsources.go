@@ -2,7 +2,6 @@ package externalingest
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 
 	"github.com/google/uuid"
@@ -122,7 +121,7 @@ func FindMatchingManagedSources(
 		// `config = integration.config or {}` opens Python's loop body for every
 		// row, so a truthy non-object integration config raises (AttributeError,
 		// unhandled) at this row, in loop order, before anything else is read.
-		integrationConfig, err := credentialConfig(c.configRaw)
+		integrationConfig, err := decodePyConfig(c.configRaw)
 		if err != nil {
 			return nil, err
 		}
@@ -203,36 +202,16 @@ type resolvedHost struct {
 // config.get(f"{system}_url")`, kept only when it is a str that is not
 // blank: the first key wins whenever its value is truthy, even when that
 // value is not a str.
-func configuredHost(config map[string]any, system string) (string, bool) {
-	value := config[system+"_instance_url"]
-	if !truthy(value) {
-		value = config[system+"_url"]
+func configuredHost(config pyConfig, system string) (string, bool) {
+	key := system + "_instance_url"
+	if !config.truthy(key) {
+		key = system + "_url"
 	}
-	text, ok := value.(string)
+	text, ok := config.str(key)
 	if !ok || pythonparity.Strip(text) == "" {
 		return "", false
 	}
 	return text, true
-}
-
-// truthy is Python's bool() of a JSON-decoded value.
-func truthy(value any) bool {
-	switch typed := value.(type) {
-	case nil:
-		return false
-	case bool:
-		return typed
-	case string:
-		return typed != ""
-	case float64:
-		return typed != 0
-	case []any:
-		return len(typed) > 0
-	case map[string]any:
-		return len(typed) > 0
-	default:
-		return true
-	}
 }
 
 // environmentBaseURLVariable is credentials/resolver.py PROVIDER_ENV_VARS'
@@ -311,7 +290,7 @@ func credentialHost(ctx context.Context, q RowsQueryer, cipher credentials.Ciphe
 	}
 	// `credential.config or {}` then `.get(...)`: a config that is truthy and not
 	// a JSON object raises AttributeError, unhandled, once the loop is reached.
-	config, err := credentialConfig(configJSON)
+	config, err := decodePyConfig(configJSON)
 	if err != nil {
 		return "", false, err
 	}
@@ -327,7 +306,7 @@ func credentialHost(ctx context.Context, q RowsQueryer, cipher credentials.Ciphe
 		candidates = append(candidates, candidate)
 	}
 	for _, key := range keys {
-		candidates = append(candidates, config[key])
+		candidates = append(candidates, config.strOrNil(key))
 	}
 	for _, candidate := range candidates {
 		text, ok := candidate.(string)
@@ -339,29 +318,4 @@ func credentialHost(ctx context.Context, q RowsQueryer, cipher credentials.Ciphe
 		}
 	}
 	return "", false, nil
-}
-
-// errCredentialConfigNotObject stands for the AttributeError Python raises
-// reading `.get` on an integration or credential config that is truthy and not
-// a dict.
-var errCredentialConfigNotObject = errors.New("config not an object")
-
-// credentialConfig is `credential.config or {}` as a mapping: an absent, null
-// or falsy config (an empty object, list or string, zero, false) is empty; a
-// JSON object is itself; any other value is errCredentialConfigNotObject.
-func credentialConfig(raw []byte) (map[string]any, error) {
-	if len(raw) == 0 {
-		return nil, nil
-	}
-	var decoded any
-	if err := json.Unmarshal(raw, &decoded); err != nil {
-		return nil, err
-	}
-	if object, ok := decoded.(map[string]any); ok {
-		return object, nil
-	}
-	if !truthy(decoded) {
-		return nil, nil
-	}
-	return nil, errCredentialConfigNotObject
 }

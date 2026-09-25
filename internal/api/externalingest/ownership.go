@@ -43,7 +43,7 @@ type integrationSource struct {
 // the same direction as before (an explicit customer_push row is not
 // overridden), just a narrower gap than "every operational github/gitlab
 // push", which is what this function covered before.
-func matchesInstance(system, instance string, source integrationSource, entityFamily string, integrationConfig map[string]any) bool {
+func matchesInstance(system, instance string, source integrationSource, entityFamily string, integrationConfig pyConfig) bool {
 	inst := strings.ToLower(strings.TrimSpace(instance))
 	if inst == "" {
 		return false
@@ -54,9 +54,9 @@ func matchesInstance(system, instance string, source integrationSource, entityFa
 			defaultHost = "gitlab.com"
 		}
 		managedHost := defaultHost
-		if configured, ok := integrationConfig[system+"_instance_url"].(string); ok && strings.TrimSpace(configured) != "" {
+		if configured, ok := integrationConfig.str(system + "_instance_url"); ok && strings.TrimSpace(configured) != "" {
 			managedHost = configured
-		} else if configured, ok := integrationConfig[system+"_url"].(string); ok && strings.TrimSpace(configured) != "" {
+		} else if configured, ok := integrationConfig.str(system + "_url"); ok && strings.TrimSpace(configured) != "" {
 			managedHost = configured
 		}
 		return normalizedOperationalHost(system, instance) == normalizedOperationalHost(system, managedHost)

@@ -9,43 +9,43 @@ func TestMatchesInstance(t *testing.T) {
 		instance string
 		source   integrationSource
 		family   string
-		config   map[string]any
+		config   string
 		want     bool
 	}{
 		{"github external_id case-insensitive", "github", "Acme/API",
-			integrationSource{ExternalID: "acme/api"}, legacyEntityFamily, nil, true},
+			integrationSource{ExternalID: "acme/api"}, legacyEntityFamily, "", true},
 		{"github full_name fallback", "github", "acme/api",
-			integrationSource{FullName: "acme/api"}, legacyEntityFamily, nil, true},
+			integrationSource{FullName: "acme/api"}, legacyEntityFamily, "", true},
 		{"github no match", "github", "acme/api",
-			integrationSource{ExternalID: "other/repo"}, legacyEntityFamily, nil, false},
+			integrationSource{ExternalID: "other/repo"}, legacyEntityFamily, "", false},
 		{"gitlab path_with_namespace", "gitlab", "group/sub/project",
-			integrationSource{Metadata: map[string]any{"path_with_namespace": "group/sub/project"}}, legacyEntityFamily, nil, true},
+			integrationSource{Metadata: map[string]any{"path_with_namespace": "group/sub/project"}}, legacyEntityFamily, "", true},
 		{"gitlab numeric external_id", "gitlab", "123",
-			integrationSource{ExternalID: "123"}, legacyEntityFamily, nil, true},
+			integrationSource{ExternalID: "123"}, legacyEntityFamily, "", true},
 		{"linear org-wide placeholder literal", "linear", "any-team-uuid",
-			integrationSource{ExternalID: "linear"}, legacyEntityFamily, nil, true},
+			integrationSource{ExternalID: "linear"}, legacyEntityFamily, "", true},
 		{"linear org-wide placeholder metadata flag", "linear", "any-team-uuid",
-			integrationSource{Metadata: map[string]any{"org_wide_placeholder": true}}, legacyEntityFamily, nil, true},
+			integrationSource{Metadata: map[string]any{"org_wide_placeholder": true}}, legacyEntityFamily, "", true},
 		{"linear specific team id", "linear", "team-uuid-1",
-			integrationSource{ExternalID: "team-uuid-1"}, legacyEntityFamily, nil, true},
-		{"custom system never matches", "custom", "x", integrationSource{ExternalID: "x"}, legacyEntityFamily, nil, false},
-		{"empty instance never matches", "github", "", integrationSource{ExternalID: ""}, legacyEntityFamily, nil, false},
+			integrationSource{ExternalID: "team-uuid-1"}, legacyEntityFamily, "", true},
+		{"custom system never matches", "custom", "x", integrationSource{ExternalID: "x"}, legacyEntityFamily, "", false},
+		{"empty instance never matches", "github", "", integrationSource{ExternalID: ""}, legacyEntityFamily, "", false},
 		{"operational github default host matches github.com", "github", "github.com",
-			integrationSource{}, operationalEntityFamily, nil, true},
+			integrationSource{}, operationalEntityFamily, "", true},
 		{"operational github default host does not match a different host", "github", "git.example.com",
-			integrationSource{}, operationalEntityFamily, nil, false},
+			integrationSource{}, operationalEntityFamily, "", false},
 		{"operational github explicit configured host matches", "github", "git.example.com",
-			integrationSource{}, operationalEntityFamily, map[string]any{"github_instance_url": "https://git.example.com"}, true},
+			integrationSource{}, operationalEntityFamily, `{"github_instance_url":"https://git.example.com"}`, true},
 		{"operational github explicit configured host is case-insensitive", "github", "GIT.EXAMPLE.COM",
-			integrationSource{}, operationalEntityFamily, map[string]any{"github_instance_url": "git.example.com"}, true},
+			integrationSource{}, operationalEntityFamily, `{"github_instance_url":"git.example.com"}`, true},
 		{"operational gitlab explicit configured host matches", "gitlab", "gitlab.example.org",
-			integrationSource{}, operationalEntityFamily, map[string]any{"gitlab_instance_url": "https://gitlab.example.org:443/"}, true},
+			integrationSource{}, operationalEntityFamily, `{"gitlab_instance_url":"https://gitlab.example.org:443/"}`, true},
 		{"operational github api.github.com aliases to github.com", "github", "api.github.com",
-			integrationSource{}, operationalEntityFamily, nil, true},
+			integrationSource{}, operationalEntityFamily, "", true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := matchesInstance(c.system, c.instance, c.source, c.family, c.config); got != c.want {
+			if got := matchesInstance(c.system, c.instance, c.source, c.family, mustPyConfig(t, c.config)); got != c.want {
 				t.Errorf("got %v, want %v", got, c.want)
 			}
 		})
@@ -83,4 +83,13 @@ func TestOwnershipErrorMapsEveryNonCustomerPushMode(t *testing.T) {
 			t.Errorf("%s: got %d %s, want 403 %s", mode, err.Status, err.Code, code)
 		}
 	}
+}
+
+func mustPyConfig(t *testing.T, raw string) pyConfig {
+	t.Helper()
+	config, err := decodePyConfig([]byte(raw))
+	if err != nil {
+		t.Fatalf("decode %q: %v", raw, err)
+	}
+	return config
 }

@@ -129,6 +129,17 @@ func scenarios() []scenario {
 		gh("config array with another provider's credential", `["bad"]`, encrypted(`{"url":"https://x.acme.test"}`), ""),
 	)
 	list[len(list)-1].credProvider = "gitlab"
+	// JSON numbers Python parses without failing but a float64 decode cannot:
+	// 1e400 is inf (truthy, not a str), 1e-400 is 0.0 (falsy). A config holding
+	// one must resolve like any other config (CHAOS-6748 r2).
+	list = append(list,
+		gh("credential config huge number falls through to base_url", `{"url":1e400,"base_url":"https://ghe-overflow.acme.test"}`, noPayload, "ghe-overflow.acme.test"),
+		gh("credential config huge number as the instance url", `{"github_instance_url":1e400,"github_url":"https://ghe-instbig.acme.test"}`, noPayload, ""),
+		gh("credential config underflow number is falsy", `{"github_instance_url":1e-400,"github_url":"https://ghe-underflow.acme.test"}`, noPayload, "ghe-underflow.acme.test"),
+		gh("config huge number, garbled payload", `1e400`, garbled, ""),
+		gh("config underflow number, garbled payload", `1e-400`, garbled, ""),
+		gh("config negative zero, garbled payload", `-0.0`, garbled, ""),
+	)
 	// The integration's own config is read first, for every candidate: a truthy
 	// non-object raises whatever the credential holds; a falsy one is `{}`.
 	for _, shape := range []struct{ name, config string }{

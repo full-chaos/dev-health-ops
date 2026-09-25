@@ -369,14 +369,22 @@ func (h *handlers) discoverJiraProjects(ctx context.Context, org string, created
 		h.logger.ErrorContext(ctx, "jira_project_discovery_at_creation_failed", "org_id", org, "error", err)
 		return
 	}
-	if _, err := h.discovery.Discover(ctx, schedsync.SourceDiscoveryArgs{
+	report, err := h.discovery.Discover(ctx, schedsync.SourceDiscoveryArgs{
 		OrgID: org, IntegrationID: created.integrationID.String(), CredentialID: credentialID,
 		Provider: created.config.Provider, SyncOptions: syncOptions,
 		ConfigID: created.config.ID.String(), PlannerManaged: true,
-	}); err != nil {
+	})
+	if err != nil {
 		h.logger.ErrorContext(ctx, "jira_project_discovery_at_creation_failed", "org_id", org,
 			"integration_id", created.integrationID.String(), "error", err)
+		return
 	}
+	// Go-only event (Python logs nothing on success): a discovery that
+	// succeeds with zero projects, or is skipped, still answers 201, so its
+	// outcome and counts are the only sign of it at Info.
+	h.logger.InfoContext(ctx, "jira_project_discovery_at_creation", "org_id", org,
+		"integration_id", created.integrationID.String(), "outcome", report.Outcome,
+		"created", report.Created, "existing", report.Existing)
 }
 
 // newCreateDiscovery builds the create path's discovery on the api pool:

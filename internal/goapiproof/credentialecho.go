@@ -22,6 +22,11 @@ import (
 //   - any run of echoWindowLen consecutive bytes of the value, so a value split
 //     into pieces of at least that length (two JSON fields, say) is still seen.
 //
+// The last two forms skip a JWT's HEADER part: it names only the algorithm and
+// type, so every token of that algorithm shares it, and a route that honestly
+// returns some OTHER token (a login or token-mint route) must not be refused
+// for it. The payload and signature parts are the credential.
+//
 // What it does NOT recognise, stated so nobody reads more into it: a value cut
 // into pieces shorter than echoWindowLen, or transformed some other way (hex,
 // reversed, encrypted). Those need a route built to hide a credential, which no
@@ -44,6 +49,9 @@ type SentSecrets struct {
 	// needles are whole-value forms searched by containment: the raw value,
 	// its base64 forms, its long dot-separated parts.
 	needles [][]byte
+	// windowed are the byte strings whose consecutive runs are searched: the
+	// value, or for a JWT its payload.signature tail.
+	windowed [][]byte
 }
 
 // SecretsOnRequest reads the credential values a request carries in its
@@ -66,13 +74,26 @@ func SecretsOnRequest(header http.Header) SentSecrets {
 	return out
 }
 
+// guardedTail is the part of a value whose parts and runs are searched: the
+// whole value, or, for a JWT (three dot-separated parts, the first the base64
+// of a JSON object), everything after its header part.
+func guardedTail(secret []byte) []byte {
+	if bytes.Count(secret, []byte(".")) == 2 && bytes.HasPrefix(secret, []byte("eyJ")) {
+		_, tail, _ := bytes.Cut(secret, []byte("."))
+		return tail
+	}
+	return secret
+}
+
 func (s *SentSecrets) add(secret []byte) {
 	s.secrets = append(s.secrets, secret)
 	s.needles = append(s.needles, secret)
+	tail := guardedTail(secret)
+	s.windowed = append(s.windowed, tail)
 	for _, encoding := range []*base64.Encoding{base64.StdEncoding, base64.RawStdEncoding, base64.URLEncoding, base64.RawURLEncoding} {
 		s.needles = append(s.needles, []byte(encoding.EncodeToString(secret)))
 	}
-	for _, part := range bytes.Split(secret, []byte(".")) {
+	for _, part := range bytes.Split(tail, []byte(".")) {
 		if len(part) >= echoPartMinLen {
 			s.needles = append(s.needles, part)
 		}
@@ -89,7 +110,7 @@ func (s SentSecrets) ReflectedIn(data []byte) bool {
 			return true
 		}
 	}
-	for _, secret := range s.secrets {
+	for _, secret := range s.windowed {
 		if len(secret) >= echoWindowLen && windowReflected(data, secret) {
 			return true
 		}

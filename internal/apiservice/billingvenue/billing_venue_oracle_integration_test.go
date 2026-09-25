@@ -711,6 +711,7 @@ func billingRequests(f billingFixture, tokens map[string]string) (main, deviatio
 	d("deviation: list org C", "GET", s+"/list?org_id="+f.orgC.String(), none, headers("memberA"))
 	d("deviation: history org A", "GET", s+"/history?org_id="+f.orgA.String(), none, headers("adminC"))
 	d("deviation: cancel org C", "POST", s+"/cancel?org_id="+f.orgC.String(), `{}`, headers("ownerA"))
+	d("deviation: change plan org C", "POST", s+"/change-plan?org_id="+f.orgC.String(), `{"price_id":"price_x"}`, headers("ownerA"))
 	return main, deviations
 }
 
@@ -900,8 +901,11 @@ func TestVenueOracleBillingPlansCheckout(t *testing.T) {
 	if len(pyCalls) >= len(goCalls) {
 		extra = pyCalls[len(goCalls):]
 	}
-	if len(extra) != 1 || !strings.HasPrefix(extra[0], "POST /v1/subscriptions/sub_C") {
-		t.Errorf("python's deviation Stripe calls = %q, want one update of sub_C", extra)
+	// cancel org C updates sub_C; change-plan org C reads sub_C (Python then
+	// answers 400 for its missing item, but it already reached org C's
+	// subscription in Stripe).
+	if len(extra) != 2 || !strings.HasPrefix(extra[0], "POST /v1/subscriptions/sub_C") || !strings.HasPrefix(extra[1], "GET /v1/subscriptions/sub_C") {
+		t.Errorf("python's deviation Stripe calls = %q, want an update then a read of sub_C", extra)
 	}
 
 	// Stored rows, raw text, generated ids and clock times blanked.

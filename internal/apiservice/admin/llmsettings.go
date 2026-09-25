@@ -40,6 +40,7 @@ func (h *handlers) llmSettingsRoutes() []httpapi.Route {
 		{Method: http.MethodPut, Pattern: governancePrefix + "/llm-settings", Handler: h.bodyFirst(policy.Admin, http.HandlerFunc(h.putLLMSettings))},
 		{Method: http.MethodDelete, Pattern: governancePrefix + "/llm-settings", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.deleteLLMSettings))},
 		{Method: http.MethodGet, Pattern: governancePrefix + "/llm-settings/budget", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.getLLMBudget))},
+		{Method: http.MethodGet, Pattern: governancePrefix + "/llm-settings/spend", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.getLLMSpend))},
 	}
 }
 

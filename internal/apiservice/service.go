@@ -241,6 +241,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 			Guard:         deps.Guard,
 			Logger:        logger,
 			ClickHouseDSN: deps.ClickHouseDSN,
+			ClickHouse:    deps.ClickHouse,
 			Decryptor:     deps.Decryptor,
 			PagerDuty:     deps.PagerDuty,
 			HTTPDoer:      deps.HTTPDoer,

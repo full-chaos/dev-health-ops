@@ -256,3 +256,14 @@ type Resolver interface {
 }
 
 var _ Resolver = Store{}
+
+// NormalizeProvider is normalizeProvider for a caller that reads an org's
+// stored provider setting itself (settings.py's evaluate_org_llm_status).
+func NormalizeProvider(name string) string { return normalizeProvider(name) }
+
+// IsKnownProvider is _is_known_llm_provider.
+func IsKnownProvider(provider string) bool { return isKnownProvider(provider) }
+
+// CredentialsComplete is _llm_credentials_complete for a provider and its
+// api_key.
+func CredentialsComplete(provider, apiKey string) bool { return credentialsComplete(provider, apiKey) }

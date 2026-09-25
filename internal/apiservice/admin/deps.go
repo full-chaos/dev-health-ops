@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/jackc/pgx/v5/pgxpool"
 	valkeygo "github.com/valkey-io/valkey-go"
 
@@ -39,6 +40,10 @@ type Deps struct {
 	// target ("" = not configured; every ClickHouse count/delete is
 	// skipped with a warning, matching org_deletion.py's own behavior).
 	ClickHouseDSN string
+	// ClickHouse is the api's own dedicated login (nil when not
+	// configured): the LLM spend route reads llm_token_usage and
+	// work_unit_investments with it.
+	ClickHouse driver.Conn
 	// Decryptor reads provider_oauth_credentials/provider_oauth_revocations'
 	// encrypted PagerDuty tokens before the org-deletion route revokes
 	// them -- keyed by the same SETTINGS_ENCRYPTION_KEY/SALT every other
@@ -114,6 +119,9 @@ func Routes(deps Deps) []httpapi.Route {
 		inviteLimiter:   httpapi.NewKeyedLimiter(limits, inviteLimit),
 		invites:         deps.Invites,
 	}
+	if deps.ClickHouse != nil {
+		area.spend = clickhouseSpend{conn: deps.ClickHouse}
+	}
 	return area.routes()
 }
 
@@ -139,9 +147,12 @@ type handlers struct {
 	// route's own dependencies (CHAOS-6306); every other handler in this
 	// package ignores them.
 	clickHouseDSN string
-	decryptor     providerfoundation.FernetDecryptor
-	pagerDuty     providerfoundation.PagerDutyRevokeConfig
-	httpDoer      providerfoundation.HTTPDoer
+	// spend is the LLM spend route's ClickHouse reader; nil when the api has no
+	// ClickHouse login.
+	spend     spendReader
+	decryptor providerfoundation.FernetDecryptor
+	pagerDuty providerfoundation.PagerDutyRevokeConfig
+	httpDoer  providerfoundation.HTTPDoer
 	// upstreamDoer is Deps.HTTPDoer as given: nil means the PagerDuty
 	// callback and credential-validation calls build their own client with
 	// the reference's timeout and redirect policy, which the defaulted

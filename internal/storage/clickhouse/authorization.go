@@ -79,6 +79,10 @@ func APIPosture(database string) Posture {
 		// with this login, as the Python route does with its own. Insert
 		// only: the route never reads, updates or deletes them.
 		{Database: database, Table: "telemetry_signal_bucket", AllowInsert: true},
+		// GET /llm-settings/spend (CHAOS-6667) reads an org's LLM token usage
+		// and its categorization outcomes per run. Read-only.
+		{Database: database, Table: "llm_token_usage", AllowSelect: true},
+		{Database: database, Table: "work_unit_investments", AllowSelect: true},
 	}}
 }
 

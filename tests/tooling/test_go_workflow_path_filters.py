@@ -150,6 +150,15 @@ UNCOVERED_FIXTURE_DIRECTORIES: dict[str, str] = {
         "given a path filter, because adding a pattern for it would claim a "
         "dependency that does not exist"
     ),
+    "internal/queryapi/server/README.md": (
+        'surfaced by the os.ReadDir(".") reader shape in '
+        "internal_auth_test.go's route-boundary scan, which enumerates the whole "
+        "package directory but skips every entry that is not a non-test `.go` "
+        "file -- so a markdown file there cannot change what it asserts, and "
+        "`**/*.go` already covers the files it does read. Excused rather than "
+        "given a path filter, because adding a pattern for it would claim a "
+        "dependency that does not exist"
+    ),
     "tests/acceptance/corpus": (
         "acceptance-suite corpus consumed by the acceptance workflow, which has "
         "its own path filters and does not run under go-quality"

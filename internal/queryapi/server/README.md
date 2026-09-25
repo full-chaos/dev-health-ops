@@ -50,8 +50,9 @@ authenticated by `authenticateInternalRequest` (`internal_auth.go`,
 CHAOS-6144): the four `X-DH-Internal-*` identity headers an in-cluster
 caller sends with no token, OR the `principal.Verifier` effective-principal
 envelope (Bearer token) during the migration; both at once is a 401. The
-headers are trusted only on `/query` and `/buildinfo`, which no Ingress
-reaches, and only while the Ingress strips those four names on every host;
+headers are trusted only on `/query`, `/query/proof` (the same dispatch
+handler, differing only in reachability and the shadow-inclusive switch) and
+`/buildinfo`, which no Ingress reaches, and only while the Ingress strips those four names on every host;
 REST routes never read them (`_records/6144/invariant.md`). GraphQL eligibility is
 registered-documents-only (`query_route.go`'s
 `registeredFeatureFlagsDocument` / `registeredReviewEdgesDocument` /

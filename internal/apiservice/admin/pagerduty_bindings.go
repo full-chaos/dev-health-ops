@@ -136,6 +136,18 @@ func bindingOrgID(w http.ResponseWriter, orgID string) (uuid.UUID, bool) {
 	return parsed, true
 }
 
+// lockBindingSource serialises the lifecycle transitions of one integration
+// source (rotate and activate) for the rest of the transaction. The row lock
+// the transitions take covers only the rows that exist when it is taken, so
+// two concurrent rotations could each find no candidate and each insert one;
+// this transaction-scoped advisory lock, keyed by the source, makes the
+// second wait, then read the first's committed candidate. Python has no such
+// lock (the race is a known gap there); this is a named divergence.
+func lockBindingSource(ctx context.Context, tx pgx.Tx, sourceID uuid.UUID) error {
+	_, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))`, sourceID.String())
+	return err
+}
+
 func (h *handlers) bindingNow() time.Time { return h.store.now().UTC().Truncate(time.Microsecond) }
 
 // requireBindingGraph is _require_active_pagerduty_graph: the source, its
@@ -282,6 +294,10 @@ func (h *handlers) rotatePagerDutyBinding(w http.ResponseWriter, r *http.Request
 		h.internalError(ctx, w, "load pagerduty binding", err)
 		return
 	}
+	if err := lockBindingSource(ctx, tx, existing.SourceID); err != nil {
+		h.internalError(ctx, w, "lock pagerduty binding source", err)
+		return
+	}
 	// The source's lifecycle rows, locked in id order.
 	rows, err := tx.Query(ctx, `SELECT `+bindingColumns+` FROM pagerduty_webhook_bindings
 WHERE integration_source_id = $1 AND status IN ('active', 'candidate', 'ready') ORDER BY id FOR UPDATE`, existing.SourceID)
@@ -377,8 +393,16 @@ func (h *handlers) activatePagerDutyBinding(w http.ResponseWriter, r *http.Reque
 		h.internalError(ctx, w, "load pagerduty binding candidate", err)
 		return
 	}
+	if err := lockBindingSource(ctx, tx, candidate.SourceID); err != nil {
+		h.internalError(ctx, w, "lock pagerduty binding source", err)
+		return
+	}
+	// Only the caller's organisation's rows are swapped (Python locks and
+	// swaps the source's rows whatever their organisation: a named
+	// divergence, unreachable through any route since a source belongs to
+	// one organisation).
 	rows, err := tx.Query(ctx, `SELECT `+bindingColumns+` FROM pagerduty_webhook_bindings
-WHERE integration_source_id = $1 AND status IN ('active', 'candidate', 'ready') ORDER BY id FOR UPDATE`, candidate.SourceID)
+WHERE integration_source_id = $1 AND org_id = $2 AND status IN ('active', 'candidate', 'ready') ORDER BY id FOR UPDATE`, candidate.SourceID, orgUUID)
 	if err != nil {
 		h.internalError(ctx, w, "lock pagerduty source bindings", err)
 		return

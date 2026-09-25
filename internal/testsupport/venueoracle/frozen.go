@@ -173,11 +173,20 @@ func (f *Frozen) Text(name string, live func() string) string {
 		f.golden.Texts[name] = text
 		return text
 	}
-	text, ok := f.golden.Texts[name]
-	if !ok {
-		f.t.Fatalf("frozen %s has no recorded text %q: re-record it on a Python-bearing build", f.path, name)
+	text, err := f.golden.text(f.path, name)
+	if err != nil {
+		f.t.Fatal(err)
 	}
 	return text
+}
+
+// text is the recorded measurement called name, or why there is none.
+func (g FrozenGolden) text(path, name string) (string, error) {
+	text, ok := g.Texts[name]
+	if !ok {
+		return "", fmt.Errorf("frozen %s has no recorded text %q: re-record it on a Python-bearing build", path, name)
+	}
+	return text, nil
 }
 
 func (f *Frozen) write() {

@@ -97,3 +97,17 @@ func TestLoadFrozenRefusesAMissingOrHollowGolden(t *testing.T) {
 		}
 	}
 }
+
+func TestFrozenTextRefusesAnUnrecordedName(t *testing.T) {
+	golden := FrozenGolden{Texts: map[string]string{"calls": "", "rows": "x"}}
+	if _, err := golden.text("g.json", "absent"); err == nil || !strings.Contains(err.Error(), "re-record") {
+		t.Fatalf("absent name: %v", err)
+	}
+	// an empty recorded text is a recording, not an absence
+	if text, err := golden.text("g.json", "calls"); err != nil || text != "" {
+		t.Fatalf("empty text: %q %v", text, err)
+	}
+	if text, err := golden.text("g.json", "rows"); err != nil || text != "x" {
+		t.Fatalf("rows: %q %v", text, err)
+	}
+}

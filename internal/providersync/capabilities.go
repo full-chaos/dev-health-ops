@@ -3,6 +3,7 @@
 package providersync
 
 import (
+	"errors"
 	"sort"
 	"strings"
 
@@ -232,4 +233,50 @@ func DatasetCostClass(provider, dataset, unitCostClass string) string {
 		return string(capability.CostClass)
 	}
 	return unitCostClass
+}
+
+// datasetKeyOrder is sync/datasets.py's DatasetKey enum order: the order
+// supported_datasets lists a provider's datasets in.
+var datasetKeyOrder = []string{
+	"repo-metadata", "commits", "commit-stats", "files", "blame", "prs", "pr-reviews", "pr-comments", "cicd", "tests",
+	"deployments", "incidents", "security", "work-items", "work-item-labels", "work-item-projects", "work-item-history",
+	"work-item-comments", "feature-flags", "services", "business-services", "escalation-policies", "schedules", "on-calls",
+	"users", "teams", "incident-alerts", "incident-log-entries", "incident-notes",
+}
+
+// ErrPagerDutyTargetNotOperational is planner_dataset_keys' ValueError for
+// a PagerDuty selection other than exactly {"operational"}.
+var ErrPagerDutyTargetNotOperational = errors.New("PagerDuty sync target must be operational")
+
+// PlannerDatasetKeys is sync/datasets.py's planner_dataset_keys: the
+// provider's datasets (in DatasetKey order, the registry read with
+// provider.lower()) whose legacy targets meet the selection. GitHub and
+// GitLab add "blame" when "git" is selected; a PagerDuty selection must be
+// exactly {"operational"}.
+func PlannerDatasetKeys(provider string, syncTargets []string) ([]string, error) {
+	targets := map[string]bool{}
+	for _, target := range syncTargets {
+		targets[target] = true
+	}
+	providerKey := pythonparity.Lower(provider)
+	if providerKey == "pagerduty" && (len(targets) != 1 || !targets["operational"]) {
+		return nil, ErrPagerDutyTargetNotOperational
+	}
+	if (providerKey == "github" || providerKey == "gitlab") && targets["git"] {
+		targets["blame"] = true
+	}
+	keys := []string{}
+	for _, dataset := range datasetKeyOrder {
+		capability, ok := datasetCapabilities[providerKey][dataset]
+		if !ok {
+			continue
+		}
+		for _, target := range capability.LegacyTargets {
+			if targets[target] {
+				keys = append(keys, dataset)
+				break
+			}
+		}
+	}
+	return keys, nil
 }

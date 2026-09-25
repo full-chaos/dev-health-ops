@@ -105,7 +105,9 @@ func apiPosture() RolePosture {
 			// creates planner sources (INSERT) and edits and disables them
 			// (UPDATE), widened in place.
 			{"integration_sources", true, true, true},
-			{"integrations", false, false, true},
+			// CHAOS-6597 (the sync config create path) creates the
+			// planner-managed integration (INSERT).
+			{"integrations", true, false, true},
 			// CHAOS-6319: the customer-push ownership check reads a managed
 			// integration's credential row (provider and plain config only;
 			// the encrypted payload is never read or decrypted here). A
@@ -162,7 +164,9 @@ func apiPosture() RolePosture {
 			{"settings", true, true, true},
 			// A purge target, delete. CHAOS-6529: the repository selection
 			// write updates the config's sync_options (UPDATE).
-			{"sync_configurations", false, true, true},
+			// CHAOS-6597: the create path adds the planner parent config
+			// (INSERT), widened in place.
+			{"sync_configurations", true, true, true},
 			// CHAOS-6437: the sync coverage read serves the stored
 			// projection (build_sync_coverage_summary). Rows go with their
 			// config by ON DELETE CASCADE, so no purge grant. CHAOS-6529:
@@ -216,7 +220,9 @@ func apiPosture() RolePosture {
 			// rows, mirroring org_deletion.py's own _disable_scheduled_jobs
 			// step.
 			{"job_runs", false, false, true},
-			{"scheduled_jobs", false, true, true},
+			// CHAOS-6597: the create path adds the config's sync job anchor
+			// (INSERT), widened in place.
+			{"scheduled_jobs", true, true, true},
 			{"backfill_jobs", false, false, true},
 			// Billing: invoice_line_items/subscription_events are each
 			// deleted via a subquery on their own owning row's org_id
@@ -257,7 +263,10 @@ func apiPosture() RolePosture {
 			{"provider_oauth_credentials", false, false, true},
 			{"provider_oauth_revocations", false, false, true},
 			// Integrations.
-			{"integration_datasets", false, false, true},
+			// CHAOS-6597: the create path seeds the planner datasets (INSERT)
+			// and the PagerDuty repair enables, disables and re-targets them
+			// (UPDATE).
+			{"integration_datasets", true, true, true},
 			{"github_app_installations", true, true, true},
 			// integration_credentials' delete grant is declared once, above
 			// (CHAOS-6319's read-only entry, widened rather than duplicated

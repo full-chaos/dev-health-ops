@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -79,6 +81,15 @@ def _dump():
         with open(out + "." + str(os.getpid()) + ".json", "w") as handle:
             json.dump({family: sorted(routes) for family, routes in _fired.items()}, handle)
 
+# pytest_sessionfinish runs in every xdist worker BEFORE it reports itself
+# finished, so the controller cannot return, and the Go test cannot glob the
+# dumps, ahead of a worker's dump. atexit alone lost that race: a worker
+# still running its exit hooks when the controller returned left no file
+# (4 of 11 local runs wrote fewer files than processes). The atexit hook stays
+# as the fallback for a process that never runs a session finish.
+def pytest_sessionfinish(session, exitstatus):
+    _dump()
+
 atexit.register(_dump)
 `
 
@@ -89,6 +100,23 @@ from alembic import command
 from dev_health_ops.migrate import _make_alembic_config
 command.upgrade(_make_alembic_config(), "heads")
 `
+
+// sweepWorkers is the xdist worker count (-n) the sweep runs with. Every one of
+// the sweepWorkers workers and the controller writes one dump file, so a run
+// that finds fewer files measured only part of the Python api's tests.
+const sweepWorkers = 4
+
+// checkSweepDumps fails when fewer process dumps exist than processes ran. A
+// missing dump silently removes every route a lost process fired: a ported
+// row then reads "lists routes X; fired under a subset of X" (main venue shard
+// 5/5, runs 36137514387 and 36137593534: 3 of 5 dumps). A measurement that did
+// not happen must fail, not shrink.
+func checkSweepDumps(files int) error {
+	if want := sweepWorkers + 1; files < want {
+		return fmt.Errorf("the sweep found %d process dump files, want %d (%d xdist workers and the controller): a process ended without writing its dump, so the fired routes are incomplete", files, want, sweepWorkers)
+	}
+	return nil
+}
 
 // noRequest is the plugin's label for a metric recorded outside any route.
 const noRequest = "<no request>"
@@ -223,7 +251,7 @@ func runSweep(t *testing.T) map[string]map[string]bool {
 		t.Fatal(err)
 	}
 	command := exec.Command(python, "-m", "pytest", "tests/api", "-p", "counter_sweep_plugin",
-		"-m", "not benchmark and not clickhouse", "-n", "4", "-q", "--no-header",
+		"-m", "not benchmark and not clickhouse", "-n", strconv.Itoa(sweepWorkers), "-q", "--no-header",
 		"-p", "no:warnings", "-p", "no:cacheprovider")
 	command.Dir = root
 	command.Env = append(os.Environ(),
@@ -243,6 +271,9 @@ func runSweep(t *testing.T) map[string]map[string]bool {
 
 	files, err := filepath.Glob(filepath.Join(dir, "out.*.json"))
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := checkSweepDumps(len(files)); err != nil {
 		t.Fatal(err)
 	}
 	fired := map[string]map[string]bool{}
@@ -359,4 +390,12 @@ func sortedKeys(set map[string]bool) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+func TestCheckSweepDumps(t *testing.T) {
+	for files, wantErr := range map[int]bool{0: true, 3: true, sweepWorkers: true, sweepWorkers + 1: false, sweepWorkers + 2: false} {
+		if err := checkSweepDumps(files); (err != nil) != wantErr {
+			t.Errorf("checkSweepDumps(%d) = %v, want error=%v", files, err, wantErr)
+		}
+	}
 }

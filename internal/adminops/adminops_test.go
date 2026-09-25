@@ -20,7 +20,7 @@ func TestTheAdminGroupHoldsEveryVerb(t *testing.T) {
 			paths = append(paths, group.Name+" "+child.Name)
 		}
 	}
-	want := "users create,users list,users update,orgs create,orgs list,orgs delete,llm-settings get,llm-settings set,llm-settings delete,features seed"
+	want := "users create,users list,users update,orgs create,orgs list,orgs delete,llm-settings get,llm-settings set,llm-settings delete,licenses keygen,licenses create,bundles create,bundles list,bundles assign-plan,bundles assign-org,features seed"
 	if command.Name != "admin" || strings.Join(paths, ",") != want {
 		t.Fatalf("the verbs are %v, want %s", paths, want)
 	}
@@ -47,6 +47,15 @@ func TestUsersVerbsRefuseBadArgumentsBeforeConnecting(t *testing.T) {
 		{"llm set needs --provider", runLLMSet, []string{"--org", "x"}},
 		{"llm set needs an organization", runLLMSet, []string{"--provider", "openai"}},
 		{"llm delete needs an organization", runLLMDelete, nil},
+		{"licenses keygen refuses a positional", runLicensesKeygen, []string{"x"}},
+		{"licenses create needs --org-id and --tier", runLicensesCreate, nil},
+		{"licenses create refuses an unknown tier", runLicensesCreate, []string{"--org-id", "o", "--tier", "bogus"}},
+		{"licenses create refuses a non-integer duration", runLicensesCreate, []string{"--org-id", "o", "--tier", "team", "--duration-days", "many"}},
+		{"bundles create needs its flags", runBundlesCreate, []string{"--key", "k"}},
+		{"bundles list refuses a positional", runBundlesList, []string{"x"}},
+		{"bundles assign-plan needs its flags", runBundlesAssignPlan, []string{"--bundle-key", "b"}},
+		{"bundles assign-org needs its flags", runBundlesAssignOrg, []string{"--org-id", "o"}},
+		{"bundles assign-org refuses a non-integer expiry", runBundlesAssignOrg, []string{"--org-id", "o", "--feature-key", "f", "--expires-days", "soon"}},
 		{"orgs delete refuses a positional", runOrgsDelete, []string{"--org-id", "x", "y"}},
 	}
 	for _, c := range cases {

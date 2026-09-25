@@ -23,6 +23,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/metricscli"
 	"github.com/full-chaos/dev-health-ops/internal/mintcli"
 	"github.com/full-chaos/dev-health-ops/internal/operationalbackfill"
+	"github.com/full-chaos/dev-health-ops/internal/pushcli"
 	"github.com/full-chaos/dev-health-ops/internal/queryapiservice"
 	"github.com/full-chaos/dev-health-ops/internal/reconcilerservice"
 	"github.com/full-chaos/dev-health-ops/internal/rivermigrate"
@@ -48,6 +49,7 @@ func commands() []cli.Command {
 		metricscli.Command(),
 		mintcli.Command(),
 		operationalbackfill.Command(),
+		pushcli.Command(),
 		queryapiservice.Command(),
 		reconcilerservice.Command(),
 		rivermigrate.Command(),

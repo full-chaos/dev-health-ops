@@ -1,0 +1,10 @@
+{
+  "externalKey": "ABC-123",
+  "provider": "jira",
+  "occurredAt": "2026-06-21T09:00:00Z",
+  "fromStatus": "todo",
+  "toStatus": "in_progress",
+  "fromStatusRaw": "To Do",
+  "toStatusRaw": "In Progress",
+  "actor": "alice@acme.example"
+}

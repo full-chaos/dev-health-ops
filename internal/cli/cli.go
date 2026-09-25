@@ -115,6 +115,8 @@ func (k Kind) String() string {
 type Env struct {
 	Args   []string
 	Lookup secrets.LookupEnv
+	// Stdin is what a verb reads when it is given "-"; nil reads as empty.
+	Stdin  io.Reader
 	Stdout io.Writer
 	Stderr io.Writer
 }
@@ -249,6 +251,7 @@ func Main(binary string, tree []Command) {
 	os.Exit(Execute(context.Background(), binary, tree, Env{
 		Args:   os.Args[1:],
 		Lookup: os.LookupEnv,
+		Stdin:  os.Stdin,
 		Stdout: os.Stdout,
 		Stderr: os.Stderr,
 	}))
@@ -256,6 +259,9 @@ func Main(binary string, tree []Command) {
 
 // Execute is the testable entry point. It never calls os.Exit.
 func Execute(ctx context.Context, binary string, tree []Command, env Env) int {
+	if env.Stdin == nil {
+		env.Stdin = strings.NewReader("")
+	}
 	if env.Stdout == nil {
 		env.Stdout = io.Discard
 	}
@@ -347,7 +353,7 @@ func Execute(ctx context.Context, binary string, tree []Command, env Env) int {
 				return ExitUsage
 			}
 		}
-		return command.Run(ctx, Env{Args: handed, Lookup: env.Lookup, Stdout: env.Stdout, Stderr: env.Stderr})
+		return command.Run(ctx, Env{Args: handed, Lookup: env.Lookup, Stdin: env.Stdin, Stdout: env.Stdout, Stderr: env.Stderr})
 	}
 }
 

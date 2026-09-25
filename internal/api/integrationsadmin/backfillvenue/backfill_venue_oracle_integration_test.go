@@ -24,6 +24,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/apiservice"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	schedsync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
@@ -42,9 +44,10 @@ const (
 // ids are random on the Python plane and derived from the occurrence on the Go
 // plane, so ids are compared by their place of first appearance.
 //
-// Named divergences (CHAOS-6674): sync_runs.credential_fingerprint is stamped
-// by Python's planner and left NULL by the Go materializer (CHAOS-6679; the
-// column is not compared); sync_runs.triggered_by is "backfill" where Python
+// The materializer stamps sync_runs.credential_fingerprint through a decryptor
+// keyed like the Python plane's (the column is compared).
+//
+// Named divergences (CHAOS-6674): sync_runs.triggered_by is "backfill" where Python
 // writes "admin-api"; an integration that is inactive, has no canonical
 // configuration, or whose configuration is neither planner-managed nor pinned
 // is planned by Python and refused with 409 by the hand-off (nothing
@@ -95,10 +98,18 @@ func TestIntegrationBackfillVenueOracle(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(schedulerPool.Close)
+	// The credential fingerprint the run is stamped with is read through a
+	// decryptor keyed like the Python plane's SETTINGS_ENCRYPTION_KEY (the
+	// materializer refuses a credential-backed occurrence without one).
+	decryptor, err := providerfoundation.NewFernetDecryptor(secrets.NewValue(venueKey), "")
+	if err != nil {
+		t.Fatal(err)
+	}
 	materializer, err := schedsync.NewNativeMaterializer(schedulerPool)
 	if err != nil {
 		t.Fatal(err)
 	}
+	materializer.WithCredentialFingerprint(decryptor)
 	reconciler, err := schedsync.NewOccurrenceReconciler(schedulerPool, materializer)
 	if err != nil {
 		t.Fatal(err)
@@ -139,7 +150,7 @@ func TestIntegrationBackfillVenueOracle(t *testing.T) {
 		name, query   string
 		minSeparators int
 	}{
-		{"sync_runs", `SELECT org_id, integration_id::text, mode, status, total_units, completed_units, failed_units, credential_id::text,
+		{"sync_runs", `SELECT org_id, integration_id::text, mode, status, total_units, completed_units, failed_units, credential_id::text, credential_fingerprint,
 auth_source, started_at, completed_at, result::text, error FROM sync_runs WHERE integration_id::text NOT IN (` + notIn + `)
 ORDER BY integration_id::text, mode`, 8},
 		{"sync_run_units", `SELECT u.org_id, u.integration_id::text, u.source_id::text, u.provider, u.dataset_key, u.cost_class, u.mode, u.since_at, u.before_at,

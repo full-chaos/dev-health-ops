@@ -39,6 +39,10 @@ type pagerDutyDisconnectFakeServer struct {
 	mu         sync.Mutex
 	calls      []string
 	failTokens map[string]bool
+	// redirectTo is where a revoke of the redirect token is sent (307, which
+	// replays the POST body); captured counts requests that reach it.
+	redirectTo string
+	captured   int
 }
 
 func (f *pagerDutyDisconnectFakeServer) handler(w http.ResponseWriter, r *http.Request) {
@@ -48,7 +52,13 @@ func (f *pagerDutyDisconnectFakeServer) handler(w http.ResponseWriter, r *http.R
 	f.mu.Lock()
 	f.calls = append(f.calls, token)
 	fail := f.failTokens[token]
+	redirectTo := f.redirectTo
 	f.mu.Unlock()
+	if token == "venue-pd-disc-redirect-token" {
+		w.Header().Set("Location", redirectTo+"/captured")
+		w.WriteHeader(http.StatusTemporaryRedirect)
+		return
+	}
 	if fail {
 		w.WriteHeader(http.StatusInternalServerError)
 		return
@@ -75,10 +85,18 @@ func TestPagerDutyDisconnectVenueOracle(t *testing.T) {
 	fake := &pagerDutyDisconnectFakeServer{failTokens: map[string]bool{}}
 	fakeServer := httptest.NewServer(http.HandlerFunc(fake.handler))
 	t.Cleanup(fakeServer.Close)
+	capture := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fake.mu.Lock()
+		fake.captured++
+		fake.mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(capture.Close)
+	fake.redirectTo = capture.URL
 
 	type orgSpec struct{ id uuid.UUID }
 	orgs := map[string]*orgSpec{}
-	for _, slug := range []string{"connected", "empty", "bad-cipher", "with-binding", "revoke-fails"} {
+	for _, slug := range []string{"connected", "empty", "bad-cipher", "with-binding", "revoke-fails", "revoke-redirects"} {
 		orgs[slug] = &orgSpec{id: uuid.New()}
 	}
 	adminID, memberID := uuid.New(), uuid.New()
@@ -144,6 +162,9 @@ VALUES ($1, 'pagerduty', 'default', 'garbage-not-fernet', 1, now(), now(), false
 			fake.failTokens["venue-pd-disc-fails-token"] = true
 			fake.mu.Unlock()
 
+			credential("revoke-redirects")
+			oauthTokens("revoke-redirects", "venue-pd-disc-redirect-token")
+
 			bindingCredentialID := credential("with-binding")
 			oauthTokens("with-binding", "venue-pd-disc-binding-token")
 			integrationID := uuid.New()
@@ -158,12 +179,13 @@ VALUES ($1, $2, $3, $4, 'sub-1', $5, 'v1', 'active', now(), now())`,
 				uuid.New(), orgs["with-binding"].id, sourceID, bindingCredentialID, encrypt("venue-pd-disc-signing-secret"))
 
 			return map[string]map[string]any{
-				"admin_connected":    {"user_id": adminID.String(), "email": "pd-disc-admin@example.com", "org_id": orgs["connected"].id.String(), "role": "admin"},
-				"admin_empty":        {"user_id": adminID.String(), "email": "pd-disc-admin@example.com", "org_id": orgs["empty"].id.String(), "role": "admin"},
-				"admin_bad_cipher":   {"user_id": adminID.String(), "email": "pd-disc-admin@example.com", "org_id": orgs["bad-cipher"].id.String(), "role": "admin"},
-				"admin_with_binding": {"user_id": adminID.String(), "email": "pd-disc-admin@example.com", "org_id": orgs["with-binding"].id.String(), "role": "admin"},
-				"admin_revoke_fails": {"user_id": adminID.String(), "email": "pd-disc-admin@example.com", "org_id": orgs["revoke-fails"].id.String(), "role": "admin"},
-				"member":             {"user_id": memberID.String(), "email": "pd-disc-member@example.com", "org_id": orgs["connected"].id.String(), "role": "member"},
+				"admin_connected":        {"user_id": adminID.String(), "email": "pd-disc-admin@example.com", "org_id": orgs["connected"].id.String(), "role": "admin"},
+				"admin_empty":            {"user_id": adminID.String(), "email": "pd-disc-admin@example.com", "org_id": orgs["empty"].id.String(), "role": "admin"},
+				"admin_bad_cipher":       {"user_id": adminID.String(), "email": "pd-disc-admin@example.com", "org_id": orgs["bad-cipher"].id.String(), "role": "admin"},
+				"admin_with_binding":     {"user_id": adminID.String(), "email": "pd-disc-admin@example.com", "org_id": orgs["with-binding"].id.String(), "role": "admin"},
+				"admin_revoke_redirects": {"user_id": adminID.String(), "email": "pd-disc-admin@example.com", "org_id": orgs["revoke-redirects"].id.String(), "role": "admin"},
+				"admin_revoke_fails":     {"user_id": adminID.String(), "email": "pd-disc-admin@example.com", "org_id": orgs["revoke-fails"].id.String(), "role": "admin"},
+				"member":                 {"user_id": memberID.String(), "email": "pd-disc-member@example.com", "org_id": orgs["connected"].id.String(), "role": "member"},
 			}
 		},
 	})
@@ -183,6 +205,7 @@ VALUES ($1, $2, $3, $4, 'sub-1', $5, 'v1', 'active', now(), now())`,
 		disconnect("W disconnect bad cipher skips revoke", "admin_bad_cipher", `{}`),
 		disconnect("W disconnect detaches webhook binding", "admin_with_binding", `{}`),
 		disconnect("W disconnect revoke fails, pending retry", "admin_revoke_fails", `{}`),
+		disconnect("W disconnect revoke redirected is a failure, not followed", "admin_revoke_redirects", `{}`),
 		disconnect("W disconnect credential_name blank", "admin_empty", `{"credential_name":"  "}`),
 		disconnect("W disconnect extra field", "admin_empty", `{"bogus":1}`),
 		disconnect("W disconnect body list", "admin_empty", `[]`),
@@ -223,6 +246,12 @@ VALUES ($1, $2, $3, $4, 'sub-1', $5, 'v1', 'active', now(), now())`,
 		`SELECT count(*) FROM provider_oauth_revocations WHERE org_id = '`+orgs["revoke-fails"].id.String()+`' AND status = 'pending'`)
 	if pending != "1" {
 		t.Errorf("revoke-fails org: go plane has %s pending revocations, want 1", pending)
+	}
+	fake.mu.Lock()
+	captured := fake.captured
+	fake.mu.Unlock()
+	if captured != 0 {
+		t.Errorf("a revoke redirect was followed and delivered a token: %d request(s) reached the redirect target", captured)
 	}
 	if fake.count() < 4 {
 		t.Errorf("fake pagerduty revoke server saw only %d calls", fake.count())

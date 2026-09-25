@@ -74,5 +74,11 @@ func RevokePagerDutyOAuthToken(ctx context.Context, doer HTTPDoer, config PagerD
 	if classification := ClassifyHTTP("pagerduty", response.StatusCode, response.Header); classification != nil {
 		return classification
 	}
+	// raise_for_status: anything but a 2xx is a failure, a redirect included
+	// (the caller's client must not follow one -- httpx does not -- so the
+	// token is never replayed to the redirect target).
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return &ProviderError{Class: ErrorPermanent, StatusCode: response.StatusCode}
+	}
 	return nil
 }

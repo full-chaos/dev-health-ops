@@ -84,7 +84,11 @@ func Routes(deps Deps) []httpapi.Route {
 	}
 	httpDoer := deps.HTTPDoer
 	if httpDoer == nil {
-		httpDoer = http.DefaultClient
+		// PagerDuty's revoke carries a bearer token in its body: httpx does
+		// not follow redirects and has a 10s timeout, so neither may this
+		// client (http.DefaultClient would replay a 307's body, token
+		// included, to the redirect target).
+		httpDoer = &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	}
 	limits := deps.Limits
 	if limits == nil {

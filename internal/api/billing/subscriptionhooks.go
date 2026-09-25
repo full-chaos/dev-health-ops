@@ -32,14 +32,29 @@ var errNotificationOrg = errors.New("billing: notification org_id is not a UUID"
 var errNoProducer = errors.New("billing: job outbox producer is not configured")
 
 // handlerOrgID is `metadata.get("org_id") if isinstance(metadata, dict)
-// else None`.
-func handlerOrgID(subscription pyjson.Value) pyjson.Value {
+// else None`; when the metadata names no org, the org that owns the Stripe
+// subscription or customer (stripeOwnerOrg, a named divergence,
+// CHAOS-6525), as its id text.
+func (h handlers) handlerOrgID(ctx context.Context, subscription pyjson.Value) pyjson.Value {
 	metadata, isObject := attr(subscription, "metadata", pyjson.NewObject()).(*pyjson.Object)
-	if !isObject {
-		return nil
+	var orgID pyjson.Value
+	if isObject {
+		orgID, _ = metadata.Get("org_id")
 	}
-	orgID, _ := metadata.Get("org_id")
-	return orgID
+	if pyjson.Truthy(orgID) || h.pool == nil {
+		return orgID
+	}
+	subscriptionID, _ := attr(subscription, "id", "").(string)
+	customer, _ := attr(subscription, "customer", "").(string)
+	owner, _, err := stripeOwnerOrg(ctx, h.pool, subscriptionID, customer)
+	if err != nil {
+		h.logger.WarnContext(ctx, "Could not look up the org owning a subscription", "error", err.Error())
+		return orgID
+	}
+	if owner == nil {
+		return orgID
+	}
+	return owner.String()
 }
 
 // orgTier reads organizations.tier for an org_id value the way the
@@ -68,7 +83,12 @@ func (h handlers) orgTier(ctx context.Context, orgID pyjson.Value) *string {
 // items' prices, then for an org in the metadata a license signed for that
 // tier and persisted; a changed tier queues subscription_changed. An items
 // data value that cannot be iterated is the route's 500, as in Python.
-func (h handlers) subscriptionUpdated(ctx context.Context, subscription pyjson.Value) error {
+//
+// oldTier is the org's tier read before the event's plan sync ran
+// (read in the route before processSubscriptionEvent): read after it, it is already the new tier and no
+// upgrade or downgrade would ever be announced (the Python order's gap,
+// CHAOS-6525).
+func (h handlers) subscriptionUpdated(ctx context.Context, subscription pyjson.Value, oldTier *string) error {
 	customer := attr(subscription, "customer", nil)
 	itemsData := attr(subscription, "items", nil)
 	if !pyjson.Truthy(itemsData) {
@@ -88,12 +108,11 @@ func (h handlers) subscriptionUpdated(ctx context.Context, subscription pyjson.V
 	if err != nil {
 		return err
 	}
-	orgID := handlerOrgID(subscription)
+	orgID := h.handlerOrgID(ctx, subscription)
 	if !pyjson.Truthy(orgID) {
 		h.logger.InfoContext(ctx, "subscription.updated without org_id metadata", "customer", pyStr(customer))
 		return nil
 	}
-	oldTier := h.orgTier(ctx, orgID)
 	orgText, isText := orgID.(string)
 	key := h.licenseKey.Reveal()
 	if !isText || key == "" {
@@ -123,7 +142,7 @@ func (h handlers) subscriptionUpdated(ctx context.Context, subscription pyjson.V
 // metadata, its current tier read, its license revoked, and
 // subscription_cancelled queued with that tier.
 func (h handlers) subscriptionDeleted(ctx context.Context, subscription pyjson.Value) {
-	orgID := handlerOrgID(subscription)
+	orgID := h.handlerOrgID(ctx, subscription)
 	customer := attr(subscription, "customer", nil)
 	if !pyjson.Truthy(orgID) {
 		h.logger.InfoContext(ctx, "subscription.deleted without org_id metadata", "customer", pyStr(customer))
@@ -194,7 +213,7 @@ func (h handlers) revokeLicense(ctx context.Context, orgID pyjson.Value) {
 // up) and the trial's end date. A trial_end past time_t is the route's
 // 500 (Python's OverflowError is outside its except).
 func (h handlers) trialWillEnd(ctx context.Context, subscription pyjson.Value) error {
-	orgID := handlerOrgID(subscription)
+	orgID := h.handlerOrgID(ctx, subscription)
 	customer := attr(subscription, "customer", nil)
 	if !pyjson.Truthy(orgID) {
 		h.logger.InfoContext(ctx, "subscription.trial_will_end without org_id metadata", "customer", pyStr(customer))

@@ -219,14 +219,13 @@ func (h handlers) invoiceEvent(ctx context.Context, eventType string, eventID py
 	var org uuid.UUID
 	resolved, applied := false, false
 	err := h.inTxFunc(ctx, func(tx pgx.Tx) error {
+		// The stored subscription is the link whatever names the org.
 		var localSubscription *uuid.UUID
-		var subscriptionOrg *uuid.UUID
 		if stripeSubscriptionID != "" {
-			var id, subOrg uuid.UUID
-			switch err := tx.QueryRow(ctx, `SELECT id, org_id FROM subscriptions WHERE stripe_subscription_id = $1`,
-				stripeSubscriptionID).Scan(&id, &subOrg); {
+			var id uuid.UUID
+			switch err := tx.QueryRow(ctx, `SELECT id FROM subscriptions WHERE stripe_subscription_id = $1`, stripeSubscriptionID).Scan(&id); {
 			case err == nil:
-				localSubscription, subscriptionOrg = &id, &subOrg
+				localSubscription = &id
 			case !errors.Is(err, pgx.ErrNoRows):
 				return err
 			}
@@ -256,16 +255,13 @@ func (h handlers) invoiceEvent(ctx context.Context, eventType string, eventID py
 				break
 			}
 		}
-		if !resolved && subscriptionOrg != nil {
-			org, resolved = *subscriptionOrg, true
-		}
-		if !resolved && customer != "" {
-			switch err := tx.QueryRow(ctx, `SELECT org_id FROM org_licenses WHERE customer_id = $1 ORDER BY org_id LIMIT 1`,
-				customer).Scan(&org); {
-			case err == nil:
-				resolved = true
-			case !errors.Is(err, pgx.ErrNoRows):
+		if !resolved {
+			owner, _, err := stripeOwnerOrg(ctx, tx, stripeSubscriptionID, customer)
+			if err != nil {
 				return err
+			}
+			if owner != nil {
+				org, resolved = *owner, true
 			}
 		}
 		if !resolved {
@@ -452,4 +448,36 @@ func (h handlers) invoiceNotification(ctx context.Context, eventType string, eve
 		h.logger.WarnContext(ctx, "Failed to enqueue invoice email", "type", notificationType, "org_id", org.String(), "error", err.Error())
 	}
 	return nil
+}
+
+// rowQuerier is what the org lookups read through: a pool or a transaction.
+type rowQuerier interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
+// stripeOwnerOrg is the org a Stripe object belongs to when its own
+// metadata names none: the local subscription row for the Stripe
+// subscription id, else the license whose customer_id is the Stripe
+// customer (written by the checkout webhook). The subscription row's id
+// comes back too, for a link. Nothing found: nil, nil.
+func stripeOwnerOrg(ctx context.Context, q rowQuerier, stripeSubscriptionID, customer string) (org, subscription *uuid.UUID, err error) {
+	if stripeSubscriptionID != "" {
+		var id, owner uuid.UUID
+		switch err := q.QueryRow(ctx, `SELECT id, org_id FROM subscriptions WHERE stripe_subscription_id = $1`, stripeSubscriptionID).Scan(&id, &owner); {
+		case err == nil:
+			return &owner, &id, nil
+		case !errors.Is(err, pgx.ErrNoRows):
+			return nil, nil, err
+		}
+	}
+	if customer != "" {
+		var owner uuid.UUID
+		switch err := q.QueryRow(ctx, `SELECT org_id FROM org_licenses WHERE customer_id = $1 ORDER BY org_id LIMIT 1`, customer).Scan(&owner); {
+		case err == nil:
+			return &owner, nil, nil
+		case !errors.Is(err, pgx.ErrNoRows):
+			return nil, nil, err
+		}
+	}
+	return nil, nil, nil
 }

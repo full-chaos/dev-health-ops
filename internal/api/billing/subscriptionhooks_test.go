@@ -24,7 +24,7 @@ func TestNotificationHandoffFailureIsAWarning(t *testing.T) {
 	if err := h.trialWillEnd(context.Background(), "evt_trial", subscription); err != nil {
 		t.Fatal(err)
 	}
-	h.subscriptionDeleted(context.Background(), subscription)
+	h.subscriptionDeleted(context.Background(), "evt_unit", subscription)
 	for _, want := range []string{"Failed to enqueue trial expiring email", "Failed to enqueue subscription cancelled email"} {
 		found := false
 		for _, line := range strings.Split(logs.String(), "\n") {

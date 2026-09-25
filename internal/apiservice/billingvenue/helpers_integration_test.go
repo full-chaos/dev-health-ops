@@ -14,6 +14,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -42,6 +44,35 @@ func venueRoot() string {
 
 func quietLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
 
+// venueLogs is where the Go api's own log lines land in a venue: every test
+// may read them (a test that does resets it first).
+var venueLogs = &logSink{}
+
+// logSink is a goroutine-safe buffer for slog.
+type logSink struct {
+	mu   sync.Mutex
+	text strings.Builder
+}
+
+func (l *logSink) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.text.Write(p)
+}
+
+func (l *logSink) Reset() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.text.Reset()
+}
+
+// Lines are the log lines so far.
+func (l *logSink) Lines() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return strings.Split(strings.TrimSpace(l.text.String()), "\n")
+}
+
 // startVenueAPI serves the Go plane for venue as dho api wires it (the
 // routes, the org scope and impersonation middlewares, security headers and
 // CORS), connected as the api role, after proving that role holds exactly
@@ -63,7 +94,7 @@ func startBillingVenueAPI(t *testing.T, ctx context.Context, cfg config.Config, 
 	if err := postgres.CheckAPIAuthorization(ctx, pool, cfg.APIDatabaseRole, cfg.RiverDatabaseSchema); err != nil {
 		t.Fatalf("dho api not ready as the api role: %v %s", err, venue.DiagnoseAPIRole(t, ctx))
 	}
-	logger := quietLogger()
+	logger := slog.New(slog.NewTextHandler(venueLogs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	verifier, err := edgetoken.New(cfg.APIJWTSecret.Reveal(), cfg.APIJWTIssuer, cfg.APIJWTAudience)
 	if err != nil {
 		t.Fatal(err)

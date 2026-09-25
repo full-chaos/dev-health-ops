@@ -1,0 +1,15 @@
+[
+  {"provider": "github", "method": "GET", "path": "/user", "status": 200,
+   "body": {"login": "zz-venue-user", "id": 1, "type": "User"}},
+  {"provider": "gitlab", "method": "GET", "path": "/api/v4/groups/zz-venue/projects", "status": 200,
+   "headers": {"X-Total-Pages": "1"},
+   "body": [{"id": 1, "name": "zz-project", "path_with_namespace": "zz-venue/zz-project"}]},
+  {"provider": "jira", "method": "GET", "path": "/rest/api/3/serverInfo", "status": 200,
+   "body": {"baseUrl": "https://zz-venue.atlassian.net", "deploymentType": "Cloud", "serverTitle": "zz-venue"}},
+  {"provider": "linear", "method": "POST", "path": "/graphql", "status": 200,
+   "body": {"data": {"teams": {"nodes": [{"id": "zz-team-1", "key": "ZZ", "name": "zz-venue"}]}}}},
+  {"provider": "pagerduty", "method": "POST", "path": "/oauth/token", "status": 200,
+   "body": {"access_token": "zz-venue-not-a-token", "token_type": "bearer", "expires_in": 3600, "scope": "services.read"}},
+  {"provider": "pagerduty", "method": "GET", "path": "/services", "status": 200,
+   "body": {"services": [{"id": "PZZVENUE", "name": "zz-venue-service", "summary": "zz-venue-service"}], "more": false}}
+]

@@ -1,0 +1,53 @@
+package main
+
+import (
+	"crypto/x509"
+	"encoding/pem"
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func TestCertsWritesAVerifiableChainForEveryProviderHostAndTheJiraTenants(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "certs")
+	if err := certs([]string{"-out", dir, "-jira-host", "zz-venue.atlassian.net"}); err != nil {
+		t.Fatal(err)
+	}
+	read := func(name string) []byte {
+		raw, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return raw
+	}
+	info, err := os.Stat(filepath.Join(dir, "server.key"))
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("server.key mode = %v, %v; want 0600", info, err)
+	}
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM(read("ca.pem")) {
+		t.Fatal("ca.pem is not a certificate")
+	}
+	block, _ := pem.Decode(read("server.pem"))
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, host := range []string{"api.github.com", "github.com", "gitlab.com", "api.linear.app", "api.pagerduty.com", "api.eu.pagerduty.com", "identity.pagerduty.com", "zz-venue.atlassian.net"} {
+		if _, err := cert.Verify(x509.VerifyOptions{DNSName: host, Roots: roots}); err != nil {
+			t.Errorf("server.pem does not verify for %s: %v", host, err)
+		}
+	}
+	if _, err := cert.Verify(x509.VerifyOptions{DNSName: "example.com", Roots: roots}); err == nil {
+		t.Error("the certificate must not cover hosts the venue does not stub")
+	}
+	if err := certs([]string{}); err == nil {
+		t.Error("certs without -out must be refused")
+	}
+}
+
+func TestServeRefusesMissingFlags(t *testing.T) {
+	if err := serve([]string{"-fixtures", "x"}); err == nil {
+		t.Fatal("serve without -cert and -key must be refused")
+	}
+}

@@ -12,7 +12,7 @@
 package main
 
 import (
-	"github.com/full-chaos/dev-health-ops/internal/admincli"
+	"github.com/full-chaos/dev-health-ops/internal/adminops"
 	"github.com/full-chaos/dev-health-ops/internal/aicli"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
@@ -38,7 +38,7 @@ func main() { cli.Main("dho", commands()) }
 // commands is the complete command tree, one vertical per line.
 func commands() []cli.Command {
 	return []cli.Command{
-		admincli.Command(),
+		adminops.Command(),
 		aicli.Command(),
 		apiservice.Command(),
 		contractcheck.Command(),

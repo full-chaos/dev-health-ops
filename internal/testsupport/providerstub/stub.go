@@ -110,30 +110,69 @@ type Fixture struct {
 	// the fixture file's directory (a recorded body, byte for byte). Not both.
 	Body     json.RawMessage `json:"body,omitempty"`
 	BodyFile string          `json:"body_file,omitempty"`
+	// BodyContains, when set, requires the REQUEST body to contain this text (a POST/PUT/PATCH fixture: e.g. which GraphQL
+	// operation a Linear call sends). RequestHeaders, when set, requires each named request header to equal the value exactly
+	// (e.g. the Authorization a probe sends, to answer a 401 for one key). Both are compared inside the stub and never recorded.
+	BodyContains   string            `json:"body_contains,omitempty"`
+	RequestHeaders map[string]string `json:"request_headers,omitempty"`
 
 	body []byte
 }
 
-func (f *Fixture) matches(provider, method, path string, query map[string][]string) bool {
+// matchResult is the outcome of testing one fixture against a request.
+type matchResult int
+
+const (
+	noMatch matchResult = iota
+	matchYes
+	// matchRefuse: every other selector matched, but this fixture selects on the request body and the body could not be
+	// read in full (over the limit, a read error, the read deadline). The stub cannot know which fixture the request
+	// belongs to, so the request is answered 599 and no later (less specific) fixture may answer it.
+	matchRefuse
+)
+
+// matches reports whether the request selects this fixture. body is called at most once per request, and only when every other
+// selector already matched and this fixture has a body_contains: a fixture with no body selector never waits on the request body.
+// Header values are compared as net/http parsed them (surrounding whitespace is already stripped on the wire).
+func (f *Fixture) matches(provider, method, path string, query map[string][]string, header http.Header, body func() ([]byte, bool)) matchResult {
 	if f.Provider != provider || f.Method != method {
-		return false
+		return noMatch
 	}
 	if strings.HasSuffix(f.Path, "*") {
 		if !strings.HasPrefix(path, strings.TrimSuffix(f.Path, "*")) {
-			return false
+			return noMatch
 		}
 	} else if f.Path != path {
-		return false
+		return noMatch
 	}
 	for key, want := range f.Query {
 		// exactly one value: a duplicate key must not smuggle a second value past the fixture
 		got, ok := query[key]
 		if !ok || len(got) != 1 || got[0] != want {
-			return false
+			return noMatch
 		}
 	}
-	return true
+	for name, want := range f.RequestHeaders {
+		// exactly one value, like a query key: a repeated header must not smuggle a second value past the fixture.
+		// Values canonicalizes the name.
+		if got := header.Values(name); len(got) != 1 || got[0] != want {
+			return noMatch
+		}
+	}
+	if f.BodyContains != "" {
+		raw, complete := body()
+		if !complete {
+			return matchRefuse // its tail is unseen: never a match, and never an answer from a less specific fixture either
+		}
+		if !strings.Contains(string(raw), f.BodyContains) {
+			return noMatch
+		}
+	}
+	return matchYes
 }
+
+// maxMatchBody bounds the request body the stub reads to decide a body_contains match; a longer body never matches one.
+const maxMatchBody = 1 << 20
 
 var validMethods = map[string]bool{"GET": true, "POST": true, "PUT": true, "PATCH": true, "DELETE": true, "HEAD": true, "OPTIONS": true}
 
@@ -154,10 +193,61 @@ func (f *Fixture) validate(where string) error {
 		return fmt.Errorf("%s: path %q must start with /", where, f.Path)
 	case f.Status < 200 || f.Status > 598:
 		return fmt.Errorf("%s: status %d must be a final status in 200..598 (599 is reserved for unstubbed requests)", where, f.Status)
+	case f.BodyContains != "" && f.Method != "POST" && f.Method != "PUT" && f.Method != "PATCH":
+		return fmt.Errorf("%s: body_contains needs a POST, PUT or PATCH fixture", where)
+	case len(f.BodyContains) > maxMatchBody:
+		return fmt.Errorf("%s: body_contains is longer than the %d byte match limit", where, maxMatchBody)
 	case len(f.Body) > 0 && f.BodyFile != "":
 		return fmt.Errorf("%s: both body and body_file", where)
 	}
+	for name, value := range f.RequestHeaders {
+		if name == "" || value == "" {
+			return fmt.Errorf("%s: request_headers needs a non-empty header name and value", where)
+		}
+		if !validHeaderName(name) {
+			return fmt.Errorf("%s: request_headers name %q is not a valid HTTP field name, so no request could carry it", where, name)
+		}
+		// net/http keeps these out of the request header map (Host in r.Host, the framing in r.TransferEncoding), so a
+		// fixture naming one could never match.
+		switch strings.ToLower(name) {
+		case "host", "transfer-encoding":
+			return fmt.Errorf("%s: request_headers cannot select on %q (net/http does not expose it as a header)", where, name)
+		}
+	}
 	return nil
+}
+
+// validHeaderName reports whether name is an RFC 9110 field-name token.
+func validHeaderName(name string) bool {
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		if c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || strings.IndexByte("!#$%&'*+-.^_`|~", c) >= 0 {
+			continue
+		}
+		return false
+	}
+	return name != ""
+}
+
+// matchBodyTimeout bounds how long the stub waits for a request body it needs for a body_contains match.
+const matchBodyTimeout = 5 * time.Second
+
+// readMatchBody reads at most maxMatchBody bytes of the request body (plus one sentinel byte, read only to tell "exactly at
+// the limit" from "over it"), and reports whether the body was ALL read and within the limit: a read error
+// (a stalled or broken client, the read deadline) or a body over the limit reports false, so it never matches.
+func readMatchBody(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
+	if r.Body == nil {
+		return nil, true
+	}
+	_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(matchBodyTimeout)) // best effort: not every writer supports it
+	raw, err := io.ReadAll(io.LimitReader(r.Body, maxMatchBody+1))
+	if err != nil || len(raw) > maxMatchBody {
+		if len(raw) > maxMatchBody {
+			raw = raw[:maxMatchBody]
+		}
+		return raw, false
+	}
+	return raw, true
 }
 
 // Recorded is one request the stub answered (or refused).
@@ -265,14 +355,31 @@ func (s *Stub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	var matched *Fixture
 	if provider != "" && safePath(r) {
-		s.mu.Lock()
+		// the request body is read (bounded, with a deadline) only when a fixture that matches on everything else has a
+		// body_contains, and once per request: never recorded, logged or echoed. The fixture table is immutable after
+		// New/LoadDir, so no lock is held while a slow client sends its body.
+		var (
+			body     []byte
+			complete bool
+			read     bool
+		)
+		lazyBody := func() ([]byte, bool) {
+			if !read {
+				body, complete = readMatchBody(w, r)
+				read = true
+			}
+			return body, complete
+		}
+		query := r.URL.Query()
 		for _, fixture := range s.fixtures {
-			if fixture.matches(provider, r.Method, r.URL.Path, r.URL.Query()) {
+			result := fixture.matches(provider, r.Method, r.URL.Path, query, r.Header, lazyBody)
+			if result == matchYes {
 				matched = fixture
-				break
+			}
+			if result != noMatch {
+				break // matchRefuse ends the walk with no answer: 599
 			}
 		}
-		s.mu.Unlock()
 	}
 	if matched == nil {
 		record.Status = 599

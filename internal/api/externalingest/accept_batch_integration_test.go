@@ -13,74 +13,38 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/pgmigrate"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	valkeygo "github.com/valkey-io/valkey-go"
 )
 
-// createExternalIngestTables mirrors internal/externalrecompute's own
-// createCompatibilityTables pattern: a Go integration test defines exactly
-// the tables it touches directly, rather than running the full Python
-// alembic chain -- the columns here are taken from the SQLAlchemy models
-// this package's queries were written against (models/ingest_auth.py,
-// models/external_ingest.py, models/integrations.py) plus the tables
-// internal/api/licensing.PostgresStore.Decide reads (org_feature_overrides
-// needs its `config` column -- see that package's own store_integration_test.go
-// for the DDL this mirrors; omitting it fails every Decide call with
-// "column org_override.config does not exist", surfaced here as the
-// generic internal_error "failed to resolve feature state").
+// createExternalIngestTables builds the REAL schema -- the pgmigrate baseline
+// and chain, the same schema the Alembic heads produce -- so a column the
+// queries under test read (integrations.credential_id, CHAOS-6717) exists
+// exactly when it exists in a deployment. It used to hand-write a subset of
+// the tables; that subset drifted the first time the ownership matcher read a
+// new column, and the accept-batch tests failed on main with a generic 500
+// (Trap #412: integration tests never hand-write DDL for production tables).
 func createExternalIngestTables(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
-	statements := []string{
-		`CREATE EXTENSION IF NOT EXISTS pgcrypto`,
-		`CREATE TABLE organizations (id uuid PRIMARY KEY, tier text)`,
-		`CREATE TABLE org_licenses (org_id uuid PRIMARY KEY, tier text, features_override jsonb)`,
-		`CREATE TABLE feature_flags (id uuid PRIMARY KEY, key text UNIQUE NOT NULL, is_enabled boolean NOT NULL, min_tier text NOT NULL)`,
-		`CREATE TABLE org_feature_overrides (org_id uuid, feature_id uuid, is_enabled boolean, expires_at timestamptz, config jsonb, PRIMARY KEY (org_id, feature_id))`,
-		`CREATE TABLE external_ingest_sources (
-			id uuid PRIMARY KEY, org_id text NOT NULL, system text NOT NULL, instance text NOT NULL,
-			entity_family text NOT NULL DEFAULT 'legacy', mode text NOT NULL DEFAULT 'disabled',
-			enabled boolean NOT NULL DEFAULT true
-		)`,
-		`CREATE TABLE external_ingest_tokens (
-			id uuid PRIMARY KEY, org_id text NOT NULL, source_id uuid, token_hash text UNIQUE NOT NULL,
-			scopes jsonb NOT NULL, expires_at timestamptz, revoked_at timestamptz,
-			last_used_at timestamptz, last_used_ip text
-		)`,
-		`CREATE TABLE external_ingest_batches (
-			ingestion_id uuid PRIMARY KEY, org_id text NOT NULL, idempotency_key text NOT NULL,
-			payload_hash text NOT NULL, source_system text NOT NULL, source_instance text NOT NULL,
-			entity_family text NOT NULL DEFAULT 'legacy', producer text, producer_version text,
-			schema_version text NOT NULL, window_started_at timestamptz, window_ended_at timestamptz,
-			status text NOT NULL DEFAULT 'accepted', attempts integer NOT NULL DEFAULT 1,
-			items_received integer NOT NULL DEFAULT 0, items_accepted integer NOT NULL DEFAULT 0,
-			items_rejected integer NOT NULL DEFAULT 0, record_counts jsonb, error_summary jsonb,
-			created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL, completed_at timestamptz,
-			recompute_status text NOT NULL DEFAULT 'not_applicable', recompute_scope jsonb,
-			recompute_dispatched_at timestamptz, recompute_completed_at timestamptz, recompute_error text,
-			UNIQUE (org_id, source_system, source_instance, entity_family, idempotency_key)
-		)`,
-		`CREATE TABLE external_ingest_batch_payloads (
-			ingestion_id uuid PRIMARY KEY, org_id text NOT NULL, schema_version text NOT NULL,
-			payload_json bytea NOT NULL, byte_size integer NOT NULL, created_at timestamptz NOT NULL
-		)`,
-		`CREATE TABLE external_ingest_rejections (
-			id uuid PRIMARY KEY, org_id text NOT NULL, ingestion_id uuid NOT NULL, record_index integer NOT NULL,
-			record_kind text NOT NULL, external_id text, code text NOT NULL, message text NOT NULL,
-			path text, created_at timestamptz NOT NULL
-		)`,
-		`CREATE TABLE integrations (id uuid PRIMARY KEY, org_id text NOT NULL, provider text NOT NULL, is_active boolean NOT NULL DEFAULT true, config jsonb NOT NULL DEFAULT '{}')`,
-		`CREATE TABLE integration_sources (
-			id uuid PRIMARY KEY, org_id text NOT NULL, integration_id uuid NOT NULL REFERENCES integrations(id),
-			provider text NOT NULL, external_id text NOT NULL, name text NOT NULL, full_name text NOT NULL,
-			metadata jsonb NOT NULL DEFAULT '{}', is_enabled boolean NOT NULL DEFAULT true
-		)`,
+	conn, err := pgx.Connect(ctx, pool.Config().ConnString())
+	if err != nil {
+		t.Fatalf("connect for the schema: %v", err)
 	}
-	for _, stmt := range statements {
-		if _, err := pool.Exec(ctx, stmt); err != nil {
-			t.Fatalf("create table: %v\n%s", err, stmt)
-		}
+	defer conn.Close(context.Background())
+	baseline, err := pgmigrate.LoadBaseline()
+	if err != nil {
+		t.Fatalf("load baseline: %v", err)
+	}
+	chain, err := pgmigrate.LoadChain()
+	if err != nil {
+		t.Fatalf("load chain: %v", err)
+	}
+	if _, err := pgmigrate.Upgrade(ctx, conn, baseline, chain); err != nil {
+		t.Fatalf("apply the schema: %v", err)
 	}
 }
 
@@ -95,20 +59,20 @@ func mustHash(token string) string {
 func seedIngestToken(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgID, system, instance, token string) uuid.UUID {
 	t.Helper()
 	sourceID := uuid.New()
-	if _, err := pool.Exec(ctx, `INSERT INTO organizations (id, tier) VALUES ($1, 'team')`, orgID); err != nil {
+	if _, err := pool.Exec(ctx, `INSERT INTO organizations (id, slug, name, tier, is_active, created_at, updated_at) VALUES ($1::uuid, 'org-' || $1::text, 'org', 'team', true, now(), now())`, orgID); err != nil {
 		t.Fatalf("seed organization: %v", err)
 	}
 	if _, err := pool.Exec(ctx, `
-		INSERT INTO external_ingest_sources (id, org_id, system, instance, entity_family, mode, enabled)
-		VALUES ($1, $2, $3, $4, 'legacy', 'customer_push', true)
+		INSERT INTO external_ingest_sources (id, org_id, system, instance, entity_family, mode, enabled, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, 'legacy', 'customer_push', true, now(), now())
 	`, sourceID, orgID, system, instance); err != nil {
 		t.Fatalf("seed source: %v", err)
 	}
 	scopes, _ := json.Marshal([]string{"schema:read", "ingest:write", "ingest:status"})
 	tokenID := uuid.New()
 	if _, err := pool.Exec(ctx, `
-		INSERT INTO external_ingest_tokens (id, org_id, source_id, token_hash, scopes)
-		VALUES ($1, $2, $3, $4, $5)
+		INSERT INTO external_ingest_tokens (id, org_id, source_id, name, token_hash, token_prefix, scopes, created_at)
+		VALUES ($1, $2, $3, 'test', $4, 'fcpush_test', $5, now())
 	`, tokenID, orgID, sourceID, mustHash(token), scopes); err != nil {
 		t.Fatalf("seed token: %v", err)
 	}
@@ -117,7 +81,7 @@ func seedIngestToken(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgI
 	// integration tests run multiple subtests against the same container) --
 	// idempotent by design, not "seed once and hope no caller repeats it".
 	if _, err := pool.Exec(ctx, `
-		INSERT INTO feature_flags (id, key, is_enabled, min_tier) VALUES ($1, 'customer_push_ingest', true, 'team')
+		INSERT INTO feature_flags (id, key, name, is_enabled, min_tier, created_at, updated_at) VALUES ($1, 'customer_push_ingest', 'customer_push_ingest', true, 'team', now(), now())
 		ON CONFLICT (key) DO NOTHING
 	`, uuid.New()); err != nil {
 		t.Fatalf("seed feature flag: %v", err)

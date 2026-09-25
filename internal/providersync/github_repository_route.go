@@ -239,27 +239,19 @@ func (row repositoryRow) validate(claim Claim) error {
 	return nil
 }
 
-// providerRelativePath joins path segments underneath the credential's
-// configured base path. A leading-slash absolute path would make url.Parse
-// *replace* the base path, silently dropping a GitHub Enterprise install's
-// required `/api/v3` prefix and issuing the request against a non-API route.
+// providerRelativePath joins path segments into a request path relative to the
+// credential's base URL. HTTPClient.Do joins the path under the base URL's own
+// path (a GitHub Enterprise install's `/api/v3` prefix, a self-hosted GitLab
+// sub-path), so the base path is NOT added here.
 func providerRelativePath(
-	client *providerfoundation.HTTPClient,
+	_ *providerfoundation.HTTPClient,
 	segments ...string,
 ) string {
 	escaped := make([]string, 0, len(segments))
 	for _, segment := range segments {
 		escaped = append(escaped, url.PathEscape(segment))
 	}
-	joined := strings.Join(escaped, "/")
-	if client == nil || client.BaseURL == nil {
-		return "/" + joined
-	}
-	base := client.BaseURL.EscapedPath()
-	if base == "" || base == "/" {
-		return "/" + joined
-	}
-	return strings.TrimSuffix(base, "/") + "/" + joined
+	return "/" + strings.Join(escaped, "/")
 }
 
 // repositoryIdentity mirrors Python's get_repo_uuid_from_repo for the ASCII

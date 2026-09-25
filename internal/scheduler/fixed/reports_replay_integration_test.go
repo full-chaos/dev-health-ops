@@ -1402,7 +1402,7 @@ VALUES ($1::uuid, $2, 'seam', $3::uuid, TRUE, $4, $4)`,
 	seedRecordedOccurrence(t, ctx, pool, previous)
 
 	engine, publisher := newReportEngine(t, pool, schedule)
-	loop, err := NewLoop(engine, DefaultLoopConfig(health.NewRegistry(100*time.Millisecond)))
+	loop, err := NewLoop(engine, DefaultLoopConfig(health.NewRegistry(readinessTestCheckTimeout)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1495,7 +1495,7 @@ func TestSkipReasonDoesNotReachTheGaugeThroughTheEngine(t *testing.T) {
 	seedRecordedOccurrence(t, ctx, pool, previous)
 
 	engine, publisher := newReportEngine(t, pool, schedule)
-	loop, err := NewLoop(engine, DefaultLoopConfig(health.NewRegistry(100*time.Millisecond)))
+	loop, err := NewLoop(engine, DefaultLoopConfig(health.NewRegistry(readinessTestCheckTimeout)))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -224,7 +224,10 @@ jobs:
         run: go run ./cmd/gqlgen-guard check-drift
 
       - name: Install locked live provider oracle dependencies
-        if: steps.relevance.outputs.relevant == 'true' && matrix.name == 'oracles'
+        # EVERY leg: unit tests in the test and race legs run real Python
+        # programs too (e.g. admin TestOrgDeletionTargetsMatchThePythonList);
+        # the single-job gate had these installed for all of them.
+        if: steps.relevance.outputs.relevant == 'true'
         run: python -m pip install --no-deps -r ci/requirements-live-python-oracles.txt
 
       - name: Prepare base job contracts

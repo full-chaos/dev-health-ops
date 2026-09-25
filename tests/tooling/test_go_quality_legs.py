@@ -384,8 +384,14 @@ def test_only_the_static_leg_runs_the_static_only_steps() -> None:
         name = step.get("name", "")
         if name.startswith(static_only):
             assert "matrix.name == 'static'" in str(step.get("if", "")), name
-    assert any(
-        "Install locked live provider oracle dependencies" in s.get("name", "")
-        and "matrix.name == 'oracles'" in str(s.get("if", ""))
+    # The locked live-Python dependencies are installed by EVERY leg: unit tests
+    # of the test and race legs run real Python programs too.
+    deps = [
+        s
         for s in leg["steps"]
+        if "Install locked live provider oracle dependencies" in s.get("name", "")
+    ]
+    assert len(deps) == 1
+    assert "matrix.name" not in str(deps[0].get("if", "")), (
+        "the oracle dependencies must be installed on every leg, not only one"
     )

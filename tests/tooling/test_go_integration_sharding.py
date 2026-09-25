@@ -289,6 +289,9 @@ EXPECTED_PACKAGES = {
     # CHAOS-6462: the PostgreSQL head baseline is re-derived by executing the
     # real Python upgrade on a fresh PostgreSQL, and dho's migrator is checked
     # against that database -- only a real engine can build either side.
+    # CHAOS-6467: `dho backfill run` on a real PostgreSQL at the head baseline, compared
+    # with the rows the Python hand-off wrote (frozen, and live by venue oracle).
+    "internal/backfillrun",
     # CHAOS-6467: `dho backfill operational` on a real ClickHouse at both operational
     # table shapes, compared with the rows the Python producer wrote (frozen, and live
     # by venue oracle).

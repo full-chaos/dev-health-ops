@@ -1,0 +1,9114 @@
+{
+ "": {
+  "supported": [],
+  "entries": [
+   {
+    "targets": []
+   },
+   {
+    "targets": [
+     "git"
+    ]
+   },
+   {
+    "targets": [
+     "prs"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs"
+    ]
+   },
+   {
+    "targets": [
+     "blame"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "blame"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "blame"
+    ]
+   },
+   {
+    "targets": [
+     "cicd"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "cicd"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "cicd"
+    ]
+   },
+   {
+    "targets": [
+     "blame",
+     "cicd"
+    ]
+   },
+   {
+    "targets": [
+     "deployments"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "deployments"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "deployments"
+    ]
+   },
+   {
+    "targets": [
+     "blame",
+     "deployments"
+    ]
+   },
+   {
+    "targets": [
+     "cicd",
+     "deployments"
+    ]
+   },
+   {
+    "targets": [
+     "incidents"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "incidents"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "incidents"
+    ]
+   },
+   {
+    "targets": [
+     "blame",
+     "incidents"
+    ]
+   },
+   {
+    "targets": [
+     "cicd",
+     "incidents"
+    ]
+   },
+   {
+    "targets": [
+     "deployments",
+     "incidents"
+    ]
+   },
+   {
+    "targets": [
+     "security"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "security"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "security"
+    ]
+   },
+   {
+    "targets": [
+     "blame",
+     "security"
+    ]
+   },
+   {
+    "targets": [
+     "cicd",
+     "security"
+    ]
+   },
+   {
+    "targets": [
+     "deployments",
+     "security"
+    ]
+   },
+   {
+    "targets": [
+     "incidents",
+     "security"
+    ]
+   },
+   {
+    "targets": [
+     "tests"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "tests"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "tests"
+    ]
+   },
+   {
+    "targets": [
+     "blame",
+     "tests"
+    ]
+   },
+   {
+    "targets": [
+     "cicd",
+     "tests"
+    ]
+   },
+   {
+    "targets": [
+     "deployments",
+     "tests"
+    ]
+   },
+   {
+    "targets": [
+     "incidents",
+     "tests"
+    ]
+   },
+   {
+    "targets": [
+     "security",
+     "tests"
+    ]
+   },
+   {
+    "targets": [
+     "work-items"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "work-items"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "work-items"
+    ]
+   },
+   {
+    "targets": [
+     "blame",
+     "work-items"
+    ]
+   },
+   {
+    "targets": [
+     "cicd",
+     "work-items"
+    ]
+   },
+   {
+    "targets": [
+     "deployments",
+     "work-items"
+    ]
+   },
+   {
+    "targets": [
+     "incidents",
+     "work-items"
+    ]
+   },
+   {
+    "targets": [
+     "security",
+     "work-items"
+    ]
+   },
+   {
+    "targets": [
+     "tests",
+     "work-items"
+    ]
+   },
+   {
+    "targets": [
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "blame",
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "cicd",
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "deployments",
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "incidents",
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "security",
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "tests",
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "work-items",
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "operational"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "operational"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "operational"
+    ]
+   },
+   {
+    "targets": [
+     "blame",
+     "operational"
+    ]
+   },
+   {
+    "targets": [
+     "cicd",
+     "operational"
+    ]
+   },
+   {
+    "targets": [
+     "deployments",
+     "operational"
+    ]
+   },
+   {
+    "targets": [
+     "incidents",
+     "operational"
+    ]
+   },
+   {
+    "targets": [
+     "security",
+     "operational"
+    ]
+   },
+   {
+    "targets": [
+     "tests",
+     "operational"
+    ]
+   },
+   {
+    "targets": [
+     "work-items",
+     "operational"
+    ]
+   },
+   {
+    "targets": [
+     "feature-flags",
+     "operational"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational"
+    ]
+   },
+   {
+    "targets": [
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "blame",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "cicd",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "deployments",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "incidents",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "security",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "tests",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "work-items",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "feature-flags",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "operational",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "operational",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ]
+   }
+  ]
+ },
+ "GitHub": {
+  "supported": [
+   "git",
+   "prs",
+   "blame",
+   "cicd",
+   "deployments",
+   "security",
+   "tests",
+   "work-items"
+  ],
+  "entries": [
+   {
+    "targets": []
+   },
+   {
+    "targets": [
+     "git"
+    ],
+    "keys": [
+     "repo-metadata",
+     "commits",
+     "commit-stats",
+     "files",
+     "blame"
+    ]
+   },
+   {
+    "targets": [
+     "prs"
+    ],
+    "keys": [
+     "prs",
+     "pr-reviews",
+     "pr-comments"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs"
+    ],
+    "keys": [
+     "repo-metadata",
+     "commits",
+     "commit-stats",
+     "files",
+     "blame",
+     "prs",
+     "pr-reviews",
+     "pr-comments"
+    ]
+   },
+   {
+    "targets": [
+     "blame"
+    ],
+    "keys": [
+     "blame"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "blame"
+    ],
+    "keys": [
+     "repo-metadata",
+     "commits",
+     "commit-stats",
+     "files",
+     "blame"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "blame"
+    ],
+    "keys": [
+     "blame",
+     "prs",
+     "pr-reviews",
+     "pr-comments"
+    ]
+   },
+   {
+    "targets": [
+     "cicd"
+    ],
+    "keys": [
+     "cicd"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "cicd"
+    ],
+    "keys": [
+     "repo-metadata",
+     "commits",
+     "commit-stats",
+     "files",
+     "blame",
+     "cicd"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "cicd"
+    ],
+    "keys": [
+     "prs",
+     "pr-reviews",
+     "pr-comments",
+     "cicd"
+    ]
+   },
+   {
+    "targets": [
+     "blame",
+     "cicd"
+    ],
+    "keys": [
+     "blame",
+     "cicd"
+    ]
+   },
+   {
+    "targets": [
+     "deployments"
+    ],
+    "keys": [
+     "deployments"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "deployments"
+    ],
+    "keys": [
+     "repo-metadata",
+     "commits",
+     "commit-stats",
+     "files",
+     "blame",
+     "deployments"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "deployments"
+    ],
+    "keys": [
+     "prs",
+     "pr-reviews",
+     "pr-comments",
+     "deployments"
+    ]
+   },
+   {
+    "targets": [
+     "blame",
+     "deployments"
+    ],
+    "keys": [
+     "blame",
+     "deployments"
+    ]
+   },
+   {
+    "targets": [
+     "cicd",
+     "deployments"
+    ],
+    "keys": [
+     "cicd",
+     "deployments"
+    ]
+   },
+   {
+    "targets": [
+     "incidents"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "incidents"
+    ],
+    "keys": [
+     "repo-metadata",
+     "commits",
+     "commit-stats",
+     "files",
+     "blame"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "incidents"
+    ],
+    "keys": [
+     "prs",
+     "pr-reviews",
+     "pr-comments"
+    ]
+   },
+   {
+    "targets": [
+     "blame",
+     "incidents"
+    ],
+    "keys": [
+     "blame"
+    ]
+   },
+   {
+    "targets": [
+     "cicd",
+     "incidents"
+    ],
+    "keys": [
+     "cicd"
+    ]
+   },
+   {
+    "targets": [
+     "deployments",
+     "incidents"
+    ],
+    "keys": [
+     "deployments"
+    ]
+   },
+   {
+    "targets": [
+     "security"
+    ],
+    "keys": [
+     "security"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "security"
+    ],
+    "keys": [
+     "repo-metadata",
+     "commits",
+     "commit-stats",
+     "files",
+     "blame",
+     "security"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "security"
+    ],
+    "keys": [
+     "prs",
+     "pr-reviews",
+     "pr-comments",
+     "security"
+    ]
+   },
+   {
+    "targets": [
+     "blame",
+     "security"
+    ],
+    "keys": [
+     "blame",
+     "security"
+    ]
+   },
+   {
+    "targets": [
+     "cicd",
+     "security"
+    ],
+    "keys": [
+     "cicd",
+     "security"
+    ]
+   },
+   {
+    "targets": [
+     "deployments",
+     "security"
+    ],
+    "keys": [
+     "deployments",
+     "security"
+    ]
+   },
+   {
+    "targets": [
+     "incidents",
+     "security"
+    ],
+    "keys": [
+     "security"
+    ]
+   },
+   {
+    "targets": [
+     "tests"
+    ],
+    "keys": [
+     "tests"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "tests"
+    ],
+    "keys": [
+     "repo-metadata",
+     "commits",
+     "commit-stats",
+     "files",
+     "blame",
+     "tests"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "tests"
+    ],
+    "keys": [
+     "prs",
+     "pr-reviews",
+     "pr-comments",
+     "tests"
+    ]
+   },
+   {
+    "targets": [
+     "blame",
+     "tests"
+    ],
+    "keys": [
+     "blame",
+     "tests"
+    ]
+   },
+   {
+    "targets": [
+     "cicd",
+     "tests"
+    ],
+    "keys": [
+     "cicd",
+     "tests"
+    ]
+   },
+   {
+    "targets": [
+     "deployments",
+     "tests"
+    ],
+    "keys": [
+     "tests",
+     "deployments"
+    ]
+   },
+   {
+    "targets": [
+     "incidents",
+     "tests"
+    ],
+    "keys": [
+     "tests"
+    ]
+   },
+   {
+    "targets": [
+     "security",
+     "tests"
+    ],
+    "keys": [
+     "tests",
+     "security"
+    ]
+   },
+   {
+    "targets": [
+     "work-items"
+    ],
+    "keys": [
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "work-items"
+    ],
+    "keys": [
+     "repo-metadata",
+     "commits",
+     "commit-stats",
+     "files",
+     "blame",
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "work-items"
+    ],
+    "keys": [
+     "prs",
+     "pr-reviews",
+     "pr-comments",
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "blame",
+     "work-items"
+    ],
+    "keys": [
+     "blame",
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "cicd",
+     "work-items"
+    ],
+    "keys": [
+     "cicd",
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "deployments",
+     "work-items"
+    ],
+    "keys": [
+     "deployments",
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "incidents",
+     "work-items"
+    ],
+    "keys": [
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "security",
+     "work-items"
+    ],
+    "keys": [
+     "security",
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "tests",
+     "work-items"
+    ],
+    "keys": [
+     "tests",
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "feature-flags"
+    ],
+    "keys": [
+     "repo-metadata",
+     "commits",
+     "commit-stats",
+     "files",
+     "blame"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "feature-flags"
+    ],
+    "keys": [
+     "prs",
+     "pr-reviews",
+     "pr-comments"
+    ]
+   },
+   {
+    "targets": [
+     "blame",
+     "feature-flags"
+    ],
+    "keys": [
+     "blame"
+    ]
+   },
+   {
+    "targets": [
+     "cicd",
+     "feature-flags"
+    ],
+    "keys": [
+     "cicd"
+    ]
+   },
+   {
+    "targets": [
+     "deployments",
+     "feature-flags"
+    ],
+    "keys": [
+     "deployments"
+    ]
+   },
+   {
+    "targets": [
+     "incidents",
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "security",
+     "feature-flags"
+    ],
+    "keys": [
+     "security"
+    ]
+   },
+   {
+    "targets": [
+     "tests",
+     "feature-flags"
+    ],
+    "keys": [
+     "tests"
+    ]
+   },
+   {
+    "targets": [
+     "work-items",
+     "feature-flags"
+    ],
+    "keys": [
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "operational"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "operational"
+    ],
+    "keys": [
+     "repo-metadata",
+     "commits",
+     "commit-stats",
+     "files",
+     "blame"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "operational"
+    ],
+    "keys": [
+     "prs",
+     "pr-reviews",
+     "pr-comments"
+    ]
+   },
+   {
+    "targets": [
+     "blame",
+     "operational"
+    ],
+    "keys": [
+     "blame"
+    ]
+   },
+   {
+    "targets": [
+     "cicd",
+     "operational"
+    ],
+    "keys": [
+     "cicd"
+    ]
+   },
+   {
+    "targets": [
+     "deployments",
+     "operational"
+    ],
+    "keys": [
+     "deployments"
+    ]
+   },
+   {
+    "targets": [
+     "incidents",
+     "operational"
+    ]
+   },
+   {
+    "targets": [
+     "security",
+     "operational"
+    ],
+    "keys": [
+     "security"
+    ]
+   },
+   {
+    "targets": [
+     "tests",
+     "operational"
+    ],
+    "keys": [
+     "tests"
+    ]
+   },
+   {
+    "targets": [
+     "work-items",
+     "operational"
+    ],
+    "keys": [
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "feature-flags",
+     "operational"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational"
+    ],
+    "keys": [
+     "repo-metadata",
+     "commits",
+     "commit-stats",
+     "files",
+     "blame",
+     "prs",
+     "pr-reviews",
+     "pr-comments",
+     "cicd",
+     "tests",
+     "deployments",
+     "security",
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "bogus"
+    ],
+    "keys": [
+     "repo-metadata",
+     "commits",
+     "commit-stats",
+     "files",
+     "blame"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "bogus"
+    ],
+    "keys": [
+     "prs",
+     "pr-reviews",
+     "pr-comments"
+    ]
+   },
+   {
+    "targets": [
+     "blame",
+     "bogus"
+    ],
+    "keys": [
+     "blame"
+    ]
+   },
+   {
+    "targets": [
+     "cicd",
+     "bogus"
+    ],
+    "keys": [
+     "cicd"
+    ]
+   },
+   {
+    "targets": [
+     "deployments",
+     "bogus"
+    ],
+    "keys": [
+     "deployments"
+    ]
+   },
+   {
+    "targets": [
+     "incidents",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "security",
+     "bogus"
+    ],
+    "keys": [
+     "security"
+    ]
+   },
+   {
+    "targets": [
+     "tests",
+     "bogus"
+    ],
+    "keys": [
+     "tests"
+    ]
+   },
+   {
+    "targets": [
+     "work-items",
+     "bogus"
+    ],
+    "keys": [
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "feature-flags",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "bogus"
+    ],
+    "keys": [
+     "repo-metadata",
+     "commits",
+     "commit-stats",
+     "files",
+     "blame",
+     "prs",
+     "pr-reviews",
+     "pr-comments",
+     "cicd",
+     "tests",
+     "deployments",
+     "security",
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "operational",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "operational",
+     "bogus"
+    ],
+    "keys": [
+     "repo-metadata",
+     "commits",
+     "commit-stats",
+     "files",
+     "blame",
+     "prs",
+     "pr-reviews",
+     "pr-comments",
+     "cicd",
+     "tests",
+     "deployments",
+     "security",
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "keys": [
+     "repo-metadata",
+     "commits",
+     "commit-stats",
+     "files",
+     "blame",
+     "prs",
+     "pr-reviews",
+     "pr-comments",
+     "cicd",
+     "tests",
+     "deployments",
+     "security"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "keys": [
+     "repo-metadata",
+     "commits",
+     "commit-stats",
+     "files",
+     "blame",
+     "prs",
+     "pr-reviews",
+     "pr-comments",
+     "cicd",
+     "deployments",
+     "security",
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "keys": [
+     "repo-metadata",
+     "commits",
+     "commit-stats",
+     "files",
+     "blame",
+     "prs",
+     "pr-reviews",
+     "pr-comments",
+     "cicd",
+     "tests",
+     "deployments",
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "keys": [
+     "repo-metadata",
+     "commits",
+     "commit-stats",
+     "files",
+     "blame",
+     "prs",
+     "pr-reviews",
+     "pr-comments",
+     "cicd",
+     "tests",
+     "deployments",
+     "security",
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "keys": [
+     "repo-metadata",
+     "commits",
+     "commit-stats",
+     "files",
+     "blame",
+     "prs",
+     "pr-reviews",
+     "pr-comments",
+     "cicd",
+     "tests",
+     "security",
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "keys": [
+     "repo-metadata",
+     "commits",
+     "commit-stats",
+     "files",
+     "blame",
+     "prs",
+     "pr-reviews",
+     "pr-comments",
+     "tests",
+     "deployments",
+     "security",
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "keys": [
+     "repo-metadata",
+     "commits",
+     "commit-stats",
+     "files",
+     "blame",
+     "prs",
+     "pr-reviews",
+     "pr-comments",
+     "cicd",
+     "tests",
+     "deployments",
+     "security",
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "keys": [
+     "repo-metadata",
+     "commits",
+     "commit-stats",
+     "files",
+     "blame",
+     "cicd",
+     "tests",
+     "deployments",
+     "security",
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "keys": [
+     "blame",
+     "prs",
+     "pr-reviews",
+     "pr-comments",
+     "cicd",
+     "tests",
+     "deployments",
+     "security",
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "keys": [
+     "repo-metadata",
+     "commits",
+     "commit-stats",
+     "files",
+     "blame",
+     "prs",
+     "pr-reviews",
+     "pr-comments",
+     "cicd",
+     "tests",
+     "deployments",
+     "security",
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   }
+  ]
+ },
+ "PAGERDUTY": {
+  "supported": [
+   "operational"
+  ],
+  "entries": [
+   {
+    "targets": [],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "git"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "prs"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "git",
+     "prs"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "blame"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "git",
+     "blame"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "prs",
+     "blame"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "cicd"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "git",
+     "cicd"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "prs",
+     "cicd"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "blame",
+     "cicd"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "deployments"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "git",
+     "deployments"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "prs",
+     "deployments"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "blame",
+     "deployments"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "cicd",
+     "deployments"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "incidents"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "git",
+     "incidents"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "prs",
+     "incidents"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "blame",
+     "incidents"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "cicd",
+     "incidents"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "deployments",
+     "incidents"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "security"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "git",
+     "security"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "prs",
+     "security"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "blame",
+     "security"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "cicd",
+     "security"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "deployments",
+     "security"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "incidents",
+     "security"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "tests"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "git",
+     "tests"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "prs",
+     "tests"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "blame",
+     "tests"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "cicd",
+     "tests"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "deployments",
+     "tests"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "incidents",
+     "tests"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "security",
+     "tests"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "work-items"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "git",
+     "work-items"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "prs",
+     "work-items"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "blame",
+     "work-items"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "cicd",
+     "work-items"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "deployments",
+     "work-items"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "incidents",
+     "work-items"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "security",
+     "work-items"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "tests",
+     "work-items"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "feature-flags"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "git",
+     "feature-flags"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "prs",
+     "feature-flags"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "blame",
+     "feature-flags"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "cicd",
+     "feature-flags"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "deployments",
+     "feature-flags"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "incidents",
+     "feature-flags"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "security",
+     "feature-flags"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "tests",
+     "feature-flags"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "work-items",
+     "feature-flags"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "operational"
+    ],
+    "keys": [
+     "incidents",
+     "services",
+     "business-services",
+     "escalation-policies",
+     "schedules",
+     "on-calls",
+     "users",
+     "teams",
+     "incident-alerts",
+     "incident-log-entries",
+     "incident-notes"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "operational"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "prs",
+     "operational"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "blame",
+     "operational"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "cicd",
+     "operational"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "deployments",
+     "operational"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "incidents",
+     "operational"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "security",
+     "operational"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "tests",
+     "operational"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "work-items",
+     "operational"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "feature-flags",
+     "operational"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "bogus"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "git",
+     "bogus"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "prs",
+     "bogus"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "blame",
+     "bogus"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "cicd",
+     "bogus"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "deployments",
+     "bogus"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "incidents",
+     "bogus"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "security",
+     "bogus"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "tests",
+     "bogus"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "work-items",
+     "bogus"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "feature-flags",
+     "bogus"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "bogus"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "operational",
+     "bogus"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "operational",
+     "bogus"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "git",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   }
+  ]
+ },
+ "github": {
+  "supported": [
+   "git",
+   "prs",
+   "blame",
+   "cicd",
+   "deployments",
+   "security",
+   "tests",
+   "work-items"
+  ],
+  "entries": [
+   {
+    "targets": []
+   },
+   {
+    "targets": [
+     "git"
+    ],
+    "keys": [
+     "repo-metadata",
+     "commits",
+     "commit-stats",
+     "files",
+     "blame"
+    ]
+   },
+   {
+    "targets": [
+     "prs"
+    ],
+    "keys": [
+     "prs",
+     "pr-reviews",
+     "pr-comments"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs"
+    ],
+    "keys": [
+     "repo-metadata",
+     "commits",
+     "commit-stats",
+     "files",
+     "blame",
+     "prs",
+     "pr-reviews",
+     "pr-comments"
+    ]
+   },
+   {
+    "targets": [
+     "blame"
+    ],
+    "keys": [
+     "blame"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "blame"
+    ],
+    "keys": [
+     "repo-metadata",
+     "commits",
+     "commit-stats",
+     "files",
+     "blame"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "blame"
+    ],
+    "keys": [
+     "blame",
+     "prs",
+     "pr-reviews",
+     "pr-comments"
+    ]
+   },
+   {
+    "targets": [
+     "cicd"
+    ],
+    "keys": [
+     "cicd"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "cicd"
+    ],
+    "keys": [
+     "repo-metadata",
+     "commits",
+     "commit-stats",
+     "files",
+     "blame",
+     "cicd"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "cicd"
+    ],
+    "keys": [
+     "prs",
+     "pr-reviews",
+     "pr-comments",
+     "cicd"
+    ]
+   },
+   {
+    "targets": [
+     "blame",
+     "cicd"
+    ],
+    "keys": [
+     "blame",
+     "cicd"
+    ]
+   },
+   {
+    "targets": [
+     "deployments"
+    ],
+    "keys": [
+     "deployments"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "deployments"
+    ],
+    "keys": [
+     "repo-metadata",
+     "commits",
+     "commit-stats",
+     "files",
+     "blame",
+     "deployments"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "deployments"
+    ],
+    "keys": [
+     "prs",
+     "pr-reviews",
+     "pr-comments",
+     "deployments"
+    ]
+   },
+   {
+    "targets": [
+     "blame",
+     "deployments"
+    ],
+    "keys": [
+     "blame",
+     "deployments"
+    ]
+   },
+   {
+    "targets": [
+     "cicd",
+     "deployments"
+    ],
+    "keys": [
+     "cicd",
+     "deployments"
+    ]
+   },
+   {
+    "targets": [
+     "incidents"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "incidents"
+    ],
+    "keys": [
+     "repo-metadata",
+     "commits",
+     "commit-stats",
+     "files",
+     "blame"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "incidents"
+    ],
+    "keys": [
+     "prs",
+     "pr-reviews",
+     "pr-comments"
+    ]
+   },
+   {
+    "targets": [
+     "blame",
+     "incidents"
+    ],
+    "keys": [
+     "blame"
+    ]
+   },
+   {
+    "targets": [
+     "cicd",
+     "incidents"
+    ],
+    "keys": [
+     "cicd"
+    ]
+   },
+   {
+    "targets": [
+     "deployments",
+     "incidents"
+    ],
+    "keys": [
+     "deployments"
+    ]
+   },
+   {
+    "targets": [
+     "security"
+    ],
+    "keys": [
+     "security"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "security"
+    ],
+    "keys": [
+     "repo-metadata",
+     "commits",
+     "commit-stats",
+     "files",
+     "blame",
+     "security"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "security"
+    ],
+    "keys": [
+     "prs",
+     "pr-reviews",
+     "pr-comments",
+     "security"
+    ]
+   },
+   {
+    "targets": [
+     "blame",
+     "security"
+    ],
+    "keys": [
+     "blame",
+     "security"
+    ]
+   },
+   {
+    "targets": [
+     "cicd",
+     "security"
+    ],
+    "keys": [
+     "cicd",
+     "security"
+    ]
+   },
+   {
+    "targets": [
+     "deployments",
+     "security"
+    ],
+    "keys": [
+     "deployments",
+     "security"
+    ]
+   },
+   {
+    "targets": [
+     "incidents",
+     "security"
+    ],
+    "keys": [
+     "security"
+    ]
+   },
+   {
+    "targets": [
+     "tests"
+    ],
+    "keys": [
+     "tests"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "tests"
+    ],
+    "keys": [
+     "repo-metadata",
+     "commits",
+     "commit-stats",
+     "files",
+     "blame",
+     "tests"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "tests"
+    ],
+    "keys": [
+     "prs",
+     "pr-reviews",
+     "pr-comments",
+     "tests"
+    ]
+   },
+   {
+    "targets": [
+     "blame",
+     "tests"
+    ],
+    "keys": [
+     "blame",
+     "tests"
+    ]
+   },
+   {
+    "targets": [
+     "cicd",
+     "tests"
+    ],
+    "keys": [
+     "cicd",
+     "tests"
+    ]
+   },
+   {
+    "targets": [
+     "deployments",
+     "tests"
+    ],
+    "keys": [
+     "tests",
+     "deployments"
+    ]
+   },
+   {
+    "targets": [
+     "incidents",
+     "tests"
+    ],
+    "keys": [
+     "tests"
+    ]
+   },
+   {
+    "targets": [
+     "security",
+     "tests"
+    ],
+    "keys": [
+     "tests",
+     "security"
+    ]
+   },
+   {
+    "targets": [
+     "work-items"
+    ],
+    "keys": [
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "work-items"
+    ],
+    "keys": [
+     "repo-metadata",
+     "commits",
+     "commit-stats",
+     "files",
+     "blame",
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "work-items"
+    ],
+    "keys": [
+     "prs",
+     "pr-reviews",
+     "pr-comments",
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "blame",
+     "work-items"
+    ],
+    "keys": [
+     "blame",
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "cicd",
+     "work-items"
+    ],
+    "keys": [
+     "cicd",
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "deployments",
+     "work-items"
+    ],
+    "keys": [
+     "deployments",
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "incidents",
+     "work-items"
+    ],
+    "keys": [
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "security",
+     "work-items"
+    ],
+    "keys": [
+     "security",
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "tests",
+     "work-items"
+    ],
+    "keys": [
+     "tests",
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "feature-flags"
+    ],
+    "keys": [
+     "repo-metadata",
+     "commits",
+     "commit-stats",
+     "files",
+     "blame"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "feature-flags"
+    ],
+    "keys": [
+     "prs",
+     "pr-reviews",
+     "pr-comments"
+    ]
+   },
+   {
+    "targets": [
+     "blame",
+     "feature-flags"
+    ],
+    "keys": [
+     "blame"
+    ]
+   },
+   {
+    "targets": [
+     "cicd",
+     "feature-flags"
+    ],
+    "keys": [
+     "cicd"
+    ]
+   },
+   {
+    "targets": [
+     "deployments",
+     "feature-flags"
+    ],
+    "keys": [
+     "deployments"
+    ]
+   },
+   {
+    "targets": [
+     "incidents",
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "security",
+     "feature-flags"
+    ],
+    "keys": [
+     "security"
+    ]
+   },
+   {
+    "targets": [
+     "tests",
+     "feature-flags"
+    ],
+    "keys": [
+     "tests"
+    ]
+   },
+   {
+    "targets": [
+     "work-items",
+     "feature-flags"
+    ],
+    "keys": [
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "operational"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "operational"
+    ],
+    "keys": [
+     "repo-metadata",
+     "commits",
+     "commit-stats",
+     "files",
+     "blame"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "operational"
+    ],
+    "keys": [
+     "prs",
+     "pr-reviews",
+     "pr-comments"
+    ]
+   },
+   {
+    "targets": [
+     "blame",
+     "operational"
+    ],
+    "keys": [
+     "blame"
+    ]
+   },
+   {
+    "targets": [
+     "cicd",
+     "operational"
+    ],
+    "keys": [
+     "cicd"
+    ]
+   },
+   {
+    "targets": [
+     "deployments",
+     "operational"
+    ],
+    "keys": [
+     "deployments"
+    ]
+   },
+   {
+    "targets": [
+     "incidents",
+     "operational"
+    ]
+   },
+   {
+    "targets": [
+     "security",
+     "operational"
+    ],
+    "keys": [
+     "security"
+    ]
+   },
+   {
+    "targets": [
+     "tests",
+     "operational"
+    ],
+    "keys": [
+     "tests"
+    ]
+   },
+   {
+    "targets": [
+     "work-items",
+     "operational"
+    ],
+    "keys": [
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "feature-flags",
+     "operational"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational"
+    ],
+    "keys": [
+     "repo-metadata",
+     "commits",
+     "commit-stats",
+     "files",
+     "blame",
+     "prs",
+     "pr-reviews",
+     "pr-comments",
+     "cicd",
+     "tests",
+     "deployments",
+     "security",
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "bogus"
+    ],
+    "keys": [
+     "repo-metadata",
+     "commits",
+     "commit-stats",
+     "files",
+     "blame"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "bogus"
+    ],
+    "keys": [
+     "prs",
+     "pr-reviews",
+     "pr-comments"
+    ]
+   },
+   {
+    "targets": [
+     "blame",
+     "bogus"
+    ],
+    "keys": [
+     "blame"
+    ]
+   },
+   {
+    "targets": [
+     "cicd",
+     "bogus"
+    ],
+    "keys": [
+     "cicd"
+    ]
+   },
+   {
+    "targets": [
+     "deployments",
+     "bogus"
+    ],
+    "keys": [
+     "deployments"
+    ]
+   },
+   {
+    "targets": [
+     "incidents",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "security",
+     "bogus"
+    ],
+    "keys": [
+     "security"
+    ]
+   },
+   {
+    "targets": [
+     "tests",
+     "bogus"
+    ],
+    "keys": [
+     "tests"
+    ]
+   },
+   {
+    "targets": [
+     "work-items",
+     "bogus"
+    ],
+    "keys": [
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "feature-flags",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "bogus"
+    ],
+    "keys": [
+     "repo-metadata",
+     "commits",
+     "commit-stats",
+     "files",
+     "blame",
+     "prs",
+     "pr-reviews",
+     "pr-comments",
+     "cicd",
+     "tests",
+     "deployments",
+     "security",
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "operational",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "operational",
+     "bogus"
+    ],
+    "keys": [
+     "repo-metadata",
+     "commits",
+     "commit-stats",
+     "files",
+     "blame",
+     "prs",
+     "pr-reviews",
+     "pr-comments",
+     "cicd",
+     "tests",
+     "deployments",
+     "security",
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "keys": [
+     "repo-metadata",
+     "commits",
+     "commit-stats",
+     "files",
+     "blame",
+     "prs",
+     "pr-reviews",
+     "pr-comments",
+     "cicd",
+     "tests",
+     "deployments",
+     "security"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "keys": [
+     "repo-metadata",
+     "commits",
+     "commit-stats",
+     "files",
+     "blame",
+     "prs",
+     "pr-reviews",
+     "pr-comments",
+     "cicd",
+     "deployments",
+     "security",
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "keys": [
+     "repo-metadata",
+     "commits",
+     "commit-stats",
+     "files",
+     "blame",
+     "prs",
+     "pr-reviews",
+     "pr-comments",
+     "cicd",
+     "tests",
+     "deployments",
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "keys": [
+     "repo-metadata",
+     "commits",
+     "commit-stats",
+     "files",
+     "blame",
+     "prs",
+     "pr-reviews",
+     "pr-comments",
+     "cicd",
+     "tests",
+     "deployments",
+     "security",
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "keys": [
+     "repo-metadata",
+     "commits",
+     "commit-stats",
+     "files",
+     "blame",
+     "prs",
+     "pr-reviews",
+     "pr-comments",
+     "cicd",
+     "tests",
+     "security",
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "keys": [
+     "repo-metadata",
+     "commits",
+     "commit-stats",
+     "files",
+     "blame",
+     "prs",
+     "pr-reviews",
+     "pr-comments",
+     "tests",
+     "deployments",
+     "security",
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "keys": [
+     "repo-metadata",
+     "commits",
+     "commit-stats",
+     "files",
+     "blame",
+     "prs",
+     "pr-reviews",
+     "pr-comments",
+     "cicd",
+     "tests",
+     "deployments",
+     "security",
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "keys": [
+     "repo-metadata",
+     "commits",
+     "commit-stats",
+     "files",
+     "blame",
+     "cicd",
+     "tests",
+     "deployments",
+     "security",
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "keys": [
+     "blame",
+     "prs",
+     "pr-reviews",
+     "pr-comments",
+     "cicd",
+     "tests",
+     "deployments",
+     "security",
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "keys": [
+     "repo-metadata",
+     "commits",
+     "commit-stats",
+     "files",
+     "blame",
+     "prs",
+     "pr-reviews",
+     "pr-comments",
+     "cicd",
+     "tests",
+     "deployments",
+     "security",
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   }
+  ]
+ },
+ "gitlab": {
+  "supported": [
+   "git",
+   "prs",
+   "blame",
+   "cicd",
+   "deployments",
+   "incidents",
+   "security",
+   "tests",
+   "work-items",
+   "feature-flags"
+  ],
+  "entries": [
+   {
+    "targets": []
+   },
+   {
+    "targets": [
+     "git"
+    ],
+    "keys": [
+     "repo-metadata",
+     "commits",
+     "commit-stats",
+     "files",
+     "blame"
+    ]
+   },
+   {
+    "targets": [
+     "prs"
+    ],
+    "keys": [
+     "prs",
+     "pr-reviews",
+     "pr-comments"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs"
+    ],
+    "keys": [
+     "repo-metadata",
+     "commits",
+     "commit-stats",
+     "files",
+     "blame",
+     "prs",
+     "pr-reviews",
+     "pr-comments"
+    ]
+   },
+   {
+    "targets": [
+     "blame"
+    ],
+    "keys": [
+     "blame"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "blame"
+    ],
+    "keys": [
+     "repo-metadata",
+     "commits",
+     "commit-stats",
+     "files",
+     "blame"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "blame"
+    ],
+    "keys": [
+     "blame",
+     "prs",
+     "pr-reviews",
+     "pr-comments"
+    ]
+   },
+   {
+    "targets": [
+     "cicd"
+    ],
+    "keys": [
+     "cicd"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "cicd"
+    ],
+    "keys": [
+     "repo-metadata",
+     "commits",
+     "commit-stats",
+     "files",
+     "blame",
+     "cicd"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "cicd"
+    ],
+    "keys": [
+     "prs",
+     "pr-reviews",
+     "pr-comments",
+     "cicd"
+    ]
+   },
+   {
+    "targets": [
+     "blame",
+     "cicd"
+    ],
+    "keys": [
+     "blame",
+     "cicd"
+    ]
+   },
+   {
+    "targets": [
+     "deployments"
+    ],
+    "keys": [
+     "deployments"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "deployments"
+    ],
+    "keys": [
+     "repo-metadata",
+     "commits",
+     "commit-stats",
+     "files",
+     "blame",
+     "deployments"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "deployments"
+    ],
+    "keys": [
+     "prs",
+     "pr-reviews",
+     "pr-comments",
+     "deployments"
+    ]
+   },
+   {
+    "targets": [
+     "blame",
+     "deployments"
+    ],
+    "keys": [
+     "blame",
+     "deployments"
+    ]
+   },
+   {
+    "targets": [
+     "cicd",
+     "deployments"
+    ],
+    "keys": [
+     "cicd",
+     "deployments"
+    ]
+   },
+   {
+    "targets": [
+     "incidents"
+    ],
+    "keys": [
+     "incidents"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "incidents"
+    ],
+    "keys": [
+     "repo-metadata",
+     "commits",
+     "commit-stats",
+     "files",
+     "blame",
+     "incidents"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "incidents"
+    ],
+    "keys": [
+     "prs",
+     "pr-reviews",
+     "pr-comments",
+     "incidents"
+    ]
+   },
+   {
+    "targets": [
+     "blame",
+     "incidents"
+    ],
+    "keys": [
+     "blame",
+     "incidents"
+    ]
+   },
+   {
+    "targets": [
+     "cicd",
+     "incidents"
+    ],
+    "keys": [
+     "cicd",
+     "incidents"
+    ]
+   },
+   {
+    "targets": [
+     "deployments",
+     "incidents"
+    ],
+    "keys": [
+     "deployments",
+     "incidents"
+    ]
+   },
+   {
+    "targets": [
+     "security"
+    ],
+    "keys": [
+     "security"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "security"
+    ],
+    "keys": [
+     "repo-metadata",
+     "commits",
+     "commit-stats",
+     "files",
+     "blame",
+     "security"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "security"
+    ],
+    "keys": [
+     "prs",
+     "pr-reviews",
+     "pr-comments",
+     "security"
+    ]
+   },
+   {
+    "targets": [
+     "blame",
+     "security"
+    ],
+    "keys": [
+     "blame",
+     "security"
+    ]
+   },
+   {
+    "targets": [
+     "cicd",
+     "security"
+    ],
+    "keys": [
+     "cicd",
+     "security"
+    ]
+   },
+   {
+    "targets": [
+     "deployments",
+     "security"
+    ],
+    "keys": [
+     "deployments",
+     "security"
+    ]
+   },
+   {
+    "targets": [
+     "incidents",
+     "security"
+    ],
+    "keys": [
+     "incidents",
+     "security"
+    ]
+   },
+   {
+    "targets": [
+     "tests"
+    ],
+    "keys": [
+     "tests"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "tests"
+    ],
+    "keys": [
+     "repo-metadata",
+     "commits",
+     "commit-stats",
+     "files",
+     "blame",
+     "tests"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "tests"
+    ],
+    "keys": [
+     "prs",
+     "pr-reviews",
+     "pr-comments",
+     "tests"
+    ]
+   },
+   {
+    "targets": [
+     "blame",
+     "tests"
+    ],
+    "keys": [
+     "blame",
+     "tests"
+    ]
+   },
+   {
+    "targets": [
+     "cicd",
+     "tests"
+    ],
+    "keys": [
+     "cicd",
+     "tests"
+    ]
+   },
+   {
+    "targets": [
+     "deployments",
+     "tests"
+    ],
+    "keys": [
+     "tests",
+     "deployments"
+    ]
+   },
+   {
+    "targets": [
+     "incidents",
+     "tests"
+    ],
+    "keys": [
+     "tests",
+     "incidents"
+    ]
+   },
+   {
+    "targets": [
+     "security",
+     "tests"
+    ],
+    "keys": [
+     "tests",
+     "security"
+    ]
+   },
+   {
+    "targets": [
+     "work-items"
+    ],
+    "keys": [
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "work-items"
+    ],
+    "keys": [
+     "repo-metadata",
+     "commits",
+     "commit-stats",
+     "files",
+     "blame",
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "work-items"
+    ],
+    "keys": [
+     "prs",
+     "pr-reviews",
+     "pr-comments",
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "blame",
+     "work-items"
+    ],
+    "keys": [
+     "blame",
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "cicd",
+     "work-items"
+    ],
+    "keys": [
+     "cicd",
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "deployments",
+     "work-items"
+    ],
+    "keys": [
+     "deployments",
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "incidents",
+     "work-items"
+    ],
+    "keys": [
+     "incidents",
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "security",
+     "work-items"
+    ],
+    "keys": [
+     "security",
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "tests",
+     "work-items"
+    ],
+    "keys": [
+     "tests",
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "feature-flags"
+    ],
+    "keys": [
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "feature-flags"
+    ],
+    "keys": [
+     "repo-metadata",
+     "commits",
+     "commit-stats",
+     "files",
+     "blame",
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "feature-flags"
+    ],
+    "keys": [
+     "prs",
+     "pr-reviews",
+     "pr-comments",
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "blame",
+     "feature-flags"
+    ],
+    "keys": [
+     "blame",
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "cicd",
+     "feature-flags"
+    ],
+    "keys": [
+     "cicd",
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "deployments",
+     "feature-flags"
+    ],
+    "keys": [
+     "deployments",
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "incidents",
+     "feature-flags"
+    ],
+    "keys": [
+     "incidents",
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "security",
+     "feature-flags"
+    ],
+    "keys": [
+     "security",
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "tests",
+     "feature-flags"
+    ],
+    "keys": [
+     "tests",
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "work-items",
+     "feature-flags"
+    ],
+    "keys": [
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments",
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "operational"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "operational"
+    ],
+    "keys": [
+     "repo-metadata",
+     "commits",
+     "commit-stats",
+     "files",
+     "blame"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "operational"
+    ],
+    "keys": [
+     "prs",
+     "pr-reviews",
+     "pr-comments"
+    ]
+   },
+   {
+    "targets": [
+     "blame",
+     "operational"
+    ],
+    "keys": [
+     "blame"
+    ]
+   },
+   {
+    "targets": [
+     "cicd",
+     "operational"
+    ],
+    "keys": [
+     "cicd"
+    ]
+   },
+   {
+    "targets": [
+     "deployments",
+     "operational"
+    ],
+    "keys": [
+     "deployments"
+    ]
+   },
+   {
+    "targets": [
+     "incidents",
+     "operational"
+    ],
+    "keys": [
+     "incidents"
+    ]
+   },
+   {
+    "targets": [
+     "security",
+     "operational"
+    ],
+    "keys": [
+     "security"
+    ]
+   },
+   {
+    "targets": [
+     "tests",
+     "operational"
+    ],
+    "keys": [
+     "tests"
+    ]
+   },
+   {
+    "targets": [
+     "work-items",
+     "operational"
+    ],
+    "keys": [
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "feature-flags",
+     "operational"
+    ],
+    "keys": [
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational"
+    ],
+    "keys": [
+     "repo-metadata",
+     "commits",
+     "commit-stats",
+     "files",
+     "blame",
+     "prs",
+     "pr-reviews",
+     "pr-comments",
+     "cicd",
+     "tests",
+     "deployments",
+     "incidents",
+     "security",
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments",
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "bogus"
+    ],
+    "keys": [
+     "repo-metadata",
+     "commits",
+     "commit-stats",
+     "files",
+     "blame"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "bogus"
+    ],
+    "keys": [
+     "prs",
+     "pr-reviews",
+     "pr-comments"
+    ]
+   },
+   {
+    "targets": [
+     "blame",
+     "bogus"
+    ],
+    "keys": [
+     "blame"
+    ]
+   },
+   {
+    "targets": [
+     "cicd",
+     "bogus"
+    ],
+    "keys": [
+     "cicd"
+    ]
+   },
+   {
+    "targets": [
+     "deployments",
+     "bogus"
+    ],
+    "keys": [
+     "deployments"
+    ]
+   },
+   {
+    "targets": [
+     "incidents",
+     "bogus"
+    ],
+    "keys": [
+     "incidents"
+    ]
+   },
+   {
+    "targets": [
+     "security",
+     "bogus"
+    ],
+    "keys": [
+     "security"
+    ]
+   },
+   {
+    "targets": [
+     "tests",
+     "bogus"
+    ],
+    "keys": [
+     "tests"
+    ]
+   },
+   {
+    "targets": [
+     "work-items",
+     "bogus"
+    ],
+    "keys": [
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "feature-flags",
+     "bogus"
+    ],
+    "keys": [
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "bogus"
+    ],
+    "keys": [
+     "repo-metadata",
+     "commits",
+     "commit-stats",
+     "files",
+     "blame",
+     "prs",
+     "pr-reviews",
+     "pr-comments",
+     "cicd",
+     "tests",
+     "deployments",
+     "incidents",
+     "security",
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments",
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "operational",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "operational",
+     "bogus"
+    ],
+    "keys": [
+     "repo-metadata",
+     "commits",
+     "commit-stats",
+     "files",
+     "blame",
+     "prs",
+     "pr-reviews",
+     "pr-comments",
+     "cicd",
+     "tests",
+     "deployments",
+     "incidents",
+     "security",
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "keys": [
+     "repo-metadata",
+     "commits",
+     "commit-stats",
+     "files",
+     "blame",
+     "prs",
+     "pr-reviews",
+     "pr-comments",
+     "cicd",
+     "tests",
+     "deployments",
+     "incidents",
+     "security",
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "keys": [
+     "repo-metadata",
+     "commits",
+     "commit-stats",
+     "files",
+     "blame",
+     "prs",
+     "pr-reviews",
+     "pr-comments",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments",
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "keys": [
+     "repo-metadata",
+     "commits",
+     "commit-stats",
+     "files",
+     "blame",
+     "prs",
+     "pr-reviews",
+     "pr-comments",
+     "cicd",
+     "tests",
+     "deployments",
+     "incidents",
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments",
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "keys": [
+     "repo-metadata",
+     "commits",
+     "commit-stats",
+     "files",
+     "blame",
+     "prs",
+     "pr-reviews",
+     "pr-comments",
+     "cicd",
+     "tests",
+     "deployments",
+     "security",
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments",
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "keys": [
+     "repo-metadata",
+     "commits",
+     "commit-stats",
+     "files",
+     "blame",
+     "prs",
+     "pr-reviews",
+     "pr-comments",
+     "cicd",
+     "tests",
+     "incidents",
+     "security",
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments",
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "keys": [
+     "repo-metadata",
+     "commits",
+     "commit-stats",
+     "files",
+     "blame",
+     "prs",
+     "pr-reviews",
+     "pr-comments",
+     "tests",
+     "deployments",
+     "incidents",
+     "security",
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments",
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "keys": [
+     "repo-metadata",
+     "commits",
+     "commit-stats",
+     "files",
+     "blame",
+     "prs",
+     "pr-reviews",
+     "pr-comments",
+     "cicd",
+     "tests",
+     "deployments",
+     "incidents",
+     "security",
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments",
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "keys": [
+     "repo-metadata",
+     "commits",
+     "commit-stats",
+     "files",
+     "blame",
+     "cicd",
+     "tests",
+     "deployments",
+     "incidents",
+     "security",
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments",
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "keys": [
+     "blame",
+     "prs",
+     "pr-reviews",
+     "pr-comments",
+     "cicd",
+     "tests",
+     "deployments",
+     "incidents",
+     "security",
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments",
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "keys": [
+     "repo-metadata",
+     "commits",
+     "commit-stats",
+     "files",
+     "blame",
+     "prs",
+     "pr-reviews",
+     "pr-comments",
+     "cicd",
+     "tests",
+     "deployments",
+     "incidents",
+     "security",
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments",
+     "feature-flags"
+    ]
+   }
+  ]
+ },
+ "jira": {
+  "supported": [
+   "work-items",
+   "operational"
+  ],
+  "entries": [
+   {
+    "targets": []
+   },
+   {
+    "targets": [
+     "git"
+    ]
+   },
+   {
+    "targets": [
+     "prs"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs"
+    ]
+   },
+   {
+    "targets": [
+     "blame"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "blame"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "blame"
+    ]
+   },
+   {
+    "targets": [
+     "cicd"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "cicd"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "cicd"
+    ]
+   },
+   {
+    "targets": [
+     "blame",
+     "cicd"
+    ]
+   },
+   {
+    "targets": [
+     "deployments"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "deployments"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "deployments"
+    ]
+   },
+   {
+    "targets": [
+     "blame",
+     "deployments"
+    ]
+   },
+   {
+    "targets": [
+     "cicd",
+     "deployments"
+    ]
+   },
+   {
+    "targets": [
+     "incidents"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "incidents"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "incidents"
+    ]
+   },
+   {
+    "targets": [
+     "blame",
+     "incidents"
+    ]
+   },
+   {
+    "targets": [
+     "cicd",
+     "incidents"
+    ]
+   },
+   {
+    "targets": [
+     "deployments",
+     "incidents"
+    ]
+   },
+   {
+    "targets": [
+     "security"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "security"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "security"
+    ]
+   },
+   {
+    "targets": [
+     "blame",
+     "security"
+    ]
+   },
+   {
+    "targets": [
+     "cicd",
+     "security"
+    ]
+   },
+   {
+    "targets": [
+     "deployments",
+     "security"
+    ]
+   },
+   {
+    "targets": [
+     "incidents",
+     "security"
+    ]
+   },
+   {
+    "targets": [
+     "tests"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "tests"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "tests"
+    ]
+   },
+   {
+    "targets": [
+     "blame",
+     "tests"
+    ]
+   },
+   {
+    "targets": [
+     "cicd",
+     "tests"
+    ]
+   },
+   {
+    "targets": [
+     "deployments",
+     "tests"
+    ]
+   },
+   {
+    "targets": [
+     "incidents",
+     "tests"
+    ]
+   },
+   {
+    "targets": [
+     "security",
+     "tests"
+    ]
+   },
+   {
+    "targets": [
+     "work-items"
+    ],
+    "keys": [
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "work-items"
+    ],
+    "keys": [
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "work-items"
+    ],
+    "keys": [
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "blame",
+     "work-items"
+    ],
+    "keys": [
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "cicd",
+     "work-items"
+    ],
+    "keys": [
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "deployments",
+     "work-items"
+    ],
+    "keys": [
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "incidents",
+     "work-items"
+    ],
+    "keys": [
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "security",
+     "work-items"
+    ],
+    "keys": [
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "tests",
+     "work-items"
+    ],
+    "keys": [
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "blame",
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "cicd",
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "deployments",
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "incidents",
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "security",
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "tests",
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "work-items",
+     "feature-flags"
+    ],
+    "keys": [
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "operational"
+    ],
+    "keys": [
+     "incidents"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "operational"
+    ],
+    "keys": [
+     "incidents"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "operational"
+    ],
+    "keys": [
+     "incidents"
+    ]
+   },
+   {
+    "targets": [
+     "blame",
+     "operational"
+    ],
+    "keys": [
+     "incidents"
+    ]
+   },
+   {
+    "targets": [
+     "cicd",
+     "operational"
+    ],
+    "keys": [
+     "incidents"
+    ]
+   },
+   {
+    "targets": [
+     "deployments",
+     "operational"
+    ],
+    "keys": [
+     "incidents"
+    ]
+   },
+   {
+    "targets": [
+     "incidents",
+     "operational"
+    ],
+    "keys": [
+     "incidents"
+    ]
+   },
+   {
+    "targets": [
+     "security",
+     "operational"
+    ],
+    "keys": [
+     "incidents"
+    ]
+   },
+   {
+    "targets": [
+     "tests",
+     "operational"
+    ],
+    "keys": [
+     "incidents"
+    ]
+   },
+   {
+    "targets": [
+     "work-items",
+     "operational"
+    ],
+    "keys": [
+     "incidents",
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "feature-flags",
+     "operational"
+    ],
+    "keys": [
+     "incidents"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational"
+    ],
+    "keys": [
+     "incidents",
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "blame",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "cicd",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "deployments",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "incidents",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "security",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "tests",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "work-items",
+     "bogus"
+    ],
+    "keys": [
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "feature-flags",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "bogus"
+    ],
+    "keys": [
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "operational",
+     "bogus"
+    ],
+    "keys": [
+     "incidents"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "operational",
+     "bogus"
+    ],
+    "keys": [
+     "incidents",
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "keys": [
+     "incidents"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "keys": [
+     "incidents",
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "keys": [
+     "incidents",
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "keys": [
+     "incidents",
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "keys": [
+     "incidents",
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "keys": [
+     "incidents",
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "keys": [
+     "incidents",
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "keys": [
+     "incidents",
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "keys": [
+     "incidents",
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "keys": [
+     "incidents",
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   }
+  ]
+ },
+ "launchdarkly": {
+  "supported": [
+   "feature-flags"
+  ],
+  "entries": [
+   {
+    "targets": []
+   },
+   {
+    "targets": [
+     "git"
+    ]
+   },
+   {
+    "targets": [
+     "prs"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs"
+    ]
+   },
+   {
+    "targets": [
+     "blame"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "blame"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "blame"
+    ]
+   },
+   {
+    "targets": [
+     "cicd"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "cicd"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "cicd"
+    ]
+   },
+   {
+    "targets": [
+     "blame",
+     "cicd"
+    ]
+   },
+   {
+    "targets": [
+     "deployments"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "deployments"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "deployments"
+    ]
+   },
+   {
+    "targets": [
+     "blame",
+     "deployments"
+    ]
+   },
+   {
+    "targets": [
+     "cicd",
+     "deployments"
+    ]
+   },
+   {
+    "targets": [
+     "incidents"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "incidents"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "incidents"
+    ]
+   },
+   {
+    "targets": [
+     "blame",
+     "incidents"
+    ]
+   },
+   {
+    "targets": [
+     "cicd",
+     "incidents"
+    ]
+   },
+   {
+    "targets": [
+     "deployments",
+     "incidents"
+    ]
+   },
+   {
+    "targets": [
+     "security"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "security"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "security"
+    ]
+   },
+   {
+    "targets": [
+     "blame",
+     "security"
+    ]
+   },
+   {
+    "targets": [
+     "cicd",
+     "security"
+    ]
+   },
+   {
+    "targets": [
+     "deployments",
+     "security"
+    ]
+   },
+   {
+    "targets": [
+     "incidents",
+     "security"
+    ]
+   },
+   {
+    "targets": [
+     "tests"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "tests"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "tests"
+    ]
+   },
+   {
+    "targets": [
+     "blame",
+     "tests"
+    ]
+   },
+   {
+    "targets": [
+     "cicd",
+     "tests"
+    ]
+   },
+   {
+    "targets": [
+     "deployments",
+     "tests"
+    ]
+   },
+   {
+    "targets": [
+     "incidents",
+     "tests"
+    ]
+   },
+   {
+    "targets": [
+     "security",
+     "tests"
+    ]
+   },
+   {
+    "targets": [
+     "work-items"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "work-items"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "work-items"
+    ]
+   },
+   {
+    "targets": [
+     "blame",
+     "work-items"
+    ]
+   },
+   {
+    "targets": [
+     "cicd",
+     "work-items"
+    ]
+   },
+   {
+    "targets": [
+     "deployments",
+     "work-items"
+    ]
+   },
+   {
+    "targets": [
+     "incidents",
+     "work-items"
+    ]
+   },
+   {
+    "targets": [
+     "security",
+     "work-items"
+    ]
+   },
+   {
+    "targets": [
+     "tests",
+     "work-items"
+    ]
+   },
+   {
+    "targets": [
+     "feature-flags"
+    ],
+    "keys": [
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "feature-flags"
+    ],
+    "keys": [
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "feature-flags"
+    ],
+    "keys": [
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "blame",
+     "feature-flags"
+    ],
+    "keys": [
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "cicd",
+     "feature-flags"
+    ],
+    "keys": [
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "deployments",
+     "feature-flags"
+    ],
+    "keys": [
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "incidents",
+     "feature-flags"
+    ],
+    "keys": [
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "security",
+     "feature-flags"
+    ],
+    "keys": [
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "tests",
+     "feature-flags"
+    ],
+    "keys": [
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "work-items",
+     "feature-flags"
+    ],
+    "keys": [
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "operational"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "operational"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "operational"
+    ]
+   },
+   {
+    "targets": [
+     "blame",
+     "operational"
+    ]
+   },
+   {
+    "targets": [
+     "cicd",
+     "operational"
+    ]
+   },
+   {
+    "targets": [
+     "deployments",
+     "operational"
+    ]
+   },
+   {
+    "targets": [
+     "incidents",
+     "operational"
+    ]
+   },
+   {
+    "targets": [
+     "security",
+     "operational"
+    ]
+   },
+   {
+    "targets": [
+     "tests",
+     "operational"
+    ]
+   },
+   {
+    "targets": [
+     "work-items",
+     "operational"
+    ]
+   },
+   {
+    "targets": [
+     "feature-flags",
+     "operational"
+    ],
+    "keys": [
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational"
+    ],
+    "keys": [
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "blame",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "cicd",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "deployments",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "incidents",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "security",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "tests",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "work-items",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "feature-flags",
+     "bogus"
+    ],
+    "keys": [
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "bogus"
+    ],
+    "keys": [
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "operational",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "operational",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "keys": [
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "keys": [
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "keys": [
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "keys": [
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "keys": [
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "keys": [
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "keys": [
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "keys": [
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "keys": [
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "keys": [
+     "feature-flags"
+    ]
+   }
+  ]
+ },
+ "linear": {
+  "supported": [
+   "work-items"
+  ],
+  "entries": [
+   {
+    "targets": []
+   },
+   {
+    "targets": [
+     "git"
+    ]
+   },
+   {
+    "targets": [
+     "prs"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs"
+    ]
+   },
+   {
+    "targets": [
+     "blame"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "blame"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "blame"
+    ]
+   },
+   {
+    "targets": [
+     "cicd"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "cicd"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "cicd"
+    ]
+   },
+   {
+    "targets": [
+     "blame",
+     "cicd"
+    ]
+   },
+   {
+    "targets": [
+     "deployments"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "deployments"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "deployments"
+    ]
+   },
+   {
+    "targets": [
+     "blame",
+     "deployments"
+    ]
+   },
+   {
+    "targets": [
+     "cicd",
+     "deployments"
+    ]
+   },
+   {
+    "targets": [
+     "incidents"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "incidents"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "incidents"
+    ]
+   },
+   {
+    "targets": [
+     "blame",
+     "incidents"
+    ]
+   },
+   {
+    "targets": [
+     "cicd",
+     "incidents"
+    ]
+   },
+   {
+    "targets": [
+     "deployments",
+     "incidents"
+    ]
+   },
+   {
+    "targets": [
+     "security"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "security"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "security"
+    ]
+   },
+   {
+    "targets": [
+     "blame",
+     "security"
+    ]
+   },
+   {
+    "targets": [
+     "cicd",
+     "security"
+    ]
+   },
+   {
+    "targets": [
+     "deployments",
+     "security"
+    ]
+   },
+   {
+    "targets": [
+     "incidents",
+     "security"
+    ]
+   },
+   {
+    "targets": [
+     "tests"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "tests"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "tests"
+    ]
+   },
+   {
+    "targets": [
+     "blame",
+     "tests"
+    ]
+   },
+   {
+    "targets": [
+     "cicd",
+     "tests"
+    ]
+   },
+   {
+    "targets": [
+     "deployments",
+     "tests"
+    ]
+   },
+   {
+    "targets": [
+     "incidents",
+     "tests"
+    ]
+   },
+   {
+    "targets": [
+     "security",
+     "tests"
+    ]
+   },
+   {
+    "targets": [
+     "work-items"
+    ],
+    "keys": [
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "work-items"
+    ],
+    "keys": [
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "work-items"
+    ],
+    "keys": [
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "blame",
+     "work-items"
+    ],
+    "keys": [
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "cicd",
+     "work-items"
+    ],
+    "keys": [
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "deployments",
+     "work-items"
+    ],
+    "keys": [
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "incidents",
+     "work-items"
+    ],
+    "keys": [
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "security",
+     "work-items"
+    ],
+    "keys": [
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "tests",
+     "work-items"
+    ],
+    "keys": [
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "blame",
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "cicd",
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "deployments",
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "incidents",
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "security",
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "tests",
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "work-items",
+     "feature-flags"
+    ],
+    "keys": [
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "operational"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "operational"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "operational"
+    ]
+   },
+   {
+    "targets": [
+     "blame",
+     "operational"
+    ]
+   },
+   {
+    "targets": [
+     "cicd",
+     "operational"
+    ]
+   },
+   {
+    "targets": [
+     "deployments",
+     "operational"
+    ]
+   },
+   {
+    "targets": [
+     "incidents",
+     "operational"
+    ]
+   },
+   {
+    "targets": [
+     "security",
+     "operational"
+    ]
+   },
+   {
+    "targets": [
+     "tests",
+     "operational"
+    ]
+   },
+   {
+    "targets": [
+     "work-items",
+     "operational"
+    ],
+    "keys": [
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "feature-flags",
+     "operational"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational"
+    ],
+    "keys": [
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "blame",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "cicd",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "deployments",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "incidents",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "security",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "tests",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "work-items",
+     "bogus"
+    ],
+    "keys": [
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "feature-flags",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "bogus"
+    ],
+    "keys": [
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "operational",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "operational",
+     "bogus"
+    ],
+    "keys": [
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "keys": [
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "keys": [
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "keys": [
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "keys": [
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "keys": [
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "keys": [
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "keys": [
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "keys": [
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "keys": [
+     "work-items",
+     "work-item-labels",
+     "work-item-projects",
+     "work-item-history",
+     "work-item-comments"
+    ]
+   }
+  ]
+ },
+ "pagerduty": {
+  "supported": [
+   "operational"
+  ],
+  "entries": [
+   {
+    "targets": [],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "git"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "prs"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "git",
+     "prs"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "blame"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "git",
+     "blame"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "prs",
+     "blame"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "cicd"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "git",
+     "cicd"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "prs",
+     "cicd"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "blame",
+     "cicd"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "deployments"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "git",
+     "deployments"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "prs",
+     "deployments"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "blame",
+     "deployments"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "cicd",
+     "deployments"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "incidents"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "git",
+     "incidents"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "prs",
+     "incidents"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "blame",
+     "incidents"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "cicd",
+     "incidents"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "deployments",
+     "incidents"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "security"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "git",
+     "security"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "prs",
+     "security"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "blame",
+     "security"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "cicd",
+     "security"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "deployments",
+     "security"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "incidents",
+     "security"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "tests"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "git",
+     "tests"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "prs",
+     "tests"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "blame",
+     "tests"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "cicd",
+     "tests"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "deployments",
+     "tests"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "incidents",
+     "tests"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "security",
+     "tests"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "work-items"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "git",
+     "work-items"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "prs",
+     "work-items"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "blame",
+     "work-items"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "cicd",
+     "work-items"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "deployments",
+     "work-items"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "incidents",
+     "work-items"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "security",
+     "work-items"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "tests",
+     "work-items"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "feature-flags"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "git",
+     "feature-flags"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "prs",
+     "feature-flags"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "blame",
+     "feature-flags"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "cicd",
+     "feature-flags"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "deployments",
+     "feature-flags"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "incidents",
+     "feature-flags"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "security",
+     "feature-flags"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "tests",
+     "feature-flags"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "work-items",
+     "feature-flags"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "operational"
+    ],
+    "keys": [
+     "incidents",
+     "services",
+     "business-services",
+     "escalation-policies",
+     "schedules",
+     "on-calls",
+     "users",
+     "teams",
+     "incident-alerts",
+     "incident-log-entries",
+     "incident-notes"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "operational"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "prs",
+     "operational"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "blame",
+     "operational"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "cicd",
+     "operational"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "deployments",
+     "operational"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "incidents",
+     "operational"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "security",
+     "operational"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "tests",
+     "operational"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "work-items",
+     "operational"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "feature-flags",
+     "operational"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "bogus"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "git",
+     "bogus"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "prs",
+     "bogus"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "blame",
+     "bogus"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "cicd",
+     "bogus"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "deployments",
+     "bogus"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "incidents",
+     "bogus"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "security",
+     "bogus"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "tests",
+     "bogus"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "work-items",
+     "bogus"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "feature-flags",
+     "bogus"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "bogus"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "operational",
+     "bogus"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "operational",
+     "bogus"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "git",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ],
+    "error": "PagerDuty sync target must be operational"
+   }
+  ]
+ },
+ "unknown": {
+  "supported": [],
+  "entries": [
+   {
+    "targets": []
+   },
+   {
+    "targets": [
+     "git"
+    ]
+   },
+   {
+    "targets": [
+     "prs"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs"
+    ]
+   },
+   {
+    "targets": [
+     "blame"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "blame"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "blame"
+    ]
+   },
+   {
+    "targets": [
+     "cicd"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "cicd"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "cicd"
+    ]
+   },
+   {
+    "targets": [
+     "blame",
+     "cicd"
+    ]
+   },
+   {
+    "targets": [
+     "deployments"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "deployments"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "deployments"
+    ]
+   },
+   {
+    "targets": [
+     "blame",
+     "deployments"
+    ]
+   },
+   {
+    "targets": [
+     "cicd",
+     "deployments"
+    ]
+   },
+   {
+    "targets": [
+     "incidents"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "incidents"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "incidents"
+    ]
+   },
+   {
+    "targets": [
+     "blame",
+     "incidents"
+    ]
+   },
+   {
+    "targets": [
+     "cicd",
+     "incidents"
+    ]
+   },
+   {
+    "targets": [
+     "deployments",
+     "incidents"
+    ]
+   },
+   {
+    "targets": [
+     "security"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "security"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "security"
+    ]
+   },
+   {
+    "targets": [
+     "blame",
+     "security"
+    ]
+   },
+   {
+    "targets": [
+     "cicd",
+     "security"
+    ]
+   },
+   {
+    "targets": [
+     "deployments",
+     "security"
+    ]
+   },
+   {
+    "targets": [
+     "incidents",
+     "security"
+    ]
+   },
+   {
+    "targets": [
+     "tests"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "tests"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "tests"
+    ]
+   },
+   {
+    "targets": [
+     "blame",
+     "tests"
+    ]
+   },
+   {
+    "targets": [
+     "cicd",
+     "tests"
+    ]
+   },
+   {
+    "targets": [
+     "deployments",
+     "tests"
+    ]
+   },
+   {
+    "targets": [
+     "incidents",
+     "tests"
+    ]
+   },
+   {
+    "targets": [
+     "security",
+     "tests"
+    ]
+   },
+   {
+    "targets": [
+     "work-items"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "work-items"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "work-items"
+    ]
+   },
+   {
+    "targets": [
+     "blame",
+     "work-items"
+    ]
+   },
+   {
+    "targets": [
+     "cicd",
+     "work-items"
+    ]
+   },
+   {
+    "targets": [
+     "deployments",
+     "work-items"
+    ]
+   },
+   {
+    "targets": [
+     "incidents",
+     "work-items"
+    ]
+   },
+   {
+    "targets": [
+     "security",
+     "work-items"
+    ]
+   },
+   {
+    "targets": [
+     "tests",
+     "work-items"
+    ]
+   },
+   {
+    "targets": [
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "blame",
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "cicd",
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "deployments",
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "incidents",
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "security",
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "tests",
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "work-items",
+     "feature-flags"
+    ]
+   },
+   {
+    "targets": [
+     "operational"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "operational"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "operational"
+    ]
+   },
+   {
+    "targets": [
+     "blame",
+     "operational"
+    ]
+   },
+   {
+    "targets": [
+     "cicd",
+     "operational"
+    ]
+   },
+   {
+    "targets": [
+     "deployments",
+     "operational"
+    ]
+   },
+   {
+    "targets": [
+     "incidents",
+     "operational"
+    ]
+   },
+   {
+    "targets": [
+     "security",
+     "operational"
+    ]
+   },
+   {
+    "targets": [
+     "tests",
+     "operational"
+    ]
+   },
+   {
+    "targets": [
+     "work-items",
+     "operational"
+    ]
+   },
+   {
+    "targets": [
+     "feature-flags",
+     "operational"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational"
+    ]
+   },
+   {
+    "targets": [
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "blame",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "cicd",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "deployments",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "incidents",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "security",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "tests",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "work-items",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "feature-flags",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "operational",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "operational",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ]
+   },
+   {
+    "targets": [
+     "git",
+     "prs",
+     "blame",
+     "cicd",
+     "deployments",
+     "incidents",
+     "security",
+     "tests",
+     "work-items",
+     "feature-flags",
+     "operational",
+     "bogus"
+    ]
+   }
+  ]
+ }
+}

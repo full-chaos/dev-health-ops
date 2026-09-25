@@ -101,6 +101,8 @@ internal/apiservice/admin	2
 internal/apiservice/sessionvenue	1
 internal/apiservice/authflowvenue	1
 internal/apiservice/billingvenue	2
+internal/atlassianteams	20
+internal/synccli	20
 internal/apiservice/externalingestvenue	190
 internal/auth/ratelimitvalkey	11
 internal/aicli	20

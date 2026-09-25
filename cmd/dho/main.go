@@ -25,6 +25,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/rivermigrate"
 	"github.com/full-chaos/dev-health-ops/internal/schedulerservice"
 	"github.com/full-chaos/dev-health-ops/internal/streamrunnerservice"
+	"github.com/full-chaos/dev-health-ops/internal/synccli"
 	"github.com/full-chaos/dev-health-ops/internal/workersctl"
 	"github.com/full-chaos/dev-health-ops/internal/workerservice"
 )
@@ -46,6 +47,7 @@ func commands() []cli.Command {
 		rivermigrate.Command(),
 		schedulerservice.Command(),
 		streamrunnerservice.Command(),
+		synccli.Command(),
 		workerservice.Command(),
 		workersctl.Command(),
 	}

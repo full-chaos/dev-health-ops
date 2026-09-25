@@ -106,6 +106,13 @@ type EnableRequest struct {
 	// document the deployed binary does not serve.
 	DocumentDigest map[string]string
 
+	// MutationOperations names the operations whose registered document is a
+	// GraphQL mutation (CHAOS-6810; from the catalog's kind). A mutation is
+	// admitted ONLY by a write_executed write receipt, every other operation by
+	// a deployed_executed two-plane receipt. Nil judges every operation as a
+	// query, so a mutation is refused: forgetting the kind fails closed.
+	MutationOperations map[string]bool
+
 	Mode string
 	// RolloutPercentage must be EnforcedRolloutPercentage: no plane obeys any
 	// other value (CHAOS-6807), so Enable refuses it rather than record it.
@@ -308,7 +315,7 @@ func Enable(ctx context.Context, pool *pgxpool.Pool, request EnableRequest) ([]E
 	// OperationsWithEnablementProof's targetMode expects, so the value
 	// enable is about to WRITE is also the value that decides whether
 	// today's proof authorizes writing it.
-	proven, err := OperationsWithEnablementProof(ctx, pool, request.SchemaDigest, request.RunningBuild, request.Mode, wanted)
+	proven, err := OperationsWithEnablementProofByKind(ctx, pool, request.SchemaDigest, request.RunningBuild, request.Mode, wanted, request.MutationOperations)
 	if err != nil {
 		return nil, err
 	}

@@ -794,8 +794,10 @@ func TestTheRoutingStatementCarriesNoVersionDependentLiteral(t *testing.T) {
 	numeric := regexp.MustCompile(`E'(?:\\x[0-9a-f]{2}|\\u[0-9a-f]{4}|\\U[0-9a-f]{8})*'`)
 	literals := numeric.FindAllString(statement, -1)
 	rest := numeric.ReplaceAllString(statement, "")
-	if len(literals) != 4 {
-		t.Fatalf("want the generated literal 4 times (citation and build, two modes), found %d", len(literals))
+	// Two receipt forms (query: citation and build; write: side-effect digest and
+	// build, CHAOS-6810) times two modes.
+	if len(literals) != 8 {
+		t.Fatalf("want the generated literal 8 times (two forms, each judging two blank-sensitive columns, two modes), found %d", len(literals))
 	}
 	if strings.Contains(rest, "\\") || strings.Contains(rest, "E'") {
 		t.Fatalf("the routing statement carries a backslash or an escape string that is not the generated literal:\n%s", rest)

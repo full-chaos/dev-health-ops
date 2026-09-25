@@ -26,6 +26,15 @@ const (
 	EnablementProofTerminalState = "match"
 )
 
+// EnablementWriteProofStage is the stage of the single-plane WRITE proof
+// (CHAOS-6810), the ONLY receipt that authorizes enabling a GraphQL MUTATION.
+// A mutation cannot run on both planes (it would write twice), so its receipt is
+// one execution of the deployed build inside the fixture org plus the digest of
+// the rows and River outbox payloads it persisted (SideEffectDigest). The two
+// forms never admit each other's operations, and the write form admits on
+// `match` alone: a divergent write is data corruption, not a known Python defect.
+const EnablementWriteProofStage = "write_executed"
+
 // Receipt is one immutable proof-run row.
 //
 // The four-column key (SchemaDigest, DocumentDigest, SelectedOperation,
@@ -74,6 +83,13 @@ type Receipt struct {
 	// which build served it cannot be told apart later from one that knew
 	// exactly.
 	BuildBinding string
+
+	// SideEffectDigest is the digest of the rows and River outbox payloads a
+	// WRITE proof's single execution persisted (stage write_executed), which the
+	// receipt compares with the CI oracle's committed baseline digest. Required for
+	// that stage (alembic 0143's CHECK refuses a write receipt without it); empty
+	// for every other stage.
+	SideEffectDigest string
 
 	// Variant names the OperationSpec.Variants entry (e.g. "TEAM") this
 	// receipt measured, or is empty for an operation's base request --
@@ -238,8 +254,8 @@ func Write(ctx context.Context, db Querier, receipt Receipt) (uuid.UUID, error) 
 		    baseline_response_ref, candidate_response_ref,
 		    data_watermark, org_id, review_evidence, recorded_by, observed_at,
 		    measurement_route, baseline_defect, differences_outside_baseline_defect,
-		    build_binding)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
+		    build_binding, side_effect_digest)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)`,
 		id, receipt.SchemaDigest, receipt.DocumentDigest, receipt.SelectedOperation, receipt.CandidateBuild,
 		receipt.RequestIdentity, receipt.Stage, receipt.TerminalState,
 		nullIfEmpty(receipt.BaselineResponseRef), nullIfEmpty(receipt.CandidateResponseRef),
@@ -247,7 +263,7 @@ func Write(ctx context.Context, db Querier, receipt Receipt) (uuid.UUID, error) 
 		nullIfEmpty(receipt.ReviewEvidence), nullIfEmpty(receipt.RecordedBy), receipt.ObservedAt,
 		nullIfEmpty(receipt.MeasurementRoute), receipt.BaselineDefects,
 		receipt.DifferencesOutsideBaselineDefect,
-		nullIfEmpty(receipt.BuildBinding),
+		nullIfEmpty(receipt.BuildBinding), nullIfEmpty(receipt.SideEffectDigest),
 	); err != nil {
 		return uuid.Nil, fmt.Errorf("goapiproof: record proof run for %s: %w", receipt.SelectedOperation, err)
 	}
@@ -260,6 +276,7 @@ func Write(ctx context.Context, db Querier, receipt Receipt) (uuid.UUID, error) 
 // this is the fast, specific failure for a programming error.
 var stages = map[string]bool{
 	"dual_run": true, "deployed_executed": true, "shadow": true, "canary": true,
+	EnablementWriteProofStage: true,
 }
 
 var measurementRoutes = map[string]bool{RouteEdge: true, RouteProof: true}
@@ -284,6 +301,20 @@ func validateVocabulary(receipt Receipt) error {
 	// makes the reason legible at the call site.
 	if receipt.Stage == "shadow" && receipt.DataWatermark == "" {
 		return fmt.Errorf("goapiproof: a shadow-stage receipt requires a data watermark (same-watermark comparison is what the stage claims)")
+	}
+	// The DB carries this as ck_go_api_proof_run_write_executed_shape (alembic
+	// 0143); a digest that names nothing is refused here too, because the
+	// enablement predicate refuses it and a receipt no reader can admit is worse
+	// than no receipt.
+	if receipt.Stage == EnablementWriteProofStage {
+		if NamesNothing(receipt.SideEffectDigest) {
+			return fmt.Errorf("goapiproof: a write_executed receipt requires a side-effect digest that names something (nothing was compared without it)")
+		}
+		if receipt.MeasurementRoute != RouteEdge {
+			return fmt.Errorf("goapiproof: a write_executed receipt must be measured through the edge (only the edge serves a mutation), got route %q", receipt.MeasurementRoute)
+		}
+	} else if receipt.SideEffectDigest != "" {
+		return fmt.Errorf("goapiproof: only a write_executed receipt carries a side-effect digest (stage %q)", receipt.Stage)
 	}
 	return nil
 }
@@ -529,8 +560,39 @@ func enablementProofPredicate(alias string) string {
 		    AND ` + alias + `.build_binding = '` + EdgeBuildPresent + `'`
 }
 
+// enablementWriteProofPredicate is the admission rule for a GraphQL MUTATION
+// (CHAOS-6810), as SQL over one go_api_proof_run row: the stage of the
+// single-plane write proof, `match` ALONE (no cited-mismatch arm), a
+// side-effect digest that names something, and the two clauses every admission
+// shares (a candidate build that names something, the per-request build
+// binding). The route rule is added by the caller, as for a query.
+func enablementWriteProofPredicate(alias string) string {
+	return alias + `.stage = '` + EnablementWriteProofStage + `'
+		    AND ` + alias + `.terminal_state = '` + EnablementProofTerminalState + `'
+		    AND ` + alias + `.side_effect_digest IS NOT NULL
+		    AND btrim(` + alias + `.side_effect_digest, ` + blankCitationSQL() + `) <> ''
+		    AND btrim(` + alias + `.candidate_build, ` + blankCitationSQL() + `) <> ''
+		    AND ` + alias + `.build_binding = '` + EdgeBuildPresent + `'`
+}
+
+func enablementRouteClause(alias, targetMode string) (string, error) {
+	switch targetMode {
+	case TargetModePrimary:
+		return alias + ".measurement_route = '" + RouteEdge + "'", nil
+	case TargetModeCanary:
+		// Recorded, not merely anything. A NULL is a pre-0128 row that
+		// says nothing about how it was measured, and "any route" is not
+		// "no route" -- admitting unknown provenance is the same failure
+		// shape as reading a DEFAULT 0 as an assertion.
+		return alias + ".measurement_route IS NOT NULL", nil
+	default:
+		return "", fmt.Errorf("goapiproof: unknown enablement target mode %q -- expected %q or %q; refusing to build a predicate whose route rule is undefined", targetMode, TargetModeCanary, TargetModePrimary)
+	}
+}
+
 // EnablementProofClause is THE rule deciding whether a go_api_proof_run
-// row is enablement proof for targetMode, as a SQL fragment over `alias`.
+// row is enablement proof for a QUERY operation for targetMode, as a SQL
+// fragment over `alias`.
 //
 // It exists because testing found a THIRD reader of this rule --
 // internal/migrationmatrix's routingStateQuery -- carrying its own copy
@@ -545,21 +607,45 @@ func enablementProofPredicate(alias string) string {
 // A shared truth table pins the implementations it knows about. It cannot
 // pin one nobody enumerated, so the rule now has ONE source and callers
 // compose it rather than restate it.
+//
+// A GraphQL MUTATION is judged by EnablementWriteProofClause instead
+// (CHAOS-6810): the two forms never admit each other's operations.
 func EnablementProofClause(alias, targetMode string) (string, error) {
-	var routeClause string
-	switch targetMode {
-	case TargetModePrimary:
-		routeClause = alias + ".measurement_route = '" + RouteEdge + "'"
-	case TargetModeCanary:
-		// Recorded, not merely anything. A NULL is a pre-0128 row that
-		// says nothing about how it was measured, and "any route" is not
-		// "no route" -- admitting unknown provenance is the same failure
-		// shape as reading a DEFAULT 0 as an assertion.
-		routeClause = alias + ".measurement_route IS NOT NULL"
-	default:
-		return "", fmt.Errorf("goapiproof: unknown enablement target mode %q -- expected %q or %q; refusing to build a predicate whose route rule is undefined", targetMode, TargetModeCanary, TargetModePrimary)
+	routeClause, err := enablementRouteClause(alias, targetMode)
+	if err != nil {
+		return "", err
 	}
 	return enablementProofPredicate(alias) + "\n\t\t    AND " + routeClause, nil
+}
+
+// EnablementWriteProofClause is the rule for a GraphQL MUTATION (CHAOS-6810):
+// the write-proof stage, `match` alone, a side-effect digest that names
+// something, and the shared build clauses, plus the same route rule as a query.
+func EnablementWriteProofClause(alias, targetMode string) (string, error) {
+	routeClause, err := enablementRouteClause(alias, targetMode)
+	if err != nil {
+		return "", err
+	}
+	return enablementWriteProofPredicate(alias) + "\n\t\t    AND " + routeClause, nil
+}
+
+// EnablementProofClauseAnyKind is the rule for a reader that does NOT know an
+// operation's document kind (the migration-status page, which reads receipts
+// and routing rows only): a receipt counts if it satisfies its OWN form. That is
+// weaker than enablement's kind-keyed rule, on purpose and stated: it can render
+// a mutation PROVEN on a `deployed_executed` receipt, which no writer produces
+// (the prover refuses a mutation document before any request) and which
+// `enable` would still refuse. Enablement itself never uses this.
+func EnablementProofClauseAnyKind(alias, targetMode string) (string, error) {
+	query, err := EnablementProofClause(alias, targetMode)
+	if err != nil {
+		return "", err
+	}
+	write, err := EnablementWriteProofClause(alias, targetMode)
+	if err != nil {
+		return "", err
+	}
+	return "((" + query + ")\n\t\t    OR (" + write + "))", nil
 }
 
 // OperationsWithEnablementProof is the Go reader for the exact predicate
@@ -585,7 +671,30 @@ func OperationsWithEnablementProof(
 	targetMode string,
 	documentDigestByOperation map[string]string,
 ) (map[string]bool, error) {
-	clause, err := EnablementProofClause("p", targetMode)
+	return OperationsWithEnablementProofByKind(ctx, db, schemaDigest, candidateBuild, targetMode, documentDigestByOperation, nil)
+}
+
+// OperationsWithEnablementProofByKind is OperationsWithEnablementProof for
+// operations of both document kinds (CHAOS-6810): an operation named in
+// mutationOperations needs a `write_executed` write receipt, every other
+// operation a two-plane `deployed_executed` receipt, and neither form admits the
+// other's operations. Callers that pass no kinds judge every operation as a
+// query, so a mutation is REFUSED (it can never have that receipt): forgetting
+// the kind fails closed.
+func OperationsWithEnablementProofByKind(
+	ctx context.Context,
+	db Querier,
+	schemaDigest string,
+	candidateBuild string,
+	targetMode string,
+	documentDigestByOperation map[string]string,
+	mutationOperations map[string]bool,
+) (map[string]bool, error) {
+	queryClause, err := EnablementProofClause("p", targetMode)
+	if err != nil {
+		return nil, err
+	}
+	writeClause, err := EnablementWriteProofClause("p", targetMode)
 	if err != nil {
 		return nil, err
 	}
@@ -597,21 +706,24 @@ func OperationsWithEnablementProof(
 
 	operations := make([]string, 0, len(documentDigestByOperation))
 	digests := make([]string, 0, len(documentDigestByOperation))
+	mutations := make([]bool, 0, len(documentDigestByOperation))
 	for operation, digest := range documentDigestByOperation {
 		operations = append(operations, operation)
 		digests = append(digests, digest)
+		mutations = append(mutations, mutationOperations[operation])
 	}
 
 	rows, err := db.Query(ctx,
 		`SELECT DISTINCT p.selected_operation
 		   FROM go_api_proof_run AS p
-		   JOIN unnest($3::text[], $4::text[]) AS want(operation, document_digest)
+		   JOIN unnest($3::text[], $4::text[], $5::boolean[]) AS want(operation, document_digest, is_mutation)
 		     ON want.operation = p.selected_operation
 		    AND want.document_digest = p.document_digest
 		  WHERE p.schema_digest = $1
 		    AND p.candidate_build = $2
-		    AND `+clause,
-		schemaDigest, candidateBuild, operations, digests,
+		    AND ((NOT want.is_mutation AND (`+queryClause+`))
+		      OR (want.is_mutation AND (`+writeClause+`)))`,
+		schemaDigest, candidateBuild, operations, digests, mutations,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("goapiproof: read enablement proof: %w", err)

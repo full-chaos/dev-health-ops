@@ -215,11 +215,11 @@ func runStatus(argv []string) error {
 		report.GoPlaneError = stringPtr(registryURLSanitizeErr.Error())
 	}
 
-	catalog, catalogErr := goapiproof.LoadOperationCatalog(common.catalogPath)
+	catalog, mutations, catalogErr := goapiproof.LoadOperationCatalogWithKinds(common.catalogPath)
 	report.CatalogLoaded = catalogErr == nil
 	if catalogErr != nil {
 		report.CatalogError = stringPtr(catalogErr.Error())
-		catalog = map[string]string{}
+		catalog, mutations = map[string]string{}, nil
 	}
 
 	// No credential is read here, deliberately. /registry is
@@ -334,7 +334,7 @@ func runStatus(argv []string) error {
 				// authority on what is live, so this falls back to this
 				// binary's digest and printStatusText says so rather
 				// than presenting a guess as a classification.
-				statuses, err = goapiproof.RoutingStatusRows(dbCtx, pool, liveDigest, pendingDigest, catalog)
+				statuses, err = goapiproof.RoutingStatusRowsWithKinds(dbCtx, pool, liveDigest, pendingDigest, catalog, mutations)
 				if err != nil {
 					// Its OWN field: the census above succeeded and must
 					// still be printed (r2 R2-04).

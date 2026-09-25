@@ -72,6 +72,10 @@ type Deps struct {
 	Limits Limits
 	Now    func() time.Time
 	Logger *slog.Logger
+	// Counters is where the six route limits count: the api's shared counter
+	// store (Valkey when configured, so a limit holds across replicas); nil
+	// means an in-process one on Now.
+	Counters httpapi.CounterStore
 
 	limiters      *authLimiters
 	routeLimiters *routeLimiters
@@ -114,7 +118,7 @@ func Routes(deps Deps) []httpapi.Route {
 		deps.limiters = newAuthLimiters(deps.Now)
 	}
 	if deps.routeLimiters == nil {
-		deps.routeLimiters = newRouteLimiters(deps.Now)
+		deps.routeLimiters = newRouteLimiters(deps.Counters, deps.Now)
 	}
 	maxBodyBytes := int64(deps.limits().MaxBodyBytes)
 	const prefix = "/api/v1/external-ingest"

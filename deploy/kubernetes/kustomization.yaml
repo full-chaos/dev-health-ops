@@ -13,7 +13,7 @@ resources:
   # NOTE (CHAOS-2304): Jobs do not gate Deployments. The migrate Job must
   # complete before api/go-workers roll out — see migrate-job.yaml and
   # README.md. Safety net: api carries a read-only `wait-for-migrations`
-  # initContainer that blocks app start until the schema is current, so a
+  # initContainer (`dho migrate clickhouse status --check`) that blocks app start until the schema is current, so a
   # naive `kubectl apply -k` cannot serve against an unmigrated schema.
   - migrate-job.yaml
   - api.yaml

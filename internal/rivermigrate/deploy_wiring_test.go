@@ -161,6 +161,76 @@ func TestKubernetesMigrateJobRunsDhoMigrateUpgrade(t *testing.T) {
 	}
 }
 
+// The api Deployment's wait-for-migrations initContainer (the safety net of
+// a naive `kubectl apply -k`) runs the read-only Go probe from the dho image:
+// exactly `migrate clickhouse status --check`, in exec form with no shell,
+// never the upgrade, against the ClickHouse the migrate Job migrates (the
+// migration Secret's native-protocol URI), under contract 2.
+func TestKubernetesApiWaitsForMigrationsWithDho(t *testing.T) {
+	decoder := yaml.NewDecoder(strings.NewReader(string(repoFile(t, "deploy/kubernetes/api.yaml"))))
+	for {
+		var doc struct {
+			Kind string `yaml:"kind"`
+			Spec struct {
+				Template struct {
+					Spec struct {
+						InitContainers []struct {
+							Name    string   `yaml:"name"`
+							Image   string   `yaml:"image"`
+							Command []string `yaml:"command"`
+							Args    []string `yaml:"args"`
+							EnvFrom []any    `yaml:"envFrom"`
+							Env     []struct {
+								Name      string `yaml:"name"`
+								Value     string `yaml:"value"`
+								ValueFrom struct {
+									SecretKeyRef struct {
+										Name string `yaml:"name"`
+										Key  string `yaml:"key"`
+									} `yaml:"secretKeyRef"`
+								} `yaml:"valueFrom"`
+							} `yaml:"env"`
+						} `yaml:"initContainers"`
+					} `yaml:"spec"`
+				} `yaml:"template"`
+			} `yaml:"spec"`
+		}
+		if err := decoder.Decode(&doc); err != nil {
+			t.Fatal("api.yaml has no Deployment with a wait-for-migrations initContainer")
+		}
+		if doc.Kind != "Deployment" {
+			continue
+		}
+		for _, init := range doc.Spec.Template.Spec.InitContainers {
+			if init.Name != "wait-for-migrations" {
+				continue
+			}
+			if !strings.Contains(init.Image, "dev-health-go-dho") || init.Command != nil ||
+				!reflect.DeepEqual(init.Args, []string{"migrate", "clickhouse", "status", "--check"}) {
+				t.Fatalf("image %s command %v args %v, want the dho image running exactly [migrate clickhouse status --check]", init.Image, init.Command, init.Args)
+			}
+			if len(init.EnvFrom) != 0 {
+				t.Fatalf("envFrom = %v: the probe needs one key, not a whole Secret", init.EnvFrom)
+			}
+			env := map[string]string{}
+			var uriSecret, uriKey string
+			for _, entry := range init.Env {
+				env[entry.Name] = entry.Value
+				if entry.Name == "CLICKHOUSE_URI" {
+					uriSecret, uriKey = entry.ValueFrom.SecretKeyRef.Name, entry.ValueFrom.SecretKeyRef.Key
+				}
+			}
+			if env["OPERATIONAL_ORDERING_CONTRACT"] != "2" {
+				t.Fatalf("OPERATIONAL_ORDERING_CONTRACT = %q, want 2", env["OPERATIONAL_ORDERING_CONTRACT"])
+			}
+			if uriSecret != "dev-health-migration-secrets" || uriKey != "CLICKHOUSE_URI" {
+				t.Fatalf("CLICKHOUSE_URI from secret %q key %q, want the migrate Job's dev-health-migration-secrets", uriSecret, uriKey)
+			}
+			return
+		}
+	}
+}
+
 // Every Go worker's default contract is production's: 2.
 func TestGoWorkersDefaultToOrderingContract2(t *testing.T) {
 	for _, testCase := range []struct{ file, want string }{

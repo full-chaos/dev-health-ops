@@ -858,47 +858,6 @@ def test_kubernetes_secret_exposes_clickhouse_uri_for_migrate(monkeypatch) -> No
     assert "GITHUB_TOKEN" not in migration_secret["stringData"]
 
 
-def test_kubernetes_app_deployments_wait_for_migrations() -> None:
-    """CHAOS-2304 safety net: a naive `kubectl apply -k` rolls Deployments
-    without waiting for the migrate Job. api must carry a read-only
-    wait-for-migrations initContainer that blocks until the schema is
-    current (`dev-hops migrate clickhouse status --check`) and never runs
-    DDL itself. The Go worker groups in go-workers.yaml (CHAOS-4195, which
-    replaced the Celery worker.yaml this test used to also parametrize over)
-    carry no such initContainer of their own -- migration readiness for
-    them is a Job dependency (go-river-migrate), not an initContainer."""
-    deployment = next(d for d in _k8s_docs("api.yaml") if d.get("kind") == "Deployment")
-    pod_spec = deployment["spec"]["template"]["spec"]
-    waiter = next(
-        (
-            c
-            for c in pod_spec.get("initContainers") or []
-            if c["name"] == "wait-for-migrations"
-        ),
-        None,
-    )
-    assert waiter is not None, (
-        "api.yaml must define a wait-for-migrations initContainer"
-    )
-
-    command = " ".join(waiter["command"])
-    assert "dev-hops migrate clickhouse status --check" in command
-    # Read-only contract: every dev-hops invocation in the waiter is the
-    # status --check probe — it must never run the upgrade (DDL) path.
-    assert command.count("dev-hops") == command.count(
-        "dev-hops migrate clickhouse status --check"
-    )
-
-    secret_refs = {
-        ref["secretRef"]["name"]
-        for ref in waiter.get("envFrom", [])
-        if "secretRef" in ref
-    }
-    assert "dev-health-secrets" in secret_refs, (
-        "waiter needs the secret env (CLICKHOUSE_URI) to resolve the DSN"
-    )
-
-
 def test_helm_chart_runs_migrations_as_pre_upgrade_hook() -> None:
     # Helm templates are Go-templated, so assert on text rather than YAML.
     template = (_HELM_DIR / "templates" / "migrate-job.yaml").read_text(

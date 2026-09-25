@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
@@ -47,6 +48,12 @@ type LicenseRequest struct {
 	Tier      string
 	IssuedAt  int64
 	LicenseID string
+	// DurationDays is sign_license's duration_days; nil is its default of 365.
+	// A value that is not positive is refused, as Python refuses it.
+	DurationDays *int64
+	// OrgName and ContactEmail are the payload's org_name and contact_email;
+	// nil is None.
+	OrgName, ContactEmail *string
 }
 
 // licenseDurationDays is sign_license's duration_days default.
@@ -62,12 +69,23 @@ func SignLicense(privateKeyB64 string, request LicenseRequest) (string, error) {
 	if _, ok := TierRank(tier); !ok {
 		return "", fmt.Errorf("Invalid tier %q. Must be one of: community, team, enterprise", request.Tier)
 	}
+	duration := int64(licenseDurationDays)
+	if request.DurationDays != nil {
+		duration = *request.DurationDays
+	}
+	if duration <= 0 {
+		return "", errors.New("duration_days must be positive")
+	}
+	if duration > math.MaxInt64/86400 || (request.IssuedAt > 0 && duration*86400 > math.MaxInt64-request.IssuedAt) {
+		// Python's integers are unbounded; the expiry of this payload is not.
+		return "", errors.New("duration_days is too large")
+	}
 	seed, err := pythonB64Decode(privateKeyB64)
 	if err != nil {
 		return "", fmt.Errorf("Invalid private key: %w", err)
 	}
 	if len(seed) != ed25519.SeedSize {
-		return "", fmt.Errorf("Invalid private key: the seed must be exactly %d bytes long", ed25519.SeedSize)
+		return "", fmt.Errorf("Invalid private key: The seed must be exactly %d bytes long", ed25519.SeedSize)
 	}
 	limits, _ := DefaultLimits(tier)
 	grace, _ := GraceDays(tier)
@@ -84,13 +102,13 @@ func SignLicense(privateKeyB64 string, request LicenseRequest) (string, error) {
 	payload.Set("iss", "fullchaos.studio")
 	payload.Set("sub", request.OrgID)
 	payload.Set("iat", request.IssuedAt)
-	payload.Set("exp", request.IssuedAt+licenseDurationDays*86400)
+	payload.Set("exp", request.IssuedAt+duration*86400)
 	payload.Set("tier", tier)
 	payload.Set("features", features)
 	payload.Set("limits", limitObject)
 	payload.Set("grace_days", grace)
-	payload.Set("org_name", nil)
-	payload.Set("contact_email", nil)
+	payload.Set("org_name", optionalString(request.OrgName))
+	payload.Set("contact_email", optionalString(request.ContactEmail))
 	payload.Set("license_id", request.LicenseID)
 	body, err := pyjson.MarshalModel(payload)
 	if err != nil {
@@ -100,6 +118,13 @@ func SignLicense(privateKeyB64 string, request LicenseRequest) (string, error) {
 	return base64.StdEncoding.EncodeToString(body) + "." + base64.StdEncoding.EncodeToString(signature), nil
 }
 
+func optionalString(value *string) pyjson.Value {
+	if value == nil {
+		return nil
+	}
+	return *value
+}
+
 // pythonB64Decode is base64.b64decode(text) with its default
 // validate=False: characters outside the base64 alphabet are discarded,
 // the rest must form whole, correctly padded quanta. Named limit: the
@@ -107,10 +132,18 @@ func SignLicense(privateKeyB64 string, request LicenseRequest) (string, error) {
 // padding) are refused here.
 func pythonB64Decode(text string) ([]byte, error) {
 	var kept strings.Builder
+	data := 0
 	for _, r := range text {
-		if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '+' || r == '/' || r == '=' {
+		if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '+' || r == '/' {
+			data++
+			kept.WriteRune(r)
+		} else if r == '=' {
 			kept.WriteRune(r)
 		}
+	}
+	// binascii names a data length that leaves one stray character.
+	if data%4 == 1 {
+		return nil, fmt.Errorf("Invalid base64-encoded string: number of data characters (%d) cannot be 1 more than a multiple of 4", data)
 	}
 	decoded, err := base64.StdEncoding.DecodeString(kept.String())
 	if err != nil {

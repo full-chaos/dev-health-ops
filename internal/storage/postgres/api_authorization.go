@@ -106,8 +106,11 @@ func apiPosture() RolePosture {
 			// (UPDATE), widened in place.
 			{"integration_sources", true, true, true},
 			// CHAOS-6597 (the sync config create path) creates the
-			// planner-managed integration (INSERT).
-			{"integrations", true, false, true},
+			// planner-managed integration (INSERT); the integration admin routes
+			// create and update integrations, and CHAOS-6643 (the sync config
+			// update path) writes a GitHub integration's work-item runtime
+			// options into its config (UPDATE).
+			{"integrations", true, true, true},
 			// CHAOS-6319: the customer-push ownership check reads a managed
 			// integration's credential row (provider and plain config only;
 			// the encrypted payload is never read or decrypted here). A
@@ -137,10 +140,16 @@ func apiPosture() RolePosture {
 			// (services/login_attempts.py): read, insert the first failure,
 			// update the count and lock, delete on a successful login.
 			{"login_attempts", true, true, true},
-			// org_invites: create_org_invite (CHAOS-6391) checks for a
-			// pending invite (read) and inserts one; a purge target, delete
-			// added. Never updated by this role.
-			{"org_invites", true, false, true},
+			// org_invites: create_org_invite checks for a pending invite
+			// (read) and inserts one; accept-invite and onboard's join_org
+			// mark it accepted (UPDATE). A purge target, delete added.
+			{"org_invites", true, true, true},
+			// The single-use link tokens of e-mail verification and
+			// password reset: every issue deletes the user's earlier tokens
+			// and inserts one, and redeeming one deletes them all. Never
+			// updated.
+			{"email_verification_tokens", true, false, true},
+			{"password_reset_tokens", true, false, true},
 			// CHAOS-6303 (admin impersonation routes) is the first route
 			// area over this principal to WRITE the impersonation session
 			// it reads: start_impersonation ends any prior open session
@@ -195,7 +204,7 @@ func apiPosture() RolePosture {
 			// (mark_candidate_ready_from_verified_ping). Binding admin CRUD
 			// (create/rotate/activate/revoke) is CHAOS-6255, not this route.
 			// CHAOS-6306 adds delete (a purge target) on top.
-			{"pagerduty_webhook_bindings", false, true, true},
+			{"pagerduty_webhook_bindings", true, true, true},
 
 			// CHAOS-6306 (org deletion): org_deletion.py's remaining purge
 			// targets, none previously declared. Every entry here is
@@ -223,6 +232,12 @@ func apiPosture() RolePosture {
 			// CHAOS-6597: the create path adds the config's sync job anchor
 			// (INSERT), widened in place.
 			{"scheduled_jobs", true, true, true},
+			// CHAOS-6673: the integration sync and backfill triggers hand a
+			// run to the scheduler: they write one occurrence and its manual
+			// trigger (INSERT), and read them and the planned run back (the
+			// SELECT is implicit). The scheduler owns every later write.
+			{"scheduled_sync_occurrences", true, false, false},
+			{"sync_manual_triggers", true, false, false},
 			{"backfill_jobs", false, false, true},
 			// Billing: invoice_line_items/subscription_events are each
 			// deleted via a subquery on their own owning row's org_id
@@ -235,8 +250,9 @@ func apiPosture() RolePosture {
 			// fallback is a SELECT, always implicit). Its invoice events
 			// (CHAOS-6526) upsert invoices (INSERT ... ON CONFLICT DO
 			// UPDATE) and replace their line items (delete, then insert).
-			// The refund route (CHAOS-6478) inserts its refund row.
-			{"refunds", true, false, true},
+			// The refund route (CHAOS-6478) inserts its refund row, pending,
+			// and updates it when Stripe answers (CHAOS-6632).
+			{"refunds", true, true, true},
 			{"invoice_line_items", true, false, true},
 			{"invoices", true, true, true},
 			{"subscription_events", true, false, true},
@@ -245,7 +261,10 @@ func apiPosture() RolePosture {
 			// Sync state.
 			{"metric_checkpoints", false, false, true},
 			{"sync_compute_checkpoints", false, false, true},
-			{"sync_watermarks", false, false, true},
+			// UPDATE as of CHAOS-6622: the sync config create and update routes
+			// run Jira source discovery, which moves a renamed project's
+			// watermarks to its new key (DELETE was already the purge's).
+			{"sync_watermarks", false, true, true},
 			{"sync_run_reference_discoveries", false, false, true},
 			{"sync_dispatch_outbox", false, false, true},
 			{"sync_run_post_dispatches", false, false, true},
@@ -269,7 +288,10 @@ func apiPosture() RolePosture {
 			// request per call (and deletes the calling org's own expired
 			// rows first); the callback half will consume (delete) it.
 			{"pagerduty_oauth_authorization_requests", true, false, true},
-			{"provider_oauth_credentials", false, false, true},
+			// CHAOS-6595's callback replaces the org's OAuth grant
+			// (replace_and_capture: insert a new binding, update an existing
+			// one in place); the manual credential routes delete it.
+			{"provider_oauth_credentials", true, true, true},
 			{"provider_oauth_revocations", true, true, true},
 			// Integrations.
 			// CHAOS-6597: the create path seeds the planner datasets (INSERT)
@@ -281,8 +303,9 @@ func apiPosture() RolePosture {
 			// (CHAOS-6319's read-only entry, widened rather than duplicated
 			// here) -- the one-entry-per-table rule.
 			// SSO: encrypted_secrets presence is also read for
-			// credentials_deleted's count.
-			{"sso_providers", false, false, true},
+			// credentials_deleted's count. The SSO activate and deactivate
+			// routes set a provider's status (UPDATE).
+			{"sso_providers", false, true, true},
 			// The admin IP-allowlist routes create, update and delete
 			// entries.
 			{"org_ip_allowlist", true, true, true},
@@ -298,6 +321,9 @@ func apiPosture() RolePosture {
 			{"billing_prices", true, true, true},
 			{"plan_feature_bundles", true, false, true},
 			{"feature_bundles", false, false, false},
+			// The admin BYO LLM budget read (CHAOS-6666) sums the current
+			// month's reservations: read only, the runtime guard is the writer.
+			{"byo_llm_budget_reservations", false, false, false},
 		},
 	}
 }

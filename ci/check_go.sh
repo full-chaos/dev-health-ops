@@ -55,10 +55,31 @@ INTEGRATION_CONTAINER_HARNESS="${ROOT}/internal/testsupport/containers/harness.g
 # able to change which suite a verb runs.
 GO_ENV_OFF=(env -u GO_PROVIDER_ROUTES -u DEV_HEALTH_ENV -u GOFLAGS -u GOEXPERIMENT)
 
+# INTEGRATION_TEST_ENV (CHAOS-6634): environment for the MULTI-PACKAGE
+# `go test -tags=integration pkgA pkgB ...` invocations below (integration and
+# the integration-shard packages target). testcontainers-go derives its session
+# id from the PARENT pid, so every test binary of one such invocation shares ONE
+# session and ONE Ryuk reaper. When one package's process exits, Ryuk reaps the
+# session's containers after its 10 s reconnection timeout -- including a
+# SIBLING package's live container. Seen on shard 3: internal/admincli
+# TestSeedMatchesPython lost its Postgres ~10 s after internal/api/externalingest
+# exited (`unexpected postmaster exit`, `No such container`, then the Python
+# leg's `Connect call failed`). Reproduced with two throwaway packages in one
+# `go test -p 2` run: the long-lived one is refused ~10 s after the short one
+# exits, and survives with TESTCONTAINERS_RYUK_DISABLED=true.
+# In CI (hosted runners are discarded, and every harness container has its own
+# t.Cleanup Terminate) the reaper is off for those invocations. A value the
+# caller already set wins. Outside CI the reaper stays on (orphan safety on a
+# workstation), so a local multi-package run keeps the cross-package hazard.
+INTEGRATION_TEST_ENV=()
+if [ "${CI:-}" = "true" ] && [ -z "${TESTCONTAINERS_RYUK_DISABLED+x}" ]; then
+  INTEGRATION_TEST_ENV=(TESTCONTAINERS_RYUK_DISABLED=true)
+fi
+
 usage() {
   # Backticks in the literal help text document commands; they are not substitutions.
   # shellcheck disable=SC2016
-  printf '%s\n' 'Usage: ci/check_go.sh [fmt|vet|test|race|live-python-oracles|venue-oracles|build|contract|multi-replica-workers|integration-vet|integration-coverage|integration-shard-plan|integration-prepull|integration-shard|integration|fast|ci|all]
+  printf '%s\n' 'Usage: ci/check_go.sh [fmt|vet|test|race|live-python-oracles|venue-oracles [SHARD COUNT]|ci-leg LEG [SHARD COUNT]|build|contract|multi-replica-workers|integration-vet|integration-coverage|integration-shard-plan|integration-prepull|integration-shard|integration|fast|ci|all]
 
   fmt    Check gofmt without modifying files.
   vet    Run go vet ./... in every Go module.
@@ -100,6 +121,19 @@ usage() {
          The static half of that validation is ci/check_venue_oracle_registry.sh
          (no Go toolchain, containers or Python), run on every PR by
          tests/tooling/test_venue_oracle_registry.py.
+         `venue-oracles SHARD COUNT` (CHAOS-6574) runs the SHARD-th of COUNT
+         slices of the registry rows marked run (every COUNT-th row of the
+         sorted sequence, so the tests of one package spread over all slices);
+         the hosted job runs COUNT matrix legs. A slice that selects zero
+         rows fails; no arguments runs every row.
+  ci-leg LEG [SHARD COUNT]
+         One parallel slice of `ci` for the go-quality workflow (CHAOS-6690):
+         static (format, vet, build, contract, integration-vet, shard plans),
+         test (go test ./... + the multi-replica worker gate), race SHARD
+         COUNT (go test -race, the SHARD-th of COUNT weight-balanced package
+         slices, ci/go_race_weights.tsv), oracles (live-Python oracles). The
+         legs run exactly the steps of `ci` (pinned by a tooling test); each
+         stage prints UTC start/done stamps.
   build  Run go build ./... in every Go module.
   contract
          Validate the job contract tree and, when DEV_HEALTH_CONTRACT_BASE is
@@ -288,6 +322,90 @@ check_test() {
 
 check_race() {
   run_in_modules "go test -race" go test -mod=readonly -race ./...
+}
+
+# check_race_shard SHARD COUNT (CHAOS-6690): the SHARD-th of COUNT weight-balanced
+# slices of every module's packages under `go test -race`. The race stage was 17
+# of the 34 minutes of the single go-quality step, dominated by a few packages
+# (goapiproof, providersync, gqlgenguard, workgraph/units), so the slices are
+# balanced by measured package time (ci/go_race_weights.tsv, ci/go_race_shard.awk)
+# and NOT by count. The slices always partition `go list ./...`: a wrong weight
+# costs balance, never coverage. A slice that selects no package at all fails.
+GO_RACE_WEIGHTS="${ROOT}/ci/go_race_weights.tsv"
+check_race_shard() {
+  local shard="${1:-}" count="${2:-}" module_dir modpath pkg selected=0
+  case "${shard}" in ""|*[!0-9]*) die "race SHARD must be a positive integer, got '${shard}'" ;; esac
+  case "${count}" in ""|*[!0-9]*) die "race COUNT must be a positive integer, got '${count}'" ;; esac
+  { [ "${shard}" -ge 1 ] && [ "${count}" -ge 1 ] && [ "${shard}" -le "${count}" ]; } \
+    || die "race shard ${shard} is outside 1..${count}"
+  [ -f "${GO_RACE_WEIGHTS}" ] || die "race shards need ${GO_RACE_WEIGHTS}"
+  local -a pkgs
+  for module_dir in "${MODULE_DIRS[@]}"; do
+    modpath="$(cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -m)"
+    pkgs=()
+    while IFS= read -r pkg; do
+      [ -n "${pkg}" ] && pkgs+=("${pkg}")
+    done < <(cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -mod=readonly ./... \
+      | awk -v mod="${modpath}" -v shard="${shard}" -v count="${count}" -v weights="${GO_RACE_WEIGHTS}" -f "${ROOT}/ci/go_race_shard.awk")
+    printf 'go test -race (shard %s/%s): %s: %d package(s)\n' "${shard}" "${count}" "${module_dir}" "${#pkgs[@]}"
+    [ "${#pkgs[@]}" -gt 0 ] || continue
+    selected=$((selected + ${#pkgs[@]}))
+    (
+      cd "${ROOT}/${module_dir}"
+      "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -race "${pkgs[@]}"
+    )
+  done
+  [ "${selected}" -gt 0 ] \
+    || die "race shard ${shard}/${count} selected zero packages -- the matrix is wider than the package list, so this leg would read green while running nothing"
+}
+
+# ci_leg_stage NAME CMD... prints UTC start/done stamps around one stage so a
+# leg's log says where its minutes went (CHAOS-6690). No `if`/`||` around the
+# command on purpose: errexit is suppressed inside a function called in a
+# condition, which would let a failing command in the middle of a stage pass.
+ci_leg_stage() {
+  local name="$1" started
+  shift
+  started="$(date +%s)"
+  printf '==> stage %s start %s\n' "${name}" "$(date -u +%H:%M:%SZ)"
+  "$@"
+  printf '<== stage %s done in %ss at %s\n' "${name}" "$(($(date +%s) - started))" "$(date -u +%H:%M:%SZ)"
+}
+
+# check_ci_leg LEG [SHARD COUNT]: one parallel slice of `ci` for the go-quality
+# workflow (CHAOS-6690). The legs together run exactly the steps of `ci`
+# (tests/tooling/test_go_quality_legs.py pins the union against the `ci` case):
+#   static   format, vet, build, contract, integration-vet, the shard plans
+#   test     go test ./... and the multi-replica worker gate
+#   race     go test -race, slice SHARD of COUNT (weight-balanced)
+#   oracles  the live-Python oracle blocks
+check_ci_leg() {
+  local leg="${1:-}"
+  case "${leg}" in
+    static)
+      ci_leg_stage format check_format
+      ci_leg_stage vet check_vet
+      ci_leg_stage build check_build
+      ci_leg_stage contract check_contract
+      ci_leg_stage integration-vet check_integration_vet
+      ci_leg_stage plan-integration-shards plan_integration_shards
+      ci_leg_stage plan-providersync-shards plan_providersync_test_shards
+      ;;
+    test)
+      ci_leg_stage test check_test
+      ci_leg_stage multi-replica-workers check_multi_replica_workers
+      ;;
+    race)
+      ci_leg_stage "race ${2:-}/${3:-}" check_race_shard "${2:-}" "${3:-}"
+      ;;
+    oracles)
+      ci_leg_stage live-python-oracles check_live_python_oracles
+      ;;
+    *)
+      die "ci-leg LEG must be one of static, test, race SHARD COUNT, oracles (got '${leg}')"
+      ;;
+  esac
+  printf 'ci-leg %s: OK\n' "${leg}"
 }
 
 check_live_python_oracles() {
@@ -612,7 +730,7 @@ check_live_python_oracles() {
     rm -rf -- "${proof_dir}"
     return 1
   fi
-  printf 'go test -count=1: internal/auth/httpapi (redirect scheme vs live uvicorn)\n'
+  printf 'go test -count=1: internal/auth/httpapi (redirect scheme vs live uvicorn, limit strings vs live limits)\n'
   if ! (
     cd "${ROOT}"
     "${GO_ENV_OFF[@]}" \
@@ -621,8 +739,37 @@ check_live_python_oracles() {
       DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
       PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
       go test -mod=readonly -count=1 \
-        -run '^(TestForwardedSchemeMatchesLiveUvicorn)$' \
+        -run '^(TestForwardedSchemeMatchesLiveUvicorn|TestParseLimitMatchesLivePython)$' \
         ./internal/auth/httpapi
+  ); then
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  printf 'go test -count=1: internal/atlassianteams (the vendored Atlassian client vs the pinned upstream Python Teams client)\n'
+  if ! (
+    cd "${ROOT}"
+    "${GO_ENV_OFF[@]}" \
+      GOWORK=off \
+      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
+      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
+      go test -mod=readonly -count=1 \
+        -run '^(TestAtlassianTeamsClientMatchesLivePython)$' \
+        ./internal/atlassianteams
+  ); then
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  printf 'go test -count=1: internal/auth/signedtoken (link tokens vs the live invite, verification and reset services)\n'
+  if ! (
+    cd "${ROOT}"
+    "${GO_ENV_OFF[@]}" \
+      GOWORK=off \
+      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
+      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
+      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
+      go test -mod=readonly -count=1 \
+        -run '^(TestSignedTokenMatchesLivePython)$' \
+        ./internal/auth/signedtoken
   ); then
     rm -rf -- "${proof_dir}"
     return 1
@@ -702,7 +849,7 @@ check_live_python_oracles() {
     rm -rf -- "${proof_dir}"
     return 1
   fi
-  for proof_name in api-policy-principal api-pyjson api-pyjson-dumps api-pyjson-model api-pyjson-syntax-error-text api-orgs-registry api-pytime api-pytime-date api-pytime-fromisoformat api-pytime-pydantic api-health-revisions api-pybody-queryint api-pybody-querybool api-pybody-bodyint edgetoken-signer api-pybody-string api-pybody-emailstr pythonparity-pyunicodedata pythonparity-pyunicodedata-nfc pythonparity-pyidna-tables pythonparity-pyidna-behaviour pythonparity-emailvalidator pythonparity-strrepr pythonparity-utf8-replace pythonparity-seqratio pythonparity-sanitize pythonparity-urlsplit pythonparity-isoformat pythonparity-fnmatch pythonparity-idna llmorgsettings-validate-base-url httpapi-forwarded-scheme api-customerpush-schema api-customerpush-bodies api-legacyingest api-pybody-queryuuid api-billing-bodies api-billing-helpers api-billing-stripe-version api-licensing-registry api-licensing-sign api-billing-webhook-signature; do
+  for proof_name in api-policy-principal api-pyjson api-pyjson-dumps api-pyjson-model api-pyjson-syntax-error-text api-orgs-registry api-pytime api-pytime-date api-pytime-fromisoformat api-pytime-pydantic api-health-revisions api-pybody-queryint api-pybody-querybool api-pybody-bodyint edgetoken-signer api-pybody-string api-pybody-emailstr pythonparity-pyunicodedata pythonparity-pyunicodedata-nfc pythonparity-pyidna-tables pythonparity-pyidna-behaviour pythonparity-emailvalidator pythonparity-strrepr pythonparity-utf8-replace pythonparity-seqratio pythonparity-sanitize pythonparity-urlsplit pythonparity-isoformat pythonparity-fnmatch pythonparity-idna llmorgsettings-validate-base-url httpapi-forwarded-scheme api-customerpush-schema api-customerpush-bodies api-legacyingest api-pybody-queryuuid api-billing-bodies api-billing-helpers api-billing-stripe-version api-licensing-registry api-licensing-sign api-billing-webhook-signature httpapi-limit-string auth-signedtoken atlassianteams-python-client; do
     proof_file="${proof_dir}/${proof_name}"
     if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
       printf 'ERROR: api live Python oracle %s did not run\n' "${proof_name}" >&2
@@ -1600,6 +1747,26 @@ check_live_python_oracles() {
     return 1
   fi
 
+  printf 'go test -count=1: internal/synccli (dho sync <target> request handling vs the REAL dev-hops argparse, preflight and run_sync_target)\n'
+  if ! (
+    cd "${ROOT}"
+    "${GO_ENV_OFF[@]}" \
+      GOWORK=off \
+      DEV_HEALTH_LIVE_PYTHON_ORACLES=1 \
+      DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
+      PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
+      go test -mod=readonly -count=1 -run '^TestSyncTargetMatchesLivePython$' ./internal/synccli
+  ); then
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+  proof_file="${proof_dir}/cli-sync-target"
+  if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
+    printf 'ERROR: the dho sync <target> live Python oracle measurement did not occur\n' >&2
+    rm -rf -- "${proof_dir}"
+    return 1
+  fi
+
   printf 'go test -count=1: internal/queryapi/principal (Go verifier vs a REAL Python-issued envelope + JWKS, CHAOS-4366)\n'
   if ! (
     cd "${ROOT}"
@@ -1738,7 +1905,22 @@ check_live_python_oracles() {
 # shellcheck source=ci/lib/venue_oracle_registry.sh
 . "${ROOT}/ci/lib/venue_oracle_registry.sh"
 
+# check_venue_oracles [SHARD COUNT] (CHAOS-6574). With no arguments it runs every
+# registry `run` row (the local full run). With SHARD COUNT it runs the rows
+# whose 0-based position in the registry's sorted `run` sequence, modulo COUNT,
+# is SHARD-1: sorted by (package, test), so every package's tests spread over
+# all shards (one package -- apiservice/admin -- alone took 23 min of a 67 min
+# sequential job, so a package-level split could not get under ~23 min). The
+# hosted job runs COUNT matrix legs; a leg whose slice is empty FAILS (a
+# matrix wider than the registry is a config error, never a green no-op).
 check_venue_oracles() {
+  local shard="${1:-}" shard_count="${2:-}"
+  if [ -n "${shard}${shard_count}" ]; then
+    case "${shard}" in ""|*[!0-9]*) die "venue-oracles SHARD must be a positive integer, got '${shard}'" ;; esac
+    case "${shard_count}" in ""|*[!0-9]*) die "venue-oracles COUNT must be a positive integer, got '${shard_count}'" ;; esac
+    { [ "${shard}" -ge 1 ] && [ "${shard_count}" -ge 1 ] && [ "${shard}" -le "${shard_count}" ]; } \
+      || die "venue-oracles shard ${shard} is outside 1..${shard_count}"
+  fi
   [ "${DEV_HEALTH_LIVE_PYTHON_ORACLES:-}" = "1" ] \
     || die "venue-oracles requires DEV_HEALTH_LIVE_PYTHON_ORACLES=1 (this verb never sets it itself -- a skip must be visible to the caller, not swallowed here)"
   command -v jq >/dev/null 2>&1 \
@@ -1750,6 +1932,7 @@ check_venue_oracles() {
   check_venue_oracle_registry >&2 || die "venue-oracles: ci/venue_oracle_registry.tsv disagrees with the tree (see above)"
 
   local proof_dir dir kind name file names="" total=0 prev_pkg="" index
+  local run_index=0 pkg_has_run=0 registered_runs=0
   local -a vo_dirs=() vo_names=() local_only=()
   proof_dir="$(mktemp -d "${TMPDIR:-/tmp}/dev-health-venue-oracles.XXXXXX")"
 
@@ -1758,22 +1941,31 @@ check_venue_oracles() {
   while read -r dir name kind; do
     if [ "${dir}" != "${prev_pkg}" ]; then
       if [ -n "${prev_pkg}" ]; then
-        if [ -z "${names}" ]; then
+        if [ "${pkg_has_run}" -eq 0 ]; then
           # A package whose every registered test is local-only runs zero
-          # comparisons while reading as covered: refuse it.
+          # comparisons while reading as covered: refuse it (on the WHOLE
+          # registry, whatever this shard's slice is).
           rm -rf -- "${proof_dir}"
           die "venue-oracles: ${prev_pkg} is registered but no test there is run by this verb (local-only: ${#local_only[@]} so far) -- an oracle package that runs zero comparisons must not read as covered"
         fi
-        vo_dirs+=("${ROOT}/${prev_pkg}")
-        vo_names+=("${names}")
+        if [ -n "${names}" ]; then
+          vo_dirs+=("${ROOT}/${prev_pkg}")
+          vo_names+=("${names}")
+        fi
       fi
       prev_pkg="${dir}"
       names=""
+      pkg_has_run=0
     fi
     case "${kind}" in
       run)
-        names="${names:+${names}|}${name}"
-        total=$((total + 1))
+        pkg_has_run=1
+        registered_runs=$((registered_runs + 1))
+        if [ -z "${shard}" ] || [ $((run_index % shard_count + 1)) -eq "${shard}" ]; then
+          names="${names:+${names}|}${name}"
+          total=$((total + 1))
+        fi
+        run_index=$((run_index + 1))
         ;;
       local)
         file="$(grep -lE "^func ${name}[(\[]" "${ROOT}/${dir}"/*_test.go | head -n1)"
@@ -1783,12 +1975,20 @@ check_venue_oracles() {
     esac
   done < <(venue_oracle_registry_rows | LC_ALL=C sort -k1,1 -k2,2; printf '\001 \001 end\n')
 
-  if [ "${total}" -eq 0 ]; then
+  if [ "${registered_runs}" -eq 0 ]; then
     rm -rf -- "${proof_dir}"
     die "venue-oracles: the registry holds zero runnable venue-oracle tests -- the registry itself is broken, not a genuinely oracle-free tree"
   fi
+  if [ "${total}" -eq 0 ]; then
+    rm -rf -- "${proof_dir}"
+    die "venue-oracles: shard ${shard}/${shard_count} selects zero of the ${registered_runs} registered run rows -- the matrix is wider than the registry, so this leg would read green while running nothing"
+  fi
 
-  printf 'venue-oracles: %d registered test(s) across %d package(s)\n' "${total}" "${#vo_dirs[@]}"
+  if [ -n "${shard}" ]; then
+    printf 'venue-oracles: shard %s/%s runs %d of %d registered run row(s) across %d package(s)\n' "${shard}" "${shard_count}" "${total}" "${registered_runs}" "${#vo_dirs[@]}"
+  else
+    printf 'venue-oracles: %d registered test(s) across %d package(s)\n' "${total}" "${#vo_dirs[@]}"
+  fi
 
   local rel pattern pkg_proof_dir json_log stderr_log go_test_status proof failed=0
   local -a compared=() go_only=()
@@ -2700,7 +2900,7 @@ check_integration_package_shard() {
     fi
     (
       cd "${ROOT}/${module_dir}"
-      "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -tags=integration -count=1 -timeout=30m "${run_pkgs[@]}"
+      "${GO_ENV_OFF[@]}" GOWORK=off ${INTEGRATION_TEST_ENV[@]+"${INTEGRATION_TEST_ENV[@]}"} go test -mod=readonly -tags=integration -count=1 -timeout=30m "${run_pkgs[@]}"
     )
   done
 
@@ -2798,7 +2998,7 @@ check_integration() {
     printf 'go test integration: %s -> %s\n' "${module_dir}" "${run_pkgs[*]}"
     (
       cd "${ROOT}/${module_dir}"
-      "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -tags=integration -count=1 -timeout=30m "${run_pkgs[@]}"
+      "${GO_ENV_OFF[@]}" GOWORK=off ${INTEGRATION_TEST_ENV[@]+"${INTEGRATION_TEST_ENV[@]}"} go test -mod=readonly -tags=integration -count=1 -timeout=30m "${run_pkgs[@]}"
     )
   done
 }
@@ -2875,8 +3075,13 @@ case "${1:-all}" in
     check_live_python_oracles
     ;;
   venue-oracles)
-    [ "$#" -eq 1 ] || die "venue-oracles accepts no arguments"
-    check_venue_oracles
+    { [ "$#" -eq 1 ] || [ "$#" -eq 3 ]; } || die "venue-oracles accepts no arguments, or SHARD COUNT (1-based shard of COUNT)"
+    check_venue_oracles "${2:-}" "${3:-}"
+    ;;
+  ci-leg)
+    { [ "$#" -eq 2 ] || [ "$#" -eq 4 ]; } || die "ci-leg accepts LEG, or 'race SHARD COUNT'"
+    shift
+    check_ci_leg "$@"
     ;;
   build)
     check_build

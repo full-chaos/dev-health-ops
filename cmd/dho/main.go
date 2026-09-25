@@ -12,18 +12,23 @@
 package main
 
 import (
-	"github.com/full-chaos/dev-health-ops/internal/admincli"
+	"github.com/full-chaos/dev-health-ops/internal/adminops"
+	"github.com/full-chaos/dev-health-ops/internal/aicli"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/contractcheck"
 	"github.com/full-chaos/dev-health-ops/internal/fixturescli"
 	"github.com/full-chaos/dev-health-ops/internal/goapicli"
+	"github.com/full-chaos/dev-health-ops/internal/maintenancecli"
+	"github.com/full-chaos/dev-health-ops/internal/metricscli"
 	"github.com/full-chaos/dev-health-ops/internal/mintcli"
+	"github.com/full-chaos/dev-health-ops/internal/operationalbackfill"
 	"github.com/full-chaos/dev-health-ops/internal/queryapiservice"
 	"github.com/full-chaos/dev-health-ops/internal/reconcilerservice"
 	"github.com/full-chaos/dev-health-ops/internal/rivermigrate"
 	"github.com/full-chaos/dev-health-ops/internal/schedulerservice"
 	"github.com/full-chaos/dev-health-ops/internal/streamrunnerservice"
+	"github.com/full-chaos/dev-health-ops/internal/synccli"
 	"github.com/full-chaos/dev-health-ops/internal/workersctl"
 	"github.com/full-chaos/dev-health-ops/internal/workerservice"
 )
@@ -33,17 +38,22 @@ func main() { cli.Main("dho", commands()) }
 // commands is the complete command tree, one vertical per line.
 func commands() []cli.Command {
 	return []cli.Command{
-		admincli.Command(),
+		adminops.Command(),
+		aicli.Command(),
 		apiservice.Command(),
 		contractcheck.Command(),
 		fixturescli.Command(),
 		goapicli.Command(),
+		maintenancecli.Command(),
+		metricscli.Command(),
 		mintcli.Command(),
+		operationalbackfill.Command(),
 		queryapiservice.Command(),
 		reconcilerservice.Command(),
 		rivermigrate.Command(),
 		schedulerservice.Command(),
 		streamrunnerservice.Command(),
+		synccli.Command(),
 		workerservice.Command(),
 		workersctl.Command(),
 	}

@@ -58,6 +58,10 @@ func jiraRowsCases() []jiraRowsCase {
 		"not an object",
 		[]any{"a"},
 		map[string]any{"id": "10011", "key": "eng", "name": "Engineering (lower)"},
+		// A capital sigma, 31 case-ignorable runes, then a letter: medial
+		// in CPython at any distance (x/text alone stops looking at 31).
+		map[string]any{"id": "10012", "key": "SIG", "name": "Sigma", "projectTypeKey": "AΣ" + strings.Repeat(".", 31) + "B"},
+		map[string]any{"id": "10013", "key": "SIGF", "name": "Final sigma", "projectTypeKey": " Ops Σ" + strings.Repeat("'", 40) + " "},
 	}
 	options := []map[string]any{
 		nil, {}, {"project_key": "CHAOS"}, {"project_key": " ops "}, {"project_key": "missing"},

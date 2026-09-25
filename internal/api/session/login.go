@@ -60,8 +60,11 @@ func passwordMatches(password, hash string) (bool, error) {
 
 // auditEntry is emit_audit_log's arguments.
 type auditEntry struct {
-	orgID        uuid.UUID
-	action       audit.Action
+	orgID  uuid.UUID
+	action audit.Action
+	// resourceType is the row's resource type; "" is the session routes'
+	// own AuditResourceType.SESSION.
+	resourceType audit.ResourceType
 	resourceID   string
 	userID       *uuid.UUID
 	description  string
@@ -85,8 +88,12 @@ func (h handlers) emitAudit(ctx context.Context, tx pgx.Tx, r *http.Request, ent
 		changes = []byte(text)
 	}
 	description := entry.description
+	resourceType := entry.resourceType
+	if resourceType == "" {
+		resourceType = audit.ResourceSession
+	}
 	row := audit.Entry{
-		OrgID: entry.orgID, UserID: entry.userID, Action: entry.action, ResourceType: audit.ResourceSession,
+		OrgID: entry.orgID, UserID: entry.userID, Action: entry.action, ResourceType: resourceType,
 		ResourceID: entry.resourceID, Description: &description, Changes: changes, RequestMetadata: metadata,
 	}
 	if entry.failure {

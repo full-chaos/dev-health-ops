@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"regexp"
 	"strings"
 	"testing"
@@ -49,6 +48,8 @@ func credentialSeedRows(f venueFixture) []credentialSeedRow {
 		{org: f.orgA, provider: "gitlab", name: "noop-a", secrets: map[string]any{"token": "gl_noop"}, config: `{"a": 1}`, isActive: false},
 		{org: f.orgA, provider: "github", name: "noop-b", secrets: map[string]any{"token": "gh_noop"}, config: `{"x": 1, "y": 2}`, isActive: true},
 		{org: f.orgA, provider: "github", name: "eq-create", secrets: map[string]any{"token": "gh_eq"}, config: `{"org": "acme", "zeta": 1, "alpha": [1, 2]}`, isActive: true},
+		{org: f.orgA, provider: "gitlab", name: "del-a", secrets: map[string]any{"token": "gl_del"}, config: `{"a": 2}`, isActive: true},
+		{org: f.orgA, provider: "github", name: "del-b", secrets: map[string]any{"token": "gh_del"}, config: `{}`, isActive: false},
 		{org: f.orgA, provider: "jira", name: "null-config", secrets: map[string]any{"email": "a@example.test", "api_token": "t"}, config: "", isActive: true},
 		{org: f.orgA, provider: "jira", name: "null-config2", secrets: map[string]any{"email": "b@example.test", "api_token": "t"}, config: "", isActive: true},
 		{org: f.orgA, provider: "github", name: "repos", secrets: map[string]any{"token": "gh_repos"}, config: `{"org": "shadowed"}`, isActive: true},
@@ -208,6 +209,26 @@ func credentialRequests(f venueFixture, tokens map[string]string) []venueoracle.
 	add("get: an equal config on create leaves the stored order", "GET", one("github", "eq-create"), bearer("admin"), nil)
 	add("get: after patches", "GET", one("github", "camel"), bearer("admin"), nil)
 	add("list: after patches", "GET", base, bearer("admin"), nil)
+
+	// DELETE (CHAOS-6662): the row goes for the caller's organisation only, by
+	// exact provider and name; the rows left behind are compared below.
+	add("delete: anonymous", "DELETE", one("gitlab", "del-a"), nil, nil)
+	add("delete: member", "DELETE", one("gitlab", "del-a"), bearer("member"), nil)
+	add("delete: missing", "DELETE", one("github", "missing"), bearer("admin"), nil)
+	add("delete: other org row is not visible", "DELETE", one("github", "other-org"), bearer("admin"), nil)
+	add("delete: another provider's name", "DELETE", one("github", "del-a"), bearer("admin"), nil)
+	add("delete: provider case matters", "DELETE", one("GitLab", "del-a"), bearer("admin"), nil)
+	add("delete: name case matters", "DELETE", one("gitlab", "DEL-A"), bearer("admin"), nil)
+	add("get: still there after refused deletes", "GET", one("gitlab", "del-a"), bearer("admin"), nil)
+	add("delete: an active row", "DELETE", one("gitlab", "del-a"), bearer("admin"), nil)
+	add("get: gone after delete", "GET", one("gitlab", "del-a"), bearer("admin"), nil)
+	add("delete: the same row again", "DELETE", one("gitlab", "del-a"), bearer("admin"), nil)
+	add("delete: an inactive row", "DELETE", one("github", "del-b"), bearer("admin"), nil)
+	add("delete: a row the credentials plane named repos", "DELETE", one("github", "repos"), bearer("admin"), nil)
+	add("delete: percent-encoded name that is missing", "DELETE", one("github", "a%20b"), bearer("admin"), nil)
+	add("list: after deletes", "GET", base, bearer("admin"), nil)
+	add("delete: other org admin sees only its own row", "DELETE", one("github", "other-org"), bearer("superuser"), nil)
+	add("list: other org after its delete", "GET", base, bearer("superuser"), nil)
 	return out
 }
 
@@ -245,33 +266,6 @@ func TestVenueOracleCredentialAdmin(t *testing.T) {
 			return credentialIDPattern.ReplaceAllString(body, `"id":"<uuid>"`)
 		},
 	})
-
-	// DELETE on a credential is deliberately not served here (its PagerDuty
-	// disconnect is ported with the PagerDuty admin, and the path stays on
-	// the Python plane until then): Go answers 405. This pins the gap so a
-	// later change to it is a decision, not an accident.
-	deleteResponse := venueoracle.Do(t, base, venueoracle.Request{Name: "delete: not served by Go", Method: "DELETE",
-		Path: "/api/v1/admin/credentials/gitlab/noop-a", Headers: map[string]string{"Authorization": "Bearer " + venue.Tokens["admin"]}})
-	if deleteResponse.Status != http.StatusMethodNotAllowed {
-		t.Errorf("DELETE /credentials/{provider}/{name} on the Go plane answered %d, want 405", deleteResponse.Status)
-	}
-
-	// /credentials/{id}/repos of a credential the org holds is repo listing,
-	// which this plane does not serve: 501, not a credential read.
-	goPool, err := pgxpool.New(ctx, venue.AdminURI(t, venue.GoDB))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var heldID string
-	if err := goPool.QueryRow(ctx, `SELECT id::text FROM integration_credentials WHERE provider = 'github' AND name = 'eq-create'`).Scan(&heldID); err != nil {
-		t.Fatal(err)
-	}
-	goPool.Close()
-	repos := venueoracle.Do(t, base, venueoracle.Request{Name: "repos of a held credential", Method: "GET",
-		Path: "/api/v1/admin/credentials/" + heldID + "/repos", Headers: map[string]string{"Authorization": "Bearer " + venue.Tokens["admin"]}})
-	if repos.Status != http.StatusNotImplemented || !strings.Contains(repos.Body, "not served by this API plane") {
-		t.Errorf("repos of a held credential answered %d %s, want 501", repos.Status, repos.Body)
-	}
 
 	// Rows: everything but the generated id and the write timestamps, plus
 	// the decrypted payload of each row from the Python plane's decrypt_value.

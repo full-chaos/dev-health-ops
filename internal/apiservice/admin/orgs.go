@@ -4,7 +4,6 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -162,7 +161,7 @@ func (h *handlers) createOrganization(w http.ResponseWriter, r *http.Request) {
 		// error is "value_error" with ctx {"error": {}} (a ValueError
 		// object jsonable_encoder cannot serialize further), input is the
 		// UNTRIMMED raw value.
-		trimmedName := strings.TrimSpace(name)
+		trimmedName := pythonparity.Strip(name)
 		if trimmedName == "" && name != "" {
 			errCtx := pyjson.NewObject()
 			errCtx.Set("error", pyjson.NewObject())

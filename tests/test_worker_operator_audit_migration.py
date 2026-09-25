@@ -88,8 +88,8 @@ def test_migration_0136_allows_the_operator_principal_and_is_reversible():
     )
     assert migration.revision == "0136"
     assert migration.down_revision == "0135"
-    # 0140 (invoices: last_event_created) supersedes the head check:
-    # derived, not typed (tests/_alembic_heads.py); the next migration
+    # 0140 (invoices: last_event_created) supersedes the head
+    # check: derived, not typed (tests/_alembic_heads.py); the next migration
     # author moves it.
     action_check = importlib.import_module(
         "dev_health_ops.alembic.versions.0137_worker_operator_audits_action_check"
@@ -99,10 +99,14 @@ def test_migration_0136_allows_the_operator_principal_and_is_reversible():
         "dev_health_ops.alembic.versions.0138_worker_operator_audits_direct_write_actions"
     )
     assert direct_write_check.down_revision == "0137"
+    refunds_write_first = importlib.import_module(
+        "dev_health_ops.alembic.versions.0139_refunds_write_first_idempotency_key"
+    )
+    assert refunds_write_first.down_revision == direct_write_check.revision
     last_event_created = importlib.import_module(
         "dev_health_ops.alembic.versions.0140_invoices_last_event_created"
     )
-    assert last_event_created.down_revision == direct_write_check.revision
+    assert last_event_created.down_revision == refunds_write_first.revision
     assert last_event_created.revision == application_schema_head()
 
     engine = sa.create_engine("sqlite:///:memory:")

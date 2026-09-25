@@ -121,6 +121,24 @@ at `unassigned` usually means the ClickHouse `teams` dimension is empty.
 | 6 | `manual_fallback` | `manual_attribution_fallbacks` (repo/project/member/issue_key_prefix) | manual\|low | 7 only | 0–5 | `scope_type, scope_id, reason` |
 | 7 | `unassigned` | — (nothing matched) | none | — (floor) | — | `reason` |
 
+### 0.2a Atlassian Teams (Jira) — real teams beside the project-as-team fallback
+
+Jira has two team models and both live in ClickHouse under `provider = 'jira'`:
+
+| | Project-as-team (fallback) | Atlassian Teams (real teams) |
+|---|---|---|
+| Written by | the Jira team catalog / auto-import | `dho sync teams --provider jira` (`internal/atlassianteams`) |
+| `teams.id` | the Jira project key (`PLAT`) | the uuid of the team's ARI (`ari:cloud:identity::team/<uuid>`), `native_team_key` = the full ARI |
+| Members (`team_memberships`, `source = 'native'`) | the project lead only, 100/10 | every `TEAM_MEMBER` of the team from the Teamwork Graph (`member_id = jira:<lower(accountId)>`, the same id the auto-import uses), 100/10 |
+| Project ownership (`team_project_ownership`, `source = 'native'`) | the project itself, specificity 100, priority 10 | the team's active projects, **specificity 110, priority 10** |
+
+`project_ownership` candidates rank by `is_primary`, then `specificity` (higher first), then `priority` (lower
+first) (`RankDerivationCandidates`). An Atlassian team that works on a project therefore **outranks** the project
+standing in for a team (110 over 100); the project-as-team row stays as the fallback for projects no Atlassian team
+claims. The two id spaces cannot collide (a project key is not a uuid), and the sync never writes the project-as-team
+rows. The source is the existing `native` enum value: `team_*.source` has no room for another value without a
+ClickHouse migration (rule 4.1 above). Asserted by `TestAnAtlassianTeamOutranksTheProjectAsTeamOwnerInTheCascade`.
+
 ### 0.3 Off-the-rails matrix (symptom → diagnosis → fix)
 
 | Symptom | Likely stage | Diagnose | Fix |
@@ -131,6 +149,7 @@ at `unassigned` usually means the ClickHouse `teams` dimension is empty.
 | A bare prefix (e.g. `CHAOS`) attributes as `linked_issue` | 5 vs 6 | did a full key resolve to a real `work_items` row, or did a prefix shortcut leak in? | no prefix→team in `linked_issue`; route to manual `issue_key_prefix` |
 | A PR inherits via `linked_issue` from a donor that only has a `manual_fallback` (e.g. `issue_key_prefix`) rule | 5 (donor) | is the donor's *primary* source in 0–4? a rank-6 fallback must never be relabeled rank-5 | donors gated to `_DONOR_SOURCES` (0–4) in `build_linked_issue_team_resolver`; a manual-only donor is never a linked_issue donor (done CS3) |
 | Same scope shows duplicate ownership candidates / bloats over time | RMT read | `valid_from` is in the ownership tables' `ORDER BY`, so `FINAL` cannot collapse re-imports (each daily run is a new sort key) | reads dedup per *logical* scope via `argMax((updated_at, valid_from))`, NOT `FINAL` (done CS3, `load_team_attribution_context`); manual-fallback read keeps `FINAL` (its sort key has no `valid_from`) |
+| A retracted ownership/membership (a new row, same sort key, `valid_to` set) still attributes until the RMT pair merges | RMT read | the retraction is a second physical row under the same sort key until a merge; a loader that filtered `valid_to` first dropped it and kept the older open row | the three Go loaders (`LoadProjects`, `LoadRepos`, `LoadProviderMembers`) resolve the newest row per full sort key first (`argMax` by `updated_at`), THEN apply `valid_from`/`valid_to`, then dedup per logical scope; asserted by `TestLoadersHonorARetractionBeforeTheRowPairMerges` (CHAOS-6637). Readers that already use `FINAL` before the window (`teamownership`, `teamscope`) are correct for this class |
 | Team flips / stale team lingers after a re-org | write side | ownership writers set `valid_from=now` but never `valid_to`, so a reassigned scope keeps the old-team row active; readers can't tell stale from co-ownership | needs writer-side `valid_to` expiry on re-derivation — tracked **CHAOS-2610** (read-side `argMax` already makes the newest the primary by recency tiebreak) |
 | `manual_fallback` resolves the wrong team | scope match | which `manual_attribution_fallbacks` row matched (repo/project/member/issue_key_prefix)? | check `_manual_fallback_candidates` scope match + rule `priority`; manual is rank 6 (done CS3) |
 | Provenance absent in the API | GraphQL | resolver SELECTs the provenance columns? SDL has the fields? | expose `source/confidence/evidence` |

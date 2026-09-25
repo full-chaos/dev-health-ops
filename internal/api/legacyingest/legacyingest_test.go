@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"io"
 	"log/slog"
 	"net/http"
@@ -196,5 +197,42 @@ func TestInvalidRequestConsumesTheIdempotencyKey(t *testing.T) {
 	routes[0].Handler.ServeHTTP(recorder, request)
 	if recorder.Code != 422 || len(store.claims) != 1 || len(store.appended) != 0 {
 		t.Fatalf("%d claims=%v appended=%v", recorder.Code, store.claims, store.appended)
+	}
+}
+
+const telemetryBody = `{"org_id":"org-1","items":[{"signal_type":"s","signal_count":1,"session_count":1,"environment":"e","bucket_start":"2026-01-01T00:00:00Z","bucket_end":"2026-01-01T01:00:00Z","dedupe_key":"d"}]}`
+
+type failingClickHouse struct{ err error }
+
+func (f failingClickHouse) PrepareBatch(context.Context, string, ...driver.PrepareBatchOption) (driver.Batch, error) {
+	return nil, f.err
+}
+
+func postTelemetry(t *testing.T, clickhouse ClickHouse) *httptest.ResponseRecorder {
+	t.Helper()
+	routes := Routes(Deps{ClickHouse: clickhouse, Getenv: env(map[string]string{"ENVIRONMENT": "dev"}), Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	for _, route := range routes {
+		if route.Pattern == "/api/v1/ingest/telemetry" {
+			request := httptest.NewRequest(http.MethodPost, "/api/v1/ingest/telemetry", strings.NewReader(telemetryBody))
+			recorder := httptest.NewRecorder()
+			route.Handler.ServeHTTP(recorder, request)
+			return recorder
+		}
+	}
+	t.Fatal("no telemetry route")
+	return nil
+}
+
+func TestTelemetryWithoutClickHouseIsAcceptedAndSkipped(t *testing.T) {
+	got := postTelemetry(t, nil)
+	if got.Code != 202 || !strings.HasSuffix(got.Body.String(), `"stream":"ingest:org-1:telemetry"}`) {
+		t.Fatalf("%d %s", got.Code, got.Body.String())
+	}
+}
+
+func TestTelemetryInsertFailureIsTheUnhandled500(t *testing.T) {
+	got := postTelemetry(t, failingClickHouse{err: errors.New("down")})
+	if got.Code != 500 || strings.TrimSpace(got.Body.String()) != `{"detail":"Internal Server Error"}` {
+		t.Fatalf("%d %s", got.Code, got.Body.String())
 	}
 }

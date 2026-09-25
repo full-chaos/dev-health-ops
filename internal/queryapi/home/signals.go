@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
 	"regexp"
 	"sort"
 	"strconv"
@@ -396,7 +397,7 @@ func BuildHealthState(signals []Signal, dataConfidence DataConfidence, asOf *tim
 			Status:   status,
 			Headline: "Cockpit signals appear sparse",
 			Summary:  "Available data suggests watching coverage before making operating changes.",
-			AsOf:     (*NaiveDateTime)(asOf),
+			AsOf:     (*pytime.NaiveDateTime)(asOf),
 		}
 	}
 	top := signals[0]
@@ -415,7 +416,7 @@ func BuildHealthState(signals []Signal, dataConfidence DataConfidence, asOf *tim
 		Status:   status,
 		Headline: fmt.Sprintf("%s across %s", top.Title, top.AffectedScope),
 		Summary:  fmt.Sprintf("The strongest signal suggests %s", top.WhyItMatters),
-		AsOf:     (*NaiveDateTime)(asOf),
+		AsOf:     (*pytime.NaiveDateTime)(asOf),
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"math"
 	"math/big"
+	"regexp"
 	"time"
 
 	"github.com/google/uuid"
@@ -211,8 +212,10 @@ func (h handlers) revokeLicense(ctx context.Context, orgID pyjson.Value) {
 // trialWillEnd is _handle_trial_will_end: for an org in the metadata and a
 // readable trial_end, trial_expiring queued with the days left (rounded
 // up) and the trial's end date. A trial_end past time_t is the route's
-// 500 (Python's OverflowError is outside its except).
-func (h handlers) trialWillEnd(ctx context.Context, subscription pyjson.Value) error {
+// 500 (Python's OverflowError is outside its except). The intent is keyed
+// by the Stripe event id (a named divergence: Python keys it by the
+// attributes, so a redelivery on another day queued a second email).
+func (h handlers) trialWillEnd(ctx context.Context, eventID pyjson.Value, subscription pyjson.Value) error {
 	orgID := h.handlerOrgID(ctx, subscription)
 	customer := attr(subscription, "customer", nil)
 	if !pyjson.Truthy(orgID) {
@@ -242,7 +245,10 @@ func (h handlers) trialWillEnd(ctx context.Context, subscription pyjson.Value) e
 	attributes := pyjson.NewObject()
 	attributes.Set("days_remaining", pyjson.IntOf(days))
 	attributes.Set("trial_end_date", trialEnd.Format(time.DateOnly))
-	if err := h.enqueueBillingNotification(ctx, "trial_expiring", orgID, attributes); err != nil {
+	// Keyed by the Stripe event id: a redelivery reuses the intent even when
+	// days_remaining has changed since the first delivery.
+	eventText, _ := eventID.(string)
+	if err := h.enqueueBillingNotificationFor(ctx, "trial_expiring", orgID, eventText, attributes); err != nil {
 		h.logger.WarnContext(ctx, "Failed to enqueue trial expiring email", "org_id", pyStr(orgID), "error", err.Error())
 		return nil
 	}
@@ -297,6 +303,10 @@ func (h handlers) enqueueBillingNotification(ctx context.Context, notificationTy
 	return h.enqueueBillingNotificationFor(ctx, notificationType, orgID, "", attributes)
 }
 
+// outboxSafeKey is the character set the job outbox accepts in an
+// idempotency key (jobcontract's safe id).
+var outboxSafeKey = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]*$`)
+
 // enqueueBillingNotificationFor is _enqueue_billing_notification with its
 // provider_event_id: a Stripe event id keys the intent (one intent per
 // event, so a redelivered event reuses it), hashed when longer than 128
@@ -338,7 +348,10 @@ func newBillingIntent(notificationType string, orgID pyjson.Value, providerEvent
 	suffix := hex.EncodeToString(digest[:])
 	if identity := pythonparity.Strip(providerEventID); identity != "" {
 		suffix = identity
-		if len([]rune(identity)) > 128 {
+		// Hashed when long, or when it holds a character the job outbox
+		// refuses in a key: otherwise the intent would be written and never
+		// handed off.
+		if len([]rune(identity)) > 128 || !outboxSafeKey.MatchString(identity) {
 			hashed := sha256.Sum256([]byte(identity))
 			suffix = hex.EncodeToString(hashed[:])
 		}

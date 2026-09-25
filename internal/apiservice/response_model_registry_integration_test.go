@@ -5,6 +5,7 @@ package apiservice
 import (
 	"encoding/json"
 	"github.com/full-chaos/dev-health-ops/internal/api/session"
+	"github.com/full-chaos/dev-health-ops/internal/api/sso"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"io"
@@ -53,9 +54,16 @@ var goRoutesWithoutPython = map[string]string{
 	"POST /api/v1/admin/orgs/{org_id}/transfer-ownership": "Go serves the web's shape; the ruled intentional divergence",
 	"POST /api/v1/admin/teams/{team_id}":                  "dispatches POST /api/v1/admin/teams/import; any other id is 405",
 	"POST /api/v1/admin/ip-allowlist/{entry_id}":          "dispatches POST /api/v1/admin/ip-allowlist/check; any other id is 405",
-	"GET /buildinfo":                         "Go-only build stamp; the Python api has no such route",
-	"POST /api/v1/billing/plans/{plan_id}":   "answers 405 for every id; POST /api/v1/billing/plans/pull-stripe is its own pattern",
-	"HEAD /api/v1/billing/plans/pull-stripe": "answers the 405 FastAPI gives a HEAD there (Allow: POST); without it the GET /plans/{plan_id} route's 405 would answer",
+	"GET /buildinfo":                              "Go-only build stamp; the Python api has no such route",
+	"POST /api/v1/billing/plans/{plan_id}":        "answers 405 for every id; POST /api/v1/billing/plans/pull-stripe is its own pattern",
+	"HEAD /api/v1/billing/plans/pull-stripe":      "answers the 405 FastAPI gives a HEAD there (Allow: POST); without it the GET /plans/{plan_id} route's 405 would answer",
+	"GET /api/v1/auth/oauth/{first}/{second}":     "dispatches the four overlapping /oauth routes (PATCH providers/{id}, POST {id}/authorize, POST {id}/callback, GET {type}/authorize) as Starlette does",
+	"HEAD /api/v1/auth/oauth/{first}/{second}":    "dispatches the four overlapping /oauth routes (PATCH providers/{id}, POST {id}/authorize, POST {id}/callback, GET {type}/authorize) as Starlette does",
+	"POST /api/v1/auth/oauth/{first}/{second}":    "dispatches the four overlapping /oauth routes (PATCH providers/{id}, POST {id}/authorize, POST {id}/callback, GET {type}/authorize) as Starlette does",
+	"PUT /api/v1/auth/oauth/{first}/{second}":     "dispatches the four overlapping /oauth routes (PATCH providers/{id}, POST {id}/authorize, POST {id}/callback, GET {type}/authorize) as Starlette does",
+	"PATCH /api/v1/auth/oauth/{first}/{second}":   "dispatches the four overlapping /oauth routes (PATCH providers/{id}, POST {id}/authorize, POST {id}/callback, GET {type}/authorize) as Starlette does",
+	"DELETE /api/v1/auth/oauth/{first}/{second}":  "dispatches the four overlapping /oauth routes (PATCH providers/{id}, POST {id}/authorize, POST {id}/callback, GET {type}/authorize) as Starlette does",
+	"OPTIONS /api/v1/auth/oauth/{first}/{second}": "dispatches the four overlapping /oauth routes (PATCH providers/{id}, POST {id}/authorize, POST {id}/callback, GET {type}/authorize) as Starlette does",
 }
 
 var routeParameter = regexp.MustCompile(`\{[^}]+\}`)
@@ -126,6 +134,8 @@ func TestVenueOracleRouteResponseModels(t *testing.T) {
 	}
 	routes = append(routes, markResponseModels(session.Routes(session.Deps{Pool: &pgxpool.Pool{}, Guard: guard,
 		Auth: &policy.Authenticator{}, Verifier: verifier, Signer: signer}))...)
+	// sso mounts only with a pool; its route list does not use it.
+	routes = append(routes, markResponseModels(sso.Routes(sso.Deps{Pool: &pgxpool.Pool{}, Guard: guard, Logger: logger}))...)
 	patterns := map[string]httpapi.Route{}
 	for _, route := range routes {
 		patterns[route.Method+" "+route.Pattern] = route

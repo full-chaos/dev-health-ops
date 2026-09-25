@@ -50,7 +50,7 @@ func TestLegacyIngestRefusalsAreScrapedFromTheOperatorRegistry(t *testing.T) {
 		}
 		return out.String()
 	}
-	const series = `dev_health_api_ingest_legacy_auth_rejected_total{reason="no_credential_configured"}`
+	const series = `devhealth_ingest_legacy_auth_rejected_total{reason="no_credential_configured"}`
 	if got := scrape(); !strings.Contains(got, series+" 0\n") || !strings.Contains(got, `{reason="invalid_api_key"} 0`) || !strings.Contains(got, `{reason="invalid_signature"} 0`) {
 		t.Fatalf("the series are not all present at zero:\n%s", got)
 	}

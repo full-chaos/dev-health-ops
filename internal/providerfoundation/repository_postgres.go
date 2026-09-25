@@ -146,6 +146,7 @@ func finalizeConfig(record EncryptedCredential, configJSON []byte) (EncryptedCre
 	if err := decodeConfig(configJSON, record.Config); err != nil {
 		return EncryptedCredential{}, ErrCredentialInvalid
 	}
+	record.RawConfig = configJSON
 	return record, nil
 }
 

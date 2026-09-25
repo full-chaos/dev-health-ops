@@ -1,6 +1,10 @@
 package admin
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/llmbudget"
+)
 
 func TestOperatorMaximumMicroUSD(t *testing.T) {
 	defer func(saved func(string) (string, bool)) { lookupEnv = saved }(lookupEnv)
@@ -20,7 +24,7 @@ func TestOperatorMaximumMicroUSD(t *testing.T) {
 		{"beyond int64", true, "99999999999999999999", "99999999999999999999"},
 	} {
 		lookupEnv = func(string) (string, bool) { return tc.value, tc.set }
-		if got := operatorMaximumMicroUSD().String(); got != tc.want {
+		if got := llmbudget.OperatorMaximum(lookupEnv).String(); got != tc.want {
 			t.Errorf("%s: got %s, want %s", tc.name, got, tc.want)
 		}
 	}
@@ -51,7 +55,7 @@ func TestBudgetLockKeyMatchesPython(t *testing.T) {
 		"70d529e0-0000-4000-8000-000000000001": 4899195206064546492,
 		"3f2b8c1e-5a7d-4e9a-9b1c-2d4e6f8a0b1c": 9008887641742855183,
 	} {
-		if got := budgetLockKey(org); got != want {
+		if got := llmbudget.LockKey(org); got != want {
 			t.Errorf("budgetLockKey(%s) = %d, python %d", org, got, want)
 		}
 	}

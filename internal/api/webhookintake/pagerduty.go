@@ -17,6 +17,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/licensing"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/api/ratelimit"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -466,7 +467,16 @@ type pagerdutyHTTPError struct {
 // handlePagerDutyWebhook ports pagerduty.py's pagerduty_webhook end to end.
 func (d Deps) handlePagerDutyWebhook() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !d.limiters.pagerduty.Allow(forwardedIP(r)) {
+		// slowapi's bucket is per (get_forwarded_ip, exact path): per binding.
+		// A store that cannot answer is the Python api's unhandled 500 (slowapi
+		// has no swallow_errors), never a request let through: the limiter
+		// logs and counts it.
+		allowed, err := d.limiters.pagerduty.AllowCounted(r.Context(), ratelimit.ForwardedIP(r), r.URL.Path)
+		if err != nil {
+			policy.WriteInternal(w)
+			return
+		}
+		if !allowed {
 			policy.WriteDetail(w, http.StatusTooManyRequests, policy.ErrorDetail("Rate limit exceeded. Please try again later."), nil)
 			return
 		}

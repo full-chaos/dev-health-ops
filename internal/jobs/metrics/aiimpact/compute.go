@@ -269,12 +269,11 @@ func cycleHours(createdAt, mergedAt time.Time) float64 {
 
 // safeBucket ports _safe_bucket (:107).
 //
-// ASCII-CONTAINMENT NOTE (required by pythonparity.Lower's doc comment):
-// Lower carries a bounded-Final_Sigma divergence from CPython, which can only
-// change an answer when a comparand is non-ASCII. Every bucket name compared
-// below is ASCII, so a value differing only in sigma form fails every
-// comparison either way and lands in "unknown" identically. Pinned by
-// TestSigmaFormCannotChangeABucket.
+// Every bucket name compared below is ASCII, so a value differing only in
+// sigma form fails every comparison either way and lands in "unknown"
+// identically (TestSigmaFormCannotChangeABucket). pythonparity.Lower now
+// decides the sigma form as CPython does (CHAOS-6630); this note records
+// why the answer never depended on it.
 func safeBucket(kind *string) AttributionBucket {
 	if kind == nil || *kind == "" {
 		return BucketUnknown
@@ -438,8 +437,7 @@ func indexAttributions(rows []AttributionRow) map[PRKey]AttributionRow {
 //
 // The CHANGES_REQUESTED test is `str(row.get("state") or "").upper()`, so it
 // uses CPython's FULL uppercase mapping. pythonparity.Upper reproduces it; the
-// comparand is ASCII, so the bounded-Final_Sigma divergence cannot change the
-// answer (same containment argument as safeBucket).
+// comparand is ASCII (the same argument as safeBucket).
 func reviewsByPR(rows []PullRequestReviewRow) map[PRKey][2]uint32 {
 	counts := make(map[PRKey][2]uint32)
 	for _, row := range rows {

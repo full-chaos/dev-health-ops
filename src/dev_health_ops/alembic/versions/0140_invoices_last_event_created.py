@@ -1,7 +1,7 @@
 """Invoices: record the Stripe time of the newest applied event.
 
 Revision ID: 0140
-Revises: 0138
+Revises: 0139
 
 The Stripe invoice webhook applies an event only when it was created at or
 after the newest event already applied to that invoice, so a delayed or
@@ -20,7 +20,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "0140"
-down_revision: str | None = "0138"
+down_revision: str | None = "0139"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

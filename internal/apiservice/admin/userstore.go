@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 	"strings"
 	"time"
 
@@ -52,12 +53,12 @@ func (s pgStore) fullUserByID(ctx context.Context, id uuid.UUID) (*fullUser, err
 
 // userByEmail is UserService.get_by_email (case-insensitive).
 func (s pgStore) userByEmail(ctx context.Context, email string) (*fullUser, error) {
-	return scanFullUser(s.Pool.QueryRow(ctx, `SELECT `+fullUserColumns+` FROM users WHERE lower(email) = lower($1)`, email))
+	return scanFullUser(s.Pool.QueryRow(ctx, `SELECT `+fullUserColumns+` FROM users WHERE lower(email) = $1`, pythonparity.Lower(email)))
 }
 
 // userByUsername is UserService.get_by_username (case-insensitive).
 func (s pgStore) userByUsername(ctx context.Context, username string) (*fullUser, error) {
-	return scanFullUser(s.Pool.QueryRow(ctx, `SELECT `+fullUserColumns+` FROM users WHERE lower(username) = lower($1)`, username))
+	return scanFullUser(s.Pool.QueryRow(ctx, `SELECT `+fullUserColumns+` FROM users WHERE lower(username) = $1`, pythonparity.Lower(username)))
 }
 
 // listUsersFilter is list_users' shared WHERE clause (active_only + search
@@ -73,7 +74,7 @@ func (f listUsersFilter) whereActiveAndSearch(nextParam int) (clause string, arg
 		clause += ` AND u.is_active = true`
 	}
 	if f.Search != nil {
-		pattern := "%" + strings.ToLower(*f.Search) + "%"
+		pattern := "%" + pythonparity.Lower(*f.Search) + "%"
 		clause += ` AND (lower(u.email) LIKE $` + itoa(nextParam) +
 			` OR lower(coalesce(u.username, '')) LIKE $` + itoa(nextParam) +
 			` OR lower(coalesce(u.full_name, '')) LIKE $` + itoa(nextParam) + `)`
@@ -174,7 +175,7 @@ func (s pgStore) insertUser(ctx context.Context, in userCreateInput) (*fullUser,
 		AuthProviderID: in.AuthProviderID, IsActive: true, IsVerified: in.IsVerified, IsSuperuser: in.IsSuperuser,
 		CreatedAt: now, UpdatedAt: now,
 	}
-	email := strings.ToLower(strings.TrimSpace(deref(in.Email)))
+	email := pythonparity.Strip(pythonparity.Lower(deref(in.Email)))
 	u.Email = email
 	// UserService.create: `username=username.lower().strip() if username
 	// else None` -- Python's truthy check runs on the RAW value, before
@@ -184,7 +185,7 @@ func (s pgStore) insertUser(ctx context.Context, in userCreateInput) (*fullUser,
 	// never null. Gating on the TRIMMED result's emptiness instead of the
 	// raw value's emptiness silently turned that case into a stored NULL.
 	if in.Username != nil && *in.Username != "" {
-		lowered := strings.ToLower(strings.TrimSpace(*in.Username))
+		lowered := pythonparity.Strip(pythonparity.Lower(*in.Username))
 		u.Username = &lowered
 	}
 	// UserService.create's own signature default (`auth_provider: str =
@@ -234,29 +235,29 @@ func (s pgStore) updateUser(ctx context.Context, id uuid.UUID, patch userUpdate)
 		return existing, err
 	}
 	email := existing.Email
-	if patch.Email != nil && *patch.Email != "" && !strings.EqualFold(*patch.Email, existing.Email) {
+	if patch.Email != nil && *patch.Email != "" && pythonparity.Lower(*patch.Email) != existing.Email {
 		if other, err := s.userByEmail(ctx, *patch.Email); err != nil {
 			return nil, err
 		} else if other != nil {
 			return nil, errEmailExists
 		}
-		email = strings.ToLower(strings.TrimSpace(*patch.Email))
+		email = pythonparity.Strip(pythonparity.Lower(*patch.Email))
 	}
 	username := existing.Username
 	if patch.Username != nil {
 		if *patch.Username != "" {
 			currentLower := ""
 			if existing.Username != nil {
-				currentLower = strings.ToLower(*existing.Username)
+				currentLower = pythonparity.Lower(*existing.Username)
 			}
-			if !strings.EqualFold(*patch.Username, currentLower) {
+			if pythonparity.Lower(*patch.Username) != currentLower {
 				if other, err := s.userByUsername(ctx, *patch.Username); err != nil {
 					return nil, err
 				} else if other != nil {
 					return nil, errUsernameExists
 				}
 			}
-			lowered := strings.ToLower(strings.TrimSpace(*patch.Username))
+			lowered := pythonparity.Strip(pythonparity.Lower(*patch.Username))
 			username = &lowered
 		} else {
 			username = nil

@@ -11,14 +11,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"math"
 	"math/big"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/api/restcore"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
@@ -26,19 +27,13 @@ import (
 const (
 	// DefaultBaseURL is _DEFAULT_BASE_URL.
 	DefaultBaseURL = "https://gitlab.com"
-	// maxRetries is _DEFAULT_MAX_RETRIES: attempts per logical request.
-	maxRetries = 5
 	// perPage is list_projects' per_page default.
 	perPage = 100
-	// maxItems is list_projects' max_items without max_projects.
-	maxItems = 1_000_000
-	// timeout is _DEFAULT_TIMEOUT_SECONDS.
-	timeout = 15 * time.Second
+	// maxItemsDefault is list_projects' max_items without max_projects.
+	maxItemsDefault = 1_000_000
+	// DefaultTimeout is _DEFAULT_TIMEOUT_SECONDS.
+	DefaultTimeout = 15 * time.Second
 )
-
-// The core's backoff: _DEFAULT_INITIAL_BACKOFF_SECONDS doubling up to
-// _DEFAULT_MAX_BACKOFF_SECONDS.
-var initialBackoff, maxBackoff = time.Second, 60 * time.Second
 
 // Project is the Repository fields the sync config writes read.
 type Project struct {
@@ -46,6 +41,10 @@ type Project struct {
 	ID *big.Int
 	// Name is Repository.name; FullName is Repository.full_name.
 	Name, FullName string
+	// Description and URL are the project's raw description and web_url
+	// (Repository.description, Repository.url): any JSON value, nil when
+	// the key is absent.
+	Description, URL pyjson.Value
 }
 
 // Client lists a GitLab group's projects.
@@ -63,38 +62,77 @@ type Client struct {
 
 // Error is a Python exception the client raises: Class names it
 // (AuthenticationException, APIException, ...), Error() is str(exc).
-type Error struct {
-	Class   string
-	Message string
+type Error = restcore.Error
+
+const (
+	groupOperation    = "project:GET /groups/{id}/projects"
+	projectsOperation = "project:GET /projects"
+)
+
+// ListOptions are list_projects' keyword arguments: Group nil is
+// group_name=None (the /projects listing); Search is sent only when
+// non-empty; Pattern is fnmatch-ed against the lowered full name; Membership
+// asks for the caller's projects; MaxProjects nil is max_projects=None.
+type ListOptions struct {
+	Group       *string
+	Search      string
+	Pattern     string
+	Membership  bool
+	MaxProjects *big.Int
 }
-
-func (e *Error) Error() string { return e.Message }
-
-const operation = "project:GET /groups/{id}/projects"
 
 // ListGroupProjects is GitLabCodeClient.list_projects(group_name=group):
 // every page of /groups/{quote(group, safe="")}/projects, the dict items
 // mapped by _map_project and _project_to_repository.
 func (c Client) ListGroupProjects(ctx context.Context, group string) ([]Project, error) {
+	return c.ListProjects(ctx, ListOptions{Group: &group})
+}
+
+// ListProjects is GitLabCodeClient.list_projects: the fetch cap is
+// max_projects (1,000,000 without one, or with a pattern), pages are fetched
+// until the cap's page count, the dict items are cut to it (a Python slice,
+// so a negative cap drops items from the end), then mapped one at a time,
+// filtered by the pattern, until max_projects have been kept.
+func (c Client) ListProjects(ctx context.Context, opts ListOptions) ([]Project, error) {
 	root := strings.TrimRight(c.BaseURL, "/") + "/api/v4"
-	path := "/groups/" + pythonparity.Quote(group, "") + "/projects"
+	path, operation := "/projects", projectsOperation
+	if opts.Group != nil {
+		path, operation = "/groups/"+pythonparity.Quote(*opts.Group, "")+"/projects", groupOperation
+	}
+	var query strings.Builder
+	if opts.Search != "" {
+		query.WriteString("search=" + url.QueryEscape(opts.Search) + "&")
+	}
+	if opts.Membership {
+		query.WriteString("membership=true&")
+	}
+	maxItems := big.NewInt(maxItemsDefault)
+	if opts.MaxProjects != nil && opts.MaxProjects.Sign() != 0 && opts.Pattern == "" {
+		maxItems = opts.MaxProjects
+	}
+	// max_pages = max(1, (max_items + per_page - 1) // per_page); the
+	// divisor is positive, so big.Int's Euclidean quotient is the floor.
+	maxPages := new(big.Int).Div(new(big.Int).Add(maxItems, big.NewInt(perPage-1)), big.NewInt(perPage))
+	if maxPages.Sign() < 1 {
+		maxPages = big.NewInt(1)
+	}
 	var items []pyjson.Value
 	page := big.NewInt(1)
-	for pages := 0; ; pages++ {
-		if pages >= (maxItems+perPage-1)/perPage {
+	for pages := int64(0); ; pages++ {
+		if maxPages.Cmp(big.NewInt(pages)) <= 0 {
 			break
 		}
-		response, body, err := c.request(ctx, root+path, page)
+		response, err := c.request(ctx, root+path, operation, query.String(), page)
 		if err != nil {
 			return nil, err
 		}
-		payload, err := decodeJSON(body)
+		payload, err := decodeJSON(response.Body)
 		if err != nil {
 			return nil, err
 		}
 		list, ok := payload.([]pyjson.Value)
 		if !ok {
-			return nil, &Error{"APIException", fmt.Sprintf("Unexpected paginated response for %s: <class '%s'>", operation, pythonType(payload))}
+			return nil, &Error{Class: "APIException", Message: fmt.Sprintf("Unexpected paginated response for %s: <class '%s'>", operation, pythonType(payload))}
 		}
 		if len(list) == 0 {
 			break
@@ -106,22 +144,45 @@ func (c Client) ListGroupProjects(ctx context.Context, group string) ([]Project,
 		}
 		page = next
 	}
-	var out []Project
+	var dicts []*pyjson.Object
 	for _, item := range items {
-		object, ok := item.(*pyjson.Object)
-		if !ok {
-			continue
+		if object, ok := item.(*pyjson.Object); ok {
+			dicts = append(dicts, object)
 		}
-		if len(out) >= maxItems {
-			break
-		}
+	}
+	dicts = sliceTo(dicts, maxItems)
+	lowered := pythonparity.Lower(opts.Pattern)
+	var out []Project
+	for _, object := range dicts {
 		project, err := mapProject(object)
 		if err != nil {
 			return nil, err
 		}
+		if opts.Pattern != "" && !pythonparity.FnMatch(pythonparity.Lower(project.FullName), lowered) {
+			continue
+		}
 		out = append(out, project)
+		if opts.MaxProjects != nil && big.NewInt(int64(len(out))).Cmp(opts.MaxProjects) >= 0 {
+			break
+		}
 	}
 	return out, nil
+}
+
+// sliceTo is items[:limit] for a Python int limit: a negative one counts
+// from the end, one past the length keeps everything.
+func sliceTo[T any](items []T, limit *big.Int) []T {
+	length := big.NewInt(int64(len(items)))
+	if limit.Sign() < 0 {
+		limit = new(big.Int).Add(limit, length)
+		if limit.Sign() < 0 {
+			return nil
+		}
+	}
+	if limit.Cmp(length) >= 0 {
+		return items
+	}
+	return items[:limit.Int64()]
 }
 
 // nextPage is _next_page_param: a non-empty X-Next-Page read by int()
@@ -145,69 +206,21 @@ func nextPage(headers http.Header, current *big.Int, count int) (*big.Int, bool)
 	return new(big.Int).Add(current, big.NewInt(1)), true
 }
 
-// request is InstrumentedRESTCore.request for one GET: retried in place on
-// a timeout or refused connection, on 429/500/502/503/504 and on a
-// rate-limit-qualified 403, then classified by _classify_error and
-// _raise_for_status.
-func (c Client) request(ctx context.Context, url string, page *big.Int) (*http.Response, []byte, error) {
-	httpClient := c.HTTP
-	if httpClient == nil {
-		httpClient = &http.Client{Timeout: timeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+// core is the client's request loop: GitLab retries a rate-limit-qualified
+// 403 too, waits by Retry-After or RateLimit-Reset, and reads a terminal 403
+// as a rate limit or as _GitLabSecurityForbidden.
+func (c Client) core() restcore.Core {
+	return restcore.Core{Provider: "gitlab", HTTP: c.HTTP, Sleep: c.Sleep, Headers: map[string]string{"PRIVATE-TOKEN": c.Token},
+		IsRetryable: retryable, RetryAfter: retryAfter, Classify: classify}
+}
+
+// request is InstrumentedRESTCore.request for one page of a listing.
+func (c Client) request(ctx context.Context, target, operation, extra string, page *big.Int) (restcore.Response, error) {
+	core := c.core()
+	if core.HTTP == nil {
+		core.HTTP = &http.Client{Timeout: DefaultTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	}
-	sleep := c.Sleep
-	if sleep == nil {
-		sleep = sleepContext
-	}
-	full := fmt.Sprintf("%s?page=%s&per_page=%d", url, page.String(), perPage)
-	delay := initialBackoff
-	for attempt := 0; attempt < maxRetries; attempt++ {
-		request, err := http.NewRequestWithContext(ctx, http.MethodGet, full, nil)
-		if err != nil {
-			return nil, nil, &Error{"APIException", err.Error()}
-		}
-		request.Header.Set("PRIVATE-TOKEN", c.Token)
-		response, err := httpClient.Do(request)
-		if err != nil {
-			if attempt < maxRetries-1 {
-				if err := sleep(ctx, delay); err != nil {
-					return nil, nil, err
-				}
-				delay = min(delay*2, maxBackoff)
-				continue
-			}
-			// httpx's own exception text differs from Go's (named limit).
-			return nil, nil, &Error{"APIException", fmt.Sprintf("gitlab request failed on %s: %v", operation, err)}
-		}
-		body, err := io.ReadAll(response.Body)
-		response.Body.Close()
-		if err != nil {
-			return nil, nil, &Error{"APIException", fmt.Sprintf("gitlab request failed on %s: %v", operation, err)}
-		}
-		status := response.StatusCode
-		if status < 300 {
-			return response, body, nil
-		}
-		if status < 400 {
-			location := response.Header.Get("Location")
-			if len(response.Header.Values("Location")) == 0 {
-				location = "<no Location header>"
-			}
-			return nil, nil, &Error{"APIException", fmt.Sprintf("gitlab unexpected redirect on %s: HTTP %d -> %s; the instrumented core does not follow redirects (pass raw_redirect=True to receive the redirect response and handle Location manually)", operation, status, location)}
-		}
-		if retryable(status, response.Header) && attempt < maxRetries-1 {
-			wait := retryAfter(response.Header)
-			if wait <= 0 {
-				wait = delay
-			}
-			if err := sleep(ctx, wait); err != nil {
-				return nil, nil, err
-			}
-			delay = min(delay*2, maxBackoff)
-			continue
-		}
-		return nil, nil, raiseForStatus(status, response.Header, body, full)
-	}
-	return nil, nil, &Error{"APIException", fmt.Sprintf("gitlab request failed on %s: unknown error", operation)}
+	return core.Get(ctx, fmt.Sprintf("%s?%spage=%s&per_page=%d", target, extra, page.String(), perPage), operation)
 }
 
 // rateLimitedForbidden is gitlab_403_is_rate_limited: a Retry-After header
@@ -217,55 +230,37 @@ func rateLimitedForbidden(headers http.Header) bool {
 	return len(headers.Values("Retry-After")) > 0 || (len(remaining) > 0 && strings.Join(remaining, ", ") == "0")
 }
 
-// retryable is _is_retryable_status.
-func retryable(status int, headers http.Header) bool {
-	switch status {
-	case 429, 500, 502, 503, 504:
-		return true
-	case 403:
-		return rateLimitedForbidden(headers)
+// retryable is the client's is_retryable_status.
+func retryable(r restcore.Response) bool {
+	if r.Status == 403 {
+		return rateLimitedForbidden(r.Header)
 	}
-	return false
+	return restcore.DefaultRetryable(r)
 }
 
 // retryAfter is gitlab_resolve_retry_after_seconds: Retry-After (seconds or
 // an HTTP date), else RateLimit-Reset (epoch seconds) from now.
-func retryAfter(headers http.Header) time.Duration {
+func retryAfter(r restcore.Response) time.Duration {
 	now := time.Now()
-	if raw := strings.TrimSpace(strings.Join(headers.Values("Retry-After"), ", ")); raw != "" {
+	if raw := strings.TrimSpace(strings.Join(r.Header.Values("Retry-After"), ", ")); raw != "" {
 		if wait := providerfoundation.ParseRetryAfter(raw, now); wait > 0 {
 			return wait
 		}
 	}
-	return providerfoundation.ParseRateLimitReset(strings.Join(headers.Values("RateLimit-Reset"), ", "), now)
+	return providerfoundation.ParseRateLimitReset(strings.Join(r.Header.Values("RateLimit-Reset"), ", "), now)
 }
 
-// raiseForStatus is _classify_error then _raise_for_status.
-func raiseForStatus(status int, headers http.Header, body []byte, url string) error {
-	text := responseText(body, headers)
-	switch {
-	case status == 403 && rateLimitedForbidden(headers):
-		return &Error{"RateLimitException", "GitLab rate limited (HTTP 403)"}
-	case status == 403:
-		return &Error{"_GitLabSecurityForbidden", fmt.Sprintf("gitlab forbidden on %s: %s", operation, text)}
-	case status == 401:
-		return &Error{"AuthenticationException", "gitlab authentication failed on " + operation}
-	case status == 404:
-		return &Error{"NotFoundException", fmt.Sprintf("gitlab resource not found on %s: %s", operation, url)}
-	case status == 429:
-		return &Error{"RateLimitException", "gitlab rate limit exceeded on " + operation}
-	case status >= 500:
-		return &Error{"APIException", fmt.Sprintf("gitlab server error on %s: %d - %s", operation, status, text)}
+// classify is the client's classify_error: a terminal 403 is a rate limit
+// when it carries the rate-limit headers, else the security marker; every
+// other status is the core's own classification.
+func classify(r restcore.Response, operation string) *restcore.Error {
+	if r.Status != 403 {
+		return nil
 	}
-	return &Error{"APIException", fmt.Sprintf("gitlab API error on %s: %d - %s", operation, status, text)}
-}
-
-// responseText is httpx's response.text for a body without a charset
-// parameter: UTF-8 decoded with errors="replace" (one U+FFFD per maximal
-// invalid subpart, as CPython decodes). A charset parameter other than
-// UTF-8 is not ported (named limit).
-func responseText(body []byte, _ http.Header) string {
-	return pythonparity.DecodeUTF8Replace(string(body))
+	if rateLimitedForbidden(r.Header) {
+		return &restcore.Error{Class: "RateLimitException", Message: "GitLab rate limited (HTTP 403)"}
+	}
+	return &restcore.Error{Class: "_GitLabSecurityForbidden", Message: fmt.Sprintf("gitlab forbidden on %s: %s", operation, r.Text())}
 }
 
 // decodeJSON is response.json(): json.loads of the body, with
@@ -278,9 +273,9 @@ func decodeJSON(body []byte) (pyjson.Value, error) {
 	var syntax *pyjson.SyntaxError
 	if errors.As(err, &syntax) {
 		text, _ := pyjson.DecodeBody(body)
-		return nil, &Error{"JSONDecodeError", syntax.Text(text)}
+		return nil, &Error{Class: "JSONDecodeError", Message: syntax.Text(text)}
 	}
-	return nil, &Error{"ValueError", err.Error()}
+	return nil, &Error{Class: "ValueError", Message: err.Error()}
 }
 
 // pythonType is type(value).__name__ for a decoded JSON value.
@@ -304,7 +299,7 @@ func pythonType(value pyjson.Value) string {
 
 // errOverflow is int(float("inf")): OverflowError, which _coerce_int does
 // not catch.
-var errOverflow = &Error{"OverflowError", "cannot convert float infinity to integer"}
+var errOverflow = &Error{Class: "OverflowError", Message: "cannot convert float infinity to integer"}
 
 // coerceInt is _coerce_int: int(value) for a str, int or float (bool
 // included), else 0; a ValueError is 0, an infinite float raises.
@@ -362,16 +357,5 @@ func mapProject(object *pyjson.Object) (Project, error) {
 			return Project{}, err
 		}
 	}
-	return Project{ID: id, Name: name, FullName: fullName}, nil
-}
-
-func sleepContext(ctx context.Context, wait time.Duration) error {
-	timer := time.NewTimer(wait)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timer.C:
-		return nil
-	}
+	return Project{ID: id, Name: name, FullName: fullName, Description: get("description"), URL: get("web_url")}, nil
 }

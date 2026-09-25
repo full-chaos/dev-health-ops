@@ -54,16 +54,14 @@ type prefixRule struct {
 //   - str(pattern).strip().lower() uses CPython's semantics conceptually, but
 //     the KEY this resolver builds is a comparison key, never persisted or
 //     compared against a value Python itself lowered and stored -- so it uses
-//     pythonparity.Fold, not Lower. Codex round chaos-4280-r1 (finding 6)
-//     measured a REAL divergence in Lower for this call site: x/text's
-//     Final_Sigma lookahead is capped at 31 case-ignorable runes where
-//     CPython's is not (pythonparity.Lower's doc comment), so a pattern like
-//     "AΣ"+"."*31+"B*" would resolve a DIFFERENT team than the repo name it
-//     was meant to match. Fold has no position-dependent case rule at all
-//     (every sigma spelling folds to one value), so it cannot exhibit that
-//     boundary -- see pythonparity.Fold's doc comment for the narrower
-//     residual it trades in exchange, and
-//     TestNonASCIIPatternsAreComparedConsistently for both proven live.
+//     pythonparity.Fold, not Lower. It was chosen when Lower still had
+//     x/text's 31-rune Final_Sigma lookahead bound (codex round
+//     chaos-4280-r1, finding 6), under which a pattern like
+//     "AΣ"+"."*31+"B*" resolved a different team than the repo name it was
+//     meant to match. Lower no longer has that bound (CHAOS-6630); this
+//     resolver still compares with Fold, which folds every sigma spelling to
+//     one value -- see pythonparity.Fold's doc comment for the narrower
+//     residual that trades in, and TestNonASCIIPatternsAreComparedConsistently.
 //   - `prefix = p.rstrip("*").rstrip("/")` strips ALL trailing '*' then ALL
 //     trailing '/', so "acme/**" and "acme/*" and "acme/" all reduce to
 //     "acme". Go's strings.TrimRight has the same all-characters semantics --

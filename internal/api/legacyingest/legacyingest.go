@@ -22,6 +22,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/google/uuid"
 	valkeygo "github.com/valkey-io/valkey-go"
@@ -74,6 +75,9 @@ type Deps struct {
 	// Metrics counts credential refusals; register it with the health
 	// registry to expose it. Nil counts nothing.
 	Metrics *Metrics
+	// ClickHouse is nil when no ClickHouse is configured: telemetry batches
+	// are accepted and not persisted (the Python route logs and skips).
+	ClickHouse ClickHouse
 	// Getenv reads the credentials and the environment name on every
 	// request, as the Python api does; nil means os.Getenv.
 	Getenv func(string) string
@@ -85,12 +89,17 @@ type route struct {
 	path  string
 	kind  string
 	parse parser
+	// telemetry routes write ClickHouse rows instead of streaming a payload.
+	telemetry bool
 }
 
 var routes = []route{
-	{"commits", "commits", batchParser(true, parseCommit)},
-	{"deployments", "deployments", batchParser(true, parseDeployment)},
-	{"incidents", "incidents", batchParser(true, parseIncident)},
+	{path: "commits", kind: "commits", parse: batchParser(true, parseCommit)},
+	{path: "pull-requests", kind: "pull-requests", parse: batchParser(true, parsePullRequest)},
+	{path: "work-items", kind: "work-items", parse: batchParser(false, parseWorkItem)},
+	{path: "deployments", kind: "deployments", parse: batchParser(true, parseDeployment)},
+	{path: "incidents", kind: "incidents", parse: batchParser(true, parseIncident)},
+	{path: "telemetry", kind: "telemetry", parse: parseTelemetry, telemetry: true},
 }
 
 // Routes returns the area's routes.
@@ -108,18 +117,19 @@ func Routes(deps Deps) []httpapi.Route {
 		out[index] = httpapi.Route{
 			Method:  http.MethodPost,
 			Pattern: "/api/v1/ingest/" + item.path,
-			Handler: handler{route: item, store: deps.Store, metrics: deps.Metrics, getenv: getenv, logger: logger},
+			Handler: handler{route: item, store: deps.Store, metrics: deps.Metrics, clickhouse: deps.ClickHouse, getenv: getenv, logger: logger},
 		}
 	}
 	return out
 }
 
 type handler struct {
-	route   route
-	store   Store
-	metrics *Metrics
-	getenv  func(string) string
-	logger  *slog.Logger
+	route      route
+	store      Store
+	metrics    *Metrics
+	clickhouse ClickHouse
+	getenv     func(string) string
+	logger     *slog.Logger
 }
 
 func (h handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -158,6 +168,10 @@ func (h handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	parsed, problems := h.route.parse(body)
 	if len(problems) > 0 {
 		policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(problems), nil)
+		return
+	}
+	if h.route.telemetry {
+		h.telemetry(w, r, parsed)
 		return
 	}
 	// model_dump_json runs before anything is written: a value it cannot
@@ -213,4 +227,24 @@ func (h handler) claimIdempotencyKey(w http.ResponseWriter, r *http.Request) boo
 		return false
 	}
 	return true
+}
+
+// telemetry is the telemetry route's tail: the rows are written to
+// ClickHouse in one insert (skipped, with a warning, when none is
+// configured); a failed insert is the unhandled 500. Nothing is streamed.
+func (h handler) telemetry(w http.ResponseWriter, r *http.Request, parsed batch) {
+	ingestionID := uuid.NewString()
+	if h.clickhouse == nil {
+		h.logger.WarnContext(r.Context(), "No ClickHouse URI configured, skipping telemetry persistence")
+	} else if err := insertSignals(r.Context(), h.clickhouse, parsed.OrgID, parsed.Signals, time.Now().UTC()); err != nil {
+		h.logger.ErrorContext(r.Context(), "legacy ingest: telemetry persistence failed", slog.String("error", err.Error()))
+		policy.WriteInternal(w)
+		return
+	}
+	out := pyjson.NewObject()
+	out.Set("ingestion_id", ingestionID)
+	out.Set("status", "accepted")
+	out.Set("items_received", int64(parsed.Items))
+	out.Set("stream", "ingest:"+parsed.OrgID+":telemetry")
+	policy.WriteModel(w, http.StatusAccepted, out, nil)
 }

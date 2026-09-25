@@ -79,6 +79,9 @@ var outOfScopeWriters = map[string]string{
 	"internal/providersync/pagerduty_incidents_effects_clickhouse.go|operational_incident_notes":                "operational",
 	"internal/providersync/pagerduty_escalation_policies_effects_clickhouse.go|operational_escalation_policies": "operational",
 	"internal/providersync/pagerduty_incident_responders.go|operational_incident_responders":                    "operational",
+	"internal/operationalbackfill/write.go|operational_incidents":                                               "operational",
+	"internal/operationalbackfill/write.go|operational_alerts":                                                  "operational",
+	"internal/operationalbackfill/write.go|operational_on_call_schedules":                                       "operational",
 }
 
 // unresolvedWriters build the table name at run time; each names why it

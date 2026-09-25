@@ -7,13 +7,23 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // pgStore is the Postgres surface the admin area reads and writes: orgs,
 // users, memberships, invites, and impersonation_sessions.
+// pgDB is the query surface pgStore uses: a *pgxpool.Pool (the routes) or a
+// pgx.Tx (the operator verbs, which run one Python session's writes as one
+// transaction). Both satisfy it, Begin included (a pgx.Tx begins a savepoint).
+type pgDB interface {
+	Begin(ctx context.Context) (pgx.Tx, error)
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
 type pgStore struct {
-	Pool *pgxpool.Pool
+	Pool pgDB
 	// Now is injectable for tests; nil means time.Now.
 	Now func() time.Time
 }

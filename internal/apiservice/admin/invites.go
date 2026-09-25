@@ -2,23 +2,19 @@ package admin
 
 import (
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
-	"fmt"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/audit"
+	"github.com/full-chaos/dev-health-ops/internal/api/authmail"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
-	"github.com/full-chaos/dev-health-ops/internal/mail"
+	"github.com/full-chaos/dev-health-ops/internal/auth/signedtoken"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
@@ -26,62 +22,14 @@ import (
 // ever passes.
 const inviteTTL = 72 * time.Hour
 
-// inviteMailTimeout bounds one invite email send. Python awaits the send with
-// no bound of its own; a mail relay that stalls must not hold an admin
-// request open until the client gives up, so the send gets its own deadline
-// (a failure is logged and never surfaced, exactly as in Python).
-const inviteMailTimeout = 30 * time.Second
-
 // errPendingInviteExists is create_invite's ValueError("A pending invite
 // already exists for this email"), which the route maps to 409.
 var errPendingInviteExists = errors.New("A pending invite already exists for this email")
 
-// InviteConfig is what create_org_invite needs beyond the database. The zero
-// value is a working default for a test that does not care: no mail is sent,
-// the token secret is invites.py's own last-resort fallback, and the accept
-// link points at the local web app.
-type InviteConfig struct {
-	// Mail sends the invite email. Nil means no email is sent (the failure is
-	// logged like any other send failure).
-	Mail mail.Sender
-	// TokenSecret is the HMAC key the invite token is signed with:
-	// invites.py's _token_secret(), JWT_SECRET_KEY, else
-	// SETTINGS_ENCRYPTION_KEY, else "dev-key-not-for-prod". The caller
-	// resolves that chain; "" here also falls back to the last resort.
-	TokenSecret string
-	// AppBaseURL is APP_BASE_URL as the process sees it, "" when unset
-	// (send_invite_email: os.getenv("APP_BASE_URL", "http://localhost:3000")
-	// -- an unset variable takes the default, a set-but-empty one does not,
-	// which is why the caller passes AppBaseURLSet).
-	AppBaseURL    string
-	AppBaseURLSet bool
-}
-
-func (c InviteConfig) tokenSecret() string {
-	if c.TokenSecret != "" {
-		return c.TokenSecret
-	}
-	return "dev-key-not-for-prod"
-}
-
-func (c InviteConfig) baseURL() string {
-	base := "http://localhost:3000"
-	if c.AppBaseURLSet {
-		base = c.AppBaseURL
-	}
-	return strings.TrimRight(base, "/")
-}
-
-// inviteToken is invites.py's _build_token/_hash_token: "<uuid hex>.<hmac
-// sha256 hex of the uuid hex>" and the sha256 hex of that whole string.
-func inviteToken(id uuid.UUID, secret string) (token, tokenHash string) {
-	idHex := strings.ReplaceAll(id.String(), "-", "")
-	mac := hmac.New(sha256.New, []byte(secret))
-	mac.Write([]byte(idHex))
-	token = idHex + "." + hex.EncodeToString(mac.Sum(nil))
-	sum := sha256.Sum256([]byte(token))
-	return token, hex.EncodeToString(sum[:])
-}
+// InviteConfig is what create_org_invite needs beyond the database: the
+// link-mail configuration it shares with e-mail verification and password
+// reset.
+type InviteConfig = authmail.Config
 
 // orgInvite is one org_invites row, as create_org_invite returns it.
 type orgInvite struct {
@@ -254,7 +202,7 @@ SELECT EXISTS (
 	}
 
 	id := uuid.New()
-	token, tokenHash := inviteToken(id, h.invites.tokenSecret())
+	token, tokenHash := signedtoken.Build(id, h.invites.Secret())
 	stamp := h.store.now().UTC()
 	invite := &orgInvite{
 		ID: id, OrgID: orgID, Email: email, Role: role, InvitedByID: &invitedByID,
@@ -293,45 +241,12 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
 // sendInviteEmail is invites.py's send_invite_email, best effort: any failure
 // is logged and swallowed.
 func (h *handlers) sendInviteEmail(ctx context.Context, orgName, inviter string, invite *orgInvite, token string) {
-	acceptURL := h.invites.baseURL() + "/accept-invite?token=" + pythonQuote(token)
-	html, err := mail.RenderTemplate("invite", map[string]string{
-		"org_name": orgName, "inviter_name": inviter, "accept_url": acceptURL,
-	})
-	if err == nil {
-		if h.invites.Mail == nil {
-			err = errors.New("no mail sender is configured")
-		} else {
-			sendCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), inviteMailTimeout)
-			defer cancel()
-			err = h.invites.Mail.Send(sendCtx, mail.Message{
-				To: invite.Email, Subject: "You're invited to join " + orgName, HTML: html,
-			})
-		}
-	}
-	if err != nil {
-		// The address is not logged: it is the invitee's, and the invite id
-		// identifies the row.
-		h.logger.ErrorContext(ctx, "admin: failed to send invite email",
-			"invite_id", invite.ID.String(), "org_id", invite.OrgID.String(), "error", err)
-	}
-}
-
-// pythonQuote is urllib.parse.quote(token) with its default safe="/": every
-// byte outside the unreserved set is percent-encoded. A token is only hex and
-// ".", so this is the identity for real tokens; it is kept exact anyway.
-func pythonQuote(value string) string {
-	var out strings.Builder
-	for i := 0; i < len(value); i++ {
-		c := value[i]
-		switch {
-		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9',
-			c == '_', c == '.', c == '-', c == '~', c == '/':
-			out.WriteByte(c)
-		default:
-			out.WriteString(fmt.Sprintf("%%%02X", c))
-		}
-	}
-	return out.String()
+	// The address is not logged: it is the invitee's, and the invite id
+	// identifies the row.
+	h.invites.Send(ctx, h.logger, "admin: failed to send invite email", invite.Email,
+		"You're invited to join "+orgName, "invite", map[string]string{
+			"org_name": orgName, "inviter_name": inviter, "accept_url": h.invites.Link("/accept-invite", token),
+		}, "invite_id", invite.ID.String(), "org_id", invite.OrgID.String())
 }
 
 // inviterIdentity reads the inviting user's full_name and email; both nil when

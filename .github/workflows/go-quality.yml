@@ -14,6 +14,16 @@
 # reports, and it reports honestly -- either the gate ran, or the job says in
 # plain text that it skipped and why.
 #
+# PARALLEL LEGS (CHAOS-6690). The gate used to be ONE 34-minute step
+# (`check_go.sh ci`: vet 2, test 5.6, race 17, live-Python oracles 8.4, the rest
+# ~1.5) and was the whole critical path of a PR (median 28.6 min, p90 36.8, plus
+# 3 min of queue). It now runs as five parallel legs (`check_go.sh ci-leg`) and
+# a fan-in job that KEEPS the required context name `go-quality`, so no
+# branch-protection edit is needed. The fan-in is `unconditional`: a leg that is
+# skipped, cancelled or missing from the result FAILS the gate (a measurement
+# that did not happen must not read green). tests/tooling/test_go_quality_legs.py
+# pins that the legs together run exactly the steps of `ci`.
+#
 # The pattern list is NOT restated here. ci/go_relevance.py reads go.yml's own
 # `on.pull_request.paths`, so there is one list and it cannot drift -- which also
 # guarantees the invariant that matters: anything Go-relevant enough to run the
@@ -45,7 +55,27 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref != 'refs/heads/main') }}
 
 jobs:
-  go-quality:
+  go-quality-leg:
+    name: go-quality-leg (${{ matrix.name }})
+    strategy:
+      # One red leg must not cancel the others: every leg reports its own signal.
+      fail-fast: false
+      matrix:
+        include:
+          # static = format, vet, build, contract, integration-vet, shard plans
+          # + the migration matrix contract, gqlgen drift, shellcheck pin and
+          # River harness checks. race COUNT below MUST equal the number of race
+          # entries (the tooling test pins it).
+          - name: static
+            args: static
+          - name: test
+            args: test
+          - name: race-1-of-2
+            args: race 1 2
+          - name: race-2-of-2
+            args: race 2 2
+          - name: oracles
+            args: oracles
     # Routed to the self-hosted ARC pool while GitHub-hosted dispatch is
     # stalled (org plan change, 2026-09-04; chris ruling 16:54 PDT: route the
     # ruleset-required contexts to oci-arc-runners so merges can continue).
@@ -61,7 +91,7 @@ jobs:
     # VM; it is the wrong budget for a shared self-hosted pool. 45m is a
     # deliberately generous multiple, not a tight refit -- retune down once
     # real completion times on ARC are known.
-    timeout-minutes: 45
+    timeout-minutes: 30
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository_owner }}
     steps:
@@ -72,6 +102,7 @@ jobs:
           fetch-depth: 0
 
       - name: Check the migration matrix has not gone stale
+        if: matrix.name == 'static'
         # UNCONDITIONAL, and deliberately placed before the relevance
         # decision below. Every other gate in this repo fires because a PR
         # TOUCHED something; this one has to fire because nobody did. The
@@ -151,7 +182,7 @@ jobs:
           cache: ${{ !(vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) }}
 
       - name: Prove the migration matrix contract, and prove its freshness gate
-        if: steps.relevance.outputs.relevant == 'true'
+        if: steps.relevance.outputs.relevant == 'true' && matrix.name == 'static'
         # The contract half: re-renders the page from the COMMITTED sources
         # only -- no database, no docker, no network -- and fails when a row
         # claims a status its evidence column cannot support, or when a
@@ -167,7 +198,7 @@ jobs:
           bash ci/check_migration_matrix_test.sh
 
       - name: Check the gqlgen output has not drifted from its hand-edits
-        if: steps.relevance.outputs.relevant == 'true'
+        if: steps.relevance.outputs.relevant == 'true' && matrix.name == 'static'
         # cmd/query-api's generated GraphQL layer carries deliberate
         # hand-edits -- the nullability rulings recorded in the file comments --
         # and a bare `gqlgen generate` reverts every one of them.
@@ -193,11 +224,14 @@ jobs:
         run: go run ./cmd/gqlgen-guard check-drift
 
       - name: Install locked live provider oracle dependencies
+        # EVERY leg: unit tests in the test and race legs run real Python
+        # programs too (e.g. admin TestOrgDeletionTargetsMatchThePythonList);
+        # the single-job gate had these installed for all of them.
         if: steps.relevance.outputs.relevant == 'true'
         run: python -m pip install --no-deps -r ci/requirements-live-python-oracles.txt
 
       - name: Prepare base job contracts
-        if: steps.relevance.outputs.relevant == 'true' && (github.event_name == 'pull_request' || github.event_name == 'merge_group')
+        if: steps.relevance.outputs.relevant == 'true' && matrix.name == 'static' && (github.event_name == 'pull_request' || github.event_name == 'merge_group')
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
         run: |
@@ -233,12 +267,13 @@ jobs:
         if: steps.relevance.outputs.relevant == 'true'
         run: bash ci/check_go.sh integration-prepull
 
-      - name: Run Go quality gate
+      - name: Run Go quality leg
         if: steps.relevance.outputs.relevant == 'true'
-        run: bash ci/check_go.sh ci
+        # Each stage of the leg prints UTC start/done stamps (`==> stage ...`).
+        run: bash ci/check_go.sh ci-leg ${{ matrix.args }}
 
       - name: Install pinned shellcheck
-        if: steps.relevance.outputs.relevant == 'true'
+        if: steps.relevance.outputs.relevant == 'true' && matrix.name == 'static'
         # CHAOS-4915. Installed, not assumed: the runner image ships its own
         # shellcheck and can change it without a commit here, which is exactly
         # the nondeterminism this pins away. Checksum-verified, because an
@@ -290,7 +325,7 @@ jobs:
           echo "${RUNNER_TEMP}/bin" >> "${GITHUB_PATH}"
 
       - name: Check the shellcheck pin
-        if: steps.relevance.outputs.relevant == 'true'
+        if: steps.relevance.outputs.relevant == 'true' && matrix.name == 'static'
         # Runs BEFORE the harness validation that depends on it. Asserts both
         # that the canonical set is clean and that the unclean fixture is still
         # rejected -- the second is what catches a linter that has silently
@@ -298,5 +333,31 @@ jobs:
         run: bash ci/check_shellcheck_pin.sh
 
       - name: Validate River compatibility harness
-        if: steps.relevance.outputs.relevant == 'true'
+        if: steps.relevance.outputs.relevant == 'true' && matrix.name == 'static'
         run: bash ci/check_river_compat_static.sh
+
+  go-quality:
+    name: go-quality
+    # Must remain `always()`: under any condition that lets this job itself
+    # skip, a cancelled run leaves the REQUIRED check skipped, and branch
+    # protection counts a skipped required check as satisfied.
+    if: always()
+    needs: [go-quality-leg]
+    # Same ARC routing as the legs above.
+    runs-on: ${{ (vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) && fromJSON('["self-hosted","oci-arc-runners"]') || 'ubuntu-latest' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Aggregate go-quality result
+        env:
+          GATE_NAME: go-quality
+          EVENT_NAME: ${{ github.event_name }}
+          # The legs always run and decide relevance inside themselves (no
+          # `changes` job), so a skip is never legitimate here: the
+          # `unconditional` policy, as typecheck's own fan-in. needs.<job>.result
+          # of a matrix job is `success` only when EVERY leg succeeded.
+          GATE_HAS_SELECTOR: "false"
+          GATED_JOB_1: go-quality-leg|unconditional|${{ needs.go-quality-leg.result }}
+        run: |
+          chmod +x ci/aggregate_gate_results.sh
+          ./ci/aggregate_gate_results.sh

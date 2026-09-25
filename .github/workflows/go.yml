@@ -60,13 +60,17 @@ on:
       # (internal/mail/template.go); its drift guard against the Python
       # template lives in that package's tests.
       - 'internal/mail/templates/**'
-      # Same shape again: the admin password denylist is //go:embed-ed into
-      # internal/apiservice/admin (userstore.go's password policy check),
-      # so editing it changes what the compiled binary actually rejects. It
+      # Same shape again: the password denylist is //go:embed-ed into
+      # internal/auth/passwordpolicy (the policy the admin password routes
+      # and registration apply), so editing it changes what the compiled
+      # binary actually rejects. It
       # is a .txt file, which no other pattern here matches -- without this
       # a PR touching only the denylist is classified non-Go and go-quality
       # passes vacuously.
-      - 'internal/apiservice/admin/data/**'
+      - 'internal/auth/passwordpolicy/data/**'
+      # The Python denylist the embedded copy is pinned to
+      # (passwordpolicy_test.go reads it).
+      - 'src/dev_health_ops/data/common_passwords.txt'
       - 'src/dev_health_ops/models/**'
       - 'src/dev_health_ops/parsers/**'
       - 'src/dev_health_ops/processors/**'
@@ -122,6 +126,10 @@ on:
       # venue-oracles job decides relevance from this list, so a registry-only
       # change must count as Go-relevant or it is never validated on main.
       - 'ci/venue_oracle_registry.tsv'
+      # CHAOS-6690: the go-quality race shards read these; a change to either
+      # alone must run go-quality.
+      - 'ci/go_race_shard.awk'
+      - 'ci/go_race_weights.tsv'
       - 'ci/venue_oracle_discovery.awk'
       - 'ci/venue_oracle_names.awk'
       - 'ci/check_venue_oracle_registry.sh'
@@ -217,13 +225,17 @@ on:
       # (internal/mail/template.go); its drift guard against the Python
       # template lives in that package's tests.
       - 'internal/mail/templates/**'
-      # Same shape again: the admin password denylist is //go:embed-ed into
-      # internal/apiservice/admin (userstore.go's password policy check),
-      # so editing it changes what the compiled binary actually rejects. It
+      # Same shape again: the password denylist is //go:embed-ed into
+      # internal/auth/passwordpolicy (the policy the admin password routes
+      # and registration apply), so editing it changes what the compiled
+      # binary actually rejects. It
       # is a .txt file, which no other pattern here matches -- without this
       # a PR touching only the denylist is classified non-Go and go-quality
       # passes vacuously.
-      - 'internal/apiservice/admin/data/**'
+      - 'internal/auth/passwordpolicy/data/**'
+      # The Python denylist the embedded copy is pinned to
+      # (passwordpolicy_test.go reads it).
+      - 'src/dev_health_ops/data/common_passwords.txt'
       - 'src/dev_health_ops/models/**'
       - 'src/dev_health_ops/parsers/**'
       - 'src/dev_health_ops/processors/**'
@@ -279,6 +291,10 @@ on:
       # venue-oracles job decides relevance from this list, so a registry-only
       # change must count as Go-relevant or it is never validated on main.
       - 'ci/venue_oracle_registry.tsv'
+      # CHAOS-6690: the go-quality race shards read these; a change to either
+      # alone must run go-quality.
+      - 'ci/go_race_shard.awk'
+      - 'ci/go_race_weights.tsv'
       - 'ci/venue_oracle_discovery.awk'
       - 'ci/venue_oracle_names.awk'
       - 'ci/check_venue_oracle_registry.sh'

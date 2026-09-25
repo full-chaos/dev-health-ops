@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"math/big"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -15,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
@@ -38,11 +42,26 @@ async def run(scenario):
     def handler(request):
         seen.append([str(request.url), request.headers.get("PRIVATE-TOKEN")])
         status, headers, body = responses.pop(0) if responses else (599, [], "")
+        if status == -1:
+            raise httpx.ConnectError("boom", request=request)
+        if status == -2:
+            raise httpx.ReadTimeout("slow", request=request)
+        if status == -3:
+            raise httpx.RemoteProtocolError("bad framing", request=request)
+        if status == -4:
+            raise httpx.ReadError("cut", request=request)
         return httpx.Response(status, headers=headers, content=base64.b64decode(body))
     try:
         async with GitLabCodeClient(private_token="tok", base_url=scenario["base"], transport=httpx.MockTransport(handler)) as client:
-            projects = await client.list_projects(group_name=scenario["group"])
-        result = [[str(p.id), p.name, p.full_name] for p in projects]
+            maximum = scenario.get("max")
+            projects = await client.list_projects(
+                group_name=scenario["group"],
+                search=scenario.get("search") or None,
+                pattern=scenario.get("pattern") or None,
+                membership=bool(scenario.get("membership")),
+                max_projects=int(maximum) if maximum is not None else None,
+            )
+        result = [[str(p.id), p.name, p.full_name, p.description, p.url] for p in projects]
     except Exception as exc:
         result = type(exc).__name__ + ": " + str(exc)
     return {"requests": seen, "result": result}
@@ -65,8 +84,16 @@ func (s scripted) MarshalJSON() ([]byte, error) {
 }
 
 type scenario struct {
-	Base      string     `json:"base"`
-	Group     string     `json:"group"`
+	Base string `json:"base"`
+	// Group nil is group_name=None: the /projects listing.
+	Group      *string `json:"group"`
+	Search     string  `json:"search,omitempty"`
+	Pattern    string  `json:"pattern,omitempty"`
+	Membership bool    `json:"membership,omitempty"`
+	Max        *string `json:"max,omitempty"`
+	// Loose compares only the exception class of a failure: the text of a
+	// transport error is httpx's in Python and Go's here.
+	Loose     bool       `json:"loose,omitempty"`
 	Responses []scripted `json:"responses"`
 }
 
@@ -74,6 +101,22 @@ func ok(body string, headers ...[2]string) scripted { return scripted{200, heade
 func status(code int, body string, headers ...[2]string) scripted {
 	return scripted{code, headers, body}
 }
+
+// Transport failures: the status field carries the kind the transports raise.
+const (
+	failConnect  = -1
+	failTimeout  = -2
+	failProtocol = -3
+	failRead     = -4
+)
+
+// timeoutError is a net.Error that timed out.
+type timeoutError struct{}
+
+func (timeoutError) Error() string   { return "i/o timeout" }
+func (timeoutError) Timeout() bool   { return true }
+func (timeoutError) Temporary() bool { return true }
+
 func repeat(n int, response scripted) []scripted {
 	out := make([]scripted, n)
 	for index := range out {
@@ -92,10 +135,11 @@ func fullPage(offset int) string {
 
 func listScenarios() []scenario {
 	base := "http://gitlab.test"
+	base0 := base
 	two := `[{"id": 1, "name": "api", "path_with_namespace": "grp/api"}, {"id": 2, "name": "web", "path_with_namespace": "grp/sub/web"}]`
 	var out []scenario
 	add := func(group string, responses ...scripted) {
-		out = append(out, scenario{Base: base, Group: group, Responses: responses})
+		out = append(out, scenario{Base: base, Group: &group, Responses: responses})
 	}
 	add("grp", ok(two))
 	add("grp", ok(`[]`))
@@ -141,7 +185,77 @@ func listScenarios() []scenario {
 	add("grp", ok(``))
 	add("grp", ok("[\n{\"id\": 1,}\n]"))
 	add("grp", ok(two), ok(two))
-	out = append(out, scenario{Base: "http://gitlab.test/prefix/", Group: "grp", Responses: []scripted{status(404, "")}})
+	prefix := "grp"
+	out = append(out, scenario{Base: "http://gitlab.test/prefix/", Group: &prefix, Responses: []scripted{status(404, "")}})
+	out = append(out, listOptionScenarios()...)
+	// A timeout and a failure to connect are retried, any other transport
+	// error is raised at once (the core's retry filter, shared with GitHub).
+	for _, kind := range []int{failConnect, failTimeout, failProtocol, failRead} {
+		group := "grp"
+		out = append(out, scenario{Base: base0, Group: &group, Loose: true, Responses: repeat(6, scripted{Status: kind})})
+		out = append(out, scenario{Base: base0, Group: nil, Loose: true, Responses: []scripted{{Status: kind}, ok(`[{"id": 1, "name": "a"}]`)}})
+		out = append(out, scenario{Base: base0, Group: &group, Loose: true, Responses: []scripted{ok(fullPage(0)), {Status: kind}, ok(`[{"id": 1, "name": "a"}]`)}})
+	}
+	return out
+}
+
+// listOptionScenarios are the keyword arguments the credential repo
+// listing passes: the membership and group listings, search, pattern and
+// max_projects, over pages the cap does and does not reach.
+func listOptionScenarios() []scenario {
+	base := "http://gitlab.test"
+	named := `[{"id": 1, "name": "api", "path_with_namespace": "Grp/API", "description": "the api", "web_url": "http://gitlab.test/grp/api"},
+{"id": 2, "name": "web", "path_with_namespace": "grp/sub/web", "description": null, "web_url": null},
+{"id": 3, "name": "docs", "path_with_namespace": "other/docs"}, {"id": 4, "name": "\u00c4rger", "path_with_namespace": "grp/\u00c4rger", "description": 5, "web_url": ["x"]}]`
+	str := func(s string) *string { return &s }
+	var out []scenario
+	add := func(group *string, mutate func(*scenario), responses ...scripted) {
+		s := scenario{Base: base, Group: group, Responses: responses}
+		if mutate != nil {
+			mutate(&s)
+		}
+		out = append(out, s)
+	}
+	// The membership listing and the group listing, with and without search.
+	add(nil, func(s *scenario) { s.Membership = true }, ok(named))
+	add(nil, nil, ok(named))
+	add(nil, func(s *scenario) { s.Membership = true; s.Search = "ap i&x=y" }, ok(named))
+	add(str("grp"), func(s *scenario) { s.Search = "a b/c?d#e~f*g\u00e9" }, ok(named))
+	add(str("grp"), func(s *scenario) { s.Search = "" }, ok(named))
+	// A pattern is fnmatch-ed against the lowered full name; it lifts the
+	// fetch cap and never reaches the server.
+	add(nil, func(s *scenario) { s.Pattern = "*api*" }, ok(named))
+	add(nil, func(s *scenario) { s.Pattern = "*GRP/*"; s.Membership = true }, ok(named))
+	add(nil, func(s *scenario) { s.Pattern = "*[a-c]*" }, ok(named))
+	add(nil, func(s *scenario) { s.Pattern = "*zzz*" }, ok(named))
+	add(str("grp"), func(s *scenario) { s.Pattern = "*"; s.Search = "s" }, ok(named))
+	// max_projects: kept count, the fetch cap and its slice.
+	for _, max := range []string{"1", "2", "3", "4", "5", "100", "101", "0", "-1", "-3", "-4", "-9", "99999999999999999999999999", "-99999999999999999999999999"} {
+		max := max
+		add(nil, func(s *scenario) { s.Max = &max; s.Membership = true }, ok(named))
+	}
+	for _, max := range []string{"1", "150", "0", "-1", "250"} {
+		max := max
+		add(nil, func(s *scenario) { s.Max = &max }, ok(fullPage(0)), ok(fullPage(100)), ok(fullPage(200)), ok(named))
+	}
+	for _, max := range []string{"1", "150", "0", "-1"} {
+		max := max
+		add(nil, func(s *scenario) { s.Max = &max; s.Pattern = "*p1*" }, ok(fullPage(0)), ok(fullPage(100)), ok(named))
+	}
+	// Errors carry the listing's own operation text.
+	add(nil, nil, status(401, `{}`))
+	add(nil, nil, status(404, `{"message": "404 Not Found"}`))
+	add(nil, func(s *scenario) { s.Search = "x y" }, status(404, `{}`))
+	add(nil, nil, status(403, `{"message": "403 Forbidden"}`))
+	add(nil, nil, status(429, `{}`, [2]string{"Retry-After", "1"}), ok(named))
+	add(nil, nil, repeat(5, status(500, "boom"))...)
+	add(nil, nil, status(418, "teapot"))
+	add(nil, nil, ok(`{"not": "a list"}`))
+	add(nil, nil, ok(`[1, {"id": 1, "name": "a", "star_count": Infinity}]`))
+	add(nil, func(s *scenario) { s.Max = str("1") }, ok(`[{"id": 1, "name": "ok"}, {"id": 2, "name": "b", "star_count": Infinity}]`))
+	add(nil, func(s *scenario) { s.Max = str("2") }, ok(`[{"id": 1, "name": "ok"}, {"id": 2, "name": "b", "star_count": Infinity}]`))
+	add(nil, func(s *scenario) { s.Pattern = "*ok*" }, ok(`[{"id": 1, "name": "ok"}, {"id": 2, "name": "b", "forks_count": Infinity}]`))
+	add(nil, nil, ok(`[{"id": 1, "name": "n", "path_with_namespace": "", "path": "", "description": "", "web_url": ""}, {"id": 2, "description": 0, "web_url": false}, {"id": 3, "description": {"a": [1, null]}, "web_url": 1.5}]`))
 	return out
 }
 
@@ -157,6 +271,16 @@ func (s *scriptedTransport) RoundTrip(request *http.Request) (*http.Response, er
 	next := scripted{Status: 599}
 	if len(s.responses) > 0 {
 		next, s.responses = s.responses[0], s.responses[1:]
+	}
+	switch next.Status {
+	case failConnect:
+		return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
+	case failTimeout:
+		return nil, &net.OpError{Op: "read", Net: "tcp", Err: timeoutError{}}
+	case failProtocol:
+		return nil, errors.New("http: server closed idle connection")
+	case failRead:
+		return nil, &net.OpError{Op: "read", Net: "tcp", Err: errors.New("connection reset by peer")}
 	}
 	headers := http.Header{}
 	for _, pair := range next.Headers {
@@ -202,7 +326,11 @@ func TestListProjectsVenueOracleMatchesLivePython(t *testing.T) {
 		transport := &scriptedTransport{responses: s.Responses}
 		client := Client{BaseURL: s.Base, Token: "tok", HTTP: &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
 			Sleep: func(context.Context, time.Duration) error { return nil }}
-		projects, err := client.ListGroupProjects(context.Background(), s.Group)
+		options := ListOptions{Group: s.Group, Search: s.Search, Pattern: s.Pattern, Membership: s.Membership}
+		if s.Max != nil {
+			options.MaxProjects, _ = new(big.Int).SetString(*s.Max, 10)
+		}
+		projects, err := client.ListProjects(context.Background(), options)
 		var got any
 		if err != nil {
 			class := "error"
@@ -211,18 +339,31 @@ func TestListProjectsVenueOracleMatchesLivePython(t *testing.T) {
 			}
 			got = class + ": " + err.Error()
 		} else {
-			rows := [][]string{}
+			rows := [][]any{}
 			for _, project := range projects {
-				rows = append(rows, []string{project.ID.String(), project.Name, project.FullName})
+				rows = append(rows, []any{project.ID.String(), project.Name, project.FullName, jsonOf(t, project.Description), jsonOf(t, project.URL)})
 			}
 			got = rows
 		}
-		gotResult, _ := json.Marshal(got)
 		var pythonResult any
 		_ = json.Unmarshal(want[index].Result, &pythonResult)
+		if s.Loose {
+			if text, ok := got.(string); ok {
+				got, _, _ = strings.Cut(text, ": ")
+			}
+			if text, ok := pythonResult.(string); ok {
+				pythonResult, _, _ = strings.Cut(text, ": ")
+			}
+			// Go names every transport error it raises at once TransportError;
+			// Python names the httpx exception (raised at once, not retried).
+			if got == "TransportError" && (pythonResult == "RemoteProtocolError" || pythonResult == "ReadError") {
+				got = pythonResult
+			}
+		}
+		gotResult, _ := json.Marshal(got)
 		wantResult, _ := json.Marshal(pythonResult)
 		if string(gotResult) != string(wantResult) {
-			t.Errorf("scenario %d (%s): result\n go     %s\n python %s", index, s.Group, gotResult, wantResult)
+			t.Errorf("scenario %d (%s): result\n go     %s\n python %s", index, describe(s), gotResult, wantResult)
 		}
 		var pythonRequests [][2]string
 		for _, request := range want[index].Requests {
@@ -236,9 +377,36 @@ func TestListProjectsVenueOracleMatchesLivePython(t *testing.T) {
 			pythonRequests = append(pythonRequests, pair)
 		}
 		if fmt.Sprint(transport.seen) != fmt.Sprint(pythonRequests) {
-			t.Errorf("scenario %d (%s): requests\n go     %v\n python %v", index, s.Group, transport.seen, pythonRequests)
+			t.Errorf("scenario %d (%s): requests\n go     %v\n python %v", index, describe(s), transport.seen, pythonRequests)
 		}
 	}
 	t.Logf("%d scenarios compared", len(scenarios))
 	venueoracle.WriteProof(t)
+}
+
+// jsonOf is a decoded JSON value as plain Go data, for comparison.
+func jsonOf(t *testing.T, value pyjson.Value) any {
+	t.Helper()
+	text, err := pyjson.Dumps(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out any
+	if err := json.Unmarshal([]byte(text), &out); err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// describe names a scenario in a failure.
+func describe(s scenario) string {
+	group := "<none>"
+	if s.Group != nil {
+		group = *s.Group
+	}
+	max := "<none>"
+	if s.Max != nil {
+		max = *s.Max
+	}
+	return fmt.Sprintf("group=%s search=%q pattern=%q membership=%v max=%s", group, s.Search, s.Pattern, s.Membership, max)
 }

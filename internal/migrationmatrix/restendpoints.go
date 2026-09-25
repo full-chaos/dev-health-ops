@@ -76,9 +76,12 @@ type RESTRoute struct {
 // QueryAPIMuxRoute is one `/api/v1/*` path query-api's mux registers.
 type QueryAPIMuxRoute struct {
 	Path string
-	// HandlerLoc is "<file>:<line>" of the route's builder function
-	// definition when it could be resolved (see LoadQueryAPIMuxRoutes), or
-	// the mux registration's own "<file>:<line>" as a fallback.
+	// HandlerLoc is "<file>#<builder function>" of the route's builder function
+	// when it could be resolved (see LoadQueryAPIMuxRoutes), or
+	// "<file>#HandleFunc(<route>)" -- the mux registration, named by its route
+	// -- as a fallback. It cites a SYMBOL, never a line number: a line moves
+	// whenever anything above it in the file is edited, which failed the
+	// doc-drift check on unrelated PRs (CHAOS-6633).
 	HandlerLoc string
 }
 
@@ -268,9 +271,15 @@ func funcDefRe(name string) *regexp.Regexp {
 // internal/queryapi/server/ -- a fixed, repo-relative label, deliberately NOT
 // derived from the caller-supplied queryAPIDir argument, which can be
 // absolute (a test's t.TempDir(), or -root resolved to an absolute path) and
-// would otherwise leak a build-machine path onto the rendered page.
-func queryAPILoc(name string, line int) string {
-	return fmt.Sprintf("internal/queryapi/server/%s:%d", filepath.Base(name), line)
+// would otherwise leak a build-machine path onto the rendered page. The
+// symbol after '#' is the citation's anchor: a function name, or the mux
+// registration named by its route. Never a line number (CHAOS-6633): the page
+// is regenerated from the committed sources and compared, so a citation that
+// moves with unrelated edits fails every PR that touches the file. A renamed
+// or removed builder still changes the citation, so the drift check still
+// fails for a real mapping change.
+func queryAPILoc(name, symbol string) string {
+	return fmt.Sprintf("internal/queryapi/server/%s#%s", filepath.Base(name), symbol)
 }
 
 func LoadQueryAPIMuxRoutes(queryAPIDir string) ([]QueryAPIMuxRoute, error) {
@@ -304,8 +313,7 @@ func LoadQueryAPIMuxRoutes(queryAPIDir string) ([]QueryAPIMuxRoute, error) {
 		for _, m := range muxHandleFuncRe.FindAllStringSubmatchIndex(f.text, -1) {
 			route := f.text[m[2]:m[3]]
 			handlerVar := f.text[m[4]:m[5]]
-			mountLine := 1 + strings.Count(f.text[:m[0]], "\n")
-			loc := queryAPILoc(f.name, mountLine)
+			loc := queryAPILoc(f.name, "HandleFunc("+route+")")
 
 			// Best-effort: if the builder cannot be resolved (a shape this
 			// codebase does not use today), loc stays the mount site set
@@ -313,9 +321,8 @@ func LoadQueryAPIMuxRoutes(queryAPIDir string) ([]QueryAPIMuxRoute, error) {
 			if assign := builderAssignRe(handlerVar).FindStringSubmatch(f.text); assign != nil {
 				builder := assign[1]
 				for _, f2 := range files {
-					if defMatch := funcDefRe(builder).FindStringIndex(f2.text); defMatch != nil {
-						defLine := 1 + strings.Count(f2.text[:defMatch[0]], "\n")
-						loc = queryAPILoc(f2.name, defLine)
+					if funcDefRe(builder).MatchString(f2.text) {
+						loc = queryAPILoc(f2.name, builder)
 						break
 					}
 				}

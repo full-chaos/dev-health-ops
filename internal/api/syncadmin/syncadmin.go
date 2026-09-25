@@ -39,6 +39,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
+	schedsync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
 )
 
 const prefix = "/api/v1/admin"
@@ -64,6 +65,9 @@ type Deps struct {
 	// GitLabHTTP is the GitLab listing's HTTP client (nil: the client's
 	// default, 15 s timeout, no redirects followed).
 	GitLabHTTP *http.Client
+	// JiraHTTP is the create path's Jira project discovery HTTP client
+	// (nil: 45 s timeout, no redirects followed, as the scheduler's).
+	JiraHTTP *http.Client
 }
 
 // Routes is the area's route set.
@@ -96,12 +100,19 @@ func Routes(deps Deps) []httpapi.Route {
 	if deps.ClickHouse != nil {
 		h.diagnostics = clickhouseDiagnostics{conn: deps.ClickHouse}
 	}
+	h.discovery = newCreateDiscovery(deps, logger, clock)
 	wrap := func(handler http.HandlerFunc) http.Handler { return deps.Guard.Wrap(policy.AdminOrg, handler) }
 	return []httpapi.Route{
 		{Method: http.MethodGet, Pattern: prefix + "/sync-configs/auto-import-capabilities", Handler: wrap(h.autoImportCapabilities)},
 		{Method: http.MethodGet, Pattern: prefix + "/sync-targets", Handler: wrap(h.syncTargets)},
 		{Method: http.MethodGet, Pattern: prefix + "/sync-configs", Handler: wrap(h.listSyncConfigs)},
+		{Method: http.MethodPost, Pattern: prefix + "/sync-configs",
+			Handler: deps.Guard.BodyFirst(policy.AdminOrg, http.HandlerFunc(h.createSyncConfig))},
+		{Method: http.MethodPost, Pattern: prefix + "/sync-configs/batch",
+			Handler: deps.Guard.BodyFirst(policy.AdminOrg, http.HandlerFunc(h.batchCreateSyncConfigs))},
 		{Method: http.MethodGet, Pattern: prefix + "/sync-configs/{config_id}", Handler: wrap(h.getSyncConfig)},
+		{Method: http.MethodPatch, Pattern: prefix + "/sync-configs/{config_id}",
+			Handler: deps.Guard.BodyFirst(policy.AdminOrg, http.HandlerFunc(h.updateSyncConfig))},
 		{Method: http.MethodDelete, Pattern: prefix + "/sync-configs/{config_id}", Handler: wrap(h.deleteSyncConfig)},
 		{Method: http.MethodGet, Pattern: prefix + "/sync-configs/{config_id}/repositories", Handler: wrap(h.getRepositories)},
 		{Method: http.MethodPut, Pattern: prefix + "/sync-configs/{config_id}/repositories",
@@ -129,6 +140,9 @@ type handlers struct {
 	gitlabHTTP *http.Client
 	// diagnostics is nil when the api has no ClickHouse login.
 	diagnostics diagnosticsReader
+	// discovery is the create path's Jira project discovery; nil when the
+	// process has no pool or credential decryptor.
+	discovery schedsync.SourceDiscoveryExecutor
 }
 
 // now is the writes' clock.

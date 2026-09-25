@@ -169,7 +169,7 @@ func (h *handlers) resolveOwnership(ctx context.Context, tx pgx.Tx, orgID, syste
 	if system == "custom" {
 		return nil, warnings, nil, nil
 	}
-	matches, err := externalingest.FindMatchingManagedSources(ctx, tx, h.getenv, orgID, system, instance, entityFamily)
+	matches, err := externalingest.FindMatchingManagedSources(ctx, tx, h.getenv, h.cipher, orgID, system, instance, entityFamily)
 	if errors.Is(err, externalingest.ErrOwnershipResolutionUnavailable) {
 		return nil, nil, fail(http.StatusConflict, codeDetail("ownership_resolution_unavailable",
 			externalingest.OwnershipResolutionUnavailableMessage)), nil

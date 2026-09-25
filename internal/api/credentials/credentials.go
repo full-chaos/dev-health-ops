@@ -72,7 +72,14 @@ func Routes(deps Deps) []httpapi.Route {
 	if lookup == nil {
 		lookup = externalurl.ResolveHostAddrs
 	}
-	h := handlers{pool: deps.Pool, cipher: deps.Cipher, logger: logger, now: now, client: client, lookup: lookup}
+	// The repository listing's clients each apply their provider's own
+	// timeout to this one (a test's client answers for both).
+	repoClient := deps.HTTPClient
+	if repoClient == nil {
+		repoClient = &http.Client{Transport: externalurl.GuardedTransport(),
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	}
+	h := handlers{pool: deps.Pool, cipher: deps.Cipher, logger: logger, now: now, client: client, repoClient: repoClient, lookup: lookup}
 	return []httpapi.Route{
 		{Method: http.MethodGet, Pattern: "/api/v1/admin/credentials", Allow: http.MethodGet,
 			Handler: deps.Guard.Wrap(policy.AdminOrg, http.HandlerFunc(h.list))},
@@ -99,7 +106,9 @@ type handlers struct {
 	logger *slog.Logger
 	now    func() time.Time
 	client *http.Client
-	lookup func(context.Context, string) ([]netip.Addr, error)
+	// repoClient carries the repository listing's provider requests.
+	repoClient *http.Client
+	lookup     func(context.Context, string) ([]netip.Addr, error)
 }
 
 func (h handlers) internal(w http.ResponseWriter, r *http.Request, what string, err error) {
@@ -239,7 +248,7 @@ func (h handlers) load(ctx context.Context, q interface {
 // get is GET /credentials/{provider}/{name}.
 func (h handlers) get(w http.ResponseWriter, r *http.Request) {
 	if r.PathValue("name") == "repos" {
-		h.reposShadow(w, r)
+		h.repos(w, r)
 		return
 	}
 	c, err := h.load(r.Context(), h.pool, orgIDOf(r.Context()), r.PathValue("provider"), r.PathValue("name"), false)
@@ -252,32 +261,6 @@ func (h handlers) get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	policy.WriteModel(w, http.StatusOK, c.responseJSON(), nil)
-}
-
-// reposShadow answers GET /credentials/{x}/repos, where Python's
-// /credentials/{credential_id}/repos route is registered before the read
-// route and wins the same-shaped path. That route looks the segment up as a
-// credential id: a segment that is not a UUID, or names no credential of the
-// org, is Python's 404 "Credential not found" -- answered here identically --
-// and an id that names one is repo listing, which is not served on this
-// plane (501, never a credential read of the wrong shape).
-func (h handlers) reposShadow(w http.ResponseWriter, r *http.Request) {
-	id, ok := policy.ParsePyUUID(r.PathValue("provider"))
-	if ok {
-		var found bool
-		err := h.pool.QueryRow(r.Context(), `SELECT EXISTS (SELECT 1 FROM integration_credentials WHERE org_id = $1 AND id = $2)`,
-			orgIDOf(r.Context()), id).Scan(&found)
-		if err != nil {
-			h.internal(w, r, "look up credential for repo listing", err)
-			return
-		}
-		ok = found
-	}
-	if !ok {
-		policy.WriteDetail(w, http.StatusNotFound, "Credential not found", nil)
-		return
-	}
-	policy.WriteDetail(w, http.StatusNotImplemented, "Repository listing is not served by this API plane", nil)
 }
 
 const pagerDutyDedicated = "Use the dedicated PagerDuty setup endpoints"

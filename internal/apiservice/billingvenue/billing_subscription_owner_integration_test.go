@@ -111,6 +111,16 @@ func TestSubscriptionEventsResolveTheOwningOrg(t *testing.T) {
 	send("trial_will_end: no metadata, license customer", "evt_own_trial", "customer.subscription.trial_will_end", func(object map[string]any) {
 		object["id"], object["customer"], object["trial_end"] = "sub_own_new", "cus_A", trialEnd
 	})
+	// The same trial event redelivered across a day boundary (its trial
+	// ends 6 s past two days from now; the redelivery comes 8 s later, so
+	// its days_remaining is one less): still one email.
+	edge := time.Now().Add(2*24*time.Hour + 6*time.Second).Unix()
+	trialEdge := func(object map[string]any) {
+		object["id"], object["customer"], object["trial_end"] = "sub_own_new", "cus_A", edge
+	}
+	send("trial_will_end: at a day boundary", "evt_own_trial_edge", "customer.subscription.trial_will_end", trialEdge)
+	time.Sleep(8 * time.Second)
+	send("trial_will_end: the same event redelivered a day count later", "evt_own_trial_edge", "customer.subscription.trial_will_end", trialEdge)
 	send("deleted: no metadata, stored subscription", "evt_own_deleted", "customer.subscription.deleted", func(object map[string]any) {
 		object["id"], object["customer"], object["status"] = "sub_own_new", "cus_other", "canceled"
 		setPrice(object, "price_seed_y")
@@ -145,8 +155,13 @@ func TestSubscriptionEventsResolveTheOwningOrg(t *testing.T) {
 	expect("org A's license is revoked by the cancellation",
 		`SELECT tier || ' ' || is_valid::text FROM org_licenses WHERE org_id = '`+orgA+`'`, "community false")
 	expect("the cancellation and the trial end are queued for org A",
-		`SELECT string_agg(notification_type, ',' ORDER BY notification_type) FROM billing_notifications
+		`SELECT string_agg(DISTINCT notification_type, ',' ORDER BY notification_type) FROM billing_notifications
 			WHERE org_id = '`+orgA+`' AND notification_type IN ('subscription_cancelled', 'trial_expiring')`, "subscription_cancelled,trial_expiring")
+	expect("one trial email per trial event, a redelivery included",
+		`SELECT count(*)::text FROM billing_notifications WHERE org_id = '`+orgA+`' AND notification_type = 'trial_expiring'`, "2")
+	expect("each trial email handed to the job outbox",
+		`SELECT count(*)::text FROM billing_notifications n JOIN worker_job_outbox o ON o.dedupe_key = n.idempotency_key
+			WHERE n.org_id = '`+orgA+`' AND n.notification_type = 'trial_expiring'`, "2")
 	expect("the late update is recorded, not applied",
 		`SELECT count(*)::text || ' ' || min(new_status) FROM subscription_events WHERE stripe_event_id = 'evt_own_late'`, "1 canceled")
 	expect("one cancellation notification despite the redelivery",

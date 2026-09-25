@@ -77,10 +77,12 @@ func TestTheDriftCheckIsWiredIntoGoQualityAndIsActive(t *testing.T) {
 		t.Fatalf("CI passes unexpected arguments to the guard: %q", rest)
 	}
 
-	// The step's operative condition, exactly -- the same gate every other
-	// step in the job uses. A bool `false`, a different expression, or a
-	// missing `if:` all fail.
-	const gate = "steps.relevance.outputs.relevant == 'true'"
+	// The step's operative condition, exactly -- the relevance gate every
+	// step in the job uses, plus the leg that runs it (CHAOS-6690: go-quality
+	// runs as parallel legs; the drift check is a `static`-leg step, so it is
+	// still executed on every relevant change). A bool `false`, a different
+	// expression, or a missing `if:` all fail.
+	const gate = "steps.relevance.outputs.relevant == 'true' && matrix.name == 'static'"
 	cond, ok := st["if"].(string)
 	if !ok || strings.TrimSpace(cond) != gate {
 		t.Fatalf("the guard step's `if:` is %#v; it must be exactly %q", st["if"], gate)

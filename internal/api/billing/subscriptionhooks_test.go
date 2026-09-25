@@ -21,7 +21,7 @@ func TestNotificationHandoffFailureIsAWarning(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := h.trialWillEnd(context.Background(), subscription); err != nil {
+	if err := h.trialWillEnd(context.Background(), "evt_trial", subscription); err != nil {
 		t.Fatal(err)
 	}
 	h.subscriptionDeleted(context.Background(), subscription)

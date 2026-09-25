@@ -32,6 +32,8 @@ type batch struct {
 	OrgID string
 	Dump  *pyjson.Object
 	Items int
+	// Signals are the validated telemetry rows (the telemetry route only).
+	Signals []signalBucket
 }
 
 // parser validates one request body.
@@ -147,5 +149,146 @@ func parseIncident(m pybody.Model) (*pyjson.Object, bool) {
 	out.Set("status", status.Value)
 	out.Set("started_at", moment(startedAt.Value))
 	out.Set("resolved_at", optional(resolvedAt, moment))
+	return out, true
+}
+
+// intValue is an `int | None` field's dump value.
+func intValue(value *big.Int) pyjson.Value { return pyjson.Int{Int: value} }
+
+// parseReview is IngestPullRequestReview: every field required.
+func parseReview(m pybody.Model) (*pyjson.Object, bool) {
+	id := pybody.Get(m, "review_id", pybody.Required, pybody.Str)
+	reviewer := pybody.Get(m, "reviewer", pybody.Required, pybody.Str)
+	state := pybody.Get(m, "state", pybody.Required, pybody.Str)
+	submittedAt := pybody.Get(m, "submitted_at", pybody.Required, pybody.Datetime)
+	if !(id.OK && reviewer.OK && state.OK && submittedAt.OK) {
+		return nil, false
+	}
+	out := pyjson.NewObject()
+	out.Set("review_id", id.Value)
+	out.Set("reviewer", reviewer.Value)
+	out.Set("state", state.Value)
+	out.Set("submitted_at", moment(submittedAt.Value))
+	return out, true
+}
+
+var reviewList = pybody.ModelList(parseReview)
+
+// parsePullRequest is IngestPullRequest (`reviews` defaults to a new empty
+// list; a null is refused).
+func parsePullRequest(m pybody.Model) (*pyjson.Object, bool) {
+	number := pybody.Get(m, "number", pybody.Required, pybody.Int)
+	title := pybody.Get(m, "title", pybody.Required, pybody.Str)
+	body := pybody.Get(m, "body", pybody.Nullable, pybody.Str)
+	state := pybody.Get(m, "state", pybody.Required, pybody.Str)
+	authorName := pybody.Get(m, "author_name", pybody.Required, pybody.Str)
+	authorEmail := pybody.Get(m, "author_email", pybody.Nullable, pybody.Str)
+	createdAt := pybody.Get(m, "created_at", pybody.Required, pybody.Datetime)
+	mergedAt := pybody.Get(m, "merged_at", pybody.Nullable, pybody.Datetime)
+	closedAt := pybody.Get(m, "closed_at", pybody.Nullable, pybody.Datetime)
+	headBranch := pybody.Get(m, "head_branch", pybody.Nullable, pybody.Str)
+	baseBranch := pybody.Get(m, "base_branch", pybody.Nullable, pybody.Str)
+	additions := pybody.Get(m, "additions", pybody.Nullable, pybody.Int)
+	deletions := pybody.Get(m, "deletions", pybody.Nullable, pybody.Int)
+	changedFiles := pybody.Get(m, "changed_files", pybody.Nullable, pybody.Int)
+	reviews := pybody.Get(m, "reviews", pybody.Defaulted, reviewList)
+	ok := number.OK && title.OK && body.OK && state.OK && authorName.OK && authorEmail.OK && createdAt.OK &&
+		mergedAt.OK && closedAt.OK && headBranch.OK && baseBranch.OK && additions.OK && deletions.OK &&
+		changedFiles.OK && reviews.OK
+	if !ok {
+		return nil, false
+	}
+	out := pyjson.NewObject()
+	out.Set("number", pyjson.Int{Int: number.Value})
+	out.Set("title", title.Value)
+	out.Set("body", optional(body, text))
+	out.Set("state", state.Value)
+	out.Set("author_name", authorName.Value)
+	out.Set("author_email", optional(authorEmail, text))
+	out.Set("created_at", moment(createdAt.Value))
+	out.Set("merged_at", optional(mergedAt, moment))
+	out.Set("closed_at", optional(closedAt, moment))
+	out.Set("head_branch", optional(headBranch, text))
+	out.Set("base_branch", optional(baseBranch, text))
+	out.Set("additions", optional(additions, intValue))
+	out.Set("deletions", optional(deletions, intValue))
+	out.Set("changed_files", optional(changedFiles, intValue))
+	list := []pyjson.Value{}
+	if reviews.Set {
+		for _, review := range reviews.Value {
+			list = append(list, review)
+		}
+	}
+	out.Set("reviews", list)
+	return out, true
+}
+
+var (
+	workItemProvider = pybody.Literal("jira", "github", "gitlab", "linear")
+	workItemType     = pybody.Literal("story", "task", "bug", "epic", "issue", "incident", "chore", "unknown")
+	workItemStatus   = pybody.Literal("backlog", "todo", "in_progress", "in_review", "blocked", "done", "canceled", "unknown")
+)
+
+// stringList is a `list[str]` field's dump value.
+func stringList(values []string) []pyjson.Value {
+	out := make([]pyjson.Value, len(values))
+	for index, value := range values {
+		out[index] = value
+	}
+	return out
+}
+
+// parseWorkItem is IngestWorkItem (`type` and `status` default to
+// "unknown", `assignees` and `labels` to new empty lists).
+func parseWorkItem(m pybody.Model) (*pyjson.Object, bool) {
+	id := pybody.Get(m, "work_item_id", pybody.Required, pybody.Str)
+	provider := pybody.Get(m, "provider", pybody.Required, workItemProvider)
+	title := pybody.Get(m, "title", pybody.Required, pybody.Str)
+	kind := pybody.Get(m, "type", pybody.Defaulted, workItemType)
+	status := pybody.Get(m, "status", pybody.Defaulted, workItemStatus)
+	statusRaw := pybody.Get(m, "status_raw", pybody.Nullable, pybody.Str)
+	description := pybody.Get(m, "description", pybody.Nullable, pybody.Str)
+	projectKey := pybody.Get(m, "project_key", pybody.Nullable, pybody.Str)
+	assignees := pybody.Get(m, "assignees", pybody.Defaulted, pybody.StrList)
+	reporter := pybody.Get(m, "reporter", pybody.Nullable, pybody.Str)
+	createdAt := pybody.Get(m, "created_at", pybody.Required, pybody.Datetime)
+	updatedAt := pybody.Get(m, "updated_at", pybody.Nullable, pybody.Datetime)
+	startedAt := pybody.Get(m, "started_at", pybody.Nullable, pybody.Datetime)
+	completedAt := pybody.Get(m, "completed_at", pybody.Nullable, pybody.Datetime)
+	labels := pybody.Get(m, "labels", pybody.Defaulted, pybody.StrList)
+	storyPoints := pybody.Get(m, "story_points", pybody.Nullable, pybody.Float)
+	priorityRaw := pybody.Get(m, "priority_raw", pybody.Nullable, pybody.Str)
+	url := pybody.Get(m, "url", pybody.Nullable, pybody.Str)
+	ok := id.OK && provider.OK && title.OK && kind.OK && status.OK && statusRaw.OK && description.OK &&
+		projectKey.OK && assignees.OK && reporter.OK && createdAt.OK && updatedAt.OK && startedAt.OK &&
+		completedAt.OK && labels.OK && storyPoints.OK && priorityRaw.OK && url.OK
+	if !ok {
+		return nil, false
+	}
+	defaulted := func(field pybody.Field[string]) string {
+		if field.Set {
+			return field.Value
+		}
+		return "unknown"
+	}
+	out := pyjson.NewObject()
+	out.Set("work_item_id", id.Value)
+	out.Set("provider", provider.Value)
+	out.Set("title", title.Value)
+	out.Set("type", defaulted(kind))
+	out.Set("status", defaulted(status))
+	out.Set("status_raw", optional(statusRaw, text))
+	out.Set("description", optional(description, text))
+	out.Set("project_key", optional(projectKey, text))
+	out.Set("assignees", stringList(assignees.Value))
+	out.Set("reporter", optional(reporter, text))
+	out.Set("created_at", moment(createdAt.Value))
+	out.Set("updated_at", optional(updatedAt, moment))
+	out.Set("started_at", optional(startedAt, moment))
+	out.Set("completed_at", optional(completedAt, moment))
+	out.Set("labels", stringList(labels.Value))
+	out.Set("story_points", optional(storyPoints, func(value float64) pyjson.Value { return pyjson.Float(value) }))
+	out.Set("priority_raw", optional(priorityRaw, text))
+	out.Set("url", optional(url, text))
 	return out, true
 }

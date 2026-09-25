@@ -12,41 +12,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 )
 
-func TestKeyedBucketAllowsUpToBurstThenBlocks(t *testing.T) {
-	now := time.Unix(0, 0)
-	clock := func() time.Time { return now }
-	bucket := newKeyedBucket(60, 2, clock) // 1/s refill, burst 2
-
-	if !bucket.allow("a") || !bucket.allow("a") {
-		t.Fatal("burst of 2 must be allowed")
-	}
-	if bucket.allow("a") {
-		t.Fatal("3rd immediate call must be blocked")
-	}
-	// A different key has its own budget.
-	if !bucket.allow("b") {
-		t.Fatal("a different key must not share a's exhausted bucket")
-	}
-
-	now = now.Add(time.Second)
-	if !bucket.allow("a") {
-		t.Fatal("one token must have refilled after 1s at 1/s")
-	}
-}
-
-func TestKeyedBucketTestDoesNotConsume(t *testing.T) {
-	now := time.Unix(0, 0)
-	bucket := newKeyedBucket(60, 1, func() time.Time { return now })
-	for i := 0; i < 5; i++ {
-		if !bucket.test("k") {
-			t.Fatalf("test() must never consume a token (call %d)", i)
-		}
-	}
-	if !bucket.allow("k") {
-		t.Fatal("the untouched token must still be there")
-	}
-}
-
 func TestRouteLimitersEnforceThePerMinuteCeilings(t *testing.T) {
 	now := time.Unix(0, 0)
 	limiters := newRouteLimiters(nil, func() time.Time { return now })
@@ -170,6 +135,9 @@ var ctx = context.Background()
 type failingCounters struct{ httpapi.CounterStore }
 
 func (failingCounters) Increment(context.Context, httpapi.Hit) (int64, error) {
+	return 0, errors.New("valkey down")
+}
+func (failingCounters) Peek(context.Context, httpapi.Hit) (int64, error) {
 	return 0, errors.New("valkey down")
 }
 func (failingCounters) Backend() string { return "redis" }

@@ -4,7 +4,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"math/rand"
 	"os"
 	"os/exec"
@@ -99,7 +98,8 @@ func TestSyntaxErrorTextMatchesLivePython(t *testing.T) {
 	_, file, _, _ := runtime.Caller(0)
 	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
 	python := pyoracle.Resolve(t, root)
-	requireDeployedInterpreter(t, python)
+	probe, probeErr := exec.Command(python, pyoracle.VersionProbeArgs...).Output()
+	pyoracle.RequireDeployed(t, python, probe, probeErr)
 	corpus := syntaxTextCorpus()
 	encoded := make([]string, len(corpus))
 	for i, body := range corpus {
@@ -165,23 +165,4 @@ func TestSyntaxErrorTextMatchesLivePython(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Logf("%d bodies compared (%d errors, %d ok, %d other), %d mismatches", len(corpus), texts, oks, others, mismatches)
-}
-
-// requireDeployedInterpreter fails (never skips) when the resolved Python is
-// older than the interpreter the api ships on (pyproject requires-python,
-// 3.14): json.decoder's messages differ between releases -- 3.13 added
-// "Illegal trailing comma", and 3.14 reports an unterminated string after a
-// complete \uXXXX escape -- so a comparison against an older interpreter
-// measures the wrong Python, not this code.
-func requireDeployedInterpreter(t *testing.T, python string) {
-	t.Helper()
-	output, err := exec.Command(python, "-c", "import sys; print('%d.%d' % sys.version_info[:2])").Output()
-	if err != nil {
-		t.Fatalf("read the interpreter version of %s: %v", python, err)
-	}
-	version := strings.TrimSpace(string(output))
-	var major, minor int
-	if _, err := fmt.Sscanf(version, "%d.%d", &major, &minor); err != nil || major < 3 || (major == 3 && minor < 14) {
-		t.Fatalf("live oracle resolved Python %s at %s; it needs the deployed 3.14 (set DEV_HEALTH_PYTHON to the repo .venv interpreter)", version, python)
-	}
 }

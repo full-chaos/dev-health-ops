@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -30,6 +31,48 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
 )
+
+// readinessTestCheckTimeout bounds a HUNG readiness check in these tests. It is
+// NOT an assertion: no test here relies on a check timing out, and a check that
+// answers does so in microseconds. It used to be 100 ms, which under `-race`
+// with a CPU-starved runner failed `provider_route_switches` (two os.Stat calls;
+// the goroutine wakes late after each syscall) with TimedOut:true in
+// TestLaunchDarklyReadinessRequiresConcreteProviderHandlerRegistration -- 16 of
+// 40 runs pinned to 2 cores beside 6 busy loops, and recurring on CI (CHAOS-6725).
+const readinessTestCheckTimeout = 10 * time.Second
+
+// requireDefiniteReadinessAnswers fails when any check in status TIMED OUT
+// instead of answering: a check that hit its wait bound says nothing about the
+// dependency (a slow answer and a wrong answer look alike in Failed), so a test
+// asserting readiness -- or a definite failure -- must not accept a timeout as
+// either (timeout-fallback masquerade).
+func requireDefiniteReadinessAnswers(t *testing.T, status health.Readiness) {
+	t.Helper()
+	for _, check := range status.Checks {
+		if check.TimedOut {
+			t.Fatalf("readiness check %q timed out instead of answering: %#v", check.Name, status)
+		}
+	}
+}
+
+// The test files of this package never build a registry with a sub-second
+// check timeout again (the source-level guard for the class above).
+func TestNoWorkerServiceTestBuildsASubSecondReadinessTimeout(t *testing.T) {
+	files, err := filepath.Glob("*_test.go")
+	if err != nil || len(files) == 0 {
+		t.Fatalf("glob test files: %v (%d files)", err, len(files))
+	}
+	pattern := regexp.MustCompile(`health\.NewRegistry\(\s*\d+\s*\*\s*time\.(Millisecond|Microsecond|Nanosecond)\s*\)`)
+	for _, file := range files {
+		raw, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if loc := pattern.FindIndex(raw); loc != nil {
+			t.Errorf("%s builds a health registry with a sub-second check timeout (%q); use readinessTestCheckTimeout", file, raw[loc[0]:loc[1]])
+		}
+	}
+}
 
 func TestWorkerSpecConfiguresDependencies(t *testing.T) {
 	if workerSpec.Service != "dev-health-worker" || workerSpec.DefaultProfile != "" {
@@ -86,7 +129,7 @@ func TestWorkerGroupIsAnObservableLabelNotAQueueSelector(t *testing.T) {
 
 func TestNoDatabaseConfigurationStaysLiveAndFailsReadiness(t *testing.T) {
 	t.Chdir(filepath.Join("..", ".."))
-	registry := health.NewRegistry(100 * time.Millisecond)
+	registry := health.NewRegistry(readinessTestCheckTimeout)
 	components, err := configureWorkerDependencies(
 		context.Background(),
 		config.Config{
@@ -349,7 +392,7 @@ func TestLaunchDarklyReadinessRequiresConcreteProviderHandlerRegistration(
 			},
 		}, nil
 	}
-	registry := health.NewRegistry(100 * time.Millisecond)
+	registry := health.NewRegistry(readinessTestCheckTimeout)
 	_, err = configureWorkerDependenciesWithSources(
 		context.Background(),
 		func() config.Config {
@@ -372,6 +415,7 @@ func TestLaunchDarklyReadinessRequiresConcreteProviderHandlerRegistration(
 		t.Fatal(err)
 	}
 	status := registry.Readiness(context.Background())
+	requireDefiniteReadinessAnswers(t, status)
 	if !status.Ready {
 		t.Fatalf("registered provider runtime readiness=%#v", status)
 	}
@@ -384,7 +428,7 @@ func TestLaunchDarklyReadinessRequiresConcreteProviderHandlerRegistration(
 	// already proves -- before the readiness gate this assertion inspects
 	// ever opens.
 	sources.buildSyncCoordinator = nil
-	missingRegistry := health.NewRegistry(100 * time.Millisecond)
+	missingRegistry := health.NewRegistry(readinessTestCheckTimeout)
 	_, err = configureWorkerDependenciesWithSources(
 		context.Background(),
 		config.Config{
@@ -402,6 +446,8 @@ func TestLaunchDarklyReadinessRequiresConcreteProviderHandlerRegistration(
 		t.Fatal(err)
 	}
 	missing := missingRegistry.Readiness(context.Background())
+	// The two checks must FAIL by answering, not by timing out.
+	requireDefiniteReadinessAnswers(t, missing)
 	if !slices.Contains(missing.Failed, "provider_route_switches") ||
 		!slices.Contains(missing.Failed, "queue_completeness") {
 		t.Fatalf("missing provider runtime readiness=%#v", missing)
@@ -410,7 +456,7 @@ func TestLaunchDarklyReadinessRequiresConcreteProviderHandlerRegistration(
 
 func TestTransactionModeQueueControlHasActionableReadinessCategory(t *testing.T) {
 	t.Chdir(filepath.Join("..", ".."))
-	registry := health.NewRegistry(100 * time.Millisecond)
+	registry := health.NewRegistry(readinessTestCheckTimeout)
 	components, err := configureWorkerDependencies(
 		context.Background(),
 		config.Config{
@@ -482,7 +528,7 @@ func TestSelectedQueuesUseRegistryBoundedJobDimensions(t *testing.T) {
 		return database, nil
 	}
 	sources.newRiverClientID = func() string { return "test-client" }
-	registry := health.NewRegistry(100 * time.Millisecond)
+	registry := health.NewRegistry(readinessTestCheckTimeout)
 	_, err := configureWorkerDependenciesWithSources(
 		context.Background(),
 		config.Config{
@@ -534,7 +580,7 @@ func TestCeleryRoutedHandlersCannotPassQueueCompleteness(t *testing.T) {
 		return database, nil
 	}
 
-	registry := health.NewRegistry(100 * time.Millisecond)
+	registry := health.NewRegistry(readinessTestCheckTimeout)
 	components, err := configureWorkerDependenciesWithSources(
 		context.Background(),
 		config.Config{
@@ -630,7 +676,7 @@ func TestQueueTelemetryConfigUsesConfiguredTimeout(t *testing.T) {
 			QueueDatabaseMaxConns:  2,
 			QueueTelemetryTimeout:  17 * time.Second,
 		},
-		health.NewRegistry(100*time.Millisecond),
+		health.NewRegistry(readinessTestCheckTimeout),
 		sources,
 	)
 	if err != nil {
@@ -1503,7 +1549,7 @@ func TestUnsupportedAvailableContractVersionFailsClosed(t *testing.T) {
 	sources.openDatabase = func(context.Context, config.Config) (workerDatabase, error) { return database, nil }
 	sources.newRiverClientID = func() string { return "test-client" }
 
-	registry := health.NewRegistry(100 * time.Millisecond)
+	registry := health.NewRegistry(readinessTestCheckTimeout)
 	if _, err := configureWorkerDependenciesWithSources(
 		context.Background(),
 		config.Config{
@@ -1540,7 +1586,7 @@ func TestQueueTelemetryFailureMakesMetricsUnavailable(t *testing.T) {
 	sources.openDatabase = func(context.Context, config.Config) (workerDatabase, error) { return database, nil }
 	sources.newRiverClientID = func() string { return "test-client" }
 
-	registry := health.NewRegistry(100 * time.Millisecond)
+	registry := health.NewRegistry(readinessTestCheckTimeout)
 	if _, err := configureWorkerDependenciesWithSources(
 		context.Background(),
 		config.Config{
@@ -1570,7 +1616,7 @@ func TestMissingContractArtifactsFailRegistryAndQueueChecks(t *testing.T) {
 	}
 	sources.contractRoot = filepath.Join(t.TempDir(), "missing-contracts")
 
-	registry := health.NewRegistry(100 * time.Millisecond)
+	registry := health.NewRegistry(readinessTestCheckTimeout)
 	_, err := configureWorkerDependenciesWithSources(
 		context.Background(),
 		config.Config{Queues: []string{"coverage", "heartbeat", "retention", "webhooks"}, RiverDatabaseSchema: "river"},
@@ -1598,7 +1644,7 @@ func TestReadinessRegistrationFailureClosesConstructedPools(t *testing.T) {
 	}
 	sources.contractRoot = filepath.Join(t.TempDir(), "missing-contracts")
 
-	registry := health.NewRegistry(100 * time.Millisecond)
+	registry := health.NewRegistry(readinessTestCheckTimeout)
 	if err := registry.RegisterRequired("domain_postgres", func(context.Context) error { return nil }); err != nil {
 		t.Fatalf("register collision: %v", err)
 	}
@@ -2786,7 +2832,7 @@ func TestSelectedQueueCapabilityIsValidatedAcrossBuilderFamilies(t *testing.T) {
 				}
 				return family, nil
 			}
-			registry := health.NewRegistry(100 * time.Millisecond)
+			registry := health.NewRegistry(readinessTestCheckTimeout)
 			_, err := configureWorkerDependenciesWithSources(
 				context.Background(), syncConfig, registry, sources,
 			)
@@ -2827,7 +2873,7 @@ func TestOperationalDatabaseFailureCrashesInsteadOfIdlingUnready(t *testing.T) {
 		return nil, errors.New("dial tcp 10.0.0.1:5432: connect: connection refused")
 	}
 	components, err := configureWorkerDependenciesWithSources(
-		context.Background(), cfg, health.NewRegistry(100*time.Millisecond), sources,
+		context.Background(), cfg, health.NewRegistry(readinessTestCheckTimeout), sources,
 	)
 	if !errors.Is(err, errWorkerDependencyUnavailable) || len(components) != 0 {
 		t.Fatalf("operational open failure = %v, %d components; want dependency refusal", err, len(components))
@@ -2842,7 +2888,7 @@ func TestOperationalDatabaseFailureCrashesInsteadOfIdlingUnready(t *testing.T) {
 		return nil, postgres.ErrQueueControlTransactionMode
 	}
 	if _, err := configureWorkerDependenciesWithSources(
-		context.Background(), cfg, health.NewRegistry(100*time.Millisecond), rejected,
+		context.Background(), cfg, health.NewRegistry(readinessTestCheckTimeout), rejected,
 	); err != nil {
 		t.Fatalf("configuration rejection must stay live and unready, got %v", err)
 	}
@@ -3023,7 +3069,7 @@ func TestComposeWorkerFamilyMergesDistinctMetricsSourcesButRejectsADuplicateName
 // registered providerfoundation.Metrics instance -- two here would mean
 // two blocks, which is what a real Prometheus scraper rejects outright.
 func TestSyncRunRollupBumpedMetricAppearsExactlyOnceAcrossBothFamilies(t *testing.T) {
-	registry := health.NewRegistry(100 * time.Millisecond)
+	registry := health.NewRegistry(readinessTestCheckTimeout)
 
 	// providerFoundationFamily: what buildProviderSyncWorker registers.
 	providerFoundationFamily := providerfoundation.NewMetrics()
@@ -3214,7 +3260,7 @@ func TestConfigureSurfacesTheShutdownReasonAndItsOperands(t *testing.T) {
 			ShutdownTimeout:         30 * time.Second,
 			ShutdownTimeoutExplicit: true,
 		},
-		health.NewRegistry(100*time.Millisecond),
+		health.NewRegistry(readinessTestCheckTimeout),
 		sources,
 		logger,
 	)
@@ -3330,7 +3376,7 @@ func TestUnrelatedStartupFaultDoesNotStealTheContractReason(t *testing.T) {
 			WorkerQueueConcurrency: map[string]int{"coverage": 1, "heartbeat": 1, "retention": 1, "webhooks": 4},
 			RiverDatabaseSchema:    "river",
 		},
-		health.NewRegistry(100*time.Millisecond),
+		health.NewRegistry(readinessTestCheckTimeout),
 		sources,
 	)
 	if err == nil {
@@ -3455,7 +3501,7 @@ func TestComposedWorkerWithSurvivingHandlerStillNamesTheShutdownViolation(t *tes
 			ShutdownTimeout:         30 * time.Second,
 			ShutdownTimeoutExplicit: true,
 		},
-		health.NewRegistry(100*time.Millisecond),
+		health.NewRegistry(readinessTestCheckTimeout),
 		sources,
 	)
 	if err == nil {

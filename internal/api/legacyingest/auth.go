@@ -17,7 +17,7 @@ import (
 )
 
 // authRejectedName is the series of the refusals counter.
-const authRejectedName = "dev_health_api_ingest_legacy_auth_rejected_total"
+const authRejectedName = "devhealth_ingest_legacy_auth_rejected_total"
 
 // rejectionReasons is the fixed vocabulary of the counter (never request
 // contents), each series present at zero from the first scrape.

@@ -7,6 +7,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/credentials"
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
@@ -55,8 +57,13 @@ type RowsQueryer interface {
 //
 // An instance or managed host that normalized_operational_provider_instance
 // refuses is ErrInvalidOperationalInstance, raised where Python raises it.
+//
+// cipher reads the credential's encrypted payload (SETTINGS_ENCRYPTION_KEY);
+// nil is a process without a key, which Python's decrypt_value refuses (an
+// unhandled RuntimeError) the moment a payload exists.
 func FindMatchingManagedSources(
-	ctx context.Context, q RowsQueryer, getenv func(string) (string, bool), orgID, system, instance, entityFamily string,
+	ctx context.Context, q RowsQueryer, getenv func(string) (string, bool), cipher credentials.Cipher,
+	orgID, system, instance, entityFamily string,
 ) ([]ManagedSourceMatch, error) {
 	if system == "custom" {
 		return nil, nil
@@ -108,6 +115,7 @@ func FindMatchingManagedSources(
 	if system == "gitlab" {
 		defaultHost = "gitlab.com"
 	}
+	hosts := map[uuid.UUID]resolvedHost{}
 	var matches []ManagedSourceMatch
 	for _, c := range candidates {
 		if !operational {
@@ -122,10 +130,19 @@ func FindMatchingManagedSources(
 		case hasConfigured:
 			managedHost = configured
 		case c.credentialID != nil:
-			base, resolved, err := credentialHost(ctx, q, orgID, system, *c.credentialID)
-			if err != nil {
-				return nil, err
+			// One resolution per credential per call, as Python's
+			// credential_hosts cache: a credential shared by several sources
+			// is read (and, later, counted when unreadable) once.
+			host, cached := hosts[*c.credentialID]
+			if !cached {
+				base, resolved, err := credentialHost(ctx, q, cipher, orgID, system, *c.credentialID)
+				if err != nil {
+					return nil, err
+				}
+				host = resolvedHost{base: base, resolved: resolved}
+				hosts[*c.credentialID] = host
 			}
+			base, resolved := host.base, host.resolved
 			if !resolved {
 				instanceHost, ok := OperationalProviderInstance(system, instance)
 				if !ok {
@@ -166,6 +183,12 @@ func FindMatchingManagedSources(
 		}
 	}
 	return matches, nil
+}
+
+// resolvedHost is one credential's host resolution.
+type resolvedHost struct {
+	base     string
+	resolved bool
 }
 
 // configuredHost is `config.get(f"{system}_instance_url") or
@@ -220,18 +243,19 @@ func deref(value *string) string {
 	return *value
 }
 
-// credentialHost is ownership.py _credential_host_resolution for a
-// credential whose encrypted payload is absent or does not decrypt
-// (credentials None): the org's integration_credentials row must exist and
-// name the same provider (case-folded), and the first non-blank str of its
-// config's "<system>_url", "url" and "base_url" is the host when
+// credentialHost is ownership.py _credential_host_resolution: the org's
+// integration_credentials row must exist and name the same provider
+// (case-folded); its payload is decrypted (get_decrypted_credentials_by_id:
+// no payload, a payload that does not decrypt or parse, and JSON null are
+// all "no credentials", a decrypt that raises for a missing key is an error)
+// and a payload that is not a JSON object is unresolved at once. Otherwise
+// the first non-blank str of the payload's "<system>_url", "url" and
+// "base_url", then the config's, is the host when
 // normalized_operational_provider_instance accepts it; anything else is
-// unresolved. This process holds no decryption key, so a payload that
-// Python decrypts is treated as absent too (named limit: Python then reads
-// the decrypted values' "<system>_url"/"url"/"base_url" first, and refuses
-// a decrypted value that is not a mapping).
-func credentialHost(ctx context.Context, q RowsQueryer, orgID, system string, credentialID uuid.UUID) (string, bool, error) {
-	rows, err := q.Query(ctx, `SELECT provider, config FROM integration_credentials WHERE org_id = $1 AND id = $2`,
+// unresolved (the resolution's UNREADABLE and MISSING_BASE_URL states differ
+// only for the environment host, which has its own path).
+func credentialHost(ctx context.Context, q RowsQueryer, cipher credentials.Cipher, orgID, system string, credentialID uuid.UUID) (string, bool, error) {
+	rows, err := q.Query(ctx, `SELECT provider, config, credentials_encrypted FROM integration_credentials WHERE org_id = $1 AND id = $2`,
 		orgID, credentialID)
 	if err != nil {
 		return "", false, err
@@ -239,10 +263,11 @@ func credentialHost(ctx context.Context, q RowsQueryer, orgID, system string, cr
 	var (
 		provider   string
 		configJSON []byte
+		ciphertext *string
 		found      bool
 	)
 	for rows.Next() {
-		if err := rows.Scan(&provider, &configJSON); err != nil {
+		if err := rows.Scan(&provider, &configJSON, &ciphertext); err != nil {
 			rows.Close()
 			return "", false, err
 		}
@@ -255,14 +280,49 @@ func credentialHost(ctx context.Context, q RowsQueryer, orgID, system string, cr
 	if !found || pythonparity.Fold(provider) != system {
 		return "", false, nil
 	}
+	var values *pyjson.Object
+	if ciphertext != nil && *ciphertext != "" {
+		decoded, readable, err := credentials.DecryptStoredValue(cipher, *ciphertext)
+		if err != nil {
+			return "", false, err
+		}
+		if !readable {
+			// get_decrypted_credentials_by_id_with_outcome's DECRYPT_FAILED counts
+			// one unreadable stored credential, labelled with its provider.
+			credentials.RecordDecryptFailed(ctx, provider)
+		}
+		if readable {
+			switch typed := decoded.(type) {
+			case nil:
+			case *pyjson.Object:
+				values = typed
+			default:
+				return "", false, nil
+			}
+		}
+	}
+	candidates := make([]any, 0, 6)
+	keys := []string{system + "_url", "url", "base_url"}
+	for _, key := range keys {
+		var candidate any
+		if values != nil {
+			if value, ok := values.Get(key); ok {
+				candidate = value
+			}
+		}
+		candidates = append(candidates, candidate)
+	}
 	config := decodeMetadata(configJSON)
-	for _, key := range []string{system + "_url", "url", "base_url"} {
-		candidate, ok := config[key].(string)
-		if !ok || pythonparity.Strip(candidate) == "" {
+	for _, key := range keys {
+		candidates = append(candidates, config[key])
+	}
+	for _, candidate := range candidates {
+		text, ok := candidate.(string)
+		if !ok || pythonparity.Strip(text) == "" {
 			continue
 		}
-		if _, valid := OperationalProviderInstance(system, candidate); valid {
-			return candidate, true, nil
+		if _, valid := OperationalProviderInstance(system, text); valid {
+			return text, true, nil
 		}
 	}
 	return "", false, nil

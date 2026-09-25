@@ -1,10 +1,9 @@
 **/data/**
 # Tracked on purpose: a source data file, not a data artifact.
 !src/dev_health_ops/data/common_passwords.txt
-# Go's go:embed copy of the same denylist (internal/apiservice/admin's
-# password_policy.go port) -- keep the two in sync if the Python list
-# changes; see that file's own doc comment.
-!internal/apiservice/admin/data/common_passwords.txt
+# Go's go:embed copy of the same denylist (internal/auth/passwordpolicy);
+# TestEmbeddedListMatchesThePythonOne fails when the two drift.
+!internal/auth/passwordpolicy/data/common_passwords.txt
 .env
 .env.local
 .env.*.local

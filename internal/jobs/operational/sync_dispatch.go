@@ -13,6 +13,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 )
 
 // ErrWebhookSyncUnroutable is wrapped into the Permanent error Work returns
@@ -534,18 +536,30 @@ WHERE org_id = $1 AND sync_config_id = $2 AND job_type = 'sync'`, orgID, configI
 	if isActive && explicitCron != "" {
 		status = jobStatusActive
 	}
-	jobConfig, err := json.Marshal(map[string]string{"provider": provider, "sync_config_id": configID})
+	// job_config is stored as the ORM writes a JSON column: json.dumps of
+	// {"provider": ..., "sync_config_id": ...}, in that key order.
+	config := pyjson.NewObject()
+	config.Set("provider", provider)
+	config.Set("sync_config_id", configID)
+	jobConfig, err := pyjson.Dumps(config)
 	if err != nil {
 		return "", err
 	}
 
+	// Every NOT NULL column the ScheduledJob model fills from its Python-side
+	// defaults (is_running, run_count, failure_count, created_at, updated_at)
+	// is written here, as the ORM writes them. created_at and updated_at have
+	// no server default, so omitting them fails with 23502; the other three
+	// carry server defaults and are written only to match the ORM's insert.
+	now := time.Now().UTC()
 	err = pool.QueryRow(ctx, `
 INSERT INTO public.scheduled_jobs
-	(id, org_id, name, job_type, provider, schedule_cron, timezone, job_config, sync_config_id, status)
-VALUES (gen_random_uuid(), $1, $2, 'sync', $3, $4, $5, $6::jsonb, $7, $8)
-ON CONFLICT (org_id, sync_config_id, job_type) DO NOTHING
+	(id, org_id, name, job_type, provider, schedule_cron, timezone, job_config, sync_config_id, status,
+	 is_running, run_count, failure_count, created_at, updated_at)
+VALUES (gen_random_uuid(), $1, $2, 'sync', $3, $4, $5, $6::json, $7, $8, false, 0, 0, $9, $9)
+ON CONFLICT DO NOTHING
 RETURNING id::text`,
-		orgID, fmt.Sprintf("sync-config-%s", configID), provider, cron, tz, jobConfig, configID, status,
+		orgID, fmt.Sprintf("sync-config-%s", configID), provider, cron, tz, jobConfig, configID, status, now,
 	).Scan(&jobID)
 	if err == nil {
 		return jobID, nil
@@ -554,11 +568,19 @@ RETURNING id::text`,
 		return "", err
 	}
 	// A concurrent webhook delivery for the same never-before-scheduled
-	// config won the INSERT race -- read back the row it created.
+	// config won the INSERT race -- read back the row it created. The
+	// conflict clause has no target on purpose: the table has two unique
+	// keys, (org_id, sync_config_id, job_type) and (org_id, provider, name),
+	// and the name is derived from the config id, so a racing insert
+	// collides on both and the arbiter Postgres checks first is not ours to
+	// pick. A targeted clause raised 23505 on the name key.
 	if err := pool.QueryRow(ctx, `
 SELECT id::text FROM public.scheduled_jobs
 WHERE org_id = $1 AND sync_config_id = $2 AND job_type = 'sync'`, orgID, configID,
 	).Scan(&jobID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", fmt.Errorf("scheduled job name %q is held by a row for another sync config", fmt.Sprintf("sync-config-%s", configID))
+		}
 		return "", err
 	}
 	return jobID, nil

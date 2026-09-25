@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/goapiproof"
@@ -33,8 +34,16 @@ func TestDHOAPICorpusEntriesAreMountedRoutes(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pool.Close()
+	// A ClickHouse connection that never connects (clickhouse.Open dials on the
+	// first query) makes the ClickHouse-backed area (teams, identities) mount,
+	// exactly as in a configured service.
+	clickHouse, err := clickhouse.Open(&clickhouse.Options{Addr: []string{"127.0.0.1:1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = clickHouse.Close() }()
 	mounted := map[string]bool{}
-	for _, route := range Routes(Deps{Pool: pool, Auth: auth, Guard: policy.NewGuard(auth, quietLogger())}, quietLogger()) {
+	for _, route := range Routes(Deps{Pool: pool, ClickHouse: clickHouse, Auth: auth, Guard: policy.NewGuard(auth, quietLogger())}, quietLogger()) {
 		mounted[route.Method+" "+route.Pattern] = true
 	}
 

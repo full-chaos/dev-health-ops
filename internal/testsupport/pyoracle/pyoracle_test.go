@@ -131,3 +131,36 @@ func TestRunErrorNilPassthrough(t *testing.T) {
 type fakeExitError struct{ msg string }
 
 func (e *fakeExitError) Error() string { return e.msg }
+
+// TestDeployedVersionError pins the version gate at its boundary: the
+// deployed release and newer pass; the release before it, an older major, an
+// unparsable answer and a probe that failed to run are all refused.
+func TestDeployedVersionError(t *testing.T) {
+	cases := []struct {
+		name    string
+		output  string
+		runErr  error
+		wantErr bool
+	}{
+		{"deployed release", "3.14\n", nil, false},
+		{"newer minor", "3.15\n", nil, false},
+		{"newer major", "4.0\n", nil, false},
+		{"one minor before", "3.13\n", nil, true},
+		{"hosted runner release", "3.12\n", nil, true},
+		{"older major", "2.7\n", nil, true},
+		{"unparsable", "not-a-version\n", nil, true},
+		{"empty answer", "", nil, true},
+		{"probe failed", "3.14\n", os.ErrNotExist, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := DeployedVersionError("/x/python", []byte(tc.output), tc.runErr)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("output %q: err = %v, wantErr %v", tc.output, err, tc.wantErr)
+			}
+			if err != nil && !strings.Contains(err.Error(), "/x/python") {
+				t.Fatalf("error %q does not name the interpreter", err)
+			}
+		})
+	}
+}

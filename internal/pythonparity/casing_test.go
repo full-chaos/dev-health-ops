@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"unicode"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 )
@@ -149,47 +150,130 @@ func TestLowerAndUpperAreSafeUnderConcurrency(t *testing.T) {
 	}
 }
 
-// TestFinalSigmaLookaheadBoundaryIsWhereWeMeasuredIt pins the ONE known
-// divergence between Lower and CPython's str.lower(): x/text's Final_Sigma
-// lookahead is bounded at 31 case-ignorable runes, CPython's is unbounded.
-//
-// It is asserted, not merely documented, for two reasons. First, the
-// enumeration test above structurally cannot see it -- that walks single code
-// points, and this needs a 33+ rune input. Second, a divergence recorded only
-// in prose silently becomes wrong when a dependency bump moves it: if x/text
-// ever widens or removes the bound, THIS test fails and tells the next reader
-// the doc comment needs updating, rather than leaving a stale measurement that
-// reads as current.
-//
-// The assertion is deliberately two-sided -- n=30 must still agree with CPython
-// and n=31 must still differ. A one-sided test would keep passing if the bound
-// moved in the direction that made things agree, hiding the change.
-func TestFinalSigmaLookaheadBoundaryIsWhereWeMeasuredIt(t *testing.T) {
+// TestFinalSigmaMatchesLivePythonAtAnyDistance holds Lower to CPython's
+// str.lower() on capital sigmas whose context lies at every distance around
+// x/text's own 31-rune lookahead bound, which Lower no longer relies on:
+// medial and final positions, dots, apostrophes and combining marks, the
+// scan in both directions, several sigmas in one string, and neighbours with
+// multi-rune mappings.
+func TestFinalSigmaMatchesLivePythonAtAnyDistance(t *testing.T) {
 	python := requireLivePython(t)
-
-	for _, dots := range []int{30, 31} {
-		input := "AΣ" + strings.Repeat(".", dots) + "B"
-		command := exec.Command(python, "-c", "import sys; sys.stdout.write(sys.argv[1].lower())", input)
-		rendered, err := command.Output()
-		if err != nil {
-			t.Fatalf("live python lower(n=%d): %v", dots, pyoracle.RunError(python, err, nil))
-		}
-		cpython, got := string(rendered), Lower(input)
-		agrees := cpython == got
-		switch dots {
-		case 30:
-			if !agrees {
-				t.Errorf("n=30 must still AGREE with CPython (inside x/text's lookahead bound), "+
-					"but python=%q go=%q -- the measured boundary has moved", cpython, got)
-			}
-		case 31:
-			if agrees {
-				t.Errorf("n=31 now AGREES with CPython, but the recorded measurement says x/text's " +
-					"Final_Sigma lookahead gives up here. x/text's behaviour has changed: re-measure " +
-					"the boundary and update Lower's doc comment, which still claims 31.")
-			}
+	var inputs []string
+	for _, n := range []int{0, 1, 2, 30, 31, 32, 33, 64, 1000} {
+		for _, pad := range []string{".", "'", "\u0301", "\u00b7", "\u02b0", ".\u0301'"} {
+			run := strings.Repeat(pad, n)
+			inputs = append(inputs,
+				"AΣ"+run+"B",        // a cased letter follows: medial
+				"AΣ"+run,            // nothing cased follows: final
+				"AΣ"+run+" B",       // a space stops the scan: final
+				"A"+run+"Σ",         // cased before, across the run: final
+				run+"Σ",             // nothing cased before: medial
+				" "+run+"ΣB",        // uncased before: medial
+				"ΑΣ"+run+"ΣΟΣ",      // three sigmas, one string
+				"İΣ"+run+"ß",        // multi-rune neighbours
+				"ǅ"+run+"Σ"+run+"1", // titlecase before, digit after
+			)
 		}
 	}
+	encoded, err := json.Marshal(inputs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command(python, "-c", "import json, sys; json.dump([s.lower() for s in json.load(sys.stdin)], sys.stdout)")
+	command.Stdin = strings.NewReader(string(encoded))
+	rendered, err := command.Output()
+	if err != nil {
+		t.Fatalf("live python lower: %v", pyoracle.RunError(python, err, nil))
+	}
+	var want []string
+	if err := json.Unmarshal(rendered, &want); err != nil || len(want) != len(inputs) {
+		t.Fatalf("decode: %v (%d of %d)", err, len(want), len(inputs))
+	}
+	for index, input := range inputs {
+		if got := Lower(input); got != want[index] {
+			t.Errorf("Lower(%q) = %q, python %q", input, got, want[index])
+		}
+	}
+	t.Logf("%d inputs compared", len(inputs))
+}
+
+// TestSigmaPropertiesMatchLivePythonOnEveryCodePoint derives, for every code
+// point c, which sigma CPython writes in three contexts -- c before a sigma,
+// c between a cased letter and a sigma, c between a sigma and a cased letter
+// -- which together fix c's Case_Ignorable property and, for a character that
+// is not case-ignorable, its Cased property. It requires Lower to write the
+// same sigma in each context.
+//
+// Named exclusion, derived rather than listed: Go's unicode tables may be a
+// newer Unicode version than the running CPython's, so a code point whose
+// general category differs between the two (unassigned in CPython's version,
+// or re-categorised since) is skipped and counted.
+func TestSigmaPropertiesMatchLivePythonOnEveryCodePoint(t *testing.T) {
+	python := requireLivePython(t)
+	const derive = `
+import sys, unicodedata
+bits, cats = [], []
+for cp in range(0x110000):
+    c = chr(cp)
+    b = 0
+    if (c + "Σ").lower()[-1] == "ς": b |= 1
+    if ("A" + c + "Σ").lower()[-1] == "ς": b |= 2
+    if ("AΣ" + c + "B").lower()[1] == "ς": b |= 4
+    bits.append(str(b))
+    cats.append(unicodedata.category(c))
+sys.stdout.write(unicodedata.unidata_version + "\n" + "".join(bits) + "\n" + "".join(cats))
+`
+	rendered, err := exec.Command(python, "-c", derive).Output()
+	if err != nil {
+		t.Fatalf("derive sigma properties: %v", pyoracle.RunError(python, err, nil))
+	}
+	parts := strings.SplitN(string(rendered), "\n", 3)
+	if len(parts) != 3 || len(parts[1]) != 0x110000 || len(parts[2]) != 2*0x110000 {
+		t.Fatalf("derivation output malformed (%d parts)", len(parts))
+	}
+	bits, categories := parts[1], parts[2]
+	compared, excluded := 0, 0
+	for cp := rune(0); cp < 0x110000; cp++ {
+		if cp == capitalSigma || (cp >= 0xd800 && cp <= 0xdfff) {
+			continue
+		}
+		if categories[2*cp:2*cp+2] != generalCategory(cp) {
+			excluded++
+			continue
+		}
+		c := string(cp)
+		got := 0
+		if strings.HasSuffix(Lower(c+"Σ"), "ς") {
+			got |= 1
+		}
+		if strings.HasSuffix(Lower("A"+c+"Σ"), "ς") {
+			got |= 2
+		}
+		if strings.HasPrefix(strings.TrimPrefix(Lower("AΣ"+c+"B"), "a"), "ς") {
+			got |= 4
+		}
+		if want := int(bits[cp] - '0'); got != want {
+			t.Errorf("U+%04X: go contexts %03b, python %03b", cp, got, want)
+		}
+		compared++
+	}
+	if compared < 0x100000 {
+		t.Fatalf("only %d code points compared", compared)
+	}
+	t.Logf("python unicode %s, go unicode %s: %d code points compared, %d skipped for a differing general category",
+		parts[0], unicode.Version, compared, excluded)
+}
+
+// generalCategory is cp's two-letter general category in Go's tables ("Cn"
+// when unassigned), for the exclusion above. "LC" (Lu+Ll+Lt) is a group,
+// not a category.
+func generalCategory(cp rune) string {
+	for name, table := range unicode.Categories {
+		if len(name) == 2 && name != "LC" && unicode.Is(table, cp) {
+			return name
+		}
+	}
+	return "Cn"
 }
 
 func TestLowerAndUpperPassThroughTheEmptyString(t *testing.T) {

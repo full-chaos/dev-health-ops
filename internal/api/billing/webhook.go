@@ -117,7 +117,7 @@ func (h handlers) stripeWebhook(w http.ResponseWriter, r *http.Request) {
 			h.subscriptionDeleted(ctx, dataObject)
 		}
 	case "customer.subscription.trial_will_end":
-		if err := h.trialWillEnd(ctx, dataObject); err != nil {
+		if err := h.trialWillEnd(ctx, eventID, dataObject); err != nil {
 			h.internal(w, r, "stripe webhook", err)
 			return
 		}

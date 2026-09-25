@@ -18,6 +18,7 @@ import (
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/quadrant"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/timewindow"
 )
@@ -84,7 +85,7 @@ type Coverage struct {
 // always present with a null value (no `omitempty`), matching Pydantic's
 // `model_dump(mode="json")` for an explicit None field.
 type Freshness struct {
-	LastIngestedAt         *time.Time                `json:"last_ingested_at"`
+	LastIngestedAt         *pytime.NaiveDateTime     `json:"last_ingested_at"`
 	LatestSuccessfulSyncAt *time.Time                `json:"latest_successful_sync_at"`
 	Sources                pyjson.OrderedMap[string] `json:"sources"`
 	Coverage               Coverage                  `json:"coverage"`
@@ -92,8 +93,8 @@ type Freshness struct {
 
 // SparkPoint ports SparkPoint (api/models/schemas.py:22-24).
 type SparkPoint struct {
-	Ts    time.Time `json:"ts"`
-	Value float64   `json:"value"`
+	Ts    pytime.NaiveDateTime `json:"ts"`
+	Value float64              `json:"value"`
 }
 
 // PersonDelta ports PersonDelta (api/models/schemas.py:378-384).
@@ -769,10 +770,7 @@ func BuildSummaryResponse(ctx context.Context, reader *Reader, orgID string, par
 		previous := safeFloat(previousValue)
 		pctChange := safeFloat(deltaPct(current, previous))
 
-		spark := make([]SparkPoint, 0, len(series))
-		for _, row := range series {
-			spark = append(spark, SparkPoint{Ts: row.Day, Value: safeTransform(metric.Transform, safeFloat(row.Value))})
-		}
+		spark := sparkPoints(series, metric.Transform)
 
 		deltas = append(deltas, PersonDelta{
 			Metric:   metric.Metric,
@@ -814,7 +812,7 @@ func BuildSummaryResponse(ctx context.Context, reader *Reader, orgID string, par
 	return SummaryResponse{
 		Person: person,
 		Freshness: Freshness{
-			LastIngestedAt:         lastIngested,
+			LastIngestedAt:         naiveLastIngested(lastIngested),
 			LatestSuccessfulSyncAt: nil,
 			Sources:                sources,
 			Coverage:               coverage,
@@ -831,4 +829,27 @@ func BuildSummaryResponse(ctx context.Context, reader *Reader, orgID string, par
 			},
 		},
 	}, nil
+}
+
+// sparkPoints ports _spark_points (services/people.py): each series row's
+// `day` (a ClickHouse Date, which Python holds as a `date`) becomes the ts of
+// a SparkPoint, a pydantic `datetime` field, so the wire carries midnight of
+// that date with no zone.
+func sparkPoints(rows []personMetricTimeseriesRow, transform func(float64) float64) []SparkPoint {
+	points := make([]SparkPoint, 0, len(rows))
+	for _, row := range rows {
+		points = append(points, SparkPoint{Ts: pytime.NaiveDay(row.Day), Value: safeTransform(transform, safeFloat(row.Value))})
+	}
+	return points
+}
+
+// naiveLastIngested is fetch_last_ingested_at's value on the wire: a
+// DateTime('UTC') column that clickhouse-connect returns as a naive datetime
+// (the same producer and wire form as the home route's Freshness).
+func naiveLastIngested(value *time.Time) *pytime.NaiveDateTime {
+	if value == nil {
+		return nil
+	}
+	naive := pytime.NaiveUTC(*value)
+	return &naive
 }

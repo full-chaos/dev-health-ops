@@ -202,7 +202,7 @@ func apiPosture() RolePosture {
 			// (mark_candidate_ready_from_verified_ping). Binding admin CRUD
 			// (create/rotate/activate/revoke) is CHAOS-6255, not this route.
 			// CHAOS-6306 adds delete (a purge target) on top.
-			{"pagerduty_webhook_bindings", false, true, true},
+			{"pagerduty_webhook_bindings", true, true, true},
 
 			// CHAOS-6306 (org deletion): org_deletion.py's remaining purge
 			// targets, none previously declared. Every entry here is

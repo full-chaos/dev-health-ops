@@ -240,3 +240,28 @@ def test_a_duplicate_path_and_a_missing_manifest_are_reported(tmp_path):
     assert len(rows) == 1 and any("listed twice" in problem for problem in problems)
     _, missing = checker.load_manifest(tmp_path / "absent.tsv")
     assert any("does not exist" in problem for problem in missing)
+
+
+def test_a_template_covers_its_static_sibling_as_the_ingress_does(tree):
+    root, source, _ = tree
+    manifest = {
+        "/api/v1/billing/plans/{}": checker.ManifestRow(
+            "rev1", "go-api", "/api/v1/billing/plans/{}"
+        )
+    }
+    pull = _route(source, "stubbed", "/api/v1/billing/plans/pull-stripe", method="POST")
+    by_id = _route(
+        source, "stubbed_return", "/api/v1/billing/plans/{plan_id}", method="GET"
+    )
+    assert checker.check([pull, by_id], manifest, root) == []
+    # ... but not a longer path, a different prefix, or the collection itself
+    for path in (
+        "/api/v1/billing/plans",
+        "/api/v1/billing/plans/a/b",
+        "/api/v1/billing/planx/1",
+    ):
+        assert not checker.covers("/api/v1/billing/plans/{}", path), path
+    assert checker.covers("/a/{}/b", "/a/x/b") and not checker.covers(
+        "/a/{}/b", "/a/x/y/b"
+    )
+    assert checker.covers("/exact", "/exact")

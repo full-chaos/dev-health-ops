@@ -57,6 +57,17 @@ def normalize(path: str) -> str:
     return stripped.rstrip("/") or "/"
 
 
+def covers(template: str, path: str) -> bool:
+    """Whether the ingress rule ``template`` (parameters written ``{}``) sends
+    ``path`` to its service. The ingress matches a parameter as ``[^/]+``, so a
+    template also covers a static sibling: ``/plans/{}`` covers
+    ``/plans/pull-stripe``, exactly as the deployed rule does."""
+    if template == path:
+        return True
+    pattern = "^" + "[^/]+".join(re.escape(part) for part in template.split("{}")) + "$"
+    return re.fullmatch(pattern, path) is not None
+
+
 @dataclass(frozen=True)
 class ManifestRow:
     rev: str
@@ -170,10 +181,9 @@ def check(
     routes: list[dict], manifest: dict[str, ManifestRow], root: Path
 ) -> list[str]:
     problems: list[str] = []
-    listed = set(manifest)
     for route in stub_routes(routes, root):
         path = normalize(route["path"])
-        if path not in listed:
+        if not any(covers(template, path) for template in manifest):
             problems.append(
                 f"{route['method']} {route['path']} ({route.get('file')}:{route.get('line')}): the body is the "
                 f"'served by Go' refusal stub, but {path} is not in the Go-served path manifest "
@@ -181,7 +191,7 @@ def check(
             )
     served = {normalize(route["path"]) for route in routes}
     for path, row in sorted(manifest.items()):
-        if path not in served:
+        if not any(covers(path, route_path) for route_path in served):
             problems.append(
                 f"{MANIFEST_RELATIVE}: {row.rev} {row.plane} {path} names no served Python route: "
                 "remove the row or fix the path"

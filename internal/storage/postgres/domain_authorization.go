@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -1260,9 +1261,38 @@ func CheckRolePosture(ctx context.Context, pool *pgxpool.Pool, expectedRole, riv
 		// match its declared posture. A completely different incident from
 		// the case above, and a role name is a checked-in runtime identifier
 		// (config, not connection material), so it is always safe to log.
-		return fmt.Errorf("%w: %w for role %q", ErrUnavailable, ErrPostureRefused, expectedRole)
+		return fmt.Errorf("%w: %w for role %q: %s", ErrUnavailable, ErrPostureRefused, expectedRole,
+			firstPostureMismatch(ctx, pool, expectedRole, posture))
 	default:
 		return nil
+	}
+}
+
+// postureDiagnoseTimeout bounds the diagnostic pass that names the first
+// mismatched privilege once rolePostureQuery has refused. The caller's own
+// context may already be spent by the slow refusing query, so the pass runs
+// on a detached context of its own.
+const postureDiagnoseTimeout = 5 * time.Second
+
+// firstPostureMismatch names the first declared-vs-actual gap behind a
+// refusal, in the redacted PostureGap.String form (checked-in table and column
+// names plus SQL privilege keywords only -- safe to log and to wrap into a
+// readiness error). rolePostureQuery answers one boolean, so before CHAOS-6765
+// a refusal read as an unactionable "posture refused"; the operator had to run
+// DiagnoseRolePosture by hand. DiagnoseRolePosture does not cover every route
+// rolePostureQuery does (ownership, database-level and River-schema
+// privileges), so an empty result is reported as such, never as "no problem".
+func firstPostureMismatch(ctx context.Context, pool *pgxpool.Pool, expectedRole string, posture RolePosture) string {
+	diagnoseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), postureDiagnoseTimeout)
+	defer cancel()
+	gaps, err := DiagnoseRolePosture(diagnoseCtx, pool, expectedRole, posture)
+	switch {
+	case err != nil:
+		return "first mismatch unknown: the diagnostic pass could not run"
+	case len(gaps) == 0:
+		return "first mismatch not identified by the table, column and sequence diagnostics (an ownership, database-level or River-schema privilege)"
+	default:
+		return "first mismatch: " + gaps[0].String()
 	}
 }
 

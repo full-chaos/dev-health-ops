@@ -148,9 +148,12 @@ func TestACaseThatCouldProveNothingIsRefused(t *testing.T) {
 		t.Fatalf("a well-formed case was refused: %v", err)
 	}
 	for name, mutate := range map[string]func(*Case){
-		"no name":           func(c *Case) { c.Name = " " },
-		"no operation":      func(c *Case) { c.Operation = "" },
-		"no variables":      func(c *Case) { c.VariablesJSON = "" },
+		"no name":      func(c *Case) { c.Name = " " },
+		"no operation": func(c *Case) { c.Operation = "" },
+		"no variables": func(c *Case) { c.VariablesJSON = "" },
+		"both variable forms": func(c *Case) {
+			c.Variables = func(string, RunTag) string { return "{}" }
+		},
 		"no seeder":         func(c *Case) { c.Seeder = nil },
 		"no tables":         func(c *Case) { c.Tables = nil },
 		"no baseline":       func(c *Case) { c.BaselineDigest = "" },
@@ -163,5 +166,45 @@ func TestACaseThatCouldProveNothingIsRefused(t *testing.T) {
 		if err := c.Validate(); err == nil {
 			t.Errorf("%s: a case that could not prove anything was accepted", name)
 		}
+	}
+}
+
+func TestADateTimeStringIsTheInstantNotItsSpelling(t *testing.T) {
+	n := NewNormalizer(nil, "", epoch)
+	near := epoch.Add(2 * time.Minute)
+	for _, spelling := range []string{
+		near.UTC().Format(time.RFC3339Nano),                   // Go: "...Z"
+		near.UTC().Format("2006-01-02T15:04:05.000000-07:00"), // Python isoformat: "+00:00"
+	} {
+		if got := mustValue(t, n, spelling); got != "<now>" {
+			t.Errorf("%q is an instant near now and must be masked, got %v", spelling, got)
+		}
+	}
+	far := "2026-01-02T03:04:05.5+00:00"
+	if got := mustValue(t, n, far); got != "2026-01-02T03:04:05.5Z" {
+		t.Errorf("a far instant must keep its value under one spelling, got %v", got)
+	}
+	if a, b := mustValue(t, n, "2026-01-02T03:04:05Z"), mustValue(t, n, "2026-01-02T03:04:05+00:00"); a != b {
+		t.Errorf("Z and +00:00 spell one instant but normalized differently: %v vs %v", a, b)
+	}
+	// Free text is never parsed piecewise.
+	text := "ran at 2026-01-02T03:04:05Z today"
+	if got := mustValue(t, n, text); got != text {
+		t.Errorf("free text containing an instant was rewritten: %v", got)
+	}
+}
+
+func TestVariablesAreBuiltPerRunWhenTheCaseSaysSo(t *testing.T) {
+	c := Case{Name: "n", Operation: "op", Seeder: noSeeder{}, Tables: []Table{{Label: "t", SQL: "select 1"}}, BaselineDigest: "sha256:abc",
+		Variables: func(org string, run RunTag) string { return `{"orgId":"` + org + `","name":"` + string(run) + `"}` }}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("a case that builds its variables was refused: %v", err)
+	}
+	if got := c.VariablesText("org-1", "run-9"); got != `{"orgId":"org-1","name":"run-9"}` {
+		t.Errorf("variables not built from the org and run: %s", got)
+	}
+	static := Case{VariablesJSON: `{"a":1}`}
+	if static.VariablesText("o", "r") != `{"a":1}` {
+		t.Error("a static case must send its text")
 	}
 }

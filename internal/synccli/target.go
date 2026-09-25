@@ -111,6 +111,15 @@ type Plan struct {
 	UseAsync       bool
 
 	GitHub *GitHubCredentials
+
+	// Synthetic plans (sync_synthetic_target): the repo the rows are for, the
+	// window in days (resolve_date_range), its last day, --defer-finalize, and
+	// whether the run completes a sync_run itself.
+	RepoName      string
+	Days          *big.Int
+	EndDay        *time.Time
+	DeferFinalize bool
+	Finalizes     bool
 }
 
 // Refusal is a request the Python CLI also refuses. Code is the exit code:
@@ -341,10 +350,13 @@ func BuildPlan(target string, args []string, in Inputs) (plan Plan, help bool, e
 		plan.GitLabToken = token
 	case "synthetic":
 		// Synthetic git/prs/blame has no Go path (undecided) and the other
-		// targets are `dho fixtures load-synthetic`: the request is valid as
-		// far as the shared flags go, and the executor decides.
-		plan.Call = CallSynthetic
-		return plan, false, nil
+		// targets are `dho fixtures load-synthetic`; the request is still
+		// validated exactly as Python validates it, and the executor decides.
+		name, rerr := syntheticRepoName(v)
+		if rerr != nil {
+			return Plan{}, false, rerr
+		}
+		plan.Call, plan.RepoName = CallSynthetic, name
 	}
 
 	if serr := validateSink(v["sink"], v); serr != nil {
@@ -354,9 +366,15 @@ func BuildPlan(target string, args []string, in Inputs) (plan Plan, help bool, e
 		// detect_db_type raises ValueError: an uncaught traceback, exit 1.
 		return Plan{}, false, &Refusal{Code: cli.ExitFailure, Stage: "error", Type: "ValueError", Message: "Could not detect database type from the ClickHouse connection string (ValueError)"}
 	}
+	if providerName == "synthetic" {
+		if serr := fillSynthetic(&plan, v, in); serr != nil {
+			return Plan{}, false, serr
+		}
+		return plan, false, nil
+	}
 	since, backfill, overflow := resolveWindow(v, in)
 	if overflow {
-		return Plan{}, false, &Refusal{Code: cli.ExitFailure, Stage: "error", Type: "OverflowError", Message: "date value out of range (OverflowError)"}
+		return Plan{}, false, overflowRefusal()
 	}
 	plan.Since = since
 	plan.MaxCommits = resolveMaxCommits(v, since != nil || backfill.Cmp(big.NewInt(1)) > 0)
@@ -533,22 +551,9 @@ func pyAddDays(t time.Time, n int64) (time.Time, bool) {
 // reports the OverflowError Python raises for a date outside years 1..9999.
 func resolveWindow(v map[string]string, in Inputs) (since *time.Time, backfill *big.Int, overflow bool) {
 	backfill = intOr(v, "backfill", 1)
-	var before *time.Time
-	if text, ok := v["before"]; ok {
-		t, _ := pyDate(text)
-		before = &t
-	}
-	deprecated, hasDeprecated := v["day"]
-	if !hasDeprecated {
-		deprecated, hasDeprecated = v["date"]
-	}
-	if hasDeprecated && before == nil {
-		t, _ := pyDate(deprecated)
-		next, ok := pyAddDays(t, 1)
-		if !ok {
-			return nil, backfill, true
-		}
-		before = &next
+	before, overflow := effectiveBefore(v)
+	if overflow {
+		return nil, backfill, true
 	}
 	if text, ok := v["since"]; ok {
 		t, _ := pyDate(text)
@@ -733,12 +738,53 @@ func writeLine(w io.Writer, line string) {
 	}
 }
 
+// optionHelp is the help line of each option, in dev-hops's order (the
+// argparse help strings of _add_sync_target_args, add_sink_arg and
+// add_date_range_args).
+var optionHelp = []struct{ flags, help string }{
+	{"--sink SINK", "analytics sink; only 'clickhouse' (or 'auto') is supported"},
+	{"--provider {local,github,gitlab,synthetic}", "source provider (required)"},
+	{"--auth AUTH", "provider token override (GitHub/GitLab)"},
+	{"--github-app-id ID", "GitHub App id (github)"},
+	{"--github-app-key-path PATH", "GitHub App private key PEM (github)"},
+	{"--github-app-installation-id ID", "GitHub App installation id (github)"},
+	{"--repo-path PATH", "local git repository path (local; default .)"},
+	{"--owner OWNER", "GitHub owner/org (single repo mode)"},
+	{"--repo REPO", "GitHub repo name (single repo mode)"},
+	{"--project-id ID", "GitLab project id (single project mode)"},
+	{"--gitlab-url URL", "GitLab instance URL (default $GITLAB_URL or https://gitlab.com)"},
+	{"--group GROUP", "batch mode org/group name"},
+	{"-s, --search PATTERN", "batch mode pattern, e.g. 'org/*'"},
+	{"--batch-size N", "batch size (default 10)"},
+	{"--max-concurrent N", "maximum concurrent repos (default 4)"},
+	{"--rate-limit-delay SECONDS", "delay between batches (default 1.0)"},
+	{"--max-repos N", "maximum repos or projects in a batch"},
+	{"--use-async", "use the async batch path"},
+	{"--max-commits-per-repo N", "commit cap per repo (default 100 without a window)"},
+	{"--repo-name NAME", "synthetic repo name (default meridian/web-app)"},
+	{"--defer-finalize", "synthetic sync-run-backed targets: write rows, do not complete the sync run"},
+	{"--since DATE", "start date, inclusive, ISO YYYY-MM-DD (excludes --backfill)"},
+	{"--backfill N", "process N days ending before --before (default 1; excludes --since)"},
+	{"--before DATE", "end date, exclusive, ISO YYYY-MM-DD (default tomorrow)"},
+	{"--log-level LEVEL", "global: logging level"},
+	{"--db URI", "global: PostgreSQL URI (env POSTGRES_URI or DATABASE_URI)"},
+	{"--analytics-db URI", "global: ClickHouse URI (env CLICKHOUSE_URI)"},
+	{"--org ORG", "global: organization id (env ORG_ID; else the first organization in PostgreSQL)"},
+	{"-l, --llm-provider NAME", "global: accepted and ignored by sync"},
+	{"-m, --model NAME", "global: accepted and ignored by sync"},
+}
+
 func targetUsage(target string) string {
-	return fmt.Sprintf("usage: dho sync %s --provider {local,github,gitlab,synthetic} [options]\n\n%s.\n\n"+
-		"--provider is required. github needs --owner and --repo (or --search); gitlab needs --project-id\n"+
-		"(or --search); local reads --repo-path (default .). ClickHouse comes from --analytics-db or CLICKHOUSE_URI.\n"+
-		"Window: --since YYYY-MM-DD | --backfill N (default 1), --before YYYY-MM-DD. Exit codes: 0 ok, 1 failure,\n"+
-		"2 usage error, 3 not available in dho yet.", target, targetSummaries[target])
+	var b strings.Builder
+	fmt.Fprintf(&b, "usage: dho sync %s --provider {local,github,gitlab,synthetic} [options]\n\n%s.\n\noptions:\n", target, targetSummaries[target])
+	for _, option := range optionHelp {
+		fmt.Fprintf(&b, "  %-42s %s\n", option.flags, option.help)
+	}
+	b.WriteString("  -h, --help                                 show this help\n\n")
+	b.WriteString("github needs --owner and --repo (or --search); gitlab needs --project-id (or --search).\n")
+	b.WriteString("Flags accept unique prefixes, --flag=value and -sVALUE, as dev-hops does. Global flags go after the verb.\n")
+	b.WriteString("Exit codes: 0 ok, 1 refused by the verb, 2 usage error, 3 not available in dho yet.")
+	return b.String()
 }
 
 // TargetCommands returns the `sync <target>` verbs, run by exec (the not-yet-
@@ -760,4 +806,109 @@ func TargetCommands(exec Executor) []cli.Command {
 		})
 	}
 	return commands
+}
+
+// defaultDemoRepoName is fixtures.demo_identity.DEFAULT_DEMO_REPO_NAME.
+const defaultDemoRepoName = "meridian/web-app"
+
+// syntheticRunBacked are the synthetic targets that complete a real sync_run
+// (_SYNC_RUN_BACKED_SYNTHETIC_TARGETS).
+var syntheticRunBacked = map[string]bool{"cicd": true, "deployments": true, "incidents": true, "tests": true}
+
+// syntheticRepoName is _resolve_synthetic_repo_name.
+func syntheticRepoName(v map[string]string) (string, *Refusal) {
+	if name := v["repo_name"]; name != "" {
+		return name, nil
+	}
+	if v["owner"] != "" && v["repo"] != "" {
+		return v["owner"] + "/" + v["repo"], nil
+	}
+	if search := v["search"]; search != "" {
+		if strings.ContainsAny(search, "*?") {
+			return "", exitRefusal("Synthetic provider does not support pattern search; use --repo-name.")
+		}
+		return search, nil
+	}
+	return defaultDemoRepoName, nil
+}
+
+// effectiveBefore is the --before the window arithmetic sees: --before, else
+// --day/--date + 1 day (_handle_deprecated_day_flag). overflow reports the
+// OverflowError of a date outside years 1..9999.
+func effectiveBefore(v map[string]string) (before *time.Time, overflow bool) {
+	if text, ok := v["before"]; ok {
+		t, _ := pyDate(text)
+		before = &t
+	}
+	deprecated, has := v["day"]
+	if !has {
+		deprecated, has = v["date"]
+	}
+	if has && before == nil {
+		t, _ := pyDate(deprecated)
+		next, ok := pyAddDays(t, 1)
+		if !ok {
+			return nil, true
+		}
+		before = &next
+	}
+	return before, false
+}
+
+func overflowRefusal() *Refusal {
+	return &Refusal{Code: cli.ExitFailure, Stage: "error", Type: "OverflowError", Message: "date value out of range (OverflowError)"}
+}
+
+// fillSynthetic is the rest of sync_synthetic_target's validation, in its
+// order: resolve_date_range, the org requirement of the sync-run-backed
+// targets, and the throwaway-database gate.
+func fillSynthetic(plan *Plan, v map[string]string, in Inputs) *Refusal {
+	before, overflow := effectiveBefore(v)
+	if overflow {
+		return overflowRefusal()
+	}
+	if before == nil {
+		now := in.Now
+		if now == nil {
+			now = time.Now
+		}
+		today := now().UTC()
+		tomorrow := time.Date(today.Year(), today.Month(), today.Day(), 0, 0, 0, 0, time.UTC).AddDate(0, 0, 1)
+		before = &tomorrow
+	}
+	endDay, ok := pyAddDays(*before, -1)
+	if !ok {
+		return overflowRefusal()
+	}
+	if text, given := v["since"]; given {
+		since, _ := pyDate(text)
+		if since.After(endDay) {
+			return exitRefusal(fmt.Sprintf("--since (%s) must be before --before (%s).", since.Format("2006-01-02"), before.Format("2006-01-02")))
+		}
+		plan.Days = big.NewInt(int64(endDay.Sub(since).Hours()/24) + 1)
+	} else {
+		backfill := intOr(v, "backfill", 1)
+		if backfill.Cmp(big.NewInt(1)) < 0 {
+			backfill = big.NewInt(1)
+		}
+		plan.Days = backfill
+	}
+	plan.EndDay = &endDay
+	_, plan.DeferFinalize = v["defer_finalize"]
+	runBacked := syntheticRunBacked[plan.Target]
+	orgKnown := plan.OrgSource == OrgFromDBFirst || (plan.Org != nil && *plan.Org != "")
+	if runBacked && !orgKnown {
+		return exitRefusal(fmt.Sprintf("--provider synthetic --target %s requires a resolved org "+
+			"(--org or ORG_ID env): it completes a real sync_run scoped to "+
+			"that org, unlike git/prs/blame which write analytics rows only.", plan.Target))
+	}
+	if runBacked && in.envOr("DEV_HEALTH_ALLOW_SYNTHETIC_SYNC_RUN") != "1" {
+		return exitRefusal(fmt.Sprintf("--provider synthetic --target %s writes to the GLOBAL "+
+			"CHAOS-4114 executed-proof ledger under a real provider identity "+
+			"and must never run against a shared or production-adjacent "+
+			"database. Set DEV_HEALTH_ALLOW_SYNTHETIC_SYNC_RUN=1 explicitly "+
+			"if this really is a throwaway CI/test database.", plan.Target))
+	}
+	plan.Finalizes = runBacked && !plan.DeferFinalize
+	return nil
 }

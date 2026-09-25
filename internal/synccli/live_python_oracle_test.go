@@ -114,12 +114,22 @@ func goResult(target string, c oracleCase, in Inputs) map[string]any {
 
 func planView(plan Plan) map[string]any {
 	run := map[string]any{"call": tStr(plan.Call)}
-	if plan.Call == CallSynthetic {
-		return run
-	}
 	storeOrg := tOptStr(plan.Org)
 	if plan.OrgSource == OrgFromDBFirst {
 		storeOrg = tStr("FIRST-ORG")
+	}
+	if plan.Call == CallSynthetic {
+		run["sink_uri"], run["store_org"], run["org_source"] = tStr(plan.SinkURI), storeOrg, tStr(plan.OrgSource)
+		run["db"] = tOptStr(plan.DB)
+		run["repo_name"], run["days"] = tStr(plan.RepoName), tBig(plan.Days)
+		run["end_day"] = tStr(plan.EndDay.Format("2006-01-02"))
+		run["defer_finalize"], run["finalizes"] = tBool(plan.DeferFinalize), tBool(plan.Finalizes)
+		if plan.Finalizes {
+			run["finalize_org"], run["finalize_repo"] = storeOrg, tStr(plan.RepoName)
+		} else {
+			run["finalize_org"], run["finalize_repo"] = tNull(), tNull()
+		}
+		return run
 	}
 	run["sink_uri"] = tStr(plan.SinkURI)
 	run["store_org"] = storeOrg

@@ -131,3 +131,21 @@ func TestThePlanCarriesWhatTheExecutorNeeds(t *testing.T) {
 		t.Errorf("max commits = %s, want none when a window is set and no cap was given", got.MaxCommits)
 	}
 }
+
+// TestHelpListsEverySyncOption keeps the help honest against the parser: every
+// option string the parser accepts (bar the hidden deprecated --day/--date)
+// appears in the help text.
+func TestHelpListsEverySyncOption(t *testing.T) {
+	_, help, _ := runVerb(t, "git", neverRuns(t), []string{"--help"}, nil)
+	hidden := map[string]bool{"--day": true, "--date": true, "-h": true, "--help": true}
+	for _, spec := range syncSpecs {
+		for _, option := range spec.strs {
+			if hidden[option] {
+				continue
+			}
+			if !strings.Contains(help, option) {
+				t.Errorf("help does not list %s", option)
+			}
+		}
+	}
+}

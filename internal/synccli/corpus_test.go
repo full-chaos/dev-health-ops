@@ -194,6 +194,36 @@ func syncTargetCorpus(keyFile string) []oracleCase {
 		add(cenv, "git", "--provider", "github", "--owner", "o", "--repo", "r", "--db", "postgresql://p", "--org", "")
 		add(cenv, "git", "--provider", "github", "--owner", "o", "--repo", "r", "--db", "", "--org", "x")
 	}
+	// Synthetic (sync_synthetic_target): repo-name resolution, the date range
+	// and its --since/--before errors, the org requirement and throwaway-
+	// database gate of the sync-run-backed targets, --defer-finalize.
+	syntheticEnvs := []map[string]string{
+		{}, ch, with(ch, "ORG_ID", "envorg"), with(ch, "DEV_HEALTH_ALLOW_SYNTHETIC_SYNC_RUN", "1"),
+		with(ch, "ORG_ID", "envorg", "DEV_HEALTH_ALLOW_SYNTHETIC_SYNC_RUN", "1"),
+		with(ch, "ORG_ID", "", "DEV_HEALTH_ALLOW_SYNTHETIC_SYNC_RUN", "1"),
+		with(ch, "ORG_ID", "envorg", "DEV_HEALTH_ALLOW_SYNTHETIC_SYNC_RUN", "0"),
+	}
+	syntheticLines := [][]string{
+		{}, {"--repo-name", "acme/custom"}, {"--repo-name", ""}, {"--owner", "o", "--repo", "r"}, {"--owner", "o"}, {"--repo", "r"},
+		{"--repo-name", "x/y", "--owner", "o", "--repo", "r"}, {"--repo-name", "", "--owner", "o", "--repo", "r"},
+		{"-s", "plain/name"}, {"-s", "a*"}, {"-s", "a?b"}, {"-s", ""}, {"--search", "z", "--owner", "o", "--repo", "r"},
+		{"--defer-finalize"}, {"--defer-finalize", "--backfill", "3"},
+		{"--since", "2026-01-02"}, {"--since", "2026-09-25"}, {"--since", "2026-09-26"}, {"--since", "2026-09-24", "--before", "2026-09-25"},
+		{"--since", "2026-01-02", "--before", "2026-01-02"}, {"--since", "2026-01-02", "--before", "2026-01-03"}, {"--since", "2026-03-10", "--before", "2026-03-01"},
+		{"--before", "2026-03-01"}, {"--before", "2026-03-01", "--backfill", "3"}, {"--backfill", "7"}, {"--backfill", "0"}, {"--backfill", "-4"}, {"--backfill", "1"},
+		{"--day", "2026-03-09"}, {"--date", "2026-01-01", "--before", "2026-02-01"}, {"--day", "2026-03-09", "--backfill", "5"}, {"--day", "2026-03-09", "--since", "2026-03-01"},
+		{"--before", "0001-01-01"}, {"--before", "0001-01-02"}, {"--before", "0001-01-01", "--since", "0001-01-01"}, {"--day", "9999-12-31"}, {"--before", "9999-12-31"},
+		{"--sink", "mongo"}, {"--sink", "auto"}, {"--sink", "junk"}, {"--analytics-db", " clickhouse://h"}, {"--analytics-db", "clickhouse+native://h"},
+		{"--org", "x"}, {"--org", ""}, {"--org", "x", "--defer-finalize"}, {"--db", "postgresql://p"},
+		{"--auth", "ignored", "--github-app-id", "1"}, {"--owner", "o", "--repo", "r", "--search", "*"},
+	}
+	for _, target := range Targets {
+		for _, senv := range syntheticEnvs {
+			for _, line := range syntheticLines {
+				add(senv, target, append([]string{"--provider", "synthetic"}, line...)...)
+			}
+		}
+	}
 	return corpus
 }
 

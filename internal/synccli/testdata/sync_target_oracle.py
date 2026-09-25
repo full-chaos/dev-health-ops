@@ -25,6 +25,10 @@ from dev_health_ops.credentials import CredentialSource, GitHubCredentials
 from dev_health_ops.processors import sync as sync_mod
 from dev_health_ops.utils import cli as utils_cli
 
+# The real functions, captured once: each case installs spies over them.
+REAL_REPO_NAME = sync_mod._resolve_synthetic_repo_name
+REAL_DATE_RANGE = sync_mod.resolve_date_range
+
 TODAY = date(2026, 9, 25)
 utils_cli.utc_today = lambda: TODAY
 
@@ -32,7 +36,7 @@ MANAGED_ENV = [
     "CLICKHOUSE_URI", "POSTGRES_URI", "DATABASE_URI", "DATABASE_URL", "ORG_ID",
     "GITHUB_TOKEN", "GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY_PATH",
     "GITHUB_APP_INSTALLATION_ID", "GITHUB_URL", "GITHUB_BASE_URL",
-    "GITLAB_TOKEN", "GITLAB_URL",
+    "GITLAB_TOKEN", "GITLAB_URL", "DEV_HEALTH_ALLOW_SYNTHETIC_SYNC_RUN",
 ]
 
 
@@ -94,9 +98,17 @@ def run_case(case, keyfile):
 
     recorded = {}
 
+    synthetic = ns.provider == "synthetic"
+
     async def fake_run_with_store(db_uri, db_type, handler, org_id=None):
         recorded["sink_uri"] = db_uri
         recorded["store_org"] = org_id
+        if synthetic:
+            # The synthetic handler generates and writes rows through a real
+            # store; everything it needs to decide is resolved before this
+            # call, and what it does afterwards is recorded below.
+            recorded["call"] = "synthetic"
+            return
         await handler(object())
 
     def recorder(name, positional=()):
@@ -116,9 +128,21 @@ def run_case(case, keyfile):
             token="db-token", source=CredentialSource.DATABASE, credential_name="db"
         )
 
-    async def synthetic_stub(ns, target):
-        recorded["call"] = "synthetic"
-        return 0
+    def repo_name_spy(namespace):
+        name = REAL_REPO_NAME(namespace)
+        recorded["repo_name"] = name
+        return name
+
+    def date_range_spy(namespace):
+        end_day, days = REAL_DATE_RANGE(namespace)
+        recorded["end_day"] = end_day
+        recorded["days"] = days
+        return end_day, days
+
+    def finalize_spy(**kwargs):
+        recorded["finalizes"] = True
+        recorded["finalize_org"] = kwargs["org_id"]
+        recorded["finalize_repo"] = kwargs["repo_full_name"]
 
     sync_mod.run_with_store = fake_run_with_store
     sync_mod.resolve_credentials_sync = creds_miss
@@ -132,7 +156,9 @@ def run_case(case, keyfile):
     sync_mod.process_gitlab_projects_batch = recorder("gitlab_batch")
     sync_mod.process_local_repo = recorder("local_repo")
     sync_mod.process_local_blame = recorder("local_blame")
-    sync_mod.sync_synthetic_target = synthetic_stub
+    sync_mod._resolve_synthetic_repo_name = repo_name_spy
+    sync_mod.resolve_date_range = date_range_spy
+    sync_mod._complete_synthetic_sync_run = finalize_spy
 
     try:
         with contextlib.redirect_stderr(err), contextlib.redirect_stdout(out):
@@ -169,7 +195,20 @@ def describe(recorded, ns, org_source):
     kw = recorded.get("kwargs", {})
     call = recorded.get("call")
     if call == "synthetic":
-        return {"call": tag(call)}
+        return {
+            "call": tag(call),
+            "sink_uri": tag(recorded.get("sink_uri")),
+            "store_org": tag(recorded.get("store_org")),
+            "org_source": tag(org_source),
+            "db": tag(getattr(ns, "db", None)),
+            "repo_name": tag(recorded.get("repo_name")),
+            "days": tag(recorded.get("days")),
+            "end_day": tag(recorded["end_day"].isoformat()),
+            "defer_finalize": tag(bool(getattr(ns, "defer_finalize", False))),
+            "finalizes": tag(bool(recorded.get("finalizes", False))),
+            "finalize_org": tag(recorded.get("finalize_org")),
+            "finalize_repo": tag(recorded.get("finalize_repo")),
+        }
     since = kw.get("since")
     result = {
         "call": tag(call),

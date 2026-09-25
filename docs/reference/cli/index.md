@@ -104,6 +104,8 @@ Requires: ClickHouse (--analytics-db / CLICKHOUSE_URI), organization (--org / OR
 >
 > **Interim Workaround:** Trigger the sync via `POST /api/v1/admin/sync-configs/{config_id}/trigger`. The API plans the `SyncRun` and commits a durable reference-discovery wakeup; the reconciler publishes it through the active sync-dispatch route.
 
+> **`dho sync <target>` (Go):** `dho sync git|prs|blame|cicd|deployments|incidents|security|tests` accepts and refuses the same command lines as the `dev-hops` verbs below (flags, `--since`/`--before`/`--backfill` window, `--sink`, credential rules, exit codes: 0 ok, 1 refused by the verb, 2 usage error). Until an executor is wired for a provider, a `dho` verb exits **3** (nothing written) and says so; run the `dev-hops` verb meanwhile. Global flags go **after** the verb (`dho sync git --org X ...`), not before it.
+
 ### `sync git`
 
 Sync git repository data. Uses `CLICKHOUSE_URI` (analytics layer).

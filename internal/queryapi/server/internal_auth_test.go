@@ -2,9 +2,11 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -111,6 +113,8 @@ func iaHeaders(orgID, role string, superuser, impersonating bool) func(*http.Req
 		return "false"
 	}
 	return func(r *http.Request) {
+		// These tests speak to the handler as the INTERNAL listener would.
+		*r = *r.WithContext(iaInternalCtx(r.Context()))
 		r.Header.Set(internalidentity.HeaderOrgID, orgID)
 		r.Header.Set(internalidentity.HeaderRole, role)
 		r.Header.Set(internalidentity.HeaderSuperuser, flag(superuser))
@@ -167,7 +171,10 @@ func TestQueryRefusesEveryAmbiguousOrMalformedCarrier(t *testing.T) {
 			r.Header.Set("Authorization", "Bearer garbage")
 			iaHeaders("org-1", "admin", false, false)(r)
 		}},
-		{"org header only", func(r *http.Request) { r.Header.Set(internalidentity.HeaderOrgID, "org-1") }},
+		{"org header only", func(r *http.Request) {
+			*r = *r.WithContext(iaInternalCtx(r.Context()))
+			r.Header.Set(internalidentity.HeaderOrgID, "org-1")
+		}},
 		{"role header missing", func(r *http.Request) {
 			iaHeaders("org-1", "admin", false, false)(r)
 			r.Header.Del(internalidentity.HeaderRole)
@@ -284,7 +291,7 @@ func TestOnlyInternalPathsReadTheInternalIdentity(t *testing.T) {
 	if checked < 20 {
 		t.Fatalf("scanned %d source files; the scan is not measuring the package", checked)
 	}
-	wantImporters := map[string]bool{"internal_auth.go": true}
+	wantImporters := map[string]bool{"internal_auth.go": true, "server.go": true}
 	wantCallers := map[string]bool{"internal_auth.go": true, "query_route.go": true, "buildinfo_route.go": true}
 	if !sameSet(importers, wantImporters) {
 		t.Fatalf("files importing internalidentity: %v, want %v", importers, wantImporters)
@@ -321,7 +328,10 @@ func TestQueryDecidesTheCarrierBeforeTheDocumentLookup(t *testing.T) {
 		},
 		"none":             func(*http.Request) {},
 		"invalid envelope": func(r *http.Request) { r.Header.Set("Authorization", "Bearer not-a-token") },
-		"partial headers":  func(r *http.Request) { r.Header.Set(internalidentity.HeaderOrgID, "org-1") },
+		"partial headers": func(r *http.Request) {
+			*r = *r.WithContext(iaInternalCtx(r.Context()))
+			r.Header.Set(internalidentity.HeaderOrgID, "org-1")
+		},
 	}
 	for _, document := range []string{iaDocument, "query { notRegistered { id } }"} {
 		for name, mutate := range carriers {
@@ -357,5 +367,104 @@ func TestQueryStillAnswers404ForAnUnregisteredDocumentOnceAuthenticated(t *testi
 	handler(rec, req)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("authenticated unregistered document: status=%d, want 404", rec.Code)
+	}
+}
+
+// iaInternalCtx is the context a request carries after the internal listener.
+func iaInternalCtx(ctx context.Context) context.Context {
+	var marked context.Context
+	internalidentity.Internal(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		marked = r.Context()
+	})).ServeHTTP(nil, (&http.Request{}).WithContext(ctx))
+	return marked
+}
+
+// CHAOS-6780: the identity headers are honoured only on the internal
+// listener. The same forged four headers that grant an identity there are
+// deleted, logged and counted on the public one.
+func TestIdentityHeadersAreHonouredOnlyOnTheInternalListener(t *testing.T) {
+	verifier, priv := iaVerifier(t)
+	handler, seen := iaDispatch(t, verifier)
+	public, internal := newListenerServers("127.0.0.1:0", "127.0.0.1:0", handler)
+	if internal == nil {
+		t.Fatal("no internal server built although an internal address was given")
+	}
+	post := func(server *http.Server, mutate func(*http.Request)) int {
+		body, err := json.Marshal(map[string]string{"query": iaDocument})
+		if err != nil {
+			t.Fatal(err)
+		}
+		req := httptest.NewRequest(http.MethodPost, "/query", bytes.NewReader(body))
+		mutate(req)
+		rec := httptest.NewRecorder()
+		server.Handler.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	// Raw headers only, no context marking: the listener alone decides.
+	rawForged := func(r *http.Request) {
+		for _, name := range internalidentity.Headers {
+			r.Header.Set(name, "true")
+		}
+		r.Header.Set(internalidentity.HeaderOrgID, "org-forged")
+		r.Header.Set(internalidentity.HeaderRole, "owner")
+	}
+
+	var logs bytes.Buffer
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+	if code := post(public, rawForged); code != http.StatusUnauthorized {
+		t.Fatalf("forged headers on the public listener: %d, want 401", code)
+	}
+	if len(*seen) != 0 {
+		t.Fatalf("forged headers on the public listener reached the resolver: %+v", *seen)
+	}
+	if !strings.Contains(logs.String(), "dropped internal identity headers on the public listener") ||
+		!strings.Contains(logs.String(), "path_class=query") || strings.Contains(logs.String(), "org-forged") {
+		t.Fatalf("drop log = %q, want a line naming the path class and header names, never a value", logs.String())
+	}
+	// A bearer caller sending stray headers to the public port is served by the
+	// bearer (the headers are gone, so it is no longer ambiguous).
+	envelope := iaEnvelope(t, priv, principal.Claims{OrgID: "org-1", Role: "member"})
+	if code := post(public, func(r *http.Request) {
+		rawForged(r)
+		r.Header.Set("Authorization", "Bearer "+envelope)
+	}); code != http.StatusOK {
+		t.Fatalf("bearer + stray headers on the public listener: %d, want 200", code)
+	}
+	if got := (*seen)[len(*seen)-1]; got.OrgID != "org-1" {
+		t.Fatalf("public listener resolved %+v, want the bearer's org-1", got)
+	}
+	// The same four headers on the internal listener grant the stated identity.
+	*seen = nil
+	if code := post(internal, rawForged); code != http.StatusOK {
+		t.Fatalf("headers on the internal listener: %d, want 200", code)
+	}
+	if len(*seen) != 1 || (*seen)[0].OrgID != "org-forged" {
+		t.Fatalf("internal listener resolved %+v, want org-forged", *seen)
+	}
+}
+
+// Unset internal address = no internal server = headers honoured nowhere.
+func TestNoInternalListenerWhenTheAddressIsUnset(t *testing.T) {
+	public, internal := newListenerServers("127.0.0.1:0", "", http.NotFoundHandler())
+	if internal != nil || public == nil {
+		t.Fatalf("public=%v internal=%v, want a public server only", public, internal)
+	}
+}
+
+// A handler wired without the listener middleware refuses the headers rather
+// than trusting them.
+func TestHeadersOffTheInternalListenerAreRefusedAtTheHandler(t *testing.T) {
+	verifier, _ := iaVerifier(t)
+	handler, seen := iaDispatch(t, verifier)
+	code := iaPost(t, handler, func(r *http.Request) {
+		r.Header.Set(internalidentity.HeaderOrgID, "org-1")
+		r.Header.Set(internalidentity.HeaderRole, "admin")
+		r.Header.Set(internalidentity.HeaderSuperuser, "false")
+		r.Header.Set(internalidentity.HeaderImpersonationActive, "false")
+	})
+	if code != http.StatusUnauthorized || len(*seen) != 0 {
+		t.Fatalf("status=%d resolver=%+v, want 401 and no resolver call", code, *seen)
 	}
 }

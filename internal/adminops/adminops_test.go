@@ -20,7 +20,7 @@ func TestTheAdminGroupHoldsEveryVerb(t *testing.T) {
 			paths = append(paths, group.Name+" "+child.Name)
 		}
 	}
-	want := "users create,users list,users update,orgs create,orgs list,orgs delete,features seed"
+	want := "users create,users list,users update,orgs create,orgs list,orgs delete,llm-settings get,llm-settings set,llm-settings delete,features seed"
 	if command.Name != "admin" || strings.Join(paths, ",") != want {
 		t.Fatalf("the verbs are %v, want %s", paths, want)
 	}
@@ -42,6 +42,11 @@ func TestUsersVerbsRefuseBadArgumentsBeforeConnecting(t *testing.T) {
 		{"list refuses a positional", runUsersList, []string{"x"}},
 		{"orgs list refuses a non-number limit", runOrgsList, []string{"--limit", "many"}},
 		{"orgs delete needs --org-id", runOrgsDelete, nil},
+		{"llm get needs an organization", runLLMGet, nil},
+		{"llm get refuses an empty --org", runLLMGet, []string{"--org", ""}},
+		{"llm set needs --provider", runLLMSet, []string{"--org", "x"}},
+		{"llm set needs an organization", runLLMSet, []string{"--provider", "openai"}},
+		{"llm delete needs an organization", runLLMDelete, nil},
 		{"orgs delete refuses a positional", runOrgsDelete, []string{"--org-id", "x", "y"}},
 	}
 	for _, c := range cases {

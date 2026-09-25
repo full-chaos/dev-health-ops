@@ -326,6 +326,7 @@ func goVerbEnv(t *testing.T, db *database, extra map[string]string, args []strin
 	runs := map[string]func(context.Context, cli.Env) int{
 		"users create": runUsersCreate, "users list": runUsersList, "users update": runUsersUpdate,
 		"orgs create": runOrgsCreate, "orgs list": runOrgsList, "orgs delete": runOrgsDelete,
+		"llm-settings get": runLLMGet, "llm-settings set": runLLMSet, "llm-settings delete": runLLMDelete,
 	}
 	run, ok := runs[args[0]+" "+args[1]]
 	if !ok {
@@ -349,6 +350,12 @@ func pythonVerb(t *testing.T, db *database, args []string) (int, string) {
 }
 
 func pythonVerbEnv(t *testing.T, db *database, extra map[string]string, args []string) (int, string) {
+	return pythonVerbFull(t, db, extra, nil, args)
+}
+
+// pythonVerbFull runs `dev-hops <global> admin <args>`: global holds the root
+// flags Python takes before the subcommand (--org).
+func pythonVerbFull(t *testing.T, db *database, extra map[string]string, global []string, args []string) (int, string) {
 	t.Helper()
 	root, err := filepath.Abs(filepath.Join("..", ".."))
 	if err != nil {
@@ -356,7 +363,7 @@ func pythonVerbEnv(t *testing.T, db *database, extra map[string]string, args []s
 	}
 	python := pyoracle.Resolve(t, root)
 	program := "import sys\nfrom dev_health_ops import cli\nraise SystemExit(cli.main(sys.argv[1:]))\n"
-	command := exec.Command(python, append([]string{"-c", program, "admin"}, args...)...)
+	command := exec.Command(python, append(append([]string{"-c", program}, global...), append([]string{"admin"}, args...)...)...)
 	pyURI := strings.Replace(db.uri, "postgres://", "postgresql://", 1)
 	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"), "POSTGRES_URI="+pyURI, "DATABASE_URI="+pyURI, "OTEL_ENABLED=false")
 	for key, value := range extra {

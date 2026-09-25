@@ -51,34 +51,78 @@ func notFoundOrg() *pyjson.Object {
 	return detail
 }
 
-// requireBYOLLMAccess is llm_settings.py's require_byo_llm_access. It answers
-// the refusal itself and returns false; a failed lookup answers the generic
-// 500 (the gate fails closed).
-func (h *handlers) requireBYOLLMAccess(ctx context.Context, w http.ResponseWriter, orgID string, forCleanup bool) bool {
+// llmRefusal is one refusal of the BYO LLM settings functions
+// (LLMSettingsAccessError): the status the route answers and the detail it
+// carries. The route writes it; the operator verb prints its message.
+type llmRefusal struct {
+	status int
+	detail any
+}
+
+func (r *llmRefusal) write(w http.ResponseWriter) { policy.WriteDetail(w, r.status, r.detail, nil) }
+
+// message is LLMSettingsAccessError.message: the tier refusal spells out both
+// tiers, every other refusal is its detail's message.
+func (r *llmRefusal) message() string {
+	detail, ok := r.detail.(*pyjson.Object)
+	if !ok {
+		return "BYO LLM settings access denied"
+	}
+	text := func(key string) string {
+		value, _ := detail.Get(key)
+		str, _ := value.(string)
+		return str
+	}
+	if text("error") == "feature_not_licensed" {
+		return "BYO LLM settings require " + text("required_tier") + " tier; current tier is " + text("current_tier")
+	}
+	if message := text("message"); message != "" {
+		return message
+	}
+	return "BYO LLM settings access denied"
+}
+
+func newLLMRefusal(status int, pairs ...string) *llmRefusal {
+	detail := pyjson.NewObject()
+	for index := 0; index+1 < len(pairs); index += 2 {
+		detail.Set(pairs[index], pairs[index+1])
+	}
+	return &llmRefusal{status: status, detail: detail}
+}
+
+// llmStepError names the lookup that failed, for the route's log line.
+type llmStepError struct {
+	step string
+	err  error
+}
+
+func (e *llmStepError) Error() string { return e.step + ": " + e.err.Error() }
+func (e *llmStepError) Unwrap() error { return e.err }
+
+// byoLLMAccess is llm_settings.py's require_byo_llm_access: a refusal, or an
+// error when a lookup failed (the gate fails closed).
+func (h *handlers) byoLLMAccess(ctx context.Context, orgID string, forCleanup bool) (*llmRefusal, error) {
+	notFound := func() *llmRefusal { return &llmRefusal{status: http.StatusNotFound, detail: notFoundOrg()} }
 	org, err := pythonparity.ParseUUID(orgID)
 	if err != nil {
-		policy.WriteDetail(w, http.StatusNotFound, notFoundOrg(), nil)
-		return false
+		return notFound(), nil
 	}
 	var found uuid.UUID
 	err = h.store.Pool.QueryRow(ctx, `SELECT id FROM organizations WHERE id = $1`, org).Scan(&found)
 	if errors.Is(err, pgx.ErrNoRows) {
-		policy.WriteDetail(w, http.StatusNotFound, notFoundOrg(), nil)
-		return false
+		return notFound(), nil
 	}
 	if err != nil {
-		h.internalError(ctx, w, "look up organization", err)
-		return false
+		return nil, &llmStepError{"look up organization", err}
 	}
 	// Cleanup skips both the tier and the flag gate: stored credentials must
 	// stay removable after a downgrade or a kill switch.
 	if forCleanup {
-		return true
+		return nil, nil
 	}
 	tier, err := licensing.ResolveOrgTier(ctx, h.store.Pool, org)
 	if err != nil {
-		h.internalError(ctx, w, "resolve org tier", err)
-		return false
+		return nil, &llmStepError{"resolve org tier", err}
 	}
 	have, _ := licensing.TierRank(tier)
 	want, _ := licensing.TierRank(byoLLMMinTier)
@@ -88,20 +132,37 @@ func (h *handlers) requireBYOLLMAccess(ctx context.Context, w http.ResponseWrite
 		detail.Set("feature", byoLLMFeature)
 		detail.Set("required_tier", byoLLMMinTier)
 		detail.Set("current_tier", tier)
-		policy.WriteDetail(w, http.StatusPaymentRequired, detail, nil)
-		return false
+		return &llmRefusal{status: http.StatusPaymentRequired, detail: detail}, nil
 	}
 	state, _, err := licensing.FeatureFlagState(ctx, h.store.Pool, org, byoLLMFeature, byoLLMMinTier, h.store.now())
 	if err != nil {
-		h.internalError(ctx, w, "resolve byo_llm flag", err)
-		return false
+		return nil, &llmStepError{"resolve byo_llm flag", err}
 	}
 	if state == licensing.StateDisabled {
 		detail := pyjson.NewObject()
 		detail.Set("error", "feature_not_enabled")
 		detail.Set("feature", byoLLMFeature)
 		detail.Set("message", "BYO LLM is not enabled for this organization")
-		policy.WriteDetail(w, http.StatusForbidden, detail, nil)
+		return &llmRefusal{status: http.StatusForbidden, detail: detail}, nil
+	}
+	return nil, nil
+}
+
+// requireBYOLLMAccess answers the route's refusal itself and returns false; a
+// failed lookup answers the generic 500.
+func (h *handlers) requireBYOLLMAccess(ctx context.Context, w http.ResponseWriter, orgID string, forCleanup bool) bool {
+	refusal, err := h.byoLLMAccess(ctx, orgID, forCleanup)
+	if err != nil {
+		var step *llmStepError
+		if errors.As(err, &step) {
+			h.internalError(ctx, w, step.step, step.err)
+		} else {
+			h.internalError(ctx, w, "byo llm access", err)
+		}
+		return false
+	}
+	if refusal != nil {
+		refusal.write(w)
 		return false
 	}
 	return true
@@ -259,28 +320,57 @@ func (h *handlers) putLLMSettings(w http.ResponseWriter, r *http.Request) {
 			"message", "BYO LLM budget changes are unavailable while impersonating")
 		return
 	}
+	out, refusal, err := h.applyLLMSettings(ctx, orgID, llmUpsert{
+		provider: *provider, model: model, apiKey: apiKey, baseURL: baseURL,
+		concurrency: concurrency, budgetLimitMu: budgetLimitMu,
+	})
+	if err != nil {
+		var step *llmStepError
+		if errors.As(err, &step) {
+			h.internalError(ctx, w, step.step, step.err)
+		} else {
+			h.internalError(ctx, w, "write llm settings", err)
+		}
+		return
+	}
+	if refusal != nil {
+		refusal.write(w)
+		return
+	}
+	policy.WriteModel(w, http.StatusOK, out, nil)
+}
+
+// llmUpsert is LLMSettingsUpsert as the writes read it.
+type llmUpsert struct {
+	provider                   string
+	model, apiKey, baseURL     *string
+	concurrency, budgetLimitMu *big.Int
+}
+
+// applyLLMSettings is llm_settings.py's upsert_llm_settings over settings.py's:
+// the base URL is checked, then every write and the budget limit share one
+// transaction that a refusal or a failed response rolls back. The route and the
+// operator verb both run it.
+func (h *handlers) applyLLMSettings(ctx context.Context, orgID string, in llmUpsert) (*pyjson.Object, *llmRefusal, error) {
 	baseURLText := ""
-	if baseURL != nil {
-		baseURLText = *baseURL
+	if in.baseURL != nil {
+		baseURLText = *in.baseURL
 	}
 	valid, reason, splitErr := llmorgsettings.ValidateBaseURLChecked(ctx, baseURLText)
 	if splitErr != nil {
 		// urlsplit's ValueError escapes validate_llm_base_url: an unhandled 500.
-		h.internalError(ctx, w, "validate base url", splitErr)
-		return
+		return nil, nil, &llmStepError{"validate base url", splitErr}
 	}
 	if !valid {
 		if reason == "" {
 			reason = "Invalid LLM base_url"
 		}
-		llmDetail(http.StatusBadRequest, w, "error", "invalid_base_url", "feature", byoLLMFeature, "message", reason)
-		return
+		return nil, newLLMRefusal(http.StatusBadRequest, "error", "invalid_base_url", "feature", byoLLMFeature, "message", reason), nil
 	}
 
 	tx, err := h.store.Pool.Begin(ctx)
 	if err != nil {
-		h.internalError(ctx, w, "begin llm settings", err)
-		return
+		return nil, nil, &llmStepError{"begin llm settings", err}
 	}
 	committed := false
 	defer func() {
@@ -292,68 +382,61 @@ func (h *handlers) putLLMSettings(w http.ResponseWriter, r *http.Request) {
 		_, err := h.upsertSetting(ctx, tx, orgID, llmCategory, key, value, encrypt, &description)
 		return err
 	}
-	normalized := pythonparity.Lower(pythonparity.Strip(*provider))
+	normalized := pythonparity.Lower(pythonparity.Strip(in.provider))
 	steps := []struct {
 		run func() error
 	}{
 		{func() error { return set("provider", &normalized, false, "BYO LLM provider for this organization") }},
-		{func() error { return set("model", model, false, "BYO LLM model for this organization") }},
+		{func() error { return set("model", in.model, false, "BYO LLM model for this organization") }},
 	}
-	if apiKey != nil {
+	if in.apiKey != nil {
 		steps = append(steps, struct{ run func() error }{func() error {
-			return set("api_key", apiKey, true, "Encrypted BYO LLM API key for this organization")
+			return set("api_key", in.apiKey, true, "Encrypted BYO LLM API key for this organization")
 		}})
 	}
 	steps = append(steps, struct{ run func() error }{func() error {
-		return set("base_url", baseURL, false, "BYO LLM base URL for this organization")
+		return set("base_url", in.baseURL, false, "BYO LLM base URL for this organization")
 	}})
-	if concurrency != nil {
-		text := concurrency.String()
+	if in.concurrency != nil {
+		text := in.concurrency.String()
 		steps = append(steps, struct{ run func() error }{func() error {
 			return set("concurrency", &text, false, "BYO LLM maximum concurrent categorizations for this organization")
 		}})
 	}
 	for _, step := range steps {
 		if err := step.run(); err != nil {
-			h.internalError(ctx, w, "write llm setting", err)
-			return
+			return nil, nil, &llmStepError{"write llm setting", err}
 		}
 	}
-	if budgetLimitMu != nil {
+	if in.budgetLimitMu != nil {
 		maximum, err := llmbudget.ProvisionedMaximum(ctx, tx, lookupEnv, orgID)
 		if err != nil {
-			h.internalError(ctx, w, "resolve budget ceiling", err)
-			return
+			return nil, nil, &llmStepError{"resolve budget ceiling", err}
 		}
-		if budgetLimitMu.Sign() < 0 || budgetLimitMu.Cmp(maximum) > 0 {
-			llmDetail(http.StatusBadRequest, w,
+		if in.budgetLimitMu.Sign() < 0 || in.budgetLimitMu.Cmp(maximum) > 0 {
+			return nil, newLLMRefusal(http.StatusBadRequest,
 				"error", "budget_limit_exceeds_maximum",
 				"feature", byoLLMFeature,
-				"message", "budget_limit_micro_usd must be between 0 and "+maximum.String())
-			return
+				"message", "budget_limit_micro_usd must be between 0 and "+maximum.String()), nil
 		}
 		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, llmbudget.LockKey(orgID)); err != nil {
-			h.internalError(ctx, w, "lock budget", err)
-			return
+			return nil, nil, &llmStepError{"lock budget", err}
 		}
-		limit := budgetLimitMu.String()
+		limit := in.budgetLimitMu.String()
 		description := "Organization BYO LLM monetary ceiling in integer micro-USD; stored separately from provider credentials"
 		if _, err := h.upsertSetting(ctx, tx, orgID, llmbudget.Category, llmbudget.LimitKey, &limit, false, &description); err != nil {
-			h.internalError(ctx, w, "write budget limit", err)
-			return
+			return nil, nil, &llmStepError{"write budget limit", err}
 		}
 	}
 	out, err := h.llmSettingsResponse(ctx, tx, orgID)
 	if err != nil {
-		h.internalError(ctx, w, "build llm settings response", err)
-		return
+		return nil, nil, &llmStepError{"build llm settings response", err}
 	}
 	if err := tx.Commit(ctx); err != nil {
-		h.internalError(ctx, w, "commit llm settings", err)
-		return
+		return nil, nil, &llmStepError{"commit llm settings", err}
 	}
 	committed = true
-	policy.WriteModel(w, http.StatusOK, out, nil)
+	return out, nil, nil
 }
 
 // deleteLLMSettings is settings.py's delete_llm_settings: cleanup access, then

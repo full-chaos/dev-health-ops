@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
@@ -556,4 +558,121 @@ func plainJSON(value pyjson.Value) any {
 		return out
 	}
 	return value
+}
+
+// LLMSettingsConfig is what the BYO LLM settings verbs need beyond the database:
+// the settings decryptor (the API key is stored encrypted).
+type LLMSettingsConfig struct {
+	Decryptor providerfoundation.FernetDecryptor
+}
+
+// LLMSettingsInput is `admin llm-settings set`: Model, APIKey and BaseURL nil
+// when not given.
+type LLMSettingsInput struct {
+	Provider               string
+	Model, APIKey, BaseURL *string
+}
+
+func (o Operator) llmHandlers(config LLMSettingsConfig) *handlers {
+	return &handlers{store: o.store(o.Pool), decryptor: config.Decryptor,
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+}
+
+// llmError turns what the shared LLM settings functions return into what the
+// verb prints: a refusal is its message, any other failure is returned as it is.
+func llmError(refusal *llmRefusal, err error) error {
+	if refusal != nil {
+		return &OperatorError{Message: refusal.message()}
+	}
+	return err
+}
+
+// llmSettingsDocument is get_llm_settings_response's model_dump: every field,
+// None as null, before the caller sorts and indents it.
+func llmSettingsDocument(response *pyjson.Object) map[string]any {
+	document := map[string]any{"provider": nil, "model": nil, "api_key": nil, "base_url": nil, "concurrency": nil}
+	for _, key := range response.Keys() {
+		value, _ := response.Get(key)
+		if number, ok := value.(pyjson.Int); ok {
+			document[key] = json.Number(number.String())
+			continue
+		}
+		document[key] = value
+	}
+	return document
+}
+
+// GetLLMSettings is `admin llm-settings get`: the org's BYO LLM settings with
+// the API key masked. The organization must exist and hold the BYO LLM tier.
+func (o Operator) GetLLMSettings(ctx context.Context, orgID string, config LLMSettingsConfig) (map[string]any, error) {
+	h := o.llmHandlers(config)
+	if refusal, err := h.byoLLMAccess(ctx, orgID, false); refusal != nil || err != nil {
+		return nil, llmError(refusal, err)
+	}
+	response, err := h.llmSettingsResponse(ctx, h.store.Pool, orgID)
+	if err != nil {
+		return nil, err
+	}
+	return llmSettingsDocument(response), nil
+}
+
+// SetLLMSettings is `admin llm-settings set`: an empty provider is refused, then
+// the same access gate and upsert as the PUT route (no budget, no concurrency: the
+// verb has neither). Any failure after the input checks reads "failed to update
+// LLM settings" (Python's catch-all), the refusals their own message.
+func (o Operator) SetLLMSettings(ctx context.Context, orgID string, in LLMSettingsInput, config LLMSettingsConfig) (map[string]any, error) {
+	provider := pythonparity.Strip(in.Provider)
+	if provider == "" {
+		return nil, refuse("invalid LLM settings input: provider must not be empty")
+	}
+	h := o.llmHandlers(config)
+	refusal, err := h.byoLLMAccess(ctx, orgID, false)
+	if refusal == nil && err == nil {
+		var out *pyjson.Object
+		out, refusal, err = h.applyLLMSettings(ctx, orgID, llmUpsert{provider: provider, model: in.Model, apiKey: in.APIKey, baseURL: in.BaseURL})
+		if refusal == nil && err == nil {
+			return llmSettingsDocument(out), nil
+		}
+	}
+	if refusal != nil {
+		return nil, llmError(refusal, nil)
+	}
+	return nil, &llmFailure{message: "failed to update LLM settings", cause: err}
+}
+
+// llmFailure is a failure Python reports by a fixed text; the cause is kept for
+// the operator's log.
+type llmFailure struct {
+	message string
+	cause   error
+}
+
+func (e *llmFailure) Error() string { return e.message }
+
+// FixedText is the text Python prints for the failure.
+func (e *llmFailure) FixedText() string { return e.message }
+func (e *llmFailure) Unwrap() error     { return e.cause }
+
+// DeleteLLMSettings is `admin llm-settings delete`: cleanup access (the tier and
+// the feature flag are not checked, so stored credentials stay removable), then
+// every llm key of the org is deleted; none existing is a refusal.
+func (o Operator) DeleteLLMSettings(ctx context.Context, orgID string, config LLMSettingsConfig) error {
+	h := o.llmHandlers(config)
+	refusal, err := h.byoLLMAccess(ctx, orgID, true)
+	if refusal == nil && err == nil {
+		var tag pgconn.CommandTag
+		tag, err = h.store.Pool.Exec(ctx,
+			`DELETE FROM settings WHERE org_id = $1 AND category = $2 AND key = ANY($3)`,
+			orgID, llmCategory, llmSettingKeys)
+		if err == nil {
+			if tag.RowsAffected() == 0 {
+				return refuse("LLM settings not found")
+			}
+			return nil
+		}
+	}
+	if refusal != nil {
+		return llmError(refusal, nil)
+	}
+	return &llmFailure{message: "failed to delete LLM settings", cause: err}
 }

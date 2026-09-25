@@ -25,6 +25,30 @@ func repoFile(t *testing.T, relative string) []byte {
 	return data
 }
 
+// The image repositories a migrate path may run. The check is on the exact
+// repository, not on a substring of the name: an image called
+// dev-health-go-dho-not-real is not the dho image.
+const (
+	dhoRepository      = "ghcr.io/full-chaos/dev-health-go-dho"
+	operatorRepository = "ghcr.io/full-chaos/dev-health-go-operator"
+)
+
+// imageRepository is the repository of an image reference: a Compose
+// `${VAR:-default}` is read as its default, and the digest and the tag are
+// dropped.
+func imageRepository(reference string) string {
+	if strings.HasPrefix(reference, "${") && strings.HasSuffix(reference, "}") {
+		if _, fallback, found := strings.Cut(reference[2:len(reference)-1], ":-"); found {
+			reference = fallback
+		}
+	}
+	reference, _, _ = strings.Cut(reference, "@")
+	if slash := strings.LastIndex(reference, "/"); strings.Contains(reference[slash+1:], ":") {
+		reference = reference[:slash+1+strings.Index(reference[slash+1:], ":")]
+	}
+	return reference
+}
+
 // composeMigrate is the `migrate` service of a Compose or Swarm file.
 type composeMigrate struct {
 	Image       string            `yaml:"image"`
@@ -63,8 +87,8 @@ func TestComposeMigrateServicesRunDhoMigrateUpgrade(t *testing.T) {
 			if err := node.Decode(&migrate); err != nil {
 				t.Fatal(err)
 			}
-			if !strings.Contains(migrate.Image, "dev-health-go-dho") && !strings.Contains(migrate.Image, "dev-health-go-operator") {
-				t.Fatalf("image = %s, want a dho image", migrate.Image)
+			if repository := imageRepository(migrate.Image); repository != dhoRepository && repository != operatorRepository {
+				t.Fatalf("image = %s, want the dho or operator image repository", migrate.Image)
 			}
 			if migrate.Entrypoint != nil {
 				t.Fatalf("entrypoint = %v, want none: the dho image's entrypoint runs", migrate.Entrypoint)
@@ -125,7 +149,7 @@ func TestKubernetesMigrateJobRunsDhoMigrateUpgrade(t *testing.T) {
 		t.Fatalf("restartPolicy %q with %d container(s)", spec.RestartPolicy, len(spec.Containers))
 	}
 	c := spec.Containers[0]
-	if !strings.Contains(c.Image, "dev-health-go-dho") || c.Command != nil || !reflect.DeepEqual(c.Args, []string{"migrate", "upgrade", "--river"}) {
+	if imageRepository(c.Image) != dhoRepository || c.Command != nil || !reflect.DeepEqual(c.Args, []string{"migrate", "upgrade", "--river"}) {
 		t.Fatalf("image %s command %v args %v, want the dho image running [migrate upgrade --river]", c.Image, c.Command, c.Args)
 	}
 	env := map[string]string{}
@@ -205,7 +229,7 @@ func TestKubernetesApiWaitsForMigrationsWithDho(t *testing.T) {
 			if init.Name != "wait-for-migrations" {
 				continue
 			}
-			if !strings.Contains(init.Image, "dev-health-go-dho") || init.Command != nil ||
+			if imageRepository(init.Image) != dhoRepository || init.Command != nil ||
 				!reflect.DeepEqual(init.Args, []string{"migrate", "clickhouse", "status", "--check"}) {
 				t.Fatalf("image %s command %v args %v, want the dho image running exactly [migrate clickhouse status --check]", init.Image, init.Command, init.Args)
 			}
@@ -243,5 +267,25 @@ func TestGoWorkersDefaultToOrderingContract2(t *testing.T) {
 		if !strings.Contains(text, testCase.want) || strings.Contains(text, "OPERATIONAL_ORDERING_CONTRACT:-1}") {
 			t.Fatalf("%s does not default the contract to 2 (%s)", testCase.file, testCase.want)
 		}
+	}
+}
+
+func TestImageRepositoryIsTheExactRepository(t *testing.T) {
+	for reference, want := range map[string]string{
+		"ghcr.io/full-chaos/dev-health-go-dho:latest":                                      dhoRepository,
+		"ghcr.io/full-chaos/dev-health-go-dho":                                             dhoRepository,
+		"ghcr.io/full-chaos/dev-health-go-dho@sha256:abc":                                  dhoRepository,
+		"ghcr.io/full-chaos/dev-health-go-dho:v1@sha256:abc":                               dhoRepository,
+		"${DEV_HEALTH_GO_DHO_IMAGE:-ghcr.io/full-chaos/dev-health-go-dho:latest}":          dhoRepository,
+		"${DEV_HEALTH_GO_OPERATOR_IMAGE:-ghcr.io/full-chaos/dev-health-go-operator:local}": operatorRepository,
+		"ghcr.io/full-chaos/dev-health-go-dho-not-real:latest":                             "ghcr.io/full-chaos/dev-health-go-dho-not-real",
+		"registry:5000/dev-health-go-dho:1":                                                "registry:5000/dev-health-go-dho",
+	} {
+		if got := imageRepository(reference); got != want {
+			t.Errorf("imageRepository(%q) = %q, want %q", reference, got, want)
+		}
+	}
+	if imageRepository("ghcr.io/full-chaos/dev-health-go-dho-not-real:latest") == dhoRepository {
+		t.Fatal("a look-alike image name reads as the dho repository")
 	}
 }

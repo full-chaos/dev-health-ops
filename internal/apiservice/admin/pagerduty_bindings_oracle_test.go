@@ -97,7 +97,7 @@ VALUES ($1, $2, $3, $4, 'service', $5, $5, $5, '{}'::json, $6, now(), now())`, i
 			integration("I-nocred", "main", "pagerduty", "", true)
 			integration("I-github", "main", "github", "C1", true)
 			integration("I-other", "other", "pagerduty", "C-other", true)
-			for _, s := range []string{"S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8", "S13", "S14", "S15", "S16", "S17", "S18"} {
+			for _, s := range []string{"S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8", "S13", "S14", "S15", "S16", "S17", "S18", "S19"} {
 				source(s, "main", "I1", "pagerduty", true)
 			}
 			source("S-disabled", "main", "I1", "pagerduty", false)
@@ -140,6 +140,11 @@ VALUES ($1, $2, $3, $4, $5, 'v1:seed-not-decrypted', 'v1', $6, now(), now(), $7:
 			// the organisation alone).
 			binding("B-ready-revoked-S17", "main", "S17", "C1", "ready", "sub-s17", true)
 			binding("B-crossorg-S18", "other", "S18", "C1", "active", "sub-s18", false)
+			// Activation swaps the source's active row whatever its
+			// organisation (Python filters the lock by source only): the two
+			// planes must do the same on data no route can create.
+			binding("B-crossorg-S19", "other", "S19", "C1", "active", "sub-s19", false)
+			binding("B-ready-S19", "main", "S19", "C1", "ready", "sub-s19-next", false)
 
 			admin_ := func(slug string) map[string]any {
 				return map[string]any{"user_id": adminID.String(), "email": "pd-bind-admin@example.com", "org_id": orgs[slug].String(), "role": "admin"}
@@ -226,6 +231,7 @@ VALUES ($1, $2, $3, $4, $5, 'v1:seed-not-decrypted', 'v1', $6, now(), now(), $7:
 		act("activate a ready candidate over an active binding", "activate", "admin", S("B-ready-S4")),
 		act("activate again: it is active now", "activate", "admin", S("B-ready-S4")),
 		act("activate a ready candidate with no active binding", "activate", "admin", S("B-ready-S5")),
+		act("activate swaps a foreign-organisation active row on the source", "activate", "admin", S("B-ready-S19")),
 		act("activate a candidate that is not ready", "activate", "admin", S("B-cand-S6")),
 		act("activate an inactive binding", "activate", "admin", S("B-inactive-S7")),
 		act("activate another organisation's binding", "activate", "admin", S("B-other")),

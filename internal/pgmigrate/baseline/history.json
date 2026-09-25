@@ -1,0 +1,782 @@
+[
+ {
+  "revision": "0066",
+  "down": "0065",
+  "labels": "river_cutover",
+  "realHead": true,
+  "head": true,
+  "doc": "Move the checked-in worker job kinds to the River transport."
+ },
+ {
+  "revision": "0140",
+  "down": "0139",
+  "labels": "application_schema",
+  "realHead": true,
+  "head": true,
+  "doc": "Invoices: record the Stripe time of the newest applied event."
+ },
+ {
+  "revision": "0139",
+  "down": "0138",
+  "labels": "application_schema",
+  "doc": "Refunds: write the row before Stripe answers, and key client retries."
+ },
+ {
+  "revision": "0138",
+  "down": "0137",
+  "labels": "application_schema",
+  "doc": "Audit the direct-write operator verbs in worker_operator_audits."
+ },
+ {
+  "revision": "0137",
+  "down": "0136",
+  "labels": "application_schema",
+  "doc": "Allow every audited operator action in worker_operator_audits."
+ },
+ {
+  "revision": "0136",
+  "down": "0135",
+  "labels": "application_schema",
+  "doc": "Allow the operator principal in worker_operator_audits."
+ },
+ {
+  "revision": "0135",
+  "down": "0134",
+  "labels": "application_schema",
+  "doc": "Add go_api_rest_proof_run.baseline_defect_declared."
+ },
+ {
+  "revision": "0134",
+  "down": "0133",
+  "labels": "application_schema",
+  "doc": "Add the REST live-prove receipt ledger, ``go_api_rest_proof_run``."
+ },
+ {
+  "revision": "0133",
+  "down": "0132",
+  "labels": "application_schema",
+  "doc": "Seed the go-api-prove proof service principal users row."
+ },
+ {
+  "revision": "0132",
+  "down": "0131",
+  "labels": "application_schema",
+  "doc": "Retire the Celery rollback route for the four sync-dispatch transport kinds."
+ },
+ {
+  "revision": "0131",
+  "down": "0130",
+  "labels": "application_schema",
+  "doc": "Promote the ``sync.provider_unit`` route off canary AND off Celery."
+ },
+ {
+  "revision": "0130",
+  "down": "0129",
+  "labels": "application_schema",
+  "doc": "Add ``go_api_routing_audits`` -- the append-only record of routing writes."
+ },
+ {
+  "revision": "0129",
+  "down": "0128",
+  "labels": "application_schema",
+  "doc": "Add ``build_binding`` to ``go_api_proof_run``."
+ },
+ {
+  "revision": "0128",
+  "down": "0127",
+  "labels": "application_schema",
+  "doc": "Add measurement provenance to ``go_api_proof_run``."
+ },
+ {
+  "revision": "0127",
+  "down": "0126",
+  "labels": "application_schema",
+  "doc": "Add review_evidence / recorded_by to the Go-API registry tables."
+ },
+ {
+  "revision": "0126",
+  "down": "0125",
+  "labels": "application_schema",
+  "doc": "Add work_item_attribution to the remaining_metric_runs family CHECK constraint."
+ },
+ {
+  "revision": "0125",
+  "down": "0124",
+  "labels": "application_schema",
+  "doc": "Promote every checked-in worker job route off the Celery rollback route."
+ },
+ {
+  "revision": "0124",
+  "down": "0123",
+  "labels": "application_schema",
+  "doc": "Add a blocked marker to daily_metrics_runs."
+ },
+ {
+  "revision": "0123",
+  "down": "0122",
+  "labels": "application_schema",
+  "doc": "Seed the native work_item_attribution backstop route."
+ },
+ {
+  "revision": "0122",
+  "down": "0121",
+  "labels": "application_schema",
+  "doc": "Add a durable claim/completion fence to billing_notifications."
+ },
+ {
+  "revision": "0121",
+  "down": "0120",
+  "labels": "application_schema",
+  "doc": "Validate the NOT VALID scheduled_sync_occurrences.reconcile_error_code CHECK constraint added in 0120."
+ },
+ {
+  "revision": "0120",
+  "down": "0119",
+  "labels": "application_schema",
+  "doc": "Widen scheduled_sync_occurrences.reconcile_error_code for invalid_plan (CHAOS-4602, install, NOT VALID)."
+ },
+ {
+  "revision": "0119",
+  "down": "0118",
+  "labels": "application_schema",
+  "doc": "Add sync_manual_triggers (CHAOS-4602)."
+ },
+ {
+  "revision": "0118",
+  "down": "0117",
+  "labels": "application_schema",
+  "doc": "Index sync_dispatch_outbox for the CHAOS-4583 terminal-close candidate scan."
+ },
+ {
+  "revision": "0117",
+  "down": "0116",
+  "labels": "application_schema",
+  "doc": "Add the partition-recompute provenance ledger (CHAOS-4459)."
+ },
+ {
+  "revision": "0116",
+  "down": "0115",
+  "labels": "application_schema",
+  "doc": "Add the finalize-redrive provenance ledger (CHAOS-4405)."
+ },
+ {
+  "revision": "0115",
+  "down": "0114",
+  "labels": "application_schema",
+  "doc": "Seed the native team_repo_ownership-derivation route."
+ },
+ {
+  "revision": "0114",
+  "down": "0113",
+  "labels": "application_schema",
+  "doc": "Add the Go API operation rollout registry and proof ledger (CHAOS-4366)."
+ },
+ {
+  "revision": "0113",
+  "down": "0112",
+  "labels": "application_schema",
+  "doc": "Add a durable failed_permanent terminal state to daily_metrics_partitions."
+ },
+ {
+  "revision": "0112",
+  "down": "0111",
+  "labels": "application_schema",
+  "doc": "Split the single ``auto_import_teams`` flag into three independent\ncategories: teams, projects, members (CHAOS-4323)."
+ },
+ {
+  "revision": "0111",
+  "down": "0110",
+  "labels": "application_schema",
+  "doc": "Index active sync runs for the materializer's finalize/dispatch candidate scan."
+ },
+ {
+  "revision": "0110",
+  "down": "0109",
+  "labels": "application_schema",
+  "doc": "Retire the extra_metrics/team_metrics remaining-metric route rows and family values."
+ },
+ {
+  "revision": "0109",
+  "down": "0108",
+  "labels": "application_schema",
+  "doc": "Add the durable executed-proof ledger and backfill it once (CHAOS-4114)."
+ },
+ {
+  "revision": "0108",
+  "down": "0107",
+  "labels": "application_schema",
+  "doc": "Repair ``integration_datasets`` rows that drifted out of agreement with the\nconfig's ``sync_targets`` (CHAOS-4106)."
+ },
+ {
+  "revision": "0107",
+  "down": "0106",
+  "labels": "application_schema",
+  "doc": "Move the fresh-install ``sync.provider_unit`` route off Celery, which no\nlonger has an executor (CHAOS-4054 step 4)."
+ },
+ {
+  "revision": "0106",
+  "down": "0105",
+  "labels": "application_schema",
+  "doc": "Surface repeated provider_dataset_unavailable terminalizations on the\nIntegrationDataset row the owner-facing API already reads, instead of only\nper-unit failure rows nobody watches (CHAOS-4048)."
+ },
+ {
+  "revision": "0105",
+  "down": "0104",
+  "labels": "application_schema",
+  "doc": "Add the optional root trace_parent captured once when a sync run starts."
+ },
+ {
+  "revision": "0104",
+  "down": "0103",
+  "labels": "application_schema",
+  "doc": "Add expiring Go worker-instance registrations."
+ },
+ {
+  "revision": "0103",
+  "down": "0102",
+  "labels": "application_schema",
+  "doc": "Add durable cross-process Go worker concurrency leases."
+ },
+ {
+  "revision": "0102",
+  "down": "0101",
+  "labels": "application_schema",
+  "doc": "Add fenced resumable provider-unit chunk persistence."
+ },
+ {
+  "revision": "0101",
+  "down": "0100",
+  "labels": "application_schema",
+  "doc": "Index active sync runs for bounded River terminal-delivery repair."
+ },
+ {
+  "revision": "0100",
+  "down": "0099",
+  "labels": "application_schema",
+  "doc": "Persist fixed-schedule degraded verdicts with their occurrence."
+ },
+ {
+  "revision": "0099",
+  "down": "0098",
+  "labels": "application_schema",
+  "doc": "Retain minimal evidence for abandoned worker-job delivery."
+ },
+ {
+  "revision": "0098",
+  "down": "0097",
+  "labels": "application_schema",
+  "doc": "Add the durable report execution lease and reclaim counter."
+ },
+ {
+  "revision": "0097",
+  "down": "0096",
+  "labels": "application_schema",
+  "doc": "Backfill the durable recurring-report paging marker."
+ },
+ {
+  "revision": "0096",
+  "down": "0095",
+  "labels": "application_schema",
+  "doc": "Enforce one saved report per recurring schedule."
+ },
+ {
+  "revision": "0095",
+  "down": "0094",
+  "labels": "application_schema",
+  "doc": "Persist the explicit no-repository outcome for scheduled daily metrics."
+ },
+ {
+  "revision": "0094",
+  "down": "0093",
+  "labels": "application_schema",
+  "doc": "Seed the native sync-coverage refresh route."
+ },
+ {
+  "revision": "0093",
+  "down": "0092",
+  "labels": "application_schema",
+  "doc": "Fence prepared effect snapshots to their owning unit tenant."
+ },
+ {
+  "revision": "0092",
+  "down": "0091",
+  "labels": "application_schema",
+  "doc": "Add bounded prepared effect snapshots for exact Go worker recovery."
+ },
+ {
+  "revision": "0091",
+  "down": "0090",
+  "labels": "application_schema",
+  "doc": "Validate the NOT VALID dev_answer_frames.public_outcome CHECK constraint added in 0090."
+ },
+ {
+  "revision": "0090",
+  "down": "0089",
+  "labels": "application_schema",
+  "doc": "Widen dev_answer_frames.public_outcome for CHAOS-3541 (install, NOT VALID)."
+ },
+ {
+  "revision": "0089",
+  "down": "0088",
+  "labels": "application_schema",
+  "doc": "Validate the NOT VALID dev_runs.public_outcome CHECK constraint added in 0088."
+ },
+ {
+  "revision": "0088",
+  "down": "0087",
+  "labels": "application_schema",
+  "doc": "Widen dev_runs.public_outcome for CHAOS-3541 (install, NOT VALID)."
+ },
+ {
+  "revision": "0087",
+  "down": "0086",
+  "labels": "application_schema",
+  "doc": "Add dev_qua_shadow_budget_reservations (CHAOS-3452 isolated shadow quota)."
+ },
+ {
+  "revision": "0086",
+  "down": "0085",
+  "labels": "application_schema",
+  "doc": "Add dev_run_qua_shadow (CHAOS-3389 Question Understanding Agent shadow mode)."
+ },
+ {
+  "revision": "0085",
+  "down": "0084",
+  "labels": "application_schema",
+  "doc": "Add sync run unit deferral-exhaustion columns (CHAOS-3412)."
+ },
+ {
+  "revision": "0084",
+  "down": "0083",
+  "labels": "application_schema",
+  "doc": "Validate the NOT VALID dev_runs.narrative_failure_code CHECK constraint added in 0083."
+ },
+ {
+  "revision": "0083",
+  "down": "0082",
+  "labels": "application_schema",
+  "doc": "DB-enforced closed vocabulary for dev_runs.narrative_failure_code (CHAOS-3297 codex NO-SHIP finding round 1, MEDIUM #3)."
+ },
+ {
+  "revision": "0082",
+  "down": "0081",
+  "labels": "application_schema",
+  "doc": "Validate the NOT VALID dev_run_source_observations CHECK constraint added in 0081."
+ },
+ {
+  "revision": "0081",
+  "down": "0080",
+  "labels": "application_schema",
+  "doc": "Widen dev_run_source_observations.source_class for CHAOS-3297 stack #3 (install, NOT VALID)."
+ },
+ {
+  "revision": "0080",
+  "down": "0079",
+  "labels": "application_schema",
+  "doc": "DB-enforced payload contract + row-binding triggers (CHAOS-3297 Codex review round 9)."
+ },
+ {
+  "revision": "0079",
+  "down": "0078",
+  "labels": "application_schema",
+  "doc": "Persist the exact terminal v1 DevError payload on dev_runs (CHAOS-3297 Codex review HIGH #1)."
+ },
+ {
+  "revision": "0078",
+  "down": "0077",
+  "labels": "application_schema",
+  "doc": "Reserve narrative mode/failure-code columns on dev_runs (CHAOS-3297 stack #1)."
+ },
+ {
+  "revision": "0077",
+  "down": "0076",
+  "labels": "application_schema",
+  "doc": "Add CHAOS-3302 health rule governance persistence."
+ },
+ {
+  "revision": "0076",
+  "down": "0075",
+  "labels": "application_schema",
+  "doc": "Add compact exact-history sync coverage projections."
+ },
+ {
+  "revision": "0075",
+  "down": "0074",
+  "labels": "application_schema",
+  "doc": "Validate the NOT VALID dev_runs CHECK constraints added in 0074."
+ },
+ {
+  "revision": "0074",
+  "down": "0073",
+  "labels": "application_schema",
+  "doc": "Add Ask Dev Wave 3.1 v2 persistence (intent, resolution, plans, frames, replay)."
+ },
+ {
+  "revision": "0073",
+  "down": "0072",
+  "labels": "application_schema",
+  "doc": "Seed the default-disabled Ask Dev Wave 3.1 entitlement."
+ },
+ {
+  "revision": "0072",
+  "down": "0071",
+  "labels": "application_schema",
+  "doc": "Widen dev_runs.state for the CHAOS-3292 preflight and add run diagnostics."
+ },
+ {
+  "revision": "0071",
+  "down": "0070",
+  "labels": "application_schema",
+  "doc": "Add durable reservations and usage for organization BYO LLM budgets."
+ },
+ {
+  "revision": "0070",
+  "down": "0069",
+  "labels": "application_schema",
+  "doc": "Seed the default-disabled Ask Dev contextual-entrypoints entitlement."
+ },
+ {
+  "revision": "0069",
+  "down": "0068",
+  "labels": "application_schema",
+  "doc": "Index Ask Dev user and organization admission windows."
+ },
+ {
+  "revision": "0068",
+  "down": "0067",
+  "labels": "application_schema",
+  "doc": "Add Ask Dev conversation, run, feedback, retention, and audit persistence."
+ },
+ {
+  "revision": "0067",
+  "down": "0065",
+  "labels": "application_schema",
+  "doc": "Seed the default-disabled Ask Dev entitlement."
+ },
+ {
+  "revision": "0065",
+  "down": "0064",
+  "branchPoint": true,
+  "doc": "Add the durable fixed-schedule occurrence ledger."
+ },
+ {
+  "revision": "0064",
+  "down": "0063",
+  "doc": "Seed safe rollback routes for every checked-in worker job kind."
+ },
+ {
+  "revision": "0063",
+  "down": "0062",
+  "doc": "Add durable completion fences for ordered worker handoffs."
+ },
+ {
+  "revision": "0062",
+  "down": "0061",
+  "doc": "Index the bounded Celery canary-quiescence probe."
+ },
+ {
+  "revision": "0061",
+  "down": "0060",
+  "doc": "Seed the safe sync-provider route baseline and audit actions."
+ },
+ {
+  "revision": "0060",
+  "down": "0059",
+  "doc": "Add fenced work-graph and investment execution requests."
+ },
+ {
+  "revision": "0059",
+  "down": "0058",
+  "doc": "Add the metric compatibility execution ledger."
+ },
+ {
+  "revision": "0058",
+  "down": "0057",
+  "doc": "Add durable state for remaining metric family partitions."
+ },
+ {
+  "revision": "0057",
+  "down": "0056",
+  "doc": "Add durable daily-metrics run, partition, and finalize state."
+ },
+ {
+  "revision": "0056",
+  "down": "0055",
+  "doc": "Make report-ready notification claims recoverable after worker loss."
+ },
+ {
+  "revision": "0055",
+  "down": "0054",
+  "doc": "Add durable per-kind worker job route control."
+ },
+ {
+  "revision": "0054",
+  "down": "0053",
+  "doc": "Persist generic webhook and billing delivery references."
+ },
+ {
+  "revision": "0053",
+  "down": "0052",
+  "doc": "Add durable report occurrence and execution idempotency metadata."
+ },
+ {
+  "revision": "0052",
+  "down": "0051",
+  "doc": "Add durable execution idempotency state for Go worker jobs."
+ },
+ {
+  "revision": "0051",
+  "down": "0050",
+  "doc": "Add durable retry and quarantine state to scheduled sync occurrences."
+ },
+ {
+  "revision": "0050",
+  "down": "0049",
+  "doc": "Add durable scheduled sync occurrence identities."
+ },
+ {
+  "revision": "0049",
+  "down": "0048",
+  "doc": "Add the database-backed sync dispatch transport ownership fence."
+ },
+ {
+  "revision": "0048",
+  "down": "0047",
+  "doc": "Enable canonical incident ingestion by default."
+ },
+ {
+  "revision": "0047",
+  "down": "0046",
+  "doc": "Add durable payload-free worker operator audit records."
+ },
+ {
+  "revision": "0046",
+  "down": "0045",
+  "doc": "Add the language-neutral worker job outbox."
+ },
+ {
+  "revision": "0045",
+  "down": "0044",
+  "doc": "Retain only server-generated PagerDuty OAuth authorization state."
+ },
+ {
+  "revision": "0044",
+  "down": "0043",
+  "doc": "Add durable encrypted OAuth revocation retry records."
+ },
+ {
+  "revision": "0043",
+  "down": "0042",
+  "doc": "Add PagerDuty webhook binding lifecycle table."
+ },
+ {
+  "revision": "0042",
+  "down": "0041",
+  "doc": ""
+ },
+ {
+  "revision": "0041",
+  "down": "0040",
+  "doc": "Add PagerDuty OAuth setup: authorization-request state + token metadata."
+ },
+ {
+  "revision": "0040",
+  "down": "0039",
+  "doc": ""
+ },
+ {
+  "revision": "0039",
+  "down": "0038",
+  "doc": "Add encrypted, versioned OAuth credential storage."
+ },
+ {
+  "revision": "0038",
+  "down": "0037",
+  "doc": "Add dedicated internal service credentials for ACR entitlement lookups."
+ },
+ {
+  "revision": "0037",
+  "down": "0036",
+  "doc": "Seed the hosted Agent Context Runtime entitlement flag."
+ },
+ {
+  "revision": "0036",
+  "down": "0035",
+  "doc": "Seed the customer_push_ingest feature flag."
+ },
+ {
+  "revision": "0035",
+  "down": "0034",
+  "doc": "Add bounded-recompute visibility columns + job log (CHAOS-2699)."
+ },
+ {
+  "revision": "0034",
+  "down": "0033",
+  "doc": "Add external_ingest_batches, external_ingest_rejections, and\nexternal_ingest_batch_payloads (CHAOS-2694)."
+ },
+ {
+  "revision": "0033",
+  "down": "0032",
+  "doc": "Add external_ingest_sources and external_ingest_tokens (CHAOS-2696/2712)."
+ },
+ {
+  "revision": "0032",
+  "down": "0031",
+  "doc": "Drop the legacy sync_configurations.credential_id auth surface (CHAOS-2762)."
+ },
+ {
+  "revision": "0031",
+  "down": "0030",
+  "doc": "Add provider_rate_limit_observations table (CHAOS-2758)."
+ },
+ {
+  "revision": "0030",
+  "down": "0029",
+  "doc": "Add run-auth freeze credential stamp columns to sync_runs (CHAOS-2755)."
+ },
+ {
+  "revision": "0029",
+  "down": "0028",
+  "doc": "Add sync run reference discovery ledger."
+ },
+ {
+  "revision": "0028",
+  "down": "0027",
+  "doc": "Add sync unit expired-lease retry columns."
+ },
+ {
+  "revision": "0027",
+  "down": "0026",
+  "doc": "Allow orgless refresh-token records."
+ },
+ {
+  "revision": "0026",
+  "down": "0025",
+  "doc": "Add organizations.onboarding_integration_skipped_at."
+ },
+ {
+  "revision": "0025",
+  "down": "0024",
+  "doc": "Add sync compute checkpoints."
+ },
+ {
+  "revision": "0024",
+  "down": "0023",
+  "doc": "Add investment provider batch control-plane tables."
+ },
+ {
+  "revision": "0023",
+  "down": "0022",
+  "doc": "Rename sync_config integration links to canonical names."
+ },
+ {
+  "revision": "0022",
+  "down": "0021",
+  "doc": "Add sync run unit rate-limit deferral columns."
+ },
+ {
+  "revision": "0021",
+  "down": "0020",
+  "doc": "Drop the dead Postgres team/identity mapping tables."
+ },
+ {
+  "revision": "0020",
+  "down": "0019",
+  "doc": "Add sync dispatch outbox."
+ },
+ {
+  "revision": "0019",
+  "down": "0018",
+  "doc": "Add sync run unit lease columns."
+ },
+ {
+  "revision": "0018",
+  "down": "0017",
+  "doc": "Add explicit planner-managed sync config marker."
+ },
+ {
+  "revision": "0017",
+  "down": "0016",
+  "doc": "Seed the byo_llm feature flag."
+ },
+ {
+  "revision": "0016",
+  "down": "0015",
+  "doc": "Add sync configuration migration compatibility links."
+ },
+ {
+  "revision": "0015",
+  "down": "0014",
+  "doc": "Add integration source dataset sync run data model."
+ },
+ {
+  "revision": "0014",
+  "down": "0013",
+  "doc": "Add github_app_installations table for frictionless GitHub App install."
+ },
+ {
+  "revision": "0013",
+  "down": "0012",
+  "doc": "Add ScheduledJob unique constraint for sync dispatch markers."
+ },
+ {
+  "revision": "0012",
+  "down": "0011",
+  "doc": "Add token_version to users for JWT credential invalidation."
+ },
+ {
+  "revision": "0011",
+  "down": "0010",
+  "doc": "Add managed_by column to org_licenses and organizations for tier-source guard."
+ },
+ {
+  "revision": "0010",
+  "down": "0009",
+  "doc": "Add retry_count column to ci_pipeline_runs for TestOps rerun_rate."
+ },
+ {
+  "revision": "0009",
+  "down": "0008",
+  "doc": "Widen unique constraints on sync_configurations and scheduled_jobs to include provider."
+ },
+ {
+  "revision": "0008",
+  "down": "0007",
+  "doc": "Add successor_jti column to refresh_tokens for rotation grace window."
+ },
+ {
+  "revision": "0007",
+  "down": "0006",
+  "doc": "Seed feature_flags table from STANDARD_FEATURES registry."
+ },
+ {
+  "revision": "0006",
+  "down": "0005",
+  "doc": "Add updated_by to org_feature_overrides and ON DELETE CASCADE to billing_prices.plan_id."
+ },
+ {
+  "revision": "0005",
+  "down": "0004",
+  "doc": "Add saved_reports and report_runs tables."
+ },
+ {
+  "revision": "0004",
+  "down": "0003",
+  "doc": "Add parent_id self-referencing FK to sync_configurations."
+ },
+ {
+  "revision": "0003",
+  "down": "0002",
+  "doc": "Add tier_limits table with seed data."
+ },
+ {
+  "revision": "0002",
+  "down": "0001",
+  "doc": "Add backfill_jobs table."
+ },
+ {
+  "revision": "0001",
+  "down": "<base>",
+  "doc": "Initial consolidated schema migration."
+ }
+]

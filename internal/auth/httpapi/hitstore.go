@@ -54,6 +54,11 @@ var ErrPathBound = errors.New("httpapi: in-process rate-limit counter set is ful
 // never letting the request through.
 type CounterStore interface {
 	Increment(ctx context.Context, hit Hit) (count int64, err error)
+	// Peek returns the window's count for hit WITHOUT counting anything: 0
+	// when the pair has no live counter. It is slowapi's `limits` `test()`
+	// read (ingest auth's failure throttle checks it before the request has
+	// failed and only records a failure when it does).
+	Peek(ctx context.Context, hit Hit) (count int64, err error)
 	// Backend names the store as /health reports it: "redis" for the shared
 	// store (Python's own word for it), "memory" for the in-process one.
 	Backend() string
@@ -98,6 +103,17 @@ func (m *MemoryCounters) Increment(_ context.Context, hit Hit) (int64, error) {
 	return int64(count), nil
 }
 
+// Peek implements CounterStore.
+func (m *MemoryCounters) Peek(_ context.Context, hit Hit) (int64, error) {
+	m.mu.Lock()
+	counters := m.windows[hit.Limit.ID]
+	m.mu.Unlock()
+	if counters == nil {
+		return 0, nil
+	}
+	return int64(counters.peek(hit.Key, hit.Path)), nil
+}
+
 // Backend implements CounterStore.
 func (m *MemoryCounters) Backend() string { return "memory" }
 
@@ -140,6 +156,22 @@ func (l *KeyedLimiter) Backend() string {
 		return "noop"
 	}
 	return l.store.Backend()
+}
+
+// Test reports whether the (key, path) pair is still below its limit, WITHOUT
+// counting a hit: slowapi's `limits` `test()` (the stored count is below the
+// limit). A caller that records its own hits (Allow) after deciding it must
+// checks Test first, as ingest auth's failure throttle does. A store error is
+// returned and the request must be treated as refused.
+func (l *KeyedLimiter) Test(ctx context.Context, key, path string) (bool, error) {
+	if l == nil {
+		return true, nil
+	}
+	count, err := l.store.Peek(ctx, Hit{Limit: l.limit, Key: key, Path: path})
+	if err != nil {
+		return false, err
+	}
+	return count < int64(l.limit.Count), nil
 }
 
 // Allow counts one hit for (key, path) and reports whether it is within the
@@ -231,6 +263,20 @@ func (l *KeyedLimiter) Declare() {
 // returned; the caller answers the Python api's unhandled-error 500.
 func (l *KeyedLimiter) AllowCounted(ctx context.Context, key, path string) (bool, error) {
 	allowed, err := l.Allow(ctx, key, path)
+	if err != nil {
+		id := l.ID()
+		slog.ErrorContext(ctx, "rate limit store failed; answering 500",
+			slog.String("limit", id), slog.String("backend", l.Backend()), slog.String("error", err.Error()))
+		RateLimitStoreErrors.inc(id)
+	}
+	return allowed, err
+}
+
+// TestCounted is Test for a caller that answers a store error itself: the
+// error is logged with the limit's ID (never the caller key or path) and
+// counted in RateLimitStoreErrors, then returned.
+func (l *KeyedLimiter) TestCounted(ctx context.Context, key, path string) (bool, error) {
+	allowed, err := l.Test(ctx, key, path)
 	if err != nil {
 		id := l.ID()
 		slog.ErrorContext(ctx, "rate limit store failed; answering 500",

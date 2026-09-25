@@ -127,7 +127,7 @@ func seedIngestToken(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgI
 
 func newTestDeps(t *testing.T, pool *pgxpool.Pool, client valkeygo.Client) Deps {
 	t.Helper()
-	return Deps{Pool: pool, Valkey: client, limiters: newAuthLimiters(nil), routeLimiters: newRouteLimiters(nil, nil)}
+	return Deps{Pool: pool, Valkey: client, limiters: newAuthLimiters(nil, nil), routeLimiters: newRouteLimiters(nil, nil)}
 }
 
 // TestAcceptBatchEndToEnd is this ticket's proof shape (Linear CHAOS-6246,

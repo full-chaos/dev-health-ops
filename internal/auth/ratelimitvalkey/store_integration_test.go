@@ -252,3 +252,43 @@ func TestCallerKeyAndPathAreNotStoredInCleartext(t *testing.T) {
 		t.Fatalf("counter = %d (%v), want 2", count, err)
 	}
 }
+
+// Peek is the non-consuming read `limits` test() needs: 0 for a pair that has
+// no live counter (and it creates none), the count after hits, and 0 again
+// once the window's TTL removes the counter.
+func TestPeekReadsTheCounterWithoutCreatingOrCountingIt(t *testing.T) {
+	client, _ := startValkey(t)
+	store := newStore(t, client)
+	limit := httpapi.Limit{ID: "peek", Count: 5, Window: 2 * time.Second}
+	ctx := context.Background()
+	hitFor := httpapi.Hit{Limit: limit, Key: "k", Path: ""}
+	count, err := store.Peek(ctx, hitFor)
+	if err != nil || count != 0 {
+		t.Fatalf("Peek of an untouched pair = %d, %v, want 0", count, err)
+	}
+	keys, err := client.Do(ctx, client.B().Keys().Pattern("dho:rl:*").Build()).AsStrSlice()
+	if err != nil || len(keys) != 0 {
+		t.Fatalf("Peek created keys %q (%v), want none", keys, err)
+	}
+	hit(t, store, limit, "k", "")
+	hit(t, store, limit, "k", "")
+	if count, err := store.Peek(ctx, hitFor); err != nil || count != 2 {
+		t.Fatalf("Peek after two hits = %d, %v, want 2 (and unchanged by peeking)", count, err)
+	}
+	if count, _ := store.Peek(ctx, hitFor); count != 2 {
+		t.Fatalf("a second Peek = %d, want 2 (Peek must not count)", count)
+	}
+	time.Sleep(2*time.Second + 250*time.Millisecond)
+	if count, err := store.Peek(ctx, hitFor); err != nil || count != 0 {
+		t.Fatalf("Peek after the window = %d, %v, want 0 (the counter expired)", count, err)
+	}
+}
+
+func TestPeekReturnsTheStoreError(t *testing.T) {
+	client, _ := startValkey(t)
+	store := newStore(t, client)
+	client.Close()
+	if _, err := store.Peek(context.Background(), httpapi.Hit{Limit: httpapi.Limit{ID: "down", Count: 1, Window: time.Hour}, Key: "k"}); err == nil {
+		t.Fatal("Peek on a closed client returned no error")
+	}
+}

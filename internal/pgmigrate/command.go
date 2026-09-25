@@ -43,6 +43,22 @@ func Command(resolve ResolveDSN) cli.Command {
 					return run(ctx, "status", resolve, env)
 				},
 			},
+			{
+				Name:    "current",
+				Summary: "print the revisions the database records, as `alembic current` does",
+				Kind:    cli.Verb,
+				Run: func(ctx context.Context, env cli.Env) int {
+					return revisions(ctx, "current", resolve, env)
+				},
+			},
+			{
+				Name:    "heads",
+				Summary: "print the head revisions, as `alembic heads` does",
+				Kind:    cli.Verb,
+				Run: func(ctx context.Context, env cli.Env) int {
+					return revisions(ctx, "heads", resolve, env)
+				},
+			},
 		},
 	}
 }
@@ -128,4 +144,70 @@ func writeResult(stdout, stderr io.Writer, value any) int {
 func writeError(stderr io.Writer, code, detail string) int {
 	_ = json.NewEncoder(stderr).Encode(map[string]any{"error": map[string]string{"code": code, "detail": detail}})
 	return cli.ExitFailure
+}
+
+// revisions is `current` and `heads`. The verbose forms of `alembic current` and
+// `alembic heads` print each script's docstring and path, which dho does not
+// carry (the Go migrator has the head baseline, not the Alembic scripts):
+// --verbose is refused, and `history` and `downgrade` stay with Alembic.
+func revisions(ctx context.Context, verb string, resolve ResolveDSN, env cli.Env) int {
+	flags := flag.NewFlagSet("dho migrate postgres "+verb, flag.ContinueOnError)
+	flags.SetOutput(env.Stderr)
+	verbose := flags.Bool("verbose", false, "not supported: the Alembic script details are not carried in dho")
+	flags.BoolVar(verbose, "v", false, "not supported: the Alembic script details are not carried in dho")
+	defaultUsage := flags.Usage
+	flags.Usage = func() {
+		defaultUsage()
+		if verb == "current" {
+			fmt.Fprint(env.Stderr, "\nEnvironment:\n"+
+				"  MIGRATION_DATABASE_URI (or _FILE, or the DEV_HEALTH_MIGRATION_PG_* component form)   elevated DSN, direct to PostgreSQL\n"+
+				"  POSTGRES_URI (or _FILE)                   used when MIGRATION_DATABASE_URI is not configured\n")
+		}
+	}
+	if err := flags.Parse(env.Args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return cli.ExitOK
+		}
+		return cli.ExitUsage
+	}
+	if flags.NArg() != 0 {
+		fmt.Fprintln(env.Stderr, "argument error: positional arguments are not accepted")
+		return cli.ExitUsage
+	}
+	if *verbose {
+		fmt.Fprintln(env.Stderr, "argument error: --verbose is not supported: dho does not carry the Alembic script details (use alembic for them)")
+		return cli.ExitUsage
+	}
+	baseline, err := LoadBaseline()
+	if err != nil {
+		return writeError(env.Stderr, "baseline_unavailable", err.Error())
+	}
+	chain, err := LoadChain()
+	if err != nil {
+		return writeError(env.Stderr, "chain_unavailable", err.Error())
+	}
+	if verb == "heads" {
+		if err := WriteHeads(env.Stdout, baseline, chain); err != nil {
+			return cli.ExitFailure
+		}
+		return cli.ExitOK
+	}
+	dsn, _, ok := resolve(env.Lookup, env.Stderr)
+	if !ok {
+		return cli.ExitFailure
+	}
+	boundary := secrets.NewBoundary(dsn.Reveal())
+	conn, err := pgx.Connect(ctx, dsn.Reveal())
+	if err != nil {
+		return writeError(env.Stderr, "postgres_unavailable", boundary.Redact(err).Error())
+	}
+	defer conn.Close(context.Background())
+	recorded, err := Recorded(ctx, conn)
+	if err != nil {
+		return writeError(env.Stderr, "current_failed", boundary.Redact(err).Error())
+	}
+	if err := WriteCurrent(env.Stdout, recorded, baseline, chain); err != nil {
+		return cli.ExitFailure
+	}
+	return cli.ExitOK
 }

@@ -46,6 +46,12 @@ func Command() cli.Command {
 					return run(ctx, "status", env)
 				},
 			},
+			{
+				Name:    "repair",
+				Summary: "list the stale duplicate rows of repos (deleted with --apply)",
+				Kind:    cli.Verb,
+				Run:     runRepair,
+			},
 		},
 	}
 }
@@ -162,4 +168,65 @@ func writeResultQuietly(stderr io.Writer, result Result) {
 func writeError(stderr io.Writer, code, detail string) int {
 	_ = json.NewEncoder(stderr).Encode(map[string]any{"error": map[string]string{"code": code, "detail": detail}})
 	return cli.ExitFailure
+}
+
+const repairUsage = `Usage: dho migrate clickhouse repair [--apply] [--org <org_id>]
+
+Lists the stale duplicate rows of repos: a repository whose newest row (by
+last_synced) is in another organization leaves its older (id, org_id) rows
+behind. A dry run unless --apply is given, which deletes the listed rows one
+mutation at a time. --org keeps only the groups whose newest row belongs to it.
+
+Environment:
+  CLICKHOUSE_URI (or _FILE, or the DEV_HEALTH_CH_* component form)   ClickHouse DSN, native protocol
+  ORG_ID                       the organization, when --org is not given
+`
+
+func runRepair(ctx context.Context, env cli.Env) int {
+	flags := flag.NewFlagSet("dho migrate clickhouse repair", flag.ContinueOnError)
+	flags.SetOutput(env.Stderr)
+	flags.Usage = func() { fmt.Fprint(env.Stderr, repairUsage) }
+	apply := flags.Bool("apply", false, "delete the stale duplicate rows shown by the dry run")
+	org := flags.String("org", "", "only groups whose newest repository row belongs to this org_id")
+	if err := flags.Parse(env.Args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return cli.ExitOK
+		}
+		return cli.ExitUsage
+	}
+	if flags.NArg() != 0 {
+		fmt.Fprintln(env.Stderr, "argument error: positional arguments are not accepted")
+		return cli.ExitUsage
+	}
+	if env.Lookup == nil {
+		env.Lookup = func(string) (string, bool) { return "", false }
+	}
+	// Python takes the organization verbatim: an explicit --org (even an empty
+	// one, which means no filter) wins over ORG_ID, and neither is trimmed.
+	orgID := *org
+	given := false
+	flags.Visit(func(set *flag.Flag) { given = given || set.Name == "org" })
+	if !given {
+		orgID, _ = env.Lookup("ORG_ID")
+	}
+	dsn, configured, err := platformconfig.ResolveDSN(env.Lookup, ClickHouseURIKey, platformconfig.ClickHouseSpec)
+	if err != nil {
+		return writeError(env.Stderr, "configuration_error", err.Error())
+	}
+	if !configured {
+		return writeError(env.Stderr, "configuration_error", ClickHouseURIKey+" is required")
+	}
+	boundary := secrets.NewBoundary(dsn.Reveal())
+	config := chstorage.DefaultConfig(dsn.Reveal())
+	config.MaxOpenConns, config.MaxIdleConns = 1, 1
+	config.ReadTimeout = migrationReadTimeout
+	conn, err := chstorage.Open(ctx, config)
+	if err != nil {
+		return writeError(env.Stderr, "clickhouse_unavailable", boundary.Redact(err).Error())
+	}
+	defer conn.Close()
+	if err := Repair(ctx, conn, orgID, *apply, env.Stdout); err != nil {
+		return writeError(env.Stderr, "repair_failed", boundary.Redact(err).Error())
+	}
+	return cli.ExitOK
 }

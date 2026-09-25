@@ -136,15 +136,16 @@ func TestLoadSyntheticRefusesBeforeTouchingClickHouse(t *testing.T) {
 		exit int
 		want string
 	}{
-		"no target":         {env, []string{"--repo-name", "a/b"}, cli.ExitUsage, "--target must be one of cicd, deployments, incidents, tests"},
-		"git has no rows":   {env, []string{"--target", "git", "--repo-name", "a/b"}, cli.ExitUsage, "--target must be one of"},
-		"no repo name":      {env, []string{"--target", "cicd"}, cli.ExitUsage, "--repo-name is required"},
-		"zero backfill":     {env, []string{"--target", "cicd", "--repo-name", "a/b", "--backfill", "0"}, cli.ExitUsage, "--backfill must be at least 1"},
-		"no org":            {nil, []string{"--target", "cicd", "--repo-name", "a/b"}, cli.ExitUsage, "an organization is required"},
-		"a positional":      {env, []string{"--target", "cicd", "--repo-name", "a/b", "x"}, cli.ExitUsage, "positional arguments are not accepted"},
-		"an unfrozen set":   {env, []string{"--target", "cicd", "--repo-name", "a/b", "--backfill", "7"}, cli.ExitRefused, "no_frozen_rows"},
-		"another org":       {map[string]string{"ORG_ID": "22222222-2222-4333-8444-555555555555"}, []string{"--target", "cicd", "--repo-name", "ci-metrics-executed-proof/repo", "--backfill", "7"}, cli.ExitRefused, "the frozen sets are"},
-		"no clickhouse dsn": {env, []string{"--target", "cicd", "--repo-name", "ci-metrics-executed-proof/repo", "--backfill", "7"}, cli.ExitFailure, "CLICKHOUSE_URI is required"},
+		"no target":                       {env, []string{"--repo-name", "a/b"}, cli.ExitUsage, "--target must be one of cicd, deployments, incidents, tests"},
+		"git has no rows":                 {env, []string{"--target", "git", "--repo-name", "a/b"}, cli.ExitUsage, "--target must be one of"},
+		"no repo name":                    {env, []string{"--target", "cicd"}, cli.ExitUsage, "--repo-name is required"},
+		"zero backfill":                   {env, []string{"--target", "cicd", "--repo-name", "a/b", "--backfill", "0"}, cli.ExitUsage, "--backfill must be at least 1"},
+		"no org":                          {nil, []string{"--target", "cicd", "--repo-name", "a/b"}, cli.ExitUsage, "an organization is required"},
+		"a positional":                    {env, []string{"--target", "cicd", "--repo-name", "a/b", "x"}, cli.ExitUsage, "positional arguments are not accepted"},
+		"an alias of a frozen repository": {env, []string{"--target", "cicd", "--repo-name", "ci-metrics-executed-proof__repo", "--backfill", "7"}, cli.ExitRefused, "no_frozen_rows"},
+		"an unfrozen set":                 {env, []string{"--target", "cicd", "--repo-name", "a/b", "--backfill", "7"}, cli.ExitRefused, "no_frozen_rows"},
+		"another org":                     {map[string]string{"ORG_ID": "22222222-2222-4333-8444-555555555555"}, []string{"--target", "cicd", "--repo-name", "ci-metrics-executed-proof/repo", "--backfill", "7"}, cli.ExitRefused, "the frozen sets are"},
+		"no clickhouse dsn":               {env, []string{"--target", "cicd", "--repo-name", "ci-metrics-executed-proof/repo", "--backfill", "7"}, cli.ExitFailure, "CLICKHOUSE_URI is required"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			code, stderr := runLoad(tc.env, tc.args...)
@@ -152,5 +153,31 @@ func TestLoadSyntheticRefusesBeforeTouchingClickHouse(t *testing.T) {
 				t.Fatalf("exit %d, stderr %q; want exit %d naming %q", code, stderr, tc.exit, tc.want)
 			}
 		})
+	}
+}
+
+// The file name is only a lookup key: it encodes "/" as "__", so a different
+// repository name can name the same file. The set that is read must be the one
+// that was asked for, whatever the name that found it.
+func TestLoadFrozenSetRefusesAnAliasOfAFrozenName(t *testing.T) {
+	const org, repo = "c0ffee00-dead-4bee-8bad-f00dfeedface", "ci-metrics-executed-proof/repo"
+	for name, tc := range map[string]struct {
+		org, repo string
+		days      int
+	}{
+		"the __ spelling of the repository": {org, "ci-metrics-executed-proof__repo", 7},
+		"another org, same repository":      {"22222222-2222-4333-8444-555555555555", repo, 7},
+		"another window":                    {org, repo, 8},
+		"upper-cased org":                   {strings.ToUpper(org), repo, 7},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if set, err := LoadFrozenSet(tc.org, tc.repo, tc.days); err == nil {
+				t.Fatalf("loaded the set for %s / %s / %d days, which was never frozen", set.OrgID, set.RepoName, set.Days)
+			}
+		})
+	}
+	set, err := LoadFrozenSet(org, repo, 7)
+	if err != nil || set.OrgID != org || set.RepoName != repo || set.Days != 7 {
+		t.Fatalf("the frozen set itself: %+v, %v", set, err)
 	}
 }

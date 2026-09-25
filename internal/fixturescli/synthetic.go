@@ -85,7 +85,17 @@ func LoadFrozenSet(orgID, repoName string, days int) (FrozenSet, error) {
 		return FrozenSet{}, fmt.Errorf("no frozen synthetic rows for organization %s, repository %s, %d day(s); the frozen sets are: %s",
 			orgID, repoName, days, strings.Join(FrozenSetNames(), "; "))
 	}
-	return decodeFrozenSet(raw)
+	set, err := decodeFrozenSet(raw)
+	if err != nil {
+		return FrozenSet{}, err
+	}
+	// The file name only found the set ("/" is spelled "__" in it, so two names
+	// can reach one file): what was read must be what was asked for.
+	if set.OrgID != orgID || set.RepoName != repoName || set.Days != days {
+		return FrozenSet{}, fmt.Errorf("no frozen synthetic rows for organization %s, repository %s, %d day(s); the frozen sets are: %s",
+			orgID, repoName, days, strings.Join(FrozenSetNames(), "; "))
+	}
+	return set, nil
 }
 
 func decodeFrozenSet(raw []byte) (FrozenSet, error) {

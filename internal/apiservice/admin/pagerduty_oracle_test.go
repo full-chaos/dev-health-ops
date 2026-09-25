@@ -18,7 +18,8 @@ import (
 // copies of one database, byte for byte.
 func TestPagerDutyStatusAndPreflightVenueOracle(t *testing.T) {
 	ctx := context.Background()
-	root := repoRoot(t)
+	golden := venueoracle.OpenGolden(t, pagerDutyGolden("status_preflight", "TestPagerDutyStatusAndPreflightVenueOracle", "e19b00d68636aecac76f2c741ddd1ef0738337867fb50dbdedb646ea68788197"))
+	root := golden.PythonRoot(t, repoRoot(t))
 	const jwtKey = "venue-oracle-test-secret-key-for-pagerduty-status-32-bytes!"
 
 	type orgSpec struct {
@@ -168,8 +169,9 @@ VALUES ($1, 'pagerduty', $2, 'v1:not-decryptable-here', 1, now(), now(), $3, $4,
 		get("preflight get is 405", path+"/preflight", "admin"),
 	}
 
-	python := venue.ServePython(t, requests)
+	python := golden.Python(t, venue, requests)
 	goBase, _ := startGoServer(t, ctx, venue, jwtKey)
-	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{})
+	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{Golden: golden})
 	t.Log(receipt)
+	golden.Finish(t)
 }

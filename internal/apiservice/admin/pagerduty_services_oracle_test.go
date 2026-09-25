@@ -244,22 +244,25 @@ type servicesCredential struct {
 	raw     string // stored as is (not encrypted) when set
 }
 
-func TestPagerDutyServicesVenueOracle(t *testing.T) { runPagerDutyServicesOracle(t, "full") }
+func TestPagerDutyServicesVenueOracle(t *testing.T) {
+	runPagerDutyServicesOracle(t, "full", "285af7feedb688b54525c857ecbd3f351d1def4c227614058919aec17e942de9")
+}
 func TestPagerDutyServicesWithoutOAuthAppVenueOracle(t *testing.T) {
-	runPagerDutyServicesOracle(t, "noapp")
+	runPagerDutyServicesOracle(t, "noapp", "c5ea110b2e92451f590476a54732b4f950ff8c814ac8254b1d4cb54eb7cc8c5c")
 }
 
-func runPagerDutyServicesOracle(t *testing.T, mode string) {
+func runPagerDutyServicesOracle(t *testing.T, mode, digest string) {
 	ctx := context.Background()
-	root := repoRoot(t)
+	golden := venueoracle.OpenGolden(t, pagerDutyGolden("services_"+mode, t.Name(), digest))
+	root := golden.PythonRoot(t, repoRoot(t))
 	const jwtKey = "venue-oracle-test-secret-key-for-pagerduty-services-32-b"
 
 	fake := &fakeServicesPagerDuty{attempts: map[string]int{}}
 	upstream := httptest.NewServer(fake.handler())
 	t.Cleanup(upstream.Close)
 
-	orgs := map[string]uuid.UUID{"main": uuid.New(), "other": uuid.New()}
-	adminID, memberID, superID := uuid.New(), uuid.New(), uuid.New()
+	orgs := map[string]uuid.UUID{"main": uuid.MustParse(venueoracle.StableUUID("pd-svc-org-main")), "other": uuid.MustParse(venueoracle.StableUUID("pd-svc-org-other"))}
+	adminID, memberID, superID := uuid.MustParse(venueoracle.StableUUID("pd-svc-admin")), uuid.MustParse(venueoracle.StableUUID("pd-svc-member")), uuid.MustParse(venueoracle.StableUUID("pd-svc-super"))
 
 	api := func(mode, token string, extra string) string {
 		return `{"auth_mode":"` + mode + `","subdomain":"acme","region":"us"` + extra + `}`
@@ -558,8 +561,10 @@ VALUES ($1, 'pagerduty', 'oa-corrupt', 'garbage-not-fernet', 1, now(), now(), 'b
 	if err != nil {
 		t.Fatalf("build decryptor: %v", err)
 	}
-	python := venue.ServePython(t, requests)
-	pythonCalls := fake.take()
+	python := golden.Python(t, venue, requests)
+	// What the Python plane sent upstream is part of what its executed build
+	// answered: frozen with the golden, compared with the Go plane's calls.
+	pythonCallsText := golden.Rows(t, "upstream calls of the Python plane", func() string { return strings.Join(fake.take(), "\n") })
 	fake.reset()
 	goBase, _ := startGoServer(t, ctx, venue, jwtKey, func(deps *apiservice.Deps) {
 		deps.Decryptor = decryptor
@@ -568,28 +573,30 @@ VALUES ($1, 'pagerduty', 'oa-corrupt', 'garbage-not-fernet', 1, now(), now(), 'b
 			TokenURL: upstream.URL + "/token", APIBaseOverride: upstream.URL,
 		}
 	})
-	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{})
+	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{Golden: golden})
 	t.Log(receipt)
 	goCalls := fake.take()
 
-	if strings.Join(pythonCalls, "\n") != strings.Join(goCalls, "\n") {
-		t.Errorf("upstream calls differ:\n python (%d):\n%s\n go (%d):\n%s", len(pythonCalls), strings.Join(pythonCalls, "\n"), len(goCalls), strings.Join(goCalls, "\n"))
+	if pythonCallsText != strings.Join(goCalls, "\n") {
+		t.Errorf("upstream calls differ:\n python:\n%s\n go (%d):\n%s", pythonCallsText, len(goCalls), strings.Join(goCalls, "\n"))
 	}
-	if mode == "full" && len(pythonCalls) < 50 {
-		t.Errorf("the fake upstream saw only %d calls from the Python plane", len(pythonCalls))
+	if pythonCalls := strings.Count(pythonCallsText, "\n") + 1; mode == "full" && pythonCalls < 50 {
+		t.Errorf("the fake upstream saw only %d calls from the Python plane", pythonCalls)
 	}
 	_ = time.Second
 
 	compare := func(name, query string) {
 		t.Helper()
-		source := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), query)
+		source := golden.Rows(t, name, func() string {
+			return venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), query)
+		})
 		goRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), query)
 		if source != goRows {
 			t.Errorf("%s differs after the requests:\n python: %s\n go:     %s", name, source, goRows)
 		}
 	}
 	compare("provider_oauth_credentials metadata", `SELECT org_id, credential_name, version, has_refresh_token, granted_scopes::text, binding_id,
-	round(EXTRACT(EPOCH FROM (expires_at - updated_at)) / 10) * 10
+	CASE WHEN expires_at < '2001-01-01'::timestamptz THEN 'seeded expiry kept' ELSE (round(EXTRACT(EPOCH FROM (expires_at - updated_at)) / 10) * 10)::text END
 FROM provider_oauth_credentials ORDER BY org_id, credential_name`)
 	compare("integration_credentials untouched", `SELECT org_id, name, is_active, (credentials_encrypted IS NULL)::text, config::text FROM integration_credentials ORDER BY org_id, name`)
 
@@ -650,8 +657,10 @@ FROM provider_oauth_credentials ORDER BY org_id, credential_name`)
 		}
 		return out
 	}
-	pythonTokens, goTokens := opened(venue.SourceDB), opened(venue.GoDB)
-	if strings.Join(pythonTokens, "\n") != strings.Join(goTokens, "\n") {
-		t.Errorf("stored OAuth tokens differ:\n python:\n%s\n go:\n%s", strings.Join(pythonTokens, "\n"), strings.Join(goTokens, "\n"))
+	pythonTokens := golden.Rows(t, "stored OAuth tokens opened", func() string { return strings.Join(opened(venue.SourceDB), "\n") })
+	goTokens := strings.Join(opened(venue.GoDB), "\n")
+	if pythonTokens != goTokens {
+		t.Errorf("stored OAuth tokens differ:\n python:\n%s\n go:\n%s", pythonTokens, goTokens)
 	}
+	golden.Finish(t)
 }

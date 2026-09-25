@@ -1,0 +1,339 @@
+{
+  "header": {
+    "test": "TestPagerDutyAuthorizeWithoutClientIDVenueOracle",
+    "python_build": "9642a8da15bb47d7400cef13cc93547b46e5f67a",
+    "recipe": "git worktree add --detach $DIR 9642a8da15bb47d7400cef13cc93547b46e5f67a; then from the repository root: DHO_VENUE_GOLDEN_UPDATE=1 DHO_VENUE_GOLDEN_PYTHON_ROOT=$DIR DEV_HEALTH_LIVE_PYTHON_ORACLES=1 go test -tags=integration -count=1 -run '^TestPagerDutyAuthorizeWithoutClientIDVenueOracle$' ./internal/apiservice/admin/ (it fails once by design and prints the digest to pin)"
+  },
+  "requests": [
+    {
+      "name": "W authorize",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/authorize",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "status": 400,
+      "headers": {
+        "content-length": "51",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "9f0c5175-a240-4c32-bff7-5949405361c3"
+      },
+      "body": "{\"detail\":\"PAGER_DUTY_CLIENT_ID is not configured\"}"
+    },
+    {
+      "name": "W authorize again same org",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/authorize",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "status": 400,
+      "headers": {
+        "content-length": "51",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "f1940491-a4e3-4e70-8990-c6217e5f465d"
+      },
+      "body": "{\"detail\":\"PAGER_DUTY_CLIENT_ID is not configured\"}"
+    },
+    {
+      "name": "W authorize other org",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/authorize",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "status": 400,
+      "headers": {
+        "content-length": "51",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "ddcaf133-3877-4634-8825-30a08351fbcb"
+      },
+      "body": "{\"detail\":\"PAGER_DUTY_CLIENT_ID is not configured\"}"
+    },
+    {
+      "name": "W authorize purges this org's expired row",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/authorize",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "status": 400,
+      "headers": {
+        "content-length": "51",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "52d7f992-6f22-432b-a34e-8e026c19269b"
+      },
+      "body": "{\"detail\":\"PAGER_DUTY_CLIENT_ID is not configured\"}"
+    },
+    {
+      "name": "W authorize uppercase org id claim",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/authorize",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "status": 400,
+      "headers": {
+        "content-length": "51",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "1dc08c73-740f-454a-b1bb-85660ce6c723"
+      },
+      "body": "{\"detail\":\"PAGER_DUTY_CLIENT_ID is not configured\"}"
+    },
+    {
+      "name": "W authorize feature off refused",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/authorize",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "status": 403,
+      "headers": {
+        "content-length": "78",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "2e73992a-39ac-43d7-9170-eba74a522479"
+      },
+      "body": "{\"detail\":\"Canonical incident ingestion is not enabled for this organization\"}"
+    },
+    {
+      "name": "W authorize malformed org id claim is 403",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/authorize",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "status": 403,
+      "headers": {
+        "content-length": "78",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "eb656299-eb18-4f70-9a45-868693a98896"
+      },
+      "body": "{\"detail\":\"Canonical incident ingestion is not enabled for this organization\"}"
+    },
+    {
+      "name": "W authorize extra field",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/authorize",
+      "body_sha256": "4ac0eca5e8336886160e927f5fb5e89184f915e540257d1ae12d2590f02cb37e",
+      "status": 422,
+      "headers": {
+        "content-length": "111",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "c9f56222-f807-495b-94ee-dbb38495fa29"
+      },
+      "body": "{\"detail\":[{\"type\":\"extra_forbidden\",\"loc\":[\"body\",\"bogus\"],\"msg\":\"Extra inputs are not permitted\",\"input\":1}]}"
+    },
+    {
+      "name": "W authorize several extra fields in order",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/authorize",
+      "body_sha256": "aee131d9b50a0f3437c6c08e5d74e86ecde12267e4c88d68d61ba26207c241bb",
+      "status": 422,
+      "headers": {
+        "content-length": "202",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "0fe4104c-5366-4b85-9c3c-96d3ef623668"
+      },
+      "body": "{\"detail\":[{\"type\":\"extra_forbidden\",\"loc\":[\"body\",\"z\"],\"msg\":\"Extra inputs are not permitted\",\"input\":1},{\"type\":\"extra_forbidden\",\"loc\":[\"body\",\"a\"],\"msg\":\"Extra inputs are not permitted\",\"input\":2}]}"
+    },
+    {
+      "name": "W authorize body list",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/authorize",
+      "body_sha256": "0efe8c9a1a45511fe53ad47b02b82b32f480d1819874e6fb6d37c54cf9a2f5ea",
+      "status": 422,
+      "headers": {
+        "content-length": "147",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "77b94795-0f1e-4940-95a1-a71617a666b9"
+      },
+      "body": "{\"detail\":[{\"type\":\"model_attributes_type\",\"loc\":[\"body\"],\"msg\":\"Input should be a valid dictionary or object to extract fields from\",\"input\":[]}]}"
+    },
+    {
+      "name": "W authorize body null",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/authorize",
+      "body_sha256": "bb99e5bb3a756453730056b900774c14cb31358abd79a0903bf0e0349d0ade7a",
+      "status": 422,
+      "headers": {
+        "content-length": "82",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "5e4169b5-2016-4693-b8dc-66e6aad503b2"
+      },
+      "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\"],\"msg\":\"Field required\",\"input\":null}]}"
+    },
+    {
+      "name": "W authorize empty body",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/authorize",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 422,
+      "headers": {
+        "content-length": "82",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "d380ac79-6c30-433d-a16d-eaa9fe942e77"
+      },
+      "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\"],\"msg\":\"Field required\",\"input\":null}]}"
+    },
+    {
+      "name": "W authorize invalid json",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/authorize",
+      "body_sha256": "28e9bafc45d8e9d77bb0a8df443097a32dd967a6099b003712d0ef3725b43c5e",
+      "status": 422,
+      "headers": {
+        "content-length": "158",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "4d4fea28-90fb-4d93-b825-23d440b2eb6b"
+      },
+      "body": "{\"detail\":[{\"type\":\"json_invalid\",\"loc\":[\"body\",1],\"msg\":\"JSON decode error\",\"input\":{},\"ctx\":{\"error\":\"Expecting property name enclosed in double quotes\"}}]}"
+    },
+    {
+      "name": "W authorize non-json content type",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/authorize",
+      "body_sha256": "5e21d86b709b6aa2d5fff6d7cfed56ab73bf002020a6399a955c0b09791d4613",
+      "status": 422,
+      "headers": {
+        "content-length": "148",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "ddbb2f0c-21a8-4f47-bc02-dee7d7db7982"
+      },
+      "body": "{\"detail\":[{\"type\":\"model_attributes_type\",\"loc\":[\"body\"],\"msg\":\"Input should be a valid dictionary or object to extract fields from\",\"input\":\"x\"}]}"
+    },
+    {
+      "name": "W authorize unauthenticated",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/authorize",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "status": 401,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "www-authenticate": "Bearer",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "5079962b-fa9d-41bc-9ebd-d70919818d2e"
+      },
+      "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
+    },
+    {
+      "name": "W authorize member refused",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/authorize",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "status": 403,
+      "headers": {
+        "content-length": "34",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "c23d6b1c-6afa-436e-83e5-9c13eb27688a"
+      },
+      "body": "{\"detail\":\"Admin access required\"}"
+    },
+    {
+      "name": "authorize get is 405",
+      "method": "GET",
+      "path": "/api/v1/admin/integrations/pagerduty/authorize",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 405,
+      "headers": {
+        "allow": "POST",
+        "content-length": "31",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "eaef00d2-8c76-40a4-ac7f-657ca97374ea"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    }
+  ],
+  "rows": {
+    "authorization request rows": {
+      "rows": "0314363a-0756-5369-9602-b35074e4974513600.000000v1 | c2ad3a3b-08d2-5463-be96-3f45d97b708913600.000000v1"
+    }
+  }
+}

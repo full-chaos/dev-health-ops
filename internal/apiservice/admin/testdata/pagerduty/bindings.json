@@ -1,0 +1,1569 @@
+{
+  "header": {
+    "test": "TestPagerDutyWebhookBindingsVenueOracle",
+    "python_build": "9642a8da15bb47d7400cef13cc93547b46e5f67a",
+    "recipe": "git worktree add --detach $DIR 9642a8da15bb47d7400cef13cc93547b46e5f67a; then from the repository root: DHO_VENUE_GOLDEN_UPDATE=1 DHO_VENUE_GOLDEN_PYTHON_ROOT=$DIR DEV_HEALTH_LIVE_PYTHON_ORACLES=1 go test -tags=integration -count=1 -run '^TestPagerDutyWebhookBindingsVenueOracle$' ./internal/apiservice/admin/ (it fails once by design and prints the digest to pin)"
+  },
+  "requests": [
+    {
+      "name": "new: create",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings",
+      "body_sha256": "6f6a00482d3f4a6401c7f40a998c2db9726a8ab51f2af0ae83a60d7cbccf4c6c",
+      "status": 201,
+      "headers": {
+        "content-length": "336",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "e7564523-ce9a-41c7-9d45-006ceec579b0"
+      },
+      "body": "{\"id\":\"e27d6a0f-1f3d-477a-9bc5-fc57bd062b80\",\"integration_source_id\":\"f9636bcc-e03e-5cb5-83dd-d9e95aba2cc3\",\"credential_id\":\"4003302b-05c2-5a60-b7de-5fcd9335b4b9\",\"provider_subscription_id\":\"sub-new-1\",\"signing_secret_key_version\":\"v1\",\"status\":\"candidate\",\"created_at\":\"2026-09-25T22:12:57.929559Z\",\"rotated_at\":null,\"revoked_at\":null}"
+    },
+    {
+      "name": "new: create again for the same source (two candidates)",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings",
+      "body_sha256": "e7e3e086ee37d19c551476d54d457586b22ed2446a4ada2068b8c67e229a7483",
+      "status": 201,
+      "headers": {
+        "content-length": "336",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "e846f92a-b6d0-474a-b7cc-318d7e403fb0"
+      },
+      "body": "{\"id\":\"a0931780-0a1c-4246-9dfc-f0fc1bfe86cd\",\"integration_source_id\":\"f9636bcc-e03e-5cb5-83dd-d9e95aba2cc3\",\"credential_id\":\"4003302b-05c2-5a60-b7de-5fcd9335b4b9\",\"provider_subscription_id\":\"sub-new-2\",\"signing_secret_key_version\":\"v1\",\"status\":\"candidate\",\"created_at\":\"2026-09-25T22:12:58.212644Z\",\"rotated_at\":null,\"revoked_at\":null}"
+    },
+    {
+      "name": "create subscription id blank",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings",
+      "body_sha256": "d4573b4dbd53592356bf7600266fda88c9d98d1cb34db61ac3ebc3a9b85d7bfe",
+      "status": 400,
+      "headers": {
+        "content-length": "55",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "30cb7959-01e7-4af9-8ce1-43e39263cbcd"
+      },
+      "body": "{\"detail\":\"provider subscription id must not be blank\"}"
+    },
+    {
+      "name": "create source unknown",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings",
+      "body_sha256": "e2622d830556c8bb7c2d01ea2ab1dce12d7697a664343e76e8a9f730c4276467",
+      "status": 400,
+      "headers": {
+        "content-length": "50",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "044c9140-c589-48ca-8945-fbb9b97a92ec"
+      },
+      "body": "{\"detail\":\"PagerDuty binding graph was not found\"}"
+    },
+    {
+      "name": "create credential unknown",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings",
+      "body_sha256": "1e2391b0c514d82c7c8494170dafd0b74458be26e485dab2a79ea95f3c724910",
+      "status": 400,
+      "headers": {
+        "content-length": "50",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "8c37763d-7712-4cf5-a41e-2bf0494780e0"
+      },
+      "body": "{\"detail\":\"PagerDuty binding graph was not found\"}"
+    },
+    {
+      "name": "create credential not linked to the integration",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings",
+      "body_sha256": "ff142e7782374209d6bc881f4647ec97651de7357dfa1ac14b2dfaa923f65599",
+      "status": 400,
+      "headers": {
+        "content-length": "63",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "eeab46ac-9d02-4dd2-9c4a-30c6af90b15c"
+      },
+      "body": "{\"detail\":\"PagerDuty binding graph is not active and same-org\"}"
+    },
+    {
+      "name": "create credential inactive",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings",
+      "body_sha256": "8e0e199a1706bd244b9e4a1d88f632e00311c6ab9b9869874dcfb00fad74e182",
+      "status": 400,
+      "headers": {
+        "content-length": "63",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "bfbd4646-b9e6-4af6-84b7-464378b898b1"
+      },
+      "body": "{\"detail\":\"PagerDuty binding graph is not active and same-org\"}"
+    },
+    {
+      "name": "create source disabled",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings",
+      "body_sha256": "6695986c2ad17253c6d9ca132f2dc09f65351bc6fe0596c011963a2e5ad9d665",
+      "status": 400,
+      "headers": {
+        "content-length": "63",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "fba3d7a6-2ee3-4f7a-8c56-d0330fb52626"
+      },
+      "body": "{\"detail\":\"PagerDuty binding graph is not active and same-org\"}"
+    },
+    {
+      "name": "create integration inactive",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings",
+      "body_sha256": "a60954ad2cb446465b287a6be64d39f4d329deb1d1300225f532c957c02f70ee",
+      "status": 400,
+      "headers": {
+        "content-length": "63",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "b66dfb3c-0dd9-4219-96a3-1e3ecf05c8be"
+      },
+      "body": "{\"detail\":\"PagerDuty binding graph is not active and same-org\"}"
+    },
+    {
+      "name": "create integration without a credential",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings",
+      "body_sha256": "df52e18b754cbb5c277ced250b6c8ef4a2d7d97943c53d1336c988be95914cd0",
+      "status": 400,
+      "headers": {
+        "content-length": "63",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "bc7093a1-dd73-4196-9b76-5f3783ac6e71"
+      },
+      "body": "{\"detail\":\"PagerDuty binding graph is not active and same-org\"}"
+    },
+    {
+      "name": "create source of another provider",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings",
+      "body_sha256": "df2e2725ebd1590a50e709bd464364bf8122a42b72801d4af053e885ea38b02b",
+      "status": 400,
+      "headers": {
+        "content-length": "63",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "8badab75-5121-40d7-89d2-edd05d550c6c"
+      },
+      "body": "{\"detail\":\"PagerDuty binding graph is not active and same-org\"}"
+    },
+    {
+      "name": "create integration of another provider",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings",
+      "body_sha256": "369b81427b5fc3c1589cd958dfb714c14fcfbbf71f84fb9d90a8b8135b7f9051",
+      "status": 400,
+      "headers": {
+        "content-length": "63",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "bb41f946-ea5f-43c7-86ed-aa319bd4a754"
+      },
+      "body": "{\"detail\":\"PagerDuty binding graph is not active and same-org\"}"
+    },
+    {
+      "name": "create source of another org",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings",
+      "body_sha256": "33b47b3cf3884b0e06e14f251e57db4d6f77a4171456e34f1070acfcc10a927c",
+      "status": 400,
+      "headers": {
+        "content-length": "63",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "9da9422c-78db-4d2d-bc52-1ef10108c28a"
+      },
+      "body": "{\"detail\":\"PagerDuty binding graph is not active and same-org\"}"
+    },
+    {
+      "name": "create feature off refused",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings",
+      "body_sha256": "4be67c40b489cde0511564d988b061a2ed9dcc76e4f42ec74e2579d4e5ce40ff",
+      "status": 403,
+      "headers": {
+        "content-length": "78",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "ca8c497e-c1e0-4617-b9ee-c90899c0e207"
+      },
+      "body": "{\"detail\":\"Canonical incident ingestion is not enabled for this organization\"}"
+    },
+    {
+      "name": "create invalid body wins over the gate",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "status": 422,
+      "headers": {
+        "content-length": "368",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "bec4c981-ddd8-4f87-aab1-fdb3b8395e0e"
+      },
+      "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"integration_source_id\"],\"msg\":\"Field required\",\"input\":{}},{\"type\":\"missing\",\"loc\":[\"body\",\"credential_id\"],\"msg\":\"Field required\",\"input\":{}},{\"type\":\"missing\",\"loc\":[\"body\",\"provider_subscription_id\"],\"msg\":\"Field required\",\"input\":{}},{\"type\":\"missing\",\"loc\":[\"body\",\"signing_secret\"],\"msg\":\"Field required\",\"input\":{}}]}"
+    },
+    {
+      "name": "create bad org claim is the gate's 403",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings",
+      "body_sha256": "4be67c40b489cde0511564d988b061a2ed9dcc76e4f42ec74e2579d4e5ce40ff",
+      "status": 403,
+      "headers": {
+        "content-length": "78",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "35d915f0-8dcd-4023-b213-81c04c7300bf"
+      },
+      "body": "{\"detail\":\"Canonical incident ingestion is not enabled for this organization\"}"
+    },
+    {
+      "name": "create fields missing",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "status": 422,
+      "headers": {
+        "content-length": "368",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "215c141f-7c3a-4a82-b37b-443627929be0"
+      },
+      "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"integration_source_id\"],\"msg\":\"Field required\",\"input\":{}},{\"type\":\"missing\",\"loc\":[\"body\",\"credential_id\"],\"msg\":\"Field required\",\"input\":{}},{\"type\":\"missing\",\"loc\":[\"body\",\"provider_subscription_id\"],\"msg\":\"Field required\",\"input\":{}},{\"type\":\"missing\",\"loc\":[\"body\",\"signing_secret\"],\"msg\":\"Field required\",\"input\":{}}]}"
+    },
+    {
+      "name": "create fields empty",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings",
+      "body_sha256": "e5b72714e708b5a9aab82e8732698128b75b9a169619373e1615f883e6d79b48",
+      "status": 422,
+      "headers": {
+        "content-length": "806",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "c62367fe-58e8-41ca-8e97-f6b8c9c7d3cb"
+      },
+      "body": "{\"detail\":[{\"type\":\"uuid_parsing\",\"loc\":[\"body\",\"integration_source_id\"],\"msg\":\"Input should be a valid UUID, invalid length: expected length 32 for simple format, found 0\",\"input\":\"\",\"ctx\":{\"error\":\"invalid length: expected length 32 for simple format, found 0\"}},{\"type\":\"uuid_parsing\",\"loc\":[\"body\",\"credential_id\"],\"msg\":\"Input should be a valid UUID, invalid length: expected length 32 for simple format, found 0\",\"input\":\"\",\"ctx\":{\"error\":\"invalid length: expected length 32 for simple format, found 0\"}},{\"type\":\"string_too_short\",\"loc\":[\"body\",\"provider_subscription_id\"],\"msg\":\"String should have at least 1 character\",\"input\":\"\",\"ctx\":{\"min_length\":1}},{\"type\":\"string_too_short\",\"loc\":[\"body\",\"signing_secret\"],\"msg\":\"String should have at least 1 character\",\"input\":\"\",\"ctx\":{\"min_length\":1}}]}"
+    },
+    {
+      "name": "create uuids malformed",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings",
+      "body_sha256": "cf6bf98eed5096fa6b823965499f18bc9e2046f3268880dd76ad15c1725bea46",
+      "status": 422,
+      "headers": {
+        "content-length": "464",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "476a7df7-011c-4a01-b1e3-95cb27414c6d"
+      },
+      "body": "{\"detail\":[{\"type\":\"uuid_parsing\",\"loc\":[\"body\",\"integration_source_id\"],\"msg\":\"Input should be a valid UUID, invalid character: found `n` at 1\",\"input\":\"nope\",\"ctx\":{\"error\":\"invalid character: found `n` at 1\"}},{\"type\":\"uuid_parsing\",\"loc\":[\"body\",\"credential_id\"],\"msg\":\"Input should be a valid UUID, invalid length: expected length 32 for simple format, found 4\",\"input\":\"1234\",\"ctx\":{\"error\":\"invalid length: expected length 32 for simple format, found 4\"}}]}"
+    },
+    {
+      "name": "new: create uuid forms",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings",
+      "body_sha256": "245a31b02c9649c89363d2ebaeba68bbb3b331f2a476f1c62206e9b13a878134",
+      "status": 201,
+      "headers": {
+        "content-length": "335",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "b68ed9c7-5eb9-4a74-817a-ee78cc8e2cad"
+      },
+      "body": "{\"id\":\"2de51dca-034c-4e78-9be6-5421bafdde06\",\"integration_source_id\":\"f9636bcc-e03e-5cb5-83dd-d9e95aba2cc3\",\"credential_id\":\"4003302b-05c2-5a60-b7de-5fcd9335b4b9\",\"provider_subscription_id\":\"sub-form\",\"signing_secret_key_version\":\"v1\",\"status\":\"candidate\",\"created_at\":\"2026-09-25T22:13:00.770346Z\",\"rotated_at\":null,\"revoked_at\":null}"
+    },
+    {
+      "name": "create types wrong",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings",
+      "body_sha256": "b818c3653814e7df449ffb57bf2f2cf8239de5c8cc5c7aa4c5ef107462db9d96",
+      "status": 422,
+      "headers": {
+        "content-length": "487",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "c95484f7-7e0a-4658-b91d-5e3da92dfa8a"
+      },
+      "body": "{\"detail\":[{\"type\":\"uuid_type\",\"loc\":[\"body\",\"integration_source_id\"],\"msg\":\"UUID input should be a string, bytes or UUID object\",\"input\":5},{\"type\":\"uuid_type\",\"loc\":[\"body\",\"credential_id\"],\"msg\":\"UUID input should be a string, bytes or UUID object\",\"input\":null},{\"type\":\"string_type\",\"loc\":[\"body\",\"provider_subscription_id\"],\"msg\":\"Input should be a valid string\",\"input\":[]},{\"type\":\"string_type\",\"loc\":[\"body\",\"signing_secret\"],\"msg\":\"Input should be a valid string\",\"input\":{}}]}"
+    },
+    {
+      "name": "create extra fields",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings",
+      "body_sha256": "0eb2ec4d2733df405692abafb4af6366cacfdfd8ec422984033c6e4f5f0c0a77",
+      "status": 422,
+      "headers": {
+        "content-length": "202",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "b6b5beaa-1360-4be2-82fd-43be45f60226"
+      },
+      "body": "{\"detail\":[{\"type\":\"extra_forbidden\",\"loc\":[\"body\",\"z\"],\"msg\":\"Extra inputs are not permitted\",\"input\":1},{\"type\":\"extra_forbidden\",\"loc\":[\"body\",\"a\"],\"msg\":\"Extra inputs are not permitted\",\"input\":2}]}"
+    },
+    {
+      "name": "create body list",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings",
+      "body_sha256": "0efe8c9a1a45511fe53ad47b02b82b32f480d1819874e6fb6d37c54cf9a2f5ea",
+      "status": 422,
+      "headers": {
+        "content-length": "147",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "385f554d-2564-4844-ae65-ec9392034d21"
+      },
+      "body": "{\"detail\":[{\"type\":\"model_attributes_type\",\"loc\":[\"body\"],\"msg\":\"Input should be a valid dictionary or object to extract fields from\",\"input\":[]}]}"
+    },
+    {
+      "name": "create member refused",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings",
+      "body_sha256": "5c69a6055f1e0b343ba52f008489a004a6a15f4fe0972603a349611af916cced",
+      "status": 403,
+      "headers": {
+        "content-length": "34",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "19bfd207-ef5f-4974-bb4c-fc5e4971d7f0"
+      },
+      "body": "{\"detail\":\"Admin access required\"}"
+    },
+    {
+      "name": "create superuser without org",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings",
+      "body_sha256": "5c69a6055f1e0b343ba52f008489a004a6a15f4fe0972603a349611af916cced",
+      "status": 403,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "3a32ddf4-9a96-45b0-992a-ea6d0932a668"
+      },
+      "body": "{\"detail\":\"Organization context required\"}"
+    },
+    {
+      "name": "create unauthenticated",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings",
+      "body_sha256": "5c69a6055f1e0b343ba52f008489a004a6a15f4fe0972603a349611af916cced",
+      "status": 401,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "www-authenticate": "Bearer",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "dca0acb6-4d4d-4f85-bdba-11f598f33632"
+      },
+      "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
+    },
+    {
+      "name": "collection get is 405",
+      "method": "GET",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 405,
+      "headers": {
+        "allow": "POST",
+        "content-length": "31",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "69fc3c49-deff-44ed-ade6-ac5580c31578"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "name": "new: rotate an active binding",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings/80b8718b-8fd6-5da5-8936-cc66c0caeadb/rotate",
+      "body_sha256": "05f4e01133d6e3158aa54ea76b781c845483dba02243a26f24afb17df06ad24c",
+      "status": 200,
+      "headers": {
+        "content-length": "334",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "d9d38f26-921f-4f85-a6d1-ab37bc239ecb"
+      },
+      "body": "{\"id\":\"6cf73f8e-a165-45df-aa8f-6b3886984e03\",\"integration_source_id\":\"fb960c1c-2fb0-574c-a150-2b14bbf04572\",\"credential_id\":\"4003302b-05c2-5a60-b7de-5fcd9335b4b9\",\"provider_subscription_id\":\"sub-rot\",\"signing_secret_key_version\":\"v1\",\"status\":\"candidate\",\"created_at\":\"2026-09-25T22:13:01.665872Z\",\"rotated_at\":null,\"revoked_at\":null}"
+    },
+    {
+      "name": "rotate again: a candidate now exists",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings/80b8718b-8fd6-5da5-8936-cc66c0caeadb/rotate",
+      "body_sha256": "197db837c535e921eefe426783b07fd9ee13175f6ec009a352d2507bcaa92118",
+      "status": 400,
+      "headers": {
+        "content-length": "64",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "53db254d-4817-4805-a795-10ead79502b5"
+      },
+      "body": "{\"detail\":\"a rotation candidate already exists for this source\"}"
+    },
+    {
+      "name": "rotate: candidate already exists",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings/6016d10c-3301-5278-a869-c90091047b16/rotate",
+      "body_sha256": "1df1746d8e0feae5d8cffcbe7b89fac54c20095ec1e224f1f271e2177ad48d39",
+      "status": 400,
+      "headers": {
+        "content-length": "64",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "ce5a7b0f-cf4e-4762-8eb8-df5d433397e9"
+      },
+      "body": "{\"detail\":\"a rotation candidate already exists for this source\"}"
+    },
+    {
+      "name": "rotate: ready candidate already exists",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings/0e10b7a2-f480-5079-81ef-bce764d5e604/rotate",
+      "body_sha256": "7cc70ca801c04d35b6560e93bae4d97b1cf846ee1a09c7bfe14e7422fa7fa5c3",
+      "status": 400,
+      "headers": {
+        "content-length": "64",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "f0f3004f-8979-413e-921d-699787fb08d2"
+      },
+      "body": "{\"detail\":\"a rotation candidate already exists for this source\"}"
+    },
+    {
+      "name": "rotate: binding is not active",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings/9779b249-cdd9-5d27-bbb9-db892853757e/rotate",
+      "body_sha256": "76b8bbb38bc10d0935f14eeceacbd83359113267dfe054985758cee8622038f0",
+      "status": 404,
+      "headers": {
+        "content-length": "45",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "4ca9db16-c9ab-461f-b32f-f5eacd363be6"
+      },
+      "body": "{\"detail\":\"Active webhook binding not found\"}"
+    },
+    {
+      "name": "rotate: unknown binding",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings/7d425c6c-c88d-5423-b5d5-60244ccb9b7c/rotate",
+      "body_sha256": "7183f5b5a19d1d5b3b9c357a841638ee13f7596b33609ed7022cf60de2594c5f",
+      "status": 404,
+      "headers": {
+        "content-length": "45",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "6101451c-2bac-474a-90e0-49a1a3260297"
+      },
+      "body": "{\"detail\":\"Active webhook binding not found\"}"
+    },
+    {
+      "name": "rotate: another source than the binding's",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings/9d382c98-0944-55c2-a77b-14d22b7af9f4/rotate",
+      "body_sha256": "7183f5b5a19d1d5b3b9c357a841638ee13f7596b33609ed7022cf60de2594c5f",
+      "status": 400,
+      "headers": {
+        "content-length": "72",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "b92d522f-7e75-42b8-8b2a-19104ea83819"
+      },
+      "body": "{\"detail\":\"rotation candidate must belong to the active binding source\"}"
+    },
+    {
+      "name": "rotate: another organisation's active binding",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings/f8a72586-4d63-5af7-9cdd-3583bb66d44a/rotate",
+      "body_sha256": "7183f5b5a19d1d5b3b9c357a841638ee13f7596b33609ed7022cf60de2594c5f",
+      "status": 400,
+      "headers": {
+        "content-length": "72",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "493e7448-ae9f-4268-b1ec-04e7c83297e6"
+      },
+      "body": "{\"detail\":\"rotation candidate must belong to the active binding source\"}"
+    },
+    {
+      "name": "rotate: active binding of another organisation on this source",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings/8dfc60ae-310b-5d7e-9ae3-a27e69607671/rotate",
+      "body_sha256": "3d12c06cc3f56c5aeeb816e756af1e93445bf4e31e5a0fc1025707b05737a2dc",
+      "status": 400,
+      "headers": {
+        "content-length": "72",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "c8ec01e4-3055-4fbb-9d84-e918c62ae9a6"
+      },
+      "body": "{\"detail\":\"rotation candidate must belong to the active binding source\"}"
+    },
+    {
+      "name": "rotate: blank subscription id",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings/9d382c98-0944-55c2-a77b-14d22b7af9f4/rotate",
+      "body_sha256": "b29e1f892067ed34765d0600d4b88b5f6ae1e3d343fdac4d88e290665fc0696d",
+      "status": 400,
+      "headers": {
+        "content-length": "55",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "ceb624e9-f0f3-4911-8f3c-b9b8e2a6a945"
+      },
+      "body": "{\"detail\":\"provider subscription id must not be blank\"}"
+    },
+    {
+      "name": "rotate: graph failure precedes the lookup",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings/8c625f29-1bec-55ff-97bf-13bc65c06bdf/rotate",
+      "body_sha256": "ec2f2b81cc9249cd5f7b059dd330f75ba1ced1d796e8783ba1128b18f29e577d",
+      "status": 400,
+      "headers": {
+        "content-length": "63",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "3a703f6d-8e9c-4b4b-a01d-9c2405327141"
+      },
+      "body": "{\"detail\":\"PagerDuty binding graph is not active and same-org\"}"
+    },
+    {
+      "name": "rotate: path id malformed and body invalid",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings/nope/rotate",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "status": 422,
+      "headers": {
+        "content-length": "559",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "b707aae4-1372-4673-a7e3-c8b1d77dd57b"
+      },
+      "body": "{\"detail\":[{\"type\":\"uuid_parsing\",\"loc\":[\"path\",\"binding_id\"],\"msg\":\"Input should be a valid UUID, invalid character: found `n` at 1\",\"input\":\"nope\",\"ctx\":{\"error\":\"invalid character: found `n` at 1\"}},{\"type\":\"missing\",\"loc\":[\"body\",\"integration_source_id\"],\"msg\":\"Field required\",\"input\":{}},{\"type\":\"missing\",\"loc\":[\"body\",\"credential_id\"],\"msg\":\"Field required\",\"input\":{}},{\"type\":\"missing\",\"loc\":[\"body\",\"provider_subscription_id\"],\"msg\":\"Field required\",\"input\":{}},{\"type\":\"missing\",\"loc\":[\"body\",\"signing_secret\"],\"msg\":\"Field required\",\"input\":{}}]}"
+    },
+    {
+      "name": "rotate: path id malformed",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings/nope/rotate",
+      "body_sha256": "5c69a6055f1e0b343ba52f008489a004a6a15f4fe0972603a349611af916cced",
+      "status": 422,
+      "headers": {
+        "content-length": "203",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "1de6abff-c7d6-45cb-8bf9-ec8c2a35ad46"
+      },
+      "body": "{\"detail\":[{\"type\":\"uuid_parsing\",\"loc\":[\"path\",\"binding_id\"],\"msg\":\"Input should be a valid UUID, invalid character: found `n` at 1\",\"input\":\"nope\",\"ctx\":{\"error\":\"invalid character: found `n` at 1\"}}]}"
+    },
+    {
+      "name": "rotate: feature off refused",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings/9d382c98-0944-55c2-a77b-14d22b7af9f4/rotate",
+      "body_sha256": "ade84b0d517ffe31997e5d25514ad53b882517b90a4a14e7d5eb4f076e308dc7",
+      "status": 403,
+      "headers": {
+        "content-length": "78",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "e2dad721-2e3b-45bc-8bfb-d97a1d874fbd"
+      },
+      "body": "{\"detail\":\"Canonical incident ingestion is not enabled for this organization\"}"
+    },
+    {
+      "name": "rotate: member refused",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings/9d382c98-0944-55c2-a77b-14d22b7af9f4/rotate",
+      "body_sha256": "ade84b0d517ffe31997e5d25514ad53b882517b90a4a14e7d5eb4f076e308dc7",
+      "status": 403,
+      "headers": {
+        "content-length": "34",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "fdcbbf8e-2f03-4e5c-b994-7ccf152fc81d"
+      },
+      "body": "{\"detail\":\"Admin access required\"}"
+    },
+    {
+      "name": "activate a ready candidate over an active binding",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings/845230ca-55e7-5709-b498-2278d37fc53c/activate",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 200,
+      "headers": {
+        "content-length": "335",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "0ba5d090-7301-4bab-ac75-aefe8f343461"
+      },
+      "body": "{\"id\":\"845230ca-55e7-5709-b498-2278d37fc53c\",\"integration_source_id\":\"889e4272-b215-505b-b3db-89d95a36440d\",\"credential_id\":\"4003302b-05c2-5a60-b7de-5fcd9335b4b9\",\"provider_subscription_id\":\"sub-s4-next\",\"signing_secret_key_version\":\"v1\",\"status\":\"active\",\"created_at\":\"2026-09-25T22:12:48.125292Z\",\"rotated_at\":null,\"revoked_at\":null}"
+    },
+    {
+      "name": "activate again: it is active now",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings/845230ca-55e7-5709-b498-2278d37fc53c/activate",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 404,
+      "headers": {
+        "content-length": "54",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "eaddb71f-e52a-4177-86ab-d7b34ec7f215"
+      },
+      "body": "{\"detail\":\"Ready webhook binding candidate not found\"}"
+    },
+    {
+      "name": "activate a ready candidate with no active binding",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings/a7ed23b1-76d2-5fb2-b6c6-81313739d11b/activate",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 200,
+      "headers": {
+        "content-length": "330",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "7d384d55-945a-47e9-b385-58f74a2020d2"
+      },
+      "body": "{\"id\":\"a7ed23b1-76d2-5fb2-b6c6-81313739d11b\",\"integration_source_id\":\"f9844c97-f316-5a31-8f0c-086f1dc82631\",\"credential_id\":\"4003302b-05c2-5a60-b7de-5fcd9335b4b9\",\"provider_subscription_id\":\"sub-s5\",\"signing_secret_key_version\":\"v1\",\"status\":\"active\",\"created_at\":\"2026-09-25T22:12:48.127219Z\",\"rotated_at\":null,\"revoked_at\":null}"
+    },
+    {
+      "name": "activate a candidate that is not ready",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings/950a731e-bf73-54ce-bb9c-dc3778f95149/activate",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 404,
+      "headers": {
+        "content-length": "54",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "32f6d67f-4070-431f-b9e0-c4cc035895c4"
+      },
+      "body": "{\"detail\":\"Ready webhook binding candidate not found\"}"
+    },
+    {
+      "name": "activate an inactive binding",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings/9779b249-cdd9-5d27-bbb9-db892853757e/activate",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 404,
+      "headers": {
+        "content-length": "54",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "4c21f262-95d7-4292-8dea-07a307688edb"
+      },
+      "body": "{\"detail\":\"Ready webhook binding candidate not found\"}"
+    },
+    {
+      "name": "activate another organisation's binding",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings/f8a72586-4d63-5af7-9cdd-3583bb66d44a/activate",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 404,
+      "headers": {
+        "content-length": "54",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "cb3a53a6-eaeb-4395-a643-db3494925d2d"
+      },
+      "body": "{\"detail\":\"Ready webhook binding candidate not found\"}"
+    },
+    {
+      "name": "activate unknown binding",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings/211c00f3-e97d-51ad-ad41-d877f746bb9f/activate",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 404,
+      "headers": {
+        "content-length": "54",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "40c8a701-4a2c-47fb-ba99-2845ff24a168"
+      },
+      "body": "{\"detail\":\"Ready webhook binding candidate not found\"}"
+    },
+    {
+      "name": "activate: subscription id already active elsewhere",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings/92b5de41-daa3-533f-be36-1d211c375f5c/activate",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "activate: candidate without a credential",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings/356b28d0-82ff-52fc-a72b-7f8dcfe67150/activate",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "activate: path id malformed",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings/nope/activate",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 422,
+      "headers": {
+        "content-length": "203",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "f62f87f6-0c4b-463a-9164-60a3b7b179ea"
+      },
+      "body": "{\"detail\":[{\"type\":\"uuid_parsing\",\"loc\":[\"path\",\"binding_id\"],\"msg\":\"Input should be a valid UUID, invalid character: found `n` at 1\",\"input\":\"nope\",\"ctx\":{\"error\":\"invalid character: found `n` at 1\"}}]}"
+    },
+    {
+      "name": "activate: feature off refused",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings/e5655dfc-41fe-57d9-82a4-b77ded3c1a6c/activate",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 403,
+      "headers": {
+        "content-length": "78",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "67b681af-bddd-422c-931d-5b102f7d39fe"
+      },
+      "body": "{\"detail\":\"Canonical incident ingestion is not enabled for this organization\"}"
+    },
+    {
+      "name": "activate: member refused",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings/e5655dfc-41fe-57d9-82a4-b77ded3c1a6c/activate",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 403,
+      "headers": {
+        "content-length": "34",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "f3d21333-82dc-47af-9ede-ddc3ee26e44f"
+      },
+      "body": "{\"detail\":\"Admin access required\"}"
+    },
+    {
+      "name": "activate: superuser without org",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings/e5655dfc-41fe-57d9-82a4-b77ded3c1a6c/activate",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 403,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "2973c934-8ad2-4c53-a469-0121d424b3fa"
+      },
+      "body": "{\"detail\":\"Organization context required\"}"
+    },
+    {
+      "name": "activate get is 405",
+      "method": "GET",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings/e5655dfc-41fe-57d9-82a4-b77ded3c1a6c/activate",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 405,
+      "headers": {
+        "allow": "POST",
+        "content-length": "31",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "0184cf98-8d6e-4196-8854-3ae7c1731622"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "name": "revoke an active binding",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings/cc65db9b-7e58-525e-b1c5-0f8450f18bec/revoke",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 200,
+      "headers": {
+        "content-length": "357",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "8a448f39-b21d-4471-8fb0-e46dd5e0d1ba"
+      },
+      "body": "{\"id\":\"cc65db9b-7e58-525e-b1c5-0f8450f18bec\",\"integration_source_id\":\"dd7c87da-b38c-5cdd-867c-d8f8b8c715c2\",\"credential_id\":\"4003302b-05c2-5a60-b7de-5fcd9335b4b9\",\"provider_subscription_id\":\"sub-s8\",\"signing_secret_key_version\":\"v1\",\"status\":\"inactive\",\"created_at\":\"2026-09-25T22:12:48.132901Z\",\"rotated_at\":null,\"revoked_at\":\"2026-09-25T22:13:05.718860Z\"}"
+    },
+    {
+      "name": "revoke again: it is inactive now",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings/cc65db9b-7e58-525e-b1c5-0f8450f18bec/revoke",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 404,
+      "headers": {
+        "content-length": "45",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "97d38212-c449-4fc1-a2c4-b475b2b507d7"
+      },
+      "body": "{\"detail\":\"Active webhook binding not found\"}"
+    },
+    {
+      "name": "revoke a candidate",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings/950a731e-bf73-54ce-bb9c-dc3778f95149/revoke",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 200,
+      "headers": {
+        "content-length": "357",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "d7557b32-5b77-4b81-a759-4fd5e8162f52"
+      },
+      "body": "{\"id\":\"950a731e-bf73-54ce-bb9c-dc3778f95149\",\"integration_source_id\":\"fa6f87eb-d960-5f99-a328-d2c72664a6e3\",\"credential_id\":\"4003302b-05c2-5a60-b7de-5fcd9335b4b9\",\"provider_subscription_id\":\"sub-s6\",\"signing_secret_key_version\":\"v1\",\"status\":\"inactive\",\"created_at\":\"2026-09-25T22:12:48.129232Z\",\"rotated_at\":null,\"revoked_at\":\"2026-09-25T22:13:05.989405Z\"}"
+    },
+    {
+      "name": "revoke an inactive binding",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings/9779b249-cdd9-5d27-bbb9-db892853757e/revoke",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 404,
+      "headers": {
+        "content-length": "45",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "64b06b7b-7400-4150-ad95-52ed3b7c5bb0"
+      },
+      "body": "{\"detail\":\"Active webhook binding not found\"}"
+    },
+    {
+      "name": "revoke another organisation's binding",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings/f8a72586-4d63-5af7-9cdd-3583bb66d44a/revoke",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 404,
+      "headers": {
+        "content-length": "45",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "9b4e740f-ba4d-4d9c-9538-d1d9a9ca6977"
+      },
+      "body": "{\"detail\":\"Active webhook binding not found\"}"
+    },
+    {
+      "name": "revoke keeps an earlier revoked_at",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings/5d350f66-7b93-5072-a1d2-e2c5e99702fa/revoke",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 200,
+      "headers": {
+        "content-length": "351",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "8963212d-1d05-4d02-afa0-935907518d04"
+      },
+      "body": "{\"id\":\"5d350f66-7b93-5072-a1d2-e2c5e99702fa\",\"integration_source_id\":\"5f22d85d-4054-5799-a9aa-3893c17c29b3\",\"credential_id\":\"4003302b-05c2-5a60-b7de-5fcd9335b4b9\",\"provider_subscription_id\":\"sub-s17\",\"signing_secret_key_version\":\"v1\",\"status\":\"inactive\",\"created_at\":\"2026-09-25T22:12:48.145118Z\",\"rotated_at\":null,\"revoked_at\":\"2026-01-02T03:04:05Z\"}"
+    },
+    {
+      "name": "revoke unknown binding",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings/67a1f1b4-c07c-5254-83e8-86fe91605a93/revoke",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 404,
+      "headers": {
+        "content-length": "45",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "21135374-e617-4442-94ab-c8861308dbf6"
+      },
+      "body": "{\"detail\":\"Active webhook binding not found\"}"
+    },
+    {
+      "name": "revoke is not behind the feature flag",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings/e5655dfc-41fe-57d9-82a4-b77ded3c1a6c/revoke",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 404,
+      "headers": {
+        "content-length": "45",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "7dc463c5-f9c0-495b-889f-535821e9974a"
+      },
+      "body": "{\"detail\":\"Active webhook binding not found\"}"
+    },
+    {
+      "name": "revoke: bad org claim is a 400",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings/9d382c98-0944-55c2-a77b-14d22b7af9f4/revoke",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 400,
+      "headers": {
+        "content-length": "36",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "841620b3-683e-45fb-9c0d-78e7f7bd147d"
+      },
+      "body": "{\"detail\":\"Invalid organization id\"}"
+    },
+    {
+      "name": "revoke: path id malformed",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings/nope/revoke",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 422,
+      "headers": {
+        "content-length": "203",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "90e43413-b597-4002-a2cb-dbbeaa52703d"
+      },
+      "body": "{\"detail\":[{\"type\":\"uuid_parsing\",\"loc\":[\"path\",\"binding_id\"],\"msg\":\"Input should be a valid UUID, invalid character: found `n` at 1\",\"input\":\"nope\",\"ctx\":{\"error\":\"invalid character: found `n` at 1\"}}]}"
+    },
+    {
+      "name": "revoke: member refused",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings/9d382c98-0944-55c2-a77b-14d22b7af9f4/revoke",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 403,
+      "headers": {
+        "content-length": "34",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "2ecc8060-9a4e-4517-9613-cb9bacb9c487"
+      },
+      "body": "{\"detail\":\"Admin access required\"}"
+    },
+    {
+      "name": "get an active binding",
+      "method": "GET",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings/9d382c98-0944-55c2-a77b-14d22b7af9f4",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 200,
+      "headers": {
+        "content-length": "331",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "0b8f4e2f-1b68-4f49-baa4-f9d2757bcc53"
+      },
+      "body": "{\"id\":\"9d382c98-0944-55c2-a77b-14d22b7af9f4\",\"integration_source_id\":\"a57e334d-d7ab-511d-9a25-760e5240f11b\",\"credential_id\":\"4003302b-05c2-5a60-b7de-5fcd9335b4b9\",\"provider_subscription_id\":\"sub-s16\",\"signing_secret_key_version\":\"v1\",\"status\":\"active\",\"created_at\":\"2026-09-25T22:12:48.141212Z\",\"rotated_at\":null,\"revoked_at\":null}"
+    },
+    {
+      "name": "get an inactive binding",
+      "method": "GET",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings/9779b249-cdd9-5d27-bbb9-db892853757e",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 200,
+      "headers": {
+        "content-length": "350",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "07612dd2-752c-4ffa-bb0f-46f20a2d6a0c"
+      },
+      "body": "{\"id\":\"9779b249-cdd9-5d27-bbb9-db892853757e\",\"integration_source_id\":\"84a7e5fe-fde3-5b0e-87ab-010f9970232f\",\"credential_id\":\"4003302b-05c2-5a60-b7de-5fcd9335b4b9\",\"provider_subscription_id\":\"sub-s7\",\"signing_secret_key_version\":\"v1\",\"status\":\"inactive\",\"created_at\":\"2026-09-25T22:12:48.131321Z\",\"rotated_at\":null,\"revoked_at\":\"2026-01-02T03:04:05Z\"}"
+    },
+    {
+      "name": "get a binding without a credential",
+      "method": "GET",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings/356b28d0-82ff-52fc-a72b-7f8dcfe67150",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 200,
+      "headers": {
+        "content-length": "296",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "e1b32bf2-1fb1-441c-b65c-551b915bc437"
+      },
+      "body": "{\"id\":\"356b28d0-82ff-52fc-a72b-7f8dcfe67150\",\"integration_source_id\":\"d9132dbe-69ce-5a4f-98b5-8d47fa211260\",\"credential_id\":null,\"provider_subscription_id\":\"sub-s14\",\"signing_secret_key_version\":\"v1\",\"status\":\"ready\",\"created_at\":\"2026-09-25T22:12:48.137451Z\",\"rotated_at\":null,\"revoked_at\":null}"
+    },
+    {
+      "name": "get another organisation's binding",
+      "method": "GET",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings/f8a72586-4d63-5af7-9cdd-3583bb66d44a",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 404,
+      "headers": {
+        "content-length": "38",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "0b4066b6-73ae-4b25-b353-f638eb5ba862"
+      },
+      "body": "{\"detail\":\"Webhook binding not found\"}"
+    },
+    {
+      "name": "get the other organisation's binding as its admin",
+      "method": "GET",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings/f8a72586-4d63-5af7-9cdd-3583bb66d44a",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 200,
+      "headers": {
+        "content-length": "333",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "55201bd4-f5f1-4465-87a1-3849ed118f12"
+      },
+      "body": "{\"id\":\"f8a72586-4d63-5af7-9cdd-3583bb66d44a\",\"integration_source_id\":\"59a30398-d423-5c1f-ae27-90ec53d172d8\",\"credential_id\":\"e03004d7-34e6-5aa6-8e24-fe3596318582\",\"provider_subscription_id\":\"sub-other\",\"signing_secret_key_version\":\"v1\",\"status\":\"active\",\"created_at\":\"2026-09-25T22:12:48.143198Z\",\"rotated_at\":null,\"revoked_at\":null}"
+    },
+    {
+      "name": "get unknown binding",
+      "method": "GET",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings/e021fb43-6d1d-5874-b126-07d20de3457d",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 404,
+      "headers": {
+        "content-length": "38",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "10694db8-3e4b-4c04-bab1-7754709ef4b0"
+      },
+      "body": "{\"detail\":\"Webhook binding not found\"}"
+    },
+    {
+      "name": "get uppercase path id",
+      "method": "GET",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings/9D382C98-0944-55C2-A77B-14D22B7AF9F4",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 200,
+      "headers": {
+        "content-length": "331",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "220e4ab9-14be-40f2-bf69-4c0bceb744e0"
+      },
+      "body": "{\"id\":\"9d382c98-0944-55c2-a77b-14d22b7af9f4\",\"integration_source_id\":\"a57e334d-d7ab-511d-9a25-760e5240f11b\",\"credential_id\":\"4003302b-05c2-5a60-b7de-5fcd9335b4b9\",\"provider_subscription_id\":\"sub-s16\",\"signing_secret_key_version\":\"v1\",\"status\":\"active\",\"created_at\":\"2026-09-25T22:12:48.141212Z\",\"rotated_at\":null,\"revoked_at\":null}"
+    },
+    {
+      "name": "get path id without hyphens",
+      "method": "GET",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings/9d382c98094455c2a77b14d22b7af9f4",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 200,
+      "headers": {
+        "content-length": "331",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "462fe3f9-b0ff-490a-af6b-e5d2217b7993"
+      },
+      "body": "{\"id\":\"9d382c98-0944-55c2-a77b-14d22b7af9f4\",\"integration_source_id\":\"a57e334d-d7ab-511d-9a25-760e5240f11b\",\"credential_id\":\"4003302b-05c2-5a60-b7de-5fcd9335b4b9\",\"provider_subscription_id\":\"sub-s16\",\"signing_secret_key_version\":\"v1\",\"status\":\"active\",\"created_at\":\"2026-09-25T22:12:48.141212Z\",\"rotated_at\":null,\"revoked_at\":null}"
+    },
+    {
+      "name": "get path id malformed",
+      "method": "GET",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings/nope",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 422,
+      "headers": {
+        "content-length": "203",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "e82d2e26-d965-439e-97ee-5be28352437c"
+      },
+      "body": "{\"detail\":[{\"type\":\"uuid_parsing\",\"loc\":[\"path\",\"binding_id\"],\"msg\":\"Input should be a valid UUID, invalid character: found `n` at 1\",\"input\":\"nope\",\"ctx\":{\"error\":\"invalid character: found `n` at 1\"}}]}"
+    },
+    {
+      "name": "get bad org claim is a 400",
+      "method": "GET",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings/9d382c98-0944-55c2-a77b-14d22b7af9f4",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 400,
+      "headers": {
+        "content-length": "36",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "05ea4747-5d04-4ac8-b403-061ec03e224c"
+      },
+      "body": "{\"detail\":\"Invalid organization id\"}"
+    },
+    {
+      "name": "get member refused",
+      "method": "GET",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings/9d382c98-0944-55c2-a77b-14d22b7af9f4",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 403,
+      "headers": {
+        "content-length": "34",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "012f56b2-e252-4037-8622-713e3795d3d9"
+      },
+      "body": "{\"detail\":\"Admin access required\"}"
+    },
+    {
+      "name": "get superuser without org",
+      "method": "GET",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings/9d382c98-0944-55c2-a77b-14d22b7af9f4",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 403,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "353297d3-da5d-41c8-8753-7d1d17b777ad"
+      },
+      "body": "{\"detail\":\"Organization context required\"}"
+    },
+    {
+      "name": "get unauthenticated",
+      "method": "GET",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings/9d382c98-0944-55c2-a77b-14d22b7af9f4",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 401,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "www-authenticate": "Bearer",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "1e783e46-f79a-4b21-bf1f-9c0c0c815237"
+      },
+      "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
+    },
+    {
+      "name": "binding post is 405",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings/9d382c98-0944-55c2-a77b-14d22b7af9f4",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 405,
+      "headers": {
+        "allow": "GET",
+        "content-length": "31",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "76cd116e-78f9-4a72-a30a-61227815cb52"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "name": "activate with a foreign-organisation active row on the source",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/webhook-bindings/f8bc4b0a-b972-52e6-993c-f269cbc8b1a8/activate",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "status": 200,
+      "headers": {
+        "content-length": "336",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "6e705133-2b9f-49a5-a836-58d7acda913c"
+      },
+      "body": "{\"id\":\"f8bc4b0a-b972-52e6-993c-f269cbc8b1a8\",\"integration_source_id\":\"6b91015f-757c-5025-bd99-5e6d9666cecd\",\"credential_id\":\"4003302b-05c2-5a60-b7de-5fcd9335b4b9\",\"provider_subscription_id\":\"sub-s19-next\",\"signing_secret_key_version\":\"v1\",\"status\":\"active\",\"created_at\":\"2026-09-25T22:12:48.150306Z\",\"rotated_at\":null,\"revoked_at\":null}"
+    }
+  ],
+  "rows": {
+    "pagerduty_webhook_bindings rows": {
+      "rows": "[57 58 12 229 239 146 84 7 178 159 141 133 116 132 148 121] [8 74 151 39 197 239 81 20 191 48 64 166 186 102 127 222]sub-s18activev1falsetruetrue--true | [57 58 12 229 239 146 84 7 178 159 141 133 116 132 148 121] [89 163 3 152 212 35 92 31 174 39 144 236 83 209 114 216]sub-otheractivev1falsetruetrue--true | [57 58 12 229 239 146 84 7 178 159 141 133 116 132 148 121] [107 145 1 95 117 124 80 37 189 153 94 109 150 102 206 205]sub-s19activev1falsetruetrue--true | [137 143 239 222 58 98 84 22 167 147 218 50 115 227 174 61] [18 55 165 94 170 88 84 80 146 112 193 92 210 165 83 33]sub-areadyv1falsetruetrue--true | [137 143 239 222 58 98 84 22 167 147 218 50 115 227 174 61] [95 34 216 93 64 84 87 153 169 170 56 147 193 124 41 179]sub-s17inactivev1falsetruefalsefalse-true | [137 143 239 222 58 98 84 22 167 147 218 50 115 227 174 61] [107 145 1 95 117 124 80 37 189 153 94 109 150 102 206 205]sub-s19-nextreadyv1falsetruetrue--true | [137 143 239 222 58 98 84 22 167 147 218 50 115 227 174 61] [132 167 229 254 253 227 91 14 135 171 1 15 153 112 35 47]sub-s7inactivev1falsetruefalsefalse-true | [137 143 239 222 58 98 84 22 167 147 218 50 115 227 174 61] [136 158 66 114 178 21 80 91 179 219 137 217 90 54 68 13]sub-s4inactivev1falsefalsefalsetruetruetrue | [137 143 239 222 58 98 84 22 167 147 218 50 115 227 174 61] [136 158 66 114 178 21 80 91 179 219 137 217 90 54 68 13]sub-s4-nextactivev1falsetruetrue--true | [137 143 239 222 58 98 84 22 167 147 218 50 115 227 174 61] [165 126 51 77 215 171 81 29 154 37 118 14 82 64 241 27]sub-s16activev1falsetruetrue--true | [137 143 239 222 58 98 84 22 167 147 218 50 115 227 174 61] [166 214 177 36 236 115 83 231 184 158 177 151 230 28 203 80]sub-s15readyv1falsetruetrue--true | [137 143 239 222 58 98 84 22 167 147 218 50 115 227 174 61] [194 125 5 78 243 207 90 10 136 63 48 30 11 94 164 199]sub-s20activev1falsetruetrue--true | [137 143 239 222 58 98 84 22 167 147 218 50 115 227 174 61] [194 218 82 217 182 159 85 215 139 116 191 74 70 82 91 108]sub-s3activev1falsetruetrue--true | [137 143 239 222 58 98 84 22 167 147 218 50 115 227 174 61] [194 218 82 217 182 159 85 215 139 116 191 74 70 82 91 108]sub-s3-nextcandidatev1falsetruetrue--true | [137 143 239 222 58 98 84 22 167 147 218 50 115 227 174 61] [217 19 45 190 105 206 90 79 152 181 141 71 250 33 18 96]sub-s14readyv1truetruetrue--true | [137 143 239 222 58 98 84 22 167 147 218 50 115 227 174 61] [221 124 135 218 179 140 92 221 134 124 216 248 184 199 21 194]sub-s8inactivev1falsetruefalsetrue-true | [137 143 239 222 58 98 84 22 167 147 218 50 115 227 174 61] [249 99 107 204 224 62 92 181 131 221 217 233 90 186 44 195]sub-formcandidatev1falsetruetrue--true | [137 143 239 222 58 98 84 22 167 147 218 50 115 227 174 61] [249 99 107 204 224 62 92 181 131 221 217 233 90 186 44 195]sub-new-1candidatev1falsetruetrue--true | [137 143 239 222 58 98 84 22 167 147 218 50 115 227 174 61] [249 99 107 204 224 62 92 181 131 221 217 233 90 186 44 195]sub-new-2candidatev1falsetruetrue--true | [137 143 239 222 58 98 84 22 167 147 218 50 115 227 174 61] [249 132 76 151 243 22 90 49 143 12 8 111 29 200 38 49]sub-s5activev1falsetruetrue--true | [137 143 239 222 58 98 84 22 167 147 218 50 115 227 174 61] [250 111 135 235 217 96 95 153 163 40 210 199 38 100 166 227]sub-s6inactivev1falsetruefalsetrue-true | [137 143 239 222 58 98 84 22 167 147 218 50 115 227 174 61] [251 150 12 28 47 176 87 76 161 80 43 20 187 240 69 114]sub-aactivev1falsetruetrue--true | [137 143 239 222 58 98 84 22 167 147 218 50 115 227 174 61] [251 150 12 28 47 176 87 76 161 80 43 20 187 240 69 114]sub-rotcandidatev1falsetruetrue--true"
+    },
+    "python status of the foreign-organisation row": {
+      "rows": "inactive"
+    },
+    "stored signing secrets opened": {
+      "rows": "sub-form =\u003e s\nsub-new-1 =\u003e secret-one\nsub-new-2 =\u003e secret-two\nsub-rot =\u003e rot-secret"
+    }
+  }
+}

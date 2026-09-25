@@ -32,7 +32,8 @@ const pagerDutyBindingsVenueEncryptionKey = "venue-pd-bindings-fernet-key-32-byt
 // leave (and every secret they store, opened with Python's decrypt) match.
 func TestPagerDutyWebhookBindingsVenueOracle(t *testing.T) {
 	ctx := context.Background()
-	root := repoRoot(t)
+	golden := venueoracle.OpenGolden(t, pagerDutyGolden("bindings", "TestPagerDutyWebhookBindingsVenueOracle", "90629b14228da7410b072d313ba6789bc65076cf486f13492a178373d86285c8"))
+	root := golden.PythonRoot(t, repoRoot(t))
 	const jwtKey = "venue-oracle-test-secret-key-for-pagerduty-bindings-32-b"
 
 	ids := map[string]uuid.UUID{}
@@ -40,14 +41,14 @@ func TestPagerDutyWebhookBindingsVenueOracle(t *testing.T) {
 		if v, ok := ids[name]; ok {
 			return v
 		}
-		ids[name] = uuid.New()
+		ids[name] = uuid.MustParse(venueoracle.StableUUID("pd-bind-id-" + name))
 		return ids[name]
 	}
 	orgs := map[string]uuid.UUID{}
 	for _, slug := range []string{"main", "other", "off"} {
-		orgs[slug] = uuid.New()
+		orgs[slug] = uuid.MustParse(venueoracle.StableUUID("pd-bind-org-" + slug))
 	}
-	adminID, memberID, superID := uuid.New(), uuid.New(), uuid.New()
+	adminID, memberID, superID := uuid.MustParse(venueoracle.StableUUID("pd-bind-admin")), uuid.MustParse(venueoracle.StableUUID("pd-bind-member")), uuid.MustParse(venueoracle.StableUUID("pd-bind-super"))
 
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Root:      root,
@@ -194,8 +195,8 @@ VALUES ($1, $2, $3, $4, $5, 'v1:seed-not-decrypted', 'v1', $6, now(), now(), $7:
 		create("new: create", "admin", body(S("S1"), S("C1"), "sub-new-1", "secret-one")),
 		create("new: create again for the same source (two candidates)", "admin", body(S("S1"), S("C1"), "sub-new-2", "secret-two")),
 		create("create subscription id blank", "admin", body(S("S1"), S("C1"), "   ", "s")),
-		create("create source unknown", "admin", body(uuid.NewString(), S("C1"), "sub", "s")),
-		create("create credential unknown", "admin", body(S("S1"), uuid.NewString(), "sub", "s")),
+		create("create source unknown", "admin", body(venueoracle.StableUUID("pd-bind-unknown-1"), S("C1"), "sub", "s")),
+		create("create credential unknown", "admin", body(S("S1"), venueoracle.StableUUID("pd-bind-unknown-2"), "sub", "s")),
 		create("create credential not linked to the integration", "admin", body(S("S1"), S("C3-unlinked"), "sub", "s")),
 		create("create credential inactive", "admin", body(S("S-badcred"), S("C2-inactive"), "sub", "s")),
 		create("create source disabled", "admin", body(S("S-disabled"), S("C1"), "sub", "s")),
@@ -224,12 +225,12 @@ VALUES ($1, $2, $3, $4, $5, 'v1:seed-not-decrypted', 'v1', $6, now(), now(), $7:
 		rotate("rotate: candidate already exists", "admin", S("B-active-S3"), body(S("S3"), S("C1"), "sub-x", "s")),
 		rotate("rotate: ready candidate already exists", "admin", S("B-active-S4"), body(S("S4"), S("C1"), "sub-x", "s")),
 		rotate("rotate: binding is not active", "admin", S("B-inactive-S7"), body(S("S7"), S("C1"), "sub-x", "s")),
-		rotate("rotate: unknown binding", "admin", uuid.NewString(), body(S("S1"), S("C1"), "sub-x", "s")),
+		rotate("rotate: unknown binding", "admin", venueoracle.StableUUID("pd-bind-unknown-3"), body(S("S1"), S("C1"), "sub-x", "s")),
 		rotate("rotate: another source than the binding's", "admin", S("B-active-S16"), body(S("S1"), S("C1"), "sub-x", "s")),
 		rotate("rotate: another organisation's active binding", "admin", S("B-other"), body(S("S1"), S("C1"), "sub-x", "s")),
 		rotate("rotate: active binding of another organisation on this source", "admin", S("B-crossorg-S18"), body(S("S18"), S("C1"), "sub-x", "s")),
 		rotate("rotate: blank subscription id", "admin", S("B-active-S16"), body(S("S16"), S("C1"), " ", "s")),
-		rotate("rotate: graph failure precedes the lookup", "admin", uuid.NewString(), body(S("S-disabled"), S("C1"), "s", "s")),
+		rotate("rotate: graph failure precedes the lookup", "admin", venueoracle.StableUUID("pd-bind-unknown-4"), body(S("S-disabled"), S("C1"), "s", "s")),
 		rotate("rotate: path id malformed and body invalid", "admin", "nope", `{}`),
 		rotate("rotate: path id malformed", "admin", "nope", body(S("S1"), S("C1"), "s", "s")),
 		rotate("rotate: feature off refused", "admin_off", S("B-active-S16"), body(S("S16"), S("C1"), "s", "s")),
@@ -241,7 +242,7 @@ VALUES ($1, $2, $3, $4, $5, 'v1:seed-not-decrypted', 'v1', $6, now(), now(), $7:
 		act("activate a candidate that is not ready", "activate", "admin", S("B-cand-S6")),
 		act("activate an inactive binding", "activate", "admin", S("B-inactive-S7")),
 		act("activate another organisation's binding", "activate", "admin", S("B-other")),
-		act("activate unknown binding", "activate", "admin", uuid.NewString()),
+		act("activate unknown binding", "activate", "admin", venueoracle.StableUUID("pd-bind-unknown-5")),
 		act("activate: subscription id already active elsewhere", "activate", "admin", S("B-ready-S13")),
 		act("activate: candidate without a credential", "activate", "admin", S("B-ready-S14")),
 		act("activate: path id malformed", "activate", "admin", "nope"),
@@ -256,7 +257,7 @@ VALUES ($1, $2, $3, $4, $5, 'v1:seed-not-decrypted', 'v1', $6, now(), now(), $7:
 		act("revoke an inactive binding", "revoke", "admin", S("B-inactive-S7")),
 		act("revoke another organisation's binding", "revoke", "admin", S("B-other")),
 		act("revoke keeps an earlier revoked_at", "revoke", "admin", S("B-ready-revoked-S17")),
-		act("revoke unknown binding", "revoke", "admin", uuid.NewString()),
+		act("revoke unknown binding", "revoke", "admin", venueoracle.StableUUID("pd-bind-unknown-6")),
 		act("revoke is not behind the feature flag", "revoke", "admin_off", S("B-ready-S15")),
 		act("revoke: bad org claim is a 400", "revoke", "admin_badorg", S("B-active-S16")),
 		act("revoke: path id malformed", "revoke", "admin", "nope"),
@@ -267,7 +268,7 @@ VALUES ($1, $2, $3, $4, $5, 'v1:seed-not-decrypted', 'v1', $6, now(), now(), $7:
 		get("get a binding without a credential", "admin", S("B-ready-S14")),
 		get("get another organisation's binding", "admin", S("B-other")),
 		get("get the other organisation's binding as its admin", "admin_other", S("B-other")),
-		get("get unknown binding", "admin", uuid.NewString()),
+		get("get unknown binding", "admin", venueoracle.StableUUID("pd-bind-unknown-7")),
 		get("get uppercase path id", "admin", strings.ToUpper(S("B-active-S16"))),
 		get("get path id without hyphens", "admin", strings.ReplaceAll(S("B-active-S16"), "-", "")),
 		get("get path id malformed", "admin", "nope"),
@@ -282,7 +283,7 @@ VALUES ($1, $2, $3, $4, $5, 'v1:seed-not-decrypted', 'v1', $6, now(), now(), $7:
 	if err != nil {
 		t.Fatalf("build decryptor: %v", err)
 	}
-	python := venue.ServePython(t, requests)
+	python := golden.Python(t, venue, requests)
 	goBase, _ := startGoServer(t, ctx, venue, jwtKey, func(deps *apiservice.Deps) { deps.Decryptor = decryptor })
 	// The rows a create or rotate inserts carry a random id and now()
 	// timestamps: blank the ids of the "new:" answers and every well-formed
@@ -290,6 +291,7 @@ VALUES ($1, $2, $3, $4, $5, 'v1:seed-not-decrypted', 'v1', $6, now(), now(), $7:
 	timestamp := regexp.MustCompile(`\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d{1,6})?Z`)
 	newID := regexp.MustCompile(`"id":"[0-9a-f-]{36}"`)
 	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{
+		Golden: golden,
 		Normalize: func(request venueoracle.Request, text string) string {
 			text = timestamp.ReplaceAllString(text, "<ts>")
 			if strings.HasPrefix(request.Name, "new:") {
@@ -302,7 +304,9 @@ VALUES ($1, $2, $3, $4, $5, 'v1:seed-not-decrypted', 'v1', $6, now(), now(), $7:
 
 	compare := func(name, query string) {
 		t.Helper()
-		source := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), query)
+		source := golden.Rows(t, name, func() string {
+			return venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), query)
+		})
 		goRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), query)
 		if source != goRows {
 			t.Errorf("%s differs after the writes:\n python: %s\n go:     %s", name, source, goRows)
@@ -352,7 +356,8 @@ FROM pagerduty_webhook_bindings ORDER BY org_id, integration_source_id, provider
 		}
 		return strings.Join(lines, "\n")
 	}
-	pythonSecrets, goSecrets := opened(venue.SourceDB), opened(venue.GoDB)
+	pythonSecrets := golden.Rows(t, "stored signing secrets opened", func() string { return opened(venue.SourceDB) })
+	goSecrets := opened(venue.GoDB)
 	if pythonSecrets != goSecrets {
 		t.Errorf("stored signing secrets differ:\n python:\n%s\n go:\n%s", pythonSecrets, goSecrets)
 	}
@@ -398,11 +403,11 @@ FROM pagerduty_webhook_bindings ORDER BY org_id, integration_source_id, provider
 	// leaves another organisation's row alone. (No route can create such a
 	// row: a source belongs to one organisation.)
 	foreign := act("activate with a foreign-organisation active row on the source", "activate", "admin", S("B-ready-S19"))
-	pythonForeign := venue.ServePython(t, []venueoracle.Request{foreign})
+	pythonForeign := golden.Python(t, venue, []venueoracle.Request{foreign})
 	if pythonForeign[0].Status != 200 {
 		t.Fatalf("python activate: status %d", pythonForeign[0].Status)
 	}
-	if got := statusOf(venue.SourceDB, S("B-crossorg-S19")); got != "inactive" {
+	if got := golden.Rows(t, "python status of the foreign-organisation row", func() string { return statusOf(venue.SourceDB, S("B-crossorg-S19")) }); got != "inactive" {
 		t.Errorf("python plane left the foreign row %q; the named divergence expects it to swap it (inactive)", got)
 	}
 	if status, _ := goSend(foreign); status != 200 {
@@ -469,4 +474,5 @@ FROM pagerduty_webhook_bindings ORDER BY org_id, integration_source_id, provider
 	if accepted != 1 || candidates != "1" {
 		t.Errorf("%d concurrent rotations of one source: %d accepted, %s candidate rows; want exactly 1 and 1", racers, accepted, candidates)
 	}
+	golden.Finish(t)
 }

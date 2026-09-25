@@ -30,7 +30,8 @@ import (
 // once the api is configured.
 func TestPagerDutyDisconnectWithoutClientIDVenueOracle(t *testing.T) {
 	ctx := context.Background()
-	root := repoRoot(t)
+	golden := venueoracle.OpenGolden(t, pagerDutyGolden("disconnect_noclient", "TestPagerDutyDisconnectWithoutClientIDVenueOracle", "f3b9597394d040093e5a08c6174f8ad01669b80eccad673be8e0a22ce1f1d560"))
+	root := golden.PythonRoot(t, repoRoot(t))
 	const jwtKey = "venue-oracle-test-secret-key-for-pagerduty-disconnect-32-by"
 
 	fake := &pagerDutyDisconnectFakeServer{failTokens: map[string]bool{}}
@@ -39,9 +40,9 @@ func TestPagerDutyDisconnectWithoutClientIDVenueOracle(t *testing.T) {
 
 	orgs := map[string]uuid.UUID{}
 	for _, slug := range []string{"connected", "empty", "bad-cipher", "racer"} {
-		orgs[slug] = uuid.New()
+		orgs[slug] = uuid.MustParse(venueoracle.StableUUID("pd-noclient-org-" + slug))
 	}
-	adminID := uuid.New()
+	adminID := uuid.MustParse(venueoracle.StableUUID("pd-noclient-admin"))
 
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Root:   root,
@@ -118,14 +119,14 @@ VALUES ($1, 'pagerduty', 'default', 'garbage-not-fernet', 1, now(), now(), false
 	if err != nil {
 		t.Fatalf("build decryptor: %v", err)
 	}
-	python := venue.ServePython(t, requests)
+	python := golden.Python(t, venue, requests)
 	goBase, _ := startGoServer(t, ctx, venue, jwtKey, func(deps *apiservice.Deps) {
 		deps.Decryptor = decryptor
 		// No ClientID: the Go api is unconfigured too. The revoke URL is
 		// set so a plane that tried to revoke anyway would reach the fake.
 		deps.PagerDuty = providerfoundation.PagerDutyRevokeConfig{RevokeURL: fakeServer.URL}
 	})
-	t.Log(venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{}))
+	t.Log(venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{Golden: golden}))
 
 	rows := func(db, query string) string {
 		t.Helper()
@@ -135,7 +136,8 @@ VALUES ($1, 'pagerduty', 'default', 'garbage-not-fernet', 1, now(), now(), false
 		"integration_credentials":   `SELECT org_id, provider, name, is_active, (credentials_encrypted IS NULL)::text FROM integration_credentials ORDER BY org_id, name`,
 		"provider_oauth_credential": `SELECT org_id, provider, credential_name FROM provider_oauth_credentials ORDER BY org_id`,
 	} {
-		if source, goRows := rows(venue.SourceDB, query), rows(venue.GoDB, query); source != goRows {
+		source := golden.Rows(t, "rows: "+name, func() string { return rows(venue.SourceDB, query) })
+		if goRows := rows(venue.GoDB, query); source != goRows {
 			t.Errorf("%s rows differ after the disconnects:\n python: %s\n go:     %s", name, source, goRows)
 		}
 	}
@@ -143,7 +145,9 @@ VALUES ($1, 'pagerduty', 'default', 'garbage-not-fernet', 1, now(), now(), false
 	// The named difference, asserted on each side.
 	const revocations = `SELECT count(*) FROM provider_oauth_revocations WHERE org_id = '%s' AND provider = 'pagerduty' AND purpose = 'disconnect' AND status = 'pending' AND attempts = 0`
 	connected := orgs["connected"].String()
-	if got := rows(venue.SourceDB, strings.Replace(revocations, "%s", connected, 1)); got != "0" {
+	if got := golden.Rows(t, "python revocations of the connected org", func() string {
+		return rows(venue.SourceDB, strings.Replace(revocations, "%s", connected, 1))
+	}); got != "0" {
 		t.Errorf("Python queued %s revocation rows for the token it dropped, want 0", got)
 	}
 	if got := rows(venue.GoDB, strings.Replace(revocations, "%s", connected, 1)); got != "1" {
@@ -225,4 +229,5 @@ CREATE TRIGGER pd_noclient_slow_delete BEFORE DELETE ON provider_oauth_credentia
 	if revoked != 1 {
 		t.Errorf("the racing credential's token was sent to PagerDuty %d times, want once", revoked)
 	}
+	golden.Finish(t)
 }

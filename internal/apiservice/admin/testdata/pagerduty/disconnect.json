@@ -1,0 +1,309 @@
+{
+  "header": {
+    "test": "TestPagerDutyDisconnectVenueOracle",
+    "python_build": "9642a8da15bb47d7400cef13cc93547b46e5f67a",
+    "recipe": "git worktree add --detach $DIR 9642a8da15bb47d7400cef13cc93547b46e5f67a; then from the repository root: DHO_VENUE_GOLDEN_UPDATE=1 DHO_VENUE_GOLDEN_PYTHON_ROOT=$DIR DEV_HEALTH_LIVE_PYTHON_ORACLES=1 go test -tags=integration -count=1 -run '^TestPagerDutyDisconnectVenueOracle$' ./internal/apiservice/admin/ (it fails once by design and prints the digest to pin)"
+  },
+  "requests": [
+    {
+      "name": "W disconnect connected (revokes)",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/disconnect",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "status": 200,
+      "headers": {
+        "content-length": "49",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "ffe6a963-1db6-4bc9-bca2-5cdaee23505d"
+      },
+      "body": "{\"disconnected\":true,\"credential_name\":\"default\"}"
+    },
+    {
+      "name": "W disconnect again is idempotent",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/disconnect",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "status": 200,
+      "headers": {
+        "content-length": "49",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "8fff734d-4c74-4832-8a08-da96a93bb3cb"
+      },
+      "body": "{\"disconnected\":true,\"credential_name\":\"default\"}"
+    },
+    {
+      "name": "W disconnect empty org has no row",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/disconnect",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "status": 200,
+      "headers": {
+        "content-length": "49",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "e5b2eb0a-99dc-4229-98f9-cbab6d28a9f3"
+      },
+      "body": "{\"disconnected\":true,\"credential_name\":\"default\"}"
+    },
+    {
+      "name": "W disconnect bad cipher skips revoke",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/disconnect",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "status": 200,
+      "headers": {
+        "content-length": "49",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "c48f20af-c53c-4821-902a-af868efd5a19"
+      },
+      "body": "{\"disconnected\":true,\"credential_name\":\"default\"}"
+    },
+    {
+      "name": "W disconnect detaches webhook binding",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/disconnect",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "status": 200,
+      "headers": {
+        "content-length": "49",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "160acc39-22e9-4c9f-817c-cc33829bff25"
+      },
+      "body": "{\"disconnected\":true,\"credential_name\":\"default\"}"
+    },
+    {
+      "name": "W disconnect revoke fails, pending retry",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/disconnect",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "status": 503,
+      "headers": {
+        "content-length": "57",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "2f63c192-99d0-4e8c-aa49-f878643f5964"
+      },
+      "body": "{\"detail\":\"PagerDuty remote revocation is pending retry\"}"
+    },
+    {
+      "name": "W disconnect revoke redirected is a failure, not followed",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/disconnect",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "status": 503,
+      "headers": {
+        "content-length": "57",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "c604b20d-6e27-4a35-90a8-d9a9e1f96b5c"
+      },
+      "body": "{\"detail\":\"PagerDuty remote revocation is pending retry\"}"
+    },
+    {
+      "name": "W disconnect token JSON is not an OAuthTokens object",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/disconnect",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "status": 200,
+      "headers": {
+        "content-length": "49",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "63da3efb-1ca1-49a6-8d08-331c07b10825"
+      },
+      "body": "{\"disconnected\":true,\"credential_name\":\"default\"}"
+    },
+    {
+      "name": "W disconnect token JSON with an extra key",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/disconnect",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "status": 200,
+      "headers": {
+        "content-length": "49",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "a8c1bbd1-1a04-4fe6-82d7-33a78d2eac2f"
+      },
+      "body": "{\"disconnected\":true,\"credential_name\":\"default\"}"
+    },
+    {
+      "name": "W disconnect credential_name blank",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/disconnect",
+      "body_sha256": "528a2a476c58db80b92f66e9eee393247243125b6673dabb64b820d798b38153",
+      "status": 422,
+      "headers": {
+        "content-length": "145",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "1d2731f6-1cdb-4827-a17a-57821e2b084f"
+      },
+      "body": "{\"detail\":[{\"type\":\"value_error\",\"loc\":[\"body\",\"credential_name\"],\"msg\":\"Value error, value must not be blank\",\"input\":\"  \",\"ctx\":{\"error\":{}}}]}"
+    },
+    {
+      "name": "W disconnect extra field",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/disconnect",
+      "body_sha256": "4ac0eca5e8336886160e927f5fb5e89184f915e540257d1ae12d2590f02cb37e",
+      "status": 422,
+      "headers": {
+        "content-length": "111",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "7c1dd475-81e9-4734-8de3-4641a887ece6"
+      },
+      "body": "{\"detail\":[{\"type\":\"extra_forbidden\",\"loc\":[\"body\",\"bogus\"],\"msg\":\"Extra inputs are not permitted\",\"input\":1}]}"
+    },
+    {
+      "name": "W disconnect body list",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/disconnect",
+      "body_sha256": "0efe8c9a1a45511fe53ad47b02b82b32f480d1819874e6fb6d37c54cf9a2f5ea",
+      "status": 422,
+      "headers": {
+        "content-length": "147",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "d65c9858-6444-4551-98f7-3a5905e4ef4b"
+      },
+      "body": "{\"detail\":[{\"type\":\"model_attributes_type\",\"loc\":[\"body\"],\"msg\":\"Input should be a valid dictionary or object to extract fields from\",\"input\":[]}]}"
+    },
+    {
+      "name": "W disconnect invalid json",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/disconnect",
+      "body_sha256": "28e9bafc45d8e9d77bb0a8df443097a32dd967a6099b003712d0ef3725b43c5e",
+      "status": 422,
+      "headers": {
+        "content-length": "158",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "de91a7f9-13dd-4404-b171-cfa6655f2ead"
+      },
+      "body": "{\"detail\":[{\"type\":\"json_invalid\",\"loc\":[\"body\",1],\"msg\":\"JSON decode error\",\"input\":{},\"ctx\":{\"error\":\"Expecting property name enclosed in double quotes\"}}]}"
+    },
+    {
+      "name": "W disconnect unauthenticated",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/disconnect",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "status": 401,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "www-authenticate": "Bearer",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "9d78782a-5aa1-48c0-bd4b-ed2dd7c83288"
+      },
+      "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
+    },
+    {
+      "name": "W disconnect member refused",
+      "method": "POST",
+      "path": "/api/v1/admin/integrations/pagerduty/disconnect",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "status": 403,
+      "headers": {
+        "content-length": "34",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "16fd225e-37eb-43c3-902f-0595e08756a1"
+      },
+      "body": "{\"detail\":\"Admin access required\"}"
+    }
+  ],
+  "rows": {
+    "integration_credentials rows": {
+      "rows": "52e37894-fcd0-5eb0-a9be-13f1e0c1504epagerdutydefaultfalsetrue | 6b178ac0-33fc-502b-95e7-c42363b33fadpagerdutydefaultfalsetrue | afc1721b-5860-5546-b2b6-15222c2a423apagerdutydefaultfalsetrue | b55bb48b-5886-50c9-94ea-c3ff9da877f2pagerdutydefaultfalsetrue | bb9e2582-c720-505e-a26d-d30b6edd4d06pagerdutydefaultfalsetrue | d2db1087-525f-5ac9-8ed6-d4fffd9fcd36pagerdutydefaultfalsetrue | fa98cb5e-4ad2-5d11-9700-414b88b686d6pagerdutydefaultfalsetrue"
+    },
+    "pagerduty_webhook_bindings rows": {
+      "rows": "[250 152 203 94 74 210 93 17 151 0 65 75 136 182 134 214]inactivetruefalse"
+    },
+    "provider_oauth_credentials rows": {
+      "rows": ""
+    },
+    "provider_oauth_revocations rows": {
+      "rows": "6b178ac0-33fc-502b-95e7-c42363b33fadpagerdutydefaultpending | bb9e2582-c720-505e-a26d-d30b6edd4d06pagerdutydefaultpending"
+    }
+  }
+}

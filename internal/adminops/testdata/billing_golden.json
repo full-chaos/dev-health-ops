@@ -1,0 +1,161 @@
+[
+ {
+  "args": [
+   "billing",
+   "list"
+  ],
+  "exit": 0,
+  "stdout": "No billing plans found.\n",
+  "state": "{\"plans\":null,\"prices\":null}"
+ },
+ {
+  "args": [
+   "billing",
+   "seed"
+  ],
+  "exit": 0,
+  "stdout": "Seeded 3 billing plan(s) with prices.\n",
+  "state": "{\"plans\":[\"community|Community|For individuals and small teams getting started with engineering analytics.|community|true|0|\\u003cnull\\u003e|{}\",\"enterprise|Enterprise|For organizations that need enterprise-grade security, compliance, and dedicated support.|enterprise|true|2|\\u003cnull\\u003e|{}\",\"team|Team|For growing teams that need full visibility into delivery health and investment patterns.|team|true|1|\\u003cnull\\u003e|{}\"],\"prices\":[\"community|monthly|0|usd|true|\\u003cnull\\u003e\",\"community|yearly|0|usd|true|\\u003cnull\\u003e\",\"enterprise|monthly|12900|usd|true|\\u003cnull\\u003e\",\"enterprise|yearly|124000|usd|true|\\u003cnull\\u003e\",\"team|monthly|1200|usd|true|\\u003cnull\\u003e\",\"team|yearly|11500|usd|true|\\u003cnull\\u003e\"]}"
+ },
+ {
+  "args": [
+   "billing",
+   "seed"
+  ],
+  "exit": 0,
+  "stdout": "All standard billing plans already exist.\n",
+  "state": "{\"plans\":[\"community|Community|For individuals and small teams getting started with engineering analytics.|community|true|0|\\u003cnull\\u003e|{}\",\"enterprise|Enterprise|For organizations that need enterprise-grade security, compliance, and dedicated support.|enterprise|true|2|\\u003cnull\\u003e|{}\",\"team|Team|For growing teams that need full visibility into delivery health and investment patterns.|team|true|1|\\u003cnull\\u003e|{}\"],\"prices\":[\"community|monthly|0|usd|true|\\u003cnull\\u003e\",\"community|yearly|0|usd|true|\\u003cnull\\u003e\",\"enterprise|monthly|12900|usd|true|\\u003cnull\\u003e\",\"enterprise|yearly|124000|usd|true|\\u003cnull\\u003e\",\"team|monthly|1200|usd|true|\\u003cnull\\u003e\",\"team|yearly|11500|usd|true|\\u003cnull\\u003e\"]}"
+ },
+ {
+  "args": [
+   "billing",
+   "list"
+  ],
+  "exit": 0,
+  "stdout": "Key             Name            Tier         Active   Stripe Product ID              Prices\n--------------------------------------------------------------------------------------------------------------\ncommunity       Community       community    Yes      -                              monthly $0.00, yearly $0.00\nteam            Team            team         Yes      -                              monthly $12.00, yearly $115.00\nenterprise      Enterprise      enterprise   Yes      -                              monthly $129.00, yearly $1240.00\n",
+  "state": "{\"plans\":[\"community|Community|For individuals and small teams getting started with engineering analytics.|community|true|0|\\u003cnull\\u003e|{}\",\"enterprise|Enterprise|For organizations that need enterprise-grade security, compliance, and dedicated support.|enterprise|true|2|\\u003cnull\\u003e|{}\",\"team|Team|For growing teams that need full visibility into delivery health and investment patterns.|team|true|1|\\u003cnull\\u003e|{}\"],\"prices\":[\"community|monthly|0|usd|true|\\u003cnull\\u003e\",\"community|yearly|0|usd|true|\\u003cnull\\u003e\",\"enterprise|monthly|12900|usd|true|\\u003cnull\\u003e\",\"enterprise|yearly|124000|usd|true|\\u003cnull\\u003e\",\"team|monthly|1200|usd|true|\\u003cnull\\u003e\",\"team|yearly|11500|usd|true|\\u003cnull\\u003e\"]}"
+ },
+ {
+  "args": [
+   "\u003cseed\u003e"
+  ],
+  "exit": 0,
+  "stdout": "",
+  "state": "{\"plans\":[\"enterprise|Enterprise|For organizations that need enterprise-grade security, compliance, and dedicated support.|enterprise|true|2|\\u003cnull\\u003e|{}\",\"team|Team|For growing teams that need full visibility into delivery health and investment patterns.|team|true|1|\\u003cnull\\u003e|{}\"],\"prices\":[\"enterprise|monthly|12900|usd|true|\\u003cnull\\u003e\",\"enterprise|yearly|124000|usd|true|\\u003cnull\\u003e\",\"team|monthly|1200|usd|true|\\u003cnull\\u003e\",\"team|yearly|11500|usd|true|\\u003cnull\\u003e\"]}"
+ },
+ {
+  "args": [
+   "billing",
+   "seed"
+  ],
+  "exit": 0,
+  "stdout": "Seeded 1 billing plan(s) with prices.\n",
+  "state": "{\"plans\":[\"community|Community|For individuals and small teams getting started with engineering analytics.|community|true|0|\\u003cnull\\u003e|{}\",\"enterprise|Enterprise|For organizations that need enterprise-grade security, compliance, and dedicated support.|enterprise|true|2|\\u003cnull\\u003e|{}\",\"team|Team|For growing teams that need full visibility into delivery health and investment patterns.|team|true|1|\\u003cnull\\u003e|{}\"],\"prices\":[\"community|monthly|0|usd|true|\\u003cnull\\u003e\",\"community|yearly|0|usd|true|\\u003cnull\\u003e\",\"enterprise|monthly|12900|usd|true|\\u003cnull\\u003e\",\"enterprise|yearly|124000|usd|true|\\u003cnull\\u003e\",\"team|monthly|1200|usd|true|\\u003cnull\\u003e\",\"team|yearly|11500|usd|true|\\u003cnull\\u003e\"]}"
+ },
+ {
+  "args": [
+   "billing",
+   "list"
+  ],
+  "exit": 0,
+  "stdout": "Key             Name            Tier         Active   Stripe Product ID              Prices\n--------------------------------------------------------------------------------------------------------------\ncommunity       Community       community    Yes      -                              monthly $0.00, yearly $0.00\nteam            Team            team         Yes      -                              monthly $12.00, yearly $115.00\nenterprise      Enterprise      enterprise   Yes      -                              monthly $129.00, yearly $1240.00\n",
+  "state": "{\"plans\":[\"community|Community|For individuals and small teams getting started with engineering analytics.|community|true|0|\\u003cnull\\u003e|{}\",\"enterprise|Enterprise|For organizations that need enterprise-grade security, compliance, and dedicated support.|enterprise|true|2|\\u003cnull\\u003e|{}\",\"team|Team|For growing teams that need full visibility into delivery health and investment patterns.|team|true|1|\\u003cnull\\u003e|{}\"],\"prices\":[\"community|monthly|0|usd|true|\\u003cnull\\u003e\",\"community|yearly|0|usd|true|\\u003cnull\\u003e\",\"enterprise|monthly|12900|usd|true|\\u003cnull\\u003e\",\"enterprise|yearly|124000|usd|true|\\u003cnull\\u003e\",\"team|monthly|1200|usd|true|\\u003cnull\\u003e\",\"team|yearly|11500|usd|true|\\u003cnull\\u003e\"]}"
+ },
+ {
+  "args": [
+   "\u003cseed\u003e"
+  ],
+  "exit": 0,
+  "stdout": "",
+  "state": "{\"plans\":[\"a-rather-long-plan-key|A rather long plan name|d|a-long-tier-name|false|5|prod_0123456789012345678901234567890|{}\",\"community|Community|For individuals and small teams getting started with engineering analytics.|community|true|0|\\u003cnull\\u003e|{}\",\"enterprise|Enterprise|For organizations that need enterprise-grade security, compliance, and dedicated support.|enterprise|true|2|\\u003cnull\\u003e|{}\",\"noprices|No prices|\\u003cnull\\u003e|team|true|7|\\u003cnull\\u003e|{}\",\"team|Team|For growing teams that need full visibility into delivery health and investment patterns.|team|true|1|\\u003cnull\\u003e|{}\",\"uni|Ünï 日本|\\u003cnull\\u003e|team|true|6|prod_uni|{}\"],\"prices\":[\"community|monthly|0|usd|true|\\u003cnull\\u003e\",\"community|yearly|0|usd|true|\\u003cnull\\u003e\",\"enterprise|monthly|12900|usd|true|\\u003cnull\\u003e\",\"enterprise|yearly|124000|usd|true|\\u003cnull\\u003e\",\"team|monthly|1200|usd|true|\\u003cnull\\u003e\",\"team|yearly|11500|usd|true|\\u003cnull\\u003e\",\"uni|daily|-150|usd|true|\\u003cnull\\u003e\",\"uni|monthly|1|usd|true|\\u003cnull\\u003e\",\"uni|odd|5|usd|true|\\u003cnull\\u003e\",\"uni|once|100000|usd|true|\\u003cnull\\u003e\",\"uni|weekly|1999|usd|true|\\u003cnull\\u003e\",\"uni|yearly|999|usd|true|\\u003cnull\\u003e\"]}"
+ },
+ {
+  "args": [
+   "billing",
+   "list"
+  ],
+  "exit": 0,
+  "stdout": "Key             Name            Tier         Active   Stripe Product ID              Prices\n--------------------------------------------------------------------------------------------------------------\ncommunity       Community       community    Yes      -                              monthly $0.00, yearly $0.00\nteam            Team            team         Yes      -                              monthly $12.00, yearly $115.00\nenterprise      Enterprise      enterprise   Yes      -                              monthly $129.00, yearly $1240.00\na-rather-long-plan-key A rather long plan name a-long-tier-name No       prod_0123456789012345678901234567890 none\nuni             Ünï 日本          team         Yes      prod_uni                       monthly $0.01, yearly $9.99, weekly $19.99, daily $-1.50, once $1000.00, odd $0.05\nnoprices        No prices       team         Yes      -                              none\n",
+  "state": "{\"plans\":[\"a-rather-long-plan-key|A rather long plan name|d|a-long-tier-name|false|5|prod_0123456789012345678901234567890|{}\",\"community|Community|For individuals and small teams getting started with engineering analytics.|community|true|0|\\u003cnull\\u003e|{}\",\"enterprise|Enterprise|For organizations that need enterprise-grade security, compliance, and dedicated support.|enterprise|true|2|\\u003cnull\\u003e|{}\",\"noprices|No prices|\\u003cnull\\u003e|team|true|7|\\u003cnull\\u003e|{}\",\"team|Team|For growing teams that need full visibility into delivery health and investment patterns.|team|true|1|\\u003cnull\\u003e|{}\",\"uni|Ünï 日本|\\u003cnull\\u003e|team|true|6|prod_uni|{}\"],\"prices\":[\"community|monthly|0|usd|true|\\u003cnull\\u003e\",\"community|yearly|0|usd|true|\\u003cnull\\u003e\",\"enterprise|monthly|12900|usd|true|\\u003cnull\\u003e\",\"enterprise|yearly|124000|usd|true|\\u003cnull\\u003e\",\"team|monthly|1200|usd|true|\\u003cnull\\u003e\",\"team|yearly|11500|usd|true|\\u003cnull\\u003e\",\"uni|daily|-150|usd|true|\\u003cnull\\u003e\",\"uni|monthly|1|usd|true|\\u003cnull\\u003e\",\"uni|odd|5|usd|true|\\u003cnull\\u003e\",\"uni|once|100000|usd|true|\\u003cnull\\u003e\",\"uni|weekly|1999|usd|true|\\u003cnull\\u003e\",\"uni|yearly|999|usd|true|\\u003cnull\\u003e\"]}"
+ },
+ {
+  "args": [
+   "\u003cseed\u003e"
+  ],
+  "exit": 0,
+  "stdout": "",
+  "state": "{\"plans\":[\"a-rather-long-plan-key|A rather long plan name|d|a-long-tier-name|false|5|prod_0123456789012345678901234567890|{}\",\"community|Community|For individuals and small teams getting started with engineering analytics.|community|true|0|\\u003cnull\\u003e|{}\",\"noprices|No prices|\\u003cnull\\u003e|team|true|7|\\u003cnull\\u003e|{}\",\"uni|Ünï 日本|\\u003cnull\\u003e|team|true|6|prod_uni|{}\"],\"prices\":[\"community|monthly|0|usd|true|\\u003cnull\\u003e\",\"community|yearly|0|usd|true|\\u003cnull\\u003e\",\"uni|daily|-150|usd|true|\\u003cnull\\u003e\",\"uni|monthly|1|usd|true|\\u003cnull\\u003e\",\"uni|odd|5|usd|true|\\u003cnull\\u003e\",\"uni|once|100000|usd|true|\\u003cnull\\u003e\",\"uni|weekly|1999|usd|true|\\u003cnull\\u003e\",\"uni|yearly|999|usd|true|\\u003cnull\\u003e\"]}"
+ },
+ {
+  "args": [
+   "\u003cseed\u003e"
+  ],
+  "exit": 0,
+  "stdout": "",
+  "state": "{\"plans\":[\"a-rather-long-plan-key|A rather long plan name|d|a-long-tier-name|false|5|prod_0123456789012345678901234567890|{}\",\"community|Community|For individuals and small teams getting started with engineering analytics.|community|true|0|\\u003cnull\\u003e|{}\",\"noprices|No prices|\\u003cnull\\u003e|team|true|7|\\u003cnull\\u003e|{}\",\"uni|Ünï 日本|\\u003cnull\\u003e|team|true|6|prod_uni|{}\"],\"prices\":[\"community|monthly|0|usd|true|\\u003cnull\\u003e\",\"community|yearly|0|usd|true|\\u003cnull\\u003e\",\"uni|daily|-150|usd|true|\\u003cnull\\u003e\",\"uni|monthly|1|usd|true|\\u003cnull\\u003e\",\"uni|odd|5|usd|true|\\u003cnull\\u003e\",\"uni|once|100000|usd|true|\\u003cnull\\u003e\",\"uni|weekly|1999|usd|true|\\u003cnull\\u003e\",\"uni|yearly|999|usd|true|\\u003cnull\\u003e\"]}"
+ },
+ {
+  "args": [
+   "billing",
+   "seed"
+  ],
+  "exit": 1,
+  "stdout": "Error: \u003cdatabase error\u003e\n",
+  "state": "{\"plans\":[\"a-rather-long-plan-key|A rather long plan name|d|a-long-tier-name|false|5|prod_0123456789012345678901234567890|{}\",\"community|Community|For individuals and small teams getting started with engineering analytics.|community|true|0|\\u003cnull\\u003e|{}\",\"noprices|No prices|\\u003cnull\\u003e|team|true|7|\\u003cnull\\u003e|{}\",\"uni|Ünï 日本|\\u003cnull\\u003e|team|true|6|prod_uni|{}\"],\"prices\":[\"community|monthly|0|usd|true|\\u003cnull\\u003e\",\"community|yearly|0|usd|true|\\u003cnull\\u003e\",\"uni|daily|-150|usd|true|\\u003cnull\\u003e\",\"uni|monthly|1|usd|true|\\u003cnull\\u003e\",\"uni|odd|5|usd|true|\\u003cnull\\u003e\",\"uni|once|100000|usd|true|\\u003cnull\\u003e\",\"uni|weekly|1999|usd|true|\\u003cnull\\u003e\",\"uni|yearly|999|usd|true|\\u003cnull\\u003e\"]}"
+ },
+ {
+  "args": [
+   "billing",
+   "list"
+  ],
+  "exit": 0,
+  "stdout": "Key             Name            Tier         Active   Stripe Product ID              Prices\n--------------------------------------------------------------------------------------------------------------\ncommunity       Community       community    Yes      -                              monthly $0.00, yearly $0.00\na-rather-long-plan-key A rather long plan name a-long-tier-name No       prod_0123456789012345678901234567890 none\nuni             Ünï 日本          team         Yes      prod_uni                       monthly $0.01, yearly $9.99, weekly $19.99, daily $-1.50, once $1000.00, odd $0.05\nnoprices        No prices       team         Yes      -                              none\n",
+  "state": "{\"plans\":[\"a-rather-long-plan-key|A rather long plan name|d|a-long-tier-name|false|5|prod_0123456789012345678901234567890|{}\",\"community|Community|For individuals and small teams getting started with engineering analytics.|community|true|0|\\u003cnull\\u003e|{}\",\"noprices|No prices|\\u003cnull\\u003e|team|true|7|\\u003cnull\\u003e|{}\",\"uni|Ünï 日本|\\u003cnull\\u003e|team|true|6|prod_uni|{}\"],\"prices\":[\"community|monthly|0|usd|true|\\u003cnull\\u003e\",\"community|yearly|0|usd|true|\\u003cnull\\u003e\",\"uni|daily|-150|usd|true|\\u003cnull\\u003e\",\"uni|monthly|1|usd|true|\\u003cnull\\u003e\",\"uni|odd|5|usd|true|\\u003cnull\\u003e\",\"uni|once|100000|usd|true|\\u003cnull\\u003e\",\"uni|weekly|1999|usd|true|\\u003cnull\\u003e\",\"uni|yearly|999|usd|true|\\u003cnull\\u003e\"]}"
+ },
+ {
+  "args": [
+   "\u003cseed\u003e"
+  ],
+  "exit": 0,
+  "stdout": "",
+  "state": "{\"plans\":[\"a-rather-long-plan-key|A rather long plan name|d|a-long-tier-name|false|5|prod_0123456789012345678901234567890|{}\",\"community|Community|For individuals and small teams getting started with engineering analytics.|community|true|0|\\u003cnull\\u003e|{}\",\"noprices|No prices|\\u003cnull\\u003e|team|true|7|\\u003cnull\\u003e|{}\",\"uni|Ünï 日本|\\u003cnull\\u003e|team|true|6|prod_uni|{}\"],\"prices\":[\"community|monthly|0|usd|true|\\u003cnull\\u003e\",\"community|yearly|0|usd|true|\\u003cnull\\u003e\",\"uni|daily|-150|usd|true|\\u003cnull\\u003e\",\"uni|monthly|1|usd|true|\\u003cnull\\u003e\",\"uni|odd|5|usd|true|\\u003cnull\\u003e\",\"uni|once|100000|usd|true|\\u003cnull\\u003e\",\"uni|weekly|1999|usd|true|\\u003cnull\\u003e\",\"uni|yearly|999|usd|true|\\u003cnull\\u003e\"]}"
+ },
+ {
+  "args": [
+   "billing",
+   "seed"
+  ],
+  "exit": 0,
+  "stdout": "Seeded 2 billing plan(s) with prices.\n",
+  "state": "{\"plans\":[\"a-rather-long-plan-key|A rather long plan name|d|a-long-tier-name|false|5|prod_0123456789012345678901234567890|{}\",\"community|Community|For individuals and small teams getting started with engineering analytics.|community|true|0|\\u003cnull\\u003e|{}\",\"enterprise|Enterprise|For organizations that need enterprise-grade security, compliance, and dedicated support.|enterprise|true|2|\\u003cnull\\u003e|{}\",\"noprices|No prices|\\u003cnull\\u003e|team|true|7|\\u003cnull\\u003e|{}\",\"team|Team|For growing teams that need full visibility into delivery health and investment patterns.|team|true|1|\\u003cnull\\u003e|{}\",\"uni|Ünï 日本|\\u003cnull\\u003e|team|true|6|prod_uni|{}\"],\"prices\":[\"community|monthly|0|usd|true|\\u003cnull\\u003e\",\"community|yearly|0|usd|true|\\u003cnull\\u003e\",\"enterprise|monthly|12900|usd|true|\\u003cnull\\u003e\",\"enterprise|yearly|124000|usd|true|\\u003cnull\\u003e\",\"team|monthly|1200|usd|true|\\u003cnull\\u003e\",\"team|yearly|11500|usd|true|\\u003cnull\\u003e\",\"uni|daily|-150|usd|true|\\u003cnull\\u003e\",\"uni|monthly|1|usd|true|\\u003cnull\\u003e\",\"uni|odd|5|usd|true|\\u003cnull\\u003e\",\"uni|once|100000|usd|true|\\u003cnull\\u003e\",\"uni|weekly|1999|usd|true|\\u003cnull\\u003e\",\"uni|yearly|999|usd|true|\\u003cnull\\u003e\"]}"
+ },
+ {
+  "args": [
+   "billing",
+   "list"
+  ],
+  "exit": 0,
+  "stdout": "Key             Name            Tier         Active   Stripe Product ID              Prices\n--------------------------------------------------------------------------------------------------------------\ncommunity       Community       community    Yes      -                              monthly $0.00, yearly $0.00\nteam            Team            team         Yes      -                              monthly $12.00, yearly $115.00\nenterprise      Enterprise      enterprise   Yes      -                              monthly $129.00, yearly $1240.00\na-rather-long-plan-key A rather long plan name a-long-tier-name No       prod_0123456789012345678901234567890 none\nuni             Ünï 日本          team         Yes      prod_uni                       monthly $0.01, yearly $9.99, weekly $19.99, daily $-1.50, once $1000.00, odd $0.05\nnoprices        No prices       team         Yes      -                              none\n",
+  "state": "{\"plans\":[\"a-rather-long-plan-key|A rather long plan name|d|a-long-tier-name|false|5|prod_0123456789012345678901234567890|{}\",\"community|Community|For individuals and small teams getting started with engineering analytics.|community|true|0|\\u003cnull\\u003e|{}\",\"enterprise|Enterprise|For organizations that need enterprise-grade security, compliance, and dedicated support.|enterprise|true|2|\\u003cnull\\u003e|{}\",\"noprices|No prices|\\u003cnull\\u003e|team|true|7|\\u003cnull\\u003e|{}\",\"team|Team|For growing teams that need full visibility into delivery health and investment patterns.|team|true|1|\\u003cnull\\u003e|{}\",\"uni|Ünï 日本|\\u003cnull\\u003e|team|true|6|prod_uni|{}\"],\"prices\":[\"community|monthly|0|usd|true|\\u003cnull\\u003e\",\"community|yearly|0|usd|true|\\u003cnull\\u003e\",\"enterprise|monthly|12900|usd|true|\\u003cnull\\u003e\",\"enterprise|yearly|124000|usd|true|\\u003cnull\\u003e\",\"team|monthly|1200|usd|true|\\u003cnull\\u003e\",\"team|yearly|11500|usd|true|\\u003cnull\\u003e\",\"uni|daily|-150|usd|true|\\u003cnull\\u003e\",\"uni|monthly|1|usd|true|\\u003cnull\\u003e\",\"uni|odd|5|usd|true|\\u003cnull\\u003e\",\"uni|once|100000|usd|true|\\u003cnull\\u003e\",\"uni|weekly|1999|usd|true|\\u003cnull\\u003e\",\"uni|yearly|999|usd|true|\\u003cnull\\u003e\"]}"
+ },
+ {
+  "args": [
+   "billing",
+   "seed",
+   "--extra"
+  ],
+  "exit": 2,
+  "stdout": "",
+  "state": "{\"plans\":[\"a-rather-long-plan-key|A rather long plan name|d|a-long-tier-name|false|5|prod_0123456789012345678901234567890|{}\",\"community|Community|For individuals and small teams getting started with engineering analytics.|community|true|0|\\u003cnull\\u003e|{}\",\"enterprise|Enterprise|For organizations that need enterprise-grade security, compliance, and dedicated support.|enterprise|true|2|\\u003cnull\\u003e|{}\",\"noprices|No prices|\\u003cnull\\u003e|team|true|7|\\u003cnull\\u003e|{}\",\"team|Team|For growing teams that need full visibility into delivery health and investment patterns.|team|true|1|\\u003cnull\\u003e|{}\",\"uni|Ünï 日本|\\u003cnull\\u003e|team|true|6|prod_uni|{}\"],\"prices\":[\"community|monthly|0|usd|true|\\u003cnull\\u003e\",\"community|yearly|0|usd|true|\\u003cnull\\u003e\",\"enterprise|monthly|12900|usd|true|\\u003cnull\\u003e\",\"enterprise|yearly|124000|usd|true|\\u003cnull\\u003e\",\"team|monthly|1200|usd|true|\\u003cnull\\u003e\",\"team|yearly|11500|usd|true|\\u003cnull\\u003e\",\"uni|daily|-150|usd|true|\\u003cnull\\u003e\",\"uni|monthly|1|usd|true|\\u003cnull\\u003e\",\"uni|odd|5|usd|true|\\u003cnull\\u003e\",\"uni|once|100000|usd|true|\\u003cnull\\u003e\",\"uni|weekly|1999|usd|true|\\u003cnull\\u003e\",\"uni|yearly|999|usd|true|\\u003cnull\\u003e\"]}"
+ },
+ {
+  "args": [
+   "billing",
+   "list",
+   "x"
+  ],
+  "exit": 2,
+  "stdout": "",
+  "state": "{\"plans\":[\"a-rather-long-plan-key|A rather long plan name|d|a-long-tier-name|false|5|prod_0123456789012345678901234567890|{}\",\"community|Community|For individuals and small teams getting started with engineering analytics.|community|true|0|\\u003cnull\\u003e|{}\",\"enterprise|Enterprise|For organizations that need enterprise-grade security, compliance, and dedicated support.|enterprise|true|2|\\u003cnull\\u003e|{}\",\"noprices|No prices|\\u003cnull\\u003e|team|true|7|\\u003cnull\\u003e|{}\",\"team|Team|For growing teams that need full visibility into delivery health and investment patterns.|team|true|1|\\u003cnull\\u003e|{}\",\"uni|Ünï 日本|\\u003cnull\\u003e|team|true|6|prod_uni|{}\"],\"prices\":[\"community|monthly|0|usd|true|\\u003cnull\\u003e\",\"community|yearly|0|usd|true|\\u003cnull\\u003e\",\"enterprise|monthly|12900|usd|true|\\u003cnull\\u003e\",\"enterprise|yearly|124000|usd|true|\\u003cnull\\u003e\",\"team|monthly|1200|usd|true|\\u003cnull\\u003e\",\"team|yearly|11500|usd|true|\\u003cnull\\u003e\",\"uni|daily|-150|usd|true|\\u003cnull\\u003e\",\"uni|monthly|1|usd|true|\\u003cnull\\u003e\",\"uni|odd|5|usd|true|\\u003cnull\\u003e\",\"uni|once|100000|usd|true|\\u003cnull\\u003e\",\"uni|weekly|1999|usd|true|\\u003cnull\\u003e\",\"uni|yearly|999|usd|true|\\u003cnull\\u003e\"]}"
+ }
+]

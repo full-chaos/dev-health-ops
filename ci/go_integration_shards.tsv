@@ -147,6 +147,7 @@ internal/jobs/workgraph/operationaledges	49
 internal/jobs/workgraph/prcommit	24
 internal/llmorgsettings	44
 internal/backfillrun	120
+internal/maintenancecli	100
 internal/operationalbackfill	130
 internal/pgmigrate	45
 internal/platform/config	14

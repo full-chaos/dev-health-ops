@@ -107,7 +107,17 @@ metadata:
     dev-health.io/queue-set: {{ join "_" . | quote }}
     {{- end }}
 spec:
+  {{- /*
+  CHAOS-6767: a KEDA-scaled group must not carry `replicas`. KEDA's generated HPA owns the scale
+  subresource; a manifest that also sets spec.replicas makes every server-side apply conflict with the
+  scaler's field manager whenever KEDA has moved the count off the manifest value (prod rev 185: go-sync
+  scaled to 2 vs manifest 1 => `conflict with "k3s" with subresource "scale": .spec.replicas`), and a
+  forced apply would reset the count under load. Same rule the api Deployment already follows for its HPA.
+  A non-autoscaled group keeps its fixed replicas.
+  */}}
+  {{- if not (and $group.autoscaling $group.autoscaling.enabled) }}
   replicas: {{ $group.replicas }}
+  {{- end }}
   {{- /* CHAOS-6647: per-group goWorkers.groups[].rollingUpdate, else goWorkers.rollingUpdate, else maxUnavailable 0 / maxSurge 1. */}}
   strategy:
     type: RollingUpdate

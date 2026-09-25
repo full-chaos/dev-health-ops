@@ -36,6 +36,12 @@ import (
 //
 //venueoracle:local-only needs a Stripe test-mode key hosted CI does not hold
 func TestStripeTestModeBillingDifferential(t *testing.T) {
+	// CHAOS-6817 deleted the Python billing route bodies this differential drove:
+	// the Python plane now answers the go-served refusal, so there is nothing to
+	// compare against. Real Stripe state cannot be frozen; the last live receipt
+	// was taken before the deletion (see the PR that deleted them). The body below
+	// is kept for reference and cannot run until a Python producer exists again.
+	t.Skip("Python billing route bodies are deleted (CHAOS-6817): no Python plane to drive")
 	if os.Getenv("DEV_HEALTH_STRIPE_TEST_MODE") != "1" {
 		t.Skip("real Stripe test mode runs only with DEV_HEALTH_STRIPE_TEST_MODE=1 (local receipt)")
 	}

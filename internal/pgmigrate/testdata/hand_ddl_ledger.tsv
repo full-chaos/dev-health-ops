@@ -17,9 +17,6 @@ internal/api/policy/store_integration_test.go	settings	SUBSET
 internal/api/policy/store_integration_test.go	sync_configurations	SUBSET	
 internal/api/policy/store_integration_test.go	users	SUBSET	
 internal/api/policy/store_integration_test.go	worker_instances	INVENTED	id
-internal/api/session/golden_replay_integration_test.go	impersonation_sessions	INVENTED	started_at
-internal/api/session/golden_replay_integration_test.go	memberships	SUBSET	
-internal/api/session/golden_replay_integration_test.go	organizations	SUBSET	
 internal/api/syncadmin/config_delete_integration_test.go	sync_configurations	SUBSET	
 internal/api/webhookintake/webhookintake_integration_test.go	feature_flags	SUBSET	
 internal/api/webhookintake/webhookintake_integration_test.go	org_feature_overrides	SUBSET	

@@ -81,31 +81,94 @@ func TestDecodeCredentialRendersNumbersLikePythonStr(t *testing.T) {
 	}
 }
 
-// TestDecodeCredentialStillRefusesEveryOtherNonString: only the two App
-// identifiers, only for github, only JSON numbers.
-func TestDecodeCredentialStillRefusesEveryOtherNonString(t *testing.T) {
-	cases := []struct{ name, provider, body string }{
-		{"a numeric token", "github", `{"token": 12}`},
-		{"a numeric private key", "github", `{"app_id": 1, "private_key": 5, "installation_id": 2}`},
-		{"a boolean identifier", "github", `{"app_id": true, "installation_id": 2}`},
-		{"a null identifier", "github", `{"app_id": null, "installation_id": 2}`},
-		{"an object identifier", "github", `{"app_id": {"n": 1}}`},
-		{"a list identifier", "github", `{"app_id": [1]}`},
-		{"a numeric base url", "github", `{"base_url": 3}`},
-		{"a numeric app_id for another provider", "gitlab", `{"app_id": 12, "token": "t"}`},
-		{"a numeric api_key", "linear", `{"api_key": 12}`},
+// TestDecodeCredentialReadsNonStringFieldsLikePython (CHAOS-6770): Python
+// reads the fields it wants with `str(cred.get(k) or "")` and ignores the
+// rest, so a number is its str(), a falsy value is present-but-empty, a null is
+// absent, and a field nobody asks for never fails the credential.
+func TestDecodeCredentialReadsNonStringFieldsLikePython(t *testing.T) {
+	cases := []struct {
+		name, provider, body, field string
+		want                        string
+		wantPresent                 bool
+	}{
+		{"github numeric token", "github", `{"token": 12}`, "token", "12", true},
+		{"gitlab numeric token", "gitlab", `{"token": 12}`, "token", "12", true},
+		{"jira numeric api_token", "jira", `{"api_token": 12, "email": "e@x.com"}`, "api_token", "12", true},
+		{"linear numeric api_key", "linear", `{"api_key": 12.5}`, "api_key", "12.5", true},
+		{"true is str(True)", "gitlab", `{"token": true}`, "token", "True", true},
+		{"false is present and empty", "gitlab", `{"token": false}`, "token", "", true},
+		{"zero is present and empty", "linear", `{"api_key": 0}`, "api_key", "", true},
+		{"null is absent", "github", `{"app_id": null}`, "app_id", "", false},
+		{"a non-empty list has no faithful text", "gitlab", `{"token": [1]}`, "token", "", false},
+		{"an empty list is falsy", "gitlab", `{"token": []}`, "token", "", false},
+		{"an object has no faithful text", "gitlab", `{"token": {"a": 1}}`, "token", "", false},
+		{"a later canonical number outranks its alias", "github", `{"appId": "alias", "app_id": 12}`, "app_id", "12", true},
+		{"a later alias string outranks its canonical number", "github", `{"app_id": 12, "appId": "alias"}`, "app_id", "alias", true},
 	}
 	for _, tc := range cases {
-		_, err := decodeCredential(EncryptedCredential{Provider: tc.provider}, []byte(tc.body))
-		if !errors.Is(err, ErrCredentialInvalid) {
-			t.Errorf("%s: err = %v, want ErrCredentialInvalid", tc.name, err)
+		credential, err := decodeCredential(EncryptedCredential{Provider: tc.provider}, []byte(tc.body))
+		if err != nil {
+			t.Errorf("%s: decode refused: %v", tc.name, err)
+			continue
+		}
+		got, ok := credential.Secret(tc.field)
+		if ok != tc.wantPresent || got.Reveal() != tc.want {
+			t.Errorf("%s: Secret(%q) = %q, %v; want %q, %v", tc.name, tc.field, got.Reveal(), ok, tc.want, tc.wantPresent)
 		}
 	}
 }
 
+// TestDecodeCredentialIgnoresFieldsNobodyReads: the whole credential no longer
+// fails because ONE field held a value the reader did not want (Python's
+// allow-list of kwargs never looks at it), and the shape check still judges
+// only the fields the provider needs.
+func TestDecodeCredentialIgnoresFieldsNobodyReads(t *testing.T) {
+	for _, tc := range []struct{ provider, body string }{
+		{"gitlab", `{"token": "glpat-x", "project_id": 7, "tags": [1, {"a": 2}], "meta": {"deep": [true, null]}}`},
+		{"github", `{"token": "ghp_abc", "note": null, "extra": 1.5}`},
+		{"jira", `{"api_token": "t", "email": "e@x.com", "site_id": 42}`},
+		{"linear", `{"api_key": "lin_api_x", "workspace_id": 9}`},
+		{"gitlab", `{"token": 12}`},
+	} {
+		credential, err := decodeCredential(EncryptedCredential{Provider: tc.provider}, []byte(tc.body))
+		if err != nil {
+			t.Errorf("%s %s: decode refused: %v", tc.provider, tc.body, err)
+			continue
+		}
+		if err := ValidateCredentialShape(credential); err != nil {
+			t.Errorf("%s %s: shape refused: %v", tc.provider, tc.body, err)
+		}
+	}
+	// What is still refused: not an object, and a blank key.
+	for _, body := range []string{`[1]`, `"x"`, `12`, `{"": "v"}`, `{`} {
+		if _, err := decodeCredential(EncryptedCredential{Provider: "gitlab"}, []byte(body)); !errors.Is(err, ErrCredentialInvalid) {
+			t.Errorf("%s: err = %v, want ErrCredentialInvalid", body, err)
+		}
+	}
+	// A wanted field that has no faithful text leaves the credential incomplete.
+	credential, err := decodeCredential(EncryptedCredential{Provider: "gitlab"}, []byte(`{"token": [1]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateCredentialShape(credential); !errors.Is(err, ErrCredentialInvalid) {
+		t.Errorf("a list token: shape err = %v, want ErrCredentialInvalid", err)
+	}
+}
+
 // A zero-value pyjson.Int (nil big.Int) is not a number: never dereferenced.
-func TestPythonNumberTextRefusesAnUnsetInteger(t *testing.T) {
-	if text, ok := pythonNumberText(pyjson.Int{}); ok || text != "" {
-		t.Errorf("pythonNumberText(pyjson.Int{}) = %q, %v; want \"\", false", text, ok)
+func TestPythonSecretTextRefusesAnUnsetInteger(t *testing.T) {
+	if text, ok := pythonSecretText(pyjson.Int{}); ok || text.Reveal() != "" {
+		t.Errorf("pythonSecretText(pyjson.Int{}) = %q, %v; want \"\", false", text.Reveal(), ok)
+	}
+}
+
+// The safe field count covers every stored field, string or not.
+func TestCredentialSafeAttributesCountsNonStringFields(t *testing.T) {
+	credential, err := decodeCredential(EncryptedCredential{Provider: "gitlab"}, []byte(`{"token": "t", "project_id": 7, "note": null}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := credential.SafeAttributes()["credential_field_count"]; got != 3 {
+		t.Errorf("credential_field_count = %v, want 3", got)
 	}
 }

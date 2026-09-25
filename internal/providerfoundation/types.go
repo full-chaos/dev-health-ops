@@ -15,6 +15,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
@@ -123,6 +124,10 @@ type Credential struct {
 	Name     string
 	Config   map[string]string
 	fields   map[string]secrets.Value
+	// deferred holds the fields whose stored value was not a string, as
+	// decoded; Secret reads one the way Python's resolver does (see
+	// pythonSecretText). Nil for a credential built from strings.
+	deferred map[string]pyjson.Value
 }
 
 // NewCredential builds a Credential from already-decrypted fields, for a
@@ -141,8 +146,13 @@ func NewCredential(provider, id string, config map[string]string, fields map[str
 }
 
 func (c Credential) Secret(name string) (secrets.Value, bool) {
-	v, ok := c.fields[name]
-	return v, ok
+	if v, ok := c.fields[name]; ok {
+		return v, true
+	}
+	if raw, ok := c.deferred[name]; ok {
+		return pythonSecretText(raw)
+	}
+	return secrets.Value{}, false
 }
 
 // WithEphemeralSecret returns a copy augmented with a short-lived secret from
@@ -164,7 +174,7 @@ func (c Credential) WithEphemeralSecret(name string, value secrets.Value) (Crede
 func (c Credential) SafeAttributes() map[string]any {
 	return map[string]any{
 		"provider": c.Provider, "credential_id_configured": c.ID != "",
-		"credential_name_configured": c.Name != "", "credential_field_count": len(c.fields),
+		"credential_name_configured": c.Name != "", "credential_field_count": len(c.fields) + len(c.deferred),
 	}
 }
 

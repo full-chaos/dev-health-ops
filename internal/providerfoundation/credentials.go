@@ -174,34 +174,36 @@ var githubFieldAliases = map[string]string{
 	"privateKeyPath": "private_key_path",
 }
 
-// githubNumericIdentifiers are the GitHub App identifier fields Python accepts
-// as JSON numbers (CHAOS-6737): github_credentials_from_mapping passes the
-// value through untouched and the client renders it with str(), so a row
-// stored as {"app_id": 12, "installation_id": 34} authenticates. Every other
-// field, and every other non-string value, stays refused.
-var githubNumericIdentifiers = map[string]bool{"app_id": true, "installation_id": true}
-
-// pythonNumberText is str() of a decoded JSON number: the decimal digits of an
-// integer and repr() of a float. A zero is Python-falsy, which the App-auth
-// shape check treats as absent, so it renders as "" (not configured). A value
-// that is not a number reports false.
-func pythonNumberText(value any) (string, bool) {
+// pythonSecretText is what Python makes of a credential field's non-string
+// JSON value where the resolver reads it as `str(value or "")`: a number is
+// its str() (every integer digit, repr() for a float), a boolean is "True" and
+// falsy forms (0, 0.0, false) are "" -- a present field that is not configured.
+// A null is absent (Python drops None). A non-empty container has no
+// faithful text here and reads as absent: the shape check then refuses the
+// credential, where Python would carry str(list) through. An empty container
+// is falsy in Python (""), which is also absent here.
+func pythonSecretText(value pyjson.Value) (secrets.Value, bool) {
 	switch number := value.(type) {
+	case bool:
+		if !number {
+			return secrets.NewValue(""), true
+		}
+		return secrets.NewValue("True"), true
 	case pyjson.Int:
 		if number.Int == nil {
-			return "", false
+			return secrets.Value{}, false
 		}
 		if number.Sign() == 0 {
-			return "", true
+			return secrets.NewValue(""), true
 		}
-		return number.String(), true
+		return secrets.NewValue(number.String()), true
 	case pyjson.Float:
 		if number == 0 {
-			return "", true
+			return secrets.NewValue(""), true
 		}
-		return pythonparity.Repr(float64(number)), true
+		return secrets.NewValue(pythonparity.Repr(float64(number))), true
 	}
-	return "", false
+	return secrets.Value{}, false
 }
 
 func decodeCredential(record EncryptedCredential, plaintext []byte) (Credential, error) {
@@ -214,6 +216,7 @@ func decodeCredential(record EncryptedCredential, plaintext []byte) (Credential,
 		return Credential{}, ErrCredentialInvalid
 	}
 	fields := make(map[string]secrets.Value, object.Len())
+	deferred := map[string]pyjson.Value{}
 	for _, key := range object.Keys() {
 		value, _ := object.Get(key)
 		if strings.TrimSpace(key) == "" {
@@ -224,20 +227,27 @@ func decodeCredential(record EncryptedCredential, plaintext []byte) (Credential,
 				key = canonical
 			}
 		}
-		text, ok := value.(string)
-		if !ok && record.Provider == "github" && githubNumericIdentifiers[key] {
-			text, ok = pythonNumberText(value)
+		// A key stored twice (an alias and its canonical spelling) keeps the
+		// later one, whichever kind of value each held. A later string
+		// replaces an earlier non-string because Secret reads fields first; a
+		// later non-string must remove an earlier string here.
+		delete(fields, key)
+		if text, isString := value.(string); isString {
+			fields[key] = secrets.NewValue(text)
+			continue
 		}
-		if !ok {
-			return Credential{}, ErrCredentialInvalid
-		}
-		fields[key] = secrets.NewValue(text)
+		// Python reads the fields it wants and ignores the rest
+		// (`str(cred_dict.get("token") or "")`, an allow-list of kwargs), so a
+		// value that is not a string is kept as decoded and judged only when a
+		// caller asks for that field (Credential.Secret), never up front
+		// (CHAOS-6770).
+		deferred[key] = value
 	}
 	config := make(map[string]string, len(record.Config))
 	for key, value := range record.Config {
 		config[key] = value
 	}
-	return Credential{Provider: record.Provider, ID: record.ID, Name: record.Name, Config: config, fields: fields}, nil
+	return Credential{Provider: record.Provider, ID: record.ID, Name: record.Name, Config: config, fields: fields, deferred: deferred}, nil
 }
 
 // jiraAPITokenAliases lists the spellings a stored Jira credential may use for

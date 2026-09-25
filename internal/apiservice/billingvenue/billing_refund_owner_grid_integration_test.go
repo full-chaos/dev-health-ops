@@ -13,10 +13,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
-	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
-	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
@@ -52,11 +48,6 @@ const gridWaitingFormat = "dddddddd-0000-4000-8000-%012d"
 func TestRefundEventOwnershipGrid(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Minute)
 	defer cancel()
-	reader := sdkmetric.NewManualReader()
-	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
-	otel.SetMeterProvider(provider)
-	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
-
 	fake := newFakeStripe()
 	goStripe := httptest.NewServer(fake.plane("go"))
 	t.Cleanup(goStripe.Close)
@@ -181,29 +172,7 @@ func TestRefundEventOwnershipGrid(t *testing.T) {
 	}
 	python := venue.ServePython(t, requests)
 
-	// The decision counter, read as per-reason deltas around each Go event.
-	counts := func() map[string]int64 {
-		var collected metricdata.ResourceMetrics
-		if err := reader.Collect(context.Background(), &collected); err != nil {
-			t.Fatal(err)
-		}
-		out := map[string]int64{}
-		for _, scope := range collected.ScopeMetrics {
-			for _, series := range scope.Metrics {
-				if series.Name != "dev_health_api_stripe_refund_event_decisions_total" && series.Name != "dev_health_api_stripe_webhook_unhandled_events_total" {
-					continue
-				}
-				for _, point := range series.Data.(metricdata.Sum[int64]).DataPoints {
-					for _, key := range []string{"reason", "event_type"} {
-						if label, ok := point.Attributes.Value(attribute.Key(key)); ok {
-							out[series.Name+"/"+label.AsString()] += point.Value
-						}
-					}
-				}
-			}
-		}
-		return out
-	}
+	counts := func() map[string]int64 { return decisionCounts(t) }
 
 	goURI, pyURI := venue.AdminURI(t, venue.GoDB), venue.AdminURI(t, venue.SourceDB)
 	label := map[string]string{orgA: "A", orgB: "B"}
@@ -329,6 +298,14 @@ func TestRefundEventOwnershipGrid(t *testing.T) {
 		if reason != "" {
 			wantDelta["dev_health_api_stripe_refund_event_decisions_total/"+reason] = 1
 		}
+		// Stripe's own refund events are applied on a Go-only rule, and a
+		// completed waiting row is one too: each says so once.
+		if strings.HasPrefix(cell.event, "refund.") {
+			wantDelta["dev_health_api_stripe_refund_event_decisions_total/applied_via_refund_event_extension"]++
+		}
+		if strings.HasSuffix(wantGo, "+adopted") {
+			wantDelta["dev_health_api_stripe_refund_event_decisions_total/waiting_row_completed"]++
+		}
 		if fmt.Sprint(delta) != fmt.Sprint(wantDelta) {
 			mismatches = append(mismatches, fmt.Sprintf("%s: decision counts %v, want %v", name, delta, wantDelta))
 		}
@@ -344,6 +321,7 @@ func TestRefundEventOwnershipGrid(t *testing.T) {
 	}
 	// The skips outside the ownership rule: each leaves exactly one count.
 	edge := func(name, fixture, eventType string, edit func(value, object map[string]any), wantReason string) {
+		viaExtension := strings.HasPrefix(eventType, "refund.") && wantReason != "no_data_object"
 		value := loadWebhookFixture(t, fixture)
 		value["type"], value["id"] = eventType, "evt_edge_"+strings.ReplaceAll(name, " ", "_")
 		object := value["data"].(map[string]any)["object"].(map[string]any)
@@ -361,6 +339,9 @@ func TestRefundEventOwnershipGrid(t *testing.T) {
 			}
 		}
 		want := map[string]int64{"dev_health_api_stripe_refund_event_decisions_total/" + wantReason: 1}
+		if viaExtension {
+			want["dev_health_api_stripe_refund_event_decisions_total/applied_via_refund_event_extension"] = 1
+		}
 		if response.Status != 200 || fmt.Sprint(delta) != fmt.Sprint(want) {
 			mismatches = append(mismatches, fmt.Sprintf("edge %s: status %d, decision counts %v, want %v", name, response.Status, delta, want))
 		}
@@ -371,6 +352,9 @@ func TestRefundEventOwnershipGrid(t *testing.T) {
 	}, "amount_not_storable")
 	edge("amount a string", "refund.updated.json", "refund.updated", func(_, object map[string]any) { object["id"], object["amount"] = "re_edge_str", "100" }, "amount_not_storable")
 	edge("no data object", "refund.updated.json", "refund.updated", func(value, _ map[string]any) { value["data"] = map[string]any{"object": nil} }, "no_data_object")
+	edge("charge.refunded with an empty list", "charge.refunded.json", "charge.refunded", func(_, object map[string]any) {
+		object["refunds"] = map[string]any{"object": "list", "data": []any{}}
+	}, "charge_refunded_empty_refund_list")
 	edge("charge.refunded without a list", "charge.refunded.json", "charge.refunded", func(_, object map[string]any) { delete(object, "refunds") }, "charge_refunded_without_refund_list")
 	for _, line := range mismatches {
 		if strings.HasPrefix(line, "edge ") {

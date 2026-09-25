@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -176,8 +177,24 @@ func TestRefundEventSettledGrid(t *testing.T) {
 
 	divergent := 0
 	for _, c := range cells {
+		before := decisionCounts(t)
 		response := venueoracle.Do(t, base, requests[c.index])
+		delta := decisionDelta(before, decisionCounts(t))
 		name := fmt.Sprintf("stored=%s event=%s status=%s failure=%s", c.stored, c.event, c.status, c.failure)
+		// Every rule Go applies that Python does not says so, once.
+		wantDelta := map[string]int64{}
+		if strings.HasPrefix(c.event, "refund.") {
+			wantDelta[decisionPrefix+"applied_via_refund_event_extension"] = 1
+		}
+		switch {
+		case c.stored != "pending" && (c.status == "pending" || c.status == "requires_action"):
+			wantDelta[decisionPrefix+"settled_status_kept"] = 1
+		case c.failure == "null" && c.stored == "failed":
+			wantDelta[decisionPrefix+"failure_reason_kept"] = 1
+		}
+		if fmt.Sprint(delta) != fmt.Sprint(wantDelta) {
+			t.Errorf("%s: decision counts %v, want %v", name, delta, wantDelta)
+		}
 		if response.Status != 200 {
 			t.Errorf("%s: go answered %d", name, response.Status)
 		}

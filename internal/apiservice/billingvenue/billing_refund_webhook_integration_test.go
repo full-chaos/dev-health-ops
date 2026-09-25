@@ -211,6 +211,7 @@ func TestRefundWebhookWriteFirstAndOrder(t *testing.T) {
 		deliver("race: the event beats the completion", stripeID, "succeeded", metadata(map[string]any{"org_id": orgA, "invoice_id": invRace, "refund_id": rowID}))
 	}
 	hookMu.Unlock()
+	raceBefore := decisionCounts(t)
 	response := venueoracle.Do(t, base, venueoracle.Request{Name: "race: create", Method: "POST", Path: "/api/v1/billing/refunds",
 		Headers: map[string]string{"Authorization": "Bearer " + venue.Tokens["super"], "Content-Type": "application/json"},
 		Body:    venueoracle.B64(`{"invoice_id":"` + invRace + `","amount":800}`)})
@@ -218,6 +219,7 @@ func TestRefundWebhookWriteFirstAndOrder(t *testing.T) {
 	hook = nil
 	hookMu.Unlock()
 	expect("race: the create answered", fmt.Sprint(response.Status), "200")
+	expect("race: the completion says it kept the settled status", fmt.Sprint(decisionDelta(raceBefore, decisionCounts(t))[decisionPrefix+"route_completion_kept_settled_status"]), "1")
 	expect("race: one row for the invoice, settled, holding the Stripe id",
 		row(`SELECT count(*)::text || ' ' || min(status) || ' ' || (min(stripe_refund_id) LIKE 're_%')::text FROM refunds WHERE invoice_id = '`+invRace+`'`), "1 succeeded true")
 
@@ -231,6 +233,7 @@ func TestRefundWebhookWriteFirstAndOrder(t *testing.T) {
 		})
 	}
 	hookMu.Unlock()
+	raceFailedBefore := decisionCounts(t)
 	response = venueoracle.Do(t, base, venueoracle.Request{Name: "race: create, then failed", Method: "POST", Path: "/api/v1/billing/refunds",
 		Headers: map[string]string{"Authorization": "Bearer " + venue.Tokens["super"], "Content-Type": "application/json"},
 		Body:    venueoracle.B64(`{"invoice_id":"` + invRace2 + `","amount":900}`)})
@@ -238,6 +241,7 @@ func TestRefundWebhookWriteFirstAndOrder(t *testing.T) {
 	hook = nil
 	hookMu.Unlock()
 	expect("race failed: the create answered", fmt.Sprint(response.Status), "200")
+	expect("race failed: the completion says it kept the settled status", fmt.Sprint(decisionDelta(raceFailedBefore, decisionCounts(t))[decisionPrefix+"route_completion_kept_settled_status"]), "1")
 	expect("race failed: the row keeps the failure and its reason",
 		row(`SELECT count(*)::text || ' ' || min(status) || ' ' || coalesce(min(failure_reason), '<null>') FROM refunds WHERE invoice_id = '`+invRace2+`'`), "1 failed lost_or_stolen_card")
 
@@ -268,6 +272,7 @@ func TestRefundWebhookWriteFirstAndOrder(t *testing.T) {
 		})
 	}
 	hookMu.Unlock()
+	raceNoReasonBefore := decisionCounts(t)
 	response = venueoracle.Do(t, base, venueoracle.Request{Name: "race: create, then failed without a reason", Method: "POST", Path: "/api/v1/billing/refunds",
 		Headers: map[string]string{"Authorization": "Bearer " + venue.Tokens["super"], "Content-Type": "application/json"},
 		Body:    venueoracle.B64(`{"invoice_id":"` + invRace4 + `","amount":450}`)})
@@ -275,6 +280,7 @@ func TestRefundWebhookWriteFirstAndOrder(t *testing.T) {
 	hook, routeStatus = nil, "pending"
 	hookMu.Unlock()
 	expect("race failed without reason: the create answered", fmt.Sprint(response.Status), "200")
+	expect("race failed without reason: the completion says it kept the failure reason", fmt.Sprint(decisionDelta(raceNoReasonBefore, decisionCounts(t))[decisionPrefix+"route_completion_kept_failure_reason"]), "1")
 	expect("race failed without reason: the event's reason remains with the failed status",
 		row(`SELECT count(*)::text || ' ' || min(status) || ' ' || coalesce(min(failure_reason), '<null>') FROM refunds WHERE invoice_id = '`+invRace4+`'`), "1 failed lost_or_stolen_card")
 

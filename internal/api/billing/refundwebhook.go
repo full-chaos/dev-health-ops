@@ -47,9 +47,17 @@ func (h handlers) refundEvent(ctx context.Context, eventType string, eventID pyj
 			countRefundDecision(ctx, skipChargeWithoutRefund)
 			return nil
 		}
+		if len(list) == 0 {
+			h.logger.InfoContext(ctx, "charge.refunded lists no refunds; nothing to record", "event_id", pyStr(eventID), "charge", chargeID)
+			countRefundDecision(ctx, skipEmptyRefundList)
+			return nil
+		}
 		refunds = list
 	} else {
 		refunds = []pyjson.Value{dataObject}
+		if stripeEventExtensions[eventType] != "" {
+			h.noteRefundRule(ctx, noteViaExtension, "event_id", pyStr(eventID), "event_type", eventType)
+		}
 	}
 	return h.inTxFunc(ctx, func(tx pgx.Tx) error {
 		for _, refund := range refunds {
@@ -198,22 +206,24 @@ func (h handlers) upsertStripeRefund(ctx context.Context, tx pgx.Tx, event pyjso
 				return err
 			}
 		}
-		decision := decideRefundOwner(refundOwnerInput{Invoices: invoices, MetaOrg: metaOrg, Waiting: waiting})
+		decision := decideRefundOwner(refundOwnerInput{Invoices: invoices, MetaOrg: metaOrg, MetaInvoice: metaInvoice, Waiting: waiting})
 		if decision.Skip != "" {
 			h.logSkippedRefund(ctx, decision.Skip, stripeRefundID, intent, len(invoices), metadata, metaRow)
 			countRefundDecision(ctx, decision.Skip)
 			return nil
 		}
-		if decision.Note != "" {
-			countRefundDecision(ctx, decision.Note)
-		}
-		if decision.Note == noteOverriddenByPayment {
+		switch decision.Note {
+		case noteOverriddenByPayment:
 			h.logger.WarnContext(ctx, "Refund webhook event's org metadata names another org than its payment's invoice; the payment's org is used",
 				"stripe_refund_id", stripeRefundID, "payment_intent", intent, "org_id_received", metaOrg.String(), "org_id", decision.Org.String())
+			countRefundDecision(ctx, decision.Note)
+		case noteOwnerFromPayment:
+			h.noteRefundRule(ctx, decision.Note, "stripe_refund_id", stripeRefundID, "payment_intent", intent, "org_id", decision.Org.String(), "invoice_id", decision.Invoice.String())
 		}
 		org, intentInvoice = decision.Org, decision.Invoice
 		if decision.Adopt {
 			stored, found = *waiting, true
+			h.noteRefundRule(ctx, noteWaitingRowCompleted, "stripe_refund_id", stripeRefundID, "refund_id", waiting.id.String())
 		}
 	}
 
@@ -313,11 +323,17 @@ func (h handlers) upsertStripeRefund(ctx context.Context, tx pgx.Tx, event pyjso
 	if status != "" && !stale {
 		newStatus = status
 	}
-	if !stale {
+	if stale {
+		h.noteRefundRule(ctx, noteSettledKept, "stripe_refund_id", stripeRefundID, "stored_status", stored.status, "event_status", status)
+	} else {
 		// A null (or absent) failure reason is a sparser snapshot, not a
 		// retraction: a reason once recorded is kept.
-		if failure, valid := refundText(event, "failure_reason", stored.failure); valid && (failure != nil || stored.failure == nil) {
-			newFailure = failure
+		if failure, valid := refundText(event, "failure_reason", stored.failure); valid {
+			if failure != nil || stored.failure == nil {
+				newFailure = failure
+			} else {
+				h.noteRefundRule(ctx, noteFailureKept, "stripe_refund_id", stripeRefundID, "failure_reason", *stored.failure)
+			}
 		}
 	}
 	newReason, valid := refundText(event, "reason", stored.reason)
@@ -328,12 +344,21 @@ func (h handlers) upsertStripeRefund(ctx context.Context, tx pgx.Tx, event pyjso
 	if text, isText := attr(event, "description", nil).(string); isText && stored.description == nil {
 		newDescription = &text
 	}
+	// The invoice link: the row's own, else the one the payment names (the
+	// ownership decision's), else the metadata's when it is this org's.
 	newInvoice := stored.invoice
+	if newInvoice == nil && intentInvoice != nil {
+		newInvoice = intentInvoice
+	}
 	if newInvoice == nil && metaInvoice != nil {
 		if owned, err := invoiceOfOrg(ctx, tx, *metaInvoice, stored.org); err != nil {
 			return err
 		} else if owned {
 			newInvoice = metaInvoice
+		} else {
+			h.logger.WarnContext(ctx, "Refund webhook event names an invoice that is not this org's; left unlinked",
+				"stripe_refund_id", stripeRefundID, "invoice_id", metaInvoice.String(), "org_id", stored.org.String())
+			countRefundDecision(ctx, noteInvoiceNotOrgs)
 		}
 	}
 	_, err = tx.Exec(ctx, `UPDATE refunds SET stripe_refund_id = $2, stripe_charge_id = $3, stripe_payment_intent_id = $4, amount = $5,

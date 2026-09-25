@@ -104,6 +104,7 @@ var responseModelRoutes = map[string]bool{
 	"GET /api/v1/admin/retention-policies/resource-types":                              true,
 	"GET /api/v1/admin/retention-policies/{policy_id}":                                 true,
 	"GET /api/v1/admin/llm-settings":                                                   true,
+	"GET /api/v1/admin/llm-settings/budget":                                            true,
 	"GET /api/v1/admin/integrations/pagerduty/status":                                  true,
 	"GET /api/v1/admin/integrations/pagerduty/webhook-bindings/{binding_id}":           true,
 	"GET /api/v1/admin/settings/categories":                                            true,

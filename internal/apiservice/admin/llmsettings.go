@@ -2,8 +2,6 @@ package admin
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/binary"
 	"errors"
 	"math/big"
 	"net/http"
@@ -17,21 +15,16 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/llmbudget"
 	"github.com/full-chaos/dev-health-ops/internal/llmorgsettings"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
 const (
-	llmCategory       = "llm"
-	llmBudgetCategory = "llm_budget"
-	llmBudgetLimitKey = "limit_micro_usd"
-	byoLLMFeature     = "byo_llm"
-	byoLLMMinTier     = "team"
-	// defaultOperatorMaxMicroUSD is llm/budget.py's
-	// DEFAULT_OPERATOR_MAX_MICRO_USD.
-	defaultOperatorMaxMicroUSD = 100_000_000
-	licenseBudgetLimitKey      = "byo_llm_budget_micro_usd"
+	llmCategory   = "llm"
+	byoLLMFeature = "byo_llm"
+	byoLLMMinTier = "team"
 )
 
 // llmSettingKeys is llm_settings.py's LLM_SETTING_KEYS, in delete order.
@@ -46,6 +39,7 @@ func (h *handlers) llmSettingsRoutes() []httpapi.Route {
 		{Method: http.MethodGet, Pattern: governancePrefix + "/llm-settings", Allow: "GET", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.getLLMSettings))},
 		{Method: http.MethodPut, Pattern: governancePrefix + "/llm-settings", Handler: h.bodyFirst(policy.Admin, http.HandlerFunc(h.putLLMSettings))},
 		{Method: http.MethodDelete, Pattern: governancePrefix + "/llm-settings", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.deleteLLMSettings))},
+		{Method: http.MethodGet, Pattern: governancePrefix + "/llm-settings/budget", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.getLLMBudget))},
 	}
 }
 
@@ -205,64 +199,6 @@ func (h *handlers) getLLMSettings(w http.ResponseWriter, r *http.Request) {
 	policy.WriteModel(w, http.StatusOK, out, nil)
 }
 
-// operatorMaximumMicroUSD is llm/budget.py's operator_maximum_micro_usd.
-func operatorMaximumMicroUSD() *big.Int {
-	raw, set := lookupEnv("BYO_LLM_MAX_BUDGET_MICRO_USD")
-	if !set {
-		return big.NewInt(defaultOperatorMaxMicroUSD)
-	}
-	value, err := pythonparity.ParseInt(raw)
-	if err != nil || value.Sign() < 0 {
-		return new(big.Int)
-	}
-	return value
-}
-
-// provisionedMaximumMicroUSD is provisioned_maximum_micro_usd: the lower of the
-// operator ceiling and the org licence's byo_llm_budget_micro_usd override.
-func (h *handlers) provisionedMaximumMicroUSD(ctx context.Context, db pgExecer, orgID string) (*big.Int, error) {
-	operator := operatorMaximumMicroUSD()
-	org, err := pythonparity.ParseUUID(orgID)
-	if err != nil {
-		return operator, nil
-	}
-	var raw []byte
-	err = db.QueryRow(ctx, `SELECT limits_override FROM org_licenses WHERE org_id = $1`, org).Scan(&raw)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return operator, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	value, err := jsonColumnValue(raw)
-	if err != nil {
-		return nil, err
-	}
-	object, isObject := value.(*pyjson.Object)
-	if !isObject {
-		return operator, nil
-	}
-	item, present := object.Get(licenseBudgetLimitKey)
-	if !present {
-		return operator, nil
-	}
-	licensed, err := pythonparity.ParseInt(pyjson.Str(item))
-	if err != nil || licensed.Sign() < 0 {
-		return new(big.Int), nil
-	}
-	if licensed.Cmp(operator) < 0 {
-		return licensed, nil
-	}
-	return operator, nil
-}
-
-// budgetLockKey is llm/budget.py's advisory-lock key: the first eight bytes of
-// sha256("byo-llm-budget:<org>") as a big-endian integer, masked to 63 bits.
-func budgetLockKey(orgID string) int64 {
-	digest := sha256.Sum256([]byte("byo-llm-budget:" + orgID))
-	return int64(binary.BigEndian.Uint64(digest[:8]) & (1<<63 - 1))
-}
-
 func llmDetail(status int, w http.ResponseWriter, pairs ...string) {
 	detail := pyjson.NewObject()
 	for index := 0; index+1 < len(pairs); index += 2 {
@@ -383,7 +319,7 @@ func (h *handlers) putLLMSettings(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if budgetLimitMu != nil {
-		maximum, err := h.provisionedMaximumMicroUSD(ctx, tx, orgID)
+		maximum, err := llmbudget.ProvisionedMaximum(ctx, tx, lookupEnv, orgID)
 		if err != nil {
 			h.internalError(ctx, w, "resolve budget ceiling", err)
 			return
@@ -395,13 +331,13 @@ func (h *handlers) putLLMSettings(w http.ResponseWriter, r *http.Request) {
 				"message", "budget_limit_micro_usd must be between 0 and "+maximum.String())
 			return
 		}
-		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, budgetLockKey(orgID)); err != nil {
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, llmbudget.LockKey(orgID)); err != nil {
 			h.internalError(ctx, w, "lock budget", err)
 			return
 		}
 		limit := budgetLimitMu.String()
 		description := "Organization BYO LLM monetary ceiling in integer micro-USD; stored separately from provider credentials"
-		if _, err := h.upsertSetting(ctx, tx, orgID, llmBudgetCategory, llmBudgetLimitKey, &limit, false, &description); err != nil {
+		if _, err := h.upsertSetting(ctx, tx, orgID, llmbudget.Category, llmbudget.LimitKey, &limit, false, &description); err != nil {
 			h.internalError(ctx, w, "write budget limit", err)
 			return
 		}

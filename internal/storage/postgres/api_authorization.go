@@ -313,6 +313,9 @@ func apiPosture() RolePosture {
 			{"billing_prices", true, true, true},
 			{"plan_feature_bundles", true, false, true},
 			{"feature_bundles", false, false, false},
+			// The admin BYO LLM budget read (CHAOS-6666) sums the current
+			// month's reservations: read only, the runtime guard is the writer.
+			{"byo_llm_budget_reservations", false, false, false},
 		},
 	}
 }

@@ -71,27 +71,37 @@ func TestVenueOracleWorkUnitExplainProviderResolution(t *testing.T) {
 	ctx := context.Background()
 	_, file, _, _ := runtime.Caller(0)
 	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
-	unparsable, refused := uuid.New(), uuid.New()
+	unparsable, refused, unsupported := uuid.New(), uuid.New(), uuid.New()
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Root:   root,
 		JWTKey: uuid.NewString() + uuid.NewString(),
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
 			for _, org := range []struct {
-				id      uuid.UUID
-				slug    string
-				baseURL string
+				id       uuid.UUID
+				slug     string
+				provider string
+				apiKey   string
+				baseURL  string
 			}{
 				// A legacy row: the llm-settings routes refuse this value,
 				// so only an older save can hold it.
-				{unparsable, "venue-llm-unparsable", "https://[::1"},
-				{refused, "venue-llm-refused", "https://[::1]/v1"},
+				{unparsable, "venue-llm-unparsable", "local", "", "https://[::1"},
+				{refused, "venue-llm-refused", "local", "", "https://[::1]/v1"},
+				// A provider Python serves and the Go port answers 501 for,
+				// with the same unparsable base_url: Python raises the
+				// ValueError before it builds any provider.
+				{unsupported, "venue-llm-unsupported", "anthropic", "sk-ant-venue", "https://[::1"},
 			} {
 				if _, err := admin.Exec(ctx, `INSERT INTO organizations (id, slug, name, tier, managed_by, is_active, created_at, updated_at)
 VALUES ($1, $2, $2, 'team', 'stripe', true, now(), now())`, org.id, org.slug); err != nil {
 					t.Fatalf("seed organization: %v", err)
 				}
-				for key, value := range map[string]string{"provider": "local", "base_url": org.baseURL} {
+				settings := map[string]string{"provider": org.provider, "base_url": org.baseURL}
+				if org.apiKey != "" {
+					settings["api_key"] = org.apiKey
+				}
+				for key, value := range settings {
 					if _, err := admin.Exec(ctx, `INSERT INTO settings (id, org_id, category, key, value, is_encrypted, created_at, updated_at)
 VALUES ($1, $2, 'llm', $3, $4, false, now(), now())`, uuid.New(), org.id.String(), key, value); err != nil {
 						t.Fatalf("seed settings %s: %v", key, err)
@@ -124,6 +134,7 @@ VALUES ($1, $2, 'llm', $3, $4, false, now(), now())`, uuid.New(), org.id.String(
 		{Name: "explicit mock, stored base_url urlsplit cannot parse", OrgID: unparsable.String(), LLMProvider: "mock"},
 		{Name: "auto, stored base_url SSRF refuses", OrgID: refused.String(), LLMProvider: "auto"},
 		{Name: "explicit local, stored base_url SSRF refuses", OrgID: refused.String(), LLMProvider: "local"},
+		{Name: "explicit anthropic, stored base_url urlsplit cannot parse", OrgID: unsupported.String(), LLMProvider: "anthropic"},
 	}
 	for index := range cases {
 		cases[index].WorkUnitID = "wu-provider-" + cases[index].LLMProvider

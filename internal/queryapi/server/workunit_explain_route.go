@@ -277,6 +277,16 @@ func newWorkUnitExplainHandler(
 			return
 		}
 		if kind != categorize.ProviderKindNone {
+			// _provider_has_required_config resolves the org's credentials
+			// for the resolved kind before any platform one, and an org
+			// base_url urlsplit cannot parse raises out of it: 422 with the
+			// ValueError's text. Python raises that before it builds any
+			// provider, so it comes before the unsupported-provider 501.
+			if detail, raised := investmentexplain.ProviderValueError(
+				r.Context(), nil, kind, claims.OrgID, orgSettings); raised {
+				writeRESTError(w, r, "work_unit_explain", claims.OrgID, http.StatusUnprocessableEntity, detail)
+				return
+			}
 			// A provider Python genuinely serves but this port has no client
 			// for must answer a distinct non-200 rather than a plausible
 			// "credential missing" 422 -- the same guard, for the same
@@ -284,15 +294,6 @@ func newWorkUnitExplainHandler(
 			if _, unsupported := investmentexplain.ResolveUnsupportedProviderKindForOrg(
 				r.Context(), parsed.llmProvider, claims.OrgID, orgSettings); unsupported {
 				writeRESTError(w, r, "work_unit_explain", claims.OrgID, http.StatusNotImplemented, "unsupported_provider")
-				return
-			}
-			// _provider_has_required_config resolves the org's credentials
-			// for the resolved kind before any platform one, and an org
-			// base_url urlsplit cannot parse raises out of it: 422 with the
-			// ValueError's text.
-			if detail, raised := investmentexplain.ProviderValueError(
-				r.Context(), nil, kind, claims.OrgID, orgSettings); raised {
-				writeRESTError(w, r, "work_unit_explain", claims.OrgID, http.StatusUnprocessableEntity, detail)
 				return
 			}
 			if !investmentexplain.IsLLMAvailableForOrg(r.Context(), parsed.llmProvider, claims.OrgID, orgSettings) {

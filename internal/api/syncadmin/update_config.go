@@ -111,7 +111,7 @@ func (h *handlers) updateSyncConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if result.discover {
-		h.discoverIntegrationSources(ctx, org, *result.config.IntegrationID, "jira_project_discovery_on_update_failed",
+		h.discoverIntegrationSources(ctx, org, *result.config.IntegrationID, "jira_project_discovery_on_update",
 			"config_id", r.PathValue("config_id"))
 	}
 	credentialID, err := h.credentialForConfig(ctx, org, result.config)
@@ -595,11 +595,13 @@ func (h *handlers) cascadeToChildren(ctx context.Context, tx pgx.Tx, org string,
 // update path, run after the update commits through the scheduler's
 // source discovery (the one implementation): the integration's provider
 // and credential, its planner-managed parent config's id and options (the
-// integration's own config when it has none). A failure is logged under
-// event and swallowed.
+// integration's own config when it has none). A failure is logged at Error
+// as <event>_failed (Python's own event) and swallowed; a success is logged
+// at Info as <event> with the outcome and counts (Go-only, as on create: a
+// discovery that finds nothing still answers 200).
 func (h *handlers) discoverIntegrationSources(ctx context.Context, org string, integrationID uuid.UUID, event string, attrs ...any) {
 	fail := func(err any) {
-		h.logger.ErrorContext(ctx, event, append([]any{"org_id", org, "error", err}, attrs...)...)
+		h.logger.ErrorContext(ctx, event+"_failed", append([]any{"org_id", org, "error", err}, attrs...)...)
 	}
 	if h.discovery == nil {
 		fail("source discovery is unavailable in this process")
@@ -637,10 +639,14 @@ WHERE integration_id = $1 AND planner_managed IS true AND parent_id IS NULL`, in
 		text := credentialID.String()
 		credential = &text
 	}
-	if _, err := h.discovery.Discover(ctx, schedsync.SourceDiscoveryArgs{
+	report, err := h.discovery.Discover(ctx, schedsync.SourceDiscoveryArgs{
 		OrgID: org, IntegrationID: integrationID.String(), CredentialID: credential,
 		Provider: provider, SyncOptions: syncOptions, ConfigID: configID, PlannerManaged: plannerFound,
-	}); err != nil {
+	})
+	if err != nil {
 		fail(err)
+		return
 	}
+	h.logger.InfoContext(ctx, event, append([]any{"org_id", org, "integration_id", integrationID.String(),
+		"outcome", report.Outcome, "created", report.Created, "existing", report.Existing}, attrs...)...)
 }

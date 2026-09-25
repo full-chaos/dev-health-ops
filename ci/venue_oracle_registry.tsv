@@ -28,6 +28,7 @@ internal/api/syncadmin	TestSyncConfigBatchCreateVenueOracle	run
 internal/api/syncadmin	TestSyncConfigCreateVenueOracle	run
 internal/api/syncadmin	TestSyncConfigDeleteVenueOracle	run
 internal/api/syncadmin	TestSyncConfigRepositoriesVenueOracle	run
+internal/api/syncadmin	TestSyncConfigUpdateVenueOracle	run
 internal/api/syncadmin	TestUpdateWriteEnginesVenueOracleMatchesLivePython	run
 internal/api/teamsidentity	TestJiraDatetimeParseMatchesPython	run
 internal/api/teamsidentity	TestListFieldVenueOracle	run

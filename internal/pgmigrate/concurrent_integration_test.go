@@ -3,15 +3,20 @@
 package pgmigrate_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/pgmigrate"
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
@@ -202,16 +207,28 @@ func TestUpgradeSurvivesAnotherMigratorApplyingTheStepFirst(t *testing.T) {
 	}()
 	waitForRelationWaiters(1)
 
-	// dho plans from the baseline and queues its own first statement behind the other's.
-	dho := connect(t, uri)
-	type outcome struct {
-		result pgmigrate.Result
-		err    error
+	// dho (the real command) plans from the baseline and queues its own first
+	// statement behind the other's.
+	resolve := pgmigrate.ResolveDSN(func(secrets.LookupEnv, io.Writer) (secrets.Value, string, bool) {
+		return secrets.NewValue(uri), "test", true
+	})
+	var run func(context.Context, cli.Env) int
+	for _, child := range pgmigrate.Command(resolve).Children {
+		if child.Name == "upgrade" {
+			run = child.Run
+		}
 	}
-	dhoDone := make(chan outcome, 1)
+	if run == nil {
+		t.Fatal("no upgrade verb")
+	}
+	var stdout, stderr bytes.Buffer
+	exit := make(chan int, 1)
 	go func() {
-		result, err := pgmigrate.Upgrade(ctx, dho, baseline, chain)
-		dhoDone <- outcome{result, err}
+		lookup := func(key string) (string, bool) {
+			value, ok := map[string]string{pgmigrate.CutoverEnv: "1"}[key]
+			return value, ok
+		}
+		exit <- run(ctx, cli.Env{Lookup: lookup, Stdout: &stdout, Stderr: &stderr})
 	}()
 	waitForRelationWaiters(2)
 	if _, err := blocker.Exec(ctx, "ROLLBACK"); err != nil {
@@ -220,16 +237,19 @@ func TestUpgradeSurvivesAnotherMigratorApplyingTheStepFirst(t *testing.T) {
 	if err := <-otherDone; err != nil {
 		t.Fatalf("the other migrator failed: %v", err)
 	}
-	got := <-dhoDone
-	if got.err != nil {
-		t.Fatalf("dho failed although the database advanced past its step: %v", got.err)
+	if code := <-exit; code != cli.ExitOK {
+		t.Fatalf("dho exited %d although the database advanced past its step: %s", code, stderr.String())
+	}
+	var result pgmigrate.Result
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatalf("dho's result %q is not JSON: %v", stdout.String(), err)
 	}
 	var want []string
 	for _, file := range chain[1:] {
 		want = append(want, file.Revision)
 	}
-	if fmt.Sprint(got.result.Applied) != fmt.Sprint(want) {
-		t.Errorf("dho applied %v, want only the steps the other migrator did not: %v", got.result.Applied, want)
+	if fmt.Sprint(result.Applied) != fmt.Sprint(want) {
+		t.Errorf("dho applied %v, want only the steps the other migrator did not: %v", result.Applied, want)
 	}
 	recorded, err := pgmigrate.Recorded(ctx, setup)
 	if err != nil {
@@ -237,6 +257,12 @@ func TestUpgradeSurvivesAnotherMigratorApplyingTheStepFirst(t *testing.T) {
 	}
 	if heads := pgmigrate.Heads(baseline, chain); fmt.Sprint(recorded) != fmt.Sprint(heads) {
 		t.Errorf("alembic_version holds %v, want the heads %v", recorded, heads)
+	}
+	// The recovery leaves a trace on stderr: the run reported success.
+	for _, want := range []string{`"revision":"` + chain[0].Revision + `"`, `"sqlstate":"42701"`} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Errorf("the recovery log %q lacks %s", stderr.String(), want)
+		}
 	}
 }
 

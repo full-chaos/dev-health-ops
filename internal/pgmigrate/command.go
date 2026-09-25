@@ -7,10 +7,12 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 
 	"github.com/jackc/pgx/v5"
 
 	"github.com/full-chaos/dev-health-ops/internal/cli"
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	pgstorage "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 )
@@ -128,7 +130,7 @@ func run(ctx context.Context, verb string, resolve ResolveDSN, env cli.Env) int 
 		}
 		return writeResult(env.Stdout, env.Stderr, status)
 	}
-	result, err := Upgrade(ctx, conn, baseline, chain)
+	result, err := UpgradeLogged(ctx, conn, baseline, chain, logging.NewJSON(env.Stderr, slog.LevelInfo))
 	if err != nil {
 		var below BelowHeadError
 		var foreign ForeignDatabaseError

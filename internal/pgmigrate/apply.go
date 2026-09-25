@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // lockKey serializes concurrent `dho migrate postgres` runs against one
@@ -24,6 +26,13 @@ type Result struct {
 // Upgrade brings the database behind conn to the head of baseline, then
 // applies every chain revision after it.
 func Upgrade(ctx context.Context, conn *pgx.Conn, baseline Baseline, chain []ChainFile) (Result, error) {
+	return UpgradeLogged(ctx, conn, baseline, chain, slog.New(slog.DiscardHandler))
+}
+
+// UpgradeLogged is Upgrade with a logger for the one event the command's JSON
+// result cannot show: a chain step that failed and was recovered because another
+// migrator had recorded its revision.
+func UpgradeLogged(ctx context.Context, conn *pgx.Conn, baseline Baseline, chain []ChainFile, logger *slog.Logger) (Result, error) {
 	result := Result{Heads: Heads(baseline, chain)}
 	var plan Plan
 	err := inTransaction(ctx, conn, func(tx pgx.Tx) error {
@@ -69,7 +78,7 @@ func Upgrade(ctx context.Context, conn *pgx.Conn, baseline Baseline, chain []Cha
 	if err != nil {
 		return result, err
 	}
-	applied, err := applyChain(ctx, dbChain{conn: conn, baseline: baseline, chain: chain})
+	applied, err := applyChain(ctx, dbChain{conn: conn, baseline: baseline, chain: chain}, logger)
 	result.Applied = applied
 	if err != nil {
 		return result, err
@@ -97,7 +106,7 @@ type chainSteps interface {
 // again UNDER the lock: a concurrent run may have applied revisions since an
 // earlier plan, and its non-idempotent SQL must not run twice. It returns what this
 // run applied.
-func applyChain(ctx context.Context, steps chainSteps) ([]string, error) {
+func applyChain(ctx context.Context, steps chainSteps, logger *slog.Logger) ([]string, error) {
 	var applied []string
 	for {
 		done, attempted, err := steps.step(ctx)
@@ -111,6 +120,11 @@ func applyChain(ctx context.Context, steps chainSteps) ([]string, error) {
 			if attempted == "" || !steps.recorded(ctx, attempted) {
 				return applied, err
 			}
+			// Not silent: a run that recovers reports success, so this line is the
+			// only trace that another migrator applied the revision under it (and
+			// that the two migrators ran together, against the runbook).
+			logger.Info("migrate chain step recovered: another migrator recorded the revision",
+				"revision", attempted, "sqlstate", sqlState(err))
 			continue
 		}
 		if done == "" {
@@ -324,4 +338,14 @@ func revisionRecordedSince(ctx context.Context, conn *pgx.Conn, baseline Baselin
 		return nil
 	})
 	return err == nil && recorded
+}
+
+// sqlState is the SQLSTATE of a step's failure, or "" when it is not a server
+// error. The message is not logged: a server error can carry row values.
+func sqlState(err error) string {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr.Code
+	}
+	return ""
 }

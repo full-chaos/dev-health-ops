@@ -25,6 +25,8 @@ type Server struct {
 	// statement with an error that echoes the login and password (a server whose
 	// authentication works and whose query errors carry them).
 	acceptLogin bool
+	// failPing also fails the driver's ping (an empty statement) with the echo.
+	failPing bool
 	// connections counts the connections that reached the server.
 	connections atomic.Int64
 }
@@ -36,16 +38,16 @@ func (s *Server) Connections() int { return int(s.connections.Load()) }
 
 // New listens on a loopback port until the test ends. Every connection is refused
 // with SQLSTATE 28P01.
-func New(t testing.TB) *Server { return newServer(t, false) }
+func New(t testing.TB) *Server { return newServer(t, false, false) }
 
-func newServer(t testing.TB, acceptLogin bool) *Server {
+func newServer(t testing.TB, acceptLogin, failPing bool) *Server {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("fakepg listen: %v", err)
 	}
 	t.Cleanup(func() { _ = listener.Close() })
-	server := &Server{Host: "127.0.0.1", Port: listener.Addr().(*net.TCPAddr).Port, acceptLogin: acceptLogin}
+	server := &Server{Host: "127.0.0.1", Port: listener.Addr().(*net.TCPAddr).Port, acceptLogin: acceptLogin, failPing: failPing}
 	go func() {
 		for {
 			conn, err := listener.Accept()
@@ -53,7 +55,7 @@ func newServer(t testing.TB, acceptLogin bool) *Server {
 				return
 			}
 			server.connections.Add(1)
-			go serve(conn, acceptLogin)
+			go serve(conn, acceptLogin, failPing)
 		}
 	}()
 	return server
@@ -66,7 +68,7 @@ func Start(t testing.TB) (host string, port int) {
 	return server.Host, server.Port
 }
 
-func serve(conn net.Conn, acceptLogin bool) {
+func serve(conn net.Conn, acceptLogin, failPing bool) {
 	defer conn.Close()
 	reader := bufio.NewReader(conn)
 	var params map[string]string
@@ -115,7 +117,7 @@ func serve(conn net.Conn, acceptLogin bool) {
 	}
 	password := strings.TrimRight(string(payload), "\x00")
 	if acceptLogin {
-		serveAccepted(conn, reader, params["user"], password)
+		serveAccepted(conn, reader, params["user"], password, failPing)
 		return
 	}
 	writeError(conn, "FATAL", "28P01", fmt.Sprintf("password authentication failed for user %q (password %q)", params["user"], password))
@@ -185,7 +187,7 @@ func (r Refusing) RequireConnected(t testing.TB) {
 // serveAccepted accepts the login (AuthenticationOk, ReadyForQuery), answers the
 // driver's ping (an empty query) and fails every other statement with an error that
 // echoes the login and password.
-func serveAccepted(conn net.Conn, reader *bufio.Reader, user, password string) {
+func serveAccepted(conn net.Conn, reader *bufio.Reader, user, password string, failPing bool) {
 	if _, err := conn.Write([]byte{'R', 0, 0, 0, 8, 0, 0, 0, 0, 'Z', 0, 0, 0, 5, 'I'}); err != nil {
 		return
 	}
@@ -208,7 +210,7 @@ func serveAccepted(conn net.Conn, reader *bufio.Reader, user, password string) {
 		case 'X':
 			return
 		case 'Q':
-			if emptyQuery(strings.TrimRight(string(body), "\x00")) {
+			if !failPing && emptyQuery(strings.TrimRight(string(body), "\x00")) {
 				if _, err := conn.Write([]byte{'I', 0, 0, 0, 4, 'Z', 0, 0, 0, 5, 'I'}); err != nil {
 					return
 				}
@@ -226,7 +228,7 @@ func serveAccepted(conn net.Conn, reader *bufio.Reader, user, password string) {
 			if len(parts) > 1 {
 				query = parts[1]
 			}
-			emptyStatement = emptyQuery(query)
+			emptyStatement = !failPing && emptyQuery(query)
 			if emptyStatement {
 				if _, err := conn.Write([]byte{'1', 0, 0, 0, 4}); err != nil {
 					return
@@ -265,9 +267,15 @@ func serveAccepted(conn net.Conn, reader *bufio.Reader, user, password string) {
 
 // StartEchoing is StartRefusing for a server that accepts the login and then
 // fails every statement with an error carrying the login and password.
-func StartEchoing(t *testing.T) Refusing {
+func StartEchoing(t *testing.T) Refusing { return startEchoing(t, false) }
+
+// StartEchoingOnPing is StartEchoing for a server that fails the driver's ping too:
+// the error origin is the ping, not a later statement.
+func StartEchoingOnPing(t *testing.T) Refusing { return startEchoing(t, true) }
+
+func startEchoing(t *testing.T, failPing bool) Refusing {
 	t.Helper()
-	server := newServer(t, true)
+	server := newServer(t, true, failPing)
 	r := Refusing{
 		Server:   server,
 		URI:      fmt.Sprintf("postgres://%s:%d/appdb?sslmode=disable", server.Host, server.Port),

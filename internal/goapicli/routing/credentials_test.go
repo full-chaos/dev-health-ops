@@ -57,33 +57,48 @@ func TestVerbsPrintNoCredentialsFromTheEnvironment(t *testing.T) {
 	}
 }
 
-// A server whose login works and whose statements fail with an error echoing the
-// login and password: what a later query error can carry. `status` reports it in
-// its report, `disable` returns it through classifyWriteError (r2 of CHAOS-6665).
-func TestVerbsPrintNoCredentialsInLaterQueryErrors(t *testing.T) {
+// Every origin of a database error a routing verb can print, through every verb
+// that reaches it: the connect (a refused login), the ping (a server that accepts the
+// login and fails the driver's ping with an echo of the login and password) and a
+// later statement (the ping succeeds, the next statement echoes: what `status`'s
+// census, `disable`'s read and its write transaction run). Scan and close errors
+// surface through the same statement sinks and cannot be produced by the fake
+// separately. The credentials reach the driver only through PGUSER and PGPASSWORD.
+func TestEveryDatabaseErrorOriginIsRedactedThroughEveryVerb(t *testing.T) {
 	t.Setenv(bearerEnvVar, "")
 	catalog := filepath.Join("..", "..", "..", "src", "dev_health_ops", "api", "graphql", "go_api_operations.json")
-	for name, argv := range map[string][]string{
+	origins := map[string]struct {
+		start  func(*testing.T) fakepg.Refusing
+		marker string
+	}{
+		"connect": {fakepg.StartRefusing, "authentication failed"},
+		"ping":    {fakepg.StartEchoingOnPing, "server echo"},
+		"query":   {fakepg.StartEchoing, "server echo"},
+	}
+	verbs := map[string][]string{
 		"status":  {"status", "-timeout", "3s"},
 		"disable": {"disable", "-mode", "python", "-timeout", "3s", "-catalog", catalog},
-	} {
-		echoing := fakepg.StartEchoing(t)
-		argv = append(argv, "-postgres-uri", echoing.URI)
-		savedOut, savedErr := stdout, stderr
-		var out, errOut bytes.Buffer
-		stdout, stderr = &out, &errOut
-		err := run(argv)
-		stdout, stderr = savedOut, savedErr
-		echoing.RequireConnected(t)
-		text := out.String() + errOut.String()
-		if err != nil {
-			text += err.Error()
-		}
-		if !strings.Contains(text, "server echo") {
-			t.Errorf("%s: the server's statement error never reached the output (the test measures nothing):\n%s", name, text)
-		}
-		if leaks := echoing.Leaks(text); len(leaks) > 0 {
-			t.Errorf("%s: the output carries %v:\n%s", name, leaks, text)
+	}
+	for origin, spec := range origins {
+		for verb, base := range verbs {
+			server := spec.start(t)
+			argv := append(append([]string(nil), base...), "-postgres-uri", server.URI)
+			savedOut, savedErr := stdout, stderr
+			var out, errOut bytes.Buffer
+			stdout, stderr = &out, &errOut
+			err := run(argv)
+			stdout, stderr = savedOut, savedErr
+			server.RequireConnected(t)
+			text := out.String() + errOut.String()
+			if err != nil {
+				text += err.Error()
+			}
+			if !strings.Contains(text, spec.marker) {
+				t.Errorf("%s/%s: the server's error never reached the output (the test measures nothing):\n%s", origin, verb, text)
+			}
+			if leaks := server.Leaks(text); len(leaks) > 0 {
+				t.Errorf("%s/%s: the output carries %v:\n%s", origin, verb, leaks, text)
+			}
 		}
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -28,6 +29,7 @@ const budgetEnforceChunkingCandidateCount = 600
 func seedManyCandidateUnits(t *testing.T, ctx context.Context, pool *pgxpool.Pool, count int) []string {
 	t.Helper()
 	ids := make([]string, count)
+	pgseed.EnsureSyncIntegration(ctx, t, pool, "org-1", "00000000-0000-4000-8000-000000000010", "00000000-0000-4000-8000-000000000011")
 	// One statement via generate_series rather than `count` individual
 	// round trips -- this fixture exists specifically to seed hundreds of
 	// rows, and per-row INSERTs would make this test the slowest thing in
@@ -35,12 +37,12 @@ func seedManyCandidateUnits(t *testing.T, ctx context.Context, pool *pgxpool.Poo
 	if _, err := pool.Exec(ctx, `
 INSERT INTO public.sync_run_units
  (id, sync_run_id, org_id, integration_id, source_id, provider, dataset_key, cost_class,
-  status, available_at, updated_at, result)
+  mode, attempts, created_at, status, available_at, updated_at, result)
 SELECT
   ('00000000-0000-4000-9000-' || lpad(to_hex(n), 12, '0'))::uuid,
   $1::uuid, 'org-1', '00000000-0000-4000-8000-000000000010'::uuid,
   '00000000-0000-4000-8000-000000000011'::uuid, 'github', 'commits', 'rest_core',
-  'planned', NULL, now(), '{}'::json
+  'incremental', 0, now(), 'planned', NULL, now(), '{}'::json
 FROM generate_series(1, $2) AS n`,
 		budgetCandidatesRunID, count); err != nil {
 		t.Fatal(err)

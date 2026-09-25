@@ -40,7 +40,7 @@ func seedBlockedRun(
 	t *testing.T, ctx context.Context, pool *pgxpool.Pool, fixture blockedFixture, now time.Time,
 ) {
 	t.Helper()
-	if _, err := pool.Exec(ctx, `INSERT INTO daily_metrics_runs (id,org_id,target_day,generation,status,finalization_status,created_at,updated_at) VALUES ($1,$2,'2026-09-01','daily-v1','running','pending',$3,$3)`,
+	if _, err := pool.Exec(ctx, `INSERT INTO daily_metrics_runs (id,org_id,target_day,generation,status,finalization_status,created_at,updated_at) VALUES ($1::uuid,$2,'2026-09-01','daily-v1-' || $1::uuid::text,'running','pending',$3,$3)`,
 		fixture.runID, fixture.orgID, now); err != nil {
 		t.Fatal(err)
 	}

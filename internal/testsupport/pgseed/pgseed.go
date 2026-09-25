@@ -101,3 +101,12 @@ VALUES ($1, $2, $3, 'test-build', 'python', $4)
 ON CONFLICT (schema_digest, document_digest, selected_operation) DO UPDATE SET mode = $4`,
 		schemaDigest, documentDigest, operation, mode)
 }
+
+// SetFeatureFlag makes key exist with exactly this floor and enabled state, replacing the row the
+// migrations already register for it (they register the shipped flags). Use it where a test needs a
+// specific state of a shipped flag; use FeatureFlag for a flag the migrations do not register.
+func SetFeatureFlag(ctx context.Context, t testing.TB, pool *pgxpool.Pool, id, key, minTier string, enabled bool) {
+	t.Helper()
+	exec(ctx, t, pool, "reset feature flag "+key, `DELETE FROM feature_flags WHERE key = $1`, key)
+	FeatureFlag(ctx, t, pool, id, key, minTier, enabled)
+}

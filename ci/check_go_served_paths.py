@@ -43,7 +43,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-STUB_NAME = "_raise_served_by_go_api"
+STUB_NAMES = frozenset({"_raise_served_by_go_api", "raise_served_by_go_api"})
 PLANES = {"go-api", "query-api"}
 MANIFEST_RELATIVE = Path("ci/go_served_paths.tsv")
 _PARAM = re.compile(r"\{[^}/]*\}")
@@ -131,7 +131,7 @@ def _is_stub_body(body: list[ast.stmt]) -> bool:
         if isinstance(func, ast.Attribute)
         else None
     )
-    return name == STUB_NAME
+    return name in STUB_NAMES
 
 
 def _function_at(

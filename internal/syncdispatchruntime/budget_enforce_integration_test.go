@@ -36,7 +36,6 @@ func withBudgetEnforcePool(t *testing.T, fn func(ctx context.Context, pool *pgxp
 	}
 	defer pool.Close()
 	createBudgetCandidatesTables(t, ctx, pool)
-	createCooldownTables(t, ctx, pool)
 	fn(ctx, pool)
 }
 

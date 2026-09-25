@@ -302,17 +302,37 @@ func (h handlers) enqueueBillingNotification(ctx context.Context, notificationTy
 // event, so a redelivered event reuses it), hashed when longer than 128
 // characters; without one the key is the canonical attributes' sha256.
 func (h handlers) enqueueBillingNotificationFor(ctx context.Context, notificationType string, orgID pyjson.Value, providerEventID string, attributes *pyjson.Object) error {
+	intent, err := newBillingIntent(notificationType, orgID, providerEventID, attributes)
+	if err != nil {
+		return err
+	}
+	if err := h.inTxFunc(ctx, func(tx pgx.Tx) error { return h.insertBillingIntent(ctx, tx, &intent) }); err != nil {
+		return err
+	}
+	return h.publishBillingIntent(ctx, intent)
+}
+
+// billingIntent is one billing_notifications row: its key and stored
+// attributes, and, once written, its id.
+type billingIntent struct {
+	kind, key, stored string
+	org, id           uuid.UUID
+}
+
+// newBillingIntent is the intent's key and stored attributes (the key rule
+// above), not yet written.
+func newBillingIntent(notificationType string, orgID pyjson.Value, providerEventID string, attributes *pyjson.Object) (billingIntent, error) {
 	text, isText := orgID.(string)
 	if !isText {
-		return errNotificationOrg
+		return billingIntent{}, errNotificationOrg
 	}
 	org, err := pythonparity.ParseUUID(text)
 	if err != nil {
-		return errNotificationOrg
+		return billingIntent{}, errNotificationOrg
 	}
 	canonical, err := pyjson.MarshalCanonical(attributes)
 	if err != nil {
-		return err
+		return billingIntent{}, err
 	}
 	digest := sha256.Sum256(canonical)
 	suffix := hex.EncodeToString(digest[:])
@@ -326,31 +346,36 @@ func (h handlers) enqueueBillingNotificationFor(ctx context.Context, notificatio
 	key := "billing:" + notificationType + ":" + org.String() + ":" + suffix
 	stored, err := pyjson.Dumps(attributes)
 	if err != nil {
+		return billingIntent{}, err
+	}
+	return billingIntent{kind: notificationType, org: org, key: key, stored: stored}, nil
+}
+
+// insertBillingIntent writes the intent in tx, or reads the id of the one
+// its key already names.
+func (h handlers) insertBillingIntent(ctx context.Context, tx pgx.Tx, intent *billingIntent) error {
+	switch err := tx.QueryRow(ctx, `INSERT INTO billing_notifications (id, org_id, notification_type, idempotency_key, attributes, created_at)
+		VALUES ($1, $2, $3, $4, $5::json, $6) ON CONFLICT (idempotency_key) DO NOTHING RETURNING id`,
+		uuid.New(), intent.org, intent.kind, intent.key, intent.stored, h.nowUTC()).Scan(&intent.id); {
+	case errors.Is(err, pgx.ErrNoRows):
+		return tx.QueryRow(ctx, `SELECT id FROM billing_notifications WHERE idempotency_key = $1`, intent.key).Scan(&intent.id)
+	default:
 		return err
 	}
-	var notificationID uuid.UUID
-	err = h.inTxFunc(ctx, func(tx pgx.Tx) error {
-		switch err := tx.QueryRow(ctx, `INSERT INTO billing_notifications (id, org_id, notification_type, idempotency_key, attributes, created_at)
-			VALUES ($1, $2, $3, $4, $5::json, $6) ON CONFLICT (idempotency_key) DO NOTHING RETURNING id`,
-			uuid.New(), org, notificationType, key, stored, h.nowUTC()).Scan(&notificationID); {
-		case errors.Is(err, pgx.ErrNoRows):
-			return tx.QueryRow(ctx, `SELECT id FROM billing_notifications WHERE idempotency_key = $1`, key).Scan(&notificationID)
-		default:
-			return err
-		}
-	})
-	if err != nil {
-		return err
-	}
+}
+
+// publishBillingIntent hands a written intent to the job outbox; a handoff
+// already there for its key is not an error.
+func (h handlers) publishBillingIntent(ctx context.Context, intent billingIntent) error {
 	if h.producer == nil {
 		return errNoProducer
 	}
-	id, orgText := notificationID.String(), org.String()
+	id, orgText := intent.id.String(), intent.org.String()
 	envelope := jobcontract.Envelope{
 		ContractVersion: jobcontract.ContractVersionV1,
 		OrganizationID:  &orgText,
 		CorrelationID:   "billing-notification:" + id,
-		IdempotencyKey:  key,
+		IdempotencyKey:  intent.key,
 		Domain:          jobcontract.DomainLink{Type: "billing_notification", ID: id},
 		Payload:         jobcontract.BillingNotificationPayload{NotificationID: id},
 	}

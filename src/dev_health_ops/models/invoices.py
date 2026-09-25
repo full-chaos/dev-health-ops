@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Any
 
 import sqlalchemy as sa
-from sqlalchemy import JSON, DateTime, ForeignKey, Integer, Text
+from sqlalchemy import JSON, BigInteger, DateTime, ForeignKey, Integer, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .git import GUID, Base
@@ -58,6 +58,8 @@ class Invoice(Base):
     attempt_count: Mapped[int] = mapped_column(
         Integer, server_default="0", nullable=False
     )
+    # The Stripe `created` time of the newest event applied to this invoice.
+    last_event_created: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     metadata_: Mapped[dict[str, Any]] = mapped_column(
         "metadata", JSON, server_default="{}", nullable=False
     )

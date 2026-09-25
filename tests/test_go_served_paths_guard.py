@@ -92,6 +92,16 @@ SOURCE = textwrap.dedent(
     def stubbed_attribute():
         module._raise_served_by_go_api("/x")
 
+    def stubbed_public_name():
+        raise_served_by_go_api("/x", "go-api")
+
+    def stubbed_public_attribute():
+        go_served.raise_served_by_go_api("/x", GO_API)
+
+    def public_name_then_more():
+        raise_served_by_go_api("/x", "go-api")
+        return 1
+
     def logic_then_stub():
         value = 1
         _raise_served_by_go_api("/x")
@@ -154,6 +164,9 @@ def test_the_recogniser_counts_only_a_body_that_is_nothing_but_the_stub(tree):
             "stubbed_with_docstring",
             "stubbed_return",
             "stubbed_attribute",
+            "stubbed_public_name",
+            "stubbed_public_attribute",
+            "public_name_then_more",
             "logic_then_stub",
             "stub_and_more",
             "calls_something_else",
@@ -166,6 +179,8 @@ def test_the_recogniser_counts_only_a_body_that_is_nothing_but_the_stub(tree):
         "stubbed_with_docstring",
         "stubbed_return",
         "stubbed_attribute",
+        "stubbed_public_name",
+        "stubbed_public_attribute",
     }
 
 

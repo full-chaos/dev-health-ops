@@ -38,8 +38,8 @@ type storedCredential struct {
 // decryptPayload is decrypt_value + json.loads. ok is false where Python's
 // ValueError / JSONDecodeError is caught (a wrong key, a malformed token, a
 // payload that is not JSON); a missing key is Python's RuntimeError, which
-// is not caught, so it is returned as an error. A payload that is not a JSON
-// object counts as unreadable here.
+// is not caught, so it is returned as an error. A payload that is valid JSON
+// but not an object is readable (ok) with nil creds.
 func (h handlers) decryptPayload(ciphertext string) (creds *pyjson.Object, ok bool, err error) {
 	if !h.cipher.Configured() {
 		return nil, false, errors.New("SETTINGS_ENCRYPTION_KEY environment variable is required for encryption")
@@ -52,10 +52,12 @@ func (h handlers) decryptPayload(ciphertext string) (creds *pyjson.Object, ok bo
 	if parseErr != nil {
 		return nil, false, nil
 	}
-	object, isObject := decoded.(*pyjson.Object)
-	if !isObject {
-		return nil, false, nil
-	}
+	// Valid JSON that is not an object decrypted and parsed: Python's
+	// json.loads gives it back with the OK outcome, and never counts it as
+	// a decrypt failure. It carries no credentials here (nil), which the
+	// route answers as "Credential not found", as Python does for a falsy
+	// value such as [] (`if not creds`).
+	object, _ := decoded.(*pyjson.Object)
 	return object, true, nil
 }
 

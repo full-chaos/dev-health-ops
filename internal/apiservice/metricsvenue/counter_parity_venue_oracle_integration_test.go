@@ -47,7 +47,7 @@ const encryptionKey = "venue-metrics-settings-encryption-key"
 func TestCounterParityVenueOracle(t *testing.T) {
 	ctx := context.Background()
 	orgID, ownerID := uuid.New(), uuid.New()
-	garbled, notJSON := uuid.New(), uuid.New()
+	garbled, notJSON, emptyList, oddProvider := uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	jwtKey := uuid.NewString() + uuid.NewString()
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Root:      venueRoot(),
@@ -58,11 +58,18 @@ func TestCounterParityVenueOracle(t *testing.T) {
 			// A payload the key cannot decrypt, and one it decrypts to text
 			// json.loads refuses: get_decrypted_credentials_by_id_with_outcome
 			// counts both as DECRYPT_FAILED.
-			encrypted := v.CallPython(t, venueoracle.PythonCall{
-				Target: "dev_health_ops.core.encryption:encrypt_value", Args: []any{"not a json object {"},
-			})
-			var notJSONCiphertext string
+			// And one that decrypts to valid JSON that is not an object
+			// (json.loads succeeds: the OK outcome, never counted; the route
+			// answers 404 for a falsy value).
+			encrypted := v.CallPython(t,
+				venueoracle.PythonCall{Target: "dev_health_ops.core.encryption:encrypt_value", Args: []any{"not a json object {"}},
+				venueoracle.PythonCall{Target: "dev_health_ops.core.encryption:encrypt_value", Args: []any{"[]"}},
+			)
+			var notJSONCiphertext, emptyListCiphertext string
 			if err := json.Unmarshal(encrypted[0], &notJSONCiphertext); err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal(encrypted[1], &emptyListCiphertext); err != nil {
 				t.Fatal(err)
 			}
 			for _, statement := range []struct {
@@ -79,6 +86,12 @@ VALUES ($1, $2, $3, 'owner', now(), now(), now())`, []any{uuid.New(), orgID, own
 VALUES ($1, $2, 'github', 'garbled', true, 'gAAAAABnot-a-fernet-token', '{}'::json, now(), now())`, []any{garbled, orgID.String()}},
 				{`INSERT INTO integration_credentials (id, org_id, provider, name, is_active, credentials_encrypted, config, created_at, updated_at)
 VALUES ($1, $2, 'gitlab', 'not-json', true, $3, '{}'::json, now(), now())`, []any{notJSON, orgID.String(), notJSONCiphertext}},
+				{`INSERT INTO integration_credentials (id, org_id, provider, name, is_active, credentials_encrypted, config, created_at, updated_at)
+VALUES ($1, $2, 'jira', 'empty-list', true, $3, '{}'::json, now(), now())`, []any{emptyList, orgID.String(), emptyListCiphertext}},
+				// A free-form provider whose label value holds "}", "," and
+				// a quote: the exposition's label parsing must not stop early.
+				{`INSERT INTO integration_credentials (id, org_id, provider, name, is_active, credentials_encrypted, config, created_at, updated_at)
+VALUES ($1, $2, 'odd},"x', 'garbled', true, 'gAAAAABnot-a-fernet-token', '{}'::json, now(), now())`, []any{oddProvider, orgID.String()}},
 			} {
 				if _, err := admin.Exec(ctx, statement.sql, statement.args...); err != nil {
 					t.Fatalf("seed: %v\n%s", err, statement.sql)
@@ -99,6 +112,8 @@ VALUES ($1, $2, 'gitlab', 'not-json', true, $3, '{}'::json, now(), now())`, []an
 		testByID("test a garbled stored credential", garbled, "github"),
 		testByID("test it again", garbled, "github"),
 		testByID("test a stored credential that is not JSON", notJSON, "gitlab"),
+		testByID("test a stored credential that is an empty JSON list", emptyList, "jira"),
+		testByID("test a garbled credential with an odd provider", oddProvider, "github"),
 	}
 	scrape := venueoracle.Request{Name: "metrics", Method: http.MethodGet, Path: "/metrics"}
 
@@ -116,8 +131,8 @@ VALUES ($1, $2, 'gitlab', 'not-json', true, $3, '{}'::json, now(), now())`, []an
 	checkPythonMetricsTable(t)
 
 	for _, counter := range routeCounters {
-		pythonSamples := samples(pythonMetrics.Body, counter.metric)
-		goSamples := samples(goMetrics, counter.metric)
+		pythonSamples := samples(t, pythonMetrics.Body, counter.metric)
+		goSamples := samples(t, goMetrics, counter.metric)
 		if len(pythonSamples) == 0 {
 			t.Errorf("%s (%s): the Python api did not move it; the case proves nothing", counter.metric, counter.route)
 			continue
@@ -137,7 +152,7 @@ var routeCounters = []struct{ metric, route string }{
 	{"devhealth_integration_credential_decrypt_failed_total", "POST /api/v1/admin/credentials/test"},
 }
 
-//go:embed python_metrics.tsv
+//go:embed testdata/python_metrics.tsv
 var pythonMetricsTable string
 
 // pythonMetricFamilies lists every metric family the Python api registers,
@@ -282,9 +297,13 @@ func startGoAPI(t *testing.T, ctx context.Context, venue *venueoracle.Venue, key
 }
 
 // samples reads metric's samples out of a Prometheus text exposition: label
-// set (as written, labels sorted) -> value. It reads the counter's own
-// samples only, not its _created companion.
-func samples(exposition, metric string) map[string]float64 {
+// set (each name="value" pair as written, sorted) -> value. It reads the
+// counter's own samples only, not its _created companion. Label values are
+// read as the text format quotes them, so a value holding "}", "," or an
+// escaped quote does not end the label set early; a line that does not
+// parse fails the test rather than being skipped.
+func samples(t *testing.T, exposition, metric string) map[string]float64 {
+	t.Helper()
 	out := map[string]float64{}
 	scanner := bufio.NewScanner(strings.NewReader(exposition))
 	scanner.Buffer(make([]byte, 1<<20), 1<<24)
@@ -294,29 +313,61 @@ func samples(exposition, metric string) map[string]float64 {
 			continue
 		}
 		rest := line[len(metric):]
-		labels := ""
-		if strings.HasPrefix(rest, "{") {
-			end := strings.Index(rest, "}")
-			if end < 0 {
-				continue
+		var pairs []string
+		switch {
+		case strings.HasPrefix(rest, "{"):
+			var ok bool
+			pairs, rest, ok = labelPairs(rest[1:])
+			if !ok {
+				t.Fatalf("unparsable label set in %q", line)
 			}
-			labels, rest = rest[1:end], rest[end+1:]
-		} else if !strings.HasPrefix(rest, " ") {
+		case strings.HasPrefix(rest, " "):
+		default:
 			continue // another metric whose name starts with this one
 		}
 		fields := strings.Fields(rest)
 		if len(fields) == 0 {
-			continue
+			t.Fatalf("no value in %q", line)
 		}
 		value, err := strconv.ParseFloat(fields[0], 64)
 		if err != nil {
-			continue
+			t.Fatalf("unparsable value in %q: %v", line, err)
 		}
-		parts := strings.Split(labels, ",")
-		sort.Strings(parts)
-		out[strings.Join(parts, ",")] = value
+		sort.Strings(pairs)
+		out[strings.Join(pairs, ",")] = value
 	}
 	return out
+}
+
+// labelPairs reads `name="value",...}` (the text after "{"): the pairs as
+// written and the text after the closing "}".
+func labelPairs(text string) ([]string, string, bool) {
+	var pairs []string
+	for {
+		if strings.HasPrefix(text, "}") {
+			return pairs, text[1:], true
+		}
+		eq := strings.Index(text, "=\"")
+		if eq <= 0 {
+			return nil, "", false
+		}
+		end := -1
+		for index := eq + 2; index < len(text); index++ {
+			if text[index] == '\\' {
+				index++
+				continue
+			}
+			if text[index] == '"' {
+				end = index
+				break
+			}
+		}
+		if end < 0 {
+			return nil, "", false
+		}
+		pairs = append(pairs, text[:end+1])
+		text = strings.TrimPrefix(text[end+1:], ",")
+	}
 }
 
 func equalSamples(a, b map[string]float64) bool {

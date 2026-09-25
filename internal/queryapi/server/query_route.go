@@ -2761,6 +2761,11 @@ func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, op
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
+		// Two carriers can name two identities: refuse before any body or
+		// document work, so no later 4xx/404 can answer an ambiguous request.
+		if refuseAmbiguousCarrier(w, r) {
+			return
+		}
 		// Same body-size contract the Python edge's
 		// GraphQLQuerySizeLimitMiddleware enforces for /graphql
 		// (security.py's GRAPHQL_MAX_QUERY_BYTES, default 16 KiB) --

@@ -26,14 +26,10 @@ import (
 //
 // verifier may be nil only where a test exercises the no-carrier refusal.
 func authenticateInternalRequest(w http.ResponseWriter, r *http.Request, verifier *principal.Verifier) (authctx.Claims, bool) {
-	hasHeaders := internalidentity.Present(r.Header)
-	hasBearer := len(r.Header.Values("Authorization")) > 0
-
-	switch {
-	case hasHeaders && hasBearer:
-		refuseInternal(w, r, "ambiguous_carrier", "both")
+	if refuseAmbiguousCarrier(w, r) {
 		return authctx.Claims{}, false
-	case hasHeaders:
+	}
+	if internalidentity.Present(r.Header) {
 		claims, err := internalidentity.FromHeader(r.Header)
 		if err != nil {
 			refuseInternal(w, r, internalidentity.ReasonOf(err), "headers")
@@ -51,12 +47,26 @@ func authenticateInternalRequest(w http.ResponseWriter, r *http.Request, verifie
 	verifyCtx := principal.WithRequestMeta(r.Context(), r.RemoteAddr, envelopeRequestID(r))
 	claims, err := verifier.Verify(verifyCtx, token)
 	if err != nil {
-		// principal.Verify logs and counts its own rejection reason.
+		// principal.Verify logs and counts its own rejection reason; the
+		// internal-path outcome is counted here so the carrier series is whole.
+		internalidentity.RecordOutcome("envelope", "invalid")
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return authctx.Claims{}, false
 	}
 	internalidentity.RecordOutcome("envelope", "accepted")
 	return authctx.Claims{OrgID: claims.OrgID, Role: claims.Role, IsSuperuser: claims.IsSuperuser, ImpersonationActive: claims.ImpersonationActive}, true
+}
+
+// refuseAmbiguousCarrier answers 401 and reports true when the request carries
+// both the internal identity headers and an Authorization header. /query calls
+// it before it looks the document up, so an ambiguous request is refused even
+// for a document this router would otherwise 404 (r1 P1: the 404 came first).
+func refuseAmbiguousCarrier(w http.ResponseWriter, r *http.Request) bool {
+	if !internalidentity.Present(r.Header) || len(r.Header.Values("Authorization")) == 0 {
+		return false
+	}
+	refuseInternal(w, r, "ambiguous_carrier", "both")
+	return true
 }
 
 // refuseInternal answers the bare 401 and leaves a line naming why. The line

@@ -4,12 +4,16 @@
 // The head is not rebuilt from the historical alembic chain. That chain
 // (src/dev_health_ops/alembic/versions) is Python, and many of its revisions
 // run SQL through the connection and read data, so alembic cannot render it
-// as SQL; only a database below the head needs it. So the head is a
-// BASELINE: the end state of a fresh database after the real Python upgrade
-// (`dev-hops migrate postgres`) has run, captured by executing it
-// (baseline_capture_integration_test.go) and checked in as
-// baseline/head.json -- the schema and the rows the chain seeds, both as
-// pg_dump SQL, and the alembic heads it records.
+// as SQL. So the migrator is a BASELINE plus a numbered SQL CHAIN: the baseline
+// is the end state of a fresh database at the baseline revision (0138, the
+// oldest revision a production database is upgraded from) after the real Python
+// upgrade has run, captured by executing it (baseline_integration_test.go) and
+// checked in as baseline/head.json -- the schema and the rows the chain seeds,
+// both as pg_dump SQL, and the alembic heads it records; every revision after it
+// is a sql/<revision>_<slug>.sql file, rendered from its Alembic revision and
+// verified by executing both. The baseline never moves: adding an Alembic
+// revision adds its .sql file (TestChainCoversEveryAlembicRevision fails until it
+// does), so a database at any revision from the baseline up reaches the head.
 //
 // The chain's end state depends on two settings, and the baseline is the
 // combination production runs (read from prod, 2026-09-24): revision 0066,
@@ -27,11 +31,12 @@
 //     nothing behind;
 //   - alembic_version holds every baseline head and no later revision, but
 //     tables the baseline creates are absent: schema_mismatch, refused;
-//   - alembic_version holds every baseline head: apply the .sql revisions
-//     after the head (sql/), each in its own transaction together with the
-//     alembic_version update;
-//   - alembic_version without every baseline head: below the head, refused,
-//     naming what the database holds and what is required;
+//   - alembic_version holds every baseline head (or a chain revision that
+//     continues it): apply the .sql revisions after the one it holds (sql/), each
+//     in its own transaction together with the alembic_version update;
+//   - alembic_version without every baseline head (below the baseline revision):
+//     refused as below the head, naming what the database holds and what is
+//     required;
 //   - objects but no alembic_version: a database this migrator
 //     did not create, refused.
 package pgmigrate
@@ -294,7 +299,7 @@ func (e BelowHeadError) Error() string {
 		}
 	}
 	return fmt.Sprintf("the PostgreSQL schema is below the head: alembic_version holds %v and lacks %v.%s "+
-		"dho applies the head only to an empty database; run the Python upgrade (`dev-hops migrate postgres`) with production's settings first",
+		"dho upgrades an empty database and one at the baseline revision or later; run the Python upgrade (`dev-hops migrate postgres`) with production's settings first",
 		e.Recorded, e.Missing, detail)
 }
 

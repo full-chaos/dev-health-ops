@@ -24,7 +24,7 @@ type Result struct {
 // Upgrade brings the database behind conn to the head of baseline, then
 // applies every chain revision after it.
 func Upgrade(ctx context.Context, conn *pgx.Conn, baseline Baseline, chain []ChainFile) (Result, error) {
-	result := Result{Heads: baseline.Heads}
+	result := Result{Heads: Heads(baseline, chain)}
 	var plan Plan
 	err := inTransaction(ctx, conn, func(tx pgx.Tx) error {
 		observation, err := observe(ctx, tx)
@@ -114,7 +114,7 @@ type Status struct {
 
 // ReadStatus reports where the database stands without changing it.
 func ReadStatus(ctx context.Context, conn *pgx.Conn, baseline Baseline, chain []ChainFile) (Status, error) {
-	status := Status{Heads: baseline.Heads}
+	status := Status{Heads: Heads(baseline, chain)}
 	err := readOnlyTransaction(ctx, conn, func(tx pgx.Tx) error {
 		observation, err := observe(ctx, tx)
 		if err != nil {

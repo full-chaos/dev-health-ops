@@ -90,18 +90,22 @@ func aliasSetup(t *testing.T, statement string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
+	chain, err := pgmigrate.LoadChain()
+	if err != nil {
+		t.Fatal(err)
+	}
 	entries, err := pgmigrate.LoadHistory()
 	if err != nil {
 		t.Fatal(err)
 	}
 	var app string
-	for _, head := range baseline.Heads {
+	for _, head := range pgmigrate.Heads(baseline, chain) {
 		if head != "0066" {
 			app = head
 		}
 	}
 	var below string
-	for _, entry := range entries {
+	for _, entry := range pgmigrate.WithChain(entries, baseline, chain) {
 		if entry.Revision == app {
 			below = entry.Down
 		}

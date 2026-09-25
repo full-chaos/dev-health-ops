@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import uuid
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -14,12 +13,10 @@ from sqlalchemy import Column, Table
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from dev_health_ops.api.auth.router import get_current_user
-from dev_health_ops.api.billing import invoice_routes
 from dev_health_ops.api.billing import router as billing_router
 from dev_health_ops.api.billing.invoice_service import InvoiceService
 from dev_health_ops.models import Base, Organization
 from dev_health_ops.models.git import GUID
-from dev_health_ops.models.invoices import Invoice
 
 
 def _make_stripe_event(event_type: str, data_object: dict, event_id: str = "evt_test"):
@@ -72,7 +69,6 @@ async def api_client(db_session: AsyncSession, seeded_org: uuid.UUID):
 
     from dev_health_ops.api.services.auth import AuthenticatedUser
 
-    app.dependency_overrides[invoice_routes.get_session] = _session_override
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedUser(
         user_id="user-1",
         email="test@example.com",
@@ -177,84 +173,3 @@ async def test_webhook_invoice_event_is_idempotent(api_client):
 
     assert response.status_code == 200
     mock_invoice_service.upsert_invoice.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_invoice_list_and_detail_endpoints(
-    api_client: AsyncClient,
-    db_session: AsyncSession,
-    seeded_org: uuid.UUID,
-):
-    invoice = Invoice(
-        org_id=seeded_org,
-        stripe_invoice_id="in_list_1",
-        stripe_customer_id="cus_list_1",
-        status="open",
-        amount_due=1200,
-        created_at=datetime.now(timezone.utc),
-        updated_at=datetime.now(timezone.utc),
-    )
-    db_session.add(invoice)
-    await db_session.commit()
-
-    list_resp = await api_client.get("/api/v1/billing/invoices")
-    assert list_resp.status_code == 200
-    assert list_resp.json()["total"] == 1
-
-    detail_resp = await api_client.get(f"/api/v1/billing/invoices/{invoice.id}")
-    assert detail_resp.status_code == 200
-    assert detail_resp.json()["stripe_invoice_id"] == "in_list_1"
-
-
-@pytest.mark.asyncio
-async def test_void_invoice_endpoint(
-    api_client: AsyncClient, db_session: AsyncSession, seeded_org: uuid.UUID
-):
-    invoice = Invoice(
-        org_id=seeded_org,
-        stripe_invoice_id="in_void_1",
-        stripe_customer_id="cus_void_1",
-        status="open",
-        amount_due=2200,
-        amount_remaining=2200,
-        created_at=datetime.now(timezone.utc),
-        updated_at=datetime.now(timezone.utc),
-    )
-    db_session.add(invoice)
-    await db_session.commit()
-
-    with patch(
-        "dev_health_ops.api.billing.invoice_routes.get_stripe_client"
-    ) as mock_stripe:
-        mock_client = MagicMock()
-        mock_client.invoices.void_invoice.return_value = {"id": "in_void_1"}
-        mock_stripe.return_value = mock_client
-
-        response = await api_client.post(f"/api/v1/billing/invoices/{invoice.id}/void")
-
-    assert response.status_code == 200
-    assert response.json()["status"] == "void"
-
-
-@pytest.mark.asyncio
-async def test_void_paid_invoice_rejected(
-    api_client: AsyncClient,
-    db_session: AsyncSession,
-    seeded_org: uuid.UUID,
-):
-    invoice = Invoice(
-        org_id=seeded_org,
-        stripe_invoice_id="in_paid_1",
-        stripe_customer_id="cus_paid_1",
-        status="paid",
-        amount_due=3300,
-        amount_paid=3300,
-        amount_remaining=0,
-        created_at=datetime.now(timezone.utc),
-        updated_at=datetime.now(timezone.utc),
-    )
-    db_session.add(invoice)
-    await db_session.commit()
-
-    response = await api_client.post(f"/api/v1/billing/invoices/{invoice.id}/void")
-    assert response.status_code == 400

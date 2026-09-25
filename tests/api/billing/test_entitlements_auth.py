@@ -10,7 +10,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
 from dev_health_ops.api.services import auth as auth_module
@@ -51,9 +51,6 @@ def _app(monkeypatch: pytest.MonkeyPatch) -> FastAPI:
     async def _database_dependency() -> AsyncIterator[AsyncMock]:
         yield database
 
-    app.dependency_overrides[billing_module.postgres_session_dependency] = (
-        _database_dependency
-    )
     app.state.billing_database = database
     monkeypatch.setattr(gating, "get_org_entitlements_from_db", _entitlements)
     return app
@@ -90,64 +87,6 @@ async def test_billing_entitlements_rejects_anonymous_request(
         response = await client.get(f"/api/v1/billing/entitlements/{org_id}")
 
     assert response.status_code == 401
-
-
-@pytest.mark.asyncio
-async def test_billing_entitlements_rejects_other_organization_member(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    app = _app(monkeypatch)
-    app.dependency_overrides[billing_module.get_current_user] = lambda: _user(
-        str(uuid.uuid4())
-    )
-    org_id = uuid.uuid4()
-
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        response = await client.get(f"/api/v1/billing/entitlements/{org_id}")
-
-    assert response.status_code == 403
-    assert response.json() == {"detail": "Access forbidden"}
-
-
-@pytest.mark.asyncio
-async def test_billing_entitlements_returns_own_organization_entitlements(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    app = _app(monkeypatch)
-    org_id = uuid.uuid4()
-    app.dependency_overrides[billing_module.get_current_user] = lambda: _user(
-        str(org_id)
-    )
-
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        response = await client.get(f"/api/v1/billing/entitlements/{org_id}")
-
-    assert response.status_code == 200
-    assert response.json()["features"] == {"agent_context_runtime": True}
-
-
-@pytest.mark.asyncio
-async def test_billing_entitlements_allows_superuser_cross_organization_lookup(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    app = _app(monkeypatch)
-    app.dependency_overrides[billing_module.get_current_user] = lambda: _user(
-        str(uuid.uuid4()), is_superuser=True
-    )
-    app.state.billing_database.get.return_value = SimpleNamespace(
-        is_active=True, is_superuser=True
-    )
-
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        response = await client.get(f"/api/v1/billing/entitlements/{uuid.uuid4()}")
-
-    assert response.status_code == 200
 
 
 @pytest.mark.asyncio
@@ -210,23 +149,3 @@ async def test_billing_entitlements_rejects_expired_user_session(
         )
 
     assert response.status_code == 401
-
-
-@pytest.mark.asyncio
-async def test_billing_entitlements_rejects_removed_member_and_demoted_superuser() -> (
-    None
-):
-    org_id = uuid.uuid4()
-    user = _user(str(org_id), is_superuser=True)
-    database = AsyncMock()
-    database.get.return_value = SimpleNamespace(is_active=True, is_superuser=False)
-    database.execute.return_value = SimpleNamespace(scalar_one_or_none=lambda: None)
-
-    with pytest.raises(HTTPException) as exc_info:
-        await billing_module.require_billing_entitlement_access(
-            org_id=org_id,
-            user=user,
-            db=database,
-        )
-
-    assert exc_info.value.status_code == 403

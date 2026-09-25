@@ -21,7 +21,7 @@ WHAT THIS PINS
 3. live-e2e.yml (both of its jobs: live-e2e and metrics-executed-proof)
    installs with `uv sync --frozen` and puts `.venv/bin` on PATH (the run
    scripts call `python3`), and its path filter selects on uv.lock.
-4. The scan is not vacuous: it must see the known allowed installs.
+4. The scan is not vacuous: it must read at least 50 workflow `run:` steps.
 """
 
 from __future__ import annotations
@@ -34,14 +34,10 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS_DIR = REPO_ROOT / ".github" / "workflows"
 
-# (workflow file, job id) -> why it is still unlocked. Out of CHAOS-6589's
-# scope (the E2E workflows); each is a follow-up to move to `uv sync --frozen`.
-ALLOWED_UNLOCKED: dict[tuple[str, str], str] = {
-    ("integration.yml", "integration"): "integration tier; not an E2E workflow",
-    ("lint.yml", "lint-job"): "installs ruff==0.16.5 + the project for the lint gate",
-    ("test.yml", "coverage"): "coverage-gated tier; not an E2E workflow",
-    ("test.yml", "docs-tests"): "docs guards; not an E2E workflow",
-}
+# (workflow file, job id) -> why it is still unlocked. Empty since CHAOS-6646
+# moved the last four jobs to `uv sync --frozen`; an entry needs a reason a
+# reviewer can accept and the test below fails once the job is locked again.
+ALLOWED_UNLOCKED: dict[tuple[str, str], str] = {}
 
 E2E_WORKFLOW = "live-e2e.yml"
 E2E_JOBS = ("live-e2e", "metrics-executed-proof")
@@ -83,6 +79,18 @@ def _unlocked_jobs(workflows_dir: Path) -> set[tuple[str, str]]:
     return found
 
 
+def _run_steps_scanned(workflows_dir: Path) -> int:
+    count = 0
+    for path in sorted(workflows_dir.glob("*.yml")):
+        for job in (_load(path).get("jobs") or {}).values():
+            count += sum(
+                1
+                for step in (job or {}).get("steps") or []
+                if isinstance(step.get("run"), str)
+            )
+    return count
+
+
 def test_no_unlisted_workflow_job_installs_from_the_unlocked_requirements_file() -> (
     None
 ):
@@ -104,8 +112,10 @@ def test_the_allowlist_is_not_stale() -> None:
         "Delete the entry -- an exception that outlives its reason hides the "
         "next regression in that job."
     )
-    # Vacuity guard: the scan must actually see installs.
-    assert found, "the scan found no unlocked install at all -- it is broken"
+    # Vacuity guard: with nothing to find, prove the scan still read the tree.
+    assert _run_steps_scanned(WORKFLOWS_DIR) >= 50, (
+        "the scan read fewer than 50 workflow `run:` steps -- it is broken"
+    )
 
 
 def test_the_e2e_jobs_install_the_lock() -> None:

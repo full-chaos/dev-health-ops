@@ -286,6 +286,17 @@ func NewNativeSourceDiscoveryService(
 	}, nil
 }
 
+// WithClock sets the instant discovery stamps on the rows it writes
+// (discovered_at, last_seen_at): a caller serving a request passes the
+// request's clock, as Python's discovery reads the same datetime.now the
+// rest of the request does. nil keeps the wall clock.
+func (service *NativeSourceDiscoveryService) WithClock(now func() time.Time) *NativeSourceDiscoveryService {
+	if now != nil {
+		service.now = now
+	}
+	return service
+}
+
 // WritePrometheus exposes provider_source_discovery_total.
 func (service *NativeSourceDiscoveryService) WritePrometheus(output io.Writer) error {
 	return service.telemetry.WritePrometheus(output)

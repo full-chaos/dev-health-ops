@@ -83,6 +83,10 @@ func dependencyFailure(ctx context.Context, logger *slog.Logger, dependency, rea
 // package (internal/api/<area>, internal/apiservice/<area>) never opens its
 // own.
 type Deps struct {
+	// SyncJiraHTTP is the sync config create path's Jira project discovery
+	// HTTP client (nil: the area's default); a test sets one that trusts
+	// its fake Jira's certificate.
+	SyncJiraHTTP *http.Client
 	// LegacyIngestMetrics counts the legacy ingest routes' credential
 	// refusals (registered on the operator metrics endpoint by configure).
 	LegacyIngestMetrics *legacyingest.Metrics

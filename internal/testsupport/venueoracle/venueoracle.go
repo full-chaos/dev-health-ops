@@ -234,6 +234,12 @@ elif mode == "serve":
         for _module_name in os.environ.get("VENUE_PINNED_NOW_MODULES", "").split(","):
             if _module_name:
                 setattr(_importlib.import_module(_module_name), "datetime", _PinnedDatetime)
+        # Same rule for a module that reads the clock through its own
+        # global name 'time' (croniter's "from time import time"): the
+        # listed modules' time() returns the pinned instant's epoch.
+        for _module_name in os.environ.get("VENUE_PINNED_TIME_MODULES", "").split(","):
+            if _module_name:
+                setattr(_importlib.import_module(_module_name), "time", lambda: _pin.timestamp())
     from fastapi.testclient import TestClient
     from dev_health_ops.api.main import app
     # VENUE_STRIPE_SUBSCRIPTION_HANDLERS_AS_DICT=1 hands the router's

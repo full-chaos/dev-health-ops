@@ -158,7 +158,7 @@ func TestRefundCreate(t *testing.T) {
 		`SELECT string_agg(stripe_invoice_id || '=' || coalesce(payment_intent_id, 'null'), ',' ORDER BY stripe_invoice_id) FROM invoices
 			WHERE stripe_invoice_id IN ('in_pi', 'in_charge', 'in_none')`, "in_charge=,in_none=null,in_pi=pi_listed")
 	expect("the refund metadata names the org and invoice",
-		`SELECT DISTINCT (metadata::jsonb - 'refund_id')::text FROM refunds WHERE stripe_payment_intent_id = 'pi_listed'`,
+		`SELECT DISTINCT (metadata::jsonb - 'refund_id' - 'requested_amount')::text FROM refunds WHERE stripe_payment_intent_id = 'pi_listed'`,
 		`{"org_id": "`+seed.orgA.String()+`", "invoice_id": "`+invIntent+`"}`)
 	// What reached Stripe: the listed payments are the paid ones, and each
 	// refund names its payment, amount, reason and metadata.
@@ -190,12 +190,12 @@ func TestRefundCreate(t *testing.T) {
 var refundRowID = regexp.MustCompile(`&metadata\[refund_id\]=[0-9a-f-]{36}`)
 
 func wantRefundCalls(org string) string {
-	refund := func(invoice, amount, payment, reason string) string {
+	refund := func(invoice, amount, requested, payment, reason string) string {
 		form := "amount=" + amount
 		if strings.HasPrefix(payment, "ch_") {
 			form += "&charge=" + payment
 		}
-		form += "&metadata[invoice_id]=" + invoice + "&metadata[org_id]=" + org
+		form += "&metadata[invoice_id]=" + invoice + "&metadata[org_id]=" + org + "&metadata[requested_amount]=" + requested
 		if strings.HasPrefix(payment, "pi_") {
 			form += "&payment_intent=" + payment
 		}
@@ -208,16 +208,16 @@ func wantRefundCalls(org string) string {
 		return "GET /v1/invoice_payments | query=invoice=" + invoice + "&status=paid | form="
 	}
 	return strings.Join([]string{
-		refund(invPaidA, "2000", "pi_A2", "duplicate"),
-		refund(invPaidA, "4000", "pi_A2", ""),
+		refund(invPaidA, "2000", "2000", "pi_A2", "duplicate"),
+		refund(invPaidA, "4000", "balance", "pi_A2", ""),
 		payments("in_pi"),
-		refund("77777777-0000-4000-8000-000000000001", "300", "pi_listed", ""),
-		refund("77777777-0000-4000-8000-000000000001", "1", "pi_listed", ""),
-		refund("77777777-0000-4000-8000-000000000001", "599", "pi_listed", ""),
+		refund("77777777-0000-4000-8000-000000000001", "300", "300", "pi_listed", ""),
+		refund("77777777-0000-4000-8000-000000000001", "1", "1", "pi_listed", ""),
+		refund("77777777-0000-4000-8000-000000000001", "599", "599", "pi_listed", ""),
 		payments("in_charge"),
-		refund("77777777-0000-4000-8000-000000000002", "500", "ch_bare", ""),
+		refund("77777777-0000-4000-8000-000000000002", "500", "balance", "ch_bare", ""),
 		payments("in_none"),
 		payments("in_pi_bad"),
-		refund("77777777-0000-4000-8000-000000000003", "300", "pi_fail", ""),
+		refund("77777777-0000-4000-8000-000000000003", "300", "balance", "pi_fail", ""),
 	}, "\n")
 }

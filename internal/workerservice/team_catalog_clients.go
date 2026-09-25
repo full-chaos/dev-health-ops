@@ -12,6 +12,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
+	"github.com/full-chaos/dev-health-ops/internal/syncbudget"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -246,8 +247,22 @@ func (resolver teamCatalogClientResolver) ResolveClient(
 	// fresh credential the way a claimed provider-unit's next attempt does,
 	// so silently continuing on a mismatched witness has no later chance to
 	// self-correct.
+	//
+	// The witness is recomputed by syncbudget's fingerprint, the one port of
+	// credentials/fingerprint.py credential_fingerprint: over the credential
+	// row's {**config, **decrypted} mapping, exactly as the planner (and the
+	// Go materializer) stamped it. It re-reads the row rather than hashing
+	// the resolved Credential, whose typed accessors cannot reproduce the
+	// mapping Python hashed (CHAOS-6689: every run with a base_url, a
+	// non-string identifier or a config-held identifier failed closed on a
+	// false mismatch).
 	if stampedFingerprint != "" {
-		if computed := providerfoundation.CredentialFingerprint(credential, credentialID, integrationID); computed != stampedFingerprint {
+		loader := syncbudget.Loader{DB: resolver.pool, Decryptor: resolver.credentials.Decryptor}
+		computed, err := loader.PlanFingerprint(ctx, orgID, integrationID, provider, &credentialID)
+		if err != nil {
+			return providerfoundation.Credential{}, nil, "", fmt.Errorf("%w: integration=%s: %v", errTeamCatalogCredentialFingerprintMismatch, integrationID, err)
+		}
+		if computed != stampedFingerprint {
 			return providerfoundation.Credential{}, nil, "", fmt.Errorf("%w: integration=%s", errTeamCatalogCredentialFingerprintMismatch, integrationID)
 		}
 	}

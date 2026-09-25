@@ -68,6 +68,7 @@ func TestInlineRunsEveryDatasetOfATargetInOrder(t *testing.T) {
 		"deployments": {"deployments"},
 		"security":    {"security"},
 	}
+
 	providerArgs := map[string][]string{
 		"github": {"--provider", "github", "--owner", "acme", "--repo", "api", "--auth", "ghp-secret"},
 		"gitlab": {"--provider", "gitlab", "--project-id", "77", "--auth", "glpat-secret"},
@@ -148,7 +149,6 @@ func TestInlineRefusesWhatItCannotRunWithoutOpeningAnything(t *testing.T) {
 	}{
 		{"batch", "git", []string{"--provider", "github", "-s", "acme/*", "--auth", "tok"}, inlineEnv, ticketBatch},
 		{"local", "git", []string{"--provider", "local"}, inlineEnv, ticketLocal},
-		{"incidents", "incidents", gl, inlineEnv, ticketIncidents},
 		{"cicd", "cicd", gh, inlineEnv, ticketChunked},
 		{"tests", "tests", gl, inlineEnv, ticketChunked},
 		{"first org from Postgres", "git", gh, map[string]string{"CLICKHOUSE_URI": inlineEnv["CLICKHOUSE_URI"]}, ticketDBLookups},
@@ -198,5 +198,28 @@ func TestInlineOpenFailureDoesNotEchoTheDSN(t *testing.T) {
 		[]string{"--provider", "github", "--owner", "a", "--repo", "b", "--auth", "tok"}, inlineEnv)
 	if code != cli.ExitFailure || strings.Contains(stderr, "ch-secret") || len(h.runs) != 0 {
 		t.Fatalf("exit %d stderr %q runs %d: an unreachable store fails (1) without leaking the DSN or running a route", code, stderr, len(h.runs))
+	}
+}
+
+// TestInlineRunsGitLabIncidentsAndRefusesGitHubWithPythonsMessage: incidents is
+// a GitLab dataset the worker serves; GitHub has no native incident source and
+// process_github_repo raises a ValueError (uncaught: exit 1) that the verb
+// reproduces verbatim, without opening a store or running a route.
+func TestInlineRunsGitLabIncidentsAndRefusesGitHubWithPythonsMessage(t *testing.T) {
+	h := &inlineHarness{}
+	code, stdout, stderr := runVerb(t, "incidents", h.executor(),
+		[]string{"--provider", "gitlab", "--project-id", "77", "--auth", "glpat-secret"}, inlineEnv)
+	if code != cli.ExitOK || stdout != "" || !reflect.DeepEqual(h.datasets(), []string{"incidents"}) {
+		t.Fatalf("gitlab incidents: exit %d stdout %q stderr %q datasets %v", code, stdout, stderr, h.datasets())
+	}
+
+	h = &inlineHarness{}
+	code, stdout, stderr = runVerb(t, "incidents", h.executor(),
+		[]string{"--provider", "github", "--owner", "a", "--repo", "b", "--auth", "ghp-secret"}, inlineEnv)
+	if code != cli.ExitFailure || stdout != "" || !strings.Contains(stderr, "GitHub does not expose a native incident source; sync work items instead") {
+		t.Fatalf("github incidents: exit %d stdout %q stderr %q, want Python's ValueError text and exit 1", code, stdout, stderr)
+	}
+	if len(h.runs) != 0 || len(h.opened) != 0 || strings.Contains(stderr, "ghp-secret") {
+		t.Fatalf("a refused request must run and open nothing and leak nothing: runs=%v opened=%v stderr=%q", h.runs, h.opened, stderr)
 	}
 }

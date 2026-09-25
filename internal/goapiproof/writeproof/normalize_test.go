@@ -1,10 +1,18 @@
 package writeproof
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+
+	"github.com/full-chaos/dev-health-ops/internal/goapiproof"
 )
 
 var epoch = time.Date(2026, 9, 25, 12, 0, 0, 0, time.UTC)
@@ -208,3 +216,67 @@ func TestVariablesAreBuiltPerRunWhenTheCaseSaysSo(t *testing.T) {
 		t.Error("a static case must send its text")
 	}
 }
+
+func TestAMapKeyThatSpellsAnInstantIsAKeyNotAValue(t *testing.T) {
+	n := NewNormalizer(nil, "", epoch)
+	got := mustValue(t, n, map[string]any{"2026-01-02T03:04:05+00:00": "v"}).(map[string]any)
+	if _, ok := got["2026-01-02T03:04:05+00:00"]; !ok {
+		t.Errorf("a key was rewritten as an instant: %v", got)
+	}
+}
+
+func TestVariablesAreResolvedOnceBeforeAnythingIsSeeded(t *testing.T) {
+	calls := 0
+	seeded := false
+	c := Case{Name: "n", Operation: "op", Seeder: seedRecorder{seeded: &seeded}, Tables: []Table{{Label: "t", SQL: "select 1"}}, BaselineDigest: "sha256:abc",
+		Variables: func(string, RunTag) string { calls++; return `{"call":` + fmt.Sprint(calls) + `}` }}
+	var sent string
+	_, err := Execute(context.Background(), refusingDB{}, "org", c, "run", "doc", func(_ context.Context, _, variables string) (Response, error) {
+		sent = variables
+		return Response{Status: 200, Body: []byte(`{"data":{}}`)}, errors.New("stop before reading tables")
+	})
+	_ = err
+	if calls != 1 {
+		t.Errorf("the variables builder ran %d times: validation and send could see different text", calls)
+	}
+	if sent != `{"call":1}` {
+		t.Errorf("the poster received %q, not the one text that was validated", sent)
+	}
+}
+
+func TestVariablesThatAreNotJSONRefuseBeforeTheSeed(t *testing.T) {
+	seeded := false
+	c := Case{Name: "n", Operation: "op", Seeder: seedRecorder{seeded: &seeded}, Tables: []Table{{Label: "t", SQL: "select 1"}}, BaselineDigest: "sha256:abc",
+		Variables: func(string, RunTag) string { return `{not json` }}
+	_, err := Execute(context.Background(), refusingDB{}, "org", c, "run", "doc", func(context.Context, string, string) (Response, error) {
+		t.Error("the mutation was posted with invalid variables")
+		return Response{}, nil
+	})
+	if !errors.Is(err, ErrNotExecuted) {
+		t.Fatalf("want ErrNotExecuted, got %v", err)
+	}
+	if seeded {
+		t.Error("the dataset was seeded although the variables were refused")
+	}
+}
+
+type seedRecorder struct{ seeded *bool }
+
+func (s seedRecorder) Seed(context.Context, goapiproof.Querier, string, RunTag) error {
+	*s.seeded = true
+	return nil
+}
+func (seedRecorder) Teardown(context.Context, goapiproof.Querier, string, RunTag) error { return nil }
+
+// refusingDB answers every read with an error, so Execute stops after the post.
+type refusingDB struct{}
+
+func (refusingDB) Exec(context.Context, string, ...any) (pgconn.CommandTag, error) {
+	return pgconn.CommandTag{}, nil
+}
+func (refusingDB) Query(context.Context, string, ...any) (pgx.Rows, error) {
+	return nil, errors.New("no database in this test")
+}
+func (refusingDB) QueryRow(context.Context, string, ...any) pgx.Row { return nil }
+
+var _ goapiproof.Querier = refusingDB{}

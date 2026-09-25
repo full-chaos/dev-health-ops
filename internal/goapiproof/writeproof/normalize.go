@@ -52,6 +52,12 @@ func (n *Normalizer) String(value string) string {
 	if instant, err := time.Parse(time.RFC3339Nano, value); err == nil {
 		return n.instant(instant)
 	}
+	return n.mask(value)
+}
+
+// mask replaces the run tag and generated ids. Map KEYS go through it alone:
+// an instant is a value, and a key that happens to spell one is a name.
+func (n *Normalizer) mask(value string) string {
 	if n.run != "" {
 		value = strings.ReplaceAll(value, n.run, "<run>")
 	}
@@ -128,7 +134,7 @@ func (n *Normalizer) Value(value any) (any, error) {
 			if err != nil {
 				return nil, err
 			}
-			out[n.String(key)] = normalized
+			out[n.mask(key)] = normalized
 		}
 		return out, nil
 	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, float32, float64:

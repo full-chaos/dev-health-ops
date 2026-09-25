@@ -12,6 +12,7 @@ import (
 	"os"
 	osexec "os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"sort"
 	"strconv"
@@ -47,15 +48,17 @@ const (
 func str(value string) *string { return &value }
 
 // teamPage is one teamSearchV2 answer: the generated TeamSearchConnection in
-// gen.TeamSearchV2Data's envelope, plus
+// the generated gen.TeamSearchV2Data envelope, plus
 // top-level GraphQL errors when errs is set.
 func teamPage(nodes []gen.TeamNode, hasNext bool, cursor *string, errs bool) []byte {
 	connection := &gen.TeamSearchConnection{PageInfo: gen.TeamPageInfo{HasNextPage: hasNext, EndCursor: cursor}}
 	for index := range nodes {
 		connection.Nodes = append(connection.Nodes, gen.TeamSearchResultNode{Team: &nodes[index]})
 	}
-	// gen.TeamSearchV2Data's envelope: {"team": {"teamSearchV2": <connection>}}.
-	return envelope(map[string]any{"team": map[string]any{"teamSearchV2": connection}}, errs)
+	data := gen.TeamSearchV2Data{Team: &struct {
+		Search *gen.TeamSearchConnection `json:"teamSearchV2"`
+	}{Search: connection}}
+	return envelope(data, errs)
 }
 
 // value flattens a generated Cypher value union into the JSON the gateway
@@ -84,27 +87,58 @@ func value(v gen.GraphStoreCypherQueryV2Value) map[string]any {
 }
 
 // graphPage is one Teamwork Graph answer for field (teamworkGraph_teamUsers or
-// teamworkGraph_teamActiveProjects): the generated connection, its Cypher
-// values flattened.
+// teamworkGraph_teamActiveProjects): the generated connection in its generated
+// data envelope (gen.TeamUsersData or gen.TeamActiveProjectsData), marshalled.
+// The generated Cypher value union has no MarshalJSON, so each column value is
+// replaced by its gateway form (value). The page must decode, through the
+// client's own decoder, back to the connection it was built from: a flattening
+// that is not the inverse of the generated UnmarshalJSON panics here.
 func graphPage(field string, rows [][]gen.GraphStoreCypherQueryV2Column, hasNext bool, cursor *string, errs bool) []byte {
-	edges := []map[string]any{}
-	for _, row := range rows {
-		var columns []map[string]any
-		for _, column := range row {
-			entry := map[string]any{"key": column.Key, "value": nil}
-			if column.Value != nil {
-				entry["value"] = value(*column.Value)
-			}
-			columns = append(columns, entry)
-		}
-		edges = append(edges, map[string]any{"node": map[string]any{"columns": columns}})
-	}
 	// The query selects hasPreviousPage, so a gateway always answers it.
 	noPrevious := false
-	pageInfo, _ := json.Marshal(gen.GraphStoreCypherQueryV2PageInfo{HasNextPage: hasNext, HasPreviousPage: &noPrevious, EndCursor: cursor})
-	var info map[string]any
-	_ = json.Unmarshal(pageInfo, &info)
-	data := map[string]any{field: map[string]any{"pageInfo": info, "edges": edges, "version": "1"}}
+	connection := gen.GraphStoreCypherQueryV2Connection{
+		PageInfo: gen.GraphStoreCypherQueryV2PageInfo{HasNextPage: hasNext, HasPreviousPage: &noPrevious, EndCursor: cursor},
+		Edges:    []gen.GraphStoreCypherQueryV2Edge{},
+		Version:  "1",
+	}
+	for _, row := range rows {
+		connection.Edges = append(connection.Edges, gen.GraphStoreCypherQueryV2Edge{Node: gen.GraphStoreCypherQueryV2Node{Columns: row}})
+	}
+	var typed any
+	decode := gen.DecodeTeamUsers
+	switch field {
+	case usersField:
+		typed = gen.TeamUsersData{Result: &connection}
+	case projectsField:
+		typed = gen.TeamActiveProjectsData{Result: &connection}
+		decode = gen.DecodeTeamActiveProjects
+	default:
+		panic("graphPage: unknown field " + field)
+	}
+	raw, err := json.Marshal(typed)
+	if err != nil {
+		panic(err)
+	}
+	var data map[string]any
+	if err := json.Unmarshal(raw, &data); err != nil {
+		panic(err)
+	}
+	edges := data[field].(map[string]any)["edges"].([]any)
+	for i, edge := range connection.Edges {
+		columns := edges[i].(map[string]any)["node"].(map[string]any)["columns"].([]any)
+		for j, column := range edge.Node.Columns {
+			if column.Value != nil {
+				columns[j].(map[string]any)["value"] = value(*column.Value)
+			}
+		}
+	}
+	decoded, err := decode(data)
+	if err != nil {
+		panic(fmt.Sprintf("graphPage: the client cannot decode the page: %v", err))
+	}
+	if !reflect.DeepEqual(*decoded, connection) {
+		panic(fmt.Sprintf("graphPage: the page decodes to %+v, not to the connection it was built from", *decoded))
+	}
 	return envelope(data, errs)
 }
 
@@ -633,7 +667,7 @@ func compare(python, goSide map[string]outcome) []string {
 // IterTeamActiveProjects) with the full-chaos/atlassian Python Teams client
 // at the same sha (iter_teams, iter_team_users, iter_team_active_projects):
 // both read one fake gateway that serves a corpus built from the client's
-// generated response types, lax and strict, and every mapped model (typed
+// generated response types, in the strict configuration the sync runs, and every mapped model (typed
 // leaves) or the fact of an error must match.
 //
 // The known-defect gate plants one divergence in each compared family (a

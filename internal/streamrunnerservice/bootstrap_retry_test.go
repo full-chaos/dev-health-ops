@@ -166,7 +166,7 @@ func TestStreamRunnerReadinessRecoversAfterAStartupDependencyOutage(t *testing.T
 			testCase.arm(storage)
 			var opens atomic.Int64
 			var logs syncBuffer
-			registry := health.NewRegistry(100 * time.Millisecond)
+			registry := health.NewRegistry(readinessTestCheckTimeout)
 			components, err := configureStreamRunnerDependenciesWithSources(
 				context.Background(),
 				config.Config{Profile: "ingest", StreamConfiguredReplicas: 1},
@@ -240,7 +240,7 @@ func TestStreamRunnerReadinessRecoversAfterAStartupDependencyOutage(t *testing.T
 // it did not open, and makes no further attempt after shutdown returns.
 func TestStreamRunnerShutdownDuringAStartupOutageIsClean(t *testing.T) {
 	var opens atomic.Int64
-	registry := health.NewRegistry(100 * time.Millisecond)
+	registry := health.NewRegistry(readinessTestCheckTimeout)
 	components, err := configureStreamRunnerDependenciesWithSources(
 		context.Background(),
 		config.Config{Profile: "ingest", StreamConfiguredReplicas: 1},
@@ -366,7 +366,7 @@ func TestStreamConsumerFailuresAfterStartupReachTheRuntime(t *testing.T) {
 		{name: "consumer start", storage: &failingStartStorage{discoverErr: errors.New("discovery down")}},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			registry := health.NewRegistry(100 * time.Millisecond)
+			registry := health.NewRegistry(readinessTestCheckTimeout)
 			components, err := configureStreamRunnerDependenciesWithSources(
 				context.Background(),
 				config.Config{Profile: "ingest", StreamConfiguredReplicas: 1},
@@ -403,7 +403,7 @@ func TestStreamConsumerFailuresAfterStartupReachTheRuntime(t *testing.T) {
 }
 
 func TestStreamConsumerSupervisorStartsOnceAndReservesDrain(t *testing.T) {
-	registry := health.NewRegistry(100 * time.Millisecond)
+	registry := health.NewRegistry(readinessTestCheckTimeout)
 	components, err := configureStreamRunnerDependenciesWithSources(
 		context.Background(),
 		config.Config{Profile: "ingest", StreamConfiguredReplicas: 1},

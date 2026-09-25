@@ -105,9 +105,9 @@ import json
 import logging
 import math
 import os
+import re
 import time
 from typing import TYPE_CHECKING, Any
-from urllib.parse import urlsplit
 
 import httpx
 from starlette.requests import Request
@@ -178,46 +178,79 @@ def _internal_query_api_url() -> str | None:
 _CLUSTER_HOST_SUFFIXES = (".svc", ".svc.cluster.local", ".cluster.local")
 
 
-def _origin(url: str) -> tuple[str, str, int | None] | None:
+#: A DNS label: what a query-api Service host may consist of. A single-label
+#: host must also start with a letter, so a numeric IPv4 spelling such as
+#: ``2130706433`` or ``0x7f000001`` is never mistaken for a Service name.
+_DNS_LABEL = re.compile(r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?")
+
+
+def _normalized_url(value: str) -> httpx.URL | None:
+    """``value`` as httpx will target it: IDNA-normalised host (an ideographic
+    full stop becomes a dot), a default port dropped. Every host or origin
+    decision below is taken on THIS form and THIS form is what is sent, so what
+    was validated is what is contacted. None when httpx cannot parse it."""
     try:
-        parts = urlsplit(url)
-        return (parts.scheme, (parts.hostname or "").lower(), parts.port)
-    except ValueError:
+        url = httpx.URL(value)
+        _host(url)  # IDNA-decoding a malformed A-label raises
+        return url
+    except (httpx.InvalidURL, ValueError):
         return None
 
 
-def _internal_url_problem(value: str, public_url: str | None) -> str | None:
-    """Why ``value`` may not receive the internal identity headers, or None.
-    Fail closed: the edge sends nothing to a URL it cannot tell is internal.
-    Refused: a scheme other than plain http (an Ingress host is https), userinfo,
-    a query or fragment, a public-looking host, and the very origin of
-    GO_API_QUERY_API_URL (the public listener, which strips the headers)."""
+def _host(url: httpx.URL) -> str:
+    """The ASCII (A-label) host httpx puts on the wire, lower-cased."""
+    return url.raw_host.decode("ascii").lower()
+
+
+def _origin(url: httpx.URL) -> tuple[str, str, int | None]:
+    return (url.scheme, _host(url), url.port)
+
+
+def _internal_host(host: str) -> bool:
+    if not host:
+        return False
     try:
-        parts = urlsplit(value)
-        hostname = (parts.hostname or "").lower()
-        parts.port  # noqa: B018 -- raises ValueError on a malformed port
+        address = ipaddress.ip_address(host)
     except ValueError:
-        return "malformed"
-    if parts.scheme != "http" or not hostname:
-        return "scheme_or_host"
-    if parts.username is not None or parts.password is not None:
-        return "userinfo"
-    if parts.query or parts.fragment:
-        return "query_or_fragment"
-    internal_host = "." not in hostname or hostname.endswith(_CLUSTER_HOST_SUFFIXES)
-    if not internal_host:
-        try:
-            address = ipaddress.ip_address(hostname)
-            internal_host = (
-                address.is_loopback or address.is_private or address.is_link_local
-            )
-        except ValueError:
-            internal_host = False
-    if not internal_host:
-        return "public_host"
-    if public_url and _origin(value) == _origin(public_url):
-        return "same_as_public_url"
-    return None
+        labels = host.split(".")
+        if not all(_DNS_LABEL.fullmatch(label) for label in labels):
+            return False
+        if len(labels) == 1:
+            return labels[0][0].isalpha()
+        return host.endswith(_CLUSTER_HOST_SUFFIXES)
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped:
+        address = address.ipv4_mapped
+    return (
+        address.is_loopback or address.is_private or address.is_link_local
+    ) and not address.is_unspecified
+
+
+def _internal_url_target(
+    value: str, public_url: str | None
+) -> tuple[str | None, str | None]:
+    """``(url_to_send_to, None)`` when ``value`` may receive the internal
+    identity headers, else ``(None, reason)``. Fail closed: the edge sends
+    nothing to a URL it cannot tell is internal. The returned URL is httpx's
+    normalised form of ``value``; the caller must send to exactly that string.
+    Refused: a scheme other than plain http (an Ingress host is https),
+    userinfo, a query or fragment, a public-looking host, and the very origin of
+    GO_API_QUERY_API_URL (the public listener, which strips the headers)."""
+    url = _normalized_url(value)
+    if url is None:
+        return None, "malformed"
+    if url.scheme != "http" or not _host(url):
+        return None, "scheme_or_host"
+    if url.userinfo:
+        return None, "userinfo"
+    if url.query or url.fragment:
+        return None, "query_or_fragment"
+    if not _internal_host(_host(url)):
+        return None, "public_host"
+    if public_url:
+        public = _normalized_url(public_url)
+        if public is not None and _origin(public) == _origin(url):
+            return None, "same_as_public_url"
+    return str(url), None
 
 
 def _internal_identity_headers(user: AuthenticatedUser) -> dict[str, str]:
@@ -716,15 +749,18 @@ class GoApiDispatchRouter(GraphQLRouter[_Context, _RootValue]):
             # The internal identity carrier (CHAOS-6144 P3): plain headers to
             # the internal listener; nothing is signed, and tier /
             # licensed_features are not part of the identity query-api reads.
-            problem = _internal_url_problem(
+            internal_target, problem = _internal_url_target(
                 internal_url, os.getenv("GO_API_QUERY_API_URL")
             )
-            if problem is not None:
+            if problem is not None or internal_target is None:
                 # Fail closed and LOUD: nothing is sent to a URL that is not
                 # provably internal (a public host would receive the identity).
                 logger.error(
                     "go_api_dispatch.internal_url_refused",
-                    extra={"operation": selected_operation, "reason": problem},
+                    extra={
+                        "operation": selected_operation,
+                        "reason": problem or "unknown",
+                    },
                 )
                 return self._go_failed(
                     selected_operation, "go_internal_url_refused", 0.0
@@ -739,7 +775,7 @@ class GoApiDispatchRouter(GraphQLRouter[_Context, _RootValue]):
                 return self._go_failed(
                     selected_operation, "go_identity_not_header_safe", 0.0
                 )
-            target_url = internal_url
+            target_url = internal_target
         else:
             if context.tier is None or context.licensed_features is None:
                 # Best-effort resolution in get_context can legitimately fail

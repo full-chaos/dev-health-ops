@@ -588,6 +588,16 @@ async def test_internal_url_alone_does_not_turn_the_dispatcher_on(
         "http://query-api:8090",  # the origin of GO_API_QUERY_API_URL
         "ftp://query-api-internal:8091",
         "query-api-internal:8091",
+        # r2: what httpx contacts is not what the raw string says.
+        "http://attacker\u3002com:8091",  # U+3002 IDNA-normalises to attacker.com
+        "http://attacker\uff0ecom:8091",  # fullwidth full stop, same
+        "http://attacker\uff61com:8091",  # halfwidth ideographic full stop, same
+        "http://QUERY-API.:80",
+        "http://2130706433:8091",  # numeric IPv4 spelling of 127.0.0.1
+        "http://0x7f000001:8091",
+        "http://[::ffff:8.8.8.8]:8091",  # IPv4-mapped public address
+        "http://0.0.0.0:8091",  # unspecified
+        "http://a%2eb:8091",
     ],
 )
 async def test_internal_url_not_provably_internal_is_refused_and_nothing_is_sent(
@@ -612,13 +622,17 @@ async def test_internal_url_not_provably_internal_is_refused_and_nothing_is_sent
 
 
 @pytest.mark.parametrize(
-    "internal_url",
+    ("internal_url", "sent"),
     [
-        "http://query-api-internal:8091",
-        "http://query-api.dev-health.svc:8091",
-        "http://query-api.dev-health.svc.cluster.local:8091",
-        "http://10.1.2.3:8091",
-        "http://127.0.0.1:8091",
+        ("http://query-api-internal:8091", "http://query-api-internal:8091/query"),
+        ("http://query-api.dev-health.svc:8091", None),
+        ("http://query-api.dev-health.svc.cluster.local:8091", None),
+        ("http://10.1.2.3:8091", None),
+        ("http://127.0.0.1:8091", None),
+        ("http://[::ffff:10.1.2.3]:8091", None),
+        # What is validated is what is sent: httpx's normalised form.
+        ("http://Query-Api-Internal:8091", "http://query-api-internal:8091/query"),
+        ("http://query-api-internal:80", "http://query-api-internal/query"),
     ],
 )
 async def test_internal_url_classes_that_are_allowed(
@@ -626,6 +640,7 @@ async def test_internal_url_classes_that_are_allowed(
     routing_row_mode,
     monkeypatch: pytest.MonkeyPatch,
     internal_url: str,
+    sent: str | None,
 ):
     routing_row_mode("primary")
     monkeypatch.setenv("QUERY_API_INTERNAL_URL", internal_url)
@@ -635,7 +650,120 @@ async def test_internal_url_classes_that_are_allowed(
     result = await router._maybe_dispatch_to_go(_post_request(TEST_QUERY), context)
 
     assert result is not None and result.status_code == 200
-    assert seen["url"] == f"{internal_url}/query"
+    assert seen["url"] == (sent or f"{internal_url}/query")
+
+
+@pytest.mark.parametrize(
+    ("public_url", "internal_url"),
+    [
+        ("http://query-api", "http://query-api:80"),
+        ("http://query-api:80", "http://query-api"),
+        ("http://query-api:80", "http://QUERY-API:0080"),
+        ("http://Query-Api", "http://query-api:80/"),
+    ],
+)
+async def test_default_port_spelling_cannot_hide_the_public_origin(
+    router: GoApiDispatchRouter,
+    routing_row_mode,
+    monkeypatch: pytest.MonkeyPatch,
+    public_url: str,
+    internal_url: str,
+):
+    """r2: origins are compared after httpx normalisation, so an explicit :80
+    and no port are the same origin (the public listener strips the headers)."""
+    routing_row_mode("primary")
+    monkeypatch.setenv("GO_API_QUERY_API_URL", public_url)
+    monkeypatch.setenv("QUERY_API_INTERNAL_URL", internal_url)
+    seen = _capture_outbound(monkeypatch)
+    context = _context(user=_sample_user(), tier=None, licensed_features=None)
+
+    result = await router._maybe_dispatch_to_go(_post_request(TEST_QUERY), context)
+
+    _assert_go_failure(result, reason="go_internal_url_refused")
+    assert "url" not in seen
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("http://query-api-internal:8091", "http://query-api-internal:8091"),
+        ("http://Query-Api-Internal:80", "http://query-api-internal"),
+        (
+            "http://query-api.dev-health.svc:8091/",
+            "http://query-api.dev-health.svc:8091/",
+        ),
+    ],
+)
+def test_internal_url_target_is_the_normalised_form_httpx_targets(
+    value: str, expected: str
+):
+    """Validated == sent: the accepted URL is returned in httpx's normalised
+    form and the dispatcher sends to exactly that string."""
+    assert go_api_dispatcher._internal_url_target(value, None) == (expected, None)
+
+
+_HOSTILE_INTERNAL_URLS = [
+    "http://attacker\u3002com",
+    "http://attacker\u3002com:8091",
+    "http://attacker\uff0ecom",
+    "http://attacker\uff61com",
+    "http://query-api\u3002example\u3002com",
+    "http://query-api:80",
+    "http://query-api:0080",
+    "http://QUERY-API",
+    "http://query-api.",
+    "http://2130706433",
+    "http://0x7f.1",
+    "http://017700000001",
+    "http://127.1",
+    "http://[::ffff:8.8.8.8]",
+    "http://[::ffff:808:808]",
+    "http://[2001:db8::1]",
+    "http://0.0.0.0",
+    "http://8.8.8.8",
+    "http://a%2eexample%2ecom",
+    "http://query-api%2f@attacker.com",
+    "http://query-api@attacker.com",
+    "http://attacker.com#@query-api",
+    "http://attacker.com?@query-api",
+    "http://query-api\\@attacker.com",
+    "http://query-api .attacker.com",
+    "http://\u2460",
+    "http://xn--",
+    "http://",
+    "http:///query-api",
+    "  http://attacker.com  ",
+]
+
+
+@pytest.mark.parametrize("internal_url", _HOSTILE_INTERNAL_URLS)
+async def test_whatever_httpx_contacts_is_internal_and_not_the_public_origin(
+    router: GoApiDispatchRouter,
+    routing_row_mode,
+    monkeypatch: pytest.MonkeyPatch,
+    internal_url: str,
+):
+    """The property, on what httpx will ACTUALLY target (its own normalisation:
+    IDNA host, default port dropped), not on the raw string: for every hostile
+    spelling either nothing is sent, or the request went to an origin that is
+    internal and is not the public listener's. Validated == contacted."""
+    routing_row_mode("primary")
+    monkeypatch.setenv("GO_API_QUERY_API_URL", "http://query-api:8090")
+    public = httpx.URL("http://query-api:8090")
+    monkeypatch.setenv("QUERY_API_INTERNAL_URL", internal_url)
+    seen = _capture_outbound(monkeypatch)
+    context = _context(user=_sample_user(), tier=None, licensed_features=None)
+
+    await router._maybe_dispatch_to_go(_post_request(TEST_QUERY), context)
+
+    if "url" not in seen:
+        return
+    target = httpx.URL(seen["url"])
+    assert target.scheme == "http" and not target.userinfo
+    assert go_api_dispatcher._internal_host(target.raw_host.decode("ascii").lower()), (
+        seen["url"]
+    )
+    assert (target.raw_host, target.port) != (public.raw_host, public.port)
 
 
 async def test_non_ascii_identity_values_pass_through_as_utf8_bytes(

@@ -485,6 +485,10 @@ func assertRuntimePrivileges(t *testing.T, ctx context.Context, domainURI, queue
 	if _, err := domainPool.Exec(ctx, "UPDATE public.sync_watermarks SET value='updated' WHERE key='privilege'"); err != nil {
 		t.Fatalf("domain role cannot UPDATE sync watermarks: %v", err)
 	}
+	// CHAOS-6622: the Jira rename watermark move deletes a superseded row.
+	if _, err := domainPool.Exec(ctx, "DELETE FROM public.sync_watermarks WHERE key='privilege'"); err != nil {
+		t.Fatalf("domain role cannot DELETE sync watermarks: %v", err)
+	}
 	if _, err := domainPool.Exec(
 		ctx,
 		"INSERT INTO public.sync_dispatch_outbox (id, state) VALUES ('00000000-0000-0000-0000-000000000003', 'pending')",
@@ -516,7 +520,6 @@ func assertRuntimePrivileges(t *testing.T, ctx context.Context, domainURI, queue
 		"SELECT nextval('public.domain_runtime_probe_id_seq')",
 		"INSERT INTO public.integrations (id) VALUES ('00000000-0000-0000-0000-000000000010')",
 		"DELETE FROM public.sync_run_units",
-		"DELETE FROM public.sync_watermarks",
 		"DELETE FROM public.sync_dispatch_outbox",
 	} {
 		if _, err := domainPool.Exec(ctx, statement); err == nil {

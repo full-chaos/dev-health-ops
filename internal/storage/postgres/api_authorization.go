@@ -252,7 +252,10 @@ func apiPosture() RolePosture {
 			// Sync state.
 			{"metric_checkpoints", false, false, true},
 			{"sync_compute_checkpoints", false, false, true},
-			{"sync_watermarks", false, false, true},
+			// UPDATE as of CHAOS-6622: the sync config create and update routes
+			// run Jira source discovery, which moves a renamed project's
+			// watermarks to its new key (DELETE was already the purge's).
+			{"sync_watermarks", false, true, true},
 			{"sync_run_reference_discoveries", false, false, true},
 			{"sync_dispatch_outbox", false, false, true},
 			{"sync_run_post_dispatches", false, false, true},

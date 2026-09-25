@@ -788,7 +788,9 @@ func runtimeGrantStatements(options MigrationOptions) []string {
 		// transactions that write sync_run_units and read by the scheduler's
 		// evidence refresh. No DELETE: the ledger is monotone by construction.
 		"DO $$ BEGIN IF to_regclass('public.sync_executed_proof_ledger') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_executed_proof_ledger TO " + domainRole + "; END IF; END $$",
-		"DO $$ BEGIN IF to_regclass('public.sync_watermarks') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_watermarks TO " + domainRole + "; END IF; END $$",
+		// CHAOS-6622: DELETE for the Jira rename watermark move (see
+		// domainPosture's sync_watermarks entry).
+		"DO $$ BEGIN IF to_regclass('public.sync_watermarks') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.sync_watermarks TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.sync_dispatch_outbox') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_dispatch_outbox TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.worker_job_outbox') IS NOT NULL THEN GRANT SELECT, INSERT ON TABLE public.worker_job_outbox TO " + domainRole + "; END IF; END $$",
 		// UPDATE added by CHAOS-4209 for stampCanonicalSyncConfig's last_sync_*

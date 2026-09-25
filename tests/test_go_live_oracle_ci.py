@@ -66,7 +66,11 @@ def _pinned_requirements() -> dict[str, str]:
 
 def test_go_quality_bootstraps_locked_live_oracle_dependencies() -> None:
     workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
-    steps = workflow["jobs"]["go-quality"]["steps"]
+    # CHAOS-6690: go-quality runs as the matrix job `go-quality-leg` (a fan-in
+    # named `go-quality` keeps the required context); every leg installs the
+    # locked oracle dependencies, because unit tests in the test/race legs run
+    # real Python programs too.
+    steps = workflow["jobs"]["go-quality-leg"]["steps"]
     commands = [str(step.get("run", "")).strip() for step in steps]
 
     install = (
@@ -80,7 +84,7 @@ def test_go_quality_bootstraps_locked_live_oracle_dependencies() -> None:
     # tests/tooling/test_check_go_public_verbs.py's VERB_STEPS), so it still
     # runs check_live_python_oracles and this bootstrap assertion still
     # holds.
-    quality_gate = "bash ci/check_go.sh ci"
+    quality_gate = "bash ci/check_go.sh ci-leg ${{ matrix.args }}"
     assert install in commands
     assert commands.index(install) < commands.index(quality_gate)
 

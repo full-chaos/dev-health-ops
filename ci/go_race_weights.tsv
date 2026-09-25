@@ -1,0 +1,25 @@
+# Measured wall seconds of one package under `go test -race` (CHAOS-6690), the weight
+# ci/go_race_shard.awk balances the race shards by. Only packages of 20 s or more are
+# listed; every other package weighs the awk default. The weights only need to be
+# roughly right: a stale one costs balance, never coverage (the shards always partition
+# the full package list). Key = import path relative to the module root. Sorted (LC_ALL=C),
+# no duplicates; tests/tooling/test_go_race_shards.py checks each row names a real package.
+cmd/dev-health-migration-matrix	21
+cmd/dho	29
+cmd/gqlgen-guard	27
+internal/fixturescli	61
+internal/goapicli/restprove	26
+internal/goapiproof	483
+internal/gqlgenguard	366
+internal/joboutbox	49
+internal/jobruntime	30
+internal/jobs	32
+internal/jobs/workgraph/edges	28
+internal/jobs/workgraph/units	307
+internal/platform/logging	23
+internal/providerfoundation	37
+internal/providersync	446
+internal/queryapi/investmentflow	34
+internal/storedversion	124
+internal/streamhandlers	86
+internal/streamrunnerservice	21

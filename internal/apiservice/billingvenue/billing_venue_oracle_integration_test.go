@@ -353,7 +353,13 @@ func (f *fakeStripe) serve(plane string, w http.ResponseWriter, r *http.Request)
 		// Stripe's idempotency: a key already used answers the refund it
 		// made, and makes no second one.
 		key := r.Header.Get("Idempotency-Key")
+		lost := map[string]int{"pi_lost500": http.StatusInternalServerError, "pi_lost408": http.StatusRequestTimeout}[form.Get("payment_intent")]
 		if made, seen := f.refundByKey[key]; seen && key != "" {
+			if lost != 0 {
+				w.WriteHeader(lost)
+				fmt.Fprint(w, `{"error": {"message": "venue: response lost", "type": "api_error"}}`)
+				return
+			}
 			fmt.Fprint(w, made)
 			return
 		}
@@ -381,6 +387,13 @@ func (f *fakeStripe) serve(plane string, w http.ResponseWriter, r *http.Request)
 			f.refunds, form.Get("amount"), charge, intentJSON, status, strings.Join(metadata, ", "))
 		if key != "" {
 			f.refundByKey[key] = made
+		}
+		// Accepted, then the answer is lost: the refund exists, the caller
+		// sees only an error, on every attempt.
+		if lost != 0 {
+			w.WriteHeader(lost)
+			fmt.Fprint(w, `{"error": {"message": "venue: response lost", "type": "api_error"}}`)
+			return
 		}
 		fmt.Fprint(w, made)
 	default:

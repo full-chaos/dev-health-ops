@@ -31,6 +31,10 @@ import (
 // Stripe unreachable leaves the row pending (the outcome is unknown, so its
 // amount stays held). Database triggers on the Go plane refuse a write.
 // The Python refund route cannot run (see TestRefundCreate): Go-only.
+// pendingDetail is the 409 detail for a create while the invoice holds a
+// refund whose Stripe outcome is not known.
+const pendingDetail = "A refund for this invoice is still pending; retry it with its Idempotency-Key"
+
 func TestRefundWriteFirstAndIdempotent(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
@@ -63,13 +67,16 @@ func TestRefundWriteFirstAndIdempotent(t *testing.T) {
 	}
 	const invIdem, invOrphan, invUpd, invDown, invFail = "88888888-0000-4000-8000-00000000000a", "88888888-0000-4000-8000-00000000000b",
 		"88888888-0000-4000-8000-00000000000c", "88888888-0000-4000-8000-00000000000d", "88888888-0000-4000-8000-00000000000e"
+	const invLost500, invLost408 = "88888888-0000-4000-8000-00000000000f", "88888888-0000-4000-8000-000000000010"
 	exec(`INSERT INTO invoices (id, org_id, stripe_invoice_id, stripe_customer_id, status, amount_due, amount_paid, currency,
 		payment_intent_id, metadata, created_at, updated_at) VALUES
 		('`+invIdem+`', $1, 'in_idem', 'cus_A', 'paid', 1000, 1000, 'usd', 'pi_idem', '{}', now(), now()),
 		('`+invOrphan+`', $1, 'in_orphan', 'cus_A', 'paid', 500, 500, 'usd', 'pi_orphan', '{}', now(), now()),
 		('`+invUpd+`', $1, 'in_upd', 'cus_A', 'paid', 600, 600, 'usd', 'pi_upd', '{}', now(), now()),
 		('`+invDown+`', $1, 'in_down', 'cus_A', 'paid', 300, 300, 'usd', NULL, '{}', now(), now()),
-		('`+invFail+`', $1, 'in_fail', 'cus_A', 'paid', 400, 400, 'usd', 'pi_fail', '{}', now(), now())`, seed.orgA)
+		('`+invFail+`', $1, 'in_fail', 'cus_A', 'paid', 400, 400, 'usd', 'pi_fail', '{}', now(), now()),
+		('`+invLost500+`', $1, 'in_lost500', 'cus_A', 'paid', 1000, 1000, 'usd', 'pi_lost500', '{}', now(), now()),
+		('`+invLost408+`', $1, 'in_lost408', 'cus_A', 'paid', 1000, 1000, 'usd', 'pi_lost408', '{}', now(), now())`, seed.orgA)
 	loaded, err := config.Load(config.Spec{Service: config.APIServiceName, LookupEnv: func(key string) (string, bool) {
 		value, ok := billingEnv[key]
 		return value, ok
@@ -139,6 +146,10 @@ func TestRefundWriteFirstAndIdempotent(t *testing.T) {
 	code, out := refund("retry: the key reused for another amount", "key-idem-1", `{"invoice_id":"`+invIdem+`","amount":200}`)
 	expect("retry: the key reused for another amount is refused", fmt.Sprint(code, " ", out["detail"]), "409 Idempotency-Key was used for a different refund request")
 	expect("retry: still one refund row", row(`SELECT count(*)::text FROM refunds WHERE invoice_id = '`+invIdem+`'`), "1")
+	code, out = refund("retry: the key reused with another reason", "key-idem-1", `{"invoice_id":"`+invIdem+`","amount":300,"reason":"fraudulent"}`)
+	expect("retry: the key reused with another reason is refused", fmt.Sprint(code, " ", out["detail"]), "409 Idempotency-Key was used for a different refund request")
+	code, out = refund("retry: the key reused with another description", "key-idem-1", `{"invoice_id":"`+invIdem+`","amount":300,"description":"x"}`)
+	expect("retry: the key reused with another description is refused", fmt.Sprint(code, " ", out["detail"]), "409 Idempotency-Key was used for a different refund request")
 
 	// 2. The row cannot be written: no Stripe refund.
 	exec(`CREATE FUNCTION venue_refuse_refund() RETURNS trigger LANGUAGE plpgsql AS $$
@@ -159,8 +170,8 @@ func TestRefundWriteFirstAndIdempotent(t *testing.T) {
 	expect("completion: 500", fmt.Sprint(code), "500")
 	expect("completion: the row is pending, holding its amount", row(`SELECT status || ' ' || amount::text || ' ' || (stripe_refund_id IS NULL)::text || ' ' || idempotency_key
 		FROM refunds WHERE invoice_id = '`+invUpd+`'`), "pending 250 true key-upd-1")
-	code, out = refund("completion: another refund meanwhile sees it held", "", `{"invoice_id":"`+invUpd+`","amount":351}`)
-	expect("completion: the pending amount is held", fmt.Sprint(code, " ", out["detail"]), "400 Refund amount exceeds refundable balance")
+	code, out = refund("completion: another refund meanwhile is refused", "", `{"invoice_id":"`+invUpd+`","amount":100}`)
+	expect("completion: no other refund while one is pending", fmt.Sprint(code, " ", out["detail"]), "409 "+pendingDetail)
 	exec(`DROP TRIGGER venue_refuse_completion ON refunds`)
 	code, out = refund("completion: the retry", "key-upd-1", `{"invoice_id":"`+invUpd+`","amount":250}`)
 	expect("completion: the retry completes the row", fmt.Sprint(code, " ", out["status"], " ", strings.HasPrefix(fmt.Sprint(out["stripe_refund_id"]), "re_")), "200 succeeded true")
@@ -177,8 +188,31 @@ func TestRefundWriteFirstAndIdempotent(t *testing.T) {
 	expect("down: 502", status(code, out)[:3], "502")
 	expect("down: the row stays pending, holding its amount", row(`SELECT status || ' ' || amount::text || ' ' || (stripe_refund_id IS NULL)::text
 		FROM refunds WHERE invoice_id = '`+invDown+`'`), "pending 300 true")
-	code, out = refund("down: a second refund sees it held", "", `{"invoice_id":"`+invDown+`"}`)
-	expect("down: the balance is held", fmt.Sprint(code, " ", out["detail"]), "400 Invoice has already been fully refunded")
+	code, out = refund("down: a second refund is refused while one is pending", "", `{"invoice_id":"`+invDown+`"}`)
+	expect("down: no other refund while one is pending", fmt.Sprint(code, " ", out["detail"]), "409 "+pendingDetail)
+
+	// 6. Stripe accepted, then the answer was lost (500 on every attempt):
+	// the row stays pending, and a retry without the key cannot make a
+	// second refund.
+	code, _ = refund("lost 500: accepted, answer lost", "", `{"invoice_id":"`+invLost500+`","amount":300}`)
+	expect("lost 500: 502", fmt.Sprint(code), "502")
+	code, out = refund("lost 500: the same request again, no key", "", `{"invoice_id":"`+invLost500+`","amount":300}`)
+	expect("lost 500: the retry without a key is refused", fmt.Sprint(code, " ", out["detail"]), "409 "+pendingDetail)
+	expect("lost 500: one pending row, one Stripe refund", row(`SELECT count(*)::text || ' ' || min(status) FROM refunds WHERE invoice_id = '`+invLost500+`'`)+
+		" "+stripeCreates(invLost500)[strings.Index(stripeCreates(invLost500), ", ")+2:], "1 pending 1 refunds")
+
+	// 7. A 408 is not a refusal Stripe stated: the row stays pending (never
+	// failed), and neither a same-key retry nor another key makes a second
+	// refund.
+	code, _ = refund("lost 408: accepted, then 408", "key-lost-408", `{"invoice_id":"`+invLost408+`","amount":300}`)
+	expect("lost 408: 502", fmt.Sprint(code), "502")
+	expect("lost 408: the row stays pending", row(`SELECT status || ' ' || (stripe_refund_id IS NULL)::text FROM refunds WHERE invoice_id = '`+invLost408+`'`), "pending true")
+	code, _ = refund("lost 408: the same key again", "key-lost-408", `{"invoice_id":"`+invLost408+`","amount":300}`)
+	expect("lost 408: the same-key retry does not answer a failed refund", fmt.Sprint(code), "502")
+	code, out = refund("lost 408: another key", "key-lost-408-b", `{"invoice_id":"`+invLost408+`","amount":300}`)
+	expect("lost 408: another key is refused while one is pending", fmt.Sprint(code, " ", out["detail"]), "409 "+pendingDetail)
+	expect("lost 408: one pending row, one Stripe refund", row(`SELECT count(*)::text || ' ' || min(status) FROM refunds WHERE invoice_id = '`+invLost408+`'`)+
+		" "+stripeCreates(invLost408)[strings.Index(stripeCreates(invLost408), ", ")+2:], "1 pending 1 refunds")
 
 	// Every Stripe create carried the local row's id.
 	expect("every completed row's Stripe metadata names its row", row(`SELECT count(*)::text FROM refunds

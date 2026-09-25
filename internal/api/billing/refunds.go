@@ -150,6 +150,15 @@ func (h handlers) createRefund(w http.ResponseWriter, r *http.Request) {
 	h.write(w, answer)
 }
 
+// sameText reports whether two optional texts are equal (absent equals
+// absent).
+func sameText(a, b *string) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return *a == *b
+}
+
 // pendingRefund is a reserved refund row and what its Stripe call needs.
 type pendingRefund struct {
 	id, org        uuid.UUID
@@ -158,16 +167,25 @@ type pendingRefund struct {
 	reason         *string
 }
 
-// refusedByStripe reports a refusal Stripe stated (a 4xx other than 409,
-// an idempotent request in flight, and 429); anything else leaves the
-// outcome unknown.
+// refusedByStripe reports a refusal Stripe stated: a card or
+// invalid-request error on 400, 402 or 404. Anything else (408, 409, 429,
+// 5xx, a network error) may follow a refund Stripe made, so the outcome is
+// unknown.
 func refusedByStripe(err error) bool {
 	var apiError *stripe.Error
 	if !errors.As(err, &apiError) {
 		return false
 	}
-	code := apiError.HTTPStatusCode
-	return code >= 400 && code < 500 && code != http.StatusConflict && code != http.StatusTooManyRequests
+	switch apiError.Type {
+	case stripe.ErrorTypeCard, stripe.ErrorTypeInvalidRequest:
+	default:
+		return false
+	}
+	switch apiError.HTTPStatusCode {
+	case http.StatusBadRequest, http.StatusPaymentRequired, http.StatusNotFound:
+		return true
+	}
+	return false
 }
 
 // reserveRefund locks the invoice, answers a repeated Idempotency-Key with
@@ -197,12 +215,15 @@ func (h handlers) reserveRefund(ctx context.Context, tx pgx.Tx, request refundRe
 		var keyedInvoice *uuid.UUID
 		var keyedAmount int64
 		var keyedStatus string
-		var keyedRefundID, keyedCharge, keyedIntent, keyedReason *string
-		switch err := tx.QueryRow(ctx, `SELECT id, invoice_id, amount, status, stripe_refund_id, stripe_charge_id, stripe_payment_intent_id, reason
-			FROM refunds WHERE org_id = $1 AND idempotency_key = $2`, org, clientKey).
-			Scan(&id, &keyedInvoice, &keyedAmount, &keyedStatus, &keyedRefundID, &keyedCharge, &keyedIntent, &keyedReason); {
+		var keyedRefundID, keyedCharge, keyedIntent, keyedReason, keyedDescription *string
+		switch err := tx.QueryRow(ctx, `SELECT id, invoice_id, amount, status, stripe_refund_id, stripe_charge_id, stripe_payment_intent_id, reason,
+			description FROM refunds WHERE org_id = $1 AND idempotency_key = $2`, org, clientKey).
+			Scan(&id, &keyedInvoice, &keyedAmount, &keyedStatus, &keyedRefundID, &keyedCharge, &keyedIntent, &keyedReason, &keyedDescription); {
 		case err == nil:
-			if keyedInvoice == nil || *keyedInvoice != invoiceID || (request.amount != nil && (!request.amount.IsInt64() || request.amount.Int64() != keyedAmount)) {
+			// The same request: invoice, amount (when given), reason and
+			// description.
+			if keyedInvoice == nil || *keyedInvoice != invoiceID || (request.amount != nil && (!request.amount.IsInt64() || request.amount.Int64() != keyedAmount)) ||
+				!sameText(request.reason, keyedReason) || !sameText(request.description, keyedDescription) {
 				return early(detail(http.StatusConflict, "Idempotency-Key was used for a different refund request"))
 			}
 			if keyedStatus != "pending" || keyedRefundID != nil {
@@ -228,6 +249,16 @@ func (h handlers) reserveRefund(ctx context.Context, tx pgx.Tx, request refundRe
 	}
 	if pythonparity.Lower(status) != "paid" {
 		return early(detail(http.StatusBadRequest, "Invoice is not paid"))
+	}
+	// A refund whose Stripe outcome is unknown blocks any other: Stripe may
+	// have made it, so only its own Idempotency-Key may resume it.
+	var unresolved bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM refunds WHERE invoice_id = $1 AND status = 'pending' AND stripe_refund_id IS NULL)`,
+		invoiceID).Scan(&unresolved); err != nil {
+		return pendingRefund{}, nil, err
+	}
+	if unresolved {
+		return early(detail(http.StatusConflict, "A refund for this invoice is still pending; retry it with its Idempotency-Key"))
 	}
 	var refunded int64
 	if err := tx.QueryRow(ctx, `SELECT coalesce(sum(amount), 0) FROM refunds WHERE invoice_id = $1 AND status IN ('pending', 'succeeded')`,

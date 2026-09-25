@@ -189,6 +189,18 @@ def check(
     return problems
 
 
+def discover_routes(root: Path) -> list[dict]:
+    """The served routes (ci/discover_ops_routes.py imports the application)."""
+    spec = importlib.util.spec_from_file_location(
+        "_discover_ops_routes", root / "ci" / "discover_ops_routes.py"
+    )
+    assert spec is not None and spec.loader is not None
+    discovery = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = discovery
+    spec.loader.exec_module(discovery)
+    return list(discovery.discover(root)["routes"])
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--root", default=".", type=Path)
@@ -207,14 +219,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.routes_json is not None:
         routes = json.loads(args.routes_json.read_text())["routes"]
     else:
-        spec = importlib.util.spec_from_file_location(
-            "_discover_ops_routes", root / "ci" / "discover_ops_routes.py"
-        )
-        assert spec is not None and spec.loader is not None
-        discovery = importlib.util.module_from_spec(spec)
-        sys.modules[spec.name] = discovery
-        spec.loader.exec_module(discovery)  # imports the served application
-        routes = discovery.discover(root)["routes"]
+        routes = discover_routes(root)
     problems.extend(check(routes, manifest, root))
     if problems:
         print("go-served-paths: FAIL", file=sys.stderr)

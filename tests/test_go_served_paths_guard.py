@@ -38,10 +38,7 @@ checker = _load_checker()
 
 @pytest.fixture(scope="module")
 def real_routes() -> list[dict]:
-    sys.path.insert(0, str(REPO_ROOT / "ci"))
-    import discover_ops_routes
-
-    return discover_ops_routes.discover(REPO_ROOT)["routes"]
+    return checker.discover_routes(REPO_ROOT)
 
 
 def test_the_real_tree_passes(real_routes):

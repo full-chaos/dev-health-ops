@@ -127,6 +127,9 @@ EXPECTED_PACKAGES = {
     # The sync admin reads' venue differential oracle: the real Python api
     # and dho api on two copies of one seeded Postgres (skips without the
     # live Python env).
+    # The generic integration admin routes' venue differential (skips
+    # without the live Python env), in its own package for its own budget.
+    "internal/api/integrationsadmin/integrationsvenue",
     "internal/api/syncadmin",
     # The session routes: the Go routes alone replayed against the recorded
     # Python answers, concurrent refreshes of one token, and the failed-

@@ -198,6 +198,17 @@ var responseModelRoutes = map[string]bool{
 	"PUT /api/v1/admin/llm-settings":                                      true,
 	"PUT /api/v1/admin/settings/{category}/{key}":                         true,
 	"PUT /api/v1/admin/sync-configs/{config_id}/repositories":             true,
+
+	// The generic integration admin routes (integrations.py); a separate
+	// group so gofmt aligns them without reflowing the rest.
+	"GET /api/v1/admin/integrations":                                        true,
+	"POST /api/v1/admin/integrations":                                       true,
+	"GET /api/v1/admin/integrations/{integration_id}":                       true,
+	"PATCH /api/v1/admin/integrations/{integration_id}":                     true,
+	"GET /api/v1/admin/integrations/{integration_id}/sources":               true,
+	"PATCH /api/v1/admin/integrations/{integration_id}/sources/{source_id}": true,
+	"GET /api/v1/admin/integrations/{integration_id}/datasets":              true,
+	"PATCH /api/v1/admin/integrations/{integration_id}/datasets":            true,
 }
 
 // jsonResponseRoutes are response_model routes on the FastAPI side whose

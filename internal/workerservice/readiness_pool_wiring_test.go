@@ -50,6 +50,9 @@ func TestDomainReadinessChecksRunOnTheReadinessPoolNotTheWorkPool(t *testing.T) 
 		"DomainPostureCheck": func(d *postgresWorkerDatabase, ctx context.Context) error {
 			return d.DomainPostureCheck(nil)(ctx)
 		},
+		"DomainTransactionReady": func(d *postgresWorkerDatabase, ctx context.Context) error {
+			return d.DomainTransactionReady(ctx)
+		},
 		"PostureManifestLockstep": func(d *postgresWorkerDatabase, ctx context.Context) error {
 			_, err := d.PostureManifestLockstep(ctx, "digest")
 			return err

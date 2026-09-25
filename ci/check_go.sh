@@ -828,7 +828,7 @@ check_live_python_oracles() {
       DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
       PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
       go test -mod=readonly -count=1 \
-        -run '^(TestTierFeaturesMatchLivePython|TestSignLicenseMatchesLivePython)$' \
+        -run '^(TestTierFeaturesMatchLivePython|TestSignLicenseMatchesLivePython|TestPythonB64DecodeMatchesLivePython)$' \
         ./internal/api/licensing
   ); then
     rm -rf -- "${proof_dir}"

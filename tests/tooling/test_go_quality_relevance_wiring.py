@@ -26,7 +26,9 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parents[2]
 GO_QUALITY_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "go-quality.yml"
 
-JOB_ID = "go-quality"
+# CHAOS-6690: the work runs in the matrix job `go-quality-leg`; `go-quality` is the
+# fan-in that keeps the required context name.
+JOB_ID = "go-quality-leg"
 
 
 def _job_definition() -> dict:

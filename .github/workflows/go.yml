@@ -126,6 +126,10 @@ on:
       # venue-oracles job decides relevance from this list, so a registry-only
       # change must count as Go-relevant or it is never validated on main.
       - 'ci/venue_oracle_registry.tsv'
+      # CHAOS-6690: the go-quality race shards read these; a change to either
+      # alone must run go-quality.
+      - 'ci/go_race_shard.awk'
+      - 'ci/go_race_weights.tsv'
       - 'ci/venue_oracle_discovery.awk'
       - 'ci/venue_oracle_names.awk'
       - 'ci/check_venue_oracle_registry.sh'
@@ -287,6 +291,10 @@ on:
       # venue-oracles job decides relevance from this list, so a registry-only
       # change must count as Go-relevant or it is never validated on main.
       - 'ci/venue_oracle_registry.tsv'
+      # CHAOS-6690: the go-quality race shards read these; a change to either
+      # alone must run go-quality.
+      - 'ci/go_race_shard.awk'
+      - 'ci/go_race_weights.tsv'
       - 'ci/venue_oracle_discovery.awk'
       - 'ci/venue_oracle_names.awk'
       - 'ci/check_venue_oracle_registry.sh'

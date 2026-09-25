@@ -79,7 +79,7 @@ fi
 usage() {
   # Backticks in the literal help text document commands; they are not substitutions.
   # shellcheck disable=SC2016
-  printf '%s\n' 'Usage: ci/check_go.sh [fmt|vet|test|race|live-python-oracles|venue-oracles [SHARD COUNT]|build|contract|multi-replica-workers|integration-vet|integration-coverage|integration-shard-plan|integration-prepull|integration-shard|integration|fast|ci|all]
+  printf '%s\n' 'Usage: ci/check_go.sh [fmt|vet|test|race|live-python-oracles|venue-oracles [SHARD COUNT]|ci-leg LEG [SHARD COUNT]|build|contract|multi-replica-workers|integration-vet|integration-coverage|integration-shard-plan|integration-prepull|integration-shard|integration|fast|ci|all]
 
   fmt    Check gofmt without modifying files.
   vet    Run go vet ./... in every Go module.
@@ -126,6 +126,14 @@ usage() {
          sorted sequence, so the tests of one package spread over all slices);
          the hosted job runs COUNT matrix legs. A slice that selects zero
          rows fails; no arguments runs every row.
+  ci-leg LEG [SHARD COUNT]
+         One parallel slice of `ci` for the go-quality workflow (CHAOS-6690):
+         static (format, vet, build, contract, integration-vet, shard plans),
+         test (go test ./... + the multi-replica worker gate), race SHARD
+         COUNT (go test -race, the SHARD-th of COUNT weight-balanced package
+         slices, ci/go_race_weights.tsv), oracles (live-Python oracles). The
+         legs run exactly the steps of `ci` (pinned by a tooling test); each
+         stage prints UTC start/done stamps.
   build  Run go build ./... in every Go module.
   contract
          Validate the job contract tree and, when DEV_HEALTH_CONTRACT_BASE is
@@ -314,6 +322,90 @@ check_test() {
 
 check_race() {
   run_in_modules "go test -race" go test -mod=readonly -race ./...
+}
+
+# check_race_shard SHARD COUNT (CHAOS-6690): the SHARD-th of COUNT weight-balanced
+# slices of every module's packages under `go test -race`. The race stage was 17
+# of the 34 minutes of the single go-quality step, dominated by a few packages
+# (goapiproof, providersync, gqlgenguard, workgraph/units), so the slices are
+# balanced by measured package time (ci/go_race_weights.tsv, ci/go_race_shard.awk)
+# and NOT by count. The slices always partition `go list ./...`: a wrong weight
+# costs balance, never coverage. A slice that selects no package at all fails.
+GO_RACE_WEIGHTS="${ROOT}/ci/go_race_weights.tsv"
+check_race_shard() {
+  local shard="${1:-}" count="${2:-}" module_dir modpath pkg selected=0
+  case "${shard}" in ""|*[!0-9]*) die "race SHARD must be a positive integer, got '${shard}'" ;; esac
+  case "${count}" in ""|*[!0-9]*) die "race COUNT must be a positive integer, got '${count}'" ;; esac
+  { [ "${shard}" -ge 1 ] && [ "${count}" -ge 1 ] && [ "${shard}" -le "${count}" ]; } \
+    || die "race shard ${shard} is outside 1..${count}"
+  [ -f "${GO_RACE_WEIGHTS}" ] || die "race shards need ${GO_RACE_WEIGHTS}"
+  local -a pkgs
+  for module_dir in "${MODULE_DIRS[@]}"; do
+    modpath="$(cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -m)"
+    pkgs=()
+    while IFS= read -r pkg; do
+      [ -n "${pkg}" ] && pkgs+=("${pkg}")
+    done < <(cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -mod=readonly ./... \
+      | awk -v mod="${modpath}" -v shard="${shard}" -v count="${count}" -v weights="${GO_RACE_WEIGHTS}" -f "${ROOT}/ci/go_race_shard.awk")
+    printf 'go test -race (shard %s/%s): %s: %d package(s)\n' "${shard}" "${count}" "${module_dir}" "${#pkgs[@]}"
+    [ "${#pkgs[@]}" -gt 0 ] || continue
+    selected=$((selected + ${#pkgs[@]}))
+    (
+      cd "${ROOT}/${module_dir}"
+      "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -race "${pkgs[@]}"
+    )
+  done
+  [ "${selected}" -gt 0 ] \
+    || die "race shard ${shard}/${count} selected zero packages -- the matrix is wider than the package list, so this leg would read green while running nothing"
+}
+
+# ci_leg_stage NAME CMD... prints UTC start/done stamps around one stage so a
+# leg's log says where its minutes went (CHAOS-6690). No `if`/`||` around the
+# command on purpose: errexit is suppressed inside a function called in a
+# condition, which would let a failing command in the middle of a stage pass.
+ci_leg_stage() {
+  local name="$1" started
+  shift
+  started="$(date +%s)"
+  printf '==> stage %s start %s\n' "${name}" "$(date -u +%H:%M:%SZ)"
+  "$@"
+  printf '<== stage %s done in %ss at %s\n' "${name}" "$(($(date +%s) - started))" "$(date -u +%H:%M:%SZ)"
+}
+
+# check_ci_leg LEG [SHARD COUNT]: one parallel slice of `ci` for the go-quality
+# workflow (CHAOS-6690). The legs together run exactly the steps of `ci`
+# (tests/tooling/test_go_quality_legs.py pins the union against the `ci` case):
+#   static   format, vet, build, contract, integration-vet, the shard plans
+#   test     go test ./... and the multi-replica worker gate
+#   race     go test -race, slice SHARD of COUNT (weight-balanced)
+#   oracles  the live-Python oracle blocks
+check_ci_leg() {
+  local leg="${1:-}"
+  case "${leg}" in
+    static)
+      ci_leg_stage format check_format
+      ci_leg_stage vet check_vet
+      ci_leg_stage build check_build
+      ci_leg_stage contract check_contract
+      ci_leg_stage integration-vet check_integration_vet
+      ci_leg_stage plan-integration-shards plan_integration_shards
+      ci_leg_stage plan-providersync-shards plan_providersync_test_shards
+      ;;
+    test)
+      ci_leg_stage test check_test
+      ci_leg_stage multi-replica-workers check_multi_replica_workers
+      ;;
+    race)
+      ci_leg_stage "race ${2:-}/${3:-}" check_race_shard "${2:-}" "${3:-}"
+      ;;
+    oracles)
+      ci_leg_stage live-python-oracles check_live_python_oracles
+      ;;
+    *)
+      die "ci-leg LEG must be one of static, test, race SHARD COUNT, oracles (got '${leg}')"
+      ;;
+  esac
+  printf 'ci-leg %s: OK\n' "${leg}"
 }
 
 check_live_python_oracles() {
@@ -2951,6 +3043,11 @@ case "${1:-all}" in
   venue-oracles)
     { [ "$#" -eq 1 ] || [ "$#" -eq 3 ]; } || die "venue-oracles accepts no arguments, or SHARD COUNT (1-based shard of COUNT)"
     check_venue_oracles "${2:-}" "${3:-}"
+    ;;
+  ci-leg)
+    { [ "$#" -eq 2 ] || [ "$#" -eq 4 ]; } || die "ci-leg accepts LEG, or 'race SHARD COUNT'"
+    shift
+    check_ci_leg "$@"
     ;;
   build)
     check_build

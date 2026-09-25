@@ -15,6 +15,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/datahealth"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 )
 
 // The data-health reads, executed against a real ClickHouse and a real
@@ -69,23 +70,6 @@ CREATE TABLE team_metrics_daily (org_id String, day Date, computed_at DateTime('
 CREATE TABLE work_unit_investments (org_id String, work_unit_id String, computed_at DateTime64(3, 'UTC')) ENGINE = MergeTree ORDER BY (org_id, work_unit_id);
 `
 
-const dataHealthPostgresDDL = `
-CREATE TABLE sync_configurations (
-    id UUID PRIMARY KEY, org_id TEXT NOT NULL DEFAULT '', name TEXT NOT NULL, provider TEXT NOT NULL,
-    sync_targets JSON NOT NULL DEFAULT '[]', is_active BOOLEAN NOT NULL DEFAULT TRUE,
-    last_sync_at TIMESTAMPTZ, last_sync_success BOOLEAN, last_sync_error TEXT,
-    last_sync_stats JSON, updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-CREATE TABLE scheduled_jobs (
-    id UUID PRIMARY KEY, org_id TEXT NOT NULL DEFAULT '', sync_config_id UUID REFERENCES sync_configurations(id)
-);
-CREATE TABLE job_runs (
-    id UUID PRIMARY KEY, job_id UUID NOT NULL REFERENCES scheduled_jobs(id), status INTEGER NOT NULL DEFAULT 0,
-    started_at TIMESTAMPTZ, completed_at TIMESTAMPTZ, result JSON, error TEXT,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-`
-
 func TestDataHealthReadersSeededRealStores(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 240*time.Second)
 	defer cancel()
@@ -123,9 +107,9 @@ func TestDataHealthReadersSeededRealStores(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	if _, err := pool.Exec(ctx, dataHealthPostgresDDL); err != nil {
-		t.Fatalf("postgres ddl: %v", err)
-	}
+	// The migrated schema (CHAOS-6769 ledger): the hand-written sync_configurations, scheduled_jobs
+	// and job_runs lacked the real tables' NOT NULL columns.
+	pgschema.Apply(ctx, t, pool)
 
 	const org, other = "dh-org", "dh-other"
 	mustExec := func(sql string) {
@@ -170,12 +154,12 @@ func TestDataHealthReadersSeededRealStores(t *testing.T) {
 		}
 	}
 	const cfgGH, cfgJira, cfgOff, cfgForeign, jobGH, jobJira = "aaaaaaaa-0000-0000-0000-000000000001", "aaaaaaaa-0000-0000-0000-000000000002", "aaaaaaaa-0000-0000-0000-000000000003", "aaaaaaaa-0000-0000-0000-000000000004", "bbbbbbbb-0000-0000-0000-000000000001", "bbbbbbbb-0000-0000-0000-000000000002"
-	pgExec(`INSERT INTO sync_configurations (id, org_id, name, provider, sync_targets, is_active, last_sync_at, last_sync_success, last_sync_stats) VALUES
-		($1,$2,'gh-main','github','["acme/a","acme/b"]',true,'2026-02-01T10:00:00Z',true,'{"rows_ingested":11}'),
-		($3,$2,'jira-main','jira','[]',true,NULL,false,NULL),
-		($4,$2,'inactive','github','[]',false,NULL,NULL,NULL),
-		($5,$6,'foreign','github','[]',true,NULL,NULL,NULL)`, cfgGH, org, cfgJira, cfgOff, cfgForeign, other)
-	pgExec(`INSERT INTO scheduled_jobs (id, org_id, sync_config_id) VALUES ($1,$2,$3),($4,$2,$5)`, jobGH, org, cfgGH, jobJira, cfgJira)
+	pgExec(`INSERT INTO sync_configurations (id, org_id, name, provider, sync_targets, is_active, last_sync_at, last_sync_success, last_sync_stats, created_at, updated_at) VALUES
+		($1,$2,'gh-main','github','["acme/a","acme/b"]',true,'2026-02-01T10:00:00Z',true,'{"rows_ingested":11}',now(),now()),
+		($3,$2,'jira-main','jira','[]',true,NULL,false,NULL,now(),now()),
+		($4,$2,'inactive','github','[]',false,NULL,NULL,NULL,now(),now()),
+		($5,$6,'foreign','github','[]',true,NULL,NULL,NULL,now(),now())`, cfgGH, org, cfgJira, cfgOff, cfgForeign, other)
+	pgExec(`INSERT INTO scheduled_jobs (id, org_id, sync_config_id, name, job_type, schedule_cron, status, created_at, updated_at) VALUES ($1,$2,$3,'job-a','sync','0 * * * *',0,now(),now()),($4,$2,$5,'job-b','sync','0 * * * *',0,now(),now())`, jobGH, org, cfgGH, jobJira, cfgJira)
 	pgExec(`INSERT INTO job_runs (id, job_id, status, started_at, completed_at, result, error, created_at) VALUES
 		('cccccccc-0000-0000-0000-000000000001',$1,2,'2026-01-01T00:00:00Z','2026-01-01T00:10:00Z','{"rows":1}',NULL,'2026-01-01T00:00:00Z'),
 		('cccccccc-0000-0000-0000-000000000002',$2,3,'2026-03-01T00:00:00Z','2026-03-01T00:05:00Z','{"stage":"fetch","rows":4}','boom','2026-03-01T00:00:00Z'),
@@ -183,7 +167,7 @@ func TestDataHealthReadersSeededRealStores(t *testing.T) {
 
 	// a job of another org attached to this org's Jira configuration, with a
 	// newer failed run: it must not supply this configuration's newest run
-	pgExec(`INSERT INTO scheduled_jobs (id, org_id, sync_config_id) VALUES ('bbbbbbbb-0000-0000-0000-000000000009', $1, $2)`, other, cfgJira)
+	pgExec(`INSERT INTO scheduled_jobs (id, org_id, sync_config_id, name, job_type, schedule_cron, status, created_at, updated_at) VALUES ('bbbbbbbb-0000-0000-0000-000000000009', $1, $2, 'job-foreign','sync','0 * * * *',0,now(),now())`, other, cfgJira)
 	pgExec(`INSERT INTO job_runs (id, job_id, status, started_at, completed_at, result, error, created_at) VALUES
 		('cccccccc-0000-0000-0000-000000000009','bbbbbbbb-0000-0000-0000-000000000009',3,'2027-01-01T00:00:00Z','2027-01-01T00:05:00Z','{"stage":"foreign","rows":99}','foreign boom','2027-01-01T00:00:00Z')`)
 

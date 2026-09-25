@@ -10,27 +10,18 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// schemaFor applies the migrated schema (CHAOS-6769 ledger): the hand-written organizations,
+// feature_flags, org_feature_overrides and org_licenses lacked the real tables' NOT NULL
+// columns and keys, and did not have the agent_context_runtime flag the migrations register.
 func schemaFor(ctx context.Context, t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
-	for _, statement := range []string{
-		`CREATE TABLE organizations (id uuid PRIMARY KEY, tier text NOT NULL)`,
-		`CREATE TABLE feature_flags (
-  id uuid PRIMARY KEY, key text UNIQUE NOT NULL, min_tier text NOT NULL,
-  is_enabled boolean NOT NULL)`,
-		`CREATE TABLE org_feature_overrides (
-  org_id uuid NOT NULL, feature_id uuid NOT NULL, is_enabled boolean NOT NULL,
-  expires_at timestamptz, config json, PRIMARY KEY (org_id, feature_id))`,
-		`CREATE TABLE org_licenses (
-  org_id uuid PRIMARY KEY, tier text NOT NULL, features_override json)`,
-	} {
-		if _, err := pool.Exec(ctx, statement); err != nil {
-			t.Fatal(err)
-		}
-	}
+	pgschema.Apply(ctx, t, pool)
 }
 
 // TestPostgresEntitlementStoreLookupEndToEnd proves the ROUTE-LEVEL contract
@@ -68,9 +59,9 @@ func TestPostgresEntitlementStoreLookupEndToEnd(t *testing.T) {
 	})
 
 	orgID := uuid.NewString()
-	if _, err := pool.Exec(ctx,
-		`INSERT INTO organizations (id, tier) VALUES ($1, 'community')`, orgID,
-	); err != nil {
+	pgseed.Org(ctx, t, pool, orgID, "community")
+	// The migrations register agent_context_runtime; the "not registered" case starts without it.
+	if _, err := pool.Exec(ctx, `DELETE FROM feature_flags WHERE key = 'agent_context_runtime'`); err != nil {
 		t.Fatal(err)
 	}
 
@@ -88,16 +79,8 @@ func TestPostgresEntitlementStoreLookupEndToEnd(t *testing.T) {
 	})
 
 	featureID := uuid.NewString()
-	if _, err := pool.Exec(ctx, `
-INSERT INTO feature_flags (id, key, min_tier, is_enabled)
-VALUES ($1, 'agent_context_runtime', 'community', true)`, featureID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := pool.Exec(ctx, `
-INSERT INTO org_feature_overrides (org_id, feature_id, is_enabled)
-VALUES ($1, $2, true)`, orgID, featureID); err != nil {
-		t.Fatal(err)
-	}
+	pgseed.FeatureFlag(ctx, t, pool, featureID, "agent_context_runtime", "community", true)
+	pgseed.OrgOverride(ctx, t, pool, orgID, featureID, true)
 
 	t.Run("org override enables it", func(t *testing.T) {
 		entitlement, err := store.Lookup(ctx, orgID)

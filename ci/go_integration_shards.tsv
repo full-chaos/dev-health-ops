@@ -122,6 +122,7 @@ internal/chmigrate	60
 internal/externalrecompute	32
 internal/fixturescli	20
 internal/goapiproof	604
+internal/goapiproof/writeproof	25
 internal/joboperator	9
 internal/joboutbox	24
 internal/jobrescue	4

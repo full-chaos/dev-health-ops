@@ -133,6 +133,19 @@ func (l *windowCounters) hit(key, path string) (count int, admitted bool) {
 	return entry.count, true
 }
 
+// peek returns the window's count for the (key, path) pair without counting
+// a hit or changing anything: 0 when the pair has no entry or its window has
+// elapsed.
+func (l *windowCounters) peek(key, path string) int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	entry := l.entries[key+"\x00"+path]
+	if entry == nil || l.now().Sub(entry.start) >= l.window {
+		return 0
+	}
+	return entry.count
+}
+
 // sweep deletes every entry whose window has fully expired, at most once
 // per l.window of wall-clock time -- called with l.mu already held. This
 // bounds the sweep's own O(n) cost to once per window rather than every

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/licensing"
+	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -40,19 +41,37 @@ func (s *IngestSource) isWriteEligible() bool {
 	return s != nil && s.Enabled && s.Mode == "customer_push"
 }
 
-// authLimiters are the two per-IP ingest-auth buckets (rate_limit.py's
-// INGEST_AUTH_ATTEMPT_IP_LIMIT/INGEST_AUTH_FAILURE_IP_LIMIT), shared across
-// every request this process serves -- auth.py's module-level limiter is
-// the same shape (one process-wide limiter, keyed per request).
+// authLimiters are the two per-IP ingest-auth limits (rate_limit.py's
+// INGEST_AUTH_ATTEMPT_IP_LIMIT/INGEST_AUTH_FAILURE_IP_LIMIT). auth.py drives
+// slowapi's underlying `limits` limiter directly (hit() and test()) with a key
+// that is only the caller's address: a FIXED window per address in the storage
+// every api replica shares. Each is an httpapi.KeyedLimiter over the shared
+// counter store with an empty path (the key carries no request path).
 type authLimiters struct {
-	attempt *keyedBucket
-	failure *keyedBucket
+	attempt *httpapi.KeyedLimiter // every attempt, hit() before anything else
+	failure *httpapi.KeyedLimiter // failures only: test() first, hit() on each failure
 }
 
-func newAuthLimiters(now func() time.Time) *authLimiters {
+const (
+	ingestAuthAttemptLimitPerMinute = 100
+	ingestAuthFailureLimitPerMinute = 30
+)
+
+// newAuthLimiters counts in store; nil means an in-process store on now
+// (development and tests). Each limiter has its own limit ID and its
+// store-error series is declared at zero.
+func newAuthLimiters(store httpapi.CounterStore, now func() time.Time) *authLimiters {
+	if store == nil {
+		store = httpapi.NewMemoryCounters(now)
+	}
+	perMinute := func(id string, count int) *httpapi.KeyedLimiter {
+		limiter := httpapi.NewKeyedLimiter(store, httpapi.Limit{ID: id, Count: count, Window: time.Minute})
+		limiter.Declare()
+		return limiter
+	}
 	return &authLimiters{
-		attempt: newKeyedBucket(100, 100, now),
-		failure: newKeyedBucket(30, 30, now),
+		attempt: perMinute("external_ingest_auth_attempt", ingestAuthAttemptLimitPerMinute),
+		failure: perMinute("external_ingest_auth_failure", ingestAuthFailureLimitPerMinute),
 	}
 }
 
@@ -63,15 +82,30 @@ func (d Deps) requireIngestScope(
 	ctx context.Context, r *http.Request, scope string, requireCustomerPushFeature bool,
 ) (*IngestAuthContext, *ingestError) {
 	ip := forwardedIP(r)
-	if !d.limiters.attempt.allow("attempt:" + ip) {
+	// A store that cannot answer is the Python api's unhandled 500 (the
+	// `limits` storage raises and auth.py does not catch it), never a request
+	// let through: each limiter logs and counts it.
+	allowed, err := d.limiters.attempt.AllowCounted(ctx, ip, "")
+	if err != nil {
+		return nil, unhandledError()
+	}
+	if !allowed {
 		return nil, newIngestError(http.StatusTooManyRequests, "rate_limited", "Too many authentication attempts")
 	}
-	if !d.limiters.failure.test("failure:" + ip) {
+	below, err := d.limiters.failure.TestCounted(ctx, ip, "")
+	if err != nil {
+		return nil, unhandledError()
+	}
+	if !below {
 		return nil, newIngestError(http.StatusTooManyRequests, "rate_limited", "Too many failed authentication attempts")
 	}
 
+	// fail records one failure (auth.py's _record_auth_failure_hit) and
+	// answers the 401; a store that cannot record it is the unhandled 500.
 	fail := func() *ingestError {
-		d.limiters.failure.allow("failure:" + ip)
+		if _, err := d.limiters.failure.AllowCounted(ctx, ip, ""); err != nil {
+			return unhandledError()
+		}
 		return newIngestError(http.StatusUnauthorized, "invalid_token", "Missing or invalid ingest token")
 	}
 
@@ -94,7 +128,7 @@ func (d Deps) requireIngestScope(
 		expiresAt  *time.Time
 		revokedAt  *time.Time
 	)
-	err := d.Pool.QueryRow(ctx, `
+	err = d.Pool.QueryRow(ctx, `
 		SELECT id, org_id, source_id, scopes, expires_at, revoked_at
 		FROM external_ingest_tokens
 		WHERE token_hash = $1
@@ -130,7 +164,9 @@ func (d Deps) requireIngestScope(
 		scopes[s] = true
 	}
 	if !scopes[scope] {
-		d.limiters.failure.allow("failure:" + ip)
+		if _, err := d.limiters.failure.AllowCounted(ctx, ip, ""); err != nil {
+			return nil, unhandledError()
+		}
 		return nil, newIngestError(http.StatusForbidden, "insufficient_scope", "Token is missing required scope: "+scope)
 	}
 
@@ -140,7 +176,9 @@ func (d Deps) requireIngestScope(
 			return nil, newIngestError(http.StatusInternalServerError, "internal_error", "failed to resolve feature state")
 		}
 		if !decision.Allowed {
-			d.limiters.failure.allow("failure:" + ip)
+			if _, err := d.limiters.failure.AllowCounted(ctx, ip, ""); err != nil {
+				return nil, unhandledError()
+			}
 			return nil, newIngestError(http.StatusForbidden, "feature_not_enabled", "Customer push ingest is not enabled for this organization")
 		}
 	}

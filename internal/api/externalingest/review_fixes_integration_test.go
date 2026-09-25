@@ -104,7 +104,7 @@ func TestAcceptBatchAgainstFaultsAndEdgeCases(t *testing.T) {
 		// deps.Valkey is nil: enqueueBatch always fails closed
 		// (errStreamUnavailable), forcing the markStreamUnavailableTx path,
 		// which the CHECK constraint above then also fails.
-		deps := Deps{Pool: pool, limiters: newAuthLimiters(nil), routeLimiters: newRouteLimiters(nil, nil)}
+		deps := Deps{Pool: pool, limiters: newAuthLimiters(nil, nil), routeLimiters: newRouteLimiters(nil, nil)}
 		body := `{
 			"schemaVersion": "external-ingest.v1",
 			"idempotencyKey": "batch-mark-fault",

@@ -449,6 +449,9 @@ func (failingStore) Increment(context.Context, Hit) (int64, error) {
 	return 0, errors.New("valkey is down")
 }
 func (failingStore) Backend() string { return "redis" }
+func (failingStore) Peek(context.Context, Hit) (int64, error) {
+	return 0, errors.New("valkey is down")
+}
 
 // A store error is the Python api's unhandled-error 500 (slowapi has no
 // swallow_errors): the request is never let through, the handler is never
@@ -510,6 +513,7 @@ type boundStore struct{}
 
 func (boundStore) Increment(context.Context, Hit) (int64, error) { return 0, ErrPathBound }
 func (boundStore) Backend() string                               { return "test" }
+func (boundStore) Peek(context.Context, Hit) (int64, error)      { return 0, nil }
 
 // The store error counter is a metrics source: the series exists at zero as
 // soon as a limit is wired, counts each store error by limit id, and never
@@ -593,5 +597,47 @@ func TestKeyedLimiterScansOnlyWhenSomethingCanHaveExpired(t *testing.T) {
 	limiter.Allow("admin-user:fresh", "/p/x")
 	if limiter.fullSweeps != 1 {
 		t.Fatalf("fullSweeps after expiry = %d, want exactly 1", limiter.fullSweeps)
+	}
+}
+
+// Test is slowapi's `limits` test(): true while the stored count is below the
+// limit, and it never counts. A pair with no live counter is at zero.
+func TestKeyedLimiterTestDoesNotConsumeAndFollowsTheWindow(t *testing.T) {
+	now := time.Now()
+	store := NewMemoryCounters(func() time.Time { return now })
+	limiter := NewKeyedLimiter(store, Limit{ID: "peek", Count: 2, Window: time.Minute})
+	ctx := context.Background()
+	for range 5 {
+		if ok, err := limiter.Test(ctx, "k", ""); !ok || err != nil {
+			t.Fatalf("Test on an untouched pair = %v, %v, want true (it must never consume)", ok, err)
+		}
+	}
+	if ok, _ := limiter.Allow(ctx, "k", ""); !ok {
+		t.Fatal("the first hit was refused: Test consumed allowance")
+	}
+	if ok, _ := limiter.Test(ctx, "k", ""); !ok {
+		t.Fatal("Test at count 1 of 2 = false, want true")
+	}
+	limiter.Allow(ctx, "k", "")
+	if ok, _ := limiter.Test(ctx, "k", ""); ok {
+		t.Fatal("Test at count 2 of 2 = true, want false (count is no longer below the limit)")
+	}
+	if ok, _ := limiter.Test(ctx, "other", ""); !ok {
+		t.Fatal("another key shares the exhausted pair's count")
+	}
+	now = now.Add(time.Minute)
+	if ok, _ := limiter.Test(ctx, "k", ""); !ok {
+		t.Fatal("Test after the window = false, want true (a new window)")
+	}
+	var nilLimiter *KeyedLimiter
+	if ok, err := nilLimiter.Test(ctx, "k", ""); !ok || err != nil {
+		t.Fatalf("a nil limiter Test = %v, %v, want true", ok, err)
+	}
+}
+
+func TestKeyedLimiterTestReturnsAStoreError(t *testing.T) {
+	limiter := NewKeyedLimiter(failingStore{}, Limit{ID: "peek_err", Count: 2, Window: time.Minute})
+	if ok, err := limiter.Test(context.Background(), "k", ""); ok || err == nil {
+		t.Fatalf("Test on a failing store = %v, %v, want false with the error", ok, err)
 	}
 }

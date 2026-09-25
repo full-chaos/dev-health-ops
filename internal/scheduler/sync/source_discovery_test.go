@@ -252,7 +252,7 @@ func TestDiscoverGitHubMapsRepositoriesAndFiltersByPattern(t *testing.T) {
 	if got.ExternalID != "acme/api" || got.SourceType != "repository" || got.Name != "api" || got.FullName != "acme/api" {
 		t.Fatalf("discoverGitHub() source = %#v", got)
 	}
-	if got.Metadata["owner"] != "acme" {
+	if metadataString(got.Metadata, "owner") != "acme" {
 		t.Fatalf("discoverGitHub() metadata = %#v, want owner=acme", got.Metadata)
 	}
 	if len(doer.paths) != 1 || !strings.HasPrefix(doer.paths[0], "/orgs/acme/repos") {
@@ -401,7 +401,7 @@ func TestDiscoverGitLabNonAllReposListsOneGroupWithoutIncludeSubgroups(t *testin
 	if got.ExternalID != "101" || got.SourceType != "project" || got.Name != "api" || got.FullName != "acme/api" {
 		t.Fatalf("discoverGitLab() source = %#v", got)
 	}
-	if got.Metadata["path_with_namespace"] != "acme/api" {
+	if metadataString(got.Metadata, "path_with_namespace") != "acme/api" {
 		t.Fatalf("discoverGitLab() metadata = %#v", got.Metadata)
 	}
 	if len(doer.urls) != 1 || !strings.HasPrefix(doer.paths[0], "/api/v4/groups/acme/projects") {
@@ -497,11 +497,13 @@ func TestDiscoverJiraMapsProjectsByKey(t *testing.T) {
 		t.Fatalf("discoverJira() = %#v, want exactly one project", sources)
 	}
 	got := sources[0]
-	if got.ExternalID != "CHAOS" || got.SourceType != "project" || got.FullName != "Chaos Engineering" {
+	// _map_jira_tuple: external_id and full_name are the key, name the
+	// project name, and the metadata Python's own, in its order.
+	if got.ExternalID != "CHAOS" || got.SourceType != "project" || got.Name != "Chaos Engineering" || got.FullName != "CHAOS" {
 		t.Fatalf("discoverJira() source = %#v", got)
 	}
-	if got.Metadata["project_id"] != "10001" {
-		t.Fatalf("discoverJira() metadata = %#v", got.Metadata)
+	if text, _ := encodeSourceMetadata(got.Metadata); text != `{"project_type_key": "", "discovered_project": true, "jira_project_id": "10001"}` {
+		t.Fatalf("discoverJira() metadata = %s", text)
 	}
 	if len(doer.paths) != 1 || !strings.HasPrefix(doer.paths[0], "/rest/api/3/project/search") {
 		t.Fatalf("discoverJira() requested paths = %v", doer.paths)

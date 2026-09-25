@@ -1,9 +1,11 @@
 package workerservice
 
 import (
+	"bytes"
 	"context"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -174,5 +176,31 @@ func TestExecutionLivenessMonitorIsWiredThroughTheBusyTolerance(t *testing.T) {
 	status := registry.Readiness(context.Background())
 	if slices.Contains(status.Failed, "execution_liveness") {
 		t.Fatalf("execution_liveness stayed failed after a busy sample: %#v", status)
+	}
+}
+
+// r2 P3 on #3193: the counter's exposition is proven only if a busy pass on the
+// production composition reaches the registry's metrics output (the /metrics
+// surface), not just the counter's own writer.
+func TestBusyPassesAreExposedThroughTheRegistryMetrics(t *testing.T) {
+	registry, database, _ := busyComposition(t, 10*time.Second)
+	var before bytes.Buffer
+	if err := registry.WriteMetrics(&before); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(before.String(), `worker_readiness_busy_total{check="idempotency_backend"} 0`) {
+		t.Fatalf("the busy counter is not registered with the registry: %q", before.String())
+	}
+	database.exhausted.Store(true)
+	if status := registry.Readiness(context.Background()); !status.Ready {
+		t.Fatalf("a busy pass did not read as ready: %#v", status)
+	}
+	var after bytes.Buffer
+	if err := registry.WriteMetrics(&after); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(after.String(), `worker_readiness_busy_total{check="idempotency_backend"} 0`) ||
+		!strings.Contains(after.String(), `worker_readiness_busy_total{check="idempotency_backend"} `) {
+		t.Fatalf("a busy pass left the registry counter at zero: %q", after.String())
 	}
 }

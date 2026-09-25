@@ -6,6 +6,7 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
+	"io/fs"
 	"log"
 	"net/http"
 	"net/http/httptest"
@@ -466,5 +467,54 @@ func TestHeadersOffTheInternalListenerAreRefusedAtTheHandler(t *testing.T) {
 	})
 	if code != http.StatusUnauthorized || len(*seen) != 0 {
 		t.Fatalf("status=%d resolver=%+v, want 401 and no resolver call", code, *seen)
+	}
+}
+
+// r1 P3 on #3161/#3186: the boundary scan above sees only this directory. The
+// identity package exposes the header reader and the listener marker, so a
+// reader added in ANY package could trust a browser-set header. This walks every
+// non-test Go file under internal/ and cmd/ and names the only importers.
+func TestOnlyTheServerPackageImportsTheInternalIdentityPackage(t *testing.T) {
+	root := filepath.Join("..", "..", "..")
+	importers, scanned := map[string]bool{}, 0
+	for _, top := range []string{"internal", "cmd"} {
+		err := filepath.WalkDir(filepath.Join(root, top), func(path string, entry fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if entry.IsDir() {
+				if entry.Name() == "node_modules" || entry.Name() == ".git" || entry.Name() == "testdata" {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+				return nil
+			}
+			raw, readErr := os.ReadFile(path)
+			if readErr != nil {
+				return readErr
+			}
+			scanned++
+			rel, _ := filepath.Rel(root, path)
+			rel = filepath.ToSlash(rel)
+			if strings.Contains(string(raw), "queryapi/internalidentity\"") && !strings.HasPrefix(rel, "internal/queryapi/internalidentity/") {
+				importers[rel] = true
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if scanned < 1000 {
+		t.Fatalf("scanned %d source files; the scan is not measuring the repository", scanned)
+	}
+	want := map[string]bool{
+		"internal/queryapi/server/internal_auth.go": true,
+		"internal/queryapi/server/server.go":        true,
+	}
+	if !sameSet(importers, want) {
+		t.Fatalf("packages importing internalidentity: %v, want %v", importers, want)
 	}
 }

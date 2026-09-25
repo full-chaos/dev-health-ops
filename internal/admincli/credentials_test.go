@@ -9,28 +9,22 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakepg"
 )
 
-// `admin features seed` opens PostgreSQL itself: a login and password that only
-// PGUSER and PGPASSWORD supply must not reach its output.
-func TestSeedRedactsCredentialsThatComeFromTheEnvironment(t *testing.T) {
+// `admin features seed` opens PostgreSQL with a raw pgx connection: over every form
+// of the connection string (URI and keyword, userinfo, pool parameters, service and
+// password files) no login or password the driver resolved reaches its output.
+func TestSeedRedactsResolvedCredentialsOverEveryConnectionForm(t *testing.T) {
 	refusing := fakepg.StartRefusing(t)
-	for _, uri := range refusing.URIs() {
-		before := refusing.Connections()
+	refusing.RunGrid(t, false, func(t *testing.T, dsn string) string {
 		lookup := func(key string) (string, bool) {
 			if key == "POSTGRES_URI" {
-				return uri, true
+				return dsn, true
 			}
 			return "", false
 		}
 		var stdout, stderr bytes.Buffer
-		code := cli.Execute(context.Background(), "dho", []cli.Command{Command()}, cli.Env{
+		cli.Execute(context.Background(), "dho", []cli.Command{Command()}, cli.Env{
 			Args: []string{"admin", "features", "seed"}, Lookup: lookup, Stdout: &stdout, Stderr: &stderr,
 		})
-		refusing.RequireConnectedSince(t, before)
-		if code == cli.ExitOK || stderr.Len() == 0 {
-			t.Fatalf("%s: exit %d, stderr %q: the refusing server must fail the verb with a message", uri, code, stderr.String())
-		}
-		if leaks := refusing.Leaks(stdout.String() + stderr.String()); len(leaks) > 0 {
-			t.Errorf("%s: the output carries %v:\n%s", uri, leaks, stderr.String())
-		}
-	}
+		return stdout.String() + stderr.String()
+	})
 }

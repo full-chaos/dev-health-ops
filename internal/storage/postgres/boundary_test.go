@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakepg"
@@ -116,5 +117,51 @@ func TestBoundaryKeepsResolvedCredentialsWhenThePoolParserRefusesTheURI(t *testi
 		if got := Boundary(uri).Redact(err).Error(); strings.Contains(got, secret) {
 			t.Errorf("Boundary(uri) left %q in %q", secret, got)
 		}
+	}
+}
+
+// Over every form of the connection string, and through both openers the platform uses
+// (pgx.Connect and pgxpool.New), the boundary built from the URI removes every login
+// and password the driver resolved from the driver's own failure text; a boundary built
+// from the DSN components alone leaves some.
+func TestBoundaryRedactsEveryConnectionFormThroughEveryOpener(t *testing.T) {
+	refusing := fakepg.StartRefusing(t)
+	openers := map[string]struct {
+		pool bool
+		open func(dsn string) error
+	}{
+		"pgx.Connect": {false, func(dsn string) error {
+			conn, err := pgx.Connect(context.Background(), dsn)
+			if err == nil {
+				_ = conn.Close(context.Background())
+			}
+			return err
+		}},
+		"pgxpool.New": {true, func(dsn string) error {
+			pool, err := pgxpool.New(context.Background(), dsn)
+			if err != nil {
+				return err
+			}
+			defer pool.Close()
+			return pool.Ping(context.Background())
+		}},
+	}
+	dsnOnlyLeaked := false
+	for name, opener := range openers {
+		t.Run(name, func(t *testing.T) {
+			refusing.RunGrid(t, opener.pool, func(t *testing.T, dsn string) string {
+				err := opener.open(dsn)
+				if err == nil {
+					t.Fatal("the fake server accepted the login")
+				}
+				if len(refusing.Leaks(err.Error())) > 0 && len(refusing.Leaks(secrets.NewBoundary(dsn).Redact(err).Error())) > 0 {
+					dsnOnlyLeaked = true
+				}
+				return Boundary(dsn).Redact(err).Error()
+			})
+		})
+	}
+	if !dsnOnlyLeaked {
+		t.Error("no form left a credential with a DSN-only boundary: the grid no longer reproduces the defect")
 	}
 }

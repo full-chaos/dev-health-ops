@@ -12,9 +12,14 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type firstStatement int
@@ -393,5 +398,134 @@ func (r Refusing) RequireConnectedSince(t testing.TB, before int) {
 	t.Helper()
 	if r.Connections() <= before {
 		t.Fatal("no connection reached the refusing server during this run: the verb never tried to log in (the test measures nothing)")
+	}
+}
+
+// Form is one way of writing the connection string of the refusing server: the
+// credentials a driver resolves from it (or from the environment, a service file or a
+// password file) are the ones the server echoes, so they are the ones no output may
+// carry.
+type Form struct {
+	Name string
+	DSN  string
+	// Env is set for the run (t.Setenv); PGUSER and PGPASSWORD are cleared first.
+	Env map[string]string
+	// Login and Password are what the driver dials with for this form.
+	Login, Password string
+	// ConnParses and PoolParses say whether pgx.ParseConfig and pgxpool.ParseConfig
+	// accept the form (a form the pool parser rejects never reaches the server through
+	// a pool verb).
+	ConnParses, PoolParses bool
+}
+
+// Leaks names the form's credentials found in text.
+func (f Form) Leaks(text string) []string {
+	var found []string
+	for _, secret := range []string{f.Login, f.Password} {
+		if secret != "" && strings.Contains(text, secret) {
+			found = append(found, secret)
+		}
+	}
+	return found
+}
+
+// Grid is the forms a connection string takes: a URI and a keyword string, with and
+// without userinfo, with pool parameters valid, invalid and zero, with options and
+// sslmode, percent-encoded userinfo, and the credentials coming from the
+// environment, a service file or a password file. Each form's environment is applied
+// with Apply before the verb runs. (An IPv6 host is not in the grid: the server listens
+// on IPv4 only.)
+func (r Refusing) Grid(t *testing.T) []Form {
+	t.Helper()
+	dir := t.TempDir()
+	host, port := r.Host, r.Port
+	base := fmt.Sprintf("postgres://%s:%d/appdb?sslmode=disable", host, port)
+	keyword := fmt.Sprintf("host=%s port=%d dbname=appdb sslmode=disable", host, port)
+	service := filepath.Join(dir, "pg_service.conf")
+	serviceBody := fmt.Sprintf("[svc]\nhost=%s\nport=%d\nuser=svc_login_k3\npassword=svc_password_w8\ndbname=appdb\nsslmode=disable\n", host, port)
+	if err := os.WriteFile(service, []byte(serviceBody), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	passfile := filepath.Join(dir, "pgpass")
+	passBody := fmt.Sprintf("%s:%d:appdb:%s:pgpass_password_r5\n", host, port, r.Login)
+	if err := os.WriteFile(passfile, []byte(passBody), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env := func(extra map[string]string) map[string]string {
+		out := map[string]string{"PGUSER": r.Login, "PGPASSWORD": r.Password, "PGSERVICEFILE": "", "PGPASSFILE": filepath.Join(dir, "no-pgpass")}
+		for key, value := range extra {
+			out[key] = value
+		}
+		return out
+	}
+	withEnvCreds := func(name, dsn string) Form {
+		return Form{Name: name, DSN: dsn, Env: env(nil), Login: r.Login, Password: r.Password}
+	}
+	forms := []Form{
+		withEnvCreds("uri", base),
+		withEnvCreds("uri, pool_max_conns=0", base+"&pool_max_conns=0"),
+		withEnvCreds("uri, pool_max_conns=4 pool_min_conns=0", base+"&pool_max_conns=4&pool_min_conns=0"),
+		withEnvCreds("uri, pool_max_conns=abc", base+"&pool_max_conns=abc"),
+		withEnvCreds("uri, pool_max_conns=-1", base+"&pool_max_conns=-1"),
+		withEnvCreds("uri, pool_health_check_period=5s", base+"&pool_health_check_period=5s"),
+		withEnvCreds("uri, options and application_name", base+"&options=-c%20statement_timeout%3D1000&application_name=grid"),
+		withEnvCreds("uri, sslmode=prefer", strings.Replace(base, "sslmode=disable", "sslmode=prefer", 1)),
+		withEnvCreds("keyword", keyword),
+		withEnvCreds("keyword, pool_max_conns=0", keyword+" pool_max_conns=0"),
+		withEnvCreds("keyword, pool_max_conns=2", keyword+" pool_max_conns=2"),
+		{Name: "uri, percent-encoded userinfo", DSN: fmt.Sprintf("postgres://us%%40er:p%%40ss%%2Fw@%s:%d/appdb?sslmode=disable", host, port), Env: env(nil), Login: "us@er", Password: "p@ss/w"},
+		{Name: "uri, percent-encoded userinfo, pool_max_conns=0", DSN: fmt.Sprintf("postgres://us%%40er:p%%40ss%%2Fw@%s:%d/appdb?sslmode=disable&pool_max_conns=0", host, port), Env: env(nil), Login: "us@er", Password: "p@ss/w"},
+		{Name: "keyword, userinfo", DSN: keyword + " user=kw_login password=kw_pass", Env: env(nil), Login: "kw_login", Password: "kw_pass"},
+		{Name: "keyword, userinfo, pool_max_conns=0", DSN: keyword + " user=kw_login password=kw_pass pool_max_conns=0", Env: env(nil), Login: "kw_login", Password: "kw_pass"},
+		{Name: "uri, service file", DSN: "postgres:///appdb?service=svc", Env: env(map[string]string{"PGSERVICEFILE": service, "PGUSER": "", "PGPASSWORD": ""}), Login: "svc_login_k3", Password: "svc_password_w8"},
+		{Name: "uri, service file, pool_max_conns=0", DSN: "postgres:///appdb?service=svc&pool_max_conns=0", Env: env(map[string]string{"PGSERVICEFILE": service, "PGUSER": "", "PGPASSWORD": ""}), Login: "svc_login_k3", Password: "svc_password_w8"},
+		{Name: "keyword, service file", DSN: "service=svc dbname=appdb", Env: env(map[string]string{"PGSERVICEFILE": service, "PGUSER": "", "PGPASSWORD": ""}), Login: "svc_login_k3", Password: "svc_password_w8"},
+		{Name: "uri, password file", DSN: base, Env: env(map[string]string{"PGPASSFILE": passfile, "PGPASSWORD": ""}), Login: r.Login, Password: "pgpass_password_r5"},
+		{Name: "uri, password file, pool_max_conns=0", DSN: base + "&pool_max_conns=0", Env: env(map[string]string{"PGPASSFILE": passfile, "PGPASSWORD": ""}), Login: r.Login, Password: "pgpass_password_r5"},
+	}
+	for index := range forms {
+		forms[index].Apply(t)
+		forms[index].ConnParses = parses(func() error { _, err := pgx.ParseConfig(forms[index].DSN); return err })
+		forms[index].PoolParses = parses(func() error { _, err := pgxpool.ParseConfig(forms[index].DSN); return err })
+	}
+	return forms
+}
+
+func parses(parse func() error) bool { return parse() == nil }
+
+// Apply sets the form's environment for the rest of the test.
+func (f Form) Apply(t *testing.T) {
+	t.Helper()
+	for key, value := range f.Env {
+		t.Setenv(key, value)
+	}
+}
+
+// RunGrid runs a verb once per form of the grid. run gets the form's connection
+// string and returns everything the verb printed. Every run's output must carry none
+// of the form's credentials; a run whose opener parses the form must have reached the
+// server (pool says whether the opener is a pool, whose parser is stricter): a form
+// the opener refuses to parse is still checked for leaks, but cannot dial.
+func (r Refusing) RunGrid(t *testing.T, pool bool, run func(t *testing.T, dsn string) string) {
+	t.Helper()
+	reached := 0
+	forms := r.Grid(t)
+	for _, form := range forms {
+		form.Apply(t)
+		before := r.Connections()
+		output := run(t, form.DSN)
+		dials := (pool && form.PoolParses) || (!pool && form.ConnParses)
+		if dials {
+			if r.Connections() <= before {
+				t.Errorf("%s: no connection reached the refusing server although the opener parses the form (the run measures nothing)", form.Name)
+			}
+			reached++
+		}
+		if leaks := form.Leaks(output); len(leaks) > 0 {
+			t.Errorf("%s: the output carries %v:\n%s", form.Name, leaks, output)
+		}
+	}
+	if reached < 8 {
+		t.Fatalf("only %d of %d forms reached the server: the grid measures too little", reached, len(forms))
 	}
 }

@@ -10,24 +10,24 @@ import (
 )
 
 // The pool this command opens returns pgx's own connect error, which carries the
-// effective login (and, from a server that echoes, the password): run() applies
-// the boundary built from the resolved configuration to it, so a login and
-// password that only PGUSER and PGPASSWORD supply do not reach the output. A
-// boundary built from the URI alone left both (CHAOS-6665).
-func TestOpenPostgresPoolErrorIsRedactedForEnvironmentCredentials(t *testing.T) {
+// effective login (and, from a server that echoes, the password): run() applies the
+// boundary built from the resolved configuration to it. Over every form of the
+// connection string no login or password the driver resolved survives that boundary,
+// and a boundary built from the DSN alone (the defect this pins) leaves some.
+func TestOpenPostgresPoolErrorIsRedactedOverEveryConnectionForm(t *testing.T) {
 	refusing := fakepg.StartRefusing(t)
-	_, err := openPostgresPool(context.Background(), refusing.URI)
-	refusing.RequireConnected(t)
-	if err == nil {
-		t.Fatal("the refusing server let the pool open")
-	}
-	if len(refusing.Leaks(err.Error())) != 2 {
-		t.Fatalf("the driver error does not carry the environment's credentials (the repro is void): %v", err)
-	}
-	if leaks := refusing.Leaks(secrets.NewBoundary(refusing.URI).Redact(err).Error()); len(leaks) == 0 {
-		t.Error("the URI-only boundary already redacts them: the defect this pins is gone")
-	}
-	if leaks := refusing.Leaks(pgstorage.Boundary(refusing.URI).Redact(err).Error()); len(leaks) > 0 {
-		t.Errorf("the resolved-configuration boundary left %v in %v", leaks, err)
+	dsnOnlyLeaked := false
+	refusing.RunGrid(t, true, func(t *testing.T, dsn string) string {
+		_, err := openPostgresPool(context.Background(), dsn)
+		if err == nil {
+			return ""
+		}
+		if len(refusing.Leaks(err.Error())) > 0 && len(refusing.Leaks(secrets.NewBoundary(dsn).Redact(err).Error())) > 0 {
+			dsnOnlyLeaked = true
+		}
+		return pgstorage.Boundary(dsn).Redact(err).Error()
+	})
+	if !dsnOnlyLeaked {
+		t.Error("no form left a credential with a DSN-only boundary: the grid no longer reproduces the defect")
 	}
 }

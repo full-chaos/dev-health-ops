@@ -29,31 +29,31 @@ func TestConnectPostgresRedactsCredentialsFromTheEnvironment(t *testing.T) {
 	}
 }
 
-// The verbs print what connectPostgres returns: `status` in its report (it never
-// fails), `disable` as its refusal. (`enable`, `repoint` and `carry` reach the same
-// helper behind flag, credential and registry preflights this test does not build.)
-func TestVerbsPrintNoCredentialsFromTheEnvironment(t *testing.T) {
+// Over every form of the connection string, `status` and `disable` print no login or
+// password the driver resolved (the connect origin; TestEveryDatabaseErrorOrigin...
+// drives the other origins).
+func TestRoutingRedactsResolvedCredentialsOverEveryConnectionForm(t *testing.T) {
 	t.Setenv(bearerEnvVar, "")
 	catalog := filepath.Join("..", "..", "..", "src", "dev_health_ops", "api", "graphql", "go_api_operations.json")
-	for name, argv := range map[string][]string{
-		"status":  {"status", "-timeout", "3s", "-catalog", catalog},
+	for name, base := range map[string][]string{
+		"status":  {"status", "-timeout", "3s"},
 		"disable": {"disable", "-mode", "python", "-timeout", "3s", "-catalog", catalog},
 	} {
 		refusing := fakepg.StartRefusing(t)
-		argv = append(argv, "-postgres-uri", refusing.URI)
-		savedOut, savedErr := stdout, stderr
-		var out, errOut bytes.Buffer
-		stdout, stderr = &out, &errOut
-		err := run(argv)
-		stdout, stderr = savedOut, savedErr
-		refusing.RequireConnected(t)
-		text := out.String() + errOut.String()
-		if err != nil {
-			text += err.Error()
-		}
-		if leaks := refusing.Leaks(text); len(leaks) > 0 {
-			t.Errorf("%s: the output carries %v:\n%s", name, leaks, text)
-		}
+		refusing.RunGrid(t, true, func(t *testing.T, dsn string) string {
+			argv := append(append([]string(nil), base...), "-postgres-uri", dsn)
+			savedOut, savedErr := stdout, stderr
+			var out, errOut bytes.Buffer
+			stdout, stderr = &out, &errOut
+			err := run(argv)
+			stdout, stderr = savedOut, savedErr
+			text := out.String() + errOut.String()
+			if err != nil {
+				text += err.Error()
+			}
+			return text
+		})
+		_ = name
 	}
 }
 

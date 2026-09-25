@@ -188,3 +188,23 @@ func TestRouteLimitersAStoreErrorIsTheUnhandled500(t *testing.T) {
 		t.Fatalf("the store error must be counted against its limit id:\n%s", out.String())
 	}
 }
+
+// Through the route: a limit store that cannot answer is the Python api's
+// unhandled 500 (the marker header the api's error middleware keys on and the
+// generic body), not a 429 and not a request let through.
+func TestAStoreErrorThroughTheRouteIsTheUnhandled500(t *testing.T) {
+	deps := Deps{routeLimiters: newRouteLimiters(failingCounters{}, nil)}
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/external-ingest/schemas", nil)
+	recorder := httptest.NewRecorder()
+	deps.handleListSchemas()(recorder, request)
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500, body=%s", recorder.Code, recorder.Body.String())
+	}
+	if got := recorder.Header().Get("X-Dho-Unhandled-Error"); got != "1" {
+		t.Fatalf("X-Dho-Unhandled-Error = %q, want \"1\"", got)
+	}
+	const want = `{"error":{"code":"internal_error","message":"Internal Server Error"}}`
+	if got := strings.TrimSpace(recorder.Body.String()); got != want {
+		t.Fatalf("body = %s, want %s", got, want)
+	}
+}

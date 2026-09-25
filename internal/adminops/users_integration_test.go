@@ -330,6 +330,7 @@ func goVerbEnv(t *testing.T, db *database, extra map[string]string, args []strin
 		"licenses keygen": runLicensesKeygen, "licenses create": runLicensesCreate,
 		"bundles create": runBundlesCreate, "bundles list": runBundlesList, "bundles assign-plan": runBundlesAssignPlan, "bundles assign-org": runBundlesAssignOrg,
 		"billing seed": runBillingSeed, "billing list": runBillingList,
+		"billing pull-stripe": runBillingPullStripe, "billing sync-stripe": runBillingSyncStripe,
 	}
 	run, ok := runs[args[0]+" "+args[1]]
 	if !ok {
@@ -365,7 +366,19 @@ func pythonVerbFull(t *testing.T, db *database, extra map[string]string, global 
 		t.Fatal(err)
 	}
 	python := pyoracle.Resolve(t, root)
-	program := "import sys\nfrom dev_health_ops import cli\nraise SystemExit(cli.main(sys.argv[1:]))\n"
+	// Test-runner-only monkeypatch (the venue oracle's rule): when set, every
+	// StripeClient the verb builds talks to this base instead of Stripe.
+	program := "import os, sys\n" +
+		"_base = os.environ.get('VENUE_STRIPE_API_BASE')\n" +
+		"if _base:\n" +
+		"    import stripe as _stripe\n" +
+		"    _init = _stripe.StripeClient.__init__\n" +
+		"    def _patched(self, *args, **kwargs):\n" +
+		"        kwargs['base_addresses'] = {'api': _base}\n" +
+		"        _init(self, *args, **kwargs)\n" +
+		"    _stripe.StripeClient.__init__ = _patched\n" +
+		"from dev_health_ops import cli\n" +
+		"raise SystemExit(cli.main(sys.argv[1:]))\n"
 	command := exec.Command(python, append(append([]string{"-c", program}, global...), append([]string{"admin"}, args...)...)...)
 	pyURI := strings.Replace(db.uri, "postgres://", "postgresql://", 1)
 	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"), "POSTGRES_URI="+pyURI, "DATABASE_URI="+pyURI, "OTEL_ENABLED=false")

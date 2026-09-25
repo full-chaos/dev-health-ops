@@ -12,8 +12,8 @@ import (
 )
 
 // `admin billing seed|list` port the Python verbs over the billing plans: the
-// three standard plans with their prices, and a listing. (The two Stripe verbs,
-// pull-stripe and sync-stripe, are a separate change.)
+// three standard plans with their prices, a listing, and the two Stripe
+// directions of the plan sync (billing_stripe.go).
 
 func billingGroup() cli.Command {
 	return cli.Command{
@@ -21,6 +21,8 @@ func billingGroup() cli.Command {
 		Children: []cli.Command{
 			{Name: "seed", Summary: "seed the standard billing plans (Community, Team, Enterprise) with prices", Kind: cli.Verb, Run: runBillingSeed},
 			{Name: "list", Summary: "list billing plans with prices and Stripe sync status", Kind: cli.Verb, Run: runBillingList},
+			{Name: "pull-stripe", Summary: "pull billing plans from Stripe into the database", Kind: cli.Verb, Run: runBillingPullStripe},
+			{Name: "sync-stripe", Summary: "push billing plans without a Stripe product to Stripe", Kind: cli.Verb, Run: runBillingSyncStripe},
 		},
 	}
 }

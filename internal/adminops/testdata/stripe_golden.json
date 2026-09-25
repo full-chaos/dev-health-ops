@@ -1,0 +1,201 @@
+[
+ {
+  "args": [
+   "\u003cseed\u003e"
+  ],
+  "exit": 0,
+  "stdout": "",
+  "state": "{\"plans\":[\"community|Community|c|community|true|0|\\u003cnull\\u003e|{}\",\"enterprise|Enterprise old name|\\u003cnull\\u003e|enterprise|true|2|prod_existing|{}\",\"failprice|Fail Price|fp|team|true|4|\\u003cnull\\u003e|{}\",\"failprod|FAIL-PRODUCT|\\u003cnull\\u003e|team|true|3|\\u003cnull\\u003e|{}\",\"inactive|Inactive|\\u003cnull\\u003e|team|false|5|\\u003cnull\\u003e|{}\",\"team|Team|team plan|team|true|1|\\u003cnull\\u003e|{}\"],\"prices\":[\"community|monthly|0|usd|true|\\u003cnull\\u003e\",\"community|yearly|0|usd|true|\\u003cnull\\u003e\",\"enterprise|monthly|12900|usd|true|price_ent_m\",\"failprice|monthly|1000|usd|true|\\u003cnull\\u003e\",\"failprice|yearly|424242|usd|true|\\u003cnull\\u003e\",\"failprod|monthly|100|usd|true|\\u003cnull\\u003e\",\"inactive|monthly|5|usd|true|\\u003cnull\\u003e\",\"team|monthly|1200|usd|true|\\u003cnull\\u003e\",\"team|yearly|11500|usd|true|price_have_y\"]}",
+  "calls": null
+ },
+ {
+  "args": [
+   "billing",
+   "pull-stripe"
+  ],
+  "exit": 1,
+  "stdout": "Error: STRIPE_SECRET_KEY environment variable is not set\n",
+  "state": "{\"plans\":[\"community|Community|c|community|true|0|\\u003cnull\\u003e|{}\",\"enterprise|Enterprise old name|\\u003cnull\\u003e|enterprise|true|2|prod_existing|{}\",\"failprice|Fail Price|fp|team|true|4|\\u003cnull\\u003e|{}\",\"failprod|FAIL-PRODUCT|\\u003cnull\\u003e|team|true|3|\\u003cnull\\u003e|{}\",\"inactive|Inactive|\\u003cnull\\u003e|team|false|5|\\u003cnull\\u003e|{}\",\"team|Team|team plan|team|true|1|\\u003cnull\\u003e|{}\"],\"prices\":[\"community|monthly|0|usd|true|\\u003cnull\\u003e\",\"community|yearly|0|usd|true|\\u003cnull\\u003e\",\"enterprise|monthly|12900|usd|true|price_ent_m\",\"failprice|monthly|1000|usd|true|\\u003cnull\\u003e\",\"failprice|yearly|424242|usd|true|\\u003cnull\\u003e\",\"failprod|monthly|100|usd|true|\\u003cnull\\u003e\",\"inactive|monthly|5|usd|true|\\u003cnull\\u003e\",\"team|monthly|1200|usd|true|\\u003cnull\\u003e\",\"team|yearly|11500|usd|true|price_have_y\"]}",
+  "calls": null
+ },
+ {
+  "args": [
+   "billing",
+   "sync-stripe"
+  ],
+  "exit": 1,
+  "stdout": "Error: STRIPE_SECRET_KEY environment variable is not set\n",
+  "state": "{\"plans\":[\"community|Community|c|community|true|0|\\u003cnull\\u003e|{}\",\"enterprise|Enterprise old name|\\u003cnull\\u003e|enterprise|true|2|prod_existing|{}\",\"failprice|Fail Price|fp|team|true|4|\\u003cnull\\u003e|{}\",\"failprod|FAIL-PRODUCT|\\u003cnull\\u003e|team|true|3|\\u003cnull\\u003e|{}\",\"inactive|Inactive|\\u003cnull\\u003e|team|false|5|\\u003cnull\\u003e|{}\",\"team|Team|team plan|team|true|1|\\u003cnull\\u003e|{}\"],\"prices\":[\"community|monthly|0|usd|true|\\u003cnull\\u003e\",\"community|yearly|0|usd|true|\\u003cnull\\u003e\",\"enterprise|monthly|12900|usd|true|price_ent_m\",\"failprice|monthly|1000|usd|true|\\u003cnull\\u003e\",\"failprice|yearly|424242|usd|true|\\u003cnull\\u003e\",\"failprod|monthly|100|usd|true|\\u003cnull\\u003e\",\"inactive|monthly|5|usd|true|\\u003cnull\\u003e\",\"team|monthly|1200|usd|true|\\u003cnull\\u003e\",\"team|yearly|11500|usd|true|price_have_y\"]}",
+  "calls": null
+ },
+ {
+  "args": [
+   "billing",
+   "sync-stripe"
+  ],
+  "exit": 0,
+  "stdout": "Created:  ['community → prod_fake_1', 'team → prod_fake_2']\nUpdated:  []\nSkipped:  []\nErrors:   ['failprod: Request req_oracle: the product was refused', 'failprice: Request req_oracle: the price was refused']\n",
+  "state": "{\"plans\":[\"community|Community|c|community|true|0|prod_fake_1|{}\",\"enterprise|Enterprise old name|\\u003cnull\\u003e|enterprise|true|2|prod_existing|{}\",\"failprice|Fail Price|fp|team|true|4|prod_fake_3|{}\",\"failprod|FAIL-PRODUCT|\\u003cnull\\u003e|team|true|3|\\u003cnull\\u003e|{}\",\"inactive|Inactive|\\u003cnull\\u003e|team|false|5|\\u003cnull\\u003e|{}\",\"team|Team|team plan|team|true|1|prod_fake_2|{}\"],\"prices\":[\"community|monthly|0|usd|true|price_fake_2\",\"community|yearly|0|usd|true|price_fake_1\",\"enterprise|monthly|12900|usd|true|price_ent_m\",\"failprice|monthly|1000|usd|true|\\u003cnull\\u003e\",\"failprice|yearly|424242|usd|true|\\u003cnull\\u003e\",\"failprod|monthly|100|usd|true|\\u003cnull\\u003e\",\"inactive|monthly|5|usd|true|\\u003cnull\\u003e\",\"team|monthly|1200|usd|true|price_fake_3\",\"team|yearly|11500|usd|true|price_have_y\"]}",
+  "calls": [
+   "POST /v1/products | query= | form=description=c\u0026metadata[plan_key]=community\u0026metadata[tier]=community\u0026name=Community | version=2026-08-26.dahlia | auth=fake-key",
+   "POST /v1/prices | query= | form=currency=usd\u0026metadata[interval]=yearly\u0026metadata[plan_key]=community\u0026product=prod_fake_1\u0026recurring[interval]=year\u0026unit_amount=0 | version=2026-08-26.dahlia | auth=fake-key",
+   "POST /v1/prices | query= | form=currency=usd\u0026metadata[interval]=monthly\u0026metadata[plan_key]=community\u0026product=prod_fake_1\u0026recurring[interval]=month\u0026unit_amount=0 | version=2026-08-26.dahlia | auth=fake-key",
+   "POST /v1/products | query= | form=description=team plan\u0026metadata[plan_key]=team\u0026metadata[tier]=team\u0026name=Team | version=2026-08-26.dahlia | auth=fake-key",
+   "POST /v1/prices | query= | form=currency=usd\u0026metadata[interval]=monthly\u0026metadata[plan_key]=team\u0026product=prod_fake_2\u0026recurring[interval]=month\u0026unit_amount=1200 | version=2026-08-26.dahlia | auth=fake-key",
+   "POST /v1/products | query= | form=description=\u0026metadata[plan_key]=failprod\u0026metadata[tier]=team\u0026name=FAIL-PRODUCT | version=2026-08-26.dahlia | auth=fake-key",
+   "POST /v1/products | query= | form=description=fp\u0026metadata[plan_key]=failprice\u0026metadata[tier]=team\u0026name=Fail Price | version=2026-08-26.dahlia | auth=fake-key",
+   "POST /v1/prices | query= | form=currency=usd\u0026metadata[interval]=yearly\u0026metadata[plan_key]=failprice\u0026product=prod_fake_3\u0026recurring[interval]=year\u0026unit_amount=424242 | version=2026-08-26.dahlia | auth=fake-key"
+  ]
+ },
+ {
+  "args": [
+   "billing",
+   "sync-stripe"
+  ],
+  "exit": 0,
+  "stdout": "Created:  []\nUpdated:  []\nSkipped:  []\nErrors:   ['failprod: Request req_oracle: the product was refused']\n",
+  "state": "{\"plans\":[\"community|Community|c|community|true|0|prod_fake_1|{}\",\"enterprise|Enterprise old name|\\u003cnull\\u003e|enterprise|true|2|prod_existing|{}\",\"failprice|Fail Price|fp|team|true|4|prod_fake_3|{}\",\"failprod|FAIL-PRODUCT|\\u003cnull\\u003e|team|true|3|\\u003cnull\\u003e|{}\",\"inactive|Inactive|\\u003cnull\\u003e|team|false|5|\\u003cnull\\u003e|{}\",\"team|Team|team plan|team|true|1|prod_fake_2|{}\"],\"prices\":[\"community|monthly|0|usd|true|price_fake_2\",\"community|yearly|0|usd|true|price_fake_1\",\"enterprise|monthly|12900|usd|true|price_ent_m\",\"failprice|monthly|1000|usd|true|\\u003cnull\\u003e\",\"failprice|yearly|424242|usd|true|\\u003cnull\\u003e\",\"failprod|monthly|100|usd|true|\\u003cnull\\u003e\",\"inactive|monthly|5|usd|true|\\u003cnull\\u003e\",\"team|monthly|1200|usd|true|price_fake_3\",\"team|yearly|11500|usd|true|price_have_y\"]}",
+  "calls": [
+   "POST /v1/products | query= | form=description=\u0026metadata[plan_key]=failprod\u0026metadata[tier]=team\u0026name=FAIL-PRODUCT | version=2026-08-26.dahlia | auth=fake-key"
+  ]
+ },
+ {
+  "args": [
+   "\u003cseed\u003e"
+  ],
+  "exit": 0,
+  "stdout": "",
+  "state": "{\"plans\":[\"community|Community|c|community|true|0|prod_fake_1|{}\",\"enterprise|Enterprise old name|\\u003cnull\\u003e|enterprise|true|2|prod_existing|{}\",\"failprice|Fail Price|fp|team|true|4|prod_fake_3|{}\",\"inactive|Inactive|\\u003cnull\\u003e|team|false|5|\\u003cnull\\u003e|{}\",\"team|Team|team plan|team|true|1|prod_fake_2|{}\"],\"prices\":[\"community|monthly|0|usd|true|price_fake_2\",\"community|yearly|0|usd|true|price_fake_1\",\"enterprise|monthly|12900|usd|true|price_ent_m\",\"failprice|monthly|1000|usd|true|\\u003cnull\\u003e\",\"failprice|yearly|424242|usd|true|\\u003cnull\\u003e\",\"inactive|monthly|5|usd|true|\\u003cnull\\u003e\",\"team|monthly|1200|usd|true|price_fake_3\",\"team|yearly|11500|usd|true|price_have_y\"]}",
+  "calls": null
+ },
+ {
+  "args": [
+   "billing",
+   "sync-stripe"
+  ],
+  "exit": 0,
+  "stdout": "Created:  []\nUpdated:  []\nSkipped:  []\n",
+  "state": "{\"plans\":[\"community|Community|c|community|true|0|prod_fake_1|{}\",\"enterprise|Enterprise old name|\\u003cnull\\u003e|enterprise|true|2|prod_existing|{}\",\"failprice|Fail Price|fp|team|true|4|prod_fake_3|{}\",\"inactive|Inactive|\\u003cnull\\u003e|team|false|5|\\u003cnull\\u003e|{}\",\"team|Team|team plan|team|true|1|prod_fake_2|{}\"],\"prices\":[\"community|monthly|0|usd|true|price_fake_2\",\"community|yearly|0|usd|true|price_fake_1\",\"enterprise|monthly|12900|usd|true|price_ent_m\",\"failprice|monthly|1000|usd|true|\\u003cnull\\u003e\",\"failprice|yearly|424242|usd|true|\\u003cnull\\u003e\",\"inactive|monthly|5|usd|true|\\u003cnull\\u003e\",\"team|monthly|1200|usd|true|price_fake_3\",\"team|yearly|11500|usd|true|price_have_y\"]}",
+  "calls": null
+ },
+ {
+  "args": [
+   "\u003cseed\u003e"
+  ],
+  "exit": 0,
+  "stdout": "",
+  "state": "{\"plans\":[\"community|Community|c|community|true|0|prod_fake_1|{}\",\"enterprise|Enterprise old name|\\u003cnull\\u003e|enterprise|true|2|prod_existing|{}\",\"failprice|Fail Price|fp|team|true|4|prod_fake_3|{}\",\"inactive|Inactive|\\u003cnull\\u003e|team|false|5|\\u003cnull\\u003e|{}\",\"team|Team|team plan|team|true|1|prod_fake_2|{}\"],\"prices\":[\"community|monthly|0|usd|true|price_fake_2\",\"community|yearly|0|usd|true|price_fake_1\",\"enterprise|monthly|12900|usd|true|price_ent_m\",\"failprice|monthly|1000|usd|true|\\u003cnull\\u003e\",\"failprice|yearly|424242|usd|true|\\u003cnull\\u003e\",\"inactive|monthly|5|usd|true|\\u003cnull\\u003e\",\"inactive|yearly|1|usd|true|price_new_y\",\"team|monthly|1200|usd|true|price_fake_3\",\"team|yearly|11500|usd|true|price_have_y\"]}",
+  "calls": null
+ },
+ {
+  "args": [
+   "billing",
+   "pull-stripe",
+   "--dry-run"
+  ],
+  "exit": 0,
+  "stdout": "[dry-run] No changes written.\nCreated:  ['n_code_pro ← prod_new', 'last-plan ← prod_last']\nUpdated:  ['enterprise ← prod_existing', 'team ← prod_basic', 'community ← prod_slug']\nSkipped:  ['No Prices (prod_noprices): no recurring prices']\nErrors:   ['Err Product (prod_err): Request req_oracle: boom']\n",
+  "state": "{\"plans\":[\"community|Community|c|community|true|0|prod_fake_1|{}\",\"enterprise|Enterprise old name|\\u003cnull\\u003e|enterprise|true|2|prod_existing|{}\",\"failprice|Fail Price|fp|team|true|4|prod_fake_3|{}\",\"inactive|Inactive|\\u003cnull\\u003e|team|false|5|\\u003cnull\\u003e|{}\",\"team|Team|team plan|team|true|1|prod_fake_2|{}\"],\"prices\":[\"community|monthly|0|usd|true|price_fake_2\",\"community|yearly|0|usd|true|price_fake_1\",\"enterprise|monthly|12900|usd|true|price_ent_m\",\"failprice|monthly|1000|usd|true|\\u003cnull\\u003e\",\"failprice|yearly|424242|usd|true|\\u003cnull\\u003e\",\"inactive|monthly|5|usd|true|\\u003cnull\\u003e\",\"inactive|yearly|1|usd|true|price_new_y\",\"team|monthly|1200|usd|true|price_fake_3\",\"team|yearly|11500|usd|true|price_have_y\"]}",
+  "calls": [
+   "GET /v1/products | query=active=true\u0026limit=100 | form= | version=2026-08-26.dahlia | auth=fake-key",
+   "GET /v1/products | query=active=true\u0026limit=100\u0026starting_after=prod_basic | form= | version=2026-08-26.dahlia | auth=fake-key",
+   "GET /v1/products | query=active=true\u0026limit=100\u0026starting_after=prod_new | form= | version=2026-08-26.dahlia | auth=fake-key",
+   "GET /v1/products | query=active=true\u0026limit=100\u0026starting_after=prod_err | form= | version=2026-08-26.dahlia | auth=fake-key",
+   "GET /v1/prices | query=active=true\u0026limit=100\u0026product=prod_existing | form= | version=2026-08-26.dahlia | auth=fake-key",
+   "GET /v1/prices | query=active=true\u0026limit=100\u0026product=prod_basic | form= | version=2026-08-26.dahlia | auth=fake-key",
+   "GET /v1/prices | query=active=true\u0026limit=100\u0026product=prod_basic\u0026starting_after=price_basic_once | form= | version=2026-08-26.dahlia | auth=fake-key",
+   "GET /v1/prices | query=active=true\u0026limit=100\u0026product=prod_slug | form= | version=2026-08-26.dahlia | auth=fake-key",
+   "GET /v1/prices | query=active=true\u0026limit=100\u0026product=prod_new | form= | version=2026-08-26.dahlia | auth=fake-key",
+   "GET /v1/prices | query=active=true\u0026limit=100\u0026product=prod_noprices | form= | version=2026-08-26.dahlia | auth=fake-key",
+   "GET /v1/prices | query=active=true\u0026limit=100\u0026product=prod_err | form= | version=2026-08-26.dahlia | auth=fake-key",
+   "GET /v1/prices | query=active=true\u0026limit=100\u0026product=prod_last | form= | version=2026-08-26.dahlia | auth=fake-key"
+  ]
+ },
+ {
+  "args": [
+   "\u003cseed\u003e"
+  ],
+  "exit": 0,
+  "stdout": "",
+  "state": "{\"plans\":[\"community|Community|c|community|true|0|prod_fake_1|{}\",\"enterprise|Enterprise old name|\\u003cnull\\u003e|enterprise|true|2|prod_existing|{}\",\"failprice|Fail Price|fp|team|true|4|prod_fake_3|{}\",\"inactive|Inactive|\\u003cnull\\u003e|team|false|5|\\u003cnull\\u003e|{}\",\"team|Team|team plan|team|true|1|prod_fake_2|{}\"],\"prices\":[\"community|monthly|0|usd|true|price_fake_2\",\"community|yearly|0|usd|true|price_fake_1\",\"enterprise|monthly|12900|usd|true|price_ent_m\",\"failprice|monthly|1000|usd|true|\\u003cnull\\u003e\",\"failprice|yearly|424242|usd|true|\\u003cnull\\u003e\",\"inactive|monthly|5|usd|true|\\u003cnull\\u003e\",\"team|monthly|1200|usd|true|price_fake_3\",\"team|yearly|11500|usd|true|price_have_y\"]}",
+  "calls": null
+ },
+ {
+  "args": [
+   "billing",
+   "pull-stripe"
+  ],
+  "exit": 0,
+  "stdout": "Created:  ['n_code_pro ← prod_new', 'last-plan ← prod_last']\nUpdated:  ['enterprise ← prod_existing', 'team ← prod_basic', 'community ← prod_slug']\nSkipped:  ['No Prices (prod_noprices): no recurring prices']\nErrors:   ['Err Product (prod_err): Request req_oracle: boom']\n",
+  "state": "{\"plans\":[\"community|Community|c|community|true|0|prod_slug|{}\",\"enterprise|Enterprise|\\u003cnull\\u003e|enterprise|true|2|prod_existing|{}\",\"failprice|Fail Price|fp|team|true|4|prod_fake_3|{}\",\"inactive|Inactive|\\u003cnull\\u003e|team|false|5|\\u003cnull\\u003e|{}\",\"last-plan|Last One|the last|team|true|0|prod_last|{\\\"plan_key\\\": \\\"last-plan\\\", \\\"tier\\\": \\\" Team \\\"}\",\"n_code_pro|Ünïcode Pro!||enterprise|true|0|prod_new|{\\\"tier\\\": \\\"Enterprise\\\", \\\"x\\\": \\\"1\\\"}\",\"team|Basic|team plan|team|true|1|prod_basic|{}\"],\"prices\":[\"community|monthly|0|usd|true|price_comm_m\",\"community|yearly|0|usd|false|price_comm_y\",\"enterprise|monthly|5200|usd|true|price_ent_m\",\"enterprise|yearly|52000|usd|true|price_ent_y\",\"failprice|monthly|1000|usd|true|\\u003cnull\\u003e\",\"failprice|yearly|424242|usd|true|\\u003cnull\\u003e\",\"inactive|monthly|5|usd|true|\\u003cnull\\u003e\",\"last-plan|monthly|300|usd|true|price_last_m\",\"n_code_pro|yearly|9900|eur|true|price_new_y\",\"team|monthly|1000|usd|true|price_basic_m\",\"team|yearly|11500|usd|true|price_have_y\"]}",
+  "calls": [
+   "GET /v1/products | query=active=true\u0026limit=100 | form= | version=2026-08-26.dahlia | auth=fake-key",
+   "GET /v1/products | query=active=true\u0026limit=100\u0026starting_after=prod_basic | form= | version=2026-08-26.dahlia | auth=fake-key",
+   "GET /v1/products | query=active=true\u0026limit=100\u0026starting_after=prod_new | form= | version=2026-08-26.dahlia | auth=fake-key",
+   "GET /v1/products | query=active=true\u0026limit=100\u0026starting_after=prod_err | form= | version=2026-08-26.dahlia | auth=fake-key",
+   "GET /v1/prices | query=active=true\u0026limit=100\u0026product=prod_existing | form= | version=2026-08-26.dahlia | auth=fake-key",
+   "GET /v1/prices | query=active=true\u0026limit=100\u0026product=prod_basic | form= | version=2026-08-26.dahlia | auth=fake-key",
+   "GET /v1/prices | query=active=true\u0026limit=100\u0026product=prod_basic\u0026starting_after=price_basic_once | form= | version=2026-08-26.dahlia | auth=fake-key",
+   "GET /v1/prices | query=active=true\u0026limit=100\u0026product=prod_slug | form= | version=2026-08-26.dahlia | auth=fake-key",
+   "GET /v1/prices | query=active=true\u0026limit=100\u0026product=prod_new | form= | version=2026-08-26.dahlia | auth=fake-key",
+   "GET /v1/prices | query=active=true\u0026limit=100\u0026product=prod_noprices | form= | version=2026-08-26.dahlia | auth=fake-key",
+   "GET /v1/prices | query=active=true\u0026limit=100\u0026product=prod_err | form= | version=2026-08-26.dahlia | auth=fake-key",
+   "GET /v1/prices | query=active=true\u0026limit=100\u0026product=prod_last | form= | version=2026-08-26.dahlia | auth=fake-key"
+  ]
+ },
+ {
+  "args": [
+   "billing",
+   "pull-stripe"
+  ],
+  "exit": 0,
+  "stdout": "Created:  []\nUpdated:  ['enterprise ← prod_existing', 'team ← prod_basic', 'community ← prod_slug', 'n_code_pro ← prod_new', 'last-plan ← prod_last']\nSkipped:  ['No Prices (prod_noprices): no recurring prices']\nErrors:   ['Err Product (prod_err): Request req_oracle: boom']\n",
+  "state": "{\"plans\":[\"community|Community|c|community|true|0|prod_slug|{}\",\"enterprise|Enterprise|\\u003cnull\\u003e|enterprise|true|2|prod_existing|{}\",\"failprice|Fail Price|fp|team|true|4|prod_fake_3|{}\",\"inactive|Inactive|\\u003cnull\\u003e|team|false|5|\\u003cnull\\u003e|{}\",\"last-plan|Last One|the last|team|true|0|prod_last|{\\\"plan_key\\\": \\\"last-plan\\\", \\\"tier\\\": \\\" Team \\\"}\",\"n_code_pro|Ünïcode Pro!||enterprise|true|0|prod_new|{\\\"tier\\\": \\\"Enterprise\\\", \\\"x\\\": \\\"1\\\"}\",\"team|Basic|team plan|team|true|1|prod_basic|{}\"],\"prices\":[\"community|monthly|0|usd|true|price_comm_m\",\"community|yearly|0|usd|false|price_comm_y\",\"enterprise|monthly|5200|usd|true|price_ent_m\",\"enterprise|yearly|52000|usd|true|price_ent_y\",\"failprice|monthly|1000|usd|true|\\u003cnull\\u003e\",\"failprice|yearly|424242|usd|true|\\u003cnull\\u003e\",\"inactive|monthly|5|usd|true|\\u003cnull\\u003e\",\"last-plan|monthly|300|usd|true|price_last_m\",\"n_code_pro|yearly|9900|eur|true|price_new_y\",\"team|monthly|1000|usd|true|price_basic_m\",\"team|yearly|11500|usd|true|price_have_y\"]}",
+  "calls": [
+   "GET /v1/products | query=active=true\u0026limit=100 | form= | version=2026-08-26.dahlia | auth=fake-key",
+   "GET /v1/products | query=active=true\u0026limit=100\u0026starting_after=prod_basic | form= | version=2026-08-26.dahlia | auth=fake-key",
+   "GET /v1/products | query=active=true\u0026limit=100\u0026starting_after=prod_new | form= | version=2026-08-26.dahlia | auth=fake-key",
+   "GET /v1/products | query=active=true\u0026limit=100\u0026starting_after=prod_err | form= | version=2026-08-26.dahlia | auth=fake-key",
+   "GET /v1/prices | query=active=true\u0026limit=100\u0026product=prod_existing | form= | version=2026-08-26.dahlia | auth=fake-key",
+   "GET /v1/prices | query=active=true\u0026limit=100\u0026product=prod_basic | form= | version=2026-08-26.dahlia | auth=fake-key",
+   "GET /v1/prices | query=active=true\u0026limit=100\u0026product=prod_basic\u0026starting_after=price_basic_once | form= | version=2026-08-26.dahlia | auth=fake-key",
+   "GET /v1/prices | query=active=true\u0026limit=100\u0026product=prod_slug | form= | version=2026-08-26.dahlia | auth=fake-key",
+   "GET /v1/prices | query=active=true\u0026limit=100\u0026product=prod_new | form= | version=2026-08-26.dahlia | auth=fake-key",
+   "GET /v1/prices | query=active=true\u0026limit=100\u0026product=prod_noprices | form= | version=2026-08-26.dahlia | auth=fake-key",
+   "GET /v1/prices | query=active=true\u0026limit=100\u0026product=prod_err | form= | version=2026-08-26.dahlia | auth=fake-key",
+   "GET /v1/prices | query=active=true\u0026limit=100\u0026product=prod_last | form= | version=2026-08-26.dahlia | auth=fake-key"
+  ]
+ },
+ {
+  "args": [
+   "billing",
+   "list"
+  ],
+  "exit": 0,
+  "stdout": "Key             Name            Tier         Active   Stripe Product ID              Prices\n--------------------------------------------------------------------------------------------------------------\ncommunity       Community       community    Yes      prod_slug                      monthly $0.00, yearly $0.00\nlast-plan       Last One        team         Yes      prod_last                      monthly $3.00\nn_code_pro      Ünïcode Pro!    enterprise   Yes      prod_new                       yearly $99.00\nteam            Basic           team         Yes      prod_basic                     monthly $10.00, yearly $115.00\nenterprise      Enterprise      enterprise   Yes      prod_existing                  monthly $52.00, yearly $520.00\nfailprice       Fail Price      team         Yes      prod_fake_3                    monthly $10.00, yearly $4242.42\ninactive        Inactive        team         No       -                              monthly $0.05\n",
+  "state": "{\"plans\":[\"community|Community|c|community|true|0|prod_slug|{}\",\"enterprise|Enterprise|\\u003cnull\\u003e|enterprise|true|2|prod_existing|{}\",\"failprice|Fail Price|fp|team|true|4|prod_fake_3|{}\",\"inactive|Inactive|\\u003cnull\\u003e|team|false|5|\\u003cnull\\u003e|{}\",\"last-plan|Last One|the last|team|true|0|prod_last|{\\\"plan_key\\\": \\\"last-plan\\\", \\\"tier\\\": \\\" Team \\\"}\",\"n_code_pro|Ünïcode Pro!||enterprise|true|0|prod_new|{\\\"tier\\\": \\\"Enterprise\\\", \\\"x\\\": \\\"1\\\"}\",\"team|Basic|team plan|team|true|1|prod_basic|{}\"],\"prices\":[\"community|monthly|0|usd|true|price_comm_m\",\"community|yearly|0|usd|false|price_comm_y\",\"enterprise|monthly|5200|usd|true|price_ent_m\",\"enterprise|yearly|52000|usd|true|price_ent_y\",\"failprice|monthly|1000|usd|true|\\u003cnull\\u003e\",\"failprice|yearly|424242|usd|true|\\u003cnull\\u003e\",\"inactive|monthly|5|usd|true|\\u003cnull\\u003e\",\"last-plan|monthly|300|usd|true|price_last_m\",\"n_code_pro|yearly|9900|eur|true|price_new_y\",\"team|monthly|1000|usd|true|price_basic_m\",\"team|yearly|11500|usd|true|price_have_y\"]}",
+  "calls": null
+ },
+ {
+  "args": [
+   "billing",
+   "pull-stripe",
+   "--extra"
+  ],
+  "exit": 2,
+  "stdout": "",
+  "state": "{\"plans\":[\"community|Community|c|community|true|0|prod_slug|{}\",\"enterprise|Enterprise|\\u003cnull\\u003e|enterprise|true|2|prod_existing|{}\",\"failprice|Fail Price|fp|team|true|4|prod_fake_3|{}\",\"inactive|Inactive|\\u003cnull\\u003e|team|false|5|\\u003cnull\\u003e|{}\",\"last-plan|Last One|the last|team|true|0|prod_last|{\\\"plan_key\\\": \\\"last-plan\\\", \\\"tier\\\": \\\" Team \\\"}\",\"n_code_pro|Ünïcode Pro!||enterprise|true|0|prod_new|{\\\"tier\\\": \\\"Enterprise\\\", \\\"x\\\": \\\"1\\\"}\",\"team|Basic|team plan|team|true|1|prod_basic|{}\"],\"prices\":[\"community|monthly|0|usd|true|price_comm_m\",\"community|yearly|0|usd|false|price_comm_y\",\"enterprise|monthly|5200|usd|true|price_ent_m\",\"enterprise|yearly|52000|usd|true|price_ent_y\",\"failprice|monthly|1000|usd|true|\\u003cnull\\u003e\",\"failprice|yearly|424242|usd|true|\\u003cnull\\u003e\",\"inactive|monthly|5|usd|true|\\u003cnull\\u003e\",\"last-plan|monthly|300|usd|true|price_last_m\",\"n_code_pro|yearly|9900|eur|true|price_new_y\",\"team|monthly|1000|usd|true|price_basic_m\",\"team|yearly|11500|usd|true|price_have_y\"]}",
+  "calls": null
+ },
+ {
+  "args": [
+   "billing",
+   "sync-stripe",
+   "x"
+  ],
+  "exit": 2,
+  "stdout": "",
+  "state": "{\"plans\":[\"community|Community|c|community|true|0|prod_slug|{}\",\"enterprise|Enterprise|\\u003cnull\\u003e|enterprise|true|2|prod_existing|{}\",\"failprice|Fail Price|fp|team|true|4|prod_fake_3|{}\",\"inactive|Inactive|\\u003cnull\\u003e|team|false|5|\\u003cnull\\u003e|{}\",\"last-plan|Last One|the last|team|true|0|prod_last|{\\\"plan_key\\\": \\\"last-plan\\\", \\\"tier\\\": \\\" Team \\\"}\",\"n_code_pro|Ünïcode Pro!||enterprise|true|0|prod_new|{\\\"tier\\\": \\\"Enterprise\\\", \\\"x\\\": \\\"1\\\"}\",\"team|Basic|team plan|team|true|1|prod_basic|{}\"],\"prices\":[\"community|monthly|0|usd|true|price_comm_m\",\"community|yearly|0|usd|false|price_comm_y\",\"enterprise|monthly|5200|usd|true|price_ent_m\",\"enterprise|yearly|52000|usd|true|price_ent_y\",\"failprice|monthly|1000|usd|true|\\u003cnull\\u003e\",\"failprice|yearly|424242|usd|true|\\u003cnull\\u003e\",\"inactive|monthly|5|usd|true|\\u003cnull\\u003e\",\"last-plan|monthly|300|usd|true|price_last_m\",\"n_code_pro|yearly|9900|eur|true|price_new_y\",\"team|monthly|1000|usd|true|price_basic_m\",\"team|yearly|11500|usd|true|price_have_y\"]}",
+  "calls": null
+ }
+]

@@ -333,6 +333,7 @@ func (h handlers) pullStripe(w http.ResponseWriter, r *http.Request) {
 type pullRun struct {
 	h       handlers
 	ctx     context.Context
+	dryRun  bool
 	tx      pgx.Tx
 	pending []func(pgx.Tx) error
 	index   planIndex
@@ -440,19 +441,21 @@ func (p *pullRun) pullProduct(client *stripe.Client, product stripeProduct, repo
 			tier = normalizeTier(value)
 		}
 		planID, productID := existing.id, product.ID
-		existing.stripeProductID, existing.name = &productID, name
-		p.pending = append(p.pending, func(tx pgx.Tx) error {
-			if tier != "" {
-				_, err := tx.Exec(p.ctx, `UPDATE billing_plans SET stripe_product_id = $2, name = $3, tier = $4, updated_at = $5 WHERE id = $1`,
-					planID, productID, name, tier, now)
+		if !p.dryRun {
+			existing.stripeProductID, existing.name = &productID, name
+			p.pending = append(p.pending, func(tx pgx.Tx) error {
+				if tier != "" {
+					_, err := tx.Exec(p.ctx, `UPDATE billing_plans SET stripe_product_id = $2, name = $3, tier = $4, updated_at = $5 WHERE id = $1`,
+						planID, productID, name, tier, now)
+					return err
+				}
+				_, err := tx.Exec(p.ctx, `UPDATE billing_plans SET stripe_product_id = $2, name = $3, updated_at = $4 WHERE id = $1`,
+					planID, productID, name, now)
+				return err
+			})
+			if err := p.upsertPrices(planID, prices); err != nil {
 				return err
 			}
-			_, err := tx.Exec(p.ctx, `UPDATE billing_plans SET stripe_product_id = $2, name = $3, updated_at = $4 WHERE id = $1`,
-				planID, productID, name, now)
-			return err
-		})
-		if err := p.upsertPrices(planID, prices); err != nil {
-			return err
 		}
 		report.updated = append(report.updated, existing.key+" ← "+product.ID)
 		return nil
@@ -469,23 +472,25 @@ func (p *pullRun) pullProduct(client *stripe.Client, product stripeProduct, repo
 	if err != nil {
 		return err
 	}
-	// db.add + an explicit flush: the insert runs now, inside this step.
-	if err := p.flush(); err != nil {
-		return err
-	}
-	planID := uuid.New()
-	if _, err := p.tx.Exec(p.ctx, `INSERT INTO billing_plans
+	if !p.dryRun {
+		// db.add + an explicit flush: the insert runs now, inside this step.
+		if err := p.flush(); err != nil {
+			return err
+		}
+		planID := uuid.New()
+		if _, err := p.tx.Exec(p.ctx, `INSERT INTO billing_plans
 		(id, key, name, description, tier, stripe_product_id, metadata, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7::json, $8, $8)`,
-		planID, planKey, product.Name, product.Description, normalizeTier(metadataValue(product.Metadata, "tier")),
-		product.ID, metadataText, now); err != nil {
-		return err
+			planID, planKey, product.Name, product.Description, normalizeTier(metadataValue(product.Metadata, "tier")),
+			product.ID, metadataText, now); err != nil {
+			return err
+		}
+		if err := p.upsertPrices(planID, prices); err != nil {
+			return err
+		}
+		productID := product.ID
+		p.index.add(&localPlan{id: planID, key: planKey, name: product.Name, stripeProductID: &productID})
 	}
-	if err := p.upsertPrices(planID, prices); err != nil {
-		return err
-	}
-	productID := product.ID
-	p.index.add(&localPlan{id: planID, key: planKey, name: product.Name, stripeProductID: &productID})
 	report.created = append(report.created, planKey+" ← "+product.ID)
 	return nil
 }
@@ -556,6 +561,13 @@ func (p *pullRun) upsertPrices(planID uuid.UUID, prices []stripePrice) error {
 	return nil
 }
 
+// stripeListError is a failure of the product list call: the route logs it with
+// its own prefix, the operator verb prints Python's text (PythonText).
+type stripeListError struct{ err error }
+
+func (e stripeListError) Error() string      { return "stripe product list: " + pyStripeError(e.err) }
+func (e stripeListError) PythonText() string { return pyStripeError(e.err) }
+
 // fetchProducts is _fetch_all_products: every active product, 100 a page.
 func fetchProducts(ctx context.Context, client *stripe.Client) ([]stripeProduct, error) {
 	params := &stripe.ProductListParams{Active: stripe.Bool(true)}
@@ -563,7 +575,7 @@ func fetchProducts(ctx context.Context, client *stripe.Client) ([]stripeProduct,
 	var out []stripeProduct
 	for product, err := range client.V1Products.List(ctx, params).All(ctx) {
 		if err != nil {
-			return nil, fmt.Errorf("stripe product list: %s", pyStripeError(err))
+			return nil, stripeListError{err}
 		}
 		object, err := rawObject(product.LastResponse)
 		if err != nil {

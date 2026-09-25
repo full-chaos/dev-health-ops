@@ -199,6 +199,9 @@ EXPECTED_PACKAGES = {
     "internal/jobrescue",
     "internal/jobroute",
     "internal/jobruntime",
+    # CHAOS-6467: `dho metrics validate-flags` on a real ClickHouse, seeded org by org
+    # and compared with the frozen Python reports (and the live producer, by venue oracle).
+    "internal/metricscli",
     "internal/migrationmatrix",
     # CHAOS-5006 PR2: the end-to-end proof that
     # ResolveProviderKindForOrg's org-BYO precedence (org BYO beats an

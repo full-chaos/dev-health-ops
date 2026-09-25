@@ -114,6 +114,7 @@ internal/joboutbox	24
 internal/jobrescue	4
 internal/jobroute	27
 internal/jobruntime	51
+internal/metricscli	45
 internal/migrationmatrix	24
 internal/jobs/dimensionfold	76
 internal/jobs/investment	58

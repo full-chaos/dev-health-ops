@@ -1,0 +1,131 @@
+[
+ {
+  "org": "aaaaaaaa-0000-4000-8000-000000000001",
+  "args": null,
+  "exit": 1,
+  "output": "Feature Flag Pipeline Validation — org='aaaaaaaa-0000-4000-8000-000000000001'\n============================================================\n  [✗] coverage: 1/4 releases have telemetry (25%).\n      total_releases=4, covered_releases=1, ratio=0.25\n  [✗] dedup_verification: Duplicate dedupe_keys in: feature_flag_event (worst ratio: 20.00%).\n      table=feature_flag_event, total_rows=10, distinct_keys=8, duplicates=2, dup_ratio=0.2\n  [⚠] schema_completeness: 8/10 flags have all required fields (80%).\n      total=10, complete=8, ratio=0.8\n  [⚠] drift_detection: 2 day(s) with \u003e2× volume change in last 14d.\n      day=\u003cdate\u003e, prev_day=\u003cdate\u003e, prev_count=10, curr_count=30, change_ratio=3.0\n      day=\u003cdate\u003e, prev_day=\u003cdate\u003e, prev_count=30, curr_count=4, change_ratio=0.13\n  [✓] org_isolation: Multi-tenant data present in 4 table(s) — verify scoped queries filter correctly.\n  [✗] join_integrity: 2/5 impact rows join to deployments (40%).\n      total=5, matched=2, ratio=0.4\n  [⚠] confidence_distribution: 60% of confidence scores are very low (\u003c0.2) — check coverage and sample sizes.\n      bucket=very_low, range=[0.0, 0.2), count=3, pct=0.6\n      bucket=low, range=[0.2, 0.4), count=0, pct=0.0\n      bucket=medium, range=[0.4, 0.6), count=1, pct=0.2\n      bucket=high, range=[0.6, 0.8), count=0, pct=0.0\n      bucket=very_high, range=[0.8, 1.0), count=1, pct=0.2\n\nValidation report for org='aaaaaaaa-0000-4000-8000-000000000001': 1 ok, 3 warn, 3 critical\nRESULT: CRITICAL — pipeline health checks failed.\n"
+ },
+ {
+  "org": "aaaaaaaa-0000-4000-8000-000000000001",
+  "args": [
+   "--lookback",
+   "7"
+  ],
+  "exit": 1,
+  "output": "Feature Flag Pipeline Validation — org='aaaaaaaa-0000-4000-8000-000000000001'\n============================================================\n  [✗] coverage: 1/4 releases have telemetry (25%).\n      total_releases=4, covered_releases=1, ratio=0.25\n  [✗] dedup_verification: Duplicate dedupe_keys in: feature_flag_event (worst ratio: 20.00%).\n      table=feature_flag_event, total_rows=10, distinct_keys=8, duplicates=2, dup_ratio=0.2\n  [⚠] schema_completeness: 8/10 flags have all required fields (80%).\n      total=10, complete=8, ratio=0.8\n  [⚠] drift_detection: 2 day(s) with \u003e2× volume change in last 7d.\n      day=\u003cdate\u003e, prev_day=\u003cdate\u003e, prev_count=10, curr_count=30, change_ratio=3.0\n      day=\u003cdate\u003e, prev_day=\u003cdate\u003e, prev_count=30, curr_count=4, change_ratio=0.13\n  [✓] org_isolation: Multi-tenant data present in 4 table(s) — verify scoped queries filter correctly.\n  [✗] join_integrity: 2/5 impact rows join to deployments (40%).\n      total=5, matched=2, ratio=0.4\n  [⚠] confidence_distribution: 60% of confidence scores are very low (\u003c0.2) — check coverage and sample sizes.\n      bucket=very_low, range=[0.0, 0.2), count=3, pct=0.6\n      bucket=low, range=[0.2, 0.4), count=0, pct=0.0\n      bucket=medium, range=[0.4, 0.6), count=1, pct=0.2\n      bucket=high, range=[0.6, 0.8), count=0, pct=0.0\n      bucket=very_high, range=[0.8, 1.0), count=1, pct=0.2\n\nValidation report for org='aaaaaaaa-0000-4000-8000-000000000001': 1 ok, 3 warn, 3 critical\nRESULT: CRITICAL — pipeline health checks failed.\n"
+ },
+ {
+  "org": "aaaaaaaa-0000-4000-8000-000000000001",
+  "args": [
+   "--lookback",
+   "3"
+  ],
+  "exit": 1,
+  "output": "Feature Flag Pipeline Validation — org='aaaaaaaa-0000-4000-8000-000000000001'\n============================================================\n  [✗] coverage: 1/4 releases have telemetry (25%).\n      total_releases=4, covered_releases=1, ratio=0.25\n  [✗] dedup_verification: Duplicate dedupe_keys in: feature_flag_event (worst ratio: 20.00%).\n      table=feature_flag_event, total_rows=10, distinct_keys=8, duplicates=2, dup_ratio=0.2\n  [⚠] schema_completeness: 8/10 flags have all required fields (80%).\n      total=10, complete=8, ratio=0.8\n  [—] drift_detection: Not enough daily data for drift detection.\n  [✓] org_isolation: Multi-tenant data present in 4 table(s) — verify scoped queries filter correctly.\n  [✗] join_integrity: 2/5 impact rows join to deployments (40%).\n      total=5, matched=2, ratio=0.4\n  [⚠] confidence_distribution: 60% of confidence scores are very low (\u003c0.2) — check coverage and sample sizes.\n      bucket=very_low, range=[0.0, 0.2), count=3, pct=0.6\n      bucket=low, range=[0.2, 0.4), count=0, pct=0.0\n      bucket=medium, range=[0.4, 0.6), count=1, pct=0.2\n      bucket=high, range=[0.6, 0.8), count=0, pct=0.0\n      bucket=very_high, range=[0.8, 1.0), count=1, pct=0.2\n\nValidation report for org='aaaaaaaa-0000-4000-8000-000000000001': 1 ok, 2 warn, 3 critical, 1 skip\nRESULT: CRITICAL — pipeline health checks failed.\n"
+ },
+ {
+  "org": "aaaaaaaa-0000-4000-8000-000000000001",
+  "args": [
+   "--lookback",
+   "0"
+  ],
+  "exit": 1,
+  "output": "Feature Flag Pipeline Validation — org='aaaaaaaa-0000-4000-8000-000000000001'\n============================================================\n  [—] coverage: No releases found in lookback window.\n  [✗] dedup_verification: Duplicate dedupe_keys in: feature_flag_event (worst ratio: 20.00%).\n      table=feature_flag_event, total_rows=10, distinct_keys=8, duplicates=2, dup_ratio=0.2\n  [⚠] schema_completeness: 8/10 flags have all required fields (80%).\n      total=10, complete=8, ratio=0.8\n  [—] drift_detection: Not enough daily data for drift detection.\n  [✓] org_isolation: Multi-tenant data present in 4 table(s) — verify scoped queries filter correctly.\n  [—] join_integrity: No release_impact_daily rows in lookback window.\n  [—] confidence_distribution: No confidence scores in lookback window.\n\nValidation report for org='aaaaaaaa-0000-4000-8000-000000000001': 1 ok, 1 warn, 1 critical, 4 skip\nRESULT: CRITICAL — pipeline health checks failed.\n"
+ },
+ {
+  "org": "aaaaaaaa-0000-4000-8000-000000000001",
+  "args": [
+   "--lookback",
+   "365"
+  ],
+  "exit": 1,
+  "output": "Feature Flag Pipeline Validation — org='aaaaaaaa-0000-4000-8000-000000000001'\n============================================================\n  [✗] coverage: 1/4 releases have telemetry (25%).\n      total_releases=4, covered_releases=1, ratio=0.25\n  [✗] dedup_verification: Duplicate dedupe_keys in: feature_flag_event (worst ratio: 20.00%).\n      table=feature_flag_event, total_rows=10, distinct_keys=8, duplicates=2, dup_ratio=0.2\n  [⚠] schema_completeness: 8/10 flags have all required fields (80%).\n      total=10, complete=8, ratio=0.8\n  [⚠] drift_detection: 2 day(s) with \u003e2× volume change in last 14d.\n      day=\u003cdate\u003e, prev_day=\u003cdate\u003e, prev_count=10, curr_count=30, change_ratio=3.0\n      day=\u003cdate\u003e, prev_day=\u003cdate\u003e, prev_count=30, curr_count=4, change_ratio=0.13\n  [✓] org_isolation: Multi-tenant data present in 4 table(s) — verify scoped queries filter correctly.\n  [✗] join_integrity: 2/5 impact rows join to deployments (40%).\n      total=5, matched=2, ratio=0.4\n  [⚠] confidence_distribution: 60% of confidence scores are very low (\u003c0.2) — check coverage and sample sizes.\n      bucket=very_low, range=[0.0, 0.2), count=3, pct=0.6\n      bucket=low, range=[0.2, 0.4), count=0, pct=0.0\n      bucket=medium, range=[0.4, 0.6), count=1, pct=0.2\n      bucket=high, range=[0.6, 0.8), count=0, pct=0.0\n      bucket=very_high, range=[0.8, 1.0), count=1, pct=0.2\n\nValidation report for org='aaaaaaaa-0000-4000-8000-000000000001': 1 ok, 3 warn, 3 critical\nRESULT: CRITICAL — pipeline health checks failed.\n"
+ },
+ {
+  "org": "bbbbbbbb-0000-4000-8000-000000000002",
+  "args": null,
+  "exit": 0,
+  "output": "Feature Flag Pipeline Validation — org='bbbbbbbb-0000-4000-8000-000000000002'\n============================================================\n  [✓] coverage: 2/2 releases have telemetry (100%).\n  [✓] dedup_verification: No duplicate dedupe_keys found in event tables.\n  [✓] schema_completeness: 20/20 flags have all required fields (100%).\n  [✓] drift_detection: No \u003e2× day-over-day volume changes detected.\n  [✓] org_isolation: Multi-tenant data present in 4 table(s) — verify scoped queries filter correctly.\n  [✓] join_integrity: 2/2 impact rows join to deployments (100%).\n  [✓] confidence_distribution: 2 scores, avg=0.88.\n\nValidation report for org='bbbbbbbb-0000-4000-8000-000000000002': 7 ok\nRESULT: OK — all checks passed.\n"
+ },
+ {
+  "org": "bbbbbbbb-0000-4000-8000-000000000002",
+  "args": [
+   "--lookback",
+   "3"
+  ],
+  "exit": 0,
+  "output": "Feature Flag Pipeline Validation — org='bbbbbbbb-0000-4000-8000-000000000002'\n============================================================\n  [✓] coverage: 2/2 releases have telemetry (100%).\n  [✓] dedup_verification: No duplicate dedupe_keys found in event tables.\n  [✓] schema_completeness: 20/20 flags have all required fields (100%).\n  [✓] drift_detection: No \u003e2× day-over-day volume changes detected.\n  [✓] org_isolation: Multi-tenant data present in 4 table(s) — verify scoped queries filter correctly.\n  [✓] join_integrity: 2/2 impact rows join to deployments (100%).\n  [✓] confidence_distribution: 2 scores, avg=0.88.\n\nValidation report for org='bbbbbbbb-0000-4000-8000-000000000002': 7 ok\nRESULT: OK — all checks passed.\n"
+ },
+ {
+  "org": "cccccccc-0000-4000-8000-000000000003",
+  "args": null,
+  "exit": 0,
+  "output": "Feature Flag Pipeline Validation — org='cccccccc-0000-4000-8000-000000000003'\n============================================================\n  [—] coverage: No releases found in lookback window.\n  [✓] dedup_verification: No duplicate dedupe_keys found in event tables.\n  [—] schema_completeness: No feature_flag records found.\n  [—] drift_detection: Not enough daily data for drift detection.\n  [✓] org_isolation: Multi-tenant data present in 4 table(s) — verify scoped queries filter correctly.\n  [—] join_integrity: No release_impact_daily rows in lookback window.\n  [—] confidence_distribution: No confidence scores in lookback window.\n\nValidation report for org='cccccccc-0000-4000-8000-000000000003': 2 ok, 5 skip\nRESULT: OK — all checks passed.\n"
+ },
+ {
+  "org": "cccccccc-0000-4000-8000-000000000003",
+  "args": [
+   "--lookback",
+   "1"
+  ],
+  "exit": 0,
+  "output": "Feature Flag Pipeline Validation — org='cccccccc-0000-4000-8000-000000000003'\n============================================================\n  [—] coverage: No releases found in lookback window.\n  [✓] dedup_verification: No duplicate dedupe_keys found in event tables.\n  [—] schema_completeness: No feature_flag records found.\n  [—] drift_detection: Not enough daily data for drift detection.\n  [✓] org_isolation: Multi-tenant data present in 4 table(s) — verify scoped queries filter correctly.\n  [—] join_integrity: No release_impact_daily rows in lookback window.\n  [—] confidence_distribution: No confidence scores in lookback window.\n\nValidation report for org='cccccccc-0000-4000-8000-000000000003': 2 ok, 5 skip\nRESULT: OK — all checks passed.\n"
+ },
+ {
+  "org": "dddddddd-0000-4000-8000-000000000004",
+  "args": null,
+  "exit": 0,
+  "output": "Feature Flag Pipeline Validation — org='dddddddd-0000-4000-8000-000000000004'\n============================================================\n  [⚠] coverage: 6/10 releases have telemetry (60%).\n      total_releases=10, covered_releases=6, ratio=0.6\n  [✓] dedup_verification: No duplicate dedupe_keys found in event tables.\n  [✓] schema_completeness: 19/20 flags have all required fields (95%).\n  [⚠] drift_detection: 2 day(s) with \u003e2× volume change in last 14d.\n      day=\u003cdate\u003e, prev_day=\u003cdate\u003e, prev_count=6, curr_count=20, change_ratio=3.33\n      day=\u003cdate\u003e, prev_day=\u003cdate\u003e, prev_count=20, curr_count=9, change_ratio=0.45\n  [✓] org_isolation: Multi-tenant data present in 4 table(s) — verify scoped queries filter correctly.\n  [✓] join_integrity: 2/2 impact rows join to deployments (100%).\n  [✓] confidence_distribution: 2 scores, avg=0.30.\n\nValidation report for org='dddddddd-0000-4000-8000-000000000004': 5 ok, 2 warn\nRESULT: WARNING — review flagged items.\n"
+ },
+ {
+  "org": "dddddddd-0000-4000-8000-000000000004",
+  "args": [
+   "--lookback",
+   "14"
+  ],
+  "exit": 0,
+  "output": "Feature Flag Pipeline Validation — org='dddddddd-0000-4000-8000-000000000004'\n============================================================\n  [⚠] coverage: 6/10 releases have telemetry (60%).\n      total_releases=10, covered_releases=6, ratio=0.6\n  [✓] dedup_verification: No duplicate dedupe_keys found in event tables.\n  [✓] schema_completeness: 19/20 flags have all required fields (95%).\n  [⚠] drift_detection: 2 day(s) with \u003e2× volume change in last 14d.\n      day=\u003cdate\u003e, prev_day=\u003cdate\u003e, prev_count=6, curr_count=20, change_ratio=3.33\n      day=\u003cdate\u003e, prev_day=\u003cdate\u003e, prev_count=20, curr_count=9, change_ratio=0.45\n  [✓] org_isolation: Multi-tenant data present in 4 table(s) — verify scoped queries filter correctly.\n  [✓] join_integrity: 2/2 impact rows join to deployments (100%).\n  [✓] confidence_distribution: 2 scores, avg=0.30.\n\nValidation report for org='dddddddd-0000-4000-8000-000000000004': 5 ok, 2 warn\nRESULT: WARNING — review flagged items.\n"
+ },
+ {
+  "org": "eeeeeeee-0000-4000-8000-000000000005",
+  "args": null,
+  "exit": 0,
+  "output": "Feature Flag Pipeline Validation — org='eeeeeeee-0000-4000-8000-000000000005'\n============================================================\n  [✓] coverage: 4/4 releases have telemetry (100%).\n  [✓] dedup_verification: No duplicate dedupe_keys found in event tables.\n  [—] schema_completeness: No feature_flag records found.\n  [—] drift_detection: Not enough daily data for drift detection.\n  [✓] org_isolation: Multi-tenant data present in 4 table(s) — verify scoped queries filter correctly.\n  [✓] join_integrity: 4/4 impact rows join to deployments (100%).\n  [⚠] confidence_distribution: 75% of confidence scores are very low (\u003c0.2) — check coverage and sample sizes.\n      bucket=very_low, range=[0.0, 0.2), count=3, pct=0.75\n      bucket=low, range=[0.2, 0.4), count=0, pct=0.0\n      bucket=medium, range=[0.4, 0.6), count=0, pct=0.0\n      bucket=high, range=[0.6, 0.8), count=0, pct=0.0\n      bucket=very_high, range=[0.8, 1.0), count=1, pct=0.25\n\nValidation report for org='eeeeeeee-0000-4000-8000-000000000005': 4 ok, 1 warn, 2 skip\nRESULT: WARNING — review flagged items.\n"
+ },
+ {
+  "org": "ffffffff-0000-4000-8000-000000000006",
+  "args": null,
+  "exit": 0,
+  "output": "Feature Flag Pipeline Validation — org='ffffffff-0000-4000-8000-000000000006'\n============================================================\n  [✓] coverage: 5/5 releases have telemetry (100%).\n  [✓] dedup_verification: No duplicate dedupe_keys found in event tables.\n  [—] schema_completeness: No feature_flag records found.\n  [—] drift_detection: Not enough daily data for drift detection.\n  [✓] org_isolation: Multi-tenant data present in 4 table(s) — verify scoped queries filter correctly.\n  [⚠] join_integrity: 3/5 impact rows join to deployments (60%).\n      total=5, matched=3, ratio=0.6\n  [✓] confidence_distribution: 5 scores, avg=0.73.\n\nValidation report for org='ffffffff-0000-4000-8000-000000000006': 4 ok, 1 warn, 2 skip\nRESULT: WARNING — review flagged items.\n"
+ },
+ {
+  "org": "99999999-0000-4000-8000-000000000007",
+  "args": null,
+  "exit": 0,
+  "output": "Feature Flag Pipeline Validation — org='99999999-0000-4000-8000-000000000007'\n============================================================\n  [⚠] coverage: 5/10 releases have telemetry (50%).\n      total_releases=10, covered_releases=5, ratio=0.5\n  [✓] dedup_verification: No duplicate dedupe_keys found in event tables.\n  [—] schema_completeness: No feature_flag records found.\n  [—] drift_detection: Not enough daily data for drift detection.\n  [✓] org_isolation: Multi-tenant data present in 4 table(s) — verify scoped queries filter correctly.\n  [—] join_integrity: No release_impact_daily rows in lookback window.\n  [—] confidence_distribution: No confidence scores in lookback window.\n\nValidation report for org='99999999-0000-4000-8000-000000000007': 2 ok, 1 warn, 4 skip\nRESULT: WARNING — review flagged items.\n"
+ },
+ {
+  "org": "88888888-0000-4000-8000-000000000008",
+  "args": null,
+  "exit": 0,
+  "output": "Feature Flag Pipeline Validation — org='88888888-0000-4000-8000-000000000008'\n============================================================\n  [⚠] coverage: 11/20 releases have telemetry (55%).\n      total_releases=20, covered_releases=11, ratio=0.55\n  [✓] dedup_verification: No duplicate dedupe_keys found in event tables.\n  [—] schema_completeness: No feature_flag records found.\n  [—] drift_detection: Not enough daily data for drift detection.\n  [✓] org_isolation: Multi-tenant data present in 4 table(s) — verify scoped queries filter correctly.\n  [—] join_integrity: No release_impact_daily rows in lookback window.\n  [—] confidence_distribution: No confidence scores in lookback window.\n\nValidation report for org='88888888-0000-4000-8000-000000000008': 2 ok, 1 warn, 4 skip\nRESULT: WARNING — review flagged items.\n"
+ },
+ {
+  "org": "77777777-0000-4000-8000-000000000009",
+  "args": null,
+  "exit": 0,
+  "output": "Feature Flag Pipeline Validation — org='77777777-0000-4000-8000-000000000009'\n============================================================\n  [✓] coverage: 4/4 releases have telemetry (100%).\n  [✓] dedup_verification: No duplicate dedupe_keys found in event tables.\n  [—] schema_completeness: No feature_flag records found.\n  [—] drift_detection: Not enough daily data for drift detection.\n  [✓] org_isolation: Multi-tenant data present in 4 table(s) — verify scoped queries filter correctly.\n  [✓] join_integrity: 4/4 impact rows join to deployments (100%).\n  [✓] confidence_distribution: 4 scores, avg=0.39.\n\nValidation report for org='77777777-0000-4000-8000-000000000009': 5 ok, 2 skip\nRESULT: OK — all checks passed.\n"
+ },
+ {
+  "org": "66666666-0000-4000-8000-00000000000a",
+  "args": null,
+  "exit": 1,
+  "output": "Feature Flag Pipeline Validation — org='66666666-0000-4000-8000-00000000000a'\n============================================================\n  [—] coverage: No releases found in lookback window.\n  [✓] dedup_verification: No duplicate dedupe_keys found in event tables.\n  [✓] schema_completeness: 1/1 flags have all required fields (100%).\n  [—] drift_detection: Not enough daily data for drift detection.\n  [✓] org_isolation: No cross-org data detected (spot check).\n  [✗] join_integrity: 0/1 impact rows join to deployments (0%).\n      total=1, matched=0, ratio=0.0\n  [✓] confidence_distribution: 1 scores, avg=0.90.\n\nValidation report for org='66666666-0000-4000-8000-00000000000a': 4 ok, 1 critical, 2 skip\nRESULT: CRITICAL — pipeline health checks failed.\n"
+ },
+ {
+  "org": "",
+  "args": null,
+  "exit": 1,
+  "output": "Feature Flag Pipeline Validation — org=''\n============================================================\n  [—] coverage: No releases found in lookback window.\n  [✓] dedup_verification: No duplicate dedupe_keys found in event tables.\n  [✓] schema_completeness: 1/1 flags have all required fields (100%).\n  [—] drift_detection: Not enough daily data for drift detection.\n  [✓] org_isolation: Multi-tenant data present in 2 table(s) — verify scoped queries filter correctly.\n  [✗] join_integrity: 0/1 impact rows join to deployments (0%).\n      total=1, matched=0, ratio=0.0\n  [✓] confidence_distribution: 1 scores, avg=0.90.\n\nValidation report for org='': 4 ok, 1 critical, 2 skip\nRESULT: CRITICAL — pipeline health checks failed.\n"
+ }
+]

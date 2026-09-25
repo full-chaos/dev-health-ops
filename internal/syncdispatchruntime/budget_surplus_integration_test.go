@@ -8,20 +8,14 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func createBudgetSurplusTables(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
-	_, err := pool.Exec(ctx, `
-CREATE TABLE public.sync_run_units (
- id uuid PRIMARY KEY, status text NOT NULL, available_at timestamptz NULL,
- updated_at timestamptz NOT NULL DEFAULT now(), error text NULL, result json NULL,
- budget_deferrals int NOT NULL DEFAULT 0
-)`)
-	if err != nil {
-		t.Fatal(err)
-	}
+	pgschema.Apply(ctx, t, pool)
 }
 
 const budgetSurplusTestUnit = "00000000-0000-4000-8000-0000000002a0"
@@ -46,11 +40,8 @@ func withBudgetSurplusPool(t *testing.T, fn func(ctx context.Context, pool *pgxp
 
 func insertSurplusUnit(t *testing.T, ctx context.Context, pool *pgxpool.Pool, status string, availableAt time.Time) {
 	t.Helper()
-	if _, err := pool.Exec(ctx, `
-INSERT INTO public.sync_run_units (id, status, available_at, updated_at)
-VALUES ($1::uuid, $2, $3, now())`, budgetSurplusTestUnit, status, availableAt); err != nil {
-		t.Fatal(err)
-	}
+	now := time.Now()
+	pgseed.InsertSyncRunUnit(ctx, t, pool, pgseed.SyncRunUnit{ID: budgetSurplusTestUnit, Status: status, AvailableAt: &availableAt, UpdatedAt: &now})
 }
 
 // TestAdmitUnitFromSurplusPullsAvailableAtForward pins the CAS write's

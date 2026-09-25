@@ -143,7 +143,10 @@ type Recorded struct {
 	Host     string    `json:"host"`
 	Method   string    `json:"method"`
 	Path     string    `json:"path"`
-	Query    string    `json:"query"`
+	// QueryKeys are the query parameter NAMES, sorted: never their values (some
+	// provider APIs accept a token as a query parameter, so a value can be a
+	// credential).
+	QueryKeys []string `json:"query_keys"`
 	// AuthKind is the kind of Authorization-style header the request carried
 	// ("Bearer", "Basic", "token", "PRIVATE-TOKEN", "none"): never its value.
 	AuthKind string `json:"auth_kind"`
@@ -222,7 +225,7 @@ func (s *Stub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	provider := ProviderFor(r.Host)
 	record := Recorded{
 		At: time.Now().UTC(), Provider: provider, Host: r.Host, Method: r.Method,
-		Path: r.URL.Path, Query: r.URL.RawQuery, AuthKind: authKind(r),
+		Path: r.URL.Path, QueryKeys: queryKeys(r), AuthKind: authKind(r),
 	}
 	var matched *Fixture
 	if provider != "" {
@@ -263,6 +266,16 @@ func (s *Stub) record(r Recorded) {
 	s.mu.Lock()
 	s.recorded = append(s.recorded, r)
 	s.mu.Unlock()
+}
+
+// queryKeys returns the sorted query parameter names of a request (never values).
+func queryKeys(r *http.Request) []string {
+	keys := make([]string, 0)
+	for key := range r.URL.Query() {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // authKind names the kind of credential header a request carried, never its

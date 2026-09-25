@@ -90,6 +90,8 @@ func TestRecorderKeepsOnlyTheKindOfCredentialNeverItsValue(t *testing.T) {
 	get(t, stub, "api.github.com", "GET", "/user", map[string]string{"Authorization": "token " + secret})
 	get(t, stub, "gitlab.com", "GET", "/x", map[string]string{"PRIVATE-TOKEN": secret})
 	get(t, stub, "api.github.com", "GET", "/user", nil)
+	// A token carried as a query parameter (some provider APIs accept one) must not be kept either.
+	get(t, stub, "api.github.com", "GET", "/user?access_token="+secret+"&page=1", nil)
 	encoded, _ := json.Marshal(stub.Requests())
 	if strings.Contains(string(encoded), secret) {
 		t.Fatal("a credential value reached the recorder")
@@ -98,8 +100,11 @@ func TestRecorderKeepsOnlyTheKindOfCredentialNeverItsValue(t *testing.T) {
 	for _, r := range stub.Requests() {
 		kinds = append(kinds, r.AuthKind)
 	}
-	if strings.Join(kinds, ",") != "token,PRIVATE-TOKEN,none" {
+	if strings.Join(kinds, ",") != "token,PRIVATE-TOKEN,none,none" {
 		t.Fatalf("auth kinds = %v", kinds)
+	}
+	if last := stub.Requests()[3]; strings.Join(last.QueryKeys, ",") != "access_token,page" {
+		t.Fatalf("query keys = %v, want the names only", last.QueryKeys)
 	}
 }
 

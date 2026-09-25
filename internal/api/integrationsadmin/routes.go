@@ -27,7 +27,6 @@ import (
 	"net/http"
 	"strings"
 	"time"
-	"unicode"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -435,13 +434,7 @@ func parseSourceUpdate(body pybody.Body) (bool, pybody.Errors) {
 }
 
 // jiraKey is discovery/repos.py jira_key_norm: .strip().lower().
-func jiraKey(value string) string {
-	// str.strip() also strips the four ASCII separators U+001C to U+001F, and
-	// str.lower() expands U+0130 (capital I with dot) to "i" and a combining
-	// dot instead of Go's simple mapping to "i".
-	stripped := strings.TrimFunc(value, func(r rune) bool { return unicode.IsSpace(r) || (r >= 0x1c && r <= 0x1f) })
-	return strings.ToLower(strings.ReplaceAll(stripped, "\u0130", "i\u0307"))
-}
+func jiraKey(value string) string { return pythonparity.Lower(pythonparity.Strip(value)) }
 
 // systemMarkers are the discovery bookkeeping keys an explicit enable or
 // disable supersedes.

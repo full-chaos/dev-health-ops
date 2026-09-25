@@ -80,8 +80,9 @@ func TestLimitIntTruncatesLikeInt(t *testing.T) {
 }
 
 func TestJiraKeyMatchesPythonStripAndLower(t *testing.T) {
-	// U+0130 lower-cases to "i" + U+0307 in Python, and str.strip() removes
-	// U+001C to U+001F.
+	// jiraKey is the shared pythonparity strip and lower: U+0130 lower-cases to
+	// "i" + U+0307 in Python, and str.strip() removes U+001C to U+001F. The
+	// comparand is ASCII, so a final-sigma spelling cannot change the answer.
 	if jiraKey("J\u0130RA") == "jira" {
 		t.Error("a capital I with dot is not a plain i")
 	}

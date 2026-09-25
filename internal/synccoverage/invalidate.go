@@ -54,3 +54,20 @@ WHERE org_id = $1 AND sync_config_id = ANY($2::uuid[])`, orgID, configIDs); err 
 	}
 	return nil
 }
+
+// InvalidateForConfig is invalidate_sync_coverage_projection's
+// sync_config_id selector variant (a config with no integration): the
+// config's advisory transaction lock, then the invalidating UPDATE of its
+// projections, updated_at included as in InvalidateForIntegration.
+func InvalidateForConfig(ctx context.Context, tx pgx.Tx, orgID, configID string) error {
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, "sync-coverage:"+orgID+":"+configID); err != nil {
+		return fmt.Errorf("coverage lock: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+UPDATE public.sync_coverage_projections
+SET invalidated_at = now(), updated_at = now()
+WHERE org_id = $1 AND sync_config_id = $2::uuid`, orgID, configID); err != nil {
+		return fmt.Errorf("invalidate coverage projections: %w", err)
+	}
+	return nil
+}

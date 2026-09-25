@@ -50,6 +50,21 @@ func (o *Object) Get(key string) (Value, bool) {
 	return value, ok
 }
 
+// Delete removes key if present (dict.pop(key, None)); the other keys keep
+// their order.
+func (o *Object) Delete(key string) {
+	if _, exists := o.values[key]; !exists {
+		return
+	}
+	delete(o.values, key)
+	for index, existing := range o.keys {
+		if existing == key {
+			o.keys = append(o.keys[:index], o.keys[index+1:]...)
+			break
+		}
+	}
+}
+
 // Keys returns the keys in order.
 func (o *Object) Keys() []string { return append([]string(nil), o.keys...) }
 

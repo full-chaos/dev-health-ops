@@ -145,6 +145,7 @@ var responseModelRoutes = map[string]bool{
 	"PATCH /api/v1/admin/credentials/{provider}/{name}":                                true,
 	"PATCH /api/v1/admin/customer-push/sources/{source_id}":                            true,
 	"PATCH /api/v1/admin/feature-flags/{flag_id}":                                      true,
+	"PATCH /api/v1/admin/sync-configs/{config_id}":                                     true,
 	"PATCH /api/v1/admin/ip-allowlist/{entry_id}":                                      true,
 	"PATCH /api/v1/admin/orgs/{org_id}":                                                true,
 	"PATCH /api/v1/admin/orgs/{org_id}/feature-overrides/{override_id}":                true,

@@ -166,6 +166,7 @@ func webhookRequests(t *testing.T, f billingFixture) []venueoracle.Request {
 	invoice("invoice.payment_failed: empty org_id", "invoice.payment_failed", map[string]any{"org_id": ""})
 
 	subscriptionRequests(t, f, event, func(name string, body []byte) { signed(name, body) })
+	refundRequests(t, event)
 
 	// Types this slice does not handle yet (named in the PR) and unknown
 	// ones: logged only.
@@ -273,6 +274,7 @@ func TestVenueOracleBillingWebhook(t *testing.T) {
 				}
 			}
 			subscriptionSeed(t, ctx, admin, seed)
+			refundSeed(t, ctx, admin)
 			return seed.tokenSpecs()
 		},
 	})
@@ -330,6 +332,9 @@ func TestVenueOracleBillingWebhook(t *testing.T) {
 		return strings.Join(out, "\n")
 	}
 	tables := subscriptionTables(t, ctx, start)
+	for name, read := range refundTables(t, ctx, start) {
+		tables[name] = read
+	}
 	for name, read := range map[string]func(string) string{
 		"org_licenses": licenses,
 		"organizations": func(uri string) string {
@@ -403,6 +408,8 @@ func TestVenueOracleBillingWebhook(t *testing.T) {
 		}
 	}
 	measureSubscriptions(t, ctx, venue.AdminURI(t, venue.GoDB))
+	measureRefunds(t, ctx, venue.AdminURI(t, venue.GoDB))
+	receipt += refundMetadata(t, ctx, venue.AdminURI(t, venue.SourceDB), venue.AdminURI(t, venue.GoDB))
 	goLicenses := licenses(venue.AdminURI(t, venue.GoDB))
 	if !strings.Contains(goLicenses, "valid=true") || !strings.Contains(goLicenses, `"tier":"enterprise"`) {
 		t.Errorf("the Go plane stored no verified enterprise license: the checkout path measured nothing\n%s", goLicenses)

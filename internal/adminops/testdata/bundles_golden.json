@@ -18,7 +18,7 @@
    "team"
   ],
   "exit": 0,
-  "stdout": "signature valid=true\nlayout {\"iss\":\"fullchaos.studio\",\"sub\":\"org-1\",\"iat\":\u003cn\u003e,\"exp\":\u003cn\u003e,\"tier\":\"team\",\"features\":{\"git_sync\":true,\"work_items_sync\":true,\"basic_analytics\":true,\"team_management\":true,\"github_integration\":true,\"gitlab_integration\":true,\"jira_integration\":true,\"investment_view\":true,\"api_access\":true,\"capacity_forecast\":true,\"work_graph\":true,\"quadrant_analysis\":true,\"linear_integration\":true,\"llm_categorization\":true,\"webhooks\":true,\"customer_push_ingest\":true,\"canonical_incident_ingestion\":true,\"agent_context_runtime\":false,\"ask_dev\":false,\"ask_dev_contextual_entrypoints\":false,\"ask_dev_wave_3_1\":false,\"scheduled_jobs\":true,\"sso_saml\":false,\"sso_oidc\":false,\"audit_log\":false,\"custom_retention\":false,\"ip_allowlist\":false,\"data_export\":false,\"multi_org\":false,\"custom_branding\":false,\"priority_support\":false,\"byo_llm\":true},\"limits\":{\"users\":20,\"repos\":10,\"api_rate\":500,\"backfill_days\":90},\"grace_days\":14,\"org_name\":null,\"contact_email\":null,\"license_id\":\"\u003cuuid\u003e\"}\nfields {\"contact_email\":null,\"exp\":\"\\u003cmasked\\u003e\",\"features\":{\"agent_context_runtime\":false,\"api_access\":true,\"ask_dev\":false,\"ask_dev_contextual_entrypoints\":false,\"ask_dev_wave_3_1\":false,\"audit_log\":false,\"basic_analytics\":true,\"byo_llm\":true,\"canonical_incident_ingestion\":true,\"capacity_forecast\":true,\"custom_branding\":false,\"custom_retention\":false,\"customer_push_ingest\":true,\"data_export\":false,\"git_sync\":true,\"github_integration\":true,\"gitlab_integration\":true,\"investment_view\":true,\"ip_allowlist\":false,\"jira_integration\":true,\"linear_integration\":true,\"llm_categorization\":true,\"multi_org\":false,\"priority_support\":false,\"quadrant_analysis\":true,\"scheduled_jobs\":true,\"sso_oidc\":false,\"sso_saml\":false,\"team_management\":true,\"webhooks\":true,\"work_graph\":true,\"work_items_sync\":true},\"grace_days\":14,\"iat\":\"\\u003cmasked\\u003e\",\"iss\":\"fullchaos.studio\",\"license_id\":\"\\u003cmasked\\u003e\",\"lifetime_days\":365,\"limits\":{\"api_rate\":500,\"backfill_days\":90,\"repos\":10,\"users\":20},\"org_name\":null,\"sub\":\"org-1\",\"tier\":\"team\"}\n",
+  "stdout": "signature valid=true\nlayout {\"iss\":\"fullchaos.studio\",\"sub\":\"org-1\",\"iat\":\u003cn\u003e,\"exp\":\u003cn\u003e,\"tier\":\"team\",\"features\":{\"git_sync\":true,\"work_items_sync\":true,\"basic_analytics\":true,\"team_management\":true,\"github_integration\":true,\"gitlab_integration\":true,\"jira_integration\":true,\"investment_view\":true,\"api_access\":true,\"capacity_forecast\":true,\"work_graph\":true,\"quadrant_analysis\":true,\"linear_integration\":true,\"llm_categorization\":true,\"webhooks\":true,\"customer_push_ingest\":true,\"canonical_incident_ingestion\":true,\"agent_context_runtime\":false,\"ask_dev\":false,\"ask_dev_contextual_entrypoints\":false,\"ask_dev_wave_3_1\":false,\"scheduled_jobs\":true,\"sso_saml\":false,\"sso_oidc\":false,\"audit_log\":false,\"custom_retention\":false,\"ip_allowlist\":false,\"data_export\":false,\"multi_org\":false,\"custom_branding\":false,\"priority_support\":false,\"byo_llm\":true},\"limits\":{\"users\":20,\"repos\":10,\"api_rate\":500,\"backfill_days\":90},\"grace_days\":14,\"org_name\":null,\"contact_email\":null,\"license_id\":\"\u003cuuid\u003e\"}\nfields {\"contact_email\":null,\"exp\":\"\\u003cmasked\\u003e\",\"features\":{\"agent_context_runtime\":false,\"api_access\":true,\"ask_dev\":false,\"ask_dev_contextual_entrypoints\":false,\"ask_dev_wave_3_1\":false,\"audit_log\":false,\"basic_analytics\":true,\"byo_llm\":true,\"canonical_incident_ingestion\":true,\"capacity_forecast\":true,\"custom_branding\":false,\"custom_retention\":false,\"customer_push_ingest\":true,\"data_export\":false,\"git_sync\":true,\"github_integration\":true,\"gitlab_integration\":true,\"investment_view\":true,\"ip_allowlist\":false,\"jira_integration\":true,\"linear_integration\":true,\"llm_categorization\":true,\"multi_org\":false,\"priority_support\":false,\"quadrant_analysis\":true,\"scheduled_jobs\":true,\"sso_oidc\":false,\"sso_saml\":false,\"team_management\":true,\"webhooks\":true,\"work_graph\":true,\"work_items_sync\":true},\"grace_days\":14,\"iat\":\"\\u003cmasked\\u003e\",\"iss\":\"fullchaos.studio\",\"license_id\":\"\\u003cmasked\\u003e\",\"lifetime_days\":\"365\",\"limits\":{\"api_rate\":500,\"backfill_days\":90,\"repos\":10,\"users\":20},\"org_name\":null,\"sub\":\"org-1\",\"tier\":\"team\"}\n",
   "state": "{\"bundles\":null,\"overrides\":null,\"plans\":null}"
  },
  {
@@ -37,7 +37,7 @@
    "billing@example.com"
   ],
   "exit": 0,
-  "stdout": "signature valid=true\nlayout {\"iss\":\"fullchaos.studio\",\"sub\":\"org-1\",\"iat\":\u003cn\u003e,\"exp\":\u003cn\u003e,\"tier\":\"enterprise\",\"features\":{\"git_sync\":true,\"work_items_sync\":true,\"basic_analytics\":true,\"team_management\":true,\"github_integration\":true,\"gitlab_integration\":true,\"jira_integration\":true,\"investment_view\":true,\"api_access\":true,\"capacity_forecast\":true,\"work_graph\":true,\"quadrant_analysis\":true,\"linear_integration\":true,\"llm_categorization\":true,\"webhooks\":true,\"customer_push_ingest\":true,\"canonical_incident_ingestion\":true,\"agent_context_runtime\":false,\"ask_dev\":false,\"ask_dev_contextual_entrypoints\":false,\"ask_dev_wave_3_1\":false,\"scheduled_jobs\":true,\"sso_saml\":true,\"sso_oidc\":true,\"audit_log\":true,\"custom_retention\":true,\"ip_allowlist\":true,\"data_export\":true,\"multi_org\":true,\"custom_branding\":true,\"priority_support\":true,\"byo_llm\":true},\"limits\":{\"users\":-1,\"repos\":-1,\"api_rate\":-1,\"backfill_days\":null},\"grace_days\":30,\"org_name\":\"Acme é\",\"contact_email\":\"billing@example.com\",\"license_id\":\"\u003cuuid\u003e\"}\nfields {\"contact_email\":\"billing@example.com\",\"exp\":\"\\u003cmasked\\u003e\",\"features\":{\"agent_context_runtime\":false,\"api_access\":true,\"ask_dev\":false,\"ask_dev_contextual_entrypoints\":false,\"ask_dev_wave_3_1\":false,\"audit_log\":true,\"basic_analytics\":true,\"byo_llm\":true,\"canonical_incident_ingestion\":true,\"capacity_forecast\":true,\"custom_branding\":true,\"custom_retention\":true,\"customer_push_ingest\":true,\"data_export\":true,\"git_sync\":true,\"github_integration\":true,\"gitlab_integration\":true,\"investment_view\":true,\"ip_allowlist\":true,\"jira_integration\":true,\"linear_integration\":true,\"llm_categorization\":true,\"multi_org\":true,\"priority_support\":true,\"quadrant_analysis\":true,\"scheduled_jobs\":true,\"sso_oidc\":true,\"sso_saml\":true,\"team_management\":true,\"webhooks\":true,\"work_graph\":true,\"work_items_sync\":true},\"grace_days\":30,\"iat\":\"\\u003cmasked\\u003e\",\"iss\":\"fullchaos.studio\",\"license_id\":\"\\u003cmasked\\u003e\",\"lifetime_days\":30,\"limits\":{\"api_rate\":-1,\"backfill_days\":null,\"repos\":-1,\"users\":-1},\"org_name\":\"Acme é\",\"sub\":\"org-1\",\"tier\":\"enterprise\"}\n",
+  "stdout": "signature valid=true\nlayout {\"iss\":\"fullchaos.studio\",\"sub\":\"org-1\",\"iat\":\u003cn\u003e,\"exp\":\u003cn\u003e,\"tier\":\"enterprise\",\"features\":{\"git_sync\":true,\"work_items_sync\":true,\"basic_analytics\":true,\"team_management\":true,\"github_integration\":true,\"gitlab_integration\":true,\"jira_integration\":true,\"investment_view\":true,\"api_access\":true,\"capacity_forecast\":true,\"work_graph\":true,\"quadrant_analysis\":true,\"linear_integration\":true,\"llm_categorization\":true,\"webhooks\":true,\"customer_push_ingest\":true,\"canonical_incident_ingestion\":true,\"agent_context_runtime\":false,\"ask_dev\":false,\"ask_dev_contextual_entrypoints\":false,\"ask_dev_wave_3_1\":false,\"scheduled_jobs\":true,\"sso_saml\":true,\"sso_oidc\":true,\"audit_log\":true,\"custom_retention\":true,\"ip_allowlist\":true,\"data_export\":true,\"multi_org\":true,\"custom_branding\":true,\"priority_support\":true,\"byo_llm\":true},\"limits\":{\"users\":-1,\"repos\":-1,\"api_rate\":-1,\"backfill_days\":null},\"grace_days\":30,\"org_name\":\"Acme é\",\"contact_email\":\"billing@example.com\",\"license_id\":\"\u003cuuid\u003e\"}\nfields {\"contact_email\":\"billing@example.com\",\"exp\":\"\\u003cmasked\\u003e\",\"features\":{\"agent_context_runtime\":false,\"api_access\":true,\"ask_dev\":false,\"ask_dev_contextual_entrypoints\":false,\"ask_dev_wave_3_1\":false,\"audit_log\":true,\"basic_analytics\":true,\"byo_llm\":true,\"canonical_incident_ingestion\":true,\"capacity_forecast\":true,\"custom_branding\":true,\"custom_retention\":true,\"customer_push_ingest\":true,\"data_export\":true,\"git_sync\":true,\"github_integration\":true,\"gitlab_integration\":true,\"investment_view\":true,\"ip_allowlist\":true,\"jira_integration\":true,\"linear_integration\":true,\"llm_categorization\":true,\"multi_org\":true,\"priority_support\":true,\"quadrant_analysis\":true,\"scheduled_jobs\":true,\"sso_oidc\":true,\"sso_saml\":true,\"team_management\":true,\"webhooks\":true,\"work_graph\":true,\"work_items_sync\":true},\"grace_days\":30,\"iat\":\"\\u003cmasked\\u003e\",\"iss\":\"fullchaos.studio\",\"license_id\":\"\\u003cmasked\\u003e\",\"lifetime_days\":\"30\",\"limits\":{\"api_rate\":-1,\"backfill_days\":null,\"repos\":-1,\"users\":-1},\"org_name\":\"Acme é\",\"sub\":\"org-1\",\"tier\":\"enterprise\"}\n",
   "state": "{\"bundles\":null,\"overrides\":null,\"plans\":null}"
  },
  {
@@ -52,7 +52,7 @@
    "1_0"
   ],
   "exit": 0,
-  "stdout": "signature valid=true\nlayout {\"iss\":\"fullchaos.studio\",\"sub\":\"org-2\",\"iat\":\u003cn\u003e,\"exp\":\u003cn\u003e,\"tier\":\"community\",\"features\":{\"git_sync\":true,\"work_items_sync\":true,\"basic_analytics\":true,\"team_management\":true,\"github_integration\":false,\"gitlab_integration\":false,\"jira_integration\":false,\"investment_view\":false,\"api_access\":false,\"capacity_forecast\":false,\"work_graph\":false,\"quadrant_analysis\":false,\"linear_integration\":false,\"llm_categorization\":false,\"webhooks\":false,\"customer_push_ingest\":false,\"canonical_incident_ingestion\":true,\"agent_context_runtime\":false,\"ask_dev\":false,\"ask_dev_contextual_entrypoints\":false,\"ask_dev_wave_3_1\":false,\"scheduled_jobs\":false,\"sso_saml\":false,\"sso_oidc\":false,\"audit_log\":false,\"custom_retention\":false,\"ip_allowlist\":false,\"data_export\":false,\"multi_org\":false,\"custom_branding\":false,\"priority_support\":false,\"byo_llm\":false},\"limits\":{\"users\":5,\"repos\":3,\"api_rate\":100,\"backfill_days\":30},\"grace_days\":0,\"org_name\":null,\"contact_email\":null,\"license_id\":\"\u003cuuid\u003e\"}\nfields {\"contact_email\":null,\"exp\":\"\\u003cmasked\\u003e\",\"features\":{\"agent_context_runtime\":false,\"api_access\":false,\"ask_dev\":false,\"ask_dev_contextual_entrypoints\":false,\"ask_dev_wave_3_1\":false,\"audit_log\":false,\"basic_analytics\":true,\"byo_llm\":false,\"canonical_incident_ingestion\":true,\"capacity_forecast\":false,\"custom_branding\":false,\"custom_retention\":false,\"customer_push_ingest\":false,\"data_export\":false,\"git_sync\":true,\"github_integration\":false,\"gitlab_integration\":false,\"investment_view\":false,\"ip_allowlist\":false,\"jira_integration\":false,\"linear_integration\":false,\"llm_categorization\":false,\"multi_org\":false,\"priority_support\":false,\"quadrant_analysis\":false,\"scheduled_jobs\":false,\"sso_oidc\":false,\"sso_saml\":false,\"team_management\":true,\"webhooks\":false,\"work_graph\":false,\"work_items_sync\":true},\"grace_days\":0,\"iat\":\"\\u003cmasked\\u003e\",\"iss\":\"fullchaos.studio\",\"license_id\":\"\\u003cmasked\\u003e\",\"lifetime_days\":10,\"limits\":{\"api_rate\":100,\"backfill_days\":30,\"repos\":3,\"users\":5},\"org_name\":null,\"sub\":\"org-2\",\"tier\":\"community\"}\n",
+  "stdout": "signature valid=true\nlayout {\"iss\":\"fullchaos.studio\",\"sub\":\"org-2\",\"iat\":\u003cn\u003e,\"exp\":\u003cn\u003e,\"tier\":\"community\",\"features\":{\"git_sync\":true,\"work_items_sync\":true,\"basic_analytics\":true,\"team_management\":true,\"github_integration\":false,\"gitlab_integration\":false,\"jira_integration\":false,\"investment_view\":false,\"api_access\":false,\"capacity_forecast\":false,\"work_graph\":false,\"quadrant_analysis\":false,\"linear_integration\":false,\"llm_categorization\":false,\"webhooks\":false,\"customer_push_ingest\":false,\"canonical_incident_ingestion\":true,\"agent_context_runtime\":false,\"ask_dev\":false,\"ask_dev_contextual_entrypoints\":false,\"ask_dev_wave_3_1\":false,\"scheduled_jobs\":false,\"sso_saml\":false,\"sso_oidc\":false,\"audit_log\":false,\"custom_retention\":false,\"ip_allowlist\":false,\"data_export\":false,\"multi_org\":false,\"custom_branding\":false,\"priority_support\":false,\"byo_llm\":false},\"limits\":{\"users\":5,\"repos\":3,\"api_rate\":100,\"backfill_days\":30},\"grace_days\":0,\"org_name\":null,\"contact_email\":null,\"license_id\":\"\u003cuuid\u003e\"}\nfields {\"contact_email\":null,\"exp\":\"\\u003cmasked\\u003e\",\"features\":{\"agent_context_runtime\":false,\"api_access\":false,\"ask_dev\":false,\"ask_dev_contextual_entrypoints\":false,\"ask_dev_wave_3_1\":false,\"audit_log\":false,\"basic_analytics\":true,\"byo_llm\":false,\"canonical_incident_ingestion\":true,\"capacity_forecast\":false,\"custom_branding\":false,\"custom_retention\":false,\"customer_push_ingest\":false,\"data_export\":false,\"git_sync\":true,\"github_integration\":false,\"gitlab_integration\":false,\"investment_view\":false,\"ip_allowlist\":false,\"jira_integration\":false,\"linear_integration\":false,\"llm_categorization\":false,\"multi_org\":false,\"priority_support\":false,\"quadrant_analysis\":false,\"scheduled_jobs\":false,\"sso_oidc\":false,\"sso_saml\":false,\"team_management\":true,\"webhooks\":false,\"work_graph\":false,\"work_items_sync\":true},\"grace_days\":0,\"iat\":\"\\u003cmasked\\u003e\",\"iss\":\"fullchaos.studio\",\"license_id\":\"\\u003cmasked\\u003e\",\"lifetime_days\":\"10\",\"limits\":{\"api_rate\":100,\"backfill_days\":30,\"repos\":3,\"users\":5},\"org_name\":null,\"sub\":\"org-2\",\"tier\":\"community\"}\n",
   "state": "{\"bundles\":null,\"overrides\":null,\"plans\":null}"
  },
  {
@@ -67,7 +67,7 @@
    " 7 "
   ],
   "exit": 0,
-  "stdout": "signature valid=true\nlayout {\"iss\":\"fullchaos.studio\",\"sub\":\"org-2\",\"iat\":\u003cn\u003e,\"exp\":\u003cn\u003e,\"tier\":\"team\",\"features\":{\"git_sync\":true,\"work_items_sync\":true,\"basic_analytics\":true,\"team_management\":true,\"github_integration\":true,\"gitlab_integration\":true,\"jira_integration\":true,\"investment_view\":true,\"api_access\":true,\"capacity_forecast\":true,\"work_graph\":true,\"quadrant_analysis\":true,\"linear_integration\":true,\"llm_categorization\":true,\"webhooks\":true,\"customer_push_ingest\":true,\"canonical_incident_ingestion\":true,\"agent_context_runtime\":false,\"ask_dev\":false,\"ask_dev_contextual_entrypoints\":false,\"ask_dev_wave_3_1\":false,\"scheduled_jobs\":true,\"sso_saml\":false,\"sso_oidc\":false,\"audit_log\":false,\"custom_retention\":false,\"ip_allowlist\":false,\"data_export\":false,\"multi_org\":false,\"custom_branding\":false,\"priority_support\":false,\"byo_llm\":true},\"limits\":{\"users\":20,\"repos\":10,\"api_rate\":500,\"backfill_days\":90},\"grace_days\":14,\"org_name\":null,\"contact_email\":null,\"license_id\":\"\u003cuuid\u003e\"}\nfields {\"contact_email\":null,\"exp\":\"\\u003cmasked\\u003e\",\"features\":{\"agent_context_runtime\":false,\"api_access\":true,\"ask_dev\":false,\"ask_dev_contextual_entrypoints\":false,\"ask_dev_wave_3_1\":false,\"audit_log\":false,\"basic_analytics\":true,\"byo_llm\":true,\"canonical_incident_ingestion\":true,\"capacity_forecast\":true,\"custom_branding\":false,\"custom_retention\":false,\"customer_push_ingest\":true,\"data_export\":false,\"git_sync\":true,\"github_integration\":true,\"gitlab_integration\":true,\"investment_view\":true,\"ip_allowlist\":false,\"jira_integration\":true,\"linear_integration\":true,\"llm_categorization\":true,\"multi_org\":false,\"priority_support\":false,\"quadrant_analysis\":true,\"scheduled_jobs\":true,\"sso_oidc\":false,\"sso_saml\":false,\"team_management\":true,\"webhooks\":true,\"work_graph\":true,\"work_items_sync\":true},\"grace_days\":14,\"iat\":\"\\u003cmasked\\u003e\",\"iss\":\"fullchaos.studio\",\"license_id\":\"\\u003cmasked\\u003e\",\"lifetime_days\":7,\"limits\":{\"api_rate\":500,\"backfill_days\":90,\"repos\":10,\"users\":20},\"org_name\":null,\"sub\":\"org-2\",\"tier\":\"team\"}\n",
+  "stdout": "signature valid=true\nlayout {\"iss\":\"fullchaos.studio\",\"sub\":\"org-2\",\"iat\":\u003cn\u003e,\"exp\":\u003cn\u003e,\"tier\":\"team\",\"features\":{\"git_sync\":true,\"work_items_sync\":true,\"basic_analytics\":true,\"team_management\":true,\"github_integration\":true,\"gitlab_integration\":true,\"jira_integration\":true,\"investment_view\":true,\"api_access\":true,\"capacity_forecast\":true,\"work_graph\":true,\"quadrant_analysis\":true,\"linear_integration\":true,\"llm_categorization\":true,\"webhooks\":true,\"customer_push_ingest\":true,\"canonical_incident_ingestion\":true,\"agent_context_runtime\":false,\"ask_dev\":false,\"ask_dev_contextual_entrypoints\":false,\"ask_dev_wave_3_1\":false,\"scheduled_jobs\":true,\"sso_saml\":false,\"sso_oidc\":false,\"audit_log\":false,\"custom_retention\":false,\"ip_allowlist\":false,\"data_export\":false,\"multi_org\":false,\"custom_branding\":false,\"priority_support\":false,\"byo_llm\":true},\"limits\":{\"users\":20,\"repos\":10,\"api_rate\":500,\"backfill_days\":90},\"grace_days\":14,\"org_name\":null,\"contact_email\":null,\"license_id\":\"\u003cuuid\u003e\"}\nfields {\"contact_email\":null,\"exp\":\"\\u003cmasked\\u003e\",\"features\":{\"agent_context_runtime\":false,\"api_access\":true,\"ask_dev\":false,\"ask_dev_contextual_entrypoints\":false,\"ask_dev_wave_3_1\":false,\"audit_log\":false,\"basic_analytics\":true,\"byo_llm\":true,\"canonical_incident_ingestion\":true,\"capacity_forecast\":true,\"custom_branding\":false,\"custom_retention\":false,\"customer_push_ingest\":true,\"data_export\":false,\"git_sync\":true,\"github_integration\":true,\"gitlab_integration\":true,\"investment_view\":true,\"ip_allowlist\":false,\"jira_integration\":true,\"linear_integration\":true,\"llm_categorization\":true,\"multi_org\":false,\"priority_support\":false,\"quadrant_analysis\":true,\"scheduled_jobs\":true,\"sso_oidc\":false,\"sso_saml\":false,\"team_management\":true,\"webhooks\":true,\"work_graph\":true,\"work_items_sync\":true},\"grace_days\":14,\"iat\":\"\\u003cmasked\\u003e\",\"iss\":\"fullchaos.studio\",\"license_id\":\"\\u003cmasked\\u003e\",\"lifetime_days\":\"7\",\"limits\":{\"api_rate\":500,\"backfill_days\":90,\"repos\":10,\"users\":20},\"org_name\":null,\"sub\":\"org-2\",\"tier\":\"team\"}\n",
   "state": "{\"bundles\":null,\"overrides\":null,\"plans\":null}"
  },
  {
@@ -82,7 +82,7 @@
    "١"
   ],
   "exit": 0,
-  "stdout": "signature valid=true\nlayout {\"iss\":\"fullchaos.studio\",\"sub\":\"org-2\",\"iat\":\u003cn\u003e,\"exp\":\u003cn\u003e,\"tier\":\"team\",\"features\":{\"git_sync\":true,\"work_items_sync\":true,\"basic_analytics\":true,\"team_management\":true,\"github_integration\":true,\"gitlab_integration\":true,\"jira_integration\":true,\"investment_view\":true,\"api_access\":true,\"capacity_forecast\":true,\"work_graph\":true,\"quadrant_analysis\":true,\"linear_integration\":true,\"llm_categorization\":true,\"webhooks\":true,\"customer_push_ingest\":true,\"canonical_incident_ingestion\":true,\"agent_context_runtime\":false,\"ask_dev\":false,\"ask_dev_contextual_entrypoints\":false,\"ask_dev_wave_3_1\":false,\"scheduled_jobs\":true,\"sso_saml\":false,\"sso_oidc\":false,\"audit_log\":false,\"custom_retention\":false,\"ip_allowlist\":false,\"data_export\":false,\"multi_org\":false,\"custom_branding\":false,\"priority_support\":false,\"byo_llm\":true},\"limits\":{\"users\":20,\"repos\":10,\"api_rate\":500,\"backfill_days\":90},\"grace_days\":14,\"org_name\":null,\"contact_email\":null,\"license_id\":\"\u003cuuid\u003e\"}\nfields {\"contact_email\":null,\"exp\":\"\\u003cmasked\\u003e\",\"features\":{\"agent_context_runtime\":false,\"api_access\":true,\"ask_dev\":false,\"ask_dev_contextual_entrypoints\":false,\"ask_dev_wave_3_1\":false,\"audit_log\":false,\"basic_analytics\":true,\"byo_llm\":true,\"canonical_incident_ingestion\":true,\"capacity_forecast\":true,\"custom_branding\":false,\"custom_retention\":false,\"customer_push_ingest\":true,\"data_export\":false,\"git_sync\":true,\"github_integration\":true,\"gitlab_integration\":true,\"investment_view\":true,\"ip_allowlist\":false,\"jira_integration\":true,\"linear_integration\":true,\"llm_categorization\":true,\"multi_org\":false,\"priority_support\":false,\"quadrant_analysis\":true,\"scheduled_jobs\":true,\"sso_oidc\":false,\"sso_saml\":false,\"team_management\":true,\"webhooks\":true,\"work_graph\":true,\"work_items_sync\":true},\"grace_days\":14,\"iat\":\"\\u003cmasked\\u003e\",\"iss\":\"fullchaos.studio\",\"license_id\":\"\\u003cmasked\\u003e\",\"lifetime_days\":1,\"limits\":{\"api_rate\":500,\"backfill_days\":90,\"repos\":10,\"users\":20},\"org_name\":null,\"sub\":\"org-2\",\"tier\":\"team\"}\n",
+  "stdout": "signature valid=true\nlayout {\"iss\":\"fullchaos.studio\",\"sub\":\"org-2\",\"iat\":\u003cn\u003e,\"exp\":\u003cn\u003e,\"tier\":\"team\",\"features\":{\"git_sync\":true,\"work_items_sync\":true,\"basic_analytics\":true,\"team_management\":true,\"github_integration\":true,\"gitlab_integration\":true,\"jira_integration\":true,\"investment_view\":true,\"api_access\":true,\"capacity_forecast\":true,\"work_graph\":true,\"quadrant_analysis\":true,\"linear_integration\":true,\"llm_categorization\":true,\"webhooks\":true,\"customer_push_ingest\":true,\"canonical_incident_ingestion\":true,\"agent_context_runtime\":false,\"ask_dev\":false,\"ask_dev_contextual_entrypoints\":false,\"ask_dev_wave_3_1\":false,\"scheduled_jobs\":true,\"sso_saml\":false,\"sso_oidc\":false,\"audit_log\":false,\"custom_retention\":false,\"ip_allowlist\":false,\"data_export\":false,\"multi_org\":false,\"custom_branding\":false,\"priority_support\":false,\"byo_llm\":true},\"limits\":{\"users\":20,\"repos\":10,\"api_rate\":500,\"backfill_days\":90},\"grace_days\":14,\"org_name\":null,\"contact_email\":null,\"license_id\":\"\u003cuuid\u003e\"}\nfields {\"contact_email\":null,\"exp\":\"\\u003cmasked\\u003e\",\"features\":{\"agent_context_runtime\":false,\"api_access\":true,\"ask_dev\":false,\"ask_dev_contextual_entrypoints\":false,\"ask_dev_wave_3_1\":false,\"audit_log\":false,\"basic_analytics\":true,\"byo_llm\":true,\"canonical_incident_ingestion\":true,\"capacity_forecast\":true,\"custom_branding\":false,\"custom_retention\":false,\"customer_push_ingest\":true,\"data_export\":false,\"git_sync\":true,\"github_integration\":true,\"gitlab_integration\":true,\"investment_view\":true,\"ip_allowlist\":false,\"jira_integration\":true,\"linear_integration\":true,\"llm_categorization\":true,\"multi_org\":false,\"priority_support\":false,\"quadrant_analysis\":true,\"scheduled_jobs\":true,\"sso_oidc\":false,\"sso_saml\":false,\"team_management\":true,\"webhooks\":true,\"work_graph\":true,\"work_items_sync\":true},\"grace_days\":14,\"iat\":\"\\u003cmasked\\u003e\",\"iss\":\"fullchaos.studio\",\"license_id\":\"\\u003cmasked\\u003e\",\"lifetime_days\":\"1\",\"limits\":{\"api_rate\":500,\"backfill_days\":90,\"repos\":10,\"users\":20},\"org_name\":null,\"sub\":\"org-2\",\"tier\":\"team\"}\n",
   "state": "{\"bundles\":null,\"overrides\":null,\"plans\":null}"
  },
  {
@@ -112,7 +112,7 @@
    " 5 "
   ],
   "exit": 0,
-  "stdout": "signature valid=true\nlayout {\"iss\":\"fullchaos.studio\",\"sub\":\"org-2\",\"iat\":\u003cn\u003e,\"exp\":\u003cn\u003e,\"tier\":\"team\",\"features\":{\"git_sync\":true,\"work_items_sync\":true,\"basic_analytics\":true,\"team_management\":true,\"github_integration\":true,\"gitlab_integration\":true,\"jira_integration\":true,\"investment_view\":true,\"api_access\":true,\"capacity_forecast\":true,\"work_graph\":true,\"quadrant_analysis\":true,\"linear_integration\":true,\"llm_categorization\":true,\"webhooks\":true,\"customer_push_ingest\":true,\"canonical_incident_ingestion\":true,\"agent_context_runtime\":false,\"ask_dev\":false,\"ask_dev_contextual_entrypoints\":false,\"ask_dev_wave_3_1\":false,\"scheduled_jobs\":true,\"sso_saml\":false,\"sso_oidc\":false,\"audit_log\":false,\"custom_retention\":false,\"ip_allowlist\":false,\"data_export\":false,\"multi_org\":false,\"custom_branding\":false,\"priority_support\":false,\"byo_llm\":true},\"limits\":{\"users\":20,\"repos\":10,\"api_rate\":500,\"backfill_days\":90},\"grace_days\":14,\"org_name\":null,\"contact_email\":null,\"license_id\":\"\u003cuuid\u003e\"}\nfields {\"contact_email\":null,\"exp\":\"\\u003cmasked\\u003e\",\"features\":{\"agent_context_runtime\":false,\"api_access\":true,\"ask_dev\":false,\"ask_dev_contextual_entrypoints\":false,\"ask_dev_wave_3_1\":false,\"audit_log\":false,\"basic_analytics\":true,\"byo_llm\":true,\"canonical_incident_ingestion\":true,\"capacity_forecast\":true,\"custom_branding\":false,\"custom_retention\":false,\"customer_push_ingest\":true,\"data_export\":false,\"git_sync\":true,\"github_integration\":true,\"gitlab_integration\":true,\"investment_view\":true,\"ip_allowlist\":false,\"jira_integration\":true,\"linear_integration\":true,\"llm_categorization\":true,\"multi_org\":false,\"priority_support\":false,\"quadrant_analysis\":true,\"scheduled_jobs\":true,\"sso_oidc\":false,\"sso_saml\":false,\"team_management\":true,\"webhooks\":true,\"work_graph\":true,\"work_items_sync\":true},\"grace_days\":14,\"iat\":\"\\u003cmasked\\u003e\",\"iss\":\"fullchaos.studio\",\"license_id\":\"\\u003cmasked\\u003e\",\"lifetime_days\":5,\"limits\":{\"api_rate\":500,\"backfill_days\":90,\"repos\":10,\"users\":20},\"org_name\":null,\"sub\":\"org-2\",\"tier\":\"team\"}\n",
+  "stdout": "signature valid=true\nlayout {\"iss\":\"fullchaos.studio\",\"sub\":\"org-2\",\"iat\":\u003cn\u003e,\"exp\":\u003cn\u003e,\"tier\":\"team\",\"features\":{\"git_sync\":true,\"work_items_sync\":true,\"basic_analytics\":true,\"team_management\":true,\"github_integration\":true,\"gitlab_integration\":true,\"jira_integration\":true,\"investment_view\":true,\"api_access\":true,\"capacity_forecast\":true,\"work_graph\":true,\"quadrant_analysis\":true,\"linear_integration\":true,\"llm_categorization\":true,\"webhooks\":true,\"customer_push_ingest\":true,\"canonical_incident_ingestion\":true,\"agent_context_runtime\":false,\"ask_dev\":false,\"ask_dev_contextual_entrypoints\":false,\"ask_dev_wave_3_1\":false,\"scheduled_jobs\":true,\"sso_saml\":false,\"sso_oidc\":false,\"audit_log\":false,\"custom_retention\":false,\"ip_allowlist\":false,\"data_export\":false,\"multi_org\":false,\"custom_branding\":false,\"priority_support\":false,\"byo_llm\":true},\"limits\":{\"users\":20,\"repos\":10,\"api_rate\":500,\"backfill_days\":90},\"grace_days\":14,\"org_name\":null,\"contact_email\":null,\"license_id\":\"\u003cuuid\u003e\"}\nfields {\"contact_email\":null,\"exp\":\"\\u003cmasked\\u003e\",\"features\":{\"agent_context_runtime\":false,\"api_access\":true,\"ask_dev\":false,\"ask_dev_contextual_entrypoints\":false,\"ask_dev_wave_3_1\":false,\"audit_log\":false,\"basic_analytics\":true,\"byo_llm\":true,\"canonical_incident_ingestion\":true,\"capacity_forecast\":true,\"custom_branding\":false,\"custom_retention\":false,\"customer_push_ingest\":true,\"data_export\":false,\"git_sync\":true,\"github_integration\":true,\"gitlab_integration\":true,\"investment_view\":true,\"ip_allowlist\":false,\"jira_integration\":true,\"linear_integration\":true,\"llm_categorization\":true,\"multi_org\":false,\"priority_support\":false,\"quadrant_analysis\":true,\"scheduled_jobs\":true,\"sso_oidc\":false,\"sso_saml\":false,\"team_management\":true,\"webhooks\":true,\"work_graph\":true,\"work_items_sync\":true},\"grace_days\":14,\"iat\":\"\\u003cmasked\\u003e\",\"iss\":\"fullchaos.studio\",\"license_id\":\"\\u003cmasked\\u003e\",\"lifetime_days\":\"5\",\"limits\":{\"api_rate\":500,\"backfill_days\":90,\"repos\":10,\"users\":20},\"org_name\":null,\"sub\":\"org-2\",\"tier\":\"team\"}\n",
   "state": "{\"bundles\":null,\"overrides\":null,\"plans\":null}"
  },
  {
@@ -140,6 +140,66 @@
    "team",
    "--duration-days",
    "-5"
+  ],
+  "exit": 1,
+  "stdout": "Error: duration_days must be positive\n",
+  "state": "{\"bundles\":null,\"overrides\":null,\"plans\":null}"
+ },
+ {
+  "args": [
+   "licenses",
+   "create",
+   "--org-id",
+   "org-2",
+   "--tier",
+   "team",
+   "--duration-days",
+   "106751991167301"
+  ],
+  "exit": 0,
+  "stdout": "signature valid=true\nlayout {\"iss\":\"fullchaos.studio\",\"sub\":\"org-2\",\"iat\":\u003cn\u003e,\"exp\":\u003cn\u003e,\"tier\":\"team\",\"features\":{\"git_sync\":true,\"work_items_sync\":true,\"basic_analytics\":true,\"team_management\":true,\"github_integration\":true,\"gitlab_integration\":true,\"jira_integration\":true,\"investment_view\":true,\"api_access\":true,\"capacity_forecast\":true,\"work_graph\":true,\"quadrant_analysis\":true,\"linear_integration\":true,\"llm_categorization\":true,\"webhooks\":true,\"customer_push_ingest\":true,\"canonical_incident_ingestion\":true,\"agent_context_runtime\":false,\"ask_dev\":false,\"ask_dev_contextual_entrypoints\":false,\"ask_dev_wave_3_1\":false,\"scheduled_jobs\":true,\"sso_saml\":false,\"sso_oidc\":false,\"audit_log\":false,\"custom_retention\":false,\"ip_allowlist\":false,\"data_export\":false,\"multi_org\":false,\"custom_branding\":false,\"priority_support\":false,\"byo_llm\":true},\"limits\":{\"users\":20,\"repos\":10,\"api_rate\":500,\"backfill_days\":90},\"grace_days\":14,\"org_name\":null,\"contact_email\":null,\"license_id\":\"\u003cuuid\u003e\"}\nfields {\"contact_email\":null,\"exp\":\"\\u003cmasked\\u003e\",\"features\":{\"agent_context_runtime\":false,\"api_access\":true,\"ask_dev\":false,\"ask_dev_contextual_entrypoints\":false,\"ask_dev_wave_3_1\":false,\"audit_log\":false,\"basic_analytics\":true,\"byo_llm\":true,\"canonical_incident_ingestion\":true,\"capacity_forecast\":true,\"custom_branding\":false,\"custom_retention\":false,\"customer_push_ingest\":true,\"data_export\":false,\"git_sync\":true,\"github_integration\":true,\"gitlab_integration\":true,\"investment_view\":true,\"ip_allowlist\":false,\"jira_integration\":true,\"linear_integration\":true,\"llm_categorization\":true,\"multi_org\":false,\"priority_support\":false,\"quadrant_analysis\":true,\"scheduled_jobs\":true,\"sso_oidc\":false,\"sso_saml\":false,\"team_management\":true,\"webhooks\":true,\"work_graph\":true,\"work_items_sync\":true},\"grace_days\":14,\"iat\":\"\\u003cmasked\\u003e\",\"iss\":\"fullchaos.studio\",\"license_id\":\"\\u003cmasked\\u003e\",\"lifetime_days\":\"106751991167301\",\"limits\":{\"api_rate\":500,\"backfill_days\":90,\"repos\":10,\"users\":20},\"org_name\":null,\"sub\":\"org-2\",\"tier\":\"team\"}\n",
+  "state": "{\"bundles\":null,\"overrides\":null,\"plans\":null}"
+ },
+ {
+  "args": [
+   "licenses",
+   "create",
+   "--org-id",
+   "org-2",
+   "--tier",
+   "team",
+   "--duration-days",
+   "9223372036854775808"
+  ],
+  "exit": 0,
+  "stdout": "signature valid=true\nlayout {\"iss\":\"fullchaos.studio\",\"sub\":\"org-2\",\"iat\":\u003cn\u003e,\"exp\":\u003cn\u003e,\"tier\":\"team\",\"features\":{\"git_sync\":true,\"work_items_sync\":true,\"basic_analytics\":true,\"team_management\":true,\"github_integration\":true,\"gitlab_integration\":true,\"jira_integration\":true,\"investment_view\":true,\"api_access\":true,\"capacity_forecast\":true,\"work_graph\":true,\"quadrant_analysis\":true,\"linear_integration\":true,\"llm_categorization\":true,\"webhooks\":true,\"customer_push_ingest\":true,\"canonical_incident_ingestion\":true,\"agent_context_runtime\":false,\"ask_dev\":false,\"ask_dev_contextual_entrypoints\":false,\"ask_dev_wave_3_1\":false,\"scheduled_jobs\":true,\"sso_saml\":false,\"sso_oidc\":false,\"audit_log\":false,\"custom_retention\":false,\"ip_allowlist\":false,\"data_export\":false,\"multi_org\":false,\"custom_branding\":false,\"priority_support\":false,\"byo_llm\":true},\"limits\":{\"users\":20,\"repos\":10,\"api_rate\":500,\"backfill_days\":90},\"grace_days\":14,\"org_name\":null,\"contact_email\":null,\"license_id\":\"\u003cuuid\u003e\"}\nfields {\"contact_email\":null,\"exp\":\"\\u003cmasked\\u003e\",\"features\":{\"agent_context_runtime\":false,\"api_access\":true,\"ask_dev\":false,\"ask_dev_contextual_entrypoints\":false,\"ask_dev_wave_3_1\":false,\"audit_log\":false,\"basic_analytics\":true,\"byo_llm\":true,\"canonical_incident_ingestion\":true,\"capacity_forecast\":true,\"custom_branding\":false,\"custom_retention\":false,\"customer_push_ingest\":true,\"data_export\":false,\"git_sync\":true,\"github_integration\":true,\"gitlab_integration\":true,\"investment_view\":true,\"ip_allowlist\":false,\"jira_integration\":true,\"linear_integration\":true,\"llm_categorization\":true,\"multi_org\":false,\"priority_support\":false,\"quadrant_analysis\":true,\"scheduled_jobs\":true,\"sso_oidc\":false,\"sso_saml\":false,\"team_management\":true,\"webhooks\":true,\"work_graph\":true,\"work_items_sync\":true},\"grace_days\":14,\"iat\":\"\\u003cmasked\\u003e\",\"iss\":\"fullchaos.studio\",\"license_id\":\"\\u003cmasked\\u003e\",\"lifetime_days\":\"9223372036854775808\",\"limits\":{\"api_rate\":500,\"backfill_days\":90,\"repos\":10,\"users\":20},\"org_name\":null,\"sub\":\"org-2\",\"tier\":\"team\"}\n",
+  "state": "{\"bundles\":null,\"overrides\":null,\"plans\":null}"
+ },
+ {
+  "args": [
+   "licenses",
+   "create",
+   "--org-id",
+   "org-2",
+   "--tier",
+   "team",
+   "--duration-days",
+   "10000000000000000000000000000000000000000"
+  ],
+  "exit": 0,
+  "stdout": "signature valid=true\nlayout {\"iss\":\"fullchaos.studio\",\"sub\":\"org-2\",\"iat\":\u003cn\u003e,\"exp\":\u003cn\u003e,\"tier\":\"team\",\"features\":{\"git_sync\":true,\"work_items_sync\":true,\"basic_analytics\":true,\"team_management\":true,\"github_integration\":true,\"gitlab_integration\":true,\"jira_integration\":true,\"investment_view\":true,\"api_access\":true,\"capacity_forecast\":true,\"work_graph\":true,\"quadrant_analysis\":true,\"linear_integration\":true,\"llm_categorization\":true,\"webhooks\":true,\"customer_push_ingest\":true,\"canonical_incident_ingestion\":true,\"agent_context_runtime\":false,\"ask_dev\":false,\"ask_dev_contextual_entrypoints\":false,\"ask_dev_wave_3_1\":false,\"scheduled_jobs\":true,\"sso_saml\":false,\"sso_oidc\":false,\"audit_log\":false,\"custom_retention\":false,\"ip_allowlist\":false,\"data_export\":false,\"multi_org\":false,\"custom_branding\":false,\"priority_support\":false,\"byo_llm\":true},\"limits\":{\"users\":20,\"repos\":10,\"api_rate\":500,\"backfill_days\":90},\"grace_days\":14,\"org_name\":null,\"contact_email\":null,\"license_id\":\"\u003cuuid\u003e\"}\nfields {\"contact_email\":null,\"exp\":\"\\u003cmasked\\u003e\",\"features\":{\"agent_context_runtime\":false,\"api_access\":true,\"ask_dev\":false,\"ask_dev_contextual_entrypoints\":false,\"ask_dev_wave_3_1\":false,\"audit_log\":false,\"basic_analytics\":true,\"byo_llm\":true,\"canonical_incident_ingestion\":true,\"capacity_forecast\":true,\"custom_branding\":false,\"custom_retention\":false,\"customer_push_ingest\":true,\"data_export\":false,\"git_sync\":true,\"github_integration\":true,\"gitlab_integration\":true,\"investment_view\":true,\"ip_allowlist\":false,\"jira_integration\":true,\"linear_integration\":true,\"llm_categorization\":true,\"multi_org\":false,\"priority_support\":false,\"quadrant_analysis\":true,\"scheduled_jobs\":true,\"sso_oidc\":false,\"sso_saml\":false,\"team_management\":true,\"webhooks\":true,\"work_graph\":true,\"work_items_sync\":true},\"grace_days\":14,\"iat\":\"\\u003cmasked\\u003e\",\"iss\":\"fullchaos.studio\",\"license_id\":\"\\u003cmasked\\u003e\",\"lifetime_days\":\"10000000000000000000000000000000000000000\",\"limits\":{\"api_rate\":500,\"backfill_days\":90,\"repos\":10,\"users\":20},\"org_name\":null,\"sub\":\"org-2\",\"tier\":\"team\"}\n",
+  "state": "{\"bundles\":null,\"overrides\":null,\"plans\":null}"
+ },
+ {
+  "args": [
+   "licenses",
+   "create",
+   "--org-id",
+   "org-2",
+   "--tier",
+   "team",
+   "--duration-days",
+   "-9223372036854775809"
   ],
   "exit": 1,
   "stdout": "Error: duration_days must be positive\n",
@@ -622,6 +682,96 @@
   ],
   "exit": 1,
   "stdout": "Error: date value out of range\n",
+  "state": "{\"bundles\":[\"core|Core|The core|[\\\"git_sync\\\", \\\"work_items_sync\\\", \\\"basic_analytics\\\"]\",\"nofeat|No features|\\u003cnull\\u003e|[]\",\"uni|Ünï 日本|\\u003cnull\\u003e|[\\\"sso_saml\\\"]\"],\"overrides\":[\"aaaaaaaa-0000-4000-8000-00000000000a|git_sync|true|-3|{}|\\u003cnull\\u003e\",\"aaaaaaaa-0000-4000-8000-00000000000a|sso_oidc|true|\\u003cnull\\u003e|{}|\\u003cnull\\u003e\",\"aaaaaaaa-0000-4000-8000-00000000000a|sso_saml|true|30|{}|support ticket\",\"aaaaaaaa-0000-4000-8000-00000000000a|webhooks|true|10|{}|\\u003cnull\\u003e\"],\"plans\":[\"core|pro-plan\",\"core|team-plan\"]}"
+ },
+ {
+  "args": [
+   "bundles",
+   "assign-org",
+   "--org-id",
+   "aaaaaaaa-0000-4000-8000-00000000000a",
+   "--feature-key",
+   "api_access",
+   "--expires-days",
+   "2147483647"
+  ],
+  "exit": 1,
+  "stdout": "Error: days=2147483647; must have magnitude \u003c= 999999999\n",
+  "state": "{\"bundles\":[\"core|Core|The core|[\\\"git_sync\\\", \\\"work_items_sync\\\", \\\"basic_analytics\\\"]\",\"nofeat|No features|\\u003cnull\\u003e|[]\",\"uni|Ünï 日本|\\u003cnull\\u003e|[\\\"sso_saml\\\"]\"],\"overrides\":[\"aaaaaaaa-0000-4000-8000-00000000000a|git_sync|true|-3|{}|\\u003cnull\\u003e\",\"aaaaaaaa-0000-4000-8000-00000000000a|sso_oidc|true|\\u003cnull\\u003e|{}|\\u003cnull\\u003e\",\"aaaaaaaa-0000-4000-8000-00000000000a|sso_saml|true|30|{}|support ticket\",\"aaaaaaaa-0000-4000-8000-00000000000a|webhooks|true|10|{}|\\u003cnull\\u003e\"],\"plans\":[\"core|pro-plan\",\"core|team-plan\"]}"
+ },
+ {
+  "args": [
+   "bundles",
+   "assign-org",
+   "--org-id",
+   "aaaaaaaa-0000-4000-8000-00000000000a",
+   "--feature-key",
+   "api_access",
+   "--expires-days",
+   "2147483648"
+  ],
+  "exit": 1,
+  "stdout": "Error: Python int too large to convert to C int\n",
+  "state": "{\"bundles\":[\"core|Core|The core|[\\\"git_sync\\\", \\\"work_items_sync\\\", \\\"basic_analytics\\\"]\",\"nofeat|No features|\\u003cnull\\u003e|[]\",\"uni|Ünï 日本|\\u003cnull\\u003e|[\\\"sso_saml\\\"]\"],\"overrides\":[\"aaaaaaaa-0000-4000-8000-00000000000a|git_sync|true|-3|{}|\\u003cnull\\u003e\",\"aaaaaaaa-0000-4000-8000-00000000000a|sso_oidc|true|\\u003cnull\\u003e|{}|\\u003cnull\\u003e\",\"aaaaaaaa-0000-4000-8000-00000000000a|sso_saml|true|30|{}|support ticket\",\"aaaaaaaa-0000-4000-8000-00000000000a|webhooks|true|10|{}|\\u003cnull\\u003e\"],\"plans\":[\"core|pro-plan\",\"core|team-plan\"]}"
+ },
+ {
+  "args": [
+   "bundles",
+   "assign-org",
+   "--org-id",
+   "aaaaaaaa-0000-4000-8000-00000000000a",
+   "--feature-key",
+   "api_access",
+   "--expires-days",
+   "-2147483648"
+  ],
+  "exit": 1,
+  "stdout": "Error: days=-2147483648; must have magnitude \u003c= 999999999\n",
+  "state": "{\"bundles\":[\"core|Core|The core|[\\\"git_sync\\\", \\\"work_items_sync\\\", \\\"basic_analytics\\\"]\",\"nofeat|No features|\\u003cnull\\u003e|[]\",\"uni|Ünï 日本|\\u003cnull\\u003e|[\\\"sso_saml\\\"]\"],\"overrides\":[\"aaaaaaaa-0000-4000-8000-00000000000a|git_sync|true|-3|{}|\\u003cnull\\u003e\",\"aaaaaaaa-0000-4000-8000-00000000000a|sso_oidc|true|\\u003cnull\\u003e|{}|\\u003cnull\\u003e\",\"aaaaaaaa-0000-4000-8000-00000000000a|sso_saml|true|30|{}|support ticket\",\"aaaaaaaa-0000-4000-8000-00000000000a|webhooks|true|10|{}|\\u003cnull\\u003e\"],\"plans\":[\"core|pro-plan\",\"core|team-plan\"]}"
+ },
+ {
+  "args": [
+   "bundles",
+   "assign-org",
+   "--org-id",
+   "aaaaaaaa-0000-4000-8000-00000000000a",
+   "--feature-key",
+   "api_access",
+   "--expires-days",
+   "-2147483649"
+  ],
+  "exit": 1,
+  "stdout": "Error: Python int too large to convert to C int\n",
+  "state": "{\"bundles\":[\"core|Core|The core|[\\\"git_sync\\\", \\\"work_items_sync\\\", \\\"basic_analytics\\\"]\",\"nofeat|No features|\\u003cnull\\u003e|[]\",\"uni|Ünï 日本|\\u003cnull\\u003e|[\\\"sso_saml\\\"]\"],\"overrides\":[\"aaaaaaaa-0000-4000-8000-00000000000a|git_sync|true|-3|{}|\\u003cnull\\u003e\",\"aaaaaaaa-0000-4000-8000-00000000000a|sso_oidc|true|\\u003cnull\\u003e|{}|\\u003cnull\\u003e\",\"aaaaaaaa-0000-4000-8000-00000000000a|sso_saml|true|30|{}|support ticket\",\"aaaaaaaa-0000-4000-8000-00000000000a|webhooks|true|10|{}|\\u003cnull\\u003e\"],\"plans\":[\"core|pro-plan\",\"core|team-plan\"]}"
+ },
+ {
+  "args": [
+   "bundles",
+   "assign-org",
+   "--org-id",
+   "aaaaaaaa-0000-4000-8000-00000000000a",
+   "--feature-key",
+   "api_access",
+   "--expires-days",
+   "9223372036854775808"
+  ],
+  "exit": 1,
+  "stdout": "Error: Python int too large to convert to C int\n",
+  "state": "{\"bundles\":[\"core|Core|The core|[\\\"git_sync\\\", \\\"work_items_sync\\\", \\\"basic_analytics\\\"]\",\"nofeat|No features|\\u003cnull\\u003e|[]\",\"uni|Ünï 日本|\\u003cnull\\u003e|[\\\"sso_saml\\\"]\"],\"overrides\":[\"aaaaaaaa-0000-4000-8000-00000000000a|git_sync|true|-3|{}|\\u003cnull\\u003e\",\"aaaaaaaa-0000-4000-8000-00000000000a|sso_oidc|true|\\u003cnull\\u003e|{}|\\u003cnull\\u003e\",\"aaaaaaaa-0000-4000-8000-00000000000a|sso_saml|true|30|{}|support ticket\",\"aaaaaaaa-0000-4000-8000-00000000000a|webhooks|true|10|{}|\\u003cnull\\u003e\"],\"plans\":[\"core|pro-plan\",\"core|team-plan\"]}"
+ },
+ {
+  "args": [
+   "bundles",
+   "assign-org",
+   "--org-id",
+   "aaaaaaaa-0000-4000-8000-00000000000a",
+   "--feature-key",
+   "api_access",
+   "--expires-days",
+   "-1000000000000000000000000000000"
+  ],
+  "exit": 1,
+  "stdout": "Error: Python int too large to convert to C int\n",
   "state": "{\"bundles\":[\"core|Core|The core|[\\\"git_sync\\\", \\\"work_items_sync\\\", \\\"basic_analytics\\\"]\",\"nofeat|No features|\\u003cnull\\u003e|[]\",\"uni|Ünï 日本|\\u003cnull\\u003e|[\\\"sso_saml\\\"]\"],\"overrides\":[\"aaaaaaaa-0000-4000-8000-00000000000a|git_sync|true|-3|{}|\\u003cnull\\u003e\",\"aaaaaaaa-0000-4000-8000-00000000000a|sso_oidc|true|\\u003cnull\\u003e|{}|\\u003cnull\\u003e\",\"aaaaaaaa-0000-4000-8000-00000000000a|sso_saml|true|30|{}|support ticket\",\"aaaaaaaa-0000-4000-8000-00000000000a|webhooks|true|10|{}|\\u003cnull\\u003e\"],\"plans\":[\"core|pro-plan\",\"core|team-plan\"]}"
  },
  {

@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"math/big"
 	"os"
 	"regexp"
 	"strings"
@@ -64,6 +65,11 @@ var bundleScript = []bundleStep{
 	withKey(testSeed, "licenses", "create", "--org-id", "org-2", "--tier", "team", "--duration-days", "\u00a05\u2003"),
 	withKey(testSeed, "licenses", "create", "--org-id", "org-2", "--tier", "team", "--duration-days", "0"),
 	withKey(testSeed, "licenses", "create", "--org-id", "org-2", "--tier", "team", "--duration-days", "-5"),
+	// Python's integers are unbounded: these are signed (exp beyond 64 bits).
+	withKey(testSeed, "licenses", "create", "--org-id", "org-2", "--tier", "team", "--duration-days", "106751991167301"),
+	withKey(testSeed, "licenses", "create", "--org-id", "org-2", "--tier", "team", "--duration-days", "9223372036854775808"),
+	withKey(testSeed, "licenses", "create", "--org-id", "org-2", "--tier", "team", "--duration-days", "1"+strings.Repeat("0", 40)),
+	withKey(testSeed, "licenses", "create", "--org-id", "org-2", "--tier", "team", "--duration-days", "-9223372036854775809"),
 	withKey(testSeed, "licenses", "create", "--org-id", "org-2", "--tier", "bogus"),
 	withKey(testSeed, "licenses", "create", "--org-id", "org-2", "--tier", "team", "--duration-days", "many"),
 	withKey(testSeed, "licenses", "create", "--tier", "team"),
@@ -102,6 +108,12 @@ INSERT INTO organizations (id, slug, name, tier, managed_by, is_active, created_
 	dbErr("bundles", "assign-org", "--org-id", "bbbbbbbb-0000-4000-8000-00000000000b", "--feature-key", "api_access"),
 	vb("bundles", "assign-org", "--org-id", overrideOrg, "--feature-key", "api_access", "--expires-days", "1000000000"),
 	vb("bundles", "assign-org", "--org-id", overrideOrg, "--feature-key", "api_access", "--expires-days", "999999999"),
+	vb("bundles", "assign-org", "--org-id", overrideOrg, "--feature-key", "api_access", "--expires-days", "2147483647"),
+	vb("bundles", "assign-org", "--org-id", overrideOrg, "--feature-key", "api_access", "--expires-days", "2147483648"),
+	vb("bundles", "assign-org", "--org-id", overrideOrg, "--feature-key", "api_access", "--expires-days", "-2147483648"),
+	vb("bundles", "assign-org", "--org-id", overrideOrg, "--feature-key", "api_access", "--expires-days", "-2147483649"),
+	vb("bundles", "assign-org", "--org-id", overrideOrg, "--feature-key", "api_access", "--expires-days", "9223372036854775808"),
+	vb("bundles", "assign-org", "--org-id", overrideOrg, "--feature-key", "api_access", "--expires-days", "-"+"1"+strings.Repeat("0", 30)),
 	dbErr("bundles", "assign-org", "--org-id", "{AAAAAAAA-0000-4000-8000-00000000000A}", "--feature-key", "work_graph", "--reason", "é"),
 	dbErr("bundles", "assign-org", "--org-id", "urn:uuid:aaaaaaaa-0000-4000-8000-00000000000a", "--feature-key", "work_graph"),
 	vb("bundles", "assign-org", "--org-id", "AAAAAAAA00004000800000000000000A", "--feature-key", "work_graph", "--reason", "é"),
@@ -156,9 +168,10 @@ func normalizeLicense(t *testing.T, stdout, seedB64 string) string {
 	if err := decoder.Decode(&payload); err != nil {
 		return stdout
 	}
-	iat, _ := payload["iat"].(json.Number).Int64()
-	exp, _ := payload["exp"].(json.Number).Int64()
-	payload["lifetime_days"] = (exp - iat) / 86400
+	// exp can exceed 64 bits (Python's integers are unbounded): keep it exact.
+	iat, _ := new(big.Int).SetString(payload["iat"].(json.Number).String(), 10)
+	exp, _ := new(big.Int).SetString(payload["exp"].(json.Number).String(), 10)
+	payload["lifetime_days"] = new(big.Int).Quo(new(big.Int).Sub(exp, iat), big.NewInt(86400)).String()
 	for _, key := range []string{"iat", "exp", "license_id"} {
 		payload[key] = "<masked>"
 	}
@@ -246,7 +259,7 @@ const bundlesGolden = "testdata/bundles_golden.json"
 // producer is deleted with the Python CLI, so this is a rot guard: the file is
 // only rewritten by TestBundlesVenueOracleMatchesThePythonProducer with
 // DHO_BUNDLES_GOLDEN_UPDATE=1, then this digest is updated.
-const bundlesGoldenSHA256 = "be82db23b4edbf1f6abfcbfe9889d8be134c5ae7a05c662dbb01cb1ca5c6a036"
+const bundlesGoldenSHA256 = "d592039a8a00a786a7e76d3e939580084673a6996b3d315a843abacac7bf5718"
 
 func TestBundlesGoldenIsTheFileTheDigestPins(t *testing.T) {
 	raw, err := os.ReadFile(bundlesGolden)

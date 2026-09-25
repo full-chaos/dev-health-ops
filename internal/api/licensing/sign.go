@@ -5,7 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"math"
+	"math/big"
 	"strings"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
@@ -50,8 +50,9 @@ type LicenseRequest struct {
 	IssuedAt  int64
 	LicenseID string
 	// DurationDays is sign_license's duration_days; nil is its default of 365.
-	// A value that is not positive is refused, as Python refuses it.
-	DurationDays *int64
+	// A value that is not positive is refused, as Python refuses it. Python's
+	// integers are unbounded, so is this one (the expiry becomes a big integer).
+	DurationDays *big.Int
 	// OrgName and ContactEmail are the payload's org_name and contact_email;
 	// nil is None.
 	OrgName, ContactEmail *string
@@ -70,17 +71,15 @@ func SignLicense(privateKeyB64 string, request LicenseRequest) (string, error) {
 	if _, ok := TierRank(tier); !ok {
 		return "", fmt.Errorf("Invalid tier %s. Must be one of: community, team, enterprise", pythonparity.StrRepr(request.Tier))
 	}
-	duration := int64(licenseDurationDays)
+	duration := big.NewInt(licenseDurationDays)
 	if request.DurationDays != nil {
-		duration = *request.DurationDays
+		duration = request.DurationDays
 	}
-	if duration <= 0 {
+	if duration.Sign() <= 0 {
 		return "", errors.New("duration_days must be positive")
 	}
-	if duration > math.MaxInt64/86400 || (request.IssuedAt > 0 && duration*86400 > math.MaxInt64-request.IssuedAt) {
-		// Python's integers are unbounded; the expiry of this payload is not.
-		return "", errors.New("duration_days is too large")
-	}
+	expiry := new(big.Int).Mul(duration, big.NewInt(86400))
+	expiry.Add(expiry, big.NewInt(request.IssuedAt))
 	seed, err := pythonB64Decode(privateKeyB64)
 	if err != nil {
 		return "", fmt.Errorf("Invalid private key: %w", err)
@@ -103,7 +102,7 @@ func SignLicense(privateKeyB64 string, request LicenseRequest) (string, error) {
 	payload.Set("iss", "fullchaos.studio")
 	payload.Set("sub", request.OrgID)
 	payload.Set("iat", request.IssuedAt)
-	payload.Set("exp", request.IssuedAt+duration*86400)
+	payload.Set("exp", pyjson.Int{Int: expiry})
 	payload.Set("tier", tier)
 	payload.Set("features", features)
 	payload.Set("limits", limitObject)

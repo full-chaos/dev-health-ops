@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
+	"math/big"
 	"sort"
 	"strings"
 	"time"
@@ -265,7 +267,7 @@ func isoUTC(t time.Time) string {
 func runBundlesAssignOrg(ctx context.Context, env cli.Env) int {
 	flags := newFlags(env, "dho admin bundles assign-org")
 	var orgID, featureKey, reason optString
-	var expiresDays *int64
+	var expiresDays *big.Int
 	flags.Var(&orgID, "org-id", "organization id, a UUID (required)")
 	flags.Var(&featureKey, "feature-key", "feature flag key (required)")
 	flags.Var(&reason, "reason", "why the override exists")
@@ -274,7 +276,7 @@ func runBundlesAssignOrg(ctx context.Context, env cli.Env) int {
 		if err != nil {
 			return err
 		}
-		expiresDays = &days
+		expiresDays = days
 		return nil
 	})
 	if code, ok := parseArgs(flags, env); !ok {
@@ -298,13 +300,18 @@ func runBundlesAssignOrg(ctx context.Context, env cli.Env) int {
 		return cli.ExitFailure
 	}
 	var expires *time.Time
-	if expiresDays != nil && *expiresDays != 0 {
-		// datetime.now(utc) + timedelta(days=N): Python's own limits.
-		if *expiresDays > 999999999 || *expiresDays < -999999999 {
-			fmt.Fprintf(env.Stdout, "Error: days=%d; must have magnitude <= 999999999\n", *expiresDays)
+	if expiresDays != nil && expiresDays.Sign() != 0 {
+		// datetime.now(utc) + timedelta(days=N): Python's own limits (a day
+		// count beyond a C int is refused before its magnitude is checked).
+		if !expiresDays.IsInt64() || expiresDays.Int64() > math.MaxInt32 || expiresDays.Int64() < math.MinInt32 {
+			fmt.Fprintln(env.Stdout, "Error: Python int too large to convert to C int")
 			return cli.ExitFailure
 		}
-		moment := time.Now().UTC().AddDate(0, 0, int(*expiresDays))
+		if days := expiresDays.Int64(); days > 999999999 || days < -999999999 {
+			fmt.Fprintf(env.Stdout, "Error: days=%d; must have magnitude <= 999999999\n", days)
+			return cli.ExitFailure
+		}
+		moment := time.Now().UTC().AddDate(0, 0, int(expiresDays.Int64()))
 		if moment.Year() < 1 || moment.Year() > 9999 {
 			fmt.Fprintln(env.Stdout, "Error: date value out of range")
 			return cli.ExitFailure
@@ -328,13 +335,13 @@ VALUES ($1, $2, $3, true, $4, '{}', $5, now(), now())`, uuid.New(), org, feature
 
 // parsePyInt is int(text) as argparse's type=int calls it (pythonparity.ParseInt:
 // Unicode decimal digits and whitespace, a sign, single underscores between
-// digits). A value beyond int64 is refused (Python's integers are unbounded).
-func parsePyInt(text string) (int64, error) {
+// digits); Python's integers are unbounded, so is the result.
+func parsePyInt(text string) (*big.Int, error) {
 	value, err := pythonparity.ParseInt(text)
-	if err != nil || !value.IsInt64() {
-		return 0, errors.New("not an integer")
+	if err != nil {
+		return nil, errors.New("not an integer")
 	}
-	return value.Int64(), nil
+	return value, nil
 }
 
 // parseDriverUUID is how the Python verb's database driver reads a UUID

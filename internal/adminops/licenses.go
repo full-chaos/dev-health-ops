@@ -82,7 +82,7 @@ func runLicensesCreate(_ context.Context, env cli.Env) int {
 	}
 	license, err := licensing.SignLicense(key.Reveal(), licensing.LicenseRequest{
 		OrgID: orgID.value, Tier: tier.value, IssuedAt: nowUnix(), LicenseID: uuid.NewString(),
-		DurationDays: &days, OrgName: orgName.ptr(), ContactEmail: contactEmail.ptr(),
+		DurationDays: days, OrgName: orgName.ptr(), ContactEmail: contactEmail.ptr(),
 	})
 	if err != nil {
 		// Python prints the ValueError text; the key itself is never in it.

@@ -4,6 +4,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"math"
+	"math/big"
 	"math/rand"
 	"os"
 	"os/exec"
@@ -16,15 +18,16 @@ import (
 )
 
 // pythonSignProgram signs each case with the real sign_license: stdin is a
-// JSON list of [key, org_id, tier, issued_at, license_id]; each answer is
+// JSON list of [key, org_id, tier, issued_at, license_id, duration_days as decimal text ("" = the default)]; each answer is
 // the license or "error: <ValueError text>".
 const pythonSignProgram = `
 import json, sys
 from dev_health_ops.licensing.generator import sign_license
 out = []
-for key, org, tier, issued, license_id in json.loads(sys.stdin.read()):
+for key, org, tier, issued, license_id, days in json.loads(sys.stdin.read()):
     try:
-        out.append(sign_license(key, org_id=org, tier=tier, issued_at=issued, license_id=license_id))
+        extra = {} if days == "" else {"duration_days": int(days)}
+        out.append(sign_license(key, org_id=org, tier=tier, issued_at=issued, license_id=license_id, **extra))
     except ValueError as exc:
         out.append("error: " + str(exc))
 print(json.dumps(out))
@@ -34,6 +37,7 @@ type signCase struct {
 	key, org, tier string
 	issued         int64
 	licenseID      string
+	days           string
 }
 
 func signCases() []signCase {
@@ -52,29 +56,37 @@ func signCases() []signCase {
 	for index, key := range keys {
 		for _, org := range orgs {
 			for _, tier := range tiers {
-				cases = append(cases, signCase{key, org, tier, issued[(index+len(org))%len(issued)], fmt.Sprintf("lic-%d-%s", index, tier)})
+				cases = append(cases, signCase{key, org, tier, issued[(index+len(org))%len(issued)], fmt.Sprintf("lic-%d-%s", index, tier), ""})
 			}
 		}
 	}
 	// Tier spelling and key shapes that sign_license refuses or reads
 	// leniently.
 	cases = append(cases,
-		signCase{zero, "o", "Team", 5, "l"},
-		signCase{zero, "o", "gold", 5, "l"},
-		signCase{" " + zero[:10] + "\n" + zero[10:] + " ", "o", "team", 5, "l"},
-		signCase{base64.StdEncoding.EncodeToString(make([]byte, 31)), "o", "team", 5, "l"},
-		signCase{base64.StdEncoding.EncodeToString(make([]byte, 33)), "o", "team", 5, "l"},
-		signCase{"not base64 at all!", "o", "team", 5, "l"},
-		signCase{zero, "o", "team", 5, ""},
+		signCase{zero, "o", "Team", 5, "l", ""},
+		signCase{zero, "o", "gold", 5, "l", ""},
+		signCase{" " + zero[:10] + "\n" + zero[10:] + " ", "o", "team", 5, "l", ""},
+		signCase{base64.StdEncoding.EncodeToString(make([]byte, 31)), "o", "team", 5, "l", ""},
+		signCase{base64.StdEncoding.EncodeToString(make([]byte, 33)), "o", "team", 5, "l", ""},
+		signCase{"not base64 at all!", "o", "team", 5, "l", ""},
+		signCase{zero, "o", "team", 5, "", ""},
 		// Excess padding, non-ASCII text and one stray character: the
 		// review round's inputs (binascii's lenient loop).
-		signCase{"AAAA====", "o", "team", 5, "l"},
-		signCase{zero + "====", "o", "team", 5, "l"},
-		signCase{zero[:43] + "=" + "=", "o", "team", 5, "l"},
-		signCase{"\u00e9" + zero, "o", "team", 5, "l"},
-		signCase{"AAAAA", "o", "team", 5, "l"},
-		signCase{"", "o", "team", 5, "l"},
+		signCase{"AAAA====", "o", "team", 5, "l", ""},
+		signCase{zero + "====", "o", "team", 5, "l", ""},
+		signCase{zero[:43] + "=" + "=", "o", "team", 5, "l", ""},
+		signCase{"\u00e9" + zero, "o", "team", 5, "l", ""},
+		signCase{"AAAAA", "o", "team", 5, "l", ""},
+		signCase{"", "o", "team", 5, "l", ""},
 	)
+	// Python's integers are unbounded: durations beyond 64 bits (and the
+	// review round's inputs) are signed with an exact expiry; a duration that
+	// is not positive is refused whatever its size.
+	for _, days := range []string{"1", "365", "106751991167301", "106751991167302", "9223372036854775807", "9223372036854775808", "18446744073709551616", "1" + strings.Repeat("0", 40), "0", "-1", "-9223372036854775809", "-1" + strings.Repeat("0", 40)} {
+		for _, issued := range []int64{0, 5, 1790200000, -86400, math.MaxInt64} {
+			cases = append(cases, signCase{zero, "o", "team", issued, "l", days})
+		}
+	}
 	return cases
 }
 
@@ -96,7 +108,7 @@ func TestSignLicenseMatchesLivePython(t *testing.T) {
 		if c.licenseID == "" {
 			licenseID = "0"
 		}
-		input[index] = []any{c.key, c.org, c.tier, c.issued, licenseID}
+		input[index] = []any{c.key, c.org, c.tier, c.issued, licenseID, c.days}
 	}
 	stdin, _ := json.Marshal(input)
 	command := exec.Command(python, "-c", pythonSignProgram)
@@ -120,7 +132,11 @@ func TestSignLicenseMatchesLivePython(t *testing.T) {
 		if licenseID == "" {
 			licenseID = "0"
 		}
-		got, err := SignLicense(c.key, LicenseRequest{OrgID: c.org, Tier: c.tier, IssuedAt: c.issued, LicenseID: licenseID})
+		request := LicenseRequest{OrgID: c.org, Tier: c.tier, IssuedAt: c.issued, LicenseID: licenseID}
+		if c.days != "" {
+			request.DurationDays, _ = new(big.Int).SetString(c.days, 10)
+		}
+		got, err := SignLicense(c.key, request)
 		pythonRefused := strings.HasPrefix(want[index], "error: ")
 		switch {
 		case err != nil && pythonRefused:

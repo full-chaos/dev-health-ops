@@ -7,7 +7,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -198,14 +197,21 @@ func TestSyncConfigBatchCreateVenueOracle(t *testing.T) {
 	// first and answers exactly as the Go single create does for the same
 	// body, persisting nothing. These run after the row comparison because
 	// the Python plane writes rows the Go plane (by design) does not.
+	// A duplicate (org, provider, name) (CHAOS-6726, D2473): Python lets the
+	// unique violation escape as a 500, Go answers 409 exactly as its single
+	// create does; neither persists a second row, and the whole batch is
+	// refused (no source of the request survives).
 	divergent := []struct {
-		name, body string
-		headers    map[string]string
-		status     int
+		name, body   string
+		headers      map[string]string
+		pythonStatus int
+		status       int
+		persisted    int
 	}{
-		{"out-of-range cron", `{"name":"gh cron 60","provider":"github","sync_options":{"owner":"acme","all_repos":true},"repos":["c60"],"schedule_cron":"60 * * * *"}`, a, 422},
-		{"croniter-only cron and unknown timezone", `{"name":"gh sched","provider":"github","sync_targets":["git"],"sync_options":{"owner":"acme","all_repos":true},"repos":["s1"],"schedule_cron":"@hourly","timezone":"Mars/Base","initial_sync_depth":"9999"}`, a, 422},
-		{"unknown timezone", `{"name":"gh tz","provider":"github","sync_options":{"owner":"acme","all_repos":true},"repos":["t1"],"schedule_cron":"0 * * * *","timezone":"Mars/Base"}`, a, 422},
+		{"out-of-range cron", `{"name":"gh cron 60","provider":"github","sync_options":{"owner":"acme","all_repos":true},"repos":["c60"],"schedule_cron":"60 * * * *"}`, a, 201, 422, 0},
+		{"croniter-only cron and unknown timezone", `{"name":"gh sched","provider":"github","sync_targets":["git"],"sync_options":{"owner":"acme","all_repos":true},"repos":["s1"],"schedule_cron":"@hourly","timezone":"Mars/Base","initial_sync_depth":"9999"}`, a, 201, 422, 0},
+		{"unknown timezone", `{"name":"gh tz","provider":"github","sync_options":{"owner":"acme","all_repos":true},"repos":["t1"],"schedule_cron":"0 * * * *","timezone":"Mars/Base"}`, a, 201, 422, 0},
+		{"duplicate name", `{"name":"gh batch","provider":"GitHub","sync_targets":["git"],"sync_options":{"owner":"acme","all_repos":true},"repos":["dup-source"]}`, a, 500, 409, 1},
 	}
 	batchRequests := make([]venueoracle.Request, len(divergent))
 	for index, c := range divergent {
@@ -213,8 +219,8 @@ func TestSyncConfigBatchCreateVenueOracle(t *testing.T) {
 	}
 	pythonDivergent := venue.ServePython(t, batchRequests)
 	for index, c := range divergent {
-		if pythonDivergent[index].Status != http.StatusCreated {
-			t.Errorf("%s: python batch status %d, want 201 (the divergence this pins)", c.name, pythonDivergent[index].Status)
+		if pythonDivergent[index].Status != c.pythonStatus {
+			t.Errorf("%s: python batch status %d, want %d (the divergence this pins)", c.name, pythonDivergent[index].Status, c.pythonStatus)
 		}
 		batch := venueoracle.Do(t, base, batchRequests[index])
 		single := venueoracle.Do(t, base, venueoracle.Request{Name: "single: " + c.name, Method: "POST",
@@ -228,10 +234,17 @@ func TestSyncConfigBatchCreateVenueOracle(t *testing.T) {
 		if err := pgxQueryInt(ctx, goDB, `SELECT count(*) FROM sync_configurations WHERE name = $1`, name, &persisted); err != nil {
 			t.Fatal(err)
 		}
-		if persisted != 0 {
-			t.Errorf("%s: go persisted %d sync configurations named %q, want none", c.name, persisted, name)
+		if persisted != c.persisted {
+			t.Errorf("%s: go holds %d sync configurations named %q, want %d", c.name, persisted, name, c.persisted)
 		}
-		t.Logf("divergent %s: python=%d go=%d (single create %d), go persisted nothing", c.name, pythonDivergent[index].Status, batch.Status, single.Status)
+		var sources int
+		if err := pgxQueryInt(ctx, goDB, `SELECT count(*) FROM integration_sources WHERE external_id LIKE '%' || $1`, "dup-source", &sources); err != nil {
+			t.Fatal(err)
+		}
+		if sources != 0 {
+			t.Errorf("%s: go persisted %d sources of the refused batch", c.name, sources)
+		}
+		t.Logf("divergent %s: python=%d go=%d (single create %d), go holds %d configs of that name", c.name, pythonDivergent[index].Status, batch.Status, single.Status, persisted)
 	}
 }
 

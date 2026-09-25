@@ -224,7 +224,6 @@ func TestSyncConfigCreateVenueOracle(t *testing.T) {
 		post("github malformed work-item option", `{"name":"gh bad option","provider":"github","sync_targets":["work-items"],"sync_options":{"all_repos":true,"fetch_comments":"no"}}`, a),
 		post("gitlab all repos", `{"name":"gl all","provider":"GitLab","sync_targets":["git","cicd"],"sync_options":{"all_repos":true,"group":"acme"}}`, a),
 		post("jira explicit project", `{"name":"jira eng","provider":"jira","sync_targets":["work-items"],"sync_options":{"project_key":"ENG","full_name":"Engineering"}}`, a),
-		post("jira explicit project, same name", `{"name":"jira eng","provider":"jira","sync_targets":["work-items"],"sync_options":{"project_key":"OPS"}}`, a),
 		post("jira discovered", `{"name":"jira all","provider":"jira","credential_id":"`+jiraCred+`","sync_targets":["work-items"],"schedule_cron":"0 0 * * 1"}`, a),
 		post("jira discovery refused", `{"name":"jira bad cred","provider":"jira","credential_id":"`+jiraBad+`","sync_targets":["work-items"]}`, a),
 		post("jira inactive credential", `{"name":"jira inactive cred","provider":"jira","credential_id":"`+jiraInactive+`","sync_targets":["work-items"]}`, a),
@@ -272,16 +271,27 @@ func TestSyncConfigCreateVenueOracle(t *testing.T) {
 	})
 	t.Logf("receipt (%d requests):\n%s", len(requests), receipt)
 
-	// Named divergence: croniter-only syntax, org D. Python creates, Go refuses.
+	// Named divergences. Croniter-only syntax, org D: Python creates, Go
+	// refuses. A duplicate (org, provider, name), org A (CHAOS-6726, D2473):
+	// Python lets the unique violation escape as a 500; Go answers 409 with
+	// its detail. Neither plane persists the duplicate, so org A's rows below
+	// stay identical.
 	divergent := []venueoracle.Request{
 		post("croniter-only alias", `{"name":"d alias","provider":"jira","schedule_cron":"@hourly","sync_options":{"project_key":"DA"}}`, d),
 		post("croniter-only seconds field", `{"name":"d seconds","provider":"jira","schedule_cron":"0 0 * * * 0","sync_options":{"project_key":"DS"}}`, d),
+		post("jira explicit project, same name", `{"name":"jira eng","provider":"jira","sync_targets":["work-items"],"sync_options":{"project_key":"OPS"}}`, a),
 	}
+	want := [][2]int{{http.StatusCreated, http.StatusUnprocessableEntity}, {http.StatusCreated, http.StatusUnprocessableEntity},
+		{http.StatusInternalServerError, http.StatusConflict}}
 	pythonDivergent := venue.ServePython(t, divergent)
 	for index, request := range divergent {
 		goResponse := venueoracle.Do(t, base, request)
-		if pythonDivergent[index].Status != http.StatusCreated || goResponse.Status != http.StatusUnprocessableEntity {
-			t.Errorf("%s: python %d, go %d %s; want the documented 201 / 422", request.Name, pythonDivergent[index].Status, goResponse.Status, goResponse.Body)
+		if pythonDivergent[index].Status != want[index][0] || goResponse.Status != want[index][1] {
+			t.Errorf("%s: python %d, go %d %s; want the documented %d / %d", request.Name, pythonDivergent[index].Status,
+				goResponse.Status, goResponse.Body, want[index][0], want[index][1])
+		}
+		if goResponse.Status == http.StatusConflict && goResponse.Body != `{"detail":"Sync configuration with this name already exists for this provider"}` {
+			t.Errorf("%s: go 409 body %s", request.Name, goResponse.Body)
 		}
 	}
 

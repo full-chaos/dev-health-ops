@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"sort"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
@@ -103,6 +105,13 @@ VALUES ($1, $2, $3, $4, $5, $6::json, true, $7, $8, $9, $9)`,
 (id, org_id, name, provider, sync_targets, sync_options, is_active, planner_managed, integration_id, created_at, updated_at)
 VALUES ($1, $2, $3, $4, $5::json, $6::json, true, true, $7, $8, $8)`,
 		configID, in.orgID, in.name, in.provider, targetsText, optionsText, integrationID, now); err != nil {
+		if isDuplicateSyncConfigName(err) {
+			// Named divergence (CHAOS-6726, D2473): Python lets the unique
+			// violation escape as a 500. Go answers 409 in FastAPI's detail
+			// shape, and the caller's transaction rolls back every write of
+			// the request (a batch create is refused whole).
+			return nil, refuse(http.StatusConflict, duplicateSyncConfigNameDetail)
+		}
 		return nil, fmt.Errorf("insert sync configuration: %w", err)
 	}
 
@@ -390,4 +399,16 @@ VALUES ($1, $2, $3, $4, true, $5::json)`, uuid.New(), orgID, integrationID, key,
 		}
 	}
 	return nil
+}
+
+// duplicateSyncConfigNameDetail is the 409 detail for a create whose
+// (org, provider, name) is already taken. No Python admin route has a
+// duplicate-name message to reuse, so the text is the one D2473 names.
+const duplicateSyncConfigNameDetail = "Sync configuration with this name already exists for this provider"
+
+// isDuplicateSyncConfigName reports the unique violation of
+// sync_configurations' (org_id, provider, name) key, and nothing else.
+func isDuplicateSyncConfigName(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "uq_sync_config_org_provider_name"
 }

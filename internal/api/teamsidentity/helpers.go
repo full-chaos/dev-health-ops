@@ -54,6 +54,15 @@ func naiveDatetime(value time.Time) string {
 	return pytime.Pydantic(pytime.DateTime{Time: value.UTC(), Aware: true, Offset: offset})
 }
 
+// writtenDatetime renders the instant a write route stamped on the row it
+// answers with. Python builds that response from the object it just wrote,
+// whose updated_at is datetime.now(timezone.utc): aware, so pydantic prints it
+// with "Z" whatever zone the ClickHouse server is in (unlike a value read back
+// from the column, see naiveDatetime).
+func writtenDatetime(value time.Time) string {
+	return pytime.Pydantic(pytime.DateTime{Time: value.UTC(), Aware: true})
+}
+
 func sortedKeysBool(m map[string]bool) []string {
 	out := make([]string, 0, len(m))
 	for key := range m {

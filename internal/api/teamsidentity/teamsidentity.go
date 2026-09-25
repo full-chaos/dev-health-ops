@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"regexp"
+	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -166,7 +167,13 @@ func pathParam(r *http.Request, name string) string {
 
 // --- response builders -----------------------------------------------------
 
-func teamJSON(team Team) *pyjson.Object {
+// teamJSON renders a team read from ClickHouse; teamWrittenJSON the team a
+// write route just wrote, whose stamps Python holds as aware UTC instants.
+func teamJSON(team Team) *pyjson.Object { return teamObject(team, naiveDatetime) }
+
+func teamWrittenJSON(team Team) *pyjson.Object { return teamObject(team, writtenDatetime) }
+
+func teamObject(team Team, stamp func(time.Time) string) *pyjson.Object {
 	out := pyjson.NewObject()
 	out.Set("id", team.ID)
 	out.Set("team_id", team.TeamID)
@@ -180,12 +187,20 @@ func teamJSON(team Team) *pyjson.Object {
 	out.Set("flagged_changes", nil)
 	out.Set("last_drift_sync_at", nil)
 	out.Set("is_active", team.IsActive)
-	out.Set("created_at", naiveDatetime(team.UpdatedAt))
-	out.Set("updated_at", naiveDatetime(team.UpdatedAt))
+	out.Set("created_at", stamp(team.UpdatedAt))
+	out.Set("updated_at", stamp(team.UpdatedAt))
 	return out
 }
 
-func identityJSON(identity Identity) *pyjson.Object {
+// identityJSON renders an identity read from ClickHouse; identityWrittenJSON
+// the one a write route just wrote (see teamJSON).
+func identityJSON(identity Identity) *pyjson.Object { return identityObject(identity, naiveDatetime) }
+
+func identityWrittenJSON(identity Identity) *pyjson.Object {
+	return identityObject(identity, writtenDatetime)
+}
+
+func identityObject(identity Identity, stamp func(time.Time) string) *pyjson.Object {
 	out := pyjson.NewObject()
 	out.Set("id", identity.ID)
 	out.Set("canonical_id", identity.CanonicalID)
@@ -201,8 +216,8 @@ func identityJSON(identity Identity) *pyjson.Object {
 	out.Set("provider_identities", providers)
 	out.Set("team_ids", stringsToValues(identity.TeamIDs))
 	out.Set("is_active", identity.IsActive)
-	out.Set("created_at", naiveDatetime(identity.UpdatedAt))
-	out.Set("updated_at", naiveDatetime(identity.UpdatedAt))
+	out.Set("created_at", stamp(identity.UpdatedAt))
+	out.Set("updated_at", stamp(identity.UpdatedAt))
 	return out
 }
 
@@ -282,7 +297,7 @@ func (h handlers) createOrUpdateTeam(w http.ResponseWriter, r *http.Request) {
 		h.internal(w, r, "create or update team", err)
 		return
 	}
-	policy.WriteModel(w, http.StatusOK, teamJSON(team), nil)
+	policy.WriteModel(w, http.StatusOK, teamWrittenJSON(team), nil)
 }
 
 func (h handlers) deleteTeam(w http.ResponseWriter, r *http.Request) {
@@ -564,7 +579,7 @@ func (h handlers) updateTeam(w http.ResponseWriter, r *http.Request) {
 		h.internal(w, r, "update team", err)
 		return
 	}
-	policy.WriteModel(w, http.StatusOK, teamJSON(updated), nil)
+	policy.WriteModel(w, http.StatusOK, teamWrittenJSON(updated), nil)
 }
 
 func (h handlers) listIdentities(w http.ResponseWriter, r *http.Request) {
@@ -748,5 +763,5 @@ func (h handlers) createOrUpdateIdentity(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
-	policy.WriteModel(w, http.StatusOK, identityJSON(stored), nil)
+	policy.WriteModel(w, http.StatusOK, identityWrittenJSON(stored), nil)
 }

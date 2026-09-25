@@ -25,8 +25,10 @@ import "net/url"
 //     PUT/POST/DELETE, llm-settings PUT/DELETE, DELETE sync-configs/{id}, PUT
 //     sync-configs/{id}/repositories): real use only (R402/R406), never a
 //     synthetic case; the bigboy pass script runs them on the Fixture Org.
-//   - Produced-id cases: the Fixture Org has no setting row, sync run or
-//     backfill job, so only missing-id cases exist.
+//   - Produced-id cases: the Fixture Org has no setting row or sync run, so
+//     only missing-id cases exist here (the backfill-job and sync-config
+//     produced-id cases are in dhoapi_admin_sync_corpus.go, bound from their
+//     lists).
 //   - The GitHub install-url mint is compared on STATUS and on the candidate
 //     answering a live, non-empty JSON object (candidate_shape): its signed
 //     state differs on every call, so the two bodies are not compared, and the
@@ -47,7 +49,6 @@ var dhoAPIAdminSettingsRunOrder = []string{
 	"REST:GET:/api/v1/admin/settings/{category}/{key}",
 	"REST:GET:/api/v1/admin/llm-settings",
 	"REST:GET:/api/v1/admin/sync-runs/{run_id}/units",
-	"REST:GET:/api/v1/admin/backfill-jobs/{job_id}",
 	"REST:GET:/api/v1/admin/integrations/pagerduty/status",
 	"REST:POST:/api/v1/admin/integrations/github/install-url",
 }
@@ -77,7 +78,6 @@ var dhoAPIAdminSettingsEndpointSpecs = map[string]RESTEndpointSpec{
 		map[string]string{"category": adminSettingsCategory, "key": adminSettingsMissingKey}),
 	"REST:GET:/api/v1/admin/llm-settings":             adminGET("/api/v1/admin/llm-settings", "unconfigured", 200, nil),
 	"REST:GET:/api/v1/admin/sync-runs/{run_id}/units": adminGET("/api/v1/admin/sync-runs/{run_id}/units", "missing", 404, map[string]string{"run_id": adminMissingID}),
-	"REST:GET:/api/v1/admin/backfill-jobs/{job_id}":   adminGET("/api/v1/admin/backfill-jobs/{job_id}", "missing", 404, map[string]string{"job_id": adminMissingID}),
 	"REST:GET:/api/v1/admin/integrations/pagerduty/status": withSecondRequest(
 		adminGET("/api/v1/admin/integrations/pagerduty/status", "default", 200, nil),
 		RESTRequest{

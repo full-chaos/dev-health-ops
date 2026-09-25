@@ -1365,6 +1365,7 @@ func (r *Runner) post(ctx context.Context, url, document string, credential *Cre
 	if err := credential.Apply(ctx, request); err != nil {
 		return Observation{}, err
 	}
+	sentSecrets := SecretsOnRequest(request.Header)
 
 	// r.Client is a LegClient: redirects are REFUSED and no proxy is
 	// used. The measured routes are direct endpoints; a redirect or a
@@ -1384,6 +1385,13 @@ func (r *Runner) post(ctx context.Context, url, document string, credential *Cre
 	responseBody, err := io.ReadAll(response.Body)
 	if err != nil {
 		return Observation{}, fmt.Errorf("read response body: %w", err)
+	}
+
+	// A response that reflects the credential this request sent must never be
+	// stored as an artifact or read for its build header: refuse the leg, by
+	// target, never with the value (see SentSecrets).
+	if sentSecrets.ReflectedIn(responseBody) || sentSecrets.HeaderReflects(response.Header) {
+		return Observation{}, fmt.Errorf("%s answered with a body or header that contains the credential this request sent; refused so the credential is never stored as response evidence", EndpointLabel(url))
 	}
 
 	observation := Observation{

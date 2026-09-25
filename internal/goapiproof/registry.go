@@ -598,6 +598,7 @@ func FetchBuildIdentity(ctx context.Context, client *LegClient, buildInfoURL str
 	if err := credential.Apply(ctx, request); err != nil {
 		return "", err
 	}
+	sentSecrets := SecretsOnRequest(request.Header)
 	legResponse, err := client.Do(request)
 	response := legResponse.Response
 	if err != nil {
@@ -618,6 +619,12 @@ func FetchBuildIdentity(ctx context.Context, client *LegClient, buildInfoURL str
 	body, err := io.ReadAll(response.Body)
 	if err != nil {
 		return "", fmt.Errorf("goapiproof: read buildinfo body: %w", err)
+	}
+	// The commit read below is printed and written into every receipt: a
+	// response that reflects the credential this request sent must never
+	// become a build identity (CHAOS-6612).
+	if sentSecrets.ReflectedIn(body) || sentSecrets.HeaderReflects(response.Header) {
+		return "", fmt.Errorf("goapiproof: %s answered with a body or header that contains the credential this request sent; refused so the credential is never printed or written as a build identity", EndpointLabel(buildInfoURL))
 	}
 	// Without this check, a `commit` value carrying
 	// invalid UTF-8 (a single bad byte is enough) decodes silently -- Go's

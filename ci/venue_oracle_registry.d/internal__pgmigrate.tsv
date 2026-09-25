@@ -1,2 +1,3 @@
+internal/pgmigrate	TestAliasesVenueOracleMatchesTheFlatVerbs	run
 internal/pgmigrate	TestHistoryVenueOracleMatchesAlembic	run
 internal/pgmigrate	TestRevisionsVenueOracleMatchesAlembic	run

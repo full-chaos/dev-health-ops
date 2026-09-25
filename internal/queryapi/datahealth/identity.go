@@ -6,6 +6,7 @@ import (
 
 	"github.com/full-chaos/dev-health-go/clickhouse"
 
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 )
 
@@ -183,7 +184,7 @@ func providerValues(value any) []string {
 
 // norm ports _norm: strip, lowercase, collapse whitespace runs.
 func norm(value string) string {
-	return strings.Join(pyFields(pyLower(pyStrip(value))), " ")
+	return strings.Join(pyFields(pythonparity.Lower(pyStrip(value))), " ")
 }
 
 func identityKeys(mapped []mappedIdentity) map[string]struct{} {

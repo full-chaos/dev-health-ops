@@ -57,6 +57,8 @@ func sameRequests(venue *venueoracle.Venue, v ids) []venueoracle.Request {
 		post(venue, "since is a list", flat, a, json(`{"since": [], "before": "2026-09-01T00:00:00Z"}`)),
 		post(venue, "source_ids is a string", flat, a, json(`{`+window("2026-09-01T00:00:00Z", "2026-09-10T00:00:00Z")+`, "source_ids": "x"}`)),
 		post(venue, "dataset_keys holds a number", flat, a, json(`{`+window("2026-09-01T00:00:00Z", "2026-09-10T00:00:00Z")+`, "dataset_keys": ["a", 1]}`)),
+		post(venue, "a source id that is not a uuid", flat, a, json(`{`+window("2026-09-01T00:00:00Z", "2026-09-10T00:00:00Z")+`, "source_ids": ["not-a-uuid"]}`)),
+		post(venue, "a selector source id that is not a uuid", flat, a, json(`{"selector": {`+window("2026-09-01T00:00:00Z", "2026-09-10T00:00:00Z")+`, "source_ids": ["urn:uuid:`+subset.srcs[0].String()+`", "nope", "worse"]}}`)),
 		post(venue, "selector is a string", flat, a, json(`{"selector": "x"}`)),
 		post(venue, "selector is empty", flat, a, json(`{"selector": {}}`)),
 		post(venue, "selector without before", flat, a, json(`{"selector": {"since": "2026-09-01T00:00:00Z"}}`)),

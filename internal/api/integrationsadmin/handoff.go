@@ -13,6 +13,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 	"github.com/full-chaos/dev-health-ops/internal/synchandoff"
 )
 
@@ -135,6 +136,14 @@ func (h handlers) handOff(w http.ResponseWriter, r *http.Request, scope triggerS
 		current, id, err := requireIntegration(r.Context(), tx, orgID, r.PathValue("integration_id"))
 		if err != nil {
 			return err
+		}
+		// Python's planner coerces every explicit source id with uuid.UUID
+		// before it plans anything, and answers the first refusal as a 400;
+		// the scheduler would quarantine the occurrence and say something else.
+		for _, sourceID := range scope.sourceIDs {
+			if _, err := pythonparity.ParseUUID(sourceID); err != nil {
+				return refuse(http.StatusBadRequest, "Invalid source_id: "+sourceID)
+			}
 		}
 		target, err := handoffTarget(r.Context(), tx, orgID, id, current.IsActive)
 		if err != nil {

@@ -286,6 +286,11 @@ func credentialHost(ctx context.Context, q RowsQueryer, cipher credentials.Ciphe
 		if err != nil {
 			return "", false, err
 		}
+		if !readable {
+			// get_decrypted_credentials_by_id_with_outcome's DECRYPT_FAILED counts
+			// one unreadable stored credential, labelled with its provider.
+			credentials.RecordDecryptFailed(ctx, provider)
+		}
 		if readable {
 			switch typed := decoded.(type) {
 			case nil:

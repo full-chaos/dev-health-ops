@@ -10,19 +10,25 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/prometheus/common/expfmt"
+	"github.com/prometheus/common/model"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
+	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/storage/valkey"
@@ -266,14 +272,71 @@ VALUES ($1, $2, $3, 'venue', $4, 'fcpush_venue', $5::jsonb, now())`, uuid.New(),
 			})
 		}
 	}
-	python := venue.ServePython(t, requests)
+	scrape := venueoracle.Request{Name: "metrics", Method: "GET", Path: "/metrics"}
+	python := venue.ServePython(t, append(append([]venueoracle.Request{}, requests...), scrape))
+	pythonMetrics := python[len(python)-1]
+	if pythonMetrics.Status != 200 {
+		t.Fatalf("python /metrics answered %d", pythonMetrics.Status)
+	}
 
-	goBase := startGoServer(t, ctx, venue, jwtKey)
-	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{Normalize: normalize})
+	goBase, operator := startGoServer(t, ctx, venue, jwtKey)
+	receipt := venueoracle.Diff(t, goBase, requests, python[:len(requests)], venueoracle.DiffOptions{Normalize: normalize})
 	t.Log(receipt)
+	compareDecryptFailed(t, pythonMetrics.Body, operator())
 }
 
-func startGoServer(t *testing.T, ctx context.Context, venue *venueoracle.Venue, jwtKey string) string {
+// decryptFailedCounts reads devhealth_integration_credential_decrypt_failed_total
+// out of a Prometheus text exposition: provider -> value. A zero sample is no
+// movement and is left out.
+func decryptFailedCounts(t *testing.T, exposition string) map[string]float64 {
+	t.Helper()
+	parser := expfmt.NewTextParser(model.UTF8Validation)
+	families, err := parser.TextToMetricFamilies(strings.NewReader(exposition))
+	if err != nil {
+		t.Fatalf("parse exposition: %v", err)
+	}
+	out := map[string]float64{}
+	family := families["devhealth_integration_credential_decrypt_failed_total"]
+	if family == nil {
+		family = families["devhealth_integration_credential_decrypt_failed"]
+	}
+	if family == nil {
+		return out
+	}
+	for _, metric := range family.GetMetric() {
+		for _, label := range metric.GetLabel() {
+			if label.GetName() == "provider" {
+				if value := metric.GetCounter().GetValue(); value != 0 {
+					out[label.GetValue()] = value
+				}
+			}
+		}
+	}
+	return out
+}
+
+// compareDecryptFailed requires the counter to have moved by the same amount
+// per provider on both planes: one count for each unreadable stored payload a
+// request read (a credential shared by the org's sources is read once per
+// request), none for a payload that decrypts, even to JSON null or a list.
+func compareDecryptFailed(t *testing.T, python, goExposition string) {
+	t.Helper()
+	pythonCounts, goCounts := decryptFailedCounts(t, python), decryptFailedCounts(t, goExposition)
+	for _, provider := range []string{"github", "gitlab"} {
+		if pythonCounts[provider] == 0 {
+			t.Errorf("the Python api did not count provider %s (%v); the run does not exercise it", provider, pythonCounts)
+		}
+	}
+	if !reflect.DeepEqual(pythonCounts, goCounts) {
+		t.Errorf("devhealth_integration_credential_decrypt_failed_total: DIFF\n python %v\n go     %v", pythonCounts, goCounts)
+		return
+	}
+	t.Logf("devhealth_integration_credential_decrypt_failed_total: SAME %v", goCounts)
+}
+
+// startGoServer serves the dho api and returns its base URL and a reader of
+// its operator /metrics, the Go api's scrape surface.
+func startGoServer(t *testing.T, ctx context.Context, venue *venueoracle.Venue, jwtKey string) (string, func() string) {
 	t.Helper()
 	pool, err := pgxpool.New(ctx, venue.GoAPIDatabaseURI(t))
 	if err != nil {
@@ -303,7 +366,12 @@ func startGoServer(t *testing.T, ctx context.Context, venue *venueoracle.Venue, 
 	if err != nil {
 		t.Fatalf("config.Load: %v", err)
 	}
-	routes := apiservice.Routes(apiservice.Deps{Pool: pool, Valkey: client, Auth: auth, Guard: guard, Decryptor: decryptor, Verifier: verifier}, logger)
+	deps := apiservice.Deps{Pool: pool, Valkey: client, Auth: auth, Guard: guard, Decryptor: decryptor, Verifier: verifier}
+	registry := health.NewRegistry(0)
+	if err := apiservice.RegisterOperatorMetrics(registry, &deps); err != nil {
+		t.Fatalf("operator metrics: %v", err)
+	}
+	routes := apiservice.Routes(deps, logger)
 	scope := policy.NewScope(auth, logger)
 	server, err := apiservice.NewServer(cfg, logger, routes, scope.OrgScope, scope.Impersonation)
 	if err != nil {
@@ -311,5 +379,25 @@ func startGoServer(t *testing.T, ctx context.Context, venue *venueoracle.Venue, 
 	}
 	ts := httptest.NewServer(server.Handler())
 	t.Cleanup(ts.Close)
-	return ts.URL
+	operatorServer, err := health.NewServer(health.ServerOptions{Address: "127.0.0.1:0", Registry: registry, Service: "api"})
+	if err != nil {
+		t.Fatalf("operator server: %v", err)
+	}
+	operator := httptest.NewServer(operatorServer.Handler())
+	t.Cleanup(operator.Close)
+	return ts.URL, func() string {
+		response, err := http.Get(operator.URL + "/metrics")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer response.Body.Close()
+		body, err := io.ReadAll(response.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if response.StatusCode != http.StatusOK {
+			t.Fatalf("operator /metrics answered %d: %s", response.StatusCode, body)
+		}
+		return string(body)
+	}
 }

@@ -91,15 +91,17 @@ type requestRow struct {
 	exists                 bool
 	attempts               int
 	nextAttempt, refusedAt *time.Time
+	mintedAt               *time.Time
 	lastError, refused     *string
+	occurrenceID           *string
 }
 
 func (fixture webhookRequestFixture) row(t *testing.T, id string) requestRow {
 	t.Helper()
 	var row requestRow
 	err := fixture.pool.QueryRow(context.Background(), `
-SELECT attempts, next_attempt_at, last_error, refused_at, refused_reason FROM webhook_sync_requests WHERE delivery_id = $1`, id).
-		Scan(&row.attempts, &row.nextAttempt, &row.lastError, &row.refusedAt, &row.refused)
+SELECT attempts, next_attempt_at, last_error, refused_at, refused_reason, minted_at, occurrence_id FROM webhook_sync_requests WHERE delivery_id = $1`, id).
+		Scan(&row.attempts, &row.nextAttempt, &row.lastError, &row.refusedAt, &row.refused, &row.mintedAt, &row.occurrenceID)
 	if err == pgx.ErrNoRows {
 		return row
 	}
@@ -144,21 +146,38 @@ func TestWebhookRequestMinterSettlesEachRequestByItsOwnOutcome(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if row := fixture.row(t, minted); row.exists {
-		t.Fatalf("minted request still present: %+v", row)
+	// A minted request is KEPT (marked minted, with its occurrence id) so a
+	// retried delivery is a no-op; the two deliveries share an instant, so the
+	// second one's occurrence moved one microsecond and both exist.
+	first, second := fixture.row(t, minted), fixture.row(t, replay)
+	if !first.exists || first.mintedAt == nil || first.occurrenceID == nil || !second.exists || second.mintedAt == nil || second.occurrenceID == nil || *first.occurrenceID == *second.occurrenceID {
+		t.Fatalf("minted rows = %+v / %+v, want both kept, marked minted, with distinct occurrence ids", first, second)
 	}
-	if row := fixture.row(t, replay); row.exists {
-		t.Fatalf("a replay of an already minted delivery time must settle (deleted), got %+v", row)
+	if occurrences, triggers := fixture.count(t, "scheduled_sync_occurrences"), fixture.count(t, "sync_manual_triggers"); occurrences != 2 || triggers != 2 {
+		t.Fatalf("occurrences=%d triggers=%d, want one of each per distinct delivery (2)", occurrences, triggers)
 	}
-	if occurrences, triggers := fixture.count(t, "scheduled_sync_occurrences"), fixture.count(t, "sync_manual_triggers"); occurrences != 1 || triggers != 1 {
-		t.Fatalf("occurrences=%d triggers=%d, want exactly one of each for one delivery time", occurrences, triggers)
+	var instants []time.Time
+	rows, err := fixture.pool.Query(ctx, `SELECT scheduled_for FROM scheduled_sync_occurrences ORDER BY scheduled_for`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var instant time.Time
+		if err := rows.Scan(&instant); err != nil {
+			t.Fatal(err)
+		}
+		instants = append(instants, instant)
+	}
+	rows.Close()
+	if len(instants) != 2 || !instants[0].Equal(delivered) || !instants[1].Equal(delivered.Add(time.Microsecond)) {
+		t.Fatalf("occurrence instants = %v, want %s and one microsecond later", instants, delivered)
 	}
 	var mode, triggeredBy string
 	var sourceIDs []string
 	var scheduledFor time.Time
 	if err := fixture.pool.QueryRow(ctx, `
 SELECT t.mode, t.triggered_by, t.source_ids, o.scheduled_for
-FROM sync_manual_triggers t JOIN scheduled_sync_occurrences o USING (occurrence_id)`).Scan(&mode, &triggeredBy, &sourceIDs, &scheduledFor); err != nil {
+FROM sync_manual_triggers t JOIN scheduled_sync_occurrences o USING (occurrence_id) ORDER BY o.scheduled_for LIMIT 1`).Scan(&mode, &triggeredBy, &sourceIDs, &scheduledFor); err != nil {
 		t.Fatal(err)
 	}
 	if mode != "incremental" || triggeredBy != "manual" || len(sourceIDs) != 1 || sourceIDs[0] != fixture.sourceID || !scheduledFor.Equal(delivered) {
@@ -198,28 +217,24 @@ FROM sync_manual_triggers t JOIN scheduled_sync_occurrences o USING (occurrence_
 	if final.refusedAt == nil || final.refused == nil || *final.refused != "attempts exhausted after 10; last error mint: sqlstate 23514" {
 		t.Fatalf("exhausted request = %+v (refused %v), want refused after 10 attempts", final, deref(final.refused))
 	}
-	if occurrences := fixture.count(t, "scheduled_sync_occurrences"); occurrences != 1 {
-		t.Fatalf("a failing or refused request minted an occurrence: %d", occurrences)
+	if occurrences := fixture.count(t, "scheduled_sync_occurrences"); occurrences != 2 {
+		t.Fatalf("a failing or refused request minted an occurrence: %d, want only the two distinct deliveries", occurrences)
 	}
 }
 
-// TestWebhookRequestMinterRefusesARequestWhoseConfigurationIsGone: the FK
-// cascades a deleted configuration's requests away, so this branch is only
-// reachable if that constraint is ever loosened; it must refuse (keep the row
-// and the reason), never dereference a missing configuration. The constraint
-// is dropped here to reach it.
+// TestWebhookRequestMinterRefusesARequestWhoseConfigurationIsGone (r1): a
+// pending request OUTLIVES its configuration (no cascade), so deleting the
+// configuration leaves the request to be refused with a reason, never dropped.
 func TestWebhookRequestMinterRefusesARequestWhoseConfigurationIsGone(t *testing.T) {
 	fixture := startWebhookRequestFixture(t)
 	ctx := context.Background()
-	if _, err := fixture.pool.Exec(ctx, `ALTER TABLE webhook_sync_requests DROP CONSTRAINT fk_webhook_sync_requests_sync_config_id`); err != nil {
-		t.Fatal(err)
-	}
 	now := time.Now().UTC().Truncate(time.Microsecond)
-	id := uuid.NewString()
-	if _, err := fixture.pool.Exec(ctx, `
-INSERT INTO webhook_sync_requests (delivery_id, org_id, sync_config_id, mode, source_ids, scheduled_for, created_at)
-VALUES ($1, $2, gen_random_uuid(), 'incremental', ARRAY[$3], $4, $4)`, id, fixture.org, fixture.sourceID, now); err != nil {
-		t.Fatal(err)
+	id := fixture.request(t, fixture.org, "incremental", now.Add(-time.Minute), now.Add(-time.Minute))
+	if _, err := fixture.pool.Exec(ctx, `DELETE FROM sync_configurations WHERE id = $1::uuid`, fixture.configID); err != nil {
+		t.Fatalf("delete the configuration: %v", err)
+	}
+	if row := fixture.row(t, id); !row.exists {
+		t.Fatal("deleting the configuration deleted its pending request (a cascade)")
 	}
 	minter := &webhookRequestMinter{pool: fixture.pool, maxAge: webhookRequestMaxAge}
 	if err := minter.mintPending(ctx, now, 10); err != nil {
@@ -230,6 +245,46 @@ VALUES ($1, $2, gen_random_uuid(), 'incremental', ARRAY[$3], $4, $4)`, id, fixtu
 	}
 	if occurrences := fixture.count(t, "scheduled_sync_occurrences"); occurrences != 0 {
 		t.Fatalf("occurrences = %d, want none", occurrences)
+	}
+}
+
+// TestWebhookRequestMinterPrunesMintedRequestsPastRetention: a minted request
+// is kept for its retention window and then removed; pending and refused rows
+// are never pruned.
+func TestWebhookRequestMinterPrunesMintedRequestsPastRetention(t *testing.T) {
+	fixture := startWebhookRequestFixture(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	old := fixture.request(t, fixture.org, "incremental", now.Add(-time.Minute), now.Add(-time.Minute))
+	recent := fixture.request(t, fixture.org, "incremental", now.Add(-2*time.Minute), now.Add(-2*time.Minute))
+	refused := fixture.request(t, fixture.org, "incremental", now.Add(-3*time.Minute), now.Add(-3*time.Minute))
+	pending := fixture.request(t, fixture.org, "incremental", now.Add(-4*time.Minute), now.Add(-4*time.Minute))
+	for id, age := range map[string]time.Duration{old: 8 * 24 * time.Hour, recent: 6 * 24 * time.Hour} {
+		if _, err := fixture.pool.Exec(ctx, `UPDATE webhook_sync_requests SET minted_at = $2, occurrence_id = 'x' WHERE delivery_id = $1`, id, now.Add(-age)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := fixture.pool.Exec(ctx, `UPDATE webhook_sync_requests SET refused_at = $2, refused_reason = 'r' WHERE delivery_id = $1`, refused, now.Add(-30*24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	// A pending request must not be swept by the window either: park it.
+	if _, err := fixture.pool.Exec(ctx, `UPDATE webhook_sync_requests SET next_attempt_at = $2 WHERE delivery_id = $1`, pending, now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	minter := &webhookRequestMinter{pool: fixture.pool, maxAge: webhookRequestMaxAge}
+	if err := minter.mintPending(ctx, now, 10); err != nil {
+		t.Fatal(err)
+	}
+	if row := fixture.row(t, old); row.exists {
+		t.Fatalf("a minted request past its retention was kept: %+v", row)
+	}
+	for name, id := range map[string]string{"recent minted": recent, "refused": refused, "pending": pending} {
+		if row := fixture.row(t, id); !row.exists {
+			t.Errorf("%s request was pruned", name)
+		}
+	}
+	if minter.pruned.Load() != 1 {
+		t.Errorf("pruned counter = %d, want 1", minter.pruned.Load())
 	}
 }
 
@@ -258,10 +313,45 @@ func TestWebhookRequestMinterSkipsARequestAnotherSchedulerHasClaimed(t *testing.
 	if err != nil || !claimed {
 		t.Fatalf("mintOne = %v, %v; want it to settle the unlocked request without waiting", claimed, err)
 	}
-	if row := fixture.row(t, free); row.exists {
+	if row := fixture.row(t, free); row.mintedAt == nil {
 		t.Fatalf("the unlocked request was not minted: %+v", row)
 	}
-	if row := fixture.row(t, held); !row.exists {
-		t.Fatal("the request another transaction holds was minted anyway")
+	if row := fixture.row(t, held); !row.exists || row.mintedAt != nil {
+		t.Fatalf("the request another transaction holds was minted anyway: %+v", row)
+	}
+}
+
+// TestWebhookRequestMinterFailsWhenEveryCandidateInstantIsTaken: a request
+// moves at most webhookRequestMaxInstantBumps microseconds; past that it fails
+// (backoff, stage-named), it is never merged into another delivery's occurrence.
+func TestWebhookRequestMinterFailsWhenEveryCandidateInstantIsTaken(t *testing.T) {
+	fixture := startWebhookRequestFixture(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	delivered := now.Add(-time.Minute)
+	var ids []string
+	for index := 0; index < webhookRequestMaxInstantBumps+2; index++ {
+		ids = append(ids, fixture.request(t, fixture.org, "incremental", delivered, now.Add(-time.Minute+time.Duration(index)*time.Second)))
+	}
+	minter := &webhookRequestMinter{pool: fixture.pool, maxAge: webhookRequestMaxAge}
+	if err := minter.mintPending(ctx, now, 20); err != nil {
+		t.Fatal(err)
+	}
+	minted := 0
+	for _, id := range ids {
+		if row := fixture.row(t, id); row.mintedAt != nil {
+			minted++
+		}
+	}
+	// One at the instant plus MaxInstantBumps moved ones; the rest fail.
+	if want := webhookRequestMaxInstantBumps + 1; minted != want {
+		t.Fatalf("minted %d requests at one instant, want %d", minted, want)
+	}
+	last := fixture.row(t, ids[len(ids)-1])
+	if last.mintedAt != nil || last.attempts != 1 || last.lastError == nil || *last.lastError != "mint: sync.instantTakenError" {
+		t.Fatalf("the request past the bound = %+v (last_error %v), want a stage-named failure and no occurrence", last, deref(last.lastError))
+	}
+	if occurrences := fixture.count(t, "scheduled_sync_occurrences"); occurrences != webhookRequestMaxInstantBumps+1 {
+		t.Fatalf("occurrences = %d, want %d", occurrences, webhookRequestMaxInstantBumps+1)
 	}
 }

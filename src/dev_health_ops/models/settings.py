@@ -833,22 +833,20 @@ class SyncManualTrigger(Base):
 
 
 class WebhookSyncRequest(Base):
-    """A webhook delivery's request for a scoped sync (CHAOS-6695, alembic 0139).
+    """A webhook delivery's request for a scoped sync (CHAOS-6695, alembic 0142).
 
     Written by the Go webhook worker on the domain role; claimed by the Go
-    scheduler on the coordinator role, which mints the occurrence and deletes
-    the row, or refuses it and records why.
+    scheduler on the coordinator role, which mints the occurrence and marks the
+    row minted (pruned after a retention window), or refuses it and records why.
     """
 
     __tablename__ = "webhook_sync_requests"
 
     delivery_id: Mapped[uuid.UUID] = mapped_column(GUID, primary_key=True)
     org_id: Mapped[str] = mapped_column(Text, nullable=False)
-    sync_config_id: Mapped[uuid.UUID] = mapped_column(
-        GUID,
-        ForeignKey("sync_configurations.id", ondelete="CASCADE"),
-        nullable=False,
-    )
+    # No foreign key: a request outlives its configuration so the scheduler can
+    # refuse it with a reason rather than a cascade deleting it silently.
+    sync_config_id: Mapped[uuid.UUID] = mapped_column(GUID, nullable=False)
     mode: Mapped[str] = mapped_column(Text, nullable=False)
     source_ids: Mapped[list[str] | None] = mapped_column(
         postgresql.ARRAY(Text()).with_variant(JSON(), "sqlite"), nullable=True
@@ -872,12 +870,21 @@ class WebhookSyncRequest(Base):
         DateTime(timezone=True), nullable=True
     )
     refused_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    minted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    occurrence_id: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     __table_args__ = (
         Index(
+            "ix_webhook_sync_requests_minted",
+            "minted_at",
+            postgresql_where=text("minted_at IS NOT NULL"),
+        ),
+        Index(
             "ix_webhook_sync_requests_pending",
             "created_at",
-            postgresql_where=text("refused_at IS NULL"),
+            postgresql_where=text("refused_at IS NULL AND minted_at IS NULL"),
         ),
     )
 

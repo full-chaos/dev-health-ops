@@ -31,8 +31,12 @@ import (
 //
 // Partial-write limit (R436): the request and its occurrence are two
 // transactions on two roles. A request can exist without an occurrence until
-// this minter mints it or refuses it; an occurrence never exists without the
-// request having been deleted in its own transaction.
+// this minter mints it or refuses it; an occurrence never exists without its
+// request having been marked minted in the same transaction. A minted request
+// is KEPT for webhookRequestMintedRetention (and then pruned): its row is what
+// makes a retried delivery a no-op even when the delivery would now route to a
+// different configuration, and it survives its configuration being deleted (no
+// foreign key), so a request is never dropped without a recorded outcome.
 const (
 	// webhookRequestMaxAge bounds how old a request may be when it is minted.
 	// An older request is refused with a reason rather than starting a sync
@@ -42,8 +46,15 @@ const (
 	// webhookRequestMaxAttempts bounds retries of a failing mint; the row is
 	// then refused with the last stage-named error kept.
 	webhookRequestMaxAttempts = 10
-	webhookRequestBaseBackoff = 30 * time.Second
-	webhookRequestMaxBackoff  = 30 * time.Minute
+	// webhookRequestMintedRetention is how long a minted request is kept for
+	// delivery-level idempotency before the scheduler prunes it.
+	webhookRequestMintedRetention = 7 * 24 * time.Hour
+	// webhookRequestMaxInstantBumps bounds how many microseconds a request's
+	// instant moves when another delivery already holds (configuration,
+	// instant): distinct deliveries each get their own occurrence.
+	webhookRequestMaxInstantBumps = 8
+	webhookRequestBaseBackoff     = 30 * time.Second
+	webhookRequestMaxBackoff      = 30 * time.Minute
 	// webhookRequestTriggeredBy is the manual trigger's triggered_by, as the
 	// webhook path always wrote it (the sync_manual_triggers CHECK allows
 	// only "manual" and "backfill").
@@ -62,7 +73,7 @@ type webhookRequestMinter struct {
 	pool   *pgxpool.Pool
 	maxAge time.Duration
 
-	minted, refused, failed atomic.Uint64
+	minted, refused, failed, bumped, pruned atomic.Uint64
 }
 
 // mintPending claims up to limit pending requests, one transaction each, and
@@ -79,8 +90,13 @@ func (minter *webhookRequestMinter) mintPending(ctx context.Context, now time.Ti
 			return err
 		}
 		if !claimed {
-			return nil
+			break
 		}
+	}
+	// Retention of the minted rows must never fail the window: it is logged
+	// and retried next window.
+	if err := minter.prune(ctx, now); err != nil {
+		slog.ErrorContext(ctx, "sync.webhook_request.prune_failed", slog.String("error", safeErrorSummary(err)))
 	}
 	return nil
 }
@@ -98,7 +114,7 @@ func (minter *webhookRequestMinter) mintOne(ctx context.Context, now time.Time) 
 	err = tx.QueryRow(ctx, `
 SELECT delivery_id::text, org_id, sync_config_id::text, mode, source_ids, scheduled_for, created_at, attempts
 FROM public.webhook_sync_requests
-WHERE refused_at IS NULL AND (next_attempt_at IS NULL OR next_attempt_at <= $1)
+WHERE refused_at IS NULL AND minted_at IS NULL AND (next_attempt_at IS NULL OR next_attempt_at <= $1)
 ORDER BY created_at, delivery_id
 LIMIT 1
 FOR UPDATE SKIP LOCKED`, now).Scan(&request.deliveryID, &request.orgID, &request.syncConfigID, &request.mode,
@@ -130,18 +146,39 @@ FOR UPDATE SKIP LOCKED`, now).Scan(&request.deliveryID, &request.orgID, &request
 	}
 	scheduledFor := request.scheduledFor
 	mode, datasetKeys := syncNowSelection(config, request.mode)
-	trigger, mintErr := synchandoff.Mint(ctx, tx, config, synchandoff.MintInput{
-		Mode: mode, SourceIDs: request.sourceIDs, DatasetKeys: datasetKeys, TriggeredBy: webhookRequestTriggeredBy,
-		ScheduledFor: &scheduledFor,
-	}, now)
+	var trigger synchandoff.Trigger
+	var mintErr error
+	for bump := 0; ; bump++ {
+		trigger, mintErr = synchandoff.Mint(ctx, tx, config, synchandoff.MintInput{
+			Mode: mode, SourceIDs: request.sourceIDs, DatasetKeys: datasetKeys, TriggeredBy: webhookRequestTriggeredBy,
+			ScheduledFor: &scheduledFor,
+		}, now)
+		if mintErr != nil || !trigger.Existing {
+			break
+		}
+		// An occurrence for this (configuration, instant) already exists and
+		// this request is not the one that made it (a request mints once, in one
+		// transaction, and a retried delivery is stopped by its own row): a
+		// DIFFERENT delivery landed on the same microsecond. It gets its own
+		// occurrence one microsecond later rather than being merged into the
+		// first one, whose sources it may not cover.
+		if bump >= webhookRequestMaxInstantBumps {
+			mintErr = instantTakenError{}
+			break
+		}
+		scheduledFor = scheduledFor.Add(time.Microsecond)
+		minter.bumped.Add(1)
+	}
 	if mintErr != nil {
 		if _, err := tx.Exec(ctx, `ROLLBACK TO SAVEPOINT webhook_sync_request_mint`); err != nil {
 			return true, fmt.Errorf("webhook sync request rollback: %w", err)
 		}
 		return true, minter.fail(ctx, tx, request, now, "mint", mintErr)
 	}
-	if _, err := tx.Exec(ctx, `DELETE FROM public.webhook_sync_requests WHERE delivery_id = $1::uuid`, request.deliveryID); err != nil {
-		return true, fmt.Errorf("delete a minted webhook sync request: %w", err)
+	if _, err := tx.Exec(ctx, `
+UPDATE public.webhook_sync_requests SET minted_at = $2, occurrence_id = $3 WHERE delivery_id = $1::uuid`,
+		request.deliveryID, now, trigger.OccurrenceID); err != nil {
+		return true, fmt.Errorf("mark a webhook sync request minted: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return true, fmt.Errorf("commit a minted webhook sync request: %w", err)
@@ -149,8 +186,27 @@ FOR UPDATE SKIP LOCKED`, now).Scan(&request.deliveryID, &request.orgID, &request
 	minter.minted.Add(1)
 	slog.InfoContext(ctx, "sync.webhook_request.minted",
 		slog.String("delivery_id", request.deliveryID), slog.String("org_id", request.orgID),
-		slog.String("sync_config_id", request.syncConfigID), slog.String("occurrence_id", trigger.OccurrenceID))
+		slog.String("sync_config_id", request.syncConfigID), slog.String("occurrence_id", trigger.OccurrenceID),
+		slog.String("mode", mode), slog.Int("source_count", len(request.sourceIDs)), slog.Int("dataset_key_count", len(datasetKeys)),
+		slog.Time("scheduled_for", scheduledFor), slog.Bool("instant_bumped", !scheduledFor.Equal(request.scheduledFor)))
 	return true, nil
+}
+
+// instantTakenError: every microsecond the request could move to already holds
+// an occurrence of the configuration.
+type instantTakenError struct{}
+
+func (instantTakenError) Error() string { return "the occurrence instants are all taken" }
+
+// prune removes minted requests past their retention.
+func (minter *webhookRequestMinter) prune(ctx context.Context, now time.Time) error {
+	tag, err := minter.pool.Exec(ctx, `
+DELETE FROM public.webhook_sync_requests WHERE minted_at IS NOT NULL AND minted_at < $1`, now.Add(-webhookRequestMintedRetention))
+	if err != nil {
+		return fmt.Errorf("prune minted webhook sync requests: %w", err)
+	}
+	minter.pruned.Add(uint64(tag.RowsAffected()))
+	return nil
 }
 
 // syncNowSelection is the mode and dataset part of sync/trigger_routing.py's
@@ -252,8 +308,10 @@ func (minter *webhookRequestMinter) writePrometheus(output io.Writer) error {
 			"# TYPE devhealth_scheduler_webhook_sync_requests_total counter\n"+
 			"devhealth_scheduler_webhook_sync_requests_total{outcome=\"minted\"} %d\n"+
 			"devhealth_scheduler_webhook_sync_requests_total{outcome=\"failed_attempt\"} %d\n"+
-			"devhealth_scheduler_webhook_sync_requests_total{outcome=\"refused\"} %d\n",
-		minter.minted.Load(), minter.failed.Load(), minter.refused.Load())
+			"devhealth_scheduler_webhook_sync_requests_total{outcome=\"refused\"} %d\n"+
+			"devhealth_scheduler_webhook_sync_requests_total{outcome=\"instant_bumped\"} %d\n"+
+			"devhealth_scheduler_webhook_sync_requests_total{outcome=\"pruned\"} %d\n",
+		minter.minted.Load(), minter.failed.Load(), minter.refused.Load(), minter.bumped.Load(), minter.pruned.Load())
 	return err
 }
 

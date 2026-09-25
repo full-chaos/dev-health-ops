@@ -98,13 +98,13 @@ VALUES (gen_random_uuid(), $1, $2, 'incremental', ARRAY[$3], $4)`, org, configID
 	}
 	var requests, occurrences, triggers int
 	if err := pool.QueryRow(ctx, `SELECT
-  (SELECT count(*) FROM webhook_sync_requests),
+  (SELECT count(*) FROM webhook_sync_requests WHERE minted_at IS NULL),
   (SELECT count(*) FROM scheduled_sync_occurrences WHERE sync_config_id = $1::uuid),
   (SELECT count(*) FROM sync_manual_triggers)`, configID).Scan(&requests, &occurrences, &triggers); err != nil {
 		t.Fatal(err)
 	}
 	if requests != 0 || occurrences != 1 || triggers != 1 {
-		t.Fatalf("after one production Reconcile window: requests=%d occurrences=%d triggers=%d, want 0/1/1",
+		t.Fatalf("after one production Reconcile window: pending requests=%d occurrences=%d triggers=%d, want 0/1/1",
 			requests, occurrences, triggers)
 	}
 }

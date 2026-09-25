@@ -12,13 +12,17 @@ role split, so the domain role could never make them (42501).
 The webhook worker now records one durable request per delivery in this
 table, on the domain role, and the Go scheduler claims it on the coordinator
 role and mints the occurrence through the same hand-off every other trigger
-uses (``internal/synchandoff``). The row stays until the mint commits (then it
-is deleted in the same transaction) or the scheduler refuses it for good:
+uses (``internal/synchandoff``). The row stays until the scheduler refuses it
+for good, or after the mint (marked ``minted_at``/``occurrence_id`` in the same
+transaction, then pruned after a retention window, so a retried delivery is a
+no-op even when it would now route elsewhere). It has no foreign key to
+``sync_configurations``: a request outlives its configuration and is refused
+with a reason rather than cascade-deleted:
 
 - ``attempts``/``next_attempt_at``/``last_error``: a failed mint is retried
   with backoff; ``last_error`` is stage-named and never carries payload data.
 - ``refused_at``/``refused_reason``: a request the scheduler will not mint
-  (too old, its configuration gone or inactive) keeps its row with the reason.
+  (too old, its configuration gone) keeps its row with the reason.
 
 No data changes. Downgrade drops the table.
 """
@@ -67,12 +71,14 @@ def upgrade() -> None:
         sa.Column("last_error", sa.Text(), nullable=True),
         sa.Column("refused_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("refused_reason", sa.Text(), nullable=True),
-        sa.ForeignKeyConstraint(
-            ["sync_config_id"],
-            ["sync_configurations.id"],
-            name="fk_webhook_sync_requests_sync_config_id",
-            ondelete="CASCADE",
-        ),
+        # Set once the scheduler has minted the occurrence. The row stays (for
+        # a retention window) so a retried delivery finds it and mints nothing
+        # a second time, even after its routing changed.
+        sa.Column("minted_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("occurrence_id", sa.Text(), nullable=True),
+        # No foreign key to sync_configurations: a request must OUTLIVE its
+        # configuration so the scheduler can refuse it with a reason instead of
+        # a cascade deleting it silently.
         sa.PrimaryKeyConstraint("delivery_id", name="pk_webhook_sync_requests"),
     )
     # The scheduler's claim reads pending rows in arrival order.
@@ -80,10 +86,18 @@ def upgrade() -> None:
         "ix_webhook_sync_requests_pending",
         _TABLE,
         ["created_at"],
-        postgresql_where=sa.text("refused_at IS NULL"),
+        postgresql_where=sa.text("refused_at IS NULL AND minted_at IS NULL"),
+    )
+    # The retention prune reads minted rows by age.
+    op.create_index(
+        "ix_webhook_sync_requests_minted",
+        _TABLE,
+        ["minted_at"],
+        postgresql_where=sa.text("minted_at IS NOT NULL"),
     )
 
 
 def downgrade() -> None:
+    op.drop_index("ix_webhook_sync_requests_minted", table_name=_TABLE)
     op.drop_index("ix_webhook_sync_requests_pending", table_name=_TABLE)
     op.drop_table(_TABLE)

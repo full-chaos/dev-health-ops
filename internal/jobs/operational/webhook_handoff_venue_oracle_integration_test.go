@@ -154,6 +154,9 @@ func TestWebhookHandoffVenueOracleMatchesLivePython(t *testing.T) {
 			}
 		}
 	}
+	if t.Failed() {
+		return
+	}
 	t.Logf("%d configurations: scheduling rows identical on both planes", len(cases))
 	venueoracle.WriteProof(t)
 }

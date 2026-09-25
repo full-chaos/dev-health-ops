@@ -146,8 +146,10 @@ func (store *PostgresStore) TriggerScopedSync(
 	// under Option B, and this worker runs on the domain role. It records one
 	// request per delivery; the scheduler claims it on the coordinator role
 	// and mints through synchandoff.Mint with this scheduled_for, so the
-	// occurrence identity reported below is the one it will mint. A retried
-	// job finds its own row and writes nothing.
+	// occurrence identity reported below is the one it mints unless another
+	// delivery already holds that instant (the scheduler then moves this one
+	// by a microsecond). The row is kept after the mint, so a retried job
+	// finds its own row and writes nothing, whatever the routing is by then.
 	if _, err := store.pool.Exec(ctx, `
 INSERT INTO public.webhook_sync_requests (delivery_id, org_id, sync_config_id, mode, source_ids, scheduled_for)
 VALUES ($1::uuid, $2, $3::uuid, 'incremental', $4, $5)

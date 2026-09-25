@@ -685,3 +685,84 @@ func triggerAndMint(
 	}
 	return result, nil
 }
+
+// TestTriggerScopedSyncRetriedDeliveryAfterRerouteMintsNothingTwice (r1): the
+// request row is what makes a delivery idempotent, so it is kept after the
+// mint; a retry that would now route to a DIFFERENT configuration finds the
+// row and writes nothing.
+func TestTriggerScopedSyncRetriedDeliveryAfterRerouteMintsNothingTwice(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	pool, domain, coordinator := startSyncDispatchDatabase(ctx, t)
+	store := &PostgresStore{pool: domain}
+
+	insertGithubInstallation(ctx, t, pool, 555, "org-1")
+	sourceID := insertIntegrationSource(ctx, t, pool, "org-1", "github", "42", "full-chaos/dev-health")
+	first := insertSyncConfiguration(ctx, t, pool, "org-1", "github", sourceID, `{}`)
+
+	deliveredAt := time.Date(2026, 9, 6, 12, 0, 0, 0, time.UTC)
+	payload := []byte(`{"installation":{"id":555},"repository":{"id":42,"full_name":"full-chaos/dev-health"}}`)
+	if _, err := triggerAndMint(ctx, t, store, coordinator, "github", "push", payload, deliveredAt); err != nil {
+		t.Fatal(err)
+	}
+	// The routing moves: the first configuration is deactivated and another
+	// child configuration of the same source takes its place.
+	if _, err := pool.Exec(ctx, `UPDATE public.sync_configurations SET is_active = false WHERE id = $1::uuid`, first); err != nil {
+		t.Fatal(err)
+	}
+	var second string
+	if err := pool.QueryRow(ctx, `
+INSERT INTO public.sync_configurations (id, org_id, name, provider, source_id, sync_targets, sync_options, is_active,
+	planner_managed, created_at, updated_at)
+VALUES (gen_random_uuid(), 'org-1', 'rerouted-child', 'github', $1::uuid, '[]', '{}'::json, true, false, now(), now()) RETURNING id::text`,
+		sourceID).Scan(&second); err != nil {
+		t.Fatal(err)
+	}
+	retried, err := triggerAndMint(ctx, t, store, coordinator, "github", "push", payload, deliveredAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := countRows(ctx, t, pool, "public.scheduled_sync_occurrences"); got != 1 {
+		t.Fatalf("a retried delivery after a re-route minted %d occurrences (second config %s, reported %s), want 1", got, second, retried.SyncConfigID)
+	}
+	if got := countRows(ctx, t, pool, "public.webhook_sync_requests"); got != 1 {
+		t.Fatalf("webhook_sync_requests rows = %d, want the one delivery's row kept", got)
+	}
+	var mintedAt *time.Time
+	var occurrenceID *string
+	if err := pool.QueryRow(ctx, `SELECT minted_at, occurrence_id FROM public.webhook_sync_requests`).Scan(&mintedAt, &occurrenceID); err != nil {
+		t.Fatal(err)
+	}
+	if mintedAt == nil || occurrenceID == nil || *occurrenceID == "" {
+		t.Fatalf("the kept row is not marked minted: minted_at=%v occurrence_id=%v", mintedAt, occurrenceID)
+	}
+}
+
+// TestTriggerScopedSyncDistinctDeliveriesAtOneInstantEachGetAnOccurrence (r1):
+// two DIFFERENT deliveries stamped with the same microsecond must not be
+// merged into one occurrence (the second one's sources would be lost).
+func TestTriggerScopedSyncDistinctDeliveriesAtOneInstantEachGetAnOccurrence(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	pool, domain, coordinator := startSyncDispatchDatabase(ctx, t)
+	store := &PostgresStore{pool: domain}
+
+	insertGithubInstallation(ctx, t, pool, 555, "org-1")
+	sourceID := insertIntegrationSource(ctx, t, pool, "org-1", "github", "42", "full-chaos/dev-health")
+	insertSyncConfiguration(ctx, t, pool, "org-1", "github", sourceID, `{}`)
+
+	deliveredAt := time.Date(2026, 9, 6, 12, 0, 0, 123456000, time.UTC)
+	payload := []byte(`{"installation":{"id":555},"repository":{"id":42,"full_name":"full-chaos/dev-health"}}`)
+	for _, event := range []string{"push", "pull_request", "issues"} {
+		if _, err := triggerAndMint(ctx, t, store, coordinator, "github", event, payload, deliveredAt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if occurrences, triggers := countRows(ctx, t, pool, "public.scheduled_sync_occurrences"), countRows(ctx, t, pool, "public.sync_manual_triggers"); occurrences != 3 || triggers != 3 {
+		t.Fatalf("occurrences=%d triggers=%d, want one of each per distinct delivery (3)", occurrences, triggers)
+	}
+	var distinct int
+	if err := pool.QueryRow(ctx, `SELECT count(DISTINCT occurrence_id) FROM public.webhook_sync_requests WHERE minted_at IS NOT NULL`).Scan(&distinct); err != nil || distinct != 3 {
+		t.Fatalf("distinct minted occurrence ids = %d (%v), want 3", distinct, err)
+	}
+}

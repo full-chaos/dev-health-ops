@@ -35,31 +35,24 @@ type BatchRow struct {
 	UpdatedAt       time.Time
 	CompletedAt     *time.Time
 	// ErrorSummary is status.py's BatchStatusResponse.error_summary: a raw
-	// `dict[str, Any] | None` field with NO Pydantic submodel, so Python
-	// serializes exactly the dict json.loads produced from the stored
-	// JSONB text -- insertion order and int/float distinction preserved
-	// from whatever the writer (status.py's _build_error_summary, its
-	// mark_failed, or the Go worker's own writer) originally wrote. Decoded
-	// via pyjson.Decode (json.loads semantics: order kept, Int/Float
-	// distinct), not the generic decodeMetadata map[string]any helper,
-	// specifically so this passes through unconverted rather than being
-	// re-keyed against one assumed fixed shape -- round 1 review reproduced
-	// a second producer (mark_failed's {system_failure, reason}) that a
-	// fixed-shape converter silently dropped, plus reordered/float-ified
-	// keys on the shape it did handle.
-	ErrorSummary pyjson.Value
-	// ErrorSummaryJSON and RecordCountsJSON are the columns' stored JSON
-	// text (nil for SQL NULL) -- customerpush's own admin proxy decodes
-	// these itself (jsonObjectColumn) rather than going through ErrorSummary
-	// above, so both stay populated from the same scanned bytes.
+	// `dict[str, Any] | None` field, so Python serializes exactly the dict
+	// `_parse_json` produced from the stored JSONB, insertion order and int/float
+	// distinction preserved from whatever the writer (status.py's
+	// _build_error_summary, its mark_failed, or the Go worker's own writer)
+	// originally wrote, decoded with pyjson (json.loads semantics). A value that
+	// is not a dict is ErrStoredJSONColumn (see parseStoredDict).
+	ErrorSummary *pyjson.Object
+	// ErrorSummaryJSON and RecordCountsJSON are the columns' stored JSON text
+	// (nil for SQL NULL), kept beside the parsed values above.
 	ErrorSummaryJSON []byte
 	RecordCountsJSON []byte
-	// RecomputeScope is the raw recompute_scope JSONB column, decoded
-	// generically (key order doesn't matter here: status.py's
-	// RecomputeScopeResponse is a real Pydantic submodel, so Python
-	// serializes it in ITS OWN declared field order regardless of the
-	// stored dict's order -- recomputeScopePyJSON rebuilds that order).
-	RecomputeScope        map[string]any
+	// RecomputeScope is the recompute_scope column read as status.py's
+	// `_parse_json` reads it (nil for None); recomputeScopeResponse rebuilds the
+	// model's field order and raises where `_recompute_scope_response` raises.
+	RecomputeScope *pyjson.Object
+	// RecordCounts is `_parse_json(record_counts)`: parsed (and refused) on every
+	// row read, as Python does, though no status response carries it.
+	RecordCounts          *pyjson.Object
 	RecomputeStatus       string
 	RecomputeDispatchedAt *time.Time
 	RecomputeCompletedAt  *time.Time
@@ -83,21 +76,25 @@ func scanBatchRow(row pgx.Row) (*BatchRow, error) {
 		&b.RecomputeStatus, &recomputeScope, &b.RecomputeDispatchedAt, &b.RecomputeCompletedAt, &b.RecomputeError,
 		&b.RecordCountsJSON,
 	)
-	if len(errorSummary) > 0 {
-		v, decodeErr := pyjson.Decode(errorSummary)
-		if decodeErr != nil {
-			return nil, fmt.Errorf("decode error_summary: %w", decodeErr)
-		}
-		b.ErrorSummary = v
-	}
-	b.ErrorSummaryJSON = errorSummary
-	b.RecomputeScope = decodeMetadata(recomputeScope)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
+	// status.py's _row_to_batch parses the three JSON columns for every row it
+	// reads, and raises (unhandled) on a value that is not a dict: the same
+	// order and the same refusal here.
+	if b.RecordCounts, err = parseStoredDict(b.RecordCountsJSON); err != nil {
+		return nil, fmt.Errorf("record_counts: %w", err)
+	}
+	if b.ErrorSummary, err = parseStoredDict(errorSummary); err != nil {
+		return nil, fmt.Errorf("error_summary: %w", err)
+	}
+	if b.RecomputeScope, err = parseStoredDict(recomputeScope); err != nil {
+		return nil, fmt.Errorf("recompute_scope: %w", err)
+	}
+	b.ErrorSummaryJSON = errorSummary
 	return &b, nil
 }
 

@@ -33,25 +33,6 @@ func TestScopesValueIsTheStoredListOrEmpty(t *testing.T) {
 	}
 }
 
-func TestJSONObjectColumnKeepsStoredKeyOrder(t *testing.T) {
-	value, err := jsonObjectColumn([]byte(`{"zeta": 1, "alpha": {"b": 2, "a": 1}}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	got, _ := pyjson.Marshal(value)
-	if string(got) != `{"zeta":1,"alpha":{"b":2,"a":1}}` {
-		t.Fatalf("got %s", got)
-	}
-	for _, raw := range []string{"", "null"} {
-		if value, err := jsonObjectColumn([]byte(raw)); err != nil || value != nil {
-			t.Fatalf("%q: %v %v", raw, value, err)
-		}
-	}
-	if _, err := jsonObjectColumn([]byte(`[1]`)); err == nil {
-		t.Fatal("a list is not a dict")
-	}
-}
-
 func TestLastQueryIsStarlettesLastValue(t *testing.T) {
 	values, _ := url.ParseQuery("limit=1&limit=2&empty=")
 	if got := pybody.LastQuery(values, "limit"); got == nil || *got != "2" {

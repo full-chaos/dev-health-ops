@@ -83,6 +83,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/migrationmatrix"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/platform/version"
+	pgstorage "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 )
 
 // Command is the `goapi rest-prove` verb of the dho binary.
@@ -111,7 +112,7 @@ func execute(f flags, parseErr error) error {
 		return nil
 	}
 	if parseErr != nil {
-		err := secrets.NewBoundary(f.postgresURI).Redact(parseErr)
+		err := pgstorage.Boundary(f.postgresURI).Redact(parseErr)
 		if writeErr := writeStoppedBeforeMeasuringReport(f, nil, nil, err); writeErr != nil {
 			return fmt.Errorf("%w; additionally, writing the report failed: %v", err, writeErr)
 		}
@@ -1169,7 +1170,7 @@ func run(f flags) (err error) {
 	// site downstream to redact its own. A bare `return expr` still
 	// assigns expr to `err` before this defer runs, so every return in
 	// the rest of the function is covered.
-	boundary := secrets.NewBoundary(f.postgresURI)
+	boundary := pgstorage.Boundary(f.postgresURI)
 	defer func() { err = boundary.Redact(err) }()
 
 	// signal.NotifyContext gives an operator's Ctrl-C (or a SIGTERM from
@@ -2215,7 +2216,7 @@ func partialError(f flags, runErr error) string {
 	if runErr == nil {
 		return ""
 	}
-	return secrets.NewBoundary(f.postgresURI).Redact(runErr).Error()
+	return pgstorage.Boundary(f.postgresURI).Redact(runErr).Error()
 }
 
 func writeJSONReport(path string, report jsonReport) error {

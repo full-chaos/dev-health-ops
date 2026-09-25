@@ -2,6 +2,15 @@
   "$schema": "https://json-schema.org/draft-07/schema#",
   "type": "object",
   "definitions": {
+    "rollingUpdate": {
+      "type": "object",
+      "description": "Deployment strategy.rollingUpdate parameters (CHAOS-6647): maxSurge and maxUnavailable, each a non-negative integer or a percentage string; empty keeps the chart default {maxUnavailable: 0, maxSurge: 1}. Kubernetes rejects both being 0, and this schema refuses that too.",
+      "properties": {
+        "maxSurge": { "oneOf": [ { "type": "integer", "minimum": 0 }, { "type": "string", "pattern": "^[0-9]+%$" } ] },
+        "maxUnavailable": { "oneOf": [ { "type": "integer", "minimum": 0 }, { "type": "string", "pattern": "^[0-9]+%$" } ] }
+      },
+      "additionalProperties": false
+    },
     "envFromEntry": {
       "type": "object",
       "description": "One Kubernetes envFrom source: exactly one of configMapRef or secretRef, each carrying only a Secret/ConfigMap name -- matches the shape api-deployment.yaml/go-workers.yaml build for their own two hardcoded entries, so an extraEnvFrom entry can't carry a key (e.g. a typo'd field) the chart would silently drop when it toYaml's the combined list.",
@@ -180,10 +189,12 @@
               },
               "livenessProbe": { "type": "object" },
               "readinessProbe": { "type": "object" },
-              "preclaimReadinessTimeout": { "type": "string" }
+              "preclaimReadinessTimeout": { "type": "string" },
+              "rollingUpdate": { "$ref": "#/definitions/rollingUpdate" }
             }
           }
         },
+        "rollingUpdate": { "$ref": "#/definitions/rollingUpdate" },
         "defaultProbes": {
           "type": "object",
           "properties": {

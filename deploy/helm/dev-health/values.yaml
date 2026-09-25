@@ -289,6 +289,12 @@ goApi:
 queryApi:
   enabled: false
   replicas: 1
+  # -- RollingUpdate parameters of the Deployment (CHAOS-6647). Empty keeps the
+  #    chart's guarantee {maxUnavailable: 0, maxSurge: 1} (never below serving
+  #    capacity, one surge pod). On a node without CPU headroom for a surge pod
+  #    set {maxUnavailable: 1, maxSurge: 0} (with replicas >= 2 one pod rolls at
+  #    a time and one stays ready).
+  rollingUpdate: {}
   port: 8090
   image:
     # -- The dho image (docker/go-worker.Dockerfile target `dho`); the
@@ -395,6 +401,11 @@ queryApi:
 # creates only its own postgresql.credentials.user login.
 goWorkers:
   enabled: true
+  # -- Default RollingUpdate parameters of every group's Deployment (CHAOS-6647);
+  #    empty keeps {maxUnavailable: 0, maxSurge: 1}. A group's own
+  #    `rollingUpdate` wins. {maxUnavailable: 1, maxSurge: 0} on a single-replica
+  #    group means no surge pod (the consumer restarts in place).
+  rollingUpdate: {}
   # -- River/queue-consumer worker groups the API's /health/workers checks
   #    for live worker_instances heartbeats once goWorkers.enabled is true
   #    (CHAOS-3942). Reconciler/scheduler/stream-* are deliberately excluded:

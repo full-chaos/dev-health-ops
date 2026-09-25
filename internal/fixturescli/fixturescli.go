@@ -26,11 +26,13 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/full-chaos/dev-health-ops/internal/cacheinvalidation"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
+	valkeystore "github.com/full-chaos/dev-health-ops/internal/storage/valkey"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime"
 )
 
@@ -196,8 +198,10 @@ func lookupID(ctx context.Context, tx pgx.Tx, query string, args ...any) (string
 
 // Finalize seeds the run and finalizes it through the native Go finalize the
 // River worker uses, which writes the terminal run state and the once-only
-// post_sync outbox wakeup the reconciler relays.
-func Finalize(ctx context.Context, pool *pgxpool.Pool, logger *slog.Logger, params Params) (string, error) {
+// post_sync outbox wakeup the reconciler relays. With an invalidator it also
+// bumps the org's coverage-cache epoch, as the worker's finalize does; without
+// one the finalize logs that failure as a warning on every run.
+func Finalize(ctx context.Context, pool *pgxpool.Pool, logger *slog.Logger, params Params, invalidator ...cacheinvalidation.OrgCacheInvalidator) (string, error) {
 	runID, err := Seed(ctx, pool, params)
 	if err != nil {
 		return "", err
@@ -205,6 +209,11 @@ func Finalize(ctx context.Context, pool *pgxpool.Pool, logger *slog.Logger, para
 	service, err := syncdispatchruntime.NewNativeFinalizeSyncRunService(pool, logger)
 	if err != nil {
 		return runID, fmt.Errorf("finalize service: %w", err)
+	}
+	if len(invalidator) > 0 && invalidator[0] != nil {
+		if err := service.UseCoverageCacheInvalidator(invalidator[0]); err != nil {
+			return runID, fmt.Errorf("coverage cache invalidator: %w", err)
+		}
 	}
 	if err := service.FinalizeRun(ctx, params.OrgID, runID); err != nil {
 		return runID, fmt.Errorf("finalize run %s: %w", runID, err)
@@ -231,6 +240,8 @@ Environment:
                                           database that is not a throwaway one
   MIGRATION_DATABASE_URI (or _FILE, or the DEV_HEALTH_MIGRATION_PG_* component
   form), else POSTGRES_URI (or _FILE)     the database
+  VALKEY_URI (optional, database 1)       when set, the org's coverage-cache epoch
+                                          is bumped as the worker's finalize does
 `
 
 func runFinalizeSynthetic(ctx context.Context, env cli.Env) int {
@@ -291,6 +302,25 @@ func runFinalizeSynthetic(ctx context.Context, env cli.Env) int {
 	}
 	defer pool.Close()
 	logger := logging.NewJSON(env.Stderr, slog.LevelInfo)
+	var invalidators []cacheinvalidation.OrgCacheInvalidator
+	if raw, _ := env.Lookup("VALKEY_URI"); strings.TrimSpace(raw) != "" {
+		valkeyBoundary := secrets.NewBoundary(raw)
+		client, err := valkeystore.Open(ctx, valkeystore.DefaultConfig(strings.TrimSpace(raw)))
+		if err != nil {
+			return writeError(env.Stderr, cli.ExitFailure, "valkey_unavailable", valkeyBoundary.Redact(err).Error())
+		}
+		defer client.Close()
+		invalidator, err := cacheinvalidation.NewValkeyOrgCacheInvalidator(client)
+		if err != nil {
+			return writeError(env.Stderr, cli.ExitFailure, "valkey_unavailable", valkeyBoundary.Redact(err).Error())
+		}
+		invalidators = append(invalidators, invalidator)
+	} else {
+		// No Valkey in this throwaway environment: say so once, at Info, instead
+		// of letting every finalize warn about a nil client.
+		invalidators = append(invalidators, skippedCacheInvalidator{})
+		logger.Info("coverage cache invalidation skipped", "reason", "VALKEY_URI is not configured")
+	}
 	logger.Info("synthetic finalize database", "source", source, "host", pool.Config().ConnConfig.Host, "database", pool.Config().ConnConfig.Database)
 
 	before := time.Now().UTC()
@@ -299,7 +329,7 @@ func runFinalizeSynthetic(ctx context.Context, env cli.Env) int {
 		Since: before.AddDate(0, 0, -*backfill), Before: before,
 	}
 	started := time.Now()
-	runID, err := Finalize(ctx, pool, logger, params)
+	runID, err := Finalize(ctx, pool, logger, params, invalidators...)
 	if err != nil {
 		return writeError(env.Stderr, cli.ExitFailure, "finalize_failed", boundary.Redact(err).Error())
 	}
@@ -315,3 +345,9 @@ func writeError(stderr io.Writer, exit int, code, detail string) int {
 	fmt.Fprintf(stderr, "{\"error\":{\"code\":%q,\"detail\":%q}}\n", code, detail)
 	return exit
 }
+
+// skippedCacheInvalidator stands in for Valkey when none is configured: the
+// throwaway database has no cached view to make unreachable.
+type skippedCacheInvalidator struct{}
+
+func (skippedCacheInvalidator) InvalidateOrg(context.Context, string) error { return nil }

@@ -71,9 +71,8 @@ func WriteHeads(out io.Writer, baseline Baseline, chain []ChainFile) error {
 }
 
 // Recorded reads the revisions alembic_version records (none when the table
-// does not exist), in the order the table returns them: the same unordered
-// query Alembic runs, so `current` prints what `alembic current` prints for
-// the same database at the same moment.
+// does not exist), sorted: Alembic's own order for two heads is not stable
+// across runs, so dho prints a deterministic one.
 func Recorded(ctx context.Context, conn *pgx.Conn) ([]string, error) {
 	var recorded []string
 	err := readOnlyTransaction(ctx, conn, func(tx pgx.Tx) error {
@@ -92,6 +91,7 @@ func Recorded(ctx context.Context, conn *pgx.Conn) ([]string, error) {
 		if err != nil {
 			return fmt.Errorf("read alembic_version: %w", err)
 		}
+		sort.Strings(versions)
 		recorded = versions
 		return nil
 	})

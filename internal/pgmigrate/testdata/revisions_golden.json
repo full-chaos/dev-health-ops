@@ -1,4 +1,4 @@
-# written by TestRevisionsVenueOracleMatchesAlembic; `current` lines are compared as a set: Alembic prints alembic_version in table (heap) order, which an UPDATE or VACUUM can change
+# written by TestRevisionsVenueOracleMatchesAlembic; Alembic's `current` order for two heads is unstable across runs, dho sorts it, so `current` compares as a set
 [
  {
   "name": "heads",

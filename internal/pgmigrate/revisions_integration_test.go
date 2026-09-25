@@ -49,7 +49,7 @@ const revisionsGolden = "testdata/revisions_golden.json"
 // freshness check: the file is only rewritten by
 // TestRevisionsVenueOracleMatchesAlembic with DHO_REVISIONS_GOLDEN_UPDATE=1,
 // then this digest is updated.
-const revisionsGoldenSHA256 = "af1cb89d596dfe5ba9866f48217237b40ce8e478cf68a5ee53e864e70f641f1f"
+const revisionsGoldenSHA256 = "a7c41e40bf32675b2cec889ed60a8a19ad21eb0f711f889286f090fad89e3389"
 
 type revisionResult struct {
 	Name   string `json:"name"`
@@ -163,6 +163,9 @@ func TestRevisionsMatchTheFrozenAlembicOutput(t *testing.T) {
 			exec(scenario.setup)
 		}
 		got := goRevisions(t, uri, scenario.verb)
+		if scenario.verb == "current" && strings.Join(sortedLines(got), "\n") != strings.TrimRight(got, "\n") {
+			t.Errorf("%s: dho printed %q, want its revisions sorted", scenario.name, got)
+		}
 		if !sameRevisionText(scenario.verb, got, frozen[index].Stdout) {
 			t.Errorf("%s: dho printed %q, Alembic printed %q", scenario.name, got, frozen[index].Stdout)
 		}
@@ -213,8 +216,8 @@ func TestRevisionsVenueOracleMatchesAlembic(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		out = append([]byte("# written by TestRevisionsVenueOracleMatchesAlembic; `current` lines are compared as a set: "+
-			"Alembic prints alembic_version in table (heap) order, which an UPDATE or VACUUM can change\n"), out...)
+		out = append([]byte("# written by TestRevisionsVenueOracleMatchesAlembic; Alembic's `current` order for two heads is unstable "+
+			"across runs, dho sorts it, so `current` compares as a set\n"), out...)
 		if err := os.MkdirAll("testdata", 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -240,8 +243,8 @@ func goldenBody(raw []byte) []byte {
 }
 
 // sameRevisionText compares a verb's output. `heads` is ordered (both sides
-// sort it). `current` prints alembic_version in table order, which is not a
-// contract (an UPDATE or VACUUM moves a row), so its lines compare as a set.
+// sort it). Alembic's `current` order for two heads is unstable across runs
+// while dho sorts it, so `current` lines compare as a set.
 func sameRevisionText(verb, got, want string) bool {
 	if verb != "current" {
 		return got == want

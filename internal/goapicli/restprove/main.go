@@ -578,7 +578,7 @@ func doREST(ctx context.Context, client *goapiproof.LegClient, baseURL, method, 
 			return goapiproof.RESTLeg{}, err
 		}
 	}
-	sentSecrets := credentialValuesOn(req.Header)
+	sentSecrets := goapiproof.SecretsOnRequest(req.Header)
 	if baseline {
 		// CHAOS-6580: the Python api's unhandled-error path answers a real
 		// response (its own status and body -- doREST never treats that as a
@@ -607,11 +607,13 @@ func doREST(ctx context.Context, client *goapiproof.LegClient, baseURL, method, 
 		// plane cannot answer may stand on it.
 		return goapiproof.RESTLeg{}, answerStartedError{goapiproof.NewTransportFailure(target, err)}
 	}
-	// A body that carries the credential this request sent would be stored
-	// verbatim as response evidence (artifacts, linked from the receipt). The
-	// leg is refused instead, naming the target and never the value.
-	if echoed := echoesCredential(raw, sentSecrets); echoed {
-		return goapiproof.RESTLeg{}, fmt.Errorf("%s answered with a body that contains the credential this request sent; refused so the credential is never stored as response evidence", target)
+	// A body or header value that carries a form of the credential this request
+	// sent would be stored verbatim as response evidence (artifacts linked from
+	// the receipt) or printed (the build header). The leg is refused instead,
+	// naming the target and never the value; see goapiproof.SentSecrets for the
+	// forms it recognises and the ones it does not.
+	if sentSecrets.ReflectedIn(raw) || sentSecrets.HeaderReflects(resp.Header) {
+		return goapiproof.RESTLeg{}, fmt.Errorf("%s answered with a body or header that contains the credential this request sent; refused so the credential is never stored or printed as response evidence", target)
 	}
 	return goapiproof.RESTLeg{
 		StatusCode:    resp.StatusCode,
@@ -621,40 +623,6 @@ func doREST(ctx context.Context, client *goapiproof.LegClient, baseURL, method, 
 		Impersonating: goapiproof.ServedUnderImpersonation(resp.Header),
 		WireAttempts:  legResponse.WireAttempts,
 	}, nil
-}
-
-// minEchoSecretLen is the shortest credential value the echo guard looks for:
-// anything shorter would match ordinary body text.
-const minEchoSecretLen = 8
-
-// credentialValuesOn returns the credential values a request carries in its
-// headers (the Authorization scheme prefix stripped), for the echo guard. It
-// is read AFTER Credential.Apply, so it holds exactly what was sent, whatever
-// the credential kind.
-func credentialValuesOn(header http.Header) [][]byte {
-	var secrets [][]byte
-	for name, values := range header {
-		if http.CanonicalHeaderKey(name) == "Content-Type" {
-			continue
-		}
-		for _, value := range values {
-			value = strings.TrimSpace(strings.TrimPrefix(value, "Bearer "))
-			if len(value) >= minEchoSecretLen {
-				secrets = append(secrets, []byte(value))
-			}
-		}
-	}
-	return secrets
-}
-
-// echoesCredential reports whether body contains any of the secrets.
-func echoesCredential(body []byte, secrets [][]byte) bool {
-	for _, secret := range secrets {
-		if bytes.Contains(body, secret) {
-			return true
-		}
-	}
-	return false
 }
 
 // answerStartedError marks a leg failure that happened after the plane sent its

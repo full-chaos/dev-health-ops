@@ -2,6 +2,7 @@ package restprove
 
 import (
 	"context"
+	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -97,5 +98,42 @@ func TestProveOneRESTRequestNeverStoresAnEchoedCredential(t *testing.T) {
 	}
 	if len(writer.receipts) != 0 {
 		t.Fatalf("a refused request must write no receipt, wrote %d", len(writer.receipts))
+	}
+}
+
+// TestDoRESTRefusesTransformedAndHeaderEchoes (CHAOS-6612, r2 P1): a credential
+// reflected base64-encoded, split across two JSON fields, or in a response
+// header (the x-dev-health-build header is copied into the leg and printed in a
+// refusal) is refused like a raw echo, and neither the refusal nor the returned
+// leg carries the value.
+func TestDoRESTRefusesTransformedAndHeaderEchoes(t *testing.T) {
+	token := strings.Join([]string{strings.Repeat("Hd", 15), strings.Repeat("Pl", 25), strings.Repeat("Sg", 30)}, ".")
+	credential := goapiproof.StaticCredential("Authorization", "org-admin bearer", token)
+	seen := func(r *http.Request) string { return strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ") }
+	for name, handler := range map[string]http.HandlerFunc{
+		"base64 body": func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte(`{"seen":"` + base64.StdEncoding.EncodeToString([]byte(seen(r))) + `"}`))
+		},
+		"split across two fields": func(w http.ResponseWriter, r *http.Request) {
+			v := seen(r)
+			_, _ = w.Write([]byte(`{"a":"` + v[:len(v)/2] + `","b":"` + v[len(v)/2:] + `"}`))
+		},
+		"build header": func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("x-dev-health-build", seen(r))
+			_, _ = w.Write([]byte(`{}`))
+		},
+	} {
+		server := httptest.NewServer(handler)
+		for _, baseline := range []bool{true, false} {
+			leg, err := doREST(context.Background(), goapiproof.NewLegClient(0), server.URL, http.MethodGet, "/x", nil, nil, credential, baseline, time.Second)
+			if err == nil {
+				t.Errorf("%s baseline=%v: the echo went unrefused: %+v", name, baseline, leg)
+				continue
+			}
+			if strings.Contains(err.Error(), token) || len(leg.Body) != 0 || leg.Build != "" {
+				t.Errorf("%s baseline=%v: the refusal or leg carries the credential: %v / %q / %q", name, baseline, err, leg.Body, leg.Build)
+			}
+		}
+		server.Close()
 	}
 }

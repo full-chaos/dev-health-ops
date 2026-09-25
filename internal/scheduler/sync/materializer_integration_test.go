@@ -2212,3 +2212,84 @@ func TestNativeMaterializerRefusesCredentialBackedPlanWithoutDecryptor(t *testin
 		t.Fatalf("sync_runs=%d after a refused plan, want 0", runs)
 	}
 }
+
+// TestNativeMaterializerStampsZeroUnitJiraPlanForStrictDiscovery ports
+// CHAOS-4593 (planner.py _zero_unit_plan_needs_credential_stamp): a Jira
+// plan with zero units still arms reference discovery, whose strict Jira
+// populate needs the frozen credential, so the run carries the full
+// run-auth stamp. Other providers' zero-unit plans stay unstamped
+// (TestNativeMaterializerDoesNotHydrateCredentialMetadataForZeroUnitPlan).
+func TestNativeMaterializerStampsZeroUnitJiraPlanForStrictDiscovery(t *testing.T) {
+	for _, withCredential := range []bool{false, true} {
+		name := "environment auth"
+		if withCredential {
+			name = "stored credential"
+		}
+		t.Run(name, func(t *testing.T) {
+			fixture := startMaterializerPostgres(t)
+			ctx := context.Background()
+			const credentialID = "00000000-0000-4000-8000-000000006703"
+			decryptor := pagerDutyFixtureDecryptor(t)
+			statements := []struct {
+				sql  string
+				args []any
+			}{
+				{`UPDATE integrations SET provider='jira',credential_id=NULL`, nil},
+				{`UPDATE integration_sources SET provider='jira',is_enabled=FALSE`, nil},
+				{`UPDATE sync_configurations SET provider='jira',sync_targets='[]'::jsonb`, nil},
+			}
+			if withCredential {
+				ciphertext, err := decryptor.Encrypt([]byte(`{"email": "e@example.com", "api_token": "t", "base_url": "https://x.atlassian.net"}`))
+				if err != nil {
+					t.Fatal(err)
+				}
+				statements = append(statements,
+					struct {
+						sql  string
+						args []any
+					}{`INSERT INTO integration_credentials (id,org_id,provider,is_active,config,credentials_encrypted) VALUES ($1::uuid,$2,'jira',TRUE,'{}'::jsonb,$3)`,
+						[]any{credentialID, fixture.occurrence.OrgID, ciphertext.Reveal()}},
+					struct {
+						sql  string
+						args []any
+					}{`UPDATE integrations SET credential_id=$1::uuid`, []any{credentialID}})
+			}
+			for _, statement := range statements {
+				if _, err := fixture.pool.Exec(ctx, statement.sql, statement.args...); err != nil {
+					t.Fatal(err)
+				}
+			}
+			materializer, err := NewNativeMaterializer(fixture.pool)
+			if err != nil {
+				t.Fatal(err)
+			}
+			materializer.WithCredentialFingerprint(decryptor)
+			plan, err := materializeAndCommit(t, fixture, materializer, fixture.occurrence)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var units int
+			var credential, auth, fingerprint *string
+			if err := fixture.pool.QueryRow(ctx, `SELECT total_units,credential_id::text,auth_source,credential_fingerprint FROM sync_runs WHERE id=$1::uuid`,
+				plan.SyncRunID).Scan(&units, &credential, &auth, &fingerprint); err != nil {
+				t.Fatal(err)
+			}
+			wantAuth, wantCredential := "environment", ""
+			if withCredential {
+				wantAuth, wantCredential = "integration_credential", credentialID
+			}
+			if units != 0 || auth == nil || *auth != wantAuth || fingerprint == nil || *fingerprint == "" ||
+				(wantCredential == "") != (credential == nil) || (credential != nil && *credential != wantCredential) {
+				t.Fatalf("zero-unit jira run stamp: units=%d credential=%v auth=%v fingerprint=%v, want auth %q credential %q",
+					units, deref(credential), deref(auth), deref(fingerprint), wantAuth, wantCredential)
+			}
+		})
+	}
+}
+
+func deref(value *string) string {
+	if value == nil {
+		return "<nil>"
+	}
+	return *value
+}

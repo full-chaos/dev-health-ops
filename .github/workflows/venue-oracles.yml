@@ -9,8 +9,8 @@
 # roll starts until it is green again.
 #
 # ONE PRODUCER. The job lives only in this workflow (go.yml must not declare
-# it again). It is a 4-leg matrix (CHAOS-6574: one sequential job outgrew its
-# timeout), so a commit carries four `venue-oracles (shard K/4)` contexts, all
+# it again). It is a 5-leg matrix (CHAOS-6574: one sequential job outgrew its
+# timeout), so a commit carries five `venue-oracles (shard K/5)` contexts, all
 # informational (R430), none required.
 #
 # RELEVANCE. A push to main decides relevance INSIDE the job, not with a
@@ -55,20 +55,22 @@ jobs:
     runs-on: ubuntu-latest
     # SHARDED (CHAOS-6574). One sequential job took 67 min at 87 tests and was
     # CANCELLED at its 75-minute timeout on two consecutive main pushes (a
-    # cancel reads as no signal). The matrix runs 4 legs; leg K runs every
-    # 4th row of the registry's sorted `run` sequence (`check_go.sh
-    # venue-oracles K 4`), so one package's tests spread over all legs
+    # cancel reads as no signal). The matrix runs 5 legs; leg K runs every
+    # 5th row of the registry's sorted `run` sequence (`check_go.sh
+    # venue-oracles K 5`), so one package's tests spread over all legs
     # (apiservice/admin alone was 23 min). Keep the matrix list and the count
     # passed to the verb in step: tests/tooling/test_venue_oracle_shards.py
     # pins both. Each package's own go test is bounded at 40 minutes inside
     # the verb; a leg is bounded at 40 minutes here (~16 min of tests plus
-    # setup expected).
-    name: venue-oracles (shard ${{ matrix.shard }}/4)
+    # setup expected). The fifth leg (CHAOS-6678) makes room for the metrics
+    # table sweep, which runs the Python api's route tests (~7 min) and put
+    # a 4-leg slice (21-27 min measured) near the 40-minute bound.
+    name: venue-oracles (shard ${{ matrix.shard }}/5)
     timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: [1, 2, 3, 4, 5]
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository_owner }}
     steps:
@@ -178,7 +180,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "${RUNNER_TEMP}/venue-oracle-receipt"
-          bash ci/check_go.sh venue-oracles "${{ matrix.shard }}" 4 2>&1 | tee "${RUNNER_TEMP}/venue-oracle-receipt/receipt.log"
+          bash ci/check_go.sh venue-oracles "${{ matrix.shard }}" 5 2>&1 | tee "${RUNNER_TEMP}/venue-oracle-receipt/receipt.log"
 
       - name: Upload the venue oracle receipt
         if: steps.relevance.outputs.relevant == 'true' && always()

@@ -214,7 +214,7 @@ print("RESULT " + json.dumps({m.name: m.type for m in REGISTRY.collect()}))
 // tableStatuses are the statuses python_metrics.tsv may give a family; its
 // header says what each means.
 var tableStatuses = map[string]bool{
-	"ported": true, "partial": true, "route-missing": true, "route-not-ported": true,
+	"ported": true, "partial": true, "route-missing": true, "unreached": true, "route-not-ported": true,
 	"other-go-service": true, "worker": true, "python-only": true, "retired": true,
 	"unused": true, "runtime": true,
 }
@@ -253,24 +253,15 @@ func checkPythonMetricsTable(t *testing.T) {
 	}
 	table := map[string]bool{}
 	lazy := 0
-	for _, line := range strings.Split(pythonMetricsTable, "\n") {
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		fields := strings.Split(line, "\t")
-		if len(fields) != 4 || fields[3] == "" {
-			t.Errorf("python_metrics.tsv: %q is not <family> <type> <status> <note>", line)
-			continue
-		}
-		family, kind, status := fields[0], fields[1], fields[2]
+	for _, row := range parsePythonMetricsTable(t) {
+		family, kind, status := row.family, row.kind, row.status
 		if table[family] {
 			t.Errorf("python_metrics.tsv names %s twice", family)
 		}
 		table[family] = true
 		liveKind, registered := live[family]
-		if lazyKind, isLazy := strings.CutPrefix(kind, "lazy:"); isLazy {
+		if row.lazy {
 			lazy++
-			kind = lazyKind
 			if registered {
 				t.Errorf("python_metrics.tsv marks %s lazy, but the Python api registers it at import", family)
 			}
@@ -310,6 +301,37 @@ func checkPythonMetricsTable(t *testing.T) {
 		}
 	}
 	t.Logf("python_metrics.tsv: %d families (%d lazy); every import-time family of the live Python api is named", len(table), lazy)
+}
+
+// tableRow is one python_metrics.tsv row: <family> <type> <status>
+// <routes> <note>, where type may carry a "lazy:" prefix and routes is
+// "-" or the ";"-separated route labels the family fires under.
+type tableRow struct {
+	family, kind, status, note string
+	lazy                       bool
+	routes                     []string
+}
+
+func parsePythonMetricsTable(t *testing.T) []tableRow {
+	t.Helper()
+	var rows []tableRow
+	for _, line := range strings.Split(pythonMetricsTable, "\n") {
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		fields := strings.Split(line, "\t")
+		if len(fields) != 5 || fields[3] == "" || fields[4] == "" {
+			t.Errorf("python_metrics.tsv: %q is not <family> <type> <status> <routes> <note>", line)
+			continue
+		}
+		row := tableRow{family: fields[0], status: fields[2], note: fields[4]}
+		row.kind, row.lazy = strings.CutPrefix(fields[1], "lazy:")
+		if fields[3] != "-" {
+			row.routes = strings.Split(fields[3], ";")
+		}
+		rows = append(rows, row)
+	}
+	return rows
 }
 
 // startGoAPI serves the dho api route set on the venue's Go database, and

@@ -149,18 +149,26 @@ func TestInvoiceWebhookAppliesTestModeEvents(t *testing.T) {
 	send("voided with an open payload", "evt_in_vopen", "invoice.voided", invoice("in_vopen", "open", nil, unknownParent, map[string]any{"org_id": orgD}, "cus_other"))
 	// Amounts beyond the int4 columns (a large JPY invoice, a large line)
 	// are refused, never stored as another number; one that fits is kept.
-	send("amount beyond int4", "evt_in_large", "invoice.finalized", func(object map[string]any) {
-		invoice("in_large", "open", nil, unknownParent, map[string]any{"org_id": orgD}, "cus_other")(object)
-		object["currency"], object["amount_due"], object["amount_remaining"] = "jpy", 2147483648, 2147483648
-	})
-	send("line amount beyond int4", "evt_in_large_line", "invoice.finalized", func(object map[string]any) {
-		invoice("in_large_line", "open", nil, unknownParent, map[string]any{"org_id": orgD}, "cus_other")(object)
-		object["lines"].(map[string]any)["data"].([]any)[0].(map[string]any)["amount"] = 2147483648
-	})
+	for _, field := range []string{"amount_due", "amount_paid", "amount_remaining", "attempt_count"} {
+		send(field+" beyond int4", "evt_in_large_"+field, "invoice.finalized", func(object map[string]any) {
+			invoice("in_large_"+field, "open", nil, unknownParent, map[string]any{"org_id": orgD}, "cus_other")(object)
+			object["currency"], object[field] = "jpy", 2147483648
+		})
+	}
+	for field, value := range map[string]any{"amount": 2147483648, "quantity": 2147483648, "negative amount": -2147483649} {
+		send("line "+field+" beyond int4", "evt_in_line_"+strings.ReplaceAll(field, " ", "_"), "invoice.finalized", func(object map[string]any) {
+			invoice("in_line_"+strings.ReplaceAll(field, " ", "_"), "open", nil, unknownParent, map[string]any{"org_id": orgD}, "cus_other")(object)
+			object["lines"].(map[string]any)["data"].([]any)[0].(map[string]any)[strings.TrimPrefix(field, "negative ")] = value
+		})
+	}
 	send("amount at the int4 limit", "evt_in_int4", "invoice.finalized", func(object map[string]any) {
 		invoice("in_int4", "open", nil, unknownParent, map[string]any{"org_id": orgD}, "cus_other")(object)
 		object["amount_due"], object["amount_remaining"] = 2147483647, 2147483647
+		object["lines"].(map[string]any)["data"].([]any)[0].(map[string]any)["amount"] = -2147483648
 	})
+	// A payment that failed and then succeeded is paid.
+	send("failed, then paid", "evt_in_fp_failed", "invoice.payment_failed", invoice("in_fp", "open", nil, unknownParent, map[string]any{"org_id": orgD}, "cus_other"))
+	send("failed, then paid: paid", "evt_in_fp_paid", "invoice.paid", invoice("in_fp", "paid", 1790241800, unknownParent, map[string]any{"org_id": orgD}, "cus_other"))
 	// An event that carries only the first of five lines: all five are read
 	// from Stripe.
 	send("lines beyond the event (has_more)", "evt_in_more", "invoice.finalized", func(object map[string]any) {
@@ -243,8 +251,11 @@ func TestInvoiceWebhookAppliesTestModeEvents(t *testing.T) {
 		orgB+" 11111111-0000-4000-8000-0000000000aa")
 	expect("in_rem: paid clears amount_remaining", row(`SELECT status, amount_remaining FROM invoices WHERE stripe_invoice_id = 'in_rem'`), "paid 0")
 	expect("in_vopen: voided is void", row(`SELECT status, voided_at IS NOT NULL FROM invoices WHERE stripe_invoice_id = 'in_vopen'`), "void true")
-	expect("amounts beyond int4 refused, the limit kept", row(`SELECT string_agg(stripe_invoice_id || '=' || amount_due::text, ',' ORDER BY stripe_invoice_id)
-		FROM invoices WHERE stripe_invoice_id IN ('in_large', 'in_large_line', 'in_int4')`), "in_int4=2147483647")
+	expect("amounts beyond int4 refused, the limits kept", row(`SELECT string_agg(i.stripe_invoice_id || '=' || i.amount_due::text || '/' || l.amount::text, ','
+		ORDER BY i.stripe_invoice_id) FROM invoices i LEFT JOIN invoice_line_items l ON l.invoice_id = i.id
+		WHERE i.stripe_invoice_id LIKE 'in\_large\_%' OR i.stripe_invoice_id LIKE 'in\_line\_%' OR i.stripe_invoice_id = 'in_int4'`),
+		"in_int4=2147483647/-2147483648")
+	expect("in_fp: failed, then paid", row(`SELECT status FROM invoices WHERE stripe_invoice_id = 'in_fp'`), "paid")
 	expect("in_more: every line read from Stripe", row(`SELECT count(*), sum(l.amount), sum(l.quantity), min(l.stripe_price_id), count(l.period_start)
 		FROM invoice_line_items l JOIN invoices i ON i.id = l.invoice_id WHERE i.stripe_invoice_id = 'in_more'`), "5 1500 15 price_more 5")
 	expect("in_more_fail: nothing written", row(`SELECT count(*) FROM invoices WHERE stripe_invoice_id = 'in_more_fail'`), "0")
@@ -255,11 +266,13 @@ func TestInvoiceWebhookAppliesTestModeEvents(t *testing.T) {
 			"invoice_receipt billing:invoice_receipt:"+orgB+":evt_in_sub_paid",
 			"invoice_receipt billing:invoice_receipt:"+orgB+":evt_in_unc_paid",
 			"invoice_receipt billing:invoice_receipt:"+orgD+":evt_in_rem",
+			"invoice_receipt billing:invoice_receipt:"+orgD+":evt_in_fp_paid",
+			"payment_failed billing:payment_failed:"+orgD+":evt_in_fp_failed",
 			"payment_failed billing:payment_failed:"+orgD+":evt_in_meta_failed",
 			"payment_failed billing:payment_failed:"+orgD+":evt_in_pfu",
 		))
 	expect("outbox: one handoff per notification", row(`SELECT count(*) FROM worker_job_outbox o JOIN billing_notifications n
-		ON n.idempotency_key = o.dedupe_key WHERE n.notification_type IN ('invoice_receipt', 'payment_failed')`), "5")
+		ON n.idempotency_key = o.dedupe_key WHERE n.notification_type IN ('invoice_receipt', 'payment_failed')`), "7")
 	expect("receipt attributes", row(`SELECT attributes::text FROM billing_notifications WHERE idempotency_key = $1`,
 		"billing:invoice_receipt:"+orgB+":evt_in_sub_paid"), `{"amount_cents": 1000, "currency": "usd", "invoice_url": "https://invoice.stripe.test/venue"}`)
 

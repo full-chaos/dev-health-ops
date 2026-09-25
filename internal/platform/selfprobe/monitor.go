@@ -36,7 +36,6 @@ package selfprobe
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -62,31 +61,10 @@ type Tx interface {
 	Rollback(ctx context.Context) error
 }
 
-// AcquireError marks a Begin failure that happened while WAITING FOR A POOL
-// CONNECTION, before any statement was sent (CHAOS-6771 r1). A deadline here
-// says the pool had no free connection; a deadline on the BEGIN itself (the
-// server accepted the connection and never answered) is a different fact, and
-// callers that tolerate a busy pool (internal/platform/busyprobe) must tell
-// them apart. Unwrap exposes the driver's own error.
-type AcquireError struct{ Err error }
-
-func (e *AcquireError) Error() string { return "acquire pool connection: " + e.Err.Error() }
-func (e *AcquireError) Unwrap() error { return e.Err }
-
-// IsAcquireError reports whether err is (or wraps) an AcquireError.
-func IsAcquireError(err error) bool {
-	var acquire *AcquireError
-	return errors.As(err, &acquire)
-}
-
-// poolOpener adapts *pgxpool.Pool to TxOpener. It acquires the connection and
-// begins the transaction as two steps, exactly what pool.Begin does, so a
-// failure to ACQUIRE is reported as an AcquireError and a failure of the BEGIN
-// itself is not. The connection goes back to the pool when the transaction is
-// rolled back (or when the BEGIN fails).
-type poolOpener struct {
-	pool *pgxpool.Pool
-}
+// poolOpener adapts *pgxpool.Pool to TxOpener. pgx.Tx (the concrete Begin
+// return type) declares Rollback(context.Context) error, so it satisfies Tx
+// structurally -- no wrapping of the transaction itself is needed.
+type poolOpener struct{ pool *pgxpool.Pool }
 
 // NewPool wraps a real *pgxpool.Pool as a TxOpener. A nil pool is preserved
 // as a nil TxOpener so New's nil-checks compose correctly rather than
@@ -95,34 +73,11 @@ func NewPool(pool *pgxpool.Pool) TxOpener {
 	if pool == nil {
 		return nil
 	}
-	return &poolOpener{pool: pool}
+	return poolOpener{pool: pool}
 }
 
-func (o *poolOpener) Begin(ctx context.Context) (Tx, error) {
-	connection, err := o.pool.Acquire(ctx)
-	if err != nil {
-		return nil, &AcquireError{Err: err}
-	}
-	transaction, err := connection.Begin(ctx)
-	if err != nil {
-		connection.Release()
-		return nil, err
-	}
-	return &releasingTx{Tx: transaction, connection: connection}, nil
-}
-
-// releasingTx returns the connection to the pool once the probe transaction is
-// rolled back, like the transaction pool.Begin returns.
-type releasingTx struct {
-	Tx
-	connection *pgxpool.Conn
-	once       sync.Once
-}
-
-func (t *releasingTx) Rollback(ctx context.Context) error {
-	err := t.Tx.Rollback(ctx)
-	t.once.Do(t.connection.Release)
-	return err
+func (o poolOpener) Begin(ctx context.Context) (Tx, error) {
+	return o.pool.Begin(ctx)
 }
 
 // Once runs a single, synchronous Begin+Rollback round trip against opener

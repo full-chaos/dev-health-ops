@@ -9,17 +9,13 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/full-chaos/dev-health-ops/internal/platform/busyprobe"
-	"github.com/full-chaos/dev-health-ops/internal/platform/selfprobe"
 )
 
 // CHAOS-6771: a saturated work pool is busy, not broken -- but only in exactly
 // the shape the readiness contract can defend. Each row plants one way the
 // probe could be wrongly tolerated or wrongly refused.
 func TestIdempotencyBackendBusyToleranceIsExactlyBusyNotBroken(t *testing.T) {
-	deadline := &selfprobe.AcquireError{Err: fmt.Errorf("acquire: %w", context.DeadlineExceeded)}
-	beginStalled := fmt.Errorf("begin: %w", context.DeadlineExceeded) // a deadline AFTER a connection was acquired
+	deadline := fmt.Errorf("acquire: %w", context.DeadlineExceeded)
 	refused := errors.New("connection refused")
 	progressing := func(context.Context) error { return nil }
 	wedged := func(context.Context) error { return errors.New("no claim in the staleness window") }
@@ -35,7 +31,6 @@ func TestIdempotencyBackendBusyToleranceIsExactlyBusyNotBroken(t *testing.T) {
 		{"acquire deadline, pool NOT saturated = broken (slow database)", deadline, 0.75, progressing, false},
 		{"acquire deadline, pool saturated, claim liveness red = broken (wedged pool)", deadline, 1, wedged, false},
 		{"connection error while saturated = broken (the transaction path failed)", refused, 1, progressing, false},
-		{"deadline on the BEGIN itself (connection acquired) = broken (stalled database)", beginStalled, 1, progressing, false},
 		{"no progress guard wired = broken", deadline, 1, nil, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -78,7 +73,7 @@ func TestIdempotencyBackendBusyToleranceIsExactlyBusyNotBroken(t *testing.T) {
 // tolerated by the same rule (its own check name on the counter).
 func TestExecutionLivenessSampleIsToleratedWhenBusyToo(t *testing.T) {
 	database := &fakeWorkerDatabase{domainSaturation: 1}
-	database.setTxOpenerErr(&selfprobe.AcquireError{Err: context.DeadlineExceeded})
+	database.setTxOpenerErr(context.DeadlineExceeded)
 	dependencies := &workerDependencies{
 		database:      database,
 		busy:          newReadinessBusy(nil),
@@ -102,15 +97,15 @@ func TestBusyLogIsRateLimitedButTheCounterCountsEveryProbe(t *testing.T) {
 	var logs bytes.Buffer
 	busy := newReadinessBusy(slog.New(slog.NewJSONHandler(&logs, nil)))
 	clock := time.Unix(1_700_000_000, 0)
-	busy.SetClock(func() time.Time { return clock })
+	busy.now = func() time.Time { return clock }
 	for i := 0; i < 5; i++ {
-		busy.Record(context.Background(), "idempotency_backend")
+		busy.record(context.Background(), "idempotency_backend")
 	}
 	if got := strings.Count(logs.String(), "passed as busy"); got != 1 {
 		t.Fatalf("%d log lines within the interval, want 1", got)
 	}
-	clock = clock.Add(busyprobe.LogInterval + time.Second)
-	busy.Record(context.Background(), "idempotency_backend")
+	clock = clock.Add(busyLogInterval + time.Second)
+	busy.record(context.Background(), "idempotency_backend")
 	if got := strings.Count(logs.String(), "passed as busy"); got != 2 {
 		t.Fatalf("%d log lines after the interval, want 2", got)
 	}

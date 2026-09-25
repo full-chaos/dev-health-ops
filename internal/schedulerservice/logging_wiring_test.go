@@ -56,7 +56,7 @@ func TestSyncSchedulerLoopReceivesTheComposedLoggerFromSchedulerCompositionRoot(
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&buf, nil))
 
-	registry := health.NewRegistry(100 * time.Millisecond)
+	registry := health.NewRegistry(readinessTestCheckTimeout)
 	component, err := buildSchedulerLoopWithSources(
 		context.Background(),
 		config.Config{RiverDatabaseSchema: "river"},

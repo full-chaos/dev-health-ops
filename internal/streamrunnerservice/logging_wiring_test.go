@@ -160,7 +160,7 @@ func TestStreamRunnerReceivesTheComposedLoggerFromStreamRunnerCompositionRoot(t 
 	var buf syncBuffer
 	logger := slog.New(slog.NewJSONHandler(&buf, nil))
 
-	registry := health.NewRegistry(100 * time.Millisecond)
+	registry := health.NewRegistry(readinessTestCheckTimeout)
 	components, err := configureStreamRunnerDependenciesWithSources(
 		context.Background(),
 		config.Config{Profile: "ingest", StreamConfiguredReplicas: 1},

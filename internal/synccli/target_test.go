@@ -140,7 +140,7 @@ func TestHelpListsEverySyncOption(t *testing.T) {
 	_, help, _ := runVerb(t, "git", neverRuns(t), []string{"--help"}, nil)
 	hidden := map[string]bool{"--day": true, "--date": true, "-h": true, "--help": true}
 	for _, spec := range syncSpecs {
-		for _, option := range spec.strs {
+		for _, option := range spec.Strs {
 			if hidden[option] {
 				continue
 			}

@@ -133,6 +133,8 @@ func Command() cli.Command {
 		Name:    "api",
 		Summary: "serve the Go HTTP api",
 		Kind:    cli.Service,
+		// dev-hops's root --log-level, typed before the command, is this service's own flag.
+		RootFlags: []cli.RootFlag{cli.RootLogLevel},
 		Run: func(ctx context.Context, env cli.Env) int {
 			return shell.Execute(ctx, Spec, env.Args, env.Lookup, shell.IO{
 				Stdout: env.Stdout,

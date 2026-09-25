@@ -24,8 +24,9 @@ var syncTargetOracleProgram string
 
 // Named limitations, each outside the corpus on purpose:
 //   - dev-hops's ROOT-level global flags before the subcommand
-//     (`dev-hops --org X sync git`): dho's dispatcher has no root flags, so
-//     they go after the verb;
+//     (`dev-hops --org X sync git`) are parsed by the dispatcher (internal/cli,
+//     proven against the real root parser there) and handed to this verb as its
+//     own leading flags, so this oracle covers them in the leaf position only;
 //   - `.env` loading by dev-hops main() is not replicated.
 // Integers of any size, Unicode digits and Python's exact float grammar come
 // from internal/pythonparity, the repository's one port of int() and float().

@@ -28,6 +28,8 @@ func Command() cli.Command {
 		Name:    "worker",
 		Summary: "consume the River queues this deployment selects",
 		Kind:    cli.Service,
+		// dev-hops's root --log-level, typed before the command, is this service's own flag.
+		RootFlags: []cli.RootFlag{cli.RootLogLevel},
 		Run: func(ctx context.Context, env cli.Env) int {
 			return shell.Execute(ctx, workerSpec, env.Args, env.Lookup, shell.IO{
 				Stdout: env.Stdout,

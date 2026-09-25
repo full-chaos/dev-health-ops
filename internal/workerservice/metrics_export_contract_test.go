@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
@@ -56,7 +55,7 @@ func TestMetricsEndpointExposesAppCounterContract(t *testing.T) {
 	}
 	sources.newRiverClientID = func() string { return "test-client" }
 
-	registry := health.NewRegistry(100 * time.Millisecond)
+	registry := health.NewRegistry(readinessTestCheckTimeout)
 	if _, err := configureWorkerDependenciesWithSources(
 		context.Background(),
 		config.Config{

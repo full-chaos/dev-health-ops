@@ -181,15 +181,22 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::json, true, $10, $10)`,
 // sync job yet: ScheduledJob(name "sync-config-<id>", job_type "sync", the
 // options' schedule_cron or the hourly default, the lower-cased provider,
 // job_config {provider, sync_config_id}, the options' timezone or UTC),
-// ACTIVE when the config has an explicit schedule (it is active), else
-// PAUSED.
+// ACTIVE when the config is active and has an explicit schedule, else
+// PAUSED. The config's activity is read back here: the PagerDuty repair may
+// just have disabled it, as the ORM object Python passes carries.
 func insertScheduledJob(ctx context.Context, tx pgx.Tx, orgID string, configID uuid.UUID, provider string, options *pyjson.Object, now time.Time) error {
+	var active bool
+	if err := tx.QueryRow(ctx, `SELECT is_active FROM sync_configurations WHERE id = $1`, configID).Scan(&active); err != nil {
+		return fmt.Errorf("read the config's activity: %w", err)
+	}
 	lower := pythonparity.Lower(provider)
 	cron := "0 * * * *"
 	status := 1 // JobStatus.PAUSED
 	if value, _ := options.Get("schedule_cron"); pyjson.Truthy(value) {
 		cron = pyjson.Str(value)
-		status = 0 // JobStatus.ACTIVE
+		if active {
+			status = 0 // JobStatus.ACTIVE
+		}
 	}
 	timezone := "UTC"
 	if value, _ := options.Get("timezone"); pyjson.Truthy(value) {

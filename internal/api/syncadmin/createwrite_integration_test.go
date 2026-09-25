@@ -162,6 +162,13 @@ func TestCreateWriteVenueOracleSequenceUnderTheAPIRole(t *testing.T) {
 	}
 	expect("pagerduty stamped", query(`SELECT concat_ws('|', is_active, last_sync_success, last_sync_error, last_sync_stats::text) FROM sync_configurations WHERE id = $1`, pdBad.config.ID),
 		`[f|f|PagerDuty credential account identity is invalid|{"phase": "pagerduty_repair", "error": "PagerDuty credential account identity is invalid"}]`)
+	// The repair disabled that config, so its explicitly scheduled job is
+	// PAUSED, as Python's _upsert_scheduled_job reads the disabled config.
+	pdBadScheduled, err := create("pd bad scheduled", "pagerduty", []string{"operational"}, `{"schedule_cron": "0 * * * *"}`, &bad)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expect("pagerduty disabled config's job", query(`SELECT status::text FROM scheduled_jobs WHERE sync_config_id = $1`, pdBadScheduled.config.ID), `[1]`)
 	other := otherOrgCredential.String()
 	pdOther, err := create("pd other", "pagerduty", []string{"operational"}, `{}`, &other)
 	if err != nil {

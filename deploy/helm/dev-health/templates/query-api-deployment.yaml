@@ -35,9 +35,10 @@ spec:
   capacity during a rollout. Kubernetes' 25%/25% default only behaves at
   replicas: 1 by rounding.
   */}}
+  {{- /* CHAOS-6647: values-driven; unset keeps the guarantee above (maxUnavailable 0, maxSurge 1). A node with no CPU headroom for a surge pod sets {maxUnavailable: 1, maxSurge: 0} (at replicas >= 2 one pod rolls at a time). */}}
   strategy:
     type: RollingUpdate
-    rollingUpdate: {maxUnavailable: 0, maxSurge: 1}
+    rollingUpdate: {{ .Values.queryApi.rollingUpdate | default (dict "maxUnavailable" 0 "maxSurge" 1) | toJson }}
   selector:
     matchLabels:
       {{- include "dev-health.componentSelectorLabels" (dict "component" "query-api" "context" $) | nindent 6 }}

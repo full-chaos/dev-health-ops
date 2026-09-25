@@ -108,9 +108,10 @@ metadata:
     {{- end }}
 spec:
   replicas: {{ $group.replicas }}
+  {{- /* CHAOS-6647: per-group goWorkers.groups[].rollingUpdate, else goWorkers.rollingUpdate, else maxUnavailable 0 / maxSurge 1. */}}
   strategy:
     type: RollingUpdate
-    rollingUpdate: {maxUnavailable: 0, maxSurge: 1}
+    rollingUpdate: {{ $group.rollingUpdate | default $.Values.goWorkers.rollingUpdate | default (dict "maxUnavailable" 0 "maxSurge" 1) | toJson }}
   selector:
     matchLabels:
       {{- include "dev-health.componentSelectorLabels" (dict "component" "go-worker" "context" $) | nindent 6 }}

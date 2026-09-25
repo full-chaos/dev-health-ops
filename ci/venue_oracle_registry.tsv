@@ -35,6 +35,7 @@ internal/api/teamsidentity/adminstampvenue	TestAdminTimestampVenueOracle	run
 internal/apiservice	TestCORSVenueOracleMatchesLiveStarlette	run
 internal/apiservice	TestExternalIngestPayloadHashVenueOracle	run
 internal/apiservice	TestExternalIngestVenueOracle	run
+internal/apiservice	TestLegacyIngestTelemetryVenueOracle	run
 internal/apiservice	TestLegacyIngestVenueOracle	run
 internal/apiservice	TestVenueOracleCredentialAdmin	run
 internal/apiservice	TestVenueOracleCredentialConnectionTest	run

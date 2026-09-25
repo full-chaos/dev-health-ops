@@ -183,7 +183,13 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 	if deps.Valkey != nil {
 		legacyStore = legacyingest.ValkeyStore{Client: deps.Valkey}
 	}
-	routes = append(routes, legacyingest.Routes(legacyingest.Deps{Store: legacyStore, Metrics: deps.LegacyIngestMetrics, Logger: logger})...)
+	// The telemetry route writes ClickHouse with the api's own login; with
+	// none configured it accepts and skips, as the Python route does.
+	var legacyClickHouse legacyingest.ClickHouse
+	if deps.ClickHouse != nil {
+		legacyClickHouse = deps.ClickHouse
+	}
+	routes = append(routes, legacyingest.Routes(legacyingest.Deps{Store: legacyStore, Metrics: deps.LegacyIngestMetrics, ClickHouse: legacyClickHouse, Logger: logger})...)
 	routes = append(routes, healthroutes.Routes(healthroutes.Deps{
 		// deps.ClickHouse is the api's own dedicated ClickHouse login
 		// (CHAOS-6310), the SAME connection internal/api/teamsidentity's

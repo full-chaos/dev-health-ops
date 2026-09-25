@@ -69,6 +69,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"slices"
 	"sort"
 	"strings"
 	"syscall"
@@ -147,6 +148,11 @@ type flags struct {
 	pushTokenFile     string
 	orgAdminTokenFile string
 	platformTokenFile string
+	// skipCredentialKinds are the file-fed credential kinds whose corpus
+	// entries this run does NOT plan (-skip-credential-kind): a venue with no
+	// principal of that kind can still run the rest of the leg. Stated in the
+	// output and the report, never silent.
+	skipCredentialKinds []goapiproof.RESTCredentialKind
 	// tokenCredentials holds the file-fed credential of each token kind the
 	// run was given a file for (built in run, never from argv).
 	tokenCredentials map[goapiproof.RESTCredentialKind]*goapiproof.Credential
@@ -231,6 +237,16 @@ func registerFlags() (*flag.FlagSet, *flags) {
 	fs.StringVar(&f.pushTokenFile, "push-token-file", "", "path to a file holding the external-ingest push token (fcpush_...), sent on BOTH legs of every corpus entry that authenticates with it (the external-ingest routes of -service=dho-api). Required when the run plans such entries. The token is read from the file on every use and is never taken from argv, printed or written to a receipt")
 	fs.StringVar(&f.orgAdminTokenFile, "org-admin-token-file", "", "path to a file holding the access token (a JWT) of the proof principal that holds an Admin membership in the proof org, sent on BOTH legs of every corpus entry that authenticates as an org admin (read-only GETs of the org-admin admin routes of -service=dho-api). Required when the run plans such entries. Read from the file on every use; never taken from argv, printed or written to a receipt")
 	fs.StringVar(&f.platformTokenFile, "platform-token-file", "", "path to a file holding the access token (a JWT) of the dedicated platform-superadmin proof principal, sent on BOTH legs of every corpus entry that authenticates as a platform superadmin (read-only GETs of the superuser admin routes of -service=dho-api). Required when the run plans such entries. Read from the file on every use; never taken from argv, printed or written to a receipt")
+	fs.Func("skip-credential-kind", "repeatable: do NOT plan the corpus entries of this file-fed credential kind (push_token, org_admin or platform_superadmin), for a venue that has no principal of that kind. The run prints skipped_credential_kinds=... and the report carries skipped_credential_kinds, so the smaller plan is a stated decision; it is refused together with that kind's token file, and refused for any other kind", func(raw string) error {
+		kind := goapiproof.RESTCredentialKind(raw)
+		if _, ok := goapiproof.TokenFileKindFor(kind); !ok {
+			return fmt.Errorf("-skip-credential-kind %q: not a file-fed credential kind", raw)
+		}
+		if !slices.Contains(f.skipCredentialKinds, kind) {
+			f.skipCredentialKinds = append(f.skipCredentialKinds, kind)
+		}
+		return nil
+	})
 	fs.StringVar(&f.serviceName, "service", string(goapiproof.RESTServiceQueryAPI), "which Go service this run measures: query-api (default) or dho-api. One run measures one service; the build every receipt names is read from that service's /buildinfo, and only that service's corpus entries are sent")
 	fs.StringVar(&f.pythonAPIURL, "python-api-url", "", "the Python api service's OWN in-cluster address -- the baseline leg (required). Never an edge or ingress URL, for the same reason as -query-api-url")
 	fs.BoolVar(&f.pythonForwarderOff, "python-forwarder-off", false, "attest that the Python app's forwarding switch for every endpoint it can forward to query-api (RESTEndpointSpec.PythonForwarder: POST /api/v1/investment/explain) is OFF for this whole run, so a 200 baseline there is Python's own answer and is compared. The Python app relays query-api's answer without any header that marks it, so nothing on the response can show which plane computed it: without this flag such a 200 baseline is refused by name, and with it every receipt for such an endpoint records the attestation")
@@ -786,12 +802,16 @@ func planRESTRequests() ([]plannedRequest, error) {
 
 // planRESTRequestsFor plans the requests of the corpus entries that target
 // service, in run order.
-func planRESTRequestsFor(service goapiproof.RESTService) ([]plannedRequest, error) {
+// Entries whose credential kind is in skip are not planned.
+func planRESTRequestsFor(service goapiproof.RESTService, skip ...goapiproof.RESTCredentialKind) ([]plannedRequest, error) {
 	var planned []plannedRequest
 	for _, operation := range goapiproof.RESTRunOrderFor(service) {
 		spec, err := goapiproof.SpecForREST(operation)
 		if err != nil {
 			return planned, fmt.Errorf("%s: %w", operation, err)
+		}
+		if slices.Contains(skip, spec.Credential) {
+			continue
 		}
 		for _, request := range spec.Requests {
 			planned = append(planned, plannedRequest{operation: operation, request: request, spec: spec})
@@ -1237,14 +1257,22 @@ func run(f flags) (err error) {
 	if err := goapiproof.ValidateRESTCorpus(); err != nil {
 		return err
 	}
+	// Stated FIRST, before any refusal below, so a run that stops before
+	// measuring still says on stdout what it was told to skip.
+	if len(f.skipCredentialKinds) > 0 {
+		fmt.Printf("skipped_credential_kinds=%s\n", skippedKindsText(f.skipCredentialKinds))
+	}
 	if err := requireTokenFiles(f, func(kind goapiproof.RESTCredentialKind) bool {
-		return goapiproof.PlansCredentialKind(f.service, kind)
+		return goapiproof.PlansCredentialKind(f.service, kind) && !slices.Contains(f.skipCredentialKinds, kind)
 	}); err != nil {
 		return err
 	}
+	if err := refuseSkipWithTokenFile(f); err != nil {
+		return err
+	}
 	// A run that plans nothing measured nothing; it must not read as a pass.
-	if len(goapiproof.RESTRunOrderFor(f.service)) == 0 {
-		return fmt.Errorf("the REST corpus has no entry that targets -service=%s, so this run would send nothing", f.service)
+	if plan, _ := planRESTRequestsFor(f.service, f.skipCredentialKinds...); len(plan) == 0 {
+		return fmt.Errorf("the REST corpus has no entry that targets -service=%s (after -skip-credential-kind), so this run would send nothing", f.service)
 	}
 
 	// Built before any credential or network step for the same reason the
@@ -1324,7 +1352,7 @@ const proverBuildSkewFlag = "-allow-prover-build-skew"
 // signal), else refused_before_measuring. runEnded is the run context's
 // own Err() as the run exited.
 func writeStoppedBeforeMeasuringReport(f flags, builds *goapiproof.ProverBuild, runEnded, stopErr error) error {
-	planned, _ := planRESTRequestsFor(f.service)
+	planned, _ := planRESTRequestsFor(f.service, f.skipCredentialKinds...)
 	notRun := notRunKeys(planned, nil)
 	cause := stopCause(runEnded, nil)
 	exitCause := exitCauseFromPartial(cause)
@@ -1346,6 +1374,8 @@ func writeStoppedBeforeMeasuringReport(f flags, builds *goapiproof.ProverBuild, 
 		PartialError: stopErr.Error(),
 		ExitCause:    exitCause,
 		RunDeadline:  f.runDeadline.String(),
+
+		SkippedCredentialKinds: skippedKindNames(f.skipCredentialKinds),
 	})
 }
 
@@ -1710,6 +1740,34 @@ func requireTokenFiles(f flags, plans func(goapiproof.RESTCredentialKind) bool) 
 	return nil
 }
 
+// refuseSkipWithTokenFile refuses a run that both skips a credential kind and
+// supplies that kind's token file: the two say opposite things, and a token
+// file for entries that will not run would be read for nothing.
+func refuseSkipWithTokenFile(f flags) error {
+	for _, kind := range f.skipCredentialKinds {
+		if path := f.tokenFileFor(kind); path != "" {
+			descriptor, _ := goapiproof.TokenFileKindFor(kind)
+			return fmt.Errorf("-skip-credential-kind %s contradicts %s: drop one", kind, descriptor.Flag)
+		}
+	}
+	return nil
+}
+
+// skippedKindsText is the sorted, comma-joined kinds, for the output line and
+// the report.
+func skippedKindsText(kinds []goapiproof.RESTCredentialKind) string {
+	return strings.Join(skippedKindNames(kinds), ",")
+}
+
+func skippedKindNames(kinds []goapiproof.RESTCredentialKind) []string {
+	names := make([]string, 0, len(kinds))
+	for _, kind := range kinds {
+		names = append(names, string(kind))
+	}
+	sort.Strings(names)
+	return names
+}
+
 // tokenFileFor names the file the run was given for a file-fed credential
 // kind ("" when none).
 func (f flags) tokenFileFor(kind goapiproof.RESTCredentialKind) string {
@@ -1760,7 +1818,7 @@ func runMeasurement(ctx context.Context, client *goapiproof.LegClient, f flags, 
 	// passed above (every RESTRunOrder entry is checked against
 	// restEndpointSpecs there), kept as a named, reported failure rather
 	// than a panic on the day that stops being true.
-	planned, specErr := planRESTRequestsFor(f.service)
+	planned, specErr := planRESTRequestsFor(f.service, f.skipCredentialKinds...)
 
 	var outcomes []outcome
 	attempted, admitted, matched, mismatched := 0, 0, 0, 0
@@ -2035,7 +2093,7 @@ func finalRunReport(f flags, outcomes []outcome, notRun []string, runEnded, runE
 		exitCause = exitCompletedWithNothingMeasured
 		finalErr = fmt.Errorf("this -service=%s run admitted no request, so it measured nothing (read the REFUSED lines above; an unresolved -bind is the usual cause)", f.service)
 	}
-	report := jsonReport{Outcomes: outcomes, NotRun: notRun, PartialCause: partialCause, PartialError: partialError(f, runErr), ExitCause: exitCause, RunDeadline: f.runDeadline.String(), SkewAdmittedByOperation: skewAdmittedByOperation(outcomes), GapAdmittedByOperation: gapAdmittedByOperation(outcomes)}
+	report := jsonReport{Outcomes: outcomes, NotRun: notRun, PartialCause: partialCause, PartialError: partialError(f, runErr), ExitCause: exitCause, RunDeadline: f.runDeadline.String(), SkippedCredentialKinds: skippedKindNames(f.skipCredentialKinds), SkewAdmittedByOperation: skewAdmittedByOperation(outcomes), GapAdmittedByOperation: gapAdmittedByOperation(outcomes)}
 	return report, finalErr
 }
 
@@ -2138,6 +2196,10 @@ type jsonReport struct {
 	ExitCause string `json:"exit_cause"`
 	// RunDeadline is this run's -run-deadline.
 	RunDeadline string `json:"run_deadline"`
+	// SkippedCredentialKinds names the credential kinds whose entries this run
+	// did not plan (-skip-credential-kind); absent when none. A smaller plan
+	// is a stated decision, never a silent shrink.
+	SkippedCredentialKinds []string `json:"skipped_credential_kinds,omitempty"`
 }
 
 // Exit causes, one per way the command can end; each is written into the

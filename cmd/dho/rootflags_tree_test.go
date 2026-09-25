@@ -64,7 +64,8 @@ func helpWith(t *testing.T, tree []cli.Command, path []string, before, after []s
 }
 
 func names(text string, flag string) bool {
-	return regexp.MustCompile(`(^|[\s\[,|])-{1,2}` + flag + `\b`).MatchString(text)
+	// The whole flag name: `--org` is not `--org-id`.
+	return regexp.MustCompile(`(^|[\s\[,|])-{1,2}` + flag + `([\s=\],|]|$)`).MatchString(text)
 }
 
 // TestRootFlagsAreNeverDroppedSilentlyByAnyVertical walks the real tree. A
@@ -155,6 +156,19 @@ func TestEveryRootLogLevelIsAcceptedByTheServices(t *testing.T) {
 		}})
 		if err != nil {
 			t.Errorf("--log-level %q is handed to a service as %q, which its config refuses: %v", level, value, err)
+		}
+	}
+}
+
+// TestNamesMatchesTheWholeFlagName pins the help scan the walk relies on: `--org`
+// is not `--org-id` (admin orgs delete has the second and no first).
+func TestNamesMatchesTheWholeFlagName(t *testing.T) {
+	for text, want := range map[string]bool{
+		"  -org-id value\n": false, "  --org-id X": false, "  -org value\n": true, "Usage: dho x [--org <id>]": true,
+		"--org=X": true, "  -org\n": true, "-organization": false, "a|--org|b": true,
+	} {
+		if got := names(text, "org"); got != want {
+			t.Errorf("names(%q, org) = %v, want %v", text, got, want)
 		}
 	}
 }

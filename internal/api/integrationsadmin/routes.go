@@ -514,6 +514,7 @@ func (h handlers) setSourceEnabled(ctx context.Context, tx pgx.Tx, orgID string,
 				return current, err
 			}
 			if int64(count)+1 > maxRepos {
+				recordEnableRejectedAtRepoLimit(ctx)
 				h.Logger.WarnContext(ctx, "jira_source_enable_rejected_repo_limit", slog.String("org_id", orgID),
 					slog.String("source_id", current.ID.String()), slog.Int64("max_repos", maxRepos))
 				return current, refuse(http.StatusForbidden, fmt.Sprintf("Enabling this source would exceed the org's repo limit (%s)", pyjson.Repr(limit)))

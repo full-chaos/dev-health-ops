@@ -1,79 +1,107 @@
-# Every metric family the Python api registers (prometheus_client REGISTRY
-# after importing dev_health_ops.api.main), with its Go status. The counter
-# parity oracle lists the live families and fails on any family missing
-# here, any row whose family Python no longer registers, and any "ported"
-# row the oracle does not drive (routeCounters).
-# Columns (TAB separated): <family> <type> <status>
-#   ported  = the Go api exposes it and the oracle compares it with Python
-#   runtime = a process/interpreter collector, not a route counter
-#   pending = not yet classified or ported (the route-counter inventory)
-credential_mapping_rejected	counter	pending
-dev_health_metric_compat_child_silence_seconds	histogram	pending
-dev_health_metrics_family_failures	counter	pending
-dev_health_otel_init_failures	counter	pending
-dev_health_team_attribution_membership_layer	counter	pending
-dev_health_team_autoimport_reference_category_outcome	counter	pending
-dev_health_team_autoimport_reference_subitem_skipped	counter	pending
-dev_health_team_autoimport_roster_preservation_failed	counter	pending
-dev_health_work_item_team_attributions_written	counter	pending
-devhealth_ask_dev_internal_token_leak	counter	pending
-devhealth_ask_dev_narrative_fallback	counter	pending
-devhealth_ask_dev_plan_registry_gap	counter	pending
-devhealth_ask_dev_platform_model_unpriced	counter	pending
-devhealth_ask_dev_qua_commit	counter	pending
-devhealth_ask_dev_qua_shadow	counter	pending
-devhealth_ask_dev_qua_shadow_cardinality_uncorroborated	counter	pending
-devhealth_ask_dev_qua_shadow_fault	counter	pending
-devhealth_ask_dev_qua_shadow_latency_seconds	histogram	pending
-devhealth_ask_dev_tool_executor_fault	counter	pending
-devhealth_ask_dev_unhandled_run_fault	counter	pending
-devhealth_ask_dev_unregistered_terminal_code	counter	pending
-devhealth_byo_llm_base_url_fallback	counter	pending
-devhealth_byo_llm_base_url_fallback_alert	counter	pending
-devhealth_celery_task_duration_seconds	histogram	pending
-devhealth_celery_tasks	counter	pending
-devhealth_clickhouse_org_scope_rows_filtered	counter	pending
-devhealth_clickhouse_queries	counter	pending
-devhealth_clickhouse_query_duration_seconds	histogram	pending
-devhealth_github_api_requests	counter	pending
-devhealth_github_rate_limit_remaining	gauge	pending
-devhealth_go_api_candidate_build_registered	counter	pending
-devhealth_go_api_dispatch_attempted	counter	pending
-devhealth_go_api_dispatch_digest_miss	counter	pending
-devhealth_go_api_dispatch_fallback	counter	pending
-devhealth_go_api_dispatch_go_failed	counter	pending
-devhealth_go_api_dispatch_latency_seconds	histogram	pending
-devhealth_go_api_dispatch_served_go	counter	pending
-devhealth_go_api_envelope_issued	counter	pending
-devhealth_go_api_proof_run_recorded	counter	pending
-devhealth_go_api_registry_lookup	counter	pending
-devhealth_go_api_routing_digest_drift	counter	pending
-devhealth_ingest_legacy_auth_rejected	counter	pending
-devhealth_integration_credential_decrypt_failed	counter	ported
-devhealth_investment_membership_scope_lag_seconds	gauge	pending
-devhealth_investment_membership_scope_stale	counter	pending
-devhealth_licensed_features_resolved	counter	pending
-devhealth_llm_request_duration_seconds	histogram	pending
-devhealth_llm_requests	counter	pending
-devhealth_llm_tokens	counter	pending
-devhealth_org_tier_resolved_async	counter	pending
-devhealth_recommendations_readiness_gate_fail_open	counter	pending
-devhealth_telemetry_org_id_rejected	counter	pending
-jira_project_discovery	counter	pending
-process_cpu_seconds	counter	runtime
-process_max_fds	gauge	runtime
-process_open_fds	gauge	runtime
-process_resident_memory_bytes	gauge	runtime
-process_start_time_seconds	gauge	runtime
-process_virtual_memory_bytes	gauge	runtime
-python_gc_collections	counter	runtime
-python_gc_objects_collected	counter	runtime
-python_gc_objects_uncollectable	counter	runtime
-python_info	gauge	runtime
-sync_coverage_datasets_excluded_by_intent	counter	pending
-sync_coverage_folded_key_resolutions	counter	pending
-sync_manual_trigger_await_latency_seconds	histogram	pending
-sync_manual_trigger_await_outcome	counter	pending
-sync_target_dataset_drift_repaired	counter	pending
-sync_zero_unit_plan_credential_stamped	counter	pending
-worker_report_run_lease_expired	counter	pending
+# Every metric family the Python api registers, with its Go status: the
+# route-counter inventory. Built from an executed sweep (the Python api
+# tests run with a plugin that recorded which family fires under which
+# route) and, where the sweep saw a family only outside a request, from the
+# source; the note says which.
+# Columns (TAB separated): <family> <type> <status> <note>
+#   type lazy:<type> = registered only when its code first runs, so absent
+#       from the import-time listing the oracle takes
+#   ported           = the Go api counts it wherever Python does; the oracle drives it
+#   partial          = the Go api counts it on some of Python's routes (note); the oracle drives it
+#   route-missing    = a route the Go api serves fires it in Python; the Go api does not count it yet
+#   route-not-ported = fired by a Python route the dho api does not serve
+#   other-go-service = fired by a route another Go service serves (the query-api)
+#   worker           = fired by job/worker code, not an api route
+#   python-only      = Python-api machinery with no Go counterpart to port
+#   retired          = fired by code that no longer runs (Celery)
+#   unused           = no caller left in the Python source
+#   runtime          = a process/interpreter collector
+credential_mapping_rejected	counter	route-missing	POST /api/v1/admin/sync-configs (sweep); also sync workers (credentials/resolver.py)
+dev_health_metric_compat_child_silence_seconds	histogram	unused	no caller in src/dev_health_ops outside metrics/prometheus.py (source)
+dev_health_metrics_family_failures	counter	worker	metrics/job_daily.py (source)
+dev_health_otel_init_failures	counter	python-only	tracing.py: Python process start-up
+dev_health_team_attribution_membership_layer	counter	unused	no caller in src/dev_health_ops outside metrics/prometheus.py (source)
+dev_health_team_autoimport_reference_category_outcome	counter	unused	no caller in src/dev_health_ops outside metrics/prometheus.py (source)
+dev_health_team_autoimport_reference_subitem_skipped	counter	unused	no caller in src/dev_health_ops outside metrics/prometheus.py (source)
+dev_health_team_autoimport_roster_preservation_failed	counter	unused	no caller in src/dev_health_ops outside metrics/prometheus.py (source)
+dev_health_work_item_team_attributions_written	counter	worker	metrics/compute_work_items.py, metrics/sinks/clickhouse/core.py (source)
+devhealth_ask_dev_internal_token_leak	counter	route-not-ported	ask-dev (api/dev/*), not a dho api route
+devhealth_ask_dev_narrative_fallback	counter	route-not-ported	ask-dev (api/dev/*), not a dho api route
+devhealth_ask_dev_plan_registry_gap	counter	route-not-ported	ask-dev (api/dev/*), not a dho api route
+devhealth_ask_dev_platform_model_unpriced	counter	route-not-ported	ask-dev (api/dev/*), not a dho api route
+devhealth_ask_dev_qua_commit	counter	route-not-ported	ask-dev (api/dev/*), not a dho api route
+devhealth_ask_dev_qua_shadow	counter	route-not-ported	ask-dev (api/dev/*), not a dho api route
+devhealth_ask_dev_qua_shadow_cardinality_uncorroborated	counter	route-not-ported	ask-dev (api/dev/*), not a dho api route
+devhealth_ask_dev_qua_shadow_fault	counter	route-not-ported	ask-dev (api/dev/*), not a dho api route
+devhealth_ask_dev_qua_shadow_latency_seconds	histogram	route-not-ported	ask-dev (api/dev/*), not a dho api route
+devhealth_ask_dev_tool_executor_fault	counter	route-not-ported	ask-dev (api/dev/*), not a dho api route
+devhealth_ask_dev_unhandled_run_fault	counter	route-not-ported	ask-dev (api/dev/*), not a dho api route
+devhealth_ask_dev_unregistered_terminal_code	counter	route-not-ported	ask-dev (api/dev/*), not a dho api route
+devhealth_byo_llm_base_url_fallback	counter	other-go-service	llm/credentials.py: the LLM explain routes, served by the query-api
+devhealth_byo_llm_base_url_fallback_alert	counter	other-go-service	llm/credentials.py: the LLM explain routes, served by the query-api
+devhealth_celery_task_duration_seconds	histogram	retired	workers/celery_app.py: Celery is retired
+devhealth_celery_tasks	counter	retired	workers/celery_app.py: Celery is retired
+devhealth_clickhouse_org_scope_rows_filtered	counter	worker	metrics/loaders/clickhouse.py (source)
+devhealth_clickhouse_queries	counter	unused	no caller in src/dev_health_ops outside metrics/prometheus.py (source)
+devhealth_clickhouse_query_duration_seconds	histogram	unused	no caller in src/dev_health_ops outside metrics/prometheus.py (source)
+devhealth_github_api_requests	counter	worker	connectors/github.py (source)
+devhealth_github_rate_limit_remaining	gauge	unused	no caller in src/dev_health_ops outside metrics/prometheus.py (source)
+devhealth_go_api_candidate_build_registered	counter	python-only	GraphQL Go-dispatch proxy telemetry; retired with the Python api
+devhealth_go_api_dispatch_attempted	counter	python-only	GraphQL Go-dispatch proxy telemetry; retired with the Python api
+devhealth_go_api_dispatch_digest_miss	counter	python-only	GraphQL Go-dispatch proxy telemetry; retired with the Python api
+devhealth_go_api_dispatch_fallback	counter	python-only	GraphQL Go-dispatch proxy telemetry; retired with the Python api
+devhealth_go_api_dispatch_go_failed	counter	python-only	GraphQL Go-dispatch proxy telemetry; retired with the Python api
+devhealth_go_api_dispatch_latency_seconds	histogram	python-only	GraphQL Go-dispatch proxy telemetry; retired with the Python api
+devhealth_go_api_dispatch_served_go	counter	python-only	GraphQL Go-dispatch proxy telemetry; retired with the Python api
+devhealth_go_api_envelope_issued	counter	python-only	GraphQL Go-dispatch proxy telemetry; retired with the Python api
+devhealth_go_api_proof_run_recorded	counter	python-only	GraphQL Go-dispatch proxy telemetry; retired with the Python api
+devhealth_go_api_registry_lookup	counter	python-only	GraphQL Go-dispatch proxy telemetry; retired with the Python api
+devhealth_go_api_routing_digest_drift	counter	python-only	GraphQL Go-dispatch proxy telemetry; retired with the Python api
+devhealth_ingest_legacy_auth_rejected	counter	ported	POST /api/v1/ingest/* (source: api/ingest/auth.py)
+devhealth_integration_credential_decrypt_failed	counter	partial	POST /api/v1/admin/credentials/test counts it; the Python api also fires it from POST /api/v1/admin/customer-push/sources and POST /api/v1/external-ingest/batches (sweep), where the Go routes do not count it yet
+devhealth_investment_membership_scope_lag_seconds	gauge	other-go-service	api/queries/investment_membership_scope.py: investment reads, served by the query-api
+devhealth_investment_membership_scope_stale	counter	other-go-service	api/queries/investment_membership_scope.py: investment reads, served by the query-api
+devhealth_licensed_features_resolved	counter	route-missing	api/services/licensing.py (source; the sweep saw it only outside a request)
+devhealth_llm_request_duration_seconds	histogram	unused	no caller in src/dev_health_ops outside metrics/prometheus.py (source)
+devhealth_llm_requests	counter	unused	no caller in src/dev_health_ops outside metrics/prometheus.py (source)
+devhealth_llm_tokens	counter	unused	no caller in src/dev_health_ops outside metrics/prometheus.py (source)
+devhealth_org_tier_resolved_async	counter	route-missing	api/services/licensing.py (source; the sweep saw it only outside a request)
+devhealth_recommendations_readiness_gate_fail_open	counter	worker	workers/recommendations_tasks.py (source)
+devhealth_telemetry_org_id_rejected	counter	ported	POST /api/v1/telemetry/report drives it; the not_a_member and no_org_context sites (api/telemetry/router.py get_org_id) are ported too, but the org-scope middleware refuses first on the requests a test can send
+jira_project_discovery	counter	partial	PATCH /api/v1/admin/integrations/{integration_id}/sources/{source_id} counts rejected_at_enable_repo_limit; the discovery outcomes fired by POST /api/v1/admin/integrations/{integration_id}/discover and POST/PATCH /api/v1/admin/sync-configs (sweep) are not counted by the Go port yet
+process_cpu_seconds	counter	runtime	process/interpreter collector
+process_max_fds	gauge	runtime	process/interpreter collector
+process_open_fds	gauge	runtime	process/interpreter collector
+process_resident_memory_bytes	gauge	runtime	process/interpreter collector
+process_start_time_seconds	gauge	runtime	process/interpreter collector
+process_virtual_memory_bytes	gauge	runtime	process/interpreter collector
+python_gc_collections	counter	runtime	process/interpreter collector
+python_gc_objects_collected	counter	runtime	process/interpreter collector
+python_gc_objects_uncollectable	counter	runtime	process/interpreter collector
+python_info	gauge	runtime	process/interpreter collector
+sync_coverage_datasets_excluded_by_intent	counter	route-missing	api/services/sync_coverage.py (source; the sweep saw it only outside a request)
+sync_coverage_folded_key_resolutions	counter	route-missing	api/services/sync_coverage.py (source; the sweep saw it only outside a request)
+sync_manual_trigger_await_latency_seconds	histogram	route-missing	sync/execution_trigger.py (source): the manual sync trigger
+sync_manual_trigger_await_outcome	counter	route-missing	sync/execution_trigger.py (source): the manual sync trigger
+sync_target_dataset_drift_repaired	counter	route-missing	api/admin/routers/sync.py (source)
+sync_zero_unit_plan_credential_stamped	counter	worker	sync/planner.py (source)
+worker_report_run_lease_expired	counter	unused	no caller in src/dev_health_ops outside metrics/prometheus.py (source)
+devhealth_cache_epoch_unreadable	lazy:counter	worker	core/cache_epoch_telemetry.py (sweep: outside a request)
+devhealth_go_api_comparator_finding	lazy:counter	python-only	GraphQL Go-dispatch comparator
+devhealth_go_api_comparator_verdict	lazy:counter	python-only	GraphQL Go-dispatch comparator
+devhealth_investment_explain_dispatch_attempted	lazy:counter	python-only	GraphQL investment-explain Go dispatch
+devhealth_investment_explain_dispatch_fallback	lazy:counter	python-only	GraphQL investment-explain Go dispatch
+devhealth_investment_explain_dispatch_served_go	lazy:counter	python-only	GraphQL investment-explain Go dispatch
+devhealth_investment_explain_dispatch_stream_truncated	lazy:counter	python-only	GraphQL investment-explain Go dispatch
+devhealth_investment_llm_categorization_outcomes	lazy:counter	worker	work_graph/investment: categorization jobs
+devhealth_investment_llm_explanation_parse	lazy:counter	other-go-service	investment explanation (query-api)
+devhealth_investment_llm_output_chars	lazy:histogram	worker	work_graph/investment: LLM calls
+devhealth_investment_llm_request_duration_seconds	lazy:histogram	worker	work_graph/investment: LLM calls
+devhealth_investment_llm_request_errors	lazy:counter	worker	work_graph/investment: LLM calls
+devhealth_investment_llm_requests	lazy:counter	worker	work_graph/investment: LLM calls
+devhealth_investment_llm_tokens	lazy:counter	worker	work_graph/investment: LLM calls
+devhealth_investment_llm_validation	lazy:counter	worker	work_graph/investment: LLM calls
+devhealth_investment_llm_validation_failures	lazy:counter	worker	work_graph/investment: LLM calls
+http_requests	lazy:counter	python-only	prometheus_fastapi_instrumentator request metrics
+http_request_duration_seconds	lazy:histogram	python-only	prometheus_fastapi_instrumentator request metrics
+http_request_duration_highr_seconds	lazy:histogram	python-only	prometheus_fastapi_instrumentator request metrics

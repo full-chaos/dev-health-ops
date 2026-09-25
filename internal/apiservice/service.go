@@ -270,16 +270,21 @@ func configure(
 	return configureWith(ctx, cfg, registry, logger, nil)
 }
 
-// RegisterAPIInstruments puts the api's OTel instruments -- each declared
-// under the Python api's prometheus_client counter name -- on the operator
-// /metrics, as one fragment. The Python api served its counters on
-// /metrics; the Go api's scrape surface is the operator listener.
-func RegisterAPIInstruments(registry *health.Registry) error {
+// RegisterOperatorMetrics puts the api's counters on the operator
+// /metrics, the Go api's scrape surface (the Python api served its
+// prometheus_client counters on /metrics): the OTel instruments, each
+// declared under the Python counter name, as one fragment, and the
+// legacy-ingest refusal counter, which it sets on deps, as another.
+func RegisterOperatorMetrics(registry *health.Registry, deps *Deps) error {
 	source, err := apimetrics.Install()
 	if err != nil {
 		return err
 	}
-	return registry.RegisterMetrics("api_instruments", source)
+	if err := registry.RegisterMetrics("api_instruments", source); err != nil {
+		return err
+	}
+	deps.LegacyIngestMetrics = legacyingest.NewMetrics()
+	return registry.RegisterMetrics("legacy_ingest", deps.LegacyIngestMetrics)
 }
 
 // configureWith is configure with adjust applied to the built Deps before
@@ -307,14 +312,7 @@ func configureWith(
 		deps.Verifier, deps.Signer = protected.verifier, protected.signer
 		scope = []func(http.Handler) http.Handler{protected.scope.OrgScope, protected.scope.Impersonation}
 	}
-	if err := RegisterAPIInstruments(registry); err != nil {
-		closeComponents(depComponents)
-		return nil, err
-	}
-	// The legacy-ingest refusal counter is scraped from the operator
-	// endpoint, so it is registered here, where the registry is.
-	deps.LegacyIngestMetrics = legacyingest.NewMetrics()
-	if err := registry.RegisterMetrics("legacy_ingest", deps.LegacyIngestMetrics); err != nil {
+	if err := RegisterOperatorMetrics(registry, &deps); err != nil {
 		closeComponents(depComponents)
 		return nil, err
 	}

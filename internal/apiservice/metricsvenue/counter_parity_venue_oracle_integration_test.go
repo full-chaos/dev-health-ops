@@ -36,6 +36,10 @@ import (
 // encryptionKey is SETTINGS_ENCRYPTION_KEY on both planes.
 const encryptionKey = "venue-metrics-settings-encryption-key"
 
+// ingestAPIKey is INGEST_API_KEYS on both planes: the legacy ingest routes
+// refuse any other key (reason invalid_api_key).
+const ingestAPIKey = "venue-metrics-ingest-key"
+
 // TestCounterParityVenueOracle sends the same requests to the real Python
 // api and to the dho api (both on the venue's seeded database), then reads
 // each plane's Prometheus exposition -- the Python app's /metrics and the
@@ -46,13 +50,16 @@ const encryptionKey = "venue-metrics-settings-encryption-key"
 // then proves nothing.
 func TestCounterParityVenueOracle(t *testing.T) {
 	ctx := context.Background()
-	orgID, ownerID := uuid.New(), uuid.New()
+	orgID, ownerID, otherOrgID := uuid.New(), uuid.New(), uuid.New()
+	// A community-tier org at its max_repos (3 active sync configs) with a
+	// disabled Jira source: enabling it is refused at the repo limit.
+	cappedOrg, cappedOwner, jiraIntegration, jiraSource := uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	garbled, notJSON, emptyList, oddProvider := uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	jwtKey := uuid.NewString() + uuid.NewString()
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Root:      venueRoot(),
 		JWTKey:    jwtKey,
-		PythonEnv: []string{"SETTINGS_ENCRYPTION_KEY=" + encryptionKey},
+		PythonEnv: []string{"SETTINGS_ENCRYPTION_KEY=" + encryptionKey, "INGEST_API_KEYS=" + ingestAPIKey},
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
 			// A payload the key cannot decrypt, and one it decrypts to text
@@ -78,6 +85,23 @@ func TestCounterParityVenueOracle(t *testing.T) {
 			}{
 				{`INSERT INTO organizations (id, slug, name, tier, managed_by, is_active, created_at, updated_at)
 VALUES ($1, 'venue-metrics', 'Venue Metrics', 'enterprise', 'stripe', true, now(), now())`, []any{orgID}},
+				{`INSERT INTO organizations (id, slug, name, tier, managed_by, is_active, created_at, updated_at)
+VALUES ($1, 'venue-metrics-other', 'Venue Metrics Other', 'enterprise', 'stripe', true, now(), now())`, []any{otherOrgID}},
+				{`INSERT INTO organizations (id, slug, name, tier, managed_by, is_active, created_at, updated_at)
+VALUES ($1, 'venue-metrics-capped', 'Venue Metrics Capped', 'community', 'stripe', true, now(), now())`, []any{cappedOrg}},
+				{`INSERT INTO users (id, email, is_active, is_verified, is_superuser, token_version, created_at, updated_at)
+VALUES ($1, 'venue-metrics-capped@example.com', true, true, false, 0, now(), now())`, []any{cappedOwner}},
+				{`INSERT INTO memberships (id, org_id, user_id, role, joined_at, created_at, updated_at)
+VALUES ($1, $2, $3, 'owner', now(), now(), now())`, []any{uuid.New(), cappedOrg, cappedOwner}},
+				{`INSERT INTO integrations (id, org_id, provider, credential_id, name, config, is_active, created_at, updated_at)
+VALUES ($1, $2, 'jira', NULL, 'capped-jira', '{}'::json, true, now(), now())`, []any{jiraIntegration, cappedOrg.String()}},
+				{`INSERT INTO integration_sources (id, org_id, integration_id, provider, source_type, external_id, name, full_name,
+metadata, is_enabled, discovered_at, last_seen_at)
+VALUES ($1, $2, $3, 'jira', 'repository', 'P1', 'Proj One', 'Proj One', '{}'::json, false, now(), now())`, []any{jiraSource, cappedOrg.String(), jiraIntegration}},
+				{`INSERT INTO sync_configurations (id, org_id, name, provider, sync_targets, sync_options, is_active, planner_managed, created_at, updated_at)
+VALUES (gen_random_uuid(), $1, 'c1', 'github', '[]'::json, '{}'::json, true, false, now(), now()),
+       (gen_random_uuid(), $1, 'c2', 'github', '[]'::json, '{}'::json, true, false, now(), now()),
+       (gen_random_uuid(), $1, 'c3', 'github', '[]'::json, '{}'::json, true, false, now(), now())`, []any{cappedOrg.String()}},
 				{`INSERT INTO users (id, email, is_active, is_verified, is_superuser, token_version, created_at, updated_at)
 VALUES ($1, 'venue-metrics-owner@example.com', true, true, false, 0, now(), now())`, []any{ownerID}},
 				{`INSERT INTO memberships (id, org_id, user_id, role, joined_at, created_at, updated_at)
@@ -98,7 +122,8 @@ VALUES ($1, $2, 'odd},"x', 'garbled', true, 'gAAAAABnot-a-fernet-token', '{}'::j
 				}
 			}
 			return map[string]map[string]any{
-				"owner": {"user_id": ownerID.String(), "email": "venue-metrics-owner@example.com", "org_id": orgID.String(), "role": "owner"},
+				"owner":  {"user_id": ownerID.String(), "email": "venue-metrics-owner@example.com", "org_id": orgID.String(), "role": "owner"},
+				"capped": {"user_id": cappedOwner.String(), "email": "venue-metrics-capped@example.com", "org_id": cappedOrg.String(), "role": "owner"},
 			}
 		},
 	})
@@ -114,6 +139,24 @@ VALUES ($1, $2, 'odd},"x', 'garbled', true, 'gAAAAABnot-a-fernet-token', '{}'::j
 		testByID("test a stored credential that is not JSON", notJSON, "gitlab"),
 		testByID("test a stored credential that is an empty JSON list", emptyList, "jira"),
 		testByID("test a garbled credential with an odd provider", oddProvider, "github"),
+		// Telemetry: an org the caller is not a member of (not_a_member),
+		// and the instance-wide report without a platform role
+		// (report_not_platform_role).
+		// The org-scope middleware refuses another org's X-Org-Id before the
+		// route's own not_a_member check, so on both planes this 403 must
+		// move no counter.
+		{Name: "telemetry status for another org", Method: http.MethodGet, Path: "/api/v1/telemetry/status",
+			Headers: map[string]string{"Authorization": "Bearer " + venue.Tokens["owner"], "X-Org-Id": otherOrgID.String()}},
+		{Name: "telemetry report without a platform role", Method: http.MethodPost, Path: "/api/v1/telemetry/report", Headers: bearer},
+		// An operator's enable of a Jira source past the org's max_repos.
+		{Name: "enable a jira source past the repo limit", Method: http.MethodPatch,
+			Path:    "/api/v1/admin/integrations/" + jiraIntegration.String() + "/sources/" + jiraSource.String(),
+			Headers: map[string]string{"Authorization": "Bearer " + venue.Tokens["capped"], "Content-Type": "application/json"},
+			Body:    venueoracle.B64(`{"is_enabled":true}`)},
+		// Legacy ingest with a key INGEST_API_KEYS does not hold.
+		{Name: "legacy ingest with a wrong key", Method: http.MethodPost, Path: "/api/v1/ingest/commits",
+			Headers: map[string]string{"X-API-Key": "not-" + ingestAPIKey, "Content-Type": "application/json"},
+			Body:    venueoracle.B64(`{"repo":"acme/api","commits":[]}`)},
 	}
 	scrape := venueoracle.Request{Name: "metrics", Method: http.MethodGet, Path: "/metrics"}
 
@@ -123,6 +166,7 @@ VALUES ($1, $2, 'odd},"x', 'garbled', true, 'gAAAAABnot-a-fernet-token', '{}'::j
 		t.Fatalf("python /metrics answered %d", pythonMetrics.Status)
 	}
 
+	t.Setenv("INGEST_API_KEYS", ingestAPIKey)
 	goBase, operator := startGoAPI(t, ctx, venue, jwtKey)
 	receipt := venueoracle.Diff(t, goBase, requests, python[:len(requests)], venueoracle.DiffOptions{})
 	t.Log("\n" + receipt)
@@ -150,6 +194,9 @@ VALUES ($1, $2, 'odd},"x', 'garbled', true, 'gAAAAABnot-a-fernet-token', '{}'::j
 // Python handler moves them.
 var routeCounters = []struct{ metric, route string }{
 	{"devhealth_integration_credential_decrypt_failed_total", "POST /api/v1/admin/credentials/test"},
+	{"devhealth_telemetry_org_id_rejected_total", "POST /api/v1/telemetry/report"},
+	{"devhealth_ingest_legacy_auth_rejected_total", "POST /api/v1/ingest/commits"},
+	{"jira_project_discovery_total", "PATCH /api/v1/admin/integrations/{integration_id}/sources/{source_id}"},
 }
 
 //go:embed testdata/python_metrics.tsv
@@ -164,10 +211,22 @@ from prometheus_client import REGISTRY
 print("RESULT " + json.dumps({m.name: m.type for m in REGISTRY.collect()}))
 `
 
+// tableStatuses are the statuses python_metrics.tsv may give a family; its
+// header says what each means.
+var tableStatuses = map[string]bool{
+	"ported": true, "partial": true, "route-missing": true, "route-not-ported": true,
+	"other-go-service": true, "worker": true, "python-only": true, "retired": true,
+	"unused": true, "runtime": true,
+}
+
 // checkPythonMetricsTable is the route-to-counter guard. python_metrics.tsv
-// must name exactly the families the live Python api registers, each with
-// its type, so a Python counter cannot be added or ported without a row;
-// and every "ported" row must be a counter this oracle compares.
+// must name exactly the families the live Python api registers at import,
+// each with its type, so a Python counter cannot be added or ported without
+// a row. A "lazy:" row is a family registered only when its code first
+// runs, so it must be absent from the import-time listing (a family that
+// moves to import time needs its row corrected). Every "ported" or
+// "partial" row must be a counter this oracle compares, and every counter
+// the oracle compares must have such a row.
 func checkPythonMetricsTable(t *testing.T) {
 	t.Helper()
 	command := exec.Command("python3", "-c", pythonMetricFamilies)
@@ -190,38 +249,54 @@ func checkPythonMetricsTable(t *testing.T) {
 	}
 	driven := map[string]bool{}
 	for _, counter := range routeCounters {
-		driven[counter.metric] = true
+		driven[counter.metric] = false
 	}
 	table := map[string]bool{}
+	lazy := 0
 	for _, line := range strings.Split(pythonMetricsTable, "\n") {
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
 		fields := strings.Split(line, "\t")
-		if len(fields) != 3 {
-			t.Errorf("python_metrics.tsv: %q is not <family> <type> <status>", line)
+		if len(fields) != 4 || fields[3] == "" {
+			t.Errorf("python_metrics.tsv: %q is not <family> <type> <status> <note>", line)
 			continue
 		}
 		family, kind, status := fields[0], fields[1], fields[2]
-		table[family] = true
-		switch liveKind, ok := live[family]; {
-		case !ok:
-			t.Errorf("python_metrics.tsv names %s, which the Python api no longer registers", family)
-		case liveKind != kind:
-			t.Errorf("python_metrics.tsv types %s as %s; the Python api registers a %s", family, kind, liveKind)
+		if table[family] {
+			t.Errorf("python_metrics.tsv names %s twice", family)
 		}
-		switch status {
-		case "ported":
-			exposed := family
-			if kind == "counter" {
-				exposed += "_total"
+		table[family] = true
+		liveKind, registered := live[family]
+		if lazyKind, isLazy := strings.CutPrefix(kind, "lazy:"); isLazy {
+			lazy++
+			kind = lazyKind
+			if registered {
+				t.Errorf("python_metrics.tsv marks %s lazy, but the Python api registers it at import", family)
 			}
-			if !driven[exposed] {
-				t.Errorf("python_metrics.tsv marks %s ported, but the oracle does not compare %s", family, exposed)
+		} else {
+			switch {
+			case !registered:
+				t.Errorf("python_metrics.tsv names %s, which the Python api no longer registers", family)
+			case liveKind != kind:
+				t.Errorf("python_metrics.tsv types %s as %s; the Python api registers a %s", family, kind, liveKind)
 			}
-		case "runtime", "pending":
-		default:
-			t.Errorf("python_metrics.tsv: %s has status %q, not ported/runtime/pending", family, status)
+		}
+		if !tableStatuses[status] {
+			t.Errorf("python_metrics.tsv: %s has status %q, which the header does not define", family, status)
+		}
+		exposed := family
+		if kind == "counter" {
+			exposed += "_total"
+		}
+		_, compared := driven[exposed]
+		switch {
+		case (status == "ported" || status == "partial") && !compared:
+			t.Errorf("python_metrics.tsv marks %s %s, but the oracle does not compare %s", family, status, exposed)
+		case status != "ported" && status != "partial" && compared:
+			t.Errorf("the oracle compares %s, but python_metrics.tsv marks %s %s", exposed, family, status)
+		case compared:
+			driven[exposed] = true
 		}
 	}
 	for family, kind := range live {
@@ -229,7 +304,12 @@ func checkPythonMetricsTable(t *testing.T) {
 			t.Errorf("the Python api registers %s (%s), which python_metrics.tsv does not name", family, kind)
 		}
 	}
-	t.Logf("python_metrics.tsv: %d families, all registered by the live Python api", len(table))
+	for metric, rowed := range driven {
+		if !rowed {
+			t.Errorf("the oracle compares %s, which python_metrics.tsv does not mark ported or partial", metric)
+		}
+	}
+	t.Logf("python_metrics.tsv: %d families (%d lazy); every import-time family of the live Python api is named", len(table), lazy)
 }
 
 // startGoAPI serves the dho api route set on the venue's Go database, and
@@ -260,6 +340,12 @@ func startGoAPI(t *testing.T, ctx context.Context, venue *venueoracle.Venue, key
 		t.Fatal(err)
 	}
 	deps := apiservice.Deps{Pool: pool, Auth: auth, Guard: policy.NewGuard(auth, logger), Verifier: verifier, Decryptor: decryptor}
+	// The operator endpoint as dho api's configure builds it, before the
+	// routes (it sets the legacy-ingest counter on deps).
+	registry := health.NewRegistry(0)
+	if err := apiservice.RegisterOperatorMetrics(registry, &deps); err != nil {
+		t.Fatal(err)
+	}
 	scope := policy.NewScope(auth, logger)
 	server, err := apiservice.NewServer(cfg, logger, apiservice.Routes(deps, logger), scope.OrgScope, scope.Impersonation)
 	if err != nil {
@@ -268,11 +354,6 @@ func startGoAPI(t *testing.T, ctx context.Context, venue *venueoracle.Venue, key
 	api := httptest.NewServer(server.Handler())
 	t.Cleanup(api.Close)
 
-	// The operator endpoint as dho api's configure builds it.
-	registry := health.NewRegistry(0)
-	if err := apiservice.RegisterAPIInstruments(registry); err != nil {
-		t.Fatal(err)
-	}
 	operatorServer, err := health.NewServer(health.ServerOptions{Address: "127.0.0.1:0", Registry: registry, Service: "api"})
 	if err != nil {
 		t.Fatal(err)
@@ -332,6 +413,13 @@ func samples(t *testing.T, exposition, metric string) map[string]float64 {
 		value, err := strconv.ParseFloat(fields[0], 64)
 		if err != nil {
 			t.Fatalf("unparsable value in %q: %v", line, err)
+		}
+		// A zero sample is no movement: a Go fragment may pre-seed every
+		// label value at 0 (so an alert sees the series before the first
+		// increment), where prometheus_client exposes only the label values
+		// it has counted. Movement is what the oracle compares.
+		if value == 0 {
+			continue
 		}
 		sort.Strings(pairs)
 		out[strings.Join(pairs, ",")] = value

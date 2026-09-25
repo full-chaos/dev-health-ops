@@ -167,6 +167,9 @@ EXPECTED_PACKAGES = {
     # against that database -- only a real engine can build either side.
     "internal/chmigrate",
     "internal/externalrecompute",
+    # CHAOS-6465: `dho fixtures finalize-synthetic-sync` on a real PostgreSQL at the
+    # head baseline, against the rows the Python producer wrote (frozen).
+    "internal/fixturescli",
     "internal/joboperator",
     "internal/joboutbox",
     "internal/jobrescue",

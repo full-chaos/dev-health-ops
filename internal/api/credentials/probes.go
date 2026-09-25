@@ -407,6 +407,10 @@ func (h handlers) probeJira(ctx context.Context, creds *pyjson.Object) (bool, *p
 	email := orChain(creds, "email")
 	base := orChain(creds, "base_url", "baseUrl", "url", "server_url")
 	if apiToken == "" || email == "" || base == "" {
+		providerfoundation.RecordCredentialMappingRejected(ctx, "jira",
+			providerfoundation.MappingField{Name: "api_token", Present: apiToken != ""},
+			providerfoundation.MappingField{Name: "email", Present: email != ""},
+			providerfoundation.MappingField{Name: "base_url", Present: base != ""})
 		return failure("error", "Missing required credentials (email, api_token, base_url)")
 	}
 	if valid, detail := h.validateURL(ctx, base); !valid {

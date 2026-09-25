@@ -124,6 +124,22 @@ func resolvedCredentials(poolConfig *pgxpool.Config) []string {
 	return []string{poolConfig.ConnConfig.User, poolConfig.ConnConfig.Password}
 }
 
+// Boundary is the secrets.Boundary of a PostgreSQL URI: the URI's own
+// credential components and the login and password the driver settles on. A
+// boundary built from the URI alone (secrets.NewBoundary) cannot know a login or
+// password that came from PGUSER, PGPASSWORD, a password file or a service file,
+// which never appear in the URI yet appear in a server's failure text. A CLI verb
+// that opens PostgreSQL itself (a raw pgx connection or pool, not Open) builds its
+// boundary here. A URI pgx cannot parse gets the URI's own components (the parse
+// error, which the driver returns again, carries no resolved credential).
+func Boundary(uri string) secrets.Boundary {
+	poolConfig, err := parseConfig(uri)
+	if err != nil {
+		return secrets.NewBoundary(uri)
+	}
+	return secrets.NewBoundaryWith(uri, resolvedCredentials(poolConfig)...)
+}
+
 func parseConfig(uri string) (*pgxpool.Config, error) {
 	return pgxpool.ParseConfig(normalizeURI(uri))
 }

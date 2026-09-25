@@ -14,7 +14,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
-	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
+	pgstorage "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 )
 
 // The verbs below port `dev-hops admin users create|list|update` and
@@ -135,7 +135,7 @@ func operator(ctx context.Context, env cli.Env) (admin.Operator, func(), int) {
 	if !ok {
 		return admin.Operator{}, func() {}, cli.ExitFailure
 	}
-	boundary := secrets.NewBoundary(dsn.Reveal())
+	boundary := pgstorage.Boundary(dsn.Reveal())
 	pool, err := pgxpool.New(ctx, dsn.Reveal())
 	if err != nil {
 		return admin.Operator{}, func() {}, writeError(env.Stderr, "postgres_unavailable", boundary.Redact(err).Error())
@@ -159,7 +159,7 @@ func redactor(env cli.Env) func(error) error {
 	if !ok {
 		return func(err error) error { return errors.New("redacted") }
 	}
-	boundary := secrets.NewBoundary(dsn.Reveal())
+	boundary := pgstorage.Boundary(dsn.Reveal())
 	return boundary.Redact
 }
 

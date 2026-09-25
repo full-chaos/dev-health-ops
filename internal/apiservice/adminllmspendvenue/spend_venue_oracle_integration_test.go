@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -97,6 +98,15 @@ const (
 	otherOrg = "other"
 	hugeOrg  = "huge"
 )
+
+// specialErrors are organizations with one work unit whose errors json is the
+// value: json.loads refuses an integer of more than 4300 digits with a
+// ValueError that is not a JSONDecodeError, an unhandled error (500) in
+// Python. (A document nested past the interpreter's recursion budget is a
+// Python crash the port does not reproduce; see the PR body.)
+func specialErrors() map[string]string {
+	return map[string]string{hugeOrg: strings.Repeat("9", 4301)}
+}
 
 var (
 	// requests over the rich organization, by query string.
@@ -209,13 +219,13 @@ func seedStatements(orgs map[string]uuid.UUID, base time.Time) []string {
 	statements = append(statements,
 		"INSERT INTO work_unit_investments (work_unit_id, org_id, categorization_run_id, categorization_status, categorization_errors_json, effort_metric, effort_value, computed_at, to_ts) VALUES\n"+
 			strings.Join(outcomeRows, ",\n"))
-	// an organization whose errors json is an integer of more than 4300 digits:
-	// json.loads refuses it with a ValueError that is not a JSONDecodeError.
-	huge := orgs[hugeOrg].String()
-	statements = append(statements,
-		usageInsert(huge, "run-huge", stamp(-2*time.Hour)),
-		"INSERT INTO work_unit_investments (work_unit_id, org_id, categorization_run_id, categorization_status, categorization_errors_json, effort_metric, effort_value, computed_at, to_ts) VALUES\n"+
-			outcome(huge, "run-huge", "", strings.Repeat("9", 4301), 1, stamp(-2*time.Hour)))
+	for key, document := range specialErrors() {
+		id := orgs[key].String()
+		statements = append(statements,
+			usageInsert(id, "run-special", stamp(-2*time.Hour)),
+			"INSERT INTO work_unit_investments (work_unit_id, org_id, categorization_run_id, categorization_status, categorization_errors_json, effort_metric, effort_value, computed_at, to_ts) VALUES\n"+
+				outcome(id, "run-special", "", document, 1, stamp(-2*time.Hour)))
+	}
 	return statements
 }
 
@@ -228,12 +238,35 @@ var sinceField = regexp.MustCompile(`"since":"[^"]*"`)
 // TestAdminLLMSpendVenueOracle answers GET /api/v1/admin/llm-settings/spend
 // with the real Python api and the real Go api over the same organizations
 // and ClickHouse rows, and requires the same status and response text.
-func TestAdminLLMSpendVenueOracle(t *testing.T) {
+func TestAdminLLMSpendVenueOracle(t *testing.T) { runSpendVenue(t, "") }
+
+// TestAdminLLMSpendLocalZoneVenueOracle runs both planes in
+// America/Los_Angeles (TZ for the Python plane, time.Local for Go): a naive
+// `since` is local time there, so a window edge that lands exactly on a row
+// only matches when both read it the same way.
+func TestAdminLLMSpendLocalZoneVenueOracle(t *testing.T) { runSpendVenue(t, "America/Los_Angeles") }
+
+func runSpendVenue(t *testing.T, zone string) {
 	ctx := context.Background()
 	root := repoRoot(t)
 	const jwtKey = "venue-oracle-test-secret-key-for-llm-spend-32-bytes!"
 	cases := scenarios()
-	orgs := map[string]uuid.UUID{richOrg: uuid.New(), otherOrg: uuid.New(), hugeOrg: uuid.New()}
+	var pythonEnv []string
+	if zone != "" {
+		location, err := time.LoadLocation(zone)
+		if err != nil {
+			t.Fatalf("zone %s: %v", zone, err)
+		}
+		previous := time.Local
+		time.Local = location
+		t.Cleanup(func() { time.Local = previous })
+		pythonEnv = []string{"TZ=" + zone}
+		cases = cases[:2] // the gates only; the settings branches are zone-free
+	}
+	orgs := map[string]uuid.UUID{richOrg: uuid.New(), otherOrg: uuid.New()}
+	for key := range specialErrors() {
+		orgs[key] = uuid.New()
+	}
 	caseOrgs := make([]uuid.UUID, len(cases))
 	for i := range cases {
 		caseOrgs[i] = uuid.New()
@@ -242,7 +275,7 @@ func TestAdminLLMSpendVenueOracle(t *testing.T) {
 	base := time.Now().UTC().Truncate(time.Hour)
 
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Root: root, JWTKey: jwtKey,
+		Root: root, JWTKey: jwtKey, PythonEnv: pythonEnv,
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
 			exec := func(sql string, args ...any) {
 				t.Helper()
@@ -323,7 +356,11 @@ VALUES ($1, $2, (SELECT id FROM feature_flags WHERE key = 'byo_llm'), false, NUL
 	for i, c := range cases {
 		requests = append(requests, venueoracle.Request{Name: c.name, Method: "GET", Path: path, Headers: auth(fmt.Sprintf("admin%d", i))})
 	}
-	for _, query := range append(append([]string{}, richQueries...), edgeQueries(base)...) {
+	queries := append(append([]string{}, richQueries...), edgeQueries(base)...)
+	if zone != "" {
+		queries = localEdgeQueries(base, zone)
+	}
+	for _, query := range queries {
 		full := path
 		if query != "" {
 			full += "?" + query
@@ -332,13 +369,22 @@ VALUES ($1, $2, (SELECT id FROM feature_flags WHERE key = 'byo_llm'), false, NUL
 	}
 	requests = append(requests,
 		venueoracle.Request{Name: "other organization", Method: "GET", Path: path + "?limit=100", Headers: auth("admin-" + otherOrg)},
-		venueoracle.Request{Name: "an integer of more than 4300 digits", Method: "GET", Path: path, Headers: auth("admin-" + hugeOrg)},
 		venueoracle.Request{Name: "community tier with a bad limit", Method: "GET", Path: path + "?limit=0", Headers: auth("admin0")},
 		venueoracle.Request{Name: "kill switch with a bad since", Method: "GET", Path: path + "?since=abc", Headers: auth("admin1")},
 		venueoracle.Request{Name: "a member is not an admin", Method: "GET", Path: path, Headers: auth("member")},
 		venueoracle.Request{Name: "member with a bad limit", Method: "GET", Path: path + "?limit=0", Headers: auth("member")},
 		venueoracle.Request{Name: "no credentials", Method: "GET", Path: path},
 	)
+	if zone == "" {
+		var special []string
+		for key := range specialErrors() {
+			special = append(special, key)
+		}
+		sort.Strings(special)
+		for _, key := range special {
+			requests = append(requests, venueoracle.Request{Name: "errors json " + key, Method: "GET", Path: path, Headers: auth("admin-" + key)})
+		}
+	}
 	python := venue.ServePython(t, requests)
 
 	goBase := startGoServer(t, ctx, venue, jwtKey)
@@ -352,6 +398,28 @@ VALUES ($1, $2, (SELECT id FROM feature_flags WHERE key = 'byo_llm'), false, NUL
 		},
 	})
 	t.Log(receipt)
+}
+
+// localEdgeQueries are naive `since` values, written in zone's wall clock,
+// that sit on and one second either side of the rows' computed_at, plus the
+// same instants as aware values, so a window that starts at the wrong
+// instant drops or adds a run.
+func localEdgeQueries(base time.Time, zone string) []string {
+	location, _ := time.LoadLocation(zone)
+	naive := func(offset time.Duration) string {
+		return "since=" + url.QueryEscape(base.Add(offset).In(location).Format("2006-01-02T15:04:05"))
+	}
+	aware := func(offset time.Duration) string {
+		return "since=" + url.QueryEscape(base.Add(offset).UTC().Format("2006-01-02T15:04:05Z"))
+	}
+	return []string{"", "limit=3",
+		naive(-2 * time.Hour), naive(-2*time.Hour + time.Second), naive(-2*time.Hour - time.Second),
+		naive(-3 * time.Hour), naive(-3*time.Hour + time.Second), naive(-30 * time.Hour),
+		aware(-2 * time.Hour), aware(-2*time.Hour + time.Second), aware(-3 * time.Hour),
+		// the same wall clock read as UTC would be seven hours off
+		"since=" + url.QueryEscape(base.Add(-2*time.Hour).UTC().Format("2006-01-02T15:04:05")),
+		"since=" + url.QueryEscape(base.Add(-2*time.Hour).In(location).Format("2006-01-02T15:04:05.999999")),
+	}
 }
 
 func startGoServer(t *testing.T, ctx context.Context, venue *venueoracle.Venue, jwtKey string) string {

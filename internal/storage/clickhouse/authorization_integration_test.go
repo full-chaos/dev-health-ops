@@ -130,6 +130,11 @@ const (
 
 	// POST /api/v1/ingest/telemetry inserts its signal buckets (CHAOS-6501).
 	grantTelemetryExact = "GRANT INSERT ON default.telemetry_signal_bucket"
+
+	// GET /llm-settings/spend reads an org's token usage and categorization
+	// outcomes (CHAOS-6667).
+	grantLLMUsageExact       = "GRANT SELECT ON default.llm_token_usage"
+	grantWorkUnitInvestExact = "GRANT SELECT ON default.work_unit_investments"
 )
 
 // grantMetricsExact are the read-only metric-table grants of the manifest
@@ -148,7 +153,7 @@ var grantMetricsExact = []string{
 // the whole manifest is met.
 func importGrants() []string {
 	return append([]string{grantSyncPoliciesExact, grantObservationsExact, grantDriftChangesExact, grantMembershipsExact, grantFallbacksExact,
-		grantRepoComplexityExact, grantCompoundingExact, grantTelemetryExact}, grantMetricsExact...)
+		grantRepoComplexityExact, grantCompoundingExact, grantTelemetryExact, grantLLMUsageExact, grantWorkUnitInvestExact}, grantMetricsExact...)
 }
 
 // TestCheckPostureAcceptsExactMatch proves the happy path: a user granted

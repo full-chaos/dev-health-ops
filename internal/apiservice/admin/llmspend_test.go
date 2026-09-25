@@ -47,8 +47,8 @@ func TestCategorizationOutcomeClass(t *testing.T) {
 }
 
 // TestSpendWindowStart pins what clickhouse-connect binds for {since:DateTime}:
-// the UTC instant in whole seconds, a naive value read as UTC, and the two
-// ranges Python's astimezone refuses.
+// the UTC instant in whole seconds, a naive value read as the process's local
+// time, and the ranges Python's astimezone refuses.
 func TestSpendWindowStart(t *testing.T) {
 	naive := func(year int, month time.Month, day, hour int) pytime.DateTime {
 		return pytime.DateTime{Time: time.Date(year, month, day, hour, 0, 0, 0, time.UTC)}
@@ -76,5 +76,26 @@ func TestSpendWindowStart(t *testing.T) {
 		if _, err := spendWindowStart(c.since); (err != nil) != c.fail {
 			t.Errorf("%s: error %v, want failure %v", c.name, err, c.fail)
 		}
+	}
+}
+
+// TestSpendWindowStartNaiveIsLocalTime pins that a naive `since` is the
+// process's local time, as Python's astimezone reads it: in
+// America/Los_Angeles (UTC-7 in September) 05:00 is 12:00 UTC.
+func TestSpendWindowStartNaiveIsLocalTime(t *testing.T) {
+	zone, err := time.LoadLocation("America/Los_Angeles")
+	if err != nil {
+		t.Skipf("no zoneinfo: %v", err)
+	}
+	previous := time.Local
+	time.Local = zone
+	defer func() { time.Local = previous }()
+	got, err := spendWindowStart(pytime.DateTime{Time: time.Date(2026, 9, 25, 5, 0, 0, 0, time.UTC)})
+	if err != nil || !got.Equal(time.Date(2026, 9, 25, 12, 0, 0, 0, time.UTC)) {
+		t.Errorf("naive 05:00 in Los Angeles = %v, %v; want 12:00 UTC", got, err)
+	}
+	aware, err := spendWindowStart(pytime.DateTime{Time: time.Date(2026, 9, 25, 5, 0, 0, 0, time.UTC), Aware: true})
+	if err != nil || !aware.Equal(time.Date(2026, 9, 25, 5, 0, 0, 0, time.UTC)) {
+		t.Errorf("aware value moved by the local zone: %v, %v", aware, err)
 	}
 }

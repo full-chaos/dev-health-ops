@@ -155,18 +155,25 @@ func spendTime(at time.Time) string {
 }
 
 // spendWindowStart is what clickhouse-connect binds for a `{since:DateTime}`
-// parameter: `value.astimezone(server_tz)` (UTC) in whole seconds. Python
-// refuses two ranges with an unhandled error, an unhandled 500 here too: an
-// aware value whose UTC instant leaves years 1..9999 (OverflowError), and a
-// naive value on the first or last day the datetime type holds (its local-time
-// lookup steps a day outside the type). A naive value is read as UTC.
+// parameter: `value.astimezone(server_tz)` (UTC) in whole seconds. A naive
+// value is read as the process's local time (Python's astimezone does, and
+// Go's time.Local follows the same TZ and zoneinfo); the deployed processes
+// run UTC. Python refuses two ranges with an unhandled error, an unhandled
+// 500 here too: an aware or converted value whose UTC instant leaves years
+// 1..9999 (OverflowError), and a naive value on the first or last day the
+// datetime type holds (its local-time lookup steps a day outside the type).
+// NOT covered: a naive value inside a daylight-saving gap or fold (Python
+// takes fold=0), and the first/last-day rule in a zone other than UTC.
 func spendWindowStart(since pytime.DateTime) (time.Time, error) {
 	instant := since.Time.UTC()
-	if since.Aware {
-		if instant.Year() < 1 || instant.Year() > 9999 {
+	if !since.Aware {
+		wall := instant
+		if (wall.Year() == 1 && wall.YearDay() == 1) || (wall.Year() == 9999 && wall.Month() == time.December && wall.Day() == 31) {
 			return time.Time{}, errSpendWindowRange
 		}
-	} else if (instant.Year() == 1 && instant.YearDay() == 1) || (instant.Year() == 9999 && instant.Month() == time.December && instant.Day() == 31) {
+		instant = time.Date(wall.Year(), wall.Month(), wall.Day(), wall.Hour(), wall.Minute(), wall.Second(), wall.Nanosecond(), time.Local).UTC()
+	}
+	if instant.Year() < 1 || instant.Year() > 9999 {
 		return time.Time{}, errSpendWindowRange
 	}
 	return instant.Truncate(time.Second), nil

@@ -21,7 +21,7 @@ func TestDecide(t *testing.T) {
 	application := Baseline{Heads: []string{"0138"}, Schema: schema}
 	cutover := Baseline{Cutover: true, Heads: []string{"0066", "0138"}, Schema: schema}
 	tables := []string{"alembic_version", "users"}
-	chain := []ChainFile{{Revision: "0140", Name: "0140_a.sql"}, {Revision: "0141", Name: "0141_b.sql"}}
+	chain := []ChainFile{{Revision: "0139", Name: "0139_a.sql"}, {Revision: "0140", Name: "0140_b.sql"}}
 	for name, testCase := range map[string]struct {
 		observation Observation
 		baseline    Baseline
@@ -39,12 +39,12 @@ func TestDecide(t *testing.T) {
 			Plan{State: StateAtHead, ApplicationHead: "0138", Pending: chain}},
 		"the heads recorded without the schema": {Observation{HasVersionTable: true, Versions: []string{"0066", "0138"}, PublicTables: []string{"alembic_version"}}, cutover,
 			Plan{State: StateSchemaMismatch, MissingTables: []string{"users"}}},
-		"a chain revision recorded, a baseline table dropped": {Observation{HasVersionTable: true, Versions: []string{"0066", "0140"}, PublicTables: []string{"alembic_version"}}, cutover,
-			Plan{State: StateAtHead, ApplicationHead: "0140", Pending: chain[1:]}},
-		"part of the chain applied": {Observation{HasVersionTable: true, Versions: []string{"0066", "0140"}}, cutover,
-			Plan{State: StateAtHead, ApplicationHead: "0140", Pending: chain[1:]}},
-		"the whole chain applied": {Observation{HasVersionTable: true, Versions: []string{"0141"}}, application,
-			Plan{State: StateAtHead, ApplicationHead: "0141", Pending: []ChainFile{}}},
+		"a chain revision recorded, a baseline table dropped": {Observation{HasVersionTable: true, Versions: []string{"0066", "0139"}, PublicTables: []string{"alembic_version"}}, cutover,
+			Plan{State: StateAtHead, ApplicationHead: "0139", Pending: chain[1:]}},
+		"part of the chain applied": {Observation{HasVersionTable: true, Versions: []string{"0066", "0139"}}, cutover,
+			Plan{State: StateAtHead, ApplicationHead: "0139", Pending: chain[1:]}},
+		"the whole chain applied": {Observation{HasVersionTable: true, Versions: []string{"0140"}}, application,
+			Plan{State: StateAtHead, ApplicationHead: "0140", Pending: []ChainFile{}}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			got := Decide(testCase.observation, testCase.baseline, chain)
@@ -131,8 +131,8 @@ func TestBaselineLoads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !baseline.Cutover || baseline.RiverSchema != "river" || !reflect.DeepEqual(baseline.Heads, []string{"0066", "0140"}) {
-		t.Fatalf("baseline settings cutover=%v schema=%q heads %v; want production's (true, river, [0066 0140])",
+	if !baseline.Cutover || baseline.RiverSchema != "river" || !reflect.DeepEqual(baseline.Heads, []string{"0066", "0141"}) {
+		t.Fatalf("baseline settings cutover=%v schema=%q heads %v; want production's (true, river, [0066 0141])",
 			baseline.Cutover, baseline.RiverSchema, baseline.Heads)
 	}
 	if strings.Contains(baseline.Schema, `\restrict`) || strings.Contains(baseline.Data, `\restrict`) {

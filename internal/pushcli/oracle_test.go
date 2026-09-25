@@ -1,3 +1,5 @@
+//go:build integration
+
 package pushcli
 
 import (
@@ -17,6 +19,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
 // The offline push verbs are compared with the real `dev-hops push` verbs over one
@@ -357,7 +360,7 @@ const pushGolden = "testdata/push_golden.json"
 // pushGoldenSHA256 pins testdata/push_golden.json (R24): what the real
 // `dev-hops push validate|sample|export` printed for every case of the corpus. The
 // producer is deleted with the Python CLI, so this is a rot guard: the file is
-// only rewritten by TestPushMatchesThePythonProducer with DHO_PUSH_GOLDEN_UPDATE=1,
+// only rewritten by TestPushVenueOracleMatchesThePythonProducer with DHO_PUSH_GOLDEN_UPDATE=1,
 // then this digest is updated.
 const pushGoldenSHA256 = "388516853de1f54215080c80de533afc2ba9f59cd99b61aacb36ebb85e1c4784"
 
@@ -473,9 +476,9 @@ func TestPushMatchesTheFrozenPythonOutput(t *testing.T) {
 	_ = failures
 }
 
-// TestPushMatchesThePythonProducer runs the corpus through the real Python verbs
+// TestPushVenueOracleMatchesThePythonProducer runs the corpus through the real Python verbs
 // and through dho. With DHO_PUSH_GOLDEN_UPDATE=1 it rewrites the frozen file.
-func TestPushMatchesThePythonProducer(t *testing.T) {
+func TestPushVenueOracleMatchesThePythonProducer(t *testing.T) {
 	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
 		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
 	}
@@ -544,11 +547,7 @@ func TestPushMatchesThePythonProducer(t *testing.T) {
 		}
 	}
 	if mismatches == 0 {
-		if proof := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR"); proof != "" {
-			if err := os.WriteFile(filepath.Join(proof, "pushcli-offline"), []byte("executed"), 0o600); err != nil {
-				t.Fatal(err)
-			}
-		}
+		venueoracle.WriteProof(t)
 	}
 }
 

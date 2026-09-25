@@ -71,6 +71,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/goapiproof"
+	pgstorage "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 )
 
 // bearerEnvVar names the environment variable carrying the effective-
@@ -909,7 +910,13 @@ func connectPostgres(ctx context.Context, uri string, timeout time.Duration) (*p
 		// is unaffected: it catches this error and reports it as
 		// `registry_db_error`, never propagating it as an exit code, so
 		// this classification only affects enable/disable/repoint.
-		return nil, internal("Postgres did not answer within %s: %w", timeout, err)
+		//
+		// The error is redacted first: pgx puts the effective login in its
+		// connect failure (`failed to connect to \`user=...\``) and a server can
+		// echo the password, and the login and password may come from PGUSER,
+		// PGPASSWORD, a password file or a service file rather than from the DSN
+		// (CHAOS-6665), so the boundary is built from the resolved configuration.
+		return nil, internal("Postgres did not answer within %s: %w", timeout, pgstorage.Boundary(uri).Redact(err))
 	}
 	return pool, nil
 }

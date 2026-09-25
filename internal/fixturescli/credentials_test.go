@@ -21,6 +21,7 @@ func TestCredentialsFromTheEnvironmentAreRedacted(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	env := cli.Env{Args: []string{"--target", "cicd", "--repo-name", "acme/api", "--org", "org-1"}, Lookup: lookup, Stdout: &stdout, Stderr: &stderr}
 	code := runFinalizeSynthetic(context.Background(), env)
+	refusing.RequireConnected(t)
 	if code == cli.ExitOK || stderr.Len() == 0 {
 		t.Fatalf("exit %d, stderr %q: the refusing server must fail the verb with a message", code, stderr.String())
 	}

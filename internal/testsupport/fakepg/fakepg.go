@@ -13,29 +13,51 @@ import (
 	"io"
 	"net"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
-// Start listens on a loopback port until the test ends and returns the host and
-// port. Every connection is refused with SQLSTATE 28P01.
-func Start(t testing.TB) (host string, port int) {
+// Server is a running refusing server.
+type Server struct {
+	Host string
+	Port int
+	// connections counts the connections that reached the server.
+	connections atomic.Int64
+}
+
+// Connections is how many connections the server has accepted: a test that
+// expects a login attempt asserts it is not zero, so a verb that failed before
+// dialing (a malformed URI, a refusal) does not pass for a redaction.
+func (s *Server) Connections() int { return int(s.connections.Load()) }
+
+// New listens on a loopback port until the test ends. Every connection is refused
+// with SQLSTATE 28P01.
+func New(t testing.TB) *Server {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("fakepg listen: %v", err)
 	}
 	t.Cleanup(func() { _ = listener.Close() })
+	server := &Server{Host: "127.0.0.1", Port: listener.Addr().(*net.TCPAddr).Port}
 	go func() {
 		for {
 			conn, err := listener.Accept()
 			if err != nil {
 				return
 			}
+			server.connections.Add(1)
 			go serve(conn)
 		}
 	}()
-	address := listener.Addr().(*net.TCPAddr)
-	return "127.0.0.1", address.Port
+	return server
+}
+
+// Start is New for a test that needs only the address.
+func Start(t testing.TB) (host string, port int) {
+	t.Helper()
+	server := New(t)
+	return server.Host, server.Port
 }
 
 func serve(conn net.Conn) {
@@ -103,6 +125,7 @@ func serve(conn net.Conn) {
 // the driver only through the environment (PGUSER, PGPASSWORD), never through the
 // URI the verb resolves.
 type Refusing struct {
+	*Server
 	// URI names the server and a database and carries no credential.
 	URI             string
 	Login, Password string
@@ -112,9 +135,10 @@ type Refusing struct {
 // PGSERVICEFILE for the test (t.Setenv, so the test cannot run in parallel).
 func StartRefusing(t *testing.T) Refusing {
 	t.Helper()
-	host, port := Start(t)
+	server := New(t)
 	r := Refusing{
-		URI:      fmt.Sprintf("postgres://%s:%d/appdb?sslmode=disable", host, port),
+		Server:   server,
+		URI:      fmt.Sprintf("postgres://%s:%d/appdb?sslmode=disable", server.Host, server.Port),
 		Login:    "env_login_zq4",
 		Password: "env_password_mv7",
 	}
@@ -133,4 +157,13 @@ func (r Refusing) Leaks(text string) []string {
 		}
 	}
 	return found
+}
+
+// RequireConnected fails the test when no connection reached the server: the verb
+// never tried to log in, so its output says nothing about credentials.
+func (r Refusing) RequireConnected(t testing.TB) {
+	t.Helper()
+	if r.Connections() == 0 {
+		t.Fatal("no connection reached the refusing server: the verb never tried to log in (the test measures nothing)")
+	}
 }

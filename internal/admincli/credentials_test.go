@@ -23,6 +23,7 @@ func TestSeedRedactsCredentialsThatComeFromTheEnvironment(t *testing.T) {
 	code := cli.Execute(context.Background(), "dho", []cli.Command{Command()}, cli.Env{
 		Args: []string{"admin", "features", "seed"}, Lookup: lookup, Stdout: &stdout, Stderr: &stderr,
 	})
+	refusing.RequireConnected(t)
 	if code == cli.ExitOK || stderr.Len() == 0 {
 		t.Fatalf("exit %d, stderr %q: the refusing server must fail the verb with a message", code, stderr.String())
 	}

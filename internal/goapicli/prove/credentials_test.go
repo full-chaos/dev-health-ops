@@ -17,6 +17,7 @@ import (
 func TestOpenPostgresPoolErrorIsRedactedForEnvironmentCredentials(t *testing.T) {
 	refusing := fakepg.StartRefusing(t)
 	_, err := openPostgresPool(context.Background(), refusing.URI)
+	refusing.RequireConnected(t)
 	if err == nil {
 		t.Fatal("the refusing server let the pool open")
 	}

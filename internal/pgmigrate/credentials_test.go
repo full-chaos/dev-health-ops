@@ -33,6 +33,7 @@ func TestVerbsRedactCredentialsThatComeFromTheEnvironment(t *testing.T) {
 		}
 		var stdout, stderr bytes.Buffer
 		code := run(context.Background(), cli.Env{Lookup: lookup, Stdout: &stdout, Stderr: &stderr})
+		refusing.RequireConnected(t)
 		if code == cli.ExitOK {
 			t.Fatalf("%s: the refusing server let the verb succeed", verb)
 		}

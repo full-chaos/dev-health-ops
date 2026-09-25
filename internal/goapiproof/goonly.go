@@ -86,8 +86,12 @@ type GoServedGuard struct {
 // GoServedEntry is one operation whose Python execution path is deleted.
 type GoServedEntry struct {
 	Operation string `json:"operation"`
-	// TwoPlaneOpsSHA is the ops build at which this operation last had a
-	// two-plane match receipt. Empty exactly when UnprovenReason is set.
+	// TwoPlaneOpsSHA is the ops build of an executed two-plane run for this
+	// operation, with non-empty legs, whose receipts are `match` or `mismatch`
+	// with no difference outside a declared baseline defect (the enablement
+	// predicate's own arms). A run whose data-bearing legs were empty on both
+	// planes compared no leaf and does not count. Empty exactly when
+	// UnprovenReason is set.
 	TwoPlaneOpsSHA string `json:"two_plane_ops_sha,omitempty"`
 	// UnprovenReason, set on an operation that never had a two-plane run with
 	// any leaf compared, names why and where the enablement was recorded. The

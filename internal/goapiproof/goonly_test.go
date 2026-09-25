@@ -453,3 +453,42 @@ func TestUnprovenEntryRefusals(t *testing.T) {
 		}
 	}
 }
+
+// CHAOS-6841: the three saved-report operations carry the build of the
+// isolated two-plane run that first compared their leaves on non-empty data
+// (65fffb90, the parent of the Python reports deletion): every receipt was a
+// match or a mismatch with 0 differences outside the declared CHAOS-6103
+// timestamp-spelling defect. They keep an enable_limit because a production
+// proof can never compare a leaf (production holds no saved reports), and
+// they name the real-database route test among their guards.
+func TestSavedReportOperationsCarryTheIsolatedTwoPlaneRun(t *testing.T) {
+	const build = "65fffb90e78942571e8a76ae65e4188bdecaeeca"
+	const routeGuard = "TestSavedReportRoutes_ThroughTheSignedEnvelope"
+	ledger := defaultLedgerForTest(t)
+	for _, operation := range []string{"savedReports", "savedReport", "reportRuns"} {
+		entry, ok := ledger.Entry(operation)
+		if !ok {
+			t.Fatalf("%s is not in the ledger", operation)
+		}
+		if entry.TwoPlaneOpsSHA != build || entry.UnprovenReason != "" {
+			t.Errorf("%s: two_plane_ops_sha = %q, unproven_reason = %q; want the isolated run's build and no unproven reason", operation, entry.TwoPlaneOpsSHA, entry.UnprovenReason)
+		}
+		if strings.TrimSpace(entry.EnableLimit) == "" {
+			t.Errorf("%s: no enable_limit; enable could no longer write a row for it (a production proof cannot compare a leaf)", operation)
+		}
+		named := false
+		for _, guard := range entry.Guards {
+			named = named || guard.Test == routeGuard
+		}
+		if !named {
+			t.Errorf("%s does not name %s among its guards", operation, routeGuard)
+		}
+		citation, err := NewGoOnlyCitation(ledger, operation)
+		if err != nil {
+			t.Fatalf("%s: %v", operation, err)
+		}
+		if !strings.Contains(citation, "two_plane="+build) || strings.Contains(citation, unprovenCitationField) {
+			t.Errorf("%s: citation %q is not the two-plane form", operation, citation)
+		}
+	}
+}

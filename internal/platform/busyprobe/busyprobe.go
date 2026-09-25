@@ -242,3 +242,29 @@ func (p *PoolProgress) Ready(context.Context) error {
 	}
 	return errors.New("busyprobe: no acquire completed within the progress window")
 }
+
+// Liveness is the whole busy-tolerant wiring of a runtime's execution-liveness
+// self-probe on its domain pool, built in ONE place so no caller can hand the
+// progress guard the wrong (or no) own-acquire counter: the opener, and the
+// progress guard reading the very same opener's own acquires.
+type Liveness struct {
+	Opener   Opener
+	Progress *PoolProgress
+}
+
+// NewLiveness wires pool's probe opener, the pool-saturation check and a
+// PoolProgress that subtracts that opener's own acquires. pool must not be nil.
+func NewLiveness(pool *pgxpool.Pool, check string, window time.Duration, counter *Counter) Liveness {
+	probe := selfprobe.NewPool(pool)
+	progress := NewPoolProgress(pool, window, func() int64 { return selfprobe.OwnAcquires(probe) })
+	return Liveness{
+		Opener: Opener{
+			Inner:     probe,
+			Check:     check,
+			Saturated: func() bool { return Saturated(pool) },
+			Progress:  progress.Ready,
+			Counter:   counter,
+		},
+		Progress: progress,
+	}
+}

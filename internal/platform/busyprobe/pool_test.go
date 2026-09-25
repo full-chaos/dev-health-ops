@@ -170,3 +170,39 @@ func TestOwnAcquiresDoNotCountAsProgress(t *testing.T) {
 		t.Fatalf("OwnAcquires = %d, want 3", got)
 	}
 }
+
+// The wiring the scheduler and the reconciler use. The progress guard must not
+// count the probe's own acquires (r1 P1 cause 2): with the work idle and only
+// the probe acquiring, the guard goes red once the window passes. A wiring that
+// left the own-acquire counter nil or zero would read the probe's acquires as
+// the work moving and stay green.
+func TestLivenessProgressIgnoresTheProbesOwnAcquires(t *testing.T) {
+	addr := fakepg.Serve(t)
+	config, err := pgxpool.ParseConfig("postgres://role:secret@" + addr + "/db?sslmode=disable")
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.MaxConns = 2
+	pool, err := pgxpool.NewWithConfig(context.Background(), config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	liveness := NewLiveness(pool, "execution_liveness", 50*time.Millisecond, NewCounter("probe_busy_total", []string{"execution_liveness"}, nil))
+
+	if err := liveness.Progress.Ready(context.Background()); err != nil {
+		t.Fatalf("a new guard gets a full window: %v", err)
+	}
+	for i := 0; i < 3; i++ {
+		if err := selfprobe.Once(context.Background(), liveness.Opener); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if pool.Stat().AcquireCount() != 3 {
+		t.Fatalf("pool acquire count = %d, want the probe's 3", pool.Stat().AcquireCount())
+	}
+	time.Sleep(80 * time.Millisecond)
+	if err := liveness.Progress.Ready(context.Background()); err == nil {
+		t.Fatal("the probe's own acquires read as the work progressing")
+	}
+}

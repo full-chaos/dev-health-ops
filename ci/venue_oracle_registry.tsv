@@ -7,6 +7,7 @@
 # PR that adds the test: `ci/check_venue_oracle_registry.sh` (run on every PR
 # by tests/tooling/test_venue_oracle_registry.py) fails on a venue test that is
 # missing here and on a row with no test.
+internal/aicli	TestAllowlistVenueOracleMatchesThePythonProducer	run
 internal/api/billing	TestVenueOracleStripeEventDispatch	run
 internal/api/externalurl	TestValidateExternalURLVenueOracle	run
 internal/api/githubapp	TestVenueOracleGitHubAppInstall	run
@@ -16,8 +17,11 @@ internal/api/licensing	TestTierLimitsVenueOracleMatchesLivePython	run
 internal/api/syncadmin	TestBackfillDiagnosticsVenueOracleMatchesLivePython	run
 internal/api/syncadmin	TestCoverageModelVenueOracleMatchesLivePydantic	run
 internal/api/syncadmin	TestCreateValidationVenueOracleMatchesLivePython	run
+internal/api/syncadmin	TestCreateWriteEnginesVenueOracleMatchesLivePython	run
+internal/api/syncadmin	TestCreateWriteVenueOracleSequenceUnderTheAPIRole	run
 internal/api/syncadmin	TestRunUnitsModelVenueOracleMatchesLivePython	run
 internal/api/syncadmin	TestSyncAdminReadsVenueOracle	run
+internal/api/syncadmin	TestSyncConfigCreateVenueOracle	run
 internal/api/syncadmin	TestSyncConfigDeleteVenueOracle	run
 internal/api/syncadmin	TestSyncConfigRepositoriesVenueOracle	run
 internal/api/teamsidentity	TestJiraDatetimeParseMatchesPython	run
@@ -50,7 +54,13 @@ internal/apiservice/admin	TestOrgCRUDMatchesThePythonAPI	run
 internal/apiservice/admin	TestOrgDeletionMatchesThePythonAPI	run
 internal/apiservice/admin	TestOrgDeletionPurgesEveryDiscoveredClickHouseTable	run
 internal/apiservice/admin	TestOrgDeletionRevokesPagerDutyOnBothPlanes	run
+internal/apiservice/admin	TestPagerDutyAuthorizeVenueOracle	run
+internal/apiservice/admin	TestPagerDutyAuthorizeWithoutClientIDVenueOracle	run
+internal/apiservice/admin	TestPagerDutyAuthorizeWithoutEncryptionKeyVenueOracle	run
+internal/apiservice/admin	TestPagerDutyCallbackAndManualVenueOracle	run
+internal/apiservice/admin	TestPagerDutyDisconnectVenueOracle	run
 internal/apiservice/admin	TestPagerDutyStatusAndPreflightVenueOracle	run
+internal/apiservice/admin	TestRateLimitPathCardinalityVenueOracle	run
 internal/apiservice/admin	TestRetentionRoutesVenueOracle	run
 internal/apiservice/admin	TestSetUserPasswordRateLimitIsIndependentPerTargetAndAdmin	run
 internal/apiservice/admin	TestSetUserPasswordRateLimitMatchesThePythonAPI	run
@@ -61,6 +71,8 @@ internal/apiservice/admin	TestSettingsRoutesWithoutEncryptionKeyVenueOracle	run
 internal/apiservice/admin	TestSharedRateLimitAcrossReplicasVenueOracle	run
 internal/apiservice/admin	TestUserCRUDAndPasswordChangeMatchesThePythonAPI	run
 internal/apiservice/billingvenue	TestInvoiceWebhookAppliesTestModeEvents	run
+internal/apiservice/billingvenue	TestInvoiceWebhookOrderLinesAndRetry	run
+internal/apiservice/billingvenue	TestRefundCreate	run
 internal/apiservice/billingvenue	TestStripeTestModeBillingDifferential	local
 internal/apiservice/billingvenue	TestStripeTestModeInvoiceEvents	local
 internal/apiservice/billingvenue	TestStripeTestModeSubscriptionLifecycle	local
@@ -69,8 +81,11 @@ internal/apiservice/billingvenue	TestVenueOracleBillingLedger	run
 internal/apiservice/billingvenue	TestVenueOracleBillingPlansCheckout	run
 internal/apiservice/billingvenue	TestVenueOracleBillingWebhook	run
 internal/apiservice/billingvenue	TestVenueOracleBillingWithoutStripeKey	run
+internal/apiservice/externalingestvenue	TestExternalIngestLimiterVenueOracle	run
 internal/apiservice/sessionvenue	TestSessionVenueOracle	run
 internal/fixturescli	TestFinalizeSyntheticVenueOracleMatchesThePythonProducer	run
+internal/fixturescli	TestLoadSyntheticVenueOracleMatchesThePythonProducer	run
+internal/queryapi/server	TestQueryParamValidationVenueOracle	run
 internal/queryapi/server	TestVenueOracleQueryAPIDictOrder	run
 internal/queryapi/server	TestVenueOracleQueryAPIResponseModels	run
 internal/scheduler/sync	TestJiraDiscoveryRowsVenueOracleMatchesLivePython	run

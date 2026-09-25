@@ -20,7 +20,7 @@ from dev_health_ops.api.admin.middleware import (  # noqa: F401
     get_admin_org_id,
     get_admin_user,
 )
-from dev_health_ops.api.go_served import _raise_served_by_go_api
+from dev_health_ops.api.go_served import GO_API, raise_served_by_go_api
 from dev_health_ops.licensing import is_org_feature_enabled_async
 from dev_health_ops.licensing.registry import CANONICAL_INCIDENT_INGESTION_FEATURE
 
@@ -227,7 +227,7 @@ async def authorize_pagerduty(
     org_id: str = Depends(get_admin_org_id),
 ) -> PagerDutyAuthorizeResponse:
     """Create a one-time authorization context and return PagerDuty's URL."""
-    _raise_served_by_go_api("/api/v1/admin/integrations/pagerduty/authorize")
+    raise_served_by_go_api("/api/v1/admin/integrations/pagerduty/authorize", GO_API)
 
 
 @router.post(
@@ -246,7 +246,7 @@ async def complete_pagerduty_authorization(
     code;
     the gate having passed at authorize time is sufficient.
     """
-    _raise_served_by_go_api("/api/v1/admin/integrations/pagerduty/callback")
+    raise_served_by_go_api("/api/v1/admin/integrations/pagerduty/callback", GO_API)
 
 
 @router.get(
@@ -258,7 +258,7 @@ async def get_pagerduty_status(
     org_id: str = Depends(get_admin_org_id),
 ) -> PagerDutyStatusResponse:
     """Return PagerDuty setup status without decrypting OAuth tokens."""
-    _raise_served_by_go_api("/api/v1/admin/integrations/pagerduty/status")
+    raise_served_by_go_api("/api/v1/admin/integrations/pagerduty/status", GO_API)
 
 
 @router.post(
@@ -270,7 +270,7 @@ async def disconnect_pagerduty(
     org_id: str = Depends(get_admin_org_id),
 ) -> PagerDutyDisconnectResponse:
     """Revoke PagerDuty secrets and retain only an inactive descriptor tombstone."""
-    _raise_served_by_go_api("/api/v1/admin/integrations/pagerduty/disconnect")
+    raise_served_by_go_api("/api/v1/admin/integrations/pagerduty/disconnect", GO_API)
 
 
 @router.post(
@@ -282,7 +282,7 @@ async def preflight_pagerduty(
     org_id: str = Depends(get_admin_org_id),
 ) -> PagerDutyPreflightResponse:
     """Report requested dataset scopes without imposing unrelated requirements."""
-    _raise_served_by_go_api("/api/v1/admin/integrations/pagerduty/preflight")
+    raise_served_by_go_api("/api/v1/admin/integrations/pagerduty/preflight", GO_API)
 
 
 @router.post(
@@ -294,7 +294,9 @@ async def set_pagerduty_client_credentials(
     org_id: str = Depends(get_admin_org_id),
 ) -> PagerDutyConnectionResponse:
     """Persist a non-OAuth PagerDuty client-credentials descriptor."""
-    _raise_served_by_go_api("/api/v1/admin/integrations/pagerduty/client-credentials")
+    raise_served_by_go_api(
+        "/api/v1/admin/integrations/pagerduty/client-credentials", GO_API
+    )
 
 
 @router.post(
@@ -306,4 +308,4 @@ async def set_pagerduty_api_token(
     org_id: str = Depends(get_admin_org_id),
 ) -> PagerDutyConnectionResponse:
     """Persist a non-OAuth PagerDuty API-token descriptor."""
-    _raise_served_by_go_api("/api/v1/admin/integrations/pagerduty/api-token")
+    raise_served_by_go_api("/api/v1/admin/integrations/pagerduty/api-token", GO_API)

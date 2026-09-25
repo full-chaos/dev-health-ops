@@ -70,3 +70,16 @@ rev186	query-api	/api/v1/quadrant
 rev186	query-api	/api/v1/sankey
 rev186	query-api	/api/v1/work-units
 rev186	query-api	/api/v1/work-units/{}/explain
+187	go-api	/api/v1/admin/integrations/pagerduty/api-token
+187	go-api	/api/v1/admin/integrations/pagerduty/authorize
+187	go-api	/api/v1/admin/integrations/pagerduty/callback
+187	go-api	/api/v1/admin/integrations/pagerduty/client-credentials
+187	go-api	/api/v1/admin/integrations/pagerduty/disconnect
+187	go-api	/api/v1/admin/integrations/pagerduty/preflight
+187	go-api	/api/v1/admin/integrations/pagerduty/services
+187	go-api	/api/v1/admin/integrations/pagerduty/status
+187	go-api	/api/v1/admin/integrations/pagerduty/webhook-bindings
+187	go-api	/api/v1/admin/integrations/pagerduty/webhook-bindings/{}
+187	go-api	/api/v1/admin/integrations/pagerduty/webhook-bindings/{}/activate
+187	go-api	/api/v1/admin/integrations/pagerduty/webhook-bindings/{}/revoke
+187	go-api	/api/v1/admin/integrations/pagerduty/webhook-bindings/{}/rotate

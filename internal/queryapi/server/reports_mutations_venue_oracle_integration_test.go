@@ -157,6 +157,9 @@ VALUES ($1, $2, 'report:scheduled', 'report', '', '0 6 * * *', 'UTC', $3::json, 
 				{reportDST4, oracleOrgA, "dst-4", `{}`, `{}`, nil, true},
 			} {
 				at := seededAt
+				// created_at differs from last_run_at, so a schedule's base
+				// (last_run_at when there is one, else created_at) is decided.
+				createdAt := "2025-12-01T00:00:00+00:00"
 				switch r.id {
 				case reportDST1:
 					at = "2026-03-08T06:30:00+00:00"
@@ -168,8 +171,8 @@ VALUES ($1, $2, 'report:scheduled', 'report', '', '0 6 * * *', 'UTC', $3::json, 
 					at = "2026-10-25T00:30:00+00:00"
 				}
 				exec(`INSERT INTO saved_reports (id, org_id, name, description, report_plan, is_template, parameters, schedule_id, is_active, last_run_at, last_run_status, created_by, created_at, updated_at)
-VALUES ($1, $2, $3, 'seeded', $4::json, false, $5::json, $6, $7, $8, 'success', 'seed', $8, $8)`,
-					r.id, r.org, r.name, r.plan, r.params, r.schedule, r.active, at)
+VALUES ($1, $2, $3, 'seeded', $4::json, false, $5::json, $6, $7, $8, 'success', 'seed', $9, $8)`,
+					r.id, r.org, r.name, r.plan, r.params, r.schedule, r.active, at, createdAt)
 			}
 			exec(`INSERT INTO report_runs (id, report_id, status, triggered_by, provenance_records, attempt_count, execution_reclaim_count, notification_status, created_at)
 VALUES ('e0000000-0000-4000-8000-000000000001', $1, 'success', 'seed', '[]'::json, 0, 0, 'pending', $2)`, reportDelete, seededAt)
@@ -503,7 +506,7 @@ func compareRows(t *testing.T, ctx context.Context, venue *venueoracle.Venue) {
 		"saved_reports": `SELECT r.org_id, r.name, r.description, r.report_plan::text, r.is_template,
   (SELECT s.name FROM saved_reports s WHERE s.id = r.template_source_id), r.parameters::text,
   (SELECT j.name FROM scheduled_jobs j WHERE j.id = r.schedule_id), r.is_active, r.last_run_at, r.last_run_status,
-  r.created_by, r.created_at = '` + seededAt + `', r.updated_at >= r.created_at
+  r.created_by, r.created_at < now() - interval '1 hour', r.updated_at >= r.created_at
 FROM saved_reports r ORDER BY r.org_id, r.name, r.description`,
 		"scheduled_jobs": `SELECT j.org_id, j.name, j.job_type, j.provider, j.schedule_cron, j.timezone,
   regexp_replace(j.job_config::text, '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', '<id>'),
@@ -511,7 +514,7 @@ FROM saved_reports r ORDER BY r.org_id, r.name, r.description`,
 FROM scheduled_jobs j ORDER BY j.org_id, j.name`,
 		"report_runs": `SELECT s.name, r.status, r.scheduled_occurrence_id, r.started_at, r.completed_at, r.duration_seconds,
   r.rendered_markdown, r.artifact_url, r.provenance_records::text, r.error, r.attempt_count, r.execution_reclaim_count,
-  r.notification_status, r.triggered_by, r.created_at = '` + seededAt + `'
+  r.notification_status, r.triggered_by, r.created_at < now() - interval '1 hour'
 FROM report_runs r JOIN saved_reports s ON s.id = r.report_id ORDER BY s.name, r.triggered_by`,
 		"worker_job_outbox": `SELECT job_kind, contract_version, queue, priority, max_attempts, status, attempt_count,
   regexp_replace(dedupe_key, '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', '<run>'),

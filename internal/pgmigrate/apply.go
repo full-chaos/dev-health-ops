@@ -74,8 +74,8 @@ func Upgrade(ctx context.Context, conn *pgx.Conn, baseline Baseline, chain []Cha
 	// non-idempotent SQL must not run twice. What this run applied is what it
 	// reports.
 	for {
-		var applied *ChainFile
-		if err := inTransaction(ctx, conn, func(tx pgx.Tx) error {
+		var applied, attempted *ChainFile
+		stepErr := inTransaction(ctx, conn, func(tx pgx.Tx) error {
 			observation, err := observe(ctx, tx)
 			if err != nil {
 				return err
@@ -88,13 +88,24 @@ func Upgrade(ctx context.Context, conn *pgx.Conn, baseline Baseline, chain []Cha
 				return nil
 			}
 			file := current.Pending[0]
+			attempted = &file
 			if err := applyChainFile(ctx, tx, file, current.ApplicationHead); err != nil {
 				return err
 			}
 			applied = &file
 			return nil
-		}); err != nil {
-			return result, err
+		})
+		if stepErr != nil {
+			// Another migrator that takes no dho lock (the Python Alembic upgrade)
+			// may have committed this revision after the plan above and before
+			// this SQL ran: the SQL fails (a column it adds is there) although the
+			// database is where this run wants it. When the revision is now
+			// recorded, carry on with a fresh plan; any other failure is the
+			// step's own.
+			if attempted == nil || !revisionRecordedSince(ctx, conn, baseline, chain, attempted.Revision) {
+				return result, stepErr
+			}
+			continue
 		}
 		if applied == nil {
 			break
@@ -247,4 +258,28 @@ func sameSet(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// revisionRecordedSince reports whether the database now records the chain revision
+// (or a later one): read fresh, after the failed step's transaction is gone.
+func revisionRecordedSince(ctx context.Context, conn *pgx.Conn, baseline Baseline, chain []ChainFile, revision string) bool {
+	var recorded bool
+	err := readOnlyTransaction(ctx, conn, func(tx pgx.Tx) error {
+		observation, err := observe(ctx, tx)
+		if err != nil {
+			return err
+		}
+		current := Decide(observation, baseline, chain)
+		if current.State != StateAtHead {
+			return nil
+		}
+		for _, file := range current.Pending {
+			if file.Revision == revision {
+				return nil
+			}
+		}
+		recorded = true
+		return nil
+	})
+	return err == nil && recorded
 }

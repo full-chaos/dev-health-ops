@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
+	"github.com/full-chaos/dev-health-ops/internal/platform/poolstat"
 	"github.com/full-chaos/dev-health-ops/internal/platform/selfprobe"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchcontract"
 	"github.com/full-chaos/dev-health-ops/internal/syncreconciler"
@@ -75,6 +77,10 @@ func holdAll(t *testing.T, pool *pgxpool.Pool, count int) {
 // buildWithPools composes the production reconciler builder around a work pool
 // and a readiness pool and returns the real, opened registry.
 func buildWithPools(t *testing.T, work, probe *pgxpool.Pool, budget time.Duration) *health.Registry {
+	return buildWithPoolsLogged(t, work, probe, budget, reconcilerTestLogger())
+}
+
+func buildWithPoolsLogged(t *testing.T, work, probe *pgxpool.Pool, budget time.Duration, logger *slog.Logger) *health.Registry {
 	t.Helper()
 	t.Chdir(filepath.Join("..", ".."))
 	database := &probeDatabase{fakeReconcilerDatabase: &fakeReconcilerDatabase{domainPool: work}, probe: probe}
@@ -94,7 +100,7 @@ func buildWithPools(t *testing.T, work, probe *pgxpool.Pool, budget time.Duratio
 	}
 	registry := health.NewRegistry(budget)
 	components, err := configureReconcilerDependenciesWithSourcesAndLogger(
-		context.Background(), config.Config{RiverDatabaseSchema: "river"}, registry, reconcilerTestLogger(), sources,
+		context.Background(), config.Config{RiverDatabaseSchema: "river"}, registry, logger, sources,
 	)
 	if err != nil {
 		t.Fatalf("configureReconcilerDependenciesWithSourcesAndLogger() error = %v", err)
@@ -261,4 +267,41 @@ func TestDomainPostgresRunsTheCachedPostureCheckWhenOffered(t *testing.T) {
 			t.Fatalf("the fallback DomainReady (refusing) did not fail domain_postgres: failed=%v", failed)
 		}
 	})
+}
+
+type syncBuffer struct {
+	mu     sync.Mutex
+	buffer bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buffer.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buffer.String()
+}
+
+// r4 P1: a running reconciler warns about a saturated work pool on its own
+// sampler, with no metrics scrape at all.
+func TestReconcilerWarnsAboutASaturatedWorkPoolWithoutAScrape(t *testing.T) {
+	previous := poolstat.SampleInterval
+	poolstat.SampleInterval = 10 * time.Millisecond
+	t.Cleanup(func() { poolstat.SampleInterval = previous })
+	work := newPoolpgPool(t, poolpg.Start(t), 2)
+	probe := newPoolpgPool(t, poolpg.Start(t), 1)
+	holdAll(t, work, 2)
+	var logs syncBuffer
+	buildWithPoolsLogged(t, work, probe, 2*time.Second, slog.New(slog.NewTextHandler(&logs, nil)))
+	deadline := time.Now().Add(5 * time.Second)
+	for !strings.Contains(logs.String(), "readiness does not depend on it") {
+		if time.Now().After(deadline) {
+			t.Fatal("a saturated work pool produced no warning although nothing scraped the metrics")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 }

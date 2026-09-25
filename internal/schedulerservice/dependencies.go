@@ -700,9 +700,10 @@ func buildSchedulerLoopWithSources(
 	); err != nil {
 		return nil, err
 	}
-	if err := registry.RegisterMetrics(
-		"scheduler_domain_pool", poolstat.New("scheduler_database_pool_saturation_ratio", domainPool, logger),
-	); err != nil {
+	// The sampler (a component of the runtime below) logs saturation on its own
+	// ticker: the warning must not depend on a metrics scrape.
+	saturation := poolstat.New("scheduler_database_pool_saturation_ratio", domainPool, logger)
+	if err := registry.RegisterMetrics("scheduler_domain_pool", saturation); err != nil {
 		return nil, err
 	}
 	repository, err := sources.newRepository(coordinatorPool)
@@ -812,10 +813,11 @@ func buildSchedulerLoopWithSources(
 	}
 	closeOnError = false
 	return schedulerRuntime{
-		database:  database,
-		loop:      loop,
-		fixedLoop: fixedLoop,
-		fixedGate: gate,
+		database:   database,
+		loop:       loop,
+		fixedLoop:  fixedLoop,
+		fixedGate:  gate,
+		saturation: saturation,
 	}, nil
 }
 
@@ -824,6 +826,8 @@ type schedulerRuntime struct {
 	loop      *schedulersync.Loop
 	fixedLoop fixedScheduleRuntime
 	fixedGate *fixedScheduleGate
+	// saturation logs work-pool saturation on its own ticker (CHAOS-6800).
+	saturation *poolstat.Source
 }
 
 func (schedulerRuntime) Name() string { return "sync-scheduler-runtime" }
@@ -842,6 +846,10 @@ func (component schedulerRuntime) Start(ctx context.Context) error {
 	}
 	if err := component.loop.Start(ctx); err != nil {
 		return err
+	}
+	// Best-effort and never fails Start: the sampler only logs.
+	if component.saturation != nil {
+		_ = component.saturation.Start(ctx)
 	}
 	if component.fixedLoop == nil || component.fixedGate == nil {
 		return nil
@@ -865,12 +873,15 @@ func (component schedulerRuntime) Shutdown(ctx context.Context) error {
 	if component.loop == nil {
 		return errSchedulerActivationUnavailable
 	}
-	var fixedErr error
+	var fixedErr, saturationErr error
 	if component.fixedGate != nil {
 		component.fixedGate.detach()
 	}
 	if component.fixedLoop != nil {
 		fixedErr = component.fixedLoop.Shutdown(ctx)
 	}
-	return errors.Join(fixedErr, component.loop.Shutdown(ctx))
+	if component.saturation != nil {
+		saturationErr = component.saturation.Shutdown(ctx)
+	}
+	return errors.Join(fixedErr, saturationErr, component.loop.Shutdown(ctx))
 }

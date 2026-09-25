@@ -676,13 +676,14 @@ func configureReconcilerDependenciesWithActivationSourcesAndLogger(
 	// prove liveness from, and a probe on the shared work pool could not tell
 	// contention from a broken transaction path (CHAOS-6800). Work-pool
 	// saturation is a metric plus a loud log line, never a readiness input.
-	if err := registry.RegisterMetrics(
-		"reconciler_domain_pool",
-		poolstat.New("reconciler_database_pool_saturation_ratio", dependencies.database.DomainPool(), logger),
-	); err != nil {
+	// The sampler is a component: it logs saturation on its own ticker, so the
+	// warning does not depend on a metrics scrape.
+	saturation := poolstat.New("reconciler_database_pool_saturation_ratio", dependencies.database.DomainPool(), logger)
+	if err := registry.RegisterMetrics("reconciler_domain_pool", saturation); err != nil {
 		dependencies.close()
 		return nil, err
 	}
+	components = append(components, saturation)
 	return components, nil
 }
 

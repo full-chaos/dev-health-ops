@@ -179,7 +179,7 @@ func TestReconcilerComposesNoopLoopInDatabaseThenLoopOrder(t *testing.T) {
 	}
 	if got := componentNames(components); !slices.Equal(got, []string{
 		"postgres-runtime-pools", "outbox-reconciler-loop", "sync-dispatch-observation-recorder",
-		"sync-dispatch-observer-loop",
+		"sync-dispatch-observer-loop", "pool-saturation-reconciler_database_pool_saturation_ratio",
 	}) {
 		t.Fatalf("component order = %v", got)
 	}

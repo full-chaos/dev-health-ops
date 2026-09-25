@@ -154,7 +154,12 @@ func (executor *TestopsPipelineExecutor) ComputeFamily(
 		); err != nil {
 			return 0, err
 		}
-		metrics = append(metrics, accumulator.Finish()...)
+		// ONE row per (org, repo, day): the table's sorting key holds no
+		// more, so the per-(team, service) groups are merged before the write
+		// instead of collapsing arbitrarily in ClickHouse (CHAOS-6774).
+		if merged := accumulator.FinishRepoDay(); merged != nil {
+			metrics = append(metrics, *merged)
+		}
 	}
 	return writeTestopsPipelineMetrics(
 		ctx, executor.conn, run.OrganizationID, scope.day, scope.computedAt, metrics)

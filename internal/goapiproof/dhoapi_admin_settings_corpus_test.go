@@ -17,7 +17,6 @@ func TestAdminSettingsCorpusPinsItsRoutesAndCapturedStatuses(t *testing.T) {
 		"REST:GET:/api/v1/admin/settings/{category}/{key}/missing_key":            404,
 		"REST:GET:/api/v1/admin/llm-settings/unconfigured":                        200,
 		"REST:GET:/api/v1/admin/sync-runs/{run_id}/units/missing":                 404,
-		"REST:GET:/api/v1/admin/backfill-jobs/{job_id}/missing":                   404,
 		"REST:GET:/api/v1/admin/integrations/pagerduty/status/default":            200,
 		"REST:GET:/api/v1/admin/integrations/pagerduty/status/missing_credential": 200,
 		"REST:POST:/api/v1/admin/integrations/github/install-url/mint":            200,
@@ -73,14 +72,16 @@ func TestAdminSettingsCorpusPinsItsRoutesAndCapturedStatuses(t *testing.T) {
 	}
 }
 
-// TestAdminPersistNothingPOSTAllowlistIsExactlyTheInstallURLMint: an admin
+// TestAdminPersistNothingPOSTAllowlistIsExactlyTheTwoReadOnlyPOSTs: an admin
 // credential may carry a non-GET only for the operations on the allowlist, each
 // read in the Python handler to persist nothing; any other POST stays refused
 // (the existing TestAdminCredentialEntriesMustBeDHOAPIReadOnlyGETs pins the
 // refusal), and the allowlist does not grow silently.
-func TestAdminPersistNothingPOSTAllowlistIsExactlyTheInstallURLMint(t *testing.T) {
-	if len(adminPersistNothingPOSTs) != 1 || !adminPersistNothingPOSTs["REST:POST:/api/v1/admin/integrations/github/install-url"] {
-		t.Fatalf("allowlist = %v, want exactly the GitHub install-url mint", adminPersistNothingPOSTs)
+func TestAdminPersistNothingPOSTAllowlistIsExactlyTheTwoReadOnlyPOSTs(t *testing.T) {
+	if len(adminPersistNothingPOSTs) != 2 ||
+		!adminPersistNothingPOSTs["REST:POST:/api/v1/admin/integrations/github/install-url"] ||
+		!adminPersistNothingPOSTs["REST:POST:/api/v1/admin/integrations/pagerduty/preflight"] {
+		t.Fatalf("allowlist = %v, want exactly the GitHub install-url mint and the PagerDuty preflight", adminPersistNothingPOSTs)
 	}
 	if err := ValidateRESTCorpus(); err != nil {
 		t.Fatalf("the corpus with the allowlisted POST must validate: %v", err)
@@ -109,7 +110,6 @@ func TestAdminUnservedLLMSettingsReadsStayOut(t *testing.T) {
 		"REST:GET:/api/v1/admin/llm-settings/status",
 		"REST:GET:/api/v1/admin/llm-settings/budget",
 		"REST:GET:/api/v1/admin/llm-settings/spend",
-		"REST:POST:/api/v1/admin/integrations/pagerduty/preflight",
 		"REST:POST:/api/v1/admin/integrations/github/install-callback",
 	} {
 		if _, err := SpecForREST(operation); err == nil {

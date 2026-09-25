@@ -140,7 +140,7 @@ func PlansCredentialKind(service RESTService, kind RESTCredentialKind) bool {
 // adminPersistNothingPOSTs are the only POST operations an admin credential may
 // carry: each was read in the Python handler to persist nothing and call
 // nothing outside the process (the GitHub install-url route only signs a state
-// and builds a URL), so a case is a read in effect, like the external-ingest
+// and builds a URL; the PagerDuty preflight only reads the database), so a case is a read in effect, like the external-ingest
 // validate case. Anything else that is not a GET is a write: real use only
 // (R402/R406), never a synthetic corpus case.
 // restIngestPathPrefix is where the external-ingest API lives; the push token
@@ -149,6 +149,11 @@ const restIngestPathPrefix = "/api/v1/external-ingest/"
 
 var adminPersistNothingPOSTs = map[string]bool{
 	"REST:POST:/api/v1/admin/integrations/github/install-url": true,
+	// The Python handler answers from the database only (the credentials
+	// service and the OAuth status metadata repository): no write, no PagerDuty
+	// call; a missing credential answers 200 {connected:false}, an unknown
+	// dataset 400.
+	"REST:POST:/api/v1/admin/integrations/pagerduty/preflight": true,
 }
 
 // validateRESTCredentialKinds refuses an unknown credential kind, a file-fed

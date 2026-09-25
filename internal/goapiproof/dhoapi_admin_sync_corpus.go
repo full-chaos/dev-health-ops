@@ -29,6 +29,26 @@ package goapiproof
 //     produced-id case, whose id is items[0].team_id and NOT items[0].id, joins
 //     with the team route once Go serves it).
 
+// Ids the seeded bigboy Fixture Org rows (or any org that has them) make available:
+// the first sync configuration of the sync-configs list (a bare JSON array) and the
+// first backfill job of the backfill-jobs list ({items: [...]}). An org with no such
+// row leaves the "produced" cases unresolved: refused by name, never sent.
+const (
+	adminSyncConfigIDProducer  = "admin_sync_config_id"
+	adminBackfillJobIDProducer = "admin_backfill_job_id"
+)
+
+// adminProducedRead is the produced-id request of an id-scoped read: the id is
+// bound into path parameter param and both planes answer 200.
+func adminProducedRead(producer, param string) RESTRequest {
+	return RESTRequest{
+		Name:                "produced",
+		IDBindings:          []RESTIDBinding{{Producer: producer, PathParam: param}},
+		WantCandidateStatus: 200, WantBaselineStatus: 200,
+		BodyMode: RESTBodyModeJSON,
+	}
+}
+
 var dhoAPIAdminSyncRunOrder = []string{
 	"REST:GET:/api/v1/admin/sync-configs",
 	"REST:GET:/api/v1/admin/sync-configs/auto-import-capabilities",
@@ -39,6 +59,7 @@ var dhoAPIAdminSyncRunOrder = []string{
 	"REST:GET:/api/v1/admin/sync-runs/{run_id}",
 	"REST:GET:/api/v1/admin/sync-targets",
 	"REST:GET:/api/v1/admin/backfill-jobs",
+	"REST:GET:/api/v1/admin/backfill-jobs/{job_id}",
 }
 
 // adminMissingConfigGET is a GET on a {config_id} sub-route for a config that
@@ -48,15 +69,20 @@ func adminMissingConfigGET(path string) RESTEndpointSpec {
 }
 
 var dhoAPIAdminSyncEndpointSpecs = map[string]RESTEndpointSpec{
-	"REST:GET:/api/v1/admin/sync-configs":                          adminGET("/api/v1/admin/sync-configs", "list", 200, nil),
+	"REST:GET:/api/v1/admin/sync-configs": withProducer(adminGET("/api/v1/admin/sync-configs", "list", 200, nil),
+		RESTIDProducer{Name: adminSyncConfigIDProducer, IDField: "id"}),
 	"REST:GET:/api/v1/admin/sync-configs/auto-import-capabilities": adminGET("/api/v1/admin/sync-configs/auto-import-capabilities", "capabilities", 200, nil),
-	"REST:GET:/api/v1/admin/sync-configs/{config_id}":              adminMissingConfigGET("/api/v1/admin/sync-configs/{config_id}"),
+	"REST:GET:/api/v1/admin/sync-configs/{config_id}":              withSecondRequest(adminMissingConfigGET("/api/v1/admin/sync-configs/{config_id}"), adminProducedRead(adminSyncConfigIDProducer, "config_id")),
 	"REST:GET:/api/v1/admin/sync-configs/{config_id}/coverage":     adminMissingConfigGET("/api/v1/admin/sync-configs/{config_id}/coverage"),
-	"REST:GET:/api/v1/admin/sync-configs/{config_id}/jobs":         adminMissingConfigGET("/api/v1/admin/sync-configs/{config_id}/jobs"),
-	"REST:GET:/api/v1/admin/sync-configs/{config_id}/repositories": adminMissingConfigGET("/api/v1/admin/sync-configs/{config_id}/repositories"),
+	"REST:GET:/api/v1/admin/sync-configs/{config_id}/jobs":         withSecondRequest(adminMissingConfigGET("/api/v1/admin/sync-configs/{config_id}/jobs"), adminProducedRead(adminSyncConfigIDProducer, "config_id")),
+	"REST:GET:/api/v1/admin/sync-configs/{config_id}/repositories": withSecondRequest(adminMissingConfigGET("/api/v1/admin/sync-configs/{config_id}/repositories"), adminProducedRead(adminSyncConfigIDProducer, "config_id")),
 	"REST:GET:/api/v1/admin/sync-runs/{run_id}":                    adminGET("/api/v1/admin/sync-runs/{run_id}", "missing", 404, map[string]string{"run_id": adminMissingID}),
 	"REST:GET:/api/v1/admin/sync-targets":                          adminGET("/api/v1/admin/sync-targets", "targets", 200, nil),
-	"REST:GET:/api/v1/admin/backfill-jobs":                         adminGET("/api/v1/admin/backfill-jobs", "list", 200, nil),
+	"REST:GET:/api/v1/admin/backfill-jobs": withProducer(adminGET("/api/v1/admin/backfill-jobs", "list", 200, nil),
+		RESTIDProducer{Name: adminBackfillJobIDProducer, ListPath: "items", IDField: "id"}),
+	"REST:GET:/api/v1/admin/backfill-jobs/{job_id}": withSecondRequest(
+		adminGET("/api/v1/admin/backfill-jobs/{job_id}", "missing", 404, map[string]string{"job_id": adminMissingID}),
+		adminProducedRead(adminBackfillJobIDProducer, "job_id")),
 }
 
 func init() {

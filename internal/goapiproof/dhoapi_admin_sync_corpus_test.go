@@ -17,6 +17,11 @@ func TestAdminSyncCorpusPinsItsRoutesAndCapturedStatuses(t *testing.T) {
 		"REST:GET:/api/v1/admin/sync-configs/{config_id}/jobs/missing":              404,
 		"REST:GET:/api/v1/admin/sync-configs/{config_id}/repositories/missing":      404,
 		"REST:GET:/api/v1/admin/sync-runs/{run_id}/missing":                         404,
+		"REST:GET:/api/v1/admin/sync-configs/{config_id}/produced":                  200,
+		"REST:GET:/api/v1/admin/sync-configs/{config_id}/jobs/produced":             200,
+		"REST:GET:/api/v1/admin/sync-configs/{config_id}/repositories/produced":     200,
+		"REST:GET:/api/v1/admin/backfill-jobs/{job_id}/missing":                     404,
+		"REST:GET:/api/v1/admin/backfill-jobs/{job_id}/produced":                    200,
 		"REST:GET:/api/v1/admin/sync-targets/targets":                               200,
 		"REST:GET:/api/v1/admin/backfill-jobs/list":                                 200,
 	}
@@ -116,5 +121,53 @@ func TestAdminMissingCasesNameTheZeroUUID(t *testing.T) {
 	}
 	if checked < 8 {
 		t.Fatalf("checked %d missing cases, want at least 8 (audit-logs, ip-allowlist, retention-policies, users, sync-configs x4, sync-runs)", checked)
+	}
+}
+
+// TestAdminSyncProducedIDsComeFromTheirListsAndStayUnresolvedWithoutRows: the
+// sync-config and backfill-job produced cases bind the first id of their list
+// (a bare array, and {items: [...]}); an org with no row leaves them unresolved
+// (refused by name, never sent with a placeholder). coverage has no produced
+// case: its status depends on the projection state.
+func TestAdminSyncProducedIDsComeFromTheirListsAndStayUnresolvedWithoutRows(t *testing.T) {
+	configs, _ := SpecForREST("REST:GET:/api/v1/admin/sync-configs")
+	cfgProducer := configs.Requests[0].Produces[0]
+	if id, ok := ExtractRESTID([]any{map[string]any{"id": "c-1"}, map[string]any{"id": "c-2"}}, cfgProducer); !ok || id != "c-1" {
+		t.Fatalf("sync config producer = %q, %v", id, ok)
+	}
+	if _, ok := ExtractRESTID([]any{}, cfgProducer); ok {
+		t.Fatal("an org without sync configs must produce no id")
+	}
+	jobs, _ := SpecForREST("REST:GET:/api/v1/admin/backfill-jobs")
+	jobProducer := jobs.Requests[0].Produces[0]
+	if id, ok := ExtractRESTID(map[string]any{"items": []any{map[string]any{"id": "j-1"}}}, jobProducer); !ok || id != "j-1" {
+		t.Fatalf("backfill job producer = %q, %v", id, ok)
+	}
+	if _, ok := ExtractRESTID(map[string]any{"items": []any{}, "total": 0.0}, jobProducer); ok {
+		t.Fatal("an org without backfill jobs must produce no id")
+	}
+	for operation, producer := range map[string]string{
+		"REST:GET:/api/v1/admin/sync-configs/{config_id}":              cfgProducer.Name,
+		"REST:GET:/api/v1/admin/sync-configs/{config_id}/jobs":         cfgProducer.Name,
+		"REST:GET:/api/v1/admin/sync-configs/{config_id}/repositories": cfgProducer.Name,
+		"REST:GET:/api/v1/admin/backfill-jobs/{job_id}":                jobProducer.Name,
+	} {
+		spec, _ := SpecForREST(operation)
+		request := spec.Requests[len(spec.Requests)-1]
+		if request.Name != "produced" {
+			t.Fatalf("%s: last request is %q, want produced", operation, request.Name)
+		}
+		if path, _, _, unresolved := ResolveRESTIDBindings(spec.Path, request, map[string]string{producer: "the-id"}); len(unresolved) != 0 || path == spec.Path {
+			t.Errorf("%s: resolved %q (unresolved %v)", operation, path, unresolved)
+		}
+		if _, _, _, unresolved := ResolveRESTIDBindings(spec.Path, request, map[string]string{}); len(unresolved) == 0 {
+			t.Errorf("%s: without a produced id the request must be unresolved", operation)
+		}
+	}
+	coverage, _ := SpecForREST("REST:GET:/api/v1/admin/sync-configs/{config_id}/coverage")
+	for _, request := range coverage.Requests {
+		if len(request.IDBindings) != 0 {
+			t.Errorf("coverage has a produced case %q: its status depends on the projection state and stays out", request.Name)
+		}
 	}
 }

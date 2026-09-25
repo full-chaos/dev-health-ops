@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"strconv"
+
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 )
 
 // errCredentialConfigNotObject stands for the AttributeError Python raises
@@ -80,11 +82,20 @@ func (c pyConfig) str(key string) (string, bool) {
 	if !ok || len(raw) == 0 || raw[0] != '"' {
 		return "", false
 	}
-	var text string
-	if err := json.Unmarshal(raw, &text); err != nil {
+	return decodeJSONString(raw)
+}
+
+// decodeJSONString is json.loads of one string token, as Python reads it: a lone
+// surrogate escape ("\ud800") stays a surrogate (WTF-8 here), where
+// encoding/json would replace it with U+FFFD and make two different strings
+// compare equal (CHAOS-6748 r4).
+func decodeJSONString(token []byte) (string, bool) {
+	decoded, err := pyjson.DecodeString(string(token))
+	if err != nil {
 		return "", false
 	}
-	return text, true
+	text, ok := decoded.(string)
+	return text, ok
 }
 
 // strOrNil is config.get(key) for a caller that wants a str or None: a str comes
@@ -112,11 +123,8 @@ func rawTruthy(raw []byte) (bool, error) {
 	case 'f':
 		return false, nil
 	case '"':
-		var text string
-		if err := json.Unmarshal(raw, &text); err != nil {
-			return false, err
-		}
-		return text != "", nil
+		// A string is falsy only when it is empty: no decode needed.
+		return !bytes.Equal(raw, []byte(`""`)), nil
 	case '[', '{':
 		// Emptiness is the next token being the closer: no descent, so a
 		// container nested deeper than encoding/json's limit reads like any other.
@@ -165,9 +173,9 @@ func topLevelMembers(raw []byte) (map[string]json.RawMessage, error) {
 		if err != nil {
 			return nil, err
 		}
-		var key string
-		if err := json.Unmarshal(raw[i:keyEnd], &key); err != nil {
-			return nil, err
+		key, ok := decodeJSONString(raw[i:keyEnd])
+		if !ok {
+			return nil, errors.New("JSON object key is not a string")
 		}
 		i = skipSpace(raw, keyEnd)
 		if i >= len(raw) || raw[i] != ':' {

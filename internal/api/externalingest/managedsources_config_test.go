@@ -135,3 +135,24 @@ func TestMatchesInstanceMetadataReadOnlyWhereItIsRead(t *testing.T) {
 		t.Fatalf("an owned path beside a deep unused value must still match: got (%v, %v)", matched, err)
 	}
 }
+
+// Python's json keeps a lone surrogate escape as a surrogate; encoding/json
+// replaces it with U+FFFD, so two different stored strings compared equal
+// (CHAOS-6748 r4). pyConfig decodes string tokens like Python does.
+func TestPyConfigKeepsLoneSurrogatesDistinctFromReplacementCharacter(t *testing.T) {
+	config, err := decodePyConfig([]byte(`{"path":"group/\ud800","other":"group/\ufffd","\ud800":"key","pair":"\ud83d\ude00"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lone, _ := config.str("path")
+	replaced, _ := config.str("other")
+	if lone == replaced {
+		t.Fatalf("a lone surrogate must not equal U+FFFD: %q == %q", lone, replaced)
+	}
+	if _, ok := config.str("\xed\xa0\x80"); !ok {
+		t.Fatalf("the key is the WTF-8 surrogate, not U+FFFD")
+	}
+	if got, ok := config.str("pair"); !ok || got != "\U0001F600" {
+		t.Fatalf("a surrogate pair is one code point: got (%q, %t)", got, ok)
+	}
+}

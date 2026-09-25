@@ -184,6 +184,11 @@ func scenarios() []scenario {
 		scenario{name: "linear metadata array", system: "linear", family: "legacy", intConfig: "{}", sourceOn: true, intActive: true, metadata: `["bad"]`, host: "acme/managed"},
 		scenario{name: "linear metadata org wide placeholder", system: "linear", family: "legacy", intConfig: "{}", sourceOn: true, intActive: true, metadata: `{"org_wide_placeholder":true}`},
 		scenario{name: "github metadata array is never read", system: "github", family: "legacy", intConfig: "{}", sourceOn: true, intActive: true, metadata: `["bad"]`, host: "acme/managed"},
+		// Python's json keeps a lone surrogate escape as a surrogate; encoding/json
+		// turns it into U+FFFD, which made "group/\ud800" equal "group/\ufffd" (r4).
+		scenario{name: "gitlab metadata path with a lone surrogate", system: "gitlab", family: "legacy", intConfig: "{}", sourceOn: true, intActive: true,
+			metadata: `{"path_with_namespace":"group/\ud800"}`, host: "group/\ufffd"},
+		scenario{name: "integration config host key with a lone surrogate", system: "github", intConfig: `{"github_url":"ghe-\ud800.acme.test"}`, sourceOn: true, intActive: true},
 		// Python decrypts the linked credential BEFORE it compares the credential's
 		// provider: an unreadable payload is counted (labelled with the credential's
 		// own provider) even when it belongs to another provider.

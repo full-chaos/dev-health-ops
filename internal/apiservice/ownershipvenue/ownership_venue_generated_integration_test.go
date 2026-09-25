@@ -44,8 +44,16 @@ func quote(text string) string {
 	return string(out)
 }
 
+// rawStrings are JSON string tokens a plain decode reads differently from
+// Python's json: lone surrogates (kept by Python, U+FFFD in encoding/json),
+// escapes, non-ASCII and compatibility characters.
+var rawStrings = []string{`"\ud800"`, `"group/\ud800"`, `"ghe-\udc00.acme.test"`, `"\ud83d\ude00"`, `"\u00e9"`, `"\u0000"`, `"\uff47ithub.com"`, `"a\\b"`}
+
 // scalar is a JSON scalar of any type, including the ones a typed decode cannot hold.
 func scalar(r *rand.Rand) string {
+	if r.Intn(6) == 0 {
+		return pick(r, rawStrings...)
+	}
 	return pick(r, `null`, `true`, `false`, `0`, `-0`, `0.0`, `-0.0`, `5`, `-3`, `2.5`, `1e400`, `-1e400`, `1e-400`,
 		`123456789012345678901234567890`, `""`, quote("text"), quote(" x "), quote(pick(r, hostPool...)))
 }
@@ -126,8 +134,8 @@ func generatedScenarios(n int) []scenario {
 		if system == "gitlab" || system == "linear" {
 			s.metadata = object(r, []string{"path_with_namespace", "org_wide_placeholder"})
 			if r.Intn(3) == 0 {
-				s.metadata = `{"path_with_namespace":"group/private","org_wide_placeholder":` + pick(r, "true", "false", "1", `"true"`) + `,"unused":` + value(r, 50) + `}`
-				s.host = pick(r, "group/private", "acme/managed")
+				s.metadata = `{"path_with_namespace":` + pick(r, `"group/private"`, `"group/\ud800"`) + `,"org_wide_placeholder":` + pick(r, "true", "false", "1", `"true"`) + `,"unused":` + value(r, 50) + `}`
+				s.host = pick(r, "group/private", "acme/managed", "group/\ufffd")
 			}
 		}
 		if operational {

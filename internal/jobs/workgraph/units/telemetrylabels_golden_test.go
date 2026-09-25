@@ -207,51 +207,26 @@ func TestStripUsesTheIsSpaceClassNotTheNumericOne(t *testing.T) {
 		divergent, len(golden.WhitespaceProbes))
 }
 
-// TestSigmaLookaheadDivergesAtThirtyOne pins the exact boundary of the one known
-// difference between x/text and CPython's str.lower().
-//
-// Recorded as a measurement rather than a caveat: "x/text is approximately
-// right" is not a fact anyone can act on, whereas "it diverges at exactly 31
-// case-ignorable runes" tells a future reader where to look and lets them notice
-// if a Go or x/text release moves it.
-func TestSigmaLookaheadDivergesAtThirtyOne(t *testing.T) {
-	sigmaForm := func(dotCount int) rune {
+// TestSigmaIsMedialAtAnyDistance pins the lowering these labels rely on at
+// the distance where x/text alone used to give up: CPython yields the MEDIAL
+// sigma at every length, because the trailing "B" is a cased letter at any
+// distance, and pythonparity.Lower now does too (CHAOS-6630).
+func TestSigmaIsMedialAtAnyDistance(t *testing.T) {
+	for _, dotCount := range []int{0, 1, 29, 30, 31, 32, 50} {
 		input := "AΣ" + strings.Repeat(".", dotCount) + "B"
-		for _, character := range pythonparity.Lower(input) {
-			if character == 'σ' || character == 'ς' {
-				return character
-			}
-		}
-		t.Fatalf("no sigma survived lowering %q", input)
-		return 0
-	}
-
-	// CPython yields the MEDIAL sigma at every length, because the trailing "B"
-	// is a cased letter at any distance.
-	for _, dotCount := range []int{0, 1, 29, 30} {
-		if got := sigmaForm(dotCount); got != 'σ' {
-			t.Errorf("with %d case-ignorable runes: x/text gave %q, want medial σ "+
-				"(CPython gives medial at every length)", dotCount, got)
-		}
-	}
-	for _, dotCount := range []int{31, 32, 50} {
-		if got := sigmaForm(dotCount); got != 'ς' {
-			t.Errorf("with %d case-ignorable runes: x/text gave %q, expected the "+
-				"known FINAL-sigma divergence ς. If x/text has been fixed, delete "+
-				"this half of the test and the containment comment in "+
-				"telemetrylabels.go -- do not just widen the bound", dotCount, got)
+		if got := pythonparity.Lower(input); !strings.ContainsRune(got, 'σ') || strings.ContainsRune(got, 'ς') {
+			t.Errorf("with %d case-ignorable runes: Lower(%q) = %q, want the medial σ", dotCount, input, got)
 		}
 	}
 }
 
-// TestSigmaFormCannotChangeABucket is the containment proof that makes the
-// divergence above acceptable.
+// TestSigmaFormCannotChangeABucket keeps the bucket decisions independent of
+// which sigma form a label carries.
 //
 // Both sigma spellings are non-ASCII; every allow-list entry and every
 // ModelBucket prefix is ASCII. So no bucket decision can depend on which form
 // appears. This test fails the moment that stops being true -- a non-ASCII
-// allow-list entry, a non-ASCII prefix, or pythonLower being exported to a
-// caller that does not bound its output.
+// allow-list entry or a non-ASCII prefix.
 func TestSigmaFormCannotChangeABucket(t *testing.T) {
 	replaceSigma := func(value string, with rune) string {
 		var builder strings.Builder

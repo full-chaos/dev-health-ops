@@ -204,9 +204,8 @@ func TestNonASCIIPatternsAreComparedConsistently(t *testing.T) {
 	got := resolver.Resolve(repoName)
 	if got == nil || *got != "team-sigma" {
 		t.Fatalf("Resolve(%q) with pattern %q = %v, want \"team-sigma\" -- "+
-			"x/text's bounded Final_Sigma lookahead (31 case-ignorable runes, "+
-			"pythonparity.Lower's doc comment) makes Lower alone disagree with "+
-			"CPython here; the fix is comparing via pythonparity.Fold instead",
+			"the resolver compares with pythonparity.Fold, which folds every "+
+			"sigma spelling to one value at any distance",
 			repoName, pattern, got)
 	}
 

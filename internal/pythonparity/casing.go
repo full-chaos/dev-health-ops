@@ -193,9 +193,9 @@ var upperPool = sync.Pool{New: func() any {
 // Case FOLDING (Unicode's CaseFolding.txt, what cases.Fold implements) has no
 // position-dependent branching at all -- unlike lowering's Final_Sigma rule,
 // every spelling of sigma (Σ, σ, ς) folds to the SAME value regardless of
-// what follows. So Fold cannot exhibit Lower's measured 31-case-ignorable-
-// rune Final_Sigma boundary (casing.go's own doc comment): there is no
-// lookahead to bound in the first place.
+// what follows. So Fold never had Lower's former 31-case-ignorable-rune
+// Final_Sigma boundary (x/text's, removed from Lower in CHAOS-6630): there is
+// no lookahead to bound in the first place.
 //
 // This trades one narrow divergence for a narrower one, not zero: Python's
 // `.lower()` leaves an ALREADY-lowercase final sigma "ς" and an already-
@@ -205,7 +205,9 @@ var upperPool = sync.Pool{New: func() any {
 // treat as different could compare EQUAL here. Reaching this requires a
 // LITERAL lowercase final-sigma character already present in the input
 // (not one Python derived by lowering an uppercase Σ) -- narrower than the
-// 31-rune bug it replaces, and worth stating rather than declaring zero risk.
+// 31-rune bug it was chosen to avoid, and worth stating rather than declaring
+// zero risk. Lower no longer has that bug (CHAOS-6630); a Fold caller that
+// needs Python's exact distinction can now use Lower.
 //
 // CHAOS-4280 (codex round chaos-4280-r1, finding 6): promoted here instead of
 // living only in aiimpact/repoteams.go, so a second caller with the same

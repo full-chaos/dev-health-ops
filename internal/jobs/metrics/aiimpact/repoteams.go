@@ -62,7 +62,8 @@ type prefixRule struct {
 //     was meant to match. Fold has no position-dependent case rule at all
 //     (every sigma spelling folds to one value), so it cannot exhibit that
 //     boundary -- see pythonparity.Fold's doc comment for the narrower
-//     residual it trades in exchange, and
+//     residual it trades in exchange (Lower's bound was removed in
+//     CHAOS-6630; this resolver still compares with Fold), and
 //     TestNonASCIIPatternsAreComparedConsistently for both proven live.
 //   - `prefix = p.rstrip("*").rstrip("/")` strips ALL trailing '*' then ALL
 //     trailing '/', so "acme/**" and "acme/*" and "acme/" all reduce to

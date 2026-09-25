@@ -23,8 +23,11 @@ import (
 //
 //   - The invoice row is upserted on its unique Stripe id and its line items
 //     are replaced, in one transaction, so a redelivered event writes the
-//     same state again instead of a second one. Notification intents are
-//     keyed by the Stripe event id, so a redelivery reuses its intent.
+//     same state again instead of a second one. Events for one invoice are
+//     applied one at a time (a transaction advisory lock on its Stripe id),
+//     so two first deliveries cannot both write. Notification intents are
+//     keyed by the Stripe event id, so a redelivery reuses its intent; an
+//     intent that cannot be written answers 500 so Stripe retries.
 //   - Status moves forward only (draft, open, payment_failed, then paid,
 //     void or uncollectible; paid and void are final, uncollectible may
 //     still be paid): an event that would move it back changes nothing, so
@@ -72,7 +75,8 @@ func invoiceStatusFollows(stored, status string) bool {
 // lines.
 var invoiceLineEvents = map[string]bool{
 	"invoice.created": true, "invoice.updated": true, "invoice.finalized": true,
-	"invoice.paid": true, "invoice.payment_failed": true,
+	"invoice.paid": true, "invoice.payment_failed": true, "invoice.voided": true,
+	"invoice.marked_uncollectible": true,
 }
 
 // invoiceString is a string-valued field of an object ("" when absent or not
@@ -300,6 +304,12 @@ func (h handlers) upsertInvoice(ctx context.Context, tx pgx.Tx, eventType string
 	var storedStatus string
 	var storedPaidAt, storedVoidedAt *time.Time
 	found := true
+	// One event per invoice at a time: FOR UPDATE cannot lock a row that
+	// is not there yet, so two first deliveries would both see none and the
+	// older could overwrite the newer.
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('stripe_invoice:' || $1, 0))`, stripeInvoiceID); err != nil {
+		return false, err
+	}
 	switch err := tx.QueryRow(ctx, `SELECT id, status, paid_at, voided_at FROM invoices WHERE stripe_invoice_id = $1 FOR UPDATE`,
 		stripeInvoiceID).Scan(&invoiceID, &storedStatus, &storedPaidAt, &storedVoidedAt); {
 	case errors.Is(err, pgx.ErrNoRows):
@@ -421,7 +431,9 @@ func (h handlers) upsertInvoice(ctx context.Context, tx pgx.Tx, eventType string
 
 // invoiceNotification queues invoice_receipt for invoice.paid and
 // payment_failed for invoice.payment_failed, keyed by the event id. A
-// failure is a warning; the invoice state is already committed.
+// failure is returned, so the route answers 500 and Stripe retries: the
+// invoice state is already committed, the retry writes the same state, and
+// the event-id key keeps the intent single.
 func (h handlers) invoiceNotification(ctx context.Context, eventType string, eventID pyjson.Value, invoice pyjson.Value, org uuid.UUID) error {
 	attributes := pyjson.NewObject()
 	var notificationType string
@@ -449,7 +461,9 @@ func (h handlers) invoiceNotification(ctx context.Context, eventType string, eve
 	}
 	eventText, _ := eventID.(string)
 	if err := h.enqueueBillingNotificationFor(ctx, notificationType, org.String(), eventText, attributes); err != nil {
-		h.logger.WarnContext(ctx, "Failed to enqueue invoice email", "type", notificationType, "org_id", org.String(), "error", err.Error())
+		h.logger.ErrorContext(ctx, "Failed to enqueue invoice email; answering 500 so Stripe retries", "type", notificationType,
+			"org_id", org.String(), "error", err.Error())
+		return err
 	}
 	return nil
 }

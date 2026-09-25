@@ -80,13 +80,16 @@ func Open(ctx context.Context, config Config) (driver.Conn, error) {
 	options.Debugf = nil
 	options.Logger = nil
 
+	// The login and password the driver settled on (it parses the DSN itself, by
+	// its own rules) are redacted with the DSN's components.
+	resolved := []string{options.Auth.Username, options.Auth.Password}
 	connection, err := clickhouse.Open(options)
 	if err != nil {
-		return nil, secrets.WithRedactedCause(ErrUnavailable, config.DSN, err)
+		return nil, secrets.WithRedactedCauseAlso(ErrUnavailable, config.DSN, err, resolved...)
 	}
 	if err := connection.Ping(ctx); err != nil {
 		_ = connection.Close()
-		return nil, secrets.WithRedactedCause(ErrUnavailable, config.DSN, err)
+		return nil, secrets.WithRedactedCauseAlso(ErrUnavailable, config.DSN, err, resolved...)
 	}
 	return connection, nil
 }

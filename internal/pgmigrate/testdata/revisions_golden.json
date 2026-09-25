@@ -1,0 +1,27 @@
+# written by TestRevisionsVenueOracleMatchesAlembic; Alembic's `current` order for two heads is unstable across runs, dho sorts it, so `current` compares as a set
+[
+ {
+  "name": "heads",
+  "stdout": "0066 (river_cutover) (head)\n0140 (application_schema) (head)\n"
+ },
+ {
+  "name": "current at the head",
+  "stdout": "0140 (head)\n0066 (head)\n"
+ },
+ {
+  "name": "current without the cutover head",
+  "stdout": "0140 (head)\n"
+ },
+ {
+  "name": "current below the head",
+  "stdout": "0139\n0066 (head)\n"
+ },
+ {
+  "name": "current of an empty version table",
+  "stdout": ""
+ },
+ {
+  "name": "current without a version table",
+  "stdout": ""
+ }
+]

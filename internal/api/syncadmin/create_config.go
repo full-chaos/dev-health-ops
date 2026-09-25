@@ -164,27 +164,8 @@ func (h *handlers) createSyncConfigTx(ctx context.Context, tx pgx.Tx, org string
 		return nil, nil, refuse(http.StatusUnprocessableEntity, detail)
 	}
 
-	if depth, _ := options.Get("initial_sync_depth"); depth != nil {
-		requested, err := pyInt(depth)
-		if err != nil {
-			return nil, nil, err
-		}
-		allowed, reason, err := licensing.CheckBackfillLimitFrom(inputs, requested)
-		if err != nil {
-			return nil, nil, err
-		}
-		if !allowed {
-			if reason == "" {
-				reason = "initial_sync_depth exceeds tier limit"
-			}
-			return nil, nil, refuse(http.StatusForbidden, reason)
-		}
-	}
-
-	if cron, _ := options.Get("schedule_cron"); pyjson.Truthy(cron) {
-		if err := h.checkSchedule(ctx, tx, org, inputs, cron, options); err != nil {
-			return nil, nil, err
-		}
+	if err := h.checkDepthAndSchedule(ctx, tx, org, inputs, options); err != nil {
+		return nil, nil, err
 	}
 
 	lower := pythonparity.Lower(in.provider)
@@ -230,6 +211,36 @@ func syncOptionsWithTopLevelFields(in syncConfigCreate) *pyjson.Object {
 		merged.Set("initial_sync_depth", pyjson.Int{Int: in.initialSyncDepth})
 	}
 	return merged
+}
+
+// checkDepthAndSchedule is create_sync_config's backfill-limit and schedule
+// block over the merged options: an initial_sync_depth past the tier's
+// backfill limit is a 403 (a value int() refuses raises), and a truthy
+// schedule_cron runs checkSchedule. The single and batch creates share it:
+// Python's batch create runs neither check (it stores any cron, timezone
+// and depth, then answers 201 or fails later), and the Go batch create
+// answers as the single create does instead -- a named divergence.
+func (h *handlers) checkDepthAndSchedule(ctx context.Context, tx pgx.Tx, org string, inputs licensing.TierLimitInputs, options *pyjson.Object) error {
+	if depth, _ := options.Get("initial_sync_depth"); depth != nil {
+		requested, err := pyInt(depth)
+		if err != nil {
+			return err
+		}
+		allowed, reason, err := licensing.CheckBackfillLimitFrom(inputs, requested)
+		if err != nil {
+			return err
+		}
+		if !allowed {
+			if reason == "" {
+				reason = "initial_sync_depth exceeds tier limit"
+			}
+			return refuse(http.StatusForbidden, reason)
+		}
+	}
+	if cron, _ := options.Get("schedule_cron"); pyjson.Truthy(cron) {
+		return h.checkSchedule(ctx, tx, org, inputs, cron, options)
+	}
+	return nil
 }
 
 // scheduledJobsFeature is the feature the schedule checks gate on.
@@ -369,36 +380,39 @@ func (h *handlers) discoverJiraProjects(ctx context.Context, org string, created
 		h.logger.ErrorContext(ctx, "jira_project_discovery_at_creation_failed", "org_id", org, "error", err)
 		return
 	}
-	if _, err := h.discovery.Discover(ctx, schedsync.SourceDiscoveryArgs{
+	report, err := h.discovery.Discover(ctx, schedsync.SourceDiscoveryArgs{
 		OrgID: org, IntegrationID: created.integrationID.String(), CredentialID: credentialID,
 		Provider: created.config.Provider, SyncOptions: syncOptions,
 		ConfigID: created.config.ID.String(), PlannerManaged: true,
-	}); err != nil {
+	})
+	if err != nil {
 		h.logger.ErrorContext(ctx, "jira_project_discovery_at_creation_failed", "org_id", org,
 			"integration_id", created.integrationID.String(), "error", err)
+		return
 	}
+	// Go-only event (Python logs nothing on success): a discovery that
+	// succeeds with zero projects, or is skipped, still answers 201, so its
+	// outcome and counts are the only sign of it at Info.
+	h.logger.InfoContext(ctx, "jira_project_discovery_at_creation", "org_id", org,
+		"integration_id", created.integrationID.String(), "outcome", report.Outcome,
+		"created", report.Created, "existing", report.Existing)
 }
 
-// newCreateDiscovery builds the create path's discovery on the api pool:
-// the stored credential through the api's decryptor, the given (or the
-// scheduler's default) HTTP client. nil without a pool or a decryptor.
+// newCreateDiscovery builds the create path's discovery on the api pool (the
+// shared api discovery: the stored credential through the api's decryptor,
+// the given or a default HTTP client). nil without a pool or a decryptor.
 func newCreateDiscovery(deps Deps, logger *slog.Logger, clock func() time.Time) schedsync.SourceDiscoveryExecutor {
 	if deps.Pool == nil || deps.Decryptor == nil {
 		return nil
 	}
-	client := deps.JiraHTTP
-	if client == nil {
-		client = &http.Client{Timeout: 45 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse
-		}}
+	var client providerfoundation.HTTPDoer
+	if deps.JiraHTTP != nil {
+		client = deps.JiraHTTP
 	}
-	discovery, err := schedsync.NewNativeSourceDiscoveryService(deps.Pool, providerfoundation.CredentialResolver{
-		Repository: providerfoundation.PostgresCredentialRepository{Pool: deps.Pool},
-		Decryptor:  deps.Decryptor,
-	}, client, logger)
+	discovery, err := schedsync.NewAPISourceDiscovery(deps.Pool, deps.Decryptor, client, logger, clock)
 	if err != nil {
 		logger.Error("sync_config_create: jira project discovery is unavailable", "error", err)
 		return nil
 	}
-	return discovery.WithClock(clock)
+	return discovery
 }

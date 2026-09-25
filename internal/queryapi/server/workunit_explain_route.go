@@ -259,6 +259,14 @@ func newWorkUnitExplainHandler(
 		kind, resolveErr := investmentexplain.ResolveProviderKindForOrg(
 			r.Context(), parsed.llmProvider, claims.OrgID, orgSettings)
 		if resolveErr != nil {
+			// The org's stored base_url raised urlsplit's ValueError while
+			// "auto" was resolved: the route answers 422 with its text
+			// (`except (ValueError, LLMError) as exc: ... detail=str(exc)`).
+			if detail, raised := investmentexplain.ProviderValueError(
+				r.Context(), resolveErr, kind, claims.OrgID, orgSettings); raised {
+				writeRESTError(w, r, "work_unit_explain", claims.OrgID, http.StatusUnprocessableEntity, detail)
+				return
+			}
 			// resolve_provider_name's only failure is an "auto" request
 			// nothing in the environment answers, which raises
 			// _missing_provider_error("auto") -- the resolver's own Go
@@ -269,6 +277,16 @@ func newWorkUnitExplainHandler(
 			return
 		}
 		if kind != categorize.ProviderKindNone {
+			// _provider_has_required_config resolves the org's credentials
+			// for the resolved kind before any platform one, and an org
+			// base_url urlsplit cannot parse raises out of it: 422 with the
+			// ValueError's text. Python raises that before it builds any
+			// provider, so it comes before the unsupported-provider 501.
+			if detail, raised := investmentexplain.ProviderValueError(
+				r.Context(), nil, kind, claims.OrgID, orgSettings); raised {
+				writeRESTError(w, r, "work_unit_explain", claims.OrgID, http.StatusUnprocessableEntity, detail)
+				return
+			}
 			// A provider Python genuinely serves but this port has no client
 			// for must answer a distinct non-200 rather than a plausible
 			// "credential missing" 422 -- the same guard, for the same

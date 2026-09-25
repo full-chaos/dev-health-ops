@@ -80,9 +80,12 @@ func TestInvoiceWebhookOrderLinesAndRetry(t *testing.T) {
 
 	orgD := seed.orgD.String()
 	stamp := time.Now().Unix() + 200
-	event := func(name, eventID, eventType, invoiceID, status string, amountDue int) venueoracle.Request {
+	eventAt := func(name, eventID, eventType, invoiceID, status string, amountDue int, created int64) venueoracle.Request {
 		value := loadWebhookFixture(t, "invoice.paid.json")
 		value["type"], value["id"] = eventType, eventID
+		if created != 0 {
+			value["created"] = created
+		}
 		object := value["data"].(map[string]any)["object"].(map[string]any)
 		object["id"], object["status"], object["customer"] = invoiceID, status, "cus_other"
 		object["metadata"] = map[string]any{"org_id": orgD}
@@ -92,6 +95,9 @@ func TestInvoiceWebhookOrderLinesAndRetry(t *testing.T) {
 		return venueoracle.Request{Name: name, Method: "POST", Path: webhookPath,
 			Headers: map[string]string{"Stripe-Signature": webhookSignature(webhookVenueSecret, stamp, body), "Content-Type": "application/json"},
 			Body:    venueoracle.B64(string(body))}
+	}
+	event := func(name, eventID, eventType, invoiceID, status string, amountDue int) venueoracle.Request {
+		return eventAt(name, eventID, eventType, invoiceID, status, amountDue, 0)
 	}
 	receipt := ""
 	expect := func(label, got, want string) {
@@ -151,6 +157,43 @@ func TestInvoiceWebhookOrderLinesAndRetry(t *testing.T) {
 	expect("intent refused: one receipt intent after the retries", row(`SELECT count(*)::text FROM billing_notifications
 		WHERE idempotency_key = 'billing:invoice_receipt:`+orgD+`:evt_notify_fail'`), "1")
 	expect("intent refused: the invoice is paid", row(`SELECT status FROM invoices WHERE stripe_invoice_id = 'in_notify'`), "paid")
+
+	// 4. Event time orders events of one status: an older snapshot
+	// delivered after a newer one changes nothing.
+	now := time.Now().Unix()
+	newerDraft := venueoracle.Do(t, base, eventAt("time: newer draft", "evt_time_new", "invoice.updated", "in_time", "draft", 2400, now))
+	olderDraft := venueoracle.Do(t, base, eventAt("time: older draft after it", "evt_time_old", "invoice.updated", "in_time", "draft", 1200, now-60))
+	expect("time: both answered", fmt.Sprintf("%d %d", newerDraft.Status, olderDraft.Status), "200 200")
+	expect("time: the newer amount stands", row(`SELECT status || ' ' || amount_due::text FROM invoices WHERE stripe_invoice_id = 'in_time'`), "draft 2400")
+
+	// 5. A payment_failed event whose email could not be handed off (the
+	// outbox refused it), retried only after a newer paid event: the retry
+	// is stale, yet the intent the first attempt committed is handed off.
+	exec(`CREATE FUNCTION venue_refuse_handoff() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN IF NEW.dedupe_key LIKE '%overtaken_evt' THEN RAISE EXCEPTION 'venue: handoff refused'; END IF; RETURN NEW; END $$`)
+	exec(`CREATE TRIGGER venue_refuse_handoff BEFORE INSERT ON worker_job_outbox FOR EACH ROW EXECUTE FUNCTION venue_refuse_handoff()`)
+	failedEvent := eventAt("overtaken: payment failed, handoff refused", "overtaken_evt", "invoice.payment_failed", "in_overtaken", "open", 700, now-120)
+	failedFirst := venueoracle.Do(t, base, failedEvent)
+	exec(`DROP TRIGGER venue_refuse_handoff ON worker_job_outbox`)
+	paidAfter := venueoracle.Do(t, base, eventAt("overtaken: paid", "evt_overtaken_paid", "invoice.paid", "in_overtaken", "paid", 700, now-60))
+	failedRetry := venueoracle.Do(t, base, failedEvent)
+	expect("overtaken: 500, then the paid event, then the retry", fmt.Sprintf("%d %d %d", failedFirst.Status, paidAfter.Status, failedRetry.Status), "500 200 200")
+	expect("overtaken: the invoice is paid", row(`SELECT status FROM invoices WHERE stripe_invoice_id = 'in_overtaken'`), "paid")
+	expect("overtaken: the payment_failed intent, once, handed off", row(`SELECT count(*)::text || ' ' || count(o.dedupe_key)::text FROM billing_notifications n
+		LEFT JOIN worker_job_outbox o ON o.dedupe_key = n.idempotency_key WHERE n.idempotency_key = 'billing:payment_failed:`+orgD+`:overtaken_evt'`), "1 1")
+
+	// 6. An intent that cannot be written rolls back the invoice state it
+	// belongs to: nothing is recorded, and the retry records both.
+	exec(`CREATE TRIGGER venue_refuse_intent BEFORE INSERT ON billing_notifications FOR EACH ROW EXECUTE FUNCTION venue_refuse_intent()`)
+	atomic := eventAt("atomic: paid, intent refused", "atomic_evt_notify_fail", "invoice.paid", "in_atomic", "paid", 800, now)
+	atomicFirst := venueoracle.Do(t, base, atomic)
+	stateAfterRefusal := row(`SELECT count(*)::text FROM invoices WHERE stripe_invoice_id = 'in_atomic'`)
+	exec(`DROP TRIGGER venue_refuse_intent ON billing_notifications`)
+	atomicRetry := venueoracle.Do(t, base, atomic)
+	expect("atomic: 500, nothing recorded, then the retry", fmt.Sprintf("%d %s %d", atomicFirst.Status, stateAfterRefusal, atomicRetry.Status), "500 0 200")
+	expect("atomic: the retry records the invoice and its intent", row(`SELECT i.status || ' ' || count(n.id)::text FROM invoices i
+		LEFT JOIN billing_notifications n ON n.idempotency_key = 'billing:invoice_receipt:`+orgD+`:atomic_evt_notify_fail'
+		WHERE i.stripe_invoice_id = 'in_atomic' GROUP BY i.status`), "paid 1")
 
 	t.Log("\n" + receipt)
 	venueoracle.WriteGoOnlyProof(t, "Go keeps a newer invoice status against a concurrent older first delivery, keeps the lines of a voided or uncollectible first delivery, and answers 500 when an invoice email intent cannot be written (CHAOS-6526)")

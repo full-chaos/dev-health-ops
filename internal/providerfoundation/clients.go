@@ -67,7 +67,15 @@ func NewGitLabClient(credential Credential, doer HTTPDoer, retry RetryPolicy, le
 }
 
 func NewJiraClient(credential Credential, doer HTTPDoer, retry RetryPolicy, lease LeaseGuard) (*HTTPClient, error) {
-	if credential.Provider != "jira" || ValidateCredentialShape(credential) != nil {
+	if credential.Provider != "jira" {
+		return nil, ErrCredentialInvalid
+	}
+	// jira_credentials_from_mapping counts every mapping it cannot build (a
+	// token, email or base URL that is absent) before answering None.
+	if fields := jiraMappingFields(credential); !mappingComplete(fields) {
+		RecordCredentialMappingRejected(context.Background(), "jira", fields...)
+	}
+	if ValidateCredentialShape(credential) != nil {
 		return nil, ErrCredentialInvalid
 	}
 	email, _ := credential.Secret("email")

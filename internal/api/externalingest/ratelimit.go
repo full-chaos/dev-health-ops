@@ -5,80 +5,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"net/http"
-	"sync"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/ratelimit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 )
-
-// keyedBucket is a per-key token bucket, the same algorithm as
-// httpapi.Bucket, but keyed (auth.py's limiter buckets by IP; httpapi's is
-// one bucket per ROUTE for every caller, which is the wrong shape for
-// per-caller ingest-auth throttling).
-type keyedBucket struct {
-	perSecond float64
-	burst     float64
-	now       func() time.Time
-
-	mu      sync.Mutex
-	buckets map[string]*bucketState
-}
-
-type bucketState struct {
-	tokens float64
-	last   time.Time
-}
-
-func newKeyedBucket(perMinute float64, burst int, now func() time.Time) *keyedBucket {
-	if now == nil {
-		now = time.Now
-	}
-	return &keyedBucket{
-		perSecond: perMinute / 60,
-		burst:     float64(burst),
-		now:       now,
-		buckets:   make(map[string]*bucketState),
-	}
-}
-
-// allow consumes one token for key, refilling first. Matches
-// auth.py's hit()/test() semantics with consume=true.
-func (b *keyedBucket) allow(key string) bool {
-	return b.reserve(key, true)
-}
-
-// test reports whether key currently has a token, WITHOUT consuming one
-// (auth.py's _reject_if_already_ip_throttled: a request about to succeed
-// never pays for this check).
-func (b *keyedBucket) test(key string) bool {
-	return b.reserve(key, false)
-}
-
-func (b *keyedBucket) reserve(key string, consume bool) bool {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	state, ok := b.buckets[key]
-	now := b.now()
-	if !ok {
-		state = &bucketState{tokens: b.burst, last: now}
-		b.buckets[key] = state
-	}
-	if elapsed := now.Sub(state.last); elapsed > 0 {
-		state.tokens += elapsed.Seconds() * b.perSecond
-		if state.tokens > b.burst {
-			state.tokens = b.burst
-		}
-		state.last = now
-	}
-	if state.tokens < 1 {
-		return false
-	}
-	if consume {
-		state.tokens--
-	}
-	return true
-}
 
 // forwardedIP is rate_limit.py's get_forwarded_ip, the api's one copy
 // (ratelimit.ForwardedIP).

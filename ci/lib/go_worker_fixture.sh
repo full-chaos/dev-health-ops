@@ -397,12 +397,15 @@ stop_worker_stack() {
 }
 
 # ---------------------------------------------------------------------------
-# seed_and_finalize_sync_targets target... -- seeds real source rows for
-# every target through the real sync path (dev-hops sync <target> --provider
-# synthetic --defer-finalize), THEN finalizes every target's deferred
-# sync_run (dev-hops sync finalize-synthetic-sync), triggering
-# NativePostSyncService.Fanout. Reads: ORG_ID, CLICKHOUSE_URI_HTTP,
-# POSTGRES_SUPERUSER_URI, REPO_NAME, BACKFILL_DAYS.
+# seed_and_finalize_sync_targets target... -- seeds the synthetic source rows
+# of every target (dho fixtures load-synthetic: the frozen rows of the Python
+# generator for the parameter sets this repo's CI scripts run, CHAOS-6465),
+# THEN finalizes every target's sync_run (dho fixtures finalize-synthetic-sync),
+# triggering NativePostSyncService.Fanout. Reads: ORG_ID,
+# CLICKHOUSE_URI_NATIVE, POSTGRES_SUPERUSER_URI, REPO_NAME, BACKFILL_DAYS,
+# BIN_DIR (the dho binary build_go_binaries built). The (ORG_ID, REPO_NAME,
+# BACKFILL_DAYS) triple must be one whose rows were frozen; the verb refuses any
+# other, naming the frozen ones.
 #
 # ORDERING CONTRACT (CHAOS-4266), enforced INSIDE this function rather than
 # left to the caller: every target must be seeded before any of them is
@@ -414,30 +417,30 @@ stop_worker_stack() {
 # happens to be seeded first.
 # ---------------------------------------------------------------------------
 seed_and_finalize_sync_targets() {
-  echo "==> seeding real source rows through the real sync path (dev-hops sync <target> --provider synthetic --defer-finalize)"
+  echo "==> seeding the synthetic source rows (dho fixtures load-synthetic)"
   local target
+  for target in "$@"; do
+    echo "   -- ${target}"
+    CLICKHOUSE_URI="${CLICKHOUSE_URI_NATIVE}" OTEL_ENABLED=false \
+      "${BIN_DIR}/dho" fixtures load-synthetic \
+      --target "${target}" \
+      --org "${ORG_ID}" \
+      --repo-name "${REPO_NAME}" \
+      --backfill "${BACKFILL_DAYS}"
+  done
+
+  echo "==> finalizing the sync_runs (dho fixtures finalize-synthetic-sync), now that every target's rows exist"
   for target in "$@"; do
     echo "   -- ${target}"
     # DEV_HEALTH_ALLOW_SYNTHETIC_SYNC_RUN=1: this path writes to the global,
     # org-unscoped CHAOS-4114 executed-proof ledger under the real "gitlab"
     # provider identity -- safe only because this job's Postgres is its own
     # throwaway database, never a shared or production-adjacent one.
-    ORG_ID="${ORG_ID}" CLICKHOUSE_URI="${CLICKHOUSE_URI_HTTP}" DATABASE_URI="${POSTGRES_SUPERUSER_URI}" OTEL_ENABLED=false \
+    MIGRATION_DATABASE_URI="${POSTGRES_SUPERUSER_URI}" OTEL_ENABLED=false \
       DEV_HEALTH_ALLOW_SYNTHETIC_SYNC_RUN=1 \
-      run_dev_hops sync "${target}" \
-      --provider synthetic \
-      --repo-name "${REPO_NAME}" \
-      --backfill "${BACKFILL_DAYS}" \
-      --defer-finalize
-  done
-
-  echo "==> finalizing the deferred sync_runs (dev-hops sync finalize-synthetic-sync), now that every target's rows exist"
-  for target in "$@"; do
-    echo "   -- ${target}"
-    ORG_ID="${ORG_ID}" DATABASE_URI="${POSTGRES_SUPERUSER_URI}" OTEL_ENABLED=false \
-      DEV_HEALTH_ALLOW_SYNTHETIC_SYNC_RUN=1 \
-      run_dev_hops sync finalize-synthetic-sync \
+      "${BIN_DIR}/dho" fixtures finalize-synthetic-sync \
       --target "${target}" \
+      --org "${ORG_ID}" \
       --repo-name "${REPO_NAME}" \
       --backfill "${BACKFILL_DAYS}"
   done

@@ -1,0 +1,267 @@
+[
+ {
+  "name": "github parent, a three-day window",
+  "exit": 0,
+  "rows": {
+   "scheduled_jobs": [
+    "{\"created_at\":\"\\u003cts\\u003e\",\"failure_count\":0,\"id\":\"\\u003cuuid\\u003e\",\"is_running\":false,\"job_config\":{\"provider\":\"github\",\"sync_config_id\":\"\\u003cuuid\\u003e\"},\"job_type\":\"sync\",\"last_run_at\":null,\"last_run_duration_seconds\":null,\"last_run_error\":null,\"last_run_status\":null,\"name\":\"sync-config-000000c0-0000-4000-8000-000000000001\",\"next_run_at\":null,\"org_id\":\"\\u003cuuid\\u003e\",\"provider\":\"github\",\"run_count\":0,\"schedule_cron\":\"*/5 * * * *\",\"status\":0,\"sync_config_id\":\"\\u003cuuid\\u003e\",\"timezone\":\"Europe/Berlin\",\"updated_at\":\"\\u003cts\\u003e\"}"
+   ],
+   "scheduled_sync_occurrences": [
+    "{\"created_at\":\"\\u003cts\\u003e\",\"identity_version\":\"sync_scheduler_occurrence_v1\",\"job_run_id\":null,\"occurrence_id\":\"sha256:1031419303d071c2e5dc8c9f9d5884a6ecc741a3609ecbc4859087ba11b3e1e2\",\"org_id\":\"\\u003cuuid\\u003e\",\"reconcile_attempt_count\":0,\"reconcile_error_at\":null,\"reconcile_error_code\":null,\"reconcile_next_attempt_at\":null,\"reconcile_status\":\"pending\",\"scheduled_for\":\"2026-03-10T12:00:00.123456Z\",\"scheduled_job_id\":\"\\u003cuuid\\u003e\",\"sync_config_id\":\"\\u003cuuid\\u003e\",\"sync_run_id\":null}"
+   ],
+   "sync_manual_triggers": [
+    "{\"before\":\"2026-03-03T23:59:59.999999Z\",\"created_at\":\"\\u003cts\\u003e\",\"dataset_keys\":[\"repo-metadata\",\"commits\",\"commit-stats\",\"files\",\"blame\",\"prs\",\"pr-reviews\",\"pr-comments\"],\"mode\":\"backfill\",\"occurrence_id\":\"sha256:1031419303d071c2e5dc8c9f9d5884a6ecc741a3609ecbc4859087ba11b3e1e2\",\"since\":\"2026-03-01T00:00:00.000000Z\",\"source_ids\":[\"\\u003cuuid\\u003e\",\"\\u003cuuid\\u003e\"],\"triggered_by\":\"backfill\"}"
+   ]
+  }
+ },
+ {
+  "name": "github parent, backfill days",
+  "exit": 0,
+  "rows": {
+   "scheduled_jobs": [
+    "{\"created_at\":\"\\u003cts\\u003e\",\"failure_count\":0,\"id\":\"\\u003cuuid\\u003e\",\"is_running\":false,\"job_config\":{\"provider\":\"github\",\"sync_config_id\":\"\\u003cuuid\\u003e\"},\"job_type\":\"sync\",\"last_run_at\":null,\"last_run_duration_seconds\":null,\"last_run_error\":null,\"last_run_status\":null,\"name\":\"sync-config-000000c0-0000-4000-8000-000000000001\",\"next_run_at\":null,\"org_id\":\"\\u003cuuid\\u003e\",\"provider\":\"github\",\"run_count\":0,\"schedule_cron\":\"*/5 * * * *\",\"status\":0,\"sync_config_id\":\"\\u003cuuid\\u003e\",\"timezone\":\"Europe/Berlin\",\"updated_at\":\"\\u003cts\\u003e\"}"
+   ],
+   "scheduled_sync_occurrences": [
+    "{\"created_at\":\"\\u003cts\\u003e\",\"identity_version\":\"sync_scheduler_occurrence_v1\",\"job_run_id\":null,\"occurrence_id\":\"sha256:1031419303d071c2e5dc8c9f9d5884a6ecc741a3609ecbc4859087ba11b3e1e2\",\"org_id\":\"\\u003cuuid\\u003e\",\"reconcile_attempt_count\":0,\"reconcile_error_at\":null,\"reconcile_error_code\":null,\"reconcile_next_attempt_at\":null,\"reconcile_status\":\"pending\",\"scheduled_for\":\"2026-03-10T12:00:00.123456Z\",\"scheduled_job_id\":\"\\u003cuuid\\u003e\",\"sync_config_id\":\"\\u003cuuid\\u003e\",\"sync_run_id\":null}"
+   ],
+   "sync_manual_triggers": [
+    "{\"before\":\"2026-03-09T23:59:59.999999Z\",\"created_at\":\"\\u003cts\\u003e\",\"dataset_keys\":[\"repo-metadata\",\"commits\",\"commit-stats\",\"files\",\"blame\",\"prs\",\"pr-reviews\",\"pr-comments\"],\"mode\":\"backfill\",\"occurrence_id\":\"sha256:1031419303d071c2e5dc8c9f9d5884a6ecc741a3609ecbc4859087ba11b3e1e2\",\"since\":\"2026-03-03T00:00:00.000000Z\",\"source_ids\":[\"\\u003cuuid\\u003e\",\"\\u003cuuid\\u003e\"],\"triggered_by\":\"backfill\"}"
+   ]
+  }
+ },
+ {
+  "name": "github parent with a marker job already there",
+  "exit": 0,
+  "rows": {
+   "scheduled_jobs": [
+    "{\"created_at\":\"\\u003cts\\u003e\",\"failure_count\":0,\"id\":\"\\u003cuuid\\u003e\",\"is_running\":false,\"job_config\":{},\"job_type\":\"sync\",\"last_run_at\":null,\"last_run_duration_seconds\":null,\"last_run_error\":null,\"last_run_status\":null,\"name\":\"sync-config-000000c0-0000-4000-8000-000000000001\",\"next_run_at\":null,\"org_id\":\"\\u003cuuid\\u003e\",\"provider\":\"github\",\"run_count\":0,\"schedule_cron\":\"15 * * * *\",\"status\":1,\"sync_config_id\":\"\\u003cuuid\\u003e\",\"timezone\":\"UTC\",\"updated_at\":\"\\u003cts\\u003e\"}"
+   ],
+   "scheduled_sync_occurrences": [
+    "{\"created_at\":\"\\u003cts\\u003e\",\"identity_version\":\"sync_scheduler_occurrence_v1\",\"job_run_id\":null,\"occurrence_id\":\"sha256:1031419303d071c2e5dc8c9f9d5884a6ecc741a3609ecbc4859087ba11b3e1e2\",\"org_id\":\"\\u003cuuid\\u003e\",\"reconcile_attempt_count\":0,\"reconcile_error_at\":null,\"reconcile_error_code\":null,\"reconcile_next_attempt_at\":null,\"reconcile_status\":\"pending\",\"scheduled_for\":\"2026-03-10T12:00:00.123456Z\",\"scheduled_job_id\":\"\\u003cuuid\\u003e\",\"sync_config_id\":\"\\u003cuuid\\u003e\",\"sync_run_id\":null}"
+   ],
+   "sync_manual_triggers": [
+    "{\"before\":\"2026-03-09T23:59:59.999999Z\",\"created_at\":\"\\u003cts\\u003e\",\"dataset_keys\":[\"repo-metadata\",\"commits\",\"commit-stats\",\"files\",\"blame\",\"prs\",\"pr-reviews\",\"pr-comments\"],\"mode\":\"backfill\",\"occurrence_id\":\"sha256:1031419303d071c2e5dc8c9f9d5884a6ecc741a3609ecbc4859087ba11b3e1e2\",\"since\":\"2026-03-09T00:00:00.000000Z\",\"source_ids\":[\"\\u003cuuid\\u003e\",\"\\u003cuuid\\u003e\"],\"triggered_by\":\"backfill\"}"
+   ]
+  }
+ },
+ {
+  "name": "paused github parent, mixed-case provider",
+  "exit": 0,
+  "rows": {
+   "scheduled_jobs": [
+    "{\"created_at\":\"\\u003cts\\u003e\",\"failure_count\":0,\"id\":\"\\u003cuuid\\u003e\",\"is_running\":false,\"job_config\":{\"provider\":\"GitHub\",\"sync_config_id\":\"\\u003cuuid\\u003e\"},\"job_type\":\"sync\",\"last_run_at\":null,\"last_run_duration_seconds\":null,\"last_run_error\":null,\"last_run_status\":null,\"name\":\"sync-config-000000c0-0000-4000-8000-000000000002\",\"next_run_at\":null,\"org_id\":\"\\u003cuuid\\u003e\",\"provider\":\"GitHub\",\"run_count\":0,\"schedule_cron\":\"0 * * * *\",\"status\":1,\"sync_config_id\":\"\\u003cuuid\\u003e\",\"timezone\":\"UTC\",\"updated_at\":\"\\u003cts\\u003e\"}"
+   ],
+   "scheduled_sync_occurrences": [
+    "{\"created_at\":\"\\u003cts\\u003e\",\"identity_version\":\"sync_scheduler_occurrence_v1\",\"job_run_id\":null,\"occurrence_id\":\"sha256:7cf35228e31c68ad0c01bf88bf0aff59e2f28419031e17a5c93aaa029c340f3c\",\"org_id\":\"\\u003cuuid\\u003e\",\"reconcile_attempt_count\":0,\"reconcile_error_at\":null,\"reconcile_error_code\":null,\"reconcile_next_attempt_at\":null,\"reconcile_status\":\"pending\",\"scheduled_for\":\"2026-03-10T12:00:00.123456Z\",\"scheduled_job_id\":\"\\u003cuuid\\u003e\",\"sync_config_id\":\"\\u003cuuid\\u003e\",\"sync_run_id\":null}"
+   ],
+   "sync_manual_triggers": [
+    "{\"before\":\"2026-02-28T23:59:59.999999Z\",\"created_at\":\"\\u003cts\\u003e\",\"dataset_keys\":[\"repo-metadata\",\"commits\",\"commit-stats\",\"files\",\"blame\",\"cicd\",\"deployments\"],\"mode\":\"backfill\",\"occurrence_id\":\"sha256:7cf35228e31c68ad0c01bf88bf0aff59e2f28419031e17a5c93aaa029c340f3c\",\"since\":\"2026-02-27T00:00:00.000000Z\",\"source_ids\":[\"\\u003cuuid\\u003e\",\"\\u003cuuid\\u003e\"],\"triggered_by\":\"backfill\"}"
+   ]
+  }
+ },
+ {
+  "name": "gitlab git adds blame",
+  "exit": 0,
+  "rows": {
+   "scheduled_jobs": [
+    "{\"created_at\":\"\\u003cts\\u003e\",\"failure_count\":0,\"id\":\"\\u003cuuid\\u003e\",\"is_running\":false,\"job_config\":{\"provider\":\"gitlab\",\"sync_config_id\":\"\\u003cuuid\\u003e\"},\"job_type\":\"sync\",\"last_run_at\":null,\"last_run_duration_seconds\":null,\"last_run_error\":null,\"last_run_status\":null,\"name\":\"sync-config-000000c0-0000-4000-8000-000000000003\",\"next_run_at\":null,\"org_id\":\"\\u003cuuid\\u003e\",\"provider\":\"gitlab\",\"run_count\":0,\"schedule_cron\":\"0 * * * *\",\"status\":1,\"sync_config_id\":\"\\u003cuuid\\u003e\",\"timezone\":\"UTC\",\"updated_at\":\"\\u003cts\\u003e\"}"
+   ],
+   "scheduled_sync_occurrences": [
+    "{\"created_at\":\"\\u003cts\\u003e\",\"identity_version\":\"sync_scheduler_occurrence_v1\",\"job_run_id\":null,\"occurrence_id\":\"sha256:eb971e731c020f60403b8ad517fbe2244b1e32d5b14277f63ffa5146a1507a3a\",\"org_id\":\"\\u003cuuid\\u003e\",\"reconcile_attempt_count\":0,\"reconcile_error_at\":null,\"reconcile_error_code\":null,\"reconcile_next_attempt_at\":null,\"reconcile_status\":\"pending\",\"scheduled_for\":\"2026-03-10T12:00:00.123456Z\",\"scheduled_job_id\":\"\\u003cuuid\\u003e\",\"sync_config_id\":\"\\u003cuuid\\u003e\",\"sync_run_id\":null}"
+   ],
+   "sync_manual_triggers": [
+    "{\"before\":\"2026-03-09T23:59:59.999999Z\",\"created_at\":\"\\u003cts\\u003e\",\"dataset_keys\":[\"repo-metadata\",\"commits\",\"commit-stats\",\"files\",\"blame\"],\"mode\":\"backfill\",\"occurrence_id\":\"sha256:eb971e731c020f60403b8ad517fbe2244b1e32d5b14277f63ffa5146a1507a3a\",\"since\":\"2026-03-08T00:00:00.000000Z\",\"source_ids\":[\"\\u003cuuid\\u003e\",\"\\u003cuuid\\u003e\"],\"triggered_by\":\"backfill\"}"
+   ]
+  }
+ },
+ {
+  "name": "jira",
+  "exit": 0,
+  "rows": {
+   "scheduled_jobs": [
+    "{\"created_at\":\"\\u003cts\\u003e\",\"failure_count\":0,\"id\":\"\\u003cuuid\\u003e\",\"is_running\":false,\"job_config\":{\"provider\":\"jira\",\"sync_config_id\":\"\\u003cuuid\\u003e\"},\"job_type\":\"sync\",\"last_run_at\":null,\"last_run_duration_seconds\":null,\"last_run_error\":null,\"last_run_status\":null,\"name\":\"sync-config-000000c0-0000-4000-8000-000000000004\",\"next_run_at\":null,\"org_id\":\"\\u003cuuid\\u003e\",\"provider\":\"jira\",\"run_count\":0,\"schedule_cron\":\"0 3 * * *\",\"status\":0,\"sync_config_id\":\"\\u003cuuid\\u003e\",\"timezone\":\"UTC\",\"updated_at\":\"\\u003cts\\u003e\"}"
+   ],
+   "scheduled_sync_occurrences": [
+    "{\"created_at\":\"\\u003cts\\u003e\",\"identity_version\":\"sync_scheduler_occurrence_v1\",\"job_run_id\":null,\"occurrence_id\":\"sha256:d1597d8d4e37078d699291c72fb87ff1eae76e850f47e084073db29eda58568e\",\"org_id\":\"\\u003cuuid\\u003e\",\"reconcile_attempt_count\":0,\"reconcile_error_at\":null,\"reconcile_error_code\":null,\"reconcile_next_attempt_at\":null,\"reconcile_status\":\"pending\",\"scheduled_for\":\"2026-03-10T12:00:00.123456Z\",\"scheduled_job_id\":\"\\u003cuuid\\u003e\",\"sync_config_id\":\"\\u003cuuid\\u003e\",\"sync_run_id\":null}"
+   ],
+   "sync_manual_triggers": [
+    "{\"before\":\"2026-03-10T23:59:59.999999Z\",\"created_at\":\"\\u003cts\\u003e\",\"dataset_keys\":[\"incidents\",\"work-items\",\"work-item-labels\",\"work-item-projects\",\"work-item-history\",\"work-item-comments\"],\"mode\":\"backfill\",\"occurrence_id\":\"sha256:d1597d8d4e37078d699291c72fb87ff1eae76e850f47e084073db29eda58568e\",\"since\":\"2026-03-10T00:00:00.000000Z\",\"source_ids\":[\"\\u003cuuid\\u003e\",\"\\u003cuuid\\u003e\"],\"triggered_by\":\"backfill\"}"
+   ]
+  }
+ },
+ {
+  "name": "linear",
+  "exit": 0,
+  "rows": {
+   "scheduled_jobs": [
+    "{\"created_at\":\"\\u003cts\\u003e\",\"failure_count\":0,\"id\":\"\\u003cuuid\\u003e\",\"is_running\":false,\"job_config\":{\"provider\":\"linear\",\"sync_config_id\":\"\\u003cuuid\\u003e\"},\"job_type\":\"sync\",\"last_run_at\":null,\"last_run_duration_seconds\":null,\"last_run_error\":null,\"last_run_status\":null,\"name\":\"sync-config-000000c0-0000-4000-8000-000000000005\",\"next_run_at\":null,\"org_id\":\"\\u003cuuid\\u003e\",\"provider\":\"linear\",\"run_count\":0,\"schedule_cron\":\"0 * * * *\",\"status\":1,\"sync_config_id\":\"\\u003cuuid\\u003e\",\"timezone\":\"UTC\",\"updated_at\":\"\\u003cts\\u003e\"}"
+   ],
+   "scheduled_sync_occurrences": [
+    "{\"created_at\":\"\\u003cts\\u003e\",\"identity_version\":\"sync_scheduler_occurrence_v1\",\"job_run_id\":null,\"occurrence_id\":\"sha256:fd97c09c65ade941a8df81ee51e47a1ea2d7d84c5f199e028a35967b9a03f98c\",\"org_id\":\"\\u003cuuid\\u003e\",\"reconcile_attempt_count\":0,\"reconcile_error_at\":null,\"reconcile_error_code\":null,\"reconcile_next_attempt_at\":null,\"reconcile_status\":\"pending\",\"scheduled_for\":\"2026-03-10T12:00:00.123456Z\",\"scheduled_job_id\":\"\\u003cuuid\\u003e\",\"sync_config_id\":\"\\u003cuuid\\u003e\",\"sync_run_id\":null}"
+   ],
+   "sync_manual_triggers": [
+    "{\"before\":\"2026-03-09T23:59:59.999999Z\",\"created_at\":\"\\u003cts\\u003e\",\"dataset_keys\":[\"work-items\",\"work-item-labels\",\"work-item-projects\",\"work-item-history\",\"work-item-comments\"],\"mode\":\"backfill\",\"occurrence_id\":\"sha256:fd97c09c65ade941a8df81ee51e47a1ea2d7d84c5f199e028a35967b9a03f98c\",\"since\":\"2026-02-08T00:00:00.000000Z\",\"source_ids\":[\"\\u003cuuid\\u003e\",\"\\u003cuuid\\u003e\"],\"triggered_by\":\"backfill\"}"
+   ]
+  }
+ },
+ {
+  "name": "pagerduty",
+  "exit": 0,
+  "rows": {
+   "scheduled_jobs": [
+    "{\"created_at\":\"\\u003cts\\u003e\",\"failure_count\":0,\"id\":\"\\u003cuuid\\u003e\",\"is_running\":false,\"job_config\":{\"provider\":\"pagerduty\",\"sync_config_id\":\"\\u003cuuid\\u003e\"},\"job_type\":\"sync\",\"last_run_at\":null,\"last_run_duration_seconds\":null,\"last_run_error\":null,\"last_run_status\":null,\"name\":\"sync-config-000000c0-0000-4000-8000-000000000006\",\"next_run_at\":null,\"org_id\":\"\\u003cuuid\\u003e\",\"provider\":\"pagerduty\",\"run_count\":0,\"schedule_cron\":\"0 * * * *\",\"status\":1,\"sync_config_id\":\"\\u003cuuid\\u003e\",\"timezone\":\"UTC\",\"updated_at\":\"\\u003cts\\u003e\"}"
+   ],
+   "scheduled_sync_occurrences": [
+    "{\"created_at\":\"\\u003cts\\u003e\",\"identity_version\":\"sync_scheduler_occurrence_v1\",\"job_run_id\":null,\"occurrence_id\":\"sha256:1660989df5c7bb0dc03b5836733bcba256a81bd3d388f170188bd89c314fbaa3\",\"org_id\":\"\\u003cuuid\\u003e\",\"reconcile_attempt_count\":0,\"reconcile_error_at\":null,\"reconcile_error_code\":null,\"reconcile_next_attempt_at\":null,\"reconcile_status\":\"pending\",\"scheduled_for\":\"2026-03-10T12:00:00.123456Z\",\"scheduled_job_id\":\"\\u003cuuid\\u003e\",\"sync_config_id\":\"\\u003cuuid\\u003e\",\"sync_run_id\":null}"
+   ],
+   "sync_manual_triggers": [
+    "{\"before\":\"2026-03-09T23:59:59.999999Z\",\"created_at\":\"\\u003cts\\u003e\",\"dataset_keys\":[\"incidents\",\"services\",\"business-services\",\"escalation-policies\",\"schedules\",\"on-calls\",\"users\",\"teams\",\"incident-alerts\",\"incident-log-entries\",\"incident-notes\"],\"mode\":\"backfill\",\"occurrence_id\":\"sha256:1660989df5c7bb0dc03b5836733bcba256a81bd3d388f170188bd89c314fbaa3\",\"since\":\"2026-03-09T00:00:00.000000Z\",\"source_ids\":[\"\\u003cuuid\\u003e\",\"\\u003cuuid\\u003e\"],\"triggered_by\":\"backfill\"}"
+   ]
+  }
+ },
+ {
+  "name": "launchdarkly",
+  "exit": 0,
+  "rows": {
+   "scheduled_jobs": [
+    "{\"created_at\":\"\\u003cts\\u003e\",\"failure_count\":0,\"id\":\"\\u003cuuid\\u003e\",\"is_running\":false,\"job_config\":{\"provider\":\"launchdarkly\",\"sync_config_id\":\"\\u003cuuid\\u003e\"},\"job_type\":\"sync\",\"last_run_at\":null,\"last_run_duration_seconds\":null,\"last_run_error\":null,\"last_run_status\":null,\"name\":\"sync-config-000000c0-0000-4000-8000-000000000007\",\"next_run_at\":null,\"org_id\":\"\\u003cuuid\\u003e\",\"provider\":\"launchdarkly\",\"run_count\":0,\"schedule_cron\":\"0 * * * *\",\"status\":1,\"sync_config_id\":\"\\u003cuuid\\u003e\",\"timezone\":\"UTC\",\"updated_at\":\"\\u003cts\\u003e\"}"
+   ],
+   "scheduled_sync_occurrences": [
+    "{\"created_at\":\"\\u003cts\\u003e\",\"identity_version\":\"sync_scheduler_occurrence_v1\",\"job_run_id\":null,\"occurrence_id\":\"sha256:00aabb34b8e662eb80e252e44fddac9f6c4f5c6d2a3026003ffc89e7903b14b3\",\"org_id\":\"\\u003cuuid\\u003e\",\"reconcile_attempt_count\":0,\"reconcile_error_at\":null,\"reconcile_error_code\":null,\"reconcile_next_attempt_at\":null,\"reconcile_status\":\"pending\",\"scheduled_for\":\"2026-03-10T12:00:00.123456Z\",\"scheduled_job_id\":\"\\u003cuuid\\u003e\",\"sync_config_id\":\"\\u003cuuid\\u003e\",\"sync_run_id\":null}"
+   ],
+   "sync_manual_triggers": [
+    "{\"before\":\"2026-03-09T23:59:59.999999Z\",\"created_at\":\"\\u003cts\\u003e\",\"dataset_keys\":[\"feature-flags\"],\"mode\":\"backfill\",\"occurrence_id\":\"sha256:00aabb34b8e662eb80e252e44fddac9f6c4f5c6d2a3026003ffc89e7903b14b3\",\"since\":\"2026-03-09T00:00:00.000000Z\",\"source_ids\":[\"\\u003cuuid\\u003e\",\"\\u003cuuid\\u003e\"],\"triggered_by\":\"backfill\"}"
+   ]
+  }
+ },
+ {
+  "name": "no targets selects every dataset",
+  "exit": 0,
+  "rows": {
+   "scheduled_jobs": [
+    "{\"created_at\":\"\\u003cts\\u003e\",\"failure_count\":0,\"id\":\"\\u003cuuid\\u003e\",\"is_running\":false,\"job_config\":{\"provider\":\"github\",\"sync_config_id\":\"\\u003cuuid\\u003e\"},\"job_type\":\"sync\",\"last_run_at\":null,\"last_run_duration_seconds\":null,\"last_run_error\":null,\"last_run_status\":null,\"name\":\"sync-config-000000c0-0000-4000-8000-000000000008\",\"next_run_at\":null,\"org_id\":\"\\u003cuuid\\u003e\",\"provider\":\"github\",\"run_count\":0,\"schedule_cron\":\"0 * * * *\",\"status\":1,\"sync_config_id\":\"\\u003cuuid\\u003e\",\"timezone\":\"UTC\",\"updated_at\":\"\\u003cts\\u003e\"}"
+   ],
+   "scheduled_sync_occurrences": [
+    "{\"created_at\":\"\\u003cts\\u003e\",\"identity_version\":\"sync_scheduler_occurrence_v1\",\"job_run_id\":null,\"occurrence_id\":\"sha256:6dd4d79633f7d06158f26ac5077c6019677370dfa2766296fc2dfa6beb748b6d\",\"org_id\":\"\\u003cuuid\\u003e\",\"reconcile_attempt_count\":0,\"reconcile_error_at\":null,\"reconcile_error_code\":null,\"reconcile_next_attempt_at\":null,\"reconcile_status\":\"pending\",\"scheduled_for\":\"2026-03-10T12:00:00.123456Z\",\"scheduled_job_id\":\"\\u003cuuid\\u003e\",\"sync_config_id\":\"\\u003cuuid\\u003e\",\"sync_run_id\":null}"
+   ],
+   "sync_manual_triggers": [
+    "{\"before\":\"2026-03-09T23:59:59.999999Z\",\"created_at\":\"\\u003cts\\u003e\",\"dataset_keys\":null,\"mode\":\"backfill\",\"occurrence_id\":\"sha256:6dd4d79633f7d06158f26ac5077c6019677370dfa2766296fc2dfa6beb748b6d\",\"since\":\"2026-03-09T00:00:00.000000Z\",\"source_ids\":[\"\\u003cuuid\\u003e\",\"\\u003cuuid\\u003e\"],\"triggered_by\":\"backfill\"}"
+   ]
+  }
+ },
+ {
+  "name": "child pinned to one source",
+  "exit": 0,
+  "rows": {
+   "scheduled_jobs": [
+    "{\"created_at\":\"\\u003cts\\u003e\",\"failure_count\":0,\"id\":\"\\u003cuuid\\u003e\",\"is_running\":false,\"job_config\":{\"provider\":\"github\",\"sync_config_id\":\"\\u003cuuid\\u003e\"},\"job_type\":\"sync\",\"last_run_at\":null,\"last_run_duration_seconds\":null,\"last_run_error\":null,\"last_run_status\":null,\"name\":\"sync-config-000000c0-0000-4000-8000-000000000009\",\"next_run_at\":null,\"org_id\":\"\\u003cuuid\\u003e\",\"provider\":\"github\",\"run_count\":0,\"schedule_cron\":\"0 * * * *\",\"status\":1,\"sync_config_id\":\"\\u003cuuid\\u003e\",\"timezone\":\"UTC\",\"updated_at\":\"\\u003cts\\u003e\"}"
+   ],
+   "scheduled_sync_occurrences": [
+    "{\"created_at\":\"\\u003cts\\u003e\",\"identity_version\":\"sync_scheduler_occurrence_v1\",\"job_run_id\":null,\"occurrence_id\":\"sha256:07e675349d725a1742f4b250ca4be58aea31edc0ee2e68a0bf961f22a20e47f9\",\"org_id\":\"\\u003cuuid\\u003e\",\"reconcile_attempt_count\":0,\"reconcile_error_at\":null,\"reconcile_error_code\":null,\"reconcile_next_attempt_at\":null,\"reconcile_status\":\"pending\",\"scheduled_for\":\"2026-03-10T12:00:00.123456Z\",\"scheduled_job_id\":\"\\u003cuuid\\u003e\",\"sync_config_id\":\"\\u003cuuid\\u003e\",\"sync_run_id\":null}"
+   ],
+   "sync_manual_triggers": [
+    "{\"before\":\"2026-03-09T23:59:59.999999Z\",\"created_at\":\"\\u003cts\\u003e\",\"dataset_keys\":[\"prs\",\"pr-reviews\",\"pr-comments\"],\"mode\":\"backfill\",\"occurrence_id\":\"sha256:07e675349d725a1742f4b250ca4be58aea31edc0ee2e68a0bf961f22a20e47f9\",\"since\":\"2026-03-09T00:00:00.000000Z\",\"source_ids\":null,\"triggered_by\":\"backfill\"}"
+   ]
+  }
+ },
+ {
+  "name": "every github target",
+  "exit": 0,
+  "rows": {
+   "scheduled_jobs": [
+    "{\"created_at\":\"\\u003cts\\u003e\",\"failure_count\":0,\"id\":\"\\u003cuuid\\u003e\",\"is_running\":false,\"job_config\":{\"provider\":\"github\",\"sync_config_id\":\"\\u003cuuid\\u003e\"},\"job_type\":\"sync\",\"last_run_at\":null,\"last_run_duration_seconds\":null,\"last_run_error\":null,\"last_run_status\":null,\"name\":\"sync-config-000000c0-0000-4000-8000-000000000015\",\"next_run_at\":null,\"org_id\":\"\\u003cuuid\\u003e\",\"provider\":\"github\",\"run_count\":0,\"schedule_cron\":\"0 * * * *\",\"status\":1,\"sync_config_id\":\"\\u003cuuid\\u003e\",\"timezone\":\"UTC\",\"updated_at\":\"\\u003cts\\u003e\"}"
+   ],
+   "scheduled_sync_occurrences": [
+    "{\"created_at\":\"\\u003cts\\u003e\",\"identity_version\":\"sync_scheduler_occurrence_v1\",\"job_run_id\":null,\"occurrence_id\":\"sha256:2e4ce6a3a87bb7b8295a4aea5e7aa1b8d9832b70bf39e3cbf8d62c15e2ff2f87\",\"org_id\":\"\\u003cuuid\\u003e\",\"reconcile_attempt_count\":0,\"reconcile_error_at\":null,\"reconcile_error_code\":null,\"reconcile_next_attempt_at\":null,\"reconcile_status\":\"pending\",\"scheduled_for\":\"2026-03-10T12:00:00.123456Z\",\"scheduled_job_id\":\"\\u003cuuid\\u003e\",\"sync_config_id\":\"\\u003cuuid\\u003e\",\"sync_run_id\":null}"
+   ],
+   "sync_manual_triggers": [
+    "{\"before\":\"2025-12-31T23:59:59.999999Z\",\"created_at\":\"\\u003cts\\u003e\",\"dataset_keys\":[\"repo-metadata\",\"commits\",\"commit-stats\",\"files\",\"blame\",\"prs\",\"pr-reviews\",\"pr-comments\",\"cicd\",\"tests\",\"deployments\",\"security\",\"work-items\",\"work-item-labels\",\"work-item-projects\",\"work-item-history\",\"work-item-comments\"],\"mode\":\"backfill\",\"occurrence_id\":\"sha256:2e4ce6a3a87bb7b8295a4aea5e7aa1b8d9832b70bf39e3cbf8d62c15e2ff2f87\",\"since\":\"2025-12-25T00:00:00.000000Z\",\"source_ids\":[\"\\u003cuuid\\u003e\",\"\\u003cuuid\\u003e\"],\"triggered_by\":\"backfill\"}"
+   ]
+  }
+ },
+ {
+  "name": "the org assertion holds",
+  "exit": 0,
+  "rows": {
+   "scheduled_jobs": [
+    "{\"created_at\":\"\\u003cts\\u003e\",\"failure_count\":0,\"id\":\"\\u003cuuid\\u003e\",\"is_running\":false,\"job_config\":{\"provider\":\"github\",\"sync_config_id\":\"\\u003cuuid\\u003e\"},\"job_type\":\"sync\",\"last_run_at\":null,\"last_run_duration_seconds\":null,\"last_run_error\":null,\"last_run_status\":null,\"name\":\"sync-config-000000c0-0000-4000-8000-000000000001\",\"next_run_at\":null,\"org_id\":\"\\u003cuuid\\u003e\",\"provider\":\"github\",\"run_count\":0,\"schedule_cron\":\"*/5 * * * *\",\"status\":0,\"sync_config_id\":\"\\u003cuuid\\u003e\",\"timezone\":\"Europe/Berlin\",\"updated_at\":\"\\u003cts\\u003e\"}"
+   ],
+   "scheduled_sync_occurrences": [
+    "{\"created_at\":\"\\u003cts\\u003e\",\"identity_version\":\"sync_scheduler_occurrence_v1\",\"job_run_id\":null,\"occurrence_id\":\"sha256:1031419303d071c2e5dc8c9f9d5884a6ecc741a3609ecbc4859087ba11b3e1e2\",\"org_id\":\"\\u003cuuid\\u003e\",\"reconcile_attempt_count\":0,\"reconcile_error_at\":null,\"reconcile_error_code\":null,\"reconcile_next_attempt_at\":null,\"reconcile_status\":\"pending\",\"scheduled_for\":\"2026-03-10T12:00:00.123456Z\",\"scheduled_job_id\":\"\\u003cuuid\\u003e\",\"sync_config_id\":\"\\u003cuuid\\u003e\",\"sync_run_id\":null}"
+   ],
+   "sync_manual_triggers": [
+    "{\"before\":\"2026-03-09T23:59:59.999999Z\",\"created_at\":\"\\u003cts\\u003e\",\"dataset_keys\":[\"repo-metadata\",\"commits\",\"commit-stats\",\"files\",\"blame\",\"prs\",\"pr-reviews\",\"pr-comments\"],\"mode\":\"backfill\",\"occurrence_id\":\"sha256:1031419303d071c2e5dc8c9f9d5884a6ecc741a3609ecbc4859087ba11b3e1e2\",\"since\":\"2026-03-09T00:00:00.000000Z\",\"source_ids\":[\"\\u003cuuid\\u003e\",\"\\u003cuuid\\u003e\"],\"triggered_by\":\"backfill\"}"
+   ]
+  }
+ },
+ {
+  "name": "the org assertion fails",
+  "exit": 1,
+  "rows": {}
+ },
+ {
+  "name": "no such configuration",
+  "exit": 1,
+  "rows": {}
+ },
+ {
+  "name": "not a uuid",
+  "exit": 1,
+  "rows": {}
+ },
+ {
+  "name": "unrecognized targets",
+  "exit": 1,
+  "rows": {}
+ },
+ {
+  "name": "jira incidents are the operational target",
+  "exit": 1,
+  "rows": {}
+ },
+ {
+  "name": "a name that needs quotes in the message",
+  "exit": 1,
+  "rows": {}
+ },
+ {
+  "name": "no integration",
+  "exit": 1,
+  "rows": {}
+ },
+ {
+  "name": "not the canonical parent",
+  "exit": 1,
+  "rows": {}
+ },
+ {
+  "name": "an integration without enabled sources",
+  "exit": 0,
+  "rows": {
+   "scheduled_jobs": [
+    "{\"created_at\":\"\\u003cts\\u003e\",\"failure_count\":0,\"id\":\"\\u003cuuid\\u003e\",\"is_running\":false,\"job_config\":{\"provider\":\"github\",\"sync_config_id\":\"\\u003cuuid\\u003e\"},\"job_type\":\"sync\",\"last_run_at\":null,\"last_run_duration_seconds\":null,\"last_run_error\":null,\"last_run_status\":null,\"name\":\"sync-config-000000c0-0000-4000-8000-000000000018\",\"next_run_at\":null,\"org_id\":\"\\u003cuuid\\u003e\",\"provider\":\"github\",\"run_count\":0,\"schedule_cron\":\"0 * * * *\",\"status\":1,\"sync_config_id\":\"\\u003cuuid\\u003e\",\"timezone\":\"UTC\",\"updated_at\":\"\\u003cts\\u003e\"}"
+   ],
+   "scheduled_sync_occurrences": [
+    "{\"created_at\":\"\\u003cts\\u003e\",\"identity_version\":\"sync_scheduler_occurrence_v1\",\"job_run_id\":null,\"occurrence_id\":\"sha256:55fb5d2a48253deb312950b612d04d5eb3fafe1d13b7bc66584afd72a6bb9a18\",\"org_id\":\"\\u003cuuid\\u003e\",\"reconcile_attempt_count\":0,\"reconcile_error_at\":null,\"reconcile_error_code\":null,\"reconcile_next_attempt_at\":null,\"reconcile_status\":\"pending\",\"scheduled_for\":\"2026-03-10T12:00:00.123456Z\",\"scheduled_job_id\":\"\\u003cuuid\\u003e\",\"sync_config_id\":\"\\u003cuuid\\u003e\",\"sync_run_id\":null}"
+   ],
+   "sync_manual_triggers": [
+    "{\"before\":\"2026-03-09T23:59:59.999999Z\",\"created_at\":\"\\u003cts\\u003e\",\"dataset_keys\":[\"prs\",\"pr-reviews\",\"pr-comments\"],\"mode\":\"backfill\",\"occurrence_id\":\"sha256:55fb5d2a48253deb312950b612d04d5eb3fafe1d13b7bc66584afd72a6bb9a18\",\"since\":\"2026-03-09T00:00:00.000000Z\",\"source_ids\":[],\"triggered_by\":\"backfill\"}"
+   ]
+  }
+ },
+ {
+  "name": "planner-managed configuration pinned to a source",
+  "exit": 0,
+  "rows": {
+   "scheduled_jobs": [
+    "{\"created_at\":\"\\u003cts\\u003e\",\"failure_count\":0,\"id\":\"\\u003cuuid\\u003e\",\"is_running\":false,\"job_config\":{\"provider\":\"github\",\"sync_config_id\":\"\\u003cuuid\\u003e\"},\"job_type\":\"sync\",\"last_run_at\":null,\"last_run_duration_seconds\":null,\"last_run_error\":null,\"last_run_status\":null,\"name\":\"sync-config-000000c0-0000-4000-8000-000000000019\",\"next_run_at\":null,\"org_id\":\"\\u003cuuid\\u003e\",\"provider\":\"github\",\"run_count\":0,\"schedule_cron\":\"0 * * * *\",\"status\":1,\"sync_config_id\":\"\\u003cuuid\\u003e\",\"timezone\":\"UTC\",\"updated_at\":\"\\u003cts\\u003e\"}"
+   ],
+   "scheduled_sync_occurrences": [
+    "{\"created_at\":\"\\u003cts\\u003e\",\"identity_version\":\"sync_scheduler_occurrence_v1\",\"job_run_id\":null,\"occurrence_id\":\"sha256:ab4dfebbe661b7b9f7d6c4701621d1540ac6c39780add7c2cfc56b6b4e0b26aa\",\"org_id\":\"\\u003cuuid\\u003e\",\"reconcile_attempt_count\":0,\"reconcile_error_at\":null,\"reconcile_error_code\":null,\"reconcile_next_attempt_at\":null,\"reconcile_status\":\"pending\",\"scheduled_for\":\"2026-03-10T12:00:00.123456Z\",\"scheduled_job_id\":\"\\u003cuuid\\u003e\",\"sync_config_id\":\"\\u003cuuid\\u003e\",\"sync_run_id\":null}"
+   ],
+   "sync_manual_triggers": [
+    "{\"before\":\"2026-03-09T23:59:59.999999Z\",\"created_at\":\"\\u003cts\\u003e\",\"dataset_keys\":[\"prs\",\"pr-reviews\",\"pr-comments\"],\"mode\":\"backfill\",\"occurrence_id\":\"sha256:ab4dfebbe661b7b9f7d6c4701621d1540ac6c39780add7c2cfc56b6b4e0b26aa\",\"since\":\"2026-03-09T00:00:00.000000Z\",\"source_ids\":null,\"triggered_by\":\"backfill\"}"
+   ]
+  }
+ }
+]

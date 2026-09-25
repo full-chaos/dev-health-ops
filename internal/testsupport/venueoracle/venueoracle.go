@@ -131,6 +131,23 @@ elif mode == "serve":
         _pd_api_override = os.environ.get("VENUE_PAGERDUTY_API_BASE_OVERRIDE")
         if _pd_api_override:
             _pd_cv.pagerduty_base_url = lambda *, region: _pd_api_override + "/" + region
+            # The services route builds its client through providers/
+            # pagerduty/client.py, which reads its own imported copy.
+            from dev_health_ops.providers.pagerduty import client as _pd_client
+            _pd_client.pagerduty_base_url = lambda *, region: _pd_api_override + "/" + region
+        if _pd_token_override:
+            # The services route builds its client-credentials OAuth config
+            # directly (not from the environment), so its token request is
+            # redirected on the router's own imported function.
+            from dev_health_ops.api.admin.routers import pagerduty_services as _pd_services
+            _pd_services_client_credentials = _pd_services.client_credentials
+
+            async def _pd_patched_client_credentials(config, **kwargs):
+                return await _pd_services_client_credentials(
+                    dataclasses.replace(config, token_url=_pd_token_override), **kwargs
+                )
+
+            _pd_services.client_credentials = _pd_patched_client_credentials
     # Test-runner-only monkeypatch, same rule as above: when set, every
     # StripeClient the app builds talks to this base instead of Stripe, so
     # a venue test can record what each plane asks of Stripe on one fake

@@ -155,6 +155,30 @@ type SourceDiscoveryReport struct {
 	Outcome  string
 	Created  int
 	Existing int
+	// SourceIDs are the ids of the integration_sources rows this run upserted
+	// (new and updated), one per discovered source in discovery order, as
+	// discover_sources_for_integration returns its `upserted` list: a row
+	// the run matched twice appears twice. The integration admin discover
+	// route renders them.
+	SourceIDs []string
+}
+
+// sourceIDCollector records the row each discovered source landed on, for
+// Discover's report. It rides the context so the upsert functions keep their
+// signatures.
+type sourceIDCollector struct{ ids []string }
+
+type sourceIDCollectorKey struct{}
+
+func withSourceIDCollector(ctx context.Context) (context.Context, *sourceIDCollector) {
+	collector := &sourceIDCollector{}
+	return context.WithValue(ctx, sourceIDCollectorKey{}, collector), collector
+}
+
+func recordUpsertedSource(ctx context.Context, id string) {
+	if collector, ok := ctx.Value(sourceIDCollectorKey{}).(*sourceIDCollector); ok {
+		collector.ids = append(collector.ids, id)
+	}
 }
 
 // SourceDiscoveryExecutor is the native-Go per-occurrence source-discovery
@@ -350,6 +374,19 @@ func (service *NativeSourceDiscoveryService) Discover(ctx context.Context, args 
 		// risk discovering against the wrong account; already-existing
 		// sources still plan normally.
 		service.telemetry.observe(provider, SourceDiscoveryOutcomeSkipped)
+		if provider == "jira" {
+			// Python reads the JIRA_* environment for such an integration and,
+			// with none set, its mapping is refused (an absent token, the
+			// first required field) and it discovers nothing, counting a zero
+			// discovery (sync/discovery.py, discovery/repos.py). This service
+			// has no environment credential path (a named limit: with JIRA_*
+			// set Python discovers projects) and discovers nothing here too.
+			providerfoundation.RecordCredentialMappingRejected(ctx, "jira",
+				providerfoundation.MappingField{Name: "api_token"},
+				providerfoundation.MappingField{Name: "email"},
+				providerfoundation.MappingField{Name: "base_url"})
+			recordJiraProjectDiscovery(ctx, 0, 0, 0, 0, 0, args.PlannerManaged)
+		}
 		return SourceDiscoveryReport{Outcome: SourceDiscoveryOutcomeSkipped}, nil
 	}
 	credential, err := service.credentials.Resolve(ctx, sourceDiscoveryLease{}, providerfoundation.TenantScope{
@@ -359,6 +396,7 @@ func (service *NativeSourceDiscoveryService) Discover(ctx context.Context, args 
 		service.telemetry.observe(provider, SourceDiscoveryOutcomeError)
 		return SourceDiscoveryReport{}, fmt.Errorf("resolve %s credential for source discovery: %w", provider, err)
 	}
+	ctx, collector := withSourceIDCollector(ctx)
 	var discovered []discoveredSource
 	switch provider {
 	case "github":
@@ -440,11 +478,14 @@ func (service *NativeSourceDiscoveryService) Discover(ctx context.Context, args 
 	}
 	service.telemetry.observeN(provider, SourceDiscoveryOutcomeSuperseded, superseded)
 	recordSourceDiscoveryOutcome(service.telemetry, provider, created, existing)
+	if provider == "jira" {
+		recordJiraProjectDiscovery(ctx, len(discovered), created, superseded, capped, recovered, args.PlannerManaged)
+	}
 	outcome := SourceDiscoveryOutcomeExisting
 	if created > 0 {
 		outcome = SourceDiscoveryOutcomeCreated
 	}
-	return SourceDiscoveryReport{Outcome: outcome, Created: created, Existing: existing}, nil
+	return SourceDiscoveryReport{Outcome: outcome, Created: created, Existing: existing, SourceIDs: collector.ids}, nil
 }
 
 // recordSourceDiscoveryOutcome observes one telemetry point per created/
@@ -468,6 +509,36 @@ func recordSourceDiscoveryOutcome(telemetry *sourceDiscoveryTelemetry, provider 
 	}
 	if created == 0 && existing == 0 {
 		telemetry.observe(provider, SourceDiscoveryOutcomeExisting)
+	}
+}
+
+// recordJiraProjectDiscovery is sync/discovery.py's jira_project_discovery_total
+// emission for one committed Jira discovery: _record_jira_project_discovery's
+// discovered/created/existing (or discovered_zero) and
+// skipped_no_planner_parent, plus the superseded, capped and recovered counts
+// of the steps that ran in the same pass. existing is Python's
+// `len(source_dicts) - created_count`.
+func recordJiraProjectDiscovery(ctx context.Context, discovered, created, superseded, capped, recovered int, plannerManaged bool) {
+	if superseded > 0 {
+		providerfoundation.RecordJiraProjectDiscovery(ctx, providerfoundation.JiraDiscoverySuperseded, superseded)
+	}
+	if capped > 0 {
+		providerfoundation.RecordJiraProjectDiscovery(ctx, providerfoundation.JiraDiscoveryCapped, capped)
+	}
+	if recovered > 0 {
+		providerfoundation.RecordJiraProjectDiscovery(ctx, providerfoundation.JiraDiscoveryRecoveredFromCap, recovered)
+	}
+	if discovered == 0 {
+		providerfoundation.RecordJiraProjectDiscovery(ctx, providerfoundation.JiraDiscoveryZero, 1)
+	} else {
+		providerfoundation.RecordJiraProjectDiscovery(ctx, providerfoundation.JiraDiscoveryDiscovered, discovered)
+		providerfoundation.RecordJiraProjectDiscovery(ctx, providerfoundation.JiraDiscoveryCreated, created)
+		if existing := discovered - created; existing > 0 {
+			providerfoundation.RecordJiraProjectDiscovery(ctx, providerfoundation.JiraDiscoveryExisting, existing)
+		}
+	}
+	if !plannerManaged {
+		providerfoundation.RecordJiraProjectDiscovery(ctx, providerfoundation.JiraDiscoverySkippedNoPlanner, 1)
 	}
 }
 
@@ -793,6 +864,13 @@ func (service *NativeSourceDiscoveryService) discoverGitLab(ctx context.Context,
 func (service *NativeSourceDiscoveryService) discoverJira(ctx context.Context, credential providerfoundation.Credential, syncOptions map[string]any) ([]discoveredSource, error) {
 	client, err := providerfoundation.NewJiraClient(credential, service.doer, service.retry, sourceDiscoveryLease{})
 	if err != nil {
+		// discovery/repos.py: a mapping jira_credentials_from_mapping refuses (an
+		// absent token, email or base URL) is "no usable credential", and the
+		// answer is an empty listing, never an exception (CHAOS-4584); the
+		// constructor has already counted the rejection.
+		if providerfoundation.JiraMappingIncomplete(credential) {
+			return nil, nil
+		}
 		return nil, err
 	}
 	page, err := providerfoundation.CollectJiraTokenOffsetPages(ctx, client, providerfoundation.JiraPageOptions{
@@ -996,44 +1074,66 @@ func (service *NativeSourceDiscoveryService) upsertSources(
 	// changes based on what has or hasn't been tagged before, so it can't
 	// regress once any row happens to already carry the tag.
 	stampNewRows := plannerManaged && configID != "" && unbounded
+	// Read, merge and write as discover_sources_for_integration does: an
+	// existing row keeps its own metadata keys (their order and spelling) and
+	// the fresh keys win, and the column holds json.dumps text. A single
+	// jsonb-merging upsert would reorder the keys and write non-ASCII
+	// unescaped, so the stored text would differ from Python's.
+	existingRows, err := fetchExistingSourceRows(ctx, tx, orgID, integrationID)
+	if err != nil {
+		return 0, 0, err
+	}
 	for _, source := range sources {
 		metadata := source.Metadata
+		if metadata == nil {
+			metadata = pyjson.NewObject()
+		}
 		if stampNewRows {
 			metadata = cloneMetadata(metadata)
 			metadata.Set("planner_managed_sync_config_id", configID)
 		}
-		metadataJSON, marshalErr := json.Marshal(metadata)
-		if marshalErr != nil {
-			return 0, 0, fmt.Errorf("encode %s source metadata: %w", provider, marshalErr)
+		var row *existingSourceRow
+		for _, candidate := range existingRows {
+			if candidate.Provider == provider && candidate.ExternalID == source.ExternalID {
+				row = candidate
+				break
+			}
 		}
-		// integration_sources.metadata is a plain `json` column (alembic 0015
-		// `sa.JSON()`, not JSONB) -- the `||` merge operator only exists for
-		// jsonb, so both sides are cast to jsonb for the merge and the result
-		// is cast back to json for storage. Fresh discovery keys win, keys
-		// the fresh payload lacks (e.g. a manually-added
-		// planner_managed_sync_config_id) are preserved, matching
-		// discover_sources_for_integration's own merge contract exactly.
-		var inserted bool
-		scanErr := tx.QueryRow(ctx, `
-INSERT INTO public.integration_sources
- (id,org_id,integration_id,provider,source_type,external_id,name,full_name,metadata,is_enabled,discovered_at,last_seen_at)
-VALUES ($1::uuid,$2,$3::uuid,$4,$5,$6,$7,$8,$9::json,TRUE,$10,$10)
-ON CONFLICT (org_id,integration_id,provider,external_id) DO UPDATE
-SET name=EXCLUDED.name, full_name=EXCLUDED.full_name,
-    metadata=(public.integration_sources.metadata::jsonb || EXCLUDED.metadata::jsonb)::json,
-    last_seen_at=EXCLUDED.last_seen_at
-RETURNING (xmax = 0)`,
-			uuid.New().String(), orgID, integrationID, provider, source.SourceType,
-			source.ExternalID, source.Name, source.FullName, metadataJSON, now,
-		).Scan(&inserted)
-		if scanErr != nil {
-			return 0, 0, fmt.Errorf("upsert %s source %s: %w", provider, source.ExternalID, scanErr)
-		}
-		if inserted {
-			created++
-		} else {
+		if row != nil {
+			merged := cloneMetadata(row.Metadata)
+			for _, key := range metadata.Keys() {
+				value, _ := metadata.Get(key)
+				merged.Set(key, value)
+			}
+			if err := updateExistingSourceRow(ctx, tx, row.ID, source.Name, source.FullName, merged, now, false); err != nil {
+				return 0, 0, err
+			}
+			row.Metadata = merged
+			recordUpsertedSource(ctx, row.ID)
 			existing++
+			continue
 		}
+		newID, discoveredAt, insertErr := insertNewSourceRow(ctx, tx, orgID, integrationID, provider, source.SourceType, source.ExternalID, source.Name, source.FullName, metadata, now)
+		if errors.Is(insertErr, errSourceInsertConflict) {
+			// A concurrent discovery inserted this exact key first: the row is there.
+			var winnerID string
+			if err := tx.QueryRow(ctx, `SELECT id::text FROM public.integration_sources
+WHERE org_id=$1 AND integration_id=$2::uuid AND provider=$3 AND external_id=$4`, orgID, integrationID, provider, source.ExternalID).Scan(&winnerID); err != nil {
+				return 0, 0, fmt.Errorf("read the source a concurrent discovery inserted: %w", err)
+			}
+			recordUpsertedSource(ctx, winnerID)
+			existing++
+			continue
+		}
+		if insertErr != nil {
+			return 0, 0, insertErr
+		}
+		recordUpsertedSource(ctx, newID)
+		created++
+		existingRows = append(existingRows, &existingSourceRow{
+			ID: newID, Provider: provider, ExternalID: source.ExternalID,
+			IsEnabled: true, DiscoveredAt: discoveredAt, Metadata: metadata,
+		})
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return 0, 0, fmt.Errorf("commit source discovery domain transaction: %w", err)
@@ -1340,6 +1440,13 @@ func (service *NativeSourceDiscoveryService) upsertJiraSources(
 				if dup == survivor {
 					continue
 				}
+				if dup.ExternalID != survivor.ExternalID {
+					// The losing case-variant may hold the project's sync
+					// watermarks; move them onto the survivor's key.
+					if err := migrateJiraWatermarksOnRename(ctx, tx, orgID, dup.ExternalID, survivor.ExternalID, now); err != nil {
+						return 0, 0, nil, nil, 0, err
+					}
+				}
 				metadata := cloneMetadata(dup.Metadata)
 				metadata.Set(sourceDuplicateOfKey, survivor.ExternalID)
 				if err := disableSourceRow(ctx, tx, dup.ID, metadata); err != nil {
@@ -1347,6 +1454,44 @@ func (service *NativeSourceDiscoveryService) upsertJiraSources(
 				}
 				dup.IsEnabled = false
 				dup.Metadata = metadata
+			}
+		}
+
+		renamedTo := ""
+		if survivor == nil {
+			// No row carries the discovered key: before treating it as a new
+			// project, look for the SAME project under an older key. Jira's
+			// numeric project id survives a rename, so a row carrying it is
+			// reused (its watermarks moved to the new key), never duplicated.
+			if projectID := metadataString(source.Metadata, "jira_project_id"); projectID != "" {
+				var renameCandidates []*existingSourceRow
+				for _, row := range existingRows {
+					if normalizeSourceKey(row.Provider) != "jira" {
+						continue
+					}
+					if stored, ok := row.Metadata.Get("jira_project_id"); ok {
+						if text, isString := stored.(string); isString && text == projectID {
+							renameCandidates = append(renameCandidates, row)
+						}
+					}
+				}
+				sort.Slice(renameCandidates, func(i, j int) bool {
+					if !renameCandidates[i].DiscoveredAt.Equal(renameCandidates[j].DiscoveredAt) {
+						return renameCandidates[i].DiscoveredAt.Before(renameCandidates[j].DiscoveredAt)
+					}
+					return renameCandidates[i].ID < renameCandidates[j].ID
+				})
+				if len(renameCandidates) > 0 {
+					renamed := renameCandidates[0]
+					if normalizeSourceKey(renamed.ExternalID) != normalizedKey {
+						if err := migrateJiraWatermarksOnRename(ctx, tx, orgID, renamed.ExternalID, source.ExternalID, now); err != nil {
+							return 0, 0, nil, nil, 0, err
+						}
+						renamed.ExternalID = source.ExternalID
+						renamedTo = source.ExternalID
+					}
+					survivor = renamed
+				}
 			}
 		}
 
@@ -1370,6 +1515,11 @@ func (service *NativeSourceDiscoveryService) upsertJiraSources(
 				merged = withoutMetadataKey(merged, sourceSupersededMarkerKey)
 				reenable = true
 			}
+			if renamedTo != "" {
+				if _, err := tx.Exec(ctx, `UPDATE public.integration_sources SET external_id=$2 WHERE id=$1::uuid`, survivor.ID, renamedTo); err != nil {
+					return 0, 0, nil, nil, 0, fmt.Errorf("rename integration source %s: %w", survivor.ID, err)
+				}
+			}
 			if err := updateExistingSourceRow(ctx, tx, survivor.ID, source.Name, source.FullName, merged, now, reenable); err != nil {
 				return 0, 0, nil, nil, 0, err
 			}
@@ -1377,18 +1527,27 @@ func (service *NativeSourceDiscoveryService) upsertJiraSources(
 			if reenable {
 				survivor.IsEnabled = true
 			}
+			recordUpsertedSource(ctx, survivor.ID)
 			existingCount++
 			continue
 		}
 
 		newID, discoveredAt, insertErr := insertNewSourceRow(ctx, tx, orgID, integrationID, "jira", "project", source.ExternalID, source.Name, source.FullName, metadata, now)
 		if errors.Is(insertErr, errSourceInsertConflict) {
+			// A concurrent insert of this exact key won: the row is there.
+			var winnerID string
+			if err := tx.QueryRow(ctx, `SELECT id::text FROM public.integration_sources
+WHERE org_id=$1 AND integration_id=$2::uuid AND provider=$3 AND external_id=$4`, orgID, integrationID, "jira", source.ExternalID).Scan(&winnerID); err != nil {
+				return 0, 0, nil, nil, 0, fmt.Errorf("read the source a concurrent discovery inserted: %w", err)
+			}
+			recordUpsertedSource(ctx, winnerID)
 			existingCount++
 			continue
 		}
 		if insertErr != nil {
 			return 0, 0, nil, nil, 0, insertErr
 		}
+		recordUpsertedSource(ctx, newID)
 		created++
 		createdLower[normalizedKey] = struct{}{}
 		existingRows = append(existingRows, &existingSourceRow{
@@ -1781,4 +1940,60 @@ func translateFnmatchBracketNegation(pattern string) string {
 		builder.WriteByte(pattern[i])
 	}
 	return builder.String()
+}
+
+// migrateJiraWatermarksOnRename ports
+// discovery.py::_migrate_jira_watermarks_on_rename: every sync watermark of
+// the org under the old source key moves to the new key. When the new key
+// already has a watermark for the same dataset, the later last_synced_at is
+// kept on that row and the old row is deleted, so no cursor goes backwards
+// and uq_sync_watermark_org_source_dataset holds. updated_at is stamped on
+// every row written, as the model's onupdate does.
+func migrateJiraWatermarksOnRename(ctx context.Context, tx pgx.Tx, orgID, oldExternalID, newExternalID string, now time.Time) error {
+	rows, err := tx.Query(ctx, `SELECT id::text, dataset_key, last_synced_at FROM public.sync_watermarks WHERE org_id=$1 AND source_id=$2`,
+		orgID, oldExternalID)
+	if err != nil {
+		return fmt.Errorf("load watermarks to migrate: %w", err)
+	}
+	type watermark struct {
+		id, datasetKey string
+		lastSyncedAt   *time.Time
+	}
+	var old []watermark
+	for rows.Next() {
+		var row watermark
+		if err := rows.Scan(&row.id, &row.datasetKey, &row.lastSyncedAt); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan watermark to migrate: %w", err)
+		}
+		old = append(old, row)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("load watermarks to migrate: %w", err)
+	}
+	for _, row := range old {
+		var conflictID string
+		var conflictAt *time.Time
+		err := tx.QueryRow(ctx, `SELECT id::text, last_synced_at FROM public.sync_watermarks WHERE org_id=$1 AND source_id=$2 AND dataset_key=$3`,
+			orgID, newExternalID, row.datasetKey).Scan(&conflictID, &conflictAt)
+		if errors.Is(err, pgx.ErrNoRows) {
+			if _, err := tx.Exec(ctx, `UPDATE public.sync_watermarks SET source_id=$2, updated_at=$3 WHERE id=$1::uuid`, row.id, newExternalID, now); err != nil {
+				return fmt.Errorf("move watermark %s: %w", row.id, err)
+			}
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("load conflicting watermark: %w", err)
+		}
+		if row.lastSyncedAt != nil && (conflictAt == nil || row.lastSyncedAt.After(*conflictAt)) {
+			if _, err := tx.Exec(ctx, `UPDATE public.sync_watermarks SET last_synced_at=$2, updated_at=$3 WHERE id=$1::uuid`, conflictID, *row.lastSyncedAt, now); err != nil {
+				return fmt.Errorf("advance watermark %s: %w", conflictID, err)
+			}
+		}
+		if _, err := tx.Exec(ctx, `DELETE FROM public.sync_watermarks WHERE id=$1::uuid`, row.id); err != nil {
+			return fmt.Errorf("delete superseded watermark %s: %w", row.id, err)
+		}
+	}
+	return nil
 }

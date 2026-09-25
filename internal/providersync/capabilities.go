@@ -280,3 +280,35 @@ func PlannerDatasetKeys(provider string, syncTargets []string) ([]string, error)
 	}
 	return keys, nil
 }
+
+// operatorSelectableSyncTargets is sync/datasets.py's
+// OPERATOR_SELECTABLE_SYNC_TARGETS: the targets the config form offers as
+// checkboxes. "blame" and "security" are not among them.
+var operatorSelectableSyncTargets = map[string]bool{
+	"git": true, "prs": true, "cicd": true, "tests": true, "deployments": true,
+	"incidents": true, "work-items": true, "feature-flags": true, "operational": true,
+}
+
+// OperatorControlledDatasetKeys is sync/datasets.py's
+// operator_controlled_dataset_keys: PlannerDatasetKeys over every
+// selectable target the provider supports (sorted), so provider rules such
+// as git-implies-blame apply; none when the provider supports no selectable
+// target, or when PlannerDatasetKeys refuses the set (PagerDuty with more
+// than "operational"). The keys come back in DatasetKey order.
+func OperatorControlledDatasetKeys(provider string) []string {
+	var selectable []string
+	for _, target := range SupportedLegacyTargets(provider) {
+		if operatorSelectableSyncTargets[target] {
+			selectable = append(selectable, target)
+		}
+	}
+	if len(selectable) == 0 {
+		return nil
+	}
+	sort.Strings(selectable)
+	keys, err := PlannerDatasetKeys(provider, selectable)
+	if err != nil {
+		return nil
+	}
+	return keys
+}

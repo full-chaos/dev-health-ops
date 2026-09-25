@@ -30,6 +30,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/api/apimetrics"
 	"log/slog"
 	"net/http"
 	"net/netip"
@@ -43,11 +44,13 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/externalingest"
 	"github.com/full-chaos/dev-health-ops/internal/api/githubapp"
 	healthroutes "github.com/full-chaos/dev-health-ops/internal/api/health"
+	"github.com/full-chaos/dev-health-ops/internal/api/integrationsadmin"
 	"github.com/full-chaos/dev-health-ops/internal/api/legacyingest"
 	"github.com/full-chaos/dev-health-ops/internal/api/orgs"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/producttelemetry"
 	"github.com/full-chaos/dev-health-ops/internal/api/session"
+	"github.com/full-chaos/dev-health-ops/internal/api/sso"
 	"github.com/full-chaos/dev-health-ops/internal/api/syncadmin"
 	"github.com/full-chaos/dev-health-ops/internal/api/teamsidentity"
 	"github.com/full-chaos/dev-health-ops/internal/api/telemetry"
@@ -64,6 +67,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/shell"
 	"github.com/full-chaos/dev-health-ops/internal/platform/version"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	schedsync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -129,6 +133,8 @@ func Command() cli.Command {
 		Name:    "api",
 		Summary: "serve the Go HTTP api",
 		Kind:    cli.Service,
+		// dev-hops's root --log-level, typed before the command, is this service's own flag.
+		RootFlags: []cli.RootFlag{cli.RootLogLevel},
 		Run: func(ctx context.Context, env cli.Env) int {
 			return shell.Execute(ctx, Spec, env.Args, env.Lookup, shell.IO{
 				Stdout: env.Stdout,
@@ -173,6 +179,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 	var routes []httpapi.Route
 	routes = append(routes, acr.Routes(acr.Deps{Store: store, Logger: logger})...)
 	routes = append(routes, externalingest.Routes(externalingest.Deps{
+		Cipher:   deps.Decryptor,
 		Pool:     deps.Pool,
 		Valkey:   deps.Valkey,
 		Logger:   logger,
@@ -182,7 +189,13 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 	if deps.Valkey != nil {
 		legacyStore = legacyingest.ValkeyStore{Client: deps.Valkey}
 	}
-	routes = append(routes, legacyingest.Routes(legacyingest.Deps{Store: legacyStore, Metrics: deps.LegacyIngestMetrics, Logger: logger})...)
+	// The telemetry route writes ClickHouse with the api's own login; with
+	// none configured it accepts and skips, as the Python route does.
+	var legacyClickHouse legacyingest.ClickHouse
+	if deps.ClickHouse != nil {
+		legacyClickHouse = deps.ClickHouse
+	}
+	routes = append(routes, legacyingest.Routes(legacyingest.Deps{Store: legacyStore, Metrics: deps.LegacyIngestMetrics, ClickHouse: legacyClickHouse, Logger: logger})...)
 	routes = append(routes, healthroutes.Routes(healthroutes.Deps{
 		// deps.ClickHouse is the api's own dedicated ClickHouse login
 		// (CHAOS-6310), the SAME connection internal/api/teamsidentity's
@@ -199,17 +212,20 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 		Pool: deps.Pool, Guard: deps.Guard, Auth: deps.Auth, Verifier: deps.Verifier, Signer: deps.Signer,
 		// The api's own ClickHouse login: organization activity.
 		ClickHouse: deps.ClickHouse, Limits: limits, Write: WriteError, OAuth: deps.SessionOAuth, Logger: logger,
+		Mail: deps.Invites, RegisterLimit: deps.RegisterLimit,
 	})...)
 	if deps.Guard != nil {
 		routes = append(routes, orgs.Routes(deps.Pool, deps.Guard, logger)...)
 		routes = append(routes, telemetry.Routes(deps.Pool, deps.Guard, deps.Auth, deps.Telemetry.Endpoint, logger)...)
-		routes = append(routes, customerpush.Routes(customerpush.Deps{Pool: deps.Pool, Guard: deps.Guard, Logger: logger})...)
+		routes = append(routes, customerpush.Routes(customerpush.Deps{Pool: deps.Pool, Guard: deps.Guard, Logger: logger, Cipher: deps.Decryptor})...)
 		routes = append(routes, syncadmin.Routes(syncadmin.Deps{Pool: deps.Pool, ClickHouse: deps.ClickHouse, Guard: deps.Guard, Logger: logger, Decryptor: deps.Decryptor, Now: deps.Now, JiraHTTP: deps.SyncJiraHTTP})...)
 		routes = append(routes, credentials.Routes(credentials.Deps{Pool: deps.Pool, Guard: deps.Guard, Cipher: deps.Decryptor, Logger: logger, Now: deps.Now,
 			HTTPClient: credentialProbeClient, HostLookup: credentialHostLookup})...)
 		routes = append(routes, githubapp.Routes(githubapp.Deps{Pool: deps.Pool, Guard: deps.Guard, Valkey: deps.Valkey, Cipher: deps.Decryptor,
 			Logger: logger, Now: deps.Now, Config: deps.GitHubApp, Signer: deps.GitHubStateSigner,
 			HTTPClient: deps.GitHubAppHTTPClient, GitHubURL: deps.GitHubAppURL, GitHubAPIURL: deps.GitHubAppAPIURL})...)
+		routes = append(routes, integrationsadmin.Routes(integrationsadmin.Deps{Pool: deps.Pool, Guard: deps.Guard, Logger: logger, Now: deps.Now,
+			Discovery: integrationDiscovery(deps, logger), HandoffWait: deps.IntegrationHandoffWait})...)
 		if deps.ClickHouse != nil {
 			routes = append(routes, teamsidentity.Routes(deps.ClickHouse, deps.Guard, logger, deps.Pool, deps.Decryptor)...)
 		}
@@ -219,6 +235,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 	// configured); with no pool these paths are simply absent from the mux,
 	// same as any other not-yet-ported area.
 	if deps.Pool != nil && deps.Guard != nil {
+		routes = append(routes, sso.Routes(sso.Deps{Pool: deps.Pool, Guard: deps.Guard, Logger: logger, Now: deps.Now, Write: WriteError})...)
 		routes = append(routes, billing.Routes(billing.Deps{
 			Pool: deps.Pool, Guard: deps.Guard, Stripe: deps.Stripe, Config: deps.BillingConfig, Logger: logger,
 			WebhookSecret: deps.StripeWebhookSecret, LicensePrivateKey: deps.LicensePrivateKey, Producer: deps.Producer,
@@ -229,6 +246,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 			Guard:         deps.Guard,
 			Logger:        logger,
 			ClickHouseDSN: deps.ClickHouseDSN,
+			ClickHouse:    deps.ClickHouse,
 			Decryptor:     deps.Decryptor,
 			PagerDuty:     deps.PagerDuty,
 			HTTPDoer:      deps.HTTPDoer,
@@ -244,6 +262,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 		Producer:  deps.Producer,
 		Decryptor: deps.Decryptor,
 		Logger:    logger,
+		Counters:  limits,
 	})...)
 	return markResponseModels(routes)
 }
@@ -255,6 +274,23 @@ func configure(
 	logger *slog.Logger,
 ) ([]lifecycle.Component, error) {
 	return configureWith(ctx, cfg, registry, logger, nil)
+}
+
+// RegisterOperatorMetrics puts the api's counters on the operator
+// /metrics, the Go api's scrape surface (the Python api served its
+// prometheus_client counters on /metrics): the OTel instruments, each
+// declared under the Python counter name, as one fragment, and the
+// legacy-ingest refusal counter, which it sets on deps, as another.
+func RegisterOperatorMetrics(registry *health.Registry, deps *Deps) error {
+	source, err := apimetrics.Install()
+	if err != nil {
+		return err
+	}
+	if err := registry.RegisterMetrics("api_instruments", source); err != nil {
+		return err
+	}
+	deps.LegacyIngestMetrics = legacyingest.NewMetrics()
+	return registry.RegisterMetrics("legacy_ingest", deps.LegacyIngestMetrics)
 }
 
 // configureWith is configure with adjust applied to the built Deps before
@@ -282,10 +318,7 @@ func configureWith(
 		deps.Verifier, deps.Signer = protected.verifier, protected.signer
 		scope = []func(http.Handler) http.Handler{protected.scope.OrgScope, protected.scope.Impersonation}
 	}
-	// The legacy-ingest refusal counter is scraped from the operator
-	// endpoint, so it is registered here, where the registry is.
-	deps.LegacyIngestMetrics = legacyingest.NewMetrics()
-	if err := registry.RegisterMetrics("legacy_ingest", deps.LegacyIngestMetrics); err != nil {
+	if err := RegisterOperatorMetrics(registry, &deps); err != nil {
 		closeComponents(depComponents)
 		return nil, err
 	}
@@ -313,6 +346,11 @@ func configureWith(
 	deps.Invites = inviteConfig(cfg, logger, os.LookupEnv)
 	deps.GitHubApp = GitHubAppConfig(os.LookupEnv)
 	deps.GitHubStateSigner = githubapp.Signer{Secret: cfg.APIJWTSecret.Reveal(), Issuer: cfg.APIJWTIssuer, Audience: cfg.APIJWTAudience}
+	deps.RegisterLimit, err = registerLimit(os.LookupEnv)
+	if err != nil {
+		closeComponents(depComponents)
+		return nil, dependencyFailure(ctx, logger, "api_server", "api_register_limit_invalid", err)
+	}
 	if adjust != nil {
 		adjust(&deps)
 	}
@@ -381,8 +419,8 @@ func closeComponents(components []lifecycle.Component) {
 // every handler-chain layer so no response it produces, scope rejection or
 // unhandled error, lacks it),
 // request id, panic recovery, then scope (the
-// org scope and impersonation middlewares, when given), security headers,
-// CORS, then the mux (and, per route, recovery, deadline, body bound). It
+// org scope and impersonation middlewares, when given), the register
+// route's origin check, security headers, CORS, then the mux (and, per route, recovery, deadline, body bound). It
 // matches the Python api's request order (src/dev_health_ops/api/
 // _middleware.py registers in reverse): OrgIdMiddleware and
 // ImpersonationMiddleware run outside SecurityHeadersMiddleware and
@@ -394,7 +432,7 @@ func NewServer(
 	scope ...func(http.Handler) http.Handler,
 ) (*httpapi.Server, error) {
 	middleware := append([]func(http.Handler) http.Handler{buildinfo.Stamp(version.Current("api")), UnhandledErrorShape, CloseHTTP10, DecodedPathRouting}, scope...)
-	middleware = append(middleware, SecurityHeaders, NewCORS(cfg.CORSAllowedOrigins).Wrap)
+	middleware = append(middleware, NewOriginValidation(cfg.CORSAllowedOrigins).Wrap, SecurityHeaders, NewCORS(cfg.CORSAllowedOrigins).Wrap)
 	return httpapi.NewServer(httpapi.ServerOptions{
 		Name:           "api-http",
 		Address:        cfg.APIAddress,
@@ -431,4 +469,23 @@ func forwardedAllowIPs() *string {
 		return nil
 	}
 	return &value
+}
+
+// integrationDiscovery builds the source discovery the integration discover
+// route runs, the one implementation the sync config create path shares, on
+// the api pool. nil without a pool or a decryptor.
+func integrationDiscovery(deps Deps, logger *slog.Logger) schedsync.SourceDiscoveryExecutor {
+	if deps.Pool == nil {
+		return nil
+	}
+	var client providerfoundation.HTTPDoer
+	if deps.SyncJiraHTTP != nil {
+		client = deps.SyncJiraHTTP
+	}
+	discovery, err := schedsync.NewAPISourceDiscovery(deps.Pool, deps.Decryptor, client, logger, deps.Now)
+	if err != nil {
+		logger.Error("integration discover: source discovery is unavailable", "error", err)
+		return nil
+	}
+	return discovery
 }

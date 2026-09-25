@@ -412,12 +412,10 @@ func TestMeanUsesCompensatedSummation(t *testing.T) {
 	}
 }
 
-// TestSigmaFormCannotChangeABucket discharges the ASCII-containment obligation
-// pythonparity.Lower's doc comment places on every caller: its Final_Sigma
-// lookahead is bounded where CPython's is not, so a caller must show that a
-// medial-vs-final sigma difference cannot change its ANSWER. Here every bucket
-// name is ASCII, so any input carrying either sigma fails every comparison and
-// lands in "unknown" identically.
+// TestSigmaFormCannotChangeABucket pins that a medial-vs-final sigma
+// difference cannot change a bucket: every bucket name is ASCII, so any input
+// carrying either sigma fails every comparison and lands in "unknown"
+// identically.
 func TestSigmaFormCannotChangeABucket(t *testing.T) {
 	medial, final := "ΑΣΒ", "ΑΣ"
 	for _, input := range []string{medial, final, medial + "ai_assisted", "ai_assisted" + final} {

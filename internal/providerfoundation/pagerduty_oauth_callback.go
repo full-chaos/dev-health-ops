@@ -2,7 +2,6 @@ package providerfoundation
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"io"
 	"math/big"
@@ -12,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
@@ -56,14 +56,44 @@ const pagerDutyMaxResponseBody = 1 << 20
 // POST to the token URL (no redirect following, 10s), the response turned
 // into tokens by _tokens.
 func ExchangePagerDutyAuthorizationCode(ctx context.Context, doer HTTPDoer, config PagerDutyRevokeConfig, code, codeVerifier string, now time.Time) (PagerDutyOAuthTokens, error) {
-	form := url.Values{
+	return postPagerDutyTokenForm(ctx, doer, config, url.Values{
 		"grant_type":    {"authorization_code"},
 		"client_id":     {config.ClientID},
 		"client_secret": {config.ClientSecret},
 		"redirect_uri":  {config.RedirectURI},
 		"code":          {code},
 		"code_verifier": {codeVerifier},
-	}
+	}, now)
+}
+
+// RefreshPagerDutyOAuthTokens is oauth.py's refresh_tokens: the same POST
+// with a refresh_token grant.
+func RefreshPagerDutyOAuthTokens(ctx context.Context, doer HTTPDoer, config PagerDutyRevokeConfig, refreshToken string, now time.Time) (PagerDutyOAuthTokens, error) {
+	return postPagerDutyTokenForm(ctx, doer, config, url.Values{
+		"grant_type":    {"refresh_token"},
+		"client_id":     {config.ClientID},
+		"client_secret": {config.ClientSecret},
+		"refresh_token": {refreshToken},
+	}, now)
+}
+
+// RequestPagerDutyClientCredentialsToken is oauth.py's client_credentials:
+// the same POST with a client_credentials grant for every read scope, the
+// account's subdomain and region.
+func RequestPagerDutyClientCredentialsToken(ctx context.Context, doer HTTPDoer, config PagerDutyRevokeConfig, subdomain, region string, now time.Time) (PagerDutyOAuthTokens, error) {
+	scopes := PagerDutyReadScopeSet()
+	sort.Strings(scopes)
+	return postPagerDutyTokenForm(ctx, doer, config, url.Values{
+		"grant_type":    {"client_credentials"},
+		"client_id":     {config.ClientID},
+		"client_secret": {config.ClientSecret},
+		"scope":         {strings.Join(scopes, " ")},
+		"subdomain":     {subdomain},
+		"region":        {region},
+	}, now)
+}
+
+func postPagerDutyTokenForm(ctx context.Context, doer HTTPDoer, config PagerDutyRevokeConfig, form url.Values, now time.Time) (PagerDutyOAuthTokens, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, config.tokenURL(), strings.NewReader(form.Encode()))
 	if err != nil {
 		return PagerDutyOAuthTokens{}, ErrPagerDutyExchangeUnavailable
@@ -103,20 +133,20 @@ func pagerDutyClient(doer HTTPDoer, followRedirects bool, timeout time.Duration)
 	return client
 }
 
-// pagerDutyTokensFromPayload is oauth.py's _tokens. Its unhandled failures
-// (an unparseable body, a missing access_token, an expires_in that is not an
-// integer) are ErrPagerDutyExchangeMalformed here. Named difference: a
-// non-string access_token/scope/refresh_token, which Python stringifies and
-// carries on with, is malformed here too -- PagerDuty never sends one.
+// pagerDutyTokensFromPayload is oauth.py's _tokens, on the body decoded the way
+// json.loads decodes it: access_token, refresh_token (when truthy) and scope
+// go through str(), so a number or a boolean is carried on as its text, as
+// Python does. Its unhandled failures (a body that is not a JSON object, a
+// missing access_token, an expires_in int() refuses) are
+// ErrPagerDutyExchangeMalformed here.
 func pagerDutyTokensFromPayload(body []byte, now time.Time) (PagerDutyOAuthTokens, error) {
-	decoder := json.NewDecoder(strings.NewReader(string(body)))
-	decoder.UseNumber()
-	var payload map[string]any
-	if err := decoder.Decode(&payload); err != nil || payload == nil {
+	decoded, err := pyjson.Decode(body)
+	payload, isObject := decoded.(*pyjson.Object)
+	if err != nil || !isObject {
 		return PagerDutyOAuthTokens{}, ErrPagerDutyExchangeMalformed
 	}
-	access, ok := payload["access_token"].(string)
-	if !ok {
+	rawAccess, present := payload.Get("access_token")
+	if !present {
 		return PagerDutyOAuthTokens{}, ErrPagerDutyExchangeMalformed
 	}
 	seconds, ok := pagerDutyExpiresInSeconds(payload)
@@ -128,21 +158,13 @@ func pagerDutyTokensFromPayload(body []byte, now time.Time) (PagerDutyOAuthToken
 		// datetime + timedelta raises OverflowError, which Python leaves unhandled.
 		return PagerDutyOAuthTokens{}, ErrPagerDutyExchangeMalformed
 	}
-	tokens := PagerDutyOAuthTokens{AccessToken: access, ExpiresAt: expiresAt}
-	if value, present := payload["refresh_token"]; present && value != nil {
-		text, isString := value.(string)
-		if !isString {
-			return PagerDutyOAuthTokens{}, ErrPagerDutyExchangeMalformed
-		}
-		tokens.RefreshToken = text
+	tokens := PagerDutyOAuthTokens{AccessToken: pyjson.Str(rawAccess), ExpiresAt: expiresAt}
+	if raw, present := payload.Get("refresh_token"); present && pyjson.Truthy(raw) {
+		tokens.RefreshToken = pyjson.Str(raw)
 	}
 	scope := ""
-	if value, present := payload["scope"]; present {
-		text, isString := value.(string)
-		if !isString {
-			return PagerDutyOAuthTokens{}, ErrPagerDutyExchangeMalformed
-		}
-		scope = text
+	if raw, present := payload.Get("scope"); present {
+		scope = pyjson.Str(raw)
 	}
 	tokens.GrantedScopes = pagerDutyScopeSet(pythonparity.SplitWhitespace(scope))
 	return tokens, nil
@@ -151,8 +173,8 @@ func pagerDutyTokensFromPayload(body []byte, now time.Time) (PagerDutyOAuthToken
 // pagerDutyExpiresInSeconds is _tokens' `int(expires_in) if isinstance(
 // expires_in, int | str) else 3600`: a JSON integer or boolean or a string
 // int() accepts is used as is (no clamping), anything else means an hour.
-func pagerDutyExpiresInSeconds(payload map[string]any) (int64, bool) {
-	value, present := payload["expires_in"]
+func pagerDutyExpiresInSeconds(payload *pyjson.Object) (int64, bool) {
+	value, present := payload.Get("expires_in")
 	if !present {
 		return 3600, true
 	}
@@ -163,15 +185,11 @@ func pagerDutyExpiresInSeconds(payload map[string]any) (int64, bool) {
 		if typed {
 			seconds = big.NewInt(1)
 		}
-	case json.Number:
-		if strings.ContainsAny(typed.String(), ".eE") {
-			return 3600, true
+	case pyjson.Int:
+		seconds = typed.Int
+		if seconds == nil {
+			seconds = big.NewInt(0)
 		}
-		parsed, ok := new(big.Int).SetString(typed.String(), 10)
-		if !ok {
-			return 0, false
-		}
-		seconds = parsed
 	case string:
 		parsed, err := pythonparity.ParseInt(typed)
 		if err != nil {

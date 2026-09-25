@@ -115,6 +115,8 @@ func (k Kind) String() string {
 type Env struct {
 	Args   []string
 	Lookup secrets.LookupEnv
+	// Stdin is what a verb reads when it is given "-"; nil reads as empty.
+	Stdin  io.Reader
 	Stdout io.Writer
 	Stderr io.Writer
 }
@@ -132,6 +134,21 @@ type Command struct {
 	// Children are required for a Group and optional for a Service. A Verb
 	// has none.
 	Children []Command
+	// RootFlags are the root flags of the how-it-runs kind (--log-level,
+	// --llm-provider, --model; see RootFlag) that this command's own flag set
+	// takes by the same name. A root flag typed before the command line is
+	// handed to a command that lists it as if it were typed first among its own
+	// flags, so one typed after wins. The flags that say where a command acts
+	// (--org, --db, --analytics-db) are handed to every command and are not
+	// listed. Only a Verb or a Service lists any.
+	RootFlags []RootFlag
+	// IgnoresArguments marks a command that takes no arguments and tolerates
+	// (ignores) any it is given. It cannot refuse a where-it-acts root flag
+	// (--org, --db, --analytics-db) the way a command with a flag set does, so
+	// the dispatcher refuses one typed before it: silently dropping it would run
+	// the command on the environment's organization or database while the
+	// operator typed another.
+	IgnoresArguments bool
 }
 
 // Validate checks a tree before it runs. cmd/dho's test calls it on the real
@@ -156,6 +173,9 @@ func validateLevel(level []Command, parent string) error {
 		}
 		if strings.TrimSpace(command.Summary) == "" {
 			return fmt.Errorf("command %q has no summary", path)
+		}
+		if err := validateRootFlags(path, command); err != nil {
+			return err
 		}
 		switch command.Kind {
 		case Group:
@@ -231,6 +251,7 @@ func Main(binary string, tree []Command) {
 	os.Exit(Execute(context.Background(), binary, tree, Env{
 		Args:   os.Args[1:],
 		Lookup: os.LookupEnv,
+		Stdin:  os.Stdin,
 		Stdout: os.Stdout,
 		Stderr: os.Stderr,
 	}))
@@ -238,6 +259,9 @@ func Main(binary string, tree []Command) {
 
 // Execute is the testable entry point. It never calls os.Exit.
 func Execute(ctx context.Context, binary string, tree []Command, env Env) int {
+	if env.Stdin == nil {
+		env.Stdin = strings.NewReader("")
+	}
 	if env.Stdout == nil {
 		env.Stdout = io.Discard
 	}
@@ -256,6 +280,28 @@ func Execute(ctx context.Context, binary string, tree []Command, env Env) int {
 	if len(args) == 0 {
 		writeHelp(env.Stderr, binary, nil, tree)
 		return ExitUsage
+	}
+	// Root flags (dev-hops's global options) come before the command:
+	// `dho --org X fixtures generate`. The words the builtins answer stand
+	// first, so `dho --version` and `dho --help` are unchanged.
+	var root rootParse
+	if strings.HasPrefix(args[0], "-") && args[0] != "-h" && args[0] != "--help" && args[0] != "--version" {
+		parsed, err := parseRootFlags(args)
+		if err != nil {
+			fmt.Fprintf(env.Stderr, "%s: error: %s\n", binary, err.Msg)
+			return ExitUsage
+		}
+		if parsed.help {
+			return help(env, binary, tree, nil)
+		}
+		if level, typed := parsed.values[string(RootLogLevel)]; typed {
+			defer logging.InstallDefault(logging.NewJSON(env.Stderr, pythonLevel(level)))()
+		}
+		root, args = parsed, parsed.rest
+		if len(args) == 0 {
+			fmt.Fprintf(env.Stderr, "%s: error: the following arguments are required: command\n", binary)
+			return ExitUsage
+		}
 	}
 	switch args[0] {
 	case "-h", "--help", "help":
@@ -300,7 +346,14 @@ func Execute(ctx context.Context, binary string, tree []Command, env Env) int {
 			writeHelp(env.Stderr, binary, path, command.Children)
 			return ExitUsage
 		}
-		return command.Run(ctx, Env{Args: args, Lookup: env.Lookup, Stdout: env.Stdout, Stderr: env.Stderr})
+		handed := handOver(command, root, args)
+		if command.IgnoresArguments {
+			if flag, typed := refusedRootFlag(root); typed {
+				fmt.Fprintf(env.Stderr, "%s: %s takes no --%s (typed before the command); it acts on what its environment names\n", binary, strings.Join(path, " "), flag)
+				return ExitUsage
+			}
+		}
+		return command.Run(ctx, Env{Args: handed, Lookup: env.Lookup, Stdin: env.Stdin, Stdout: env.Stdout, Stderr: env.Stderr})
 	}
 }
 

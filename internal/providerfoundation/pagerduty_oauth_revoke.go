@@ -50,6 +50,9 @@ func (c PagerDutyRevokeConfig) tokenURL() string {
 	return pagerDutyTokenURL
 }
 
+// APIBase is providers/pagerduty/client.py's pagerduty_base_url.
+func (c PagerDutyRevokeConfig) APIBase(region string) string { return c.apiBase(region) }
+
 // apiBase is providers/pagerduty/client.py's pagerduty_base_url.
 func (c PagerDutyRevokeConfig) apiBase(region string) string {
 	if c.APIBaseOverride != "" {

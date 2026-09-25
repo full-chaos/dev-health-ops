@@ -101,6 +101,9 @@ func (downStore) Increment(context.Context, httpapi.Hit) (int64, error) {
 	return 0, errors.New("dial tcp 10.0.0.9:6379: connection refused")
 }
 func (downStore) Backend() string { return "redis" }
+func (downStore) Peek(context.Context, httpapi.Hit) (int64, error) {
+	return 0, errors.New("dial tcp 10.0.0.9:6379: connection refused")
+}
 
 // A Valkey outage on a limited route is the Python api's unhandled-error 500
 // (slowapi has no swallow_errors), in the api's Python wire shape, marked as

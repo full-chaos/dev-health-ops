@@ -176,7 +176,9 @@ func TestRuntimeAuthorizationBindsSeparateLeastPrivilegeRolePools(t *testing.T) 
 		// worker never opens either kind of row.
 		"GRANT SELECT, UPDATE ON TABLE public.backfill_jobs, public.job_runs TO " + runtimeAuthorizationDomainRole,
 		"GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_coverage_projections TO " + runtimeAuthorizationDomainRole,
-		"GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_executed_proof_ledger, public.sync_watermarks, public.sync_dispatch_outbox, public.remaining_metric_runs, public.remaining_metric_partitions, public.work_graph_execution_requests, public.work_graph_execution_ledger, public.daily_metrics_partitions, public.daily_metrics_runs, public.daily_metrics_finalize_redrive_events, public.worker_job_runs TO " + runtimeAuthorizationDomainRole,
+		"GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_executed_proof_ledger, public.sync_dispatch_outbox, public.remaining_metric_runs, public.remaining_metric_partitions, public.work_graph_execution_requests, public.work_graph_execution_ledger, public.daily_metrics_partitions, public.daily_metrics_runs, public.daily_metrics_finalize_redrive_events, public.worker_job_runs TO " + runtimeAuthorizationDomainRole,
+		// CHAOS-6622: the Jira rename watermark move deletes the superseded row.
+		"GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.sync_watermarks TO " + runtimeAuthorizationDomainRole,
 		"GRANT SELECT, INSERT ON TABLE public.daily_metrics_partition_recompute_events TO " + runtimeAuthorizationDomainRole,
 		"GRANT SELECT, UPDATE ON TABLE public.metric_compatibility_executions TO " + runtimeAuthorizationDomainRole,
 		"GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.worker_concurrency_leases TO " + runtimeAuthorizationDomainRole,

@@ -63,6 +63,10 @@ type Deps struct {
 	Secrets Secrets
 	Now     func() time.Time
 	Logger  *slog.Logger
+	// Counters is the store the PagerDuty limiter counts in: the shared
+	// Valkey-backed store in a real deployment (so the limit holds across api
+	// replicas), nil for an in-process store on Now (development and tests).
+	Counters httpapi.CounterStore
 
 	limiters *rateLimiters
 }
@@ -94,7 +98,7 @@ func (d Deps) logger() *slog.Logger {
 // carry none in Python either.
 func Routes(deps Deps) []httpapi.Route {
 	if deps.limiters == nil {
-		deps.limiters = newRateLimiters(deps.Now)
+		deps.limiters = newRateLimiters(deps.Counters, deps.Now)
 	}
 	const prefix = "/api/v1/webhooks"
 	return []httpapi.Route{

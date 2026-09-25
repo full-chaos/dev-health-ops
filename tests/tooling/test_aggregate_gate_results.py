@@ -1734,15 +1734,18 @@ def test_docs_tests_installs_what_the_docs_suite_imports() -> None:
         for step in _docs_tests_job()["steps"]
         if isinstance(step, dict)
     )
-    # requirements.txt is `-e .[dev]`, which is where pytest AND the root
+    # `-e .[dev]` (what requirements.txt spells) is where pytest AND the root
     # conftest's imports (GitPython) come from. Omitting it is not a
     # theoretical risk: the first version of this job installed only
     # requirements-docs.txt and failed in CI at collection with
     # `ModuleNotFoundError: No module named 'git'` -- tests/conftest.py is
     # loaded even when only tests/docs is selected. Locally it passed,
-    # because the dev environment already had everything.
-    assert "requirements.txt" in runs, (
-        "docs-tests must install requirements.txt (-e .[dev]); without it "
+    # because the dev environment already had everything. Since CHAOS-6646
+    # the project comes from the lock (`uv sync --frozen --all-extras
+    # --dev`, the same set as -e .[dev]) instead of an unlocked re-resolve.
+    assert "uv sync --frozen --all-extras --dev" in runs, (
+        "docs-tests must install the project's dev environment from uv.lock "
+        "(uv sync --frozen --all-extras --dev); without it "
         "tests/conftest.py cannot even be imported and the job fails at "
         "collection"
     )

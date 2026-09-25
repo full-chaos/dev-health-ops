@@ -54,7 +54,11 @@ if _PORT:
     _orig_init = httpx.AsyncClient.__init__
 
     def _init(self: Any, *args: Any, **kwargs: Any) -> None:
-        kwargs.setdefault("transport", _StubTransport())
+        # A client that names no transport (transport=None included, as the
+        # instrumented REST core passes) gets the stub; one that names its
+        # own keeps it.
+        if kwargs.get("transport") is None:
+            kwargs["transport"] = _StubTransport()
         _orig_init(self, *args, **kwargs)
 
     setattr(httpx.AsyncClient, "__init__", _init)

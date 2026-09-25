@@ -8,12 +8,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
+	"github.com/full-chaos/dev-health-ops/internal/syncbudget"
 	"github.com/full-chaos/dev-health-ops/internal/syncreconciler"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -58,7 +62,9 @@ CREATE TABLE public.integration_datasets (
 );
 CREATE TABLE public.sync_watermarks (
  org_id text NOT NULL, source_id text NOT NULL, dataset_key text NOT NULL,
- repo_id text NOT NULL, target text NOT NULL, last_synced_at timestamptz
+ repo_id text NOT NULL, target text NOT NULL, last_synced_at timestamptz,
+ id uuid NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
+ updated_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE TABLE public.organizations (id uuid PRIMARY KEY, tier text);
 CREATE TABLE public.org_licenses (
@@ -278,13 +284,38 @@ func TestNativeMaterializerReplaysWithoutDuplicateGraphRows(t *testing.T) {
 			t.Errorf("%s row count=%d, want %d", table, got, want)
 		}
 	}
+	// Environment auth is stamped through Materialize and persisted even with
+	// no decryptor installed: the fingerprint of the provider's environment
+	// credentials, as planner.py stamps it (the value itself is held to
+	// Python by TestCredentialFingerprintVenueOracleMatchesLivePython).
 	var fingerprint *string
-	var authSource string
-	if err := fixture.pool.QueryRow(context.Background(), `SELECT credential_fingerprint,auth_source FROM sync_runs WHERE id=$1::uuid`, first.SyncRunID).Scan(&fingerprint, &authSource); err != nil {
+	var authSource, integrationID, provider string
+	if err := fixture.pool.QueryRow(context.Background(), `
+SELECT sync_runs.credential_fingerprint, sync_runs.auth_source, sync_runs.integration_id::text, integrations.provider
+FROM sync_runs JOIN integrations ON integrations.id = sync_runs.integration_id WHERE sync_runs.id=$1::uuid`, first.SyncRunID,
+	).Scan(&fingerprint, &authSource, &integrationID, &provider); err != nil {
 		t.Fatal(err)
 	}
-	if fingerprint != nil || authSource != "environment" {
-		t.Fatalf("unsafe scheduler credential stamp: fingerprint=%v auth_source=%q", fingerprint, authSource)
+	want, err := syncbudget.Loader{Getenv: os.Getenv}.PlanFingerprint(context.Background(), fixture.occurrence.OrgID, integrationID, provider, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if authSource != "environment" || fingerprint == nil || *fingerprint != want {
+		t.Fatalf("environment credential stamp: fingerprint=%v auth_source=%q, want %s", fingerprint, authSource, want)
+	}
+	// The stamp is part of replay equality: a run whose persisted stamp no
+	// longer matches the plan is rejected, and replays again once restored.
+	if _, err := fixture.pool.Exec(context.Background(), `UPDATE sync_runs SET credential_fingerprint='corrupt' WHERE id=$1::uuid`, first.SyncRunID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := materializeAndCommit(t, fixture, materializer, fixture.occurrence); !errors.Is(err, ErrInvalidPlan) {
+		t.Fatalf("replay over a changed credential stamp: err=%v, want ErrInvalidPlan", err)
+	}
+	if _, err := fixture.pool.Exec(context.Background(), `UPDATE sync_runs SET credential_fingerprint=$2 WHERE id=$1::uuid`, first.SyncRunID, want); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := materializeAndCommit(t, fixture, materializer, fixture.occurrence); err != nil {
+		t.Fatalf("replay did not recover after restoring the stamp: %v", err)
 	}
 	var jobResultJSON []byte
 	if err := fixture.pool.QueryRow(context.Background(), `SELECT result::jsonb FROM job_runs WHERE id=$1::uuid`, first.JobRunID).Scan(&jobResultJSON); err != nil {
@@ -449,16 +480,32 @@ func TestNativeMaterializerRejectsReplayAcrossInitializedFieldFamilies(t *testin
 	}
 }
 
+// pagerDutyFixtureDecryptor is the cipher the PagerDuty fixture's credential
+// is encrypted with. The materializer's fingerprint stamp decrypts it through
+// the domain pool (the coordinator-side repair still never reads it).
+func pagerDutyFixtureDecryptor(t *testing.T) providerfoundation.FernetDecryptor {
+	t.Helper()
+	decryptor, err := providerfoundation.NewFernetDecryptor(secrets.NewValue("materializer-pagerduty-fixture-key"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return decryptor
+}
+
 func configurePagerDutyFixture(t *testing.T, fixture materializerFixture, targets string) {
 	t.Helper()
 	const credentialID = "00000000-0000-4000-8000-000000001006"
 	ctx := context.Background()
+	ciphertext, err := pagerDutyFixtureDecryptor(t).Encrypt([]byte(`{"access_token": "pd-token"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
 	statements := []struct {
 		sql  string
 		args []any
 	}{
 		{`DELETE FROM sync_watermarks`, nil}, {`DELETE FROM integration_sources`, nil}, {`DELETE FROM integration_datasets`, nil},
-		{`INSERT INTO integration_credentials (id,org_id,provider,is_active,config,credentials_encrypted) VALUES ($1::uuid,$2,'pagerduty',TRUE,'{"account_id":"acct-1","subdomain":"full-chaos"}'::jsonb,'ciphertext-must-not-be-read')`, []any{credentialID, fixture.occurrence.OrgID}},
+		{`INSERT INTO integration_credentials (id,org_id,provider,is_active,config,credentials_encrypted) VALUES ($1::uuid,$2,'pagerduty',TRUE,'{"account_id":"acct-1","subdomain":"full-chaos"}'::jsonb,$3)`, []any{credentialID, fixture.occurrence.OrgID, ciphertext.Reveal()}},
 		{`UPDATE integrations SET provider='pagerduty',credential_id=$1::uuid WHERE id=(SELECT integration_id FROM sync_configurations LIMIT 1)`, []any{credentialID}},
 		{`UPDATE sync_configurations SET provider='pagerduty',sync_targets=$1::jsonb WHERE id=$2::uuid`, []any{targets, fixture.occurrence.ConfigID}},
 	}
@@ -504,6 +551,7 @@ VALUES (
 	if err != nil {
 		t.Fatal(err)
 	}
+	materializer.WithCredentialFingerprint(pagerDutyFixtureDecryptor(t))
 	plan, err := materializeAndCommit(t, fixture, materializer, fixture.occurrence)
 	if err != nil {
 		t.Fatal(err)
@@ -514,7 +562,7 @@ VALUES (
 	if err := fixture.pool.QueryRow(context.Background(), `SELECT total_units,credential_id::text,credential_fingerprint,auth_source FROM sync_runs WHERE id=$1::uuid`, plan.SyncRunID).Scan(&units, &credentialID, &fingerprint, &authSource); err != nil {
 		t.Fatal(err)
 	}
-	if units != len(pagerDutyOperationalDatasets) || credentialID == "" || fingerprint != nil || authSource != "integration_credential" {
+	if units != len(pagerDutyOperationalDatasets) || credentialID == "" || fingerprint == nil || *fingerprint == "" || authSource != "integration_credential" {
 		t.Fatalf("PagerDuty run stamp/units unexpected: units=%d credential=%q fingerprint=%v auth=%q", units, credentialID, fingerprint, authSource)
 	}
 	var sources, datasets int
@@ -553,6 +601,7 @@ func TestNativeMaterializerPagerDutyRepairAndUnitsShareDomainTransaction(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
+	materializer.WithCredentialFingerprint(pagerDutyFixtureDecryptor(t))
 	crash := errors.New("injected crash after PagerDuty domain commit")
 	materializer.afterDomainCommit = func() error { return crash }
 	if _, err := materializeAndCommit(t, fixture, materializer, fixture.occurrence); !errors.Is(err, crash) {
@@ -2136,4 +2185,111 @@ VALUES ($1::uuid,$2,(SELECT integration_id FROM sync_configurations WHERE id='%s
 	if len(sourceIDs) != 2 || !found {
 		t.Fatalf("sync_run_units source_ids=%v, want both PROJ and %s (the real discovered jira project)", sourceIDs, realSourceID)
 	}
+}
+
+// TestNativeMaterializerRefusesCredentialBackedPlanWithoutDecryptor pins
+// Python parity for a scheduler whose cipher failed to load: planner.py
+// cannot stamp a credential-backed run without the key and its plan fails,
+// so the Go occurrence is refused (and retried, then quarantined) instead
+// of committing a run with no credential_fingerprint, which would skip its
+// readers' fail-closed check.
+func TestNativeMaterializerRefusesCredentialBackedPlanWithoutDecryptor(t *testing.T) {
+	fixture := startMaterializerPostgres(t)
+	configurePagerDutyFixture(t, fixture, `["operational"]`)
+	materializer, err := NewNativeMaterializer(fixture.pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = materializeAndCommit(t, fixture, materializer, fixture.occurrence)
+	if !errors.Is(err, ErrOccurrenceIneligible) || !strings.Contains(err.Error(), "credential fingerprint: no credential decryptor") {
+		t.Fatalf("credential-backed plan without a decryptor: err=%v, want the credential-fingerprint refusal", err)
+	}
+	var runs int
+	if err := fixture.pool.QueryRow(context.Background(), `SELECT count(*) FROM sync_runs`).Scan(&runs); err != nil {
+		t.Fatal(err)
+	}
+	if runs != 0 {
+		t.Fatalf("sync_runs=%d after a refused plan, want 0", runs)
+	}
+}
+
+// TestNativeMaterializerStampsZeroUnitJiraPlanForStrictDiscovery ports
+// CHAOS-4593 (planner.py _zero_unit_plan_needs_credential_stamp): a Jira
+// plan with zero units still arms reference discovery, whose strict Jira
+// populate needs the frozen credential, so the run carries the full
+// run-auth stamp. Other providers' zero-unit plans stay unstamped
+// (TestNativeMaterializerDoesNotHydrateCredentialMetadataForZeroUnitPlan).
+func TestNativeMaterializerStampsZeroUnitJiraPlanForStrictDiscovery(t *testing.T) {
+	for _, withCredential := range []bool{false, true} {
+		name := "environment auth"
+		if withCredential {
+			name = "stored credential"
+		}
+		t.Run(name, func(t *testing.T) {
+			fixture := startMaterializerPostgres(t)
+			ctx := context.Background()
+			const credentialID = "00000000-0000-4000-8000-000000006703"
+			decryptor := pagerDutyFixtureDecryptor(t)
+			statements := []struct {
+				sql  string
+				args []any
+			}{
+				{`UPDATE integrations SET provider='jira',credential_id=NULL`, nil},
+				{`UPDATE integration_sources SET provider='jira',is_enabled=FALSE`, nil},
+				{`UPDATE sync_configurations SET provider='jira',sync_targets='[]'::jsonb`, nil},
+			}
+			if withCredential {
+				ciphertext, err := decryptor.Encrypt([]byte(`{"email": "e@example.com", "api_token": "t", "base_url": "https://x.atlassian.net"}`))
+				if err != nil {
+					t.Fatal(err)
+				}
+				statements = append(statements,
+					struct {
+						sql  string
+						args []any
+					}{`INSERT INTO integration_credentials (id,org_id,provider,is_active,config,credentials_encrypted) VALUES ($1::uuid,$2,'jira',TRUE,'{}'::jsonb,$3)`,
+						[]any{credentialID, fixture.occurrence.OrgID, ciphertext.Reveal()}},
+					struct {
+						sql  string
+						args []any
+					}{`UPDATE integrations SET credential_id=$1::uuid`, []any{credentialID}})
+			}
+			for _, statement := range statements {
+				if _, err := fixture.pool.Exec(ctx, statement.sql, statement.args...); err != nil {
+					t.Fatal(err)
+				}
+			}
+			materializer, err := NewNativeMaterializer(fixture.pool)
+			if err != nil {
+				t.Fatal(err)
+			}
+			materializer.WithCredentialFingerprint(decryptor)
+			plan, err := materializeAndCommit(t, fixture, materializer, fixture.occurrence)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var units int
+			var credential, auth, fingerprint *string
+			if err := fixture.pool.QueryRow(ctx, `SELECT total_units,credential_id::text,auth_source,credential_fingerprint FROM sync_runs WHERE id=$1::uuid`,
+				plan.SyncRunID).Scan(&units, &credential, &auth, &fingerprint); err != nil {
+				t.Fatal(err)
+			}
+			wantAuth, wantCredential := "environment", ""
+			if withCredential {
+				wantAuth, wantCredential = "integration_credential", credentialID
+			}
+			if units != 0 || auth == nil || *auth != wantAuth || fingerprint == nil || *fingerprint == "" ||
+				(wantCredential == "") != (credential == nil) || (credential != nil && *credential != wantCredential) {
+				t.Fatalf("zero-unit jira run stamp: units=%d credential=%v auth=%v fingerprint=%v, want auth %q credential %q",
+					units, deref(credential), deref(auth), deref(fingerprint), wantAuth, wantCredential)
+			}
+		})
+	}
+}
+
+func deref(value *string) string {
+	if value == nil {
+		return "<nil>"
+	}
+	return *value
 }

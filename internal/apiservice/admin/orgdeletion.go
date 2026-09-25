@@ -78,7 +78,6 @@ func (h *handlers) deleteOrganization(w http.ResponseWriter, r *http.Request) {
 		policy.WriteDetail(w, http.StatusBadRequest, "Invalid organization id", nil)
 		return
 	}
-	orgIDStr := orgUUID.String()
 
 	values, queryErr := url.ParseQuery(r.URL.RawQuery)
 	if queryErr != nil {
@@ -91,6 +90,35 @@ func (h *handlers) deleteOrganization(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	result, err := h.deleteOrganizationData(ctx, orgUUID, dryRun)
+	if err != nil {
+		var step *orgDeletionStepError
+		if errors.As(err, &step) {
+			h.logger.ErrorContext(ctx, "admin: org deletion "+step.step+" failed", "error", step.err)
+		}
+		policy.WriteInternal(w)
+		return
+	}
+
+	policy.WriteModel(w, http.StatusOK, result.json(), nil)
+}
+
+// orgDeletionStepError names which step of an organization deletion failed;
+// the route logs the step, the operator verb prints the cause.
+type orgDeletionStepError struct {
+	step string
+	err  error
+}
+
+func (e *orgDeletionStepError) Error() string { return e.err.Error() }
+func (e *orgDeletionStepError) Unwrap() error { return e.err }
+
+// deleteOrganizationData is org_deletion.py's OrganizationDeletionService.delete
+// after the org id is parsed: the one sequence the route and the operator verb
+// (Operator.DeleteOrg) both run. ClickHouse trouble is a warning in the result,
+// never an error.
+func (h *handlers) deleteOrganizationData(ctx context.Context, orgUUID uuid.UUID, dryRun bool) (*orgDeletionResult, error) {
+	orgIDStr := orgUUID.String()
 	result := &orgDeletionResult{
 		organizationID:     orgIDStr,
 		dryRun:             dryRun,
@@ -100,9 +128,7 @@ func (h *handlers) deleteOrganization(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.orgDeletionCredentialCounts(ctx, orgUUID, orgIDStr, result); err != nil {
-		h.logger.ErrorContext(ctx, "admin: org deletion credential counts failed", "error", err)
-		policy.WriteInternal(w)
-		return
+		return nil, &orgDeletionStepError{"credential counts", err}
 	}
 
 	// PagerDuty is revoked BEFORE the per-target count below (never
@@ -112,29 +138,22 @@ func (h *handlers) deleteOrganization(w http.ResponseWriter, r *http.Request) {
 	// there is 0, not 1, on both planes.
 	if !dryRun {
 		if err := h.orgDeletionRevokePagerDuty(ctx, orgIDStr); err != nil {
-			h.logger.ErrorContext(ctx, "admin: org deletion pagerduty revoke failed", "error", err)
-			policy.WriteInternal(w)
-			return
+			return nil, &orgDeletionStepError{"pagerduty revoke", err}
 		}
 	}
 
 	if err := h.orgDeletionCountTargets(ctx, orgUUID, orgIDStr, result); err != nil {
-		h.logger.ErrorContext(ctx, "admin: org deletion target counts failed", "error", err)
-		policy.WriteInternal(w)
-		return
+		return nil, &orgDeletionStepError{"target counts", err}
 	}
 
 	if !dryRun {
 		if err := h.orgDeletionPurgePostgres(ctx, orgUUID, orgIDStr, result); err != nil {
-			h.logger.ErrorContext(ctx, "admin: org deletion postgres purge failed", "error", err)
-			policy.WriteInternal(w)
-			return
+			return nil, &orgDeletionStepError{"postgres purge", err}
 		}
 	}
 
 	h.orgDeletionPurgeClickHouse(ctx, orgIDStr, dryRun, result)
-
-	policy.WriteModel(w, http.StatusOK, result.json(), nil)
+	return result, nil
 }
 
 // orgDeletionResult mirrors DeletionResult/DeletionResultResponse, field
@@ -290,7 +309,7 @@ func (h *handlers) orgDeletionRevokePagerDuty(ctx context.Context, orgIDStr stri
 		return nil
 	}
 	if h.pagerDuty.ClientID == "" {
-		return fmt.Errorf("pagerduty oauth configuration is unavailable for deletion")
+		return fmt.Errorf("PagerDuty OAuth configuration is unavailable for deletion")
 	}
 
 	for _, row := range credentials {
@@ -332,52 +351,94 @@ func (h *handlers) orgDeletionRevokePagerDuty(ctx context.Context, orgIDStr stri
 // expires_at is accepted as an RFC 3339 string, a date-time without an
 // offset, a date, or a JSON number; pydantic accepts a few more spellings.
 func pagerDutyRevokeToken(plaintext []byte) (string, error) {
+	tokens, err := parsePagerDutyOAuthTokens(plaintext)
+	if err != nil {
+		return "", err
+	}
+	if tokens.Refresh != "" {
+		return tokens.Refresh, nil
+	}
+	return tokens.Access, nil
+}
+
+// pagerDutyStoredTokens is OAuthTokens as validated from a stored payload.
+type pagerDutyStoredTokens struct {
+	Access, Refresh string
+	HasRefresh      bool
+	ExpiresAt       time.Time
+	// ExpiresNaive is an expires_at without an offset, which Python reads as
+	// a naive datetime (and fails to compare with an aware one).
+	ExpiresNaive bool
+	Scopes       []string
+}
+
+// parsePagerDutyOAuthTokens is OAuthTokens.model_validate_json.
+func parsePagerDutyOAuthTokens(plaintext []byte) (pagerDutyStoredTokens, error) {
+	var out pagerDutyStoredTokens
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(plaintext, &fields); err != nil || fields == nil {
-		return "", errors.New("pagerduty oauth tokens: not a JSON object")
+		return out, errors.New("pagerduty oauth tokens: not a JSON object")
 	}
 	for key := range fields {
 		switch key {
 		case "access_token", "refresh_token", "expires_at", "granted_scopes":
 		default:
-			return "", errors.New("pagerduty oauth tokens: extra field")
+			return out, errors.New("pagerduty oauth tokens: extra field")
 		}
 	}
-	var access string
-	if raw, ok := fields["access_token"]; !ok || json.Unmarshal(raw, &access) != nil || string(raw) == "null" {
-		return "", errors.New("pagerduty oauth tokens: access_token")
+	if raw, ok := fields["access_token"]; !ok || json.Unmarshal(raw, &out.Access) != nil || string(raw) == "null" {
+		return out, errors.New("pagerduty oauth tokens: access_token")
 	}
 	var refresh *string
 	if raw, ok := fields["refresh_token"]; ok && json.Unmarshal(raw, &refresh) != nil {
-		return "", errors.New("pagerduty oauth tokens: refresh_token")
+		return out, errors.New("pagerduty oauth tokens: refresh_token")
 	}
-	if raw, ok := fields["expires_at"]; !ok || !pagerDutyTokenExpiryValid(raw) {
-		return "", errors.New("pagerduty oauth tokens: expires_at")
+	if refresh != nil {
+		out.Refresh, out.HasRefresh = *refresh, true
 	}
+	raw, ok := fields["expires_at"]
+	if !ok {
+		return out, errors.New("pagerduty oauth tokens: expires_at")
+	}
+	expires, naive, valid := pagerDutyTokenExpiry(raw)
+	if !valid {
+		return out, errors.New("pagerduty oauth tokens: expires_at")
+	}
+	out.ExpiresAt, out.ExpiresNaive = expires, naive
 	if raw, ok := fields["granted_scopes"]; ok {
-		var scopes []string
-		if json.Unmarshal(raw, &scopes) != nil || string(raw) == "null" {
-			return "", errors.New("pagerduty oauth tokens: granted_scopes")
+		if json.Unmarshal(raw, &out.Scopes) != nil || string(raw) == "null" {
+			return out, errors.New("pagerduty oauth tokens: granted_scopes")
 		}
 	}
-	if refresh != nil && *refresh != "" {
-		return *refresh, nil
-	}
-	return access, nil
+	return out, nil
 }
 
-func pagerDutyTokenExpiryValid(raw json.RawMessage) bool {
+// pagerDutyTokenExpiry reads an expires_at: an RFC 3339 string, a date-time
+// without an offset (naive), a date, or a JSON number (epoch seconds).
+func pagerDutyTokenExpiry(raw json.RawMessage) (at time.Time, naive, ok bool) {
 	var text string
 	if json.Unmarshal(raw, &text) == nil {
-		for _, layout := range []string{time.RFC3339Nano, "2006-01-02T15:04:05.999999999", "2006-01-02 15:04:05.999999999Z07:00", "2006-01-02 15:04:05.999999999", "2006-01-02"} {
-			if _, err := time.Parse(layout, text); err == nil {
-				return true
+		if parsed, err := time.Parse(time.RFC3339Nano, text); err == nil {
+			return parsed.UTC(), false, true
+		}
+		for _, layout := range []string{"2006-01-02 15:04:05.999999999Z07:00"} {
+			if parsed, err := time.Parse(layout, text); err == nil {
+				return parsed.UTC(), false, true
 			}
 		}
-		return false
+		for _, layout := range []string{"2006-01-02T15:04:05.999999999", "2006-01-02 15:04:05.999999999", "2006-01-02"} {
+			if parsed, err := time.Parse(layout, text); err == nil {
+				return parsed.UTC(), true, true
+			}
+		}
+		return time.Time{}, false, false
 	}
 	var number float64
-	return json.Unmarshal(raw, &number) == nil && string(raw) != "null"
+	if json.Unmarshal(raw, &number) == nil && string(raw) != "null" {
+		whole := int64(number)
+		return time.Unix(whole, int64((number-float64(whole))*1e9)).UTC(), false, true
+	}
+	return time.Time{}, false, false
 }
 
 // orgDeletionPurgePostgres disables every scheduled job for the org, then

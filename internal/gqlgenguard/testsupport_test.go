@@ -71,9 +71,28 @@ func (f *fixture) withModuleFiles() *fixture {
 		if err != nil {
 			f.t.Fatalf("read %s from the repository root: %v", name, err)
 		}
-		f.write(name, string(data))
+		f.write(name, withoutVendoredAtlassian(name, string(data)))
 	}
 	return f
+}
+
+// withoutVendoredAtlassian drops the require and replace of the vendored
+// atlassian client (third_party/vendor/atlassian, a nested module the fixture
+// does not carry) from a copy of the repository's go.mod: the fixture imports
+// nothing from it, and the guard refuses a replace it cannot resolve inside
+// the copy.
+func withoutVendoredAtlassian(name, content string) string {
+	if name != "go.mod" {
+		return content
+	}
+	var kept []string
+	for _, line := range strings.Split(content, "\n") {
+		if strings.Contains(line, "atlassian") {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	return strings.Join(kept, "\n")
 }
 
 func (f *fixture) write(rel, body string) {

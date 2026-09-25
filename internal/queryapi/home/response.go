@@ -19,7 +19,10 @@
 // internal/goapiproof/home_corpus.go for the specific citations.
 package home
 
-import "github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+import (
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
+)
 
 // Coverage is the wire shape of Coverage (schemas.py:9-12).
 type Coverage struct {
@@ -30,16 +33,16 @@ type Coverage struct {
 
 // Freshness is the wire shape of Freshness (schemas.py:15-19).
 type Freshness struct {
-	LastIngestedAt         *NaiveDateTime    `json:"last_ingested_at"`
-	LatestSuccessfulSyncAt *MicroDateTime    `json:"latest_successful_sync_at"`
-	Sources                map[string]string `json:"sources"`
-	Coverage               Coverage          `json:"coverage"`
+	LastIngestedAt         *pytime.NaiveDateTime `json:"last_ingested_at"`
+	LatestSuccessfulSyncAt *MicroDateTime        `json:"latest_successful_sync_at"`
+	Sources                map[string]string     `json:"sources"`
+	Coverage               Coverage              `json:"coverage"`
 }
 
 // SparkPoint is the wire shape of SparkPoint (schemas.py:22-24).
 type SparkPoint struct {
-	TS    NaiveDateTime `json:"ts"`
-	Value float64       `json:"value"`
+	TS    pytime.NaiveDateTime `json:"ts"`
+	Value float64              `json:"value"`
 }
 
 // MetricDelta is the wire shape of MetricDelta (schemas.py:27-33).
@@ -101,10 +104,10 @@ type ScopeEntityRef struct {
 
 // HealthState is the wire shape of HomeHealthState (schemas.py:81-85).
 type HealthState struct {
-	Status   string         `json:"status"`
-	Headline string         `json:"headline"`
-	Summary  string         `json:"summary"`
-	AsOf     *NaiveDateTime `json:"as_of"`
+	Status   string                `json:"status"`
+	Headline string                `json:"headline"`
+	Summary  string                `json:"summary"`
+	AsOf     *pytime.NaiveDateTime `json:"as_of"`
 }
 
 // Signal is the wire shape of HomeSignal (schemas.py:88-106).

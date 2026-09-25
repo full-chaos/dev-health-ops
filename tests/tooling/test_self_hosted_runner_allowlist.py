@@ -172,7 +172,9 @@ def test_no_deny_list_fragment_survives_in_routed_workflows() -> None:
 # a regression on an aggregator job (`test`, `lint`, `typecheck`) is exactly
 # as real a routing bug as one on its constituent job.
 REQUIRED_CONTEXT_JOBS = {
-    "go-quality.yml": ["go-quality"],
+    # CHAOS-6690: go-quality runs as parallel legs behind a fan-in that keeps the
+    # required context name; both are routed by the same ternary.
+    "go-quality.yml": ["go-quality-leg", "go-quality"],
     "lint.yml": ["changes", "lint-job", "lint"],
     "typecheck.yml": ["typecheck-mypy", "typecheck"],
     "test.yml": ["changes", "test-matrix", "coverage", "docs-tests", "test"],
@@ -203,7 +205,7 @@ def test_every_required_context_job_uses_the_allowlist_condition() -> None:
 # stayed correct -- a distinct failure mode from a routing bug, catchable
 # only by checking this field directly.
 CACHE_NEGATION_JOBS = {
-    "go-quality.yml": "go-quality",
+    "go-quality.yml": "go-quality-leg",
     "test.yml": "test-matrix",
     "live-e2e.yml": "metrics-executed-proof",
 }
@@ -336,7 +338,7 @@ _CACHE_PATH_STEP_IF_PLAIN = ALLOWLIST_CONDITION
 
 _CACHE_PATH_STEP_SITES = {
     "go-quality.yml": (
-        "go-quality",
+        "go-quality-leg",
         "Configure self-hosted Go cache paths",
         _CACHE_PATH_STEP_IF_WITH_RELEVANCE,
     ),

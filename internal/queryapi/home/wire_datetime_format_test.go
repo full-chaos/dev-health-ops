@@ -3,6 +3,7 @@ package home
 import (
 	"encoding/json"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
 	"regexp"
 	"strings"
 	"testing"
@@ -14,7 +15,7 @@ import (
 // SparkPoint.ts leaves carry no "Z" suffix and no fractional seconds
 // (see this type's own doc comment for the source of each leaf).
 func TestNaiveDateTimeMarshalsWithoutZoneOrFraction(t *testing.T) {
-	n := NaiveDateTime(time.Date(2024, 1, 8, 10, 0, 4, 0, time.UTC))
+	n := pytime.NaiveDateTime(time.Date(2024, 1, 8, 10, 0, 4, 0, time.UTC))
 	got, err := json.Marshal(n)
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
@@ -22,6 +23,29 @@ func TestNaiveDateTimeMarshalsWithoutZoneOrFraction(t *testing.T) {
 	want := `"2024-01-08T10:00:04"`
 	if string(got) != want {
 		t.Fatalf("NaiveDateTime bytes = %s, want %s", got, want)
+	}
+}
+
+// TestNaiveLeavesMarshalAsThePythonNaiveWallClock pins the two ways the home
+// response builds its naive leaves now that they are pytime.NaiveDateTime: a
+// ClickHouse Date is the midnight of its date (SparkPoint.ts), and a
+// DateTime('UTC') value read in another location is the UTC wall clock
+// clickhouse-connect's naive_utc mode returns.
+func TestNaiveLeavesMarshalAsThePythonNaiveWallClock(t *testing.T) {
+	zone := time.FixedZone("plus2", 2*60*60)
+	for name, c := range map[string]struct {
+		in   pytime.NaiveDateTime
+		want string
+	}{
+		"a date is its midnight":          {pytime.NaiveDay(time.Date(2024, 1, 8, 0, 0, 0, 0, time.UTC)), `"2024-01-08T00:00:00"`},
+		"a date keeps its own wall date":  {pytime.NaiveDay(time.Date(2024, 1, 8, 23, 30, 0, 0, zone)), `"2024-01-08T00:00:00"`},
+		"a UTC instant is its wall clock": {pytime.NaiveUTC(time.Date(2024, 1, 8, 10, 0, 4, 0, time.UTC)), `"2024-01-08T10:00:04"`},
+		"another zone reads as UTC":       {pytime.NaiveUTC(time.Date(2024, 1, 8, 12, 0, 4, 0, zone)), `"2024-01-08T10:00:04"`},
+	} {
+		got, err := json.Marshal(c.in)
+		if err != nil || string(got) != c.want {
+			t.Errorf("%s: %s (%v), want %s", name, got, err, c.want)
+		}
 	}
 }
 
@@ -72,7 +96,7 @@ func TestMicroDateTimeMarshalsFixedSixDigitFraction(t *testing.T) {
 // SHAPE (never the same VALUE -- events[].ts is a per-request clock
 // read on both planes) for events[].ts.
 func TestHomeResponseWireDateTimeLeavesMatchPythonBytes(t *testing.T) {
-	lastIngested := NaiveDateTime(time.Date(2024, 1, 8, 10, 0, 4, 0, time.UTC))
+	lastIngested := pytime.NaiveDateTime(time.Date(2024, 1, 8, 10, 0, 4, 0, time.UTC))
 	synced := MicroDateTime(time.Date(2024, 1, 8, 10, 17, 50, 66950000, time.UTC))
 	eventTS := MicroDateTime(time.Date(2024, 1, 8, 10, 53, 32, 901785000, time.UTC))
 

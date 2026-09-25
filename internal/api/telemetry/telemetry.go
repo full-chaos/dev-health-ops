@@ -35,10 +35,10 @@ const (
 // record_telemetry_org_id_rejected does.
 var rejected = func() metric.Int64Counter {
 	counter, err := otel.Meter("github.com/full-chaos/dev-health-ops/internal/api/telemetry").Int64Counter(
-		"dev_health_api_telemetry_org_id_rejected_total",
+		"devhealth_telemetry_org_id_rejected_total",
 		metric.WithDescription("Telemetry route requests refused for their org, by reason"))
 	if err != nil {
-		counter, _ = otel.GetMeterProvider().Meter("noop").Int64Counter("dev_health_api_telemetry_org_id_rejected_total")
+		counter, _ = otel.GetMeterProvider().Meter("noop").Int64Counter("devhealth_telemetry_org_id_rejected_total")
 	}
 	return counter
 }()

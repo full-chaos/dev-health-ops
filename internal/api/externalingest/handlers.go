@@ -286,7 +286,11 @@ func (d Deps) handleAcceptBatch() http.HandlerFunc {
 			return
 		}
 
-		mode, err := resolveEffectiveMode(r.Context(), d.Pool, authCtx.OrgID, envelope.Source.System, envelope.Source.Instance, envelope.Source.EntityFamily)
+		mode, err := resolveEffectiveMode(r.Context(), d, authCtx.OrgID, envelope.Source.System, envelope.Source.Instance, envelope.Source.EntityFamily)
+		if errors.Is(err, ErrOwnershipResolutionUnavailable) {
+			writeIngestError(w, newIngestError(http.StatusForbidden, "ownership_resolution_unavailable", OwnershipResolutionUnavailableMessage))
+			return
+		}
 		if err != nil {
 			writeIngestError(w, newIngestError(http.StatusInternalServerError, "internal_error", "failed to resolve source ownership"))
 			return

@@ -170,7 +170,7 @@ var optionRegistry = []Option{
 		Flag: "log-level", Aliases: []string{"loglevel"},
 		Env: "DEV_HEALTH_LOG_LEVEL", Kind: KindString,
 		Default: "info", Group: GroupRuntime,
-		Usage: "debug, info, warn, or error",
+		Usage: "debug, info, warn, error, or critical",
 	},
 	{
 		Flag: "environment", Env: devHealthEnv, Kind: KindString, Group: GroupRuntime,

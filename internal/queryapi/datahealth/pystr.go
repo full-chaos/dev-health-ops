@@ -224,60 +224,6 @@ func pyFloatRepr(f float64) string {
 	return sign + out + "e" + expSign + expDigits
 }
 
-// pyLower is str.lower(): full Unicode lowercasing, where U+0130 becomes "i"
-// plus a combining dot and a capital sigma at the end of a word becomes the
-// final sigma.
-func pyLower(s string) string {
-	runes := []rune(s)
-	var b strings.Builder
-	for i, r := range runes {
-		switch {
-		case r == 0x130:
-			b.WriteString("i̇")
-		case r == 0x3a3:
-			if finalSigma(runes, i) {
-				b.WriteRune(0x3c2)
-			} else {
-				b.WriteRune(0x3c3)
-			}
-		default:
-			b.WriteRune(unicode.ToLower(r))
-		}
-	}
-	return b.String()
-}
-
-// finalSigma reports the Final_Sigma condition: a cased letter before (skipping
-// case-ignorable characters) and none after.
-func finalSigma(runes []rune, i int) bool {
-	before := false
-	for j := i - 1; j >= 0; j-- {
-		if isCaseIgnorable(runes[j]) {
-			continue
-		}
-		before = isCased(runes[j])
-		break
-	}
-	if !before {
-		return false
-	}
-	for j := i + 1; j < len(runes); j++ {
-		if isCaseIgnorable(runes[j]) {
-			continue
-		}
-		return !isCased(runes[j])
-	}
-	return true
-}
-
-func isCased(r rune) bool {
-	return unicode.IsUpper(r) || unicode.IsLower(r) || unicode.IsTitle(r)
-}
-
-func isCaseIgnorable(r rune) bool {
-	return unicode.In(r, unicode.Mn, unicode.Me, unicode.Cf, unicode.Lm, unicode.Sk) || r == '\'' || r == '.' || r == ':' || r == 0xb7 || r == 0x2019
-}
-
 // pySpace is str.isspace() for one rune.
 func pySpace(r rune) bool {
 	return unicode.IsSpace(r) || (r >= 0x1c && r <= 0x1f) || r == 0x85

@@ -1212,9 +1212,13 @@ func logLevelEnv(lookup secrets.LookupEnv) (slog.Level, error) {
 		return slog.LevelWarn, nil
 	case "error":
 		return slog.LevelError, nil
+	case "critical", "fatal":
+		// dev-hops's --log-level CRITICAL (Python's logging.CRITICAL, 50): above
+		// error, so ERROR records are silenced as they are there.
+		return slog.LevelError + 4, nil
 	default:
 		return 0, fmt.Errorf(
-			"%s must be debug, info, warn, or error", settingLabel("DEV_HEALTH_LOG_LEVEL"),
+			"%s must be debug, info, warn, error, or critical", settingLabel("DEV_HEALTH_LOG_LEVEL"),
 		)
 	}
 }

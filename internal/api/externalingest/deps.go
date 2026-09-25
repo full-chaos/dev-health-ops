@@ -24,6 +24,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/credentials"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/jackc/pgx/v5/pgxpool"
 	valkeygo "github.com/valkey-io/valkey-go"
@@ -76,9 +77,23 @@ type Deps struct {
 	// store (Valkey when configured, so a limit holds across replicas); nil
 	// means an in-process one on Now.
 	Counters httpapi.CounterStore
+	// Cipher reads a managed integration's credential payload for the
+	// operational ownership check (SETTINGS_ENCRYPTION_KEY); nil is a
+	// process without a key.
+	Cipher credentials.Cipher
+	// Getenv reads GITHUB_URL/GITLAB_URL for a credential-less managed
+	// integration; nil means os.LookupEnv. Python reads them per request.
+	Getenv func(string) (string, bool)
 
 	limiters      *authLimiters
 	routeLimiters *routeLimiters
+}
+
+func (d Deps) getenv() func(string) (string, bool) {
+	if d.Getenv != nil {
+		return d.Getenv
+	}
+	return os.LookupEnv
 }
 
 func (d Deps) now() time.Time {
@@ -115,7 +130,7 @@ func (d Deps) logger() *slog.Logger {
 // either (router.py has no @limiter.limit on it) and gets none here.
 func Routes(deps Deps) []httpapi.Route {
 	if deps.limiters == nil {
-		deps.limiters = newAuthLimiters(deps.Now)
+		deps.limiters = newAuthLimiters(deps.Counters, deps.Now)
 	}
 	if deps.routeLimiters == nil {
 		deps.routeLimiters = newRouteLimiters(deps.Counters, deps.Now)

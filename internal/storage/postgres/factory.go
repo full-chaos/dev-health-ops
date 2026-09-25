@@ -94,7 +94,7 @@ func New(ctx context.Context, config Config) (*pgxpool.Pool, error) {
 
 	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
 	if err != nil {
-		return nil, secrets.WithRedactedCause(ErrUnavailable, config.URI, err)
+		return nil, secrets.WithRedactedCauseAlso(ErrUnavailable, config.URI, err, resolvedCredentials(poolConfig)...)
 	}
 	return pool, nil
 }
@@ -110,10 +110,18 @@ func Open(ctx context.Context, config Config) (*pgxpool.Pool, error) {
 		return nil, err
 	}
 	if err := pool.Ping(ctx); err != nil {
+		resolved := resolvedCredentials(pool.Config())
 		pool.Close()
-		return nil, secrets.WithRedactedCause(ErrUnavailable, config.URI, err)
+		return nil, secrets.WithRedactedCauseAlso(ErrUnavailable, config.URI, err, resolved...)
 	}
 	return pool, nil
+}
+
+// resolvedCredentials is the login and password pgx settled on. It reads them
+// from the DSN, PGUSER and PGPASSWORD, and service files, so the effective login
+// can be absent from the DSN and still appear in the server's failure text.
+func resolvedCredentials(poolConfig *pgxpool.Config) []string {
+	return []string{poolConfig.ConnConfig.User, poolConfig.ConnConfig.Password}
 }
 
 func parseConfig(uri string) (*pgxpool.Config, error) {

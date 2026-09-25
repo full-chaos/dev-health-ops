@@ -38,13 +38,39 @@ type storedCredential struct {
 // decryptPayload is decrypt_value + json.loads. ok is false where Python's
 // ValueError / JSONDecodeError is caught (a wrong key, a malformed token, a
 // payload that is not JSON); a missing key is Python's RuntimeError, which
-// is not caught, so it is returned as an error. A payload that is not a JSON
-// object counts as unreadable here.
+// is not caught, so it is returned as an error. A payload that is valid JSON
+// but not an object is readable (ok) with nil creds.
 func (h handlers) decryptPayload(ciphertext string) (creds *pyjson.Object, ok bool, err error) {
-	if !h.cipher.Configured() {
+	decoded, ok, err := h.decryptValue(ciphertext)
+	if err != nil || !ok {
+		return nil, ok, err
+	}
+	// Valid JSON that is not an object decrypted and parsed: Python's
+	// json.loads gives it back with the OK outcome, and never counts it as
+	// a decrypt failure. It carries no credentials here (nil), which the
+	// route answers as "Credential not found", as Python does for a falsy
+	// value such as [] (`if not creds`).
+	object, _ := decoded.(*pyjson.Object)
+	return object, true, nil
+}
+
+// decryptValue is DecryptStoredValue on the handlers' cipher.
+func (h handlers) decryptValue(ciphertext string) (decoded pyjson.Value, ok bool, err error) {
+	return DecryptStoredValue(h.cipher, ciphertext)
+}
+
+// DecryptStoredValue is decrypt_value + json.loads, the decoded value
+// whatever its type (nil for JSON null), with decryptPayload's ok and error
+// rules: ok is false where Python's ValueError / JSONDecodeError is caught
+// (a wrong key, a malformed token, a payload that is not JSON) and a missing
+// key is Python's RuntimeError, not caught, returned as an error. It is the
+// one implementation of the stored-payload read, shared by every route that
+// reads integration_credentials.credentials_encrypted.
+func DecryptStoredValue(cipher Cipher, ciphertext string) (decoded pyjson.Value, ok bool, err error) {
+	if cipher == nil || !cipher.Configured() {
 		return nil, false, errors.New("SETTINGS_ENCRYPTION_KEY environment variable is required for encryption")
 	}
-	plain, decryptErr := h.cipher.Decrypt(secrets.NewValue(ciphertext))
+	plain, decryptErr := cipher.Decrypt(secrets.NewValue(ciphertext))
 	if decryptErr != nil {
 		return nil, false, nil
 	}
@@ -52,11 +78,7 @@ func (h handlers) decryptPayload(ciphertext string) (creds *pyjson.Object, ok bo
 	if parseErr != nil {
 		return nil, false, nil
 	}
-	object, isObject := decoded.(*pyjson.Object)
-	if !isObject {
-		return nil, false, nil
-	}
-	return object, true, nil
+	return decoded, true, nil
 }
 
 // lookupByID is get_decrypted_credentials_by_id_with_outcome.
@@ -84,6 +106,7 @@ func (h handlers) lookupByID(ctx context.Context, orgID, credentialID string) (*
 		return nil, outcomeNotFound, err
 	}
 	if !readable {
+		RecordDecryptFailed(ctx, provider)
 		return row, outcomeDecryptFailed, nil
 	}
 	row.creds = creds

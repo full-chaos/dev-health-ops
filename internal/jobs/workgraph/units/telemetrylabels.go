@@ -15,38 +15,11 @@ import (
 
 // Case folding here is pythonparity.Lower (CPython's str.lower(), NOT
 // strings.ToLower). The full rationale -- SpecialCasing, why language.Und is
-// correct BY DESIGN rather than by observed agreement, and the measured
-// 31-rune Final_Sigma lookahead divergence -- now lives on that function's doc
-// comment, which this package's local copy was promoted into (CHAOS-4280).
-//
-// # WHY THAT DIVERGENCE IS STILL CONTAINED FOR THIS PACKAGE
-//
-// x/text's Final_Sigma lookahead is bounded at 31 case-ignorable runes and
-// CPython's is not, so the two can disagree on which sigma form a long string
-// lowercases to. That is accepted HERE -- not on the grounds that a 31-dot
-// model name is implausible (implausibility is not a measurement, and this
-// lane has been wrong that way before), but because it is CONTAINED, provably:
-//
-//   - both sigma spellings are non-ASCII;
-//   - every entry in every allow-list here is ASCII;
-//   - every prefix ModelBucket tests is ASCII.
-//
-// So a string differing only in which sigma it carries takes the same branch
-// and lands in the same bucket, whichever form appears.
-//
-// TestSigmaFormCannotChangeABucket asserts exactly that, and is the reason this
-// stays acceptable. It fails the moment the containment does -- if a non-ASCII
-// entry joins an allow-list, or a non-ASCII prefix is added. At that point this
-// comment stops being a justification and Final_Sigma has to be implemented
-// directly.
-//
-// CORRECTED (CHAOS-4280): the previous wording also listed "if pythonLower is
-// exported" as a trigger. Promoting it to pythonparity.Lower did exactly that,
-// and the containment above is UNAFFECTED -- it depends on this package's own
-// allow-lists being ASCII, not on the helper's visibility. What promotion does
-// change is that the divergence is now shared, so the argument no longer
-// travels with the function: each NEW caller must establish its own
-// containment. That obligation is stated on pythonparity.Lower itself.
+// correct BY DESIGN rather than by observed agreement, and how Final_Sigma is
+// decided -- lives on that function's doc comment, which this package's local
+// copy was promoted into (CHAOS-4280). Its final-sigma decision no longer has
+// x/text's 31-rune lookahead bound (CHAOS-6630), so the containment argument
+// this package once needed for that divergence is gone with it.
 
 // Bounded ports llm_telemetry_labels.bounded.
 //

@@ -672,7 +672,11 @@ func domainPosture() RolePosture {
 			// PostgreSQL treats FOR UPDATE/FOR SHARE as UPDATE-class
 			// privileges. See loadPreparedRouteSnapshotRowSQL.
 			{"sync_run_unit_effect_snapshots", true, false, true},
-			{"sync_watermarks", true, true, false},
+			// DELETE as of CHAOS-6622: Jira source discovery moves a renamed
+			// project's watermarks to its new key and drops the old row when
+			// the new key already has one (discovery.py's
+			// _migrate_jira_watermarks_on_rename).
+			{"sync_watermarks", true, true, true},
 			{"sync_dispatch_outbox", true, true, false},
 			{"worker_job_outbox", true, false, false},
 			// UPDATE as of CHAOS-4209: stampCanonicalSyncConfig

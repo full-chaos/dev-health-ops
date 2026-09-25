@@ -236,9 +236,10 @@ def test_integration_coverage_inventory_completes_and_stays_nonempty() -> None:
     # server including its missing-privilege/extra-grant negative controls.
     # The count is derived, not pinned: the discovery verb's own total must
     # equal the shard manifest's package rows (tests/tooling/
-    # test_go_integration_sharding.py holds the manifest to EXPECTED_PACKAGES),
-    # so adding an integration package edits the two lists and never a
-    # number. The narrative above is history only.
+    # test_go_integration_sharding.py derives its expected set from this very
+    # discovery, CHAOS-6705), so adding an integration package edits ONE list
+    # (ci/go_integration_shards.tsv) and never a number. The narrative above
+    # is history only.
     match = re.search(
         r"(\d+) package\(s\) discovered, 0 denylisted, (\d+) will run", result.stdout
     )

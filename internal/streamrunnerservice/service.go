@@ -30,6 +30,8 @@ func Command() cli.Command {
 		Name:    "stream-runner",
 		Summary: "run a Valkey stream consumer profile (ingest, external, pagerduty)",
 		Kind:    cli.Service,
+		// dev-hops's root --log-level, typed before the command, is this service's own flag.
+		RootFlags: []cli.RootFlag{cli.RootLogLevel},
 		Run: func(ctx context.Context, env cli.Env) int {
 			return shell.Execute(ctx, streamRunnerSpec, env.Args, env.Lookup, shell.IO{
 				Stdout: env.Stdout,

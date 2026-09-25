@@ -177,14 +177,21 @@ type Deps struct {
 	// (see limitStore); nil means the Valkey-backed store when Valkey is
 	// configured, else an in-process one.
 	Limits httpapi.CounterStore
-	// Invites is create_org_invite's token secret, accept-link base and email
-	// sender (CHAOS-6391); the zero value sends no email.
+	// Invites is the link-mail configuration: the token secret, link base
+	// and email sender create_org_invite, e-mail verification and password
+	// reset share; the zero value sends no email.
 	Invites admin.InviteConfig
+	// RegisterLimit is AUTH_REGISTER_LIMIT as read at startup; the zero
+	// value is the register route's own default.
+	RegisterLimit httpapi.Limit
 	// Now is injectable so a test can drive an area's own clock (e.g.
 	// admin's keyed rate limiter, CHAOS-6357). Nil means time.Now, the
 	// same "nil is the production default" contract every other Now field
 	// in this codebase uses.
 	Now func() time.Time
+	// IntegrationHandoffWait bounds how long the integration sync and
+	// backfill routes wait for the scheduler to plan a run (0: 30 s).
+	IntegrationHandoffWait time.Duration
 }
 
 // TelemetryConfig is TELEMETRY_ENDPOINT (where /telemetry/report sends) and

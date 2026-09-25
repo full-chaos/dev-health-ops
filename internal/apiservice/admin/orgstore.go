@@ -54,7 +54,7 @@ func (s pgStore) orgByID(ctx context.Context, id uuid.UUID) (*organization, erro
 // orgBySlug is OrganizationService.get_by_slug (case-insensitive).
 func (s pgStore) orgBySlug(ctx context.Context, slug string) (*organization, error) {
 	return scanOrganization(s.Pool.QueryRow(ctx,
-		`SELECT `+orgColumns+` FROM organizations WHERE lower(slug) = lower($1)`, slug))
+		`SELECT `+orgColumns+` FROM organizations WHERE lower(slug) = $1`, pythonparity.Lower(slug)))
 }
 
 // listOrganizations is OrganizationService.list_all.
@@ -210,14 +210,14 @@ func slugify(name string) string {
 	// name.lower() is CPython's Unicode-aware str.lower(), not
 	// strings.ToLower (which diverges on e.g. U+0130) -- see
 	// pythonparity.Lower's own doc comment.
-	lowered := pythonparity.Lower(strings.TrimSpace(name))
+	lowered := pythonparity.Strip(pythonparity.Lower(name))
 	var kept strings.Builder
 	for _, r := range lowered {
-		if r == '_' || r == '-' || unicode.IsSpace(r) || unicode.IsLetter(r) || unicode.IsNumber(r) {
+		if r == '_' || r == '-' || pythonparity.IsSpace(r) || unicode.IsLetter(r) || unicode.IsNumber(r) {
 			kept.WriteRune(r)
 		}
 	}
-	fields := strings.FieldsFunc(kept.String(), func(r rune) bool { return r == '-' || unicode.IsSpace(r) })
+	fields := strings.FieldsFunc(kept.String(), func(r rune) bool { return r == '-' || pythonparity.IsSpace(r) })
 	slug := []rune(strings.Join(fields, "-"))
 	if len(slug) > 50 {
 		slug = slug[:50]

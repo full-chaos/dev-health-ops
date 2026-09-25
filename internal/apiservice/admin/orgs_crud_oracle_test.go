@@ -150,6 +150,18 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, uuid.New(), orgID, newMembe
 		// live round found Go dropping non-ASCII letters entirely.
 		{Name: "create org unicode name", Method: "POST", Path: "/api/v1/admin/orgs", Headers: jsonHeaders("super"),
 			Body: venueoracle.B64(`{"name":"Café 東京"}`)},
+		// CHAOS-6712: Python's str.strip()/str.lower()/\s are NOT Go's. U+001C..U+001F
+		// are whitespace to Python only: an all-FS name is "Workspace name is
+		// required", the same characters around a name are stripped, in the middle
+		// they separate slug words, and U+0130 lowers to two code points.
+		{Name: "create org control-whitespace name", Method: "POST", Path: "/api/v1/admin/orgs", Headers: jsonHeaders("super"),
+			Body: venueoracle.B64(`{"name":"\u001c"}`)},
+		{Name: "create org name padded with control whitespace", Method: "POST", Path: "/api/v1/admin/orgs", Headers: jsonHeaders("super"),
+			Body: venueoracle.B64(`{"name":"\u001f\u001eStripped Name\u001c"}`)},
+		{Name: "create org name with control whitespace inside", Method: "POST", Path: "/api/v1/admin/orgs", Headers: jsonHeaders("super"),
+			Body: venueoracle.B64(`{"name":"Left\u001cRight"}`)},
+		{Name: "create org dotted capital I name", Method: "POST", Path: "/api/v1/admin/orgs", Headers: jsonHeaders("super"),
+			Body: venueoracle.B64(`{"name":"\u001c\u0130stanbul\u001f"}`)},
 		{Name: "patch org", Method: "PATCH", Path: "/api/v1/admin/orgs/" + orgID.String(), Headers: jsonHeaders("super"),
 			Body: venueoracle.B64(`{"description":"updated description"}`)},
 		{Name: "patch org not found", Method: "PATCH", Path: "/api/v1/admin/orgs/" + uuid.New().String(), Headers: jsonHeaders("super"),

@@ -52,6 +52,7 @@ jobs:
               - 'migrations/**'
               - 'requirements.txt'
               - 'pyproject.toml'
+              - 'uv.lock'
               - 'pytest.ini'
               - 'alembic.ini'
               - 'Makefile'
@@ -147,16 +148,24 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: '**/go.sum'
 
-      - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      # CHAOS-6589: install EXACTLY uv.lock's resolution. This job used to
+      # `pip install -r requirements.txt` (`-e .[dev]`), which re-resolves
+      # every specifier in pyproject.toml against PyPI on every run and never
+      # reads uv.lock: SQLAlchemy 2.1.0, published mid-day 2026-09-24, was
+      # picked up here and broke main while every lock-installing job stayed
+      # green (CHAOS-6588 bounded it in pyproject as the stopgap). `uv sync
+      # --frozen` installs the locked (= deployed) set and FAILS the step if
+      # the lock is stale relative to pyproject.toml. The run scripts call
+      # `python3` from PATH, so the venv's bin goes on GITHUB_PATH.
+      - name: Install uv
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           python-version: "3.14"
-          cache: "pip"
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          uv sync --frozen --all-extras --dev
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
 
       - name: Run live-e2e tier
         env:
@@ -301,16 +310,24 @@ jobs:
           # same time (same reasoning as go.yml's self-hosted legs).
           cache: ${{ !(vars.SELF_HOSTED_RUNNERS == 'enabled' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.ref == '') || github.event_name == 'release' || github.event_name == 'schedule')) }}
 
-      - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      # CHAOS-6589: install EXACTLY uv.lock's resolution. This job used to
+      # `pip install -r requirements.txt` (`-e .[dev]`), which re-resolves
+      # every specifier in pyproject.toml against PyPI on every run and never
+      # reads uv.lock: SQLAlchemy 2.1.0, published mid-day 2026-09-24, was
+      # picked up here and broke main while every lock-installing job stayed
+      # green (CHAOS-6588 bounded it in pyproject as the stopgap). `uv sync
+      # --frozen` installs the locked (= deployed) set and FAILS the step if
+      # the lock is stale relative to pyproject.toml. The run scripts call
+      # `python3` from PATH, so the venv's bin goes on GITHUB_PATH.
+      - name: Install uv
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           python-version: "3.14"
-          cache: "pip"
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          uv sync --frozen --all-extras --dev
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
 
       - name: Run metrics executed-proof
         id: metrics-proof

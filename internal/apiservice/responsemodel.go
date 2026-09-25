@@ -108,6 +108,7 @@ var responseModelRoutes = map[string]bool{
 	"GET /api/v1/admin/settings/categories":                                            true,
 	"GET /api/v1/admin/settings/{category}":                                            true,
 	"GET /api/v1/admin/settings/{category}/{key}":                                      true,
+	"GET /api/v1/admin/setup/status":                                                   true,
 	"GET /api/v1/admin/sync-configs":                                                   true,
 	"GET /api/v1/admin/sync-configs/auto-import-capabilities":                          true,
 	"GET /api/v1/admin/sync-configs/{config_id}":                                       true,

@@ -100,6 +100,7 @@ internal/apiservice/acr	6
 internal/admincli	40
 internal/apiservice/admin	2
 internal/apiservice/metricsvenue	1
+internal/apiservice/adminsetupvenue	1
 internal/apiservice/sessionvenue	1
 internal/apiservice/authflowvenue	1
 internal/apiservice/billingvenue	2

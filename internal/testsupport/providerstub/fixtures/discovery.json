@@ -149,6 +149,27 @@
  {
   "provider": "gitlab",
   "method": "GET",
+  "path": "/api/v4/projects",
+  "status": 200,
+  "body": [
+   {
+    "id": 101,
+    "name": "zz-project",
+    "path_with_namespace": "zz-venue/zz-project"
+   },
+   {
+    "id": 102,
+    "name": "other-project",
+    "path_with_namespace": "other-group/other-project"
+   }
+  ],
+  "query": {
+   "membership": "True"
+  }
+ },
+ {
+  "provider": "gitlab",
+  "method": "GET",
   "path": "/api/v4/groups/zz-venue",
   "status": 200,
   "body": {
@@ -193,6 +214,27 @@
  {
   "provider": "gitlab",
   "method": "GET",
+  "path": "/c/ok/api/v4/projects",
+  "status": 200,
+  "body": [
+   {
+    "id": 101,
+    "name": "zz-project",
+    "path_with_namespace": "zz-venue/zz-project"
+   },
+   {
+    "id": 102,
+    "name": "other-project",
+    "path_with_namespace": "other-group/other-project"
+   }
+  ],
+  "query": {
+   "membership": "True"
+  }
+ },
+ {
+  "provider": "gitlab",
+  "method": "GET",
   "path": "/c/ok/api/v4/groups/zz-venue",
   "status": 200,
   "body": {
@@ -230,5 +272,31 @@
   "body": {
    "message": "401 Unauthorized"
   }
+ },
+ {
+  "provider": "gitlab",
+  "method": "GET",
+  "path": "/api/v4/groups/7/projects",
+  "status": 200,
+  "body": [
+   {
+    "id": 101,
+    "name": "zz-project",
+    "path_with_namespace": "zz-venue/zz-project"
+   }
+  ]
+ },
+ {
+  "provider": "gitlab",
+  "method": "GET",
+  "path": "/c/ok/api/v4/groups/7/projects",
+  "status": 200,
+  "body": [
+   {
+    "id": 101,
+    "name": "zz-project",
+    "path_with_namespace": "zz-venue/zz-project"
+   }
+  ]
  }
 ]

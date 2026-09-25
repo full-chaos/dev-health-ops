@@ -18,7 +18,9 @@ func TestDiscoveryFixturesAnswerEachCaseOnTheRightProvider(t *testing.T) {
 		{"gitlab.com", "/api/v4/projects?membership=true&page=1", 200}, {"gitlab.com", "/c/ok/api/v4/projects?membership=true", 200},
 		{"gitlab.com", "/api/v4/groups/zz-venue", 200}, {"gitlab.com", "/api/v4/groups/zz-venue/projects", 200},
 		{"gitlab.com", "/c/ok/api/v4/groups/zz-venue/projects", 200}, {"gitlab.com", "/api/v4/groups/zz-401/projects", 401},
-		{"gitlab.com", "/api/v4/projects", 599}, // the fixture requires membership=true
+		{"gitlab.com", "/api/v4/projects?membership=True", 200}, {"gitlab.com", "/c/ok/api/v4/projects?membership=True", 200},
+		{"gitlab.com", "/api/v4/groups/7/projects", 200}, {"gitlab.com", "/c/ok/api/v4/groups/7/projects", 200},
+		{"gitlab.com", "/api/v4/projects", 599}, // the fixture requires membership=true (either spelling)
 		{"api.github.com", "/api/v4/projects?membership=true", 599},
 	} {
 		if got := get(t, fixtures, tc.host, "GET", tc.target, nil); got.Code != tc.want {

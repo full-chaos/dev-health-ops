@@ -88,7 +88,7 @@ func withDispatchServicePool(t *testing.T, fn func(ctx context.Context, pool *pg
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	createReferenceDiscoveryTables(t, ctx, pool)
+	createReferenceDiscoveryTablesLegacy(t, ctx, pool)
 	// DispatchGuard.authorize_run's total-cap resolution
 	// (scheduledsync.ResolveMaxSyncUnitsCap -> loadPlanLimits) queries
 	// organizations/org_licenses -- absent in production only for a

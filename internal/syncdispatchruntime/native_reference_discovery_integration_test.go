@@ -11,88 +11,14 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func createReferenceDiscoveryTables(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
-	_, err := pool.Exec(ctx, `
-CREATE TABLE sync_dispatch_transport_routes (
- kind text PRIMARY KEY, transport text NOT NULL, generation bigint NOT NULL,
- paused boolean NOT NULL, rollback_transport text NOT NULL
-);
-CREATE TABLE sync_dispatch_outbox (
- id uuid PRIMARY KEY, sync_run_id uuid NOT NULL, org_id text NOT NULL, kind text NOT NULL,
- status text NOT NULL, available_at timestamptz NOT NULL, attempts int NOT NULL DEFAULT 0,
- dispatched_at timestamptz NULL, dispatched_transport text NULL, dispatched_route_generation bigint NULL,
- transport_job_id text NULL, claim_token text NULL, claim_transport text NULL,
- claim_route_generation bigint NULL, claim_expires_at timestamptz NULL, last_error text NULL,
- created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL,
- UNIQUE (sync_run_id, kind)
-);
-CREATE TABLE sync_runs (
- id uuid PRIMARY KEY, org_id text NOT NULL, integration_id uuid NOT NULL,
- status text NOT NULL DEFAULT 'dispatching', total_units int NOT NULL DEFAULT 0,
- completed_units int NOT NULL DEFAULT 0, failed_units int NOT NULL DEFAULT 0,
- started_at timestamptz NULL, completed_at timestamptz NULL, result json NULL, error text NULL
-);
-CREATE TABLE sync_run_units (
- id uuid PRIMARY KEY, org_id text NOT NULL, sync_run_id uuid NOT NULL, provider text NOT NULL,
- dataset_key text NOT NULL, source_id uuid NOT NULL, status text NOT NULL,
- cost_class text NOT NULL DEFAULT 'standard',
- integration_id uuid NOT NULL DEFAULT '00000000-0000-4000-8000-000000000010',
- since_at timestamptz NULL, before_at timestamptz NULL,
- available_at timestamptz NULL, error text NULL, result json NULL, lease_owner text NULL, lease_expires_at timestamptz NULL,
- last_heartbeat_at timestamptz NULL, updated_at timestamptz NOT NULL DEFAULT now(),
- rate_limit_deferrals int NOT NULL DEFAULT 0, rate_limit_first_seen_at timestamptz NULL,
- budget_deferrals int NOT NULL DEFAULT 0, budget_first_deferred_at timestamptz NULL,
- first_blocked_at timestamptz NULL, last_retry_reason text NULL, processor_flags json NULL
-);
-CREATE TABLE integrations (
- id uuid PRIMARY KEY, org_id text NOT NULL, provider text NOT NULL
-);
-CREATE TABLE integration_datasets (
- id uuid PRIMARY KEY, integration_id uuid NOT NULL, dataset_key text NOT NULL, is_enabled boolean NOT NULL
-);
-CREATE TABLE feature_flags (
- id uuid PRIMARY KEY, key text NOT NULL UNIQUE, min_tier text NOT NULL, is_enabled boolean NOT NULL
-);
-CREATE TABLE org_feature_overrides (
- id uuid PRIMARY KEY, org_id uuid NOT NULL, feature_id uuid NOT NULL,
- is_enabled boolean NOT NULL, expires_at timestamptz NULL, config json NULL,
- UNIQUE (org_id, feature_id)
-);
-CREATE TABLE organizations (
- id uuid PRIMARY KEY, tier text NULL
-);
-CREATE TABLE org_licenses (
- org_id uuid PRIMARY KEY, tier text NULL, features_override json NULL, limits_override jsonb NULL
-);
-CREATE TABLE tier_limits (
- tier text NOT NULL, limit_key text NOT NULL, limit_value text NULL, PRIMARY KEY (tier, limit_key)
-);
-CREATE TABLE backfill_jobs (
- id uuid PRIMARY KEY, org_id text NOT NULL, celery_task_id text NULL, status text NOT NULL,
- total_chunks int NOT NULL DEFAULT 0, completed_chunks int NOT NULL DEFAULT 0,
- failed_chunks int NOT NULL DEFAULT 0, error_message text NULL, completed_at timestamptz NULL
-);
-CREATE TABLE scheduled_jobs (
- id uuid PRIMARY KEY
-);
-CREATE TABLE job_runs (
- id uuid PRIMARY KEY, job_id uuid NOT NULL REFERENCES scheduled_jobs(id),
- status int NOT NULL, completed_at timestamptz NULL, result json NULL, error text NULL
-);
-CREATE TABLE sync_run_reference_discoveries (
- id uuid PRIMARY KEY, sync_run_id uuid NOT NULL UNIQUE, org_id text NOT NULL,
- status text NOT NULL, attempts int NOT NULL DEFAULT 0, available_at timestamptz NOT NULL,
- lease_owner text NULL, lease_expires_at timestamptz NULL, last_heartbeat_at timestamptz NULL,
- completed_at timestamptz NULL, error text NULL, result json NULL,
- created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now()
-)`)
-	if err != nil {
-		t.Fatal(err)
-	}
+	pgschema.Apply(ctx, t, pool)
 }
 
 const (
@@ -102,34 +28,27 @@ const (
 	discoveryTestIntegration = "00000000-0000-4000-8000-0000000000d4"
 )
 
+// discoveryRouteGeneration: the migrations seed every route as celery at generation 2 and the
+// table's trigger demands an increase for a state change, so the river route lands at 3.
+const discoveryRouteGeneration = 3
+
 func seedDiscoveryRoute(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
-	statements := []string{
-		`INSERT INTO sync_dispatch_transport_routes (kind,transport,generation,paused,rollback_transport)
-		 VALUES ('reference_discovery','river',1,false,'celery')`,
-		`INSERT INTO sync_dispatch_outbox
-		    (id,sync_run_id,org_id,kind,status,available_at,dispatched_transport,dispatched_route_generation,created_at,updated_at)
-		 VALUES ('` + discoveryTestOutbox + `','` + discoveryTestRun + `','` + discoveryTestOrg + `',
-		         'reference_discovery','dispatched',now(),'river',1,now(),now())`,
-		`INSERT INTO sync_runs (id,org_id,integration_id) VALUES ('` + discoveryTestRun + `','` +
-			discoveryTestOrg + `','` + discoveryTestIntegration + `')`,
-		// resolveAuthoritativeProvider (CHAOS-4175 round 2) joins sync_runs to
-		// integrations for every Discover() call now, not just the
-		// feature-gate tests -- every test in this file needs a real
-		// integrations row to reach the claimed-lease path at all.
-		`INSERT INTO integrations (id,org_id,provider) VALUES ('` + discoveryTestIntegration + `','` + discoveryTestOrg + `','github')`,
+	if got := pgseed.SyncTransportRoute(ctx, t, pool, "reference_discovery", "river", discoveryRouteGeneration, false, "celery"); got != discoveryRouteGeneration {
+		t.Fatalf("reference_discovery route generation = %d, want %d", got, discoveryRouteGeneration)
 	}
-	for _, statement := range statements {
-		if _, err := pool.Exec(ctx, statement); err != nil {
-			t.Fatal(err)
-		}
-	}
+	// resolveAuthoritativeProvider (CHAOS-4175 round 2) joins sync_runs to
+	// integrations for every Discover() call now, not just the
+	// feature-gate tests -- every test in this file needs a real
+	// integrations row to reach the claimed-lease path at all.
+	pgseed.EnsureSyncRun(ctx, t, pool, pgseed.SyncRun{ID: discoveryTestRun, OrgID: discoveryTestOrg, IntegrationID: discoveryTestIntegration})
+	pgseed.SyncDispatchOutbox(ctx, t, pool, discoveryTestOutbox, discoveryTestRun, discoveryTestOrg, "reference_discovery", "dispatched", "river", discoveryRouteGeneration)
 }
 
 func newDiscoveryArgs() ReferenceDiscoveryArgs {
 	return ReferenceDiscoveryArgs{TransportArgs: TransportArgs{
 		Version: ContractVersionV1, OrgID: discoveryTestOrg, RunID: discoveryTestRun,
-		DispatchOutbox: discoveryTestOutbox, RouteGeneration: 1,
+		DispatchOutbox: discoveryTestOutbox, RouteGeneration: discoveryRouteGeneration,
 	}}
 }
 
@@ -229,8 +148,8 @@ func TestNativeReferenceDiscoverySkipsAnAlreadyClaimedRun(t *testing.T) {
 
 	ledgerID := "00000000-0000-4000-8000-0000000000d5"
 	if _, err := pool.Exec(ctx, `
-INSERT INTO sync_run_reference_discoveries (id,sync_run_id,org_id,status,attempts,available_at,lease_owner,lease_expires_at)
-VALUES ($1,$2,$3,'running',1,now(),'someone-else',now() + interval '1 hour')`,
+INSERT INTO sync_run_reference_discoveries (id,sync_run_id,org_id,status,attempts,available_at,lease_owner,lease_expires_at,created_at,updated_at)
+VALUES ($1,$2,$3,'running',1,now(),'someone-else',now() + interval '1 hour',now(),now())`,
 		ledgerID, discoveryTestRun, discoveryTestOrg); err != nil {
 		t.Fatal(err)
 	}
@@ -354,12 +273,10 @@ func TestNativeReferenceDiscoveryTerminatesAfterExhaustingRetries(t *testing.T) 
 	seedDiscoveryRoute(t, ctx, pool)
 	unitID := "00000000-0000-4000-8000-0000000000d6"
 	sourceID := "00000000-0000-4000-8000-0000000000d7"
-	if _, err := pool.Exec(ctx, `
-INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status)
-VALUES ($1,$2,$3,'github','commits',$4,'planned')`,
-		unitID, discoveryTestOrg, discoveryTestRun, sourceID); err != nil {
-		t.Fatal(err)
-	}
+	pgseed.InsertSyncRunUnit(ctx, t, pool, pgseed.SyncRunUnit{
+		ID: unitID, RunID: discoveryTestRun, OrgID: discoveryTestOrg, IntegrationID: discoveryTestIntegration,
+		SourceID: sourceID, Provider: "github", DatasetKey: "commits", Status: "planned",
+	})
 
 	executor := &fakeDiscoveryExecutor{err: retryableDiscoveryError{message: "rate limited, please retry"}}
 	service, err := NewNativeReferenceDiscoveryService(pool, nil, executor)
@@ -448,13 +365,10 @@ func TestFailNonterminalUnitsAcquiresTheBucketAdvisoryLockBeforeAnyUnitWrite(t *
 	seedDiscoveryRoute(t, ctx, pool)
 	unitID := "00000000-0000-4000-8000-0000000000e7"
 	sourceID := "00000000-0000-4000-8000-0000000000e8"
-	if _, err := pool.Exec(ctx, `
-INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status)
-VALUES ($1,$2,$3,'github','commits',$4,'planned')`,
-		unitID, discoveryTestOrg, discoveryTestRun, sourceID); err != nil {
-		t.Fatal(err)
-	}
-	// cost_class defaults to 'standard' (schema default, createReferenceDiscoveryTables).
+	pgseed.InsertSyncRunUnit(ctx, t, pool, pgseed.SyncRunUnit{
+		ID: unitID, RunID: discoveryTestRun, OrgID: discoveryTestOrg, IntegrationID: discoveryTestIntegration,
+		SourceID: sourceID, Provider: "github", DatasetKey: "commits", CostClass: "standard", Status: "planned",
+	})
 	bucketKey := bucketAdvisoryLockKey(dispatchBucket{
 		orgID: discoveryTestOrg, provider: "github", costClass: "standard",
 	})
@@ -547,12 +461,10 @@ func TestNativeReferenceDiscoveryTerminatesAfterExhaustingRetriesRecordsTheRollu
 	seedDiscoveryRoute(t, ctx, pool)
 	unitID := "00000000-0000-4000-8000-0000000000fa"
 	sourceID := "00000000-0000-4000-8000-0000000000fb"
-	if _, err := pool.Exec(ctx, `
-INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status)
-VALUES ($1,$2,$3,'github','commits',$4,'planned')`,
-		unitID, discoveryTestOrg, discoveryTestRun, sourceID); err != nil {
-		t.Fatal(err)
-	}
+	pgseed.InsertSyncRunUnit(ctx, t, pool, pgseed.SyncRunUnit{
+		ID: unitID, RunID: discoveryTestRun, OrgID: discoveryTestOrg, IntegrationID: discoveryTestIntegration,
+		SourceID: sourceID, Provider: "github", DatasetKey: "commits", Status: "planned",
+	})
 
 	executor := &fakeDiscoveryExecutor{err: retryableDiscoveryError{message: "rate limited, please retry"}}
 	service, err := NewNativeReferenceDiscoveryService(pool, nil, executor)
@@ -603,8 +515,8 @@ func TestNativeReferenceDiscoveryLostLeaseDoesNotOverwriteAWinner(t *testing.T) 
 	// its executor call returned -- the ledger now shows a DIFFERENT owner
 	// having already succeeded.
 	if _, err := pool.Exec(ctx, `
-INSERT INTO sync_run_reference_discoveries (id,sync_run_id,org_id,status,attempts,available_at,completed_at,result)
-VALUES ($1,$2,$3,'success',1,now(),now(),'{}'::json)`,
+INSERT INTO sync_run_reference_discoveries (id,sync_run_id,org_id,status,attempts,available_at,completed_at,result,created_at,updated_at)
+VALUES ($1,$2,$3,'success',1,now(),now(),'{}'::json,now(),now())`,
 		"00000000-0000-4000-8000-0000000000d8", discoveryTestRun, discoveryTestOrg); err != nil {
 		t.Fatal(err)
 	}
@@ -649,10 +561,13 @@ func TestNativeReferenceDiscoveryTerminalizesRunWhenFeatureDisabled(t *testing.T
 	seedDiscoveryRoute(t, ctx, pool)
 	unitID := "00000000-0000-4000-8000-0000000000d9"
 	sourceID := "00000000-0000-4000-8000-0000000000da"
-	if _, err := pool.Exec(ctx, `
-INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status)
-VALUES ($1,$2,$3,'pagerduty','incidents',$4,'planned')`,
-		unitID, discoveryTestOrg, discoveryTestRun, sourceID); err != nil {
+	pgseed.InsertSyncRunUnit(ctx, t, pool, pgseed.SyncRunUnit{
+		ID: unitID, RunID: discoveryTestRun, OrgID: discoveryTestOrg, IntegrationID: discoveryTestIntegration,
+		SourceID: sourceID, Provider: "pagerduty", DatasetKey: "incidents", Status: "planned",
+	})
+	// The migrations pre-register canonical_incident_ingestion; this test's premise is that no
+	// feature_flags row exists for it, so the decision reads feature_not_registered.
+	if _, err := pool.Exec(ctx, `DELETE FROM feature_flags WHERE key = 'canonical_incident_ingestion'`); err != nil {
 		t.Fatal(err)
 	}
 
@@ -738,10 +653,13 @@ func TestNativeReferenceDiscoveryTerminalizesRunWhenFeatureDisabledRecordsTheRol
 	seedDiscoveryRoute(t, ctx, pool)
 	unitID := "00000000-0000-4000-8000-0000000000e5"
 	sourceID := "00000000-0000-4000-8000-0000000000e6"
-	if _, err := pool.Exec(ctx, `
-INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status)
-VALUES ($1,$2,$3,'pagerduty','incidents',$4,'planned')`,
-		unitID, discoveryTestOrg, discoveryTestRun, sourceID); err != nil {
+	pgseed.InsertSyncRunUnit(ctx, t, pool, pgseed.SyncRunUnit{
+		ID: unitID, RunID: discoveryTestRun, OrgID: discoveryTestOrg, IntegrationID: discoveryTestIntegration,
+		SourceID: sourceID, Provider: "pagerduty", DatasetKey: "incidents", Status: "planned",
+	})
+	// The migrations pre-register canonical_incident_ingestion; this test's premise is that no
+	// feature_flags row exists for it, so the decision reads feature_not_registered.
+	if _, err := pool.Exec(ctx, `DELETE FROM feature_flags WHERE key = 'canonical_incident_ingestion'`); err != nil {
 		t.Fatal(err)
 	}
 
@@ -791,12 +709,10 @@ func TestNativeReferenceDiscoveryProceedsWhenFeatureNotRequired(t *testing.T) {
 	seedDiscoveryRoute(t, ctx, pool)
 	unitID := "00000000-0000-4000-8000-0000000000db"
 	sourceID := "00000000-0000-4000-8000-0000000000dc"
-	if _, err := pool.Exec(ctx, `
-INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status)
-VALUES ($1,$2,$3,'github','prs',$4,'planned')`,
-		unitID, discoveryTestOrg, discoveryTestRun, sourceID); err != nil {
-		t.Fatal(err)
-	}
+	pgseed.InsertSyncRunUnit(ctx, t, pool, pgseed.SyncRunUnit{
+		ID: unitID, RunID: discoveryTestRun, OrgID: discoveryTestOrg, IntegrationID: discoveryTestIntegration,
+		SourceID: sourceID, Provider: "github", DatasetKey: "prs", Status: "planned",
+	})
 
 	executor := &fakeDiscoveryExecutor{summary: map[string]any{"ok": true}}
 	service, err := NewNativeReferenceDiscoveryService(pool, nil, executor)

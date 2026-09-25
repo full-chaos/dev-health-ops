@@ -15,6 +15,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -111,7 +113,7 @@ func TestNativePostSyncFanoutIsDuplicateStableAndRollsBackWholeGeneration(t *tes
 	service.now = func() time.Time { return time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC) }
 	args := PostSyncArgs{TransportArgs: TransportArgs{
 		Version: ContractVersionV1, OrgID: orgID, RunID: runID,
-		DispatchOutbox: outboxID, RouteGeneration: 1,
+		DispatchOutbox: outboxID, RouteGeneration: postSyncRouteGeneration,
 	}}
 	for attempt := 0; attempt < 2; attempt++ {
 		if err := service.Fanout(ctx, args); err != nil {
@@ -192,7 +194,7 @@ WHERE sync_run_id=$1`, runID)
 		t.Fatalf("failed generation leaked %d markers", markers)
 	}
 
-	args.TransportArgs.RouteGeneration = 2
+	args.TransportArgs.RouteGeneration = postSyncRouteGeneration + 1
 	if err := service.Fanout(ctx, args); err != nil {
 		t.Fatal(err)
 	}
@@ -253,7 +255,7 @@ func TestNativePostSyncFanoutObservesPublishedOutcomeWithDispatchID(t *testing.T
 	service.SetFanoutObserver(observer)
 	args := PostSyncArgs{TransportArgs: TransportArgs{
 		Version: ContractVersionV1, OrgID: orgID, RunID: runID,
-		DispatchOutbox: outboxID, RouteGeneration: 1,
+		DispatchOutbox: outboxID, RouteGeneration: postSyncRouteGeneration,
 	}}
 	if err := service.Fanout(ctx, args); err != nil {
 		t.Fatal(err)
@@ -290,31 +292,11 @@ func TestNativePostSyncFanoutObservesNoRepositoriesOutcomeWhenNotDailyRelevant(t
 		integrationID = "00000000-0000-4000-8000-000000000024"
 		repositoryID  = "00000000-0000-4000-8000-000000000025"
 	)
-	for _, statement := range []struct {
-		query string
-		args  []any
-	}{
-		{`INSERT INTO sync_dispatch_transport_routes
-		    (kind,transport,generation,paused,rollback_transport)
-		  VALUES ('post_sync','river',1,false,'celery')`, nil},
-		{`INSERT INTO sync_dispatch_outbox
-    (id,sync_run_id,org_id,kind,status,dispatched_transport,dispatched_route_generation)
-		  VALUES ($1,$2,$3,'post_sync','dispatched','river',1)`, []any{outboxID, runID, orgID}},
-		{`INSERT INTO sync_runs (id,org_id,integration_id) VALUES ($1,$2,$3)`,
-			[]any{runID, orgID, integrationID}},
-		// "blame" LegacyTargets to ["blame"] alone -- not git, prs, work-items,
-		// cicd, deployments, incidents, or operational -- so successfulUnit is
-		// true (plan != nil) but dailyMetricsTrigger's every input is false.
-		{`INSERT INTO sync_run_units
-    (id,sync_run_id,provider,dataset_key,source_id,since_at,before_at,status)
-VALUES ('00000000-0000-4000-8000-000000000026',$1,'github','blame',$2,
-        '2026-07-23T00:00:00Z','2026-07-23T00:00:00Z','success')`,
-			[]any{runID, repositoryID}},
-	} {
-		if _, err := pool.Exec(ctx, statement.query, statement.args...); err != nil {
-			t.Fatal(err)
-		}
-	}
+	// "blame" LegacyTargets to ["blame"] alone -- not git, prs, work-items,
+	// cicd, deployments, incidents, or operational -- so successfulUnit is
+	// true (plan != nil) but dailyMetricsTrigger's every input is false.
+	seedPostSyncGraph(t, ctx, pool, orgID, runID, outboxID, integrationID, repositoryID,
+		"00000000-0000-4000-8000-000000000026", "blame", "", "")
 	service, err := NewNativePostSyncService(pool, markerDaily{}, markerRemaining{}, markerWorkGraph{}, markerTeam{}, markerTeamRepoOwnership{}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -324,7 +306,7 @@ VALUES ('00000000-0000-4000-8000-000000000026',$1,'github','blame',$2,
 	service.SetFanoutObserver(observer)
 	args := PostSyncArgs{TransportArgs: TransportArgs{
 		Version: ContractVersionV1, OrgID: orgID, RunID: runID,
-		DispatchOutbox: outboxID, RouteGeneration: 1,
+		DispatchOutbox: outboxID, RouteGeneration: postSyncRouteGeneration,
 	}}
 	if err := service.Fanout(ctx, args); err != nil {
 		t.Fatal(err)
@@ -381,7 +363,7 @@ func TestNativePostSyncFanoutObservesErrorOutcomeWhenDailyStartRunTxFails(t *tes
 	service.SetFanoutObserver(observer)
 	args := PostSyncArgs{TransportArgs: TransportArgs{
 		Version: ContractVersionV1, OrgID: orgID, RunID: runID,
-		DispatchOutbox: outboxID, RouteGeneration: 1,
+		DispatchOutbox: outboxID, RouteGeneration: postSyncRouteGeneration,
 	}}
 	if err := service.Fanout(ctx, args); !errors.Is(err, ErrPostSyncUnavailable) {
 		t.Fatalf("Fanout error = %v, want ErrPostSyncUnavailable", err)
@@ -441,7 +423,7 @@ func TestNativePostSyncFanoutDoesNotReportPublishedWhenALaterStageRollsBackTheWh
 	service.SetFanoutObserver(observer)
 	args := PostSyncArgs{TransportArgs: TransportArgs{
 		Version: ContractVersionV1, OrgID: orgID, RunID: runID,
-		DispatchOutbox: outboxID, RouteGeneration: 1,
+		DispatchOutbox: outboxID, RouteGeneration: postSyncRouteGeneration,
 	}}
 	if err := service.Fanout(ctx, args); !errors.Is(err, ErrPostSyncUnavailable) {
 		t.Fatalf("Fanout error = %v, want ErrPostSyncUnavailable", err)
@@ -509,7 +491,7 @@ func TestNativePostSyncFanoutDoesNotReportPublishedWhenALaterStageWriterPanics(t
 	service.SetFanoutObserver(observer)
 	args := PostSyncArgs{TransportArgs: TransportArgs{
 		Version: ContractVersionV1, OrgID: orgID, RunID: runID,
-		DispatchOutbox: outboxID, RouteGeneration: 1,
+		DispatchOutbox: outboxID, RouteGeneration: postSyncRouteGeneration,
 	}}
 	panicked := func() (recovered any) {
 		defer func() { recovered = recover() }()
@@ -533,33 +515,45 @@ func TestNativePostSyncFanoutDoesNotReportPublishedWhenALaterStageWriterPanics(t
 
 func createPostSyncTables(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
-	_, err := pool.Exec(ctx, `
-CREATE TABLE sync_dispatch_transport_routes (
- kind text PRIMARY KEY, transport text NOT NULL, generation bigint NOT NULL,
- paused boolean NOT NULL, rollback_transport text NOT NULL
-);
-CREATE TABLE sync_dispatch_outbox (
- id uuid PRIMARY KEY, sync_run_id uuid NOT NULL, org_id uuid NOT NULL, kind text NOT NULL,
- status text NOT NULL, dispatched_transport text NULL, dispatched_route_generation bigint NULL
-);
-CREATE TABLE sync_runs (
- id uuid PRIMARY KEY, org_id uuid NOT NULL, integration_id uuid NOT NULL
-);
-CREATE TABLE sync_run_units (
- id uuid PRIMARY KEY, sync_run_id uuid NOT NULL, provider text NOT NULL,
- dataset_key text NOT NULL, source_id uuid NOT NULL, since_at timestamptz NULL,
- before_at timestamptz NULL, status text NOT NULL
-);
-CREATE TABLE sync_configurations (
- id uuid PRIMARY KEY, org_id uuid NOT NULL, integration_id uuid NOT NULL,
- parent_id uuid NULL, sync_options json NOT NULL, created_at timestamptz NOT NULL
-);
+	pgschema.Apply(ctx, t, pool)
+	// post_sync_markers is this file's own probe table (the marker writers below stage into it);
+	// it is not a production table, so the migrated schema does not carry it.
+	if _, err := pool.Exec(ctx, `
 CREATE TABLE post_sync_markers (
  sync_run_id uuid NOT NULL, kind text NOT NULL, prerequisite text NULL,
  PRIMARY KEY(sync_run_id, kind)
-)`)
-	if err != nil {
+)`); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// postSyncRouteGeneration is the post_sync route generation these tests run under. The migrations
+// seed every route as celery at generation 2 and the table's trigger demands a generation increase
+// for any state change, so a river route starts at generation 2.
+const postSyncRouteGeneration = 3
+
+// seedPostSyncGraph seeds the post_sync route, the run with its dispatched outbox row, one
+// successful unit over [2026-07-23, 2026-07-23] for dataset, and (when configID is set) the
+// team-autoimport sync configuration, all against the migrated schema.
+func seedPostSyncGraph(
+	t *testing.T,
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	orgID, runID, outboxID, integrationID, repositoryID, unitID, dataset, configID, syncOptionsJSON string,
+) {
+	t.Helper()
+	day := time.Date(2026, 7, 23, 0, 0, 0, 0, time.UTC)
+	if got := pgseed.SyncTransportRoute(ctx, t, pool, "post_sync", "river", postSyncRouteGeneration, false, "celery"); got != postSyncRouteGeneration {
+		t.Fatalf("post_sync route generation = %d, want %d", got, postSyncRouteGeneration)
+	}
+	pgseed.EnsureSyncRun(ctx, t, pool, pgseed.SyncRun{ID: runID, OrgID: orgID, IntegrationID: integrationID})
+	pgseed.SyncDispatchOutbox(ctx, t, pool, outboxID, runID, orgID, "post_sync", "dispatched", "river", postSyncRouteGeneration)
+	pgseed.InsertSyncRunUnit(ctx, t, pool, pgseed.SyncRunUnit{
+		ID: unitID, RunID: runID, OrgID: orgID, IntegrationID: integrationID, SourceID: repositoryID,
+		DatasetKey: dataset, Status: "success", SinceAt: &day, BeforeAt: &day,
+	})
+	if configID != "" {
+		pgseed.SyncConfiguration(ctx, t, pool, configID, orgID, integrationID, syncOptionsJSON, day)
 	}
 }
 
@@ -570,34 +564,9 @@ func seedPostSync(
 	orgID, runID, outboxID, integrationID, repositoryID string,
 ) {
 	t.Helper()
-	statements := []struct {
-		query string
-		args  []any
-	}{
-		{`INSERT INTO sync_dispatch_transport_routes
-		    (kind,transport,generation,paused,rollback_transport)
-		  VALUES ('post_sync','river',1,false,'celery')`, nil},
-		{`INSERT INTO sync_dispatch_outbox
-    (id,sync_run_id,org_id,kind,status,dispatched_transport,dispatched_route_generation)
-		  VALUES ($1,$2,$3,'post_sync','dispatched','river',1)`, []any{outboxID, runID, orgID}},
-		{`INSERT INTO sync_runs (id,org_id,integration_id) VALUES ($1,$2,$3)`,
-			[]any{runID, orgID, integrationID}},
-		{`INSERT INTO sync_run_units
-    (id,sync_run_id,provider,dataset_key,source_id,since_at,before_at,status)
-VALUES ('00000000-0000-4000-8000-000000000006',$1,'github','commits',$2,
-        '2026-07-23T00:00:00Z','2026-07-23T00:00:00Z','success')`,
-			[]any{runID, repositoryID}},
-		{`INSERT INTO sync_configurations
-    (id,org_id,integration_id,parent_id,sync_options,created_at)
-VALUES ('00000000-0000-4000-8000-000000000007',$1,$2,NULL,
-        '{"auto_import_teams":true}'::json,'2026-07-23T00:00:00Z')`,
-			[]any{orgID, integrationID}},
-	}
-	for _, statement := range statements {
-		if _, err := pool.Exec(ctx, statement.query, statement.args...); err != nil {
-			t.Fatal(err)
-		}
-	}
+	seedPostSyncGraph(t, ctx, pool, orgID, runID, outboxID, integrationID, repositoryID,
+		"00000000-0000-4000-8000-000000000006", "commits",
+		"00000000-0000-4000-8000-000000000007", `{"auto_import_teams":true}`)
 }
 
 // rejectingTeamWriter refuses deterministically, the way the outbox refuses an
@@ -676,7 +645,7 @@ func TestNativePostSyncFanoutTeamAutoimportFailurePolicy(t *testing.T) {
 	seedPostSync(t, ctx, pool, orgID, runID, outboxID, integrationID, repositoryID)
 	args := PostSyncArgs{TransportArgs: TransportArgs{
 		Version: ContractVersionV1, OrgID: orgID, RunID: runID,
-		DispatchOutbox: outboxID, RouteGeneration: 1,
+		DispatchOutbox: outboxID, RouteGeneration: postSyncRouteGeneration,
 	}}
 	now := func() time.Time { return time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC) }
 	// Every handoff the metric fanout owns, PLUS team_repo_ownership_derivation
@@ -836,7 +805,7 @@ func TestNativePostSyncFanoutTeamRepoOwnershipDerivationFailurePolicy(t *testing
 	seedPostSync(t, ctx, pool, orgID, runID, outboxID, integrationID, repositoryID)
 	args := PostSyncArgs{TransportArgs: TransportArgs{
 		Version: ContractVersionV1, OrgID: orgID, RunID: runID,
-		DispatchOutbox: outboxID, RouteGeneration: 1,
+		DispatchOutbox: outboxID, RouteGeneration: postSyncRouteGeneration,
 	}}
 	now := func() time.Time { return time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC) }
 	// Every handoff the metric fanout owns, PLUS team_autoimport (a reliable
@@ -1007,7 +976,7 @@ func TestNativePostSyncFanoutTeamRepoOwnershipDerivationRecordsRouteMissingOnDet
 	service.SetTeamRepoOwnershipDerivationObserver(observer)
 	args := PostSyncArgs{TransportArgs: TransportArgs{
 		Version: ContractVersionV1, OrgID: orgID, RunID: runID,
-		DispatchOutbox: outboxID, RouteGeneration: 1,
+		DispatchOutbox: outboxID, RouteGeneration: postSyncRouteGeneration,
 	}}
 
 	if err := service.Fanout(ctx, args); err != nil {
@@ -1054,38 +1023,9 @@ func seedPostSyncWithSyncOptions(
 	orgID, runID, outboxID, integrationID, repositoryID, unitID, configID, syncOptionsJSON string,
 ) {
 	t.Helper()
-	statements := []struct {
-		query string
-		args  []any
-	}{
-		// ON CONFLICT DO NOTHING: this helper is called once per sub-test
-		// against the SAME pool/schema, and the route row is process-wide
-		// config, not per-run data -- only the first call needs to insert it.
-		{`INSERT INTO sync_dispatch_transport_routes
-		    (kind,transport,generation,paused,rollback_transport)
-		  VALUES ('post_sync','river',1,false,'celery')
-		  ON CONFLICT (kind) DO NOTHING`, nil},
-		{`INSERT INTO sync_dispatch_outbox
-    (id,sync_run_id,org_id,kind,status,dispatched_transport,dispatched_route_generation)
-		  VALUES ($1,$2,$3,'post_sync','dispatched','river',1)`, []any{outboxID, runID, orgID}},
-		{`INSERT INTO sync_runs (id,org_id,integration_id) VALUES ($1,$2,$3)`,
-			[]any{runID, orgID, integrationID}},
-		{`INSERT INTO sync_run_units
-    (id,sync_run_id,provider,dataset_key,source_id,since_at,before_at,status)
-VALUES ($1,$2,'github','commits',$3,
-        '2026-07-23T00:00:00Z','2026-07-23T00:00:00Z','success')`,
-			[]any{unitID, runID, repositoryID}},
-		{`INSERT INTO sync_configurations
-    (id,org_id,integration_id,parent_id,sync_options,created_at)
-VALUES ($1,$2,$3,NULL,
-        $4::json,'2026-07-23T00:00:00Z')`,
-			[]any{configID, orgID, integrationID, syncOptionsJSON}},
-	}
-	for _, statement := range statements {
-		if _, err := pool.Exec(ctx, statement.query, statement.args...); err != nil {
-			t.Fatal(err)
-		}
-	}
+	// The route row is process-wide config, not per-run data: SyncTransportRoute upserts, so the
+	// once-per-sub-test calls against the SAME pool/schema stay idempotent.
+	seedPostSyncGraph(t, ctx, pool, orgID, runID, outboxID, integrationID, repositoryID, unitID, "commits", configID, syncOptionsJSON)
 }
 
 // TestNativePostSyncFanoutTeamAutoimportGateIsAnyOfThreeCategories pins the
@@ -1153,7 +1093,7 @@ func TestNativePostSyncFanoutTeamAutoimportGateIsAnyOfThreeCategories(t *testing
 			service.now = func() time.Time { return time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC) }
 			args := PostSyncArgs{TransportArgs: TransportArgs{
 				Version: ContractVersionV1, OrgID: orgID, RunID: runID,
-				DispatchOutbox: outboxID, RouteGeneration: 1,
+				DispatchOutbox: outboxID, RouteGeneration: postSyncRouteGeneration,
 			}}
 			if err := service.Fanout(ctx, args); err != nil {
 				t.Fatal(err)

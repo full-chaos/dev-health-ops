@@ -67,7 +67,7 @@ func withRouteHoldFixture(t *testing.T, fn func(ctx context.Context, fixture rou
 	// FULL production worker_job_outbox shape + a real River schema + the
 	// jobroute worker_job_routes table, none of which the lighter dispatch
 	// fixtures need).
-	createReferenceDiscoveryTables(t, ctx, pool)
+	createReferenceDiscoveryTablesLegacy(t, ctx, pool)
 	// organizations/org_licenses/tier_limits are created by
 	// createReferenceDiscoveryTables above (CHAOS-6286 merged them there);
 	// only the seed row and this fixture's own extra tables are local.

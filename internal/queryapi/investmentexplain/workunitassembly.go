@@ -1,6 +1,8 @@
 package investmentexplain
 
 import (
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+
 	"context"
 	"encoding/json"
 	"fmt"
@@ -36,11 +38,9 @@ type WorkUnitEvidenceOutput struct {
 	Textual    []map[string]any
 	Structural []map[string]any
 	Contextual []map[string]any
-	// StructuralPayload is the stored structural_evidence_json the
-	// Structural entry was parsed from. A Go map loses the document's key
-	// order, which work_units.py keeps (`{"type": ..., **parsed}`); the
-	// route writes the entry from this text.
-	StructuralPayload string
+	// StructuralOrdered is Structural as the route writes it: each entry
+	// in the key order work_units.py builds it. A Go map loses that order.
+	StructuralOrdered []*pyjson.Object
 }
 
 // InvestmentBreakdownOutput ports api/models/schemas.py's
@@ -234,16 +234,33 @@ func (reader *Reader) BuildWorkUnitInvestments(ctx context.Context, opts BuildWo
 			effortValue = *row.EffortValue
 		}
 
+		// work_units.py: `parsed = json.loads(payload)`, and only a dict
+		// becomes an entry, `{"type": "work_unit_nodes", **parsed}` -- "type"
+		// first (a stored "type" replaces its value, not its place), then
+		// the payload's own members in document order. pyjson.Decode reads
+		// the payload as json.loads does (JSON null is None, not a dict).
 		var structuralEvidence []map[string]any
+		var structuralOrdered []*pyjson.Object
 		structuralPayload := derefString(row.StructuralEvidenceJSON)
 		if structuralPayload != "" {
-			var parsed map[string]any
-			if err := json.Unmarshal([]byte(structuralPayload), &parsed); err == nil {
-				entry := map[string]any{"type": "work_unit_nodes"}
-				for k, v := range parsed {
-					entry[k] = v
+			if decoded, err := pyjson.Decode([]byte(structuralPayload)); err == nil {
+				if parsed, ok := decoded.(*pyjson.Object); ok {
+					ordered := pyjson.NewObject()
+					ordered.Set("type", "work_unit_nodes")
+					for _, key := range parsed.Keys() {
+						value, _ := parsed.Get(key)
+						ordered.Set(key, value)
+					}
+					structuralOrdered = append(structuralOrdered, ordered)
+					entry := map[string]any{"type": "work_unit_nodes"}
+					var members map[string]any
+					if json.Unmarshal([]byte(structuralPayload), &members) == nil {
+						for k, v := range members {
+							entry[k] = v
+						}
+					}
+					structuralEvidence = append(structuralEvidence, entry)
 				}
-				structuralEvidence = append(structuralEvidence, entry)
 			}
 		}
 
@@ -334,7 +351,7 @@ func (reader *Reader) BuildWorkUnitInvestments(ctx context.Context, opts BuildWo
 				Structural: structuralEvidence,
 				Contextual: contextualEvidence,
 
-				StructuralPayload: structuralPayload,
+				StructuralOrdered: structuralOrdered,
 			},
 		})
 	}

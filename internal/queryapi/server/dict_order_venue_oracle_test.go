@@ -225,6 +225,25 @@ func TestVenueOracleQueryAPIDictOrder(t *testing.T) {
 				 map('quality.bugfix', 0.6, 'feature_delivery.customer', 0.4),
 				 '{"work_items":["b-2","a-1"],"prs":[],"summary":{"zeta":1,"alpha":2.5}}',
 				 0.5, 'moderate', 'ok', '', 'v1', 'hash', 'run-1', now64(3), '%s')`, workUnitID, fromTS, toTS, orgID),
+			// Two more stored payloads the work units list must write as
+			// Python does: one with its own "type" member (which replaces
+			// the value but keeps "type" first), and JSON null (not a
+			// dict, so no structural entry).
+			fmt.Sprintf(`INSERT INTO work_unit_investments
+				(work_unit_id, work_unit_type, work_unit_name, from_ts, to_ts, repo_id, provider,
+				 effort_metric, effort_value, theme_distribution_json, subcategory_distribution_json,
+				 structural_evidence_json, evidence_quality, evidence_quality_band, categorization_status,
+				 categorization_errors_json, categorization_model_version, categorization_input_hash,
+				 categorization_run_id, computed_at, org_id)
+			VALUES ('%s-typed', 'issue', 'Typed payload unit', toDateTime64('%s',3), toDateTime64('%s',3), NULL, 'github',
+				 'churn_loc', 5.0, map('quality', 1.0), map('quality.bugfix', 1.0),
+				 '{"zeta":1,"type":"custom","alpha":2}',
+				 0.5, 'moderate', 'ok', '', 'v1', 'hash', 'run-2', now64(3), '%s'),
+				('%s-null', 'issue', 'Null payload unit', toDateTime64('%s',3), toDateTime64('%s',3), NULL, 'github',
+				 'churn_loc', 4.0, map('quality', 1.0), map('quality.bugfix', 1.0),
+				 'null',
+				 0.5, 'moderate', 'ok', '', 'v1', 'hash', 'run-3', now64(3), '%s')`,
+				workUnitID, fromTS, toTS, orgID, workUnitID, fromTS, toTS, orgID),
 			fmt.Sprintf(`INSERT INTO work_unit_investment_quotes (work_unit_id, quote, source_type, source_id, computed_at, categorization_run_id, org_id)
 			VALUES ('%s', 'Fix the flaky login test.', 'pr_body', 'pr-7', now64(3), 'run-1', '%s')`, workUnitID, orgID),
 		} {

@@ -217,33 +217,13 @@ var evidenceKeyOrder = map[string][]string{
 	"team_scope":     {"type", "team_ids", "team_names"},
 }
 
-// orderedEvidence writes each evidence entry in Python's key order: the
-// fixed-shape entries by evidenceKeyOrder, and the work_unit_nodes entry as
-// work_units.py builds it, "type" first and then the stored JSON's own
-// members in document order (payload is that JSON). An entry of another
-// shape keeps its keys in sorted order after the known ones.
-func orderedEvidence(entries []map[string]any, payload string) ([]any, error) {
+// orderedEvidence writes each fixed-shape evidence entry in the key order
+// work_units.py builds it (evidenceKeyOrder, by "type"). An entry of
+// another shape keeps its keys in sorted order after the known ones.
+func orderedEvidence(entries []map[string]any) []any {
 	out := make([]any, 0, len(entries))
 	for _, entry := range entries {
 		kind, _ := entry["type"].(string)
-		if kind == "work_unit_nodes" && payload != "" {
-			decoded, err := pyjson.Decode([]byte(payload))
-			if err != nil {
-				return nil, err
-			}
-			parsed, ok := decoded.(*pyjson.Object)
-			if !ok {
-				return nil, fmt.Errorf("structural_evidence_json is not an object")
-			}
-			object := pyjson.NewObject()
-			object.Set("type", "work_unit_nodes")
-			for _, key := range parsed.Keys() {
-				value, _ := parsed.Get(key)
-				object.Set(key, value)
-			}
-			out = append(out, object)
-			continue
-		}
 		ordered := pyjson.NewOrderedMap[any]()
 		for _, key := range evidenceKeyOrder[kind] {
 			if value, ok := entry[key]; ok {
@@ -262,7 +242,7 @@ func orderedEvidence(entries []map[string]any, payload string) ([]any, error) {
 		}
 		out = append(out, ordered)
 	}
-	return out, nil
+	return out
 }
 
 type workUnitInvestmentWire struct {
@@ -307,7 +287,7 @@ func formatWorkUnitTimestamp(t time.Time) string {
 // matching WorkUnitEvidence's own Field(default_factory=list) -- Go's
 // encoding/json renders a nil slice as `null`, and Python's response
 // never does.
-func toWorkUnitInvestmentWire(investment investmentexplain.WorkUnitInvestment) (workUnitInvestmentWire, error) {
+func toWorkUnitInvestmentWire(investment investmentexplain.WorkUnitInvestment) workUnitInvestmentWire {
 	themes := pyjson.NewOrderedMap[float64]()
 	for _, kv := range investment.Investment.Themes {
 		themes.Set(kv.Key, kv.Value)
@@ -317,18 +297,14 @@ func toWorkUnitInvestmentWire(investment investmentexplain.WorkUnitInvestment) (
 		subcategories.Set(kv.Key, kv.Value)
 	}
 
-	textual, err := orderedEvidence(investment.Evidence.Textual, "")
-	if err != nil {
-		return workUnitInvestmentWire{}, err
+	textual := orderedEvidence(investment.Evidence.Textual)
+	// The structural entries were built in Python's order when they were
+	// assembled (from the stored JSON, which a map would not keep).
+	structural := make([]any, 0, len(investment.Evidence.StructuralOrdered))
+	for _, entry := range investment.Evidence.StructuralOrdered {
+		structural = append(structural, entry)
 	}
-	structural, err := orderedEvidence(investment.Evidence.Structural, investment.Evidence.StructuralPayload)
-	if err != nil {
-		return workUnitInvestmentWire{}, err
-	}
-	contextual, err := orderedEvidence(investment.Evidence.Contextual, "")
-	if err != nil {
-		return workUnitInvestmentWire{}, err
-	}
+	contextual := orderedEvidence(investment.Evidence.Contextual)
 
 	var band *string
 	if investment.EvidenceQuality.Band != nil {
@@ -361,7 +337,7 @@ func toWorkUnitInvestmentWire(investment investmentexplain.WorkUnitInvestment) (
 			Structural: structural,
 			Contextual: contextual,
 		},
-	}, nil
+	}
 }
 
 // writeWorkUnitsResponse writes investments as the final 200 JSON body --
@@ -374,14 +350,7 @@ func toWorkUnitInvestmentWire(investment investmentexplain.WorkUnitInvestment) (
 func writeWorkUnitsResponse(w http.ResponseWriter, r *http.Request, orgID string, investments []investmentexplain.WorkUnitInvestment) {
 	wire := make([]workUnitInvestmentWire, 0, len(investments))
 	for _, investment := range investments {
-		converted, err := toWorkUnitInvestmentWire(investment)
-		if err != nil {
-			log.Printf("query-api: work_units: evidence not writable: org_id=%s request_id=%s work_unit_id=%s err=%v",
-				orgID, envelopeRequestID(r), investment.WorkUnitID, err)
-			writeModelFailure(w)
-			return
-		}
-		wire = append(wire, converted)
+		wire = append(wire, toWorkUnitInvestmentWire(investment))
 	}
 	if encodeErr := writeModelResponse(w, wire); encodeErr != nil {
 		log.Printf("query-api: work_units: encode response failed: org_id=%s request_id=%s err=%v",

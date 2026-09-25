@@ -27,332 +27,43 @@ TEST_GO_CACHE = Path(tempfile.gettempdir()) / "chaos3141-go-sharding-test-cache"
 # does not change the workflow job cap or the Go test timeout.
 CHECK_GO_TIMEOUT_SECONDS = 120
 
-EXPECTED_PACKAGES = {
-    "internal/goapiproof",
-    "internal/reconcilerservice",
-    "internal/workerservice",
-    "internal/workersctl",
-    # CHAOS-5486: the routing verbs' first //go:build integration file --
-    # `enable` driven end to end against a real Postgres and a real HTTP
-    # server, because an adversarial round proved that disabling the
-    # schema-agreement preflight and suppressing the enabled_unproven
-    # WARNING, both at their real call sites in this package, survived the
-    # entire suite while nothing ever ran a verb. CHAOS-6280 (spec S1)
-    # moved the package from cmd/go-api-routing to internal/goapicli/routing
-    # when go-api-routing folded into the dho operator binary.
-    "internal/goapicli/routing",
-    "internal/queryapi/server",
-    "internal/queryapi/aianalytics",
-    "internal/queryapi/analytics",
-    "internal/queryapi/busfactor",
-    "internal/queryapi/compoundingrisk",
-    # internal/queryapi/explain's integration-tagged tests exercise
-    # the team-scoped repo filter's pushed-down membership condition
-    # against a real ClickHouse: the query text that once returned every
-    # matching repo id as its own result set throws the read-only
-    # client's row ceiling when run standalone, while the route itself
-    # succeeds on the same data; a status-filtered metric's
-    # empty-vs-populated response is exercised in both directions too.
-    "internal/queryapi/explain",
-    # CHAOS-5523: the featureFlagEvents port's own Testcontainers-backed
-    # tests (events_integration_test.go) -- the org-scoping/flagKey-filter/
-    # ORDER BY/count-not-limit-bound happy path and the real UNKNOWN_TABLE
-    # degraded path, both against a real ClickHouse engine.
-    "internal/queryapi/featureflags",
-    # Every home reader runs once against a real ClickHouse container
-    # with the canonical migration chain applied, each ReplacingMergeTree
-    # table seeded with a duplicate physical version at its own natural
-    # key: sum()/count() aggregates over integer columns promote to
-    # UInt64 in ClickHouse, and a fake RowScanner cannot reproduce the
-    # real clickhouse-go driver's refusal to scan that into a narrower
-    # destination, nor can it prove FINAL/argMax actually collapses a
-    # duplicate row the way canned fixture rows already assume it does
-    # (see readers_seeded_integration_test.go's own header comment).
-    "internal/queryapi/home",
-    "internal/queryapi/hotspots",
-    # The people summary naive-timestamp venue differential (skips without
-    # the live Python env), in its own package for its own time budget.
-    "internal/queryapi/people/summaryvenue",
-    # CHAOS-4977 step 7: the recurrence guard for FetchWorkUnitInvestments'
-    # real Map(String, Float64) theme/subcategory columns -- a fake
-    # RowScanner double can hand back any Go type its author declares, so
-    # it can never prove the real clickhouse-go driver's type-conversion
-    # path actually works against the real column type (it didn't, see
-    # workunitreader_seeded_integration_test.go's own header comment).
-    "internal/queryapi/investmentexplain",
-    # fetchInvestmentUnassignedCounts' countDistinctIf() columns: the
-    # aggregate returns UInt64 in ClickHouse regardless of the counted
-    # column's own type, and a fake RowScanner answers a Scan call by
-    # reflecting on the Go destination type it is handed rather than
-    # replaying the real clickhouse-go driver's own conversion rules, so
-    # it cannot prove a narrower scan destination actually works against
-    # the real driver (see unassignedcounts_seeded_integration_test.go's
-    # own header comment).
-    "internal/queryapi/investmentflow",
-    # The argMax dedup NULL-skip fix (Nullable(Float64) fields on
-    # work_item_metrics_daily/repo_metrics_daily/incident_metrics_daily/
-    # ai_impact_metrics_daily) has its own real-ClickHouse proof, since a
-    # fake RowScanner cannot reproduce argMax's server-side null-skip
-    # behaviour.
-    "internal/queryapi/operatingreview",
-    "internal/queryapi/routeswitch",
-    # sum()/countIf() aggregates over UInt32 columns (new_items_count,
-    # new_bugs_count, items_touched, churn) promote to UInt64 in
-    # ClickHouse, and a fake RowScanner cannot reproduce the real
-    # clickhouse-go driver's refusal to scan that into a narrower/
-    # mismatched Go destination (see
-    # aggregatescan_seeded_integration_test.go's own header comment).
-    "internal/queryapi/sankey",
-    "internal/queryapi/scopelabel",
-    "internal/queryapi/security",
-    "internal/queryapi/testopsrisk",
-    # Same argMax dedup NULL-skip proof as operatingreview above, for
-    # wip_age_p50/p90_hours and pr_first_review_p50_hours.
-    "internal/queryapi/throughputforecast",
-    "internal/queryapi/workgraph",
-    # The generic admin audit_logs writer: real INSERT round-trips (declared
-    # columns, the changes/request_metadata "{}" coercion, the org_id FK
-    # violation) against a real Postgres.
-    "internal/api/audit",
-    # The Stripe webhook dispatch oracle: executes the real Python route per
-    # event type (skips without DEV_HEALTH_LIVE_PYTHON_ORACLES=1).
-    "internal/api/billing",
-    "internal/api/externalingest",
-    "internal/api/externalurl",
-    # The GitHub App install routes' venue differential oracle against the
-    # real Python api (its own package: internal/apiservice is at its time
-    # budget).
-    "internal/api/githubapp",
-    "internal/api/licensing",
-    # The api's protected-route policy read path: provision, migrate, api
-    # readiness and an authenticated request on a real Postgres.
-    "internal/api/policy",
-    # The sync admin reads' venue differential oracle: the real Python api
-    # and dho api on two copies of one seeded Postgres (skips without the
-    # live Python env).
-    # The generic integration admin routes' venue differential (skips
-    # without the live Python env), in its own package for its own budget.
-    "internal/api/integrationsadmin/backfillvenue",
-    "internal/api/integrationsadmin/integrationsvenue",
-    # The integration discover route's venue differential (skips without the live
-    # Python env), in its own package for its own budget.
-    "internal/api/integrationsadmin/discoveryvenue",
-    "internal/api/integrationsadmin/syncvenue",
-    "internal/api/syncadmin",
-    # The session routes: the Go routes alone replayed against the recorded
-    # Python answers, concurrent refreshes of one token, and the failed-
-    # attempt record on a locked row, against real Postgres and ClickHouse.
-    "internal/api/session",
-    # The session routes' venue differential (skips without the live Python
-    # env), in its own package for its own venue time budget.
-    "internal/apiservice/sessionvenue",
-    # The registration, verification, reset, invite and onboarding routes'
-    # venue differential (skips without the live Python env), in its own
-    # package for its own venue time budget.
-    "internal/apiservice/authflowvenue",
-    # The dho api's Prometheus counter parity venue differential (skips
-    # without the live Python env), in its own package for its own venue
-    # time budget.
-    "internal/apiservice/metricsvenue",
-    # The enterprise SSO routes' venue differential (skips without the live
-    # Python env), in its own package for its own venue time budget.
-    "internal/apiservice/ssovenue",
-    # The team + identity admin CRUD store/handlers: real ClickHouse CRUD
-    # round trips and the identity POST route's 404/409/facet-reconciliation
-    # logic, against a real server (testcontainers).
-    "internal/api/teamsidentity",
-    # The admin teams/identities naive-timestamp venue differential (skips
-    # without the live Python env), in its own package for its own budget.
-    "internal/api/teamsidentity/adminstampvenue",
-    # CHAOS-6247: GitHub/GitLab/Jira webhook intake against a real Postgres
-    # (durable delivery row + job outbox publish), PagerDuty intake against
-    # a real Postgres and a real Valkey (binding lookup, replay claim/
-    # accept, stream write).
-    "internal/api/webhookintake",
-    # The venue differential oracle: the real Python api and dho api on two
-    # copies of one Alembic-built Postgres (runs with the live Python env).
-    "internal/apiservice",
-    "internal/apiservice/acr",
-    # The admin org/user/invite/impersonation routes' venue-oracle
-    # differentials against the real Python api; each test skips without
-    # DEV_HEALTH_LIVE_PYTHON_ORACLES=1, so under the plain integration tag
-    # this package still builds and its tests still register (SKIP counts
-    # as run), matching internal/api/policy's own live-oracle pattern.
-    # CHAOS-6463: `dho admin features seed` is checked against the Python verb
-    # on databases the real Python upgrade built -- only a real engine can
-    # build either side.
-    "internal/admincli",
-    # CHAOS-6466: the Atlassian Teams sync writes the team dimensions against a
-    # real ClickHouse (manual members and project keys carried over, the
-    # project-as-team rows untouched, a re-run).
-    "internal/atlassianteams",
-    # CHAOS-6466: the `dho sync teams` verb end to end against a real ClickHouse.
-    "internal/synccli",
-    "internal/apiservice/admin",
-    # The admin setup-status venue differential (skips without the live
-    # Python env), in its own package for its own venue time budget.
-    "internal/apiservice/adminsetupvenue",
-    # The admin LLM budget venue differential (skips without the live Python
-    # env), in its own package for its own venue time budget.
-    "internal/apiservice/adminllmvenue",
-    # The admin LLM spend venue differential (ClickHouse rows on both planes).
-    "internal/apiservice/adminllmspendvenue",
-    # The billing venue oracles (plans, checkout, portal, ledger, the Stripe
-    # webhook) in a package of their own, out of internal/apiservice's venue
-    # time budget; each skips without DEV_HEALTH_LIVE_PYTHON_ORACLES=1.
-    "internal/apiservice/billingvenue",
-    # The external-ingest limiter venue differential (CHAOS-6480): a new venue
-    # test lives in its own package because internal/apiservice is at its
-    # 20-minute budget.
-    "internal/apiservice/externalingestvenue",
-    # CHAOS-6368: the shared rate-limit store against a real Valkey (limit held
-    # across two clients, the fixed window, the per-caller path bound, TTLs).
-    "internal/auth/ratelimitvalkey",
-    # CHAOS-6467: `dho ai allowlist set|list` against a real ClickHouse at the head,
-    # compared with the Python verb (venue oracle).
-    "internal/aicli",
-    "internal/cacheinvalidation",
-    # CHAOS-6461: the ClickHouse head baseline is re-derived by executing the
-    # real Python chain on a fresh ClickHouse, and dho's migrator is checked
-    # against that database -- only a real engine can build either side.
-    "internal/chmigrate",
-    "internal/externalrecompute",
-    # CHAOS-6465: `dho fixtures finalize-synthetic-sync` on a real PostgreSQL at the
-    # head baseline, against the rows the Python producer wrote (frozen).
-    "internal/fixturescli",
-    "internal/joboperator",
-    "internal/joboutbox",
-    "internal/jobrescue",
-    "internal/jobroute",
-    "internal/jobruntime",
-    # CHAOS-6467: `dho metrics validate-flags` on a real ClickHouse, seeded org by org
-    # and compared with the frozen Python reports (and the live producer, by venue oracle).
-    "internal/metricscli",
-    "internal/migrationmatrix",
-    # CHAOS-5006 PR2: the end-to-end proof that
-    # ResolveProviderKindForOrg's org-BYO precedence (org BYO beats an
-    # explicit platform LLM_PROVIDER, only the none/mock kill-switch
-    # beats org BYO) holds against llmorgsettings.Store.ResolveUsableProvider
-    # over a REAL Postgres container, not a fake resolver.
-    # CHAOS-5359: the package root's first //go:build integration file,
-    # hierarchycascade_integration_test.go -- proves the repo-hierarchy
-    # cascade's Materializer.Run end-to-end wiring, and the sankeycoverage.go
-    # repo-resolution expression it feeds, against a real ClickHouse.
-    # The dimension-table fold's OPTIMIZE FINAL and its single-partition and
-    # row-bound guard are properties of a real ClickHouse engine, run
-    # against the migrated repos and teams tables.
-    "internal/jobs/dimensionfold",
-    "internal/jobs/investment",
-    "internal/jobs/investment/categorize",
-    "internal/jobs/investment/chquery",
-    # CHAOS-4441: the ClickHouse writer for investment.materialize's three
-    # ReplacingMergeTree tables. Its correctness claims (dedup-before-filter,
-    # sub-millisecond version distinctness, org-scoping) are properties of the
-    # real engine, so a fake connection cannot prove them.
-    "internal/jobs/investment/chwrite",
-    "internal/jobs/metrics/daily",
-    # CHAOS-4806: the package's first //go:build integration file,
-    # baselines_nullable_integration_test.go -- proves a nil *float64
-    # aggregate field round-trips as a real ClickHouse NULL (migration
-    # 090's newly-Nullable columns) and does not corrupt a present
-    # sibling field on the same row, against a real server.
-    "internal/jobs/metrics/daily/benchmarking",
-    "internal/jobs/metrics/daily/icfinalize",
-    "internal/jobs/metrics/remaining",
-    # CHAOS-5318: the native GitHub App installation/marketplace_purchase
-    # webhook handler's Postgres-backed proofs (the atomic ON CONFLICT DO
-    # NOTHING upsert's 8-goroutine convergence, credential deactivation on
-    # "deleted"). CHAOS-5319 added a second integration file to this SAME
-    # package (the org/source resolution + scheduled_sync_occurrences/
-    # sync_manual_triggers native dispatch path) -- no further count change.
-    "internal/jobs/operational",
-    "internal/jobs/pagerduty",
-    "internal/jobs/repair",
-    "internal/jobs/report",
-    "internal/jobs/system",
-    "internal/jobs/workgraph",
-    "internal/jobs/workgraph/edges",
-    # CHAOS-5358: the CHAOS-5341-adjacent bind-value-type fix (bind
-    # window.RepoID.String(), not the raw uuid.UUID, to a {repo_id:UUID}
-    # named ClickHouse query parameter) -- the regression test proves the
-    # fix against a real server, since the defect is a server-side parse
-    # error a fake connection can never reproduce.
-    "internal/jobs/workgraph/issuecommitedges",
-    "internal/jobs/workgraph/issuepredges",
-    "internal/jobs/workgraph/issueprlinks",
-    # CHAOS-4924: the native operational-incident/flag-guards edge producer.
-    # Its correctness claims (the CHAOS-4269 NULL-valid_from guard, the
-    # DateTime-vs-DateTime64 placeholder precision, the batch-clock stamp)
-    # are properties of the real migration chain and a real ClickHouse
-    # engine, so a fake connection cannot prove them.
-    "internal/jobs/workgraph/operationaledges",
-    # CHAOS-5358: same bind-value-type fix as issuecommitedges/issuepredges
-    # above.
-    "internal/jobs/workgraph/prcommit",
-    # CHAOS-4989: the org-scoped BYO LLM settings read path's own
-    # feature_flags/org_feature_overrides/org_licenses/organizations/
-    # settings precedence matrix runs against a real Postgres container.
-    "internal/llmorgsettings",
-    # CHAOS-6462: the PostgreSQL head baseline is re-derived by executing the
-    # real Python upgrade on a fresh PostgreSQL, and dho's migrator is checked
-    # against that database -- only a real engine can build either side.
-    # CHAOS-6467: `dho backfill run` on a real PostgreSQL at the head baseline, compared
-    # with the rows the Python hand-off wrote (frozen, and live by venue oracle).
-    "internal/backfillrun",
-    # CHAOS-6669: `dho maintenance` on a real PostgreSQL at the head baseline, compared
-    # with the rows the Python verbs left (frozen, and live by venue oracle).
-    "internal/maintenancecli",
-    # CHAOS-6467: `dho backfill operational` on a real ClickHouse at both operational
-    # table shapes, compared with the rows the Python producer wrote (frozen, and live
-    # by venue oracle).
-    "internal/operationalbackfill",
-    "internal/pgmigrate",
-    "internal/platform/config",
-    "internal/providerfoundation",
-    "internal/providersync",
-    # CHAOS-6464: `dho migrate upgrade` run end to end on real PostgreSQL and
-    # ClickHouse.
-    "internal/rivermigrate",
-    "internal/scheduler/fixed",
-    "internal/scheduler/sync",
-    # The ClickHouse posture manifest (CHAOS-6310): SHOW GRANTS FOR
-    # CURRENT_USER parsing proven against a real server, including the
-    # missing-privilege/extra-grant/extra-privilege negative controls.
-    "internal/storage/clickhouse",
-    "internal/storage/postgres",
-    # CHAOS-4882: the auth-owned schema's migration lineage. Its suite starts
-    # a real PostgreSQL and connects AS the runtime role to prove DDL and
-    # cross-schema access are refused, so it is integration-tagged.
-    "internal/storage/postgres/authschema",
-    "internal/storage/river",
-    "internal/streamhandlers",
-    "internal/streamrunner",
-    # CHAOS-6243: the in-process budget estimator's loader runs its real
-    # SQL against Postgres.
-    "internal/syncbudget",
-    "internal/syncdispatchruntime",
-    "internal/syncreconciler",
-    "internal/synccoverage",
-    "internal/syncroute",
-    # The argMax dedup NULL-skip fix for team_project_ownership.project_key,
-    # team_repo_ownership.repo_id and team_memberships.raw_provider_user_id/
-    # raw_email has its own real-ClickHouse proof, for the same reason as
-    # operatingreview/throughputforecast above.
-    "internal/teamattribution",
-    # CHAOS-4897: the recommendations loader's owned-repo scoping join reads
-    # team_repo_ownership's bitemporal window for real, so its correctness
-    # (valid_from/valid_to boundaries, NULL-repo_id exclusion, org isolation)
-    # is a property of the real engine a fake connection cannot prove.
-    "internal/teamownership",
-    # CHAOS-4902: the RMT sweep's own authoritative-count/dedup-key
-    # integration test -- applies the real migration chain to a fresh
-    # ClickHouse container and reads system.tables directly, so a fake
-    # connection cannot prove the population it asserts.
-    "internal/testsupport/chschema",
-    "internal/testsupport/containers",
-    # venueoracle's TableRows guard, checked against a real Postgres.
-    "internal/testsupport/venueoracle",
-}
+# CHAOS-6705: the expected package set is DERIVED from the live integration-tag
+# discovery (`check_go.sh integration-coverage`), not restated here. It used to be
+# a 300-line literal that every PR adding a Go integration package had to edit
+# (24 of the last 120 merged PRs touched it, and each touch was a merge conflict
+# for the next PR). The protection is unchanged in kind: `integration-shard-plan`
+# dies when ci/go_integration_shards.tsv omits or duplicates a discovered
+# package (the missing/duplicate-manifest tests below), so a new package needs
+# exactly one manifest row, in ONE file.
+_DISCOVERED: set[str] | None = None
+
+
+def _expected_packages() -> set[str]:
+    """Every package the live discovery says has integration-tagged tests."""
+    global _DISCOVERED
+    if _DISCOVERED is None:
+        result = subprocess.run(
+            ["bash", "ci/check_go.sh", "integration-coverage"],
+            cwd=ROOT,
+            env={**os.environ, "DEV_HEALTH_GO_CACHE": str(TEST_GO_CACHE)},
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=CHECK_GO_TIMEOUT_SECONDS,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        _DISCOVERED = {
+            line.removeprefix("  RUN  ").strip()
+            for line in result.stdout.splitlines()
+            if line.startswith("  RUN  ")
+        }
+        # A measurement that did not happen must fail: an empty or truncated
+        # discovery cannot make every comparison below vacuously true.
+        assert len(_DISCOVERED) >= 100, (
+            f"integration discovery found only {len(_DISCOVERED)} package(s)"
+        )
+        assert PROVIDER_PACKAGE in _DISCOVERED
+    return _DISCOVERED
 
 
 def _run_check_go(
@@ -523,7 +234,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
     result = _run_check_go("integration-shard-plan", github_output=github_output)
 
     assert result.returncode == 0, result.stdout + result.stderr
-    package_total = len(EXPECTED_PACKAGES)
+    package_total = len(_expected_packages())
     assert (
         f"{package_total} package(s) discovered, 0 denylisted, {package_total} will run"
     ) in result.stdout
@@ -573,8 +284,8 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
 
     assert set(assignments) == {1, 2, 3, 4, 5, 6}
     flattened = [package for packages in assignments.values() for package in packages]
-    assert len(flattened) == len(set(flattened)) == len(EXPECTED_PACKAGES)
-    assert set(flattened) == EXPECTED_PACKAGES
+    assert len(flattened) == len(set(flattened)) == len(_expected_packages())
+    assert set(flattened) == _expected_packages()
 
     # internal/providersync's isolation in the lowest-numbered shard is a
     # property of its WEIGHT relative to the other packages, not a fact this
@@ -700,7 +411,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment() -> None:
         )
 
     assert len(selected_packages) == len(set(selected_packages))
-    assert set(selected_packages) == EXPECTED_PACKAGES - {PROVIDER_PACKAGE}
+    assert set(selected_packages) == _expected_packages() - {PROVIDER_PACKAGE}
 
     selected_tests: list[str] = []
     for shard in (1, 2, 3, 4):

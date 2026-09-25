@@ -1,19 +1,20 @@
+# written by TestRevisionsVenueOracleMatchesAlembic; `current` lines are compared as a set: Alembic prints alembic_version in table (heap) order, which an UPDATE or VACUUM can change
 [
  {
   "name": "heads",
-  "stdout": "0066 (river_cutover) (head)\n0138 (application_schema) (head)\n"
+  "stdout": "0066 (river_cutover) (head)\n0140 (application_schema) (head)\n"
  },
  {
   "name": "current at the head",
-  "stdout": "0066 (head)\n0138 (head)\n"
+  "stdout": "0140 (head)\n0066 (head)\n"
  },
  {
   "name": "current without the cutover head",
-  "stdout": "0138 (head)\n"
+  "stdout": "0140 (head)\n"
  },
  {
   "name": "current below the head",
-  "stdout": "0066 (head)\n0137\n"
+  "stdout": "0139\n0066 (head)\n"
  },
  {
   "name": "current of an empty version table",

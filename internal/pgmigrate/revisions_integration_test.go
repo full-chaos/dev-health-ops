@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -35,7 +36,7 @@ var revisionScenarios = []revisionScenario{
 	{name: "heads", verb: "heads"},
 	{name: "current at the head", verb: "current"},
 	{name: "current without the cutover head", setup: "DELETE FROM alembic_version WHERE version_num = '0066'", verb: "current"},
-	{name: "current below the head", setup: "UPDATE alembic_version SET version_num = '0137' WHERE version_num = '0138'", verb: "current"},
+	{name: "current below the head", setup: "UPDATE alembic_version SET version_num = '0139' WHERE version_num = '0140'", verb: "current"},
 	{name: "current of an empty version table", setup: "DELETE FROM alembic_version", verb: "current"},
 	{name: "current without a version table", setup: "DROP TABLE alembic_version", verb: "current"},
 }
@@ -48,7 +49,7 @@ const revisionsGolden = "testdata/revisions_golden.json"
 // freshness check: the file is only rewritten by
 // TestRevisionsVenueOracleMatchesAlembic with DHO_REVISIONS_GOLDEN_UPDATE=1,
 // then this digest is updated.
-const revisionsGoldenSHA256 = "0dfb6924865d8a188d40ee81d51e8b1b2fdb6691e8fce0567810efd055b2bfd7"
+const revisionsGoldenSHA256 = "af1cb89d596dfe5ba9866f48217237b40ce8e478cf68a5ee53e864e70f641f1f"
 
 type revisionResult struct {
 	Name   string `json:"name"`
@@ -147,7 +148,7 @@ func TestRevisionsMatchTheFrozenAlembicOutput(t *testing.T) {
 		t.Fatal(err)
 	}
 	var frozen []revisionResult
-	if err := json.Unmarshal(raw, &frozen); err != nil {
+	if err := json.Unmarshal(goldenBody(raw), &frozen); err != nil {
 		t.Fatal(err)
 	}
 	if len(frozen) != len(revisionScenarios) {
@@ -162,7 +163,7 @@ func TestRevisionsMatchTheFrozenAlembicOutput(t *testing.T) {
 			exec(scenario.setup)
 		}
 		got := goRevisions(t, uri, scenario.verb)
-		if got != frozen[index].Stdout {
+		if !sameRevisionText(scenario.verb, got, frozen[index].Stdout) {
 			t.Errorf("%s: dho printed %q, Alembic printed %q", scenario.name, got, frozen[index].Stdout)
 		}
 		if frozen[index].Stdout == "" && scenario.verb == "heads" {
@@ -200,7 +201,7 @@ func TestRevisionsVenueOracleMatchesAlembic(t *testing.T) {
 		}
 		want := pythonRevisions(t, uri, scenario.verb)
 		got := goRevisions(t, uri, scenario.verb)
-		if got != want {
+		if !sameRevisionText(scenario.verb, got, want) {
 			t.Errorf("%s: dho printed %q, Alembic printed %q", scenario.name, got, want)
 		}
 		frozen = append(frozen, revisionResult{Name: scenario.name, Stdout: want})
@@ -212,6 +213,8 @@ func TestRevisionsVenueOracleMatchesAlembic(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		out = append([]byte("# written by TestRevisionsVenueOracleMatchesAlembic; `current` lines are compared as a set: "+
+			"Alembic prints alembic_version in table (heap) order, which an UPDATE or VACUUM can change\n"), out...)
 		if err := os.MkdirAll("testdata", 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -222,4 +225,32 @@ func TestRevisionsVenueOracleMatchesAlembic(t *testing.T) {
 	if !t.Failed() {
 		venueoracle.WriteProof(t)
 	}
+}
+
+// goldenBody is the golden's JSON: its leading "#" header lines removed.
+func goldenBody(raw []byte) []byte {
+	for bytes.HasPrefix(raw, []byte("#")) {
+		end := bytes.IndexByte(raw, '\n')
+		if end < 0 {
+			return nil
+		}
+		raw = raw[end+1:]
+	}
+	return raw
+}
+
+// sameRevisionText compares a verb's output. `heads` is ordered (both sides
+// sort it). `current` prints alembic_version in table order, which is not a
+// contract (an UPDATE or VACUUM moves a row), so its lines compare as a set.
+func sameRevisionText(verb, got, want string) bool {
+	if verb != "current" {
+		return got == want
+	}
+	return strings.Join(sortedLines(got), "\n") == strings.Join(sortedLines(want), "\n")
+}
+
+func sortedLines(text string) []string {
+	lines := strings.Split(strings.TrimRight(text, "\n"), "\n")
+	sort.Strings(lines)
+	return lines
 }

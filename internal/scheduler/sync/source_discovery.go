@@ -1340,6 +1340,13 @@ func (service *NativeSourceDiscoveryService) upsertJiraSources(
 				if dup == survivor {
 					continue
 				}
+				if dup.ExternalID != survivor.ExternalID {
+					// The losing case-variant may hold the project's sync
+					// watermarks; move them onto the survivor's key.
+					if err := migrateJiraWatermarksOnRename(ctx, tx, orgID, dup.ExternalID, survivor.ExternalID, now); err != nil {
+						return 0, 0, nil, nil, 0, err
+					}
+				}
 				metadata := cloneMetadata(dup.Metadata)
 				metadata.Set(sourceDuplicateOfKey, survivor.ExternalID)
 				if err := disableSourceRow(ctx, tx, dup.ID, metadata); err != nil {
@@ -1347,6 +1354,44 @@ func (service *NativeSourceDiscoveryService) upsertJiraSources(
 				}
 				dup.IsEnabled = false
 				dup.Metadata = metadata
+			}
+		}
+
+		renamedTo := ""
+		if survivor == nil {
+			// No row carries the discovered key: before treating it as a new
+			// project, look for the SAME project under an older key. Jira's
+			// numeric project id survives a rename, so a row carrying it is
+			// reused (its watermarks moved to the new key), never duplicated.
+			if projectID := metadataString(source.Metadata, "jira_project_id"); projectID != "" {
+				var renameCandidates []*existingSourceRow
+				for _, row := range existingRows {
+					if normalizeSourceKey(row.Provider) != "jira" {
+						continue
+					}
+					if stored, ok := row.Metadata.Get("jira_project_id"); ok {
+						if text, isString := stored.(string); isString && text == projectID {
+							renameCandidates = append(renameCandidates, row)
+						}
+					}
+				}
+				sort.Slice(renameCandidates, func(i, j int) bool {
+					if !renameCandidates[i].DiscoveredAt.Equal(renameCandidates[j].DiscoveredAt) {
+						return renameCandidates[i].DiscoveredAt.Before(renameCandidates[j].DiscoveredAt)
+					}
+					return renameCandidates[i].ID < renameCandidates[j].ID
+				})
+				if len(renameCandidates) > 0 {
+					renamed := renameCandidates[0]
+					if normalizeSourceKey(renamed.ExternalID) != normalizedKey {
+						if err := migrateJiraWatermarksOnRename(ctx, tx, orgID, renamed.ExternalID, source.ExternalID, now); err != nil {
+							return 0, 0, nil, nil, 0, err
+						}
+						renamed.ExternalID = source.ExternalID
+						renamedTo = source.ExternalID
+					}
+					survivor = renamed
+				}
 			}
 		}
 
@@ -1369,6 +1414,11 @@ func (service *NativeSourceDiscoveryService) upsertJiraSources(
 				// operator's own) rescope disable.
 				merged = withoutMetadataKey(merged, sourceSupersededMarkerKey)
 				reenable = true
+			}
+			if renamedTo != "" {
+				if _, err := tx.Exec(ctx, `UPDATE public.integration_sources SET external_id=$2 WHERE id=$1::uuid`, survivor.ID, renamedTo); err != nil {
+					return 0, 0, nil, nil, 0, fmt.Errorf("rename integration source %s: %w", survivor.ID, err)
+				}
 			}
 			if err := updateExistingSourceRow(ctx, tx, survivor.ID, source.Name, source.FullName, merged, now, reenable); err != nil {
 				return 0, 0, nil, nil, 0, err
@@ -1781,4 +1831,60 @@ func translateFnmatchBracketNegation(pattern string) string {
 		builder.WriteByte(pattern[i])
 	}
 	return builder.String()
+}
+
+// migrateJiraWatermarksOnRename ports
+// discovery.py::_migrate_jira_watermarks_on_rename: every sync watermark of
+// the org under the old source key moves to the new key. When the new key
+// already has a watermark for the same dataset, the later last_synced_at is
+// kept on that row and the old row is deleted, so no cursor goes backwards
+// and uq_sync_watermark_org_source_dataset holds. updated_at is stamped on
+// every row written, as the model's onupdate does.
+func migrateJiraWatermarksOnRename(ctx context.Context, tx pgx.Tx, orgID, oldExternalID, newExternalID string, now time.Time) error {
+	rows, err := tx.Query(ctx, `SELECT id::text, dataset_key, last_synced_at FROM public.sync_watermarks WHERE org_id=$1 AND source_id=$2`,
+		orgID, oldExternalID)
+	if err != nil {
+		return fmt.Errorf("load watermarks to migrate: %w", err)
+	}
+	type watermark struct {
+		id, datasetKey string
+		lastSyncedAt   *time.Time
+	}
+	var old []watermark
+	for rows.Next() {
+		var row watermark
+		if err := rows.Scan(&row.id, &row.datasetKey, &row.lastSyncedAt); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan watermark to migrate: %w", err)
+		}
+		old = append(old, row)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("load watermarks to migrate: %w", err)
+	}
+	for _, row := range old {
+		var conflictID string
+		var conflictAt *time.Time
+		err := tx.QueryRow(ctx, `SELECT id::text, last_synced_at FROM public.sync_watermarks WHERE org_id=$1 AND source_id=$2 AND dataset_key=$3`,
+			orgID, newExternalID, row.datasetKey).Scan(&conflictID, &conflictAt)
+		if errors.Is(err, pgx.ErrNoRows) {
+			if _, err := tx.Exec(ctx, `UPDATE public.sync_watermarks SET source_id=$2, updated_at=$3 WHERE id=$1::uuid`, row.id, newExternalID, now); err != nil {
+				return fmt.Errorf("move watermark %s: %w", row.id, err)
+			}
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("load conflicting watermark: %w", err)
+		}
+		if row.lastSyncedAt != nil && (conflictAt == nil || row.lastSyncedAt.After(*conflictAt)) {
+			if _, err := tx.Exec(ctx, `UPDATE public.sync_watermarks SET last_synced_at=$2, updated_at=$3 WHERE id=$1::uuid`, conflictID, *row.lastSyncedAt, now); err != nil {
+				return fmt.Errorf("advance watermark %s: %w", conflictID, err)
+			}
+		}
+		if _, err := tx.Exec(ctx, `DELETE FROM public.sync_watermarks WHERE id=$1::uuid`, row.id); err != nil {
+			return fmt.Errorf("delete superseded watermark %s: %w", row.id, err)
+		}
+	}
+	return nil
 }

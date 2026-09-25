@@ -313,18 +313,10 @@ func TestNativeTestopsExecutorsWriteTheirTablesAgainstRealClickHouse(t *testing.
 		name     string
 		executor NativeFamilyExecutor
 		table    string
-		// collapsesToOneRow pins a KNOWN production defect (CHAOS-6774): the
-		// pipeline executor returns one row per (team, service) group of a
-		// repo/day, but the real table is ReplacingMergeTree ORDER BY
-		// (org_id, repo_id, day) (migration 096), so the rows of one run collapse
-		// to one and which survives is arbitrary. The hand-typed MergeTree DDL
-		// this test used to carry hid it. The pin fails when the collapse is
-		// fixed (or worsens), so the fix removes the flag.
-		collapsesToOneRow bool
 	}{
-		{"testops_pipeline", pipelineExecutor, "testops_pipeline_metrics_daily", true},
-		{"testops_test", testExecutor, "testops_test_metrics_daily", false},
-		{"testops_coverage", coverageExecutor, "testops_coverage_metrics_daily", false},
+		{"testops_pipeline", pipelineExecutor, "testops_pipeline_metrics_daily"},
+		{"testops_test", testExecutor, "testops_test_metrics_daily"},
+		{"testops_coverage", coverageExecutor, "testops_coverage_metrics_daily"},
 	} {
 		written, err := spec.executor.ComputeFamily(ctx, run, partition)
 		if err != nil {
@@ -343,11 +335,13 @@ func TestNativeTestopsExecutorsWriteTheirTablesAgainstRealClickHouse(t *testing.
 		).Scan(&stored); err != nil {
 			t.Fatalf("%s readback: %v", spec.name, err)
 		}
-		if spec.collapsesToOneRow {
-			if written <= 1 || stored != 1 {
-				t.Fatalf("%s: CHAOS-6774 pin: want several rows reported and exactly 1 stored (the sorting-key collapse), got wrote %d reported %d; if the collapse was fixed, drop collapsesToOneRow", spec.name, stored, written)
-			}
-			continue
+		// Each of these tables holds ONE row per (org_id, repo_id, day)
+		// (ReplacingMergeTree, migration 096), so a partition writes exactly one:
+		// the pipeline executor merges the fixture's three (team, service)
+		// groups into one row before the write (CHAOS-6774; it used to report 3
+		// and store 1).
+		if written != 1 {
+			t.Fatalf("%s reported %d rows for one repo/day, want exactly 1 (the table's sorting key holds one)", spec.name, written)
 		}
 		if stored != uint64(written) {
 			t.Fatalf("%s wrote %d rows but reported %d", spec.name, stored, written)

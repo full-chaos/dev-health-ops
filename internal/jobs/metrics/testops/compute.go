@@ -531,40 +531,114 @@ func (accumulator *PipelineAccumulator) Finish() []PipelineMetric {
 	})
 	result := make([]PipelineMetric, 0, len(order))
 	for _, k := range order {
-		b := byGroup[k]
-		metric := PipelineMetric{
-			RepoID: repoID, OrgID: b.orgID,
-			PipelinesCount: b.pipelines, SuccessCount: b.success,
-			FailureCount: b.failure, CancelledCount: b.cancelled,
-		}
-		if b.pipelines > 0 {
-			n := float64(b.pipelines)
-			metric.SuccessRate = float64(b.success) / n
-			metric.FailureRate = float64(b.failure) / n
-			metric.CancelRate = float64(b.cancelled) / n
-			metric.RerunRate = float64(b.reruns) / n
-		}
-		if len(b.durations) > 0 {
-			m := median(b.durations)
-			p95 := percentile(b.durations, 95.0)
-			metric.MedianDurationSeconds = &m
-			metric.P95DurationSeconds = &p95
-		}
-		if len(b.queues) > 0 {
-			avg := mean(b.queues)
-			p95 := percentile(b.queues, 95.0)
-			metric.AvgQueueSeconds = &avg
-			metric.P95QueueSeconds = &p95
-		}
-		if k.teamID != "" {
-			metric.TeamID = strPtr(k.teamID)
-		}
-		if k.serviceSet {
-			metric.ServiceID = strPtr(k.serviceValue)
-		}
-		result = append(result, metric)
+		result = append(result, finishPipelineBucket(repoID, k, byGroup[k]))
 	}
 	return result
+}
+
+// finishPipelineBucket turns one group's counters into its PipelineMetric.
+func finishPipelineBucket(repoID uuid.UUID, k pipelineKey, b *pipelineBucket) PipelineMetric {
+	metric := PipelineMetric{
+		RepoID: repoID, OrgID: b.orgID,
+		PipelinesCount: b.pipelines, SuccessCount: b.success,
+		FailureCount: b.failure, CancelledCount: b.cancelled,
+	}
+	if b.pipelines > 0 {
+		n := float64(b.pipelines)
+		metric.SuccessRate = float64(b.success) / n
+		metric.FailureRate = float64(b.failure) / n
+		metric.CancelRate = float64(b.cancelled) / n
+		metric.RerunRate = float64(b.reruns) / n
+	}
+	if len(b.durations) > 0 {
+		m := median(b.durations)
+		p95 := percentile(b.durations, 95.0)
+		metric.MedianDurationSeconds = &m
+		metric.P95DurationSeconds = &p95
+	}
+	if len(b.queues) > 0 {
+		avg := mean(b.queues)
+		p95 := percentile(b.queues, 95.0)
+		metric.AvgQueueSeconds = &avg
+		metric.P95QueueSeconds = &p95
+	}
+	if k.teamID != "" {
+		metric.TeamID = strPtr(k.teamID)
+	}
+	if k.serviceSet {
+		metric.ServiceID = strPtr(k.serviceValue)
+	}
+	return metric
+}
+
+// FinishRepoDay merges every (team, service) group into ONE PipelineMetric
+// for the (org, repo, day) the accumulator was fed (CHAOS-6774).
+//
+// testops_pipeline_metrics_daily is ReplacingMergeTree(computed_at) ORDER BY
+// (org_id, repo_id, day) (migration 096): one row per repo/day is all the
+// table can hold, and the per-group rows Finish returns collapse to one of
+// themselves, arbitrarily, in production. The write path therefore
+// aggregates first, and this is that aggregate:
+//
+//   - counts are summed across groups;
+//   - the rates are recomputed from the summed counts (never averaged);
+//   - median/p95 duration and avg/p95 queue are taken over the UNION of the
+//     groups' samples;
+//   - TeamID/ServiceID are set only when every contributing group agrees,
+//     and are nil when they disagree: unknown, not a guess. A repo/day with a
+//     single group is therefore exactly what Finish returns for it.
+//
+// Finish and ComputePipelineMetrics stay per-group: that is Python's own
+// grouping (compute_testops.py:135-138), which the live-Python oracles compare
+// against. The Python producer still writes several rows per repo/day; that
+// divergence is named on CHAOS-6774 and is not fixed here.
+//
+// Returns nil when no row was added.
+func (accumulator *PipelineAccumulator) FinishRepoDay() *PipelineMetric {
+	order := append([]pipelineKey(nil), accumulator.order...)
+	if len(order) == 0 {
+		return nil
+	}
+	sort.SliceStable(order, func(i, j int) bool {
+		if order[i].teamID != order[j].teamID {
+			return order[i].teamID < order[j].teamID
+		}
+		return order[i].serviceValue < order[j].serviceValue
+	})
+	merged := pipelineBucket{}
+	for _, k := range order {
+		b := accumulator.byGroup[k]
+		merged.pipelines += b.pipelines
+		merged.success += b.success
+		merged.failure += b.failure
+		merged.cancelled += b.cancelled
+		merged.reruns += b.reruns
+		merged.durations = append(merged.durations, b.durations...)
+		merged.queues = append(merged.queues, b.queues...)
+		if merged.orgID == "" {
+			merged.orgID = b.orgID
+		}
+	}
+	metric := finishPipelineBucket(accumulator.repoID, mergedAttribution(order), &merged)
+	return &metric
+}
+
+// mergedAttribution is the ONE place that decides the team_id/service_id of a
+// merged repo/day row (CHAOS-6774 working default, lead D2547): a value when
+// every group agrees on it, unset (NULL) when they disagree. Change the
+// semantics here and nowhere else. groups is non-empty.
+func mergedAttribution(groups []pipelineKey) pipelineKey {
+	first := groups[0]
+	key := pipelineKey{teamID: first.teamID, serviceSet: first.serviceSet, serviceValue: first.serviceValue}
+	for _, k := range groups[1:] {
+		if k.teamID != first.teamID {
+			key.teamID = ""
+		}
+		if k.serviceSet != first.serviceSet || k.serviceValue != first.serviceValue {
+			key.serviceSet, key.serviceValue = false, ""
+		}
+	}
+	return key
 }
 
 // ComputeTestMetrics ports compute_test_metrics_daily

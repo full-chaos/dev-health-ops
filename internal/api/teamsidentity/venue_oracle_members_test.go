@@ -272,7 +272,9 @@ func requireMemberOracleEnv(t *testing.T) string {
 	}
 	_, currentFile, _, _ := runtime.Caller(0)
 	repoRoot := filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(currentFile))))
-	return pyoracle.Resolve(t, repoRoot)
+	python := pyoracle.Resolve(t, repoRoot)
+	pyoracle.RequireDeployed(t, python)
+	return python
 }
 
 func redirectDiscoveryClient(t *testing.T, stub *memberOracleStub) {

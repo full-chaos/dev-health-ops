@@ -19,6 +19,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -73,4 +74,43 @@ func RunError(python string, err error, output []byte) error {
 		return fmt.Errorf("interpreter %s: %w: %s", python, err, output)
 	}
 	return fmt.Errorf("interpreter %s: %w", python, err)
+}
+
+// DeployedMajor and DeployedMinor are the interpreter the api ships on
+// (pyproject.toml requires-python = ">=3.14"). A live oracle compares Go
+// against Python's behaviour, and that behaviour moves between releases
+// (json.decoder's error text, datetime parsing edge cases), so an older
+// interpreter measures the wrong Python, not the code under test.
+const (
+	DeployedMajor = 3
+	DeployedMinor = 14
+)
+
+// DeployedInterpreterError reports why python is not at least the deployed
+// interpreter, or nil when it is. It runs the interpreter to read its
+// version rather than trusting the path, so a bare "python3" that resolves to
+// a hosted runner's 3.12 is refused by what it IS.
+func DeployedInterpreterError(python string) error {
+	output, err := exec.Command(python, "-c", "import sys; print('%d.%d' % sys.version_info[:2])").Output()
+	if err != nil {
+		return fmt.Errorf("read the interpreter version of %s: %w", python, err)
+	}
+	version := strings.TrimSpace(string(output))
+	var major, minor int
+	if _, scanErr := fmt.Sscanf(version, "%d.%d", &major, &minor); scanErr != nil ||
+		major < DeployedMajor || (major == DeployedMajor && minor < DeployedMinor) {
+		return fmt.Errorf("live oracle resolved Python %q at %s; it needs the deployed %d.%d (set DEV_HEALTH_PYTHON to the repo .venv interpreter)",
+			version, python, DeployedMajor, DeployedMinor)
+	}
+	return nil
+}
+
+// RequireDeployed fails (never skips) the test when python is older than the
+// deployed interpreter. Call it right after Resolve in every oracle whose
+// answer depends on the Python release.
+func RequireDeployed(t *testing.T, python string) {
+	t.Helper()
+	if err := DeployedInterpreterError(python); err != nil {
+		t.Fatalf("pyoracle: %v", err)
+	}
 }

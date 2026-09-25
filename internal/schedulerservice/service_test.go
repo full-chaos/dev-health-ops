@@ -55,7 +55,7 @@ func TestSchedulerSpecRejectsAnActivatedRuntimeWithoutDatabaseConfiguration(t *t
 	// checks that failed. An absent DSN is a DECLARED configuration rejection
 	// (postgres.ConfigurationRejected), so it is reported through readiness an
 	// operator can scrape rather than a crash loop that names nothing.
-	registry := health.NewRegistry(100 * time.Millisecond)
+	registry := health.NewRegistry(readinessTestCheckTimeout)
 	components, err := configureSchedulerDependencies(context.Background(), config.Config{}, registry, nil)
 	if err != nil || len(components) != 0 {
 		t.Fatalf("unconfigured activated scheduler components=%v err=%v", components, err)
@@ -86,7 +86,7 @@ func TestSchedulerSpecRejectsAnActivatedRuntimeWithoutDatabaseConfiguration(t *t
 // unparseable DSN -- must still terminate the process rather than idle as an
 // alive-but-unready zombie (CHAOS-3873).
 func TestSchedulerCrashLoopsOnAnOperationalDatabaseFailure(t *testing.T) {
-	registry := health.NewRegistry(100 * time.Millisecond)
+	registry := health.NewRegistry(readinessTestCheckTimeout)
 	_, err := buildSchedulerLoopWithSources(
 		context.Background(), config.Config{}, registry,
 		schedulerRuntimeSources{
@@ -109,7 +109,7 @@ func TestSchedulerCrashLoopsOnAnOperationalDatabaseFailure(t *testing.T) {
 }
 
 func TestSchedulerActivationIsPrivateSourceReviewedComposition(t *testing.T) {
-	registry := health.NewRegistry(100 * time.Millisecond)
+	registry := health.NewRegistry(readinessTestCheckTimeout)
 	called := false
 	components, err := configureSchedulerDependenciesWithSources(
 		context.Background(),
@@ -125,7 +125,7 @@ func TestSchedulerActivationIsPrivateSourceReviewedComposition(t *testing.T) {
 		t.Fatalf("reviewed activation components=%v called=%v err=%v", components, called, err)
 	}
 
-	registry = health.NewRegistry(100 * time.Millisecond)
+	registry = health.NewRegistry(readinessTestCheckTimeout)
 	_, err = configureSchedulerDependenciesWithSources(
 		context.Background(), config.Config{}, registry,
 		schedulerActivation{},

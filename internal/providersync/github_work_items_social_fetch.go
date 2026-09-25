@@ -325,7 +325,7 @@ func (fetcher GitHubWorkItemPRSocialFetcher) fetchPage(
 	if err != nil {
 		return nil, providerfoundation.ErrNormalizationInvalid
 	}
-	response, err := client.Do(ctx, http.MethodPost, gitHubGraphQLPath(client), bytes.NewReader(body))
+	response, err := client.Do(ctx, http.MethodPost, gitHubGraphQLURL(client), bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}

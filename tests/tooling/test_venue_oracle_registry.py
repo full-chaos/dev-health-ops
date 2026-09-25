@@ -1,4 +1,4 @@
-"""Every venue oracle test is in `ci/venue_oracle_registry.tsv`, and the registry is what runs.
+"""Every venue oracle test is in `ci/venue_oracle_registry.d/`, and the registry is what runs.
 
 WHY THIS TEST EXISTS (CHAOS-6584, Trap #392)
 --------------------------------------------
@@ -121,20 +121,43 @@ def tree(tmp_path: Path) -> Path:
 
 
 def _registry(
-    tree: Path, rows: list[tuple[str, str, str]], *, raw: str | None = None
+    tree: Path,
+    rows: list[tuple[str, str, str]],
+    *,
+    raw: str | None = None,
+    sort: bool = True,
 ) -> None:
-    text = REGISTRY_HEAD + (
-        raw if raw is not None else "".join(f"{p}\t{t}\t{m}\n" for p, t, m in rows)
+    """(Re)write ci/venue_oracle_registry.d/ from rows (or raw TSV lines): one
+    file per package, named <package with / as __>.tsv (CHAOS-6724)."""
+    directory = tree / "ci" / "venue_oracle_registry.d"
+    shutil.rmtree(directory, ignore_errors=True)
+    directory.mkdir(parents=True)
+    lines = (
+        raw.splitlines() if raw is not None else [f"{p}\t{t}\t{m}" for p, t, m in rows]
     )
-    _write(tree / "ci" / "venue_oracle_registry.tsv", text)
+    groups: dict[str, list[str]] = {}
+    for line in lines:
+        if line.strip():
+            groups.setdefault(line.split("\t", 1)[0], []).append(line)
+    for pkg, group in groups.items():
+        body = sorted(group) if sort else group
+        _write(
+            directory / (pkg.replace("/", "__") + ".tsv"),
+            REGISTRY_HEAD + "\n".join(body) + "\n",
+        )
+
+
+def _rows_of(directory: Path) -> list[str]:
+    return [
+        line
+        for path in sorted(directory.glob("*.tsv"))
+        for line in path.read_text().splitlines()
+        if line and not line.startswith("#")
+    ]
 
 
 def _read_rows(tree: Path) -> list[str]:
-    return [
-        line
-        for line in (tree / "ci" / "venue_oracle_registry.tsv").read_text().splitlines()
-        if line and not line.startswith("#")
-    ]
+    return _rows_of(tree / "ci" / "venue_oracle_registry.d")
 
 
 # ---------------------------------------------------------------------------
@@ -145,11 +168,7 @@ def _read_rows(tree: Path) -> list[str]:
 def test_real_tree_registry_matches_the_tree() -> None:
     proc = _run_in_repo()
     assert proc.returncode == 0, proc.stderr + proc.stdout
-    registered = [
-        line
-        for line in (ROOT / "ci" / "venue_oracle_registry.tsv").read_text().splitlines()
-        if line and not line.startswith("#")
-    ]
+    registered = _rows_of(ROOT / "ci" / "venue_oracle_registry.d")
     # A measurement that did not happen must fail: an empty or truncated
     # registry cannot read as covered.
     assert len(registered) >= 45, f"only {len(registered)} registry rows"
@@ -186,7 +205,8 @@ def test_a_structure_found_test_left_out_of_the_registry_fails(tree: Path) -> No
     proc = _run(tree)
     assert proc.returncode != 0
     assert "internal/a TestZeta" in proc.stderr
-    assert "NOT in ci/venue_oracle_registry.tsv" in proc.stderr
+    assert "NOT in ci/venue_oracle_registry.d/" in proc.stderr
+    assert "internal__a.tsv" in proc.stderr
 
 
 def test_a_name_found_test_in_a_non_harness_package_left_out_fails(tree: Path) -> None:
@@ -201,9 +221,7 @@ def test_a_name_found_test_in_a_non_harness_package_left_out_fails(tree: Path) -
 
 
 def test_a_registry_row_with_no_test_fails(tree: Path) -> None:
-    rows = _read_rows(tree)
-    rows.insert(2, "internal/a\tTestGhost\trun")
-    rows.sort()
+    rows = _read_rows(tree) + ["internal/a\tTestGhost\trun"]
     _registry(tree, [], raw="\n".join(rows) + "\n")
     proc = _run(tree)
     assert proc.returncode != 0
@@ -213,7 +231,7 @@ def test_a_registry_row_with_no_test_fails(tree: Path) -> None:
 
 def test_a_registry_row_with_no_package_fails(tree: Path) -> None:
     rows = _read_rows(tree) + ["internal/zzz\tTestNowhere\trun"]
-    _registry(tree, [], raw="\n".join(sorted(rows)) + "\n")
+    _registry(tree, [], raw="\n".join(rows) + "\n")
     proc = _run(tree)
     assert proc.returncode != 0
     assert "package dir internal/zzz does not exist" in proc.stderr
@@ -259,26 +277,85 @@ def test_empty_or_malformed_registry_fails(tree: Path, raw: str, needle: str) ->
 
 def test_unsorted_registry_fails(tree: Path) -> None:
     rows = list(reversed(_read_rows(tree)))
-    _registry(tree, [], raw="\n".join(rows) + "\n")
+    _registry(tree, [], raw="\n".join(rows) + "\n", sort=False)
     proc = _run(tree)
     assert proc.returncode != 0
-    assert "not sorted" in proc.stderr
+    assert "must be sorted and unique within a file" in proc.stderr
 
 
 def test_duplicate_registry_row_fails(tree: Path) -> None:
     rows = _read_rows(tree)
     rows.insert(1, rows[0])
-    _registry(tree, [], raw="\n".join(rows) + "\n")
+    _registry(tree, [], raw="\n".join(rows) + "\n", sort=False)
     proc = _run(tree)
     assert proc.returncode != 0
-    assert "duplicate" in proc.stderr
+    assert "must be sorted and unique within a file" in proc.stderr
 
 
-def test_missing_registry_file_fails(tree: Path) -> None:
-    (tree / "ci" / "venue_oracle_registry.tsv").unlink()
+def test_missing_registry_directory_fails(tree: Path) -> None:
+    shutil.rmtree(tree / "ci" / "venue_oracle_registry.d")
     proc = _run(tree)
     assert proc.returncode != 0
     assert "does not exist" in proc.stderr
+
+
+# CHAOS-6724: one file per package, nothing shared between PRs.
+
+
+def test_a_row_left_in_the_retired_single_file_fails(tree: Path) -> None:
+    """A PR rebased across the migration that still edits the old file: the file
+    must not exist, so its row can never be silently ignored."""
+    _write(
+        tree / "ci" / "venue_oracle_registry.tsv",
+        "internal/a\tTestLegacyRow\trun\n",
+    )
+    proc = _run(tree)
+    assert proc.returncode != 0
+    assert "must not exist any more" in proc.stderr
+    assert "TestLegacyRow" not in proc.stdout
+
+
+def test_a_row_in_the_wrong_packages_file_fails(tree: Path) -> None:
+    directory = tree / "ci" / "venue_oracle_registry.d"
+    text = (directory / "internal__b.tsv").read_text()
+    (directory / "internal__b.tsv").write_text(text + "internal/a\tTestStrayRow\trun\n")
+    proc = _run(tree)
+    assert proc.returncode != 0
+    assert "package internal/a belongs in internal__a.tsv" in proc.stderr
+
+
+def test_a_stray_file_in_the_registry_directory_fails(tree: Path) -> None:
+    _write(
+        tree / "ci" / "venue_oracle_registry.d" / "internal__a.tsv.orig",
+        "internal/a\tTestAlpha\trun\n",
+    )
+    proc = _run(tree)
+    assert proc.returncode != 0
+    assert "stray entry internal__a.tsv.orig" in proc.stderr
+
+
+def test_an_empty_package_file_fails(tree: Path) -> None:
+    _write(tree / "ci" / "venue_oracle_registry.d" / "internal__e.tsv", "# nothing\n")
+    proc = _run(tree)
+    assert proc.returncode != 0
+    assert "internal__e.tsv holds no rows" in proc.stderr
+
+
+def test_two_prs_adding_tests_in_different_packages_touch_different_files(
+    tree: Path,
+) -> None:
+    """The property CHAOS-6724 exists for: a row for a NEW package is a NEW file,
+    and a row for another package edits a file the first PR never touches."""
+    _write(
+        tree / "internal/f/f_test.go", _go_test("f", "TestVenueOracleF", harness=True)
+    )
+    _write(
+        tree / "ci" / "venue_oracle_registry.d" / "internal__f.tsv",
+        "internal/f\tTestVenueOracleF\trun\n",
+    )
+    proc = _run(tree)
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    assert "6 registered test(s)" in proc.stdout
 
 
 # ---------------------------------------------------------------------------

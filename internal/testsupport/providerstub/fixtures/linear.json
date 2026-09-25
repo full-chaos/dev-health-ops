@@ -1,0 +1,13 @@
+[
+ {"provider": "linear", "method": "POST", "path": "/graphql", "body_contains": "viewer",
+  "request_headers": {"Authorization": "stub-linear-key-401"}, "status": 401,
+  "body": {"errors": [{"message": "Authentication required, not authenticated"}]}},
+ {"provider": "linear", "method": "POST", "path": "/graphql", "body_contains": "viewer",
+  "request_headers": {"Authorization": "stub-linear-key-500"}, "status": 500,
+  "body": {"errors": [{"message": "upstream failure"}]}},
+ {"provider": "linear", "method": "POST", "path": "/graphql", "body_contains": "viewer",
+  "request_headers": {"Authorization": "stub-linear-key-noviewer"}, "status": 200,
+  "body": {"data": {"viewer": null}}},
+ {"provider": "linear", "method": "POST", "path": "/graphql", "body_contains": "viewer", "status": 200,
+  "body": {"data": {"viewer": {"id": "zz-viewer-1", "email": "stub@venue.invalid", "name": "Stub Linear"}}}}
+]

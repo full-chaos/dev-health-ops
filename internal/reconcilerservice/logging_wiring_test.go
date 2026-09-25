@@ -42,7 +42,7 @@ func TestOutboxReconcilerLoopReceivesTheComposedLoggerFromReconcilerCompositionR
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&buf, nil))
 
-	registry := health.NewRegistry(100 * time.Millisecond)
+	registry := health.NewRegistry(readinessTestCheckTimeout)
 	components, err := configureReconcilerDependenciesWithSourcesAndLogger(
 		context.Background(),
 		config.Config{RiverDatabaseSchema: "river"},
@@ -100,7 +100,7 @@ func TestSyncDispatchObserverLoopReceivesTheComposedLoggerFromReconcilerComposit
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&buf, nil))
 
-	registry := health.NewRegistry(100 * time.Millisecond)
+	registry := health.NewRegistry(readinessTestCheckTimeout)
 	components, err := configureReconcilerDependenciesWithSourcesAndLogger(
 		context.Background(),
 		config.Config{RiverDatabaseSchema: "river"},

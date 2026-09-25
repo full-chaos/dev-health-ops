@@ -6,6 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 	"io"
 	"log/slog"
 	"net"
@@ -933,5 +936,69 @@ func TestBlankFlagDoesNotShadowTheEnvironment(t *testing.T) {
 	}
 	if observed.LogLevel != slog.LevelWarn {
 		t.Fatalf("log level = %s, want the environment's warn", observed.LogLevel)
+	}
+}
+
+// TestShellExportsOTelInstrumentsOnMetrics pins that a binary started through
+// the shell exports the OTel instruments its code declares on its own
+// /metrics: an instrument created and recorded after start reaches the scrape
+// (the api and the query-api installed a MeterProvider; the scheduler, worker,
+// reconciler and stream runner did not, so their instruments were dropped).
+func TestShellExportsOTelInstrumentsOnMetrics(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := listener.Addr().String()
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var stdout, stderr bytes.Buffer
+	done := make(chan int, 1)
+	go func() {
+		done <- Execute(ctx, Spec{Service: "dev-health-worker"}, nil, testLookup(map[string]string{
+			"DEV_HEALTH_HTTP_ADDR":        address,
+			"DEV_HEALTH_SHUTDOWN_TIMEOUT": "1s",
+		}), IO{Stdout: &stdout, Stderr: &stderr})
+	}()
+
+	client := &http.Client{Timeout: 200 * time.Millisecond}
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		response, requestErr := client.Get("http://" + address + "/healthz")
+		if requestErr == nil {
+			_ = response.Body.Close()
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("shell did not start: %v logs=%s stderr=%s", requestErr, stdout.String(), stderr.String())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	counter, err := otel.Meter("github.com/full-chaos/dev-health-ops/internal/platform/shell").Int64Counter("shell_otel_probe_total")
+	if err != nil {
+		t.Fatal(err)
+	}
+	counter.Add(context.Background(), 3, metric.WithAttributes(attribute.String("probe", "shell")))
+
+	response, err := client.Get("http://" + address + "/metrics")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(response.Body)
+	_ = response.Body.Close()
+	if !strings.Contains(string(body), `shell_otel_probe_total{probe="shell"} 3`) {
+		t.Fatalf("/metrics does not carry the recorded OTel instrument:\n%s", body)
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("shell did not terminate after cancellation")
 	}
 }

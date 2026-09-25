@@ -370,7 +370,7 @@ func fetchGitLabGraphQLBlobs(
 	if err != nil {
 		return nil, providerfoundation.ErrNormalizationInvalid
 	}
-	response, err := client.Do(ctx, http.MethodPost, gitLabGraphQLPath(client), bytes.NewReader(body))
+	response, err := client.Do(ctx, http.MethodPost, gitLabGraphQLURL(client), bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -431,6 +431,13 @@ func gitLabBlobQuery(fields string) string {
 		"}"
 }
 
+// gitLabGraphQLURL is the GraphQL endpoint as an absolute URL (see
+// gitHubGraphQLURL).
+func gitLabGraphQLURL(client *providerfoundation.HTTPClient) string {
+	return (&url.URL{Scheme: client.BaseURL.Scheme, Host: client.BaseURL.Host}).String() + gitLabGraphQLPath(client)
+}
+
+// gitLabGraphQLPath is that endpoint's path on the base URL's host.
 func gitLabGraphQLPath(client *providerfoundation.HTTPClient) string {
 	base := strings.TrimSuffix(client.BaseURL.EscapedPath(), "/")
 	if strings.HasSuffix(base, "/api/v4") {

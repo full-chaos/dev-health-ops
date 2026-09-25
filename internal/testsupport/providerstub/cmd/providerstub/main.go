@@ -108,7 +108,7 @@ func serve(args []string) error {
 	if err != nil {
 		return err
 	}
-	provider := &http.Server{Addr: *listen, Handler: stub, ReadHeaderTimeout: 10 * time.Second,
+	provider := &http.Server{Addr: *listen, Handler: stub, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second,
 		TLSConfig: &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}}
 	recorder := &http.Server{Addr: *admin, Handler: stub.AdminHandler(), ReadHeaderTimeout: 10 * time.Second}
 	errs := make(chan error, 2)

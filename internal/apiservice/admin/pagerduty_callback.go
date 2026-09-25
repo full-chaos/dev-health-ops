@@ -145,6 +145,12 @@ func (h *handlers) completePagerDutyAuthorization(w http.ResponseWriter, r *http
 		return
 	}
 
+	// From here the callback lives under a deadline shorter than the cutoff
+	// after which a later callback treats its setup row as abandoned, so a
+	// live callback's token is never drained under it.
+	ctx, cancelSetup := context.WithTimeout(ctx, setupCallbackTimeout)
+	defer cancelSetup()
+
 	if missing := missingPagerDutyReadScopes(tokens.GrantedScopes); len(missing) > 0 {
 		h.revokePagerDutySetupToken(ctx, setupID, tokens)
 		policy.WriteDetail(w, http.StatusBadRequest, "Missing required PagerDuty OAuth scopes: "+strings.Join(missing, ", "), nil)

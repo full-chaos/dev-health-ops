@@ -320,6 +320,7 @@ SCRUB_ENV_NAMES: frozenset[str] = frozenset(
         "PGBOUNCER_TRANSACTION_MODE",
         "POSTGRES_CONNECT_TIMEOUT_SECONDS",
         "PROVIDER_SYNC_QUEUES_ENABLED",
+        "QUERY_API_INTERNAL_URL",
         "QWEN_API_KEY",
         "QWEN_LOCAL_MODEL",
         "QWEN_MODEL",

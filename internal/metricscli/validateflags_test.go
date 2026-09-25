@@ -111,7 +111,7 @@ func TestValidateFlagsRefusesBeforeTouchingClickHouse(t *testing.T) {
 // rot guard, not a freshness check: the file is only rewritten by
 // TestValidateFlagsVenueOracleMatchesThePythonProducer with
 // DHO_VALIDATE_FLAGS_GOLDEN_UPDATE=1, then this digest is updated.
-const goldenSHA256 = "db181acef1c62da15cc1206b1f2eb1f688176aae517b33309fe059f5095cf548"
+const goldenSHA256 = "5e70c96d9a2bfcd238bdf87f9917fcc57d320c294927b882210b7de4653616cb"
 
 func TestValidateFlagsGoldenIsTheFileTheDigestPins(t *testing.T) {
 	raw, err := os.ReadFile("testdata/validate_flags_golden.json")

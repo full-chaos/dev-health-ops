@@ -621,10 +621,14 @@ func runValidateFlags(ctx context.Context, env cli.Env) int {
 	if env.Lookup == nil {
 		env.Lookup = func(string) (string, bool) { return "", false }
 	}
-	orgID := strings.TrimSpace(*org)
-	if orgID == "" {
+	// Python takes the organization verbatim: an explicit --org (even an empty
+	// one, which scopes the checks to the rows with no organization) wins over
+	// ORG_ID, and neither value is trimmed.
+	orgID := *org
+	given := false
+	flags.Visit(func(set *flag.Flag) { given = given || set.Name == "org" })
+	if !given {
 		orgID, _ = env.Lookup("ORG_ID")
-		orgID = strings.TrimSpace(orgID)
 	}
 
 	logger := logging.NewJSON(env.Stderr, slog.LevelInfo)

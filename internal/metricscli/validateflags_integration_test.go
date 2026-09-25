@@ -35,6 +35,8 @@ const (
 	orgMid     = "88888888-0000-4000-8000-000000000008"
 	orgFifty   = "77777777-0000-4000-8000-000000000009"
 	orgSolo    = "66666666-0000-4000-8000-00000000000a"
+	orgFive    = "55555555-0000-4000-8000-00000000000b"
+	orgOver    = "44444444-0000-4000-8000-00000000000c"
 )
 
 type clickHouse struct {
@@ -170,6 +172,17 @@ func seed(t *testing.T, ch clickHouse) {
 		buckets(orgMid, fmt.Sprintf("r%d", release), 2, 1, "m")
 	}
 
+	// orgFive: exactly 5% duplicate keys (one in twenty), the boundary of the dedup
+	// check: a warning, not critical.
+	deployments(orgFive, 2)
+	covered(orgFive, 2, "v")
+	events(orgFive, 19, 1)
+
+	// orgOver: one duplicate key in nineteen rows (5.26%), just past the boundary: critical.
+	deployments(orgOver, 2)
+	covered(orgOver, 2, "w")
+	events(orgOver, 18, 1)
+
 	// orgFifty: exactly half the confidence scores are very low (not more than half: ok).
 	deployments(orgFifty, 4)
 	covered(orgFifty, 4, "y")
@@ -253,6 +266,9 @@ var scenarios = []struct {
 	{orgEmpty, nil, nil}, {orgEmpty, []string{"--lookback", "1"}, nil},
 	{orgDrifty, nil, nil}, {orgDrifty, []string{"--lookback", "14"}, nil},
 	{orgLowConf, nil, nil}, {orgJoin, nil, nil}, {orgHalf, nil, nil}, {orgMid, nil, nil}, {orgFifty, nil, nil},
+	{orgFive, nil, nil}, {orgOver, nil, nil},
+	// An explicit --org wins over ORG_ID, empty or not, and is taken verbatim.
+	{orgGood, []string{"--org", ""}, nil}, {orgGood, []string{"--org", " "}, nil}, {orgBad, []string{"--org", orgGood}, nil},
 	{orgSolo, nil, seedIsolation}, {"", nil, nil},
 }
 

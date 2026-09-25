@@ -71,3 +71,34 @@ func TestCertsRefusesANonJiraHostAndTightensAnExistingKeyFile(t *testing.T) {
 		t.Fatalf("server.key mode = %v, %v; want 0600 even when the file pre-existed 0644", info, err)
 	}
 }
+
+func TestCertsNeverWritesThroughAPreExistingSymlink(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "certs")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(root, "victim")
+	if err := os.WriteFile(target, []byte("victim-original"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(dir, "server.key")); err != nil {
+		t.Skip("no symlinks")
+	}
+	if err := certs([]string{"-out", dir}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(target); string(got) != "victim-original" {
+		t.Fatalf("certs wrote the private key through a symlink: %q", got[:min(len(got), 30)])
+	}
+	info, err := os.Lstat(filepath.Join(dir, "server.key"))
+	if err != nil || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm() != 0o600 {
+		t.Fatalf("server.key = %v, %v; want a regular 0600 file", info, err)
+	}
+}
+
+func TestServeDefaultsTheRecorderToLoopback(t *testing.T) {
+	if defaultAdminAddr != "127.0.0.1:9090" {
+		t.Fatalf("default recorder address = %q, want loopback only", defaultAdminAddr)
+	}
+}

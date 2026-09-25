@@ -166,13 +166,13 @@ func TestLoadDirReadsFilesAndBodyFilesAndTheBuiltinStarterLoads(t *testing.T) {
 func TestAdminHandlerServesTheRecorderOnItsOwnHandler(t *testing.T) {
 	stub, _ := New(Fixture{Provider: "github", Method: "GET", Path: "/user", Status: 200, Body: json.RawMessage(`{}`)})
 	get(t, stub, "api.github.com", "GET", "/user", nil)
-	get(t, stub, "api.github.com", "GET", "/nope", nil)
+	get(t, stub, "api.github.com", "GET", "/user/orgs", nil)
 	admin := stub.AdminHandler()
 	var all, unmatched []Recorded
 	if err := json.Unmarshal(get(t, admin, "x", "GET", "/requests", nil).Body.Bytes(), &all); err != nil || len(all) != 2 {
 		t.Fatalf("requests: %v %v", all, err)
 	}
-	if err := json.Unmarshal(get(t, admin, "x", "GET", "/unmatched", nil).Body.Bytes(), &unmatched); err != nil || len(unmatched) != 1 || unmatched[0].Path != "/nope" {
+	if err := json.Unmarshal(get(t, admin, "x", "GET", "/unmatched", nil).Body.Bytes(), &unmatched); err != nil || len(unmatched) != 1 || unmatched[0].Path != "/user/orgs" {
 		t.Fatalf("unmatched: %v %v", unmatched, err)
 	}
 	if r := get(t, admin, "x", "POST", "/reset", nil); r.Code != http.StatusNoContent || len(stub.Requests()) != 0 {
@@ -384,5 +384,156 @@ func TestIssueServerCoversOnlyProviderHostsAndJiraTenants(t *testing.T) {
 	cert, _ := x509.ParseCertificate(block.Bytes)
 	if len(cert.IPAddresses) != 0 {
 		t.Fatalf("the certificate must not carry IP SANs: %v", cert.IPAddresses)
+	}
+}
+
+// ---- r2 (CHAOS-6718) findings: each test fails on the d7deb43e stub ----
+
+func TestPathShapeKeepsOnlyKnownVocabularyNotShortAlphabeticTokens(t *testing.T) {
+	stub, _ := New(Fixture{Provider: "gitlab", Method: "GET", Path: "/api/v4/groups/*", Status: 200, Body: json.RawMessage(`{}`)})
+	miss := get(t, stub, "gitlab.com", "POST", "/api/v4/runners/secretvalue", nil)
+	raw, _ := json.Marshal(stub.Requests())
+	if strings.Contains(miss.Body.String(), "secretvalue") || strings.Contains(string(raw), "secretvalue") {
+		t.Fatalf("a short alphabetic path token survived: %s / %s", miss.Body.String(), raw)
+	}
+	if !strings.Contains(string(raw), "/api/v4/") {
+		t.Fatalf("recorder lost the api prefix: %s", raw)
+	}
+	// a word the fixtures name stays readable
+	get(t, stub, "gitlab.com", "DELETE", "/api/v4/groups/abcdefgh", nil)
+	raw, _ = json.Marshal(stub.Requests())
+	if !strings.Contains(string(raw), "/api/v4/groups/{x}") {
+		t.Fatalf("fixture vocabulary was masked: %s", raw)
+	}
+}
+
+func TestRepeatedlyEncodedPathsAndQueryKeysAreRefused(t *testing.T) {
+	stub, _ := New(
+		Fixture{Provider: "gitlab", Method: "GET", Path: "/api/v4/groups/*", Status: 202, Body: json.RawMessage(`{}`)},
+		Fixture{Provider: "github", Method: "GET", Path: "/x", Query: map[string]string{"scope": "read"}, Status: 201, Body: json.RawMessage(`{}`)})
+	for _, target := range []string{"/api/v4/groups/%252e%252e/admin", "/api/v4/groups/%252E%252E/admin", "/api/v4/groups/%252Fadmin", "/api/v4/groups/100%25"} {
+		if got := get(t, stub, "gitlab.com", "GET", target, nil); got.Code != 599 {
+			t.Errorf("%s answered %d, want 599", target, got.Code)
+		}
+	}
+	for _, target := range []string{"/x?scope=read&%2573cope=admin", "/x?scope=read&%73cope=admin"} {
+		if got := get(t, stub, "api.github.com", "GET", target, nil); got.Code != 599 {
+			t.Errorf("%s answered %d, want 599", target, got.Code)
+		}
+	}
+}
+
+func TestBodyFileIsReadThroughARootSoASwapCannotEscape(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "fx")
+	_ = os.Mkdir(dir, 0o755)
+	_ = os.WriteFile(filepath.Join(root, "outside.raw"), []byte("outside-marker"), 0o600)
+	_ = os.WriteFile(filepath.Join(dir, "a.json"), []byte(`[{"provider":"github","method":"GET","path":"/x","status":200,"body_file":"sub/link.raw"}]`), 0o600)
+	_ = os.Mkdir(filepath.Join(dir, "sub"), 0o755)
+	// a directory symlink that points out of the fixture directory
+	if err := os.Symlink(root, filepath.Join(dir, "sub", "up")); err != nil {
+		t.Skip("no symlinks")
+	}
+	_ = os.WriteFile(filepath.Join(dir, "a.json"), []byte(`[{"provider":"github","method":"GET","path":"/x","status":200,"body_file":"sub/up/outside.raw"}]`), 0o600)
+	if _, err := LoadDir(dir); err == nil {
+		t.Fatal("a body_file reached through a symlinked directory out of the fixture directory must be refused")
+	}
+}
+
+func TestBodyFileSymlinkSwapRaceNeverReadsOutside(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "fx")
+	_ = os.Mkdir(dir, 0o755)
+	outside := filepath.Join(root, "outside.raw")
+	_ = os.WriteFile(outside, []byte("outside-marker"), 0o600)
+	inside := filepath.Join(dir, "body.raw")
+	_ = os.WriteFile(inside, []byte("inside-marker"), 0o600)
+	_ = os.WriteFile(filepath.Join(dir, "a.json"), []byte(`[{"provider":"github","method":"GET","path":"/x","status":200,"body_file":"body.raw"}]`), 0o600)
+	if err := os.Symlink(outside, filepath.Join(root, "probe")); err != nil {
+		t.Skip("no symlinks")
+	}
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			_ = os.Remove(inside)
+			if err := os.Symlink(outside, inside); err != nil {
+				return
+			}
+			_ = os.Remove(inside)
+			_ = os.WriteFile(inside, []byte("inside-marker"), 0o600)
+		}
+	}()
+	defer func() { close(stop); <-done }()
+	deadline := time.Now().Add(1500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		stub, err := LoadDir(dir)
+		if err != nil {
+			continue // a refused swap is fine
+		}
+		if got := get(t, stub, "api.github.com", "GET", "/x", nil).Body.String(); strings.Contains(got, "outside-marker") {
+			t.Fatal("LoadDir read a file outside the fixture directory during a symlink swap")
+		}
+	}
+}
+
+func TestTenantNamesMustBeConcreteSingleLabelJiraHosts(t *testing.T) {
+	for host, want := range map[string]string{
+		"zz-venue.atlassian.net": "jira", "a1.atlassian.net": "jira",
+		"*.atlassian.net": "", ".atlassian.net": "", "foo..atlassian.net": "", "a.b.atlassian.net": "", "-x.atlassian.net": "", "x-.atlassian.net": "",
+		"evil-atlassian.net": "", "atlassian.net.evil.com": "",
+	} {
+		if got := ProviderFor(host); got != want {
+			t.Errorf("ProviderFor(%q) = %q, want %q", host, got, want)
+		}
+	}
+	ca, _ := NewCA(time.Hour)
+	for _, host := range []string{"*.atlassian.net", ".atlassian.net", "foo..atlassian.net", "api.github.com."} {
+		if _, _, err := ca.IssueServer([]string{"api.github.com", host}, time.Hour); err == nil {
+			t.Errorf("IssueServer accepted %q", host)
+		}
+	}
+}
+
+func TestTrailingDotProviderHostIsAnswered(t *testing.T) {
+	stub, _ := New(Fixture{Provider: "github", Method: "GET", Path: "/user", Status: 200, Body: json.RawMessage(`{}`)})
+	for _, host := range []string{"api.github.com.", "api.github.com.:443", "API.GITHUB.COM."} {
+		if got := get(t, stub, host, "GET", "/user", nil); got.Code != 200 {
+			t.Errorf("Host %q answered %d, want 200", host, got.Code)
+		}
+	}
+	if got := get(t, stub, "api.github.com..", "GET", "/user", nil); got.Code != 599 {
+		t.Errorf("a doubled trailing dot answered %d, want 599", got.Code)
+	}
+}
+
+func TestAdminHandlerRefusesAProviderHostname(t *testing.T) {
+	stub, _ := New()
+	for _, host := range []string{"api.github.com", "api.github.com:9090", "zz-venue.atlassian.net"} {
+		if got := get(t, stub.AdminHandler(), host, "POST", "/reset", nil); got.Code != 404 {
+			t.Errorf("admin via Host %q answered %d, want 404", host, got.Code)
+		}
+	}
+	if got := get(t, stub.AdminHandler(), "127.0.0.1:9090", "GET", "/requests", nil); got.Code != 200 {
+		t.Errorf("admin via loopback answered %d", got.Code)
+	}
+}
+
+func TestRequestLogCarriesTheHostAndPathShape(t *testing.T) {
+	stub, _ := New()
+	var lines []string
+	stub.Log = func(line string) { lines = append(lines, line) }
+	get(t, stub, "gitlab.com", "GET", "/api/v4/runners/secretvalue?token=q-canary", nil)
+	if len(lines) != 1 || !strings.Contains(lines[0], "host=gitlab.com") || !strings.Contains(lines[0], "path=/api/v4/") {
+		t.Fatalf("log line = %q", lines)
+	}
+	if strings.Contains(lines[0], "secretvalue") || strings.Contains(lines[0], "q-canary") {
+		t.Fatalf("log line carries a value: %s", lines[0])
 	}
 }

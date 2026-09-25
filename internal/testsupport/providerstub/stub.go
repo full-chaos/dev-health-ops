@@ -61,14 +61,20 @@ func ProviderFor(host string) string {
 		}
 		host = h
 	}
+	// the absolute spelling of a DNS name ("api.github.com.") is the same host; ".." is not
+	host = strings.TrimSuffix(host, ".")
 	if provider, ok := providerHosts[host]; ok {
 		return provider
 	}
-	if strings.HasSuffix(host, ".atlassian.net") {
+	if jiraTenant.MatchString(host) {
 		return "jira"
 	}
 	return ""
 }
+
+// jiraTenant is one concrete tenant label under atlassian.net: never a wildcard, an empty
+// label, a dotted sub-domain or a label that starts or ends with a hyphen.
+var jiraTenant = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?\.atlassian\.net$`)
 
 // Hosts lists the fixed provider hosts (for certificate SANs and the hosts
 // file). Jira tenant hosts are added by the caller with the tenants it uses.
@@ -80,6 +86,13 @@ func Hosts() []string {
 	sort.Strings(hosts)
 	return hosts
 }
+
+// builtinVocabulary is the path vocabulary of the provider APIs a venue row is likely to hit; a
+// segment outside it and outside the loaded fixtures is recorded as {x}. It holds no token-like word.
+var builtinVocabulary = strings.Fields(`api rest v3 v4 graphql oauth authorize token access_token user users org orgs organizations
+	repos repositories repository projects project groups group issues issue pulls pull merge_requests search services service
+	incidents teams team members member webhooks hooks installation installations app apps applications integrations abilities
+	runners jobs pipelines commits branches tags releases oncalls schedules escalation_policies vendors extensions status serverInfo myself field priority`)
 
 // Fixture answers one request. A request matches when its provider, method and
 // path match and every Query entry is present with that value. Path is exact,
@@ -172,6 +185,8 @@ type Stub struct {
 	recorded []Recorded
 	// Log, when set, receives one line per request (provider, method, status, matched: no path, no values).
 	Log func(string)
+	// vocab is every literal path segment the fixtures name: the only words a recorded path keeps.
+	vocab map[string]bool
 }
 
 // New builds a stub from fixtures already in memory.
@@ -187,6 +202,7 @@ func New(fixtures ...Fixture) (*Stub, error) {
 		}
 		stub.fixtures = append(stub.fixtures, &fixture)
 	}
+	stub.buildVocab()
 	return stub, nil
 }
 
@@ -230,6 +246,7 @@ func LoadDir(dir string) (*Stub, error) {
 			stub.fixtures = append(stub.fixtures, &fixture)
 		}
 	}
+	stub.buildVocab()
 	return stub, nil
 }
 
@@ -242,7 +259,7 @@ func (s *Stub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	record := Recorded{
 		At: time.Now().UTC(), Provider: provider, Host: host, Method: knownMethod(r.Method),
-		Path: shapePath(r.URL.Path), QueryKeys: queryKeys(r), AuthKind: authKind(r),
+		Path: s.shapePath(r.URL.Path), QueryKeys: queryKeys(r), AuthKind: authKind(r),
 	}
 	var matched *Fixture
 	if provider != "" && safePath(r) {
@@ -290,7 +307,7 @@ func (s *Stub) record(r Recorded) {
 		if provider == "" {
 			provider = "unknown"
 		}
-		logf(fmt.Sprintf("providerstub request provider=%s method=%s status=%d matched=%t auth=%s", provider, r.Method, r.Status, r.Matched, r.AuthKind))
+		logf(fmt.Sprintf("providerstub request provider=%s host=%s method=%s path=%s status=%d matched=%t auth=%s", provider, r.Host, r.Method, r.Path, r.Status, r.Matched, r.AuthKind))
 	}
 }
 
@@ -363,7 +380,19 @@ func (s *Stub) AdminHandler() http.Handler {
 	mux.HandleFunc("GET /requests", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, s.Requests()) })
 	mux.HandleFunc("GET /unmatched", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, s.Unmatched()) })
 	mux.HandleFunc("POST /reset", func(w http.ResponseWriter, _ *http.Request) { s.Reset(); w.WriteHeader(http.StatusNoContent) })
-	return mux
+	// the recorder is for the operator: a request that arrives under a provider hostname (the venue's
+	// hosts mapping) is a plane talking to the wrong port, never an operator
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host := r.Host
+		if h, _, err := net.SplitHostPort(host); err == nil {
+			host = h
+		}
+		if ProviderFor(host) != "" { // any port: 9090 under a provider name is still a plane at the wrong door
+			http.NotFound(w, r)
+			return
+		}
+		mux.ServeHTTP(w, r)
+	})
 }
 
 func writeJSON(w http.ResponseWriter, v any) {
@@ -374,28 +403,37 @@ func writeJSON(w http.ResponseWriter, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
+func (s *Stub) buildVocab() {
+	s.vocab = map[string]bool{}
+	for _, word := range builtinVocabulary {
+		s.vocab[word] = true
+	}
+	for _, fixture := range s.fixtures {
+		for _, segment := range strings.Split(strings.TrimSuffix(fixture.Path, "*"), "/") {
+			if segment != "" {
+				s.vocab[segment] = true
+			}
+		}
+	}
+}
+
 // readConfined reads name from dir, refusing an absolute name, a name that
-// climbs out of dir, and a symlink that resolves outside it.
+// climbs out of dir, and any symlink that resolves outside it.
 func readConfined(dir, name string) ([]byte, error) {
 	if !filepath.IsLocal(name) {
 		return nil, fmt.Errorf("body_file %q must be a relative path inside the fixture directory", name)
 	}
-	root, err := filepath.EvalSymlinks(dir)
+	// os.Root resolves every component inside dir, symlinks included, with no check-then-read gap
+	// for a swap to slip through.
+	root, err := os.OpenRoot(dir)
 	if err != nil {
 		return nil, err
 	}
-	resolved, err := filepath.EvalSymlinks(filepath.Join(dir, name))
-	if err != nil {
-		return nil, err
-	}
-	if rel, err := filepath.Rel(root, resolved); err != nil || !filepath.IsLocal(rel) {
-		return nil, fmt.Errorf("body_file %q resolves outside the fixture directory", name)
-	}
-	return os.ReadFile(resolved) // #nosec G304 -- confined to the fixture directory above
+	defer func() { _ = root.Close() }()
+	return root.ReadFile(name)
 }
 
 var (
-	wordSegment    = regexp.MustCompile(`^[A-Za-z][A-Za-z_-]{0,23}$`)
 	versionSegment = regexp.MustCompile(`^v?[0-9]{1,2}$`)
 	keyName        = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_.\[\]-]{0,31}$`)
 )
@@ -407,6 +445,15 @@ func safePath(r *http.Request) bool {
 	path := r.URL.Path
 	if !strings.HasPrefix(path, "/") || strings.Contains(path, "\\") {
 		return false
+	}
+	// no fixture path holds a percent sign: a "%" left after one decode is a repeated encoding
+	if strings.Contains(path, "%") {
+		return false
+	}
+	for key := range r.URL.Query() {
+		if strings.Contains(key, "%") {
+			return false // a query key encoded twice would read as a duplicate one layer down
+		}
 	}
 	escaped := strings.ToLower(r.URL.EscapedPath())
 	if strings.Contains(escaped, "%2f") || strings.Contains(escaped, "%5c") {
@@ -421,13 +468,13 @@ func safePath(r *http.Request) bool {
 	return true
 }
 
-// shapePath keeps only the vocabulary of a path (short words, api versions):
-// every other segment (an id, a slug, a token) becomes {x}, so the recorder can
+// shapePath keeps only the vocabulary of a path (the words the fixtures and the builtin list name,
+// api versions): every other segment (an id, a slug, a token) becomes {x}, so the recorder can
 // name the endpoint that was hit without ever holding a credential.
-func shapePath(path string) string {
+func (s *Stub) shapePath(path string) string {
 	segments := strings.Split(path, "/")
 	for i, segment := range segments {
-		if segment != "" && !wordSegment.MatchString(segment) && !versionSegment.MatchString(segment) {
+		if segment != "" && !s.vocab[segment] && !versionSegment.MatchString(segment) {
 			segments[i] = "{x}"
 		}
 	}

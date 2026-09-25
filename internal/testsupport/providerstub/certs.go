@@ -57,7 +57,7 @@ func (ca *CA) IssueServer(hosts []string, lifetime time.Duration) (certPEM, keyP
 		return nil, nil, fmt.Errorf("providerstub: no hosts for the server certificate")
 	}
 	for _, host := range hosts {
-		if strings.Contains(host, ":") || host != strings.ToLower(host) || ProviderFor(host) == "" {
+		if strings.Contains(host, ":") || host != strings.ToLower(host) || strings.HasSuffix(host, ".") || ProviderFor(host) == "" {
 			return nil, nil, fmt.Errorf("providerstub: %q is not a provider host or a Jira tenant (*.atlassian.net)", host)
 		}
 	}

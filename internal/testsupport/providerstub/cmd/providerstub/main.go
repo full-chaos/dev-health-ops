@@ -28,6 +28,9 @@ type stringList []string
 func (l *stringList) String() string     { return strings.Join(*l, ",") }
 func (l *stringList) Set(v string) error { *l = append(*l, v); return nil }
 
+// defaultAdminAddr keeps the recorder on loopback: it is reached with docker exec, never through a provider hostname.
+const defaultAdminAddr = "127.0.0.1:9090"
+
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Fprintln(os.Stderr, "usage: providerstub certs|serve [flags]")
@@ -75,12 +78,7 @@ func certs(args []string) error {
 		if name == "server.key" {
 			mode = 0o600
 		}
-		path := filepath.Join(*out, name)
-		if err := os.WriteFile(path, data, mode); err != nil {
-			return err
-		}
-		// WriteFile leaves the mode of a file that already exists: set it explicitly
-		if err := os.Chmod(path, mode); err != nil {
+		if err := writeFresh(filepath.Join(*out, name), data, mode); err != nil {
 			return err
 		}
 	}
@@ -94,7 +92,7 @@ func serve(args []string) error {
 	certFile := fs.String("cert", "", "server certificate PEM")
 	keyFile := fs.String("key", "", "server key PEM")
 	listen := fs.String("listen", ":443", "provider (TLS) listen address")
-	admin := fs.String("admin", ":9090", "recorder (plain HTTP) listen address")
+	admin := fs.String("admin", defaultAdminAddr, "recorder (plain HTTP) listen address (loopback by default)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -129,4 +127,25 @@ func serve(args []string) error {
 	_ = provider.Shutdown(ctx)
 	_ = recorder.Shutdown(ctx)
 	return nil
+}
+
+// writeFresh writes data to a NEW regular file with the given mode. A file already there (a stale
+// key, or a symlink planted in the directory) is removed first, never followed or reused.
+func writeFresh(path string, data []byte, mode os.FileMode) error {
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode) // #nosec G304 -- operator-chosen output directory
+	if err != nil {
+		return err
+	}
+	if err := f.Chmod(mode); err != nil { // the umask can only narrow a mode, but be explicit
+		_ = f.Close()
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		return err
+	}
+	return f.Close()
 }

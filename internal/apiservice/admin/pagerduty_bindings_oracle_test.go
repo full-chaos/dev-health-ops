@@ -4,11 +4,16 @@ package admin_test
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -97,7 +102,7 @@ VALUES ($1, $2, $3, $4, 'service', $5, $5, $5, '{}'::json, $6, now(), now())`, i
 			integration("I-nocred", "main", "pagerduty", "", true)
 			integration("I-github", "main", "github", "C1", true)
 			integration("I-other", "other", "pagerduty", "C-other", true)
-			for _, s := range []string{"S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8", "S13", "S14", "S15", "S16", "S17", "S18", "S19"} {
+			for _, s := range []string{"S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8", "S13", "S14", "S15", "S16", "S17", "S18", "S19", "S20"} {
 				source(s, "main", "I1", "pagerduty", true)
 			}
 			source("S-disabled", "main", "I1", "pagerduty", false)
@@ -145,6 +150,8 @@ VALUES ($1, $2, $3, $4, $5, 'v1:seed-not-decrypted', 'v1', $6, now(), now(), $7:
 			// planes must do the same on data no route can create.
 			binding("B-crossorg-S19", "other", "S19", "C1", "active", "sub-s19", false)
 			binding("B-ready-S19", "main", "S19", "C1", "ready", "sub-s19-next", false)
+			// The concurrency section's source: one active binding, no candidate.
+			binding("B-active-S20", "main", "S20", "C1", "active", "sub-s20", false)
 
 			admin_ := func(slug string) map[string]any {
 				return map[string]any{"user_id": adminID.String(), "email": "pd-bind-admin@example.com", "org_id": orgs[slug].String(), "role": "admin"}
@@ -231,7 +238,6 @@ VALUES ($1, $2, $3, $4, $5, 'v1:seed-not-decrypted', 'v1', $6, now(), now(), $7:
 		act("activate a ready candidate over an active binding", "activate", "admin", S("B-ready-S4")),
 		act("activate again: it is active now", "activate", "admin", S("B-ready-S4")),
 		act("activate a ready candidate with no active binding", "activate", "admin", S("B-ready-S5")),
-		act("activate swaps a foreign-organisation active row on the source", "activate", "admin", S("B-ready-S19")),
 		act("activate a candidate that is not ready", "activate", "admin", S("B-cand-S6")),
 		act("activate an inactive binding", "activate", "admin", S("B-inactive-S7")),
 		act("activate another organisation's binding", "activate", "admin", S("B-other")),
@@ -352,5 +358,115 @@ FROM pagerduty_webhook_bindings ORDER BY org_id, integration_source_id, provider
 	}
 	if strings.Count(pythonSecrets, "\n") < 2 {
 		t.Errorf("only %q secrets were stored by the Python plane", pythonSecrets)
+	}
+
+	// ---- two named divergences from Python (Go-first fixes) -----------------------
+	// Sent after the parity run and its row comparisons, so the two planes'
+	// tables were still equal when compared.
+	goSend := func(request venueoracle.Request) (int, string) {
+		t.Helper()
+		var reader io.Reader
+		if request.Body != nil {
+			decoded, err := base64.StdEncoding.DecodeString(*request.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			reader = strings.NewReader(string(decoded))
+		}
+		httpRequest, err := http.NewRequestWithContext(ctx, request.Method, goBase+request.Path, reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for key, value := range request.Headers {
+			httpRequest.Header.Set(key, value)
+		}
+		response, err := http.DefaultClient.Do(httpRequest)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer response.Body.Close()
+		body, _ := io.ReadAll(response.Body)
+		return response.StatusCode, string(body)
+	}
+	statusOf := func(dbName, binding string) string {
+		t.Helper()
+		return venueoracle.TableRows(t, ctx, venue.AdminURI(t, dbName), `SELECT status FROM pagerduty_webhook_bindings WHERE id = '`+binding+`'`)
+	}
+
+	// (a) activation swaps only the caller's organisation's rows. Python
+	// deactivates the source's active row whatever its organisation; Go
+	// leaves another organisation's row alone. (No route can create such a
+	// row: a source belongs to one organisation.)
+	foreign := act("activate with a foreign-organisation active row on the source", "activate", "admin", S("B-ready-S19"))
+	pythonForeign := venue.ServePython(t, []venueoracle.Request{foreign})
+	if pythonForeign[0].Status != 200 {
+		t.Fatalf("python activate: status %d", pythonForeign[0].Status)
+	}
+	if got := statusOf(venue.SourceDB, S("B-crossorg-S19")); got != "inactive" {
+		t.Errorf("python plane left the foreign row %q; the named divergence expects it to swap it (inactive)", got)
+	}
+	if status, _ := goSend(foreign); status != 200 {
+		t.Fatalf("go activate: status %d", status)
+	}
+	if got := statusOf(venue.GoDB, S("B-crossorg-S19")); got != "active" {
+		t.Errorf("go plane changed another organisation's binding to %q; it must leave it active", got)
+	}
+	if got := statusOf(venue.GoDB, S("B-ready-S19")); got != "active" {
+		t.Errorf("go plane did not activate the caller's ready candidate: %q", got)
+	}
+
+	// (b) concurrent rotations of one source create one candidate, not one
+	// each. The test holds the active row's lock so every rotation blocks at
+	// the point where the unfixed code read the source's rows; when the lock is
+	// released, only the first may insert.
+	goPool, err := pgxpool.New(ctx, venue.AdminURI(t, venue.GoDB))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer goPool.Close()
+	holder, err := goPool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := holder.Exec(ctx, `SELECT 1 FROM pagerduty_webhook_bindings WHERE id = $1 FOR UPDATE`, id("B-active-S20")); err != nil {
+		t.Fatal(err)
+	}
+	const racers = 6
+	type answer struct {
+		status int
+		body   string
+	}
+	answers := make([]answer, racers)
+	var wg sync.WaitGroup
+	for i := 0; i < racers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			status, text := goSend(rotate("race", "admin", S("B-active-S20"), body(S("S20"), S("C1"), fmt.Sprintf("sub-race-%d", i), "race-secret")))
+			answers[i] = answer{status, text}
+		}(i)
+	}
+	time.Sleep(4 * time.Second) // every racer is blocked behind the held row lock
+	if err := holder.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	wg.Wait()
+	accepted := 0
+	for _, a := range answers {
+		switch a.status {
+		case 200:
+			accepted++
+		case 400:
+			if !strings.Contains(a.body, "a rotation candidate already exists for this source") {
+				t.Errorf("unexpected 400 body %q", a.body)
+			}
+		default:
+			t.Errorf("unexpected answer %d %s", a.status, a.body)
+		}
+	}
+	candidates := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB),
+		`SELECT count(*) FROM pagerduty_webhook_bindings WHERE integration_source_id = '`+S("S20")+`' AND status IN ('candidate', 'ready')`)
+	if accepted != 1 || candidates != "1" {
+		t.Errorf("%d concurrent rotations of one source: %d accepted, %s candidate rows; want exactly 1 and 1", racers, accepted, candidates)
 	}
 }

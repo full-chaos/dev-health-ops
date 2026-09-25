@@ -113,6 +113,11 @@ FILES=(
   "${ROOT}/tests/compatibility/river/record.sh"
   "${ROOT}/ci/check_go.sh"
   "${ROOT}/ci/check_river_compat_static.sh"
+  # CHAOS-6584: the venue-oracles registry check. check_go.sh sources the lib,
+  # so shellcheck (run WITHOUT -x here) needs it named as input, or the
+  # `source=` directive is reported as SC1091.
+  "${ROOT}/ci/check_venue_oracle_registry.sh"
+  "${ROOT}/ci/lib/venue_oracle_registry.sh"
   # this script itself, AND the self-test that enforces it -- lane-4441's read:
   # the script enforcing the lint was the one script the lint did not check,
   # which is the guard-file-is-not-guarded shape one level up.

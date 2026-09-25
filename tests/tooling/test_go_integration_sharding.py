@@ -292,6 +292,9 @@ EXPECTED_PACKAGES = {
     # CHAOS-6467: `dho backfill run` on a real PostgreSQL at the head baseline, compared
     # with the rows the Python hand-off wrote (frozen, and live by venue oracle).
     "internal/backfillrun",
+    # CHAOS-6669: `dho maintenance` on a real PostgreSQL at the head baseline, compared
+    # with the rows the Python verbs left (frozen, and live by venue oracle).
+    "internal/maintenancecli",
     # CHAOS-6467: `dho backfill operational` on a real ClickHouse at both operational
     # table shapes, compared with the rows the Python producer wrote (frozen, and live
     # by venue oracle).

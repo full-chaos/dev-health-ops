@@ -301,3 +301,34 @@ func TestASeedFailureNeverPostsTheMutation(t *testing.T) {
 		t.Fatalf("a failed seed must refuse before any post: err=%v calls=%d", err, calls)
 	}
 }
+
+// A transport that used more than one connection for the single post may have
+// sent the mutation twice: the run is never a match, whatever the effects say.
+func TestAPostTheTransportMayHaveSentTwiceIsNeverAMatch(t *testing.T) {
+	pool := startPool(t)
+	raw, _ := os.ReadFile("testdata/synthetic_baseline.json")
+	var committed struct {
+		Digest string `json:"digest"`
+	}
+	_ = json.Unmarshal(raw, &committed)
+	run := RunTag("gwc-wp-twice")
+	calls := 0
+	inner := posterInserting(t, pool, "org-fixture", run, "", &calls)
+	post := func(ctx context.Context, d, v string) (Response, error) {
+		resp, err := inner(ctx, d, v)
+		resp.WireAttempts = 2
+		return resp, err
+	}
+	result, err := Execute(context.Background(), pool, "org-fixture", syntheticCase(committed.Digest), run, "mutation M { x }", post)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.TerminalState != StateProofFailed || result.Kept == nil {
+		t.Fatalf("want proof_failed with the dataset kept, got %s kept=%v (%s)", result.TerminalState, result.Kept, result.Detail)
+	}
+	// With one attempt the very same effects ARE the baseline: the refusal is
+	// about the wire, not about what was persisted.
+	if result.Digest != committed.Digest {
+		t.Fatalf("the effects should equal the baseline (only the wire count differs): %s vs %s", result.Digest, committed.Digest)
+	}
+}

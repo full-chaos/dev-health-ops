@@ -7,11 +7,13 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/apiservice"
@@ -122,7 +124,6 @@ func TestSyncConfigBatchCreateVenueOracle(t *testing.T) {
 		post("github no owner", `{"name":"gh no owner","provider":"github","sync_targets":["git"],"repos":["solo"]}`, a),
 		post("github group as owner", `{"name":"gh group","provider":"github","sync_targets":["git"],"sync_options":{"group":"grp"},"repos":["g1"]}`, a),
 		post("github no repos", `{"name":"gh empty","provider":"github","sync_targets":["git"],"sync_options":{"owner":"acme"},"repos":[]}`, a),
-		post("github top-level fields, unchecked", `{"name":"gh sched","provider":"github","sync_targets":["git"],"sync_options":{"owner":"acme"},"repos":["s1"],"schedule_cron":"@hourly","timezone":"Mars/Base","initial_sync_depth":"9999"}`, a),
 		post("github scheduled", `{"name":"gh cron","provider":"github","sync_targets":["git"],"sync_options":{"owner":"acme"},"repos":["c1"],"schedule_cron":"0 */6 * * *","timezone":"Europe/Paris","initial_sync_depth":30}`, a),
 		post("github duplicate repo", `{"name":"gh dup","provider":"github","sync_targets":["git"],"sync_options":{"owner":"acme"},"repos":["dup","dup"]}`, a),
 		post("jira repos", `{"name":"jira batch","provider":"jira","sync_targets":["work-items"],"sync_options":{"owner":"ENG"},"repos":["ENG","OPS"]}`, a),
@@ -189,6 +190,58 @@ func TestSyncConfigBatchCreateVenueOracle(t *testing.T) {
 		t.Errorf("writes not observed (resolved gitlab sources, stamped gitlab_url, pinned configs) = %s", state)
 	}
 	t.Logf("write state: %s", state)
+
+	// Named divergence (CHAOS-6719): Python's batch create runs no backfill
+	// or schedule check, so it stores an out-of-range cron, an unknown
+	// timezone or an over-tier depth on an active config,
+	// and answers 201. The Go batch create runs the single create's checks
+	// first and answers exactly as the Go single create does for the same
+	// body, persisting nothing. These run after the row comparison because
+	// the Python plane writes rows the Go plane (by design) does not.
+	divergent := []struct {
+		name, body string
+		headers    map[string]string
+		status     int
+	}{
+		{"out-of-range cron", `{"name":"gh cron 60","provider":"github","sync_options":{"owner":"acme","all_repos":true},"repos":["c60"],"schedule_cron":"60 * * * *"}`, a, 422},
+		{"croniter-only cron and unknown timezone", `{"name":"gh sched","provider":"github","sync_targets":["git"],"sync_options":{"owner":"acme","all_repos":true},"repos":["s1"],"schedule_cron":"@hourly","timezone":"Mars/Base","initial_sync_depth":"9999"}`, a, 422},
+		{"unknown timezone", `{"name":"gh tz","provider":"github","sync_options":{"owner":"acme","all_repos":true},"repos":["t1"],"schedule_cron":"0 * * * *","timezone":"Mars/Base"}`, a, 422},
+	}
+	batchRequests := make([]venueoracle.Request, len(divergent))
+	for index, c := range divergent {
+		batchRequests[index] = post("divergent: "+c.name, c.body, c.headers)
+	}
+	pythonDivergent := venue.ServePython(t, batchRequests)
+	for index, c := range divergent {
+		if pythonDivergent[index].Status != http.StatusCreated {
+			t.Errorf("%s: python batch status %d, want 201 (the divergence this pins)", c.name, pythonDivergent[index].Status)
+		}
+		batch := venueoracle.Do(t, base, batchRequests[index])
+		single := venueoracle.Do(t, base, venueoracle.Request{Name: "single: " + c.name, Method: "POST",
+			Path: "/api/v1/admin/sync-configs", Headers: c.headers, Body: venueoracle.B64(c.body)})
+		if batch.Status != c.status || batch.Status != single.Status || batch.Body != single.Body {
+			t.Errorf("%s: go batch %d %s, go single create %d %s, want both %d and identical", c.name,
+				batch.Status, batch.Body, single.Status, single.Body, c.status)
+		}
+		var persisted int
+		name := strings.SplitN(strings.TrimPrefix(c.body, `{"name":"`), `"`, 2)[0]
+		if err := pgxQueryInt(ctx, goDB, `SELECT count(*) FROM sync_configurations WHERE name = $1`, name, &persisted); err != nil {
+			t.Fatal(err)
+		}
+		if persisted != 0 {
+			t.Errorf("%s: go persisted %d sync configurations named %q, want none", c.name, persisted, name)
+		}
+		t.Logf("divergent %s: python=%d go=%d (single create %d), go persisted nothing", c.name, pythonDivergent[index].Status, batch.Status, single.Status)
+	}
+}
+
+func pgxQueryInt(ctx context.Context, uri, sql string, arg any, out *int) error {
+	conn, err := pgx.Connect(ctx, uri)
+	if err != nil {
+		return err
+	}
+	defer conn.Close(ctx)
+	return conn.QueryRow(ctx, sql, arg).Scan(out)
 }
 
 // seedBatchVenue writes org A (enterprise, the canonical incident feature

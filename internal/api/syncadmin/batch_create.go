@@ -69,8 +69,12 @@ func decodeSyncConfigBatchCreate(body pybody.Body) (syncConfigBatchCreate, pybod
 // one, duplicates included), the parent options, the auto-import flag
 // checks, the GitLab project resolution and effective gitlab_url, and the
 // planner-managed create with one source row per repos entry. 201 with the
-// parent config and no children. Unlike the single create it runs no
-// schedule, timezone or backfill check.
+// parent config and no children. It also runs the single create's backfill
+// and schedule checks (checkDepthAndSchedule) before any write, which
+// Python's batch create does not: a named divergence (CHAOS-6719). Python
+// stores an out-of-range cron, an unknown timezone or an over-tier depth on
+// an active config; Go answers 422/403 exactly as its single create does
+// and persists nothing.
 func (h *handlers) batchCreateSyncConfigs(w http.ResponseWriter, r *http.Request) {
 	body, _ := policy.BodyFrom(r.Context())
 	in, problems := decodeSyncConfigBatchCreate(body)
@@ -168,6 +172,9 @@ func (h *handlers) batchCreateSyncConfigsTx(ctx context.Context, tx pgx.Tx, org 
 		detail.Set("message", provider+" does not support the requested auto-import categories")
 		detail.Set("unsupported_auto_import_categories", unsupported)
 		return nil, refuse(http.StatusUnprocessableEntity, detail)
+	}
+	if err := h.checkDepthAndSchedule(ctx, tx, org, inputs, parentOptions); err != nil {
+		return nil, err
 	}
 
 	var gitlabProjects map[string]gitlabProject

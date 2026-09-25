@@ -640,6 +640,13 @@ func TestLoadCatalogOverItsInputDomain(t *testing.T) {
 		{"digest null", `[{"operation":"featureFlags","digest":null}]`, false},
 		{"duplicate digest, two operations", `[{"operation":"featureFlags","digest":"` + d1 + `"},{"operation":"hotspots","digest":"` + d1 + `"}]`, false},
 		{"out-of-vocabulary key", `[{"operation":"featureFlags","digest":"` + d1 + `","document":"x"}]`, false},
+		{"kind mutation", `[{"operation":"createSavedReport","digest":"` + d1 + `","kind":"mutation"}]`, true},
+		{"kind query (explicit)", `[{"operation":"featureFlags","digest":"` + d1 + `","kind":"query"}]`, true},
+		{"kind subscription", `[{"operation":"featureFlags","digest":"` + d1 + `","kind":"subscription"}]`, false},
+		{"kind wrong case", `[{"operation":"featureFlags","digest":"` + d1 + `","kind":"Mutation"}]`, false},
+		{"kind empty", `[{"operation":"featureFlags","digest":"` + d1 + `","kind":""}]`, false},
+		{"kind null", `[{"operation":"featureFlags","digest":"` + d1 + `","kind":null}]`, false},
+		{"kind wrong scalar type (number)", `[{"operation":"featureFlags","digest":"` + d1 + `","kind":1}]`, false},
 	} {
 		path := filepath.Join(dir, strings.ReplaceAll(c.name, " ", "_")+".json")
 		if err := os.WriteFile(path, []byte(c.body), 0o600); err != nil {

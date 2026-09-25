@@ -166,6 +166,28 @@ func parseISODateQueryParam(raw string) (t time.Time, present bool, ok bool) {
 	return parsed.UTC(), true, true
 }
 
+// parseQueryDate is parseISODateQueryParam for a named query parameter,
+// with FastAPI's presence rule (CHAOS-6604): a key that is PRESENT with an
+// empty value ("?start_date=") is a value like any other and fails date
+// validation ("input is too short", verified live on a `date | None`
+// parameter), it is never treated as absent. Only a key that is not in the
+// query at all is absent. The value read is the LAST of a repeated key
+// (lastQueryValue), the same one dateQueryParamError echoes.
+func parseQueryDate(query url.Values, name string) (t time.Time, present bool, ok bool) {
+	if raw := lastQueryValue(query, name); query.Has(name) && raw == "" {
+		return time.Time{}, true, false
+	}
+	return parseISODateQueryParam(lastQueryValue(query, name))
+}
+
+// parseQueryDateTime is parseQueryDate for a `datetime | None` parameter.
+func parseQueryDateTime(query url.Values, name string) (t time.Time, present bool, ok bool) {
+	if raw := lastQueryValue(query, name); query.Has(name) && raw == "" {
+		return time.Time{}, true, false
+	}
+	return parseISODateTimeQueryParam(lastQueryValue(query, name))
+}
+
 // dateQueryParamError builds the date_from_datetime_parsing detail
 // Pydantic's `date` field type produces for a malformed value, at the
 // given loc (e.g. []any{"query", "start_date"}).

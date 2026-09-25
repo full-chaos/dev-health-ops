@@ -121,7 +121,7 @@ func (r *Registry) RegisterMetrics(name string, source MetricsSource) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, exists := r.metricsSource[name]; exists {
-		return fmt.Errorf("metrics source %q is already registered", name)
+		return &MetricsSourceRegisteredError{Name: name}
 	}
 	r.metricsSource[name] = source
 	return nil
@@ -417,4 +417,14 @@ func (g Gate) Shutdown(context.Context) error {
 		g.Registry.SetReady(false)
 	}
 	return nil
+}
+
+// MetricsSourceRegisteredError is RegisterMetrics' refusal of a name that is
+// already registered, so a caller that may run after another registration of
+// the same source (a shell that installs a process-wide source and a service
+// that also does) can tell that case from a real failure.
+type MetricsSourceRegisteredError struct{ Name string }
+
+func (e *MetricsSourceRegisteredError) Error() string {
+	return fmt.Sprintf("metrics source %q is already registered", e.Name)
 }

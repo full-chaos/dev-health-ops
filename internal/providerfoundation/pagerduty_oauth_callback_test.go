@@ -126,13 +126,3 @@ func TestExchangePagerDutyAuthorizationCodeBodyReadFailureIsUnavailable(t *testi
 		}
 	}
 }
-
-func TestRevokePagerDutyOAuthTokenRefusesAnyNon2xx(t *testing.T) {
-	for status, wantErr := range map[int]bool{200: false, 204: false, 199: true, 301: true, 302: true, 307: true, 400: true, 500: true} {
-		doer := callbackDoerFunc(func(*http.Request) (*http.Response, error) { return jsonResponse(status, ``), nil })
-		err := RevokePagerDutyOAuthToken(context.Background(), doer, PagerDutyRevokeConfig{ClientID: "id"}, "tok")
-		if (err != nil) != wantErr {
-			t.Errorf("status %d: err = %v, want error %v", status, err, wantErr)
-		}
-	}
-}

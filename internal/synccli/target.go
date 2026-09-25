@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/pyargparse"
 	"io"
 	"math/big"
 	"os"
@@ -148,41 +149,41 @@ func notAvailableExecutor(_ context.Context, plan Plan, _ cli.Env) error {
 	return fmt.Errorf("dho sync %s --provider %s is %w; run dev-hops sync %s meanwhile", plan.Target, plan.Provider, ErrNotAvailable, plan.Target)
 }
 
-var syncSpecs = []optSpec{
-	{strs: []string{"-h", "--help"}, dest: "help", kind: optHelp},
-	{strs: []string{"--sink"}, dest: "sink", kind: optValue},
-	{strs: []string{"--provider"}, dest: "provider", kind: optValue},
-	{strs: []string{"--auth"}, dest: "auth", kind: optValue},
-	{strs: []string{"--github-app-id"}, dest: "github_app_id", kind: optValue},
-	{strs: []string{"--github-app-key-path"}, dest: "github_app_key_path", kind: optValue},
-	{strs: []string{"--github-app-installation-id"}, dest: "github_app_installation_id", kind: optValue},
-	{strs: []string{"--repo-path"}, dest: "repo_path", kind: optValue},
-	{strs: []string{"--owner"}, dest: "owner", kind: optValue},
-	{strs: []string{"--repo"}, dest: "repo", kind: optValue},
-	{strs: []string{"--project-id"}, dest: "project_id", kind: optValue},
-	{strs: []string{"--gitlab-url"}, dest: "gitlab_url", kind: optValue},
-	{strs: []string{"--group"}, dest: "group", kind: optValue},
-	{strs: []string{"-s", "--search"}, dest: "search", kind: optValue},
-	{strs: []string{"--batch-size"}, dest: "batch_size", kind: optValue},
-	{strs: []string{"--max-concurrent"}, dest: "max_concurrent", kind: optValue},
-	{strs: []string{"--rate-limit-delay"}, dest: "rate_limit_delay", kind: optValue},
-	{strs: []string{"--max-repos"}, dest: "max_repos", kind: optValue},
-	{strs: []string{"--use-async"}, dest: "use_async", kind: optFlag},
-	{strs: []string{"--max-commits-per-repo"}, dest: "max_commits_per_repo", kind: optValue},
-	{strs: []string{"--repo-name"}, dest: "repo_name", kind: optValue},
-	{strs: []string{"--defer-finalize"}, dest: "defer_finalize", kind: optFlag},
-	{strs: []string{"--since"}, dest: "since", kind: optValue},
-	{strs: []string{"--backfill"}, dest: "backfill", kind: optValue},
-	{strs: []string{"--before"}, dest: "before", kind: optValue},
-	{strs: []string{"--day"}, dest: "day", kind: optValue},
-	{strs: []string{"--date"}, dest: "date", kind: optValue},
+var syncSpecs = []pyargparse.Spec{
+	{Strs: []string{"-h", "--help"}, Dest: "help", Kind: pyargparse.OptHelp},
+	{Strs: []string{"--sink"}, Dest: "sink", Kind: pyargparse.OptValue},
+	{Strs: []string{"--provider"}, Dest: "provider", Kind: pyargparse.OptValue},
+	{Strs: []string{"--auth"}, Dest: "auth", Kind: pyargparse.OptValue},
+	{Strs: []string{"--github-app-id"}, Dest: "github_app_id", Kind: pyargparse.OptValue},
+	{Strs: []string{"--github-app-key-path"}, Dest: "github_app_key_path", Kind: pyargparse.OptValue},
+	{Strs: []string{"--github-app-installation-id"}, Dest: "github_app_installation_id", Kind: pyargparse.OptValue},
+	{Strs: []string{"--repo-path"}, Dest: "repo_path", Kind: pyargparse.OptValue},
+	{Strs: []string{"--owner"}, Dest: "owner", Kind: pyargparse.OptValue},
+	{Strs: []string{"--repo"}, Dest: "repo", Kind: pyargparse.OptValue},
+	{Strs: []string{"--project-id"}, Dest: "project_id", Kind: pyargparse.OptValue},
+	{Strs: []string{"--gitlab-url"}, Dest: "gitlab_url", Kind: pyargparse.OptValue},
+	{Strs: []string{"--group"}, Dest: "group", Kind: pyargparse.OptValue},
+	{Strs: []string{"-s", "--search"}, Dest: "search", Kind: pyargparse.OptValue},
+	{Strs: []string{"--batch-size"}, Dest: "batch_size", Kind: pyargparse.OptValue},
+	{Strs: []string{"--max-concurrent"}, Dest: "max_concurrent", Kind: pyargparse.OptValue},
+	{Strs: []string{"--rate-limit-delay"}, Dest: "rate_limit_delay", Kind: pyargparse.OptValue},
+	{Strs: []string{"--max-repos"}, Dest: "max_repos", Kind: pyargparse.OptValue},
+	{Strs: []string{"--use-async"}, Dest: "use_async", Kind: pyargparse.OptFlag},
+	{Strs: []string{"--max-commits-per-repo"}, Dest: "max_commits_per_repo", Kind: pyargparse.OptValue},
+	{Strs: []string{"--repo-name"}, Dest: "repo_name", Kind: pyargparse.OptValue},
+	{Strs: []string{"--defer-finalize"}, Dest: "defer_finalize", Kind: pyargparse.OptFlag},
+	{Strs: []string{"--since"}, Dest: "since", Kind: pyargparse.OptValue},
+	{Strs: []string{"--backfill"}, Dest: "backfill", Kind: pyargparse.OptValue},
+	{Strs: []string{"--before"}, Dest: "before", Kind: pyargparse.OptValue},
+	{Strs: []string{"--day"}, Dest: "day", Kind: pyargparse.OptValue},
+	{Strs: []string{"--date"}, Dest: "date", Kind: pyargparse.OptValue},
 	// dev-hops re-adds its global flags on every leaf.
-	{strs: []string{"--log-level"}, dest: "log_level", kind: optValue},
-	{strs: []string{"--db"}, dest: "db", kind: optValue},
-	{strs: []string{"--analytics-db"}, dest: "analytics_db", kind: optValue},
-	{strs: []string{"--org"}, dest: "org", kind: optValue},
-	{strs: []string{"-l", "--llm-provider"}, dest: "llm_provider", kind: optValue},
-	{strs: []string{"-m", "--model"}, dest: "model", kind: optValue},
+	{Strs: []string{"--log-level"}, Dest: "log_level", Kind: pyargparse.OptValue},
+	{Strs: []string{"--db"}, Dest: "db", Kind: pyargparse.OptValue},
+	{Strs: []string{"--analytics-db"}, Dest: "analytics_db", Kind: pyargparse.OptValue},
+	{Strs: []string{"--org"}, Dest: "org", Kind: pyargparse.OptValue},
+	{Strs: []string{"-l", "--llm-provider"}, Dest: "llm_provider", Kind: pyargparse.OptValue},
+	{Strs: []string{"-m", "--model"}, Dest: "model", Kind: pyargparse.OptValue},
 }
 
 var providers = []string{"local", "github", "gitlab", "synthetic"}
@@ -230,19 +231,19 @@ type argState struct {
 	backfillGiven bool
 }
 
-func typeError(spec *optSpec, value string) *argError {
-	name := spec.strs[len(spec.strs)-1]
+func typeError(spec *pyargparse.Spec, value string) *pyargparse.Error {
+	name := spec.Strs[len(spec.Strs)-1]
 	kinds := map[string]string{
 		"project_id": "int", "batch_size": "int", "max_concurrent": "int", "max_repos": "int",
 		"max_commits_per_repo": "int", "backfill": "int", "rate_limit_delay": "float",
 		"since": "date", "before": "date", "day": "date", "date": "date",
 	}
-	return &argError{fmt.Sprintf("argument %s: invalid %s value: %q", name, kinds[spec.dest], value)}
+	return &pyargparse.Error{Msg: fmt.Sprintf("argument %s: invalid %s value: %q", name, kinds[spec.Dest], value)}
 }
 
-func convert(state *argState) func(spec *optSpec, value string) *argError {
-	return func(spec *optSpec, value string) *argError {
-		switch spec.dest {
+func convert(state *argState) func(spec *pyargparse.Spec, value string) *pyargparse.Error {
+	return func(spec *pyargparse.Spec, value string) *pyargparse.Error {
+		switch spec.Dest {
 		case "project_id", "batch_size", "max_concurrent", "max_repos", "max_commits_per_repo":
 			if _, ok := pyInt(value); !ok {
 				return typeError(spec, value)
@@ -255,7 +256,7 @@ func convert(state *argState) func(spec *optSpec, value string) *argError {
 			// to the default (argparse 3.14: the value is a fresh object).
 			state.backfillGiven = true
 			if state.sinceGiven {
-				return &argError{"argument --backfill: not allowed with argument --since"}
+				return &pyargparse.Error{Msg: "argument --backfill: not allowed with argument --since"}
 			}
 		case "rate_limit_delay":
 			if _, ok := pyFloat(value); !ok {
@@ -267,7 +268,7 @@ func convert(state *argState) func(spec *optSpec, value string) *argError {
 			}
 			state.sinceGiven = true
 			if state.backfillGiven {
-				return &argError{"argument --since: not allowed with argument --backfill"}
+				return &pyargparse.Error{Msg: "argument --since: not allowed with argument --backfill"}
 			}
 		case "before", "day", "date":
 			if _, ok := pyDate(value); !ok {
@@ -279,7 +280,7 @@ func convert(state *argState) func(spec *optSpec, value string) *argError {
 					return nil
 				}
 			}
-			return &argError{fmt.Sprintf("argument --provider: invalid choice: %q (choose from local, github, gitlab, synthetic)", value)}
+			return &pyargparse.Error{Msg: fmt.Sprintf("argument --provider: invalid choice: %q (choose from local, github, gitlab, synthetic)", value)}
 		}
 		return nil
 	}
@@ -292,20 +293,20 @@ func isNonEmpty(values map[string]string, key string) bool { return values[key] 
 // exits with. help reports a -h/--help request (Python prints help, exit 0).
 func BuildPlan(target string, args []string, in Inputs) (plan Plan, help bool, err *Refusal) {
 	state := &argState{}
-	parsed, perr := newParser(syncSpecs).parse(args, convert(state))
+	parsed, perr := pyargparse.New(syncSpecs).Parse(args, convert(state))
 	if perr != nil {
-		return Plan{}, false, usageRefusal("argparse", "%s", perr.msg)
+		return Plan{}, false, usageRefusal("argparse", "%s", perr.Msg)
 	}
-	if parsed.help {
+	if parsed.Help {
 		return Plan{}, true, nil
 	}
-	if _, ok := parsed.values["provider"]; !ok {
+	if _, ok := parsed.Values["provider"]; !ok {
 		return Plan{}, false, usageRefusal("argparse", "the following arguments are required: --provider")
 	}
-	if len(parsed.unrecognized) > 0 {
-		return Plan{}, false, usageRefusal("argparse", "unrecognized arguments: %s", strings.Join(parsed.unrecognized, " "))
+	if len(parsed.Unrecognized) > 0 {
+		return Plan{}, false, usageRefusal("argparse", "unrecognized arguments: %s", strings.Join(parsed.Unrecognized, " "))
 	}
-	v := parsed.values
+	v := parsed.Values
 
 	// main(): --org typed wins, else ORG_ID (set-but-empty counts as set),
 	// else the executor resolves the first organization in Postgres.
@@ -800,6 +801,10 @@ func TargetCommands(exec Executor) []cli.Command {
 			Name:    target,
 			Summary: targetSummaries[target],
 			Kind:    cli.Verb,
+			// The six global options dev-hops re-adds on every leaf are this
+			// verb's own flags (syncSpecs); the where-it-acts three are handed
+			// to every command.
+			RootFlags: []cli.RootFlag{cli.RootLogLevel, cli.RootLLMProvider, cli.RootModel},
 			Run: func(ctx context.Context, env cli.Env) int {
 				return runTarget(ctx, env, target, exec, nil)
 			},

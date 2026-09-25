@@ -18,6 +18,9 @@ func Command() cli.Command {
 		Name:    "query-api",
 		Summary: "serve the read-only Go query plane",
 		Kind:    cli.Service,
+		// It takes no arguments and ignores any it is given (server.Run), so a
+		// where-it-acts root flag typed before it must be refused by the dispatcher.
+		IgnoresArguments: true,
 		Run: func(ctx context.Context, env cli.Env) int {
 			return server.Run(ctx, env.Args, env.Lookup, env.Stdout, env.Stderr)
 		},

@@ -187,6 +187,9 @@ EXPECTED_PACKAGES = {
     # The admin setup-status venue differential (skips without the live
     # Python env), in its own package for its own venue time budget.
     "internal/apiservice/adminsetupvenue",
+    # The admin LLM budget venue differential (skips without the live Python
+    # env), in its own package for its own venue time budget.
+    "internal/apiservice/adminllmvenue",
     # The billing venue oracles (plans, checkout, portal, ledger, the Stripe
     # webhook) in a package of their own, out of internal/apiservice's venue
     # time budget; each skips without DEV_HEALTH_LIVE_PYTHON_ORACLES=1.

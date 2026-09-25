@@ -1,0 +1,8 @@
+[
+ {"provider": "github", "method": "POST", "path": "/login/oauth/access_token", "status": 200,
+  "body": {"access_token": "zz-venue-not-a-user-token", "token_type": "bearer", "scope": ""}},
+ {"provider": "github", "method": "GET", "path": "/user/installations", "status": 200,
+  "body": {"total_count": 2, "installations": [
+    {"id": 9100001, "account": {"login": "zz-venue", "type": "Organization"}},
+    {"id": 9100002, "account": {"login": "zz-venue-two", "type": "Organization"}}]}}
+]

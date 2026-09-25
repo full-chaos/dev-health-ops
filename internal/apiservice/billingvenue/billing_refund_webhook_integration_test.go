@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -154,7 +155,13 @@ func TestRefundWebhookWriteFirstAndOrder(t *testing.T) {
 
 	stamp := time.Now().Unix() + 200
 	deliverAs := func(name, eventType, refundID, status string, edit func(object map[string]any)) venueoracle.Response {
-		value := loadWebhookFixture(t, "charge.refund.updated.json")
+		// The captured test-mode event of that type; refund.failed has none in
+		// the test account, so it is the captured charge.refund.updated re-typed.
+		fixture := eventType + ".json"
+		if _, err := os.Stat("testdata/stripe_webhook/" + fixture); err != nil {
+			fixture = "charge.refund.updated.json"
+		}
+		value := loadWebhookFixture(t, fixture)
 		value["type"], value["id"] = eventType, "evt_"+strings.NewReplacer(" ", "_", ":", "").Replace(name)
 		object := value["data"].(map[string]any)["object"].(map[string]any)
 		object["id"], object["status"] = refundID, status
@@ -396,4 +403,5 @@ func TestRefundWebhookWriteFirstAndOrder(t *testing.T) {
 	expect("redelivery: one row", row(`SELECT count(*)::text FROM refunds WHERE stripe_refund_id = 're_no_invoice'`), "1")
 
 	t.Log("\n" + receipt)
+	venueoracle.WriteGoOnlyProof(t, "Go completes a write-first refund row from its event, never reopens a settled refund or erases its failure reason, takes the org from the payment's invoice, and records Stripe's own refund events; the Python handler drops or overwrites each")
 }

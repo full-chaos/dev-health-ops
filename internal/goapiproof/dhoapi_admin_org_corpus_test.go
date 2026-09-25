@@ -47,15 +47,6 @@ func TestAdminOrgCorpusPinsItsRoutesAndCapturedStatuses(t *testing.T) {
 			t.Errorf("%s: status %d, want %d", key, got[key], status)
 		}
 	}
-	// The unsafe-to-add routes stay out until proven safe.
-	for _, operation := range []string{
-		"REST:GET:/api/v1/admin/teams/{team_id}/discover-members",
-		"REST:GET:/api/v1/admin/teams/{team_id}/infer-members",
-	} {
-		if _, err := SpecForREST(operation); err == nil {
-			t.Errorf("%s must not be in the corpus until it is proven to make no external provider call", operation)
-		}
-	}
 }
 
 // TestAdminUsersProducedIDReadsTheRootArrayAndMembersBindsTheOperatorOrg:

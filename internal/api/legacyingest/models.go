@@ -32,6 +32,8 @@ type batch struct {
 	OrgID string
 	Dump  *pyjson.Object
 	Items int
+	// Signals are the validated telemetry rows (the telemetry route only).
+	Signals []signalBucket
 }
 
 // parser validates one request body.

@@ -1,12 +1,12 @@
 package syncadmin
 
 import (
-	"errors"
 	"fmt"
 	"math"
 	"math/big"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/pydict"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
@@ -16,7 +16,7 @@ import (
 // its response model: a TypeError/ValueError in list()/dict()/int(), or a
 // pydantic validation error on the response. FastAPI answers both with a
 // bare 500, and so does this package.
-var errUnrenderable = errors.New("syncadmin: stored value cannot be rendered")
+var errUnrenderable = pydict.ErrUnrenderable
 
 // decodeStored reads a JSON column's stored text as json.loads does
 // (SQLAlchemy's JSON type on asyncpg). nil text is SQL NULL, i.e. None.
@@ -68,76 +68,15 @@ func pyStringList(value pyjson.Value) ([]pyjson.Value, error) {
 	return nil, fmt.Errorf("%w: %T is not iterable", errUnrenderable, value)
 }
 
-// pyDict is `dict(value or {})` validated as pydantic's dict[str, Any]: a
-// falsy value is {}, a dict is copied, and a list is read as dict() reads
-// a sequence of pairs (each item a 2-item list, a 2-character string, or a
-// 2-key dict), whose keys must be strings. Any other value cannot be
-// rendered.
-func pyDict(value pyjson.Value) (*pyjson.Object, error) { return convertDict(value, true) }
+// pyDict is `dict(value or {})` validated as pydantic's dict[str, Any] (the
+// shared implementation, api/pydict).
+func pyDict(value pyjson.Value) (*pyjson.Object, error) { return pydict.Dict(value) }
 
-// plainDict is `dict(value or {})` with no validation after it. A pair's
-// key may then be any hashable value; the result keeps only the string
-// keys, the only ones a caller ever looks up. An unhashable key (a list or
-// a dict) is dict()'s TypeError.
-func plainDict(value pyjson.Value) (*pyjson.Object, error) { return convertDict(value, false) }
+// plainDict is `dict(value or {})` with no validation after it (api/pydict).
+func plainDict(value pyjson.Value) (*pyjson.Object, error) { return pydict.Plain(value) }
 
 func convertDict(value pyjson.Value, stringKeys bool) (*pyjson.Object, error) {
-	if !pyjson.Truthy(value) {
-		return pyjson.NewObject(), nil
-	}
-	switch typed := value.(type) {
-	case *pyjson.Object:
-		out := pyjson.NewObject()
-		for _, key := range typed.Keys() {
-			item, _ := typed.Get(key)
-			out.Set(key, item)
-		}
-		return out, nil
-	case []pyjson.Value:
-		out := pyjson.NewObject()
-		for index, item := range typed {
-			key, pairValue, err := dictPair(item)
-			if err != nil {
-				return nil, fmt.Errorf("%w: dict() item %d: %v", errUnrenderable, index, err)
-			}
-			switch typed := key.(type) {
-			case string:
-				out.Set(typed, pairValue)
-			case []pyjson.Value, *pyjson.Object:
-				return nil, fmt.Errorf("%w: dict() item %d key is unhashable %T", errUnrenderable, index, key)
-			default:
-				if stringKeys {
-					return nil, fmt.Errorf("%w: dict() item %d key is %T, want str", errUnrenderable, index, key)
-				}
-			}
-		}
-		return out, nil
-	}
-	return nil, fmt.Errorf("%w: dict() of %T", errUnrenderable, value)
-}
-
-// dictPair unpacks one dict() update-sequence element into (key, value).
-func dictPair(item pyjson.Value) (pyjson.Value, pyjson.Value, error) {
-	switch typed := item.(type) {
-	case []pyjson.Value:
-		if len(typed) == 2 {
-			return typed[0], typed[1], nil
-		}
-		return nil, nil, fmt.Errorf("sequence of length %d", len(typed))
-	case string:
-		runes := pyjson.Runes(typed)
-		if len(runes) == 2 {
-			return pyjson.FromRunes(runes[:1]), pyjson.FromRunes(runes[1:]), nil
-		}
-		return nil, nil, fmt.Errorf("string of length %d", len(runes))
-	case *pyjson.Object:
-		keys := typed.Keys()
-		if len(keys) == 2 {
-			return keys[0], keys[1], nil
-		}
-		return nil, nil, fmt.Errorf("dict of length %d", len(keys))
-	}
-	return nil, nil, fmt.Errorf("%T is not iterable", item)
+	return pydict.Convert(value, stringKeys)
 }
 
 // pyDictOrNone is a `dict[str, Any] | None` response field holding the

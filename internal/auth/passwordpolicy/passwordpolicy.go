@@ -1,4 +1,7 @@
-package admin
+// Package passwordpolicy is password_policy.py: the one password strength
+// check every route that sets a password applies (the admin set-password
+// route and self-registration).
+package passwordpolicy
 
 import (
 	_ "embed"
@@ -24,10 +27,10 @@ var (
 
 // loadCommonPasswords is password_policy.py's _load_common_passwords: one
 // parse of the checked-in denylist, lowercased, comments (#) and blank
-// lines dropped. The list is copied byte-for-byte from
-// ops/src/dev_health_ops/data/common_passwords.txt (Go embeds its own copy
-// rather than reading across the repo boundary at runtime) -- keep the two
-// in sync if the Python list changes.
+// lines dropped. The list is a byte-for-byte copy of
+// src/dev_health_ops/data/common_passwords.txt, because `//go:embed` cannot
+// reach outside the package directory; TestEmbeddedListMatchesThePythonOne
+// fails when either side drifts.
 func loadCommonPasswords() map[string]struct{} {
 	commonPasswordsOnce.Do(func() {
 		commonPasswords = map[string]struct{}{}
@@ -42,10 +45,10 @@ func loadCommonPasswords() map[string]struct{} {
 	return commonPasswords
 }
 
-// validatePassword is password_policy.py's validate_password, same
+// Validate is password_policy.py's validate_password, same
 // violation strings and same order (length checks, then letter, then
 // digit, then common-password lookup).
-func validatePassword(password string) []string {
+func Validate(password string) []string {
 	var violations []string
 
 	length := len([]rune(password))

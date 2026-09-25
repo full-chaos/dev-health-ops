@@ -258,7 +258,6 @@ func TestSyncConfigCreateVenueOracle(t *testing.T) {
 		{Name: "list after", Method: "GET", Path: "/api/v1/admin/sync-configs", Headers: a},
 	}
 	statusOnly := map[string]bool{"cron refused by both": true, "cron not a string": true}
-	idPattern := regexp.MustCompile(`"id":"[0-9a-f-]{36}"`)
 	python := venue.ServePython(t, requests)
 	receipt := venueoracle.Diff(t, base, requests, python, venueoracle.DiffOptions{
 		Normalize: func(request venueoracle.Request, body string) string {
@@ -266,7 +265,7 @@ func TestSyncConfigCreateVenueOracle(t *testing.T) {
 				return "<status only: named divergence>"
 			}
 			if request.Method == "POST" || request.Name == "list after" {
-				return idPattern.ReplaceAllString(body, `"id":"<uuid4>"`)
+				return uuidPattern.ReplaceAllString(body, `"id":"<uuid4>"`)
 			}
 			return body
 		},
@@ -287,33 +286,7 @@ func TestSyncConfigCreateVenueOracle(t *testing.T) {
 	}
 
 	orgs := fmt.Sprintf("'%s','%s','%s','%s'", ids.orgA, ids.orgB, ids.orgC, ids.orgE)
-	queries := map[string]string{
-		"integrations": `SELECT coalesce(string_agg(r, E'\n' ORDER BY r), '') FROM (SELECT concat_ws(' | ', org_id, provider,
-  coalesce(credential_id::text, '<null>'), name, config::text, is_active, coalesce(schedule_cron, '<null>'),
-  coalesce(timezone, '<null>'), created_at, updated_at) AS r FROM integrations WHERE org_id IN (` + orgs + `)) AS rows`,
-		"sync_configurations": `SELECT coalesce(string_agg(r, E'\n' ORDER BY r), '') FROM (SELECT concat_ws(' | ', c.org_id, c.name, c.provider,
-  c.sync_targets::text, c.sync_options::text, c.is_active, c.planner_managed, coalesce(c.last_sync_at::text, '<null>'),
-  coalesce(c.last_sync_success::text, '<null>'), coalesce(c.last_sync_error, '<null>'), coalesce(c.last_sync_stats::text, '<null>'),
-  c.created_at, c.updated_at, coalesce(p.name, '<null>'), coalesce(i.name, '<null>'), coalesce(c.source_id::text, '<null>')) AS r
-  FROM sync_configurations c LEFT JOIN sync_configurations p ON p.id = c.parent_id LEFT JOIN integrations i ON i.id = c.integration_id
-  WHERE c.org_id IN (` + orgs + `)) AS rows`,
-		"integration_sources": `SELECT coalesce(string_agg(r, E'\n' ORDER BY r), '') FROM (SELECT concat_ws(' | ', s.org_id, i.name, s.provider,
-  s.source_type, s.external_id, s.name, s.full_name, CASE WHEN c.id IS NULL THEN s.metadata::text
-  ELSE replace(s.metadata::text, c.id::text, 'CFG:' || c.name) END, s.is_enabled, s.discovered_at, s.last_seen_at,
-  coalesce(s.last_sync_at::text, '<null>'), coalesce(s.last_sync_success::text, '<null>'), coalesce(s.last_sync_error, '<null>')) AS r
-  FROM integration_sources s JOIN integrations i ON i.id = s.integration_id
-  LEFT JOIN sync_configurations c ON c.integration_id = s.integration_id AND c.parent_id IS NULL AND c.planner_managed
-  WHERE s.org_id IN (` + orgs + `) AND i.name <> 'jira inactive cred') AS rows`,
-		"integration_datasets": `SELECT coalesce(string_agg(r, E'\n' ORDER BY r), '') FROM (SELECT concat_ws(' | ', d.org_id, i.name, d.dataset_key,
-  d.is_enabled, d.options::text, coalesce(d.unavailable_reason, '<null>'), coalesce(d.unavailable_since::text, '<null>'),
-  coalesce(d.unavailable_last_seen_at::text, '<null>')) AS r
-  FROM integration_datasets d JOIN integrations i ON i.id = d.integration_id WHERE d.org_id IN (` + orgs + `)) AS rows`,
-		"scheduled_jobs": `SELECT coalesce(string_agg(r, E'\n' ORDER BY r), '') FROM (SELECT concat_ws(' | ', j.org_id,
-  replace(j.name, c.id::text, 'CFG:' || c.name), j.job_type, j.provider, j.schedule_cron, j.timezone,
-  replace(j.job_config::text, c.id::text, 'CFG:' || c.name), c.name, j.status, j.is_running, j.run_count, j.failure_count,
-  coalesce(j.last_run_at::text, '<null>'), coalesce(j.next_run_at::text, '<null>'), j.created_at, j.updated_at) AS r
-  FROM scheduled_jobs j JOIN sync_configurations c ON c.id = j.sync_config_id WHERE j.org_id IN (` + orgs + `)) AS rows`,
-	}
+	queries := createVenueRowQueries(orgs, "i.name <> 'jira inactive cred'")
 	source, goDB := venue.AdminURI(t, venue.SourceDB), venue.AdminURI(t, venue.GoDB)
 	for _, table := range []string{"integrations", "sync_configurations", "integration_sources", "integration_datasets", "scheduled_jobs"} {
 		pythonRows, goRows := venueoracle.TableRows(t, ctx, source, queries[table]), venueoracle.TableRows(t, ctx, goDB, queries[table])
@@ -417,5 +390,43 @@ integration_id, created_at, updated_at) VALUES ($1, $2, 'c existing', 'github', 
 is_enabled, discovered_at, last_seen_at) VALUES ($1, $2, $3, 'github', 'repo', $4, $4, $4, $5::json, true, $6, $6)`,
 			uuid.New(), ids.orgC.String(), ids.intC, fmt.Sprintf("acme/r%d", n),
 			fmt.Sprintf(`{"planner_managed_sync_config_id": "%s"}`, configC), at)
+	}
+}
+
+// uuidPattern matches a response's "id" field (uuid4 on each plane).
+var uuidPattern = regexp.MustCompile(`"id":"[0-9a-f-]{36}"`)
+
+// createVenueRowQueries are the raw-text row queries the create venues
+// compare, over the given orgs: integrations, sync_configurations,
+// integration_sources (narrowed by sourcesFilter, a SQL condition on s and
+// i; "true" for none), integration_datasets and scheduled_jobs. Row ids are
+// replaced by the names they point at.
+func createVenueRowQueries(orgs, sourcesFilter string) map[string]string {
+	return map[string]string{
+		"integrations": `SELECT coalesce(string_agg(r, E'\n' ORDER BY r), '') FROM (SELECT concat_ws(' | ', org_id, provider,
+  coalesce(credential_id::text, '<null>'), name, config::text, is_active, coalesce(schedule_cron, '<null>'),
+  coalesce(timezone, '<null>'), created_at, updated_at) AS r FROM integrations WHERE org_id IN (` + orgs + `)) AS rows`,
+		"sync_configurations": `SELECT coalesce(string_agg(r, E'\n' ORDER BY r), '') FROM (SELECT concat_ws(' | ', c.org_id, c.name, c.provider,
+  c.sync_targets::text, c.sync_options::text, c.is_active, c.planner_managed, coalesce(c.last_sync_at::text, '<null>'),
+  coalesce(c.last_sync_success::text, '<null>'), coalesce(c.last_sync_error, '<null>'), coalesce(c.last_sync_stats::text, '<null>'),
+  c.created_at, c.updated_at, coalesce(p.name, '<null>'), coalesce(i.name, '<null>'), coalesce(c.source_id::text, '<null>')) AS r
+  FROM sync_configurations c LEFT JOIN sync_configurations p ON p.id = c.parent_id LEFT JOIN integrations i ON i.id = c.integration_id
+  WHERE c.org_id IN (` + orgs + `)) AS rows`,
+		"integration_sources": `SELECT coalesce(string_agg(r, E'\n' ORDER BY r), '') FROM (SELECT concat_ws(' | ', s.org_id, i.name, s.provider,
+  s.source_type, s.external_id, s.name, s.full_name, CASE WHEN c.id IS NULL THEN s.metadata::text
+  ELSE replace(s.metadata::text, c.id::text, 'CFG:' || c.name) END, s.is_enabled, s.discovered_at, s.last_seen_at,
+  coalesce(s.last_sync_at::text, '<null>'), coalesce(s.last_sync_success::text, '<null>'), coalesce(s.last_sync_error, '<null>')) AS r
+  FROM integration_sources s JOIN integrations i ON i.id = s.integration_id
+  LEFT JOIN sync_configurations c ON c.integration_id = s.integration_id AND c.parent_id IS NULL AND c.planner_managed
+  WHERE s.org_id IN (` + orgs + `) AND ` + sourcesFilter + `) AS rows`,
+		"integration_datasets": `SELECT coalesce(string_agg(r, E'\n' ORDER BY r), '') FROM (SELECT concat_ws(' | ', d.org_id, i.name, d.dataset_key,
+  d.is_enabled, d.options::text, coalesce(d.unavailable_reason, '<null>'), coalesce(d.unavailable_since::text, '<null>'),
+  coalesce(d.unavailable_last_seen_at::text, '<null>')) AS r
+  FROM integration_datasets d JOIN integrations i ON i.id = d.integration_id WHERE d.org_id IN (` + orgs + `)) AS rows`,
+		"scheduled_jobs": `SELECT coalesce(string_agg(r, E'\n' ORDER BY r), '') FROM (SELECT concat_ws(' | ', j.org_id,
+  replace(j.name, c.id::text, 'CFG:' || c.name), j.job_type, j.provider, j.schedule_cron, j.timezone,
+  replace(j.job_config::text, c.id::text, 'CFG:' || c.name), c.name, j.status, j.is_running, j.run_count, j.failure_count,
+  coalesce(j.last_run_at::text, '<null>'), coalesce(j.next_run_at::text, '<null>'), j.created_at, j.updated_at) AS r
+  FROM scheduled_jobs j JOIN sync_configurations c ON c.id = j.sync_config_id WHERE j.org_id IN (` + orgs + `)) AS rows`,
 	}
 }

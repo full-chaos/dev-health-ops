@@ -53,6 +53,15 @@ var responseModelRoutes = map[string]bool{
 	"POST /api/v1/auth/social-login":                                      true,
 	"POST /api/v1/auth/switch-org":                                        true,
 	"POST /api/v1/auth/validate":                                          true,
+	"POST /api/v1/auth/register":                                          true,
+	"GET /api/v1/auth/verify":                                             true,
+	"POST /api/v1/auth/resend-verification":                               true,
+	"POST /api/v1/auth/forgot-password":                                   true,
+	"POST /api/v1/auth/reset-password":                                    true,
+	"POST /api/v1/auth/accept-invite":                                     true,
+	"POST /api/v1/auth/onboard":                                           true,
+	"GET /api/v1/auth/onboarding/state":                                   true,
+	"POST /api/v1/auth/onboarding/skip-integration":                       true,
 	"DELETE /api/v1/admin/ip-allowlist/{entry_id}":                        true,
 	"DELETE /api/v1/admin/orgs/{org_id}":                                  true,
 	"DELETE /api/v1/admin/orgs/{org_id}/feature-overrides/{override_id}":  false,
@@ -172,6 +181,7 @@ var responseModelRoutes = map[string]bool{
 	"POST /api/v1/admin/retention-policies/{policy_id}/execute":           true,
 	"POST /api/v1/admin/settings":                                         true,
 	"POST /api/v1/admin/sync-configs":                                     true,
+	"POST /api/v1/admin/sync-configs/batch":                               true,
 	"POST /api/v1/admin/teams":                                            true,
 	"POST /api/v1/admin/teams/import":                                     true,
 	"POST /api/v1/admin/teams/{team_id}/approve-changes":                  true,
@@ -187,6 +197,7 @@ var responseModelRoutes = map[string]bool{
 	"POST /api/v1/ingest/incidents":                                       true,
 	"POST /api/v1/ingest/pull-requests":                                   true,
 	"POST /api/v1/ingest/work-items":                                      true,
+	"POST /api/v1/ingest/telemetry":                                       true,
 	"POST /api/v1/product-telemetry/events":                               true,
 	"POST /api/v1/telemetry/opt-in":                                       true,
 	"POST /api/v1/telemetry/opt-out":                                      true,
@@ -198,6 +209,17 @@ var responseModelRoutes = map[string]bool{
 	"PUT /api/v1/admin/llm-settings":                                      true,
 	"PUT /api/v1/admin/settings/{category}/{key}":                         true,
 	"PUT /api/v1/admin/sync-configs/{config_id}/repositories":             true,
+
+	// The generic integration admin routes (integrations.py); a separate
+	// group so gofmt aligns them without reflowing the rest.
+	"GET /api/v1/admin/integrations":                                        true,
+	"POST /api/v1/admin/integrations":                                       true,
+	"GET /api/v1/admin/integrations/{integration_id}":                       true,
+	"PATCH /api/v1/admin/integrations/{integration_id}":                     true,
+	"GET /api/v1/admin/integrations/{integration_id}/sources":               true,
+	"PATCH /api/v1/admin/integrations/{integration_id}/sources/{source_id}": true,
+	"GET /api/v1/admin/integrations/{integration_id}/datasets":              true,
+	"PATCH /api/v1/admin/integrations/{integration_id}/datasets":            true,
 }
 
 // jsonResponseRoutes are response_model routes on the FastAPI side whose

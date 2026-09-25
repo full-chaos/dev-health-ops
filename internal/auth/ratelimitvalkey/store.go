@@ -96,3 +96,17 @@ func (s *Store) Increment(ctx context.Context, hit httpapi.Hit) (int64, error) {
 	}
 	return count, nil
 }
+
+// Peek implements httpapi.CounterStore: the counter's value, 0 when it has no
+// live counter (an expired or never-hit key does not exist).
+func (s *Store) Peek(ctx context.Context, hit httpapi.Hit) (int64, error) {
+	result := s.client.Do(ctx, s.client.B().Get().Key(CounterKey(hit.Limit, hit.Key, hit.Path)).Build())
+	count, err := result.AsInt64()
+	if valkeygo.IsValkeyNil(err) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("rate limit peek for %q: %w", hit.Limit.ID, err)
+	}
+	return count, nil
+}

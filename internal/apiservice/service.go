@@ -43,6 +43,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/externalingest"
 	"github.com/full-chaos/dev-health-ops/internal/api/githubapp"
 	healthroutes "github.com/full-chaos/dev-health-ops/internal/api/health"
+	"github.com/full-chaos/dev-health-ops/internal/api/integrationsadmin"
 	"github.com/full-chaos/dev-health-ops/internal/api/legacyingest"
 	"github.com/full-chaos/dev-health-ops/internal/api/orgs"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
@@ -182,7 +183,13 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 	if deps.Valkey != nil {
 		legacyStore = legacyingest.ValkeyStore{Client: deps.Valkey}
 	}
-	routes = append(routes, legacyingest.Routes(legacyingest.Deps{Store: legacyStore, Metrics: deps.LegacyIngestMetrics, Logger: logger})...)
+	// The telemetry route writes ClickHouse with the api's own login; with
+	// none configured it accepts and skips, as the Python route does.
+	var legacyClickHouse legacyingest.ClickHouse
+	if deps.ClickHouse != nil {
+		legacyClickHouse = deps.ClickHouse
+	}
+	routes = append(routes, legacyingest.Routes(legacyingest.Deps{Store: legacyStore, Metrics: deps.LegacyIngestMetrics, ClickHouse: legacyClickHouse, Logger: logger})...)
 	routes = append(routes, healthroutes.Routes(healthroutes.Deps{
 		// deps.ClickHouse is the api's own dedicated ClickHouse login
 		// (CHAOS-6310), the SAME connection internal/api/teamsidentity's
@@ -199,6 +206,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 		Pool: deps.Pool, Guard: deps.Guard, Auth: deps.Auth, Verifier: deps.Verifier, Signer: deps.Signer,
 		// The api's own ClickHouse login: organization activity.
 		ClickHouse: deps.ClickHouse, Limits: limits, Write: WriteError, OAuth: deps.SessionOAuth, Logger: logger,
+		Mail: deps.Invites, RegisterLimit: deps.RegisterLimit,
 	})...)
 	if deps.Guard != nil {
 		routes = append(routes, orgs.Routes(deps.Pool, deps.Guard, logger)...)
@@ -210,6 +218,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 		routes = append(routes, githubapp.Routes(githubapp.Deps{Pool: deps.Pool, Guard: deps.Guard, Valkey: deps.Valkey, Cipher: deps.Decryptor,
 			Logger: logger, Now: deps.Now, Config: deps.GitHubApp, Signer: deps.GitHubStateSigner,
 			HTTPClient: deps.GitHubAppHTTPClient, GitHubURL: deps.GitHubAppURL, GitHubAPIURL: deps.GitHubAppAPIURL})...)
+		routes = append(routes, integrationsadmin.Routes(integrationsadmin.Deps{Pool: deps.Pool, Guard: deps.Guard, Logger: logger, Now: deps.Now})...)
 		if deps.ClickHouse != nil {
 			routes = append(routes, teamsidentity.Routes(deps.ClickHouse, deps.Guard, logger, deps.Pool, deps.Decryptor)...)
 		}
@@ -244,6 +253,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 		Producer:  deps.Producer,
 		Decryptor: deps.Decryptor,
 		Logger:    logger,
+		Counters:  limits,
 	})...)
 	return markResponseModels(routes)
 }
@@ -313,6 +323,11 @@ func configureWith(
 	deps.Invites = inviteConfig(cfg, logger, os.LookupEnv)
 	deps.GitHubApp = GitHubAppConfig(os.LookupEnv)
 	deps.GitHubStateSigner = githubapp.Signer{Secret: cfg.APIJWTSecret.Reveal(), Issuer: cfg.APIJWTIssuer, Audience: cfg.APIJWTAudience}
+	deps.RegisterLimit, err = registerLimit(os.LookupEnv)
+	if err != nil {
+		closeComponents(depComponents)
+		return nil, dependencyFailure(ctx, logger, "api_server", "api_register_limit_invalid", err)
+	}
 	if adjust != nil {
 		adjust(&deps)
 	}
@@ -381,8 +396,8 @@ func closeComponents(components []lifecycle.Component) {
 // every handler-chain layer so no response it produces, scope rejection or
 // unhandled error, lacks it),
 // request id, panic recovery, then scope (the
-// org scope and impersonation middlewares, when given), security headers,
-// CORS, then the mux (and, per route, recovery, deadline, body bound). It
+// org scope and impersonation middlewares, when given), the register
+// route's origin check, security headers, CORS, then the mux (and, per route, recovery, deadline, body bound). It
 // matches the Python api's request order (src/dev_health_ops/api/
 // _middleware.py registers in reverse): OrgIdMiddleware and
 // ImpersonationMiddleware run outside SecurityHeadersMiddleware and
@@ -394,7 +409,7 @@ func NewServer(
 	scope ...func(http.Handler) http.Handler,
 ) (*httpapi.Server, error) {
 	middleware := append([]func(http.Handler) http.Handler{buildinfo.Stamp(version.Current("api")), UnhandledErrorShape, CloseHTTP10, DecodedPathRouting}, scope...)
-	middleware = append(middleware, SecurityHeaders, NewCORS(cfg.CORSAllowedOrigins).Wrap)
+	middleware = append(middleware, NewOriginValidation(cfg.CORSAllowedOrigins).Wrap, SecurityHeaders, NewCORS(cfg.CORSAllowedOrigins).Wrap)
 	return httpapi.NewServer(httpapi.ServerOptions{
 		Name:           "api-http",
 		Address:        cfg.APIAddress,

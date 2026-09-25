@@ -1,6 +1,9 @@
 package goapiproof
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestRESTCorpusIsValid(t *testing.T) {
 	if err := ValidateRESTCorpus(); err != nil {
@@ -796,28 +799,31 @@ func TestFlamePRIDBoundParity_NonVacuousMatchIsIdleNotStale(t *testing.T) {
 	}
 }
 
-// TestPeopleSummaryLastIngestedAtTimestampDefect_AdmitsTheNaiveVsZDivergence
-// proves the new freshness.last_ingested_at citation fires on exactly the
-// shape it declares -- everything else identical, only last_ingested_at
-// differing by the naive-vs-aware rendering -- and covers nothing else.
-func TestPeopleSummaryLastIngestedAtTimestampDefect_AdmitsTheNaiveVsZDivergence(t *testing.T) {
-	baseline := `{"person":{"person_id":"p1","display_name":"n","identities":[]},"freshness":{"last_ingested_at":"2024-01-01T00:00:00","latest_successful_sync_at":null,"sources":{"github":"ok"},"coverage":{"repos_covered_pct":50,"prs_linked_to_issues_pct":100,"issues_with_cycle_states_pct":70}},"identity_coverage_pct":100,"deltas":[],"narrative":[],"sections":{"work_mix":[],"flow_breakdown":[],"collaboration":{"review_load":[],"handoff_points":[]}}}`
-	candidate := `{"person":{"person_id":"p1","display_name":"n","identities":[]},"freshness":{"last_ingested_at":"2024-01-01T00:00:00Z","latest_successful_sync_at":null,"sources":{"github":"ok"},"coverage":{"repos_covered_pct":50,"prs_linked_to_issues_pct":100,"issues_with_cycle_states_pct":70}},"identity_coverage_pct":100,"deltas":[],"narrative":[],"sections":{"work_mix":[],"flow_breakdown":[],"collaboration":{"review_load":[],"handoff_points":[]}}}`
-	result := Compare(restSnapshotFromJSON(t, baseline), restSnapshotFromJSON(t, candidate), peopleSummaryParity)
+// TestPeopleSummaryTimestampsAreNotADeclaredDefect pins that the naive-vs-Z
+// timestamp divergence on GET .../summary is no longer a citable baseline
+// defect: the Go summary writes deltas[].spark[].ts and
+// freshness.last_ingested_at as naive datetimes as Python does, so a
+// candidate that writes "Z" again is a plain finding outside every citation.
+func TestPeopleSummaryTimestampsAreNotADeclaredDefect(t *testing.T) {
+	baseline := `{"person":{"person_id":"p1","display_name":"n","identities":[]},"freshness":{"last_ingested_at":"2024-01-01T00:00:00","latest_successful_sync_at":null,"sources":{"github":"ok"},"coverage":{"repos_covered_pct":50,"prs_linked_to_issues_pct":100,"issues_with_cycle_states_pct":70}},"identity_coverage_pct":100,"deltas":[{"metric":"m","label":"M","value":1.5,"unit":"u","delta_pct":0,"spark":[{"ts":"2024-01-01T00:00:00","value":1.5}]}],"narrative":[],"sections":{"work_mix":[],"flow_breakdown":[],"collaboration":{"review_load":[],"handoff_points":[]}}}`
+	regressed := strings.NewReplacer(`"last_ingested_at":"2024-01-01T00:00:00"`, `"last_ingested_at":"2024-01-01T00:00:00Z"`, `"ts":"2024-01-01T00:00:00"`, `"ts":"2024-01-01T00:00:00Z"`).Replace(baseline)
+	if regressed == baseline {
+		t.Fatal("the fixture did not change")
+	}
+	result := Compare(restSnapshotFromJSON(t, baseline), restSnapshotFromJSON(t, regressed), peopleSummaryParity)
 	if result.TerminalState != TerminalStateMismatch {
-		t.Fatalf("terminal = %q, want mismatch -- a declared defect never converts one", result.TerminalState)
+		t.Fatalf("terminal = %q, want mismatch", result.TerminalState)
 	}
-	if result.DifferencesOutsideBaselineDefect != 0 {
-		t.Fatalf("outside = %d, want 0 -- findings %+v", result.DifferencesOutsideBaselineDefect, result.Findings)
+	if result.DifferencesOutsideBaselineDefect < 2 {
+		t.Fatalf("outside = %d, want at least the two timestamp leaves -- findings %+v", result.DifferencesOutsideBaselineDefect, result.Findings)
 	}
-	found := false
 	for _, ticket := range result.BaselineDefectsMatched {
-		if ticket == "CHAOS-5871" {
-			found = true
+		if ticket == "CHAOS-5859" || ticket == "CHAOS-5871" {
+			t.Fatalf("matched = %v: the timestamp citations are retired", result.BaselineDefectsMatched)
 		}
 	}
-	if !found {
-		t.Fatalf("matched = %v, want CHAOS-5871 present", result.BaselineDefectsMatched)
+	if same := Compare(restSnapshotFromJSON(t, baseline), restSnapshotFromJSON(t, baseline), peopleSummaryParity); same.TerminalState != TerminalStateMatch {
+		t.Fatalf("identical naive bodies: terminal = %q, findings %+v", same.TerminalState, same.Findings)
 	}
 }
 

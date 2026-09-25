@@ -115,7 +115,7 @@ func (d Deps) logger() *slog.Logger {
 // either (router.py has no @limiter.limit on it) and gets none here.
 func Routes(deps Deps) []httpapi.Route {
 	if deps.limiters == nil {
-		deps.limiters = newAuthLimiters(deps.Now)
+		deps.limiters = newAuthLimiters(deps.Counters, deps.Now)
 	}
 	if deps.routeLimiters == nil {
 		deps.routeLimiters = newRouteLimiters(deps.Counters, deps.Now)

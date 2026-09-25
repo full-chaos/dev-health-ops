@@ -188,11 +188,10 @@ func runRepoTeamsOracle(t *testing.T, markerName string) map[string]*string {
 // (the round caught that too: "a PR body naming a test IS a claim").
 //
 // Reproduces the exact adversarial input the round measured: a capital Sigma
-// followed by 31 case-ignorable runes then a cased letter is PAST
-// x/text cases.Lower's Final_Sigma lookahead cap, so Lower alone resolves the
-// pattern and the repo name to two DIFFERENT strings ("...ς" vs "...σ") even
-// though CPython's str.lower() -- and this resolver's own Fold-based key --
-// treat them as the same team.
+// followed by 31 case-ignorable runes then a cased letter, which was past
+// x/text cases.Lower's Final_Sigma lookahead cap before CHAOS-6630. CPython's
+// str.lower() and this resolver's Fold-based key treat the pattern and the
+// repo name as the same team.
 func TestNonASCIIPatternsAreComparedConsistently(t *testing.T) {
 	longRun := strings.Repeat(".", 31)
 	pattern := "AΣ" + longRun + "B*" // -> prefix "aσ" + longRun + "b" once folded
@@ -204,9 +203,8 @@ func TestNonASCIIPatternsAreComparedConsistently(t *testing.T) {
 	got := resolver.Resolve(repoName)
 	if got == nil || *got != "team-sigma" {
 		t.Fatalf("Resolve(%q) with pattern %q = %v, want \"team-sigma\" -- "+
-			"x/text's bounded Final_Sigma lookahead (31 case-ignorable runes, "+
-			"pythonparity.Lower's doc comment) makes Lower alone disagree with "+
-			"CPython here; the fix is comparing via pythonparity.Fold instead",
+			"the resolver compares with pythonparity.Fold, which folds every "+
+			"sigma spelling to one value at any distance",
 			repoName, pattern, got)
 	}
 

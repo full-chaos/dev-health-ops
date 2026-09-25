@@ -909,7 +909,7 @@ func pullRequestDrilldownDefects(route pullRequestDrilldownRoute) []BaselineDefe
 	return gatePullRequestDefects([]BaselineDefect{
 		{
 			Ticket:                  "CHAOS-5803",
-			Reason:                  "git_pull_requests' created_at/merged_at/first_review_at columns are ClickHouse DateTime64(3, 'UTC') (000_raw_tables.sql); Python's clickhouse_connect driver returns them NAIVE (no tzinfo), so the Pydantic response serializes them with no offset -- and so does a next-page cursor copied from the last row's created_at -- while Go's driver attaches UTC location and each port's row type (encoding/json's default time.Time marshaling) emits RFC 3339 with an explicit offset -- the same class of divergence already declared for the operations.go GraphQL corpus's own capacityForecasts and pr entries. Go is correct. The same naive-vs-aware rendering recurs on GET /api/v1/people/{person_id}/summary's deltas spark series ts field, reading a ClickHouse Date column through a different query path and declared separately, in peopleSummarySparkTimestampDefect below.",
+			Reason:                  "git_pull_requests' created_at/merged_at/first_review_at columns are ClickHouse DateTime64(3, 'UTC') (000_raw_tables.sql); Python's clickhouse_connect driver returns them NAIVE (no tzinfo), so the Pydantic response serializes them with no offset -- and so does a next-page cursor copied from the last row's created_at -- while Go's driver attaches UTC location and each port's row type (encoding/json's default time.Time marshaling) emits RFC 3339 with an explicit offset -- the same class of divergence already declared for the operations.go GraphQL corpus's own capacityForecasts and pr entries. Go is correct.",
 			Paths:                   datetimePaths,
 			TimestampRenderingShape: &TimestampRenderingShape{},
 			Intermittent:            true,
@@ -1599,12 +1599,12 @@ var peopleParity = Options{
 // this mechanism, and neither does data.person (resolvePersonIdentity's
 // own UNION DISTINCT collapses a duplicate identity string regardless of
 // which physical row it came from). deltas[].spark[].ts is excluded
-// too: it is peopleSummarySparkTimestampDefect's own, separately
-// declared divergence (a naive-vs-aware timestamp rendering, present or
-// absent by result content, never by merge state), and folding it into
-// this blanket citation would let this defect's own live/idle state
-// stand in for that one's, silently absorbing that divergence even on a
-// run where this table's own trigger is live for an unrelated reason.
+// too: it is not a merge-state divergence (the Go summary writes it as a
+// naive datetime, as Python does, so any difference there is a real
+// finding), and folding it into this blanket citation would let this
+// defect's own live/idle state stand in for it, silently absorbing
+// that divergence even on a run where this table's own trigger is live
+// for an unrelated reason.
 // peopleDetailParity is a BASELINE-DEFECTS-ONLY template: GET .../summary
 // and .../metric's own six per-metric live entries each derive their own
 // Options from it BY VALUE (the same split heatmapDedupParity's own four
@@ -1662,65 +1662,6 @@ var peopleDetailParity = Options{
 			IntermittentReason: "present only while one of the four source tables holds an unmerged physical version for THIS person_id's own rows since the last merge; a comparison taken after the next background merge shows no divergence",
 		},
 	},
-}
-
-// peopleSummarySparkTimestampDefect declares GET .../summary's own
-// deltas[].spark[].ts divergence: user_metrics_daily.day and
-// work_item_user_metrics_daily.day (001_metrics_v2.sql) are ClickHouse
-// Date columns, not DateTime64. _spark_points (services/people.py) sets
-// SparkPoint.ts directly from the driver's row value; clickhouse_connect
-// returns a Date column as a naive python date, and SparkPoint.ts's own
-// pydantic type (models/schemas.py: `ts: datetime`) coerces it to
-// midnight with no tzinfo, so the response serializes with no UTC
-// offset. This port's fetchPersonMetricSeries (metricqueries.go) scans
-// the same Date column into a time.Time the ClickHouse Go driver
-// locates in UTC, and encoding/json's default time.Time marshaling
-// always writes an explicit offset -- the same naive-vs-aware rendering
-// drilldownPRsParity's own datetime entry declares for git_pull_requests'
-// DateTime64 columns, recurring here on a Date column reached through a
-// different query path. Go is correct. Unlike peopleDetailParity's own
-// citation, this divergence does not depend on merge state -- every REST
-// citation in this table is Intermittent (TestEveryRESTBaselineDefect
-// IsIntermittent), but on RESULT CONTENT, not ClickHouse's: it is
-// present whenever this person's deltas actually carry a spark point,
-// the same content-triggered reading drilldownPRsParity's own datetime
-// entry already uses, and it goes idle (never stale) for a person whose
-// series happens to be empty this request -- never idle because a
-// background merge happened to run.
-var peopleSummarySparkTimestampDefect = BaselineDefect{
-	Ticket:             "CHAOS-5859",
-	Reason:             "user_metrics_daily.day and work_item_user_metrics_daily.day (001_metrics_v2.sql) are ClickHouse Date columns; _spark_points (services/people.py) assigns SparkPoint.ts from the driver's row value, and SparkPoint.ts's pydantic type (models/schemas.py: `ts: datetime`) coerces the naive python date clickhouse_connect returns for a Date column into a naive datetime with no tzinfo, so the response serializes with no UTC offset. This port's fetchPersonMetricSeries (metricqueries.go) scans the same Date column into a time.Time the ClickHouse Go driver locates in UTC, and encoding/json's default time.Time marshaling always writes an explicit offset. Go is correct.",
-	Paths:              []string{"data.deltas.spark.ts"},
-	Intermittent:       true,
-	IntermittentReason: "present only while this person's deltas actually carry at least one non-empty spark series; a person whose window returns an empty series for every metric shows no divergence under this path and is not a bug in this citation -- a result-content trigger, not ClickHouse merge state: a comparison taken after a background merge shows the identical divergence, because the underlying naive-vs-aware rendering the Reason describes never depends on which physical row version was read",
-}
-
-// peopleSummaryLastIngestedAtTimestampDefect declares GET .../summary's
-// own freshness.last_ingested_at divergence: the SAME naive-vs-aware
-// rendering class peopleSummarySparkTimestampDefect declares for a Date
-// column and drilldownPRsParity's own datetime entry declares for
-// DateTime64 columns, recurring here on repo_metrics_daily.computed_at
-// (migration 096), a plain ClickHouse DateTime column reached through
-// freshness's own query rather than either of those. fetch_last_ingested_at
-// (api/queries/freshness.py) returns the driver's row value with no
-// explicit timezone handling, and clickhouse_connect returns a DateTime
-// column NAIVE (no tzinfo), so the Pydantic response serializes it with
-// no UTC offset. This port's fetchLastIngestedAt (summary.go) scans the
-// same column into a time.Time the ClickHouse Go driver locates in UTC,
-// and encoding/json's default time.Time marshaling always writes an
-// explicit offset. Go is correct. A distinct declaration from the two
-// above because it is a different column on a different query, not a
-// restatement of either -- peopleDetailParity's own citation excludes
-// this path precisely because repos/repo_metrics_daily's FINAL read is
-// correctness-neutral for this aggregate (fetchCoverage/
-// fetchLastIngestedAt's own doc comments), so the merge-lag mechanism
-// never explains this divergence; only the rendering does.
-var peopleSummaryLastIngestedAtTimestampDefect = BaselineDefect{
-	Ticket:             "CHAOS-5871",
-	Reason:             "repo_metrics_daily.computed_at (migration 096) is a ClickHouse DateTime column; fetch_last_ingested_at (api/queries/freshness.py) returns the driver's row value through query_dicts with no explicit timezone handling, and Python's clickhouse_connect driver returns a DateTime column NAIVE (no tzinfo), so the response serializes it with no UTC offset. This port's fetchLastIngestedAt (summary.go) scans the same column into a time.Time the ClickHouse Go driver locates in UTC, and encoding/json's default time.Time marshaling always writes an explicit offset -- the same naive-vs-aware rendering class this table's own Date- and DateTime64-column entries already declare, recurring here on a plain DateTime column reached through freshness's own query. Go is correct.",
-	Paths:              []string{"data.freshness.last_ingested_at"},
-	Intermittent:       true,
-	IntermittentReason: "present only while this org's freshness reading actually carries a non-null last_ingested_at; an org with no repo_metrics_daily rows at all shows no divergence under this path -- a result-content trigger, not ClickHouse merge state, the same reading peopleSummarySparkTimestampDefect's own IntermittentReason uses",
 }
 
 // peopleSummaryCollaborationOrderInsensitiveLists declares GET
@@ -1815,8 +1756,7 @@ var peopleSummaryParity = Options{
 	NumericLeavesDeclared: true,
 	FloatTierB:            peopleSummaryNumericFloats,
 	IntegerLeaves:         peopleSummaryNumericInts,
-	BaselineDefects: append(append([]BaselineDefect{}, peopleDetailParity.BaselineDefects...),
-		peopleSummarySparkTimestampDefect, peopleSummaryLastIngestedAtTimestampDefect),
+	BaselineDefects:       append([]BaselineDefect{}, peopleDetailParity.BaselineDefects...),
 	OrderInsensitiveLists: peopleSummaryCollaborationOrderInsensitiveLists,
 }
 

@@ -70,6 +70,9 @@ EXPECTED_PACKAGES = {
     # (see readers_seeded_integration_test.go's own header comment).
     "internal/queryapi/home",
     "internal/queryapi/hotspots",
+    # The people summary naive-timestamp venue differential (skips without
+    # the live Python env), in its own package for its own time budget.
+    "internal/queryapi/people/summaryvenue",
     # CHAOS-4977 step 7: the recurrence guard for FetchWorkUnitInvestments'
     # real Map(String, Float64) theme/subcategory columns -- a fake
     # RowScanner double can hand back any Go type its author declares, so
@@ -127,6 +130,9 @@ EXPECTED_PACKAGES = {
     # The sync admin reads' venue differential oracle: the real Python api
     # and dho api on two copies of one seeded Postgres (skips without the
     # live Python env).
+    # The generic integration admin routes' venue differential (skips
+    # without the live Python env), in its own package for its own budget.
+    "internal/api/integrationsadmin/integrationsvenue",
     "internal/api/syncadmin",
     # The session routes: the Go routes alone replayed against the recorded
     # Python answers, concurrent refreshes of one token, and the failed-
@@ -135,6 +141,10 @@ EXPECTED_PACKAGES = {
     # The session routes' venue differential (skips without the live Python
     # env), in its own package for its own venue time budget.
     "internal/apiservice/sessionvenue",
+    # The registration, verification, reset, invite and onboarding routes'
+    # venue differential (skips without the live Python env), in its own
+    # package for its own venue time budget.
+    "internal/apiservice/authflowvenue",
     # The team + identity admin CRUD store/handlers: real ClickHouse CRUD
     # round trips and the identity POST route's 404/409/facet-reconciliation
     # logic, against a real server (testcontainers).

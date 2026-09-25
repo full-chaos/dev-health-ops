@@ -30,11 +30,12 @@ func completeDeps(t *testing.T) Deps {
 		Verifier: verifier, Signer: signer}
 }
 
-// Routes mounts the eight routes only when every one of its five required
-// dependencies is present; each missing one alone leaves nothing mounted.
+// Routes mounts all seventeen routes only when every one of its five
+// required dependencies is present; each missing one alone leaves nothing
+// mounted.
 func TestRoutesNeedEveryRequiredDependency(t *testing.T) {
-	if got := len(Routes(completeDeps(t))); got != 8 {
-		t.Fatalf("complete deps mount %d routes, want 8", got)
+	if got := len(Routes(completeDeps(t))); got != 17 {
+		t.Fatalf("complete deps mount %d routes, want 17", got)
 	}
 	for name, drop := range map[string]func(*Deps){
 		"Pool":     func(d *Deps) { d.Pool = nil },
@@ -53,7 +54,8 @@ func TestRoutesNeedEveryRequiredDependency(t *testing.T) {
 
 func TestWithDefaultsFillsEveryOptionalDependency(t *testing.T) {
 	d := Deps{}.withDefaults()
-	if d.Getenv == nil || d.Audit == nil || d.Now == nil || d.NewUUID == nil || d.Logger == nil || d.OAuth == nil || d.Limits == nil || d.Write == nil {
+	if d.Getenv == nil || d.Audit == nil || d.Now == nil || d.NewUUID == nil || d.Logger == nil || d.OAuth == nil || d.Limits == nil || d.Write == nil ||
+		d.RegisterLimit != DefaultRegisterLimit {
 		t.Fatalf("a default is missing: %+v", d)
 	}
 	logger := slog.New(slog.DiscardHandler)

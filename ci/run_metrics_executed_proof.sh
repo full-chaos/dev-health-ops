@@ -5,9 +5,10 @@ set -euo pipefail
 # run_live_backend_e2e.sh's `--with-metrics` fixture path (which writes
 # derived metric rows directly into ClickHouse, bypassing sync entirely --
 # see the FIXTURE-BACKED comments in that script), this job drives the REAL
-# pipeline: seed real source rows through the real sync path (cicd/
-# deployments/incidents/tests via `dev-hops sync <target> --provider
-# synthetic`, CHAOS-4266's sync.py extension), let the REAL Go worker +
+# pipeline: seed source rows (cicd/deployments/incidents/tests, the frozen
+# rows of the Python synthetic generator, loaded by `dho fixtures
+# load-synthetic`, CHAOS-6465), complete their sync runs (`dho fixtures
+# finalize-synthetic-sync`), let the REAL Go worker +
 # reconciler process the resulting sync_dispatch_outbox(kind=post_sync) row
 # exactly as a real provider sync would, then assert rows landed in
 # ClickHouse (ci/assert_metrics_executed_proof.py).
@@ -334,8 +335,8 @@ ORG_ID="${ORG_ID}" CLICKHOUSE_URI="${CLICKHOUSE_URI_HTTP}" DATABASE_URI="${POSTG
 # remaining-metric family (dora needs cicd+deployments+incidents) off the
 # FIRST qualifying sync_run to finalize -- it does not wait for a caller's
 # other targets, and it never gets a second chance (no retry once the rest of
-# the data later lands). `--defer-finalize` (sync.py) writes rows without
-# completing the sync_run; `finalize-synthetic-sync` (sync.py) completes it
+# the data later lands). `dho fixtures load-synthetic` writes rows without
+# completing a sync_run; `dho fixtures finalize-synthetic-sync` completes it
 # afterward. This mirrors how the real pipeline never fans out before a
 # provider's own sync actually completes.
 seed_and_finalize_sync_targets cicd deployments incidents tests

@@ -1,6 +1,10 @@
 package datahealth
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
+)
 
 func TestPyReprMatchesPython(t *testing.T) {
 	for _, tc := range pyReprCases {
@@ -22,7 +26,7 @@ func TestPyStrLeavesStringsAlone(t *testing.T) {
 
 func TestPyLowerMatchesPython(t *testing.T) {
 	for _, tc := range pyLowerCases {
-		if got := pyLower(tc.in); got != tc.want {
+		if got := pythonparity.Lower(tc.in); got != tc.want {
 			t.Errorf("lower(%q) = %q, want %q", tc.in, got, tc.want)
 		}
 	}

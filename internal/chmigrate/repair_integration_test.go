@@ -280,3 +280,46 @@ func TestRepairVenueOracleMatchesThePythonProducer(t *testing.T) {
 		venueoracle.WriteProof(t)
 	}
 }
+
+// TestRepairApplyKeepsARowWrittenAfterThePreview is the race the review found: a
+// row of a stale (id, org_id) written between the report and the mutation is the
+// active row of that key, and the mutation must delete only the rows the report
+// listed (no newer than the listed one).
+func TestRepairApplyKeepsARowWrittenAfterThePreview(t *testing.T) {
+	db := startRepairDB(t)
+	db.do(t, "TRUNCATE TABLE repos")
+	const repoID = "a0000000-0000-4000-8000-0000000000aa"
+	insert := func(org, lastSynced string) {
+		db.do(t, fmt.Sprintf("INSERT INTO repos (id, repo, ref, created_at, settings, tags, last_synced, org_id) VALUES ('%s', 'acme/moved-back', NULL, toDateTime64('2026-01-01 00:00:00', 3, 'UTC'), NULL, NULL, toDateTime64('%s', 3, 'UTC'), '%s')", repoID, lastSynced, org))
+	}
+	insert(orgOne, "2026-02-01 00:00:00") // stale: orgTwo's row is newer
+	insert(orgTwo, "2026-02-15 00:00:00")
+	restore := chmigrate.SetRepairBeforeDelete(func(id, org string) {
+		if org == orgOne {
+			insert(orgOne, "2026-03-01 00:00:00") // orgOne wrote the repository again: now the newest
+		}
+	})
+	defer restore()
+
+	var repair func(context.Context, cli.Env) int
+	for _, child := range chmigrate.Command().Children {
+		if child.Name == "repair" {
+			repair = child.Run
+		}
+	}
+	lookup := func(key string) (string, bool) {
+		if key == "CLICKHOUSE_URI" {
+			return db.instance.URI, true
+		}
+		return "", false
+	}
+	var stdout, stderr bytes.Buffer
+	if code := repair(context.Background(), cli.Env{Args: []string{"--apply"}, Lookup: lookup, Stdout: &stdout, Stderr: &stderr}); code != 0 {
+		t.Fatalf("exit %d, stderr %s", code, stderr.String())
+	}
+	left := strings.TrimSpace(db.do(t, "SELECT org_id, toString(last_synced) FROM repos ORDER BY org_id, last_synced FORMAT TSV"))
+	want := orgOne + "\t2026-03-01 00:00:00.000\n" + orgTwo + "\t2026-02-15 00:00:00.000"
+	if left != want {
+		t.Fatalf("rows left:\n%s\nwant (the row written after the preview kept, the listed stale row gone):\n%s\nreport:\n%s", left, want, stdout.String())
+	}
+}

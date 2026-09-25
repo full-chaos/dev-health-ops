@@ -44,6 +44,10 @@ WHERE r.org_id != l.active_org_id
 ORDER BY r.repo, r.org_id
 `
 
+// beforeDelete is a test seam: it runs before each stale row's mutation, where a
+// concurrent writer could add a newer row of the same key.
+var beforeDelete func(staleRow)
+
 // staleRow is one stale duplicate row.
 type staleRow struct {
 	ID, Repo, StaleOrg, ActiveOrg string
@@ -122,8 +126,15 @@ func Repair(ctx context.Context, conn driver.Conn, org string, apply bool, out i
 	fmt.Fprintln(out, "Applying ALTER TABLE repos DELETE for each stale duplicate row...")
 	deleted := 0
 	for _, row := range stale {
-		if err := conn.Exec(ctx, "ALTER TABLE repos DELETE WHERE id = {id:UUID} AND org_id = {org:String} SETTINGS mutations_sync=2",
-			clickhouse.Named("id", row.ID), clickhouse.Named("org", row.StaleOrg)); err != nil {
+		if beforeDelete != nil {
+			beforeDelete(row)
+		}
+		// Only rows no newer than the one the report listed: a row of the same
+		// (id, org_id) written after the report is the active one, and the
+		// mutation must not take it with the stale one. (The Python verb deleted
+		// by (id, org_id) alone and carried that race.)
+		if err := conn.Exec(ctx, "ALTER TABLE repos DELETE WHERE id = {id:UUID} AND org_id = {org:String} AND last_synced <= {stale:DateTime64(3, 'UTC')} SETTINGS mutations_sync=2",
+			clickhouse.Named("id", row.ID), clickhouse.Named("org", row.StaleOrg), clickhouse.Named("stale", row.StaleLastSynced.UTC().Format("2006-01-02 15:04:05.000"))); err != nil {
 			return fmt.Errorf("delete %s (%s): %w", row.Repo, row.StaleOrg, err)
 		}
 		deleted++

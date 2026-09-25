@@ -6,6 +6,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -14,7 +17,9 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/auth/passwordhash"
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
@@ -490,3 +495,65 @@ func (o Operator) ListOrgs(ctx context.Context, limit int, includeInactive bool)
 }
 
 var _ = pgx.ErrNoRows
+
+// DeleteOrgConfig is what an organization deletion needs beyond the database,
+// as the API service builds it for the DELETE /orgs/{id} route: the ClickHouse
+// DSN of the analytics purge ("" leaves a warning in the result), the settings
+// decryptor and PagerDuty client identity of the OAuth revoke, and the client
+// it revokes with (nil means a client that follows no redirect, 10 s timeout).
+type DeleteOrgConfig struct {
+	ClickHouseDSN string
+	Decryptor     providerfoundation.FernetDecryptor
+	PagerDuty     providerfoundation.PagerDutyRevokeConfig
+	HTTPDoer      providerfoundation.HTTPDoer
+}
+
+// DeleteOrg is OrganizationDeletionService.delete as `admin orgs delete` runs
+// it, and the same code as the DELETE /orgs/{id} route: the org's Postgres rows
+// and ClickHouse rows are counted and (not a dry run) deleted. A malformed id is
+// a refusal; any other failure is returned as it is.
+func (o Operator) DeleteOrg(ctx context.Context, orgID string, dryRun bool, config DeleteOrgConfig) (map[string]any, error) {
+	orgUUID, err := pyUUID(orgID)
+	if err != nil {
+		return nil, refuse("Invalid organization id")
+	}
+	httpDoer := config.HTTPDoer
+	if httpDoer == nil {
+		httpDoer = &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	}
+	h := &handlers{
+		store:         o.store(o.Pool),
+		logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
+		clickHouseDSN: config.ClickHouseDSN,
+		decryptor:     config.Decryptor,
+		pagerDuty:     config.PagerDuty,
+		httpDoer:      httpDoer,
+	}
+	result, err := h.deleteOrganizationData(ctx, orgUUID, dryRun)
+	if err != nil {
+		return nil, err
+	}
+	plain, _ := plainJSON(result.json()).(map[string]any)
+	return plain, nil
+}
+
+// plainJSON turns a pyjson value into the plain maps and slices encoding/json
+// writes (with its keys sorted, as json.dumps(sort_keys=True) does).
+func plainJSON(value pyjson.Value) any {
+	switch typed := value.(type) {
+	case *pyjson.Object:
+		out := make(map[string]any, typed.Len())
+		for _, key := range typed.Keys() {
+			item, _ := typed.Get(key)
+			out[key] = plainJSON(item)
+		}
+		return out
+	case []pyjson.Value:
+		out := make([]any, len(typed))
+		for index, item := range typed {
+			out[index] = plainJSON(item)
+		}
+		return out
+	}
+	return value
+}

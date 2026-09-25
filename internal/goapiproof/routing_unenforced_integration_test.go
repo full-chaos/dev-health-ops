@@ -27,6 +27,12 @@ func TestRoutingStatusRowsFlagsTheControlsNoPlaneObeys(t *testing.T) {
 		{"emptyList", "canary", 100, "'[]'::json", []string{}},
 		{"emptyObject", "canary", 100, "'{}'::json", []string{}},
 		{"jsonNull", "canary", 100, "'null'::json", []string{}},
+		// A json column keeps insignificant whitespace: these are as empty as
+		// their compact forms.
+		{"spacedEmptyList", "canary", 100, "'[ ]'::json", []string{}},
+		{"newlineEmptyList", "canary", 100, "E'[\\n]'::json", []string{}},
+		{"spacedEmptyObject", "canary", 100, "'{ }'::json", []string{}},
+		{"spacedNull", "canary", 100, "' null '::json", []string{}},
 		{"partialRollout", "canary", 50, "NULL", []string{"rollout_percentage=50"}},
 		{"zeroRollout", "canary", 0, "NULL", []string{"rollout_percentage=0"}},
 		{"allowlist", "canary", 100, `'["org-a"]'::json`, []string{`eligible_orgs=["org-a"]`}},

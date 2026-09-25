@@ -156,6 +156,10 @@ func TestStatusNamesTheControlsNoPlaneObeys(t *testing.T) {
 func TestEnableRefusesARolloutNoPlaneObeys(t *testing.T) {
 	t.Setenv(bearerEnvVar, "")
 	t.Setenv("POSTGRES_URI", "")
+	// The rollout refusal comes before every other precondition, -mode included.
+	if err := run([]string{"enable", "-rollout", "50"}); err == nil || !strings.Contains(err.Error(), "neither plane enforces") {
+		t.Fatalf("enable -rollout 50 with no -mode = %v, want the named rollout refusal first", err)
+	}
 	for _, rollout := range []string{"0", "1", "50", "99"} {
 		err := run([]string{"enable", "-mode", "canary", "-rollout", rollout})
 		if err == nil || !strings.Contains(err.Error(), "neither plane enforces") {

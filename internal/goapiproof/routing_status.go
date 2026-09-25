@@ -19,6 +19,7 @@ package goapiproof
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -136,14 +137,36 @@ func (s OperationStatus) UnenforcedControls() []string {
 	if s.RolloutPercentage != nil && *s.RolloutPercentage != EnforcedRolloutPercentage {
 		controls = append(controls, fmt.Sprintf("rollout_percentage=%d", *s.RolloutPercentage))
 	}
-	if s.EligibleOrgs != nil {
-		switch strings.TrimSpace(*s.EligibleOrgs) {
-		case "", "null", "[]", "{}":
-		default:
-			controls = append(controls, "eligible_orgs="+strings.TrimSpace(*s.EligibleOrgs))
-		}
+	if s.EligibleOrgs != nil && !eligibleOrgsIsEmpty(*s.EligibleOrgs) {
+		controls = append(controls, "eligible_orgs="+strings.TrimSpace(*s.EligibleOrgs))
 	}
 	return controls
+}
+
+// eligibleOrgsIsEmpty reports whether an eligible_orgs column value records no
+// allowlist: SQL text of NULL, JSON null, an empty array or an empty object,
+// however the json column spells them (it keeps insignificant whitespace, so
+// `[ ]` is as empty as `[]`). The value is read as JSON, not compared as text.
+// Text that is not JSON at all is not empty: better a false warning than a
+// hidden cohort.
+func eligibleOrgsIsEmpty(text string) bool {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return true
+	}
+	var decoded any
+	if err := json.Unmarshal([]byte(trimmed), &decoded); err != nil {
+		return false
+	}
+	switch value := decoded.(type) {
+	case nil:
+		return true
+	case []any:
+		return len(value) == 0
+	case map[string]any:
+		return len(value) == 0
+	}
+	return false
 }
 
 // Reachable reports whether a real request would be served by Go right

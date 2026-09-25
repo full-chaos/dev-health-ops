@@ -71,11 +71,11 @@ func runEnable(argv []string) error {
 	if err := common.requirePositiveTimeout(); err != nil {
 		return err
 	}
-	if mode == "" {
-		return refuse("-mode is required and must be one of %v", goapiproof.EnableModes)
-	}
 	if rollout != goapiproof.EnforcedRolloutPercentage {
 		return refuse("%v", goapiproof.ErrRolloutNotEnforced(rollout))
+	}
+	if mode == "" {
+		return refuse("-mode is required and must be one of %v", goapiproof.EnableModes)
 	}
 	if err := common.requireProvenance(); err != nil {
 		return err

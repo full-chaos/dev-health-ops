@@ -171,6 +171,53 @@ class EffectivePrincipalEnvelopeClaims:
     aud: str = field(default=ENVELOPE_AUDIENCE)
 
 
+@dataclass(frozen=True)
+class EffectivePrincipalIdentity:
+    """The identity a downstream consumer must act as: the impersonation
+    TARGET's while impersonating, the authenticated user's otherwise. One
+    derivation for both carriers (the signed envelope and the internal
+    identity headers of CHAOS-6144), so they cannot name two identities."""
+
+    sub: str
+    org_id: str
+    role: str
+    impersonated_by: str | None
+    impersonation_active: bool
+
+
+def effective_principal_identity(user: AuthenticatedUser) -> EffectivePrincipalIdentity:
+    impersonation = get_impersonation_context()
+    impersonation_active = bool(impersonation is not None and impersonation.is_active)
+
+    # When impersonating, `sub`/`org_id`/`role` must be the TARGET's identity,
+    # not the real admin's -- matching every other impersonation-aware read in
+    # this codebase (graphql/app.py's org_id resolution prefers
+    # imp_ctx.target_org_id over user.org_id; get_user_permissions returns the
+    # target role's permission set). An envelope carrying the real admin's
+    # sub/org_id/role while impersonation_active=true would let a Go consumer
+    # authorize or scope a query under the WRONG principal -- the admin's org,
+    # not the org they are impersonating into.
+    effective_impersonated_by: str | None
+    if impersonation is not None and impersonation.is_active:
+        effective_sub = impersonation.target_user_id
+        effective_org_id = impersonation.target_org_id
+        effective_role = impersonation.target_role
+        effective_impersonated_by = impersonation.real_user_id
+    else:
+        effective_sub = user.user_id
+        effective_org_id = user.org_id
+        effective_role = user.role
+        effective_impersonated_by = user.impersonated_by
+
+    return EffectivePrincipalIdentity(
+        sub=effective_sub,
+        org_id=effective_org_id,
+        role=effective_role,
+        impersonated_by=effective_impersonated_by,
+        impersonation_active=impersonation_active,
+    )
+
+
 def issue_effective_principal_envelope(
     user: AuthenticatedUser,
     *,
@@ -203,42 +250,21 @@ def issue_effective_principal_envelope(
         logger.error("go_api_envelope.signing_key_error", exc_info=True)
         raise
 
-    impersonation = get_impersonation_context()
-    impersonation_active = bool(impersonation is not None and impersonation.is_active)
-
-    # When impersonating, `sub`/`org_id`/`role` must be the TARGET's identity,
-    # not the real admin's -- matching every other impersonation-aware read in
-    # this codebase (graphql/app.py's org_id resolution prefers
-    # imp_ctx.target_org_id over user.org_id; get_user_permissions returns the
-    # target role's permission set). An envelope carrying the real admin's
-    # sub/org_id/role while impersonation_active=true would let a Go consumer
-    # authorize or scope a query under the WRONG principal -- the admin's org,
-    # not the org they are impersonating into.
-    effective_impersonated_by: str | None
-    if impersonation is not None and impersonation.is_active:
-        effective_sub = impersonation.target_user_id
-        effective_org_id = impersonation.target_org_id
-        effective_role = impersonation.target_role
-        effective_impersonated_by = impersonation.real_user_id
-    else:
-        effective_sub = user.user_id
-        effective_org_id = user.org_id
-        effective_role = user.role
-        effective_impersonated_by = user.impersonated_by
+    identity = effective_principal_identity(user)
 
     claims = EffectivePrincipalEnvelopeClaims(
         v=ENVELOPE_CLAIM_SCHEMA_VERSION,
-        sub=effective_sub,
-        org_id=effective_org_id,
-        role=effective_role,
+        sub=identity.sub,
+        org_id=identity.org_id,
+        role=identity.role,
         is_superuser=user.is_superuser,
         is_superuser_verified=user.is_superuser_verified,
         permissions=sorted(get_user_permissions(user)),
         token_version=user.token_version or 0,
         tier=tier.value,
         licensed_features=sorted(licensed_features),
-        impersonated_by=effective_impersonated_by,
-        impersonation_active=impersonation_active,
+        impersonated_by=identity.impersonated_by,
+        impersonation_active=identity.impersonation_active,
         aud=audience,
     )
 

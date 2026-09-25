@@ -51,6 +51,11 @@ type fakePagerDuty struct {
 	// token to a third party, which captured counts.
 	redirectTo string
 	captured   int
+	// slowStarted closes when a PagerDuty read of the "at-slow" token
+	// begins, and that read then waits for slowRelease: a callback held
+	// between its record and its grant.
+	slowStarted chan struct{}
+	slowRelease chan struct{}
 }
 
 type fakeAccount struct{ id, subdomain, name string }
@@ -175,6 +180,10 @@ func (f *fakePagerDuty) handler() http.Handler {
 			reply(200, `{"token_type":"bearer"}`)
 		case "c-badexpires":
 			reply(200, token("at-ok", "rt-ok", pagerDutyAllReadScopes, `"abc"`))
+		case "c-slow":
+			reply(200, token("at-slow", "rt-slow", pagerDutyAllReadScopes, "3600"))
+		case "c-unrecordable":
+			reply(200, token("at-unrecordable", "rt-unrecordable", pagerDutyAllReadScopes, "3600"))
 		case "c-ok":
 			reply(200, token("at-ok", "rt-ok", pagerDutyAllReadScopes, "3600"))
 		case "c-ok2":
@@ -226,8 +235,12 @@ func (f *fakePagerDuty) handler() http.Handler {
 		region := r.PathValue("region")
 		authorization := r.Header.Get("Authorization")
 		f.record("GET /%s/services?%s auth=%q accept=%q", region, r.URL.RawQuery, authorization, r.Header.Get("Accept"))
+		if authorization == "Bearer at-slow" && f.slowStarted != nil {
+			close(f.slowStarted)
+			<-f.slowRelease
+		}
 		accountKey := map[string]string{
-			"Bearer at-ok": "acme", "Bearer at-ok2": "acme", "Bearer at-ok3": "acme", "Bearer at-norefresh": "acme",
+			"Bearer at-slow": "acme", "Bearer at-ok": "acme", "Bearer at-ok2": "acme", "Bearer at-ok3": "acme", "Bearer at-norefresh": "acme",
 			"Bearer at-missing": "acme", "Bearer at-cc-ok": "acme", "Bearer at-cc-missing": "acme", "Token token=tok-acme": "acme",
 			"Bearer at-eu": "eu", "Bearer at-cc-eu": "eu", "Bearer at-cc-other": "other", "Token token=tok-other": "other",
 			"Bearer at-htmlurl": "htmlurl", "Token token=tok-html": "htmlurl", "Bearer at-nodisp": "nodisp",
@@ -275,7 +288,8 @@ func TestPagerDutyCallbackAndManualVenueOracle(t *testing.T) {
 	root := repoRoot(t)
 	const jwtKey = "venue-oracle-test-secret-key-for-pagerduty-callback-32-b"
 
-	fake := &fakePagerDuty{failRevoke: map[string]bool{"old-fail-rt": true, "rt-missing-refused": true, "rt-noaccount-refused": true, "rt-corrupt-refused": true}}
+	fake := &fakePagerDuty{failRevoke: map[string]bool{"old-fail-rt": true, "rt-missing-refused": true, "rt-noaccount-refused": true, "rt-corrupt-refused": true},
+		slowStarted: make(chan struct{}), slowRelease: make(chan struct{})}
 	upstream := httptest.NewServer(fake.handler())
 	t.Cleanup(upstream.Close)
 	capture := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -320,6 +334,7 @@ func TestPagerDutyCallbackAndManualVenueOracle(t *testing.T) {
 		// once the fake accepts revokes again.
 		{"s-refm-1", "refmissing"}, {"s-refm-2", "refmissing"}, {"s-refm-3", "refmissing"}, {"s-refn-1", "refnoacct"}, {"s-refn-2", "refnoacct"}, {"s-refn-3", "refnoacct"},
 		{"s-refc-1", "refcorrupt"}, {"s-refc-2", "refcorrupt"}, {"s-refr-1", "refredirect"}, {"s-refr-2", "refredirect"},
+		{"s-refn-4", "refnoacct"}, {"s-race-1", "refmissing"}, {"s-race-2", "refmissing"},
 	} {
 		addState(spec.name, spec.org)
 	}
@@ -795,7 +810,7 @@ FROM provider_oauth_revocations WHERE purpose = 'setup' ORDER BY org_id`)
 	}
 	retried := strings.Join(fake.take(), "\n")
 	for _, token := range []string{"rt-missing-refused", "rt-noaccount-refused", "rt-corrupt-refused", "rt-redirect"} {
-		if !strings.Contains(retried, "POST /revoke") && strings.Contains(retried, "token="+token) {
+		if !(strings.Contains(retried, "POST /revoke") && strings.Contains(retried, "token="+token)) {
 			t.Errorf("the next callback did not retry the revoke of %s:\n%s", token, retried)
 		}
 	}
@@ -874,7 +889,72 @@ CREATE TRIGGER pd_setup_record_refused BEFORE INSERT ON provider_oauth_revocatio
 	if calls := strings.Join(fake.take(), "\n"); !strings.Contains(calls, "POST /revoke") || !strings.Contains(calls, "token=rt-ok3") {
 		t.Errorf("a token that could not be recorded was not revoked:\n%s", calls)
 	}
+	// The named limit: with the record refused and PagerDuty refusing the
+	// revoke as well, the token stays live and nothing can be kept (the store
+	// that would hold the record is the one failing). The setup still fails
+	// loudly and leaves no grant.
+	fake.mu.Lock()
+	fake.failRevoke["rt-unrecordable"] = true
+	fake.mu.Unlock()
+	fake.take()
+	unrecordable := venueoracle.Do(t, goBase, cb("follow-up record and revoke refused", "admin_refnoacct", "s-refn-4", "c-unrecordable"))
+	if unrecordable.Status != http.StatusInternalServerError {
+		t.Errorf("a callback whose token could be neither recorded nor revoked answered %d %s, want 500", unrecordable.Status, unrecordable.Body)
+	}
+	if calls := strings.Join(fake.take(), "\n"); !strings.Contains(calls, "POST /revoke") || !strings.Contains(calls, "token=rt-unrecordable") {
+		t.Errorf("the unrecordable token's revoke was not even attempted:\n%s", calls)
+	}
 	if _, err := goPool.Exec(ctx, `DROP TRIGGER pd_setup_record_refused ON provider_oauth_revocations; DROP FUNCTION pd_setup_record_refused()`); err != nil {
 		t.Fatal(err)
+	}
+
+	// A callback held between its record and its grant while a later callback
+	// drains its (aged) row: the drain revokes the token, so the held callback
+	// must not store it as the active grant.
+	// A failed assertion below must not leave the held callback blocked (the
+	// upstream server's cleanup would wait on it forever).
+	releaseHeld := sync.OnceFunc(func() { close(fake.slowRelease) })
+	t.Cleanup(releaseHeld)
+	firstDone := make(chan venueoracle.Response, 1)
+	go func() {
+		firstDone <- venueoracle.Do(t, goBase, cb("held callback", "admin_refmissing", "s-race-1", "c-slow"))
+	}()
+	select {
+	case <-fake.slowStarted:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the held callback never reached PagerDuty's identity read")
+	}
+	if _, err := goPool.Exec(ctx, `UPDATE provider_oauth_revocations SET created_at = now() - interval '16 minutes' WHERE org_id = $1 AND purpose = 'setup' AND attempts = 0`, orgs["refmissing"].String()); err != nil {
+		t.Fatal(err)
+	}
+	fake.take()
+	drainer := venueoracle.Do(t, goBase, cb("callback that drains the aged row", "admin_refmissing", "s-race-2", "c-ok3"))
+	if drainer.Status != http.StatusOK {
+		t.Fatalf("the draining callback answered %d %s, want 200", drainer.Status, drainer.Body)
+	}
+	if calls := strings.Join(fake.take(), "\n"); !strings.Contains(calls, "POST /revoke") || !strings.Contains(calls, "token=rt-slow") {
+		t.Fatalf("the aged row was not drained (the race did not happen):\n%s", calls)
+	}
+	releaseHeld()
+	held := <-firstDone
+	if held.Status != http.StatusInternalServerError {
+		t.Errorf("the held callback whose token was revoked answered %d %s, want 500", held.Status, held.Body)
+	}
+	var sealedGrant string
+	if err := goPool.QueryRow(ctx, `SELECT token_encrypted FROM provider_oauth_credentials WHERE org_id = $1 AND provider = 'pagerduty' AND credential_name = 'Acme Co'`, orgs["refmissing"].String()).Scan(&sealedGrant); err != nil {
+		t.Fatal(err)
+	}
+	plainGrant, err := decryptor.Decrypt(secrets.NewValue(sealedGrant))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var grant struct {
+		RefreshToken string `json:"refresh_token"`
+	}
+	if err := json.Unmarshal(plainGrant, &grant); err != nil {
+		t.Fatal(err)
+	}
+	if grant.RefreshToken != "rt-ok3" {
+		t.Errorf("the active grant holds refresh token %q; it must be the draining callback's rt-ok3, never the revoked rt-slow", grant.RefreshToken)
 	}
 }

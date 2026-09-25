@@ -2,6 +2,7 @@ package admin
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 
 	"github.com/google/uuid"
@@ -20,7 +21,11 @@ import (
 // Python drops the token instead (both planes did): the durable row is the
 // named divergence.
 
-// setupRevocationStaleAfter is how old a setup row that never failed a
+// errPagerDutySetupSuperseded: the callback's setup record is gone at the
+// moment it would store its grant, so a drain revoked the token first.
+var errPagerDutySetupSuperseded = errors.New("pagerduty setup revocation superseded: the token was revoked before the grant was stored")
+
+// setupRevocationStaleInterval is how old a setup row that never failed a
 // revoke (its request died between the exchange and the outcome) must be
 // before a later callback retries it: an in-flight callback's row is younger
 // and must not be revoked under it.

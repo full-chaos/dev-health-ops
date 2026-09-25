@@ -133,12 +133,25 @@ VALUES ($1, $2, 'odd},"x', 'garbled', true, 'gAAAAABnot-a-fernet-token', '{}'::j
 		return venueoracle.Request{Name: name, Method: http.MethodPost, Path: "/api/v1/admin/credentials/test", Headers: bearer,
 			Body: venueoracle.B64(`{"provider":"` + provider + `","credential_id":"` + id.String() + `"}`)}
 	}
+	testInline := func(name, credentials string) venueoracle.Request {
+		return venueoracle.Request{Name: name, Method: http.MethodPost, Path: "/api/v1/admin/credentials/test", Headers: bearer,
+			Body: venueoracle.B64(`{"provider":"jira","credentials":` + credentials + `}`)}
+	}
 	requests := []venueoracle.Request{
 		testByID("test a garbled stored credential", garbled, "github"),
 		testByID("test it again", garbled, "github"),
 		testByID("test a stored credential that is not JSON", notJSON, "gitlab"),
 		testByID("test a stored credential that is an empty JSON list", emptyList, "jira"),
 		testByID("test a garbled credential with an odd provider", oddProvider, "github"),
+		// A Jira credential the resolver cannot build: credential_mapping_rejected
+		// counts the first required field it lacks (api_token, then email, then
+		// base_url); a repeat counts again. Nothing here reaches Jira.
+		testInline("jira without any required field", `{"unrelated":"x"}`),
+		testInline("jira with only a token", `{"token":"t"}`),
+		testInline("jira with a token and an email", `{"apiToken":"t","email":"a@example.com"}`),
+		testInline("jira with an email and a base url", `{"email":"a@example.com","server_url":"https://example.invalid"}`),
+		testInline("jira with only a base url", `{"url":"https://example.invalid"}`),
+		testInline("jira again without any required field", `{"unrelated":"y"}`),
 		// Telemetry: an org the caller is not a member of (not_a_member),
 		// and the instance-wide report without a platform role
 		// (report_not_platform_role).
@@ -194,6 +207,7 @@ VALUES ($1, $2, 'odd},"x', 'garbled', true, 'gAAAAABnot-a-fernet-token', '{}'::j
 // Python handler moves them.
 var routeCounters = []struct{ metric, route string }{
 	{"devhealth_integration_credential_decrypt_failed_total", "POST /api/v1/admin/credentials/test"},
+	{"credential_mapping_rejected_total", "POST /api/v1/admin/credentials/test"},
 	{"devhealth_telemetry_org_id_rejected_total", "POST /api/v1/telemetry/report"},
 	{"devhealth_ingest_legacy_auth_rejected_total", "POST /api/v1/ingest/commits"},
 	{"jira_project_discovery_total", "PATCH /api/v1/admin/integrations/{integration_id}/sources/{source_id}"},

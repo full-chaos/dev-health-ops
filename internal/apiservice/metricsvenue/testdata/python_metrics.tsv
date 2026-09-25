@@ -25,7 +25,7 @@
 #     retired          = fired by code that no longer runs (Celery)
 #     unused           = no caller left in the Python source; the sweep never fires it
 #     runtime          = a process/interpreter collector
-credential_mapping_rejected	counter	route-missing	POST /api/v1/admin/sync-configs	POST /api/v1/admin/sync-configs (sweep); also sync workers (credentials/resolver.py)
+credential_mapping_rejected	counter	partial	POST /api/v1/admin/credentials/test;POST /api/v1/admin/sync-configs	POST /api/v1/admin/credentials/test is compared (a Jira credential missing api_token, email or base_url); POST /api/v1/admin/sync-configs (sweep) counts through providerfoundation.NewJiraClient but the oracle does not drive it until jira_project_discovery_total is ported (its discovery moves both counters); also sync workers (credentials/resolver.py)
 dev_health_metric_compat_child_silence_seconds	histogram	unused	-	no caller in src/dev_health_ops outside metrics/prometheus.py (source)
 dev_health_metrics_family_failures	counter	worker	-	metrics/job_daily.py (source)
 dev_health_otel_init_failures	counter	python-only	-	tracing.py: Python process start-up

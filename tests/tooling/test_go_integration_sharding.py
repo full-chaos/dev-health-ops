@@ -181,6 +181,9 @@ EXPECTED_PACKAGES = {
     # CHAOS-6466: the `dho sync teams` verb end to end against a real ClickHouse.
     "internal/synccli",
     "internal/apiservice/admin",
+    # The admin setup-status venue differential (skips without the live
+    # Python env), in its own package for its own venue time budget.
+    "internal/apiservice/adminsetupvenue",
     # The billing venue oracles (plans, checkout, portal, ledger, the Stripe
     # webhook) in a package of their own, out of internal/apiservice's venue
     # time budget; each skips without DEV_HEALTH_LIVE_PYTHON_ORACLES=1.

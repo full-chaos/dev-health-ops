@@ -57,6 +57,9 @@ func TestExecutionLivenessSamplePassesAsBusyOnAFullyAcquiredDomainPool(t *testin
 			return &fakeFixedLoop{}, nil
 		},
 	}
+	previousWindow := busyProgressWindow
+	busyProgressWindow = 300 * time.Millisecond
+	t.Cleanup(func() { busyProgressWindow = previousWindow })
 	registry := health.NewRegistry(readinessTestCheckTimeout)
 	runtime, err := buildSchedulerLoopWithSources(ctx, config.Config{}, registry, sources, slog.Default())
 	if err != nil {
@@ -94,6 +97,14 @@ func TestExecutionLivenessSamplePassesAsBusyOnAFullyAcquiredDomainPool(t *testin
 	scheduler.livenessMonitor.Probe(probeCtx)
 	if status := registry.CheckRequired(ctx); containsString(status.Failed, "execution_liveness") {
 		t.Fatalf("a busy sample left execution_liveness failed: %v", status.Failed)
+	}
+	// r3 P1: the busy pass refreshed the monitor's success, which the monitor
+	// honours for its whole staleness allowance. Readiness must still go red once
+	// the WORK evidence is older than the progress window (no work acquire since).
+	scheduler.livenessMonitor.SetStaleness(time.Minute) // the monitor alone would stay fresh for the whole test
+	time.Sleep(2 * busyProgressWindow)
+	if status := registry.CheckRequired(ctx); !containsString(status.Failed, "execution_liveness") {
+		t.Fatalf("a wedged pool stayed ready after the progress window: monitor freshness alone decided readiness (%v)", status.Failed)
 	}
 }
 

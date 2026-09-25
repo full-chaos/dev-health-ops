@@ -169,3 +169,73 @@ func TestBusyToleranceStateTable(t *testing.T) {
 		t.Fatalf("table has %d cells, want %d (5 outcomes x 6 evidence x 2 pool states)", cells, want)
 	}
 }
+
+// CHAOS-6800 r3 P1: the readiness GATE. A busy pass is a success to the monitor,
+// which then grants its own staleness allowance: readiness must not be the
+// monitor's freshness alone when its latest success was tolerated rather than
+// earned. Generated over monitor state x latest-success kind x progress evidence:
+//
+//	ready  iff  the monitor is fresh  AND  (the latest success was a real
+//	transaction  OR  the work evidence is fresh right now).
+func TestReadinessGateStateTable(t *testing.T) {
+	type monitorState string
+	monitors := []monitorState{"fresh", "stale"}
+	kinds := []string{"real", "busy"}
+	evidences := []progressEvidence{evidenceFresh, evidenceAtWindow, evidenceStale, evidenceNone, evidenceBaselineOnly, evidenceGrace}
+	cells := 0
+	for _, monitor := range monitors {
+		for _, kind := range kinds {
+			for _, evidence := range evidences {
+				cells++
+				name := fmt.Sprintf("monitor-%s/last-%s/%s", monitor, kind, evidence)
+				t.Run(name, func(t *testing.T) {
+					liveness := &Liveness{Progress: guardFor(evidence)}
+					liveness.lastBusy.Store(kind == "busy")
+					base := func(context.Context) error {
+						if monitor == "stale" {
+							return errors.New("monitor stale")
+						}
+						return nil
+					}
+					err := liveness.Gate(base)(context.Background())
+					freshEvidence := evidence == evidenceFresh || evidence == evidenceGrace
+					wantReady := monitor == "fresh" && (kind == "real" || freshEvidence)
+					if (err == nil) != wantReady {
+						t.Fatalf("%s: ready=%v (err=%v), want ready=%v", name, err == nil, err, wantReady)
+					}
+				})
+			}
+		}
+	}
+	if cells != 24 {
+		t.Fatalf("gate table has %d cells, want 24 (2 monitor x 2 kinds x 6 evidence)", cells)
+	}
+}
+
+// The opener reports how each Begin ended, so the gate knows whether the
+// monitor's latest success was earned or tolerated.
+func TestOpenerReportsWhetherTheSuccessWasBusy(t *testing.T) {
+	var last []bool
+	opener := Opener{
+		Inner:     tableInner{outcomeAcquireDeadline},
+		Check:     "check",
+		Saturated: func() bool { return true },
+		Progress:  func(context.Context) error { return nil },
+		Counter:   NewCounter("m", nil, nil),
+		OnOutcome: func(busy bool) { last = append(last, busy) },
+	}
+	if _, err := opener.Begin(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	opener.Inner = tableInner{outcomeOK}
+	if _, err := opener.Begin(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	opener.Inner = tableInner{outcomeOtherError}
+	if _, err := opener.Begin(context.Background()); err == nil {
+		t.Fatal("a plain error passed")
+	}
+	if fmt.Sprint(last) != "[true false]" {
+		t.Fatalf("outcomes = %v, want [true false] (busy, real; a failure reports nothing)", last)
+	}
+}

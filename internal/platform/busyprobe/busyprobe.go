@@ -28,6 +28,7 @@ import (
 	"io"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -120,6 +121,10 @@ type Opener struct {
 	// Progress is the progress guard; nil error = work is provably moving.
 	Progress func(context.Context) error
 	Counter  *Counter
+	// OnOutcome, when set, is told how each Begin ended: busy=true for a busy
+	// pass, busy=false for a real transaction. Liveness uses it to remember
+	// whether the monitor's latest success was earned or tolerated.
+	OnOutcome func(busy bool)
 }
 
 type busyTx struct{}
@@ -158,6 +163,9 @@ func (o Opener) Begin(ctx context.Context) (selfprobe.Tx, error) {
 	defer cancelAcquire()
 	tx, err := o.Inner.Begin(acquireCtx)
 	if err == nil {
+		if o.OnOutcome != nil {
+			o.OnOutcome(false)
+		}
 		return tx, nil
 	}
 	// The caller's own deadline is gone too: there is no time left to prove
@@ -174,6 +182,9 @@ func (o Opener) Begin(ctx context.Context) (selfprobe.Tx, error) {
 		return nil, err
 	}
 	o.Counter.Record(ctx, o.Check)
+	if o.OnOutcome != nil {
+		o.OnOutcome(true)
+	}
 	return busyTx{}, nil
 }
 
@@ -273,24 +284,48 @@ func (p *PoolProgress) Ready(context.Context) error {
 // self-probe on its domain pool, built in ONE place so no caller can hand the
 // progress guard the wrong (or no) own-acquire counter: the opener, and the
 // progress guard reading the very same opener's own acquires.
+//
+// A busy pass is a SUCCESS to the monitor, which then grants its own staleness
+// allowance (60 s by default) on top: bounding the progress window alone left a
+// wedged pool ready for window + interval + staleness (CHAOS-6800 r3: 82 s
+// observed). Gate closes that: while the monitor's latest success was a busy
+// pass, readiness is decided by the work evidence AT READ TIME, so a wedge turns
+// red within the progress window of the last work acquire, whatever the monitor's
+// staleness says.
 type Liveness struct {
 	Opener   Opener
 	Progress *PoolProgress
+
+	lastBusy atomic.Bool
 }
 
 // NewLiveness wires pool's probe opener, the pool-saturation check and a
 // PoolProgress that subtracts that opener's own acquires. pool must not be nil.
-func NewLiveness(pool *pgxpool.Pool, check string, window time.Duration, counter *Counter) Liveness {
+func NewLiveness(pool *pgxpool.Pool, check string, window time.Duration, counter *Counter) *Liveness {
 	probe := selfprobe.NewPool(pool)
 	progress := NewPoolProgress(pool, window, func() int64 { return selfprobe.OwnAcquires(probe) })
-	return Liveness{
-		Opener: Opener{
-			Inner:     probe,
-			Check:     check,
-			Saturated: func() bool { return Saturated(pool) },
-			Progress:  progress.Ready,
-			Counter:   counter,
-		},
-		Progress: progress,
+	liveness := &Liveness{Progress: progress}
+	liveness.Opener = Opener{
+		Inner:     probe,
+		Check:     check,
+		Saturated: func() bool { return Saturated(pool) },
+		Progress:  progress.Ready,
+		Counter:   counter,
+		OnOutcome: liveness.lastBusy.Store,
+	}
+	return liveness
+}
+
+// Gate wraps the monitor's readiness check: the monitor must be fresh, and when
+// its latest success was a busy pass the work evidence must be fresh too.
+func (l *Liveness) Gate(monitorReady func(context.Context) error) func(context.Context) error {
+	return func(ctx context.Context) error {
+		if err := monitorReady(ctx); err != nil {
+			return err
+		}
+		if l.lastBusy.Load() {
+			return l.Progress.Ready(ctx)
+		}
+		return nil
 	}
 }

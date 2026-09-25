@@ -26,9 +26,13 @@ import (
 // busyProgressWindow is how long the domain pool may go without a completed
 // work acquire before a fully acquired pool stops reading as busy. A movement
 // is dated to the probe that first sees it (one probe per DefaultInterval), so a
-// wedge is detected within window + one interval = 3 x DefaultInterval, the
-// monitor's own staleness bound (selfprobe.DefaultStalenessMultiple).
-const busyProgressWindow = 2 * selfprobe.DefaultInterval
+// wedge turns readiness red within window + one interval = 3 x DefaultInterval
+// of the last work acquire. That holds only because readiness is GATED on the
+// work evidence while the monitor's latest success was a busy pass
+// (busyprobe.Liveness.Gate): a busy pass is a success to the monitor, which
+// would otherwise grant its own staleness allowance on top (CHAOS-6800 r3).
+// A var so tests can shrink it.
+var busyProgressWindow = 2 * selfprobe.DefaultInterval
 
 type schedulerDatabase interface {
 	DomainReady(context.Context) error
@@ -688,11 +692,13 @@ func buildSchedulerLoopWithSources(
 	if err := registry.RegisterMetrics("scheduler_readiness_busy", busy); err != nil {
 		return nil, err
 	}
-	livenessMonitor := selfprobe.New("scheduler_execution_liveness",
-		busyprobe.NewLiveness(domainPool, "execution_liveness", busyProgressWindow, busy).Opener, logger)
+	liveness := busyprobe.NewLiveness(domainPool, "execution_liveness", busyProgressWindow, busy)
+	livenessMonitor := selfprobe.New("scheduler_execution_liveness", liveness.Opener, logger)
 	if livenessMonitor != nil {
 		livenessMonitor.Probe(ctx)
-		if err := registry.RegisterRequired("execution_liveness", livenessMonitor.Ready); err != nil {
+		// Gated: a busy pass is a success to the monitor, which would grant its
+		// own staleness allowance on top of the progress window.
+		if err := registry.RegisterRequired("execution_liveness", liveness.Gate(livenessMonitor.Ready)); err != nil {
 			return nil, err
 		}
 		if err := registry.RegisterMetrics("scheduler_execution_liveness", livenessMonitor); err != nil {

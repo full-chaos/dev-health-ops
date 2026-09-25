@@ -92,9 +92,13 @@ type reconcilerDatabase interface {
 // busyProgressWindow is how long the domain pool may go without a completed
 // work acquire before a fully acquired pool stops reading as busy. A movement
 // is dated to the probe that first sees it (one probe per DefaultInterval), so a
-// wedge is detected within window + one interval = 3 x DefaultInterval, the
-// monitor's own staleness bound (selfprobe.DefaultStalenessMultiple).
-const busyProgressWindow = 2 * selfprobe.DefaultInterval
+// wedge turns readiness red within window + one interval = 3 x DefaultInterval
+// of the last work acquire. That holds only because readiness is GATED on the
+// work evidence while the monitor's latest success was a busy pass
+// (busyprobe.Liveness.Gate): a busy pass is a success to the monitor, which
+// would otherwise grant its own staleness allowance on top (CHAOS-6800 r3).
+// A var so tests can shrink it.
+var busyProgressWindow = 2 * selfprobe.DefaultInterval
 
 type postgresReconcilerDatabase struct {
 	pools           *postgres.RuntimePools
@@ -603,6 +607,9 @@ func configureReconcilerDependenciesWithActivationSourcesAndLogger(
 	// like every other check here; resolved once dependencies.database is
 	// confirmed non-nil, below.
 	var livenessMonitor *selfprobe.Monitor
+	// livenessGate is the gated readiness of that monitor (CHAOS-6800 r3): nil
+	// until the monitor is built with a domain pool.
+	var livenessGate func(context.Context) error
 	checks := []struct {
 		name  string
 		check health.CheckFunc
@@ -620,6 +627,9 @@ func configureReconcilerDependenciesWithActivationSourcesAndLogger(
 		{name: "execution_liveness", check: func(ctx context.Context) error {
 			if livenessMonitor == nil {
 				return errReconcilerDependencyUnavailable
+			}
+			if livenessGate != nil {
+				return livenessGate(ctx)
 			}
 			return livenessMonitor.Ready(ctx)
 		}},
@@ -688,10 +698,15 @@ func configureReconcilerDependenciesWithActivationSourcesAndLogger(
 	// A nil domain pool (test fixtures only) keeps a nil opener, so no monitor is
 	// constructed and execution_liveness reports unavailable, exactly as before.
 	var livenessOpener selfprobe.TxOpener
+	var liveness *busyprobe.Liveness
 	if domainPool != nil {
-		livenessOpener = busyprobe.NewLiveness(domainPool, "execution_liveness", busyProgressWindow, busy).Opener
+		liveness = busyprobe.NewLiveness(domainPool, "execution_liveness", busyProgressWindow, busy)
+		livenessOpener = liveness.Opener
 	}
 	livenessMonitor = selfprobe.New("reconciler_execution_liveness", livenessOpener, logger)
+	if livenessMonitor != nil && liveness != nil {
+		livenessGate = liveness.Gate(livenessMonitor.Ready)
+	}
 	if livenessMonitor != nil {
 		livenessMonitor.Probe(ctx)
 		components = append(components, livenessMonitor)

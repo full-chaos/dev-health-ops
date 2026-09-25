@@ -192,15 +192,15 @@ func Start(ctx context.Context, pool *pgxpool.Pool, configID string, params Para
 	if cfg == nil {
 		return Trigger{}, fmt.Errorf("Sync configuration not found: %s", params.ConfigID)
 	}
-	keys, enabled, err := Validate(ctx, tx, cfg, params)
+	validated, err := Validate(ctx, tx, cfg, params)
 	if err != nil {
 		return Trigger{}, err
 	}
-	trigger, err := Mint(ctx, tx, cfg, params, keys, now())
+	trigger, err := Mint(ctx, tx, cfg, params, validated, now())
 	if err != nil {
 		return Trigger{}, err
 	}
-	trigger.EnabledSources = enabled
+	trigger.EnabledSources = validated.EnabledSources
 	if err := tx.Commit(ctx); err != nil {
 		return Trigger{}, fmt.Errorf("commit: %w", err)
 	}

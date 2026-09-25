@@ -102,6 +102,8 @@ type cfg struct {
 	noIntegration  bool
 	withSource     bool // pinned to one source (source_id set)
 	sharedWith     int  // the integration of another cfg (a second parent)
+	inactive       bool // the integration is not active
+	noEnabled      bool // every source of the integration is disabled
 	createdAt      string
 }
 
@@ -127,10 +129,10 @@ func seed(t *testing.T, uri string, configs []cfg) {
 			seenIntegration[integration] = true
 			org := c.org
 			if _, err := conn.Exec(ctx, `INSERT INTO integrations (id, org_id, provider, name, config, is_active, created_at, updated_at)
-VALUES ($1::uuid, $2, $3, $4, '{}'::json, true, now(), now())`, uuidN(0x1a, integration), org, c.provider, fmt.Sprintf("integration-%d", integration)); err != nil {
+VALUES ($1::uuid, $2, $3, $4, '{}'::json, $5, now(), now())`, uuidN(0x1a, integration), org, c.provider, fmt.Sprintf("integration-%d", integration), !c.inactive); err != nil {
 				t.Fatalf("seed integration: %v", err)
 			}
-			for index, enabled := range []bool{true, true, false} {
+			for index, enabled := range []bool{!c.noEnabled, !c.noEnabled, false} {
 				if _, err := conn.Exec(ctx, `INSERT INTO integration_sources (id, org_id, integration_id, provider, source_type, external_id, name, full_name, metadata, is_enabled, discovered_at, last_seen_at)
 VALUES ($1::uuid, $2, $3::uuid, $4, 'repo', $5, $5, $5, '{}'::json, $6, now(), now())`,
 					uuidN(0x5a, integration*10+index), org, uuidN(0x1a, integration), c.provider, fmt.Sprintf("org/repo-%d-%d", integration, index), enabled); err != nil {
@@ -197,6 +199,9 @@ var configs = []cfg{
 	{n: 13, org: testOrg, name: "second parent", provider: "github", targets: []string{"git"}, active: true, plannerManaged: true, sharedWith: 1, createdAt: "2026-01-02T00:00:00Z"},
 	{n: 14, org: testOrg, name: "it's quoted", provider: "github", targets: []string{"git", "nope"}, active: true, plannerManaged: true},
 	{n: 16, org: testOrg, name: "jira incidents", provider: "jira", targets: []string{"incidents"}, active: true, plannerManaged: true},
+	{n: 17, org: testOrg, name: "inactive integration", provider: "github", targets: []string{"git"}, active: true, plannerManaged: true, inactive: true},
+	{n: 18, org: testOrg, name: "no enabled sources", provider: "github", targets: []string{"prs"}, active: true, plannerManaged: true, noEnabled: true},
+	{n: 19, org: testOrg, name: "planner-managed and pinned", provider: "github", targets: []string{"prs"}, active: true, plannerManaged: true, withSource: true},
 	{n: 15, org: testOrg, name: "gh all targets", provider: "github", targets: []string{"git", "prs", "blame", "cicd", "deployments", "security", "tests", "work-items"}, active: true, plannerManaged: true},
 }
 
@@ -222,6 +227,9 @@ var scenarios = []scenario{
 	{name: "a name that needs quotes in the message", cfg: 14, message: `("it's quoted") has sync_targets ['nope']`},
 	{name: "no integration", cfg: 12, message: "has no integration_id; cannot plan a backfill"},
 	{name: "not the canonical parent", cfg: 13, message: "is not the config the shared reference-discovery resolver"},
+	{name: "an integration without enabled sources", cfg: 18, args: []string{"--backfill", "1", "--before", "2026-03-10"}},
+	{name: "planner-managed configuration pinned to a source", cfg: 19, args: []string{"--backfill", "1", "--before", "2026-03-10"}},
+	{name: "inactive integration", cfg: 17, goOnly: true, goExit: cli.ExitRefused, message: "is not active, and the scheduler materializes only an active integration"},
 	{name: "unrouted configuration", cfg: 10, goOnly: true, goExit: cli.ExitRefused, message: "is neither planner-managed nor pinned to one source"},
 }
 
@@ -296,6 +304,22 @@ if code == 0 and "request" in captured:
     with get_postgres_session_sync() as session:
         config = session.get(SyncConfiguration, uuid.UUID(spec["config_id"]))
         request = dataclasses.replace(captured["request"], triggered_by="backfill")
+        if config.planner_managed and config.source_id is None:
+            # The one named difference: Python planned source_ids=None as "every
+            # enabled source"; the scheduler reads NULL on a planner-managed
+            # configuration as "the sources tagged for it", so dho names them.
+            from dev_health_ops.models.integrations import IntegrationSource
+            enabled = (
+                session.query(IntegrationSource)
+                .filter(
+                    IntegrationSource.org_id == config.org_id,
+                    IntegrationSource.integration_id == config.integration_id,
+                    IntegrationSource.is_enabled.is_(True),
+                )
+                .order_by(IntegrationSource.full_name, IntegrationSource.id)
+                .all()
+            )
+            request = dataclasses.replace(request, source_ids=tuple(str(row.id) for row in enabled))
         et._create_go_manual_sync_execution_trigger(session, config, str(config.org_id), request)
         session.commit()
 raise SystemExit(code)
@@ -534,6 +558,18 @@ func TestBackfillRunActuallyWrites(t *testing.T) {
 		ok := len(item.Rows["scheduled_sync_occurrences"]) == 1
 		if item.Exit == 0 && (!ok || len(item.Rows["sync_manual_triggers"]) != 1 || len(item.Rows["scheduled_jobs"]) != 1) {
 			t.Fatalf("%s froze no rows: %v", item.Name, item.Rows)
+		}
+		// A planner-managed parent names its enabled sources (never NULL): the
+		// scheduler would otherwise read NULL as "the sources tagged for this
+		// configuration" and could plan zero units.
+		if item.Name == "github parent, a three-day window" {
+			trigger := strings.Join(item.Rows["sync_manual_triggers"], "")
+			if !strings.Contains(trigger, `"source_ids":["\u003cuuid\u003e","\u003cuuid\u003e"]`) {
+				t.Fatalf("%s did not freeze the enabled source ids: %s", item.Name, trigger)
+			}
+		}
+		if item.Name == "an integration without enabled sources" && !strings.Contains(strings.Join(item.Rows["sync_manual_triggers"], ""), `"source_ids":[]`) {
+			t.Fatalf("%s did not freeze an empty source list: %v", item.Name, item.Rows["sync_manual_triggers"])
 		}
 		if item.Exit != 0 && len(item.Rows["scheduled_sync_occurrences"]) != 0 {
 			t.Fatalf("%s: a refused run left rows: %v", item.Name, item.Rows)

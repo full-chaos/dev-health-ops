@@ -138,7 +138,7 @@ func TestVerbRefusesBeforeTouchingPostgres(t *testing.T) {
 // rot guard, not a freshness check: the file is only rewritten by
 // TestBackfillRunVenueOracleMatchesThePythonProducer with
 // DHO_BACKFILL_RUN_GOLDEN_UPDATE=1, then this digest is updated.
-const goldenSHA256 = "98a94386c95aaac0ee402f3f51fb43ba3a5270b0a47635b2e8783c693e7fcffe"
+const goldenSHA256 = "ed3e62589cf477964e5693c5172d40e8408522e812f9f42b365d63d92e653e44"
 
 func TestGoldenIsTheFileTheDigestPins(t *testing.T) {
 	raw, err := os.ReadFile("testdata/backfill_run_golden.json")

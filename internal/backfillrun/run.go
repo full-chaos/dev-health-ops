@@ -142,12 +142,34 @@ FROM public.sync_configurations WHERE id = $1::uuid`, configID).Scan(
 	return &config, nil
 }
 
+// Validated is what validation resolved.
+type Validated struct {
+	DatasetKeys    []string
+	EnabledSources int
+	// SourceIDs is the explicit source list the trigger carries (nil: none).
+	SourceIDs []string
+}
+
+// sourceIDsFor is the source scope of the trigger. Python's planner took
+// source_ids=None to mean every enabled source of the integration. The scheduler
+// reads a NULL list on a planner-managed configuration as "the sources tagged for
+// this configuration", which can be none: a run over untagged sources would
+// complete with zero units. So the enabled sources are named. A configuration
+// pinned to one source is scoped by that source and carries no list.
+func sourceIDsFor(config *Config, enabled []string) []string {
+	if config.PlannerManaged && config.SourceID == nil {
+		return enabled
+	}
+	return nil
+}
+
 // Validate is the validation _cmd_backfill_run ran before it planned, in its
 // order and with its messages, then the two refusals of this seam. It returns
 // the dataset keys the sync_targets select (nil when there are no targets).
-func Validate(ctx context.Context, tx pgx.Tx, config *Config, params Params) (datasetKeys []string, enabledSources int, err error) {
+func Validate(ctx context.Context, tx pgx.Tx, config *Config, params Params) (validated Validated, err error) {
+	var datasetKeys []string
 	if params.RequestedOrg != "" && params.RequestedOrg != config.OrgID {
-		return nil, 0, fmt.Errorf("Org mismatch: --org %s does not own sync config %s (owned by %s)",
+		return Validated{}, fmt.Errorf("Org mismatch: --org %s does not own sync config %s (owned by %s)",
 			params.RequestedOrg, params.ConfigID, config.OrgID)
 	}
 	provider := strings.ToLower(strings.TrimSpace(config.Provider))
@@ -164,24 +186,56 @@ func Validate(ctx context.Context, tx pgx.Tx, config *Config, params Params) (da
 			sort.Strings(unresolved)
 			all := slices.Clone(syncTargets)
 			sort.Strings(all)
-			return nil, 0, fmt.Errorf("backfill run: sync configuration %s (%s) has sync_targets %s that provider %s "+
+			return Validated{}, fmt.Errorf("backfill run: sync configuration %s (%s) has sync_targets %s that provider %s "+
 				"does not recognize as a legacy target (checked against sync.datasets.supported_legacy_targets) -- "+
 				"refusing rather than silently planning a narrower or empty dataset_keys set. Full sync_targets on "+
 				"this config: %s.", params.ConfigID, pyRepr(config.Name), pyList(unresolved), pyRepr(provider), pyList(all))
 		}
 		keys, err := schedsync.PlannerDatasetKeys(provider, syncTargets)
 		if err != nil {
-			return nil, 0, err
+			return Validated{}, err
 		}
 		datasetKeys = keys
 	}
 	if config.IntegrationID == nil {
-		return nil, 0, fmt.Errorf("Sync configuration %s has no integration_id; cannot plan a backfill", params.ConfigID)
+		return Validated{}, fmt.Errorf("Sync configuration %s has no integration_id; cannot plan a backfill", params.ConfigID)
 	}
-	if err := tx.QueryRow(ctx, `
-SELECT count(*) FROM public.integration_sources
-WHERE org_id = $1 AND integration_id = $2::uuid AND is_enabled`, config.OrgID, *config.IntegrationID).Scan(&enabledSources); err != nil {
-		return nil, 0, fmt.Errorf("count enabled sources: %w", err)
+	// The integration must be there, in the configuration's organization, and
+	// active: the scheduler materializes no other (it would retry the occurrence
+	// five times and quarantine it).
+	var integrationActive bool
+	err = tx.QueryRow(ctx, `
+SELECT is_active FROM public.integrations WHERE id = $1::uuid AND org_id = $2`, *config.IntegrationID, config.OrgID).Scan(&integrationActive)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Validated{}, RefusedError{Message: fmt.Sprintf("backfill run: sync configuration %s (%s) names integration %s, which does not exist in organization %s: nothing was started",
+			params.ConfigID, pyRepr(config.Name), *config.IntegrationID, config.OrgID)}
+	}
+	if err != nil {
+		return Validated{}, fmt.Errorf("read the integration: %w", err)
+	}
+	if !integrationActive {
+		return Validated{}, RefusedError{Message: fmt.Sprintf("backfill run: integration %s of sync configuration %s (%s) is not active, and the scheduler materializes only an active integration: nothing was started",
+			*config.IntegrationID, params.ConfigID, pyRepr(config.Name))}
+	}
+	sourceRows, err := tx.Query(ctx, `
+SELECT id::text FROM public.integration_sources
+WHERE org_id = $1 AND integration_id = $2::uuid AND is_enabled
+ORDER BY full_name, id`, config.OrgID, *config.IntegrationID)
+	if err != nil {
+		return Validated{}, fmt.Errorf("list enabled sources: %w", err)
+	}
+	enabled := []string{}
+	for sourceRows.Next() {
+		var id string
+		if err := sourceRows.Scan(&id); err != nil {
+			sourceRows.Close()
+			return Validated{}, err
+		}
+		enabled = append(enabled, id)
+	}
+	sourceRows.Close()
+	if err := sourceRows.Err(); err != nil {
+		return Validated{}, err
 	}
 	// The canonical-parent check (canonical_sync_config_for_sync_run).
 	rows, err := tx.Query(ctx, `
@@ -189,7 +243,7 @@ SELECT id::text, name FROM public.sync_configurations
 WHERE org_id = $1 AND integration_id = $2::uuid AND parent_id IS NULL
 ORDER BY created_at ASC, id ASC LIMIT 2`, config.OrgID, *config.IntegrationID)
 	if err != nil {
-		return nil, 0, fmt.Errorf("resolve the canonical configuration: %w", err)
+		return Validated{}, fmt.Errorf("resolve the canonical configuration: %w", err)
 	}
 	var canonicalID, canonicalName string
 	found := false
@@ -197,21 +251,21 @@ ORDER BY created_at ASC, id ASC LIMIT 2`, config.OrgID, *config.IntegrationID)
 		if !found {
 			if err := rows.Scan(&canonicalID, &canonicalName); err != nil {
 				rows.Close()
-				return nil, 0, err
+				return Validated{}, err
 			}
 			found = true
 		}
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		return nil, 0, err
+		return Validated{}, err
 	}
 	if !found || canonicalID != config.ID {
 		resolved := "no parent SyncConfiguration at all"
 		if found {
 			resolved = fmt.Sprintf("%s (%s)", canonicalID, pyRepr(canonicalName))
 		}
-		return nil, 0, fmt.Errorf("backfill run: --config-id %s (%s) is not the config the shared reference-discovery "+
+		return Validated{}, fmt.Errorf("backfill run: --config-id %s (%s) is not the config the shared reference-discovery "+
 			"resolver (canonical_sync_config_for_sync_run) would use for integration %s -- it would resolve %s instead. "+
 			"This is a child config (parent_id set) or one of several parent configs for this integration; the "+
 			"discovery seam has no way to honour --config-id specifically (CHAOS-4500). Point --config-id at the "+
@@ -222,10 +276,10 @@ ORDER BY created_at ASC, id ASC LIMIT 2`, config.OrgID, *config.IntegrationID)
 	// configuration or a child pinned to one source, and would quarantine any
 	// other, so the run is not started.
 	if !config.PlannerManaged && config.SourceID == nil {
-		return nil, 0, RefusedError{Message: fmt.Sprintf("backfill run: sync configuration %s (%s) is neither planner-managed "+
+		return Validated{}, RefusedError{Message: fmt.Sprintf("backfill run: sync configuration %s (%s) is neither planner-managed "+
 			"nor pinned to one source, and the scheduler materializes only those: nothing was started", params.ConfigID, pyRepr(config.Name))}
 	}
-	return datasetKeys, enabledSources, nil
+	return Validated{DatasetKeys: datasetKeys, EnabledSources: len(enabled), SourceIDs: sourceIDsFor(config, enabled)}, nil
 }
 
 func pyRepr(text string) string {
@@ -247,7 +301,8 @@ func pyList(items []string) string {
 }
 
 // Mint writes the occurrence and its manual trigger in the transaction.
-func Mint(ctx context.Context, tx pgx.Tx, config *Config, params Params, datasetKeys []string, now time.Time) (Trigger, error) {
+func Mint(ctx context.Context, tx pgx.Tx, config *Config, params Params, validated Validated, now time.Time) (Trigger, error) {
+	datasetKeys := validated.DatasetKeys
 	scheduledFor := now.UTC().Truncate(time.Microsecond)
 	occurrenceID := occurrenceIdentity(config.ID, scheduledFor)
 	jobID, created, err := ensureScheduledJob(ctx, tx, config, scheduledFor)
@@ -267,8 +322,8 @@ VALUES ($1, $2, $3, $4::uuid, $5::uuid, $6)`,
 	}
 	if _, err := tx.Exec(ctx, `
 INSERT INTO public.sync_manual_triggers (occurrence_id, mode, since, before, source_ids, dataset_keys, triggered_by)
-VALUES ($1, 'backfill', $2, $3, NULL, $4, 'backfill')`,
-		occurrenceID, params.Window.Since, params.Window.Before, keys); err != nil {
+VALUES ($1, 'backfill', $2, $3, $4, $5, 'backfill')`,
+		occurrenceID, params.Window.Since, params.Window.Before, validated.SourceIDs, keys); err != nil {
 		return Trigger{}, fmt.Errorf("write the manual trigger: %w", err)
 	}
 	return Trigger{

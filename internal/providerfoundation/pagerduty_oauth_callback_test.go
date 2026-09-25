@@ -110,3 +110,29 @@ func TestPagerDutyAccountIdentityMatchesPython(t *testing.T) {
 		})
 	}
 }
+
+type failingReader struct{}
+
+func (failingReader) Read([]byte) (int, error) { return 0, io.ErrUnexpectedEOF }
+
+func TestExchangePagerDutyAuthorizationCodeBodyReadFailureIsUnavailable(t *testing.T) {
+	for _, status := range []int{200, 403, 500} {
+		doer := callbackDoerFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: status, Header: http.Header{}, Body: io.NopCloser(failingReader{})}, nil
+		})
+		_, err := ExchangePagerDutyAuthorizationCode(context.Background(), doer, PagerDutyRevokeConfig{ClientID: "id"}, "c", "v", time.Now())
+		if !errors.Is(err, ErrPagerDutyExchangeUnavailable) {
+			t.Errorf("status %d with a body that fails to read: err = %v, want unavailable", status, err)
+		}
+	}
+}
+
+func TestRevokePagerDutyOAuthTokenRefusesAnyNon2xx(t *testing.T) {
+	for status, wantErr := range map[int]bool{200: false, 204: false, 199: true, 301: true, 302: true, 307: true, 400: true, 500: true} {
+		doer := callbackDoerFunc(func(*http.Request) (*http.Response, error) { return jsonResponse(status, ``), nil })
+		err := RevokePagerDutyOAuthToken(context.Background(), doer, PagerDutyRevokeConfig{ClientID: "id"}, "tok")
+		if (err != nil) != wantErr {
+			t.Errorf("status %d: err = %v, want error %v", status, err, wantErr)
+		}
+	}
+}

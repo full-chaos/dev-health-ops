@@ -46,6 +46,11 @@ type fakePagerDuty struct {
 	mu         sync.Mutex
 	lines      []string
 	failRevoke map[string]bool
+	// redirectTo is where a revoke of "rt-redirect" is redirected (307,
+	// which replays the POST body): a plane that follows it delivers the
+	// token to a third party, which captured counts.
+	redirectTo string
+	captured   int
 }
 
 type fakeAccount struct{ id, subdomain, name string }
@@ -109,8 +114,16 @@ func (f *fakePagerDuty) handler() http.Handler {
 			}
 			return out + `}`
 		}
+		truncated := func() {
+			// Promise more bytes than are sent: the reader sees the body end early.
+			w.Header().Set("Content-Length", "500")
+			w.WriteHeader(200)
+			_, _ = io.WriteString(w, `{"access_token":"at-tru`)
+		}
 		if form.Get("grant_type") == "client_credentials" {
 			switch form.Get("client_id") {
+			case "cc-truncated":
+				truncated()
 			case "cc-rejected":
 				reply(401, `{"error":"invalid_client"}`)
 			case "cc-badjson":
@@ -133,6 +146,14 @@ func (f *fakePagerDuty) handler() http.Handler {
 			return
 		}
 		switch form.Get("code") {
+		case "c-truncated":
+			truncated()
+		case "c-truncated-403":
+			w.Header().Set("Content-Length", "500")
+			w.WriteHeader(403)
+			_, _ = io.WriteString(w, `{"err`)
+		case "c-missing-redirect":
+			reply(200, token("at-missing-redirect", "rt-redirect", "incidents.read", "3600"))
 		case "c-rejected":
 			reply(400, `{"error":"invalid_grant"}`)
 		case "c-forbidden":
@@ -182,7 +203,13 @@ func (f *fakePagerDuty) handler() http.Handler {
 		f.record("POST /revoke %s", sortedForm(form))
 		f.mu.Lock()
 		fail := f.failRevoke[form.Get("token")]
+		redirectTo := f.redirectTo
 		f.mu.Unlock()
+		if form.Get("token") == "rt-redirect" {
+			w.Header().Set("Location", redirectTo+"/captured")
+			w.WriteHeader(307)
+			return
+		}
 		if fail {
 			w.WriteHeader(500)
 			return
@@ -245,6 +272,14 @@ func TestPagerDutyCallbackAndManualVenueOracle(t *testing.T) {
 	fake := &fakePagerDuty{failRevoke: map[string]bool{"old-fail-rt": true}}
 	upstream := httptest.NewServer(fake.handler())
 	t.Cleanup(upstream.Close)
+	capture := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fake.mu.Lock()
+		fake.captured++
+		fake.mu.Unlock()
+		w.WriteHeader(200)
+	}))
+	t.Cleanup(capture.Close)
+	fake.redirectTo = capture.URL
 
 	orgSlugs := []string{"fresh", "replacefail", "variants", "failures", "corrupt", "off", "cc", "ccoauth", "cccorrupt", "tok", "ccoff"}
 	orgs := map[string]uuid.UUID{}
@@ -272,7 +307,7 @@ func TestPagerDutyCallbackAndManualVenueOracle(t *testing.T) {
 		{"s-fail-missing", "failures"}, {"s-fail-noaccount", "failures"}, {"s-fail-readfails", "failures"}, {"s-fail-rejected", "failures"},
 		{"s-fail-forbidden", "failures"}, {"s-fail-server", "failures"}, {"s-fail-redirect", "failures"}, {"s-fail-badjson", "failures"},
 		{"s-fail-noaccess", "failures"}, {"s-fail-badexpires", "failures"}, {"s-fail-error", "failures"}, {"s-fail-nocode", "failures"},
-		{"s-fail-emptycode", "failures"}, {"s-fail-errorempty", "failures"}, {"s-fail-reuse", "failures"}, {"s-fail-extra", "failures"},
+		{"s-fail-emptycode", "failures"}, {"s-fail-truncated", "failures"}, {"s-fail-truncated403", "failures"}, {"s-fail-redirect-revoke", "failures"}, {"s-fail-errorempty", "failures"}, {"s-fail-reuse", "failures"}, {"s-fail-extra", "failures"},
 		{"s-corrupt", "corrupt"}, {"s-off", "off"},
 	} {
 		addState(spec.name, spec.org)
@@ -432,6 +467,9 @@ VALUES ($1, 'pagerduty', 'default', 'garbage-not-fernet', 1, now(), now(), false
 		cb("code rejected 403", "admin_failures", "s-fail-forbidden", "c-forbidden"),
 		cb("service 500", "admin_failures", "s-fail-server", "c-server-error"),
 		cb("service redirect", "admin_failures", "s-fail-redirect", "c-redirect"),
+		cb("token body cut short is a transport error", "admin_failures", "s-fail-truncated", "c-truncated"),
+		cb("error status body cut short is a transport error", "admin_failures", "s-fail-truncated403", "c-truncated-403"),
+		cb("compensating revoke redirected is not followed", "admin_failures", "s-fail-redirect-revoke", "c-missing-redirect"),
 		cb("token body not json", "admin_failures", "s-fail-badjson", "c-badjson"),
 		cb("token body without access_token", "admin_failures", "s-fail-noaccess", "c-noaccess"),
 		cb("expires_in not an integer", "admin_failures", "s-fail-badexpires", "c-badexpires"),
@@ -472,6 +510,7 @@ VALUES ($1, 'pagerduty', 'default', 'garbage-not-fernet', 1, now(), now(), false
 		post("W client-credentials eu region", "/client-credentials", "admin_cc", ccBody("cc-eu", "acme-eu", `,"region":"eu","credential_name":"eu"`)),
 		post("W client-credentials other account", "/client-credentials", "admin_cc", ccBody("cc-other", "acme", "")),
 		post("W client-credentials rejected", "/client-credentials", "admin_cc", ccBody("cc-rejected", "acme", "")),
+		post("W client-credentials token body cut short", "/client-credentials", "admin_cc", ccBody("cc-truncated", "acme", "")),
 		post("W client-credentials token body not json", "/client-credentials", "admin_cc", ccBody("cc-badjson", "acme", "")),
 		post("W client-credentials token body a list", "/client-credentials", "admin_cc", ccBody("cc-list", "acme", "")),
 		post("W client-credentials token without access_token", "/client-credentials", "admin_cc", ccBody("cc-noaccess", "acme", "")),
@@ -531,6 +570,13 @@ VALUES ($1, 'pagerduty', 'default', 'garbage-not-fernet', 1, now(), now(), false
 	// region and credentials of every live read, every revoke.
 	if strings.Join(pythonCalls, "\n") != strings.Join(goCalls, "\n") {
 		t.Errorf("upstream calls differ:\n python (%d):\n%s\n go (%d):\n%s", len(pythonCalls), strings.Join(pythonCalls, "\n"), len(goCalls), strings.Join(goCalls, "\n"))
+	}
+	// The redirected revoke must reach the redirect target on NEITHER plane.
+	fake.mu.Lock()
+	captured := fake.captured
+	fake.mu.Unlock()
+	if captured != 0 {
+		t.Errorf("a revoke redirect was followed and delivered a token: %d request(s) reached the redirect target", captured)
 	}
 	if len(pythonCalls) < 60 {
 		t.Errorf("the fake upstream saw only %d calls from the Python plane", len(pythonCalls))

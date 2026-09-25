@@ -74,7 +74,12 @@ func ExchangePagerDutyAuthorizationCode(ctx context.Context, doer HTTPDoer, conf
 		return PagerDutyOAuthTokens{}, ErrPagerDutyExchangeUnavailable
 	}
 	defer response.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(response.Body, pagerDutyMaxResponseBody))
+	// httpx reads the whole body inside client.post, so a body that ends
+	// early is a transport error whatever the status said.
+	body, err := io.ReadAll(io.LimitReader(response.Body, pagerDutyMaxResponseBody))
+	if err != nil {
+		return PagerDutyOAuthTokens{}, ErrPagerDutyExchangeUnavailable
+	}
 	switch {
 	case response.StatusCode >= 400 && response.StatusCode < 500:
 		return PagerDutyOAuthTokens{}, ErrPagerDutyExchangeRejected

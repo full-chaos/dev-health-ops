@@ -78,14 +78,20 @@ var dropLogGate atomic.Int64
 // line naming the path and the header NAMES (never a value).
 func Public(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if Present(r.Header) {
-			var names []string
+		// net/http canonicalises header keys off the wire, so a non-canonical key
+		// cannot arrive; deleting by case-insensitive match anyway keeps the
+		// guarantee independent of that.
+		var names []string
+		for key := range r.Header {
 			for _, name := range Headers {
-				if len(r.Header.Values(name)) > 0 {
+				if strings.EqualFold(key, name) {
 					names = append(names, name)
-					r.Header.Del(name)
+					delete(r.Header, key)
+					break
 				}
 			}
+		}
+		if len(names) > 0 {
 			droppedCounter.Add(r.Context(), 1, metric.WithAttributes(attribute.String("path_class", pathClass(r.URL.Path))))
 			if last, now := dropLogGate.Load(), time.Now().UnixNano(); now-last >= int64(time.Second) && dropLogGate.CompareAndSwap(last, now) {
 				log.Printf("query-api: dropped internal identity headers on the public listener: path_class=%s headers=%s",

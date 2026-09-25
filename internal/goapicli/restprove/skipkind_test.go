@@ -1,8 +1,11 @@
 package restprove
 
 import (
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -48,6 +51,20 @@ func TestPlanSkipsEntriesOfASkippedKindOnly(t *testing.T) {
 		if p.spec.Credential == goapiproof.RESTCredentialPushToken {
 			t.Fatalf("%s still planned", p.operation)
 		}
+	}
+	// Every other request is still there, unchanged and in the same order.
+	var want []string
+	for _, p := range full {
+		if p.spec.Credential != goapiproof.RESTCredentialPushToken {
+			want = append(want, p.operation+"/"+p.request.Name)
+		}
+	}
+	var got []string
+	for _, p := range skipped {
+		got = append(got, p.operation+"/"+p.request.Name)
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("the remaining plan changed:\n got %v\nwant %v", got, want)
 	}
 	// Skipping a kind on another service changes nothing there.
 	query, _ := planRESTRequestsFor(goapiproof.RESTServiceQueryAPI)
@@ -109,5 +126,31 @@ func TestSkippedKindsAreStatedInTheReports(t *testing.T) {
 	none, _ := finalRunReport(flags{}, nil, nil, nil, nil, nil, nil)
 	if len(none.SkippedCredentialKinds) != 0 {
 		t.Fatalf("a run that skips nothing must report nothing skipped, got %v", none.SkippedCredentialKinds)
+	}
+}
+
+// TestSkipIsStatedOnStdoutEvenWhenTheRunRefusesBeforeMeasuring (r1 P2): the
+// skipped_credential_kinds line is printed before any startup refusal, so a run
+// that stops for another reason still says what it was told to skip.
+func TestSkipIsStatedOnStdoutEvenWhenTheRunRefusesBeforeMeasuring(t *testing.T) {
+	f, err := parseFlags(append(serviceArgs("-service", "dho-api", "-dho-api-url", "http://127.0.0.1:1", "-skip-credential-kind", "org_admin"), "-artifact-dir", t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdout := os.Stdout
+	os.Stdout = writer
+	runErr := run(f) // refuses: the push-token file is still required
+	os.Stdout = stdout
+	_ = writer.Close()
+	printed, _ := io.ReadAll(reader)
+	if runErr == nil || !strings.Contains(runErr.Error(), "-push-token-file") {
+		t.Fatalf("want the push-token refusal, got %v", runErr)
+	}
+	if !strings.Contains(string(printed), "skipped_credential_kinds=org_admin") {
+		t.Fatalf("stdout of a run that refused before measuring must state the skip, got %q", printed)
 	}
 }

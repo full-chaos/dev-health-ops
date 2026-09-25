@@ -1257,6 +1257,11 @@ func run(f flags) (err error) {
 	if err := goapiproof.ValidateRESTCorpus(); err != nil {
 		return err
 	}
+	// Stated FIRST, before any refusal below, so a run that stops before
+	// measuring still says on stdout what it was told to skip.
+	if len(f.skipCredentialKinds) > 0 {
+		fmt.Printf("skipped_credential_kinds=%s\n", skippedKindsText(f.skipCredentialKinds))
+	}
 	if err := requireTokenFiles(f, func(kind goapiproof.RESTCredentialKind) bool {
 		return goapiproof.PlansCredentialKind(f.service, kind) && !slices.Contains(f.skipCredentialKinds, kind)
 	}); err != nil {
@@ -1264,9 +1269,6 @@ func run(f flags) (err error) {
 	}
 	if err := refuseSkipWithTokenFile(f); err != nil {
 		return err
-	}
-	if len(f.skipCredentialKinds) > 0 {
-		fmt.Printf("skipped_credential_kinds=%s\n", skippedKindsText(f.skipCredentialKinds))
 	}
 	// A run that plans nothing measured nothing; it must not read as a pass.
 	if plan, _ := planRESTRequestsFor(f.service, f.skipCredentialKinds...); len(plan) == 0 {

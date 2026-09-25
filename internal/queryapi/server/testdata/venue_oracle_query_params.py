@@ -3,6 +3,7 @@ validation: the app is imported as it is, get_current_user is overridden so
 the request reaches parameter validation, and the route's own signature
 (date | None, datetime | None, int, ...) produces the status and body. A
 request that fails validation is a 422 before any endpoint code runs."""
+
 import json
 import sys
 

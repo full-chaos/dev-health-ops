@@ -7,21 +7,58 @@ import (
 	"strings"
 )
 
-// pagerDutyRevokeURL is providers/pagerduty/oauth.py's
-// PagerDutyOAuthConfig.revoke_url default.
-const pagerDutyRevokeURL = "https://identity.pagerduty.com/oauth/revoke"
+// pagerDutyRevokeURL/pagerDutyAuthorizationURL are providers/pagerduty/
+// oauth.py's PagerDutyOAuthConfig field defaults (pagerDutyTokenURL, the
+// third, is declared once in clients.go).
+const (
+	pagerDutyRevokeURL        = "https://identity.pagerduty.com/oauth/revoke"
+	pagerDutyAuthorizationURL = "https://identity.pagerduty.com/oauth/authorize"
+)
 
 // PagerDutyRevokeConfig is the registered PagerDuty app's OAuth client
-// identity, the one RevokePagerDutyOAuthToken needs -- client_secret is
-// unused by the revoke call itself (matching revoke_token's own request
-// body, client_id + token only) but kept alongside ClientID for callers
-// that already carry both from config, and so a future revoke_url override
-// (a test double, see RevokeURL) has somewhere to live beside it.
+// identity (providers/pagerduty/oauth.py's PagerDutyOAuthConfig.from_env,
+// the name kept from CHAOS-6306's org-deletion route -- CHAOS-6591's
+// authorize route also needs RedirectURI; revoke itself still only needs
+// ClientID+token). The URL fields override PagerDuty's real endpoints when
+// non-empty; a live venue test points both planes at one fake server per
+// field it exercises, the same seam RevokeURL already established.
 type PagerDutyRevokeConfig struct {
 	ClientID string
-	// RevokeURL overrides pagerDutyRevokeURL when non-empty -- a live
-	// venue test points both planes at one fake endpoint here.
+	// RedirectURI is unused by the client-credentials (self-hosted) flow
+	// and empty by default -- PAGER_DUTY_REDIRECT_URI.
+	RedirectURI string
+	// RevokeURL overrides pagerDutyRevokeURL when non-empty.
 	RevokeURL string
+	// AuthorizationURL overrides pagerDutyAuthorizationURL when non-empty.
+	AuthorizationURL string
+	// ClientSecret is PAGER_DUTY_SECRET (empty for a public PKCE client);
+	// the callback's code exchange sends it as client_secret.
+	ClientSecret string
+	// TokenURL overrides pagerDutyTokenURL when non-empty, for the code
+	// exchange and the client-credentials token request.
+	TokenURL string
+	// APIBaseOverride, when non-empty, replaces PagerDuty's regional REST
+	// base with APIBaseOverride + "/" + region, so a venue test can point
+	// both planes at one fake upstream and still see the region asked for.
+	APIBaseOverride string
+}
+
+func (c PagerDutyRevokeConfig) tokenURL() string {
+	if c.TokenURL != "" {
+		return c.TokenURL
+	}
+	return pagerDutyTokenURL
+}
+
+// apiBase is providers/pagerduty/client.py's pagerduty_base_url.
+func (c PagerDutyRevokeConfig) apiBase(region string) string {
+	if c.APIBaseOverride != "" {
+		return c.APIBaseOverride + "/" + region
+	}
+	if region == "eu" {
+		return "https://api.eu.pagerduty.com"
+	}
+	return pagerDutyAPIBase
 }
 
 func (c PagerDutyRevokeConfig) revokeURL() string {
@@ -29,6 +66,13 @@ func (c PagerDutyRevokeConfig) revokeURL() string {
 		return c.RevokeURL
 	}
 	return pagerDutyRevokeURL
+}
+
+func (c PagerDutyRevokeConfig) authorizationURL() string {
+	if c.AuthorizationURL != "" {
+		return c.AuthorizationURL
+	}
+	return pagerDutyAuthorizationURL
 }
 
 // RevokePagerDutyOAuthToken is providers/pagerduty/oauth.py's
@@ -57,6 +101,12 @@ func RevokePagerDutyOAuthToken(ctx context.Context, doer HTTPDoer, config PagerD
 	defer response.Body.Close()
 	if classification := ClassifyHTTP("pagerduty", response.StatusCode, response.Header); classification != nil {
 		return classification
+	}
+	// raise_for_status: anything but a 2xx is a failure, a redirect included
+	// (the caller's client must not follow one -- httpx does not -- so the
+	// token is never replayed to the redirect target).
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return &ProviderError{Class: ErrorPermanent, StatusCode: response.StatusCode}
 	}
 	return nil
 }

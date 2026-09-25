@@ -118,6 +118,14 @@ on:
       - 'docker/go-worker.Dockerfile'
       - 'tests/compatibility/river/**'
       - 'ci/check_go.sh'
+      # CHAOS-6584: the venue-oracles registry and what validates it. The
+      # venue-oracles job decides relevance from this list, so a registry-only
+      # change must count as Go-relevant or it is never validated on main.
+      - 'ci/venue_oracle_registry.tsv'
+      - 'ci/venue_oracle_discovery.awk'
+      - 'ci/venue_oracle_names.awk'
+      - 'ci/check_venue_oracle_registry.sh'
+      - 'ci/lib/venue_oracle_registry.sh'
       - 'ci/go_integration_shards.tsv'
       - 'ci/go_providersync_test_shards.tsv'
       - 'ci/requirements-live-python-oracles.txt'
@@ -267,6 +275,14 @@ on:
       - 'docker/go-worker.Dockerfile'
       - 'tests/compatibility/river/**'
       - 'ci/check_go.sh'
+      # CHAOS-6584: the venue-oracles registry and what validates it. The
+      # venue-oracles job decides relevance from this list, so a registry-only
+      # change must count as Go-relevant or it is never validated on main.
+      - 'ci/venue_oracle_registry.tsv'
+      - 'ci/venue_oracle_discovery.awk'
+      - 'ci/venue_oracle_names.awk'
+      - 'ci/check_venue_oracle_registry.sh'
+      - 'ci/lib/venue_oracle_registry.sh'
       - 'ci/go_integration_shards.tsv'
       - 'ci/go_providersync_test_shards.tsv'
       - 'ci/requirements-live-python-oracles.txt'

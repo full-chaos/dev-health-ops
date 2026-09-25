@@ -7,8 +7,10 @@ own body reads the variable and requires it to be either
 
 * named in one of ``check_go.sh``'s ``-run`` selectors (the
   ``live-python-oracles`` verb), or
-* named ``Test*VenueOracle*``, which the ``venue-oracles`` verb discovers by
-  name (it greps every ``*_test.go`` for ``^func Test.*VenueOracle``).
+* named ``Test*VenueOracle*``, which must be a row of
+  ``ci/venue_oracle_registry.tsv`` (the ``venue-oracles`` verb runs the
+  registry; ``tests/tooling/test_venue_oracle_registry.py`` fails on a
+  ``Test*VenueOracle*`` function the registry does not name).
 
 A test that satisfies neither is reported by name, so a new oracle cannot be
 added without wiring it.

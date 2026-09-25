@@ -48,7 +48,15 @@ func TestDHOAPICorpusPinsItsRoutes(t *testing.T) {
 	// Set equality: which file's init registers an entry (and so its position
 	// in the run order) is not what is pinned, only that every entry is there
 	// exactly once.
-	got := slices.Clone(RESTRunOrderFor(RESTServiceDHOAPI))
+	// The admin batches (org-admin / platform-superadmin credentials) each pin
+	// their own routes in their own test, so they do not all edit this list.
+	got := []string{}
+	for _, operation := range RESTRunOrderFor(RESTServiceDHOAPI) {
+		if spec := restEndpointSpecs[operation]; spec.Credential == RESTCredentialOrgAdmin || spec.Credential == RESTCredentialPlatformSuperadmin {
+			continue
+		}
+		got = append(got, operation)
+	}
 	slices.Sort(got)
 	sortedWant := slices.Clone(want)
 	slices.Sort(sortedWant)

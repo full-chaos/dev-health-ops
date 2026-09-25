@@ -260,9 +260,21 @@ func apiPosture() RolePosture {
 			// on a successfully revoked pending record, ahead of the bulk
 			// purge pass. pagerduty_webhook_bindings' own delete grant is
 			// declared once, above, widened rather than duplicated here.
-			{"pagerduty_oauth_authorization_requests", false, false, true},
-			{"provider_oauth_credentials", false, false, true},
-			{"provider_oauth_revocations", false, false, true},
+			// CHAOS-6591's disconnect route widens provider_oauth_revocations
+			// to insert+update: it enqueues a pending revocation row before
+			// the live PagerDuty revoke attempt, then either deletes it (the
+			// existing DELETE grant) on success or updates attempts/last_error
+			// on failure, matching PagerDutyOAuthRevocationRepository.enqueue/
+			// retry_pending.
+			// CHAOS-6591's authorize route inserts one PKCE authorization
+			// request per call (and deletes the calling org's own expired
+			// rows first); the callback half will consume (delete) it.
+			{"pagerduty_oauth_authorization_requests", true, false, true},
+			// CHAOS-6595's callback replaces the org's OAuth grant
+			// (replace_and_capture: insert a new binding, update an existing
+			// one in place); the manual credential routes delete it.
+			{"provider_oauth_credentials", true, true, true},
+			{"provider_oauth_revocations", true, true, true},
 			// Integrations.
 			// CHAOS-6597: the create path seeds the planner datasets (INSERT)
 			// and the PagerDuty repair enables, disables and re-targets them

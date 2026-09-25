@@ -266,6 +266,11 @@ type Config struct {
 	SettingsEncryptionSalt  secrets.Value
 	PagerDutyOAuthClientID  secrets.Value
 	PagerDutyOAuthSecret    secrets.Value
+	// PagerDutyOAuthRedirectURI is PAGER_DUTY_REDIRECT_URI, unused by the
+	// client-credentials (self-hosted) flow, "" when unset -- Python's own
+	// `os.getenv("PAGER_DUTY_REDIRECT_URI", "")`. Not a secret: it is the
+	// public callback URL PagerDuty redirects back to.
+	PagerDutyOAuthRedirectURI string
 	// StripeSecretKey is STRIPE_SECRET_KEY, the Stripe API key the billing
 	// routes of dho api call Stripe with (the Python api's same variable).
 	StripeSecretKey secrets.Value
@@ -891,6 +896,7 @@ func Load(spec Spec) (Config, error) {
 			corsOrigins = defaultCORSAllowedOrigins
 		}
 		cfg.CORSAllowedOrigins = parseCORSOrigins(corsOrigins)
+		cfg.PagerDutyOAuthRedirectURI, _ = lookup("PAGER_DUTY_REDIRECT_URI")
 		cfg.APIJWTSecret, _, err = secrets.Resolve("JWT_SECRET_KEY", lookup)
 		if err != nil {
 			return Config{}, err

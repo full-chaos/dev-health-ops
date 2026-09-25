@@ -29,8 +29,9 @@ var createValidationPinnedNow = time.Date(2026, 9, 24, 12, 34, 56, 0, time.UTC)
 // providers/team_capabilities' auto-import checks (the malformed values as
 // the route's detail renders them, str(value)).
 const pythonCreateValidationProgram = `
-import json, sys
-import croniter.croniter as cronmod
+import importlib, json, sys
+# the module, not the class the package re-exports under the same name
+cronmod = importlib.import_module("croniter.croniter")
 from croniter import croniter as Croniter
 from zoneinfo import available_timezones
 from dev_health_ops.utils.datetime import validate_timezone_name

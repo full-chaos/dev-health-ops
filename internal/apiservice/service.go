@@ -204,7 +204,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 		routes = append(routes, orgs.Routes(deps.Pool, deps.Guard, logger)...)
 		routes = append(routes, telemetry.Routes(deps.Pool, deps.Guard, deps.Auth, deps.Telemetry.Endpoint, logger)...)
 		routes = append(routes, customerpush.Routes(customerpush.Deps{Pool: deps.Pool, Guard: deps.Guard, Logger: logger})...)
-		routes = append(routes, syncadmin.Routes(syncadmin.Deps{Pool: deps.Pool, ClickHouse: deps.ClickHouse, Guard: deps.Guard, Logger: logger, Decryptor: deps.Decryptor, Now: deps.Now})...)
+		routes = append(routes, syncadmin.Routes(syncadmin.Deps{Pool: deps.Pool, ClickHouse: deps.ClickHouse, Guard: deps.Guard, Logger: logger, Decryptor: deps.Decryptor, Now: deps.Now, JiraHTTP: deps.SyncJiraHTTP})...)
 		routes = append(routes, credentials.Routes(credentials.Deps{Pool: deps.Pool, Guard: deps.Guard, Cipher: deps.Decryptor, Logger: logger, Now: deps.Now,
 			HTTPClient: credentialProbeClient, HostLookup: credentialHostLookup})...)
 		routes = append(routes, githubapp.Routes(githubapp.Deps{Pool: deps.Pool, Guard: deps.Guard, Valkey: deps.Valkey, Cipher: deps.Decryptor,
@@ -304,7 +304,7 @@ func configureWith(
 	deps.BillingConfig = cfg.APIBilling
 	deps.StripeWebhookSecret = cfg.StripeWebhookSecret
 	deps.LicensePrivateKey = cfg.LicensePrivateKey
-	deps.PagerDuty = providerfoundation.PagerDutyRevokeConfig{ClientID: cfg.PagerDutyOAuthClientID.Reveal()}
+	deps.PagerDuty = providerfoundation.PagerDutyRevokeConfig{ClientID: cfg.PagerDutyOAuthClientID.Reveal(), ClientSecret: cfg.PagerDutyOAuthSecret.Reveal(), RedirectURI: cfg.PagerDutyOAuthRedirectURI}
 	// deps.ClickHouseDSN: see Deps' own doc comment for why this is
 	// CLICKHOUSE_URI, never API_CLICKHOUSE_URI.
 	if cfg.ClickHouseURI.Configured() {

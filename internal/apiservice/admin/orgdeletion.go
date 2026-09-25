@@ -11,9 +11,11 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -321,19 +323,61 @@ func (h *handlers) orgDeletionRevokePagerDuty(ctx context.Context, orgIDStr stri
 
 // pagerDutyRevokeToken is OAuthTokens.model_validate_json(...) followed by
 // `tokens.refresh_token or tokens.access_token` -- the token a live
-// credential's decrypted JSON payload actually revokes.
+// credential's decrypted JSON payload actually revokes. The model is
+// extra="forbid" with a required access_token (str) and expires_at
+// (datetime), an optional refresh_token (str | None) and an optional
+// granted_scopes (list of str), so a payload that is valid JSON but not that
+// object (an empty object, a missing field, a wrong type, an extra key) is an
+// error, as Python's ValidationError (a ValueError) is. Named difference:
+// expires_at is accepted as an RFC 3339 string, a date-time without an
+// offset, a date, or a JSON number; pydantic accepts a few more spellings.
 func pagerDutyRevokeToken(plaintext []byte) (string, error) {
-	var tokens struct {
-		AccessToken  string `json:"access_token"`
-		RefreshToken string `json:"refresh_token"`
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(plaintext, &fields); err != nil || fields == nil {
+		return "", errors.New("pagerduty oauth tokens: not a JSON object")
 	}
-	if err := json.Unmarshal(plaintext, &tokens); err != nil {
-		return "", err
+	for key := range fields {
+		switch key {
+		case "access_token", "refresh_token", "expires_at", "granted_scopes":
+		default:
+			return "", errors.New("pagerduty oauth tokens: extra field")
+		}
 	}
-	if tokens.RefreshToken != "" {
-		return tokens.RefreshToken, nil
+	var access string
+	if raw, ok := fields["access_token"]; !ok || json.Unmarshal(raw, &access) != nil || string(raw) == "null" {
+		return "", errors.New("pagerduty oauth tokens: access_token")
 	}
-	return tokens.AccessToken, nil
+	var refresh *string
+	if raw, ok := fields["refresh_token"]; ok && json.Unmarshal(raw, &refresh) != nil {
+		return "", errors.New("pagerduty oauth tokens: refresh_token")
+	}
+	if raw, ok := fields["expires_at"]; !ok || !pagerDutyTokenExpiryValid(raw) {
+		return "", errors.New("pagerduty oauth tokens: expires_at")
+	}
+	if raw, ok := fields["granted_scopes"]; ok {
+		var scopes []string
+		if json.Unmarshal(raw, &scopes) != nil || string(raw) == "null" {
+			return "", errors.New("pagerduty oauth tokens: granted_scopes")
+		}
+	}
+	if refresh != nil && *refresh != "" {
+		return *refresh, nil
+	}
+	return access, nil
+}
+
+func pagerDutyTokenExpiryValid(raw json.RawMessage) bool {
+	var text string
+	if json.Unmarshal(raw, &text) == nil {
+		for _, layout := range []string{time.RFC3339Nano, "2006-01-02T15:04:05.999999999", "2006-01-02 15:04:05.999999999Z07:00", "2006-01-02 15:04:05.999999999", "2006-01-02"} {
+			if _, err := time.Parse(layout, text); err == nil {
+				return true
+			}
+		}
+		return false
+	}
+	var number float64
+	return json.Unmarshal(raw, &number) == nil && string(raw) != "null"
 }
 
 // orgDeletionPurgePostgres disables every scheduled job for the org, then

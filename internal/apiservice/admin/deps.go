@@ -84,7 +84,11 @@ func Routes(deps Deps) []httpapi.Route {
 	}
 	httpDoer := deps.HTTPDoer
 	if httpDoer == nil {
-		httpDoer = http.DefaultClient
+		// PagerDuty's revoke carries a bearer token in its body: httpx does
+		// not follow redirects and has a 10s timeout, so neither may this
+		// client (http.DefaultClient would replay a 307's body, token
+		// included, to the redirect target).
+		httpDoer = &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	}
 	limits := deps.Limits
 	if limits == nil {
@@ -104,6 +108,7 @@ func Routes(deps Deps) []httpapi.Route {
 		decryptor:       deps.Decryptor,
 		pagerDuty:       deps.PagerDuty,
 		httpDoer:        httpDoer,
+		upstreamDoer:    deps.HTTPDoer,
 		write:           write,
 		passwordLimiter: httpapi.NewKeyedLimiter(limits, passwordLimit),
 		inviteLimiter:   httpapi.NewKeyedLimiter(limits, inviteLimit),
@@ -137,6 +142,11 @@ type handlers struct {
 	decryptor     providerfoundation.FernetDecryptor
 	pagerDuty     providerfoundation.PagerDutyRevokeConfig
 	httpDoer      providerfoundation.HTTPDoer
+	// upstreamDoer is Deps.HTTPDoer as given: nil means the PagerDuty
+	// callback and credential-validation calls build their own client with
+	// the reference's timeout and redirect policy, which the defaulted
+	// httpDoer above would bypass.
+	upstreamDoer providerfoundation.HTTPDoer
 	// write renders this area's own directly-written errors (the keyed
 	// rate limiter's 429) in the same wire shape every other error uses.
 	write httpapi.ErrorWriter

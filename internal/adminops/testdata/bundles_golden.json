@@ -79,6 +79,51 @@
    "--tier",
    "team",
    "--duration-days",
+   "١"
+  ],
+  "exit": 0,
+  "stdout": "signature valid=true\nlayout {\"iss\":\"fullchaos.studio\",\"sub\":\"org-2\",\"iat\":\u003cn\u003e,\"exp\":\u003cn\u003e,\"tier\":\"team\",\"features\":{\"git_sync\":true,\"work_items_sync\":true,\"basic_analytics\":true,\"team_management\":true,\"github_integration\":true,\"gitlab_integration\":true,\"jira_integration\":true,\"investment_view\":true,\"api_access\":true,\"capacity_forecast\":true,\"work_graph\":true,\"quadrant_analysis\":true,\"linear_integration\":true,\"llm_categorization\":true,\"webhooks\":true,\"customer_push_ingest\":true,\"canonical_incident_ingestion\":true,\"agent_context_runtime\":false,\"ask_dev\":false,\"ask_dev_contextual_entrypoints\":false,\"ask_dev_wave_3_1\":false,\"scheduled_jobs\":true,\"sso_saml\":false,\"sso_oidc\":false,\"audit_log\":false,\"custom_retention\":false,\"ip_allowlist\":false,\"data_export\":false,\"multi_org\":false,\"custom_branding\":false,\"priority_support\":false,\"byo_llm\":true},\"limits\":{\"users\":20,\"repos\":10,\"api_rate\":500,\"backfill_days\":90},\"grace_days\":14,\"org_name\":null,\"contact_email\":null,\"license_id\":\"\u003cuuid\u003e\"}\nfields {\"contact_email\":null,\"exp\":\"\\u003cmasked\\u003e\",\"features\":{\"agent_context_runtime\":false,\"api_access\":true,\"ask_dev\":false,\"ask_dev_contextual_entrypoints\":false,\"ask_dev_wave_3_1\":false,\"audit_log\":false,\"basic_analytics\":true,\"byo_llm\":true,\"canonical_incident_ingestion\":true,\"capacity_forecast\":true,\"custom_branding\":false,\"custom_retention\":false,\"customer_push_ingest\":true,\"data_export\":false,\"git_sync\":true,\"github_integration\":true,\"gitlab_integration\":true,\"investment_view\":true,\"ip_allowlist\":false,\"jira_integration\":true,\"linear_integration\":true,\"llm_categorization\":true,\"multi_org\":false,\"priority_support\":false,\"quadrant_analysis\":true,\"scheduled_jobs\":true,\"sso_oidc\":false,\"sso_saml\":false,\"team_management\":true,\"webhooks\":true,\"work_graph\":true,\"work_items_sync\":true},\"grace_days\":14,\"iat\":\"\\u003cmasked\\u003e\",\"iss\":\"fullchaos.studio\",\"license_id\":\"\\u003cmasked\\u003e\",\"lifetime_days\":1,\"limits\":{\"api_rate\":500,\"backfill_days\":90,\"repos\":10,\"users\":20},\"org_name\":null,\"sub\":\"org-2\",\"tier\":\"team\"}\n",
+  "state": "{\"bundles\":null,\"overrides\":null,\"plans\":null}"
+ },
+ {
+  "args": [
+   "licenses",
+   "create",
+   "--org-id",
+   "org-2",
+   "--tier",
+   "team",
+   "--duration-days",
+   "\u001c1"
+  ],
+  "exit": 2,
+  "stdout": "",
+  "state": "{\"bundles\":null,\"overrides\":null,\"plans\":null}"
+ },
+ {
+  "args": [
+   "licenses",
+   "create",
+   "--org-id",
+   "org-2",
+   "--tier",
+   "team",
+   "--duration-days",
+   " 5 "
+  ],
+  "exit": 0,
+  "stdout": "signature valid=true\nlayout {\"iss\":\"fullchaos.studio\",\"sub\":\"org-2\",\"iat\":\u003cn\u003e,\"exp\":\u003cn\u003e,\"tier\":\"team\",\"features\":{\"git_sync\":true,\"work_items_sync\":true,\"basic_analytics\":true,\"team_management\":true,\"github_integration\":true,\"gitlab_integration\":true,\"jira_integration\":true,\"investment_view\":true,\"api_access\":true,\"capacity_forecast\":true,\"work_graph\":true,\"quadrant_analysis\":true,\"linear_integration\":true,\"llm_categorization\":true,\"webhooks\":true,\"customer_push_ingest\":true,\"canonical_incident_ingestion\":true,\"agent_context_runtime\":false,\"ask_dev\":false,\"ask_dev_contextual_entrypoints\":false,\"ask_dev_wave_3_1\":false,\"scheduled_jobs\":true,\"sso_saml\":false,\"sso_oidc\":false,\"audit_log\":false,\"custom_retention\":false,\"ip_allowlist\":false,\"data_export\":false,\"multi_org\":false,\"custom_branding\":false,\"priority_support\":false,\"byo_llm\":true},\"limits\":{\"users\":20,\"repos\":10,\"api_rate\":500,\"backfill_days\":90},\"grace_days\":14,\"org_name\":null,\"contact_email\":null,\"license_id\":\"\u003cuuid\u003e\"}\nfields {\"contact_email\":null,\"exp\":\"\\u003cmasked\\u003e\",\"features\":{\"agent_context_runtime\":false,\"api_access\":true,\"ask_dev\":false,\"ask_dev_contextual_entrypoints\":false,\"ask_dev_wave_3_1\":false,\"audit_log\":false,\"basic_analytics\":true,\"byo_llm\":true,\"canonical_incident_ingestion\":true,\"capacity_forecast\":true,\"custom_branding\":false,\"custom_retention\":false,\"customer_push_ingest\":true,\"data_export\":false,\"git_sync\":true,\"github_integration\":true,\"gitlab_integration\":true,\"investment_view\":true,\"ip_allowlist\":false,\"jira_integration\":true,\"linear_integration\":true,\"llm_categorization\":true,\"multi_org\":false,\"priority_support\":false,\"quadrant_analysis\":true,\"scheduled_jobs\":true,\"sso_oidc\":false,\"sso_saml\":false,\"team_management\":true,\"webhooks\":true,\"work_graph\":true,\"work_items_sync\":true},\"grace_days\":14,\"iat\":\"\\u003cmasked\\u003e\",\"iss\":\"fullchaos.studio\",\"license_id\":\"\\u003cmasked\\u003e\",\"lifetime_days\":5,\"limits\":{\"api_rate\":500,\"backfill_days\":90,\"repos\":10,\"users\":20},\"org_name\":null,\"sub\":\"org-2\",\"tier\":\"team\"}\n",
+  "state": "{\"bundles\":null,\"overrides\":null,\"plans\":null}"
+ },
+ {
+  "args": [
+   "licenses",
+   "create",
+   "--org-id",
+   "org-2",
+   "--tier",
+   "team",
+   "--duration-days",
    "0"
   ],
   "exit": 1,
@@ -189,6 +234,45 @@
   ],
   "exit": 1,
   "stdout": "Error: Invalid private key: Incorrect padding\n",
+  "state": "{\"bundles\":null,\"overrides\":null,\"plans\":null}"
+ },
+ {
+  "args": [
+   "licenses",
+   "create",
+   "--org-id",
+   "org-1",
+   "--tier",
+   "team"
+  ],
+  "exit": 1,
+  "stdout": "Error: Invalid private key: The seed must be exactly 32 bytes long\n",
+  "state": "{\"bundles\":null,\"overrides\":null,\"plans\":null}"
+ },
+ {
+  "args": [
+   "licenses",
+   "create",
+   "--org-id",
+   "org-1",
+   "--tier",
+   "team"
+  ],
+  "exit": 1,
+  "stdout": "Error: Invalid private key: The seed must be exactly 32 bytes long\n",
+  "state": "{\"bundles\":null,\"overrides\":null,\"plans\":null}"
+ },
+ {
+  "args": [
+   "licenses",
+   "create",
+   "--org-id",
+   "org-1",
+   "--tier",
+   "team"
+  ],
+  "exit": 1,
+  "stdout": "Error: Invalid private key: string argument should contain only ASCII characters\n",
   "state": "{\"bundles\":null,\"overrides\":null,\"plans\":null}"
  },
  {
@@ -410,7 +494,7 @@
    "30"
   ],
   "exit": 0,
-  "stdout": "Assigned feature 'sso_saml' override to org 'aaaaaaaa-0000-4000-8000-00000000000a'\n  Expires: \u003ctime\u003e\n",
+  "stdout": "Assigned feature 'sso_saml' override to org 'aaaaaaaa-0000-4000-8000-00000000000a'\n  Expires: \u003cin 30 days\u003e\n",
   "state": "{\"bundles\":[\"core|Core|The core|[\\\"git_sync\\\", \\\"work_items_sync\\\", \\\"basic_analytics\\\"]\",\"nofeat|No features|\\u003cnull\\u003e|[]\",\"uni|Ünï 日本|\\u003cnull\\u003e|[\\\"sso_saml\\\"]\"],\"overrides\":[\"aaaaaaaa-0000-4000-8000-00000000000a|sso_saml|true|30|{}|support ticket\"],\"plans\":[\"core|pro-plan\",\"core|team-plan\"]}"
  },
  {
@@ -453,7 +537,7 @@
    "-3"
   ],
   "exit": 0,
-  "stdout": "Assigned feature 'git_sync' override to org 'aaaaaaaa-0000-4000-8000-00000000000a'\n  Expires: \u003ctime\u003e\n",
+  "stdout": "Assigned feature 'git_sync' override to org 'aaaaaaaa-0000-4000-8000-00000000000a'\n  Expires: \u003cin -3 days\u003e\n",
   "state": "{\"bundles\":[\"core|Core|The core|[\\\"git_sync\\\", \\\"work_items_sync\\\", \\\"basic_analytics\\\"]\",\"nofeat|No features|\\u003cnull\\u003e|[]\",\"uni|Ünï 日本|\\u003cnull\\u003e|[\\\"sso_saml\\\"]\"],\"overrides\":[\"aaaaaaaa-0000-4000-8000-00000000000a|git_sync|true|-3|{}|\\u003cnull\\u003e\",\"aaaaaaaa-0000-4000-8000-00000000000a|sso_oidc|true|\\u003cnull\\u003e|{}|\\u003cnull\\u003e\",\"aaaaaaaa-0000-4000-8000-00000000000a|sso_saml|true|30|{}|support ticket\"],\"plans\":[\"core|pro-plan\",\"core|team-plan\"]}"
  },
  {
@@ -468,7 +552,7 @@
    "1_0"
   ],
   "exit": 0,
-  "stdout": "Assigned feature 'webhooks' override to org 'aaaaaaaa-0000-4000-8000-00000000000a'\n  Expires: \u003ctime\u003e\n",
+  "stdout": "Assigned feature 'webhooks' override to org 'aaaaaaaa-0000-4000-8000-00000000000a'\n  Expires: \u003cin 10 days\u003e\n",
   "state": "{\"bundles\":[\"core|Core|The core|[\\\"git_sync\\\", \\\"work_items_sync\\\", \\\"basic_analytics\\\"]\",\"nofeat|No features|\\u003cnull\\u003e|[]\",\"uni|Ünï 日本|\\u003cnull\\u003e|[\\\"sso_saml\\\"]\"],\"overrides\":[\"aaaaaaaa-0000-4000-8000-00000000000a|git_sync|true|-3|{}|\\u003cnull\\u003e\",\"aaaaaaaa-0000-4000-8000-00000000000a|sso_oidc|true|\\u003cnull\\u003e|{}|\\u003cnull\\u003e\",\"aaaaaaaa-0000-4000-8000-00000000000a|sso_saml|true|30|{}|support ticket\",\"aaaaaaaa-0000-4000-8000-00000000000a|webhooks|true|10|{}|\\u003cnull\\u003e\"],\"plans\":[\"core|pro-plan\",\"core|team-plan\"]}"
  },
  {

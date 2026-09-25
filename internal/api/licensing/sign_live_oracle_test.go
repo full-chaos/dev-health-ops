@@ -66,6 +66,14 @@ func signCases() []signCase {
 		signCase{base64.StdEncoding.EncodeToString(make([]byte, 33)), "o", "team", 5, "l"},
 		signCase{"not base64 at all!", "o", "team", 5, "l"},
 		signCase{zero, "o", "team", 5, ""},
+		// Excess padding, non-ASCII text and one stray character: the
+		// review round's inputs (binascii's lenient loop).
+		signCase{"AAAA====", "o", "team", 5, "l"},
+		signCase{zero + "====", "o", "team", 5, "l"},
+		signCase{zero[:43] + "=" + "=", "o", "team", 5, "l"},
+		signCase{"\u00e9" + zero, "o", "team", 5, "l"},
+		signCase{"AAAAA", "o", "team", 5, "l"},
+		signCase{"", "o", "team", 5, "l"},
 	)
 	return cases
 }
@@ -116,6 +124,10 @@ func TestSignLicenseMatchesLivePython(t *testing.T) {
 		pythonRefused := strings.HasPrefix(want[index], "error: ")
 		switch {
 		case err != nil && pythonRefused:
+			if want := strings.TrimPrefix(want[index], "error: "); err.Error() != want {
+				mismatches++
+				t.Errorf("case %d %+v: go error %q, python error %q", index, c, err.Error(), want)
+			}
 		case err == nil && !pythonRefused:
 			signed++
 			if got != want[index] {
@@ -133,6 +145,93 @@ func TestSignLicenseMatchesLivePython(t *testing.T) {
 	t.Logf("%d cases, %d signed on both planes, %d mismatches", len(cases), signed, mismatches)
 	if proof := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR"); proof != "" {
 		if err := os.WriteFile(filepath.Join(proof, "api-licensing-sign"), []byte("executed"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// pythonDecodeProgram decodes each text with the real base64.b64decode: stdin is
+// a JSON list of strings; each answer is the bytes as hex, or "error: <text>".
+const pythonDecodeProgram = `
+import base64, json, sys
+out = []
+for text in json.loads(sys.stdin.read()):
+    try:
+        out.append(base64.b64decode(text).hex())
+    except Exception as exc:
+        out.append("error: " + str(exc))
+print(json.dumps(out))
+`
+
+// TestPythonB64DecodeMatchesLivePython holds pythonB64Decode to base64.b64decode
+// over every text of up to five characters drawn from a set that covers the
+// alphabet, padding, skipped characters and non-ASCII, plus random longer ones.
+func TestPythonB64DecodeMatchesLivePython(t *testing.T) {
+	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
+		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
+	}
+	_, file, _, _ := runtime.Caller(0)
+	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
+	python := pyoracle.Resolve(t, root)
+	pieces := []string{"A", "Q", "/", "=", " ", "\n", "-", "\u00e9"}
+	var texts []string
+	var build func(prefix string, depth int)
+	build = func(prefix string, depth int) {
+		texts = append(texts, prefix)
+		if depth == 0 {
+			return
+		}
+		for _, piece := range pieces {
+			build(prefix+piece, depth-1)
+		}
+	}
+	build("", 5)
+	random := rand.New(rand.NewSource(6675))
+	for index := 0; index < 4000; index++ {
+		var text strings.Builder
+		for length := random.Intn(14); length > 0; length-- {
+			text.WriteString(pieces[random.Intn(len(pieces))])
+		}
+		texts = append(texts, text.String())
+	}
+	stdin, _ := json.Marshal(texts)
+	command := exec.Command(python, "-c", pythonDecodeProgram)
+	command.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"))
+	command.Stdin = strings.NewReader(string(stdin))
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("live python: %v", pyoracle.RunError(python, err, output))
+	}
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	var want []string
+	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &want); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(want) != len(texts) {
+		t.Fatalf("python answered %d of %d texts", len(want), len(texts))
+	}
+	mismatches, decoded := 0, 0
+	for index, text := range texts {
+		got, err := pythonB64Decode(text)
+		answer := fmt.Sprintf("%x", got)
+		if err != nil {
+			answer = "error: " + err.Error()
+		} else {
+			decoded++
+		}
+		if answer != want[index] {
+			mismatches++
+			if mismatches <= 20 {
+				t.Errorf("%q: go %q, python %q", text, answer, want[index])
+			}
+		}
+	}
+	if decoded < 1000 {
+		t.Fatalf("only %d texts decoded on the Go side; the comparison measured too little", decoded)
+	}
+	t.Logf("%d texts, %d decoded, %d mismatches", len(texts), decoded, mismatches)
+	if proof := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR"); proof != "" {
+		if err := os.WriteFile(filepath.Join(proof, "api-licensing-b64decode"), []byte("executed"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}

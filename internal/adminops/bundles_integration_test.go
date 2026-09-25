@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"regexp"
 	"strings"
@@ -58,6 +59,9 @@ var bundleScript = []bundleStep{
 	withKey(testSeed, "licenses", "create", "--org-id", "org-1", "--tier", "enterprise", "--duration-days", "30", "--org-name", "Acme é", "--contact-email", "billing@example.com"),
 	withKey(testSeed, "licenses", "create", "--org-id", "org-2", "--tier", "community", "--duration-days", "1_0"),
 	withKey(testSeed, "licenses", "create", "--org-id", "org-2", "--tier", "team", "--duration-days", " 7 "),
+	withKey(testSeed, "licenses", "create", "--org-id", "org-2", "--tier", "team", "--duration-days", "\u0661"),
+	withKey(testSeed, "licenses", "create", "--org-id", "org-2", "--tier", "team", "--duration-days", "\x1c1"),
+	withKey(testSeed, "licenses", "create", "--org-id", "org-2", "--tier", "team", "--duration-days", "\u00a05\u2003"),
 	withKey(testSeed, "licenses", "create", "--org-id", "org-2", "--tier", "team", "--duration-days", "0"),
 	withKey(testSeed, "licenses", "create", "--org-id", "org-2", "--tier", "team", "--duration-days", "-5"),
 	withKey(testSeed, "licenses", "create", "--org-id", "org-2", "--tier", "bogus"),
@@ -67,6 +71,9 @@ var bundleScript = []bundleStep{
 	withKey("not base64 !!", "licenses", "create", "--org-id", "org-1", "--tier", "team"),
 	withKey("AAAA", "licenses", "create", "--org-id", "org-1", "--tier", "team"),
 	withKey("AAA", "licenses", "create", "--org-id", "org-1", "--tier", "team"),
+	withKey("AAAA====", "licenses", "create", "--org-id", "org-1", "--tier", "team"),
+	withKey("AAA=A", "licenses", "create", "--org-id", "org-1", "--tier", "team"),
+	withKey("\u00e9AAAA", "licenses", "create", "--org-id", "org-1", "--tier", "team"),
 	{args: []string{"bundles", "list"}, seed: true, sql: `INSERT INTO billing_plans (id, key, name, tier, is_active, display_order, created_at, updated_at) VALUES
 (gen_random_uuid(), 'team-plan', 'Team', 'team', true, 1, now(), now()), (gen_random_uuid(), 'pro-plan', 'Pro', 'enterprise', true, 2, now(), now());
 INSERT INTO organizations (id, slug, name, tier, managed_by, is_active, created_at, updated_at) VALUES ('` + overrideOrg + `', 'ov-org', 'Override', 'community', 'stripe', true, now(), now())`},
@@ -109,7 +116,7 @@ type bundleResult struct {
 }
 
 var (
-	expiresLine = regexp.MustCompile(`(?m)^  Expires: \S+$`)
+	expiresLine = regexp.MustCompile(`(?m)^  Expires: (\S+)$`)
 )
 
 // normalizeLicense turns a printed license (or key pair) into a stable, checked
@@ -226,7 +233,7 @@ func bundleSession(t *testing.T, python bool) []bundleResult {
 		case s.args[0] == "licenses":
 			stdout = normalizeLicense(t, stdout, s.env["LICENSE_PRIVATE_KEY"])
 		}
-		stdout = expiresLine.ReplaceAllString(stdout, "  Expires: <time>")
+		stdout = maskExpiry(t, stdout)
 		out = append(out, bundleResult{Args: s.args, Exit: code, Stdout: stdout, State: db.bundleState(t)})
 	}
 	return out
@@ -239,7 +246,7 @@ const bundlesGolden = "testdata/bundles_golden.json"
 // producer is deleted with the Python CLI, so this is a rot guard: the file is
 // only rewritten by TestBundlesVenueOracleMatchesThePythonProducer with
 // DHO_BUNDLES_GOLDEN_UPDATE=1, then this digest is updated.
-const bundlesGoldenSHA256 = "957eeb1ac01f93981647de1821236e7074089f3dcd1e1506d1b1748fa4ae9946"
+const bundlesGoldenSHA256 = "be82db23b4edbf1f6abfcbfe9889d8be134c5ae7a05c662dbb01cb1ca5c6a036"
 
 func TestBundlesGoldenIsTheFileTheDigestPins(t *testing.T) {
 	raw, err := os.ReadFile(bundlesGolden)
@@ -319,4 +326,23 @@ func TestBundlesVenueOracleMatchesThePythonProducer(t *testing.T) {
 	if !t.Failed() {
 		venueoracle.WriteProof(t)
 	}
+}
+
+// maskExpiry replaces the printed expiry by its distance from now in whole days,
+// after checking its shape (an ISO 8601 UTC time with the +00:00 offset, the
+// fraction only when it is not zero): a wrong date or layout stays visible.
+func maskExpiry(t *testing.T, stdout string) string {
+	t.Helper()
+	return expiresLine.ReplaceAllStringFunc(stdout, func(line string) string {
+		text := strings.TrimPrefix(line, "  Expires: ")
+		moment, err := time.Parse("2006-01-02T15:04:05.999999999Z07:00", text)
+		if err != nil || !strings.HasSuffix(text, "+00:00") || strings.Count(text, ".") > 1 {
+			return "  Expires: <malformed " + text + ">"
+		}
+		if strings.Contains(text, ".") && len(text) != len("2006-01-02T15:04:05.000000+00:00") {
+			return "  Expires: <malformed fraction " + text + ">"
+		}
+		days := int(math.Floor((time.Until(moment).Hours() + 12) / 24))
+		return fmt.Sprintf("  Expires: <in %d days>", days)
+	})
 }

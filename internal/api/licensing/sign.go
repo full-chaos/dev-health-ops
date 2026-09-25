@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
 // GraceDays is licensing.types.GRACE_DAYS; ok is false for a tier outside
@@ -67,7 +68,7 @@ const licenseDurationDays = 365
 func SignLicense(privateKeyB64 string, request LicenseRequest) (string, error) {
 	tier := strings.ToLower(request.Tier)
 	if _, ok := TierRank(tier); !ok {
-		return "", fmt.Errorf("Invalid tier %q. Must be one of: community, team, enterprise", request.Tier)
+		return "", fmt.Errorf("Invalid tier %s. Must be one of: community, team, enterprise", pythonparity.StrRepr(request.Tier))
 	}
 	duration := int64(licenseDurationDays)
 	if request.DurationDays != nil {
@@ -125,29 +126,57 @@ func optionalString(value *string) pyjson.Value {
 	return *value
 }
 
-// pythonB64Decode is base64.b64decode(text) with its default
-// validate=False: characters outside the base64 alphabet are discarded,
-// the rest must form whole, correctly padded quanta. Named limit: the
-// less common shapes binascii's lenient mode also accepts (data after the
-// padding) are refused here.
+// pythonB64Decode is base64.b64decode(text) with its defaults (validate=False),
+// a port of binascii.a2b_base64's non-strict loop: text that is not ASCII is a
+// ValueError; characters outside the alphabet (and \r, \n, spaces) are skipped;
+// an "=" is ignored until enough of them close a partly filled quantum (then
+// the rest of the text is ignored); what is left over is either one stray
+// character (named with the count of data characters) or "Incorrect padding".
 func pythonB64Decode(text string) ([]byte, error) {
-	var kept strings.Builder
-	data := 0
 	for _, r := range text {
-		if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '+' || r == '/' {
-			data++
-			kept.WriteRune(r)
-		} else if r == '=' {
-			kept.WriteRune(r)
+		if r > 0x7f {
+			return nil, errors.New("string argument should contain only ASCII characters")
 		}
 	}
-	// binascii names a data length that leaves one stray character.
-	if data%4 == 1 {
-		return nil, fmt.Errorf("Invalid base64-encoded string: number of data characters (%d) cannot be 1 more than a multiple of 4", data)
+	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+	var out []byte
+	quadPos, pads := 0, 0
+	var left byte
+	for index := 0; index < len(text); index++ {
+		ch := text[index]
+		if ch == '=' {
+			if quadPos >= 2 {
+				pads++
+			}
+			continue
+		}
+		value := strings.IndexByte(alphabet, ch)
+		if value < 0 {
+			continue
+		}
+		pads = 0
+		switch quadPos {
+		case 0:
+			quadPos, left = 1, byte(value)
+		case 1:
+			quadPos = 2
+			out = append(out, left<<2|byte(value)>>4)
+			left = byte(value) & 0x0f
+		case 2:
+			quadPos = 3
+			out = append(out, left<<4|byte(value)>>2)
+			left = byte(value) & 0x03
+		case 3:
+			quadPos = 0
+			out = append(out, left<<6|byte(value))
+			left = 0
+		}
 	}
-	decoded, err := base64.StdEncoding.DecodeString(kept.String())
-	if err != nil {
+	if quadPos == 1 {
+		return nil, fmt.Errorf("Invalid base64-encoded string: number of data characters (%d) cannot be 1 more than a multiple of 4", len(out)/3*4+1)
+	}
+	if quadPos != 0 && quadPos+pads < 4 {
 		return nil, errors.New("Incorrect padding")
 	}
-	return decoded, nil
+	return out, nil
 }

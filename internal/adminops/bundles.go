@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -327,21 +326,15 @@ VALUES ($1, $2, $3, true, $4, '{}', $5, now(), now())`, uuid.New(), org, feature
 	return cli.ExitOK
 }
 
-// parsePyInt is int(text) as argparse's type=int calls it: surrounding
-// whitespace, a sign, decimal digits with single underscores between them.
-// A value beyond int64 is refused (Python's integers are unbounded).
+// parsePyInt is int(text) as argparse's type=int calls it (pythonparity.ParseInt:
+// Unicode decimal digits and whitespace, a sign, single underscores between
+// digits). A value beyond int64 is refused (Python's integers are unbounded).
 func parsePyInt(text string) (int64, error) {
-	stripped := pythonparity.Strip(text)
-	digits := strings.TrimLeft(stripped, "+-")
-	if len(stripped)-len(digits) > 1 || digits == "" || strings.HasPrefix(digits, "_") || strings.HasSuffix(digits, "_") || strings.Contains(digits, "__") {
+	value, err := pythonparity.ParseInt(text)
+	if err != nil || !value.IsInt64() {
 		return 0, errors.New("not an integer")
 	}
-	for _, r := range digits {
-		if r != '_' && (r < '0' || r > '9') {
-			return 0, errors.New("not an integer")
-		}
-	}
-	return strconv.ParseInt(strings.ReplaceAll(stripped, "_", ""), 10, 64)
+	return value.Int64(), nil
 }
 
 // parseDriverUUID is how the Python verb's database driver reads a UUID

@@ -23,10 +23,13 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	valkeygo "github.com/valkey-io/valkey-go"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/cacheinvalidation"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/pgmigrate"
+	valkeystore "github.com/full-chaos/dev-health-ops/internal/storage/valkey"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
@@ -539,5 +542,77 @@ func TestFinalizeSyntheticVerbFinalizesARunFromTheEnvironment(t *testing.T) {
 	var after int
 	if err := conn.QueryRow(context.Background(), `SELECT count(*) FROM sync_runs`).Scan(&after); err != nil || after != 2 {
 		t.Fatalf("a refused call left %d run(s) (err %v), want 2", after, err)
+	}
+}
+
+// With VALKEY_URI configured, the verb bumps the org's coverage-cache epoch
+// exactly as the River worker's finalize does (a cached filter-scoped view of
+// the org becomes unreachable); without it the run still finalizes, the skip is
+// logged at Info, and no cache failure is logged as a warning.
+func TestFinalizeSyntheticBumpsTheCoverageCacheEpochWhenValkeyIsConfigured(t *testing.T) {
+	instance, admin := startDatabase(t)
+	uri := freshDatabase(t, instance, admin)
+	valkey, err := containers.StartValkey(context.Background())
+	if err != nil {
+		t.Fatalf("start valkey: %v", err)
+	}
+	t.Cleanup(func() { _ = valkey.Close(context.Background()) })
+
+	epoch := func() (int64, bool) {
+		client, err := valkeystore.Open(context.Background(), valkeystore.DefaultConfig(valkey.URI))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer client.Close()
+		value, err := client.Do(context.Background(), client.B().Get().Key(cacheinvalidation.OrgCacheEpochKey(testOrg)).Build()).AsInt64()
+		if valkeygo.IsValkeyNil(err) {
+			return 0, false
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		return value, true
+	}
+	runVerb := func(env map[string]string) (int, string) {
+		t.Helper()
+		var stdout, stderr bytes.Buffer
+		lookup := func(key string) (string, bool) { value, ok := env[key]; return value, ok }
+		code := runFinalizeSynthetic(context.Background(), cli.Env{
+			Args:   []string{"--target", "cicd", "--repo-name", testRepoName, "--backfill", "7"},
+			Lookup: lookup, Stdout: &stdout, Stderr: &stderr,
+		})
+		return code, stderr.String()
+	}
+	base := map[string]string{"MIGRATION_DATABASE_URI": uri, "ORG_ID": testOrg, AllowEnvVar: "1"}
+
+	code, stderr := runVerb(base)
+	if code != cli.ExitOK {
+		t.Fatalf("without VALKEY_URI: exit %d\n%s", code, stderr)
+	}
+	if _, present := epoch(); present {
+		t.Fatal("the epoch was bumped with no VALKEY_URI configured")
+	}
+	if strings.Contains(stderr, "coverage_cache_invalidation_failed") || !strings.Contains(stderr, `"msg":"coverage cache invalidation skipped"`) {
+		t.Fatalf("without VALKEY_URI the skip must be one Info line and no failure warning:\n%s", stderr)
+	}
+
+	withValkey := map[string]string{"VALKEY_URI": valkey.URI}
+	for key, value := range base {
+		withValkey[key] = value
+	}
+	code, stderr = runVerb(withValkey)
+	if code != cli.ExitOK {
+		t.Fatalf("with VALKEY_URI: exit %d\n%s", code, stderr)
+	}
+	if got, present := epoch(); !present || got != 1 {
+		t.Fatalf("epoch after a finalize with VALKEY_URI = %d (present %v), want 1", got, present)
+	}
+	if strings.Contains(stderr, "coverage_cache_invalidation_failed") || strings.Contains(stderr, valkey.URI) {
+		t.Fatalf("with VALKEY_URI the run logged a cache failure or the URI:\n%s", stderr)
+	}
+
+	withValkey["VALKEY_URI"] = "redis://127.0.0.1:1/1"
+	if code, stderr = runVerb(withValkey); code == cli.ExitOK || !strings.Contains(stderr, "valkey_unavailable") {
+		t.Fatalf("an unreachable VALKEY_URI must fail the verb naming valkey_unavailable (exit %d):\n%s", code, stderr)
 	}
 }

@@ -105,6 +105,10 @@ func TestCredentialFieldReadsMatchLivePython(t *testing.T) {
 		{"gitlab", `{"token": []}`, gitlab},
 		{"gitlab", `{"token": "t", "project_id": 7, "tags": [1, {"a": 2}]}`, gitlab},
 		{"gitlab", `{"private_token": "p", "project_id": 7}`, gitlab},
+		// A blank key is a field nobody reads.
+		{"gitlab", `{"token": "fixture", " ": 7}`, gitlab},
+		{"gitlab", `{"token": "fixture", "": "v"}`, gitlab},
+		{"github", `{"token": "ghp", "\t": [1]}`, github},
 		// A container in a field the provider reads is its Python str().
 		{"gitlab", `{"token": [1]}`, gitlab},
 		{"gitlab", `{"token": {"a": 1, "b": [2, {"c": null}]}}`, gitlab},

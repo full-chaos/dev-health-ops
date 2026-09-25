@@ -202,9 +202,8 @@ func decodeCredential(record EncryptedCredential, plaintext []byte) (Credential,
 	deferred := map[string]pyjson.Value{}
 	for _, key := range object.Keys() {
 		value, _ := object.Get(key)
-		if strings.TrimSpace(key) == "" {
-			return Credential{}, ErrCredentialInvalid
-		}
+		// A blank key is a field nobody reads, like any other: Python's builders
+		// ignore it and so does this decode.
 		if record.Provider == "github" {
 			if canonical, aliased := githubFieldAliases[key]; aliased {
 				key = canonical

@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -169,6 +170,24 @@ func (c Credential) WithEphemeralSecret(name string, value secrets.Value) (Crede
 	fields[name] = value
 	c.fields = fields
 	return c, nil
+}
+
+// String, GoString and LogValue keep secret material out of every printed form
+// of a Credential: fmt (%v, %+v, %#v) and slog would otherwise reflect over the
+// private field maps and print the values (a secrets.Value's raw text, a
+// decoded non-string value). Only metadata is shown.
+func (c Credential) String() string {
+	return fmt.Sprintf("providerfoundation.Credential{provider=%s fields=%d}", c.Provider, len(c.fields)+len(c.deferred))
+}
+
+func (c Credential) GoString() string { return c.String() }
+
+func (c Credential) LogValue() slog.Value {
+	return slog.GroupValue(
+		slog.String("provider", c.Provider),
+		slog.Bool("credential_id_configured", c.ID != ""),
+		slog.Int("credential_field_count", len(c.fields)+len(c.deferred)),
+	)
 }
 
 func (c Credential) SafeAttributes() map[string]any {

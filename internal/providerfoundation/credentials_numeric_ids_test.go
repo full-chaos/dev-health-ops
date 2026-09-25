@@ -1,7 +1,11 @@
 package providerfoundation
 
 import (
+	"bytes"
 	"errors"
+	"fmt"
+	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
@@ -131,6 +135,7 @@ func TestDecodeCredentialIgnoresFieldsNobodyReads(t *testing.T) {
 		{"jira", `{"api_token": "t", "email": "e@x.com", "site_id": 42}`},
 		{"linear", `{"api_key": "lin_api_x", "workspace_id": 9}`},
 		{"gitlab", `{"token": 12}`},
+		{"gitlab", `{"token": "t", " ": 7, "": "v"}`},
 	} {
 		credential, err := decodeCredential(EncryptedCredential{Provider: tc.provider}, []byte(tc.body))
 		if err != nil {
@@ -141,8 +146,8 @@ func TestDecodeCredentialIgnoresFieldsNobodyReads(t *testing.T) {
 			t.Errorf("%s %s: shape refused: %v", tc.provider, tc.body, err)
 		}
 	}
-	// What is still refused: not an object, and a blank key.
-	for _, body := range []string{`[1]`, `"x"`, `12`, `{"": "v"}`, `{`} {
+	// What is still refused: not an object and invalid JSON.
+	for _, body := range []string{`[1]`, `"x"`, `12`, `{`} {
 		if _, err := decodeCredential(EncryptedCredential{Provider: "gitlab"}, []byte(body)); !errors.Is(err, ErrCredentialInvalid) {
 			t.Errorf("%s: err = %v, want ErrCredentialInvalid", body, err)
 		}
@@ -173,5 +178,49 @@ func TestCredentialSafeAttributesCountsNonStringFields(t *testing.T) {
 	}
 	if got := credential.SafeAttributes()["credential_field_count"]; got != 3 {
 		t.Errorf("credential_field_count = %v, want 3", got)
+	}
+}
+
+// TestCredentialNeverPrintsItsSecrets: fmt and slog reflect over a struct's
+// private fields, so a Credential prints only metadata, whether a field was a
+// string, a number or a container.
+func TestCredentialNeverPrintsItsSecrets(t *testing.T) {
+	for _, body := range []string{
+		`{"token": "secret-fixture"}`,
+		`{"token": ["secret-fixture"]}`,
+		`{"token": {"k": "secret-fixture"}}`,
+		`{"token": 987654321}`,
+		`{"token": "x", "other": ["secret-fixture"]}`,
+	} {
+		credential, err := decodeCredential(EncryptedCredential{Provider: "gitlab", ID: "cred-1"}, []byte(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var text, jsonOut bytes.Buffer
+		slog.New(slog.NewTextHandler(&text, nil)).Info("x", "credential", credential)
+		slog.New(slog.NewJSONHandler(&jsonOut, nil)).Info("x", "credential", credential)
+		// slog resolves LogValue for JSON as well as text: the group carries the count.
+		count := len(credential.fields) + len(credential.deferred)
+		if !strings.Contains(jsonOut.String(), fmt.Sprintf(`"credential_field_count":%d`, count)) || !strings.Contains(text.String(), fmt.Sprintf("credential_field_count=%d", count)) {
+			t.Errorf("%s: slog output lost the safe attributes: %s %s", body, text.String(), jsonOut.String())
+		}
+		if want := fmt.Sprintf("fields=%d}", count); !strings.Contains(fmt.Sprintf("%v", credential), want) {
+			t.Errorf("%s: String() = %v, want it to count every stored field (%s)", body, credential, want)
+		}
+		printed := []string{
+			text.String(), jsonOut.String(),
+			fmt.Sprintf("%v", credential), fmt.Sprintf("%+v", credential), fmt.Sprintf("%#v", credential), fmt.Sprintf("%s", credential),
+			fmt.Sprintf("%v", &credential), fmt.Sprintf("%+v", []Credential{credential}), fmt.Sprintf("%+v", map[string]Credential{"c": credential}),
+		}
+		for _, out := range printed {
+			for _, leaked := range []string{"secret-fixture", "987654321", "raw:", "0x"} {
+				if strings.Contains(out, leaked) {
+					t.Errorf("%s printed %q in %q", body, leaked, out)
+				}
+			}
+			if !strings.Contains(out, "gitlab") {
+				t.Errorf("%s: %q lost its metadata", body, out)
+			}
+		}
 	}
 }

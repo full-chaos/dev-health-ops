@@ -4,6 +4,7 @@ import logging
 import mimetypes
 import os
 import uuid
+import zlib
 from pathlib import Path
 
 import pytest
@@ -273,6 +274,58 @@ def scrubbed_ambient_env_names() -> tuple[str, ...]:
     return scrubbed_env_names()
 
 
+#: Env var selecting one slice of the suite, `K/N` (both 1-based). The hosted
+#: `test-matrix` job runs N legs, leg K with PYTEST_SHARD=K/N (CHAOS-6692).
+SHARD_ENV = "PYTEST_SHARD"
+
+
+def parse_shard(raw: str) -> tuple[int, int]:
+    """Parse `K/N` (1 <= K <= N); raises ``pytest.UsageError`` on anything else."""
+    parts = raw.split("/")
+    if (
+        len(parts) != 2
+        or not all(p.isascii() and p.isdigit() for p in parts)
+        or not 1 <= int(parts[0]) <= int(parts[1])
+    ):
+        raise pytest.UsageError(
+            f"{SHARD_ENV}={raw!r} is not K/N with 1 <= K <= N (e.g. 1/2)"
+        )
+    return int(parts[0]), int(parts[1])
+
+
+def shard_of(nodeid: str, count: int) -> int:
+    """0-based shard of a test: a stable hash of its FILE, so one file's tests
+    stay together (module-scoped fixtures) and every xdist worker, which collects
+    on its own, computes the same partition."""
+    return zlib.crc32(nodeid.split("::", 1)[0].encode()) % count
+
+
+@pytest.hookimpl(trylast=True)
+def pytest_collection_modifyitems(config, items):
+    raw = os.environ.get(SHARD_ENV, "").strip()
+    if not raw:
+        return
+    shard, count = parse_shard(raw)
+    keep = [item for item in items if shard_of(item.nodeid, count) == shard - 1]
+    dropped = [item for item in items if shard_of(item.nodeid, count) != shard - 1]
+    if not keep:
+        raise pytest.UsageError(
+            f"{SHARD_ENV}={raw} selects none of the {len(items)} collected tests: "
+            "the matrix is wider than the suite, so this leg would read green "
+            "while running nothing"
+        )
+    config.hook.pytest_deselected(items=dropped)
+    items[:] = keep
+    workerid = getattr(config, "workerinput", {}).get("workerid", "gw0")
+    reporter = config.pluginmanager.get_plugin("terminalreporter")
+    if reporter is not None and workerid == "gw0":
+        files = {item.nodeid.split("::", 1)[0] for item in keep}
+        reporter.write_line(
+            f"pytest shard {shard}/{count}: selected {len(keep)} of "
+            f"{len(keep) + len(dropped)} test(s) from {len(files)} file(s)"
+        )
+
+
 def pytest_report_header(config):
     """Say out loud what the shell was carrying.
 
@@ -294,6 +347,11 @@ def pytest_report_header(config):
     if lane_kept:
         lines.append(
             "ambient env kept for an announced lane: " + ", ".join(sorted(lane_kept))
+        )
+    shard = os.environ.get(SHARD_ENV, "").strip()
+    if shard:
+        lines.append(
+            f"{SHARD_ENV}={shard} (CHAOS-6692): this leg runs its slice of the test files only"
         )
     return lines
 

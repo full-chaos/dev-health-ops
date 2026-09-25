@@ -20,6 +20,14 @@
 # suite or says in plain text that it skipped and why. A path filter on the
 # trigger would skip the run with no record at all. A workflow_dispatch run
 # has no push range and always runs the full suite.
+#
+# A SKIP IS NOT A PASS (Trap #408). A skipped run reports SUCCESS, and it was
+# once read as a green main venue. Definition of record: GREEN MAIN VENUE =
+# the newest run whose oracle step EXECUTED is green (every leg), and no later
+# EXECUTED run failed. Skipped runs are neither green nor red; the last
+# executed run stays the state of record. A skipped run says so loudly (a
+# ::notice:: and a step-summary line naming that last executed run), and
+# `ci/last-venue-run.sh` prints the verdict from the API.
 name: Venue oracles
 
 on:
@@ -29,6 +37,8 @@ on:
 
 permissions:
   contents: read
+  # ci/last-venue-run.sh reads this workflow's runs and jobs (skip report only).
+  actions: read
   # Pull the mirrored test-dependency images from ghcr.io (CHAOS-4778).
   packages: read
 
@@ -130,11 +140,26 @@ jobs:
 
       - name: Report that the gate was skipped, and why
         if: steps.relevance.outputs.relevant != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
           echo "skipped: no Go-relevant paths in this change set."
           echo "Relevance is decided by ci/go_relevance.py against go.yml's own"
           echo "on.pull_request.paths list. The job still reports, so the skip is"
           echo "on record for this commit rather than a run that never happened."
+          # Loud, and best-effort: a failed API read must never fail the skip.
+          state="$(bash ci/last-venue-run.sh --branch main 2>/dev/null | tail -n 1 || true)"
+          [ -n "${state}" ] || state="venue-main: UNKNOWN (could not read the run history)"
+          reason="no Go-relevant paths in this change set"
+          echo "::notice title=VENUE ORACLES NOT RUN::${reason}. This green is NOT oracle evidence. ${state}"
+          {
+            echo "### VENUE ORACLES NOT RUN"
+            echo
+            echo "VENUE ORACLES NOT RUN: ${reason}, ${state}"
+            echo
+            echo "A skipped run is not a pass (Trap #408): the last EXECUTED run is the state of record."
+          } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Set up Go
         if: steps.relevance.outputs.relevant == 'true'

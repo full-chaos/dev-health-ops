@@ -172,6 +172,9 @@ EXPECTED_PACKAGES = {
     # CHAOS-6368: the shared rate-limit store against a real Valkey (limit held
     # across two clients, the fixed window, the per-caller path bound, TTLs).
     "internal/auth/ratelimitvalkey",
+    # CHAOS-6467: `dho ai allowlist set|list` against a real ClickHouse at the head,
+    # compared with the Python verb (venue oracle).
+    "internal/aicli",
     "internal/cacheinvalidation",
     # CHAOS-6461: the ClickHouse head baseline is re-derived by executing the
     # real Python chain on a fresh ClickHouse, and dho's migrator is checked

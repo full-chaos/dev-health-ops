@@ -100,6 +100,7 @@ internal/apiservice/sessionvenue	1
 internal/apiservice/billingvenue	2
 internal/apiservice/externalingestvenue	190
 internal/auth/ratelimitvalkey	11
+internal/aicli	20
 internal/cacheinvalidation	2
 internal/chmigrate	60
 internal/externalrecompute	32

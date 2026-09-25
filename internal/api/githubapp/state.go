@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/golang-jwt/jwt/v5"
 )
@@ -168,10 +169,10 @@ func pathQuote(value string) string {
 
 // pyIntClaim is what PyJWT's int(payload[claim]) makes of a time claim when
 // Python would convert it: a boolean is 0 or 1, and a string is read by
-// int(str) (surrounding whitespace, one optional sign, ASCII digits with
-// single underscores between them). Every other value, and a string int()
-// refuses, is returned as it is, for the validator to refuse as it does a
-// malformed claim.
+// int(str) (surrounding Unicode whitespace, but not the ASCII separators U+001C to U+001F, which int() refuses; one optional sign, decimal digits of any
+// script with single underscores between them). Every other value, and a
+// string int() refuses, is returned as it is, for the validator to refuse as
+// it does a malformed claim.
 func pyIntClaim(value any) any {
 	switch typed := value.(type) {
 	case bool:
@@ -180,7 +181,7 @@ func pyIntClaim(value any) any {
 		}
 		return float64(0)
 	case string:
-		text := strings.TrimSpace(typed)
+		text := strings.TrimFunc(typed, unicode.IsSpace)
 		negative := false
 		if text != "" && (text[0] == '+' || text[0] == '-') {
 			negative = text[0] == '-'
@@ -189,14 +190,19 @@ func pyIntClaim(value any) any {
 		if text == "" || text[0] == '_' || text[len(text)-1] == '_' || strings.Contains(text, "__") {
 			return value
 		}
-		digits := strings.ReplaceAll(text, "_", "")
-		number := new(big.Int)
-		for _, r := range digits {
-			if r < '0' || r > '9' {
+		var digits strings.Builder
+		for _, r := range text {
+			if r == '_' {
+				continue
+			}
+			digit, ok := decimalDigit(r)
+			if !ok {
 				return value
 			}
+			digits.WriteByte(byte('0' + digit))
 		}
-		if _, ok := number.SetString(digits, 10); !ok {
+		number, ok := new(big.Int).SetString(digits.String(), 10)
+		if !ok {
 			return value
 		}
 		if negative {
@@ -208,6 +214,22 @@ func pyIntClaim(value any) any {
 		return math.Max(-timeClaimBound, math.Min(timeClaimBound, result))
 	}
 	return value
+}
+
+// decimalDigit is the value of a Unicode decimal digit (category Nd), which
+// Python's int() reads in any script. Each script's ten digits are
+// consecutive code points starting at its zero, and adjacent scripts start
+// on multiples of ten from the first, so the offset from the start of the
+// consecutive run of digits, modulo ten, is the value.
+func decimalDigit(r rune) (int, bool) {
+	if !unicode.IsDigit(r) {
+		return 0, false
+	}
+	start := r
+	for unicode.IsDigit(start - 1) {
+		start--
+	}
+	return int(r-start) % 10, true
 }
 
 // timeClaimBound bounds a converted time claim to what a time.Time holds.

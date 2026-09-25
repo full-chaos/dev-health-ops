@@ -279,6 +279,37 @@ func githubAppRequests(t *testing.T, tokens map[string]string, org, otherOrg, py
 		callback("callback: list "+claim, claims(value([]int{1})), 101, "denied", "")
 		callback("callback: object "+claim, claims(value(map[string]int{"a": 1})), 101, "denied", "")
 	}
+	// int() reads decimal digits of every script, and strips Unicode whitespace
+	// but not the ASCII separators U+001C to U+001F.
+	unicodeDigits := func(number int64, zero rune) string {
+		var out []rune
+		for _, digit := range fmt.Sprint(number) {
+			out = append(out, zero+(digit-'0'))
+		}
+		return string(out)
+	}
+	for _, script := range []struct {
+		name string
+		zero rune
+	}{{"Arabic-Indic", 0x0660}, {"fullwidth", 0xFF10}, {"Devanagari", 0x0966}, {"mathematical bold", 0x1D7CE}} {
+		callback("callback: "+script.name+" digit time claims", claims(func(c jwt.MapClaims) {
+			c["exp"] = unicodeDigits(future, script.zero)
+			c["iat"] = unicodeDigits(now.Unix()-60, script.zero)
+			c["nbf"] = unicodeDigits(now.Unix()-60, script.zero)
+		}), 101, "denied", "")
+		callback("callback: "+script.name+" digit expiry in the past", claims(func(c jwt.MapClaims) {
+			c["exp"] = unicodeDigits(now.Unix()-60, script.zero)
+		}), 101, "denied", "")
+	}
+	callback("callback: mixed-script digit expiry", claims(func(c jwt.MapClaims) {
+		c["exp"] = unicodeDigits(future/1000, 0x0660) + unicodeDigits(future%1000, 0x0966)
+	}), 101, "denied", "")
+	callback("callback: no-break-space padded expiry", claims(func(c jwt.MapClaims) { c["exp"] = "\u00a0" + fmt.Sprint(future) + "\u2003" }), 101, "denied", "")
+	callback("callback: separator padded expiry", claims(func(c jwt.MapClaims) { c["exp"] = "\x1f" + fmt.Sprint(future) + "\x1c" }), 101, "denied", "")
+	callback("callback: Unicode digits with underscores", claims(func(c jwt.MapClaims) {
+		c["exp"] = unicodeDigits(future/1000, 0x0660) + "_" + unicodeDigits(future%1000, 0x0660)
+	}), 101, "denied", "")
+	callback("callback: unicode number that is not a decimal digit", claims(func(c jwt.MapClaims) { c["exp"] = "\u00b2" + fmt.Sprint(future) }), 101, "denied", "")
 	callback("callback: zero expiry", claims(func(c jwt.MapClaims) { c["exp"] = 0 }), 101, "denied", "")
 	callback("callback: zero-string expiry", claims(func(c jwt.MapClaims) { c["exp"] = "0" }), 101, "denied", "")
 	callback("callback: negative-string expiry", claims(func(c jwt.MapClaims) { c["exp"] = "-5" }), 101, "denied", "")

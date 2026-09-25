@@ -157,6 +157,15 @@ func TestVerifyReadsTimeClaimsLikePyJWT(t *testing.T) {
 		{"iat false", "iat", false, true},
 		{"iat future string", "iat", "1800000600", false},
 		{"nbf null", "nbf", nil, false},
+		{"exp Arabic-Indic digits", "exp", "١٨٠٠٠٠٠٦٠٠", true},
+		{"exp fullwidth digits", "exp", "１８００００００６００", true},
+		{"exp mathematical bold digits", "exp", "𝟏𝟖𝟎𝟎𝟎𝟎𝟎𝟔𝟎𝟎", true},
+		{"exp mixed-script digits", "exp", "١٨٠٠" + "०००६००", true},
+		{"exp ASCII separator padded is refused by int()", "exp", "\x1f1800000600\x1c", false},
+		{"exp next-line padded", "exp", "\u00851800000600\u0085", true},
+		{"exp no-break space padded", "exp", "\u00a01800000600\u2003", true},
+		{"exp Arabic-Indic digits past", "exp", "١٧٩٩٩٩٩٩٩٩", false},
+		{"exp superscript two is no decimal digit", "exp", "\u00b21800000600", false},
 		{"iat list", "iat", []int{1}, false},
 	} {
 		_, err := signer.Verify(sign(func(c jwt.MapClaims) { c[tc.claim] = tc.value }), now)

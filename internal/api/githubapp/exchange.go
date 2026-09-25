@@ -11,7 +11,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/full-chaos/dev-health-ops/internal/api/credentials"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 )
 

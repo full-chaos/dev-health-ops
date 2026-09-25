@@ -5,14 +5,17 @@ import (
 	"errors"
 	"math/big"
 	"net/http"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/externalurl"
+	"github.com/full-chaos/dev-health-ops/internal/api/githubcode"
 	"github.com/full-chaos/dev-health-ops/internal/api/gitlabcode"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/api/restcore"
 )
 
 // repoCredential is what list_credential_repos reads of a stored credential:
@@ -95,7 +98,7 @@ func (h handlers) repos(w http.ResponseWriter, r *http.Request) {
 	}
 	switch credential.provider {
 	case "github":
-		policy.WriteDetail(w, http.StatusNotImplemented, "Repository listing is not served by this API plane", nil)
+		h.listGitHubRepos(w, r, credential, str(owner), str(search), maxRepos)
 	case "gitlab":
 		h.listGitLabRepos(w, r, credential, str(owner), str(search), maxRepos)
 	default:
@@ -187,7 +190,7 @@ func (h handlers) listGitLabRepos(w http.ResponseWriter, r *http.Request, creden
 	} else {
 		options.Pattern = pattern(search)
 	}
-	client := gitlabcode.Client{BaseURL: baseURL, Token: pyjson.Str(token), HTTP: h.repoClient}
+	client := gitlabcode.Client{BaseURL: baseURL, Token: pyjson.Str(token), HTTP: withTimeout(h.repoClient, gitlabcode.DefaultTimeout)}
 	projects, err := client.ListProjects(ctx, options)
 	if err != nil {
 		var listErr *gitlabcode.Error
@@ -255,4 +258,131 @@ func repoListing(provider string, repos []pyjson.Value) *pyjson.Object {
 	out.Set("repos", repos)
 	out.Set("total", int64(len(repos)))
 	return out
+}
+
+// withTimeout is the client with the provider client's request timeout, where
+// it names none.
+func withTimeout(client *http.Client, timeout time.Duration) *http.Client {
+	if client.Timeout != 0 {
+		return client
+	}
+	copied := *client
+	copied.Timeout = timeout
+	return &copied
+}
+
+// listGitHubRepos is the github branch of list_credential_repos.
+func (h handlers) listGitHubRepos(w http.ResponseWriter, r *http.Request, credential *repoCredential, owner, search string, maxRepos *big.Int) {
+	ctx := r.Context()
+	fail := func(err error) { h.internal(w, r, "list github repositories", err) }
+	stored, ok := credential.decrypted.(*pyjson.Object)
+	if !ok {
+		fail(errNotADict)
+		return
+	}
+	// {**decrypted, "base_url": decrypted.get("base_url") or config.get("base_url")}
+	base, _ := stored.Get("base_url")
+	if !pyjson.Truthy(base) {
+		var err error
+		if base, err = credential.configGet("base_url"); err != nil {
+			fail(err)
+			return
+		}
+	}
+	merged := pyjson.NewObject()
+	for _, key := range stored.Keys() {
+		value, _ := stored.Get(key)
+		merged.Set(key, value)
+	}
+	merged.Set("base_url", base)
+	gc := githubFromMapping(merged)
+	if gc == nil {
+		policy.WriteDetail(w, http.StatusBadRequest, "GitHub credentials require either token or app_id + private_key + installation_id", nil)
+		return
+	}
+	if gc.hasBaseURL && !gc.baseIsString {
+		fail(errors.New("urlparse of a value that is not a str"))
+		return
+	}
+	baseURL := gc.baseURL
+	if baseURL == "" {
+		baseURL = defaultGitHubBase
+	}
+	if valid, detail := h.validateURL(ctx, baseURL); !valid {
+		policy.WriteDetail(w, http.StatusBadRequest, detail, nil)
+		return
+	}
+	group := owner
+	if group == "" {
+		configured, err := credential.configGet("org")
+		if err != nil {
+			fail(err)
+			return
+		}
+		if group = stringValue(configured); group == "" {
+			group = stringValue(mustGet(stored, "org"))
+		}
+	}
+
+	token := gc.token
+	if gc.app {
+		minted, err := h.installationToken(ctx, gc, baseURL)
+		if err != nil {
+			policy.WriteDetail(w, http.StatusUnauthorized, "GitHub App authentication failed", nil)
+			return
+		}
+		token = minted
+	}
+	client := githubcode.Client{Token: token, BaseURL: baseURL, HTTP: withTimeout(h.repoClient, restcore.DefaultTimeout)}
+	var repos []githubcode.Repo
+	var err error
+	switch {
+	case group == "" && gc.app:
+		repos, err = client.ListInstallationRepositories(ctx, search, maxRepos)
+	case group != "":
+		repos, err = client.ListRepositories(ctx, githubcode.ListOptions{Org: group, Search: search, MaxRepos: maxRepos})
+	default:
+		repos, err = client.ListRepositories(ctx, githubcode.ListOptions{Pattern: pattern(search), MaxRepos: maxRepos})
+	}
+	if err != nil {
+		var listErr *githubcode.Error
+		if errors.As(err, &listErr) {
+			switch listErr.Class {
+			case "NotFoundException":
+				policy.WriteModel(w, http.StatusOK, repoListing("github", nil), nil)
+				return
+			case "AuthenticationException":
+				policy.WriteDetail(w, http.StatusUnauthorized, listErr.Message, nil)
+				return
+			case "RateLimitException":
+				policy.WriteDetail(w, http.StatusTooManyRequests, listErr.Message, nil)
+				return
+			case "APIException":
+				policy.WriteDetail(w, http.StatusBadGateway, listErr.Message, nil)
+				return
+			}
+		}
+		fail(err)
+		return
+	}
+	listed := make([]pyjson.Value, 0, len(repos))
+	for _, repo := range repos {
+		item := pyjson.NewObject()
+		item.Set("name", repo.Name)
+		item.Set("full_name", repo.FullName)
+		if repo.Description != nil {
+			item.Set("description", *repo.Description)
+		} else {
+			item.Set("description", nil)
+		}
+		item.Set("url", repo.URL)
+		listed = append(listed, item)
+	}
+	policy.WriteModel(w, http.StatusOK, repoListing("github", listed), nil)
+}
+
+// mustGet is object.get(key) for an object known to be one.
+func mustGet(object *pyjson.Object, key string) pyjson.Value {
+	value, _ := object.Get(key)
+	return value
 }

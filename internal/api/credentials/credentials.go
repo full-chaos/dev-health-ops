@@ -19,7 +19,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/externalurl"
-	"github.com/full-chaos/dev-health-ops/internal/api/gitlabcode"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
@@ -73,11 +72,11 @@ func Routes(deps Deps) []httpapi.Route {
 	if lookup == nil {
 		lookup = externalurl.ResolveHostAddrs
 	}
-	// The repository listing's GitLab client has its own timeout (the
-	// provider client's 15 s); a test's client answers for both.
+	// The repository listing's clients each apply their provider's own
+	// timeout to this one (a test's client answers for both).
 	repoClient := deps.HTTPClient
 	if repoClient == nil {
-		repoClient = &http.Client{Transport: externalurl.GuardedTransport(), Timeout: gitlabcode.DefaultTimeout,
+		repoClient = &http.Client{Transport: externalurl.GuardedTransport(),
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	}
 	h := handlers{pool: deps.Pool, cipher: deps.Cipher, logger: logger, now: now, client: client, repoClient: repoClient, lookup: lookup}

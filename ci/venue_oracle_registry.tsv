@@ -11,6 +11,7 @@ internal/aicli	TestAllowlistVenueOracleMatchesThePythonProducer	run
 internal/api/billing	TestVenueOracleStripeEventDispatch	run
 internal/api/externalurl	TestValidateExternalURLVenueOracle	run
 internal/api/githubapp	TestVenueOracleGitHubAppInstall	run
+internal/api/githubcode	TestListRepositoriesVenueOracleMatchesLivePython	run
 internal/api/gitlabcode	TestListProjectsVenueOracleMatchesLivePython	run
 internal/api/integrationsadmin/backfillvenue	TestIntegrationBackfillVenueOracle	run
 internal/api/integrationsadmin/discoveryvenue	TestIntegrationDiscoverVenueOracle	run
@@ -46,6 +47,7 @@ internal/apiservice	TestLegacyIngestTelemetryVenueOracle	run
 internal/apiservice	TestLegacyIngestVenueOracle	run
 internal/apiservice	TestVenueOracleCredentialAdmin	run
 internal/apiservice	TestVenueOracleCredentialConnectionTest	run
+internal/apiservice	TestVenueOracleCredentialGitHubRepos	run
 internal/apiservice	TestVenueOracleCredentialRepos	run
 internal/apiservice	TestVenueOracleCustomerPushReads	run
 internal/apiservice	TestVenueOracleCustomerPushValidate	run

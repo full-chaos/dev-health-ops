@@ -437,12 +437,5 @@ func TestVenueOracleCredentialRepos(t *testing.T) {
 		t.Errorf("provider requests differ:\n python:\n%s\n go:\n%s", strings.Join(pythonProvider, "\n"), strings.Join(goProvider, "\n"))
 	}
 
-	// GitHub listing is the one branch this plane does not serve yet: 501.
-	github := venueoracle.Do(t, base, venueoracle.Request{Name: "github repos are not served", Method: "GET",
-		Path:    "/api/v1/admin/credentials/" + ids["github/default"] + "/repos",
-		Headers: map[string]string{"Authorization": "Bearer " + venue.Tokens["admin"]}})
-	if github.Status != http.StatusNotImplemented || !strings.Contains(github.Body, "not served by this API plane") {
-		t.Errorf("github repos answered %d %s, want 501", github.Status, github.Body)
-	}
 	t.Logf("\n%sprovider requests (%d): %s\n", receipt, len(goProvider), venueoracle.Mark(providerSame))
 }

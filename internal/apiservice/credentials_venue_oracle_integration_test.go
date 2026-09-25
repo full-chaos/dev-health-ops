@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"regexp"
 	"strings"
 	"testing"
@@ -267,23 +266,6 @@ func TestVenueOracleCredentialAdmin(t *testing.T) {
 			return credentialIDPattern.ReplaceAllString(body, `"id":"<uuid>"`)
 		},
 	})
-
-	// /credentials/{id}/repos of a credential the org holds is repo listing,
-	// which this plane does not serve: 501, not a credential read.
-	goPool, err := pgxpool.New(ctx, venue.AdminURI(t, venue.GoDB))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var heldID string
-	if err := goPool.QueryRow(ctx, `SELECT id::text FROM integration_credentials WHERE provider = 'github' AND name = 'eq-create'`).Scan(&heldID); err != nil {
-		t.Fatal(err)
-	}
-	goPool.Close()
-	repos := venueoracle.Do(t, base, venueoracle.Request{Name: "repos of a held credential", Method: "GET",
-		Path: "/api/v1/admin/credentials/" + heldID + "/repos", Headers: map[string]string{"Authorization": "Bearer " + venue.Tokens["admin"]}})
-	if repos.Status != http.StatusNotImplemented || !strings.Contains(repos.Body, "not served by this API plane") {
-		t.Errorf("repos of a held credential answered %d %s, want 501", repos.Status, repos.Body)
-	}
 
 	// Rows: everything but the generated id and the write timestamps, plus
 	// the decrypted payload of each row from the Python plane's decrypt_value.

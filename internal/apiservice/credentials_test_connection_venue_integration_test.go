@@ -175,6 +175,8 @@ func (s *probeStub) handle(w http.ResponseWriter, r *http.Request) {
 			write(201, `{"token":"inst_ok","expires_at":"2099-01-01T00:00:00Z"}`)
 		case "333":
 			write(201, `{"expires_at":"2099-01-01T00:00:00Z"}`)
+		case "444": // a transient exchange failure: GitHubAppTokenProvider retries it
+			write(503, `{"message":"unavailable"}`)
 		default:
 			write(401, `{"message":"A JSON web token could not be decoded"}`)
 		}
@@ -290,6 +292,7 @@ func probeSeedRows(pemKey string) []probeSeedRow {
 		{provider: "github", name: "app-refused", secrets: map[string]any{"appId": "1", "privateKey": pemKey, "installationId": "222"}},
 		{provider: "github", name: "app-badkey", secrets: map[string]any{"app_id": "1", "private_key": "not a key", "installation_id": "111"}},
 		{provider: "github", name: "app-notoken", secrets: map[string]any{"app_id": "1", "private_key": pemKey, "installation_id": "333"}},
+		{provider: "github", name: "app-transient", secrets: map[string]any{"app_id": "1", "private_key": pemKey, "installation_id": "444"}},
 		{provider: "github", name: "both", secrets: map[string]any{"token": "ghp_ok", "app_id": "1"}},
 		{provider: "github", name: "ghe", secrets: map[string]any{"token": "ghp_ok", "base_url": "https://provider.example.test/ghe/api"}},
 		{provider: "gitlab", name: "default", secrets: map[string]any{"token": "gl_ok"}},
@@ -425,6 +428,7 @@ func probeRequests(tokens map[string]string, ids map[string]string, pemKey strin
 	stored("test: github App token exchange refused", "github", "app-refused")
 	stored("test: github App with an unusable key", "github", "app-badkey")
 	stored("test: github App token response without a token", "github", "app-notoken")
+	stored("test: github App token exchange 5xx is retried", "github", "app-transient")
 	inline("test: github App inline", "github", fmt.Sprintf(`{"app_id":"9","private_key":%q,"installation_id":"111"}`, pemKey))
 
 	// GitLab

@@ -239,7 +239,10 @@ type githubCredentials struct {
 	token, appID, privateKey, installationID string
 	baseURL                                  string
 	hasBaseURL                               bool
-	app                                      bool
+	// baseIsString is false when the stored base_url is truthy but not a str
+	// (Python's urlparse then raises on it).
+	baseIsString bool
+	app          bool
 }
 
 // githubFromMapping is github_credentials_from_mapping: nil where Python
@@ -289,6 +292,7 @@ func githubFromMapping(creds *pyjson.Object) *githubCredentials {
 		out.privateKey = stringValue(get("private_key"))
 	}
 	if truthy(get("base_url")) {
+		_, out.baseIsString = get("base_url").(string)
 		out.baseURL, out.hasBaseURL = pyStr(get("base_url")), true
 	}
 	return out
@@ -340,8 +344,41 @@ func (h handlers) probeGitHub(ctx context.Context, creds *pyjson.Object) (bool, 
 }
 
 // installationToken mints an App installation token against base, the way
-// GitHubAppTokenProvider does (RS256 JWT, POST .../access_tokens).
+// GitHubAppTokenProvider does (RS256 JWT, POST .../access_tokens): a 5xx or a
+// network failure is transient and retried up to three attempts, one and two
+// seconds apart (retry_with_backoff), every other failure at once.
 func (h handlers) installationToken(ctx context.Context, gc *githubCredentials, base string) (string, error) {
+	delay := time.Second
+	for attempt := 1; ; attempt++ {
+		token, err := h.mintInstallationToken(ctx, gc, base)
+		if err == nil || attempt == installationTokenAttempts || !transientTokenError(err) {
+			return token, err
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return "", ctx.Err()
+		case <-timer.C:
+		}
+		delay = min(delay*2, 10*time.Second)
+	}
+}
+
+// installationTokenAttempts is the exchange's TOKEN_EXCHANGE_MAX_RETRIES.
+const installationTokenAttempts = 3
+
+// transientTokenError is GitHubAppTransientError: the exchange failed on the
+// network or the provider answered 5xx.
+func transientTokenError(err error) bool {
+	var failure *providerfoundation.ProviderError
+	if !errors.As(err, &failure) || failure.Class != providerfoundation.ErrorTransient {
+		return false
+	}
+	return failure.StatusCode == 0 || (failure.StatusCode >= 500 && failure.StatusCode <= 599)
+}
+
+func (h handlers) mintInstallationToken(ctx context.Context, gc *githubCredentials, base string) (string, error) {
 	credential := providerfoundation.NewCredential("github", "admin-test", nil, map[string]secrets.Value{
 		"app_id": secrets.NewValue(gc.appID), "private_key": secrets.NewValue(gc.privateKey), "installation_id": secrets.NewValue(gc.installationID),
 	})

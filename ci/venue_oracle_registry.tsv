@@ -12,6 +12,7 @@ internal/api/billing	TestVenueOracleStripeEventDispatch	run
 internal/api/externalurl	TestValidateExternalURLVenueOracle	run
 internal/api/githubapp	TestVenueOracleGitHubAppInstall	run
 internal/api/gitlabcode	TestListProjectsVenueOracleMatchesLivePython	run
+internal/api/integrationsadmin/backfillvenue	TestIntegrationBackfillVenueOracle	run
 internal/api/integrationsadmin/discoveryvenue	TestIntegrationDiscoverVenueOracle	run
 internal/api/integrationsadmin/integrationsvenue	TestIntegrationsAdminVenueOracle	run
 internal/api/integrationsadmin/syncvenue	TestIntegrationSyncVenueOracle	run

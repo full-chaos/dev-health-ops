@@ -253,19 +253,19 @@ func newSankeyGetHandler(client sankey.QueryClient) http.HandlerFunc {
 			}
 		}
 
-		startDate, startPresent, startOK := parseISODateQueryParam(lastQueryValue(query, "start_date"))
+		startDate, startPresent, startOK := parseQueryDate(query, "start_date")
 		if startPresent && !startOK {
 			validationErrors = append(validationErrors, dateQueryParamError([]any{"query", "start_date"}, lastQueryValue(query, "start_date")))
 		}
-		endDate, endPresent, endOK := parseISODateQueryParam(lastQueryValue(query, "end_date"))
+		endDate, endPresent, endOK := parseQueryDate(query, "end_date")
 		if endPresent && !endOK {
 			validationErrors = append(validationErrors, dateQueryParamError([]any{"query", "end_date"}, lastQueryValue(query, "end_date")))
 		}
-		windowStart, windowStartPresent, windowStartOK := parseISODateQueryParam(lastQueryValue(query, "window_start"))
+		windowStart, windowStartPresent, windowStartOK := parseQueryDate(query, "window_start")
 		if windowStartPresent && !windowStartOK {
 			validationErrors = append(validationErrors, dateQueryParamError([]any{"query", "window_start"}, lastQueryValue(query, "window_start")))
 		}
-		windowEnd, windowEndPresent, windowEndOK := parseISODateQueryParam(lastQueryValue(query, "window_end"))
+		windowEnd, windowEndPresent, windowEndOK := parseQueryDate(query, "window_end")
 		if windowEndPresent && !windowEndOK {
 			validationErrors = append(validationErrors, dateQueryParamError([]any{"query", "window_end"}, lastQueryValue(query, "window_end")))
 		}

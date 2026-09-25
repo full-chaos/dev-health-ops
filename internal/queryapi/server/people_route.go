@@ -186,7 +186,8 @@ func newPeopleSearchHandler(reader *people.Reader) http.HandlerFunc {
 		q := lastQueryValue(query, "q")
 
 		limit := 20
-		if raw := lastQueryValue(query, "limit"); raw != "" {
+		if query.Has("limit") {
+			raw := lastQueryValue(query, "limit")
 			parsed, err := strconv.Atoi(raw)
 			if err != nil {
 				// Python's `limit: int = 20` is FastAPI/Pydantic

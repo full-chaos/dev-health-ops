@@ -9,6 +9,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
+	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 )
 
 // maxIntDigits is pydantic-core's string length limit for an int parse
@@ -163,11 +164,7 @@ func (e *Errors) QueryDatetime(name string, raw *string) (*pytime.DateTime, bool
 // LastQuery is Starlette's QueryParams.get: the LAST value of a repeated
 // parameter, nil when absent.
 func LastQuery(values url.Values, name string) *string {
-	list, ok := values[name]
-	if !ok || len(list) == 0 {
-		return nil
-	}
-	return &list[len(list)-1]
+	return httpapi.QueryLastPtr(values, name)
 }
 
 // Instant is the UTC time of a parsed datetime query value, nil when the

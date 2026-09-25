@@ -181,11 +181,11 @@ func newFlameAggregatedWorkHandler(client aggflame.QueryClient) http.HandlerFunc
 		}
 		mode := lastQueryValue(query, "mode")
 
-		startDate, startPresent, startOK := parseISODateQueryParam(lastQueryValue(query, "start_date"))
+		startDate, startPresent, startOK := parseQueryDate(query, "start_date")
 		if startPresent && !startOK {
 			validationErrors = append(validationErrors, dateQueryParamError([]any{"query", "start_date"}, lastQueryValue(query, "start_date")))
 		}
-		endDate, endPresent, endOK := parseISODateQueryParam(lastQueryValue(query, "end_date"))
+		endDate, endPresent, endOK := parseQueryDate(query, "end_date")
 		if endPresent && !endOK {
 			validationErrors = append(validationErrors, dateQueryParamError([]any{"query", "end_date"}, lastQueryValue(query, "end_date")))
 		}

@@ -312,11 +312,11 @@ func newInvestmentGetHandler(reader *investment.Reader) http.HandlerFunc {
 			}
 		}
 
-		startDate, startPresent, startOK := parseISODateQueryParam(lastQueryValue(query, "start_date"))
+		startDate, startPresent, startOK := parseQueryDate(query, "start_date")
 		if startPresent && !startOK {
 			validationErrors = append(validationErrors, dateQueryParamError([]any{"query", "start_date"}, lastQueryValue(query, "start_date")))
 		}
-		endDate, endPresent, endOK := parseISODateQueryParam(lastQueryValue(query, "end_date"))
+		endDate, endPresent, endOK := parseQueryDate(query, "end_date")
 		if endPresent && !endOK {
 			validationErrors = append(validationErrors, dateQueryParamError([]any{"query", "end_date"}, lastQueryValue(query, "end_date")))
 		}
@@ -493,7 +493,8 @@ func newInvestmentSunburstGetHandler(reader *investment.Reader) http.HandlerFunc
 		// see that function's own doc comment on why no clamping happens
 		// downstream of this route.
 		limit := 500
-		if raw := lastQueryValue(query, "limit"); raw != "" {
+		if query.Has("limit") {
+			raw := lastQueryValue(query, "limit")
 			parsed, err := strconv.Atoi(raw)
 			if err != nil {
 				validationErrors = append(validationErrors, intQueryParamError([]any{"query", "limit"}, raw))
@@ -502,11 +503,11 @@ func newInvestmentSunburstGetHandler(reader *investment.Reader) http.HandlerFunc
 			}
 		}
 
-		startDate, startPresent, startOK := parseISODateQueryParam(lastQueryValue(query, "start_date"))
+		startDate, startPresent, startOK := parseQueryDate(query, "start_date")
 		if startPresent && !startOK {
 			validationErrors = append(validationErrors, dateQueryParamError([]any{"query", "start_date"}, lastQueryValue(query, "start_date")))
 		}
-		endDate, endPresent, endOK := parseISODateQueryParam(lastQueryValue(query, "end_date"))
+		endDate, endPresent, endOK := parseQueryDate(query, "end_date")
 		if endPresent && !endOK {
 			validationErrors = append(validationErrors, dateQueryParamError([]any{"query", "end_date"}, lastQueryValue(query, "end_date")))
 		}

@@ -163,7 +163,8 @@ func newPeopleDrilldownPRsHandler(reader *people.Reader) http.HandlerFunc {
 			}
 		}
 		limit := 50
-		if raw := lastQueryValue(query, "limit"); raw != "" {
+		if query.Has("limit") {
+			raw := lastQueryValue(query, "limit")
 			parsed, err := strconv.Atoi(raw)
 			if err != nil {
 				validationErrors = append(validationErrors, intQueryParamError([]any{"query", "limit"}, raw))
@@ -171,7 +172,7 @@ func newPeopleDrilldownPRsHandler(reader *people.Reader) http.HandlerFunc {
 				limit = parsed
 			}
 		}
-		cursorTime, cursorPresent, cursorOK := parseISODateTimeQueryParam(lastQueryValue(query, "cursor"))
+		cursorTime, cursorPresent, cursorOK := parseQueryDateTime(query, "cursor")
 		if cursorPresent && !cursorOK {
 			validationErrors = append(validationErrors, dateTimeQueryParamError([]any{"query", "cursor"}, lastQueryValue(query, "cursor")))
 		}

@@ -11,6 +11,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
+	"github.com/full-chaos/dev-health-ops/internal/teamattribution"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
@@ -93,7 +94,7 @@ func TestWriteTeamsMembershipsAndOwnershipAgainstClickHouse(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := Write(ctx, conn, org, rows, selections); err != nil {
+		if _, err := Write(ctx, conn, org, rows, selections); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -141,11 +142,122 @@ func TestWriteTeamsMembershipsAndOwnershipAgainstClickHouse(t *testing.T) {
 		t.Fatalf("the project-as-team row was rewritten: %v", got)
 	}
 
-	// A full re-run leaves the logical rows the same: readers take the newest
-	// row per (team, member) the way the attribution loaders do.
+	// A full re-run replaces its rows: a member and a link that stay keep their
+	// valid_from, so the physical rows do not accumulate run over run.
 	run(first.Add(2*time.Hour), everything)
-	latest := lines(t, conn, `SELECT concat(team_id, '|', member_id) FROM (SELECT team_id, member_id, argMax(updated_at, updated_at) AS u FROM team_memberships WHERE org_id = 'org-1' AND provider = 'jira' GROUP BY team_id, member_id) ORDER BY team_id, member_id`)
-	if len(latest) != 4 {
-		t.Fatalf("logical memberships after a re-run = %v", latest)
+	physical := lines(t, conn, `SELECT toString(count()) FROM team_memberships WHERE org_id = 'org-1' AND provider = 'jira'`)
+	exec(t, conn, `OPTIMIZE TABLE team_memberships FINAL`)
+	merged := lines(t, conn, `SELECT toString(count()) FROM team_memberships WHERE org_id = 'org-1' AND provider = 'jira'`)
+	if merged[0] != "4" || physical[0] == "" {
+		t.Fatalf("memberships after a re-run and a merge = %v (physical %v), want the same 4 rows", merged, physical)
+	}
+}
+
+// r1 finding: a member who left, a project link that vanished and an archived
+// team stayed attributed forever. The next run closes them (valid_to), for
+// Atlassian teams only, and the attribution loaders' own predicate no longer
+// sees them once ClickHouse has merged the replacement rows.
+func TestARunRetractsWhatTheSnapshotNoLongerHas(t *testing.T) {
+	conn := openClickHouse(t)
+	ctx := context.Background()
+	const org = "org-1"
+	first := time.Date(2026, 9, 25, 3, 0, 0, 0, time.UTC)
+
+	exec(t, conn, `INSERT INTO team_memberships (org_id, provider, team_id, member_id, raw_provider_user_id, raw_email, identity_facets, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES ('org-1', 'jira', 'PLAT', 'jira:lead-9', 'jira:accountid:lead-9', NULL, ['jira:accountid:lead-9'], 'native', 1, 100, 10, '2026-09-01 00:00:00', NULL, '2026-09-01 00:00:00')`)
+	exec(t, conn, `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES ('org-1', 'jira', 'PLAT', 'org-1:jira:PLAT', 'PLAT', 'native', 1, 100, 10, '2026-09-01 00:00:00', NULL, '2026-09-01 00:00:00')`)
+
+	g := newGateway(t, standard)
+	run := func(now time.Time, respond func(request) (int, any)) Result {
+		if respond != nil {
+			g.respond = respond
+		} else {
+			g.respond = standard
+		}
+		p := params(everything)
+		p.Now = now
+		rows, err := Collect(ctx, g.client(), p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		result, err := Write(ctx, conn, org, rows, everything)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+	if got := run(first, nil); got.ExpiredMemberships != 0 || got.ExpiredOwnership != 0 {
+		t.Fatalf("the first run retracted %+v", got)
+	}
+
+	// Later: team A lost alice-1 and its project, team C was deleted upstream.
+	shrunk := func(req request) (int, any) {
+		switch req.Operation {
+		case "TeamSearchV2":
+			return 200, searchPage("", teamNode(teamA, "Platform", "ACTIVE"), teamNode(teamB, "Old", "ARCHIVED"))
+		case "TeamworkGraph_teamUsers":
+			return 200, connection("teamworkGraph_teamUsers", "", userEdge(teamA, "bob-2"))
+		case "TeamworkGraph_teamActiveProjects":
+			return 200, connection("teamworkGraph_teamActiveProjects", "")
+		}
+		return 500, nil
+	}
+	result := run(first.Add(time.Hour), shrunk)
+	// alice-1 (team A), carol-3 (team C, no longer returned) = 2 members; PLAT (team A) = 1 link.
+	if result.ExpiredMemberships != 2 || result.ExpiredOwnership != 1 {
+		t.Fatalf("retracted %+v, want 2 memberships and 1 project link", result)
+	}
+	for _, table := range []string{"team_memberships", "team_project_ownership"} {
+		exec(t, conn, "OPTIMIZE TABLE "+table+" FINAL")
+	}
+
+	// The loaders' own validity predicate, evaluated a day after the snapshots
+	// (the test's clock is fixed, not the wall clock).
+	asOf := first.Add(24 * time.Hour)
+	open := lines(t, conn, `SELECT concat(team_id, '|', member_id) FROM team_memberships WHERE org_id = 'org-1' AND provider = 'jira' AND valid_from <= toDateTime64('2026-09-26 03:00:00', 3, 'UTC') AND (valid_to IS NULL OR valid_to > toDateTime64('2026-09-26 03:00:00', 3, 'UTC')) ORDER BY team_id, member_id`)
+	if strings.Join(open, ",") != "PLAT|jira:lead-9,"+idA+"|jira:bob-2" {
+		t.Fatalf("open memberships = %v, want the project-as-team lead and bob only", open)
+	}
+	source := teamattribution.ClickHouseFactSource{Conn: conn}
+	projects, err := source.LoadProjects(ctx, org, asOf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var owners []string
+	for _, project := range projects {
+		owners = append(owners, project.TeamID+":"+teamattribution.GithubWorkItemDerivationStringValue(project.ProjectKey))
+	}
+	if strings.Join(owners, ",") != "PLAT:PLAT" {
+		t.Fatalf("attribution project owners = %v, want only the project-as-team owner left", owners)
+	}
+	// The project-as-team rows were never touched.
+	if got := lines(t, conn, `SELECT toString(updated_at) FROM team_memberships FINAL WHERE org_id = 'org-1' AND team_id = 'PLAT'`); len(got) != 1 || !strings.HasPrefix(got[0], "2026-09-01") {
+		t.Fatalf("the project-as-team membership was rewritten: %v", got)
+	}
+}
+
+// r1 finding: a failed write left an earlier table committed. The catalog row
+// is written last, so a failure leaves no listed team without its members, and
+// the error names what was committed.
+func TestAFailedWriteLeavesNoTeamWithoutItsMembers(t *testing.T) {
+	conn := openClickHouse(t)
+	ctx := context.Background()
+	now := time.Date(2026, 9, 25, 3, 0, 0, 0, time.UTC)
+	g := newGateway(t, standard)
+	p := params(everything)
+	p.Now = now
+	rows, err := Collect(ctx, g.client(), p)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The table stays readable but refuses every insert: the failure happens at
+	// write time, after memberships were committed.
+	exec(t, conn, `ALTER TABLE team_project_ownership ADD CONSTRAINT never_writable CHECK 1 = 0`)
+	_, err = Write(ctx, conn, "org-1", rows, everything)
+	if err == nil || !strings.Contains(err.Error(), "write team project ownership") || !strings.Contains(err.Error(), "already written: team memberships") {
+		t.Fatalf("err = %v, want the failing stage and the committed one named", err)
+	}
+	if got := lines(t, conn, `SELECT toString(count()) FROM teams WHERE org_id = 'org-1' AND provider = 'jira'`); got[0] != "0" {
+		t.Fatalf("%s teams committed although a later table failed", got[0])
 	}
 }

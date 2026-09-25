@@ -53,7 +53,7 @@ func TestSyncTeamsWritesThroughTheVerbAgainstClickHouse(t *testing.T) {
 	if code != cli.ExitOK {
 		t.Fatalf("exit %d: %s", code, stderr)
 	}
-	if strings.TrimSpace(stdout) != "teams=1 memberships=1 project_links=1" {
+	if strings.TrimSpace(stdout) != "teams=1 memberships=1 project_links=1 expired_memberships=0 expired_project_links=0" {
 		t.Fatalf("stdout = %q", stdout)
 	}
 

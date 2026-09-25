@@ -214,3 +214,25 @@ func TestTheCommandTreeIsValid(t *testing.T) {
 }
 
 func writeFile(path, content string) error { return os.WriteFile(path, []byte(content), 0o600) }
+
+type emptyClient struct{}
+
+func (emptyClient) SearchTeams(context.Context, string, string, string, int) ([]atlassian.AtlassianTeam, error) {
+	return nil, nil
+}
+func (emptyClient) IterTeamUsers(context.Context, string, int) ([]atlassian.TeamworkUserRelation, error) {
+	return nil, nil
+}
+func (emptyClient) IterTeamActiveProjects(context.Context, string, int) ([]atlassian.TeamworkProject, error) {
+	return nil, nil
+}
+
+// An empty answer is a permissions or configuration problem far more often than
+// an organization without teams, and writing it would retract every member.
+func TestAnEmptyResultIsRefusedUnlessAllowed(t *testing.T) {
+	rec := &recorded{}
+	code, stdout, stderr := run(t, validEnv(), stubDeps(rec, emptyClient{}, nil), "--provider", "jira", "--org", "o")
+	if code != cli.ExitFailure || !strings.Contains(stderr, `"code":"empty_result"`) || stdout != "" {
+		t.Fatalf("exit %d, stdout %q, stderr %s", code, stdout, stderr)
+	}
+}

@@ -46,7 +46,8 @@ const (
 	gatewayPath       = "/gateway/api"
 	teamsUsage        = "usage: dho sync teams --provider jira --org <org-id> [--structure] [--members] [--projects]\n\n" +
 		"Syncs the organization's Atlassian Teams into ClickHouse. With none of --structure,\n" +
-		"--members and --projects, all three are synced.\n\n" +
+		"--members and --projects, all three are synced. Members and project links a team no longer has are\n" +
+		"retracted (closed); an empty result is refused, so a permissions problem retracts nothing, unless --allow-empty.\n\n" +
 		"environment (names only):\n" +
 		"  CLICKHOUSE_URI (or _FILE)             ClickHouse DSN\n" +
 		"  ATLASSIAN_ORGANIZATION_ID             the Atlassian organization id\n" +
@@ -98,6 +99,7 @@ func runTeams(ctx context.Context, env cli.Env, d deps) int {
 	structure := flags.Bool("structure", false, "sync the teams")
 	members := flags.Bool("members", false, "sync team memberships")
 	projects := flags.Bool("projects", false, "sync the projects each team works on")
+	allowEmpty := flags.Bool("allow-empty", false, "accept an organization with no Atlassian teams (retracts every member and link)")
 	if err := flags.Parse(env.Args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return cli.ExitOK
@@ -156,12 +158,22 @@ func runTeams(ctx context.Context, env cli.Env, d deps) int {
 	if err != nil {
 		return writeError(env.Stderr, cli.ExitFailure, "read_failed", redact(err))
 	}
-	if err := atlassianteams.Write(ctx, conn, orgID, rows, selections); err != nil {
+	// An empty answer is far more often a permissions or configuration problem
+	// than an organization with no teams, and writing it would retract every
+	// member and link: refuse it unless the operator says it is real.
+	if len(rows.Teams) == 0 && !*allowEmpty {
+		return writeError(env.Stderr, cli.ExitFailure, "empty_result",
+			"the gateway returned no Atlassian teams; nothing was written. Check the organization id, the cloud id and the credentials, or pass --allow-empty if the organization really has no teams")
+	}
+	result, err := atlassianteams.Write(ctx, conn, orgID, rows, selections)
+	if err != nil {
 		return writeError(env.Stderr, cli.ExitFailure, "write_failed", redact(err))
 	}
 	logger.Info("atlassian teams synced", "org_id", orgID, "teams", len(rows.Teams), "memberships", len(rows.Memberships),
-		"project_links", len(rows.Ownership), "skipped_project_links", rows.SkippedProjects, "duration_ms", time.Since(started).Milliseconds())
-	if _, err := fmt.Fprintf(env.Stdout, "teams=%d memberships=%d project_links=%d\n", len(rows.Teams), len(rows.Memberships), len(rows.Ownership)); err != nil {
+		"project_links", len(rows.Ownership), "skipped_project_links", rows.SkippedProjects,
+		"expired_memberships", result.ExpiredMemberships, "expired_project_links", result.ExpiredOwnership, "duration_ms", time.Since(started).Milliseconds())
+	if _, err := fmt.Fprintf(env.Stdout, "teams=%d memberships=%d project_links=%d expired_memberships=%d expired_project_links=%d\n",
+		len(rows.Teams), len(rows.Memberships), len(rows.Ownership), result.ExpiredMemberships, result.ExpiredOwnership); err != nil {
 		return cli.ExitFailure
 	}
 	return cli.ExitOK

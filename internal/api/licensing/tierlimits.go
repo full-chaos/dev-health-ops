@@ -199,23 +199,45 @@ func CheckLimitFrom(inputs TierLimitInputs, key string, current int64) (bool, st
 
 // exceeds is Python's current > limit for an int current.
 func exceeds(current int64, limit pyjson.Value) bool {
+	return exceedsInt(big.NewInt(current), limit)
+}
+
+// exceedsInt is Python's current > limit for an int current of any size.
+// The limit is one of get_limit's value types (None is handled by the
+// callers; _coerce_limit_map and typed_value keep only numbers).
+func exceedsInt(current *big.Int, limit pyjson.Value) bool {
 	switch typed := limit.(type) {
 	case bool:
 		if typed {
-			return current > 1
+			return current.Cmp(big.NewInt(1)) > 0
 		}
-		return current > 0
+		return current.Sign() > 0
 	case pyjson.Int:
-		return big.NewInt(current).Cmp(typed.Int) > 0
+		return current.Cmp(typed.Int) > 0
 	case pyjson.Float:
 		// NaN compares false; otherwise Python compares an int and a float
 		// exactly, as big.Float does (it holds ±Inf too).
 		if math.IsNaN(float64(typed)) {
 			return false
 		}
-		return new(big.Float).SetInt64(current).Cmp(big.NewFloat(float64(typed))) > 0
+		return new(big.Float).SetInt(current).Cmp(big.NewFloat(float64(typed))) > 0
 	}
 	return false
+}
+
+// CheckBackfillLimitFrom is TierLimitService.check_backfill_limit over
+// already-read rows: allowed when backfill_days is None or requested does
+// not exceed it, else "Backfill limit exceeded: requested N days, limit is
+// L days" with Python's str() of each.
+func CheckBackfillLimitFrom(inputs TierLimitInputs, requested *big.Int) (bool, string, error) {
+	limit, err := GetLimitFrom(inputs, "backfill_days")
+	if err != nil || limit == nil {
+		return true, "", err
+	}
+	if !exceedsInt(requested, limit) {
+		return true, "", nil
+	}
+	return false, fmt.Sprintf("Backfill limit exceeded: requested %s days, limit is %s days", requested.String(), pyjson.Str(limit)), nil
 }
 
 // Querier is the pgx surface the loaders use.

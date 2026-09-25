@@ -99,6 +99,7 @@ internal/apiservice/authflowvenue	TestAuthFlowVenueOracle	run
 internal/apiservice/billingvenue	TestInvoiceWebhookAppliesTestModeEvents	run
 internal/apiservice/billingvenue	TestInvoiceWebhookOrderLinesAndRetry	run
 internal/apiservice/billingvenue	TestRefundCreate	run
+internal/apiservice/billingvenue	TestRefundWebhookWriteFirstAndOrder	run
 internal/apiservice/billingvenue	TestRefundWriteFirstAndIdempotent	run
 internal/apiservice/billingvenue	TestStripeTestModeBillingDifferential	local
 internal/apiservice/billingvenue	TestStripeTestModeInvoiceEvents	local

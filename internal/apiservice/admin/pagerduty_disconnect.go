@@ -125,9 +125,12 @@ func (h *handlers) disconnectPagerDutyCredential(ctx context.Context, orgID, cre
 	// decrypt/decode failure (ValueError in Python) leaves it nil, exactly
 	// as Python's `except ValueError: revoke_candidate = None` does --
 	// local deletion below never depends on it.
+	// The read locks the row: two concurrent disconnects of one credential
+	// serialise here, so the second finds it deleted and queues nothing
+	// (otherwise both would queue a revocation for the same token).
 	var revokeCandidate *string
 	var tokenEncrypted *string
-	err = tx.QueryRow(ctx, `SELECT token_encrypted FROM provider_oauth_credentials WHERE org_id = $1 AND provider = 'pagerduty' AND credential_name = $2`,
+	err = tx.QueryRow(ctx, `SELECT token_encrypted FROM provider_oauth_credentials WHERE org_id = $1 AND provider = 'pagerduty' AND credential_name = $2 FOR UPDATE`,
 		orgID, credentialName).Scan(&tokenEncrypted)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return nil, err

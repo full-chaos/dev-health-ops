@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -37,7 +38,7 @@ func TestPagerDutyDisconnectWithoutClientIDVenueOracle(t *testing.T) {
 	t.Cleanup(fakeServer.Close)
 
 	orgs := map[string]uuid.UUID{}
-	for _, slug := range []string{"connected", "empty", "bad-cipher"} {
+	for _, slug := range []string{"connected", "empty", "bad-cipher", "racer"} {
 		orgs[slug] = uuid.New()
 	}
 	adminID := uuid.New()
@@ -81,6 +82,10 @@ VALUES ($1, $2, 'pagerduty', 'default', true, NULL, '{"auth_mode":"oauth","regio
 			exec(`INSERT INTO provider_oauth_credentials (org_id, provider, credential_name, token_encrypted, version, created_at, updated_at, has_refresh_token)
 VALUES ($1, 'pagerduty', 'default', $2, 1, now(), now(), false)`, orgs["connected"],
 				encrypt(`{"access_token":"venue-pd-noclient-token","refresh_token":null,"expires_at":"2099-01-01T00:00:00Z","granted_scopes":[]}`))
+			credential(orgs["racer"])
+			exec(`INSERT INTO provider_oauth_credentials (org_id, provider, credential_name, token_encrypted, version, created_at, updated_at, has_refresh_token)
+VALUES ($1, 'pagerduty', 'default', $2, 1, now(), now(), false)`, orgs["racer"],
+				encrypt(`{"access_token":"venue-pd-noclient-racer-token","refresh_token":null,"expires_at":"2099-01-01T00:00:00Z","granted_scopes":[]}`))
 			credential(orgs["bad-cipher"])
 			exec(`INSERT INTO provider_oauth_credentials (org_id, provider, credential_name, token_encrypted, version, created_at, updated_at, has_refresh_token)
 VALUES ($1, 'pagerduty', 'default', 'garbage-not-fernet', 1, now(), now(), false)`, orgs["bad-cipher"])
@@ -92,6 +97,7 @@ VALUES ($1, 'pagerduty', 'default', 'garbage-not-fernet', 1, now(), now(), false
 				"admin_connected":  adminClaims(orgs["connected"]),
 				"admin_empty":      adminClaims(orgs["empty"]),
 				"admin_bad_cipher": adminClaims(orgs["bad-cipher"]),
+				"admin_racer":      adminClaims(orgs["racer"]),
 			}
 		},
 	})
@@ -186,5 +192,37 @@ VALUES ($1, 'pagerduty', 'default', 'garbage-not-fernet', 1, now(), now(), false
 	}
 	if got := rows(venue.GoDB, `SELECT count(*) FROM provider_oauth_revocations WHERE org_id = '`+connected+`'`); got != "0" {
 		t.Errorf("%s revocation rows remain after the queued token was revoked", got)
+	}
+
+	// Two disconnects of one credential overlapping in time queue ONE
+	// revocation: the second waits on the token row's lock and then finds
+	// nothing to revoke. A trigger holds the first one's delete open so the
+	// overlap is certain.
+	if _, err := goAdmin.Exec(ctx, `CREATE FUNCTION pd_noclient_slow_delete() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN PERFORM pg_sleep(2); RETURN OLD; END $$;
+CREATE TRIGGER pd_noclient_slow_delete BEFORE DELETE ON provider_oauth_credentials FOR EACH ROW EXECUTE FUNCTION pd_noclient_slow_delete()`); err != nil {
+		t.Fatal(err)
+	}
+	racers := make(chan venueoracle.Response, 2)
+	go func() { racers <- venueoracle.Do(t, goBase, disconnect("racer one", "admin_racer")) }()
+	time.Sleep(500 * time.Millisecond)
+	go func() { racers <- venueoracle.Do(t, goBase, disconnect("racer two", "admin_racer")) }()
+	statuses := []int{(<-racers).Status, (<-racers).Status}
+	if _, err := goAdmin.Exec(ctx, `DROP TRIGGER pd_noclient_slow_delete ON provider_oauth_credentials; DROP FUNCTION pd_noclient_slow_delete()`); err != nil {
+		t.Fatal(err)
+	}
+	if got := rows(venue.GoDB, `SELECT count(*) FROM provider_oauth_revocations WHERE org_id = '`+orgs["racer"].String()+`'`); got != "1" {
+		t.Errorf("two overlapping disconnects of one credential (statuses %v) queued %s revocations, want 1", statuses, got)
+	}
+	if _, err := goAdmin.Exec(ctx, `UPDATE integration_credentials SET is_active = true WHERE org_id = $1 AND provider = 'pagerduty' AND name = 'default'`, orgs["racer"]); err != nil {
+		t.Fatal(err)
+	}
+	if again := venueoracle.Do(t, configured, disconnect("racer configured", "admin_racer")); again.Status != http.StatusOK {
+		t.Errorf("the configured disconnect answered %d %s, want 200", again.Status, again.Body)
+	}
+	fake.mu.Lock()
+	revoked := strings.Count(strings.Join(fake.calls, ","), "venue-pd-noclient-racer-token")
+	fake.mu.Unlock()
+	if revoked != 1 {
+		t.Errorf("the racing credential's token was sent to PagerDuty %d times, want once", revoked)
 	}
 }

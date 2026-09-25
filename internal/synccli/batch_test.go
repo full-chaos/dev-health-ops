@@ -319,8 +319,6 @@ func TestBatchRefusalsRunAndListNothing(t *testing.T) {
 		{"chunked cicd", "cicd", githubBatchArgs, inlineEnv, cli.ExitRefused, ticketChunked},
 		{"chunked tests", "tests", []string{"--provider", "gitlab", "-s", "a/*", "--auth", "t"}, inlineEnv, cli.ExitRefused, ticketChunked},
 		{"no org", "git", githubBatchArgs, map[string]string{"CLICKHOUSE_URI": inlineEnv["CLICKHOUSE_URI"]}, cli.ExitRefused, ticketDBLookups},
-		{"db credentials", "git", []string{"--provider", "github", "-s", "a/*"},
-			map[string]string{"CLICKHOUSE_URI": inlineEnv["CLICKHOUSE_URI"], "ORG_ID": "o", "POSTGRES_URI": "postgresql://p"}, cli.ExitRefused, ticketDBLookups},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

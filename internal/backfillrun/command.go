@@ -7,10 +7,8 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"strings"
 	"time"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/cli"
@@ -205,88 +203,4 @@ func Start(ctx context.Context, pool *pgxpool.Pool, configID string, params Para
 		return Trigger{}, fmt.Errorf("commit: %w", err)
 	}
 	return trigger, nil
-}
-
-// State is what the scheduler did with the occurrence.
-type State int
-
-const (
-	StatePending State = iota
-	StateMaterialized
-	StateQuarantined
-	StateTerminal
-)
-
-// Outcome is the result of Wait.
-type Outcome struct {
-	State      State
-	SyncRunID  string
-	TotalUnits int
-	ErrorCode  string
-	Reason     string
-}
-
-// Wait polls the occurrence until the scheduler has planned it, quarantined it,
-// or the wait is over. A pending outcome is not an error.
-func Wait(ctx context.Context, pool *pgxpool.Pool, occurrenceID string, wait, poll time.Duration) (Outcome, error) {
-	deadline := time.Now().Add(wait)
-	for {
-		var status string
-		var syncRunID, errorCode *string
-		err := pool.QueryRow(ctx, `
-SELECT reconcile_status, sync_run_id::text, reconcile_error_code
-FROM public.scheduled_sync_occurrences WHERE occurrence_id = $1`, occurrenceID).Scan(&status, &syncRunID, &errorCode)
-		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-			return Outcome{}, fmt.Errorf("read the occurrence: %w", err)
-		}
-		if err == nil {
-			switch status {
-			case "completed":
-				if syncRunID != nil {
-					return readRun(ctx, pool, *syncRunID)
-				}
-			case "quarantined":
-				code := "unknown"
-				if errorCode != nil && *errorCode != "" {
-					code = *errorCode
-				}
-				return Outcome{State: StateQuarantined, ErrorCode: code}, nil
-			}
-		}
-		remaining := time.Until(deadline)
-		if remaining <= 0 {
-			return Outcome{State: StatePending}, nil
-		}
-		select {
-		case <-ctx.Done():
-			return Outcome{}, ctx.Err()
-		case <-time.After(min(poll, remaining)):
-		}
-	}
-}
-
-// readRun is _materialized_trigger_result: the planned run's unit count, or its
-// terminal reason when the run ended as a disabled PagerDuty sync.
-func readRun(ctx context.Context, pool *pgxpool.Pool, syncRunID string) (Outcome, error) {
-	var units int
-	var status string
-	var runError *string
-	var category *string
-	err := pool.QueryRow(ctx, `
-SELECT COALESCE(total_units, 0), status::text, error, result->>'error_category'
-FROM public.sync_runs WHERE id = $1::uuid`, syncRunID).Scan(&units, &status, &runError, &category)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return Outcome{State: StatePending}, nil
-	}
-	if err != nil {
-		return Outcome{}, fmt.Errorf("read the sync run: %w", err)
-	}
-	if strings.EqualFold(status, "failed") && category != nil && *category == "pagerduty_sync_disabled" {
-		reason := ""
-		if runError != nil {
-			reason = *runError
-		}
-		return Outcome{State: StateTerminal, SyncRunID: syncRunID, Reason: reason}, nil
-	}
-	return Outcome{State: StateMaterialized, SyncRunID: syncRunID, TotalUnits: units}, nil
 }

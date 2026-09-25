@@ -148,7 +148,7 @@ func TestProductionReconcilerSelectsTheMutationStepper(t *testing.T) {
 	if _, err := configureReconcilerDependenciesWithSourcesAndLogger(
 		context.Background(),
 		reconcilerProductionShapedConfig(t),
-		health.NewRegistry(100*time.Millisecond),
+		health.NewRegistry(readinessTestCheckTimeout),
 		reconcilerTestLogger(),
 		sources,
 	); err != nil {
@@ -237,7 +237,7 @@ func TestReconcilerSpecInvokesTheReviewedActivation(t *testing.T) {
 	if _, err := reconcilerSpec.ConfigureDependenciesWithLogger(
 		context.Background(),
 		reconcilerProductionShapedConfig(t),
-		health.NewRegistry(100*time.Millisecond),
+		health.NewRegistry(readinessTestCheckTimeout),
 		reconcilerTestLogger(),
 	); err != nil {
 		t.Fatalf("configuring the reconciler through the spec field failed: %v", err)

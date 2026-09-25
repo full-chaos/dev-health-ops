@@ -59,7 +59,7 @@ func TestExecutionLivenessIsWiredToTheRealDomainPool(t *testing.T) {
 		},
 	}
 
-	registry := health.NewRegistry(500 * time.Millisecond)
+	registry := health.NewRegistry(readinessTestCheckTimeout)
 	runtime, err := buildSchedulerLoopWithSources(ctx, config.Config{}, registry, sources, slog.Default())
 	if err != nil {
 		t.Fatalf("buildSchedulerLoopWithSources() error = %v", err)

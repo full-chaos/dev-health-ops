@@ -46,7 +46,7 @@ const (
 // names org A without a membership. Org E holds an invalid license tier.
 func ledgerSeed(t *testing.T, ctx context.Context, pool *pgxpool.Pool, f billingFixture) map[string]map[string]any {
 	t.Helper()
-	inactive := uuid.New()
+	inactive := venueID("ledger-inactive-plan")
 	statements := []struct {
 		sql  string
 		args []any
@@ -98,10 +98,10 @@ func ledgerSeed(t *testing.T, ctx context.Context, pool *pgxpool.Pool, f billing
 		args []any
 	}{
 		{`INSERT INTO users (id, email, is_superuser, is_active, token_version) VALUES ($1, 'bill-inactive@x', false, false, 0)`, []any{inactive}},
-		{`INSERT INTO memberships (id, user_id, org_id, role) VALUES (gen_random_uuid(), $1, $2, 'owner')`, []any{inactive, f.orgA}},
+		{`INSERT INTO memberships (id, user_id, org_id, role) VALUES (md5(nextval('venue_seed_seq')::text)::uuid, $1, $2, 'owner')`, []any{inactive, f.orgA}},
 		{`INSERT INTO organizations (id, slug, name, tier) VALUES ($1, 'bill-e', 'Bill E', 'Gold')`, []any{orgE}},
 		{`INSERT INTO org_licenses (id, org_id, tier, licensed_users, licensed_repos, is_valid, customer_id, created_at, updated_at)
-			VALUES (gen_random_uuid(), $1, 'Team', 5, 5, false, NULL, now(), now())`, []any{orgE}},
+			VALUES (md5(nextval('venue_seed_seq')::text)::uuid, $1, 'Team', 5, 5, false, NULL, now(), now())`, []any{orgE}},
 	}...)
 	for _, statement := range statements {
 		if _, err := pool.Exec(ctx, statement.sql, statement.args...); err != nil {
@@ -139,7 +139,7 @@ func ledgerRequests(f billingFixture, tokens map[string]string) []venueoracle.Re
 	p := "/api/v1/billing"
 	i, rf, a := p+"/invoices", p+"/refunds", p+"/audit"
 	orgA, orgB, orgC, orgD := f.orgA.String(), f.orgB.String(), f.orgC.String(), f.orgD.String()
-	missing := uuid.New().String()
+	missing := venueID("ledger-missing").String()
 
 	// Entitlements.
 	m("ent: anon", "GET", p+"/entitlements/"+orgA, none, headers(""))
@@ -276,6 +276,7 @@ func ledgerRequests(f billingFixture, tokens map[string]string) []venueoracle.Re
 func TestVenueOracleBillingLedger(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
+	frozen := venueoracle.OpenFrozen(t, frozenGolden(t.Name()))
 	start := time.Now().UTC()
 	fake := newFakeStripe()
 	pyStripe, goStripe := httptest.NewServer(fake.plane("py")), httptest.NewServer(fake.plane("go"))
@@ -316,8 +317,8 @@ func TestVenueOracleBillingLedger(t *testing.T) {
 	}
 	base := startBillingVenueAPI(t, ctx, cfg, venue, goStripe.URL)
 	requests := ledgerRequests(seed, venue.Tokens)
-	python := venue.ServePython(t, requests)
 	normalize := billingNormalizer(seeded, start)
+	python := frozen.Responses(requests, normalize, func() []venueoracle.Response { return venue.ServePython(t, requests) })
 	// The reconciliation must have read the fake Stripe lists: a
 	// comparison of two empty Stripe sides would also read SAME.
 	reconcileWants := map[string][]string{
@@ -332,7 +333,7 @@ func TestVenueOracleBillingLedger(t *testing.T) {
 			`"stripe_id":"sub_C","field":"status","local_value":"active","stripe_value":null`, `"sub_stripe_only"`, `"re_stripe_only"`},
 	}
 	inspected := 0
-	receipt := venueoracle.Diff(t, base, requests, python, venueoracle.DiffOptions{
+	receipt := venueoracle.DiffRecorded(t, base, requests, python, venueoracle.DiffOptions{
 		Normalize: func(_ venueoracle.Request, body string) string { return normalize(body) },
 		Inspect: func(request venueoracle.Request, goResponse venueoracle.Response) {
 			wants, ok := reconcileWants[request.Name]
@@ -346,14 +347,15 @@ func TestVenueOracleBillingLedger(t *testing.T) {
 				}
 			}
 		},
-	})
+	}, frozenReason)
 	if inspected != len(reconcileWants) {
 		t.Errorf("inspected %d reconcile answers, want %d", inspected, len(reconcileWants))
 	}
 
 	fake.mu.Lock()
-	pyCalls, goCalls := append([]string(nil), fake.calls["py"]...), append([]string(nil), fake.calls["go"]...)
+	goCalls := append([]string(nil), fake.calls["go"]...)
 	fake.mu.Unlock()
+	pyCalls := frozenCalls(frozen, fake, "py")
 	callsSame := strings.Join(pyCalls, "\n") == strings.Join(goCalls, "\n") && len(goCalls) > 0
 	if !callsSame {
 		t.Errorf("stripe calls differ (or none):\n python %s\n go     %s", strings.Join(pyCalls, "\n        "), strings.Join(goCalls, "\n        "))
@@ -374,7 +376,9 @@ func TestVenueOracleBillingLedger(t *testing.T) {
 	}
 	sort.Strings(names)
 	for _, name := range names {
-		pyRows := normalize(venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), tables[name]))
+		pyRows := frozen.Text("rows:"+name, func() string {
+			return normalize(venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), tables[name]))
+		})
 		goRows := normalize(venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), tables[name]))
 		same := pyRows == goRows && pyRows != ""
 		receipt += fmt.Sprintf("%s rows after writes: %s\n", name, venueoracle.Mark(same))
@@ -428,7 +432,7 @@ func ledgerBareRequests(tokens map[string]string) []venueoracle.Request {
 		{Name: "void: no key", Method: "POST", Path: p + "/invoices/" + invOpenA + "/void", Headers: headers("ownerA")},
 		{Name: "void: paid, no key", Method: "POST", Path: p + "/invoices/" + invPaidA + "/void", Headers: headers("ownerA")},
 		{Name: "resolve: no key", Method: "POST", Path: p + "/audit/" + auditA + "/resolve", Headers: headers("super"), Body: venueoracle.B64(`{"resolution":"x"}`)},
-		{Name: "resolve: missing, no key", Method: "POST", Path: p + "/audit/" + uuid.NewString() + "/resolve", Headers: headers("super"), Body: venueoracle.B64(`{"resolution":"x"}`)},
+		{Name: "resolve: missing, no key", Method: "POST", Path: p + "/audit/" + venueID("ledger-bare-missing-audit").String() + "/resolve", Headers: headers("super"), Body: venueoracle.B64(`{"resolution":"x"}`)},
 		{Name: "reconcile: no key", Method: "POST", Path: p + "/reconcile", Headers: headers("super")},
 		{Name: "reconcile: member, no key", Method: "POST", Path: p + "/reconcile", Headers: headers("memberA")},
 	}

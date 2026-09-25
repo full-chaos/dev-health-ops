@@ -1,0 +1,2468 @@
+{
+ "recorded_at_sha": "9a0f5a99087456debc2a9b5821144797cbe326dc",
+ "recipe": "On a tree whose Python route bodies still exist (the recorded sha), from the package directory: DHO_FROZEN_PYTHON_RECORD=1 DHO_FROZEN_PYTHON_SHA=\u003csha\u003e DEV_HEALTH_LIVE_PYTHON_ORACLES=1 go test -tags=integration -count=1 -run '^TestVenueOracleBillingPlansCheckout$' . (the venue oracle runs the live Python plane and rewrites this file).",
+ "requests": [
+  {
+   "name": "plans: anon",
+   "method": "GET"
+  },
+  {
+   "name": "plans: garbage token",
+   "method": "GET"
+  },
+  {
+   "name": "plans: basic scheme",
+   "method": "GET"
+  },
+  {
+   "name": "plans: inactive anon",
+   "method": "GET"
+  },
+  {
+   "name": "plans: inactive member",
+   "method": "GET"
+  },
+  {
+   "name": "plans: inactive super",
+   "method": "GET"
+  },
+  {
+   "name": "plans: inactive last wins",
+   "method": "GET"
+  },
+  {
+   "name": "plans: inactive bad",
+   "method": "GET"
+  },
+  {
+   "name": "plan: anon",
+   "method": "GET"
+  },
+  {
+   "name": "plan: upper id",
+   "method": "GET"
+  },
+  {
+   "name": "plan: braced id",
+   "method": "GET"
+  },
+  {
+   "name": "plan: inactive anon",
+   "method": "GET"
+  },
+  {
+   "name": "plan: inactive super",
+   "method": "GET"
+  },
+  {
+   "name": "plan: inactive prices member",
+   "method": "GET"
+  },
+  {
+   "name": "plan: inactive prices super",
+   "method": "GET"
+  },
+  {
+   "name": "plan: bad query before bad id",
+   "method": "GET"
+  },
+  {
+   "name": "plan: bad id",
+   "method": "GET"
+  },
+  {
+   "name": "plan: missing",
+   "method": "GET"
+  },
+  {
+   "name": "plan: pull-stripe as id",
+   "method": "GET"
+  },
+  {
+   "name": "plan: 405 patch",
+   "method": "PATCH"
+  },
+  {
+   "name": "plan: 405 post",
+   "method": "POST"
+  },
+  {
+   "name": "plans: 405 put",
+   "method": "PUT"
+  },
+  {
+   "name": "create: bad json anon",
+   "method": "POST"
+  },
+  {
+   "name": "create: anon",
+   "method": "POST"
+  },
+  {
+   "name": "create: member invalid",
+   "method": "POST"
+  },
+  {
+   "name": "create: member",
+   "method": "POST"
+  },
+  {
+   "name": "create: invalid",
+   "method": "POST"
+  },
+  {
+   "name": "create: no body",
+   "method": "POST"
+  },
+  {
+   "name": "create: super",
+   "method": "POST"
+  },
+  {
+   "name": "create: duplicate key",
+   "method": "POST"
+  },
+  {
+   "name": "create: unknown bundle",
+   "method": "POST"
+  },
+  {
+   "name": "create: bad bundle id",
+   "method": "POST"
+  },
+  {
+   "name": "create: duplicate price keys",
+   "method": "POST"
+  },
+  {
+   "name": "create: order overflow",
+   "method": "POST"
+  },
+  {
+   "name": "create: duplicate bundles",
+   "method": "POST"
+  },
+  {
+   "name": "plans after creates",
+   "method": "GET"
+  },
+  {
+   "name": "update: anon",
+   "method": "PUT"
+  },
+  {
+   "name": "update: member",
+   "method": "PUT"
+  },
+  {
+   "name": "update: invalid",
+   "method": "PUT"
+  },
+  {
+   "name": "update: empty",
+   "method": "PUT"
+  },
+  {
+   "name": "update: super",
+   "method": "PUT"
+  },
+  {
+   "name": "update: null key",
+   "method": "PUT"
+  },
+  {
+   "name": "update: fields",
+   "method": "PUT"
+  },
+  {
+   "name": "update: null lists",
+   "method": "PUT"
+  },
+  {
+   "name": "update: bad bundle",
+   "method": "PUT"
+  },
+  {
+   "name": "update: bad id",
+   "method": "PUT"
+  },
+  {
+   "name": "update: missing",
+   "method": "PUT"
+  },
+  {
+   "name": "delete: member",
+   "method": "DELETE"
+  },
+  {
+   "name": "delete: bad id",
+   "method": "DELETE"
+  },
+  {
+   "name": "delete: missing",
+   "method": "DELETE"
+  },
+  {
+   "name": "delete: super",
+   "method": "DELETE"
+  },
+  {
+   "name": "plan: deleted anon",
+   "method": "GET"
+  },
+  {
+   "name": "sync: member",
+   "method": "POST"
+  },
+  {
+   "name": "sync: bad id",
+   "method": "POST"
+  },
+  {
+   "name": "sync: missing",
+   "method": "POST"
+  },
+  {
+   "name": "sync: new product",
+   "method": "POST"
+  },
+  {
+   "name": "sync: existing product",
+   "method": "POST"
+  },
+  {
+   "name": "sync: again",
+   "method": "POST"
+  },
+  {
+   "name": "sync: blank stripe ids",
+   "method": "POST"
+  },
+  {
+   "name": "pull: anon",
+   "method": "POST"
+  },
+  {
+   "name": "pull: member",
+   "method": "POST"
+  },
+  {
+   "name": "pull: owner",
+   "method": "POST"
+  },
+  {
+   "name": "pull: super",
+   "method": "POST"
+  },
+  {
+   "name": "plans after pull",
+   "method": "GET"
+  },
+  {
+   "name": "checkout: bad json",
+   "method": "POST"
+  },
+  {
+   "name": "checkout: anon",
+   "method": "POST"
+  },
+  {
+   "name": "checkout: invalid",
+   "method": "POST"
+  },
+  {
+   "name": "checkout: bad tier",
+   "method": "POST"
+  },
+  {
+   "name": "checkout: community",
+   "method": "POST"
+  },
+  {
+   "name": "checkout: no scheme",
+   "method": "POST"
+  },
+  {
+   "name": "checkout: foreign host",
+   "method": "POST"
+  },
+  {
+   "name": "checkout: padded url",
+   "method": "POST"
+  },
+  {
+   "name": "checkout: bad cancel",
+   "method": "POST"
+  },
+  {
+   "name": "checkout: trial kept",
+   "method": "POST"
+  },
+  {
+   "name": "checkout: trial stripped",
+   "method": "POST"
+  },
+  {
+   "name": "checkout: trial stripped, stripe fails",
+   "method": "POST"
+  },
+  {
+   "name": "checkout: enterprise",
+   "method": "POST"
+  },
+  {
+   "name": "checkout: no url",
+   "method": "POST"
+  },
+  {
+   "name": "checkout: no org",
+   "method": "POST"
+  },
+  {
+   "name": "checkout: bad org claim",
+   "method": "POST"
+  },
+  {
+   "name": "portal: anon",
+   "method": "POST"
+  },
+  {
+   "name": "portal: owner",
+   "method": "POST"
+  },
+  {
+   "name": "portal: return url",
+   "method": "POST"
+  },
+  {
+   "name": "portal: empty return url",
+   "method": "POST"
+  },
+  {
+   "name": "portal: no customer",
+   "method": "POST"
+  },
+  {
+   "name": "portal: stripe fails",
+   "method": "POST"
+  },
+  {
+   "name": "portal: bad org claim",
+   "method": "POST"
+  },
+  {
+   "name": "portal: no org",
+   "method": "POST"
+  },
+  {
+   "name": "sub: anon",
+   "method": "GET"
+  },
+  {
+   "name": "sub: owner",
+   "method": "GET"
+  },
+  {
+   "name": "sub: member own org param",
+   "method": "GET"
+  },
+  {
+   "name": "sub: super all orgs",
+   "method": "GET"
+  },
+  {
+   "name": "sub: super org C",
+   "method": "GET"
+  },
+  {
+   "name": "sub: super org D",
+   "method": "GET"
+  },
+  {
+   "name": "sub: org B",
+   "method": "GET"
+  },
+  {
+   "name": "sub: no org",
+   "method": "GET"
+  },
+  {
+   "name": "sub: bad org claim",
+   "method": "GET"
+  },
+  {
+   "name": "sub: bad org param",
+   "method": "GET"
+  },
+  {
+   "name": "sub: urn org param",
+   "method": "GET"
+  },
+  {
+   "name": "list: owner",
+   "method": "GET"
+  },
+  {
+   "name": "list: page",
+   "method": "GET"
+  },
+  {
+   "name": "list: super",
+   "method": "GET"
+  },
+  {
+   "name": "list: bad params",
+   "method": "GET"
+  },
+  {
+   "name": "list: limit high",
+   "method": "GET"
+  },
+  {
+   "name": "list: offset overflow",
+   "method": "GET"
+  },
+  {
+   "name": "list: anon bad params",
+   "method": "GET"
+  },
+  {
+   "name": "history: owner",
+   "method": "GET"
+  },
+  {
+   "name": "history: super",
+   "method": "GET"
+  },
+  {
+   "name": "history: org C",
+   "method": "GET"
+  },
+  {
+   "name": "change: anon",
+   "method": "POST"
+  },
+  {
+   "name": "change: member",
+   "method": "POST"
+  },
+  {
+   "name": "change: invalid",
+   "method": "POST"
+  },
+  {
+   "name": "change: super no org",
+   "method": "POST"
+  },
+  {
+   "name": "change: super org D",
+   "method": "POST"
+  },
+  {
+   "name": "change: owner",
+   "method": "POST"
+  },
+  {
+   "name": "change: no items",
+   "method": "POST"
+  },
+  {
+   "name": "change: stripe fails",
+   "method": "POST"
+  },
+  {
+   "name": "cancel: missing body",
+   "method": "POST"
+  },
+  {
+   "name": "cancel: at period end",
+   "method": "POST"
+  },
+  {
+   "name": "cancel: immediately",
+   "method": "POST"
+  },
+  {
+   "name": "cancel: bad flag",
+   "method": "POST"
+  },
+  {
+   "name": "reactivate: owner",
+   "method": "POST"
+  },
+  {
+   "name": "reactivate: body ignored",
+   "method": "POST"
+  },
+  {
+   "name": "reactivate: member",
+   "method": "POST"
+  },
+  {
+   "name": "reactivate: stripe fails",
+   "method": "POST"
+  },
+  {
+   "name": "reactivate: 405",
+   "method": "GET"
+  },
+  {
+   "name": "deviation: read org B",
+   "method": "GET"
+  },
+  {
+   "name": "deviation: list org C",
+   "method": "GET"
+  },
+  {
+   "name": "deviation: history org A",
+   "method": "GET"
+  },
+  {
+   "name": "deviation: cancel org C",
+   "method": "POST"
+  },
+  {
+   "name": "deviation: change plan org C",
+   "method": "POST"
+  }
+ ],
+ "responses": [
+  {
+   "status": 200,
+   "headers": {
+    "content-length": "2319",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "[{\"id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"key\":\"enterprise\",\"name\":\"Enterprise\",\"description\":null,\"tier\":\"enterprise\",\"is_active\":true,\"display_order\":1,\"stripe_product_id\":\"prod_existing\",\"metadata\":{},\"prices\":[{\"id\":\"1e60b3ef-4a4d-58ec-a34c-0b4caefd47f3\",\"plan_id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"interval\":\"monthly\",\"amount\":5000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":null},{\"id\":\"d346e58a-e52c-5bff-851e-02fa5ab423f5\",\"plan_id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"interval\":\"yearly\",\"amount\":50000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"price_ent_y\"}],\"bundles\":[]},{\"id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"key\":\"team\",\"name\":\"Team Plan\",\"description\":\"For teams\",\"tier\":\"team\",\"is_active\":true,\"display_order\":1,\"stripe_product_id\":null,\"metadata\":{\"z\":1,\"a\":{\"b\":[1.5,null]},\"q\":\"it's\"},\"prices\":[{\"id\":\"5a14dce8-d539-594b-b0ef-ec675d4b3f01\",\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"monthly\",\"amount\":1000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":null},{\"id\":\"6155ad80-b426-551c-9944-1d57c13086cf\",\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"yearly\",\"amount\":10000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"price_seed_y\"}],\"bundles\":[{\"id\":\"c85aa159-e4fa-5b28-8039-98361e34b384\",\"key\":\"a-core\",\"name\":\"Core\",\"description\":\"Core features\",\"features\":[]},{\"id\":\"d1043917-f762-5c85-8fe4-bd888f3ff1d7\",\"key\":\"b-analytics\",\"name\":\"Analytics\",\"description\":null,\"features\":[\"a\",\"b\"]}]},{\"id\":\"0b51e4e1-97b0-5c63-8fa8-82516ff19cdc\",\"key\":\"basic\",\"name\":\"Basic Old\",\"description\":null,\"tier\":\"community\",\"is_active\":true,\"display_order\":2,\"stripe_product_id\":null,\"metadata\":{\"note\":\"é\"},\"prices\":[{\"id\":\"45c48cce-2e2d-7fbd-ea1a-fc51c7c6ad26\",\"plan_id\":\"0b51e4e1-97b0-5c63-8fa8-82516ff19cdc\",\"interval\":\"monthly\",\"amount\":700,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":null}],\"bundles\":[]},{\"id\":\"5365a9d2-fcb5-5b76-9329-658b9201ad3b\",\"key\":\"empty-ids\",\"name\":\"Empty Ids\",\"description\":\"Blank Stripe ids\",\"tier\":\"team\",\"is_active\":true,\"display_order\":3,\"stripe_product_id\":\"\",\"metadata\":{},\"prices\":[{\"id\":\"d3d94468-02a4-4259-755d-38e6d163e820\",\"plan_id\":\"5365a9d2-fcb5-5b76-9329-658b9201ad3b\",\"interval\":\"monthly\",\"amount\":400,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"\"}],\"bundles\":[]}]"
+  },
+  {
+   "status": 200,
+   "headers": {
+    "content-length": "2319",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "[{\"id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"key\":\"enterprise\",\"name\":\"Enterprise\",\"description\":null,\"tier\":\"enterprise\",\"is_active\":true,\"display_order\":1,\"stripe_product_id\":\"prod_existing\",\"metadata\":{},\"prices\":[{\"id\":\"1e60b3ef-4a4d-58ec-a34c-0b4caefd47f3\",\"plan_id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"interval\":\"monthly\",\"amount\":5000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":null},{\"id\":\"d346e58a-e52c-5bff-851e-02fa5ab423f5\",\"plan_id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"interval\":\"yearly\",\"amount\":50000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"price_ent_y\"}],\"bundles\":[]},{\"id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"key\":\"team\",\"name\":\"Team Plan\",\"description\":\"For teams\",\"tier\":\"team\",\"is_active\":true,\"display_order\":1,\"stripe_product_id\":null,\"metadata\":{\"z\":1,\"a\":{\"b\":[1.5,null]},\"q\":\"it's\"},\"prices\":[{\"id\":\"5a14dce8-d539-594b-b0ef-ec675d4b3f01\",\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"monthly\",\"amount\":1000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":null},{\"id\":\"6155ad80-b426-551c-9944-1d57c13086cf\",\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"yearly\",\"amount\":10000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"price_seed_y\"}],\"bundles\":[{\"id\":\"c85aa159-e4fa-5b28-8039-98361e34b384\",\"key\":\"a-core\",\"name\":\"Core\",\"description\":\"Core features\",\"features\":[]},{\"id\":\"d1043917-f762-5c85-8fe4-bd888f3ff1d7\",\"key\":\"b-analytics\",\"name\":\"Analytics\",\"description\":null,\"features\":[\"a\",\"b\"]}]},{\"id\":\"0b51e4e1-97b0-5c63-8fa8-82516ff19cdc\",\"key\":\"basic\",\"name\":\"Basic Old\",\"description\":null,\"tier\":\"community\",\"is_active\":true,\"display_order\":2,\"stripe_product_id\":null,\"metadata\":{\"note\":\"é\"},\"prices\":[{\"id\":\"45c48cce-2e2d-7fbd-ea1a-fc51c7c6ad26\",\"plan_id\":\"0b51e4e1-97b0-5c63-8fa8-82516ff19cdc\",\"interval\":\"monthly\",\"amount\":700,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":null}],\"bundles\":[]},{\"id\":\"5365a9d2-fcb5-5b76-9329-658b9201ad3b\",\"key\":\"empty-ids\",\"name\":\"Empty Ids\",\"description\":\"Blank Stripe ids\",\"tier\":\"team\",\"is_active\":true,\"display_order\":3,\"stripe_product_id\":\"\",\"metadata\":{},\"prices\":[{\"id\":\"d3d94468-02a4-4259-755d-38e6d163e820\",\"plan_id\":\"5365a9d2-fcb5-5b76-9329-658b9201ad3b\",\"interval\":\"monthly\",\"amount\":400,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"\"}],\"bundles\":[]}]"
+  },
+  {
+   "status": 200,
+   "headers": {
+    "content-length": "2319",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "[{\"id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"key\":\"enterprise\",\"name\":\"Enterprise\",\"description\":null,\"tier\":\"enterprise\",\"is_active\":true,\"display_order\":1,\"stripe_product_id\":\"prod_existing\",\"metadata\":{},\"prices\":[{\"id\":\"1e60b3ef-4a4d-58ec-a34c-0b4caefd47f3\",\"plan_id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"interval\":\"monthly\",\"amount\":5000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":null},{\"id\":\"d346e58a-e52c-5bff-851e-02fa5ab423f5\",\"plan_id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"interval\":\"yearly\",\"amount\":50000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"price_ent_y\"}],\"bundles\":[]},{\"id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"key\":\"team\",\"name\":\"Team Plan\",\"description\":\"For teams\",\"tier\":\"team\",\"is_active\":true,\"display_order\":1,\"stripe_product_id\":null,\"metadata\":{\"z\":1,\"a\":{\"b\":[1.5,null]},\"q\":\"it's\"},\"prices\":[{\"id\":\"5a14dce8-d539-594b-b0ef-ec675d4b3f01\",\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"monthly\",\"amount\":1000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":null},{\"id\":\"6155ad80-b426-551c-9944-1d57c13086cf\",\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"yearly\",\"amount\":10000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"price_seed_y\"}],\"bundles\":[{\"id\":\"c85aa159-e4fa-5b28-8039-98361e34b384\",\"key\":\"a-core\",\"name\":\"Core\",\"description\":\"Core features\",\"features\":[]},{\"id\":\"d1043917-f762-5c85-8fe4-bd888f3ff1d7\",\"key\":\"b-analytics\",\"name\":\"Analytics\",\"description\":null,\"features\":[\"a\",\"b\"]}]},{\"id\":\"0b51e4e1-97b0-5c63-8fa8-82516ff19cdc\",\"key\":\"basic\",\"name\":\"Basic Old\",\"description\":null,\"tier\":\"community\",\"is_active\":true,\"display_order\":2,\"stripe_product_id\":null,\"metadata\":{\"note\":\"é\"},\"prices\":[{\"id\":\"45c48cce-2e2d-7fbd-ea1a-fc51c7c6ad26\",\"plan_id\":\"0b51e4e1-97b0-5c63-8fa8-82516ff19cdc\",\"interval\":\"monthly\",\"amount\":700,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":null}],\"bundles\":[]},{\"id\":\"5365a9d2-fcb5-5b76-9329-658b9201ad3b\",\"key\":\"empty-ids\",\"name\":\"Empty Ids\",\"description\":\"Blank Stripe ids\",\"tier\":\"team\",\"is_active\":true,\"display_order\":3,\"stripe_product_id\":\"\",\"metadata\":{},\"prices\":[{\"id\":\"d3d94468-02a4-4259-755d-38e6d163e820\",\"plan_id\":\"5365a9d2-fcb5-5b76-9329-658b9201ad3b\",\"interval\":\"monthly\",\"amount\":400,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"\"}],\"bundles\":[]}]"
+  },
+  {
+   "status": 403,
+   "headers": {
+    "content-length": "39",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"detail\":\"Superadmin access required\"}"
+  },
+  {
+   "status": 403,
+   "headers": {
+    "content-length": "39",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"detail\":\"Superadmin access required\"}"
+  },
+  {
+   "status": 200,
+   "headers": {
+    "content-length": "2913",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "[{\"id\":\"f49e1fc2-3dc1-597b-b874-986b00eb55ba\",\"key\":\"legacy\",\"name\":\"Legacy\",\"description\":null,\"tier\":\"team\",\"is_active\":false,\"display_order\":0,\"stripe_product_id\":null,\"metadata\":{},\"prices\":[{\"id\":\"c9f0f895-fb98-ab91-59f5-1fd0297e236d\",\"plan_id\":\"f49e1fc2-3dc1-597b-b874-986b00eb55ba\",\"interval\":\"yearly\",\"amount\":3000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"price_legacy_y\"}],\"bundles\":[]},{\"id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"key\":\"enterprise\",\"name\":\"Enterprise\",\"description\":null,\"tier\":\"enterprise\",\"is_active\":true,\"display_order\":1,\"stripe_product_id\":\"prod_existing\",\"metadata\":{},\"prices\":[{\"id\":\"1e60b3ef-4a4d-58ec-a34c-0b4caefd47f3\",\"plan_id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"interval\":\"monthly\",\"amount\":5000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":null},{\"id\":\"d346e58a-e52c-5bff-851e-02fa5ab423f5\",\"plan_id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"interval\":\"yearly\",\"amount\":50000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"price_ent_y\"}],\"bundles\":[]},{\"id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"key\":\"team\",\"name\":\"Team Plan\",\"description\":\"For teams\",\"tier\":\"team\",\"is_active\":true,\"display_order\":1,\"stripe_product_id\":null,\"metadata\":{\"z\":1,\"a\":{\"b\":[1.5,null]},\"q\":\"it's\"},\"prices\":[{\"id\":\"fc4f8f2e-2593-52e3-8804-35869b2b0de2\",\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"monthly\",\"amount\":900,\"currency\":\"eur\",\"is_active\":false,\"stripe_price_id\":null},{\"id\":\"5a14dce8-d539-594b-b0ef-ec675d4b3f01\",\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"monthly\",\"amount\":1000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":null},{\"id\":\"6155ad80-b426-551c-9944-1d57c13086cf\",\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"yearly\",\"amount\":10000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"price_seed_y\"}],\"bundles\":[{\"id\":\"c85aa159-e4fa-5b28-8039-98361e34b384\",\"key\":\"a-core\",\"name\":\"Core\",\"description\":\"Core features\",\"features\":[]},{\"id\":\"d1043917-f762-5c85-8fe4-bd888f3ff1d7\",\"key\":\"b-analytics\",\"name\":\"Analytics\",\"description\":null,\"features\":[\"a\",\"b\"]}]},{\"id\":\"0b51e4e1-97b0-5c63-8fa8-82516ff19cdc\",\"key\":\"basic\",\"name\":\"Basic Old\",\"description\":null,\"tier\":\"community\",\"is_active\":true,\"display_order\":2,\"stripe_product_id\":null,\"metadata\":{\"note\":\"é\"},\"prices\":[{\"id\":\"45c48cce-2e2d-7fbd-ea1a-fc51c7c6ad26\",\"plan_id\":\"0b51e4e1-97b0-5c63-8fa8-82516ff19cdc\",\"interval\":\"monthly\",\"amount\":700,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":null}],\"bundles\":[]},{\"id\":\"5365a9d2-fcb5-5b76-9329-658b9201ad3b\",\"key\":\"empty-ids\",\"name\":\"Empty Ids\",\"description\":\"Blank Stripe ids\",\"tier\":\"team\",\"is_active\":true,\"display_order\":3,\"stripe_product_id\":\"\",\"metadata\":{},\"prices\":[{\"id\":\"d3d94468-02a4-4259-755d-38e6d163e820\",\"plan_id\":\"5365a9d2-fcb5-5b76-9329-658b9201ad3b\",\"interval\":\"monthly\",\"amount\":400,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"\"}],\"bundles\":[]}]"
+  },
+  {
+   "status": 200,
+   "headers": {
+    "content-length": "2319",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "[{\"id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"key\":\"enterprise\",\"name\":\"Enterprise\",\"description\":null,\"tier\":\"enterprise\",\"is_active\":true,\"display_order\":1,\"stripe_product_id\":\"prod_existing\",\"metadata\":{},\"prices\":[{\"id\":\"1e60b3ef-4a4d-58ec-a34c-0b4caefd47f3\",\"plan_id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"interval\":\"monthly\",\"amount\":5000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":null},{\"id\":\"d346e58a-e52c-5bff-851e-02fa5ab423f5\",\"plan_id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"interval\":\"yearly\",\"amount\":50000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"price_ent_y\"}],\"bundles\":[]},{\"id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"key\":\"team\",\"name\":\"Team Plan\",\"description\":\"For teams\",\"tier\":\"team\",\"is_active\":true,\"display_order\":1,\"stripe_product_id\":null,\"metadata\":{\"z\":1,\"a\":{\"b\":[1.5,null]},\"q\":\"it's\"},\"prices\":[{\"id\":\"5a14dce8-d539-594b-b0ef-ec675d4b3f01\",\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"monthly\",\"amount\":1000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":null},{\"id\":\"6155ad80-b426-551c-9944-1d57c13086cf\",\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"yearly\",\"amount\":10000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"price_seed_y\"}],\"bundles\":[{\"id\":\"c85aa159-e4fa-5b28-8039-98361e34b384\",\"key\":\"a-core\",\"name\":\"Core\",\"description\":\"Core features\",\"features\":[]},{\"id\":\"d1043917-f762-5c85-8fe4-bd888f3ff1d7\",\"key\":\"b-analytics\",\"name\":\"Analytics\",\"description\":null,\"features\":[\"a\",\"b\"]}]},{\"id\":\"0b51e4e1-97b0-5c63-8fa8-82516ff19cdc\",\"key\":\"basic\",\"name\":\"Basic Old\",\"description\":null,\"tier\":\"community\",\"is_active\":true,\"display_order\":2,\"stripe_product_id\":null,\"metadata\":{\"note\":\"é\"},\"prices\":[{\"id\":\"45c48cce-2e2d-7fbd-ea1a-fc51c7c6ad26\",\"plan_id\":\"0b51e4e1-97b0-5c63-8fa8-82516ff19cdc\",\"interval\":\"monthly\",\"amount\":700,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":null}],\"bundles\":[]},{\"id\":\"5365a9d2-fcb5-5b76-9329-658b9201ad3b\",\"key\":\"empty-ids\",\"name\":\"Empty Ids\",\"description\":\"Blank Stripe ids\",\"tier\":\"team\",\"is_active\":true,\"display_order\":3,\"stripe_product_id\":\"\",\"metadata\":{},\"prices\":[{\"id\":\"d3d94468-02a4-4259-755d-38e6d163e820\",\"plan_id\":\"5365a9d2-fcb5-5b76-9329-658b9201ad3b\",\"interval\":\"monthly\",\"amount\":400,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"\"}],\"bundles\":[]}]"
+  },
+  {
+   "status": 422,
+   "headers": {
+    "content-length": "154",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"detail\":[{\"type\":\"bool_parsing\",\"loc\":[\"query\",\"include_inactive\"],\"msg\":\"Input should be a valid boolean, unable to interpret input\",\"input\":\"maybe\"}]}"
+  },
+  {
+   "status": 200,
+   "headers": {
+    "content-length": "879",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"key\":\"team\",\"name\":\"Team Plan\",\"description\":\"For teams\",\"tier\":\"team\",\"is_active\":true,\"display_order\":1,\"stripe_product_id\":null,\"metadata\":{\"z\":1,\"a\":{\"b\":[1.5,null]},\"q\":\"it's\"},\"prices\":[{\"id\":\"5a14dce8-d539-594b-b0ef-ec675d4b3f01\",\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"monthly\",\"amount\":1000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":null},{\"id\":\"6155ad80-b426-551c-9944-1d57c13086cf\",\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"yearly\",\"amount\":10000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"price_seed_y\"}],\"bundles\":[{\"id\":\"c85aa159-e4fa-5b28-8039-98361e34b384\",\"key\":\"a-core\",\"name\":\"Core\",\"description\":\"Core features\",\"features\":[]},{\"id\":\"d1043917-f762-5c85-8fe4-bd888f3ff1d7\",\"key\":\"b-analytics\",\"name\":\"Analytics\",\"description\":null,\"features\":[\"a\",\"b\"]}]}"
+  },
+  {
+   "status": 200,
+   "headers": {
+    "content-length": "879",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"key\":\"team\",\"name\":\"Team Plan\",\"description\":\"For teams\",\"tier\":\"team\",\"is_active\":true,\"display_order\":1,\"stripe_product_id\":null,\"metadata\":{\"z\":1,\"a\":{\"b\":[1.5,null]},\"q\":\"it's\"},\"prices\":[{\"id\":\"5a14dce8-d539-594b-b0ef-ec675d4b3f01\",\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"monthly\",\"amount\":1000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":null},{\"id\":\"6155ad80-b426-551c-9944-1d57c13086cf\",\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"yearly\",\"amount\":10000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"price_seed_y\"}],\"bundles\":[{\"id\":\"c85aa159-e4fa-5b28-8039-98361e34b384\",\"key\":\"a-core\",\"name\":\"Core\",\"description\":\"Core features\",\"features\":[]},{\"id\":\"d1043917-f762-5c85-8fe4-bd888f3ff1d7\",\"key\":\"b-analytics\",\"name\":\"Analytics\",\"description\":null,\"features\":[\"a\",\"b\"]}]}"
+  },
+  {
+   "status": 200,
+   "headers": {
+    "content-length": "879",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"key\":\"team\",\"name\":\"Team Plan\",\"description\":\"For teams\",\"tier\":\"team\",\"is_active\":true,\"display_order\":1,\"stripe_product_id\":null,\"metadata\":{\"z\":1,\"a\":{\"b\":[1.5,null]},\"q\":\"it's\"},\"prices\":[{\"id\":\"5a14dce8-d539-594b-b0ef-ec675d4b3f01\",\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"monthly\",\"amount\":1000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":null},{\"id\":\"6155ad80-b426-551c-9944-1d57c13086cf\",\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"yearly\",\"amount\":10000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"price_seed_y\"}],\"bundles\":[{\"id\":\"c85aa159-e4fa-5b28-8039-98361e34b384\",\"key\":\"a-core\",\"name\":\"Core\",\"description\":\"Core features\",\"features\":[]},{\"id\":\"d1043917-f762-5c85-8fe4-bd888f3ff1d7\",\"key\":\"b-analytics\",\"name\":\"Analytics\",\"description\":null,\"features\":[\"a\",\"b\"]}]}"
+  },
+  {
+   "status": 404,
+   "headers": {
+    "content-length": "27",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"detail\":\"Plan not found\"}"
+  },
+  {
+   "status": 200,
+   "headers": {
+    "content-length": "406",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"id\":\"f49e1fc2-3dc1-597b-b874-986b00eb55ba\",\"key\":\"legacy\",\"name\":\"Legacy\",\"description\":null,\"tier\":\"team\",\"is_active\":false,\"display_order\":0,\"stripe_product_id\":null,\"metadata\":{},\"prices\":[{\"id\":\"c9f0f895-fb98-ab91-59f5-1fd0297e236d\",\"plan_id\":\"f49e1fc2-3dc1-597b-b874-986b00eb55ba\",\"interval\":\"yearly\",\"amount\":3000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"price_legacy_y\"}],\"bundles\":[]}"
+  },
+  {
+   "status": 403,
+   "headers": {
+    "content-length": "39",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"detail\":\"Superadmin access required\"}"
+  },
+  {
+   "status": 200,
+   "headers": {
+    "content-length": "1066",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"key\":\"team\",\"name\":\"Team Plan\",\"description\":\"For teams\",\"tier\":\"team\",\"is_active\":true,\"display_order\":1,\"stripe_product_id\":null,\"metadata\":{\"z\":1,\"a\":{\"b\":[1.5,null]},\"q\":\"it's\"},\"prices\":[{\"id\":\"fc4f8f2e-2593-52e3-8804-35869b2b0de2\",\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"monthly\",\"amount\":900,\"currency\":\"eur\",\"is_active\":false,\"stripe_price_id\":null},{\"id\":\"5a14dce8-d539-594b-b0ef-ec675d4b3f01\",\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"monthly\",\"amount\":1000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":null},{\"id\":\"6155ad80-b426-551c-9944-1d57c13086cf\",\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"yearly\",\"amount\":10000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"price_seed_y\"}],\"bundles\":[{\"id\":\"c85aa159-e4fa-5b28-8039-98361e34b384\",\"key\":\"a-core\",\"name\":\"Core\",\"description\":\"Core features\",\"features\":[]},{\"id\":\"d1043917-f762-5c85-8fe4-bd888f3ff1d7\",\"key\":\"b-analytics\",\"name\":\"Analytics\",\"description\":null,\"features\":[\"a\",\"b\"]}]}"
+  },
+  {
+   "status": 422,
+   "headers": {
+    "content-length": "157",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"detail\":[{\"type\":\"bool_parsing\",\"loc\":[\"query\",\"include_inactive_prices\"],\"msg\":\"Input should be a valid boolean, unable to interpret input\",\"input\":\"x\"}]}"
+  },
+  {
+   "status": 400,
+   "headers": {
+    "content-length": "28",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"detail\":\"Invalid plan_id\"}"
+  },
+  {
+   "status": 404,
+   "headers": {
+    "content-length": "27",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"detail\":\"Plan not found\"}"
+  },
+  {
+   "status": 400,
+   "headers": {
+    "content-length": "28",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"detail\":\"Invalid plan_id\"}"
+  },
+  {
+   "status": 405,
+   "headers": {
+    "allow": "GET",
+    "content-length": "31",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"detail\":\"Method Not Allowed\"}"
+  },
+  {
+   "status": 405,
+   "headers": {
+    "allow": "GET",
+    "content-length": "31",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"detail\":\"Method Not Allowed\"}"
+  },
+  {
+   "status": 405,
+   "headers": {
+    "allow": "GET",
+    "content-length": "31",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"detail\":\"Method Not Allowed\"}"
+  },
+  {
+   "status": 422,
+   "headers": {
+    "content-length": "124",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"detail\":[{\"type\":\"json_invalid\",\"loc\":[\"body\",7],\"msg\":\"JSON decode error\",\"input\":{},\"ctx\":{\"error\":\"Expecting value\"}}]}"
+  },
+  {
+   "status": 401,
+   "headers": {
+    "content-length": "42",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "www-authenticate": "Bearer",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
+  },
+  {
+   "status": 422,
+   "headers": {
+    "content-length": "366",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"key\"],\"msg\":\"Field required\",\"input\":{\"tier\":\"gold\"}},{\"type\":\"missing\",\"loc\":[\"body\",\"name\"],\"msg\":\"Field required\",\"input\":{\"tier\":\"gold\"}},{\"type\":\"literal_error\",\"loc\":[\"body\",\"tier\"],\"msg\":\"Input should be 'community', 'team' or 'enterprise'\",\"input\":\"gold\",\"ctx\":{\"expected\":\"'community', 'team' or 'enterprise'\"}}]}"
+  },
+  {
+   "status": 403,
+   "headers": {
+    "content-length": "39",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"detail\":\"Superadmin access required\"}"
+  },
+  {
+   "status": 422,
+   "headers": {
+    "content-length": "873",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"key\"],\"msg\":\"Input should be a valid string\",\"input\":1},{\"type\":\"missing\",\"loc\":[\"body\",\"name\"],\"msg\":\"Field required\",\"input\":{\"key\":1,\"tier\":\"TEAM\",\"prices\":[{\"interval\":\"weekly\",\"amount\":-1},5]}},{\"type\":\"literal_error\",\"loc\":[\"body\",\"tier\"],\"msg\":\"Input should be 'community', 'team' or 'enterprise'\",\"input\":\"TEAM\",\"ctx\":{\"expected\":\"'community', 'team' or 'enterprise'\"}},{\"type\":\"enum\",\"loc\":[\"body\",\"prices\",0,\"interval\"],\"msg\":\"Input should be 'monthly' or 'yearly'\",\"input\":\"weekly\",\"ctx\":{\"expected\":\"'monthly' or 'yearly'\"}},{\"type\":\"greater_than_equal\",\"loc\":[\"body\",\"prices\",0,\"amount\"],\"msg\":\"Input should be greater than or equal to 0\",\"input\":-1,\"ctx\":{\"ge\":0}},{\"type\":\"model_attributes_type\",\"loc\":[\"body\",\"prices\",1],\"msg\":\"Input should be a valid dictionary or object to extract fields from\",\"input\":5}]}"
+  },
+  {
+   "status": 422,
+   "headers": {
+    "content-length": "82",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\"],\"msg\":\"Field required\",\"input\":null}]}"
+  },
+  {
+   "status": 200,
+   "headers": {
+    "content-length": "866",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"id\":\"\u003cid\u003e\",\"key\":\"pro\",\"name\":\"Pro\",\"description\":null,\"tier\":\"enterprise\",\"is_active\":true,\"display_order\":5,\"stripe_product_id\":null,\"metadata\":{\"k\":[1,2.0,\"é\"],\"k2\":{\"n\":null}},\"prices\":[{\"id\":\"\u003cid\u003e\",\"plan_id\":\"\u003cid\u003e\",\"interval\":\"monthly\",\"amount\":2000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":null},{\"id\":\"\u003cid\u003e\",\"plan_id\":\"\u003cid\u003e\",\"interval\":\"yearly\",\"amount\":20000,\"currency\":\"usd\",\"is_active\":false,\"stripe_price_id\":\"price_pro_y\"}],\"bundles\":[{\"id\":\"c85aa159-e4fa-5b28-8039-98361e34b384\",\"key\":\"a-core\",\"name\":\"Core\",\"description\":\"Core features\",\"features\":[]},{\"id\":\"d1043917-f762-5c85-8fe4-bd888f3ff1d7\",\"key\":\"b-analytics\",\"name\":\"Analytics\",\"description\":null,\"features\":[\"a\",\"b\"]}]}"
+  },
+  {
+   "status": 500,
+   "headers": {
+    "content-length": "34",
+    "content-type": "application/json"
+   },
+   "body": "{\"detail\":\"Internal Server Error\"}"
+  },
+  {
+   "status": 404,
+   "headers": {
+    "content-length": "55",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"detail\":\"One or more feature bundles were not found\"}"
+  },
+  {
+   "status": 400,
+   "headers": {
+    "content-length": "30",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"detail\":\"Invalid bundle_id\"}"
+  },
+  {
+   "status": 200,
+   "headers": {
+    "content-length": "574",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"id\":\"\u003cid\u003e\",\"key\":\"dup\",\"name\":\"Dup\",\"description\":null,\"tier\":\"community\",\"is_active\":true,\"display_order\":0,\"stripe_product_id\":null,\"metadata\":{},\"prices\":[{\"id\":\"\u003cid\u003e\",\"plan_id\":\"\u003cid\u003e\",\"interval\":\"monthly\",\"amount\":1,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":null},{\"id\":\"\u003cid\u003e\",\"plan_id\":\"\u003cid\u003e\",\"interval\":\"monthly\",\"amount\":2,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":null}],\"bundles\":[]}"
+  },
+  {
+   "status": 500,
+   "headers": {
+    "content-length": "34",
+    "content-type": "application/json"
+   },
+   "body": "{\"detail\":\"Internal Server Error\"}"
+  },
+  {
+   "status": 500,
+   "headers": {
+    "content-length": "34",
+    "content-type": "application/json"
+   },
+   "body": "{\"detail\":\"Internal Server Error\"}"
+  },
+  {
+   "status": 200,
+   "headers": {
+    "content-length": "4355",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "[{\"id\":\"\u003cid\u003e\",\"key\":\"dup\",\"name\":\"Dup\",\"description\":null,\"tier\":\"community\",\"is_active\":true,\"display_order\":0,\"stripe_product_id\":null,\"metadata\":{},\"prices\":[{\"id\":\"\u003cid\u003e\",\"plan_id\":\"\u003cid\u003e\",\"interval\":\"monthly\",\"amount\":1,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":null},{\"id\":\"\u003cid\u003e\",\"plan_id\":\"\u003cid\u003e\",\"interval\":\"monthly\",\"amount\":2,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":null}],\"bundles\":[]},{\"id\":\"f49e1fc2-3dc1-597b-b874-986b00eb55ba\",\"key\":\"legacy\",\"name\":\"Legacy\",\"description\":null,\"tier\":\"team\",\"is_active\":false,\"display_order\":0,\"stripe_product_id\":null,\"metadata\":{},\"prices\":[{\"id\":\"c9f0f895-fb98-ab91-59f5-1fd0297e236d\",\"plan_id\":\"f49e1fc2-3dc1-597b-b874-986b00eb55ba\",\"interval\":\"yearly\",\"amount\":3000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"price_legacy_y\"}],\"bundles\":[]},{\"id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"key\":\"enterprise\",\"name\":\"Enterprise\",\"description\":null,\"tier\":\"enterprise\",\"is_active\":true,\"display_order\":1,\"stripe_product_id\":\"prod_existing\",\"metadata\":{},\"prices\":[{\"id\":\"1e60b3ef-4a4d-58ec-a34c-0b4caefd47f3\",\"plan_id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"interval\":\"monthly\",\"amount\":5000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":null},{\"id\":\"d346e58a-e52c-5bff-851e-02fa5ab423f5\",\"plan_id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"interval\":\"yearly\",\"amount\":50000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"price_ent_y\"}],\"bundles\":[]},{\"id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"key\":\"team\",\"name\":\"Team Plan\",\"description\":\"For teams\",\"tier\":\"team\",\"is_active\":true,\"display_order\":1,\"stripe_product_id\":null,\"metadata\":{\"z\":1,\"a\":{\"b\":[1.5,null]},\"q\":\"it's\"},\"prices\":[{\"id\":\"fc4f8f2e-2593-52e3-8804-35869b2b0de2\",\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"monthly\",\"amount\":900,\"currency\":\"eur\",\"is_active\":false,\"stripe_price_id\":null},{\"id\":\"5a14dce8-d539-594b-b0ef-ec675d4b3f01\",\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"monthly\",\"amount\":1000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":null},{\"id\":\"6155ad80-b426-551c-9944-1d57c13086cf\",\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"yearly\",\"amount\":10000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"price_seed_y\"}],\"bundles\":[{\"id\":\"c85aa159-e4fa-5b28-8039-98361e34b384\",\"key\":\"a-core\",\"name\":\"Core\",\"description\":\"Core features\",\"features\":[]},{\"id\":\"d1043917-f762-5c85-8fe4-bd888f3ff1d7\",\"key\":\"b-analytics\",\"name\":\"Analytics\",\"description\":null,\"features\":[\"a\",\"b\"]}]},{\"id\":\"0b51e4e1-97b0-5c63-8fa8-82516ff19cdc\",\"key\":\"basic\",\"name\":\"Basic Old\",\"description\":null,\"tier\":\"community\",\"is_active\":true,\"display_order\":2,\"stripe_product_id\":null,\"metadata\":{\"note\":\"é\"},\"prices\":[{\"id\":\"45c48cce-2e2d-7fbd-ea1a-fc51c7c6ad26\",\"plan_id\":\"0b51e4e1-97b0-5c63-8fa8-82516ff19cdc\",\"interval\":\"monthly\",\"amount\":700,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":null}],\"bundles\":[]},{\"id\":\"5365a9d2-fcb5-5b76-9329-658b9201ad3b\",\"key\":\"empty-ids\",\"name\":\"Empty Ids\",\"description\":\"Blank Stripe ids\",\"tier\":\"team\",\"is_active\":true,\"display_order\":3,\"stripe_product_id\":\"\",\"metadata\":{},\"prices\":[{\"id\":\"d3d94468-02a4-4259-755d-38e6d163e820\",\"plan_id\":\"5365a9d2-fcb5-5b76-9329-658b9201ad3b\",\"interval\":\"monthly\",\"amount\":400,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"\"}],\"bundles\":[]},{\"id\":\"\u003cid\u003e\",\"key\":\"pro\",\"name\":\"Pro\",\"description\":null,\"tier\":\"enterprise\",\"is_active\":true,\"display_order\":5,\"stripe_product_id\":null,\"metadata\":{\"k\":[1,2.0,\"é\"],\"k2\":{\"n\":null}},\"prices\":[{\"id\":\"\u003cid\u003e\",\"plan_id\":\"\u003cid\u003e\",\"interval\":\"monthly\",\"amount\":2000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":null},{\"id\":\"\u003cid\u003e\",\"plan_id\":\"\u003cid\u003e\",\"interval\":\"yearly\",\"amount\":20000,\"currency\":\"usd\",\"is_active\":false,\"stripe_price_id\":\"price_pro_y\"}],\"bundles\":[{\"id\":\"c85aa159-e4fa-5b28-8039-98361e34b384\",\"key\":\"a-core\",\"name\":\"Core\",\"description\":\"Core features\",\"features\":[]},{\"id\":\"d1043917-f762-5c85-8fe4-bd888f3ff1d7\",\"key\":\"b-analytics\",\"name\":\"Analytics\",\"description\":null,\"features\":[\"a\",\"b\"]}]}]"
+  },
+  {
+   "status": 401,
+   "headers": {
+    "content-length": "42",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "www-authenticate": "Bearer",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
+  },
+  {
+   "status": 403,
+   "headers": {
+    "content-length": "39",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"detail\":\"Superadmin access required\"}"
+  },
+  {
+   "status": 422,
+   "headers": {
+    "content-length": "324",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"detail\":[{\"type\":\"bool_parsing\",\"loc\":[\"body\",\"is_active\"],\"msg\":\"Input should be a valid boolean, unable to interpret input\",\"input\":\"maybe\"},{\"type\":\"missing\",\"loc\":[\"body\",\"prices\",0,\"interval\"],\"msg\":\"Field required\",\"input\":{}},{\"type\":\"missing\",\"loc\":[\"body\",\"prices\",0,\"amount\"],\"msg\":\"Field required\",\"input\":{}}]}"
+  },
+  {
+   "status": 200,
+   "headers": {
+    "content-length": "615",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"key\":\"enterprise\",\"name\":\"Enterprise\",\"description\":null,\"tier\":\"enterprise\",\"is_active\":true,\"display_order\":1,\"stripe_product_id\":\"prod_existing\",\"metadata\":{},\"prices\":[{\"id\":\"1e60b3ef-4a4d-58ec-a34c-0b4caefd47f3\",\"plan_id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"interval\":\"monthly\",\"amount\":5000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":null},{\"id\":\"d346e58a-e52c-5bff-851e-02fa5ab423f5\",\"plan_id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"interval\":\"yearly\",\"amount\":50000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"price_ent_y\"}],\"bundles\":[]}"
+  },
+  {
+   "status": 200,
+   "headers": {
+    "content-length": "911",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"key\":\"team\",\"name\":\"Team Plan 2\",\"description\":\"For teams\",\"tier\":\"team\",\"is_active\":true,\"display_order\":1,\"stripe_product_id\":null,\"metadata\":{},\"prices\":[{\"id\":\"\u003cid\u003e\",\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"monthly\",\"amount\":800,\"currency\":\"gbp\",\"is_active\":true,\"stripe_price_id\":null},{\"id\":\"5a14dce8-d539-594b-b0ef-ec675d4b3f01\",\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"monthly\",\"amount\":1100,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":null},{\"id\":\"6155ad80-b426-551c-9944-1d57c13086cf\",\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"yearly\",\"amount\":11000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"price_seed_y\"}],\"bundles\":[{\"id\":\"d1043917-f762-5c85-8fe4-bd888f3ff1d7\",\"key\":\"b-analytics\",\"name\":\"Analytics\",\"description\":null,\"features\":[\"a\",\"b\"]}]}"
+  },
+  {
+   "status": 500,
+   "headers": {
+    "content-length": "34",
+    "content-type": "application/json"
+   },
+   "body": "{\"detail\":\"Internal Server Error\"}"
+  },
+  {
+   "status": 200,
+   "headers": {
+    "content-length": "406",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"id\":\"0b51e4e1-97b0-5c63-8fa8-82516ff19cdc\",\"key\":\"basic\",\"name\":\"Basic Old\",\"description\":null,\"tier\":\"enterprise\",\"is_active\":true,\"display_order\":7,\"stripe_product_id\":null,\"metadata\":{\"m\":1},\"prices\":[{\"id\":\"45c48cce-2e2d-7fbd-ea1a-fc51c7c6ad26\",\"plan_id\":\"0b51e4e1-97b0-5c63-8fa8-82516ff19cdc\",\"interval\":\"monthly\",\"amount\":700,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":null}],\"bundles\":[]}"
+  },
+  {
+   "status": 200,
+   "headers": {
+    "content-length": "406",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"id\":\"0b51e4e1-97b0-5c63-8fa8-82516ff19cdc\",\"key\":\"basic\",\"name\":\"Basic Old\",\"description\":null,\"tier\":\"enterprise\",\"is_active\":true,\"display_order\":7,\"stripe_product_id\":null,\"metadata\":{\"m\":1},\"prices\":[{\"id\":\"45c48cce-2e2d-7fbd-ea1a-fc51c7c6ad26\",\"plan_id\":\"0b51e4e1-97b0-5c63-8fa8-82516ff19cdc\",\"interval\":\"monthly\",\"amount\":700,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":null}],\"bundles\":[]}"
+  },
+  {
+   "status": 400,
+   "headers": {
+    "content-length": "30",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"detail\":\"Invalid bundle_id\"}"
+  },
+  {
+   "status": 400,
+   "headers": {
+    "content-length": "28",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"detail\":\"Invalid plan_id\"}"
+  },
+  {
+   "status": 404,
+   "headers": {
+    "content-length": "27",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"detail\":\"Plan not found\"}"
+  },
+  {
+   "status": 403,
+   "headers": {
+    "content-length": "39",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"detail\":\"Superadmin access required\"}"
+  },
+  {
+   "status": 400,
+   "headers": {
+    "content-length": "28",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"detail\":\"Invalid plan_id\"}"
+  },
+  {
+   "status": 404,
+   "headers": {
+    "content-length": "27",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"detail\":\"Plan not found\"}"
+  },
+  {
+   "status": 200,
+   "headers": {
+    "content-length": "16",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"deleted\":true}"
+  },
+  {
+   "status": 404,
+   "headers": {
+    "content-length": "27",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"detail\":\"Plan not found\"}"
+  },
+  {
+   "status": 403,
+   "headers": {
+    "content-length": "39",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"detail\":\"Superadmin access required\"}"
+  },
+  {
+   "status": 400,
+   "headers": {
+    "content-length": "28",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"detail\":\"Invalid plan_id\"}"
+  },
+  {
+   "status": 404,
+   "headers": {
+    "content-length": "27",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"detail\":\"Plan not found\"}"
+  },
+  {
+   "status": 200,
+   "headers": {
+    "content-length": "943",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"key\":\"team\",\"name\":\"Team Plan 2\",\"description\":\"For teams\",\"tier\":\"team\",\"is_active\":true,\"display_order\":1,\"stripe_product_id\":\"prod_venue_1\",\"metadata\":{},\"prices\":[{\"id\":\"\u003cid\u003e\",\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"monthly\",\"amount\":800,\"currency\":\"gbp\",\"is_active\":true,\"stripe_price_id\":\"price_venue_1\"},{\"id\":\"5a14dce8-d539-594b-b0ef-ec675d4b3f01\",\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"monthly\",\"amount\":1100,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"price_venue_2\"},{\"id\":\"6155ad80-b426-551c-9944-1d57c13086cf\",\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"yearly\",\"amount\":11000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"price_seed_y\"}],\"bundles\":[{\"id\":\"d1043917-f762-5c85-8fe4-bd888f3ff1d7\",\"key\":\"b-analytics\",\"name\":\"Analytics\",\"description\":null,\"features\":[\"a\",\"b\"]}]}"
+  },
+  {
+   "status": 200,
+   "headers": {
+    "content-length": "626",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"key\":\"enterprise\",\"name\":\"Enterprise\",\"description\":null,\"tier\":\"enterprise\",\"is_active\":true,\"display_order\":1,\"stripe_product_id\":\"prod_existing\",\"metadata\":{},\"prices\":[{\"id\":\"1e60b3ef-4a4d-58ec-a34c-0b4caefd47f3\",\"plan_id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"interval\":\"monthly\",\"amount\":5000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"price_venue_3\"},{\"id\":\"d346e58a-e52c-5bff-851e-02fa5ab423f5\",\"plan_id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"interval\":\"yearly\",\"amount\":50000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"price_ent_y\"}],\"bundles\":[]}"
+  },
+  {
+   "status": 200,
+   "headers": {
+    "content-length": "943",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"key\":\"team\",\"name\":\"Team Plan 2\",\"description\":\"For teams\",\"tier\":\"team\",\"is_active\":true,\"display_order\":1,\"stripe_product_id\":\"prod_venue_1\",\"metadata\":{},\"prices\":[{\"id\":\"\u003cid\u003e\",\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"monthly\",\"amount\":800,\"currency\":\"gbp\",\"is_active\":true,\"stripe_price_id\":\"price_venue_1\"},{\"id\":\"5a14dce8-d539-594b-b0ef-ec675d4b3f01\",\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"monthly\",\"amount\":1100,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"price_venue_2\"},{\"id\":\"6155ad80-b426-551c-9944-1d57c13086cf\",\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"yearly\",\"amount\":11000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"price_seed_y\"}],\"bundles\":[{\"id\":\"d1043917-f762-5c85-8fe4-bd888f3ff1d7\",\"key\":\"b-analytics\",\"name\":\"Analytics\",\"description\":null,\"features\":[\"a\",\"b\"]}]}"
+  },
+  {
+   "status": 200,
+   "headers": {
+    "content-length": "434",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"id\":\"5365a9d2-fcb5-5b76-9329-658b9201ad3b\",\"key\":\"empty-ids\",\"name\":\"Empty Ids\",\"description\":\"Blank Stripe ids\",\"tier\":\"team\",\"is_active\":true,\"display_order\":3,\"stripe_product_id\":\"prod_venue_2\",\"metadata\":{},\"prices\":[{\"id\":\"d3d94468-02a4-4259-755d-38e6d163e820\",\"plan_id\":\"5365a9d2-fcb5-5b76-9329-658b9201ad3b\",\"interval\":\"monthly\",\"amount\":400,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"price_venue_4\"}],\"bundles\":[]}"
+  },
+  {
+   "status": 401,
+   "headers": {
+    "content-length": "42",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "www-authenticate": "Bearer",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
+  },
+  {
+   "status": 403,
+   "headers": {
+    "content-length": "38",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"detail\":\"Superuser access required\"}"
+  },
+  {
+   "status": 403,
+   "headers": {
+    "content-length": "38",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"detail\":\"Superuser access required\"}"
+  },
+  {
+   "status": 200,
+   "headers": {
+    "content-length": "1339",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"created\":[\"n_code_pro ← prod_new\",\"conflict ← prod_conflict\"],\"updated\":[\"enterprise ← prod_existing\",\"basic ← prod_basic\",\"team ← prod_team\"],\"skipped\":[\"No Prices (prod_noprices): no recurring prices\"],\"errors\":[\"Err Product (prod_err): Request req_venue: boom\",\"Last One (prod_last): \u003cunique violation\u003e\"]}"
+  },
+  {
+   "status": 200,
+   "headers": {
+    "content-length": "4264",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "[{\"id\":\"\u003cid\u003e\",\"key\":\"dup\",\"name\":\"Dup\",\"description\":null,\"tier\":\"community\",\"is_active\":true,\"display_order\":0,\"stripe_product_id\":null,\"metadata\":{},\"prices\":[{\"id\":\"\u003cid\u003e\",\"plan_id\":\"\u003cid\u003e\",\"interval\":\"monthly\",\"amount\":1,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":null},{\"id\":\"\u003cid\u003e\",\"plan_id\":\"\u003cid\u003e\",\"interval\":\"monthly\",\"amount\":2,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":null}],\"bundles\":[]},{\"id\":\"f49e1fc2-3dc1-597b-b874-986b00eb55ba\",\"key\":\"legacy\",\"name\":\"Legacy\",\"description\":null,\"tier\":\"team\",\"is_active\":false,\"display_order\":0,\"stripe_product_id\":null,\"metadata\":{},\"prices\":[{\"id\":\"c9f0f895-fb98-ab91-59f5-1fd0297e236d\",\"plan_id\":\"f49e1fc2-3dc1-597b-b874-986b00eb55ba\",\"interval\":\"yearly\",\"amount\":3000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"price_legacy_y\"}],\"bundles\":[]},{\"id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"key\":\"enterprise\",\"name\":\"Enterprise\",\"description\":null,\"tier\":\"enterprise\",\"is_active\":true,\"display_order\":1,\"stripe_product_id\":\"prod_existing\",\"metadata\":{},\"prices\":[{\"id\":\"1e60b3ef-4a4d-58ec-a34c-0b4caefd47f3\",\"plan_id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"interval\":\"monthly\",\"amount\":5000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"price_venue_3\"},{\"id\":\"d346e58a-e52c-5bff-851e-02fa5ab423f5\",\"plan_id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"interval\":\"yearly\",\"amount\":50000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"price_ent_y\"}],\"bundles\":[]},{\"id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"key\":\"team\",\"name\":\"Team Plan 2\",\"description\":\"For teams\",\"tier\":\"team\",\"is_active\":true,\"display_order\":1,\"stripe_product_id\":\"prod_venue_1\",\"metadata\":{},\"prices\":[{\"id\":\"\u003cid\u003e\",\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"monthly\",\"amount\":800,\"currency\":\"gbp\",\"is_active\":true,\"stripe_price_id\":\"price_venue_1\"},{\"id\":\"5a14dce8-d539-594b-b0ef-ec675d4b3f01\",\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"monthly\",\"amount\":1100,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"price_venue_2\"},{\"id\":\"6155ad80-b426-551c-9944-1d57c13086cf\",\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"yearly\",\"amount\":11000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"price_seed_y\"}],\"bundles\":[{\"id\":\"d1043917-f762-5c85-8fe4-bd888f3ff1d7\",\"key\":\"b-analytics\",\"name\":\"Analytics\",\"description\":null,\"features\":[\"a\",\"b\"]}]},{\"id\":\"5365a9d2-fcb5-5b76-9329-658b9201ad3b\",\"key\":\"empty-ids\",\"name\":\"Empty Ids\",\"description\":\"Blank Stripe ids\",\"tier\":\"team\",\"is_active\":true,\"display_order\":3,\"stripe_product_id\":\"prod_venue_2\",\"metadata\":{},\"prices\":[{\"id\":\"d3d94468-02a4-4259-755d-38e6d163e820\",\"plan_id\":\"5365a9d2-fcb5-5b76-9329-658b9201ad3b\",\"interval\":\"monthly\",\"amount\":400,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"price_venue_4\"}],\"bundles\":[]},{\"id\":\"\u003cid\u003e\",\"key\":\"pro\",\"name\":\"Pro\",\"description\":null,\"tier\":\"enterprise\",\"is_active\":true,\"display_order\":5,\"stripe_product_id\":null,\"metadata\":{\"k\":[1,2.0,\"é\"],\"k2\":{\"n\":null}},\"prices\":[{\"id\":\"\u003cid\u003e\",\"plan_id\":\"\u003cid\u003e\",\"interval\":\"monthly\",\"amount\":2000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":null},{\"id\":\"\u003cid\u003e\",\"plan_id\":\"\u003cid\u003e\",\"interval\":\"yearly\",\"amount\":20000,\"currency\":\"usd\",\"is_active\":false,\"stripe_price_id\":\"price_pro_y\"}],\"bundles\":[{\"id\":\"c85aa159-e4fa-5b28-8039-98361e34b384\",\"key\":\"a-core\",\"name\":\"Core\",\"description\":\"Core features\",\"features\":[]},{\"id\":\"d1043917-f762-5c85-8fe4-bd888f3ff1d7\",\"key\":\"b-analytics\",\"name\":\"Analytics\",\"description\":null,\"features\":[\"a\",\"b\"]}]},{\"id\":\"0b51e4e1-97b0-5c63-8fa8-82516ff19cdc\",\"key\":\"basic\",\"name\":\"Basic Old\",\"description\":null,\"tier\":\"enterprise\",\"is_active\":false,\"display_order\":7,\"stripe_product_id\":null,\"metadata\":{\"m\":1},\"prices\":[{\"id\":\"45c48cce-2e2d-7fbd-ea1a-fc51c7c6ad26\",\"plan_id\":\"0b51e4e1-97b0-5c63-8fa8-82516ff19cdc\",\"interval\":\"monthly\",\"amount\":700,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":null}],\"bundles\":[]}]"
+  },
+  {
+   "status": 422,
+   "headers": {
+    "content-length": "158",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"detail\":[{\"type\":\"json_invalid\",\"loc\":[\"body\",1],\"msg\":\"JSON decode error\",\"input\":{},\"ctx\":{\"error\":\"Expecting property name enclosed in double quotes\"}}]}"
+  },
+  {
+   "status": 401,
+   "headers": {
+    "content-length": "42",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "www-authenticate": "Bearer",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
+  },
+  {
+   "status": 422,
+   "headers": {
+    "content-length": "285",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"tier\"],\"msg\":\"Input should be a valid string\",\"input\":1},{\"type\":\"missing\",\"loc\":[\"body\",\"success_url\"],\"msg\":\"Field required\",\"input\":{\"tier\":1}},{\"type\":\"missing\",\"loc\":[\"body\",\"cancel_url\"],\"msg\":\"Field required\",\"input\":{\"tier\":1}}]}"
+  },
+  {
+   "status": 400,
+   "headers": {
+    "content-length": "31",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"detail\":\"Invalid tier: gold\"}"
+  },
+  {
+   "status": 400,
+   "headers": {
+    "content-length": "52",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"detail\":\"No price configured for tier: Community\"}"
+  },
+  {
+   "status": 400,
+   "headers": {
+    "content-length": "33",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"detail\":\"Invalid checkout URL\"}"
+  },
+  {
+   "status": 400,
+   "headers": {
+    "content-length": "83",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"detail\":\"Invalid checkout URL: must be relative or start with an allowed prefix\"}"
+  },
+  {
+   "status": 400,
+   "headers": {
+    "content-length": "83",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"detail\":\"Invalid checkout URL: must be relative or start with an allowed prefix\"}"
+  },
+  {
+   "status": 400,
+   "headers": {
+    "content-length": "33",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"detail\":\"Invalid checkout URL\"}"
+  },
+  {
+   "status": 200,
+   "headers": {
+    "content-length": "74",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"session_id\":\"cs_venue_1\",\"url\":\"https://checkout.venue.test/cs_venue_1\"}"
+  },
+  {
+   "status": 200,
+   "headers": {
+    "content-length": "74",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"session_id\":\"cs_venue_2\",\"url\":\"https://checkout.venue.test/cs_venue_2\"}"
+  },
+  {
+   "status": 502,
+   "headers": {
+    "content-length": "46",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"detail\":\"Failed to create checkout session\"}"
+  },
+  {
+   "status": 200,
+   "headers": {
+    "content-length": "74",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"session_id\":\"cs_venue_3\",\"url\":\"https://checkout.venue.test/cs_venue_3\"}"
+  },
+  {
+   "status": 200,
+   "headers": {
+    "content-length": "36",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"session_id\":\"cs_venue_4\",\"url\":\"\"}"
+  },
+  {
+   "status": 200,
+   "headers": {
+    "content-length": "74",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"session_id\":\"cs_venue_5\",\"url\":\"https://checkout.venue.test/cs_venue_5\"}"
+  },
+  {
+   "status": 200,
+   "headers": {
+    "content-length": "74",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"session_id\":\"cs_venue_6\",\"url\":\"https://checkout.venue.test/cs_venue_6\"}"
+  },
+  {
+   "status": 401,
+   "headers": {
+    "content-length": "42",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "www-authenticate": "Bearer",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
+  },
+  {
+   "status": 200,
+   "headers": {
+    "content-length": "47",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"url\":\"https://portal.venue.test/bps_venue_1\"}"
+  },
+  {
+   "status": 200,
+   "headers": {
+    "content-length": "47",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"url\":\"https://portal.venue.test/bps_venue_2\"}"
+  },
+  {
+   "status": 200,
+   "headers": {
+    "content-length": "47",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"url\":\"https://portal.venue.test/bps_venue_3\"}"
+  },
+  {
+   "status": 404,
+   "headers": {
+    "content-length": "59",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"detail\":\"No billing account found for this organization\"}"
+  },
+  {
+   "status": 502,
+   "headers": {
+    "content-length": "44",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"detail\":\"Failed to create portal session\"}"
+  },
+  {
+   "status": 404,
+   "headers": {
+    "content-length": "59",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"detail\":\"No billing account found for this organization\"}"
+  },
+  {
+   "status": 404,
+   "headers": {
+    "content-length": "59",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"detail\":\"No billing account found for this organization\"}"
+  },
+  {
+   "status": 401,
+   "headers": {
+    "content-length": "42",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "www-authenticate": "Bearer",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
+  },
+  {
+   "status": 200,
+   "headers": {
+    "content-length": "1030",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"id\":\"11111111-0000-4000-8000-000000000002\",\"org_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"stripe_subscription_id\":\"sub_A2\",\"stripe_customer_id\":\"cus_A\",\"status\":\"trialing\",\"current_period_start\":\"2026-09-09T22:00:00+00:00\",\"current_period_end\":\"2026-10-10T00:00:00+00:00\",\"cancel_at_period_end\":false,\"canceled_at\":\"2026-09-11T08:30:00.123456+00:00\",\"trial_start\":\"2026-09-10T00:00:00+00:00\",\"trial_end\":\"2026-09-24T00:00:00+00:00\",\"plan\":{\"created_at\":\"2026-01-01T00:00:00+00:00\",\"description\":null,\"display_order\":1,\"id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"is_active\":true,\"key\":\"enterprise\",\"metadata_\":\"{}\",\"name\":\"Enterprise\",\"stripe_product_id\":\"prod_existing\",\"tier\":\"enterprise\",\"updated_at\":\"\u003cnow\u003e\"},\"price\":{\"amount\":50000,\"created_at\":\"2026-01-01T00:00:00+00:00\",\"currency\":\"usd\",\"id\":\"d346e58a-e52c-5bff-851e-02fa5ab423f5\",\"interval\":\"yearly\",\"is_active\":true,\"plan_id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"stripe_price_id\":\"price_ent_y\",\"updated_at\":\"2026-01-01T00:00:00+00:00\"}}"
+  },
+  {
+   "status": 200,
+   "headers": {
+    "content-length": "1030",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"id\":\"11111111-0000-4000-8000-000000000002\",\"org_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"stripe_subscription_id\":\"sub_A2\",\"stripe_customer_id\":\"cus_A\",\"status\":\"trialing\",\"current_period_start\":\"2026-09-09T22:00:00+00:00\",\"current_period_end\":\"2026-10-10T00:00:00+00:00\",\"cancel_at_period_end\":false,\"canceled_at\":\"2026-09-11T08:30:00.123456+00:00\",\"trial_start\":\"2026-09-10T00:00:00+00:00\",\"trial_end\":\"2026-09-24T00:00:00+00:00\",\"plan\":{\"created_at\":\"2026-01-01T00:00:00+00:00\",\"description\":null,\"display_order\":1,\"id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"is_active\":true,\"key\":\"enterprise\",\"metadata_\":\"{}\",\"name\":\"Enterprise\",\"stripe_product_id\":\"prod_existing\",\"tier\":\"enterprise\",\"updated_at\":\"\u003cnow\u003e\"},\"price\":{\"amount\":50000,\"created_at\":\"2026-01-01T00:00:00+00:00\",\"currency\":\"usd\",\"id\":\"d346e58a-e52c-5bff-851e-02fa5ab423f5\",\"interval\":\"yearly\",\"is_active\":true,\"plan_id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"stripe_price_id\":\"price_ent_y\",\"updated_at\":\"2026-01-01T00:00:00+00:00\"}}"
+  },
+  {
+   "status": 200,
+   "headers": {
+    "content-length": "1004",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"id\":\"11111111-0000-4000-8000-000000000003\",\"org_id\":\"1bdff33b-214e-5dbf-9424-b30e42a9a0ad\",\"stripe_subscription_id\":\"sub_C\",\"stripe_customer_id\":\"cus_fail\",\"status\":\"active\",\"current_period_start\":\"2026-08-01T00:00:00+00:00\",\"current_period_end\":\"2026-09-01T00:00:00+00:00\",\"cancel_at_period_end\":true,\"canceled_at\":null,\"trial_start\":\"2026-07-01T00:00:00+00:00\",\"trial_end\":\"2026-07-15T00:00:00+00:00\",\"plan\":{\"created_at\":\"2026-01-01T00:00:00+00:00\",\"description\":\"For teams\",\"display_order\":1,\"id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"is_active\":true,\"key\":\"team\",\"metadata_\":\"{}\",\"name\":\"Team Plan 2\",\"stripe_product_id\":\"prod_venue_1\",\"tier\":\"Team \",\"updated_at\":\"\u003cnow\u003e\"},\"price\":{\"amount\":1100,\"created_at\":\"2026-01-01T00:00:00+00:00\",\"currency\":\"usd\",\"id\":\"5a14dce8-d539-594b-b0ef-ec675d4b3f01\",\"interval\":\"monthly\",\"is_active\":true,\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"stripe_price_id\":\"price_venue_2\",\"updated_at\":\"\u003cnow\u003e\"}}"
+  },
+  {
+   "status": 200,
+   "headers": {
+    "content-length": "1004",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"id\":\"11111111-0000-4000-8000-000000000003\",\"org_id\":\"1bdff33b-214e-5dbf-9424-b30e42a9a0ad\",\"stripe_subscription_id\":\"sub_C\",\"stripe_customer_id\":\"cus_fail\",\"status\":\"active\",\"current_period_start\":\"2026-08-01T00:00:00+00:00\",\"current_period_end\":\"2026-09-01T00:00:00+00:00\",\"cancel_at_period_end\":true,\"canceled_at\":null,\"trial_start\":\"2026-07-01T00:00:00+00:00\",\"trial_end\":\"2026-07-15T00:00:00+00:00\",\"plan\":{\"created_at\":\"2026-01-01T00:00:00+00:00\",\"description\":\"For teams\",\"display_order\":1,\"id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"is_active\":true,\"key\":\"team\",\"metadata_\":\"{}\",\"name\":\"Team Plan 2\",\"stripe_product_id\":\"prod_venue_1\",\"tier\":\"Team \",\"updated_at\":\"\u003cnow\u003e\"},\"price\":{\"amount\":1100,\"created_at\":\"2026-01-01T00:00:00+00:00\",\"currency\":\"usd\",\"id\":\"5a14dce8-d539-594b-b0ef-ec675d4b3f01\",\"interval\":\"monthly\",\"is_active\":true,\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"stripe_price_id\":\"price_venue_2\",\"updated_at\":\"\u003cnow\u003e\"}}"
+  },
+  {
+   "status": 404,
+   "headers": {
+    "content-length": "35",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"detail\":\"No active subscription\"}"
+  },
+  {
+   "status": 200,
+   "headers": {
+    "content-length": "960",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"id\":\"11111111-0000-4000-8000-000000000004\",\"org_id\":\"092d1323-14fb-5f19-b878-28bcca58f9d6\",\"stripe_subscription_id\":\"sub_err\",\"stripe_customer_id\":\"cus_B\",\"status\":\"past_due\",\"current_period_start\":\"2026-08-01T00:00:00+00:00\",\"current_period_end\":\"2026-09-01T00:00:00+00:00\",\"cancel_at_period_end\":false,\"canceled_at\":null,\"trial_start\":null,\"trial_end\":null,\"plan\":{\"created_at\":\"2026-01-01T00:00:00+00:00\",\"description\":\"For teams\",\"display_order\":1,\"id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"is_active\":true,\"key\":\"team\",\"metadata_\":\"{}\",\"name\":\"Team Plan 2\",\"stripe_product_id\":\"prod_venue_1\",\"tier\":\"Team \",\"updated_at\":\"\u003cnow\u003e\"},\"price\":{\"amount\":1100,\"created_at\":\"2026-01-01T00:00:00+00:00\",\"currency\":\"usd\",\"id\":\"5a14dce8-d539-594b-b0ef-ec675d4b3f01\",\"interval\":\"monthly\",\"is_active\":true,\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"stripe_price_id\":\"price_venue_2\",\"updated_at\":\"\u003cnow\u003e\"}}"
+  },
+  {
+   "status": 400,
+   "headers": {
+    "content-length": "42",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"detail\":\"Organization context required\"}"
+  },
+  {
+   "status": 400,
+   "headers": {
+    "content-length": "33",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"detail\":\"Invalid organization\"}"
+  },
+  {
+   "status": 422,
+   "headers": {
+    "content-length": "200",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"detail\":[{\"type\":\"uuid_parsing\",\"loc\":[\"query\",\"org_id\"],\"msg\":\"Input should be a valid UUID, invalid character: found `n` at 1\",\"input\":\"nope\",\"ctx\":{\"error\":\"invalid character: found `n` at 1\"}}]}"
+  },
+  {
+   "status": 200,
+   "headers": {
+    "content-length": "1030",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"id\":\"11111111-0000-4000-8000-000000000002\",\"org_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"stripe_subscription_id\":\"sub_A2\",\"stripe_customer_id\":\"cus_A\",\"status\":\"trialing\",\"current_period_start\":\"2026-09-09T22:00:00+00:00\",\"current_period_end\":\"2026-10-10T00:00:00+00:00\",\"cancel_at_period_end\":false,\"canceled_at\":\"2026-09-11T08:30:00.123456+00:00\",\"trial_start\":\"2026-09-10T00:00:00+00:00\",\"trial_end\":\"2026-09-24T00:00:00+00:00\",\"plan\":{\"created_at\":\"2026-01-01T00:00:00+00:00\",\"description\":null,\"display_order\":1,\"id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"is_active\":true,\"key\":\"enterprise\",\"metadata_\":\"{}\",\"name\":\"Enterprise\",\"stripe_product_id\":\"prod_existing\",\"tier\":\"enterprise\",\"updated_at\":\"\u003cnow\u003e\"},\"price\":{\"amount\":50000,\"created_at\":\"2026-01-01T00:00:00+00:00\",\"currency\":\"usd\",\"id\":\"d346e58a-e52c-5bff-851e-02fa5ab423f5\",\"interval\":\"yearly\",\"is_active\":true,\"plan_id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"stripe_price_id\":\"price_ent_y\",\"updated_at\":\"2026-01-01T00:00:00+00:00\"}}"
+  },
+  {
+   "status": 200,
+   "headers": {
+    "content-length": "2038",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"items\":[{\"id\":\"11111111-0000-4000-8000-000000000002\",\"org_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"stripe_subscription_id\":\"sub_A2\",\"stripe_customer_id\":\"cus_A\",\"status\":\"trialing\",\"current_period_start\":\"2026-09-09T22:00:00+00:00\",\"current_period_end\":\"2026-10-10T00:00:00+00:00\",\"cancel_at_period_end\":false,\"canceled_at\":\"2026-09-11T08:30:00.123456+00:00\",\"trial_start\":\"2026-09-10T00:00:00+00:00\",\"trial_end\":\"2026-09-24T00:00:00+00:00\",\"plan\":{\"created_at\":\"2026-01-01T00:00:00+00:00\",\"description\":null,\"display_order\":1,\"id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"is_active\":true,\"key\":\"enterprise\",\"metadata_\":\"{}\",\"name\":\"Enterprise\",\"stripe_product_id\":\"prod_existing\",\"tier\":\"enterprise\",\"updated_at\":\"\u003cnow\u003e\"},\"price\":{\"amount\":50000,\"created_at\":\"2026-01-01T00:00:00+00:00\",\"currency\":\"usd\",\"id\":\"d346e58a-e52c-5bff-851e-02fa5ab423f5\",\"interval\":\"yearly\",\"is_active\":true,\"plan_id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"stripe_price_id\":\"price_ent_y\",\"updated_at\":\"2026-01-01T00:00:00+00:00\"}},{\"id\":\"11111111-0000-4000-8000-000000000001\",\"org_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"stripe_subscription_id\":\"sub_A\",\"stripe_customer_id\":\"cus_A\",\"status\":\"active\",\"current_period_start\":\"2026-09-01T00:00:00+00:00\",\"current_period_end\":\"2026-10-01T00:00:00.500000+00:00\",\"cancel_at_period_end\":false,\"canceled_at\":null,\"trial_start\":null,\"trial_end\":null,\"plan\":{\"created_at\":\"2026-01-01T00:00:00+00:00\",\"description\":\"For teams\",\"display_order\":1,\"id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"is_active\":true,\"key\":\"team\",\"metadata_\":\"{}\",\"name\":\"Team Plan 2\",\"stripe_product_id\":\"prod_venue_1\",\"tier\":\"Team \",\"updated_at\":\"\u003cnow\u003e\"},\"price\":{\"amount\":1100,\"created_at\":\"2026-01-01T00:00:00+00:00\",\"currency\":\"usd\",\"id\":\"5a14dce8-d539-594b-b0ef-ec675d4b3f01\",\"interval\":\"monthly\",\"is_active\":true,\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"stripe_price_id\":\"price_venue_2\",\"updated_at\":\"\u003cnow\u003e\"}}],\"total\":2,\"limit\":20,\"offset\":0}"
+  },
+  {
+   "status": 200,
+   "headers": {
+    "content-length": "1006",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"items\":[{\"id\":\"11111111-0000-4000-8000-000000000001\",\"org_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"stripe_subscription_id\":\"sub_A\",\"stripe_customer_id\":\"cus_A\",\"status\":\"active\",\"current_period_start\":\"2026-09-01T00:00:00+00:00\",\"current_period_end\":\"2026-10-01T00:00:00.500000+00:00\",\"cancel_at_period_end\":false,\"canceled_at\":null,\"trial_start\":null,\"trial_end\":null,\"plan\":{\"created_at\":\"2026-01-01T00:00:00+00:00\",\"description\":\"For teams\",\"display_order\":1,\"id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"is_active\":true,\"key\":\"team\",\"metadata_\":\"{}\",\"name\":\"Team Plan 2\",\"stripe_product_id\":\"prod_venue_1\",\"tier\":\"Team \",\"updated_at\":\"\u003cnow\u003e\"},\"price\":{\"amount\":1100,\"created_at\":\"2026-01-01T00:00:00+00:00\",\"currency\":\"usd\",\"id\":\"5a14dce8-d539-594b-b0ef-ec675d4b3f01\",\"interval\":\"monthly\",\"is_active\":true,\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"stripe_price_id\":\"price_venue_2\",\"updated_at\":\"\u003cnow\u003e\"}}],\"total\":2,\"limit\":1,\"offset\":1}"
+  },
+  {
+   "status": 200,
+   "headers": {
+    "content-length": "4004",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"items\":[{\"id\":\"11111111-0000-4000-8000-000000000003\",\"org_id\":\"1bdff33b-214e-5dbf-9424-b30e42a9a0ad\",\"stripe_subscription_id\":\"sub_C\",\"stripe_customer_id\":\"cus_fail\",\"status\":\"active\",\"current_period_start\":\"2026-08-01T00:00:00+00:00\",\"current_period_end\":\"2026-09-01T00:00:00+00:00\",\"cancel_at_period_end\":true,\"canceled_at\":null,\"trial_start\":\"2026-07-01T00:00:00+00:00\",\"trial_end\":\"2026-07-15T00:00:00+00:00\",\"plan\":{\"created_at\":\"2026-01-01T00:00:00+00:00\",\"description\":\"For teams\",\"display_order\":1,\"id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"is_active\":true,\"key\":\"team\",\"metadata_\":\"{}\",\"name\":\"Team Plan 2\",\"stripe_product_id\":\"prod_venue_1\",\"tier\":\"Team \",\"updated_at\":\"\u003cnow\u003e\"},\"price\":{\"amount\":1100,\"created_at\":\"2026-01-01T00:00:00+00:00\",\"currency\":\"usd\",\"id\":\"5a14dce8-d539-594b-b0ef-ec675d4b3f01\",\"interval\":\"monthly\",\"is_active\":true,\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"stripe_price_id\":\"price_venue_2\",\"updated_at\":\"\u003cnow\u003e\"}},{\"id\":\"11111111-0000-4000-8000-000000000002\",\"org_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"stripe_subscription_id\":\"sub_A2\",\"stripe_customer_id\":\"cus_A\",\"status\":\"trialing\",\"current_period_start\":\"2026-09-09T22:00:00+00:00\",\"current_period_end\":\"2026-10-10T00:00:00+00:00\",\"cancel_at_period_end\":false,\"canceled_at\":\"2026-09-11T08:30:00.123456+00:00\",\"trial_start\":\"2026-09-10T00:00:00+00:00\",\"trial_end\":\"2026-09-24T00:00:00+00:00\",\"plan\":{\"created_at\":\"2026-01-01T00:00:00+00:00\",\"description\":null,\"display_order\":1,\"id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"is_active\":true,\"key\":\"enterprise\",\"metadata_\":\"{}\",\"name\":\"Enterprise\",\"stripe_product_id\":\"prod_existing\",\"tier\":\"enterprise\",\"updated_at\":\"\u003cnow\u003e\"},\"price\":{\"amount\":50000,\"created_at\":\"2026-01-01T00:00:00+00:00\",\"currency\":\"usd\",\"id\":\"d346e58a-e52c-5bff-851e-02fa5ab423f5\",\"interval\":\"yearly\",\"is_active\":true,\"plan_id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"stripe_price_id\":\"price_ent_y\",\"updated_at\":\"2026-01-01T00:00:00+00:00\"}},{\"id\":\"11111111-0000-4000-8000-000000000001\",\"org_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"stripe_subscription_id\":\"sub_A\",\"stripe_customer_id\":\"cus_A\",\"status\":\"active\",\"current_period_start\":\"2026-09-01T00:00:00+00:00\",\"current_period_end\":\"2026-10-01T00:00:00.500000+00:00\",\"cancel_at_period_end\":false,\"canceled_at\":null,\"trial_start\":null,\"trial_end\":null,\"plan\":{\"created_at\":\"2026-01-01T00:00:00+00:00\",\"description\":\"For teams\",\"display_order\":1,\"id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"is_active\":true,\"key\":\"team\",\"metadata_\":\"{}\",\"name\":\"Team Plan 2\",\"stripe_product_id\":\"prod_venue_1\",\"tier\":\"Team \",\"updated_at\":\"\u003cnow\u003e\"},\"price\":{\"amount\":1100,\"created_at\":\"2026-01-01T00:00:00+00:00\",\"currency\":\"usd\",\"id\":\"5a14dce8-d539-594b-b0ef-ec675d4b3f01\",\"interval\":\"monthly\",\"is_active\":true,\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"stripe_price_id\":\"price_venue_2\",\"updated_at\":\"\u003cnow\u003e\"}},{\"id\":\"11111111-0000-4000-8000-000000000004\",\"org_id\":\"092d1323-14fb-5f19-b878-28bcca58f9d6\",\"stripe_subscription_id\":\"sub_err\",\"stripe_customer_id\":\"cus_B\",\"status\":\"past_due\",\"current_period_start\":\"2026-08-01T00:00:00+00:00\",\"current_period_end\":\"2026-09-01T00:00:00+00:00\",\"cancel_at_period_end\":false,\"canceled_at\":null,\"trial_start\":null,\"trial_end\":null,\"plan\":{\"created_at\":\"2026-01-01T00:00:00+00:00\",\"description\":\"For teams\",\"display_order\":1,\"id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"is_active\":true,\"key\":\"team\",\"metadata_\":\"{}\",\"name\":\"Team Plan 2\",\"stripe_product_id\":\"prod_venue_1\",\"tier\":\"Team \",\"updated_at\":\"\u003cnow\u003e\"},\"price\":{\"amount\":1100,\"created_at\":\"2026-01-01T00:00:00+00:00\",\"currency\":\"usd\",\"id\":\"5a14dce8-d539-594b-b0ef-ec675d4b3f01\",\"interval\":\"monthly\",\"is_active\":true,\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"stripe_price_id\":\"price_venue_2\",\"updated_at\":\"\u003cnow\u003e\"}}],\"total\":4,\"limit\":20,\"offset\":0}"
+  },
+  {
+   "status": 422,
+   "headers": {
+    "content-length": "463",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"detail\":[{\"type\":\"greater_than_equal\",\"loc\":[\"query\",\"limit\"],\"msg\":\"Input should be greater than or equal to 1\",\"input\":\"0\",\"ctx\":{\"ge\":1}},{\"type\":\"greater_than_equal\",\"loc\":[\"query\",\"offset\"],\"msg\":\"Input should be greater than or equal to 0\",\"input\":\"-1\",\"ctx\":{\"ge\":0}},{\"type\":\"uuid_parsing\",\"loc\":[\"query\",\"org_id\"],\"msg\":\"Input should be a valid UUID, invalid character: found `x` at 1\",\"input\":\"x\",\"ctx\":{\"error\":\"invalid character: found `x` at 1\"}}]}"
+  },
+  {
+   "status": 422,
+   "headers": {
+    "content-length": "144",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"detail\":[{\"type\":\"less_than_equal\",\"loc\":[\"query\",\"limit\"],\"msg\":\"Input should be less than or equal to 100\",\"input\":\"101\",\"ctx\":{\"le\":100}}]}"
+  },
+  {
+   "status": 500,
+   "headers": {
+    "content-length": "34",
+    "content-type": "application/json"
+   },
+   "body": "{\"detail\":\"Internal Server Error\"}"
+  },
+  {
+   "status": 401,
+   "headers": {
+    "content-length": "42",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "www-authenticate": "Bearer",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
+  },
+  {
+   "status": 200,
+   "headers": {
+    "content-length": "765",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"items\":[{\"id\":\"\u003cid\u003e\",\"stripe_event_id\":\"evt_2\",\"event_type\":\"customer.subscription.updated\",\"previous_status\":\"incomplete\",\"new_status\":\"trialing\",\"processed_at\":\"2026-09-10T00:00:01.000500+00:00\",\"payload\":{}},{\"id\":\"\u003cid\u003e\",\"stripe_event_id\":\"evt_3\",\"event_type\":\"customer.subscription.updated\",\"previous_status\":\"active\",\"new_status\":\"active\",\"processed_at\":\"2026-09-02T00:00:00+00:00\",\"payload\":{}},{\"id\":\"\u003cid\u003e\",\"stripe_event_id\":\"evt_1\",\"event_type\":\"customer.subscription.created\",\"previous_status\":null,\"new_status\":\"active\",\"processed_at\":\"2026-09-01T00:00:01+00:00\",\"payload\":{\"id\":\"evt_1\",\"data\":{\"b\":1,\"a\":[true,2.5,\"é\"]}}}],\"total\":3,\"limit\":20,\"offset\":0}"
+  },
+  {
+   "status": 200,
+   "headers": {
+    "content-length": "499",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"items\":[{\"id\":\"\u003cid\u003e\",\"stripe_event_id\":\"evt_2\",\"event_type\":\"customer.subscription.updated\",\"previous_status\":\"incomplete\",\"new_status\":\"trialing\",\"processed_at\":\"2026-09-10T00:00:01.000500+00:00\",\"payload\":{}},{\"id\":\"\u003cid\u003e\",\"stripe_event_id\":\"evt_3\",\"event_type\":\"customer.subscription.updated\",\"previous_status\":\"active\",\"new_status\":\"active\",\"processed_at\":\"2026-09-02T00:00:00+00:00\",\"payload\":{}}],\"total\":4,\"limit\":2,\"offset\":1}"
+  },
+  {
+   "status": 200,
+   "headers": {
+    "content-length": "266",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"items\":[{\"id\":\"\u003cid\u003e\",\"stripe_event_id\":\"evt_4\",\"event_type\":\"customer.subscription.updated\",\"previous_status\":null,\"new_status\":\"active\",\"processed_at\":\"2026-09-13T00:00:00+00:00\",\"payload\":{\"k\":1}}],\"total\":1,\"limit\":20,\"offset\":0}"
+  },
+  {
+   "status": 401,
+   "headers": {
+    "content-length": "42",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "www-authenticate": "Bearer",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
+  },
+  {
+   "status": 403,
+   "headers": {
+    "content-length": "34",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"detail\":\"Admin access required\"}"
+  },
+  {
+   "status": 422,
+   "headers": {
+    "content-length": "279",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"detail\":[{\"type\":\"uuid_parsing\",\"loc\":[\"query\",\"org_id\"],\"msg\":\"Input should be a valid UUID, invalid character: found `n` at 1\",\"input\":\"nope\",\"ctx\":{\"error\":\"invalid character: found `n` at 1\"}},{\"type\":\"missing\",\"loc\":[\"body\",\"price_id\"],\"msg\":\"Field required\",\"input\":{}}]}"
+  },
+  {
+   "status": 400,
+   "headers": {
+    "content-length": "28",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"detail\":\"org_id required\"}"
+  },
+  {
+   "status": 404,
+   "headers": {
+    "content-length": "34",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"detail\":\"No subscription found\"}"
+  },
+  {
+   "status": 200,
+   "headers": {
+    "content-length": "15",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"status\":\"ok\"}"
+  },
+  {
+   "status": 400,
+   "headers": {
+    "content-length": "45",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"detail\":\"Stripe subscription has no items\"}"
+  },
+  {
+   "status": 500,
+   "headers": {
+    "content-length": "34",
+    "content-type": "application/json"
+   },
+   "body": "{\"detail\":\"Internal Server Error\"}"
+  },
+  {
+   "status": 422,
+   "headers": {
+    "content-length": "82",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\"],\"msg\":\"Field required\",\"input\":null}]}"
+  },
+  {
+   "status": 200,
+   "headers": {
+    "content-length": "15",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"status\":\"ok\"}"
+  },
+  {
+   "status": 200,
+   "headers": {
+    "content-length": "15",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"status\":\"ok\"}"
+  },
+  {
+   "status": 422,
+   "headers": {
+    "content-length": "147",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"detail\":[{\"type\":\"bool_parsing\",\"loc\":[\"body\",\"immediately\"],\"msg\":\"Input should be a valid boolean, unable to interpret input\",\"input\":\"soon\"}]}"
+  },
+  {
+   "status": 200,
+   "headers": {
+    "content-length": "15",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"status\":\"ok\"}"
+  },
+  {
+   "status": 200,
+   "headers": {
+    "content-length": "15",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"status\":\"ok\"}"
+  },
+  {
+   "status": 403,
+   "headers": {
+    "content-length": "34",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"detail\":\"Admin access required\"}"
+  },
+  {
+   "status": 500,
+   "headers": {
+    "content-length": "34",
+    "content-type": "application/json"
+   },
+   "body": "{\"detail\":\"Internal Server Error\"}"
+  },
+  {
+   "status": 405,
+   "headers": {
+    "allow": "POST",
+    "content-length": "31",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"detail\":\"Method Not Allowed\"}"
+  },
+  {
+   "status": 200,
+   "headers": {
+    "content-length": "960",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"id\":\"11111111-0000-4000-8000-000000000004\",\"org_id\":\"092d1323-14fb-5f19-b878-28bcca58f9d6\",\"stripe_subscription_id\":\"sub_err\",\"stripe_customer_id\":\"cus_B\",\"status\":\"past_due\",\"current_period_start\":\"2026-08-01T00:00:00+00:00\",\"current_period_end\":\"2026-09-01T00:00:00+00:00\",\"cancel_at_period_end\":false,\"canceled_at\":null,\"trial_start\":null,\"trial_end\":null,\"plan\":{\"created_at\":\"2026-01-01T00:00:00+00:00\",\"description\":\"For teams\",\"display_order\":1,\"id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"is_active\":true,\"key\":\"team\",\"metadata_\":\"{}\",\"name\":\"Team Plan 2\",\"stripe_product_id\":\"prod_venue_1\",\"tier\":\"Team \",\"updated_at\":\"\u003cnow\u003e\"},\"price\":{\"amount\":1100,\"created_at\":\"2026-01-01T00:00:00+00:00\",\"currency\":\"usd\",\"id\":\"5a14dce8-d539-594b-b0ef-ec675d4b3f01\",\"interval\":\"monthly\",\"is_active\":true,\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"stripe_price_id\":\"price_venue_2\",\"updated_at\":\"\u003cnow\u003e\"}}"
+  },
+  {
+   "status": 200,
+   "headers": {
+    "content-length": "1048",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"items\":[{\"id\":\"11111111-0000-4000-8000-000000000003\",\"org_id\":\"1bdff33b-214e-5dbf-9424-b30e42a9a0ad\",\"stripe_subscription_id\":\"sub_C\",\"stripe_customer_id\":\"cus_fail\",\"status\":\"active\",\"current_period_start\":\"2026-08-01T00:00:00+00:00\",\"current_period_end\":\"2026-09-01T00:00:00+00:00\",\"cancel_at_period_end\":true,\"canceled_at\":null,\"trial_start\":\"2026-07-01T00:00:00+00:00\",\"trial_end\":\"2026-07-15T00:00:00+00:00\",\"plan\":{\"created_at\":\"2026-01-01T00:00:00+00:00\",\"description\":\"For teams\",\"display_order\":1,\"id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"is_active\":true,\"key\":\"team\",\"metadata_\":\"{}\",\"name\":\"Team Plan 2\",\"stripe_product_id\":\"prod_venue_1\",\"tier\":\"Team \",\"updated_at\":\"\u003cnow\u003e\"},\"price\":{\"amount\":1100,\"created_at\":\"2026-01-01T00:00:00+00:00\",\"currency\":\"usd\",\"id\":\"5a14dce8-d539-594b-b0ef-ec675d4b3f01\",\"interval\":\"monthly\",\"is_active\":true,\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"stripe_price_id\":\"price_venue_2\",\"updated_at\":\"\u003cnow\u003e\"}}],\"total\":1,\"limit\":20,\"offset\":0}"
+  },
+  {
+   "status": 200,
+   "headers": {
+    "content-length": "765",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"items\":[{\"id\":\"\u003cid\u003e\",\"stripe_event_id\":\"evt_2\",\"event_type\":\"customer.subscription.updated\",\"previous_status\":\"incomplete\",\"new_status\":\"trialing\",\"processed_at\":\"2026-09-10T00:00:01.000500+00:00\",\"payload\":{}},{\"id\":\"\u003cid\u003e\",\"stripe_event_id\":\"evt_3\",\"event_type\":\"customer.subscription.updated\",\"previous_status\":\"active\",\"new_status\":\"active\",\"processed_at\":\"2026-09-02T00:00:00+00:00\",\"payload\":{}},{\"id\":\"\u003cid\u003e\",\"stripe_event_id\":\"evt_1\",\"event_type\":\"customer.subscription.created\",\"previous_status\":null,\"new_status\":\"active\",\"processed_at\":\"2026-09-01T00:00:01+00:00\",\"payload\":{\"id\":\"evt_1\",\"data\":{\"b\":1,\"a\":[true,2.5,\"é\"]}}}],\"total\":3,\"limit\":20,\"offset\":0}"
+  },
+  {
+   "status": 200,
+   "headers": {
+    "content-length": "15",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"status\":\"ok\"}"
+  },
+  {
+   "status": 400,
+   "headers": {
+    "content-length": "45",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "req-1"
+   },
+   "body": "{\"detail\":\"Stripe subscription has no items\"}"
+  }
+ ],
+ "texts": {
+  "rows:billing_audit_log": "1bdff33b-214e-5dbf-9424-b30e42a9a0ad7790165a-5eff-5377-92c7-40a86f18dbactrial_abuse_preventedcheckout1bdff33b-214e-5dbf-9424-b30e42a9a0adOrg already had a trial, creating checkout without trial period\u003cnil\u003e{\"requested_trial_days\": 9223372036854775808}nullfalse \u003cnil\u003e \u003cnow\u003e",
+  "rows:billing_plans": "0b51e4e1-97b0-5c63-8fa8-82516ff19cdcbasicBasic Old\u003cnil\u003eenterprisefalse 7 \u003cnil\u003e{\"m\": 1}2026-01-01 00:00:00 +0000 UTC \u003cnow\u003e | \u003cid\u003edupDup\u003cnil\u003ecommunitytrue 0 \u003cnil\u003e{}\u003cnow\u003e \u003cnow\u003e | 5365a9d2-fcb5-5b76-9329-658b9201ad3bempty-idsEmpty IdsBlank Stripe idsteamtrue 3prod_venue_2{}2026-01-01 00:00:00 +0000 UTC \u003cnow\u003e | 56b0f5ee-605f-5e5f-afdd-c6521330f863enterpriseEnterprise\u003cnil\u003eenterprisetrue 1prod_existing{}2026-01-01 00:00:00 +0000 UTC \u003cnow\u003e | f49e1fc2-3dc1-597b-b874-986b00eb55balegacyLegacy\u003cnil\u003eweirdfalse 0 \u003cnil\u003e[]2026-01-01 00:00:00 +0000 UTC 2026-01-01 00:00:00 +0000 UTC | \u003cid\u003eproPro\u003cnil\u003eenterprisetrue 5 \u003cnil\u003e{\"k\": [1, 2.0, \"\\u00e9\"], \"k2\": {\"n\": null}}\u003cnow\u003e \u003cnow\u003e | ae72201b-4170-5c2b-95dc-1470b1919816teamTeam Plan 2For teamsTeam true 1prod_venue_1{}2026-01-01 00:00:00 +0000 UTC \u003cnow\u003e",
+  "rows:billing_prices": "45c48cce-2e2d-7fbd-ea1a-fc51c7c6ad26basicmonthly700usdtrue \u003cnil\u003e 2026-01-01 00:00:00 +0000 UTC 2026-01-01 00:00:00 +0000 UTC | \u003cid\u003edupmonthly1usdtrue \u003cnil\u003e \u003cnow\u003e \u003cnow\u003e | \u003cid\u003edupmonthly2usdtrue \u003cnil\u003e \u003cnow\u003e \u003cnow\u003e | d3d94468-02a4-4259-755d-38e6d163e820empty-idsmonthly400usdtrueprice_venue_42026-01-01 00:00:00 +0000 UTC \u003cnow\u003e | 1e60b3ef-4a4d-58ec-a34c-0b4caefd47f3enterprisemonthly5000usdtrueprice_venue_32026-01-01 00:00:00 +0000 UTC \u003cnow\u003e | d346e58a-e52c-5bff-851e-02fa5ab423f5enterpriseyearly50000usdtrueprice_ent_y2026-01-01 00:00:00 +0000 UTC 2026-01-01 00:00:00 +0000 UTC | c9f0f895-fb98-ab91-59f5-1fd0297e236dlegacyyearly3000usdtrueprice_legacy_y2026-01-01 00:00:00 +0000 UTC 2026-01-01 00:00:00 +0000 UTC | \u003cid\u003epromonthly2000usdtrue \u003cnil\u003e \u003cnow\u003e \u003cnow\u003e | \u003cid\u003eproyearly20000usdfalseprice_pro_y\u003cnow\u003e \u003cnow\u003e | \u003cid\u003eteammonthly800gbptrueprice_venue_1\u003cnow\u003e \u003cnow\u003e | 5a14dce8-d539-594b-b0ef-ec675d4b3f01teammonthly1100usdtrueprice_venue_22026-01-01 00:00:00 +0000 UTC \u003cnow\u003e | 6155ad80-b426-551c-9944-1d57c13086cfteamyearly11000usdtrueprice_seed_y2026-01-01 00:00:00 +0000 UTC \u003cnow\u003e",
+  "rows:plan_feature_bundles": "proa-core | prob-analytics | teamb-analytics",
+  "rows:subscriptions": "11111111-0000-4000-8000-000000000001active\u003cnil\u003e 2026-09-02 00:00:00 +0000 UTC | 11111111-0000-4000-8000-000000000002trialingfalse 2026-09-12 00:00:00 +0000 UTC | 11111111-0000-4000-8000-000000000003activetrue 2026-09-13 00:00:00 +0000 UTC | 11111111-0000-4000-8000-000000000004past_duefalse 2026-08-13 00:00:00 +0000 UTC",
+  "stripe_calls_py": "POST /v1/products | query= | form=description=For teams\u0026metadata[plan_key]=team\u0026metadata[tier]=team\u0026name=Team Plan 2 | version=2026-08-26.dahlia | idempotency=present | auth=fake-key\nPOST /v1/prices | query= | form=currency=gbp\u0026metadata[interval]=monthly\u0026metadata[plan_key]=team\u0026product=prod_venue_1\u0026recurring[interval]=month\u0026unit_amount=800 | version=2026-08-26.dahlia | idempotency=present | auth=fake-key\nPOST /v1/prices | query= | form=currency=usd\u0026metadata[interval]=monthly\u0026metadata[plan_key]=team\u0026product=prod_venue_1\u0026recurring[interval]=month\u0026unit_amount=1100 | version=2026-08-26.dahlia | idempotency=present | auth=fake-key\nPOST /v1/prices | query= | form=currency=usd\u0026metadata[interval]=monthly\u0026metadata[plan_key]=enterprise\u0026product=prod_existing\u0026recurring[interval]=month\u0026unit_amount=5000 | version=2026-08-26.dahlia | idempotency=present | auth=fake-key\nPOST /v1/products | query= | form=description=Blank Stripe ids\u0026metadata[plan_key]=empty-ids\u0026metadata[tier]=team\u0026name=Empty Ids | version=2026-08-26.dahlia | idempotency=present | auth=fake-key\nPOST /v1/prices | query= | form=currency=usd\u0026metadata[interval]=monthly\u0026metadata[plan_key]=empty-ids\u0026product=prod_venue_2\u0026recurring[interval]=month\u0026unit_amount=400 | version=2026-08-26.dahlia | idempotency=present | auth=fake-key\nGET /v1/products | query=active=true\u0026limit=100 | form= | version=2026-08-26.dahlia | idempotency=absent | auth=fake-key\nGET /v1/products | query=active=true\u0026limit=100\u0026starting_after=prod_basic | form= | version=2026-08-26.dahlia | idempotency=absent | auth=fake-key\nGET /v1/products | query=active=true\u0026limit=100\u0026starting_after=prod_new | form= | version=2026-08-26.dahlia | idempotency=absent | auth=fake-key\nGET /v1/products | query=active=true\u0026limit=100\u0026starting_after=prod_err | form= | version=2026-08-26.dahlia | idempotency=absent | auth=fake-key\nGET /v1/prices | query=active=true\u0026limit=100\u0026product=prod_existing | form= | version=2026-08-26.dahlia | idempotency=absent | auth=fake-key\nGET /v1/prices | query=active=true\u0026limit=100\u0026product=prod_basic | form= | version=2026-08-26.dahlia | idempotency=absent | auth=fake-key\nGET /v1/prices | query=active=true\u0026limit=100\u0026product=prod_team | form= | version=2026-08-26.dahlia | idempotency=absent | auth=fake-key\nGET /v1/prices | query=active=true\u0026limit=100\u0026product=prod_new | form= | version=2026-08-26.dahlia | idempotency=absent | auth=fake-key\nGET /v1/prices | query=active=true\u0026limit=100\u0026product=prod_new\u0026starting_after=price_new_w | form= | version=2026-08-26.dahlia | idempotency=absent | auth=fake-key\nGET /v1/prices | query=active=true\u0026limit=100\u0026product=prod_noprices | form= | version=2026-08-26.dahlia | idempotency=absent | auth=fake-key\nGET /v1/prices | query=active=true\u0026limit=100\u0026product=prod_err | form= | version=2026-08-26.dahlia | idempotency=absent | auth=fake-key\nGET /v1/prices | query=active=true\u0026limit=100\u0026product=prod_conflict | form= | version=2026-08-26.dahlia | idempotency=absent | auth=fake-key\nGET /v1/prices | query=active=true\u0026limit=100\u0026product=prod_last | form= | version=2026-08-26.dahlia | idempotency=absent | auth=fake-key\nPOST /v1/checkout/sessions | query= | form=cancel_url=https://alt.venue.test/no\u0026client_reference_id=092d1323-14fb-5f19-b878-28bcca58f9d6\u0026line_items[0][price]=price_team_cfg\u0026line_items[0][quantity]=1\u0026metadata[org_id]=092d1323-14fb-5f19-b878-28bcca58f9d6\u0026mode=subscription\u0026subscription_data[trial_period_days]=9223372036854775808\u0026subscription_data[trial_settings][end_behavior][missing_payment_method]=cancel\u0026success_url=https://app.venue.test/ok?s=1 | version=2026-08-26.dahlia | idempotency=present | auth=fake-key\nPOST /v1/checkout/sessions | query= | form=cancel_url=/no\u0026client_reference_id=1bdff33b-214e-5dbf-9424-b30e42a9a0ad\u0026line_items[0][price]=price_team_cfg\u0026line_items[0][quantity]=1\u0026metadata[org_id]=1bdff33b-214e-5dbf-9424-b30e42a9a0ad\u0026mode=subscription\u0026success_url=/ok | version=2026-08-26.dahlia | idempotency=present | auth=fake-key\nPOST /v1/checkout/sessions | query= | form=cancel_url=/no\u0026client_reference_id=37aa5733-344b-54a7-9210-c911e4ccf37a\u0026line_items[0][price]=price_team_cfg\u0026line_items[0][quantity]=1\u0026metadata[org_id]=37aa5733-344b-54a7-9210-c911e4ccf37a\u0026mode=subscription\u0026success_url=/stripe-fail | version=2026-08-26.dahlia | idempotency=present | auth=fake-key\nPOST /v1/checkout/sessions | query= | form=cancel_url=https://x.test/pathz\u0026client_reference_id=37aa5733-344b-54a7-9210-c911e4ccf37a\u0026line_items[0][price]=price_ent_cfg\u0026line_items[0][quantity]=1\u0026metadata[org_id]=37aa5733-344b-54a7-9210-c911e4ccf37a\u0026mode=subscription\u0026success_url=/ok | version=2026-08-26.dahlia | idempotency=present | auth=fake-key\nPOST /v1/checkout/sessions | query= | form=cancel_url=/no\u0026client_reference_id=37aa5733-344b-54a7-9210-c911e4ccf37a\u0026line_items[0][price]=price_ent_cfg\u0026line_items[0][quantity]=1\u0026metadata[org_id]=37aa5733-344b-54a7-9210-c911e4ccf37a\u0026mode=subscription\u0026success_url=/no-url | version=2026-08-26.dahlia | idempotency=present | auth=fake-key\nPOST /v1/checkout/sessions | query= | form=cancel_url=/no\u0026client_reference_id=\u0026line_items[0][price]=price_team_cfg\u0026line_items[0][quantity]=1\u0026metadata[org_id]=\u0026mode=subscription\u0026subscription_data[trial_period_days]=9223372036854775808\u0026subscription_data[trial_settings][end_behavior][missing_payment_method]=cancel\u0026success_url=/ok | version=2026-08-26.dahlia | idempotency=present | auth=fake-key\nPOST /v1/checkout/sessions | query= | form=cancel_url=/no\u0026client_reference_id=not-a-uuid\u0026line_items[0][price]=price_team_cfg\u0026line_items[0][quantity]=1\u0026metadata[org_id]=not-a-uuid\u0026mode=subscription\u0026subscription_data[trial_period_days]=9223372036854775808\u0026subscription_data[trial_settings][end_behavior][missing_payment_method]=cancel\u0026success_url=/ok | version=2026-08-26.dahlia | idempotency=present | auth=fake-key\nPOST /v1/billing_portal/sessions | query= | form=customer=cus_A\u0026return_url=/ | version=2026-08-26.dahlia | idempotency=present | auth=fake-key\nPOST /v1/billing_portal/sessions | query= | form=customer=cus_A\u0026return_url=https://y.test/ | version=2026-08-26.dahlia | idempotency=present | auth=fake-key\nPOST /v1/billing_portal/sessions | query= | form=customer=cus_A\u0026return_url=/ | version=2026-08-26.dahlia | idempotency=present | auth=fake-key\nPOST /v1/billing_portal/sessions | query= | form=customer=cus_fail\u0026return_url=/ | version=2026-08-26.dahlia | idempotency=present | auth=fake-key\nGET /v1/subscriptions/sub_A2 | query= | form= | version=2026-08-26.dahlia | idempotency=absent | auth=fake-key\nPOST /v1/subscriptions/sub_A2 | query= | form=items[0][id]=si_sub_A2\u0026items[0][price]=price_x\u0026proration_behavior=create_prorations | version=2026-08-26.dahlia | idempotency=present | auth=fake-key\nGET /v1/subscriptions/sub_C | query= | form= | version=2026-08-26.dahlia | idempotency=absent | auth=fake-key\nGET /v1/subscriptions/sub_err | query= | form= | version=2026-08-26.dahlia | idempotency=absent | auth=fake-key\nPOST /v1/subscriptions/sub_A2 | query= | form=cancel_at_period_end=true | version=2026-08-26.dahlia | idempotency=present | auth=fake-key\nDELETE /v1/subscriptions/sub_A2 | query= | form= | version=2026-08-26.dahlia | idempotency=absent | auth=fake-key\nPOST /v1/subscriptions/sub_A2 | query= | form=cancel_at_period_end=false | version=2026-08-26.dahlia | idempotency=present | auth=fake-key\nPOST /v1/subscriptions/sub_A2 | query= | form=cancel_at_period_end=false | version=2026-08-26.dahlia | idempotency=present | auth=fake-key\nPOST /v1/subscriptions/sub_err | query= | form=cancel_at_period_end=false | version=2026-08-26.dahlia | idempotency=present | auth=fake-key\nPOST /v1/subscriptions/sub_C | query= | form=cancel_at_period_end=true | version=2026-08-26.dahlia | idempotency=present | auth=fake-key\nGET /v1/subscriptions/sub_C | query= | form= | version=2026-08-26.dahlia | idempotency=absent | auth=fake-key"
+ }
+}

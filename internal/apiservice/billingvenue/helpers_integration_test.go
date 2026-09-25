@@ -18,6 +18,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/billing/stripeclient"
@@ -124,4 +125,44 @@ func startBillingVenueAPI(t *testing.T, ctx context.Context, cfg config.Config, 
 	ts := httptest.NewServer(server.Handler())
 	t.Cleanup(ts.Close)
 	return ts.URL
+}
+
+// venueNamespace makes the venue's fixture ids the same in every run: a
+// recording of the Python plane (venueoracle.Frozen) holds the seeded ids
+// literally, so the run that replays it must seed the same ones.
+var venueNamespace = uuid.MustParse("6f6d0b50-8f0e-4a55-9c31-2a5cbe0a6817")
+
+// venueID is the fixture id named label, stable across runs.
+func venueID(label string) uuid.UUID { return uuid.NewSHA1(venueNamespace, []byte(label)) }
+
+// resetSeedSequence starts the sequence the seed SQL draws its row ids from
+// (md5(nextval(...))::uuid, in place of gen_random_uuid()), so the rows a seed
+// inserts get the same ids in every run.
+func resetSeedSequence(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+	t.Helper()
+	for _, statement := range []string{`DROP SEQUENCE IF EXISTS venue_seed_seq`, `CREATE SEQUENCE venue_seed_seq`} {
+		if _, err := pool.Exec(ctx, statement); err != nil {
+			t.Fatalf("seed sequence: %v", err)
+		}
+	}
+}
+
+// frozenGolden is the checked-in recording of the Python plane for test name.
+func frozenGolden(name string) string { return filepath.Join("testdata", "frozen", name+".json") }
+
+// frozenReason names, in the Go-only proof, what these oracles measure.
+const frozenReason = "Go against the Python plane's recorded answers (recorded by executing the last Python-bearing build; see testdata/frozen)"
+
+// frozenCalls is the Stripe calls the Python plane made, as the recording holds
+// them (live in record mode).
+func frozenCalls(frozen *venueoracle.Frozen, fake *fakeStripe, plane string) []string {
+	text := frozen.Text("stripe_calls_"+plane, func() string {
+		fake.mu.Lock()
+		defer fake.mu.Unlock()
+		return strings.Join(fake.calls[plane], "\n")
+	})
+	if text == "" {
+		return nil
+	}
+	return strings.Split(text, "\n")
 }

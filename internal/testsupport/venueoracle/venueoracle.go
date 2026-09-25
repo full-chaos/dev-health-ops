@@ -824,6 +824,16 @@ type DiffOptions struct {
 // CI job's check loudly, rather than reading as a pass built on nothing.
 func Diff(t *testing.T, goBase string, requests []Request, python []Response, options DiffOptions) string {
 	t.Helper()
+	receipt := diffPlanes(t, goBase, requests, python, options)
+	writeProof(t)
+	return receipt
+}
+
+// diffPlanes is Diff's comparison without its proof: every request goes to the
+// Go api and its answer is compared with the matching Python answer (live, or a
+// recording: DiffRecorded).
+func diffPlanes(t *testing.T, goBase string, requests []Request, python []Response, options DiffOptions) string {
+	t.Helper()
 	if len(python) != len(requests) {
 		t.Fatalf("diff: %d python responses for %d requests", len(python), len(requests))
 	}
@@ -847,7 +857,6 @@ func Diff(t *testing.T, goBase string, requests []Request, python []Response, op
 	if violations := policy.WriterViolations(); violations > 0 {
 		t.Errorf("%d body writes used the wrong writer for their route (see the policy ERROR logs naming each route)", violations)
 	}
-	writeProof(t)
 	return receipt.String()
 }
 

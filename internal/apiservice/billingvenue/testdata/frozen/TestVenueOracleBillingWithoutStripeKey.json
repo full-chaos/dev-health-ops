@@ -1,0 +1,337 @@
+{
+ "recorded_at_sha": "9a0f5a99087456debc2a9b5821144797cbe326dc",
+ "recipe": "On a tree whose Python route bodies still exist (the recorded sha), from the package directory: DHO_FROZEN_PYTHON_RECORD=1 DHO_FROZEN_PYTHON_SHA=\u003csha\u003e DEV_HEALTH_LIVE_PYTHON_ORACLES=1 go test -tags=integration -count=1 -run '^TestVenueOracleBillingWithoutStripeKey$' . (the venue oracle runs the live Python plane and rewrites this file).",
+ "requests": [
+  {
+   "name": "checkout: team shares the enterprise price",
+   "method": "POST"
+  },
+  {
+   "name": "checkout: default base url accepted, no key",
+   "method": "POST"
+  },
+  {
+   "name": "checkout: default base url refused",
+   "method": "POST"
+  },
+  {
+   "name": "checkout: enterprise for a trialed org, no key",
+   "method": "POST"
+  },
+  {
+   "name": "portal: no key",
+   "method": "POST"
+  },
+  {
+   "name": "portal: no customer, no key",
+   "method": "POST"
+  },
+  {
+   "name": "sync: no key",
+   "method": "POST"
+  },
+  {
+   "name": "sync: missing plan, no key",
+   "method": "POST"
+  },
+  {
+   "name": "pull: no key",
+   "method": "POST"
+  },
+  {
+   "name": "change plan: no key",
+   "method": "POST"
+  },
+  {
+   "name": "cancel: no key",
+   "method": "POST"
+  },
+  {
+   "name": "reactivate: no key",
+   "method": "POST"
+  },
+  {
+   "name": "reactivate: no subscription, no key",
+   "method": "POST"
+  },
+  {
+   "name": "plans: no key needed",
+   "method": "GET"
+  },
+  {
+   "name": "void: no key",
+   "method": "POST"
+  },
+  {
+   "name": "void: paid, no key",
+   "method": "POST"
+  },
+  {
+   "name": "resolve: no key",
+   "method": "POST"
+  },
+  {
+   "name": "resolve: missing, no key",
+   "method": "POST"
+  },
+  {
+   "name": "reconcile: no key",
+   "method": "POST"
+  },
+  {
+   "name": "reconcile: member, no key",
+   "method": "POST"
+  }
+ ],
+ "responses": [
+  {
+   "status": 400,
+   "headers": {
+    "content-length": "47",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "2d612700-7d96-4038-a067-98c7a20cfb6d"
+   },
+   "body": "{\"detail\":\"No price configured for tier: team\"}"
+  },
+  {
+   "status": 500,
+   "headers": {
+    "content-length": "62",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "9a16fef8-683f-45ae-a8d9-309dfa266269"
+   },
+   "body": "{\"detail\":\"STRIPE_SECRET_KEY environment variable is not set\"}"
+  },
+  {
+   "status": 400,
+   "headers": {
+    "content-length": "83",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "021cd73e-0d9a-4862-a44e-827887a8eb94"
+   },
+   "body": "{\"detail\":\"Invalid checkout URL: must be relative or start with an allowed prefix\"}"
+  },
+  {
+   "status": 500,
+   "headers": {
+    "content-length": "62",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "e9dd77a9-e7b3-4483-8555-b9407b4b6dab"
+   },
+   "body": "{\"detail\":\"STRIPE_SECRET_KEY environment variable is not set\"}"
+  },
+  {
+   "status": 500,
+   "headers": {
+    "content-length": "62",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "16447513-c17d-4872-be0f-6a7af6185849"
+   },
+   "body": "{\"detail\":\"STRIPE_SECRET_KEY environment variable is not set\"}"
+  },
+  {
+   "status": 404,
+   "headers": {
+    "content-length": "59",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "ed581364-48ee-4dcc-b1df-1c72d75ec2e2"
+   },
+   "body": "{\"detail\":\"No billing account found for this organization\"}"
+  },
+  {
+   "status": 500,
+   "headers": {
+    "content-length": "34",
+    "content-type": "application/json"
+   },
+   "body": "{\"detail\":\"Internal Server Error\"}"
+  },
+  {
+   "status": 404,
+   "headers": {
+    "content-length": "27",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "5c8647ca-62d5-4094-a521-337ec49609a8"
+   },
+   "body": "{\"detail\":\"Plan not found\"}"
+  },
+  {
+   "status": 500,
+   "headers": {
+    "content-length": "34",
+    "content-type": "application/json"
+   },
+   "body": "{\"detail\":\"Internal Server Error\"}"
+  },
+  {
+   "status": 500,
+   "headers": {
+    "content-length": "34",
+    "content-type": "application/json"
+   },
+   "body": "{\"detail\":\"Internal Server Error\"}"
+  },
+  {
+   "status": 500,
+   "headers": {
+    "content-length": "34",
+    "content-type": "application/json"
+   },
+   "body": "{\"detail\":\"Internal Server Error\"}"
+  },
+  {
+   "status": 500,
+   "headers": {
+    "content-length": "34",
+    "content-type": "application/json"
+   },
+   "body": "{\"detail\":\"Internal Server Error\"}"
+  },
+  {
+   "status": 404,
+   "headers": {
+    "content-length": "34",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "24c75b3b-494c-47af-ba8d-b9308f7bc3b4"
+   },
+   "body": "{\"detail\":\"No subscription found\"}"
+  },
+  {
+   "status": 200,
+   "headers": {
+    "content-length": "2319",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "68e98a07-7197-4caa-a3b9-2fbe647b149d"
+   },
+   "body": "[{\"id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"key\":\"enterprise\",\"name\":\"Enterprise\",\"description\":null,\"tier\":\"enterprise\",\"is_active\":true,\"display_order\":1,\"stripe_product_id\":\"prod_existing\",\"metadata\":{},\"prices\":[{\"id\":\"1e60b3ef-4a4d-58ec-a34c-0b4caefd47f3\",\"plan_id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"interval\":\"monthly\",\"amount\":5000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":null},{\"id\":\"d346e58a-e52c-5bff-851e-02fa5ab423f5\",\"plan_id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"interval\":\"yearly\",\"amount\":50000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"price_ent_y\"}],\"bundles\":[]},{\"id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"key\":\"team\",\"name\":\"Team Plan\",\"description\":\"For teams\",\"tier\":\"team\",\"is_active\":true,\"display_order\":1,\"stripe_product_id\":null,\"metadata\":{\"z\":1,\"a\":{\"b\":[1.5,null]},\"q\":\"it's\"},\"prices\":[{\"id\":\"5a14dce8-d539-594b-b0ef-ec675d4b3f01\",\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"monthly\",\"amount\":1000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":null},{\"id\":\"6155ad80-b426-551c-9944-1d57c13086cf\",\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"yearly\",\"amount\":10000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"price_seed_y\"}],\"bundles\":[{\"id\":\"c85aa159-e4fa-5b28-8039-98361e34b384\",\"key\":\"a-core\",\"name\":\"Core\",\"description\":\"Core features\",\"features\":[]},{\"id\":\"d1043917-f762-5c85-8fe4-bd888f3ff1d7\",\"key\":\"b-analytics\",\"name\":\"Analytics\",\"description\":null,\"features\":[\"a\",\"b\"]}]},{\"id\":\"0b51e4e1-97b0-5c63-8fa8-82516ff19cdc\",\"key\":\"basic\",\"name\":\"Basic Old\",\"description\":null,\"tier\":\"community\",\"is_active\":true,\"display_order\":2,\"stripe_product_id\":null,\"metadata\":{\"note\":\"é\"},\"prices\":[{\"id\":\"45c48cce-2e2d-7fbd-ea1a-fc51c7c6ad26\",\"plan_id\":\"0b51e4e1-97b0-5c63-8fa8-82516ff19cdc\",\"interval\":\"monthly\",\"amount\":700,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":null}],\"bundles\":[]},{\"id\":\"5365a9d2-fcb5-5b76-9329-658b9201ad3b\",\"key\":\"empty-ids\",\"name\":\"Empty Ids\",\"description\":\"Blank Stripe ids\",\"tier\":\"team\",\"is_active\":true,\"display_order\":3,\"stripe_product_id\":\"\",\"metadata\":{},\"prices\":[{\"id\":\"d3d94468-02a4-4259-755d-38e6d163e820\",\"plan_id\":\"5365a9d2-fcb5-5b76-9329-658b9201ad3b\",\"interval\":\"monthly\",\"amount\":400,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"\"}],\"bundles\":[]}]"
+  },
+  {
+   "status": 500,
+   "headers": {
+    "content-length": "62",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "008094ea-c239-4e32-803c-dbc3e4fed090"
+   },
+   "body": "{\"detail\":\"STRIPE_SECRET_KEY environment variable is not set\"}"
+  },
+  {
+   "status": 400,
+   "headers": {
+    "content-length": "68",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "3b6c382c-a3d1-4429-84cf-416db0a370af"
+   },
+   "body": "{\"detail\":\"Only open invoices can be voided (current status: paid)\"}"
+  },
+  {
+   "status": 500,
+   "headers": {
+    "content-length": "34",
+    "content-type": "application/json"
+   },
+   "body": "{\"detail\":\"Internal Server Error\"}"
+  },
+  {
+   "status": 500,
+   "headers": {
+    "content-length": "34",
+    "content-type": "application/json"
+   },
+   "body": "{\"detail\":\"Internal Server Error\"}"
+  },
+  {
+   "status": 500,
+   "headers": {
+    "content-length": "34",
+    "content-type": "application/json"
+   },
+   "body": "{\"detail\":\"Internal Server Error\"}"
+  },
+  {
+   "status": 403,
+   "headers": {
+    "content-length": "39",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "vary": "Origin",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "0d89cbf6-7eec-4643-9437-032e39575bfa"
+   },
+   "body": "{\"detail\":\"Superadmin access required\"}"
+  }
+ ],
+ "texts": {
+  "rows:SELECT action, org_id::text, local_state::text FROM billing_audit_log ORDER BY org_id, created_at, action": "x1bdff33b-214e-5dbf-9424-b30e42a9a0ad[1] | webhook.received37aa5733-344b-54a7-9210-c911e4ccf37a\u003cnil\u003e | reconciliation.mismatch_found37aa5733-344b-54a7-9210-c911e4ccf37a{\"field\": \"status\", \"value\": 1.50, \"t\": \"é\"} | checkout.created37aa5733-344b-54a7-9210-c911e4ccf37anull",
+  "rows:SELECT id::text, status, voided_at, updated_at FROM invoices ORDER BY id": "22222222-0000-4000-8000-000000000001open\u003cnil\u003e 2026-09-01 00:00:00 +0000 UTC | 22222222-0000-4000-8000-000000000002paid\u003cnil\u003e 2026-09-02 00:00:00 +0000 UTC | 22222222-0000-4000-8000-000000000003void2026-09-03 00:00:00 +0000 UTC 2026-09-03 00:00:00 +0000 UTC | 22222222-0000-4000-8000-000000000004open\u003cnil\u003e 2026-09-04 00:00:00 +0000 UTC | 22222222-0000-4000-8000-000000000005open\u003cnil\u003e 2026-08-30 00:00:00 +0000 UTC | 22222222-0000-4000-8000-000000000006open\u003cnil\u003e 2026-09-05 00:00:00 +0000 UTC",
+  "rows:SELECT key, stripe_product_id, updated_at FROM billing_plans ORDER BY key": "basic\u003cnil\u003e 2026-01-01 00:00:00 +0000 UTC | empty-ids2026-01-01 00:00:00 +0000 UTC | enterpriseprod_existing2026-01-01 00:00:00 +0000 UTC | legacy\u003cnil\u003e 2026-01-01 00:00:00 +0000 UTC | team\u003cnil\u003e 2026-01-01 00:00:00 +0000 UTC"
+ }
+}

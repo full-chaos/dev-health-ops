@@ -32,6 +32,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
+	pgstorage "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	valkeystore "github.com/full-chaos/dev-health-ops/internal/storage/valkey"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime"
 )
@@ -300,7 +301,7 @@ func runFinalizeSynthetic(ctx context.Context, env cli.Env) int {
 	if !ok {
 		return cli.ExitFailure
 	}
-	boundary := secrets.NewBoundary(dsn.Reveal())
+	boundary := pgstorage.Boundary(dsn.Reveal())
 	pool, err := pgxpool.New(ctx, dsn.Reveal())
 	if err != nil {
 		return writeError(env.Stderr, cli.ExitFailure, "postgres_unavailable", boundary.Redact(err).Error())

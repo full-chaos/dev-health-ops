@@ -326,23 +326,6 @@ func (h *handlers) listSourceBatches(w http.ResponseWriter, r *http.Request) {
 	policy.WriteModel(w, http.StatusOK, out, nil)
 }
 
-// jsonObjectColumn is a `dict | None` field read from a json column's
-// text: None for SQL NULL or JSON null, the object with its stored key
-// order otherwise.
-func jsonObjectColumn(raw []byte) (pyjson.Value, error) {
-	if len(raw) == 0 {
-		return nil, nil
-	}
-	decoded, err := pyjson.Decode(raw)
-	if err != nil || decoded == nil {
-		return nil, err
-	}
-	if _, ok := decoded.(*pyjson.Object); !ok {
-		return nil, errors.New("json column is not an object")
-	}
-	return decoded, nil
-}
-
 func (h *handlers) getBatch(w http.ResponseWriter, r *http.Request) {
 	values := r.URL.Query()
 	var errs pybody.Errors
@@ -388,13 +371,14 @@ func (h *handlers) batchDetail(ctx context.Context, orgID string, batch external
 	if err != nil {
 		return nil, err
 	}
-	recordCounts, err := jsonObjectColumn(batch.RecordCountsJSON)
-	if err != nil {
-		return nil, err
+	// The batch row's JSON columns were already read the way status.py's
+	// _parse_json reads them (a value that is not a dict never reaches here).
+	var recordCounts, errorSummary pyjson.Value
+	if batch.RecordCounts != nil {
+		recordCounts = batch.RecordCounts
 	}
-	errorSummary, err := jsonObjectColumn(batch.ErrorSummaryJSON)
-	if err != nil {
-		return nil, err
+	if batch.ErrorSummary != nil {
+		errorSummary = batch.ErrorSummary
 	}
 	out := pyjson.NewObject()
 	out.Set("ingestion_id", batch.IngestionID.String())

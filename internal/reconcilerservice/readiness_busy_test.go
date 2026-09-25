@@ -17,19 +17,19 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchcontract"
 	"github.com/full-chaos/dev-health-ops/internal/syncreconciler"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakepg"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/poolpg"
 )
 
 // CHAOS-6771: the reconciler's execution_liveness self-probe runs on the domain
 // pool; a pool fully acquired by progressing work is BUSY, not BROKEN. Real
-// pgxpool connections (fakepg), the production composition and the real health
+// pgxpool connections (poolpg), the production composition and the real health
 // registry: stale the monitor, hold every connection, sample once -- the sample
 // passes as busy and readiness does not fail execution_liveness. Handing the
 // monitor the raw opener fails this test.
 func TestExecutionLivenessSamplePassesAsBusyOnAFullyAcquiredDomainPool(t *testing.T) {
 	t.Chdir(filepath.Join("..", ".."))
 	ctx := context.Background()
-	addr := fakepg.Serve(t)
+	addr := poolpg.Serve(t)
 	poolConfig, err := pgxpool.ParseConfig("postgres://reconciler:secret@" + addr + "/devhealth?sslmode=disable")
 	if err != nil {
 		t.Fatal(err)

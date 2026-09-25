@@ -74,15 +74,6 @@ func TestConfiguredHostFirstTruthyKeyWins(t *testing.T) {
 	}
 }
 
-// A source's metadata is read for two string keys only; a number Go's float64
-// cannot hold elsewhere in it must not lose those keys.
-func TestDecodeMetadataKeepsStringKeysBesideAnOverflowNumber(t *testing.T) {
-	metadata := decodeMetadata([]byte(`{"path_with_namespace":"group/project","weight":1e400}`))
-	if got, _ := metadata["path_with_namespace"].(string); got != "group/project" {
-		t.Fatalf("path_with_namespace = %q, want it kept beside 1e400 (metadata %v)", got, metadata)
-	}
-}
-
 // A stored document nested deeper than encoding/json's limit (10000) is read by
 // Python; pyConfig scans it iteratively and reads the string keys beside it
 // (CHAOS-6748 r3). 1100 levels matched on both APIs before; 10001 did not.

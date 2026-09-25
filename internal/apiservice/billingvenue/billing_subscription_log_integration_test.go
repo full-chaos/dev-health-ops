@@ -153,4 +153,7 @@ func TestSubscriptionSkipLinesNameTheEvent(t *testing.T) {
 	expect("unknown price on update: the tier warning names the price", line, "price_ids=", unknownPrice)
 
 	t.Log("\n" + receipt)
+	// No Python response is compared (the Python api logs none of these fields), so the venue
+	// verb needs the Go-only proof instead of a both-planes one.
+	venueoracle.WriteGoOnlyProof(t, "the Go api's own skip and failure log lines name the event, subscription, customer, org and price")
 }

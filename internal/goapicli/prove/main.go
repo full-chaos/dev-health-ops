@@ -62,6 +62,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/goapiproof"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/platform/version"
+	pgstorage "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 )
 
 // The proof-plane credential environment variable. VALUES never appear in
@@ -257,7 +258,7 @@ func run(args []string) (err error) {
 	parsed, parseErr := parseFlags(args)
 	f = parsed
 	if parseErr != nil {
-		return secrets.NewBoundary(f.postgresURI).Redact(parseErr)
+		return pgstorage.Boundary(f.postgresURI).Redact(parseErr)
 	}
 	// A single boundary, applied here via defer, covers every error this
 	// function returns from this point on, no matter which layer
@@ -267,7 +268,7 @@ func run(args []string) (err error) {
 	// than trusting every call site downstream to redact its own. A
 	// bare `return expr` still assigns expr to `err` before this defer
 	// runs, so every return in the rest of the function is covered.
-	boundary := secrets.NewBoundary(f.postgresURI)
+	boundary := pgstorage.Boundary(f.postgresURI)
 	defer func() { err = boundary.Redact(err) }()
 
 	// Refused before anything is measured: the note is stored inside a
@@ -785,7 +786,7 @@ func emitReport(f flags, registry goapiproof.RegistryView, builds goapiproof.Pro
 		ExitCause:      exitCause,
 	}
 	if runErr != nil {
-		r.ExitDetail = secrets.NewBoundary(f.postgresURI).Redact(runErr).Error()
+		r.ExitDetail = pgstorage.Boundary(f.postgresURI).Redact(runErr).Error()
 	}
 	if err := writeReportFile(f.reportPath, r); err != nil {
 		return err

@@ -12,18 +12,18 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	schedulersync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakepg"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/poolpg"
 )
 
 // CHAOS-6771: the scheduler's execution_liveness self-probe runs on the domain
 // pool; a pool fully acquired by progressing work is BUSY, not BROKEN. Real
-// pgxpool connections (fakepg), the production builder and the real health
+// pgxpool connections (poolpg), the production builder and the real health
 // registry: stale the monitor, hold every connection, sample once -- the sample
 // passes as busy and readiness does not fail execution_liveness. Handing the
 // monitor the raw opener fails this test.
 func TestExecutionLivenessSamplePassesAsBusyOnAFullyAcquiredDomainPool(t *testing.T) {
 	ctx := context.Background()
-	addr := fakepg.Serve(t)
+	addr := poolpg.Serve(t)
 	poolConfig, err := pgxpool.ParseConfig("postgres://domain:secret@" + addr + "/devhealth?sslmode=disable")
 	if err != nil {
 		t.Fatal(err)

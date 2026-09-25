@@ -10,14 +10,14 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/selfprobe"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakepg"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/poolpg"
 )
 
 // Real pgxpool connections against the fake server: Saturated and PoolProgress
 // read the pool's real Stat(), and the opener turns a real acquire timeout on a
 // fully acquired pool into a busy pass.
 func TestOpenerOnARealSaturatedPool(t *testing.T) {
-	addr := fakepg.Serve(t)
+	addr := poolpg.Serve(t)
 	config, err := pgxpool.ParseConfig("postgres://role:secret@" + addr + "/db?sslmode=disable")
 	if err != nil {
 		t.Fatal(err)
@@ -98,7 +98,7 @@ func TestOpenerOnARealSaturatedPool(t *testing.T) {
 // looked saturated), time out, and read as BUSY. A deadline on the BEGIN itself is
 // not an acquire timeout: it must stay a failure.
 func TestAStalledBeginOnASaturatedPoolIsNotBusy(t *testing.T) {
-	server := fakepg.Start(t)
+	server := poolpg.Start(t)
 	server.StallBegin(true)
 	config, err := pgxpool.ParseConfig("postgres://role:secret@" + server.Addr() + "/db?sslmode=disable")
 	if err != nil {
@@ -134,7 +134,7 @@ func TestAStalledBeginOnASaturatedPoolIsNotBusy(t *testing.T) {
 // The probe's own acquires are not evidence that the pool's WORK is moving: a
 // pool wedged by stuck work must go red even while probes keep acquiring.
 func TestOwnAcquiresDoNotCountAsProgress(t *testing.T) {
-	addr := fakepg.Serve(t)
+	addr := poolpg.Serve(t)
 	config, err := pgxpool.ParseConfig("postgres://role:secret@" + addr + "/db?sslmode=disable")
 	if err != nil {
 		t.Fatal(err)
@@ -176,7 +176,7 @@ func TestOwnAcquiresDoNotCountAsProgress(t *testing.T) {
 // left the own-acquire counter nil or zero would read the probe's acquires as
 // the work moving and stay green.
 func TestLivenessProgressIgnoresTheProbesOwnAcquires(t *testing.T) {
-	addr := fakepg.Serve(t)
+	addr := poolpg.Serve(t)
 	config, err := pgxpool.ParseConfig("postgres://role:secret@" + addr + "/db?sslmode=disable")
 	if err != nil {
 		t.Fatal(err)

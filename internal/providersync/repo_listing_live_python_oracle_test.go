@@ -105,7 +105,7 @@ func goListing(kase listingCase) listingOutcome {
 	}
 	base := "https://api.github.com"
 	if kase.Provider == "gitlab" {
-		base = "https://gitlab.com/api/v4"
+		base = "https://gitlab.com" // the production shape: providerfoundation.NewGitLabClient takes the instance host
 	}
 	client, err := providerfoundation.NewHTTPClient(kase.Provider, base, doer,
 		func(*http.Request) error { return nil },

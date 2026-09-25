@@ -51,6 +51,9 @@ type GitHubListing struct {
 	MaxRepos *int
 }
 
+// gitLabRESTPrefix is the REST root under a GitLab instance host.
+const gitLabRESTPrefix = "/api/v4"
+
 const (
 	repoListingPerPage  = 100
 	repoListingMaxPages = 100
@@ -101,7 +104,8 @@ func pyStrOrEmpty(object *pyjson.Object, key string) string {
 }
 
 // clientBasePath is the client's base URL path without a trailing slash: a
-// GitLab client's base ends in /api/v4, a GitHub Enterprise one in /api/v3.
+// GitLab client's base is the instance host (the listing adds /api/v4), a
+// GitHub Enterprise one ends in /api/v3.
 func clientBasePath(client *providerfoundation.HTTPClient) string {
 	if client == nil || client.BaseURL == nil {
 		return ""
@@ -193,9 +197,13 @@ func effectiveGitLabGroup(listing GitLabListing) string {
 // (only an uncapped, patternless listing bounds the page count by MaxProjects),
 // then each project kept when its lower-cased path_with_namespace matches.
 func ListGitLabProjects(ctx context.Context, client *providerfoundation.HTTPClient, listing GitLabListing) ([]ListedRepository, error) {
-	path := clientBasePath(client) + "/projects"
+	// The client's base is the instance host (providerfoundation.NewGitLabClient),
+	// and Python's GitLabCodeClient joins /api/v4 onto it (gitlab_rest_base_url:
+	// host with a trailing slash trimmed, then /api/v4, always).
+	root := clientBasePath(client) + gitLabRESTPrefix
+	path := root + "/projects"
 	if group := effectiveGitLabGroup(listing); group != "" {
-		path = clientBasePath(client) + "/groups/" + pythonparity.Quote(group, "") + "/projects"
+		path = root + "/groups/" + pythonparity.Quote(group, "") + "/projects"
 	}
 	// `1_000_000 if pattern and max_projects is not None else max_projects or
 	// 1_000_000`: a pattern reads everything, and a max of 0 is falsy here.

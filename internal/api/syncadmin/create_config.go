@@ -164,27 +164,8 @@ func (h *handlers) createSyncConfigTx(ctx context.Context, tx pgx.Tx, org string
 		return nil, nil, refuse(http.StatusUnprocessableEntity, detail)
 	}
 
-	if depth, _ := options.Get("initial_sync_depth"); depth != nil {
-		requested, err := pyInt(depth)
-		if err != nil {
-			return nil, nil, err
-		}
-		allowed, reason, err := licensing.CheckBackfillLimitFrom(inputs, requested)
-		if err != nil {
-			return nil, nil, err
-		}
-		if !allowed {
-			if reason == "" {
-				reason = "initial_sync_depth exceeds tier limit"
-			}
-			return nil, nil, refuse(http.StatusForbidden, reason)
-		}
-	}
-
-	if cron, _ := options.Get("schedule_cron"); pyjson.Truthy(cron) {
-		if err := h.checkSchedule(ctx, tx, org, inputs, cron, options); err != nil {
-			return nil, nil, err
-		}
+	if err := h.checkDepthAndSchedule(ctx, tx, org, inputs, options); err != nil {
+		return nil, nil, err
 	}
 
 	lower := pythonparity.Lower(in.provider)
@@ -230,6 +211,36 @@ func syncOptionsWithTopLevelFields(in syncConfigCreate) *pyjson.Object {
 		merged.Set("initial_sync_depth", pyjson.Int{Int: in.initialSyncDepth})
 	}
 	return merged
+}
+
+// checkDepthAndSchedule is create_sync_config's backfill-limit and schedule
+// block over the merged options: an initial_sync_depth past the tier's
+// backfill limit is a 403 (a value int() refuses raises), and a truthy
+// schedule_cron runs checkSchedule. The single and batch creates share it:
+// Python's batch create runs neither check (it stores any cron, timezone
+// and depth, then answers 201 or fails later), and the Go batch create
+// answers as the single create does instead -- a named divergence.
+func (h *handlers) checkDepthAndSchedule(ctx context.Context, tx pgx.Tx, org string, inputs licensing.TierLimitInputs, options *pyjson.Object) error {
+	if depth, _ := options.Get("initial_sync_depth"); depth != nil {
+		requested, err := pyInt(depth)
+		if err != nil {
+			return err
+		}
+		allowed, reason, err := licensing.CheckBackfillLimitFrom(inputs, requested)
+		if err != nil {
+			return err
+		}
+		if !allowed {
+			if reason == "" {
+				reason = "initial_sync_depth exceeds tier limit"
+			}
+			return refuse(http.StatusForbidden, reason)
+		}
+	}
+	if cron, _ := options.Get("schedule_cron"); pyjson.Truthy(cron) {
+		return h.checkSchedule(ctx, tx, org, inputs, cron, options)
+	}
+	return nil
 }
 
 // scheduledJobsFeature is the feature the schedule checks gate on.

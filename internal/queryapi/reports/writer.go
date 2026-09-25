@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
 
@@ -20,6 +22,19 @@ import (
 // ErrWriterUnavailable reports a write attempted without the dependency it
 // needs (no Postgres pool, or no outbox publisher for triggerReport).
 var ErrWriterUnavailable = errors.New("reports: saved report writer unavailable")
+
+// logWriteFailure is logFailure for a mutation: the same fields, a message that
+// says a write failed (the read message would send an operator looking at the
+// wrong path).
+func logWriteFailure(ctx context.Context, operation, step string, err error) {
+	var pgErr *pgconn.PgError
+	cause := "query"
+	if errors.As(err, &pgErr) {
+		cause = "sqlstate_" + pgErr.Code
+	}
+	slog.ErrorContext(ctx, "query-api: saved report write failed",
+		"operation", operation, "step", step, "cause", cause, "error", err)
+}
 
 // TxBeginner opens the transaction one mutation runs in; *pgxpool.Pool
 // satisfies it.
@@ -104,12 +119,12 @@ func (w *Writer) newID() string {
 
 func (w *Writer) begin(ctx context.Context, operation string) (pgx.Tx, error) {
 	if w == nil || w.Pool == nil {
-		logFailure(ctx, operation, "writer", ErrWriterUnavailable)
+		logWriteFailure(ctx, operation, "writer", ErrWriterUnavailable)
 		return nil, ErrWriterUnavailable
 	}
 	tx, err := w.Pool.Begin(ctx)
 	if err != nil {
-		logFailure(ctx, operation, "begin", err)
+		logWriteFailure(ctx, operation, "begin", err)
 		return nil, fmt.Errorf("%s: begin transaction: %w", operation, err)
 	}
 	return tx, nil
@@ -121,12 +136,12 @@ func (w *Writer) begin(ctx context.Context, operation string) (pgx.Tx, error) {
 func finish(ctx context.Context, tx pgx.Tx, operation string, opErr error) error {
 	if opErr != nil {
 		if err := tx.Rollback(context.WithoutCancel(ctx)); err != nil && !errors.Is(err, pgx.ErrTxClosed) {
-			logFailure(ctx, operation, "rollback", err)
+			logWriteFailure(ctx, operation, "rollback", err)
 		}
 		return opErr
 	}
 	if err := tx.Commit(ctx); err != nil {
-		logFailure(ctx, operation, "commit", err)
+		logWriteFailure(ctx, operation, "commit", err)
 		return fmt.Errorf("%s: commit: %w", operation, err)
 	}
 	return nil
@@ -164,7 +179,7 @@ func (w *Writer) create(ctx context.Context, tx pgx.Tx, orgID string, in CreateI
 	created := w.now()
 	if _, err := tx.Exec(ctx, insertSavedReportSQL, id, orgID, in.Name, in.Description, plan,
 		in.IsTemplate, nil, parameters, true, nil, created, created); err != nil {
-		logFailure(ctx, "createSavedReport", "insert", err)
+		logWriteFailure(ctx, "createSavedReport", "insert", err)
 		return nil, fmt.Errorf("createSavedReport: insert: %w", err)
 	}
 	if in.ScheduleCron != nil {
@@ -222,7 +237,7 @@ func (w *Writer) ensureSchedule(ctx context.Context, tx pgx.Tx, report reportSta
 UPDATE scheduled_jobs SET schedule_cron = $2, timezone = $3, next_run_at = $4, updated_at = $5
 WHERE id = $1::uuid`, *report.ScheduleID, cron, tz, nextRun, w.now())
 		if err != nil {
-			logFailure(ctx, "saveReportSchedule", "update job", err)
+			logWriteFailure(ctx, "saveReportSchedule", "update job", err)
 			return fmt.Errorf("saved report schedule: update job: %w", err)
 		}
 		if updated.RowsAffected() > 0 {
@@ -241,7 +256,7 @@ INSERT INTO scheduled_jobs (id, org_id, name, job_type, provider, schedule_cron,
 VALUES ($1::uuid, $2, $3, 'report', '', $4, $5, $6::json, NULL, 0, false, $7, 0, 0, $8, $8)`,
 		jobID, report.OrgID, "report:"+report.Name, cron, tz,
 		`{"report_id": "`+report.ID+`"}`, nextRun, stamp); err != nil {
-		logFailure(ctx, "saveReportSchedule", "insert job", err)
+		logWriteFailure(ctx, "saveReportSchedule", "insert job", err)
 		return fmt.Errorf("saved report schedule: insert job: %w", err)
 	}
 	var linkErr error
@@ -252,7 +267,7 @@ VALUES ($1::uuid, $2, $3, 'report', '', $4, $5, $6::json, NULL, 0, false, $7, 0,
 			report.ID, jobID, w.now())
 	}
 	if err := linkErr; err != nil {
-		logFailure(ctx, "saveReportSchedule", "link job", err)
+		logWriteFailure(ctx, "saveReportSchedule", "link job", err)
 		return fmt.Errorf("saved report schedule: link job: %w", err)
 	}
 	return nil
@@ -308,7 +323,7 @@ FROM saved_reports WHERE id = $1::uuid AND org_id = $2 FOR UPDATE`, id, orgID).
 		return nil, nil
 	}
 	if err != nil {
-		logFailure(ctx, "updateSavedReport", "read", err)
+		logWriteFailure(ctx, "updateSavedReport", "read", err)
 		return nil, fmt.Errorf("updateSavedReport: read: %w", err)
 	}
 	state.Name = name
@@ -347,7 +362,7 @@ FROM saved_reports WHERE id = $1::uuid AND org_id = $2 FOR UPDATE`, id, orgID).
 	}
 	set("updated_at", "", w.now())
 	if _, err := tx.Exec(ctx, "UPDATE saved_reports SET "+strings.Join(sets, ", ")+" WHERE id = $1::uuid", args...); err != nil {
-		logFailure(ctx, "updateSavedReport", "update", err)
+		logWriteFailure(ctx, "updateSavedReport", "update", err)
 		return nil, fmt.Errorf("updateSavedReport: update: %w", err)
 	}
 	if in.ScheduleCron != nil {
@@ -382,7 +397,7 @@ func (w *Writer) Delete(ctx context.Context, orgID, reportID string) (bool, erro
 	deleted, opErr := func() (bool, error) {
 		tag, err := tx.Exec(ctx, `DELETE FROM saved_reports WHERE id = $1::uuid AND org_id = $2`, id, orgID)
 		if err != nil {
-			logFailure(ctx, "deleteSavedReport", "delete", err)
+			logWriteFailure(ctx, "deleteSavedReport", "delete", err)
 			return false, fmt.Errorf("deleteSavedReport: delete: %w", err)
 		}
 		return tag.RowsAffected() > 0, nil
@@ -421,7 +436,7 @@ FROM saved_reports WHERE id = $1::uuid AND org_id = $2`, sourceID, orgID).
 		return nil, nil
 	}
 	if err != nil {
-		logFailure(ctx, "cloneSavedReport", "read", err)
+		logWriteFailure(ctx, "cloneSavedReport", "read", err)
 		return nil, fmt.Errorf("cloneSavedReport: read: %w", err)
 	}
 	cloneName := name + " (Copy)"
@@ -442,7 +457,7 @@ FROM saved_reports WHERE id = $1::uuid AND org_id = $2`, sourceID, orgID).
 	created := w.now()
 	if _, err := tx.Exec(ctx, insertSavedReportSQL, id, orgID, cloneName, description, planText,
 		false, sourceID, parametersText, true, createdBy, created, created); err != nil {
-		logFailure(ctx, "cloneSavedReport", "insert", err)
+		logWriteFailure(ctx, "cloneSavedReport", "insert", err)
 		return nil, fmt.Errorf("cloneSavedReport: insert: %w", err)
 	}
 	return (&Reader{Postgres: tx}).Get(ctx, orgID, id)
@@ -457,7 +472,7 @@ func (w *Writer) Trigger(ctx context.Context, orgID, reportID string) (*model.Re
 		return nil, nil // Python catches the ValueError and answers null
 	}
 	if w == nil || w.Outbox == nil {
-		logFailure(ctx, "triggerReport", "writer", ErrWriterUnavailable)
+		logWriteFailure(ctx, "triggerReport", "writer", ErrWriterUnavailable)
 		return nil, ErrWriterUnavailable
 	}
 	tx, err := w.begin(ctx, "triggerReport")
@@ -479,7 +494,7 @@ func (w *Writer) trigger(ctx context.Context, tx pgx.Tx, orgID, reportID string)
 		return nil, nil
 	}
 	if err != nil {
-		logFailure(ctx, "triggerReport", "lock", err)
+		logWriteFailure(ctx, "triggerReport", "lock", err)
 		return nil, fmt.Errorf("triggerReport: lock report: %w", err)
 	}
 	runID := w.newID()
@@ -489,7 +504,7 @@ INSERT INTO report_runs (id, report_id, status, provenance_records, attempt_coun
                          execution_reclaim_count, notification_status, triggered_by, created_at)
 VALUES ($1::uuid, $2::uuid, 'pending', '[]'::json, 0, 0, 'pending', 'api', $3)`,
 		runID, reportID, created); err != nil {
-		logFailure(ctx, "triggerReport", "insert run", err)
+		logWriteFailure(ctx, "triggerReport", "insert run", err)
 		return nil, fmt.Errorf("triggerReport: insert run: %w", err)
 	}
 	envelope := jobcontract.Envelope{
@@ -501,7 +516,7 @@ VALUES ($1::uuid, $2::uuid, 'pending', '[]'::json, 0, 0, 'pending', 'api', $3)`,
 		Payload:         jobcontract.OnDemandReportExecutionPayload{ReportID: reportID},
 	}
 	if err := w.Outbox.Publish(ctx, tx, jobcontract.KindReportExecuteOnDemand, envelope); err != nil {
-		logFailure(ctx, "triggerReport", "publish", err)
+		logWriteFailure(ctx, "triggerReport", "publish", err)
 		return nil, fmt.Errorf("triggerReport: stage the execution: %w", err)
 	}
 	return &model.ReportRunType{

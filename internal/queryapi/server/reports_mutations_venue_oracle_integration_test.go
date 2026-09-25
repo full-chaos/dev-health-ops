@@ -534,6 +534,10 @@ FROM worker_job_outbox ORDER BY regexp_replace(args::text, '(report-run:|report\
 		if len(py) != len(gr) {
 			t.Errorf("%s: python has %d rows, go has %d", name, len(py), len(gr))
 		}
+		// The rows are compared as sorted sets: two clones of one source share every
+		// ordering column the query has, so their position is not part of the answer.
+		sort.Strings(py)
+		sort.Strings(gr)
 		for i := 0; i < len(py) && i < len(gr); i++ {
 			if py[i] != gr[i] {
 				t.Errorf("%s row %d differs\n python: %s\n go:     %s", name, i, py[i], gr[i])

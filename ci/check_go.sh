@@ -79,7 +79,7 @@ fi
 usage() {
   # Backticks in the literal help text document commands; they are not substitutions.
   # shellcheck disable=SC2016
-  printf '%s\n' 'Usage: ci/check_go.sh [fmt|vet|test|race|live-python-oracles|venue-oracles|build|contract|multi-replica-workers|integration-vet|integration-coverage|integration-shard-plan|integration-prepull|integration-shard|integration|fast|ci|all]
+  printf '%s\n' 'Usage: ci/check_go.sh [fmt|vet|test|race|live-python-oracles|venue-oracles [SHARD COUNT]|build|contract|multi-replica-workers|integration-vet|integration-coverage|integration-shard-plan|integration-prepull|integration-shard|integration|fast|ci|all]
 
   fmt    Check gofmt without modifying files.
   vet    Run go vet ./... in every Go module.
@@ -121,6 +121,11 @@ usage() {
          The static half of that validation is ci/check_venue_oracle_registry.sh
          (no Go toolchain, containers or Python), run on every PR by
          tests/tooling/test_venue_oracle_registry.py.
+         `venue-oracles SHARD COUNT` (CHAOS-6574) runs the SHARD-th of COUNT
+         slices of the registry rows marked run (every COUNT-th row of the
+         sorted sequence, so the tests of one package spread over all slices);
+         the hosted job runs COUNT matrix legs. A slice that selects zero
+         rows fails; no arguments runs every row.
   build  Run go build ./... in every Go module.
   contract
          Validate the job contract tree and, when DEV_HEALTH_CONTRACT_BASE is
@@ -1774,7 +1779,22 @@ check_live_python_oracles() {
 # shellcheck source=ci/lib/venue_oracle_registry.sh
 . "${ROOT}/ci/lib/venue_oracle_registry.sh"
 
+# check_venue_oracles [SHARD COUNT] (CHAOS-6574). With no arguments it runs every
+# registry `run` row (the local full run). With SHARD COUNT it runs the rows
+# whose 0-based position in the registry's sorted `run` sequence, modulo COUNT,
+# is SHARD-1: sorted by (package, test), so every package's tests spread over
+# all shards (one package -- apiservice/admin -- alone took 23 min of a 67 min
+# sequential job, so a package-level split could not get under ~23 min). The
+# hosted job runs COUNT matrix legs; a leg whose slice is empty FAILS (a
+# matrix wider than the registry is a config error, never a green no-op).
 check_venue_oracles() {
+  local shard="${1:-}" shard_count="${2:-}"
+  if [ -n "${shard}${shard_count}" ]; then
+    case "${shard}" in ""|*[!0-9]*) die "venue-oracles SHARD must be a positive integer, got '${shard}'" ;; esac
+    case "${shard_count}" in ""|*[!0-9]*) die "venue-oracles COUNT must be a positive integer, got '${shard_count}'" ;; esac
+    { [ "${shard}" -ge 1 ] && [ "${shard_count}" -ge 1 ] && [ "${shard}" -le "${shard_count}" ]; } \
+      || die "venue-oracles shard ${shard} is outside 1..${shard_count}"
+  fi
   [ "${DEV_HEALTH_LIVE_PYTHON_ORACLES:-}" = "1" ] \
     || die "venue-oracles requires DEV_HEALTH_LIVE_PYTHON_ORACLES=1 (this verb never sets it itself -- a skip must be visible to the caller, not swallowed here)"
   command -v jq >/dev/null 2>&1 \
@@ -1786,6 +1806,7 @@ check_venue_oracles() {
   check_venue_oracle_registry >&2 || die "venue-oracles: ci/venue_oracle_registry.tsv disagrees with the tree (see above)"
 
   local proof_dir dir kind name file names="" total=0 prev_pkg="" index
+  local run_index=0 pkg_has_run=0 registered_runs=0
   local -a vo_dirs=() vo_names=() local_only=()
   proof_dir="$(mktemp -d "${TMPDIR:-/tmp}/dev-health-venue-oracles.XXXXXX")"
 
@@ -1794,22 +1815,31 @@ check_venue_oracles() {
   while read -r dir name kind; do
     if [ "${dir}" != "${prev_pkg}" ]; then
       if [ -n "${prev_pkg}" ]; then
-        if [ -z "${names}" ]; then
+        if [ "${pkg_has_run}" -eq 0 ]; then
           # A package whose every registered test is local-only runs zero
-          # comparisons while reading as covered: refuse it.
+          # comparisons while reading as covered: refuse it (on the WHOLE
+          # registry, whatever this shard's slice is).
           rm -rf -- "${proof_dir}"
           die "venue-oracles: ${prev_pkg} is registered but no test there is run by this verb (local-only: ${#local_only[@]} so far) -- an oracle package that runs zero comparisons must not read as covered"
         fi
-        vo_dirs+=("${ROOT}/${prev_pkg}")
-        vo_names+=("${names}")
+        if [ -n "${names}" ]; then
+          vo_dirs+=("${ROOT}/${prev_pkg}")
+          vo_names+=("${names}")
+        fi
       fi
       prev_pkg="${dir}"
       names=""
+      pkg_has_run=0
     fi
     case "${kind}" in
       run)
-        names="${names:+${names}|}${name}"
-        total=$((total + 1))
+        pkg_has_run=1
+        registered_runs=$((registered_runs + 1))
+        if [ -z "${shard}" ] || [ $((run_index % shard_count + 1)) -eq "${shard}" ]; then
+          names="${names:+${names}|}${name}"
+          total=$((total + 1))
+        fi
+        run_index=$((run_index + 1))
         ;;
       local)
         file="$(grep -lE "^func ${name}[(\[]" "${ROOT}/${dir}"/*_test.go | head -n1)"
@@ -1819,12 +1849,20 @@ check_venue_oracles() {
     esac
   done < <(venue_oracle_registry_rows | LC_ALL=C sort -k1,1 -k2,2; printf '\001 \001 end\n')
 
-  if [ "${total}" -eq 0 ]; then
+  if [ "${registered_runs}" -eq 0 ]; then
     rm -rf -- "${proof_dir}"
     die "venue-oracles: the registry holds zero runnable venue-oracle tests -- the registry itself is broken, not a genuinely oracle-free tree"
   fi
+  if [ "${total}" -eq 0 ]; then
+    rm -rf -- "${proof_dir}"
+    die "venue-oracles: shard ${shard}/${shard_count} selects zero of the ${registered_runs} registered run rows -- the matrix is wider than the registry, so this leg would read green while running nothing"
+  fi
 
-  printf 'venue-oracles: %d registered test(s) across %d package(s)\n' "${total}" "${#vo_dirs[@]}"
+  if [ -n "${shard}" ]; then
+    printf 'venue-oracles: shard %s/%s runs %d of %d registered run row(s) across %d package(s)\n' "${shard}" "${shard_count}" "${total}" "${registered_runs}" "${#vo_dirs[@]}"
+  else
+    printf 'venue-oracles: %d registered test(s) across %d package(s)\n' "${total}" "${#vo_dirs[@]}"
+  fi
 
   local rel pattern pkg_proof_dir json_log stderr_log go_test_status proof failed=0
   local -a compared=() go_only=()
@@ -2911,8 +2949,8 @@ case "${1:-all}" in
     check_live_python_oracles
     ;;
   venue-oracles)
-    [ "$#" -eq 1 ] || die "venue-oracles accepts no arguments"
-    check_venue_oracles
+    { [ "$#" -eq 1 ] || [ "$#" -eq 3 ]; } || die "venue-oracles accepts no arguments, or SHARD COUNT (1-based shard of COUNT)"
+    check_venue_oracles "${2:-}" "${3:-}"
     ;;
   build)
     check_build

@@ -9,7 +9,9 @@
 # roll starts until it is green again.
 #
 # ONE PRODUCER. The job lives only in this workflow (go.yml must not declare
-# it again), so there is exactly one `venue-oracles` context per commit.
+# it again). It is a 4-leg matrix (CHAOS-6574: one sequential job outgrew its
+# timeout), so a commit carries four `venue-oracles (shard K/4)` contexts, all
+# informational (R430), none required.
 #
 # RELEVANCE. A push to main decides relevance INSIDE the job, not with a
 # trigger path filter: `ci/go_relevance.py` (the decider go-quality.yml
@@ -51,10 +53,22 @@ jobs:
     # closure -- discovered the hard way when this job's own PR first failed
     # go-quality with `ModuleNotFoundError: alembic`.
     runs-on: ubuntu-latest
-    # The verb runs its packages one after another; a full local run took
-    # 39 minutes and the hosted one 28, with more oracles landing. Each
-    # package's own go test is bounded at 40 minutes inside the verb.
-    timeout-minutes: 75
+    # SHARDED (CHAOS-6574). One sequential job took 67 min at 87 tests and was
+    # CANCELLED at its 75-minute timeout on two consecutive main pushes (a
+    # cancel reads as no signal). The matrix runs 4 legs; leg K runs every
+    # 4th row of the registry's sorted `run` sequence (`check_go.sh
+    # venue-oracles K 4`), so one package's tests spread over all legs
+    # (apiservice/admin alone was 23 min). Keep the matrix list and the count
+    # passed to the verb in step: tests/tooling/test_venue_oracle_shards.py
+    # pins both. Each package's own go test is bounded at 40 minutes inside
+    # the verb; a leg is bounded at 40 minutes here (~16 min of tests plus
+    # setup expected).
+    name: venue-oracles (shard ${{ matrix.shard }}/4)
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository_owner }}
     steps:
@@ -157,19 +171,19 @@ jobs:
       # `set -o pipefail` (via -euo pipefail) is load-bearing: without it, a
       # failing check_go.sh in this pipe would be masked by `tee`'s own zero
       # exit, and the step would report success on a red run.
-      - name: Run every venue differential oracle against the live Python api
+      - name: Run this shard's venue differential oracles against the live Python api
         if: steps.relevance.outputs.relevant == 'true'
         env:
           DEV_HEALTH_LIVE_PYTHON_ORACLES: '1'
         run: |
           set -euo pipefail
           mkdir -p "${RUNNER_TEMP}/venue-oracle-receipt"
-          bash ci/check_go.sh venue-oracles 2>&1 | tee "${RUNNER_TEMP}/venue-oracle-receipt/receipt.log"
+          bash ci/check_go.sh venue-oracles "${{ matrix.shard }}" 4 2>&1 | tee "${RUNNER_TEMP}/venue-oracle-receipt/receipt.log"
 
       - name: Upload the venue oracle receipt
         if: steps.relevance.outputs.relevant == 'true' && always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: venue-oracle-receipt-${{ github.run_id }}-${{ github.run_attempt }}
+          name: venue-oracle-receipt-${{ github.run_id }}-${{ github.run_attempt }}-shard-${{ matrix.shard }}
           path: ${{ runner.temp }}/venue-oracle-receipt/receipt.log
           if-no-files-found: ignore

@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -73,40 +75,10 @@ func claimSnapshotBucket() dispatchBucket {
 // dispatch transaction rather than falling back to the env default.
 func createClaimSnapshotTables(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
-	if _, err := pool.Exec(ctx, `
-CREATE TABLE public.organizations (id uuid PRIMARY KEY, tier text);
-CREATE TABLE public.org_licenses (
- org_id uuid PRIMARY KEY, tier text NOT NULL, limits_override json NOT NULL,
- features_override json NOT NULL
-);
-CREATE TABLE public.tier_limits (
- tier text NOT NULL, limit_key text NOT NULL, limit_value text, UNIQUE(tier, limit_key)
-);
-CREATE TABLE public.sync_runs (
- id uuid PRIMARY KEY, completed_units int NOT NULL DEFAULT 0,
- failed_units int NOT NULL DEFAULT 0, total_units int NOT NULL DEFAULT 0
-);
-CREATE TABLE public.sync_run_units (
- id uuid PRIMARY KEY, sync_run_id uuid NOT NULL, org_id text NOT NULL,
- integration_id uuid NOT NULL, source_id uuid NOT NULL, provider text NOT NULL,
- dataset_key text NOT NULL, cost_class text NOT NULL,
- since_at timestamptz NULL, before_at timestamptz NULL,
- status text NOT NULL, available_at timestamptz NULL,
- updated_at timestamptz NOT NULL DEFAULT now(), error text NULL, result json NULL,
- lease_owner text NULL, lease_expires_at timestamptz NULL, last_heartbeat_at timestamptz NULL,
- rate_limit_deferrals int NOT NULL DEFAULT 0, rate_limit_first_seen_at timestamptz NULL,
- budget_deferrals int NOT NULL DEFAULT 0, budget_first_deferred_at timestamptz NULL,
- first_blocked_at timestamptz NULL, last_retry_reason text NULL, processor_flags json NULL
-)`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := pool.Exec(ctx, `INSERT INTO public.organizations (id, tier) VALUES ($1::uuid, 'community')`, claimSnapshotOrg); err != nil {
-		t.Fatal(err)
-	}
+	pgschema.Apply(ctx, t, pool)
+	pgseed.Org(ctx, t, pool, claimSnapshotOrg, "community")
 	for _, runID := range []string{claimSnapshotRun, claimSnapshotOtherRun} {
-		if _, err := pool.Exec(ctx, `INSERT INTO public.sync_runs (id) VALUES ($1::uuid)`, runID); err != nil {
-			t.Fatal(err)
-		}
+		pgseed.EnsureSyncRun(ctx, t, pool, pgseed.SyncRun{ID: runID, OrgID: claimSnapshotOrg, IntegrationID: claimSnapshotIntegration})
 	}
 }
 
@@ -143,17 +115,12 @@ func insertClaimSnapshotUnit(t *testing.T, ctx context.Context, pool *pgxpool.Po
 	if f.runID == "" {
 		f.runID = claimSnapshotRun
 	}
-	if _, err := pool.Exec(ctx, `
-INSERT INTO public.sync_run_units
- (id, sync_run_id, org_id, integration_id, source_id, provider, dataset_key, cost_class,
-  status, available_at, updated_at, result, lease_owner, lease_expires_at)
-VALUES ($1::uuid, $2::uuid, $3, $4::uuid, $5::uuid, $6, 'commits', $7,
-        $8, $9, $10, '{}'::json, $11, $12)`,
-		f.id, f.runID, claimSnapshotOrg, claimSnapshotIntegration, claimSnapshotSource,
-		claimSnapshotProvider, claimSnapshotCostClass,
-		f.status, f.availableAt, f.updatedAt, f.leaseOwner, f.leaseExpiresAt); err != nil {
-		t.Fatal(err)
-	}
+	updatedAt := f.updatedAt
+	pgseed.InsertSyncRunUnit(ctx, t, pool, pgseed.SyncRunUnit{
+		ID: f.id, RunID: f.runID, OrgID: claimSnapshotOrg, IntegrationID: claimSnapshotIntegration, SourceID: claimSnapshotSource,
+		Provider: claimSnapshotProvider, CostClass: claimSnapshotCostClass, Status: f.status,
+		AvailableAt: f.availableAt, UpdatedAt: &updatedAt, ResultJSON: `{}`, LeaseOwner: f.leaseOwner, LeaseExpiresAt: f.leaseExpiresAt,
+	})
 }
 
 // saturateClaimSnapshotBucket fills the bucket to exactly `count` capacity

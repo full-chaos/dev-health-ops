@@ -44,6 +44,12 @@ func TestEveryHelperInsertsIntoTheMigratedSchema(t *testing.T) {
 	pgseed.Credential(ctx, t, pool, credential, org, "github")
 	pgseed.RoutingState(ctx, t, pool, "schema", "document", "operation", "canary")
 	pgseed.RoutingState(ctx, t, pool, "schema", "document", "operation", "primary") // the upsert path
+	unit, run := uuid.NewString(), uuid.NewString()
+	pgseed.EnsureSyncRun(ctx, t, pool, pgseed.SyncRun{ID: run, TotalUnits: 1})
+	pgseed.EnsureSyncRun(ctx, t, pool, pgseed.SyncRun{ID: run}) // idempotent
+	pgseed.InsertSyncRunUnit(ctx, t, pool, pgseed.SyncRunUnit{ID: unit, RunID: run, Status: "planned", ResultJSON: `{}`})
+	pgseed.TierLimit(ctx, t, pool, "community", "max_sync_units", "3")
+	pgseed.TierLimit(ctx, t, pool, "community", "max_sync_units", "4") // the upsert path
 
 	for _, table := range []struct {
 		name  string
@@ -58,6 +64,9 @@ func TestEveryHelperInsertsIntoTheMigratedSchema(t *testing.T) {
 		{"integrations", `SELECT count(*) FROM integrations WHERE id = '` + integration + `'`, 1},
 		{"integration_sources", `SELECT count(*) FROM integration_sources WHERE id = '` + source + `'`, 1},
 		{"integration_credentials", `SELECT count(*) FROM integration_credentials WHERE id = '` + credential + `'`, 1},
+		{"sync_runs", `SELECT count(*) FROM sync_runs WHERE id = '` + run + `' AND total_units = 1`, 1},
+		{"sync_run_units", `SELECT count(*) FROM sync_run_units WHERE id = '` + unit + `' AND sync_run_id = '` + run + `'`, 1},
+		{"tier_limits", `SELECT count(*) FROM tier_limits WHERE tier = 'community' AND limit_key = 'max_sync_units' AND limit_value = '4'`, 1},
 		{"go_api_routing_state", `SELECT count(*) FROM go_api_routing_state WHERE mode = 'primary'`, 1},
 	} {
 		var got int

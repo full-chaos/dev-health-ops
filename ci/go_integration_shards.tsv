@@ -168,7 +168,7 @@ internal/storage/postgres/authschema	72
 internal/storage/river	38
 internal/streamhandlers	190
 internal/streamrunner	2
-internal/syncdispatchruntime	418
+internal/syncdispatchruntime	850
 internal/syncreconciler	203
 internal/synccoverage	4
 internal/syncbudget	14

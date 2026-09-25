@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -87,13 +88,15 @@ func TestEstimateErrorClassesAcrossEveryConsumerAndChunkPosition(t *testing.T) {
 		// 600 running units in one OTHER run: the population
 		// activeBudgetConsumption re-estimates (two chunks of 500 + 100).
 		const activeRunID = "00000000-0000-4000-8000-0000000001b0"
+		pgseed.EnsureSyncRun(ctx, t, pool, pgseed.SyncRun{ID: activeRunID, OrgID: "org-1", IntegrationID: "00000000-0000-4000-8000-000000000010"})
+		pgseed.EnsureSyncIntegration(ctx, t, pool, "org-1", "00000000-0000-4000-8000-000000000010", "00000000-0000-4000-8000-000000000011")
 		if _, err := pool.Exec(ctx, `
 INSERT INTO public.sync_run_units
  (id, sync_run_id, org_id, integration_id, source_id, provider, dataset_key, cost_class,
-  status, updated_at, lease_expires_at, result)
+  mode, attempts, created_at, status, updated_at, lease_expires_at, result)
 SELECT ('00000000-0000-4000-9100-' || lpad(to_hex(n), 12, '0'))::uuid, $1::uuid, 'org-1',
   '00000000-0000-4000-8000-000000000010'::uuid, '00000000-0000-4000-8000-000000000011'::uuid,
-  'github', 'commits', 'rest_core', 'running', now(), now() + interval '1 hour', '{}'::json
+  'github', 'commits', 'rest_core', 'incremental', 0, now(), 'running', now(), now() + interval '1 hour', '{}'::json
 FROM generate_series(1, $2) AS n`, activeRunID, fatalChunkCandidates); err != nil {
 			t.Fatal(err)
 		}

@@ -109,7 +109,7 @@ func (c Client) listPages(ctx context.Context, path, operation, dataKey, extra, 
 	core := c.core()
 	loweredPattern := pythonparity.Lower(pattern)
 	var repos []Repo
-	next := base + path + "?per_page=" + fmt.Sprint(perPage) + extra
+	next := normalizeURL(merge(base, path, "per_page="+fmt.Sprint(perPage)+extra))
 	for pages := 0; ; pages++ {
 		if pages >= maxPages {
 			break
@@ -159,9 +159,10 @@ func (c Client) listPages(ctx context.Context, path, operation, dataKey, extra, 
 		if !present {
 			break
 		}
-		if next, err = resolve(base, link); err != nil {
+		if next, err = resolve(base, link, ""); err != nil {
 			return nil, err
 		}
+		next = normalizeURL(next)
 	}
 	return repos, nil
 }
@@ -173,11 +174,12 @@ func orDefault(base string) string {
 	return base
 }
 
-// resolve is httpx's URL merge for a request path: an absolute URL is used
-// as it is (whatever its host), a relative one is appended to the base's
-// path. A scheme httpx cannot send is its UnsupportedProtocol, which the
-// core does not catch.
-func resolve(base, link string) (string, error) {
+// resolve is httpx's URL merge for a request URL: an absolute URL (a scheme
+// and a host) is used as it is, whatever its host; anything else, a
+// network-path reference included, contributes only its path and query, which
+// are appended to the base's own. A scheme httpx cannot send is its
+// UnsupportedProtocol, which the core does not catch.
+func resolve(base, link, params string) (string, error) {
 	parsed, err := url.Parse(link)
 	if err == nil && parsed.Scheme != "" && parsed.Host != "" {
 		if parsed.Scheme != "http" && parsed.Scheme != "https" {
@@ -185,7 +187,46 @@ func resolve(base, link string) (string, error) {
 		}
 		return link, nil
 	}
-	return base + "/" + strings.TrimLeft(link, "/"), nil
+	reference := link
+	if err == nil {
+		reference = parsed.EscapedPath()
+		if parsed.RawQuery != "" || parsed.ForceQuery {
+			reference += "?" + parsed.RawQuery
+		}
+	}
+	return merge(base, reference, params), nil
+}
+
+// merge is httpx's Client._merge_url followed by the request's params: the
+// base's raw path (path and query) gets a trailing slash, the reference's raw
+// path is appended to it, and the result is split again at its first "?" --
+// so a base with a query takes the reference into that query -- then params,
+// when given, replace the query. The base's fragment stays on the URL.
+func merge(base, reference, params string) string {
+	parsed, err := url.Parse(base)
+	if err != nil {
+		return base + "/" + strings.TrimLeft(reference, "/")
+	}
+	raw := parsed.EscapedPath()
+	if parsed.RawQuery != "" || parsed.ForceQuery {
+		raw += "?" + parsed.RawQuery
+	}
+	if !strings.HasSuffix(raw, "/") {
+		raw += "/"
+	}
+	raw += strings.TrimLeft(reference, "/")
+	path, query, hasQuery := strings.Cut(raw, "?")
+	if params != "" {
+		query, hasQuery = params, true
+	}
+	out := parsed.Scheme + "://" + parsed.Host + path
+	if hasQuery {
+		out += "?" + query
+	}
+	if fragment := parsed.EscapedFragment(); fragment != "" {
+		out += "#" + fragment
+	}
+	return out
 }
 
 // core is the client's request loop: GitHub retries a rate-limited 403 too,

@@ -245,6 +245,9 @@ func githubRepoSeedRows(pemKey string) []repoSeedRow {
 		row("aliasbase", `{"token":"gh_ok","baseUrl":"`+host+`/alias/api/v3"}`, `{"base_url":"`+host+`/cfg/api/v3"}`),
 		row("bothbase", `{"token":"gh_ok","baseUrl":"`+host+`/alias/api/v3","base_url":"`+host+`/snake/api/v3"}`, ""),
 		row("aliasandcfg", `{"token":"gh_ok","base_url":"`+host+`/snake/api/v3","baseUrl":"`+host+`/alias/api/v3"}`, `{"base_url":"`+host+`/cfg/api/v3"}`),
+		row("basequery", `{"token":"gh_ok","base_url":"`+host+`/ghe/api/v3?scope=all"}`, ""),
+		row("basefrag", `{"token":"gh_ok","base_url":"`+host+`/ghe/api/v3#frag"}`, ""),
+		row("basequeryfrag", `{"token":"gh_ok","base_url":"`+host+`/ghe/api/v3/?scope=all#frag"}`, ""),
 		row("nonstrbase", `{"token":"gh_ok","base_url":5}`, ""),
 		row("listbase", `{"token":"gh_ok"}`, `{"base_url":["x"]}`),
 		row("localhost", `{"token":"gh_ok","base_url":"http://localhost"}`, ""),
@@ -309,6 +312,13 @@ func githubRepoRequests(tokens map[string]string, ids map[string]string) []venue
 	for _, name := range []string{"orgcfg", "orgdec", "orgboth", "orgnonstr", "orgemptycfg", "orgnonstrboth", "ghe", "gheorg", "cfgbase", "emptybase", "nullbase", "aliasbase", "bothbase", "aliasandcfg"} {
 		list("credential "+name, name, "")
 		list("credential "+name+" with an owner", name, "owner=other")
+	}
+	// A base URL with a query or a fragment is joined the way httpx joins it.
+	for _, name := range []string{"basequery", "basefrag", "basequeryfrag"} {
+		list("credential "+name, name, "")
+		list("credential "+name+" with an owner", name, "owner=other")
+		list("credential "+name+" with a search", name, "owner=other&search=x")
+		list("credential "+name+" with a pattern", name, "search=a")
 	}
 	// Problems with the credential.
 	for _, name := range []string{"nonstrbase", "listbase", "localhost", "private", "userinfo", "unresolvable", "scheme", "emptypayload", "nullpayload", "listpayload", "stringpayload",

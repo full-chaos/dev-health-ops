@@ -11,8 +11,10 @@ package restcore
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -134,7 +136,19 @@ func (c Core) Get(ctx context.Context, target, operation string) (Response, erro
 			request.Header.Set(name, value)
 		}
 		response, err := httpClient.Do(request)
+		var body []byte
+		if err == nil {
+			body, err = io.ReadAll(response.Body)
+			response.Body.Close()
+		}
 		if err != nil {
+			// Only a timeout and a connection failure are retried
+			// (httpx.TimeoutException, httpx.ConnectError); any other
+			// transport error is raised at once as the httpx exception
+			// itself, which no route handles.
+			if !retryableTransport(err) {
+				return Response{}, &Error{Class: "TransportError", Message: err.Error()}
+			}
 			if attempt < retries-1 {
 				if err := sleep(ctx, delay); err != nil {
 					return Response{}, err
@@ -143,12 +157,7 @@ func (c Core) Get(ctx context.Context, target, operation string) (Response, erro
 				continue
 			}
 			// httpx's own exception text differs from Go's (named limit).
-			return Response{}, &Error{"APIException", fmt.Sprintf("%s request failed on %s: %v", c.Provider, operation, err)}
-		}
-		body, err := io.ReadAll(response.Body)
-		response.Body.Close()
-		if err != nil {
-			return Response{}, &Error{"APIException", fmt.Sprintf("%s request failed on %s: %v", c.Provider, operation, err)}
+			return Response{}, &Error{Class: "APIException", Message: fmt.Sprintf("%s request failed on %s: %v", c.Provider, operation, err)}
 		}
 		got := Response{Status: response.StatusCode, Header: response.Header, Body: body, URL: target}
 		if got.Status < 300 {
@@ -198,6 +207,18 @@ func (c Core) raise(r Response, operation string) error {
 		return &Error{"APIException", fmt.Sprintf("%s server error on %s: %d - %s", c.Provider, operation, r.Status, r.Text())}
 	}
 	return &Error{"APIException", fmt.Sprintf("%s API error on %s: %d - %s", c.Provider, operation, r.Status, r.Text())}
+}
+
+// retryableTransport is `except (httpx.TimeoutException, httpx.ConnectError)`:
+// a timeout of any phase, or a failure to connect (a refused connection, an
+// unreachable host, a name that does not resolve).
+func retryableTransport(err error) bool {
+	var timeout interface{ Timeout() bool }
+	if errors.As(err, &timeout) && timeout.Timeout() {
+		return true
+	}
+	var operation *net.OpError
+	return errors.As(err, &operation) && operation.Op == "dial"
 }
 
 func sleepContext(ctx context.Context, wait time.Duration) error {

@@ -431,6 +431,5 @@ func ledgerBareRequests(tokens map[string]string) []venueoracle.Request {
 		{Name: "resolve: missing, no key", Method: "POST", Path: p + "/audit/" + uuid.NewString() + "/resolve", Headers: headers("super"), Body: venueoracle.B64(`{"resolution":"x"}`)},
 		{Name: "reconcile: no key", Method: "POST", Path: p + "/reconcile", Headers: headers("super")},
 		{Name: "reconcile: member, no key", Method: "POST", Path: p + "/reconcile", Headers: headers("memberA")},
-		{Name: "refund create: no key", Method: "POST", Path: p + "/refunds", Headers: headers("super"), Body: venueoracle.B64(`{"invoice_id":"` + invPaidA + `"}`)},
 	}
 }

@@ -985,6 +985,18 @@ func TestVenueOracleBillingWithoutStripeKey(t *testing.T) {
 			t.Errorf("rows differ:\n python %s\n go     %s", pyRows, goRows)
 		}
 	}
+	// Go-only: the refund route reaches Stripe only past its balance check,
+	// so without a key it answers the key error as a 500 detail, as checkout
+	// does; the Python route raises before that (its invoice column), a
+	// bare 500. Nothing is written.
+	refund := venueoracle.Do(t, base, venueoracle.Request{Name: "refund create: no key", Method: "POST", Path: "/api/v1/billing/refunds",
+		Headers: headers("super"), Body: venueoracle.B64(`{"invoice_id":"` + invPaidA + `"}`)})
+	refundRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), `SELECT count(*) FROM refunds WHERE invoice_id = '`+invPaidA+`'`)
+	refundOK := refund.Status == 500 && strings.Contains(refund.Body, "STRIPE_SECRET_KEY") && refundRows == "1"
+	receipt += fmt.Sprintf("refund create: no key (go-only) go=%d rows=%s %s\n", refund.Status, refundRows, venueoracle.Mark(refundOK))
+	if !refundOK {
+		t.Errorf("refund create without a key: go answered %d %s, refund rows %s (want 500 naming the key, the 1 seeded row)", refund.Status, refund.Body, refundRows)
+	}
 	if path := os.Getenv("DEV_HEALTH_VENUE_RECEIPT"); path != "" {
 		_ = os.WriteFile(path+".bare", []byte(receipt), 0o600)
 	}

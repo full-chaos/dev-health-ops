@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -355,33 +356,8 @@ func assertRunAndPartitionCounts(t *testing.T, ctx context.Context, pool *pgxpoo
 
 func createRemainingTables(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
-	_, err := pool.Exec(ctx, `
-CREATE TABLE remaining_metric_runs (
- id uuid PRIMARY KEY, org_id uuid NOT NULL, family text NOT NULL, generation text NOT NULL,
- scope_key text NOT NULL, generation_seed bigint NULL, status text NOT NULL,
- canceled_at timestamptz NULL, created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL,
- UNIQUE(org_id,family,generation,scope_key)
-);
-CREATE TABLE remaining_metric_partitions (
- id uuid PRIMARY KEY, run_id uuid NOT NULL REFERENCES remaining_metric_runs(id), ordinal integer NOT NULL CHECK (ordinal >= 1),
- scope jsonb NOT NULL, status text NOT NULL, claim_token uuid NULL, lease_expires_at timestamptz NULL,
- attempt_count integer NOT NULL, output_evidence text NULL, completed_at timestamptz NULL,
- created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL, UNIQUE(run_id,ordinal)
-) ;
-CREATE TABLE worker_job_completion_fences (
- completion_key text PRIMARY KEY,
- completed_at timestamptz NOT NULL DEFAULT statement_timestamp()
-)`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// deadHandoffReasonSQL (redrive.go) is embedded in
-	// findManualBackfillBlocker's own query (manual_backfill.go), so every
-	// caller of StartManualBackfillRun/StartManualCapacityTriggerRun/
-	// StartManualRecommendationsTriggerRun -- not just this package's
-	// redrive-focused tests -- reads worker_job_outbox now. The real schema
-	// always has it alongside these tables; this fixture matches that.
-	createRemainingOutboxTable(t, ctx, pool)
+	// The migrated schema, not hand-written tables (CHAOS-6769 ledger).
+	pgschema.Apply(ctx, t, pool)
 }
 
 // A live lease must be reported, not folded into the same nil that means

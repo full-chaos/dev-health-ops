@@ -40,14 +40,17 @@ func TestCredentialComponents_LoginName(t *testing.T) {
 		// The effective login is not always the userinfo or the first keyword:
 		// clickhouse-go reads "username=" from the query, pgx lets a query "user"
 		// override the userinfo and keeps the LAST duplicate keyword.
-		"query username":             {"clickhouse://host:9000/db?username=query-login&password=pw-q", []string{"query-login", "pw-q"}, nil},
-		"query user overrides":       {"postgres://info-login:pw@host/db?user=query-login", []string{"info-login", "query-login"}, nil},
-		"query key case":             {"clickhouse://host/db?USERNAME=upper-login", []string{"upper-login"}, nil},
-		"query repeated":             {"postgres://host/db?user=first-login&user=last-login", []string{"first-login", "last-login"}, nil},
-		"query encoded":              {"postgres://host/db?user=us%40er", []string{"us@er"}, nil},
-		"keyword duplicate user":     {"host=h user=first-login user=last-login password=pw", []string{"first-login", "last-login", "pw"}, nil},
-		"keyword username":           {"host=h username=alt-login", []string{"alt-login"}, nil},
-		"keyword duplicate password": {"host=h password=pw-one password=pw-two", []string{"pw-one", "pw-two"}, nil},
+		"query username":       {"clickhouse://host:9000/db?username=query-login&password=pw-q", []string{"query-login", "pw-q"}, nil},
+		"query user overrides": {"postgres://info-login:pw@host/db?user=query-login", []string{"info-login", "query-login"}, nil},
+		// A key cased differently from the drivers' is ignored by them: its value is
+		// not a credential and is not redacted from unrelated text.
+		"query key case is not the drivers'": {"clickhouse://host/db?USERNAME=upper-login", nil, []string{"upper-login"}},
+		"query password decoded":             {"clickhouse://host/db?password=p%40ss%2Fword", []string{"p@ss/word"}, nil},
+		"query repeated":                     {"postgres://host/db?user=first-login&user=last-login", []string{"first-login", "last-login"}, nil},
+		"query encoded":                      {"postgres://host/db?user=us%40er", []string{"us@er"}, nil},
+		"keyword duplicate user":             {"host=h user=first-login user=last-login password=pw", []string{"first-login", "last-login", "pw"}, nil},
+		"keyword username":                   {"host=h username=alt-login", []string{"alt-login"}, nil},
+		"keyword duplicate password":         {"host=h password=pw-one password=pw-two", []string{"pw-one", "pw-two"}, nil},
 	} {
 		got := CredentialComponents(tc.dsn)
 		for _, want := range tc.want {

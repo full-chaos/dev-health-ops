@@ -18,11 +18,11 @@ const RedactedMarker = "[REDACTED]"
 var keywordPasswordPattern = regexp.MustCompile(`(?i)\bpassword\s*=\s*('(?:\\.|[^'\\])*'|[^'\s]+)`)
 
 // keywordUserPattern matches every user (or username) parameter of a
-// conninfo string, the value quoted or bare exactly as for the password. The
+// conninfo string (the drivers' keywords are lower case), the value quoted or bare exactly as for the password. The
 // boundary keeps it from matching inside another parameter's name ("superuser="
 // or "db_user="). Every occurrence is used, not the first: pgx keeps the last
 // duplicate, so the effective login may be any of them.
-var keywordUserPattern = regexp.MustCompile(`(?i)(?:^|\s)user(?:name)?\s*=\s*('(?:\\.|[^'\\])*'|[^'\s]+)`)
+var keywordUserPattern = regexp.MustCompile(`(?:^|\s)user(?:name)?\s*=\s*('(?:\\.|[^'\\])*'|[^'\s]+)`)
 
 // CredentialComponents returns every substring of dsn that is, on its
 // own, as sensitive as dsn itself: dsn's own bytes, and, separately, its
@@ -53,10 +53,14 @@ func CredentialComponents(dsn string) []string {
 				out = append(out, name)
 			}
 		}
-		// The drivers also take the login from the query (clickhouse-go
-		// "username=", pgx "user="), where it overrides the userinfo.
+		// The drivers also take the login (clickhouse-go "username=", pgx
+		// "user=") and the password from the query, where they override the
+		// userinfo. The keys are the drivers' own, lower case: a differently
+		// cased key is ignored by the driver, so its value is not a credential.
+		// The values are the decoded ones the driver uses; the encoded spelling
+		// is covered by the DSN's own bytes.
 		for key, values := range u.Query() {
-			if strings.EqualFold(key, "user") || strings.EqualFold(key, "username") {
+			if key == "user" || key == "username" || key == "password" {
 				for _, value := range values {
 					if value != "" {
 						out = append(out, value)
@@ -135,10 +139,19 @@ func (e redactedCauseError) Unwrap() error { return e.sentinel }
 // operator can tell an authentication failure from a refused dial without the
 // log ever holding the password or the DSN. A nil cause returns sentinel.
 func WithRedactedCause(sentinel error, dsn string, cause error) error {
+	return WithRedactedCauseAlso(sentinel, dsn, cause)
+}
+
+// WithRedactedCauseAlso is WithRedactedCause for a driver that resolves
+// credentials from more than the DSN (a PostgreSQL client reads PGUSER,
+// PGPASSWORD and service files): the caller passes the login and password the
+// driver settled on, and they are redacted with the DSN's own components.
+func WithRedactedCauseAlso(sentinel error, dsn string, cause error, resolved ...string) error {
 	if cause == nil {
 		return sentinel
 	}
-	return redactedCauseError{sentinel: sentinel, cause: RedactValues(cause.Error(), CredentialComponents(dsn)...)}
+	values := append(CredentialComponents(dsn), resolved...)
+	return redactedCauseError{sentinel: sentinel, cause: RedactValues(cause.Error(), values...)}
 }
 
 // appendKeywordValue adds a conninfo value, unquoted (libpq's quoting:

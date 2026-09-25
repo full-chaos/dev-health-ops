@@ -5,6 +5,8 @@ package postgres
 import (
 	"context"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -55,37 +57,67 @@ func TestAuthFailureNamesNeitherPasswordNorEffectiveLogin(t *testing.T) {
 	forms["keyword, duplicate user"] = "host=" + host + " port=" + port + " dbname=" + database +
 		" user=decoy-login-unused user=" + user + " password=" + wrongPassword + " sslmode=disable"
 
+	// Credentials the DSN never carries: pgx reads PGUSER and PGPASSWORD, and a
+	// service file, and the server's failure text names the login it resolved.
+	t.Run("PGUSER and PGPASSWORD", func(t *testing.T) {
+		t.Setenv("PGUSER", user)
+		t.Setenv("PGPASSWORD", wrongPassword)
+		dsn := "host=" + host + " port=" + port + " dbname=" + database + " sslmode=disable"
+		checkOpenRedacts(t, ctx, dsn, user, wrongPassword, false)
+	})
+	t.Run("service file", func(t *testing.T) {
+		serviceFile := filepath.Join(t.TempDir(), "pg_service.conf")
+		if err := os.WriteFile(serviceFile, []byte("[review]\nuser="+user+"\npassword="+wrongPassword+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("PGSERVICEFILE", serviceFile)
+		dsn := "service=review host=" + host + " port=" + port + " dbname=" + database + " sslmode=disable"
+		checkOpenRedacts(t, ctx, dsn, user, wrongPassword, false)
+	})
 	for name, dsn := range forms {
-		t.Run(name, func(t *testing.T) {
-			// The vector exists: pgx's own error carries the login it used.
-			poolConfig, err := parseConfig(dsn)
-			if err != nil {
-				t.Fatal(err)
+		t.Run(name, func(t *testing.T) { checkOpenRedacts(t, ctx, dsn, user, wrongPassword, true) })
+	}
+}
+
+// checkOpenRedacts connects with the wrong password and checks every surface
+// that prints the failure. The Boundary over the raw driver error is checked only
+// when the DSN carries the credentials: a Boundary is built from the DSN alone.
+func checkOpenRedacts(t *testing.T, ctx context.Context, dsn, user, wrongPassword string, driverSurface bool) {
+	t.Helper()
+	// The vector exists: pgx's own error carries the login it used.
+	poolConfig, err := parseConfig(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := pgx.ConnectConfig(ctx, poolConfig.ConnConfig)
+	if err == nil {
+		_ = raw.Close(ctx)
+		t.Fatal("the connection succeeded with a wrong password")
+	}
+	if !strings.Contains(err.Error(), user) {
+		t.Fatalf("the server's authentication failure no longer names the login (%v): nothing to prove", err)
+	}
+	_, openErr := Open(ctx, DefaultConfig(dsn))
+	if openErr == nil {
+		t.Fatal("Open succeeded with a wrong password")
+	}
+	surfaces := map[string]string{
+		"Open":           openErr.Error(),
+		"Boundary(Open)": secrets.NewBoundary(dsn).Redact(openErr).Error(),
+	}
+	if driverSurface {
+		surfaces["Boundary(driver)"] = secrets.NewBoundary(dsn).Redact(err).Error()
+	}
+	for surface, text := range surfaces {
+		// The failure's own text stays: an operator must still tell an
+		// authentication failure from a refused dial.
+		if !strings.Contains(strings.ToLower(text), "authentication failed") {
+			t.Errorf("%s lost the failure's own text:\n%s", surface, text)
+		}
+		for what, secret := range map[string]string{"password": wrongPassword, "login": user, "DSN": dsn} {
+			if strings.Contains(text, secret) {
+				t.Errorf("%s carries the %s %q:\n%s", surface, what, secret, text)
 			}
-			raw, err := pgx.ConnectConfig(ctx, poolConfig.ConnConfig)
-			if err == nil {
-				_ = raw.Close(ctx)
-				t.Fatal("the connection succeeded with a wrong password")
-			}
-			if !strings.Contains(err.Error(), user) {
-				t.Fatalf("the server's authentication failure no longer names the login (%v): nothing to prove", err)
-			}
-			_, openErr := Open(ctx, DefaultConfig(dsn))
-			if openErr == nil {
-				t.Fatal("Open succeeded with a wrong password")
-			}
-			surfaces := map[string]string{
-				"Open":             openErr.Error(),
-				"Boundary(Open)":   secrets.NewBoundary(dsn).Redact(openErr).Error(),
-				"Boundary(driver)": secrets.NewBoundary(dsn).Redact(err).Error(),
-			}
-			for surface, text := range surfaces {
-				for what, secret := range map[string]string{"password": wrongPassword, "login": user, "DSN": dsn} {
-					if strings.Contains(text, secret) {
-						t.Errorf("%s carries the %s %q:\n%s", surface, what, secret, text)
-					}
-				}
-			}
-		})
+		}
 	}
 }

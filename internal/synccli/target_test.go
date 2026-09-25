@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 
@@ -148,4 +149,13 @@ func TestHelpListsEverySyncOption(t *testing.T) {
 			}
 		}
 	}
+}
+
+func writeTempKey(t *testing.T) string {
+	t.Helper()
+	path := t.TempDir() + "/app.pem"
+	if err := os.WriteFile(path, []byte("-----BEGIN KEY-----\nabc\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }

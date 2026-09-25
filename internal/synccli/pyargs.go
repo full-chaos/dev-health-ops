@@ -2,12 +2,13 @@ package synccli
 
 import (
 	"fmt"
-	"math"
+	"math/big"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
+
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
 // This file is the small slice of Python's argparse that `dev-hops sync
@@ -53,7 +54,10 @@ type parsedArgs struct {
 	unrecognized []string
 }
 
-var negativeNumber = regexp.MustCompile(`^-\d+$|^-\d*\.\d+$`)
+// negativeNumber is argparse 3.14's _negative_number_matcher: digits with
+// PEP 515 underscores, an optional fraction and an optional exponent. (Python's
+// \d is any Unicode decimal digit.)
+var negativeNumber = regexp.MustCompile(`^-(?:\p{Nd}+(?:_\p{Nd}+)*(?:\.\p{Nd}+(?:_\p{Nd}+)*)?|\.\p{Nd}+(?:_\p{Nd}+)*)(?:[eE][+-]?\p{Nd}+(?:_\p{Nd}+)*)?$`)
 
 type parser struct {
 	specs   []optSpec
@@ -298,77 +302,18 @@ func (p *parser) consumeOptional(
 	return next, nil
 }
 
-// pyInt is int(text): surrounding whitespace, an optional sign, ASCII digits
-// with single underscores between digits. It reports ok=false for anything
-// Python's int() refuses; values outside int64 are refused too (Python keeps
-// arbitrary precision -- named limitation).
-func pyInt(text string) (int64, bool) {
-	s := asciiDigits(strings.TrimFunc(text, isPySpace))
-	negative := false
-	if s != "" && (s[0] == '+' || s[0] == '-') {
-		negative = s[0] == '-'
-		s = s[1:]
-	}
-	if s == "" || strings.HasPrefix(s, "_") || strings.HasSuffix(s, "_") || strings.Contains(s, "__") {
-		return 0, false
-	}
-	digits := strings.ReplaceAll(s, "_", "")
-	for _, r := range digits {
-		if r < '0' || r > '9' {
-			return 0, false
-		}
-	}
-	if negative {
-		digits = "-" + digits
-	}
-	n, err := strconv.ParseInt(digits, 10, 64)
-	if err != nil {
-		return 0, false
-	}
-	return n, true
+// pyInt is Python's int(text) for a command-line value, arbitrary precision:
+// the repository's one Python int() port (internal/pythonparity), not a
+// second one. ok=false is what makes argparse refuse the value (exit 2).
+func pyInt(text string) (*big.Int, bool) {
+	n, err := pythonparity.ParseInt(text)
+	return n, err == nil
 }
 
-// asciiDigits maps every Unicode decimal digit (category Nd) to its ASCII
-// digit, as Python's int() and float() read them.
-func asciiDigits(s string) string {
-	var b strings.Builder
-	for _, r := range s {
-		if r > unicode.MaxASCII && unicode.Is(unicode.Nd, r) {
-			start := r
-			for unicode.Is(unicode.Nd, start-1) {
-				start--
-			}
-			b.WriteRune('0' + (r-start)%10)
-			continue
-		}
-		b.WriteRune(r)
-	}
-	return b.String()
-}
-
-var pyFloatPattern = regexp.MustCompile(`^[+-]?(?:(?:\d+(?:_\d+)*)(?:\.(?:\d+(?:_\d+)*)?)?|\.\d+(?:_\d+)*)(?:[eE][+-]?\d+(?:_\d+)*)?$`)
-
-// pyFloat is float(text): decimal and exponent forms with optional
-// underscores between digits, and the inf/infinity/nan spellings.
+// pyFloat is Python's float(text) for a command-line value: the repository's
+// one Python float() port (internal/pythonparity).
 func pyFloat(text string) (float64, bool) {
-	s := asciiDigits(strings.TrimFunc(text, isPySpace))
-	switch strings.ToLower(strings.TrimLeft(s, "+-")) {
-	case "inf", "infinity":
-		if strings.HasPrefix(s, "-") {
-			return math.Inf(-1), true
-		}
-		return math.Inf(1), true
-	case "nan":
-		return math.NaN(), true
-	}
-	if !pyFloatPattern.MatchString(s) {
-		return 0, false
-	}
-	f, err := strconv.ParseFloat(strings.ReplaceAll(s, "_", ""), 64)
-	if err != nil && !math.IsInf(f, 0) {
-		return 0, false
-	}
-	return f, true
+	return pythonparity.ParseFloat(text)
 }
 
 var (

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"math/big"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -21,14 +22,13 @@ import (
 //go:embed testdata/sync_target_oracle.py
 var syncTargetOracleProgram string
 
-// Named limitations of the argparse/int/float port, each outside the corpus
-// on purpose and refused (never silently different) by the Go side:
-//   - integers beyond int64 (Python keeps arbitrary precision; a --backfill
-//     that large crashes Python with an OverflowError anyway);
-//   - non-ASCII decimal digits in int()/float() text (Python accepts
-//     "\u0663", the Go side refuses);
+// Named limitations, each outside the corpus on purpose:
 //   - dev-hops's ROOT-level global flags before the subcommand
-//     (`dev-hops --org X sync git`): dho takes them after the verb only.
+//     (`dev-hops --org X sync git`): dho's dispatcher has no root flags, so
+//     they go after the verb;
+//   - `.env` loading by dev-hops main() is not replicated.
+// Integers of any size, Unicode digits and Python's exact float grammar come
+// from internal/pythonparity, the repository's one port of int() and float().
 
 type oracleCase struct {
 	Args []string          `json:"args"`
@@ -55,12 +55,13 @@ func tOptStr(v *string) typed {
 	}
 	return tStr(*v)
 }
-func tOptInt(v *int64) typed {
+func tOptInt(v *big.Int) typed {
 	if v == nil {
 		return tNull()
 	}
-	return tInt(*v)
+	return typed{"int", v.String()}
 }
+func tBig(v *big.Int) typed { return typed{"int", v.String()} }
 
 // pyFloatRepr is Python's repr(float): shortest round-trip digits, exponent
 // form only outside [1e-4, 1e16).
@@ -150,7 +151,7 @@ func planView(plan Plan) map[string]any {
 		credentialView(run, plan.GitHub)
 	case CallGitHubBatch:
 		run["org_name"], run["user_name"] = tOptStr(plan.Group), tStr(githubBatchUser(plan))
-		run["pattern"], run["batch_size"], run["max_concurrent"] = tStr(plan.Search), tInt(plan.BatchSize), tInt(plan.MaxConcurrent)
+		run["pattern"], run["batch_size"], run["max_concurrent"] = tStr(plan.Search), tBig(plan.BatchSize), tBig(plan.MaxConcurrent)
 		run["rate_limit_delay"] = typed{"float", pyFloatRepr(plan.RateLimitDelay)}
 		run["max_repos"], run["use_async"] = tOptInt(plan.MaxRepos), tBool(plan.UseAsync)
 		run["max_commits_per_repo"], run["backfill_missing"] = tOptInt(plan.MaxCommits), tBool(true)
@@ -160,7 +161,7 @@ func planView(plan Plan) map[string]any {
 		run["token"] = tStr(plan.GitLabToken)
 	case CallGitLabBatch:
 		run["gitlab_url"], run["group_name"], run["pattern"] = tStr(plan.GitLabURL), tOptStr(plan.Group), tStr(plan.Search)
-		run["batch_size"], run["max_concurrent"] = tInt(plan.BatchSize), tInt(plan.MaxConcurrent)
+		run["batch_size"], run["max_concurrent"] = tBig(plan.BatchSize), tBig(plan.MaxConcurrent)
 		run["rate_limit_delay"] = typed{"float", pyFloatRepr(plan.RateLimitDelay)}
 		run["max_projects"], run["use_async"] = tOptInt(plan.MaxRepos), tBool(plan.UseAsync)
 		run["max_commits_per_project"], run["token"] = tOptInt(plan.MaxCommits), tStr(plan.GitLabToken)
@@ -196,7 +197,8 @@ func requireSyncOracleEnv(t *testing.T) string {
 	_, currentFile, _, _ := runtime.Caller(0)
 	repoRoot := filepath.Dir(filepath.Dir(filepath.Dir(currentFile)))
 	python := pyoracle.Resolve(t, repoRoot)
-	pyoracle.RequireDeployed(t, python)
+	probe, probeErr := exec.Command(python, pyoracle.VersionProbeArgs...).Output()
+	pyoracle.RequireDeployed(t, python, probe, probeErr)
 	return python
 }
 

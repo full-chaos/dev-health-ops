@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"os"
 	"strings"
 	"time"
@@ -89,7 +90,7 @@ type Plan struct {
 	DB        *string
 
 	Since      *time.Time
-	MaxCommits *int64
+	MaxCommits *big.Int
 
 	SyncGit, SyncPrs, SyncCICD, SyncDeployments   bool
 	SyncIncidents, SyncSecurity, SyncTests, Blame bool
@@ -97,16 +98,16 @@ type Plan struct {
 	RepoPath string
 
 	Owner, Repo string
-	ProjectID   *int64
+	ProjectID   *big.Int
 	GitLabURL   string
 	GitLabToken string
 
 	Group          *string
 	Search         string
-	BatchSize      int64
-	MaxConcurrent  int64
+	BatchSize      *big.Int
+	MaxConcurrent  *big.Int
 	RateLimitDelay float64
-	MaxRepos       *int64
+	MaxRepos       *big.Int
 	UseAsync       bool
 
 	GitHub *GitHubCredentials
@@ -238,11 +239,9 @@ func convert(state *argState) func(spec *optSpec, value string) *argError {
 				return typeError(spec, value)
 			}
 		case "backfill":
-			n, ok := pyInt(value)
-			if !ok {
+			if _, ok := pyInt(value); !ok {
 				return typeError(spec, value)
 			}
-			_ = n
 			// Any explicit --backfill conflicts with --since, even one equal
 			// to the default (argparse 3.14: the value is a fresh object).
 			state.backfillGiven = true
@@ -360,7 +359,7 @@ func BuildPlan(target string, args []string, in Inputs) (plan Plan, help bool, e
 		return Plan{}, false, &Refusal{Code: cli.ExitFailure, Stage: "error", Type: "OverflowError", Message: "date value out of range (OverflowError)"}
 	}
 	plan.Since = since
-	plan.MaxCommits = resolveMaxCommits(v, since != nil || backfill > 1)
+	plan.MaxCommits = resolveMaxCommits(v, since != nil || backfill.Cmp(big.NewInt(1)) > 0)
 
 	fillFlags(&plan)
 	if rerr := fillMode(&plan, v, in); rerr != nil {
@@ -401,20 +400,20 @@ func fillFlags(plan *Plan) {
 	plan.SyncTests, plan.Blame = t == "tests", t == "blame"
 }
 
-func optionalInt(v map[string]string, key string) *int64 {
+func optionalInt(v map[string]string, key string) *big.Int {
 	text, ok := v[key]
 	if !ok {
 		return nil
 	}
 	n, _ := pyInt(text)
-	return &n
+	return n
 }
 
-func intOr(v map[string]string, key string, def int64) int64 {
+func intOr(v map[string]string, key string, def int64) *big.Int {
 	if n := optionalInt(v, key); n != nil {
-		return *n
+		return n
 	}
-	return def
+	return big.NewInt(def)
 }
 
 // fillMode is the per-provider handler of run_sync_target: which processor a
@@ -532,7 +531,7 @@ func pyAddDays(t time.Time, n int64) (time.Time, bool) {
 // --day/--date translated into --before as _handle_deprecated_day_flag does
 // (--day wins over --date; an explicit --before wins over both). overflow
 // reports the OverflowError Python raises for a date outside years 1..9999.
-func resolveWindow(v map[string]string, in Inputs) (since *time.Time, backfill int64, overflow bool) {
+func resolveWindow(v map[string]string, in Inputs) (since *time.Time, backfill *big.Int, overflow bool) {
 	backfill = intOr(v, "backfill", 1)
 	var before *time.Time
 	if text, ok := v["before"]; ok {
@@ -555,7 +554,7 @@ func resolveWindow(v map[string]string, in Inputs) (since *time.Time, backfill i
 		t, _ := pyDate(text)
 		return &t, backfill, false
 	}
-	if backfill > 1 {
+	if backfill.Cmp(big.NewInt(1)) > 0 {
 		if before == nil {
 			now := in.Now
 			if now == nil {
@@ -565,7 +564,10 @@ func resolveWindow(v map[string]string, in Inputs) (since *time.Time, backfill i
 			tomorrow := time.Date(today.Year(), today.Month(), today.Day(), 0, 0, 0, 0, time.UTC).AddDate(0, 0, 1)
 			before = &tomorrow
 		}
-		start, ok := pyAddDays(*before, -backfill)
+		if !backfill.IsInt64() {
+			return nil, backfill, true
+		}
+		start, ok := pyAddDays(*before, -backfill.Int64())
 		if !ok {
 			return nil, backfill, true
 		}
@@ -575,16 +577,15 @@ func resolveWindow(v map[string]string, in Inputs) (since *time.Time, backfill i
 }
 
 // resolveMaxCommits is utils.cli.resolve_max_commits.
-func resolveMaxCommits(v map[string]string, hasDateConstraint bool) *int64 {
+func resolveMaxCommits(v map[string]string, hasDateConstraint bool) *big.Int {
 	given := optionalInt(v, "max_commits_per_repo")
 	if hasDateConstraint {
 		return given
 	}
-	if given != nil && *given != 0 {
+	if given != nil && given.Sign() != 0 {
 		return given
 	}
-	def := int64(100)
-	return &def
+	return big.NewInt(100)
 }
 
 // githubCredentials is _resolve_github_sync_credentials up to the point it

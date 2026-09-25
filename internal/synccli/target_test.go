@@ -118,7 +118,7 @@ func TestThePlanCarriesWhatTheExecutorNeeds(t *testing.T) {
 	if code != cli.ExitOK {
 		t.Fatalf("exit %d: %s", code, stderr)
 	}
-	if got.Call != CallGitLabSingle || got.ProjectID == nil || *got.ProjectID != 7 || !got.SyncCICD || got.SyncGit {
+	if got.Call != CallGitLabSingle || got.ProjectID == nil || got.ProjectID.Int64() != 7 || !got.SyncCICD || got.SyncGit {
 		t.Errorf("plan = %+v", got)
 	}
 	if got.Org == nil || *got.Org != "acme" || got.OrgSource != OrgFromFlag {
@@ -128,6 +128,6 @@ func TestThePlanCarriesWhatTheExecutorNeeds(t *testing.T) {
 		t.Error("--backfill 3 must produce a since bound")
 	}
 	if got.MaxCommits != nil {
-		t.Errorf("max commits = %d, want none when a window is set and no cap was given", *got.MaxCommits)
+		t.Errorf("max commits = %s, want none when a window is set and no cap was given", got.MaxCommits)
 	}
 }

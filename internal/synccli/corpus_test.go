@@ -86,7 +86,7 @@ func syncTargetCorpus(keyFile string) []oracleCase {
 		{"--use-async"}, {"--use-async=1"}, {"--use-async=", ""}, {"--use"}, {"--use-a", "x"},
 		{"--defer-finalize"}, {"--defer"}, {"--defer-finalize=1"},
 		{"-h"}, {"--help"}, {"-hx"}, {"-hs"}, {"-hs", "x"}, {"-h=x"}, {"-h-x"}, {"-hs=x"}, {"-hh"}, {"-hsx"}, {"-hm", "y"}, {"-h", "--bogus"}, {"--bogus", "-h"}, {"--help", "--since", "bad"},
-		{"--since", "bad", "--help"}, {"--bogus"}, {"--bogus=1"}, {"-q"}, {"-x", "1"}, {"-1"}, {"-1.5"}, {"-.5"},
+		{"--since", "bad", "--help"}, {"--bogus"}, {"--bogus=1"}, {"-q"}, {"-x", "1"}, {"-1"}, {"-1.5"}, {"-.5"}, {"-1e5"}, {"-1_0"}, {"-1."}, {"-.5e-3"}, {"-\u0663"}, {"-1e"}, {"-1e+5", "x"},
 		{"positional"}, {"positional", "--since", "2026-01-02"}, {"--"}, {"--", "x"}, {"--since", "--", "2026-01-02"},
 		{"--", "--since", "2026-01-02"}, {"a b"}, {"--since", "2026-01-02", "a b"},
 		{"--repo", "r2"}, {"--repo=r2", "--repo", "r3"}, {"--owner", ""}, {"--repo", ""},
@@ -114,7 +114,7 @@ func syncTargetCorpus(keyFile string) []oracleCase {
 	// in a fixed valid context (github batch so the batch options show).
 	batch := []string{"--provider", "github", "-s", "o/*", "--auth", "tok"}
 	typedOptions := []string{"--batch-size", "--max-concurrent", "--max-repos", "--max-commits-per-repo", "--backfill"}
-	intShapes := []string{"0", "1", "2", "3", "10", "100", "256", "257", "1000", "-1", "-5", "+3", " 4 ", "\t5\n", "1_0", "1__0", "_1", "1_", "01", "0x10",
+	intShapes := []string{"0", "1", "2", "3", "10", "100", "256", "257", "1000", "-1", "-5", "+3", " 4 ", "\t5\n", "1_0", "1__0", "_1", "1_", "01", "0x10", "9223372036854775808", "-9223372036854775809", "18446744073709551618", "99999999999999999999999999", "\u00a05\u00a0", "\u20035\u2003", "１２", "+ 5", "5 5", "--5", "+-5",
 		"1.5", "1e3", "abc", "", " ", "--", "9223372036854775807", "-9223372036854775808", "٣"}
 	for _, option := range typedOptions {
 		for _, shape := range intShapes {
@@ -137,7 +137,7 @@ func syncTargetCorpus(keyFile string) []oracleCase {
 		}
 	}
 	floatShapes := []string{"0", "1", "1.0", "2.5", ".5", "5.", "1e3", "1E-3", "1e400", "-1", "+2.5", "1_0.5", "1__0", "_1", "1_", "inf", "-Infinity", "NaN", "nan", "+inf", "infinit",
-		"1e", "e1", "0x1p3", "abc", "", " 3 ", "1,5", "1.5.2", "٣"}
+		"1e", "e1", "0x1p3", "++inf", "+-inf", "-+inf", "\u0130NF", "iNf", "INFINITY", "infinit", "-nan", "+NaN", "nan_", "n_an", "1_e5", "1e_5", "1e5_", "\u00a01.5\u00a0", "１.５", "1．5", "1e+", "+.5", "-.5e-3", ".e3", ".", "+", "-", "1e3.5", "0e0", "-0", "-0.0", "1e-5", "1e15", "1e16", "1e21", "123456789012345678", "abc", "", " 3 ", "1,5", "1.5.2", "٣"}
 	for _, shape := range floatShapes {
 		add(ch, "git", append(append([]string{}, batch...), "--rate-limit-delay="+shape)...)
 		add(ch, "git", append(append([]string{}, batch...), "--rate-limit-delay", shape)...)

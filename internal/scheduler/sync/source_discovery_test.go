@@ -901,3 +901,58 @@ func TestJiraMaxReposTierDefaultsMatchPython(t *testing.T) {
 		t.Errorf("enterprise max_repos default = %v, want nil (unlimited)", *got)
 	}
 }
+
+// TestDiscoveryKeepsTheProviderStatusOfAnAuthenticationFailure pins what the
+// integration discover route maps to a 422: the error a provider's 401 or 403
+// makes (GitHub's org lookup and then its user lookup both rejected; a GitLab
+// group listing rejected) carries the classified *ProviderError with its
+// status, through every wrapper, and never an empty success. A rate-limited
+// 403 keeps its own class.
+func TestDiscoveryKeepsTheProviderStatusOfAnAuthenticationFailure(t *testing.T) {
+	credential := func(provider string) providerfoundation.Credential {
+		c, err := providerfoundation.Credential{Provider: provider}.WithEphemeralSecret("token", secrets.NewValue("token"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	for _, c := range []struct {
+		name     string
+		run      func(*NativeSourceDiscoveryService) error
+		provider string
+		status   int
+		class    providerfoundation.ErrorClass
+	}{
+		{"github owner: org 401 then user 401", func(s *NativeSourceDiscoveryService) error {
+			_, err := s.discoverGitHub(context.Background(), credential("github"), map[string]any{"owner": "zz-401"})
+			return err
+		}, "github", http.StatusUnauthorized, providerfoundation.ErrorAuthentication},
+		{"github owner: 403", func(s *NativeSourceDiscoveryService) error {
+			_, err := s.discoverGitHub(context.Background(), credential("github"), map[string]any{"owner": "zz-403"})
+			return err
+		}, "github", http.StatusForbidden, providerfoundation.ErrorAuthentication},
+		{"github all repos: 401", func(s *NativeSourceDiscoveryService) error {
+			_, err := s.discoverGitHub(context.Background(), credential("github"), map[string]any{"all_repos": true})
+			return err
+		}, "github", http.StatusUnauthorized, providerfoundation.ErrorAuthentication},
+		{"gitlab group: 401", func(s *NativeSourceDiscoveryService) error {
+			_, err := s.discoverGitLab(context.Background(), credential("gitlab"), map[string]any{"group": "zz-401"})
+			return err
+		}, "gitlab", http.StatusUnauthorized, providerfoundation.ErrorAuthentication},
+		{"gitlab group: 403", func(s *NativeSourceDiscoveryService) error {
+			_, err := s.discoverGitLab(context.Background(), credential("gitlab"), map[string]any{"group": "zz-403"})
+			return err
+		}, "gitlab", http.StatusForbidden, providerfoundation.ErrorAuthentication},
+	} {
+		doer := &sequencedSourceDiscoveryDoer{t: t, statuses: []int{c.status}, bodies: []string{`{"message":"rejected"}`}}
+		service := &NativeSourceDiscoveryService{doer: doer, retry: fastRetry(), telemetry: newSourceDiscoveryTelemetry(), now: time.Now}
+		err := c.run(service)
+		var providerErr *providerfoundation.ProviderError
+		if !errors.As(err, &providerErr) || providerErr.Class != c.class || providerErr.StatusCode != c.status {
+			t.Errorf("%s: error %v (as ProviderError: %+v), want class %s status %d", c.name, err, providerErr, c.class, c.status)
+		}
+		if err == nil {
+			t.Errorf("%s: an authentication failure returned an empty success", c.name)
+		}
+	}
+}

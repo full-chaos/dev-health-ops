@@ -7,12 +7,15 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
+	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pydict"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	schedsync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
 )
 
@@ -20,6 +23,37 @@ const (
 	discoveryErrorCode    = "integration_discovery_failed"
 	discoveryErrorMessage = "Integration discovery failed"
 )
+
+// providerRejection reports a discovery that failed because the PROVIDER
+// refused the integration's credential: an authentication-class provider error
+// with status 401 or 403, however the discovery service wrapped it (a
+// rate-limited 403 is another class and is not one). Python's GitHub and GitLab
+// discovery reads that refusal as "nothing found" and answers 202 with
+// discovered=0, and its Jira discovery raises (503); Go never presents a
+// provider authentication failure as an empty success or as a generic 503
+// (lead ruling, CHAOS-6753), so the route answers 422 naming the provider and
+// its status, for every provider. Every other failure stays the 503.
+func providerRejection(provider string, err error) (name string, status int, rejected bool) {
+	var providerErr *providerfoundation.ProviderError
+	if !errors.As(err, &providerErr) || providerErr.Class != providerfoundation.ErrorAuthentication {
+		return "", 0, false
+	}
+	if providerErr.StatusCode != http.StatusUnauthorized && providerErr.StatusCode != http.StatusForbidden {
+		return "", 0, false
+	}
+	return strings.ToLower(strings.TrimSpace(provider)), providerErr.StatusCode, true
+}
+
+// writeProviderRejection answers the 422 for a provider that refused the
+// integration's credential: a FastAPI-shaped detail whose message names the
+// provider and its status.
+func writeProviderRejection(w http.ResponseWriter, integrationID, provider string, status int) {
+	policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail([]pybody.Error{{
+		Type: "provider_authentication_failed", Loc: []pyjson.Value{"path", "integration_id"},
+		Msg:   fmt.Sprintf("%s rejected the integration's credential (HTTP %d)", provider, status),
+		Input: integrationID,
+	}}), nil)
+}
 
 // discover is POST /integrations/{integration_id}/discover
 // (discover_integration_sources): run source discovery for the integration
@@ -39,6 +73,10 @@ func (h handlers) discover(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		h.Logger.ErrorContext(ctx, "integration_discovery.failed", slog.String("error_code", discoveryErrorCode),
 			slog.String("org_id", orgID), slog.String("integration_id", id.String()), slog.String("error", err.Error()))
+		if provider, status, rejected := providerRejection(integration.Provider, err); rejected {
+			writeProviderRejection(w, raw, provider, status)
+			return
+		}
 		detail := pyjson.NewObject()
 		detail.Set("code", discoveryErrorCode)
 		detail.Set("message", discoveryErrorMessage)

@@ -305,6 +305,9 @@ func NewNativeSourceDiscoveryService(
 	}
 	return &NativeSourceDiscoveryService{
 		domainPool: domainPool, credentials: credentials, doer: doer,
+		// The Go retry budget (3 attempts per call) is not Python's: PyGithub and
+		// python-gitlab retry 10 times by library default. Named divergence, pinned
+		// by discovery_retry_shape_test.go (CHAOS-6784).
 		retry: providerfoundation.DefaultRetryPolicy(), logger: logger,
 		telemetry: newSourceDiscoveryTelemetry(), now: time.Now,
 	}, nil

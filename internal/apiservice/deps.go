@@ -2,8 +2,10 @@ package apiservice
 
 import (
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/api/githubapp"
 	"github.com/full-chaos/dev-health-ops/internal/api/oauthprovider"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
+	"net/http"
 	"os"
 
 	"context"
@@ -124,6 +126,18 @@ type Deps struct {
 	// legal, always-failing decryptor -- see buildDeps's own comment on
 	// SettingsEncryptionKey below.
 	Decryptor providerfoundation.FernetDecryptor
+	// GitHubApp and GitHubStateSigner configure the GitHub App install
+	// routes (internal/api/githubapp): the App's identity read from
+	// GITHUB_APP_* when the api starts, and the JWT secret, issuer and
+	// audience its install state is signed with.
+	GitHubApp         githubapp.Config
+	GitHubStateSigner githubapp.Signer
+	// GitHubAppHTTPClient, GitHubAppURL and GitHubAppAPIURL are the install
+	// callback's outbound seam: nil/empty in production (github.com and
+	// api.github.com, no redirects); the venue oracle points them at a stub.
+	GitHubAppHTTPClient *http.Client
+	GitHubAppURL        string
+	GitHubAppAPIURL     string
 	// PagerDuty is the admin org-deletion route's own dependency
 	// (CHAOS-6306): the OAuth client config used to revoke a stored token.
 	PagerDuty providerfoundation.PagerDutyRevokeConfig

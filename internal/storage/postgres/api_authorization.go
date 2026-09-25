@@ -257,7 +257,7 @@ func apiPosture() RolePosture {
 			{"provider_oauth_revocations", false, false, true},
 			// Integrations.
 			{"integration_datasets", false, false, true},
-			{"github_app_installations", false, false, true},
+			{"github_app_installations", true, true, true},
 			// integration_credentials' delete grant is declared once, above
 			// (CHAOS-6319's read-only entry, widened rather than duplicated
 			// here) -- the one-entry-per-table rule.

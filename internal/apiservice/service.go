@@ -41,6 +41,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/buildinfo"
 	"github.com/full-chaos/dev-health-ops/internal/api/credentials"
 	"github.com/full-chaos/dev-health-ops/internal/api/externalingest"
+	"github.com/full-chaos/dev-health-ops/internal/api/githubapp"
 	healthroutes "github.com/full-chaos/dev-health-ops/internal/api/health"
 	"github.com/full-chaos/dev-health-ops/internal/api/legacyingest"
 	"github.com/full-chaos/dev-health-ops/internal/api/orgs"
@@ -205,6 +206,9 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 		routes = append(routes, syncadmin.Routes(syncadmin.Deps{Pool: deps.Pool, ClickHouse: deps.ClickHouse, Guard: deps.Guard, Logger: logger, Decryptor: deps.Decryptor, Now: deps.Now})...)
 		routes = append(routes, credentials.Routes(credentials.Deps{Pool: deps.Pool, Guard: deps.Guard, Cipher: deps.Decryptor, Logger: logger, Now: deps.Now,
 			HTTPClient: credentialProbeClient, HostLookup: credentialHostLookup})...)
+		routes = append(routes, githubapp.Routes(githubapp.Deps{Pool: deps.Pool, Guard: deps.Guard, Valkey: deps.Valkey, Cipher: deps.Decryptor,
+			Logger: logger, Now: deps.Now, Config: deps.GitHubApp, Signer: deps.GitHubStateSigner,
+			HTTPClient: deps.GitHubAppHTTPClient, GitHubURL: deps.GitHubAppURL, GitHubAPIURL: deps.GitHubAppAPIURL})...)
 		if deps.ClickHouse != nil {
 			routes = append(routes, teamsidentity.Routes(deps.ClickHouse, deps.Guard, logger, deps.Pool, deps.Decryptor)...)
 		}
@@ -306,6 +310,8 @@ func configureWith(
 		deps.ClickHouseDSN = cfg.ClickHouseURI.Reveal()
 	}
 	deps.Invites = inviteConfig(cfg, logger, os.LookupEnv)
+	deps.GitHubApp = GitHubAppConfig(os.LookupEnv)
+	deps.GitHubStateSigner = githubapp.Signer{Secret: cfg.APIJWTSecret.Reveal(), Issuer: cfg.APIJWTIssuer, Audience: cfg.APIJWTAudience}
 	if adjust != nil {
 		adjust(&deps)
 	}

@@ -35,6 +35,7 @@ if _PORT:
     _STUBBED_HOSTS = {
         "provider.example.test",
         "api.github.com",
+        "github.com",
         "gitlab.com",
         "api.linear.app",
         "app.launchdarkly.com",

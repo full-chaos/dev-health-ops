@@ -21,6 +21,7 @@ internal/api/syncadmin	TestCreateWriteEnginesVenueOracleMatchesLivePython	run
 internal/api/syncadmin	TestCreateWriteVenueOracleSequenceUnderTheAPIRole	run
 internal/api/syncadmin	TestRunUnitsModelVenueOracleMatchesLivePython	run
 internal/api/syncadmin	TestSyncAdminReadsVenueOracle	run
+internal/api/syncadmin	TestSyncConfigBatchCreateVenueOracle	run
 internal/api/syncadmin	TestSyncConfigCreateVenueOracle	run
 internal/api/syncadmin	TestSyncConfigDeleteVenueOracle	run
 internal/api/syncadmin	TestSyncConfigRepositoriesVenueOracle	run

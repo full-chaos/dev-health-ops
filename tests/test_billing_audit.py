@@ -182,33 +182,3 @@ async def api_client(session_maker):
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         yield client, session_maker
-
-
-@pytest.mark.asyncio
-async def test_billing_audit_endpoints_require_superadmin(api_client):
-    client, session_maker = api_client
-
-    org = Organization(id=uuid.uuid4(), slug="audit-org-5", name="Audit Org 5")
-    async with session_maker() as session:
-        session.add(org)
-        await session.flush()
-        session.add(
-            BillingAuditLog(
-                org_id=org.id,
-                action="reconciliation.mismatch_found",
-                resource_type="invoice",
-                resource_id=uuid.uuid4(),
-                description="Mismatch",
-                reconciliation_status="mismatch",
-                created_at=datetime.now(timezone.utc),
-            )
-        )
-        await session.commit()
-
-    response = await client.get(
-        f"/api/v1/billing/audit?org_id={org.id}&limit=10&offset=0"
-    )
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["total"] == 1
-    assert payload["limit"] == 10

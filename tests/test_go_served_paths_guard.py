@@ -47,10 +47,16 @@ def test_the_real_tree_passes(real_routes):
     assert problems == []
     assert checker.check(real_routes, manifest, REPO_ROOT) == []
     stubs = checker.stub_routes(real_routes, REPO_ROOT)
-    # CHAOS-6241's 32 deleted bodies are recognised as stubs (a recogniser that
-    # found none would make every other assertion here vacuous).
-    assert len(stubs) == 32
-    assert {checker.normalize(route["path"]) for route in stubs} <= set(manifest)
+    # CHAOS-6241's 32 deleted bodies (24 query-api paths) and CHAOS-6817's 26
+    # billing bodies are recognised as stubs (a recogniser that found none
+    # would make every other assertion here vacuous).
+    assert len(stubs) >= 58
+    stub_paths = {checker.normalize(route["path"]) for route in stubs}
+    assert "/api/v1/meta" in stub_paths and "/api/v1/billing/plans/{}" in stub_paths
+    assert all(
+        any(checker.covers(template, path) for template in manifest)
+        for path in {checker.normalize(route["path"]) for route in stubs}
+    )
 
 
 def test_a_stub_whose_path_leaves_the_manifest_fails(real_routes):
@@ -81,17 +87,17 @@ def test_a_manifest_row_with_no_python_route_fails(real_routes):
 SOURCE = textwrap.dedent(
     '''
     def stubbed():
-        _raise_served_by_go_api("/x")
+        raise_served_by_go_api("/x")
 
     def stubbed_with_docstring():
         """Served by Go."""
-        _raise_served_by_go_api("/x")
+        raise_served_by_go_api("/x")
 
     def stubbed_return():
-        return _raise_served_by_go_api("/x")
+        return raise_served_by_go_api("/x")
 
     def stubbed_attribute():
-        module._raise_served_by_go_api("/x")
+        module.raise_served_by_go_api("/x")
 
     def stubbed_public_name():
         raise_served_by_go_api("/x", "go-api")
@@ -120,10 +126,10 @@ SOURCE = textwrap.dedent(
 
     def logic_then_stub():
         value = 1
-        _raise_served_by_go_api("/x")
+        raise_served_by_go_api("/x")
 
     def stub_and_more():
-        _raise_served_by_go_api("/x")
+        raise_served_by_go_api("/x")
         return 1
 
     def calls_something_else():
@@ -140,7 +146,7 @@ SOURCE = textwrap.dedent(
 
     @decorator
     def shared():
-        _raise_served_by_go_api("/x")
+        raise_served_by_go_api("/x")
     '''
 )
 

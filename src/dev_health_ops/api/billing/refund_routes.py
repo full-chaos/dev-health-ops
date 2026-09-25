@@ -4,16 +4,14 @@ import uuid
 from datetime import datetime
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, ConfigDict, Field
 
 from dev_health_ops.api.auth.router import get_current_user
+from dev_health_ops.api.go_served import GO_API, raise_served_by_go_api
 from dev_health_ops.api.services.auth import AuthenticatedUser
-from dev_health_ops.db import get_postgres_session
-from dev_health_ops.models.refunds import Refund
 
-from ._helpers import RefundReason, ensure_dict, require_int, require_str, require_uuid
-from .refund_service import refund_service
+from ._helpers import RefundReason
 
 router = APIRouter(prefix="/refunds", tags=["billing-refunds"])
 
@@ -54,84 +52,12 @@ class RefundListResponse(BaseModel):
     offset: int
 
 
-def _as_response(refund: Refund) -> RefundResponse:
-    return RefundResponse(
-        id=str(require_uuid(refund.id, "refund.id")),
-        org_id=str(require_uuid(refund.org_id, "refund.org_id")),
-        invoice_id=(
-            str(require_uuid(refund.invoice_id, "refund.invoice_id"))
-            if refund.invoice_id is not None
-            else None
-        ),
-        subscription_id=(
-            str(require_uuid(refund.subscription_id, "refund.subscription_id"))
-            if refund.subscription_id is not None
-            else None
-        ),
-        stripe_refund_id=require_str(
-            refund.stripe_refund_id, "refund.stripe_refund_id"
-        ),
-        stripe_charge_id=require_str(
-            refund.stripe_charge_id, "refund.stripe_charge_id"
-        ),
-        stripe_payment_intent_id=(
-            refund.stripe_payment_intent_id
-            if isinstance(refund.stripe_payment_intent_id, str)
-            else None
-        ),
-        amount=require_int(refund.amount, "refund.amount"),
-        currency=require_str(refund.currency, "refund.currency"),
-        status=require_str(refund.status, "refund.status"),
-        reason=refund.reason if isinstance(refund.reason, str) else None,
-        description=refund.description if isinstance(refund.description, str) else None,
-        failure_reason=(
-            refund.failure_reason if isinstance(refund.failure_reason, str) else None
-        ),
-        initiated_by=(
-            str(require_uuid(refund.initiated_by, "refund.initiated_by"))
-            if refund.initiated_by is not None
-            else None
-        ),
-        metadata=ensure_dict(refund.metadata_),
-        created_at=refund.created_at
-        if isinstance(refund.created_at, datetime)
-        else None,
-        updated_at=refund.updated_at
-        if isinstance(refund.updated_at, datetime)
-        else None,
-    )
-
-
 @router.post("", response_model=RefundResponse)
 async def create_refund(
     payload: CreateRefundRequest,
     user: Annotated[AuthenticatedUser, Depends(get_current_user)],
 ) -> RefundResponse:
-    if not user.is_superuser:
-        raise HTTPException(status_code=403, detail="Superuser access required")
-
-    try:
-        invoice_id = uuid.UUID(payload.invoice_id)
-        actor_id = uuid.UUID(user.user_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail="Invalid identifier") from exc
-
-    async with get_postgres_session() as db:
-        try:
-            refund = await refund_service.create_refund(
-                db=db,
-                invoice_id=invoice_id,
-                amount=payload.amount,
-                reason=payload.reason,
-                description=payload.description,
-                actor_id=actor_id,
-            )
-            return _as_response(refund)
-        except ValueError as exc:
-            detail = str(exc)
-            if detail == "Invoice not found":
-                raise HTTPException(status_code=404, detail=detail) from exc
-            raise HTTPException(status_code=400, detail=detail) from exc
+    raise_served_by_go_api("/api/v1/billing/refunds", GO_API)
 
 
 @router.get("", response_model=RefundListResponse)
@@ -141,25 +67,7 @@ async def list_refunds(
     offset: int = 0,
     org_id: uuid.UUID | None = Query(default=None),
 ) -> RefundListResponse:
-    if not user.is_superuser:
-        raise HTTPException(status_code=403, detail="Superuser access required")
-
-    safe_limit = min(max(limit, 1), 100)
-    safe_offset = max(offset, 0)
-
-    async with get_postgres_session() as db:
-        refunds, total = await refund_service.list_refunds(
-            db=db,
-            org_id=org_id,
-            limit=safe_limit,
-            offset=safe_offset,
-        )
-        return RefundListResponse(
-            items=[_as_response(item) for item in refunds],
-            total=total,
-            limit=safe_limit,
-            offset=safe_offset,
-        )
+    raise_served_by_go_api("/api/v1/billing/refunds", GO_API)
 
 
 @router.get("/{refund_id}", response_model=RefundResponse)
@@ -168,20 +76,4 @@ async def get_refund(
     user: Annotated[AuthenticatedUser, Depends(get_current_user)],
     org_id: uuid.UUID | None = Query(default=None),
 ) -> RefundResponse:
-    if not user.is_superuser:
-        raise HTTPException(status_code=403, detail="Superuser access required")
-
-    try:
-        parsed_refund_id = uuid.UUID(refund_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail="Invalid identifier") from exc
-
-    async with get_postgres_session() as db:
-        refund = await refund_service.get_refund(
-            db=db,
-            refund_id=parsed_refund_id,
-            org_id=org_id,
-        )
-        if refund is None:
-            raise HTTPException(status_code=404, detail="Refund not found")
-        return _as_response(refund)
+    raise_served_by_go_api("/api/v1/billing/refunds/{refund_id}", GO_API)

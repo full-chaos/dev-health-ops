@@ -34,6 +34,7 @@ _TEST_USER = AuthenticatedUser(
     "sentinel-test@example.invalid",
     "70d529e0",
     "admin",
+    is_superuser=True,
 )
 
 
@@ -123,5 +124,86 @@ def test_get_home_unauthenticated_still_401s():
         # A plain assignment, not a lambda literal, to keep the finally
         # block free of anything CodeQL's py/exit-from-finally check could
         # read as an early-exit statement.
+        app.dependency_overrides[get_current_user] = _override_get_current_user
+    assert resp.status_code == 401, resp.text
+
+
+# CHAOS-6817: the 26 billing routes go-api owns (the manifest's billing paths and
+# the static /plans/pull-stripe the ingress rule /plans/[^/]+$ also sends to Go).
+# Every route keeps its signature and auth dependency, so a request that
+# reaches the Python handler on an authenticated superadmin gets the 500
+# diagnostic naming go-api, whatever the body is.
+_UUID = "00000000-0000-4000-8000-0000000000aa"
+_BILLING_ROUTES = [
+    ("GET", "/api/v1/billing/plans", None),
+    ("POST", "/api/v1/billing/plans", {"key": "k", "name": "n", "tier": "team"}),
+    ("POST", "/api/v1/billing/plans/pull-stripe", None),
+    ("GET", f"/api/v1/billing/plans/{_UUID}", None),
+    ("PUT", f"/api/v1/billing/plans/{_UUID}", {}),
+    ("DELETE", f"/api/v1/billing/plans/{_UUID}", None),
+    ("POST", f"/api/v1/billing/plans/{_UUID}/sync-stripe", None),
+    ("GET", "/api/v1/billing/invoices", None),
+    ("GET", f"/api/v1/billing/invoices/{_UUID}", None),
+    ("POST", f"/api/v1/billing/invoices/{_UUID}/void", None),
+    ("GET", "/api/v1/billing/refunds", None),
+    ("POST", "/api/v1/billing/refunds", {"invoice_id": _UUID}),
+    ("GET", f"/api/v1/billing/refunds/{_UUID}", None),
+    (
+        "POST",
+        "/api/v1/billing/checkout",
+        {
+            "tier": "team",
+            "success_url": "https://x.test/ok",
+            "cancel_url": "https://x.test/no",
+        },
+    ),
+    ("POST", "/api/v1/billing/portal", None),
+    ("GET", f"/api/v1/billing/entitlements/{_UUID}", None),
+    ("GET", "/api/v1/billing/subscriptions", None),
+    ("GET", "/api/v1/billing/subscriptions/list", None),
+    ("GET", "/api/v1/billing/subscriptions/history", None),
+    ("POST", "/api/v1/billing/subscriptions/change-plan", {"price_id": "price_1"}),
+    ("POST", "/api/v1/billing/subscriptions/cancel", {}),
+    ("POST", "/api/v1/billing/subscriptions/reactivate", None),
+    ("GET", f"/api/v1/billing/audit?org_id={_UUID}", None),
+    ("GET", f"/api/v1/billing/audit/{_UUID}", None),
+    ("POST", f"/api/v1/billing/audit/{_UUID}/resolve", {"resolution": "ok"}),
+    ("POST", "/api/v1/billing/reconcile", None),
+]
+
+
+@pytest.mark.parametrize(("method", "path", "body"), _BILLING_ROUTES)
+def test_billing_route_fires_the_go_api_sentinel(
+    method: str, path: str, body: dict | None, caplog: pytest.LogCaptureFixture
+):
+    """A deleted billing body answers 500 naming go-api and logs the event."""
+    with caplog.at_level(logging.ERROR, logger="dev_health_ops.api.go_served"):
+        resp = client.request(method, path, json=body)
+    assert resp.status_code == 500, f"{method} {path} = {resp.status_code} {resp.text}"
+    detail = resp.json().get("detail", "")
+    assert "go-api" in detail and "no Python implementation" in detail, detail
+    assert any(
+        r.message == "rest.route_served_by_go_api"
+        and getattr(r, "plane", None) == "go-api"
+        for r in caplog.records
+    ), f"{method} {path} did not emit rest.route_served_by_go_api"
+
+
+def test_the_go_api_stub_names_the_path_it_was_reached_on(
+    caplog: pytest.LogCaptureFixture,
+):
+    with caplog.at_level(logging.ERROR, logger="dev_health_ops.api.go_served"):
+        resp = client.get("/api/v1/billing/plans")
+    assert "/api/v1/billing/plans" in resp.json()["detail"]
+    assert any(
+        getattr(r, "path", None) == "/api/v1/billing/plans" for r in caplog.records
+    )
+
+
+def test_a_billing_route_with_an_auth_dependency_still_401s_first():
+    app.dependency_overrides.pop(get_current_user, None)
+    try:
+        resp = client.post("/api/v1/billing/checkout", json={"tier": "team"})
+    finally:
         app.dependency_overrides[get_current_user] = _override_get_current_user
     assert resp.status_code == 401, resp.text

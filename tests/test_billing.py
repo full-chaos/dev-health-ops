@@ -311,62 +311,6 @@ async def authed_client(authed_app):
 
 
 @pytest.mark.asyncio
-async def test_checkout_invalid_tier(authed_client):
-    resp = await authed_client.post(
-        "/api/v1/billing/checkout",
-        json={
-            "tier": "nonexistent",
-            "success_url": "https://example.com/success",
-            "cancel_url": "https://example.com/cancel",
-        },
-    )
-    assert resp.status_code == 400
-    assert "Invalid tier" in resp.json()["detail"]
-
-
-@pytest.mark.asyncio
-async def test_checkout_no_price_configured(authed_client):
-    resp = await authed_client.post(
-        "/api/v1/billing/checkout",
-        json={
-            "tier": "team",
-            "success_url": "https://example.com/success",
-            "cancel_url": "https://example.com/cancel",
-        },
-    )
-    assert resp.status_code == 400
-    assert "No price configured" in resp.json()["detail"]
-
-
-@pytest.mark.asyncio
-async def test_checkout_success(authed_client):
-    mock_session = SimpleNamespace(
-        id="cs_test", url="https://checkout.stripe.com/cs_test"
-    )
-
-    with (
-        patch("dev_health_ops.api.billing.router.get_stripe_client") as mock_client_fn,
-        patch.dict("os.environ", {"STRIPE_PRICE_ID_TEAM": "price_team_123"}),
-    ):
-        mock_client = MagicMock()
-        mock_client.checkout.sessions.create.return_value = mock_session
-        mock_client_fn.return_value = mock_client
-
-        resp = await authed_client.post(
-            "/api/v1/billing/checkout",
-            json={
-                "tier": "team",
-                "success_url": "https://example.com/success",
-                "cancel_url": "https://example.com/cancel",
-            },
-        )
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["session_id"] == "cs_test"
-        assert data["url"] == "https://checkout.stripe.com/cs_test"
-
-
-@pytest.mark.asyncio
 async def test_checkout_requires_auth(client):
     resp = await client.post(
         "/api/v1/billing/checkout",
@@ -384,90 +328,9 @@ async def test_checkout_requires_auth(client):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_portal_no_customer(authed_client):
-    with patch(
-        "dev_health_ops.api.billing.router._get_customer_id",
-        return_value=None,
-    ):
-        resp = await authed_client.post("/api/v1/billing/portal")
-        assert resp.status_code == 404
-        assert "No billing account" in resp.json()["detail"]
-
-
-@pytest.mark.asyncio
-async def test_portal_success(authed_client):
-    mock_portal = SimpleNamespace(url="https://billing.stripe.com/session/test")
-
-    with (
-        patch(
-            "dev_health_ops.api.billing.router._get_customer_id",
-            return_value="cus_test",
-        ),
-        patch("dev_health_ops.api.billing.router.get_stripe_client") as mock_client_fn,
-    ):
-        mock_client = MagicMock()
-        mock_client.billing_portal.sessions.create.return_value = mock_portal
-        mock_client_fn.return_value = mock_client
-
-        resp = await authed_client.post("/api/v1/billing/portal")
-        assert resp.status_code == 200
-        assert resp.json()["url"] == "https://billing.stripe.com/session/test"
-
-
 # ---------------------------------------------------------------------------
 # Entitlements tests
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_entitlements_org_endpoint_returns_per_org_state(client, app):
-    from dev_health_ops.api.auth.router import get_current_user
-    from dev_health_ops.api.services.auth import AuthenticatedUser
-    from dev_health_ops.db import postgres_session_dependency
-
-    async def _override_session():
-        yield AsyncMock()
-
-    app.dependency_overrides[postgres_session_dependency] = _override_session
-    app.dependency_overrides[get_current_user] = lambda: AuthenticatedUser(
-        user_id="00000000-0000-0000-0000-000000000002",
-        email="member@example.com",
-        org_id="00000000-0000-0000-0000-000000000001",
-        role="member",
-    )
-
-    mock_entitlements = {
-        "tier": "team",
-        "features": {"team_dashboard": True},
-        "limits": {"users": 25, "repos": 20, "api_rate": 300},
-        "is_licensed": True,
-        "in_grace_period": False,
-        "is_trialing": True,
-        "trial_ends_at": "2026-03-31T00:00:00+00:00",
-    }
-
-    mock_gating = SimpleNamespace(
-        get_org_entitlements_from_db=AsyncMock(return_value=mock_entitlements)
-    )
-
-    try:
-        with patch(
-            "dev_health_ops.api.billing.router.importlib.import_module",
-            return_value=mock_gating,
-        ):
-            resp = await client.get(
-                "/api/v1/billing/entitlements/00000000-0000-0000-0000-000000000001"
-            )
-    finally:
-        app.dependency_overrides.pop(postgres_session_dependency, None)
-        app.dependency_overrides.pop(get_current_user, None)
-
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["tier"] == "team"
-    assert body["is_trialing"] is True
-    assert body["trial_ends_at"] == "2026-03-31T00:00:00+00:00"
 
 
 # ---------------------------------------------------------------------------

@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
 
 import pytest
 import pytest_asyncio
@@ -10,7 +8,6 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from dev_health_ops.api.auth.router import get_current_user, get_current_user_optional
 from dev_health_ops.api.billing.router import router as billing_router
 from dev_health_ops.api.services.auth import AuthenticatedUser
 from dev_health_ops.db import postgres_session_dependency
@@ -104,99 +101,3 @@ async def test_public_list_and_get_plans(client):
         },
     )
     assert create_response.status_code == 401
-
-
-@pytest.mark.asyncio
-async def test_superadmin_crud_and_regular_user_access(client, app_and_sessionmaker):
-    app, _ = app_and_sessionmaker
-    app.dependency_overrides[get_current_user] = lambda: _build_user(superuser=True)
-    app.dependency_overrides[get_current_user_optional] = lambda: _build_user(
-        superuser=True
-    )
-
-    create_response = await client.post(
-        "/api/v1/billing/plans",
-        json={
-            "key": "team",
-            "name": "Team",
-            "tier": "team",
-            "display_order": 1,
-            "prices": [
-                {"interval": "monthly", "amount": 4900, "currency": "usd"},
-                {"interval": "yearly", "amount": 47000, "currency": "usd"},
-            ],
-            "bundle_ids": [],
-        },
-    )
-    assert create_response.status_code == 200
-    created = create_response.json()
-    plan_id = created["id"]
-
-    list_response = await client.get("/api/v1/billing/plans")
-    assert list_response.status_code == 200
-    assert len(list_response.json()) == 1
-
-    update_response = await client.put(
-        f"/api/v1/billing/plans/{plan_id}",
-        json={"name": "Team Updated", "display_order": 3},
-    )
-    assert update_response.status_code == 200
-    assert update_response.json()["name"] == "Team Updated"
-
-    delete_response = await client.delete(f"/api/v1/billing/plans/{plan_id}")
-    assert delete_response.status_code == 200
-    assert delete_response.json()["deleted"] is True
-
-    app.dependency_overrides[get_current_user] = lambda: _build_user(superuser=False)
-    app.dependency_overrides[get_current_user_optional] = lambda: _build_user(
-        superuser=False
-    )
-
-    forbidden_list_response = await client.get(
-        "/api/v1/billing/plans?include_inactive=true"
-    )
-    assert forbidden_list_response.status_code == 403
-
-    forbidden_update_response = await client.put(
-        f"/api/v1/billing/plans/{plan_id}",
-        json={"name": "Should Fail"},
-    )
-    assert forbidden_update_response.status_code == 403
-
-
-@pytest.mark.asyncio
-async def test_sync_stripe_sets_product_and_price_ids(client, app_and_sessionmaker):
-    app, _ = app_and_sessionmaker
-    app.dependency_overrides[get_current_user] = lambda: _build_user(superuser=True)
-    app.dependency_overrides[get_current_user_optional] = lambda: _build_user(
-        superuser=True
-    )
-
-    create_response = await client.post(
-        "/api/v1/billing/plans",
-        json={
-            "key": "enterprise",
-            "name": "Enterprise",
-            "tier": "enterprise",
-            "prices": [{"interval": "monthly", "amount": 12900, "currency": "usd"}],
-            "bundle_ids": [],
-        },
-    )
-    assert create_response.status_code == 200
-    plan_id = create_response.json()["id"]
-
-    mock_client = MagicMock()
-    mock_client.products.create.return_value = SimpleNamespace(id="prod_123")
-    mock_client.prices.create.return_value = SimpleNamespace(id="price_123")
-
-    with patch(
-        "dev_health_ops.api.billing.plans.get_stripe_client", return_value=mock_client
-    ):
-        sync_response = await client.post(
-            f"/api/v1/billing/plans/{plan_id}/sync-stripe"
-        )
-
-    assert sync_response.status_code == 200
-    synced = sync_response.json()
-    assert synced["stripe_product_id"] == "prod_123"
-    assert synced["prices"][0]["stripe_price_id"] == "price_123"

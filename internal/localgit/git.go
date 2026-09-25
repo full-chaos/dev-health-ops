@@ -40,7 +40,8 @@ func Open(path string) (Repo, error) {
 	if resolved, err := filepath.EvalSymlinks(absolute); err == nil {
 		root = resolved
 	}
-	if _, err := os.Lstat(filepath.Join(root, ".git")); err != nil {
+	// Path.exists() follows symlinks: a dangling .git symlink does not exist.
+	if _, err := os.Stat(filepath.Join(root, ".git")); err != nil {
 		return Repo{Root: root}, fmt.Errorf("%w at %s", ErrNoRepository, root)
 	}
 	return Repo{Root: root}, nil

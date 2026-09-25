@@ -3,6 +3,7 @@ package localgit
 import (
 	"context"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
@@ -61,6 +62,24 @@ func (w Writer) insert(ctx context.Context, table, plain, withOrg string, rows [
 	return batch.Send()
 }
 
+// representable reports whether the ClickHouse client can write the instant as a
+// DateTime64: the driver scales it through int64 nanoseconds, which wraps for a
+// year before 1678 or after 2262. Python writes the raw tick count and a year the
+// column does not document (2299 and after) comes back as another date; the port
+// refuses instead of writing a wrapped timestamp.
+func representable(t time.Time) bool {
+	return !t.Before(time.Unix(0, math.MinInt64)) && !t.After(time.Unix(0, math.MaxInt64))
+}
+
+func checkRepresentable(what string, times ...time.Time) error {
+	for _, t := range times {
+		if !representable(t) {
+			return fmt.Errorf("%s %s is outside the range the ClickHouse client can write (1678 to 2262)", what, t.UTC().Format(time.RFC3339))
+		}
+	}
+	return nil
+}
+
 // InsertRepo is insert_repo(Repo(repo_path=..., repo=<dir name>, provider="local")):
 // a Repo that was never flushed has no ref, settings or tags, and created_at
 // is the sync time (build_repository_insert_row); tags are the repository's tag names (TagsJSON).
@@ -83,6 +102,9 @@ func (w Writer) InsertCommits(ctx context.Context, repoID uuid.UUID, commits []C
 	synced := w.now()
 	rows := make([][]any, 0, len(commits))
 	for _, c := range commits {
+		if err := checkRepresentable("commit "+c.Hash+" committed at", c.CommittedAt); err != nil {
+			return err
+		}
 		rows = append(rows, []any{w.effectiveOrg(), repoID, c.Hash, c.Message, nullable(c.AuthorName), nullable(c.AuthorEmail), c.CommittedAt,
 			nullable(c.CommitterName), nullable(c.CommitterEmail), c.CommittedAt, uint32(len(c.Parents)), synced})
 	}
@@ -105,9 +127,17 @@ func (w Writer) InsertPullRequests(ctx context.Context, repoID uuid.UUID, prs []
 	synced := w.now()
 	rows := make([][]any, 0, len(prs))
 	for _, p := range prs {
+		if p.Number > math.MaxUint32 {
+			// The number column is UInt32: ClickHouse rejects the batch (a DataError
+			// in Python), so the whole insert fails there too.
+			return fmt.Errorf("pull request number %d does not fit the UInt32 column", p.Number)
+		}
 		var merged any
 		if p.MergedAt != nil {
 			merged = *p.MergedAt
+		}
+		if err := checkRepresentable(fmt.Sprintf("pull request %d created at", p.Number), p.CreatedAt); err != nil {
+			return err
 		}
 		rows = append(rows, []any{repoID, uint32(p.Number), nullable(p.Title), nil, p.State, nullable(p.AuthorName), nullable(p.AuthorEmail),
 			p.CreatedAt, merged, nil, nullable(p.HeadBranch), nil, nil, nil, nil, nil, nil, uint32(0), uint32(0), uint32(0), synced, nil, w.effectiveOrg()})

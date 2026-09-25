@@ -161,8 +161,33 @@ func (f *fixture) merge(branch, message string) string {
 	return f.git("rev-parse", "HEAD")
 }
 
+// setRef writes a loose ref file directly, so a name or target git's own
+// commands would refuse can still be put in the repository.
+func (f *fixture) setRef(name, target string) {
+	f.t.Helper()
+	path := filepath.Join(f.dir, ".git", filepath.FromSlash(name))
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		f.t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(target+"\n"), 0o644); err != nil {
+		f.t.Fatal(err)
+	}
+}
+
+// object writes a git object of any type byte for byte (no validation).
+func (f *fixture) object(kind, content string) string {
+	f.t.Helper()
+	return f.run(nil, content, "hash-object", "-t", kind, "-w", "--literally", "--stdin")
+}
+
+// tagObject writes an annotated tag object naming target.
+func (f *fixture) tagObject(target, targetKind, name string) string {
+	return f.object("tag", "object "+target+"\ntype "+targetKind+"\ntag "+name+"\ntagger T <t@e> 1700000000 +0000\n\nmessage\n")
+}
+
 // rawCommit writes a commit object byte for byte (header lines, message) so a
-// header shape git itself would not write can be read.
+// header shape git itself would not write can be read, and points main at it
+// by writing the ref file: `git update-ref` refuses a commit git cannot parse.
 func (f *fixture) rawCommit(parents []string, headers []string, message []byte, author, committer string) string {
 	f.t.Helper()
 	tree := f.git("write-tree")
@@ -178,9 +203,8 @@ func (f *fixture) rawCommit(parents []string, headers []string, message []byte, 
 	}
 	body.WriteString("\n")
 	body.Write(message)
-	hash := f.run(nil, body.String(), "hash-object", "-t", "commit", "-w", "--literally", "--stdin")
-	f.git("update-ref", "refs/heads/main", hash)
-	f.git("reset", "-q", "--hard", "HEAD")
+	hash := f.object("commit", body.String())
+	f.setRef("refs/heads/main", hash)
 	return hash
 }
 
@@ -194,6 +218,9 @@ type localScenario struct {
 	// pathForm is how --repo-path names the repository: "" as created, "symlink",
 	// "relative" (to the working directory) or "dots" (a trailing /./).
 	pathForm string
+	// goRefuses marks a named divergence: Python succeeds and the port refuses
+	// (exit 1, "outside the range"), so the tables are not compared.
+	goRefuses bool
 }
 
 func localScenarios() []localScenario {
@@ -649,7 +676,7 @@ func TestLocalSyncMatchesLivePython(t *testing.T) {
 
 	compared, mismatches, rowsSeen := 0, 0, 0
 	perTable := map[string]int{}
-	for _, scenario := range localScenarios() {
+	for _, scenario := range append(localScenarios(), generatedScenarios()...) {
 		f := newFixture(t, strings.NewReplacer(" ", "-", ",", "", ":", "", "'", "").Replace(scenario.name))
 		scenario.build(f)
 		targets := scenario.targets
@@ -690,6 +717,15 @@ func TestLocalSyncMatchesLivePython(t *testing.T) {
 			}
 			code, stdoutText, stderrText := runVerb(t, target, InlineExecutor(InlineDeps{}), goArgs, env)
 
+			if scenario.goRefuses && target == "git" {
+				stage := fmt.Sprint(want["stage"].(map[string]any)["v"])
+				if stage != "ok" || code == cli.ExitOK || !strings.Contains(stderrText, "outside the range") {
+					mismatches++
+					t.Errorf("%s / %s: a named divergence must be Python ok and a port refusal, got python %v, go exit %d (%s)", scenario.name, target, want, code, stderrText)
+				}
+				compared++
+				continue
+			}
 			wantStage := fmt.Sprint(want["stage"].(map[string]any)["v"])
 			gotStage := "ok"
 			if code != cli.ExitOK {

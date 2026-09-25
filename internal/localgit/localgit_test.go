@@ -2,9 +2,11 @@ package localgit
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -120,11 +122,12 @@ func TestParseActorAndDate(t *testing.T) {
 		{"author <only@example.com> 1700000000 +0000", "", "only@example.com", true, 1700000000},
 		{"committer   Spaced   <c@example.com> 1700003600 -0700", "  Spaced", "c@example.com", true, 1700003600},
 		{"author A <a@b> <c@d> 5 +0000", "A", "a@b", true, 5},
+		{"author Name <a@b> １７００００００００ +0000", "Name", "a@b", true, 1700000000},
 	}
 	for _, tc := range cases {
 		name, email, epoch := parseActorAndDate(tc.line)
-		if name == nil || *name != tc.name || (email != nil) != tc.hasEmail || (tc.hasEmail && *email != tc.email) || epoch != tc.epoch {
-			t.Errorf("%q = %v %v %d", tc.line, name, email, epoch)
+		if name == nil || *name != tc.name || (email != nil) != tc.hasEmail || (tc.hasEmail && *email != tc.email) || epoch.value != tc.epoch {
+			t.Errorf("%q = %v %v %d", tc.line, name, email, epoch.value)
 		}
 	}
 }
@@ -248,5 +251,182 @@ func TestIterCommitsSinceStopsAtTheFirstOldCommit(t *testing.T) {
 func TestOpenRefusesAFolderWithoutGit(t *testing.T) {
 	if _, err := Open(t.TempDir()); err == nil || !strings.Contains(err.Error(), "no git repository") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestClassifyEpoch(t *testing.T) {
+	for _, tc := range []struct {
+		epoch int64
+		fits  bool
+		want  int
+	}{
+		{0, true, timeOK}, {1700000000, true, timeOK}, {253402300799, true, timeOK}, {253402300800, true, timeValueError},
+		{1 << 55, true, timeValueError}, {1<<62 - 1, true, timeValueError}, {1 << 62, true, timeOtherError}, {0, false, timeOtherError},
+	} {
+		if got := classifyEpoch(tc.epoch, tc.fits); got != tc.want {
+			t.Errorf("classifyEpoch(%d, %v) = %d, want %d", tc.epoch, tc.fits, got, tc.want)
+		}
+	}
+	if got := unicodeDigitsToInt64("９９９９９９９９９９９９９９９９９９９９９"); got.fits {
+		t.Errorf("a value past int64 must not fit: %+v", got)
+	}
+	if got := unicodeDigitsToInt64("𝟏𝟐"); !got.fits || got.value != 12 {
+		t.Errorf("mathematical digits = %+v", got)
+	}
+}
+
+func TestRepresentableInstants(t *testing.T) {
+	at := func(year int, month time.Month) time.Time { return time.Date(year, month, 1, 0, 0, 0, 0, time.UTC) }
+	for name, tc := range map[string]struct {
+		when time.Time
+		want bool
+	}{
+		"1600": {at(1600, 6), false}, "june 1677": {at(1677, 6), false}, "1678": {at(1678, 6), true}, "1900": {at(1900, 1), true},
+		"2023": {at(2023, 1), true}, "january 2262": {at(2262, 1), true}, "june 2262": {at(2262, 6), false}, "2263": {at(2263, 1), false}, "5138": {at(5138, 1), false},
+	} {
+		if got := representable(tc.when); got != tc.want {
+			t.Errorf("representable(%s) = %v, want %v", name, got, tc.want)
+		}
+	}
+}
+
+func TestOpenTreatsADanglingGitSymlinkAsNoRepository(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Symlink(filepath.Join(dir, "nowhere"), filepath.Join(dir, ".git")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(dir); err == nil || !strings.Contains(err.Error(), "no git repository") {
+		t.Fatalf("a dangling .git symlink does not exist to Path.exists(): err = %v", err)
+	}
+}
+
+func refRepo(t *testing.T) (Repo, string) {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git binary")
+	}
+	dir := t.TempDir()
+	gitIn(t, dir, "init", "-q", "-b", "main")
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("a\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitIn(t, dir, "add", "-A")
+	gitIn(t, dir, "commit", "-q", "-m", "first")
+	repo, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return repo, gitIn(t, dir, "rev-parse", "HEAD")
+}
+
+func setRef(t *testing.T, repo Repo, name, target string) {
+	t.Helper()
+	path := filepath.Join(repo.Root, ".git", filepath.FromSlash(name))
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(target+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTagsAreReadLikeGitPythonReadsThem(t *testing.T) {
+	repo, head := refRepo(t)
+	for _, name := range []string{"plain", "ends ", " starts", "has space", "trail.", "nested/one", "Zeta"} {
+		setRef(t, repo, "refs/tags/"+name, head)
+	}
+	got, err := repo.TagsJSON(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Sorted by code point; whitespace kept; names git itself would refuse are listed too.
+	want := "[\"Zeta\",\"ends\u2003\",\"has space\",\"nested/one\",\"plain\",\"trail.\",\"\u2003starts\"]"
+	if got != want {
+		t.Errorf("tags = %s, want %s", got, want)
+	}
+	// A packed ref goes through GitPython's line.strip(): the trailing em space is gone.
+	gitIn(t, repo.Root, "pack-refs", "--all")
+	wantPacked := "[\"Zeta\",\"ends\",\"has space\",\"nested/one\",\"plain\",\"trail.\",\"\u2003starts\"]"
+	if again, _ := repo.TagsJSON(context.Background()); again != wantPacked {
+		t.Errorf("packed tags = %s, want %s", again, wantPacked)
+	}
+	setRef(t, repo, "refs/tags/bad\xffname", head)
+	if _, err := repo.TagsJSON(context.Background()); err == nil {
+		t.Error("a tag name that is not UTF-8 cannot be written and must fail the run")
+	}
+}
+
+func TestRefNameIsThePathWithoutItsFirstTwoComponents(t *testing.T) {
+	for path, want := range map[string]string{"refs/tags/v1": "v1", "refs/tags/a/b": "a/b", "refs/tags-old/x": "x", "refs/tags": "refs/tags"} {
+		if got := refName(path); got != want {
+			t.Errorf("refName(%q) = %q, want %q", path, got, want)
+		}
+	}
+}
+
+func TestOpenPullRequestRefsResolveLikeGitPython(t *testing.T) {
+	repo, head := refRepo(t)
+	ctx := context.Background()
+	tree := gitIn(t, repo.Root, "rev-parse", "HEAD^{tree}")
+	blob := gitIn(t, repo.Root, "rev-parse", "HEAD:a.txt")
+	tag := func(target, kind, name string) string {
+		command := exec.Command("git", "hash-object", "-t", "tag", "-w", "--literally", "--stdin")
+		command.Dir = repo.Root
+		command.Stdin = strings.NewReader("object " + target + "\ntype " + kind + "\ntag " + name + "\ntagger T <t@e> 1700000000 +0000\n\nm\n")
+		out, err := command.CombinedOutput()
+		if err != nil {
+			t.Fatalf("%v\n%s", err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	inner := tag(head, "commit", "inner")
+	setRef(t, repo, "refs/pull/1/head", head)                       // a commit
+	setRef(t, repo, "refs/pull/2/head", tag(head, "commit", "t"))   // an annotated tag, peeled once
+	setRef(t, repo, "refs/pull/3/head", tag(inner, "tag", "outer")) // a tag of a tag: not a commit
+	setRef(t, repo, "refs/pull/4/head", tag(tree, "tree", "tt"))    // a tag of a tree
+	setRef(t, repo, "refs/pull/5/head", blob)                       // a blob
+	setRef(t, repo, "refs/pull/6/head", tree)                       // a tree
+	setRef(t, repo, "refs/pull/7/head", strings.Repeat("ab", 20))   // a missing object
+	setRef(t, repo, "refs/pull/８/head", head)                       // fullwidth digit
+	setRef(t, repo, "refs/merge-requests/9/head", head)
+	setRef(t, repo, "refs/pull/10/merge", head) // not a head ref
+	rows, err := repo.InferOpenPullRequests(ctx, time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[int]string{}
+	for _, row := range rows {
+		got[row.Number] = *row.HeadBranch
+	}
+	want := map[int]string{1: "refs/pull/1/head", 2: "refs/pull/2/head", 8: "refs/pull/８/head", 9: "refs/merge-requests/9/head"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("open pull requests = %v, want %v", got, want)
+	}
+}
+
+func TestPackedRefsHeadersAndLinesLikeGitPython(t *testing.T) {
+	repo, head := refRepo(t)
+	write := func(content string) {
+		if err := os.WriteFile(filepath.Join(repo.Root, ".git", "packed-refs"), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ctx := context.Background()
+	write("# pack-refs with: other\n" + head + " refs/tags/x\n")
+	if _, err := repo.refPaths(ctx, "refs/tags"); err == nil {
+		t.Error("a packing scheme without `peeled` must fail")
+	}
+	write("# pack-refs with: peeled fully-peeled sorted \n" + head + "\n")
+	if _, err := repo.refPaths(ctx, "refs/tags"); err == nil {
+		t.Error("a line with no path cannot be unpacked")
+	}
+	write("# a comment\n\n" + head + " refs/tags/a\n^" + head + "\n" + head + " refs/tags/b\x1f\n" + head + " refs/tags-old/c\n" + head + " refs/heads/main\n")
+	paths, err := repo.refPaths(ctx, "refs/tags")
+	if err != nil || !reflect.DeepEqual(paths, []string{"refs/tags-old/c", "refs/tags/a", "refs/tags/b"}) {
+		t.Errorf("paths = %q, err = %v (a name is stripped of control whitespace; a sibling that starts alike is listed)", paths, err)
+	}
+	write(head + " refs/heads/bad\xff\n")
+	if _, err := repo.refPaths(ctx, "refs/tags"); !errors.Is(err, errPackedRefsNotUTF8) {
+		t.Errorf("err = %v", err)
 	}
 }

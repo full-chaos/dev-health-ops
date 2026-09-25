@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -87,25 +88,25 @@ func (r Repo) remoteNames(ctx context.Context) []string {
 // TagsJSON is the repos.tags column: Repo(...).repo_tags is never set on the
 // unflushed model, so build_repository_insert_row falls back to GitPython's
 // Repo.tags, the tag references in sorted path order, each rendered by
-// str() (its name below refs/tags/), and encoded by repository_json_or_none:
-// json.dumps(ensure_ascii=False, separators=(",", ":")).
+// str() (Reference.name), and encoded by repository_json_or_none:
+// json.dumps(ensure_ascii=False, separators=(",", ":")). A name that is not
+// valid UTF-8 cannot be encoded for the insert: Python's UnicodeEncodeError
+// (returned here as an error, so no row of the run is written).
 func (r Repo) TagsJSON(ctx context.Context) (string, error) {
-	out, err := r.run(ctx, "for-each-ref", "--format=%(refname)", "refs/tags")
+	paths, err := r.refPaths(ctx, "refs/tags")
 	if err != nil {
 		return "", err
 	}
 	var b strings.Builder
 	b.WriteByte('[')
-	first := true
-	for _, ref := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		name, ok := strings.CutPrefix(ref, "refs/tags/")
-		if !ok || name == "" {
-			continue
+	for i, path := range paths {
+		name := refName(path)
+		if !utf8.ValidString(name) {
+			return "", fmt.Errorf("tag name %q is not valid UTF-8 and cannot be written", name)
 		}
-		if !first {
+		if i > 0 {
 			b.WriteByte(',')
 		}
-		first = false
 		b.WriteString(pythonJSONString(name))
 	}
 	b.WriteByte(']')

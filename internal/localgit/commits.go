@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"os/exec"
 	"regexp"
@@ -26,7 +27,31 @@ type Commit struct {
 	CommitterEmail *string
 	// CommittedAt is committed_datetime: the instant, in UTC.
 	CommittedAt time.Time
-	Parents     []string
+	// TimeClass says whether Python can build committed_datetime from the
+	// committer line: timeOK, timeValueError (an epoch whose year is past 9999:
+	// ValueError) or timeOtherError (an epoch past 2**62: OSError or OverflowError).
+	TimeClass int
+	Parents   []string
+}
+
+// Classes of a committer timestamp (Commit.committed_datetime).
+const (
+	timeOK = iota
+	timeValueError
+	timeOtherError
+)
+
+// classifyEpoch mirrors datetime.fromtimestamp(epoch, utc) for a non-negative
+// epoch: ValueError once the year passes 9999, OSError from 2**62, OverflowError
+// from 2**63.
+func classifyEpoch(epoch int64, fits bool) int {
+	switch {
+	case !fits || epoch >= 1<<62:
+		return timeOtherError
+	case epoch > 253402300799:
+		return timeValueError
+	}
+	return timeOK
 }
 
 // IterCommitsSince is list(iter_commits_since(repo, since)): `git rev-list HEAD
@@ -51,6 +76,10 @@ func (r Repo) IterCommitsSince(ctx context.Context, since *time.Time) ([]Commit,
 	}
 	var kept []Commit
 	for _, commit := range commits {
+		if commit.TimeClass != timeOK {
+			// commit.committed_datetime raises inside iter_commits_since, uncaught.
+			return nil, fmt.Errorf("commit %s has a committer time Python cannot represent", commit.Hash)
+		}
 		if since != nil && commit.CommittedAt.Before(*since) {
 			break
 		}
@@ -111,7 +140,7 @@ func (r Repo) readCommits(ctx context.Context, hashes []string) ([]Commit, error
 }
 
 var (
-	reActorEpoch = regexp.MustCompile(`^.+? (.*) (\d+) ([+-]\d+).*$`)
+	reActorEpoch = regexp.MustCompile(`^.+? (.*) (\p{Nd}+) ([+-]\p{Nd}+).*$`)
 	reOnlyActor  = regexp.MustCompile(`^.+? (.*)$`)
 )
 
@@ -137,17 +166,27 @@ func parseCommit(hash string, raw []byte) Commit {
 	commit.AuthorName, commit.AuthorEmail = name, email
 	name, email, epoch := parseActorAndDate(string(committerLine))
 	commit.CommitterName, commit.CommitterEmail = name, email
-	commit.CommittedAt = time.Unix(epoch, 0).UTC()
+	commit.TimeClass = classifyEpoch(epoch.value, epoch.fits)
+	if commit.TimeClass == timeOK {
+		commit.CommittedAt = time.Unix(epoch.value, 0).UTC()
+	}
 	return commit
 }
 
 // parseActorAndDate is objects/util.py parse_actor_and_date + Actor.from_string.
-func parseActorAndDate(line string) (name, email *string, epoch int64) {
+// epochValue is int(epoch): the value when it fits an int64.
+type epochValue struct {
+	value int64
+	fits  bool
+}
+
+func parseActorAndDate(line string) (name, email *string, epoch epochValue) {
 	line = pythonparity.DecodeUTF8Replace(line)
+	epoch.fits = true
 	actor := ""
 	if match := reActorEpoch.FindStringSubmatch(line); match != nil {
 		actor = match[1]
-		epoch, _ = strconv.ParseInt(match[2], 10, 64)
+		epoch = unicodeDigitsToInt64(match[2])
 	} else if match := reOnlyActor.FindStringSubmatch(line); match != nil {
 		actor = match[1]
 	} else {
@@ -166,4 +205,20 @@ func parseActorAndDate(line string) (name, email *string, epoch int64) {
 		return &n, &e, epoch
 	}
 	return &actor, nil, epoch
+}
+
+// unicodeDigitsToInt64 is int() of a run of Unicode decimal digits.
+func unicodeDigitsToInt64(digits string) epochValue {
+	var value int64
+	for _, r := range digits {
+		digit, ok := unicodeDigit(r)
+		if !ok {
+			return epochValue{}
+		}
+		if value > (math.MaxInt64-int64(digit))/10 {
+			return epochValue{} // does not fit
+		}
+		value = value*10 + int64(digit)
+	}
+	return epochValue{value: value, fits: true}
 }

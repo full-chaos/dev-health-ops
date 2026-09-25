@@ -2,8 +2,8 @@ package localgit
 
 import (
 	"context"
+	"fmt"
 	"regexp"
-	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -179,44 +179,117 @@ func InferMergedPullRequests(commits []Commit, since *time.Time) []PullRequest {
 	return out
 }
 
-var openRefRE = regexp.MustCompile(`^refs/(?:pull|merge-requests)/(\d+)/head$`)
+var openRefRE = regexp.MustCompile(`^refs/(?:pull|merge-requests)/(\p{Nd}+)/head$`)
 
 // InferOpenPullRequests is infer_open_pull_requests_from_refs: every
-// refs/pull/<n>/head or refs/merge-requests/<n>/head is an open PR created at
-// its tip commit's committed time.
+// refs/pull/<n>/head or refs/merge-requests/<n>/head whose target resolves to a
+// commit is an open PR created at that commit's committed time. `n` is any run
+// of Unicode decimal digits (Python's \d and int()). A ref is resolved like
+// SymbolicReference._get_commit: a commit is used, an annotated tag is peeled
+// ONCE, and anything else (a tree, a blob, a tag of a tag, an object that is
+// missing) raises in Python, which skips the ref.
 func (r Repo) InferOpenPullRequests(ctx context.Context, now func() time.Time) ([]PullRequest, error) {
-	out, err := r.run(ctx, "for-each-ref", "--format=%(refname)%00%(objectname)", "refs/pull", "refs/merge-requests")
+	paths, err := r.refPaths(ctx, "refs")
+	if err != nil {
+		return nil, err
+	}
+	dir, err := r.commonDir(ctx)
 	if err != nil {
 		return nil, err
 	}
 	byNumber := map[int]PullRequest{}
 	var order []int
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		name, hash, ok := strings.Cut(line, "\x00")
-		if !ok {
-			continue
-		}
+	for _, name := range paths {
 		match := openRefRE.FindStringSubmatch(name)
 		if match == nil {
 			continue
 		}
-		number, err := strconv.Atoi(match[1])
-		if err != nil {
+		number, ok := decimalValue(match[1])
+		if !ok {
 			continue
 		}
-		created := now().UTC()
-		if commits, err := r.readCommits(ctx, []string{hash}); err == nil && len(commits) == 1 {
-			created = commits[0].CommittedAt
+		tip, skip, err := r.refCommit(ctx, dir, name)
+		if err != nil {
+			return nil, err
+		}
+		if skip {
+			continue
+		}
+		commits, err := r.readCommits(ctx, []string{tip})
+		if err != nil || len(commits) != 1 {
+			continue
+		}
+		switch commits[0].TimeClass {
+		case timeValueError:
+			continue // ValueError: infer_open_pull_requests_from_refs skips the ref
+		case timeOtherError:
+			return nil, fmt.Errorf("ref %s: the tip commit has a committer time Python cannot represent (OSError/OverflowError, uncaught)", name)
 		}
 		head := name
 		if _, seen := byNumber[number]; !seen {
 			order = append(order, number)
 		}
-		byNumber[number] = PullRequest{Number: number, State: "open", CreatedAt: created, HeadBranch: &head}
+		byNumber[number] = PullRequest{Number: number, State: "open", CreatedAt: commits[0].CommittedAt, HeadBranch: &head}
 	}
 	rows := make([]PullRequest, 0, len(order))
 	for _, number := range order {
 		rows = append(rows, byNumber[number])
 	}
 	return rows, nil
+}
+
+// refCommit is `ref.commit`: the ref is dereferenced the way GitPython reads
+// it (dereferenceRef), its object's type is read without failing on a missing
+// object, and an annotated tag is peeled once. skip means Python skips the ref;
+// an error is an exception it does not catch.
+func (r Repo) refCommit(ctx context.Context, dir, name string) (tip string, skip bool, err error) {
+	hash, skip, err := dereferenceRef(dir, name)
+	if err != nil || skip {
+		return "", true, err
+	}
+	kind, ok := r.objectType(ctx, hash)
+	if !ok {
+		return "", true, nil
+	}
+	tip, ok = r.peelToCommit(ctx, hash, kind)
+	return tip, !ok, nil
+}
+
+// objectType is `git cat-file -t` for an object that may not exist.
+func (r Repo) objectType(ctx context.Context, hash string) (string, bool) {
+	out, err := r.run(ctx, "cat-file", "-t", hash)
+	if err != nil {
+		return "", false
+	}
+	return strings.TrimSpace(string(out)), true
+}
+
+// peelToCommit is `_get_commit`: the ref's object when it is a commit; for a
+// tag object, the object it names when THAT is a commit.
+func (r Repo) peelToCommit(ctx context.Context, hash, kind string) (string, bool) {
+	switch kind {
+	case "commit":
+		return hash, true
+	case "tag":
+		out, err := r.run(ctx, "cat-file", "tag", hash)
+		if err != nil {
+			return "", false
+		}
+		var object, objectKind string
+		for _, line := range strings.Split(string(out), "\n") {
+			if line == "" {
+				break
+			}
+			if value, ok := strings.CutPrefix(line, "object "); ok && object == "" {
+				object = value
+			}
+			if value, ok := strings.CutPrefix(line, "type "); ok && objectKind == "" {
+				objectKind = value
+			}
+		}
+		if object != "" && objectKind == "commit" {
+			return object, true
+		}
+	}
+	return "", false
 }

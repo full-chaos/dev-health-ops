@@ -208,6 +208,28 @@ type teamCatalogClientResolver struct {
 	retry       providerfoundation.RetryPolicy
 }
 
+// recordingCredentialRepository keeps the row its inner repository
+// returned, so the stamped-run check hashes the exact bytes the credential
+// was built from.
+type recordingCredentialRepository struct {
+	inner    providerfoundation.CredentialRepository
+	record   providerfoundation.EncryptedCredential
+	resolved bool
+}
+
+func (repository *recordingCredentialRepository) ResolveEncrypted(
+	ctx context.Context, scope providerfoundation.TenantScope,
+) (providerfoundation.EncryptedCredential, error) {
+	if repository.inner == nil {
+		return providerfoundation.EncryptedCredential{}, providerfoundation.ErrCredentialNotFound
+	}
+	record, err := repository.inner.ResolveEncrypted(ctx, scope)
+	if err == nil {
+		repository.record, repository.resolved = record, true
+	}
+	return record, err
+}
+
 // teamCatalogLease is a trivial, ctx-bound LeaseGuard. Reference discovery
 // here runs once per sync run with no claimed provider-unit lease behind it
 // (CHAOS-4431 ruling) -- the only thing worth asserting before a provider
@@ -226,10 +248,16 @@ func (resolver teamCatalogClientResolver) ResolveClient(
 		return providerfoundation.Credential{}, nil, "", err
 	}
 	lease := teamCatalogLease{}
+	// The stamped-run check below hashes the very row the credential is
+	// built from: the resolver reads through this recorder, never a second
+	// read that an edit-and-restore could make disagree with it.
+	recorder := &recordingCredentialRepository{inner: resolver.credentials.Repository}
+	credentials := resolver.credentials
+	credentials.Repository = recorder
 	// IntegrationID is required: TenantScope.Validate() fails closed
 	// ("invalid provider tenant scope") without it -- confirmed via local
 	// readback, org 70d529e0, CHAOS-4431.
-	credential, err := resolver.credentials.Resolve(ctx, lease, providerfoundation.TenantScope{
+	credential, err := credentials.Resolve(ctx, lease, providerfoundation.TenantScope{
 		OrgID: orgID, Provider: provider, IntegrationID: integrationID, CredentialID: credentialID,
 	})
 	if err != nil {
@@ -249,16 +277,16 @@ func (resolver teamCatalogClientResolver) ResolveClient(
 	// self-correct.
 	//
 	// The witness is recomputed by syncbudget's fingerprint, the one port of
-	// credentials/fingerprint.py credential_fingerprint: over the credential
-	// row's {**config, **decrypted} mapping, exactly as the planner (and the
-	// Go materializer) stamped it. It re-reads the row rather than hashing
-	// the resolved Credential, whose typed accessors cannot reproduce the
-	// mapping Python hashed (CHAOS-6689: every run with a base_url, a
-	// non-string identifier or a config-held identifier failed closed on a
-	// false mismatch).
+	// credentials/fingerprint.py credential_fingerprint: over the row's
+	// {**config, **decrypted} mapping, exactly as the planner (and the Go
+	// materializer) stamped it, and over the same row the resolver built
+	// the credential from (the typed Credential cannot reproduce the
+	// mapping Python hashed: CHAOS-6689).
 	if stampedFingerprint != "" {
-		loader := syncbudget.Loader{DB: resolver.pool, Decryptor: resolver.credentials.Decryptor}
-		computed, err := loader.PlanFingerprint(ctx, orgID, integrationID, provider, &credentialID)
+		if !recorder.resolved {
+			return providerfoundation.Credential{}, nil, "", fmt.Errorf("%w: integration=%s: no credential row was read", errTeamCatalogCredentialFingerprintMismatch, integrationID)
+		}
+		computed, err := syncbudget.EncryptedCredentialFingerprint(resolver.credentials.Decryptor, recorder.record, integrationID)
 		if err != nil {
 			return providerfoundation.Credential{}, nil, "", fmt.Errorf("%w: integration=%s: %v", errTeamCatalogCredentialFingerprintMismatch, integrationID, err)
 		}

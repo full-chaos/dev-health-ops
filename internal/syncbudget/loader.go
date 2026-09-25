@@ -522,6 +522,30 @@ func RunAuthFingerprint(credentials any, credentialID *string, integrationID str
 	return fingerprintOf(scope), nil
 }
 
+// EncryptedCredentialFingerprint is credential_fingerprint over one
+// already-read credential row: {**config, **decrypted} of its ciphertext
+// and raw config text, then RunAuthFingerprint. A verifier hashes the very
+// row it built its client from, so no second read can disagree with it.
+func EncryptedCredentialFingerprint(
+	decryptor providerfoundation.CredentialDecryptor, credential providerfoundation.EncryptedCredential, integrationID string,
+) (string, error) {
+	if decryptor == nil {
+		return "", errors.New("syncbudget: credential fingerprint needs a decryptor")
+	}
+	ciphertext := credential.Ciphertext.Reveal()
+	var configText *string
+	if len(credential.RawConfig) > 0 {
+		text := string(credential.RawConfig)
+		configText = &text
+	}
+	mapping, err := Loader{Decryptor: decryptor}.credentialMapping(&ciphertext, configText)
+	if err != nil {
+		return "", err
+	}
+	id := credential.ID
+	return RunAuthFingerprint(mapping, &id, integrationID)
+}
+
 // PlanFingerprint is the credential_fingerprint sync/planner.py's
 // _resolve_credential_stamp stamps on a new sync run: over the
 // provider's environment credentials when the integration has no

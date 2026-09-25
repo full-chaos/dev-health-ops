@@ -190,6 +190,32 @@ VALUES ($1, $2, $3, $4, $5, $6, 'scheduled', 'incremental', 'running', 0, 0, 0, 
 	if err := run(cases[0], stamp); !errors.Is(err, errTeamCatalogCredentialFingerprintMismatch) {
 		t.Fatalf("an in-place secret edit after the stamp: err = %v, want the fingerprint mismatch", err)
 	}
+	// The edit-and-restore race (#3099 r1): the resolver's read sees an
+	// edited secret, and the row is back to the stamped content by the time
+	// anything else could read it. The check must hash the row the client
+	// was built from, so it must refuse; a second read of the restored row
+	// would have matched the stamp and sent the edited secret.
+	var original string
+	if err := pool.QueryRow(ctx, `SELECT credentials_encrypted FROM integration_credentials WHERE id = $1`, cases[1].credentialID).Scan(&original); err != nil {
+		t.Fatal(err)
+	}
+	raced := resolver
+	raced.credentials.Repository = editedAtReadRepository{inner: resolver.credentials.Repository, ciphertext: tampered}
+	racedRunID := uuid.NewString()
+	if _, err := pool.Exec(ctx, `
+INSERT INTO sync_runs (id, org_id, integration_id, credential_id, credential_fingerprint, auth_source, triggered_by, mode, status,
+	total_units, completed_units, failed_units, created_at)
+VALUES ($1, $2, $3, $4, $5, $6, 'scheduled', 'incremental', 'running', 0, 0, 0, now())`,
+		racedRunID, org, cases[1].integrationID, stamps[1][0], stamps[1][1], stamps[1][2]); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := raced.ResolveClient(ctx, org, racedRunID, cases[1].provider); !errors.Is(err, errTeamCatalogCredentialFingerprintMismatch) {
+		t.Fatalf("a secret edited at the resolver's read and restored after it: err = %v, want the fingerprint mismatch", err)
+	}
+	var after string
+	if err := pool.QueryRow(ctx, `SELECT credentials_encrypted FROM integration_credentials WHERE id = $1`, cases[1].credentialID).Scan(&after); err != nil || after != original {
+		t.Fatalf("the raced row changed in the database (%v); the race must be at read time only", err)
+	}
 	t.Logf("%d credentials: %d python stamps accepted by go (%d resolved a client), %d refused by the resolver before the check; the edited secret fails closed", len(cases), verified, resolved, refused)
 	venueoracle.WriteProof(t)
 }
@@ -252,4 +278,22 @@ VALUES ($1, $2, $3, $4, $5, '{}', true, $6, $6)`, integrationID, org, shape.prov
 		t.Fatal(err)
 	}
 	return cases, tampered
+}
+
+// editedAtReadRepository returns its inner repository's row with the
+// ciphertext replaced: the row as an edit-and-restore race would have
+// shown it to the resolver, while the database keeps the stamped content.
+type editedAtReadRepository struct {
+	inner      providerfoundation.CredentialRepository
+	ciphertext string
+}
+
+func (repository editedAtReadRepository) ResolveEncrypted(
+	ctx context.Context, scope providerfoundation.TenantScope,
+) (providerfoundation.EncryptedCredential, error) {
+	record, err := repository.inner.ResolveEncrypted(ctx, scope)
+	if err == nil {
+		record.Ciphertext = secrets.NewValue(repository.ciphertext)
+	}
+	return record, err
 }

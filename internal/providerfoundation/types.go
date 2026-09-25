@@ -177,6 +177,11 @@ type EncryptedCredential struct {
 	Active     bool
 	Ciphertext secrets.Value
 	Config     map[string]string
+	// RawConfig is the config column's JSON text exactly as read with
+	// Ciphertext, so a caller can hash the same row the credential was
+	// built from (the run-auth fingerprint hashes {**config, **decrypted},
+	// which the string-only Config map cannot reproduce).
+	RawConfig []byte
 }
 
 type CredentialRepository interface {

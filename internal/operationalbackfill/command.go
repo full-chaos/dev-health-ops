@@ -49,8 +49,8 @@ incident is a current row. Re-running it writes the same identities again.
 
 Environment:
   CLICKHOUSE_URI (or _FILE, or the DEV_HEALTH_CH_* component form)   ClickHouse DSN, native protocol
-  OPERATIONAL_ORDERING_CONTRACT   1 (legacy table shape, the default) or 2; when set, every
-                                  operational table must already be in that shape
+  OPERATIONAL_ORDERING_CONTRACT   1 (legacy table shape, the default) or 2; every operational
+                                  table must already be in that shape
   SERVICE_NAME, SERVICE_VERSION   named in a writer rejection
 `
 
@@ -113,17 +113,19 @@ func runOperational(ctx context.Context, env cli.Env) int {
 	}
 	defer conn.Close()
 
-	if explicit {
-		service, version := "dev-health-ops", "unknown"
-		if value, ok := env.Lookup("SERVICE_NAME"); ok {
-			service = value
-		}
-		if value, ok := env.Lookup("SERVICE_VERSION"); ok {
-			version = value
-		}
-		if err := GuardTables(ctx, conn, contract, service, version); err != nil {
-			return fail(err)
-		}
+	// The tables must be in the shape the contract names, whether the variable is
+	// set or defaulted to legacy. Python checked only when the variable was set,
+	// and wrote into a table of any other shape (a partial ordering shape got
+	// revision 0); dho refuses before anything is written.
+	service, version := "dev-health-ops", "unknown"
+	if value, ok := env.Lookup("SERVICE_NAME"); ok {
+		service = value
+	}
+	if value, ok := env.Lookup("SERVICE_VERSION"); ok {
+		version = value
+	}
+	if err := GuardTables(ctx, conn, contract, service, version); err != nil {
+		return fail(err)
 	}
 	result, err := Run(ctx, conn, *org, *instance, contract, time.Now)
 	if err != nil {
@@ -148,5 +150,6 @@ func validateSink(sink string) string {
 	case "clickhouse", "auto":
 		return ""
 	}
-	return fmt.Sprintf("Unknown sink '%s'. Only 'clickhouse' is supported.", sink)
+	// The value is not echoed: a DSN passed by mistake would print its credentials.
+	return "Unknown sink. Only 'clickhouse' is supported."
 }

@@ -186,3 +186,39 @@ func TestGoldenIsTheFileTheDigestPins(t *testing.T) {
 		t.Fatalf("golden digest = %s, want %s: the golden changed without its digest. It is only rewritten from the live Python producer, then the digest is updated", got, goldenSHA256)
 	}
 }
+
+// Vectors from Python's datetime arithmetic: time.Time.Sub saturates at the year
+// 2262, so the microseconds of a later (still valid) DateTime64 value need the
+// seconds and microseconds taken separately.
+func TestUTCMicrosecondsKeepsTheWholeDateTime64Range(t *testing.T) {
+	for _, tc := range []struct {
+		at   time.Time
+		want uint64
+	}{
+		{time.Date(2262, 4, 11, 23, 47, 16, 854775000, time.UTC), 9223372036854775},
+		{time.Date(2262, 4, 12, 0, 0, 0, 0, time.UTC), 9223372800000000},
+		{time.Date(2290, 1, 1, 0, 0, 0, 0, time.UTC), 10098259200000000},
+		{time.Date(2299, 12, 31, 23, 59, 59, 999999000, time.UTC), 10413791999999999},
+	} {
+		if got, err := utcMicroseconds(tc.at, "x"); err != nil || got != tc.want {
+			t.Errorf("utcMicroseconds(%s) = %d, %v; want %d", tc.at, got, err, tc.want)
+		}
+	}
+}
+
+// An unknown --sink is not echoed: a DSN passed there by mistake would print its
+// credentials (the message is built before the DSN boundary exists).
+func TestUnknownSinkIsNotEchoed(t *testing.T) {
+	const needle = "needle-value-4711"
+	var stderr strings.Builder
+	code := runOperational(context.Background(), cli.Env{
+		Args:   []string{"--org", "o", "--sink", "clickhouse://user:" + needle + "@host:9000/db"},
+		Stderr: &stderr, Stdout: &stderr,
+	})
+	if code != 2 || strings.Contains(stderr.String(), needle) || !strings.Contains(stderr.String(), "Unknown sink") {
+		t.Fatalf("exit %d, stderr %q", code, stderr.String())
+	}
+	if strings.Contains(validateSink("Some-Sink"), "Some-Sink") {
+		t.Fatal("the unknown sink is echoed")
+	}
+}

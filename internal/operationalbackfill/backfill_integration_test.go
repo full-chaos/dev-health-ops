@@ -635,3 +635,23 @@ func TestBackfillOperationalPartialWriteIsNamedAndRerunnable(t *testing.T) {
 		t.Fatalf("re-run left %s incidents, %s alerts, %s schedules\n%s", count("operational_incidents"), count("operational_alerts"), count("operational_on_call_schedules"), stdout)
 	}
 }
+
+// TestBackfillOperationalRefusesAMalformedTableShapeWhateverTheContract: with the
+// contract variable unset (legacy) a table that has only some of the ordering
+// columns is neither shape. Python wrote into it (the rows got revision 0); dho
+// refuses before anything is written.
+func TestBackfillOperationalRefusesAMalformedTableShapeWhateverTheContract(t *testing.T) {
+	ch := startClickHouse(t, "")
+	seedLegacy(t, ch)
+	ch.do(t, "ALTER TABLE operational_alerts ADD COLUMN source_revision UInt128 DEFAULT 0")
+	s := scenarios[0]
+	code, _, stderr, _ := goRun(t, ch, s)
+	if code != 1 || !strings.Contains(stderr, "operational ordering stale_state table=operational_alerts") {
+		t.Fatalf("exit %d, stderr:\n%s", code, stderr)
+	}
+	for _, table := range operationalTables {
+		if count := strings.TrimSpace(ch.do(t, "SELECT count() FROM "+table)); count != "0" {
+			t.Fatalf("the refused run left %s rows in %s", count, table)
+		}
+	}
+}

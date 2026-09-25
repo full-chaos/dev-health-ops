@@ -107,8 +107,9 @@ func utcMicroseconds(value time.Time, name string) (uint64, error) {
 	if value.Before(unixEpoch) || value.After(clickHouseDateTime64Max) {
 		return 0, fmt.Errorf("invalid operational ordering field %s: ClickHouse DateTime64(6) range required", name)
 	}
-	delta := value.Sub(unixEpoch)
-	return uint64(delta / time.Microsecond), nil
+	// Seconds and microseconds separately: time.Time.Sub saturates a Duration
+	// (int64 nanoseconds) at the year 2262, well before the DateTime64 maximum.
+	return uint64(value.Unix())*1_000_000 + uint64(value.Nanosecond()/1000), nil
 }
 
 func lengthPrefixed(out *bytes.Buffer, value []byte, width int) {

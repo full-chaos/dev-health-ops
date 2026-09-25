@@ -1,8 +1,11 @@
 package routing
 
 import (
+	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/goapiproof"
 )
 
 // The census line is read by an operator deciding whether to roll, and
@@ -103,4 +106,68 @@ func captureStatusText(t *testing.T, report statusReport, local string) (string,
 	t.Cleanup(func() { stdout, stderr = savedOut, savedErr })
 	printStatusText(report, local)
 	return outBuf.String(), errBuf.String(), nil
+}
+
+// CHAOS-6807: a reachable row that records a control no plane obeys is named
+// on the row (JSON `not_enforced`) and in the text, and a clean row is
+// reported with an empty list, never null.
+func TestStatusNamesTheControlsNoPlaneObeys(t *testing.T) {
+	rollout, clean := 50, 100
+	eligible := `["org-a"]`
+	flagged := goapiproof.OperationStatus{
+		Operation: "featureFlags", DocumentDigest: "abc", DigestState: goapiproof.DigestMatch,
+		Mode: "canary", CurrentCandidateBuild: "b", RolloutPercentage: &rollout, EligibleOrgs: &eligible,
+	}
+	got := toReportOperation(flagged, map[string]string{"featureFlags": "abc"}, false, false)
+	if want := []string{"rollout_percentage=50", `eligible_orgs=["org-a"]`}; !reflect.DeepEqual(got.NotEnforced, want) {
+		t.Fatalf("not_enforced = %v, want %v", got.NotEnforced, want)
+	}
+	cleanRow := flagged
+	cleanRow.RolloutPercentage, cleanRow.EligibleOrgs = &clean, nil
+	if got := toReportOperation(cleanRow, map[string]string{"featureFlags": "abc"}, false, false); got.NotEnforced == nil || len(got.NotEnforced) != 0 {
+		t.Fatalf("a clean row must report an empty list, got %#v", got.NotEnforced)
+	}
+	stale := goapiproof.OperationStatus{Operation: "hotspots", DocumentDigest: "def", DigestState: goapiproof.DigestStale}
+	if got := toReportOperation(stale, nil, false, false); got.NotEnforced == nil || len(got.NotEnforced) != 0 {
+		t.Fatalf("a row with no live state must report an empty list, got %#v", got.NotEnforced)
+	}
+
+	const digest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	out, _, _ := captureStatusText(t, statusReport{
+		LocalSchemaDigest: digest, GoPlaneSchemaDigest: stringPtr(digest), PlanesAgree: boolPtr(true), CatalogLoaded: true,
+		RowsBySchemaDigest: map[string]int{digest: 1},
+		Operations:         []statusReportOperation{toReportOperation(flagged, map[string]string{"featureFlags": "abc"}, false, false)},
+	}, digest)
+	if !strings.Contains(out, "NOT ENFORCED: rollout_percentage=50, eligible_orgs=[\"org-a\"]") || !strings.Contains(out, "EVERY authenticated org") {
+		t.Fatalf("the text does not name the unenforced controls:\n%s", out)
+	}
+	out, _, _ = captureStatusText(t, statusReport{
+		LocalSchemaDigest: digest, GoPlaneSchemaDigest: stringPtr(digest), PlanesAgree: boolPtr(true), CatalogLoaded: true,
+		RowsBySchemaDigest: map[string]int{digest: 1},
+		Operations:         []statusReportOperation{toReportOperation(cleanRow, map[string]string{"featureFlags": "abc"}, false, false)},
+	}, digest)
+	if strings.Contains(out, "NOT ENFORCED") {
+		t.Fatalf("a clean row must not carry the flag:\n%s", out)
+	}
+}
+
+// CHAOS-6807: `enable` refuses a rollout no plane obeys, by name, before any
+// other precondition; the default (100) is unchanged.
+func TestEnableRefusesARolloutNoPlaneObeys(t *testing.T) {
+	t.Setenv(bearerEnvVar, "")
+	t.Setenv("POSTGRES_URI", "")
+	for _, rollout := range []string{"0", "1", "50", "99"} {
+		err := run([]string{"enable", "-mode", "canary", "-rollout", rollout})
+		if err == nil || !strings.Contains(err.Error(), "neither plane enforces") {
+			t.Fatalf("enable -rollout %s = %v, want the named refusal", rollout, err)
+		}
+		if got := exitCodeFor(err); got != 3 {
+			t.Fatalf("enable -rollout %s exits %d, want 3", rollout, got)
+		}
+	}
+	// 100 passes this check and is then refused by the NEXT precondition,
+	// which proves the refusal above is the rollout's and nothing else's.
+	if err := run([]string{"enable", "-mode", "canary", "-rollout", "100"}); err == nil || strings.Contains(err.Error(), "neither plane enforces") {
+		t.Fatalf("enable -rollout 100 = %v, want the provenance refusal, not the rollout one", err)
+	}
 }

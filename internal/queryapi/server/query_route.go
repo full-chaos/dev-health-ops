@@ -2510,18 +2510,13 @@ func (e *readyzDependencyError) Unwrap() error { return e.Cause }
 // each gated by its own go_api_routing_state row: enabling featureFlags
 // does not enable reviewEdges and vice versa.
 //
-// Inherited, pre-existing gap this wave does NOT close (codex review,
-// 2026-08-28, re-raising it against this route -- it is PostgresSwitch's
-// own documented gap #2, not something introduced here): eligible_orgs
-// and rollout_percentage are not enforced. Mode=canary/primary is
-// reachable for every authenticated org once dispatched here, because
-// Switch.Enabled(operation string) takes no org argument at all -- see
-// PostgresSwitch's doc comment in internal/routeswitch/postgres_switch.go
-// for why (threading org through Enabled is a later wave's job, the same
-// wave that would also verify request document identity, gap #1). Both
-// waves are local dual-run proof only (plan §5 stage 2); org-scoped
-// canary enforcement is a stage-5 concern this PR does not claim to
-// satisfy.
+// eligible_orgs and rollout_percentage are inert by design (CHAOS-6807; it is
+// PostgresSwitch's documented point 2): Mode=canary/primary is reachable for
+// every authenticated org once dispatched here, because Switch.Enabled(operation
+// string) takes no org argument, the Python edge that decides delegation does
+// not enforce them, and these operations have no Python resolver for an org
+// outside a cohort to fall back to. `dho goapi routing enable` refuses a
+// partial rollout and `status` flags a row that records one.
 // maxUnwrapChainLogBytes bounds the CHAOS-4647 unwrap-chain log line
 // (codex review, merge-gate round, P3 ARGUED): the deepest cause is
 // frequently a ClickHouse *proto.Exception, whose Message field is

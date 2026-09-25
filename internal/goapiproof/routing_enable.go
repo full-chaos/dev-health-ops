@@ -106,7 +106,9 @@ type EnableRequest struct {
 	// document the deployed binary does not serve.
 	DocumentDigest map[string]string
 
-	Mode              string
+	Mode string
+	// RolloutPercentage must be EnforcedRolloutPercentage: no plane obeys any
+	// other value (CHAOS-6807), so Enable refuses it rather than record it.
 	RolloutPercentage int
 
 	RecordedBy     string
@@ -227,6 +229,8 @@ func (r EnableRequest) validateFields() error {
 		return errors.New("goapiproof: no operations selected -- 'all-registered' must be resolved to a concrete list before it reaches Enable")
 	case r.RolloutPercentage < 0 || r.RolloutPercentage > 100:
 		return fmt.Errorf("goapiproof: rollout percentage %d is outside 0..100, which ck_go_api_routing_state_rollout_percentage rejects", r.RolloutPercentage)
+	case r.RolloutPercentage != EnforcedRolloutPercentage:
+		return ErrRolloutNotEnforced(r.RolloutPercentage)
 	}
 	if !contains(EnableModes, r.Mode) {
 		return fmt.Errorf("goapiproof: enable may only set %v, got %q -- turning an operation OFF is `disable`'s job", EnableModes, r.Mode)
@@ -464,4 +468,16 @@ func Enable(ctx context.Context, pool *pgxpool.Pool, request EnableRequest) ([]E
 		return nil, fmt.Errorf("goapiproof: commit: %w", err)
 	}
 	return outcomes, nil
+}
+
+// EnforcedRolloutPercentage is the only rollout_percentage a row can carry
+// honestly: canary and primary are both "on for every authenticated org",
+// revocable only by mode (CHAOS-6807).
+const EnforcedRolloutPercentage = 100
+
+// ErrRolloutNotEnforced is the refusal for a rollout percentage no plane
+// would obey. It says what the row would really do, so the operator does not
+// believe in a staged rollout that is not there.
+func ErrRolloutNotEnforced(percentage int) error {
+	return fmt.Errorf("goapiproof: rollout percentage %d is refused: neither plane enforces rollout_percentage or eligible_orgs, so a canary or primary row is on for EVERY authenticated org whatever it records, and these operations have no Python resolver for an org outside a cohort to fall back to; the only control is the mode (turn it off with `disable`)", percentage)
 }

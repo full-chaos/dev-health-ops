@@ -48,6 +48,7 @@ type ids struct {
 	orgA, orgB, orgC                                       uuid.UUID
 	adminA, memberA, adminB, adminC, adminNoOrg            uuid.UUID
 	credGood, credBad, credGoodB, credGoodC                uuid.UUID
+	credForbidden, intForbidden                            uuid.UUID
 	intRecover, cfgRecover, srcRecover                     uuid.UUID
 	credNoURL, credNoEmail, intNoURL, intNoEmail, cfgNoURL uuid.UUID
 	intJira, intScoped, intConfigScoped, intBad, intNoCred uuid.UUID
@@ -58,7 +59,7 @@ type ids struct {
 
 func newIDs() ids {
 	var v ids
-	for _, target := range []*uuid.UUID{&v.credNoURL, &v.credNoEmail, &v.intNoURL, &v.intNoEmail, &v.cfgNoURL, &v.orgA, &v.orgB, &v.orgC, &v.adminC, &v.credGoodC, &v.intRecover, &v.cfgRecover, &v.srcRecover, &v.adminA, &v.memberA, &v.adminB, &v.adminNoOrg, &v.credGood, &v.credBad,
+	for _, target := range []*uuid.UUID{&v.credNoURL, &v.credNoEmail, &v.intNoURL, &v.intNoEmail, &v.cfgNoURL, &v.orgA, &v.orgB, &v.orgC, &v.adminC, &v.credGoodC, &v.intRecover, &v.cfgRecover, &v.srcRecover, &v.adminA, &v.memberA, &v.adminB, &v.adminNoOrg, &v.credGood, &v.credBad, &v.credForbidden, &v.intForbidden,
 		&v.credGoodB, &v.intJira, &v.intScoped, &v.intConfigScoped, &v.intBad, &v.intNoCred, &v.intLinear, &v.intB, &v.intEmpty,
 		&v.cfgJira, &v.cfgScoped, &v.cfgB, &v.intRename, &v.srcAcm, &v.srcOld, &v.srcDupLower, &v.srcDupUpper, &v.srcRename} {
 		*target = uuid.New()
@@ -95,8 +96,14 @@ func fakeJira(t *testing.T, root string) (*httptest.Server, string) {
 		projects = append(projects, page.Values...)
 	}
 	badAuth := "Basic " + base64.StdEncoding.EncodeToString([]byte("venue@example.com:bad-token"))
+	forbiddenAuth := "Basic " + base64.StdEncoding.EncodeToString([]byte("venue@example.com:forbidden-token"))
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json;charset=UTF-8")
+		if r.Header.Get("Authorization") == forbiddenAuth {
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"errorMessages":["You do not have permission to see this resource."],"errors":{}}`))
+			return
+		}
 		if r.Header.Get("Authorization") == badAuth {
 			w.WriteHeader(http.StatusUnauthorized)
 			_, _ = w.Write([]byte(`{"errorMessages":["Client must be authenticated to access this resource."],"errors":{}}`))
@@ -226,6 +233,29 @@ func TestIntegrationDiscoverVenueOracle(t *testing.T) {
 	goMetrics := scrapeOperator(t, operator.URL)
 	compareDiscoveryCounter(t, pythonMetrics.Body, goMetrics)
 	compareMappingRejected(t, pythonMetrics.Body, goMetrics)
+
+	// Named divergence (CHAOS-6753): a provider that rejects the credential (401
+	// or 403) is Python's fixed 503 (Jira raises) and the Go api's 422 naming the
+	// provider and its status; the Go answer is asserted here, not compared. Run
+	// after the comparisons above: it writes no source rows on either plane.
+	authRequests := authFailureRequests(venue, v)
+	pythonAuth := venue.ServePython(t, authRequests)
+	for index, request := range authRequests {
+		goResponse := venueoracle.Do(t, base, request)
+		wantPython := `{"detail":{"code":"integration_discovery_failed","message":"Integration discovery failed"}}`
+		if pythonAuth[index].Status != http.StatusServiceUnavailable || pythonAuth[index].Body != wantPython {
+			t.Errorf("%s: python %d %s", request.Name, pythonAuth[index].Status, pythonAuth[index].Body)
+		}
+		status := 401
+		if strings.Contains(request.Name, "403") {
+			status = 403
+		}
+		wantGo := fmt.Sprintf(`{"detail":[{"type":"provider_authentication_failed","loc":["path","integration_id"],"msg":"jira rejected the integration's credential (HTTP %d)","input":%q}]}`,
+			status, strings.TrimSuffix(strings.TrimPrefix(request.Path, discoverPath), "/discover"))
+		if goResponse.Status != http.StatusUnprocessableEntity || goResponse.Body != wantGo {
+			t.Errorf("%s: go %d %s\n want 422 %s", request.Name, goResponse.Status, goResponse.Body, wantGo)
+		}
+	}
 
 	// integration_sources as raw column text; a created row's id is random on
 	// each plane, so rows are compared by their identity columns.

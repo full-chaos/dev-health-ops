@@ -46,9 +46,11 @@ def test_the_real_tree_passes(real_routes):
     assert problems == []
     assert checker.check(real_routes, manifest, REPO_ROOT) == []
     stubs = checker.stub_routes(real_routes, REPO_ROOT)
-    # CHAOS-6241's 32 deleted bodies are recognised as stubs (a recogniser that
-    # found none would make every other assertion here vacuous).
-    assert len(stubs) == 32
+    # At least CHAOS-6241's 32 deleted bodies are recognised as stubs (a
+    # recogniser that found none would make every other assertion here vacuous;
+    # each family deleted after them adds its own routes, pinned by that
+    # family's own sentinel test, so the floor is not edited per family).
+    assert len(stubs) >= 32
     assert {checker.normalize(route["path"]) for route in stubs} <= set(manifest)
 
 

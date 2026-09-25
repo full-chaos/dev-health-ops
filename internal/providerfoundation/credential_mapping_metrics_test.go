@@ -106,3 +106,28 @@ func TestNewJiraClientCountsEveryMappingItRejects(t *testing.T) {
 		}
 	}
 }
+
+// TestJiraMappingIncomplete pins the predicate Discover reads a refused
+// mapping by: any of the token (under any spelling), the email or the base
+// URL (from the secret or the config column) absent.
+func TestJiraMappingIncomplete(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		values map[string]string
+		config map[string]string
+		want   bool
+	}{
+		{"complete", map[string]string{"token": "t", "email": "e@x.test", "url": "https://x.test"}, nil, false},
+		{"complete with the base url in the config", map[string]string{"apiToken": "t", "email": "e@x.test"}, map[string]string{"base_url": "https://x.test"}, false},
+		{"no token", map[string]string{"email": "e@x.test", "url": "https://x.test"}, nil, true},
+		{"no email", map[string]string{"token": "t", "url": "https://x.test"}, nil, true},
+		{"no base url", map[string]string{"token": "t", "email": "e@x.test"}, nil, true},
+		{"nothing", map[string]string{}, nil, true},
+	} {
+		credential := testCredential("jira", c.values)
+		credential.Config = c.config
+		if got := JiraMappingIncomplete(credential); got != c.want {
+			t.Errorf("%s: JiraMappingIncomplete = %v, want %v", c.name, got, c.want)
+		}
+	}
+}

@@ -49,6 +49,7 @@ type ids struct {
 	adminA, memberA, adminB, adminC, adminNoOrg            uuid.UUID
 	credGood, credBad, credGoodB, credGoodC                uuid.UUID
 	intRecover, cfgRecover, srcRecover                     uuid.UUID
+	credNoURL, credNoEmail, intNoURL, intNoEmail, cfgNoURL uuid.UUID
 	intJira, intScoped, intConfigScoped, intBad, intNoCred uuid.UUID
 	intLinear, intB, intEmpty, intRename                   uuid.UUID
 	cfgJira, cfgScoped, cfgB                               uuid.UUID
@@ -57,7 +58,7 @@ type ids struct {
 
 func newIDs() ids {
 	var v ids
-	for _, target := range []*uuid.UUID{&v.orgA, &v.orgB, &v.orgC, &v.adminC, &v.credGoodC, &v.intRecover, &v.cfgRecover, &v.srcRecover, &v.adminA, &v.memberA, &v.adminB, &v.adminNoOrg, &v.credGood, &v.credBad,
+	for _, target := range []*uuid.UUID{&v.credNoURL, &v.credNoEmail, &v.intNoURL, &v.intNoEmail, &v.cfgNoURL, &v.orgA, &v.orgB, &v.orgC, &v.adminC, &v.credGoodC, &v.intRecover, &v.cfgRecover, &v.srcRecover, &v.adminA, &v.memberA, &v.adminB, &v.adminNoOrg, &v.credGood, &v.credBad,
 		&v.credGoodB, &v.intJira, &v.intScoped, &v.intConfigScoped, &v.intBad, &v.intNoCred, &v.intLinear, &v.intB, &v.intEmpty,
 		&v.cfgJira, &v.cfgScoped, &v.cfgB, &v.intRename, &v.srcAcm, &v.srcOld, &v.srcDupLower, &v.srcDupUpper, &v.srcRename} {
 		*target = uuid.New()
@@ -222,7 +223,9 @@ func TestIntegrationDiscoverVenueOracle(t *testing.T) {
 	}
 	receipt := venueoracle.Diff(t, base, requests, python[:len(requests)], venueoracle.DiffOptions{Normalize: normalize})
 	t.Logf("receipt (%d requests):\n%s", len(requests), receipt)
-	compareDiscoveryCounter(t, pythonMetrics.Body, scrapeOperator(t, operator.URL))
+	goMetrics := scrapeOperator(t, operator.URL)
+	compareDiscoveryCounter(t, pythonMetrics.Body, goMetrics)
+	compareMappingRejected(t, pythonMetrics.Body, goMetrics)
 
 	// integration_sources as raw column text; a created row's id is random on
 	// each plane, so rows are compared by their identity columns.
@@ -311,6 +314,50 @@ func compareDiscoveryCounter(t *testing.T, python, goExposition string) {
 		return
 	}
 	t.Logf("jira_project_discovery_total: SAME %v", goCounts)
+}
+
+// compareMappingRejected requires credential_mapping_rejected_total to have
+// moved by the same amount on both planes, label set by label set: the two
+// stored credentials the resolver refuses are each counted against the field
+// they lack.
+func compareMappingRejected(t *testing.T, python, goExposition string) {
+	t.Helper()
+	read := func(exposition string) map[string]float64 {
+		parser := expfmt.NewTextParser(model.UTF8Validation)
+		families, err := parser.TextToMetricFamilies(strings.NewReader(exposition))
+		if err != nil {
+			t.Fatalf("parse exposition: %v", err)
+		}
+		out := map[string]float64{}
+		family := families["credential_mapping_rejected_total"]
+		if family == nil {
+			family = families["credential_mapping_rejected"]
+		}
+		if family == nil {
+			return out
+		}
+		for _, metric := range family.GetMetric() {
+			labels := map[string]string{}
+			for _, label := range metric.GetLabel() {
+				labels[label.GetName()] = label.GetValue()
+			}
+			if value := metric.GetCounter().GetValue(); value != 0 {
+				out[labels["provider"]+"/"+labels["missing_field"]] = value
+			}
+		}
+		return out
+	}
+	pythonCounts, goCounts := read(python), read(goExposition)
+	for _, want := range []string{"jira/base_url", "jira/email"} {
+		if pythonCounts[want] == 0 {
+			t.Errorf("the Python api did not count %s (%v); the run does not exercise it", want, pythonCounts)
+		}
+	}
+	if !reflect.DeepEqual(pythonCounts, goCounts) {
+		t.Errorf("credential_mapping_rejected_total: DIFF\n python %v\n go     %v", pythonCounts, goCounts)
+		return
+	}
+	t.Logf("credential_mapping_rejected_total: SAME %v", goCounts)
 }
 
 var anyUUID = regexp.MustCompile(`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`)

@@ -24,8 +24,10 @@
 package providerstub
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -294,7 +296,8 @@ func (s *Stub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 	}
 	w.WriteHeader(matched.Status)
-	_, _ = w.Write(matched.body)
+	// a fixture body is served as recorded bytes, exactly as a real provider would send them
+	_, _ = io.Copy(w, bytes.NewReader(matched.body))
 }
 
 func (s *Stub) record(r Recorded) {

@@ -249,6 +249,7 @@ var responseModelRoutes = map[string]bool{
 	"PATCH /api/v1/admin/integrations/{integration_id}/datasets":            true,
 	"POST /api/v1/admin/integrations/{integration_id}/discover":             true,
 	"POST /api/v1/admin/integrations/{integration_id}/sync":                 true,
+	"POST /api/v1/admin/integrations/{integration_id}/backfill":             true,
 }
 
 // jsonResponseRoutes are response_model routes on the FastAPI side whose

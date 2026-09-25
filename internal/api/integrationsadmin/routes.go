@@ -12,6 +12,7 @@
 //	PATCH /api/v1/admin/integrations/{integration_id}/datasets
 //	POST  /api/v1/admin/integrations/{integration_id}/discover
 //	POST  /api/v1/admin/integrations/{integration_id}/sync
+//	POST  /api/v1/admin/integrations/{integration_id}/backfill
 //
 // The sync and backfill triggers hand the run to the scheduler (synchandoff, handoff.go). Every route is Depends(get_admin_org_id): policy.AdminOrg, and the
 // org is the caller's own org_id claim. The write routes validate a pydantic
@@ -85,6 +86,7 @@ func Routes(deps Deps) []httpapi.Route {
 		{Method: http.MethodPatch, Pattern: prefix + "/{integration_id}/datasets", Handler: write(h.updateDatasets)},
 		{Method: http.MethodPost, Pattern: prefix + "/{integration_id}/discover", Handler: read(h.discover)},
 		{Method: http.MethodPost, Pattern: prefix + "/{integration_id}/sync", Handler: write(h.syncTrigger)},
+		{Method: http.MethodPost, Pattern: prefix + "/{integration_id}/backfill", Handler: write(h.backfillTrigger)},
 	}
 }
 

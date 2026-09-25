@@ -132,6 +132,7 @@ EXPECTED_PACKAGES = {
     # live Python env).
     # The generic integration admin routes' venue differential (skips
     # without the live Python env), in its own package for its own budget.
+    "internal/api/integrationsadmin/backfillvenue",
     "internal/api/integrationsadmin/integrationsvenue",
     # The integration discover route's venue differential (skips without the live
     # Python env), in its own package for its own budget.

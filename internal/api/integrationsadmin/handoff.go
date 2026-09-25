@@ -116,6 +116,48 @@ func textColumn(ctx context.Context, tx pgx.Tx, sql string, args ...any) ([]stri
 	return out, rows.Err()
 }
 
+// triggerScope is the source and dataset selection a trigger request carried;
+// the Set flags tell an omitted (or null) list, which means every enabled one,
+// from a list that was given, empty included.
+type triggerScope struct {
+	sourceIDs, datasetKeys       []string
+	sourceIDsSet, datasetKeysSet bool
+}
+
+// handOff is the body of a sync or backfill trigger once its request is
+// validated: resolve the integration and its configuration, write the
+// occurrence and manual trigger in one transaction, and answer with the
+// scheduler's plan.
+func (h handlers) handOff(w http.ResponseWriter, r *http.Request, scope triggerScope, mode, triggeredBy string, since, before *time.Time) {
+	orgID := orgOf(r)
+	var trigger synchandoff.Trigger
+	err := h.inTx(r.Context(), func(tx pgx.Tx) error {
+		current, id, err := requireIntegration(r.Context(), tx, orgID, r.PathValue("integration_id"))
+		if err != nil {
+			return err
+		}
+		target, err := handoffTarget(r.Context(), tx, orgID, id, current.IsActive)
+		if err != nil {
+			return err
+		}
+		input := synchandoff.MintInput{Mode: mode, TriggeredBy: triggeredBy, Since: since, Before: before,
+			SourceIDs: target.sources, DatasetKeys: target.datasets}
+		if scope.sourceIDsSet {
+			input.SourceIDs = append([]string{}, scope.sourceIDs...)
+		}
+		if scope.datasetKeysSet {
+			input.DatasetKeys = append([]string{}, scope.datasetKeys...)
+		}
+		trigger, err = synchandoff.Mint(r.Context(), tx, target.config, input, h.Now())
+		return err
+	})
+	if err != nil {
+		h.fail(w, r, "hand off the "+mode, err)
+		return
+	}
+	h.handoffResponse(w, r, r.PathValue("integration_id"), trigger)
+}
+
 // handoffResponse waits for the scheduler's plan of the occurrence and writes
 // Python's SyncTriggerResponse. A plan the scheduler quarantined answers 400
 // (Python's planner refusals were 400); a plan not made within the wait is a

@@ -37,7 +37,6 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
-SCRIPT = ROOT / "ci" / "merge-tree-vet.sh"
 CI_FILES = (
     "check_go.sh",
     "check_venue_oracle_registry.sh",

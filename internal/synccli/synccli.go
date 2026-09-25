@@ -63,12 +63,12 @@ func Command() cli.Command {
 		Name:    "sync",
 		Summary: "pull an external system's structure into ClickHouse",
 		Kind:    cli.Group,
-		Children: []cli.Command{{
+		Children: append([]cli.Command{{
 			Name:    "teams",
 			Summary: "sync the organization's Atlassian Teams (structure, members, active projects)",
 			Kind:    cli.Verb,
 			Run:     func(ctx context.Context, env cli.Env) int { return runTeams(ctx, env, defaultDeps()) },
-		}},
+		}}, TargetCommands(nil)...),
 	}
 }
 

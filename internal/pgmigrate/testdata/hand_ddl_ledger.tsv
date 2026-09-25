@@ -28,11 +28,6 @@ internal/apiservice/acr/store_integration_test.go	feature_flags	SUBSET
 internal/apiservice/acr/store_integration_test.go	org_feature_overrides	SUBSET	
 internal/apiservice/acr/store_integration_test.go	org_licenses	SUBSET	
 internal/apiservice/acr/store_integration_test.go	organizations	SUBSET	
-internal/externalrecompute/enqueue_integration_test.go	daily_metrics_partitions	SUBSET	
-internal/externalrecompute/enqueue_integration_test.go	daily_metrics_runs	INVENTED	repository_discovery_required
-internal/externalrecompute/enqueue_integration_test.go	worker_job_outbox	SUBSET	
-internal/externalrecompute/postgres_integration_test.go	external_ingest_batches	SUBSET	
-internal/externalrecompute/postgres_integration_test.go	external_ingest_recompute_jobs	SUBSET	
 internal/joboperator/postgres_integration_test.go	audit_logs	SUBSET	
 internal/joboperator/postgres_integration_test.go	backfill_jobs	SUBSET	
 internal/joboperator/postgres_integration_test.go	billing_notifications	SUBSET	

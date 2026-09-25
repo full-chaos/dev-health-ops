@@ -43,10 +43,15 @@ type fakeStripe struct {
 	counters    map[string]int
 	refunds     int
 	refundByKey map[string]string
+	// createdRefunds is every refund the fake made, in order (append-only).
+	createdRefunds []string
+	// losing names payment intents whose refund answers are lost (500)
+	// while set: the refund is made, the caller sees only an error.
+	losing map[string]bool
 }
 
 func newFakeStripe() *fakeStripe {
-	return &fakeStripe{calls: map[string][]string{}, counters: map[string]int{}, refundByKey: map[string]string{}}
+	return &fakeStripe{calls: map[string][]string{}, counters: map[string]int{}, refundByKey: map[string]string{}, losing: map[string]bool{}}
 }
 
 // sortedForm renders form or query values as sorted key=value pairs: both
@@ -275,6 +280,19 @@ func (f *fakeStripe) serve(plane string, w http.ResponseWriter, r *http.Request)
 			items = []string{item(`{"id": "price_team_cfg", "object": "price"}`)}
 		}
 		fmt.Fprintf(w, `{"object": "list", "url": %q, "has_more": false, "data": [%s]}`, path, strings.Join(items, ", "))
+	// The refunds made for one payment (the route's lookup before it
+	// resumes a pending refund), newest first as Stripe lists them.
+	case r.Method == http.MethodGet && path == "/v1/refunds" && (r.URL.Query().Get("payment_intent") != "" || r.URL.Query().Get("charge") != ""):
+		var matched []string
+		for index := len(f.createdRefunds) - 1; index >= 0; index-- {
+			made := f.createdRefunds[index]
+			if intent := r.URL.Query().Get("payment_intent"); intent != "" && strings.Contains(made, fmt.Sprintf(`"payment_intent": %q`, intent)) {
+				matched = append(matched, made)
+			} else if charge := r.URL.Query().Get("charge"); charge != "" && strings.Contains(made, fmt.Sprintf(`"charge": %q`, charge)) {
+				matched = append(matched, made)
+			}
+		}
+		fmt.Fprintf(w, `{"object": "list", "url": "/v1/refunds", "has_more": false, "data": [%s]}`, strings.Join(matched, ", "))
 	case r.Method == http.MethodGet && fakeLists[path] != nil:
 		after := r.URL.Query().Get("starting_after")
 		if after == "" {
@@ -354,6 +372,9 @@ func (f *fakeStripe) serve(plane string, w http.ResponseWriter, r *http.Request)
 		// made, and makes no second one.
 		key := r.Header.Get("Idempotency-Key")
 		lost := map[string]int{"pi_lost500": http.StatusInternalServerError, "pi_lost408": http.StatusRequestTimeout}[form.Get("payment_intent")]
+		if f.losing[form.Get("payment_intent")] {
+			lost = http.StatusInternalServerError
+		}
 		if made, seen := f.refundByKey[key]; seen && key != "" {
 			if lost != 0 {
 				w.WriteHeader(lost)
@@ -388,6 +409,7 @@ func (f *fakeStripe) serve(plane string, w http.ResponseWriter, r *http.Request)
 		if key != "" {
 			f.refundByKey[key] = made
 		}
+		f.createdRefunds = append(f.createdRefunds, made)
 		// Accepted, then the answer is lost: the refund exists, the caller
 		// sees only an error, on every attempt.
 		if lost != 0 {

@@ -8,11 +8,17 @@
   "doc": "Move the checked-in worker job kinds to the River transport."
  },
  {
-  "revision": "0140",
-  "down": "0139",
+  "revision": "0141",
+  "down": "0140",
   "labels": "application_schema",
   "realHead": true,
   "head": true,
+  "doc": "Let a failed OAuth setup keep a durable revocation record."
+ },
+ {
+  "revision": "0140",
+  "down": "0139",
+  "labels": "application_schema",
   "doc": "Invoices: record the Stripe time of the newest applied event."
  },
  {

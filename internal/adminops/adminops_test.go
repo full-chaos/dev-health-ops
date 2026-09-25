@@ -20,7 +20,7 @@ func TestTheAdminGroupHoldsEveryVerb(t *testing.T) {
 			paths = append(paths, group.Name+" "+child.Name)
 		}
 	}
-	want := "users create,users list,users update,orgs create,orgs list,orgs delete,llm-settings get,llm-settings set,llm-settings delete,licenses keygen,licenses create,bundles create,bundles list,bundles assign-plan,bundles assign-org,features seed"
+	want := "users create,users list,users update,orgs create,orgs list,orgs delete,llm-settings get,llm-settings set,llm-settings delete,licenses keygen,licenses create,bundles create,bundles list,bundles assign-plan,bundles assign-org,billing seed,billing list,features seed"
 	if command.Name != "admin" || strings.Join(paths, ",") != want {
 		t.Fatalf("the verbs are %v, want %s", paths, want)
 	}
@@ -53,6 +53,8 @@ func TestUsersVerbsRefuseBadArgumentsBeforeConnecting(t *testing.T) {
 		{"licenses create refuses a non-integer duration", runLicensesCreate, []string{"--org-id", "o", "--tier", "team", "--duration-days", "many"}},
 		{"bundles create needs its flags", runBundlesCreate, []string{"--key", "k"}},
 		{"bundles list refuses a positional", runBundlesList, []string{"x"}},
+		{"billing seed refuses a positional", runBillingSeed, []string{"x"}},
+		{"billing list refuses a flag", runBillingList, []string{"--all"}},
 		{"bundles assign-plan needs its flags", runBundlesAssignPlan, []string{"--bundle-key", "b"}},
 		{"bundles assign-org needs its flags", runBundlesAssignOrg, []string{"--org-id", "o"}},
 		{"bundles assign-org refuses a non-integer expiry", runBundlesAssignOrg, []string{"--org-id", "o", "--feature-key", "f", "--expires-days", "soon"}},

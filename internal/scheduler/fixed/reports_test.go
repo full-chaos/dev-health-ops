@@ -391,7 +391,7 @@ func TestStoredDegradedReasonSurvivesNonEvaluatingWindows(t *testing.T) {
 	schedule := scheduleByID(t, scheduleID)
 	loop, err := NewLoop(
 		staticStepper{schedules: []Schedule{schedule}},
-		DefaultLoopConfig(health.NewRegistry(100*time.Millisecond)),
+		DefaultLoopConfig(health.NewRegistry(readinessTestCheckTimeout)),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -484,7 +484,7 @@ func TestSkipReasonIsNotPromotedToTheDegradedGauge(t *testing.T) {
 	schedule := scheduleByID(t, scheduleID)
 	loop, err := NewLoop(
 		staticStepper{schedules: []Schedule{schedule}},
-		DefaultLoopConfig(health.NewRegistry(100*time.Millisecond)),
+		DefaultLoopConfig(health.NewRegistry(readinessTestCheckTimeout)),
 	)
 	if err != nil {
 		t.Fatal(err)

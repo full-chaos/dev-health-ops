@@ -5,7 +5,6 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
@@ -75,7 +74,7 @@ func TestExternalProfileWiresReachableIngestCounters(t *testing.T) {
 	} {
 		t.Run(testCase.profile, func(t *testing.T) {
 			storage := &observingStreamStorage{}
-			registry := health.NewRegistry(100 * time.Millisecond)
+			registry := health.NewRegistry(readinessTestCheckTimeout)
 			components, err := configureStreamRunnerDependenciesWithSources(
 				context.Background(),
 				config.Config{Profile: testCase.profile, StreamConfiguredReplicas: 1},

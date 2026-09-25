@@ -28,7 +28,7 @@ func TestReconcilerSpecConfiguresFailClosedDependencies(t *testing.T) {
 		t.Fatal("reconciler logger-aware dependency configuration is not exclusively wired")
 	}
 
-	registry := health.NewRegistry(100 * time.Millisecond)
+	registry := health.NewRegistry(readinessTestCheckTimeout)
 	components, err := configureReconcilerDependenciesWithLogger(
 		context.Background(),
 		config.Config{},

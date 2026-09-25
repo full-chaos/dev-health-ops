@@ -98,7 +98,7 @@ func TestReconcilerMissingDependenciesStayLiveAndFailReadinessWithoutValues(t *t
 		return nil, errors.New("load " + secret)
 	}
 
-	registry := health.NewRegistry(100 * time.Millisecond)
+	registry := health.NewRegistry(readinessTestCheckTimeout)
 	components, err := configureReconcilerDependenciesWithSourcesAndLogger(
 		context.Background(),
 		config.Config{RiverDatabaseSchema: "river"},
@@ -170,7 +170,7 @@ func TestReconcilerComposesNoopLoopInDatabaseThenLoopOrder(t *testing.T) {
 		return syncreconciler.NewLoop(stepper, loopConfig)
 	}
 
-	registry := health.NewRegistry(100 * time.Millisecond)
+	registry := health.NewRegistry(readinessTestCheckTimeout)
 	components, err := configureReconcilerDependenciesWithSourcesAndLogger(
 		context.Background(),
 		config.Config{RiverDatabaseSchema: "river"},
@@ -269,7 +269,7 @@ func TestSyncObservationTimeoutPropagatesFromConfig(t *testing.T) {
 		cfg.SyncObservationTimeoutExplicit = true
 		var captured time.Duration
 		_, err := configureReconcilerDependenciesWithSourcesAndLogger(
-			context.Background(), cfg, health.NewRegistry(100*time.Millisecond),
+			context.Background(), cfg, health.NewRegistry(readinessTestCheckTimeout),
 			reconcilerTestLogger(), newSources(t, &captured),
 		)
 		if err != nil {
@@ -296,7 +296,7 @@ func TestSyncObservationTimeoutPropagatesFromConfig(t *testing.T) {
 		}
 		var captured time.Duration
 		_, err := configureReconcilerDependenciesWithSourcesAndLogger(
-			context.Background(), cfg, health.NewRegistry(100*time.Millisecond),
+			context.Background(), cfg, health.NewRegistry(readinessTestCheckTimeout),
 			reconcilerTestLogger(), newSources(t, &captured),
 		)
 		if err != nil {
@@ -317,7 +317,7 @@ func TestSyncObservationTimeoutPropagatesFromConfig(t *testing.T) {
 		logger := slog.New(slog.NewJSONHandler(&buf, nil))
 		var captured time.Duration
 		_, err := configureReconcilerDependenciesWithSourcesAndLogger(
-			context.Background(), cfg, health.NewRegistry(100*time.Millisecond),
+			context.Background(), cfg, health.NewRegistry(readinessTestCheckTimeout),
 			logger, newSources(t, &captured),
 		)
 		if err != nil {
@@ -340,7 +340,7 @@ func TestSyncObservationTimeoutPropagatesFromConfig(t *testing.T) {
 		logger := slog.New(slog.NewJSONHandler(&buf, nil))
 		var captured time.Duration
 		_, err := configureReconcilerDependenciesWithSourcesAndLogger(
-			context.Background(), cfg, health.NewRegistry(100*time.Millisecond),
+			context.Background(), cfg, health.NewRegistry(readinessTestCheckTimeout),
 			logger, newSources(t, &captured),
 		)
 		if err != nil {
@@ -358,7 +358,7 @@ func TestSyncObservationTimeoutPropagatesFromConfig(t *testing.T) {
 		var captured time.Duration
 		_, err := configureReconcilerDependenciesWithSourcesAndLogger(
 			context.Background(), config.Config{RiverDatabaseSchema: "river"},
-			health.NewRegistry(100*time.Millisecond),
+			health.NewRegistry(readinessTestCheckTimeout),
 			reconcilerTestLogger(), newSources(t, &captured),
 		)
 		if err != nil {
@@ -394,7 +394,7 @@ func TestSyncObservationTimeoutPropagatesFromConfig(t *testing.T) {
 				// -- durationEnv's fallback, never Go's zero value.
 				SyncObservationTimeout: config.DefaultSyncObservationTimeout,
 			},
-			health.NewRegistry(100*time.Millisecond),
+			health.NewRegistry(readinessTestCheckTimeout),
 			reconcilerTestLogger(), newSources(t, &captured),
 		)
 		if err != nil {
@@ -442,7 +442,7 @@ func TestReconcilerMutationActivationSelectsReviewedMutationPipeline(t *testing.
 		}), nil
 	}
 
-	registry := health.NewRegistry(100 * time.Millisecond)
+	registry := health.NewRegistry(readinessTestCheckTimeout)
 	components, err := configureReconcilerDependenciesWithActivationSourcesAndLogger(
 		context.Background(),
 		config.Config{RiverDatabaseSchema: "river"},
@@ -500,7 +500,7 @@ func TestReconcilerNilLoggerFailsClosedBeforeRecorderConstruction(t *testing.T) 
 	components, err := configureReconcilerDependenciesWithSourcesAndLogger(
 		context.Background(),
 		config.Config{RiverDatabaseSchema: "river"},
-		health.NewRegistry(100*time.Millisecond),
+		health.NewRegistry(readinessTestCheckTimeout),
 		nil,
 		sources,
 	)
@@ -535,7 +535,7 @@ func TestReconcilerSyncLoopConstructionFailureClosesRecorderBeforeDatabase(t *te
 	components, err := configureReconcilerDependenciesWithSourcesAndLogger(
 		context.Background(),
 		config.Config{RiverDatabaseSchema: "river"},
-		health.NewRegistry(100*time.Millisecond),
+		health.NewRegistry(readinessTestCheckTimeout),
 		reconcilerTestLogger(),
 		sources,
 	)
@@ -567,7 +567,7 @@ func TestReconcilerRecorderConstructionFailureClosesReturnedRecorderAndDatabase(
 	components, err := configureReconcilerDependenciesWithSourcesAndLogger(
 		context.Background(),
 		config.Config{RiverDatabaseSchema: "river"},
-		health.NewRegistry(100*time.Millisecond),
+		health.NewRegistry(readinessTestCheckTimeout),
 		reconcilerTestLogger(),
 		sources,
 	)
@@ -590,7 +590,7 @@ func TestReconcilerConstructionFailureClosesDatabaseAndFailsReadiness(t *testing
 		return nil, errors.New("dial postgresql://queue:do-not-print@database.internal/app")
 	}
 
-	registry := health.NewRegistry(100 * time.Millisecond)
+	registry := health.NewRegistry(readinessTestCheckTimeout)
 	components, err := configureReconcilerDependenciesWithSourcesAndLogger(
 		context.Background(),
 		config.Config{RiverDatabaseSchema: "river"},
@@ -624,7 +624,7 @@ func TestReconcilerSyncRegistryLoadFailureClosesDatabaseAndFailsReadiness(t *tes
 		return nil, errors.New("invalid sync-dispatch contract")
 	}
 
-	registry := health.NewRegistry(100 * time.Millisecond)
+	registry := health.NewRegistry(readinessTestCheckTimeout)
 	components, err := configureReconcilerDependenciesWithSourcesAndLogger(
 		context.Background(),
 		config.Config{RiverDatabaseSchema: "river"},
@@ -658,7 +658,7 @@ func TestReconcilerSyncMutationBuildFailureClosesDatabaseAndFailsReadiness(t *te
 		return nil, errors.New("sync mutation construction failed")
 	}
 
-	registry := health.NewRegistry(100 * time.Millisecond)
+	registry := health.NewRegistry(readinessTestCheckTimeout)
 	components, err := configureReconcilerDependenciesWithSourcesAndLogger(
 		context.Background(),
 		config.Config{RiverDatabaseSchema: "river"},
@@ -694,7 +694,7 @@ func TestReconcilerReadinessRegistrationFailureClosesConstructedDatabase(t *test
 	sources.newSyncRecorder = func(*slog.Logger) (reconcilerObservationRecorder, error) {
 		return recorder, nil
 	}
-	registry := health.NewRegistry(100 * time.Millisecond)
+	registry := health.NewRegistry(readinessTestCheckTimeout)
 	if err := registry.RegisterRequired("domain_postgres", func(context.Context) error { return nil }); err != nil {
 		t.Fatalf("register collision: %v", err)
 	}
@@ -803,7 +803,7 @@ func TestReconcilerRouteFenceDriftClosesOnlyRouteFenceReadiness(t *testing.T) {
 		}), nil
 	}
 
-	registry := health.NewRegistry(100 * time.Millisecond)
+	registry := health.NewRegistry(readinessTestCheckTimeout)
 	components, err := configureReconcilerDependenciesWithSourcesAndLogger(
 		context.Background(),
 		config.Config{RiverDatabaseSchema: "river"},
@@ -851,7 +851,7 @@ func TestReconcilerRouteFenceConstructionFailureFailsClosed(t *testing.T) {
 		return nil, errors.New("route fence construction failed")
 	}
 
-	registry := health.NewRegistry(100 * time.Millisecond)
+	registry := health.NewRegistry(readinessTestCheckTimeout)
 	components, err := configureReconcilerDependenciesWithSourcesAndLogger(
 		context.Background(),
 		config.Config{RiverDatabaseSchema: "river"},

@@ -112,8 +112,30 @@ func TestCheckRolePostureAcceptsAnArbitrarySyntheticPosture(t *testing.T) {
 	if _, err := admin.Exec(ctx, "GRANT UPDATE ON TABLE public.synthetic_beta TO "+role); err != nil {
 		t.Fatal(err)
 	}
-	if err := CheckRolePosture(ctx, roleConn, role, schema, posture); err == nil {
+	excessErr := CheckRolePosture(ctx, roleConn, role, schema, posture)
+	if excessErr == nil {
 		t.Fatal("CheckRolePosture unexpectedly authorized an undeclared UPDATE on synthetic_beta")
+	}
+	// CHAOS-6765: the refusal names the first mismatched privilege instead of
+	// an opaque "posture refused".
+	if !errors.Is(excessErr, ErrPostureRefused) ||
+		!strings.Contains(excessErr.Error(), "synthetic_beta") ||
+		!strings.Contains(excessErr.Error(), "UPDATE") {
+		t.Fatalf("refusal = %q, want ErrPostureRefused naming synthetic_beta and UPDATE", excessErr)
+	}
+	// The cached readiness check surfaces the same refusal once its answer
+	// lands (RefusalTTL/TTL kept tiny; a passing answer would be served stale).
+	cached := NewCachedPostureCheck(roleConn, role, schema, posture, PostureCheckOptions{TTL: time.Millisecond})
+	cachedDeadline := time.Now().Add(30 * time.Second)
+	var cachedErr error
+	for time.Now().Before(cachedDeadline) {
+		if cachedErr = cached.Check(ctx); cachedErr != nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !errors.Is(cachedErr, ErrPostureRefused) || !strings.Contains(cachedErr.Error(), "synthetic_beta") {
+		t.Fatalf("cached check = %v, want ErrPostureRefused naming synthetic_beta", cachedErr)
 	}
 	if _, err := admin.Exec(ctx, "REVOKE UPDATE ON TABLE public.synthetic_beta FROM "+role); err != nil {
 		t.Fatal(err)

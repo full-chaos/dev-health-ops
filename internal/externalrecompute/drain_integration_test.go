@@ -128,8 +128,8 @@ func seedNativeRow(
 	if _, err := pool.Exec(ctx, `
 INSERT INTO external_ingest_batches (
     ingestion_id, org_id, source_system, source_instance,
-    recompute_status, recompute_scope, updated_at
-) VALUES ($1,$2,'github',$3,'pending',$4,now())`,
+    recompute_status, recompute_scope, updated_at, idempotency_key, payload_hash, schema_version
+) VALUES ($1,$2,'github',$3,'pending',$4,now(), gen_random_uuid()::text, 'sha256:test', 'external-ingest.v1')`,
 		uuid.New(), orgID, sourceInstance, encoded); err != nil {
 		t.Fatal(err)
 	}
@@ -436,8 +436,8 @@ func TestReplayCollapsesTheLegacyBacklogAndRetiresIt(t *testing.T) {
 		if _, err := pool.Exec(ctx, `
 INSERT INTO external_ingest_batches (
     ingestion_id, org_id, source_system, source_instance,
-    recompute_status, recompute_scope, updated_at
-) VALUES ($1,$2,'github','acme/api','pending',$3,now())`,
+    recompute_status, recompute_scope, updated_at, idempotency_key, payload_hash, schema_version
+) VALUES ($1,$2,'github','acme/api','pending',$3,now(), gen_random_uuid()::text, 'sha256:test', 'external-ingest.v1')`,
 			uuid.New(), orgID, scope); err != nil {
 			t.Fatal(err)
 		}

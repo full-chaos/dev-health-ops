@@ -68,6 +68,7 @@ func TestRefundWriteFirstAndIdempotent(t *testing.T) {
 	const invIdem, invOrphan, invUpd, invDown, invFail = "88888888-0000-4000-8000-00000000000a", "88888888-0000-4000-8000-00000000000b",
 		"88888888-0000-4000-8000-00000000000c", "88888888-0000-4000-8000-00000000000d", "88888888-0000-4000-8000-00000000000e"
 	const invLost500, invLost408 = "88888888-0000-4000-8000-00000000000f", "88888888-0000-4000-8000-000000000010"
+	const invPruned, invKeyless = "88888888-0000-4000-8000-000000000011", "88888888-0000-4000-8000-000000000012"
 	exec(`INSERT INTO invoices (id, org_id, stripe_invoice_id, stripe_customer_id, status, amount_due, amount_paid, currency,
 		payment_intent_id, metadata, created_at, updated_at) VALUES
 		('`+invIdem+`', $1, 'in_idem', 'cus_A', 'paid', 1000, 1000, 'usd', 'pi_idem', '{}', now(), now()),
@@ -76,7 +77,9 @@ func TestRefundWriteFirstAndIdempotent(t *testing.T) {
 		('`+invDown+`', $1, 'in_down', 'cus_A', 'paid', 300, 300, 'usd', NULL, '{}', now(), now()),
 		('`+invFail+`', $1, 'in_fail', 'cus_A', 'paid', 400, 400, 'usd', 'pi_fail', '{}', now(), now()),
 		('`+invLost500+`', $1, 'in_lost500', 'cus_A', 'paid', 1000, 1000, 'usd', 'pi_lost500', '{}', now(), now()),
-		('`+invLost408+`', $1, 'in_lost408', 'cus_A', 'paid', 1000, 1000, 'usd', 'pi_lost408', '{}', now(), now())`, seed.orgA)
+		('`+invLost408+`', $1, 'in_lost408', 'cus_A', 'paid', 1000, 1000, 'usd', 'pi_lost408', '{}', now(), now()),
+		('`+invPruned+`', $1, 'in_pruned', 'cus_A', 'paid', 1000, 1000, 'usd', 'pi_pruned', '{}', now(), now()),
+		('`+invKeyless+`', $1, 'in_keyless', 'cus_A', 'paid', 1000, 1000, 'usd', 'pi_keyless', '{}', now(), now())`, seed.orgA)
 	loaded, err := config.Load(config.Spec{Service: config.APIServiceName, LookupEnv: func(key string) (string, bool) {
 		value, ok := billingEnv[key]
 		return value, ok
@@ -124,13 +127,13 @@ func TestRefundWriteFirstAndIdempotent(t *testing.T) {
 				calls++
 			}
 		}
-		made := map[string]bool{}
-		for _, body := range fake.refundByKey {
+		made := 0
+		for _, body := range fake.createdRefunds {
 			if strings.Contains(body, invoice) {
-				made[body] = true
+				made++
 			}
 		}
-		return fmt.Sprintf("%d calls, %d refunds", calls, len(made))
+		return fmt.Sprintf("%d calls, %d refunds", calls, made)
 	}
 	status := func(code int, out map[string]any) string {
 		return fmt.Sprintf("%d %v %v", code, out["stripe_refund_id"], out["detail"])
@@ -146,6 +149,19 @@ func TestRefundWriteFirstAndIdempotent(t *testing.T) {
 	code, out := refund("retry: the key reused for another amount", "key-idem-1", `{"invoice_id":"`+invIdem+`","amount":200}`)
 	expect("retry: the key reused for another amount is refused", fmt.Sprint(code, " ", out["detail"]), "409 Idempotency-Key was used for a different refund request")
 	expect("retry: still one refund row", row(`SELECT count(*)::text FROM refunds WHERE invoice_id = '`+invIdem+`'`), "1")
+	// A row made before the requested amount was kept (no requested_amount
+	// in its metadata): a key reused with the amount left out cannot be told
+	// from the first request, which gave one, so it is refused; the same
+	// amount still answers the first refund.
+	exec(`UPDATE refunds SET metadata = (metadata::jsonb - 'requested_amount')::json WHERE invoice_id = '` + invIdem + `'`)
+	expect("legacy row: the requested amount is gone from its metadata", row(`SELECT (metadata::jsonb ? 'requested_amount')::text FROM refunds WHERE invoice_id = '`+invIdem+`'`), "false")
+	code, out = refund("legacy row: the key reused with the amount left out", "key-idem-1", `{"invoice_id":"`+invIdem+`"}`)
+	expect("legacy row: the key reused with the amount left out is refused", fmt.Sprint(code, " ", out["detail"]), "409 Idempotency-Key was used for a different refund request")
+	code, out = refund("legacy row: the key reused with the same amount", "key-idem-1", `{"invoice_id":"`+invIdem+`","amount":300}`)
+	expect("legacy row: the same amount answers the first refund", fmt.Sprintf("%d %t", code, out["id"] == first["id"] && first["id"] != nil), "200 true")
+	expect("legacy row: still one refund row", row(`SELECT count(*)::text FROM refunds WHERE invoice_id = '`+invIdem+`'`), "1")
+	code, out = refund("retry: the key reused with the amount left out", "key-idem-1", `{"invoice_id":"`+invIdem+`"}`)
+	expect("retry: the key reused with the amount left out is refused", fmt.Sprint(code, " ", out["detail"]), "409 Idempotency-Key was used for a different refund request")
 	code, out = refund("retry: the key reused with another reason", "key-idem-1", `{"invoice_id":"`+invIdem+`","amount":300,"reason":"fraudulent"}`)
 	expect("retry: the key reused with another reason is refused", fmt.Sprint(code, " ", out["detail"]), "409 Idempotency-Key was used for a different refund request")
 	code, out = refund("retry: the key reused with another description", "key-idem-1", `{"invoice_id":"`+invIdem+`","amount":300,"description":"x"}`)
@@ -188,18 +204,23 @@ func TestRefundWriteFirstAndIdempotent(t *testing.T) {
 	expect("down: 502", status(code, out)[:3], "502")
 	expect("down: the row stays pending, holding its amount", row(`SELECT status || ' ' || amount::text || ' ' || (stripe_refund_id IS NULL)::text
 		FROM refunds WHERE invoice_id = '`+invDown+`'`), "pending 300 true")
-	code, out = refund("down: a second refund is refused while one is pending", "", `{"invoice_id":"`+invDown+`"}`)
+	code, out = refund("down: a different refund is refused while one is pending", "", `{"invoice_id":"`+invDown+`","amount":100}`)
 	expect("down: no other refund while one is pending", fmt.Sprint(code, " ", out["detail"]), "409 "+pendingDetail)
+	code, _ = refund("down: the same request again resumes it, Stripe still unreachable", "", `{"invoice_id":"`+invDown+`"}`)
+	expect("down: still 502, still one pending row", fmt.Sprint(code, " ", row(`SELECT count(*)::text || ' ' || min(status) FROM refunds WHERE invoice_id = '`+invDown+`'`)),
+		"502 1 pending")
 
 	// 6. Stripe accepted, then the answer was lost (500 on every attempt):
 	// the row stays pending, and a retry without the key cannot make a
 	// second refund.
 	code, _ = refund("lost 500: accepted, answer lost", "", `{"invoice_id":"`+invLost500+`","amount":300}`)
 	expect("lost 500: 502", fmt.Sprint(code), "502")
+	code, out = refund("lost 500: a different request, no key", "", `{"invoice_id":"`+invLost500+`","amount":250}`)
+	expect("lost 500: a different request is refused", fmt.Sprint(code, " ", out["detail"]), "409 "+pendingDetail)
 	code, out = refund("lost 500: the same request again, no key", "", `{"invoice_id":"`+invLost500+`","amount":300}`)
-	expect("lost 500: the retry without a key is refused", fmt.Sprint(code, " ", out["detail"]), "409 "+pendingDetail)
-	expect("lost 500: one pending row, one Stripe refund", row(`SELECT count(*)::text || ' ' || min(status) FROM refunds WHERE invoice_id = '`+invLost500+`'`)+
-		" "+stripeCreates(invLost500)[strings.Index(stripeCreates(invLost500), ", ")+2:], "1 pending 1 refunds")
+	expect("lost 500: the same request records the refund Stripe made", fmt.Sprint(code, " ", out["status"]), "200 succeeded")
+	expect("lost 500: one row, one Stripe refund", row(`SELECT count(*)::text || ' ' || min(status) FROM refunds WHERE invoice_id = '`+invLost500+`'`)+
+		" "+stripeCreates(invLost500)[strings.Index(stripeCreates(invLost500), ", ")+2:], "1 succeeded 1 refunds")
 
 	// 7. A 408 is not a refusal Stripe stated: the row stays pending (never
 	// failed), and neither a same-key retry nor another key makes a second
@@ -207,12 +228,50 @@ func TestRefundWriteFirstAndIdempotent(t *testing.T) {
 	code, _ = refund("lost 408: accepted, then 408", "key-lost-408", `{"invoice_id":"`+invLost408+`","amount":300}`)
 	expect("lost 408: 502", fmt.Sprint(code), "502")
 	expect("lost 408: the row stays pending", row(`SELECT status || ' ' || (stripe_refund_id IS NULL)::text FROM refunds WHERE invoice_id = '`+invLost408+`'`), "pending true")
-	code, _ = refund("lost 408: the same key again", "key-lost-408", `{"invoice_id":"`+invLost408+`","amount":300}`)
-	expect("lost 408: the same-key retry does not answer a failed refund", fmt.Sprint(code), "502")
 	code, out = refund("lost 408: another key", "key-lost-408-b", `{"invoice_id":"`+invLost408+`","amount":300}`)
 	expect("lost 408: another key is refused while one is pending", fmt.Sprint(code, " ", out["detail"]), "409 "+pendingDetail)
-	expect("lost 408: one pending row, one Stripe refund", row(`SELECT count(*)::text || ' ' || min(status) FROM refunds WHERE invoice_id = '`+invLost408+`'`)+
-		" "+stripeCreates(invLost408)[strings.Index(stripeCreates(invLost408), ", ")+2:], "1 pending 1 refunds")
+	code, out = refund("lost 408: the same key again", "key-lost-408", `{"invoice_id":"`+invLost408+`","amount":300}`)
+	expect("lost 408: the same-key retry records the refund Stripe made", fmt.Sprint(code, " ", out["status"]), "200 succeeded")
+	expect("lost 408: one row, one Stripe refund", row(`SELECT count(*)::text || ' ' || min(status) FROM refunds WHERE invoice_id = '`+invLost408+`'`)+
+		" "+stripeCreates(invLost408)[strings.Index(stripeCreates(invLost408), ", ")+2:], "1 succeeded 1 refunds")
+
+	// 8. A pending refund resumed after Stripe pruned its idempotency key:
+	// the refund Stripe made is found by its row id and recorded, not made
+	// again.
+	exec(`CREATE FUNCTION venue_refuse_completion_pruned() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN IF NEW.invoice_id::text = '` + invPruned + `' AND OLD.stripe_refund_id IS NULL THEN RAISE EXCEPTION 'venue: completion refused'; END IF; RETURN NEW; END $$`)
+	exec(`CREATE TRIGGER venue_refuse_completion_pruned BEFORE UPDATE ON refunds FOR EACH ROW EXECUTE FUNCTION venue_refuse_completion_pruned()`)
+	code, _ = refund("pruned: Stripe refunded, the row could not be completed", "key-pruned", `{"invoice_id":"`+invPruned+`","amount":200}`)
+	exec(`DROP TRIGGER venue_refuse_completion_pruned ON refunds`)
+	expect("pruned: 500, the row pending", fmt.Sprint(code, " ", row(`SELECT status FROM refunds WHERE invoice_id = '`+invPruned+`'`)), "500 pending")
+	fake.mu.Lock()
+	for key, made := range fake.refundByKey {
+		if strings.Contains(made, invPruned) {
+			delete(fake.refundByKey, key) // Stripe pruned the key
+		}
+	}
+	fake.mu.Unlock()
+	code, out = refund("pruned: the retry after the key was pruned", "key-pruned", `{"invoice_id":"`+invPruned+`","amount":200}`)
+	expect("pruned: the retry records the refund Stripe made", fmt.Sprint(code, " ", out["status"], " ", strings.HasPrefix(fmt.Sprint(out["stripe_refund_id"]), "re_")), "200 succeeded true")
+	expect("pruned: one Stripe refund, one row", stripeCreates(invPruned)[strings.Index(stripeCreates(invPruned), ", ")+2:]+" "+
+		row(`SELECT count(*)::text FROM refunds WHERE invoice_id = '`+invPruned+`'`), "1 refunds 1")
+
+	// 9. A request without a key whose outcome is unknown: the same
+	// request, again without a key, resumes it; a different one is refused.
+	fake.mu.Lock()
+	fake.losing["pi_keyless"] = true
+	fake.mu.Unlock()
+	code, _ = refund("keyless: accepted, the answer lost", "", `{"invoice_id":"`+invKeyless+`","amount":250,"reason":"duplicate"}`)
+	fake.mu.Lock()
+	fake.losing["pi_keyless"] = false
+	fake.mu.Unlock()
+	expect("keyless: 502, the row pending", fmt.Sprint(code, " ", row(`SELECT status FROM refunds WHERE invoice_id = '`+invKeyless+`'`)), "502 pending")
+	code, out = refund("keyless: a different request meanwhile", "", `{"invoice_id":"`+invKeyless+`","amount":100}`)
+	expect("keyless: a different request is refused while one is pending", fmt.Sprint(code, " ", out["detail"]), "409 "+pendingDetail)
+	code, out = refund("keyless: the same request again", "", `{"invoice_id":"`+invKeyless+`","amount":250,"reason":"duplicate"}`)
+	expect("keyless: the same request resumes it", fmt.Sprint(code, " ", out["status"], " ", out["amount"]), "200 succeeded 250")
+	expect("keyless: one Stripe refund, one row", stripeCreates(invKeyless)[strings.Index(stripeCreates(invKeyless), ", ")+2:]+" "+
+		row(`SELECT count(*)::text FROM refunds WHERE invoice_id = '`+invKeyless+`'`), "1 refunds 1")
 
 	// Every Stripe create carried the local row's id.
 	expect("every completed row's Stripe metadata names its row", row(`SELECT count(*)::text FROM refunds

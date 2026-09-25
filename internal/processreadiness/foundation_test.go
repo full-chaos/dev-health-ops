@@ -4,13 +4,12 @@ import (
 	"context"
 	"slices"
 	"testing"
-	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 )
 
 func TestRegisterUnavailableFailsClosedWithStableNames(t *testing.T) {
-	registry := health.NewRegistry(100 * time.Millisecond)
+	registry := health.NewRegistry(readinessTestCheckTimeout)
 	if err := RegisterUnavailable(registry, "queue_postgres", "domain_postgres"); err != nil {
 		t.Fatalf("RegisterUnavailable() error = %v", err)
 	}

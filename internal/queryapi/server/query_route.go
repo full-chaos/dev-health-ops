@@ -2800,6 +2800,21 @@ func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, op
 			return
 		}
 
+		// Authenticate BEFORE the document lookup, so every carrier outcome
+		// (ambiguous, none, malformed, invalid, accepted) is decided before the
+		// unregistered-document 404 can answer (CHAOS-6757 r1: an ambiguous or
+		// unauthenticated request for an unregistered document got 404).
+		// Python parity: the edge's GraphQLRouter resolves get_context (401
+		// "Authentication required") before it picks an operation. The body
+		// refusals above stay where they were: the size 413 and the 4300-digit
+		// 500 are documented above as Python-edge behaviour that precedes this
+		// route; the malformed-JSON 400 keeps its old position and is NOT
+		// verified against Python's order.
+		claims, ok := authenticateInternalRequest(w, r, verifier)
+		if !ok {
+			return
+		}
+
 		operation, ok := operationForDocument(parsed.Query, operationByDigest)
 		if !ok {
 			// Unregistered document: plan §5's safe default ("unregistered
@@ -2826,19 +2841,7 @@ func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, op
 			return
 		}
 
-		token, ok := bearerToken(r.Header.Get("Authorization"))
-		if !ok {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-		verifyCtx := principal.WithRequestMeta(r.Context(), r.RemoteAddr, envelopeRequestID(r))
-		claims, err := verifier.Verify(verifyCtx, token)
-		if err != nil {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-
-		r = r.WithContext(authctx.WithClaims(r.Context(), authctx.Claims{OrgID: claims.OrgID, Role: claims.Role, IsSuperuser: claims.IsSuperuser, ImpersonationActive: claims.ImpersonationActive}))
+		r = r.WithContext(authctx.WithClaims(r.Context(), claims))
 		r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 
 		routeMux.Dispatch(operation, w, r)

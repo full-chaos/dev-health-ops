@@ -207,7 +207,7 @@ func newVerdictLoop(
 	if err != nil {
 		t.Fatal(err)
 	}
-	loop, err := NewLoop(engine, DefaultLoopConfig(health.NewRegistry(100*time.Millisecond)))
+	loop, err := NewLoop(engine, DefaultLoopConfig(health.NewRegistry(readinessTestCheckTimeout)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -240,7 +240,7 @@ func assertOneClaimAndOneDuplicate(t *testing.T, loops []*Loop) {
 func newReportLoop(t *testing.T, pool *pgxpool.Pool, schedule Schedule) *Loop {
 	t.Helper()
 	engine, _ := newReportEngine(t, pool, schedule)
-	loop, err := NewLoop(engine, DefaultLoopConfig(health.NewRegistry(100*time.Millisecond)))
+	loop, err := NewLoop(engine, DefaultLoopConfig(health.NewRegistry(readinessTestCheckTimeout)))
 	if err != nil {
 		t.Fatal(err)
 	}

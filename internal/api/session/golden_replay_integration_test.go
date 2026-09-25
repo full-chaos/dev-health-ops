@@ -25,40 +25,9 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	chclickhouse "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/sessionscenario"
 )
-
-// schemaDDL is the slice of the Alembic schema the session routes and the
-// scenario's seed and row queries touch, with its keys, uniques and
-// foreign keys. TestSessionVenueOracle runs the same scenario on the real
-// Alembic chain; this replay is the Python-free check of the Go routes
-// against the Python answers recorded there.
-var schemaDDL = []string{
-	`CREATE TABLE organizations (id uuid PRIMARY KEY, slug text NOT NULL UNIQUE, name text NOT NULL, description text,
-		settings json, tier text NOT NULL DEFAULT 'community', stripe_customer_id text, managed_by text NOT NULL DEFAULT 'self',
-		is_active boolean, created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL)`,
-	`CREATE TABLE users (id uuid PRIMARY KEY, email text NOT NULL UNIQUE, username text UNIQUE, password_hash text,
-		full_name text, avatar_url text, auth_provider text, auth_provider_id text, is_active boolean NOT NULL,
-		is_verified boolean NOT NULL, is_superuser boolean NOT NULL, token_version integer NOT NULL DEFAULT 0,
-		last_login_at timestamptz, created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL)`,
-	`CREATE TABLE memberships (id uuid PRIMARY KEY, user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-		org_id uuid NOT NULL REFERENCES organizations(id) ON DELETE CASCADE, role text, invited_by_id uuid,
-		joined_at timestamptz, created_at timestamptz NOT NULL, UNIQUE (user_id, org_id))`,
-	`CREATE TABLE refresh_tokens (id uuid PRIMARY KEY, user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-		org_id uuid REFERENCES organizations(id) ON DELETE CASCADE, token_hash text NOT NULL UNIQUE, family_id uuid NOT NULL,
-		expires_at timestamptz NOT NULL, revoked_at timestamptz, replaced_by_hash text, successor_jti text, ip_address text,
-		user_agent text, created_at timestamptz NOT NULL)`,
-	`CREATE TABLE login_attempts (id uuid PRIMARY KEY, email text NOT NULL UNIQUE, attempt_count integer NOT NULL,
-		first_attempt_at timestamptz, locked_until timestamptz, created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL)`,
-	`CREATE TABLE audit_logs (id uuid PRIMARY KEY, org_id uuid NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
-		user_id uuid REFERENCES users(id) ON DELETE SET NULL, action text NOT NULL, resource_type text NOT NULL,
-		resource_id text NOT NULL, description text, changes json, request_metadata json, status text NOT NULL,
-		error_message text, created_at timestamptz NOT NULL)`,
-	// impersonation_sessions: the request-scope middleware reads it for a
-	// superuser caller.
-	`CREATE TABLE impersonation_sessions (id uuid PRIMARY KEY, admin_user_id uuid NOT NULL, target_user_id uuid NOT NULL,
-		target_org_id uuid NOT NULL, target_role text, started_at timestamptz, expires_at timestamptz, ended_at timestamptz)`,
-}
 
 var metricsDDL = []string{
 	"CREATE TABLE repo_metrics_daily (org_id String, computed_at DateTime('UTC')) ENGINE = MergeTree ORDER BY org_id",
@@ -145,11 +114,11 @@ func startStack(t *testing.T, ctx context.Context) stack {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	for _, statement := range schemaDDL {
-		if _, err := pool.Exec(ctx, statement); err != nil {
-			t.Fatalf("schema: %v", err)
-		}
-	}
+	// The migrated Postgres schema, not a hand-written slice: the slice had
+	// impersonation_sessions.started_at, which the real table does not have
+	// (CHAOS-6769). TestSessionVenueOracle runs the same scenario on the real
+	// Alembic chain; this replay is the Python-free check of the Go routes.
+	pgschema.Apply(ctx, t, pool)
 	hash, err := bcrypt.GenerateFromPassword([]byte(sessionscenario.Password), bcrypt.MinCost)
 	if err != nil {
 		t.Fatal(err)

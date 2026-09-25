@@ -12,9 +12,11 @@
 package apimetrics
 
 import (
+	"errors"
 	"io"
 	"sync"
 
+	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/common/expfmt"
 	"go.opentelemetry.io/otel"
@@ -73,6 +75,29 @@ func (s *Source) WritePrometheus(w io.Writer) error {
 		if err := encoder.Encode(family); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// SourceName is the health registry name the process's OTel instruments are
+// registered under.
+const SourceName = "api_instruments"
+
+// Register installs the process's OTel MeterProvider (Install) and puts its
+// Prometheus text on registry's /metrics under SourceName. It is idempotent per
+// registry: the operator shell registers it for every binary at start, and a
+// service that registers it again (the api) is not an error.
+func Register(registry *health.Registry) error {
+	source, err := Install()
+	if err != nil {
+		return err
+	}
+	if err := registry.RegisterMetrics(SourceName, source); err != nil {
+		var registered *health.MetricsSourceRegisteredError
+		if errors.As(err, &registered) {
+			return nil
+		}
+		return err
 	}
 	return nil
 }

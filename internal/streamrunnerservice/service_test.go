@@ -93,7 +93,7 @@ func TestStreamRunnerSpecBuildsProductionProfiles(t *testing.T) {
 	}
 
 	t.Run("unconfigured storage stays live and fails readiness", func(t *testing.T) {
-		registry := health.NewRegistry(100 * time.Millisecond)
+		registry := health.NewRegistry(readinessTestCheckTimeout)
 		components, err := configureStreamRunnerDependenciesWithLogger(
 			context.Background(), config.Config{Profile: "ingest"}, registry, nil,
 		)
@@ -114,7 +114,7 @@ func TestStreamRunnerSpecBuildsProductionProfiles(t *testing.T) {
 
 	t.Run("ingest owns two isolated loops over process storage", func(t *testing.T) {
 		storage := &streamCommandStorage{}
-		registry := health.NewRegistry(100 * time.Millisecond)
+		registry := health.NewRegistry(readinessTestCheckTimeout)
 		components, err := configureStreamRunnerDependenciesWithSources(
 			context.Background(),
 			config.Config{Profile: "ingest", StreamConfiguredReplicas: 1},
@@ -145,7 +145,7 @@ func TestStreamRunnerSpecBuildsProductionProfiles(t *testing.T) {
 
 	t.Run("unavailable stream consumer stays live and fails readiness", func(t *testing.T) {
 		storage := &streamCommandStorage{handlerErr: errors.New("consumer unavailable")}
-		registry := health.NewRegistry(100 * time.Millisecond)
+		registry := health.NewRegistry(readinessTestCheckTimeout)
 		components, err := configureStreamRunnerDependenciesWithSources(
 			context.Background(),
 			config.Config{Profile: "ingest", StreamConfiguredReplicas: 1},
@@ -174,7 +174,7 @@ func TestStreamRunnerSpecBuildsProductionProfiles(t *testing.T) {
 
 	t.Run("pagerduty owns one webhook loop over process storage", func(t *testing.T) {
 		storage := &streamCommandStorage{}
-		registry := health.NewRegistry(100 * time.Millisecond)
+		registry := health.NewRegistry(readinessTestCheckTimeout)
 		components, err := configureStreamRunnerDependenciesWithSources(
 			context.Background(),
 			config.Config{Profile: "pagerduty", StreamConfiguredReplicas: 2},
@@ -204,7 +204,7 @@ func TestStreamRunnerSpecBuildsProductionProfiles(t *testing.T) {
 		// A consumer that cannot be constructed over healthy storage must
 		// never kill the process.
 		storage := &streamCommandStorage{handlerErr: errors.New("bridge unavailable")}
-		registry := health.NewRegistry(100 * time.Millisecond)
+		registry := health.NewRegistry(readinessTestCheckTimeout)
 		components, err := configureStreamRunnerDependenciesWithSources(
 			context.Background(),
 			config.Config{Profile: "pagerduty", StreamConfiguredReplicas: 1},

@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/platform/busyprobe"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
@@ -21,6 +22,11 @@ import (
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// busyProgressWindow is how long the domain pool may go without a completed
+// acquire before a fully acquired pool stops reading as busy: the monitor's own
+// staleness window (selfprobe.DefaultStalenessMultiple x DefaultInterval).
+const busyProgressWindow = selfprobe.DefaultStalenessMultiple * selfprobe.DefaultInterval
 
 type schedulerDatabase interface {
 	DomainReady(context.Context) error
@@ -103,12 +109,31 @@ func (database *postgresSchedulerDatabase) DomainReady(ctx context.Context) erro
 	if database == nil || database.pools == nil || database.pools.Domain == nil {
 		return errSchedulerActivationUnavailable
 	}
+	// CHAOS-6771: on the readiness pool, never queued behind the work pool.
 	return postgres.CheckDomainAuthorization(
 		ctx,
-		database.pools.Domain,
+		database.pools.ReadinessPool(),
 		database.domainRole,
 		database.riverSchema,
 	)
+}
+
+// DomainPostureCheck is DomainReady as a bounded, single-flight, cached check
+// (postgres.CachedPostureCheck, CHAOS-6765) on the readiness pool.
+func (database *postgresSchedulerDatabase) DomainPostureCheck(logger *slog.Logger) health.CheckFunc {
+	if database == nil || database.pools == nil || database.pools.Domain == nil {
+		return nil
+	}
+	return postgres.NewCachedPostureCheck(
+		database.pools.ReadinessPool(), database.domainRole, database.riverSchema, postgres.DomainPosture(),
+		postgres.PostureCheckOptions{Logger: logger},
+	).Check
+}
+
+// domainPostureCheckProvider is the optional capability a schedulerDatabase has
+// when it can hand out the cached domain posture check (test fakes do not).
+type domainPostureCheckProvider interface {
+	DomainPostureCheck(logger *slog.Logger) health.CheckFunc
 }
 
 func (database *postgresSchedulerDatabase) QueueReady(ctx context.Context) error {
@@ -160,7 +185,7 @@ func (database *postgresSchedulerDatabase) PostureManifestLockstep(
 	if database == nil || database.pools == nil || database.pools.Domain == nil {
 		return postgres.PostureManifestLockstepResult{}, errSchedulerActivationUnavailable
 	}
-	return postgres.CheckPostureManifestLockstep(ctx, database.pools.Domain, binaryDigest)
+	return postgres.CheckPostureManifestLockstep(ctx, database.pools.ReadinessPool(), binaryDigest)
 }
 
 func (database *postgresSchedulerDatabase) DomainPool() *pgxpool.Pool {
@@ -576,9 +601,15 @@ func buildSchedulerLoopWithSources(
 			database.Close()
 		}
 	}()
+	domainCheck := database.DomainReady
+	if provider, ok := database.(domainPostureCheckProvider); ok {
+		if cached := provider.DomainPostureCheck(logger); cached != nil {
+			domainCheck = cached
+		}
+	}
 	if err := registry.RegisterRequired(
 		"domain_postgres",
-		wrapSchedulerReadinessCheckWithLogging(logger, "domain_postgres", database.DomainReady),
+		wrapSchedulerReadinessCheckWithLogging(logger, "domain_postgres", domainCheck),
 	); err != nil {
 		return nil, err
 	}
@@ -647,7 +678,21 @@ func buildSchedulerLoopWithSources(
 	// this proves the process's transaction path is still alive at all,
 	// which is the precondition executed_proof_evidence's own refresh
 	// depends on.
-	livenessMonitor := selfprobe.New("scheduler_execution_liveness", selfprobe.NewPool(domainPool), logger)
+	// CHAOS-6771: a domain pool fully acquired by progressing work is BUSY, not
+	// BROKEN (internal/platform/busyprobe). The scheduler has no queue-claim
+	// signal, so its progress evidence is the pool's own: acquires keep
+	// completing; a pool wedged by stuck work stops advancing and goes red.
+	busy := busyprobe.NewCounter("scheduler_readiness_busy_total", []string{"execution_liveness"}, logger)
+	if err := registry.RegisterMetrics("scheduler_readiness_busy", busy); err != nil {
+		return nil, err
+	}
+	livenessMonitor := selfprobe.New("scheduler_execution_liveness", busyprobe.Opener{
+		Inner:     selfprobe.NewPool(domainPool),
+		Check:     "execution_liveness",
+		Saturated: func() bool { return busyprobe.Saturated(domainPool) },
+		Progress:  busyprobe.NewPoolProgress(domainPool, busyProgressWindow).Ready,
+		Counter:   busy,
+	}, logger)
 	if livenessMonitor != nil {
 		livenessMonitor.Probe(ctx)
 		if err := registry.RegisterRequired("execution_liveness", livenessMonitor.Ready); err != nil {

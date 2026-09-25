@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
+	"github.com/full-chaos/dev-health-ops/internal/platform/busyprobe"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/selfprobe"
@@ -134,10 +135,10 @@ func TestABusyPassReachesTheRegistryInsideTheCheckBudget(t *testing.T) {
 		}
 	}
 	// A saturated pool frees a connection in milliseconds when it is healthy:
-	// the probe waits busyAcquireWait, not the whole 10 s budget, so the kubelet
+	// the probe waits busyprobe.AcquireWait, not the whole 10 s budget, so the kubelet
 	// (10 s probe timeout) is not left racing the answer.
-	if elapsed > busyAcquireWait+time.Second {
-		t.Fatalf("the busy pass took %s, want about %s", elapsed, busyAcquireWait)
+	if elapsed > busyprobe.AcquireWait+time.Second {
+		t.Fatalf("the busy pass took %s, want about %s", elapsed, busyprobe.AcquireWait)
 	}
 }
 

@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/busyprobe"
 )
 
 // CHAOS-6771: a saturated work pool is busy, not broken -- but only in exactly
@@ -97,15 +99,15 @@ func TestBusyLogIsRateLimitedButTheCounterCountsEveryProbe(t *testing.T) {
 	var logs bytes.Buffer
 	busy := newReadinessBusy(slog.New(slog.NewJSONHandler(&logs, nil)))
 	clock := time.Unix(1_700_000_000, 0)
-	busy.now = func() time.Time { return clock }
+	busy.SetClock(func() time.Time { return clock })
 	for i := 0; i < 5; i++ {
-		busy.record(context.Background(), "idempotency_backend")
+		busy.Record(context.Background(), "idempotency_backend")
 	}
 	if got := strings.Count(logs.String(), "passed as busy"); got != 1 {
 		t.Fatalf("%d log lines within the interval, want 1", got)
 	}
-	clock = clock.Add(busyLogInterval + time.Second)
-	busy.record(context.Background(), "idempotency_backend")
+	clock = clock.Add(busyprobe.LogInterval + time.Second)
+	busy.Record(context.Background(), "idempotency_backend")
 	if got := strings.Count(logs.String(), "passed as busy"); got != 2 {
 		t.Fatalf("%d log lines after the interval, want 2", got)
 	}

@@ -20,6 +20,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily/repouser"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily/reviewedges"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/finite"
+	"github.com/full-chaos/dev-health-ops/internal/platform/busyprobe"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
@@ -475,7 +476,7 @@ type workerDependencies struct {
 	// progressGuard is the claim-liveness check (CHAOS-6771's "work is
 	// progressing" evidence for a busy pool); nil until the checks are built.
 	progressGuard health.CheckFunc
-	busy          *readinessBusy
+	busy          *busyprobe.Counter
 }
 
 // domainPostureCheckProvider is the optional capability a workerDatabase has
@@ -491,20 +492,20 @@ func (dependencies *workerDependencies) busyTolerantDomainTxOpener(check string)
 	if opener == nil {
 		return nil
 	}
-	return busyTolerantOpener{
-		inner: opener,
-		check: check,
-		saturated: func() bool {
+	return busyprobe.Opener{
+		Inner: opener,
+		Check: check,
+		Saturated: func() bool {
 			domain, _ := dependencies.database.PoolSaturation()
 			return domain >= 1
 		},
-		progress: func(ctx context.Context) error {
+		Progress: func(ctx context.Context) error {
 			if dependencies.progressGuard == nil {
 				return errWorkerDependencyUnavailable
 			}
 			return dependencies.progressGuard(ctx)
 		},
-		busy: dependencies.busy,
+		Counter: dependencies.busy,
 	}
 }
 

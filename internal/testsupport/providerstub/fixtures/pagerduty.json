@@ -1,0 +1,11 @@
+[
+ {"provider": "pagerduty", "method": "POST", "path": "/oauth/token", "status": 200,
+  "body": {"access_token": "zz-venue-not-a-token", "refresh_token": "zz-venue-not-a-refresh", "token_type": "bearer", "expires_in": 3600,
+           "scope": "incidents.read services.read escalation_policies.read schedules.read oncalls.read users.read teams.read"}},
+ {"provider": "pagerduty", "method": "POST", "path": "/oauth/revoke", "status": 200, "body": {}},
+ {"provider": "pagerduty", "method": "GET", "path": "/services", "status": 200,
+  "body": {"services": [{"id": "PZZVENUE", "name": "zz-venue-service", "summary": "zz-venue-service", "description": "stub service", "status": "active",
+                         "html_url": "https://zz-venue.pagerduty.com/service-directory/PZZVENUE",
+                         "account": {"id": "PZZACCT", "subdomain": "zz-venue", "name": "ZZ Venue"}}],
+           "limit": 1, "offset": 0, "more": false}}
+]

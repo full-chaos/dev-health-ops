@@ -329,32 +329,32 @@ func TestAcceptBatchAgainstFaultsAndEdgeCases(t *testing.T) {
 		orgID := uuid.New().String()
 		const token = "fcpush_operational_ownership_token"
 		sourceID := uuid.New()
-		if _, err := pool.Exec(ctx, `INSERT INTO organizations (id, tier) VALUES ($1, 'team')`, orgID); err != nil {
+		if _, err := pool.Exec(ctx, `INSERT INTO organizations (id, slug, name, tier, is_active, created_at, updated_at) VALUES ($1::uuid, 'org-' || $1::text, 'org', 'team', true, now(), now())`, orgID); err != nil {
 			t.Fatal(err)
 		}
 		// The explicit customer_push registration for an OPERATIONAL github
 		// source at the default host (github.com).
 		if _, err := pool.Exec(ctx, `
-			INSERT INTO external_ingest_sources (id, org_id, system, instance, entity_family, mode, enabled)
-			VALUES ($1, $2, 'github', 'github.com', 'operational', 'customer_push', true)
+			INSERT INTO external_ingest_sources (id, org_id, system, instance, entity_family, mode, enabled, created_at, updated_at)
+			VALUES ($1, $2, 'github', 'github.com', 'operational', 'customer_push', true, now(), now())
 		`, sourceID, orgID); err != nil {
 			t.Fatal(err)
 		}
 		scopes, _ := json.Marshal([]string{"schema:read", "ingest:write", "ingest:status"})
 		tokenID := uuid.New()
 		if _, err := pool.Exec(ctx, `
-			INSERT INTO external_ingest_tokens (id, org_id, source_id, token_hash, scopes)
-			VALUES ($1, $2, $3, $4, $5)
+			INSERT INTO external_ingest_tokens (id, org_id, source_id, name, token_hash, token_prefix, scopes, created_at)
+			VALUES ($1, $2, $3, 'test', $4, 'fcpush_test', $5, now())
 		`, tokenID, orgID, sourceID, mustHash(token), scopes); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := pool.Exec(ctx, `
-			INSERT INTO feature_flags (id, key, is_enabled, min_tier) VALUES ($1, 'customer_push_ingest', true, 'team') ON CONFLICT (key) DO NOTHING
+			INSERT INTO feature_flags (id, key, name, is_enabled, min_tier, created_at, updated_at) VALUES ($1, 'customer_push_ingest', 'customer_push_ingest', true, 'team', now(), now()) ON CONFLICT (key) DO NOTHING
 		`, uuid.New()); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := pool.Exec(ctx, `
-			INSERT INTO feature_flags (id, key, is_enabled, min_tier) VALUES ($1, 'canonical_incident_ingestion', true, 'community') ON CONFLICT (key) DO NOTHING
+			INSERT INTO feature_flags (id, key, name, is_enabled, min_tier, created_at, updated_at) VALUES ($1, 'canonical_incident_ingestion', 'canonical_incident_ingestion', true, 'community', now(), now()) ON CONFLICT (key) DO NOTHING
 		`, uuid.New()); err != nil {
 			t.Fatal(err)
 		}
@@ -363,13 +363,13 @@ func TestAcceptBatchAgainstFaultsAndEdgeCases(t *testing.T) {
 		// operational source's instance above.
 		integrationID := uuid.New()
 		if _, err := pool.Exec(ctx, `
-			INSERT INTO integrations (id, org_id, provider, is_active, config) VALUES ($1, $2, 'github', true, '{}')
+			INSERT INTO integrations (id, org_id, provider, name, is_active, config, created_at, updated_at) VALUES ($1, $2, 'github', 'ownership-test', true, '{}', now(), now())
 		`, integrationID, orgID); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := pool.Exec(ctx, `
-			INSERT INTO integration_sources (id, org_id, integration_id, provider, external_id, name, full_name, is_enabled)
-			VALUES ($1, $2, $3, 'github', 'acme/repo', 'repo', 'acme/repo', true)
+			INSERT INTO integration_sources (id, org_id, integration_id, provider, source_type, external_id, name, full_name, metadata, is_enabled, discovered_at, last_seen_at)
+			VALUES ($1, $2, $3, 'github', 'repository', 'acme/repo', 'repo', 'acme/repo', '{}', true, now(), now())
 		`, uuid.New(), orgID, integrationID); err != nil {
 			t.Fatal(err)
 		}

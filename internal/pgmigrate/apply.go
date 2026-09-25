@@ -69,15 +69,37 @@ func Upgrade(ctx context.Context, conn *pgx.Conn, baseline Baseline, chain []Cha
 	if err != nil {
 		return result, err
 	}
-	previous := plan.ApplicationHead
-	for _, file := range plan.Pending {
+	// One chain revision per transaction, each planned again UNDER the lock: a
+	// concurrent run may have applied revisions since the plan above, and its
+	// non-idempotent SQL must not run twice. What this run applied is what it
+	// reports.
+	for {
+		var applied *ChainFile
 		if err := inTransaction(ctx, conn, func(tx pgx.Tx) error {
-			return applyChainFile(ctx, tx, file, previous)
+			observation, err := observe(ctx, tx)
+			if err != nil {
+				return err
+			}
+			current := Decide(observation, baseline, chain)
+			if current.State != StateAtHead {
+				return fmt.Errorf("the database changed while the chain was applied: it is no longer at a known revision (state %d, alembic_version %v)", current.State, observation.Versions)
+			}
+			if len(current.Pending) == 0 {
+				return nil
+			}
+			file := current.Pending[0]
+			if err := applyChainFile(ctx, tx, file, current.ApplicationHead); err != nil {
+				return err
+			}
+			applied = &file
+			return nil
 		}); err != nil {
 			return result, err
 		}
-		result.Applied = append(result.Applied, file.Revision)
-		previous = file.Revision
+		if applied == nil {
+			break
+		}
+		result.Applied = append(result.Applied, applied.Revision)
 	}
 	if result.Action == "up_to_date" && len(result.Applied) > 0 {
 		result.Action = "chain_applied"

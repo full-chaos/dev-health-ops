@@ -58,6 +58,11 @@ func Command() cli.Command {
 		Summary: "seed a throwaway database for CI and acceptance runs",
 		Kind:    cli.Group,
 		Children: []cli.Command{{
+			Name:    "load-synthetic",
+			Summary: "load the frozen synthetic rows of one target into ClickHouse",
+			Kind:    cli.Verb,
+			Run:     runLoadSynthetic,
+		}, {
 			Name:    "finalize-synthetic-sync",
 			Summary: "complete a synthetic sync run for one target and trigger its post-sync fanout",
 			Kind:    cli.Verb,

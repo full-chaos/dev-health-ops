@@ -606,8 +606,6 @@ func (accumulator *PipelineAccumulator) FinishRepoDay() *PipelineMetric {
 		return order[i].serviceValue < order[j].serviceValue
 	})
 	merged := pipelineBucket{}
-	first := order[0]
-	sameTeam, sameService := true, true
 	for _, k := range order {
 		b := accumulator.byGroup[k]
 		merged.pipelines += b.pipelines
@@ -620,23 +618,27 @@ func (accumulator *PipelineAccumulator) FinishRepoDay() *PipelineMetric {
 		if merged.orgID == "" {
 			merged.orgID = b.orgID
 		}
+	}
+	metric := finishPipelineBucket(accumulator.repoID, mergedAttribution(order), &merged)
+	return &metric
+}
+
+// mergedAttribution is the ONE place that decides the team_id/service_id of a
+// merged repo/day row (CHAOS-6774 working default, lead D2547): a value when
+// every group agrees on it, unset (NULL) when they disagree. Change the
+// semantics here and nowhere else. groups is non-empty.
+func mergedAttribution(groups []pipelineKey) pipelineKey {
+	first := groups[0]
+	key := pipelineKey{teamID: first.teamID, serviceSet: first.serviceSet, serviceValue: first.serviceValue}
+	for _, k := range groups[1:] {
 		if k.teamID != first.teamID {
-			sameTeam = false
+			key.teamID = ""
 		}
 		if k.serviceSet != first.serviceSet || k.serviceValue != first.serviceValue {
-			sameService = false
+			key.serviceSet, key.serviceValue = false, ""
 		}
 	}
-	key := pipelineKey{}
-	if sameTeam {
-		key.teamID = first.teamID
-	}
-	if sameService {
-		key.serviceSet = first.serviceSet
-		key.serviceValue = first.serviceValue
-	}
-	metric := finishPipelineBucket(accumulator.repoID, key, &merged)
-	return &metric
+	return key
 }
 
 // ComputeTestMetrics ports compute_test_metrics_daily

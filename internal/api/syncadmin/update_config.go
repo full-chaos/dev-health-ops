@@ -639,14 +639,21 @@ WHERE integration_id = $1 AND planner_managed IS true AND parent_id IS NULL`, in
 		text := credentialID.String()
 		credential = &text
 	}
-	report, err := h.discovery.Discover(ctx, schedsync.SourceDiscoveryArgs{
+	h.runIntegrationDiscovery(ctx, schedsync.SourceDiscoveryArgs{
 		OrgID: org, IntegrationID: integrationID.String(), CredentialID: credential,
 		Provider: provider, SyncOptions: syncOptions, ConfigID: configID, PlannerManaged: plannerFound,
-	})
+	}, event, attrs...)
+}
+
+// runIntegrationDiscovery runs one discovery and logs its result: the
+// Error event <event>_failed on failure, else the Info event <event> with
+// the outcome and counts. Exactly one event per run.
+func (h *handlers) runIntegrationDiscovery(ctx context.Context, args schedsync.SourceDiscoveryArgs, event string, attrs ...any) {
+	report, err := h.discovery.Discover(ctx, args)
 	if err != nil {
-		fail(err)
+		h.logger.ErrorContext(ctx, event+"_failed", append([]any{"org_id", args.OrgID, "error", err}, attrs...)...)
 		return
 	}
-	h.logger.InfoContext(ctx, event, append([]any{"org_id", org, "integration_id", integrationID.String(),
+	h.logger.InfoContext(ctx, event, append([]any{"org_id", args.OrgID, "integration_id", args.IntegrationID,
 		"outcome", report.Outcome, "created", report.Created, "existing", report.Existing}, attrs...)...)
 }

@@ -142,16 +142,20 @@ func runContext(deadline time.Duration) (context.Context, context.CancelFunc) {
 const postgresURIEnvVar = "POSTGRES_URI"
 
 type flags struct {
-	queryAPIURL    string
-	dhoAPIURL      string
-	pushTokenFile  string
-	pushCredential *goapiproof.Credential
-	serviceName    string
-	service        goapiproof.RESTService
-	pythonAPIURL   string
-	buildInfoURL   string
-	candidateBuild string
-	queryAPISrc    string
+	queryAPIURL       string
+	dhoAPIURL         string
+	pushTokenFile     string
+	orgAdminTokenFile string
+	platformTokenFile string
+	// tokenCredentials holds the file-fed credential of each token kind the
+	// run was given a file for (built in run, never from argv).
+	tokenCredentials map[goapiproof.RESTCredentialKind]*goapiproof.Credential
+	serviceName      string
+	service          goapiproof.RESTService
+	pythonAPIURL     string
+	buildInfoURL     string
+	candidateBuild   string
+	queryAPISrc      string
 
 	allowProverBuildSkew bool
 
@@ -225,6 +229,8 @@ func registerFlags() (*flag.FlagSet, *flags) {
 	fs.StringVar(&f.queryAPIURL, "query-api-url", "http://localhost:8090", "query-api's OWN in-cluster address -- the candidate leg. Never an edge or ingress URL: every request this tool sends goes DIRECTLY to this service")
 	fs.StringVar(&f.dhoAPIURL, "dho-api-url", "", "the dho api service's OWN in-cluster address -- the candidate leg when -service=dho-api (required then, ignored otherwise). Never an edge or ingress URL")
 	fs.StringVar(&f.pushTokenFile, "push-token-file", "", "path to a file holding the external-ingest push token (fcpush_...), sent on BOTH legs of every corpus entry that authenticates with it (the external-ingest routes of -service=dho-api). Required when the run plans such entries. The token is read from the file on every use and is never taken from argv, printed or written to a receipt")
+	fs.StringVar(&f.orgAdminTokenFile, "org-admin-token-file", "", "path to a file holding the access token (a JWT) of the proof principal that holds an Admin membership in the proof org, sent on BOTH legs of every corpus entry that authenticates as an org admin (read-only GETs of the org-admin admin routes of -service=dho-api). Required when the run plans such entries. Read from the file on every use; never taken from argv, printed or written to a receipt")
+	fs.StringVar(&f.platformTokenFile, "platform-token-file", "", "path to a file holding the access token (a JWT) of the dedicated platform-superadmin proof principal, sent on BOTH legs of every corpus entry that authenticates as a platform superadmin (read-only GETs of the superuser admin routes of -service=dho-api). Required when the run plans such entries. Read from the file on every use; never taken from argv, printed or written to a receipt")
 	fs.StringVar(&f.serviceName, "service", string(goapiproof.RESTServiceQueryAPI), "which Go service this run measures: query-api (default) or dho-api. One run measures one service; the build every receipt names is read from that service's /buildinfo, and only that service's corpus entries are sent")
 	fs.StringVar(&f.pythonAPIURL, "python-api-url", "", "the Python api service's OWN in-cluster address -- the baseline leg (required). Never an edge or ingress URL, for the same reason as -query-api-url")
 	fs.BoolVar(&f.pythonForwarderOff, "python-forwarder-off", false, "attest that the Python app's forwarding switch for every endpoint it can forward to query-api (RESTEndpointSpec.PythonForwarder: POST /api/v1/investment/explain) is OFF for this whole run, so a 200 baseline there is Python's own answer and is compared. The Python app relays query-api's answer without any header that marks it, so nothing on the response can show which plane computed it: without this flag such a 200 baseline is refused by name, and with it every receipt for such an endpoint records the attestation")
@@ -556,6 +562,7 @@ func doREST(ctx context.Context, client *goapiproof.LegClient, baseURL, method, 
 			return goapiproof.RESTLeg{}, err
 		}
 	}
+	sentSecrets := credentialValuesOn(req.Header)
 	if baseline {
 		// CHAOS-6580: the Python api's unhandled-error path answers a real
 		// response (its own status and body -- doREST never treats that as a
@@ -584,6 +591,12 @@ func doREST(ctx context.Context, client *goapiproof.LegClient, baseURL, method, 
 		// plane cannot answer may stand on it.
 		return goapiproof.RESTLeg{}, answerStartedError{goapiproof.NewTransportFailure(target, err)}
 	}
+	// A body that carries the credential this request sent would be stored
+	// verbatim as response evidence (artifacts, linked from the receipt). The
+	// leg is refused instead, naming the target and never the value.
+	if echoed := echoesCredential(raw, sentSecrets); echoed {
+		return goapiproof.RESTLeg{}, fmt.Errorf("%s answered with a body that contains the credential this request sent; refused so the credential is never stored as response evidence", target)
+	}
 	return goapiproof.RESTLeg{
 		StatusCode:    resp.StatusCode,
 		Body:          raw,
@@ -592,6 +605,40 @@ func doREST(ctx context.Context, client *goapiproof.LegClient, baseURL, method, 
 		Impersonating: goapiproof.ServedUnderImpersonation(resp.Header),
 		WireAttempts:  legResponse.WireAttempts,
 	}, nil
+}
+
+// minEchoSecretLen is the shortest credential value the echo guard looks for:
+// anything shorter would match ordinary body text.
+const minEchoSecretLen = 8
+
+// credentialValuesOn returns the credential values a request carries in its
+// headers (the Authorization scheme prefix stripped), for the echo guard. It
+// is read AFTER Credential.Apply, so it holds exactly what was sent, whatever
+// the credential kind.
+func credentialValuesOn(header http.Header) [][]byte {
+	var secrets [][]byte
+	for name, values := range header {
+		if http.CanonicalHeaderKey(name) == "Content-Type" {
+			continue
+		}
+		for _, value := range values {
+			value = strings.TrimSpace(strings.TrimPrefix(value, "Bearer "))
+			if len(value) >= minEchoSecretLen {
+				secrets = append(secrets, []byte(value))
+			}
+		}
+	}
+	return secrets
+}
+
+// echoesCredential reports whether body contains any of the secrets.
+func echoesCredential(body []byte, secrets [][]byte) bool {
+	for _, secret := range secrets {
+		if bytes.Contains(body, secret) {
+			return true
+		}
+	}
+	return false
 }
 
 // answerStartedError marks a leg failure that happened after the plane sent its
@@ -1190,18 +1237,10 @@ func run(f flags) (err error) {
 	if err := goapiproof.ValidateRESTCorpus(); err != nil {
 		return err
 	}
-	// A run that plans push-token entries without a token file would refuse
-	// each of them one request at a time; name the missing flag once, first.
-	if goapiproof.PlansPushTokenEntries(f.service) && f.pushTokenFile == "" {
-		return fmt.Errorf("the -service=%s corpus has external-ingest entries that authenticate with the push token: pass -push-token-file", f.service)
-	}
-	// ...and a file that is missing, unreadable or not a push token refuses
-	// here too, before any setup request is sent (the credential itself only
-	// reads the file when an ingest request uses it).
-	if goapiproof.PlansPushTokenEntries(f.service) {
-		if err := goapiproof.CheckPushTokenFile(f.pushTokenFile); err != nil {
-			return err
-		}
+	if err := requireTokenFiles(f, func(kind goapiproof.RESTCredentialKind) bool {
+		return goapiproof.PlansCredentialKind(f.service, kind)
+	}); err != nil {
+		return err
 	}
 	// A run that plans nothing measured nothing; it must not read as a pass.
 	if len(goapiproof.RESTRunOrderFor(f.service)) == 0 {
@@ -1230,8 +1269,11 @@ func run(f flags) (err error) {
 	if err != nil {
 		return err
 	}
-	if f.pushTokenFile != "" {
-		f.pushCredential = goapiproof.PushTokenFileCredential(f.pushTokenFile)
+	f.tokenCredentials = map[goapiproof.RESTCredentialKind]*goapiproof.Credential{}
+	for _, kind := range goapiproof.TokenFileKinds() {
+		if path := f.tokenFileFor(kind.Kind); path != "" {
+			f.tokenCredentials[kind.Kind] = goapiproof.TokenFileCredential(kind, path)
+		}
 	}
 
 	// No client-level Timeout: Go's http.Client re-derives its own
@@ -1646,16 +1688,56 @@ func candidateHasNoData(refusal string) bool {
 	return false
 }
 
-// credentialsFor picks the credentials one corpus entry's legs send: the
-// run's own pair, or -- for an entry that authenticates with the external-
-// ingest push token -- that one token on BOTH legs (the ingest API owns its
-// own bearer authentication on either plane and accepts nothing else, and
-// the run's bearers are never sent to it).
-func credentialsFor(spec goapiproof.RESTEndpointSpec, push, runCandidate, runBaseline *goapiproof.Credential) (candidate, baseline *goapiproof.Credential) {
-	if spec.Credential == goapiproof.RESTCredentialPushToken {
-		return push, push
+// requireTokenFiles refuses, before any request is sent, a run that plans
+// entries of a file-fed credential kind (plans reports it) without that
+// kind's token file, or with a file that is missing, unreadable or not a
+// token of that kind. Without this each planned entry would refuse one
+// request at a time, after the setup requests had already gone out. The
+// missing flag is named once, first; no file content is ever in the error.
+func requireTokenFiles(f flags, plans func(goapiproof.RESTCredentialKind) bool) error {
+	for _, kind := range goapiproof.TokenFileKinds() {
+		if !plans(kind.Kind) {
+			continue
+		}
+		path := f.tokenFileFor(kind.Kind)
+		if path == "" {
+			return fmt.Errorf("the -service=%s corpus has entries that authenticate with the %s: pass %s", f.service, kind.What, kind.Flag)
+		}
+		if err := goapiproof.CheckTokenFile(kind, path); err != nil {
+			return err
+		}
 	}
-	return runCandidate, runBaseline
+	return nil
+}
+
+// tokenFileFor names the file the run was given for a file-fed credential
+// kind ("" when none).
+func (f flags) tokenFileFor(kind goapiproof.RESTCredentialKind) string {
+	switch kind {
+	case goapiproof.RESTCredentialPushToken:
+		return f.pushTokenFile
+	case goapiproof.RESTCredentialOrgAdmin:
+		return f.orgAdminTokenFile
+	case goapiproof.RESTCredentialPlatformSuperadmin:
+		return f.platformTokenFile
+	}
+	return ""
+}
+
+// credentialsFor picks the credentials one corpus entry's legs send: the
+// run's own pair, or -- for an entry of a file-fed kind (the external-ingest
+// push token, the org-admin access token, the platform-superadmin access
+// token) -- that kind's one token on BOTH legs. The route authenticates that
+// token on either plane and the run's bearers are never sent to it. An entry
+// whose kind has no credential in tokens gets nil legs, which the caller
+// refuses by name (startup already refuses a run missing a planned kind's
+// file, so nil is unreachable from run).
+func credentialsFor(spec goapiproof.RESTEndpointSpec, tokens map[goapiproof.RESTCredentialKind]*goapiproof.Credential, runCandidate, runBaseline *goapiproof.Credential) (candidate, baseline *goapiproof.Credential) {
+	if spec.Credential == goapiproof.RESTCredentialRun {
+		return runCandidate, runBaseline
+	}
+	token := tokens[spec.Credential]
+	return token, token
 }
 
 func runMeasurement(ctx context.Context, client *goapiproof.LegClient, f flags, runCandidateCredential, runBaselineCredential *goapiproof.Credential, builds goapiproof.ProverBuild, pgPool receiptWriter, artifacts *goapiproof.ArtifactStore) error {
@@ -1735,7 +1817,7 @@ requestLoop:
 
 		var attempt resolvedAttempt
 		var err error
-		candidateCredential, baselineCredential := credentialsFor(spec, f.pushCredential, runCandidateCredential, runBaselineCredential)
+		candidateCredential, baselineCredential := credentialsFor(spec, f.tokenCredentials, runCandidateCredential, runBaselineCredential)
 		if iterating, ok := findIteratingBinding(request.IDBindings); ok {
 			attempt, err = resolveIteratingRequest(ctx, client, f, operation, spec, request, iterating, produced, producedCandidates, candidateCredential, baselineCredential, namedBuild, auth, observedAt, pgPool, artifacts)
 		} else {

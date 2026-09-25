@@ -32,6 +32,12 @@ const (
 	RESTCredentialRun RESTCredentialKind = ""
 	// RESTCredentialPushToken is the external-ingest push token.
 	RESTCredentialPushToken RESTCredentialKind = "push_token"
+	// RESTCredentialOrgAdmin is the access token of the proof principal that
+	// holds an Admin membership in the proof org (the org-admin admin routes).
+	RESTCredentialOrgAdmin RESTCredentialKind = "org_admin"
+	// RESTCredentialPlatformSuperadmin is the access token of the dedicated
+	// platform-superadmin proof principal (the Superuser admin routes).
+	RESTCredentialPlatformSuperadmin RESTCredentialKind = "platform_superadmin"
 )
 
 // ParseRESTService resolves a -service flag value; the empty string is
@@ -116,27 +122,40 @@ func validateRESTServices() error {
 // needs the push token, so a run without -push-token-file can refuse at
 // startup instead of failing request by request.
 func PlansPushTokenEntries(service RESTService) bool {
+	return PlansCredentialKind(service, RESTCredentialPushToken)
+}
+
+// PlansCredentialKind says whether a run of service sends any entry of that
+// credential kind, so a run without the matching token file can refuse at
+// startup instead of failing request by request.
+func PlansCredentialKind(service RESTService, kind RESTCredentialKind) bool {
 	for _, operation := range RESTRunOrderFor(service) {
-		if restEndpointSpecs[operation].Credential == RESTCredentialPushToken {
+		if restEndpointSpecs[operation].Credential == kind {
 			return true
 		}
 	}
 	return false
 }
 
-// validateRESTCredentialKinds refuses an unknown credential kind, a push
-// token entry outside the dho api (only that service authenticates it), and a
+// validateRESTCredentialKinds refuses an unknown credential kind, a file-fed
+// credential entry outside the dho api (only that service authenticates it), an
+// admin credential on anything but a GET, and a
 // PathLiterals key that is not a {placeholder} of the entry's path.
 func validateRESTCredentialKinds() error {
 	for operation, spec := range restEndpointSpecs {
 		switch spec.Credential {
 		case RESTCredentialRun:
-		case RESTCredentialPushToken:
+		case RESTCredentialPushToken, RESTCredentialOrgAdmin, RESTCredentialPlatformSuperadmin:
+			// Every file-fed kind is authenticated only by the dho api, and
+			// an entry that sends no credential cannot also name one.
 			if spec.EffectiveService() != RESTServiceDHOAPI {
-				return fmt.Errorf("goapiproof: REST corpus entry %q sends the push token but targets %s, not %s", operation, spec.EffectiveService(), RESTServiceDHOAPI)
+				return fmt.Errorf("goapiproof: REST corpus entry %q sends the %s credential but targets %s, not %s", operation, spec.Credential, spec.EffectiveService(), RESTServiceDHOAPI)
 			}
 			if spec.PublicNoAuth {
-				return fmt.Errorf("goapiproof: REST corpus entry %q is both PublicNoAuth and a push-token entry", operation)
+				return fmt.Errorf("goapiproof: REST corpus entry %q is both PublicNoAuth and a %s-credential entry", operation, spec.Credential)
+			}
+			if spec.Credential != RESTCredentialPushToken && spec.Method != "GET" {
+				return fmt.Errorf("goapiproof: REST corpus entry %q sends the %s credential on a %s request; admin credentials are for read-only GETs (R402/R406)", operation, spec.Credential, spec.Method)
 			}
 		default:
 			return fmt.Errorf("goapiproof: REST corpus entry %q has an unknown credential kind %q", operation, spec.Credential)

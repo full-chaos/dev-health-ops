@@ -154,16 +154,24 @@ func TestFinalRunReportFailsADHOAPIRunThatAdmittedNothing(t *testing.T) {
 	}
 }
 
-func TestCredentialsForSendsThePushTokenOnBothLegsOnlyForIngestEntries(t *testing.T) {
+func TestCredentialsForSendsEachTokenKindOnBothLegsOnlyForItsEntries(t *testing.T) {
 	push := goapiproof.StaticCredential("Authorization", "push bearer", "fcpush_x")
+	org := goapiproof.StaticCredential("Authorization", "org-admin bearer", "a.b.c")
+	platform := goapiproof.StaticCredential("Authorization", "platform-superadmin bearer", "g.h.i")
 	runCand := goapiproof.StaticCredential("Authorization", "candidate bearer", "a.b.c")
 	runBase := goapiproof.StaticCredential("Authorization", "baseline bearer", "d.e.f")
-
-	c, b := credentialsFor(goapiproof.RESTEndpointSpec{Credential: goapiproof.RESTCredentialPushToken}, push, runCand, runBase)
-	if c != push || b != push {
-		t.Fatal("a push-token entry must send the push token on BOTH legs and never the run's bearers")
+	tokens := map[goapiproof.RESTCredentialKind]*goapiproof.Credential{
+		goapiproof.RESTCredentialPushToken:          push,
+		goapiproof.RESTCredentialOrgAdmin:           org,
+		goapiproof.RESTCredentialPlatformSuperadmin: platform,
 	}
-	c, b = credentialsFor(goapiproof.RESTEndpointSpec{}, push, runCand, runBase)
+	for kind, want := range tokens {
+		c, b := credentialsFor(goapiproof.RESTEndpointSpec{Credential: kind}, tokens, runCand, runBase)
+		if c != want || b != want {
+			t.Fatalf("a %q entry must send its own token on BOTH legs and never the run's bearers or another kind's token", kind)
+		}
+	}
+	c, b := credentialsFor(goapiproof.RESTEndpointSpec{}, tokens, runCand, runBase)
 	if c != runCand || b != runBase {
 		t.Fatal("every other entry must keep the run's own bearers")
 	}
@@ -234,6 +242,81 @@ func TestRunRefusesAnUnreadablePushTokenFileBeforeSendingAnything(t *testing.T) 
 		}
 		if hits.Load() != 0 {
 			t.Fatalf("%s: a run with an unusable token file sent %d request(s) before refusing", name, hits.Load())
+		}
+	}
+}
+
+// TestRequireTokenFilesRefusesEachPlannedKindWithoutAUsableFile: one row per
+// file-fed kind, planned in isolation (only that kind's switch on), so a kind
+// left out of the startup guard cannot hide behind another kind's row.
+func TestRequireTokenFilesRefusesEachPlannedKindWithoutAUsableFile(t *testing.T) {
+	dir := t.TempDir()
+	wrong := filepath.Join(dir, "wrong")
+	if err := os.WriteFile(wrong, []byte("Usage: mint SECRETVALUE"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	good := map[goapiproof.RESTCredentialKind]string{}
+	for _, descriptor := range goapiproof.TokenFileKinds() {
+		path := filepath.Join(dir, "good-"+string(descriptor.Kind))
+		value := strings.Join([]string{"aGVhZGVy", "cGF5bG9hZA", "c2lnbmF0dXJl"}, ".")
+		if descriptor.Kind == goapiproof.RESTCredentialPushToken {
+			value = "fcpush_ok"
+		}
+		if err := os.WriteFile(path, []byte(value), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		good[descriptor.Kind] = path
+	}
+	set := func(f *flags, kind goapiproof.RESTCredentialKind, path string) {
+		switch kind {
+		case goapiproof.RESTCredentialPushToken:
+			f.pushTokenFile = path
+		case goapiproof.RESTCredentialOrgAdmin:
+			f.orgAdminTokenFile = path
+		case goapiproof.RESTCredentialPlatformSuperadmin:
+			f.platformTokenFile = path
+		default:
+			t.Fatalf("unmapped kind %q", kind)
+		}
+	}
+	for _, descriptor := range goapiproof.TokenFileKinds() {
+		only := func(kind goapiproof.RESTCredentialKind) bool { return kind == descriptor.Kind }
+		f := flags{service: goapiproof.RESTServiceDHOAPI}
+		if err := requireTokenFiles(f, only); err == nil || !strings.Contains(err.Error(), descriptor.Flag) {
+			t.Fatalf("%s: a planned kind without its file must name %s, got %v", descriptor.Kind, descriptor.Flag, err)
+		}
+		set(&f, descriptor.Kind, filepath.Join(dir, "absent"))
+		if err := requireTokenFiles(f, only); err == nil || !strings.Contains(err.Error(), descriptor.What) {
+			t.Fatalf("%s: a missing file must refuse, got %v", descriptor.Kind, err)
+		}
+		set(&f, descriptor.Kind, wrong)
+		if err := requireTokenFiles(f, only); err == nil || strings.Contains(err.Error(), "SECRETVALUE") {
+			t.Fatalf("%s: a wrong-shape file must refuse without leaking, got %v", descriptor.Kind, err)
+		}
+		set(&f, descriptor.Kind, good[descriptor.Kind])
+		if err := requireTokenFiles(f, only); err != nil {
+			t.Fatalf("%s: a good file must pass, got %v", descriptor.Kind, err)
+		}
+		// A kind that is not planned needs no file.
+		if err := requireTokenFiles(flags{service: goapiproof.RESTServiceDHOAPI}, func(goapiproof.RESTCredentialKind) bool { return false }); err != nil {
+			t.Fatalf("an unplanned kind must not require a file, got %v", err)
+		}
+	}
+}
+
+// TestRunBuildsATokenCredentialPerSuppliedFile pins the flag -> kind wiring
+// through the real flag parser.
+func TestParseFlagsMapsEachTokenFlagToItsKind(t *testing.T) {
+	f, err := parseFlags(serviceArgs("-service", "dho-api", "-dho-api-url", "http://127.0.0.1:1",
+		"-push-token-file", "/p", "-org-admin-token-file", "/o", "-platform-token-file", "/s"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for kind, want := range map[goapiproof.RESTCredentialKind]string{
+		goapiproof.RESTCredentialPushToken: "/p", goapiproof.RESTCredentialOrgAdmin: "/o", goapiproof.RESTCredentialPlatformSuperadmin: "/s",
+	} {
+		if got := f.tokenFileFor(kind); got != want {
+			t.Fatalf("tokenFileFor(%q) = %q, want %q", kind, got, want)
 		}
 	}
 }

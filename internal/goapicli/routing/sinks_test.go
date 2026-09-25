@@ -20,7 +20,8 @@ import (
 // classified (CHAOS-6665).
 //
 // The sinks are: a call of .Error() (the text of an error), a fmt.Errorf (interpolates
-// an error into a new one), and a fmt print of a value named like an error. The rest
+// an error into a new one), a fmt print of a value named like an error, and any call on
+// a logger (log, slog, or a level method). The rest
 // of the package builds its errors with refuse and internal, which redact.
 
 type sinkTreatment string
@@ -101,6 +102,8 @@ func routingSinks(t *testing.T) []sinkSite {
 							if pkg, ok := selector.X.(*ast.Ident); ok && pkg.Name == "fmt" {
 								sites = append(sites, sinkSite{path, name, "fmt.Errorf", redacted})
 							}
+						case isLogCall(selector):
+							sites = append(sites, sinkSite{path, name, "log " + selector.Sel.Name, redacted})
 						case strings.HasPrefix(selector.Sel.Name, "Fprint") || strings.HasPrefix(selector.Sel.Name, "Sprint") || strings.HasPrefix(selector.Sel.Name, "Print"):
 							for _, argument := range call.Args {
 								if ident, ok := argument.(*ast.Ident); ok && (ident.Name == "err" || strings.HasSuffix(ident.Name, "Err")) {
@@ -151,4 +154,17 @@ func TestEveryErrorSinkIsRedactedOrClassified(t *testing.T) {
 			t.Errorf("%s is classified but no longer appears: remove it from sinkTable", key)
 		}
 	}
+}
+
+// isLogCall reports a call on a logger: a log or slog package function, or a Warn,
+// Info, Debug or Error-with-arguments method (slog.Logger's levels).
+func isLogCall(selector *ast.SelectorExpr) bool {
+	if pkg, ok := selector.X.(*ast.Ident); ok && (pkg.Name == "log" || pkg.Name == "slog") {
+		return true
+	}
+	switch selector.Sel.Name {
+	case "Warn", "Info", "Debug", "WarnContext", "InfoContext", "DebugContext", "ErrorContext":
+		return true
+	}
+	return false
 }

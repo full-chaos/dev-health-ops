@@ -36,7 +36,7 @@ func TestVerbsPrintNoCredentialsFromTheEnvironment(t *testing.T) {
 	t.Setenv(bearerEnvVar, "")
 	catalog := filepath.Join("..", "..", "..", "src", "dev_health_ops", "api", "graphql", "go_api_operations.json")
 	for name, argv := range map[string][]string{
-		"status":  {"status", "-timeout", "3s"},
+		"status":  {"status", "-timeout", "3s", "-catalog", catalog},
 		"disable": {"disable", "-mode", "python", "-timeout", "3s", "-catalog", catalog},
 	} {
 		refusing := fakepg.StartRefusing(t)
@@ -59,11 +59,11 @@ func TestVerbsPrintNoCredentialsFromTheEnvironment(t *testing.T) {
 
 // Every origin of a database error a routing verb can print, through every verb
 // that reaches it: the connect (a refused login), the ping (a server that accepts the
-// login and fails the driver's ping with an echo of the login and password) and a
-// later statement (the ping succeeds, the next statement echoes: what `status`'s
-// census, `disable`'s read and its write transaction run). Scan and close errors
-// surface through the same statement sinks and cannot be produced by the fake
-// separately. The credentials reach the driver only through PGUSER and PGPASSWORD.
+// login and fails the driver's ping with an echo of the login and password), a
+// later statement (the ping succeeds, the next statement echoes: `status`'s census,
+// `disable`'s read and its write transaction), a second statement behind a first that
+// succeeds (`status`'s classification) and an error while a result's rows are read.
+// The credentials reach the driver only through PGUSER and PGPASSWORD.
 func TestEveryDatabaseErrorOriginIsRedactedThroughEveryVerb(t *testing.T) {
 	t.Setenv(bearerEnvVar, "")
 	catalog := filepath.Join("..", "..", "..", "src", "dev_health_ops", "api", "graphql", "go_api_operations.json")
@@ -74,9 +74,14 @@ func TestEveryDatabaseErrorOriginIsRedactedThroughEveryVerb(t *testing.T) {
 		"connect": {fakepg.StartRefusing, "authentication failed"},
 		"ping":    {fakepg.StartEchoingOnPing, "server echo"},
 		"query":   {fakepg.StartEchoing, "server echo"},
+		// the first statement (status's census) succeeds, the second fails: the
+		// classification field of the report.
+		"second statement": {fakepg.StartEchoingAfterOneStatement, "server echo"},
+		// the first statement's result starts and the error arrives while its rows are read.
+		"reading rows": {fakepg.StartEchoingWhileReadingRows, "server echo"},
 	}
 	verbs := map[string][]string{
-		"status":  {"status", "-timeout", "3s"},
+		"status":  {"status", "-timeout", "3s", "-catalog", catalog},
 		"disable": {"disable", "-mode", "python", "-timeout", "3s", "-catalog", catalog},
 	}
 	for origin, spec := range origins {

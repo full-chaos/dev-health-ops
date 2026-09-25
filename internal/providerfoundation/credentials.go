@@ -16,7 +16,6 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
-	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 	"golang.org/x/crypto/pbkdf2"
 )
 
@@ -175,35 +174,19 @@ var githubFieldAliases = map[string]string{
 }
 
 // pythonSecretText is what Python makes of a credential field's non-string
-// JSON value where the resolver reads it as `str(value or "")`: a number is
-// its str() (every integer digit, repr() for a float), a boolean is "True" and
-// falsy forms (0, 0.0, false) are "" -- a present field that is not configured.
-// A null is absent (Python drops None). A non-empty container has no
-// faithful text here and reads as absent: the shape check then refuses the
-// credential, where Python would carry str(list) through. An empty container
-// is falsy in Python (""), which is also absent here.
+// JSON value where the resolver reads it as `str(value or "")`: a null is
+// absent (Python drops None); a falsy value (0, 0.0, false, an empty list or
+// object) is present but empty; any other value is its str() -- the integer's
+// digits, repr() of a float, "True", and repr() of a list or object as Python
+// writes it.
 func pythonSecretText(value pyjson.Value) (secrets.Value, bool) {
-	switch number := value.(type) {
-	case bool:
-		if !number {
-			return secrets.NewValue(""), true
-		}
-		return secrets.NewValue("True"), true
-	case pyjson.Int:
-		if number.Int == nil {
-			return secrets.Value{}, false
-		}
-		if number.Sign() == 0 {
-			return secrets.NewValue(""), true
-		}
-		return secrets.NewValue(number.String()), true
-	case pyjson.Float:
-		if number == 0 {
-			return secrets.NewValue(""), true
-		}
-		return secrets.NewValue(pythonparity.Repr(float64(number))), true
+	if value == nil {
+		return secrets.Value{}, false
 	}
-	return secrets.Value{}, false
+	if !pyjson.Truthy(value) {
+		return secrets.NewValue(""), true
+	}
+	return secrets.NewValue(pyjson.Str(value)), true
 }
 
 func decodeCredential(record EncryptedCredential, plaintext []byte) (Credential, error) {

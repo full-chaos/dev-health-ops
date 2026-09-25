@@ -52,9 +52,7 @@ print(json.dumps(out))
 // TestCredentialFieldReadsMatchLivePython (CHAOS-6770) feeds every payload
 // shape to the real Python resolver builders and to decodeCredential +
 // ValidateCredentialShape, and compares whether a credential is built and the
-// text of each field the provider reads. Named divergence, not compared: a
-// NON-EMPTY list or object in a field the provider reads (Python carries
-// str(container); Go leaves the field absent and refuses the shape).
+// text of each field the provider reads, containers included.
 func TestCredentialFieldReadsMatchLivePython(t *testing.T) {
 	if os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLES") != "1" {
 		t.Skip("live Python oracles run only through ci/check_go.sh live-python-oracles")
@@ -107,6 +105,16 @@ func TestCredentialFieldReadsMatchLivePython(t *testing.T) {
 		{"gitlab", `{"token": []}`, gitlab},
 		{"gitlab", `{"token": "t", "project_id": 7, "tags": [1, {"a": 2}]}`, gitlab},
 		{"gitlab", `{"private_token": "p", "project_id": 7}`, gitlab},
+		// A container in a field the provider reads is its Python str().
+		{"gitlab", `{"token": [1]}`, gitlab},
+		{"gitlab", `{"token": {"a": 1, "b": [2, {"c": null}]}}`, gitlab},
+		{"gitlab", `{"token": ["it's", "x", null, true, 1.5, "é"]}`, gitlab},
+		{"gitlab", `{"token": []}`, gitlab},
+		{"gitlab", `{"token": {}}`, gitlab},
+		{"github", `{"token": [1]}`, github},
+		{"github", `{"app_id": [1, 2], "installation_id": {"n": 3}, "private_key": "k"}`, github},
+		{"jira", `{"email": "e@x.com", "api_token": ["t"], "base_url": "https://x"}`, jira},
+		{"linear", `{"api_key": [1]}`, linear},
 		{"jira", `{"email": "e@x.com", "api_token": "t", "base_url": "https://x"}`, jira},
 		{"jira", `{"email": "e@x.com", "api_token": 12, "base_url": "https://x"}`, jira},
 		{"jira", `{"email": "e@x.com", "apiToken": 12, "baseUrl": "https://x"}`, jira},

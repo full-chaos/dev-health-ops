@@ -99,9 +99,11 @@ func TestDecodeCredentialReadsNonStringFieldsLikePython(t *testing.T) {
 		{"false is present and empty", "gitlab", `{"token": false}`, "token", "", true},
 		{"zero is present and empty", "linear", `{"api_key": 0}`, "api_key", "", true},
 		{"null is absent", "github", `{"app_id": null}`, "app_id", "", false},
-		{"a non-empty list has no faithful text", "gitlab", `{"token": [1]}`, "token", "", false},
-		{"an empty list is falsy", "gitlab", `{"token": []}`, "token", "", false},
-		{"an object has no faithful text", "gitlab", `{"token": {"a": 1}}`, "token", "", false},
+		{"a non-empty list is its repr", "gitlab", `{"token": [1]}`, "token", "[1]", true},
+		{"a list repr quotes like Python", "gitlab", `{"token": ["it's", "x", null, true, 1.5]}`, "token", `["it's", 'x', None, True, 1.5]`, true},
+		{"an empty list is falsy", "gitlab", `{"token": []}`, "token", "", true},
+		{"an object is its repr", "gitlab", `{"token": {"a": 1, "b": [2]}}`, "token", "{'a': 1, 'b': [2]}", true},
+		{"an empty object is falsy", "gitlab", `{"token": {}}`, "token", "", true},
 		{"a later canonical number outranks its alias", "github", `{"appId": "alias", "app_id": 12}`, "app_id", "12", true},
 		{"a later alias string outranks its canonical number", "github", `{"app_id": 12, "appId": "alias"}`, "app_id", "alias", true},
 	}
@@ -145,20 +147,21 @@ func TestDecodeCredentialIgnoresFieldsNobodyReads(t *testing.T) {
 			t.Errorf("%s: err = %v, want ErrCredentialInvalid", body, err)
 		}
 	}
-	// A wanted field that has no faithful text leaves the credential incomplete.
+	// A wanted field holding a container is its Python repr, so the shape check
+	// accepts it exactly as Python's builder does.
 	credential, err := decodeCredential(EncryptedCredential{Provider: "gitlab"}, []byte(`{"token": [1]}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := ValidateCredentialShape(credential); !errors.Is(err, ErrCredentialInvalid) {
-		t.Errorf("a list token: shape err = %v, want ErrCredentialInvalid", err)
+	if err := ValidateCredentialShape(credential); err != nil {
+		t.Errorf("a list token: shape err = %v, want it built like Python", err)
 	}
 }
 
-// A zero-value pyjson.Int (nil big.Int) is not a number: never dereferenced.
-func TestPythonSecretTextRefusesAnUnsetInteger(t *testing.T) {
-	if text, ok := pythonSecretText(pyjson.Int{}); ok || text.Reveal() != "" {
-		t.Errorf("pythonSecretText(pyjson.Int{}) = %q, %v; want \"\", false", text.Reveal(), ok)
+// A zero-value pyjson.Int (nil big.Int) is falsy and never dereferenced.
+func TestPythonSecretTextTreatsAnUnsetIntegerAsFalsy(t *testing.T) {
+	if text, ok := pythonSecretText(pyjson.Int{}); !ok || text.Reveal() != "" {
+		t.Errorf("pythonSecretText(pyjson.Int{}) = %q, %v; want \"\", true", text.Reveal(), ok)
 	}
 }
 

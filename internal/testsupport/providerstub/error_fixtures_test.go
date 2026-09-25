@@ -1,6 +1,10 @@
 package providerstub
 
-import "testing"
+import (
+	"strconv"
+	"testing"
+	"time"
+)
 
 func TestErrorFixturesAnswerTheirStatusAndHeaders(t *testing.T) {
 	fixtures, err := LoadDir("fixtures")
@@ -23,6 +27,25 @@ func TestErrorFixturesAnswerTheirStatusAndHeaders(t *testing.T) {
 		}
 		if tc.header != "" && got.Header().Get(tc.header) != tc.val {
 			t.Errorf("%s %s header %s = %q, want %q", tc.host, tc.target, tc.header, got.Header().Get(tc.header), tc.val)
+		}
+	}
+}
+
+// A primary-limit fixture must carry a reset time that has already passed: PyGithub's GithubRetry sleeps until
+// X-RateLimit-Reset, so a far-future value (the first version used 2100) wedges the Python plane for decades.
+func TestPrimaryLimitFixturesCarryAnAlreadyPassedReset(t *testing.T) {
+	fixtures, err := LoadDir("fixtures")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, target := range []string{"/orgs/zz-403", "/orgs/zz-403/repos", "/users/zz-403", "/users/zz-403/repos"} {
+		got := get(t, fixtures, "api.github.com", "GET", target, nil)
+		reset, err := strconv.ParseInt(got.Header().Get("X-Ratelimit-Reset"), 10, 64)
+		if err != nil || got.Code != 403 {
+			t.Fatalf("%s: status %d reset %q", target, got.Code, got.Header().Get("X-Ratelimit-Reset"))
+		}
+		if reset >= time.Now().Unix() {
+			t.Errorf("%s: X-RateLimit-Reset %d is not in the past: a client that sleeps until it (PyGithub) never returns", target, reset)
 		}
 	}
 }

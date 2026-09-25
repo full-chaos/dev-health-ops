@@ -11,6 +11,8 @@ import (
 	"net/http/httptest"
 	"net/http/httputil"
 	"net/url"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -110,4 +112,57 @@ func TestExternalIngestAuthLimiterVenueOracle(t *testing.T) {
 	python := venue.ServePython(t, requests)
 	receipt := venueoracle.Diff(t, balanced, requests, python, venueoracle.DiffOptions{})
 	t.Logf("%d requests compared\n%s", len(requests), receipt)
+
+	// A burst of simultaneous credential-less requests from one address: auth.py
+	// runs test() then hit() back to back with no await for such a request, so
+	// its failure counter is atomic per request and exactly 30 of them are
+	// answered 401 whatever the arrival order; the two Go replicas, sharing one
+	// store, must admit exactly as many. The comparison is the histogram of
+	// (status, body) -- the order of simultaneous requests is not defined.
+	const simultaneous = 90
+	pythonBurst := venue.ServePython(t, burst("simultaneous", simultaneous, "10.201.0.9"))
+	want := map[string]int{}
+	for _, response := range pythonBurst {
+		want[fmt.Sprintf("%d %s", response.Status, response.Body)]++
+	}
+	got := map[string]int{}
+	var mu sync.Mutex
+	var group sync.WaitGroup
+	start := make(chan struct{})
+	for range simultaneous {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			request, err := http.NewRequest(http.MethodGet, balanced+"/api/v1/external-ingest/batches", nil)
+			if err != nil {
+				return
+			}
+			request.Header.Set("X-Forwarded-For", "10.201.0.9")
+			<-start
+			response, err := http.DefaultClient.Do(request)
+			if err != nil {
+				mu.Lock()
+				got["transport error "+err.Error()]++
+				mu.Unlock()
+				return
+			}
+			body, _ := io.ReadAll(response.Body)
+			_ = response.Body.Close()
+			mu.Lock()
+			got[fmt.Sprintf("%d %s", response.StatusCode, strings.TrimSpace(string(body)))]++
+			mu.Unlock()
+		}()
+	}
+	close(start)
+	group.Wait()
+	for key, count := range want {
+		if got[key] != count {
+			t.Errorf("simultaneous burst: python answered %q x%d, go x%d\n  python histogram %v\n  go histogram     %v", key, count, got[key], want, got)
+		}
+	}
+	for key := range got {
+		if _, ok := want[key]; !ok {
+			t.Errorf("simultaneous burst: go answered %q x%d, python never", key, got[key])
+		}
+	}
 }

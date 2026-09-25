@@ -92,13 +92,7 @@ func (d Deps) requireIngestScope(
 	if !allowed {
 		return nil, newIngestError(http.StatusTooManyRequests, "rate_limited", "Too many authentication attempts")
 	}
-	below, err := d.limiters.failure.TestCounted(ctx, ip, "")
-	if err != nil {
-		return nil, unhandledError()
-	}
-	if !below {
-		return nil, newIngestError(http.StatusTooManyRequests, "rate_limited", "Too many failed authentication attempts")
-	}
+	tooManyFailures := newIngestError(http.StatusTooManyRequests, "rate_limited", "Too many failed authentication attempts")
 
 	// fail records one failure (auth.py's _record_auth_failure_hit) and
 	// answers the 401; a store that cannot record it is the unhandled 500.
@@ -111,7 +105,34 @@ func (d Deps) requireIngestScope(
 
 	raw := extractBearer(r)
 	if raw == "" || !strings.HasPrefix(raw, tokenPrefix) {
-		return nil, fail()
+		// A request that fails with no I/O in between: auth.py's test() then
+		// hit() run back to back with no await, so no other request in its
+		// event loop can slip between them and the pair is atomic there. It
+		// must be atomic here too, across replicas sharing a store: one
+		// increment, judged on its result (test() refuses at a count of 30 and
+		// does not count; an increment past 30 is the same refusal, and a count
+		// above the limit changes nothing else, since the window is fixed from
+		// the first hit). Read-then-increment let 50 of 90 simultaneous
+		// credential-less requests through as 401s where Python answers 30.
+		allowed, err := d.limiters.failure.AllowCounted(ctx, ip, "")
+		if err != nil {
+			return nil, unhandledError()
+		}
+		if !allowed {
+			return nil, tooManyFailures
+		}
+		return nil, newIngestError(http.StatusUnauthorized, "invalid_token", "Missing or invalid ingest token")
+	}
+	// A request that resolves its token in the database: auth.py awaits the
+	// lookup between test() and hit(), so concurrent requests interleave there
+	// in Python too; the non-consuming read then the per-failure increment is
+	// that same shape.
+	below, err := d.limiters.failure.TestCounted(ctx, ip, "")
+	if err != nil {
+		return nil, unhandledError()
+	}
+	if !below {
+		return nil, tooManyFailures
 	}
 	if d.Pool == nil {
 		return nil, newIngestError(http.StatusInternalServerError, "internal_error", "external-ingest database is not configured")

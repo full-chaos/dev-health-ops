@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -95,5 +96,45 @@ func TestAuthLimiterStoreErrorIsTheUnhandled500(t *testing.T) {
 	failure := authFrom(deps, "192.0.2.1")
 	if failure == nil || failure.Status != http.StatusInternalServerError || !failure.Unhandled {
 		t.Fatalf("store down = %+v, want the unhandled 500", failure)
+	}
+}
+
+// Credential-less requests fail with no I/O between the failure throttle's
+// test() and hit() in auth.py, so the pair is atomic per request there and
+// exactly 30 of any number of SIMULTANEOUS requests from one address are
+// answered 401 whatever the arrival order. The count must be exact here too,
+// with the replicas' requests interleaving on one shared store (a read of the
+// count then a separate increment let several requests read a count below 30
+// before any incremented: 50 of 90 passed against a live Python answering 30).
+func TestAuthFailureThrottleIsExactUnderSimultaneousCredentialLessRequests(t *testing.T) {
+	t.Setenv("TRUSTED_PROXIES", "")
+	store := httpapi.NewMemoryCounters(nil)
+	a, b := Deps{Counters: store}, Deps{Counters: store}
+	a.limiters, b.limiters = newAuthLimiters(store, nil), newAuthLimiters(store, nil)
+	const simultaneous = 90
+	statuses := make(chan int, simultaneous)
+	start := make(chan struct{})
+	var group sync.WaitGroup
+	for i := range simultaneous {
+		deps := a
+		if i%2 == 1 {
+			deps = b
+		}
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			<-start
+			statuses <- authFrom(deps, "192.0.2.1").Status
+		}()
+	}
+	close(start)
+	group.Wait()
+	close(statuses)
+	counts := map[int]int{}
+	for status := range statuses {
+		counts[status]++
+	}
+	if counts[http.StatusUnauthorized] != ingestAuthFailureLimitPerMinute || counts[http.StatusTooManyRequests] != simultaneous-ingestAuthFailureLimitPerMinute {
+		t.Fatalf("%d simultaneous credential-less requests = %v, want exactly %d x 401 and %d x 429", simultaneous, counts, ingestAuthFailureLimitPerMinute, simultaneous-ingestAuthFailureLimitPerMinute)
 	}
 }

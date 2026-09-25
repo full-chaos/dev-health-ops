@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -114,8 +115,32 @@ VALUES ($1, $2, true, true, false, 0, now(), now())`, user.id, user.email)
 	for _, id := range teamIDs {
 		requests = append(requests, get("team "+id, "/teams/"+id))
 	}
+	// The write routes answer with the row they wrote, stamped by the request
+	// time of each plane. They run last, so the list checks above still see
+	// the seeded stamps; "clock: " requests are compared with the instant
+	// blanked and its shape (six fraction digits, the zone suffix) kept.
+	json := venueoracle.B64
+	write := func(name, method, path, body string) venueoracle.Request {
+		headers := bearer("admin")
+		headers["Content-Type"] = "application/json"
+		return venueoracle.Request{Name: name, Method: method, Path: "/api/v1/admin" + path, Headers: headers, Body: json(body)}
+	}
+	requests = append(requests,
+		write("clock: POST a new team", "POST", "/teams", `{"team_id": "written-new", "name": "Written", "repo_patterns": ["acme/*"], "project_keys": ["WR"]}`),
+		write("clock: POST over a seeded team", "POST", "/teams", `{"team_id": "team-0", "name": "Team 0 again", "description": "d"}`),
+		write("clock: PATCH a seeded team", "PATCH", "/teams/team-1", `{"name": "Renamed", "project_keys": ["K1", "K2"]}`),
+		write("clock: PATCH with nothing to change", "PATCH", "/teams/team-2", `{}`),
+		write("PATCH an unknown team", "PATCH", "/teams/no-such-team", `{"name": "x"}`),
+		write("POST a team without a name", "POST", "/teams", `{"team_id": "written-bad"}`),
+		write("clock: POST a new identity", "POST", "/identities", `{"canonical_id": "written@example.com", "display_name": "Written", "email": "written@example.com", "provider_identities": {"github": ["written-gh"]}, "team_ids": ["team-3"]}`),
+		write("clock: POST over a seeded identity", "POST", "/identities", `{"canonical_id": "user-4@example.com", "display_name": "Four", "team_ids": ["team-4", "team-5"]}`),
+		write("POST an identity into an unknown team", "POST", "/identities", `{"canonical_id": "written-2@example.com", "team_ids": ["no-such-team"]}`),
+		get("clock: written team read back", "/teams/written-new"), get("clock: patched team read back", "/teams/team-1"),
+		get("clock: identities after the writes", "/identities?active_only=false"),
+	)
 	python := venue.ServePython(t, requests)
 	receipt := venueoracle.Diff(t, base, requests, python, venueoracle.DiffOptions{
+		Normalize: normalizeClock,
 		// The seed must reach every stored shape, or a SAME could be two
 		// empty lists agreeing: each stamp's Python rendering must appear
 		// in the Go answer of the list routes.
@@ -131,6 +156,20 @@ VALUES ($1, $2, true, true, false, 0, now(), now())`, user.id, user.email)
 		},
 	})
 	t.Logf("receipt (%d requests):\n%s", len(requests), receipt)
+}
+
+// instant is a rendered request-time instant: date, time, exactly six fraction
+// digits (a trimmed zero is a diff, so a shorter fraction is left as it is)
+// and the zone suffix, which is kept.
+var instant = regexp.MustCompile(`"(created_at|updated_at|last_synced)":"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}([^"]*)"`)
+
+// normalizeClock blanks the digits of each request-time instant in a "clock: "
+// request, keeping the shape the two planes must agree on.
+func normalizeClock(request venueoracle.Request, body string) string {
+	if !strings.HasPrefix(request.Name, "clock: ") {
+		return body
+	}
+	return instant.ReplaceAllString(body, `"$1":"<date>T<time>.<micro>$2"`)
 }
 
 // wantRendered is Python's rendering of each stamp: a naive datetime (no

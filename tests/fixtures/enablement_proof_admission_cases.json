@@ -20,7 +20,9 @@
     "'dev-hops go-api routing enable --mode <target_mode>' for that operation? Fields left",
     "out of 'receipt' take the defaults below.",
     "",
-    "`blank_cutset` is THE set of characters a citation or build may be made of and still name nothing. It is data here so that neither language owns it: Go's blankCitationCutset, the SQL literal generated from it, and Python's _BLANK_CUTSET are each asserted EQUAL to this value by a database-free test on each side."
+    "`blank_cutset` is THE set of characters a citation or build may be made of and still name nothing. It is data here so that neither language owns it: Go's blankCitationCutset, the SQL literal generated from it, and Python's _BLANK_CUTSET are each asserted EQUAL to this value by a database-free test on each side.",
+    "",
+    "CHAOS-6810. A case may name `operation_kind` (\"query\" by default, or \"mutation\"): a mutation is admitted ONLY by a `write_executed`/`match` receipt that carries a `side_effect_digest` that names something, and a query only by the two-plane `deployed_executed` receipt; neither form admits the other's operations. `receipt.side_effect_digest` defaults to null. The database itself refuses a write_executed row without a digest or off the edge route (alembic 0143), so those shapes are not fixture rows."
   ],
   "blank_cutset": " \t\n\u000b\f\r ",
   "key": {
@@ -36,7 +38,8 @@
     "build_binding": "per_request",
     "baseline_defect": null,
     "differences_outside_baseline_defect": 0,
-    "request_identity": "go-api-prove/5484-fixture"
+    "request_identity": "go-api-prove/5484-fixture",
+    "side_effect_digest": null
   },
   "cases": [
     {
@@ -1060,6 +1063,301 @@
           "terminal_state": "mismatch"
         }
       }
+    },
+    {
+      "name": "write_match_edge_canary",
+      "target_mode": "canary",
+      "operation_kind": "mutation",
+      "receipt": {
+        "stage": "write_executed",
+        "terminal_state": "match",
+        "measurement_route": "edge",
+        "side_effect_digest": "sha256:6810write00000000000000000000000000000000000000000000000000000000"
+      },
+      "admits": true,
+      "why": "The unremarkable write proof: one execution through the deployed edge, a match, and the digest of what it persisted."
+    },
+    {
+      "name": "write_match_edge_primary",
+      "target_mode": "primary",
+      "operation_kind": "mutation",
+      "receipt": {
+        "stage": "write_executed",
+        "terminal_state": "match",
+        "measurement_route": "edge",
+        "side_effect_digest": "sha256:6810write00000000000000000000000000000000000000000000000000000000"
+      },
+      "admits": true,
+      "why": "The edge route satisfies the stricter promotion too."
+    },
+    {
+      "name": "write_blank_digest_refused",
+      "target_mode": "canary",
+      "operation_kind": "mutation",
+      "receipt": {
+        "stage": "write_executed",
+        "terminal_state": "match",
+        "measurement_route": "edge",
+        "side_effect_digest": "   "
+      },
+      "admits": false,
+      "why": "A digest that names nothing is not a digest: there is nothing to have compared.",
+      "control": {
+        "receipt": {
+          "side_effect_digest": "sha256:6810named"
+        }
+      }
+    },
+    {
+      "name": "write_tab_only_digest_refused",
+      "target_mode": "canary",
+      "operation_kind": "mutation",
+      "receipt": {
+        "stage": "write_executed",
+        "terminal_state": "match",
+        "measurement_route": "edge",
+        "side_effect_digest": "\t"
+      },
+      "admits": false,
+      "why": "Blank means blank in the SAME cutset the citations use (tab).",
+      "control": {
+        "receipt": {
+          "side_effect_digest": "sha256:6810named"
+        }
+      }
+    },
+    {
+      "name": "write_nbsp_only_digest_refused",
+      "target_mode": "canary",
+      "operation_kind": "mutation",
+      "receipt": {
+        "stage": "write_executed",
+        "terminal_state": "match",
+        "measurement_route": "edge",
+        "side_effect_digest": " "
+      },
+      "admits": false,
+      "why": "Blank means blank in the SAME cutset the citations use (no-break space).",
+      "control": {
+        "receipt": {
+          "side_effect_digest": "sha256:6810named"
+        }
+      }
+    },
+    {
+      "name": "write_empty_digest_refused",
+      "target_mode": "canary",
+      "operation_kind": "mutation",
+      "receipt": {
+        "stage": "write_executed",
+        "terminal_state": "match",
+        "measurement_route": "edge",
+        "side_effect_digest": ""
+      },
+      "admits": false,
+      "why": "The empty string is not a digest either.",
+      "control": {
+        "receipt": {
+          "side_effect_digest": "sha256:6810named"
+        }
+      }
+    },
+    {
+      "name": "write_cited_mismatch_refused",
+      "target_mode": "canary",
+      "operation_kind": "mutation",
+      "receipt": {
+        "stage": "write_executed",
+        "terminal_state": "mismatch",
+        "measurement_route": "edge",
+        "side_effect_digest": "sha256:6810write00000000000000000000000000000000000000000000000000000000",
+        "baseline_defect": [
+          "CHAOS-1"
+        ],
+        "differences_outside_baseline_defect": 0
+      },
+      "admits": false,
+      "why": "A write receipt admits on match ALONE: a divergent write is data corruption, not a known Python defect, so the query form's cited-mismatch arm does not apply.",
+      "control": {
+        "receipt": {
+          "terminal_state": "match",
+          "baseline_defect": null
+        }
+      }
+    },
+    {
+      "name": "write_plain_mismatch_refused",
+      "target_mode": "canary",
+      "operation_kind": "mutation",
+      "receipt": {
+        "stage": "write_executed",
+        "terminal_state": "mismatch",
+        "measurement_route": "edge",
+        "side_effect_digest": "sha256:6810write00000000000000000000000000000000000000000000000000000000"
+      },
+      "admits": false,
+      "why": "A mismatch is not proof.",
+      "control": {
+        "receipt": {
+          "terminal_state": "match"
+        }
+      }
+    },
+    {
+      "name": "write_timeout_refused",
+      "target_mode": "primary",
+      "operation_kind": "mutation",
+      "receipt": {
+        "stage": "write_executed",
+        "terminal_state": "timeout",
+        "measurement_route": "edge",
+        "side_effect_digest": "sha256:6810write00000000000000000000000000000000000000000000000000000000"
+      },
+      "admits": false,
+      "why": "Evidence the write was NOT proven.",
+      "control": {
+        "receipt": {
+          "terminal_state": "match"
+        }
+      }
+    },
+    {
+      "name": "deployed_executed_does_not_admit_a_mutation",
+      "target_mode": "canary",
+      "operation_kind": "mutation",
+      "receipt": {
+        "stage": "deployed_executed",
+        "terminal_state": "match",
+        "measurement_route": "edge",
+        "side_effect_digest": "sha256:6810named"
+      },
+      "admits": false,
+      "why": "A two-plane comparison never ran the mutation on both planes and nothing compared what it persisted: it cannot authorize a mutation. (The receipt carries a digest on purpose: only its STAGE may refuse it.)",
+      "control": {
+        "receipt": {
+          "stage": "write_executed",
+          "terminal_state": "match",
+          "measurement_route": "edge",
+          "side_effect_digest": "sha256:6810write00000000000000000000000000000000000000000000000000000000"
+        }
+      }
+    },
+    {
+      "name": "write_executed_does_not_admit_a_query",
+      "target_mode": "canary",
+      "operation_kind": "query",
+      "receipt": {
+        "stage": "write_executed",
+        "terminal_state": "match",
+        "measurement_route": "edge",
+        "side_effect_digest": "sha256:6810write00000000000000000000000000000000000000000000000000000000"
+      },
+      "admits": false,
+      "why": "A write receipt says nothing about a query's two-plane parity: it cannot authorize a query.",
+      "control": {
+        "receipt": {
+          "stage": "deployed_executed",
+          "side_effect_digest": null
+        }
+      }
+    },
+    {
+      "name": "dual_run_does_not_admit_a_mutation",
+      "target_mode": "canary",
+      "operation_kind": "mutation",
+      "receipt": {
+        "stage": "dual_run",
+        "terminal_state": "match",
+        "measurement_route": "edge",
+        "side_effect_digest": "sha256:6810named"
+      },
+      "admits": false,
+      "why": "Only the write proof stage admits a mutation. (The receipt carries a digest on purpose: only its STAGE may refuse it.)",
+      "control": {
+        "receipt": {
+          "stage": "write_executed",
+          "terminal_state": "match",
+          "measurement_route": "edge",
+          "side_effect_digest": "sha256:6810write00000000000000000000000000000000000000000000000000000000"
+        }
+      }
+    },
+    {
+      "name": "write_receipt_for_another_build_refused",
+      "target_mode": "canary",
+      "operation_kind": "mutation",
+      "receipt": {
+        "stage": "write_executed",
+        "terminal_state": "match",
+        "measurement_route": "edge",
+        "side_effect_digest": "sha256:6810write00000000000000000000000000000000000000000000000000000000"
+      },
+      "admits": false,
+      "why": "A write proof is evidence for one immutable key, never carried across a candidate build.",
+      "control": {
+        "key_override": null
+      },
+      "key_override": {
+        "candidate_build": "0000000000000000000000000000000000000000"
+      }
+    },
+    {
+      "name": "write_unbound_build_refused",
+      "target_mode": "canary",
+      "operation_kind": "mutation",
+      "receipt": {
+        "stage": "write_executed",
+        "terminal_state": "match",
+        "measurement_route": "edge",
+        "side_effect_digest": "sha256:6810write00000000000000000000000000000000000000000000000000000000",
+        "build_binding": "absent"
+      },
+      "admits": false,
+      "why": "An edge response that did not carry the serving build cannot say WHICH build wrote the rows: the per-request binding applies to a write proof exactly as to a query proof.",
+      "control": {
+        "receipt": {
+          "build_binding": "per_request"
+        }
+      }
+    },
+    {
+      "name": "write_null_binding_refused",
+      "target_mode": "canary",
+      "operation_kind": "mutation",
+      "receipt": {
+        "stage": "write_executed",
+        "terminal_state": "match",
+        "measurement_route": "edge",
+        "side_effect_digest": "sha256:6810write00000000000000000000000000000000000000000000000000000000",
+        "build_binding": null
+      },
+      "admits": false,
+      "why": "A NULL binding is a row written before the column existed: it says nothing.",
+      "control": {
+        "receipt": {
+          "build_binding": "per_request"
+        }
+      }
+    },
+    {
+      "name": "write_blank_candidate_build_refused",
+      "target_mode": "canary",
+      "operation_kind": "mutation",
+      "receipt": {
+        "stage": "write_executed",
+        "terminal_state": "match",
+        "measurement_route": "edge",
+        "side_effect_digest": "sha256:6810write00000000000000000000000000000000000000000000000000000000"
+      },
+      "admits": false,
+      "why": "A whitespace-only candidate build is unmatchable while looking present.",
+      "control": {
+        "key_override": null
+      },
+      "key_override": {
+        "candidate_build": "   "
+      },
+      "ask_with_overridden_key": true
     }
   ]
 }

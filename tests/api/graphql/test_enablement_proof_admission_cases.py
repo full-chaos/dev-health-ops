@@ -197,6 +197,7 @@ async def _seed(
             terminal_state=receipt["terminal_state"],
             measurement_route=receipt["measurement_route"],
             build_binding=receipt["build_binding"],
+            side_effect_digest=receipt["side_effect_digest"],
             baseline_defect=receipt["baseline_defect"],
             differences_outside_baseline_defect=receipt[
                 "differences_outside_baseline_defect"
@@ -223,6 +224,13 @@ async def test_predicate_matches_the_shared_admission_table(
         candidate_build=wanted["candidate_build"],
         operations={wanted["selected_operation"]: wanted["document_digest"]},
         target_mode=case["target_mode"],
+        # CHAOS-6810: the operation's document kind, from the fixture (the
+        # fixture's operation names are not in the catalog).
+        mutation_operations=(
+            [wanted["selected_operation"]]
+            if case.get("operation_kind") == "mutation"
+            else []
+        ),
     )
     got = wanted["selected_operation"] in admitted
     assert got == case["admits"], (

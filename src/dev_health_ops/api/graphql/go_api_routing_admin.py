@@ -32,7 +32,7 @@ subsystem exists to tell apart (the same reasoning
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, cast
@@ -47,6 +47,7 @@ from sqlalchemy.sql.elements import ColumnElement
 
 from dev_health_ops.models.go_api_registry import ProofRun, RoutingState
 
+from .go_api_operation_catalog import is_mutation_operation
 from .go_api_registry import register_candidate_build
 
 __all__ = [
@@ -83,6 +84,16 @@ __all__ = [
 #: the deployed binary works; requiring a LATER one (shadow/canary) would
 #: be unsatisfiable, since reaching them is what enabling the row does.
 ENABLEMENT_PROOF_STAGE = "deployed_executed"
+
+#: CHAOS-6810. The proof stage a GraphQL MUTATION must have behind it: a
+#: mutation cannot run on both planes (it would write twice), so its receipt is
+#: the single-plane write proof, and ONLY that receipt admits it. The two forms
+#: never admit each other's operations: a ``deployed_executed`` receipt cannot
+#: authorize a mutation (nothing compared what it persisted) and a
+#: ``write_executed`` receipt cannot authorize a query. A write receipt admits on
+#: ``match`` alone (no cited-mismatch arm: a divergent write is data corruption,
+#: not a known Python defect) and only with a non-blank ``side_effect_digest``.
+ENABLEMENT_WRITE_PROOF_STAGE = "write_executed"
 
 #: A ``match`` always counts. Nothing else counts on its own: a
 #: ``deployed_executed`` run that terminated in ``timeout``/``fallback``/
@@ -513,6 +524,7 @@ async def operations_with_enablement_proof(
     candidate_build: str,
     operations: Mapping[str, str],
     target_mode: str,
+    mutation_operations: Collection[str] | None = None,
 ) -> frozenset[str]:
     """Which of ``operations`` have a ``deployed_executed``/``match``
     proof run for EXACTLY this ``(schema_digest, candidate_build)``.
@@ -534,6 +546,7 @@ async def operations_with_enablement_proof(
             candidate_build=candidate_build,
             operations=operations,
             target_mode=target_mode,
+            mutation_operations=mutation_operations,
         )
     )
     return frozenset(result.scalars().all())
@@ -666,6 +679,7 @@ def build_enablement_proof_select(
     candidate_build: str,
     operations: Mapping[str, str],
     target_mode: str,
+    mutation_operations: Collection[str] | None = None,
 ) -> Select[tuple[str]]:
     """The SELECT :func:`operations_with_enablement_proof` executes.
 
@@ -695,9 +709,27 @@ def build_enablement_proof_select(
                 candidate_build=candidate_build,
                 operations=operations,
                 target_mode=target_mode,
+                mutation_operations=mutation_operations,
             )
         )
         .distinct()
+    )
+
+
+def _write_receipt_admits() -> ColumnElement[bool]:
+    """A write proof admits on ``match`` and a digest that names something.
+
+    The clauses every admission shares apply to it unchanged: a candidate build
+    that names something, and the per-request build binding (an edge response
+    that did not carry the serving build cannot say WHICH build wrote the rows).
+    Only the terminal-state arm differs: there is no cited-mismatch arm.
+    """
+    return and_(
+        sa.func.btrim(ProofRun.candidate_build, _BLANK_CUTSET) != "",
+        ProofRun.build_binding == BUILD_BINDING_PER_REQUEST,
+        ProofRun.terminal_state == ENABLEMENT_PROOF_TERMINAL_STATE,
+        ProofRun.side_effect_digest.is_not(None),
+        sa.func.btrim(ProofRun.side_effect_digest, _BLANK_CUTSET) != "",
     )
 
 
@@ -707,25 +739,37 @@ def _enablement_proof_conditions(
     candidate_build: str,
     operations: Mapping[str, str],
     target_mode: str,
+    mutation_operations: Collection[str] | None = None,
 ) -> list[ColumnElement[bool]]:
     """The WHERE clauses of the rule -- ONE list, read by both selects.
 
     :func:`build_enablement_proof_select` (which operations are proven) and
     :func:`build_enablement_receipt_select` (WHICH receipt proves each) must
     never disagree about admissibility, so neither restates a clause.
+
+    Each operation carries the rule of its document KIND (CHAOS-6810): a query
+    needs a ``deployed_executed`` two-plane receipt, a mutation a
+    ``write_executed`` single-plane one, and neither form admits the other's
+    operations. ``mutation_operations`` names the mutations; ``None`` reads the
+    catalog (``is_mutation_operation``).
     """
+    mutations = (
+        frozenset(mutation_operations)
+        if mutation_operations is not None
+        else frozenset(op for op in operations if is_mutation_operation(op))
+    )
     # The key is FOUR columns, and `document_digest` is not optional --
     # it was missing, so a proof recorded against a
     # DIFFERENT registered document could authorize an enablement.
     # Matched as an explicit tuple-OR rather than two independent `IN`
     # lists: `selected_operation IN (...) AND document_digest IN (...)`
     # is a cross product and would accept exactly the mismatch under test.
+    #
+    # The stage, terminal-state and route rules are inside each operation's
+    # own term, because they depend on the operation's kind.
     return [
         ProofRun.schema_digest == schema_digest,
         ProofRun.candidate_build == candidate_build,
-        ProofRun.stage == ENABLEMENT_PROOF_STAGE,
-        _admissible_terminal_state(),
-        _admissible_route(target_mode),
         # `or_()` with no arguments is dropped from the WHERE clause
         # entirely by SQLAlchemy (a warning, not an error) rather than
         # compiling to FALSE, so an empty `operations` mapping would
@@ -739,6 +783,18 @@ def _enablement_proof_conditions(
                 and_(
                     ProofRun.selected_operation == operation,
                     ProofRun.document_digest == document_digest,
+                    *(
+                        (
+                            ProofRun.stage == ENABLEMENT_WRITE_PROOF_STAGE,
+                            _write_receipt_admits(),
+                        )
+                        if operation in mutations
+                        else (
+                            ProofRun.stage == ENABLEMENT_PROOF_STAGE,
+                            _admissible_terminal_state(),
+                        )
+                    ),
+                    _admissible_route(target_mode),
                 )
                 for operation, document_digest in operations.items()
             ),
@@ -881,6 +937,7 @@ def build_enablement_receipt_select(
     candidate_build: str,
     operations: Mapping[str, str],
     target_mode: str,
+    mutation_operations: Collection[str] | None = None,
 ) -> Select[Any]:
     """The newest admissible receipt per operation, under the SAME rule.
 
@@ -910,6 +967,7 @@ def build_enablement_receipt_select(
                 candidate_build=candidate_build,
                 operations=operations,
                 target_mode=target_mode,
+                mutation_operations=mutation_operations,
             )
         )
         .order_by(
@@ -928,6 +986,7 @@ async def enablement_receipts(
     candidate_build: str,
     operations: Mapping[str, str],
     target_mode: str,
+    mutation_operations: Collection[str] | None = None,
 ) -> dict[str, AuthorizingReceipt]:
     """``{operation: the receipt that authorizes it}`` -- the proven set
     :func:`operations_with_enablement_proof` returns, plus WHICH receipt."""
@@ -939,6 +998,7 @@ async def enablement_receipts(
             candidate_build=candidate_build,
             operations=operations,
             target_mode=target_mode,
+            mutation_operations=mutation_operations,
         )
     )
     receipts: dict[str, AuthorizingReceipt] = {}

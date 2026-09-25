@@ -295,6 +295,18 @@ func (f *fakeStripe) serve(plane string, w http.ResponseWriter, r *http.Request)
 			return
 		}
 		fmt.Fprintf(w, `{"id": %q, "object": "invoice", "status": "void"}`, id)
+	case r.Method == http.MethodGet && path == "/v1/invoices/in_more/lines":
+		// The full line list of an invoice whose event carried only the
+		// first line, two lines a page.
+		var lines []string
+		for index := 1; index <= 5; index++ {
+			lines = append(lines, fmt.Sprintf(`{"id": "il_more_%d", "object": "line_item", "amount": %d, "quantity": %d, "description": "Line %d",
+				"period": {"start": 1790000000, "end": 1792600000}, "pricing": {"price_details": {"price": "price_more", "product": "prod_more"}}}`,
+				index, index*100, index, index))
+		}
+		fmt.Fprint(w, page(lines, idOf, r.URL.Query().Get("starting_after"), path))
+	case r.Method == http.MethodGet && path == "/v1/invoices/in_more_fail/lines":
+		stripeFail(w, "lines refused")
 	default:
 		w.WriteHeader(http.StatusNotFound)
 		fmt.Fprint(w, `{"error": {"message": "unrouted fake call", "type": "invalid_request_error"}}`)

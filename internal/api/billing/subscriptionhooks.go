@@ -275,6 +275,14 @@ func trialEndTime(raw pyjson.Value) (time.Time, error) {
 // the key exists, then its operational.billing_notification handoff
 // published to the job outbox.
 func (h handlers) enqueueBillingNotification(ctx context.Context, notificationType string, orgID pyjson.Value, attributes *pyjson.Object) error {
+	return h.enqueueBillingNotificationFor(ctx, notificationType, orgID, "", attributes)
+}
+
+// enqueueBillingNotificationFor is _enqueue_billing_notification with its
+// provider_event_id: a Stripe event id keys the intent (one intent per
+// event, so a redelivered event reuses it), hashed when longer than 128
+// characters; without one the key is the canonical attributes' sha256.
+func (h handlers) enqueueBillingNotificationFor(ctx context.Context, notificationType string, orgID pyjson.Value, providerEventID string, attributes *pyjson.Object) error {
 	text, isText := orgID.(string)
 	if !isText {
 		return errNotificationOrg
@@ -288,7 +296,15 @@ func (h handlers) enqueueBillingNotification(ctx context.Context, notificationTy
 		return err
 	}
 	digest := sha256.Sum256(canonical)
-	key := "billing:" + notificationType + ":" + org.String() + ":" + hex.EncodeToString(digest[:])
+	suffix := hex.EncodeToString(digest[:])
+	if identity := pythonparity.Strip(providerEventID); identity != "" {
+		suffix = identity
+		if len([]rune(identity)) > 128 {
+			hashed := sha256.Sum256([]byte(identity))
+			suffix = hex.EncodeToString(hashed[:])
+		}
+	}
+	key := "billing:" + notificationType + ":" + org.String() + ":" + suffix
 	stored, err := pyjson.Dumps(attributes)
 	if err != nil {
 		return err

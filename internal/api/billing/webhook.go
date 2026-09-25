@@ -31,12 +31,6 @@ import (
 // (not an object, a v2 thin event, no type or data.object): the bare 500.
 var errWebhookEvent = errors.New("billing: stripe webhook event unreadable")
 
-// errInvoiceDedupe is the invoice branch's failure on both planes: the
-// Python duplicate-event check (InvoiceService.is_duplicate_event) raises
-// before anything is written, for every event that carries an id
-// (CHAOS-6526, a data-model decision). Parity: the same bare 500.
-var errInvoiceDedupe = errors.New("billing: invoice webhook dedupe is broken on the Python plane (CHAOS-6526); parity 500")
-
 // errWebhookCustomer is a truthy customer that is not a string reaching
 // org_licenses.customer_id (a text column): the flush fails.
 var errWebhookCustomer = errors.New("billing: customer id is not a string")
@@ -94,20 +88,10 @@ func (h handlers) stripeWebhook(w http.ResponseWriter, r *http.Request) {
 	eventID := attr(event, "id", nil)
 	switch stripeEventRoute(eventType) {
 	case "invoice.":
-		if eventType == "invoice.payment_failed" && !invoiceHasOrgID(dataObject) {
-			h.logger.WarnContext(ctx, "Payment failed", "customer", pyStr(attr(dataObject, "customer", nil)))
-			h.write(w, ok(webhookOK))
+		if err := h.invoiceEvent(ctx, eventType, eventID, dataObject); err != nil {
+			h.internal(w, r, "stripe webhook", err)
 			return
 		}
-		if pyjson.Truthy(eventID) {
-			h.internal(w, r, "stripe webhook", errInvoiceDedupe)
-			return
-		}
-		// Named limit: an invoice event without an id (Stripe never sends
-		// one) skips the Python dedupe and records the invoice there; here
-		// it answers the same 500 as every other invoice event.
-		h.internal(w, r, "stripe webhook", errInvoiceDedupe)
-		return
 	case "checkout.session.completed":
 		if err := h.checkoutCompleted(ctx, client, dataObject); err != nil {
 			h.internal(w, r, "stripe webhook", err)
@@ -228,18 +212,6 @@ func readWebhookEvent(payload []byte) (pyjson.Value, string, pyjson.Value, error
 		return nil, "", nil, errWebhookEvent
 	}
 	return event, eventType, dataObject, nil
-}
-
-// invoiceHasOrgID is _invoice_has_org_id over a plain dict.
-func invoiceHasOrgID(invoice pyjson.Value) bool {
-	// `getattr(..., {}) or {}` then isinstance(dict): a falsy or non-dict
-	// metadata carries no org.
-	object, isObject := attr(invoice, "metadata", nil).(*pyjson.Object)
-	if !isObject {
-		return false
-	}
-	orgID, _ := object.Get("org_id")
-	return pyjson.Truthy(orgID)
 }
 
 // priceTier is map_price_id_to_tier: the map is built team first, then

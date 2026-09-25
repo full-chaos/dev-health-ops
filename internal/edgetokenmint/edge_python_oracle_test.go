@@ -30,7 +30,7 @@ from types import SimpleNamespace
 from dev_health_ops.api.services.auth import AuthService
 
 spec = json.load(sys.stdin)
-principal = spec["principal"]
+default_principal = spec["principal"]
 
 
 class Result:
@@ -42,8 +42,9 @@ class Result:
 
 
 class Session:
-    def __init__(self, row):
+    def __init__(self, row, principal):
         self.row = row
+        self.principal = principal
         self.bound = []
 
     async def execute(self, statement):
@@ -51,14 +52,14 @@ class Session:
         if self.row is None:
             return Result(None)
         return Result(SimpleNamespace(
-            id=uuid.UUID(principal["user_id"]),
+            id=uuid.UUID(self.principal["user_id"]),
             is_active=self.row["is_active"],
             is_superuser=self.row["is_superuser"],
             token_version=self.row["token_version"],
         ))
 
 
-def python_token(mint):
+def python_token(mint, principal):
     service = AuthService(secret_key=spec[mint["key"]])
     if mint.get("issuer"):
         service.issuer = mint["issuer"]
@@ -71,8 +72,8 @@ def python_token(mint):
     )
 
 
-async def judge(token, row):
-    session = Session(row)
+async def judge(token, row, principal):
+    session = Session(row, principal)
     user = await AuthService(secret_key=spec["key"]).authenticate_access_token(token, session)
     return {
         "accepted": user is not None,
@@ -84,9 +85,10 @@ async def judge(token, row):
 async def main():
     verdicts = {}
     for case in spec["cases"]:
+        principal = case.get("principal") or default_principal
         verdicts[case["name"]] = {
-            "go": await judge(case["go_token"], case["db_row"]),
-            "python": await judge(python_token(case["python_mint"]), case["db_row"]),
+            "go": await judge(case["go_token"], case["db_row"], principal),
+            "python": await judge(python_token(case["python_mint"], principal), case["db_row"], principal),
         }
     json.dump(verdicts, sys.stdout, sort_keys=True)
 
@@ -107,11 +109,22 @@ type oracleMint struct {
 	ExpiresMinutes int    `json:"expires_minutes"`
 }
 
+// oraclePrincipal is the principal the Python side mints for and the
+// validator's row answers as. A case without one uses the proof principal.
+type oraclePrincipal struct {
+	UserID       string `json:"user_id"`
+	Email        string `json:"email"`
+	OrgID        string `json:"org_id"`
+	Role         string `json:"role"`
+	TokenVersion int    `json:"token_version"`
+}
+
 type oracleCase struct {
-	Name       string     `json:"name"`
-	GoToken    string     `json:"go_token"`
-	PythonMint oracleMint `json:"python_mint"`
-	DBRow      *oracleRow `json:"db_row"`
+	Name       string           `json:"name"`
+	GoToken    string           `json:"go_token"`
+	PythonMint oracleMint       `json:"python_mint"`
+	DBRow      *oracleRow       `json:"db_row"`
+	Principal  *oraclePrincipal `json:"principal,omitempty"`
 	accepted   bool
 }
 
@@ -165,6 +178,19 @@ func TestGoMintedEdgeTokenIsJudgedByTheLiveEdgeExactlyLikeAPythonMintedOne(t *te
 		}
 		return token
 	}
+	// The org-admin proof principal: its own users row and token, minted by
+	// Mint with the admin role (CHAOS-6570).
+	adminPrincipal := Principal{
+		UserID:       AdminProofPrincipalID,
+		Email:        "go-api-admin-prove@service.dev-health.invalid",
+		OrgID:        principal.OrgID,
+		Role:         "admin",
+		TokenVersion: 2,
+	}
+	adminToken, err := Mint([]byte(key), adminPrincipal, Options{})
+	if err != nil {
+		t.Fatalf("Go mint (admin principal): %v", err)
+	}
 	liveRow := &oracleRow{IsActive: true, TokenVersion: 2}
 	past := func() time.Time { return time.Now().Add(-20 * time.Minute) }
 
@@ -176,6 +202,10 @@ func TestGoMintedEdgeTokenIsJudgedByTheLiveEdgeExactlyLikeAPythonMintedOne(t *te
 		{Name: "wrong issuer", GoToken: mint(key, Options{Issuer: "dev-health-ops-edge"}), PythonMint: oracleMint{Key: "key", Issuer: "dev-health-ops-edge", ExpiresMinutes: 10}, DBRow: liveRow},
 		{Name: "inactive principal", GoToken: mint(key, Options{}), PythonMint: oracleMint{Key: "key", ExpiresMinutes: 10}, DBRow: &oracleRow{IsActive: false, TokenVersion: 2}},
 		{Name: "token_version mismatch", GoToken: mint(key, Options{}), PythonMint: oracleMint{Key: "key", ExpiresMinutes: 10}, DBRow: &oracleRow{IsActive: true, TokenVersion: 3}},
+		{
+			Name: "admin principal valid", GoToken: adminToken, PythonMint: oracleMint{Key: "key", ExpiresMinutes: 10}, DBRow: liveRow, accepted: true,
+			Principal: &oraclePrincipal{UserID: adminPrincipal.UserID, Email: adminPrincipal.Email, OrgID: adminPrincipal.OrgID, Role: adminPrincipal.Role, TokenVersion: adminPrincipal.TokenVersion},
+		},
 		{Name: "principal row missing", GoToken: mint(key, Options{}), PythonMint: oracleMint{Key: "key", ExpiresMinutes: 10}, DBRow: nil},
 	}
 
@@ -239,13 +269,17 @@ func TestGoMintedEdgeTokenIsJudgedByTheLiveEdgeExactlyLikeAPythonMintedOne(t *te
 		if !reflect.DeepEqual(goSide.User, pySide.User) {
 			t.Errorf("%s: the edge authenticated different users:\n go:     %v\n python: %v", tc.Name, goSide.User, pySide.User)
 		}
-		if tc.DBRow != nil && tc.accepted && (!reflect.DeepEqual(goSide.BoundUserIDs, []string{ProvePrincipalID}) || !reflect.DeepEqual(pySide.BoundUserIDs, goSide.BoundUserIDs)) {
-			t.Errorf("%s: the edge looked up go=%v python=%v, want the proof principal", tc.Name, goSide.BoundUserIDs, pySide.BoundUserIDs)
+		expected := oraclePrincipal{UserID: principal.UserID, Email: principal.Email, OrgID: principal.OrgID, Role: principal.Role}
+		if tc.Principal != nil {
+			expected = *tc.Principal
+		}
+		if tc.DBRow != nil && tc.accepted && (!reflect.DeepEqual(goSide.BoundUserIDs, []string{expected.UserID}) || !reflect.DeepEqual(pySide.BoundUserIDs, goSide.BoundUserIDs)) {
+			t.Errorf("%s: the edge looked up go=%v python=%v, want %s", tc.Name, goSide.BoundUserIDs, pySide.BoundUserIDs, expected.UserID)
 		}
 		if tc.accepted {
 			want := map[string]any{
-				"user_id": ProvePrincipalID, "email": principal.Email, "org_id": principal.OrgID,
-				"role": "viewer", "is_superuser": false, "is_superuser_verified": true,
+				"user_id": expected.UserID, "email": expected.Email, "org_id": expected.OrgID,
+				"role": expected.Role, "is_superuser": false, "is_superuser_verified": true,
 				"token_version": float64(2), "username": nil, "full_name": nil, "impersonated_by": nil,
 			}
 			if !reflect.DeepEqual(goSide.User, want) {

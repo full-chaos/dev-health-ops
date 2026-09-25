@@ -24,8 +24,14 @@
 //     ServiceAuthProvider and no password hash), so no login path can
 //     reach it and no human row can be minted for by mistake;
 //   - it must not be a superuser;
-//   - it must hold a membership in the requested org, with a role in
-//     AllowedRoles (read-level roles only).
+//   - it must hold a membership in the requested org, with a role
+//     RoleAllowedFor its id names (read-level roles only for the proof
+//     principal).
+//
+// A second dedicated principal, AdminProofPrincipalID, exists for proofs of
+// org-admin routes. It is a separate row, never a promotion of the first:
+// the proof principal stays read-level, so every proof that depends on it is
+// unchanged, and the admin role can be minted for that one id only.
 //
 // Every one of those is checked against the database BEFORE signing, so a
 // principal the edge would refuse fails here by name and not as a 401
@@ -81,6 +87,13 @@ const (
 	// environment and so this minter can never be pointed at another user.
 	ProvePrincipalID = "00000000-0000-4000-8000-00000000e0e1"
 
+	// AdminProofPrincipalID is the users.id of the dedicated ORG-ADMIN proof
+	// service principal (CHAOS-6570). Fixed for the same reason as
+	// ProvePrincipalID, and distinct from it: it holds exactly one Admin
+	// membership in the proof org and is the only id a token with the admin
+	// role can be minted for.
+	AdminProofPrincipalID = "00000000-0000-4000-8000-00000000e0e2"
+
 	// ServiceAuthProvider marks a users row as a service identity.
 	ServiceAuthProvider = "service"
 )
@@ -88,6 +101,21 @@ const (
 // AllowedRoles are the membership roles the proof principal may hold.
 // go-api-prove only reads; owner and admin are refused.
 var AllowedRoles = map[string]bool{"viewer": true, "member": true}
+
+// AdminAllowedRoles are the membership roles the org-admin proof principal
+// may hold: exactly admin. A viewer, member or owner row for that id is
+// refused, so the principal cannot drift into a read-level or an owner role.
+var AdminAllowedRoles = map[string]bool{"admin": true}
+
+// RoleAllowedFor reports whether a token with role may be minted for the
+// user id. Only AdminProofPrincipalID may carry admin, and only admin; every
+// other id keeps the read-level AllowedRoles.
+func RoleAllowedFor(userID, role string) bool {
+	if userID == AdminProofPrincipalID {
+		return AdminAllowedRoles[role]
+	}
+	return AllowedRoles[role]
+}
 
 // Refusals. Each names what is wrong with the principal, never a key or a
 // token.
@@ -99,7 +127,7 @@ var (
 	ErrPrincipalNotService = errors.New("edgetokenmint: the principal row is not marked as a service identity")
 	ErrPrincipalSuperuser  = errors.New("edgetokenmint: the proof service principal must not be a superuser")
 	ErrNoMembership        = errors.New("edgetokenmint: the proof service principal has no membership in this org")
-	ErrRoleNotAllowed      = errors.New("edgetokenmint: the proof service principal's role in this org is not a read-level role")
+	ErrRoleNotAllowed      = errors.New("edgetokenmint: the proof service principal's role in this org is not a role it may hold")
 )
 
 // Claims is the access-token payload auth.py's create_access_token writes,
@@ -212,7 +240,7 @@ func Mint(signingKey []byte, principal Principal, opts Options) (string, error) 
 	if strings.TrimSpace(principal.Email) == "" {
 		return "", errors.New("edgetokenmint: principal email must not be empty")
 	}
-	if !AllowedRoles[principal.Role] {
+	if !RoleAllowedFor(principal.UserID, principal.Role) {
 		return "", ErrRoleNotAllowed
 	}
 	opts = opts.withDefaults()
@@ -259,6 +287,17 @@ const lookupSQL = `SELECT u.id::text, u.email, u.is_active, u.is_superuser, u.to
 // LookupPrincipal reads the proof service principal for orgID and refuses
 // any row the edge must not accept for go-api-prove.
 func LookupPrincipal(ctx context.Context, db RowQuerier, orgID string) (Principal, error) {
+	return lookupPrincipal(ctx, db, ProvePrincipalID, orgID)
+}
+
+// LookupAdminPrincipal reads the org-admin proof service principal for orgID
+// and refuses any row that is not a service identity holding exactly the
+// admin role in that org.
+func LookupAdminPrincipal(ctx context.Context, db RowQuerier, orgID string) (Principal, error) {
+	return lookupPrincipal(ctx, db, AdminProofPrincipalID, orgID)
+}
+
+func lookupPrincipal(ctx context.Context, db RowQuerier, principalID, orgID string) (Principal, error) {
 	if _, err := uuid.Parse(orgID); err != nil {
 		return Principal{}, errors.New("edgetokenmint: org id is not a UUID")
 	}
@@ -269,7 +308,7 @@ func LookupPrincipal(ctx context.Context, db RowQuerier, orgID string) (Principa
 		hasPassword             bool
 		role                    *string
 	)
-	err := db.QueryRow(ctx, lookupSQL, ProvePrincipalID, orgID).Scan(
+	err := db.QueryRow(ctx, lookupSQL, principalID, orgID).Scan(
 		&id, &email, &active, &superuser, &tokenVersion, &authProvider, &hasPassword, &role,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -287,10 +326,20 @@ func LookupPrincipal(ctx context.Context, db RowQuerier, orgID string) (Principa
 		return Principal{}, ErrPrincipalSuperuser
 	case role == nil:
 		return Principal{}, ErrNoMembership
-	case !AllowedRoles[*role]:
+	case !RoleAllowedFor(principalID, *role):
 		return Principal{}, ErrRoleNotAllowed
 	}
 	return Principal{UserID: id, Email: email, OrgID: orgID, Role: *role, TokenVersion: tokenVersion}, nil
+}
+
+// MintForAdminProve looks up the org-admin proof service principal for orgID
+// and mints its token (role admin).
+func MintForAdminProve(ctx context.Context, db RowQuerier, signingKey []byte, orgID string, opts Options) (string, error) {
+	principal, err := LookupAdminPrincipal(ctx, db, orgID)
+	if err != nil {
+		return "", err
+	}
+	return Mint(signingKey, principal, opts)
 }
 
 // MintForProve looks up the proof service principal for orgID and mints

@@ -489,13 +489,13 @@ check_live_python_oracles() {
       DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${proof_dir}" \
       PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}" \
       go test -mod=readonly -count=1 \
-        -run '^(TestFernetCipherMatchesLivePythonCustomSalt|TestFernetCipherMatchesLivePythonDefaultSalt|TestFernetRefusesWithoutKeyLikePython|TestCredentialFieldReadsMatchLivePython)$' \
+        -run '^(TestFernetCipherMatchesLivePythonCustomSalt|TestFernetCipherMatchesLivePythonDefaultSalt|TestFernetRefusesWithoutKeyLikePython|TestCredentialFieldReadsMatchLivePython|TestCredentialFieldGridMatchesLivePython)$' \
         ./internal/providerfoundation/...
   ); then
     rm -rf -- "${proof_dir}"
     return 1
   fi
-  for proof_name in providerfoundation-credentials providerfoundation-credentials-default-salt providerfoundation-credentials-no-key providerfoundation-credential-field-reads; do
+  for proof_name in providerfoundation-credentials providerfoundation-credentials-default-salt providerfoundation-credentials-no-key providerfoundation-credential-field-reads providerfoundation-credential-field-grid; do
     proof_file="${proof_dir}/${proof_name}"
     if [ ! -f "${proof_file}" ] || [ "$(cat "${proof_file}")" != "executed" ]; then
       printf 'ERROR: providerfoundation live Python encryption measurement %s did not occur\n' "${proof_name}" >&2

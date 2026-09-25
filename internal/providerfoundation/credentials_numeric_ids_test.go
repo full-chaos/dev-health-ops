@@ -135,7 +135,7 @@ func TestDecodeCredentialIgnoresFieldsNobodyReads(t *testing.T) {
 	for _, tc := range []struct{ provider, body string }{
 		{"gitlab", `{"token": "glpat-x", "project_id": 7, "tags": [1, {"a": 2}], "meta": {"deep": [true, null]}}`},
 		{"github", `{"token": "ghp_abc", "note": null, "extra": 1.5}`},
-		{"jira", `{"api_token": "t", "email": "e@x.com", "site_id": 42}`},
+		{"jira", `{"api_token": "t", "email": "e@x.com", "base_url": "https://x", "site_id": 42}`},
 		{"linear", `{"api_key": "lin_api_x", "workspace_id": 9}`},
 		{"gitlab", `{"token": 12}`},
 		{"gitlab", `{"token": "t", " ": 7, "": "v"}`},

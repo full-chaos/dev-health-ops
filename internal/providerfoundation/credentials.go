@@ -174,15 +174,12 @@ var githubFieldAliases = map[string]string{
 }
 
 // pythonSecretText is what Python makes of a credential field's non-string
-// JSON value where the resolver reads it as `str(value or "")`: a null is
-// absent (Python drops None); a falsy value (0, 0.0, false, an empty list or
+// JSON value where the resolver reads it as `str(value or "")`. A null never
+// gets here (the decode drops None before anything else, as Python does); a falsy value (0, 0.0, false, an empty list or
 // object) is present but empty; any other value is its str() -- the integer's
 // digits, repr() of a float, "True", and repr() of a list or object as Python
 // writes it.
 func pythonSecretText(value pyjson.Value) (secrets.Value, bool) {
-	if value == nil {
-		return secrets.Value{}, false
-	}
 	if !pyjson.Truthy(value) {
 		return secrets.NewValue(""), true
 	}
@@ -271,6 +268,24 @@ func hasAny(credential Credential, names []string) bool {
 	return false
 }
 
+// githubResolvedKeyConfigured is whether github_credentials_from_mapping ends
+// up with a non-empty private key: the private_key entry when there is one,
+// else the content of private_key_path. An error is a path the builder cannot
+// read (it returns None, or raises on invalid UTF-8).
+func githubResolvedKeyConfigured(credential Credential) (bool, error) {
+	if value, present := credential.Secret("private_key"); present {
+		return value.Configured(), nil
+	}
+	if path, ok := credential.Secret("private_key_path"); ok && path.Configured() {
+		content, err := readGitHubAppPrivateKeyFile(path.Reveal())
+		if err != nil {
+			return false, err
+		}
+		return content.Configured(), nil
+	}
+	return false, nil
+}
+
 // ValidateCredentialShape keeps auth construction explicit. It accepts only
 // the auth fields that the current Python resolver accepts for this provider.
 func ValidateCredentialShape(credential Credential) error {
@@ -278,44 +293,32 @@ func ValidateCredentialShape(credential Credential) error {
 	switch credential.Provider {
 	case "github":
 		token := has("token")
-		// r2 (round 1 finding #1): github_credentials_from_mapping accepts
-		// EITHER private_key (inline PEM content) OR private_key_path (a
-		// file path it reads at resolve time, resolver.py:269-276) as
-		// satisfying the App-auth triple -- this is a pure SHAPE check
-		// (no file I/O here; NewGitHubAppAuth does the actual read), so a
-		// private_key_path-only row must pass it the same way Python's
-		// own shape check (GitHubCredentials's validation) does.
-		app := has("app_id") && (has("private_key") || has("private_key_path")) && has("installation_id")
+		// github_credentials_from_mapping resolves the private key first: the
+		// private_key entry when there is one, else the CONTENT of
+		// private_key_path (resolver.py:269-276), and an unreadable file makes
+		// the builder return None. Both the App-auth triple and the
+		// token-beside-an-App-field conflict are decided on that resolved key,
+		// so an empty, missing, unreadable or non-UTF-8 file is no key.
+		key, err := githubResolvedKeyConfigured(credential)
+		if err != nil {
+			return ErrCredentialInvalid
+		}
+		app := has("app_id") && key && has("installation_id")
 		if token == app {
 			return ErrCredentialInvalid
 		}
 		// CHAOS-6781: GitHubCredentials.__post_init__ raises when a token comes
-		// with ANY App field, not only a complete triple, and the builder then
-		// returns None. The key is private_key when that entry exists; with no
-		// entry the builder reads private_key_path into it, so the file's CONTENT
-		// decides (an empty file is no key, an unreadable one makes the builder
-		// return None), exactly as resolver.py:269-276.
-		if token {
-			key := false
-			if _, present := credential.Secret("private_key"); present {
-				key = has("private_key")
-			} else if path, ok := credential.Secret("private_key_path"); ok && path.Configured() {
-				content, err := readGitHubAppPrivateKeyFile(path.Reveal())
-				if err != nil {
-					return ErrCredentialInvalid
-				}
-				key = content.Configured()
-			}
-			if has("app_id") || has("installation_id") || key {
-				return ErrCredentialInvalid
-			}
+		// with ANY App field, not only a complete triple.
+		if token && (has("app_id") || has("installation_id") || key) {
+			return ErrCredentialInvalid
 		}
 	case "gitlab":
 		if !has("token") {
 			return ErrCredentialInvalid
 		}
 	case "jira":
-		if !hasAny(credential, jiraAPITokenAliases) || !has("email") {
+		// JiraCredentials requires api_token, email AND base_url.
+		if !hasAny(credential, jiraAPITokenAliases) || !has("email") || jiraCredentialBaseURL(credential) == "" {
 			return ErrCredentialInvalid
 		}
 	case "linear":

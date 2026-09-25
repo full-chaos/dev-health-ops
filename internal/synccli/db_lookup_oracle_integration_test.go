@@ -319,6 +319,7 @@ func TestDBLookupsMatchLivePython(t *testing.T) {
 			t.Fatalf("no scenario ended in stage %q: the corpus does not reach it", stage)
 		}
 	}
+	writeVenueProof(t)
 }
 
 // goDBResult runs BuildPlan and the executor's lookups the way the verb does

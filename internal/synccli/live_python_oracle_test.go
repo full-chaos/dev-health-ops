@@ -290,6 +290,23 @@ func TestSyncTargetMatchesLivePython(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(proof, "cli-sync-target"), []byte("executed"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	writeVenueProof(t)
+}
+
+// writeVenueProof records that the running test made a real comparison against
+// the live Python producer, under the test's own name: the venue-oracles verb
+// (ci/check_go.sh, registry ci/venue_oracle_registry.d/internal__synccli.tsv)
+// reads that file, and a run that wrote none is a failure, never a pass. Only
+// a test that has not failed writes it.
+func writeVenueProof(t *testing.T) {
+	t.Helper()
+	dir := os.Getenv("DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR")
+	if dir == "" || t.Failed() {
+		return
+	}
+	if err := os.WriteFile(filepath.Join(dir, t.Name()), []byte("executed"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // canonical re-marshals through a map so key order never matters.

@@ -731,6 +731,7 @@ func TestLocalSyncMatchesLivePython(t *testing.T) {
 	if rowsSeen == 0 {
 		t.Fatal("no scenario wrote a row: the corpus does not reach the sink")
 	}
+	writeVenueProof(t)
 }
 
 func equalLines(a, b []string) bool {

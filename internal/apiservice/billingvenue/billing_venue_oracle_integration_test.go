@@ -12,6 +12,7 @@ import (
 	"os"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -40,6 +41,7 @@ type fakeStripe struct {
 	mu       sync.Mutex
 	calls    map[string][]string
 	counters map[string]int
+	refunds  int
 }
 
 func newFakeStripe() *fakeStripe {
@@ -319,6 +321,42 @@ func (f *fakeStripe) serve(plane string, w http.ResponseWriter, r *http.Request)
 		fmt.Fprint(w, page(lines, idOf, r.URL.Query().Get("starting_after"), path))
 	case r.Method == http.MethodGet && path == "/v1/invoices/in_more_fail/lines":
 		stripeFail(w, "lines refused")
+	case r.Method == http.MethodGet && path == "/v1/invoice_payments":
+		// The invoice's payments (CHAOS-6478's refund path): a payment
+		// intent, a bare charge, or none.
+		payment := map[string]string{
+			"in_pi":     `{"type": "payment_intent", "payment_intent": "pi_listed"}`,
+			"in_pi_bad": `{"type": "payment_intent", "payment_intent": "pi_fail"}`,
+			"in_charge": `{"type": "charge", "charge": "ch_bare"}`,
+		}[r.URL.Query().Get("invoice")]
+		if r.URL.Query().Get("status") != "paid" {
+			payment = ""
+		}
+		data := ""
+		if payment != "" {
+			data = `{"id": "inpay_1", "object": "invoice_payment", "status": "paid", "payment": ` + payment + `}`
+		}
+		fmt.Fprintf(w, `{"object": "list", "url": "/v1/invoice_payments", "has_more": false, "data": [%s]}`, data)
+	case r.Method == http.MethodPost && path == "/v1/refunds":
+		if form.Get("payment_intent") == "pi_fail" {
+			stripeFail(w, "Charge ch_x has already been refunded.")
+			return
+		}
+		charge, intent := form.Get("charge"), form.Get("payment_intent")
+		intentJSON := "null"
+		if intent != "" {
+			charge, intentJSON = "ch_of_"+intent, strconv.Quote(intent)
+		}
+		// A 1-cent refund answers without a status and with a failure
+		// reason, as a refund Stripe has not settled can.
+		status := `"status": "succeeded"`
+		if form.Get("amount") == "1" {
+			status = `"failure_reason": "lost_or_stolen_card"`
+		}
+		f.refunds++
+		fmt.Fprintf(w, `{"id": "re_%d", "object": "refund", "amount": %s, "charge": %q, "payment_intent": %s, "currency": "usd",
+			%s, "metadata": {"invoice_id": %q, "org_id": %q}}`,
+			f.refunds, form.Get("amount"), charge, intentJSON, status, form.Get("metadata[invoice_id]"), form.Get("metadata[org_id]"))
 	default:
 		w.WriteHeader(http.StatusNotFound)
 		fmt.Fprint(w, `{"error": {"message": "unrouted fake call", "type": "invalid_request_error"}}`)
@@ -946,6 +984,18 @@ func TestVenueOracleBillingWithoutStripeKey(t *testing.T) {
 		if pyRows != goRows {
 			t.Errorf("rows differ:\n python %s\n go     %s", pyRows, goRows)
 		}
+	}
+	// Go-only: the refund route reaches Stripe only past its balance check,
+	// so without a key it answers the key error as a 500 detail, as checkout
+	// does; the Python route raises before that (its invoice column), a
+	// bare 500. Nothing is written.
+	refund := venueoracle.Do(t, base, venueoracle.Request{Name: "refund create: no key", Method: "POST", Path: "/api/v1/billing/refunds",
+		Headers: headers("super"), Body: venueoracle.B64(`{"invoice_id":"` + invPaidA + `"}`)})
+	refundRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), `SELECT count(*) FROM refunds WHERE invoice_id = '`+invPaidA+`'`)
+	refundOK := refund.Status == 500 && strings.Contains(refund.Body, "STRIPE_SECRET_KEY") && refundRows == "1"
+	receipt += fmt.Sprintf("refund create: no key (go-only) go=%d rows=%s %s\n", refund.Status, refundRows, venueoracle.Mark(refundOK))
+	if !refundOK {
+		t.Errorf("refund create without a key: go answered %d %s, refund rows %s (want 500 naming the key, the 1 seeded row)", refund.Status, refund.Body, refundRows)
 	}
 	if path := os.Getenv("DEV_HEALTH_VENUE_RECEIPT"); path != "" {
 		_ = os.WriteFile(path+".bare", []byte(receipt), 0o600)

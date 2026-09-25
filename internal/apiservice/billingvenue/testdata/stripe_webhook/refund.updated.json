@@ -1,0 +1,56 @@
+{
+ "id": "evt_3UJQ5zEIXptJX86e0bDrOkJO",
+ "object": "event",
+ "api_version": "2026-02-25.clover",
+ "created": 1790308114,
+ "data": {
+  "object": {
+   "id": "re_3UJQ5zEIXptJX86e0KUBHSxk",
+   "object": "refund",
+   "amount": 400,
+   "balance_transaction": "txn_3UJQ5zEIXptJX86e0hHNtdaq",
+   "charge": "ch_3UJQ5zEIXptJX86e016bIuyu",
+   "created": 1790308113,
+   "currency": "usd",
+   "customer": "cus_VK4Ez1IEuhxhgu",
+   "customer_account": null,
+   "destination_details": {
+    "card": {
+     "reference": "4181050241846571",
+     "reference_status": "available",
+     "reference_type": "acquirer_reference_number",
+     "type": "refund"
+    },
+    "type": "card"
+   },
+   "metadata": {
+    "invoice_id": "f18bd0cf-550d-4abb-bc48-f94fe1930578",
+    "org_id": "dbdf3db8-8ca3-4529-aeff-73fdb3c299b5",
+    "refund_id": "49870d3e-21b2-45ab-83f0-04aafbceca27",
+    "requested_amount": "400"
+   },
+   "payment_intent": "pi_3UJQ5zEIXptJX86e0bWgVuAH",
+   "payment_method": "pm_1UJQ5yEIXptJX86e5bL12ciC",
+   "reason": "requested_by_customer",
+   "receipt_number": null,
+   "source_transfer_reversal": null,
+   "status": "succeeded",
+   "transfer_reversal": null
+  },
+  "previous_attributes": {
+   "destination_details": {
+    "card": {
+     "reference": null,
+     "reference_status": "pending"
+    }
+   }
+  }
+ },
+ "livemode": false,
+ "pending_webhooks": 0,
+ "request": {
+  "id": null,
+  "idempotency_key": null
+ },
+ "type": "refund.updated"
+}

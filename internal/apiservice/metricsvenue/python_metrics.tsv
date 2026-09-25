@@ -1,0 +1,79 @@
+# Every metric family the Python api registers (prometheus_client REGISTRY
+# after importing dev_health_ops.api.main), with its Go status. The counter
+# parity oracle lists the live families and fails on any family missing
+# here, any row whose family Python no longer registers, and any "ported"
+# row the oracle does not drive (routeCounters).
+# Columns (TAB separated): <family> <type> <status>
+#   ported  = the Go api exposes it and the oracle compares it with Python
+#   runtime = a process/interpreter collector, not a route counter
+#   pending = not yet classified or ported (the route-counter inventory)
+credential_mapping_rejected	counter	pending
+dev_health_metric_compat_child_silence_seconds	histogram	pending
+dev_health_metrics_family_failures	counter	pending
+dev_health_otel_init_failures	counter	pending
+dev_health_team_attribution_membership_layer	counter	pending
+dev_health_team_autoimport_reference_category_outcome	counter	pending
+dev_health_team_autoimport_reference_subitem_skipped	counter	pending
+dev_health_team_autoimport_roster_preservation_failed	counter	pending
+dev_health_work_item_team_attributions_written	counter	pending
+devhealth_ask_dev_internal_token_leak	counter	pending
+devhealth_ask_dev_narrative_fallback	counter	pending
+devhealth_ask_dev_plan_registry_gap	counter	pending
+devhealth_ask_dev_platform_model_unpriced	counter	pending
+devhealth_ask_dev_qua_commit	counter	pending
+devhealth_ask_dev_qua_shadow	counter	pending
+devhealth_ask_dev_qua_shadow_cardinality_uncorroborated	counter	pending
+devhealth_ask_dev_qua_shadow_fault	counter	pending
+devhealth_ask_dev_qua_shadow_latency_seconds	histogram	pending
+devhealth_ask_dev_tool_executor_fault	counter	pending
+devhealth_ask_dev_unhandled_run_fault	counter	pending
+devhealth_ask_dev_unregistered_terminal_code	counter	pending
+devhealth_byo_llm_base_url_fallback	counter	pending
+devhealth_byo_llm_base_url_fallback_alert	counter	pending
+devhealth_celery_task_duration_seconds	histogram	pending
+devhealth_celery_tasks	counter	pending
+devhealth_clickhouse_org_scope_rows_filtered	counter	pending
+devhealth_clickhouse_queries	counter	pending
+devhealth_clickhouse_query_duration_seconds	histogram	pending
+devhealth_github_api_requests	counter	pending
+devhealth_github_rate_limit_remaining	gauge	pending
+devhealth_go_api_candidate_build_registered	counter	pending
+devhealth_go_api_dispatch_attempted	counter	pending
+devhealth_go_api_dispatch_digest_miss	counter	pending
+devhealth_go_api_dispatch_fallback	counter	pending
+devhealth_go_api_dispatch_go_failed	counter	pending
+devhealth_go_api_dispatch_latency_seconds	histogram	pending
+devhealth_go_api_dispatch_served_go	counter	pending
+devhealth_go_api_envelope_issued	counter	pending
+devhealth_go_api_proof_run_recorded	counter	pending
+devhealth_go_api_registry_lookup	counter	pending
+devhealth_go_api_routing_digest_drift	counter	pending
+devhealth_ingest_legacy_auth_rejected	counter	pending
+devhealth_integration_credential_decrypt_failed	counter	ported
+devhealth_investment_membership_scope_lag_seconds	gauge	pending
+devhealth_investment_membership_scope_stale	counter	pending
+devhealth_licensed_features_resolved	counter	pending
+devhealth_llm_request_duration_seconds	histogram	pending
+devhealth_llm_requests	counter	pending
+devhealth_llm_tokens	counter	pending
+devhealth_org_tier_resolved_async	counter	pending
+devhealth_recommendations_readiness_gate_fail_open	counter	pending
+devhealth_telemetry_org_id_rejected	counter	pending
+jira_project_discovery	counter	pending
+process_cpu_seconds	counter	runtime
+process_max_fds	gauge	runtime
+process_open_fds	gauge	runtime
+process_resident_memory_bytes	gauge	runtime
+process_start_time_seconds	gauge	runtime
+process_virtual_memory_bytes	gauge	runtime
+python_gc_collections	counter	runtime
+python_gc_objects_collected	counter	runtime
+python_gc_objects_uncollectable	counter	runtime
+python_info	gauge	runtime
+sync_coverage_datasets_excluded_by_intent	counter	pending
+sync_coverage_folded_key_resolutions	counter	pending
+sync_manual_trigger_await_latency_seconds	histogram	pending
+sync_manual_trigger_await_outcome	counter	pending
+sync_target_dataset_drift_repaired	counter	pending
+sync_zero_unit_plan_credential_stamped	counter	pending
+worker_report_run_lease_expired	counter	pending

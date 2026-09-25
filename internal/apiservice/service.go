@@ -30,6 +30,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/api/apimetrics"
 	"log/slog"
 	"net/http"
 	"net/netip"
@@ -267,6 +268,18 @@ func configure(
 	return configureWith(ctx, cfg, registry, logger, nil)
 }
 
+// RegisterAPIInstruments puts the api's OTel instruments -- each declared
+// under the Python api's prometheus_client counter name -- on the operator
+// /metrics, as one fragment. The Python api served its counters on
+// /metrics; the Go api's scrape surface is the operator listener.
+func RegisterAPIInstruments(registry *health.Registry) error {
+	source, err := apimetrics.Install()
+	if err != nil {
+		return err
+	}
+	return registry.RegisterMetrics("api_instruments", source)
+}
+
 // configureWith is configure with adjust applied to the built Deps before
 // the routes are composed. Only a test passes adjust (to point a client at
 // a fake external service); production always runs configure.
@@ -291,6 +304,10 @@ func configureWith(
 		deps.Auth, deps.Guard = protected.auth, protected.guard
 		deps.Verifier, deps.Signer = protected.verifier, protected.signer
 		scope = []func(http.Handler) http.Handler{protected.scope.OrgScope, protected.scope.Impersonation}
+	}
+	if err := RegisterAPIInstruments(registry); err != nil {
+		closeComponents(depComponents)
+		return nil, err
 	}
 	// The legacy-ingest refusal counter is scraped from the operator
 	// endpoint, so it is registered here, where the registry is.

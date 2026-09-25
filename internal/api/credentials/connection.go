@@ -84,6 +84,7 @@ func (h handlers) lookupByID(ctx context.Context, orgID, credentialID string) (*
 		return nil, outcomeNotFound, err
 	}
 	if !readable {
+		recordDecryptFailed(ctx, provider)
 		return row, outcomeDecryptFailed, nil
 	}
 	row.creds = creds

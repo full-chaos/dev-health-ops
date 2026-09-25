@@ -24,6 +24,13 @@ const (
 type Response struct {
 	Status int
 	Body   []byte
+	// Build is the x-dev-health-build header of THIS response (the build of the
+	// process that served it), or empty when it carried none.
+	Build string
+	// WireAttempts is how many connections the transport used for the one post
+	// (goapiproof.LegResponse.WireAttempts). More than one means the write may
+	// have been sent twice.
+	WireAttempts int
 }
 
 // Poster sends the mutation document with the case's variables VERBATIM and
@@ -50,6 +57,8 @@ type Result struct {
 	Digest         string
 	BaselineDigest string
 	Detail         string
+	// ServedBuild is the build header the mutation's response carried.
+	ServedBuild string
 	// Posts is how many times the mutation was posted. It is 1 for every Result:
 	// a second post would be a second write.
 	Posts int
@@ -99,9 +108,13 @@ func Execute(ctx context.Context, db goapiproof.Querier, org string, c Case, run
 		detail = append(detail, "the post failed ("+postErr.Error()+"): the mutation may have run, its effects are read and kept")
 		effects.Response = "<no response>"
 	default:
+		result.ServedBuild = response.Build
 		parsed, problem := parseResponse(response)
 		if problem != "" {
 			detail = append(detail, problem)
+		}
+		if response.WireAttempts > 1 {
+			detail = append(detail, fmt.Sprintf("the transport used %d connections for one post: the mutation may have been sent more than once", response.WireAttempts))
 		}
 		normalized, err := normalizer.Value(parsed)
 		if err != nil {

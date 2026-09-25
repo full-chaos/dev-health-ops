@@ -59,6 +59,7 @@
 shards	6
 internal/reconcilerservice	5
 internal/workerservice	246
+internal/goapicli/prove	15
 internal/goapicli/routing	100
 internal/workersctl	14
 internal/queryapi/server	520

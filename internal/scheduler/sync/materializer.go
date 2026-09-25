@@ -16,7 +16,9 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/licensing"
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
+	"github.com/full-chaos/dev-health-ops/internal/syncbudget"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -90,6 +92,21 @@ type NativeMaterializer struct {
 	// disables the step entirely -- every pre-CHAOS-4602 caller and test
 	// keeps its exact prior behavior until WithSourceDiscovery is called.
 	sourceDiscovery SourceDiscoveryExecutor
+	// fingerprintDecryptor decrypts a stamped credential for the run's
+	// credential_fingerprint (CHAOS-6679): Python's planner stamps it, and
+	// the workers' run-auth freeze skips its secret-edit check when it is
+	// empty. Nil leaves the fingerprint NULL (tests that never install it).
+	fingerprintDecryptor providerfoundation.CredentialDecryptor
+}
+
+// WithCredentialFingerprint installs the decryptor the materializer stamps
+// sync_runs.credential_fingerprint with, read through the domain pool (the
+// coordinator role cannot read credential ciphertext).
+func (materializer *NativeMaterializer) WithCredentialFingerprint(decryptor providerfoundation.CredentialDecryptor) *NativeMaterializer {
+	if materializer != nil {
+		materializer.fingerprintDecryptor = decryptor
+	}
+	return materializer
 }
 
 // WithSourceDiscovery installs the source-discovery step and returns the
@@ -488,6 +505,9 @@ func (materializer *NativeMaterializer) Materialize(
 		if err := resolveCredentialStamp(ctx, coordinatorTx, &loaded); err != nil {
 			return PlanResult{}, err
 		}
+		if err := materializer.stampCredentialFingerprint(ctx, &loaded); err != nil {
+			return PlanResult{}, err
+		}
 	}
 
 	domainTx, err := materializer.domainPool.Begin(ctx)
@@ -558,6 +578,7 @@ type loadedMaterializationPlan struct {
 	configuredCredentialID *string
 	credentialID           *string
 	authSource             *string
+	credentialFingerprint  *string
 	totalUnitCap           int
 	terminalReason         string
 	ensureSecurityDataset  bool
@@ -891,6 +912,41 @@ func resolveCredentialStamp(ctx context.Context, tx pgx.Tx, loaded *loadedMateri
 	auth := "integration_credential"
 	loaded.credentialID = &credential
 	loaded.authSource = &auth
+	return nil
+}
+
+// stampCredentialFingerprint is the credential_fingerprint half of
+// planner.py's _resolve_credential_stamp: syncbudget's PlanFingerprint
+// (the one port of credentials/fingerprint.py credential_fingerprint) over
+// the stamped credential's {**config, **decrypted} mapping, or over the
+// provider's environment credentials for environment auth. It reads the
+// credential through the domain pool. A credential that cannot be read or
+// decrypted refuses the occurrence, as Python's plan fails. Environment
+// auth needs no decryptor and is always stamped. A credential-backed run in
+// a process with no decryptor (the cipher failed to load) refuses the
+// occurrence too: Python's plan fails without the key, and a run left
+// unstamped would skip its readers' fail-closed check.
+func (materializer *NativeMaterializer) stampCredentialFingerprint(ctx context.Context, loaded *loadedMaterializationPlan) error {
+	if loaded.authSource == nil {
+		return nil
+	}
+	refuse := func(reason string) error {
+		slog.Default().ErrorContext(ctx, "sync.materializer.credential_fingerprint_failed",
+			slog.String("stage", "credential_fingerprint"),
+			slog.String("org_id", loaded.input.OrgID),
+			slog.String("integration_id", loaded.input.IntegrationID),
+			slog.String("error", reason))
+		return fmt.Errorf("%w: credential fingerprint: %s", ErrOccurrenceIneligible, reason)
+	}
+	if loaded.credentialID != nil && materializer.fingerprintDecryptor == nil {
+		return refuse("no credential decryptor (settings encryption key unavailable)")
+	}
+	loader := syncbudget.Loader{DB: materializer.domainPool, Decryptor: materializer.fingerprintDecryptor, Getenv: os.Getenv}
+	fingerprint, err := loader.PlanFingerprint(ctx, loaded.input.OrgID, loaded.input.IntegrationID, loaded.provider, loaded.credentialID)
+	if err != nil {
+		return refuse(err.Error())
+	}
+	loaded.credentialFingerprint = &fingerprint
 	return nil
 }
 
@@ -1946,9 +2002,10 @@ func persistDomainGraph(ctx context.Context, tx pgx.Tx, ids materializationIDs, 
 INSERT INTO public.sync_runs
  (id, org_id, integration_id, triggered_by, mode, status, total_units, completed_units, failed_units,
   credential_id, credential_fingerprint, auth_source,completed_at,result,error,created_at)
-VALUES ($1::uuid,$2,$3::uuid,$4,$5,$6,$7,0,0,$8::uuid,NULL,$9,$10,$11::jsonb,$12,$13)
+VALUES ($1::uuid,$2,$3::uuid,$4,$5,$6,$7,0,0,$8::uuid,$14,$9,$10,$11::jsonb,$12,$13)
 ON CONFLICT (id) DO NOTHING`, ids.SyncRunID, loaded.input.OrgID, loaded.input.IntegrationID, triggeredByStamp,
-		loaded.input.Mode, expectedStatus, len(units), loaded.credentialID, loaded.authSource, completedAt, resultJSON, runError, createdAt)
+		loaded.input.Mode, expectedStatus, len(units), loaded.credentialID, loaded.authSource, completedAt, resultJSON, runError, createdAt,
+		loaded.credentialFingerprint)
 	if err != nil {
 		return fmt.Errorf("persist scheduled sync run: %w", err)
 	}
@@ -1961,7 +2018,7 @@ ON CONFLICT (id) DO NOTHING`, ids.SyncRunID, loaded.input.OrgID, loaded.input.In
 	if err := tx.QueryRow(ctx, `SELECT org_id,integration_id::text,triggered_by,mode,status,total_units,completed_units,failed_units,credential_id::text,auth_source,credential_fingerprint,started_at,completed_at,result::jsonb,error,created_at FROM public.sync_runs WHERE id=$1::uuid`, ids.SyncRunID).Scan(&org, &integration, &triggeredBy, &mode, &status, &total, &completed, &failed, &credential, &auth, &fingerprint, &persistedStartedAt, &persistedCompletedAt, &persistedResult, &persistedError, &persistedCreatedAt); err != nil {
 		return fmt.Errorf("verify scheduled sync run: %w", err)
 	}
-	if org != loaded.input.OrgID || integration != loaded.input.IntegrationID || triggeredBy != triggeredByStamp || mode != loaded.input.Mode || status != expectedStatus || total != len(units) || completed != 0 || failed != 0 || !equalOptionalString(credential, loaded.credentialID) || !equalOptionalString(auth, loaded.authSource) || fingerprint != nil || persistedStartedAt != nil || !equalOptionalTime(persistedCompletedAt, completedAt) || !equalOptionalString(persistedError, runError) || !equalOptionalJSON(persistedResult, resultJSON) || !persistedCreatedAt.Equal(createdAt) {
+	if org != loaded.input.OrgID || integration != loaded.input.IntegrationID || triggeredBy != triggeredByStamp || mode != loaded.input.Mode || status != expectedStatus || total != len(units) || completed != 0 || failed != 0 || !equalOptionalString(credential, loaded.credentialID) || !equalOptionalString(auth, loaded.authSource) || !equalOptionalString(fingerprint, loaded.credentialFingerprint) || persistedStartedAt != nil || !equalOptionalTime(persistedCompletedAt, completedAt) || !equalOptionalString(persistedError, runError) || !equalOptionalJSON(persistedResult, resultJSON) || !persistedCreatedAt.Equal(createdAt) {
 		return fmt.Errorf("%w: deterministic sync run identity maps to different state", ErrInvalidPlan)
 	}
 	type expectedUnit struct {

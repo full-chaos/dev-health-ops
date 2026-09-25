@@ -152,6 +152,9 @@ EXPECTED_PACKAGES = {
     # without the live Python env), in its own package for its own venue
     # time budget.
     "internal/apiservice/metricsvenue",
+    # The enterprise SSO routes' venue differential (skips without the live
+    # Python env), in its own package for its own venue time budget.
+    "internal/apiservice/ssovenue",
     # The team + identity admin CRUD store/handlers: real ClickHouse CRUD
     # round trips and the identity POST route's 404/409/facet-reconciliation
     # logic, against a real server (testcontainers).

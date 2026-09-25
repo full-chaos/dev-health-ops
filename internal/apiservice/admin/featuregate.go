@@ -6,7 +6,6 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/licensing"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
-	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 )
 
 // requireFeature is licensing/gating.py's `@require_feature(feature,
@@ -41,14 +40,11 @@ func (h *handlers) requireFeature(ctx context.Context, w http.ResponseWriter, fe
 	return false
 }
 
-// writeFeatureNotLicensed is the decorator's 402 body.
+// writeFeatureNotLicensed is the decorator's 402 body
+// (@require_feature(feature, required_tier="enterprise")).
 func writeFeatureNotLicensed(w http.ResponseWriter, feature string) {
-	detail := pyjson.NewObject()
-	detail.Set("error", "feature_not_licensed")
-	detail.Set("feature", feature)
-	detail.Set("required_tier", "enterprise")
-	detail.Set("current_tier", "community")
-	policy.WriteDetail(w, http.StatusPaymentRequired, detail, nil)
+	tier := "enterprise"
+	policy.WriteDetail(w, http.StatusPaymentRequired, licensing.FeatureNotLicensedDetail(feature, &tier), nil)
 }
 
 // orgHasFeature is _check_org_feature_async for this package's gated

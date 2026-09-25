@@ -50,6 +50,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/producttelemetry"
 	"github.com/full-chaos/dev-health-ops/internal/api/session"
+	"github.com/full-chaos/dev-health-ops/internal/api/sso"
 	"github.com/full-chaos/dev-health-ops/internal/api/syncadmin"
 	"github.com/full-chaos/dev-health-ops/internal/api/teamsidentity"
 	"github.com/full-chaos/dev-health-ops/internal/api/telemetry"
@@ -231,6 +232,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 	// configured); with no pool these paths are simply absent from the mux,
 	// same as any other not-yet-ported area.
 	if deps.Pool != nil && deps.Guard != nil {
+		routes = append(routes, sso.Routes(sso.Deps{Pool: deps.Pool, Guard: deps.Guard, Logger: logger, Now: deps.Now, Write: WriteError})...)
 		routes = append(routes, billing.Routes(billing.Deps{
 			Pool: deps.Pool, Guard: deps.Guard, Stripe: deps.Stripe, Config: deps.BillingConfig, Logger: logger,
 			WebhookSecret: deps.StripeWebhookSecret, LicensePrivateKey: deps.LicensePrivateKey, Producer: deps.Producer,

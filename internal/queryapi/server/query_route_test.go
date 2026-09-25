@@ -77,7 +77,7 @@ func TestTruncateForLog(t *testing.T) {
 // variables here, which the {query} decode alone would not see) is an
 // unhandled ValueError, the generic 500, never a served operation.
 func TestQueryRouteAnswersAnIntegerPastThe4300DigitLimitAsPythons500(t *testing.T) {
-	handler := newDocumentDispatchHandler(os.Getenv, nil, nil, nil)
+	handler := newDocumentDispatchHandler(os.Getenv, nil, nil, nil, true)
 	post := func(digits int) *httptest.ResponseRecorder {
 		body := `{"query":"{ __typename }","variables":{"n":` + strings.Repeat("1", digits) + `}}`
 		recorder := httptest.NewRecorder()

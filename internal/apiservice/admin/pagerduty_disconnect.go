@@ -125,9 +125,12 @@ func (h *handlers) disconnectPagerDutyCredential(ctx context.Context, orgID, cre
 	// decrypt/decode failure (ValueError in Python) leaves it nil, exactly
 	// as Python's `except ValueError: revoke_candidate = None` does --
 	// local deletion below never depends on it.
+	// The read locks the row: two concurrent disconnects of one credential
+	// serialise here, so the second finds it deleted and queues nothing
+	// (otherwise both would queue a revocation for the same token).
 	var revokeCandidate *string
 	var tokenEncrypted *string
-	err = tx.QueryRow(ctx, `SELECT token_encrypted FROM provider_oauth_credentials WHERE org_id = $1 AND provider = 'pagerduty' AND credential_name = $2`,
+	err = tx.QueryRow(ctx, `SELECT token_encrypted FROM provider_oauth_credentials WHERE org_id = $1 AND provider = 'pagerduty' AND credential_name = $2 FOR UPDATE`,
 		orgID, credentialName).Scan(&tokenEncrypted)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return nil, err
@@ -140,8 +143,14 @@ func (h *handlers) disconnectPagerDutyCredential(ctx context.Context, orgID, cre
 		}
 	}
 
+	// The revocation row is queued whether or not PagerDuty is configured
+	// (CHAOS-6619): without a client id the revoke cannot be attempted now,
+	// but dropping the token would leave it live at PagerDuty with nothing
+	// to say a revoke is still owed. Python queues nothing then (named
+	// divergence); the row is retried once the api is configured, by the
+	// next callback or disconnect of this credential.
 	configPresent := h.pagerDuty.ClientID != ""
-	if configPresent && revokeCandidate != nil {
+	if revokeCandidate != nil {
 		sealed, encErr := h.decryptor.Encrypt([]byte(*revokeCandidate))
 		if encErr != nil {
 			return nil, encErr

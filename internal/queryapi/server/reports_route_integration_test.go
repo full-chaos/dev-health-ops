@@ -19,38 +19,9 @@ import (
 // its claims reach the resolvers through the real middleware, and every
 // statement runs on the production pgx pool.
 
+// The saved_reports and report_runs tables come from the migrated schema (startTestRegistryPostgres applies it);
+// the hand-written copies lacked real columns (CHAOS-6769 ledger). This seeds their rows.
 const savedReportsPostgresDDL = `
-CREATE TABLE saved_reports (
-    id uuid PRIMARY KEY,
-    org_id text NOT NULL DEFAULT '',
-    name text NOT NULL,
-    description text,
-    report_plan json NOT NULL DEFAULT '{}',
-    is_template boolean NOT NULL DEFAULT false,
-    template_source_id uuid REFERENCES saved_reports(id) ON DELETE SET NULL,
-    parameters json,
-    schedule_id uuid,
-    is_active boolean NOT NULL DEFAULT true,
-    last_run_at timestamptz,
-    last_run_status text,
-    created_at timestamptz NOT NULL,
-    updated_at timestamptz NOT NULL,
-    created_by text
-);
-CREATE TABLE report_runs (
-    id uuid PRIMARY KEY,
-    report_id uuid NOT NULL REFERENCES saved_reports(id) ON DELETE CASCADE,
-    status text NOT NULL,
-    started_at timestamptz,
-    completed_at timestamptz,
-    duration_seconds double precision,
-    rendered_markdown text,
-    artifact_url text,
-    provenance_records json,
-    error text,
-    triggered_by text NOT NULL DEFAULT 'manual',
-    created_at timestamptz NOT NULL
-);
 INSERT INTO saved_reports (id, org_id, name, description, report_plan, parameters, created_at, updated_at, created_by, last_run_at, last_run_status) VALUES
  ('aaaaaaaa-0000-0000-0000-00000000000a', 'org-1', 'Weekly', 'first', '{"b": 1, "a": [1, 2.5, null], "b": 3}', NULL, '2026-01-01T00:00:00Z', '2026-01-03T00:00:00Z', 'ABC-123', '2026-01-02T03:04:05Z', 'success'),
  ('aaaaaaaa-0000-0000-0000-00000000000b', 'org-1', 'Monthly', NULL, '{}', '{"team": "t-1"}', '2026-01-01T00:00:00Z', '2026-01-05T00:00:00Z', NULL, NULL, NULL),

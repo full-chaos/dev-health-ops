@@ -714,6 +714,39 @@ def test_every_fixture_on_disk_triggers_the_go_workflow(event: str) -> None:
 
 
 @pytest.mark.parametrize("event", ["push", "pull_request"])
+def test_every_alembic_file_triggers_the_go_workflow(event: str) -> None:
+    """A change to the Alembic chain must run the Go workflow that proves the migrate hook (CHAOS-6801).
+
+    internal/pgmigrate carries a baseline captured from the Alembic chain and an executed
+    differential (hook_upgrade_integration_test.go) that upgrades an old production database
+    with the hook's verb and compares it with the real Alembic upgrade. Revisions 0139 to 0141
+    were added as Python files only: `go.yml` listed just the worker_operator_audits
+    migrations, so those PRs were classified non-Go, the Go integration shards never ran, and
+    rev 186's migrate hook failed on production (`below_head 0138 < 0140`). The oracle here is
+    the directory listing, not a pattern: every file of the Alembic package on disk must match.
+    """
+    go_paths = (_on_block(_load(GO_WORKFLOW)).get(event) or {}).get("paths") or []
+    alembic = REPO_ROOT / "src/dev_health_ops/alembic"
+    files = sorted(
+        path.relative_to(REPO_ROOT).as_posix()
+        for path in alembic.rglob("*")
+        if path.is_file() and "__pycache__" not in path.parts
+    )
+    assert any("/versions/" in path for path in files), (
+        "no Alembic revision found on disk -- the walk has broken, and this test would "
+        "pass vacuously, which is the failure mode it exists to prevent"
+    )
+    unmatched = [path for path in files if not _matches_any(path, go_paths)]
+    assert not unmatched, (
+        f"{len(unmatched)} of {len(files)} Alembic file(s) match no {event} path filter in "
+        "go.yml, so a PR that changes only one of them is classified non-Go and the migrate "
+        "hook's differential never runs:\n  "
+        + "\n  ".join(unmatched[:8])
+        + "\n\nAdd `src/dev_health_ops/alembic/**` to BOTH path lists in go.yml."
+    )
+
+
+@pytest.mark.parametrize("event", ["push", "pull_request"])
 def test_no_excused_directory_is_actually_covered(event: str) -> None:
     """An exclusion that stops being necessary must fail, not linger.
 

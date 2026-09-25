@@ -16,7 +16,6 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
-	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 	"golang.org/x/crypto/pbkdf2"
 )
 
@@ -174,34 +173,17 @@ var githubFieldAliases = map[string]string{
 	"privateKeyPath": "private_key_path",
 }
 
-// githubNumericIdentifiers are the GitHub App identifier fields Python accepts
-// as JSON numbers (CHAOS-6737): github_credentials_from_mapping passes the
-// value through untouched and the client renders it with str(), so a row
-// stored as {"app_id": 12, "installation_id": 34} authenticates. Every other
-// field, and every other non-string value, stays refused.
-var githubNumericIdentifiers = map[string]bool{"app_id": true, "installation_id": true}
-
-// pythonNumberText is str() of a decoded JSON number: the decimal digits of an
-// integer and repr() of a float. A zero is Python-falsy, which the App-auth
-// shape check treats as absent, so it renders as "" (not configured). A value
-// that is not a number reports false.
-func pythonNumberText(value any) (string, bool) {
-	switch number := value.(type) {
-	case pyjson.Int:
-		if number.Int == nil {
-			return "", false
-		}
-		if number.Sign() == 0 {
-			return "", true
-		}
-		return number.String(), true
-	case pyjson.Float:
-		if number == 0 {
-			return "", true
-		}
-		return pythonparity.Repr(float64(number)), true
+// pythonSecretText is what Python makes of a credential field's non-string
+// JSON value where the resolver reads it as `str(value or "")`. A null never
+// gets here (the decode drops None before anything else, as Python does); a falsy value (0, 0.0, false, an empty list or
+// object) is present but empty; any other value is its str() -- the integer's
+// digits, repr() of a float, "True", and repr() of a list or object as Python
+// writes it.
+func pythonSecretText(value pyjson.Value) (secrets.Value, bool) {
+	if !pyjson.Truthy(value) {
+		return secrets.NewValue(""), true
 	}
-	return "", false
+	return secrets.NewValue(pyjson.Str(value)), true
 }
 
 func decodeCredential(record EncryptedCredential, plaintext []byte) (Credential, error) {
@@ -214,30 +196,55 @@ func decodeCredential(record EncryptedCredential, plaintext []byte) (Credential,
 		return Credential{}, ErrCredentialInvalid
 	}
 	fields := make(map[string]secrets.Value, object.Len())
+	deferred := map[string]pyjson.Value{}
 	for _, key := range object.Keys() {
 		value, _ := object.Get(key)
-		if strings.TrimSpace(key) == "" {
-			return Credential{}, ErrCredentialInvalid
+		// A blank key is a field nobody reads, like any other: Python's builders
+		// ignore it and so does this decode.
+		//
+		// A null is dropped BEFORE alias resolution (github_credentials_from_mapping
+		// filters `if v is not None` first), so it never replaces an earlier
+		// value stored under the same canonical name.
+		if value == nil {
+			continue
 		}
 		if record.Provider == "github" {
 			if canonical, aliased := githubFieldAliases[key]; aliased {
 				key = canonical
 			}
 		}
-		text, ok := value.(string)
-		if !ok && record.Provider == "github" && githubNumericIdentifiers[key] {
-			text, ok = pythonNumberText(value)
+		// A key stored twice (an alias and its canonical spelling) keeps the
+		// later one, whichever kind of value each held.
+		delete(fields, key)
+		delete(deferred, key)
+		if text, isString := value.(string); isString {
+			fields[key] = secrets.NewValue(text)
+			continue
 		}
-		if !ok {
-			return Credential{}, ErrCredentialInvalid
-		}
-		fields[key] = secrets.NewValue(text)
+		// Python reads the fields it wants and ignores the rest
+		// (`str(cred_dict.get("token") or "")`, an allow-list of kwargs), so a
+		// value that is not a string is kept as decoded and judged only when a
+		// caller asks for that field (Credential.Secret), never up front
+		// (CHAOS-6770).
+		deferred[key] = value
 	}
 	config := make(map[string]string, len(record.Config))
 	for key, value := range record.Config {
 		config[key] = value
 	}
-	return Credential{Provider: record.Provider, ID: record.ID, Name: record.Name, Config: config, fields: fields}, nil
+	credential := Credential{Provider: record.Provider, ID: record.ID, Name: record.Name, Config: config, fields: fields, deferred: deferred}
+	// CHAOS-6782: linear_credentials_from_mapping reads
+	// `str(api_key or apiKey or "")`: the canonical spelling wins when it is
+	// truthy (not by document order, unlike GitHub's aliases), otherwise the
+	// camelCase spelling the web wrote.
+	if record.Provider == "linear" {
+		if canonical, ok := credential.Secret("api_key"); !ok || !canonical.Configured() {
+			if alias, ok := credential.Secret("apiKey"); ok && alias.Configured() {
+				fields["api_key"] = alias
+			}
+		}
+	}
+	return credential, nil
 }
 
 // jiraAPITokenAliases lists the spellings a stored Jira credential may use for
@@ -261,6 +268,24 @@ func hasAny(credential Credential, names []string) bool {
 	return false
 }
 
+// githubResolvedKeyConfigured is whether github_credentials_from_mapping ends
+// up with a non-empty private key: the private_key entry when there is one,
+// else the content of private_key_path. An error is a path the builder cannot
+// read (it returns None, or raises on invalid UTF-8).
+func githubResolvedKeyConfigured(credential Credential) (bool, error) {
+	if value, present := credential.Secret("private_key"); present {
+		return value.Configured(), nil
+	}
+	if path, ok := credential.Secret("private_key_path"); ok && path.Configured() {
+		content, err := readGitHubAppPrivateKeyFile(path.Reveal())
+		if err != nil {
+			return false, err
+		}
+		return content.Configured(), nil
+	}
+	return false, nil
+}
+
 // ValidateCredentialShape keeps auth construction explicit. It accepts only
 // the auth fields that the current Python resolver accepts for this provider.
 func ValidateCredentialShape(credential Credential) error {
@@ -268,15 +293,23 @@ func ValidateCredentialShape(credential Credential) error {
 	switch credential.Provider {
 	case "github":
 		token := has("token")
-		// r2 (round 1 finding #1): github_credentials_from_mapping accepts
-		// EITHER private_key (inline PEM content) OR private_key_path (a
-		// file path it reads at resolve time, resolver.py:269-276) as
-		// satisfying the App-auth triple -- this is a pure SHAPE check
-		// (no file I/O here; NewGitHubAppAuth does the actual read), so a
-		// private_key_path-only row must pass it the same way Python's
-		// own shape check (GitHubCredentials's validation) does.
-		app := has("app_id") && (has("private_key") || has("private_key_path")) && has("installation_id")
+		// github_credentials_from_mapping resolves the private key first: the
+		// private_key entry when there is one, else the CONTENT of
+		// private_key_path (resolver.py:269-276), and an unreadable file makes
+		// the builder return None. Both the App-auth triple and the
+		// token-beside-an-App-field conflict are decided on that resolved key,
+		// so an empty, missing, unreadable or non-UTF-8 file is no key.
+		key, err := githubResolvedKeyConfigured(credential)
+		if err != nil {
+			return ErrCredentialInvalid
+		}
+		app := has("app_id") && key && has("installation_id")
 		if token == app {
+			return ErrCredentialInvalid
+		}
+		// CHAOS-6781: GitHubCredentials.__post_init__ raises when a token comes
+		// with ANY App field, not only a complete triple.
+		if token && (has("app_id") || has("installation_id") || key) {
 			return ErrCredentialInvalid
 		}
 	case "gitlab":
@@ -284,7 +317,8 @@ func ValidateCredentialShape(credential Credential) error {
 			return ErrCredentialInvalid
 		}
 	case "jira":
-		if !hasAny(credential, jiraAPITokenAliases) || !has("email") {
+		// JiraCredentials requires api_token, email AND base_url.
+		if !hasAny(credential, jiraAPITokenAliases) || !has("email") || jiraCredentialBaseURL(credential) == "" {
 			return ErrCredentialInvalid
 		}
 	case "linear":

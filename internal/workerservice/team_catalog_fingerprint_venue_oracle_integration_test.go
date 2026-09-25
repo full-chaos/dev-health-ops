@@ -250,14 +250,21 @@ func seedTeamCatalogFingerprintCases(
 		{"github", `{"app_id": 12.0, "installation_id": 34, "private_key": "-----BEGIN KEY-----"}`, `{}`, ""},
 		{"github", `{"token": "ghp_abc", "app_id": 0}`, `{}`, ""},
 		{"github", `{"app_id": 0, "installation_id": 34, "private_key": "-----BEGIN KEY-----"}`, `{}`, ""},
-		// Named residual divergence (CHAOS-6737 scopes the App identifiers
-		// only): Python str()-coerces a numeric secret for these providers, Go
-		// still refuses every other non-string value.
-		{"github", `{"token": 12}`, `{}`, "a numeric GitHub token (Python keeps it; only the App identifiers are widened)"},
-		{"gitlab", `{"token": 12}`, `{}`, "a numeric GitLab token (Python str()-coerces it; only the App identifiers are widened)"},
-		{"jira", `{"email": "e@example.com", "api_token": 12, "base_url": "https://x.atlassian.net/"}`, `{}`, "a numeric Jira api_token (Python str()-coerces it; only the App identifiers are widened)"},
+		// CHAOS-6770: Python reads the credential fields it wants with
+		// `str(value or "")` and ignores the rest, so a numeric secret is its
+		// str() and a field nobody reads never fails the credential.
+		{"github", `{"token": 12}`, `{}`, ""},
+		{"gitlab", `{"token": 12}`, `{}`, ""},
+		{"jira", `{"email": "e@example.com", "api_token": 12, "base_url": "https://x.atlassian.net/"}`, `{}`, ""},
+		{"linear", `{"api_key": 12}`, `{}`, ""},
+		{"gitlab", `{"token": "glpat-x", "project_id": 7, "tags": [1, {"a": 2}]}`, `{}`, ""},
+		{"github", `{"token": "ghp_abc", "note": null, "extra": 1.5}`, `{}`, ""},
+		{"linear", `{"api_key": "lin_api_z", "workspace_id": 9}`, `{}`, ""},
 		{"gitlab", `{"token": "glpat-x"}`, `{"url": "https://gitlab.example.com", "group_id": 9}`, ""},
-		{"gitlab", `{"private_token": "p", "project_id": 7}`, `{"base_url": "https://gl.example/"}`, "a GitLab private_token without token"},
+		// No token: Python's builder returns None and Go's client build refuses
+		// it, so only the stamp is compared at the resolver. (This row was a
+		// resolver refusal only because project_id was a number.)
+		{"gitlab", `{"private_token": "p", "project_id": 7}`, `{"base_url": "https://gl.example/"}`, ""},
 		{"jira", `{"email": "e@example.com", "api_token": "t<&>", "base_url": "https://x.atlassian.net/"}`, `{"cloud_id": "c-1"}`, ""},
 		{"jira", `{"refresh_token": "r", "client_id": "cid", "client_secret": "cs", "oauth_binding_id": "b"}`, `{}`, ""},
 		{"github", `["not", "a", "mapping"]`, `{}`, "a payload that is not a mapping"},

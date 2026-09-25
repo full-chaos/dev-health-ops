@@ -6,11 +6,15 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 type postureClock struct {
@@ -263,5 +267,82 @@ func TestPostureRefusalTTLIsShorterThanTheReadinessProbePeriod(t *testing.T) {
 	const shortestProbePeriod = 5 * time.Second
 	if defaultPostureRefusalTTL >= shortestProbePeriod {
 		t.Fatalf("defaultPostureRefusalTTL = %s, want < %s", defaultPostureRefusalTTL, shortestProbePeriod)
+	}
+}
+
+// r1 P3 on #3166: the run bound (RunTimeout) had no test that could fail. A run
+// must carry a deadline of about RunTimeout that does NOT come from the probe's
+// own context, and the default is the documented 30 s.
+func TestCachedPostureCheckRunsUnderItsOwnBoundedDeadline(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		options PostureCheckOptions
+		want    time.Duration
+	}{
+		{"explicit", PostureCheckOptions{RunTimeout: 3 * time.Second}, 3 * time.Second},
+		{"default", PostureCheckOptions{}, defaultPostureRunTimeout},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var deadline time.Time
+			var hasDeadline bool
+			check, _ := newTestCachedPostureCheck(func(ctx context.Context) error {
+				deadline, hasDeadline = ctx.Deadline()
+				return nil
+			}, tc.options)
+			// A probe with a much SHORTER deadline must not shorten the run.
+			probe, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			started := time.Now()
+			if err := check.Check(probe); err != nil {
+				t.Fatal(err)
+			}
+			if !hasDeadline {
+				t.Fatal("the run has no deadline: nothing bounds a hung query")
+			}
+			got := deadline.Sub(started)
+			if got < tc.want-time.Second || got > tc.want+time.Second {
+				t.Fatalf("run deadline is %s after the call, want about %s (independent of the probe's 10 s)", got, tc.want)
+			}
+		})
+	}
+}
+
+// r1 P3 on #3166: the refusal window must stay shorter than the readiness probe
+// period of every chart that ships the check, read from the chart values, not a
+// number typed here. (The production period, 5 s, lives in the deploy repo's
+// values and is pinned by TestPostureRefusalTTLIsShorterThanTheReadinessProbePeriod.)
+func TestPostureRefusalTTLIsShorterThanTheChartReadinessProbePeriods(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "deploy", "helm", "dev-health", "values.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var values struct {
+		GoAPI struct {
+			ReadinessProbe struct {
+				PeriodSeconds int `yaml:"periodSeconds"`
+			} `yaml:"readinessProbe"`
+		} `yaml:"goApi"`
+		GoWorkers struct {
+			DefaultProbes struct {
+				ReadinessProbe struct {
+					PeriodSeconds int `yaml:"periodSeconds"`
+				} `yaml:"readinessProbe"`
+			} `yaml:"defaultProbes"`
+		} `yaml:"goWorkers"`
+	}
+	if err := yaml.Unmarshal(raw, &values); err != nil {
+		t.Fatal(err)
+	}
+	periods := map[string]int{
+		"goApi.readinessProbe":                   values.GoAPI.ReadinessProbe.PeriodSeconds,
+		"goWorkers.defaultProbes.readinessProbe": values.GoWorkers.DefaultProbes.ReadinessProbe.PeriodSeconds,
+	}
+	for name, seconds := range periods {
+		if seconds <= 0 {
+			t.Fatalf("%s.periodSeconds = %d: the chart no longer declares it, so this guard measures nothing", name, seconds)
+		}
+		if period := time.Duration(seconds) * time.Second; defaultPostureRefusalTTL >= period {
+			t.Fatalf("defaultPostureRefusalTTL = %s is not shorter than %s (%s)", defaultPostureRefusalTTL, name, period)
+		}
 	}
 }

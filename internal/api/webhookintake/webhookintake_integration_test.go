@@ -21,6 +21,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/storage/valkey"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -33,35 +35,11 @@ const testContractRoot = "../../../contracts/jobs/v1"
 
 func createWebhookIntakeTables(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
-	statements := []string{
-		`CREATE EXTENSION IF NOT EXISTS pgcrypto`,
-		`CREATE TABLE webhook_deliveries (
-			id uuid PRIMARY KEY, provider text NOT NULL, delivery_key text NOT NULL,
-			event_type text NOT NULL, raw_event_type text NOT NULL,
-			org_ref text, repo_name text, payload jsonb NOT NULL,
-			payload_sha256 text NOT NULL, created_at timestamptz NOT NULL,
-			UNIQUE (provider, delivery_key))`,
-		`CREATE TABLE worker_job_outbox (
-			id uuid PRIMARY KEY, dedupe_key text UNIQUE NOT NULL, job_kind text NOT NULL,
-			contract_version integer NOT NULL, args json NOT NULL, payload_hash text NOT NULL,
-			queue text NOT NULL, priority integer NOT NULL, max_attempts integer NOT NULL,
-			scheduled_at timestamptz NOT NULL, status text NOT NULL, attempt_count integer NOT NULL,
-			next_attempt_at timestamptz NOT NULL, prerequisite_completion_key text,
-			created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL)`,
-		`CREATE TABLE pagerduty_webhook_bindings (
-			id uuid PRIMARY KEY, org_id uuid NOT NULL, status text NOT NULL,
-			provider_subscription_id text NOT NULL, signing_secret_encrypted text NOT NULL,
-			signing_secret_key_version text NOT NULL DEFAULT 'v1', updated_at timestamptz NOT NULL DEFAULT now())`,
-		`CREATE TABLE organizations (id uuid PRIMARY KEY, tier text)`,
-		`CREATE TABLE org_licenses (org_id uuid PRIMARY KEY, tier text, features_override jsonb)`,
-		`CREATE TABLE feature_flags (id uuid PRIMARY KEY, key text UNIQUE NOT NULL, is_enabled boolean NOT NULL, min_tier text NOT NULL)`,
-		`CREATE TABLE org_feature_overrides (org_id uuid, feature_id uuid, is_enabled boolean, expires_at timestamptz, config jsonb, PRIMARY KEY (org_id, feature_id))`,
-	}
-	for _, statement := range statements {
-		if _, err := pool.Exec(ctx, statement); err != nil {
-			t.Fatalf("bootstrap %s: %v", statement, err)
-		}
-	}
+	// The migrated schema (CHAOS-6769 ledger): the hand-written webhook_deliveries, worker_job_outbox,
+	// pagerduty_webhook_bindings (no integration_source_id), organizations, org_licenses,
+	// feature_flags and org_feature_overrides drifted from the real tables' types, NOT NULL columns
+	// and foreign keys.
+	pgschema.Apply(ctx, t, pool)
 }
 
 func newTestProducer(t *testing.T, pool *pgxpool.Pool) *joboutbox.Producer {
@@ -79,14 +57,12 @@ func newTestProducer(t *testing.T, pool *pgxpool.Pool) *joboutbox.Producer {
 
 func seedFeatureEnabled(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgID uuid.UUID) {
 	t.Helper()
-	if _, err := pool.Exec(ctx, `INSERT INTO organizations (id, tier) VALUES ($1, 'team')`, orgID); err != nil {
-		t.Fatalf("seed organization: %v", err)
+	pgseed.Org(ctx, t, pool, orgID.String(), "team")
+	// The migrations register canonical_incident_ingestion; the test needs it enabled at the team floor.
+	if _, err := pool.Exec(ctx, `DELETE FROM feature_flags WHERE key = 'canonical_incident_ingestion'`); err != nil {
+		t.Fatalf("reset feature flag: %v", err)
 	}
-	if _, err := pool.Exec(ctx, `
-INSERT INTO feature_flags (id, key, is_enabled, min_tier) VALUES ($1, 'canonical_incident_ingestion', true, 'team')
-ON CONFLICT (key) DO NOTHING`, uuid.New()); err != nil {
-		t.Fatalf("seed feature flag: %v", err)
-	}
+	pgseed.FeatureFlag(ctx, t, pool, uuid.NewString(), "canonical_incident_ingestion", "team", true)
 }
 
 func newTestDecryptor(t *testing.T) providerfoundation.FernetDecryptor {
@@ -105,9 +81,18 @@ func seedPagerDutyBinding(t *testing.T, ctx context.Context, pool *pgxpool.Pool,
 		t.Fatal(err)
 	}
 	id := uuid.New()
+	// A binding points at one of the org's integration sources (real NOT NULL foreign key).
+	integrationID, sourceID := uuid.NewString(), uuid.NewString()
+	pgseed.Integration(ctx, t, pool, integrationID, orgID.String(), "pagerduty")
+	pgseed.IntegrationSource(ctx, t, pool, sourceID, orgID.String(), integrationID, "pagerduty", "service-"+sourceID)
+	// The real table refuses an active binding without a credential
+	// (ck_pagerduty_webhook_bindings_active_credential_required); the hand-written one allowed it.
+	credentialID := uuid.NewString()
+	pgseed.Credential(ctx, t, pool, credentialID, orgID.String(), "pagerduty")
 	if _, err := pool.Exec(ctx, `
-INSERT INTO pagerduty_webhook_bindings (id, org_id, status, provider_subscription_id, signing_secret_encrypted)
-VALUES ($1, $2, $3, $4, $5)`, id, orgID, status, subscriptionID, encrypted.Reveal()); err != nil {
+INSERT INTO pagerduty_webhook_bindings (id, org_id, integration_source_id, credential_id, status, provider_subscription_id,
+	signing_secret_encrypted, signing_secret_key_version, created_at, updated_at)
+VALUES ($1, $2, $3::uuid, $4::uuid, $5, $6, $7, 'v1', now(), now())`, id, orgID, sourceID, credentialID, status, subscriptionID, encrypted.Reveal()); err != nil {
 		t.Fatalf("seed pagerduty binding: %v", err)
 	}
 	return id

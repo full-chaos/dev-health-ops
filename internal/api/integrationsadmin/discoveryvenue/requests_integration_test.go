@@ -52,6 +52,8 @@ VALUES ($1, 'disc-noorg@example.com', true, true, false, 0, $2, $2)`, v.adminNoO
 		// Mappings jira_credentials_from_mapping refuses: no base URL, no email.
 		{"email": "venue@example.com", "api_token": "good-token"},
 		{"api_token": "good-token", "base_url": jiraURL},
+		// GitHub and GitLab credentials the provider refuses (CHAOS-6785).
+		{"token": "gh-bad-token"}, {"token": "gh-forbidden-token"}, {"token": "gl-bad-token"}, {"token": "gl-forbidden-token"},
 	} {
 		encoded, _ := json.Marshal(mapping)
 		calls = append(calls, venueoracle.PythonCall{Target: "dev_health_ops.core.encryption:encrypt_value", Args: []any{string(encoded)}})
@@ -75,6 +77,14 @@ VALUES ($1, $2, 'jira', $3, true, $4, '{}'::json, $5, $5)`, id, org.String(), na
 	credential(v.credGoodC, v.orgC, "jira good c", ciphertexts[0])
 	credential(v.credNoURL, v.orgA, "jira no base url", ciphertexts[3])
 	credential(v.credNoEmail, v.orgA, "jira no email", ciphertexts[4])
+	providerCredential := func(id uuid.UUID, provider, name, ciphertext string) {
+		exec(`INSERT INTO integration_credentials (id, org_id, provider, name, is_active, credentials_encrypted, config, created_at, updated_at)
+VALUES ($1, $2, $3, $4, true, $5, '{}'::json, $6, $6)`, id, v.orgA.String(), provider, name, ciphertext, at)
+	}
+	providerCredential(v.credGHBad, "github", "github bad", ciphertexts[5])
+	providerCredential(v.credGHForbidden, "github", "github forbidden", ciphertexts[6])
+	providerCredential(v.credGLBad, "gitlab", "gitlab bad", ciphertexts[7])
+	providerCredential(v.credGLForbidden, "gitlab", "gitlab forbidden", ciphertexts[8])
 
 	integration := func(id, org uuid.UUID, provider string, credential any, name, config string) {
 		exec(`INSERT INTO integrations (id, org_id, provider, credential_id, name, config, is_active, created_at, updated_at)
@@ -105,6 +115,10 @@ VALUES ($1, $2, $3, $4, 'project', $5, $6, $5, $7::json, $8, $9::timestamptz, $9
 	source(v.srcDupUpper, v.orgA, v.intConfigScoped, "JIRA", "AEROGEAR", "upper", `{"x": 1}`, false, "2026-02-04 00:00:00+00")
 	integration(v.intBad, v.orgA, "jira", v.credBad, "disc-jira-bad", `{}`)
 	integration(v.intForbidden, v.orgA, "jira", v.credForbidden, "disc-jira-forbidden", `{}`)
+	integration(v.intGHBad, v.orgA, "github", v.credGHBad, "disc-github-bad", `{"owner": "zz-owner"}`)
+	integration(v.intGHForbidden, v.orgA, "github", v.credGHForbidden, "disc-github-forbidden", `{"owner": "zz-owner"}`)
+	integration(v.intGLBad, v.orgA, "gitlab", v.credGLBad, "disc-gitlab-bad", `{"group": "zz-group"}`)
+	integration(v.intGLForbidden, v.orgA, "gitlab", v.credGLForbidden, "disc-gitlab-forbidden", `{"group": "zz-group"}`)
 	// Stored credentials the resolver refuses: an empty listing, not an error.
 	integration(v.intNoURL, v.orgA, "jira", v.credNoURL, "disc-jira-no-url", `{}`)
 	planner(v.cfgNoURL, v.orgA, v.intNoURL, `{}`)

@@ -11,10 +11,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 	"unicode/utf8"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
@@ -123,6 +125,10 @@ type Credential struct {
 	Name     string
 	Config   map[string]string
 	fields   map[string]secrets.Value
+	// deferred holds the fields whose stored value was not a string, as
+	// decoded; Secret reads one the way Python's resolver does (see
+	// pythonSecretText). Nil for a credential built from strings.
+	deferred map[string]pyjson.Value
 }
 
 // NewCredential builds a Credential from already-decrypted fields, for a
@@ -141,8 +147,13 @@ func NewCredential(provider, id string, config map[string]string, fields map[str
 }
 
 func (c Credential) Secret(name string) (secrets.Value, bool) {
-	v, ok := c.fields[name]
-	return v, ok
+	if v, ok := c.fields[name]; ok {
+		return v, true
+	}
+	if raw, ok := c.deferred[name]; ok {
+		return pythonSecretText(raw)
+	}
+	return secrets.Value{}, false
 }
 
 // WithEphemeralSecret returns a copy augmented with a short-lived secret from
@@ -161,10 +172,31 @@ func (c Credential) WithEphemeralSecret(name string, value secrets.Value) (Crede
 	return c, nil
 }
 
+// String, Format and LogValue keep secret material out of every printed form
+// of a Credential: fmt (%v, %+v, %#v) and slog would otherwise reflect over the
+// private field maps and print the values (a secrets.Value's raw text, a
+// decoded non-string value). Only metadata is shown.
+func (c Credential) String() string {
+	return fmt.Sprintf("providerfoundation.Credential{provider=%s fields=%d}", c.Provider, len(c.fields)+len(c.deferred))
+}
+
+// Format redacts for EVERY fmt verb, %#v included: String alone covers only the
+// verbs that ask for a string, while %d, %f, %x and the rest reflect over the
+// private field maps and print the values.
+func (c Credential) Format(state fmt.State, _ rune) { _, _ = fmt.Fprint(state, c.String()) }
+
+func (c Credential) LogValue() slog.Value {
+	return slog.GroupValue(
+		slog.String("provider", c.Provider),
+		slog.Bool("credential_id_configured", c.ID != ""),
+		slog.Int("credential_field_count", len(c.fields)+len(c.deferred)),
+	)
+}
+
 func (c Credential) SafeAttributes() map[string]any {
 	return map[string]any{
 		"provider": c.Provider, "credential_id_configured": c.ID != "",
-		"credential_name_configured": c.Name != "", "credential_field_count": len(c.fields),
+		"credential_name_configured": c.Name != "", "credential_field_count": len(c.fields) + len(c.deferred),
 	}
 }
 

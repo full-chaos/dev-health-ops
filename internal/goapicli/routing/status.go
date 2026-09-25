@@ -277,7 +277,7 @@ func runStatus(argv []string) error {
 		// database makes this verb say "unreachable" instead of hanging
 		// forever. A diagnostic that never returns is worse than
 		// one that returns bad news.
-		report.RegistryDBError = stringPtr(err.Error())
+		report.RegistryDBError = stringPtr(redactCredentials(err.Error()))
 	} else {
 		defer pool.Close()
 		// EVERY database read gets the deadline, not just the dial.
@@ -302,7 +302,7 @@ func runStatus(argv []string) error {
 		defer cancel()
 		counts, err := goapiproof.CountRowsBySchemaDigest(dbCtx, pool)
 		if err != nil {
-			report.RegistryDBError = stringPtr(err.Error())
+			report.RegistryDBError = stringPtr(redactCredentials(err.Error()))
 		} else {
 			report.RowsBySchemaDigest = counts
 			// Only attempt the per-operation classification once the census
@@ -332,7 +332,7 @@ func runStatus(argv []string) error {
 				if err != nil {
 					// Its OWN field: the census above succeeded and must
 					// still be printed (r2 R2-04).
-					report.ClassificationError = stringPtr(err.Error())
+					report.ClassificationError = stringPtr(redactCredentials(err.Error()))
 				}
 			}
 		}

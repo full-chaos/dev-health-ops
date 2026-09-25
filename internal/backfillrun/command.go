@@ -15,6 +15,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
+	pgstorage "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 )
 
 // Verb is the `run` verb of the `backfill` group.
@@ -128,7 +129,7 @@ func runVerb(ctx context.Context, env cli.Env) int {
 	if !ok {
 		return cli.ExitFailure
 	}
-	boundary := secrets.NewBoundary(dsn.Reveal())
+	boundary := pgstorage.Boundary(dsn.Reveal())
 	pool, err := pgxpool.New(ctx, dsn.Reveal())
 	if err != nil {
 		return fail(boundary, err)

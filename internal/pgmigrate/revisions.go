@@ -16,20 +16,16 @@ import (
 // Alembic while the Python chain exists.
 
 // headLabel is the branch label `alembic heads` shows on a head. The cutover
-// head carries river_cutover (0066 declares it). The application head is the
-// head of the branch 0067 labels application_schema, whatever its number: the
-// baseline holds exactly the cutover head and the application head
-// (TestBaselineHoldsOnlyTheCutoverAndApplicationHeads pins it), so the
-// application head is the baseline head that is not the cutover head. A chain
-// revision after the baseline has none: it is not an Alembic script.
-func headLabel(baseline Baseline, revision string) string {
-	switch {
-	case revision == cutoverRevision:
+// head carries river_cutover (0066 declares it). Every other head is the head of the
+// branch 0067 labels application_schema: Alembic gives a branch label to every
+// descendant on that branch, so a chain revision after the baseline prints it too
+// (the baseline holds exactly the cutover head and the application head,
+// TestBaselineHoldsOnlyTheCutoverAndApplicationHeads pins it).
+func headLabel(revision string) string {
+	if revision == cutoverRevision {
 		return "river_cutover"
-	case revision == applicationHead(baseline):
-		return "application_schema"
 	}
-	return ""
+	return "application_schema"
 }
 
 // Heads is the set of head revisions: the baseline's heads, with the application
@@ -63,7 +59,7 @@ func FormatRevision(revision string, isHead bool, label string) string {
 // WriteHeads prints the heads.
 func WriteHeads(out io.Writer, baseline Baseline, chain []ChainFile) error {
 	for _, head := range Heads(baseline, chain) {
-		if _, err := fmt.Fprintln(out, FormatRevision(head, true, headLabel(baseline, head))); err != nil {
+		if _, err := fmt.Fprintln(out, FormatRevision(head, true, headLabel(head))); err != nil {
 			return err
 		}
 	}

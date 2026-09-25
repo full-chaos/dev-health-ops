@@ -470,6 +470,8 @@ func TestRuntimeGrantStatementsMatchProvisionedLeastPrivilegePolicy(t *testing.T
 		"DO $$ BEGIN IF to_regclass('public.integration_sources') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.integration_sources TO \"domain_runtime\"; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.integration_datasets') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.integration_datasets TO \"domain_runtime\"; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.integration_credentials') IS NOT NULL THEN GRANT SELECT ON TABLE public.integration_credentials TO \"domain_runtime\"; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.github_app_installations') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.github_app_installations TO \"domain_runtime\"; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.webhook_sync_requests') IS NOT NULL THEN GRANT SELECT, INSERT ON TABLE public.webhook_sync_requests TO \"domain_runtime\"; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.provider_oauth_credentials') IS NOT NULL THEN GRANT SELECT, UPDATE ON TABLE public.provider_oauth_credentials TO \"domain_runtime\"; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.sync_runs') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_runs TO \"domain_runtime\"; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.sync_dispatch_transport_routes') IS NOT NULL THEN GRANT SELECT ON TABLE public.sync_dispatch_transport_routes TO \"domain_runtime\"; END IF; END $$",

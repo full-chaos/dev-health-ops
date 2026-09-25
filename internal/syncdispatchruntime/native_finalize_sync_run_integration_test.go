@@ -12,6 +12,8 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -38,78 +40,7 @@ func zeroUnitFinalizationCount(t *testing.T, collector *jobruntime.MetricsCollec
 
 func createFinalizeTables(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
-	_, err := pool.Exec(ctx, `
-CREATE TABLE sync_dispatch_transport_routes (
- kind text PRIMARY KEY, transport text NOT NULL, generation bigint NOT NULL,
- paused boolean NOT NULL, rollback_transport text NOT NULL
-);
-CREATE TABLE sync_dispatch_outbox (
- id uuid PRIMARY KEY, sync_run_id uuid NOT NULL, org_id text NOT NULL, kind text NOT NULL,
- status text NOT NULL, available_at timestamptz NOT NULL, attempts int NOT NULL DEFAULT 0,
- dispatched_at timestamptz NULL, dispatched_transport text NULL, dispatched_route_generation bigint NULL,
- transport_job_id text NULL, claim_token text NULL, claim_transport text NULL,
- claim_route_generation bigint NULL, claim_expires_at timestamptz NULL, last_error text NULL,
- created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL,
- UNIQUE (sync_run_id, kind)
-);
-CREATE TABLE sync_runs (
- id uuid PRIMARY KEY, org_id text NOT NULL, integration_id uuid NOT NULL,
- status text NOT NULL, total_units int NOT NULL DEFAULT 0, completed_units int NOT NULL DEFAULT 0,
- failed_units int NOT NULL DEFAULT 0, completed_at timestamptz NULL, result json NULL, error text NULL
-);
-CREATE TABLE sync_run_units (
- id uuid PRIMARY KEY, org_id text NOT NULL, sync_run_id uuid NOT NULL, provider text NOT NULL,
- dataset_key text NOT NULL, source_id uuid NOT NULL, status text NOT NULL,
- since_at timestamptz NULL, before_at timestamptz NULL,
- cost_class text NOT NULL DEFAULT 'medium', mode text NOT NULL DEFAULT 'incremental',
- error text NULL, result json NULL, processor_flags json NULL
-);
-CREATE TABLE integrations (
- id uuid PRIMARY KEY, provider text NOT NULL
-);
-CREATE TABLE sync_configurations (
- id uuid PRIMARY KEY, org_id text NOT NULL, integration_id uuid NOT NULL, parent_id uuid NULL,
- sync_options json NOT NULL, created_at timestamptz NOT NULL,
- last_sync_at timestamptz NULL, last_sync_success boolean NULL, last_sync_error text NULL,
- last_sync_stats json NULL
-);
-CREATE TABLE backfill_jobs (
- id uuid PRIMARY KEY, org_id text NOT NULL, celery_task_id text NULL, status text NOT NULL,
- total_chunks int NOT NULL DEFAULT 0, completed_chunks int NOT NULL DEFAULT 0,
- failed_chunks int NOT NULL DEFAULT 0, error_message text NULL, completed_at timestamptz NULL
-);
-CREATE TABLE scheduled_jobs (
- id uuid PRIMARY KEY
-);
-CREATE TABLE job_runs (
- id uuid PRIMARY KEY, job_id uuid NOT NULL REFERENCES scheduled_jobs(id),
- status int NOT NULL, completed_at timestamptz NULL, result json NULL, error text NULL
-);
-CREATE TABLE integration_sources (
- id uuid PRIMARY KEY
-);
-CREATE TABLE sync_compute_checkpoints (
- id uuid PRIMARY KEY, org_id text NOT NULL, sync_run_id uuid NOT NULL, sync_run_unit_id uuid NOT NULL,
- source_id uuid NULL REFERENCES integration_sources(id), provider text NOT NULL, dataset_key text NOT NULL,
- compute_type text NOT NULL,
- status text NOT NULL, window_start timestamptz NULL, window_end timestamptz NULL,
- checkpointed_at timestamptz NOT NULL, metadata json NULL,
- created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL,
- CONSTRAINT uq_sync_compute_checkpoint_unit_type UNIQUE (sync_run_id, sync_run_unit_id, compute_type)
-);
-CREATE TABLE sync_run_post_dispatches (
- id uuid PRIMARY KEY, org_id text NOT NULL, sync_run_id uuid NOT NULL, kind text NOT NULL,
- dispatched_at timestamptz NOT NULL,
- UNIQUE (sync_run_id, kind)
-);
-CREATE TABLE sync_coverage_projections (
- org_id text NOT NULL, sync_config_id uuid NOT NULL, invalidated_at timestamptz NULL,
- updated_at timestamptz NOT NULL DEFAULT '2000-01-01 00:00:00+00',
- PRIMARY KEY (org_id, sync_config_id)
-)`)
-	if err != nil {
-		t.Fatal(err)
-	}
+	pgschema.Apply(ctx, t, pool)
 }
 
 const (
@@ -122,54 +53,46 @@ const (
 	finalizeTestSource      = "00000000-0000-4000-8000-0000000000f7"
 )
 
+// finalizeRouteGeneration: the migrations seed every route as celery at generation 2 and the
+// table's trigger demands an increase for a state change, so the river route lands at 3.
+const finalizeRouteGeneration = 3
+
+func seedFinalizeRouteRow(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+	t.Helper()
+	if got := pgseed.SyncTransportRoute(ctx, t, pool, "finalize_sync_run", "river", finalizeRouteGeneration, false, "celery"); got != finalizeRouteGeneration {
+		t.Fatalf("finalize_sync_run route generation = %d, want %d", got, finalizeRouteGeneration)
+	}
+}
+
+// seedFinalizeRoute seeds the route, the integration and its sync configuration. The dispatched
+// outbox row needs the run to exist first, so insertFinalizeRun (below) adds it.
 func seedFinalizeRoute(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
-	statements := []string{
-		`INSERT INTO sync_dispatch_transport_routes (kind,transport,generation,paused,rollback_transport)
-		 VALUES ('finalize_sync_run','river',1,false,'celery')`,
-		`INSERT INTO sync_dispatch_outbox
-		    (id,sync_run_id,org_id,kind,status,available_at,dispatched_transport,dispatched_route_generation,created_at,updated_at)
-		 VALUES ('` + finalizeTestOutbox + `','` + finalizeTestRun + `','` + finalizeTestOrg + `',
-		         'finalize_sync_run','dispatched',now(),'river',1,now(),now())`,
-		`INSERT INTO integrations (id, provider) VALUES ('` + finalizeTestIntegration + `','github')`,
-		`INSERT INTO sync_configurations (id,org_id,integration_id,parent_id,sync_options,created_at)
-		 VALUES ('` + finalizeTestSyncConfig + `','` + finalizeTestOrg + `','` + finalizeTestIntegration + `',
-		         NULL,'{}'::json, now())`,
-	}
-	for _, statement := range statements {
-		if _, err := pool.Exec(ctx, statement); err != nil {
-			t.Fatal(err)
-		}
-	}
+	seedFinalizeRouteRow(t, ctx, pool)
+	pgseed.EnsureSyncIntegration(ctx, t, pool, finalizeTestOrg, finalizeTestIntegration, "")
+	pgseed.SyncConfiguration(ctx, t, pool, finalizeTestSyncConfig, finalizeTestOrg, finalizeTestIntegration, `{}`, time.Now())
+}
+
+// insertFinalizeRun inserts the dispatching run and the dispatched finalize outbox row that points at it.
+func insertFinalizeRun(t *testing.T, ctx context.Context, pool *pgxpool.Pool, totalUnits int, resultJSON, errorText string) {
+	t.Helper()
+	pgseed.EnsureSyncRun(ctx, t, pool, pgseed.SyncRun{
+		ID: finalizeTestRun, OrgID: finalizeTestOrg, IntegrationID: finalizeTestIntegration,
+		Status: "dispatching", TotalUnits: totalUnits, ResultJSON: resultJSON, Error: errorText,
+	})
+	pgseed.SyncDispatchOutbox(ctx, t, pool, finalizeTestOutbox, finalizeTestRun, finalizeTestOrg, "finalize_sync_run", "dispatched", "river", finalizeRouteGeneration)
 }
 
 func newFinalizeArgs() FinalizeSyncRunArgs {
 	return FinalizeSyncRunArgs{TransportArgs: TransportArgs{
 		Version: ContractVersionV1, OrgID: finalizeTestOrg, RunID: finalizeTestRun,
-		DispatchOutbox: finalizeTestOutbox, RouteGeneration: 1,
+		DispatchOutbox: finalizeTestOutbox, RouteGeneration: finalizeRouteGeneration,
 	}}
 }
 
 func insertZeroUnitRun(t *testing.T, ctx context.Context, pool *pgxpool.Pool, plannerResult, plannerError string) {
 	t.Helper()
-	var resultArg any
-	if plannerResult == "" {
-		resultArg = nil
-	} else {
-		resultArg = plannerResult
-	}
-	var errorArg any
-	if plannerError == "" {
-		errorArg = nil
-	} else {
-		errorArg = plannerError
-	}
-	if _, err := pool.Exec(ctx, `
-INSERT INTO sync_runs (id,org_id,integration_id,status,total_units,completed_units,failed_units,result,error)
-VALUES ($1,$2,$3,'dispatching',0,0,0,$4::json,$5)`,
-		finalizeTestRun, finalizeTestOrg, finalizeTestIntegration, resultArg, errorArg); err != nil {
-		t.Fatal(err)
-	}
+	insertFinalizeRun(t, ctx, pool, 0, plannerResult, plannerError)
 }
 
 // TestNativeFinalizeSyncRunPreservesPlannerZeroUnitCause pins the CHAOS-4159
@@ -344,34 +267,20 @@ func TestNativeFinalizeSyncRunAggregatesSuccessfulUnits(t *testing.T) {
 	defer pool.Close()
 	createFinalizeTables(t, ctx, pool)
 	seedFinalizeRoute(t, ctx, pool)
-	if _, err := pool.Exec(ctx, `
-INSERT INTO sync_runs (id,org_id,integration_id,status,total_units,completed_units,failed_units)
-VALUES ($1,$2,$3,'dispatching',1,0,0)`, finalizeTestRun, finalizeTestOrg, finalizeTestIntegration); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := pool.Exec(ctx, `INSERT INTO integration_sources (id) VALUES ($1)`, finalizeTestSource); err != nil {
-		t.Fatal(err)
-	}
+	insertFinalizeRun(t, ctx, pool, 1, "", "")
+	pgseed.EnsureSyncIntegration(ctx, t, pool, finalizeTestOrg, finalizeTestIntegration, finalizeTestSource)
 	unitSinceAt := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
 	unitBeforeAt := time.Date(2026, 7, 2, 0, 0, 0, 0, time.UTC)
-	if _, err := pool.Exec(ctx, `
-INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status,since_at,before_at,cost_class,mode)
-VALUES ($1,$2,$3,'github','commits',$4,'success',$5,$6,'heavy','incremental')`,
-		finalizeTestUnit, finalizeTestOrg, finalizeTestRun, finalizeTestSource, unitSinceAt, unitBeforeAt); err != nil {
-		t.Fatal(err)
-	}
+	pgseed.InsertSyncRunUnit(ctx, t, pool, pgseed.SyncRunUnit{
+		ID: finalizeTestUnit, RunID: finalizeTestRun, OrgID: finalizeTestOrg, IntegrationID: finalizeTestIntegration,
+		SourceID: finalizeTestSource, Status: "success", SinceAt: &unitSinceAt, BeforeAt: &unitBeforeAt, CostClass: "heavy",
+	})
 	// An in-flight JobRun this SyncRun should terminalize -- PENDING (0),
 	// result carries sync_run_id so the (status IN (0,1)) + result match
 	// query finds it.
 	jobRunID := "00000000-0000-4000-8000-0000000000f8"
-	if _, err := pool.Exec(ctx, `INSERT INTO scheduled_jobs (id) VALUES ($1)`, jobRunID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := pool.Exec(ctx, `
-INSERT INTO job_runs (id, job_id, status, result) VALUES ($1, $1, 0, $2::json)`,
-		jobRunID, `{"sync_run_id":"`+finalizeTestRun+`"}`); err != nil {
-		t.Fatal(err)
-	}
+	pgseed.ScheduledJob(ctx, t, pool, jobRunID, finalizeTestOrg)
+	pgseed.JobRun(ctx, t, pool, jobRunID, jobRunID, 0, `{"sync_run_id":"`+finalizeTestRun+`"}`)
 
 	service, err := NewNativeFinalizeSyncRunService(pool, nil)
 	if err != nil {
@@ -484,31 +393,32 @@ func TestNativeFinalizeSyncRunSurvivesAGenuineComputeCheckpointFailure(t *testin
 	defer pool.Close()
 	createFinalizeTables(t, ctx, pool)
 	seedFinalizeRoute(t, ctx, pool)
-	if _, err := pool.Exec(ctx, `
-INSERT INTO sync_runs (id,org_id,integration_id,status,total_units,completed_units,failed_units)
-VALUES ($1,$2,$3,'dispatching',2,0,0)`, finalizeTestRun, finalizeTestOrg, finalizeTestIntegration); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := pool.Exec(ctx, `INSERT INTO integration_sources (id) VALUES ($1)`, finalizeTestSource); err != nil {
-		t.Fatal(err)
-	}
+	insertFinalizeRun(t, ctx, pool, 2, "", "")
+	pgseed.EnsureSyncIntegration(ctx, t, pool, finalizeTestOrg, finalizeTestIntegration, finalizeTestSource)
 	// Unit A: valid, registered source -- its checkpoint must succeed.
 	unitA := "00000000-0000-4000-8000-0000000000fa"
-	if _, err := pool.Exec(ctx, `
-INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status)
-VALUES ($1,$2,$3,'github','commits',$4,'success')`,
-		unitA, finalizeTestOrg, finalizeTestRun, finalizeTestSource); err != nil {
-		t.Fatal(err)
-	}
-	// Unit B: a DANGLING source_id with no integration_sources row --
-	// its checkpoint insert genuinely fails on the FK, distinct from the
-	// expected/tolerated unique-constraint race.
+	pgseed.InsertSyncRunUnit(ctx, t, pool, pgseed.SyncRunUnit{
+		ID: unitA, RunID: finalizeTestRun, OrgID: finalizeTestOrg, IntegrationID: finalizeTestIntegration,
+		SourceID: finalizeTestSource, Status: "success",
+	})
+	// Unit B: its checkpoint insert genuinely fails, distinct from the expected/tolerated
+	// unique-constraint race. The migrated schema's foreign keys make a dangling source_id
+	// unrepresentable, so a trigger rejects the checkpoint row for this one unit.
 	unitB := "00000000-0000-4000-8000-0000000000fb"
-	danglingSource := "00000000-0000-4000-8000-0000000000fc"
+	pgseed.InsertSyncRunUnit(ctx, t, pool, pgseed.SyncRunUnit{
+		ID: unitB, RunID: finalizeTestRun, OrgID: finalizeTestOrg, IntegrationID: finalizeTestIntegration,
+		SourceID: finalizeTestSource, Status: "success",
+	})
 	if _, err := pool.Exec(ctx, `
-INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status)
-VALUES ($1,$2,$3,'github','commits',$4,'success')`,
-		unitB, finalizeTestOrg, finalizeTestRun, danglingSource); err != nil {
+CREATE FUNCTION reject_unit_b_checkpoint() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+	IF NEW.sync_run_unit_id = '`+unitB+`'::uuid THEN
+		RAISE EXCEPTION 'test: checkpoint rejected for unit B';
+	END IF;
+	RETURN NEW;
+END $$;
+CREATE TRIGGER trg_reject_unit_b_checkpoint BEFORE INSERT ON sync_compute_checkpoints
+	FOR EACH ROW EXECUTE FUNCTION reject_unit_b_checkpoint()`); err != nil {
 		t.Fatal(err)
 	}
 
@@ -560,7 +470,7 @@ SELECT count(*) FROM sync_compute_checkpoints WHERE sync_run_id=$1 AND sync_run_
 		t.Fatal(err)
 	}
 	if checkpointCountB != 0 {
-		t.Fatalf("unit B's checkpoint = %d rows, want 0 (its FK violation should have been rolled back to its own savepoint)", checkpointCountB)
+		t.Fatalf("unit B's checkpoint = %d rows, want 0 (its rejected insert should have been rolled back to its own savepoint)", checkpointCountB)
 	}
 }
 
@@ -587,24 +497,16 @@ func TestNativeFinalizeSyncRunCheckpointUsesUnitOrgIDNotRunOrgID(t *testing.T) {
 	defer pool.Close()
 	createFinalizeTables(t, ctx, pool)
 	seedFinalizeRoute(t, ctx, pool)
-	if _, err := pool.Exec(ctx, `
-INSERT INTO sync_runs (id,org_id,integration_id,status,total_units,completed_units,failed_units)
-VALUES ($1,$2,$3,'dispatching',1,0,0)`, finalizeTestRun, finalizeTestOrg, finalizeTestIntegration); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := pool.Exec(ctx, `INSERT INTO integration_sources (id) VALUES ($1)`, finalizeTestSource); err != nil {
-		t.Fatal(err)
-	}
+	insertFinalizeRun(t, ctx, pool, 1, "", "")
+	pgseed.EnsureSyncIntegration(ctx, t, pool, finalizeTestOrg, finalizeTestIntegration, finalizeTestSource)
 	// The unit's org_id deliberately DIFFERS from the run's org_id
 	// (finalizeTestOrg). Real production data should never actually diverge
 	// like this, but the port must read the field Python reads regardless.
 	unitOrgID := "00000000-0000-4000-8000-0000000000fd"
-	if _, err := pool.Exec(ctx, `
-INSERT INTO sync_run_units (id,org_id,sync_run_id,provider,dataset_key,source_id,status)
-VALUES ($1,$2,$3,'github','commits',$4,'success')`,
-		finalizeTestUnit, unitOrgID, finalizeTestRun, finalizeTestSource); err != nil {
-		t.Fatal(err)
-	}
+	pgseed.InsertSyncRunUnit(ctx, t, pool, pgseed.SyncRunUnit{
+		ID: finalizeTestUnit, RunID: finalizeTestRun, OrgID: unitOrgID, IntegrationID: finalizeTestIntegration,
+		SourceID: finalizeTestSource, Status: "success",
+	})
 
 	service, err := NewNativeFinalizeSyncRunService(pool, nil)
 	if err != nil {
@@ -647,21 +549,10 @@ func TestNativeFinalizeSyncRunZeroUnitProviderIsNormalized(t *testing.T) {
 	}
 	defer pool.Close()
 	createFinalizeTables(t, ctx, pool)
-	if _, err := pool.Exec(ctx, `INSERT INTO sync_dispatch_transport_routes (kind,transport,generation,paused,rollback_transport)
-		 VALUES ('finalize_sync_run','river',1,false,'celery')`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := pool.Exec(ctx, `INSERT INTO sync_dispatch_outbox
-		    (id,sync_run_id,org_id,kind,status,available_at,dispatched_transport,dispatched_route_generation,created_at,updated_at)
-		 VALUES ($1,$2,$3,'finalize_sync_run','dispatched',now(),'river',1,now(),now())`,
-		finalizeTestOutbox, finalizeTestRun, finalizeTestOrg); err != nil {
-		t.Fatal(err)
-	}
+	seedFinalizeRouteRow(t, ctx, pool)
 	// Mixed-case, whitespace-padded provider -- exactly what
 	// _run_provider's .strip().lower() normalizes away.
-	if _, err := pool.Exec(ctx, `INSERT INTO integrations (id, provider) VALUES ($1, '  PagerDuty  ')`, finalizeTestIntegration); err != nil {
-		t.Fatal(err)
-	}
+	pgseed.Integration(ctx, t, pool, finalizeTestIntegration, finalizeTestOrg, "  PagerDuty  ")
 	insertZeroUnitRun(t, ctx, pool, "", "")
 
 	metrics, err := jobruntime.NewMetricsCollector(jobruntime.MetricDimensions{})

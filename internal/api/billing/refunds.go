@@ -456,8 +456,23 @@ func (h handlers) completeRefund(ctx context.Context, tx pgx.Tx, pending pending
 	if err != nil {
 		return reply{}, err
 	}
+	// A completion never reopens a settled row nor erases a recorded reason
+	// (an event may have settled it while the route waited for Stripe): when
+	// it is protecting one, it says so.
+	var priorStatus string
+	var priorFailure *string
+	if err := tx.QueryRow(ctx, `SELECT status, failure_reason FROM refunds WHERE id = $1 FOR UPDATE`, pending.id).Scan(&priorStatus, &priorFailure); err != nil {
+		return reply{}, err
+	}
+	if terminalRefundStatus(priorStatus) && !terminalRefundStatus(refundStatus) {
+		h.noteRefundRule(ctx, noteCompletionKeptState, "refund_id", pending.id.String(), "stored_status", priorStatus, "stripe_status", refundStatus)
+	} else if priorFailure != nil && failure == nil {
+		h.noteRefundRule(ctx, noteCompletionKeptFail, "refund_id", pending.id.String(), "failure_reason", *priorFailure)
+	}
 	if _, err := tx.Exec(ctx, `UPDATE refunds SET stripe_refund_id = $2, stripe_charge_id = $3, stripe_payment_intent_id = $4,
-		status = $5, failure_reason = $6, metadata = $7::json, updated_at = $8 WHERE id = $1`,
+		status = CASE WHEN status IN ('succeeded', 'failed', 'canceled') AND $5 NOT IN ('succeeded', 'failed', 'canceled') THEN status ELSE $5 END,
+		failure_reason = CASE WHEN status IN ('succeeded', 'failed', 'canceled') AND $5 NOT IN ('succeeded', 'failed', 'canceled') THEN failure_reason ELSE COALESCE($6, failure_reason) END,
+		metadata = $7::json, updated_at = $8 WHERE id = $1`,
 		pending.id, refund.ID, chargeID, refundIntent, refundStatus, failure, metadataText, h.nowUTC()); err != nil {
 		return reply{}, err
 	}

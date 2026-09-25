@@ -13,27 +13,14 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func createBudgetConsumptionTables(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
-	_, err := pool.Exec(ctx, `
-CREATE TABLE public.sync_run_units (
- id uuid PRIMARY KEY, sync_run_id uuid NOT NULL, org_id text NOT NULL,
- integration_id uuid NOT NULL, source_id uuid NOT NULL, provider text NOT NULL,
- dataset_key text NOT NULL, cost_class text NOT NULL,
- since_at timestamptz NULL, before_at timestamptz NULL,
- status text NOT NULL, available_at timestamptz NULL,
- updated_at timestamptz NOT NULL DEFAULT now(), error text NULL, result json NULL,
- lease_owner text NULL, lease_expires_at timestamptz NULL, last_heartbeat_at timestamptz NULL,
- rate_limit_deferrals int NOT NULL DEFAULT 0, rate_limit_first_seen_at timestamptz NULL,
- budget_deferrals int NOT NULL DEFAULT 0, budget_first_deferred_at timestamptz NULL,
- first_blocked_at timestamptz NULL
-)`)
-	if err != nil {
-		t.Fatal(err)
-	}
+	pgschema.Apply(ctx, t, pool)
 }
 
 func withBudgetConsumptionPool(t *testing.T, fn func(ctx context.Context, pool *pgxpool.Pool)) {
@@ -73,14 +60,11 @@ func insertConsumptionUnit(t *testing.T, ctx context.Context, pool *pgxpool.Pool
 	if f.sourceID == "" {
 		f.sourceID = "00000000-0000-4000-8000-000000000011"
 	}
-	if _, err := pool.Exec(ctx, `
-INSERT INTO public.sync_run_units
- (id, sync_run_id, org_id, integration_id, source_id, provider, dataset_key, cost_class,
-  status, updated_at, lease_expires_at, result)
-VALUES ($1::uuid, $2::uuid, $3, $4::uuid, $5::uuid, 'github', 'commits', 'rest_core', $6, $7, $8, '{}'::json)`,
-		f.id, f.syncRunID, f.orgID, f.integrationID, f.sourceID, f.status, f.updatedAt, f.leaseExpires); err != nil {
-		t.Fatal(err)
-	}
+	updatedAt := f.updatedAt
+	pgseed.InsertSyncRunUnit(ctx, t, pool, pgseed.SyncRunUnit{
+		ID: f.id, RunID: f.syncRunID, OrgID: f.orgID, IntegrationID: f.integrationID, SourceID: f.sourceID,
+		Status: f.status, UpdatedAt: &updatedAt, LeaseExpiresAt: f.leaseExpires, ResultJSON: `{}`,
+	})
 }
 
 // fakeBudgetEstimator records every call it receives and returns canned

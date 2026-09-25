@@ -8,36 +8,14 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func createBudgetCASTables(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
-	// sync_runs backs bumpSyncRunRollup's seam (CHAOS-4586, round 1):
-	// terminalizeUnit (budget_chokepoint.go) -- reached here via
-	// terminalizeRateLimitExhausted, the only path in this file that
-	// actually terminalizes a unit -- recomputes this row's
-	// completed_units/failed_units in the SAME transaction as the
-	// sync_run_units write. sync_run_id is nullable so every OTHER test
-	// in this file (none of which terminalize a unit, so none reach
-	// bumpSyncRunRollup) can keep inserting via insertBudgetCASUnit
-	// unchanged.
-	_, err := pool.Exec(ctx, `
-CREATE TABLE public.sync_runs (
- id uuid PRIMARY KEY, completed_units int NOT NULL DEFAULT 0,
- failed_units int NOT NULL DEFAULT 0, total_units int NOT NULL DEFAULT 0
-);
-CREATE TABLE public.sync_run_units (
- id uuid PRIMARY KEY, sync_run_id uuid NULL, status text NOT NULL, available_at timestamptz NULL,
- updated_at timestamptz NOT NULL DEFAULT now(), error text NULL, result json NULL,
- lease_owner text NULL, lease_expires_at timestamptz NULL, last_heartbeat_at timestamptz NULL,
- rate_limit_deferrals int NOT NULL DEFAULT 0, rate_limit_first_seen_at timestamptz NULL,
- budget_deferrals int NOT NULL DEFAULT 0, budget_first_deferred_at timestamptz NULL,
- first_blocked_at timestamptz NULL
-)`)
-	if err != nil {
-		t.Fatal(err)
-	}
+	pgschema.Apply(ctx, t, pool)
 }
 
 const budgetCASTestUnit = "00000000-0000-4000-8000-0000000000f0"
@@ -48,9 +26,7 @@ const budgetCASTestRunID = "00000000-0000-4000-8000-0000000000f1"
 // bumpSyncRunRollup), not every test in this file.
 func seedBudgetCASRun(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
-	if _, err := pool.Exec(ctx, `INSERT INTO public.sync_runs (id, total_units) VALUES ($1::uuid, 1)`, budgetCASTestRunID); err != nil {
-		t.Fatal(err)
-	}
+	pgseed.EnsureSyncRun(ctx, t, pool, pgseed.SyncRun{ID: budgetCASTestRunID, TotalUnits: 1})
 	if _, err := pool.Exec(ctx, `UPDATE public.sync_run_units SET sync_run_id=$1::uuid WHERE id=$2::uuid`, budgetCASTestRunID, budgetCASTestUnit); err != nil {
 		t.Fatal(err)
 	}
@@ -76,11 +52,8 @@ func withBudgetCASPool(t *testing.T, fn func(ctx context.Context, pool *pgxpool.
 
 func insertBudgetCASUnit(t *testing.T, ctx context.Context, pool *pgxpool.Pool, status string) {
 	t.Helper()
-	if _, err := pool.Exec(ctx, `
-INSERT INTO public.sync_run_units (id, status, available_at, updated_at)
-VALUES ($1::uuid, $2, now(), now())`, budgetCASTestUnit, status); err != nil {
-		t.Fatal(err)
-	}
+	now := time.Now()
+	pgseed.InsertSyncRunUnit(ctx, t, pool, pgseed.SyncRunUnit{ID: budgetCASTestUnit, Status: status, AvailableAt: &now, UpdatedAt: &now})
 }
 
 // TestApplyCooldownDeferralWritesTheStampAndClearsTheBudgetEpisode pins the

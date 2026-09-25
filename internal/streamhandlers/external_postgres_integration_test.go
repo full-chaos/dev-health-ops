@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -30,37 +32,22 @@ func newOperationalAllowedFixture(ctx context.Context, t *testing.T) (*pgxpool.P
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	for _, statement := range []string{
-		`CREATE TABLE organizations (id uuid PRIMARY KEY, tier text NOT NULL)`,
-		`CREATE TABLE feature_flags (
-  id uuid PRIMARY KEY, key text UNIQUE NOT NULL, min_tier text NOT NULL,
-  is_enabled boolean NOT NULL)`,
-		`CREATE TABLE org_feature_overrides (
-  org_id uuid NOT NULL, feature_id uuid NOT NULL, is_enabled boolean NOT NULL,
-  expires_at timestamptz, config json, PRIMARY KEY (org_id, feature_id))`,
-		`CREATE TABLE org_licenses (
-  org_id uuid PRIMARY KEY, tier text NOT NULL, features_override json)`,
-	} {
-		if _, err := pool.Exec(ctx, statement); err != nil {
-			t.Fatal(err)
-		}
-	}
-	orgID := uuid.NewString()
-	if _, err := pool.Exec(ctx,
-		`INSERT INTO organizations (id, tier) VALUES ($1, 'enterprise')`, orgID,
-	); err != nil {
+	// The migrated schema (CHAOS-6769 ledger): the hand-written tables lacked the real tables' NOT NULL
+	// columns, and the migrations already register the shipped feature flags.
+	pgschema.Apply(ctx, t, pool)
+	// The migrations register both operational features; these tests exercise the "not registered"
+	// branches of the entitlement query, so they start from the state before either existed.
+	if _, err := pool.Exec(ctx, `DELETE FROM feature_flags WHERE key IN ('customer_push_ingest', 'canonical_incident_ingestion')`); err != nil {
 		t.Fatal(err)
 	}
+	orgID := uuid.NewString()
+	pgseed.Org(ctx, t, pool, orgID, "enterprise")
 	return pool, orgID
 }
 
 func insertOperationalFeature(ctx context.Context, t *testing.T, pool *pgxpool.Pool, key, minTier string) {
 	t.Helper()
-	if _, err := pool.Exec(ctx, `
-INSERT INTO feature_flags (id, key, min_tier, is_enabled)
-VALUES ($1, $2, $3, true)`, uuid.NewString(), key, minTier); err != nil {
-		t.Fatal(err)
-	}
+	pgseed.SetFeatureFlag(ctx, t, pool, uuid.NewString(), key, minTier, true)
 }
 
 // TestPostgresExternalBatchRepositoryOperationalAllowedRequiresBothFeatures
@@ -127,11 +114,7 @@ func TestPostgresExternalBatchRepositoryOperationalAllowedNonObjectLicenseOverri
 	pool, orgID := newOperationalAllowedFixture(ctx, t)
 	insertOperationalFeature(ctx, t, pool, "customer_push_ingest", "team")
 	insertOperationalFeature(ctx, t, pool, "canonical_incident_ingestion", "community")
-	if _, err := pool.Exec(ctx,
-		`INSERT INTO org_licenses (org_id, tier, features_override) VALUES ($1, 'enterprise', '[]')`, orgID,
-	); err != nil {
-		t.Fatal(err)
-	}
+	pgseed.OrgLicense(ctx, t, pool, orgID, "enterprise", `[]`)
 
 	repo, err := NewPostgresExternalBatchRepository(pool)
 	if err != nil {

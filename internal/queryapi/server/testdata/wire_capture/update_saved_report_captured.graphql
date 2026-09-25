@@ -1,0 +1,18 @@
+mutation updateSavedReport($orgId: String!, $reportId: String!, $input: UpdateSavedReportInput!) {
+  updateSavedReport(orgId: $orgId, reportId: $reportId, input: $input) {
+    id
+    orgId
+    name
+    description
+    reportPlan
+    isTemplate
+    parameters
+    scheduleId
+    isActive
+    lastRunAt
+    lastRunStatus
+    createdAt
+    updatedAt
+    __typename
+  }
+}

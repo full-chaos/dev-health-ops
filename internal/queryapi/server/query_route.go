@@ -29,6 +29,7 @@ import (
 	gqlhandler "github.com/99designs/gqlgen/graphql/handler"
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/vektah/gqlparser/v2/ast"
 	"github.com/vektah/gqlparser/v2/gqlerror"
 
 	schemav1 "github.com/full-chaos/dev-health-ops/contracts/graphql/v1"
@@ -1622,6 +1623,72 @@ const registeredReportRunsDocument = `query reportRuns($orgId: String!, $reportI
   }
 }`
 
+// The saved-report mutation documents, the exact wire-form text a real web
+// client sends (testdata/wire_capture/*_saved_report_captured.graphql and
+// trigger_report_captured.graphql), produced by the pinned @urql/core the way the
+// web repo's graphql-wire-parity check reproduces it.
+const registeredCreateSavedReportDocument = `mutation createSavedReport($orgId: String!, $input: CreateSavedReportInput!) {
+  createSavedReport(orgId: $orgId, input: $input) {
+    id
+    orgId
+    name
+    description
+    reportPlan
+    isTemplate
+    isActive
+    createdAt
+    updatedAt
+    __typename
+  }
+}`
+
+const registeredUpdateSavedReportDocument = `mutation updateSavedReport($orgId: String!, $reportId: String!, $input: UpdateSavedReportInput!) {
+  updateSavedReport(orgId: $orgId, reportId: $reportId, input: $input) {
+    id
+    orgId
+    name
+    description
+    reportPlan
+    isTemplate
+    parameters
+    scheduleId
+    isActive
+    lastRunAt
+    lastRunStatus
+    createdAt
+    updatedAt
+    __typename
+  }
+}`
+
+const registeredCloneSavedReportDocument = `mutation cloneSavedReport($orgId: String!, $input: CloneSavedReportInput!) {
+  cloneSavedReport(orgId: $orgId, input: $input) {
+    id
+    orgId
+    name
+    description
+    isActive
+    createdAt
+    updatedAt
+    __typename
+  }
+}`
+
+const registeredDeleteSavedReportDocument = `mutation deleteSavedReport($orgId: String!, $reportId: String!) {
+  deleteSavedReport(orgId: $orgId, reportId: $reportId)
+}`
+
+const registeredTriggerReportDocument = `mutation triggerReport($orgId: String!, $reportId: String!) {
+  triggerReport(orgId: $orgId, reportId: $reportId) {
+    id
+    reportId
+    status
+    startedAt
+    triggeredBy
+    __typename
+  }
+}`
+
 // registeredSecurityOverviewDocument is the registered document for the
 // `securityOverview` operation, the exact wire-form text a real web client
 // sends (testdata/wire_capture/securityoverview_captured.graphql).
@@ -2686,6 +2753,11 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 		"savedReports":                      digestHex(registeredSavedReportsDocument),
 		"savedReport":                       digestHex(registeredSavedReportDocument),
 		"reportRuns":                        digestHex(registeredReportRunsDocument),
+		"createSavedReport":                 digestHex(registeredCreateSavedReportDocument),
+		"updateSavedReport":                 digestHex(registeredUpdateSavedReportDocument),
+		"deleteSavedReport":                 digestHex(registeredDeleteSavedReportDocument),
+		"cloneSavedReport":                  digestHex(registeredCloneSavedReportDocument),
+		"triggerReport":                     digestHex(registeredTriggerReportDocument),
 		"productTelemetryDashboard":         digestHex(registeredProductTelemetryDashboardDocument),
 		"productTelemetryPlatformDashboard": digestHex(registeredProductTelemetryPlatformDashboardDocument),
 		"experiments":                       digestHex(registeredExperimentsDocument),
@@ -2727,9 +2799,38 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 		operationByDigest[digest] = operation
 	}
 
-	schema := graph.NewExecutableSchema(graph.Config{Resolvers: &graph.Resolver{ClickHouse: chClient, Postgres: pgPool}})
+	gqlHandler := newGraphQLServer(&graph.Resolver{ClickHouse: chClient, Postgres: pgPool, ReportWriter: newReportWriter(pgPool, jobContractRoot)})
+	for operation := range digestByOperation {
+		routeMux.Register(operation, gqlHandler)
+	}
+
+	// CHAOS-5425: the SAME pipeline is built a second time over a
+	// measurement-only Switch, so a shadow-mode operation can be executed
+	// on the deployed build without exposing it to real traffic. Both
+	// handlers share newDocumentDispatchHandler below -- byte-identical
+	// ingress, body-size contract, document resolution, bearer/envelope
+	// verification and org context. ONLY the Switch differs, which is the
+	// entire point: a proof must exercise the real path, and a second
+	// hand-written copy of this closure would be a second path.
+	proofMux := routeswitch.NewMux(routeswitch.NewProofSwitch(pgPool, schemaDigest, digestByOperation))
+	for operation := range digestByOperation {
+		proofMux.Register(operation, gqlHandler)
+	}
+
+	return newDocumentDispatchHandler(getenv, routeMux, operationByDigest, verifier, true),
+		newDocumentDispatchHandler(getenv, proofMux, operationByDigest, verifier, false),
+		registryHandler
+}
+
+// newGraphQLServer is the gqlgen server every registered operation runs on:
+// the executable schema over the resolvers, the null-argument refusal, and the
+// error presenter. The venue oracle builds the same server, so what it measures
+// is what serves.
+func newGraphQLServer(resolver *graph.Resolver) *gqlhandler.Server {
+	schema := graph.NewExecutableSchema(graph.Config{Resolvers: resolver})
 	gqlHandler := gqlhandler.NewDefaultServer(schema)
 	gqlHandler.AroundFields(graph.RefuseNullForNonNullArguments)
+	gqlHandler.Use(graph.MutationOrgGuard{})
 	// CHAOS-4647 diagnostic: the process log carries nothing per-request,
 	// and gqlgen's default presenter surfaces only err.Error() -- which for
 	// a dev-health-go *operationError (clickhouse/client.go) is the fixed
@@ -2753,28 +2854,26 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 			chain = append(chain, unwrapped.Error())
 		}
 		log.Printf("query-api: resolver error unwrap chain: %s", truncateForLog(strings.Join(chain, " <- "), maxUnwrapChainLogBytes))
-		return graphql.DefaultErrorPresenter(ctx, err)
+		return withMutationLocation(ctx, graphql.DefaultErrorPresenter(ctx, err))
 	})
-	for operation := range digestByOperation {
-		routeMux.Register(operation, gqlHandler)
-	}
+	return gqlHandler
+}
 
-	// CHAOS-5425: the SAME pipeline is built a second time over a
-	// measurement-only Switch, so a shadow-mode operation can be executed
-	// on the deployed build without exposing it to real traffic. Both
-	// handlers share newDocumentDispatchHandler below -- byte-identical
-	// ingress, body-size contract, document resolution, bearer/envelope
-	// verification and org context. ONLY the Switch differs, which is the
-	// entire point: a proof must exercise the real path, and a second
-	// hand-written copy of this closure would be a second path.
-	proofMux := routeswitch.NewMux(routeswitch.NewProofSwitch(pgPool, schemaDigest, digestByOperation))
-	for operation := range digestByOperation {
-		proofMux.Register(operation, gqlHandler)
+// withMutationLocation gives an error raised by a mutation field the source
+// location of that field, as the Python plane's error carries (line and column
+// of the field in the document). Queries keep the answer they have always had:
+// no location on a resolver error.
+func withMutationLocation(ctx context.Context, presented *gqlerror.Error) *gqlerror.Error {
+	if presented == nil || len(presented.Locations) > 0 || !graphql.HasOperationContext(ctx) {
+		return presented
 	}
-
-	return newDocumentDispatchHandler(getenv, routeMux, operationByDigest, verifier, true),
-		newDocumentDispatchHandler(getenv, proofMux, operationByDigest, verifier, false),
-		registryHandler
+	operation := graphql.GetOperationContext(ctx).Operation
+	field := graphql.GetFieldContext(ctx)
+	if operation == nil || operation.Operation != ast.Mutation || field == nil || field.Field.Field == nil || field.Field.Position == nil {
+		return presented
+	}
+	presented.Locations = []gqlerror.Location{{Line: field.Field.Position.Line, Column: field.Field.Position.Column}}
+	return presented
 }
 
 // newDocumentDispatchHandler builds the per-request pipeline both /query
@@ -2892,7 +2991,9 @@ func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, op
 			}
 		}
 
-		r = r.WithContext(authctx.WithClaims(r.Context(), claims))
+		// The raw body rides along so a resolver can read a JSON variable in the
+		// order the client wrote its keys (see graph.WithRequestBody).
+		r = r.WithContext(graph.WithRequestBody(authctx.WithClaims(r.Context(), claims), bodyBytes))
 		r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 
 		routeMux.Dispatch(operation, w, r)

@@ -139,8 +139,10 @@ func TestVenueOracleStripeEventDispatch(t *testing.T) {
 			t.Errorf("%s: Python applies it (%v); Go answers 200 and drops it (route it or name it in stripeEventGaps)", eventType, reached[eventType])
 		case applied[eventType] && routed && gap:
 			t.Errorf("%s is routed and still listed as a gap", eventType)
-		case !applied[eventType] && routed:
-			t.Errorf("Go routes %s, which Python does not apply (%v)", eventType, reached[eventType])
+		case !applied[eventType] && routed && stripeEventExtensions[eventType] == "":
+			t.Errorf("Go routes %s, which Python does not apply (%v); name it in stripeEventExtensions", eventType, reached[eventType])
+		case applied[eventType] && stripeEventExtensions[eventType] != "":
+			t.Errorf("%s is named a Go-only extension and Python now applies it (%v): drop it from stripeEventExtensions", eventType, reached[eventType])
 		case !applied[eventType] && gap:
 			t.Errorf("gap %s is not a type Python applies: a stale entry", eventType)
 		}

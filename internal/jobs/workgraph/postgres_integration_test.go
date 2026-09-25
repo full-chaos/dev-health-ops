@@ -11,6 +11,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -255,32 +256,6 @@ func (registry activeWorkgraphRegistry) Descriptor(kind string) (jobruntime.Desc
 
 func createExecutionTables(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
-	_, err := pool.Exec(ctx, `
-CREATE TABLE work_graph_execution_requests (
- id uuid PRIMARY KEY, org_id uuid NOT NULL, kind text NOT NULL, scope jsonb NOT NULL,
- model_ref text NULL, prompt_ref text NULL, llm_concurrency integer NOT NULL,
- spend_limit_microunits bigint NOT NULL, correlation_id text NOT NULL, idempotency_key text NOT NULL UNIQUE,
- state text NOT NULL, claim_token uuid NULL, lease_expires_at timestamptz NULL,
- attempt_count integer NOT NULL DEFAULT 0, created_at timestamptz NOT NULL DEFAULT statement_timestamp(), updated_at timestamptz NOT NULL DEFAULT statement_timestamp()
-);
-CREATE TABLE work_graph_execution_ledger (
- request_id uuid PRIMARY KEY REFERENCES work_graph_execution_requests(id), claim_token uuid NOT NULL,
- state text NOT NULL, attempt_count integer NOT NULL DEFAULT 1, output_evidence jsonb NULL,
- failure_detail text NULL, last_attempt_at timestamptz NOT NULL DEFAULT statement_timestamp(), completed_at timestamptz NULL
-);
-CREATE TABLE worker_job_outbox (
- id uuid PRIMARY KEY, dedupe_key varchar(256) NOT NULL UNIQUE, job_kind varchar(96) NOT NULL,
- contract_version integer NOT NULL, args json NOT NULL, payload_hash varchar(71) NOT NULL,
- queue varchar(96) NOT NULL, priority smallint NOT NULL, max_attempts smallint NOT NULL,
- scheduled_at timestamptz NOT NULL, status varchar(16) NOT NULL, attempt_count integer NOT NULL,
- next_attempt_at timestamptz NOT NULL, prerequisite_completion_key text NULL,
- created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL
-) ;
-CREATE TABLE worker_job_completion_fences (
- completion_key text PRIMARY KEY,
- completed_at timestamptz NOT NULL DEFAULT statement_timestamp()
-)`)
-	if err != nil {
-		t.Fatal(err)
-	}
+	// The migrated schema, not hand-written tables (CHAOS-6769 ledger).
+	pgschema.Apply(ctx, t, pool)
 }

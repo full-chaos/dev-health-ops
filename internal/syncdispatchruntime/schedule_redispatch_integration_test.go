@@ -63,8 +63,8 @@ func TestScheduleRedispatchOverwritesAPendingUnclaimedRowsAvailableAt(t *testing
 		now := pgNow()
 		earlier := now.Add(5 * time.Minute)
 		if _, err := pool.Exec(ctx, `
-INSERT INTO sync_dispatch_outbox (id,sync_run_id,org_id,kind,status,available_at,created_at,updated_at)
-VALUES ($1,$2,$3,$4,'pending',$5,now(),now())`,
+INSERT INTO sync_dispatch_outbox (id,sync_run_id,org_id,kind,status,available_at,attempts,created_at,updated_at)
+VALUES ($1,$2,$3,$4,'pending',$5,0,now(),now())`,
 			"00000000-0000-4000-8000-0000000000d5", discoveryTestRun, discoveryTestOrg, outboxKindDispatchSyncRun, earlier); err != nil {
 			t.Fatal(err)
 		}
@@ -91,8 +91,8 @@ func TestScheduleRedispatchDoesNotOverwriteAClaimedRow(t *testing.T) {
 		claimedAt := now.Add(5 * time.Minute)
 		claimExpiresAt := now.Add(time.Hour)
 		if _, err := pool.Exec(ctx, `
-INSERT INTO sync_dispatch_outbox (id,sync_run_id,org_id,kind,status,available_at,claim_token,claim_expires_at,created_at,updated_at)
-VALUES ($1,$2,$3,$4,'pending',$5,'some-claim-token',$6,now(),now())`,
+INSERT INTO sync_dispatch_outbox (id,sync_run_id,org_id,kind,status,available_at,attempts,claim_token,claim_expires_at,created_at,updated_at)
+VALUES ($1,$2,$3,$4,'pending',$5,0,'some-claim-token',$6,now(),now())`,
 			"00000000-0000-4000-8000-0000000000d6", discoveryTestRun, discoveryTestOrg, outboxKindDispatchSyncRun, claimedAt, claimExpiresAt); err != nil {
 			t.Fatal(err)
 		}

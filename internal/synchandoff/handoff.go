@@ -18,6 +18,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 )
 
 const (
@@ -54,6 +56,9 @@ type Trigger struct {
 	SinceInstant    time.Time
 	BeforeInstant   time.Time
 	ScheduledJobNew bool
+	// Existing reports an occurrence with this identity that was already
+	// written: Mint wrote nothing new.
+	Existing bool
 }
 
 // OccurrenceIdentity is scheduled_sync_occurrence_identity, byte for byte.
@@ -115,22 +120,39 @@ type MintInput struct {
 	SourceIDs, DatasetKeys []string
 	// TriggeredBy is "manual" or "backfill" (the table's CHECK constraint).
 	TriggeredBy string
+	// ScheduledFor fixes the occurrence's scheduled_for, and so its identity
+	// (nil: now). A webhook request passes its delivery's created_at, so a
+	// replayed request mints the same occurrence rather than a second one.
+	ScheduledFor *time.Time
 }
 
 // Mint writes the occurrence and its manual trigger in the transaction.
+//
+// The occurrence is written once per identity: when an occurrence with this
+// identity already exists (a replayed webhook request), neither it nor its
+// trigger is written again, and the returned Trigger reports Existing.
 func Mint(ctx context.Context, tx pgx.Tx, config *Config, input MintInput, now time.Time) (Trigger, error) {
 	scheduledFor := now.UTC().Truncate(time.Microsecond)
+	if input.ScheduledFor != nil {
+		scheduledFor = input.ScheduledFor.UTC().Truncate(time.Microsecond)
+	}
 	occurrenceID := OccurrenceIdentity(config.ID, scheduledFor)
-	jobID, created, err := ensureScheduledJob(ctx, tx, config, scheduledFor)
+	jobID, created, err := ensureScheduledJob(ctx, tx, config, now.UTC())
 	if err != nil {
 		return Trigger{}, err
 	}
-	if _, err := tx.Exec(ctx, `
+	tag, err := tx.Exec(ctx, `
 INSERT INTO public.scheduled_sync_occurrences
 	(occurrence_id, identity_version, org_id, sync_config_id, scheduled_job_id, scheduled_for)
-VALUES ($1, $2, $3, $4::uuid, $5::uuid, $6)`,
-		occurrenceID, occurrenceIdentityVersion, config.OrgID, config.ID, jobID, scheduledFor); err != nil {
+VALUES ($1, $2, $3, $4::uuid, $5::uuid, $6)
+ON CONFLICT (occurrence_id) DO NOTHING`,
+		occurrenceID, occurrenceIdentityVersion, config.OrgID, config.ID, jobID, scheduledFor)
+	if err != nil {
 		return Trigger{}, fmt.Errorf("write the scheduled occurrence: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return Trigger{OccurrenceID: occurrenceID, ScheduledFor: scheduledFor, JobID: jobID, Provider: config.Provider,
+			OrgID: config.OrgID, SyncConfigID: config.ID, SyncTargets: config.SyncTargets, Existing: true}, nil
 	}
 	// nil is NULL (the scheduler's default selection); an empty, non-nil list
 	// is an explicit empty selection, which plans nothing.
@@ -160,6 +182,13 @@ VALUES ($1, $2, $3, $4, $5, $6, $7)`,
 
 // ensureScheduledJob is _ensure_scheduled_job_for_config: the sync job marker
 // of the configuration, created paused when the configuration has no schedule.
+//
+// It is the one implementation of that marker write (the webhook path's copy
+// was folded in here by CHAOS-6695): every NOT NULL column the ScheduledJob
+// model fills from Python-side defaults is written as the ORM writes it
+// (created_at and updated_at have no server default, CHAOS-6652), job_config
+// is json.dumps text in the json column, and a concurrent first mint for the
+// same configuration reads back the winner's row (CHAOS-6699).
 func ensureScheduledJob(ctx context.Context, tx pgx.Tx, config *Config, now time.Time) (string, bool, error) {
 	var jobID string
 	err := tx.QueryRow(ctx, `
@@ -172,34 +201,56 @@ SELECT id::text FROM public.scheduled_jobs WHERE org_id = $1 AND sync_config_id 
 		return "", false, fmt.Errorf("find the scheduled job: %w", err)
 	}
 	cron := "0 * * * *"
-	if truthy(config.SyncOptions["schedule_cron"]) {
+	if Truthy(config.SyncOptions["schedule_cron"]) {
 		cron = fmt.Sprint(config.SyncOptions["schedule_cron"])
 	}
 	timezone := "UTC"
-	if truthy(config.SyncOptions["timezone"]) {
+	if Truthy(config.SyncOptions["timezone"]) {
 		timezone = fmt.Sprint(config.SyncOptions["timezone"])
 	}
 	status := jobStatusPaused
-	if config.IsActive && truthy(config.SyncOptions["schedule_cron"]) {
+	if config.IsActive && Truthy(config.SyncOptions["schedule_cron"]) {
 		status = jobStatusActive
 	}
-	jobConfig, err := json.Marshal(map[string]string{"provider": config.Provider, "sync_config_id": config.ID})
+	jobConfig := pyjson.NewObject()
+	jobConfig.Set("provider", config.Provider)
+	jobConfig.Set("sync_config_id", config.ID)
+	jobConfigText, err := pyjson.Dumps(jobConfig)
 	if err != nil {
 		return "", false, err
 	}
-	if err := tx.QueryRow(ctx, `
+	// The conflict clause has no target on purpose: scheduled_jobs has two
+	// unique keys, (org_id, sync_config_id, job_type) and (org_id, provider,
+	// name), and the name derives from the config id, so a racing insert
+	// collides on both and the arbiter Postgres checks first is not ours to
+	// pick.
+	err = tx.QueryRow(ctx, `
 INSERT INTO public.scheduled_jobs
-	(id, org_id, name, job_type, provider, schedule_cron, timezone, job_config, sync_config_id, status, created_at, updated_at)
-VALUES (gen_random_uuid(), $1, $2, 'sync', $3, $4, $5, $6::jsonb, $7::uuid, $8, $9, $9)
+	(id, org_id, name, job_type, provider, schedule_cron, timezone, job_config, sync_config_id, status,
+	 is_running, run_count, failure_count, created_at, updated_at)
+VALUES (gen_random_uuid(), $1, $2, 'sync', $3, $4, $5, $6::json, $7::uuid, $8, false, 0, 0, $9, $9)
+ON CONFLICT DO NOTHING
 RETURNING id::text`,
-		config.OrgID, "sync-config-"+config.ID, config.Provider, cron, timezone, jobConfig, config.ID, status, now).Scan(&jobID); err != nil {
+		config.OrgID, "sync-config-"+config.ID, config.Provider, cron, timezone, jobConfigText, config.ID, status, now).Scan(&jobID)
+	if err == nil {
+		return jobID, true, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
 		return "", false, fmt.Errorf("create the scheduled job: %w", err)
 	}
-	return jobID, true, nil
+	if err := tx.QueryRow(ctx, `
+SELECT id::text FROM public.scheduled_jobs WHERE org_id = $1 AND sync_config_id = $2::uuid AND job_type = 'sync'`,
+		config.OrgID, config.ID).Scan(&jobID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", false, fmt.Errorf("scheduled job name %q is held by a row for another sync config", "sync-config-"+config.ID)
+		}
+		return "", false, fmt.Errorf("find the scheduled job: %w", err)
+	}
+	return jobID, false, nil
 }
 
-// truthy is Python truthiness for a JSON value (`x or default`).
-func truthy(value any) bool {
+// Truthy is Python's bool() of a JSON-decoded sync_options value.
+func Truthy(value any) bool {
 	switch typed := value.(type) {
 	case nil:
 		return false

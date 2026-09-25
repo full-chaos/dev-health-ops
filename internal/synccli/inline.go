@@ -30,14 +30,16 @@ import (
 //     GITLAB_TOKEN) and --org (or ORG_ID);
 //   - the chunked targets cicd and tests (they need a chunk store the
 //     in-process ledger does not implement yet);
-//   - incidents, --search batch and --provider local|synthetic (their own
-//     tickets).
+//   - --search batch and --provider local|synthetic (their own tickets).
+
+// githubIncidentsRefusal is the Python message, verbatim
+// (processors/github.py process_github_repo).
+const githubIncidentsRefusal = "GitHub does not expose a native incident source; sync work items instead"
 
 // Tickets the refusals point at.
 const (
 	ticketDBLookups = "CHAOS-6710"
 	ticketChunked   = "CHAOS-6711"
-	ticketIncidents = "CHAOS-6683"
 	ticketBatch     = "CHAOS-6684"
 	ticketLocal     = "CHAOS-6685"
 )
@@ -130,7 +132,11 @@ func inlineDatasets(plan Plan) ([]string, *Refusal) {
 	}
 	switch plan.Target {
 	case "incidents":
-		return nil, notYet(plan, "incidents", ticketIncidents)
+		if plan.Provider == "github" {
+			// process_github_repo(sync_incidents=True) raises this ValueError: an
+			// uncaught traceback, exit 1. GitHub has no native incident source.
+			return nil, &Refusal{Code: cli.ExitFailure, Stage: "error", Type: "ValueError", Message: githubIncidentsRefusal}
+		}
 	case "cicd", "tests":
 		return nil, notYet(plan, "the chunked CI/CD and test routes", ticketChunked)
 	}

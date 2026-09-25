@@ -1,0 +1,7 @@
+{
+  "externalId": "acme/api",
+  "sourceSystem": "github",
+  "defaultRef": "main",
+  "tags": ["backend", "core"],
+  "settings": {"visibility": "private"}
+}

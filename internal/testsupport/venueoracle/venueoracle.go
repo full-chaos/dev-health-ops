@@ -99,8 +99,20 @@ elif mode == "serve":
     # revoke_url at a fake endpoint, so a venue test can prove the Go and
     # Python planes revoke against the SAME fake server without the
     # production PagerDutyOAuthConfig ever gaining a revoke_url env knob.
+    _pd_overrides = {}
     _pd_revoke_override = os.environ.get("VENUE_PAGERDUTY_REVOKE_URL_OVERRIDE")
     if _pd_revoke_override:
+        _pd_overrides["revoke_url"] = _pd_revoke_override
+    # Same rule, for the code exchange and the client-credentials token
+    # request (PagerDutyOAuthConfig.token_url and credential_validation's
+    # own _TOKEN_URL) and for the regional REST base the live validation
+    # reads (credential_validation.pagerduty_base_url): a venue test points
+    # both planes at one fake PagerDuty, and the Go plane's
+    # PagerDutyRevokeConfig.TokenURL/APIBaseOverride are its counterparts.
+    _pd_token_override = os.environ.get("VENUE_PAGERDUTY_TOKEN_URL_OVERRIDE")
+    if _pd_token_override:
+        _pd_overrides["token_url"] = _pd_token_override
+    if _pd_overrides:
         import dataclasses
         from dev_health_ops.providers.pagerduty import oauth as _pd_oauth
         _pd_original_from_env = _pd_oauth.PagerDutyOAuthConfig.from_env.__func__
@@ -109,9 +121,16 @@ elif mode == "serve":
             config = _pd_original_from_env(cls)
             if config is None:
                 return config
-            return dataclasses.replace(config, revoke_url=_pd_revoke_override)
+            return dataclasses.replace(config, **_pd_overrides)
 
         _pd_oauth.PagerDutyOAuthConfig.from_env = classmethod(_pd_patched_from_env)
+    if _pd_token_override or os.environ.get("VENUE_PAGERDUTY_API_BASE_OVERRIDE"):
+        from dev_health_ops.providers.pagerduty import credential_validation as _pd_cv
+        if _pd_token_override:
+            _pd_cv._TOKEN_URL = _pd_token_override
+        _pd_api_override = os.environ.get("VENUE_PAGERDUTY_API_BASE_OVERRIDE")
+        if _pd_api_override:
+            _pd_cv.pagerduty_base_url = lambda *, region: _pd_api_override + "/" + region
     # Test-runner-only monkeypatch, same rule as above: when set, every
     # StripeClient the app builds talks to this base instead of Stripe, so
     # a venue test can record what each plane asks of Stripe on one fake

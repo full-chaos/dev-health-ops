@@ -17,7 +17,7 @@ import (
 // "/api/v1/admin" -- this is the whole route table this Service mounts
 // under that prefix, so this file list is also this test's own coverage
 // statement.
-var adminRouteGuardFiles = []string{"impersonation.go", "users.go", "orgs.go", "platformstats.go", "featureflags.go", "auditlogs.go", "ipallowlist.go", "retention.go", "settings.go", "llmsettings.go", "pagerduty.go", "pagerduty_disconnect.go", "pagerduty_authorize.go"}
+var adminRouteGuardFiles = []string{"impersonation.go", "users.go", "orgs.go", "platformstats.go", "featureflags.go", "auditlogs.go", "ipallowlist.go", "retention.go", "settings.go", "llmsettings.go", "pagerduty.go", "pagerduty_disconnect.go", "pagerduty_authorize.go", "pagerduty_callback.go", "pagerduty_manual.go"}
 
 // adminRouteGuardFuncs names the exact functions parsed for a Route
 // table -- a route registered anywhere else in this package is invisible
@@ -37,6 +37,8 @@ var adminRouteGuardFuncs = map[string]bool{
 	"pagerDutyRoutes":           true,
 	"pagerDutyDisconnectRoutes": true,
 	"pagerDutyAuthorizeRoutes":  true,
+	"pagerDutyCallbackRoutes":   true,
+	"pagerDutyManualRoutes":     true,
 }
 
 // adminRouteGuardExceptions names every route this test permits at a

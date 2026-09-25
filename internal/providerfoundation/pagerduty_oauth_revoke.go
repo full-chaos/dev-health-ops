@@ -31,6 +31,34 @@ type PagerDutyRevokeConfig struct {
 	RevokeURL string
 	// AuthorizationURL overrides pagerDutyAuthorizationURL when non-empty.
 	AuthorizationURL string
+	// ClientSecret is PAGER_DUTY_SECRET (empty for a public PKCE client);
+	// the callback's code exchange sends it as client_secret.
+	ClientSecret string
+	// TokenURL overrides pagerDutyTokenURL when non-empty, for the code
+	// exchange and the client-credentials token request.
+	TokenURL string
+	// APIBaseOverride, when non-empty, replaces PagerDuty's regional REST
+	// base with APIBaseOverride + "/" + region, so a venue test can point
+	// both planes at one fake upstream and still see the region asked for.
+	APIBaseOverride string
+}
+
+func (c PagerDutyRevokeConfig) tokenURL() string {
+	if c.TokenURL != "" {
+		return c.TokenURL
+	}
+	return pagerDutyTokenURL
+}
+
+// apiBase is providers/pagerduty/client.py's pagerduty_base_url.
+func (c PagerDutyRevokeConfig) apiBase(region string) string {
+	if c.APIBaseOverride != "" {
+		return c.APIBaseOverride + "/" + region
+	}
+	if region == "eu" {
+		return "https://api.eu.pagerduty.com"
+	}
+	return pagerDutyAPIBase
 }
 
 func (c PagerDutyRevokeConfig) revokeURL() string {

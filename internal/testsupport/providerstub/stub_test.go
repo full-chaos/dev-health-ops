@@ -60,6 +60,10 @@ func TestStubAnswersTheMatchingFixtureAndRefusesTheRest(t *testing.T) {
 	if r := get(t, stub, "api.github.com", "GET", "/orgs/zz/repos", nil); r.Header().Get("Link") == "" || !strings.Contains(r.Body.String(), `"a"`) {
 		t.Fatalf("no-query fixture: %v %s", r.Header(), r.Body)
 	}
+	// A query parameter with the wrong value must not match the constrained fixture.
+	if r := get(t, stub, "api.github.com", "GET", "/orgs/zz/repos?page=3", nil); r.Body.String() == "[]" || !strings.Contains(r.Body.String(), `"a"`) {
+		t.Fatalf("page=3 matched the page=2 fixture: %s", r.Body)
+	}
 	if r := get(t, stub, "gitlab.com", "GET", "/api/v4/groups/anything/projects", nil); r.Code != 404 {
 		t.Fatalf("prefix path: %d", r.Code)
 	}
@@ -75,8 +79,8 @@ func TestStubAnswersTheMatchingFixtureAndRefusesTheRest(t *testing.T) {
 	if got := len(stub.Unmatched()); got != 3 {
 		t.Fatalf("unmatched = %d, want 3", got)
 	}
-	if got := len(stub.Requests()); got != 7 {
-		t.Fatalf("recorded = %d, want 7", got)
+	if got := len(stub.Requests()); got != 8 {
+		t.Fatalf("recorded = %d, want 8", got)
 	}
 }
 

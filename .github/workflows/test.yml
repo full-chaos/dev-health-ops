@@ -179,8 +179,17 @@ jobs:
       contents: read
       packages: read
     strategy:
+      # SHARDED (CHAOS-6692). The unit suite was 15 of the 17 minutes of this
+      # job and the longest required job of a PR. The matrix runs 2 legs; leg K
+      # runs the pytest FILES whose stable hash falls in slice K
+      # (PYTEST_SHARD=K/2, tests/conftest.py). Keep the shard list and the N in
+      # PYTEST_SHARD below in step: tests/tooling/test_pytest_shards.py pins
+      # both. The `test` aggregate judges the MATRIX result, so a failed,
+      # cancelled or missing leg fails the required check.
+      fail-fast: false
       matrix:
         python-version: ["3.14"]
+        shard: [1, 2]
 
     services:
       postgres:
@@ -318,12 +327,14 @@ jobs:
           # 4 vCPUs, so this matches `-n auto` there while staying predictable on
           # larger runners. Override PYTEST_XDIST_WORKERS to tune.
           PYTEST_XDIST_WORKERS: "4"
+          # This leg's slice of the suite (K/N); see the matrix above.
+          PYTEST_SHARD: ${{ matrix.shard }}/2
           PYTEST_ADDOPTS: --ignore=tests/test_0066_celery_river_cutover_postgres.py --ignore=tests/test_saved_report_schedule_unique_postgres_migration.py --ignore=tests/test_0097_backfill_report_schedule_next_run_postgres.py --ignore=tests/test_report_run_execution_lease_postgres_migration.py --ignore=tests/test_chaos_3337_source_class_postgres_migration.py --ignore=tests/api/admin/test_add_member_visibility.py --ignore=tests/api/dev/test_persistence_postgres.py
         run: |
           chmod +x ci/run_tests.sh
           mkdir -p test-results/logs
           set -o pipefail
-          ./ci/run_tests.sh unit 2>&1 | tee test-results/logs/unit-${{ matrix.python-version }}.log
+          ./ci/run_tests.sh unit 2>&1 | tee test-results/logs/unit-${{ matrix.python-version }}-shard-${{ matrix.shard }}.log
 
       # These files carry their own `isolated_postgres`/`require_postgres_test_uri`
       # fixtures that pytest.fail() (not skip) when CI/GITHUB_ACTIONS is set but
@@ -342,6 +353,9 @@ jobs:
       # the module was collected by neither PR-gated step with its URI set,
       # so it always skipped on pull_request).
       - name: Run PostgreSQL migration tests
+        # Shard 1 only: these named files are --ignore'd from the unit run above
+        # (in every shard) and run exactly once here, not once per leg.
+        if: matrix.shard == 1
         env:
           DEV_HEALTH_POSTGRES_TEST_URI: postgresql+asyncpg://postgres:postgres@localhost:5432/test_db
           DEV_HEALTH_TEST_POSTGRES_ADMIN_URI: postgresql+asyncpg://postgres:postgres@localhost:5432/postgres
@@ -360,7 +374,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: junit-${{ matrix.python-version }}
+          name: junit-${{ matrix.python-version }}-shard-${{ matrix.shard }}
           path: test-results/junit/*.xml
           if-no-files-found: ignore
           retention-days: 90
@@ -369,7 +383,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: pytest-logs-${{ matrix.python-version }}
+          name: pytest-logs-${{ matrix.python-version }}-shard-${{ matrix.shard }}
           path: |
             test-results/logs/*.log
             **/pytest.log

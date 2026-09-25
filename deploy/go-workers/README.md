@@ -233,8 +233,11 @@ missing is two check FAMILIES no existing dependency probe reproduced:
    opened; this does. It never touches the shared WORK pool.
 2. **`execution_liveness`** (`dev-health-worker` ONLY) — claim evidence only
    (`claim_liveness.go`): a queue with available jobs and no handler invocation
-   inside the staleness window (60s) turns it red; an empty or capacity-bound
-   queue is healthy. `HandlerInvoked` fires only after every pre-handler gate,
+   inside the staleness window (60s) turns it red; an empty queue is healthy,
+   and so is a full queue whose every running slot is inside a handler (long
+   jobs). A full queue with a slot stuck BEFORE its handler (River counts it as
+   running) is not healthy: `HandlerReturned` pairs `HandlerInvoked` so the
+   check can tell. `HandlerInvoked` fires only after every pre-handler gate,
    including the idempotency claim's `Begin` on the WORK pool, so **a job that
    fails at `Begin` produces no evidence: failing jobs are how a stale or
    recreated pooler (CHAOS-4029) turns readiness red**. This replaced the

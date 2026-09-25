@@ -462,7 +462,15 @@ func (adapter *Adapter[T]) execute(parent context.Context, job *river.Job[T], la
 	if invocationObserver, ok := adapter.observer.(HandlerInvocationObserver); ok {
 		observe(func() { invocationObserver.HandlerInvoked(ctx, labels) })
 	}
-	handlerErr := adapter.handler.Work(ctx, execution)
+	handlerErr := func() error {
+		if returnObserver, ok := adapter.observer.(HandlerReturnObserver); ok {
+			// Deferred so a handler panic still balances the HandlerInvoked above,
+			// and scoped to the handler call alone: the completion claim below
+			// runs on the work pool and must not count as "inside a handler".
+			defer observe(func() { returnObserver.HandlerReturned(ctx, labels) })
+		}
+		return adapter.handler.Work(ctx, execution)
+	}()
 	// A handler that returned success completed its work; a drain or lease
 	// loss that lands between that return and this line must not rewrite the
 	// outcome. Promoting ctx.Err() here used to turn a succeeded run into a

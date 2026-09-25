@@ -33,6 +33,14 @@ import (
 type claimLiveness struct {
 	mu       sync.RWMutex
 	perQueue map[string]time.Time
+	// inHandler counts, per queue, the jobs of THIS process that are inside a
+	// handler right now (HandlerInvoked minus HandlerReturned). River counts a
+	// job as running from claim -- including one failing at its idempotency
+	// Begin -- so a queue whose Running count equals inHandler is genuinely busy
+	// with handler work, while Running above inHandler means slots are stuck
+	// BEFORE their handler. That difference is what lets a full queue stay
+	// healthy for long-running jobs yet still turn red for a stale pooler.
+	inHandler map[string]int64
 	// staleWindow defaults to claimStalenessWindow in newClaimLiveness.
 	// Exposed via SetStaleWindow so a test can shrink it from the
 	// production 60s to a real-but-small duration (mirroring
@@ -128,6 +136,37 @@ func (c *claimLiveness) recordClaim(queue string, now time.Time) {
 // (dependencies.go) calls this immediately before preclaimReadinessComponent
 // is added to the returned components, so the grace period restarts from
 // "construction has actually finished," not from struct allocation.
+// handlerInvoked records a job entering a handler: it is claim evidence and one
+// more slot genuinely inside a handler.
+func (c *claimLiveness) handlerInvoked(queue string, now time.Time) {
+	c.mu.Lock()
+	if c.inHandler == nil {
+		c.inHandler = make(map[string]int64, 1)
+	}
+	c.inHandler[queue]++
+	c.mu.Unlock()
+	c.recordClaim(queue, now)
+}
+
+// handlerReturned records a handler leaving (success, error or panic). It is
+// also claim evidence: a handler that ran to its end proves the consumer path
+// worked, and it covers the instant where River's row still reads running after
+// the handler is already gone.
+func (c *claimLiveness) handlerReturned(queue string, now time.Time) {
+	c.mu.Lock()
+	if c.inHandler[queue] > 0 {
+		c.inHandler[queue]--
+	}
+	c.mu.Unlock()
+	c.recordClaim(queue, now)
+}
+
+func (c *claimLiveness) handlersInside(queue string) int64 {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.inHandler[queue]
+}
+
 func (c *claimLiveness) reseed(now time.Time) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -242,7 +281,14 @@ func (observer claimLivenessObserver) Unwrap() *jobruntime.MetricsCollector {
 // pure addition to claimLivenessObserver's method set.
 func (observer claimLivenessObserver) HandlerInvoked(_ context.Context, labels jobruntime.JobLabels) {
 	if observer.liveness != nil {
-		observer.liveness.recordClaim(labels.Queue, time.Now())
+		observer.liveness.handlerInvoked(labels.Queue, time.Now())
+	}
+}
+
+// HandlerReturned pairs HandlerInvoked (jobruntime.HandlerReturnObserver).
+func (observer claimLivenessObserver) HandlerReturned(_ context.Context, labels jobruntime.JobLabels) {
+	if observer.liveness != nil {
+		observer.liveness.handlerReturned(labels.Queue, time.Now())
 	}
 }
 
@@ -258,7 +304,7 @@ var errClaimLivenessStalledWithBacklog = errors.New(
 const claimStalenessWindow = 3 * 20 * time.Second
 
 // claimLivenessReady is the claim-liveness half of execution_liveness's
-// real closed CheckFunc, wired alongside livenessMonitor's DB-probe half in
+// real closed CheckFunc (the whole of the worker's execution_liveness since CHAOS-6818), wired in
 // configureWorkerDependenciesWithSources (dependencies.go). It evaluates
 // EVERY selected queue independently (round-2 codex finding: a shared
 // single clock lets claims on one healthy queue mask a wedged sibling), and
@@ -267,12 +313,15 @@ const claimStalenessWindow = 3 * 20 * time.Second
 //
 //   - no available work on that queue (idle, not broken), OR
 //   - every claim slot this process budgeted for that queue is already
-//     running an existing job (round-2 codex finding: a fully saturated
-//     queue -- Running >= Capacity -- has no free capacity to claim MORE
-//     work regardless of how healthy the consumer is; registered job
-//     timeouts run up to two hours, so a queue legitimately busy with
-//     long-running work must not be flagged just because nothing NEW
-//     claimed in the last 60s).
+//     running an existing job AND every one of those running jobs is INSIDE
+//     a handler (round-2 codex finding: a fully saturated queue has no free
+//     capacity to claim MORE work; registered job timeouts run up to two
+//     hours, so a queue legitimately busy with long-running work must not be
+//     flagged just because nothing NEW claimed in the last 60s). River counts
+//     a job as running from claim, including one failing at its idempotency
+//     Begin, so Running >= Capacity alone is not enough (CHAOS-6818 r1b P1):
+//     a full queue with a slot stuck BEFORE its handler is the stale-pooler
+//     shape and falls through to the claim-age check.
 //
 // A queue with available work, idle capacity to claim it, and no recent
 // claim fails closed: that is exactly "recent jobs are all terminal-
@@ -287,7 +336,7 @@ const claimStalenessWindow = 3 * 20 * time.Second
 // Every error this returns wraps errWorkerDependencyUnavailable via
 // dependencyCheckFailed rather than replacing it outright, and is logged
 // through logDependencyCheckFailure before it is returned -- the same
-// discipline domainReady/queueReady/riverSchemaReady/idempotencyBackendReady
+// discipline domainReady/queueReady/riverSchemaReady/domainTransactionReady
 // already follow -- so a queue-telemetry read that failed only because its
 // own bounded context expired still classifies as retryable, and an
 // operator sees this member's own cause, not just its name, in the crash-
@@ -326,8 +375,13 @@ func (dependencies *workerDependencies) claimLivenessReady(claim *claimLiveness)
 			if job.Available <= 0 {
 				continue // this queue is confirmed empty right now: idle, not broken.
 			}
-			if capacity, ok := capacityByQueue[job.Queue]; ok && capacity.Capacity > 0 && capacity.Running >= capacity.Capacity {
-				continue // fully saturated with existing work -- healthy, not wedged.
+			if capacity, ok := capacityByQueue[job.Queue]; ok && capacity.Capacity > 0 && capacity.Running >= capacity.Capacity &&
+				claim.handlersInside(job.Queue) >= capacity.Running {
+				// Every running slot is inside a handler (long work): healthy. A
+				// full queue whose slots are NOT all in handlers has jobs stuck
+				// before their handler (a stale pooler failing at Begin, CHAOS-4029)
+				// and falls through to the claim-age check below.
+				continue
 			}
 			if claim.since(job.Queue, now) <= claim.staleness() {
 				continue // a real claim landed on this queue recently.

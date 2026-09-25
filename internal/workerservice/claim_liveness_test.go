@@ -285,7 +285,10 @@ func TestClaimLivenessReadyRequiresProofNotJustAbsenceOfError(t *testing.T) {
 // just because nothing NEW claimed in the last 60s.
 func TestClaimLivenessReadyTreatsSaturatedQueueAsHealthy(t *testing.T) {
 	t.Parallel()
-	claim := &claimLiveness{} // never claimed anything, ever
+	claim := &claimLiveness{}
+	// Two long jobs entered their handlers an hour ago and are still inside.
+	claim.handlerInvoked("sync_provider", time.Now().Add(-time.Hour))
+	claim.handlerInvoked("sync_provider", time.Now().Add(-time.Hour))
 	dependencies := &workerDependencies{
 		queueTelemetryRequired: true,
 		queueTelemetry: &fakeQueueTelemetry{snapshot: riverstore.QueueTelemetrySnapshot{
@@ -296,6 +299,55 @@ func TestClaimLivenessReadyTreatsSaturatedQueueAsHealthy(t *testing.T) {
 	ready := dependencies.claimLivenessReady(claim)
 	if err := ready(context.Background()); err != nil {
 		t.Fatalf("ready() on a fully saturated queue = %v, want nil (busy is not the same as wedged)", err)
+	}
+}
+
+// CHAOS-6818 r1b P1: Running == Capacity is only "busy" when every running slot
+// is INSIDE a handler. River counts a job failing at its idempotency Begin as
+// running, so a full queue with a slot stuck before its handler (a stale
+// pooler) and a stale claim clock must fail, and must heal when the stuck slot
+// reaches a handler again.
+func TestClaimLivenessReadyFailsAFullQueueWhoseSlotsAreNotAllInsideHandlers(t *testing.T) {
+	t.Parallel()
+	claim := &claimLiveness{}
+	claim.handlerInvoked("sync_provider", time.Now().Add(-time.Hour)) // 1 of 2 running slots inside a handler
+	dependencies := &workerDependencies{
+		queueTelemetryRequired: true,
+		queueTelemetry: &fakeQueueTelemetry{snapshot: riverstore.QueueTelemetrySnapshot{
+			Jobs:            []riverstore.QueueJobTelemetry{{Queue: "sync_provider", Kind: "sync.provider_unit", Available: 12}},
+			QueueCapacities: []riverstore.QueueCapacityTelemetry{{Queue: "sync_provider", Capacity: 2, Running: 2}},
+		}},
+	}
+	ready := dependencies.claimLivenessReady(claim)
+	if err := ready(context.Background()); !errors.Is(err, errClaimLivenessStalledWithBacklog) {
+		t.Fatalf("ready() = %v, want errClaimLivenessStalledWithBacklog (one full-queue slot is stuck before its handler)", err)
+	}
+	claim.handlerInvoked("sync_provider", time.Now()) // the stuck slot finally reaches its handler
+	if err := ready(context.Background()); err != nil {
+		t.Fatalf("ready() after the slot reached its handler = %v, want nil", err)
+	}
+}
+
+// handlerReturned must balance handlerInvoked, never go below zero, and count
+// as claim evidence itself.
+func TestClaimLivenessHandlerReturnedBalancesAndIsEvidence(t *testing.T) {
+	t.Parallel()
+	claim := &claimLiveness{}
+	old := time.Now().Add(-time.Hour)
+	claim.handlerInvoked("q", old)
+	claim.handlerReturned("q", old)
+	claim.handlerReturned("q", old) // an unmatched return must not go negative
+	if got := claim.handlersInside("q"); got != 0 {
+		t.Fatalf("handlersInside after balanced+extra return = %d, want 0", got)
+	}
+	claim.handlerInvoked("q", old)
+	if got := claim.handlersInside("q"); got != 1 {
+		t.Fatalf("handlersInside after a fresh invoke = %d, want 1 (a floor bug would leave it 0 or negative)", got)
+	}
+	before := claim.since("q", time.Now())
+	claim.handlerReturned("q", time.Now())
+	if after := claim.since("q", time.Now()); after >= before {
+		t.Fatalf("handlerReturned did not refresh the claim clock: before=%v after=%v", before, after)
 	}
 }
 

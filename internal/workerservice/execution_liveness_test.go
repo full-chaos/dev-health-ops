@@ -3,6 +3,7 @@ package workerservice
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/riverqueue/river"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
@@ -310,6 +312,21 @@ func TestExecutionLivenessCatchesAWedgedConsumerWithAHealthyDatabase(t *testing.
 // readiness flips inside the (shrunk) window with domain_transaction still green,
 // and recovers the moment a job reaches its handler again.
 func TestARecreatedPoolerFlipsReadinessThroughFailingJobsWithinTheWindow(t *testing.T) {
+	runRecreatedPoolerScenario(t, nil)
+}
+
+// CHAOS-6818 r1b P1: the same scenario with the queue FULL. River counts a job
+// that is failing at its idempotency Begin as running, so Running == Capacity
+// while nothing is inside a handler; the old "saturated => healthy" exemption
+// hid exactly the state the removed self-probe used to catch.
+func TestARecreatedPoolerFlipsReadinessEvenWhenEveryClaimSlotIsRunning(t *testing.T) {
+	runRecreatedPoolerScenario(t, []riverstore.QueueCapacityTelemetry{
+		{Queue: "heartbeat", Capacity: 1, Running: 1, Saturation: 1},
+	})
+}
+
+func runRecreatedPoolerScenario(t *testing.T, capacities []riverstore.QueueCapacityTelemetry) {
+	t.Helper()
 	t.Chdir(filepath.Join("..", ".."))
 	queues := []string{"coverage", "heartbeat", "retention", "webhooks"}
 	runtimeRegistry, err := jobruntime.Load(defaultContractRoot)
@@ -395,7 +412,8 @@ func TestARecreatedPoolerFlipsReadinessThroughFailingJobsWithinTheWindow(t *test
 	// The pooler is recreated: established connections die, jobs are waiting.
 	workServer.DropConnections(true)
 	telemetry.setSnapshot(riverstore.QueueTelemetrySnapshot{
-		Jobs: []riverstore.QueueJobTelemetry{{Queue: "heartbeat", Kind: "system.heartbeat", Available: 5}},
+		Jobs:            []riverstore.QueueJobTelemetry{{Queue: "heartbeat", Kind: "system.heartbeat", Available: 5}},
+		QueueCapacities: capacities,
 	})
 	deadline := time.Now().Add(3 * time.Second)
 	for {
@@ -435,5 +453,62 @@ func TestARecreatedPoolerFlipsReadinessThroughFailingJobsWithinTheWindow(t *test
 			t.Errorf("shutdown %s: %v", component.Name(), err)
 		}
 		cancel()
+	}
+}
+
+// CHAOS-6818 r1b P3: the observer the worker hands to every family builder must be
+// the claim-liveness one, wired to BOTH taps. Swapping it for the plain metrics
+// collector (or dropping the return tap) must fail here, not pass silently.
+func TestProductionObserverFeedsClaimLivenessThroughBothHandlerTaps(t *testing.T) {
+	t.Chdir(filepath.Join("..", ".."))
+	queues := []string{"heartbeat"}
+	runtimeRegistry, err := jobruntime.Load(defaultContractRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	database := &fakeWorkerDatabase{telemetry: &fakeQueueTelemetry{}}
+	sources := productionWorkerDependencySources
+	sources.openDatabase = func(context.Context, config.Config) (workerDatabase, error) { return database, nil }
+	specs := mustSelectedQueueSpecs(t, runtimeRegistry, queues...)
+	budgets := selectedQueueBudgets(queues, queues, map[string]int{"heartbeat": 1})
+	var observed jobruntime.Observer
+	sources.buildOperational = func(
+		_ config.Config, _ workerDatabase, _ *jobruntime.Registry, observer jobruntime.Observer, _ *slog.Logger, _ *river.Workers,
+	) (workerFamily, error) {
+		observed = observer
+		return workerFamily{handlers: specs, queues: budgets}, nil
+	}
+	sources.buildRiverProcess = fakeRiverProcessBuilder("river-worker")
+	var claim *claimLiveness
+	sources.newClaimLiveness = func(now time.Time, queues []string) *claimLiveness {
+		claim = newClaimLiveness(now, queues)
+		return claim
+	}
+	if _, err := configureWorkerDependenciesWithSources(
+		context.Background(),
+		config.Config{
+			Queues: queues, WorkerQueueConcurrency: map[string]int{"heartbeat": 1},
+			RiverDatabaseSchema: "river", DomainDatabaseMaxConns: 4, QueueDatabaseMaxConns: 2,
+		},
+		health.NewRegistry(2*time.Second), sources,
+	); err != nil {
+		t.Fatalf("configureWorkerDependenciesWithSources() error = %v", err)
+	}
+	invoked, ok := observed.(jobruntime.HandlerInvocationObserver)
+	if !ok {
+		t.Fatalf("the observer given to family builders (%T) lacks HandlerInvoked", observed)
+	}
+	returned, ok := observed.(jobruntime.HandlerReturnObserver)
+	if !ok {
+		t.Fatalf("the observer given to family builders (%T) lacks HandlerReturned", observed)
+	}
+	labels := jobruntime.JobLabels{Queue: "heartbeat", Kind: "system.heartbeat"}
+	invoked.HandlerInvoked(context.Background(), labels)
+	if got := claim.handlersInside("heartbeat"); got != 1 {
+		t.Fatalf("HandlerInvoked through the production observer left handlersInside = %d, want 1", got)
+	}
+	returned.HandlerReturned(context.Background(), labels)
+	if got := claim.handlersInside("heartbeat"); got != 0 {
+		t.Fatalf("HandlerReturned through the production observer left handlersInside = %d, want 0", got)
 	}
 }

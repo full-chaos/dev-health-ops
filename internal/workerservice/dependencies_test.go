@@ -2053,11 +2053,10 @@ type fakeWorkerDatabase struct {
 	// domain_transaction check). Nil (the default)
 	// means a healthy transaction round trip, matching every other fake
 	// dependency in this file defaulting to healthy unless a test sets an
-	// error. Guarded by txOpenerMu so a test can flip it WHILE a background
-	// selfprobe.Monitor goroutine is concurrently sampling -- see
-	// setTxOpenerErr -- reproducing the live incident this ticket closes
-	// (the dependency changing state under a running process), not just its
-	// value at construction time.
+	// error. Guarded by txOpenerMu so a test can flip it WHILE /readyz polls
+	// are concurrently running -- see setTxOpenerErr -- reproducing the live
+	// incident this ticket closes (the dependency changing state under a
+	// running process), not just its value at construction time.
 	txOpenerMu  sync.Mutex
 	txOpenerErr error
 	// postureLockstepResult/postureLockstepErr default to a healthy lockstep

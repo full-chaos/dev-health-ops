@@ -1053,7 +1053,7 @@ func configureWorkerDependenciesWithSources(
 		components = append(components, drain)
 	}
 	workers := river.NewWorkers()
-	// claimLivenessObserver taps JobFinished so execution_liveness's claim
+	// claimLivenessObserver taps HandlerInvoked (and its pair HandlerReturned) so execution_liveness's claim
 	// half (claim_liveness.go) sees every REAL job this process's handlers
 	// execute, across every constructed family -- the same shared observer
 	// every family builder below receives. It embeds the CONCRETE

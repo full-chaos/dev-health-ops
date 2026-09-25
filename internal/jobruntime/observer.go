@@ -85,6 +85,17 @@ type HandlerInvocationObserver interface {
 	HandlerInvoked(context.Context, JobLabels)
 }
 
+// HandlerReturnObserver pairs HandlerInvoked (CHAOS-6818): HandlerReturned is
+// called exactly once for every HandlerInvoked, when the handler has returned
+// (or panicked), so an observer can tell how many of a queue's running jobs are
+// actually INSIDE a handler right now. River counts a job as running from claim,
+// including one stuck failing at the idempotency Begin, so Running alone cannot
+// distinguish "busy with long work" from "every slot is failing before its
+// handler". Optional for the same reason HandlerInvocationObserver is.
+type HandlerReturnObserver interface {
+	HandlerReturned(context.Context, JobLabels)
+}
+
 // SyncLeaseObserver is the narrower capability concrete expired-lease
 // recovery implementations depend on directly, the same way concrete budget
 // implementations call ObserveProviderBudgetWait directly rather than through

@@ -78,7 +78,7 @@ def test_get_route_fires_the_sentinel(path: str, caplog: pytest.LogCaptureFixtur
     200/404 from stale logic, and no generic unlabelled 500 -- the response
     detail names the path and the structured ERROR event is emitted.
     """
-    with caplog.at_level(logging.ERROR, logger="dev_health_ops.api.main"):
+    with caplog.at_level(logging.ERROR, logger="dev_health_ops.api.go_served"):
         resp = client.get(path)
     route = path.split("?", 1)[0]
     assert resp.status_code == 500, f"GET {path} = {resp.status_code}, want 500"
@@ -101,7 +101,7 @@ def test_post_home_fires_the_sentinel_not_masked_by_any_dependency(
     the same as every other deleted route -- not a generic 500 from some
     other dependency resolving first.
     """
-    with caplog.at_level(logging.ERROR, logger="dev_health_ops.api.main"):
+    with caplog.at_level(logging.ERROR, logger="dev_health_ops.api.go_served"):
         resp = client.post("/api/v1/home", json={"filters": {}})
     assert resp.status_code == 500, resp.text
     detail = resp.json().get("detail", "")

@@ -346,6 +346,61 @@ func TestNativeTestopsExecutorsWriteTheirTablesAgainstRealClickHouse(t *testing.
 		if stored != uint64(written) {
 			t.Fatalf("%s wrote %d rows but reported %d", spec.name, stored, written)
 		}
+		if spec.name == "testops_pipeline" {
+			assertMergedTestopsPipelineRow(ctx, t, conn, orgID, repoID)
+		}
+	}
+}
+
+// assertMergedTestopsPipelineRow pins the CONTENT of the one merged
+// testops_pipeline row, not just that there is one (CHAOS-6774 follow-up: an
+// executor that wrote only the first (team, service) group's row satisfied the
+// one-row assertions while dropping the other groups' runs). The expectations
+// are derived from the fixture's in-day winning runs, not from the code:
+// run-1, run-2, run-3, run-4, run-tie and run-null are the six that count
+// (run-prior is another day; the superseded copies lose), so pipelines=6;
+// run-4 alone is cancelled and alone retried (retry_count 3), so cancelled=1
+// and rerun_rate=1/6; the two run-tie copies both last 700 s, so the pooled
+// durations are 100 200 300 400 600 700 (median 350; p95 = 600 + 0.75*100 =
+// 675) whichever copy wins the tie; every queue sample is 0.1. The success
+// versus failure split depends on the tie's winner, which the differential
+// test pins, so only their sum (4) is asserted here. The runs disagree on
+// service (nil, empty, named), so the merged row carries no service; none
+// carries a team, so team is NULL as well.
+func assertMergedTestopsPipelineRow(ctx context.Context, t *testing.T, conn driver.Conn, orgID string, repoID uuid.UUID) {
+	t.Helper()
+	var (
+		pipelines, success, failure, cancelled uint32
+		rerunRate                              float64
+		median, p95, avgQueue, p95Queue        *float64
+		team, service                          *string
+	)
+	if err := conn.QueryRow(ctx, `SELECT pipelines_count, success_count, failure_count, cancelled_count, rerun_rate,
+median_duration_seconds, p95_duration_seconds, avg_queue_seconds, p95_queue_seconds, team_id, service_id
+FROM testops_pipeline_metrics_daily FINAL WHERE org_id = ? AND repo_id = ?`, orgID, repoID,
+	).Scan(&pipelines, &success, &failure, &cancelled, &rerunRate, &median, &p95, &avgQueue, &p95Queue, &team, &service); err != nil {
+		t.Fatalf("testops_pipeline merged row readback: %v", err)
+	}
+	near := func(name string, got *float64, want float64) {
+		t.Helper()
+		if got == nil {
+			t.Errorf("testops_pipeline %s = NULL, want %v", name, want)
+		} else if math.Abs(*got-want) > 1e-9 {
+			t.Errorf("testops_pipeline %s = %v, want %v", name, *got, want)
+		}
+	}
+	if pipelines != 6 || cancelled != 1 || success+failure != 4 {
+		t.Errorf("testops_pipeline counts pipelines=%d success=%d failure=%d cancelled=%d, want pipelines=6 success+failure=4 cancelled=1 (all groups pooled)", pipelines, success, failure, cancelled)
+	}
+	if math.Abs(rerunRate-1.0/6) > 1e-9 {
+		t.Errorf("testops_pipeline rerun_rate = %v, want 1/6", rerunRate)
+	}
+	near("median_duration_seconds", median, 350)
+	near("p95_duration_seconds", p95, 675)
+	near("avg_queue_seconds", avgQueue, 0.1)
+	near("p95_queue_seconds", p95Queue, 0.1)
+	if team != nil || service != nil {
+		t.Errorf("testops_pipeline team=%v service=%v, want both NULL (the groups disagree)", team, service)
 	}
 }
 

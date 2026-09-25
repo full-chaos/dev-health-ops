@@ -63,6 +63,23 @@ var responseModelRoutes = map[string]bool{
 	"GET /api/v1/auth/onboarding/state":                                                true,
 	"POST /api/v1/auth/onboarding/skip-integration":                                    true,
 	"DELETE /api/v1/admin/credentials/{provider}/{name}":                               true,
+	"GET /api/v1/auth/sso/providers":                                                   true,
+	"POST /api/v1/auth/sso/providers":                                                  true,
+	"GET /api/v1/auth/sso/providers/{provider_id}":                                     true,
+	"PATCH /api/v1/auth/sso/providers/{provider_id}":                                   true,
+	"DELETE /api/v1/auth/sso/providers/{provider_id}":                                  false,
+	"POST /api/v1/auth/sso/providers/{provider_id}/activate":                           true,
+	"POST /api/v1/auth/sso/providers/{provider_id}/deactivate":                         true,
+	"GET /api/v1/auth/saml/{provider_id}/metadata":                                     true,
+	"POST /api/v1/auth/saml/{provider_id}/initiate":                                    true,
+	"POST /api/v1/auth/saml/{provider_id}/acs":                                         true,
+	"POST /api/v1/auth/oidc/{provider_id}/authorize":                                   true,
+	"POST /api/v1/auth/oidc/{provider_id}/callback":                                    true,
+	"POST /api/v1/auth/oauth/providers":                                                true,
+	"PATCH /api/v1/auth/oauth/providers/{provider_id}":                                 true,
+	"POST /api/v1/auth/oauth/{provider_id}/authorize":                                  true,
+	"POST /api/v1/auth/oauth/{provider_id}/callback":                                   true,
+	"GET /api/v1/auth/oauth/{provider_type}/authorize":                                 true,
 	"DELETE /api/v1/admin/ip-allowlist/{entry_id}":                                     true,
 	"DELETE /api/v1/admin/orgs/{org_id}":                                               true,
 	"DELETE /api/v1/admin/orgs/{org_id}/feature-overrides/{override_id}":               false,
@@ -249,6 +266,11 @@ var jsonResponseRoutes = map[string]string{
 func markResponseModels(routes []httpapi.Route) []httpapi.Route {
 	for index := range routes {
 		key := routes[index].Method + " " + routes[index].Pattern
+		if _, inTable := responseModelRoutes[key]; !inTable && routes[index].ResponseModelFor != nil {
+			// A dispatcher pattern with no Python route of its own (see
+			// goRoutesWithoutPython) that decides per request itself.
+			continue
+		}
 		routes[index].ResponseModel = responseModelRoutes[key]
 		routes[index].ResponseModelFor = func(r *http.Request) bool {
 			if model, literal := responseModelRoutes[r.Method+" "+r.URL.Path]; literal {

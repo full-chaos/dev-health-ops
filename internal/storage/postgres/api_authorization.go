@@ -296,8 +296,9 @@ func apiPosture() RolePosture {
 			// (CHAOS-6319's read-only entry, widened rather than duplicated
 			// here) -- the one-entry-per-table rule.
 			// SSO: encrypted_secrets presence is also read for
-			// credentials_deleted's count.
-			{"sso_providers", false, false, true},
+			// credentials_deleted's count. The SSO activate and deactivate
+			// routes set a provider's status (UPDATE).
+			{"sso_providers", false, true, true},
 			// The admin IP-allowlist routes create, update and delete
 			// entries.
 			{"org_ip_allowlist", true, true, true},

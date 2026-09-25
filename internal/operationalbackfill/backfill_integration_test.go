@@ -610,8 +610,9 @@ func TestVerifyReportsEveryMissingIncident(t *testing.T) {
 func TestBackfillOperationalPartialWriteIsNamedAndRerunnable(t *testing.T) {
 	ch := startClickHouse(t, "")
 	seedLegacy(t, ch)
-	create := ch.do(t, "SHOW CREATE TABLE operational_on_call_schedules")
-	ch.do(t, "DROP TABLE operational_on_call_schedules")
+	// A constraint no row satisfies makes the last stage fail when it writes, while
+	// the table still passes the shape guard.
+	ch.do(t, "ALTER TABLE operational_on_call_schedules ADD CONSTRAINT never CHECK name = 'no schedule has this name'")
 	s := scenarios[0]
 	code, _, stderr, _ := goRun(t, ch, s)
 	if code != 1 || !strings.Contains(stderr, "write stage operational_on_call_schedules failed") ||
@@ -624,9 +625,8 @@ func TestBackfillOperationalPartialWriteIsNamedAndRerunnable(t *testing.T) {
 	if count("operational_incidents") != "13" || count("operational_alerts") != "8" {
 		t.Fatalf("the stages before the failure were not written: incidents %s alerts %s", count("operational_incidents"), count("operational_alerts"))
 	}
-	// Restore the table and run again: the same identities, no duplicates.
-	statement := strings.TrimSpace(strings.NewReplacer(`\n`, "\n", `\'`, "'").Replace(create))
-	ch.do(t, statement)
+	// Remove the constraint and run again: the same identities, no duplicates.
+	ch.do(t, "ALTER TABLE operational_on_call_schedules DROP CONSTRAINT never")
 	code, stdout, stderr, _ := goRun(t, ch, s)
 	if code != 0 {
 		t.Fatalf("re-run exit %d:\n%s", code, stderr)

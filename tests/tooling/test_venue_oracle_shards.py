@@ -42,6 +42,7 @@ CI_FILES = (
     "check_venue_oracle_registry.sh",
     "venue_oracle_discovery.awk",
     "venue_oracle_names.awk",
+    "venue_oracle_proof.awk",
     "lib/venue_oracle_registry.sh",
 )
 HARNESS = '"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"'

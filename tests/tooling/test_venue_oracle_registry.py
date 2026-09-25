@@ -33,6 +33,7 @@ CI_FILES = (
     "check_venue_oracle_registry.sh",
     "venue_oracle_discovery.awk",
     "venue_oracle_names.awk",
+    "venue_oracle_proof.awk",
     "lib/venue_oracle_registry.sh",
 )
 HARNESS = '"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"'
@@ -67,15 +68,20 @@ def _write(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8")
 
 
-def _go_test(package: str, *funcs: str, harness: bool = False, marker: str = "") -> str:
+def _go_test(
+    package: str,
+    *funcs: str,
+    harness: bool = False,
+    marker: str = "",
+    proof: str = "\tvenueoracle.Diff(t)\n",
+) -> str:
     body = f"package {package}\n\n"
     if harness:
         body += f"import (\n\t{HARNESS}\n)\n\n"
     for name in funcs:
         if marker == name:
             body += "//venueoracle:local-only needs a key CI does not hold\n"
-        call = "\tvenueoracle.Diff(t)\n" if harness else ""
-        body += f"func {name}(t *testing.T) {{\n{call}}}\n\n"
+        body += f"func {name}(t *testing.T) {{\n{proof}}}\n\n"
     return body
 
 
@@ -494,3 +500,86 @@ def test_the_verb_source_consumes_the_registry_not_discovery() -> None:
         "check_venue_oracles must run the registry; discovery belongs to the "
         "cross-check in check_venue_oracle_registry"
     )
+
+
+# --- CHAOS-6806: a `run` row must be able to leave a proof file -------------
+
+
+def _proofless(tree: Path, name: str = "TestBeta", *, proof: str = "") -> None:
+    _write(
+        tree / "internal/a/a_test.go",
+        _go_test("a", "TestAlpha", harness=True)
+        + _go_test("a", name, harness=True, proof=proof),
+    )
+
+
+def test_a_run_row_that_cannot_write_a_proof_fails_at_pr_time(tree: Path) -> None:
+    baseline = _run(tree)
+    assert baseline.returncode == 0, baseline.stderr
+    _proofless(tree)
+    proc = _run(tree)
+    assert proc.returncode != 0
+    assert "internal/a TestBeta is a run row" in proc.stderr
+    assert "TestAlpha is a run row" not in proc.stderr
+
+
+def test_the_go_only_proof_and_the_exported_proof_both_count(tree: Path) -> None:
+    _proofless(
+        tree, proof='\tvenueoracle.WriteGoOnlyProof(t, "checks the log lines")\n'
+    )
+    assert _run(tree).returncode == 0
+    _proofless(tree, proof="\tvenueoracle.WriteProof(t)\n")
+    assert _run(tree).returncode == 0
+
+
+def test_a_proof_written_by_a_helper_the_test_calls_counts(tree: Path) -> None:
+    _proofless(tree, proof="\thelper(t)\n")
+    helper = (
+        "package a\n\nfunc helper(t *testing.T) {\n\tinner(t)\n}\n\n"
+        "func inner(t *testing.T) {\n\tvenueoracle.Diff(t)\n}\n"
+    )
+    _write(tree / "internal/a/helper_test.go", helper)
+    assert _run(tree).returncode == 0
+    # the same helper chain with the proof call removed: the guard fails again
+    _write(
+        tree / "internal/a/helper_test.go", helper.replace("venueoracle.Diff(t)", "")
+    )
+    proc = _run(tree)
+    assert proc.returncode != 0
+    assert "internal/a TestBeta is a run row" in proc.stderr
+
+
+def test_a_proof_call_named_only_in_a_comment_does_not_count(tree: Path) -> None:
+    _proofless(tree, proof="\t// venueoracle.Diff(t) is called by the harness\n")
+    proc = _run(tree)
+    assert proc.returncode != 0
+    assert "internal/a TestBeta is a run row" in proc.stderr
+
+
+def test_a_proof_through_a_harness_import_alias_counts(tree: Path) -> None:
+    _write(
+        tree / "internal/a/a_test.go",
+        _go_test("a", "TestAlpha", harness=True, proof="\tvo.Diff(t)\n")
+        + "func TestBeta(t *testing.T) {\n\tvo.WriteProof(t)\n}\n",
+    )
+    text = (tree / "internal/a/a_test.go").read_text()
+    _write(tree / "internal/a/a_test.go", text.replace(HARNESS, "vo " + HARNESS, 1))
+    assert _run(tree).returncode == 0
+
+
+def test_a_local_only_row_needs_no_proof(tree: Path) -> None:
+    _write(
+        tree / "internal/c/c_test.go",
+        _go_test(
+            "c",
+            "TestDelta",
+            "TestEpsilonVenueOracle",
+            harness=True,
+            marker="TestEpsilonVenueOracle",
+            proof="",
+        ).replace(
+            "func TestDelta(t *testing.T) {\n}",
+            "func TestDelta(t *testing.T) {\n\tvenueoracle.Diff(t)\n}",
+        ),
+    )
+    assert _run(tree).returncode == 0

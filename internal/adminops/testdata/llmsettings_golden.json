@@ -1,0 +1,408 @@
+[
+ {
+  "args": [
+   "\u003cseed\u003e"
+  ],
+  "exit": 0,
+  "stdout": "",
+  "state": "null"
+ },
+ {
+  "args": [
+   "llm-settings",
+   "get",
+   "--org",
+   "bbbbbbbb-0000-4000-8000-00000000000b"
+  ],
+  "exit": 1,
+  "stdout": "Error: BYO LLM settings require team tier; current tier is community\n",
+  "state": "null"
+ },
+ {
+  "args": [
+   "llm-settings",
+   "set",
+   "--org",
+   "bbbbbbbb-0000-4000-8000-00000000000b",
+   "--provider",
+   "openai"
+  ],
+  "exit": 1,
+  "stdout": "Error: BYO LLM settings require team tier; current tier is community\n",
+  "state": "null"
+ },
+ {
+  "args": [
+   "llm-settings",
+   "delete",
+   "--org",
+   "bbbbbbbb-0000-4000-8000-00000000000b"
+  ],
+  "exit": 1,
+  "stdout": "Error: LLM settings not found\n",
+  "state": "null"
+ },
+ {
+  "args": [
+   "llm-settings",
+   "get",
+   "--org",
+   "cccccccc-0000-4000-8000-00000000000c"
+  ],
+  "exit": 1,
+  "stdout": "Error: Organization not found\n",
+  "state": "null"
+ },
+ {
+  "args": [
+   "llm-settings",
+   "get",
+   "--org",
+   "not-a-uuid"
+  ],
+  "exit": 1,
+  "stdout": "Error: Organization not found\n",
+  "state": "null"
+ },
+ {
+  "args": [
+   "llm-settings",
+   "get",
+   "--org",
+   ""
+  ],
+  "exit": 2,
+  "stdout": "",
+  "state": "null"
+ },
+ {
+  "args": [
+   "llm-settings",
+   "set",
+   "--org",
+   "",
+   "--provider",
+   "openai"
+  ],
+  "exit": 2,
+  "stdout": "",
+  "state": "null"
+ },
+ {
+  "args": [
+   "llm-settings",
+   "get",
+   "--org",
+   "aaaaaaaa-0000-4000-8000-00000000000a"
+  ],
+  "exit": 0,
+  "stdout": "{\n  \"api_key\": null,\n  \"base_url\": null,\n  \"concurrency\": null,\n  \"model\": null,\n  \"provider\": null\n}\n",
+  "state": "null"
+ },
+ {
+  "args": [
+   "llm-settings",
+   "set",
+   "--org",
+   "aaaaaaaa-0000-4000-8000-00000000000a",
+   "--provider",
+   "  OpenAI "
+  ],
+  "exit": 0,
+  "stdout": "{\n  \"api_key\": null,\n  \"base_url\": null,\n  \"concurrency\": null,\n  \"model\": null,\n  \"provider\": \"openai\"\n}\n",
+  "state": "[\"aaaaaaaa-0000-4000-8000-00000000000a|llm|base_url|\\u003cnull\\u003e|false|BYO LLM base URL for this organization\",\"aaaaaaaa-0000-4000-8000-00000000000a|llm|model|\\u003cnull\\u003e|false|BYO LLM model for this organization\",\"aaaaaaaa-0000-4000-8000-00000000000a|llm|provider|openai|false|BYO LLM provider for this organization\"]"
+ },
+ {
+  "args": [
+   "llm-settings",
+   "get",
+   "--org",
+   "aaaaaaaa-0000-4000-8000-00000000000a"
+  ],
+  "exit": 0,
+  "stdout": "{\n  \"api_key\": null,\n  \"base_url\": null,\n  \"concurrency\": null,\n  \"model\": null,\n  \"provider\": \"openai\"\n}\n",
+  "state": "[\"aaaaaaaa-0000-4000-8000-00000000000a|llm|base_url|\\u003cnull\\u003e|false|BYO LLM base URL for this organization\",\"aaaaaaaa-0000-4000-8000-00000000000a|llm|model|\\u003cnull\\u003e|false|BYO LLM model for this organization\",\"aaaaaaaa-0000-4000-8000-00000000000a|llm|provider|openai|false|BYO LLM provider for this organization\"]"
+ },
+ {
+  "args": [
+   "llm-settings",
+   "set",
+   "--org",
+   "aaaaaaaa-0000-4000-8000-00000000000a",
+   "--provider",
+   "   "
+  ],
+  "exit": 1,
+  "stdout": "Error: invalid LLM settings input: provider must not be empty\n",
+  "state": "[\"aaaaaaaa-0000-4000-8000-00000000000a|llm|base_url|\\u003cnull\\u003e|false|BYO LLM base URL for this organization\",\"aaaaaaaa-0000-4000-8000-00000000000a|llm|model|\\u003cnull\\u003e|false|BYO LLM model for this organization\",\"aaaaaaaa-0000-4000-8000-00000000000a|llm|provider|openai|false|BYO LLM provider for this organization\"]"
+ },
+ {
+  "args": [
+   "llm-settings",
+   "set",
+   "--org",
+   "aaaaaaaa-0000-4000-8000-00000000000a",
+   "--provider",
+   "anthropic",
+   "--model",
+   "claude-x",
+   "--api-key",
+   "\u003capi-key:long\u003e"
+  ],
+  "exit": 0,
+  "stdout": "{\n  \"api_key\": \"sk-o\\u2026cdef\",\n  \"base_url\": null,\n  \"concurrency\": null,\n  \"model\": \"claude-x\",\n  \"provider\": \"anthropic\"\n}\n",
+  "state": "[\"aaaaaaaa-0000-4000-8000-00000000000a|llm|api_key|enc:sha256:2bb9728725e7|true|Encrypted BYO LLM API key for this organization\",\"aaaaaaaa-0000-4000-8000-00000000000a|llm|base_url|\\u003cnull\\u003e|false|BYO LLM base URL for this organization\",\"aaaaaaaa-0000-4000-8000-00000000000a|llm|model|claude-x|false|BYO LLM model for this organization\",\"aaaaaaaa-0000-4000-8000-00000000000a|llm|provider|anthropic|false|BYO LLM provider for this organization\"]"
+ },
+ {
+  "args": [
+   "llm-settings",
+   "get",
+   "--org",
+   "aaaaaaaa-0000-4000-8000-00000000000a"
+  ],
+  "exit": 0,
+  "stdout": "{\n  \"api_key\": \"sk-o\\u2026cdef\",\n  \"base_url\": null,\n  \"concurrency\": null,\n  \"model\": \"claude-x\",\n  \"provider\": \"anthropic\"\n}\n",
+  "state": "[\"aaaaaaaa-0000-4000-8000-00000000000a|llm|api_key|enc:sha256:2bb9728725e7|true|Encrypted BYO LLM API key for this organization\",\"aaaaaaaa-0000-4000-8000-00000000000a|llm|base_url|\\u003cnull\\u003e|false|BYO LLM base URL for this organization\",\"aaaaaaaa-0000-4000-8000-00000000000a|llm|model|claude-x|false|BYO LLM model for this organization\",\"aaaaaaaa-0000-4000-8000-00000000000a|llm|provider|anthropic|false|BYO LLM provider for this organization\"]"
+ },
+ {
+  "args": [
+   "llm-settings",
+   "set",
+   "--org",
+   "aaaaaaaa-0000-4000-8000-00000000000a",
+   "--provider",
+   "anthropic",
+   "--api-key",
+   "\u003capi-key:short\u003e"
+  ],
+  "exit": 0,
+  "stdout": "{\n  \"api_key\": \"********\",\n  \"base_url\": null,\n  \"concurrency\": null,\n  \"model\": null,\n  \"provider\": \"anthropic\"\n}\n",
+  "state": "[\"aaaaaaaa-0000-4000-8000-00000000000a|llm|api_key|enc:sha256:6ca13d52ca70|true|Encrypted BYO LLM API key for this organization\",\"aaaaaaaa-0000-4000-8000-00000000000a|llm|base_url|\\u003cnull\\u003e|false|BYO LLM base URL for this organization\",\"aaaaaaaa-0000-4000-8000-00000000000a|llm|model|\\u003cnull\\u003e|false|BYO LLM model for this organization\",\"aaaaaaaa-0000-4000-8000-00000000000a|llm|provider|anthropic|false|BYO LLM provider for this organization\"]"
+ },
+ {
+  "args": [
+   "llm-settings",
+   "set",
+   "--org",
+   "aaaaaaaa-0000-4000-8000-00000000000a",
+   "--provider",
+   "Ünï",
+   "--model",
+   "modèle-日本-😀",
+   "--api-key",
+   "\u003capi-key:unicode\u003e"
+  ],
+  "exit": 0,
+  "stdout": "{\n  \"api_key\": \"\\u043a\\u043b\\u044e\\u0447\\u20266789\",\n  \"base_url\": null,\n  \"concurrency\": null,\n  \"model\": \"mod\\u00e8le-\\u65e5\\u672c-\\ud83d\\ude00\",\n  \"provider\": \"\\u00fcn\\u00ef\"\n}\n",
+  "state": "[\"aaaaaaaa-0000-4000-8000-00000000000a|llm|api_key|enc:sha256:2ec6ac6c7c13|true|Encrypted BYO LLM API key for this organization\",\"aaaaaaaa-0000-4000-8000-00000000000a|llm|base_url|\\u003cnull\\u003e|false|BYO LLM base URL for this organization\",\"aaaaaaaa-0000-4000-8000-00000000000a|llm|model|modèle-日本-😀|false|BYO LLM model for this organization\",\"aaaaaaaa-0000-4000-8000-00000000000a|llm|provider|ünï|false|BYO LLM provider for this organization\"]"
+ },
+ {
+  "args": [
+   "llm-settings",
+   "get",
+   "--org",
+   "aaaaaaaa-0000-4000-8000-00000000000a"
+  ],
+  "exit": 0,
+  "stdout": "{\n  \"api_key\": \"\\u043a\\u043b\\u044e\\u0447\\u20266789\",\n  \"base_url\": null,\n  \"concurrency\": null,\n  \"model\": \"mod\\u00e8le-\\u65e5\\u672c-\\ud83d\\ude00\",\n  \"provider\": \"\\u00fcn\\u00ef\"\n}\n",
+  "state": "[\"aaaaaaaa-0000-4000-8000-00000000000a|llm|api_key|enc:sha256:2ec6ac6c7c13|true|Encrypted BYO LLM API key for this organization\",\"aaaaaaaa-0000-4000-8000-00000000000a|llm|base_url|\\u003cnull\\u003e|false|BYO LLM base URL for this organization\",\"aaaaaaaa-0000-4000-8000-00000000000a|llm|model|modèle-日本-😀|false|BYO LLM model for this organization\",\"aaaaaaaa-0000-4000-8000-00000000000a|llm|provider|ünï|false|BYO LLM provider for this organization\"]"
+ },
+ {
+  "args": [
+   "llm-settings",
+   "set",
+   "--org",
+   "aaaaaaaa-0000-4000-8000-00000000000a",
+   "--provider",
+   "openai",
+   "--base-url",
+   "http://169.254.169.254/latest"
+  ],
+  "exit": 1,
+  "stdout": "Error: LLM base_url must use https\n",
+  "state": "[\"aaaaaaaa-0000-4000-8000-00000000000a|llm|api_key|enc:sha256:2ec6ac6c7c13|true|Encrypted BYO LLM API key for this organization\",\"aaaaaaaa-0000-4000-8000-00000000000a|llm|base_url|\\u003cnull\\u003e|false|BYO LLM base URL for this organization\",\"aaaaaaaa-0000-4000-8000-00000000000a|llm|model|modèle-日本-😀|false|BYO LLM model for this organization\",\"aaaaaaaa-0000-4000-8000-00000000000a|llm|provider|ünï|false|BYO LLM provider for this organization\"]"
+ },
+ {
+  "args": [
+   "llm-settings",
+   "set",
+   "--org",
+   "aaaaaaaa-0000-4000-8000-00000000000a",
+   "--provider",
+   "openai",
+   "--base-url",
+   "not a url"
+  ],
+  "exit": 1,
+  "stdout": "Error: LLM base_url must not contain whitespace or control characters\n",
+  "state": "[\"aaaaaaaa-0000-4000-8000-00000000000a|llm|api_key|enc:sha256:2ec6ac6c7c13|true|Encrypted BYO LLM API key for this organization\",\"aaaaaaaa-0000-4000-8000-00000000000a|llm|base_url|\\u003cnull\\u003e|false|BYO LLM base URL for this organization\",\"aaaaaaaa-0000-4000-8000-00000000000a|llm|model|modèle-日本-😀|false|BYO LLM model for this organization\",\"aaaaaaaa-0000-4000-8000-00000000000a|llm|provider|ünï|false|BYO LLM provider for this organization\"]"
+ },
+ {
+  "args": [
+   "llm-settings",
+   "set",
+   "--org",
+   "aaaaaaaa-0000-4000-8000-00000000000a",
+   "--provider",
+   "openai",
+   "--base-url",
+   "http://[::1"
+  ],
+  "exit": 1,
+  "stdout": "Error: failed to update LLM settings\n",
+  "state": "[\"aaaaaaaa-0000-4000-8000-00000000000a|llm|api_key|enc:sha256:2ec6ac6c7c13|true|Encrypted BYO LLM API key for this organization\",\"aaaaaaaa-0000-4000-8000-00000000000a|llm|base_url|\\u003cnull\\u003e|false|BYO LLM base URL for this organization\",\"aaaaaaaa-0000-4000-8000-00000000000a|llm|model|modèle-日本-😀|false|BYO LLM model for this organization\",\"aaaaaaaa-0000-4000-8000-00000000000a|llm|provider|ünï|false|BYO LLM provider for this organization\"]"
+ },
+ {
+  "args": [
+   "llm-settings",
+   "set",
+   "--org",
+   "aaaaaaaa-0000-4000-8000-00000000000a",
+   "--provider",
+   "openai",
+   "--base-url",
+   "https://api.openai.com/v1"
+  ],
+  "exit": 0,
+  "stdout": "{\n  \"api_key\": \"\\u043a\\u043b\\u044e\\u0447\\u20266789\",\n  \"base_url\": \"https://api.openai.com/v1\",\n  \"concurrency\": null,\n  \"model\": null,\n  \"provider\": \"openai\"\n}\n",
+  "state": "[\"aaaaaaaa-0000-4000-8000-00000000000a|llm|api_key|enc:sha256:2ec6ac6c7c13|true|Encrypted BYO LLM API key for this organization\",\"aaaaaaaa-0000-4000-8000-00000000000a|llm|base_url|https://api.openai.com/v1|false|BYO LLM base URL for this organization\",\"aaaaaaaa-0000-4000-8000-00000000000a|llm|model|\\u003cnull\\u003e|false|BYO LLM model for this organization\",\"aaaaaaaa-0000-4000-8000-00000000000a|llm|provider|openai|false|BYO LLM provider for this organization\"]"
+ },
+ {
+  "args": [
+   "llm-settings",
+   "get",
+   "--org",
+   "aaaaaaaa-0000-4000-8000-00000000000a"
+  ],
+  "exit": 0,
+  "stdout": "{\n  \"api_key\": \"\\u043a\\u043b\\u044e\\u0447\\u20266789\",\n  \"base_url\": \"https://api.openai.com/v1\",\n  \"concurrency\": null,\n  \"model\": null,\n  \"provider\": \"openai\"\n}\n",
+  "state": "[\"aaaaaaaa-0000-4000-8000-00000000000a|llm|api_key|enc:sha256:2ec6ac6c7c13|true|Encrypted BYO LLM API key for this organization\",\"aaaaaaaa-0000-4000-8000-00000000000a|llm|base_url|https://api.openai.com/v1|false|BYO LLM base URL for this organization\",\"aaaaaaaa-0000-4000-8000-00000000000a|llm|model|\\u003cnull\\u003e|false|BYO LLM model for this organization\",\"aaaaaaaa-0000-4000-8000-00000000000a|llm|provider|openai|false|BYO LLM provider for this organization\"]"
+ },
+ {
+  "args": [
+   "llm-settings",
+   "set",
+   "--org",
+   "aaaaaaaa-0000-4000-8000-00000000000a",
+   "--provider",
+   "openai",
+   "--model",
+   "m",
+   "--base-url",
+   ""
+  ],
+  "exit": 0,
+  "stdout": "{\n  \"api_key\": \"\\u043a\\u043b\\u044e\\u0447\\u20266789\",\n  \"base_url\": \"\",\n  \"concurrency\": null,\n  \"model\": \"m\",\n  \"provider\": \"openai\"\n}\n",
+  "state": "[\"aaaaaaaa-0000-4000-8000-00000000000a|llm|api_key|enc:sha256:2ec6ac6c7c13|true|Encrypted BYO LLM API key for this organization\",\"aaaaaaaa-0000-4000-8000-00000000000a|llm|base_url||false|BYO LLM base URL for this organization\",\"aaaaaaaa-0000-4000-8000-00000000000a|llm|model|m|false|BYO LLM model for this organization\",\"aaaaaaaa-0000-4000-8000-00000000000a|llm|provider|openai|false|BYO LLM provider for this organization\"]"
+ },
+ {
+  "args": [
+   "llm-settings",
+   "set",
+   "--org",
+   "aaaaaaaa-0000-4000-8000-00000000000a",
+   "--provider",
+   "openai",
+   "--api-key",
+   "\u003capi-key:long\u003e"
+  ],
+  "exit": 1,
+  "stdout": "Error: failed to update LLM settings\n",
+  "state": "[\"aaaaaaaa-0000-4000-8000-00000000000a|llm|api_key|enc:sha256:2ec6ac6c7c13|true|Encrypted BYO LLM API key for this organization\",\"aaaaaaaa-0000-4000-8000-00000000000a|llm|base_url||false|BYO LLM base URL for this organization\",\"aaaaaaaa-0000-4000-8000-00000000000a|llm|model|m|false|BYO LLM model for this organization\",\"aaaaaaaa-0000-4000-8000-00000000000a|llm|provider|openai|false|BYO LLM provider for this organization\"]"
+ },
+ {
+  "args": [
+   "llm-settings",
+   "delete",
+   "--org",
+   "aaaaaaaa-0000-4000-8000-00000000000a"
+  ],
+  "exit": 0,
+  "stdout": "{\n  \"deleted\": true\n}\n",
+  "state": "null"
+ },
+ {
+  "args": [
+   "llm-settings",
+   "delete",
+   "--org",
+   "aaaaaaaa-0000-4000-8000-00000000000a"
+  ],
+  "exit": 1,
+  "stdout": "Error: LLM settings not found\n",
+  "state": "null"
+ },
+ {
+  "args": [
+   "llm-settings",
+   "get",
+   "--org",
+   "aaaaaaaa-0000-4000-8000-00000000000a"
+  ],
+  "exit": 0,
+  "stdout": "{\n  \"api_key\": null,\n  \"base_url\": null,\n  \"concurrency\": null,\n  \"model\": null,\n  \"provider\": null\n}\n",
+  "state": "null"
+ },
+ {
+  "args": [
+   "\u003cseed\u003e"
+  ],
+  "exit": 0,
+  "stdout": "",
+  "state": "null"
+ },
+ {
+  "args": [
+   "llm-settings",
+   "get",
+   "--org",
+   "aaaaaaaa-0000-4000-8000-00000000000a"
+  ],
+  "exit": 1,
+  "stdout": "Error: BYO LLM is not enabled for this organization\n",
+  "state": "null"
+ },
+ {
+  "args": [
+   "llm-settings",
+   "set",
+   "--org",
+   "aaaaaaaa-0000-4000-8000-00000000000a",
+   "--provider",
+   "openai"
+  ],
+  "exit": 1,
+  "stdout": "Error: BYO LLM is not enabled for this organization\n",
+  "state": "null"
+ },
+ {
+  "args": [
+   "llm-settings",
+   "delete",
+   "--org",
+   "aaaaaaaa-0000-4000-8000-00000000000a"
+  ],
+  "exit": 1,
+  "stdout": "Error: LLM settings not found\n",
+  "state": "null"
+ },
+ {
+  "args": [
+   "\u003cseed\u003e"
+  ],
+  "exit": 0,
+  "stdout": "",
+  "state": "null"
+ },
+ {
+  "args": [
+   "llm-settings",
+   "get",
+   "--org",
+   "bbbbbbbb-0000-4000-8000-00000000000b"
+  ],
+  "exit": 1,
+  "stdout": "Error: BYO LLM is not enabled for this organization\n",
+  "state": "null"
+ }
+]

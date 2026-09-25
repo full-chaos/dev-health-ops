@@ -105,6 +105,25 @@ venue_oracle_expected_rows() {
   } | LC_ALL=C sort -u
 }
 
+# venue_oracle_proof_tests prints "<package dir> <Test>" for every Test
+# function in the registry's `run` packages (and the harness importers) that can
+# reach a proof writer (CHAOS-6806; see ci/venue_oracle_proof.awk).
+venue_oracle_proof_tests() {
+  local rows="$1" files
+  files="$( {
+      printf '%s\n' "${rows}" | awk '$3 == "run" { print $1 }' | LC_ALL=C sort -u | while IFS= read -r d; do
+        [ -d "${ROOT}/${d}" ] && find "${ROOT}/${d}" -maxdepth 1 -name '*.go'
+      done
+      grep -rlF --include='*.go' '"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"' "${ROOT}" || true
+    } | LC_ALL=C sort -u)"
+  [ -n "${files}" ] || return 0
+  printf 'FILES %s\n' "$(printf '%s\n' "${files}" | wc -l)"
+  # shellcheck disable=SC2086
+  printf '%s\n' "${files}" | xargs awk -f "${ROOT}/ci/venue_oracle_proof.awk" | while read -r _ dir name; do
+    printf '%s %s\n' "${dir#"${ROOT}"/}" "${name}"
+  done | LC_ALL=C sort -u
+}
+
 check_venue_oracle_registry() {
   local rows expected pkg test mode failed=0 declared sorted_keys key
   rows="$(venue_oracle_registry_rows)" || return 1
@@ -143,6 +162,25 @@ check_venue_oracle_registry() {
       failed=1
     fi
   done < <(printf '%s\n' "${expected}")
+
+  # A `run` row leaves a proof file in the venue or the hosted verb fails on
+  # main (CHAOS-6806): the test, or a helper it calls, must reach
+  # venueoracle.Diff / WriteProof / WriteGoOnlyProof.
+  local proofs nl=$'\n'
+  proofs="$(venue_oracle_proof_tests "${rows}")"
+  local scanned proven
+  scanned="$(printf '%s\n' "${proofs}" | sed -n 's/^FILES //p')"
+  proven="$(printf '%s\n' "${proofs}" | grep -vc '^FILES ' || true)"
+  while read -r pkg test mode; do
+    [ "${mode}" = "run" ] || continue
+    [ -d "${ROOT}/${pkg}" ] || continue
+    # No `printf | grep -q`: grep exits at the first match and, under pipefail, the
+    # writer's SIGPIPE (rc 141) fails the pipeline -- a flaky false "no proof".
+    if [[ "${nl}${proofs}${nl}" != *"${nl}${pkg} ${test}${nl}"* ]]; then
+      printf 'venue-oracles registry: %s %s is a run row but neither it nor a helper it calls reaches venueoracle.Diff, WriteProof or WriteGoOnlyProof, so it leaves no proof file and the hosted venue-oracles verb fails on main -- call venueoracle.WriteProof(t) after a both-planes comparison, or venueoracle.WriteGoOnlyProof(t, "<what it measures>") for a Go-only check (proof scan read %s file(s) and found %s reaching test(s); a count far below the registry means the scan, not the test, is wrong)\n' "${pkg}" "${test}" "${scanned:-0}" "${proven}" >&2
+      failed=1
+    fi
+  done < <(printf '%s\n' "${rows}")
 
   [ "${failed}" -eq 0 ] || return 1
   printf 'venue-oracle-registry: %d registered test(s), all found by discovery and by name\n' "$(printf '%s\n' "${rows}" | wc -l)"

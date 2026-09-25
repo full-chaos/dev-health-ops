@@ -2826,19 +2826,12 @@ func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, op
 			return
 		}
 
-		token, ok := bearerToken(r.Header.Get("Authorization"))
+		claims, ok := authenticateInternalRequest(w, r, verifier)
 		if !ok {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-		verifyCtx := principal.WithRequestMeta(r.Context(), r.RemoteAddr, envelopeRequestID(r))
-		claims, err := verifier.Verify(verifyCtx, token)
-		if err != nil {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
 
-		r = r.WithContext(authctx.WithClaims(r.Context(), authctx.Claims{OrgID: claims.OrgID, Role: claims.Role, IsSuperuser: claims.IsSuperuser, ImpersonationActive: claims.ImpersonationActive}))
+		r = r.WithContext(authctx.WithClaims(r.Context(), claims))
 		r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 
 		routeMux.Dispatch(operation, w, r)

@@ -7,6 +7,7 @@ import (
 	"math/big"
 	"net/http"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -80,121 +81,262 @@ func (h handlers) createRefund(w http.ResponseWriter, r *http.Request) {
 		h.write(w, detail(http.StatusBadRequest, "Invalid identifier"))
 		return
 	}
-	h.serve(w, r, "create refund", func(tx pgx.Tx) (reply, error) {
-		ctx := r.Context()
-		var org uuid.UUID
-		var subscription *uuid.UUID
-		var status, currency, stripeInvoiceID string
-		var amountPaid int64
-		var paymentIntent *string
-		// Locked, so two refunds of one invoice cannot both pass the
-		// balance check.
-		switch err := tx.QueryRow(ctx, `SELECT org_id, subscription_id, status, amount_paid, currency, payment_intent_id, stripe_invoice_id
-			FROM invoices WHERE id = $1 FOR UPDATE`, invoiceID).
-			Scan(&org, &subscription, &status, &amountPaid, &currency, &paymentIntent, &stripeInvoiceID); {
-		case errors.Is(err, pgx.ErrNoRows):
-			return detail(http.StatusNotFound, "Invoice not found"), nil
-		case err != nil:
-			return reply{}, err
+	ctx := r.Context()
+	clientKey := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+	// 1. Reserve: the refund row is written, pending, before Stripe is
+	// called, so a refund Stripe makes always has a local row.
+	var pending pendingRefund
+	answer, err := h.inTx(ctx, func(tx pgx.Tx) (reply, error) {
+		var early *reply
+		pending, early, err = h.reserveRefund(ctx, tx, request, invoiceID, actor, clientKey)
+		if early != nil {
+			return *early, err
 		}
-		if pythonparity.Lower(status) != "paid" {
-			return detail(http.StatusBadRequest, "Invoice is not paid"), nil
-		}
-		var refunded int64
-		if err := tx.QueryRow(ctx, `SELECT coalesce(sum(amount), 0) FROM refunds WHERE invoice_id = $1 AND status IN ('pending', 'succeeded')`,
-			invoiceID).Scan(&refunded); err != nil {
-			return reply{}, err
-		}
-		refundable := amountPaid - refunded
-		if refundable <= 0 {
-			return detail(http.StatusBadRequest, "Invoice has already been fully refunded"), nil
-		}
-		amount := refundable
-		if request.amount != nil {
-			if !request.amount.IsInt64() || request.amount.Int64() > refundable {
-				return detail(http.StatusBadRequest, "Refund amount exceeds refundable balance"), nil
-			}
-			amount = request.amount.Int64()
-		}
-		client, err := h.stripe.Client()
-		if err != nil {
-			return detail(http.StatusInternalServerError, err.Error()), nil
-		}
-		var charge string
-		if paymentIntent == nil || *paymentIntent == "" {
-			intent, chargeID, err := invoicePayment(ctx, client, stripeInvoiceID)
-			if err != nil {
-				h.logger.ErrorContext(ctx, "billing: stripe invoice payments read failed", "error", pyStripeError(err))
-				return detail(http.StatusBadGateway, "Failed to read the invoice payment: "+pyStripeError(err)), nil
-			}
-			switch {
-			case intent != "":
-				paymentIntent = &intent
-				if _, err := tx.Exec(ctx, `UPDATE invoices SET payment_intent_id = $2 WHERE id = $1`, invoiceID, intent); err != nil {
-					return reply{}, err
-				}
-			case chargeID != "":
-				charge = chargeID
-			default:
-				return detail(http.StatusBadRequest, "Invoice has no Stripe payment to refund"), nil
-			}
-		}
-		params := &stripe.RefundCreateParams{Amount: stripe.Int64(amount),
-			Metadata: map[string]string{"org_id": org.String(), "invoice_id": invoiceID.String()}}
-		if paymentIntent != nil && *paymentIntent != "" {
-			params.PaymentIntent = paymentIntent
-		} else {
-			params.Charge = stripe.String(charge)
-		}
-		if request.reason != nil {
-			params.Reason = request.reason
-		}
-		refund, err := client.V1Refunds.Create(ctx, params)
-		if err != nil {
-			h.logger.ErrorContext(ctx, "billing: stripe refund failed", "error", pyStripeError(err))
-			return detail(http.StatusBadGateway, "Failed to create refund: "+pyStripeError(err)), nil
-		}
-		chargeID := charge
-		if refund.Charge != nil && refund.Charge.ID != "" {
-			chargeID = refund.Charge.ID
-		}
-		var refundIntent *string
-		if refund.PaymentIntent != nil && refund.PaymentIntent.ID != "" {
-			refundIntent = &refund.PaymentIntent.ID
-		} else if paymentIntent != nil && *paymentIntent != "" {
-			refundIntent = paymentIntent
-		}
-		refundStatus := string(refund.Status)
-		if refundStatus == "" {
-			refundStatus = "pending"
-		}
-		var failure *string
-		if refund.FailureReason != "" {
-			text := string(refund.FailureReason)
-			failure = &text
-		}
-		metadata := pyjson.NewObject()
-		for _, key := range slices.Sorted(maps.Keys(refund.Metadata)) {
-			metadata.Set(key, refund.Metadata[key])
-		}
-		metadataText, err := pyjson.Dumps(metadata)
-		if err != nil {
-			return reply{}, err
-		}
-		id, now := uuid.New(), h.nowUTC()
-		if _, err := tx.Exec(ctx, `INSERT INTO refunds (id, org_id, invoice_id, subscription_id, stripe_refund_id, stripe_charge_id,
-			stripe_payment_intent_id, amount, currency, status, reason, description, failure_reason, initiated_by, metadata,
-			created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::json, $16, $16)`,
-			id, org, invoiceID, subscription, refund.ID, chargeID, refundIntent, amount, pythonparity.Lower(currency), refundStatus,
-			request.reason, request.description, failure, actor, metadataText, now); err != nil {
-			return reply{}, err
-		}
-		out, err := scanRefundJSON(tx.QueryRow(ctx, `SELECT `+refundColumns+` FROM refunds WHERE id = $1`, id))
-		if err != nil {
-			return reply{}, err
-		}
-		return ok(out), nil
+		return reply{}, err
 	})
+	switch {
+	case err != nil:
+		h.internal(w, r, "create refund", err)
+		return
+	case pending.id == uuid.Nil:
+		h.write(w, answer)
+		return
+	}
+	// 2. Stripe, with the row's own idempotency key: a retry of this row
+	// never makes a second refund.
+	client, err := h.stripe.Client()
+	if err != nil {
+		h.write(w, detail(http.StatusInternalServerError, err.Error()))
+		return
+	}
+	params := &stripe.RefundCreateParams{Amount: stripe.Int64(pending.amount),
+		Metadata: map[string]string{"org_id": pending.org.String(), "invoice_id": invoiceID.String(), "refund_id": pending.id.String()}}
+	params.SetIdempotencyKey("refund:" + pending.id.String())
+	if pending.intent != "" {
+		params.PaymentIntent = stripe.String(pending.intent)
+	} else {
+		params.Charge = stripe.String(pending.charge)
+	}
+	if pending.reason != nil {
+		params.Reason = pending.reason
+	}
+	refund, stripeErr := client.V1Refunds.Create(ctx, params)
+	// 3. Complete the row: Stripe's refund, or its refusal. An outcome
+	// Stripe did not state (a network or server error) leaves the row
+	// pending, its amount held, for the retry to complete.
+	if stripeErr != nil {
+		h.logger.ErrorContext(ctx, "billing: stripe refund failed", "refund_id", pending.id.String(), "error", pyStripeError(stripeErr))
+		if refusedByStripe(stripeErr) {
+			// Committed on its own: inTx rolls back a 4xx/5xx reply.
+			if err := h.inTxFunc(ctx, func(tx pgx.Tx) error {
+				_, err := tx.Exec(ctx, `UPDATE refunds SET status = 'failed', failure_reason = $2, updated_at = $3 WHERE id = $1`,
+					pending.id, pyStripeError(stripeErr), h.nowUTC())
+				return err
+			}); err != nil {
+				h.internal(w, r, "create refund", err)
+				return
+			}
+		}
+		h.write(w, detail(http.StatusBadGateway, "Failed to create refund: "+pyStripeError(stripeErr)))
+		return
+	}
+	answer, err = h.inTx(ctx, func(tx pgx.Tx) (reply, error) {
+		return h.completeRefund(ctx, tx, pending, refund)
+	})
+	if err != nil {
+		h.internal(w, r, "create refund", err)
+		return
+	}
+	h.write(w, answer)
+}
+
+// pendingRefund is a reserved refund row and what its Stripe call needs.
+type pendingRefund struct {
+	id, org        uuid.UUID
+	amount         int64
+	intent, charge string
+	reason         *string
+}
+
+// refusedByStripe reports a refusal Stripe stated (a 4xx other than 409,
+// an idempotent request in flight, and 429); anything else leaves the
+// outcome unknown.
+func refusedByStripe(err error) bool {
+	var apiError *stripe.Error
+	if !errors.As(err, &apiError) {
+		return false
+	}
+	code := apiError.HTTPStatusCode
+	return code >= 400 && code < 500 && code != http.StatusConflict && code != http.StatusTooManyRequests
+}
+
+// reserveRefund locks the invoice, answers a repeated Idempotency-Key with
+// its refund (or resumes it while still pending), checks the balance,
+// resolves the Stripe payment and writes the pending row. A non-nil early
+// reply ends the request.
+func (h handlers) reserveRefund(ctx context.Context, tx pgx.Tx, request refundRequest, invoiceID, actor uuid.UUID,
+	clientKey string) (pendingRefund, *reply, error) {
+	early := func(answer reply) (pendingRefund, *reply, error) { return pendingRefund{}, &answer, nil }
+	var org uuid.UUID
+	var subscription *uuid.UUID
+	var status, currency, stripeInvoiceID string
+	var amountPaid int64
+	var paymentIntent *string
+	// Locked, so two refunds of one invoice cannot both pass the balance
+	// check, and a repeated key finds the first request's row.
+	switch err := tx.QueryRow(ctx, `SELECT org_id, subscription_id, status, amount_paid, currency, payment_intent_id, stripe_invoice_id
+		FROM invoices WHERE id = $1 FOR UPDATE`, invoiceID).
+		Scan(&org, &subscription, &status, &amountPaid, &currency, &paymentIntent, &stripeInvoiceID); {
+	case errors.Is(err, pgx.ErrNoRows):
+		return early(detail(http.StatusNotFound, "Invoice not found"))
+	case err != nil:
+		return pendingRefund{}, nil, err
+	}
+	if clientKey != "" {
+		var id uuid.UUID
+		var keyedInvoice *uuid.UUID
+		var keyedAmount int64
+		var keyedStatus string
+		var keyedRefundID, keyedCharge, keyedIntent, keyedReason *string
+		switch err := tx.QueryRow(ctx, `SELECT id, invoice_id, amount, status, stripe_refund_id, stripe_charge_id, stripe_payment_intent_id, reason
+			FROM refunds WHERE org_id = $1 AND idempotency_key = $2`, org, clientKey).
+			Scan(&id, &keyedInvoice, &keyedAmount, &keyedStatus, &keyedRefundID, &keyedCharge, &keyedIntent, &keyedReason); {
+		case err == nil:
+			if keyedInvoice == nil || *keyedInvoice != invoiceID || (request.amount != nil && (!request.amount.IsInt64() || request.amount.Int64() != keyedAmount)) {
+				return early(detail(http.StatusConflict, "Idempotency-Key was used for a different refund request"))
+			}
+			if keyedStatus != "pending" || keyedRefundID != nil {
+				out, err := scanRefundJSON(tx.QueryRow(ctx, `SELECT `+refundColumns+` FROM refunds WHERE id = $1`, id))
+				if err != nil {
+					return pendingRefund{}, nil, err
+				}
+				return early(ok(out))
+			}
+			// Still pending: the first request's Stripe outcome is not
+			// recorded. Resume it with the same Stripe key.
+			resumed := pendingRefund{id: id, org: org, amount: keyedAmount, reason: keyedReason}
+			if keyedIntent != nil {
+				resumed.intent = *keyedIntent
+			}
+			if keyedCharge != nil {
+				resumed.charge = *keyedCharge
+			}
+			return resumed, nil, nil
+		case !errors.Is(err, pgx.ErrNoRows):
+			return pendingRefund{}, nil, err
+		}
+	}
+	if pythonparity.Lower(status) != "paid" {
+		return early(detail(http.StatusBadRequest, "Invoice is not paid"))
+	}
+	var refunded int64
+	if err := tx.QueryRow(ctx, `SELECT coalesce(sum(amount), 0) FROM refunds WHERE invoice_id = $1 AND status IN ('pending', 'succeeded')`,
+		invoiceID).Scan(&refunded); err != nil {
+		return pendingRefund{}, nil, err
+	}
+	refundable := amountPaid - refunded
+	if refundable <= 0 {
+		return early(detail(http.StatusBadRequest, "Invoice has already been fully refunded"))
+	}
+	amount := refundable
+	if request.amount != nil {
+		if !request.amount.IsInt64() || request.amount.Int64() > refundable {
+			return early(detail(http.StatusBadRequest, "Refund amount exceeds refundable balance"))
+		}
+		amount = request.amount.Int64()
+	}
+	client, err := h.stripe.Client()
+	if err != nil {
+		return early(detail(http.StatusInternalServerError, err.Error()))
+	}
+	var charge string
+	if paymentIntent == nil || *paymentIntent == "" {
+		intent, chargeID, err := invoicePayment(ctx, client, stripeInvoiceID)
+		if err != nil {
+			h.logger.ErrorContext(ctx, "billing: stripe invoice payments read failed", "error", pyStripeError(err))
+			return early(detail(http.StatusBadGateway, "Failed to read the invoice payment: "+pyStripeError(err)))
+		}
+		switch {
+		case intent != "":
+			paymentIntent = &intent
+			if _, err := tx.Exec(ctx, `UPDATE invoices SET payment_intent_id = $2 WHERE id = $1`, invoiceID, intent); err != nil {
+				return pendingRefund{}, nil, err
+			}
+		case chargeID != "":
+			charge = chargeID
+		default:
+			return early(detail(http.StatusBadRequest, "Invoice has no Stripe payment to refund"))
+		}
+	}
+	reserved := pendingRefund{id: uuid.New(), org: org, amount: amount, charge: charge, reason: request.reason}
+	var intentColumn *string
+	if paymentIntent != nil && *paymentIntent != "" {
+		reserved.intent = *paymentIntent
+		intentColumn = paymentIntent
+	}
+	var chargeColumn, keyColumn *string
+	if charge != "" {
+		chargeColumn = &charge
+	}
+	if clientKey != "" {
+		keyColumn = &clientKey
+	}
+	now := h.nowUTC()
+	// No Stripe ids yet: they are written when Stripe answers.
+	if _, err := tx.Exec(ctx, `INSERT INTO refunds (id, org_id, invoice_id, subscription_id, stripe_refund_id, stripe_charge_id,
+		stripe_payment_intent_id, amount, currency, status, reason, description, failure_reason, initiated_by, metadata,
+		idempotency_key, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, NULL, $5, $6, $7, $8, 'pending', $9, $10, NULL, $11, '{}', $12, $13, $13)`,
+		reserved.id, org, invoiceID, subscription, chargeColumn, intentColumn, amount,
+		pythonparity.Lower(currency), request.reason, request.description, actor, keyColumn, now); err != nil {
+		return pendingRefund{}, nil, err
+	}
+	return reserved, nil, nil
+}
+
+// completeRefund writes Stripe's refund onto its reserved row and answers
+// the row.
+func (h handlers) completeRefund(ctx context.Context, tx pgx.Tx, pending pendingRefund, refund *stripe.Refund) (reply, error) {
+	var chargeID *string
+	if pending.charge != "" {
+		chargeID = &pending.charge
+	}
+	if refund.Charge != nil && refund.Charge.ID != "" {
+		chargeID = &refund.Charge.ID
+	}
+	var refundIntent *string
+	if refund.PaymentIntent != nil && refund.PaymentIntent.ID != "" {
+		refundIntent = &refund.PaymentIntent.ID
+	} else if pending.intent != "" {
+		refundIntent = &pending.intent
+	}
+	refundStatus := string(refund.Status)
+	if refundStatus == "" {
+		refundStatus = "pending"
+	}
+	var failure *string
+	if refund.FailureReason != "" {
+		text := string(refund.FailureReason)
+		failure = &text
+	}
+	metadata := pyjson.NewObject()
+	for _, key := range slices.Sorted(maps.Keys(refund.Metadata)) {
+		metadata.Set(key, refund.Metadata[key])
+	}
+	metadataText, err := pyjson.Dumps(metadata)
+	if err != nil {
+		return reply{}, err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE refunds SET stripe_refund_id = $2, stripe_charge_id = $3, stripe_payment_intent_id = $4,
+		status = $5, failure_reason = $6, metadata = $7::json, updated_at = $8 WHERE id = $1`,
+		pending.id, refund.ID, chargeID, refundIntent, refundStatus, failure, metadataText, h.nowUTC()); err != nil {
+		return reply{}, err
+	}
+	out, err := scanRefundJSON(tx.QueryRow(ctx, `SELECT `+refundColumns+` FROM refunds WHERE id = $1`, pending.id))
+	if err != nil {
+		return reply{}, err
+	}
+	return ok(out), nil
 }
 
 // invoicePayment is the invoice's paid Stripe payment: its payment intent,
@@ -226,8 +368,8 @@ const refundColumns = `id, org_id, invoice_id, subscription_id, stripe_refund_id
 func scanRefundJSON(row pgx.Row) (*pyjson.Object, error) {
 	var id, org uuid.UUID
 	var invoiceID, subscriptionID, initiatedBy *uuid.UUID
-	var refundID, chargeID, currency, status string
-	var intentID, reason, description, failure, metadata *string
+	var currency, status string
+	var refundID, chargeID, intentID, reason, description, failure, metadata *string
 	var amount int32
 	var created, updated *time.Time
 	if err := row.Scan(&id, &org, &invoiceID, &subscriptionID, &refundID, &chargeID, &intentID, &amount, &currency,
@@ -247,8 +389,8 @@ func scanRefundJSON(row pgx.Row) (*pyjson.Object, error) {
 	out.Set("org_id", org.String())
 	out.Set("invoice_id", uuidOrNull(invoiceID))
 	out.Set("subscription_id", uuidOrNull(subscriptionID))
-	out.Set("stripe_refund_id", refundID)
-	out.Set("stripe_charge_id", chargeID)
+	out.Set("stripe_refund_id", nullableString(refundID))
+	out.Set("stripe_charge_id", nullableString(chargeID))
 	out.Set("stripe_payment_intent_id", nullableString(intentID))
 	out.Set("amount", int64(amount))
 	out.Set("currency", currency)

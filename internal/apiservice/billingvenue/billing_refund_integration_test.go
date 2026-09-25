@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -152,19 +153,28 @@ func TestRefundCreate(t *testing.T) {
 		`SELECT string_agg(i.stripe_invoice_id || '=' || r.amount::text || ':' || r.status || ':' || (r.initiated_by = '`+seed.super.String()+`')::text,
 			',' ORDER BY i.stripe_invoice_id, r.amount) FROM refunds r JOIN invoices i ON i.id = r.invoice_id
 			WHERE r.created_at > now() - interval '1 hour'`,
-		"in_A2=2000:succeeded:true,in_A2=4000:succeeded:true,in_charge=500:succeeded:true,in_pi=1:pending:true,in_pi=300:succeeded:true,in_pi=599:succeeded:true")
+		"in_A2=2000:succeeded:true,in_A2=4000:succeeded:true,in_charge=500:succeeded:true,in_pi=1:pending:true,in_pi=300:succeeded:true,in_pi=599:succeeded:true,in_pi_bad=300:failed:true")
 	expect("the listed intent is stored on the invoice",
 		`SELECT string_agg(stripe_invoice_id || '=' || coalesce(payment_intent_id, 'null'), ',' ORDER BY stripe_invoice_id) FROM invoices
 			WHERE stripe_invoice_id IN ('in_pi', 'in_charge', 'in_none')`, "in_charge=,in_none=null,in_pi=pi_listed")
 	expect("the refund metadata names the org and invoice",
-		`SELECT DISTINCT metadata::text FROM refunds WHERE stripe_payment_intent_id = 'pi_listed'`,
-		`{"invoice_id": "`+invIntent+`", "org_id": "`+seed.orgA.String()+`"}`)
+		`SELECT DISTINCT (metadata::jsonb - 'refund_id')::text FROM refunds WHERE stripe_payment_intent_id = 'pi_listed'`,
+		`{"org_id": "`+seed.orgA.String()+`", "invoice_id": "`+invIntent+`"}`)
 	// What reached Stripe: the listed payments are the paid ones, and each
 	// refund names its payment, amount, reason and metadata.
 	var calls []string
 	for _, call := range fake.calls["go"] {
 		if strings.HasPrefix(call, "POST /v1/refunds") || strings.HasPrefix(call, "GET /v1/invoice_payments") {
-			calls = append(calls, strings.SplitN(call, " | version=", 2)[0])
+			// Each refund names its local row (a per-run id), checked
+			// here and then left out of the comparison.
+			call = strings.SplitN(call, " | version=", 2)[0]
+			if strings.HasPrefix(call, "POST /v1/refunds") {
+				if !refundRowID.MatchString(call) {
+					t.Errorf("refund create without its row id: %s", call)
+				}
+				call = refundRowID.ReplaceAllString(call, "")
+			}
+			calls = append(calls, call)
 		}
 	}
 	gotCalls := strings.Join(calls, "\n")
@@ -175,6 +185,9 @@ func TestRefundCreate(t *testing.T) {
 	t.Log("\n" + receipt)
 	venueoracle.WriteGoOnlyProof(t, "Go creates Stripe refunds for paid invoices from the stored or listed payment; the Python route raises on a missing invoice column")
 }
+
+// refundRowID is the refund-create form's local row id.
+var refundRowID = regexp.MustCompile(`&metadata\[refund_id\]=[0-9a-f-]{36}`)
 
 func wantRefundCalls(org string) string {
 	refund := func(invoice, amount, payment, reason string) string {

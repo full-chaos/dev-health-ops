@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math/big"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -40,6 +42,14 @@ async def run(scenario):
     def handler(request):
         seen.append([str(request.url), request.headers.get("PRIVATE-TOKEN")])
         status, headers, body = responses.pop(0) if responses else (599, [], "")
+        if status == -1:
+            raise httpx.ConnectError("boom", request=request)
+        if status == -2:
+            raise httpx.ReadTimeout("slow", request=request)
+        if status == -3:
+            raise httpx.RemoteProtocolError("bad framing", request=request)
+        if status == -4:
+            raise httpx.ReadError("cut", request=request)
         return httpx.Response(status, headers=headers, content=base64.b64decode(body))
     try:
         async with GitLabCodeClient(private_token="tok", base_url=scenario["base"], transport=httpx.MockTransport(handler)) as client:
@@ -76,18 +86,37 @@ func (s scripted) MarshalJSON() ([]byte, error) {
 type scenario struct {
 	Base string `json:"base"`
 	// Group nil is group_name=None: the /projects listing.
-	Group      *string    `json:"group"`
-	Search     string     `json:"search,omitempty"`
-	Pattern    string     `json:"pattern,omitempty"`
-	Membership bool       `json:"membership,omitempty"`
-	Max        *string    `json:"max,omitempty"`
-	Responses  []scripted `json:"responses"`
+	Group      *string `json:"group"`
+	Search     string  `json:"search,omitempty"`
+	Pattern    string  `json:"pattern,omitempty"`
+	Membership bool    `json:"membership,omitempty"`
+	Max        *string `json:"max,omitempty"`
+	// Loose compares only the exception class of a failure: the text of a
+	// transport error is httpx's in Python and Go's here.
+	Loose     bool       `json:"loose,omitempty"`
+	Responses []scripted `json:"responses"`
 }
 
 func ok(body string, headers ...[2]string) scripted { return scripted{200, headers, body} }
 func status(code int, body string, headers ...[2]string) scripted {
 	return scripted{code, headers, body}
 }
+
+// Transport failures: the status field carries the kind the transports raise.
+const (
+	failConnect  = -1
+	failTimeout  = -2
+	failProtocol = -3
+	failRead     = -4
+)
+
+// timeoutError is a net.Error that timed out.
+type timeoutError struct{}
+
+func (timeoutError) Error() string   { return "i/o timeout" }
+func (timeoutError) Timeout() bool   { return true }
+func (timeoutError) Temporary() bool { return true }
+
 func repeat(n int, response scripted) []scripted {
 	out := make([]scripted, n)
 	for index := range out {
@@ -106,6 +135,7 @@ func fullPage(offset int) string {
 
 func listScenarios() []scenario {
 	base := "http://gitlab.test"
+	base0 := base
 	two := `[{"id": 1, "name": "api", "path_with_namespace": "grp/api"}, {"id": 2, "name": "web", "path_with_namespace": "grp/sub/web"}]`
 	var out []scenario
 	add := func(group string, responses ...scripted) {
@@ -158,6 +188,14 @@ func listScenarios() []scenario {
 	prefix := "grp"
 	out = append(out, scenario{Base: "http://gitlab.test/prefix/", Group: &prefix, Responses: []scripted{status(404, "")}})
 	out = append(out, listOptionScenarios()...)
+	// A timeout and a failure to connect are retried, any other transport
+	// error is raised at once (the core's retry filter, shared with GitHub).
+	for _, kind := range []int{failConnect, failTimeout, failProtocol, failRead} {
+		group := "grp"
+		out = append(out, scenario{Base: base0, Group: &group, Loose: true, Responses: repeat(6, scripted{Status: kind})})
+		out = append(out, scenario{Base: base0, Group: nil, Loose: true, Responses: []scripted{{Status: kind}, ok(`[{"id": 1, "name": "a"}]`)}})
+		out = append(out, scenario{Base: base0, Group: &group, Loose: true, Responses: []scripted{ok(fullPage(0)), {Status: kind}, ok(`[{"id": 1, "name": "a"}]`)}})
+	}
 	return out
 }
 
@@ -234,6 +272,16 @@ func (s *scriptedTransport) RoundTrip(request *http.Request) (*http.Response, er
 	if len(s.responses) > 0 {
 		next, s.responses = s.responses[0], s.responses[1:]
 	}
+	switch next.Status {
+	case failConnect:
+		return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
+	case failTimeout:
+		return nil, &net.OpError{Op: "read", Net: "tcp", Err: timeoutError{}}
+	case failProtocol:
+		return nil, errors.New("http: server closed idle connection")
+	case failRead:
+		return nil, &net.OpError{Op: "read", Net: "tcp", Err: errors.New("connection reset by peer")}
+	}
 	headers := http.Header{}
 	for _, pair := range next.Headers {
 		headers.Add(pair[0], pair[1])
@@ -297,9 +345,22 @@ func TestListProjectsVenueOracleMatchesLivePython(t *testing.T) {
 			}
 			got = rows
 		}
-		gotResult, _ := json.Marshal(got)
 		var pythonResult any
 		_ = json.Unmarshal(want[index].Result, &pythonResult)
+		if s.Loose {
+			if text, ok := got.(string); ok {
+				got, _, _ = strings.Cut(text, ": ")
+			}
+			if text, ok := pythonResult.(string); ok {
+				pythonResult, _, _ = strings.Cut(text, ": ")
+			}
+			// Go names every transport error it raises at once TransportError;
+			// Python names the httpx exception (raised at once, not retried).
+			if got == "TransportError" && (pythonResult == "RemoteProtocolError" || pythonResult == "ReadError") {
+				got = pythonResult
+			}
+		}
+		gotResult, _ := json.Marshal(got)
 		wantResult, _ := json.Marshal(pythonResult)
 		if string(gotResult) != string(wantResult) {
 			t.Errorf("scenario %d (%s): result\n go     %s\n python %s", index, describe(s), gotResult, wantResult)

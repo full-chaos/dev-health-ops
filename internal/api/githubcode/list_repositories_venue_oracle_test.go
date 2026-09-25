@@ -193,6 +193,13 @@ func listScenarios() []scenario {
 		repos("", "acme", ok(two, next(link)), ok(page(repoItem(3, "docs"))))
 		repos("https://ghe.test/api/v3?scope=all", "acme", ok(two, next(link)), ok(page(repoItem(3, "docs"))))
 	}
+	// Host forms: IPv6 literals (bracketed, kept as written), an upper-case
+	// host and default ports.
+	for _, base := range []string{"http://[2001:4860:4860::8888]", "https://[2001:4860:4860::8888]:8443/api/v3", "https://[2001:DB8::1]:443/x", "http://[::1]:80", "https://GHE.Test:443/api/v3",
+		"http://192.0.2.1:8080/x", "https://ghe.test:8443/api/v3", "http://GHE.test:80"} {
+		repos(base, "acme", ok(two, next("http://[2001:db8::1]:9/x?page=2")), ok(page(repoItem(3, "docs"))))
+		add("installation", base, "", "", "", nil, ok(`{"repositories": []}`))
+	}
 	// Transport failures: a timeout and a failure to connect are retried, any
 	// other transport error is raised at once.
 	for _, kind := range []int{failConnect, failTimeout, failProtocol, failRead} {

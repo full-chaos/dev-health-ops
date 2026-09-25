@@ -793,7 +793,7 @@ def _os_endpoint(host_spelling: str, port_spelling: str) -> tuple[str, int]:
             type=socket.SOCK_STREAM,
             flags=socket.AI_NUMERICHOST | socket.AI_NUMERICSERV,
         )[0][4]
-        address = ipaddress.ip_address(info[0].split("%")[0])
+        address = ipaddress.ip_address(str(info[0]).split("%")[0])
         if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped:
             address = address.ipv4_mapped
         return (str(address), port)

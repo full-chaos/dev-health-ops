@@ -22,6 +22,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
 	"github.com/full-chaos/dev-health-ops/internal/cli"
+	"github.com/full-chaos/dev-health-ops/internal/localgit"
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
@@ -218,9 +219,12 @@ type localScenario struct {
 	// pathForm is how --repo-path names the repository: "" as created, "symlink",
 	// "relative" (to the working directory) or "dots" (a trailing /./).
 	pathForm string
-	// goRefuses marks a named divergence: Python succeeds and the port refuses
-	// (exit 1, "outside the range"), so the tables are not compared.
-	goRefuses bool
+	// envFn adds variables that depend on the fixtures (paths of other repositories);
+	// every variable reaches both planes: the Python child and this process.
+	envFn func(f *fixture) map[string]string
+	// goRefusesOn names the target ("git" or "prs") on which a named divergence holds:
+	// Python succeeds and the port refuses (exit 1, "outside the range").
+	goRefusesOn string
 }
 
 func localScenarios() []localScenario {
@@ -584,9 +588,22 @@ func joinWith(parts []string, sep string) []string {
 	return out
 }
 
-func TestLocalSyncMatchesLivePython(t *testing.T) {
+// localOracle is the two planes of the local-sync oracle: a real Python verb in a
+// long-lived child, and one ClickHouse container holding the database Python writes
+// (migrated by the real chain) and a clone the Go verb writes.
+type localOracle struct {
+	t                    *testing.T
+	ctx                  context.Context
+	admin                driver.Conn
+	pythonDatabase, goDB string
+	httpDSN, goDSN       string
+	ask                  func(map[string]any) map[string]any
+}
+
+func newLocalOracle(t *testing.T) *localOracle {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Minute)
-	defer cancel()
+	t.Cleanup(cancel)
 	root, err := filepath.Abs(filepath.Join("..", ".."))
 	if err != nil {
 		t.Fatal(err)
@@ -629,7 +646,6 @@ func TestLocalSyncMatchesLivePython(t *testing.T) {
 	}
 	goURL := *nativeURL
 	goURL.Path = "/" + goDatabase
-	goDSN := goURL.String()
 
 	command := exec.Command(python, "-c", localSyncOracleProgram)
 	command.Env = append(os.Environ(), "PYTHONHASHSEED=0", "PYTHONPATH="+filepath.Join(root, "src"))
@@ -663,20 +679,57 @@ func TestLocalSyncMatchesLivePython(t *testing.T) {
 		}
 		return answer
 	}
+	return &localOracle{t: t, ctx: ctx, admin: admin, pythonDatabase: pythonDatabase, goDB: goDatabase, httpDSN: httpDSN, goDSN: goURL.String(), ask: ask}
+}
 
-	truncate := func() {
-		for _, database := range []string{pythonDatabase, goDatabase} {
-			for _, table := range localTables {
-				if err := admin.Exec(ctx, fmt.Sprintf("TRUNCATE TABLE %s.%s", database, table)); err != nil {
-					t.Fatal(err)
-				}
+func (o *localOracle) truncate() {
+	o.t.Helper()
+	for _, database := range []string{o.pythonDatabase, o.goDB} {
+		for _, table := range localTables {
+			if err := o.admin.Exec(o.ctx, fmt.Sprintf("TRUNCATE TABLE %s.%s", database, table)); err != nil {
+				o.t.Fatal(err)
 			}
 		}
 	}
+}
 
+// setProcessEnv puts the scenario's variables in the environment of THIS process
+// (the git subprocesses of the Go plane inherit it, as the Python child's do) and
+// returns the restore.
+func setProcessEnv(env map[string]string) func() {
+	type saved struct {
+		value string
+		set   bool
+	}
+	before := map[string]saved{}
+	for key, value := range env {
+		old, set := os.LookupEnv(key)
+		before[key] = saved{old, set}
+		_ = os.Setenv(key, value)
+	}
+	return func() {
+		for key, was := range before {
+			if was.set {
+				_ = os.Setenv(key, was.value)
+			} else {
+				_ = os.Unsetenv(key)
+			}
+		}
+	}
+}
+
+func TestLocalSyncMatchesLivePython(t *testing.T) {
+	oracle := newLocalOracle(t)
+	ctx, admin, ask := oracle.ctx, oracle.admin, oracle.ask
+	pythonDatabase, goDatabase, httpDSN, goDSN, truncate := oracle.pythonDatabase, oracle.goDB, oracle.httpDSN, oracle.goDSN, oracle.truncate
 	compared, mismatches, rowsSeen := 0, 0, 0
 	perTable := map[string]int{}
 	for _, scenario := range append(localScenarios(), generatedScenarios()...) {
+		// DHO_ORACLE_SCENARIOS narrows a run to the scenarios whose name contains it
+		// (a debugging aid for kill proofs; a full run leaves it unset).
+		if only := os.Getenv("DHO_ORACLE_SCENARIOS"); only != "" && !strings.Contains(scenario.name, only) {
+			continue
+		}
 		f := newFixture(t, strings.NewReplacer(" ", "-", ",", "", ":", "", "'", "").Replace(scenario.name))
 		scenario.build(f)
 		targets := scenario.targets
@@ -709,17 +762,27 @@ func TestLocalSyncMatchesLivePython(t *testing.T) {
 			}
 			pyArgs := append(append([]string{}, base...), "--analytics-db", httpDSN)
 			goArgs := append(append([]string{}, base[1:]...), "--analytics-db", goDSN)
-			want := ask(map[string]any{"args": pyArgs, "env": scenario.env})
-
 			env := map[string]string{}
 			for key, value := range scenario.env {
 				env[key] = value
 			}
-			code, stdoutText, stderrText := runVerb(t, target, InlineExecutor(InlineDeps{}), goArgs, env)
+			if scenario.envFn != nil {
+				for key, value := range scenario.envFn(f) {
+					env[key] = value
+				}
+			}
+			want := ask(map[string]any{"args": pyArgs, "env": env})
 
-			if scenario.goRefuses && target == "git" {
-				stage := fmt.Sprint(want["stage"].(map[string]any)["v"])
-				if stage != "ok" || code == cli.ExitOK || !strings.Contains(stderrText, "outside the range") {
+			restoreEnv := setProcessEnv(env)
+			code, stdoutText, stderrText := runVerb(t, target, InlineExecutor(InlineDeps{}), goArgs, env)
+			restoreEnv()
+
+			// A named divergence: Python writes an instant the ClickHouse client cannot, the
+			// port refuses (exit 1, "outside the range"). Whether Python gets that far can
+			// depend on the git in use (a git that rejects the commit fails both planes), so
+			// the row is asserted only where Python succeeded and compared normally otherwise.
+			if scenario.goRefusesOn == target && fmt.Sprint(want["stage"].(map[string]any)["v"]) == "ok" {
+				if code == cli.ExitOK || !strings.Contains(stderrText, "outside the range") {
 					mismatches++
 					t.Errorf("%s / %s: a named divergence must be Python ok and a port refusal, got python %v, go exit %d (%s)", scenario.name, target, want, code, stderrText)
 				}
@@ -759,6 +822,9 @@ func TestLocalSyncMatchesLivePython(t *testing.T) {
 		}
 	}
 	t.Logf("%d scenario runs compared, %d rows seen in the Python tables %v, %d mismatches", compared, rowsSeen, perTable, mismatches)
+	if os.Getenv("DHO_ORACLE_SCENARIOS") != "" {
+		return // a narrowed debugging run: the coverage checks below need the whole corpus
+	}
 	for _, table := range localTables {
 		if perTable[table] == 0 {
 			t.Errorf("no scenario wrote a row to %s: the corpus does not reach it", table)
@@ -810,4 +876,54 @@ func lineDiff(python, goRows []string) string {
 		}
 	}
 	return fmt.Sprintf("python %d rows, go %d rows\n%s", len(python), len(goRows), strings.Join(out, "\n"))
+}
+
+// A RERUN over a git_pull_requests row another writer filled: the stored-version
+// contract of the port's writer keeps the columns a local source has no field for
+// (R1) where `dev-hops` inserts blindly and CLEARS them. This is a named divergence
+// (decided: the invariant wins, D2598); the test pins both sides so it cannot drift.
+func TestLocalSyncRerunKeepsHeldColumnsUnlikePython(t *testing.T) {
+	oracle := newLocalOracle(t)
+	ctx := oracle.ctx
+	f := newFixture(t, "rerun")
+	richRepository(f, "12")
+	repo, err := localgit.Open(f.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := repo.RepoID(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, database := range []string{oracle.pythonDatabase, oracle.goDB} {
+		seed := fmt.Sprintf("INSERT INTO %s.git_pull_requests (repo_id, number, title, body, state, created_at, additions, deletions, changed_files, "+
+			"changes_requested_count, reviews_count, comments_count, last_synced, org_id) VALUES (toUUID('%s'), 5, 'held title', 'external body', 'open', "+
+			"toDateTime64('2021-01-01 00:00:00', 3), 7, 2, 3, 1, 4, 5, toDateTime64('2020-01-01 00:00:00', 3), 'oracle-org')", database, id)
+		if err := oracle.admin.Exec(ctx, seed); err != nil {
+			t.Fatal(err)
+		}
+	}
+	base := []string{"--provider", "local", "--repo-path", f.dir, "--org", "oracle-org"}
+	if want := oracle.ask(map[string]any{"args": append(append([]string{"prs"}, base...), "--analytics-db", oracle.httpDSN)}); fmt.Sprint(want["stage"].(map[string]any)["v"]) != "ok" {
+		t.Fatalf("python did not finish: %v", want)
+	}
+	if code, out, errText := runVerb(t, "prs", InlineExecutor(InlineDeps{}), append(append([]string{}, base...), "--analytics-db", oracle.goDSN), map[string]string{}); code != cli.ExitOK {
+		t.Fatalf("go exit %d: %s%s", code, out, errText)
+	}
+	read := func(database string) (body *string, additions *uint32, reviews uint32, title *string, state string) {
+		query := fmt.Sprintf("SELECT body, additions, reviews_count, title, state FROM %s.git_pull_requests FINAL WHERE number = 5 AND org_id = 'oracle-org'", database)
+		if err := oracle.admin.QueryRow(ctx, query).Scan(&body, &additions, &reviews, &title, &state); err != nil {
+			t.Fatalf("%s: %v", database, err)
+		}
+		return
+	}
+	pyBody, pyAdditions, pyReviews, pyTitle, pyState := read(oracle.pythonDatabase)
+	goBody, goAdditions, goReviews, goTitle, goState := read(oracle.goDB)
+	if pyBody != nil || pyAdditions != nil || pyReviews != 0 || pyTitle != nil || pyState != "open" {
+		t.Errorf("python clears what it has no field for: body=%v additions=%v reviews=%d title=%v state=%s", pyBody, pyAdditions, pyReviews, pyTitle, pyState)
+	}
+	if goBody == nil || *goBody != "external body" || goAdditions == nil || *goAdditions != 7 || goReviews != 4 || goTitle != nil || goState != "open" {
+		t.Errorf("the port keeps the held columns and states the rest: body=%v additions=%v reviews=%d title=%v state=%s", goBody, goAdditions, goReviews, goTitle, goState)
+	}
+	writeVenueProof(t)
 }

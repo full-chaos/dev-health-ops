@@ -3,6 +3,7 @@ package localgit
 import (
 	"context"
 	"errors"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,6 +11,10 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/storedversion"
 )
 
 func TestModeText(t *testing.T) {
@@ -261,7 +266,8 @@ func TestClassifyEpoch(t *testing.T) {
 		want  int
 	}{
 		{0, true, timeOK}, {1700000000, true, timeOK}, {253402300799, true, timeOK}, {253402300800, true, timeValueError},
-		{1 << 55, true, timeValueError}, {1<<62 - 1, true, timeValueError}, {1 << 62, true, timeOtherError}, {0, false, timeOtherError},
+		{1 << 55, true, timeValueError}, {67768036191676799, true, timeValueError}, {67768036191676800, true, timeOtherError},
+		{1<<62 - 1, true, timeOtherError}, {1 << 62, true, timeOtherError}, {0, false, timeOtherError},
 	} {
 		if got := classifyEpoch(tc.epoch, tc.fits); got != tc.want {
 			t.Errorf("classifyEpoch(%d, %v) = %d, want %d", tc.epoch, tc.fits, got, tc.want)
@@ -428,5 +434,83 @@ func TestPackedRefsHeadersAndLinesLikeGitPython(t *testing.T) {
 	write(head + " refs/heads/bad\xff\n")
 	if _, err := repo.refPaths(ctx, "refs/tags"); !errors.Is(err, errPackedRefsNotUTF8) {
 		t.Errorf("err = %v", err)
+	}
+}
+
+// A rerun over a row another writer filled keeps what the local source has no field for
+// (stored-version R1) and never un-merges (R3). `dev-hops` inserts blindly and CLEARS those
+// columns: a named divergence, pinned here so it cannot drift silently.
+func TestARerunKeepsWhatTheLocalSourceHasNoFieldFor(t *testing.T) {
+	repoID := uuid.MustParse("11111111-2222-3333-4444-555555555555")
+	merged := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	row, err := pullRequestRow(repoID, "org", PullRequest{Number: 7, State: "open", CreatedAt: merged}, merged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	held := map[string]any{
+		"body": "external body", "additions": uint32(7), "deletions": uint32(2), "changed_files": uint32(3),
+		"first_review_at": merged, "first_comment_at": merged, "changes_requested_count": uint32(1), "reviews_count": uint32(4),
+		"comments_count": uint32(5), "merged_at": merged,
+	}
+	rows := []storedversion.Row{{Values: row, Carry: pullRequestContract.Carry(func(string) bool { return false })}}
+	if _, err := pullRequestContract.Fold(pullRequestInsert, rows, func([]any) (map[string]any, bool) { return held, true }); err != nil {
+		t.Fatal(err)
+	}
+	positions, _ := storedversion.Positions(pullRequestInsert)
+	for column, want := range held {
+		if got := rows[0].Values[positions[column]]; !reflect.DeepEqual(got, want) {
+			t.Errorf("%s = %v, want the held %v", column, got, want)
+		}
+	}
+	if rows[0].Values[positions["state"]] != "open" || rows[0].Values[positions["title"]] != nil {
+		t.Errorf("stated columns are written as given: %v", rows[0].Values)
+	}
+}
+
+func TestNumbersPastTheColumnsAreRefusedNotWrapped(t *testing.T) {
+	for digits, wantSaturated := range map[string]bool{
+		"4294967295": false, "4294967296": false, "9223372036854775807": false,
+		"18446744073709551616": true, "18446744073709551617": true, "99999999999999999999999999": true,
+	} {
+		got, ok := decimalValue(digits)
+		if !ok || (got == math.MaxInt) != wantSaturated && digits != "9223372036854775807" {
+			t.Errorf("decimalValue(%s) = %d, %v", digits, got, ok)
+		}
+		if got < 0 {
+			t.Errorf("decimalValue(%s) wrapped negative: %d", digits, got)
+		}
+		row := func() error {
+			_, err := pullRequestRow(uuid.Nil, "o", PullRequest{Number: got, State: "open", CreatedAt: time.Now()}, time.Now())
+			return err
+		}
+		if want := got > math.MaxUint32; (row() != nil) != want {
+			t.Errorf("pull request number %s: refused = %v, want %v", digits, row() != nil, want)
+		}
+	}
+	if numstatCount("99999999999999999999") != math.MaxInt || numstatCount("-") != 0 || numstatCount("x") != -1 || numstatCount("12") != 12 {
+		t.Error("numstat counts saturate, `-` is 0, garbage is -1")
+	}
+	writer := Writer{}
+	if err := writer.InsertCommitStats(context.Background(), uuid.Nil, []CommitStat{{CommitHash: "h", FilePath: "f", Additions: math.MaxInt32 + 1}}); err == nil {
+		t.Error("a line count past Int32 must fail the insert")
+	}
+}
+
+func TestTimezoneOffsetsPastATimedelta(t *testing.T) {
+	for offset, want := range map[string]bool{
+		"+0000": false, "+2359": false, "+2400": false, "+9999": false, "+99999999999": false, "-99999999999": false,
+		"+240000000100": false, "+2399999999959": false, "+2400000000000": true, "+2400000000099": true, "+18446744073709551617": true,
+	} {
+		if got := tzOverflows(offset); got != want {
+			t.Errorf("tzOverflows(%s) = %v, want %v", offset, got, want)
+		}
+	}
+	commit := parseCommit("h", []byte("tree t\nauthor A <a@b> 1700000000 +0000\ncommitter C <c@b> 1700000000 +18446744073709551617\n\nm"))
+	if commit.TimeClass != timeOtherError {
+		t.Errorf("a committer offset past a timedelta is the OverflowError class, got %d", commit.TimeClass)
+	}
+	author := parseCommit("h", []byte("tree t\nauthor A <a@b> 1700000000 +18446744073709551617\ncommitter C <c@b> 1700000000 +0000\n\nm"))
+	if author.TimeClass != timeOK {
+		t.Errorf("the author offset is never read, got %d", author.TimeClass)
 	}
 }

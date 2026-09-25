@@ -3,6 +3,8 @@ package localgit
 import (
 	"bytes"
 	"context"
+	"errors"
+	"math"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -137,16 +139,21 @@ func lastRune(text string) string {
 	return string(runes[len(runes)-1])
 }
 
-// numstatCount is `raw != "-" and int(raw) or 0`; -1 marks an int() failure.
+// numstatCount is `raw != "-" and int(raw) or 0`; -1 marks an int() failure and a
+// count past int64 saturates (the Int32 columns refuse it, as ClickHouse does in Python).
 func numstatCount(raw string) int {
 	if raw == "-" {
 		return 0
 	}
-	value, err := strconv.Atoi(raw)
+	value, err := strconv.ParseInt(raw, 10, 64)
 	if err != nil {
+		var numErr *strconv.NumError
+		if errors.As(err, &numErr) && errors.Is(numErr.Err, strconv.ErrRange) && !strings.HasPrefix(raw, "-") {
+			return math.MaxInt
+		}
 		return -1
 	}
-	return value
+	return int(value)
 }
 
 // RawDiff is one Diff of Diff._handle_diff_line.

@@ -116,6 +116,10 @@ func (w Writer) InsertCommitStats(ctx context.Context, repoID uuid.UUID, stats [
 	synced := w.now()
 	rows := make([][]any, 0, len(stats))
 	for _, s := range stats {
+		if s.Additions > math.MaxInt32 || s.Deletions > math.MaxInt32 {
+			// Int32 columns: ClickHouse rejects the batch (a DataError in Python).
+			return fmt.Errorf("commit %s: a line count past the Int32 column for %s", s.CommitHash, s.FilePath)
+		}
 		rows = append(rows, []any{repoID, s.CommitHash, s.FilePath, int32(s.Additions), int32(s.Deletions), s.OldFileMode, s.NewFileMode, synced})
 	}
 	return w.insert(ctx, "git_commit_stats", commitStatsInsert, commitStatsOrgIn, rows)
@@ -127,20 +131,30 @@ func (w Writer) InsertPullRequests(ctx context.Context, repoID uuid.UUID, prs []
 	synced := w.now()
 	rows := make([][]any, 0, len(prs))
 	for _, p := range prs {
-		if p.Number > math.MaxUint32 {
-			// The number column is UInt32: ClickHouse rejects the batch (a DataError
-			// in Python), so the whole insert fails there too.
-			return fmt.Errorf("pull request number %d does not fit the UInt32 column", p.Number)
-		}
-		var merged any
-		if p.MergedAt != nil {
-			merged = *p.MergedAt
-		}
-		if err := checkRepresentable(fmt.Sprintf("pull request %d created at", p.Number), p.CreatedAt); err != nil {
+		row, err := pullRequestRow(repoID, w.effectiveOrg(), p, synced)
+		if err != nil {
 			return err
 		}
-		rows = append(rows, []any{repoID, uint32(p.Number), nullable(p.Title), nil, p.State, nullable(p.AuthorName), nullable(p.AuthorEmail),
-			p.CreatedAt, merged, nil, nullable(p.HeadBranch), nil, nil, nil, nil, nil, nil, uint32(0), uint32(0), uint32(0), synced, nil, w.effectiveOrg()})
+		rows = append(rows, row)
 	}
 	return w.writeContracted(ctx, pullRequestContract, pullRequestInsert, rows)
+}
+
+// pullRequestRow is one git_pull_requests insert row in pullRequestInsert's column
+// order: an inferred pull request has no body, size, review or comment data, and
+// the number must fit the UInt32 column and the times the DateTime64 client.
+func pullRequestRow(repoID uuid.UUID, org string, p PullRequest, synced time.Time) ([]any, error) {
+	if p.Number > math.MaxUint32 {
+		// ClickHouse rejects the batch (a DataError in Python).
+		return nil, fmt.Errorf("pull request number %d does not fit the UInt32 column", p.Number)
+	}
+	if err := checkRepresentable(fmt.Sprintf("pull request %d created at", p.Number), p.CreatedAt); err != nil {
+		return nil, err
+	}
+	var merged any
+	if p.MergedAt != nil {
+		merged = *p.MergedAt
+	}
+	return []any{repoID, uint32(p.Number), nullable(p.Title), nil, p.State, nullable(p.AuthorName), nullable(p.AuthorEmail),
+		p.CreatedAt, merged, nil, nullable(p.HeadBranch), nil, nil, nil, nil, nil, nil, uint32(0), uint32(0), uint32(0), synced, nil, org}, nil
 }

@@ -22,6 +22,9 @@ func generatedScenarios() []localScenario {
 	out = append(out, tagNameScenarios()...)
 	out = append(out, pathNameScenarios()...)
 	out = append(out, repositoryStateScenarios()...)
+	out = append(out, ambientGitEnvScenarios()...)
+	out = append(out, tipTimeScenarios()...)
+	out = append(out, linkedWorktreeScenarios()...)
 	out = append(out, refValueScenarios()...)
 	out = append(out, packedPullRefScenarios()...)
 	out = append(out, packedRefsScenarios()...)
@@ -45,6 +48,9 @@ var digitClasses = []string{
 	"12", "007", "0", "00", "１２" /* fullwidth */, "١٢" /* Arabic-Indic */, "१२" /* Devanagari */, "১২", /* Bengali */
 	"1２" /* ASCII + fullwidth */, "𝟏𝟐" /* mathematical bold, non-BMP */, "4294967295", "4294967296", "99999999999999999999",
 	"1_2", "12a", "+12", "-1", "²" /* superscript two: isdigit, not isdecimal */, "①" /* circled one: not \d */, "½",
+	// The numeric boundaries: 2**31, 2**63 and 2**64 and the values just past them, and a long run of leading zeros.
+	"2147483647", "2147483648", "9223372036854775807", "9223372036854775808",
+	"18446744073709551615", "18446744073709551616", "18446744073709551617", "0000000000000000000000000012",
 }
 
 // prRefNameScenarios: refs/pull and refs/merge-requests with every digit class,
@@ -396,6 +402,13 @@ func identityScenarios() []localScenario {
 		"Ünï <u@example.com> 1700000000 +0000",
 		"Name <a@b> １７００００００００ +0000",
 		"Name <a@b> 1700000000 +２３５９",
+		"Name <a@b> 18446744073709551617 +0000",
+		"Name <a@b> 67768036191676799 +0000",
+		"Name <a@b> 67768036191676800 +0000",
+		"Name <a@b> 1700000000 +2400000000000",
+		"Name <a@b> 1700000000 +2399999999959",
+		"Name <a@b> 1700000000 +240000000100",
+		"Name <a@b> 1700000000 +18446744073709551617",
 		"Name <a@b> 1700000000 +2400",
 		"Name <a@b> 1700000000 +99999999999",
 		"Name <a@b> 253402300799 +0000",
@@ -418,11 +431,13 @@ func identityScenarios() []localScenario {
 		// Instants after the year 2262: Python writes the raw tick count of a year
 		// the DateTime64 column does not document; the client the port writes
 		// through wraps it, so the port refuses (named in the PR's RISK-NOTES).
-		refuses := false
+		refuses := ""
 		for _, epoch := range []string{" 99999999999 ", " 253402300799 ", " 10413792000 ", " 13569465600 "} {
-			refuses = refuses || strings.Contains(line, epoch)
+			if strings.Contains(line, epoch) {
+				refuses = "git"
+			}
 		}
-		out = append(out, localScenario{name: fmt.Sprintf("gen identity %02d", i), goRefuses: refuses, targets: []string{"git", "prs"}, build: func(f *fixture) {
+		out = append(out, localScenario{name: fmt.Sprintf("gen identity %02d", i), goRefusesOn: refuses, targets: []string{"git", "prs"}, build: func(f *fixture) {
 			f.write("a.txt", "a\n", 0o644)
 			f.git("add", "-A")
 			f.rawCommit(nil, nil, []byte("identity\n"), line, line)
@@ -545,6 +560,172 @@ func refValueScenarios() []localScenario {
 			first, second := twoCommits(f)
 			f.setRef("refs/pull/1/head", first)
 			f.setRef("refs/pull/2/head", v.build(f, first, second))
+		}})
+	}
+	return out
+}
+
+// richRepository is a repository with everything the sync reads: unicode paths (so
+// core.quotepath matters), a merged pull request, a tag and an open pull request ref.
+func richRepository(f *fixture, prNumber string) {
+	f.write("seed.txt", "seed\n", 0o644)
+	f.write("é.txt", "accent\n", 0o644)
+	f.write("日本語/ファイル.txt", "cjk\n", 0o644)
+	f.commit("seed\n")
+	f.git("checkout", "-q", "-b", "topic")
+	f.write("t.txt", "t\n", 0o644)
+	topic := f.commit("topic\n")
+	f.git("checkout", "-q", "main")
+	f.merge("topic", "Merge pull request #"+prNumber+" from acme/topic\n\nA title\n")
+	f.write("é.txt", "accent changed\n", 0o644)
+	f.commit("change\n", commitAt{tz: "+0530"})
+	f.git("tag", "release/1.0")
+	f.setRef("refs/pull/5/head", topic)
+}
+
+// ambientGitEnvScenarios: the process environment reaches git. GitPython pins the
+// repository's own git dir over an ambient GIT_DIR / GIT_COMMON_DIR (and an absolute
+// GIT_OBJECT_DIRECTORY) and lets every other GIT_* variable through; each variable
+// below names another repository, a path that does not exist, or a setting that
+// changes git's output, and both planes run under it.
+func ambientGitEnvScenarios() []localScenario {
+	type envCase struct {
+		name string
+		vars func(self, other string) map[string]string
+	}
+	one := func(key, value string) func(self, other string) map[string]string {
+		return func(self, other string) map[string]string { return map[string]string{key: value} }
+	}
+	config := func(pairs ...string) func(self, other string) map[string]string {
+		return func(self, other string) map[string]string {
+			env := map[string]string{"GIT_CONFIG_COUNT": fmt.Sprint(len(pairs) / 2)}
+			for i := 0; i < len(pairs); i += 2 {
+				env[fmt.Sprintf("GIT_CONFIG_KEY_%d", i/2)] = pairs[i]
+				env[fmt.Sprintf("GIT_CONFIG_VALUE_%d", i/2)] = pairs[i+1]
+			}
+			return env
+		}
+	}
+	cases := []envCase{
+		{"GIT_DIR names another repository", func(self, other string) map[string]string { return map[string]string{"GIT_DIR": other + "/.git"} }},
+		{"GIT_DIR names this repository", func(self, other string) map[string]string { return map[string]string{"GIT_DIR": self + "/.git"} }},
+		{"GIT_DIR does not exist", one("GIT_DIR", "/nonexistent/.git")},
+		{"GIT_DIR is relative", one("GIT_DIR", ".git")},
+		{"GIT_DIR is empty", one("GIT_DIR", "")},
+		{"GIT_COMMON_DIR names another repository", func(self, other string) map[string]string {
+			return map[string]string{"GIT_COMMON_DIR": other + "/.git"}
+		}},
+		{"GIT_DIR and GIT_COMMON_DIR name another repository", func(self, other string) map[string]string {
+			return map[string]string{"GIT_DIR": other + "/.git", "GIT_COMMON_DIR": other + "/.git"}
+		}},
+		{"GIT_OBJECT_DIRECTORY names another repository", func(self, other string) map[string]string {
+			return map[string]string{"GIT_OBJECT_DIRECTORY": other + "/.git/objects"}
+		}},
+		{"GIT_OBJECT_DIRECTORY does not exist", one("GIT_OBJECT_DIRECTORY", "/nonexistent/objects")},
+		{"GIT_OBJECT_DIRECTORY is relative", one("GIT_OBJECT_DIRECTORY", ".git/objects")},
+		{"GIT_ALTERNATE_OBJECT_DIRECTORIES names another repository", func(self, other string) map[string]string {
+			return map[string]string{"GIT_ALTERNATE_OBJECT_DIRECTORIES": other + "/.git/objects"}
+		}},
+		{"GIT_WORK_TREE names another repository", func(self, other string) map[string]string { return map[string]string{"GIT_WORK_TREE": other} }},
+		{"GIT_WORK_TREE does not exist", one("GIT_WORK_TREE", "/nonexistent")},
+		{"GIT_INDEX_FILE does not exist", one("GIT_INDEX_FILE", "/nonexistent/index")},
+		{"GIT_INDEX_FILE names another repository's index", func(self, other string) map[string]string {
+			return map[string]string{"GIT_INDEX_FILE": other + "/.git/index"}
+		}},
+		{"GIT_NAMESPACE", one("GIT_NAMESPACE", "ns")},
+		{"GIT_CEILING_DIRECTORIES", one("GIT_CEILING_DIRECTORIES", "/")},
+		{"GIT_DISCOVERY_ACROSS_FILESYSTEM", one("GIT_DISCOVERY_ACROSS_FILESYSTEM", "1")},
+		{"core.quotepath off", config("core.quotepath", "false")},
+		{"diff.renames off", config("diff.renames", "false")},
+		{"diff.noprefix", config("diff.noprefix", "true")},
+		{"core.abbrev 4", config("core.abbrev", "4")},
+		{"log.showSignature", config("log.showSignature", "true")},
+		{"i18n.commitEncoding latin1", config("i18n.commitEncoding", "ISO-8859-1")},
+		{"core.precomposeUnicode", config("core.precomposeUnicode", "true")},
+		{"color.ui always", config("color.ui", "always")},
+		{"diff.algorithm", config("diff.algorithm", "patience")},
+		{"core.worktree another repository", func(self, other string) map[string]string {
+			return config("core.worktree", other)(self, other)
+		}},
+		{"GIT_CONFIG_PARAMETERS", one("GIT_CONFIG_PARAMETERS", "'core.quotepath=false'")},
+		{"GIT_DIFF_OPTS", one("GIT_DIFF_OPTS", "--unified=0")},
+		{"GIT_EXTERNAL_DIFF", one("GIT_EXTERNAL_DIFF", "/bin/false")},
+		{"GIT_PAGER", one("GIT_PAGER", "/bin/false")},
+		{"PAGER", one("PAGER", "/bin/false")},
+		{"GIT_TRACE", one("GIT_TRACE", "1")},
+		{"GIT_TRACE2", one("GIT_TRACE2", "1")},
+		{"GIT_OPTIONAL_LOCKS 0", one("GIT_OPTIONAL_LOCKS", "0")},
+		{"GIT_LITERAL_PATHSPECS", one("GIT_LITERAL_PATHSPECS", "1")},
+		{"GIT_NO_REPLACE_OBJECTS", one("GIT_NO_REPLACE_OBJECTS", "1")},
+		{"GIT_GRAFT_FILE", one("GIT_GRAFT_FILE", "/nonexistent/graft")},
+		{"GIT_SHALLOW_FILE", one("GIT_SHALLOW_FILE", "/nonexistent/shallow")},
+		{"GIT_REPLACE_REF_BASE", one("GIT_REPLACE_REF_BASE", "refs/other/")},
+		{"GIT_ASKPASS", one("GIT_ASKPASS", "/bin/false")},
+		{"GIT_TERMINAL_PROMPT 0", one("GIT_TERMINAL_PROMPT", "0")},
+		{"GIT_AUTHOR_DATE and GIT_COMMITTER_DATE", func(self, other string) map[string]string {
+			return map[string]string{"GIT_AUTHOR_DATE": "1 +0000", "GIT_COMMITTER_DATE": "1 +0000"}
+		}},
+		{"LC_ALL", one("LC_ALL", "de_DE.UTF-8")},
+		{"LANGUAGE", one("LANGUAGE", "fr")},
+		{"LANG", one("LANG", "ja_JP.UTF-8")},
+		{"TZ", one("TZ", "Pacific/Auckland")},
+		{"GIT_EXEC_PATH does not exist", one("GIT_EXEC_PATH", "/nonexistent")},
+		{"GIT_PROGRESS_DELAY", one("GIT_PROGRESS_DELAY", "0")},
+	}
+	var out []localScenario
+	for _, c := range cases {
+		c := c
+		var other string
+		out = append(out, localScenario{
+			name: "gen env: " + c.name, targets: []string{"git", "prs"},
+			build: func(f *fixture) {
+				richRepository(f, "12")
+				b := newFixture(f.t, "other-repository")
+				richRepository(b, "99")
+				other = b.dir
+			},
+			envFn: func(f *fixture) map[string]string { return c.vars(f.dir, other) },
+		})
+	}
+	return out
+}
+
+// tipTimeScenarios: the committer time of the commit an open PR ref points at, over the
+// classes datetime.fromtimestamp treats in its own way (OK, past 9999, past 2**62, past 2**63).
+func tipTimeScenarios() []localScenario {
+	var out []localScenario
+	for _, epoch := range []string{"1700000000", "253402300799", "253402300800", "67768036191676799", "67768036191676800", "4611686018427387903", "4611686018427387904", "9223372036854775807", "9223372036854775808", "18446744073709551617"} {
+		epoch := epoch
+		refuses := ""
+		if epoch == "253402300799" {
+			refuses = "prs" // year 9999: Python writes it, the ClickHouse client cannot
+		}
+		out = append(out, localScenario{name: "gen tip time: " + epoch, targets: []string{"prs"}, goRefusesOn: refuses, build: func(f *fixture) {
+			f.write("a.txt", "a\n", 0o644)
+			f.commit("main\n")
+			tree := f.git("write-tree")
+			line := "Name <a@b> " + epoch + " +0000"
+			tip := f.object("commit", "tree "+tree+"\nauthor "+line+"\ncommitter "+line+"\n\ntip\n")
+			f.setRef("refs/pull/5/head", tip)
+		}})
+	}
+	return out
+}
+
+// linkedWorktreeScenarios: a linked worktree keeps its refs in the main repository's
+// common dir; tags and pull refs live there.
+func linkedWorktreeScenarios() []localScenario {
+	var out []localScenario
+	for _, packed := range []bool{false, true} {
+		packed := packed
+		out = append(out, localScenario{name: fmt.Sprintf("gen linked worktree with tags and refs packed=%v", packed), targets: []string{"git", "prs"}, build: func(f *fixture) {
+			richRepository(f, "12")
+			if packed {
+				f.git("pack-refs", "--all")
+			}
+			linked := filepath.Join(filepath.Dir(f.dir), filepath.Base(f.dir)+"-linked")
+			f.git("worktree", "add", "-q", "-b", "other", linked)
+			f.dir = linked
 		}})
 	}
 	return out

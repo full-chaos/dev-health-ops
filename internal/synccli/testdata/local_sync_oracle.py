@@ -38,11 +38,16 @@ def tag(value):
     return {"t": "str", "v": str(value)}
 
 
+_SET_BY_REQUEST = set()
+
+
 def run(request):
-    for name in MANAGED_ENV:
+    for name in [*MANAGED_ENV, *_SET_BY_REQUEST]:
         os.environ.pop(name, None)
+    _SET_BY_REQUEST.clear()
     for name, value in (request.get("env") or {}).items():
         os.environ[name] = value
+        _SET_BY_REQUEST.add(name)
     sink = io.StringIO()
     try:
         with contextlib.redirect_stderr(sink), contextlib.redirect_stdout(sink):

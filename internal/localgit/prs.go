@@ -3,6 +3,7 @@ package localgit
 import (
 	"context"
 	"fmt"
+	"math"
 	"regexp"
 	"strings"
 	"time"
@@ -97,7 +98,10 @@ func gitlabNumber(message string) (int, bool) {
 	}
 }
 
-// decimalValue is int() of a run of Unicode decimal digits.
+// decimalValue is int() of a run of Unicode decimal digits. Python's ints have no
+// limit; here a value past int64 saturates at math.MaxInt64, which every caller
+// treats the way it treats any too-large number (the UInt32 and Int32 columns
+// refuse it), so a long run of digits can never wrap into a small valid number.
 func decimalValue(digits string) (int, bool) {
 	value := 0
 	for _, r := range digits {
@@ -107,6 +111,9 @@ func decimalValue(digits string) (int, bool) {
 		digit, ok := unicodeDigit(r)
 		if !ok {
 			return 0, false
+		}
+		if value > (math.MaxInt-digit)/10 {
+			return math.MaxInt, true
 		}
 		value = value*10 + digit
 	}
@@ -197,6 +204,7 @@ func (r Repo) InferOpenPullRequests(ctx context.Context, now func() time.Time) (
 	if err != nil {
 		return nil, err
 	}
+	gitDir, _ := r.gitDir()
 	byNumber := map[int]PullRequest{}
 	var order []int
 	for _, name := range paths {
@@ -208,7 +216,7 @@ func (r Repo) InferOpenPullRequests(ctx context.Context, now func() time.Time) (
 		if !ok {
 			continue
 		}
-		tip, skip, err := r.refCommit(ctx, dir, name)
+		tip, skip, err := r.refCommit(ctx, gitDir, dir, name)
 		if err != nil {
 			return nil, err
 		}
@@ -242,8 +250,8 @@ func (r Repo) InferOpenPullRequests(ctx context.Context, now func() time.Time) (
 // it (dereferenceRef), its object's type is read without failing on a missing
 // object, and an annotated tag is peeled once. skip means Python skips the ref;
 // an error is an exception it does not catch.
-func (r Repo) refCommit(ctx context.Context, dir, name string) (tip string, skip bool, err error) {
-	hash, skip, err := dereferenceRef(dir, name)
+func (r Repo) refCommit(ctx context.Context, gitDir, dir, name string) (tip string, skip bool, err error) {
+	hash, skip, err := dereferenceRef(gitDir, dir, name)
 	if err != nil || skip {
 		return "", true, err
 	}

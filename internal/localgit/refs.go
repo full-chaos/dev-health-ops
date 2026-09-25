@@ -19,18 +19,21 @@ import (
 // packed-refs, which it opens as strict UTF-8.
 var errPackedRefsNotUTF8 = errors.New("packed-refs is not valid UTF-8 (GitPython reads it as strict UTF-8)")
 
-// commonDir is repo.common_dir: the directory holding refs/ and packed-refs
-// (the main .git of a linked worktree).
+// commonDir is repo.common_dir: an absolute GIT_COMMON_DIR when the environment
+// has one, else the `commondir` file of the git dir (relative to it), else the git
+// dir itself.
 func (r Repo) commonDir(ctx context.Context) (string, error) {
-	out, err := r.run(ctx, "rev-parse", "--git-common-dir")
-	if err != nil {
-		return "", err
+	gitDir, ok := r.gitDir()
+	if !ok {
+		return "", fmt.Errorf("%s is not a git directory (InvalidGitRepositoryError)", filepath.Join(r.Root, ".git"))
 	}
-	dir := strings.TrimSuffix(string(out), "\n")
-	if !filepath.IsAbs(dir) {
-		dir = filepath.Join(r.Root, dir)
+	if env, set := os.LookupEnv("GIT_COMMON_DIR"); set {
+		return filepath.Abs(env)
 	}
-	return dir, nil
+	if data, err := os.ReadFile(filepath.Join(gitDir, "commondir")); err == nil {
+		return filepath.Join(gitDir, strings.TrimRight(string(data), "\r\n")), nil
+	}
+	return gitDir, nil
 }
 
 // refPaths is SymbolicReference._iter_items(common_path): GitPython does not ask
@@ -171,13 +174,18 @@ var errRefCrash = errors.New("GitPython raises an exception it does not catch he
 // UnicodeDecodeError, which infer_open_pull_requests_from_refs catches and
 // answers by skipping the ref; an error is one it does not (AssertionError on an
 // empty file, IndexError on `ref:` alone, a loop it would follow forever).
-func dereferenceRef(dir, refPath string) (sha string, skip bool, err error) {
+func dereferenceRef(gitDir, dir, refPath string) (sha string, skip bool, err error) {
 	for hops := 0; hops < 100; hops++ {
 		if !checkRefNameValid(refPath) {
 			return "", true, nil
 		}
 		var tokens []string
-		content, readErr := os.ReadFile(filepath.Join(dir, filepath.FromSlash(refPath)))
+		base := dir // _git_dir: HEAD and its siblings live in the git dir, every other ref in the common dir
+		switch refPath {
+		case "HEAD", "ORIG_HEAD", "FETCH_HEAD", "index", "logs":
+			base = gitDir
+		}
+		content, readErr := os.ReadFile(filepath.Join(base, filepath.FromSlash(refPath)))
 		if readErr == nil {
 			if !utf8.Valid(content) {
 				return "", true, nil // UnicodeDecodeError is a ValueError

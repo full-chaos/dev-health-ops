@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"os"
 	"os/exec"
 	"regexp"
 	"strconv"
@@ -42,12 +41,12 @@ const (
 )
 
 // classifyEpoch mirrors datetime.fromtimestamp(epoch, utc) for a non-negative
-// epoch: ValueError once the year passes 9999, OSError from 2**62, OverflowError
-// from 2**63.
+// epoch: ValueError once the year passes 9999, OSError once it passes a C int
+// (epoch 67768036191676800), OverflowError from 2**63.
 func classifyEpoch(epoch int64, fits bool) int {
 	switch {
-	case !fits || epoch >= 1<<62:
-		return timeOtherError
+	case !fits || epoch >= 67768036191676800:
+		return timeOtherError // OSError (year past a C int) or OverflowError (past int64)
 	case epoch > 253402300799:
 		return timeValueError
 	}
@@ -60,12 +59,14 @@ func classifyEpoch(epoch int64, fits bool) int {
 // committed time is before since (it is `break`, not a filter: a commit with a
 // skewed date ends the list). An unborn HEAD is Python's uncaught ValueError.
 func (r Repo) IterCommitsSince(ctx context.Context, since *time.Time) ([]Commit, error) {
-	head, err := r.run(ctx, "rev-parse", "--verify", "HEAD")
+	// Repo.iter_commits(): rev = self.head.commit, dereferenced by GitPython itself
+	// (HEAD in the git dir, the branch in the common dir), then `git rev-list <sha> --`.
+	// An unborn HEAD, a missing ref and a ref that is not a commit raise, uncaught.
+	start, err := r.headCommit(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("head has no commit: %w", err)
+		return nil, err
 	}
-	_ = head
-	out, err := r.run(ctx, "rev-list", "HEAD", "--")
+	out, err := r.run(ctx, "rev-list", start, "--")
 	if err != nil {
 		return nil, err
 	}
@@ -99,7 +100,7 @@ func (r Repo) readCommits(ctx context.Context, hashes []string) ([]Commit, error
 	}
 	command := exec.CommandContext(ctx, bin, "cat-file", "--batch")
 	command.Dir = r.Root
-	command.Env = append(os.Environ(), "LANGUAGE=C", "LC_ALL=C")
+	command.Env = r.env()
 	command.Stdin = strings.NewReader(strings.Join(hashes, "\n") + "\n")
 	stdout, err := command.StdoutPipe()
 	if err != nil {
@@ -167,6 +168,9 @@ func parseCommit(hash string, raw []byte) Commit {
 	name, email, epoch := parseActorAndDate(string(committerLine))
 	commit.CommitterName, commit.CommitterEmail = name, email
 	commit.TimeClass = classifyEpoch(epoch.value, epoch.fits)
+	if commit.TimeClass == timeOK && epoch.tzOverflow {
+		commit.TimeClass = timeOtherError
+	}
 	if commit.TimeClass == timeOK {
 		commit.CommittedAt = time.Unix(epoch.value, 0).UTC()
 	}
@@ -178,6 +182,9 @@ func parseCommit(hash string, raw []byte) Commit {
 type epochValue struct {
 	value int64
 	fits  bool
+	// tzOverflow: the timezone offset is too large for timedelta(seconds=...), which
+	// tzoffset() builds when committed_datetime is read (OverflowError).
+	tzOverflow bool
 }
 
 func parseActorAndDate(line string) (name, email *string, epoch epochValue) {
@@ -187,6 +194,7 @@ func parseActorAndDate(line string) (name, email *string, epoch epochValue) {
 	if match := reActorEpoch.FindStringSubmatch(line); match != nil {
 		actor = match[1]
 		epoch = unicodeDigitsToInt64(match[2])
+		epoch.tzOverflow = tzOverflows(match[3])
 	} else if match := reOnlyActor.FindStringSubmatch(line); match != nil {
 		actor = match[1]
 	} else {
@@ -221,4 +229,47 @@ func unicodeDigitsToInt64(digits string) epochValue {
 		value = value*10 + int64(digit)
 	}
 	return epochValue{value: value, fits: true}
+}
+
+// headCommit is `repo.head.commit`: HEAD is dereferenced through symbolic refs like
+// GitPython does, an annotated tag is peeled once, and a target that is not a commit
+// is an error.
+func (r Repo) headCommit(ctx context.Context) (string, error) {
+	commonDir, err := r.commonDir(ctx)
+	if err != nil {
+		return "", err
+	}
+	gitDir, _ := r.gitDir()
+	hash, skip, err := dereferenceRef(gitDir, commonDir, "HEAD")
+	if err != nil {
+		return "", err
+	}
+	if skip {
+		return "", fmt.Errorf("head has no commit (ValueError: the reference does not exist or cannot be parsed)")
+	}
+	kind, ok := r.objectType(ctx, hash)
+	if !ok {
+		return "", fmt.Errorf("head points at a missing object %s", hash)
+	}
+	tip, ok := r.peelToCommit(ctx, hash, kind)
+	if !ok {
+		return "", fmt.Errorf("head points at a %s, not a commit (TypeError)", kind)
+	}
+	return tip, nil
+}
+
+// tzOverflows is utctz_to_altz + timedelta(seconds=...): the offset "+HHMM" read as an
+// integer gives (|n|//100)*3600 + (|n|%100)*60 seconds, and a timedelta holds at most
+// 999999999 days.
+func tzOverflows(offset string) bool {
+	digits := strings.TrimLeft(offset, "+-")
+	magnitude := unicodeDigitsToInt64(digits)
+	if !magnitude.fits {
+		return true
+	}
+	hundreds := magnitude.value / 100
+	if hundreds > 24000000000 {
+		return true
+	}
+	return hundreds*3600+(magnitude.value%100)*60 > 86399999999999
 }

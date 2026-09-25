@@ -1,6 +1,8 @@
 """The Python edge dispatcher (CHAOS-4697) -- the hop that decides, per
-``/graphql`` request, whether query-api (Go) owns the operation, mints a
-signed effective-principal envelope, forwards, and falls back to Python
+``/graphql`` request, whether query-api (Go) owns the operation, proves the
+authenticated identity (a signed effective-principal envelope, or, when
+``QUERY_API_INTERNAL_URL`` is set, four internal identity headers to
+query-api's internal listener: CHAOS-6144 P3), forwards, and falls back to Python
 answers a typed error on a Go-plane failure. Without this module, ``go_api_routing_state`` rows
 enable nothing: ``PostgresSwitch`` is only consulted *inside* query-api,
 and nothing routed a request there before this.
@@ -127,9 +129,14 @@ from .go_api_document_digest import document_digest
 from .go_api_operation_catalog import is_mutation_operation, operation_for_digest
 from .go_api_registry import lookup_routing_state
 from .go_api_schema_digest import current_schema_digest
-from .principal_envelope import issue_effective_principal_envelope
+from .principal_envelope import (
+    effective_principal_identity,
+    issue_effective_principal_envelope,
+)
 
 if TYPE_CHECKING:
+    from dev_health_ops.api.services.auth import AuthenticatedUser
+
     from .context import GraphQLContext
 
 logger = logging.getLogger(__name__)
@@ -137,6 +144,46 @@ logger = logging.getLogger(__name__)
 __all__ = ["GoApiDispatchRouter"]
 
 _DEFAULT_DISPATCH_TIMEOUT_SECONDS = 5.0
+
+#: CHAOS-6144 P3. When set, the edge states the identity it authenticated as the
+#: four internal identity headers and sends them to THIS URL: query-api's
+#: INTERNAL listener (its own Service port that no Ingress names), which alone
+#: honours them. Unset (or blank) = the signed envelope to GO_API_QUERY_API_URL,
+#: as before: the gate that lets this ship before the deploy half. Never point
+#: it at an Ingress host: the ingress strips the headers, and query-api refuses a
+#: request carrying neither carrier (401).
+_INTERNAL_URL_ENV = "QUERY_API_INTERNAL_URL"
+
+#: The internal identity header names: a cross-repo contract with query-api
+#: (``internal/queryapi/internalidentity``), which honours them only on its
+#: internal listener, and with the ingress, which strips them from every inbound
+#: request. Do not rename without the deploy change.
+_INTERNAL_ORG_ID_HEADER = "X-DH-Internal-Org-Id"
+_INTERNAL_ROLE_HEADER = "X-DH-Internal-Role"
+_INTERNAL_SUPERUSER_HEADER = "X-DH-Internal-Superuser"
+_INTERNAL_IMPERSONATION_ACTIVE_HEADER = "X-DH-Internal-Impersonation-Active"
+
+
+def _internal_query_api_url() -> str | None:
+    value = (os.getenv(_INTERNAL_URL_ENV) or "").strip()
+    return value or None
+
+
+def _internal_identity_headers(user: AuthenticatedUser) -> dict[str, str]:
+    """The four internal identity headers for ``user``: exactly the fields the
+    effective-principal envelope carries and query-api reads (org, role,
+    superuser, impersonation active), derived by the ONE function the envelope
+    issuer also uses, so the two carriers cannot disagree. The two flags are
+    exactly ``true`` or ``false``: query-api refuses anything else."""
+    identity = effective_principal_identity(user)
+    return {
+        _INTERNAL_ORG_ID_HEADER: identity.org_id,
+        _INTERNAL_ROLE_HEADER: identity.role,
+        _INTERNAL_SUPERUSER_HEADER: "true" if user.is_superuser else "false",
+        _INTERNAL_IMPERSONATION_ACTIVE_HEADER: (
+            "true" if identity.impersonation_active else "false"
+        ),
+    }
 
 
 #: The canonical schema digest producer, now shared (CHAOS go-api routing
@@ -585,25 +632,35 @@ class GoApiDispatchRouter(GraphQLRouter[_Context, _RootValue]):
         if context.user is None:
             # Never forward unauthenticated -- fail closed to Python.
             return self._fallback(selected_operation, "unauthenticated")
-        if context.tier is None or context.licensed_features is None:
-            # Best-effort resolution in get_context can legitimately fail
-            # (see context.py's docstring); the envelope issuer requires
-            # both as non-optional kwargs, so this is fail-closed, not a
-            # bug to paper over with a default tier/empty feature list.
-            return self._fallback(selected_operation, "envelope_inputs_missing")
+        internal_url = _internal_query_api_url()
+        if internal_url is not None:
+            # The internal identity carrier (CHAOS-6144 P3): plain headers to
+            # the internal listener; nothing is signed, and tier /
+            # licensed_features are not part of the identity query-api reads.
+            target_url = internal_url
+            carrier_headers = _internal_identity_headers(context.user)
+        else:
+            if context.tier is None or context.licensed_features is None:
+                # Best-effort resolution in get_context can legitimately fail
+                # (see context.py's docstring); the envelope issuer requires
+                # both as non-optional kwargs, so this is fail-closed, not a
+                # bug to paper over with a default tier/empty feature list.
+                return self._fallback(selected_operation, "envelope_inputs_missing")
 
-        try:
-            envelope = issue_effective_principal_envelope(
-                context.user,
-                tier=context.tier,
-                licensed_features=context.licensed_features,
-            )
-        except Exception:
-            logger.exception(
-                "go_api_dispatch.envelope_signing_failed",
-                extra={"operation": selected_operation},
-            )
-            return self._fallback(selected_operation, "envelope_signing_error")
+            try:
+                envelope = issue_effective_principal_envelope(
+                    context.user,
+                    tier=context.tier,
+                    licensed_features=context.licensed_features,
+                )
+            except Exception:
+                logger.exception(
+                    "go_api_dispatch.envelope_signing_failed",
+                    extra={"operation": selected_operation},
+                )
+                return self._fallback(selected_operation, "envelope_signing_error")
+            target_url = base_url
+            carrier_headers = {"Authorization": f"Bearer {envelope}"}
 
         try:
             outbound_body = await _build_outbound_body(
@@ -617,7 +674,7 @@ class GoApiDispatchRouter(GraphQLRouter[_Context, _RootValue]):
             return self._fallback(selected_operation, "build_outbound_body_error")
 
         return await self._forward_to_go(
-            base_url, selected_operation, doc_digest, envelope, outbound_body
+            target_url, selected_operation, doc_digest, carrier_headers, outbound_body
         )
 
     async def _forward_to_go(
@@ -625,7 +682,7 @@ class GoApiDispatchRouter(GraphQLRouter[_Context, _RootValue]):
         base_url: str,
         selected_operation: str,
         doc_digest: str,
-        envelope: str,
+        carrier_headers: dict[str, str],
         outbound_body: bytes,
     ) -> Response:
         timeout = _dispatch_timeout_seconds()
@@ -636,7 +693,7 @@ class GoApiDispatchRouter(GraphQLRouter[_Context, _RootValue]):
                 f"{base_url.rstrip('/')}/query",
                 content=outbound_body,
                 headers={
-                    "Authorization": f"Bearer {envelope}",
+                    **carrier_headers,
                     "Content-Type": "application/json",
                 },
                 timeout=timeout,

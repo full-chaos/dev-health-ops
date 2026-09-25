@@ -474,6 +474,107 @@ async def test_reachable_modes_forward_and_serve_go_response(
     assert seen["body"] == original_bytes  # verbatim
 
 
+_IDENTITY_HEADERS = (
+    "x-dh-internal-org-id",
+    "x-dh-internal-role",
+    "x-dh-internal-superuser",
+    "x-dh-internal-impersonation-active",
+)
+
+
+def _capture_outbound(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    seen: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["url"] = str(request.url)
+        seen["headers"] = request.headers
+        return httpx.Response(200, json={"data": {"thing": {"id": "1"}}})
+
+    monkeypatch.setattr(
+        go_api_dispatcher, "_get_http_client", lambda: _mock_transport(handler)
+    )
+    return seen
+
+
+async def test_internal_url_set_sends_the_four_identity_headers_and_no_bearer(
+    router: GoApiDispatchRouter,
+    routing_row_mode,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """CHAOS-6144 P3: with QUERY_API_INTERNAL_URL set the edge states the
+    identity it authenticated as exactly the four internal headers, each once,
+    to the INTERNAL url, with NO Authorization (query-api refuses both
+    carriers) and no envelope minted (tier/licensed_features are not needed)."""
+    routing_row_mode("primary")
+    monkeypatch.setenv("QUERY_API_INTERNAL_URL", "http://query-api-internal.test:8091")
+
+    def _must_not_mint(*args, **kwargs):
+        raise AssertionError("the envelope must not be minted on the header carrier")
+
+    monkeypatch.setattr(
+        go_api_dispatcher, "issue_effective_principal_envelope", _must_not_mint
+    )
+    seen = _capture_outbound(monkeypatch)
+    context = _context(user=_sample_user(), tier=None, licensed_features=None)
+
+    result = await router._maybe_dispatch_to_go(_post_request(TEST_QUERY), context)
+
+    assert result is not None and result.status_code == 200
+    assert seen["url"] == "http://query-api-internal.test:8091/query"
+    headers = seen["headers"]
+    assert headers.get_list("x-dh-internal-org-id") == [
+        "11111111-1111-4111-8111-111111111111"
+    ]
+    assert headers.get_list("x-dh-internal-role") == ["admin"]
+    assert headers.get_list("x-dh-internal-superuser") == ["false"]
+    assert headers.get_list("x-dh-internal-impersonation-active") == ["false"]
+    assert headers.get("authorization") is None
+
+
+@pytest.mark.parametrize("value", [None, "", "   "])
+async def test_internal_url_unset_or_blank_is_todays_envelope_path(
+    router: GoApiDispatchRouter,
+    routing_row_mode,
+    valid_envelope_inputs,
+    monkeypatch: pytest.MonkeyPatch,
+    value: str | None,
+):
+    """The gate: unset (or blank) is unchanged behaviour: the signed envelope as
+    a bearer to GO_API_QUERY_API_URL, and none of the identity headers."""
+    routing_row_mode("primary")
+    if value is None:
+        monkeypatch.delenv("QUERY_API_INTERNAL_URL", raising=False)
+    else:
+        monkeypatch.setenv("QUERY_API_INTERNAL_URL", value)
+    seen = _capture_outbound(monkeypatch)
+    context = _context(user=_sample_user(), tier=LicenseTier.TEAM, licensed_features=[])
+
+    result = await router._maybe_dispatch_to_go(_post_request(TEST_QUERY), context)
+
+    assert result is not None and result.status_code == 200
+    assert seen["url"] == "http://query-api.test:8090/query"
+    assert seen["headers"].get("authorization") == "Bearer fake.envelope.jwt"
+    assert all(seen["headers"].get(name) is None for name in _IDENTITY_HEADERS)
+
+
+async def test_internal_url_alone_does_not_turn_the_dispatcher_on(
+    router: GoApiDispatchRouter,
+    routing_row_mode,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """GO_API_QUERY_API_URL stays the master kill switch."""
+    routing_row_mode("primary")
+    monkeypatch.delenv("GO_API_QUERY_API_URL")
+    monkeypatch.setenv("QUERY_API_INTERNAL_URL", "http://query-api-internal.test:8091")
+    seen = _capture_outbound(monkeypatch)
+    context = _context(user=_sample_user(), tier=LicenseTier.TEAM, licensed_features=[])
+
+    result = await router._maybe_dispatch_to_go(_post_request(TEST_QUERY), context)
+
+    assert result is None
+    assert "url" not in seen
+
+
 async def test_go_timeout_answers_typed_error(
     router: GoApiDispatchRouter,
     routing_row_mode,

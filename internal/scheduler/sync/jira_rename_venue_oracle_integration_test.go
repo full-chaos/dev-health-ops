@@ -120,19 +120,18 @@ func TestJiraRenameVenueOracleMatchesLivePython(t *testing.T) {
 	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &pythonOutcomes); err != nil || len(pythonOutcomes) != len(cases) {
 		t.Fatalf("decode python outcomes: %v\n%s", err, output)
 	}
-	completed := 0
-	for _, outcome := range pythonOutcomes {
-		if outcome == "ok" {
-			completed++
+	// Every case is built to complete: a Python failure here is a harness
+	// or fixture fault, never agreement to be matched.
+	for index, outcome := range pythonOutcomes {
+		if outcome != "ok" {
+			t.Fatalf("Python case %d did not complete: %s", index, outcome)
 		}
 	}
-	if completed == 0 {
-		t.Fatalf("no Python case completed: %v", pythonOutcomes)
-	}
 
-	// The Go side runs as the api role: the sync config create and update
-	// routes run this discovery on that role, so its grants (the widened
-	// sync_watermarks UPDATE/DELETE included) are exercised here.
+	// The Go side runs as the api role: the sync config create route (and
+	// the update route, once served) runs this discovery on that role, so its
+	// grants (the widened sync_watermarks UPDATE/DELETE included) are
+	// exercised here.
 	pool, err := pgxpool.New(ctx, venue.GoAPIDatabaseURI(t))
 	if err != nil {
 		t.Fatal(err)

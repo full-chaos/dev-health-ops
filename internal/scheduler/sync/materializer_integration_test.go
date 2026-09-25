@@ -58,7 +58,9 @@ CREATE TABLE public.integration_datasets (
 );
 CREATE TABLE public.sync_watermarks (
  org_id text NOT NULL, source_id text NOT NULL, dataset_key text NOT NULL,
- repo_id text NOT NULL, target text NOT NULL, last_synced_at timestamptz
+ repo_id text NOT NULL, target text NOT NULL, last_synced_at timestamptz,
+ id uuid NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
+ updated_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE TABLE public.organizations (id uuid PRIMARY KEY, tier text);
 CREATE TABLE public.org_licenses (

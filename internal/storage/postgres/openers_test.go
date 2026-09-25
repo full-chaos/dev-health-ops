@@ -38,6 +38,14 @@ const (
 	kindTest openerKind = "test"
 )
 
+// otherBoundaries is how many DSN-only boundaries (secrets.NewBoundary) a
+// `boundary` file may still build, for a database that is not PostgreSQL (a Valkey
+// URI): a file that builds one for PostgreSQL too would print the resolved
+// credentials, so any other count fails.
+var otherBoundaries = map[string]int{
+	"internal/fixturescli/fixturescli.go": 1, // the VALKEY_URI boundary
+}
+
 var openers = map[string]struct {
 	kind openerKind
 	why  string
@@ -85,14 +93,14 @@ func repoRoot(t *testing.T) string {
 	}
 }
 
-// calls names the selector calls (pkg.Func) a file makes.
-func fileCalls(t *testing.T, path string) map[string]bool {
+// fileCalls counts the selector calls (pkg.Func) a file makes.
+func fileCalls(t *testing.T, path string) map[string]int {
 	t.Helper()
 	parsed, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
 	if err != nil {
 		t.Fatalf("%s: %v", path, err)
 	}
-	found := map[string]bool{}
+	found := map[string]int{}
 	ast.Inspect(parsed, func(node ast.Node) bool {
 		call, ok := node.(*ast.CallExpr)
 		if !ok {
@@ -100,9 +108,9 @@ func fileCalls(t *testing.T, path string) map[string]bool {
 		}
 		if selector, ok := call.Fun.(*ast.SelectorExpr); ok {
 			if pkg, ok := selector.X.(*ast.Ident); ok {
-				found[pkg.Name+"."+selector.Sel.Name] = true
+				found[pkg.Name+"."+selector.Sel.Name]++
 			} else {
-				found["."+selector.Sel.Name] = true
+				found["."+selector.Sel.Name]++
 			}
 		}
 		return true
@@ -130,7 +138,7 @@ func TestEveryPostgresOpenerIsClassified(t *testing.T) {
 		}
 		calls := fileCalls(t, path)
 		for _, opener := range []string{"pgx.Connect", "pgx.ConnectConfig", "pgxpool.New", "pgxpool.NewWithConfig"} {
-			if calls[opener] {
+			if calls[opener] > 0 {
 				relative, _ := filepath.Rel(root, path)
 				opened[filepath.ToSlash(relative)] = true
 			}
@@ -157,15 +165,18 @@ func TestEveryPostgresOpenerIsClassified(t *testing.T) {
 		calls := fileCalls(t, filepath.Join(root, path))
 		switch class.kind {
 		case kindBoundary:
-			if !calls["pgstorage.Boundary"] && !calls["postgres.Boundary"] {
+			if calls["pgstorage.Boundary"]+calls["postgres.Boundary"] == 0 {
 				t.Errorf("%s is classified %q (%s) but does not call the resolved-credential Boundary", path, class.kind, class.why)
 			}
+			if got := calls["secrets.NewBoundary"]; got != otherBoundaries[path] {
+				t.Errorf("%s builds %d DSN-only secrets.NewBoundary boundaries, the table allows %d (only for a database that is not PostgreSQL): a DSN-only boundary leaves the credentials pgx resolved from the environment", path, got, otherBoundaries[path])
+			}
 		case kindGeneric:
-			if !calls["secrets.RedactedConnectError"] {
+			if calls["secrets.RedactedConnectError"] == 0 {
 				t.Errorf("%s is classified %q (%s) but does not return secrets.RedactedConnectError", path, class.kind, class.why)
 			}
 		case kindHelper:
-			if !calls["secrets.WithRedactedCauseAlso"] {
+			if calls["secrets.WithRedactedCauseAlso"] == 0 {
 				t.Errorf("%s is classified %q (%s) but does not call secrets.WithRedactedCauseAlso", path, class.kind, class.why)
 			}
 		}

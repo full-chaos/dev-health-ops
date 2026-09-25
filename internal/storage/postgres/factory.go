@@ -133,11 +133,20 @@ func resolvedCredentials(poolConfig *pgxpool.Config) []string {
 // boundary here. A URI pgx cannot parse gets the URI's own components (the parse
 // error, which the driver returns again, carries no resolved credential).
 func Boundary(uri string) secrets.Boundary {
-	poolConfig, err := parseConfig(uri)
-	if err != nil {
-		return secrets.NewBoundary(uri)
+	// The connection parser first: it is what pgx.Connect uses and what
+	// pgxpool.ParseConfig delegates to after it strips the pool_* parameters, so the
+	// login and password it settles on are the ones both openers dial with. The pool
+	// parser alone rejects a URI (pool_max_conns=0) that pgx.Connect accepts, which
+	// must not cost the boundary its resolved credentials.
+	for _, candidate := range []string{uri, normalizeURI(uri)} {
+		if config, err := pgx.ParseConfig(candidate); err == nil {
+			return secrets.NewBoundaryWith(uri, config.User, config.Password)
+		}
 	}
-	return secrets.NewBoundaryWith(uri, resolvedCredentials(poolConfig)...)
+	if poolConfig, err := parseConfig(uri); err == nil {
+		return secrets.NewBoundaryWith(uri, resolvedCredentials(poolConfig)...)
+	}
+	return secrets.NewBoundary(uri)
 }
 
 func parseConfig(uri string) (*pgxpool.Config, error) {

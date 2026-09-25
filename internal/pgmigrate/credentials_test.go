@@ -15,8 +15,15 @@ import (
 // failure text, and no verb that opens PostgreSQL itself prints them.
 func TestVerbsRedactCredentialsThatComeFromTheEnvironment(t *testing.T) {
 	refusing := fakepg.StartRefusing(t)
+	for _, uri := range refusing.URIs() {
+		verbsRedact(t, refusing, uri)
+	}
+}
+
+func verbsRedact(t *testing.T, refusing fakepg.Refusing, uri string) {
+	t.Helper()
 	resolve := ResolveDSN(func(secrets.LookupEnv, io.Writer) (secrets.Value, string, bool) {
-		return secrets.NewValue(refusing.URI), "test", true
+		return secrets.NewValue(uri), "test", true
 	})
 	lookup := func(key string) (string, bool) {
 		if key == CutoverEnv {
@@ -32,8 +39,9 @@ func TestVerbsRedactCredentialsThatComeFromTheEnvironment(t *testing.T) {
 			}
 		}
 		var stdout, stderr bytes.Buffer
+		before := refusing.Connections()
 		code := run(context.Background(), cli.Env{Lookup: lookup, Stdout: &stdout, Stderr: &stderr})
-		refusing.RequireConnected(t)
+		refusing.RequireConnectedSince(t, before)
 		if code == cli.ExitOK {
 			t.Fatalf("%s: the refusing server let the verb succeed", verb)
 		}

@@ -381,3 +381,17 @@ var twoColumnDescription = func() []byte {
 	binary.BigEndian.PutUint32(out[1:], uint32(len(body)+4))
 	return append(out, body...)
 }()
+
+// URIs are the credential-free URIs a raw pgx.Connect verb must redact the resolved
+// credentials for: the plain one, and one the pool parser rejects (pool_max_conns=0)
+// while pgx.Connect accepts it.
+func (r Refusing) URIs() []string { return []string{r.URI, r.URI + "&pool_max_conns=0"} }
+
+// RequireConnectedSince fails the test when no connection arrived after the count
+// `before` (r.Connections() taken before the run).
+func (r Refusing) RequireConnectedSince(t testing.TB, before int) {
+	t.Helper()
+	if r.Connections() <= before {
+		t.Fatal("no connection reached the refusing server during this run: the verb never tried to log in (the test measures nothing)")
+	}
+}

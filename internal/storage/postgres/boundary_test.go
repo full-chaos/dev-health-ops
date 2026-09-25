@@ -96,3 +96,25 @@ func TestBoundaryKeepsTheURIComponents(t *testing.T) {
 		t.Errorf("an unparsable URI's password is in %q", got)
 	}
 }
+
+// A URI the pool parser rejects (pool_max_conns=0) and pgx.Connect accepts still gets the
+// resolved credentials in its boundary: the raw-connection verbs dial with it.
+func TestBoundaryKeepsResolvedCredentialsWhenThePoolParserRefusesTheURI(t *testing.T) {
+	host, port := fakepg.Start(t)
+	t.Setenv("PGUSER", envLogin)
+	t.Setenv("PGPASSWORD", envPassword)
+	t.Setenv("PGSERVICEFILE", "")
+	uri := fmt.Sprintf("postgres://%s:%d/appdb?sslmode=disable&pool_max_conns=0", host, port)
+	if _, err := parseConfig(uri); err == nil {
+		t.Fatal("the pool parser accepts pool_max_conns=0: the repro is void")
+	}
+	err := refusal(t, uri)
+	for _, secret := range []string{envLogin, envPassword} {
+		if !strings.Contains(err.Error(), secret) {
+			t.Fatalf("the driver error does not carry %q (the repro is void): %v", secret, err)
+		}
+		if got := Boundary(uri).Redact(err).Error(); strings.Contains(got, secret) {
+			t.Errorf("Boundary(uri) left %q in %q", secret, got)
+		}
+	}
+}

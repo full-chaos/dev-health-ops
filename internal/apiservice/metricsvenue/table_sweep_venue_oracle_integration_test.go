@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -26,6 +27,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
@@ -78,6 +80,14 @@ def _dump():
             json.dump({family: sorted(routes) for family, routes in _fired.items()}, handle)
 
 atexit.register(_dump)
+`
+
+// sweepMigrateProgram runs the Alembic heads on POSTGRES_URI, as the
+// venue's "migrate" mode does.
+const sweepMigrateProgram = `
+from alembic import command
+from dev_health_ops.migrate import _make_alembic_config
+command.upgrade(_make_alembic_config(), "heads")
 `
 
 // noRequest is the plugin's label for a metric recorded outside any route.
@@ -179,10 +189,35 @@ func checkSweptTable(t *testing.T, fired map[string]map[string]bool, served func
 // family -> the set of route labels it fired under. It fails, rather than
 // returning an empty map, when the run fails or fires nothing: an empty
 // sweep would read as "fires under no route" for every row.
+//
+// The tests that need a live PostgreSQL read DEV_HEALTH_POSTGRES_TEST_URI,
+// and under CI they fail without it rather than skip. The sweep gives them
+// a PostgreSQL of its own, as the Python test job does, so every test runs
+// in every environment and none is silently skipped out of the sweep. It
+// migrates that database to the Alembic heads first, as the venue does:
+// some of these tests expect the app schema, which the Python test job
+// only has because its migration tests (outside tests/api) ran first.
 func runSweep(t *testing.T) map[string]map[string]bool {
 	t.Helper()
 	root := venueRoot()
 	python := pyoracle.Resolve(t, root)
+	postgres, err := containers.StartPostgres(context.Background())
+	if err != nil {
+		t.Fatalf("start the sweep's PostgreSQL: %v", err)
+	}
+	t.Cleanup(func() { _ = postgres.Close(context.Background()) })
+	postgresURI, err := url.Parse(postgres.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	postgresURI.Scheme, postgresURI.RawQuery = "postgresql+asyncpg", ""
+	migrate := exec.Command(python, "-c", sweepMigrateProgram)
+	migrate.Dir = root
+	migrate.Env = append(os.Environ(), "PYTHONPATH="+filepath.Join(root, "src"),
+		"POSTGRES_URI="+postgresURI.String(), "DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1", "OTEL_SDK_DISABLED=true")
+	if migrated, err := migrate.CombinedOutput(); err != nil {
+		t.Fatalf("migrate the sweep's PostgreSQL: %v\n%s", err, lastLines(string(migrated), 20))
+	}
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "counter_sweep_plugin.py"), []byte(sweepPlugin), 0o600); err != nil {
 		t.Fatal(err)
@@ -193,15 +228,16 @@ func runSweep(t *testing.T) map[string]map[string]bool {
 	command.Dir = root
 	command.Env = append(os.Environ(),
 		"PYTHONPATH="+filepath.Join(root, "src")+string(os.PathListSeparator)+dir,
-		"COUNTER_SWEEP_OUT="+filepath.Join(dir, "out"))
+		"COUNTER_SWEEP_OUT="+filepath.Join(dir, "out"),
+		"DEV_HEALTH_POSTGRES_TEST_URI="+postgresURI.String())
 	var output bytes.Buffer
 	command.Stdout, command.Stderr = &output, &output
 	started := time.Now()
-	err := command.Run()
+	err = command.Run()
 	elapsed := time.Since(started).Round(time.Second)
 	summary := lastLines(output.String(), 5)
 	if err != nil {
-		t.Fatalf("the Python api's tests failed under the sweep (%s): %v\n%s", elapsed, err, summary)
+		t.Fatalf("the Python api's tests failed under the sweep (%s): %v\n%s\n%s", elapsed, err, failureLines(output.String()), summary)
 	}
 	t.Logf("sweep: the Python api's route tests ran in %s\n%s", elapsed, summary)
 
@@ -294,6 +330,18 @@ func dhoAPIServes(t *testing.T) func(string) bool {
 		}
 		return false
 	}
+}
+
+// failureLines keeps pytest's short-summary lines (FAILED and ERROR, one
+// per test), which the last lines of a long run do not always hold.
+func failureLines(text string) string {
+	var kept []string
+	for _, line := range strings.Split(text, "\n") {
+		if strings.HasPrefix(line, "FAILED ") || strings.HasPrefix(line, "ERROR ") {
+			kept = append(kept, line)
+		}
+	}
+	return strings.Join(kept, "\n")
 }
 
 func lastLines(text string, n int) string {

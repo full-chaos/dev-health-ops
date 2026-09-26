@@ -49,8 +49,12 @@ def test_the_real_tree_passes(real_routes):
     stubs = checker.stub_routes(real_routes, REPO_ROOT)
     # CHAOS-6241's 32 deleted bodies are recognised as stubs (a recogniser that
     # found none would make every other assertion here vacuous).
-    assert len(stubs) == 32
-    assert {checker.normalize(route["path"]) for route in stubs} <= set(manifest)
+    # ... and the 14 sync-admin routes of CHAOS-6846 (go-api, rev187).
+    assert len(stubs) == 46
+    # a template row covers its static siblings (the ingress rule), so cover, not equality
+    for route in stubs:
+        path = checker.normalize(route["path"])
+        assert any(checker.covers(template, path) for template in manifest), path
 
 
 def test_a_stub_whose_path_leaves_the_manifest_fails(real_routes):

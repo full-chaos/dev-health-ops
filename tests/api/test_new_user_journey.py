@@ -4,7 +4,7 @@ import importlib
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 import pytest_asyncio
@@ -31,7 +31,6 @@ from dev_health_ops.models.licensing import OrgLicense, TierLimit
 from dev_health_ops.models.settings import (
     IntegrationCredential,
     JobRun,
-    JobRunStatus,
     ScheduledJob,
     SyncConfiguration,
 )
@@ -230,96 +229,6 @@ async def test_register_then_login_returns_tokens(journey_app):
     assert "access_token" in data
     assert "needs_onboarding" in data
     assert data["needs_onboarding"] is False
-
-
-@pytest.mark.asyncio
-async def test_full_journey_register_login_create_credential_create_sync_config(
-    journey_app,
-):
-    ac, current_user, session_maker, ch_store = journey_app
-
-    email = "journey3@example.com"
-    reg = await ac.post(
-        "/api/v1/auth/register",
-        json={"email": email, "password": VALID_PASSWORD},
-    )
-    assert reg.status_code == 201
-    reg_data = reg.json()
-
-    async with session_maker() as session:
-        result = await session.execute(select(User).where(User.email == email))
-        user = result.scalar_one()
-        user.is_verified = True
-        await session.commit()
-
-    login = await ac.post(
-        "/api/v1/auth/login",
-        json={"email": email, "password": VALID_PASSWORD},
-    )
-    assert login.status_code == 200
-
-    current_user["value"] = AuthenticatedUser(
-        user_id=reg_data["user_id"],
-        email=email,
-        org_id=reg_data["org_id"],
-        role="owner",
-        is_superuser=False,
-    )
-
-    cred_resp = await ac.post(
-        "/api/v1/admin/credentials",
-        json={
-            "provider": "github",
-            "name": "default",
-            "credentials": {"token": "ghp_test_token"},
-        },
-    )
-    assert cred_resp.status_code == 200
-    assert cred_resp.json()["provider"] == "github"
-
-    sync_resp = await ac.post(
-        "/api/v1/admin/sync-configs",
-        json={
-            "name": "journey-sync",
-            "provider": "github",
-            "sync_targets": [],
-            "sync_options": {"all_repos": True},
-        },
-    )
-    assert sync_resp.status_code == 201
-    config_id = sync_resp.json()["id"]
-
-    # The config is created integration-native (linked to an Integration), so it
-    # is triggerable: the manual trigger routes through the fan-out planner.
-    mock_dispatch = MagicMock()
-    mock_dispatch.apply_async.return_value = MagicMock(id="journey-task-id")
-    with patch(
-        "dev_health_ops.workers.sync_units.dispatch_sync_run.apply_async",
-        mock_dispatch.apply_async,
-    ):
-        trigger_resp = await ac.post(f"/api/v1/admin/sync-configs/{config_id}/trigger")
-    assert trigger_resp.status_code == 202, trigger_resp.text
-    mock_dispatch.apply_async.assert_not_called()
-
-    trigger_data = trigger_resp.json()
-    async with session_maker() as session:
-        job_run = await session.get(JobRun, uuid.UUID(trigger_data["run_id"]))
-        sync_run = await session.get(SyncRun, uuid.UUID(trigger_data["sync_run_id"]))
-        outbox = (
-            await session.execute(
-                select(SyncDispatchOutbox).where(
-                    SyncDispatchOutbox.sync_run_id
-                    == uuid.UUID(trigger_data["sync_run_id"]),
-                    SyncDispatchOutbox.kind == "reference_discovery",
-                )
-            )
-        ).scalar_one()
-
-    assert job_run is not None
-    assert job_run.status == JobRunStatus.PENDING.value
-    assert sync_run is not None
-    assert sync_run.status == "planned"
-    assert outbox.status == "pending"
 
 
 @pytest.mark.asyncio

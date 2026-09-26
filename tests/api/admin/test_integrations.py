@@ -1641,14 +1641,6 @@ def test_sync_config_router_still_importable():
 
 
 @pytest.mark.asyncio
-async def test_sync_configs_list_still_works(client):
-    """Existing /sync-configs endpoint must still return 200."""
-    ac, _ = client
-    resp = await ac.get("/api/v1/admin/sync-configs")
-    assert resp.status_code == 200
-
-
-@pytest.mark.asyncio
 async def test_trigger_sync_empty_selection_is_zero_units_not_all(client):
     # Regression (Codex Wave 3): an explicit empty source/dataset list must
     # mean ZERO units, not "sync everything" (None). Truthiness collapsed [] to

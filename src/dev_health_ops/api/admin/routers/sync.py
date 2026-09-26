@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import os
 import uuid
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
@@ -9,7 +8,6 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Protocol, cast
 
-from croniter import croniter as Croniter
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -30,6 +28,7 @@ from dev_health_ops.api.admin.schemas import (
     SyncCoverageSummaryResponse,
     SyncRunJobEnrichment,
 )
+from dev_health_ops.api.go_served import GO_API, raise_served_by_go_api
 from dev_health_ops.api.services.configuration import (
     IntegrationCredentialsService,
     SyncConfigurationService,
@@ -37,14 +36,9 @@ from dev_health_ops.api.services.configuration import (
 from dev_health_ops.api.services.integrations import IntegrationDatasetService
 from dev_health_ops.api.services.licensing import TierLimitService
 from dev_health_ops.api.services.sync_coverage import (
-    HISTORY_LOOKBACK_DAYS,
-    SyncCoverageComplexityError,
-    SyncCoveragePendingError,
-    build_sync_coverage_summary,
     ensure_utc,
     invalidate_sync_coverage_projection,
 )
-from dev_health_ops.discovery.repos import jira_key_norm
 from dev_health_ops.metrics.prometheus import (
     SYNC_TARGET_DATASET_DRIFT_REPAIRED_TOTAL,
 )
@@ -58,7 +52,6 @@ from dev_health_ops.models.integrations import (
     SyncRunUnitStatus,
 )
 from dev_health_ops.models.settings import (
-    JobRun,
     JobRunStatus,
     JobStatus,
     ScheduledJob,
@@ -68,14 +61,8 @@ from dev_health_ops.providers.github.work_item_options import (
     canonical_github_work_item_runtime_options,
     snapshot_github_work_item_runtime_options,
 )
-from dev_health_ops.providers.team_capabilities import (
-    all_auto_import_capabilities,
-    malformed_auto_import_category_values,
-    unsupported_auto_import_categories,
-)
 from dev_health_ops.sync.canonical_incident_gate import (
     CanonicalIncidentFeatureDisabledError,
-    is_canonical_incident_feature_enabled_async,
     require_canonical_incident_feature_async,
     sync_targets_require_canonical_incident_feature,
 )
@@ -84,7 +71,6 @@ from dev_health_ops.sync.datasets import (
     planner_dataset_keys,
     supported_legacy_targets,
 )
-from dev_health_ops.sync.discovery import discover_sources_for_integration
 from dev_health_ops.sync.error_sanitize import sanitize_error_text
 from dev_health_ops.sync.execution_trigger import (
     await_sync_execution_trigger_materialized,
@@ -98,7 +84,6 @@ from dev_health_ops.sync.pagerduty_repair import (
     repair_pagerduty_operational_integration,
 )
 from dev_health_ops.sync.planner import BackfillSelector as SyncBackfillSelector
-from dev_health_ops.utils.datetime import validate_timezone_name
 
 from .common import get_session
 
@@ -1663,40 +1648,16 @@ async def get_auto_import_capabilities(
     renders an unsupported category disabled with this reason rather than
     letting an operator select a checkbox that would write nothing.
     """
-
-    return {
-        provider: {
-            "teams": capability.teams,
-            "projects": capability.projects,
-            "members": capability.members,
-            "reasons": dict(capability.reasons),
-        }
-        for provider, capability in all_auto_import_capabilities().items()
-    }
+    raise_served_by_go_api(
+        "/api/v1/admin/sync-configs/auto-import-capabilities", GO_API
+    )
 
 
 @router.get("/sync-targets")
 async def get_provider_sync_targets(
-    session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
 ) -> dict[str, list[str]]:
-    feature_enabled = await is_canonical_incident_feature_enabled_async(
-        session,
-        org_id,
-    )
-    if feature_enabled:
-        return {
-            provider: list(targets)
-            for provider, targets in PROVIDER_SYNC_TARGETS.items()
-        }
-    return {
-        provider: [
-            target
-            for target in targets
-            if not sync_targets_require_canonical_incident_feature((target,))
-        ]
-        for provider, targets in PROVIDER_SYNC_TARGETS.items()
-    }
+    raise_served_by_go_api("/api/v1/admin/sync-targets", GO_API)
 
 
 @router.get(
@@ -1722,76 +1683,9 @@ async def list_sync_configs(
             "Set to true for support or rollback access."
         ),
     ),
-    session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
 ) -> list[SyncConfigResponse]:
-    svc = SyncConfigurationService(session, org_id)
-    configs = await svc.list_all(active_only=active_only)
-    if parent_only:
-        configs = [c for c in configs if c.parent_id is None]
-
-    # HIDE_MIGRATED_CHILD_CONFIGS: when enabled, filter out deprecated child
-    # configs from the default list response. A config is considered a
-    # "migrated child" when any of the following are true:
-    #   - parent_id is set (legacy child config), OR
-    #   - source_id is set (linked to an integration-era source).
-    # The parent SyncConfiguration gets integration_id set by the
-    # migration and is the rollback anchor, so it is NOT hidden.
-    # Callers may pass ?include_migrated=true to bypass this filter for
-    # support or rollback access.
-    _hide_migrated = os.getenv("HIDE_MIGRATED_CHILD_CONFIGS", "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
-    if _hide_migrated and not include_migrated:
-        configs = [
-            c
-            for c in configs
-            if (
-                getattr(c, "parent_id", None) is None
-                and getattr(c, "source_id", None) is None
-            )
-        ]
-
-    # Build children count map without lazy-loading relationships
-    from sqlalchemy import func, select
-
-    children_counts: dict[str, int] = {}
-    parent_id_col = getattr(SyncConfiguration, "parent_id")
-    sync_configuration_id_col = getattr(SyncConfiguration, "id")
-    parent_ids = [
-        getattr(config, "id")
-        for config in configs
-        if getattr(config, "parent_id") is None
-    ]
-    if parent_ids:
-        stmt = (
-            select(parent_id_col, func.count(sync_configuration_id_col))
-            .where(parent_id_col.in_(parent_ids))
-            .group_by(parent_id_col)
-        )
-        rows = (await session.execute(stmt)).all()
-        children_counts = {str(pid): cnt for pid, cnt in rows}
-
-    credential_ids_by_integration = await _integration_credential_ids_for_configs(
-        session, configs, org_id
-    )
-
-    results = []
-    for c in configs:
-        cc = children_counts.get(str(getattr(c, "id")))
-        integration_id = getattr(c, "integration_id", None)
-        credential_id = (
-            credential_ids_by_integration.get(str(integration_id))
-            if integration_id is not None
-            else None
-        )
-        results.append(
-            _sync_config_to_response(c, children_count=cc, credential_id=credential_id)
-        )
-    return results
+    raise_served_by_go_api("/api/v1/admin/sync-configs", GO_API)
 
 
 def _gitlab_group_from_options(sync_options: dict[str, Any]) -> str:
@@ -1967,7 +1861,6 @@ async def _resolve_gitlab_batch_projects(
 )
 async def batch_create_sync_configs(
     payload: SyncConfigBatchCreate,
-    session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
 ) -> SyncConfigBatchResponse:
     """Create a parent sync config backed by the integration/source/dataset model.
@@ -2002,343 +1895,23 @@ async def batch_create_sync_configs(
         This endpoint always creates the parent config only (zero children) plus
         the integration/source/dataset rows it routes through.
     """
-    await _require_canonical_incident_sync_access(
-        session,
-        org_id,
-        payload.sync_targets,
-    )
-    await _acquire_repo_limit_create_lock(session, org_id)
-    current_count = await _active_repo_usage_count_for_limit(session, org_id)
-    new_count = len(payload.repos)
-
-    def _check_limit(sync_session) -> tuple[bool, str | None]:
-        tier_svc = TierLimitService(sync_session)
-        return tier_svc.check_repo_limit(uuid.UUID(org_id), current_count + new_count)
-
-    allowed, reason = await session.run_sync(_check_limit)
-    if not allowed:
-        raise HTTPException(
-            status_code=403,
-            detail=reason or f"Repo limit exceeded (adding {new_count} repos)",
-        )
-
-    provider = payload.provider.lower()
-
-    parent_options = dict(payload.sync_options)
-    parent_options.pop("repo", None)  # parent has no single repo
-    if payload.schedule_cron is not None:
-        parent_options["schedule_cron"] = payload.schedule_cron
-    if payload.timezone is not None:
-        parent_options["timezone"] = payload.timezone
-    if payload.initial_sync_depth is not None:
-        parent_options["initial_sync_depth"] = payload.initial_sync_depth
-
-    # CHAOS-4323: same rejection as the single-config create/update endpoints
-    # — batch create must not silently persist an auto-import category this
-    # provider cannot supply (codex adversarial-review finding).
-    malformed_categories = malformed_auto_import_category_values(parent_options)
-    if malformed_categories:
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "message": "auto-import category flags must be true or false",
-                "malformed_auto_import_category_values": {
-                    key: str(value) for key, value in malformed_categories.items()
-                },
-            },
-        )
-    unsupported_categories = unsupported_auto_import_categories(
-        provider, parent_options
-    )
-    if unsupported_categories:
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "message": (
-                    f"{provider} does not support the requested auto-import categories"
-                ),
-                "unsupported_auto_import_categories": unsupported_categories,
-            },
-        )
-
-    # Resolve GitLab repos (and the effective instance URL) before creating
-    # the parent so a self-hosted gitlab_url derived from the credential is
-    # persisted into both parent and child options — otherwise children with
-    # a valid project_id would later sync against the gitlab.com default.
-    gitlab_projects: dict[str, tuple[int, str]] = {}
-    if provider == "gitlab" and payload.repos:
-        gitlab_projects, effective_gitlab_url = await _resolve_gitlab_batch_projects(
-            session, org_id, payload
-        )
-        if effective_gitlab_url != DEFAULT_GITLAB_URL:
-            parent_options["gitlab_url"] = effective_gitlab_url
-
-    parent, integration = await _create_planner_managed_config(
-        session,
-        org_id,
-        name=payload.name,
-        provider=payload.provider,
-        credential_id=payload.credential_id,
-        sync_targets=payload.sync_targets,
-        parent_options=parent_options,
-        schedule_cron=payload.schedule_cron,
-        timezone=payload.timezone,
-        build_source_rows=lambda integration_id, config_id: _planner_source_rows(
-            payload,
-            parent_options,
-            gitlab_projects,
-            org_id,
-            integration_id,
-            config_id,
-        ),
-    )
-
-    return SyncConfigBatchResponse(
-        parent=_sync_config_to_response(
-            parent, children_count=0, credential_id=integration.credential_id
-        ),
-        children=[],
-        total_created=0,
-    )
+    raise_served_by_go_api("/api/v1/admin/sync-configs/batch", GO_API)
 
 
 @router.post("/sync-configs", response_model=SyncConfigResponse, status_code=201)
 async def create_sync_config(
     payload: SyncConfigCreate,
-    session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
 ) -> SyncConfigResponse:
-    await _require_canonical_incident_sync_access(
-        session,
-        org_id,
-        payload.sync_targets,
-    )
-    # Fix 1 (HIGH): Enforce repo limit before creating a new sync config.
-    await _acquire_repo_limit_create_lock(session, org_id)
-    current_count = await _active_repo_usage_count_for_limit(session, org_id)
-    # CHAOS-4582 (codex P2): a Jira config with no explicit project scope
-    # materializes ZERO integration_sources rows (see
-    # _jira_config_materializes_zero_sources / _non_git_source_rows below) --
-    # charging it 1 here would wrongly 403 an org sitting exactly at its
-    # repo limit for a config that consumes no slot at all.
-    source_increment = (
-        0
-        if _jira_config_materializes_zero_sources(
-            payload.provider, payload.sync_options or {}
-        )
-        else 1
-    )
-
-    def _check_repo_limit(sync_session) -> tuple[bool, str | None]:
-        tier_svc = TierLimitService(sync_session)
-        return tier_svc.check_repo_limit(
-            uuid.UUID(org_id), current_count + source_increment
-        )
-
-    allowed, reason = await session.run_sync(_check_repo_limit)
-    if not allowed:
-        raise HTTPException(status_code=403, detail=reason or "Repo limit exceeded")
-
-    # Fix 5 (LOW): Validate initial_sync_depth against tier limits.
-    sync_options = _sync_options_with_top_level_fields(
-        payload.sync_options,
-        schedule_cron=payload.schedule_cron,
-        timezone=payload.timezone,
-        initial_sync_depth=payload.initial_sync_depth,
-    )
-
-    # CHAOS-4323: reject requesting an auto-import category this provider
-    # cannot supply (e.g. auto_import_projects on a GitHub config) rather than
-    # silently accepting a checkbox that would write nothing. Malformed
-    # (non-bool) values are rejected first so a Python/Go coercion mismatch
-    # can never reach either reader (codex adversarial-review finding).
-    malformed_categories = malformed_auto_import_category_values(sync_options)
-    if malformed_categories:
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "message": "auto-import category flags must be true or false",
-                "malformed_auto_import_category_values": {
-                    key: str(value) for key, value in malformed_categories.items()
-                },
-            },
-        )
-    unsupported_categories = unsupported_auto_import_categories(
-        payload.provider, sync_options
-    )
-    if unsupported_categories:
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "message": (
-                    f"{payload.provider} does not support the requested "
-                    "auto-import categories"
-                ),
-                "unsupported_auto_import_categories": unsupported_categories,
-            },
-        )
-
-    initial_sync_depth = sync_options.get("initial_sync_depth")
-    if initial_sync_depth is not None:
-
-        def _check_backfill_depth(sync_session) -> tuple[bool, str | None]:
-            tier_svc = TierLimitService(sync_session)
-            return tier_svc.check_backfill_limit(
-                uuid.UUID(org_id), int(initial_sync_depth)
-            )
-
-        depth_allowed, depth_reason = await session.run_sync(_check_backfill_depth)
-        if not depth_allowed:
-            raise HTTPException(
-                status_code=403,
-                detail=depth_reason or "initial_sync_depth exceeds tier limit",
-            )
-
-    # Fix 3 (MEDIUM) & Fix 4 (MEDIUM): Validate schedule_cron interval and gate
-    # scheduled jobs behind the "scheduled_jobs" feature (Team+ only).
-    schedule_cron = sync_options.get("schedule_cron")
-    if schedule_cron:
-        # Fix 4: Gate scheduled_jobs feature — Community tier cannot set schedules.
-        async def _check_scheduled_jobs_feature(
-            payload: SyncConfigCreate = payload,
-            session: AsyncSession = session,
-            org_id: str = org_id,
-        ) -> None:
-            from dev_health_ops.licensing.gating import _check_org_feature_async
-
-            feature = "scheduled_jobs"
-            if not await _check_org_feature_async(
-                feature, {"session": session, "org_id": org_id}
-            ):
-                from dev_health_ops.licensing import has_feature
-
-                if not has_feature(feature, log_denial=False):
-                    raise HTTPException(
-                        status_code=403,
-                        detail="scheduled_jobs feature requires Team tier or higher",
-                    )
-
-        await _check_scheduled_jobs_feature()
-
-        # Fix 3: Validate the cron interval against the tier's min_sync_interval_hours.
-        try:
-            itr = Croniter(schedule_cron)
-            next1 = itr.get_next(float)
-            next2 = itr.get_next(float)
-            interval_hours = (next2 - next1) / 3600.0
-        except Exception as exc:
-            raise HTTPException(
-                status_code=422, detail=f"Invalid cron expression: {exc}"
-            )
-
-        try:
-            validate_timezone_name(sync_options.get("timezone"))
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc))
-
-        def _get_min_interval(sync_session) -> float | None:
-            tier_svc = TierLimitService(sync_session)
-            val = tier_svc.get_limit(uuid.UUID(org_id), "min_sync_interval_hours")
-            return float(val) if val is not None else None
-
-        min_interval = await session.run_sync(_get_min_interval)
-        if min_interval is not None and interval_hours < min_interval:
-            raise HTTPException(
-                status_code=403,
-                detail=(
-                    f"Sync interval {interval_hours:.2f}h is below the minimum "
-                    f"{min_interval}h allowed for your tier"
-                ),
-            )
-
-    # github/gitlab specify repos either explicitly (via POST /sync-configs/batch)
-    # or token-wide via all_repos. A plain create with neither would materialize
-    # zero sources and plan zero units while still returning 202 (a silent no-op),
-    # so reject it and steer the caller to the right path.
-    if payload.provider.lower() in {"github", "gitlab"} and not bool(
-        sync_options.get("all_repos")
-    ):
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "github/gitlab sync configs require repository selection via "
-                "POST /sync-configs/batch, or sync_options.all_repos=true"
-            ),
-        )
-
-    def _build_sources(
-        integration_id: uuid.UUID, config_id: uuid.UUID
-    ) -> list[IntegrationSource]:
-        if payload.provider.lower() in {"github", "gitlab", "pagerduty"}:
-            return []
-        return _non_git_source_rows(
-            payload.provider,
-            sync_options,
-            payload.name,
-            org_id,
-            integration_id,
-            config_id,
-        )
-
-    try:
-        config, integration = await _create_planner_managed_config(
-            session,
-            org_id,
-            name=payload.name,
-            provider=payload.provider,
-            credential_id=payload.credential_id,
-            sync_targets=payload.sync_targets,
-            parent_options=sync_options,
-            schedule_cron=payload.schedule_cron,
-            timezone=payload.timezone,
-            build_source_rows=_build_sources,
-        )
-    except PagerDutyOperationalTargetError as exc:
-        await session.rollback()
-        raise HTTPException(status_code=409, detail=str(exc)) from None
-
-    if _jira_config_materializes_zero_sources(payload.provider, sync_options):
-        # CHAOS-4584: a Jira config with no explicit project scope used to
-        # be stuck at zero sources forever (CHAOS-4582 made that outcome
-        # safe, not real). Run the same discover_repos_for_config seam
-        # github/gitlab use (via the /integrations/{id}/discover endpoint)
-        # right here at creation time so a jira config with no explicit
-        # project_key/project_id actually gets real per-project sources
-        # materialized immediately. Best-effort: a
-        # discovery failure (bad credential, Jira unreachable) must not fail
-        # config creation -- the config is still valid and can be
-        # re-discovered later via that endpoint once the credential works.
-        # discover_sources_for_integration internally isolates its DB
-        # writes in a SAVEPOINT and applies the org's max_repos cap itself
-        # (codex review, CHAOS-4584 round 1 P1/P2, round 2 P1) -- both
-        # apply uniformly to every discovery entry point, not just this one.
-        try:
-            await session.run_sync(
-                lambda sync_session: discover_sources_for_integration(
-                    sync_session, integration.id
-                )
-            )
-        except Exception:
-            logger.exception(
-                "jira_project_discovery_at_creation_failed",
-                extra={"org_id": org_id, "integration_id": str(integration.id)},
-            )
-
-    return _sync_config_to_response(config, credential_id=integration.credential_id)
+    raise_served_by_go_api("/api/v1/admin/sync-configs", GO_API)
 
 
 @router.get("/sync-configs/{config_id}", response_model=SyncConfigResponse)
 async def get_sync_config(
     config_id: str,
-    session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
 ) -> SyncConfigResponse:
-    svc = SyncConfigurationService(session, org_id)
-    config = await svc.get_by_id(config_id)
-    if config is None:
-        raise HTTPException(status_code=404, detail="Sync configuration not found")
-    credential_id = await _integration_credential_id_for_config(session, config, org_id)
-    return _sync_config_to_response(config, credential_id=credential_id)
+    raise_served_by_go_api("/api/v1/admin/sync-configs/{config_id}", GO_API)
 
 
 @router.get(
@@ -2347,14 +1920,11 @@ async def get_sync_config(
 )
 async def get_sync_config_repositories(
     config_id: str,
-    session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
 ) -> SyncConfigRepositorySelection:
-    svc = SyncConfigurationService(session, org_id)
-    config = await svc.get_by_id(config_id)
-    if config is None:
-        raise HTTPException(status_code=404, detail="Sync configuration not found")
-    return await _repository_selection_for_config(session, org_id, config)
+    raise_served_by_go_api(
+        "/api/v1/admin/sync-configs/{config_id}/repositories", GO_API
+    )
 
 
 @router.get(
@@ -2363,44 +1933,9 @@ async def get_sync_config_repositories(
 )
 async def get_sync_config_coverage(
     config_id: str,
-    session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
 ) -> SyncCoverageSummaryResponse:
-    try:
-        svc = SyncConfigurationService(session, org_id)
-        config = await svc.get_by_id(config_id)
-        if config is None:
-            raise HTTPException(status_code=404, detail="Sync configuration not found")
-        payload = await build_sync_coverage_summary(
-            session,
-            org_id,
-            config,
-            lookback_days=HISTORY_LOOKBACK_DAYS,
-        )
-    except SyncCoveragePendingError as exc:
-        raise HTTPException(
-            status_code=503,
-            detail={
-                "code": "sync_coverage_projection_pending",
-                "message": str(exc),
-            },
-            headers={"Retry-After": "30"},
-        ) from exc
-    except SyncCoverageComplexityError as exc:
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "code": "sync_coverage_too_large",
-                "message": (
-                    "Coverage scope or history is too large to compute safely. "
-                    "Reduce the sync configuration scope and retry."
-                ),
-                "stage": exc.stage,
-                "limit": exc.limit,
-                "observed": exc.observed,
-            },
-        ) from exc
-    return SyncCoverageSummaryResponse.model_validate(payload)
+    raise_served_by_go_api("/api/v1/admin/sync-configs/{config_id}/coverage", GO_API)
 
 
 @router.put(
@@ -2410,377 +1945,28 @@ async def get_sync_config_coverage(
 async def replace_sync_config_repositories(
     config_id: str,
     payload: SyncConfigRepositorySelectionUpdate,
-    session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
 ) -> SyncConfigRepositorySelection:
-    svc = SyncConfigurationService(session, org_id)
-    config = await svc.get_by_id(config_id)
-    if config is None:
-        raise HTTPException(status_code=404, detail="Sync configuration not found")
-    await _require_canonical_incident_sync_access(
-        session,
-        org_id,
-        list(config.sync_targets or []),
+    raise_served_by_go_api(
+        "/api/v1/admin/sync-configs/{config_id}/repositories", GO_API
     )
-    if str(getattr(config, "provider", "")).lower() not in {"github", "gitlab"}:
-        raise HTTPException(
-            status_code=400,
-            detail="Repository selection is only supported for GitHub and GitLab configs",
-        )
-    return await _replace_planner_repository_selection(session, org_id, config, payload)
 
 
 @router.patch("/sync-configs/{config_id}", response_model=SyncConfigResponse)
 async def update_sync_config(
     config_id: str,
     payload: SyncConfigUpdate,
-    session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
 ) -> SyncConfigResponse:
-    svc = SyncConfigurationService(session, org_id)
-    config = await svc.get_by_id(config_id)
-    if config is None:
-        raise HTTPException(status_code=404, detail="Sync configuration not found")
-    await _require_canonical_incident_sync_access(
-        session,
-        org_id,
-        payload.sync_targets
-        if payload.sync_targets is not None
-        else list(config.sync_targets or []),
-    )
-
-    # Fix 3 (MEDIUM) & Fix 4 (MEDIUM): Validate schedule_cron when updating sync_options.
-    # PATCH semantics for schedule fields: an explicitly provided null clears the
-    # stored value, while an omitted field leaves it untouched. Top-level fields
-    # own these keys and override any (possibly stale) copies nested inside
-    # payload.sync_options, so a stale client payload can never resurrect an old
-    # schedule.
-    provided_fields = payload.model_fields_set
-    top_level_schedule_fields = {
-        "schedule_cron": payload.schedule_cron,
-        "timezone": payload.timezone,
-        "initial_sync_depth": payload.initial_sync_depth,
-    }
-    sync_options = dict(payload.sync_options or {})
-    cleared_keys: set[str] = set()
-    for key, value in top_level_schedule_fields.items():
-        if key not in provided_fields:
-            continue
-        if value is None:
-            cleared_keys.add(key)
-            sync_options.pop(key, None)
-        else:
-            sync_options[key] = value
-    sync_options_provided = payload.sync_options is not None or bool(
-        provided_fields & top_level_schedule_fields.keys()
-    )
-
-    schedule_cron = sync_options.get("schedule_cron")
-    if schedule_cron:
-        # Fix 4: Gate scheduled_jobs feature — Community tier cannot set schedules.
-        from dev_health_ops.licensing.gating import _check_org_feature_async
-
-        feature = "scheduled_jobs"
-        if not await _check_org_feature_async(
-            feature, {"session": session, "org_id": org_id}
-        ):
-            from dev_health_ops.licensing import has_feature
-
-            if not has_feature(feature, log_denial=False):
-                raise HTTPException(
-                    status_code=403,
-                    detail="scheduled_jobs feature requires Team tier or higher",
-                )
-
-        # Fix 3: Validate the cron interval against the tier's min_sync_interval_hours.
-        try:
-            itr = Croniter(schedule_cron)
-            next1 = itr.get_next(float)
-            next2 = itr.get_next(float)
-            interval_hours = (next2 - next1) / 3600.0
-        except Exception as exc:
-            raise HTTPException(
-                status_code=422, detail=f"Invalid cron expression: {exc}"
-            )
-
-        try:
-            validate_timezone_name(sync_options.get("timezone"))
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc))
-
-        def _get_min_interval(sync_session) -> float | None:
-            tier_svc = TierLimitService(sync_session)
-            val = tier_svc.get_limit(uuid.UUID(org_id), "min_sync_interval_hours")
-            return float(val) if val is not None else None
-
-        min_interval = await session.run_sync(_get_min_interval)
-        if min_interval is not None and interval_hours < min_interval:
-            raise HTTPException(
-                status_code=403,
-                detail=(
-                    f"Sync interval {interval_hours:.2f}h is below the minimum "
-                    f"{min_interval}h allowed for your tier"
-                ),
-            )
-
-    mutable_config = cast(_MutableSyncConfiguration, config)
-    if payload.sync_targets is not None:
-        previous_sync_targets = list(getattr(config, "sync_targets") or [])
-        mutable_config.sync_targets = payload.sync_targets
-        config_integration_id = getattr(config, "integration_id", None)
-        # IntegrationDataset rows are shared across every SyncConfiguration
-        # that points at the same integration_id (CHAOS-2762: a planner
-        # parent plus its per-repo children can share one Integration).
-        # _load_enabled_datasets (sync/planner.py) always reads that SHARED
-        # row set for the whole integration; only a source_id-scoped CHILD
-        # config additionally narrows which dataset_keys it requests
-        # (trigger_routing.py::_dataset_keys_for_config). So reconciling from
-        # a child's sync_targets would let one repo's edit silently disable a
-        # dataset for every sibling config sharing the integration (Codex
-        # adversarial-review finding, round 2). Only the config that
-        # represents the WHOLE integration (source_id is None) may mutate
-        # the shared rows.
-        #
-        # The config's own id is required, not optional: the reconciliation
-        # excludes it from the sibling-config union by id, and without one it
-        # could not tell this config's stale persisted targets apart from a
-        # sibling's live selection. Skipping is the safe branch.
-        config_row_id = getattr(config, "id", None)
-        if (
-            config_integration_id is not None
-            and getattr(config, "source_id", None) is None
-            and config_row_id is not None
-        ):
-            await _reconcile_dataset_rows_for_sync_targets(
-                session,
-                org_id,
-                config_integration_id,
-                str(getattr(config, "provider", "")),
-                payload.sync_targets,
-                previous_sync_targets,
-                config_id=config_row_id,
-            )
-    if sync_options_provided:
-        merged_options = {
-            **dict(getattr(config, "sync_options") or {}),
-            **sync_options,
-        }
-        for key in cleared_keys:
-            merged_options.pop(key, None)
-        # CHAOS-4323: same rejection as create, evaluated against the fully
-        # MERGED options so a category left on from the config's prior state
-        # (not just one this PATCH explicitly sets) is still caught.
-        malformed_categories = malformed_auto_import_category_values(merged_options)
-        if malformed_categories:
-            raise HTTPException(
-                status_code=422,
-                detail={
-                    "message": "auto-import category flags must be true or false",
-                    "malformed_auto_import_category_values": {
-                        key: str(value) for key, value in malformed_categories.items()
-                    },
-                },
-            )
-        unsupported_categories = unsupported_auto_import_categories(
-            str(getattr(config, "provider", "")), merged_options
-        )
-        if unsupported_categories:
-            raise HTTPException(
-                status_code=422,
-                detail={
-                    "message": (
-                        f"{getattr(config, 'provider', '')} does not support "
-                        "the requested auto-import categories"
-                    ),
-                    "unsupported_auto_import_categories": unsupported_categories,
-                },
-            )
-        mutable_config.sync_options = merged_options
-    if (
-        str(getattr(config, "provider", "")).lower() == "github"
-        and (integration_id := getattr(config, "integration_id", None)) is not None
-    ):
-        current_options = dict(getattr(config, "sync_options") or {})
-        integration = await session.get(Integration, integration_id)
-        scoped_integration = (
-            integration
-            if integration is not None and str(integration.org_id) == org_id
-            else None
-        )
-        integration_options = (
-            dict(scoped_integration.config or {})
-            if scoped_integration is not None
-            else {}
-        )
-        dataset_result = await session.execute(
-            select(IntegrationDataset).where(
-                IntegrationDataset.org_id == org_id,
-                IntegrationDataset.integration_id == integration_id,
-                IntegrationDataset.dataset_key == "work-items",
-            )
-        )
-        work_items_dataset = dataset_result.scalar_one_or_none()
-        dataset_options = (
-            dict(work_items_dataset.options or {})
-            if work_items_dataset is not None
-            else {}
-        )
-
-        # A planner repair can durably snapshot legacy runtime defaults in the
-        # Integration and work-items dataset before the older
-        # SyncConfiguration row has those keys. Read every durable store before
-        # consulting the environment; explicit PATCH values win last. Dataset
-        # options outrank the integration for the same reason they do in the
-        # planner repair: they are the dataset-specific execution contract.
-        canonical_runtime_options = snapshot_github_work_item_runtime_options(
-            {
-                **current_options,
-                **integration_options,
-                **dataset_options,
-                **sync_options,
-            }
-        )
-        mutable_config.sync_options = {
-            **current_options,
-            **canonical_runtime_options,
-        }
-        if scoped_integration is not None:
-            scoped_integration.config = {
-                **integration_options,
-                **canonical_runtime_options,
-            }
-        if work_items_dataset is not None:
-            work_items_dataset.options = {
-                **dataset_options,
-                **canonical_runtime_options,
-            }
-    if (
-        str(getattr(config, "provider", "")).lower() == "pagerduty"
-        and "service_repository_mappings" in sync_options
-        and isinstance(sync_options["service_repository_mappings"], dict)
-        and (integration_id := getattr(config, "integration_id", None)) is not None
-    ):
-        dataset_result = await session.execute(
-            select(IntegrationDataset).where(
-                IntegrationDataset.org_id == org_id,
-                IntegrationDataset.integration_id == integration_id,
-                IntegrationDataset.dataset_key == "services",
-            )
-        )
-        services_dataset = dataset_result.scalar_one_or_none()
-        if services_dataset is not None:
-            services_dataset.options = {
-                **dict(services_dataset.options or {}),
-                "service_repository_mappings": sync_options[
-                    "service_repository_mappings"
-                ],
-            }
-    was_inactive = not bool(getattr(config, "is_active", True))
-    if payload.is_active is not None:
-        mutable_config.is_active = payload.is_active
-    await session.flush()
-    updated = config
-
-    updated_integration_id = getattr(updated, "integration_id", None)
-    if (
-        jira_key_norm(str(getattr(updated, "provider", ""))) == "jira"
-        and updated_integration_id is not None
-        and (sync_options_provided or (was_inactive and bool(updated.is_active)))
-    ):
-        # codex review (gate round 2, P1 x2): PATCH previously persisted a
-        # jira config's sync_options (or reactivated it) without ever
-        # re-running discovery -- every scope-change/cap-recovery mechanism
-        # built across rounds 3-6 only ran when something called
-        # discover_sources_for_integration directly (tests, or the
-        # standalone /integrations/{id}/discover endpoint); a real operator
-        # PATCHing project_key via THIS endpoint got a 200 while the
-        # planner kept routing whatever was enabled before the PATCH.
-        # Reactivation additionally needs this because
-        # _active_repo_usage_count_for_limit only counts sources whose
-        # config is_active=True -- discovery that ran while paused could
-        # under-count and over-recover; re-running now, with the flush
-        # above already active, re-establishes a correct count and caps
-        # again if the org is over its allowance. Best-effort: never fail
-        # the PATCH itself.
-        try:
-            await session.run_sync(
-                lambda sync_session: discover_sources_for_integration(
-                    sync_session, updated_integration_id
-                )
-            )
-        except Exception:
-            logger.exception(
-                "jira_project_discovery_on_update_failed",
-                extra={"org_id": org_id, "config_id": config_id},
-            )
-
-    await _upsert_scheduled_job(session, updated, org_id)
-
-    # Cascade shared settings to children when updating a parent config
-    if getattr(updated, "parent_id") is None:
-        stmt = select(SyncConfiguration).where(
-            SyncConfiguration.parent_id == getattr(updated, "id")
-        )
-        result = await session.execute(stmt)
-        children = result.scalars().all()
-        for child in children:
-            mutable_child = cast(_MutableSyncConfiguration, child)
-            if payload.sync_targets is not None:
-                mutable_child.sync_targets = payload.sync_targets
-            if payload.is_active is not None:
-                mutable_child.is_active = payload.is_active
-            # Propagate schedule/timezone/depth from sync_options if provided
-            if sync_options_provided:
-                child_sync_options = dict(getattr(child, "sync_options") or {})
-                child_changed = False
-                for key in ("schedule_cron", "timezone", "initial_sync_depth"):
-                    if key in cleared_keys:
-                        if key in child_sync_options:
-                            del child_sync_options[key]
-                            child_changed = True
-                    elif key in sync_options:
-                        child_sync_options[key] = sync_options[key]
-                        child_changed = True
-                if child_changed:
-                    mutable_child.sync_options = child_sync_options
-        if children:
-            for child in children:
-                await _upsert_scheduled_job(session, child, org_id)
-            await session.flush()
-
-    integration_id = getattr(updated, "integration_id", None)
-    if integration_id is not None:
-        await invalidate_sync_coverage_projection(
-            session,
-            org_id,
-            integration_id=integration_id,
-        )
-    else:
-        await invalidate_sync_coverage_projection(
-            session,
-            org_id,
-            sync_config_id=getattr(updated, "id"),
-        )
-
-    credential_id = await _integration_credential_id_for_config(
-        session, updated, org_id
-    )
-    return _sync_config_to_response(updated, credential_id=credential_id)
+    raise_served_by_go_api("/api/v1/admin/sync-configs/{config_id}", GO_API)
 
 
 @router.delete("/sync-configs/{config_id}", status_code=204)
 async def delete_sync_config(
     config_id: str,
-    session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
 ) -> None:
-    svc = SyncConfigurationService(session, org_id)
-    config = await svc.get_by_id(config_id)
-    if config is None:
-        raise HTTPException(status_code=404, detail="Sync configuration not found")
-    await svc.delete(
-        str(getattr(config, "name")), provider=str(getattr(config, "provider"))
-    )
+    raise_served_by_go_api("/api/v1/admin/sync-configs/{config_id}", GO_API)
 
 
 @router.post("/sync-configs/{config_id}/trigger", status_code=202)
@@ -3113,114 +2299,23 @@ async def list_sync_config_jobs(
     config_id: str,
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
-    session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
 ) -> list[JobRunResponse]:
-    svc = SyncConfigurationService(session, org_id)
-    existing = await svc.get_by_id(config_id)
-    if existing is None:
-        raise HTTPException(status_code=404, detail="Sync configuration not found")
-
-    scheduled_job_id_col = getattr(ScheduledJob, "id")
-    scheduled_job_org_id = getattr(ScheduledJob, "org_id")
-    scheduled_job_sync_config_id = getattr(ScheduledJob, "sync_config_id")
-    scheduled_job_type = getattr(ScheduledJob, "job_type")
-    job_stmt = select(scheduled_job_id_col).where(
-        scheduled_job_org_id == org_id,
-        scheduled_job_sync_config_id == uuid.UUID(config_id),
-        scheduled_job_type == "sync",
-    )
-    job_result = await session.execute(job_stmt)
-    job_ids = list(job_result.scalars().all())
-
-    if not job_ids:
-        return []
-
-    job_run_job_id = getattr(JobRun, "job_id")
-    job_run_created_at = getattr(JobRun, "created_at")
-    runs_stmt = (
-        select(JobRun)
-        .where(job_run_job_id.in_(job_ids))
-        .order_by(job_run_created_at.desc())
-        .offset(offset)
-        .limit(limit)
-    )
-    runs_result = await session.execute(runs_stmt)
-    runs = list(runs_result.scalars().all())
-    planner_sync_runs = await _planner_sync_runs_for_job_runs(session, runs, org_id)
-    planner_sync_run_unit_rollups = await _planner_sync_run_unit_rollups_for_job_runs(
-        session, runs, org_id
-    )
-
-    return [
-        _job_run_response(
-            run,
-            planner_sync_runs.get(str(sync_run_id)) if sync_run_id else None,
-            planner_sync_run_unit_rollups.get(str(sync_run_id))
-            if sync_run_id
-            else None,
-        )
-        for run in runs
-        for sync_run_id in [_planner_job_run_sync_run_id(run)]
-    ]
+    raise_served_by_go_api("/api/v1/admin/sync-configs/{config_id}/jobs", GO_API)
 
 
 @router.get("/backfill-jobs")
 async def list_backfill_jobs(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
-    session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
 ):
-    from dev_health_ops.api.schemas.backfill import BackfillJobListResponse
-    from dev_health_ops.api.services.backfill import BackfillJobService
-
-    svc = BackfillJobService(session, org_id)
-    jobs, total = await svc.list_jobs(limit=limit, offset=offset)
-    items = []
-    for job in jobs:
-        run_counts = await _backfill_job_run_counts(session, job)
-        items.append(_backfill_job_response(job, run_counts))
-    return BackfillJobListResponse(
-        items=items,
-        total=total,
-        limit=limit,
-        offset=offset,
-    )
+    raise_served_by_go_api("/api/v1/admin/backfill-jobs", GO_API)
 
 
 @router.get("/backfill-jobs/{job_id}")
 async def get_backfill_job(
     job_id: str,
-    session: AsyncSession = Depends(get_session),
     org_id: str = Depends(get_admin_org_id),
-    metrics_sink_factory: Callable[
-        [], AbstractAsyncContextManager[Any | None]
-    ] = Depends(get_backfill_metrics_sink),
 ):
-    from dev_health_ops.api.services.backfill import BackfillJobService
-
-    svc = BackfillJobService(session, org_id)
-    job = await svc.get_job(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Backfill job not found")
-    run_counts = await _backfill_job_run_counts(session, job)
-    metrics_diagnostics = None
-    # The sink is opened lazily, only now that the job is confirmed to
-    # exist -- a 404 above never triggers a ClickHouse connection
-    # (CHAOS-2888 Workstream C review fix).
-    async with metrics_sink_factory() as metrics_sink:
-        if metrics_sink is not None:
-            from dev_health_ops.api.services.backfill_diagnostics import (
-                build_backfill_metrics_diagnostics,
-            )
-
-            metrics_diagnostics = build_backfill_metrics_diagnostics(
-                metrics_sink,
-                org_id=org_id,
-                range_start=getattr(job, "since_date"),
-                range_end=getattr(job, "before_date"),
-            )
-    return _backfill_job_response(
-        job, run_counts, metrics_diagnostics=metrics_diagnostics
-    )
+    raise_served_by_go_api("/api/v1/admin/backfill-jobs/{job_id}", GO_API)

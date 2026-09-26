@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/platform/workersignals"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/syncrunrollup"
 	"github.com/full-chaos/dev-health-ops/internal/workitemcontract"
@@ -645,7 +646,12 @@ func (repository *PostgresRepository) Renew(
 		renewals = repository.renewPool
 	}
 	command, err := renewals.Exec(ctx, renewLeaseSQL, claim.ID, claim.Owner, now.UTC(), expiresAt.UTC())
-	if err != nil || command.RowsAffected() != 1 {
+	if err != nil {
+		workersignals.RecordLeaseRenewalFailed(workersignals.LeaseReasonError)
+		return ErrLeaseLost
+	}
+	if command.RowsAffected() != 1 {
+		workersignals.RecordLeaseRenewalFailed(workersignals.LeaseReasonLeaseLost)
 		return ErrLeaseLost
 	}
 	return nil

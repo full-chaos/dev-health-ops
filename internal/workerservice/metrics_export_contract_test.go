@@ -121,4 +121,20 @@ func TestMetricsEndpointExposesAppCounterContract(t *testing.T) {
 			t.Errorf("GET /metrics response missing app counter family %q\nfull body:\n%s", family, body)
 		}
 	}
+	// CHAOS-6920: the rev 189 prod sampler found NO heartbeat-failure and NO dispatch lock-wait
+	// series on go-sync: a counter that has never incremented is absent, so a clean window could
+	// not be told from "not exposed". These SAMPLES must be on the live scrape without any event
+	// having happened (the value is the package's own test to pin at 0: the counters are
+	// process-wide, so another test in this binary may already have moved one).
+	for _, series := range []string{
+		"\nworker_presence_heartbeat_failed_total ",
+		"\n" + `dev_health_sync_dispatch_advisory_lock_wait_total{outcome="acquired"} `,
+		"\n" + `dev_health_sync_dispatch_advisory_lock_wait_total{outcome="busy"} `,
+		"\n" + `dev_health_provider_sync_lease_renewal_failed_total{reason="error"} `,
+		"\n" + `dev_health_provider_sync_lease_renewal_failed_total{reason="lease_lost"} `,
+	} {
+		if !strings.Contains(body, series) {
+			t.Errorf("GET /metrics response has no sample %q before any event\nfull body:\n%s", strings.TrimSpace(series), body)
+		}
+	}
 }

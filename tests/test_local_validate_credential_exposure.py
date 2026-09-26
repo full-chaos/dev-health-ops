@@ -188,7 +188,7 @@ def test_a_slash_in_the_password_cannot_defeat_redaction() -> None:
 def test_remote_clickhouse_consumers_are_proxy_neutralised() -> None:
     """curl is not the only client that talks to the lane's ClickHouse.
 
-    clickhouse-connect honours HTTP_PROXY/HTTPS_PROXY, so `ch_migrate`'s dev-hops
+    clickhouse-connect honours HTTP_PROXY/HTTPS_PROXY, so `ch_migrate`'s dho
     calls would route the real Basic-auth credential through an ambient proxy --
     the larger half of the exposure that neutralising only curl left open.
     """
@@ -196,8 +196,8 @@ def test_remote_clickhouse_consumers_are_proxy_neutralised() -> None:
     migrate = re.search(r"^ch_migrate\(\) \{.*?^\}", source, re.S | re.M)
     assert migrate, "ch_migrate() not found"
     body = migrate.group(0)
-    invocations = [line for line in body.splitlines() if "${DEVHOPS}" in line]
-    assert invocations, "ch_migrate no longer invokes dev-hops -- update this test"
+    invocations = [line for line in body.splitlines() if "${DHO}" in line]
+    assert invocations, "ch_migrate no longer invokes dho -- update this test"
     unguarded = [line.strip() for line in invocations if "PROXY_OFF" not in line]
     assert not unguarded, (
         "these remote-ClickHouse invocations are not proxy-neutralised, so an "

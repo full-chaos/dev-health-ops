@@ -85,7 +85,7 @@
 #   Since that fix: without SKIP_CLICKHOUSE=1, EVERY reason the ClickHouse stages
 #   might not run -- docker missing, the probe itself failing/timing out
 #   (indeterminate container state), the container confirmed not running, or a
-#   missing dev-hops CLI -- is a HARD FAILURE with a distinct diagnostic message
+#   missing dho binary -- is a HARD FAILURE with a distinct diagnostic message
 #   naming the true mechanism, never a silent skip. SKIP_CLICKHOUSE=1 is the
 #   ONLY sanctioned way to run without the CH-dependent stages: it is an
 #   explicit, logged, caller-initiated decision that shrinks the gate's
@@ -137,6 +137,10 @@ CH_USER="${CH_USER:-ch}"
 CH_PASS="${CH_PASS:-ch}"
 CH_HOST="${CH_HOST:-localhost}"
 CH_HTTP_PORT="${CH_HTTP_PORT:-8123}"
+# The ClickHouse NATIVE port `dho migrate clickhouse` speaks (it has no HTTP mode).
+# Everything else in this script reaches ClickHouse over HTTP (CH_HTTP_PORT); only
+# ch_migrate uses this one, on the same CH_HOST.
+CH_NATIVE_PORT="${CH_NATIVE_PORT:-9000}"
 # CH_TRANSPORT selects how the scratch CREATE/DROP DATABASE statements reach
 # ClickHouse (CHAOS-4457). "docker" (the default, unchanged) execs
 # clickhouse-client inside CH_CONTAINER; "http" POSTs to CH_HOST:CH_HTTP_PORT
@@ -328,9 +332,15 @@ RUFF="${ROOT}/.venv/bin/ruff"
 MYPY="${ROOT}/.venv/bin/mypy"
 # Overridable (CHAOS-3571): every real caller gets the identical computed
 # default (env unset), so this changes no production behavior. It lets a test
-# point DEVHOPS at a deliberately-missing path to exercise ch_probe_docker()'s
-# "dev-hops CLI missing" branch without touching the real, shared venv.
-DEVHOPS="${DEVHOPS:-${ROOT}/.venv/bin/dev-hops}"
+# point DHO at a deliberately-missing path to exercise ch_ensure_dho()'s
+# "dho missing" branch. The default is a scratch build of THIS tree
+# (`go build ./cmd/dho`, done on demand by ch_ensure_dho), never a binary from a
+# venv: dho is the only ClickHouse migrator (the dev-hops CLI is being deleted).
+# Only that default is built on demand: a caller-supplied DHO that is missing is a
+# hard failure, never silently replaced by a build.
+DHO_BUILD_ON_DEMAND=0
+[ -n "${DHO:-}" ] || DHO_BUILD_ON_DEMAND=1
+DHO="${DHO:-${ROOT}/.build/dho}"
 
 # Neutralize the local socks5h proxy for every pytest/python invocation. Without
 # this, httpx-based tests fail with 'socksio not installed' — false negatives, not
@@ -954,8 +964,8 @@ preflight() {
    ruff/mypy don't need the project installed):
       UV_CACHE_DIR=\"\$(git rev-parse --show-toplevel)/.uv-cache\" SETUPTOOLS_SCM_PRETEND_VERSION=0.0.0 \\
         uv sync --all-extras --dev --no-install-project
-      SKIP_CLICKHOUSE=1 bash ci/local_validate.sh   # this venv has no dev-hops CLI, so ch_probe
-                                                     # below cannot pass without this flag
+      SKIP_CLICKHOUSE=1 bash ci/local_validate.sh   # skips the ClickHouse-dependent stages
+                                                     # (they need a ClickHouse and a Go toolchain)
    FULL recipe (only if you need dev-hops / the ClickHouse-dependent stages locally instead of
    via CI — CAN hang forever at 0% CPU on a wedged 'git check-attr' child, the known
    setuptools_scm worktree deadlock, CHAOS-4181/4407, unrelated to this gate):
@@ -1040,15 +1050,15 @@ gate_unit_suite() {
 # rather than swallowing them the way `2>/dev/null` did before.
 #
 #   0  available: docker present, `docker ps` succeeded, container present,
-#      dev-hops present.
+#      dho present.
 #   1  docker CLI missing from PATH.
 #   2  `docker ps` ITSELF failed (nonzero exit) -- INDETERMINATE. This is the
 #      exact CHAOS-3571 mechanism: the probe could not get an answer at all,
 #      so "not running" would be a fabricated claim, not a measurement.
 #   3  `docker ps` succeeded and the container is confirmed ABSENT from the
 #      running-container list -- a real, provable "not running" fact.
-#   4  docker + container confirmed present, but the dev-hops CLI the CH
-#      stages shell out to is missing from this venv.
+#   4  docker + container confirmed present, but the dho binary the CH
+#      stages shell out to is missing and could not be built (ch_ensure_dho).
 #
 # CHAOS-3571 policy (decided in ch_provision(), not here): ONLY an explicit,
 # caller-supplied SKIP_CLICKHOUSE=1 may turn "CH stages did not run" into a
@@ -1065,21 +1075,57 @@ gate_unit_suite() {
 # mechanism, not a fabricated one -- that half of the ticket's ask is honored.
 CH_PROBE_DETAIL=""
 
+# Builds (once) the dho binary the migration stage runs, from THIS tree. Sets
+# CH_PROBE_DETAIL and returns 1 when it is missing and cannot be built.
+ch_ensure_dho() {
+  # `dho migrate clickhouse` speaks the ClickHouse NATIVE protocol only (CH_NATIVE_PORT)
+  # and this script has no TLS native connection, so an https-only endpoint cannot be
+  # migrated by this gate. Refuse HERE, in the probe, before any scratch DDL is sent,
+  # naming the mechanism -- not deep in the migration stage, and never by migrating a
+  # different (plaintext) endpoint than the one the gate was pointed at.
+  if [ "${CH_HTTP_SCHEME}" = "https" ]; then
+    CH_PROBE_DETAIL="CH_HTTP_SCHEME=https is not supported by this gate: dho migrate clickhouse (the only ClickHouse migrator) speaks the native protocol on CH_NATIVE_PORT and no TLS native connection is wired here; use a plaintext lane endpoint or run with SKIP_CLICKHOUSE=1"
+    return 1
+  fi
+  [ -x "${DHO}" ] && return 0
+  if [ "${DHO_BUILD_ON_DEMAND}" != "1" ]; then
+    CH_PROBE_DETAIL="dho missing at ${DHO} (DHO was set by the caller, so it is not built), or run with SKIP_CLICKHOUSE=1"
+    return 1
+  fi
+  if ! command -v go >/dev/null 2>&1; then
+    CH_PROBE_DETAIL="dho missing at ${DHO} and no Go toolchain on PATH to build it (go build -o ${DHO} ./cmd/dho), or run with SKIP_CLICKHOUSE=1"
+    return 1
+  fi
+  local build_log
+  build_log="$(mktemp "${TMPDIR:-/tmp}/local-validate-dho-build.XXXXXX")" || {
+    CH_PROBE_DETAIL="could not create a temp file for the dho build log"
+    return 1
+  }
+  if ! (cd "${ROOT}" && go build -o "${DHO}" ./cmd/dho) >"${build_log}" 2>&1; then
+    CH_PROBE_DETAIL="go build -o ${DHO} ./cmd/dho FAILED: $(tr '\n' ' ' <"${build_log}" | cut -c1-400)"
+    rm -f "${build_log}"
+    return 1
+  fi
+  rm -f "${build_log}"
+  [ -x "${DHO}" ] || {
+    CH_PROBE_DETAIL="go build reported success but ${DHO} is not executable"
+    return 1
+  }
+  return 0
+}
+
 ch_probe_docker() {
   CH_PROBE_DETAIL=""
   if [ "${CH_TRANSPORT}" = "http" ]; then
     # No container to probe: reachability is the HTTP endpoint answering, and a
     # dead endpoint surfaces as a loud non-zero ch_query below rather than a
-    # silent skip. The dev-hops check still applies -- the ClickHouse stages
+    # silent skip. The dho check still applies -- the ClickHouse stages
     # invoke that CLI whichever transport carries the scratch DDL.
     if ! command -v curl >/dev/null 2>&1; then
       CH_PROBE_DETAIL="curl not found on PATH, required by CH_TRANSPORT=http"
       return 1
     fi
-    if [ ! -x "${DEVHOPS}" ]; then
-      CH_PROBE_DETAIL="dev-hops CLI missing at ${DEVHOPS} — see the CH_TRANSPORT=docker branch below for the install recipe, or run with SKIP_CLICKHOUSE=1"
-      return 4
-    fi
+    ch_ensure_dho || return 4
     return 0
   fi
   if ! command -v docker >/dev/null 2>&1; then
@@ -1108,10 +1154,7 @@ ch_probe_docker() {
     CH_PROBE_DETAIL="container '${CH_CONTAINER}' confirmed NOT running (docker ps succeeded; name absent from the running-container list)"
     return 3
   fi
-  if [ ! -x "${DEVHOPS}" ]; then
-    CH_PROBE_DETAIL="dev-hops CLI missing at ${DEVHOPS} — either the [dev] extra was never installed, or this venv came from 'uv sync --no-install-project' (the CHAOS-4181/4407 setuptools_scm-hang workaround, which never installs the dev-hops console script); install with UV_CACHE_DIR=\"\$(git rev-parse --show-toplevel)/.uv-cache\" uv sync --all-extras --dev, or run with SKIP_CLICKHOUSE=1 to skip this stage"
-    return 4
-  fi
+  ch_ensure_dho || return 4
   return 0
 }
 
@@ -1233,16 +1276,19 @@ ch_migrate() {
   case "${SCRATCH_URI}" in
   *"/default" | *"/default?"*) die "refusing to migrate: SCRATCH_URI resolves to /default ($(redact_uri "${SCRATCH_URI}"))." ;;
   esac
-  printf '   migrating into scratch: %s\n' "$(redact_uri "${SCRATCH_URI}")"
   # PROXY_OFF here, not just on curl (codex): clickhouse-connect honours
   # HTTP_PROXY/HTTPS_PROXY, so with an ambient proxy set and the lane endpoint
   # absent from NO_PROXY these two would route the REAL Basic-auth credential
   # through it -- or simply fail to reach the lane. Neutralising only the curl
   # request left the actual migration exposed, which is the larger half.
-  OPERATIONAL_ORDERING_CONTRACT=2 CLICKHOUSE_URI="${SCRATCH_URI}" DATABASE_URI="${SCRATCH_URI}" OTEL_ENABLED=false \
-    "${PROXY_OFF[@]}" "${DEVHOPS}" migrate clickhouse upgrade || return 1
-  OPERATIONAL_ORDERING_CONTRACT=2 CLICKHOUSE_URI="${SCRATCH_URI}" DATABASE_URI="${SCRATCH_URI}" OTEL_ENABLED=false \
-    "${PROXY_OFF[@]}" "${DEVHOPS}" migrate clickhouse status --check || return 1
+  # dho speaks ClickHouse's native protocol (CH_NATIVE_PORT), not the HTTP port
+  # SCRATCH_URI carries; the same scratch database, user and (already-safe) password.
+  local native_uri="clickhouse://${CH_USER_ENC}:${CH_PASS_ENC}@${CH_HOST}:${CH_NATIVE_PORT}/${SCRATCH_DB}"
+  printf '   migrating into scratch (native): %s\n' "$(redact_uri "${native_uri}")"
+  OPERATIONAL_ORDERING_CONTRACT=2 CLICKHOUSE_URI="${native_uri}" OTEL_ENABLED=false \
+    "${PROXY_OFF[@]}" "${DHO}" migrate clickhouse upgrade || return 1
+  OPERATIONAL_ORDERING_CONTRACT=2 CLICKHOUSE_URI="${native_uri}" OTEL_ENABLED=false \
+    "${PROXY_OFF[@]}" "${DHO}" migrate clickhouse status --check || return 1
   return 0
 }
 
@@ -1386,7 +1432,7 @@ ch_provision() {
     EXECUTED_STAGE_IDS+=("ch_probe")
     fail_fast "clickhouse: docker probe"
   fi
-  record "clickhouse: docker probe (container '${CH_CONTAINER}' reachable, dev-hops present)" 0
+  record "clickhouse: docker probe (container '${CH_CONTAINER}' reachable, dho present)" 0
   EXECUTED_STAGE_IDS+=("ch_probe")
 
   if ! ch_create_scratch; then
@@ -1477,7 +1523,7 @@ verify_stage_manifest() {
 # full, BEFORE any stage runs -- not derived after the fact from whatever
 # happened to execute. The only branch is the explicit SKIP_CLICKHOUSE=1
 # opt-out; every other reason a CH stage might not run (docker missing, the
-# probe failing, the container confirmed absent, dev-hops missing) is a
+# probe failing, the container confirmed absent, dho missing) is a
 # ch_provision() hard failure against the FULL 8-id declaration, never a
 # reason to shrink it at runtime. Factored out of main() so the CHAOS-3571
 # `--stage-manifest-probe` test-only hook near the bottom of this file can
@@ -1726,6 +1772,13 @@ fi
 # it actually uses -- instead of grepping this file for a string, which would
 # pass against a script that still shelled out to docker at runtime. Same
 # argument-hook convention as --stage-manifest-mismatch-probe above.
+# Test-only hook: runs the REAL ch_migrate() (with a stub DHO the test supplies) so a
+# test can assert the exact dho invocations and the environment they receive.
+if [ "${1:-}" = "--ch-migrate-probe" ]; then
+  ch_migrate
+  exit $?
+fi
+
 if [ "${1:-}" = "--ch-query-probe" ]; then
   shift
   ch_query "${1:?query required}"

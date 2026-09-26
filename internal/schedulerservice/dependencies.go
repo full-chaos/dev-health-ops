@@ -45,6 +45,15 @@ type postgresSchedulerDatabase struct {
 	queueRole       string
 	coordinatorRole string
 	riverSchema     string
+
+	// CHAOS-6934: queue, coordinator and River-schema readiness never make a probe wait on their
+	// (2-connection) work pools; see postgres.LazyProbeCheck.
+	// probeOptions: RunTimeout is the probe deadline (config.HealthCheckTimeout); TTL and MaxStale
+	// are the domain check's defaults.
+	probeOptions     postgres.PostureCheckOptions
+	queueProbe       postgres.LazyProbeCheck
+	coordinatorProbe postgres.LazyProbeCheck
+	riverSchemaProbe postgres.LazyProbeCheck
 }
 
 // openSchedulerDatabase opts into the coordinator boundary via
@@ -68,13 +77,16 @@ func openSchedulerDatabase(ctx context.Context, cfg config.Config) (schedulerDat
 	if err != nil {
 		return nil, err
 	}
-	return &postgresSchedulerDatabase{
+	database := &postgresSchedulerDatabase{
 		pools:           pools,
 		domainRole:      runtimeConfig.DomainRole,
 		queueRole:       runtimeConfig.QueueRole,
 		coordinatorRole: runtimeConfig.CoordinatorRole,
 		riverSchema:     runtimeConfig.RiverSchema,
-	}, nil
+		probeOptions:    postgres.PostureCheckOptions{RunTimeout: cfg.HealthCheckTimeout, Logger: slog.Default()},
+	}
+	database.warmReadinessProbes()
+	return database, nil
 }
 
 // wrapSchedulerReadinessCheckWithLogging is domain_postgres/queue_postgres/
@@ -158,6 +170,10 @@ func (database *postgresSchedulerDatabase) QueueReady(ctx context.Context) error
 	if database == nil || database.pools == nil || database.pools.QueueControl == nil {
 		return errSchedulerActivationUnavailable
 	}
+	return database.queueProbe.CheckWith(ctx, "queue_postgres", database.queueRun, database.probeOptions)
+}
+
+func (database *postgresSchedulerDatabase) queueRun(ctx context.Context) error {
 	return postgres.CheckQueueAuthorization(
 		ctx,
 		database.pools.QueueControl,
@@ -174,6 +190,10 @@ func (database *postgresSchedulerDatabase) CoordinatorReady(ctx context.Context)
 	if database == nil || database.pools == nil || database.pools.Coordinator == nil {
 		return errSchedulerActivationUnavailable
 	}
+	return database.coordinatorProbe.CheckWith(ctx, "coordinator_postgres", database.coordinatorRun, database.probeOptions)
+}
+
+func (database *postgresSchedulerDatabase) coordinatorRun(ctx context.Context) error {
 	return postgres.CheckCoordinatorAuthorization(
 		ctx,
 		database.pools.Coordinator,
@@ -189,8 +209,21 @@ func (database *postgresSchedulerDatabase) RiverSchemaReady(
 	if database == nil || database.pools == nil || database.pools.QueueControl == nil {
 		return errSchedulerActivationUnavailable
 	}
-	_, err := riverstore.CheckSchema(ctx, database.pools.QueueControl, schema, nil)
-	return err
+	return database.riverSchemaProbe.CheckWith(ctx, "river_schema", func(ctx context.Context) error {
+		_, err := riverstore.CheckSchema(ctx, database.pools.QueueControl, schema, nil)
+		return err
+	}, database.probeOptions)
+}
+
+// warmReadinessProbes starts the background queue, coordinator and River-schema checks now, so the
+// process proves its roles before its first probe (CHAOS-6934).
+func (database *postgresSchedulerDatabase) warmReadinessProbes() {
+	database.queueProbe.Warm("queue_postgres", database.queueRun, database.probeOptions)
+	database.coordinatorProbe.Warm("coordinator_postgres", database.coordinatorRun, database.probeOptions)
+	database.riverSchemaProbe.Warm("river_schema", func(ctx context.Context) error {
+		_, err := riverstore.CheckSchema(ctx, database.pools.QueueControl, database.riverSchema, nil)
+		return err
+	}, database.probeOptions)
 }
 
 // DomainPool is the native scheduled-sync materializer's persistence pool.

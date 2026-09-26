@@ -2507,6 +2507,9 @@ type fakeQueueTelemetry struct {
 	snapshot    riverstore.QueueTelemetrySnapshot
 	snapshotErr error
 	checkErr    error
+	// checkGate, when set, makes CheckAvailableContractVersions block until it is closed or its
+	// context ends (a queue-control work pool held by other work).
+	checkGate chan struct{}
 }
 
 func (telemetry *fakeQueueTelemetry) Snapshot(context.Context) (riverstore.QueueTelemetrySnapshot, error) {
@@ -2523,8 +2526,31 @@ func (telemetry *fakeQueueTelemetry) setSnapshot(snapshot riverstore.QueueTeleme
 	telemetry.snapshot = snapshot
 }
 
-func (telemetry *fakeQueueTelemetry) CheckAvailableContractVersions(context.Context) error {
-	return telemetry.checkErr
+func (telemetry *fakeQueueTelemetry) CheckAvailableContractVersions(ctx context.Context) error {
+	telemetry.mu.Lock()
+	gate, err := telemetry.checkGate, telemetry.checkErr
+	telemetry.mu.Unlock()
+	if gate != nil {
+		select {
+		case <-gate:
+		case <-ctx.Done():
+		}
+	}
+	return err
+}
+
+// setCheckErr / setCheckGate change the census answer after construction, safe while the background
+// census runs (CHAOS-6934: queued_contract_versions is answered from a background check).
+func (telemetry *fakeQueueTelemetry) setCheckErr(err error) {
+	telemetry.mu.Lock()
+	defer telemetry.mu.Unlock()
+	telemetry.checkErr = err
+}
+
+func (telemetry *fakeQueueTelemetry) setCheckGate(gate chan struct{}) {
+	telemetry.mu.Lock()
+	defer telemetry.mu.Unlock()
+	telemetry.checkGate = gate
 }
 
 // TestExecutableReportKindsWithoutAdaptersCloseReadiness is the CUT-02
@@ -2926,12 +2952,31 @@ func TestUnsupportedContractRefusalNamesTheContractOncePerChange(t *testing.T) {
 		queueTelemetry:         telemetry,
 		queueTelemetryRequired: true,
 		logger:                 slog.New(slog.NewTextHandler(logs, nil)),
+		// CHAOS-6934: the census is a background check the probe is answered from, so a changed answer
+		// is seen one background run later; the test shortens the freshness windows, nothing else.
+		contractVersionsOptions: postgres.PostureCheckOptions{
+			TTL: 5 * time.Millisecond, RefusalTTL: 5 * time.Millisecond, MaxStale: time.Minute,
+		},
 	}
+	// until re-evaluates readiness until the (background) census reflects the latest answer.
+	until := func(what string, done func(error) bool) {
+		t.Helper()
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			err := dependencies.queuedContractVersionsReady(context.Background())
+			if done(err) {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("%s: never observed (last error %v)", what, err)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	refused := func(err error) bool { return err != nil }
 
 	for range 3 {
-		if err := dependencies.queuedContractVersionsReady(context.Background()); err == nil {
-			t.Fatal("unsupported contract version was accepted")
-		}
+		until("the unsupported contract version to be refused", refused)
 	}
 	if lines := countLogLines(logs.String()); lines != 1 {
 		t.Fatalf("logged %d times for one unchanged offender set, want 1: %s", lines, logs.String())
@@ -2941,30 +2986,28 @@ func TestUnsupportedContractRefusalNamesTheContractOncePerChange(t *testing.T) {
 	}
 
 	// A different offender set is new information.
-	telemetry.checkErr = &riverstore.UnsupportedContractVersionError{
+	telemetry.setCheckErr(&riverstore.UnsupportedContractVersionError{
 		Offenders: []string{"sync/post_sync@9"},
-	}
-	if err := dependencies.queuedContractVersionsReady(context.Background()); err == nil {
-		t.Fatal("unsupported contract version was accepted")
-	}
+	})
+	until("the changed offender set to be logged", func(err error) bool {
+		return err != nil && countLogLines(logs.String()) >= 2
+	})
 	if lines := countLogLines(logs.String()); lines != 2 {
 		t.Fatalf("a changed offender set logged %d times in total, want 2: %s", lines, logs.String())
 	}
 
 	// So is a recurrence after the queue drained clean.
-	telemetry.checkErr = nil
-	if err := dependencies.queuedContractVersionsReady(context.Background()); err != nil {
-		t.Fatalf("clean queue refused readiness: %v", err)
-	}
+	telemetry.setCheckErr(nil)
+	until("the drained queue to pass", func(err error) bool { return err == nil })
 	if lines := countLogLines(logs.String()); lines != 2 {
 		t.Fatalf("recovery logged: %s", logs.String())
 	}
-	telemetry.checkErr = &riverstore.UnsupportedContractVersionError{
+	telemetry.setCheckErr(&riverstore.UnsupportedContractVersionError{
 		Offenders: []string{"sync/post_sync@9"},
-	}
-	if err := dependencies.queuedContractVersionsReady(context.Background()); err == nil {
-		t.Fatal("unsupported contract version was accepted")
-	}
+	})
+	until("the recurrence to be logged", func(err error) bool {
+		return err != nil && countLogLines(logs.String()) >= 3
+	})
 	if lines := countLogLines(logs.String()); lines != 3 {
 		t.Fatalf("a recurrence after recovery logged %d times in total, want 3: %s", lines, logs.String())
 	}
@@ -3579,5 +3622,46 @@ func TestDORARefusalRemedyNamesTheMigrateVerb(t *testing.T) {
 		if doraRefusalRemedy(reason) == "" || strings.Contains(doraRefusalRemedy(reason), "dho migrate upgrade") {
 			t.Fatalf("reason %s: remedy %q", reason, doraRefusalRemedy(reason))
 		}
+	}
+}
+
+// CHAOS-6934: once the queued-contract census has answered, a probe never waits on it: with the census
+// blocked (the queue-control work pool held by other work) queuedContractVersionsReady still answers at
+// once from the cached pass, and refuses once that pass is older than the bound.
+func TestQueuedContractVersionsReadyDoesNotWaitOnTheCensusOnceProven(t *testing.T) {
+	telemetry := &fakeQueueTelemetry{}
+	dependencies := &workerDependencies{
+		queueTelemetry:          telemetry,
+		queueTelemetryRequired:  true,
+		logger:                  slog.New(slog.NewTextHandler(io.Discard, nil)),
+		contractVersionsOptions: postgres.PostureCheckOptions{TTL: 10 * time.Millisecond, MaxStale: 400 * time.Millisecond, RunTimeout: time.Minute},
+	}
+	dependencies.contractVersionsProbe.Warm("queued_contract_versions", dependencies.contractVersionsRun, dependencies.contractVersionsOptions)
+	deadline := time.Now().Add(5 * time.Second)
+	for dependencies.queuedContractVersionsReady(context.Background()) != nil {
+		if time.Now().After(deadline) {
+			t.Fatal("the warmed census never proved the queue")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	gate := make(chan struct{})
+	telemetry.setCheckGate(gate) // every later census run is now stuck
+	t.Cleanup(func() { close(gate) })
+	time.Sleep(40 * time.Millisecond) // older than TTL: a blocked refresh starts
+	begun := time.Now()
+	if err := dependencies.queuedContractVersionsReady(context.Background()); err != nil {
+		t.Fatalf("a pass inside the bound with a blocked census = %v, want a pass", err)
+	}
+	if time.Since(begun) > 200*time.Millisecond {
+		t.Fatalf("the probe waited %s on a blocked census", time.Since(begun))
+	}
+	time.Sleep(450 * time.Millisecond) // past the bound with no new answer: readiness refuses
+	begun = time.Now()
+	if err := dependencies.queuedContractVersionsReady(context.Background()); err == nil {
+		t.Fatal("a pass older than the bound with no answer was accepted: a dead queue database must turn readiness red")
+	}
+	if time.Since(begun) > 200*time.Millisecond {
+		t.Fatalf("the refusal waited %s", time.Since(begun))
 	}
 }

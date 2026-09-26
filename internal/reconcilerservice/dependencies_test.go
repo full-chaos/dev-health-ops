@@ -1044,3 +1044,27 @@ func (database *fakeReconcilerDatabase) CoordinatorPool() *pgxpool.Pool {
 func (database *fakeReconcilerDatabase) Close() {
 	database.closed.Store(true)
 }
+
+// CHAOS-6934: the route fence is a readiness input only, so it reads on the domain readiness pool,
+// never the work pool; a database without a readiness pool (test fakes) keeps the work pool.
+func TestRouteFencePoolIsTheReadinessPoolWhenThereIsOne(t *testing.T) {
+	work, err := pgxpool.New(context.Background(), "postgres://role@127.0.0.1:1/db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(work.Close)
+	probe, err := pgxpool.New(context.Background(), "postgres://role@127.0.0.1:1/db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(probe.Close)
+
+	withProbe := &postgresReconcilerDatabase{pools: &postgres.RuntimePools{Domain: work, DomainProbe: probe}}
+	if got := routeFencePool(withProbe); got != probe {
+		t.Fatal("the route fence reads on the work pool: a probe would queue behind the pipeline and the repairs")
+	}
+	withoutProbe := &postgresReconcilerDatabase{pools: &postgres.RuntimePools{Domain: work}}
+	if got := routeFencePool(withoutProbe); got != work {
+		t.Fatal("a database with no readiness pool must keep its work pool")
+	}
+}

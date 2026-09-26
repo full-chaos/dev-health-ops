@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/platform/workersignals"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -43,6 +44,19 @@ var ErrDispatchLockBusy = fmt.Errorf("%w: advisory lock is held by another dispa
 // naming how many keys were taken and how long it waited; what it took is
 // released with the transaction's rollback.
 func acquireAdvisoryLocksBounded(ctx context.Context, tx pgx.Tx, keys []int64, what string, budget time.Duration) error {
+	err := acquireAdvisoryLocksWithinBudget(ctx, tx, keys, what, budget)
+	switch {
+	case err == nil:
+		workersignals.RecordDispatchLockWait(workersignals.LockOutcomeAcquired)
+	case isDispatchLockBusy(err):
+		workersignals.RecordDispatchLockWait(workersignals.LockOutcomeBusy)
+	}
+	return err
+}
+
+// acquireAdvisoryLocksWithinBudget is the polling loop; acquireAdvisoryLocksBounded counts its
+// outcome (CHAOS-6920), so a quiet prod window reads as zeros, not as an absent series.
+func acquireAdvisoryLocksWithinBudget(ctx context.Context, tx pgx.Tx, keys []int64, what string, budget time.Duration) error {
 	deadline := time.Now().Add(budget)
 	for index, key := range keys {
 		wait := advisoryLockPollStart

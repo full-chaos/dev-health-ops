@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/platform/workersignals"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -164,6 +165,7 @@ func (presence *WorkerPresence) renew(ctx context.Context, done chan<- struct{})
 				// (CHAOS-3866). Keep ticking instead: the TTL is three
 				// intervals wide, and a recovered database revives the row on
 				// the next successful renewal.
+				workersignals.RecordHeartbeatFailed() // CHAOS-6920: also a counter, at 0 from startup
 				slog.Default().WarnContext(ctx, "worker presence heartbeat failed",
 					"error_category", "worker_presence_renewal",
 					"worker_group", presence.workerGroup,

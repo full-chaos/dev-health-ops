@@ -26,6 +26,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/postureguard"
 	"github.com/full-chaos/dev-health-ops/internal/platform/selfprobe"
 	"github.com/full-chaos/dev-health-ops/internal/platform/version"
+	"github.com/full-chaos/dev-health-ops/internal/platform/workersignals"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
@@ -924,6 +925,16 @@ func configureWorkerDependenciesWithSources(
 	// malformed scrape (duplicate HELP/TYPE for one metric name), not just a
 	// duplicate series. Registered here, once, unconditionally.
 	if err := registry.RegisterMetrics("sync_run_rollup_bumped", providerfoundation.SyncRunRollupBumpedMetricsSource()); err != nil {
+		dependencies.close()
+		return nil, err
+	}
+	// CHAOS-6920: the worker presence heartbeat, dispatch advisory-lock wait and provider sync
+	// lease renewal failure counters, written on every scrape from a closed vocabulary INCLUDING
+	// the zeros: a counter that has never incremented is absent, so the rev 189 prod sampler could
+	// not tell a clean window from "not exposed". A process-wide singleton for the reason above
+	// (one HELP/TYPE per name however many component families this process runs), registered here,
+	// once, unconditionally.
+	if err := registry.RegisterMetrics("worker_signals", workersignals.MetricsSource()); err != nil {
 		dependencies.close()
 		return nil, err
 	}

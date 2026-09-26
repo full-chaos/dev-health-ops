@@ -142,6 +142,12 @@ UNCOVERED_FIXTURE_DIRECTORIES: dict[str, str] = {
         "documentation-lint fixtures consumed by the docs workflow; markdown "
         "and mkdocs config, with no Go reader"
     ),
+    "tools/codex-review/fixtures": (
+        "log excerpts read only by tools/codex-review/test-exec-classify.sh, a "
+        "shell proof of the review wrapper's exec-block classifier that no "
+        "workflow runs; no Go test reads them, so requiring them to trigger the "
+        "Go workflow would run the Go suite for a wrapper-tooling fixture"
+    ),
     "internal/providersync/JIRA_PROVIDER_GAP_MATRIX.md": (
         'surfaced by the os.ReadDir(".") reader shape, which enumerates a whole '
         "package directory. The three tests doing that all filter to `jira_*.go` "

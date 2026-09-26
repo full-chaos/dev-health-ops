@@ -31,9 +31,7 @@ _CONFIG_PACKAGE = _REPO_ROOT / "internal" / "platform" / "config"
 _OPTIONS_SOURCE = _CONFIG_PACKAGE / "options.go"
 _ROUTES_SOURCE = _CONFIG_PACKAGE / "routes.go"
 
-_GO_COMPOSE = _REPO_ROOT / "deploy" / "docker-compose" / "compose.go-workers.yml"
-_GO_SWARM = _REPO_ROOT / "deploy" / "docker-swarm" / "stack.go-workers.yml"
-_GO_KUBERNETES = _REPO_ROOT / "deploy" / "kubernetes" / "go-workers.yaml"
+_GO_COMPOSE = _REPO_ROOT / "compose.yml"
 _HELM_WORKERS = (
     _REPO_ROOT / "deploy" / "helm" / "dev-health" / "templates" / "go-workers.yaml"
 )
@@ -82,26 +80,6 @@ _CREDENTIALS = frozenset(
     }
 )
 
-# AUTO_RUN_MIGRATIONS is read by the Python runtime image's entrypoint, not by
-# any Go binary, so it is not part of the worker configuration surface.
-_NON_WORKER_ENV = frozenset({"AUTO_RUN_MIGRATIONS"})
-
-# CHAOS-4587: OPERATIONAL_ORDERING_CONTRACT IS read directly by Go binaries
-# (internal/jobs/metrics/remaining/dora_native_clickhouse.go,
-# internal/providersync/pagerduty_services_effects_clickhouse.go via
-# os.LookupEnv), but deliberately outside internal/platform/config's flag
-# registry -- it gates admission against the *stored ClickHouse table
-# contract*, a deploy-time/data-migration coordination concern (see
-# .github/docs-legacy/architecture/canonical-operational-model.md
-# "Ordering-contract rollout and recovery"), not a per-process runtime
-# behavior a flag would suit. Registering it as a flag would still leave the
-# same value needing to travel from the deploy layer's `${...:-2}` default
-# into a flag's own default, without changing the CHAOS-4020 typo-safety
-# property this test enforces for the ~85-variable surface that motivated
-# it. Carved out like _NON_WORKER_ENV, for a different reason: this key is
-# CHAOS-4020-surface-exempt, not Go-binary-exempt.
-_ORDERING_CONTRACT_ENV = frozenset({"OPERATIONAL_ORDERING_CONTRACT"})
-
 
 def _go_flag_names() -> frozenset[str]:
     """Every long flag the option registry offers, including aliases."""
@@ -141,16 +119,6 @@ def _compose_manifest_flags(path: Path) -> set[str]:
     return flags
 
 
-def _kubernetes_manifest_flags(path: Path) -> set[str]:
-    flags: set[str] = set()
-    for document in yaml.safe_load_all(path.read_text(encoding="utf-8")):
-        if not document or document.get("kind") != "Deployment":
-            continue
-        for container in document["spec"]["template"]["spec"]["containers"]:
-            flags |= _flags_of(container.get("args"))
-    return flags
-
-
 def _helm_manifest_flags(path: Path) -> set[str]:
     """Flags a Helm template emits, read from the template source.
 
@@ -186,11 +154,9 @@ def test_registry_declares_the_credentials_that_stay_in_the_environment() -> Non
     ("path", "extract"),
     [
         (_GO_COMPOSE, _compose_manifest_flags),
-        (_GO_SWARM, _compose_manifest_flags),
-        (_GO_KUBERNETES, _kubernetes_manifest_flags),
         (_HELM_WORKERS, _helm_manifest_flags),
     ],
-    ids=["compose", "swarm", "kubernetes", "helm"],
+    ids=["compose", "helm"],
 )
 def test_deploy_manifests_only_pass_flags_the_binaries_accept(
     path: Path, extract
@@ -212,56 +178,6 @@ def test_deploy_manifests_only_pass_flags_the_binaries_accept(
     )
 
 
-@pytest.mark.parametrize("path", [_GO_COMPOSE, _GO_SWARM], ids=["compose", "swarm"])
-def test_compose_surfaces_keep_only_credentials_in_the_environment(
-    path: Path,
-) -> None:
-    """`docker compose config` shows the deployed configuration.
-
-    Before CHAOS-4020 a worker's configuration was reconstructed from a shared
-    env anchor plus a host .env file. Every non-credential setting now renders
-    in ``command:``, so what a container runs is readable in one place.
-    """
-    services = _compose_worker_services(path)
-    assert services, f"{path.name} declares no Go worker services"
-    for name, service in services.items():
-        environment = set(service.get("environment") or {})
-        leaked = environment - _CREDENTIALS - _NON_WORKER_ENV - _ORDERING_CONTRACT_ENV
-        assert not leaked, (
-            f"{path.name}:{name} still configures {sorted(leaked)} through the "
-            "environment; pass them as flags in command: instead"
-        )
-        command = service.get("command") or []
-        assert command, f"{path.name}:{name} passes no flags at all"
-        # A dho service names its verb first (`dho stream-runner ...`, `dho
-        # reconciler ...`); the rest is flags.
-        if str(command[0]) in {"stream-runner", "reconciler", "scheduler", "worker"}:
-            command = command[1:]
-        assert all(str(item).startswith("--") for item in command), (
-            f"{path.name}:{name} mixes positional arguments into command:"
-        )
-
-
-def test_kubernetes_workers_keep_only_credentials_in_inline_env() -> None:
-    documents = [
-        document
-        for document in yaml.safe_load_all(_GO_KUBERNETES.read_text(encoding="utf-8"))
-        if document and document.get("kind") == "Deployment"
-    ]
-    assert documents, "no Go worker Deployments found"
-    for document in documents:
-        container = document["spec"]["template"]["spec"]["containers"][0]
-        inline = {item["name"] for item in container.get("env") or []}
-        leaked = inline - _CREDENTIALS - _NON_WORKER_ENV - _ORDERING_CONTRACT_ENV
-        assert not leaked, (
-            f"{document['metadata']['name']} still configures {sorted(leaked)} "
-            "through inline env; pass them as args instead"
-        )
-        assert container.get("args"), (
-            f"{document['metadata']['name']} passes no flags at all"
-        )
-
-
 def test_every_worker_deployment_states_its_own_drain_budget() -> None:
     """The drain budget is the setting most likely to be silently inherited.
 
@@ -269,7 +185,7 @@ def test_every_worker_deployment_states_its_own_drain_budget() -> None:
     state it is relying on a 30s package default that no real queue selection
     can satisfy.
     """
-    for path in (_GO_COMPOSE, _GO_SWARM):
+    for path in (_GO_COMPOSE,):
         for name, service in _compose_worker_services(path).items():
             command = " ".join(str(item) for item in service.get("command") or [])
             assert "--shutdown-timeout=" in command, (
@@ -366,10 +282,7 @@ def test_go_queue_names_that_exist_in_celery_agree_byte_for_byte() -> None:
 def test_every_queue_a_manifest_selects_is_one_the_go_fleet_serves() -> None:
     """`-Q` names real queues; a manifest cannot select one nothing serves."""
     go = _go_queue_names()
-    for path, extract in (
-        (_GO_COMPOSE, _compose_worker_services),
-        (_GO_SWARM, _compose_worker_services),
-    ):
+    for path, extract in ((_GO_COMPOSE, _compose_worker_services),):
         for name, service in extract(path).items():
             for item in service.get("command") or []:
                 if not str(item).startswith("--queues="):
@@ -380,56 +293,6 @@ def test_every_queue_a_manifest_selects_is_one_the_go_fleet_serves() -> None:
                     f"{path.name}:{name} selects queues the Go fleet does not "
                     f"serve: {sorted(unknown)}"
                 )
-
-
-# Flags whose value would otherwise come from the shared ConfigMap. Because
-# resolution is flag > env, hard-coding one of these into a Deployment's args
-# silently disables the ConfigMap as an operator tuning surface.
-_CONFIGMAP_BACKED_FLAGS = {
-    "--river-schema": "RIVER_DATABASE_SCHEMA",
-    "--domain-database-role": "RIVER_DOMAIN_DATABASE_ROLE",
-    "--queue-database-role": "RIVER_QUEUE_DATABASE_ROLE",
-}
-
-
-def test_kubernetes_args_never_shadow_the_configmap() -> None:
-    """A Deployment must not hard-code a setting the ConfigMap owns.
-
-    CHAOS-4020 made flags win over the environment. A Deployment that both
-    imports ``dev-health-config`` via envFrom AND passes the same setting as an
-    argument therefore renders the ConfigMap inert for that key: editing it
-    changes nothing.
-
-    ``PAGERDUTY_WEBHOOK_TRANSPORT`` used to be the sharp case here -- both
-    runtimes read it and exactly one could own the webhook stream, so a
-    ConfigMap edit that a hard-coded Go argument overrode would have given the
-    stream two owners. CHAOS-4105 deleted the Python consumer and the flag
-    with it. The remaining keys are ordinary tuning surfaces, and the property
-    is unchanged: a hard-coded argument makes the ConfigMap inert.
-    """
-    configmap = yaml.safe_load(
-        (_REPO_ROOT / "deploy" / "kubernetes" / "configmap.yaml").read_text(
-            encoding="utf-8"
-        )
-    )["data"]
-
-    for document in yaml.safe_load_all(_GO_KUBERNETES.read_text(encoding="utf-8")):
-        if not document or document.get("kind") != "Deployment":
-            continue
-        container = document["spec"]["template"]["spec"]["containers"][0]
-        imports_configmap = any(
-            source.get("configMapRef") for source in container.get("envFrom") or []
-        )
-        if not imports_configmap:
-            continue
-        passed = _flags_of(container.get("args"))
-        for flag, variable in _CONFIGMAP_BACKED_FLAGS.items():
-            if variable not in configmap:
-                continue
-            assert flag.removeprefix("--") not in passed, (
-                f"{document['metadata']['name']} hard-codes {flag}, which makes "
-                f"ConfigMap key {variable} inert for this Deployment"
-            )
 
 
 def test_provider_routes_have_no_enablement_surface_at_all() -> None:

@@ -54,8 +54,8 @@ x-jwt-secret-key:
     JWT_SECRET_KEY: ${JWT_SECRET_KEY:-local-dev-jwt-secret-key-0123456789abcdef}
 
 # Go/River worker topology (CHAOS-3142, folded in at CHAOS-3088 from
-# deploy/docker-compose/compose.go-workers.yml -- that file keeps its own
-# copy for compose.production.yml's separate `--profile go-workers` overlay
+# deploy/docker-compose/compose.go-workers.yml (deleted, CHAOS-6950) -- that file keeps its own
+# copy for compose.production.yml (deleted, CHAOS-6950)'s separate `--profile go-workers` overlay
 # path; this is a second, independently maintained copy for local-dev
 # parity against THIS file's own postgres/clickhouse/valkey. Credentials
 # only in `environment:` --
@@ -339,7 +339,7 @@ services:
       # CHAOS-3944: pg_isready cannot prove the pooler can authenticate and
       # serve a query — it reports healthy even on an auth rejection
       # regardless of username, so pinning -U/-d alone doesn't fix that (see
-      # deploy/docker-compose/compose.production.yml). Run a real query
+      # deploy/docker-compose/compose.production.yml (deleted, CHAOS-6950)). Run a real query
       # through the pooler instead.
       test: ["CMD", "psql", "-w", "-h", "localhost", "-p", "6432", "-U", "${POSTGRES_USER:-postgres}", "-d", "${POSTGRES_DB:-postgres}", "-c", "SELECT 1"]
       interval: 10s
@@ -758,7 +758,7 @@ services:
       pgbouncer:
         condition: service_started
     # CHAOS-4351 (team-lead ruling): local-only exposure for direct
-    # debugging -- prod's compose.production.yml deliberately has NO
+    # debugging -- prod's compose.production.yml (deleted, CHAOS-6950) deliberately has NO
     # `ports:` here (internal DNS only is the "no public route").
     ports:
       - "8020:8000"
@@ -778,8 +778,8 @@ services:
   # outright as of CHAOS-5589 -- R146: Celery transport is not a rollback
   # target, and no consumer has run since 2026-08-19 (CHAOS-4026). This is
   # the fleet a bare `docker compose up -d` now actually runs,
-  # folded in from deploy/docker-compose/compose.go-workers.yml (kept there
-  # too, for compose.production.yml's separate overlay path, still at its
+  # folded in from deploy/docker-compose/compose.go-workers.yml (deleted, CHAOS-6950) (kept there
+  # too, for compose.production.yml (deleted, CHAOS-6950)'s separate overlay path, still at its
   # own `replicas: 0` -- unaffected by this PR). The nine long-running
   # worker/reconciler/scheduler/stream processes below run at
   # `deploy.replicas: 1` each -- one each is the intended shape, while

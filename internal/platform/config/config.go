@@ -857,7 +857,7 @@ func Load(spec Spec) (Config, error) {
 	// unconditionally: durationEnv VALIDATES and can fail Load, unlike (say)
 	// UnreclaimableSweepMode's bare envOrDefault. Every Go service reads its
 	// configuration from the same shared environment/compose base (see
-	// deploy/docker-compose/compose.go-workers.yml's go-worker-env-base), so
+	// deploy/docker-compose/compose.go-workers.yml (deleted, CHAOS-6950)'s go-worker-env-base), so
 	// an unconditional parse here would let a malformed
 	// SYNC_OBSERVATION_TIMEOUT meant only for the reconciler fail startup for
 	// the scheduler and every worker group too. Bounds match syncreconciler's
@@ -1887,7 +1887,7 @@ func componentEndpointError(spec ComponentSpec) error {
 // with nothing to say whether that was a deliberate override or a stale
 // leftover from an earlier config generation -- and a deploy manifest
 // that already defaults the "losing" var (as
-// deploy/docker-compose/compose.go-workers.yml does for POSTGRES_HOST)
+// deploy/docker-compose/compose.go-workers.yml (deleted, CHAOS-6950) does for POSTGRES_HOST)
 // makes the ambiguity permanent, not occasional. Setting both is refused
 // outright, naming both keys in one message, checked before rawKey's own
 // KEY/KEY_FILE exclusivity rule ever runs (a caller with both a stale

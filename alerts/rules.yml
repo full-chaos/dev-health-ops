@@ -156,7 +156,7 @@ groups:
       # worker_execution_saturation_ratio is PER PROCESS: each replica reports
       # its own running count over its own MaxWorkers. Averaging across
       # replicas is therefore what yields the queue's fleet utilization, and it
-      # matches the AverageValue target the HPAs in deploy/kubernetes use.
+      # matches the AverageValue target the chart's HPAs use.
       # `max by (queue)` would fire whenever any single replica filled up, even
       # with idle capacity elsewhere in the group (CHAOS-3867).
       - alert: GoWorkerExecutionSaturated
@@ -495,7 +495,7 @@ groups:
       # An absent()-based branch for "nothing is scraping this at all" was
       # considered and deliberately dropped: this fleet is additive and
       # default-off (Helm `goWorkers.enabled=false`, Kubernetes Deployments
-      # at `replicas: 0` -- see deploy/kubernetes/go-workers.yaml's own
+      # at `replicas: 0` -- see deploy/kubernetes/go-workers.yaml (deleted, CHAOS-6950)'s own
       # header comment), so a fully empty `up{job=~...}` vector is the
       # NORMAL state whenever Go workers simply aren't enabled yet, not
       # evidence a configured target went dark. absent() cannot tell those

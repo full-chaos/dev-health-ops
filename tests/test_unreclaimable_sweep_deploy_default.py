@@ -53,8 +53,8 @@ def _reconciler(path: str) -> dict:
     return _yaml(path)["services"]["go-reconciler"]
 
 
-def test_docker_compose_and_swarm_go_worker_stacks_ship_the_sweep_active() -> None:
-    """A FLAG on these three, not an environment entry.
+def test_docker_compose_go_worker_stack_ships_the_sweep_active() -> None:
+    """A FLAG, not an environment entry.
 
     CHAOS-4020's contract (tests/workers/test_go_worker_cli_contract.py) is that
     only credentials render through ``environment:`` here; every other setting
@@ -62,20 +62,10 @@ def test_docker_compose_and_swarm_go_worker_stacks_ship_the_sweep_active() -> No
     deployed configuration. The interpolated default keeps the operator override
     the environment form would have given.
 
-    CHAOS-3088 folded a copy of this fleet into root compose.yml and deleted
-    deploy/go-workers/compose-go-workers.yml (formerly covered here as a
-    fourth, ``environment:``-based surface -- that file's go-reconciler was
-    the one place the sweep rendered through ``environment:`` rather than
-    ``command:``; it had no other consumer of the distinction once deleted).
-    Root compose.yml's copy follows the same flag-not-environment shape as
-    the two below, so it joins this loop rather than getting a separate
-    ``environment:`` assertion.
+    CHAOS-6950 deleted the split Compose overlay and the Swarm stack this also
+    covered; root compose.yml is the one Compose surface left.
     """
-    for path in (
-        "compose.yml",
-        "deploy/docker-compose/compose.go-workers.yml",
-        "deploy/docker-swarm/stack.go-workers.yml",
-    ):
+    for path in ("compose.yml",):
         service = _reconciler(path)
         command = [str(argument) for argument in service["command"]]
         assert f"--unreclaimable-sweep=${{{SWEEP_KEY}:-{ACTIVE}}}" in command, (
@@ -87,10 +77,8 @@ def test_docker_compose_and_swarm_go_worker_stacks_ship_the_sweep_active() -> No
         assert SWEEP_KEY not in (service.get("environment") or {}), path
 
 
-def test_kubernetes_and_helm_ship_the_sweep_active() -> None:
-    kubernetes = _yaml("deploy/kubernetes/configmap.yaml")["data"]
+def test_helm_ships_the_sweep_active() -> None:
     helm = _yaml("deploy/helm/dev-health/values.yaml")["config"]
-    assert kubernetes[SWEEP_KEY] == ACTIVE
     assert helm[SWEEP_KEY] == ACTIVE
 
 
@@ -98,12 +86,9 @@ def test_env_examples_document_the_shipped_default() -> None:
     """The dotfiles are part of the shape, not documentation of it.
 
     An operator copying ``.env.example`` gets whatever it says; leaving the
-    variable out of these two files is how a hand-built environment silently
-    lands back in shadow.
+    variable out of this file is how a hand-built environment silently lands
+    back in shadow.
     """
-    for path, expected in (
-        (".env.example", f'{SWEEP_KEY}="{ACTIVE}"'),
-        ("deploy/docker-compose/.env.example", f"{SWEEP_KEY}={ACTIVE}"),
-    ):
+    for path, expected in ((".env.example", f'{SWEEP_KEY}="{ACTIVE}"'),):
         lines = (ROOT / path).read_text().splitlines()
         assert expected in lines, path

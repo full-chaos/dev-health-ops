@@ -43,11 +43,11 @@ image target receives the operator token only when an operator invokes it.
 Go workload renderer: runtime DSN usernames must match both declared role names
 before a process can become ready.
 
-The default Compose, Swarm, Kubernetes, and Helm stacks still render only the
-Celery topology. Additive Go workload overlays render the declared deployment
-groups at zero replicas and require explicit deployment selection. Static
-deployment-contract tests bind those overlays, the shared PgBouncer budget,
-and one-shot migration wiring to the real manifests.
+(Historical: the Compose, Swarm and Kubernetes stacks and the Go workload
+overlays this paragraph described are deleted, CHAOS-6950; the Helm chart and
+`compose.yml` render the Go topology.) Static deployment-contract tests bind
+the chart, the shared PgBouncer budget, and the one-shot migration wiring to
+the real manifests.
 
 The contract gate validates that:
 
@@ -89,8 +89,7 @@ evidence are approved.
 
 `desired_replicas` is the reviewed replica request for each deployment group.
 Validation rejects a desired count outside `min_replicas..max_replicas`, and
-the deployment tests require Compose, Swarm, Kubernetes, and Helm to render
-that same value. Change the manifest and all renderer outputs in one review.
+the deployment tests require the Helm chart to render that same value. Change the manifest and all renderer outputs in one review.
 
 River groups also declare `shutdown_grace_seconds`. It must cover the longest
 registered job timeout for that group plus 60 seconds for terminal claim
@@ -123,13 +122,9 @@ Go processes all declare `enabled_by_default: true` with
 already runs unconditionally. This is a **declaration of intent** in the
 checked-in manifest, not by itself a live scale.
 
-The Swarm/Kubernetes/Helm renderers in this directory tree now default to
-`replicas: 1` for every group too, matching `desired_replicas` -- but they
-remain checked-in renderer files, not a deploy action: applying one to a
-real cluster is what actually starts anything, and no production target runs
-these today (prod rebuild is deferred to k8s). `deploy/docker-compose/compose.go-workers.yml`
-(the separate, opt-in overlay for `compose.production.yml`, edited apart from
-root `compose.yml`) is unaffected by this PR. Rendering or scaling a Go
+The Helm renderer now defaults to `replicas: 1` for every group too, matching
+`desired_replicas` (the Swarm, raw Kubernetes and production Compose renderers
+this paragraph also named are deleted, CHAOS-6950). Rendering or scaling a Go
 workload does **not** transfer a job, queue, or scheduler marker to Go on its
 own either -- that is governed separately (`contracts/jobs/v1/migration-state.json`'s
 per-kind route, and `internal/scheduler/sync/ownership.go`'s own, unrelated
@@ -192,11 +187,8 @@ worker to contract 2 together. Concretely:
    re-create it from the head, before deploying. `dho migrate clickhouse
    status` reports where a database stands without changing it. Where the
    contract is set by hand:
-   - **Compose / Swarm**: every `migrate`/worker service references
+   - **Compose**: every `migrate`/worker service in `compose.yml` references
      `${OPERATIONAL_ORDERING_CONTRACT:-2}`.
-   - **Raw Kubernetes manifests**: the `dev-health-go-worker-config`
-     ConfigMap (`deploy/kubernetes/go-workers.yaml`) carries `"2"`, and the
-     migrate Job sets `2` itself.
    - **Helm**: `goWorkers.operationalOrderingContract` (default `"2"`) feeds
      the migrate Job and every worker group.
 3. The Python `api`/`metrics-api` services are **not** wired here on
@@ -322,21 +314,15 @@ sections.
    `MIGRATION_DATABASE_URI`.
 2. Verify the deployed immutable image contains the matching deployment
    manifest and `contracts/jobs/v1/registry.json`; then deploy the
-   coexistence topology:
-
-   ```bash
-   docker compose -f deploy/docker-compose/compose.production.yml \
-     -f deploy/docker-compose/compose.go-workers.yml \
-     --profile go-workers up -d --build
-   docker stack deploy -c deploy/docker-swarm/stack.yml \
-     -c deploy/docker-swarm/stack.go-workers.yml dev-health
-   ```
+   coexistence topology (the Compose and Swarm overlays that used to do this
+   are deleted, CHAOS-6950; locally `docker compose up -d` brings up
+   `compose.yml`):
 
    **Helm/Kubernetes (CHAOS-4195):** the Celery `worker`/`beat` templates and
    manifests, and the `values-go-workers-coexistence.yaml` overlay that
    staged the Go path beside them, are deleted -- there is no Celery fleet
    left to coexist with. `helm upgrade --install dev-health
-   deploy/helm/dev-health` and `kubectl apply -k deploy/kubernetes/` render
+   deploy/helm/dev-health` renders
    the Go topology (CHAOS-5541: every group at `replicas: 1`, matching
    `deployment.json`'s go_default posture) with no extra values file or
    separate `apply`; scale groups per step 3 below.
@@ -350,9 +336,7 @@ sections.
 3. Scale each reviewed group independently, never above its declared maximum.
    Wait for `/readyz` and confirm its selected queue set, per-queue
    concurrency, worker identity, one-client count, and connection budgets
-   before allowing an autoscaler or adding a second replica. Swarm has no
-   native HPA; use the same signals for a manual one-at-a-time scale and wait
-   through its start-first rolling update.
+   before allowing an autoscaler or adding a second replica.
 4. Run `dho workers workers queues status`. Confirm each group's
    `queues`, `desired_replicas`, expiring `live_replicas`, `queue_backlog`,
    `active_jobs`, `drain_state`, and connection-budget headroom.
@@ -436,9 +420,9 @@ dho workers queues undrain \
 
 ### Go-only is a release gate, not a switch
 
-The Compose `compose.go-workers-only.yml` overlay is a deliberately explicit
-topology overlay: it scales Celery worker/Beat consumers to zero but does not
-delete their definitions or Valkey DB 0. **Helm/Kubernetes are Go-only by
+(Historical: the Compose `compose.go-workers-only.yml` overlay, deleted in
+CHAOS-6950, scaled Celery worker/Beat consumers to zero without deleting their
+definitions or Valkey DB 0.) **Helm/Kubernetes are Go-only by
 construction since CHAOS-4195** (the Celery `worker`/`beat` templates,
 manifests, and the `go-workers-only.yaml`/`values-go-workers-only.yaml`
 scale-to-zero overlays that used to gate them are deleted, not retained at
@@ -788,8 +772,8 @@ process start.
 checkout of this repository**, and can diverge from what is reviewed here —
 CHAOS-4261 traced the incident partly to a prod-only `depends_on` edge from
 `pgbouncer-river-queue`/`pgbouncer-river-coordinator` onto
-`go-river-provision` that does not exist in this repo's
-`deploy/docker-compose/compose.production.yml`, and to `provision_river_roles.sql`
+`go-river-provision` that did not exist in this repo's production Compose
+file (deleted, CHAOS-6950), and to `provision_river_roles.sql`
 being read from a bind-mounted host directory that `docker compose pull &&
 up -d` never refreshes. Diff the host's compose file and its bind-mounted
 SQL against this repository before every deploy; do not assume `pull`
@@ -883,8 +867,7 @@ the `api` container's own memory limit:
   `_poll_peak_rss_bytes` watchdog) polls the runner subprocess's real
   `/proc/<pid>/status` VmRSS every 0.25s and kills it the moment RSS crosses
   `DEV_HEALTH_METRICS_RUNNER_MEMORY_LIMIT_BYTES` (default 640 MiB — see the
-  `api`/`worker` service `environment:` block in `compose.yml` and
-  `deploy/docker-compose/compose.production.yml`). **CHAOS-4361**: this
+  `api`/`worker` service `environment:` block in `compose.yml`). **CHAOS-4361**: this
   replaced the runner's own `RLIMIT_AS`/`RLIMIT_DATA` self-limit as the
   primary enforcement — `RLIMIT_AS` counts virtual ADDRESS SPACE (thread
   stacks, malloc arenas, every mmap mapping the ClickHouse C driver makes),
@@ -951,9 +934,9 @@ own request handling as collateral damage.
 
 ### `metrics-api` (CHAOS-4351, historical) -- its routing rationale is retired (CHAOS-6279)
 
-`compose.yml`, `deploy/docker-compose/compose.production.yml`, and
-`deploy/helm/dev-health`'s chart all still define a `metrics-api`
-service/Deployment: a second copy of `api` originally created to be the
+`compose.yml` and `deploy/helm/dev-health`'s chart all still define a
+`metrics-api` service/Deployment (the production Compose file that did too is
+deleted, CHAOS-6950): a second copy of `api` originally created to be the
 target of `go-worker-heavy`'s `--operational-bridge-url` flag. CHAOS-6279
 deletes that flag entirely -- it no longer exists on any Go binary
 (CHAOS-5320 already deleted the Python HTTP bridge it pointed at, and
@@ -985,7 +968,7 @@ registered kinds)`. `contracts/jobs/v1/registry.json` sets
 `timeout_seconds: 7200` for `metrics.daily_partition` and all six
 `metrics.remaining.*` kinds — so any worker selecting the `metrics` queue
 needs **`--shutdown-timeout=7260s`** at minimum. This is exactly why
-`deploy/docker-compose/compose.go-workers.yml`'s `go-worker-heavy` uses that
+`go-worker-heavy` (in `compose.yml` and the chart) uses that
 literal value; it previously read as an arbitrary round number. A short
 value that looks reasonable for a quick manual test or CI run (10s, 60s,
 even 420s) fails this check silently under the same opaque reason string —

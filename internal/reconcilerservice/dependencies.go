@@ -1184,7 +1184,7 @@ func (component reconcilerDatabaseLifecycle) Shutdown(context.Context) error {
 //
 // An earlier cut read EXPECTED_WORKER_GROUPS as that declaration. That was
 // wrong twice over: the variable's own contract explicitly excludes the
-// reconciler (deploy/kubernetes/go-workers.yaml, above its definition), and a
+// reconciler (deploy/kubernetes/go-workers.yaml (deleted, CHAOS-6950), above its definition), and a
 // second variable asserting what the mode already asserts is the env sprawl
 // CHAOS-4020 exists to remove.
 //

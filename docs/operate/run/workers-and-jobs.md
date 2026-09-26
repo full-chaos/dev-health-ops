@@ -24,12 +24,10 @@ rewrite around the Go-only runtime (tracked separately); until then, treat
 the sections below that still show `dev-hops workers start-*` commands as
 historical, not runnable.
 
-**CHAOS-4164 (2026-08-23):** the checked-in `compose.yml`,
-`deploy/docker-compose/compose.production.yml`, and
-`deploy/docker-swarm/stack.yml` still define the Celery `worker`/`beat` fleet
-directly (not deleted -- local-dev parity and historical reference) and are
-now marked ARCHIVED at each definition so they no longer read as live
-topology. See
+**CHAOS-4164 (2026-08-23), superseded:** the checked-in compose files were
+first marked ARCHIVED with the Celery `worker`/`beat` fleet still defined, and
+CHAOS-5589 then deleted those definitions (CHAOS-6950 deleted the production
+Compose file and the Swarm stack altogether). See
 [Workers, schedules, and queues § Historical Celery topology (dormant)](../configure/workers-and-schedules.md#historical-celery-topology-dormant)
 and [§ Known divergences](../configure/workers-and-schedules.md#known-divergences-local-vs-prod-worker-topology)
 for the archival record and the local/prod parity gaps found alongside it.
@@ -139,10 +137,10 @@ the Go config surface (CHAOS-6279) — nothing sends or reads it any more,
 the Python HTTP bridge it authenticated having already been deleted
 (CHAOS-5320).
 
-Everything else a Go worker reads is a flag, and the shipped Compose, Swarm,
-Kubernetes, and Helm surfaces pass it in `command:`/`args:` — so
-`docker compose config` and `kubectl describe pod` show the deployed
-configuration in one place instead of a merged environment map.
+Everything else a Go worker reads is a flag, and the shipped Compose and Helm
+surfaces pass it in `command:`/`args:` — so `docker compose config` and
+`kubectl describe pod` show the deployed configuration in one place instead of
+a merged environment map.
 
 The deployment owns the worker group name, replicas, resources, autoscaling,
 shutdown budget, and per-queue concurrency. The binary owns neither a named

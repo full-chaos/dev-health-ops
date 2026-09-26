@@ -27,7 +27,7 @@ import (
 //
 // It runs the REAL scripts/worker/provision_river_roles.sql through psql --
 // not a Go re-implementation of it -- exactly as
-// deploy/docker-compose/compose.go-workers.yml's go-river-provision service
+// deploy/docker-compose/compose.go-workers.yml (deleted, CHAOS-6950)'s go-river-provision service
 // does, so a future edit that reintroduces a per-table GRANT there is
 // caught by executing the actual file, not by re-reading it.
 
@@ -50,7 +50,7 @@ func provisionScriptPath(t *testing.T) string {
 }
 
 // runProvisionScript runs the checked-in provisioning script through psql,
-// passing the same variables deploy/docker-compose/compose.go-workers.yml's
+// passing the same variables deploy/docker-compose/compose.go-workers.yml (deleted, CHAOS-6950)'s
 // go-river-provision service does. It is idempotent by construction (role
 // creation is guarded by WHERE NOT EXISTS), so calling it more than once
 // must never error -- and, the property this suite exists to prove, must

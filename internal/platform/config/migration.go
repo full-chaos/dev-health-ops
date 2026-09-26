@@ -27,7 +27,7 @@ const NoMigrationDatabaseMessage = "river-migrate: neither MIGRATION_DATABASE_UR
 // class this ticket fixes, just one shell layer further out.
 //
 // The component var names are deliberately NOT POSTGRES_HOST/_PORT/_USER/
-// _PASSWORD/_DB: deploy/docker-compose/compose.go-workers.yml (not touched
+// _PASSWORD/_DB: deploy/docker-compose/compose.go-workers.yml (deleted, CHAOS-6950) (not touched
 // by this PR) already sets every one of those, unconditionally, for its own
 // pre-existing shell fallback -- reusing those names would make this
 // function activate every time that compose

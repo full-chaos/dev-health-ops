@@ -402,7 +402,7 @@ def test_provisioning_without_any_password_secret_fails_the_render(
 # its `migrate` service reads MIGRATION_DATABASE_URI (compose.yml:196) and
 # unsets it when empty (compose.yml:187-188), while the River DSN reaches
 # go-river-migrate under a DIFFERENT name, GO_WORKER_MIGRATION_DATABASE_URI
-# (compose.go-workers.yml:156). The chart cannot split the variable that way --
+# (compose.go-workers.yml:156 (deleted, CHAOS-6950)). The chart cannot split the variable that way --
 # both Jobs envFrom one migration Secret, and when secrets.create=false its
 # contents belong to the operator -- so it applies the same separation where
 # Compose already applies it, in the migrate entrypoint: hand the DSN to Alembic
@@ -588,8 +588,8 @@ def test_provisioning_without_any_dsn_fails_loudly(tmp_path: Path) -> None:
 #
 # GW (migrate-path owner), 2026-08-29. Unsetting the variable inside the
 # entrypoint is what Compose (`compose.yml:188-189`,
-# `compose.production.yml:83-84`) and the kustomize Job
-# (`deploy/kubernetes/migrate-job.yaml:60-61`) do, and it is what makes the
+# `compose.production.yml:83-84 (deleted, CHAOS-6950)`) and the kustomize Job
+# (`deploy/kubernetes/migrate-job.yam (deleted, CHAOS-6950)l:60-61`) do, and it is what makes the
 # operator-owned-Secret path safe. Where the chart owns the Secret it can do
 # better than that: keep the key out of the weight-0 Job's environment
 # altogether, the way Compose keeps the two DSNs in two different variables.
@@ -679,8 +679,8 @@ def test_weight_0_secret_is_unchanged_when_the_river_hook_is_off(
 # returns `<branch>@head` instead of `heads`
 # (`src/dev_health_ops/migrate.py:216-231`, gate at `:176-177`). Compose carries
 # the variable on its migrate service as an operator passthrough
-# (`compose.yml:198`, `compose.production.yml:95`) and the kustomize Job carries
-# it as an optional secretKeyRef (`deploy/kubernetes/migrate-job.yaml:72-78`).
+# (`compose.yml:198`, `compose.production.yml:95 (deleted, CHAOS-6950)`) and the kustomize Job carries
+# it as an optional secretKeyRef (`deploy/kubernetes/migrate-job.yam (deleted, CHAOS-6950)l:72-78`).
 # The chart carried it nowhere, so a fresh install could not reach the cutover
 # revision at all.
 
@@ -775,7 +775,7 @@ def test_hook_off_with_a_dsn_keeps_the_secret_key_that_activates_river(
 #
 # GW's condition (d). Compose's go-river-provision does not build a DSN at all:
 # it passes --host/--username/--dbname and lets PGPASSWORD travel out of band
-# (deploy/docker-compose/compose.go-workers.yml:110-125). Parts avoid the whole
+# (deploy/docker-compose/compose.go-workers.yml:110-125 (deleted, CHAOS-6950)). Parts avoid the whole
 # question of which URL dialect the value is written in, so where the Secret
 # supplies them they win; the DSN path -- and its scheme normalisation -- is for
 # when a DSN is all there is.

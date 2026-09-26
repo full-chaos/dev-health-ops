@@ -232,7 +232,7 @@ stopped before routes moved forward.
 ## After cutover
 
 - **Compose:** keep the Celery worker, Beat, and Valkey DB 0 definitions in
-  place. The `compose.go-workers-only.yml` overlay scales them to zero rather
+  place. The former `compose.go-workers-only.yml` overlay (deleted, CHAOS-6950) scaled them to zero rather
   than deleting them, and Go-only remains a release gate, not a switch — see
   [`README.md` § Go-only is a release gate](./README.md).
 - **Helm/Kubernetes (CHAOS-4195):** there is nothing to keep in place — the

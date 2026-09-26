@@ -1,5 +1,8 @@
 """River role provisioning must travel with an image, not a host file.
 
+(CHAOS-6950 deleted the Compose overlay this pinned; compose.yml is the one
+Compose surface left, and the same properties hold there.)
+
 CHAOS-3925: the provisioning SQL was bind-mounted into the compose overlay from
 a relative source path (``../../scripts/worker/provision_river_roles.sql``). A
 host with only Docker and a compose file cannot produce that path, and Docker
@@ -22,7 +25,9 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 DOCKERFILE = ROOT / "docker" / "Dockerfile"
-OVERLAY = ROOT / "deploy" / "docker-compose" / "compose.go-workers.yml"
+OVERLAY = (
+    ROOT / "compose.yml"
+)  # CHAOS-6950: the compose overlay is deleted; compose.yml is the one Compose surface
 SOURCE_SQL = ROOT / "scripts" / "worker" / "provision_river_roles.sql"
 
 _COPY = re.compile(

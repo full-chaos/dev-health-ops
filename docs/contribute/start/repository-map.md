@@ -73,9 +73,6 @@ A job or route change that updates code without the matching contract is incompl
 ## Deployment
 
 - `compose.yml` — local integrated development/evaluation.
-- `deploy/docker-compose/` — production Compose example.
-- `deploy/docker-swarm/` — Swarm example and migration ordering.
-- `deploy/kubernetes/` — Kustomize resources and migration Job.
 - `deploy/helm/dev-health/` — Helm chart, values, and schema.
 - `deploy/go-workers/` — Go worker queue-group deployment contracts and runtime
   shape.

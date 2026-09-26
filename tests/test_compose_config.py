@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import argparse
 import json
 import re
 from pathlib import Path
@@ -96,7 +95,7 @@ def test_monitoring_queue_declared() -> None:
     """The `monitoring` queue must exist in task_queues.
 
     Redundant-consumer coverage moved to
-    ``test_production_stacks_consume_monitoring_queue`` (compose.production.yml
+    ``test_production_stacks_consume_monitoring_queue`` (compose.production.yml (deleted, CHAOS-6950)
     / stack.yml) once CHAOS-5589 deleted root compose.yml's celery-legacy
     fleet -- there is no local compose worker left to assert against."""
     assert "monitoring" in task_queues
@@ -108,18 +107,9 @@ def test_monitoring_queue_declared() -> None:
 # ---------------------------------------------------------------------------
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
-_PROD_COMPOSE = _REPO_ROOT / "deploy" / "docker-compose" / "compose.production.yml"
 _LEGACY_COMPOSE = _REPO_ROOT / "compose.yml"
-_SWARM_STACK = _REPO_ROOT / "deploy" / "docker-swarm" / "stack.yml"
 _GO_CONFIG_PACKAGE = _REPO_ROOT / "internal" / "platform" / "config"
-_K8S_DIR = _REPO_ROOT / "deploy" / "kubernetes"
 _HELM_DIR = _REPO_ROOT / "deploy" / "helm" / "dev-health"
-_SPLIT_COMPOSE_OVERLAY = (
-    _REPO_ROOT / "deploy" / "docker-compose" / "compose.go-workers.yml"
-)
-_SWARM_GO_WORKER_OVERLAY = (
-    _REPO_ROOT / "deploy" / "docker-swarm" / "stack.go-workers.yml"
-)
 _DEPLOYMENT_JSON = _REPO_ROOT / "deploy" / "go-workers" / "deployment.json"
 
 # CHAOS-4587: deploy/go-workers/deployment.json's `processes` list is the
@@ -139,17 +129,6 @@ _SPLIT_COMPOSE_SERVICE_BY_PROCESS = {
     "stream-external": "go-stream-external",
     "stream-ingest": "go-stream-ingest",
     "stream-pagerduty": "go-stream-pagerduty",
-}
-_K8S_DEPLOYMENT_BY_PROCESS = {
-    "heavy": "dev-health-go-worker-heavy",
-    "ops": "dev-health-go-worker-ops",
-    "sync": "dev-health-go-worker-sync",
-    "sync-provider": "dev-health-go-worker-sync-provider",
-    "reconciler": "dev-health-go-reconciler",
-    "scheduler": "dev-health-go-scheduler",
-    "stream-external": "dev-health-go-stream-external",
-    "stream-ingest": "dev-health-go-stream-ingest",
-    "stream-pagerduty": "dev-health-go-stream-pagerduty",
 }
 
 
@@ -266,40 +245,6 @@ def test_platform_go_worker_drain_contract_matches_groups() -> None:
         service = services[service_name]
         assert _go_worker_arguments(service)["--shutdown-timeout"] == f"{grace}s"
         assert service["stop_grace_period"] == f"{grace}s"
-
-
-def test_production_compose_has_one_shot_migrate_service() -> None:
-    services = _load_yaml(_PROD_COMPOSE)["services"]
-    migrate = services.get("migrate")
-    assert migrate is not None, "compose.production.yml must define a migrate service"
-    assert migrate.get("restart") == "no"
-
-
-def test_production_compose_app_services_gate_on_migrate() -> None:
-    services = _load_yaml(_PROD_COMPOSE)["services"]
-    for name in ("api", "metrics-api"):
-        deps = services[name].get("depends_on") or {}
-        assert (
-            deps.get("migrate", {}).get("condition") == "service_completed_successfully"
-        ), f"{name} must gate on migrate completing successfully"
-
-
-def test_production_compose_disables_ambient_migrations() -> None:
-    services = _load_yaml(_PROD_COMPOSE)["services"]
-    for name in ("api", "metrics-api"):
-        env = services[name].get("environment") or {}
-        assert env.get("AUTO_RUN_MIGRATIONS") == "false", (
-            f"{name} must set AUTO_RUN_MIGRATIONS=false — schema is applied by "
-            f"the one-shot migrate service"
-        )
-
-
-def test_production_api_healthcheck_uses_ready_probe() -> None:
-    services = _load_yaml(_PROD_COMPOSE)["services"]
-    command = " ".join(str(part) for part in services["api"]["healthcheck"]["test"])
-
-    assert "/ready" in command
-    assert "/health" not in command
 
 
 def test_legacy_compose_has_one_shot_migrate_service() -> None:
@@ -542,12 +487,12 @@ def test_init_extra_dbs_sh_is_only_reachable_through_postgres_container_init() -
     That safety argument depends entirely on nothing else ever being able to
     invoke it. Assert the precondition directly rather than trusting the
     argument to stay true: the script must be mounted by exactly one
-    service (`postgres` in the legacy root `compose.yml`, into
+    service (`postgres` in the root `compose.yml`, into
     `/docker-entrypoint-initdb.d/`) and never referenced by any other
-    compose file in this repository -- if a future change wires it into
-    `compose.production.yml`, the go-workers overlay, or the swarm stack,
-    this fails loudly instead of quietly recreating CHAOS-4261 for a second
-    script.
+    service there (CHAOS-6950 deleted the other compose files, the go-workers
+    overlay and the Swarm stack this also covered) -- if a future change
+    wires it into another service, this fails loudly instead of quietly
+    recreating CHAOS-4261 for a second script.
     """
     services = _load_yaml(_LEGACY_COMPOSE)["services"]
     mounting_services = [
@@ -577,16 +522,16 @@ def test_init_extra_dbs_sh_is_only_reachable_through_postgres_container_init() -
     # reachability path -- check each service's actual
     # volumes/entrypoint/command fields, the only places a compose file can
     # make Postgres execute a script, not the raw file text.
-    for other_compose in (_PROD_COMPOSE, _SWARM_STACK, _SPLIT_COMPOSE_OVERLAY):
-        other_services = _load_yaml(other_compose).get("services") or {}
-        for name, service in other_services.items():
-            for field in ("volumes", "entrypoint", "command"):
-                assert "init-extra-dbs.sh" not in str(service.get(field) or ""), (
-                    f"{other_compose.name} service {name!r} references "
-                    f"init-extra-dbs.sh in its {field!r} -- it is a local-"
-                    "Postgres-container-init-only script and must never be "
-                    "reachable outside the postgres service's own initdb mount"
-                )
+    for name, service in services.items():
+        if name == "postgres":
+            continue
+        for field in ("volumes", "entrypoint", "command"):
+            assert "init-extra-dbs.sh" not in str(service.get(field) or ""), (
+                f"compose.yml service {name!r} references init-extra-dbs.sh "
+                f"in its {field!r} -- it is a local-Postgres-container-init-"
+                "only script and must never be reachable outside the postgres "
+                "service's own initdb mount"
+            )
 
 
 def _assert_least_privilege_domain_grants(domain_script: str) -> None:
@@ -761,97 +706,6 @@ def test_legacy_compose_app_services_gate_on_migrate() -> None:
         assert (
             deps.get("migrate", {}).get("condition") == "service_completed_successfully"
         ), f"{name} must gate on migrate completing successfully"
-
-
-def test_swarm_stack_has_migrate_service_and_disables_ambient_migrations() -> None:
-    services = _load_yaml(_SWARM_STACK)["services"]
-    migrate = services.get("migrate")
-    assert migrate is not None, "stack.yml must define a migrate service"
-    restart = migrate["deploy"]["restart_policy"]["condition"]
-    assert restart == "none", "swarm migrate must be one-shot (restart: none)"
-    for name in ("api",):
-        env = services[name].get("environment") or {}
-        assert env.get("AUTO_RUN_MIGRATIONS") == "false"
-
-
-def test_kubernetes_manifests_run_migrations_as_job() -> None:
-    job_docs = [
-        d
-        for d in yaml.safe_load_all(
-            (_K8S_DIR / "migrate-job.yaml").read_text(encoding="utf-8")
-        )
-        if d
-    ]
-    jobs = [d for d in job_docs if d.get("kind") == "Job"]
-    assert len(jobs) == 1
-    pod_spec = jobs[0]["spec"]["template"]["spec"]
-    assert pod_spec["restartPolicy"] == "Never"
-
-    config = _load_yaml(_K8S_DIR / "configmap.yaml")
-    assert config["data"]["AUTO_RUN_MIGRATIONS"] == "false"
-
-    kustomization = _load_yaml(_K8S_DIR / "kustomization.yaml")
-    assert "migrate-job.yaml" in kustomization["resources"]
-
-    migration_secret = next(
-        document
-        for document in _k8s_docs("secrets.yaml")
-        if document.get("kind") == "Secret"
-        and document["metadata"]["name"] == "dev-health-migration-secrets"
-    )
-    migration_data = migration_secret.get("stringData") or {}
-    assert "MIGRATION_DATABASE_URI" not in migration_data, (
-        "the checked-in migration Secret must omit MIGRATION_DATABASE_URI; "
-        "an empty key is a fail-closed CLI configuration error"
-    )
-    assert set(migration_data) == {"POSTGRES_URI", "CLICKHOUSE_URI"}
-
-
-def _k8s_docs(filename: str) -> list[dict]:
-    return [
-        d
-        for d in yaml.safe_load_all((_K8S_DIR / filename).read_text(encoding="utf-8"))
-        if d
-    ]
-
-
-def test_kubernetes_secret_exposes_clickhouse_uri_for_migrate(monkeypatch) -> None:
-    """`dev-hops migrate clickhouse` (the Job) and `status --check` (the
-    wait-for-migrations initContainers) resolve CLICKHOUSE_URI via
-    resolve_sink_uri — they do NOT read DATABASE_URI. Without CLICKHOUSE_URI
-    in the secret the migrate Job fails on first boot."""
-    from dev_health_ops.db import resolve_sink_uri
-
-    shared_secret = next(
-        d
-        for d in _k8s_docs("secrets.yaml")
-        if d.get("kind") == "Secret" and d["metadata"]["name"] == "dev-health-secrets"
-    )
-    migration_secret = next(
-        d
-        for d in _k8s_docs("secrets.yaml")
-        if d.get("kind") == "Secret"
-        and d["metadata"]["name"] == "dev-health-migration-secrets"
-    )
-    uri = migration_secret["stringData"].get("CLICKHOUSE_URI")
-    assert uri, "dev-health-migration-secrets must define CLICKHOUSE_URI"
-    assert uri.startswith("clickhouse://")
-
-    # The value must be resolvable exactly the way the migrate CLI resolves it.
-    monkeypatch.setenv("CLICKHOUSE_URI", uri)
-    assert resolve_sink_uri(argparse.Namespace(analytics_db=None)) == uri
-
-    # ...and the Job must actually see the secret (envFrom).
-    job = next(d for d in _k8s_docs("migrate-job.yaml") if d.get("kind") == "Job")
-    container = job["spec"]["template"]["spec"]["containers"][0]
-    secret_refs = {
-        ref["secretRef"]["name"]
-        for ref in container.get("envFrom", [])
-        if "secretRef" in ref
-    }
-    assert secret_refs == {"dev-health-migration-secrets"}
-    assert "GITHUB_TOKEN" in shared_secret["stringData"]
-    assert "GITHUB_TOKEN" not in migration_secret["stringData"]
 
 
 def test_helm_chart_runs_migrations_as_pre_upgrade_hook() -> None:
@@ -1045,21 +899,6 @@ def test_platform_compose_runs_the_go_scheduler_without_a_profile() -> None:
     assert "beat" not in services
 
 
-def test_production_workers_use_semantic_postgres_uri() -> None:
-    """CHAOS-5589 deleted the Celery worker/worker-ingest/worker-heavy
-    services from both stacks -- only `api` still carries this literal
-    `postgresql+asyncpg://` shape; the Go fleet's POSTGRES_URI is an
-    operator-supplied pass-through, not a string this test can assert a
-    prefix on (see the x-go-worker-env-base anchor in each file)."""
-    for path in (_PROD_COMPOSE, _SWARM_STACK):
-        services = _load_yaml(path).get("services") or {}
-        for service_name in ("api",):
-            environment = services[service_name]["environment"]
-            assert environment["POSTGRES_URI"].startswith("postgresql+asyncpg://")
-            assert environment["DATABASE_URI"].startswith("postgresql+asyncpg://")
-            assert environment["CLICKHOUSE_URI"].startswith("clickhouse://")
-
-
 # ---------------------------------------------------------------------------
 # CHAOS-3142: local-dev postgres hardening, plus the incident that motivated
 # it.
@@ -1186,7 +1025,7 @@ def test_compose_declares_no_provider_route_switches() -> None:
     default, on the Python side. CHAOS-3088 deleted deploy/go-workers/
     compose-go-workers.yml, whose go-worker service used to carry these two
     keys too (pass-through, unset) -- the folded-in go-* fleet (copied from
-    deploy/docker-compose/compose.go-workers.yml) never has, since that file
+    deploy/docker-compose/compose.go-workers.yml (deleted, CHAOS-6950)) never has, since that file
     relies on the worker image's own packaged /app/config default instead;
     that is a pre-existing difference between the two overlays, not
     something this PR changes, so only the negative (no switches) half
@@ -1295,7 +1134,7 @@ def test_go_services_are_unconditional_and_celery_is_deleted() -> None:
     `go-*` service behind `profiles: ["go"]` so a default `docker compose up`
     brought up the unchanged Celery stack and nothing else -- that overlay is
     now deleted. Root compose.yml's own `go-*` fleet (folded in from
-    deploy/docker-compose/compose.go-workers.yml) must declare NO `profiles`
+    deploy/docker-compose/compose.go-workers.yml (deleted, CHAOS-6950)) must declare NO `profiles`
     key at all.
 
     Mutation coverage (manually verified): adding `profiles: ["go"]` to any
@@ -1389,8 +1228,8 @@ def test_go_worker_family_has_no_pull_policy_override() -> None:
 def test_go_river_provision_chain_uses_this_files_postgres_identity() -> None:
     """go-river-provision and go-river-migrate
     defaulted their Postgres connection to devhealth/devhealth, inherited
-    unchanged from deploy/docker-compose/compose.go-workers.yml (which
-    assumes compose.production.yml's postgres identity). Root compose.yml's
+    unchanged from deploy/docker-compose/compose.go-workers.yml (deleted, CHAOS-6950) (which
+    assumes compose.production.yml (deleted, CHAOS-6950)'s postgres identity). Root compose.yml's
     own `postgres` service is postgres/postgres/postgres -- matching
     `migrate`'s own POSTGRES_URI default already in this file.
 
@@ -1443,7 +1282,7 @@ def test_go_workers_select_manifest_queues_without_runtime_profile() -> None:
 
     Compose has no activation profile to opt into any more (CHAOS-3088): the
     go-* fleet is unconditional, folded into root compose.yml from
-    deploy/docker-compose/compose.go-workers.yml. The now-deleted
+    deploy/docker-compose/compose.go-workers.yml (deleted, CHAOS-6950). The now-deleted
     deploy/go-workers/compose-go-workers.yml only ever covered the `sync`
     group as a single `go-worker` service; this file splits sync and
     sync-provider out (and heavy/ops besides), so this checks all four
@@ -1571,7 +1410,7 @@ def test_no_compose_file_defines_a_python_billing_edge_service() -> None:
     deleted; the Go api's billing-edge listener serves the Stripe webhook host.
     A compose service of that name, or one that runs the deleted module, would
     crash-loop on an import error while looking like a configured service."""
-    for path in (_LEGACY_COMPOSE, _PROD_COMPOSE):
+    for path in (_LEGACY_COMPOSE,):
         services = _load_yaml(path)["services"]
         assert "billing-edge" not in services, f"{path} defines billing-edge"
         running_it = [
@@ -1606,7 +1445,7 @@ def test_go_reconciler_declares_a_readyz_healthcheck() -> None:
     claims uniqueness within the go-* fleet.) Ported from the now-deleted
     deploy/go-workers/compose-go-workers.yml (CHAOS-3088) -- that file was
     the only place this healthcheck was defined before being folded into
-    root compose.yml; deploy/docker-compose/compose.go-workers.yml never had
+    root compose.yml; deploy/docker-compose/compose.go-workers.yml (deleted, CHAOS-6950) never had
     it.
 
     Mutation coverage (manually verified): deleting the `healthcheck` key,
@@ -1801,20 +1640,14 @@ def test_go_worker_process_registry_matches_ordering_contract_coverage_maps() ->
         f"_SPLIT_COMPOSE_SERVICE_BY_PROCESS keys "
         f"{sorted(_SPLIT_COMPOSE_SERVICE_BY_PROCESS)}"
     )
-    assert names == set(_K8S_DEPLOYMENT_BY_PROCESS), (
-        f"deployment.json processes {sorted(names)} do not match "
-        f"_K8S_DEPLOYMENT_BY_PROCESS keys {sorted(_K8S_DEPLOYMENT_BY_PROCESS)}"
-    )
 
 
-def test_split_compose_and_swarm_go_workers_wire_operational_ordering_contract() -> (
-    None
-):
-    """The fully split compose overlay, its Swarm equivalent, and root
-    compose.yml's own folded-in copy (CHAOS-3088) each carry all nine
+def test_compose_go_workers_wire_operational_ordering_contract() -> None:
+    """Root compose.yml (CHAOS-3088's folded-in fleet) carries all nine
     registry processes as distinct services -- assert every one resolves
     OPERATIONAL_ORDERING_CONTRACT in its rendered (post-YAML-merge)
-    environment.
+    environment. CHAOS-6950 deleted the split overlay and the Swarm
+    equivalent this also covered.
 
     Red on origin/main 2b3032b63: neither file's shared env anchor sets the
     key, so every service is reported missing.
@@ -1826,7 +1659,7 @@ def test_split_compose_and_swarm_go_workers_wire_operational_ordering_contract()
     nine-process split fleet this test already covers.
     """
     processes = [p["name"] for p in _load_yaml(_DEPLOYMENT_JSON)["processes"]]
-    for manifest in (_LEGACY_COMPOSE, _SPLIT_COMPOSE_OVERLAY, _SWARM_GO_WORKER_OVERLAY):
+    for manifest in (_LEGACY_COMPOSE,):
         services = _load_yaml(manifest)["services"]
         for process in processes:
             service_name = _SPLIT_COMPOSE_SERVICE_BY_PROCESS[process]
@@ -1835,39 +1668,6 @@ def test_split_compose_and_swarm_go_workers_wire_operational_ordering_contract()
                 f"{manifest.name}:{service_name} (registry process "
                 f"{process!r}) is missing OPERATIONAL_ORDERING_CONTRACT"
             )
-
-
-def test_kubernetes_go_workers_wire_operational_ordering_contract() -> None:
-    """The raw Kubernetes manifests project OPERATIONAL_ORDERING_CONTRACT
-    through a dedicated `dev-health-go-worker-config` ConfigMap (not the
-    shared api/worker `dev-health-config` one -- the Python api's own
-    ordering-contract awareness is a separate, out-of-scope concern) that
-    every go-* Deployment must envFrom.
-
-    Red on origin/main 2b3032b63: the ConfigMap has no such key and no
-    Deployment envFroms it.
-    """
-    processes = [p["name"] for p in _load_yaml(_DEPLOYMENT_JSON)["processes"]]
-    docs = _k8s_docs("go-workers.yaml")
-
-    deployments = {
-        d["metadata"]["name"]: d for d in docs if d.get("kind") == "Deployment"
-    }
-    for process in processes:
-        deployment_name = _K8S_DEPLOYMENT_BY_PROCESS[process]
-        container = deployments[deployment_name]["spec"]["template"]["spec"][
-            "containers"
-        ][0]
-        config_refs = {
-            ref["configMapRef"]["name"]
-            for ref in container.get("envFrom", [])
-            if "configMapRef" in ref
-        }
-        assert "dev-health-go-worker-config" in config_refs, (
-            f"{deployment_name} (registry process {process!r}) must envFrom "
-            "dev-health-go-worker-config to receive "
-            "OPERATIONAL_ORDERING_CONTRACT"
-        )
 
 
 def test_helm_go_workers_wire_operational_ordering_contract() -> None:
@@ -1899,30 +1699,12 @@ def test_migrate_jobs_can_also_receive_operational_ordering_contract() -> None:
     Red before this fix: none of these five migrate/Job definitions
     reference the key at all.
     """
-    for manifest in (
-        _REPO_ROOT / "compose.yml",
-        _PROD_COMPOSE,
-        _SWARM_STACK,
-    ):
+    for manifest in (_REPO_ROOT / "compose.yml",):
         migrate = _load_yaml(manifest)["services"]["migrate"]
         env = migrate.get("environment") or {}
         assert "OPERATIONAL_ORDERING_CONTRACT" in env, (
             f"{manifest.name}:migrate is missing OPERATIONAL_ORDERING_CONTRACT"
         )
-
-    migrate_job = next(
-        d for d in _k8s_docs("migrate-job.yaml") if d.get("kind") == "Job"
-    )
-    container = migrate_job["spec"]["template"]["spec"]["containers"][0]
-    config_refs = {
-        ref["configMapRef"]["name"]
-        for ref in container.get("envFrom", [])
-        if "configMapRef" in ref
-    }
-    assert "dev-health-go-worker-config" in config_refs, (
-        "kubernetes migrate Job must envFrom dev-health-go-worker-config to "
-        "receive OPERATIONAL_ORDERING_CONTRACT"
-    )
 
     helm_migrate_template = (_HELM_DIR / "templates" / "migrate-job.yaml").read_text(
         encoding="utf-8"

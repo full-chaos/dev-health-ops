@@ -641,8 +641,8 @@ jobs:
   # ---------------------------------------------------------------------------
   # Go runtime images (CHAOS-3923)
   #
-  # Every deployment renderer -- deploy/docker-compose/compose.go-workers.yml,
-  # deploy/helm/dev-health/values.yaml, deploy/kubernetes/go-workers.yaml --
+  # Every deployment renderer -- deploy/docker-compose/compose.go-workers.yml (deleted, CHAOS-6950),
+  # deploy/helm/dev-health/values.yaml, deploy/kubernetes/go-workers.yaml (deleted, CHAOS-6950) --
   # references ghcr.io/<owner>/dev-health-go-<target>, but nothing published
   # them: go.yml builds these same targets with a plain `docker build` for Trivy
   # and SBOM only. A host with just Docker installed therefore could not start

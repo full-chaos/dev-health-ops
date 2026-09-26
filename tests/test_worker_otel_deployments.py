@@ -17,15 +17,14 @@ def _yaml(path: str) -> dict:
     return yaml.safe_load((ROOT / path).read_text())
 
 
-# CHAOS-5589 deleted the Celery `worker` service outright from compose.yml,
-# compose.production.yml, and docker-swarm/stack.yml (R146: not a rollback
-# target) -- there is no Celery/Python worker container left anywhere in any
-# compose surface to carry these Python OTel env vars. The Go worker fleet's
-# own telemetry configuration is covered below, through Kubernetes/Helm.
+# CHAOS-5589 deleted the Celery `worker` service outright from every compose
+# surface (R146: not a rollback target), and CHAOS-6950 deleted the
+# production Compose, Swarm and raw Kubernetes renderers: there is no
+# Celery/Python worker container left to carry these Python OTel env vars.
+# The Go worker fleet's own telemetry configuration is covered below, through
+# Helm.
 
 
-def test_kubernetes_and_helm_workers_receive_otel_metric_configuration() -> None:
-    kubernetes = _yaml("deploy/kubernetes/configmap.yaml")["data"]
+def test_helm_workers_receive_otel_metric_configuration() -> None:
     helm = _yaml("deploy/helm/dev-health/values.yaml")["config"]
-    assert OTEL_KEYS <= set(kubernetes)
     assert OTEL_KEYS <= set(helm)

@@ -6,7 +6,6 @@ import (
 	"bytes"
 	"context"
 	"log/slog"
-	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -15,8 +14,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	postgresstore "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/operatorauditschema"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -33,36 +31,11 @@ import (
 //     the direct repro for r1 P1, run against a real database rather than
 //     argued from reading the code.
 
-// triggerExecutionTables is a minimal copy of the schema
-// internal/jobs/workgraph/postgres_integration_test.go's own
-// createExecutionTables creates -- that helper is unexported in a
-// different package and cannot be imported here, so this is a deliberate,
-// narrower duplicate carrying only what WriteTx itself touches.
+// triggerExecutionTables builds the migrated schema: the execution requests, the worker outbox and
+// the completion fences carry their real columns, constraints and foreign keys.
 func triggerExecutionTables(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
-	_, err := pool.Exec(ctx, `
-CREATE TABLE work_graph_execution_requests (
- id uuid PRIMARY KEY, org_id uuid NOT NULL, kind text NOT NULL, scope jsonb NOT NULL,
- model_ref text NULL, prompt_ref text NULL, llm_concurrency integer NOT NULL,
- spend_limit_microunits bigint NOT NULL, correlation_id text NOT NULL, idempotency_key text NOT NULL UNIQUE,
- state text NOT NULL, claim_token uuid NULL, lease_expires_at timestamptz NULL,
- attempt_count integer NOT NULL DEFAULT 0, created_at timestamptz NOT NULL DEFAULT statement_timestamp(), updated_at timestamptz NOT NULL DEFAULT statement_timestamp()
-);
-CREATE TABLE worker_job_outbox (
- id uuid PRIMARY KEY, dedupe_key varchar(256) NOT NULL UNIQUE, job_kind varchar(96) NOT NULL,
- contract_version integer NOT NULL, args json NOT NULL, payload_hash varchar(71) NOT NULL,
- queue varchar(96) NOT NULL, priority smallint NOT NULL, max_attempts smallint NOT NULL,
- scheduled_at timestamptz NOT NULL, status varchar(16) NOT NULL, attempt_count integer NOT NULL,
- next_attempt_at timestamptz NOT NULL, prerequisite_completion_key text NULL,
- created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL
-);
-CREATE TABLE worker_job_completion_fences (
- completion_key text PRIMARY KEY,
- completed_at timestamptz NOT NULL DEFAULT statement_timestamp()
-)`)
-	if err != nil {
-		t.Fatal(err)
-	}
+	pgschema.Apply(ctx, t, pool)
 }
 
 func triggerIntegrationRuntime(t *testing.T, ctx context.Context, authorizer joboperator.Authorizer) *operatorRuntime {
@@ -181,22 +154,14 @@ func TestManualTriggerRequiresOperateScope(t *testing.T) {
 	}
 }
 
-// triggerExecutionRequestsTableOnly creates ONLY work_graph_execution_requests
-// -- omitting worker_job_outbox -- so a real Postgres INSERT into the
-// requests table succeeds while the outbox producer's own insert fails on a
-// genuine missing-table error. This is what forces WriteTx to fail AFTER
-// Begin already succeeded, the exact branch r2 P2's finding targets.
+// triggerExecutionRequestsTableOnly builds the migrated schema and then DROPS worker_job_outbox, so a
+// real Postgres INSERT into the requests table succeeds while the outbox producer's own insert fails
+// on a genuine missing-table error. This is what forces WriteTx to fail AFTER Begin already
+// succeeded, the exact branch r2 P2's finding targets.
 func triggerExecutionRequestsTableOnly(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
-	_, err := pool.Exec(ctx, `
-CREATE TABLE work_graph_execution_requests (
- id uuid PRIMARY KEY, org_id uuid NOT NULL, kind text NOT NULL, scope jsonb NOT NULL,
- model_ref text NULL, prompt_ref text NULL, llm_concurrency integer NOT NULL,
- spend_limit_microunits bigint NOT NULL, correlation_id text NOT NULL, idempotency_key text NOT NULL UNIQUE,
- state text NOT NULL, claim_token uuid NULL, lease_expires_at timestamptz NULL,
- attempt_count integer NOT NULL DEFAULT 0, created_at timestamptz NOT NULL DEFAULT statement_timestamp(), updated_at timestamptz NOT NULL DEFAULT statement_timestamp()
-)`)
-	if err != nil {
+	pgschema.Apply(ctx, t, pool)
+	if _, err := pool.Exec(ctx, `DROP TABLE public.worker_job_outbox CASCADE`); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -302,16 +267,11 @@ func TestInvestmentManualTriggerRequiresOperateScope(t *testing.T) {
 	}
 }
 
-// migratedPostgresAuditor applies the real worker_operator_audits
-// migrations and returns the production PostgresAuditor on that pool.
+// migratedPostgresAuditor returns the production PostgresAuditor on a pool whose database already
+// carries the migrated schema (worker_operator_audits included): triggerExecutionTables applied the
+// checked-in head, so no migration is replayed on top of it.
 func migratedPostgresAuditor(t *testing.T, uri string, pool *pgxpool.Pool) joboperator.Auditor {
 	t.Helper()
-	ctx := context.Background()
-	python := pyoracle.Resolve(t, operatorauditschema.Root())
-	command := exec.CommandContext(ctx, python, operatorauditschema.Argv(uri)...)
-	command.Env = operatorauditschema.Env()
-	output, err := command.CombinedOutput()
-	operatorauditschema.CheckApplied(t, python, output, err)
 	auditor, err := joboperator.NewPostgresAuditor(pool)
 	if err != nil {
 		t.Fatal(err)

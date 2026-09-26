@@ -4,8 +4,15 @@ River queue control (LISTEN/cancel) and coordinator locks require stable
 sessions. These are separate services so each backend cap is auditable.
 */ -}}
 {{- if and .Values.goWorkers.enabled .Values.goWorkers.pgbouncer.enabled }}
-{{- if not (contains "@sha256:" .Values.goWorkers.pgbouncer.image) }}
-{{- fail "goWorkers.pgbouncer.image must be pinned by immutable sha256 digest" }}
+{{- /*
+CHAOS-6958: `contains "@sha256:"` treated a MALFORMED digest
+(`repo@sha256:not-a-digest`) as pinned; a real puller rejects it. This is a
+third-party image (edoburu/pgbouncer), never a dho image, so it has no identity
+check and no lockstep check to share with dev-health.pinnedOperatorImageCheck --
+only the digest needs to be a well-formed 64 lowercase-hex-digit sha256.
+*/}}
+{{- if not (regexMatch "@sha256:[0-9a-f]{64}$" .Values.goWorkers.pgbouncer.image) }}
+{{- fail (printf "goWorkers.pgbouncer.image %q must be pinned by an immutable sha256 digest (repo@sha256:<64 lowercase-hex-digit digest>)" .Values.goWorkers.pgbouncer.image) }}
 {{- end }}
 {{- $secretName := include "dev-health.goPgbouncerSecretName" . }}
 {{- $postgresHost := include "dev-health.goPgbouncerPostgresHost" . }}

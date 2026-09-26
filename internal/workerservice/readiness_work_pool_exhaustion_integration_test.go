@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/full-chaos/dev-health-ops/internal/pgmigrate"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
@@ -123,8 +124,23 @@ func TestGitHubProjectsV2CensusReadsOnTheReadinessPool(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(probe.Close)
-	if _, err := probe.Exec(ctx, `CREATE TABLE public.integrations (provider text, is_active boolean, config json)`); err != nil {
+	// The REAL schema, not a hand-written table: the census reads integrations.config, and a hand-written
+	// subset drifts from the migrated schema (Trap #412; the hand-DDL ledger guard refuses it).
+	conn, err := pgx.Connect(ctx, instance.URI)
+	if err != nil {
 		t.Fatal(err)
+	}
+	defer conn.Close(context.Background())
+	baseline, err := pgmigrate.LoadBaseline()
+	if err != nil {
+		t.Fatal(err)
+	}
+	chain, err := pgmigrate.LoadChain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pgmigrate.Upgrade(ctx, conn, baseline, chain); err != nil {
+		t.Fatalf("apply the schema: %v", err)
 	}
 	work, err := pgxpool.New(ctx, instance.URI)
 	if err != nil {

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # test-exec-classify.sh <wrapper> -- proof harness for the exec-block classifier of
-# codex-review.sh v4.8.21 (CHAOS-6906, Trap #419).
+# codex-review.sh v4.8.21/v4.8.22 (CHAOS-6906, Trap #419; CHAOS-6948).
 #
 # The classifier decides GO_EXECS / PY_EXECS / BLOCKED_HITS from a round's log and so
 # whether a workspace-write round is stamped "VOID IN FORM: reviewer executed nothing".
@@ -15,6 +15,12 @@
 # did not happen is not a pass. Each fixture below is also run through the v4.8.20
 # first-line counter, and the ones meant to be undercounted assert that it undercounts,
 # so a fixture that no longer discriminates fails.
+#
+# v4.8.22 (CHAOS-6948) adds a fourth number: the blocks that SUCCEEDED and either ran
+# `git diff` or read the review patch (`.codex-review.patch`, passed to the awk as
+# PATCH_NAME). A round with none of those never saw the diff it certifies and is stamped
+# VOID IN FORM. The failing `git diff` (a denied worktree, the case that motivated it)
+# must NOT count. Against a v4.8.21 wrapper (three numbers) the diff checks FAIL.
 #
 # usage: bash test-exec-classify.sh /var/lib/oci-cache/lane-scratch/_shared/codex-review.sh.v4.8.21-<sha>
 set -euo pipefail
@@ -34,7 +40,8 @@ awk '/^# EXEC-CLASSIFY-BEGIN$/{on=1} on{print} /^# EXEC-CLASSIFY-END$/{if(on){fo
 }
 [ "$(grep -c '^# EXEC-CLASSIFY-BEGIN$' "$WORK/classify.awk")" = 1 ] || { echo "FAIL: more than one classifier block" >&2; exit 1; }
 
-classify() { awk -v BLOCKED_PAT="$BLOCKED_PAT" -f "$WORK/classify.awk" "$1"; }
+PATCH_NAME='.codex-review.patch'
+classify() { awk -v BLOCKED_PAT="$BLOCKED_PAT" -v PATCH_NAME="$PATCH_NAME" -f "$WORK/classify.awk" "$1"; }
 # The v4.8.20 counters, verbatim: the first command line of each block only.
 legacy_go() { grep -A1 '^exec$' "$1" 2>/dev/null | grep -cE 'go (test|run|build)' || true; }
 
@@ -42,6 +49,8 @@ fails=0
 check() { # name log want-triple [legacy-go-want]
   local name=$1 log=$2 want=$3 legacy=${4:-}
   local got; got=$(classify "$log")
+  # want is the (go py hits) triple; the fourth number (diff seen) has its own checks.
+  got=$(printf '%s' "$got" | awk '{print $1, $2, $3}')
   if [ "$got" != "$want" ]; then
     echo "FAIL $name: classifier said '$got' (go py hits), want '$want'" >&2; fails=$((fails + 1)); return
   fi
@@ -143,9 +152,67 @@ check "mixed blocks incl. exited and an unterminated one" "$l" "2 0 0" 0
 l=$(newlog empty); printf 'codex\nnothing ran\n' > "$l"
 check "a log with no exec block" "$l" "0 0 0" 0
 
-# 9. every wrapper output is exactly three integers.
+# 8b. CHAOS-6948: did the round SEE the diff? The fourth number counts blocks that
+# SUCCEEDED and ran `git diff` or read the review patch.
+diffcheck() { # name log want-diff-count
+  local name=$1 log=$2 want=$3 got
+  got=$(classify "$log" | awk '{print $4}')
+  if [ "$got" != "$want" ]; then
+    echo "FAIL $name: diff-seen said '${got:-<none>}', want '$want'" >&2; fails=$((fails + 1)); return
+  fi
+  echo "ok   $name -> diff-seen $got"
+}
+l=$(newlog diff-src-only)
+block "$l" "/bin/bash -lc 'cat internal/pgmigrate/apply.go' in /w" " succeeded in 9ms:" "package pgmigrate"
+block "$l" "/bin/bash -lc \"rg -n Upgrade internal/pgmigrate\" in /w" " succeeded in 9ms:" "apply.go:1: x"
+block "$l" "/bin/bash -lc 'go test ./internal/pgmigrate' in /w" " succeeded in 900ms:" "ok"
+diffcheck "reviewer read only source files (and ran go test): not seen" "$l" 0
+l=$(newlog diff-patch-read)
+block "$l" "/bin/bash -lc \"sed -n '1,200p' .codex-review.patch\" in /w" " succeeded in 9ms:" "diff --git a/x b/x"
+diffcheck "read of the patch file: seen" "$l" 1
+l=$(newlog diff-patch-cat-later-line)
+block "$l" "/bin/bash -lc \"set -e
+cd /w
+cat .codex-review.patch | head -50\" in /w" " succeeded in 9ms:" "diff --git a/x b/x"
+diffcheck "patch read on a later line of a script: seen" "$l" 1
+l=$(newlog diff-exec)
+block "$l" "/bin/bash -lc 'git diff origin/main...HEAD' in /w" " succeeded in 12ms:" "diff --git a/x b/x"
+diffcheck "git diff exec: seen" "$l" 1
+l=$(newlog diff-exec-later-line)
+block "$l" "/bin/bash -lc \"set -e
+git -C /w diff --stat origin/main...HEAD\" in /w" " succeeded in 12ms:" " x | 2 +-"
+diffcheck "git -C dir diff on a later line: seen" "$l" 1
+l=$(newlog diff-exec-failed)
+block "$l" "/bin/bash -lc 'git diff origin/main...HEAD' in /w" " failed in 12ms:" "fatal: not a git repository: /denied/path/.git/worktrees/x"
+diffcheck "git diff that FAILED (denied worktree, the motivating case): not seen" "$l" 0
+l=$(newlog diff-read-failed)
+block "$l" "/bin/bash -lc 'cat .codex-review.patch' in /w" " failed in 12ms:" "cat: .codex-review.patch: No such file or directory"
+diffcheck "read of the patch that FAILED: not seen" "$l" 0
+l=$(newlog diff-not-a-read)
+block "$l" "/bin/bash -lc 'ls -l .codex-review.patch' in /w" " succeeded in 5ms:" "-rw-r--r-- 1 x x 100 .codex-review.patch"
+block "$l" "/bin/bash -lc 'git diff-tree --no-commit-id --name-only HEAD' in /w" " succeeded in 5ms:" "x"
+block "$l" "/bin/bash -lc 'git difftool -h' in /w" " succeeded in 5ms:" "usage"
+block "$l" "/bin/bash -lc \"set -e
+git diff-tree --no-commit-id --name-only HEAD\" in /w" " succeeded in 5ms:" "x"
+block "$l" "/bin/bash -lc \"set -e
+git difftool -h\" in /w" " succeeded in 5ms:" "usage"
+diffcheck "ls of the patch, git diff-tree, git difftool (one line or later lines) are not a diff read" "$l" 0
+l=$(newlog diff-other-patch-name)
+block "$l" "/bin/bash -lc 'cat other.patch' in /w" " succeeded in 5ms:" "x"
+diffcheck "a different patch file is not the review patch" "$l" 0
+l=$(newlog diff-count-two)
+block "$l" "/bin/bash -lc 'git diff --stat' in /w" " succeeded in 5ms:" "x"
+block "$l" "/bin/bash -lc 'head -20 .codex-review.patch' in /w" " succeeded in 5ms:" "x"
+block "$l" "/bin/bash -lc 'ls' in /w" " succeeded in 5ms:" "x"
+diffcheck "two diff-seeing blocks among three" "$l" 2
+l=$(newlog diff-empty); printf 'codex\nnothing ran\n' > "$l"
+diffcheck "a log with no exec block: not seen" "$l" 0
+# the shipped fixture (a real round that ran multi-line go scripts and never read the diff)
+diffcheck "the real #3276 r1 log (no diff read): not seen" "$FIXTURES/3276-multiline-script.log" 0
+
+# 9. every wrapper output is exactly four integers.
 for f in "$WORK"/*.log "$FIXTURES"/*.log; do
-  classify "$f" | grep -Eq '^[0-9]+ [0-9]+ [0-9]+$' || { echo "FAIL: $f produced a malformed classification" >&2; fails=$((fails + 1)); }
+  classify "$f" | grep -Eq '^[0-9]+ [0-9]+ [0-9]+ [0-9]+$' || { echo "FAIL: $f produced a malformed classification" >&2; fails=$((fails + 1)); }
 done
 
 if [ "$fails" -ne 0 ]; then echo "$fails check(s) FAILED" >&2; exit 1; fi

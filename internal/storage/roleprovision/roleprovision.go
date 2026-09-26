@@ -44,6 +44,9 @@ import (
 // configured is the name that exists.
 const MaxIdentifierBytes = 63
 
+// kedaLabel is the label (never the name) the KEDA login carries in errors and Verify.
+const kedaLabel = "keda"
+
 // Role is one login to provision.
 type Role struct {
 	Name     string
@@ -212,12 +215,15 @@ func Apply(ctx context.Context, pool interface {
 		return nil
 	}
 
+	// ONE create path for every role: the error names the LABEL, never the name
+	// (Compose defaults each role's password to the role's own name).
+	create := func(entry labelled) error {
+		return step("create the "+entry.label+" role", run.generated(ctx, createRoleSQL, entry.role))
+	}
+
 	// The mandatory block, in the script's order.
-	// Errors name the role LABEL, never its name: Compose defaults each role's
-	// password to the role's own name, so a name in an error or log line can be a
-	// password.
 	for _, entry := range []labelled{{"domain", options.Domain}, {"queue", options.Queue}, {"coordinator", options.Coordinator}} {
-		if err := step("create the "+entry.label+" role", run.generated(ctx, createRoleSQL, entry.role)); err != nil {
+		if err := create(entry); err != nil {
 			return err
 		}
 	}
@@ -245,7 +251,7 @@ func Apply(ctx context.Context, pool interface {
 		if role.Name == "" {
 			continue
 		}
-		if err := step("create the "+entry.label+" role", run.generated(ctx, createRoleSQL, role)); err != nil {
+		if err := create(entry); err != nil {
 			return err
 		}
 		name := ident(role.Name)
@@ -265,7 +271,7 @@ func Apply(ctx context.Context, pool interface {
 	if options.Keda.Name != "" {
 		name := ident(options.Keda.Name)
 		schema := ident(options.schema())
-		if err := step("create the keda role", run.generated(ctx, createRoleSQL, options.Keda)); err != nil {
+		if err := create(labelled{kedaLabel, options.Keda}); err != nil {
 			return err
 		}
 		if err := step("keda password", run.generated(ctx, setPasswordSQL, options.Keda)); err != nil {
@@ -361,52 +367,35 @@ func Verify(ctx context.Context, q roleacl.Querier, options Options) (problems [
 		if temporary {
 			problems = append(problems, Problem{entry.label, "holds TEMPORARY on the application database"})
 		}
-		if entry.label != "keda" {
-			// The readiness identity check (roleacl.IdentityPredicateSQL) refuses a
-			// role that is a member of another role or owns any object; a green
-			// closing check must not promise what readiness will then refuse.
-			var memberFree, ownsNothing bool
-			if err := q.QueryRow(ctx, `SELECT `+roleacl.MembershipFreeSQL+`, `+roleacl.OwnsNothingSQL, entry.role.Name).Scan(&memberFree, &ownsNothing); err != nil {
-				return nil, nil, fmt.Errorf("%w: cannot read role membership and ownership", ErrProvisioning)
+		// The roleacl closure, the SAME for EVERY role including KEDA (lead D2616): the
+		// identity pieces the readiness check uses (member of no role, owns nothing) and
+		// the effective-grant enumeration with its ACL-dependency self-check, PUBLIC
+		// counted. Only the JUDGEMENT of the enumerated grants differs per role
+		// (judgeGrant); a per-role shortcut around the closure is what
+		// TestVerifyRunsTheRoleaclClosureForEveryConfiguredRole exists to catch.
+		var memberFree, ownsNothing bool
+		if err := q.QueryRow(ctx, `SELECT `+roleacl.MembershipFreeSQL+`, `+roleacl.OwnsNothingSQL, entry.role.Name).Scan(&memberFree, &ownsNothing); err != nil {
+			return nil, nil, fmt.Errorf("%w: cannot read role membership and ownership", ErrProvisioning)
+		}
+		if !memberFree {
+			problems = append(problems, Problem{entry.label, "is a member of another role (privileges it inherits are invisible to its own grants; readiness refuses it)"})
+		}
+		if !ownsNothing {
+			problems = append(problems, Problem{entry.label, "owns an object (readiness refuses it)"})
+		}
+		grants, err := roleacl.Enumerate(ctx, q, entry.role.Name)
+		if err != nil {
+			return nil, nil, fmt.Errorf("%w: cannot enumerate the %s role's grants", ErrProvisioning, entry.label)
+		}
+		for _, grant := range grants {
+			if grant.Class == "setting" {
+				continue
 			}
-			if !memberFree {
-				problems = append(problems, Problem{entry.label, "is a member of another role (readiness refuses it)"})
-			}
-			if !ownsNothing {
-				problems = append(problems, Problem{entry.label, "owns an object (readiness refuses it)"})
-			}
-			// Read the SAME enumeration and closure self-check the readiness checks
-			// use, so a privilege KIND nobody thought to list cannot hide; report what
-			// neither this command nor `dho migrate river` grants (runtimeGrantOutOfScope).
-			grants, err := roleacl.Enumerate(ctx, q, entry.role.Name)
-			if err != nil {
-				return nil, nil, fmt.Errorf("%w: cannot enumerate the %s role's grants", ErrProvisioning, entry.label)
-			}
-			for _, grant := range grants {
-				if grant.ViaPublic || grant.Class == "setting" || !runtimeGrantOutOfScope(grant, database) {
-					continue
-				}
-				problems = append(problems, Problem{entry.label, "holds an unexpected privilege: " + grant.String()})
-			}
-			if !usage {
-				problems = append(problems, Problem{entry.label, "lacks USAGE on schema public"})
-			}
-			if direct {
-				problems = append(problems, Problem{entry.label, "holds CREATE on schema public in its own name"})
-			} else if create {
-				warnings = append(warnings, Problem{entry.label, "holds CREATE on schema public only through PUBLIC (a target-wide default a human must revoke)"})
+			if detail := judgeGrant(entry.label, grant, database, options.schema()); detail != "" {
+				problems = append(problems, Problem{entry.label, detail})
 			}
 		}
 		if entry.label == "keda" {
-			// Read-only in EFFECT: a role membership hides privileges from the role's own
-			// ACL entries, so KEDA is membership-free like the runtime roles.
-			var kedaMemberFree bool
-			if err := q.QueryRow(ctx, `SELECT `+roleacl.MembershipFreeSQL, entry.role.Name).Scan(&kedaMemberFree); err != nil {
-				return nil, nil, fmt.Errorf("%w: cannot read the KEDA role's memberships", ErrProvisioning)
-			}
-			if !kedaMemberFree {
-				problems = append(problems, Problem{entry.label, "is a member of another role (privileges it inherits are invisible to its own grants)"})
-			}
 			var readsJobs bool
 			if err := q.QueryRow(ctx, `SELECT has_schema_privilege($1::name, $2::name, 'USAGE')
 				AND has_table_privilege($1::name, format('%I.river_job', $2::text), 'SELECT')`,
@@ -416,32 +405,15 @@ func Verify(ctx context.Context, q roleacl.Querier, options Options) (problems [
 			if !readsJobs {
 				problems = append(problems, Problem{entry.label, "cannot SELECT river_job"})
 			}
-			// Read-only means read-only: every privilege the login holds in its own
-			// name must be one of the three Apply grants. Apply, like the script,
-			// never revokes an extra (it would be a guess about someone else's
-			// grant), so an extra is reported here for a human to remove.
-			grants, err := roleacl.Enumerate(ctx, q, entry.role.Name)
-			if err != nil {
-				return nil, nil, fmt.Errorf("%w: cannot enumerate the KEDA role's grants", ErrProvisioning)
-			}
-			for _, grant := range grants {
-				if grant.Class == "setting" || kedaGrantExpected(grant, database, options.schema()) {
-					continue
-				}
-				// PUBLIC-derived grants count for KEDA (it has no later readiness check):
-				// what PUBLIC hands EVERY role (CONNECT here, USAGE on public) is ambient,
-				// CREATE on public is the target-wide default the others warn about, and
-				// anything else it holds through PUBLIC is a problem like a direct grant.
-				if grant.ViaPublic {
-					if publicAmbient(grant, database) {
-						continue
-					}
-					if grant.Class == "schema" && grant.Object == "public" && grant.Privilege == "CREATE" {
-						continue
-					}
-				}
-				problems = append(problems, Problem{entry.label, "holds an unexpected privilege: " + grant.String()})
-			}
+			continue
+		}
+		if !usage {
+			problems = append(problems, Problem{entry.label, "lacks USAGE on schema public"})
+		}
+		if direct {
+			problems = append(problems, Problem{entry.label, "holds CREATE on schema public in its own name"})
+		} else if create {
+			warnings = append(warnings, Problem{entry.label, "holds CREATE on schema public only through PUBLIC (a target-wide default a human must revoke)"})
 		}
 	}
 	return problems, warnings, nil
@@ -483,8 +455,34 @@ func runtimeGrantOutOfScope(grant roleacl.Grant, database string) bool {
 	return false
 }
 
-// publicAmbient is what PUBLIC gives every role on a stock database.
-func publicAmbient(grant roleacl.Grant, database string) bool {
-	return (grant.Class == "database" && grant.Object == database && grant.Privilege == "CONNECT") ||
-		(grant.Class == "schema" && grant.Object == "public" && grant.Privilege == "USAGE")
+// publicAmbient is the USAGE on schema public PUBLIC gives every role on a stock
+// database (CONNECT on this database is matched by kedaGrantExpected, ViaPublic or not).
+func publicAmbient(grant roleacl.Grant) bool {
+	return grant.Class == "schema" && grant.Object == "public" && grant.Privilege == "USAGE"
+}
+
+// judgeGrant is the per-role judgement of one enumerated grant; "" means acceptable.
+//
+//   - KEDA holds exactly CONNECT here, USAGE on the River schema and SELECT on
+//     river_job. It has no later readiness check, so PUBLIC-derived grants count
+//     (ambient CONNECT and USAGE on public excepted; CREATE on public through PUBLIC
+//     is the target-wide default the other roles warn about, not a KEDA problem).
+//   - The runtime roles: what neither command grants (runtimeGrantOutOfScope), in
+//     their own name; PUBLIC-derived ones are the readiness checks' and the
+//     CREATE-on-public warning's business.
+func judgeGrant(label string, grant roleacl.Grant, database, schema string) string {
+	unexpected := "holds an unexpected privilege: " + grant.String()
+	if label == "keda" {
+		if kedaGrantExpected(grant, database, schema) {
+			return ""
+		}
+		if grant.ViaPublic && (publicAmbient(grant) || (grant.Class == "schema" && grant.Object == "public" && grant.Privilege == "CREATE")) {
+			return ""
+		}
+		return unexpected
+	}
+	if grant.ViaPublic || !runtimeGrantOutOfScope(grant, database) {
+		return ""
+	}
+	return unexpected
 }

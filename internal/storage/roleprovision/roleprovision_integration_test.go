@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -728,6 +729,82 @@ func TestVerifyAuthenticatesTheSuppliedPasswords(t *testing.T) {
 	for _, item := range append(append([]Problem{}, problems...), warnings...) {
 		if strings.Contains(item.String(), "parity_") || strings.Contains(item.String(), "pw") {
 			t.Errorf("a role name or password leaked into %q", item.String())
+		}
+	}
+}
+
+// recordingQuerier is a roleacl.Querier that records, per statement, the role it was
+// asked about (the first argument).
+type recordingQuerier struct {
+	inner roleacl.Querier
+	mu    sync.Mutex
+	calls []recordedCall
+}
+
+type recordedCall struct{ sql, role string }
+
+func (r *recordingQuerier) record(sql string, args []any) {
+	role := ""
+	if len(args) > 0 {
+		if text, ok := args[0].(string); ok {
+			role = text
+		}
+	}
+	r.mu.Lock()
+	r.calls = append(r.calls, recordedCall{sql, role})
+	r.mu.Unlock()
+}
+
+func (r *recordingQuerier) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
+	r.record(sql, args)
+	return r.inner.Query(ctx, sql, args...)
+}
+
+func (r *recordingQuerier) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
+	r.record(sql, args)
+	return r.inner.QueryRow(ctx, sql, args...)
+}
+
+func (r *recordingQuerier) ran(fragment, role string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, call := range r.calls {
+		if call.role == role && strings.Contains(call.sql, fragment) {
+			return true
+		}
+	}
+	return false
+}
+
+// Lead D2616 structural condition: Verify runs the roleacl closure (identity attributes,
+// member-of-no-role, owns-nothing, and the effective-grant enumeration with its
+// ACL-dependency self-check) for EVERY configured role, KEDA included, so a
+// role-specific shortcut around it fails here. The manifest roles are ENUMERATED from
+// the options, not listed by hand.
+func TestVerifyRunsTheRoleaclClosureForEveryConfiguredRole(t *testing.T) {
+	t.Parallel()
+	s := startSide(t)
+	options := testOptions(true)
+	s.runGo(t, options)
+	recorder := &recordingQuerier{inner: s.admin}
+	if problems, warnings, err := Verify(context.Background(), recorder, options); err != nil || len(problems)+len(warnings) != 0 {
+		t.Fatalf("Verify: %v %v %v", problems, warnings, err)
+	}
+	configured := options.configured()
+	if len(configured) != 6 {
+		t.Fatalf("the manifest must enumerate all six roles, got %d", len(configured))
+	}
+	closure := map[string]string{
+		"identity attributes":         roleacl.RoleAttributesSQL,
+		"membership-free":             roleacl.MembershipFreeSQL,
+		"owns nothing":                roleacl.OwnsNothingSQL,
+		"effective-grant enumeration": "'relation' AS class",
+	}
+	for _, entry := range configured {
+		for name, fragment := range closure {
+			if !recorder.ran(fragment, entry.role.Name) {
+				t.Errorf("Verify did not run the roleacl %s check for the %s role", name, entry.label)
+			}
 		}
 	}
 }

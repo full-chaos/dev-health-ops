@@ -311,4 +311,9 @@ func TestMigrateRolesFailsWhenAnExistingLoginHasADifferentPasswordAndChangesNoth
 		!strings.Contains(stdout.String()+stderr.String(), "does not authenticate") {
 		t.Fatalf("--check must report the stale password: exit %d\n%s\n%s", code, stdout.String(), stderr.String())
 	}
+	for _, leaked := range []string{"stale_domain", "stale_queue", "stale_coordinator", "old-domain-pass", "new-domain-pass", "queue-pass-ok", "coordinator-pass-ok"} {
+		if strings.Contains(stdout.String()+stderr.String(), leaked) {
+			t.Errorf("--check output leaked %q (role names and passwords never appear, only labels)", leaked)
+		}
+	}
 }

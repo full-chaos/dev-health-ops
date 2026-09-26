@@ -389,7 +389,7 @@ func (h *handlers) manualOutcome(w http.ResponseWriter, r *http.Request, configI
 	default:
 		return outcome, false, nil
 	}
-	policy.WriteJSON(w, http.StatusAccepted, body, nil)
+	policy.WriteModel(w, http.StatusAccepted, body, nil)
 	return outcome, true, nil
 }
 
@@ -440,5 +440,5 @@ func (h *handlers) triggerSyncConfig(w http.ResponseWriter, r *http.Request) {
 	body.Set("sync_run_id", outcome.SyncRunID)
 	body.Set("run_id", outcome.JobRunID)
 	body.Set("total_units", int64(outcome.TotalUnits))
-	policy.WriteJSON(w, http.StatusAccepted, body, nil)
+	policy.WriteModel(w, http.StatusAccepted, body, nil)
 }

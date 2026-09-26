@@ -4,7 +4,7 @@ import "testing"
 
 // wantResponseModelRoutes is the response-model table exactly as it stood in
 // responsemodel.go before CHAOS-6722 split it into per-family files (230 keys,
-// sorted). The runtime table after package init must equal it: a route dropped,
+// sorted; CHAOS-6882 added the sync-config trigger and backfill routes). The runtime table after package init must equal it: a route dropped,
 // duplicated into a wrong value, or flipped in any per-family file fails here.
 // Adding a route legitimately means adding it here too, in the same PR.
 var wantResponseModelRoutes = map[string]bool{
@@ -174,6 +174,8 @@ var wantResponseModelRoutes = map[string]bool{
 	"POST /api/v1/admin/settings":                                                      true,
 	"POST /api/v1/admin/sync-configs":                                                  true,
 	"POST /api/v1/admin/sync-configs/batch":                                            true,
+	"POST /api/v1/admin/sync-configs/{config_id}/backfill":                             true,
+	"POST /api/v1/admin/sync-configs/{config_id}/trigger":                              true,
 	"POST /api/v1/admin/teams":                                                         true,
 	"POST /api/v1/admin/teams/import":                                                  true,
 	"POST /api/v1/admin/teams/{team_id}/approve-changes":                               true,

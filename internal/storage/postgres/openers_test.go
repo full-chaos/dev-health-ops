@@ -58,6 +58,7 @@ var openers = map[string]struct {
 	"internal/goapicli/routing/main.go":                    {kindBoundary, "goapi routing: connectPostgres, the helper of status, enable, disable, repoint and carry"},
 	"internal/maintenancecli/maintenance.go":               {kindBoundary, "maintenance"},
 	"internal/pgmigrate/command.go":                        {kindBoundary, "migrate postgres upgrade, status, current"},
+	"internal/pgmigrate/preflight.go":                      {kindBoundary, "migrate postgres preflight: the connection is opened with pgx.Connect and every error goes through Boundary(dsn).Redact"},
 	"internal/goapicli/restprove/main.go":                  {kindGeneric, "a failed connect is the fixed message"},
 	"internal/migrationmatrix/live.go":                     {kindGeneric, "a failed connect is the fixed message"},
 	"internal/migrationmatrix/restproven.go":               {kindGeneric, "a failed connect is the fixed message"},

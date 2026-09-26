@@ -128,15 +128,36 @@ func (repair *TerminalDeliveryRepair) repairReadyFinalizers(
 		return outcome, fmt.Errorf("ready-finalizer candidate count: %w", ErrUnavailable)
 	}
 	outcome.Candidates = len(candidates)
+
+	// CHAOS-6956: one SET-based coordinator round trip for every candidate's readiness, instead of
+	// one round trip PER candidate. The per-candidate loop below used to call readyFinalizeDomainSQL
+	// once per row; on a pass with ~14-18 not-ready candidates (a run's finalize is not ready until
+	// every unit and discovery of it is terminal, which can hold for many passes in a row -- this is
+	// not a stuck run, it is a run still doing work) that alone consumed the whole 750ms
+	// terminal_delivery_repair stage budget in serial statements, so the transaction's own Commit ran
+	// into the budget and rolled back (CHAOS-6932). runIDs is deduplicated: the candidate query's own
+	// unique index (sync_run_id, kind) means at most one candidate per run for this kind in practice,
+	// but nothing here depends on that holding.
+	runIDs := make([]string, 0, len(candidates))
+	seenRun := make(map[string]bool, len(candidates))
 	for _, c := range candidates {
-		var ready bool
-		started := time.Now()
-		readErr := repair.coordinator.QueryRow(ctx, readyFinalizeDomainSQL, c.runID).Scan(&ready)
-		outcome.CoordinatorReadSec += time.Since(started).Seconds()
-		if readErr != nil {
-			return outcome, repair.readyFinalizeError(ctx, "coordinator_readiness", readErr)
+		if !seenRun[c.runID] {
+			seenRun[c.runID] = true
+			runIDs = append(runIDs, c.runID)
 		}
-		if !ready {
+	}
+	started := time.Now()
+	readyRuns, readErr := repair.readyFinalizeRuns(ctx, runIDs)
+	outcome.CoordinatorReadSec = time.Since(started).Seconds()
+	if readErr != nil {
+		return outcome, repair.readyFinalizeError(ctx, "coordinator_readiness", readErr)
+	}
+	for _, c := range candidates {
+		// A run absent from the answer is not ready: the batched query's WHERE clause is the same
+		// finalizeReadyRunPredicate the per-run query used, so a run it does not return failed one of
+		// those conditions, exactly as a per-run false answer would have. Missing is never read as
+		// ready (readyFinalizeRunsSQL's own doc comment).
+		if !readyRuns[c.runID] {
 			outcome.SkippedNotReady++
 			continue
 		}
@@ -286,6 +307,39 @@ LIMIT $3`
 const readyFinalizeDomainSQL = `SELECT EXISTS (
     SELECT 1 FROM public.sync_runs AS run WHERE run.id=$1 AND ` + finalizeReadyRunPredicate + `
 )`
+
+// readyFinalizeRunsSQL is readyFinalizeDomainSQL's set-based counterpart (CHAOS-6956): one
+// statement answers every candidate's readiness in a pass, instead of one statement per candidate.
+// A run whose id is passed but is absent from the result is NOT ready -- the WHERE clause is
+// finalizeReadyRunPredicate unchanged, so a run this excludes is a run the per-row query would also
+// have answered false for. It is never read as "unknown" or "ready by default".
+const readyFinalizeRunsSQL = `
+SELECT run.id::text
+FROM public.sync_runs AS run
+WHERE run.id = ANY($1::uuid[]) AND ` + finalizeReadyRunPredicate
+
+func (repair *TerminalDeliveryRepair) readyFinalizeRuns(ctx context.Context, runIDs []string) (map[string]bool, error) {
+	ready := make(map[string]bool, len(runIDs))
+	if len(runIDs) == 0 {
+		return ready, nil
+	}
+	rows, err := repair.coordinator.Query(ctx, readyFinalizeRunsSQL, runIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ready[id] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return ready, nil
+}
 
 const lockReadyFinalizeJobSQL = `
 SELECT ` + readyFinalizeJobLivenessPredicate + `

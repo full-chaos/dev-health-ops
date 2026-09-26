@@ -85,7 +85,9 @@ def test_other_autoscaled_groups_keep_their_single_river_trigger() -> None:
 def test_the_planned_query_reads_only_the_table_the_keda_login_may_select() -> None:
     """The role half grants SELECT on public.sync_run_units and river_job and nothing else."""
     _, planned = _sync(_scaled())["spec"]["triggers"]
-    tables = set(re.findall(r"\b(?:FROM|JOIN)\s+([\w.]+)", planned["metadata"]["query"], re.I))
+    tables = set(
+        re.findall(r"\b(?:FROM|JOIN)\s+([\w.]+)", planned["metadata"]["query"], re.I)
+    )
     assert tables == {"public.sync_run_units"}, tables
 
 
@@ -103,11 +105,15 @@ def test_extra_triggers_on_a_group_that_does_not_autoscale_are_refused() -> None
         if group["name"] == "sync":
             group["autoscaling"] = {
                 "enabled": False,
-                "extraTriggers": [{"name": "x", "query": "SELECT 1", "targetQueryValue": 5}],
+                "extraTriggers": [
+                    {"name": "x", "query": "SELECT 1", "targetQueryValue": 5}
+                ],
             }
     result = _template(groups)
     assert result.returncode != 0
-    assert "extraTriggers" in result.stderr and "autoscaling.enabled" in result.stderr, result.stderr
+    assert (
+        "extraTriggers" in result.stderr and "autoscaling.enabled" in result.stderr
+    ), result.stderr
 
 
 def test_an_extra_trigger_without_a_query_or_target_is_refused() -> None:
@@ -130,7 +136,10 @@ def test_extra_trigger_names_are_unique_within_a_group() -> None:
     for group in groups:
         if group["name"] == "sync":
             trigger = {"name": "dup", "query": "SELECT 1", "targetQueryValue": 5}
-            group["autoscaling"] = {**group["autoscaling"], "extraTriggers": [trigger, trigger]}
+            group["autoscaling"] = {
+                **group["autoscaling"],
+                "extraTriggers": [trigger, trigger],
+            }
     result = _template(groups)
     assert result.returncode != 0
     assert "dup" in result.stderr, result.stderr

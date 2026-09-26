@@ -99,6 +99,7 @@ func Routes(deps Deps) []httpapi.Route {
 	}
 	if deps.ClickHouse != nil {
 		h.diagnostics = clickhouseDiagnostics{conn: deps.ClickHouse}
+		h.clickhouse = deps.ClickHouse
 	}
 	h.discovery = newCreateDiscovery(deps, logger, clock)
 	wrap := func(handler http.HandlerFunc) http.Handler { return deps.Guard.Wrap(policy.AdminOrg, handler) }
@@ -114,6 +115,9 @@ func Routes(deps Deps) []httpapi.Route {
 		{Method: http.MethodPatch, Pattern: prefix + "/sync-configs/{config_id}",
 			Handler: deps.Guard.BodyFirst(policy.AdminOrg, http.HandlerFunc(h.updateSyncConfig))},
 		{Method: http.MethodDelete, Pattern: prefix + "/sync-configs/{config_id}", Handler: wrap(h.deleteSyncConfig)},
+		{Method: http.MethodPost, Pattern: prefix + "/sync-configs/{config_id}/trigger", Handler: wrap(h.triggerSyncConfig)},
+		{Method: http.MethodPost, Pattern: prefix + "/sync-configs/{config_id}/backfill",
+			Handler: deps.Guard.BodyFirst(policy.AdminOrg, http.HandlerFunc(h.backfillSyncConfig))},
 		{Method: http.MethodGet, Pattern: prefix + "/sync-configs/{config_id}/repositories", Handler: wrap(h.getRepositories)},
 		{Method: http.MethodPut, Pattern: prefix + "/sync-configs/{config_id}/repositories",
 			Handler: deps.Guard.BodyFirst(policy.AdminOrg, http.HandlerFunc(h.replaceRepositories))},
@@ -138,6 +142,9 @@ type handlers struct {
 	// the writes' clock.
 	clock      func() time.Time
 	gitlabHTTP *http.Client
+	// clickhouse is the api's ClickHouse login (nil when it has none): the
+	// trigger route's work items count.
+	clickhouse driver.Conn
 	// diagnostics is nil when the api has no ClickHouse login.
 	diagnostics diagnosticsReader
 	// discovery is the create path's Jira project discovery; nil when the

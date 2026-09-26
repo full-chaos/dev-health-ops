@@ -11,92 +11,16 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 const occurrenceOrgID = "00000000-0000-4000-8000-0000000000aa"
 
-// occurrenceReconcileFixture adds the reconcile-state columns and constraints
-// from alembic 0051 to the shared scheduler fixture. The check constraints are
-// the point of the fixture: they are what prove the reconciler never writes an
-// ambiguous lifecycle row.
-const occurrenceReconcileFixtureDDL = `
-CREATE TABLE public.sync_configurations (
-    id uuid PRIMARY KEY,
-    org_id text NOT NULL,
-    is_active boolean NOT NULL,
-    -- CHAOS-4174: defaults TRUE (unlike prod migration 0018's server_default
-    -- FALSE) so this file's existing reconciler fixtures, which never name
-    -- the column, keep exercising the materialization paths they were
-    -- written for. The dedicated refusal test inserts planner_managed
-    -- explicitly.
-    planner_managed boolean NOT NULL DEFAULT TRUE,
-    -- CHAOS-4604: lockPendingOccurrenceSQL now selects config.source_id
-    -- unconditionally (Materialize's gate admits a non-planner-managed
-    -- config only when it is set) -- this file's existing fixtures never
-    -- name the column, so it stays NULL for all of them, unchanged.
-    source_id uuid,
-    sync_options jsonb NOT NULL,
-    last_sync_at timestamptz,
-    created_at timestamptz NOT NULL
-);
-CREATE TABLE public.scheduled_jobs (
-    id uuid PRIMARY KEY,
-    org_id text NOT NULL,
-    sync_config_id uuid NOT NULL,
-    job_type text NOT NULL,
-    schedule_cron text NOT NULL,
-    timezone text NOT NULL,
-    status integer NOT NULL,
-    is_running boolean NOT NULL,
-    last_run_at timestamptz,
-    updated_at timestamptz,
-    next_run_at timestamptz
-);
-CREATE TABLE public.scheduled_sync_occurrences (
-    occurrence_id text PRIMARY KEY,
-    identity_version text NOT NULL,
-    org_id text NOT NULL,
-    sync_config_id uuid NOT NULL,
-    scheduled_job_id uuid NOT NULL,
-    scheduled_for timestamptz NOT NULL,
-    job_run_id uuid,
-    sync_run_id uuid,
-    reconcile_attempt_count integer NOT NULL DEFAULT 0,
-    reconcile_next_attempt_at timestamptz,
-    reconcile_error_code varchar(64),
-    reconcile_error_at timestamptz,
-    reconcile_status varchar(16) NOT NULL DEFAULT 'pending',
-    created_at timestamptz NOT NULL DEFAULT now(),
-    UNIQUE (sync_config_id, scheduled_for),
-    CONSTRAINT ck_scheduled_sync_occurrence_plan_links CHECK (
-        (job_run_id IS NULL AND sync_run_id IS NULL)
-        OR (job_run_id IS NOT NULL AND sync_run_id IS NOT NULL)
-    ),
-    CONSTRAINT ck_scheduled_sync_occurrence_reconcile_attempt_count
-        CHECK (reconcile_attempt_count >= 0),
-    CONSTRAINT ck_scheduled_sync_occurrence_reconcile_status
-        CHECK (reconcile_status IN ('pending', 'retry', 'completed', 'quarantined')),
-    CONSTRAINT ck_scheduled_sync_occurrence_reconcile_error_code CHECK (
-        reconcile_error_code IN
-            ('identity_conflict', 'ineligible', 'planner_error', 'retry_exhausted', 'invalid_plan')
-        OR reconcile_error_code IS NULL
-    ),
-    CONSTRAINT ck_scheduled_sync_occurrence_reconcile_error_state CHECK (
-        (reconcile_error_code IS NULL AND reconcile_error_at IS NULL)
-        OR (reconcile_error_code IS NOT NULL AND reconcile_error_at IS NOT NULL)
-    ),
-    CONSTRAINT ck_scheduled_sync_occurrence_reconcile_completed_state CHECK (
-        (reconcile_status = 'completed' AND job_run_id IS NOT NULL AND sync_run_id IS NOT NULL)
-        OR (reconcile_status <> 'completed' AND job_run_id IS NULL AND sync_run_id IS NULL)
-    ),
-    CONSTRAINT ck_scheduled_sync_occurrence_reconcile_quarantined_state CHECK (
-        reconcile_status <> 'quarantined'
-        OR (job_run_id IS NULL AND sync_run_id IS NULL AND reconcile_error_code IS NOT NULL)
-    )
-);
-`
+// The reconcile-state columns and constraints (alembic 0051) come from the migrated schema: the
+// check constraints are what prove the reconciler never writes an ambiguous lifecycle row.
 
 type occurrenceFixture struct {
 	pool       *pgxpool.Pool
@@ -125,27 +49,24 @@ func startOccurrencePostgres(t *testing.T) occurrenceFixture {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	if _, err := pool.Exec(ctx, occurrenceReconcileFixtureDDL); err != nil {
-		t.Fatal(err)
-	}
+	pgschema.Apply(ctx, t, pool)
 
 	const (
 		configID = "00000000-0000-4000-8000-000000004001"
 		jobID    = "00000000-0000-4000-8000-000000004002"
 	)
-	if _, err := pool.Exec(ctx, `
-INSERT INTO public.sync_configurations (id, org_id, is_active, sync_options, created_at)
-VALUES ($1::uuid, $2, TRUE, '{"schedule_cron":"0 * * * *","timezone":"UTC"}'::jsonb, now())`,
-		configID, occurrenceOrgID); err != nil {
+	// planner_managed is TRUE so this file's reconciler fixtures exercise the materialization paths
+	// they were written for (CHAOS-4174); source_id stays NULL (CHAOS-4604).
+	if err := insertPlannerFixture(ctx, pool, plannerFixture{
+		configID: configID, jobID: jobID, orgID: occurrenceOrgID, plannerManaged: true,
+		createdAt: time.Now().UTC().Format(time.RFC3339Nano),
+	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := pool.Exec(ctx, `
-INSERT INTO public.scheduled_jobs
-    (id, org_id, sync_config_id, job_type, schedule_cron, timezone, status, is_running)
-VALUES ($1::uuid, $2, $3::uuid, 'sync', '0 * * * *', 'UTC', 0, FALSE)`,
-		jobID, occurrenceOrgID, configID); err != nil {
-		t.Fatal(err)
-	}
+	// The stub materializers report these ids as the plan they "created"; the migrated schema's
+	// foreign keys need the job run and the sync run to exist for the occurrence to link to them.
+	pgseed.JobRun(ctx, t, pool, "00000000-0000-4000-8000-00000000b001", jobID, 0, "")
+	pgseed.EnsureSyncRun(ctx, t, pool, pgseed.SyncRun{ID: "00000000-0000-4000-8000-00000000b002", OrgID: occurrenceOrgID})
 	scheduledFor := at("2026-07-24T01:00:00Z")
 	occurrence := newOccurrence(configID, occurrenceOrgID, jobID, scheduledFor, scheduledFor, scheduledFor)
 	if _, err := pool.Exec(ctx, `
@@ -206,8 +127,8 @@ func (materializer *countingMaterializer) Materialize(
 	materializer.mu.Unlock()
 	if materializer.writeRow {
 		if _, execErr := tx.Exec(ctx, `
-INSERT INTO public.sync_configurations (id, org_id, is_active, sync_options, created_at)
-VALUES (gen_random_uuid(), $1, TRUE, '{}'::jsonb, now())`, occurrence.OrgID); execErr != nil {
+INSERT INTO public.sync_configurations (id, org_id, name, provider, is_active, sync_options, created_at, updated_at)
+VALUES (gen_random_uuid(), $1, 'partial-write-' || gen_random_uuid()::text, 'github', TRUE, '{}'::json, now(), now())`, occurrence.OrgID); execErr != nil {
 			return PlanResult{}, execErr
 		}
 	}

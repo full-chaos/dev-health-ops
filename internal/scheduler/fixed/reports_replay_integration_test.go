@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -22,12 +23,7 @@ func seedHandoff(t *testing.T, pool *pgxpool.Pool, runID, status string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	if _, err := pool.Exec(ctx, `
-INSERT INTO public.worker_job_outbox (id, dedupe_key, job_kind, status)
-VALUES (gen_random_uuid(), $1, 'report.execute_scheduled', $2)`,
-		"report.run:"+runID, status); err != nil {
-		t.Fatal(err)
-	}
+	pgseed.WorkerJobOutbox(ctx, t, pool, "report.run:"+runID, "report.execute_scheduled", status)
 }
 
 func handoffCount(t *testing.T, pool *pgxpool.Pool) int {
@@ -178,7 +174,7 @@ func TestOneTenantsStrandedRunDoesNotBlockAnotherTenant(t *testing.T) {
 		sql  string
 		args []any
 	}{
-		{`INSERT INTO public.organizations (id, name, is_active) VALUES ($1::uuid, 'tenant-b', TRUE)`,
+		{`INSERT INTO public.organizations (id, slug, name, tier, is_active, created_at, updated_at) VALUES ($1::uuid, 'org-' || $1::text, 'tenant-b', 'community', TRUE, now(), now())`,
 			[]any{otherOrganizationID}},
 		{`INSERT INTO public.scheduled_jobs
     (id, org_id, name, job_type, schedule_cron, timezone, status, is_running, created_at, updated_at)
@@ -235,8 +231,8 @@ func TestWorkBoundDefersRemainderInsteadOfFailing(t *testing.T) {
 	if _, err := pool.Exec(ctx, `
 INSERT INTO public.scheduled_jobs
     (id, org_id, name, job_type, schedule_cron, timezone, status, is_running, created_at, updated_at)
-SELECT gen_random_uuid(), $1, 'report:bulk', 'report', '0 6 * * *', 'UTC', 0, FALSE, $2, $2
-FROM generate_series(1, $3)`,
+SELECT gen_random_uuid(), $1, 'report:bulk:' || gen_random_uuid()::text, 'report', '0 6 * * *', 'UTC', 0, FALSE, $2, $2
+FROM generate_series(1, $3) AS n`,
 		testOrganizationID, createdAt, maximumScheduledReportsPerOccurrence); err != nil {
 		t.Fatal(err)
 	}
@@ -323,6 +319,11 @@ func TestAmbiguousScheduleIsRefusedEvenWhenOneReportIsLocked(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	const siblingID = "7c3d1e2f-4a5b-4c6d-8e9f-0a1b2c3d4e5f"
+	// The migrated schema enforces Alembic 0096's uq_saved_reports_schedule_id; drop it to simulate a
+	// partially migrated or manually drifted schema, as the fixture always did.
+	if _, err := pool.Exec(ctx, `ALTER TABLE public.saved_reports DROP CONSTRAINT uq_saved_reports_schedule_id`); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := pool.Exec(ctx, `
 INSERT INTO public.saved_reports (id, org_id, name, schedule_id, is_active, created_at, updated_at)
 VALUES ($1::uuid, $2, 'sibling', $3::uuid, TRUE, $4, $4)`,
@@ -368,7 +369,7 @@ func TestCrossTenantJobAndReportAreNeverPaired(t *testing.T) {
 	defer cancel()
 	const otherOrganizationID = "4d2b6e99-1c3a-4f5b-8a7c-6d5e4f3a2b10"
 	if _, err := pool.Exec(ctx, `
-INSERT INTO public.organizations (id, name, is_active) VALUES ($1::uuid, 'other', TRUE)`,
+INSERT INTO public.organizations (id, slug, name, tier, is_active, created_at, updated_at) VALUES ($1::uuid, 'org-' || $1::text, 'other', 'community', TRUE, now(), now())`,
 		otherOrganizationID); err != nil {
 		t.Fatal(err)
 	}
@@ -716,8 +717,8 @@ func TestCarriedOverReportLandsUnderContinuousArrival(t *testing.T) {
 WITH new_jobs AS (
     INSERT INTO public.scheduled_jobs
         (id, org_id, name, job_type, schedule_cron, timezone, status, is_running, next_run_at, created_at, updated_at)
-    SELECT gen_random_uuid(), $1, 'report:fill', 'report', $2, 'UTC', 0, FALSE, $5, $3, $3
-    FROM generate_series(1, $4)
+    SELECT gen_random_uuid(), $1, 'report:fill:' || gen_random_uuid()::text, 'report', $2, 'UTC', 0, FALSE, $5, $3, $3
+    FROM generate_series(1, $4) AS n
     RETURNING id
 )
 INSERT INTO public.saved_reports
@@ -817,8 +818,8 @@ func TestDurableReplayProgressesWhenTheNewReportPageIsFull(t *testing.T) {
 WITH new_jobs AS (
     INSERT INTO public.scheduled_jobs
         (id, org_id, name, job_type, schedule_cron, timezone, status, is_running, next_run_at, created_at, updated_at)
-    SELECT gen_random_uuid(), $1, 'report:new-fill', 'report', '0 6 * * *', 'UTC', 0, FALSE, $2, $3, $3
-    FROM generate_series(1, $4)
+    SELECT gen_random_uuid(), $1, 'report:new-fill:' || gen_random_uuid()::text, 'report', '0 6 * * *', 'UTC', 0, FALSE, $2, $3, $3
+    FROM generate_series(1, $4) AS n
     RETURNING id
 )
 INSERT INTO public.saved_reports
@@ -876,8 +877,8 @@ func TestSweepReadsOneBoundedPageAndObservesTheRemainder(t *testing.T) {
 WITH new_jobs AS (
     INSERT INTO public.scheduled_jobs
         (id, org_id, name, job_type, schedule_cron, timezone, status, is_running, created_at, updated_at)
-    SELECT gen_random_uuid(), $1, 'report:read', 'report', '0 6 * * *', 'UTC', 0, FALSE, $2, $2
-    FROM generate_series(1, $3)
+    SELECT gen_random_uuid(), $1, 'report:read:' || gen_random_uuid()::text, 'report', '0 6 * * *', 'UTC', 0, FALSE, $2, $2
+    FROM generate_series(1, $3) AS n
     RETURNING id
 )
 INSERT INTO public.saved_reports
@@ -981,8 +982,8 @@ func TestOneTenantsRowsBeyondTheFormerReadGuardDoNotBlockAnotherTenant(t *testin
 	attackerNextDue := time.Date(2026, time.July, 27, 6, 0, 0, 0, time.UTC)
 	victimNextDue := time.Date(2026, time.July, 25, 6, 0, 0, 0, time.UTC)
 	if _, err := pool.Exec(ctx, `
-INSERT INTO public.organizations (id, name, is_active)
-VALUES ($1::uuid, 'attacker', TRUE), ($2::uuid, 'victim', TRUE)`,
+INSERT INTO public.organizations (id, slug, name, tier, is_active, created_at, updated_at)
+VALUES ($1::uuid, 'org-attacker', 'attacker', 'community', TRUE, now(), now()), ($2::uuid, 'org-victim', 'victim', 'community', TRUE, now(), now())`,
 		attackerOrganizationID, victimOrganizationID); err != nil {
 		t.Fatal(err)
 	}
@@ -990,8 +991,8 @@ VALUES ($1::uuid, 'attacker', TRUE), ($2::uuid, 'victim', TRUE)`,
 WITH attacker_jobs AS (
     INSERT INTO public.scheduled_jobs
         (id, org_id, name, job_type, schedule_cron, timezone, status, is_running, next_run_at, created_at, updated_at)
-    SELECT gen_random_uuid(), $1, 'report:attacker', 'report', '0 6 * * *', 'UTC', 0, FALSE, $4, $2, $2
-    FROM generate_series(1, $3)
+    SELECT gen_random_uuid(), $1, 'report:attacker:' || gen_random_uuid()::text, 'report', '0 6 * * *', 'UTC', 0, FALSE, $4, $2, $2
+    FROM generate_series(1, $3) AS n
     RETURNING id
 )
 INSERT INTO public.saved_reports
@@ -1372,7 +1373,7 @@ func TestProducedWorkWithDegradationReachesTheExportedGauge(t *testing.T) {
 		sql  string
 		args []any
 	}{
-		{`INSERT INTO public.organizations (id, name, is_active) VALUES ($1::uuid, 'seam', TRUE)`,
+		{`INSERT INTO public.organizations (id, slug, name, tier, is_active, created_at, updated_at) VALUES ($1::uuid, 'org-' || $1::text, 'seam', 'community', TRUE, now(), now())`,
 			[]any{otherOrganizationID}},
 		{`INSERT INTO public.scheduled_jobs
     (id, org_id, name, job_type, schedule_cron, timezone, status, is_running, created_at, updated_at)

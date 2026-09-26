@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -19,21 +21,7 @@ import (
 // exercises, so it does not need those tables.
 func createCanonicalIncidentDecisionTables(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
-	_, err := pool.Exec(ctx, `
-CREATE TABLE feature_flags (
-	id uuid PRIMARY KEY, key text NOT NULL, min_tier text NOT NULL, is_enabled boolean NOT NULL
-);
-CREATE TABLE org_feature_overrides (
-	org_id uuid NOT NULL, feature_id uuid NOT NULL, is_enabled boolean, expires_at timestamptz,
-	config json
-);
-CREATE TABLE organizations (id uuid PRIMARY KEY, tier text);
-CREATE TABLE org_licenses (
-	org_id uuid PRIMARY KEY, tier text, features_override jsonb
-)`)
-	if err != nil {
-		t.Fatal(err)
-	}
+	pgschema.Apply(ctx, t, pool)
 }
 
 const (
@@ -43,18 +31,13 @@ const (
 
 func seedCanonicalIncidentFeatureFlag(t *testing.T, ctx context.Context, pool *pgxpool.Pool, minTier string, enabled bool) {
 	t.Helper()
-	if _, err := pool.Exec(ctx, `
-INSERT INTO feature_flags (id, key, min_tier, is_enabled) VALUES ($1, 'canonical_incident_ingestion', $2, $3)`,
-		decisionFeatureID, minTier, enabled); err != nil {
-		t.Fatal(err)
-	}
+	// The migrations pre-register canonical_incident_ingestion; the cases below need it in a specific state.
+	pgseed.SetFeatureFlag(ctx, t, pool, decisionFeatureID, "canonical_incident_ingestion", minTier, enabled)
 }
 
 func seedCanonicalIncidentOrganization(t *testing.T, ctx context.Context, pool *pgxpool.Pool, tier string) {
 	t.Helper()
-	if _, err := pool.Exec(ctx, `INSERT INTO organizations (id, tier) VALUES ($1, $2)`, decisionOrgID, tier); err != nil {
-		t.Fatal(err)
-	}
+	pgseed.Org(ctx, t, pool, decisionOrgID, tier)
 }
 
 func withDecisionTx(t *testing.T, ctx context.Context, pool *pgxpool.Pool, fn func(tx pgx.Tx)) {
@@ -230,15 +213,8 @@ func TestCanonicalIncidentDecisionNonLockingDeniesNumericLicenseOverride(t *test
 	defer pool.Close()
 	createCanonicalIncidentDecisionTables(t, ctx, pool)
 	seedCanonicalIncidentFeatureFlag(t, ctx, pool, "enterprise", true)
-	if _, err := pool.Exec(ctx, `
-INSERT INTO organizations (id, tier) VALUES ($1, 'community')`, decisionOrgID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := pool.Exec(ctx, `
-INSERT INTO org_licenses (org_id, tier, features_override)
-VALUES ($1, 'community', '{"canonical_incident_ingestion":0}'::jsonb)`, decisionOrgID); err != nil {
-		t.Fatal(err)
-	}
+	pgseed.Org(ctx, t, pool, decisionOrgID, "community")
+	pgseed.OrgLicense(ctx, t, pool, decisionOrgID, "community", `{"canonical_incident_ingestion":0}`)
 
 	allowed, reason := decideCanonicalIncidentNonLocking(t, ctx, pool)
 	if allowed {
@@ -273,15 +249,8 @@ func TestCanonicalIncidentDecisionForUpdateDeniesNumericLicenseOverride(t *testi
 	defer pool.Close()
 	createCanonicalIncidentDecisionTables(t, ctx, pool)
 	seedCanonicalIncidentFeatureFlag(t, ctx, pool, "enterprise", true)
-	if _, err := pool.Exec(ctx, `
-INSERT INTO organizations (id, tier) VALUES ($1, 'community')`, decisionOrgID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := pool.Exec(ctx, `
-INSERT INTO org_licenses (org_id, tier, features_override)
-VALUES ($1, 'community', '{"canonical_incident_ingestion":0}'::jsonb)`, decisionOrgID); err != nil {
-		t.Fatal(err)
-	}
+	pgseed.Org(ctx, t, pool, decisionOrgID, "community")
+	pgseed.OrgLicense(ctx, t, pool, decisionOrgID, "community", `{"canonical_incident_ingestion":0}`)
 
 	allowed, reason := decideCanonicalIncident(t, ctx, pool)
 	if allowed {
@@ -310,8 +279,13 @@ func canonicalIncidentDecisionReasonCases() []struct {
 		wantReason  FeatureDecisionReason
 	}{
 		{
-			name:        "no feature flag row",
-			seed:        func(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {},
+			name: "no feature flag row",
+			seed: func(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+				// The migrations pre-register the flag; this case's premise is that no row exists.
+				if _, err := pool.Exec(ctx, `DELETE FROM feature_flags WHERE key = 'canonical_incident_ingestion'`); err != nil {
+					t.Fatal(err)
+				}
+			},
 			wantAllowed: false,
 			wantReason:  FeatureDecisionReasonFeatureNotRegistered,
 		},
@@ -339,7 +313,7 @@ func canonicalIncidentDecisionReasonCases() []struct {
 				seedCanonicalIncidentFeatureFlag(t, ctx, pool, "enterprise", true)
 				seedCanonicalIncidentOrganization(t, ctx, pool, "community")
 				if _, err := pool.Exec(ctx, `
-INSERT INTO org_feature_overrides (org_id, feature_id, is_enabled, expires_at) VALUES ($1, $2, true, NULL)`,
+INSERT INTO org_feature_overrides (id, org_id, feature_id, is_enabled, expires_at, created_at, updated_at) VALUES (gen_random_uuid(), $1, $2, true, NULL, now(), now())`,
 					decisionOrgID, decisionFeatureID); err != nil {
 					t.Fatal(err)
 				}
@@ -353,7 +327,7 @@ INSERT INTO org_feature_overrides (org_id, feature_id, is_enabled, expires_at) V
 				seedCanonicalIncidentFeatureFlag(t, ctx, pool, "community", true)
 				seedCanonicalIncidentOrganization(t, ctx, pool, "enterprise")
 				if _, err := pool.Exec(ctx, `
-INSERT INTO org_feature_overrides (org_id, feature_id, is_enabled, expires_at) VALUES ($1, $2, false, NULL)`,
+INSERT INTO org_feature_overrides (id, org_id, feature_id, is_enabled, expires_at, created_at, updated_at) VALUES (gen_random_uuid(), $1, $2, false, NULL, now(), now())`,
 					decisionOrgID, decisionFeatureID); err != nil {
 					t.Fatal(err)
 				}
@@ -367,8 +341,8 @@ INSERT INTO org_feature_overrides (org_id, feature_id, is_enabled, expires_at) V
 				seedCanonicalIncidentFeatureFlag(t, ctx, pool, "community", true)
 				seedCanonicalIncidentOrganization(t, ctx, pool, "enterprise")
 				if _, err := pool.Exec(ctx, `
-INSERT INTO org_feature_overrides (org_id, feature_id, is_enabled, expires_at)
-VALUES ($1, $2, false, '2000-01-01T00:00:00Z')`,
+INSERT INTO org_feature_overrides (id, org_id, feature_id, is_enabled, expires_at, created_at, updated_at)
+VALUES (gen_random_uuid(), $1, $2, false, '2000-01-01T00:00:00Z', now(), now())`,
 					decisionOrgID, decisionFeatureID); err != nil {
 					t.Fatal(err)
 				}
@@ -380,15 +354,8 @@ VALUES ($1, $2, false, '2000-01-01T00:00:00Z')`,
 			name: "license override enabled, no org override",
 			seed: func(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 				seedCanonicalIncidentFeatureFlag(t, ctx, pool, "enterprise", true)
-				if _, err := pool.Exec(ctx, `
-INSERT INTO organizations (id, tier) VALUES ($1, 'community')`, decisionOrgID); err != nil {
-					t.Fatal(err)
-				}
-				if _, err := pool.Exec(ctx, `
-INSERT INTO org_licenses (org_id, tier, features_override)
-VALUES ($1, 'community', '{"canonical_incident_ingestion":true}'::jsonb)`, decisionOrgID); err != nil {
-					t.Fatal(err)
-				}
+				pgseed.Org(ctx, t, pool, decisionOrgID, "community")
+				pgseed.OrgLicense(ctx, t, pool, decisionOrgID, "community", `{"canonical_incident_ingestion":true}`)
 			},
 			wantAllowed: true,
 			wantReason:  FeatureDecisionReasonEnabledByLicenseOverride,
@@ -397,15 +364,8 @@ VALUES ($1, 'community', '{"canonical_incident_ingestion":true}'::jsonb)`, decis
 			name: "license override disabled, no org override",
 			seed: func(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 				seedCanonicalIncidentFeatureFlag(t, ctx, pool, "community", true)
-				if _, err := pool.Exec(ctx, `
-INSERT INTO organizations (id, tier) VALUES ($1, 'enterprise')`, decisionOrgID); err != nil {
-					t.Fatal(err)
-				}
-				if _, err := pool.Exec(ctx, `
-INSERT INTO org_licenses (org_id, tier, features_override)
-VALUES ($1, 'enterprise', '{"canonical_incident_ingestion":false}'::jsonb)`, decisionOrgID); err != nil {
-					t.Fatal(err)
-				}
+				pgseed.Org(ctx, t, pool, decisionOrgID, "enterprise")
+				pgseed.OrgLicense(ctx, t, pool, decisionOrgID, "enterprise", `{"canonical_incident_ingestion":false}`)
 			},
 			wantAllowed: false,
 			wantReason:  FeatureDecisionReasonLicenseOverrideDisabled,

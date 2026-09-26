@@ -110,3 +110,38 @@ func SetFeatureFlag(ctx context.Context, t testing.TB, pool *pgxpool.Pool, id, k
 	exec(ctx, t, pool, "reset feature flag "+key, `DELETE FROM feature_flags WHERE key = $1`, key)
 	FeatureFlag(ctx, t, pool, id, key, minTier, enabled)
 }
+
+// User inserts an active local user (email derived from the id).
+func User(ctx context.Context, t testing.TB, pool *pgxpool.Pool, id string) {
+	t.Helper()
+	exec(ctx, t, pool, "user", `
+INSERT INTO users (id, email, created_at, updated_at) VALUES ($1::uuid, $1::text || '@example.test', now(), now())`, id)
+}
+
+// DevConversation inserts an Ask Dev conversation (retention 30 days, empty scope) for an
+// existing organization and user.
+func DevConversation(ctx context.Context, t testing.TB, pool *pgxpool.Pool, id, orgID, userID string) {
+	t.Helper()
+	exec(ctx, t, pool, "dev conversation", `
+INSERT INTO dev_conversations (id, org_id, user_id, current_scope, retention_days)
+VALUES ($1::uuid, $2::uuid, $3::uuid, '{}'::jsonb, 30)`, id, orgID, userID)
+}
+
+// WorkerJobOutbox inserts a worker_job_outbox row with every NOT NULL column and check constraint
+// satisfied for the given status (pending, claimed, delivered or dead): a claimed row carries its
+// claim, a delivered row its River job id and delivery time.
+func WorkerJobOutbox(ctx context.Context, t testing.TB, pool *pgxpool.Pool, dedupeKey, jobKind, status string) {
+	t.Helper()
+	exec(ctx, t, pool, "worker job outbox "+status, `
+INSERT INTO worker_job_outbox (id, dedupe_key, job_kind, contract_version, args, payload_hash, queue, priority,
+	max_attempts, scheduled_at, status, claim_token, claimed_at, claim_expires_at, attempt_count, next_attempt_at,
+	river_job_id, delivered_at, created_at, updated_at)
+VALUES (gen_random_uuid(), $1::text, $2::text, 1, '{}'::json, 'sha256:' || repeat('0', 64), 'default', 2, 5, now(), $3::text,
+	CASE WHEN $3::text = 'claimed' THEN gen_random_uuid() END,
+	CASE WHEN $3::text = 'claimed' THEN now() END,
+	CASE WHEN $3::text = 'claimed' THEN now() + interval '1 hour' END,
+	0, now(),
+	CASE WHEN $3::text = 'delivered' THEN abs(hashtextextended($1::text, 0)) END,
+	CASE WHEN $3::text = 'delivered' THEN now() END,
+	now(), now())`, dedupeKey, jobKind, status)
+}

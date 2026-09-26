@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -77,6 +78,9 @@ func startEligibilityPostgres(t *testing.T, ctx context.Context, fixture eligibi
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
+	// The migrated schema: the coordinator tables carry their real columns and constraints, and the
+	// migrations pre-register the shipped feature flags.
+	pgschema.Apply(ctx, t, pool)
 	if err := seedEligibilityFixture(ctx, pool, fixture); err != nil {
 		t.Fatal(err)
 	}
@@ -84,90 +88,30 @@ func startEligibilityPostgres(t *testing.T, ctx context.Context, fixture eligibi
 }
 
 func seedEligibilityFixture(ctx context.Context, pool *pgxpool.Pool, fixture eligibilityFixture) error {
-	statements := []string{
-		`CREATE TABLE public.sync_configurations (
-			id uuid PRIMARY KEY,
-			org_id text NOT NULL,
-			is_active boolean NOT NULL,
-			-- CHAOS-4174: defaults TRUE (unlike prod migration 0018's
-			-- server_default FALSE) so this file's org_missing/feature_disabled
-			-- fixtures, which never name the column, keep exercising the
-			-- Coordinator refusals they were written for.
-			planner_managed boolean NOT NULL DEFAULT TRUE,
-			sync_targets jsonb NOT NULL,
-			sync_options jsonb NOT NULL,
-			last_sync_at timestamptz,
-			created_at timestamptz NOT NULL
-		)`,
-		`CREATE TABLE public.scheduled_jobs (
-			id uuid PRIMARY KEY,
-			org_id text NOT NULL,
-			sync_config_id uuid NOT NULL,
-			job_type text NOT NULL,
-			schedule_cron text NOT NULL,
-			timezone text NOT NULL,
-			status integer NOT NULL,
-			is_running boolean NOT NULL,
-			last_run_at timestamptz,
-			updated_at timestamptz,
-			next_run_at timestamptz
-		)`,
-		`CREATE TABLE public.scheduled_sync_occurrences (
-			occurrence_id text PRIMARY KEY,
-			identity_version text NOT NULL,
-			org_id text NOT NULL,
-			sync_config_id uuid NOT NULL,
-			scheduled_job_id uuid NOT NULL,
-			scheduled_for timestamptz NOT NULL,
-			job_run_id uuid,
-			sync_run_id uuid,
-			created_at timestamptz NOT NULL,
-			UNIQUE (sync_config_id, scheduled_for)
-		)`,
-		`CREATE TABLE public.organizations (id uuid PRIMARY KEY, tier text)`,
-		`CREATE TABLE public.feature_flags (
-			id uuid PRIMARY KEY,
-			key text NOT NULL,
-			min_tier text NOT NULL,
-			is_enabled boolean NOT NULL
-		)`,
-		`CREATE TABLE public.org_feature_overrides (
-			org_id uuid NOT NULL,
-			feature_id uuid NOT NULL,
-			is_enabled boolean,
-			expires_at timestamptz,
-			config json
-		)`,
-		`CREATE TABLE public.org_licenses (
-			org_id uuid PRIMARY KEY,
-			tier text,
-			features_override jsonb
-		)`,
-		fmt.Sprintf(`INSERT INTO public.sync_configurations (
-			id, org_id, is_active, sync_targets, sync_options, last_sync_at, created_at
-		) VALUES (
-			'%s', '%s', TRUE, '%s'::jsonb,
-			'{"schedule_cron":"0 * * * *","timezone":"UTC"}'::jsonb,
-			'2026-01-01T10:00:00Z', '2026-01-01T09:00:00Z'
-		)`, gateConfigID, gateOrgID, fixture.syncTargets),
-		fmt.Sprintf(`INSERT INTO public.scheduled_jobs (
-			id, org_id, sync_config_id, job_type, schedule_cron, timezone,
-			status, is_running, updated_at
-		) VALUES (
-			'%s', '%s', '%s', 'sync', '0 * * * *', 'UTC', 0, FALSE,
-			'2026-01-01T09:00:00Z'
-		)`, gateJobID, gateOrgID, gateConfigID),
+	// planner_managed is TRUE here (prod's default is FALSE) so this file's
+	// org_missing/feature_disabled fixtures keep exercising the Coordinator
+	// refusals they were written for (CHAOS-4174).
+	if err := insertPlannerFixture(ctx, pool, plannerFixture{
+		configID: gateConfigID, jobID: gateJobID, orgID: gateOrgID, plannerManaged: true,
+		targets: fixture.syncTargets, lastSyncAt: "2026-01-01T10:00:00Z", createdAt: "2026-01-01T09:00:00Z",
+	}); err != nil {
+		return err
 	}
+	var statements []string
 	if fixture.seedOrganization {
 		statements = append(statements, fmt.Sprintf(
-			`INSERT INTO public.organizations (id, tier) VALUES ('%s', '%s')`,
+			`INSERT INTO public.organizations (id, slug, name, tier, is_active, created_at, updated_at)
+			 VALUES ('%s', 'gate-org', 'gate org', '%s', TRUE, now(), now())`,
 			gateOrgID, fixture.orgTier,
 		))
 	}
+	// The migrations pre-register canonical_incident_ingestion: start from "no row" and add one only
+	// for the fixtures that want a specific state.
+	statements = append(statements, `DELETE FROM public.feature_flags WHERE key = 'canonical_incident_ingestion'`)
 	if fixture.seedFeatureFlag {
 		statements = append(statements, fmt.Sprintf(
-			`INSERT INTO public.feature_flags (id, key, min_tier, is_enabled)
-			 VALUES ('%s', 'canonical_incident_ingestion', '%s', %t)`,
+			`INSERT INTO public.feature_flags (id, key, name, min_tier, is_enabled, created_at, updated_at)
+			 VALUES ('%s', 'canonical_incident_ingestion', 'canonical incident ingestion', '%s', %t, now(), now())`,
 			gateFeatureID, fixture.featureMinTier, fixture.featureGloballyEnabled,
 		))
 	}
@@ -392,21 +336,11 @@ func TestRefusedAndAcceptedCandidatesCoexistInOneWindow(t *testing.T) {
 		refusedConfigID = "3f1c9d4a-0000-4000-8000-00000000e002"
 		refusedJobID    = "3f1c9d4a-0000-4000-8000-00000000e003"
 	)
-	for _, statement := range []string{
-		fmt.Sprintf(`INSERT INTO public.sync_configurations (
-			id, org_id, is_active, sync_targets, sync_options, last_sync_at, created_at
-		) VALUES ('%s','%s',TRUE,'["git"]'::jsonb,
-			'{"schedule_cron":"0 * * * *","timezone":"UTC"}'::jsonb,
-			'2026-01-01T10:00:00Z','2026-01-01T09:00:00Z')`, refusedConfigID, missingOrgID),
-		fmt.Sprintf(`INSERT INTO public.scheduled_jobs (
-			id, org_id, sync_config_id, job_type, schedule_cron, timezone,
-			status, is_running, updated_at
-		) VALUES ('%s','%s','%s','sync','0 * * * *','UTC',0,FALSE,
-			'2026-01-01T09:00:00Z')`, refusedJobID, missingOrgID, refusedConfigID),
-	} {
-		if _, err := pool.Exec(ctx, statement); err != nil {
-			t.Fatal(err)
-		}
+	if err := insertPlannerFixture(ctx, pool, plannerFixture{
+		configID: refusedConfigID, jobID: refusedJobID, orgID: missingOrgID, plannerManaged: true,
+		targets: `["git"]`, lastSyncAt: "2026-01-01T10:00:00Z", createdAt: "2026-01-01T09:00:00Z",
+	}); err != nil {
+		t.Fatal(err)
 	}
 
 	result, occurrences, acceptedNextRunAt := runOneHandoffWindow(t, ctx, pool)

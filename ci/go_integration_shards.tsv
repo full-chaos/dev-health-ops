@@ -160,8 +160,8 @@ internal/providerfoundation	16
 internal/providersync	2337
 internal/pushcli	20
 internal/rivermigrate	20
-internal/scheduler/fixed	151
-internal/scheduler/sync	156
+internal/scheduler/fixed	380
+internal/scheduler/sync	600
 internal/storage/clickhouse	50
 internal/storage/postgres	129
 internal/storage/postgres/authschema	72

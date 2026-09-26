@@ -8,25 +8,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
-
-func installTerminalRetentionFixture(t *testing.T, pool *pgxpool.Pool) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-	defer cancel()
-	if _, err := pool.Exec(ctx, `
-ALTER TABLE public.worker_job_outbox
-    ADD COLUMN last_error_code VARCHAR(64),
-    ADD COLUMN delivered_at TIMESTAMPTZ,
-    ADD COLUMN prerequisite_completion_key TEXT;
-CREATE TABLE public.worker_job_completion_fences (
-    completion_key TEXT PRIMARY KEY,
-    completed_at TIMESTAMPTZ NOT NULL DEFAULT statement_timestamp()
-)`); err != nil {
-		t.Fatal(err)
-	}
-}
 
 // A dead handoff must stay distinguishable from one that was never published
 // after terminal outbox retention removes the full row. This test uses the real
@@ -34,7 +16,6 @@ CREATE TABLE public.worker_job_completion_fences (
 // not reproduce CHAOS-3160.
 func TestDeadHandoffRemainsUndeliverableAfterTerminalRetention(t *testing.T) {
 	pool := startScheduledReportPostgres(t)
-	installTerminalRetentionFixture(t, pool)
 	schedule, occurrence, runID := dueScheduledReport(t, pool)
 
 	terminalAt := time.Date(2026, time.July, 25, 6, 10, 0, 0, time.UTC)
@@ -45,6 +26,8 @@ func TestDeadHandoffRemainsUndeliverableAfterTerminalRetention(t *testing.T) {
 UPDATE public.worker_job_outbox
 SET attempt_count = 4,
     last_error_code = 'contract_rejected',
+    last_error_detail = 'contract rejected',
+    last_error_at = $2,
     updated_at = $2
 WHERE dedupe_key = $1`, "report.run:"+runID, terminalAt); err != nil {
 		t.Fatal(err)

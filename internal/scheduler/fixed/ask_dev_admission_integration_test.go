@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -35,34 +37,14 @@ func TestAskDevRetentionAdmissionUsesEntitlementForFirstUseButNeverStrandsState(
 	}
 	t.Cleanup(pool.Close)
 
-	if _, err := pool.Exec(ctx, `
-CREATE TABLE feature_flags (
-	id uuid PRIMARY KEY,
-	key text NOT NULL UNIQUE,
-	min_tier text NOT NULL,
-	is_enabled boolean NOT NULL
-);
-CREATE TABLE organizations (id uuid PRIMARY KEY, tier text NOT NULL);
-CREATE TABLE org_licenses (
-	org_id uuid PRIMARY KEY,
-	tier text NOT NULL,
-	features_override json
-);
-CREATE TABLE org_feature_overrides (
-	id uuid PRIMARY KEY,
-	org_id uuid NOT NULL,
-	feature_id uuid NOT NULL,
-	is_enabled boolean NOT NULL,
-	expires_at timestamptz
-);
-CREATE TABLE dev_conversations (id uuid PRIMARY KEY);
-INSERT INTO feature_flags (id, key, min_tier, is_enabled)
-VALUES ('10000000-0000-4000-8000-000000000001', 'ask_dev', 'community', TRUE);
-INSERT INTO organizations (id, tier)
-VALUES ('20000000-0000-4000-8000-000000000001', 'community');
-`); err != nil {
-		t.Fatal(err)
-	}
+	const (
+		flagID = "10000000-0000-4000-8000-000000000001"
+		orgID  = "20000000-0000-4000-8000-000000000001"
+	)
+	pgschema.Apply(ctx, t, pool)
+	// The migrations register ask_dev; the cases below drive its row and the org's tier directly.
+	pgseed.SetFeatureFlag(ctx, t, pool, flagID, "ask_dev", "community", true)
+	pgseed.Org(ctx, t, pool, orgID, "community")
 
 	admission := NewPostgresAskDevRetentionAdmission()
 	read := func() AskDevRetentionState {
@@ -135,8 +117,8 @@ VALUES ('20000000-0000-4000-8000-000000000001', 'community');
 		}
 		if test.LicenseTier != nil {
 			if _, err := pool.Exec(ctx, `
-INSERT INTO org_licenses (org_id, tier, features_override)
-VALUES ('20000000-0000-4000-8000-000000000001', $1, $2::json)
+INSERT INTO org_licenses (id, org_id, tier, features_override, created_at, updated_at)
+VALUES (gen_random_uuid(), '20000000-0000-4000-8000-000000000001', $1, $2::json, now(), now())
 `, *test.LicenseTier, licenseJSON); err != nil {
 				t.Fatal(err)
 			}
@@ -147,11 +129,11 @@ VALUES ('20000000-0000-4000-8000-000000000001', $1, $2::json)
 		if test.OrgOverride != nil {
 			if _, err := pool.Exec(ctx, `
 INSERT INTO org_feature_overrides
-    (id, org_id, feature_id, is_enabled, expires_at)
+    (id, org_id, feature_id, is_enabled, expires_at, created_at, updated_at)
 VALUES
     ('40000000-0000-4000-8000-000000000001',
      '20000000-0000-4000-8000-000000000001',
-     '10000000-0000-4000-8000-000000000001', $1, $2)
+     '10000000-0000-4000-8000-000000000001', $1, $2, now(), now())
 `, test.OrgOverride.IsEnabled, test.OrgOverride.ExpiresAt); err != nil {
 				t.Fatal(err)
 			}
@@ -162,11 +144,9 @@ VALUES
 		}
 	}
 
-	if _, err := pool.Exec(ctx, `
-INSERT INTO dev_conversations (id)
-VALUES ('30000000-0000-4000-8000-000000000001');
-UPDATE feature_flags SET is_enabled = FALSE WHERE key = 'ask_dev';
-`); err != nil {
+	pgseed.User(ctx, t, pool, "50000000-0000-4000-8000-000000000001")
+	pgseed.DevConversation(ctx, t, pool, "30000000-0000-4000-8000-000000000001", orgID, "50000000-0000-4000-8000-000000000001")
+	if _, err := pool.Exec(ctx, `UPDATE feature_flags SET is_enabled = FALSE WHERE key = 'ask_dev'`); err != nil {
 		t.Fatal(err)
 	}
 	state := read()

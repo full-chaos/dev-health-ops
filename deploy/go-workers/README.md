@@ -1021,6 +1021,45 @@ silently skips grant re-application, so revoking privileges by hand and
 re-running the migrate binary does not restore them; re-run
 `provision_river_roles.sql` instead, or start from a fresh database.
 
+### `dho migrate roles` replaces `provision_river_roles.sql` (CHAOS-6901)
+
+`dho migrate roles` is the Go leg that creates and bootstraps the same logins
+the script did, so the roles are provisioned by the migrate binary with the same
+DSN and secret rules as every other migrate step (`MIGRATION_DATABASE_URI` or
+`_FILE`, falling back to `POSTGRES_URI`; direct, never a transaction pooler). It
+reads the script's variables as environment: `RIVER_DOMAIN_DATABASE_ROLE`,
+`RIVER_QUEUE_DATABASE_ROLE`, `RIVER_COORDINATOR_DATABASE_ROLE` (default
+`devhealth_coordinator`) with `RIVER_*_DATABASE_PASSWORD` (each also
+`<NAME>_FILE`), plus the opt-in roles, each provisioned only when its role is
+named: `API_DATABASE_ROLE`/`API_DATABASE_PASSWORD`,
+`QUERY_API_DATABASE_ROLE`/`QUERY_API_DATABASE_PASSWORD`,
+`RIVER_KEDA_READONLY_DATABASE_ROLE`/`RIVER_KEDA_READONLY_PASSWORD` (its
+password is re-applied every run) and `RIVER_DATABASE_SCHEMA` (default `river`;
+the KEDA login needs that schema to exist, so on a fresh database provision the
+KEDA login after `dho migrate river`).
+
+It does what the script did and nothing else: create a login only when missing
+(an existing role keeps its attributes and password), CONNECT on the database,
+TEMPORARY revoked (from PUBLIC too), USAGE and no CREATE on schema `public`.
+It never grants a table privilege (those are `dho migrate river`'s, derived from
+the posture manifests), never runs `DROP OWNED BY`, and applies everything in ONE
+transaction, so a failure leaves nothing half-applied (the script ran each
+statement on its own). It refuses two roles with the same name (including the KEDA
+role named like another), a role without a password, a name over 63 bytes, and a
+migration login that is itself one of the roles. After applying it verifies the
+bootstrap postconditions on the live catalog and exits 1, naming role labels and
+never a password, if one is unmet; `dho migrate roles --check` verifies only. A
+CREATE on `public` that a role holds only through PUBLIC (the PostgreSQL default
+before v15) is logged as a warning: revoking it is a human decision.
+
+Parity with the script is executed, not argued: the integration tests run the real
+`provision_river_roles.sql` through psql on one PostgreSQL and the Go leg on a
+second identical one, and compare every role attribute, whether the password was
+set and works, every effective grant (the `roleacl` enumeration the readiness
+checks use) and the ACLs of the database, `public`, the River schema and
+`river_job`. The script stays in the tree until every caller (the chart's
+provision-roles Job, Compose's `go-river-provision`) has moved to the Go leg.
+
 ### query-api role: `QUERY_API_DATABASE_ROLE` (opt-in, full least-privilege posture)
 
 query-api is the read plane, and until this is rolled out it connects with
@@ -1100,7 +1139,9 @@ as the migrate-provisioned role on the real migrated schema.
 Secret value and unsetting the env, the role and grants stay and are harmless):
 
 1. Ship the code (this leg is a no-op while the env is unset).
-2. prod-ops / chris create the login once, with the provisioning script's
+2. prod-ops / chris create the login once, with `dho migrate roles`
+   (`QUERY_API_DATABASE_ROLE`/`QUERY_API_DATABASE_PASSWORD` next to the three
+   runtime roles' variables) or, until the chart moves, the provisioning script's
    `query_api_role` block (distinct from every other runtime role; the password
    is a Secret value chris/prod-ops own):
    `psql "$MIGRATION_DATABASE_URI" --set=ON_ERROR_STOP=1 --set=domain_role=... --set=queue_role=... --set=coordinator_role=... --set=domain_password=... --set=queue_password=... --set=coordinator_password=... --set=query_api_role=devhealth_query_api --set=query_api_password=... --file=scripts/worker/provision_river_roles.sql`

@@ -231,3 +231,60 @@ func TestMigrateRolesRefusesWhatWouldBeAmbiguousBeforeTouchingTheDatabase(t *tes
 		t.Fatalf("a refused invocation created %d role(s)", roles)
 	}
 }
+
+// A role the command cannot make safe (a pre-existing login with CREATEDB is left
+// alone, like the script) is NAMED by the closing check and fails the command; and
+// --check changes nothing.
+func TestMigrateRolesFailsLoudlyOnAnOverPrivilegedPreExistingRoleAndCheckChangesNothing(t *testing.T) {
+	ctx := context.Background()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = instance.Close(context.Background()) })
+	admin, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(admin.Close)
+	if _, err := admin.Exec(ctx, `CREATE ROLE pre_domain LOGIN CREATEDB PASSWORD 'old'`); err != nil {
+		t.Fatal(err)
+	}
+	settings := map[string]string{
+		"MIGRATION_DATABASE_URI":              instance.URI,
+		"RIVER_DOMAIN_DATABASE_ROLE":          "pre_domain",
+		"RIVER_QUEUE_DATABASE_ROLE":           "pre_queue",
+		"RIVER_COORDINATOR_DATABASE_ROLE":     "pre_coordinator",
+		"RIVER_DOMAIN_DATABASE_PASSWORD":      "new-secret-domain",
+		"RIVER_QUEUE_DATABASE_PASSWORD":       "new-secret-queue",
+		"RIVER_COORDINATOR_DATABASE_PASSWORD": "new-secret-coordinator",
+	}
+	lookup := func(key string) (string, bool) { value, ok := settings[key]; return value, ok }
+
+	var stdout, stderr bytes.Buffer
+	if code := rivermigrate.ExecuteRoles(ctx, "dho", []string{"--check"}, lookup, &stdout, &stderr); code != 1 {
+		t.Fatalf("--check with roles that do not exist / are over-privileged must fail: exit %d\n%s\n%s", code, stdout.String(), stderr.String())
+	}
+	var created int
+	if err := admin.QueryRow(ctx, `SELECT count(*) FROM pg_roles WHERE rolname IN ('pre_queue', 'pre_coordinator')`).Scan(&created); err != nil {
+		t.Fatal(err)
+	}
+	if created != 0 {
+		t.Fatalf("--check created %d role(s): it must change nothing", created)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code := rivermigrate.ExecuteRoles(ctx, "dho", nil, lookup, &stdout, &stderr)
+	if code != 1 || !strings.Contains(stderr.String(), "do not meet the bootstrap postconditions") ||
+		!strings.Contains(stderr.String()+stdout.String(), "domain") {
+		t.Fatalf("an over-privileged pre-existing role must fail the closing check: exit %d\n%s\n%s", code, stdout.String(), stderr.String())
+	}
+	if strings.Contains(stdout.String()+stderr.String(), "new-secret") {
+		t.Fatal("a password leaked into the output")
+	}
+	// The other two roles WERE provisioned (Apply committed before the check).
+	if err := admin.QueryRow(ctx, `SELECT count(*) FROM pg_roles WHERE rolname IN ('pre_queue', 'pre_coordinator')`).Scan(&created); err != nil || created != 2 {
+		t.Fatalf("the apply step must have committed the other roles: %d %v", created, err)
+	}
+}

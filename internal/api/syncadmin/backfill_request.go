@@ -1,10 +1,12 @@
 package syncadmin
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
 )
 
 // backfillWindow is BackfillRequest after its validators: the window and the
@@ -21,6 +23,9 @@ type backfillWindow struct {
 	Structured bool
 	// LegacySince and LegacyBefore are the flat dates (zero for the selector form).
 	LegacySince, LegacyBefore time.Time
+	// SinceAt and BeforeAt are the selector's own aware datetimes, offset kept:
+	// Python reads .date() and .isoformat() from them in their own timezone.
+	SinceAt, BeforeAt pytime.DateTime
 	// SourceIDs and DatasetKeys are the selector's optional scope; the Set flags
 	// tell an omitted or null list (every enabled one) from a given one.
 	SourceIDs, DatasetKeys       []string
@@ -67,6 +72,7 @@ func parseSelectorModel(e *pybody.Errors, raw pyjson.Value, loc []pyjson.Value) 
 		return backfillWindow{}, false
 	}
 	out.Since, out.Before, out.Structured = since.Value.Time.UTC(), before.Value.Time.UTC(), true
+	out.SinceAt, out.BeforeAt = since.Value, before.Value
 	return out, true
 }
 
@@ -106,4 +112,77 @@ func parseBackfillRequest(body pybody.Body) (backfillWindow, pybody.Errors) {
 		LegacySince:  legacySince,
 		LegacyBefore: legacyBefore,
 	}, problems
+}
+
+// wall is the datetime's wall clock in its own offset.
+func wall(value pytime.DateTime) time.Time {
+	return value.Time.Add(time.Duration(value.Offset)*time.Second + time.Duration(value.OffsetMicro)*time.Microsecond).UTC()
+}
+
+// dateOf is datetime.date(): the calendar date of the wall clock, midnight UTC.
+func dateOf(clock time.Time) time.Time {
+	return time.Date(clock.Year(), clock.Month(), clock.Day(), 0, 0, 0, 0, time.UTC)
+}
+
+// isoOf is datetime.isoformat() of an aware datetime: microseconds only when
+// non-zero, then "+HH:MM" (or "-HH:MM"; whole minutes are all a request carries).
+func isoOf(value pytime.DateTime) string {
+	clock := wall(value)
+	text := clock.Format("2006-01-02T15:04:05")
+	if micro := clock.Nanosecond() / 1000; micro != 0 {
+		text += fmt.Sprintf(".%06d", micro)
+	}
+	offset := value.Offset
+	sign := "+"
+	if offset < 0 {
+		sign, offset = "-", -offset
+	}
+	return text + fmt.Sprintf("%s%02d:%02d", sign, offset/3600, offset%3600/60)
+}
+
+// sinceISO and beforeISO are the response's `since` and `before`: the selector's
+// own isoformat, or the flat date's.
+func (w backfillWindow) sinceISO() string {
+	if w.Structured {
+		return isoOf(w.SinceAt)
+	}
+	return w.LegacySince.Format("2006-01-02")
+}
+
+func (w backfillWindow) beforeISO() string {
+	if w.Structured {
+		return isoOf(w.BeforeAt)
+	}
+	return w.LegacyBefore.Format("2006-01-02")
+}
+
+// historySince and historyBefore are the BackfillJob row's inclusive calendar
+// dates: the selector's since date and the date of its last included microsecond
+// (both in the selector's own timezone), or the flat dates.
+func (w backfillWindow) historySince() time.Time {
+	if w.Structured {
+		return dateOf(wall(w.SinceAt))
+	}
+	return w.LegacySince
+}
+
+func (w backfillWindow) historyBefore() time.Time {
+	if w.Structured {
+		return dateOf(wall(w.BeforeAt).Add(-time.Microsecond))
+	}
+	return w.LegacyBefore
+}
+
+// days is (selector.before - selector.since).days: timedelta's floor division,
+// so a negative span (the flat dates, since after before) rounds down.
+func (w backfillWindow) days() int64 {
+	// UnixMicro, not Sub: time.Duration saturates near 292 years, and a flat
+	// window may span years 1 to 9999.
+	span := w.Before.UnixMicro() - w.Since.UnixMicro()
+	const day = int64(24 * time.Hour / time.Microsecond)
+	quotient := span / day
+	if span%day != 0 && span < 0 {
+		quotient--
+	}
+	return quotient
 }

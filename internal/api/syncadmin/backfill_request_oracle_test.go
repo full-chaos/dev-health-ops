@@ -23,7 +23,7 @@ import (
 // route saw (the resolved window and scope) or the 422 body FastAPI answered.
 const pythonBackfillRequestProgram = `
 import json, sys
-from datetime import timezone
+from datetime import timedelta, timezone
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from dev_health_ops.api.admin.schemas_flat import BackfillRequest
@@ -37,6 +37,11 @@ def route(payload: BackfillRequest):
         "since": selector.since.astimezone(timezone.utc).isoformat(),
         "before": selector.before.astimezone(timezone.utc).isoformat(),
         "structured": payload.selector is not None,
+        "since_iso": selector.since.isoformat() if payload.selector is not None else payload.since.isoformat(),
+        "before_iso": selector.before.isoformat() if payload.selector is not None else payload.before.isoformat(),
+        "history_since": selector.since.date().isoformat() if payload.selector is not None else payload.since.isoformat(),
+        "history_before": ((selector.before - timedelta(microseconds=1)).date() if payload.selector is not None else payload.before).isoformat(),
+        "days": (selector.before - selector.since).days,
         "source_ids": selector.source_ids if payload.selector is not None else None,
         "dataset_keys": selector.dataset_keys if payload.selector is not None else None,
     }
@@ -137,6 +142,9 @@ func TestBackfillRequestMatchesTheLiveFastAPIRoute(t *testing.T) {
 			accepted++
 			got = map[string]any{
 				"since": isoUTC(window.Since), "before": isoUTC(window.Before), "structured": window.Structured,
+				"since_iso": window.sinceISO(), "before_iso": window.beforeISO(),
+				"history_since": window.historySince().Format("2006-01-02"), "history_before": window.historyBefore().Format("2006-01-02"),
+				"days":       float64(window.days()),
 				"source_ids": nilIfUnset(window.SourceIDs, window.SourceIDsSet), "dataset_keys": nilIfUnset(window.DatasetKeys, window.DatasetKeysSet),
 			}
 		}

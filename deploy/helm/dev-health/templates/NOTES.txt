@@ -40,7 +40,6 @@ Components deployed:
   {{- if .Values.api.enabled }}  ✅ API{{ end }}
   {{- if .Values.web.enabled }}  ✅ Web{{ end }}
   {{- if .Values.goWorkers.enabled }}  ✅ Go workers{{ end }}
-  {{- if .Values.billingEdge.enabled }}  ✅ Billing Edge{{ end }}
   {{- if .Values.valkey.enabled }}  ✅ Valkey (in-cluster){{ end }}
   {{- if .Values.clickhouse.enabled }}  ✅ ClickHouse (in-cluster){{ end }}
   {{- if .Values.postgresql.enabled }}  ✅ PostgreSQL (in-cluster){{ end }}

@@ -32,7 +32,6 @@ func TestInternalACRRoutesStayOffThePublicIngress(t *testing.T) {
 			`{"path":"/api/v1/internal/acr","pathType":"Prefix","service":"go-api"},`+
 			`{"path":"/api/v1","pathType":"Prefix","service":"go-api"},`+
 			`{"path":"/api","pathType":"Prefix","service":"api"},`+
-			`{"path":"/billing","pathType":"Prefix","service":"billing-edge"},`+
 			`{"path":"/","pathType":"Prefix","service":"web"}]}]`,
 	).CombinedOutput()
 	if err != nil {

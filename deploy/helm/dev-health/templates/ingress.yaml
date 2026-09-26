@@ -43,9 +43,7 @@ spec:
                 port:
                   number: {{ $.Values.web.port }}
                 {{- else if eq .service "billing-edge" }}
-                name: {{ include "dev-health.fullname" $ }}-billing-edge
-                port:
-                  number: {{ $.Values.billingEdge.port }}
+                {{- fail "ingress.hosts service \"billing-edge\" is gone (CHAOS-6903): the Python billing edge was removed; the go-api billing-edge listener serves the billing host (deploy chart: goApiBillingEdge + ingress.goApiHosts entry with billingEdge: true)" }}
                 {{- end }}
           {{- end }}
     {{- end }}

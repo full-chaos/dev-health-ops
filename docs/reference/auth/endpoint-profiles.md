@@ -107,7 +107,7 @@ Routes are served by **two separate `FastAPI()` instances**, not one:
   `GraphQLQuerySizeLimitMiddleware` → `SecurityHeadersMiddleware` →
   `CORSMiddleware` → the route.
 - `dev-health-ops-billing-edge` — `src/dev_health_ops/api/billing_edge.py`, a
-  **separately deployed** app (`deploy/helm/dev-health/templates/billing-edge-deployment.yaml`)
+  **separately deployed** app (its chart template was removed in CHAOS-6903; the go-api billing-edge listener now serves the billing host)
   with **zero shared middleware** — no `OrgIdMiddleware`, no CORS, no CSRF.
   It registers exactly three routes: `POST /api/v1/billing/webhooks/stripe`
   (forwards into `billing/router.py`'s `stripe_webhook`, the SAME handler the

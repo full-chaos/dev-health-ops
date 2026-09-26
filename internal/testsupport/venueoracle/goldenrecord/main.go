@@ -26,6 +26,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -33,6 +34,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -48,6 +50,10 @@ type Config struct {
 	Test string
 	// PythonRoot is the clean checkout at the pinned build Python runs from.
 	PythonRoot string
+	// AllowDrop lets a re-record remove requests or row comparisons the existing
+	// golden holds (an intended change of the oracle). Without it the candidate
+	// must keep every request name and row name of the golden it replaces.
+	AllowDrop bool
 	// Run executes one go test invocation with the extra environment. The
 	// default runs `go test -tags=integration` in Root.
 	Run func(cfg Config, env []string) error
@@ -73,6 +79,7 @@ func main() {
 	flag.StringVar(&cfg.Package, "pkg", "", "go package of the oracles, relative to the root")
 	flag.StringVar(&cfg.Test, "test", "", "-run regular expression of the oracles to record")
 	flag.StringVar(&cfg.PythonRoot, "python-root", "", "clean checkout at the pinned Python-bearing build")
+	flag.BoolVar(&cfg.AllowDrop, "allow-drop", false, "let a re-record drop requests or row comparisons the existing golden holds")
 	flag.Parse()
 	if cfg.Package == "" || cfg.Test == "" || cfg.PythonRoot == "" {
 		fmt.Fprintln(os.Stderr, "goldenrecord: -pkg, -test and -python-root are required")
@@ -127,7 +134,12 @@ func Record(ctx context.Context, cfg Config) (Result, error) {
 	base := []string{"DEV_HEALTH_LIVE_PYTHON_ORACLES=1", "DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR=" + proofDir}
 	discard := func() { removeAll(packageDir) }
 
-	if err := cfg.Run(cfg, append(append([]string{}, base...), "DHO_VENUE_GOLDEN_UPDATE=1", "DHO_VENUE_GOLDEN_PYTHON_ROOT="+cfg.PythonRoot)); err != nil {
+	// A bytecode cache in the pinned checkout can run code older than its source:
+	// clear it, and stop the recording writing a new one.
+	if err := clearBytecode(filepath.Join(cfg.PythonRoot, "src")); err != nil {
+		return Result{}, fmt.Errorf("clearing the bytecode cache of %s: %w", cfg.PythonRoot, err)
+	}
+	if err := cfg.Run(cfg, append(append([]string{}, base...), "DHO_VENUE_GOLDEN_UPDATE=1", "DHO_VENUE_GOLDEN_PYTHON_ROOT="+cfg.PythonRoot, "PYTHONDONTWRITEBYTECODE=1")); err != nil {
 		discard()
 		return Result{}, fmt.Errorf("the recording run failed (a golden is only recorded from a run that passed every check, cleanups included): %w", err)
 	}
@@ -161,7 +173,7 @@ func Record(ctx context.Context, cfg Config) (Result, error) {
 		}
 	}
 
-	plan, result, err := planPromotion(packageDir, found, replayed)
+	plan, result, err := planPromotion(packageDir, found, replayed, cfg.AllowDrop)
 	if err != nil {
 		discard()
 		return Result{}, err
@@ -196,7 +208,7 @@ func placeholder(final string) string {
 // any is made: each golden's bytes and the pin of its digest in the package's
 // tests. A golden no test pins is an error (a promoted golden the frozen replay
 // would refuse is not a success).
-func planPromotion(packageDir string, found []string, replayed map[string][]byte) ([]edit, Result, error) {
+func planPromotion(packageDir string, found []string, replayed map[string][]byte, allowDrop bool) ([]edit, Result, error) {
 	testFiles, err := filepath.Glob(filepath.Join(packageDir, "*_test.go"))
 	if err != nil {
 		return nil, Result{}, err
@@ -220,6 +232,9 @@ func planPromotion(packageDir string, found []string, replayed map[string][]byte
 		if raw, err := os.ReadFile(final); err == nil {
 			golden.before, golden.existed = raw, true
 			promotion.OldDigest = digest(raw)
+			if dropped := droppedCoverage(raw, replayed[candidate]); len(dropped) > 0 && !allowDrop {
+				return nil, Result{}, fmt.Errorf("the candidate for %s no longer holds what the golden it replaces holds: %s; a re-record must not silently remove coverage (an intended removal: -allow-drop)", final, strings.Join(dropped, ", "))
+			}
 		}
 		needle := promotion.OldDigest
 		if needle == "" {
@@ -328,4 +343,66 @@ func goTest(cfg Config, env []string) error {
 	command.Env = append(os.Environ(), env...)
 	command.Stdout, command.Stderr = os.Stdout, os.Stderr
 	return command.Run()
+}
+
+// coverage is what a golden covers: its requests by name and its row snapshots by name.
+type coverage struct {
+	Requests []struct {
+		Name string `json:"name"`
+	} `json:"requests"`
+	Rows map[string]json.RawMessage `json:"rows"`
+}
+
+// droppedCoverage lists the request and row names the old golden holds that the
+// new one does not. An old file that cannot be read holds nothing to keep.
+func droppedCoverage(oldRaw, newRaw []byte) []string {
+	var oldCoverage, newCoverage coverage
+	if json.Unmarshal(oldRaw, &oldCoverage) != nil {
+		return nil
+	}
+	if json.Unmarshal(newRaw, &newCoverage) != nil {
+		return []string{"the candidate is not readable"}
+	}
+	have := map[string]bool{}
+	for _, request := range newCoverage.Requests {
+		have["request "+request.Name] = true
+	}
+	for name := range newCoverage.Rows {
+		have["rows "+name] = true
+	}
+	var dropped []string
+	for _, request := range oldCoverage.Requests {
+		if !have["request "+request.Name] {
+			dropped = append(dropped, fmt.Sprintf("request %q", request.Name))
+		}
+	}
+	for name := range oldCoverage.Rows {
+		if !have["rows "+name] {
+			dropped = append(dropped, fmt.Sprintf("row comparison %q", name))
+		}
+	}
+	sort.Strings(dropped)
+	return dropped
+}
+
+// clearBytecode removes every __pycache__ directory and .pyc file under dir.
+func clearBytecode(dir string) error {
+	if _, err := os.Stat(dir); err != nil {
+		return err
+	}
+	return filepath.WalkDir(dir, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		switch {
+		case entry.IsDir() && entry.Name() == "__pycache__":
+			if err := os.RemoveAll(path); err != nil {
+				return err
+			}
+			return filepath.SkipDir
+		case !entry.IsDir() && strings.HasSuffix(path, ".pyc"):
+			return os.Remove(path)
+		}
+		return nil
+	})
 }

@@ -222,11 +222,25 @@ func TestPinnedCheckoutMustBeTheBuildItsSourceByteForByte(t *testing.T) {
 		t.Fatal(err)
 	}
 	// An ignored file under src (a sitecustomize.py on the Python path runs at
-	// start-up) is refused; the byte-code cache a Python run leaves is allowed.
+	// start-up) is refused, and so is any bytecode: a timestamp-validated cache
+	// can run code older than the source beside it.
 	write(".git/info/exclude", "sitecustomize.py\n__pycache__/\n*.pyc\n")
 	write("src/app/__pycache__/m.cpython-314.pyc", "x")
+	if _, err := verifyPinnedCheckout(dir, head); err == nil || !strings.Contains(err.Error(), "bytecode cache") {
+		t.Fatalf("a bytecode cache was accepted: %v", err)
+	}
+	if err := os.RemoveAll(filepath.Join(dir, "src/app/__pycache__")); err != nil {
+		t.Fatal(err)
+	}
+	write("src/injected.pyc", "x")
+	if _, err := verifyPinnedCheckout(dir, head); err == nil || !strings.Contains(err.Error(), "compiled Python file") {
+		t.Fatalf("a compiled Python file was accepted: %v", err)
+	}
+	if err := os.Remove(filepath.Join(dir, "src/injected.pyc")); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := verifyPinnedCheckout(dir, head); err != nil {
-		t.Fatalf("the byte-code cache was refused: %v", err)
+		t.Fatalf("the cleared checkout was refused: %v", err)
 	}
 	write("src/sitecustomize.py", "print('hook')\n")
 	if _, err := verifyPinnedCheckout(dir, head); err == nil || !strings.Contains(err.Error(), "sitecustomize.py") {
@@ -603,6 +617,7 @@ func TestTheRecordingPathVerifiesTheRootThenWritesOnlyACandidate(t *testing.T) {
 
 	t.Setenv(goldenUpdateEnv, "1")
 	t.Setenv(goldenPythonRootEnv, dir)
+	t.Setenv("PYTHONDONTWRITEBYTECODE", "1")
 	final := filepath.Join(t.TempDir(), "testdata", "g.json")
 	golden := OpenGolden(t, GoldenSpec{Path: final, PythonBuild: build, Recipe: "record it"})
 	if !golden.Recording() {
@@ -633,5 +648,16 @@ func TestTheRecordingPathVerifiesTheRootThenWritesOnlyACandidate(t *testing.T) {
 	var written goldenFile
 	if err := json.Unmarshal(raw, &written); err != nil || written.Header.PythonBuild != build || len(written.Header.ProducerDigest) != 64 {
 		t.Fatalf("candidate = %s (%v)", raw, err)
+	}
+}
+
+func TestARecordingNeedsBytecodeWritingSwitchedOff(t *testing.T) {
+	t.Setenv("PYTHONDONTWRITEBYTECODE", "")
+	if err := bytecodeEnvErr(); err == nil || !strings.Contains(err.Error(), "PYTHONDONTWRITEBYTECODE=1") {
+		t.Fatalf("a recording with bytecode writing on was accepted: %v", err)
+	}
+	t.Setenv("PYTHONDONTWRITEBYTECODE", "1")
+	if err := bytecodeEnvErr(); err != nil {
+		t.Fatalf("PYTHONDONTWRITEBYTECODE=1 was refused: %v", err)
 	}
 }

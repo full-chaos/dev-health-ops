@@ -251,6 +251,9 @@ func (g *Golden) PythonRoot(t *testing.T, root string) string {
 	if pinned == "" {
 		t.Fatalf("recording needs %s: a clean worktree at %s (git worktree add --detach <dir> %s)", goldenPythonRootEnv, g.spec.PythonBuild, g.spec.PythonBuild)
 	}
+	if err := bytecodeEnvErr(); err != nil {
+		t.Fatal(err)
+	}
 	digest, err := verifyPinnedCheckout(pinned, g.spec.PythonBuild)
 	if err != nil {
 		t.Fatalf("recording: %v", err)
@@ -284,7 +287,7 @@ func verifyPinnedCheckout(dir, build string) (string, error) {
 	return producerDigest(dir)
 }
 
-// producerDigest compares every file under dir/src (the byte-code cache aside)
+// producerDigest compares every file under dir/src
 // with the blob the checked-out commit holds at that path, and returns the
 // SHA-256 of the sorted "path blob" list. A file the commit lacks, one whose
 // content differs, or a commit file that is missing is an error.
@@ -313,18 +316,18 @@ func producerDigest(dir string) (string, error) {
 		if walkErr != nil {
 			return walkErr
 		}
+		rel, err := filepath.Rel(dir, path)
+		if err != nil {
+			return err
+		}
 		if entry.IsDir() {
 			if entry.Name() == "__pycache__" {
-				return filepath.SkipDir
+				return fmt.Errorf("%s holds a bytecode cache: a timestamp-validated .pyc can run code older than the source it sits beside; clear it (the record verb does: find src -name __pycache__ -prune -exec rm -rf {} +) and record with PYTHONDONTWRITEBYTECODE=1", filepath.ToSlash(rel))
 			}
 			return nil
 		}
 		if strings.HasSuffix(path, ".pyc") {
-			return nil
-		}
-		rel, err := filepath.Rel(dir, path)
-		if err != nil {
-			return err
+			return fmt.Errorf("%s is a compiled Python file: the source of a pinned build holds none", filepath.ToSlash(rel))
 		}
 		if entry.Type()&os.ModeSymlink != 0 {
 			// A link's blob is its target text, not the code it resolves to (which can
@@ -820,4 +823,13 @@ func uuidV5(namespace [16]byte, name string) string {
 	u[6] = (u[6] & 0x0f) | 0x50
 	u[8] = (u[8] & 0x3f) | 0x80
 	return fmt.Sprintf("%x-%x-%x-%x-%x", u[0:4], u[4:6], u[6:8], u[8:10], u[10:16])
+}
+
+// bytecodeEnvErr is an error unless the environment stops the Python plane
+// from writing a bytecode cache into the pinned checkout during the recording.
+func bytecodeEnvErr() error {
+	if os.Getenv("PYTHONDONTWRITEBYTECODE") != "1" {
+		return fmt.Errorf("recording needs PYTHONDONTWRITEBYTECODE=1 so the Python plane leaves no bytecode cache in the pinned checkout (the record verb sets it)")
+	}
+	return nil
 }

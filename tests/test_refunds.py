@@ -90,64 +90,6 @@ def _make_refund(org_id: str, invoice_id: str) -> Refund:
 
 
 @pytest.mark.asyncio
-async def test_create_refund_admin_only(client: AsyncClient, app: FastAPI, member_user):
-    app.dependency_overrides[get_current_user] = lambda: member_user
-    response = await client.post(
-        "/api/v1/billing/refunds",
-        json={"invoice_id": str(uuid.uuid4())},
-    )
-    assert response.status_code == 403
-
-
-@pytest.mark.asyncio
-async def test_create_refund_success(
-    client: AsyncClient, admin_user: AuthenticatedUser
-):
-    invoice_id = str(uuid.uuid4())
-    refund = _make_refund(admin_user.org_id, invoice_id)
-
-    with (
-        patch(
-            "dev_health_ops.api.billing.refund_routes.get_postgres_session"
-        ) as mock_db,
-        patch(
-            "dev_health_ops.api.billing.refund_routes.refund_service.create_refund",
-            new=AsyncMock(return_value=refund),
-        ),
-    ):
-        mock_db.return_value = _DummySessionCtx(MagicMock())
-        response = await client.post(
-            "/api/v1/billing/refunds",
-            json={"invoice_id": invoice_id, "amount": 500},
-        )
-
-    assert response.status_code == 200
-    assert response.json()["stripe_refund_id"] == "re_test_123"
-
-
-@pytest.mark.asyncio
-async def test_create_refund_validation_errors(client: AsyncClient):
-    with (
-        patch(
-            "dev_health_ops.api.billing.refund_routes.get_postgres_session"
-        ) as mock_db,
-        patch(
-            "dev_health_ops.api.billing.refund_routes.refund_service.create_refund",
-            new=AsyncMock(
-                side_effect=ValueError("Refund amount exceeds refundable balance")
-            ),
-        ),
-    ):
-        mock_db.return_value = _DummySessionCtx(MagicMock())
-        response = await client.post(
-            "/api/v1/billing/refunds",
-            json={"invoice_id": str(uuid.uuid4()), "amount": 999999},
-        )
-
-    assert response.status_code == 400
-
-
-@pytest.mark.asyncio
 async def test_refund_webhook_event_delegates_to_service(client: AsyncClient):
     event = SimpleNamespace(
         type="charge.refund.updated",

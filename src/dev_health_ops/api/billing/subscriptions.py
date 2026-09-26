@@ -4,17 +4,14 @@ import importlib
 import uuid
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dev_health_ops.api.admin.middleware import require_admin
 from dev_health_ops.api.auth.router import get_current_user
-from dev_health_ops.api.billing.stripe_client import get_stripe_client
+from dev_health_ops.api.go_served import GO_API, raise_served_by_go_api
 from dev_health_ops.api.services.auth import AuthenticatedUser
-from dev_health_ops.db import postgres_session_dependency
-
-from ._helpers import _resolve_org_id
 
 router = APIRouter(prefix="/subscriptions", tags=["billing-subscriptions"])
 
@@ -71,41 +68,6 @@ class MutationResponse(BaseModel):
     status: str
 
 
-def _to_iso(value: Any) -> str | None:
-    if value is None:
-        return None
-    return value.isoformat() if hasattr(value, "isoformat") else str(value)
-
-
-async def _load_plan_price(
-    subscription: Any, db: AsyncSession
-) -> tuple[Any | None, Any | None]:
-    try:
-        billing_module = importlib.import_module("dev_health_ops.models.billing")
-    except ImportError:
-        return None, None
-
-    BillingPlan = getattr(billing_module, "BillingPlan", None)
-    BillingPrice = getattr(billing_module, "BillingPrice", None)
-    if BillingPlan is None or BillingPrice is None:
-        return None, None
-
-    price = await db.get(BillingPrice, subscription.billing_price_id)
-    plan = await db.get(BillingPlan, subscription.billing_plan_id)
-    return plan, price
-
-
-def _serialize_record(record: Any) -> dict[str, Any]:
-    if record is None:
-        return {}
-    out: dict[str, Any] = {}
-    for key, value in vars(record).items():
-        if key.startswith("_"):
-            continue
-        out[key] = _to_iso(value) if "at" in key or "period" in key else value
-    return out
-
-
 def _service(session: AsyncSession) -> Any:
     module = importlib.import_module("dev_health_ops.api.billing.subscription_service")
     return module.SubscriptionService(session)
@@ -114,184 +76,52 @@ def _service(session: AsyncSession) -> Any:
 @router.get("/list", response_model=SubscriptionListResponse)
 async def list_subscriptions(
     user: Annotated[AuthenticatedUser, Depends(get_current_user)],
-    session: AsyncSession = Depends(postgres_session_dependency),
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     org_id: uuid.UUID | None = Query(default=None),
 ) -> SubscriptionListResponse:
-    service = _service(session)
-    resolved_org_id = _resolve_org_id(user, org_id)
-    subscriptions, total = await service.list_subscriptions(
-        resolved_org_id, limit, offset
-    )
-    items = []
-    for sub in subscriptions:
-        plan, price = await _load_plan_price(sub, session)
-        items.append(
-            SubscriptionView(
-                id=str(sub.id),
-                org_id=str(sub.org_id),
-                stripe_subscription_id=sub.stripe_subscription_id,
-                stripe_customer_id=sub.stripe_customer_id,
-                status=sub.status,
-                current_period_start=_to_iso(sub.current_period_start) or "",
-                current_period_end=_to_iso(sub.current_period_end) or "",
-                cancel_at_period_end=bool(sub.cancel_at_period_end),
-                canceled_at=_to_iso(sub.canceled_at),
-                trial_start=_to_iso(sub.trial_start),
-                trial_end=_to_iso(sub.trial_end),
-                plan=_serialize_record(plan) or None,
-                price=_serialize_record(price) or None,
-            )
-        )
-    return SubscriptionListResponse(
-        items=items,
-        total=total,
-        limit=limit,
-        offset=offset,
-    )
+    raise_served_by_go_api("/api/v1/billing/subscriptions/list", GO_API)
 
 
 @router.get("", response_model=SubscriptionView)
 async def get_subscription(
     user: Annotated[AuthenticatedUser, Depends(get_current_user)],
-    session: AsyncSession = Depends(postgres_session_dependency),
     org_id: uuid.UUID | None = Query(default=None),
 ) -> SubscriptionView:
-    service = _service(session)
-    resolved_org_id = _resolve_org_id(user, org_id)
-    subscription = await service.get_for_org(resolved_org_id)
-    if subscription is None:
-        raise HTTPException(status_code=404, detail="No active subscription")
-
-    plan, price = await _load_plan_price(subscription, session)
-    return SubscriptionView(
-        id=str(subscription.id),
-        org_id=str(subscription.org_id),
-        stripe_subscription_id=subscription.stripe_subscription_id,
-        stripe_customer_id=subscription.stripe_customer_id,
-        status=subscription.status,
-        current_period_start=_to_iso(subscription.current_period_start) or "",
-        current_period_end=_to_iso(subscription.current_period_end) or "",
-        cancel_at_period_end=bool(subscription.cancel_at_period_end),
-        canceled_at=_to_iso(subscription.canceled_at),
-        trial_start=_to_iso(subscription.trial_start),
-        trial_end=_to_iso(subscription.trial_end),
-        plan=_serialize_record(plan) or None,
-        price=_serialize_record(price) or None,
-    )
+    raise_served_by_go_api("/api/v1/billing/subscriptions", GO_API)
 
 
 @router.get("/history", response_model=SubscriptionHistoryResponse)
 async def get_subscription_history(
     user: Annotated[AuthenticatedUser, Depends(get_current_user)],
-    session: AsyncSession = Depends(postgres_session_dependency),
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     org_id: uuid.UUID | None = Query(default=None),
 ) -> SubscriptionHistoryResponse:
-    service = _service(session)
-    resolved_org_id = _resolve_org_id(user, org_id)
-    events, total = await service.get_history(resolved_org_id, limit, offset)
-    return SubscriptionHistoryResponse(
-        items=[
-            SubscriptionHistoryItem(
-                id=str(event.id),
-                stripe_event_id=event.stripe_event_id,
-                event_type=event.event_type,
-                previous_status=event.previous_status,
-                new_status=event.new_status,
-                processed_at=_to_iso(event.processed_at) or "",
-                payload=event.payload or {},
-            )
-            for event in events
-        ],
-        total=total,
-        limit=limit,
-        offset=offset,
-    )
+    raise_served_by_go_api("/api/v1/billing/subscriptions/history", GO_API)
 
 
 @router.post("/change-plan", response_model=MutationResponse)
 async def change_plan(
     body: ChangePlanRequest,
     user: Annotated[AuthenticatedUser, Depends(require_admin)],
-    session: AsyncSession = Depends(postgres_session_dependency),
     org_id: uuid.UUID | None = Query(default=None),
 ) -> MutationResponse:
-    service = _service(session)
-    resolved_org_id = _resolve_org_id(user, org_id)
-    if resolved_org_id is None:
-        raise HTTPException(status_code=400, detail="org_id required")
-
-    subscription = await service.get_for_org(resolved_org_id)
-    if subscription is None:
-        raise HTTPException(status_code=404, detail="No subscription found")
-
-    client = get_stripe_client()
-    stripe_sub = client.subscriptions.retrieve(subscription.stripe_subscription_id)
-    item_id = None
-    items = getattr(getattr(stripe_sub, "items", None), "data", []) or []
-    if items:
-        item_id = getattr(items[0], "id", None)
-    if item_id is None:
-        raise HTTPException(status_code=400, detail="Stripe subscription has no items")
-
-    client.subscriptions.update(
-        subscription.stripe_subscription_id,
-        params={
-            "items": [{"id": item_id, "price": body.price_id}],
-            "proration_behavior": "create_prorations",
-        },
-    )
-    return MutationResponse(status="ok")
+    raise_served_by_go_api("/api/v1/billing/subscriptions/change-plan", GO_API)
 
 
 @router.post("/cancel", response_model=MutationResponse)
 async def cancel_subscription(
     body: CancelSubscriptionRequest,
     user: Annotated[AuthenticatedUser, Depends(require_admin)],
-    session: AsyncSession = Depends(postgres_session_dependency),
     org_id: uuid.UUID | None = Query(default=None),
 ) -> MutationResponse:
-    service = _service(session)
-    resolved_org_id = _resolve_org_id(user, org_id)
-    if resolved_org_id is None:
-        raise HTTPException(status_code=400, detail="org_id required")
-
-    subscription = await service.get_for_org(resolved_org_id)
-    if subscription is None:
-        raise HTTPException(status_code=404, detail="No subscription found")
-
-    client = get_stripe_client()
-    if body.immediately:
-        client.subscriptions.cancel(subscription.stripe_subscription_id)
-    else:
-        client.subscriptions.update(
-            subscription.stripe_subscription_id,
-            params={"cancel_at_period_end": True},
-        )
-    return MutationResponse(status="ok")
+    raise_served_by_go_api("/api/v1/billing/subscriptions/cancel", GO_API)
 
 
 @router.post("/reactivate", response_model=MutationResponse)
 async def reactivate_subscription(
     user: Annotated[AuthenticatedUser, Depends(require_admin)],
-    session: AsyncSession = Depends(postgres_session_dependency),
     org_id: uuid.UUID | None = Query(default=None),
 ) -> MutationResponse:
-    service = _service(session)
-    resolved_org_id = _resolve_org_id(user, org_id)
-    if resolved_org_id is None:
-        raise HTTPException(status_code=400, detail="org_id required")
-
-    subscription = await service.get_for_org(resolved_org_id)
-    if subscription is None:
-        raise HTTPException(status_code=404, detail="No subscription found")
-
-    client = get_stripe_client()
-    client.subscriptions.update(
-        subscription.stripe_subscription_id,
-        params={"cancel_at_period_end": False},
-    )
-    return MutationResponse(status="ok")
+    raise_served_by_go_api("/api/v1/billing/subscriptions/reactivate", GO_API)

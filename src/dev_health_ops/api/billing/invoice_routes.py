@@ -2,21 +2,17 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from decimal import Decimal
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from dev_health_ops.api.admin.middleware import require_admin
 from dev_health_ops.api.auth.router import get_current_user
-from dev_health_ops.api.dependencies import get_postgres_session_dep as get_session
+from dev_health_ops.api.go_served import GO_API, raise_served_by_go_api
 from dev_health_ops.api.services.auth import AuthenticatedUser
 
-from ._helpers import _resolve_org_id, assign_attr, require_str, require_uuid
 from .invoice_service import InvoiceService
-from .stripe_client import get_stripe_client
 
 router = APIRouter(prefix="/invoices", tags=["billing"])
 invoice_service = InvoiceService()
@@ -66,97 +62,24 @@ class InvoiceListResponse(BaseModel):
     offset: int
 
 
-def _to_invoice_response(
-    invoice: Any, include_line_items: bool = False
-) -> InvoiceResponse:
-    line_items: list[InvoiceLineItemResponse] = []
-    if include_line_items:
-        line_items = [
-            InvoiceLineItemResponse(
-                id=str(line_item.id),
-                stripe_line_item_id=line_item.stripe_line_item_id,
-                description=line_item.description,
-                amount=line_item.amount,
-                quantity=line_item.quantity,
-                period_start=line_item.period_start,
-                period_end=line_item.period_end,
-                stripe_price_id=line_item.stripe_price_id,
-            )
-            for line_item in invoice.line_items
-        ]
-
-    return InvoiceResponse(
-        id=str(invoice.id),
-        org_id=str(invoice.org_id),
-        subscription_id=str(invoice.subscription_id)
-        if invoice.subscription_id
-        else None,
-        stripe_invoice_id=invoice.stripe_invoice_id,
-        stripe_customer_id=invoice.stripe_customer_id,
-        status=invoice.status,
-        amount_due=invoice.amount_due,
-        amount_paid=invoice.amount_paid,
-        amount_remaining=invoice.amount_remaining,
-        currency=invoice.currency,
-        period_start=invoice.period_start,
-        period_end=invoice.period_end,
-        hosted_invoice_url=invoice.hosted_invoice_url,
-        pdf_url=invoice.pdf_url,
-        payment_intent_id=invoice.payment_intent_id,
-        finalized_at=invoice.finalized_at,
-        paid_at=invoice.paid_at,
-        voided_at=invoice.voided_at,
-        attempt_count=invoice.attempt_count,
-        metadata=invoice.metadata_ or {},
-        created_at=invoice.created_at,
-        updated_at=invoice.updated_at,
-        line_items=line_items,
-    )
-
-
 @router.get("", response_model=InvoiceListResponse)
 async def list_invoices(
     user: Annotated[AuthenticatedUser, Depends(get_current_user)],
-    session: AsyncSession = Depends(get_session),
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     status: str | None = Query(default=None),
     org_id: uuid.UUID | None = Query(default=None),
 ) -> InvoiceListResponse:
-    resolved_org_id = _resolve_org_id(user, org_id if user.is_superuser else None)
-    invoices, total = await invoice_service.list_invoices(
-        db=session,
-        org_id=resolved_org_id,
-        limit=limit,
-        offset=offset,
-        status_filter=status,
-    )
-    return InvoiceListResponse(
-        items=[_to_invoice_response(invoice) for invoice in invoices],
-        total=total,
-        limit=limit,
-        offset=offset,
-    )
+    raise_served_by_go_api("/api/v1/billing/invoices", GO_API)
 
 
 @router.get("/{invoice_id}", response_model=InvoiceResponse)
 async def get_invoice(
     invoice_id: str,
     user: Annotated[AuthenticatedUser, Depends(get_current_user)],
-    session: AsyncSession = Depends(get_session),
     org_id: uuid.UUID | None = Query(default=None),
 ) -> InvoiceResponse:
-    try:
-        invoice_uuid = uuid.UUID(invoice_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid invoice id")
-
-    resolved_org_id = _resolve_org_id(user, org_id if user.is_superuser else None)
-    invoice = await invoice_service.get_invoice(session, invoice_uuid, resolved_org_id)
-    if invoice is None:
-        raise HTTPException(status_code=404, detail="Invoice not found")
-
-    return _to_invoice_response(invoice, include_line_items=True)
+    raise_served_by_go_api("/api/v1/billing/invoices/{invoice_id}", GO_API)
 
 
 @router.post("/{invoice_id}/void", response_model=InvoiceResponse)
@@ -164,48 +87,6 @@ async def void_invoice(
     invoice_id: str,
     _: Annotated[AuthenticatedUser, Depends(require_admin)],
     user: Annotated[AuthenticatedUser, Depends(get_current_user)],
-    session: AsyncSession = Depends(get_session),
     org_id: uuid.UUID | None = Query(default=None),
 ) -> InvoiceResponse:
-    try:
-        invoice_uuid = uuid.UUID(invoice_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid invoice id")
-
-    resolved_org_id = _resolve_org_id(user, org_id if user.is_superuser else None)
-
-    invoice = await invoice_service.get_invoice(session, invoice_uuid, resolved_org_id)
-    if invoice is None:
-        raise HTTPException(status_code=404, detail="Invoice not found")
-    if require_str(invoice.status, "invoice.status") != "open":
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "Only open invoices can be voided "
-                f"(current status: {require_str(invoice.status, 'invoice.status')})"
-            ),
-        )
-
-    try:
-        stripe_client = get_stripe_client()
-        stripe_client.invoices.void_invoice(
-            require_str(invoice.stripe_invoice_id, "invoice.stripe_invoice_id")
-        )
-    except RuntimeError as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Failed to void invoice: {exc}")
-
-    updated_invoice = await invoice_service.mark_voided(
-        session, require_str(invoice.stripe_invoice_id, "invoice.stripe_invoice_id")
-    )
-    assign_attr(updated_invoice, "amount_remaining", int(Decimal("0")))
-    await session.commit()
-    refreshed = await invoice_service.get_invoice(
-        session,
-        require_uuid(updated_invoice.id, "invoice.id"),
-        resolved_org_id,
-    )
-    if refreshed is None:
-        raise HTTPException(status_code=404, detail="Invoice not found")
-    return _to_invoice_response(refreshed, include_line_items=True)
+    raise_served_by_go_api("/api/v1/billing/invoices/{invoice_id}/void", GO_API)

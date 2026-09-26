@@ -121,7 +121,7 @@ internal/aicli	20
 internal/cacheinvalidation	2
 internal/chmigrate	60
 internal/externalrecompute	32
-internal/fixturescli	20
+internal/fixturescli	95
 internal/goapiproof	604
 internal/goapiproof/writeproof	25
 internal/joboperator	9

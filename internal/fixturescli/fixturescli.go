@@ -68,6 +68,11 @@ func Command() cli.Command {
 			Summary: "complete a synthetic sync run for one target and trigger its post-sync fanout",
 			Kind:    cli.Verb,
 			Run:     runFinalizeSynthetic,
+		}, {
+			Name:    "product-telemetry",
+			Summary: "seed product_telemetry_events across organizations",
+			Kind:    cli.Verb,
+			Run:     runProductTelemetry,
 		}},
 	}
 }

@@ -2349,3 +2349,19 @@ def test_discovery_does_not_override_a_caller_set_otel_enabled(tmp_path, monkeyp
     with discoverer._import_context(root):
         assert os.environ["OTEL_ENABLED"] == "true"
     assert os.environ["OTEL_ENABLED"] == "true"
+
+
+def test_discovery_can_run_twice_in_one_process():
+    """Two discoveries in one process must both succeed (CHAOS-6943).
+
+    Order-dependent on an unpinned environment: with OTEL_ENABLED unset, `discover()`
+    purges the modules it imported but not the Prometheus collectors and SQLAlchemy
+    tables they registered, so the second discovery died with `DuplicateTimeseries` --
+    whichever test happened to run second in a local pytest process failed. CI sets
+    OTEL_ENABLED=false and never took that path; `tests/conftest.py` now pins the same
+    default for every test process, and this test fails if that pin is lost.
+    """
+    discoverer = checker._load_module(_DISCOVERER_PATH, "discover_ops_routes_twice")
+    first = discoverer.discover(_REPO_ROOT)
+    second = discoverer.discover(_REPO_ROOT)
+    assert first["routes"] == second["routes"], "the two discoveries disagree"

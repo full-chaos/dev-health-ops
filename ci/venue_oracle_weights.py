@@ -12,8 +12,9 @@ legs (a hosted run's `gh run view --log`, whose lines carry a
 TestX (12.3s)` line is one test's time, credited to the package whose
 `ok  <module>/<package>  N.NNNs` line follows it. A test seen in several logs
 keeps its LARGEST time (a slow runner is the case to plan for); a registry row
-no log shows keeps the weight already in the file, else the default (60s) and
-is listed on stderr as unmeasured. Rows whose test left the registry are
+no log shows keeps the weight already in the file, else the provisional 600s marked
+`unmeasured` (listed on stderr). With no log at all it only syncs the file with the
+registry: it adds a new run row as unmeasured and drops a row that left. Rows whose test left the registry are
 dropped. A wrong weight costs balance, never coverage.
 """
 
@@ -28,7 +29,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 WEIGHTS = ROOT / "ci" / "venue_oracle_weights.tsv"
 REGISTRY_DIR = ROOT / "ci" / "venue_oracle_registry.d"
-DEFAULT_WEIGHT = 60
+# A registry row nobody has measured yet (a new test: venue oracles only run on
+# main, so its author cannot measure it) is planned PESSIMISTICALLY and flagged
+# `unmeasured` in the file. 600 s is above the slowest row ever measured (560 s,
+# run 36230983526): the first plan of CHAOS-6891 gave two unmeasured rows the
+# default 60 s and one of them took 560 s, which made its leg 587 s slower than
+# planned (2109 s of tests against a 2400 s cap). The next run's log replaces it.
+PROVISIONAL_WEIGHT = 600
+UNMEASURED = "unmeasured"
 
 HEADER = """\
 # Measured seconds of one venue-oracles registry `run` row (CHAOS-6891): the weight
@@ -38,8 +46,10 @@ HEADER = """\
 # A stale weight costs balance, never coverage (the legs always partition the run
 # rows); tests/tooling/test_venue_oracle_shards.py fails a PR whose registry has a run
 # row with no weight here, a weight for a test that left the registry, or a heaviest
-# leg over the leg's test-time budget. A row no log has measured carries the default
-# (60). Sorted (LC_ALL=C) by package, then test.
+# leg over the leg's test-time budget. A row no log has measured carries the
+# provisional weight (600, above the slowest row ever measured) and the marker
+# `unmeasured` in a fourth column, until a run log measures it. Sorted (LC_ALL=C)
+# by package, then test.
 """
 
 _PREFIX = re.compile(r"^([^\t]*)\t[^\t]*\t\S+Z (.*)$")
@@ -77,34 +87,40 @@ def registry_run_rows() -> list[tuple[str, str]]:
     return sorted(rows)
 
 
-def read_weights(path: Path) -> dict[tuple[str, str], int]:
-    weights: dict[tuple[str, str], int] = {}
+def read_weights(path: Path) -> dict[tuple[str, str], tuple[int, bool]]:
+    """{(package, test): (seconds, marked unmeasured)}."""
+    weights: dict[tuple[str, str], tuple[int, bool]] = {}
     if path.exists():
         for line in path.read_text(encoding="utf-8").splitlines():
             if not line.strip() or line.lstrip().startswith("#"):
                 continue
-            package, test, seconds = line.split("\t")
-            weights[(package, test)] = int(seconds)
+            fields = line.split("\t")
+            weights[(fields[0], fields[1])] = (
+                int(fields[2]),
+                len(fields) > 3 and fields[3] == UNMEASURED,
+            )
     return weights
 
 
 def build(
     rows: list[tuple[str, str]],
     seen: dict[tuple[str, str], float],
-    existing: dict[tuple[str, str], int],
+    existing: dict[tuple[str, str], tuple[int, bool]],
 ) -> tuple[str, list[tuple[str, str]]]:
     """The file text for `rows`, and the rows nothing measured."""
     out = [HEADER]
     unmeasured = []
     for row in sorted(rows):
+        marker = ""
         if row in seen:
             seconds = max(1, math.ceil(seen[row]))
-        elif row in existing:
-            seconds = existing[row]
+        elif row in existing and not existing[row][1]:
+            seconds = existing[row][0]
         else:
-            seconds = DEFAULT_WEIGHT
+            seconds = existing[row][0] if row in existing else PROVISIONAL_WEIGHT
+            marker = f"\t{UNMEASURED}"
             unmeasured.append(row)
-        out.append(f"{row[0]}\t{row[1]}\t{seconds}\n")
+        out.append(f"{row[0]}\t{row[1]}\t{seconds}{marker}\n")
     return "".join(out), unmeasured
 
 
@@ -112,7 +128,7 @@ def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument(
         "logs",
-        nargs="+",
+        nargs="*",
         type=Path,
         help="saved `go test -v` / `gh run view --log` files",
     )
@@ -137,7 +153,7 @@ def main(argv: list[str]) -> int:
     )
     for package, test in unmeasured:
         print(
-            f"  unmeasured (default {DEFAULT_WEIGHT}s): {package} {test}",
+            f"  unmeasured (provisional {PROVISIONAL_WEIGHT}s): {package} {test}",
             file=sys.stderr,
         )
     return 0

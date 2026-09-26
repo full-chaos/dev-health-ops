@@ -544,17 +544,49 @@ def test_the_weights_generator_reads_a_run_log(tmp_path: Path) -> None:
             ("internal/b", "TestTwo"),
             ("internal/c", "TestKept"),
             ("internal/c", "TestNew"),
+            ("internal/d", "TestStill"),
         ],
         seen,
-        {("internal/c", "TestKept"): 77, ("internal/gone", "TestGone"): 5},
+        {
+            ("internal/c", "TestKept"): (77, False),
+            ("internal/d", "TestStill"): (5, True),
+            ("internal/gone", "TestGone"): (5, False),
+        },
     )
     body = [line for line in text.splitlines() if line and not line.startswith("#")]
     assert body == [
         "internal/a\tTestOne\t99",
         "internal/a\tTestThree\t6",  # rounded up
         "internal/b\tTestTwo\t30",
-        "internal/c\tTestKept\t77",  # unmeasured, kept from the existing file
-        "internal/c\tTestNew\t60",  # unmeasured, the default
+        "internal/c\tTestKept\t77",  # no log measured it: the existing weight stays
+        "internal/c\tTestNew\t600\tunmeasured",  # a new row: planned pessimistically
+        "internal/d\tTestStill\t5\tunmeasured",  # still unmeasured: flag kept
     ]
-    assert unmeasured == [("internal/c", "TestNew")]
+    assert unmeasured == [("internal/c", "TestNew"), ("internal/d", "TestStill")]
+    # a measurement clears the flag
+    text, unmeasured = module.build(
+        [("internal/d", "TestStill")],
+        {("internal/d", "TestStill"): 41.2},
+        {("internal/d", "TestStill"): (5, True)},
+    )
+    assert "internal/d\tTestStill\t42\n" in text and unmeasured == []
+    assert module.PROVISIONAL_WEIGHT >= 600
     assert text.startswith("# Measured seconds of one venue-oracles registry `run` row")
+
+
+def test_an_unmeasured_row_is_planned_pessimistically() -> None:
+    # CHAOS-6891: the first plan gave two rows nobody had measured a 60 s default;
+    # one took 560 s and its leg ran 2109 s of tests against a 2400 s cap. A row in
+    # the weights file marked `unmeasured` (a new test: venue oracles run on main
+    # only, so its author cannot measure it) must carry at least the provisional
+    # 600 s, above the slowest row ever measured, until a run log measures it.
+    for line in WEIGHTS_FILE.read_text(encoding="utf-8").splitlines():
+        if line.strip() and not line.lstrip().startswith("#"):
+            package, test, seconds, *marker = line.split("\t")
+            if marker == ["unmeasured"]:
+                assert int(seconds) >= 600, (
+                    f"{package} {test} is unmeasured but planned at {seconds}s: "
+                    "regenerate with ci/venue_oracle_weights.py"
+                )
+            else:
+                assert marker == [], f"unknown weights column {marker} in {line!r}"

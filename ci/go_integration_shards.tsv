@@ -171,7 +171,7 @@ internal/storage/river	38
 internal/streamhandlers	190
 internal/streamrunner	2
 internal/syncdispatchruntime	900
-internal/syncreconciler	300
+internal/syncreconciler	420
 internal/synccoverage	14
 internal/syncbudget	60
 internal/syncroute	25

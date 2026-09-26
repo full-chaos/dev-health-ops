@@ -156,7 +156,7 @@ internal/llmorgsettings	90
 internal/backfillrun	120
 internal/maintenancecli	100
 internal/operationalbackfill	130
-internal/pgmigrate	90
+internal/pgmigrate	240
 internal/platform/config	14
 internal/providerfoundation	16
 internal/providersync	2337

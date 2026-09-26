@@ -506,8 +506,10 @@ func TestPreflightCommand(t *testing.T) {
 	})
 
 	t.Run("a database whose alembic_version cannot be read is exit 3", func(t *testing.T) {
-		// alembic_version exists but is not a table of the shape the migrator reads.
-		broken := stateDatabase(t, admin, instance, execSQL(t, "CREATE TABLE public.alembic_version (other int)"))
+		// alembic_version exists but is not the shape the migrator reads: its
+		// version_num column is gone (renamed on a real, migrated database).
+		broken := stateDatabase(t, admin, instance, sequence(upgradeTo(t, baseline, current.chain),
+			execSQL(t, "ALTER TABLE public.alembic_version RENAME COLUMN version_num TO other")))
 		code, stdout, stderr := commandRun(t, databaseURI(t, instance.URI, broken), productionLookup, "preflight")
 		if code != pgmigrate.ExitMeasurementFailed || strings.TrimSpace(stdout) != "" || !strings.Contains(stderr, "preflight_failed") {
 			t.Fatalf("exit %d, stdout %q, stderr %q: a database the preflight could not read must be exit 3 with no verdict", code, stdout, stderr)

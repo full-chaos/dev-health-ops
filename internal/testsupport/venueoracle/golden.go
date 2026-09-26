@@ -85,8 +85,9 @@ type Golden struct {
 	rootVerified bool
 	// rowsUsed records which frozen row comparisons the test asked for: a
 	// snapshot nothing consumed is a comparison that no longer happens.
-	rowsUsed map[string]bool
-	state    goldenState
+	rowsUsed    map[string]bool
+	rowsFetched map[string]bool
+	state       goldenState
 }
 
 // The environment variables that switch a test to recording.
@@ -188,7 +189,7 @@ func openGolden(spec GoldenSpec, test string, recording bool) (*Golden, error) {
 	if spec.Path == "" || spec.Recipe == "" || !buildPattern.MatchString(spec.PythonBuild) {
 		return nil, fmt.Errorf("venueoracle: a GoldenSpec needs a path, a recipe and the 40-hex Python build the answers were executed on: %+v", spec)
 	}
-	g := &Golden{spec: spec, recording: recording, rowsUsed: map[string]bool{}}
+	g := &Golden{spec: spec, recording: recording, rowsUsed: map[string]bool{}, rowsFetched: map[string]bool{}}
 	if recording {
 		g.recorded = goldenFile{Header: goldenHeader{Test: test, PythonBuild: spec.PythonBuild, Recipe: spec.Recipe}, Rows: map[string]goldenRows{}}
 		return g, nil
@@ -310,14 +311,13 @@ func producerDigest(dir string) (string, error) {
 		if err != nil {
 			return err
 		}
-		var content []byte
 		if entry.Type()&os.ModeSymlink != 0 {
-			target, err := os.Readlink(path)
-			if err != nil {
-				return err
-			}
-			content = []byte(target)
-		} else if content, err = os.ReadFile(path); err != nil {
+			// A link's blob is its target text, not the code it resolves to (which can
+			// live outside src and change unseen): the Python source holds none.
+			return fmt.Errorf("%s is a symbolic link: the Python source under src of a pinned build holds none, because a link's target is not part of what the commit's blob pins", filepath.ToSlash(rel))
+		}
+		content, err := os.ReadFile(path)
+		if err != nil {
 			return err
 		}
 		onDisk[filepath.ToSlash(rel)] = gitBlobID(content)
@@ -400,8 +400,13 @@ func headersDigest(headers map[string]string) string {
 	return hex.EncodeToString(hash.Sum(nil))
 }
 
-// bearerIdentity reduces "Bearer <jwt>" to the token's claims without the
-// volatile ones, in a canonical order; any other value is returned as is.
+// bearerIdentity reduces "Bearer <jwt>" to the token's header and claims
+// without the volatile ones, in a canonical order; any other value is returned
+// as is. The signature is NOT part of the identity: the venue mints a token per
+// process, so its signature differs between a recording and a replay by
+// construction. A test that must prove the Go plane refuses a tampered token
+// asserts that itself (the golden freezes what Python answered for the caller
+// the claims name).
 func bearerIdentity(value string) string {
 	token, ok := strings.CutPrefix(value, "Bearer ")
 	if !ok {
@@ -409,6 +414,18 @@ func bearerIdentity(value string) string {
 	}
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
+		return value
+	}
+	header, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		return value
+	}
+	var headerFields map[string]any
+	if err := json.Unmarshal(header, &headerFields); err != nil {
+		return value
+	}
+	canonicalHeader, err := json.Marshal(headerFields)
+	if err != nil {
 		return value
 	}
 	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
@@ -426,7 +443,7 @@ func bearerIdentity(value string) string {
 	if err != nil {
 		return value
 	}
-	return "Bearer claims:" + string(canonical)
+	return "Bearer header:" + string(canonicalHeader) + " claims:" + string(canonical)
 }
 
 // stepErr is an error naming the call and the state unless the golden is in a
@@ -500,18 +517,49 @@ func (g *Golden) frozenAnswers(requests []Request) ([]Response, error) {
 	return out, nil
 }
 
-// Rows is the Python plane's value of a row comparison: what source computes
-// (the Python plane's database after it served) while recording, the recorded
-// text otherwise. name identifies the comparison within the file; each name
-// answers one comparison (a second use of a frozen name is refused).
-func (g *Golden) Rows(t *testing.T, name string, source func() string) string {
+// CompareRows compares the Python plane's row state with goRows and returns
+// the Python value. Recording, the Python value is what source computes (the
+// Python plane's database after it served); frozen, it is the recorded text. A
+// difference fails the test with both values. name identifies the comparison in
+// the file; each name answers one comparison. A frozen snapshot counts as used
+// only here (or through InspectRows), never merely because it was retrieved.
+func (g *Golden) CompareRows(t *testing.T, name string, source func() string, goRows string) string {
 	t.Helper()
-	g.step(t, "Rows", statePython, stateDiffed)
+	value := g.snapshot(t, "CompareRows", name, source)
+	if err := rowsDiffer(name, value, goRows); err != nil {
+		t.Error(err)
+	}
+	g.rowsUsed[name] = true
+	return value
+}
+
+// rowsDiffer is an error naming both values when the Python plane's rows and the
+// Go plane's differ.
+func rowsDiffer(name, python, goRows string) error {
+	if python != goRows {
+		return fmt.Errorf("%s differs after the requests:\n python: %s\n go:     %s", name, python, goRows)
+	}
+	return nil
+}
+
+// InspectRows returns the Python plane's row state for a test that inspects it
+// itself instead of comparing it with the Go plane's rows (for example against a
+// literal). It counts as the snapshot's use.
+func (g *Golden) InspectRows(t *testing.T, name string, source func() string) string {
+	t.Helper()
+	value := g.snapshot(t, "InspectRows", name, source)
+	g.rowsUsed[name] = true
+	return value
+}
+
+func (g *Golden) snapshot(t *testing.T, call, name string, source func() string) string {
+	t.Helper()
+	g.step(t, call, statePython, stateDiffed)
 	if g.recording {
-		value := source()
-		if _, dup := g.recorded.Rows[name]; dup {
+		if g.rowsUsed[name] {
 			t.Fatalf("golden row comparison %q is recorded twice", name)
 		}
+		value := source()
 		g.recorded.Rows[name] = goldenRows{Rows: value}
 		return value
 	}
@@ -527,10 +575,10 @@ func (g *Golden) frozenRows(name string) (string, error) {
 	if !ok {
 		return "", fmt.Errorf("golden %s holds no row comparison %q; regenerate: %s", g.spec.Path, name, g.spec.Recipe)
 	}
-	if g.rowsUsed[name] {
+	if g.rowsFetched[name] {
 		return "", fmt.Errorf("golden %s: the row comparison %q was asked for twice; a frozen snapshot answers one comparison; use a distinct name per comparison: %s", g.spec.Path, name, g.spec.Recipe)
 	}
-	g.rowsUsed[name] = true
+	g.rowsFetched[name] = true
 	return entry.Rows, nil
 }
 

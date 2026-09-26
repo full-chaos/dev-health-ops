@@ -152,7 +152,7 @@ func TestRecordingWritesTheHeaderAndNeverAProof(t *testing.T) {
 		t.Fatal("recording golden reports frozen")
 	}
 	golden.state = statePython
-	value := golden.Rows(t, "rows", func() string { return "x | y" })
+	value := golden.InspectRows(t, "rows", func() string { return "x | y" })
 	if value != "x | y" {
 		t.Fatalf("recording must return what the source computed, got %q", value)
 	}
@@ -236,6 +236,18 @@ func TestPinnedCheckoutMustBeTheBuildItsSourceByteForByte(t *testing.T) {
 	if err := os.Remove(filepath.Join(dir, "src/sitecustomize.py")); err != nil {
 		t.Fatal(err)
 	}
+	// A committed symbolic link under src: its blob is the link text, not the code it
+	// resolves to, so the source it points at could change unseen.
+	write("outside/real.py", "VALUE = 1\n")
+	if err := os.Symlink("../../outside/real.py", filepath.Join(dir, "src/app/linked.py")); err != nil {
+		t.Fatal(err)
+	}
+	run("add", ".")
+	run("commit", "-q", "-m", "link")
+	linked := run("rev-parse", "HEAD")
+	if _, err := verifyPinnedCheckout(dir, linked); err == nil || !strings.Contains(err.Error(), "symbolic link") {
+		t.Fatalf("a symbolic link under src was accepted: %v", err)
+	}
 	if _, err := verifyPinnedCheckout(t.TempDir(), head); err == nil || !strings.Contains(err.Error(), "not a git checkout") {
 		t.Fatalf("a directory that is no checkout was accepted: %v", err)
 	}
@@ -290,6 +302,21 @@ func TestRequestHeadersAreKeptInTheKeyAndABearerTokenByItsClaims(t *testing.T) {
 			t.Errorf("%s did not change the key", name)
 		}
 	}
+	// The token's header is part of the identity; its signature is not (a token
+	// is minted per process, so a signature differs by construction).
+	withHeader := func(header string) Request {
+		encode := func(text string) string { return base64.RawURLEncoding.EncodeToString([]byte(text)) }
+		token := "Bearer " + encode(header) + "." + encode(`{"sub":"u1","iat":1}`) + "." + encode("sig")
+		return Request{Name: "a", Method: "GET", Path: "/x", Headers: map[string]string{"Authorization": token}}
+	}
+	if requestKey(withHeader(`{"alg":"HS256"}`)).HeadersSHA256 == requestKey(withHeader(`{"alg":"none"}`)).HeadersSHA256 {
+		t.Error("another token header (alg) did not change the key")
+	}
+	otherSignature := Request{Name: "a", Method: "GET", Path: "/x", Headers: map[string]string{"Authorization": fakeToken(`{"sub":"u1","role":"admin"}`)}}
+	sameSignatureless := Request{Name: "a", Method: "GET", Path: "/x", Headers: map[string]string{"Authorization": strings.TrimSuffix(fakeToken(`{"sub":"u1","role":"admin"}`), base64.RawURLEncoding.EncodeToString([]byte("signature"))) + base64.RawURLEncoding.EncodeToString([]byte("another"))}}
+	if requestKey(otherSignature).HeadersSHA256 != requestKey(sameSignatureless).HeadersSHA256 {
+		t.Error("a different signature over the same header and claims changed the key: tokens minted per process would never replay")
+	}
 	// A golden recorded for one caller refuses a request from another.
 	requests := []Request{sameCaller(`{"sub":"u1","role":"admin","iat":1}`)}
 	path, digest := writeGoldenFile(t, t.TempDir(), sampleGolden(requests))
@@ -302,24 +329,35 @@ func TestRequestHeadersAreKeptInTheKeyAndABearerTokenByItsClaims(t *testing.T) {
 	}
 }
 
-func TestAFrozenSnapshotNobodyAskedForIsRefused(t *testing.T) {
+func TestAFrozenSnapshotNobodyComparedIsRefused(t *testing.T) {
 	requests := sampleRequests()
 	path, digest := writeGoldenFile(t, t.TempDir(), sampleGolden(requests))
 	golden, err := openGolden(GoldenSpec{Path: path, PythonBuild: goldenBuild, SHA256: digest, Recipe: "record it"}, "TestSample", false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := golden.frozenAnswers(requests); err != nil {
-		t.Fatal(err)
-	}
 	if err := golden.unusedRows(); err == nil || !strings.Contains(err.Error(), "rows") {
-		t.Fatalf("an unused row snapshot was accepted: %v", err)
+		t.Fatalf("a snapshot nobody asked for was accepted: %v", err)
 	}
+	// Retrieved, but the test dropped the comparison: the snapshot is not used.
 	if _, err := golden.frozenRows("rows"); err != nil {
 		t.Fatal(err)
 	}
+	if err := golden.unusedRows(); err == nil || !strings.Contains(err.Error(), "rows") {
+		t.Fatalf("a snapshot that was retrieved but never compared was accepted: %v", err)
+	}
+	golden.rowsUsed["rows"] = true // what CompareRows and InspectRows do once the test used it
 	if err := golden.unusedRows(); err != nil {
 		t.Fatalf("every snapshot used: %v", err)
+	}
+}
+
+func TestRowsThatDifferAreAnErrorNamingBothValues(t *testing.T) {
+	if err := rowsDiffer("orgs", "id=1", "id=1"); err != nil {
+		t.Fatalf("equal rows were refused: %v", err)
+	}
+	if err := rowsDiffer("orgs", "id=1", "id=999"); err == nil || !strings.Contains(err.Error(), "id=1") || !strings.Contains(err.Error(), "id=999") {
+		t.Fatalf("divergent rows were accepted: %v", err)
 	}
 }
 
@@ -430,7 +468,7 @@ func TestThePublicFrozenWorkflowEndToEnd(t *testing.T) {
 	if len(answers) != 2 || answers[1].Status != 201 {
 		t.Fatalf("answers = %+v", answers)
 	}
-	if got := golden.Rows(t, "rows", func() string { t.Fatal("frozen replay must not read the source database"); return "" }); got != "a | b" {
+	if got := golden.CompareRows(t, "rows", func() string { t.Fatal("frozen replay must not read the source database"); return "" }, "a | b"); got != "a | b" {
 		t.Fatalf("rows = %q", got)
 	}
 	Diff(t, goPlane.URL, requests, answers, DiffOptions{Golden: golden})
@@ -477,5 +515,66 @@ func TestARecordingRefusesPythonFromARootItNeverVerified(t *testing.T) {
 	golden.rootVerified = true
 	if err := golden.recordingRootErr(); err != nil {
 		t.Fatalf("a verified root was refused: %v", err)
+	}
+}
+
+// The recording path a test takes up to the Python plane: OpenGolden in
+// recording mode, PythonRoot verifying the pinned checkout, and Finish writing
+// the candidate (the Python plane itself needs a venue, so its answers are put
+// in the recording directly).
+func TestTheRecordingPathVerifiesTheRootThenWritesOnlyACandidate(t *testing.T) {
+	dir := t.TempDir()
+	run := func(args ...string) string {
+		t.Helper()
+		command := exec.Command("git", append([]string{"-C", dir, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"}, args...)...)
+		out, err := command.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	run("init", "-q")
+	if err := os.MkdirAll(filepath.Join(dir, "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "src", "app.py"), []byte("X = 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run("add", ".")
+	run("commit", "-q", "-m", "one")
+	build := run("rev-parse", "HEAD")
+
+	t.Setenv(goldenUpdateEnv, "1")
+	t.Setenv(goldenPythonRootEnv, dir)
+	final := filepath.Join(t.TempDir(), "testdata", "g.json")
+	golden := OpenGolden(t, GoldenSpec{Path: final, PythonBuild: build, Recipe: "record it"})
+	if !golden.Recording() {
+		t.Fatal("OpenGolden did not open a recording")
+	}
+	if err := golden.recordingRootErr(); err == nil {
+		t.Fatal("Python was allowed before the root was verified")
+	}
+	if got := golden.PythonRoot(t, "/the/callers/own/root"); got != dir {
+		t.Fatalf("PythonRoot = %q, want the pinned checkout %q", got, dir)
+	}
+	if err := golden.recordingRootErr(); err != nil {
+		t.Fatalf("a verified root was refused: %v", err)
+	}
+	if len(golden.recorded.Header.ProducerDigest) != 64 {
+		t.Fatalf("header producer digest = %q", golden.recorded.Header.ProducerDigest)
+	}
+	golden.recorded.Requests = []goldenRequest{{Name: "a", Method: "GET", Path: "/x"}}
+	golden.state = stateDiffed
+	golden.Finish(t)
+	if _, err := os.Stat(final); err == nil {
+		t.Fatal("Finish wrote the golden itself")
+	}
+	raw, err := os.ReadFile(final + GoldenCandidateSuffix)
+	if err != nil {
+		t.Fatalf("Finish wrote no candidate: %v", err)
+	}
+	var written goldenFile
+	if err := json.Unmarshal(raw, &written); err != nil || written.Header.PythonBuild != build || len(written.Header.ProducerDigest) != 64 {
+		t.Fatalf("candidate = %s (%v)", raw, err)
 	}
 }

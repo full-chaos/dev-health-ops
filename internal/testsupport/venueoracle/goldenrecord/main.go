@@ -22,6 +22,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -84,9 +85,6 @@ func main() {
 	}
 	for _, promotion := range result.Promoted {
 		fmt.Printf("promoted %s\n  sha256 %s (was %s)\n", promotion.Path, promotion.NewDigest, orNone(promotion.OldDigest))
-		if len(promotion.Pinned) == 0 {
-			fmt.Printf("  no test pins the previous digest: pin %s in the test that opens this golden\n", promotion.NewDigest)
-		}
 		for _, file := range promotion.Pinned {
 			fmt.Printf("  pinned in %s\n", file)
 		}
@@ -141,34 +139,159 @@ func Record(ctx context.Context, cfg Config) (Result, error) {
 	if len(found) == 0 {
 		return Result{}, errors.New("the recording run passed but wrote no candidate: the selected tests do not use venueoracle.OpenGolden or did not reach Finish")
 	}
+	// The bytes the replay is about to check are the bytes that get promoted.
+	replayed := map[string][]byte{}
+	for _, candidate := range found {
+		raw, err := os.ReadFile(candidate)
+		if err != nil {
+			discard()
+			return Result{}, err
+		}
+		replayed[candidate] = raw
+	}
 	if err := cfg.Run(cfg, append(append([]string{}, base...), "DHO_VENUE_GOLDEN_CANDIDATE=1")); err != nil {
 		discard()
 		return Result{}, fmt.Errorf("the fresh-process replay of the candidates failed: %w", err)
 	}
+	for _, candidate := range found {
+		after, err := os.ReadFile(candidate)
+		if err != nil || !bytes.Equal(after, replayed[candidate]) {
+			discard()
+			return Result{}, fmt.Errorf("the candidate %s changed after it was replayed: only the replayed bytes may be promoted", candidate)
+		}
+	}
 
+	plan, result, err := planPromotion(packageDir, found, replayed)
+	if err != nil {
+		discard()
+		return Result{}, err
+	}
+	if err := apply(plan); err != nil {
+		discard()
+		return Result{}, err
+	}
+	for _, candidate := range found {
+		_ = os.Remove(candidate)
+	}
+	return result, nil
+}
+
+// edit is one file the promotion writes; before is what it held (existed false
+// when it did not exist), so a failed promotion can put it back.
+type edit struct {
+	path    string
+	before  []byte
+	existed bool
+	after   []byte
+}
+
+// placeholder is what the test of a golden that does not exist yet pins until
+// the first record: "PIN:" and the golden's file name without its extension.
+func placeholder(final string) string {
+	name := filepath.Base(final)
+	return "PIN:" + strings.TrimSuffix(name, filepath.Ext(name))
+}
+
+// planPromotion computes every write the promotion makes, in memory, before
+// any is made: each golden's bytes and the pin of its digest in the package's
+// tests. A golden no test pins is an error (a promoted golden the frozen replay
+// would refuse is not a success).
+func planPromotion(packageDir string, found []string, replayed map[string][]byte) ([]edit, Result, error) {
+	testFiles, err := filepath.Glob(filepath.Join(packageDir, "*_test.go"))
+	if err != nil {
+		return nil, Result{}, err
+	}
+	contents := map[string]string{}
+	original := map[string][]byte{}
+	for _, file := range testFiles {
+		raw, err := os.ReadFile(file)
+		if err != nil {
+			return nil, Result{}, err
+		}
+		original[file] = raw
+		contents[file] = string(raw)
+	}
+	var plan []edit
 	var result Result
 	for _, candidate := range found {
 		final := strings.TrimSuffix(candidate, candidateSuffix)
-		promotion := Promotion{Path: final}
+		promotion := Promotion{Path: final, NewDigest: digest(replayed[candidate])}
+		golden := edit{path: final, after: replayed[candidate]}
 		if raw, err := os.ReadFile(final); err == nil {
+			golden.before, golden.existed = raw, true
 			promotion.OldDigest = digest(raw)
 		}
-		raw, err := os.ReadFile(candidate)
-		if err != nil {
-			return result, err
+		needle := promotion.OldDigest
+		if needle == "" {
+			needle = placeholder(final)
 		}
-		promotion.NewDigest = digest(raw)
-		if err := os.Rename(candidate, final); err != nil {
-			return result, err
+		for _, file := range testFiles {
+			if strings.Contains(contents[file], needle) {
+				contents[file] = strings.ReplaceAll(contents[file], needle, promotion.NewDigest)
+				promotion.Pinned = append(promotion.Pinned, file)
+			}
 		}
-		pinned, err := pin(packageDir, promotion.OldDigest, promotion.NewDigest)
-		if err != nil {
-			return result, err
+		if len(promotion.Pinned) == 0 {
+			return nil, Result{}, fmt.Errorf("no test in %s pins %s (looked for %s): a golden no test pins would be refused by the frozen replay; for a new golden give its spec the digest %q", packageDir, final, needle, placeholder(final))
 		}
-		promotion.Pinned = pinned
+		plan = append(plan, golden)
 		result.Promoted = append(result.Promoted, promotion)
 	}
-	return result, nil
+	for _, file := range testFiles {
+		if contents[file] != string(original[file]) {
+			plan = append(plan, edit{path: file, before: original[file], existed: true, after: []byte(contents[file])})
+		}
+	}
+	return plan, result, nil
+}
+
+// apply makes the planned writes, each by a temporary file renamed into place,
+// and puts every file back as it was if any write fails.
+func apply(plan []edit) error {
+	for index, step := range plan {
+		if err := writeAtomic(step.path, step.after); err != nil {
+			rollback(plan[:index])
+			return fmt.Errorf("promotion failed at %s (everything written before it was put back): %w", step.path, err)
+		}
+	}
+	return nil
+}
+
+func rollback(done []edit) {
+	for index := len(done) - 1; index >= 0; index-- {
+		step := done[index]
+		if step.existed {
+			_ = writeAtomic(step.path, step.before)
+		} else {
+			_ = os.Remove(step.path)
+		}
+	}
+}
+
+func writeAtomic(path string, content []byte) error {
+	temp, err := os.CreateTemp(filepath.Dir(path), ".goldenrecord-*")
+	if err != nil {
+		return err
+	}
+	name := temp.Name()
+	if _, err := temp.Write(content); err != nil {
+		temp.Close()
+		os.Remove(name)
+		return err
+	}
+	if err := temp.Close(); err != nil {
+		os.Remove(name)
+		return err
+	}
+	if err := os.Chmod(name, 0o644); err != nil {
+		os.Remove(name)
+		return err
+	}
+	if err := os.Rename(name, path); err != nil {
+		os.Remove(name)
+		return err
+	}
+	return nil
 }
 
 func digest(raw []byte) string {
@@ -196,37 +319,6 @@ func removeAll(dir string) {
 	for _, path := range found {
 		_ = os.Remove(path)
 	}
-}
-
-// pin replaces the previous digest of a golden with the new one in the Go test
-// files of the package directory and returns the files it changed. A new golden
-// has no previous digest: the test names the placeholder "PIN" until the first
-// record, and that literal is replaced when exactly one test file holds it.
-func pin(dir, oldDigest, newDigest string) ([]string, error) {
-	needle := oldDigest
-	if needle == "" {
-		return nil, nil
-	}
-	files, err := filepath.Glob(filepath.Join(dir, "*_test.go"))
-	if err != nil {
-		return nil, err
-	}
-	var changed []string
-	for _, file := range files {
-		raw, err := os.ReadFile(file)
-		if err != nil {
-			return changed, err
-		}
-		if !strings.Contains(string(raw), needle) {
-			continue
-		}
-		updated := strings.ReplaceAll(string(raw), needle, newDigest)
-		if err := os.WriteFile(file, []byte(updated), 0o644); err != nil {
-			return changed, err
-		}
-		changed = append(changed, file)
-	}
-	return changed, nil
 }
 
 // goTest is the default runner.

@@ -512,24 +512,19 @@ async def test_await_materialized_never_blocks_the_event_loop(
     blocking sleep would stall EVERY concurrent request for the whole
     await window, not just this one.
 
-    Proof, by WALL-CLOCK time, not raw tick count: asyncio timers are never
-    dropped, only delayed, so a concurrent ticker task eventually completes
-    its fixed number of ticks regardless of whether the other task blocked
-    the loop in between -- a tick-count assertion alone cannot tell a
-    genuinely concurrent run from a blocking one that merely finishes
-    later. What DOES tell them apart is total elapsed time: run the bounded
-    await (a never-completing occurrence, so it always runs its full
-    deadline) CONCURRENTLY with an independent ticker task on a shorter,
-    unrelated interval. A genuinely async poll overlaps the two, so total
-    elapsed is close to max(poll deadline, ticker duration). A blocking
-    time.sleep serializes them instead (each of the poll's blocking slices
-    delays the ticker's queued wakeups), so elapsed drifts toward roughly
-    their SUM. Empirically measured: ~0.28s genuinely async, ~0.49s with a
-    known-bad time.sleep() substituted in -- asserting well under the
-    sum (which would be ~0.45s here) is a tight, real discriminator.
+    Proof by INTERLEAVING, not elapsed seconds (CHAOS-5075: an elapsed-time
+    bound failed on a loaded runner without any change to the code). A
+    concurrent task that only ever yields (``asyncio.sleep(0)``) records a
+    "tick" each time it gets the loop; the poll's own read of the occurrence
+    records a "read". A poll that yields to the loop between reads lets at
+    least one tick land between every two consecutive reads, whatever the
+    machine's speed. A poll that blocks (``time.sleep``) never yields, so
+    the reads run back to back with no tick between them -- the ticker only
+    runs after the poll has already returned.
     """
     monkeypatch.setenv("SYNC_MANUAL_TRIGGER_AWAIT_SECONDS", "0.2")
     config = _seed_planner_managed_config(sqlite_session)
+    from dev_health_ops.sync import execution_trigger
     from dev_health_ops.sync.execution_trigger import (
         _create_go_manual_sync_execution_trigger,
     )
@@ -545,35 +540,54 @@ async def test_await_materialized_never_blocks_the_event_loop(
         sqlite_session, config, "org-a", request
     )
     assert minted.occurrence_id is not None
+    occurrence_id: str = minted.occurrence_id
     sqlite_session.commit()
 
-    ticks = 0
+    events: list[str] = []
+    real_read = execution_trigger._read_occurrence_reconcile_state
+
+    def _recording_read(sync_session, occurrence_id):
+        events.append("read")
+        return real_read(sync_session, occurrence_id)
+
+    monkeypatch.setattr(
+        execution_trigger, "_read_occurrence_reconcile_state", _recording_read
+    )
+
+    polling_done = False
 
     async def _ticker() -> None:
-        nonlocal ticks
-        for _ in range(50):
-            await asyncio.sleep(0.005)
-            ticks += 1
+        while not polling_done:
+            await asyncio.sleep(0)
+            if not polling_done:
+                events.append("tick")
 
-    started = asyncio.get_event_loop().time()
-    outcome, _ = await asyncio.gather(
-        await_sync_execution_trigger_materialized(
-            cast(Any, _FakeAsyncSession(sqlite_session)),
-            minted.occurrence_id,
-            poll_interval=0.02,
-        ),
-        _ticker(),
-    )
-    elapsed = asyncio.get_event_loop().time() - started
+    async def _poll():
+        nonlocal polling_done
+        try:
+            return await await_sync_execution_trigger_materialized(
+                cast(Any, _FakeAsyncSession(sqlite_session)),
+                occurrence_id,
+                poll_interval=0.02,
+            )
+        finally:
+            polling_done = True
+
+    outcome, _ = await asyncio.gather(_poll(), _ticker())
 
     assert outcome.awaiting_materialization is True
-    assert ticks == 50, f"ticker only completed {ticks}/50 ticks"
-    # ticker alone needs ~0.25s (50 * 0.005s); the poll's deadline is 0.2s.
-    # Concurrent: elapsed ~= max(0.25, 0.2) ~= 0.25-0.3s. Serialized behind
-    # a blocking sleep: elapsed drifts toward the SUM, ~0.45-0.5s.
-    assert elapsed < 0.4, (
-        f"elapsed={elapsed:.3f}s is close to the serialized sum (~0.45s), "
-        "not the concurrent max (~0.25-0.3s) -- the event loop was blocked"
+    reads = [i for i, event in enumerate(events) if event == "read"]
+    # A measurement that did not happen must fail: the poll has to have read
+    # the occurrence more than once, or there is no gap to observe.
+    assert len(reads) >= 2, f"the poll read the occurrence {len(reads)} time(s)"
+    starved = [
+        (first, second)
+        for first, second in zip(reads, reads[1:], strict=False)
+        if "tick" not in events[first:second]
+    ]
+    assert not starved, (
+        f"{len(starved)} of {len(reads) - 1} gaps between polls let no other task "
+        "run: the poll blocked the event loop instead of yielding to it"
     )
 
 

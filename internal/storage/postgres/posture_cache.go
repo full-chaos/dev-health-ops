@@ -5,28 +5,46 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math/rand/v2"
 	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Defaults for CachedPostureCheck (CHAOS-6765).
+// Defaults for CachedPostureCheck (CHAOS-6765, CHAOS-6937).
 //
-// rolePostureQuery sweeps every relation in the public and River schemas with
-// has_*_privilege calls. On the production catalog that takes 1.4-1.9 s, and
-// the readiness registry bounds each check at 2 s and cancels it at the
-// deadline -- so a check that ran per probe both flapped go-api readiness and
-// could never finish once the catalog grew (a cancelled query caches nothing).
+// rolePostureQuery swept every relation in the public and River schemas with
+// has_*_privilege calls. On the production catalog that took 1.4-1.9 s (up to
+// 14 s under load), and the readiness registry bounds each check at 2 s and
+// cancels it at the deadline -- so a check that ran per probe both flapped
+// go-api readiness and could never finish once the catalog grew (a cancelled
+// query caches nothing). CHAOS-6937 reads the ACL columns of the governed
+// schemas instead, which removes most of that cost; the cadence below is what
+// bounds what is left: on prod the check held 10-30% of a 4-connection domain
+// pool for seconds at a time, every ~10 s per replica, so other stages ran
+// into their budgets waiting for a connection.
+//
 // A role's grants only change at provisioning time, never per request, so the
 // answer is safe to reuse for a bounded window.
 const (
-	// defaultPostureTTL is how long a passing answer is served as fresh.
-	defaultPostureTTL = 30 * time.Second
+	// defaultPostureTTL is how long a passing answer is served as fresh: the
+	// interval between refreshes of a healthy role. Together with
+	// defaultPostureJitter it is the longest a grant change can go unseen by a
+	// running replica (a replica that has just started proves its posture at
+	// startup, before it is ready).
+	defaultPostureTTL = 5 * time.Minute
+	// defaultPostureJitter shortens each pass's TTL by a random fraction of up
+	// to this much, drawn afresh per pass, so replicas that started together do
+	// not refresh in lockstep and load the pooler at the same instant. It only
+	// ever shortens: TTL stays the upper bound on staleness.
+	defaultPostureJitter = 0.2
 	// defaultPostureMaxStale is how long a passing answer may still be served
 	// while a background refresh runs or keeps failing to answer. Past it the
 	// probe must see a live answer (or fail): drift cannot hide indefinitely.
-	defaultPostureMaxStale = 5 * time.Minute
+	// It is three TTLs, so two consecutive refreshes may go unanswered (a busy
+	// pool, a slow pooler) before readiness is affected.
+	defaultPostureMaxStale = 3 * defaultPostureTTL
 	// defaultPostureRefusalTTL keeps concurrent probes from each re-running the
 	// heavy query, and is deliberately SHORTER than the shortest readiness
 	// probe period in deploy/values.prod.yaml (goApi readinessProbe: 5 s), so a
@@ -47,6 +65,12 @@ type PostureCheckOptions struct {
 	MaxStale   time.Duration
 	RefusalTTL time.Duration
 	RunTimeout time.Duration
+	// Jitter is the largest fraction of TTL a pass may be shortened by. Zero
+	// takes the default; a negative value disables jitter.
+	Jitter float64
+	// Rand returns a value in [0, 1) for the per-pass jitter. Nil uses
+	// math/rand/v2; tests inject a fixed one.
+	Rand func() float64
 }
 
 // CachedPostureCheck is CheckRolePosture for a readiness probe: bounded,
@@ -74,10 +98,15 @@ type CachedPostureCheck struct {
 	maxStale   time.Duration
 	refusalTTL time.Duration
 	runTimeout time.Duration
+	jitter     float64
+	rand       func() float64
 	now        func() time.Time
 
-	mu        sync.Mutex
-	okAt      time.Time
+	mu   sync.Mutex
+	okAt time.Time
+	// passTTL is THIS pass's freshness window: ttl shortened by a random
+	// fraction of at most jitter, drawn when the pass was recorded.
+	passTTL   time.Duration
 	refused   error
 	refusedAt time.Time
 	// unanswered is the error of the last execution that neither passed nor was a definitive
@@ -127,6 +156,8 @@ func newCachedPostureCheck(role string, run func(context.Context) error, options
 		maxStale:   pick(options.MaxStale, defaultPostureMaxStale),
 		refusalTTL: pick(options.RefusalTTL, defaultPostureRefusalTTL),
 		runTimeout: pick(options.RunTimeout, defaultPostureRunTimeout),
+		jitter:     postureJitter(options.Jitter),
+		rand:       options.Rand,
 		now:        time.Now,
 	}
 }
@@ -138,7 +169,7 @@ func (c *CachedPostureCheck) Check(ctx context.Context) error {
 	now := c.now()
 	if !c.okAt.IsZero() {
 		age := now.Sub(c.okAt)
-		if age < c.ttl {
+		if age < c.freshFor() {
 			c.mu.Unlock()
 			return nil
 		}
@@ -193,7 +224,7 @@ func (c *CachedPostureCheck) CheckNoWait() error {
 	now := c.now()
 	if !c.okAt.IsZero() {
 		age := now.Sub(c.okAt)
-		if age < c.ttl {
+		if age < c.freshFor() {
 			return nil
 		}
 		if age < c.maxStale {
@@ -232,6 +263,47 @@ func (c *CachedPostureCheck) LastUnanswered() error {
 	return c.unanswered
 }
 
+// freshFor is how long the current passing answer is served without a
+// refresh. The caller holds c.mu.
+func (c *CachedPostureCheck) freshFor() time.Duration {
+	if c.passTTL > 0 {
+		return c.passTTL
+	}
+	return c.ttl
+}
+
+// jitteredTTL draws one pass's freshness window: ttl minus a random fraction of
+// at most jitter. The caller holds c.mu.
+func (c *CachedPostureCheck) jitteredTTL() time.Duration {
+	if c.jitter <= 0 {
+		return c.ttl
+	}
+	draw := rand.Float64
+	if c.rand != nil {
+		draw = c.rand
+	}
+	fraction := draw()
+	if fraction < 0 || fraction >= 1 {
+		fraction = 0
+	}
+	return time.Duration(float64(c.ttl) * (1 - c.jitter*fraction))
+}
+
+// postureJitter resolves the option: zero takes the default, negative turns
+// jitter off, and anything above 1 is clamped (a window cannot go negative).
+func postureJitter(value float64) float64 {
+	switch {
+	case value == 0:
+		return defaultPostureJitter
+	case value < 0:
+		return 0
+	case value > 1:
+		return 1
+	default:
+		return value
+	}
+}
+
 // startFlightLocked returns the in-flight execution, starting one if none.
 // The caller holds c.mu.
 func (c *CachedPostureCheck) startFlightLocked() *postureFlight {
@@ -256,6 +328,7 @@ func (c *CachedPostureCheck) execute(flight *postureFlight) {
 	switch {
 	case err == nil:
 		c.okAt, c.refused, c.unanswered = finished, nil, nil
+		c.passTTL = c.jitteredTTL()
 	case errors.Is(err, ErrPostureRefused):
 		c.okAt, c.refused, c.refusedAt, c.unanswered = time.Time{}, err, finished, nil
 	default:

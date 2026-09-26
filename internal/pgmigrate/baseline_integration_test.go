@@ -27,6 +27,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/pgmigrate"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
 // updateEnv, set to 1, rewrites baseline/head.json from the executed
@@ -63,7 +64,7 @@ func pythonUpgrade(t *testing.T, python, root, uri string, revisions ...string) 
 // production runs (read from prod, 2026-09-24).
 var productionSettings = pgmigrate.Settings{Cutover: true, RiverSchema: "river"}
 
-// TestBaselineIsTheExecutedPythonUpgrade is the baseline's provenance and the
+// TestBaselineVenueOracleIsTheExecutedPythonUpgrade is the baseline's provenance and the
 // differential oracle of the whole migrator:
 //
 //  1. capture: run the REAL Python upgrade, with production's settings, to the
@@ -81,7 +82,7 @@ var productionSettings = pgmigrate.Settings{Cutover: true, RiverSchema: "river"}
 //     refused as below the head, naming the cutover; a database missing the
 //     application head is refused naming it; a public schema without
 //     alembic_version is refused as foreign.
-func TestBaselineIsTheExecutedPythonUpgrade(t *testing.T) {
+func TestBaselineVenueOracleIsTheExecutedPythonUpgrade(t *testing.T) {
 	ctx := context.Background()
 	instance, err := containers.StartPostgres(ctx)
 	if err != nil {
@@ -142,7 +143,7 @@ func TestBaselineIsTheExecutedPythonUpgrade(t *testing.T) {
 	}
 	if diff := compare(captured, checkedIn); diff != "" {
 		t.Fatalf("baseline/head.json is not what the Python upgrade to 0138 builds today (%s); regenerate it with "+
-			"%s=1 go test -tags=integration -run TestBaselineIsTheExecutedPythonUpgrade ./internal/pgmigrate",
+			"%s=1 go test -tags=integration -run TestBaselineVenueOracleIsTheExecutedPythonUpgrade ./internal/pgmigrate",
 			diff, updateEnv)
 	}
 	wantHeads := pgmigrate.Heads(checkedIn, chain)
@@ -169,6 +170,18 @@ func TestBaselineIsTheExecutedPythonUpgrade(t *testing.T) {
 	}
 	if relations != 0 {
 		t.Fatalf("a failed baseline left %d relations in public", relations)
+	}
+	// A baseline whose data does not record the heads it claims is refused, and leaves nothing either.
+	unrecorded := checkedIn
+	unrecorded.Data += "\nDELETE FROM public.alembic_version;\n"
+	if _, err := pgmigrate.Upgrade(ctx, brokenConn, unrecorded, chain); err == nil || !strings.Contains(err.Error(), "the baseline recorded alembic_version") {
+		t.Fatalf("a baseline that records no heads = %v, want the recorded-heads refusal", err)
+	}
+	if err := brokenConn.QueryRow(ctx, "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public'").Scan(&relations); err != nil {
+		t.Fatal(err)
+	}
+	if relations != 0 {
+		t.Fatalf("a baseline that recorded no heads left %d relations in public", relations)
 	}
 
 	// 3. a fresh database: the baseline, then every chain revision.
@@ -280,6 +293,7 @@ func TestBaselineIsTheExecutedPythonUpgrade(t *testing.T) {
 	if !errors.As(err, &foreign) {
 		t.Fatalf("upgrade over tables without alembic_version = %v, want a foreign-database refusal", err)
 	}
+	venueoracle.WriteProof(t)
 }
 
 // window is the time a migration ran. A seed row stamped inside it was

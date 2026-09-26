@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/platform/dbphase"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchcontract"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -367,10 +368,16 @@ func (pipeline *MutationPipeline) runStage(
 		pipeline.stages.markIdle(stage)
 	}()
 
+	// The phase trace (CHAOS-6936) rides the stage context: the pool tracers
+	// write every connection wait and statement this stage issues into it, so
+	// a failure can name the phase that consumed the budget without any stage
+	// being edited.
+	stageCtx, trace := dbphase.With(stageCtx)
 	start := time.Now()
 	err := fn(stageCtx)
 	elapsed := time.Since(start)
 	pipeline.stages.recordDuration(stage, elapsed)
+	pipeline.stages.recordAcquireWaits(stage, trace.AcquireWaits())
 
 	if err == nil {
 		pipeline.stages.recordSuccess(stage)
@@ -388,13 +395,40 @@ func (pipeline *MutationPipeline) runStage(
 	}
 	slog.Error(
 		"syncreconciler.stage_failed",
-		"stage", string(stage),
-		"budget_ms", budget.Milliseconds(),
-		"elapsed_ms", elapsed.Milliseconds(),
-		"sqlstate", sqlstate,
-		"error", err.Error(),
+		append([]any{
+			"stage", string(stage),
+			"budget_ms", budget.Milliseconds(),
+			"elapsed_ms", elapsed.Milliseconds(),
+			"sqlstate", sqlstate,
+			"error", err.Error(),
+		}, stagePhaseAttrs(trace)...)...,
 	)
 	return err
+}
+
+// stagePhaseAttrs names the database phase that consumed a failed stage's
+// budget and lists every phase with its own elapsed time (CHAOS-6936):
+//
+//	phase          acquire | statement | none (no database call ran)
+//	phase_name     the pool for an acquire, else the statement's summary
+//	phase_elapsed_ms
+//	phase_open     true when that phase had not returned when the stage did
+//	phases         every phase, "kind:name=<ms>ms", "!" = errored, "?" = in flight
+//
+// "none" is a fact, not an unknown: the stage failed before touching the
+// database (or ran on a code path the tracers do not see).
+func stagePhaseAttrs(trace *dbphase.Trace) []any {
+	culprit, ok := trace.Culprit()
+	if !ok {
+		return []any{"phase", "none", "phases", ""}
+	}
+	return []any{
+		"phase", string(culprit.Kind),
+		"phase_name", culprit.Name,
+		"phase_elapsed_ms", culprit.Elapsed.Milliseconds(),
+		"phase_open", !culprit.Done,
+		"phases", trace.Summary(),
+	}
 }
 
 // logMaterializerPass is the materializer's per-pass telemetry, and it is
@@ -1123,6 +1157,12 @@ type stageTelemetry struct {
 	// cannot answer "how often does this stage run near its budget" the way
 	// a histogram can.
 	histograms map[StageName]*stageHistogram
+	// acquireWaits is the distribution of time this stage's calls spent
+	// waiting for a pool connection (CHAOS-6936), one observation per Acquire.
+	// Registered at zero for every stage so "no waiting" is a series, not an
+	// absence. The label is the stage name only: never a pool, statement or
+	// tenant.
+	acquireWaits map[StageName]*stageHistogram
 	// cancellations counts a stage failure by the SQLSTATE its step error
 	// carried, keyed [stage][sqlstate]. This is the CHAOS-4262 fix for the
 	// masking pattern CHAOS-4242 already named: every stage failure folds
@@ -1145,8 +1185,10 @@ type stageTelemetry struct {
 
 func newStageTelemetry() stageTelemetry {
 	histograms := make(map[StageName]*stageHistogram, len(orderedStages))
+	acquireWaits := make(map[StageName]*stageHistogram, len(orderedStages))
 	for _, stage := range orderedStages {
 		histograms[stage] = newStageHistogram()
+		acquireWaits[stage] = newStageHistogram()
 	}
 	return stageTelemetry{
 		failures:      make(map[StageName]uint64, len(orderedStages)),
@@ -1157,6 +1199,7 @@ func newStageTelemetry() stageTelemetry {
 		overrunActive: make(map[StageName]bool, len(orderedStages)),
 		overruns:      make(map[StageName]uint64, len(orderedStages)),
 		histograms:    histograms,
+		acquireWaits:  acquireWaits,
 		cancellations: make(map[StageName]map[string]uint64, len(orderedStages)),
 		outboxClosed:  make(map[string]map[string]uint64, 4),
 	}
@@ -1312,11 +1355,39 @@ func (telemetry *stageTelemetry) recordCancellation(stage StageName, sqlstate st
 	byState[sqlstate]++
 }
 
-func (telemetry *stageTelemetry) histogramSnapshot() map[StageName]*stageHistogram {
+// recordAcquireWaits adds one pass's pool-connection waits to the stage's
+// acquire-wait distribution.
+func (telemetry *stageTelemetry) recordAcquireWaits(stage StageName, waits []time.Duration) {
+	if len(waits) == 0 {
+		return
+	}
 	telemetry.mu.Lock()
 	defer telemetry.mu.Unlock()
-	snapshot := make(map[StageName]*stageHistogram, len(telemetry.histograms))
-	for stage, histogram := range telemetry.histograms {
+	histogram := telemetry.acquireWaits[stage]
+	if histogram == nil {
+		return
+	}
+	for _, wait := range waits {
+		histogram.observe(wait.Seconds())
+	}
+}
+
+func (telemetry *stageTelemetry) histogramSnapshot() map[StageName]*stageHistogram {
+	return telemetry.copyHistograms(func() map[StageName]*stageHistogram { return telemetry.histograms })
+}
+
+func (telemetry *stageTelemetry) acquireWaitSnapshot() map[StageName]*stageHistogram {
+	return telemetry.copyHistograms(func() map[StageName]*stageHistogram { return telemetry.acquireWaits })
+}
+
+func (telemetry *stageTelemetry) copyHistograms(
+	source func() map[StageName]*stageHistogram,
+) map[StageName]*stageHistogram {
+	telemetry.mu.Lock()
+	defer telemetry.mu.Unlock()
+	histograms := source()
+	snapshot := make(map[StageName]*stageHistogram, len(histograms))
+	for stage, histogram := range histograms {
 		if histogram == nil {
 			continue
 		}
@@ -1383,6 +1454,7 @@ func (pipeline *MutationPipeline) WritePrometheus(output io.Writer) error {
 	degraded := pipeline.stages.degradedSnapshot()
 	budgets := pipeline.config.StageBudgets
 	histograms := pipeline.stages.histogramSnapshot()
+	acquireWaits := pipeline.stages.acquireWaitSnapshot()
 	cancellations := pipeline.stages.cancellationSnapshot()
 
 	stages := make([]string, 0, len(orderedStages))
@@ -1428,6 +1500,14 @@ func (pipeline *MutationPipeline) WritePrometheus(output io.Writer) error {
 	text.WriteString("# HELP dev_health_reconciler_stage_duration_seconds Distribution of wall-clock time spent per pipeline stage pass, whether it succeeded or not (CHAOS-4262).\n# TYPE dev_health_reconciler_stage_duration_seconds histogram\n")
 	for _, name := range stages {
 		writeStageHistogram(&text, "dev_health_reconciler_stage_duration_seconds", name, histograms[StageName(name)])
+	}
+	// CHAOS-6936: how long each stage's calls waited for a pool connection.
+	// A stage that spends its budget queued behind other work on a small pool
+	// and a stage that runs one slow statement fail identically at the budget;
+	// this is the series that tells them apart before a failure happens.
+	text.WriteString("# HELP dev_health_reconciler_stage_acquire_wait_seconds Distribution of time a pipeline stage's calls spent waiting for a pool connection, one observation per acquire (CHAOS-6936). Labeled by stage only.\n# TYPE dev_health_reconciler_stage_acquire_wait_seconds histogram\n")
+	for _, name := range stages {
+		writeStageHistogram(&text, "dev_health_reconciler_stage_acquire_wait_seconds", name, acquireWaits[StageName(name)])
 	}
 	// CHAOS-4262: every stage failure collapses to the same ErrUnavailable
 	// classification (see stageSQLState's doc comment) so that lifecycle and

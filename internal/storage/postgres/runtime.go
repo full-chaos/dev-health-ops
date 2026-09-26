@@ -399,6 +399,11 @@ func NewRuntimePools(ctx context.Context, runtimeConfig RuntimeConfig) (*Runtime
 	if runtimeConfig.RequireCoordinator {
 		coordinatorConfig := DefaultConfig(runtimeConfig.CoordinatorURI)
 		coordinatorConfig.MaxConns = runtimeConfig.CoordinatorMaxConns
+		// No metric observer is ever attached (the acquire metric's pool
+		// dimension is bounded to domain|queue_control); the tracer exists so
+		// a failed reconciler stage can name a coordinator-pool wait or
+		// statement in its phase trace (CHAOS-6936).
+		coordinatorConfig.Tracer = newPoolAcquireTracer("coordinator")
 		coordinatorPool, err := New(ctx, coordinatorConfig)
 		if err != nil {
 			queuePool.Close()

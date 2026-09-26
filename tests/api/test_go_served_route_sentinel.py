@@ -21,6 +21,7 @@ import logging
 from collections.abc import Iterator
 
 import pytest
+from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
 from dev_health_ops.api.auth.router import get_current_user
@@ -187,7 +188,8 @@ def test_the_sync_config_trigger_and_backfill_posts_are_not_stubbed(path: str):
     routes = {
         (route.path, method)
         for route in app.routes
-        for method in getattr(route, "methods", None) or ()
+        if isinstance(route, APIRoute)
+        for method in route.methods
     }
     template = "/api/v1/admin" + path.replace("{id}", "{config_id}")
     assert (template, "POST") in routes

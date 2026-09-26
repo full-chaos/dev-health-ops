@@ -117,8 +117,13 @@ func TestReadyFinalizerCoordinatorReadIsOneRoundTripNotOnePerCandidate(t *testin
 	if tracer.calls == 0 {
 		t.Fatal("no coordinator query observed at all -- the tracer or the seed is broken")
 	}
-	if tracer.calls >= candidateCount {
-		t.Fatalf("coordinator round trips = %d for %d candidates: one per candidate, want O(1)", tracer.calls, candidateCount)
+	// r1 P3: "< candidateCount" alone would still pass at 19 calls for 20 candidates -- one query
+	// short of one-per-candidate is still not O(1). readyFinalizeRuns issues exactly one
+	// coordinator statement regardless of candidate count; pin that exact number, not merely
+	// "fewer than every candidate".
+	if tracer.calls != 1 {
+		t.Fatalf("coordinator round trips = %d for %d candidates, want exactly 1 (one query, not one per candidate)",
+			tracer.calls, candidateCount)
 	}
 }
 

@@ -796,3 +796,156 @@ func TestJudgeQueueStuckArmIgnoresAvailable(t *testing.T) {
 		}
 	}
 }
+
+// CHAOS-6864: the gate-failure arm. Jobs that keep failing at their idempotency
+// gate are invisible to the snapshot arms while River holds them in retry backoff
+// (Available=0, Running=0), so the verdict must come from the failure run itself.
+func TestJudgeQueueGateFailureArm(t *testing.T) {
+	t.Parallel()
+	const window = time.Minute
+	idleQueue := queueFacts{
+		queue: "q", available: 0, capacityKnown: true, capacity: 2, running: 0, inside: 0,
+		claimAge: time.Hour, window: window,
+		gateFails: gateFailureMinimum, gateFailSpan: 2 * window,
+	}
+	with := func(edit func(*queueFacts)) queueFacts {
+		facts := idleQueue
+		edit(&facts)
+		return facts
+	}
+	for _, test := range []struct {
+		name  string
+		facts queueFacts
+		want  queueVerdict
+	}{
+		{"the retry-backoff gap: nothing available or running, repeated failures over a window",
+			idleQueue, verdictGateFailing},
+		{"the same with a backlog behind a free queue",
+			with(func(f *queueFacts) { f.available = 3 }), verdictGateFailing},
+		{"a single failure is a blip",
+			with(func(f *queueFacts) { f.gateFails = gateFailureMinimum - 1 }), verdictHealthy},
+		{"no failures at all", with(func(f *queueFacts) { f.gateFails, f.gateFailSpan = 0, 0 }), verdictHealthy},
+		{"failures that have not yet spanned the window",
+			with(func(f *queueFacts) { f.gateFailSpan = window }), verdictHealthy},
+		{"a handler ran within the window",
+			with(func(f *queueFacts) { f.claimAge = window }), verdictHealthy},
+		{"a handler is inside right now: the work pool is reaching the database",
+			with(func(f *queueFacts) { f.inside, f.running = 1, 1 }), verdictHealthy},
+		{"preclaim: no job can have run yet",
+			with(func(f *queueFacts) { f.preclaim = true }), verdictHealthy},
+	} {
+		if got := judgeQueue(test.facts); got != test.want {
+			t.Errorf("%s: verdict %d, want %d (%+v)", test.name, got, test.want, test.facts)
+		}
+	}
+}
+
+func TestGateFailureEvidenceTracker(t *testing.T) {
+	t.Parallel()
+	start := time.Now()
+	at := func(d time.Duration) time.Time { return start.Add(d) }
+	claim := newClaimLiveness(start, []string{"q", "other"})
+	claim.SetStaleWindow(time.Minute)
+
+	if n, _ := claim.gateFailureEvidence("q", at(0)); n != 0 {
+		t.Fatalf("evidence before any failure: %d", n)
+	}
+	claim.recordGateFailure("q", true, at(0))
+	claim.recordGateFailure("q", true, at(5*time.Second))
+	claim.recordGateFailure("q", true, at(15*time.Second))
+	n, span := claim.gateFailureEvidence("q", at(3*time.Minute))
+	if n != 3 || span != 15*time.Second {
+		t.Fatalf("run = (%d, %v), want (3, 15s): a retry-pending failure must stay evidence across its backoff", n, span)
+	}
+	if n, _ := claim.gateFailureEvidence("other", at(3*time.Minute)); n != 0 {
+		t.Fatal("gate failures on one queue must not be evidence on another")
+	}
+	if n, _ := claim.gateFailureEvidence("q", at(15*time.Second+gateFailureRetryHorizon+time.Second)); n != 0 {
+		t.Fatal("evidence must lapse once no further retry is due")
+	}
+
+	// A terminal failure (no retry pending) holds the evidence for one window only.
+	claim.recordGateFailure("q", false, at(10*time.Minute))
+	if n, _ := claim.gateFailureEvidence("q", at(10*time.Minute+30*time.Second)); n != 1 {
+		t.Fatalf("a run restarted after lapse must count fresh, got %d", n)
+	}
+	if n, _ := claim.gateFailureEvidence("q", at(10*time.Minute+time.Minute+time.Second)); n != 0 {
+		t.Fatal("a terminal failure must not stay evidence past one window")
+	}
+
+	// A handler ending the run: the work pool reached the database.
+	claim.recordGateFailure("q", true, at(20*time.Minute))
+	claim.recordGateFailure("q", true, at(20*time.Minute+time.Second))
+	claim.handlerInvoked("q", at(20*time.Minute+2*time.Second))
+	if n, _ := claim.gateFailureEvidence("q", at(20*time.Minute+3*time.Second)); n != 0 {
+		t.Fatal("HandlerInvoked must end the run of gate failures")
+	}
+}
+
+// The production observer counts ONLY idempotency-category outcomes as gate
+// failure evidence, and never as a claim.
+func TestClaimLivenessObserverJobFinishedRecordsOnlyIdempotencyFailures(t *testing.T) {
+	t.Parallel()
+	collector, err := jobruntime.NewMetricsCollector(jobruntime.MetricDimensions{
+		Jobs: []jobruntime.JobLabels{{Queue: "heartbeat", Kind: "system.heartbeat"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	labels := jobruntime.JobLabels{Queue: "heartbeat", Kind: "system.heartbeat"}
+	for _, category := range []jobruntime.ErrorCategory{
+		jobruntime.CategoryNone, jobruntime.CategoryValidation, jobruntime.CategoryPanic,
+		jobruntime.CategoryTimeout, jobruntime.CategoryCancelled, jobruntime.CategoryRetryable,
+		jobruntime.CategoryPermanent, jobruntime.CategoryTerminalDomain, jobruntime.CategoryTenant,
+		jobruntime.CategoryBudget, jobruntime.CategoryRateLimited,
+	} {
+		claim := newClaimLiveness(time.Now(), []string{"heartbeat"})
+		observer := claimLivenessObserver{MetricsCollector: collector, liveness: claim}
+		observer.JobFinished(context.Background(), labels, jobruntime.ResultRetry, category, time.Millisecond)
+		if n, _ := claim.gateFailureEvidence("heartbeat", time.Now()); n != 0 {
+			t.Errorf("category %q must not count as an idempotency-gate failure", category)
+		}
+	}
+	claim := newClaimLiveness(time.Now().Add(-time.Hour), []string{"heartbeat"})
+	observer := claimLivenessObserver{MetricsCollector: collector, liveness: claim}
+	observer.JobFinished(context.Background(), labels, jobruntime.ResultRetry, jobruntime.CategoryIdempotency, time.Millisecond)
+	if n, _ := claim.gateFailureEvidence("heartbeat", time.Now()); n != 1 {
+		t.Fatalf("an idempotency failure recorded %d times, want 1", n)
+	}
+	if since := claim.since("heartbeat", time.Now()); since < 59*time.Minute {
+		t.Fatal("a gate failure must never refresh the claim clock")
+	}
+	// A nil tracker (the zero-value observer some fixtures build) must not panic.
+	claimLivenessObserver{MetricsCollector: collector}.JobFinished(
+		context.Background(), labels, jobruntime.ResultRetry, jobruntime.CategoryIdempotency, time.Millisecond)
+}
+
+// End to end through claimLivenessReady with the snapshot showing an idle queue:
+// the verdict comes from the failure run alone.
+func TestClaimLivenessReadyFailsOnAGateFailureRunWhileTheQueueLooksIdle(t *testing.T) {
+	t.Parallel()
+	telemetry := &fakeQueueTelemetry{snapshot: riverstore.QueueTelemetrySnapshot{
+		Jobs:            []riverstore.QueueJobTelemetry{{Queue: "heartbeat", Kind: "system.heartbeat", Available: 0}},
+		QueueCapacities: []riverstore.QueueCapacityTelemetry{{Queue: "heartbeat", Capacity: 1, Running: 0}},
+	}}
+	dependencies := &workerDependencies{queueTelemetryRequired: true, queueTelemetry: telemetry}
+	claim := newClaimLiveness(time.Now().Add(-time.Hour), []string{"heartbeat"})
+	claim.SetStaleWindow(time.Minute)
+	claim.markRuntimeLive()
+	ready := dependencies.claimLivenessReady(claim)
+
+	now := time.Now()
+	claim.recordGateFailure("heartbeat", true, now.Add(-90*time.Second))
+	if err := ready(context.Background()); err != nil {
+		t.Fatalf("one gate failure must not fail readiness: %v", err)
+	}
+	claim.recordGateFailure("heartbeat", true, now.Add(-time.Second))
+	err := ready(context.Background())
+	if !errors.Is(err, errClaimLivenessGateFailing) {
+		t.Fatalf("repeated gate failures across a window with an idle-looking queue: err = %v", err)
+	}
+	claim.handlerInvoked("heartbeat", time.Now())
+	if err := ready(context.Background()); err != nil {
+		t.Fatalf("a handler reaching its work must clear the verdict: %v", err)
+	}
+}

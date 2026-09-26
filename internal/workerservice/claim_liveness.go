@@ -47,6 +47,13 @@ type claimLiveness struct {
 	// from the readiness poll, and cleared the moment a poll sees every running
 	// slot inside a handler (or none running).
 	preHandlerSince map[string]time.Time
+	// gateFailures is, per queue, the run of idempotency-gate failures (a job
+	// that failed at its idempotency Begin, or at its completion claim) seen
+	// since a handler last ran on that queue. It exists for the state the queue
+	// snapshot cannot show (CHAOS-6864): River parks a failed job as retryable
+	// until its backoff elapses, so between two failures the queue reads
+	// Available=0 and Running=0 and every snapshot-driven arm calls it idle.
+	gateFailures map[string]gateFailureRun
 	// staleWindow defaults to claimStalenessWindow in newClaimLiveness.
 	// Exposed via SetStaleWindow so a test can shrink it from the
 	// production 60s to a real-but-small duration (mirroring
@@ -150,8 +157,71 @@ func (c *claimLiveness) handlerInvoked(queue string, now time.Time) {
 		c.inHandler = make(map[string]int64, 1)
 	}
 	c.inHandler[queue]++
+	// A job got through every gate, so the work pool reached the database: the
+	// run of gate failures ends here.
+	delete(c.gateFailures, queue)
 	c.mu.Unlock()
 	c.recordClaim(queue, now)
+}
+
+// gateFailureRun is one unbroken run of idempotency-gate failures on a queue.
+type gateFailureRun struct {
+	count int64
+	first time.Time
+	last  time.Time
+	// expires is when this evidence stops counting if no further failure lands.
+	expires time.Time
+}
+
+// gateFailureRetryHorizon is how long a failure that River WILL retry stays
+// evidence: the longest retry delay jobruntime.NextRetryAt produces (a 5m cap
+// with +/-10% jitter, i.e. 5m30s) plus slack. Within it the next failure is
+// still expected; past it the job is no longer being retried and the evidence
+// has nothing left to say.
+const gateFailureRetryHorizon = 6 * time.Minute
+
+// gateFailureMinimum is the fewest failures that make a run. One failure is a
+// blip (the job's own retry answers it); the repeat is the signal.
+const gateFailureMinimum = 2
+
+// recordGateFailure records a job failing at its idempotency gate on queue.
+// retryPending is whether River will retry the job (so another failure is due
+// within gateFailureRetryHorizon); a terminal failure keeps the evidence only
+// for one staleness window.
+func (c *claimLiveness) recordGateFailure(queue string, retryPending bool, now time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.gateFailures == nil {
+		c.gateFailures = make(map[string]gateFailureRun, 1)
+	}
+	run := c.gateFailures[queue]
+	if run.count == 0 || now.After(run.expires) {
+		run = gateFailureRun{first: now}
+	}
+	run.count++
+	run.last = now
+	hold := c.staleWindow
+	if hold <= 0 {
+		hold = claimStalenessWindow
+	}
+	if retryPending {
+		hold = gateFailureRetryHorizon
+	}
+	run.expires = now.Add(hold)
+	c.gateFailures[queue] = run
+}
+
+// gateFailureEvidence reports queue's live run of gate failures: how many, and
+// how long the run has lasted between its first and last failure. Zero when
+// there is none or it has expired.
+func (c *claimLiveness) gateFailureEvidence(queue string, now time.Time) (count int64, span time.Duration) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	run, ok := c.gateFailures[queue]
+	if !ok || run.count == 0 || now.After(run.expires) {
+		return 0, 0
+	}
+	return run.count, run.last.Sub(run.first)
 }
 
 // handlerReturned records a handler leaving (success, error or panic). It is
@@ -246,7 +316,8 @@ func (c *claimLiveness) since(queue string, now time.Time) time.Duration {
 }
 
 // claimLivenessObserver decorates the production jobruntime.Observer
-// (dependencies.metrics) with exactly one extra tap: HandlerInvoked, an
+// (dependencies.metrics) with one proof tap, HandlerInvoked (plus HandlerReturned and, for gate-failure
+// evidence, JobFinished -- see their doc comments), an
 // OPTIONAL jobruntime capability (internal/jobruntime/observer.go) that
 // fires once, immediately before a job's real handler runs, after every
 // pre-handler gate (validation, tenant resolution, budget acquisition, the
@@ -318,6 +389,22 @@ func (observer claimLivenessObserver) HandlerInvoked(_ context.Context, labels j
 	}
 }
 
+// JobFinished shadows the embedded collector's: it records the metric first,
+// then notes a job that finished on an idempotency-category failure as gate
+// failure evidence (CHAOS-6864). Only that one category counts. It is failure
+// evidence, never proof a handler ran, so it never touches the claim clock; a
+// handler that ran and then failed its completion claim is ended by the very
+// HandlerInvoked that preceded it.
+func (observer claimLivenessObserver) JobFinished(
+	ctx context.Context, labels jobruntime.JobLabels, result jobruntime.Result,
+	category jobruntime.ErrorCategory, duration time.Duration,
+) {
+	observer.MetricsCollector.JobFinished(ctx, labels, result, category, duration)
+	if observer.liveness != nil && category == jobruntime.CategoryIdempotency {
+		observer.liveness.recordGateFailure(labels.Queue, result == jobruntime.ResultRetry, time.Now())
+	}
+}
+
 // HandlerReturned pairs HandlerInvoked (jobruntime.HandlerReturnObserver).
 func (observer claimLivenessObserver) HandlerReturned(_ context.Context, labels jobruntime.JobLabels) {
 	if observer.liveness != nil {
@@ -327,6 +414,10 @@ func (observer claimLivenessObserver) HandlerReturned(_ context.Context, labels 
 
 var errClaimLivenessSlotStuckBeforeHandler = errors.New(
 	"a running job slot has been stuck before its handler and no handler has run on this queue",
+)
+
+var errClaimLivenessGateFailing = errors.New(
+	"jobs on this queue keep failing at their idempotency gate and no handler has run",
 )
 
 var errClaimLivenessStalledWithBacklog = errors.New(
@@ -414,6 +505,8 @@ func (dependencies *workerDependencies) claimLivenessReady(claim *claimLiveness)
 				dependencies.logClaimLivenessPreclaimSkip(ctx, facts.queue)
 			case verdictSlotStuck:
 				return fmt.Errorf("%w: queue %q", errClaimLivenessSlotStuckBeforeHandler, facts.queue)
+			case verdictGateFailing:
+				return fmt.Errorf("%w: queue %q", errClaimLivenessGateFailing, facts.queue)
 			case verdictStalledBacklog:
 				return fmt.Errorf("%w: queue %q", errClaimLivenessStalledWithBacklog, facts.queue)
 			}
@@ -443,8 +536,14 @@ type queueFacts struct {
 	// stuckFor is how long successive polls have CONTINUOUSLY seen a running
 	// slot outside a handler on this queue.
 	stuckFor time.Duration
-	window   time.Duration
-	preclaim bool
+	// gateFails / gateFailSpan: the live run of idempotency-gate failures on the
+	// queue since a handler last ran, and how long it has lasted (first to last
+	// failure). Independent of what the queue snapshot shows: a job waiting out
+	// its retry backoff is neither available nor running.
+	gateFails    int64
+	gateFailSpan time.Duration
+	window       time.Duration
+	preclaim     bool
 }
 
 type queueVerdict int
@@ -453,6 +552,7 @@ const (
 	verdictHealthy queueVerdict = iota
 	verdictPreclaimSkip
 	verdictSlotStuck
+	verdictGateFailing
 	verdictStalledBacklog
 )
 
@@ -490,6 +590,7 @@ func collectQueueFacts(snapshot riverstore.QueueTelemetrySnapshot, claim *claimL
 		if !preclaim {
 			facts.stuckFor = claim.preHandlerStuckFor(queue, facts.running, now)
 		}
+		facts.gateFails, facts.gateFailSpan = claim.gateFailureEvidence(queue, now)
 		out = append(out, *facts)
 	}
 	return out
@@ -517,12 +618,25 @@ func collectQueueFacts(snapshot riverstore.QueueTelemetrySnapshot, claim *claimL
 //     handlers) and no handler activity for the window: the consumer is not
 //     claiming.
 //
-// Before River starts (preclaim) no handler can have run, so neither arm can
+// The third way is independent of the snapshot (CHAOS-6864): jobs that keep
+// failing at their idempotency gate, across more than a window, with no handler
+// running or inside one. River parks such a job as retryable until its backoff
+// elapses (5s, 10s ... 5m), so between failures the queue reads Available=0 and
+// Running=0 and neither arm above can see it. Only a run that SPANS the window
+// counts (a blip answered by the job's own retry does not), and the evidence
+// lapses once no further failure is due. A handler currently inside means the
+// work pool is reaching the database for that job, so it is left alone.
+//
+// Before River starts (preclaim) no handler can have run, so no arm can
 // fail; a queue that WOULD have failed the backlog arm is reported as a skip.
 func judgeQueue(f queueFacts) queueVerdict {
 	outside := f.running > f.inside
 	if !f.preclaim && outside && f.stuckFor > f.window && f.claimAge > f.window {
 		return verdictSlotStuck
+	}
+	if !f.preclaim && f.gateFails >= gateFailureMinimum && f.gateFailSpan > f.window &&
+		f.inside == 0 && f.claimAge > f.window {
+		return verdictGateFailing
 	}
 	if f.available <= 0 {
 		return verdictHealthy // confirmed empty right now: idle, not broken.

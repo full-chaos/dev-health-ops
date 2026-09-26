@@ -151,12 +151,41 @@ func notYet(plan Plan, what, ticket string) *Refusal {
 	}
 }
 
+// unappliedFlags refuses a flag that the command line accepts (dev-hops does apply it)
+// and that the worker's routes do not: a run that ignored it would look like a sync
+// that honoured it. It is a usage error (exit 2) that names the flag and writes
+// nothing. Only what Python applies is refused: --max-commits-per-repo caps the
+// commits, their stats and the blame backfill of `git` and `blame`; --rate-limit-delay
+// seeds the pull-request backoff of a batch that syncs pull requests. (--use-async is
+// accepted and ignored by dev-hops itself, so ignoring it is parity.)
+func unappliedFlags(plan Plan) *Refusal {
+	refuse := func(flag, why string) *Refusal {
+		return &Refusal{
+			Code:  cli.ExitUsage,
+			Stage: "exit",
+			Message: fmt.Sprintf("%s is not supported by the Go routes (%s); drop the flag, or run dev-hops sync %s",
+				flag, why, plan.Target),
+		}
+	}
+	if plan.MaxCommitsGiven && (plan.Target == "git" || plan.Target == "blame") {
+		return refuse("--max-commits-per-repo", "they fetch the whole window and stop at their own page caps")
+	}
+	batch := plan.Call == CallGitHubBatch || plan.Call == CallGitLabBatch
+	if plan.RateLimitDelayGiven && batch && plan.Target == "prs" {
+		return refuse("--rate-limit-delay", "they back off on the provider's own rate-limit signals")
+	}
+	return nil
+}
+
 // inlineDatasets maps the target to the worker datasets it runs, or refuses.
 func inlineDatasets(plan Plan) ([]string, *Refusal) {
 	switch plan.Call {
 	case CallGitHubSingle, CallGitLabSingle, CallGitHubBatch, CallGitLabBatch:
 	default:
 		return nil, notYet(plan, "this provider", "chris-pending")
+	}
+	if refusal := unappliedFlags(plan); refusal != nil {
+		return nil, refusal
 	}
 	switch plan.Target {
 	case "incidents":

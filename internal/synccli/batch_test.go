@@ -231,7 +231,7 @@ func TestBatchProcessesChunksInOrderAndBoundsConcurrency(t *testing.T) {
 
 func TestBatchFloorsNonPositiveBatchSizeAndConcurrencyAtOne(t *testing.T) {
 	h := &batchHarness{repos: githubRepos("acme/a", "acme/b")}
-	code, _, stderr := runVerb(t, "prs", h.executor(),
+	code, _, stderr := runVerb(t, "deployments", h.executor(),
 		append([]string{"--batch-size", "0", "--max-concurrent", "-3", "--use-async", "--rate-limit-delay", "0.5"}, githubBatchArgs...), inlineEnv)
 	if code != cli.ExitOK {
 		t.Fatalf("exit %d: %s", code, stderr)
@@ -412,5 +412,91 @@ func TestEveryInlineDepHasADefault(t *testing.T) {
 		if defaults.Field(i).IsNil() {
 			t.Errorf("defaultInlineDeps().%s is nil", defaults.Type().Field(i).Name)
 		}
+	}
+}
+
+// A flag the command line accepts, dev-hops applies and the Go routes do not is a
+// usage error that writes nothing: silent acceptance would make a run that ignored
+// it look like one that honoured it (D2620).
+func TestFlagsTheGoRoutesDoNotApplyAreRefusedNotIgnored(t *testing.T) {
+	gitlabBatch := []string{"--provider", "gitlab", "-s", "a/*", "--auth", "t", "--group", "a"}
+	gh := []string{"--provider", "github", "--owner", "acme", "--repo", "api", "--auth", "tok"}
+	gl := []string{"--provider", "gitlab", "--project-id", "3", "--auth", "tok"}
+	with := func(base []string, extra ...string) []string { return append(append([]string{}, base...), extra...) }
+	refused := []struct {
+		name, target, flag string
+		args               []string
+	}{
+		{"git single github", "git", "--max-commits-per-repo", with(gh, "--max-commits-per-repo", "5")},
+		{"git single gitlab", "git", "--max-commits-per-repo", with(gl, "--max-commits-per-repo=5")},
+		{"git batch github", "git", "--max-commits-per-repo", with(githubBatchArgs, "--max-commits-per-repo", "5")},
+		{"git batch gitlab", "git", "--max-commits-per-repo", with(gitlabBatch, "--max-commits-per-repo", "0")},
+		{"blame single", "blame", "--max-commits-per-repo", with(gh, "--max-commits-per-repo", "9")},
+		{"prs batch github", "prs", "--rate-limit-delay", with(githubBatchArgs, "--rate-limit-delay", "2")},
+		{"prs batch gitlab", "prs", "--rate-limit-delay", with(gitlabBatch, "--rate-limit-delay", "1")},
+	}
+	for _, tc := range refused {
+		t.Run("refuse "+tc.name, func(t *testing.T) {
+			h := &batchHarness{repos: githubRepos("acme/a")}
+			code, stdout, stderr := runVerb(t, tc.target, h.executor(), tc.args, inlineEnv)
+			if code != cli.ExitUsage || stdout != "" || !strings.Contains(stderr, tc.flag+" is not supported by the Go routes") {
+				t.Fatalf("exit %d stdout %q stderr %q, want a usage error (2) naming %s", code, stdout, stderr, tc.flag)
+			}
+			if len(h.listings) != 0 || len(h.runs) != 0 || h.opened != 0 {
+				t.Fatalf("a refusal must list, run and open nothing: %d/%d/%d", len(h.listings), len(h.runs), h.opened)
+			}
+		})
+	}
+	// What Python ignores too is accepted: the same flags on the targets that do not
+	// use them, --use-async everywhere, and the flag's default.
+	accepted := []struct {
+		name, target string
+		args         []string
+	}{
+		{"max commits on prs", "prs", with(gh, "--max-commits-per-repo", "5")},
+		{"max commits on deployments batch", "deployments", with(githubBatchArgs, "--max-commits-per-repo", "5")},
+		{"rate limit delay on git batch", "git", with(githubBatchArgs, "--rate-limit-delay", "3")},
+		{"rate limit delay on prs single", "prs", with(gh, "--rate-limit-delay", "3")},
+		{"use-async on git batch", "git", with(githubBatchArgs, "--use-async")},
+		{"neither flag", "git", with(githubBatchArgs)},
+	}
+	for _, tc := range accepted {
+		t.Run("accept "+tc.name, func(t *testing.T) {
+			h := &batchHarness{repos: githubRepos("acme/a")}
+			if code, _, stderr := runVerb(t, tc.target, h.executor(), tc.args, inlineEnv); code != cli.ExitOK {
+				t.Fatalf("exit %d: %s", code, stderr)
+			}
+		})
+	}
+}
+
+// The batch groups by --batch-size only where process_*_batch does: GitHub always, GitLab
+// on its `git` path; every other GitLab target starts a task per project and only
+// --max-concurrent bounds them (found by the batch-loop oracle, TestBatchLoopMatchesLivePython).
+func TestBatchGroupsByBatchSizeOnlyWherePythonDoes(t *testing.T) {
+	gitlab := []string{"--provider", "gitlab", "-s", "a/*", "--auth", "t", "--group", "a", "--batch-size", "1", "--max-concurrent", "3"}
+	github := append(append([]string{}, githubBatchArgs...), "--batch-size", "1", "--max-concurrent", "3")
+	repos := []providersync.ListedRepository{{Name: "a", FullName: "a/a", ProjectID: 1}, {Name: "b", FullName: "a/b", ProjectID: 2}, {Name: "c", FullName: "a/c", ProjectID: 3}}
+	for _, tc := range []struct {
+		name, target string
+		args         []string
+		peak         int
+	}{
+		{"gitlab prs: no groups, three at once", "prs", gitlab, 3},
+		{"gitlab deployments: no groups", "deployments", gitlab, 3},
+		{"gitlab git: groups of one", "git", gitlab, 1},
+		{"github prs: groups of one", "prs", github, 1},
+		{"github git: groups of one", "git", github, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := &batchHarness{repos: repos}
+			h.hold = func(providersync.InProcessRun) { time.Sleep(60 * time.Millisecond) }
+			if code, _, stderr := runVerb(t, tc.target, h.executor(), tc.args, inlineEnv); code != cli.ExitOK {
+				t.Fatalf("exit %d: %s", code, stderr)
+			}
+			if h.peak != tc.peak {
+				t.Fatalf("peak concurrency %d, want %d", h.peak, tc.peak)
+			}
+		})
 	}
 }

@@ -2544,13 +2544,18 @@ func readinessCheck(chClient readinessPinger, pgPool readinessPinger, verifier j
 	}
 }
 
-// queryAPIPostureCheck returns the readiness check for query-api's Postgres
-// role posture, or nil when the deployment names no query-api role
+// queryAPIPostureCheck returns the readiness check for query-api's Postgres role
+// posture, or nil when the deployment names no query-api role
 // (QUERY_API_DATABASE_ROLE unset or blank): such a deployment has not opted in
-// and is checked for nothing extra. The whole-catalog posture query takes
-// 1.4-1.9 s on the production catalog (CHAOS-6765), so it runs through the
-// cached, single-flight check every posture-checked service uses rather than
-// once per probe.
+// and is checked for nothing extra.
+//
+// The whole-catalog posture query takes 1.4-1.9 s on the production catalog
+// (CHAOS-6765), longer than the kubelet's 2 s probe timeout, and the readiness
+// contract is that a probe answers within its budget from state it already
+// holds, never by running a live expensive check. So the check starts proving
+// the role in the BACKGROUND at construction (process start, before readiness
+// can flip: an unproven role is not ready) and /readyz reads the last answer
+// without waiting (CachedPostureCheck.CheckNoWait).
 func queryAPIPostureCheck(getenv getenvFunc, pgPool *pgxpool.Pool) func(context.Context) error {
 	role := strings.TrimSpace(getenv("QUERY_API_DATABASE_ROLE"))
 	if role == "" {
@@ -2560,7 +2565,8 @@ func queryAPIPostureCheck(getenv getenvFunc, pgPool *pgxpool.Pool) func(context.
 		pgPool, role, queryAPIRiverSchema(getenv), postgresstore.QueryAPIPosture(),
 		postgresstore.PostureCheckOptions{Logger: slog.Default()},
 	)
-	return cached.Check
+	cached.Warm()
+	return func(context.Context) error { return cached.CheckNoWait() }
 }
 
 // queryAPIRiverSchema is the River schema the posture check asserts the role

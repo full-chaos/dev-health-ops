@@ -1073,9 +1073,13 @@ sides:
   AS that role and the role holds exactly the manifest: no more (an unlisted
   SELECT, an extra write, a PUBLIC or membership grant, an owned object, any
   River-schema privilege) and no less. The whole-catalog query takes 1.4-1.9 s
-  on the production catalog, so it runs through the cached single-flight check
-  (CHAOS-6765): the first probe after boot may time out at the 2 s probe
-  timeout; the next is served from the cache.
+  on the production catalog, longer than the 2 s probe timeout, so the probe
+  never runs it: the proof starts in the background when the process starts,
+  and `/readyz` reads the last answer without waiting (`CheckNoWait`). Until the
+  first run answers the role is unproven and the pod is NotReady (fail closed);
+  a refusal is served with its age and re-run every 2 s until fixed; a pass
+  counts for up to 5 minutes without a newer answer, then the pod is NotReady
+  again.
 
 Leaving `QUERY_API_DATABASE_ROLE` unset changes nothing. The completeness proof
 for the manifest is `TestQueryAPIRoleServesEveryPostgresPathItReaches`

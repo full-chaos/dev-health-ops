@@ -3,9 +3,16 @@ package server
 import (
 	"context"
 	"errors"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func TestQueryAPIPostureCheckIsOptIn(t *testing.T) {
@@ -132,5 +139,90 @@ func TestQueryAPIRiverSchemaDefaultsLikeEveryOtherService(t *testing.T) {
 		if got := queryAPIRiverSchema(get); got != test.want {
 			t.Errorf("%s: schema %q, want %q", name, got, test.want)
 		}
+	}
+}
+
+// silentPostgresPool is a pool whose server accepts every connection and never
+// answers: the shape of a posture query that is slow (1.4-1.9 s on the
+// production catalog) or wedged. A probe that waits on the query pays for it.
+func silentPostgresPool(t *testing.T) (*pgxpool.Pool, *atomic.Int32) {
+	t.Helper()
+	accepted := &atomic.Int32{}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	go func() {
+		for {
+			connection, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			accepted.Add(1)
+			t.Cleanup(func() { _ = connection.Close() })
+		}
+	}()
+	pool, err := pgxpool.New(context.Background(),
+		"postgres://query_api:x@"+listener.Addr().String()+"/db?sslmode=disable&connect_timeout=30")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	return pool, accepted
+}
+
+// The readiness contract (D2549/D2588): the probe answers within its budget and
+// NEVER waits on a live expensive check. With a posture query that cannot
+// answer, /readyz must fail closed at once ("postgres_posture"), not hold the
+// probe until the handler's own 3 s bound (longer than the kubelet's 2 s probe
+// timeout). It answers again, ready, only once the background run has proven
+// the role -- which a silent server never does, so it must stay unready.
+func TestReadyzAnswersWithinTheProbeBudgetWhileThePostureQueryIsSlow(t *testing.T) {
+	pool, _ := silentPostgresPool(t)
+	env := func(key string) string {
+		if key == "QUERY_API_DATABASE_ROLE" {
+			return "devhealth_query_api"
+		}
+		return ""
+	}
+	ready := readinessCheck(fakePinger{}, fakePinger{}, fakeJWKS{}, queryAPIPostureCheck(env, pool))
+	handler := readyzHandler(ready)
+
+	const budget = 500 * time.Millisecond
+	for probe := 1; probe <= 3; probe++ {
+		recorder := httptest.NewRecorder()
+		started := time.Now()
+		handler(recorder, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+		if elapsed := time.Since(started); elapsed > budget {
+			t.Fatalf("probe %d took %v (> %v): /readyz waited on the posture query", probe, elapsed, budget)
+		}
+		if recorder.Code != http.StatusServiceUnavailable || !strings.Contains(recorder.Body.String(), readyzClassPosture) {
+			t.Fatalf("probe %d: status %d body %q, want 503 naming %q (an unproven role is not ready)",
+				probe, recorder.Code, recorder.Body.String(), readyzClassPosture)
+		}
+	}
+}
+
+// The proof starts at construction (process start), not on the first probe: a
+// deployment that names a role begins dialing Postgres for the posture query
+// before any /readyz arrives.
+func TestPostureProofStartsAtConstructionNotOnTheFirstProbe(t *testing.T) {
+	pool, accepted := silentPostgresPool(t)
+	env := func(key string) string {
+		if key == "QUERY_API_DATABASE_ROLE" {
+			return "devhealth_query_api"
+		}
+		return ""
+	}
+	if check := queryAPIPostureCheck(env, pool); check == nil {
+		t.Fatal("a named role must be checked")
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for accepted.Load() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("no connection reached Postgres with no probe made: the proof did not start at construction")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }

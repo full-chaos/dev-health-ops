@@ -150,6 +150,58 @@ func (c *CachedPostureCheck) Check(ctx context.Context) error {
 	}
 }
 
+// Warm starts the first background execution now, so a process can begin
+// proving its role at startup instead of on its first probe. It never waits.
+func (c *CachedPostureCheck) Warm() {
+	c.mu.Lock()
+	c.startFlightLocked()
+	c.mu.Unlock()
+}
+
+// CheckNoWait is Check for a probe that must NEVER wait on the expensive query
+// (CHAOS-6804; the readiness contract: a probe answers within its budget from
+// state it already holds, it does not run a live check). It returns at once
+// with the last answer and starts the background execution that will replace
+// it:
+//
+//   - a passing answer younger than MaxStale is a pass (a refresh runs in the
+//     background once it is older than TTL);
+//   - a refusal is served, with its age, until a newer answer replaces it (a
+//     re-run starts once it is older than RefusalTTL), so a GRANT/REVOKE fix is
+//     picked up one run later without any probe waiting for it;
+//   - no usable answer at all (never proven, or the last pass older than
+//     MaxStale and the refreshes since have not answered) is ErrUnavailable,
+//     fail closed, stating why and the last pass's age: absence of an answer is
+//     never read as a pass.
+func (c *CachedPostureCheck) CheckNoWait() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	now := c.now()
+	if !c.okAt.IsZero() {
+		age := now.Sub(c.okAt)
+		if age < c.ttl {
+			return nil
+		}
+		if age < c.maxStale {
+			c.startFlightLocked()
+			return nil
+		}
+	}
+	if c.refused != nil {
+		age := now.Sub(c.refusedAt)
+		if age >= c.refusalTTL {
+			c.startFlightLocked()
+		}
+		return fmt.Errorf("%w (answered %s ago)", c.refused, age.Round(time.Second))
+	}
+	c.startFlightLocked()
+	if c.okAt.IsZero() {
+		return fmt.Errorf("%w: role posture not yet proven (the check runs in the background)", ErrUnavailable)
+	}
+	return fmt.Errorf("%w: role posture last proven %s ago, older than the %s bound (the check runs in the background)",
+		ErrUnavailable, now.Sub(c.okAt).Round(time.Second), c.maxStale)
+}
+
 // startFlightLocked returns the in-flight execution, starting one if none.
 // The caller holds c.mu.
 func (c *CachedPostureCheck) startFlightLocked() *postureFlight {

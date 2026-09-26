@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -57,7 +59,7 @@ func TestMaterializerRedispatchesStaleUnitsExactlyOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	if err := createMaterializerIntegrationFixture(ctx, pool); err != nil {
+	if err := createMaterializerIntegrationFixture(ctx, t, pool); err != nil {
 		t.Fatal(err)
 	}
 	materializer, err := NewMaterializer(pool)
@@ -426,7 +428,7 @@ func TestMaterializerPostgresConcurrencyAndRollback(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	if err := createMaterializerIntegrationFixture(ctx, pool); err != nil {
+	if err := createMaterializerIntegrationFixture(ctx, t, pool); err != nil {
 		t.Fatal(err)
 	}
 	materializer, err := NewMaterializer(pool)
@@ -745,12 +747,7 @@ func TestMaterializerPostgresConcurrencyAndRollback(t *testing.T) {
 		}
 		assertMaterializerOutboxCount(t, ctx, pool, materializerDispatchMissing, "dispatch_sync_run", 0)
 
-		if _, err := pool.Exec(ctx, `
-			INSERT INTO public.scheduled_sync_occurrences
-				(occurrence_id,sync_run_id,job_run_id,reconcile_status)
-			VALUES ('ready-occurrence',$1,'00000000-0000-4000-8000-000000004499','completed')`, materializerDispatchMissing); err != nil {
-			t.Fatal(err)
-		}
+		seedCompletedOccurrence(t, ctx, pool, "ready-occurrence", materializerDispatchMissing, "00000000-0000-4000-8000-000000004499")
 		result, err = materializer.Step(ctx, now, now.Add(-15*time.Minute), 20)
 		if err != nil {
 			t.Fatal(err)
@@ -775,12 +772,7 @@ func TestMaterializerPostgresConcurrencyAndRollback(t *testing.T) {
 		if result.Finalize != 0 {
 			t.Fatalf("unready zero-unit scheduled graph finalized: %#v", result)
 		}
-		if _, err := pool.Exec(ctx, `
-			INSERT INTO public.scheduled_sync_occurrences
-				(occurrence_id,sync_run_id,job_run_id,reconcile_status)
-			VALUES ('ready-zero-occurrence',$1,'00000000-0000-4000-8000-000000004498','completed')`, materializerFinalize); err != nil {
-			t.Fatal(err)
-		}
+		seedCompletedOccurrence(t, ctx, pool, "ready-zero-occurrence", materializerFinalize, "00000000-0000-4000-8000-000000004498")
 		result, err = materializer.Step(ctx, now, now.Add(-15*time.Minute), 20)
 		if err != nil {
 			t.Fatal(err)
@@ -792,80 +784,16 @@ func TestMaterializerPostgresConcurrencyAndRollback(t *testing.T) {
 	})
 }
 
-func createMaterializerIntegrationFixture(ctx context.Context, pool *pgxpool.Pool) error {
+func createMaterializerIntegrationFixture(ctx context.Context, t *testing.T, pool *pgxpool.Pool) error {
+	t.Helper()
+	// The migrated schema: sync_runs, sync_run_units, the occurrence ledger, the executed-proof
+	// projection (CHAOS-4114), the discovery ledger, the post-sync dispatch ledger and the dispatch
+	// outbox with its route-fence trigger, all with their real columns, constraints and foreign keys.
+	pgschema.Apply(ctx, t, pool)
+	// The parent integration/source the run and unit seeds reference (foreign keys).
+	pgseed.EnsureSyncIntegration(ctx, t, pool, "org-materializer", "", "")
+	// The one test-owned relation pair: a failure-injection table and a trigger on the real outbox.
 	for _, statement := range []string{
-		"CREATE EXTENSION IF NOT EXISTS pgcrypto",
-		`CREATE TABLE public.sync_runs (
-			id uuid PRIMARY KEY,
-			org_id text NOT NULL,
-			triggered_by text NOT NULL DEFAULT 'manual',
-			status text NOT NULL,
-			created_at timestamptz NOT NULL
-		)`,
-		`CREATE TABLE public.scheduled_sync_occurrences (
-			occurrence_id text PRIMARY KEY,
-			sync_run_id uuid,
-			job_run_id uuid,
-			reconcile_status text NOT NULL
-		)`,
-		`CREATE TABLE public.sync_run_units (
-			id uuid PRIMARY KEY,
-			sync_run_id uuid NOT NULL REFERENCES public.sync_runs(id),
-			status text NOT NULL,
-			available_at timestamptz,
-			updated_at timestamptz NOT NULL
-		)`,
-		// CHAOS-4114: the maintained executed-proof projection. It is in
-		// domainPosture's manifest, and the scheduler/worker write paths stamp
-		// it inside the same transaction that writes sync_run_units, so a venue
-		// without it fails those writes outright.
-		`CREATE TABLE public.sync_executed_proof_ledger (
-			provider text NOT NULL,
-			dataset_key text NOT NULL,
-			attempted_at timestamptz NOT NULL,
-			proven_at timestamptz,
-			PRIMARY KEY (provider, dataset_key),
-			CONSTRAINT ck_sync_executed_proof_ledger_provider_normalized
-				CHECK (provider = lower(provider) AND btrim(provider) <> ''),
-			CONSTRAINT ck_sync_executed_proof_ledger_dataset_normalized
-				CHECK (dataset_key = lower(dataset_key) AND btrim(dataset_key) <> '')
-		)`,
-		`CREATE TABLE public.sync_run_reference_discoveries (
-			id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-			sync_run_id uuid NOT NULL UNIQUE REFERENCES public.sync_runs(id),
-			status text NOT NULL,
-			available_at timestamptz NOT NULL,
-			lease_expires_at timestamptz
-		)`,
-		`CREATE TABLE public.sync_run_post_dispatches (
-			id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-			org_id text NOT NULL,
-			sync_run_id uuid NOT NULL REFERENCES public.sync_runs(id),
-			kind text NOT NULL,
-			dispatched_at timestamptz NOT NULL,
-			UNIQUE (sync_run_id, kind)
-		)`,
-		`CREATE TABLE public.sync_dispatch_outbox (
-			id uuid PRIMARY KEY,
-			org_id text NOT NULL,
-			sync_run_id uuid NOT NULL REFERENCES public.sync_runs(id),
-			kind text NOT NULL,
-			status text NOT NULL,
-			available_at timestamptz NOT NULL,
-			attempts integer NOT NULL,
-			last_error text,
-			dispatched_at timestamptz,
-			claim_token text,
-			claim_expires_at timestamptz,
-			claim_transport text,
-			claim_route_generation bigint,
-			dispatched_transport text,
-			dispatched_route_generation bigint,
-			transport_job_id text,
-			created_at timestamptz NOT NULL,
-			updated_at timestamptz NOT NULL,
-			UNIQUE (sync_run_id, kind)
-		)`,
 		"CREATE TABLE public.materializer_failures (kind text PRIMARY KEY)",
 		`CREATE FUNCTION public.fail_materializer_insert() RETURNS trigger
 		LANGUAGE plpgsql AS $$
@@ -892,18 +820,11 @@ func createMaterializerIntegrationFixture(ctx context.Context, pool *pgxpool.Poo
 
 func resetMaterializerIntegrationTables(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
-	for _, statement := range []string{
-		"TRUNCATE public.materializer_failures",
-		"TRUNCATE public.sync_dispatch_outbox",
-		"TRUNCATE public.scheduled_sync_occurrences",
-		"TRUNCATE public.sync_run_post_dispatches",
-		"TRUNCATE public.sync_run_reference_discoveries",
-		"TRUNCATE public.sync_run_units",
-		"TRUNCATE public.sync_runs CASCADE",
-	} {
-		if _, err := pool.Exec(ctx, statement); err != nil {
-			t.Fatal(err)
-		}
+	// One CASCADE statement: the migrated tables reference each other.
+	if _, err := pool.Exec(ctx, `TRUNCATE public.materializer_failures, public.sync_dispatch_outbox,
+		public.scheduled_sync_occurrences, public.sync_run_post_dispatches,
+		public.sync_run_reference_discoveries, public.sync_run_units, public.sync_runs CASCADE`); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -947,15 +868,15 @@ func seedMaterializerIntegrationGraph(t *testing.T, ctx context.Context, pool *p
 	seedRun(t, ctx, pool, materializerDiscovery, "running", now.Add(-3*time.Hour))
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO public.sync_run_reference_discoveries (
-			sync_run_id, status, available_at, lease_expires_at
-		) VALUES ($1, 'retrying', $2, NULL)`, materializerDiscovery, now.Add(-time.Minute)); err != nil {
+			id, org_id, sync_run_id, status, attempts, available_at, lease_expires_at, created_at, updated_at
+		) VALUES (gen_random_uuid(), 'org-materializer', $1, 'retrying', 0, $2, NULL, now(), now())`, materializerDiscovery, now.Add(-time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 	seedRun(t, ctx, pool, materializerRiverQueued, "running", now.Add(-3*time.Hour))
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO public.sync_run_reference_discoveries (
-			sync_run_id, status, available_at, lease_expires_at
-		) VALUES ($1, 'retrying', $2, NULL)`, materializerRiverQueued, now.Add(-time.Minute)); err != nil {
+			id, org_id, sync_run_id, status, attempts, available_at, lease_expires_at, created_at, updated_at
+		) VALUES (gen_random_uuid(), 'org-materializer', $1, 'retrying', 0, $2, NULL, now(), now())`, materializerRiverQueued, now.Add(-time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -963,8 +884,8 @@ func seedMaterializerIntegrationGraph(t *testing.T, ctx context.Context, pool *p
 		seedRun(t, ctx, pool, runID, "success", now.Add(-2*time.Hour))
 		if _, err := pool.Exec(ctx, `
 			INSERT INTO public.sync_run_post_dispatches (
-				org_id, sync_run_id, kind, dispatched_at
-			) VALUES ($3, $1, 'post_sync', $2)`,
+				id, org_id, sync_run_id, kind, dispatched_at
+			) VALUES (gen_random_uuid(), $3, $1, 'post_sync', $2)`,
 			runID, now.Add(-2*time.Hour),
 			map[bool]string{true: "stale-ledger-org", false: "org-materializer"}[runID == materializerPostSyncMissing]); err != nil {
 			t.Fatal(err)
@@ -1040,11 +961,58 @@ func seedMaterializerIntegrationGraph(t *testing.T, ctx context.Context, pool *p
 	}
 }
 
+// seedCompletedOccurrence records a completed scheduled occurrence linking a run to a job run. The
+// migrated ledger references a real sync configuration, scheduled job and job run, so the fixture
+// creates them (an empty jobRunID leaves the occurrence unlinked; once per config, idempotently) and gives each occurrence its own scheduled time.
+func seedCompletedOccurrence(t *testing.T, ctx context.Context, pool *pgxpool.Pool, occurrenceID, runID, jobRunID string) {
+	t.Helper()
+	seedOccurrenceParents(t, ctx, pool)
+	if jobRunID != "" {
+		if _, err := pool.Exec(ctx, `INSERT INTO public.job_runs (id, job_id, status, created_at) VALUES ($1::uuid, $2::uuid, 2, now())
+			ON CONFLICT DO NOTHING`, jobRunID, materializerOccurrenceJobID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO public.scheduled_sync_occurrences (occurrence_id, identity_version, org_id, sync_config_id, scheduled_job_id,
+			scheduled_for, job_run_id, sync_run_id, reconcile_status, created_at)
+		VALUES ($1, 'v1', 'org-materializer', $4::uuid, $5::uuid,
+			timestamptz '2026-07-24 00:00:00+00' + make_interval(secs => abs(hashtextextended($1, 0) % 100000)),
+			nullif($3, '')::uuid, $2::uuid, 'completed', now())`,
+		occurrenceID, runID, jobRunID, materializerOccurrenceConfigID, materializerOccurrenceJobID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+const (
+	materializerOccurrenceConfigID = "00000000-0000-4000-8000-000000004a01"
+	materializerOccurrenceJobID    = "00000000-0000-4000-8000-000000004a02"
+)
+
+// seedOccurrenceParents creates, idempotently, the sync configuration and scheduled job every
+// occurrence of the migrated ledger must reference.
+func seedOccurrenceParents(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+	t.Helper()
+	for _, statement := range []string{
+		`INSERT INTO public.sync_configurations (id, org_id, name, provider, sync_targets, sync_options, is_active, created_at, updated_at, integration_id)
+			VALUES ('` + materializerOccurrenceConfigID + `', 'org-materializer', 'materializer-config', 'github', '[]'::json, '{}'::json, TRUE, now(), now(), '` + pgseed.DefaultSyncIntegrationID + `')
+			ON CONFLICT DO NOTHING`,
+		`INSERT INTO public.scheduled_jobs (id, org_id, name, sync_config_id, job_type, schedule_cron, status, created_at, updated_at)
+			VALUES ('` + materializerOccurrenceJobID + `', 'org-materializer', 'materializer-job', '` + materializerOccurrenceConfigID + `', 'sync', '0 * * * *', 0, now(), now())
+			ON CONFLICT DO NOTHING`,
+	} {
+		if _, err := pool.Exec(ctx, statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 func seedRun(t *testing.T, ctx context.Context, pool *pgxpool.Pool, id, status string, createdAt time.Time) {
 	t.Helper()
 	if _, err := pool.Exec(ctx, `
-		INSERT INTO public.sync_runs (id, org_id, status, created_at)
-		VALUES ($1, 'org-materializer', $2, $3)`, id, status, createdAt); err != nil {
+		INSERT INTO public.sync_runs (id, org_id, integration_id, triggered_by, mode, status,
+			total_units, completed_units, failed_units, created_at)
+		VALUES ($1, 'org-materializer', $4::uuid, 'manual', 'incremental', $2, 0, 0, 0, $3)`,
+		id, status, createdAt, pgseed.DefaultSyncIntegrationID); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -1059,9 +1027,11 @@ func seedUnit(
 ) {
 	t.Helper()
 	if _, err := pool.Exec(ctx, `
-		INSERT INTO public.sync_run_units (id, sync_run_id, status, available_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5)`,
-		id, runID, status, availableAt, updatedAt); err != nil {
+		INSERT INTO public.sync_run_units (id, org_id, sync_run_id, integration_id, source_id, provider, dataset_key,
+			cost_class, mode, attempts, created_at, status, available_at, updated_at)
+		VALUES ($1, 'org-materializer', $2, $6::uuid, $7::uuid, 'github', 'commits',
+			'rest_core', 'incremental', 0, $5, $3, $4, $5)`,
+		id, runID, status, availableAt, updatedAt, pgseed.DefaultSyncIntegrationID, pgseed.DefaultSyncSourceID); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -1079,8 +1049,8 @@ func seedDiscoveryLedger(
 	t.Helper()
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO public.sync_run_reference_discoveries (
-			sync_run_id, status, available_at, lease_expires_at
-		) VALUES ($1, $2, $3, $4)`,
+			id, org_id, sync_run_id, status, attempts, available_at, lease_expires_at, created_at, updated_at
+		) VALUES (gen_random_uuid(), 'org-materializer', $1, $2, 0, $3, $4, now(), now())`,
 		runID, status, availableAt, leaseExpiresAt); err != nil {
 		t.Fatal(err)
 	}
@@ -1171,6 +1141,19 @@ func seedMaterializerFeatureDisabledOutbox(
 	dispatchedAt time.Time,
 ) {
 	t.Helper()
+	// Drift simulation: the migrated route fence strips the delivery columns from a feature-disabled
+	// dispatched row, so it can never carry a River transport. This test seeds exactly that shape
+	// (the CHAOS-4357 live state), which the dispatched-route coherence check also
+	// forbids, so both are removed for this database, to prove the materializer does not depend on the trigger.
+	if _, err := pool.Exec(ctx, `ALTER TABLE public.sync_dispatch_outbox DISABLE TRIGGER trg_sync_dispatch_outbox_route_fence;
+		ALTER TABLE public.sync_dispatch_outbox DROP CONSTRAINT IF EXISTS ck_sync_dispatch_outbox_dispatched_route_coherence`); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if _, err := pool.Exec(ctx, `ALTER TABLE public.sync_dispatch_outbox ENABLE TRIGGER trg_sync_dispatch_outbox_route_fence`); err != nil {
+			t.Fatal(err)
+		}
+	}()
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO public.sync_dispatch_outbox (
 			id, org_id, sync_run_id, kind, status, available_at, attempts,
@@ -1396,7 +1379,7 @@ func TestMaterializerReportsRunawayDispatchWakeups(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	if err := createMaterializerIntegrationFixture(ctx, pool); err != nil {
+	if err := createMaterializerIntegrationFixture(ctx, t, pool); err != nil {
 		t.Fatal(err)
 	}
 	materializer, err := NewMaterializer(pool)

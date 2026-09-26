@@ -44,7 +44,7 @@ func TestCHAOS4583RedOnBaselineOutboxReachesTerminalStatus(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	if err := createMaterializerIntegrationFixture(ctx, pool); err != nil {
+	if err := createMaterializerIntegrationFixture(ctx, t, pool); err != nil {
 		t.Fatal(err)
 	}
 	resetMaterializerIntegrationTables(t, ctx, pool)
@@ -62,8 +62,8 @@ func TestCHAOS4583RedOnBaselineOutboxReachesTerminalStatus(t *testing.T) {
 	seedRun(t, ctx, pool, runID, "success", now.Add(-8*time.Hour))
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO public.sync_run_reference_discoveries (
-			sync_run_id, status, available_at
-		) VALUES ($1, 'success', $2)`, runID, now.Add(-2*time.Hour)); err != nil {
+			id, org_id, sync_run_id, status, attempts, available_at, created_at, updated_at
+		) VALUES (gen_random_uuid(), 'org-materializer', $1, 'success', 0, $2, now(), now())`, runID, now.Add(-2*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(ctx, `

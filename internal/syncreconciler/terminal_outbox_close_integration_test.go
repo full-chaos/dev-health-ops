@@ -115,7 +115,7 @@ func TestTerminalOutboxCloseClosesRowsWhoseOwnerIsTerminal(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	if err := createMaterializerIntegrationFixture(ctx, pool); err != nil {
+	if err := createMaterializerIntegrationFixture(ctx, t, pool); err != nil {
 		t.Fatal(err)
 	}
 	resetMaterializerIntegrationTables(t, ctx, pool)
@@ -279,7 +279,7 @@ func TestReapTerminalOutboxBacklogDrainsAcrossPasses(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	if err := createMaterializerIntegrationFixture(ctx, pool); err != nil {
+	if err := createMaterializerIntegrationFixture(ctx, t, pool); err != nil {
 		t.Fatal(err)
 	}
 	resetMaterializerIntegrationTables(t, ctx, pool)

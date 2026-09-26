@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -654,5 +655,121 @@ func TestPreflightVenueOracleOverRealAlembicStates(t *testing.T) {
 	}
 	if !t.Failed() {
 		venueoracle.WriteProof(t)
+	}
+}
+
+// pauseAfterVersionCheck is a query tracer that stops the connection right after the
+// query that looks for alembic_version, until release is closed: the moment a
+// concurrent upgrade can commit between the migrator's reads.
+type pauseAfterVersionCheck struct {
+	once            sync.Once
+	reached, resume chan struct{}
+}
+
+func newPauseAfterVersionCheck() *pauseAfterVersionCheck {
+	return &pauseAfterVersionCheck{reached: make(chan struct{}), resume: make(chan struct{})}
+}
+
+// tracedStart marks the statement so the end hook knows it. pgx gives the same ctx to
+// both events, so the start hook returns a ctx that carries the statement.
+type sqlKey struct{}
+
+func (p *pauseAfterVersionCheck) start(ctx context.Context, data pgx.TraceQueryStartData) context.Context {
+	return context.WithValue(ctx, sqlKey{}, data.SQL)
+}
+
+func (p *pauseAfterVersionCheck) end(ctx context.Context) {
+	if sql, _ := ctx.Value(sqlKey{}).(string); strings.Contains(sql, "to_regclass('public.alembic_version')") {
+		p.once.Do(func() {
+			close(p.reached)
+			<-p.resume
+		})
+	}
+}
+
+// snapshotTracer adapts pauseAfterVersionCheck to pgx's tracer interface.
+type snapshotTracer struct{ pause *pauseAfterVersionCheck }
+
+func (s snapshotTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
+	return s.pause.start(ctx, data)
+}
+
+func (s snapshotTracer) TraceQueryEnd(ctx context.Context, _ *pgx.Conn, _ pgx.TraceQueryEndData) {
+	s.pause.end(ctx)
+}
+
+// TestReadersSeeOneSnapshotWhileAnUpgradeCommits pins the measurement's consistency:
+// a hook upgrade that commits between the reader's queries must not tear what it
+// reads. The reader stops after its first query (does alembic_version exist?), an
+// upgrade takes the empty database to the head, and the reader resumes: it must
+// report the state its first query saw (an empty database; every reader that opens
+// readOnlyTransaction is a case), never the impossible
+// mix of "no alembic_version" from before with the objects and revisions from after
+// ("foreign database" with nothing for the hook to have refused).
+func TestReadersSeeOneSnapshotWhileAnUpgradeCommits(t *testing.T) {
+	ctx := context.Background()
+	productionEnv(t)
+	baseline, current := currentBuild(t)
+	instance, admin := startInstance(t)
+
+	for _, reader := range []struct {
+		name string
+		read func(conn *pgx.Conn) (string, error)
+	}{
+		{"preflight", func(conn *pgx.Conn) (string, error) {
+			report, err := pgmigrate.Preflight(ctx, conn, productionSettings, baseline, current.chain, current.history)
+			return report.Verdict + "/" + report.Reason, err
+		}},
+		{"status", func(conn *pgx.Conn) (string, error) {
+			status, err := pgmigrate.ReadStatus(ctx, conn, baseline, current.chain)
+			return status.State, err
+		}},
+		{"current", func(conn *pgx.Conn) (string, error) {
+			recorded, err := pgmigrate.Recorded(ctx, conn)
+			return fmt.Sprintf("%v", recorded), err
+		}},
+	} {
+		t.Run(reader.name, func(t *testing.T) {
+			database := scratchDatabase(t, admin)
+			uri := databaseURI(t, instance.URI, database)
+			config, err := pgx.ParseConfig(uri)
+			if err != nil {
+				t.Fatal(err)
+			}
+			pause := newPauseAfterVersionCheck()
+			config.Tracer = snapshotTracer{pause: pause}
+			readerConn, err := pgx.ConnectConfig(ctx, config)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = readerConn.Close(context.Background()) })
+
+			type outcome struct {
+				got string
+				err error
+			}
+			done := make(chan outcome, 1)
+			go func() {
+				got, err := reader.read(readerConn)
+				done <- outcome{got, err}
+			}()
+			select {
+			case <-pause.reached:
+			case result := <-done:
+				t.Fatalf("the reader finished (%+v) without ever running its version check: the pause measured nothing", result)
+			}
+			if _, err := pgmigrate.Upgrade(ctx, connect(t, uri), baseline, current.chain); err != nil {
+				t.Fatal(err)
+			}
+			close(pause.resume)
+			result := <-done
+			if result.err != nil {
+				t.Fatal(result.err)
+			}
+			want := map[string]string{"preflight": pgmigrate.VerdictAppliesCleanly + "/" + pgmigrate.ReasonEmptyDatabase, "status": "empty", "current": "[]"}[reader.name]
+			if result.got != want {
+				t.Fatalf("the %s read %q while an upgrade committed between its queries, want %q (the state its first query saw)", reader.name, result.got, want)
+			}
+		})
 	}
 }

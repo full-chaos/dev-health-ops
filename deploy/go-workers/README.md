@@ -1055,8 +1055,18 @@ bootstrap postconditions on the live catalog and exits 1, naming role labels and
 never a password, if one is unmet (each role is an unprivileged login with CONNECT,
 no TEMPORARY, USAGE and no CREATE on `public`; each runtime role is a member of no
 role and owns nothing, which is what its readiness check requires; the KEDA login
-holds exactly CONNECT, USAGE on the River schema and SELECT on `river_job`, and an
-extra grant it already had is reported, never silently revoked, like the script); `dho migrate roles --check` verifies only. A
+holds exactly CONNECT, USAGE on the River schema and SELECT on `river_job`, counting
+what it inherits through PUBLIC or a role membership, and an extra grant it already
+had is reported, never silently revoked, like the script). Every role, KEDA
+included, goes through the same `roleacl` closure (identity attributes,
+member-of-no-role, owns-nothing, the effective-grant enumeration with its
+ACL-dependency self-check); a test enumerates the roles and asserts each is checked.
+The supplied password is also tried against the login on the same direct endpoint:
+an existing login keeps its old password (this command never rotates one), so a
+wrong one (SQLSTATE 28P01) fails the command naming the role LABEL, while any other
+failure (pg_hba, network) is only a warning. Errors and logs name role labels
+(`domain`, `queue`, ...), never role names or passwords: Compose's defaults set each
+role's password EQUAL to its role name (CHAOS-6904 changes that default); `dho migrate roles --check` verifies only. A
 CREATE on `public` that a role holds only through PUBLIC (the PostgreSQL default
 before v15) is logged as a warning: revoking it is a human decision.
 

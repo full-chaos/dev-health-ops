@@ -808,3 +808,46 @@ func TestVerifyRunsTheRoleaclClosureForEveryConfiguredRole(t *testing.T) {
 		}
 	}
 }
+
+// Every configured role, enumerated from the options, is refused when it is a member
+// of another role or owns an object: the verdict, not just the query, applies to all.
+func TestVerifyReportsMembershipAndOwnershipForEveryConfiguredRole(t *testing.T) {
+	t.Parallel()
+	s := startSide(t)
+	options := testOptions(true)
+	s.runGo(t, options)
+	ctx := context.Background()
+	exec := func(statement string) {
+		t.Helper()
+		if _, err := s.admin.Exec(ctx, statement); err != nil {
+			t.Fatalf("%s: %v", statement, err)
+		}
+	}
+	for _, entry := range options.configured() {
+		role := ident(entry.role.Name)
+		exec("CREATE ROLE every_group NOLOGIN")
+		exec("GRANT every_group TO " + role)
+		exec("CREATE SCHEMA every_owned AUTHORIZATION " + role)
+		problems, _, err := Verify(ctx, s.admin, options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var member, owns bool
+		for _, item := range problems {
+			if item.Role != entry.label {
+				continue
+			}
+			member = member || strings.Contains(item.Detail, "member of another role")
+			owns = owns || strings.Contains(item.Detail, "owns an object")
+		}
+		if !member || !owns {
+			t.Errorf("%s: member=%v owns=%v, both must be reported: %v", entry.label, member, owns, problems)
+		}
+		exec("DROP SCHEMA every_owned")
+		exec("REVOKE every_group FROM " + role)
+		exec("DROP ROLE every_group")
+	}
+	if problems, warnings, err := Verify(ctx, s.admin, options); err != nil || len(problems)+len(warnings) != 0 {
+		t.Fatalf("not clean after restore: %v %v %v", problems, warnings, err)
+	}
+}

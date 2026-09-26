@@ -99,7 +99,7 @@ func Routes(deps Deps) []httpapi.Route {
 	}
 	if deps.ClickHouse != nil {
 		h.diagnostics = clickhouseDiagnostics{conn: deps.ClickHouse}
-		h.clickhouse = deps.ClickHouse
+		h.workItems = clickhouseWorkItems{conn: deps.ClickHouse}
 	}
 	h.discovery = newCreateDiscovery(deps, logger, clock)
 	wrap := func(handler http.HandlerFunc) http.Handler { return deps.Guard.Wrap(policy.AdminOrg, handler) }
@@ -142,9 +142,9 @@ type handlers struct {
 	// the writes' clock.
 	clock      func() time.Time
 	gitlabHTTP *http.Client
-	// clickhouse is the api's ClickHouse login (nil when it has none): the
-	// trigger route's work items count.
-	clickhouse driver.Conn
+	// workItems reads the trigger route's work items count over the api's
+	// ClickHouse login (nil when it has none).
+	workItems workItemCounter
 	// diagnostics is nil when the api has no ClickHouse login.
 	diagnostics diagnosticsReader
 	// discovery is the create path's Jira project discovery; nil when the

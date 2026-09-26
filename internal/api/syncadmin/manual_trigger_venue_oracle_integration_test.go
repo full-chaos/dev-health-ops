@@ -202,6 +202,10 @@ VALUES ($1, $2, $3, $4, 'repository', $5, $6, $5, $7::json, $8, $9, $9)`, source
 				fmt.Sprintf("acme/%s-%c", s.name, 'a'+index), fmt.Sprintf("%s-%c", s.name, 'a'+index),
 				`{"planner_managed_sync_config_id": "`+tag+`"}`, index < 2, at)
 		}
+		// A stored coverage projection: a trigger that is handed to the scheduler
+		// must invalidate it.
+		exec(`INSERT INTO sync_coverage_projections (id, org_id, sync_config_id, history_lookback_days, projection_version, generated_at, payload)
+VALUES ($1, $2, $3, 30, 1, $4, '{}'::json)`, uuid.New(), orgID.String(), c.id, at)
 		if s.pinned {
 			// The source is pinned once it exists (the foreign key).
 			exec(`UPDATE sync_configurations SET source_id = $1 WHERE id = $2`, c.sources[0], c.id)
@@ -503,6 +507,8 @@ FROM sync_runs r JOIN sync_configurations c ON c.integration_id = r.integration_
 FROM sync_run_units u JOIN sync_configurations c ON c.integration_id = u.integration_id WHERE c.name NOT LIKE '%legacy-unmanaged' ORDER BY c.name, u.source_id::text, u.dataset_key, u.since_at, u.before_at`, 12},
 		{"backfill_jobs", `SELECT c.name, b.status, b.since_date, b.before_date, b.total_chunks, b.completed_chunks, b.failed_chunks, b.celery_task_id
 FROM backfill_jobs b JOIN sync_configurations c ON c.id = b.sync_config_id WHERE c.name NOT LIKE '%legacy-unmanaged' ORDER BY c.name`, 5},
+		{"sync_coverage_projections", `SELECT c.name, (p.invalidated_at IS NOT NULL) FROM sync_coverage_projections p JOIN sync_configurations c ON c.id = p.sync_config_id
+WHERE c.name NOT LIKE '%legacy-unmanaged' ORDER BY c.name`, 30},
 		{"scheduled_jobs", `SELECT c.name, j.job_type, j.status, j.org_id FROM scheduled_jobs j JOIN sync_configurations c ON c.id = j.sync_config_id WHERE c.name NOT LIKE '%legacy-unmanaged' ORDER BY c.name`, 10},
 	}
 	for _, table := range compare {

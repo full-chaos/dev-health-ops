@@ -2,6 +2,7 @@ package syncadmin
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
@@ -11,8 +12,11 @@ import (
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/metric"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/licensing"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
@@ -89,16 +93,54 @@ func (h *handlers) checkWorkItemsLimit(ctx context.Context, org string, targets 
 	if err != nil {
 		return err
 	}
-	if h.clickhouse == nil {
+	return h.workItemsVerdict(ctx, org, maximum)
+}
+
+// workItemCounter reads an org's stored work item count.
+type workItemCounter interface {
+	count(ctx context.Context, org string) (int64, error)
+}
+
+// clickhouseWorkItems is the api's own ClickHouse login.
+type clickhouseWorkItems struct{ conn driver.Conn }
+
+func (c clickhouseWorkItems) count(ctx context.Context, org string) (int64, error) {
+	var count uint64
+	row := c.conn.QueryRow(ctx, `SELECT count() AS cnt FROM work_items WHERE org_id = {org_id:String}`,
+		clickhouse.Named("org_id", org))
+	if err := row.Scan(&count); err != nil {
+		return 0, err
+	}
+	if count > math.MaxInt64 {
+		return math.MaxInt64, nil
+	}
+	return int64(count), nil
+}
+
+// workItemsVerdict is the rest of the work items check once the tier's cap is
+// known: no ClickHouse login means no count (Python skips the check without a
+// CLICKHOUSE_URI), a count at or over the cap is 403, and a count that cannot be
+// read is one of two things. A login that is not allowed to read work_items (the
+// posture check should have refused to start) FAILS CLOSED: the sync is refused
+// and the error logged, because letting it through would silently switch the
+// cap off. Any other failure (ClickHouse unreachable, a timeout) lets the sync
+// proceed, as Python does, but loudly: a warning naming the org and a counter.
+// Python's allow is silent.
+func (h *handlers) workItemsVerdict(ctx context.Context, org string, maximum int64) error {
+	if h.workItems == nil {
 		return nil
 	}
-	current, readErr := h.workItemCount(ctx, org)
-	if readErr != nil {
-		// Python lets the sync proceed when the count cannot be read; that is
-		// kept, but LOUD: an unreadable count (a missing grant included) means the
-		// tier cap is not being enforced.
-		h.logger.ErrorContext(ctx, "sync admin: work items count unavailable, the tier cap is not enforced for this sync",
-			slog.String("error", readErr.Error()))
+	current, err := h.workItems.count(ctx, org)
+	if err != nil {
+		if clickhouseAccessDenied(err) {
+			h.logger.ErrorContext(ctx, "sync admin: the ClickHouse login may not read work_items; refusing the sync (the API posture grant is missing)",
+				slog.String("org_id", org), slog.String("error", err.Error()))
+			return refuse(http.StatusServiceUnavailable,
+				"Work items limit could not be checked: the ClickHouse login is not allowed to read work_items")
+		}
+		h.logger.WarnContext(ctx, "sync admin: work items count unavailable, allowing the sync (the tier cap is not enforced for it)",
+			slog.String("org_id", org), slog.String("error", err.Error()))
+		recordWorkItemsLimitOpen(ctx)
 		return nil
 	}
 	if current >= maximum {
@@ -108,17 +150,25 @@ func (h *handlers) checkWorkItemsLimit(ctx context.Context, org string, targets 
 	return nil
 }
 
-func (h *handlers) workItemCount(ctx context.Context, org string) (int64, error) {
-	var count uint64
-	row := h.clickhouse.QueryRow(ctx, `SELECT count() AS cnt FROM work_items WHERE org_id = {org_id:String}`,
-		clickhouse.Named("org_id", org))
-	if err := row.Scan(&count); err != nil {
-		return 0, err
+// clickhouseAccessDenied is a ClickHouse server refusal of the login's
+// privileges: ACCESS_DENIED (497) or AUTHENTICATION_FAILED (516).
+func clickhouseAccessDenied(err error) bool {
+	var exception *clickhouse.Exception
+	return errors.As(err, &exception) && (exception.Code == 497 || exception.Code == 516)
+}
+
+const workItemsLimitOpenName = "devhealth_sync_work_items_limit_open_total"
+
+// recordWorkItemsLimitOpen counts one sync let through because the work items
+// count could not be read.
+func recordWorkItemsLimitOpen(ctx context.Context) {
+	counter, err := otel.Meter("github.com/full-chaos/dev-health-ops/internal/api/syncadmin").Int64Counter(
+		workItemsLimitOpenName,
+		metric.WithDescription("Syncs allowed past the tier's max_work_items because the work items count could not be read."))
+	if err != nil {
+		return
 	}
-	if count > math.MaxInt64 {
-		return math.MaxInt64, nil
-	}
-	return int64(count), nil
+	counter.Add(ctx, 1)
 }
 
 func containsTarget(targets []pyjson.Value, want string) bool {

@@ -1,7 +1,6 @@
 package venueoracle
 
 import (
-	"crypto/sha1" //nolint:gosec // git's own blob id, not a security digest
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -312,6 +311,7 @@ func producerDigest(dir string) (string, error) {
 		return "", fmt.Errorf("%s holds no Python source under src at the pinned commit", dir)
 	}
 	onDisk := map[string]string{}
+	var files []string
 	err = filepath.WalkDir(filepath.Join(dir, "src"), func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -334,15 +334,25 @@ func producerDigest(dir string) (string, error) {
 			// live outside src and change unseen): the Python source holds none.
 			return fmt.Errorf("%s is a symbolic link: the Python source under src of a pinned build holds none, because a link's target is not part of what the commit's blob pins", filepath.ToSlash(rel))
 		}
-		content, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		onDisk[filepath.ToSlash(rel)] = gitBlobID(content)
+		files = append(files, filepath.ToSlash(rel))
 		return nil
 	})
 	if err != nil {
 		return "", fmt.Errorf("walk %s/src: %w", dir, err)
+	}
+	// git computes the blob ids itself (unfiltered, as stored), in one batch.
+	hashed := exec.Command("git", "-C", dir, "hash-object", "--no-filters", "--stdin-paths")
+	hashed.Stdin = strings.NewReader(strings.Join(files, "\n") + "\n")
+	blobs, err := hashed.Output()
+	if err != nil {
+		return "", fmt.Errorf("git hash-object in %s: %w", dir, err)
+	}
+	ids := strings.Fields(string(blobs))
+	if len(ids) != len(files) {
+		return "", fmt.Errorf("git hash-object in %s hashed %d of %d files", dir, len(ids), len(files))
+	}
+	for index, name := range files {
+		onDisk[name] = ids[index]
 	}
 	names := make([]string, 0, len(committed))
 	for name := range committed {
@@ -371,14 +381,6 @@ func producerDigest(dir string) (string, error) {
 		return "", fmt.Errorf("%s holds %s, which the pinned commit does not (an untracked, ignored or generated file under src): a golden is executed on the pinned build only", dir, extra[0])
 	}
 	return hex.EncodeToString(hash.Sum(nil)), nil
-}
-
-// gitBlobID is git's SHA-1 object id of a blob with content.
-func gitBlobID(content []byte) string {
-	hash := sha1.New()
-	fmt.Fprintf(hash, "blob %d\x00", len(content))
-	hash.Write(content)
-	return hex.EncodeToString(hash.Sum(nil))
 }
 
 func requestKey(request Request) goldenRequest {

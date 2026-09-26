@@ -50,13 +50,18 @@ import (
 // this way -- FAILS, for the same reason INTEGRATION_DENYLIST entries do in
 // ci/check_go.sh: an exemption list that drifts unnoticed is how the next
 // gap gets pre-approved.
-// It is empty today, and that is a real result rather than a placeholder:
-// every package discovery enrols does build a venue. The one historical
+// It was empty until CHAOS-6901, which registered the one package that runs on
+// the real migrated schema instead of building a venue. The one historical
 // candidate for an entry was internal/domaingrants, whose grant_surface_test.go
 // named CheckDomainAuthorization inside a message string and started no
 // database -- discovery matches parsed CALL sites, so it was never enrolled and
 // needed no exemption. That package was removed under CHAOS-3875.
-var venuePackagesWithoutSchema = map[string]string{}
+var venuePackagesWithoutSchema = map[string]string{
+	// CHAOS-6901: the `dho migrate roles` end-to-end proof runs on the REAL
+	// migrated schema (pgschema.Apply), so there is no hand-built venue whose DDL
+	// could fall behind domainPosture().
+	"internal/rivermigrate/rolese2e": "runs on the real migrated schema (pgschema.Apply), no hand-built venue",
+}
 
 var createTablePattern = regexp.MustCompile(
 	`(?i)CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?public\.([a-z0-9_]+)`,

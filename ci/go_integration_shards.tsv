@@ -161,7 +161,8 @@ internal/platform/config	14
 internal/providerfoundation	16
 internal/providersync	2337
 internal/pushcli	20
-internal/rivermigrate	20
+internal/rivermigrate	25
+internal/rivermigrate/rolese2e	25
 internal/scheduler/fixed	380
 internal/scheduler/sync	600
 internal/storage/clickhouse	50
@@ -169,6 +170,7 @@ internal/storage/postgres	129
 internal/storage/postgres/authschema	72
 internal/storage/river	38
 internal/storage/roleacl	35
+internal/storage/roleprovision	25
 internal/streamhandlers	190
 internal/streamrunner	2
 internal/syncdispatchruntime	960

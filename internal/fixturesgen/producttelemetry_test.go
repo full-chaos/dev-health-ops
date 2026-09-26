@@ -123,3 +123,24 @@ func TestBlockedPayloadKeysAreRefused(t *testing.T) {
 		t.Fatal("a payload with a blocked key was accepted")
 	}
 }
+
+// A non-UTC end time anchors each day at 09:00 in ITS zone, and every row still carries a UTC
+// instant (persist converts to UTC after the arithmetic). 09:00 at -05:00 is 14:00Z, so the first
+// session of the first day starts no earlier than 14:00Z.
+func TestNonUTCEndTimeAnchorsInItsOwnZoneAndRowsAreUTC(t *testing.T) {
+	seed := int64(17)
+	end := time.Date(2026, 3, 8, 12, 0, 0, 0, time.FixedZone("", -5*3600))
+	rows := generated(t, ProductTelemetrySpec{OrgID: "o", Days: 1, SessionsPerDay: 1, Seed: &seed, EndTime: end})
+	if len(rows) == 0 {
+		t.Fatal("no rows")
+	}
+	floor := time.Date(2026, 3, 7, 14, 0, 0, 0, time.UTC)
+	if rows[0].OccurredAt.Before(floor) {
+		t.Fatalf("first occurred_at %s is before 09:00 at -05:00 (%s): the anchor is not in the end time's zone", rows[0].OccurredAt, floor)
+	}
+	for _, row := range rows {
+		if _, offset := row.OccurredAt.Zone(); offset != 0 {
+			t.Fatalf("row at %s carries offset %d, not UTC", row.OccurredAt, offset)
+		}
+	}
+}

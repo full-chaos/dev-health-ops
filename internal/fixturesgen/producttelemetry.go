@@ -112,9 +112,15 @@ func GenerateProductTelemetry(spec ProductTelemetrySpec) ([]ProductTelemetryRow,
 	generator := &telemetryGenerator{spec: spec, orgHash: ProductTelemetryOrgHash(spec.OrgID), rng: NewRand(rngSeed)}
 
 	days := min(spec.Days, ProductTelemetryCeilingDays)
-	endTime := spec.EndTime.UTC()
-	startDay := endTime.Add(-time.Duration(days) * 24 * time.Hour)
-	startDay = time.Date(startDay.Year(), startDay.Month(), startDay.Day(), 9, 0, 0, 0, time.UTC)
+	// Python does its arithmetic on the timezone-aware end time in that time
+	// zone's own wall clock (`(end_time - timedelta(days)).replace(hour=9, ...)`,
+	// then `+ timedelta(...)`) and persist converts each event time to UTC last,
+	// so the 09:00 anchor is 09:00 in the END TIME's zone, not in UTC: a non-UTC
+	// end time moves every occurred_at. The rows are converted to UTC at the end.
+	location := spec.EndTime.Location()
+	endTime := spec.EndTime.In(location)
+	startDay := endTime.AddDate(0, 0, -days)
+	startDay = time.Date(startDay.Year(), startDay.Month(), startDay.Day(), 9, 0, 0, 0, location)
 	for dayOffset := 0; dayOffset < days; dayOffset++ {
 		dayStart := startDay.AddDate(0, 0, dayOffset)
 		for sessionIndex := 0; sessionIndex < spec.SessionsPerDay; sessionIndex++ {
@@ -172,7 +178,7 @@ func (g *telemetryGenerator) event(name string, ts time.Time, sessionID, anonUse
 		AnonymousUserID: anonUserID,
 		RoutePattern:    route,
 		PayloadJSON:     encoded,
-		OccurredAt:      ts,
+		OccurredAt:      ts.UTC(),
 		Source:          ProductTelemetrySource,
 	})
 }

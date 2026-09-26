@@ -218,12 +218,20 @@ type telemetryCase struct {
 func telemetryCorpus() []telemetryCase {
 	seed := func(v int64) *int64 { return &v }
 	orgs := []string{"6ba7b810-9dad-11d1-80b4-00c04fd430c8", "org-two", "", "unicode-é-org"}
-	ends := []string{"2026-09-26T07:31:22.123456+00:00", "2026-01-01T00:00:00+00:00", "2026-03-01T23:59:59.999999+00:00", "2024-02-29T12:00:00+00:00"}
+	ends := []string{"2026-09-26T07:31:22.123456+00:00", "2026-01-01T00:00:00+00:00", "2026-03-01T23:59:59.999999+00:00", "2024-02-29T12:00:00+00:00",
+		// Non-UTC end times: the 09:00 anchor is in the end time's own zone (the case r1 found), across
+		// offsets whose local day differs from the UTC day and the half-hour and +14/-12 extremes.
+		"2026-03-08T12:00:00-05:00", "2026-03-09T12:00:00-04:00", "2026-09-26T23:30:00-05:00", "2026-09-26T00:10:00+05:30",
+		"2026-01-01T02:00:00+14:00", "2026-12-31T23:59:59-12:00", "2026-06-15T08:59:59+09:00", "2026-06-15T09:00:00+09:00"}
 	var corpus []telemetryCase
 	for oi, org := range orgs {
 		for si, s := range []*int64{nil, seed(0), seed(1), seed(42), seed(-7), seed(9223372036854775807)} {
 			corpus = append(corpus, telemetryCase{org, 2 + (oi+si)%3, []int{1, 2, 5, 50}[(oi+si)%4], s, ends[(oi+si)%len(ends)]})
 		}
+	}
+	// Every end time on its own, so none is skipped by the org x seed rotation above.
+	for _, end := range ends {
+		corpus = append(corpus, telemetryCase{orgs[0], 3, 3, seed(5), end}, telemetryCase{orgs[1], 2, 2, nil, end})
 	}
 	// The TTL clamp: days above the ceiling generate the ceiling's worth, and the boundary itself.
 	corpus = append(corpus,

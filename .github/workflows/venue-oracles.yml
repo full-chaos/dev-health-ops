@@ -43,19 +43,12 @@ permissions:
   packages: read
 
 concurrency:
-  # ONE group for every push to main (CHAOS-6891). It was one group per commit sha
-  # (never cancelled), so N merges in a row ran N full 7-leg matrices at once on a
-  # shared runner pool: five main runs were in flight at the cut. Contention was
-  # measured NOT to be what made legs slow (per-package times equal to a lone run's,
-  # ratio 1.02), but a queue still measures the newest tip and stops burning ~3 h of
-  # runner time per merge. GitHub keeps ONE running and ONE pending run per group:
-  # the running run is never cancelled (cancel-in-progress is false), so the arbiter
-  # run always completes; a PENDING run is replaced by the newest push and shows as
-  # cancelled. A run replaced that way, or cancelled by the job cap, is INCOMPLETE,
-  # never green (Trap #408, D2540); the arbiter is the newest tip's COMPLETED run.
-  # A workflow_dispatch run is grouped by its ref.
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: false
+  # Same fleet-wide shape as go-quality.yml/go.yml (CHAOS-4906 fleet audit):
+  # group by PR number on pull_request, by ref on a push to a non-main
+  # branch, by commit sha on a push to main or on merge_group (never
+  # cancelled).
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || ((github.ref == 'refs/heads/main' || github.event_name == 'merge_group') && github.sha) || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref != 'refs/heads/main') }}
 
 jobs:
   venue-oracles:

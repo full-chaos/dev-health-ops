@@ -110,8 +110,18 @@ def build(
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    parser.add_argument("logs", nargs="+", type=Path, help="saved `go test -v` / `gh run view --log` files")
-    parser.add_argument("--weights", type=Path, default=WEIGHTS, help="the existing file (kept for unmeasured rows)")
+    parser.add_argument(
+        "logs",
+        nargs="+",
+        type=Path,
+        help="saved `go test -v` / `gh run view --log` files",
+    )
+    parser.add_argument(
+        "--weights",
+        type=Path,
+        default=WEIGHTS,
+        help="the existing file (kept for unmeasured rows)",
+    )
     args = parser.parse_args(argv)
     seen: dict[tuple[str, str], float] = {}
     for log in args.logs:
@@ -120,10 +130,16 @@ def main(argv: list[str]) -> int:
     text, unmeasured = build(rows, seen, read_weights(args.weights))
     sys.stdout.write(text)
     measured = sum(1 for row in rows if row in seen)
-    print(f"venue_oracle_weights: {measured} of {len(rows)} run rows measured from {len(args.logs)} log(s); "
-          f"{len(unmeasured)} unmeasured", file=sys.stderr)
+    print(
+        f"venue_oracle_weights: {measured} of {len(rows)} run rows measured from {len(args.logs)} log(s); "
+        f"{len(unmeasured)} unmeasured",
+        file=sys.stderr,
+    )
     for package, test in unmeasured:
-        print(f"  unmeasured (default {DEFAULT_WEIGHT}s): {package} {test}", file=sys.stderr)
+        print(
+            f"  unmeasured (default {DEFAULT_WEIGHT}s): {package} {test}",
+            file=sys.stderr,
+        )
     return 0
 
 

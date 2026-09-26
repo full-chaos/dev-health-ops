@@ -87,7 +87,10 @@ exit 0
 
 
 def _run_verb(
-    tree: Path, *args: str, env_extra: dict[str, str] | None = None, verb: str = "venue-oracles"
+    tree: Path,
+    *args: str,
+    env_extra: dict[str, str] | None = None,
+    verb: str = "venue-oracles",
 ) -> tuple[subprocess.CompletedProcess[str], list[tuple[str, str]]]:
     """Run `check_go.sh venue-oracles *args` in `tree`; return (proc, [(pkg, test)])."""
     real_go = shutil.which("go")
@@ -364,7 +367,9 @@ def _weights(path: Path = WEIGHTS_FILE) -> list[tuple[str, str, int]]:
     return rows
 
 
-def _plan(tree: Path, count: int) -> tuple[list[tuple[str, str, int, int]], dict[int, tuple[int, int]]]:
+def _plan(
+    tree: Path, count: int
+) -> tuple[list[tuple[str, str, int, int]], dict[int, tuple[int, int]]]:
     """(rows as (pkg, test, leg, weight), {leg: (rows, seconds)}) from the plan verb."""
     proc, _ = _run_verb(tree, str(count), verb="venue-oracle-plan")
     assert proc.returncode == 0, proc.stderr + proc.stdout
@@ -419,7 +424,9 @@ def test_the_planned_heaviest_leg_fits_the_budget(tmp_path: Path) -> None:
     count = len(_matrix_shards())
     rows, legs = _plan(_real_tree(tmp_path), count)
     assert sorted(legs) == list(range(1, count + 1))
-    assert sum(n for n, _ in legs.values()) == len(rows) == len(_registry_run_rows(ROOT))
+    assert (
+        sum(n for n, _ in legs.values()) == len(rows) == len(_registry_run_rows(ROOT))
+    )
     heaviest = max(seconds for _, seconds in legs.values())
     assert heaviest <= budget, (
         f"the heaviest of the {count} planned venue legs is {heaviest}s of tests, over the "
@@ -444,7 +451,9 @@ def test_weights_balance_the_legs_and_never_drop_a_test(tmp_path: Path) -> None:
     first = _plan(tree, 3)
     assert first == _plan(tree, 3), "the plan is not deterministic"
     rows, legs = first
-    assert sorted((p, t) for p, t, _, _ in rows) == all_rows, "the plan dropped or added a test"
+    assert sorted((p, t) for p, t, _, _ in rows) == all_rows, (
+        "the plan dropped or added a test"
+    )
     total = sum(w for _, _, _, w in rows)
     assert sum(seconds for _, seconds in legs.values()) == total
     heaviest_row = max(w for _, _, _, w in rows)
@@ -462,7 +471,9 @@ def test_weights_balance_the_legs_and_never_drop_a_test(tmp_path: Path) -> None:
 
 
 def test_the_500_second_row_gets_a_leg_to_itself(tmp_path: Path) -> None:
-    tree = _scratch_tree(tmp_path, {"internal/a": ["TestA1", "TestA2", "TestA3", "TestA4"]})
+    tree = _scratch_tree(
+        tmp_path, {"internal/a": ["TestA1", "TestA2", "TestA3", "TestA4"]}
+    )
     (tree / "ci" / "venue_oracle_weights.tsv").write_text(
         "internal/a\tTestA1\t500\ninternal/a\tTestA2\t100\ninternal/a\tTestA3\t100\ninternal/a\tTestA4\t100\n",
         encoding="utf-8",
@@ -488,7 +499,10 @@ def test_a_leg_logs_its_plan_and_warns_over_the_budget(tmp_path: Path) -> None:
     assert "venue-oracles: leg " in ok.stdout and "budget 1800s" in ok.stdout
     assert "::warning" not in ok.stdout
     slow, _ = _run_verb(
-        tree, "1", "1", env_extra={"VENUE_LEG_BUDGET_SECONDS": "1", "FAKE_GO_SLEEP": "2"}
+        tree,
+        "1",
+        "1",
+        env_extra={"VENUE_LEG_BUDGET_SECONDS": "1", "FAKE_GO_SLEEP": "2"},
     )
     assert slow.returncode == 0, slow.stderr
     assert "::warning title=venue-oracles leg over its test-time budget" in slow.stdout
@@ -524,8 +538,13 @@ def test_the_weights_generator_reads_a_run_log(tmp_path: Path) -> None:
         ("internal/b", "TestTwo"): 30.0,
     }
     text, unmeasured = module.build(
-        [("internal/a", "TestOne"), ("internal/a", "TestThree"), ("internal/b", "TestTwo"),
-         ("internal/c", "TestKept"), ("internal/c", "TestNew")],
+        [
+            ("internal/a", "TestOne"),
+            ("internal/a", "TestThree"),
+            ("internal/b", "TestTwo"),
+            ("internal/c", "TestKept"),
+            ("internal/c", "TestNew"),
+        ],
         seen,
         {("internal/c", "TestKept"): 77, ("internal/gone", "TestGone"): 5},
     )
@@ -539,20 +558,3 @@ def test_the_weights_generator_reads_a_run_log(tmp_path: Path) -> None:
     ]
     assert unmeasured == [("internal/c", "TestNew")]
     assert text.startswith("# Measured seconds of one venue-oracles registry `run` row")
-
-
-def test_every_main_push_shares_one_queueing_concurrency_group() -> None:
-    # CHAOS-6891: N merges in a row ran N full matrices at once (a group per sha).
-    # One group per ref queues them: the running run is never cancelled (so the
-    # arbiter run completes), a pending one is replaced by the newest push.
-    document = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
-    concurrency = document["concurrency"]
-    assert "github.sha" not in concurrency["group"], (
-        "a per-commit group runs every merge's matrix at once: "
-        f"{concurrency['group']!r}"
-    )
-    assert "github.ref" in concurrency["group"], concurrency["group"]
-    assert concurrency["cancel-in-progress"] is False, (
-        "cancelling the running run under merge churn could leave no completed "
-        "arbiter run at all"
-    )

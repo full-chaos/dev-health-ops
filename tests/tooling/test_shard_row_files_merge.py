@@ -27,9 +27,10 @@ ROOT = Path(__file__).resolve().parents[2]
 SHARDS = ROOT / "ci" / "go_integration_shards.d"
 WEIGHTS = ROOT / "ci" / "venue_oracle_weights.d"
 
-pytestmark = pytest.mark.skipif(
-    shutil.which("git") is None, reason="this test drives real git merges"
-)
+# A module-level `pytest.skip(...)` call, not a `pytestmark` assignment: this directory's
+# orphan-definition guard cannot see pytest's implicit use of `pytestmark`.
+if shutil.which("git") is None:
+    pytest.skip("this test drives real git merges", allow_module_level=True)
 
 
 def _git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess:

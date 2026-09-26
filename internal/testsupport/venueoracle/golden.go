@@ -2,6 +2,7 @@ package venueoracle
 
 import (
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -64,6 +66,14 @@ type Golden struct {
 	// the Python plane's answers in several calls (one per batch of requests),
 	// and the frozen file holds them in the order they were asked.
 	served int
+	// rowsUsed records which frozen row comparisons the test asked for: a
+	// snapshot nothing consumed is a comparison that no longer happens.
+	rowsUsed map[string]bool
+	// finished is set by a recording run that reached Finish with every check
+	// passed; the file is written by a cleanup registered at OpenGolden (so it
+	// runs after every cleanup the test registered later) and only when the
+	// test still has not failed.
+	finished bool
 }
 
 // The environment variables that switch a test to recording.
@@ -85,13 +95,17 @@ type goldenHeader struct {
 }
 
 type goldenRequest struct {
-	Name       string            `json:"name"`
-	Method     string            `json:"method"`
-	Path       string            `json:"path"`
-	BodySHA256 string            `json:"body_sha256"`
-	Status     int               `json:"status"`
-	Headers    map[string]string `json:"headers"`
-	Body       string            `json:"body"`
+	Name       string `json:"name"`
+	Method     string `json:"method"`
+	Path       string `json:"path"`
+	BodySHA256 string `json:"body_sha256"`
+	// HeadersSHA256 is the digest of the request headers the Python plane was
+	// sent (see headersDigest), so a caller or content type that drifted is
+	// refused instead of being served the answer of another.
+	HeadersSHA256 string            `json:"request_headers_sha256"`
+	Status        int               `json:"status"`
+	Headers       map[string]string `json:"headers"`
+	Body          string            `json:"body"`
 }
 
 type goldenRows struct {
@@ -109,6 +123,9 @@ func OpenGolden(t *testing.T, spec GoldenSpec) *Golden {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if g.recording {
+		t.Cleanup(func() { g.persist(t) })
+	}
 	return g
 }
 
@@ -116,7 +133,7 @@ func openGolden(spec GoldenSpec, test string, recording bool) (*Golden, error) {
 	if spec.Path == "" || spec.Recipe == "" || !buildPattern.MatchString(spec.PythonBuild) {
 		return nil, fmt.Errorf("venueoracle: a GoldenSpec needs a path, a recipe and the 40-hex Python build the answers were executed on: %+v", spec)
 	}
-	g := &Golden{spec: spec, recording: recording}
+	g := &Golden{spec: spec, recording: recording, rowsUsed: map[string]bool{}}
 	if recording {
 		g.recorded = goldenFile{Header: goldenHeader{Test: test, PythonBuild: spec.PythonBuild, Recipe: spec.Recipe}, Rows: map[string]goldenRows{}}
 		return g, nil
@@ -134,6 +151,9 @@ func openGolden(spec GoldenSpec, test string, recording bool) (*Golden, error) {
 	}
 	if err := json.Unmarshal(raw, &g.loaded); err != nil {
 		return nil, fmt.Errorf("golden %s: %w", spec.Path, err)
+	}
+	if g.loaded.Header.Test != test {
+		return nil, fmt.Errorf("golden %s was recorded for %q, not for %q; a golden belongs to one test; regenerate: %s", spec.Path, g.loaded.Header.Test, test, spec.Recipe)
 	}
 	if g.loaded.Header.PythonBuild != spec.PythonBuild {
 		return nil, fmt.Errorf("golden %s was executed on build %s, the test names %s; regenerate: %s", spec.Path, g.loaded.Header.PythonBuild, spec.PythonBuild, spec.Recipe)
@@ -171,12 +191,12 @@ func verifyPinnedCheckout(dir, build string) error {
 	if got := strings.TrimSpace(string(head)); got != build {
 		return fmt.Errorf("%s is at %s, the test pins %s", dir, got, build)
 	}
-	status, err := exec.Command("git", "-C", dir, "status", "--porcelain", "--untracked-files=no").Output()
+	status, err := exec.Command("git", "-C", dir, "status", "--porcelain", "--untracked-files=normal").Output()
 	if err != nil {
 		return fmt.Errorf("git status in %s: %w", dir, err)
 	}
 	if strings.TrimSpace(string(status)) != "" {
-		return fmt.Errorf("%s has uncommitted changes: a golden is executed on a clean build", dir)
+		return fmt.Errorf("%s has uncommitted or untracked files (ignored files aside): a golden is executed on a clean build", dir)
 	}
 	return nil
 }
@@ -186,7 +206,65 @@ func requestKey(request Request) goldenRequest {
 	if request.Body != nil {
 		sum = sha256.Sum256([]byte(*request.Body))
 	}
-	return goldenRequest{Name: request.Name, Method: request.Method, Path: request.Path, BodySHA256: hex.EncodeToString(sum[:])}
+	return goldenRequest{Name: request.Name, Method: request.Method, Path: request.Path, BodySHA256: hex.EncodeToString(sum[:]), HeadersSHA256: headersDigest(request.Headers)}
+}
+
+// volatileClaims are the claims of a bearer token that differ between two
+// processes minting the same caller's token.
+var volatileClaims = []string{"iat", "exp", "nbf", "jti"}
+
+// headersDigest is a digest of the request headers that identifies the same
+// request in another process: names are lower-cased and sorted, values are
+// hashed as sent, except a bearer token, which is a different string in every
+// process (it carries its issue time), so it is reduced to its claims minus the
+// volatile ones. A different caller, role or content type is a different digest.
+func headersDigest(headers map[string]string) string {
+	names := make([]string, 0, len(headers))
+	values := map[string]string{}
+	for name, value := range headers {
+		lower := strings.ToLower(name)
+		names = append(names, lower)
+		values[lower] = value
+	}
+	sort.Strings(names)
+	hash := sha256.New()
+	for _, name := range names {
+		value := values[name]
+		if name == "authorization" {
+			value = bearerIdentity(value)
+		}
+		fmt.Fprintf(hash, "%d:%s=%d:%s\n", len(name), name, len(value), value)
+	}
+	return hex.EncodeToString(hash.Sum(nil))
+}
+
+// bearerIdentity reduces "Bearer <jwt>" to the token's claims without the
+// volatile ones, in a canonical order; any other value is returned as is.
+func bearerIdentity(value string) string {
+	token, ok := strings.CutPrefix(value, "Bearer ")
+	if !ok {
+		return value
+	}
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return value
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return value
+	}
+	var claims map[string]any
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return value
+	}
+	for _, name := range volatileClaims {
+		delete(claims, name)
+	}
+	canonical, err := json.Marshal(claims)
+	if err != nil {
+		return value
+	}
+	return "Bearer claims:" + string(canonical)
 }
 
 // Python returns the Python plane's answers to requests: served for real
@@ -220,9 +298,9 @@ func (g *Golden) frozenAnswers(requests []Request) ([]Response, error) {
 	for index, request := range requests {
 		want := requestKey(request)
 		got := g.loaded.Requests[g.served+index]
-		if got.Name != want.Name || got.Method != want.Method || got.Path != want.Path || got.BodySHA256 != want.BodySHA256 {
-			return nil, fmt.Errorf("golden %s request %d is %q %s %s (body %s..); the test sends %q %s %s (body %s..); regenerate: %s",
-				g.spec.Path, g.served+index, got.Name, got.Method, got.Path, got.BodySHA256[:8], want.Name, want.Method, want.Path, want.BodySHA256[:8], g.spec.Recipe)
+		if got.Name != want.Name || got.Method != want.Method || got.Path != want.Path || got.BodySHA256 != want.BodySHA256 || got.HeadersSHA256 != want.HeadersSHA256 {
+			return nil, fmt.Errorf("golden %s request %d is %q %s %s (body %s.., headers %s..); the test sends %q %s %s (body %s.., headers %s..); regenerate: %s",
+				g.spec.Path, g.served+index, got.Name, got.Method, got.Path, short(got.BodySHA256), short(got.HeadersSHA256), want.Name, want.Method, want.Path, short(want.BodySHA256), short(want.HeadersSHA256), g.spec.Recipe)
 		}
 		out[index] = Response{Status: got.Status, Headers: got.Headers, Body: got.Body}
 	}
@@ -255,38 +333,93 @@ func (g *Golden) frozenRows(name string) (string, error) {
 	if !ok {
 		return "", fmt.Errorf("golden %s holds no row comparison %q; regenerate: %s", g.spec.Path, name, g.spec.Recipe)
 	}
+	g.rowsUsed[name] = true
 	return entry.Rows, nil
 }
 
-// Finish ends the test's use of the golden. Recording, it writes the file and
-// prints the digest to pin, and fails the test so a recording run is never
-// mistaken for a proof. Frozen, it writes the Go-only proof naming the build
-// the Python truth was executed on.
+func short(digest string) string {
+	if len(digest) > 8 {
+		return digest[:8]
+	}
+	return digest
+}
+
+// Finish ends the test's use of the golden. Recording, it marks the run
+// complete; the file is written, and the digest to pin printed, by the cleanup
+// OpenGolden registered, after every cleanup the test registered later, and only
+// if the test still has not failed: a recording run always ends failed by design
+// (a recording run is never a proof). Frozen, it requires every recorded answer
+// and row comparison to have been used and writes the Go-only proof naming the
+// build the Python truth was executed on.
 func (g *Golden) Finish(t *testing.T) {
 	t.Helper()
 	if g.recording {
 		if err := g.recordable(t.Failed()); err != nil {
 			t.Fatal(err)
 		}
-		raw, err := json.MarshalIndent(g.recorded, "", "  ")
-		if err != nil {
-			t.Fatal(err)
-		}
-		raw = append(raw, '\n')
-		if err := os.MkdirAll(filepath.Dir(g.spec.Path), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(g.spec.Path, raw, 0o644); err != nil {
-			t.Fatal(err)
-		}
-		sum := sha256.Sum256(raw)
-		t.Fatalf("recorded %s on build %s: pin SHA256 %s in the test and re-run without %s (a recording run is not a proof)",
-			g.spec.Path, g.spec.PythonBuild, hex.EncodeToString(sum[:]), goldenUpdateEnv)
+		g.finished = true
+		return
 	}
 	if err := g.unusedAnswers(); err != nil {
 		t.Fatal(err)
 	}
+	if err := g.unusedRows(); err != nil {
+		t.Fatal(err)
+	}
 	WriteGoOnlyProof(t, "Go against the Python plane's answers executed on build "+g.spec.PythonBuild+" (frozen golden "+filepath.Base(g.spec.Path)+")")
+}
+
+// persist is the recording cleanup: it writes the golden of a run that reached
+// Finish and has not failed since, and fails the test with the digest to pin.
+func (g *Golden) persist(t *testing.T) {
+	t.Helper()
+	digest, written, err := g.writeRecording(t.Failed())
+	switch {
+	case err != nil:
+		t.Errorf("%v", err)
+	case written:
+		t.Errorf("recorded %s on build %s: pin SHA256 %s in the test and re-run without %s (a recording run is not a proof)",
+			g.spec.Path, g.spec.PythonBuild, digest, goldenUpdateEnv)
+	case g.finished:
+		t.Logf("recording %s not written: the run failed after it finished", g.spec.Path)
+	}
+}
+
+// writeRecording writes the recorded file when the run finished and did not
+// fail, and returns its digest.
+func (g *Golden) writeRecording(failed bool) (digest string, written bool, err error) {
+	if !g.recording || !g.finished || failed {
+		return "", false, nil
+	}
+	raw, err := json.MarshalIndent(g.recorded, "", "  ")
+	if err != nil {
+		return "", false, err
+	}
+	raw = append(raw, '\n')
+	if err := os.MkdirAll(filepath.Dir(g.spec.Path), 0o755); err != nil {
+		return "", false, err
+	}
+	if err := os.WriteFile(g.spec.Path, raw, 0o644); err != nil {
+		return "", false, err
+	}
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:]), true, nil
+}
+
+// unusedRows is an error when the frozen file holds row comparisons the test
+// never asked for.
+func (g *Golden) unusedRows() error {
+	var unused []string
+	for name := range g.loaded.Rows {
+		if !g.rowsUsed[name] {
+			unused = append(unused, name)
+		}
+	}
+	if len(unused) > 0 {
+		sort.Strings(unused)
+		return fmt.Errorf("golden %s holds row comparisons the test never used: %s; an unused frozen snapshot is a comparison that no longer happens; regenerate: %s", g.spec.Path, strings.Join(unused, ", "), g.spec.Recipe)
+	}
+	return nil
 }
 
 // StableUUID is a deterministic UUID for name: the same name yields the same

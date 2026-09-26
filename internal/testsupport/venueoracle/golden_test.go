@@ -2,6 +2,7 @@ package venueoracle
 
 import (
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"os"
@@ -183,8 +184,19 @@ func TestPinnedCheckoutMustBeCleanAndAtTheBuild(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("edited\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := verifyPinnedCheckout(dir, head); err == nil || !strings.Contains(err.Error(), "uncommitted changes") {
+	if err := verifyPinnedCheckout(dir, head); err == nil || !strings.Contains(err.Error(), "uncommitted or untracked") {
 		t.Fatalf("a dirty checkout was accepted: %v", err)
+	}
+	run("checkout", "-q", "--", "a.txt")
+	if err := verifyPinnedCheckout(dir, head); err != nil {
+		t.Fatalf("the restored checkout was refused: %v", err)
+	}
+	// An untracked source file is a route the pinned build never had.
+	if err := os.WriteFile(filepath.Join(dir, "untracked_route.py"), []byte("x = 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyPinnedCheckout(dir, head); err == nil || !strings.Contains(err.Error(), "uncommitted or untracked") {
+		t.Fatalf("an untracked file was accepted: %v", err)
 	}
 	if err := verifyPinnedCheckout(t.TempDir(), head); err == nil || !strings.Contains(err.Error(), "not a git checkout") {
 		t.Fatalf("a directory that is no checkout was accepted: %v", err)
@@ -216,4 +228,129 @@ func TestARecordingIsNeverWrittenFromAFailedRun(t *testing.T) {
 	if err := golden.recordable(false); err != nil {
 		t.Fatalf("passing run with answers: error = %v", err)
 	}
+}
+
+func TestAGoldenBelongsToOneTest(t *testing.T) {
+	path, digest := writeGoldenFile(t, t.TempDir(), sampleGolden(sampleRequests()))
+	spec := GoldenSpec{Path: path, PythonBuild: goldenBuild, SHA256: digest, Recipe: "record it"}
+	if _, err := openGolden(spec, "TestSample", false); err != nil {
+		t.Fatalf("the golden's own test was refused: %v", err)
+	}
+	if _, err := openGolden(spec, "TestAnother", false); err == nil || !strings.Contains(err.Error(), "not for") {
+		t.Fatalf("a golden recorded for another test was accepted: %v", err)
+	}
+}
+
+func fakeToken(claims string) string {
+	encode := func(text string) string { return base64.RawURLEncoding.EncodeToString([]byte(text)) }
+	return "Bearer " + encode(`{"alg":"HS256"}`) + "." + encode(claims) + "." + encode("signature")
+}
+
+func TestRequestHeadersAreKeptInTheKeyAndABearerTokenByItsClaims(t *testing.T) {
+	sameCaller := func(claims string) Request {
+		return Request{Name: "a", Method: "GET", Path: "/x", Headers: map[string]string{"Authorization": fakeToken(claims), "Content-Type": "application/json"}}
+	}
+	base := requestKey(sameCaller(`{"sub":"u1","role":"admin","iat":1,"exp":2,"jti":"one"}`)).HeadersSHA256
+	// Another process mints the same caller's token again: issue time, expiry and id differ.
+	if again := requestKey(sameCaller(`{"jti":"two","exp":9,"iat":8,"role":"admin","sub":"u1"}`)).HeadersSHA256; again != base {
+		t.Fatalf("the same caller in another process changed the key:\n%s\n%s", base, again)
+	}
+	for name, changed := range map[string]Request{
+		"another role":         sameCaller(`{"sub":"u1","role":"member","iat":1,"exp":2}`),
+		"another user":         sameCaller(`{"sub":"u2","role":"admin","iat":1,"exp":2}`),
+		"another content type": {Name: "a", Method: "GET", Path: "/x", Headers: map[string]string{"Authorization": fakeToken(`{"sub":"u1","role":"admin"}`), "Content-Type": "text/plain"}},
+		"no authorization":     {Name: "a", Method: "GET", Path: "/x", Headers: map[string]string{"Content-Type": "application/json"}},
+		"a raw authorization":  {Name: "a", Method: "GET", Path: "/x", Headers: map[string]string{"Authorization": "Bearer changed", "Content-Type": "application/json"}},
+	} {
+		if requestKey(changed).HeadersSHA256 == base {
+			t.Errorf("%s did not change the key", name)
+		}
+	}
+	// A golden recorded for one caller refuses a request from another.
+	requests := []Request{sameCaller(`{"sub":"u1","role":"admin","iat":1}`)}
+	path, digest := writeGoldenFile(t, t.TempDir(), sampleGolden(requests))
+	golden, err := openGolden(GoldenSpec{Path: path, PythonBuild: goldenBuild, SHA256: digest, Recipe: "record it"}, "TestSample", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := golden.frozenAnswers([]Request{sameCaller(`{"sub":"u1","role":"member","iat":1}`)}); err == nil || !strings.Contains(err.Error(), "regenerate") {
+		t.Fatalf("header drift was accepted: %v", err)
+	}
+}
+
+func TestAFrozenSnapshotNobodyAskedForIsRefused(t *testing.T) {
+	requests := sampleRequests()
+	path, digest := writeGoldenFile(t, t.TempDir(), sampleGolden(requests))
+	golden, err := openGolden(GoldenSpec{Path: path, PythonBuild: goldenBuild, SHA256: digest, Recipe: "record it"}, "TestSample", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := golden.frozenAnswers(requests); err != nil {
+		t.Fatal(err)
+	}
+	if err := golden.unusedRows(); err == nil || !strings.Contains(err.Error(), "rows") {
+		t.Fatalf("an unused row snapshot was accepted: %v", err)
+	}
+	if _, err := golden.frozenRows("rows"); err != nil {
+		t.Fatal(err)
+	}
+	if err := golden.unusedRows(); err != nil {
+		t.Fatalf("every snapshot used: %v", err)
+	}
+}
+
+func TestARecordingIsWrittenOnlyByARunThatFinishedAndDidNotFailSince(t *testing.T) {
+	dir := t.TempDir()
+	newRecording := func() *Golden {
+		golden, err := openGolden(GoldenSpec{Path: filepath.Join(dir, "sub", "g.json"), PythonBuild: goldenBuild, Recipe: "record it"}, "TestSample", true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		golden.recorded.Requests = []goldenRequest{{Name: "a"}}
+		return golden
+	}
+	unfinished := newRecording()
+	if _, written, err := unfinished.writeRecording(false); written || err != nil {
+		t.Fatalf("a run that never reached Finish wrote a golden (%v, %v)", written, err)
+	}
+	failedLater := newRecording()
+	failedLater.finished = true
+	if _, written, err := failedLater.writeRecording(true); written || err != nil {
+		t.Fatalf("a run that failed after Finish (a later cleanup) wrote a golden (%v, %v)", written, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "sub", "g.json")); err == nil {
+		t.Fatal("a golden is on disk that no passing run wrote")
+	}
+	good := newRecording()
+	good.finished = true
+	digest, written, err := good.writeRecording(false)
+	if err != nil || !written || len(digest) != 64 {
+		t.Fatalf("a finished passing run did not write: %q %v %v", digest, written, err)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "sub", "g.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(raw)
+	if hex.EncodeToString(sum[:]) != digest {
+		t.Fatal("the printed digest is not the digest of the file written")
+	}
+}
+
+// The public replay workflow a test uses, from OpenGolden to Finish.
+func TestThePublicFrozenWorkflowEndToEnd(t *testing.T) {
+	t.Setenv(goldenUpdateEnv, "")
+	requests := sampleRequests()
+	file := sampleGolden(requests)
+	file.Header.Test = t.Name()
+	path, digest := writeGoldenFile(t, t.TempDir(), file)
+	golden := OpenGolden(t, GoldenSpec{Path: path, PythonBuild: goldenBuild, SHA256: digest, Recipe: "record it"})
+	answers := golden.Python(t, nil, requests)
+	if len(answers) != 2 || answers[1].Status != 201 {
+		t.Fatalf("answers = %+v", answers)
+	}
+	if got := golden.Rows(t, "rows", func() string { t.Fatal("frozen replay must not read the source database"); return "" }); got != "a | b" {
+		t.Fatalf("rows = %q", got)
+	}
+	golden.Finish(t)
 }

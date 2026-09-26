@@ -362,7 +362,11 @@ def _weights(path: Path = WEIGHTS_FILE) -> list[tuple[str, str, int]]:
     for line in path.read_text(encoding="utf-8").splitlines():
         if not line.strip() or line.lstrip().startswith("#"):
             continue
-        package, test, seconds = line.split("\t")
+        package, test, seconds, *marker = line.split("\t")
+        # The generator's fourth column: `unmeasured` (planned provisionally).
+        assert marker in ([], ["unmeasured"]), (
+            f"unknown weights column {marker} in {line!r}"
+        )
         rows.append((package, test, int(seconds)))
     return rows
 
@@ -590,3 +594,27 @@ def test_an_unmeasured_row_is_planned_pessimistically() -> None:
                 )
             else:
                 assert marker == [], f"unknown weights column {marker} in {line!r}"
+
+
+def test_the_weights_parser_reads_a_generator_written_unmeasured_row(
+    tmp_path: Path,
+) -> None:
+    # CHAOS-6905: ci/venue_oracle_weights.py writes a fourth column, `unmeasured`,
+    # for a row no run log has measured; a parser that unpacks exactly three
+    # columns failed every PR that regenerated the file with such a row.
+    weights = tmp_path / "weights.tsv"
+    weights.write_text(
+        "# header\ninternal/a\tTestA\t12\ninternal/b\tTestNew\t600\tunmeasured\n",
+        encoding="utf-8",
+    )
+    assert _weights(weights) == [
+        ("internal/a", "TestA", 12),
+        ("internal/b", "TestNew", 600),
+    ]
+    weights.write_text("internal/a\tTestA\t12\tsomething-else\n", encoding="utf-8")
+    try:
+        _weights(weights)
+    except AssertionError as error:
+        assert "unknown weights column" in str(error)
+    else:
+        raise AssertionError("an unknown fourth column must be refused, not ignored")

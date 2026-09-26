@@ -71,15 +71,6 @@ internal/joboperator/postgres_integration_test.go	worker_job_completion_fences	P
 internal/joboperator/postgres_integration_test.go	worker_job_delivery_abandonments	PROBE	
 internal/joboperator/postgres_integration_test.go	worker_job_outbox	INVENTED	state
 internal/joboperator/postgres_integration_test.go	worker_job_runs	PROBE	
-internal/joboutbox/relay_integration_test.go	integrations	SUBSET	
-internal/joboutbox/relay_integration_test.go	sync_run_units	SUBSET	
-internal/joboutbox/relay_integration_test.go	sync_runs	SUBSET	
-internal/joboutbox/strand_repair_integration_test.go	daily_metrics_partitions	SUBSET	
-internal/joboutbox/strand_repair_integration_test.go	daily_metrics_runs	SUBSET	
-internal/jobroute/control_integration_test.go	sync_run_units	SUBSET	
-internal/jobroute/control_integration_test.go	worker_job_outbox	SUBSET	
-internal/jobroute/control_integration_test.go	worker_job_runs	SUBSET	
-internal/providerfoundation/pagerduty_oauth_postgres_integration_test.go	provider_oauth_credentials	SUBSET	
 internal/reconcilerservice/sync_dispatch_reference_integration_test.go	sync_dispatch_outbox	SUBSET	
 internal/reconcilerservice/sync_dispatch_reference_integration_test.go	sync_runs	SUBSET	
 internal/storage/postgres/api_authorization_integration_test.go	external_ingest_sources	SUBSET	
@@ -399,9 +390,6 @@ internal/syncreconciler/unreclaimable_sweep_integration_test.go	worker_job_outbo
 internal/syncreconciler/unreclaimable_sweep_role_split_integration_test.go	integration_sources	SUBSET	
 internal/syncreconciler/unreclaimable_sweep_role_split_integration_test.go	integrations	SUBSET	
 internal/syncreconciler/unreclaimable_sweep_role_split_integration_test.go	worker_job_outbox	SUBSET	
-internal/syncroute/control_integration_test.go	sync_dispatch_outbox	SUBSET	
-internal/syncroute/control_integration_test.go	sync_dispatch_transport_routes	SUBSET	
-internal/syncroute/fence_integration_test.go	sync_dispatch_transport_routes	SUBSET	
 internal/workerservice/multi_replica_integration_test.go	org_licenses	SUBSET	
 internal/workerservice/multi_replica_integration_test.go	organizations	SUBSET	
 internal/workerservice/multi_replica_integration_test.go	provider_rate_limit_observations	SUBSET	

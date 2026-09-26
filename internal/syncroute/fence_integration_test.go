@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -39,27 +41,17 @@ func startFenceSchemaPostgres(t *testing.T, ctx context.Context) *pgxpool.Pool {
 	}
 	t.Cleanup(pool.Close)
 
-	if _, err := pool.Exec(ctx, `
-		CREATE TABLE public.sync_dispatch_transport_routes (
-			kind text PRIMARY KEY, transport text NOT NULL, generation bigint NOT NULL,
-			paused boolean NOT NULL, paused_at timestamptz, rollback_transport text NOT NULL,
-			updated_at timestamptz NOT NULL
-		)`); err != nil {
-		t.Fatal(err)
-	}
+	// The migrated schema: the routes table with its real constraints and trigger, seeded by the
+	// migrations (every kind on celery, generation 2, rollback none).
+	pgschema.Apply(ctx, t, pool)
 	return pool
 }
 
+// insertFenceRoute puts a kind's route into the given state. The migrations already seed every kind
+// and a trigger demands a generation increase for a state change, so generation is a minimum.
 func insertFenceRoute(t *testing.T, ctx context.Context, pool *pgxpool.Pool, kind, transport, rollbackTransport string, generation int64) {
 	t.Helper()
-	if _, err := pool.Exec(ctx, `
-		INSERT INTO public.sync_dispatch_transport_routes
-			(kind, transport, generation, paused, paused_at, rollback_transport, updated_at)
-		VALUES ($1, $2, $3, FALSE, NULL, $4, NOW())`,
-		kind, transport, generation, rollbackTransport,
-	); err != nil {
-		t.Fatal(err)
-	}
+	pgseed.SyncTransportRoute(ctx, t, pool, kind, transport, generation, false, rollbackTransport)
 }
 
 // TestFenceAgainstMigratedPostgres proves the fence's real SQL executes

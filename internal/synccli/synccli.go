@@ -30,6 +30,7 @@ import (
 	platformconfig "github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 )
 
@@ -77,6 +78,8 @@ type deps struct {
 	newClient func(gatewayURL string, auth atlassian.AuthProvider) atlassianteams.Client
 	openStore func(ctx context.Context, dsn string) (driver.Conn, error)
 	now       func() time.Time
+	// doer is the HTTP client of a catalog provider (nil: a 45 s client); tests replace it.
+	doer providerfoundation.HTTPDoer
 }
 
 func defaultDeps() deps {
@@ -101,7 +104,9 @@ func runTeams(ctx context.Context, env cli.Env, d deps) int {
 	flags := flag.NewFlagSet("dho sync teams", flag.ContinueOnError)
 	flags.SetOutput(env.Stderr)
 	flags.Usage = func() { fmt.Fprint(env.Stderr, teamsUsage) }
-	provider := flags.String("provider", "", "the team source: jira")
+	provider := flags.String("provider", "", "the team source: jira or github")
+	owner := flags.String("owner", "", "the GitHub organization (github)")
+	auth := flags.String("auth", "", "the provider token (github; else GITHUB_TOKEN)")
 	org := flags.String("org", "", "the organization id the rows are written under")
 	structure := flags.Bool("structure", false, "sync the teams")
 	members := flags.Bool("members", false, "sync team memberships")
@@ -117,8 +122,8 @@ func runTeams(ctx context.Context, env cli.Env, d deps) int {
 		fmt.Fprintln(env.Stderr, "argument error: positional arguments are not accepted")
 		return cli.ExitUsage
 	}
-	if *provider != "jira" {
-		fmt.Fprintln(env.Stderr, "argument error: --provider must be jira")
+	if *provider != "jira" && !isCatalogProvider(*provider) {
+		fmt.Fprintln(env.Stderr, "argument error: --provider must be jira or github")
 		return cli.ExitUsage
 	}
 	orgID := strings.TrimSpace(*org)
@@ -134,6 +139,20 @@ func runTeams(ctx context.Context, env cli.Env, d deps) int {
 		env.Lookup = func(string) (string, bool) { return "", false }
 	}
 
+	if isCatalogProvider(*provider) {
+		dsn, configured, err := platformconfig.ResolveDSN(env.Lookup, ClickHouseURIKey, platformconfig.ClickHouseSpec)
+		if err != nil || !configured {
+			detail := ClickHouseURIKey + " is not set"
+			if err != nil {
+				detail = err.Error()
+			}
+			return writeError(env.Stderr, cli.ExitRefused, "configuration", detail)
+		}
+		return runCatalogTeams(ctx, env, d, catalogRequest{
+			provider: *provider, orgID: orgID, owner: *owner, auth: *auth, allowEmpty: *allowEmpty,
+			structure: selections.Structure, members: selections.Members, dsn: dsn.Reveal(),
+		})
+	}
 	settings, err := readSettings(env.Lookup)
 	if err != nil {
 		return writeError(env.Stderr, cli.ExitRefused, "configuration", err.Error())

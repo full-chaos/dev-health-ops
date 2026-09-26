@@ -58,7 +58,7 @@ const reconcileFixturesSHA256 = "46605af8e388443b75c23f532e65e1459ce5938b445ba44
 // producer is deleted with the Python CLI, so this is a rot guard: the file is only
 // rewritten by TestBillingReconcileMatchesThePythonProducer with
 // DHO_RECONCILE_GOLDEN_UPDATE=1, then this digest is updated.
-const reconcileGoldenSHA256 = "67548ce6edc27fbddc75757f7eceb4b66e4dd5aec048cebc34a88ecbc63cba1e"
+const reconcileGoldenSHA256 = "5c5dba13ae8b39070740c249eecef0853f8c11f2cd384db53998fe1fd104b175"
 
 // reconcileFixtureProgram builds every Stripe object with the SDK's own classes and
 // prints them as JSON: stdin is empty, stdout the fixture document.
@@ -134,6 +134,10 @@ type reconcileStripe struct {
 	fixtures reconcileFixtureSet
 	calls    []string
 	failing  string
+	// failingLater refuses this path's listing from its second page on: rows already
+	// read are dropped with the rest, as Python drops them (the whole listing is one
+	// try block).
+	failingLater string
 }
 
 func (f *reconcileStripe) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -161,7 +165,7 @@ func (f *reconcileStripe) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, `{"error": {"message": "unrouted fake call", "type": "invalid_request_error"}}`)
 		return
 	}
-	if f.failing == r.URL.Path {
+	if f.failing == r.URL.Path || (f.failingLater == r.URL.Path && r.URL.Query().Get("starting_after") != "") {
 		stripeFail(w, "listing refused")
 		return
 	}
@@ -191,8 +195,9 @@ type reconcileStep struct {
 	noKey bool
 	sql   string
 	seed  bool
-	// failing refuses the listing of this Stripe path for the step.
-	failing string
+	// failing refuses the listing of this Stripe path for the step; failingLater
+	// only from its second page on.
+	failing, failingLater string
 }
 
 func rs(args ...string) reconcileStep { return reconcileStep{args: args} }
@@ -268,6 +273,9 @@ var reconcileScript = []reconcileStep{
 	{args: []string{"reconcile"}, failing: "/v1/invoices"},
 	{args: []string{"reconcile", "--org-id", recOrgA}, failing: "/v1/subscriptions"},
 	{args: []string{"reconcile", "--since", "2026-06-01"}, failing: "/v1/refunds"},
+	// A later page is refused: the rows of the earlier pages are dropped too.
+	{args: []string{"reconcile"}, failingLater: "/v1/subscriptions"},
+	{args: []string{"reconcile", "--org-id", recOrgB}, failingLater: "/v1/invoices"},
 	// Arguments and configuration.
 	{args: []string{"reconcile"}, noKey: true},
 	rs("reconcile", "--org-id", "not-a-uuid"),
@@ -423,7 +431,7 @@ func reconcileSession(t *testing.T, python bool) []reconcileResult {
 		}
 		fake.mu.Lock()
 		fake.calls = nil
-		fake.failing = s.failing
+		fake.failing, fake.failingLater = s.failing, s.failingLater
 		fake.mu.Unlock()
 		var code int
 		var stdout string

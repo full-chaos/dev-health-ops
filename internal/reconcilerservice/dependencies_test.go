@@ -990,15 +990,16 @@ func (recorder *fakeReconcilerRecorder) Shutdown(context.Context) error {
 }
 
 type fakeReconcilerDatabase struct {
-	domainErr          error
-	queueErr           error
-	coordinatorErr     error
-	schemaErr          error
-	postureLockstepErr error
-	domainPool         *pgxpool.Pool
-	queuePool          *pgxpool.Pool
-	coordinatorPool    *pgxpool.Pool
-	closed             atomic.Bool
+	domainErr            error
+	domainTransactionErr error
+	queueErr             error
+	coordinatorErr       error
+	schemaErr            error
+	postureLockstepErr   error
+	domainPool           *pgxpool.Pool
+	queuePool            *pgxpool.Pool
+	coordinatorPool      *pgxpool.Pool
+	closed               atomic.Bool
 }
 
 func (database *fakeReconcilerDatabase) PostureManifestLockstep(
@@ -1019,7 +1020,9 @@ func (database *fakeReconcilerDatabase) DomainReady(context.Context) error {
 }
 
 // DomainTransactionReady is healthy by default.
-func (database *fakeReconcilerDatabase) DomainTransactionReady(context.Context) error { return nil }
+func (database *fakeReconcilerDatabase) DomainTransactionReady(context.Context) error {
+	return database.domainTransactionErr
+}
 
 func (database *fakeReconcilerDatabase) QueueReady(context.Context) error {
 	return database.queueErr

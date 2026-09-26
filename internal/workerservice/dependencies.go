@@ -987,15 +987,18 @@ func configureWorkerDependenciesWithSources(
 		{name: "domain_transaction", check: dependencies.domainTransactionReady},
 		// execution_liveness (CHAOS-4029, CHAOS-6818): real WORK evidence only.
 		// claimLivenessReady: a real job actually reached its handler recently,
-		// OR every selected queue is confirmed empty (or at capacity) right now.
-		// The ticking DB self-probe on the work pool that used to be the first
-		// half is removed: a probe cannot tell "the work pool is busy" from "the
-		// work pool is broken". Brokenness is evidence from the work itself: a
-		// job that fails at the idempotency Begin (a stale or recreated pooler,
-		// the 2026-08-20 incident) never reaches its handler, so a queue with
+		// OR every selected queue is confirmed empty right now, OR every running
+		// slot of a full queue is inside a handler (long work). The ticking DB
+		// self-probe on the work pool that used to be the first half is removed:
+		// a probe cannot tell "the work pool is busy" from "the work pool is
+		// broken". Brokenness is evidence from the work itself: a job that fails
+		// or stalls at the idempotency Begin (a stale or recreated pooler, the
+		// 2026-08-20 incident) never reaches its handler, so a queue with
 		// available jobs and no handler invocation inside the staleness window
-		// turns this red -- N failures with zero successes, counted by the only
-		// signal that cannot be faked by a probe.
+		// turns this red, and so does a slot that stays stuck before its handler
+		// with no handler activity on the queue even when nothing is waiting
+		// behind it -- counted by the only signal that cannot be faked by a
+		// probe.
 		{name: "execution_liveness", check: dependencies.claimLivenessReady(claim)},
 	}
 	for _, check := range checks {

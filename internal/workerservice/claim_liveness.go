@@ -41,6 +41,12 @@ type claimLiveness struct {
 	// BEFORE their handler. That difference is what lets a full queue stay
 	// healthy for long-running jobs yet still turn red for a stale pooler.
 	inHandler map[string]int64
+	// preHandlerSince is, per queue, when the CURRENT unbroken run of
+	// observations began in which at least one running slot was not inside a
+	// handler (Running > inHandler). It is written only by preHandlerStuckFor,
+	// from the readiness poll, and cleared the moment a poll sees every running
+	// slot inside a handler (or none running).
+	preHandlerSince map[string]time.Time
 	// staleWindow defaults to claimStalenessWindow in newClaimLiveness.
 	// Exposed via SetStaleWindow so a test can shrink it from the
 	// production 60s to a real-but-small duration (mirroring
@@ -159,6 +165,33 @@ func (c *claimLiveness) handlerReturned(queue string, now time.Time) {
 	}
 	c.mu.Unlock()
 	c.recordClaim(queue, now)
+}
+
+// preHandlerStuckFor reports how long queue has CONTINUOUSLY had a running slot
+// that is not inside a handler, as seen by successive readiness polls; zero when
+// every running slot is inside a handler (or none is running), and on the first
+// observation. It exists for the case the backlog check cannot see (CHAOS-6818
+// r2c): the only claimed job stalls at its idempotency Begin on a stale pooler,
+// River counts it running, and nothing is available, so there is no backlog to
+// fail on. A single observation proves nothing (a job is always briefly between
+// claim and handler), so callers require BOTH a long unbroken run and no handler
+// activity on the queue for the staleness window.
+func (c *claimLiveness) preHandlerStuckFor(queue string, running int64, now time.Time) time.Duration {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if running <= c.inHandler[queue] {
+		delete(c.preHandlerSince, queue)
+		return 0
+	}
+	if c.preHandlerSince == nil {
+		c.preHandlerSince = make(map[string]time.Time, 1)
+	}
+	first, observed := c.preHandlerSince[queue]
+	if !observed {
+		c.preHandlerSince[queue] = now
+		return 0
+	}
+	return now.Sub(first)
 }
 
 func (c *claimLiveness) handlersInside(queue string) int64 {
@@ -292,6 +325,10 @@ func (observer claimLivenessObserver) HandlerReturned(_ context.Context, labels 
 	}
 }
 
+var errClaimLivenessSlotStuckBeforeHandler = errors.New(
+	"a running job slot has been stuck before its handler and no handler has run on this queue",
+)
+
 var errClaimLivenessStalledWithBacklog = errors.New(
 	"no job has been claimed recently and this queue has available work with idle capacity to claim it",
 )
@@ -371,6 +408,20 @@ func (dependencies *workerDependencies) claimLivenessReady(claim *claimLiveness)
 		}
 		now := time.Now()
 		preclaim := claim.inPreclaim()
+		if !preclaim {
+			// A slot stuck before its handler with nothing waiting behind it
+			// (CHAOS-6818 r2c): judged whether or not the queue has a backlog.
+			// Both conditions are required so that a busy healthy queue (every
+			// poll catches some job between claim and handler, but handlers keep
+			// running) and a sparse one (a job claimed a moment ago after an
+			// idle hour) never flip.
+			for _, capacity := range snapshot.QueueCapacities {
+				stuck := claim.preHandlerStuckFor(capacity.Queue, capacity.Running, now)
+				if stuck > claim.staleness() && claim.since(capacity.Queue, now) > claim.staleness() {
+					return fmt.Errorf("%w: queue %q", errClaimLivenessSlotStuckBeforeHandler, capacity.Queue)
+				}
+			}
+		}
 		for _, job := range snapshot.Jobs {
 			if job.Available <= 0 {
 				continue // this queue is confirmed empty right now: idle, not broken.

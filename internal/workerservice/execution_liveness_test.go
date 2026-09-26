@@ -312,7 +312,7 @@ func TestExecutionLivenessCatchesAWedgedConsumerWithAHealthyDatabase(t *testing.
 // readiness flips inside the (shrunk) window with domain_transaction still green,
 // and recovers the moment a job reaches its handler again.
 func TestARecreatedPoolerFlipsReadinessThroughFailingJobsWithinTheWindow(t *testing.T) {
-	runRecreatedPoolerScenario(t, nil)
+	runRecreatedPoolerScenario(t, nil, 5)
 }
 
 // CHAOS-6818 r1b P1: the same scenario with the queue FULL. River counts a job
@@ -322,10 +322,20 @@ func TestARecreatedPoolerFlipsReadinessThroughFailingJobsWithinTheWindow(t *test
 func TestARecreatedPoolerFlipsReadinessEvenWhenEveryClaimSlotIsRunning(t *testing.T) {
 	runRecreatedPoolerScenario(t, []riverstore.QueueCapacityTelemetry{
 		{Queue: "heartbeat", Capacity: 1, Running: 1, Saturation: 1},
-	})
+	}, 5)
 }
 
-func runRecreatedPoolerScenario(t *testing.T, capacities []riverstore.QueueCapacityTelemetry) {
+// CHAOS-6818 r2c P1: the same, with NO available jobs. The only job is already
+// claimed (River counts it running) and stalls at its idempotency Begin on the
+// stale pooler, so the backlog is zero while the slot is stuck before its
+// handler. `Available <= 0` used to skip the queue before that was looked at.
+func TestARecreatedPoolerFlipsReadinessWhenTheOnlyClaimedJobIsStuckAndNothingIsAvailable(t *testing.T) {
+	runRecreatedPoolerScenario(t, []riverstore.QueueCapacityTelemetry{
+		{Queue: "heartbeat", Capacity: 1, Running: 1, Saturation: 1},
+	}, 0)
+}
+
+func runRecreatedPoolerScenario(t *testing.T, capacities []riverstore.QueueCapacityTelemetry, available int64) {
 	t.Helper()
 	t.Chdir(filepath.Join("..", ".."))
 	queues := []string{"coverage", "heartbeat", "retention", "webhooks"}
@@ -412,7 +422,7 @@ func runRecreatedPoolerScenario(t *testing.T, capacities []riverstore.QueueCapac
 	// The pooler is recreated: established connections die, jobs are waiting.
 	workServer.DropConnections(true)
 	telemetry.setSnapshot(riverstore.QueueTelemetrySnapshot{
-		Jobs:            []riverstore.QueueJobTelemetry{{Queue: "heartbeat", Kind: "system.heartbeat", Available: 5}},
+		Jobs:            []riverstore.QueueJobTelemetry{{Queue: "heartbeat", Kind: "system.heartbeat", Available: available}},
 		QueueCapacities: capacities,
 	})
 	deadline := time.Now().Add(3 * time.Second)

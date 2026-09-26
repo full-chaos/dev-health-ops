@@ -545,3 +545,119 @@ func TestClaimLivenessReadyRefusesOnFirstAttemptWhenGenuinelyFailed(t *testing.T
 		t.Fatal("ready() error unexpectedly classifies as a deadline -- a genuine failure must not be retryable")
 	}
 }
+
+// CHAOS-6818 r2c P1: a slot stuck before its handler with NOTHING available.
+func stuckSlotReady(t *testing.T, claim *claimLiveness, running int64) error {
+	t.Helper()
+	dependencies := &workerDependencies{
+		queueTelemetryRequired: true,
+		queueTelemetry: &fakeQueueTelemetry{snapshot: riverstore.QueueTelemetrySnapshot{
+			Jobs:            []riverstore.QueueJobTelemetry{{Queue: "sync", Kind: "sync.dispatch", Available: 0}},
+			QueueCapacities: []riverstore.QueueCapacityTelemetry{{Queue: "sync", Capacity: 1, Running: running}},
+		}},
+	}
+	return dependencies.claimLivenessReady(claim)(context.Background())
+}
+
+func TestClaimLivenessFailsAStuckSlotWithNothingAvailable(t *testing.T) {
+	t.Parallel()
+	claim := &claimLiveness{}
+	claim.SetStaleWindow(60 * time.Millisecond)
+	claim.recordClaim("sync", time.Now().Add(-time.Hour)) // no handler activity for an hour
+	// The first observation proves nothing: a job is briefly between claim and handler.
+	if err := stuckSlotReady(t, claim, 1); err != nil {
+		t.Fatalf("first observation of a claimed job must not fail: %v", err)
+	}
+	time.Sleep(90 * time.Millisecond)
+	if err := stuckSlotReady(t, claim, 1); !errors.Is(err, errClaimLivenessSlotStuckBeforeHandler) {
+		t.Fatalf("a slot stuck before its handler past the window with no handler activity = %v, want errClaimLivenessSlotStuckBeforeHandler", err)
+	}
+	// Heals the moment the slot reaches its handler (which is also handler activity).
+	claim.handlerInvoked("sync", time.Now())
+	if err := stuckSlotReady(t, claim, 1); err != nil {
+		t.Fatalf("after the slot reached its handler: %v", err)
+	}
+}
+
+// A job just claimed on a queue that was idle for an hour: the claim clock is
+// stale but the slot has only just been seen, so it must not fail.
+func TestClaimLivenessDoesNotFailAJustClaimedJobOnASparseQueue(t *testing.T) {
+	t.Parallel()
+	claim := &claimLiveness{}
+	claim.SetStaleWindow(60 * time.Millisecond)
+	claim.recordClaim("sync", time.Now().Add(-time.Hour))
+	for i := 0; i < 3; i++ {
+		if err := stuckSlotReady(t, claim, 1); err != nil {
+			t.Fatalf("poll %d of a fresh claim: %v", i, err)
+		}
+		// Each poll sees the job finish (Running 0) before the next one claims.
+		if err := stuckSlotReady(t, claim, 0); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(30 * time.Millisecond)
+	}
+}
+
+// A busy healthy queue: every poll catches some job between claim and handler
+// for far longer than the window, but handlers keep running, so the claim clock
+// stays fresh and readiness must hold.
+func TestClaimLivenessDoesNotFailABusyQueueWhoseHandlersKeepRunning(t *testing.T) {
+	t.Parallel()
+	claim := &claimLiveness{}
+	claim.SetStaleWindow(60 * time.Millisecond)
+	deadline := time.Now().Add(250 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		claim.recordClaim("sync", time.Now()) // a handler ran a moment ago
+		if err := stuckSlotReady(t, claim, 1); err != nil {
+			t.Fatalf("a busy queue with fresh handler activity failed: %v", err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// A long job inside its handler is never "stuck before the handler".
+func TestClaimLivenessDoesNotFailALongJobInsideItsHandler(t *testing.T) {
+	t.Parallel()
+	claim := &claimLiveness{}
+	claim.SetStaleWindow(60 * time.Millisecond)
+	claim.handlerInvoked("sync", time.Now().Add(-time.Hour))
+	for i := 0; i < 4; i++ {
+		if err := stuckSlotReady(t, claim, 1); err != nil {
+			t.Fatalf("poll %d with the running job inside its handler: %v", i, err)
+		}
+		time.Sleep(40 * time.Millisecond)
+	}
+}
+
+// The unbroken-run rule: a poll that sees the slot inside a handler (or gone)
+// restarts the clock, so two short stuck spells never add up to one long one.
+func TestClaimLivenessStuckRunMustBeUnbroken(t *testing.T) {
+	t.Parallel()
+	claim := &claimLiveness{}
+	claim.SetStaleWindow(80 * time.Millisecond)
+	claim.recordClaim("sync", time.Now().Add(-time.Hour))
+	if err := stuckSlotReady(t, claim, 1); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if err := stuckSlotReady(t, claim, 0); err != nil { // the job finished: run broken
+		t.Fatal(err)
+	}
+	time.Sleep(50 * time.Millisecond) // 100 ms since the first sighting, > the 80 ms window
+	if err := stuckSlotReady(t, claim, 1); err != nil {
+		t.Fatalf("a run broken by a poll that saw no stuck slot must restart, got %v", err)
+	}
+}
+
+// No claim can exist before River starts: never fail on preclaim.
+func TestClaimLivenessStuckSlotIsIgnoredInPreclaim(t *testing.T) {
+	t.Parallel()
+	claim := newClaimLiveness(time.Now().Add(-time.Hour), []string{"sync"})
+	claim.SetStaleWindow(30 * time.Millisecond)
+	for i := 0; i < 3; i++ {
+		if err := stuckSlotReady(t, claim, 1); err != nil {
+			t.Fatalf("preclaim poll %d: %v", i, err)
+		}
+		time.Sleep(40 * time.Millisecond)
+	}
+}

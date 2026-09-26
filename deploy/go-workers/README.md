@@ -237,7 +237,11 @@ missing is two check FAMILIES no existing dependency probe reproduced:
    and so is a full queue whose every running slot is inside a handler (long
    jobs). A full queue with a slot stuck BEFORE its handler (River counts it as
    running) is not healthy: `HandlerReturned` pairs `HandlerInvoked` so the
-   check can tell. `HandlerInvoked` fires only after every pre-handler gate,
+   check can tell. The same holds with NO backlog (the only claimed job stalls at
+   its `Begin`): a slot seen stuck before its handler on every poll for longer
+   than the window, with no handler activity on the queue for that window, turns
+   it red; a job merely between claim and handler, or a busy queue whose handlers
+   keep running, never does. `HandlerInvoked` fires only after every pre-handler gate,
    including the idempotency claim's `Begin` on the WORK pool, so **a job that
    fails at `Begin` produces no evidence: failing jobs are how a stale or
    recreated pooler (CHAOS-4029) turns readiness red**. This replaced the

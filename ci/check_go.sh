@@ -62,7 +62,7 @@ GO_ENV_OFF=(env -u GO_PROVIDER_ROUTES -u DEV_HEALTH_ENV -u GOFLAGS -u GOEXPERIME
 # session and ONE Ryuk reaper. When one package's process exits, Ryuk reaps the
 # session's containers after its 10 s reconnection timeout -- including a
 # SIBLING package's live container. Seen on shard 3: internal/admincli
-# TestSeedMatchesPython lost its Postgres ~10 s after internal/api/externalingest
+# TestSeedVenueOracleMatchesThePythonProducer lost its Postgres ~10 s after internal/api/externalingest
 # exited (`unexpected postmaster exit`, `No such container`, then the Python
 # leg's `Connect call failed`). Reproduced with two throwaway packages in one
 # `go test -p 2` run: the long-lived one is refused ~10 s after the short one

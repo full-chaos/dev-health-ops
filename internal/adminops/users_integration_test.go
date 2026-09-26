@@ -124,6 +124,8 @@ type stepResult struct {
 	Exit   int      `json:"exit"`
 	Stdout string   `json:"stdout"`
 	State  string   `json:"state"`
+	// Stderr is what a run said on stderr, normalized (service-credentials steps only).
+	Stderr string `json:"stderr,omitempty"`
 }
 
 type database struct {

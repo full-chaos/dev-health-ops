@@ -136,9 +136,11 @@ func TestMigrateRolesFailsLoudlyOnAnOverPrivilegedPreExistingRoleAndCheckChanges
 	}
 }
 
-// r1 P1: through the real command, a role name with leading/trailing spaces is
-// provisioned under EXACTLY that name (the script took its variables verbatim).
-func TestMigrateRolesUsesRoleNamesExactlyAsConfigured(t *testing.T) {
+// r1/r1b P1: through the real command a role name is used EXACTLY as configured.
+// A runtime role `dho migrate river` would refuse (spaces, upper case, dots) is
+// refused UP FRONT, naming the rule and creating nothing; the KEDA login, which
+// river never reads, is provisioned under exactly its odd name.
+func TestMigrateRolesUsesRoleNamesExactlyAsConfiguredAndRefusesWhatRiverWouldRefuse(t *testing.T) {
 	ctx := context.Background()
 	instance, err := containers.StartPostgres(ctx)
 	if err != nil {
@@ -150,29 +152,46 @@ func TestMigrateRolesUsesRoleNamesExactlyAsConfigured(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(admin.Close)
-	names := []string{` Edge Domain "quoted "`, "Queue.Exact ", " coord"}
 	settings := map[string]string{
 		"MIGRATION_DATABASE_URI":              instance.URI,
-		"RIVER_DOMAIN_DATABASE_ROLE":          names[0],
-		"RIVER_QUEUE_DATABASE_ROLE":           names[1],
-		"RIVER_COORDINATOR_DATABASE_ROLE":     names[2],
+		"RIVER_DOMAIN_DATABASE_ROLE":          " Edge Domain \"quoted \"",
+		"RIVER_QUEUE_DATABASE_ROLE":           "q_exact",
+		"RIVER_COORDINATOR_DATABASE_ROLE":     "c_exact",
 		"RIVER_DOMAIN_DATABASE_PASSWORD":      "exact-pw-1",
 		"RIVER_QUEUE_DATABASE_PASSWORD":       "exact-pw-2",
 		"RIVER_COORDINATOR_DATABASE_PASSWORD": "exact-pw-3",
 	}
 	lookup := func(key string) (string, bool) { value, ok := settings[key]; return value, ok }
 	var stdout, stderr bytes.Buffer
+	code := rivermigrate.ExecuteRoles(ctx, "dho", nil, lookup, &stdout, &stderr)
+	if code != 1 || !strings.Contains(stderr.String(), "[a-z_][a-z0-9_]*") {
+		t.Fatalf("a runtime role river would refuse must be refused up front naming the rule: exit %d\n%s\n%s", code, stdout.String(), stderr.String())
+	}
+	var created int
+	if err := admin.QueryRow(ctx, `SELECT count(*) FROM pg_roles WHERE rolname IN ('q_exact', 'c_exact') OR rolname LIKE '%Edge%'`).Scan(&created); err != nil || created != 0 {
+		t.Fatalf("a refused invocation created %d role(s): %v", created, err)
+	}
+
+	// The River schema exists (KEDA reads it); the runtime roles are valid; KEDA is odd.
+	if _, err := admin.Exec(ctx, "CREATE SCHEMA river"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(ctx, "CREATE TABLE river.river_job (id bigint)"); err != nil {
+		t.Fatal(err)
+	}
+	settings["RIVER_DOMAIN_DATABASE_ROLE"] = "d_exact"
+	kedaName := ` Odd Keda "quoted "É.Name `
+	settings["RIVER_KEDA_READONLY_DATABASE_ROLE"] = kedaName
+	settings["RIVER_KEDA_READONLY_PASSWORD"] = "exact-pw-keda"
+	stdout.Reset()
+	stderr.Reset()
 	if code := rivermigrate.ExecuteRoles(ctx, "dho", nil, lookup, &stdout, &stderr); code != cli.ExitOK {
 		t.Fatalf("migrate roles: exit %d\n%s\n%s", code, stdout.String(), stderr.String())
 	}
-	for _, name := range names {
+	for _, name := range []string{"d_exact", "q_exact", "c_exact", kedaName} {
 		var exact bool
 		if err := admin.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = $1)`, name).Scan(&exact); err != nil || !exact {
 			t.Errorf("no role named exactly %q was created: %v", name, err)
 		}
-	}
-	var total int
-	if err := admin.QueryRow(ctx, `SELECT count(*) FROM pg_roles WHERE rolname !~ '^pg_' AND rolname <> current_user`).Scan(&total); err != nil || total != 3 {
-		t.Errorf("exactly the three configured roles must exist (a trimmed twin would make it more or different): %d %v", total, err)
 	}
 }

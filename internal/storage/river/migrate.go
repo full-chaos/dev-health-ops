@@ -798,6 +798,12 @@ func validateRuntimeRolePreflight(
 	return nil
 }
 
+// ValidIdentifier is the ONE rule for a role or schema name this package accepts
+// ([a-z_][a-z0-9_]*, at most 63 bytes). `dho migrate roles` applies it to the runtime
+// roles before it creates them, so it cannot provision a login that `dho migrate
+// river` would then refuse (CHAOS-6901).
+func ValidIdentifier(value string) bool { return validIdentifier(value) }
+
 func validIdentifier(value string) bool {
 	if value == "" || len(value) > 63 {
 		return false

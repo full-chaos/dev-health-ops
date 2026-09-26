@@ -33,6 +33,7 @@ import (
 	"fmt"
 	"strings"
 
+	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
 	"github.com/full-chaos/dev-health-ops/internal/storage/roleacl"
 	"github.com/jackc/pgx/v5"
 )
@@ -124,11 +125,19 @@ func (o Options) Validate() error {
 		}
 		seen[name] = entry.label
 	}
-	if o.Keda.Name != "" {
-		schema := o.schema()
-		if schema == "" || len(schema) > MaxIdentifierBytes || strings.ContainsRune(schema, 0) {
-			return fmt.Errorf("%w: the River schema name is invalid", ErrInvalidOptions)
+	// The runtime roles are the ones `dho migrate river` grants on and refuses by
+	// its own identifier rule, with the misleading "must be distinct" message. A
+	// login this command could create but river then rejects is a dead end, so the
+	// same rule applies here, up front. The KEDA login is never read by river and
+	// stays free-form.
+	for _, entry := range o.configured() {
+		if entry.label != "keda" && !riverstore.ValidIdentifier(entry.role.Name) {
+			return fmt.Errorf("%w: the %s role name must match [a-z_][a-z0-9_]* and be at most %d bytes (the rule `dho migrate river` applies to runtime roles)",
+				ErrInvalidOptions, entry.label, MaxIdentifierBytes)
 		}
+	}
+	if o.Keda.Name != "" && !riverstore.ValidIdentifier(o.schema()) {
+		return fmt.Errorf("%w: the River schema name must match [a-z_][a-z0-9_]* and be at most %d bytes", ErrInvalidOptions, MaxIdentifierBytes)
 	}
 	return nil
 }
@@ -330,6 +339,19 @@ func Verify(ctx context.Context, q roleacl.Querier, options Options) (problems [
 			problems = append(problems, Problem{entry.label, "holds TEMPORARY on the application database"})
 		}
 		if entry.label != "keda" {
+			// The readiness identity check (roleacl.IdentityPredicateSQL) refuses a
+			// role that is a member of another role or owns any object; a green
+			// closing check must not promise what readiness will then refuse.
+			var memberFree, ownsNothing bool
+			if err := q.QueryRow(ctx, `SELECT `+roleacl.MembershipFreeSQL+`, `+roleacl.OwnsNothingSQL, entry.role.Name).Scan(&memberFree, &ownsNothing); err != nil {
+				return nil, nil, fmt.Errorf("%w: cannot read role membership and ownership", ErrProvisioning)
+			}
+			if !memberFree {
+				problems = append(problems, Problem{entry.label, "is a member of another role (readiness refuses it)"})
+			}
+			if !ownsNothing {
+				problems = append(problems, Problem{entry.label, "owns an object (readiness refuses it)"})
+			}
 			if !usage {
 				problems = append(problems, Problem{entry.label, "lacks USAGE on schema public"})
 			}
@@ -349,7 +371,34 @@ func Verify(ctx context.Context, q roleacl.Querier, options Options) (problems [
 			if !readsJobs {
 				problems = append(problems, Problem{entry.label, "cannot SELECT river_job"})
 			}
+			// Read-only means read-only: every privilege the login holds in its own
+			// name must be one of the three Apply grants. Apply, like the script,
+			// never revokes an extra (it would be a guess about someone else's
+			// grant), so an extra is reported here for a human to remove.
+			grants, err := roleacl.Enumerate(ctx, q, entry.role.Name)
+			if err != nil {
+				return nil, nil, fmt.Errorf("%w: cannot enumerate the KEDA role's grants", ErrProvisioning)
+			}
+			for _, grant := range grants {
+				if grant.ViaPublic || grant.Class == "setting" || kedaGrantExpected(grant, database, options.schema()) {
+					continue
+				}
+				problems = append(problems, Problem{entry.label, "holds an unexpected privilege: " + grant.String()})
+			}
 		}
 	}
 	return problems, warnings, nil
+}
+
+// kedaGrantExpected is true for the three grants Apply gives the KEDA login.
+func kedaGrantExpected(grant roleacl.Grant, database, schema string) bool {
+	switch {
+	case grant.Class == "database" && grant.Object == database && grant.Privilege == "CONNECT":
+		return true
+	case grant.Class == "schema" && grant.Object == schema && grant.Privilege == "USAGE":
+		return true
+	case grant.Class == "relation" && grant.Object == schema+".river_job" && grant.Privilege == "SELECT":
+		return true
+	}
+	return false
 }

@@ -420,15 +420,19 @@ func TestVerifyNamesEachBrokenPostconditionAndSeparatesThePublicCreateWarning(t 
 	}
 }
 
-// r1 P1: a role name is used EXACTLY as configured. The script took --set values
-// verbatim, so a name with leading or trailing spaces, quotes, upper case or
-// non-ASCII characters is that exact role; the Go leg must provision the same one.
+// A role name is used EXACTLY as configured. The runtime roles must be names `dho
+// migrate river` accepts ([a-z_][a-z0-9_]*), so the interesting shapes there are a
+// leading underscore, digits and the length limit; the KEDA login is never read by
+// river and stays free-form (spaces, quotes, dots, upper case, non-ASCII), with a
+// password full of quoting hazards. The Go leg must match the script on all of it.
 func TestGoLegMatchesTheScriptForUnusualRoleNames(t *testing.T) {
 	t.Parallel()
 	options := Options{
-		Domain:      Role{` Edge Domain "quoted "`, "pw-1"},
-		Queue:       Role{`Queue.With.Dots`, `p"w'\2`},
-		Coordinator: Role{"Cördénator", "pw-3"},
+		Domain:      Role{"_domain_9", "pw-1"},
+		Queue:       Role{strings.Repeat("q", MaxIdentifierBytes), `p"w'\2`},
+		Coordinator: Role{"c0", "pw\n3"},
+		Keda:        Role{` Edge Keda "quoted "É.Dots`, "k'e\"d\\a"},
+		RiverSchema: "river",
 	}
 	script, golang := startSide(t), startSide(t)
 	script.runScript(t, options)
@@ -440,5 +444,129 @@ func TestGoLegMatchesTheScriptForUnusualRoleNames(t *testing.T) {
 			`SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = $1)`, entry.role.Name).Scan(&exact); err != nil || !exact {
 			t.Errorf("the role %q was not created under exactly that name: %v", entry.role.Name, err)
 		}
+	}
+}
+
+// r1b P3: a PRE-EXISTING role can hold grants the script's REVOKEs remove (an explicit
+// TEMPORARY on the database, an explicit CREATE on schema public). The Go leg must
+// remove exactly the same ones, for every role including KEDA's TEMPORARY.
+func TestGoLegRevokesTheSameStrayGrantsAsTheScript(t *testing.T) {
+	t.Parallel()
+	options := testOptions(true)
+	script, golang := startSide(t), startSide(t)
+	for _, s := range []*side{script, golang} {
+		database, err := containers.DatabaseName(s.instance.URI)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, entry := range options.configured() {
+			for _, statement := range []string{
+				"CREATE ROLE " + ident(entry.role.Name) + " LOGIN PASSWORD 'stray-" + entry.label + "'",
+				"GRANT TEMPORARY ON DATABASE " + ident(database) + " TO " + ident(entry.role.Name),
+				"GRANT CREATE ON SCHEMA public TO " + ident(entry.role.Name),
+			} {
+				if _, err := s.admin.Exec(context.Background(), statement); err != nil {
+					t.Fatalf("%s: %v", entry.label, err)
+				}
+			}
+		}
+	}
+	script.runScript(t, options)
+	golang.runGo(t, options)
+	scriptSnapshot, goSnapshot := script.snapshot(t, options), golang.snapshot(t, options)
+	diff(t, "pre-existing roles with stray grants", scriptSnapshot, goSnapshot)
+	joined := strings.Join(goSnapshot, "\n")
+	if strings.Contains(joined, "keda grant TEMPORARY") {
+		t.Errorf("the KEDA role's stray TEMPORARY must be revoked:\n%s", joined)
+	}
+}
+
+// r1b P1-1: Verify must not be green for a runtime role the readiness check will
+// refuse for owning an object or being a member of another role.
+func TestVerifyRefusesRuntimeRolesThatOwnObjectsOrHaveMemberships(t *testing.T) {
+	t.Parallel()
+	s := startSide(t)
+	options := testOptions(true)
+	s.runGo(t, options)
+	ctx := context.Background()
+	for name, test := range map[string]struct {
+		break_  []string
+		restore []string
+		label   string
+		detail  string
+	}{
+		"owns a schema": {
+			[]string{"CREATE SCHEMA owned_by_domain AUTHORIZATION parity_domain"},
+			[]string{"DROP SCHEMA owned_by_domain"}, "domain", "owns"},
+		"member of another role": {
+			[]string{"CREATE ROLE some_group NOLOGIN", "GRANT some_group TO parity_queue"},
+			[]string{"REVOKE some_group FROM parity_queue", "DROP ROLE some_group"}, "queue", "member of another role"},
+		"query-api owns a schema": {
+			[]string{"CREATE SCHEMA owned_by_qapi AUTHORIZATION parity_query_api"},
+			[]string{"DROP SCHEMA owned_by_qapi"}, "query_api", "owns"},
+	} {
+		for _, statement := range test.break_ {
+			if _, err := s.admin.Exec(ctx, statement); err != nil {
+				t.Fatalf("%s: %v", name, err)
+			}
+		}
+		problems, _, err := Verify(ctx, s.admin, options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		matched := false
+		for _, item := range problems {
+			if item.Role == test.label && strings.Contains(item.Detail, test.detail) {
+				matched = true
+			}
+		}
+		if !matched {
+			t.Errorf("%s: want %s %q in %v", name, test.label, test.detail, problems)
+		}
+		for _, statement := range test.restore {
+			if _, err := s.admin.Exec(ctx, statement); err != nil {
+				t.Fatalf("%s restore: %v", name, err)
+			}
+		}
+		if problems, warnings, err := Verify(ctx, s.admin, options); err != nil || len(problems)+len(warnings) != 0 {
+			t.Fatalf("%s: not clean after restore: %v %v %v", name, problems, warnings, err)
+		}
+	}
+}
+
+// r1b P1-2: the KEDA login is read-only on river_job and holds nothing else.
+func TestVerifyRefusesAKedaRoleThatHoldsAnythingBeyondItsReadOnlyGrants(t *testing.T) {
+	t.Parallel()
+	s := startSide(t)
+	options := testOptions(true)
+	s.runGo(t, options)
+	ctx := context.Background()
+	for name, test := range map[string]struct{ break_, restore string }{
+		"UPDATE on river_job":        {"GRANT UPDATE ON river.river_job TO parity_keda", "REVOKE UPDATE ON river.river_job FROM parity_keda"},
+		"SELECT on another table":    {"GRANT SELECT ON river.river_leader TO parity_keda", "REVOKE SELECT ON river.river_leader FROM parity_keda"},
+		"CREATE on the river schema": {"GRANT CREATE ON SCHEMA river TO parity_keda", "REVOKE CREATE ON SCHEMA river FROM parity_keda"},
+	} {
+		if _, err := s.admin.Exec(ctx, test.break_); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		problems, _, err := Verify(ctx, s.admin, options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		matched := false
+		for _, item := range problems {
+			if item.Role == "keda" && strings.Contains(item.Detail, "unexpected privilege") {
+				matched = true
+			}
+		}
+		if !matched {
+			t.Errorf("%s: a KEDA role holding more than read-only river_job must be a problem: %v", name, problems)
+		}
+		if _, err := s.admin.Exec(ctx, test.restore); err != nil {
+			t.Fatalf("%s restore: %v", name, err)
+		}
+	}
+	if problems, warnings, err := Verify(ctx, s.admin, options); err != nil || len(problems)+len(warnings) != 0 {
+		t.Fatalf("not clean after restore: %v %v %v", problems, warnings, err)
 	}
 }

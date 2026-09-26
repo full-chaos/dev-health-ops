@@ -6,7 +6,7 @@ owner: engineering
 source_of_truth:
   - internal/testsupport/containers/harness.go (the single helper every Go integration suite obtains PostgreSQL/ClickHouse/Valkey from)
   - internal/testsupport/containers/remote.go (the env-DSN path and scratch-database lifecycle)
-  - ci/go_integration_shards.tsv (the authoritative package list and CI weights)
+  - ci/go_integration_shards.d/ (the authoritative package list and CI weights)
   - .github/workflows/test.yml (the ClickHouse and PostgreSQL service versions CI runs)
 applicability: current
 lifecycle: active
@@ -121,7 +121,7 @@ covered below.
 
 ## Per-package matrix — Go, dev-health-ops
 
-Weights are the declared CI shard weights from `ci/go_integration_shards.tsv`;
+Weights are the declared CI shard weights from `ci/go_integration_shards.d/`;
 they are the best available proxy for what each package costs. "Stores" is
 derived from which harness entry points the package's files call — including
 files that reach the harness through a package-local helper without importing
@@ -284,7 +284,7 @@ concurrent lane. Under the concurrent bar it counted as blocked.
 | The harness's own self-test | 13s | 0.7% |
 
 1728/1852 = **93.30%**, rounded to 93.3% above — re-derived by script from
-`ci/go_integration_shards.tsv` against the exact set of packages this page
+`ci/go_integration_shards.d/` against the exact set of packages this page
 marks role-blocked, not typed: `movable_today (402) + role_blocked (1356) -
 still_blocked_by_valkey_too (30) = 1728`.
 

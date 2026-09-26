@@ -18,7 +18,7 @@ mkdir -p "${DEV_HEALTH_GO_CACHE}"
 export GOCACHE="${DEV_HEALTH_GO_CACHE}"
 DEV_HEALTH_GO_BUILD_OUTPUT=""
 DEV_HEALTH_GO_BUILD_TEMP_ROOT=""
-DEV_HEALTH_GO_INTEGRATION_SHARD_MANIFEST="${DEV_HEALTH_GO_INTEGRATION_SHARD_MANIFEST:-${ROOT}/ci/go_integration_shards.tsv}"
+DEV_HEALTH_GO_INTEGRATION_SHARD_MANIFEST="${DEV_HEALTH_GO_INTEGRATION_SHARD_MANIFEST:-${ROOT}/ci/go_integration_shards.d}"
 DEV_HEALTH_GO_PROVIDER_TEST_SHARD_MANIFEST="${DEV_HEALTH_GO_PROVIDER_TEST_SHARD_MANIFEST:-${ROOT}/ci/go_providersync_test_shards.tsv}"
 INTEGRATION_CONTAINER_HARNESS="${ROOT}/internal/testsupport/containers/harness.go"
 
@@ -124,7 +124,7 @@ usage() {
          tests/tooling/test_venue_oracle_registry.py.
          `venue-oracles SHARD COUNT` (CHAOS-6574) runs the SHARD-th of COUNT
          slices of the registry rows marked run, cost-balanced by the measured
-         seconds in ci/venue_oracle_weights.tsv (ci/venue_oracle_shard.awk, the
+         seconds in ci/venue_oracle_weights.d/ (ci/venue_oracle_shard.awk, the
          longest-processing-time assignment; CHAOS-6891), so the tests of one
          package spread over all slices; the hosted job runs COUNT matrix legs.
          A slice that selects zero rows fails; no arguments runs every row.
@@ -162,7 +162,7 @@ usage() {
          Fails if the denylist names a package discovery does not find, or if
          discovery finds nothing at all.
   integration-shard-plan
-         Validate ci/go_integration_shards.tsv against live package discovery,
+         Validate ci/go_integration_shards.d/ against live package discovery,
          derive deterministic longest-processing-time-first shard assignments,
          print the complete assignment, and write a GitHub Actions `matrix`
          output when GITHUB_OUTPUT is set. No Docker required.
@@ -1994,11 +1994,13 @@ check_live_python_oracles() {
 # worst leg finished at 39:59, and three new rows pushed two other legs over. The
 # legs are now cost-balanced (ci/venue_oracle_shard.awk, the longest-processing-time
 # assignment ci/go_race_shard.awk uses) by the measured seconds in
-# ci/venue_oracle_weights.tsv (regenerate: ci/venue_oracle_weights.py). A wrong or
+# ci/venue_oracle_weights.d/ (regenerate: ci/venue_oracle_weights.py). A wrong or
 # missing weight costs balance, never coverage: the legs always partition the run
 # rows. tests/tooling/test_venue_oracle_shards.py fails a PR whose registry rows
 # lack a weight or whose heaviest leg would exceed the leg's test-time budget.
-VENUE_ORACLE_WEIGHTS="${ROOT}/ci/venue_oracle_weights.tsv"
+# The weights are a DIRECTORY of per-package row files named like the registry's
+# (CHAOS-6926), so two PRs that add venue rows in different packages do not conflict.
+VENUE_ORACLE_WEIGHTS="${ROOT}/ci/venue_oracle_weights.d"
 VENUE_ORACLE_DEFAULT_WEIGHT=60
 # venue_oracle_run_rows prints every registry `run` row as "<package dir>\t<test>",
 # sorted by (package, test).
@@ -2010,7 +2012,30 @@ venue_oracle_run_rows() {
 venue_oracle_assign() {
   local shard="$1" count="$2" plan="${3:-}"
   venue_oracle_run_rows | awk -v shard="${shard}" -v count="${count}" -v plan="${plan:+1}" \
-    -v weights="${VENUE_ORACLE_WEIGHTS}" -v defw="${VENUE_ORACLE_DEFAULT_WEIGHT}" -f "${ROOT}/ci/venue_oracle_shard.awk"
+    -v weights=<(venue_oracle_weight_rows) -v defw="${VENUE_ORACLE_DEFAULT_WEIGHT}" -f "${ROOT}/ci/venue_oracle_shard.awk"
+}
+# venue_oracle_weight_rows prints every weight row (the concatenation of the weights
+# directory's *.tsv files in C-locale order; a single file is accepted too). A missing
+# weights path is an error, not "no weights": silently planning every row at the
+# default would unbalance the legs without a word.
+venue_oracle_weight_rows() {
+  if [ -d "${VENUE_ORACLE_WEIGHTS}" ]; then
+    (
+      LC_ALL=C
+      local file found=0
+      for file in "${VENUE_ORACLE_WEIGHTS}"/*.tsv; do
+        [ -e "${file}" ] || continue
+        found=1
+        cat "${file}"
+      done
+      [ "${found}" -eq 1 ] || { echo "venue-oracles: no *.tsv weight files in ${VENUE_ORACLE_WEIGHTS}" >&2; exit 1; }
+    )
+  elif [ -f "${VENUE_ORACLE_WEIGHTS}" ]; then
+    cat "${VENUE_ORACLE_WEIGHTS}"
+  else
+    echo "venue-oracles: weights not found: ${VENUE_ORACLE_WEIGHTS}" >&2
+    return 1
+  fi
 }
 # venue-oracle-plan COUNT: print the cost-balanced plan of COUNT legs (rows, predicted
 # seconds). Needs neither Go, containers nor Python.
@@ -2108,7 +2133,7 @@ check_venue_oracles() {
   fi
 
   if [ -n "${shard}" ]; then
-    printf 'venue-oracles: shard %s/%s runs %d of %d registered run row(s) across %d package(s); the cost-balanced plan predicts %ss of tests for this leg (budget %ss, ci/venue_oracle_weights.tsv)\n' "${shard}" "${shard_count}" "${total}" "${registered_runs}" "${#vo_dirs[@]}" "${predicted_seconds:-?}" "${VENUE_LEG_BUDGET_SECONDS:-1800}"
+    printf 'venue-oracles: shard %s/%s runs %d of %d registered run row(s) across %d package(s); the cost-balanced plan predicts %ss of tests for this leg (budget %ss, ci/venue_oracle_weights.d/)\n' "${shard}" "${shard_count}" "${total}" "${registered_runs}" "${#vo_dirs[@]}" "${predicted_seconds:-?}" "${VENUE_LEG_BUDGET_SECONDS:-1800}"
   else
     printf 'venue-oracles: %d registered test(s) across %d package(s)\n' "${total}" "${#vo_dirs[@]}"
   fi
@@ -2186,7 +2211,7 @@ check_venue_oracles() {
   elapsed=$(( $(date +%s) - leg_started ))
   printf 'venue-oracles: leg %ss of tests (predicted %ss, budget %ss)\n' "${elapsed}" "${predicted_seconds:-n/a}" "${budget}"
   if [ "${elapsed}" -gt "${budget}" ]; then
-    printf '::warning title=venue-oracles leg over its test-time budget::%ss of tests against a %ss budget: rebalance ci/venue_oracle_weights.tsv (ci/venue_oracle_weights.py) or add a leg before the job cap cancels it\n' "${elapsed}" "${budget}"
+    printf '::warning title=venue-oracles leg over its test-time budget::%ss of tests against a %ss budget: rebalance ci/venue_oracle_weights.d/ (ci/venue_oracle_weights.py) or add a leg before the job cap cancels it\n' "${elapsed}" "${budget}"
   fi
   [ "${failed}" -eq 0 ] || return 1
 }
@@ -2414,50 +2439,99 @@ check_integration_coverage() {
 # package-set equality check happens in plan_integration_shards after live
 # discovery, so neither the manifest nor the source scan can silently stand in
 # for the other.
+#
+# The manifest is a DIRECTORY of row files (CHAOS-6926): one file per package,
+# named for its key with "/" written "__", holding exactly one package row, plus
+# `_shards.tsv` with the one `shards` row. Two PRs that touch different packages
+# therefore touch different files and never conflict, where every PR used to edit
+# neighbouring lines of one sorted file. A single file is still accepted as a
+# manifest (the tests build small ones); it is then read as one file with any
+# number of rows.
 load_integration_shard_manifest() {
   local manifest="${DEV_HEALTH_GO_INTEGRATION_SHARD_MANIFEST}"
-  local line_number=0 key value extra
-  local shards_seen=0
-
-  [ -f "${manifest}" ] \
-    || die "integration shard manifest not found: ${manifest}"
+  local -a files=()
+  local file base as_dir=0
 
   INTEGRATION_SHARD_WEIGHTS=()
   INTEGRATION_SHARD_COUNT=0
+  SHARDS_SEEN=0
+  if [ -d "${manifest}" ]; then
+    as_dir=1
+    # C-locale glob order (function-local, restored on return), so the order of the
+    # files and of the diagnostics does not depend on the host locale.
+    local LC_ALL=C
+    files=("${manifest}"/*.tsv)
+    [ -e "${files[0]:-}" ] || die "integration shard manifest directory has no *.tsv files: ${manifest}"
+  elif [ -f "${manifest}" ]; then
+    files=("${manifest}")
+  else
+    die "integration shard manifest not found: ${manifest}"
+  fi
+
+  for file in "${files[@]}"; do
+    base="$(basename "${file}")"
+    load_integration_shard_manifest_file "${file}" "${as_dir}" "${base}"
+  done
+
+  [ "${SHARDS_SEEN}" -eq 1 ] \
+    || die "integration shard manifest must declare one 'shards' row"
+  [ "${INTEGRATION_SHARD_COUNT}" -ge 2 ] \
+    || die "integration shard manifest must declare at least two shards"
+}
+
+# load_integration_shard_manifest_file FILE AS_DIR BASENAME reads one manifest file.
+# In directory mode a file holds exactly one package row and is named for its key
+# ('_shards.tsv' holds the shards row instead), so a key cannot hide in a
+# misnamed file and two PRs adding the same package collide on the file name.
+load_integration_shard_manifest_file() {
+  local file="$1" as_dir="$2" base="$3"
+  local line_number=0 key value extra package_rows=0
+
   while IFS=$'\t ' read -r key value extra; do
     line_number=$((line_number + 1))
     case "${key}" in
       ""|\#*) continue ;;
     esac
     if [ -n "${extra}" ]; then
-      die "integration shard manifest ${manifest}:${line_number} must contain exactly two fields"
+      die "integration shard manifest ${file}:${line_number} must contain exactly two fields"
     fi
     case "${value}" in
       ""|*[!0-9]*)
-        die "integration shard manifest ${manifest}:${line_number} has non-numeric value '${value}'"
+        die "integration shard manifest ${file}:${line_number} has non-numeric value '${value}'"
         ;;
     esac
     if [ "${value}" -le 0 ]; then
-      die "integration shard manifest ${manifest}:${line_number} values must be positive"
+      die "integration shard manifest ${file}:${line_number} values must be positive"
     fi
 
     if [ "${key}" = "shards" ]; then
-      [ "${shards_seen}" -eq 0 ] \
+      if [ "${as_dir}" -eq 1 ] && [ "${base}" != "_shards.tsv" ]; then
+        die "integration shard manifest ${file}:${line_number}: the 'shards' row belongs in _shards.tsv"
+      fi
+      [ "${SHARDS_SEEN}" -eq 0 ] \
         || die "integration shard manifest declares 'shards' more than once"
-      shards_seen=1
+      SHARDS_SEEN=1
       INTEGRATION_SHARD_COUNT="${value}"
       continue
+    fi
+    if [ "${as_dir}" -eq 1 ]; then
+      [ "${base}" != "_shards.tsv" ] \
+        || die "integration shard manifest ${file}:${line_number}: _shards.tsv holds only the 'shards' row"
+      [ "${base}" = "${key//\//__}.tsv" ] \
+        || die "integration shard manifest ${file}:${line_number}: the row for '${key}' must live in ${key//\//__}.tsv"
+      package_rows=$((package_rows + 1))
+      [ "${package_rows}" -eq 1 ] \
+        || die "integration shard manifest ${file}:${line_number}: one package row per file"
     fi
     if [ -n "${INTEGRATION_SHARD_WEIGHTS[${key}]+set}" ]; then
       die "integration shard manifest lists '${key}' more than once"
     fi
     INTEGRATION_SHARD_WEIGHTS["${key}"]="${value}"
-  done < "${manifest}"
+  done < "${file}"
 
-  [ "${shards_seen}" -eq 1 ] \
-    || die "integration shard manifest must declare one 'shards' row"
-  [ "${INTEGRATION_SHARD_COUNT}" -ge 2 ] \
-    || die "integration shard manifest must declare at least two shards"
+  if [ "${as_dir}" -eq 1 ] && [ "${base}" != "_shards.tsv" ] && [ "${package_rows}" -eq 0 ]; then
+    die "integration shard manifest ${file} holds no package row"
+  fi
 }
 
 # plan_integration_shards performs deterministic longest-processing-time-first

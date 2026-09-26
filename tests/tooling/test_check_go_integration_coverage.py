@@ -7,14 +7,15 @@ import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-MANIFEST = ROOT / "ci" / "go_integration_shards.tsv"
+MANIFEST = ROOT / "ci" / "go_integration_shards.d"  # a directory of one-row files (CHAOS-6926)
 
 
 def _manifest_packages() -> set[str]:
     """Package rows of the shard manifest (its first data row is the shard count)."""
+    text = "".join(path.read_text() for path in sorted(MANIFEST.glob("*.tsv")))
     rows = [
         line.split("\t")[0]
-        for line in MANIFEST.read_text().splitlines()
+        for line in text.splitlines()
         if line.strip() and not line.startswith("#")
     ]
     return set(rows[1:])
@@ -105,7 +106,7 @@ def test_integration_coverage_inventory_completes_and_stays_nonempty() -> None:
     # and this port's variant-C 0.9 are the SAME row, because the sorting key
     # excludes confidence -- against the real migration chain in a real
     # container, asserting BOTH write orders so a pre-step regression cannot
-    # pass. Manifest weight 20s (see ci/go_integration_shards.tsv header).
+    # pass. Manifest weight 20s (see ci/go_integration_shards.d/README.md).
     # TWO packages arrived independently, each written as 37 -> 38 on its own
     # branch: CHAOS-4882 added internal/storage/postgres/authschema (the
     # auth-owned lineage's live-PostgreSQL posture suite, which connects AS
@@ -238,7 +239,7 @@ def test_integration_coverage_inventory_completes_and_stays_nonempty() -> None:
     # equal the shard manifest's package rows (tests/tooling/
     # test_go_integration_sharding.py derives its expected set from this very
     # discovery, CHAOS-6705), so adding an integration package edits ONE list
-    # (ci/go_integration_shards.tsv) and never a number. The narrative above
+    # (ci/go_integration_shards.d/) and never a number. The narrative above
     # is history only.
     match = re.search(
         r"(\d+) package\(s\) discovered, 0 denylisted, (\d+) will run", result.stdout

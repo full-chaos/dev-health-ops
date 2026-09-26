@@ -17,7 +17,15 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github" / "workflows" / "go.yml"
 CHECK_GO = ROOT / "ci" / "check_go.sh"
-MANIFEST = ROOT / "ci" / "go_integration_shards.tsv"
+MANIFEST = ROOT / "ci" / "go_integration_shards.d"  # a directory of one-row files (CHAOS-6926)
+
+
+def _manifest_text() -> str:
+    """The manifest as one file: every row file in C-locale order, `_shards.tsv` first."""
+    return "".join(
+        path.read_text(encoding="utf-8") for path in sorted(MANIFEST.glob("*.tsv"))
+    )
+
 PROVIDER_MANIFEST = ROOT / "ci" / "go_providersync_test_shards.tsv"
 PROVIDER_PACKAGE = "internal/providersync"
 CONTAINER_HARNESS = ROOT / "internal" / "testsupport" / "containers" / "harness.go"
@@ -32,7 +40,7 @@ CHECK_GO_TIMEOUT_SECONDS = 120
 # a 300-line literal that every PR adding a Go integration package had to edit
 # (24 of the last 120 merged PRs touched it, and each touch was a merge conflict
 # for the next PR). The protection is unchanged in kind: `integration-shard-plan`
-# dies when ci/go_integration_shards.tsv omits or duplicates a discovered
+# dies when ci/go_integration_shards.d/ omits or duplicates a discovered
 # package (the missing/duplicate-manifest tests below), so a new package needs
 # exactly one manifest row, in ONE file.
 _DISCOVERED: set[str] | None = None
@@ -250,7 +258,7 @@ def _manifest_rows() -> tuple[int, dict[str, int]]:
     """(the declared shard count, {package: weight}) read straight from the manifest."""
     shards = None
     weights: dict[str, int] = {}
-    for line in MANIFEST.read_text(encoding="utf-8").splitlines():
+    for line in _manifest_text().splitlines():
         if not line.strip() or line.startswith("#"):
             continue
         key, value = line.split("\t")
@@ -700,7 +708,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment(
 
 
 def test_manifest_drift_and_duplicate_packages_fail_loudly(tmp_path: Path) -> None:
-    original = MANIFEST.read_text(encoding="utf-8")
+    original = _manifest_text()
 
     missing = tmp_path / "missing.tsv"
     missing.write_text(

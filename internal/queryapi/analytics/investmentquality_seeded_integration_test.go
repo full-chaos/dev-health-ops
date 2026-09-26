@@ -9,7 +9,7 @@
 // harness internal/queryapi/hotspots' own real-engine regression guard
 // (hotspots_argmax_tiebreak_integration_test.go) already uses -- seeds known
 // rows, and asserts EXACT numbers computed by hand from the seed data. It is
-// enrolled in ci/go_integration_shards.tsv like every other integration
+// enrolled in ci/go_integration_shards.d/ like every other integration
 // package, runs in CI, and never drifts: this is what proves the SQL this
 // package generates is syntactically and semantically correct against a real
 // ClickHouse engine (aggregate NULL/NaN handling, argMax semantics, the

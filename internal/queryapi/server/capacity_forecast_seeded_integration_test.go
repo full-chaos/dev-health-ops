@@ -25,7 +25,7 @@
 //
 // It exercises capacityforecast from OUTSIDE, through the package's exported
 // entry points, and it sits in an ALREADY-SHARDED package (cmd/query-api is in
-// ci/go_integration_shards.tsv). Putting it in internal/queryapi/
+// ci/go_integration_shards.d/). Putting it in internal/queryapi/
 // capacityforecast would have made that a new integration package, requiring a
 // new .tsv row AND an addition to tests/tooling/test_go_integration_sharding.py's
 // EXPECTED_PACKAGES -- a three-way pin for no additional coverage.

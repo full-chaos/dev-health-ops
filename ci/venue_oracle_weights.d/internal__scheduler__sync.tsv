@@ -1,0 +1,5 @@
+internal/scheduler/sync	TestCredentialFingerprintVenueOracleMatchesLivePython	54
+internal/scheduler/sync	TestJiraDiscoveryRowsVenueOracleMatchesLivePython	2
+internal/scheduler/sync	TestJiraRenameVenueOracleMatchesLivePython	54
+internal/scheduler/sync	TestOperatorDatasetsVenueOracleMatchesThePythonProducer	1
+internal/scheduler/sync	TestZeroUnitRunAuthStampVenueOracleMatchesLivePython	50

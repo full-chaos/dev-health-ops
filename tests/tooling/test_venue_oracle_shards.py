@@ -29,7 +29,7 @@ The legs were every COUNT-th row, blind to cost: at 154 rows the legs' test time
 ranged 1677-2207 s against a 2400 s job cap with ~200 s of setup, the worst leg
 ended at 39:59 and three new rows pushed two other legs over (run 36228118954).
 The legs are now the longest-processing-time assignment by the measured seconds
-in ci/venue_oracle_weights.tsv (ci/venue_oracle_shard.awk). With no weights every
+in ci/venue_oracle_weights.d/ (ci/venue_oracle_shard.awk). With no weights every
 row weighs the same and the assignment IS the old every-COUNT-th-row split, which
 is what the scratch-tree tests below still pin. This file also pins:
 5. every registry `run` row has a weight and every weight names a `run` row;
@@ -352,23 +352,40 @@ def test_the_receipt_artifact_is_per_shard() -> None:
 # Cost-balanced legs (CHAOS-6891).
 # ---------------------------------------------------------------------------
 
-WEIGHTS_FILE = ROOT / "ci" / "venue_oracle_weights.tsv"
+WEIGHTS_FILE = ROOT / "ci" / "venue_oracle_weights.d"  # per-package row files (CHAOS-6926)
 JOB_SETUP_SECONDS = 200  # measured: leg wall time minus its test time, 192-212 s
 DRIFT_SECONDS = 200  # room for a slow runner beyond the planned seconds
 
 
+def _weight_files(path: Path) -> list[Path]:
+    if path.is_dir():
+        return sorted(path.glob("*.tsv"), key=lambda p: p.name.encode())
+    return [path]
+
+
 def _weights(path: Path = WEIGHTS_FILE) -> list[tuple[str, str, int]]:
+    """Every weight row of a weights directory (its files in C-locale order) or file."""
     rows = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if not line.strip() or line.lstrip().startswith("#"):
-            continue
-        package, test, seconds, *marker = line.split("\t")
-        # The generator's fourth column: `unmeasured` (planned provisionally).
-        assert marker in ([], ["unmeasured"]), (
-            f"unknown weights column {marker} in {line!r}"
-        )
-        rows.append((package, test, int(seconds)))
+    for file in _weight_files(path):
+        for line in file.read_text(encoding="utf-8").splitlines():
+            if not line.strip() or line.lstrip().startswith("#"):
+                continue
+            package, test, seconds, *marker = line.split("\t")
+            # The generator's fourth column: `unmeasured` (planned provisionally).
+            assert marker in ([], ["unmeasured"]), (
+                f"unknown weights column {marker} in {line!r}"
+            )
+            rows.append((package, test, int(seconds)))
     return rows
+
+
+def _write_weights(tree: Path, text: str) -> None:
+    """Give a scratch tree its weights: one directory holding one file."""
+    directory = tree / "ci" / "venue_oracle_weights.d"
+    directory.mkdir(parents=True, exist_ok=True)
+    for old in directory.glob("*.tsv"):
+        old.unlink()
+    (directory / "scratch.tsv").write_text(text, encoding="utf-8")
 
 
 def _plan(
@@ -399,11 +416,33 @@ def _real_tree(tmp_path: Path) -> Path:
     return tree
 
 
-def test_the_weights_file_is_well_formed_and_matches_the_registry() -> None:
+def test_the_weights_directory_is_well_formed_and_matches_the_registry() -> None:
+    files = _weight_files(WEIGHTS_FILE)
+    assert files, "ci/venue_oracle_weights.d/ holds no *.tsv file"
+    registry_files = {
+        path.name for path in (ROOT / "ci" / "venue_oracle_registry.d").glob("*.tsv")
+    }
+    for file in files:
+        # One file per package, named like the registry's: a PR that adds a venue row in
+        # package X touches registry file X and weights file X only, so two PRs in
+        # different packages cannot conflict (CHAOS-6926).
+        rows = _weights(file)
+        assert rows, f"{file.name} holds no weight row"
+        packages = {package for package, _, _ in rows}
+        assert len(packages) == 1, f"{file.name} mixes packages {sorted(packages)}"
+        (package,) = packages
+        assert file.name == package.replace("/", "__") + ".tsv", (
+            f"{file.name} holds the rows of {package}; it must be named "
+            f"{package.replace('/', '__')}.tsv"
+        )
+        assert file.name in registry_files, (
+            f"{file.name} has no registry file of the same name: the package "
+            "has no venue run row left"
+        )
+        assert rows == sorted(rows, key=lambda w: (w[0], w[1])), (
+            f"{file.name} is not sorted by test"
+        )
     weights = _weights()
-    assert weights == sorted(weights, key=lambda w: (w[0], w[1])), (
-        "ci/venue_oracle_weights.tsv is not sorted by (package, test)"
-    )
     keys = [(package, test) for package, test, _ in weights]
     assert len(keys) == len(set(keys)), "a weight row is duplicated"
     assert all(seconds >= 1 for _, _, seconds in weights), "a weight below 1 second"
@@ -411,7 +450,7 @@ def test_the_weights_file_is_well_formed_and_matches_the_registry() -> None:
     missing = sorted(registry - set(keys))
     assert not missing, (
         f"registry run rows with no weight: {missing[:5]}...: regenerate "
-        "ci/venue_oracle_weights.tsv (python3 ci/venue_oracle_weights.py <saved run log>)"
+        "ci/venue_oracle_weights.d/ (python3 ci/venue_oracle_weights.py <saved run log>)"
     )
     stale = sorted(set(keys) - registry)
     assert not stale, f"weights for tests that are not registry run rows: {stale[:5]}"
@@ -434,14 +473,15 @@ def test_the_planned_heaviest_leg_fits_the_budget(tmp_path: Path) -> None:
     heaviest = max(seconds for _, seconds in legs.values())
     assert heaviest <= budget, (
         f"the heaviest of the {count} planned venue legs is {heaviest}s of tests, over the "
-        f"{budget}s budget: regenerate ci/venue_oracle_weights.tsv from a recent run log "
+        f"{budget}s budget: regenerate ci/venue_oracle_weights.d/ from a recent run log "
         "(ci/venue_oracle_weights.py) or add a leg to the matrix and the verb's COUNT"
     )
 
 
 def test_weights_balance_the_legs_and_never_drop_a_test(tmp_path: Path) -> None:
     tree = _scratch_tree(tmp_path, PACKAGES)
-    (tree / "ci" / "venue_oracle_weights.tsv").write_text(
+    _write_weights(
+        tree,
         "# weights\n"
         "internal/a\tTestA1\t500\n"
         "internal/a\tTestA2\t20\n"
@@ -449,7 +489,6 @@ def test_weights_balance_the_legs_and_never_drop_a_test(tmp_path: Path) -> None:
         "internal/b\tTestB1\t300\n"
         "internal/c\tTestC1\t10\n"
         "internal/nowhere\tTestGone\t9999\n",  # a weight for a test that is not there: ignored
-        encoding="utf-8",
     )
     all_rows = _registry_run_rows(tree)
     first = _plan(tree, 3)
@@ -478,9 +517,9 @@ def test_the_500_second_row_gets_a_leg_to_itself(tmp_path: Path) -> None:
     tree = _scratch_tree(
         tmp_path, {"internal/a": ["TestA1", "TestA2", "TestA3", "TestA4"]}
     )
-    (tree / "ci" / "venue_oracle_weights.tsv").write_text(
+    _write_weights(
+        tree,
         "internal/a\tTestA1\t500\ninternal/a\tTestA2\t100\ninternal/a\tTestA3\t100\ninternal/a\tTestA4\t100\n",
-        encoding="utf-8",
     )
     rows, legs = _plan(tree, 2)
     heavy = next(leg for p, t, leg, _ in rows if t == "TestA1")
@@ -584,16 +623,17 @@ def test_an_unmeasured_row_is_planned_pessimistically() -> None:
     # the weights file marked `unmeasured` (a new test: venue oracles run on main
     # only, so its author cannot measure it) must carry at least the provisional
     # 600 s, above the slowest row ever measured, until a run log measures it.
-    for line in WEIGHTS_FILE.read_text(encoding="utf-8").splitlines():
-        if line.strip() and not line.lstrip().startswith("#"):
-            package, test, seconds, *marker = line.split("\t")
-            if marker == ["unmeasured"]:
-                assert int(seconds) >= 600, (
-                    f"{package} {test} is unmeasured but planned at {seconds}s: "
-                    "regenerate with ci/venue_oracle_weights.py"
-                )
-            else:
-                assert marker == [], f"unknown weights column {marker} in {line!r}"
+    for file in _weight_files(WEIGHTS_FILE):
+        for line in file.read_text(encoding="utf-8").splitlines():
+            if line.strip() and not line.lstrip().startswith("#"):
+                package, test, seconds, *marker = line.split("\t")
+                if marker == ["unmeasured"]:
+                    assert int(seconds) >= 600, (
+                        f"{package} {test} is unmeasured but planned at {seconds}s: "
+                        "regenerate with ci/venue_oracle_weights.py"
+                    )
+                else:
+                    assert marker == [], f"unknown weights column {marker} in {line!r}"
 
 
 def test_the_weights_parser_reads_a_generator_written_unmeasured_row(

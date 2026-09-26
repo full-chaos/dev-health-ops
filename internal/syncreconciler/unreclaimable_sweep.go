@@ -440,6 +440,10 @@ type unreclaimableCandidate struct {
 	costClass  string
 	createdAt  time.Time
 	updatedAt  time.Time
+	// attempts is the unit's own claim counter. Only the published-and-dead branch may
+	// act on a unit a handler already ran (CHAOS-6890); the never-published branch still
+	// requires 0.
+	attempts int64
 	// delivery is set ONLY on the CHAOS-4097 branch: the unit holds a
 	// 'delivered' outbox row whose River job was proven terminal and
 	// non-success. Its zero value means "never published", which is the
@@ -759,7 +763,10 @@ func (sweep *UnreclaimableSweep) selectUnreclaimable(
 			return nil, deferredToRepair, err
 		}
 		for _, candidate := range unpublished {
-			if !sweep.unroutable(candidate) {
+			// A unit a handler already ran that holds no outbox row at all is not a shape
+			// this branch has ever proven anything about (CHAOS-6890 widened only the
+			// published-and-dead branch): leave it.
+			if candidate.attempts > 0 || !sweep.unroutable(candidate) {
 				continue
 			}
 			selected = append(selected, candidate)
@@ -973,19 +980,30 @@ func (sweep *UnreclaimableSweep) unroutable(candidate unreclaimableCandidate) bo
 // that was ever budget-deferred.
 //
 // status = 'dispatching' only. A RUNNING unit is never selected.
+// CHAOS-6890: `unit.attempts = 0` is no longer a guard on the PUBLISHED-AND-DEAD branch.
+// Unit 22488b42 (prod run dbb92927) had attempts 4, a worker heartbeat 33 hours old, no
+// lease and a River job `discarded` 5/5: every recovery and destroy path here required
+// attempts 0 ("no handler ever claimed it"), so nobody owned it and it held a bucket slot
+// and its run open for 33 hours. A unit a handler ran (attempts > 0) is selectable only
+// with a worker heartbeat older than the idle window, and only the dead-delivery branch
+// may act on it; the never-published branch still requires attempts 0 and the idle gate on
+// updated_at, which the dispatcher's own stale reclaim keeps fresh for exactly this
+// population (so the heartbeat is the clock that means "no worker has touched it").
 const selectUnreclaimableCandidatesSQL = `
 SELECT unit.id::text, unit.sync_run_id::text, unit.org_id,
 	unit.provider, unit.dataset_key, unit.cost_class,
-	unit.created_at, unit.updated_at
+	unit.created_at, unit.updated_at, unit.attempts
 FROM public.sync_run_units AS unit
 JOIN public.sync_runs AS run ON run.id = unit.sync_run_id
 WHERE unit.status = 'dispatching'
 	AND unit.lease_owner IS NULL
 	AND unit.lease_expires_at IS NULL
 	AND (unit.last_heartbeat_at IS NULL OR unit.last_heartbeat_at <= $2)
-	AND unit.attempts = 0
 	AND unit.created_at <= $1
-	AND unit.updated_at <= $2
+	AND (
+		(unit.attempts = 0 AND unit.updated_at <= $2)
+		OR unit.attempts > 0
+	)
 	AND run.status NOT IN ('success', 'partial_failed', 'failed')
 	AND run.org_id = unit.org_id
 	AND (unit.created_at, unit.id) > ($3, $4)
@@ -1016,7 +1034,7 @@ func scanUnreclaimablePage(
 		if err := rows.Scan(
 			&candidate.id, &candidate.syncRunID, &candidate.orgID,
 			&candidate.provider, &candidate.datasetKey, &candidate.costClass,
-			&candidate.createdAt, &candidate.updatedAt,
+			&candidate.createdAt, &candidate.updatedAt, &candidate.attempts,
 		); err != nil {
 			return nil, sweepUnavailable(sweepStepCandidateScan, err)
 		}
@@ -1365,7 +1383,6 @@ SET status = 'failed',
 WHERE id = $1::uuid
 	AND status = 'dispatching'
 	AND lease_owner IS NULL
-	AND attempts = 0
 	AND updated_at = $6
 	AND EXISTS (
 		SELECT 1
@@ -1467,6 +1484,14 @@ func (sweep *UnreclaimableSweep) terminalize(
 // delivery form names the River state explicitly, because "which terminal
 // state" is the question a reader asks next.
 func unreclaimableReason(candidate unreclaimableCandidate) string {
+	if candidate.delivery.proven() && candidate.attempts > 0 {
+		return fmt.Sprintf(
+			"unreclaimable dispatch for %s: a handler ran this unit %d time(s), but its River delivery "+
+				"(job %d) is terminal in state %q, the outbox delivery budget is spent and no worker has "+
+				"touched the unit for the idle window, so nothing will execute it again",
+			candidate.pair(), candidate.attempts, candidate.delivery.jobID, candidate.delivery.state,
+		)
+	}
 	if candidate.delivery.proven() {
 		return fmt.Sprintf(
 			"unreclaimable dispatch for %s: its River delivery (job %d) is "+

@@ -24,6 +24,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
 // upgradeProgram runs the Python upgrade the migrate Job runs, with no River
@@ -67,9 +68,9 @@ from dev_health_ops.licensing.registry import STANDARD_FEATURES
 print(json.dumps([[k, n, c.value, t.value, d] for k, n, c, t, d in STANDARD_FEATURES]))
 `
 
-// TestStandardFeaturesMatchPython requires the Go registry to equal Python's,
+// TestStandardFeaturesVenueOracleMatchesPythonRegistry requires the Go registry to equal Python's,
 // row for row and in order.
-func TestStandardFeaturesMatchPython(t *testing.T) {
+func TestStandardFeaturesVenueOracleMatchesPythonRegistry(t *testing.T) {
 	root, python := pythonAt(t)
 	output := runPython(t, root, python, registryProgram)
 	var rows [][]string
@@ -83,15 +84,16 @@ func TestStandardFeaturesMatchPython(t *testing.T) {
 	if len(want) == 0 || !reflect.DeepEqual(admincli.StandardFeatures, want) {
 		t.Fatalf("admincli.StandardFeatures differs from Python's STANDARD_FEATURES:\n  go     %v\n  python %v", admincli.StandardFeatures, want)
 	}
+	venueoracle.WriteProof(t)
 }
 
-// TestSeedMatchesPython is the differential oracle: two databases built by
+// TestSeedVenueOracleMatchesThePythonProducer is the differential oracle: two databases built by
 // the real Python upgrade, the same feature rows removed from both, the
 // Python verb on one and dho's on the other. The rows must then be the same
 // -- every column but the random id and the run-time stamps, which are
 // checked for shape -- on a database missing features and on one that
 // holds all of them.
-func TestSeedMatchesPython(t *testing.T) {
+func TestSeedVenueOracleMatchesThePythonProducer(t *testing.T) {
 	ctx := context.Background()
 	instance, err := containers.StartPostgres(ctx)
 	if err != nil {
@@ -216,6 +218,7 @@ func TestSeedMatchesPython(t *testing.T) {
 	if password != "" && strings.Contains(logged, password) {
 		t.Fatalf("the seed verb logged the password: %s", logged)
 	}
+	venueoracle.WriteProof(t)
 }
 
 // existingRows reads every feature_flags row in full, id and stamps

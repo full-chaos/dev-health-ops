@@ -68,6 +68,12 @@ type Option struct {
 	// and `docker compose config` renders them verbatim, so DSNs and tokens
 	// stay in the environment on purpose and --help says so.
 	Secret bool
+	// EnvOnly marks a non-secret setting that only the environment supplies:
+	// the code that reads it takes it from the process environment itself, so
+	// a flag for it would be accepted and then ignored. It is declared so the
+	// service's whole contract is in this registry and --help; a flag override
+	// for it is refused like one for a credential.
+	EnvOnly bool
 	// QueueOnly restricts the option to binaries that consume queues. Load
 	// already rejects queue settings on the other services; registering the
 	// flag only where it applies keeps their --help honest.
@@ -107,7 +113,11 @@ var groupOrder = []string{
 // no flag at all. A worker executes the queues it subscribes to, and those
 // switches survive only as the Python producer / Go executor agreement
 // (see routes.go).
-var optionRegistry = []Option{
+// optionRegistry is the core (worker, api, reconciler, ...) options followed by
+// the query-api's own (queryapi_options.go).
+var optionRegistry = append(slices.Clone(coreOptions), queryAPIOptions...)
+
+var coreOptions = []Option{
 	// Worker: queue topology and identity.
 	{
 		// Celery spells this -Q; -q is kept because the Go worker has always
@@ -646,6 +656,9 @@ func HelpText(service string, requireQueues bool) string {
 		out.WriteString(optionHelpLine(option))
 	}
 
+	if service == QueryAPIServiceName {
+		return out.String()
+	}
 	// There is no provider route switch surface. CHAOS-4054 deleted it: a
 	// shipped route is always executable, the user's sync config decides what
 	// should run, and --queues decides what this process serves.
@@ -662,9 +675,13 @@ func HelpText(service string, requireQueues bool) string {
 // fallback, and its default.
 func optionHelpLine(option Option) string {
 	var out strings.Builder
-	if option.Secret {
+	if option.Secret || option.EnvOnly {
 		fmt.Fprintf(&out, "  %-42s %s\n", option.Env, option.Usage)
-		fmt.Fprintf(&out, "  %-42s %s\n", "", "(environment only: never accepted as a flag)")
+		if option.Secret {
+			fmt.Fprintf(&out, "  %-42s %s\n", "", "(environment only: never accepted as a flag)")
+		} else {
+			fmt.Fprintf(&out, "  %-42s %s\n", "", "(environment only: read from the process environment, no flag)")
+		}
 		return out.String()
 	}
 	name := "--" + option.Flag

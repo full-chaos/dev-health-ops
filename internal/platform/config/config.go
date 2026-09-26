@@ -338,6 +338,17 @@ type Config struct {
 	// edge's shape, and a 404 for everything else. Empty = the listener is
 	// off.
 	APIBillingEdgeAddress string
+	// QueryAPIAddress is the host:port of the query routes' listener and
+	// QueryAPIInternalAddress that of the internal one (dho query-api only; empty
+	// otherwise, and the internal one empty means no internal listener).
+	QueryAPIAddress         string
+	QueryAPIInternalAddress string
+	// Setting resolves one declared setting of the service (flag > environment),
+	// for code that reads settings by name (dho query-api's route builders). It
+	// answers only for a name declared for this service or for every service, so
+	// an undeclared read returns no value instead of reaching the environment. Nil
+	// on a service that has no such reader.
+	Setting func(name string) (string, bool)
 	// CORSAllowedOrigins is the api's CORS allow-list, parsed exactly as the
 	// Python api parses CORS_ALLOWED_ORIGINS: comma-separated, entries trimmed,
 	// empty entries dropped (dho api only).
@@ -938,6 +949,33 @@ func Load(spec Spec) (Config, error) {
 		cfg.APIBilling = loadBillingConfig(lookup)
 		cfg.APIJWTIssuer = envOrDefault(lookup, "JWT_ISSUER", defaultJWTIssuer)
 		cfg.APIJWTAudience = envOrDefault(lookup, "JWT_AUDIENCE", defaultJWTAudience)
+	}
+	if cfg.Service == QueryAPIServiceName {
+		cfg.QueryAPIAddress = envOrDefault(lookup, "QUERY_API_ADDR", defaultQueryAPIAddress)
+		if _, _, splitErr := net.SplitHostPort(cfg.QueryAPIAddress); splitErr != nil {
+			return Config{}, fmt.Errorf("%s must be a host:port address", settingLabel("QUERY_API_ADDR"))
+		}
+		cfg.QueryAPIInternalAddress = strings.TrimSpace(envOrDefault(lookup, "QUERY_API_INTERNAL_ADDR", ""))
+		if cfg.QueryAPIInternalAddress != "" {
+			if _, _, splitErr := net.SplitHostPort(cfg.QueryAPIInternalAddress); splitErr != nil {
+				return Config{}, fmt.Errorf("%s must be a host:port address", settingLabel("QUERY_API_INTERNAL_ADDR"))
+			}
+		}
+		// The three listeners are separate: an identical pair would fail the
+		// second bind (port 0 asks the kernel for a free port each time).
+		for _, pair := range [][2]string{
+			{"QUERY_API_ADDR", "DEV_HEALTH_HTTP_ADDR"},
+			{"QUERY_API_INTERNAL_ADDR", "DEV_HEALTH_HTTP_ADDR"},
+			{"QUERY_API_INTERNAL_ADDR", "QUERY_API_ADDR"},
+		} {
+			left := map[string]string{"QUERY_API_ADDR": cfg.QueryAPIAddress, "QUERY_API_INTERNAL_ADDR": cfg.QueryAPIInternalAddress}[pair[0]]
+			right := map[string]string{"DEV_HEALTH_HTTP_ADDR": cfg.HTTPAddress, "QUERY_API_ADDR": cfg.QueryAPIAddress}[pair[1]]
+			if left != "" && left == right && !strings.HasSuffix(left, ":0") {
+				return Config{}, fmt.Errorf("%s must differ from %s: the query, internal and operator listeners are separate",
+					settingLabel(pair[0]), settingLabel(pair[1]))
+			}
+		}
+		cfg.Setting = declaredSetting(cfg.Service, lookup)
 	}
 	cfg.StreamConfiguredReplicas, err = boundedIntEnv(
 		lookup,

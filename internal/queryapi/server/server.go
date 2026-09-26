@@ -26,59 +26,21 @@ package server
 import (
 	"context"
 	"errors"
-	"io"
 	"log"
-	"log/slog"
 	"net/http"
-	"os"
-	"os/signal"
-	"syscall"
 	"time"
 
 	gqlhandler "github.com/99designs/gqlgen/graphql/handler"
-	"go.opentelemetry.io/otel"
 
-	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
-	"github.com/full-chaos/dev-health-ops/internal/platform/tracing"
 	"github.com/full-chaos/dev-health-ops/internal/platform/version"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/analytics"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/internalidentity"
 )
 
-// otelServiceName is this binary's OTEL_SERVICE_NAME fallback (CHAOS-5408) --
-// tracing.InitWithServiceName's default when the env var is unset, so
-// query-api is distinguishable from the worker binaries (whose own default,
-// "dev-health-ops", tracing.Init keeps) in a trace backend without every
-// deployment needing to set OTEL_SERVICE_NAME by hand. The env var still
-// wins whenever it is set.
-const otelServiceName = "dev-health-query-api"
-
-// tracingShutdownTimeout bounds the final flush of any buffered spans on
-// process shutdown -- the same bound style readyzTimeout uses below, so a
-// wedged exporter cannot hang the shutdown sequence indefinitely.
-const tracingShutdownTimeout = 5 * time.Second
-
-const defaultAddr = ":8090"
-
-// usage is what -h/--help prints. query-api takes no arguments; every setting
-// is an environment variable, read through the lookup Run is given.
-const usage = `Usage: dho query-api
-
-Serves the read-only Go query plane on QUERY_API_ADDR (default :8090):
-/query, /registry, /buildinfo, the /api/v1 routes, /healthz, /readyz and
-/metrics. It takes no arguments; each route is configured by its own
-environment variables and stays unmounted until they are set.
-`
-
-// Exit codes Run returns, the same set every dho command uses.
-const (
-	exitOK      = 0
-	exitFailure = 1
-)
-
-// getenvFunc reads one setting by name. Run builds it from the lookup the
-// caller injects, so no route builder reads the process environment itself.
+// getenvFunc reads one setting by name. Build gets it from the caller (dho
+// query-api passes the shell's declared-settings reader), so no route builder
+// reads the process environment itself.
 type getenvFunc func(string) string
 
 // newExecutableSchemaHandler constructs the gqlgen HTTP handler over the
@@ -92,13 +54,6 @@ func newExecutableSchemaHandler() http.Handler {
 	server := gqlhandler.NewDefaultServer(schema)
 	server.AroundFields(graph.RefuseNullForNonNullArguments)
 	return server
-}
-
-func addr(getenv getenvFunc) string {
-	if v := getenv("QUERY_API_ADDR"); v != "" {
-		return v
-	}
-	return defaultAddr
 }
 
 // newListenerServers builds the public server and, when internalAddr is set,
@@ -123,13 +78,6 @@ func newListenerServers(publicAddr, internalAddr string, base http.Handler) (pub
 	return public, internal
 }
 
-func healthzHandler() http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ok"))
-	}
-}
-
 // readyzTimeout bounds every dependency check readyzHandler runs. An
 // unbounded readiness probe hangs whatever polls it (an orchestrator, a
 // rollout gate, a load balancer health check) for as long as the
@@ -137,88 +85,51 @@ func healthzHandler() http.HandlerFunc {
 // definite "not ready" -- see readyzHandler's doc comment.
 const readyzTimeout = 3 * time.Second
 
-// readyzHandler reports whether THIS instance is fit to receive traffic
-// -- distinct from healthzHandler's pure process-liveness (CHAOS-4512:
-// the two must never collapse into one signal; a process that is alive
-// but whose query dependencies are down is live, not ready).
+// ObserveProbe is one of /query's dependency probes as the required readiness check
+// dho query-api registers on the operator listener (/readyz on --http-addr). What
+// used to be readyzHandler on the query listener is now split by dependency class:
+// the operator /readyz names the failing CHECK ("query_postgres", ...) and nothing
+// else, so the class is the whole disclosure and the underlying error never reaches
+// the wire (CHAOS-4724: /readyz is UNAUTHENTICATED, pgx/clickhouse-go dial errors
+// render a host:port and CheckJWKS's errors name GO_API_ENVELOPE_JWKS_PATH's
+// filesystem path). The full error still goes to the log (the shell's logger
+// redacts credentials), so an operator can diagnose without shell access.
 //
-// ready is nil when /query is not configured/mounted in this deployment
-// (loadQueryRouteConfig's ok=false, main()'s Wave-0 "nothing mounted"
-// shape -- see that call site's comment for what configures it out of
-// this mode). That is a DELIBERATE, documented operating mode elsewhere
-// in this codebase (this file's and query_route.go's own comments both
-// treat an unconfigured environment as intentional, not a failure --
-// "an operator who has not yet configured this service's dependencies
-// must not be forced to also configure ClickHouse/Postgres/JWKS just to
-// build or run the binary"), so this handler does not fail it: there is
-// no /query dependency to check, so there is nothing to report as
-// unreachable. It still answers distinctly (body text + the
-// "not_configured" telemetry outcome below) rather than reading
-// identically to a verified-healthy 200, per CHAOS-4512's explicit
-// instruction not to let "no dependencies configured" silently read as
-// "ready to serve" -- an operator or dashboard can tell the two apart
-// even though both return 200.
-//
-// When ready is non-nil (/query IS mounted), this handler calls it with
-// a bounded timeout on every request -- a LIVE check of ClickHouse and
-// registry-Postgres reachability, not a cached result from process
-// start. That is the actual CHAOS-4512 defect: buildQueryRoute's own
-// eager ClickHouse ping only ever ran once, at startup, and
-// pgxpool.New never pinged Postgres at all, so a dependency that failed
-// or went unreachable after boot was invisible to this endpoint before
-// this fix -- the process stayed up, /readyz kept answering 200
-// unconditionally, and every real /query request then failed or 404'd
-// against a rollout gate that believed the instance was healthy.
-//
-// CHAOS-4724: /readyz is UNAUTHENTICATED and this handler previously set
-// no Content-Type (Go content-sniffed every response) and wrote the raw
-// ready(ctx) error into the 503 body -- pgx/clickhouse-go dial errors
-// render a host:port, and CheckJWKS's errors name
-// GO_API_ENVELOPE_JWKS_PATH's filesystem path directly, so an
-// unauthenticated caller could read either straight off the wire. Every
-// response now sets an explicit text/plain Content-Type, and the
-// unhealthy body carries only the failing dependency's CLASS
-// ("clickhouse" / "postgres" / "jwks", see readyzDependencyError in
-// query_route.go) -- fail-closed (503 stays 503) but not a detail leak.
-// The full error -- everything Class deliberately leaves out -- still
-// goes to the log line below, unredacted, so an operator can diagnose
-// without shell access; that log line IS this fix's telemetry.
-//
-// The unhealthy branch's write carries a `nosemgrep` suppression for
-// go.lang.security.audit.xss.no-direct-write-to-responsewriter: this is
-// server-side plain-text (Content-Type set above), never HTML, and the
-// concatenated value is now one of readyzDependencyClass's own closed-set
-// literals -- not attacker-controlled input, and (after this CHAOS-4724
-// fix) not even the underlying dependency error text anymore. Triaged and
-// confirmed a false positive against the pre-fix code (Semgrep alert
-// 2197) and re-confirmed against this fix's narrower body (alert 2199) --
-// see the PR thread. Do not "fix" this by routing through html/template;
-// that cargo-cults a scanner rule into a worse design for a plain-text
-// health endpoint.
-func readyzHandler(ready func(context.Context) error) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-
-		if ready == nil {
-			recordReadyzOutcome("not_configured")
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte("ready: /query not configured"))
-			return
-		}
-
-		ctx, cancel := context.WithTimeout(r.Context(), readyzTimeout)
+// The probe runs LIVE on every readiness request under a bounded timeout, never a
+// cached result from process start: buildQueryRoute's eager ClickHouse ping only ever
+// ran once, and pgxpool.New never pinged Postgres at all, so a dependency that failed
+// after boot was invisible before (CHAOS-4512). The outcome is counted per check
+// ("healthy" / "unhealthy") so a dashboard can tell "no probes yet" from "every check
+// is failing".
+func ObserveProbe(probe ReadinessProbe) func(context.Context) error {
+	return func(parent context.Context) error {
+		ctx, cancel := context.WithTimeout(parent, readyzTimeout)
 		defer cancel()
-		if err := ready(ctx); err != nil {
-			log.Printf("query-api: /readyz dependency check failed: %v", err)
-			recordReadyzOutcome("unhealthy")
-			w.WriteHeader(http.StatusServiceUnavailable)
-			// nosemgrep: go.lang.security.audit.xss.no-direct-write-to-responsewriter.no-direct-write-to-responsewriter
-			_, _ = w.Write([]byte("not ready: " + readyzDependencyClass(err)))
-			return
+		if err := probe.Check(ctx); err != nil {
+			log.Printf("query-api: %s readiness check failed: %v", probe.Name, err)
+			recordReadyzOutcome("unhealthy", probe.Name)
+			return errors.New(readyzDependencyClass(err))
 		}
-		recordReadyzOutcome("healthy")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ready"))
+		recordReadyzOutcome("healthy", probe.Name)
+		return nil
+	}
+}
+
+// NotConfiguredCheckName is the required readiness check of the "no /query configured" mode.
+const notConfiguredCheckName = "query_routes"
+
+// NotConfiguredCheck is the readiness check of a deployment where /query is not
+// configured (loadQueryRouteConfig's ok=false, the "nothing mounted" shape). That
+// is a DELIBERATE, documented operating mode ("an operator who has not yet configured
+// this service's dependencies must not be forced to also configure
+// ClickHouse/Postgres/JWKS just to build or run the binary"), so it passes; the
+// shell's registry fails closed on a service with no required check at all, so the
+// mode is one explicit passing check, counted as "not_configured" so it never reads
+// as a verified-healthy answer (CHAOS-4512).
+func NotConfiguredCheck() func(context.Context) error {
+	return func(context.Context) error {
+		recordReadyzOutcome("not_configured", notConfiguredCheckName)
+		return nil
 	}
 }
 
@@ -274,74 +185,38 @@ func mountQueryRoute(mux *http.ServeMux, query http.HandlerFunc) {
 	mux.HandleFunc("/query", withProofProvenance(query, runningBuild()))
 }
 
-// Run serves query-api until ctx ends or SIGINT/SIGTERM arrives, and returns
-// the process exit code: 0 after a clean shutdown, 1 when a route cannot be
-// built or the listener fails. query-api takes no arguments except -h/--help,
-// which prints the usage; any other it is given are logged and ignored, as the
-// binary always did. Logs go to stdout as JSON
-// through the redacting handler, installed as the process default for the run
-// and restored when Run returns.
-//
-// Where settings come from. Every setting query-api's own wiring reads -- the
-// listener address, each route's ClickHouse/registry/envelope configuration,
-// the route switches and the proof route -- comes from lookup. Three kinds of
-// setting are still read from the process environment below this function,
-// exactly as every other dho Service reads them: the OTEL_* tracing settings
-// (internal/platform/tracing, the same path internal/platform/shell uses),
-// and the per-request resolver settings IDENTITY_MAPPING_PATH, the LLM_*
-// provider settings and two work-graph switches. TestDirectEnvironmentReads
-// pins that set, so a new direct read cannot appear unnoticed. Every caller
-// passes the process environment as lookup, so the two sources agree; moving
-// the rest onto one option registry is the shell-lifecycle port.
-func Run(ctx context.Context, args []string, lookup func(string) (string, bool), stdout, stderr io.Writer) int {
-	if len(args) == 1 && (args[0] == "-h" || args[0] == "--help") {
-		_, _ = io.WriteString(stdout, usage)
-		return exitOK
-	}
-	getenv := getenvFunc(func(key string) string {
-		value, _ := lookup(key)
-		return value
-	})
-	// CHAOS-5408: installs the process-wide OTel TracerProvider so the spans
-	// the resolvers in internal/graph already start (org-scoping-rejection
-	// spans included) actually reach a collector instead of the global no-op
-	// provider every span in this binary silently fell into before this line
-	// existed -- confirmed absent by grep across this whole tree prior to
-	// this change. Fails soft on a bad/absent OTEL_* config (same contract
-	// tracing.Init's own doc comment describes): a broken collector or
-	// malformed env var never stops query-api from serving traffic, it just
-	// leaves tracing disabled. Started before anything else so no early
-	// resolver call can race an uninitialised global provider; shut down
-	// last, after the HTTP server has stopped accepting requests, so
-	// buffered spans from the final in-flight requests still flush.
-	logger := logging.NewJSON(stdout, slog.LevelInfo)
-	restoreDefaultLogger := logging.InstallDefault(logger)
-	defer restoreDefaultLogger()
-	if len(args) != 0 {
-		logger.Warn("query-api takes no arguments; ignoring them", "arguments", args)
-	}
-	tracingComponent := tracing.InitWithServiceName(logger, otelServiceName)
+// Plane is the query plane built from a settings reader: every route it mounts,
+// the live readiness check of /query's dependencies, and the release of what the
+// routes opened.
+type Plane struct {
+	// Handler is the mux of every mounted route, with the response-model marker.
+	// The listeners (Listeners) add the identity middleware around it.
+	Handler http.Handler
+	// Ready is nil when /query is not configured (nothing to check, see
+	// ReadinessCheck) and otherwise the live dependency check.
+	Ready func(context.Context) error
+	// Probes are the same checks, one per dependency class (nil when /query is not
+	// configured), for a caller that reports each on its own.
+	Probes []ReadinessProbe
+	// Close releases every route's dependencies, last opened first.
+	Close func()
+}
 
-	// Installs the process-wide OTel MeterProvider so the gauges/counters
-	// registry_drift_telemetry.go, readyz_telemetry.go, and
-	// internal/routeswitch/telemetry.go already create via otel.Meter(...)
-	// actually record somewhere, and mounts the Prometheus text they
-	// collect at /metrics. Fails soft, matching tracing.InitWithServiceName
-	// just above: a broken exporter must not stop query-api from serving
-	// traffic, only leave /metrics unavailable.
-	var metricsHTTPHandler http.Handler
-	if meterProvider, promRegistry, err := newPrometheusMeterProvider(); err != nil {
-		log.Printf("query-api: build Prometheus meter provider: %v -- /metrics will 404", err)
-	} else {
-		otel.SetMeterProvider(meterProvider)
-		metricsHTTPHandler = metricsHandler(promRegistry)
-		defer func() {
-			shutdownCtx, cancel := context.WithTimeout(context.Background(), tracingShutdownTimeout)
-			defer cancel()
-			if shutdownErr := meterProvider.Shutdown(shutdownCtx); shutdownErr != nil {
-				log.Printf("query-api: meter provider shutdown error: %v", shutdownErr)
-			}
-		}()
+// Build mounts the query plane. Every setting it, and every route builder, reads
+// comes from get (the declared-settings reader of dho query-api); a route whose
+// settings are absent stays unmounted, and a route that cannot be built is an error
+// and nothing stays open.
+func Build(get func(string) string) (*Plane, error) {
+	getenv := getenvFunc(get)
+	var cleanups []func()
+	closeAll := func() {
+		for i := len(cleanups) - 1; i >= 0; i-- {
+			cleanups[i]()
+		}
+	}
+	fail := func(err error) (*Plane, error) {
+		closeAll()
+		return nil, err
 	}
 
 	// Constructed to prove the schema/resolver pair builds and links
@@ -350,10 +225,6 @@ func Run(ctx context.Context, args []string, lookup func(string) (string, bool),
 	_ = newExecutableSchemaHandler()
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/healthz", healthzHandler())
-	if metricsHTTPHandler != nil {
-		mux.Handle("/metrics", metricsHTTPHandler)
-	}
 
 	// CHAOS-4367 Wave 1 / CHAOS-4368 Wave 2 / CHAOS-4369 Wave 3: mount the
 	// real featureFlags, reviewEdges, and cognitiveLoad routes when their
@@ -366,13 +237,14 @@ func Run(ctx context.Context, args []string, lookup func(string) (string, bool),
 	// successfully, matching readyzHandler's documented "nothing
 	// configured, nothing to check" contract for that state.
 	var ready func(context.Context) error
+	var probes []ReadinessProbe
 	if routeCfg, ok := loadQueryRouteConfig(getenv); ok {
 		handlers, readyFn, cleanup, buildErr := buildQueryRoute(getenv, routeCfg)
 		if buildErr != nil {
 			log.Printf("query-api: build /query route: %v", buildErr)
-			return exitFailure
+			return fail(buildErr)
 		}
-		defer cleanup()
+		cleanups = append(cleanups, cleanup)
 		// Wrapped, not raw. The provenance headers are what let a proof
 		// receipt be bound to the process that actually served the
 		// request, and until CHAOS-5479 only /query/proof carried them --
@@ -405,6 +277,7 @@ func Run(ctx context.Context, args []string, lookup func(string) (string, bool),
 		mux.HandleFunc("/buildinfo", handlers.BuildInfo)
 		mountProofRoute(getenv, mux, handlers.Proof)
 		ready = readyFn
+		probes = handlers.Probes
 		// CHAOS-4710 deliverable 3: the mount-confirmation log line used to
 		// live here as a hand-typed, six-of-twelve literal (stale since
 		// Wave 3 -- the real registration is all twelve of
@@ -425,7 +298,6 @@ func Run(ctx context.Context, args []string, lookup func(string) (string, bool),
 		// registered/not-registered lines exist to prevent (codex r1 F8).
 		mountProofRoute(getenv, mux, nil)
 	}
-	mux.HandleFunc("/readyz", readyzHandler(ready))
 
 	// CHAOS-4977 step 5a: POST /api/v1/investment/explain, gated by its
 	// own routeswitch entry (default OFF via GO_API_INVESTMENT_EXPLAIN_ENABLED)
@@ -434,9 +306,9 @@ func Run(ctx context.Context, args []string, lookup func(string) (string, bool),
 	// not this file's job) and this route's documented scope gaps.
 	if explainHandler, explainCleanup, explainOK, explainErr := buildInvestmentExplainRoute(getenv); explainErr != nil {
 		log.Printf("query-api: build /api/v1/investment/explain route: %v", explainErr)
-		return exitFailure
+		return fail(explainErr)
 	} else if explainOK {
-		defer explainCleanup()
+		cleanups = append(cleanups, explainCleanup)
 		// Wrapped in withProofProvenance so go-api-rest-prove can bind a
 		// receipt to the process that actually served this request, the
 		// same reason /query and /query/proof carry it. Reassigned, not
@@ -458,9 +330,9 @@ func Run(ctx context.Context, args []string, lookup func(string) (string, bool),
 	// for the ported resolver and its documented developer/person scope gap.
 	if quadrantHandler, quadrantCleanup, quadrantOK, quadrantErr := buildQuadrantRoute(getenv); quadrantErr != nil {
 		log.Printf("query-api: build /api/v1/quadrant route: %v", quadrantErr)
-		return exitFailure
+		return fail(quadrantErr)
 	} else if quadrantOK {
-		defer quadrantCleanup()
+		cleanups = append(cleanups, quadrantCleanup)
 		// See the investment/explain mount above for why this is a
 		// reassignment, not an inlined wrapper.
 		quadrantHandler = withProofProvenance(quadrantHandler, runningBuild())
@@ -475,9 +347,9 @@ func Run(ctx context.Context, args []string, lookup func(string) (string, bool),
 	// for the ported resolver.
 	if heatmapHandler, heatmapCleanup, heatmapOK, heatmapErr := buildHeatmapRoute(getenv); heatmapErr != nil {
 		log.Printf("query-api: build /api/v1/heatmap route: %v", heatmapErr)
-		return exitFailure
+		return fail(heatmapErr)
 	} else if heatmapOK {
-		defer heatmapCleanup()
+		cleanups = append(cleanups, heatmapCleanup)
 		// See the investment/explain mount above for why this is a
 		// reassignment, not an inlined wrapper.
 		heatmapHandler = withProofProvenance(heatmapHandler, runningBuild())
@@ -493,9 +365,9 @@ func Run(ctx context.Context, args []string, lookup func(string) (string, bool),
 	// notes.
 	if sankeyHandler, sankeyCleanup, sankeyOK, sankeyErr := buildSankeyRoute(getenv); sankeyErr != nil {
 		log.Printf("query-api: build /api/v1/sankey route: %v", sankeyErr)
-		return exitFailure
+		return fail(sankeyErr)
 	} else if sankeyOK {
-		defer sankeyCleanup()
+		cleanups = append(cleanups, sankeyCleanup)
 		// See the investment/explain mount above for why this is a
 		// reassignment, not an inlined wrapper.
 		sankeyHandler = withProofProvenance(sankeyHandler, runningBuild())
@@ -511,9 +383,9 @@ func Run(ctx context.Context, args []string, lookup func(string) (string, bool),
 	// notes.
 	if homeHandler, homeCleanup, homeOK, homeErr := buildHomeRoute(getenv); homeErr != nil {
 		log.Printf("query-api: build /api/v1/home route: %v", homeErr)
-		return exitFailure
+		return fail(homeErr)
 	} else if homeOK {
-		defer homeCleanup()
+		cleanups = append(cleanups, homeCleanup)
 		// See the investment/explain mount above for why this is a
 		// reassignment, not an inlined wrapper.
 		homeHandler = withProofProvenance(homeHandler, runningBuild())
@@ -530,9 +402,9 @@ func Run(ctx context.Context, args []string, lookup func(string) (string, bool),
 	// than reading any table of its own.
 	if opportunitiesHandler, opportunitiesCleanup, opportunitiesOK, opportunitiesErr := buildOpportunitiesRoute(getenv); opportunitiesErr != nil {
 		log.Printf("query-api: build /api/v1/opportunities route: %v", opportunitiesErr)
-		return exitFailure
+		return fail(opportunitiesErr)
 	} else if opportunitiesOK {
-		defer opportunitiesCleanup()
+		cleanups = append(cleanups, opportunitiesCleanup)
 		// See the investment/explain mount above for why this is a
 		// reassignment, not an inlined wrapper.
 		opportunitiesHandler = withProofProvenance(opportunitiesHandler, runningBuild())
@@ -550,9 +422,9 @@ func Run(ctx context.Context, args []string, lookup func(string) (string, bool),
 	// dedup notes.
 	if flowHandler, flowRepoTeamHandler, flowCleanup, flowOK, flowErr := buildInvestmentFlowRoute(getenv); flowErr != nil {
 		log.Printf("query-api: build /api/v1/investment/flow routes: %v", flowErr)
-		return exitFailure
+		return fail(flowErr)
 	} else if flowOK {
-		defer flowCleanup()
+		cleanups = append(cleanups, flowCleanup)
 		// See the investment/explain mount above for why this is a
 		// reassignment, not an inlined wrapper.
 		flowHandler = withProofProvenance(flowHandler, runningBuild())
@@ -570,9 +442,9 @@ func Run(ctx context.Context, args []string, lookup func(string) (string, bool),
 	// declared ReplacingMergeTree dedup fixes.
 	if filterOptionsHandler, filterOptionsCleanup, filterOptionsOK, filterOptionsErr := buildFilterOptionsRoute(getenv); filterOptionsErr != nil {
 		log.Printf("query-api: build /api/v1/filters/options route: %v", filterOptionsErr)
-		return exitFailure
+		return fail(filterOptionsErr)
 	} else if filterOptionsOK {
-		defer filterOptionsCleanup()
+		cleanups = append(cleanups, filterOptionsCleanup)
 		// See the investment/explain mount above for why this is a
 		// reassignment, not an inlined wrapper.
 		filterOptionsHandler = withProofProvenance(filterOptionsHandler, runningBuild())
@@ -588,9 +460,9 @@ func Run(ctx context.Context, args []string, lookup func(string) (string, bool),
 	// declared ReplacingMergeTree-dedup/membership-scope notes.
 	if investmentHandler, investmentCleanup, investmentOK, investmentErr := buildInvestmentRoute(getenv); investmentErr != nil {
 		log.Printf("query-api: build /api/v1/investment route: %v", investmentErr)
-		return exitFailure
+		return fail(investmentErr)
 	} else if investmentOK {
-		defer investmentCleanup()
+		cleanups = append(cleanups, investmentCleanup)
 		// See the investment/explain mount above for why this is a
 		// reassignment, not an inlined wrapper.
 		investmentHandler = withProofProvenance(investmentHandler, runningBuild())
@@ -605,9 +477,9 @@ func Run(ctx context.Context, args []string, lookup func(string) (string, bool),
 	// for the ported resolver.
 	if investmentSunburstHandler, investmentSunburstCleanup, investmentSunburstOK, investmentSunburstErr := buildInvestmentSunburstRoute(getenv); investmentSunburstErr != nil {
 		log.Printf("query-api: build /api/v1/investment/sunburst route: %v", investmentSunburstErr)
-		return exitFailure
+		return fail(investmentSunburstErr)
 	} else if investmentSunburstOK {
-		defer investmentSunburstCleanup()
+		cleanups = append(cleanups, investmentSunburstCleanup)
 		// See the investment/explain mount above for why this is a
 		// reassignment, not an inlined wrapper.
 		investmentSunburstHandler = withProofProvenance(investmentSunburstHandler, runningBuild())
@@ -623,9 +495,9 @@ func Run(ctx context.Context, args []string, lookup func(string) (string, bool),
 	// and its documented ReplacingMergeTree-dedup/org-scope notes.
 	if drilldownPRsHandler, drilldownPRsCleanup, drilldownPRsOK, drilldownPRsErr := buildDrilldownPRsRoute(getenv); drilldownPRsErr != nil {
 		log.Printf("query-api: build /api/v1/drilldown/prs route: %v", drilldownPRsErr)
-		return exitFailure
+		return fail(drilldownPRsErr)
 	} else if drilldownPRsOK {
-		defer drilldownPRsCleanup()
+		cleanups = append(cleanups, drilldownPRsCleanup)
 		// See the investment/explain mount above for why this is a
 		// reassignment, not an inlined wrapper.
 		drilldownPRsHandler = withProofProvenance(drilldownPRsHandler, runningBuild())
@@ -641,9 +513,9 @@ func Run(ctx context.Context, args []string, lookup func(string) (string, bool),
 	// BuildWorkUnitInvestments, shared with POST /api/v1/investment/explain.
 	if workUnitsHandler, workUnitsCleanup, workUnitsOK, workUnitsErr := buildWorkUnitsRoute(getenv); workUnitsErr != nil {
 		log.Printf("query-api: build /api/v1/work-units route: %v", workUnitsErr)
-		return exitFailure
+		return fail(workUnitsErr)
 	} else if workUnitsOK {
-		defer workUnitsCleanup()
+		cleanups = append(cleanups, workUnitsCleanup)
 		// See the investment/explain mount above for why this is a
 		// reassignment, not an inlined wrapper.
 		workUnitsHandler = withProofProvenance(workUnitsHandler, runningBuild())
@@ -662,9 +534,9 @@ func Run(ctx context.Context, args []string, lookup func(string) (string, bool),
 	// {work_unit_id} wildcard, the same mechanism the people routes use.
 	if workUnitExplainHandler, workUnitExplainCleanup, workUnitExplainOK, workUnitExplainErr := buildWorkUnitExplainRoute(getenv); workUnitExplainErr != nil {
 		log.Printf("query-api: build /api/v1/work-units/{work_unit_id}/explain route: %v", workUnitExplainErr)
-		return exitFailure
+		return fail(workUnitExplainErr)
 	} else if workUnitExplainOK {
-		defer workUnitExplainCleanup()
+		cleanups = append(cleanups, workUnitExplainCleanup)
 		// See the investment/explain mount above for why this is a
 		// reassignment, not an inlined wrapper.
 		workUnitExplainHandler = withProofProvenance(workUnitExplainHandler, runningBuild())
@@ -680,9 +552,9 @@ func Run(ctx context.Context, args []string, lookup func(string) (string, bool),
 	// resolver and its documented ReplacingMergeTree-dedup/org-scope notes.
 	if drilldownIssuesHandler, drilldownIssuesCleanup, drilldownIssuesOK, drilldownIssuesErr := buildDrilldownIssuesRoute(getenv); drilldownIssuesErr != nil {
 		log.Printf("query-api: build /api/v1/drilldown/issues route: %v", drilldownIssuesErr)
-		return exitFailure
+		return fail(drilldownIssuesErr)
 	} else if drilldownIssuesOK {
-		defer drilldownIssuesCleanup()
+		cleanups = append(cleanups, drilldownIssuesCleanup)
 		// See the investment/explain mount above for why this is a
 		// reassignment, not an inlined wrapper.
 		drilldownIssuesHandler = withProofProvenance(drilldownIssuesHandler, runningBuild())
@@ -697,9 +569,9 @@ func Run(ctx context.Context, args []string, lookup func(string) (string, bool),
 	// ported resolver and its documented ReplacingMergeTree-dedup notes.
 	if peopleSearchHandler, peopleSearchCleanup, peopleSearchOK, peopleSearchErr := buildPeopleSearchRoute(getenv); peopleSearchErr != nil {
 		log.Printf("query-api: build /api/v1/people route: %v", peopleSearchErr)
-		return exitFailure
+		return fail(peopleSearchErr)
 	} else if peopleSearchOK {
-		defer peopleSearchCleanup()
+		cleanups = append(cleanups, peopleSearchCleanup)
 		// See the investment/explain mount above for why this is a
 		// reassignment, not an inlined wrapper.
 		peopleSearchHandler = withProofProvenance(peopleSearchHandler, runningBuild())
@@ -715,9 +587,9 @@ func Run(ctx context.Context, args []string, lookup func(string) (string, bool),
 	// ported resolver.
 	if peopleSummaryHandler, peopleSummaryCleanup, peopleSummaryOK, peopleSummaryErr := buildPeopleSummaryRoute(getenv); peopleSummaryErr != nil {
 		log.Printf("query-api: build %s route: %v", peopleSummaryPath, peopleSummaryErr)
-		return exitFailure
+		return fail(peopleSummaryErr)
 	} else if peopleSummaryOK {
-		defer peopleSummaryCleanup()
+		cleanups = append(cleanups, peopleSummaryCleanup)
 		// See the investment/explain mount above for why this is a
 		// reassignment, not an inlined wrapper.
 		peopleSummaryHandler = withProofProvenance(peopleSummaryHandler, runningBuild())
@@ -732,9 +604,9 @@ func Run(ctx context.Context, args []string, lookup func(string) (string, bool),
 	// story and internal/people for the ported resolver.
 	if peopleMetricHandler, peopleMetricCleanup, peopleMetricOK, peopleMetricErr := buildPeopleMetricRoute(getenv); peopleMetricErr != nil {
 		log.Printf("query-api: build %s route: %v", peopleMetricPath, peopleMetricErr)
-		return exitFailure
+		return fail(peopleMetricErr)
 	} else if peopleMetricOK {
-		defer peopleMetricCleanup()
+		cleanups = append(cleanups, peopleMetricCleanup)
 		// See the investment/explain mount above for why this is a
 		// reassignment, not an inlined wrapper.
 		peopleMetricHandler = withProofProvenance(peopleMetricHandler, runningBuild())
@@ -750,9 +622,9 @@ func Run(ctx context.Context, args []string, lookup func(string) (string, bool),
 	// resolver.
 	if peopleDrilldownPRsHandler, peopleDrilldownPRsCleanup, peopleDrilldownPRsOK, peopleDrilldownPRsErr := buildPeopleDrilldownPRsRoute(getenv); peopleDrilldownPRsErr != nil {
 		log.Printf("query-api: build %s route: %v", peopleDrilldownPRsPath, peopleDrilldownPRsErr)
-		return exitFailure
+		return fail(peopleDrilldownPRsErr)
 	} else if peopleDrilldownPRsOK {
-		defer peopleDrilldownPRsCleanup()
+		cleanups = append(cleanups, peopleDrilldownPRsCleanup)
 		// See the investment/explain mount above for why this is a
 		// reassignment, not an inlined wrapper.
 		peopleDrilldownPRsHandler = withProofProvenance(peopleDrilldownPRsHandler, runningBuild())
@@ -769,9 +641,9 @@ func Run(ctx context.Context, args []string, lookup func(string) (string, bool),
 	// ported resolver.
 	if peopleDrilldownIssuesHandler, peopleDrilldownIssuesCleanup, peopleDrilldownIssuesOK, peopleDrilldownIssuesErr := buildPeopleDrilldownIssuesRoute(getenv); peopleDrilldownIssuesErr != nil {
 		log.Printf("query-api: build %s route: %v", peopleDrilldownIssuesPath, peopleDrilldownIssuesErr)
-		return exitFailure
+		return fail(peopleDrilldownIssuesErr)
 	} else if peopleDrilldownIssuesOK {
-		defer peopleDrilldownIssuesCleanup()
+		cleanups = append(cleanups, peopleDrilldownIssuesCleanup)
 		// See the investment/explain mount above for why this is a
 		// reassignment, not an inlined wrapper.
 		peopleDrilldownIssuesHandler = withProofProvenance(peopleDrilldownIssuesHandler, runningBuild())
@@ -789,9 +661,9 @@ func Run(ctx context.Context, args []string, lookup func(string) (string, bool),
 	// CLICKHOUSE_URI gates whether it mounts.
 	if metaHandler, metaCleanup, metaOK, metaErr := buildMetaRoute(getenv); metaErr != nil {
 		log.Printf("query-api: build /api/v1/meta route: %v", metaErr)
-		return exitFailure
+		return fail(metaErr)
 	} else if metaOK {
-		defer metaCleanup()
+		cleanups = append(cleanups, metaCleanup)
 		// See the investment/explain mount above for why this is a
 		// reassignment, not an inlined wrapper.
 		metaHandler = withProofProvenance(metaHandler, runningBuild())
@@ -807,9 +679,9 @@ func Run(ctx context.Context, args []string, lookup func(string) (string, bool),
 	// ReplacingMergeTree-dedup/org-scope notes.
 	if explainRESTHandler, explainRESTCleanup, explainRESTOK, explainRESTErr := buildExplainRoute(getenv); explainRESTErr != nil {
 		log.Printf("query-api: build /api/v1/explain route: %v", explainRESTErr)
-		return exitFailure
+		return fail(explainRESTErr)
 	} else if explainRESTOK {
-		defer explainRESTCleanup()
+		cleanups = append(cleanups, explainRESTCleanup)
 		// See the investment/explain mount above for why this is a
 		// reassignment, not an inlined wrapper.
 		explainRESTHandler = withProofProvenance(explainRESTHandler, runningBuild())
@@ -825,9 +697,9 @@ func Run(ctx context.Context, args []string, lookup func(string) (string, bool),
 	// notes.
 	if flameHandler, flameCleanup, flameOK, flameErr := buildFlameRoute(getenv); flameErr != nil {
 		log.Printf("query-api: build /api/v1/flame route: %v", flameErr)
-		return exitFailure
+		return fail(flameErr)
 	} else if flameOK {
-		defer flameCleanup()
+		cleanups = append(cleanups, flameCleanup)
 		// See the investment/explain mount above for why this is a
 		// reassignment, not an inlined wrapper.
 		flameHandler = withProofProvenance(flameHandler, runningBuild())
@@ -843,9 +715,9 @@ func Run(ctx context.Context, args []string, lookup func(string) (string, bool),
 	// and its documented ReplacingMergeTree-dedup notes.
 	if flameAggHandler, flameAggCleanup, flameAggOK, flameAggErr := buildFlameAggregatedRoute(getenv); flameAggErr != nil {
 		log.Printf("query-api: build /api/v1/flame/aggregated route: %v", flameAggErr)
-		return exitFailure
+		return fail(flameAggErr)
 	} else if flameAggOK {
-		defer flameAggCleanup()
+		cleanups = append(cleanups, flameAggCleanup)
 		// See the investment/explain mount above for why this is a
 		// reassignment, not an inlined wrapper.
 		flameAggHandler = withProofProvenance(flameAggHandler, runningBuild())
@@ -867,58 +739,5 @@ func Run(ctx context.Context, args []string, lookup func(string) (string, bool),
 		writeRESTError(w, r, "api_v1", "", http.StatusNotFound, "Not Found")
 	})
 
-	base := markResponseModelRoutes(mux)
-	server, internalServer := newListenerServers(addr(getenv), getenv("QUERY_API_INTERNAL_ADDR"), base)
-	if internalServer == nil {
-		log.Printf("query-api: QUERY_API_INTERNAL_ADDR is unset: no internal listener, so X-DH-Internal-* identity headers are honoured nowhere")
-	}
-
-	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
-	listenErr := make(chan error, 1)
-	go func() {
-		log.Printf("query-api listening on %s", server.Addr)
-		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			listenErr <- err
-		}
-	}()
-
-	if internalServer != nil {
-		go func() {
-			log.Printf("query-api internal listener on %s", internalServer.Addr)
-			if err := internalServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-				listenErr <- err
-			}
-		}()
-	}
-
-	code := exitOK
-	select {
-	case <-ctx.Done():
-	case err := <-listenErr:
-		log.Printf("query-api: listen error: %v", err)
-		code = exitFailure
-	}
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if err := server.Shutdown(shutdownCtx); err != nil {
-		log.Printf("query-api: graceful shutdown error: %v", err)
-	}
-	if internalServer != nil {
-		if err := internalServer.Shutdown(shutdownCtx); err != nil {
-			log.Printf("query-api: internal listener graceful shutdown error: %v", err)
-		}
-	}
-
-	// Shut down tracing LAST, after the server has stopped accepting new
-	// requests -- flushes any spans still buffered from the final in-flight
-	// requests. A no-op on a disabled/never-installed component (see
-	// tracing.Component.Shutdown's own doc comment).
-	tracingShutdownCtx, tracingCancel := context.WithTimeout(context.Background(), tracingShutdownTimeout)
-	defer tracingCancel()
-	if err := tracingComponent.Shutdown(tracingShutdownCtx); err != nil {
-		log.Printf("query-api: tracing shutdown error: %v", err)
-	}
-	return code
+	return &Plane{Handler: markResponseModelRoutes(mux), Ready: ready, Probes: probes, Close: closeAll}, nil
 }

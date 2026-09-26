@@ -2405,6 +2405,18 @@ type queryRouteHandlers struct {
 	// BuildInfo is GET /buildinfo -- which build this process is,
 	// authenticated with the same envelope verifier /query uses.
 	BuildInfo http.HandlerFunc
+	// Probes are /query's live dependency checks, one per dependency class, in the
+	// order readinessCheck runs them. dho query-api registers each as its own
+	// required readiness check, so the operator /readyz names the failing class
+	// (and only that) without a shared body to leak from.
+	Probes []ReadinessProbe
+}
+
+// ReadinessProbe is one live dependency check of /query. Name is a valid health
+// check name and the only thing an unauthenticated /readyz says about a failure.
+type ReadinessProbe struct {
+	Name  string
+	Check func(context.Context) error
 }
 
 func buildQueryRoute(getenv getenvFunc, cfg queryRouteConfig) (queryRouteHandlers, func(context.Context) error, func(), error) {
@@ -2469,12 +2481,16 @@ func buildQueryRoute(getenv getenvFunc, cfg queryRouteConfig) (queryRouteHandler
 		return queryRouteHandlers{}, nil, nil, fmt.Errorf("query-api: JWKS readiness check failed (GO_API_ENVELOPE_JWKS_PATH must point to a readable, non-empty, valid Ed25519 JWKS document): %w", err)
 	}
 
+	// One posture check per process: it proves the role in the background from here
+	// on, and both the combined check and the per-class probes read its last answer.
+	posture := queryAPIPostureCheck(getenv, pgPool)
 	handler, proofHandler, registryHandler := newQueryHandler(analytics.PinInvestmentMembershipScope(chClient), pgPool, verifier, schemaDigest, getenv)
 	handlers := queryRouteHandlers{
 		Query:     handler,
 		Proof:     proofHandler,
 		Registry:  registryHandler,
 		BuildInfo: newBuildInfoHandler(verifier),
+		Probes:    readinessProbes(chClient, pgPool, verifier, posture),
 	}
 	cleanup := func() { pgPool.Close() }
 	// CHAOS-6803/CHAOS-6804: a deployment that names query-api's role
@@ -2483,7 +2499,7 @@ func buildQueryRoute(getenv getenvFunc, cfg queryRouteConfig) (queryRouteHandler
 	// applies (postgres.QueryAPIPosture): the read plane, the saved-report
 	// writes, and nothing else. A deployment that names none has not opted in
 	// and is checked for nothing extra.
-	ready := readinessCheck(chClient, pgPool, verifier, queryAPIPostureCheck(getenv, pgPool))
+	ready := readinessCheck(chClient, pgPool, verifier, posture)
 	return handlers, ready, cleanup, nil
 }
 
@@ -2530,18 +2546,46 @@ type jwksChecker interface {
 // its own doc comment for why calling it here, uncached, on every probe,
 // preserves the no-restart rotation contract rather than defeating it.
 func readinessCheck(chClient readinessPinger, pgPool readinessPinger, verifier jwksChecker, posture func(context.Context) error) func(context.Context) error {
+	probes := readinessProbes(chClient, pgPool, verifier, posture)
 	return func(ctx context.Context) error {
-		if err := chClient.Ping(ctx); err != nil {
-			return &readyzDependencyError{Class: readyzClassClickHouse, Cause: err}
+		for _, probe := range probes {
+			if err := probe.Check(ctx); err != nil {
+				return err
+			}
 		}
-		if err := pgPool.Ping(ctx); err != nil {
-			return &readyzDependencyError{Class: readyzClassPostgres, Cause: err}
-		}
-		if err := verifier.CheckJWKS(); err != nil {
-			return &readyzDependencyError{Class: readyzClassJWKS, Cause: err}
-		}
-		return queryAPIPostureReadiness(ctx, posture)
+		return nil
 	}
+}
+
+// readinessProbes are the checks readinessCheck runs, one per dependency class and in
+// that order (the role-posture one only when the deployment named a query-api role).
+func readinessProbes(chClient readinessPinger, pgPool readinessPinger, verifier jwksChecker, posture func(context.Context) error) []ReadinessProbe {
+	probes := []ReadinessProbe{
+		{Name: "query_clickhouse", Check: func(ctx context.Context) error {
+			if err := chClient.Ping(ctx); err != nil {
+				return &readyzDependencyError{Class: readyzClassClickHouse, Cause: err}
+			}
+			return nil
+		}},
+		{Name: "query_postgres", Check: func(ctx context.Context) error {
+			if err := pgPool.Ping(ctx); err != nil {
+				return &readyzDependencyError{Class: readyzClassPostgres, Cause: err}
+			}
+			return nil
+		}},
+		{Name: "query_jwks", Check: func(context.Context) error {
+			if err := verifier.CheckJWKS(); err != nil {
+				return &readyzDependencyError{Class: readyzClassJWKS, Cause: err}
+			}
+			return nil
+		}},
+	}
+	if posture != nil {
+		probes = append(probes, ReadinessProbe{Name: "query_role_posture", Check: func(ctx context.Context) error {
+			return queryAPIPostureReadiness(ctx, posture)
+		}})
+	}
+	return probes
 }
 
 // queryAPIPostureCheck returns the readiness check for query-api's Postgres role

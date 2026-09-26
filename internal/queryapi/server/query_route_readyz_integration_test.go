@@ -6,7 +6,6 @@ import (
 	"context"
 	"crypto/ed25519"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"testing"
 	"time"
@@ -59,16 +58,15 @@ func TestReadyz_PostgresUnreachableSinceStartup_Returns503(t *testing.T) {
 		EnvelopeAudience:    itTestAudience,
 	}
 
-	_, ready, cleanup, buildErr := buildQueryRoute(os.Getenv, cfg)
+	handlers, _, cleanup, buildErr := buildQueryRoute(os.Getenv, cfg)
 	if buildErr != nil {
 		t.Fatalf("buildQueryRoute unexpectedly failed against an unreachable-but-lazily-dialed Postgres pool (this is the defect this test exists to prove buildQueryRoute does NOT fail on): %v", buildErr)
 	}
 	defer cleanup()
 
-	rec := httptest.NewRecorder()
-	readyzHandler(ready)(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
-	if rec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("/readyz = %d, want 503 -- the registry Postgres this instance depends on was never reachable (body %q)", rec.Code, rec.Body.String())
+	code, body := operatorReadyz(t, handlers.Probes...)
+	if code != http.StatusServiceUnavailable {
+		t.Fatalf("/readyz = %d, want 503 -- the registry Postgres this instance depends on was never reachable (body %q)", code, body)
 	}
 	// CHAOS-4724: the body now names only the dependency CLASS
 	// ("postgres"), not the full "registry postgres: dial tcp ..." error
@@ -76,8 +74,8 @@ func TestReadyz_PostgresUnreachableSinceStartup_Returns503(t *testing.T) {
 	// host:port here) goes to the log line only. See
 	// TestReadyzHandler_PinnedResponseBodies (main_test.go) for the exact
 	// body this pins at the handler-logic level.
-	if got := rec.Body.String(); got != "not ready: postgres" {
-		t.Fatalf("/readyz 503 body = %q, want exactly %q", got, "not ready: postgres")
+	if got := body; got != `{"failed_checks":["query_postgres"],"status":"not_ready"}` {
+		t.Fatalf("/readyz 503 body = %q, want exactly %q", got, `{"failed_checks":["query_postgres"],"status":"not_ready"}`)
 	}
 }
 
@@ -131,17 +129,16 @@ func TestReadyz_BothDependenciesReachable_ThenClickHouseDiesAfterStartup(t *test
 		EnvelopeAudience:    itTestAudience,
 	}
 
-	_, ready, cleanup, buildErr := buildQueryRoute(os.Getenv, cfg)
+	handlers, _, cleanup, buildErr := buildQueryRoute(os.Getenv, cfg)
 	if buildErr != nil {
 		t.Fatalf("buildQueryRoute: %v", buildErr)
 	}
 	defer cleanup()
 
 	t.Run("both dependencies reachable: 200", func(t *testing.T) {
-		rec := httptest.NewRecorder()
-		readyzHandler(ready)(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
-		if rec.Code != http.StatusOK {
-			t.Fatalf("/readyz = %d, want 200 with both real dependencies reachable (body %q)", rec.Code, rec.Body.String())
+		code, body := operatorReadyz(t, handlers.Probes...)
+		if code != http.StatusOK {
+			t.Fatalf("/readyz = %d, want 200 with both real dependencies reachable (body %q)", code, body)
 		}
 	})
 
@@ -153,15 +150,14 @@ func TestReadyz_BothDependenciesReachable_ThenClickHouseDiesAfterStartup(t *test
 		}
 		chClosed = true
 
-		rec := httptest.NewRecorder()
-		readyzHandler(ready)(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
-		if rec.Code != http.StatusServiceUnavailable {
-			t.Fatalf("/readyz = %d, want 503 once ClickHouse is unreachable (body %q)", rec.Code, rec.Body.String())
+		code, body := operatorReadyz(t, handlers.Probes...)
+		if code != http.StatusServiceUnavailable {
+			t.Fatalf("/readyz = %d, want 503 once ClickHouse is unreachable (body %q)", code, body)
 		}
 		// CHAOS-4724: exact class-only body, same reasoning as the
 		// Postgres case above.
-		if got := rec.Body.String(); got != "not ready: clickhouse" {
-			t.Fatalf("/readyz 503 body = %q, want exactly %q", got, "not ready: clickhouse")
+		if got := body; got != `{"failed_checks":["query_clickhouse"],"status":"not_ready"}` {
+			t.Fatalf("/readyz 503 body = %q, want exactly %q", got, `{"failed_checks":["query_clickhouse"],"status":"not_ready"}`)
 		}
 	})
 }

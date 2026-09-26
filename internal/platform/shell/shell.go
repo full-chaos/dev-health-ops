@@ -105,7 +105,7 @@ func (value *optionValue) IsBoolFlag() bool { return value.kind == config.KindBo
 func registerOptions(flags *flag.FlagSet, spec Spec) map[string]*optionValue {
 	bound := make(map[string]*optionValue)
 	for _, option := range config.OptionsFor(spec.Service, spec.RequireQueues) {
-		if option.Secret {
+		if option.Secret || option.EnvOnly {
 			continue
 		}
 		// Profiles are declared by the Spec, not by the registry's service

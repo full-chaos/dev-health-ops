@@ -77,7 +77,11 @@ func TestHelpDeclaresTheDocumentedEnvironmentHandful(t *testing.T) {
 	// key, the same Secret keys the Python api reads. Neither is required
 	// for a standard deployment (without them the webhook answers the
 	// Python api's 500), but both hold a real secret value.
-	if len(required) > 21 {
+	// 21 -> 23 (CHAOS-6447): GO_API_REGISTRY_POSTGRES_URI, GO_API_EDGE_JWT_SECRET
+	// added -- the query-api's registry DSN and the proof route's edge JWT
+	// secret, declared for dev-health-query-api when it moved onto the option
+	// registry. Both hold a real secret value.
+	if len(required) > 23 {
 		t.Fatalf("required environment grew to %d settings: %v", len(required), required)
 	}
 	for _, name := range required {
@@ -92,7 +96,7 @@ func TestHelpDeclaresTheDocumentedEnvironmentHandful(t *testing.T) {
 			continue
 		}
 		option, declared := optionByEnv[name]
-		if declared && option.Flag == "" {
+		if declared && option.Flag == "" && !option.EnvOnly {
 			t.Errorf("%s has neither a flag nor credential status", name)
 		}
 	}

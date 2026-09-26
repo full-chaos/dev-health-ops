@@ -6,7 +6,6 @@ import (
 	"context"
 	"crypto/ed25519"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -181,17 +180,16 @@ func TestReadyz_JWKSValidAtStartup_ThenDeletedAfterStartup_Returns503(t *testing
 		EnvelopeAudience:    itTestAudience,
 	}
 
-	_, ready, cleanup, buildErr := buildQueryRoute(os.Getenv, cfg)
+	handlers, _, cleanup, buildErr := buildQueryRoute(os.Getenv, cfg)
 	if buildErr != nil {
 		t.Fatalf("buildQueryRoute: %v", buildErr)
 	}
 	defer cleanup()
 
 	t.Run("jwks valid at startup: 200", func(t *testing.T) {
-		rec := httptest.NewRecorder()
-		readyzHandler(ready)(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
-		if rec.Code != http.StatusOK {
-			t.Fatalf("/readyz = %d, want 200 with a valid JWKS and both other dependencies reachable (body %q)", rec.Code, rec.Body.String())
+		code, body := operatorReadyz(t, handlers.Probes...)
+		if code != http.StatusOK {
+			t.Fatalf("/readyz = %d, want 200 with a valid JWKS and both other dependencies reachable (body %q)", code, body)
 		}
 	})
 
@@ -200,13 +198,12 @@ func TestReadyz_JWKSValidAtStartup_ThenDeletedAfterStartup_Returns503(t *testing
 			t.Fatalf("remove jwks file: %v", err)
 		}
 
-		rec := httptest.NewRecorder()
-		readyzHandler(ready)(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
-		if rec.Code != http.StatusServiceUnavailable {
-			t.Fatalf("/readyz = %d, want 503 once the JWKS file is gone (body %q) -- CHAOS-4708's defect: a JWKS that dies after startup must not be cached as still-healthy", rec.Code, rec.Body.String())
+		code, body := operatorReadyz(t, handlers.Probes...)
+		if code != http.StatusServiceUnavailable {
+			t.Fatalf("/readyz = %d, want 503 once the JWKS file is gone (body %q) -- CHAOS-4708's defect: a JWKS that dies after startup must not be cached as still-healthy", code, body)
 		}
-		if !strings.Contains(rec.Body.String(), "jwks") {
-			t.Fatalf("/readyz 503 body %q does not name the jwks dependency", rec.Body.String())
+		if !strings.Contains(body, "jwks") {
+			t.Fatalf("/readyz 503 body %q does not name the jwks dependency", body)
 		}
 	})
 }
@@ -255,17 +252,16 @@ func TestReadyz_JWKSValidAtStartup_ThenOverwrittenMalformedAfterStartup_Returns5
 		EnvelopeAudience:    itTestAudience,
 	}
 
-	_, ready, cleanup, buildErr := buildQueryRoute(os.Getenv, cfg)
+	handlers, _, cleanup, buildErr := buildQueryRoute(os.Getenv, cfg)
 	if buildErr != nil {
 		t.Fatalf("buildQueryRoute: %v", buildErr)
 	}
 	defer cleanup()
 
 	t.Run("jwks valid at startup: 200", func(t *testing.T) {
-		rec := httptest.NewRecorder()
-		readyzHandler(ready)(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
-		if rec.Code != http.StatusOK {
-			t.Fatalf("/readyz = %d, want 200 with a valid JWKS (body %q)", rec.Code, rec.Body.String())
+		code, body := operatorReadyz(t, handlers.Probes...)
+		if code != http.StatusOK {
+			t.Fatalf("/readyz = %d, want 200 with a valid JWKS (body %q)", code, body)
 		}
 	})
 
@@ -277,13 +273,12 @@ func TestReadyz_JWKSValidAtStartup_ThenOverwrittenMalformedAfterStartup_Returns5
 			t.Fatalf("overwrite jwks file: %v", err)
 		}
 
-		rec := httptest.NewRecorder()
-		readyzHandler(ready)(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
-		if rec.Code != http.StatusServiceUnavailable {
-			t.Fatalf("/readyz = %d, want 503 once the JWKS file is malformed (body %q)", rec.Code, rec.Body.String())
+		code, body := operatorReadyz(t, handlers.Probes...)
+		if code != http.StatusServiceUnavailable {
+			t.Fatalf("/readyz = %d, want 503 once the JWKS file is malformed (body %q)", code, body)
 		}
-		if !strings.Contains(rec.Body.String(), "jwks") {
-			t.Fatalf("/readyz 503 body %q does not name the jwks dependency", rec.Body.String())
+		if !strings.Contains(body, "jwks") {
+			t.Fatalf("/readyz 503 body %q does not name the jwks dependency", body)
 		}
 	})
 }

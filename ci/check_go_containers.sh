@@ -559,52 +559,80 @@ smoke_dho() {
 }
 
 # smoke_query_api runs `dho query-api` from the dho image the way its
-# Deployment does: the verb, QUERY_API_ADDR on :8090,
-# and no route configured. The one listener must serve /healthz, /readyz and
-# /metrics, leave /query unmounted (404), and stop with exit 0. --help must
-# print the usage and exit 0. Any other argument is logged and ignored, as the
-# old binary did, so the serving run passes one and checks the warning.
-# /metrics must name the service dev-health-query-api in target_info, the
-# same name tracing logs, not the executable's.
+# Deployment does: the verb, the query listener on QUERY_API_ADDR (:8090), the
+# operator listener on DEV_HEALTH_HTTP_ADDR (:8080), and no route configured
+# (CHAOS-6447). /healthz, /readyz and /metrics are served on the operator listener
+# and, for one release, also on the query listener in their old shapes (D2627);
+# /query is unmounted (404) on the query listener and absent from the operator one; the run
+# stops with exit 0. --help prints the option registry and exits 0; an unknown
+# flag exits 2 (the old binary ignored its arguments). /metrics names the
+# service dev-health-query-api in dev_health_runtime_info, the same name
+# tracing logs, and /readyz's one required check is query_routes (not
+# configured) plus the listener.
 smoke_query_api() {
   local tag="$1"
   local container_name="dev-health-go-query-api-smoke-$$"
-  local address
+  local query_address
+  local operator_address
   local exit_code
 
   printf 'container smoke: query-api\n'
   docker run --rm "${CONTAINER_SECURITY_ARGS[@]}" "${tag}" query-api --help \
-    | grep -F 'Usage: dho query-api' >/dev/null \
+    | grep -F 'Usage: dev-health-query-api' >/dev/null \
     || die "dho query-api --help did not print its usage"
+  exit_code=0
+  docker run --rm "${CONTAINER_SECURITY_ARGS[@]}" "${tag}" query-api --unknown >/dev/null 2>&1 || exit_code=$?
+  [ "${exit_code}" = "2" ] || die "dho query-api accepted an unknown flag (exit ${exit_code}, want 2)"
 
   ACTIVE_CONTAINER="${container_name}"
   docker run --detach \
     --name "${container_name}" \
     --publish "127.0.0.1::8090" \
+    --publish "127.0.0.1::8080" \
     --env "QUERY_API_ADDR=:8090" \
+    --env "DEV_HEALTH_HTTP_ADDR=:8080" \
     "${CONTAINER_SECURITY_ARGS[@]}" \
-    "${tag}" query-api --unknown >/dev/null
-  address="$(docker port "${container_name}" 8090/tcp 2>/dev/null | head -n 1 || true)"
-  if [ -z "${address}" ]; then
-    printf 'container query-api exited before publishing its port; its output was:\n' >&2
+    "${tag}" query-api >/dev/null
+  query_address="$(docker port "${container_name}" 8090/tcp 2>/dev/null | head -n 1 || true)"
+  operator_address="$(docker port "${container_name}" 8080/tcp 2>/dev/null | head -n 1 || true)"
+  if [ -z "${query_address}" ] || [ -z "${operator_address}" ]; then
+    printf 'container query-api exited before publishing its ports; its output was:\n' >&2
     docker logs "${container_name}" 2>&1 | tail -20 >&2
-    die "dho query-api did not publish its listener"
+    die "dho query-api did not publish its listeners"
   fi
-  wait_for_status "http://${address}/healthz" 200 \
+  wait_for_status "http://${operator_address}/healthz" 200 \
     || die "dho query-api health endpoint did not become available"
-  wait_for_status "http://${address}/readyz" 200 \
+  wait_for_status "http://${operator_address}/readyz" 200 \
     || die "dho query-api did not become ready"
-  wait_for_status "http://${address}/metrics" 200 \
+  wait_for_status "http://${operator_address}/metrics" 200 \
     || die "dho query-api metrics endpoint did not become available"
-  wait_for_status "http://${address}/query" 404 \
+  wait_for_status "http://${query_address}/query" 404 \
     || die "dho query-api mounted /query with no route configured"
+  # One release of compatibility (CHAOS-6447): the query listener still answers the
+  # probes and the scrape the chart points at it, in the old shapes, until the deploy
+  # repo moves them to the operator listener; the following release removes this.
+  wait_for_status "http://${query_address}/healthz" 200 \
+    || die "dho query-api no longer answers /healthz on the query listener"
+  wait_for_status "http://${query_address}/readyz" 200 \
+    || die "dho query-api no longer answers /readyz on the query listener"
+  wait_for_status "http://${query_address}/metrics" 200 \
+    || die "dho query-api no longer answers /metrics on the query listener"
+  curl --silent --max-time 5 "http://${query_address}/metrics" \
+    | grep -E '^target_info\{.*service_name="dev-health-query-api"' >/dev/null \
+    || die "dho query-api compat /metrics on the query listener lost its target_info series"
+  [ "$(curl --silent --max-time 5 "http://${query_address}/readyz")" = "ready: /query not configured" ] \
+    || die "dho query-api compat /readyz on the query listener is not the old body"
+  # The query routes stay off the operator listener.
+  [ "$(curl --silent --output /dev/null --write-out '%{http_code}' --max-time 5 "http://${operator_address}/query")" != "200" ] \
+    || die "dho query-api served /query on the operator listener"
   docker logs "${container_name}" 2>&1 | grep -F '"service_name":"dev-health-query-api"' >/dev/null \
     || die "dho query-api did not start tracing as dev-health-query-api"
-  docker logs "${container_name}" 2>&1 | grep -F 'query-api takes no arguments; ignoring them' >/dev/null \
-    || die "dho query-api did not log the argument it ignored"
-  curl --silent --max-time 5 "http://${address}/metrics" \
-    | grep -E '^target_info\{.*service_name="dev-health-query-api"' >/dev/null \
-    || die "dho query-api /metrics target_info does not name dev-health-query-api"
+  curl --silent --max-time 5 "http://${operator_address}/metrics" \
+    | grep -F 'dev_health_runtime_info{service="dev-health-query-api"' >/dev/null \
+    || die "dho query-api /metrics dev_health_runtime_info does not name dev-health-query-api"
+  curl --silent --max-time 5 "http://${operator_address}/metrics" \
+    | grep -F 'dev_health_runtime_check_failed{check="query_routes"} 0' >/dev/null \
+    || die "dho query-api with no route configured does not report its query_routes check"
 
   docker stop --time 5 "${container_name}" >/dev/null
   exit_code="$(docker inspect --format '{{.State.ExitCode}}' "${container_name}")"

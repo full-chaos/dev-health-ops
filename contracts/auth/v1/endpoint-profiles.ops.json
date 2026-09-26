@@ -7649,7 +7649,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/sync.py",
-        "line": 1654,
+        "line": 1639,
         "router_local_path": "/sync-configs/auto-import-capabilities"
       },
       "gaps": [],
@@ -7714,7 +7714,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/sync.py",
-        "line": 1678,
+        "line": 1648,
         "router_local_path": "/sync-targets"
       },
       "gaps": [],
@@ -7779,7 +7779,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/sync.py",
-        "line": 1702,
+        "line": 1656,
         "router_local_path": "/sync-configs"
       },
       "gaps": [],
@@ -7844,7 +7844,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/sync.py",
-        "line": 1955,
+        "line": 1843,
         "router_local_path": "/sync-configs/batch"
       },
       "gaps": [],
@@ -7909,7 +7909,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/sync.py",
-        "line": 2105,
+        "line": 1864,
         "router_local_path": "/sync-configs"
       },
       "gaps": [],
@@ -7974,7 +7974,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/sync.py",
-        "line": 2330,
+        "line": 1873,
         "router_local_path": "/sync-configs/{config_id}"
       },
       "gaps": [],
@@ -8039,7 +8039,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/sync.py",
-        "line": 2344,
+        "line": 1882,
         "router_local_path": "/sync-configs/{config_id}/repositories"
       },
       "gaps": [],
@@ -8104,7 +8104,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/sync.py",
-        "line": 2360,
+        "line": 1896,
         "router_local_path": "/sync-configs/{config_id}/coverage"
       },
       "gaps": [],
@@ -8169,7 +8169,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/sync.py",
-        "line": 2406,
+        "line": 1908,
         "router_local_path": "/sync-configs/{config_id}/repositories"
       },
       "gaps": [],
@@ -8234,7 +8234,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/sync.py",
-        "line": 2433,
+        "line": 1923,
         "router_local_path": "/sync-configs/{config_id}"
       },
       "gaps": [],
@@ -8299,7 +8299,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/sync.py",
-        "line": 2771,
+        "line": 1933,
         "router_local_path": "/sync-configs/{config_id}"
       },
       "gaps": [],
@@ -8364,7 +8364,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/sync.py",
-        "line": 2786,
+        "line": 1942,
         "router_local_path": "/sync-configs/{config_id}/trigger"
       },
       "gaps": [],
@@ -8429,7 +8429,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/sync.py",
-        "line": 2924,
+        "line": 2080,
         "router_local_path": "/sync-configs/{config_id}/backfill"
       },
       "gaps": [],
@@ -8494,7 +8494,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/sync.py",
-        "line": 3111,
+        "line": 2267,
         "router_local_path": "/sync-configs/{config_id}/jobs"
       },
       "gaps": [],
@@ -8559,7 +8559,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/sync.py",
-        "line": 3168,
+        "line": 2278,
         "router_local_path": "/backfill-jobs"
       },
       "gaps": [],
@@ -8624,7 +8624,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "src/dev_health_ops/api/admin/routers/sync.py",
-        "line": 3192,
+        "line": 2288,
         "router_local_path": "/backfill-jobs/{job_id}"
       },
       "gaps": [],

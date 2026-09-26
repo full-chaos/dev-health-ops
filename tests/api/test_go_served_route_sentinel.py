@@ -125,3 +125,79 @@ def test_get_home_unauthenticated_still_401s():
         # read as an early-exit statement.
         app.dependency_overrides[get_current_user] = _override_get_current_user
     assert resp.status_code == 401, resp.text
+
+
+_SYNC_UUID = "00000000-0000-4000-8000-0000000000aa"
+# CHAOS-6846: the 14 sync-admin routes go-api owns (the rev187 manifest's
+# sync-configs, sync-targets and backfill-jobs paths). The trigger and backfill
+# POSTs under /sync-configs/{id}/ are NOT Go-routed and keep their bodies.
+_SYNC_ADMIN_ROUTES = [
+    ("GET", "/api/v1/admin/sync-configs/auto-import-capabilities", None),
+    ("GET", "/api/v1/admin/sync-targets", None),
+    ("GET", "/api/v1/admin/sync-configs", None),
+    ("POST", "/api/v1/admin/sync-configs", {"name": "n", "provider": "github"}),
+    (
+        "POST",
+        "/api/v1/admin/sync-configs/batch",
+        {
+            "name": "n",
+            "provider": "github",
+            "repos": ["a"],
+            "sync_options": {"owner": "acme"},
+        },
+    ),
+    ("GET", f"/api/v1/admin/sync-configs/{_SYNC_UUID}", None),
+    ("PATCH", f"/api/v1/admin/sync-configs/{_SYNC_UUID}", {}),
+    ("DELETE", f"/api/v1/admin/sync-configs/{_SYNC_UUID}", None),
+    ("GET", f"/api/v1/admin/sync-configs/{_SYNC_UUID}/repositories", None),
+    (
+        "PUT",
+        f"/api/v1/admin/sync-configs/{_SYNC_UUID}/repositories",
+        {"owner": "acme", "repos": ["a"]},
+    ),
+    ("GET", f"/api/v1/admin/sync-configs/{_SYNC_UUID}/jobs", None),
+    ("GET", f"/api/v1/admin/sync-configs/{_SYNC_UUID}/coverage", None),
+    ("GET", "/api/v1/admin/backfill-jobs", None),
+    ("GET", f"/api/v1/admin/backfill-jobs/{_SYNC_UUID}", None),
+]
+
+
+@pytest.mark.parametrize(("method", "path", "body"), _SYNC_ADMIN_ROUTES)
+def test_sync_admin_route_fires_the_go_api_sentinel(
+    method: str, path: str, body: dict | None, caplog: pytest.LogCaptureFixture
+):
+    """A deleted sync-admin body answers 500 naming go-api and logs the event."""
+    with caplog.at_level(logging.ERROR, logger="dev_health_ops.api.go_served"):
+        resp = client.request(method, path, json=body)
+    assert resp.status_code == 500, f"{method} {path} = {resp.status_code} {resp.text}"
+    detail = resp.json().get("detail", "")
+    assert "go-api" in detail and "no Python implementation" in detail, detail
+    assert any(
+        r.message == "rest.route_served_by_go_api"
+        and getattr(r, "plane", None) == "go-api"
+        for r in caplog.records
+    ), f"{method} {path} did not emit rest.route_served_by_go_api"
+
+
+@pytest.mark.parametrize(
+    "path", ["/sync-configs/{id}/trigger", "/sync-configs/{id}/backfill"]
+)
+def test_the_sync_config_trigger_and_backfill_posts_are_not_stubbed(path: str):
+    """The two routes the ingress does not send to Go keep their Python bodies."""
+    routes = {
+        (route.path, method)
+        for route in app.routes
+        for method in getattr(route, "methods", None) or ()
+    }
+    template = "/api/v1/admin" + path.replace("{id}", "{config_id}")
+    assert (template, "POST") in routes
+    resp = client.post(
+        template.replace("{config_id}", _SYNC_UUID),
+        json={} if path.endswith("backfill") else None,
+    )
+    detail = (
+        resp.json().get("detail", "")
+        if resp.headers.get("content-type", "").startswith("application/json")
+        else ""
+    )
+    assert "no Python implementation" not in str(detail), (resp.status_code, detail)

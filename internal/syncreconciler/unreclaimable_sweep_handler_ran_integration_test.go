@@ -118,12 +118,11 @@ func TestUnreclaimableSweepSparesAnAttemptedUnitThatIsNotProvablyDead(t *testing
 			},
 		},
 		{
-			name:      "the outbox delivery budget remains (StrandRepair's to re-arm)",
+			name:      "the outbox delivery budget remains (StrandRepair's to re-arm, never scanned by the sweep)",
 			heartbeat: old,
 			delivery: func(t *testing.T, ctx context.Context, pool *pgxpool.Pool, unit string) {
 				seedSweepDeliveryWithBudget(t, ctx, pool, unit, "discarded", "dev-health job failed [retryable]", 5, 5, 1)
 			},
-			wantDeferred: 1,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -194,5 +193,43 @@ func TestUnreclaimableSweepIsNotStarvedByAnAttemptedPrefixWithNoDelivery(t *test
 	if status, _, _, _ := sweepUnitState(t, ctx, pool, target); status != "failed" || result.Terminalized != 1 {
 		t.Fatalf("target status = %q, result %+v: %d older attempted units with no outbox row used up the sweep's scan budget "+
 			"and hid a provably dead delivery (r1 P1)", status, result, unreclaimableMaximumScan)
+	}
+}
+
+// r2 P1 (CHAOS-6890): the bounded candidate scan must not be spent on attempted units that
+// StrandRepair owns. 1 000 older attempted units with a delivered row, a HEALTHY queued River
+// job and outbox budget left (the reviewer's shape) used up the sweep's scan budget every pass
+// and hid a genuinely dead attempted unit whose outbox budget is spent.
+func TestUnreclaimableSweepIsNotStarvedByAttemptedUnitsStrandRepairOwns(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
+	defer cancel()
+	pool := startSweepPostgres(t, ctx)
+	now := time.Now().UTC()
+	seedSweepRun(t, ctx, pool, sweepRun, "dispatching")
+	heartbeat := now.Add(-33 * time.Hour)
+	for i := 0; i < unreclaimableMaximumScan; i++ {
+		unit := sweepUnitID(1000 + i)
+		spec := strandedSpec(unit, "repo-metadata", "heavy", now)
+		spec.createdAt = now.Add(-40*time.Hour - time.Duration(i)*time.Second) // all older than the target
+		spec.attempts = 2
+		spec.heartbeat = &heartbeat
+		seedSweepUnit(t, ctx, pool, spec)
+		seedSweepDeliveryWithBudget(t, ctx, pool, unit, "available", "", 1, 5, 1)
+	}
+	target := sweepUnitID(72)
+	spec := strandedSpec(target, "repo-metadata", "heavy", now) // created 16 h ago: after the whole prefix
+	spec.attempts = 4
+	spec.heartbeat = &heartbeat
+	seedSweepUnit(t, ctx, pool, spec)
+	seedSweepDelivery(t, ctx, pool, target, "discarded", "dev-health job failed [retryable]")
+
+	result, err := newSweepForTest(t, pool, SweepModeActive).Step(ctx, now, 100)
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if status, _, _, _ := sweepUnitState(t, ctx, pool, target); status != "failed" || result.Terminalized != 1 {
+		t.Fatalf("target status = %q, result %+v: %d attempted units with a live queued job and outbox budget left "+
+			"(StrandRepair's, never the sweep's) used up the scan budget and hid a dead delivery (r2 P1)",
+			status, result, unreclaimableMaximumScan)
 	}
 }

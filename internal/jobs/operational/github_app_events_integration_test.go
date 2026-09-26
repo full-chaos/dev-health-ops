@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 )
 
 // applyGithubAppEventSchema creates the two tables UpsertGithubAppEvent reads
@@ -20,32 +21,8 @@ import (
 // the full alembic chain against a throwaway container.
 func applyGithubAppEventSchema(ctx context.Context, t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
-	statements := []string{
-		`CREATE EXTENSION IF NOT EXISTS pgcrypto`,
-		`CREATE TABLE public.github_app_installations (
-			id UUID PRIMARY KEY,
-			installation_id BIGINT NOT NULL UNIQUE,
-			account_login TEXT,
-			account_type TEXT,
-			org_id TEXT,
-			suspended_at TIMESTAMPTZ,
-			created_at TIMESTAMPTZ NOT NULL,
-			updated_at TIMESTAMPTZ NOT NULL
-		)`,
-		`CREATE TABLE public.integration_credentials (
-			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-			org_id TEXT NOT NULL DEFAULT '',
-			provider TEXT NOT NULL,
-			name TEXT NOT NULL,
-			is_active BOOLEAN NOT NULL DEFAULT TRUE,
-			updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-		)`,
-	}
-	for _, statement := range statements {
-		if _, err := pool.Exec(ctx, statement); err != nil {
-			t.Fatalf("apply schema: %v\n%s", err, statement)
-		}
-	}
+	// The migrated schema: github_app_installations (alembic 0014) and integration_credentials.
+	pgschema.Apply(ctx, t, pool)
 }
 
 func installationRow(ctx context.Context, t *testing.T, pool *pgxpool.Pool, installationID int64) (login, accountType *string, orgID *string, suspendedAt *time.Time) {
@@ -132,8 +109,8 @@ VALUES (gen_random_uuid(), 999, 'org-1', $1, $1)`, now); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(ctx, `
-INSERT INTO public.integration_credentials (org_id, provider, name, is_active)
-VALUES ('org-1', 'github', 'github-app', TRUE)`); err != nil {
+INSERT INTO public.integration_credentials (id, org_id, provider, name, is_active, created_at, updated_at)
+VALUES (gen_random_uuid(), 'org-1', 'github', 'github-app', TRUE, now(), now())`); err != nil {
 		t.Fatal(err)
 	}
 

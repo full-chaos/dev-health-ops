@@ -165,8 +165,8 @@ func startReportClickHouse(t *testing.T, ctx context.Context) driver.Conn {
 func seedGoldenReport(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
 	if _, err := pool.Exec(ctx, `
-INSERT INTO saved_reports (id, org_id, report_plan, parameters, is_active, last_run_status, updated_at)
-VALUES ($1::uuid, $2, $3::jsonb, '{}'::jsonb, TRUE, NULL, NOW())`,
+INSERT INTO saved_reports (id, org_id, name, report_plan, parameters, is_active, last_run_status, updated_at)
+VALUES ($1::uuid, $2, 'golden report', $3::json, '{}'::json, TRUE, NULL, NOW())`,
 		goldenReportID, goldenOrganizationID, goldenReportPlan); err != nil {
 		t.Fatal(err)
 	}

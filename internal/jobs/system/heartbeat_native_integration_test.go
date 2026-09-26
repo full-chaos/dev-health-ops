@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 )
 
 // heartbeatOracleFixture is the shape of testdata/heartbeat_python_oracle.json,
@@ -52,48 +53,15 @@ func loadHeartbeatOracleFixture(t *testing.T) heartbeatOracleFixture {
 	return fixture
 }
 
-// applyHeartbeatSchema creates only the tables phone_home_heartbeat's
-// Postgres session touched (Organization, User, OrgLicense, AuditLog) --
-// same "create just what this test touches" pattern used by the
-// neighbouring operational package's integration tests, rather than running
-// the full alembic chain.
+// applyHeartbeatSchema builds the migrated schema: the heartbeat reads organizations, users and
+// org_licenses and writes audit_logs, all with their real columns, foreign keys and constraints.
 func applyHeartbeatSchema(ctx context.Context, t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
-	statements := []string{
-		`CREATE EXTENSION IF NOT EXISTS pgcrypto`,
-		`CREATE TABLE public.organizations (
-			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-			name TEXT NOT NULL
-		)`,
-		`CREATE TABLE public.users (
-			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-			email TEXT NOT NULL
-		)`,
-		`CREATE TABLE public.org_licenses (
-			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-			org_id UUID NOT NULL REFERENCES public.organizations(id),
-			license_key TEXT,
-			tier TEXT NOT NULL DEFAULT 'community'
-		)`,
-		`CREATE TABLE public.audit_logs (
-			id UUID PRIMARY KEY,
-			org_id UUID NOT NULL,
-			user_id UUID,
-			action TEXT NOT NULL,
-			resource_type TEXT NOT NULL,
-			resource_id TEXT NOT NULL,
-			description TEXT,
-			changes JSONB,
-			request_metadata JSONB,
-			status TEXT NOT NULL,
-			error_message TEXT,
-			created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-		)`,
-	}
-	for _, statement := range statements {
-		if _, err := pool.Exec(ctx, statement); err != nil {
-			t.Fatalf("schema statement failed: %v\n%s", err, statement)
-		}
+	pgschema.Apply(ctx, t, pool)
+	// The migrations seed a bootstrap user (and possibly organizations); the oracle's counts are for
+	// exactly the rows each test seeds, so start from empty tables.
+	if _, err := pool.Exec(ctx, `DELETE FROM public.users; DELETE FROM public.organizations`); err != nil {
+		t.Fatalf("clear migration seed rows: %v", err)
 	}
 }
 
@@ -131,7 +99,8 @@ func TestQueryHeartbeatFactsMatchesThePythonOracle(t *testing.T) {
 	for i := 0; i < fixture.Seed.Organizations; i++ {
 		var id string
 		if err := pool.QueryRow(ctx,
-			`INSERT INTO public.organizations (name) VALUES ($1) RETURNING id::text`,
+			`INSERT INTO public.organizations (id, slug, name, tier, is_active, created_at, updated_at)
+			 VALUES (gen_random_uuid(), 'org-' || gen_random_uuid()::text, $1, 'community', TRUE, now(), now()) RETURNING id::text`,
 			"org", // name content is irrelevant to the heartbeat compute
 		).Scan(&id); err != nil {
 			t.Fatal(err)
@@ -142,13 +111,13 @@ func TestQueryHeartbeatFactsMatchesThePythonOracle(t *testing.T) {
 	}
 	for i := 0; i < fixture.Seed.Users; i++ {
 		if _, err := pool.Exec(ctx,
-			`INSERT INTO public.users (email) VALUES ($1)`, "user@example.com",
+			`INSERT INTO public.users (id, email) VALUES (gen_random_uuid(), $1 || gen_random_uuid()::text)`, "user@example.com",
 		); err != nil {
 			t.Fatal(err)
 		}
 	}
 	if _, err := pool.Exec(ctx,
-		`INSERT INTO public.org_licenses (org_id, license_key, tier) VALUES ($1, $2, $3)`,
+		`INSERT INTO public.org_licenses (id, org_id, license_key, tier, created_at, updated_at) VALUES (gen_random_uuid(), $1, $2, $3, now(), now())`,
 		firstOrgID, fixture.Seed.OrgLicense.LicenseKey, fixture.Seed.OrgLicense.Tier,
 	); err != nil {
 		t.Fatal(err)
@@ -189,7 +158,8 @@ func TestNativeHeartbeatDispatcherWritesAuditLogAndPostsTelemetry(t *testing.T) 
 
 	var orgID string
 	if err := pool.QueryRow(ctx,
-		`INSERT INTO public.organizations (name) VALUES ('org') RETURNING id::text`,
+		`INSERT INTO public.organizations (id, slug, name, tier, is_active, created_at, updated_at)
+		 VALUES (gen_random_uuid(), 'org-' || gen_random_uuid()::text, 'org', 'community', TRUE, now(), now()) RETURNING id::text`,
 	).Scan(&orgID); err != nil {
 		t.Fatal(err)
 	}

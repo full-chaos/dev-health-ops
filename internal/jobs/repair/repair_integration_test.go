@@ -14,96 +14,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 )
-
-// ddl is the ledger schema exactly as the migrations create it (the columns the
-// runs and partitions carry are those the liveness reads name).
-var ddl = []string{
-	`CREATE TABLE work_graph_execution_requests (
-		id uuid PRIMARY KEY, org_id uuid NOT NULL,
-		kind text NOT NULL CHECK (kind IN ('workgraph.build','investment.materialize','investment.dispatch','investment.chunk','investment.finalize')),
-		scope jsonb NOT NULL,
-		model_ref text NULL, prompt_ref text NULL, llm_concurrency integer NOT NULL CHECK (llm_concurrency BETWEEN 1 AND 16),
-		spend_limit_microunits bigint NOT NULL CHECK (spend_limit_microunits >= 0),
-		correlation_id text NOT NULL, idempotency_key text NOT NULL UNIQUE,
-		state text NOT NULL DEFAULT 'pending' CHECK (state IN ('pending','running','succeeded','failed','ambiguous','canceled')),
-		claim_token uuid NULL, lease_expires_at timestamptz NULL,
-		attempt_count integer NOT NULL DEFAULT 0,
-		created_at timestamptz NOT NULL DEFAULT statement_timestamp(),
-		updated_at timestamptz NOT NULL DEFAULT statement_timestamp(),
-		CHECK ((state = 'running' AND claim_token IS NOT NULL AND lease_expires_at IS NOT NULL)
-			OR (state <> 'running' AND claim_token IS NULL AND lease_expires_at IS NULL)))`,
-	`CREATE TABLE work_graph_execution_ledger (
-		request_id uuid PRIMARY KEY REFERENCES work_graph_execution_requests(id) ON DELETE CASCADE,
-		claim_token uuid NOT NULL,
-		state text NOT NULL CHECK (state IN ('executing','succeeded','failed','ambiguous','repaired')),
-		attempt_count integer NOT NULL DEFAULT 1 CHECK (attempt_count >= 1),
-		output_evidence jsonb NULL,
-		failure_detail text NULL CHECK (failure_detail IS NULL OR length(failure_detail) BETWEEN 1 AND 1024),
-		last_attempt_at timestamptz NOT NULL DEFAULT statement_timestamp(),
-		completed_at timestamptz NULL,
-		CHECK ((state = 'succeeded' AND completed_at IS NOT NULL AND output_evidence IS NOT NULL)
-			OR (state <> 'succeeded' AND completed_at IS NULL)))`,
-	`CREATE TABLE work_graph_execution_repairs (
-		id uuid PRIMARY KEY,
-		request_id uuid NOT NULL REFERENCES work_graph_execution_requests(id) ON DELETE CASCADE,
-		expected_attempt_count integer NOT NULL CHECK (expected_attempt_count >= 1),
-		resolution text NOT NULL CHECK (resolution IN ('retry_safe','confirm_succeeded')),
-		review_evidence text NOT NULL CHECK (length(review_evidence) BETWEEN 1 AND 2048),
-		output_evidence jsonb NULL,
-		created_at timestamptz NOT NULL DEFAULT statement_timestamp(),
-		UNIQUE (request_id, expected_attempt_count, resolution),
-		CHECK ((resolution = 'confirm_succeeded' AND output_evidence IS NOT NULL)
-			OR (resolution = 'retry_safe' AND output_evidence IS NULL)))`,
-	`CREATE OR REPLACE FUNCTION forbid_work_graph_terminal_mutation() RETURNS trigger AS $$
-		BEGIN
-			IF OLD.state IN ('succeeded','failed','canceled') THEN
-				RAISE EXCEPTION 'terminal work graph execution request is immutable';
-			END IF;
-			RETURN NEW;
-		END; $$ LANGUAGE plpgsql`,
-	`CREATE TRIGGER work_graph_execution_terminal_immutable BEFORE UPDATE ON work_graph_execution_requests
-		FOR EACH ROW EXECUTE FUNCTION forbid_work_graph_terminal_mutation()`,
-	`CREATE TABLE metric_compatibility_executions (
-		id uuid PRIMARY KEY,
-		worker_kind text NOT NULL CHECK (worker_kind IN ('daily','remaining')),
-		operation text NOT NULL CHECK (operation IN ('partition','finalize')),
-		run_id uuid NOT NULL, partition_id uuid NULL,
-		family text NOT NULL, generation text NOT NULL, scope_digest text NOT NULL,
-		claim_token uuid NOT NULL,
-		state text NOT NULL CHECK (state IN ('executing','succeeded','ambiguous','retry_authorized')),
-		attempt_count integer NOT NULL DEFAULT 1 CHECK (attempt_count >= 1),
-		output_evidence jsonb NULL,
-		failure_detail text NULL,
-		created_at timestamptz NOT NULL DEFAULT statement_timestamp(),
-		last_attempt_at timestamptz NOT NULL DEFAULT statement_timestamp(),
-		completed_at timestamptz NULL,
-		CHECK ((operation = 'partition' AND partition_id IS NOT NULL) OR (operation = 'finalize' AND partition_id IS NULL)),
-		CHECK ((state = 'succeeded' AND completed_at IS NOT NULL AND output_evidence IS NOT NULL)
-			OR (state <> 'succeeded' AND completed_at IS NULL)))`,
-	`CREATE TABLE metric_compatibility_execution_repairs (
-		id uuid PRIMARY KEY,
-		execution_id uuid NOT NULL REFERENCES metric_compatibility_executions(id) ON DELETE CASCADE,
-		expected_state text NOT NULL CHECK (expected_state IN ('executing','ambiguous')),
-		expected_attempt_count integer NOT NULL CHECK (expected_attempt_count >= 1),
-		resolution text NOT NULL CHECK (resolution IN ('retry_safe','confirm_succeeded')),
-		review_evidence text NOT NULL CHECK (length(review_evidence) BETWEEN 1 AND 2048),
-		output_evidence jsonb NULL,
-		created_at timestamptz NOT NULL DEFAULT statement_timestamp(),
-		CHECK ((resolution = 'confirm_succeeded' AND output_evidence IS NOT NULL)
-			OR (resolution = 'retry_safe' AND output_evidence IS NULL)),
-		UNIQUE (execution_id, expected_state, expected_attempt_count, resolution))`,
-	`CREATE TABLE daily_metrics_runs (
-		id uuid PRIMARY KEY, status text NOT NULL,
-		finalization_status text NULL, finalization_claim_token uuid NULL, finalization_lease_expires_at timestamptz NULL)`,
-	`CREATE TABLE daily_metrics_partitions (
-		id uuid PRIMARY KEY, run_id uuid NOT NULL, status text NOT NULL,
-		claim_token uuid NULL, lease_expires_at timestamptz NULL)`,
-	`CREATE TABLE remaining_metric_runs (id uuid PRIMARY KEY, status text NOT NULL, canceled_at timestamptz NULL)`,
-	`CREATE TABLE remaining_metric_partitions (
-		id uuid PRIMARY KEY, run_id uuid NOT NULL, status text NOT NULL,
-		claim_token uuid NULL, lease_expires_at timestamptz NULL)`,
-}
 
 func startDB(t *testing.T) (context.Context, *pgxpool.Pool) {
 	t.Helper()
@@ -119,11 +31,9 @@ func startDB(t *testing.T) (context.Context, *pgxpool.Pool) {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	for _, stmt := range ddl {
-		if _, err := pool.Exec(ctx, stmt); err != nil {
-			t.Fatalf("ddl: %v\n%s", err, stmt)
-		}
-	}
+	// The migrated schema: the ledgers, their CHECK constraints and the terminal-immutability trigger
+	// (alembic 0060), and the run/partition tables the liveness reads name.
+	pgschema.Apply(ctx, t, pool)
 	return ctx, pool
 }
 
@@ -344,13 +254,13 @@ func seedExecution(t *testing.T, ctx context.Context, pool *pgxpool.Pool, kind, 
 		VALUES ($1,$2,$3,$4,$5,'f','g',$6,$7,$8,$9)`, execution, kind, operation, run, partitionArg, strings.Repeat("a", 64), claim, state, attempt)
 	switch {
 	case kind == "remaining":
-		mustExec(t, ctx, pool, `INSERT INTO remaining_metric_runs (id, status) VALUES ($1, 'running')`, run)
-		mustExec(t, ctx, pool, `INSERT INTO remaining_metric_partitions (id, run_id, status, claim_token, lease_expires_at) VALUES ($1,$2,'running',$3,`+lease+`)`, partition, run, claim)
+		mustExec(t, ctx, pool, `INSERT INTO remaining_metric_runs (id, org_id, family, generation, scope_key, status) VALUES ($1, gen_random_uuid(), 'capacity', 'g', 'k', 'running')`, run)
+		mustExec(t, ctx, pool, `INSERT INTO remaining_metric_partitions (id, run_id, ordinal, scope, status, claim_token, lease_expires_at) VALUES ($1,$2,1,'{}'::jsonb,'running',$3,`+lease+`)`, partition, run, claim)
 	case operation == "partition":
-		mustExec(t, ctx, pool, `INSERT INTO daily_metrics_runs (id, status) VALUES ($1, 'running')`, run)
-		mustExec(t, ctx, pool, `INSERT INTO daily_metrics_partitions (id, run_id, status, claim_token, lease_expires_at) VALUES ($1,$2,'running',$3,`+lease+`)`, partition, run, claim)
+		mustExec(t, ctx, pool, `INSERT INTO daily_metrics_runs (id, org_id, target_day, generation, status, created_at, updated_at) VALUES ($1, gen_random_uuid(), '2026-01-01', 'g', 'running', now(), now())`, run)
+		mustExec(t, ctx, pool, `INSERT INTO daily_metrics_partitions (id, run_id, ordinal, repo_ids, status, claim_token, lease_expires_at, created_at, updated_at) VALUES ($1,$2,0,'[]'::json,'running',$3,`+lease+`, now(), now())`, partition, run, claim)
 	default:
-		mustExec(t, ctx, pool, `INSERT INTO daily_metrics_runs (id, status, finalization_status, finalization_claim_token, finalization_lease_expires_at) VALUES ($1,'running','running',$2,`+lease+`)`, run, claim)
+		mustExec(t, ctx, pool, `INSERT INTO daily_metrics_runs (id, org_id, target_day, generation, status, finalization_status, finalization_claim_token, finalization_lease_expires_at, created_at, updated_at) VALUES ($1, gen_random_uuid(), '2026-01-01', 'g', 'running','running',$2,`+lease+`, now(), now())`, run, claim)
 	}
 	return execution, run
 }

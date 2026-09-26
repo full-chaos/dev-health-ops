@@ -10,36 +10,12 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 )
 
-// The gate's fixture schema.
-//
-// The check constraints are carried over from the migrations (0057 for the
-// tables, 0113 for the failed_permanent terminal state) rather than omitted,
-// because a fixture that cannot REJECT an impossible row also cannot prove that
-// the state it seeds is one production could actually reach. Without the
-// partition status constraint, a typo'd 'failed_permanant' would seed happily
-// and the stuck-partition cells below would silently test nothing.
-const readinessFixtureDDL = `
-CREATE TABLE daily_metrics_runs (
-    id                  uuid PRIMARY KEY,
-    org_id              uuid NOT NULL,
-    target_day          date NOT NULL,
-    generation          varchar(64) NOT NULL,
-    status              varchar(16) NOT NULL DEFAULT 'pending',
-    finalization_status varchar(16) NOT NULL DEFAULT 'pending',
-    created_at          timestamptz NOT NULL,
-    updated_at          timestamptz NOT NULL
-);
-CREATE TABLE daily_metrics_partitions (
-    id      uuid PRIMARY KEY,
-    run_id  uuid NOT NULL REFERENCES daily_metrics_runs(id) ON DELETE CASCADE,
-    ordinal int NOT NULL,
-    status  varchar(24) NOT NULL,
-    CONSTRAINT ck_daily_metrics_partition_status CHECK (
-        status IN ('pending', 'running', 'succeeded', 'failed', 'failed_permanent')
-    )
-);`
+// The gate runs against the migrated schema: the check constraints (0057 for the tables, 0113 for
+// the failed_permanent terminal state) are the real ones, so a fixture cannot seed an impossible
+// row (a typo'd 'failed_permanant', a permanent failure without a reason).
 
 type recordingObserver struct {
 	failOpen []string
@@ -85,9 +61,7 @@ func TestReadinessDecisionsMatchTheReferenceAcrossTheStateGrid(t *testing.T) {
 	}
 	t.Cleanup(pool.Close)
 
-	if _, err := pool.Exec(ctx, readinessFixtureDDL); err != nil {
-		t.Fatalf("create fixture schema: %v", err)
-	}
+	pgschema.Apply(ctx, t, pool)
 
 	const orgID = "5f0f5a0c-0000-4000-8000-000000000001"
 	day := time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC)
@@ -211,9 +185,7 @@ func TestTheLatestGenerationDecidesRatherThanTheKindestOne(t *testing.T) {
 		t.Fatalf("connect: %v", err)
 	}
 	t.Cleanup(pool.Close)
-	if _, err := pool.Exec(ctx, readinessFixtureDDL); err != nil {
-		t.Fatalf("create fixture schema: %v", err)
-	}
+	pgschema.Apply(ctx, t, pool)
 
 	const orgID = "5f0f5a0c-0000-4000-8000-000000000002"
 	day := time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC)
@@ -269,9 +241,10 @@ func seedReadinessRunAt(
 		partitionStatus = "failed_permanent"
 	}
 	if _, err := pool.Exec(ctx, `
-        INSERT INTO daily_metrics_partitions (id, run_id, ordinal, status)
-        VALUES (gen_random_uuid(), CAST($1 AS uuid), 0, $2)`,
-		runID, partitionStatus,
+        INSERT INTO daily_metrics_partitions (id, run_id, ordinal, repo_ids, status, failure_reason, created_at, updated_at)
+        VALUES (gen_random_uuid(), CAST($1 AS uuid), 0, '[]'::json, $2::text,
+                CASE WHEN $2::text = 'failed_permanent' THEN 'seeded' END, $3, $3)`,
+		runID, partitionStatus, createdAt,
 	); err != nil {
 		t.Fatalf("seed partition: %v", err)
 	}

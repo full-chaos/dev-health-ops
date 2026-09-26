@@ -1276,6 +1276,19 @@ func TestPreclaimReadinessExitsImmediatelyOnGenuinePostureMismatch(t *testing.T)
 	}
 }
 
+// r1 P1 on #3317 (fixed, scoped to this PR's two leaf functions -- NOT a change to the registry's
+// own retry classification, which already treats a bare context.Canceled as retryable and is out
+// of scope here, D2664): selfprobe.Once and CheckPostureManifestLockstep used to preserve
+// context.Canceled the same way they preserve a deadline, so a check built on either of them that
+// was canceled for some OTHER reason (not merely waiting out its own deadline on a busy pool) would
+// retry to the whole budget instead of failing fast like any other genuine problem. Neither
+// function exposes Canceled any more; pinned directly against them at the unit and integration
+// level (once_timeout_class_test.go's TestOnceNeverClassifiesCancellationAsARetryableTimeout,
+// posture_manifest_timeout_class_integration_test.go's
+// TestPostureManifestLockstepNeverClassifiesCancellationAsARetryableTimeout). A preclaim check
+// registered directly with a bare context.Canceled (bypassing both functions) is the registry's
+// own pre-existing classification and is unaffected by this change.
+
 // A dependency that never recovers within the configured retry budget must
 // still end the process -- retrying is a survivability measure for a roll
 // storm, not a way to hang forever -- and must log how many attempts it took

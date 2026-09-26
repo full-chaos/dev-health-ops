@@ -124,3 +124,5 @@ b1a8b551d0488ca836ac050956eab0b2baf08cd2:cmd/go-api-routing/verbs_integration_te
 b1a8b551d:cmd/go-api-routing/verbs_integration_test.go:jwt:56
 34403706667c2c8cee4bd0d9629ca1d1de9ae872:internal/goapiproof/routing_verbs_test.go:generic-api-key:601
 344037066:internal/goapiproof/routing_verbs_test.go:generic-api-key:601
+1a550a42cc022e14f04b1d7617c0f6a51fe49ac3:internal/apiservice/admin/pagerduty_authorize_oracle_test.go:generic-api-key:51
+1a550a42c:internal/apiservice/admin/pagerduty_authorize_oracle_test.go:generic-api-key:51

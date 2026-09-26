@@ -312,21 +312,6 @@ internal/storage/river/migrate_integration_test.go	worker_job_delivery_abandonme
 internal/storage/river/migrate_integration_test.go	worker_job_outbox	PROBE	state
 internal/storage/river/migrate_integration_test.go	worker_job_routes	PROBE	id
 internal/storage/river/migrate_integration_test.go	worker_job_runs	PROBE	
-internal/syncbudget/loader_integration_test.go	integration_credentials	SUBSET	
-internal/syncbudget/loader_integration_test.go	integration_datasets	SUBSET	
-internal/syncbudget/loader_integration_test.go	integration_sources	SUBSET	
-internal/syncbudget/loader_integration_test.go	integrations	SUBSET	
-internal/syncbudget/loader_integration_test.go	sync_run_units	SUBSET	
-internal/syncbudget/loader_integration_test.go	sync_runs	SUBSET	
-internal/synccoverage/invalidate_integration_test.go	sync_configurations	SUBSET	
-internal/synccoverage/invalidate_integration_test.go	sync_coverage_projections	SUBSET	
-internal/synccoverage/projector_integration_test.go	backfill_jobs	SUBSET	
-internal/synccoverage/projector_integration_test.go	integration_datasets	SUBSET	
-internal/synccoverage/projector_integration_test.go	integration_sources	SUBSET	
-internal/synccoverage/projector_integration_test.go	scheduled_jobs	SUBSET	
-internal/synccoverage/projector_integration_test.go	sync_configurations	SUBSET	
-internal/synccoverage/projector_integration_test.go	sync_run_units	SUBSET	
-internal/synccoverage/projector_integration_test.go	sync_runs	SUBSET	
 internal/syncdispatchruntime/domain_role_statement_privileges_integration_test.go	backfill_jobs	SUBSET	
 internal/syncdispatchruntime/domain_role_statement_privileges_integration_test.go	feature_flags	SUBSET	
 internal/syncdispatchruntime/domain_role_statement_privileges_integration_test.go	integration_datasets	SUBSET	
@@ -349,8 +334,6 @@ internal/syncdispatchruntime/native_dispatch_sync_run_service_integration_test.g
 internal/syncdispatchruntime/publisher_integration_test.go	sync_dispatch_outbox	PROBE	state
 internal/syncdispatchruntime/publisher_integration_test.go	sync_dispatch_transport_routes	PROBE	
 internal/syncdispatchruntime/publisher_integration_test.go	worker_job_outbox	PROBE	state
-internal/syncreconciler/failure_backoff_integration_test.go	sync_dispatch_outbox	SUBSET	
-internal/syncreconciler/failure_backoff_integration_test.go	sync_dispatch_transport_routes	SUBSET	
 internal/syncreconciler/kernel_integration_test.go	audit_logs	PROBE	
 internal/syncreconciler/kernel_integration_test.go	backfill_jobs	PROBE	
 internal/syncreconciler/kernel_integration_test.go	billing_notifications	PROBE	
@@ -407,8 +390,6 @@ internal/syncreconciler/kernel_integration_test.go	worker_job_delivery_abandonme
 internal/syncreconciler/kernel_integration_test.go	worker_job_outbox	PROBE	state
 internal/syncreconciler/kernel_integration_test.go	worker_job_routes	PROBE	id
 internal/syncreconciler/kernel_integration_test.go	worker_job_runs	PROBE	
-internal/syncreconciler/lease_repair_integration_test.go	sync_run_units	SUBSET	
-internal/syncreconciler/lease_repair_integration_test.go	sync_runs	SUBSET	
 internal/syncreconciler/materializer_finalize_backstop_integration_test.go	sync_dispatch_transport_routes	SUBSET	
 internal/syncreconciler/materializer_integration_test.go	scheduled_sync_occurrences	SUBSET	
 internal/syncreconciler/materializer_integration_test.go	sync_run_reference_discoveries	SUBSET	

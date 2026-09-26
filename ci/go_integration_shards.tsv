@@ -169,9 +169,9 @@ internal/storage/river	38
 internal/streamhandlers	190
 internal/streamrunner	2
 internal/syncdispatchruntime	900
-internal/syncreconciler	203
-internal/synccoverage	4
-internal/syncbudget	14
+internal/syncreconciler	210
+internal/synccoverage	14
+internal/syncbudget	60
 internal/syncroute	10
 internal/teamattribution	31
 internal/teamownership	81

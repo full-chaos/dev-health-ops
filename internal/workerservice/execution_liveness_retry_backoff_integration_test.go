@@ -103,7 +103,7 @@ type backoffFixture struct {
 	window    time.Duration
 }
 
-func newBackoffFixture(t *testing.T, failFirst int64) *backoffFixture {
+func newBackoffFixture(t *testing.T, failFirst int64, window time.Duration) *backoffFixture {
 	t.Helper()
 	t.Chdir(filepath.Join("..", ".."))
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
@@ -160,7 +160,6 @@ func newBackoffFixture(t *testing.T, failFirst int64) *backoffFixture {
 	}
 	const queue = "retention"
 
-	window := 2 * time.Second
 	claim := newClaimLiveness(time.Now(), []string{queue})
 	claim.SetStaleWindow(window)
 	claim.markRuntimeLive()
@@ -294,7 +293,7 @@ func (f *backoffFixture) queueReads(t *testing.T) (available, running int64) {
 // reads Available=0/Running=0, and after more than the window with several
 // failures and no handler ever run, execution_liveness must be red.
 func TestExecutionLivenessSeesIdempotencyFailuresSpacedByRiverRetryBackoff(t *testing.T) {
-	f := newBackoffFixture(t, 0)
+	f := newBackoffFixture(t, 0, 2*time.Second)
 	f.workServe.DropConnections(true) // the pooler is recreated: Begin fails from now on
 	id := f.insert(t)
 	started := time.Now()
@@ -346,7 +345,15 @@ func TestExecutionLivenessSeesIdempotencyFailuresSpacedByRiverRetryBackoff(t *te
 // negative control on the same live path: one Begin failure, River's backoff,
 // then a normal run. Readiness must stay green through the whole sequence.
 func TestExecutionLivenessIgnoresATransientIdempotencyFailureThatRecovers(t *testing.T) {
-	f := newBackoffFixture(t, 1)
+	// The window is longer than River's first retry delay (5s +/-10%). With a
+	// window SHORTER than the backoff, the queue is legitimately "available work,
+	// no handler for the window" for the instant River promotes the retry, and the
+	// long-standing backlog arm (not this change) reads it red: that is a separate
+	// finding, not this control's question, which is a single Begin blip.
+	f := newBackoffFixture(t, 1, 15*time.Second)
+	// The claim clock was seeded when the fixture was built, before the container
+	// and River client finished starting. Age it from the moment the job exists.
+	f.claim.recordClaim("retention", time.Now())
 	id := f.insert(t)
 	deadline := time.Now().Add(45 * time.Second)
 	var sawRetryable bool

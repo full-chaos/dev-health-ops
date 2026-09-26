@@ -133,7 +133,7 @@ func TestUnreclaimableSweepSparesAnAttemptedUnitThatIsNotProvablyDead(t *testing
 			if err != nil {
 				t.Fatalf("sweep: %v", err)
 			}
-			if status, _, _, _ := sweepUnitState(t, ctx, pool, unit); status != "dispatching" || result.Terminalized != 0 {
+			if status, _, _, _ := sweepUnitState(t, ctx, pool, unit); status != "dispatching" || result.Terminalized != 0 || result.Candidates != 0 {
 				t.Fatalf("unit status = %q, result %+v: an attempted unit must be left alone unless its delivery is "+
 					"dead, its budget spent and its worker silent", status, result)
 			}

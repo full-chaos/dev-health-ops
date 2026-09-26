@@ -61,7 +61,7 @@ internal/reconcilerservice	5
 internal/workerservice	246
 internal/goapicli/prove	15
 internal/goapicli/routing	100
-internal/workersctl	14
+internal/workersctl	40
 internal/queryapi/server	520
 internal/queryapi/aianalytics	65
 internal/queryapi/analytics	251

@@ -14,6 +14,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -407,140 +408,15 @@ func startRetentionPostgres(t *testing.T, ctx context.Context) *pgxpool.Pool {
 
 func createRetentionTables(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
+	// The migrated schema: provider_rate_limit_observations, external_ingest_*, dev_conversations /
+	// dev_messages / dev_conversation_tombstones (alembic 0068) and the worker outbox tables carry
+	// their real columns, constraints and foreign keys.
+	pgschema.Apply(ctx, t, pool)
+	// The one test-owned relation: a same-shaped table the table-scoped delete must never touch.
 	if _, err := pool.Exec(ctx, `
-CREATE TABLE provider_rate_limit_observations (
-	id uuid PRIMARY KEY,
-	org_id text NOT NULL,
-	provider text NOT NULL,
-	integration_id uuid NOT NULL,
-	sync_run_id uuid NOT NULL,
-	sync_run_unit_id uuid NOT NULL,
-	observed_at timestamptz NOT NULL
-);
 CREATE TABLE decoy_rate_limit_observations (
 	id uuid PRIMARY KEY,
 	observed_at timestamptz NOT NULL
-);
-CREATE TABLE external_ingest_batches (
-	ingestion_id uuid PRIMARY KEY,
-	org_id text NOT NULL,
-	idempotency_key text NOT NULL,
-	payload_hash text NOT NULL,
-	source_system text NOT NULL,
-	source_instance text NOT NULL,
-	entity_family text NOT NULL DEFAULT 'legacy',
-	schema_version text NOT NULL,
-	status text NOT NULL,
-	attempts integer NOT NULL DEFAULT 1,
-	items_received integer NOT NULL DEFAULT 0,
-	items_accepted integer NOT NULL DEFAULT 0,
-	items_rejected integer NOT NULL DEFAULT 0,
-	created_at timestamptz NOT NULL,
-	updated_at timestamptz NOT NULL,
-	recompute_status text NOT NULL DEFAULT 'not_applicable'
-);
-CREATE TABLE external_ingest_rejections (
-	id uuid PRIMARY KEY,
-	org_id text NOT NULL,
-	ingestion_id uuid NOT NULL
-		REFERENCES external_ingest_batches(ingestion_id) ON DELETE CASCADE,
-	record_index integer NOT NULL,
-	record_kind text NOT NULL,
-	code text NOT NULL,
-	message text NOT NULL,
-	created_at timestamptz NOT NULL
-);
--- dev_conversations, dev_messages and dev_conversation_tombstones mirror
--- alembic 0068_add_ask_dev_persistence.py column for column and constraint
--- for constraint, except the org_id/user_id foreign keys to organizations
--- and users: those tables carry no retention-relevant state, so pulling
--- their full shape in here would only test referential integrity this
--- package's queries do not depend on. Every column and check constraint the
--- retention path itself can observe (used in a WHERE/SELECT/INSERT the Go
--- stores issue, or asserted against by these tests) is reproduced exactly.
-CREATE TABLE dev_conversations (
-	id uuid PRIMARY KEY,
-	org_id uuid NOT NULL,
-	user_id uuid NOT NULL,
-	title varchar(200),
-	current_scope jsonb NOT NULL,
-	retention_days smallint NOT NULL,
-	created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
-	updated_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
-	expires_at timestamptz,
-	deleted_at timestamptz,
-	CONSTRAINT ck_dev_conversations_retention_days CHECK (retention_days IN (0, 30)),
-	CONSTRAINT ck_dev_conversations_title_length CHECK (title IS NULL OR length(title) <= 200),
-	CONSTRAINT uq_dev_conversations_owner_identity UNIQUE (id, org_id, user_id)
-);
-CREATE TABLE dev_messages (
-	id uuid PRIMARY KEY,
-	conversation_id uuid NOT NULL,
-	org_id uuid NOT NULL,
-	user_id uuid NOT NULL,
-	client_message_id uuid,
-	role varchar(16) NOT NULL,
-	content text,
-	answer_id uuid,
-	answer_payload jsonb,
-	scope_snapshot jsonb NOT NULL,
-	created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
-	CONSTRAINT ck_dev_messages_role CHECK (role IN ('user', 'assistant')),
-	CONSTRAINT ck_dev_messages_role_payload CHECK (
-		(role = 'user' AND client_message_id IS NOT NULL
-			AND content IS NOT NULL AND answer_id IS NULL AND answer_payload IS NULL)
-		OR (role = 'assistant' AND client_message_id IS NULL
-			AND answer_id IS NOT NULL AND answer_payload IS NOT NULL)
-	),
-	CONSTRAINT uq_dev_messages_conversation_client_message UNIQUE (conversation_id, client_message_id),
-	CONSTRAINT uq_dev_messages_answer_id UNIQUE (answer_id),
-	CONSTRAINT fk_dev_messages_conversation_owner
-		FOREIGN KEY (conversation_id, org_id, user_id)
-		REFERENCES dev_conversations (id, org_id, user_id) ON DELETE CASCADE
-);
-CREATE TABLE dev_conversation_tombstones (
-	id uuid PRIMARY KEY,
-	conversation_id uuid NOT NULL,
-	org_id uuid NOT NULL,
-	user_id uuid NOT NULL,
-	actor_user_id uuid,
-	reason varchar(32) NOT NULL,
-	retention_days smallint NOT NULL,
-	conversation_created_at timestamptz NOT NULL,
-	deleted_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
-	CONSTRAINT ck_dev_conversation_tombstones_reason CHECK (
-		reason IN ('user_deleted', 'admin_purged', 'retention_expired', 'ephemeral_completed')
-	),
-	CONSTRAINT ck_dev_conversation_tombstones_retention_days CHECK (retention_days IN (0, 30)),
-	CONSTRAINT uq_dev_conversation_tombstones_conversation UNIQUE (conversation_id)
-);
--- worker_job_outbox, worker_job_delivery_abandonments and
--- worker_job_completion_fences reproduce exactly the columns
--- joboutbox.Repository.DeleteTerminalBefore's query touches, the same way
--- the tables above reproduce only what their own store's query touches. The
--- real table carries queue-role delivery-tracking columns this retention
--- path never reads.
-CREATE TABLE worker_job_outbox (
-	id uuid PRIMARY KEY,
-	dedupe_key text NOT NULL UNIQUE,
-	job_kind text NOT NULL,
-	status text NOT NULL,
-	attempt_count integer NOT NULL DEFAULT 0,
-	last_error_code varchar(64),
-	delivered_at timestamptz,
-	updated_at timestamptz NOT NULL,
-	prerequisite_completion_key text
-);
-CREATE TABLE worker_job_delivery_abandonments (
-	dedupe_key text PRIMARY KEY,
-	job_kind text NOT NULL,
-	abandoned_at timestamptz NOT NULL,
-	attempt_count integer NOT NULL,
-	last_error_code varchar(64)
-);
-CREATE TABLE worker_job_completion_fences (
-	completion_key text PRIMARY KEY,
-	completed_at timestamptz NOT NULL DEFAULT statement_timestamp()
 )`); err != nil {
 		t.Fatal(err)
 	}
@@ -559,6 +435,16 @@ func insertAskDevConversation(
 	conversationID := retentionUUID(t, "0000001a", index)
 	orgID := retentionUUID(t, "0000001b", 1)
 	userID := retentionUUID(t, "0000001c", 1)
+	// dev_conversations reference a real organization and user (foreign keys): create them once.
+	if _, err := pool.Exec(ctx, `
+INSERT INTO organizations (id, slug, name, tier, is_active, created_at, updated_at)
+VALUES ($1::uuid, 'org-retention', 'retention org', 'community', TRUE, now(), now()) ON CONFLICT DO NOTHING`, orgID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+INSERT INTO users (id, email) VALUES ($1::uuid, 'retention@example.test') ON CONFLICT DO NOTHING`, userID); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := pool.Exec(ctx, `
 INSERT INTO dev_conversations (
 	id, org_id, user_id, current_scope, retention_days, created_at, expires_at
@@ -659,10 +545,17 @@ func insertTerminalOutboxRow(
 ) {
 	t.Helper()
 	id := retentionUUID(t, "0000002a", index)
+	// Every NOT NULL column and check constraint of the real outbox: a delivered row carries its River
+	// job id and delivery time, and a last error carries its detail and time.
 	if _, err := pool.Exec(ctx, `
 INSERT INTO worker_job_outbox (
-	id, dedupe_key, job_kind, status, attempt_count, last_error_code, delivered_at, updated_at
-) VALUES ($1, $2, 'sync.provider_unit', $3, $4, $5, $6, $7)`,
+	id, dedupe_key, job_kind, contract_version, args, payload_hash, queue, priority, max_attempts,
+	scheduled_at, status, attempt_count, next_attempt_at, last_error_code, last_error_detail, last_error_at,
+	river_job_id, delivered_at, created_at, updated_at
+) VALUES ($1::uuid, $2::text, 'sync.provider_unit', 1, '{}'::json, 'sha256:' || repeat('0', 64), 'default', 2, 5,
+	$7::timestamptz, $3::text, $4, $7::timestamptz, $5::varchar, CASE WHEN $5::varchar IS NULL THEN NULL ELSE 'retention test' END,
+	CASE WHEN $5::varchar IS NULL THEN NULL ELSE $7::timestamptz END,
+	CASE WHEN $3::text = 'delivered' THEN abs(hashtextextended($2::text, 0)) END, $6::timestamptz, $7::timestamptz, $7::timestamptz)`,
 		id, terminalOutboxDedupeKey(index), status, attemptCount, lastErrorCode, deliveredAt, updatedAt); err != nil {
 		t.Fatal(err)
 	}

@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1001,4 +1002,95 @@ func TestShellExportsOTelInstrumentsOnMetrics(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("shell did not terminate after cancellation")
 	}
+}
+
+// CHAOS-6883: the 503 body names the failing checks and kubelet keeps no body, so
+// a refusal that cleared left no trace anywhere. A shell-run service must log
+// which required check refused and how (bounded cause), and never the error text,
+// which can carry a DSN.
+func TestShellLogsWhichRequiredCheckRefusedReadinessWithoutTheErrorText(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := listener.Addr().String()
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var stdout, stderr syncBuffer
+	done := make(chan int, 1)
+	go func() {
+		done <- Execute(ctx, Spec{
+			Service: "dev-health-worker",
+			ConfigureDependencies: func(
+				_ context.Context, _ config.Config, registry *health.Registry,
+			) ([]lifecycle.Component, error) {
+				return nil, registry.RegisterRequired("refusing_dependency", func(context.Context) error {
+					return errors.New("dial postgres://user:do-not-print@db.internal/x: connection refused")
+				})
+			},
+		}, nil, testLookup(map[string]string{
+			"DEV_HEALTH_HTTP_ADDR":        address,
+			"DEV_HEALTH_SHUTDOWN_TIMEOUT": "1s",
+		}), IO{Stdout: &stdout, Stderr: &stderr})
+	}()
+
+	client := &http.Client{Timeout: time.Second}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		response, requestErr := client.Get("http://" + address + "/readyz")
+		if requestErr == nil {
+			body, _ := io.ReadAll(response.Body)
+			_ = response.Body.Close()
+			if response.StatusCode == http.StatusServiceUnavailable && strings.Contains(string(body), "refusing_dependency") {
+				break
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the service never answered 503 naming the check: err=%v logs=%s", requestErr, stdout.String())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	// The refusal line is written off the readiness path: wait for it.
+	for logDeadline := time.Now().Add(3 * time.Second); !strings.Contains(stdout.String(), `"msg":"readiness check refused"`) &&
+		time.Now().Before(logDeadline); {
+		time.Sleep(10 * time.Millisecond)
+	}
+	logs := stdout.String()
+	for _, want := range []string{`"msg":"readiness check refused"`, `"check":"refusing_dependency"`, `"cause":"error"`} {
+		if !strings.Contains(logs, want) {
+			t.Errorf("the refusal log lacks %s: %s", want, logs)
+		}
+	}
+	for _, forbidden := range []string{"do-not-print", "db.internal", "postgres://"} {
+		if strings.Contains(logs, forbidden) {
+			t.Errorf("the refusal log leaked %q: %s", forbidden, logs)
+		}
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("shell did not terminate after cancellation")
+	}
+}
+
+// syncBuffer is a bytes.Buffer the shell's logger and the test can share.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }

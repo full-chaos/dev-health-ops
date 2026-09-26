@@ -83,11 +83,11 @@ import (
 // copy-of-a-rule failure this file's header is about, moved into the
 // operator's terminal.
 func RoutingStateSQL() (string, error) {
-	primaryClause, err := goapiproof.EnablementProofClause("pr", goapiproof.TargetModePrimary)
+	primaryClause, err := goapiproof.EnablementProofClauseAnyKind("pr", goapiproof.TargetModePrimary)
 	if err != nil {
 		return "", fmt.Errorf("build the primary enablement predicate: %w", err)
 	}
-	canaryClause, err := goapiproof.EnablementProofClause("pr", goapiproof.TargetModeCanary)
+	canaryClause, err := goapiproof.EnablementProofClauseAnyKind("pr", goapiproof.TargetModeCanary)
 	if err != nil {
 		return "", fmt.Errorf("build the canary enablement predicate: %w", err)
 	}

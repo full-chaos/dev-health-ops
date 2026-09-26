@@ -436,6 +436,76 @@ async def test_status_names_an_unregistered_live_row_on_both_outputs(
     ] == [("UNREGISTERED", "primary", True, False)], rows
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("digest", "expected"),
+    # (a NULL digest cannot exist: the shape CHECK refuses the row)
+    [("sha256:6810write", True), ("   ", False), ("\u00a0", False)],
+    ids=["named_digest", "blank_digest", "nbsp_digest"],
+)
+async def test_status_reads_an_unregistered_row_by_its_write_receipt_too(
+    session_factory: Any,
+    capsys: pytest.CaptureFixture[str],
+    digest: str,
+    expected: bool,
+) -> None:
+    """CHAOS-6810: `enable` admits nothing for an operation of unknown kind, but
+    this page is display-only: a live row for a retired operation reports what
+    receipts it HAS, judged by each receipt's own form. A well-formed
+    write_executed receipt reads proven; one whose digest names nothing does not."""
+    retired = "f" * 64
+    async with session_factory() as session:
+        await register_candidate_build(
+            session,
+            schema_digest=current_schema_digest(),
+            document_digest=retired,
+            selected_operation="retiredMutation",
+            candidate_build=BUILD,
+        )
+        await session.execute(
+            sa.insert(ProofRun).values(
+                id=uuid.uuid4(),
+                schema_digest=current_schema_digest(),
+                document_digest=retired,
+                selected_operation="retiredMutation",
+                candidate_build=BUILD,
+                request_identity=f"test-{uuid.uuid4().hex[:8]}",
+                stage="write_executed",
+                terminal_state="match",
+                measurement_route="edge",
+                build_binding="per_request",
+                side_effect_digest=digest,
+            )
+        )
+        session.add(
+            RoutingState(
+                schema_digest=current_schema_digest(),
+                document_digest=retired,
+                selected_operation="retiredMutation",
+                current_candidate_build=BUILD,
+                owner="go",
+                mode="primary",
+                rollout_percentage=100,
+            )
+        )
+        await session.commit()
+    with FakeQueryAPI(registry_payload()) as url:
+        assert (
+            await go_api_cli._cmd_routing_status(
+                argparse.Namespace(query_api_url=url, json=True)
+            )
+            == 0
+        )
+    rows = [
+        r
+        for r in json.loads(capsys.readouterr().out)["operations"]
+        if r["operation"] == "retiredMutation"
+    ]
+    assert [(r["digest_state"], r["proven"]) for r in rows] == [
+        ("UNREGISTERED", expected)
+    ], rows
+
+
 async def _reset(factory: Any) -> None:
     async with factory() as session:
         await session.execute(sa.delete(RoutingState))

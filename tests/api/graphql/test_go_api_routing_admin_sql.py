@@ -45,6 +45,9 @@ def _compiled_proof_query(
         candidate_build="build-1",
         operations=operations,
         target_mode=target_mode,
+        # This helper inspects the QUERY rule's SQL for arbitrary operation
+        # names (some not in the catalog): each is declared a query.
+        operation_kinds={operation: "query" for operation in operations},
     )
     return str(
         stmt.compile(
@@ -295,3 +298,31 @@ def test_an_unknown_target_mode_is_refused_on_both_builders(builder) -> None:
         assert repr(unknown) in message, message
         for legal in ENABLEMENT_TARGET_MODES:
             assert legal in message, message
+
+
+def test_an_operation_of_unknown_kind_compiles_to_a_clause_that_admits_nothing() -> (
+    None
+):
+    """r1 P1: an operation absent from the catalog (or from the kind map) used
+    to be judged as a query, so a deployed_executed receipt could authorize it.
+    Its term must be absent: the statement scopes to FALSE for it."""
+    from dev_health_ops.api.graphql.go_api_routing_admin import (
+        build_enablement_proof_select,
+    )
+
+    for kinds in (None, {}, {"someMutation": "subscription"}, {"someMutation": ""}):
+        stmt = build_enablement_proof_select(
+            schema_digest="sha256:live",
+            candidate_build="build-1",
+            operations={"someMutation": "doc-x"},
+            target_mode="canary",
+            operation_kinds=kinds,
+        )
+        sql = " ".join(
+            str(stmt.compile(compile_kwargs={"literal_binds": True})).split()
+        )
+        assert "deployed_executed" not in sql and "write_executed" not in sql, (
+            kinds,
+            sql,
+        )
+        assert "AND false" in sql, (kinds, sql)

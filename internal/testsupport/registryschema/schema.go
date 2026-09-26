@@ -114,7 +114,7 @@ CREATE TABLE go_api_proof_run (
 		FOREIGN KEY (schema_digest, document_digest, selected_operation, candidate_build)
 		REFERENCES go_api_candidate_build (schema_digest, document_digest, selected_operation, candidate_build),
 	CONSTRAINT ck_go_api_proof_run_stage
-		CHECK (stage IN ('dual_run', 'deployed_executed', 'shadow', 'canary')),
+		CHECK (stage IN ('dual_run', 'deployed_executed', 'shadow', 'canary', 'write_executed')),
 	CONSTRAINT ck_go_api_proof_run_terminal_state
 		CHECK (terminal_state IN ('match', 'mismatch', 'auth_rejected', 'validation_rejected',
 			'dependency_failed', 'timeout', 'cancelled', 'resource_exhausted',
@@ -124,7 +124,10 @@ CREATE TABLE go_api_proof_run (
 	CONSTRAINT ck_go_api_proof_run_shadow_requires_watermark
 		CHECK (stage <> 'shadow' OR data_watermark IS NOT NULL),
 	CONSTRAINT ck_go_api_proof_run_measurement_route
-		CHECK (measurement_route IS NULL OR measurement_route IN ('edge', 'proof'))
+		CHECK (measurement_route IS NULL OR measurement_route IN ('edge', 'proof')),
+	CONSTRAINT ck_go_api_proof_run_write_executed_shape
+		CHECK (stage <> 'write_executed' OR
+			(side_effect_digest IS NOT NULL AND measurement_route IS NOT NULL))
 );
 
 CREATE TABLE go_api_rest_proof_run (

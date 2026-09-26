@@ -49,7 +49,7 @@ const revisionsGolden = "testdata/revisions_golden.json"
 // freshness check: the file is only rewritten by
 // TestRevisionsVenueOracleMatchesAlembic with DHO_REVISIONS_GOLDEN_UPDATE=1,
 // then this digest is updated.
-const revisionsGoldenSHA256 = "d52d0d0e0b4cf7b203f0f2a745b0d30c2e0c51d14b63d63bc02b1673362f2456"
+const revisionsGoldenSHA256 = "37ffdd2d6ca0c3a1610bb3ee778af066ac01b28c85bcd4009b5e94892656b070"
 
 type revisionResult struct {
 	Name   string `json:"name"`

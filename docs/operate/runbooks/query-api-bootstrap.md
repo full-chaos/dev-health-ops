@@ -213,6 +213,24 @@ Secret, and remove the operator script that used to hand-mint it from the
 prod host. Re-run the 12-operation proof above afterward to confirm the
 in-process path alone still produces a clean result.
 
+### Enabling a GraphQL mutation (write proof)
+
+A mutation is never proven by the two-plane run above (it would write twice). Its proof is one execution inside the
+per-environment Fixture Org, recorded as a `write_executed` receipt:
+
+```bash
+GO_API_PROVE_WRITE_FIXTURE_ORG=<fixture org id> dho goapi prove-write \
+  -org <fixture org id> -case <registered case> -via query-api \
+  -documents <registrydump output> -recorded-by <operator> -review-evidence "<why>" \
+  -postgres-uri "$POSTGRES_URI"
+```
+
+The verb writes only in the Fixture Org named by the environment (it never creates an org), posts the mutation once,
+compares the persisted effects with the case's committed baseline digest, and refuses to call a run a match unless the
+response carries the candidate build. A match removes its dataset; anything else keeps it and names it. `-via query-api`
+(a direct POST to query-api) records route `proof` and admits `canary`; `-via edge` records route `edge`, which
+`primary` requires. `enable` then admits the mutation only on that receipt.
+
 ### Enable the canary set
 
 After the proof run records a `deployed_executed` result for each canary operation at the running build, enable them with the Go verb. The candidate build is read from the deployed process's `/buildinfo`; there is no build flag and no waiver flag. Operations are one comma-separated value:

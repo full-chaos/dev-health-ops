@@ -95,6 +95,7 @@ func racingEnableRequest(t testing.TB, build string) EnableRequest {
 		RunningBuild:      build,
 		Operations:        operations,
 		DocumentDigest:    digests,
+		OperationKinds:    queryKinds(operations...),
 		Mode:              "canary",
 		RolloutPercentage: 100,
 		RecordedBy:        "lane-routing-verbs",

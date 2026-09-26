@@ -57,6 +57,9 @@ type admissionCase struct {
 	AskWithOverriddenKey bool   `json:"ask_with_overridden_key"`
 	Admits               bool   `json:"admits"`
 	Why                  string `json:"why"`
+	// OperationKind is the operation's registered document kind: "mutation"
+	// or, when absent, "query" (CHAOS-6810).
+	OperationKind string `json:"operation_kind"`
 }
 
 type admissionFixture struct {
@@ -106,9 +109,10 @@ func TestEnablementPredicateMatchesTheSharedAdmissionTable(t *testing.T) {
 			}
 			seedAdmissionRow(ctx, t, pool, run.rowKey, run.receipt)
 
-			found, err := OperationsWithEnablementProof(ctx, pool,
+			found, err := OperationsWithEnablementProofByKind(ctx, pool,
 				run.askKey.SchemaDigest, run.askKey.CandidateBuild, run.targetMode,
-				map[string]string{run.askKey.SelectedOperation: run.askKey.DocumentDigest})
+				map[string]string{run.askKey.SelectedOperation: run.askKey.DocumentDigest},
+				map[string]string{run.askKey.SelectedOperation: run.kind})
 			if err != nil {
 				t.Fatalf("OperationsWithEnablementProof: %v", err)
 			}
@@ -163,6 +167,26 @@ type admissionRun struct {
 	admits     bool
 	why        string
 	control    bool
+	// kind is the operation's document kind (CHAOS-6810): OperationKindQuery,
+	// OperationKindMutation, or "" for a kind the ask does not know (the fixture's
+	// "unknown"), which must admit nothing. It decides which receipt form the
+	// enablement predicate accepts.
+	kind string
+}
+
+// crossForm reports a case whose receipt is of the OTHER kind's form than the
+// operation it is asked about: a write_executed receipt for a query, or any
+// other stage for a mutation.
+func (r admissionRun) crossForm() bool {
+	return r.kind != r.receiptForm()
+}
+
+// receiptForm is the kind whose form of receipt this run's receipt is.
+func (r admissionRun) receiptForm() string {
+	if r.receipt.stage == EnablementWriteProofStage {
+		return OperationKindMutation
+	}
+	return OperationKindQuery
 }
 
 func (r admissionRun) describe() string {
@@ -233,6 +257,7 @@ func admissionRuns(t *testing.T) []admissionRun {
 		runs = append(runs, admissionRun{
 			name: c.Name, targetMode: c.TargetMode, rowKey: rowKey, askKey: askKey,
 			receipt: mergeReceipt(t, merged), admits: c.Admits, why: c.Why,
+			kind: operationKind(t, c),
 		})
 
 		control, hasControl := doc.Cases[i]["control"].(map[string]any)
@@ -279,20 +304,47 @@ func admissionRuns(t *testing.T) []admissionRun {
 			rowKey: controlRowKey, askKey: controlAskKey,
 			receipt: mergeReceipt(t, controlReceipt), admits: true,
 			why:     "the control must be admitted: " + c.Why,
-			control: true,
+			control: true, kind: controlKind(t, c, control),
 		})
 	}
 	return runs
 }
 
+// controlKind is the kind the case's CONTROL asks with: the case's own, unless
+// the control names another ("operation_kind" in the control block: the control
+// of a case refused for an unknown kind supplies the known one).
+func controlKind(t *testing.T, c admissionCase, control map[string]any) string {
+	t.Helper()
+	if override, ok := control["operation_kind"].(string); ok {
+		c.OperationKind = override
+	}
+	return operationKind(t, c)
+}
+
+func operationKind(t *testing.T, c admissionCase) string {
+	t.Helper()
+	switch c.OperationKind {
+	case "", "query":
+		return OperationKindQuery
+	case "mutation":
+		return OperationKindMutation
+	case "unknown":
+		return ""
+	default:
+		t.Fatalf("case %q has unknown operation_kind %q (want query, mutation or unknown)", c.Name, c.OperationKind)
+		return ""
+	}
+}
+
 type seededReceipt struct {
-	stage           string
-	terminalState   string
-	route           any
-	binding         any
-	baselineDefect  any
-	outsideDiffs    int
-	requestIdentity string
+	stage            string
+	terminalState    string
+	route            any
+	binding          any
+	baselineDefect   any
+	outsideDiffs     int
+	requestIdentity  string
+	sideEffectDigest any
 }
 
 func mergeReceipt(t *testing.T, m map[string]any) seededReceipt {
@@ -305,11 +357,12 @@ func mergeReceipt(t *testing.T, m map[string]any) seededReceipt {
 		return v
 	}
 	out := seededReceipt{
-		stage:           str("stage"),
-		terminalState:   str("terminal_state"),
-		requestIdentity: str("request_identity"),
-		route:           m["measurement_route"],
-		binding:         m["build_binding"],
+		stage:            str("stage"),
+		terminalState:    str("terminal_state"),
+		requestIdentity:  str("request_identity"),
+		route:            m["measurement_route"],
+		binding:          m["build_binding"],
+		sideEffectDigest: m["side_effect_digest"],
 	}
 	switch v := m["baseline_defect"].(type) {
 	case nil:
@@ -379,11 +432,11 @@ func seedAdmissionRow(ctx context.Context, t *testing.T, pool *pgxpool.Pool, key
 		`INSERT INTO go_api_proof_run
 		   (id, schema_digest, document_digest, selected_operation, candidate_build,
 		    request_identity, stage, terminal_state, measurement_route, build_binding,
-		    baseline_defect, differences_outside_baseline_defect, observed_at)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+		    baseline_defect, differences_outside_baseline_defect, observed_at, side_effect_digest)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
 		uuid.New(), key.SchemaDigest, key.DocumentDigest, key.SelectedOperation, key.CandidateBuild,
 		r.requestIdentity, r.stage, r.terminalState, r.route, r.binding,
-		r.baselineDefect, r.outsideDiffs, time.Now().UTC(),
+		r.baselineDefect, r.outsideDiffs, time.Now().UTC(), r.sideEffectDigest,
 	); err != nil {
 		t.Fatalf("seed proof run: %v", err)
 	}
@@ -422,9 +475,17 @@ func TestTheMigrationMatrixClauseMatchesTheSharedAdmissionTable(t *testing.T) {
 			}
 			seedAdmissionRow(ctx, t, pool, run.rowKey, run.receipt)
 
-			clause, err := EnablementProofClause("pr", run.targetMode)
+			// The matrix does not know an operation's document kind: it judges a
+			// receipt by its OWN form (EnablementProofClauseAnyKind), which is
+			// weaker than enablement's kind-keyed rule only for a receipt whose
+			// form does not match the operation's kind. Those cross-form cases are
+			// asserted by their own test below, not against enablement's answer.
+			if run.crossForm() {
+				t.Skip("cross-form case: enablement refuses it by kind, the matrix cannot know the kind; see TestTheMatrixClauseJudgesAReceiptByItsOwnForm")
+			}
+			clause, err := EnablementProofClauseAnyKind("pr", run.targetMode)
 			if err != nil {
-				t.Fatalf("EnablementProofClause(%q): %v", run.targetMode, err)
+				t.Fatalf("EnablementProofClauseAnyKind(%q): %v", run.targetMode, err)
 			}
 
 			// The matrix's SHAPE: a correlated subquery keyed on the
@@ -1038,5 +1099,67 @@ func TestAShapeDifferenceUnderACitationNeverBecomesProof(t *testing.T) {
 			}
 			t.Logf("cell %-60s mode=%-7s written receipt outside=%-2d -> proves=%v", cell.name, mode, receipts[0].DifferencesOutsideBaselineDefect, found["hotspots"])
 		}
+	}
+}
+
+// The cross-form cases the matrix test skips, pinned on their own. The matrix
+// cannot know an operation's kind, so it judges a receipt by its own stage: a
+// write_executed receipt satisfies its clause exactly when the write form of
+// the shared table would admit it for a mutation, and a query-form receipt
+// exactly when the query form would admit it for a query. Enablement's
+// kind-keyed rule (asserted by TestEnablementPredicateMatchesTheSharedAdmissionTable)
+// is the one that refuses a cross-form pairing; the matrix is weaker there and
+// says so (EnablementProofClauseAnyKind).
+func TestTheMatrixClauseJudgesAReceiptByItsOwnForm(t *testing.T) {
+	ctx := context.Background()
+	runs := admissionRuns(t)
+	pool := startRegistryPostgres(t)
+
+	cross := 0
+	for _, run := range runs {
+		if !run.crossForm() {
+			continue
+		}
+		cross++
+		run := run
+		t.Run(run.name, func(t *testing.T) {
+			if _, err := pool.Exec(ctx,
+				`TRUNCATE go_api_proof_run, go_api_routing_state, go_api_candidate_build`); err != nil {
+				t.Fatalf("truncate between cases: %v", err)
+			}
+			seedAdmissionRow(ctx, t, pool, run.rowKey, run.receipt)
+			// Enablement's answer for the same row with the kind FLIPPED to the
+			// receipt's own form is what the matrix must give.
+			ownForm := run.receiptForm()
+			want, err := OperationsWithEnablementProofByKind(ctx, pool,
+				run.askKey.SchemaDigest, run.askKey.CandidateBuild, run.targetMode,
+				map[string]string{run.askKey.SelectedOperation: run.askKey.DocumentDigest},
+				map[string]string{run.askKey.SelectedOperation: ownForm})
+			if err != nil {
+				t.Fatalf("OperationsWithEnablementProofByKind: %v", err)
+			}
+			clause, err := EnablementProofClauseAnyKind("pr", run.targetMode)
+			if err != nil {
+				t.Fatalf("EnablementProofClauseAnyKind: %v", err)
+			}
+			var proofID *string
+			if err := pool.QueryRow(ctx, `
+				SELECT (SELECT pr.id::text FROM go_api_proof_run pr
+				         WHERE pr.schema_digest = $1 AND pr.document_digest = $2
+				           AND pr.selected_operation = $3 AND pr.candidate_build = $4
+				           AND `+clause+` LIMIT 1)`,
+				run.askKey.SchemaDigest, run.askKey.DocumentDigest,
+				run.askKey.SelectedOperation, run.askKey.CandidateBuild,
+			).Scan(&proofID); err != nil {
+				t.Fatalf("matrix-shaped query: %v", err)
+			}
+			got := proofID != nil && *proofID != ""
+			if got != want[run.askKey.SelectedOperation] {
+				t.Fatalf("%s: matrix renders proven=%v, the receipt's own form says %v", run.describe(), got, want[run.askKey.SelectedOperation])
+			}
+		})
+	}
+	if cross == 0 {
+		t.Fatal("the shared table has no cross-form case: the skip in the matrix test would be vacuous")
 	}
 }

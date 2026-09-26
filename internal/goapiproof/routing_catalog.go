@@ -122,6 +122,9 @@ func SplitOperations(raw string) ([]string, error) {
 type catalogFileEntry struct {
 	Operation string
 	Digest    string
+	// Mutation is true when the entry carries kind "mutation" (CHAOS-6803); an
+	// entry with no kind is a query, as go_api_operation_catalog.py reads it.
+	Mutation bool
 }
 
 // catalogEntryKey pulls one EXACTLY-spelled key out of a raw entry and
@@ -162,9 +165,20 @@ func catalogEntryKey(raw map[string]json.RawMessage, key, path string, index int
 // whichever of two entries happened to win. A duplicate operation name in
 // a registrydump-generated artifact is a broken generator either way.
 func LoadOperationCatalog(path string) (map[string]string, error) {
+	byOperation, _, err := LoadOperationCatalogWithKinds(path)
+	return byOperation, err
+}
+
+// LoadOperationCatalogWithKinds is LoadOperationCatalog plus each operation's
+// document kind (OperationKindQuery or OperationKindMutation, one entry per
+// catalog operation, CHAOS-6810): the kind decides which receipt form authorizes enabling an operation. The kind is
+// read exactly as the Python loader reads it: absent means query, "query" and
+// "mutation" are the only values, anything else makes the whole catalog
+// unusable.
+func LoadOperationCatalogWithKinds(path string) (map[string]string, map[string]string, error) {
 	raw, err := os.ReadFile(path) //nolint:gosec // operator-supplied path to the checked-in catalog
 	if err != nil {
-		return nil, fmt.Errorf("%w: read %s: %w", ErrCatalogUnusable, path, err)
+		return nil, nil, fmt.Errorf("%w: read %s: %w", ErrCatalogUnusable, path, err)
 	}
 	// The Python edge loads this file with
 	// `Path.read_text()`, which decodes the WHOLE file as UTF-8 and raises
@@ -179,27 +193,41 @@ func LoadOperationCatalog(path string) (map[string]string, error) {
 	// program never even reads, so per-value validation after JSON decode
 	// would silently accept invalid bytes Python's reader never gets past.
 	if !utf8.Valid(raw) {
-		return nil, fmt.Errorf("%w: %s is not valid UTF-8 -- the Python edge loader decodes this file as text and refuses the WHOLE file on one bad byte anywhere in it, so a Go reader that decoded past it would write rows nothing can dispatch",
+		return nil, nil, fmt.Errorf("%w: %s is not valid UTF-8 -- the Python edge loader decodes this file as text and refuses the WHOLE file on one bad byte anywhere in it, so a Go reader that decoded past it would write rows nothing can dispatch",
 			ErrCatalogUnusable, path)
 	}
 	if err := rejectUnpairedSurrogateEscapes(raw); err != nil {
-		return nil, fmt.Errorf("%w: %s: %v", ErrCatalogUnusable, path, err)
+		return nil, nil, fmt.Errorf("%w: %s: %v", ErrCatalogUnusable, path, err)
 	}
 	var rawEntries []map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &rawEntries); err != nil {
-		return nil, fmt.Errorf("%w: decode %s (expected a JSON array of {operation,digest}): %w", ErrCatalogUnusable, path, err)
+		return nil, nil, fmt.Errorf("%w: decode %s (expected a JSON array of {operation,digest}): %w", ErrCatalogUnusable, path, err)
 	}
 	var entries []catalogFileEntry
 	for index, rawEntry := range rawEntries {
 		operation, err := catalogEntryKey(rawEntry, "operation", path, index)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		digest, err := catalogEntryKey(rawEntry, "digest", path, index)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		entries = append(entries, catalogFileEntry{Operation: operation, Digest: digest})
+		mutation := false
+		if _, present := rawEntry["kind"]; present {
+			kind, err := catalogEntryKey(rawEntry, "kind", path, index)
+			if err != nil {
+				return nil, nil, err
+			}
+			switch kind {
+			case "query":
+			case "mutation":
+				mutation = true
+			default:
+				return nil, nil, fmt.Errorf("%w: %s entry %d (%q) has unknown kind %q -- the Python edge loader refuses the whole file for it", ErrCatalogUnusable, path, index, operation, kind)
+			}
+		}
+		entries = append(entries, catalogFileEntry{Operation: operation, Digest: digest, Mutation: mutation})
 	}
 	if rawEntries != nil && entries == nil {
 		// An array that decoded but produced no entries can only be `[]`,
@@ -216,13 +244,14 @@ func LoadOperationCatalog(path string) (map[string]string, error) {
 	// The whole purpose of these refusals is that the operator can fix the
 	// file, and a refusal that misdescribes the file cannot be acted on.
 	if rawEntries == nil {
-		return nil, fmt.Errorf("%w: %s decodes to JSON null, not to a list of {operation,digest} entries -- regenerate it with scripts/go_api/generate_operation_catalog.py", ErrCatalogUnusable, path)
+		return nil, nil, fmt.Errorf("%w: %s decodes to JSON null, not to a list of {operation,digest} entries -- regenerate it with scripts/go_api/generate_operation_catalog.py", ErrCatalogUnusable, path)
 	}
 	if len(entries) == 0 {
-		return nil, fmt.Errorf("%w: %s is an empty array -- regenerate it with scripts/go_api/generate_operation_catalog.py", ErrCatalogUnusable, path)
+		return nil, nil, fmt.Errorf("%w: %s is an empty array -- regenerate it with scripts/go_api/generate_operation_catalog.py", ErrCatalogUnusable, path)
 	}
 
 	byOperation := make(map[string]string, len(entries))
+	kinds := make(map[string]string, len(entries))
 	// A duplicate DIGEST is rejected as well as a duplicate operation.
 	// go_api_operation_catalog.py keys its dispatch map BY DIGEST, so two
 	// operations sharing one digest make the edge's mapping ambiguous --
@@ -231,18 +260,22 @@ func LoadOperationCatalog(path string) (map[string]string, error) {
 	byDigest := make(map[string]string, len(entries))
 	for _, entry := range entries {
 		if entry.Operation == "" || entry.Digest == "" {
-			return nil, fmt.Errorf("%w: %s carries an entry with an empty operation or digest", ErrCatalogUnusable, path)
+			return nil, nil, fmt.Errorf("%w: %s carries an entry with an empty operation or digest", ErrCatalogUnusable, path)
 		}
 		if previous, seen := byOperation[entry.Operation]; seen {
-			return nil, fmt.Errorf("%w: %s lists operation %q twice (digests %s and %s)", ErrCatalogUnusable, path, entry.Operation, previous, entry.Digest)
+			return nil, nil, fmt.Errorf("%w: %s lists operation %q twice (digests %s and %s)", ErrCatalogUnusable, path, entry.Operation, previous, entry.Digest)
 		}
 		if previous, seen := byDigest[entry.Digest]; seen {
-			return nil, fmt.Errorf("%w: %s gives digest %s to both %q and %q -- the edge keys its dispatch map by digest, so this mapping is ambiguous", ErrCatalogUnusable, path, entry.Digest, previous, entry.Operation)
+			return nil, nil, fmt.Errorf("%w: %s gives digest %s to both %q and %q -- the edge keys its dispatch map by digest, so this mapping is ambiguous", ErrCatalogUnusable, path, entry.Digest, previous, entry.Operation)
 		}
 		byOperation[entry.Operation] = entry.Digest
 		byDigest[entry.Digest] = entry.Operation
+		kinds[entry.Operation] = OperationKindQuery
+		if entry.Mutation {
+			kinds[entry.Operation] = OperationKindMutation
+		}
 	}
-	return byOperation, nil
+	return byOperation, kinds, nil
 }
 
 // CatalogOperations returns the catalog's operation names, sorted.

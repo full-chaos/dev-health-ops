@@ -197,9 +197,13 @@ _Deployed revisions read from: fleet file fleet-prod.json._
 ### Per Go-API operation
 
 Rendered from `go_api_routing_state` and `go_api_proof_run`. `Proven` is **derived**, never a stored column:
-it is the id of a `stage='deployed_executed'`, `terminal_state='match'` proof run keyed by the full immutable
+it is the id of a `stage='deployed_executed'`, `terminal_state='match'` proof run (for a GraphQL query) or of a
+`stage='write_executed'`, `terminal_state='match'` write proof carrying a non-blank `side_effect_digest` (for a
+GraphQL mutation, CHAOS-6810) keyed by the full immutable
 4-tuple `(schema_digest, document_digest, selected_operation, candidate_build)` -- the same predicate
-`go_api_routing_admin.build_enablement_proof_select` uses to authorize an enablement. A proof is evidence for
+`go_api_routing_admin.build_enablement_proof_select` uses to authorize an enablement. This page does not know an
+operation's document kind, so it judges a receipt by its own form; `enable` is stricter (a query is admitted only by
+a `deployed_executed` receipt, a mutation only by a `write_executed` one, an operation of unknown kind by neither). A proof is evidence for
 exactly one such tuple and is never carried forward across any of the four changing.
 
 `Live at current pin` compares each row's `schema_digest` against

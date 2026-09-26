@@ -51,7 +51,12 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects.postgresql import UUID
 
-from dev_health_ops.models.go_api_registry import STAGES, TERMINAL_STATES
+from dev_health_ops.models.go_api_registry import TERMINAL_STATES
+
+#: Frozen at this revision (CHAOS-6810): a migration must not read a live
+#: model constant, or widening the model would silently widen this table on a
+#: fresh database and not on one already upgraded past it.
+STAGES = ("dual_run", "deployed_executed", "shadow", "canary")
 
 revision: str = "0134"
 down_revision: str | None = "0133"

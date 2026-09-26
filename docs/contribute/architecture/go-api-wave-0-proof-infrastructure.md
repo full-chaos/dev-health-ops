@@ -143,9 +143,10 @@ erDiagram
         string selected_operation FK
         string candidate_build FK
         string request_identity
-        string stage "dual_run|deployed_executed|shadow|canary"
+        string stage "dual_run|deployed_executed|shadow|canary|write_executed"
         string terminal_state "match|mismatch|auth_rejected|validation_rejected|dependency_failed|timeout|cancelled|resource_exhausted|fallback|unsupported|proof_failed"
         string data_watermark "required when stage=shadow"
+        string side_effect_digest "required when stage=write_executed"
         string org_id
         timestamp observed_at
     }

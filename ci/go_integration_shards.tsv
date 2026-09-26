@@ -125,9 +125,9 @@ internal/fixturescli	20
 internal/goapiproof	604
 internal/goapiproof/writeproof	25
 internal/joboperator	9
-internal/joboutbox	24
+internal/joboutbox	50
 internal/jobrescue	4
-internal/jobroute	27
+internal/jobroute	50
 internal/jobruntime	51
 internal/metricscli	45
 internal/migrationmatrix	24
@@ -174,7 +174,7 @@ internal/syncdispatchruntime	900
 internal/syncreconciler	210
 internal/synccoverage	14
 internal/syncbudget	60
-internal/syncroute	10
+internal/syncroute	25
 internal/teamattribution	31
 internal/teamownership	81
 internal/testsupport/chschema	160

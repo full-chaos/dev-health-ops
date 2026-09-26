@@ -20,6 +20,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
@@ -1315,24 +1317,17 @@ func seedProviderUnitDomain(
 	availableAt time.Time,
 ) {
 	t.Helper()
-	if _, err := pool.Exec(ctx, `
-		INSERT INTO public.integrations (id, org_id, is_active)
-		VALUES ($1, $2, FALSE)`, seed.integrationID, seed.orgID); err != nil {
+	// Real integration/run/unit rows (foreign keys): the integration is inactive, as this fixture always
+	// had it, and the unit points at the org's default source.
+	pgseed.EnsureSyncIntegration(ctx, t, pool, seed.orgID, seed.integrationID, "")
+	if _, err := pool.Exec(ctx, `UPDATE public.integrations SET is_active = FALSE WHERE id = $1`, seed.integrationID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := pool.Exec(ctx, `
-		INSERT INTO public.sync_runs (id, org_id, integration_id, status)
-		VALUES ($1, $2, $3, $4)`, seed.runID, seed.orgID, seed.integrationID, runStatus); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := pool.Exec(ctx, `
-		INSERT INTO public.sync_run_units (
-			id, org_id, sync_run_id, integration_id, status, available_at,
-			lease_owner, lease_expires_at
-		) VALUES ($1, $2, $3, $4, $5, $6, NULL, NULL)`,
-		seed.unitID, seed.orgID, seed.runID, seed.integrationID, unitStatus, availableAt); err != nil {
-		t.Fatal(err)
-	}
+	pgseed.EnsureSyncRun(ctx, t, pool, pgseed.SyncRun{ID: seed.runID, OrgID: seed.orgID, IntegrationID: seed.integrationID, Status: runStatus})
+	pgseed.InsertSyncRunUnit(ctx, t, pool, pgseed.SyncRunUnit{
+		ID: seed.unitID, RunID: seed.runID, OrgID: seed.orgID, IntegrationID: seed.integrationID,
+		Status: unitStatus, AvailableAt: &availableAt,
+	})
 }
 
 func normalSeed(index int, now time.Time) outboxSeed {
@@ -1488,7 +1483,7 @@ func injectedFault() error { return errors.New("simulated process crash") }
 
 func resetOutboxTables(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
-	if _, err := pool.Exec(ctx, "TRUNCATE public.worker_job_outbox, public.worker_job_delivery_abandonments, public.worker_job_completion_fences, public.sync_run_units, public.sync_runs, public.integrations, river.river_job RESTART IDENTITY"); err != nil {
+	if _, err := pool.Exec(ctx, "TRUNCATE public.worker_job_outbox, public.worker_job_delivery_abandonments, public.worker_job_completion_fences, public.sync_run_units, public.sync_runs, public.integration_sources, public.integrations, river.river_job RESTART IDENTITY CASCADE"); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -1508,80 +1503,9 @@ func createOutboxRoles(t *testing.T, ctx context.Context, pool *pgxpool.Pool, do
 
 func createOutboxSchema(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
-	_, err := pool.Exec(ctx, `
-		CREATE TABLE public.integrations (
-			id uuid PRIMARY KEY,
-			org_id text NOT NULL,
-			is_active boolean NOT NULL
-		);
-		CREATE TABLE public.sync_runs (
-			id uuid PRIMARY KEY,
-			org_id text NOT NULL,
-			integration_id uuid NOT NULL REFERENCES public.integrations(id),
-			status text NOT NULL
-		);
-		CREATE INDEX ix_sync_runs_status_id ON public.sync_runs (status, id);
-		CREATE TABLE public.sync_run_units (
-			id uuid PRIMARY KEY,
-			org_id text NOT NULL,
-			sync_run_id uuid NOT NULL REFERENCES public.sync_runs(id),
-			integration_id uuid NOT NULL REFERENCES public.integrations(id),
-			status text NOT NULL,
-			available_at timestamptz,
-			lease_owner text,
-			lease_expires_at timestamptz
-		);
-		CREATE TABLE public.worker_job_outbox (
-			id uuid PRIMARY KEY,
-			dedupe_key varchar(256) NOT NULL UNIQUE,
-			job_kind varchar(96) NOT NULL,
-			contract_version integer NOT NULL,
-			args json NOT NULL,
-			payload_hash varchar(71) NOT NULL,
-			queue varchar(96) NOT NULL,
-			priority smallint NOT NULL,
-			max_attempts smallint NOT NULL,
-			scheduled_at timestamptz NOT NULL,
-			status varchar(16) NOT NULL,
-			claim_token uuid,
-			claimed_at timestamptz,
-			claim_expires_at timestamptz,
-			attempt_count integer NOT NULL,
-			first_attempt_at timestamptz,
-			last_attempt_at timestamptz,
-			next_attempt_at timestamptz NOT NULL,
-			last_error_code varchar(64),
-			last_error_detail varchar(256),
-			last_error_at timestamptz,
-			river_job_id bigint UNIQUE,
-			delivered_at timestamptz,
-			prerequisite_completion_key text NULL,
-			created_at timestamptz NOT NULL,
-			updated_at timestamptz NOT NULL,
-			CONSTRAINT worker_job_outbox_status CHECK (status IN ('pending','claimed','delivered','dead')),
-			CONSTRAINT worker_job_outbox_claim CHECK (
-				(status='claimed' AND claim_token IS NOT NULL AND claimed_at IS NOT NULL AND claim_expires_at IS NOT NULL)
-				OR (status<>'claimed' AND claim_token IS NULL AND claimed_at IS NULL AND claim_expires_at IS NULL)
-			),
-			CONSTRAINT worker_job_outbox_delivery CHECK (
-				(status='delivered' AND river_job_id IS NOT NULL AND delivered_at IS NOT NULL)
-				OR (status<>'delivered' AND river_job_id IS NULL AND delivered_at IS NULL)
-			)
-		);
-		CREATE TABLE public.worker_job_completion_fences (
-			completion_key text PRIMARY KEY,
-			completed_at timestamptz NOT NULL DEFAULT statement_timestamp()
-		);
-		CREATE TABLE public.worker_job_delivery_abandonments (
-			dedupe_key varchar(256) PRIMARY KEY,
-			job_kind varchar(96) NOT NULL,
-			abandoned_at timestamptz NOT NULL,
-			attempt_count integer NOT NULL,
-			last_error_code varchar(64)
-		)`)
-	if err != nil {
-		t.Fatal(err)
-	}
+	// The migrated schema: the outbox with its real CHECK constraints, the completion fences and
+	// delivery abandonments, and the run/unit/integration tables the domain liveness reads.
+	pgschema.Apply(ctx, t, pool)
 }
 
 func openIntegrationPool(t *testing.T, ctx context.Context, uri string) *pgxpool.Pool {

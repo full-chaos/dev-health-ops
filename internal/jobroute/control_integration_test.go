@@ -11,10 +11,56 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type integrationRegistry struct{ descriptor jobruntime.Descriptor }
+
+// prepareRouteDB builds the migrated schema and sets one route row to the given transport, unpaused at
+// the given generation (worker_job_routes has no generation trigger). The migrations seed every real
+// kind, so the row is upserted. The default sync run (and its integration and source) is created too:
+// sync_run_units reference them.
+func prepareRouteDB(ctx context.Context, t *testing.T, pool *pgxpool.Pool, kind, transport string, generation int64) {
+	t.Helper()
+	pgschema.Apply(ctx, t, pool)
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO public.worker_job_routes (job_kind, transport, paused, generation, updated_at)
+		VALUES ($1, $2, FALSE, $3, statement_timestamp())
+		ON CONFLICT (job_kind) DO UPDATE SET transport = $2, paused = FALSE, generation = $3,
+			updated_at = statement_timestamp()`, kind, transport, generation); err != nil {
+		t.Fatal(err)
+	}
+	pgseed.EnsureSyncRun(ctx, t, pool, pgseed.SyncRun{})
+}
+
+// unitSeed is one sync_run_units row; the timestamps are SQL expressions.
+type unitSeed struct {
+	id, provider, dataset, status, updatedAt string
+	leaseExpiresAt                           string // "" means NULL
+}
+
+type execer interface {
+	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
+}
+
+func insertUnit(ctx context.Context, t *testing.T, exec execer, unit unitSeed) {
+	t.Helper()
+	lease := "NULL"
+	if unit.leaseExpiresAt != "" {
+		lease = unit.leaseExpiresAt
+	}
+	if _, err := exec.Exec(ctx, `
+		INSERT INTO public.sync_run_units (id, org_id, sync_run_id, integration_id, source_id, provider, dataset_key,
+			cost_class, mode, attempts, created_at, status, updated_at, lease_expires_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, 'rest_core', 'incremental', 0, now(), $8, `+unit.updatedAt+`, `+lease+`)`,
+		unit.id, pgseed.DefaultSyncOrgID, pgseed.DefaultSyncRunID, pgseed.DefaultSyncIntegrationID, pgseed.DefaultSyncSourceID,
+		unit.provider, unit.dataset, unit.status); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func (registry integrationRegistry) Descriptor(kind string) (jobruntime.Descriptor, bool) {
 	return registry.descriptor, kind == registry.descriptor.Kind
@@ -47,31 +93,10 @@ func TestSyncProviderCanaryTransitionsFromSeededCeleryRoute(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	if _, err := pool.Exec(ctx, `
-		CREATE TABLE public.worker_job_routes (
-			job_kind text PRIMARY KEY, transport text NOT NULL, paused boolean NOT NULL,
-			generation bigint NOT NULL, updated_at timestamptz NOT NULL
-		);
-		CREATE TABLE public.worker_job_outbox (
-			id uuid PRIMARY KEY, job_kind text NOT NULL, status text NOT NULL
-		);
-		CREATE TABLE public.worker_job_runs (
-			id uuid PRIMARY KEY, job_kind text NOT NULL, status text NOT NULL
-		);
-		CREATE TABLE public.sync_run_units (
-			id uuid PRIMARY KEY, provider text NOT NULL, dataset_key text NOT NULL,
-			status text NOT NULL, updated_at timestamptz NOT NULL,
-			lease_expires_at timestamptz
-		);
-		INSERT INTO public.worker_job_routes
-			(job_kind, transport, paused, generation, updated_at)
-		VALUES ('sync.provider_unit', 'celery', FALSE, 1, statement_timestamp());
-		INSERT INTO public.sync_run_units (id, provider, dataset_key, status, updated_at) VALUES
-			('00000000-0000-4000-8000-000000000001', 'launchdarkly', 'feature-flags', 'planned', statement_timestamp()),
-			('00000000-0000-4000-8000-000000000002', 'launchdarkly', 'feature-flags', 'retrying', statement_timestamp()),
-			('00000000-0000-4000-8000-000000000003', 'github', 'commits', 'running', statement_timestamp())`); err != nil {
-		t.Fatal(err)
-	}
+	prepareRouteDB(ctx, t, pool, "sync.provider_unit", "celery", 1)
+	insertUnit(ctx, t, pool, unitSeed{"00000000-0000-4000-8000-000000000001", "launchdarkly", "feature-flags", "planned", "statement_timestamp()", ""})
+	insertUnit(ctx, t, pool, unitSeed{"00000000-0000-4000-8000-000000000002", "launchdarkly", "feature-flags", "retrying", "statement_timestamp()", ""})
+	insertUnit(ctx, t, pool, unitSeed{"00000000-0000-4000-8000-000000000003", "github", "commits", "running", "statement_timestamp()", ""})
 	celeryQuiescer, err := NewPostgresCelerySyncProviderQuiescer(pool)
 	if err != nil {
 		t.Fatal(err)
@@ -114,11 +139,7 @@ func TestSyncProviderCanaryTransitionsFromSeededCeleryRoute(t *testing.T) {
 	if transport != "celery" {
 		t.Fatalf("producer observed route %q", transport)
 	}
-	if _, err := producer.Exec(ctx, `
-		INSERT INTO public.sync_run_units (id, provider, dataset_key, status, updated_at)
-		VALUES ('00000000-0000-4000-8000-000000000004', 'launchdarkly', 'feature-flags', 'dispatching', statement_timestamp())`); err != nil {
-		t.Fatal(err)
-	}
+	insertUnit(ctx, t, producer, unitSeed{"00000000-0000-4000-8000-000000000004", "launchdarkly", "feature-flags", "dispatching", "statement_timestamp()", ""})
 	applyResult := make(chan error, 1)
 	go func() {
 		_, applyErr := controller.ApplyCheckedIn(ctx, "sync.provider_unit")
@@ -159,22 +180,7 @@ func TestRollbackWaitsForProducerRouteLockThenRejectsStagedOutbox(t *testing.T) 
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	if _, err := pool.Exec(ctx, `
-		CREATE TABLE public.worker_job_routes (
-			job_kind text PRIMARY KEY, transport text NOT NULL, paused boolean NOT NULL,
-			generation bigint NOT NULL, updated_at timestamptz NOT NULL
-		);
-		CREATE TABLE public.worker_job_outbox (
-			id uuid PRIMARY KEY, job_kind text NOT NULL, status text NOT NULL
-		);
-		CREATE TABLE public.worker_job_runs (
-			id uuid PRIMARY KEY, job_kind text NOT NULL, status text NOT NULL
-		);
-		INSERT INTO public.worker_job_routes
-			(job_kind, transport, paused, generation, updated_at)
-		VALUES ('job.test', 'river_canary', FALSE, 1, statement_timestamp())`); err != nil {
-		t.Fatal(err)
-	}
+	prepareRouteDB(ctx, t, pool, "job.test", "river_canary", 1)
 	controller, err := NewController(pool, integrationRegistry{jobruntime.Descriptor{
 		Kind: "job.test", Route: "river_canary", RollbackRoute: "celery",
 	}}, idleQuiescer{})
@@ -203,8 +209,10 @@ func TestRollbackWaitsForProducerRouteLockThenRejectsStagedOutbox(t *testing.T) 
 	}()
 	waitForBlockedRouteUpdate(t, ctx, pool)
 	if _, err := producer.Exec(ctx, `
-		INSERT INTO public.worker_job_outbox (id, job_kind, status)
-		VALUES ('00000000-0000-4000-8000-000000000001', 'job.test', 'pending')`); err != nil {
+		INSERT INTO public.worker_job_outbox (id, dedupe_key, job_kind, contract_version, args, payload_hash, queue,
+			priority, max_attempts, scheduled_at, status, attempt_count, next_attempt_at, created_at, updated_at)
+		VALUES ('00000000-0000-4000-8000-000000000001', 'job.test:1', 'job.test', 1, '{}'::json,
+			'sha256:' || repeat('0', 64), 'default', 2, 5, now(), 'pending', 0, now(), now(), now())`); err != nil {
 		t.Fatal(err)
 	}
 	if err := producer.Commit(ctx); err != nil {
@@ -345,22 +353,7 @@ func TestRollbackSurfacesRiverQuiesceProbeFailureAsUnavailableNotLiveClaims(t *t
 	defer pool.Close()
 	// Deliberately do NOT create the river schema/table: the probe query
 	// fails exactly as it would during a database outage.
-	if _, err := pool.Exec(ctx, `
-		CREATE TABLE public.worker_job_routes (
-			job_kind text PRIMARY KEY, transport text NOT NULL, paused boolean NOT NULL,
-			generation bigint NOT NULL, updated_at timestamptz NOT NULL
-		);
-		CREATE TABLE public.worker_job_outbox (
-			id uuid PRIMARY KEY, job_kind text NOT NULL, status text NOT NULL
-		);
-		CREATE TABLE public.worker_job_runs (
-			id uuid PRIMARY KEY, job_kind text NOT NULL, status text NOT NULL
-		);
-		INSERT INTO public.worker_job_routes
-			(job_kind, transport, paused, generation, updated_at)
-		VALUES ('job.river_probe_outage', 'river_canary', FALSE, 1, statement_timestamp())`); err != nil {
-		t.Fatal(err)
-	}
+	prepareRouteDB(ctx, t, pool, "job.river_probe_outage", "river_canary", 1)
 	quiescer, err := NewPostgresRiverQuiescer(pool, "river")
 	if err != nil {
 		t.Fatal(err)
@@ -430,23 +423,11 @@ func TestRollbackStillReportsGenuineRiverLiveClaimsAsPrecondition(t *testing.T) 
 		t.Fatal(err)
 	}
 	defer pool.Close()
+	prepareRouteDB(ctx, t, pool, "job.river_probe_live", "river_canary", 1)
 	if _, err := pool.Exec(ctx, `
-		CREATE TABLE public.worker_job_routes (
-			job_kind text PRIMARY KEY, transport text NOT NULL, paused boolean NOT NULL,
-			generation bigint NOT NULL, updated_at timestamptz NOT NULL
-		);
-		CREATE TABLE public.worker_job_outbox (
-			id uuid PRIMARY KEY, job_kind text NOT NULL, status text NOT NULL
-		);
-		CREATE TABLE public.worker_job_runs (
-			id uuid PRIMARY KEY, job_kind text NOT NULL, status text NOT NULL
-		);
 		CREATE SCHEMA river;
 		CREATE TABLE river.river_job (id bigint PRIMARY KEY, kind text NOT NULL, state text NOT NULL);
-		INSERT INTO river.river_job (id, kind, state) VALUES (1, 'job.river_probe_live', 'running');
-		INSERT INTO public.worker_job_routes
-			(job_kind, transport, paused, generation, updated_at)
-		VALUES ('job.river_probe_live', 'river_canary', FALSE, 1, statement_timestamp())`); err != nil {
+		INSERT INTO river.river_job (id, kind, state) VALUES (1, 'job.river_probe_live', 'running')`); err != nil {
 		t.Fatal(err)
 	}
 	quiescer, err := NewPostgresRiverQuiescer(pool, "river")
@@ -495,25 +476,30 @@ func TestRollbackSurfacesCelerySyncQuiesceProbeFailureAsUnavailableNotLiveClaims
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	// Deliberately do NOT create public.sync_run_units: the probe query
-	// fails exactly as it would during a database outage.
-	if _, err := pool.Exec(ctx, `
-		CREATE TABLE public.worker_job_routes (
-			job_kind text PRIMARY KEY, transport text NOT NULL, paused boolean NOT NULL,
-			generation bigint NOT NULL, updated_at timestamptz NOT NULL
-		);
-		CREATE TABLE public.worker_job_outbox (
-			id uuid PRIMARY KEY, job_kind text NOT NULL, status text NOT NULL
-		);
-		CREATE TABLE public.worker_job_runs (
-			id uuid PRIMARY KEY, job_kind text NOT NULL, status text NOT NULL
-		);
-		INSERT INTO public.worker_job_routes
-			(job_kind, transport, paused, generation, updated_at)
-		VALUES ('sync.provider_unit', 'river_canary', FALSE, 1, statement_timestamp())`); err != nil {
+	prepareRouteDB(ctx, t, pool, "sync.provider_unit", "river_canary", 1)
+	// The probe fails as it does under a real database stall: another session holds ACCESS EXCLUSIVE
+	// on sync_run_units (a migration or maintenance lock) and the quiescer's pool runs under a
+	// statement_timeout, so the probe query errors with 57014 instead of answering. The real schema is
+	// untouched; no table is dropped.
+	lockTx, err := pool.Begin(ctx)
+	if err != nil {
 		t.Fatal(err)
 	}
-	quiescer, err := NewPostgresCelerySyncProviderQuiescer(pool)
+	defer func() { _ = lockTx.Rollback(context.Background()) }()
+	if _, err := lockTx.Exec(ctx, `LOCK TABLE public.sync_run_units IN ACCESS EXCLUSIVE MODE`); err != nil {
+		t.Fatal(err)
+	}
+	probeConfig, err := pgxpool.ParseConfig(instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	probeConfig.ConnConfig.RuntimeParams["statement_timeout"] = "300"
+	probePool, err := pgxpool.NewWithConfig(ctx, probeConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer probePool.Close()
+	quiescer, err := NewPostgresCelerySyncProviderQuiescer(probePool)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -562,25 +548,10 @@ func TestRollbackSurfacesCelerySyncQuiesceProbeFailureAsUnavailableNotLiveClaims
 // counterparts (stale orphaned DISPATCHING, expired RUNNING lease -- must not
 // block). All four share one schema so the only thing that differs between
 // them is the row shape under test.
-const celerySyncQuiescenceSchema = `
-	CREATE TABLE public.worker_job_routes (
-		job_kind text PRIMARY KEY, transport text NOT NULL, paused boolean NOT NULL,
-		generation bigint NOT NULL, updated_at timestamptz NOT NULL
-	);
-	CREATE TABLE public.worker_job_outbox (
-		id uuid PRIMARY KEY, job_kind text NOT NULL, status text NOT NULL
-	);
-	CREATE TABLE public.worker_job_runs (
-		id uuid PRIMARY KEY, job_kind text NOT NULL, status text NOT NULL
-	);
-	CREATE TABLE public.sync_run_units (
-		id uuid PRIMARY KEY, provider text NOT NULL, dataset_key text NOT NULL,
-		status text NOT NULL, updated_at timestamptz NOT NULL,
-		lease_expires_at timestamptz
-	);
-	INSERT INTO public.worker_job_routes
-		(job_kind, transport, paused, generation, updated_at)
-	VALUES ('sync.provider_unit', 'river_canary', FALSE, 1, statement_timestamp())`
+func prepareCelerySyncQuiescence(ctx context.Context, t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
+	prepareRouteDB(ctx, t, pool, "sync.provider_unit", "river_canary", 1)
+}
 
 // TestRollbackStillReportsGenuineCelerySyncLiveClaimsAsPrecondition is the
 // positive control for the Celery sync-provider quiescer: a fresh DISPATCHING
@@ -605,11 +576,8 @@ func TestRollbackStillReportsGenuineCelerySyncLiveClaimsAsPrecondition(t *testin
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	if _, err := pool.Exec(ctx, celerySyncQuiescenceSchema+`;
-		INSERT INTO public.sync_run_units (id, provider, dataset_key, status, updated_at) VALUES
-			('00000000-0000-4000-8000-000000000005', 'launchdarkly', 'feature-flags', 'dispatching', statement_timestamp())`); err != nil {
-		t.Fatal(err)
-	}
+	prepareCelerySyncQuiescence(ctx, t, pool)
+	insertUnit(ctx, t, pool, unitSeed{"00000000-0000-4000-8000-000000000005", "launchdarkly", "feature-flags", "dispatching", "statement_timestamp()", ""})
 	quiescer, err := NewPostgresCelerySyncProviderQuiescer(pool)
 	if err != nil {
 		t.Fatal(err)
@@ -657,11 +625,8 @@ func TestRollbackStillReportsGenuineRunningCelerySyncLeaseAsPrecondition(t *test
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	if _, err := pool.Exec(ctx, celerySyncQuiescenceSchema+`;
-		INSERT INTO public.sync_run_units (id, provider, dataset_key, status, updated_at, lease_expires_at) VALUES
-			('00000000-0000-4000-8000-000000000006', 'launchdarkly', 'feature-flags', 'running', statement_timestamp() - interval '2 hours', statement_timestamp() + interval '10 minutes')`); err != nil {
-		t.Fatal(err)
-	}
+	prepareCelerySyncQuiescence(ctx, t, pool)
+	insertUnit(ctx, t, pool, unitSeed{"00000000-0000-4000-8000-000000000006", "launchdarkly", "feature-flags", "running", "statement_timestamp() - interval '2 hours'", "statement_timestamp() + interval '10 minutes'"})
 	quiescer, err := NewPostgresCelerySyncProviderQuiescer(pool)
 	if err != nil {
 		t.Fatal(err)
@@ -712,11 +677,8 @@ func TestRollbackDoesNotBlockOnStaleOrphanedDispatchingRow(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	if _, err := pool.Exec(ctx, celerySyncQuiescenceSchema+`;
-		INSERT INTO public.sync_run_units (id, provider, dataset_key, status, updated_at) VALUES
-			('00000000-0000-4000-8000-000000000007', 'launchdarkly', 'feature-flags', 'dispatching', statement_timestamp() - interval '2 hours')`); err != nil {
-		t.Fatal(err)
-	}
+	prepareCelerySyncQuiescence(ctx, t, pool)
+	insertUnit(ctx, t, pool, unitSeed{"00000000-0000-4000-8000-000000000007", "launchdarkly", "feature-flags", "dispatching", "statement_timestamp() - interval '2 hours'", ""})
 	quiescer, err := NewPostgresCelerySyncProviderQuiescer(pool)
 	if err != nil {
 		t.Fatal(err)
@@ -771,11 +733,8 @@ func TestRollbackDoesNotBlockOnExpiredRunningLease(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	if _, err := pool.Exec(ctx, celerySyncQuiescenceSchema+`;
-		INSERT INTO public.sync_run_units (id, provider, dataset_key, status, updated_at, lease_expires_at) VALUES
-			('00000000-0000-4000-8000-000000000008', 'launchdarkly', 'feature-flags', 'running', statement_timestamp() - interval '2 hours', statement_timestamp() - interval '10 minutes')`); err != nil {
-		t.Fatal(err)
-	}
+	prepareCelerySyncQuiescence(ctx, t, pool)
+	insertUnit(ctx, t, pool, unitSeed{"00000000-0000-4000-8000-000000000008", "launchdarkly", "feature-flags", "running", "statement_timestamp() - interval '2 hours'", "statement_timestamp() - interval '10 minutes'"})
 	quiescer, err := NewPostgresCelerySyncProviderQuiescer(pool)
 	if err != nil {
 		t.Fatal(err)

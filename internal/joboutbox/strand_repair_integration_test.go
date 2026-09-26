@@ -15,7 +15,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/providersyncschema"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river/rivertype"
@@ -1494,270 +1494,34 @@ func createStrandRoles(t *testing.T, ctx context.Context, pool *pgxpool.Pool, do
 
 func createStrandSchema(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
-	// Every table is DERIVED FROM THE ALEMBIC MIGRATIONS, column for column and
-	// constraint for constraint, not hand-written to match the repair's
-	// predicates. The first draft of this file invented an org_id column on
-	// daily_metrics_partitions that production does not have, so the suite
-	// stayed green while the shipped query crash-looped the prod reconciler on
-	// `column partition.org_id does not exist`. The per-table authorities:
+	// The migrated schema, not a hand copy: daily_metrics_runs / partitions (alembic 0057, 0095 and the
+	// permanent-failure state of 0113), work_graph_execution_requests with its terminal-immutability
+	// trigger (0060), worker_job_outbox (0046, 0063), worker_job_completion_fences (0063),
+	// worker_job_runs (0052) and the run/unit/integration tables the provider-unit shape reads. The
+	// first draft of this file invented an org_id column on daily_metrics_partitions that production
+	// does not have, so the suite stayed green while the shipped query crash-looped the prod reconciler
+	// -- the reason this fixture now is the migrated schema itself.
 	//
-	//   - daily_metrics_runs / daily_metrics_partitions: alembic 0057, with the
-	//     'no_repositories' status widened in by 0095.
-	//   - work_graph_execution_requests: alembic 0060, including its
-	//     terminal-immutability trigger.
-	//   - worker_job_outbox: alembic 0046, plus 0063's
-	//     prerequisite_completion_key column.
-	//   - worker_job_completion_fences: alembic 0063.
-	//   - worker_job_runs: alembic 0052.
-	//
-	// sync_runs / sync_run_units (+ the integration rows they FK to) are NOT
-	// written out here: they come from internal/testsupport/providersyncschema,
-	// which is the shared, alembic-0015-derived definition that
-	// tests/test_providersync_fixture_ddl_matches_migrations.py already pins
-	// against the migration. Re-typing them in this file would create a second
-	// copy for that parity test to be blind to -- the same "invented schema
-	// ships green" failure this comment's own first paragraph is about.
-	//
-	// It must run BEFORE ApplyPinnedMigrations: the queue role's SELECT grants
-	// on both tables are `to_regclass(...) IS NOT NULL` guarded
-	// (internal/storage/river/migrate.go:511-512), so a table created after the
-	// migration silently gets no grant at all and the provider-unit shape fails
-	// as ErrNotAuthorized for a fixture-ordering reason.
-	if err := providersyncschema.Create(ctx, pool); err != nil {
-		t.Fatal(err)
-	}
-	_, err := pool.Exec(ctx, `
-		CREATE TABLE public.daily_metrics_runs (
-			id uuid PRIMARY KEY,
-			org_id uuid NOT NULL,
-			target_day date NOT NULL,
-			generation varchar(64) NOT NULL,
-			status varchar(16) NOT NULL DEFAULT 'pending',
-			finalization_status varchar(16) NOT NULL DEFAULT 'pending',
-			finalization_claim_token uuid NULL,
-			finalization_lease_expires_at timestamptz NULL,
-			finalized_at timestamptz NULL,
-			created_at timestamptz NOT NULL,
-			updated_at timestamptz NOT NULL,
-			CONSTRAINT ck_daily_metrics_run_status CHECK (
-				status IN ('pending', 'running', 'succeeded', 'failed', 'canceled', 'no_repositories')
-			),
-			CONSTRAINT ck_daily_metrics_finalize_status CHECK (
-				finalization_status IN ('pending', 'running', 'succeeded', 'failed')
-			),
-			CONSTRAINT ck_daily_metrics_finalize_lease CHECK (
-				(finalization_status = 'running' AND finalization_claim_token IS NOT NULL
-					AND finalization_lease_expires_at IS NOT NULL)
-				OR (finalization_status <> 'running' AND finalization_claim_token IS NULL
-					AND finalization_lease_expires_at IS NULL)
-			),
-			CONSTRAINT uq_daily_metrics_run_generation UNIQUE (org_id, target_day, generation)
-		);
-		CREATE TABLE public.daily_metrics_partitions (
-			id uuid PRIMARY KEY,
-			run_id uuid NOT NULL REFERENCES public.daily_metrics_runs(id) ON DELETE CASCADE,
-			ordinal integer NOT NULL,
-			repo_ids json NOT NULL,
-			status varchar(16) NOT NULL DEFAULT 'pending',
-			claim_token uuid NULL,
-			lease_expires_at timestamptz NULL,
-			attempt_count integer NOT NULL DEFAULT 0,
-			completed_at timestamptz NULL,
-			created_at timestamptz NOT NULL,
-			updated_at timestamptz NOT NULL,
-			CONSTRAINT ck_daily_metrics_partition_ordinal CHECK (ordinal >= 0),
-			CONSTRAINT ck_daily_metrics_partition_status CHECK (
-				status IN ('pending', 'running', 'succeeded', 'failed')
-			),
-			CONSTRAINT ck_daily_metrics_partition_attempts CHECK (attempt_count >= 0),
-			CONSTRAINT ck_daily_metrics_partition_lease CHECK (
-				(status = 'running' AND claim_token IS NOT NULL AND lease_expires_at IS NOT NULL)
-				OR (status <> 'running' AND claim_token IS NULL AND lease_expires_at IS NULL)
-			),
-			CONSTRAINT uq_daily_metrics_partition_ordinal UNIQUE (run_id, ordinal)
-		);
-		CREATE INDEX ix_daily_metrics_partition_reclaim
-			ON public.daily_metrics_partitions (status, lease_expires_at);
-		CREATE INDEX ix_daily_metrics_partition_run_status
-			ON public.daily_metrics_partitions (run_id, status);
-		CREATE TABLE public.work_graph_execution_requests (
-			id uuid PRIMARY KEY,
-			org_id uuid NOT NULL,
-			kind text NOT NULL CHECK (kind IN (
-				'workgraph.build', 'investment.materialize', 'investment.dispatch',
-				'investment.chunk', 'investment.finalize'
-			)),
-			scope jsonb NOT NULL,
-			model_ref text NULL CHECK (model_ref IS NULL OR length(model_ref) <= 128),
-			prompt_ref text NULL CHECK (prompt_ref IS NULL OR length(prompt_ref) <= 128),
-			llm_concurrency integer NOT NULL CHECK (llm_concurrency BETWEEN 1 AND 16),
-			spend_limit_microunits bigint NOT NULL CHECK (spend_limit_microunits >= 0),
-			correlation_id text NOT NULL CHECK (length(correlation_id) BETWEEN 1 AND 128),
-			idempotency_key text NOT NULL UNIQUE CHECK (length(idempotency_key) BETWEEN 1 AND 256),
-			state text NOT NULL DEFAULT 'pending' CHECK (state IN (
-				'pending', 'running', 'succeeded', 'failed', 'ambiguous', 'canceled'
-			)),
-			claim_token uuid NULL,
-			lease_expires_at timestamptz NULL,
-			attempt_count integer NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
-			created_at timestamptz NOT NULL DEFAULT statement_timestamp(),
-			updated_at timestamptz NOT NULL DEFAULT statement_timestamp(),
-			CHECK ((state = 'running' AND claim_token IS NOT NULL AND lease_expires_at IS NOT NULL)
-				OR (state <> 'running' AND claim_token IS NULL AND lease_expires_at IS NULL))
-		);
-		CREATE INDEX ix_work_graph_execution_claim
-			ON public.work_graph_execution_requests (kind, state, lease_expires_at);
-		CREATE OR REPLACE FUNCTION forbid_work_graph_terminal_mutation()
-		RETURNS trigger AS $trigger$
-		BEGIN
-			IF OLD.state IN ('succeeded', 'failed', 'canceled') THEN
-				RAISE EXCEPTION 'terminal work graph execution request is immutable';
-			END IF;
-			RETURN NEW;
-		END;
-		$trigger$ LANGUAGE plpgsql;
-		CREATE TRIGGER work_graph_execution_terminal_immutable
-		BEFORE UPDATE ON public.work_graph_execution_requests
-		FOR EACH ROW EXECUTE FUNCTION forbid_work_graph_terminal_mutation();
-		CREATE TABLE public.worker_job_outbox (
-			id uuid PRIMARY KEY,
-			dedupe_key varchar(256) NOT NULL,
-			job_kind varchar(96) NOT NULL,
-			contract_version integer NOT NULL,
-			args json NOT NULL,
-			payload_hash varchar(71) NOT NULL,
-			queue varchar(96) NOT NULL,
-			priority smallint NOT NULL,
-			max_attempts smallint NOT NULL,
-			scheduled_at timestamptz NOT NULL,
-			status varchar(16) NOT NULL,
-			claim_token uuid,
-			claimed_at timestamptz,
-			claim_expires_at timestamptz,
-			attempt_count integer NOT NULL,
-			first_attempt_at timestamptz,
-			last_attempt_at timestamptz,
-			next_attempt_at timestamptz NOT NULL,
-			last_error_code varchar(64),
-			last_error_detail varchar(256),
-			last_error_at timestamptz,
-			river_job_id bigint,
-			delivered_at timestamptz,
-			created_at timestamptz NOT NULL,
-			updated_at timestamptz NOT NULL,
-			prerequisite_completion_key text NULL CHECK (
-				prerequisite_completion_key IS NULL
-				OR (
-					length(prerequisite_completion_key) BETWEEN 1 AND 256
-					AND prerequisite_completion_key ~ '^[a-z][a-z0-9_]{0,95}:[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
-				)
-			),
-			CONSTRAINT ck_worker_job_outbox_status CHECK (status IN ('pending', 'claimed', 'delivered', 'dead')),
-			CONSTRAINT ck_worker_job_outbox_contract_version CHECK (contract_version > 0),
-			CONSTRAINT ck_worker_job_outbox_priority CHECK (priority BETWEEN 1 AND 4),
-			CONSTRAINT ck_worker_job_outbox_max_attempts CHECK (max_attempts BETWEEN 1 AND 25),
-			CONSTRAINT ck_worker_job_outbox_attempt_count CHECK (attempt_count >= 0),
-			CONSTRAINT ck_worker_job_outbox_payload_hash CHECK (
-				length(payload_hash) = 71 AND payload_hash LIKE 'sha256:%'
-			),
-			CONSTRAINT ck_worker_job_outbox_args_size CHECK (length(CAST(args AS TEXT)) <= 16384),
-			CONSTRAINT ck_worker_job_outbox_claim_state CHECK (
-				(status = 'claimed' AND claim_token IS NOT NULL AND claimed_at IS NOT NULL AND claim_expires_at IS NOT NULL)
-				OR (status <> 'claimed' AND claim_token IS NULL AND claimed_at IS NULL AND claim_expires_at IS NULL)
-			),
-			CONSTRAINT ck_worker_job_outbox_delivery_state CHECK (
-				(status = 'delivered' AND river_job_id IS NOT NULL AND delivered_at IS NOT NULL)
-				OR (status <> 'delivered' AND river_job_id IS NULL AND delivered_at IS NULL)
-			),
-			CONSTRAINT ck_worker_job_outbox_error_state CHECK (
-				(last_error_code IS NULL AND last_error_detail IS NULL AND last_error_at IS NULL)
-				OR (last_error_code IS NOT NULL AND last_error_detail IS NOT NULL AND last_error_at IS NOT NULL)
-			),
-			CONSTRAINT uq_worker_job_outbox_dedupe_key UNIQUE (dedupe_key),
-			CONSTRAINT uq_worker_job_outbox_river_job_id UNIQUE (river_job_id)
-		);
-		CREATE INDEX ix_worker_job_outbox_due
-			ON public.worker_job_outbox (status, next_attempt_at, scheduled_at, created_at)
-			WHERE status IN ('pending', 'claimed');
-		CREATE INDEX ix_worker_job_outbox_claim_expiry
-			ON public.worker_job_outbox (claim_expires_at)
-			WHERE status = 'claimed';
-		CREATE INDEX ix_worker_job_outbox_terminal
-			ON public.worker_job_outbox (status, delivered_at, updated_at)
-			WHERE status IN ('delivered', 'dead');
-		CREATE INDEX ix_worker_job_outbox_prerequisite
-			ON public.worker_job_outbox (prerequisite_completion_key)
-			WHERE prerequisite_completion_key IS NOT NULL;
-		CREATE TABLE public.worker_job_completion_fences (
-			completion_key text PRIMARY KEY
-				CHECK (
-					length(completion_key) BETWEEN 1 AND 256
-					AND completion_key ~ '^[a-z][a-z0-9_]{0,95}:[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
-				),
-			completed_at timestamptz NOT NULL DEFAULT statement_timestamp()
-		);
-		CREATE TABLE public.worker_job_runs (
-			id uuid PRIMARY KEY,
-			job_kind varchar(96) NOT NULL,
-			idempotency_key varchar(256) NOT NULL,
-			org_id uuid NULL,
-			domain_type varchar(64) NOT NULL,
-			domain_id uuid NOT NULL,
-			status varchar(16) NOT NULL,
-			claim_token uuid NULL,
-			lease_expires_at timestamptz NULL,
-			attempt_count integer NOT NULL,
-			started_at timestamptz NOT NULL,
-			finished_at timestamptz NULL,
-			result varchar(16) NULL,
-			error_category varchar(32) NULL,
-			created_at timestamptz NOT NULL,
-			updated_at timestamptz NOT NULL,
-			CONSTRAINT ck_worker_job_run_status CHECK (
-				status IN ('running', 'retryable', 'succeeded', 'terminal')
-			),
-			CONSTRAINT ck_worker_job_run_attempt_count CHECK (attempt_count >= 1),
-			CONSTRAINT ck_worker_job_run_claim_state CHECK (
-				(status = 'running' AND claim_token IS NOT NULL AND lease_expires_at IS NOT NULL AND finished_at IS NULL)
-				OR (status <> 'running' AND claim_token IS NULL AND lease_expires_at IS NULL AND finished_at IS NOT NULL)
-			),
-			CONSTRAINT ck_worker_job_run_result_state CHECK (
-				(result IS NULL AND error_category IS NULL)
-				OR (result IS NOT NULL AND error_category IS NOT NULL)
-			),
-			CONSTRAINT uq_worker_job_run_key UNIQUE (job_kind, idempotency_key)
-		);
-		CREATE INDEX ix_worker_job_run_reclaim
-			ON public.worker_job_runs (status, lease_expires_at)`)
-	if err != nil {
-		t.Fatal(err)
-	}
+	// It must run BEFORE ApplyPinnedMigrations: the queue role's SELECT grants on both tables are
+	// `to_regclass(...) IS NOT NULL` guarded (internal/storage/river/migrate.go:511-512), so a table
+	// created after the migration silently gets no grant at all and the provider-unit shape fails as
+	// ErrNotAuthorized for a fixture-ordering reason.
+	pgschema.Apply(ctx, t, pool)
 }
 
 func resetStrandTables(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
+	// CASCADE: the migrated schema has tables that reference sync_run_units / sync_runs (chunk
+	// checkpoints, effect chunks and snapshots, dispatch outbox, watermarks) and the ledgers; naming
+	// every referencing table would couple this fixture to the schema's table list, and this database
+	// belongs to the test, so truncating them all is what "reset" means here.
 	if _, err := pool.Exec(ctx, `TRUNCATE
 		public.worker_job_outbox, public.worker_job_completion_fences,
 		public.daily_metrics_partitions, public.daily_metrics_runs,
 		public.work_graph_execution_requests, public.worker_job_runs,
-		river.river_job RESTART IDENTITY`); err != nil {
+		public.sync_run_units, public.sync_runs,
+		river.river_job RESTART IDENTITY CASCADE`); err != nil {
 		t.Fatal(err)
-	}
-	// DELETE, not TRUNCATE: providersyncschema creates several tables that
-	// reference sync_run_units / sync_runs (chunk checkpoints, effect chunks,
-	// effect snapshots, dispatch outbox, watermarks), and PostgreSQL refuses to
-	// TRUNCATE a table referenced by a foreign key unless every referencing
-	// table is truncated with it. Naming them all here would silently couple
-	// this fixture to providersyncschema's table list; CASCADE would truncate
-	// tables this file never mentions. A DELETE respects the FKs and, with
-	// nothing seeded in those tables, costs nothing. Children first.
-	for _, statement := range []string{
-		"DELETE FROM public.sync_run_units",
-		"DELETE FROM public.sync_runs",
-	} {
-		if _, err := pool.Exec(ctx, statement); err != nil {
-			t.Fatal(err)
-		}
 	}
 }
 
@@ -1969,16 +1733,20 @@ func seedSyncStrandUnit(
 		sql  string
 		args []any
 	}{
-		{`INSERT INTO public.integration_credentials (id) VALUES ($1) ON CONFLICT DO NOTHING`,
-			[]any{credentialID}},
-		{`INSERT INTO public.integrations (id, org_id, credential_id) VALUES ($1, $2, $3)
+		{`INSERT INTO public.integration_credentials (id, org_id, provider, name, is_active, created_at, updated_at)
+			VALUES ($1, $2, 'github', 'strand-credential', TRUE, now(), now()) ON CONFLICT DO NOTHING`,
+			[]any{credentialID, orgID}},
+		{`INSERT INTO public.integrations (id, org_id, provider, name, credential_id, config, is_active, created_at, updated_at)
+			VALUES ($1, $2, 'github', 'strand-integration', $3, '{}'::json, TRUE, now(), now())
 			ON CONFLICT DO NOTHING`, []any{integrationID, orgID, credentialID}},
-		{`INSERT INTO public.integration_sources (id, org_id, integration_id, external_id, full_name)
-			VALUES ($1, $2, $3, 'strand-source', 'full-chaos/strand-source')
+		{`INSERT INTO public.integration_sources (id, org_id, integration_id, provider, source_type, external_id, name, full_name,
+			metadata, is_enabled, discovered_at, last_seen_at)
+			VALUES ($1, $2, $3, 'github', 'repository', 'strand-source', 'strand-source', 'full-chaos/strand-source',
+			'{}'::json, TRUE, now(), now())
 			ON CONFLICT DO NOTHING`, []any{sourceID, orgID, integrationID}},
 		{`INSERT INTO public.sync_runs (
-			id, org_id, integration_id, status, total_units, completed_units, failed_units
-		) VALUES ($1, $2, $3, $4, 1, 0, 0)`,
+			id, org_id, integration_id, triggered_by, mode, status, total_units, completed_units, failed_units, created_at
+		) VALUES ($1, $2, $3, 'test', 'incremental', $4, 1, 0, 0, now())`,
 			[]any{runID, orgID, integrationID, spec.runStatus}},
 	} {
 		if _, err := pool.Exec(ctx, statement.sql, statement.args...); err != nil {

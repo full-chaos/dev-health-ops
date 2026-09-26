@@ -166,6 +166,14 @@ type postgresWorkerDatabase struct {
 	domainRole  string
 	queueRole   string
 	riverSchema string
+
+	// CHAOS-6934: queue and River-schema readiness never make a probe wait on the (2-connection)
+	// queue-control work pool; see postgres.LazyProbeCheck.
+	// probeOptions: RunTimeout is the probe deadline (config.HealthCheckTimeout); TTL and MaxStale
+	// are the domain check's defaults.
+	probeOptions     postgres.PostureCheckOptions
+	queueProbe       postgres.LazyProbeCheck
+	riverSchemaProbe postgres.LazyProbeCheck
 }
 
 func (database *postgresWorkerDatabase) NewWorkerPresence(
@@ -201,9 +209,12 @@ func openWorkerDatabase(ctx context.Context, cfg config.Config) (workerDatabase,
 	if err != nil {
 		return nil, err
 	}
-	return &postgresWorkerDatabase{
+	database := &postgresWorkerDatabase{
 		pools: pools, domainRole: runtimeConfig.DomainRole, queueRole: runtimeConfig.QueueRole, riverSchema: runtimeConfig.RiverSchema,
-	}, nil
+		probeOptions: postgres.PostureCheckOptions{RunTimeout: cfg.HealthCheckTimeout, Logger: slog.Default()},
+	}
+	database.warmReadinessProbes()
+	return database, nil
 }
 
 func (database *postgresWorkerDatabase) DomainReady(ctx context.Context) error {
@@ -245,7 +256,8 @@ SELECT EXISTS (
 		AND config::jsonb ? 'github_projects_v2'
 )`
 	var configured bool
-	if err := database.pools.Domain.QueryRow(ctx, query).Scan(&configured); err != nil {
+	// CHAOS-6934: a readiness input, so on the domain readiness pool, never the work pool.
+	if err := database.pools.ReadinessPool().QueryRow(ctx, query).Scan(&configured); err != nil {
 		return false, err
 	}
 	return configured, nil
@@ -255,6 +267,10 @@ func (database *postgresWorkerDatabase) QueueReady(ctx context.Context) error {
 	if database == nil || database.pools == nil || database.pools.QueueControl == nil {
 		return errWorkerDependencyUnavailable
 	}
+	return database.queueProbe.CheckWith(ctx, "queue_postgres", database.queueRun, database.probeOptions)
+}
+
+func (database *postgresWorkerDatabase) queueRun(ctx context.Context) error {
 	return postgres.CheckQueueAuthorization(ctx, database.pools.QueueControl, database.queueRole, database.riverSchema)
 }
 
@@ -262,8 +278,20 @@ func (database *postgresWorkerDatabase) RiverSchemaReady(ctx context.Context, sc
 	if database == nil || database.pools == nil || database.pools.QueueControl == nil {
 		return errWorkerDependencyUnavailable
 	}
-	_, err := riverstore.CheckSchema(ctx, database.pools.QueueControl, schema, nil)
-	return err
+	return database.riverSchemaProbe.CheckWith(ctx, "river_schema", func(ctx context.Context) error {
+		_, err := riverstore.CheckSchema(ctx, database.pools.QueueControl, schema, nil)
+		return err
+	}, database.probeOptions)
+}
+
+// warmReadinessProbes starts the background queue and River-schema checks now, so the process
+// proves its roles before its first probe (CHAOS-6934).
+func (database *postgresWorkerDatabase) warmReadinessProbes() {
+	database.queueProbe.Warm("queue_postgres", database.queueRun, database.probeOptions)
+	database.riverSchemaProbe.Warm("river_schema", func(ctx context.Context) error {
+		_, err := riverstore.CheckSchema(ctx, database.pools.QueueControl, database.riverSchema, nil)
+		return err
+	}, database.probeOptions)
 }
 
 func (database *postgresWorkerDatabase) PostureManifestLockstep(
@@ -423,6 +451,12 @@ func defaultRiverClientID() string {
 }
 
 type workerDependencies struct {
+	// contractVersionsProbe answers queued_contract_versions from a background census, never making a
+	// probe wait on the queue-control work pool (CHAOS-6934); contractVersionsOptions.RunTimeout is the
+	// census's own bound (config.QueueTelemetryTimeout).
+	contractVersionsProbe   postgres.LazyProbeCheck
+	contractVersionsOptions postgres.PostureCheckOptions
+
 	database    workerDatabase
 	databaseErr error
 
@@ -1750,6 +1784,13 @@ func (dependencies *workerDependencies) buildQueueTelemetry(
 			Occupants:    nonRegistryQueueOccupants(queueBudgets),
 		},
 	)
+	// CHAOS-6934: prove the queued contract versions at construction, before the first probe.
+	dependencies.contractVersionsOptions = postgres.PostureCheckOptions{RunTimeout: cfg.QueueTelemetryTimeout, Logger: slog.Default()}
+	if dependencies.queueTelemetryErr == nil && dependencies.queueTelemetry != nil {
+		dependencies.contractVersionsProbe.Warm(
+			"queued_contract_versions", dependencies.contractVersionsRun, dependencies.contractVersionsOptions,
+		)
+	}
 }
 
 // nonRegistryQueueOccupants is the second half of "who may legitimately have
@@ -2121,7 +2162,9 @@ func (dependencies *workerDependencies) queuedContractVersionsReady(ctx context.
 		// fail closed rather than silently passing on missing evidence.
 		return errWorkerDependencyUnavailable
 	}
-	if err := dependencies.queueTelemetry.CheckAvailableContractVersions(ctx); err != nil {
+	if err := dependencies.contractVersionsProbe.CheckWith(
+		ctx, "queued_contract_versions", dependencies.contractVersionsRun, dependencies.contractVersionsOptions,
+	); err != nil {
 		// Name the offending contract. The health registry surface reports
 		// check names only, so without this an operator sees
 		// "failed_checks=queued_contract_versions" and has no way to tell
@@ -2153,6 +2196,18 @@ func (dependencies *workerDependencies) queuedContractVersionsReady(ctx context.
 	}
 	dependencies.reportUnsupportedContracts(ctx, "")
 	return nil
+}
+
+// contractVersionsRun is the background census behind queued_contract_versions. An unsupported queued
+// contract is a DEFINITIVE answer, so it is wrapped in ErrPostureRefused: it invalidates the cached
+// pass at once. Any other failure (a deadline, a dropped connection) is an unanswered query.
+func (dependencies *workerDependencies) contractVersionsRun(ctx context.Context) error {
+	err := dependencies.queueTelemetry.CheckAvailableContractVersions(ctx)
+	var unsupported *riverstore.UnsupportedContractVersionError
+	if errors.As(err, &unsupported) {
+		return fmt.Errorf("%w: %w", postgres.ErrPostureRefused, err)
+	}
+	return err
 }
 
 // reportUnsupportedContracts logs the offender set only when it CHANGES,

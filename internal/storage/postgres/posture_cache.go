@@ -80,7 +80,11 @@ type CachedPostureCheck struct {
 	okAt      time.Time
 	refused   error
 	refusedAt time.Time
-	flight    *postureFlight
+	// unanswered is the error of the last execution that neither passed nor was a definitive
+	// refusal (a deadline, a dropped connection, ...); cleared by a pass. LazyProbeCheck surfaces it
+	// so a probe classifies the failure by its real cause (CHAOS-6934).
+	unanswered error
+	flight     *postureFlight
 }
 
 type postureFlight struct {
@@ -96,6 +100,16 @@ func NewCachedPostureCheck(
 	return newCachedPostureCheck(expectedRole, func(ctx context.Context) error {
 		return CheckRolePosture(ctx, pool, expectedRole, riverSchema, posture)
 	}, options)
+}
+
+// NewCachedRunCheck binds ANY bounded read-only readiness query (queue authorization, the River
+// schema, contract versions, ...) to the same machinery as NewCachedPostureCheck: single-flight,
+// cached, run in the background with its own timeout, and answered to a probe by CheckNoWait
+// without the probe ever waiting on a connection pool (CHAOS-6934). name is a checked-in label for
+// the log line. run should wrap a DEFINITIVE "no" in ErrPostureRefused (it invalidates the cached
+// pass at once); any other error is an unanswered query, not an answer.
+func NewCachedRunCheck(name string, run func(context.Context) error, options PostureCheckOptions) *CachedPostureCheck {
+	return newCachedPostureCheck(name, run, options)
 }
 
 func newCachedPostureCheck(role string, run func(context.Context) error, options PostureCheckOptions) *CachedPostureCheck {
@@ -202,6 +216,22 @@ func (c *CachedPostureCheck) CheckNoWait() error {
 		ErrUnavailable, now.Sub(c.okAt).Round(time.Second), c.maxStale)
 }
 
+// Answered reports whether any execution has completed (a pass, a definitive refusal or an
+// unanswered query), i.e. whether the check has ever produced state a probe can be answered from.
+func (c *CachedPostureCheck) Answered() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return !c.okAt.IsZero() || c.refused != nil || c.unanswered != nil
+}
+
+// LastUnanswered returns the error of the last execution that neither passed nor was a definitive
+// refusal, or nil.
+func (c *CachedPostureCheck) LastUnanswered() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.unanswered
+}
+
 // startFlightLocked returns the in-flight execution, starting one if none.
 // The caller holds c.mu.
 func (c *CachedPostureCheck) startFlightLocked() *postureFlight {
@@ -225,9 +255,11 @@ func (c *CachedPostureCheck) execute(flight *postureFlight) {
 	finished := c.now()
 	switch {
 	case err == nil:
-		c.okAt, c.refused = finished, nil
+		c.okAt, c.refused, c.unanswered = finished, nil, nil
 	case errors.Is(err, ErrPostureRefused):
-		c.okAt, c.refused, c.refusedAt = time.Time{}, err, finished
+		c.okAt, c.refused, c.refusedAt, c.unanswered = time.Time{}, err, finished, nil
+	default:
+		c.unanswered = err
 	}
 	flight.err = err
 	c.flight = nil

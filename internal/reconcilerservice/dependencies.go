@@ -97,6 +97,15 @@ type postgresReconcilerDatabase struct {
 	queueRole       string
 	coordinatorRole string
 	riverSchema     string
+
+	// CHAOS-6934: queue, coordinator and River-schema readiness never make a probe wait on their
+	// (2-connection) work pools; see postgres.LazyProbeCheck.
+	// probeOptions: RunTimeout is the probe deadline (config.HealthCheckTimeout); TTL and MaxStale
+	// are the domain check's defaults.
+	probeOptions     postgres.PostureCheckOptions
+	queueProbe       postgres.LazyProbeCheck
+	coordinatorProbe postgres.LazyProbeCheck
+	riverSchemaProbe postgres.LazyProbeCheck
 }
 
 func openReconcilerDatabase(ctx context.Context, cfg config.Config) (reconcilerDatabase, error) {
@@ -110,10 +119,13 @@ func openReconcilerDatabase(ctx context.Context, cfg config.Config) (reconcilerD
 	if err != nil {
 		return nil, err
 	}
-	return &postgresReconcilerDatabase{
+	database := &postgresReconcilerDatabase{
 		pools: pools, domainRole: runtimeConfig.DomainRole, queueRole: runtimeConfig.QueueRole,
 		coordinatorRole: runtimeConfig.CoordinatorRole, riverSchema: runtimeConfig.RiverSchema,
-	}, nil
+		probeOptions: postgres.PostureCheckOptions{RunTimeout: cfg.HealthCheckTimeout, Logger: slog.Default()},
+	}
+	database.warmReadinessProbes()
+	return database, nil
 }
 
 func (database *postgresReconcilerDatabase) DomainReady(ctx context.Context) error {
@@ -166,6 +178,10 @@ func (database *postgresReconcilerDatabase) QueueReady(ctx context.Context) erro
 	if database == nil || database.pools == nil || database.pools.QueueControl == nil {
 		return errReconcilerDependencyUnavailable
 	}
+	return database.queueProbe.CheckWith(ctx, "queue_postgres", database.queueRun, database.probeOptions)
+}
+
+func (database *postgresReconcilerDatabase) queueRun(ctx context.Context) error {
 	return postgres.CheckQueueAuthorization(ctx, database.pools.QueueControl, database.queueRole, database.riverSchema)
 }
 
@@ -177,6 +193,10 @@ func (database *postgresReconcilerDatabase) CoordinatorReady(ctx context.Context
 	if database == nil || database.pools == nil || database.pools.Coordinator == nil {
 		return errReconcilerDependencyUnavailable
 	}
+	return database.coordinatorProbe.CheckWith(ctx, "coordinator_postgres", database.coordinatorRun, database.probeOptions)
+}
+
+func (database *postgresReconcilerDatabase) coordinatorRun(ctx context.Context) error {
 	return postgres.CheckCoordinatorAuthorization(
 		ctx, database.pools.Coordinator, database.coordinatorRole, database.riverSchema,
 	)
@@ -186,8 +206,21 @@ func (database *postgresReconcilerDatabase) RiverSchemaReady(ctx context.Context
 	if database == nil || database.pools == nil || database.pools.QueueControl == nil {
 		return errReconcilerDependencyUnavailable
 	}
-	_, err := riverstore.CheckSchema(ctx, database.pools.QueueControl, schema, nil)
-	return err
+	return database.riverSchemaProbe.CheckWith(ctx, "river_schema", func(ctx context.Context) error {
+		_, err := riverstore.CheckSchema(ctx, database.pools.QueueControl, schema, nil)
+		return err
+	}, database.probeOptions)
+}
+
+// warmReadinessProbes starts the background queue, coordinator and River-schema checks now, so the
+// process proves its roles before its first probe (CHAOS-6934).
+func (database *postgresReconcilerDatabase) warmReadinessProbes() {
+	database.queueProbe.Warm("queue_postgres", database.queueRun, database.probeOptions)
+	database.coordinatorProbe.Warm("coordinator_postgres", database.coordinatorRun, database.probeOptions)
+	database.riverSchemaProbe.Warm("river_schema", func(ctx context.Context) error {
+		_, err := riverstore.CheckSchema(ctx, database.pools.QueueControl, database.riverSchema, nil)
+		return err
+	}, database.probeOptions)
 }
 
 func (database *postgresReconcilerDatabase) PostureManifestLockstep(
@@ -757,7 +790,7 @@ func buildReconcilerDependencies(
 		return dependencies
 	}
 	dependencies.loop = loop
-	routeFence, err := sources.buildSyncRouteFence(dependencies.database.DomainPool(), dependencies.syncDispatchRegistry)
+	routeFence, err := sources.buildSyncRouteFence(routeFencePool(dependencies.database), dependencies.syncDispatchRegistry)
 	if err != nil || routeFence == nil {
 		dependencies.syncRouteFenceErr = dependencyUnavailable("reconciler_sync_route_fence_construction_failed")
 		dependencies.disableDatabase()
@@ -1036,6 +1069,18 @@ func (dependencies *reconcilerDependencies) syncRegistryReady(context.Context) e
 		return errReconcilerDependencyUnavailable
 	}
 	return nil
+}
+
+// routeFencePool is the pool the route fence reads on. The fence is a readiness input only, so it
+// runs on the domain readiness pool (CHAOS-6771) and never queues behind the work pool
+// (CHAOS-6934); a database that has no readiness pool (test fakes) keeps the work pool.
+func routeFencePool(database reconcilerDatabase) *pgxpool.Pool {
+	if provider, ok := database.(interface{ ReadinessPool() *pgxpool.Pool }); ok {
+		if pool := provider.ReadinessPool(); pool != nil {
+			return pool
+		}
+	}
+	return database.DomainPool()
 }
 
 func (dependencies *reconcilerDependencies) syncRouteFenceReady(ctx context.Context) error {

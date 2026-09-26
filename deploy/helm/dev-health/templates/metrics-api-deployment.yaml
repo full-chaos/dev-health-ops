@@ -9,7 +9,7 @@ both deleted (zero remaining callers/readers, confirmed by grep). This
 Deployment now serves nothing this PR can see either group actually
 reaching -- whether to retire it is a separate, not-yet-decided follow-up
 (named, not executed, in CHAOS-6279's RISK-NOTES). Deliberately has no
-ingress.yaml route (unlike api/billing-edge) -- a ClusterIP Service
+ingress.yaml route (unlike api) -- a ClusterIP Service
 reachable only by in-cluster DNS is the "no public route".
 */}}
 {{- if .Values.metricsApi.enabled }}

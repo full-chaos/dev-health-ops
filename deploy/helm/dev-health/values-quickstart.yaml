@@ -96,7 +96,3 @@ web:
       memory: "256Mi"
       cpu: "125m"
 
-# Disable optional components
-billingEdge:
-  enabled: false
-

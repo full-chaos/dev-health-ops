@@ -1,0 +1,13 @@
+{{- /*
+CHAOS-6903: the Python billing-edge Deployment and Service are gone from this
+chart; the billing host is served by the go-api billing-edge listener
+(CHAOS-6520), which the DEPLOY chart routes (goApiBillingEdge + an
+ingress.goApiHosts entry with billingEdge: true).
+
+A values file that still enables the removed workload would otherwise render
+nothing for it and read as a healthy edge, so it fails here, loudly.
+`billingEdge: {enabled: false}` (older values files) still renders.
+*/ -}}
+{{- if (.Values.billingEdge | default dict).enabled }}
+{{- fail "billingEdge.enabled is gone (CHAOS-6903): the Python billing edge was removed from this chart; the go-api billing-edge listener serves the billing host (deploy chart: goApiBillingEdge + ingress.goApiHosts entry with billingEdge: true). Delete billingEdge from your values." }}
+{{- end }}

@@ -101,7 +101,7 @@ Alternative: scale the HPA's `minReplicas` instead, or scale a non-HPA workload.
 
 **Size CPU limits by the workload's longest request, not idle usage.**
 
-Billing-edge throttled at 250m (chart default) while `uvicorn` was up but `/health` missed the 1s probe timeout:
+The Python billing edge (removed from the chart in CHAOS-6903; the go-api billing-edge listener serves the billing host now) throttled at 250m (chart default) while `uvicorn` was up but `/health` missed the 1s probe timeout:
 - Process killed with exit 137 (out of memory, actually throttled).
 - Crash loop until limit raised to 1 CPU.
 - Actual usage: 13m (5% of 250m).
@@ -136,7 +136,7 @@ Carries:
 - ClickHouse 6Gi PVC.
 - API request 512Mi, CPU-only HPA (no memory target, Trap #166).
 - Web 256Mi request, 1 CPU limit.
-- Billing-edge enabled with **1 CPU limit** (see Trap #171 above).
+- No Python billing edge: the go-api billing-edge listener serves the billing host (CHAOS-6903; the sizing lesson of Trap #171 above stands for any workload).
 - Three stream-runner groups via `runtimeProfile`.
 
 Ingress: www, api, billing through Traefik to Cloudflare.

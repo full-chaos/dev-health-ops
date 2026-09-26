@@ -3,7 +3,7 @@ The Go query plane. The Python edge's dispatcher forwards a GraphQL operation
 here (GO_API_QUERY_API_URL, see dev-health.configData) when the routing
 registry says the Go plane serves it; with queryApi disabled the edge never
 learns an endpoint and every operation stays on the Python plane, which is why
-this defaults off like billingEdge and metricsApi.
+this defaults off like metricsApi.
 */ -}}
 {{- if .Values.queryApi.enabled }}
 {{- /*
@@ -70,7 +70,7 @@ spec:
             duplicate key rejects the whole Deployment. Scrape via `http`.
             */}}
           {{- /*
-          Declared-only by design: unlike api/metrics-api/billing-edge, this
+          Declared-only by design: unlike api/metrics-api, this
           container gets NO envFrom unless the operator asks for one -- it
           must not silently inherit every key in the platform Secret/
           ConfigMap. Kubernetes gives explicit `env` entries precedence over

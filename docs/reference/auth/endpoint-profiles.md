@@ -98,7 +98,7 @@ comes from the framework and the location still comes from real source.
 
 ### Two deployed apps
 
-Routes are served by **two separate `FastAPI()` instances**, not one:
+Routes are declared by **two separate `FastAPI()` instances**, not one (the heading keeps its anchor; the billing edge below is no longer deployed by the chart):
 
 - `dev-health-ops-api` — `src/dev_health_ops/api/main.py`, the main app. Full
   middleware stack registered in `api/_middleware.py`: on the request path,
@@ -107,7 +107,7 @@ Routes are served by **two separate `FastAPI()` instances**, not one:
   `GraphQLQuerySizeLimitMiddleware` → `SecurityHeadersMiddleware` →
   `CORSMiddleware` → the route.
 - `dev-health-ops-billing-edge` — `src/dev_health_ops/api/billing_edge.py`, a
-  **separately deployed** app (`deploy/helm/dev-health/templates/billing-edge-deployment.yaml`)
+  separate app that this chart no longer deploys (its template was removed; the go-api billing-edge listener now serves the billing host, and this app is only kept until its deletion)
   with **zero shared middleware** — no `OrgIdMiddleware`, no CORS, no CSRF.
   It registers exactly three routes: `POST /api/v1/billing/webhooks/stripe`
   (forwards into `billing/router.py`'s `stripe_webhook`, the SAME handler the

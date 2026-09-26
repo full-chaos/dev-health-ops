@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"log/slog"
 	"net/http"
 	"sort"
 	"strconv"
@@ -2476,12 +2477,27 @@ func buildQueryRoute(getenv getenvFunc, cfg queryRouteConfig) (queryRouteHandler
 		BuildInfo: newBuildInfoHandler(verifier),
 	}
 	cleanup := func() { pgPool.Close() }
-	// CHAOS-6803: the saved-report mutations write to Postgres, so a deployment
-	// that names query-api's role (QUERY_API_DATABASE_ROLE) is not ready until
-	// that role holds the write grants the migration leg applies. A deployment
-	// that names none has not opted in and is checked for nothing extra.
-	ready := readinessCheck(chClient, pgPool, verifier, writeGrantsCheck(getenv, pgPool))
+	// CHAOS-6803/CHAOS-6804: a deployment that names query-api's role
+	// (QUERY_API_DATABASE_ROLE) is not ready until the pool logs in AS that role
+	// and the role holds exactly the query-api manifest the migration leg
+	// applies (postgres.QueryAPIPosture): the read plane, the saved-report
+	// writes, and nothing else. A deployment that names none has not opted in
+	// and is checked for nothing extra.
+	ready := readinessCheck(chClient, pgPool, verifier, queryAPIPostureCheck(getenv, pgPool))
 	return handlers, ready, cleanup, nil
+}
+
+// readinessPinger and jwksChecker are the narrow surfaces readinessCheck needs
+// from ClickHouse, the Postgres pool and the envelope verifier
+// (*dhclickhouse.Client, *pgxpool.Pool and *principal.Verifier satisfy them),
+// so the composition -- which dependency's failure wins, and that the posture
+// check is really part of it -- is testable without a live ClickHouse.
+type readinessPinger interface {
+	Ping(context.Context) error
+}
+
+type jwksChecker interface {
+	CheckJWKS() error
 }
 
 // readinessCheck returns a func that checks ALL THREE of /query's live
@@ -2513,7 +2529,7 @@ func buildQueryRoute(getenv getenvFunc, cfg queryRouteConfig) (queryRouteHandler
 // authenticated request 401'd. verifier.CheckJWKS() closes that -- see
 // its own doc comment for why calling it here, uncached, on every probe,
 // preserves the no-restart rotation contract rather than defeating it.
-func readinessCheck(chClient *dhclickhouse.Client, pgPool *pgxpool.Pool, verifier *principal.Verifier, writeGrants func(context.Context) error) func(context.Context) error {
+func readinessCheck(chClient readinessPinger, pgPool readinessPinger, verifier jwksChecker, posture func(context.Context) error) func(context.Context) error {
 	return func(ctx context.Context) error {
 		if err := chClient.Ping(ctx); err != nil {
 			return &readyzDependencyError{Class: readyzClassClickHouse, Cause: err}
@@ -2524,32 +2540,47 @@ func readinessCheck(chClient *dhclickhouse.Client, pgPool *pgxpool.Pool, verifie
 		if err := verifier.CheckJWKS(); err != nil {
 			return &readyzDependencyError{Class: readyzClassJWKS, Cause: err}
 		}
-		return writeGrantsReadiness(ctx, writeGrants)
+		return queryAPIPostureReadiness(ctx, posture)
 	}
 }
 
-// writeGrantsCheck returns the readiness check for query-api's write grants,
-// or nil when the deployment names no query-api role (QUERY_API_DATABASE_ROLE
-// unset or blank): such a deployment has not opted in and is checked for
-// nothing extra.
-func writeGrantsCheck(getenv getenvFunc, pgPool *pgxpool.Pool) func(context.Context) error {
+// queryAPIPostureCheck returns the readiness check for query-api's Postgres
+// role posture, or nil when the deployment names no query-api role
+// (QUERY_API_DATABASE_ROLE unset or blank): such a deployment has not opted in
+// and is checked for nothing extra. The whole-catalog posture query takes
+// 1.4-1.9 s on the production catalog (CHAOS-6765), so it runs through the
+// cached, single-flight check every posture-checked service uses rather than
+// once per probe.
+func queryAPIPostureCheck(getenv getenvFunc, pgPool *pgxpool.Pool) func(context.Context) error {
 	role := strings.TrimSpace(getenv("QUERY_API_DATABASE_ROLE"))
 	if role == "" {
 		return nil
 	}
-	return func(ctx context.Context) error {
-		return postgresstore.CheckQueryAPIWriteGrants(ctx, pgPool, role)
-	}
+	cached := postgresstore.NewCachedPostureCheck(
+		pgPool, role, queryAPIRiverSchema(getenv), postgresstore.QueryAPIPosture(),
+		postgresstore.PostureCheckOptions{Logger: slog.Default()},
+	)
+	return cached.Check
 }
 
-// writeGrantsReadiness runs the optional write-grants check and classes its
+// queryAPIRiverSchema is the River schema the posture check asserts the role
+// holds NO privilege on: RIVER_DATABASE_SCHEMA, defaulting to "river" like every
+// other service (config.defaultRiverDatabaseSchema).
+func queryAPIRiverSchema(getenv getenvFunc) string {
+	if schema := strings.TrimSpace(getenv("RIVER_DATABASE_SCHEMA")); schema != "" {
+		return schema
+	}
+	return "river"
+}
+
+// queryAPIPostureReadiness runs the optional posture check and classes its
 // failure so /readyz names WHICH dependency failed without echoing the cause.
-func writeGrantsReadiness(ctx context.Context, writeGrants func(context.Context) error) error {
-	if writeGrants == nil {
+func queryAPIPostureReadiness(ctx context.Context, posture func(context.Context) error) error {
+	if posture == nil {
 		return nil
 	}
-	if err := writeGrants(ctx); err != nil {
-		return &readyzDependencyError{Class: readyzClassWriteGrants, Cause: err}
+	if err := posture(ctx); err != nil {
+		return &readyzDependencyError{Class: readyzClassPosture, Cause: err}
 	}
 	return nil
 }
@@ -2562,10 +2593,10 @@ const (
 	readyzClassClickHouse = "clickhouse"
 	readyzClassPostgres   = "postgres"
 	readyzClassJWKS       = "jwks"
-	// readyzClassWriteGrants: the query-api role does not hold the write
-	// grants its mutations need (CHAOS-6803). Only checked when
-	// QUERY_API_DATABASE_ROLE names a role.
-	readyzClassWriteGrants = "postgres_write_grants"
+	// readyzClassPosture: the pool does not log in as the named query-api role,
+	// or that role does not hold exactly the query-api manifest (CHAOS-6803,
+	// CHAOS-6804). Only checked when QUERY_API_DATABASE_ROLE names a role.
+	readyzClassPosture = "postgres_posture"
 )
 
 // readyzDependencyError names WHICH of /query's three live dependencies

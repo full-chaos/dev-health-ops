@@ -116,16 +116,17 @@ type MigrationOptions struct {
 	// (QUERY_API_DATABASE_ROLE). Optional, and applied only when the role
 	// exists: an empty name, or a role not yet provisioned, skips the leg.
 	//
-	// Unlike the coordinator and the api, this leg is ADDITIVE: it issues GRANT
-	// statements for QueryAPIWriteGrants and nothing else -- no REVOKE, no
-	// schema-wide reset, no requirement that the role be a least-privilege
-	// login. query-api has no full posture yet (it logs in as the registry
-	// owner today), so a REVOKE-ALL-then-GRANT policy would strip the reads
-	// its whole query plane depends on. QueryAPIWriteGrants is derived by the
-	// caller from postgres.QueryAPIWritePosture(), the list the readiness
-	// check asserts.
-	QueryAPIRole        string
-	QueryAPIWriteGrants []TableGrant
+	// Since CHAOS-6804 this leg has the same policy as the api role: REVOKE ALL
+	// then GRANT the full manifest, so the role's posture is a function of this
+	// migration alone. It therefore refuses (ErrMigrationConfiguration) a role
+	// that is not an eligible least-privilege login, that is the migration
+	// identity, or that owns any database, schema, relation or function: a
+	// REVOKE would strip an owner (the registry-table owner query-api logs in
+	// as today) of the privileges it needs on its own objects. QueryAPIGrants is
+	// derived by the caller from postgres.QueryAPIPosture(), the list the
+	// readiness check asserts.
+	QueryAPIRole   string
+	QueryAPIGrants []TableGrant
 	// PostureManifestDigest is the sha256 hex digest CHAOS-5437's lockstep
 	// guard stamps into worker_posture_manifest_applied on every run
 	// (postgres.PostureManifestDigest() -- injected the same way
@@ -292,15 +293,52 @@ func ApplyPinnedMigrations(
 		return MigrationResult{}, err
 	}
 	if options.QueryAPIRole != "" {
-		var queryAPIRoleExists bool
+		var queryAPIRoleExists, queryAPIRoleEligible, queryAPIRoleOwnsNothing bool
 		if err := lockConnection.QueryRow(
 			ctx,
-			`SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = $1)`,
+			`SELECT
+				EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = $1),
+				EXISTS (
+					SELECT 1 FROM pg_catalog.pg_roles
+					WHERE rolname = $1
+						AND rolcanlogin
+						AND NOT rolsuper
+						AND NOT rolcreatedb
+						AND NOT rolcreaterole
+						AND NOT rolreplication
+						AND NOT rolbypassrls
+				),
+				NOT EXISTS (
+					SELECT 1 FROM pg_catalog.pg_roles AS identity
+					JOIN pg_catalog.pg_database AS object ON object.datdba = identity.oid
+					WHERE identity.rolname = $1
+				)
+				AND NOT EXISTS (
+					SELECT 1 FROM pg_catalog.pg_roles AS identity
+					JOIN pg_catalog.pg_namespace AS object ON object.nspowner = identity.oid
+					WHERE identity.rolname = $1
+				)
+				AND NOT EXISTS (
+					SELECT 1 FROM pg_catalog.pg_roles AS identity
+					JOIN pg_catalog.pg_class AS object ON object.relowner = identity.oid
+						AND object.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')
+					WHERE identity.rolname = $1
+				)
+				AND NOT EXISTS (
+					SELECT 1 FROM pg_catalog.pg_roles AS identity
+					JOIN pg_catalog.pg_proc AS object ON object.proowner = identity.oid
+					WHERE identity.rolname = $1
+				)`,
 			options.QueryAPIRole,
-		).Scan(&queryAPIRoleExists); err != nil {
+		).Scan(&queryAPIRoleExists, &queryAPIRoleEligible, &queryAPIRoleOwnsNothing); err != nil {
 			return MigrationResult{}, migrationStageError("read query-api role")
 		}
-		options = resolveQueryAPIRole(ctx, options, queryAPIRoleExists)
+		options, err = resolveQueryAPIRole(
+			ctx, options, migrationRole, queryAPIRoleExists, queryAPIRoleEligible && queryAPIRoleOwnsNothing,
+		)
+		if err != nil {
+			return MigrationResult{}, err
+		}
 	}
 
 	schema := pgx.Identifier{options.Schema}.Sanitize()
@@ -593,15 +631,14 @@ func ValidateMigrationOptions(options MigrationOptions) error {
 	return validateQueryAPIOptions(options)
 }
 
-// validateQueryAPIOptions checks the optional query-api write-grant leg.
+// validateQueryAPIOptions checks the optional query-api role leg.
 // Grants without a role are a caller bug, as for the coordinator; a role
 // without grants is a leg that would report success having granted nothing.
 // The role must not be any of the four roles that carry a full, exact posture
-// of their own: an additive GRANT to one of those would widen a role whose
-// readiness check asserts it holds no more.
+// of their own: this leg's REVOKE ALL and GRANT would overwrite theirs.
 func validateQueryAPIOptions(options MigrationOptions) error {
 	if options.QueryAPIRole == "" {
-		if len(options.QueryAPIWriteGrants) != 0 {
+		if len(options.QueryAPIGrants) != 0 {
 			return ErrMigrationConfiguration
 		}
 		return nil
@@ -613,10 +650,10 @@ func validateQueryAPIOptions(options MigrationOptions) error {
 		options.QueryAPIRole == options.APIRole {
 		return ErrMigrationConfiguration
 	}
-	if len(options.QueryAPIWriteGrants) == 0 {
+	if len(options.QueryAPIGrants) == 0 {
 		return ErrMigrationConfiguration
 	}
-	return validateGrantSet(options.QueryAPIWriteGrants, nil, nil)
+	return validateGrantSet(options.QueryAPIGrants, nil, nil)
 }
 
 func validateCoordinatorOptions(options MigrationOptions) error {
@@ -736,21 +773,35 @@ func resolveAPIRole(
 	return options, nil
 }
 
-// resolveQueryAPIRole decides the query-api write-grant leg after the
-// existence read. A role that does not exist yet is skipped and logged, like
-// the api role: it is provisioned once by an operator, and query-api's
-// readiness stays false (when it names the role) until a later migration
-// grants it. Nothing else about the role is required.
-func resolveQueryAPIRole(ctx context.Context, options MigrationOptions, exists bool) MigrationOptions {
-	if options.QueryAPIRole == "" || exists {
-		return options
+// resolveQueryAPIRole decides the query-api role leg after the preflight
+// read. A role that does not exist yet is skipped and logged, like the api role:
+// it is provisioned once by an operator, and query-api's readiness stays false
+// (when it names the role) until a later migration grants it. One that exists
+// must be an eligible least-privilege login that owns nothing and is not the
+// migration identity, or the migration stops: this leg REVOKEs, so pointing it
+// at the registry owner (or a superuser) must never reach the statements.
+func resolveQueryAPIRole(
+	ctx context.Context,
+	options MigrationOptions,
+	migrationRole string,
+	exists bool,
+	eligible bool,
+) (MigrationOptions, error) {
+	if options.QueryAPIRole == "" {
+		return options, nil
 	}
-	if options.Logger != nil {
-		options.Logger.WarnContext(ctx, "query-api Postgres role does not exist; query-api write grants skipped",
-			"query_api_role", options.QueryAPIRole)
+	if !exists {
+		if options.Logger != nil {
+			options.Logger.WarnContext(ctx, "query-api Postgres role does not exist; query-api grants skipped",
+				"query_api_role", options.QueryAPIRole)
+		}
+		options.QueryAPIRole, options.QueryAPIGrants = "", nil
+		return options, nil
 	}
-	options.QueryAPIRole, options.QueryAPIWriteGrants = "", nil
-	return options
+	if !eligible || migrationRole == options.QueryAPIRole {
+		return options, ErrMigrationConfiguration
+	}
+	return options, nil
 }
 
 func validateRuntimeRolePreflight(
@@ -979,34 +1030,14 @@ func runtimeGrantStatements(options MigrationOptions) []string {
 		queryAPIGrantStatements(options)...)...)
 }
 
-// queryAPIGrantStatements is the query-api role's additive write policy: one
-// guarded GRANT per declared table and NOTHING that removes a privilege. See
-// MigrationOptions.QueryAPIRole for why this leg has no REVOKE. Returns nil
-// when no query-api role applies.
+// queryAPIGrantStatements is the query-api role's privilege policy, built
+// exactly as the api role's: REVOKE ALL, then the grants injected from
+// postgres.QueryAPIPosture(). Returns nil when no query-api role applies.
 func queryAPIGrantStatements(options MigrationOptions) []string {
 	if options.QueryAPIRole == "" {
 		return nil
 	}
-	role := pgx.Identifier{options.QueryAPIRole}.Sanitize()
-	statements := make([]string, 0, len(options.QueryAPIWriteGrants))
-	for _, grant := range options.QueryAPIWriteGrants {
-		privileges := "SELECT"
-		if grant.AllowInsert {
-			privileges += ", INSERT"
-		}
-		if grant.AllowUpdate {
-			privileges += ", UPDATE"
-		}
-		if grant.AllowDelete {
-			privileges += ", DELETE"
-		}
-		statements = append(statements,
-			"DO $$ BEGIN IF to_regclass('public."+grant.TableName+"') IS NOT NULL THEN GRANT "+
-				privileges+" ON TABLE "+pgx.Identifier{"public", grant.TableName}.Sanitize()+
-				" TO "+role+"; END IF; END $$",
-		)
-	}
-	return statements
+	return postureGrantStatements(options.QueryAPIRole, options.Schema, options.QueryAPIGrants, nil, nil)
 }
 
 // coordinatorGrantStatements emits the coordinator role's privilege policy

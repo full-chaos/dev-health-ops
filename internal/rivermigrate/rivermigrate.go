@@ -207,7 +207,7 @@ func Execute(
 		apiRole = value
 	}
 	apiTableGrants, apiColumnGrants, apiSequences := postureGrants(postgresstore.APIPosture())
-	queryAPIRole, queryAPIWriteGrants := queryAPILeg(lookup)
+	queryAPIRole, queryAPIGrants := queryAPILeg(lookup)
 	// CHAOS-5437: postureManifestDigest is the SAME value every go-* runtime
 	// binary recomputes at startup (postgres.PostureManifestDigest()) --
 	// stamping it here is what lets each of them prove, without a live
@@ -241,7 +241,7 @@ func Execute(
 		APIColumnGrants:         apiColumnGrants,
 		APISequences:            apiSequences,
 		QueryAPIRole:            queryAPIRole,
-		QueryAPIWriteGrants:     queryAPIWriteGrants,
+		QueryAPIGrants:          queryAPIGrants,
 		PostureManifestDigest:   postureManifestDigest,
 		PostureManifestBuildID:  migrateBuildID,
 		NativeRiverRoutes:       nativeRoutes,
@@ -422,22 +422,22 @@ func coordinatorGrants() ([]riverstore.TableGrant, []riverstore.ColumnGrant, []s
 	return postureGrants(postgresstore.CoordinatorPosture())
 }
 
-// postureGrants converts one role's declared posture into the migration's
-// grant options, so the grant side and the readiness side are one list.
-// queryAPILeg reads the query-api role leg (CHAOS-6803). It is opt-in: with
-// QUERY_API_DATABASE_ROLE unset or blank nothing is granted and nothing
-// changes. When it names a role that exists, the migration adds the ADDITIVE
-// write grants postgres.QueryAPIWritePosture() declares -- see
-// riverstore.MigrationOptions.QueryAPIRole for why that leg never revokes.
+// queryAPILeg reads the query-api role leg (CHAOS-6803, CHAOS-6804). It is
+// opt-in: with QUERY_API_DATABASE_ROLE unset or blank nothing is granted and
+// nothing changes. When it names a role that exists, the migration applies the
+// full manifest postgres.QueryAPIPosture() declares (REVOKE ALL then GRANT) --
+// see riverstore.MigrationOptions.QueryAPIRole for what it refuses.
 func queryAPILeg(lookup func(string) (string, bool)) (string, []riverstore.TableGrant) {
 	value, _ := lookup("QUERY_API_DATABASE_ROLE")
 	if strings.TrimSpace(value) == "" {
 		return "", nil
 	}
-	grants, _, _ := postureGrants(postgresstore.QueryAPIWritePosture())
+	grants, _, _ := postureGrants(postgresstore.QueryAPIPosture())
 	return value, grants
 }
 
+// postureGrants converts one role's declared posture into the migration's
+// grant options, so the grant side and the readiness side are one list.
 func postureGrants(posture postgresstore.RolePosture) ([]riverstore.TableGrant, []riverstore.ColumnGrant, []string) {
 	grants := make([]riverstore.TableGrant, 0, len(posture.RequiredTables))
 	for _, table := range posture.RequiredTables {

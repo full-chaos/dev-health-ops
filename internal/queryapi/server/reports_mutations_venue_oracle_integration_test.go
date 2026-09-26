@@ -37,9 +37,9 @@ import (
 // real /graphql app, through TestClient) and the Go mutations over the real
 // query-api dispatch pipeline answer the same requests against two copies of
 // one Postgres database that the real Alembic chain built and one seed filled.
-// Go writes through a login that holds ONLY the additive write manifest
-// (postgres.QueryAPIWritePosture), so a privilege a mutation needs and the
-// manifest lacks fails here, on the real schema.
+// Go writes through a login that holds ONLY the query-api manifest
+// (postgres.QueryAPIPosture), so a privilege a mutation needs and the manifest
+// lacks fails here, on the real schema.
 //
 // Compared: the response (status, and the body decoded and re-encoded the way
 // Python's json does, so key order, int-versus-float and escapes all count),
@@ -254,7 +254,7 @@ func jsonString(text string) string {
 // startGoMutationServer builds the Go side: the real dispatch pipeline
 // (digest -> registered operation, principal envelope, org context, raw body)
 // over the real gqlgen executor and the real Writer, with the pool logged in
-// as a role holding only the additive write manifest.
+// as a role holding only the query-api manifest.
 func startGoMutationServer(t *testing.T, ctx context.Context, venue *venueoracle.Venue) (http.HandlerFunc, func()) {
 	t.Helper()
 	admin, err := pgxpool.New(ctx, venue.AdminURI(t, venue.GoDB))
@@ -267,12 +267,17 @@ func startGoMutationServer(t *testing.T, ctx context.Context, venue *venueoracle
 	for _, statement := range []string{
 		"CREATE ROLE " + role + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '" + password + "'",
 		"GRANT USAGE ON SCHEMA public TO " + role,
+		"REVOKE CREATE ON SCHEMA public FROM " + role,
+		// PUBLIC holds TEMPORARY on every database by default, and the full
+		// posture check reads effective privilege, so it must go (the same
+		// revoke bootstrapAPIRole and provision_river_roles.sql carry).
+		"DO $$ BEGIN EXECUTE format('REVOKE TEMPORARY ON DATABASE %I FROM PUBLIC, %I', current_database(), '" + role + "'); END $$",
 	} {
 		if _, err := admin.Exec(ctx, statement); err != nil {
 			t.Fatalf("%s: %v", statement, err)
 		}
 	}
-	for _, table := range postgresstore.QueryAPIWritePosture().RequiredTables {
+	for _, table := range postgresstore.QueryAPIPosture().RequiredTables {
 		privileges := "SELECT"
 		if table.AllowInsert {
 			privileges += ", INSERT"
@@ -294,8 +299,8 @@ func startGoMutationServer(t *testing.T, ctx context.Context, venue *venueoracle
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	if err := postgresstore.CheckQueryAPIWriteGrants(ctx, pool, role); err != nil {
-		t.Fatalf("the venue role must satisfy the write manifest it was granted: %v", err)
+	if err := postgresstore.CheckQueryAPIAuthorization(ctx, pool, role, "river"); err != nil {
+		t.Fatalf("the venue role must satisfy the manifest it was granted: %v", err)
 	}
 
 	writer := newReportWriter(pool, filepath.Join(repoRootFromHere(t), "contracts", "jobs", "v1"))

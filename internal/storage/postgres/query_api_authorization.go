@@ -2,27 +2,37 @@ package postgres
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// queryAPIWritePosture is the WRITE privileges query-api needs for the saved
-// report mutations (CHAOS-6803, CHAOS-6098): the five GraphQL mutations
-// createSavedReport, updateSavedReport, deleteSavedReport, cloneSavedReport
-// and triggerReport.
+// queryAPIPosture is the query-api Service's full, hold-exactly Postgres
+// privilege manifest (CHAOS-6804; its additive write half was CHAOS-6803).
+// It is every relation `dho query-api` reaches through its Postgres pool, no
+// more and no less, so a login that holds it can serve the whole read plane
+// and the saved-report mutations and can do nothing else: CheckRolePosture
+// refuses a role that owns an object, holds an undeclared privilege by any
+// route, or holds any privilege on the River schema.
 //
-// It is deliberately NOT a RolePosture in the sense CheckRolePosture reads
-// one. query-api has no least-privilege role or full manifest yet (its
-// registry DSN is documented as the registry-table OWNER's), so a
-// "hold exactly these" posture would have to enumerate every relation its read
-// plane touches and would refuse a role the moment it held one more. This
-// declaration is ADDITIVE: it says which writes the role must hold and
-// nothing about what else it may hold. The full posture is a separate ticket.
+// Each entry is what the code actually executes (SELECT is always implied by
+// TablePrivilege). The reads are listed with the statement that needs them so
+// a reviewer can check the manifest against the code, and the live test
+// TestQueryAPIRoleServesEveryPostgresPathItReaches (internal/queryapi/server)
+// is the completeness proof: it drives each of these paths as the role.
 //
-// Each entry is what the mutation code actually executes, and no more
-// (SELECT is always implied by TablePrivilege):
+// Reads:
+//   - go_api_routing_state: routeswitch.PostgresSwitch.Enabled (every request),
+//     the proof switch, and the registry route's digest-drift log.
+//   - sync_configurations, job_runs, sync_runs: the data-health connectors
+//     section and the home freshness panel's latest-successful-sync read (which
+//     also joins scheduled_jobs, below).
+//   - organizations: the product-telemetry org names, and the BYO-LLM feature
+//     gate's tier fallback.
+//   - org_licenses, feature_flags, org_feature_overrides: the BYO-LLM feature
+//     gate.
+//   - settings: the org's BYO-LLM settings rows.
 //
+// Writes (the five saved-report GraphQL mutations, CHAOS-6098):
 //   - saved_reports: create and clone insert, update updates, delete deletes.
 //   - scheduled_jobs: a report schedule is created (insert) or rewritten
 //     (update) by create and update. A deleted report leaves its job row, as
@@ -36,63 +46,50 @@ import (
 //
 // scheduled_report_occurrences is absent on purpose: only the SCHEDULED
 // execution path writes it, and that path is the scheduler's, not this
-// role's.
-func queryAPIWritePosture() RolePosture {
+// role's. go_api_candidate_build and go_api_proof_run are absent because only
+// the goapiproof CLI touches them. No sequence is needed: every id this
+// process writes is supplied by the caller.
+//
+// Any future query-api Postgres access edits this function in the SAME PR
+// that adds it, the discipline domainPosture and apiPosture already follow.
+func queryAPIPosture() RolePosture {
 	return RolePosture{
 		RequiredTables: []TablePrivilege{
 			{"saved_reports", true, true, true},
 			{"scheduled_jobs", true, true, false},
 			{"report_runs", true, false, false},
 			{"worker_job_outbox", true, false, false},
+			{"go_api_routing_state", false, false, false},
+			{"sync_configurations", false, false, false},
+			{"job_runs", false, false, false},
+			{"sync_runs", false, false, false},
+			{"organizations", false, false, false},
+			{"org_licenses", false, false, false},
+			{"feature_flags", false, false, false},
+			{"org_feature_overrides", false, false, false},
+			{"settings", false, false, false},
 		},
 	}
 }
 
-// QueryAPIWritePosture returns the additive write manifest for the query-api
-// role. internal/rivermigrate derives the GRANT statements from this same
-// declaration, and CheckQueryAPIWriteGrants asserts it, so the grant side and
+// QueryAPIPosture exposes queryAPIPosture for callers outside this package.
+// internal/rivermigrate derives the GRANT statements from this same
+// declaration and CheckQueryAPIAuthorization asserts it, so the grant side and
 // the readiness side are one list.
-func QueryAPIWritePosture() RolePosture {
-	return queryAPIWritePosture()
+func QueryAPIPosture() RolePosture {
+	return queryAPIPosture()
 }
 
-// CheckQueryAPIWriteGrants is query-api's readiness check for its write
-// grants. It is meant to run only when the deployment NAMES a query-api role
-// (QUERY_API_DATABASE_ROLE); a deployment that names none has not opted in,
-// and the caller must not call it.
+// CheckQueryAPIAuthorization is query-api's readiness check when the
+// deployment names a query-api role (QUERY_API_DATABASE_ROLE): it binds the
+// active login to that role and proves it holds exactly queryAPIPosture's
+// manifest, no more and no less, by any route (see CheckRolePosture). It is
+// meant to run only when a role is NAMED; a deployment that names none has not
+// opted in and the caller must not call it.
 //
-// It proves two things and nothing else:
-//
-//   - the active login IS the named role. Grants on a role the pool does not
-//     log in as would read as ready while every write ran under a different
-//     identity.
-//   - the named role holds every privilege queryAPIWritePosture declares.
-//
-// It does NOT refuse a role that holds MORE (no catch-all, no excess check):
-// that is the full least-privilege posture's job.
-func CheckQueryAPIWriteGrants(ctx context.Context, pool *pgxpool.Pool, namedRole string) error {
-	if pool == nil || !validRuntimeIdentifier(namedRole) {
-		return ErrUnavailable
-	}
-	var login string
-	if err := pool.QueryRow(ctx, "SELECT current_user").Scan(&login); err != nil {
-		return fmt.Errorf("%w: reading the active login: %w", ErrUnavailable, err)
-	}
-	if login != namedRole {
-		return fmt.Errorf("%w: %w: the pool logs in as %q, not the named query-api role %q",
-			ErrUnavailable, ErrPostureRefused, login, namedRole)
-	}
-	gaps, err := DiagnoseRolePosture(ctx, pool, namedRole, queryAPIWritePosture())
-	if err != nil {
-		return err
-	}
-	for _, gap := range gaps {
-		// Excess gaps belong to a "hold exactly" posture; this one is additive.
-		if len(gap.Excess) > 0 {
-			continue
-		}
-		return fmt.Errorf("%w: %w for role %q: first missing write grant: %s",
-			ErrUnavailable, ErrPostureRefused, namedRole, gap.String())
-	}
-	return nil
+// It has the same cost as every whole-catalog posture query (1.4-1.9 s on the
+// production catalog, CHAOS-6765), so query-api wraps it in
+// NewCachedPostureCheck rather than calling it per probe.
+func CheckQueryAPIAuthorization(ctx context.Context, pool *pgxpool.Pool, expectedRole, riverSchema string) error {
+	return CheckRolePosture(ctx, pool, expectedRole, riverSchema, queryAPIPosture())
 }

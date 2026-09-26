@@ -625,3 +625,41 @@ func TestCheckQueryAPIAuthorizationRefusesAGrantOnAnObjectInAnotherDatabase(t *t
 		t.Fatalf("a grant on an object in another database passed readiness: %v", err)
 	}
 }
+
+// r4 P1, resolved as a documented scope rule: the extension-owned exclusion applies to
+// objects in THIS database only (pg_depend is per-database). An ACL entry for the role
+// on an extension-owned object in ANOTHER database cannot be classified from here, so
+// it is refused, named, and stops the migrate leg: fail closed, and outside the
+// manifest either way.
+func TestCheckQueryAPIAuthorizationRefusesAnExtensionObjectGrantInAnotherDatabaseByDesign(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	fixture := startQueryAPIFixture(t)
+	role := fixture.newRole(t, ctx, "_extodb")
+	grantQueryAPIManifest(t, ctx, fixture.admin, role, nil)
+	other := "qapi_extdb_" + role[len(role)-8:]
+	if _, err := fixture.admin.Exec(ctx, "CREATE DATABASE "+other); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = fixture.admin.Exec(context.Background(), "DROP DATABASE IF EXISTS "+other+" WITH (FORCE)")
+	})
+	parsed, err := url.Parse(fixture.uri)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed.Path = "/" + other
+	otherAdmin, err := pgxpool.New(ctx, parsed.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(otherAdmin.Close)
+	if _, err := otherAdmin.Exec(ctx, "GRANT EXECUTE ON FUNCTION pg_catalog.plpgsql_call_handler() TO "+role); err != nil {
+		t.Fatal(err)
+	}
+	err = CheckQueryAPIAuthorization(ctx, fixture.connect(t, ctx, role), role, "river")
+	if !errors.Is(err, ErrPostureRefused) || !strings.Contains(err.Error(), "unexplained ACL dependency") {
+		t.Fatalf("an extension-owned object's grant in another database must be refused and named: %v", err)
+	}
+}

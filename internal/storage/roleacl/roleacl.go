@@ -15,9 +15,13 @@
 //
 // Scope, stated (lead D2616, reconciled): every schema except the system schemas
 // (pg_catalog, information_schema, pg_toast*, pg_temp_*), and every object except
-// those an extension owns (pg_depend deptype 'e': relations, schemas, functions,
-// types, languages and foreign data wrappers), which are the server's or the
-// extension author's, not the application's. The PUBLIC defaults on types
+// those an extension owns IN THIS DATABASE (pg_depend deptype 'e': relations,
+// schemas, functions, types, languages and foreign data wrappers), which are the
+// server's or the extension author's, not the application's. pg_depend is
+// per-database, so extension membership of an object in ANOTHER database cannot be
+// determined from here: an ACL entry for the role on any object in another
+// database is refused as an unexplained ACL dependency, extension-owned or not
+// (fail closed; the entry is outside the manifest either way). The PUBLIC defaults on types
 // and languages (USAGE) and on functions (EXECUTE) are ambient in every catalog
 // and are not counted (once any explicit grant materialises an object's ACL, the
 // default PUBLIC entry inside it is still not counted), EXCEPT PUBLIC EXECUTE on a

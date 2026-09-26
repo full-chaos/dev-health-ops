@@ -1091,7 +1091,10 @@ sides:
      cannot slip past a set-equality over a complete enumeration. Stated scope
      (the exclusion predicate is the enumeration's own SQL): every schema except
      `pg_catalog`, `information_schema`, `pg_toast*` and `pg_temp_*`, and every
-     object except those an EXTENSION owns (`pg_depend` deptype `e`); PUBLIC counts
+     object except those an EXTENSION owns in THIS database (`pg_depend` deptype `e`;
+     it is per-database, so an ACL entry for the role on ANY object in another
+     database is refused, extension-owned or not: it is outside the manifest either
+     way); PUBLIC counts
      as granted to the role, including PUBLIC EXECUTE on a SECURITY DEFINER
      function; the ambient PUBLIC defaults on types, languages and
      non-SECURITY-DEFINER functions (what every catalog has) are not counted.

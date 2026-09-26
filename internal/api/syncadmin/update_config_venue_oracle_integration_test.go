@@ -41,7 +41,7 @@ func newUpdateVenueIDs() updateVenueIDs {
 		&ids.intGH, &ids.intGH2, &ids.intJira, &ids.intJiraOff, &ids.intPD, &ids.cfgGH, &ids.cfgGated, &ids.cfgJira,
 		&ids.cfgJiraOff, &ids.cfgPD, &ids.cfgChild, &ids.cfgLegacy, &ids.cfgLegacyChild1, &ids.cfgLegacyChild2, &ids.cfgNoInt,
 		&ids.cfgB, &ids.cfgGHNoDataset, &ids.intGHNoDataset, &ids.cfgGHCanon, &ids.intGHCanon, &ids.cfgNoop} {
-		*target = uuid.New()
+		*target = newID()
 	}
 	return ids
 }
@@ -62,6 +62,8 @@ func newUpdateVenueIDs() updateVenueIDs {
 // commits. The stored end state is the same, so the row diff cannot see
 // the order; only a reader between the two commits could.
 func TestSyncConfigUpdateVenueOracle(t *testing.T) {
+	resetIDs(t)
+	golden := venueoracle.OpenGolden(t, goldenSpec(t.Name()))
 	ctx := context.Background()
 	root := repoRoot(t)
 	const jwtKey = "venue-oracle-test-secret-key-for-sync-config-update!"
@@ -71,7 +73,7 @@ func TestSyncConfigUpdateVenueOracle(t *testing.T) {
 	t.Setenv("no_proxy", "127.0.0.1,localhost")
 
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Root:   root,
+		Root:   golden.PythonRoot(t, root),
 		JWTKey: jwtKey,
 		PythonEnv: []string{
 			"SETTINGS_ENCRYPTION_KEY=" + updateVenueKey,
@@ -127,7 +129,7 @@ func TestSyncConfigUpdateVenueOracle(t *testing.T) {
 		patch("invalid json", ids.cfgGH, `{"sync_targets":`, a),
 		patch("not an object", ids.cfgGH, `[]`, a),
 		patch("wrong field types", ids.cfgGH, `{"sync_targets":"git","sync_options":[],"is_active":"maybe","schedule_cron":1,"timezone":[],"initial_sync_depth":"abc"}`, a),
-		patch("unknown config", uuid.New(), `{}`, a),
+		patch("unknown config", newID(), `{}`, a),
 		{Name: "config id not a uuid", Method: "PATCH", Path: "/api/v1/admin/sync-configs/not-a-uuid", Headers: a, Body: venueoracle.B64(`{}`)},
 		patch("other org's config", ids.cfgB, `{}`, a),
 		patch("empty body", ids.cfgGH, `{}`, a),
@@ -160,9 +162,11 @@ func TestSyncConfigUpdateVenueOracle(t *testing.T) {
 		{Name: "github after", Method: "GET", Path: "/api/v1/admin/sync-configs/" + ids.cfgGH.String(), Headers: a},
 	}
 	statusOnly := map[string]bool{"cron refused": true}
-	python := venue.ServePython(t, requests)
+	python := golden.Python(t, venue, requests)
 	receipt := venueoracle.Diff(t, base, requests, python, venueoracle.DiffOptions{
+		Golden: golden,
 		Normalize: func(request venueoracle.Request, body string) string {
+			body = fakeJiraAddress.ReplaceAllString(body, "127.0.0.1:<port>")
 			if statusOnly[request.Name] {
 				return "<status only: named divergence>"
 			}
@@ -180,10 +184,10 @@ func TestSyncConfigUpdateVenueOracle(t *testing.T) {
 	source, goDB := venue.AdminURI(t, venue.SourceDB), venue.AdminURI(t, venue.GoDB)
 	for _, table := range []string{"integrations", "sync_configurations", "integration_sources", "integration_datasets", "scheduled_jobs",
 		"sync_coverage_projections"} {
-		pythonRows, goRows := venueoracle.TableRows(t, ctx, source, queries[table]), venueoracle.TableRows(t, ctx, goDB, queries[table])
-		if pythonRows != goRows {
-			t.Errorf("%s rows differ:\n python %s\n go     %s", table, pythonRows, goRows)
-		}
+		goRows := fakeJiraAddress.ReplaceAllString(venueoracle.TableRows(t, ctx, goDB, queries[table]), "127.0.0.1:<port>")
+		golden.CompareRows(t, "rows:"+table, func() string {
+			return fakeJiraAddress.ReplaceAllString(venueoracle.TableRows(t, ctx, source, queries[table]), "127.0.0.1:<port>")
+		}, goRows)
 		t.Logf("%s: %d rows identical", table, strings.Count(goRows, "\n")+map[bool]int{true: 0, false: 1}[goRows == ""])
 	}
 	// The writes happened on the Go plane: configs on the pinned clock,
@@ -200,6 +204,7 @@ func TestSyncConfigUpdateVenueOracle(t *testing.T) {
 		t.Errorf("writes not observed (pinned configs, discovered sources, invalidated projections, written integration, cascaded children) = %s", state)
 	}
 	t.Logf("write state: %s", state)
+	golden.Finish(t)
 }
 
 // seedUpdateVenue writes org A (enterprise, the canonical incident feature
@@ -228,10 +233,10 @@ func seedUpdateVenue(t *testing.T, ctx context.Context, admin *pgxpool.Pool, ven
 		exec(`INSERT INTO users (id, email, is_active, is_verified, is_superuser, token_version, created_at, updated_at)
 VALUES ($1, $2, true, true, false, 0, $3, $3)`, user.id, user.email, at)
 		exec(`INSERT INTO memberships (id, user_id, org_id, role, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $5)`,
-			uuid.New(), user.id, user.org, user.role, at)
+			newID(), user.id, user.org, user.role, at)
 	}
 	exec(`INSERT INTO org_feature_overrides (id, org_id, feature_id, is_enabled, created_at, updated_at)
-SELECT $1, $2, id, false, $3, $3 FROM feature_flags WHERE key = 'canonical_incident_ingestion'`, uuid.New(), ids.orgA, at)
+SELECT $1, $2, id, false, $3, $3 FROM feature_flags WHERE key = 'canonical_incident_ingestion'`, newID(), ids.orgA, at)
 
 	encoded, _ := json.Marshal(map[string]any{"email": "venue@example.com", "api_token": "good-token", "base_url": jiraURL})
 	raw := venue.CallPython(t, venueoracle.PythonCall{Target: "dev_health_ops.core.encryption:encrypt_value", Args: []any{string(encoded)}})
@@ -272,7 +277,7 @@ integration_id, parent_id, source_id, created_at, updated_at) VALUES ($1, $2, $3
 	config(ids.cfgNoop, ids.orgA, "no-op", "linear", `["work-items"]`, `{"team_id": "t"}`, true, nil, nil, nil, false)
 	config(ids.cfgGHCanon, ids.orgA, "gh canonical", "github", `["git"]`, `{"all_repos": true}`, true, ids.intGHCanon, nil, nil, true)
 	config(ids.cfgB, ids.orgB, "b", "github", `["git"]`, `{"all_repos": true}`, true, nil, nil, nil, false)
-	source := uuid.New()
+	source := newID()
 	exec(`INSERT INTO integration_sources (id, org_id, integration_id, provider, source_type, external_id, name, full_name, metadata,
 is_enabled, discovered_at, last_seen_at) VALUES ($1, $2, $3, 'github', 'repository', 'acme/r', 'r', 'acme/r', '{}', true, $4, $4)`,
 		source, ids.orgA.String(), ids.intGH, at)
@@ -280,7 +285,7 @@ is_enabled, discovered_at, last_seen_at) VALUES ($1, $2, $3, 'github', 'reposito
 
 	dataset := func(integrationID uuid.UUID, key string, enabled bool, options string) {
 		exec(`INSERT INTO integration_datasets (id, org_id, integration_id, dataset_key, is_enabled, options) VALUES ($1, $2, $3, $4, $5, $6::json)`,
-			uuid.New(), ids.orgA.String(), integrationID, key, enabled, options)
+			newID(), ids.orgA.String(), integrationID, key, enabled, options)
 	}
 	for _, key := range []string{"repo-metadata", "commits", "commit-stats", "files", "blame"} {
 		dataset(ids.intGH, key, true, `{}`)
@@ -288,12 +293,12 @@ is_enabled, discovered_at, last_seen_at) VALUES ($1, $2, $3, 'github', 'reposito
 	dataset(ids.intGH, "prs", false, `{}`)
 	dataset(ids.intGH, "work-items", false, `{"fetch_comments": false, "legacy": 1}`)
 	exec(`INSERT INTO integration_datasets (id, org_id, integration_id, dataset_key, is_enabled, options) VALUES ($1, $2, $3, 'services', true, $4::json)`,
-		uuid.New(), ids.orgC.String(), ids.intPD, `{"legacy_targets": ["operational"]}`)
+		newID(), ids.orgC.String(), ids.intPD, `{"legacy_targets": ["operational"]}`)
 
 	job := func(configID uuid.UUID, provider, cron string, status int) {
 		exec(`INSERT INTO scheduled_jobs (id, org_id, name, job_type, provider, schedule_cron, timezone, job_config, sync_config_id, status,
 is_running, run_count, failure_count, created_at, updated_at) VALUES ($1, $2, $3, 'sync', $4, $5, 'UTC', $6::json, $7, $8, false, 0, 0, $9, $9)`,
-			uuid.New(), ids.orgA.String(), "sync-config-"+configID.String(), provider, cron,
+			newID(), ids.orgA.String(), "sync-config-"+configID.String(), provider, cron,
 			fmt.Sprintf(`{"provider": "%s", "sync_config_id": "%s"}`, provider, configID), configID, status, at)
 	}
 	job(ids.cfgGH, "github", "0 * * * *", 1)
@@ -303,7 +308,7 @@ is_running, run_count, failure_count, created_at, updated_at) VALUES ($1, $2, $3
 	projection := func(org, configID uuid.UUID) {
 		exec(`INSERT INTO sync_coverage_projections (id, org_id, sync_config_id, history_lookback_days, projection_version,
 generated_at, source_updated_at, backfill_updated_at, invalidated_at, payload, created_at, updated_at)
-VALUES ($1, $2, $3, 3650, 2, $4, $4, $4, NULL, '{}', $4, $4)`, uuid.New(), org.String(), configID, at)
+VALUES ($1, $2, $3, 3650, 2, $4, $4, $4, NULL, '{}', $4, $4)`, newID(), org.String(), configID, at)
 	}
 	projection(ids.orgA, ids.cfgGH)
 	projection(ids.orgA, ids.cfgNoInt)

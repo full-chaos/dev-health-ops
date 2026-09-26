@@ -149,7 +149,7 @@ func newRepositoriesIDs() repositoriesIDs {
 		&ids.credConfigURL, &ids.credBroken, &ids.intGH, &ids.intGH2, &ids.intGH3, &ids.intGH4, &ids.intGL, &ids.intGL2, &ids.intGL3,
 		&ids.intGL4, &ids.intGL5, &ids.intB, &ids.intJira, &ids.cfgGH, &ids.cfgGL, &ids.cfgGLNoCred, &ids.cfgGLNoToken, &ids.cfgGLConfigURL,
 		&ids.cfgGLBroken, &ids.cfgLegacy, &ids.cfgJira, &ids.cfgGated, &ids.cfgBadTargets, &ids.cfgPairs, &ids.cfgEmptyName, &ids.cfgB, &ids.credInvalid, &ids.intGL6, &ids.cfgGLInvalidToken, &ids.intGH5, &ids.cfgInfinity} {
-		*target = uuid.New()
+		*target = newID()
 	}
 	return ids
 }
@@ -164,6 +164,8 @@ func newRepositoriesIDs() repositoriesIDs {
 // now() of each plane's own transaction) are compared by shape: set past
 // the seed on both planes, or unchanged on both.
 func TestSyncConfigRepositoriesVenueOracle(t *testing.T) {
+	resetIDs(t)
+	golden := venueoracle.OpenGolden(t, goldenSpec(t.Name()))
 	ctx := context.Background()
 	root := repoRoot(t)
 	const jwtKey = "venue-oracle-test-secret-key-for-sync-admin-reads-32b!"
@@ -173,7 +175,7 @@ func TestSyncConfigRepositoriesVenueOracle(t *testing.T) {
 	t.Setenv("no_proxy", "127.0.0.1,localhost")
 
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Root:   root,
+		Root:   golden.PythonRoot(t, root),
 		JWTKey: jwtKey,
 		PythonEnv: []string{
 			"SETTINGS_ENCRYPTION_KEY=" + repositoriesVenueKey,
@@ -222,7 +224,7 @@ func TestSyncConfigRepositoriesVenueOracle(t *testing.T) {
 		put("owner empty", ids.cfgGH, `{"owner":""}`, a),
 		put("repos not a list", ids.cfgGH, `{"owner":"acme","repos":"a"}`, a),
 		put("repos item not a str", ids.cfgGH, `{"owner":"acme","repos":["a",1]}`, a),
-		put("unknown config", uuid.New(), `{"owner":"acme"}`, a),
+		put("unknown config", newID(), `{"owner":"acme"}`, a),
 		{Name: "config id not a uuid", Method: "PUT", Path: "/api/v1/admin/sync-configs/not-a-uuid/repositories", Headers: a, Body: venueoracle.B64(`{"owner":"acme"}`)},
 		put("jira config", ids.cfgJira, `{"owner":"acme","repos":["x"]}`, a),
 		put("legacy config", ids.cfgLegacy, `{"owner":"acme","repos":["x"]}`, a),
@@ -257,8 +259,13 @@ func TestSyncConfigRepositoriesVenueOracle(t *testing.T) {
 		{Name: "github after", Method: "GET", Path: "/api/v1/admin/sync-configs/" + ids.cfgGH.String() + "/repositories", Headers: a},
 		{Name: "gitlab after", Method: "GET", Path: "/api/v1/admin/sync-configs/" + ids.cfgGL.String() + "/repositories", Headers: a},
 	}
-	python := venue.ServePython(t, requests)
-	receipt := venueoracle.Diff(t, base, requests, python, venueoracle.DiffOptions{})
+	python := golden.Python(t, venue, requests)
+	receipt := venueoracle.Diff(t, base, requests, python, venueoracle.DiffOptions{
+		Golden: golden,
+		Normalize: func(_ venueoracle.Request, body string) string {
+			return fakeJiraAddress.ReplaceAllString(body, "127.0.0.1:<port>")
+		},
+	})
 	t.Logf("receipt (%d requests):\n%s", len(requests), receipt)
 
 	seeded := make([]string, 0, len(ids.seededSources))
@@ -280,10 +287,10 @@ FROM sync_coverage_projections) AS rows`,
 	}
 	source, goDB := venue.AdminURI(t, venue.SourceDB), venue.AdminURI(t, venue.GoDB)
 	for _, table := range []string{"integration_sources", "sync_configurations", "sync_coverage_projections"} {
-		python, goRows := venueoracle.TableRows(t, ctx, source, queries[table]), venueoracle.TableRows(t, ctx, goDB, queries[table])
-		if python != goRows {
-			t.Errorf("%s rows differ:\n python %s\n go     %s", table, python, goRows)
-		}
+		goRows := fakeJiraAddress.ReplaceAllString(venueoracle.TableRows(t, ctx, goDB, queries[table]), "127.0.0.1:<port>")
+		golden.CompareRows(t, "rows:"+table, func() string {
+			return fakeJiraAddress.ReplaceAllString(venueoracle.TableRows(t, ctx, source, queries[table]), "127.0.0.1:<port>")
+		}, goRows)
 		t.Logf("%s: %d rows identical", table, strings.Count(goRows, "\n")+map[bool]int{true: 0, false: 1}[goRows == ""])
 	}
 	// The writes happened: the pinned instant reached the rows, a coverage
@@ -298,6 +305,7 @@ FROM sync_coverage_projections) AS rows`,
 		t.Errorf("writes not observed (pinned last_seen_at, created sources, invalidated projections, pinned updated_at) = %s", state)
 	}
 	t.Logf("write state: %s", state)
+	golden.Finish(t)
 }
 
 // seedRepositories writes the orgs, credentials (encrypted by the Python
@@ -326,10 +334,10 @@ VALUES ($1, $2, true, true, false, 0, $3, $3)`, user.id, user.email, at)
 		role      string
 	}{{ids.orgA, ids.adminA, "admin"}, {ids.orgA, ids.memberA, "member"}, {ids.orgB, ids.ownerB, "owner"}} {
 		exec(`INSERT INTO memberships (id, user_id, org_id, role, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $5)`,
-			uuid.New(), member.user, member.org, member.role, at)
+			newID(), member.user, member.org, member.role, at)
 	}
 	exec(`INSERT INTO org_feature_overrides (id, org_id, feature_id, is_enabled, created_at, updated_at)
-SELECT $1, $2, id, false, $3, $3 FROM feature_flags WHERE key = 'canonical_incident_ingestion'`, uuid.New(), ids.orgA, at)
+SELECT $1, $2, id, false, $3, $3 FROM feature_flags WHERE key = 'canonical_incident_ingestion'`, newID(), ids.orgA, at)
 
 	secretsOf := []map[string]any{
 		{"token": "tok-a", "url": gitlabURL},
@@ -401,7 +409,7 @@ integration_id, created_at, updated_at) VALUES ($1, $2, $3, $4, $5::json, $6::js
 	config(ids.cfgB, ids.orgB, "b", "github", `["git"]`, `{"owner": "acme"}`, ids.intB)
 
 	source := func(org, integrationID uuid.UUID, provider, sourceType, externalID, name, fullName, metadata string, enabled bool) {
-		id := uuid.New()
+		id := newID()
 		ids.seededSources = append(ids.seededSources, id)
 		exec(`INSERT INTO integration_sources (id, org_id, integration_id, provider, source_type, external_id, name, full_name,
 metadata, is_enabled, discovered_at, last_seen_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::json, $10, $11, $11)`,
@@ -416,7 +424,7 @@ metadata, is_enabled, discovered_at, last_seen_at) VALUES ($1, $2, $3, $4, $5, $
 	source(ids.orgA, ids.intGH, "github", "repository", "acme/three", "3", "acme/three",
 		`{"owner":"acme","planner_managed_sync_config_id":"`+ids.cfgGH.String()+`","extra":[1.0,true]}`, true)
 	source(ids.orgA, ids.intGH, "github", "repository", "acme/other", "other", "acme/other",
-		`{"planner_managed_sync_config_id": "`+uuid.NewString()+`"}`, true)
+		`{"planner_managed_sync_config_id": "`+newID().String()+`"}`, true)
 	source(ids.orgA, ids.intGH, "GitHub", "repository", "acme/case", "case", "acme/case", gh, true)
 	gl := func(path string) string {
 		return `{"path_with_namespace": "` + path + `", "planner_managed_sync_config_id": "` + ids.cfgGL.String() + `"}`
@@ -432,7 +440,7 @@ metadata, is_enabled, discovered_at, last_seen_at) VALUES ($1, $2, $3, $4, $5, $
 	projection := func(org, configID uuid.UUID) {
 		exec(`INSERT INTO sync_coverage_projections (id, org_id, sync_config_id, history_lookback_days, projection_version,
 generated_at, source_updated_at, backfill_updated_at, invalidated_at, payload, created_at, updated_at)
-VALUES ($1, $2, $3, 3650, 2, $4, $4, $4, NULL, '{}', $4, $4)`, uuid.New(), org.String(), configID, at)
+VALUES ($1, $2, $3, 3650, 2, $4, $4, $4, NULL, '{}', $4, $4)`, newID(), org.String(), configID, at)
 	}
 	projection(ids.orgA, ids.cfgGH)
 	projection(ids.orgA, ids.cfgGL)

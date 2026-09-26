@@ -1,0 +1,1080 @@
+{
+  "header": {
+    "test": "TestSyncConfigBatchCreateVenueOracle",
+    "python_build": "758a8d9fbb1f7548bef84df452597f9e7ddf145a",
+    "producer_digest": "53028fde43de410ecb5704202be163d92617d6794f5d2108513c8868e2607e80",
+    "recipe": "git worktree add --detach \u003cdir\u003e 758a8d9fbb1f7548bef84df452597f9e7ddf145a; from internal/api/syncadmin: DHO_VENUE_GOLDEN_UPDATE=1 DHO_VENUE_GOLDEN_PYTHON_ROOT=\u003cdir\u003e DEV_HEALTH_LIVE_PYTHON_ORACLES=1 go test -tags=integration -count=1 -run '^TestSyncConfigBatchCreateVenueOracle$' ."
+  },
+  "requests": [
+    {
+      "name": "no token",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/batch",
+      "body_sha256": "2ad2030641696f3f72982463fcf59b3a430f45b752f17eee29cc274cadbc644b",
+      "request_headers_sha256": "b58ddd4bb261e78693972b6634accd44bf966020d79a21c501cd73d1a3dee206",
+      "status": 401,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "www-authenticate": "Bearer",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "d01954bc-7b55-4623-8fcf-4edeb012a3f7"
+      },
+      "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
+    },
+    {
+      "name": "member",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/batch",
+      "body_sha256": "2ad2030641696f3f72982463fcf59b3a430f45b752f17eee29cc274cadbc644b",
+      "request_headers_sha256": "e34942309ea60962a50a505145f220e4ce45cd416808ebbbfe178735ed2aed8a",
+      "status": 403,
+      "headers": {
+        "content-length": "34",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "a7b67b1d-eeda-459f-b0a1-68c4324bcfac"
+      },
+      "body": "{\"detail\":\"Admin access required\"}"
+    },
+    {
+      "name": "invalid json",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/batch",
+      "body_sha256": "086b37162b8934af4570d0ca3b0f14d57b5262f5ff1b461cd45c1ca00e29dfdb",
+      "request_headers_sha256": "0f40ea2d7f59870c8d40429ae66df0ccd359ffdaca79a5987139ebb06c22d380",
+      "status": 422,
+      "headers": {
+        "content-length": "124",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "68d83c2f-fed9-4460-a8fe-911430dbcebc"
+      },
+      "body": "{\"detail\":[{\"type\":\"json_invalid\",\"loc\":[\"body\",8],\"msg\":\"JSON decode error\",\"input\":{},\"ctx\":{\"error\":\"Expecting value\"}}]}"
+    },
+    {
+      "name": "not an object",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/batch",
+      "body_sha256": "cdf4721b89df1e6860f4b3faed8594ad80cfdb1887cdff48e4b03cb6d53f3277",
+      "request_headers_sha256": "0f40ea2d7f59870c8d40429ae66df0ccd359ffdaca79a5987139ebb06c22d380",
+      "status": 422,
+      "headers": {
+        "content-length": "150",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "ba26af73-454a-495c-bcbc-058faf6a8bb1"
+      },
+      "body": "{\"detail\":[{\"type\":\"model_attributes_type\",\"loc\":[\"body\"],\"msg\":\"Input should be a valid dictionary or object to extract fields from\",\"input\":[\"x\"]}]}"
+    },
+    {
+      "name": "name and provider missing",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/batch",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "0f40ea2d7f59870c8d40429ae66df0ccd359ffdaca79a5987139ebb06c22d380",
+      "status": 422,
+      "headers": {
+        "content-length": "166",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "4371b9b7-3cdc-4023-abca-b79efa6cfd9f"
+      },
+      "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"name\"],\"msg\":\"Field required\",\"input\":{}},{\"type\":\"missing\",\"loc\":[\"body\",\"provider\"],\"msg\":\"Field required\",\"input\":{}}]}"
+    },
+    {
+      "name": "name empty",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/batch",
+      "body_sha256": "96ab2c8e1bfb46fbe792938864402d5cec3796c9519d32602dccdf32cd820f96",
+      "request_headers_sha256": "0f40ea2d7f59870c8d40429ae66df0ccd359ffdaca79a5987139ebb06c22d380",
+      "status": 422,
+      "headers": {
+        "content-length": "144",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "0db031cf-8dd6-4dd9-a195-f06f915726c0"
+      },
+      "body": "{\"detail\":[{\"type\":\"string_too_short\",\"loc\":[\"body\",\"name\"],\"msg\":\"String should have at least 1 character\",\"input\":\"\",\"ctx\":{\"min_length\":1}}]}"
+    },
+    {
+      "name": "wrong field types",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/batch",
+      "body_sha256": "c61e93a32b59f9c5195af790c3001f44408e72ea996f449f16639bdac61ab7b7",
+      "request_headers_sha256": "0f40ea2d7f59870c8d40429ae66df0ccd359ffdaca79a5987139ebb06c22d380",
+      "status": 422,
+      "headers": {
+        "content-length": "768",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "733db3c7-5493-4d73-a7bd-e1c0d27008bb"
+      },
+      "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"credential_id\"],\"msg\":\"Input should be a valid string\",\"input\":5},{\"type\":\"list_type\",\"loc\":[\"body\",\"sync_targets\"],\"msg\":\"Input should be a valid list\",\"input\":\"git\"},{\"type\":\"dict_type\",\"loc\":[\"body\",\"sync_options\"],\"msg\":\"Input should be a valid dictionary\",\"input\":[]},{\"type\":\"list_type\",\"loc\":[\"body\",\"repos\"],\"msg\":\"Input should be a valid list\",\"input\":\"a\"},{\"type\":\"string_type\",\"loc\":[\"body\",\"schedule_cron\"],\"msg\":\"Input should be a valid string\",\"input\":1},{\"type\":\"string_type\",\"loc\":[\"body\",\"timezone\"],\"msg\":\"Input should be a valid string\",\"input\":[]},{\"type\":\"int_parsing\",\"loc\":[\"body\",\"initial_sync_depth\"],\"msg\":\"Input should be a valid integer, unable to parse string as an integer\",\"input\":\"abc\"}]}"
+    },
+    {
+      "name": "repos item not a str",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/batch",
+      "body_sha256": "905e4bddf9c6826d961391a9ca33247e033d59d88dddc6971184aea48faef552",
+      "request_headers_sha256": "0f40ea2d7f59870c8d40429ae66df0ccd359ffdaca79a5987139ebb06c22d380",
+      "status": 422,
+      "headers": {
+        "content-length": "109",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "195ef928-963f-467b-9403-60d2ce01d9cb"
+      },
+      "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"repos\",1],\"msg\":\"Input should be a valid string\",\"input\":1}]}"
+    },
+    {
+      "name": "null defaulted fields",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/batch",
+      "body_sha256": "7c5b9e35650b7e7c46a4b236ded9ff8caab34f42703980da78c82c2bf905028b",
+      "request_headers_sha256": "0f40ea2d7f59870c8d40429ae66df0ccd359ffdaca79a5987139ebb06c22d380",
+      "status": 422,
+      "headers": {
+        "content-length": "314",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "f487437a-d4a7-4410-bb16-c1c93821814f"
+      },
+      "body": "{\"detail\":[{\"type\":\"list_type\",\"loc\":[\"body\",\"sync_targets\"],\"msg\":\"Input should be a valid list\",\"input\":null},{\"type\":\"dict_type\",\"loc\":[\"body\",\"sync_options\"],\"msg\":\"Input should be a valid dictionary\",\"input\":null},{\"type\":\"list_type\",\"loc\":[\"body\",\"repos\"],\"msg\":\"Input should be a valid list\",\"input\":null}]}"
+    },
+    {
+      "name": "gated target",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/batch",
+      "body_sha256": "cb69ddbeadb95f8dc0cc533034cd2e9cc14f0587a7913d79258a2ad65456ed1c",
+      "request_headers_sha256": "0f40ea2d7f59870c8d40429ae66df0ccd359ffdaca79a5987139ebb06c22d380",
+      "status": 403,
+      "headers": {
+        "content-length": "95",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "f9931009-9f6f-4565-840f-0f91a48d9483"
+      },
+      "body": "{\"detail\":\"feature_disabled: canonical incident ingestion is disabled (org_override_disabled)\"}"
+    },
+    {
+      "name": "github repos",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/batch",
+      "body_sha256": "f88300bc5e66682e66af8135b34f2158c7f94d4b67e6603af945219dc722ac4f",
+      "request_headers_sha256": "0f40ea2d7f59870c8d40429ae66df0ccd359ffdaca79a5987139ebb06c22d380",
+      "status": 201,
+      "headers": {
+        "content-length": "501",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "68d3449a-d886-449f-9af3-b10ec5f2f3ed"
+      },
+      "body": "{\"parent\":{\"id\":\"8862cb06-89ae-4603-92fa-bfa8d6183afe\",\"name\":\"gh batch\",\"provider\":\"GitHub\",\"credential_id\":null,\"sync_targets\":[\"git\",\"prs\",\"work-items\"],\"sync_options\":{\"owner\":\"acme\",\"x\":1,\"fetch_comments\":true,\"fetch_milestones\":true,\"comments_limit\":500},\"is_active\":true,\"parent_id\":null,\"children_count\":0,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},\"children\":[],\"total_created\":0}"
+    },
+    {
+      "name": "github no owner",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/batch",
+      "body_sha256": "0acac8f177f12c692db61ad67405a90803142047bbb73af8fee83833d75b4307",
+      "request_headers_sha256": "0f40ea2d7f59870c8d40429ae66df0ccd359ffdaca79a5987139ebb06c22d380",
+      "status": 201,
+      "headers": {
+        "content-length": "464",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "e6989a21-e3ff-4b75-8026-ea1e27d7ee87"
+      },
+      "body": "{\"parent\":{\"id\":\"ba2bd7de-822f-4034-ad15-511269d8cca2\",\"name\":\"gh no owner\",\"provider\":\"github\",\"credential_id\":null,\"sync_targets\":[\"git\"],\"sync_options\":{\"fetch_comments\":true,\"fetch_milestones\":true,\"comments_limit\":500},\"is_active\":true,\"parent_id\":null,\"children_count\":0,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},\"children\":[],\"total_created\":0}"
+    },
+    {
+      "name": "github group as owner",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/batch",
+      "body_sha256": "b08cc7eb38e32b893e17be5ed79ae27390386ec9b7b18e1e201787b1949142db",
+      "request_headers_sha256": "0f40ea2d7f59870c8d40429ae66df0ccd359ffdaca79a5987139ebb06c22d380",
+      "status": 201,
+      "headers": {
+        "content-length": "475",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "2a9667e6-f052-49f3-a8b2-9369e07111c2"
+      },
+      "body": "{\"parent\":{\"id\":\"7cd3fa4c-f3ee-421b-9e64-572a0593f496\",\"name\":\"gh group\",\"provider\":\"github\",\"credential_id\":null,\"sync_targets\":[\"git\"],\"sync_options\":{\"group\":\"grp\",\"fetch_comments\":true,\"fetch_milestones\":true,\"comments_limit\":500},\"is_active\":true,\"parent_id\":null,\"children_count\":0,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},\"children\":[],\"total_created\":0}"
+    },
+    {
+      "name": "github no repos",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/batch",
+      "body_sha256": "7d07d232b0aa64936d8f7f1f1abae1e9ebc8ccdfb83676326c37f62b63668157",
+      "request_headers_sha256": "0f40ea2d7f59870c8d40429ae66df0ccd359ffdaca79a5987139ebb06c22d380",
+      "status": 201,
+      "headers": {
+        "content-length": "476",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "18c9006c-8157-4f28-8219-26543b5df002"
+      },
+      "body": "{\"parent\":{\"id\":\"050d1525-0098-49ec-90d6-0e5b4c363963\",\"name\":\"gh empty\",\"provider\":\"github\",\"credential_id\":null,\"sync_targets\":[\"git\"],\"sync_options\":{\"owner\":\"acme\",\"fetch_comments\":true,\"fetch_milestones\":true,\"comments_limit\":500},\"is_active\":true,\"parent_id\":null,\"children_count\":0,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},\"children\":[],\"total_created\":0}"
+    },
+    {
+      "name": "github scheduled",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/batch",
+      "body_sha256": "f44a274d5e4bf64ae2ac3d5fec6cb449cebcabef7b6aac7ce18af49d67bdf889",
+      "request_headers_sha256": "0f40ea2d7f59870c8d40429ae66df0ccd359ffdaca79a5987139ebb06c22d380",
+      "status": 201,
+      "headers": {
+        "content-length": "555",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "b90708b6-bf22-4c55-8040-527168c050a3"
+      },
+      "body": "{\"parent\":{\"id\":\"49e6edc3-54c7-4bf5-aa37-db7575f30f13\",\"name\":\"gh cron\",\"provider\":\"github\",\"credential_id\":null,\"sync_targets\":[\"git\"],\"sync_options\":{\"owner\":\"acme\",\"schedule_cron\":\"0 */6 * * *\",\"timezone\":\"Europe/Paris\",\"initial_sync_depth\":30,\"fetch_comments\":true,\"fetch_milestones\":true,\"comments_limit\":500},\"is_active\":true,\"parent_id\":null,\"children_count\":0,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},\"children\":[],\"total_created\":0}"
+    },
+    {
+      "name": "github duplicate repo",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/batch",
+      "body_sha256": "ecf4c903d5f32913ca47c1184a4b18e4fc81ec33bfcbbf79daefc192634a77da",
+      "request_headers_sha256": "0f40ea2d7f59870c8d40429ae66df0ccd359ffdaca79a5987139ebb06c22d380",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "jira repos",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/batch",
+      "body_sha256": "b085872ec47b0de53539fa6de845f0a5827c9103326d1d807a954d1e237b74b4",
+      "request_headers_sha256": "0f40ea2d7f59870c8d40429ae66df0ccd359ffdaca79a5987139ebb06c22d380",
+      "status": 201,
+      "headers": {
+        "content-length": "415",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "d2db0d96-8d6f-4f7f-81ea-2b1e204ba7e0"
+      },
+      "body": "{\"parent\":{\"id\":\"9d7cf08b-61a6-405f-9e50-4989d974412c\",\"name\":\"jira batch\",\"provider\":\"jira\",\"credential_id\":null,\"sync_targets\":[\"work-items\"],\"sync_options\":{\"owner\":\"ENG\"},\"is_active\":true,\"parent_id\":null,\"children_count\":0,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},\"children\":[],\"total_created\":0}"
+    },
+    {
+      "name": "linear repos",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/batch",
+      "body_sha256": "80ddd315c3a827610f214fb2b71168f21aee8d8e945e9f7d3b0af3662a32ad34",
+      "request_headers_sha256": "0f40ea2d7f59870c8d40429ae66df0ccd359ffdaca79a5987139ebb06c22d380",
+      "status": 201,
+      "headers": {
+        "content-length": "406",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "0fae3094-22ef-4085-8038-2e3b0eaed1b4"
+      },
+      "body": "{\"parent\":{\"id\":\"7fcfeeba-f31b-4df3-a939-e76912c20069\",\"name\":\"linear batch\",\"provider\":\"linear\",\"credential_id\":null,\"sync_targets\":[\"work-items\"],\"sync_options\":{},\"is_active\":true,\"parent_id\":null,\"children_count\":0,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},\"children\":[],\"total_created\":0}"
+    },
+    {
+      "name": "malformed auto-import",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/batch",
+      "body_sha256": "acfb8764c4df77c7501faad7bf32296466af02613e0c9601fdc3f9b73a89f747",
+      "request_headers_sha256": "0f40ea2d7f59870c8d40429ae66df0ccd359ffdaca79a5987139ebb06c22d380",
+      "status": 422,
+      "headers": {
+        "content-length": "141",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "2cb29df7-c6ea-49f6-8924-5df1bd62a117"
+      },
+      "body": "{\"detail\":{\"message\":\"auto-import category flags must be true or false\",\"malformed_auto_import_category_values\":{\"auto_import_teams\":\"yes\"}}}"
+    },
+    {
+      "name": "unsupported auto-import",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/batch",
+      "body_sha256": "49978052a4ed5e8cdc23296d36af23a7770b689d2a252dc7879ab31ee737313b",
+      "request_headers_sha256": "0f40ea2d7f59870c8d40429ae66df0ccd359ffdaca79a5987139ebb06c22d380",
+      "status": 422,
+      "headers": {
+        "content-length": "190",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "80111c45-9d2a-4e33-8f31-e994d41cde55"
+      },
+      "body": "{\"detail\":{\"message\":\"github does not support the requested auto-import categories\",\"unsupported_auto_import_categories\":{\"projects\":\"GitHub attributes ownership via repos, not projects.\"}}}"
+    },
+    {
+      "name": "gitlab names, path, ids",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/batch",
+      "body_sha256": "aff505bbcec19012e8bf4f9d1d02c694cd97c976d626c0f07d6b09c27f6154ad",
+      "request_headers_sha256": "0f40ea2d7f59870c8d40429ae66df0ccd359ffdaca79a5987139ebb06c22d380",
+      "status": 201,
+      "headers": {
+        "content-length": "504",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "67286ad5-2217-4adf-99d9-f24e3a9ef9ab"
+      },
+      "body": "{\"parent\":{\"id\":\"83ccd6e8-1bb8-4a41-a9d0-c7be2c28edbc\",\"name\":\"gl batch\",\"provider\":\"gitlab\",\"credential_id\":\"1346ac0a-982c-50ef-bc19-94688b0f3710\",\"sync_targets\":[\"git\",\"prs\"],\"sync_options\":{\"group\":\"gitlab-examples/maven\",\"gitlab_url\":\"http://127.0.0.1:39015\"},\"is_active\":true,\"parent_id\":null,\"children_count\":0,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},\"children\":[],\"total_created\":0}"
+    },
+    {
+      "name": "gitlab unknown name",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/batch",
+      "body_sha256": "652b7238881ce9db3f43ac95bea45e987dd36286686e46f7560f1c7b423f65e6",
+      "request_headers_sha256": "0f40ea2d7f59870c8d40429ae66df0ccd359ffdaca79a5987139ebb06c22d380",
+      "status": 400,
+      "headers": {
+        "content-length": "99",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "8b3a9975-6a12-489d-829e-0df7016d27aa"
+      },
+      "body": "{\"detail\":\"Could not resolve GitLab projects — not found in group 'gitlab-examples/maven': nope\"}"
+    },
+    {
+      "name": "gitlab ambiguous name",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/batch",
+      "body_sha256": "b8eb07304615e1b93513dddd3e81386fa07ce395f5a3e6a8f8cd856efd91808d",
+      "request_headers_sha256": "0f40ea2d7f59870c8d40429ae66df0ccd359ffdaca79a5987139ebb06c22d380",
+      "status": 400,
+      "headers": {
+        "content-length": "137",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "1aa2f568-6397-42e0-80ae-f4623b4f24d0"
+      },
+      "body": "{\"detail\":\"Could not resolve GitLab projects — ambiguous (multiple projects share this name, use the full path): Simple Maven Example\"}"
+    },
+    {
+      "name": "gitlab empty group",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/batch",
+      "body_sha256": "77e2c003973880770f8ba6d89d1f8f995c210a959b84958660331b4b63df743f",
+      "request_headers_sha256": "0f40ea2d7f59870c8d40429ae66df0ccd359ffdaca79a5987139ebb06c22d380",
+      "status": 400,
+      "headers": {
+        "content-length": "101",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "e90fba74-c1fe-4c97-a828-d924a969c0f9"
+      },
+      "body": "{\"detail\":\"Could not resolve GitLab projects — not found in group 'gitlab-examples/ops': anything\"}"
+    },
+    {
+      "name": "gitlab missing group",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/batch",
+      "body_sha256": "4805b0e327458dad58f5e100002609a3c7c1ab7b7561fde215fe9ec02d8a9279",
+      "request_headers_sha256": "0f40ea2d7f59870c8d40429ae66df0ccd359ffdaca79a5987139ebb06c22d380",
+      "status": 400,
+      "headers": {
+        "content-length": "278",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "621c5d8d-1362-4b3b-a3a7-7031d026c5ef"
+      },
+      "body": "{\"detail\":\"Failed to list GitLab projects for group 'gitlab-examples/no-such-group-for-venue-test': gitlab resource not found on project:GET /groups/{id}/projects: http://127.0.0.1:39015/api/v4/groups/gitlab-examples%2Fno-such-group-for-venue-test/projects?page=1\u0026per_page=100\"}"
+    },
+    {
+      "name": "gitlab ids with failed listing",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/batch",
+      "body_sha256": "af637c13418e5c39e661fc16eef14afba46c06ea58c49fffcec849b2b8ec757b",
+      "request_headers_sha256": "0f40ea2d7f59870c8d40429ae66df0ccd359ffdaca79a5987139ebb06c22d380",
+      "status": 201,
+      "headers": {
+        "content-length": "536",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "327e8a6c-c0b8-4a8b-b3ec-6a47516642c2"
+      },
+      "body": "{\"parent\":{\"id\":\"f9a4f357-353b-4ec9-b119-633cf411c202\",\"name\":\"gl ids no listing\",\"provider\":\"gitlab\",\"credential_id\":\"1346ac0a-982c-50ef-bc19-94688b0f3710\",\"sync_targets\":[\"git\",\"prs\"],\"sync_options\":{\"owner\":\"gitlab-examples/no-such-group-for-venue-test\",\"gitlab_url\":\"http://127.0.0.1:39015\"},\"is_active\":true,\"parent_id\":null,\"children_count\":0,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},\"children\":[],\"total_created\":0}"
+    },
+    {
+      "name": "gitlab invalid token",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/batch",
+      "body_sha256": "7ac0d5c30e1ffd8e89c9fa93fe2bda0053d0eb0ac2f45aeec2bc436d7e47c58b",
+      "request_headers_sha256": "0f40ea2d7f59870c8d40429ae66df0ccd359ffdaca79a5987139ebb06c22d380",
+      "status": 400,
+      "headers": {
+        "content-length": "144",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "370d6f4b-f359-4cd2-8abb-f19c2fc71266"
+      },
+      "body": "{\"detail\":\"Failed to list GitLab projects for group 'gitlab-examples/maven': gitlab authentication failed on project:GET /groups/{id}/projects\"}"
+    },
+    {
+      "name": "gitlab no credential, name",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/batch",
+      "body_sha256": "1bca29a0a9825b5f13814bebfa9e20ac32b6d3f66e25848018d3bdf168fe5719",
+      "request_headers_sha256": "0f40ea2d7f59870c8d40429ae66df0ccd359ffdaca79a5987139ebb06c22d380",
+      "status": 400,
+      "headers": {
+        "content-length": "95",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "e4d565a5-badf-4c26-80c6-7aa54eb9a19c"
+      },
+      "body": "{\"detail\":\"GitLab batch create requires credential_id to resolve project names to project ids\"}"
+    },
+    {
+      "name": "gitlab no credential, ids",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/batch",
+      "body_sha256": "1780570542a960fad09e0d3f7f76ca1008dd55344cb73df2e27449c0264cb48c",
+      "request_headers_sha256": "0f40ea2d7f59870c8d40429ae66df0ccd359ffdaca79a5987139ebb06c22d380",
+      "status": 201,
+      "headers": {
+        "content-length": "438",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "2e85a919-a7b5-486b-8899-489845a04ee5"
+      },
+      "body": "{\"parent\":{\"id\":\"5058a483-4199-446b-b3cf-a9b8a2f490a8\",\"name\":\"gl no cred ids\",\"provider\":\"gitlab\",\"credential_id\":null,\"sync_targets\":[\"git\",\"prs\"],\"sync_options\":{\"group\":\"gitlab-examples/maven\"},\"is_active\":true,\"parent_id\":null,\"children_count\":0,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},\"children\":[],\"total_created\":0}"
+    },
+    {
+      "name": "gitlab no group, name",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/batch",
+      "body_sha256": "57945cc7ca86c2188df1d446578d42674bcb6a62f8dc58423f49523d1824c315",
+      "request_headers_sha256": "0f40ea2d7f59870c8d40429ae66df0ccd359ffdaca79a5987139ebb06c22d380",
+      "status": 400,
+      "headers": {
+        "content-length": "117",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "f19c0a12-5a96-48ff-8b8b-18dc52e97248"
+      },
+      "body": "{\"detail\":\"GitLab batch create requires a group (sync_options.group or sync_options.owner) to resolve project names\"}"
+    },
+    {
+      "name": "gitlab no group, ids",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/batch",
+      "body_sha256": "0bea84ef5020098c96430e9fe6b397b76829b65ff77f674ef48690943ee2375c",
+      "request_headers_sha256": "0f40ea2d7f59870c8d40429ae66df0ccd359ffdaca79a5987139ebb06c22d380",
+      "status": 201,
+      "headers": {
+        "content-length": "479",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "8d2547b9-c8c8-4971-b66c-eb0777441244"
+      },
+      "body": "{\"parent\":{\"id\":\"fb5beb50-316e-4bc6-b155-22e298a59b0c\",\"name\":\"gl no group ids\",\"provider\":\"gitlab\",\"credential_id\":\"1346ac0a-982c-50ef-bc19-94688b0f3710\",\"sync_targets\":[\"git\",\"prs\"],\"sync_options\":{\"gitlab_url\":\"http://127.0.0.1:39015\"},\"is_active\":true,\"parent_id\":null,\"children_count\":0,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},\"children\":[],\"total_created\":0}"
+    },
+    {
+      "name": "gitlab no token, name",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/batch",
+      "body_sha256": "8dc6e57684d9df45b221435840daa9bbf1fb1ceb0cb368b6070d3e04f567429a",
+      "request_headers_sha256": "0f40ea2d7f59870c8d40429ae66df0ccd359ffdaca79a5987139ebb06c22d380",
+      "status": 400,
+      "headers": {
+        "content-length": "44",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "bdc5da41-fccd-48a2-8142-7279754f22f1"
+      },
+      "body": "{\"detail\":\"GitLab credential missing token\"}"
+    },
+    {
+      "name": "gitlab no token, id",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/batch",
+      "body_sha256": "64e95beebdce8c08f8e037075e9a3da1c11f9bfd10fc6d1188e5c847126b14eb",
+      "request_headers_sha256": "0f40ea2d7f59870c8d40429ae66df0ccd359ffdaca79a5987139ebb06c22d380",
+      "status": 201,
+      "headers": {
+        "content-length": "510",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "19d4709e-c39a-4095-9ce6-8f9efc9380bb"
+      },
+      "body": "{\"parent\":{\"id\":\"0dcad81e-14d5-407c-961b-9dee1cf4b4d9\",\"name\":\"gl no token id\",\"provider\":\"gitlab\",\"credential_id\":\"e95043a4-7fb4-551e-ab6a-b8cd7618fd77\",\"sync_targets\":[\"git\",\"prs\"],\"sync_options\":{\"group\":\"gitlab-examples/maven\",\"gitlab_url\":\"http://127.0.0.1:39015\"},\"is_active\":true,\"parent_id\":null,\"children_count\":0,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},\"children\":[],\"total_created\":0}"
+    },
+    {
+      "name": "gitlab url from credential config",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/batch",
+      "body_sha256": "217e33f8ce62c99b3c98348235afd48af7928cc4e40ecf1f6fd49a9f63cc5bcc",
+      "request_headers_sha256": "0f40ea2d7f59870c8d40429ae66df0ccd359ffdaca79a5987139ebb06c22d380",
+      "status": 201,
+      "headers": {
+        "content-length": "509",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "1d057b42-d740-4c53-aaab-fdda0491d88b"
+      },
+      "body": "{\"parent\":{\"id\":\"19d8bcd6-ec6a-4c08-ae7b-7d680426ea65\",\"name\":\"gl config url\",\"provider\":\"gitlab\",\"credential_id\":\"a1ba6455-3c16-5a93-b8df-056258aa0982\",\"sync_targets\":[\"git\",\"prs\"],\"sync_options\":{\"owner\":\"gitlab-examples/maven\",\"gitlab_url\":\"http://127.0.0.1:39015\"},\"is_active\":true,\"parent_id\":null,\"children_count\":0,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},\"children\":[],\"total_created\":0}"
+    },
+    {
+      "name": "gitlab url from options",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/batch",
+      "body_sha256": "f12684223228b9c036be75884830faf26e62c33563eddc76737dad7d05537104",
+      "request_headers_sha256": "0f40ea2d7f59870c8d40429ae66df0ccd359ffdaca79a5987139ebb06c22d380",
+      "status": 201,
+      "headers": {
+        "content-length": "463",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "b13e31e7-a4b3-4779-91b8-f2ab5ec53503"
+      },
+      "body": "{\"parent\":{\"id\":\"7611eb71-d904-4867-b267-49d4ce02770c\",\"name\":\"gl option url\",\"provider\":\"gitlab\",\"credential_id\":null,\"sync_targets\":[\"git\",\"prs\"],\"sync_options\":{\"group\":\"acme\",\"gitlab_url\":\"https://gitlab.example.test\"},\"is_active\":true,\"parent_id\":null,\"children_count\":0,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},\"children\":[],\"total_created\":0}"
+    },
+    {
+      "name": "gitlab credential not decryptable",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/batch",
+      "body_sha256": "85ce82d4ff7c07b96ff4bf8a6f57e2d1fa3dd1c742da154c06175be05ad006a6",
+      "request_headers_sha256": "0f40ea2d7f59870c8d40429ae66df0ccd359ffdaca79a5987139ebb06c22d380",
+      "status": 400,
+      "headers": {
+        "content-length": "33",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "3b41fb86-58bd-4552-b61a-8fd99f0966c0"
+      },
+      "body": "{\"detail\":\"Credential not found\"}"
+    },
+    {
+      "name": "gitlab unknown credential",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/batch",
+      "body_sha256": "01e7a98c55d6678d41cbf42d8cdb01651ed5072e6380cf477672a8be4e098069",
+      "request_headers_sha256": "0f40ea2d7f59870c8d40429ae66df0ccd359ffdaca79a5987139ebb06c22d380",
+      "status": 400,
+      "headers": {
+        "content-length": "33",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "267ea7e4-7f5b-43b6-9b2c-e44f81de24aa"
+      },
+      "body": "{\"detail\":\"Credential not found\"}"
+    },
+    {
+      "name": "gitlab no repos",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/batch",
+      "body_sha256": "3481d9e75323bff318ad5cfb71f5f6ba1d70ae38f33fce3ddb02339eb73c6e8a",
+      "request_headers_sha256": "0f40ea2d7f59870c8d40429ae66df0ccd359ffdaca79a5987139ebb06c22d380",
+      "status": 201,
+      "headers": {
+        "content-length": "465",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "d916a58d-3410-4729-97aa-08247c06ba2c"
+      },
+      "body": "{\"parent\":{\"id\":\"67081e7c-8b19-47a3-b733-755a0659df5f\",\"name\":\"gl none\",\"provider\":\"gitlab\",\"credential_id\":\"1346ac0a-982c-50ef-bc19-94688b0f3710\",\"sync_targets\":[\"git\",\"prs\"],\"sync_options\":{\"group\":\"gitlab-examples/maven\"},\"is_active\":true,\"parent_id\":null,\"children_count\":0,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},\"children\":[],\"total_created\":0}"
+    },
+    {
+      "name": "gitlab credential id not a uuid",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/batch",
+      "body_sha256": "7fcb3afb1a8f342fff0a46b401868ee07ce6acd92c115edec5101381f5c27bc4",
+      "request_headers_sha256": "0f40ea2d7f59870c8d40429ae66df0ccd359ffdaca79a5987139ebb06c22d380",
+      "status": 400,
+      "headers": {
+        "content-length": "33",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "68d61995-0f0b-46f7-b099-6a89ce9d0588"
+      },
+      "body": "{\"detail\":\"Credential not found\"}"
+    },
+    {
+      "name": "gitlab empty credential id, ids",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/batch",
+      "body_sha256": "86e0c317def0705595333247c0d3f2d0d421e44dbdf5273288f13149e8bf4967",
+      "request_headers_sha256": "0f40ea2d7f59870c8d40429ae66df0ccd359ffdaca79a5987139ebb06c22d380",
+      "status": 201,
+      "headers": {
+        "content-length": "434",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "2c302980-a91f-4f7e-bdc8-bd7f9797583d"
+      },
+      "body": "{\"parent\":{\"id\":\"3e66145b-e3fd-49fe-89cd-e2989cd017c2\",\"name\":\"gl empty cred id\",\"provider\":\"gitlab\",\"credential_id\":null,\"sync_targets\":[\"git\"],\"sync_options\":{\"group\":\"gitlab-examples/maven\"},\"is_active\":true,\"parent_id\":null,\"children_count\":0,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},\"children\":[],\"total_created\":0}"
+    },
+    {
+      "name": "gitlab duplicate names",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/batch",
+      "body_sha256": "584748089539ba2548efc72ca03401af21a24f1ae3d5fb411dcb26bb43669d50",
+      "request_headers_sha256": "0f40ea2d7f59870c8d40429ae66df0ccd359ffdaca79a5987139ebb06c22d380",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "gitlab name and its id",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/batch",
+      "body_sha256": "f525ad349b8be2644109d62ae392452018df3240e6dcd97a215c6e61861a4956",
+      "request_headers_sha256": "0f40ea2d7f59870c8d40429ae66df0ccd359ffdaca79a5987139ebb06c22d380",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "pagerduty batch",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/batch",
+      "body_sha256": "c4fbdffeb638bebb10fb4fc358fb557dc4144679460753a034f7a2d516f92f32",
+      "request_headers_sha256": "0f40ea2d7f59870c8d40429ae66df0ccd359ffdaca79a5987139ebb06c22d380",
+      "status": 403,
+      "headers": {
+        "content-length": "95",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "0f721059-acb0-4c20-a151-720b3f5499b8"
+      },
+      "body": "{\"detail\":\"feature_disabled: canonical incident ingestion is disabled (org_override_disabled)\"}"
+    },
+    {
+      "name": "initial depth float",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/batch",
+      "body_sha256": "912687e5076189920932239eeba67d990f2e987389b0bb32866ceb6714ab01f5",
+      "request_headers_sha256": "0f40ea2d7f59870c8d40429ae66df0ccd359ffdaca79a5987139ebb06c22d380",
+      "status": 422,
+      "headers": {
+        "content-length": "164",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "d243fba4-3319-465d-a228-35c28fb3c671"
+      },
+      "body": "{\"detail\":[{\"type\":\"int_from_float\",\"loc\":[\"body\",\"initial_sync_depth\"],\"msg\":\"Input should be a valid integer, got a number with a fractional part\",\"input\":29.9}]}"
+    },
+    {
+      "name": "initial depth integral float",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/batch",
+      "body_sha256": "99861cb1b49ed969d3976ecb90c02d54b43c3749364e474b34bfa35c5b3e7df6",
+      "request_headers_sha256": "0f40ea2d7f59870c8d40429ae66df0ccd359ffdaca79a5987139ebb06c22d380",
+      "status": 201,
+      "headers": {
+        "content-length": "501",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "dd48c811-0d70-4ad5-b872-168244306f32"
+      },
+      "body": "{\"parent\":{\"id\":\"bb8afef5-3be8-4f32-b1ff-59c0c069d93d\",\"name\":\"gh depth whole\",\"provider\":\"github\",\"credential_id\":null,\"sync_targets\":[],\"sync_options\":{\"owner\":\"acme\",\"initial_sync_depth\":30,\"fetch_comments\":true,\"fetch_milestones\":true,\"comments_limit\":500},\"is_active\":true,\"parent_id\":null,\"children_count\":0,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},\"children\":[],\"total_created\":0}"
+    },
+    {
+      "name": "gitlab page above int32",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/batch",
+      "body_sha256": "9e11c103b7d4e9208fb918137449cf301c50e671ef689009bc89615c09ce4801",
+      "request_headers_sha256": "0f40ea2d7f59870c8d40429ae66df0ccd359ffdaca79a5987139ebb06c22d380",
+      "status": 201,
+      "headers": {
+        "content-length": "494",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "04cbfff0-773a-4021-8e75-ee652dc2cc63"
+      },
+      "body": "{\"parent\":{\"id\":\"da97635d-abe6-472c-9c02-bc13c65ee042\",\"name\":\"gl overflow\",\"provider\":\"gitlab\",\"credential_id\":\"1346ac0a-982c-50ef-bc19-94688b0f3710\",\"sync_targets\":[\"git\",\"prs\"],\"sync_options\":{\"group\":\"overflow\",\"gitlab_url\":\"http://127.0.0.1:39015\"},\"is_active\":true,\"parent_id\":null,\"children_count\":0,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},\"children\":[],\"total_created\":0}"
+    },
+    {
+      "name": "over the repo limit",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/batch",
+      "body_sha256": "3fe869c4e02909914dcb034a221a49b0e4249aab36f366854e1abc3af3968e53",
+      "request_headers_sha256": "f19f0cd880f0390c7e771be9634358c754ec6d81b676b431ff6094be021856b2",
+      "status": 403,
+      "headers": {
+        "content-length": "44",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "02c64c2a-2e5c-42f3-b50b-0f3355d70e88"
+      },
+      "body": "{\"detail\":\"Limit exceeded: max_repos (5/3)\"}"
+    },
+    {
+      "name": "at the repo limit",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/batch",
+      "body_sha256": "270d45a10ccee9c8165b237822585e48208a59b5d64b3f42024c7939bd143370",
+      "request_headers_sha256": "f19f0cd880f0390c7e771be9634358c754ec6d81b676b431ff6094be021856b2",
+      "status": 201,
+      "headers": {
+        "content-length": "467",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "0565541b-78b5-40d2-8328-7b05499cd91a"
+      },
+      "body": "{\"parent\":{\"id\":\"f02ada25-e5d3-4a21-a015-e23ad12e5e93\",\"name\":\"b at\",\"provider\":\"github\",\"credential_id\":null,\"sync_targets\":[],\"sync_options\":{\"owner\":\"acme\",\"fetch_comments\":true,\"fetch_milestones\":true,\"comments_limit\":500},\"is_active\":true,\"parent_id\":null,\"children_count\":0,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},\"children\":[],\"total_created\":0}"
+    },
+    {
+      "name": "past the limit after",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/batch",
+      "body_sha256": "59ac51c264ce28dc0ff1ca9ea553b60efbc5352576a8380da100b5d4149f6836",
+      "request_headers_sha256": "f19f0cd880f0390c7e771be9634358c754ec6d81b676b431ff6094be021856b2",
+      "status": 403,
+      "headers": {
+        "content-length": "44",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "62dbfa22-b93b-4fdf-bac4-60a9e0a2f535"
+      },
+      "body": "{\"detail\":\"Limit exceeded: max_repos (4/3)\"}"
+    },
+    {
+      "name": "list after",
+      "method": "GET",
+      "path": "/api/v1/admin/sync-configs",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "0f40ea2d7f59870c8d40429ae66df0ccd359ffdaca79a5987139ebb06c22d380",
+      "status": 200,
+      "headers": {
+        "content-length": "7924",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "8f5355c3-680d-4fe7-80a8-2ca455d60916"
+      },
+      "body": "[{\"id\":\"8862cb06-89ae-4603-92fa-bfa8d6183afe\",\"name\":\"gh batch\",\"provider\":\"GitHub\",\"credential_id\":null,\"sync_targets\":[\"git\",\"prs\",\"work-items\"],\"sync_options\":{\"owner\":\"acme\",\"x\":1,\"fetch_comments\":true,\"fetch_milestones\":true,\"comments_limit\":500},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"49e6edc3-54c7-4bf5-aa37-db7575f30f13\",\"name\":\"gh cron\",\"provider\":\"github\",\"credential_id\":null,\"sync_targets\":[\"git\"],\"sync_options\":{\"owner\":\"acme\",\"schedule_cron\":\"0 */6 * * *\",\"timezone\":\"Europe/Paris\",\"initial_sync_depth\":30,\"fetch_comments\":true,\"fetch_milestones\":true,\"comments_limit\":500},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"bb8afef5-3be8-4f32-b1ff-59c0c069d93d\",\"name\":\"gh depth whole\",\"provider\":\"github\",\"credential_id\":null,\"sync_targets\":[],\"sync_options\":{\"owner\":\"acme\",\"initial_sync_depth\":30,\"fetch_comments\":true,\"fetch_milestones\":true,\"comments_limit\":500},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"050d1525-0098-49ec-90d6-0e5b4c363963\",\"name\":\"gh empty\",\"provider\":\"github\",\"credential_id\":null,\"sync_targets\":[\"git\"],\"sync_options\":{\"owner\":\"acme\",\"fetch_comments\":true,\"fetch_milestones\":true,\"comments_limit\":500},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"7cd3fa4c-f3ee-421b-9e64-572a0593f496\",\"name\":\"gh group\",\"provider\":\"github\",\"credential_id\":null,\"sync_targets\":[\"git\"],\"sync_options\":{\"group\":\"grp\",\"fetch_comments\":true,\"fetch_milestones\":true,\"comments_limit\":500},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"ba2bd7de-822f-4034-ad15-511269d8cca2\",\"name\":\"gh no owner\",\"provider\":\"github\",\"credential_id\":null,\"sync_targets\":[\"git\"],\"sync_options\":{\"fetch_comments\":true,\"fetch_milestones\":true,\"comments_limit\":500},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"83ccd6e8-1bb8-4a41-a9d0-c7be2c28edbc\",\"name\":\"gl batch\",\"provider\":\"gitlab\",\"credential_id\":\"1346ac0a-982c-50ef-bc19-94688b0f3710\",\"sync_targets\":[\"git\",\"prs\"],\"sync_options\":{\"group\":\"gitlab-examples/maven\",\"gitlab_url\":\"http://127.0.0.1:39015\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"19d8bcd6-ec6a-4c08-ae7b-7d680426ea65\",\"name\":\"gl config url\",\"provider\":\"gitlab\",\"credential_id\":\"a1ba6455-3c16-5a93-b8df-056258aa0982\",\"sync_targets\":[\"git\",\"prs\"],\"sync_options\":{\"owner\":\"gitlab-examples/maven\",\"gitlab_url\":\"http://127.0.0.1:39015\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"3e66145b-e3fd-49fe-89cd-e2989cd017c2\",\"name\":\"gl empty cred id\",\"provider\":\"gitlab\",\"credential_id\":null,\"sync_targets\":[\"git\"],\"sync_options\":{\"group\":\"gitlab-examples/maven\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"f9a4f357-353b-4ec9-b119-633cf411c202\",\"name\":\"gl ids no listing\",\"provider\":\"gitlab\",\"credential_id\":\"1346ac0a-982c-50ef-bc19-94688b0f3710\",\"sync_targets\":[\"git\",\"prs\"],\"sync_options\":{\"owner\":\"gitlab-examples/no-such-group-for-venue-test\",\"gitlab_url\":\"http://127.0.0.1:39015\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"5058a483-4199-446b-b3cf-a9b8a2f490a8\",\"name\":\"gl no cred ids\",\"provider\":\"gitlab\",\"credential_id\":null,\"sync_targets\":[\"git\",\"prs\"],\"sync_options\":{\"group\":\"gitlab-examples/maven\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"fb5beb50-316e-4bc6-b155-22e298a59b0c\",\"name\":\"gl no group ids\",\"provider\":\"gitlab\",\"credential_id\":\"1346ac0a-982c-50ef-bc19-94688b0f3710\",\"sync_targets\":[\"git\",\"prs\"],\"sync_options\":{\"gitlab_url\":\"http://127.0.0.1:39015\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"0dcad81e-14d5-407c-961b-9dee1cf4b4d9\",\"name\":\"gl no token id\",\"provider\":\"gitlab\",\"credential_id\":\"e95043a4-7fb4-551e-ab6a-b8cd7618fd77\",\"sync_targets\":[\"git\",\"prs\"],\"sync_options\":{\"group\":\"gitlab-examples/maven\",\"gitlab_url\":\"http://127.0.0.1:39015\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"67081e7c-8b19-47a3-b733-755a0659df5f\",\"name\":\"gl none\",\"provider\":\"gitlab\",\"credential_id\":\"1346ac0a-982c-50ef-bc19-94688b0f3710\",\"sync_targets\":[\"git\",\"prs\"],\"sync_options\":{\"group\":\"gitlab-examples/maven\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"7611eb71-d904-4867-b267-49d4ce02770c\",\"name\":\"gl option url\",\"provider\":\"gitlab\",\"credential_id\":null,\"sync_targets\":[\"git\",\"prs\"],\"sync_options\":{\"group\":\"acme\",\"gitlab_url\":\"https://gitlab.example.test\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"da97635d-abe6-472c-9c02-bc13c65ee042\",\"name\":\"gl overflow\",\"provider\":\"gitlab\",\"credential_id\":\"1346ac0a-982c-50ef-bc19-94688b0f3710\",\"sync_targets\":[\"git\",\"prs\"],\"sync_options\":{\"group\":\"overflow\",\"gitlab_url\":\"http://127.0.0.1:39015\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"9d7cf08b-61a6-405f-9e50-4989d974412c\",\"name\":\"jira batch\",\"provider\":\"jira\",\"credential_id\":null,\"sync_targets\":[\"work-items\"],\"sync_options\":{\"owner\":\"ENG\"},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},{\"id\":\"7fcfeeba-f31b-4df3-a939-e76912c20069\",\"name\":\"linear batch\",\"provider\":\"linear\",\"credential_id\":null,\"sync_targets\":[\"work-items\"],\"sync_options\":{},\"is_active\":true,\"parent_id\":null,\"children_count\":null,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"}]"
+    },
+    {
+      "name": "divergent: out-of-range cron",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/batch",
+      "body_sha256": "5f59ff923dc2155aba6b82ad736967960c59fcbd83a743f476e317c7808606f8",
+      "request_headers_sha256": "0f40ea2d7f59870c8d40429ae66df0ccd359ffdaca79a5987139ebb06c22d380",
+      "status": 201,
+      "headers": {
+        "content-length": "519",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "65476db3-dc59-4449-8eba-8b73aef0ca02"
+      },
+      "body": "{\"parent\":{\"id\":\"33d79e1d-7493-4a8d-ac68-eb018141240d\",\"name\":\"gh cron 60\",\"provider\":\"github\",\"credential_id\":null,\"sync_targets\":[],\"sync_options\":{\"owner\":\"acme\",\"all_repos\":true,\"schedule_cron\":\"60 * * * *\",\"fetch_comments\":true,\"fetch_milestones\":true,\"comments_limit\":500},\"is_active\":true,\"parent_id\":null,\"children_count\":0,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},\"children\":[],\"total_created\":0}"
+    },
+    {
+      "name": "divergent: croniter-only cron and unknown timezone",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/batch",
+      "body_sha256": "a1f06ee68e01bfcf8ea1ad12b0d7aee34c97dff4974965390b5b3d4195dc6104",
+      "request_headers_sha256": "0f40ea2d7f59870c8d40429ae66df0ccd359ffdaca79a5987139ebb06c22d380",
+      "status": 201,
+      "headers": {
+        "content-length": "568",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "3b7003c5-3e5d-4636-96ba-0ab47bd2c2a2"
+      },
+      "body": "{\"parent\":{\"id\":\"fa86450d-d7a1-480d-b1e4-4494ad139437\",\"name\":\"gh sched\",\"provider\":\"github\",\"credential_id\":null,\"sync_targets\":[\"git\"],\"sync_options\":{\"owner\":\"acme\",\"all_repos\":true,\"schedule_cron\":\"@hourly\",\"timezone\":\"Mars/Base\",\"initial_sync_depth\":9999,\"fetch_comments\":true,\"fetch_milestones\":true,\"comments_limit\":500},\"is_active\":true,\"parent_id\":null,\"children_count\":0,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},\"children\":[],\"total_created\":0}"
+    },
+    {
+      "name": "divergent: unknown timezone",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/batch",
+      "body_sha256": "42f0c081d84b8341eb9c309922479f7070966b00d5e9a48be17aaa8da27b1168",
+      "request_headers_sha256": "0f40ea2d7f59870c8d40429ae66df0ccd359ffdaca79a5987139ebb06c22d380",
+      "status": 201,
+      "headers": {
+        "content-length": "536",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "d796c9ad-117b-4126-a42c-10386bbe6471"
+      },
+      "body": "{\"parent\":{\"id\":\"34341443-bf84-400a-875f-9f6b2347952c\",\"name\":\"gh tz\",\"provider\":\"github\",\"credential_id\":null,\"sync_targets\":[],\"sync_options\":{\"owner\":\"acme\",\"all_repos\":true,\"schedule_cron\":\"0 * * * *\",\"timezone\":\"Mars/Base\",\"fetch_comments\":true,\"fetch_milestones\":true,\"comments_limit\":500},\"is_active\":true,\"parent_id\":null,\"children_count\":0,\"last_sync_at\":null,\"last_sync_success\":null,\"last_sync_error\":null,\"created_at\":\"2026-09-24T12:34:56.123456Z\",\"updated_at\":\"2026-09-24T12:34:56.123456Z\"},\"children\":[],\"total_created\":0}"
+    },
+    {
+      "name": "divergent: duplicate name",
+      "method": "POST",
+      "path": "/api/v1/admin/sync-configs/batch",
+      "body_sha256": "33d0a3644205c1663bb7b33a617e0961aeb17cffaa2959379b6ffd16edc782bc",
+      "request_headers_sha256": "0f40ea2d7f59870c8d40429ae66df0ccd359ffdaca79a5987139ebb06c22d380",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    }
+  ],
+  "rows": {
+    "rows:integration_datasets": {
+      "rows": "c1b69226-9d66-596b-978c-65ad29e45e64 | gh batch | blame | t | {\"legacy_targets\": [\"git\", \"prs\", \"work-items\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gh batch | commit-stats | t | {\"legacy_targets\": [\"git\", \"prs\", \"work-items\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gh batch | commits | t | {\"legacy_targets\": [\"git\", \"prs\", \"work-items\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gh batch | files | t | {\"legacy_targets\": [\"git\", \"prs\", \"work-items\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gh batch | pr-comments | t | {\"legacy_targets\": [\"git\", \"prs\", \"work-items\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gh batch | pr-reviews | t | {\"legacy_targets\": [\"git\", \"prs\", \"work-items\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gh batch | prs | t | {\"legacy_targets\": [\"git\", \"prs\", \"work-items\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gh batch | repo-metadata | t | {\"legacy_targets\": [\"git\", \"prs\", \"work-items\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gh batch | work-item-comments | t | {\"legacy_targets\": [\"git\", \"prs\", \"work-items\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gh batch | work-item-history | t | {\"legacy_targets\": [\"git\", \"prs\", \"work-items\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gh batch | work-item-labels | t | {\"legacy_targets\": [\"git\", \"prs\", \"work-items\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gh batch | work-item-projects | t | {\"legacy_targets\": [\"git\", \"prs\", \"work-items\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gh batch | work-items | t | {\"legacy_targets\": [\"git\", \"prs\", \"work-items\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gh cron | blame | t | {\"legacy_targets\": [\"git\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gh cron | commit-stats | t | {\"legacy_targets\": [\"git\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gh cron | commits | t | {\"legacy_targets\": [\"git\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gh cron | files | t | {\"legacy_targets\": [\"git\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gh cron | repo-metadata | t | {\"legacy_targets\": [\"git\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gh empty | blame | t | {\"legacy_targets\": [\"git\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gh empty | commit-stats | t | {\"legacy_targets\": [\"git\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gh empty | commits | t | {\"legacy_targets\": [\"git\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gh empty | files | t | {\"legacy_targets\": [\"git\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gh empty | repo-metadata | t | {\"legacy_targets\": [\"git\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gh group | blame | t | {\"legacy_targets\": [\"git\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gh group | commit-stats | t | {\"legacy_targets\": [\"git\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gh group | commits | t | {\"legacy_targets\": [\"git\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gh group | files | t | {\"legacy_targets\": [\"git\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gh group | repo-metadata | t | {\"legacy_targets\": [\"git\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gh no owner | blame | t | {\"legacy_targets\": [\"git\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gh no owner | commit-stats | t | {\"legacy_targets\": [\"git\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gh no owner | commits | t | {\"legacy_targets\": [\"git\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gh no owner | files | t | {\"legacy_targets\": [\"git\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gh no owner | repo-metadata | t | {\"legacy_targets\": [\"git\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl batch | blame | t | {\"legacy_targets\": [\"git\", \"prs\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl batch | commit-stats | t | {\"legacy_targets\": [\"git\", \"prs\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl batch | commits | t | {\"legacy_targets\": [\"git\", \"prs\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl batch | files | t | {\"legacy_targets\": [\"git\", \"prs\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl batch | pr-comments | t | {\"legacy_targets\": [\"git\", \"prs\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl batch | pr-reviews | t | {\"legacy_targets\": [\"git\", \"prs\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl batch | prs | t | {\"legacy_targets\": [\"git\", \"prs\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl batch | repo-metadata | t | {\"legacy_targets\": [\"git\", \"prs\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl config url | blame | t | {\"legacy_targets\": [\"git\", \"prs\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl config url | commit-stats | t | {\"legacy_targets\": [\"git\", \"prs\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl config url | commits | t | {\"legacy_targets\": [\"git\", \"prs\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl config url | files | t | {\"legacy_targets\": [\"git\", \"prs\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl config url | pr-comments | t | {\"legacy_targets\": [\"git\", \"prs\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl config url | pr-reviews | t | {\"legacy_targets\": [\"git\", \"prs\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl config url | prs | t | {\"legacy_targets\": [\"git\", \"prs\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl config url | repo-metadata | t | {\"legacy_targets\": [\"git\", \"prs\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl empty cred id | blame | t | {\"legacy_targets\": [\"git\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl empty cred id | commit-stats | t | {\"legacy_targets\": [\"git\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl empty cred id | commits | t | {\"legacy_targets\": [\"git\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl empty cred id | files | t | {\"legacy_targets\": [\"git\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl empty cred id | repo-metadata | t | {\"legacy_targets\": [\"git\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl ids no listing | blame | t | {\"legacy_targets\": [\"git\", \"prs\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl ids no listing | commit-stats | t | {\"legacy_targets\": [\"git\", \"prs\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl ids no listing | commits | t | {\"legacy_targets\": [\"git\", \"prs\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl ids no listing | files | t | {\"legacy_targets\": [\"git\", \"prs\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl ids no listing | pr-comments | t | {\"legacy_targets\": [\"git\", \"prs\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl ids no listing | pr-reviews | t | {\"legacy_targets\": [\"git\", \"prs\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl ids no listing | prs | t | {\"legacy_targets\": [\"git\", \"prs\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl ids no listing | repo-metadata | t | {\"legacy_targets\": [\"git\", \"prs\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl no cred ids | blame | t | {\"legacy_targets\": [\"git\", \"prs\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl no cred ids | commit-stats | t | {\"legacy_targets\": [\"git\", \"prs\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl no cred ids | commits | t | {\"legacy_targets\": [\"git\", \"prs\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl no cred ids | files | t | {\"legacy_targets\": [\"git\", \"prs\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl no cred ids | pr-comments | t | {\"legacy_targets\": [\"git\", \"prs\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl no cred ids | pr-reviews | t | {\"legacy_targets\": [\"git\", \"prs\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl no cred ids | prs | t | {\"legacy_targets\": [\"git\", \"prs\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl no cred ids | repo-metadata | t | {\"legacy_targets\": [\"git\", \"prs\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl no group ids | blame | t | {\"legacy_targets\": [\"git\", \"prs\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl no group ids | commit-stats | t | {\"legacy_targets\": [\"git\", \"prs\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl no group ids | commits | t | {\"legacy_targets\": [\"git\", \"prs\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl no group ids | files | t | {\"legacy_targets\": [\"git\", \"prs\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl no group ids | pr-comments | t | {\"legacy_targets\": [\"git\", \"prs\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl no group ids | pr-reviews | t | {\"legacy_targets\": [\"git\", \"prs\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl no group ids | prs | t | {\"legacy_targets\": [\"git\", \"prs\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl no group ids | repo-metadata | t | {\"legacy_targets\": [\"git\", \"prs\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl no token id | blame | t | {\"legacy_targets\": [\"git\", \"prs\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl no token id | commit-stats | t | {\"legacy_targets\": [\"git\", \"prs\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl no token id | commits | t | {\"legacy_targets\": [\"git\", \"prs\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl no token id | files | t | {\"legacy_targets\": [\"git\", \"prs\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl no token id | pr-comments | t | {\"legacy_targets\": [\"git\", \"prs\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl no token id | pr-reviews | t | {\"legacy_targets\": [\"git\", \"prs\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl no token id | prs | t | {\"legacy_targets\": [\"git\", \"prs\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl no token id | repo-metadata | t | {\"legacy_targets\": [\"git\", \"prs\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl none | blame | t | {\"legacy_targets\": [\"git\", \"prs\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl none | commit-stats | t | {\"legacy_targets\": [\"git\", \"prs\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl none | commits | t | {\"legacy_targets\": [\"git\", \"prs\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl none | files | t | {\"legacy_targets\": [\"git\", \"prs\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl none | pr-comments | t | {\"legacy_targets\": [\"git\", \"prs\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl none | pr-reviews | t | {\"legacy_targets\": [\"git\", \"prs\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl none | prs | t | {\"legacy_targets\": [\"git\", \"prs\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl none | repo-metadata | t | {\"legacy_targets\": [\"git\", \"prs\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl option url | blame | t | {\"legacy_targets\": [\"git\", \"prs\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl option url | commit-stats | t | {\"legacy_targets\": [\"git\", \"prs\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl option url | commits | t | {\"legacy_targets\": [\"git\", \"prs\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl option url | files | t | {\"legacy_targets\": [\"git\", \"prs\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl option url | pr-comments | t | {\"legacy_targets\": [\"git\", \"prs\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl option url | pr-reviews | t | {\"legacy_targets\": [\"git\", \"prs\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl option url | prs | t | {\"legacy_targets\": [\"git\", \"prs\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl option url | repo-metadata | t | {\"legacy_targets\": [\"git\", \"prs\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl overflow | blame | t | {\"legacy_targets\": [\"git\", \"prs\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl overflow | commit-stats | t | {\"legacy_targets\": [\"git\", \"prs\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl overflow | commits | t | {\"legacy_targets\": [\"git\", \"prs\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl overflow | files | t | {\"legacy_targets\": [\"git\", \"prs\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl overflow | pr-comments | t | {\"legacy_targets\": [\"git\", \"prs\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl overflow | pr-reviews | t | {\"legacy_targets\": [\"git\", \"prs\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl overflow | prs | t | {\"legacy_targets\": [\"git\", \"prs\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl overflow | repo-metadata | t | {\"legacy_targets\": [\"git\", \"prs\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | jira batch | work-item-comments | t | {\"legacy_targets\": [\"work-items\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | jira batch | work-item-history | t | {\"legacy_targets\": [\"work-items\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | jira batch | work-item-labels | t | {\"legacy_targets\": [\"work-items\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | jira batch | work-item-projects | t | {\"legacy_targets\": [\"work-items\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | jira batch | work-items | t | {\"legacy_targets\": [\"work-items\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | linear batch | work-item-comments | t | {\"legacy_targets\": [\"work-items\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | linear batch | work-item-history | t | {\"legacy_targets\": [\"work-items\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | linear batch | work-item-labels | t | {\"legacy_targets\": [\"work-items\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | linear batch | work-item-projects | t | {\"legacy_targets\": [\"work-items\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | linear batch | work-items | t | {\"legacy_targets\": [\"work-items\"]} | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e"
+    },
+    "rows:integration_sources": {
+      "rows": "afc02ff0-46c8-56d0-9ba0-4ac786cc0cb5 | b at | github | repository | acme/a | a | acme/a | {\"planner_managed_sync_config_id\": \"CFG:b at\", \"owner\": \"acme\"} | t | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00 | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nafc02ff0-46c8-56d0-9ba0-4ac786cc0cb5 | b at | github | repository | acme/b | b | acme/b | {\"planner_managed_sync_config_id\": \"CFG:b at\", \"owner\": \"acme\"} | t | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00 | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nafc02ff0-46c8-56d0-9ba0-4ac786cc0cb5 | b at | github | repository | acme/c | c | acme/c | {\"planner_managed_sync_config_id\": \"CFG:b at\", \"owner\": \"acme\"} | t | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00 | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gh batch | GitHub | repository | acme/one | one | acme/one | {\"planner_managed_sync_config_id\": \"CFG:gh batch\", \"owner\": \"acme\"} | t | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00 | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gh batch | GitHub | repository | acme/two | two | acme/two | {\"planner_managed_sync_config_id\": \"CFG:gh batch\", \"owner\": \"acme\"} | t | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00 | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gh batch | GitHub | repository | other-org/three | three | other-org/three | {\"planner_managed_sync_config_id\": \"CFG:gh batch\", \"owner\": \"other-org\"} | t | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00 | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gh cron | github | repository | acme/c1 | c1 | acme/c1 | {\"planner_managed_sync_config_id\": \"CFG:gh cron\", \"owner\": \"acme\"} | t | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00 | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gh depth whole | github | repository | acme/f2 | f2 | acme/f2 | {\"planner_managed_sync_config_id\": \"CFG:gh depth whole\", \"owner\": \"acme\"} | t | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00 | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gh group | github | repository | grp/g1 | g1 | grp/g1 | {\"planner_managed_sync_config_id\": \"CFG:gh group\", \"owner\": \"grp\"} | t | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00 | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gh no owner | github | repository | gh no owner/solo | solo | gh no owner/solo | {\"planner_managed_sync_config_id\": \"CFG:gh no owner\", \"owner\": \"gh no owner\"} | t | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00 | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl batch | gitlab | project | 12 | 12 | gitlab-examples/maven/12 | {\"path_with_namespace\": \"gitlab-examples/maven/12\", \"planner_managed_sync_config_id\": \"CFG:gl batch\"} | t | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00 | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl batch | gitlab | project | 23791548 | simple-maven-example | gitlab-examples/maven/simple-maven-example | {\"path_with_namespace\": \"gitlab-examples/maven/simple-maven-example\", \"planner_managed_sync_config_id\": \"CFG:gl batch\"} | t | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00 | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl batch | gitlab | project | 3467535 | simple-maven-app | gitlab-examples/maven/simple-maven-app | {\"path_with_namespace\": \"gitlab-examples/maven/simple-maven-app\", \"planner_managed_sync_config_id\": \"CFG:gl batch\"} | t | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00 | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl batch | gitlab | project | 3467553 | simple-maven-dep | gitlab-examples/maven/simple-maven-dep | {\"path_with_namespace\": \"gitlab-examples/maven/simple-maven-dep\", \"planner_managed_sync_config_id\": \"CFG:gl batch\"} | t | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00 | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl batch | gitlab | project | 999 | 999 | gitlab-examples/maven/999 | {\"path_with_namespace\": \"gitlab-examples/maven/999\", \"planner_managed_sync_config_id\": \"CFG:gl batch\"} | t | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00 | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl config url | gitlab | project | 3467535 | simple-maven-app | gitlab-examples/maven/simple-maven-app | {\"path_with_namespace\": \"gitlab-examples/maven/simple-maven-app\", \"planner_managed_sync_config_id\": \"CFG:gl config url\"} | t | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00 | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl config url | gitlab | project | 3467553 | simple-maven-dep | gitlab-examples/maven/simple-maven-dep | {\"path_with_namespace\": \"gitlab-examples/maven/simple-maven-dep\", \"planner_managed_sync_config_id\": \"CFG:gl config url\"} | t | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00 | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl empty cred id | gitlab | project | 9 | 9 | gitlab-examples/maven/9 | {\"path_with_namespace\": \"gitlab-examples/maven/9\", \"planner_managed_sync_config_id\": \"CFG:gl empty cred id\"} | t | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00 | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl ids no listing | gitlab | project | 31 | 31 | gitlab-examples/no-such-group-for-venue-test/31 | {\"path_with_namespace\": \"gitlab-examples/no-such-group-for-venue-test/31\", \"planner_managed_sync_config_id\": \"CFG:gl ids no listing\"} | t | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00 | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl ids no listing | gitlab | project | 32 | 32 | gitlab-examples/no-such-group-for-venue-test/32 | {\"path_with_namespace\": \"gitlab-examples/no-such-group-for-venue-test/32\", \"planner_managed_sync_config_id\": \"CFG:gl ids no listing\"} | t | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00 | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl no cred ids | gitlab | project | 5 | 5 | gitlab-examples/maven/5 | {\"path_with_namespace\": \"gitlab-examples/maven/5\", \"planner_managed_sync_config_id\": \"CFG:gl no cred ids\"} | t | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00 | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl no cred ids | gitlab | project | 6 | 6 | gitlab-examples/maven/6 | {\"path_with_namespace\": \"gitlab-examples/maven/6\", \"planner_managed_sync_config_id\": \"CFG:gl no cred ids\"} | t | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00 | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl no group ids | gitlab | project | 41 | 41 | 41 | {\"path_with_namespace\": \"41\", \"planner_managed_sync_config_id\": \"CFG:gl no group ids\"} | t | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00 | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl no token id | gitlab | project | 7 | 7 | gitlab-examples/maven/7 | {\"path_with_namespace\": \"gitlab-examples/maven/7\", \"planner_managed_sync_config_id\": \"CFG:gl no token id\"} | t | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00 | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl option url | gitlab | project | 8 | 8 | acme/8 | {\"path_with_namespace\": \"acme/8\", \"planner_managed_sync_config_id\": \"CFG:gl option url\"} | t | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00 | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl overflow | gitlab | project | 9 | target | overflow/target | {\"path_with_namespace\": \"overflow/target\", \"planner_managed_sync_config_id\": \"CFG:gl overflow\"} | t | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00 | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | jira batch | jira | source | ENG | ENG | ENG | {\"planner_managed_sync_config_id\": \"CFG:jira batch\"} | t | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00 | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | jira batch | jira | source | OPS | OPS | OPS | {\"planner_managed_sync_config_id\": \"CFG:jira batch\"} | t | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00 | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | linear batch | linear | source | team-1 | team-1 | team-1 | {\"planner_managed_sync_config_id\": \"CFG:linear batch\"} | t | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00 | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e"
+    },
+    "rows:integrations": {
+      "rows": "afc02ff0-46c8-56d0-9ba0-4ac786cc0cb5 | github | \u003cnull\u003e | b at | {\"owner\": \"acme\", \"fetch_comments\": true, \"fetch_milestones\": true, \"comments_limit\": 500} | t | \u003cnull\u003e | \u003cnull\u003e | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00\nc1b69226-9d66-596b-978c-65ad29e45e64 | GitHub | \u003cnull\u003e | gh batch | {\"owner\": \"acme\", \"x\": 1, \"fetch_comments\": true, \"fetch_milestones\": true, \"comments_limit\": 500} | t | \u003cnull\u003e | \u003cnull\u003e | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00\nc1b69226-9d66-596b-978c-65ad29e45e64 | github | \u003cnull\u003e | gh cron | {\"owner\": \"acme\", \"schedule_cron\": \"0 */6 * * *\", \"timezone\": \"Europe/Paris\", \"initial_sync_depth\": 30, \"fetch_comments\": true, \"fetch_milestones\": true, \"comments_limit\": 500} | t | 0 */6 * * * | Europe/Paris | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00\nc1b69226-9d66-596b-978c-65ad29e45e64 | github | \u003cnull\u003e | gh depth whole | {\"owner\": \"acme\", \"initial_sync_depth\": 30, \"fetch_comments\": true, \"fetch_milestones\": true, \"comments_limit\": 500} | t | \u003cnull\u003e | \u003cnull\u003e | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00\nc1b69226-9d66-596b-978c-65ad29e45e64 | github | \u003cnull\u003e | gh empty | {\"owner\": \"acme\", \"fetch_comments\": true, \"fetch_milestones\": true, \"comments_limit\": 500} | t | \u003cnull\u003e | \u003cnull\u003e | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00\nc1b69226-9d66-596b-978c-65ad29e45e64 | github | \u003cnull\u003e | gh group | {\"group\": \"grp\", \"fetch_comments\": true, \"fetch_milestones\": true, \"comments_limit\": 500} | t | \u003cnull\u003e | \u003cnull\u003e | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00\nc1b69226-9d66-596b-978c-65ad29e45e64 | github | \u003cnull\u003e | gh no owner | {\"fetch_comments\": true, \"fetch_milestones\": true, \"comments_limit\": 500} | t | \u003cnull\u003e | \u003cnull\u003e | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00\nc1b69226-9d66-596b-978c-65ad29e45e64 | gitlab | 1346ac0a-982c-50ef-bc19-94688b0f3710 | gl batch | {\"group\": \"gitlab-examples/maven\", \"gitlab_url\": \"http://127.0.0.1:\u003cport\u003e\"} | t | \u003cnull\u003e | \u003cnull\u003e | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00\nc1b69226-9d66-596b-978c-65ad29e45e64 | gitlab | 1346ac0a-982c-50ef-bc19-94688b0f3710 | gl ids no listing | {\"owner\": \"gitlab-examples/no-such-group-for-venue-test\", \"gitlab_url\": \"http://127.0.0.1:\u003cport\u003e\"} | t | \u003cnull\u003e | \u003cnull\u003e | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00\nc1b69226-9d66-596b-978c-65ad29e45e64 | gitlab | 1346ac0a-982c-50ef-bc19-94688b0f3710 | gl no group ids | {\"gitlab_url\": \"http://127.0.0.1:\u003cport\u003e\"} | t | \u003cnull\u003e | \u003cnull\u003e | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00\nc1b69226-9d66-596b-978c-65ad29e45e64 | gitlab | 1346ac0a-982c-50ef-bc19-94688b0f3710 | gl none | {\"group\": \"gitlab-examples/maven\"} | t | \u003cnull\u003e | \u003cnull\u003e | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00\nc1b69226-9d66-596b-978c-65ad29e45e64 | gitlab | 1346ac0a-982c-50ef-bc19-94688b0f3710 | gl overflow | {\"group\": \"overflow\", \"gitlab_url\": \"http://127.0.0.1:\u003cport\u003e\"} | t | \u003cnull\u003e | \u003cnull\u003e | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00\nc1b69226-9d66-596b-978c-65ad29e45e64 | gitlab | \u003cnull\u003e | gl empty cred id | {\"group\": \"gitlab-examples/maven\"} | t | \u003cnull\u003e | \u003cnull\u003e | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00\nc1b69226-9d66-596b-978c-65ad29e45e64 | gitlab | \u003cnull\u003e | gl no cred ids | {\"group\": \"gitlab-examples/maven\"} | t | \u003cnull\u003e | \u003cnull\u003e | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00\nc1b69226-9d66-596b-978c-65ad29e45e64 | gitlab | \u003cnull\u003e | gl option url | {\"group\": \"acme\", \"gitlab_url\": \"https://gitlab.example.test\"} | t | \u003cnull\u003e | \u003cnull\u003e | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00\nc1b69226-9d66-596b-978c-65ad29e45e64 | gitlab | a1ba6455-3c16-5a93-b8df-056258aa0982 | gl config url | {\"owner\": \"gitlab-examples/maven\", \"gitlab_url\": \"http://127.0.0.1:\u003cport\u003e\"} | t | \u003cnull\u003e | \u003cnull\u003e | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00\nc1b69226-9d66-596b-978c-65ad29e45e64 | gitlab | e95043a4-7fb4-551e-ab6a-b8cd7618fd77 | gl no token id | {\"group\": \"gitlab-examples/maven\", \"gitlab_url\": \"http://127.0.0.1:\u003cport\u003e\"} | t | \u003cnull\u003e | \u003cnull\u003e | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00\nc1b69226-9d66-596b-978c-65ad29e45e64 | jira | \u003cnull\u003e | jira batch | {\"owner\": \"ENG\"} | t | \u003cnull\u003e | \u003cnull\u003e | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00\nc1b69226-9d66-596b-978c-65ad29e45e64 | linear | \u003cnull\u003e | linear batch | {} | t | \u003cnull\u003e | \u003cnull\u003e | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00"
+    },
+    "rows:scheduled_jobs": {
+      "rows": "afc02ff0-46c8-56d0-9ba0-4ac786cc0cb5 | sync-config-CFG:b at | sync | github | 0 * * * * | UTC | {\"provider\": \"github\", \"sync_config_id\": \"CFG:b at\"} | b at | 1 | f | 0 | 0 | \u003cnull\u003e | \u003cnull\u003e | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00\nc1b69226-9d66-596b-978c-65ad29e45e64 | sync-config-CFG:gh batch | sync | github | 0 * * * * | UTC | {\"provider\": \"github\", \"sync_config_id\": \"CFG:gh batch\"} | gh batch | 1 | f | 0 | 0 | \u003cnull\u003e | \u003cnull\u003e | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00\nc1b69226-9d66-596b-978c-65ad29e45e64 | sync-config-CFG:gh cron | sync | github | 0 */6 * * * | Europe/Paris | {\"provider\": \"github\", \"sync_config_id\": \"CFG:gh cron\"} | gh cron | 0 | f | 0 | 0 | \u003cnull\u003e | \u003cnull\u003e | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00\nc1b69226-9d66-596b-978c-65ad29e45e64 | sync-config-CFG:gh depth whole | sync | github | 0 * * * * | UTC | {\"provider\": \"github\", \"sync_config_id\": \"CFG:gh depth whole\"} | gh depth whole | 1 | f | 0 | 0 | \u003cnull\u003e | \u003cnull\u003e | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00\nc1b69226-9d66-596b-978c-65ad29e45e64 | sync-config-CFG:gh empty | sync | github | 0 * * * * | UTC | {\"provider\": \"github\", \"sync_config_id\": \"CFG:gh empty\"} | gh empty | 1 | f | 0 | 0 | \u003cnull\u003e | \u003cnull\u003e | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00\nc1b69226-9d66-596b-978c-65ad29e45e64 | sync-config-CFG:gh group | sync | github | 0 * * * * | UTC | {\"provider\": \"github\", \"sync_config_id\": \"CFG:gh group\"} | gh group | 1 | f | 0 | 0 | \u003cnull\u003e | \u003cnull\u003e | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00\nc1b69226-9d66-596b-978c-65ad29e45e64 | sync-config-CFG:gh no owner | sync | github | 0 * * * * | UTC | {\"provider\": \"github\", \"sync_config_id\": \"CFG:gh no owner\"} | gh no owner | 1 | f | 0 | 0 | \u003cnull\u003e | \u003cnull\u003e | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00\nc1b69226-9d66-596b-978c-65ad29e45e64 | sync-config-CFG:gl batch | sync | gitlab | 0 * * * * | UTC | {\"provider\": \"gitlab\", \"sync_config_id\": \"CFG:gl batch\"} | gl batch | 1 | f | 0 | 0 | \u003cnull\u003e | \u003cnull\u003e | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00\nc1b69226-9d66-596b-978c-65ad29e45e64 | sync-config-CFG:gl config url | sync | gitlab | 0 * * * * | UTC | {\"provider\": \"gitlab\", \"sync_config_id\": \"CFG:gl config url\"} | gl config url | 1 | f | 0 | 0 | \u003cnull\u003e | \u003cnull\u003e | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00\nc1b69226-9d66-596b-978c-65ad29e45e64 | sync-config-CFG:gl empty cred id | sync | gitlab | 0 * * * * | UTC | {\"provider\": \"gitlab\", \"sync_config_id\": \"CFG:gl empty cred id\"} | gl empty cred id | 1 | f | 0 | 0 | \u003cnull\u003e | \u003cnull\u003e | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00\nc1b69226-9d66-596b-978c-65ad29e45e64 | sync-config-CFG:gl ids no listing | sync | gitlab | 0 * * * * | UTC | {\"provider\": \"gitlab\", \"sync_config_id\": \"CFG:gl ids no listing\"} | gl ids no listing | 1 | f | 0 | 0 | \u003cnull\u003e | \u003cnull\u003e | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00\nc1b69226-9d66-596b-978c-65ad29e45e64 | sync-config-CFG:gl no cred ids | sync | gitlab | 0 * * * * | UTC | {\"provider\": \"gitlab\", \"sync_config_id\": \"CFG:gl no cred ids\"} | gl no cred ids | 1 | f | 0 | 0 | \u003cnull\u003e | \u003cnull\u003e | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00\nc1b69226-9d66-596b-978c-65ad29e45e64 | sync-config-CFG:gl no group ids | sync | gitlab | 0 * * * * | UTC | {\"provider\": \"gitlab\", \"sync_config_id\": \"CFG:gl no group ids\"} | gl no group ids | 1 | f | 0 | 0 | \u003cnull\u003e | \u003cnull\u003e | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00\nc1b69226-9d66-596b-978c-65ad29e45e64 | sync-config-CFG:gl no token id | sync | gitlab | 0 * * * * | UTC | {\"provider\": \"gitlab\", \"sync_config_id\": \"CFG:gl no token id\"} | gl no token id | 1 | f | 0 | 0 | \u003cnull\u003e | \u003cnull\u003e | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00\nc1b69226-9d66-596b-978c-65ad29e45e64 | sync-config-CFG:gl none | sync | gitlab | 0 * * * * | UTC | {\"provider\": \"gitlab\", \"sync_config_id\": \"CFG:gl none\"} | gl none | 1 | f | 0 | 0 | \u003cnull\u003e | \u003cnull\u003e | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00\nc1b69226-9d66-596b-978c-65ad29e45e64 | sync-config-CFG:gl option url | sync | gitlab | 0 * * * * | UTC | {\"provider\": \"gitlab\", \"sync_config_id\": \"CFG:gl option url\"} | gl option url | 1 | f | 0 | 0 | \u003cnull\u003e | \u003cnull\u003e | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00\nc1b69226-9d66-596b-978c-65ad29e45e64 | sync-config-CFG:gl overflow | sync | gitlab | 0 * * * * | UTC | {\"provider\": \"gitlab\", \"sync_config_id\": \"CFG:gl overflow\"} | gl overflow | 1 | f | 0 | 0 | \u003cnull\u003e | \u003cnull\u003e | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00\nc1b69226-9d66-596b-978c-65ad29e45e64 | sync-config-CFG:jira batch | sync | jira | 0 * * * * | UTC | {\"provider\": \"jira\", \"sync_config_id\": \"CFG:jira batch\"} | jira batch | 1 | f | 0 | 0 | \u003cnull\u003e | \u003cnull\u003e | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00\nc1b69226-9d66-596b-978c-65ad29e45e64 | sync-config-CFG:linear batch | sync | linear | 0 * * * * | UTC | {\"provider\": \"linear\", \"sync_config_id\": \"CFG:linear batch\"} | linear batch | 1 | f | 0 | 0 | \u003cnull\u003e | \u003cnull\u003e | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00"
+    },
+    "rows:sync_configurations": {
+      "rows": "afc02ff0-46c8-56d0-9ba0-4ac786cc0cb5 | b at | github | [] | {\"owner\": \"acme\", \"fetch_comments\": true, \"fetch_milestones\": true, \"comments_limit\": 500} | t | t | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00 | \u003cnull\u003e | b at | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gh batch | GitHub | [\"git\", \"prs\", \"work-items\"] | {\"owner\": \"acme\", \"x\": 1, \"fetch_comments\": true, \"fetch_milestones\": true, \"comments_limit\": 500} | t | t | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00 | \u003cnull\u003e | gh batch | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gh cron | github | [\"git\"] | {\"owner\": \"acme\", \"schedule_cron\": \"0 */6 * * *\", \"timezone\": \"Europe/Paris\", \"initial_sync_depth\": 30, \"fetch_comments\": true, \"fetch_milestones\": true, \"comments_limit\": 500} | t | t | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00 | \u003cnull\u003e | gh cron | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gh depth whole | github | [] | {\"owner\": \"acme\", \"initial_sync_depth\": 30, \"fetch_comments\": true, \"fetch_milestones\": true, \"comments_limit\": 500} | t | t | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00 | \u003cnull\u003e | gh depth whole | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gh empty | github | [\"git\"] | {\"owner\": \"acme\", \"fetch_comments\": true, \"fetch_milestones\": true, \"comments_limit\": 500} | t | t | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00 | \u003cnull\u003e | gh empty | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gh group | github | [\"git\"] | {\"group\": \"grp\", \"fetch_comments\": true, \"fetch_milestones\": true, \"comments_limit\": 500} | t | t | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00 | \u003cnull\u003e | gh group | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gh no owner | github | [\"git\"] | {\"fetch_comments\": true, \"fetch_milestones\": true, \"comments_limit\": 500} | t | t | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00 | \u003cnull\u003e | gh no owner | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl batch | gitlab | [\"git\", \"prs\"] | {\"group\": \"gitlab-examples/maven\", \"gitlab_url\": \"http://127.0.0.1:\u003cport\u003e\"} | t | t | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00 | \u003cnull\u003e | gl batch | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl config url | gitlab | [\"git\", \"prs\"] | {\"owner\": \"gitlab-examples/maven\", \"gitlab_url\": \"http://127.0.0.1:\u003cport\u003e\"} | t | t | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00 | \u003cnull\u003e | gl config url | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl empty cred id | gitlab | [\"git\"] | {\"group\": \"gitlab-examples/maven\"} | t | t | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00 | \u003cnull\u003e | gl empty cred id | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl ids no listing | gitlab | [\"git\", \"prs\"] | {\"owner\": \"gitlab-examples/no-such-group-for-venue-test\", \"gitlab_url\": \"http://127.0.0.1:\u003cport\u003e\"} | t | t | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00 | \u003cnull\u003e | gl ids no listing | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl no cred ids | gitlab | [\"git\", \"prs\"] | {\"group\": \"gitlab-examples/maven\"} | t | t | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00 | \u003cnull\u003e | gl no cred ids | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl no group ids | gitlab | [\"git\", \"prs\"] | {\"gitlab_url\": \"http://127.0.0.1:\u003cport\u003e\"} | t | t | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00 | \u003cnull\u003e | gl no group ids | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl no token id | gitlab | [\"git\", \"prs\"] | {\"group\": \"gitlab-examples/maven\", \"gitlab_url\": \"http://127.0.0.1:\u003cport\u003e\"} | t | t | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00 | \u003cnull\u003e | gl no token id | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl none | gitlab | [\"git\", \"prs\"] | {\"group\": \"gitlab-examples/maven\"} | t | t | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00 | \u003cnull\u003e | gl none | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl option url | gitlab | [\"git\", \"prs\"] | {\"group\": \"acme\", \"gitlab_url\": \"https://gitlab.example.test\"} | t | t | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00 | \u003cnull\u003e | gl option url | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | gl overflow | gitlab | [\"git\", \"prs\"] | {\"group\": \"overflow\", \"gitlab_url\": \"http://127.0.0.1:\u003cport\u003e\"} | t | t | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00 | \u003cnull\u003e | gl overflow | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | jira batch | jira | [\"work-items\"] | {\"owner\": \"ENG\"} | t | t | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00 | \u003cnull\u003e | jira batch | \u003cnull\u003e\nc1b69226-9d66-596b-978c-65ad29e45e64 | linear batch | linear | [\"work-items\"] | {} | t | t | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e | \u003cnull\u003e | 2026-09-24 12:34:56.123456+00 | 2026-09-24 12:34:56.123456+00 | \u003cnull\u003e | linear batch | \u003cnull\u003e"
+    }
+  }
+}

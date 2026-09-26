@@ -36,7 +36,7 @@ func newBatchVenueIDs() batchVenueIDs {
 	var ids batchVenueIDs
 	for _, target := range []*uuid.UUID{&ids.orgA, &ids.orgB, &ids.adminA, &ids.memberA, &ids.ownerB,
 		&ids.credGL, &ids.credNoToken, &ids.credConfigURL, &ids.credBroken, &ids.credInvalid} {
-		*target = uuid.New()
+		*target = newID()
 	}
 	return ids
 }
@@ -49,6 +49,8 @@ func newBatchVenueIDs() batchVenueIDs {
 // integration_sources, integration_datasets and scheduled_jobs. Row ids
 // (uuid4 on each plane) are replaced by the names they point at.
 func TestSyncConfigBatchCreateVenueOracle(t *testing.T) {
+	resetIDs(t)
+	golden := venueoracle.OpenGolden(t, goldenSpec(t.Name()))
 	ctx := context.Background()
 	root := repoRoot(t)
 	const jwtKey = "venue-oracle-test-secret-key-for-sync-config-batch!"
@@ -58,7 +60,7 @@ func TestSyncConfigBatchCreateVenueOracle(t *testing.T) {
 	t.Setenv("no_proxy", "127.0.0.1,localhost")
 
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Root:   root,
+		Root:   golden.PythonRoot(t, root),
 		JWTKey: jwtKey,
 		PythonEnv: []string{
 			"SETTINGS_ENCRYPTION_KEY=" + batchVenueKey,
@@ -145,7 +147,7 @@ func TestSyncConfigBatchCreateVenueOracle(t *testing.T) {
 		post("gitlab url from credential config", gitlabBody("gl config url", configURL, `{"owner":"gitlab-examples/maven"}`, `["simple-maven-app","3467553"]`), a),
 		post("gitlab url from options", gitlabBody("gl option url", "", `{"group":"acme","gitlab_url":" https://gitlab.example.test "}`, `["8"]`), a),
 		post("gitlab credential not decryptable", gitlabBody("gl broken", broken, maven, `["simple-maven-dep"]`), a),
-		post("gitlab unknown credential", gitlabBody("gl unknown cred", uuid.NewString(), maven, `["simple-maven-dep"]`), a),
+		post("gitlab unknown credential", gitlabBody("gl unknown cred", newID().String(), maven, `["simple-maven-dep"]`), a),
 		post("gitlab no repos", gitlabBody("gl none", gl, maven, `[]`), a),
 		post("gitlab credential id not a uuid", gitlabBody("gl bad cred id", "nope", maven, `["simple-maven-dep"]`), a),
 		post("gitlab empty credential id, ids", `{"name":"gl empty cred id","provider":"gitlab","credential_id":"","sync_targets":["git"],"sync_options":{"group":"gitlab-examples/maven"},"repos":["9"]}`, a),
@@ -160,9 +162,11 @@ func TestSyncConfigBatchCreateVenueOracle(t *testing.T) {
 		post("past the limit after", `{"name":"b past","provider":"github","sync_options":{"owner":"acme"},"repos":["z"]}`, b),
 		{Name: "list after", Method: "GET", Path: "/api/v1/admin/sync-configs", Headers: a},
 	}
-	python := venue.ServePython(t, requests)
+	python := golden.Python(t, venue, requests)
 	receipt := venueoracle.Diff(t, base, requests, python, venueoracle.DiffOptions{
+		Golden: golden,
 		Normalize: func(request venueoracle.Request, body string) string {
+			body = fakeJiraAddress.ReplaceAllString(body, "127.0.0.1:<port>")
 			return uuidPattern.ReplaceAllString(body, `"id":"<uuid4>"`)
 		},
 	})
@@ -172,10 +176,10 @@ func TestSyncConfigBatchCreateVenueOracle(t *testing.T) {
 	queries := createVenueRowQueries(orgs, "true")
 	source, goDB := venue.AdminURI(t, venue.SourceDB), venue.AdminURI(t, venue.GoDB)
 	for _, table := range []string{"integrations", "sync_configurations", "integration_sources", "integration_datasets", "scheduled_jobs"} {
-		pythonRows, goRows := venueoracle.TableRows(t, ctx, source, queries[table]), venueoracle.TableRows(t, ctx, goDB, queries[table])
-		if pythonRows != goRows {
-			t.Errorf("%s rows differ:\n python %s\n go     %s", table, pythonRows, goRows)
-		}
+		goRows := fakeJiraAddress.ReplaceAllString(venueoracle.TableRows(t, ctx, goDB, queries[table]), "127.0.0.1:<port>")
+		golden.CompareRows(t, "rows:"+table, func() string {
+			return fakeJiraAddress.ReplaceAllString(venueoracle.TableRows(t, ctx, source, queries[table]), "127.0.0.1:<port>")
+		}, goRows)
 		t.Logf("%s: %d rows identical", table, strings.Count(goRows, "\n")+map[bool]int{true: 0, false: 1}[goRows == ""])
 	}
 	// The writes happened on the Go plane: GitLab sources resolved through
@@ -217,7 +221,8 @@ func TestSyncConfigBatchCreateVenueOracle(t *testing.T) {
 	for index, c := range divergent {
 		batchRequests[index] = post("divergent: "+c.name, c.body, c.headers)
 	}
-	pythonDivergent := venue.ServePython(t, batchRequests)
+	pythonDivergent := golden.Python(t, venue, batchRequests)
+	golden.Consumed(t, pythonDivergent...)
 	for index, c := range divergent {
 		if pythonDivergent[index].Status != c.pythonStatus {
 			t.Errorf("%s: python batch status %d, want %d (the divergence this pins)", c.name, pythonDivergent[index].Status, c.pythonStatus)
@@ -246,6 +251,7 @@ func TestSyncConfigBatchCreateVenueOracle(t *testing.T) {
 		}
 		t.Logf("divergent %s: python=%d go=%d (single create %d), go holds %d configs of that name", c.name, pythonDivergent[index].Status, batch.Status, single.Status, persisted)
 	}
+	golden.Finish(t)
 }
 
 func pgxQueryInt(ctx context.Context, uri, sql string, arg any, out *int) error {
@@ -281,10 +287,10 @@ func seedBatchVenue(t *testing.T, ctx context.Context, admin *pgxpool.Pool, venu
 		exec(`INSERT INTO users (id, email, is_active, is_verified, is_superuser, token_version, created_at, updated_at)
 VALUES ($1, $2, true, true, false, 0, $3, $3)`, user.id, user.email, at)
 		exec(`INSERT INTO memberships (id, user_id, org_id, role, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $5)`,
-			uuid.New(), user.id, user.org, user.role, at)
+			newID(), user.id, user.org, user.role, at)
 	}
 	exec(`INSERT INTO org_feature_overrides (id, org_id, feature_id, is_enabled, created_at, updated_at)
-SELECT $1, $2, id, false, $3, $3 FROM feature_flags WHERE key = 'canonical_incident_ingestion'`, uuid.New(), ids.orgA, at)
+SELECT $1, $2, id, false, $3, $3 FROM feature_flags WHERE key = 'canonical_incident_ingestion'`, newID(), ids.orgA, at)
 
 	var calls []venueoracle.PythonCall
 	for _, payload := range []map[string]any{

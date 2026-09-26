@@ -45,7 +45,7 @@ func newCreateVenueIDs() createVenueIDs {
 	var ids createVenueIDs
 	for _, target := range []*uuid.UUID{&ids.orgA, &ids.orgB, &ids.orgC, &ids.orgD, &ids.orgE, &ids.adminE, &ids.adminA, &ids.memberA, &ids.ownerB,
 		&ids.adminC, &ids.adminD, &ids.credJira, &ids.credJiraBad, &ids.credJiraInactive, &ids.credPD, &ids.credPDBad, &ids.intC} {
-		*target = uuid.New()
+		*target = newID()
 	}
 	return ids
 }
@@ -147,6 +147,8 @@ func basicToken(user, password string) string {
 // Go's credential resolver refuses an inactive credential. That config's
 // sources are left out of the source diff and asserted per plane.
 func TestSyncConfigCreateVenueOracle(t *testing.T) {
+	resetIDs(t)
+	golden := venueoracle.OpenGolden(t, goldenSpec(t.Name()))
 	ctx := context.Background()
 	root := repoRoot(t)
 	const jwtKey = "venue-oracle-test-secret-key-for-sync-config-create!"
@@ -156,7 +158,7 @@ func TestSyncConfigCreateVenueOracle(t *testing.T) {
 	t.Setenv("no_proxy", "127.0.0.1,localhost")
 
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Root:   root,
+		Root:   golden.PythonRoot(t, root),
 		JWTKey: jwtKey,
 		PythonEnv: []string{
 			"SETTINGS_ENCRYPTION_KEY=" + createVenueKey,
@@ -257,12 +259,14 @@ func TestSyncConfigCreateVenueOracle(t *testing.T) {
 		{Name: "list after", Method: "GET", Path: "/api/v1/admin/sync-configs", Headers: a},
 	}
 	statusOnly := map[string]bool{"cron refused by both": true, "cron not a string": true}
-	python := venue.ServePython(t, requests)
+	python := golden.Python(t, venue, requests)
 	receipt := venueoracle.Diff(t, base, requests, python, venueoracle.DiffOptions{
+		Golden: golden,
 		Normalize: func(request venueoracle.Request, body string) string {
 			if statusOnly[request.Name] {
 				return "<status only: named divergence>"
 			}
+			body = fakeJiraAddress.ReplaceAllString(body, "127.0.0.1:<port>")
 			if request.Method == "POST" || request.Name == "list after" {
 				return uuidPattern.ReplaceAllString(body, `"id":"<uuid4>"`)
 			}
@@ -283,7 +287,8 @@ func TestSyncConfigCreateVenueOracle(t *testing.T) {
 	}
 	want := [][2]int{{http.StatusCreated, http.StatusUnprocessableEntity}, {http.StatusCreated, http.StatusUnprocessableEntity},
 		{http.StatusInternalServerError, http.StatusConflict}}
-	pythonDivergent := venue.ServePython(t, divergent)
+	pythonDivergent := golden.Python(t, venue, divergent)
+	golden.Consumed(t, pythonDivergent...)
 	for index, request := range divergent {
 		goResponse := venueoracle.Do(t, base, request)
 		if pythonDivergent[index].Status != want[index][0] || goResponse.Status != want[index][1] {
@@ -299,14 +304,14 @@ func TestSyncConfigCreateVenueOracle(t *testing.T) {
 	queries := createVenueRowQueries(orgs, "i.name <> 'jira inactive cred'")
 	source, goDB := venue.AdminURI(t, venue.SourceDB), venue.AdminURI(t, venue.GoDB)
 	for _, table := range []string{"integrations", "sync_configurations", "integration_sources", "integration_datasets", "scheduled_jobs"} {
-		pythonRows, goRows := venueoracle.TableRows(t, ctx, source, queries[table]), venueoracle.TableRows(t, ctx, goDB, queries[table])
-		if pythonRows != goRows {
-			t.Errorf("%s rows differ:\n python %s\n go     %s", table, pythonRows, goRows)
-		}
+		goRows := fakeJiraAddress.ReplaceAllString(venueoracle.TableRows(t, ctx, goDB, queries[table]), "127.0.0.1:<port>")
+		golden.CompareRows(t, "rows:"+table, func() string {
+			return fakeJiraAddress.ReplaceAllString(venueoracle.TableRows(t, ctx, source, queries[table]), "127.0.0.1:<port>")
+		}, goRows)
 		t.Logf("%s: %d rows identical", table, strings.Count(goRows, "\n")+map[bool]int{true: 0, false: 1}[goRows == ""])
 	}
 	inactive := `SELECT count(*) FROM integration_sources s JOIN integrations i ON i.id = s.integration_id WHERE i.name = 'jira inactive cred'`
-	if pythonCount, goCount := venueoracle.TableRows(t, ctx, source, inactive), venueoracle.TableRows(t, ctx, goDB, inactive); pythonCount != "292" || goCount != "0" {
+	if pythonCount, goCount := golden.InspectRows(t, "inactive", func() string { return venueoracle.TableRows(t, ctx, source, inactive) }), venueoracle.TableRows(t, ctx, goDB, inactive); pythonCount != "292" || goCount != "0" {
 		t.Errorf("inactive credential discovery: python %s sources, go %s; want the documented 292 / 0", pythonCount, goCount)
 	}
 	// The writes happened on the Go plane: discovered Jira projects, the
@@ -320,6 +325,7 @@ func TestSyncConfigCreateVenueOracle(t *testing.T) {
 		t.Errorf("writes not observed (discovered jira sources, pagerduty account source, stamped pagerduty config, pinned configs) = %s", state)
 	}
 	t.Logf("write state: %s", state)
+	golden.Finish(t)
 }
 
 // seedCreateVenue writes the orgs (A enterprise with the canonical incident
@@ -352,10 +358,10 @@ func seedCreateVenue(t *testing.T, ctx context.Context, admin *pgxpool.Pool, ven
 		exec(`INSERT INTO users (id, email, is_active, is_verified, is_superuser, token_version, created_at, updated_at)
 VALUES ($1, $2, true, true, false, 0, $3, $3)`, user.id, user.email, at)
 		exec(`INSERT INTO memberships (id, user_id, org_id, role, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $5)`,
-			uuid.New(), user.id, user.org, user.role, at)
+			newID(), user.id, user.org, user.role, at)
 	}
 	exec(`INSERT INTO org_feature_overrides (id, org_id, feature_id, is_enabled, created_at, updated_at)
-SELECT $1, $2, id, false, $3, $3 FROM feature_flags WHERE key = 'canonical_incident_ingestion'`, uuid.New(), ids.orgA, at)
+SELECT $1, $2, id, false, $3, $3 FROM feature_flags WHERE key = 'canonical_incident_ingestion'`, newID(), ids.orgA, at)
 
 	calls := []venueoracle.PythonCall{}
 	for _, payload := range []map[string]any{
@@ -391,17 +397,20 @@ VALUES ($1, $2, $3, $4, $5, $6, $7::json, $8, $8)`, id, org.String(), provider, 
 	// enabled sources.
 	exec(`INSERT INTO integrations (id, org_id, provider, name, config, is_active, created_at, updated_at)
 VALUES ($1, $2, 'github', 'c existing', '{}', true, $3, $3)`, ids.intC, ids.orgC.String(), at)
-	configC := uuid.New()
+	configC := newID()
 	exec(`INSERT INTO sync_configurations (id, org_id, name, provider, sync_targets, sync_options, is_active, planner_managed,
 integration_id, created_at, updated_at) VALUES ($1, $2, 'c existing', 'github', '["git"]', '{"all_repos": true}', true, true, $3, $4, $4)`,
 		configC, ids.orgC.String(), ids.intC, at)
 	for n := 0; n < 10; n++ {
 		exec(`INSERT INTO integration_sources (id, org_id, integration_id, provider, source_type, external_id, name, full_name, metadata,
 is_enabled, discovered_at, last_seen_at) VALUES ($1, $2, $3, 'github', 'repo', $4, $4, $4, $5::json, true, $6, $6)`,
-			uuid.New(), ids.orgC.String(), ids.intC, fmt.Sprintf("acme/r%d", n),
+			newID(), ids.orgC.String(), ids.intC, fmt.Sprintf("acme/r%d", n),
 			fmt.Sprintf(`{"planner_managed_sync_config_id": "%s"}`, configC), at)
 	}
 }
+
+// fakeJiraAddress is the fake Jira's listener, a new port in every process.
+var fakeJiraAddress = regexp.MustCompile(`127\.0\.0\.1:[0-9]+`)
 
 // uuidPattern matches a response's "id" field (uuid4 on each plane).
 var uuidPattern = regexp.MustCompile(`"id":"[0-9a-f-]{36}"`)

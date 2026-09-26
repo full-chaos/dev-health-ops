@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -62,10 +63,13 @@ func newVenueIDs() venueIDs {
 		&ids.runRich, &ids.runBadUnit, &ids.srcNoFull, &ids.runBadFlags,
 		&ids.bfP1, &ids.bfNone, &ids.bfBad, &ids.bfB, &ids.bfEdge, &ids.bfOneDay, &ids.bfBackward,
 	} {
-		*target = uuid.New()
+		*target = newID()
 	}
 	return ids
 }
+
+// readsPinnedNow is the instant both planes' run units freshness read uses.
+const readsPinnedNow = "2026-09-24T12:34:56.123456+00:00"
 
 // TestSyncAdminReadsVenueOracle sends every sync admin read route the same
 // requests on the real Python api and the Go api, over two copies of one
@@ -75,6 +79,8 @@ func newVenueIDs() venueIDs {
 // selections, planner job runs with and without a linked sync run, backfill
 // jobs with every sync_run marker shape) and the auth and query domains.
 func TestSyncAdminReadsVenueOracle(t *testing.T) {
+	resetIDs(t)
+	golden := venueoracle.OpenGolden(t, goldenSpec(t.Name()))
 	ctx := context.Background()
 	root := repoRoot(t)
 	const jwtKey = "venue-oracle-test-secret-key-for-sync-admin-reads-32b!"
@@ -88,9 +94,13 @@ func TestSyncAdminReadsVenueOracle(t *testing.T) {
 	t.Setenv("SYNC_WATERMARK_OVERLAP", "3600")
 
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Root:      root,
-		JWTKey:    jwtKey,
-		PythonEnv: []string{"HIDE_MIGRATED_CHILD_CONFIGS= On ", "SYNC_INCREMENTAL_HEAVY_MAX_WINDOW_DAYS=5", "SYNC_WATERMARK_OVERLAP=3600"},
+		Root:   golden.PythonRoot(t, root),
+		JWTKey: jwtKey,
+		PythonEnv: []string{"HIDE_MIGRATED_CHILD_CONFIGS= On ", "SYNC_INCREMENTAL_HEAVY_MAX_WINDOW_DAYS=5", "SYNC_WATERMARK_OVERLAP=3600",
+			// Both planes read the same instant: the run units freshness judges
+			// every watermark against it, so a recording made on another day
+			// answers what a frozen run does.
+			"VENUE_PINNED_NOW=" + readsPinnedNow, "VENUE_PINNED_NOW_MODULES=dev_health_ops.api.services.integrations"},
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, venue *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
 			seedSyncAdmin(t, ctx, admin, ids)
@@ -105,12 +115,17 @@ func TestSyncAdminReadsVenueOracle(t *testing.T) {
 			}
 		},
 	})
-	base := startGoServer(t, ctx, venue, jwtKey)
+	pinned, err := time.Parse(time.RFC3339Nano, readsPinnedNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := startGoServerWith(t, ctx, venue, jwtKey, func(deps *apiservice.Deps) { deps.Now = func() time.Time { return pinned } })
 
 	requests := syncAdminRequests(venue, ids)
-	python := venue.ServePython(t, requests)
+	python := golden.Python(t, venue, requests)
 	inspectDiagnostics := inspectBackfillDiagnostics(t)
 	receipt := venueoracle.Diff(t, base, requests, python, venueoracle.DiffOptions{
+		Golden: golden,
 		// lag_seconds is now minus the watermark at request time, and the
 		// two planes answer minutes apart: the digits are blanked on both.
 		// catching_up and ticks_behind are compared (every seeded
@@ -143,6 +158,7 @@ func TestSyncAdminReadsVenueOracle(t *testing.T) {
 		},
 	})
 	t.Logf("receipt (%d requests):\n%s", len(requests), receipt)
+	golden.Finish(t)
 }
 
 func syncAdminRequests(venue *venueoracle.Venue, ids venueIDs) []venueoracle.Request {
@@ -235,11 +251,12 @@ func syncAdminRequests(venue *venueoracle.Venue, ids venueIDs) []venueoracle.Req
 	// unknown UUID, another org's config.
 	upper := strings.ToUpper(ids.cfgPlanner.String())
 	hex32 := strings.ReplaceAll(ids.cfgPlanner.String(), "-", "")
-	for name, raw := range map[string]string{
+	for _, entry := range inOrder(map[string]string{
 		"uppercase": upper, "braces": "{" + ids.cfgPlanner.String() + "}", "urn": "urn:uuid:" + ids.cfgPlanner.String(),
-		"hex32": hex32, "not a uuid": "nope", "unknown": uuid.NewString(), "other org": ids.cfgB.String(),
+		"hex32": hex32, "not a uuid": "nope", "unknown": newID().String(), "other org": ids.cfgB.String(),
 		"percent-encoded space": "%20" + ids.cfgPlanner.String(),
-	} {
+	}) {
+		name, raw := entry.Name, entry.Value
 		requests = append(requests,
 			get("get config id "+name, "/sync-configs/"+raw, a),
 			get("repositories id "+name, "/sync-configs/"+raw+"/repositories", a),
@@ -260,7 +277,7 @@ func syncAdminRequests(venue *venueoracle.Venue, ids venueIDs) []venueoracle.Req
 		get("jobs no scheduled job huge offset", "/sync-configs/"+ids.cfgSingleRepo.String()+"/jobs?offset=99999999999999999999", a),
 		get("jobs unrenderable list result", "/sync-configs/"+ids.cfgJobsBadList.String()+"/jobs", a),
 		get("jobs infinite items", "/sync-configs/"+ids.cfgJobsInf.String()+"/jobs", a),
-		get("jobs bad limit unknown config", "/sync-configs/"+uuid.NewString()+"/jobs?limit=0", a),
+		get("jobs bad limit unknown config", "/sync-configs/"+newID().String()+"/jobs?limit=0", a),
 	)
 
 	// list_backfill_jobs: the page domain and every sync_run marker shape.
@@ -276,10 +293,11 @@ func syncAdminRequests(venue *venueoracle.Venue, ids venueIDs) []venueoracle.Req
 	// over the seeded ClickHouse rows, another org's job, an unknown id,
 	// and id spellings uuid.UUID() reads or refuses (a refused one is the
 	// api's unhandled 500).
-	for name, id := range map[string]uuid.UUID{
+	for _, entry := range inOrder(map[string]uuid.UUID{
 		"linked run": ids.bfP1, "no run": ids.bfNone, "bad marker": ids.bfBad, "month edge": ids.bfEdge,
-		"one day": ids.bfOneDay, "backward window": ids.bfBackward, "other org": ids.bfB, "unknown": uuid.New(),
-	} {
+		"one day": ids.bfOneDay, "backward window": ids.bfBackward, "other org": ids.bfB, "unknown": newID(),
+	}) {
+		name, id := entry.Name, entry.Value
 		requests = append(requests, get("backfill job "+name, "/backfill-jobs/"+id.String(), a))
 	}
 	for _, spelling := range []string{
@@ -293,12 +311,13 @@ func syncAdminRequests(venue *venueoracle.Venue, ids venueIDs) []venueoracle.Req
 
 	// get_sync_run: found, another org's, unknown, spellings, a result the
 	// response model refuses, a null result.
-	for name, raw := range map[string]string{
+	for _, entry := range inOrder(map[string]string{
 		"planner run": ids.runP1.String(), "idle run": ids.runP2.String(), "other org": ids.runB.String(),
-		"unknown": uuid.NewString(), "not a uuid": "zzz", "braces": "{" + ids.runP1.String() + "}",
+		"unknown": newID().String(), "not a uuid": "zzz", "braces": "{" + ids.runP1.String() + "}",
 		"uppercase": strings.ToUpper(ids.runP1.String()), "unrenderable result": ids.runBadResult.String(),
 		"null result": ids.runNullResult.String(),
-	} {
+	}) {
+		name, raw := entry.Name, entry.Value
 		requests = append(requests, get("sync run "+name, "/sync-runs/"+raw, a))
 	}
 	requests = append(requests, get("sync run trailing slash", "/sync-runs/"+ids.runP1.String()+"/", a))
@@ -311,16 +330,17 @@ func syncAdminRequests(venue *venueoracle.Venue, ids venueIDs) []venueoracle.Req
 		"?limit=x", "?limit=", "?limit=1.0", "?limit=2&limit=3", "?limit=%201%20"} {
 		requests = append(requests, get("run units rich "+query, "/sync-runs/"+ids.runRich.String()+"/units"+query, a))
 	}
-	for name, raw := range map[string]string{
+	for _, entry := range inOrder(map[string]string{
 		"planner run": ids.runP1.String(), "idle run": ids.runP2.String(), "other org": ids.runB.String(),
-		"unknown": uuid.NewString(), "not a uuid": "zzz", "uppercase": strings.ToUpper(ids.runRich.String()),
+		"unknown": newID().String(), "not a uuid": "zzz", "uppercase": strings.ToUpper(ids.runRich.String()),
 		"refused unit":             ids.runBadUnit.String(),
 		"list-shaped family flags": ids.runBadFlags.String(),
-	} {
+	}) {
+		name, raw := entry.Name, entry.Value
 		requests = append(requests, get("run units "+name, "/sync-runs/"+raw+"/units", a))
 	}
 	requests = append(requests,
-		get("run units bad limit unknown run", "/sync-runs/"+uuid.NewString()+"/units?limit=x", a),
+		get("run units bad limit unknown run", "/sync-runs/"+newID().String()+"/units?limit=x", a),
 		get("run units other org caller", "/sync-runs/"+ids.runB.String()+"/units", b),
 	)
 
@@ -328,15 +348,16 @@ func syncAdminRequests(venue *venueoracle.Venue, ids venueIDs) []venueoracle.Req
 	// payload stored as pairs, rows at another version, lookback or org
 	// (pending), payloads the response model refuses, another org's config,
 	// an unknown config and a path that is not a uuid.
-	for name, raw := range map[string]string{
+	for _, entry := range inOrder(map[string]string{
 		"fresh": ids.cfgPlanner.String(), "refreshing": ids.cfgLegacyParent.String(), "pairs": ids.cfgWeird.String(),
 		"offsets": ids.cfgJobsInf.String(), "old version": ids.cfgSingleRepo.String(),
 		"other lookback": ids.cfgNoSources.String(), "row in other org": ids.cfgCrossOrg.String(),
 		"refused status": ids.cfgInactive.String(), "null payload": ids.cfgDictTargets.String(),
 		"no overall": ids.cfgJobsBadList.String(), "other org config": ids.cfgB.String(),
-		"unknown": uuid.NewString(), "not a uuid": "zzz", "uppercase": strings.ToUpper(ids.cfgPlanner.String()),
+		"unknown": newID().String(), "not a uuid": "zzz", "uppercase": strings.ToUpper(ids.cfgPlanner.String()),
 		"basic and week boundaries": ids.child1.String(),
-	} {
+	}) {
+		name, raw := entry.Name, entry.Value
 		requests = append(requests, get("coverage "+name, "/sync-configs/"+raw+"/coverage", a))
 	}
 	requests = append(requests, get("coverage other org caller", "/sync-configs/"+ids.cfgB.String()+"/coverage", b))
@@ -373,7 +394,7 @@ func seedSyncAdmin(t *testing.T, ctx context.Context, admin *pgxpool.Pool, ids v
 		slug string
 	}{{ids.orgA, "sync-a"}, {ids.orgB, "sync-b"}, {ids.orgC, "sync-c"}} {
 		exec(`INSERT INTO organizations (id, slug, name, settings, tier, is_active, created_at, updated_at)
-VALUES ($1, $2, $2, '{}', 'community', true, now(), now())`, org.id, org.slug)
+VALUES ($1, $2, $2, '{}', 'community', true, '2026-07-01 00:00:00+00'::timestamptz, '2026-07-01 00:00:00+00'::timestamptz)`, org.id, org.slug)
 	}
 	for _, user := range []struct {
 		id    uuid.UUID
@@ -385,28 +406,28 @@ VALUES ($1, $2, $2, '{}', 'community', true, now(), now())`, org.id, org.slug)
 		{ids.adminNoOrg, "admin-noorg@example.com", false}, {ids.superNoOrg, "super-noorg@example.com", true},
 	} {
 		exec(`INSERT INTO users (id, email, is_active, is_verified, is_superuser, token_version, created_at, updated_at)
-VALUES ($1, $2, true, true, $3, 0, now(), now())`, user.id, user.email, user.super)
+VALUES ($1, $2, true, true, $3, 0, '2026-07-01 00:00:00+00'::timestamptz, '2026-07-01 00:00:00+00'::timestamptz)`, user.id, user.email, user.super)
 	}
 	for _, member := range []struct {
 		org, user uuid.UUID
 		role      string
 	}{{ids.orgA, ids.adminA, "admin"}, {ids.orgA, ids.memberA, "member"}, {ids.orgB, ids.ownerB, "owner"}, {ids.orgC, ids.adminC, "admin"}} {
-		exec(`INSERT INTO memberships (id, user_id, org_id, role, created_at, updated_at) VALUES ($1, $2, $3, $4, now(), now())`,
-			uuid.New(), member.user, member.org, member.role)
+		exec(`INSERT INTO memberships (id, user_id, org_id, role, created_at, updated_at) VALUES ($1, $2, $3, $4, '2026-07-01 00:00:00+00'::timestamptz, '2026-07-01 00:00:00+00'::timestamptz)`,
+			newID(), member.user, member.org, member.role)
 	}
 	// canonical_incident_ingestion is registered and enabled by the
 	// migrations; an org override decides each org: A closed, B open, C
 	// neither (the tier decides).
 	exec(`INSERT INTO org_feature_overrides (id, org_id, feature_id, is_enabled, created_at, updated_at)
-SELECT $1, $2, id, false, now(), now() FROM feature_flags WHERE key = 'canonical_incident_ingestion'`, uuid.New(), ids.orgA)
+SELECT $1, $2, id, false, '2026-07-01 00:00:00+00'::timestamptz, '2026-07-01 00:00:00+00'::timestamptz FROM feature_flags WHERE key = 'canonical_incident_ingestion'`, newID(), ids.orgA)
 	exec(`INSERT INTO org_feature_overrides (id, org_id, feature_id, is_enabled, created_at, updated_at)
-SELECT $1, $2, id, true, now(), now() FROM feature_flags WHERE key = 'canonical_incident_ingestion'`, uuid.New(), ids.orgB)
+SELECT $1, $2, id, true, '2026-07-01 00:00:00+00'::timestamptz, '2026-07-01 00:00:00+00'::timestamptz FROM feature_flags WHERE key = 'canonical_incident_ingestion'`, newID(), ids.orgB)
 
 	exec(`INSERT INTO integration_credentials (id, org_id, provider, name, is_active, created_at, updated_at)
-VALUES ($1, $2, 'github', 'cred-a', true, now(), now())`, ids.credA, ids.orgA.String())
+VALUES ($1, $2, 'github', 'cred-a', true, '2026-07-01 00:00:00+00'::timestamptz, '2026-07-01 00:00:00+00'::timestamptz)`, ids.credA, ids.orgA.String())
 	integration := func(id uuid.UUID, org uuid.UUID, provider string, credential any) {
 		exec(`INSERT INTO integrations (id, org_id, provider, credential_id, name, config, is_active, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $5, '{}', true, now(), now())`, id, org.String(), provider, credential, "int-"+id.String()[:8])
+VALUES ($1, $2, $3, $4, $5, '{}', true, '2026-07-01 00:00:00+00'::timestamptz, '2026-07-01 00:00:00+00'::timestamptz)`, id, org.String(), provider, credential, "int-"+id.String()[:8])
 	}
 	integration(ids.intA, ids.orgA, "github", ids.credA)
 	integration(ids.intEmpty, ids.orgA, "github", nil)
@@ -414,13 +435,13 @@ VALUES ($1, $2, $3, $4, $5, '{}', true, now(), now())`, id, org.String(), provid
 
 	source := func(id uuid.UUID, org uuid.UUID, integrationID uuid.UUID, provider, externalID, fullName string, enabled bool, metadata string) {
 		exec(`INSERT INTO integration_sources (id, org_id, integration_id, provider, source_type, external_id, name, full_name,
-metadata, is_enabled, discovered_at, last_seen_at) VALUES ($1, $2, $3, $4, 'repository', $5, $5, $6, $7::json, $8, now(), now())`,
+metadata, is_enabled, discovered_at, last_seen_at) VALUES ($1, $2, $3, $4, 'repository', $5, $5, $6, $7::json, $8, '2026-07-01 00:00:00+00'::timestamptz, '2026-07-01 00:00:00+00'::timestamptz)`,
 			id, org.String(), integrationID, provider, externalID, fullName, metadata, enabled)
 	}
 	planner := `{"planner_managed_sync_config_id": "` + ids.cfgPlanner.String() + `"}`
 	source(ids.src1, ids.orgA, ids.intA, "github", "acme/one", "acme/one", true, planner)
 	source(ids.src2, ids.orgA, ids.intA, "github", "acme/two", "acme/two", false, planner)
-	source(ids.src3, ids.orgA, ids.intA, "github", "acme/three", "acme/three", true, `{"planner_managed_sync_config_id": "`+uuid.NewString()+`"}`)
+	source(ids.src3, ids.orgA, ids.intA, "github", "acme/three", "acme/three", true, `{"planner_managed_sync_config_id": "`+newID().String()+`"}`)
 	source(ids.src4, ids.orgA, ids.intA, "GitHub", "acme/four", "acme/four", true, planner)
 	source(ids.src5, ids.orgA, ids.intA, "github", "acme/five", "acme/five", true, `[["planner_managed_sync_config_id", "`+ids.cfgPlanner.String()+`"]]`)
 	source(ids.src6, ids.orgA, ids.intA, "github", "acme/six", "acme/six", true, `[[1, 2], "ab"]`)
@@ -454,7 +475,7 @@ VALUES ($1, $2, $3, $4, $5::json, $6::json, $7, $8, $9, $10, $11, NULLIF($12, ''
 	config(ids.cfgB, ids.orgB, "planner", "github", `["git"]`, `{}`, true, nil, nil, nil, "", nil, nil, "2026-01-01 00:00:16+00")
 	// A child in another org whose parent is org A's legacy parent: the
 	// children count is keyed by parent id only.
-	config(uuid.New(), ids.orgB, "foreign-child", "gitlab", `["git"]`, `{}`, true, ids.cfgLegacyParent, nil, nil, "", nil, nil, "2026-01-01 00:00:17+00")
+	config(newID(), ids.orgB, "foreign-child", "gitlab", `["git"]`, `{}`, true, ids.cfgLegacyParent, nil, nil, "", nil, nil, "2026-01-01 00:00:17+00")
 	config(ids.cfgBadTargetsInt, ids.orgC, "bad-targets-int", "github", `["git", 1]`, `{}`, true, nil, nil, nil, "", nil, nil, "2026-01-01 00:00:18+00")
 	config(ids.cfgBadTargetsNumber, ids.orgC, "bad-targets-number", "github", `5`, `{}`, true, nil, nil, nil, "", nil, nil, "2026-01-01 00:00:19+00")
 	config(ids.cfgBadTargetsTrue, ids.orgC, "bad-targets-true", "github", `true`, `{}`, true, nil, nil, nil, "", nil, nil, "2026-01-01 00:00:20+00")
@@ -466,7 +487,7 @@ VALUES ($1, $2, $3, $4, $5::json, $6::json, $7, $8, $9, $10, $11, NULLIF($12, ''
 	scheduled := func(id, org, configID uuid.UUID, jobType string) {
 		exec(`INSERT INTO scheduled_jobs (id, org_id, name, job_type, provider, schedule_cron, timezone, job_config, sync_config_id,
 status, is_running, run_count, failure_count, created_at, updated_at)
-VALUES ($1, $2, $3, $4, 'github', '0 * * * *', 'UTC', '{}', $5, 1, false, 0, 0, now(), now())`,
+VALUES ($1, $2, $3, $4, 'github', '0 * * * *', 'UTC', '{}', $5, 1, false, 0, 0, '2026-07-01 00:00:00+00'::timestamptz, '2026-07-01 00:00:00+00'::timestamptz)`,
 			id, org.String(), jobType+"-"+id.String()[:8], jobType, configID)
 	}
 	scheduled(ids.jobSync, ids.orgA, ids.cfgPlanner, "sync")
@@ -490,8 +511,8 @@ VALUES ($1, $2, $3, 'manual', 'incremental', $4, $5, 1, 2, $6::timestamptz, $7::
 	unit := func(runID, sourceID uuid.UUID, status string, since, before any, updated string, heartbeat any) {
 		exec(`INSERT INTO sync_run_units (id, org_id, sync_run_id, integration_id, source_id, provider, dataset_key, cost_class, mode,
 since_at, before_at, status, attempts, last_heartbeat_at, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $5, 'github', 'commits', 'medium', 'incremental', $6::timestamptz, $7::timestamptz, $8, 0, $9::timestamptz, now(), $10::timestamptz)`,
-			uuid.New(), ids.orgA.String(), runID, ids.intA, sourceID, since, before, status, heartbeat, updated)
+VALUES ($1, $2, $3, $4, $5, 'github', 'commits', 'medium', 'incremental', $6::timestamptz, $7::timestamptz, $8, 0, $9::timestamptz, '2026-07-01 00:00:00+00'::timestamptz, $10::timestamptz)`,
+			newID(), ids.orgA.String(), runID, ids.intA, sourceID, since, before, status, heartbeat, updated)
 	}
 	unit(ids.runP1, ids.src1, "success", "2026-04-01 00:00:00+00", "2026-04-02 00:00:00+00", "2026-05-01 10:00:01+00", nil)
 	unit(ids.runP1, ids.src3, "success", "2026-03-30 00:00:00.5+00", "2026-04-01 00:00:00+00", "2026-05-01 10:00:02+00", "2026-05-01 11:00:00+00")
@@ -507,7 +528,7 @@ since_at, before_at, status, attempts, available_at, duration_seconds, result, p
 budget_deferrals, error, created_at, updated_at)
 VALUES ($1, $2, $3, $4, $5, 'github', $6, $7, 'incremental', '2026-04-01 00:00:00+00', '2026-04-02 00:00:00.25+00', $8, 2,
 $9::timestamptz, $10, $11::json, $12::json, 1, 3, 'e', '2026-05-01 10:00:00+00', '2026-05-01 10:30:00+00')`,
-			uuid.New(), ids.orgA.String(), runID, ids.intA, sourceID, dataset, cost, status, available, duration, result, flags)
+			newID(), ids.orgA.String(), runID, ids.intA, sourceID, dataset, cost, status, available, duration, result, flags)
 	}
 	richUnit(ids.runRich, ids.src1, "commits", "medium", "success", nil, 30, `{"items": 1.5, "nested": {"b": [1e-7, null]}}`, nil)
 	richUnit(ids.runRich, ids.src1, "files", "heavy", "failed", nil, 90, `{"error_category": "timeout", "retry_count": "2", "retry_surfaces": ["a"]}`, nil)
@@ -533,22 +554,22 @@ $9::timestamptz, $10, $11::json, $12::json, 1, 3, 'e', '2026-05-01 10:00:00+00',
 	// ticks behind, stable for 59 hours either way.
 	watermark := func(org uuid.UUID, repoID, sourceID, target, dataset, at string) {
 		exec(`INSERT INTO sync_watermarks (id, org_id, repo_id, source_id, target, dataset_key, last_synced_at, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, `+at+`, now())`, uuid.New(), org.String(), repoID, sourceID, target, dataset)
+VALUES ($1, $2, $3, $4, $5, $6, `+at+`, '2026-07-01 00:00:00+00'::timestamptz)`, newID(), org.String(), repoID, sourceID, target, dataset)
 	}
-	watermark(ids.orgA, "r-commits", "acme/one", "t-commits", "commits", "now() - interval '30 days'")
+	watermark(ids.orgA, "r-commits", "acme/one", "t-commits", "commits", "'"+readsPinnedNow+"'::timestamptz - interval '30 days'")
 	watermark(ids.orgA, "r-files-null", "acme/one", "t-files-null", "files", "NULL")
-	watermark(ids.orgA, "acme/one", "x-files", "files", "x-files", "now() - interval '1 day'")
-	watermark(ids.orgA, "acme/two", "x-wi", "work-items", "work-items", "now() - interval '3 days'")
-	watermark(ids.orgA, "acme/two", "x-wih", "work-item-history", "x-wih", "now() + interval '10 days'")
-	watermark(ids.orgA, "r-cs", "acme/three", "t-cs", "commit-stats", "now() - 10.5 * interval '428400 seconds'")
-	watermark(ids.orgA, "r-blame", "acme/four", "t-blame", "blame", "now() - interval '2 days'")
-	watermark(ids.orgA, "r-files5", "acme/five", "t-files5", "files", "now() - interval '400 days'")
-	watermark(ids.orgB, "r-other", "acme/one", "t-other", "commits", "now() - interval '1 day'")
+	watermark(ids.orgA, "acme/one", "x-files", "files", "x-files", "'"+readsPinnedNow+"'::timestamptz - interval '1 day'")
+	watermark(ids.orgA, "acme/two", "x-wi", "work-items", "work-items", "'"+readsPinnedNow+"'::timestamptz - interval '3 days'")
+	watermark(ids.orgA, "acme/two", "x-wih", "work-item-history", "x-wih", "'"+readsPinnedNow+"'::timestamptz + interval '10 days'")
+	watermark(ids.orgA, "r-cs", "acme/three", "t-cs", "commit-stats", "'"+readsPinnedNow+"'::timestamptz - 10.5 * interval '428400 seconds'")
+	watermark(ids.orgA, "r-blame", "acme/four", "t-blame", "blame", "'"+readsPinnedNow+"'::timestamptz - interval '2 days'")
+	watermark(ids.orgA, "r-files5", "acme/five", "t-files5", "files", "'"+readsPinnedNow+"'::timestamptz - interval '400 days'")
+	watermark(ids.orgB, "r-other", "acme/one", "t-other", "commits", "'"+readsPinnedNow+"'::timestamptz - interval '1 day'")
 
 	jobRun := func(jobID uuid.UUID, status int, started, completed any, duration any, result any, runError any, created string) {
 		exec(`INSERT INTO job_runs (id, job_id, status, started_at, completed_at, duration_seconds, result, error, triggered_by, created_at)
 VALUES ($1, $2, $3, $4::timestamptz, $5::timestamptz, $6, $7::json, $8, 'manual', $9::timestamptz)`,
-			uuid.New(), jobID, status, started, completed, duration, result, runError, created)
+			newID(), jobID, status, started, completed, duration, result, runError, created)
 	}
 	jobRun(ids.jobSync, 2, "2026-06-01 00:00:00+00", "2026-06-01 00:00:05+00", 5, `{"items_synced": "12", "rows": 99}`, nil, "2026-06-01 00:00:01+00")
 	jobRun(ids.jobSync, 7, nil, nil, nil, `{"rows": 3.9}`, "e2", "2026-06-01 00:00:02+00")
@@ -577,14 +598,14 @@ VALUES ($1, $2, $3, $4, $5, $11::date, $12::date, $6, $7, $8, $9, '2026-02-01 00
 	backfill(ids.bfP1, ids.orgA, "sync_run:"+ids.runP1.String(), "pending", 0, 0, 0, nil, "2026-07-01 00:00:01+00")
 	backfill(ids.bfNone, ids.orgA, nil, "running", 3, 1, 0, nil, "2026-07-01 00:00:02+00")
 	backfill(ids.bfBad, ids.orgA, "x sync_run:not-a-uuid", "failed", 2, 0, 2, "bad", "2026-07-01 00:00:03+00")
-	backfill(uuid.New(), ids.orgA, "sync_run:", "pending", 0, 0, 0, nil, "2026-07-01 00:00:04+00")
-	backfill(uuid.New(), ids.orgA, "a:sync_run:"+ids.runB.String(), "pending", 1, 1, 0, nil, "2026-07-01 00:00:05+00")
-	backfill(uuid.New(), ids.orgA, "sync_run:{"+ids.runP2.String()+"}", "pending", 4, 0, 0, "old", "2026-07-01 00:00:06+00")
-	backfill(uuid.New(), ids.orgA, "sync_run:"+uuid.NewString()+"sync_run:"+ids.runP1.String(), "done", 7, 7, 0, nil, "2026-07-01 00:00:07.123456+00")
+	backfill(newID(), ids.orgA, "sync_run:", "pending", 0, 0, 0, nil, "2026-07-01 00:00:04+00")
+	backfill(newID(), ids.orgA, "a:sync_run:"+ids.runB.String(), "pending", 1, 1, 0, nil, "2026-07-01 00:00:05+00")
+	backfill(newID(), ids.orgA, "sync_run:{"+ids.runP2.String()+"}", "pending", 4, 0, 0, "old", "2026-07-01 00:00:06+00")
+	backfill(newID(), ids.orgA, "sync_run:"+newID().String()+"sync_run:"+ids.runP1.String(), "done", 7, 7, 0, nil, "2026-07-01 00:00:07.123456+00")
 	// progress_pct in the ranges where json.dumps and pydantic-core write
 	// a float differently (this route has no response model: json.dumps).
-	backfill(uuid.New(), ids.orgA, nil, "running", 2000000000, 1, 0, nil, "2026-07-01 00:00:08+00")
-	backfill(uuid.New(), ids.orgA, nil, "running", 9000000, 1, 0, nil, "2026-07-01 00:00:09+00")
+	backfill(newID(), ids.orgA, nil, "running", 2000000000, 1, 0, nil, "2026-07-01 00:00:08+00")
+	backfill(newID(), ids.orgA, nil, "running", 9000000, 1, 0, nil, "2026-07-01 00:00:09+00")
 	backfill(ids.bfB, ids.orgB, nil, "pending", 0, 0, 0, nil, "2026-07-01 00:00:10+00")
 	// The detail route's diagnostics windows: across a month end, one day,
 	// and an end before the start (no days).
@@ -598,8 +619,8 @@ VALUES ($1, $2, $3, $4, $5, $11::date, $12::date, $6, $7, $8, $9, '2026-02-01 00
 	projection := func(org uuid.UUID, configID uuid.UUID, lookback, version int, invalidated bool, payload string) {
 		exec(`INSERT INTO sync_coverage_projections (id, org_id, sync_config_id, history_lookback_days, projection_version,
 generated_at, source_updated_at, backfill_updated_at, invalidated_at, payload, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $5, '2026-09-01 10:00:00+00', NULL, NULL, CASE WHEN $6 THEN now() END, $7::json, now(), now())`,
-			uuid.New(), org.String(), configID, lookback, version, invalidated, payload)
+VALUES ($1, $2, $3, $4, $5, '2026-09-01 10:00:00+00', NULL, NULL, CASE WHEN $6 THEN '2026-07-01 00:00:00+00'::timestamptz END, $7::json, '2026-07-01 00:00:00+00'::timestamptz, '2026-07-01 00:00:00+00'::timestamptz)`,
+			newID(), org.String(), configID, lookback, version, invalidated, payload)
 	}
 	projection(ids.orgA, ids.cfgPlanner, 3650, 2, false, coveragePayload(ids.cfgPlanner.String(), "planner", ""))
 	projection(ids.orgA, ids.cfgLegacyParent, 3650, 2, true, coveragePayload(ids.cfgLegacyParent.String(), "legacy", `, "projection_refreshing": false`))
@@ -745,7 +766,7 @@ func repoRoot(t *testing.T) string {
 func seedBackfillDiagnostics(t *testing.T, ctx context.Context, venue *venueoracle.Venue, ids venueIDs) {
 	t.Helper()
 	orgA, orgB := ids.orgA.String(), ids.orgB.String()
-	repo1, repo2 := uuid.NewString(), uuid.NewString()
+	repo1, repo2 := newID().String(), newID().String()
 	// The tables are ReplacingMergeTree: a recomputed row inserted in the
 	// same block as its first version collapses at insert time, and a merge
 	// collapses it later. Merges are stopped and each recomputed row is its
@@ -840,4 +861,28 @@ func inspectBackfillDiagnostics(t *testing.T) func(venueoracle.Request, venueora
 			t.Errorf("%s: diagnostics\n got  %s\n want %s", request.Name, got, expected)
 		}
 	}
+}
+
+// inOrder is the entries of m in name order: a request list built from a map
+// must be the same list in every process (a golden pins request order).
+func inOrder[V any](m map[string]V) []struct {
+	Name  string
+	Value V
+} {
+	names := make([]string, 0, len(m))
+	for name := range m {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	entries := make([]struct {
+		Name  string
+		Value V
+	}, 0, len(names))
+	for _, name := range names {
+		entries = append(entries, struct {
+			Name  string
+			Value V
+		}{name, m[name]})
+	}
+	return entries
 }

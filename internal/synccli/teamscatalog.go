@@ -119,15 +119,24 @@ func runCatalogTeams(ctx context.Context, env cli.Env, d deps, request catalogRe
 	if err != nil {
 		return writeError(env.Stderr, cli.ExitFailure, "sync_failed", redact(err))
 	}
-	if result.TeamsWritten == 0 && !request.allowEmpty {
+	// An empty catalog is a provider that returned no teams. A team the catalog found but did not
+	// write (its sync policy leaves it untouched, or its changes were staged for review) is not
+	// empty; teams the catalog could not confirm the rosters of are a failure, not an empty answer.
+	found := result.TeamsWritten + result.TeamsSkippedPolicy + result.TeamsStagedForReview
+	if result.RosterPreservationFailed && result.TeamsWritten == 0 {
+		return writeError(env.Stderr, cli.ExitFailure, "roster_unconfirmed",
+			"the current team rosters could not be confirmed, so no team row was written this run")
+	}
+	if found == 0 && !request.allowEmpty {
 		return writeError(env.Stderr, cli.ExitFailure, "empty_result",
 			"No teams found/generated. Pass --allow-empty to exit successfully on an empty sync.")
 	}
 	logger.Info("github team catalog synced", "org_id", request.orgID, "teams", result.TeamsWritten,
+		"teams_skipped_policy", result.TeamsSkippedPolicy, "teams_staged_for_review", result.TeamsStagedForReview,
 		"memberships", result.MembershipsWritten, "repo_ownership", result.RepoOwnershipWritten,
 		"roster_preservation_failed", result.RosterPreservationFailed, "duration_ms", time.Since(started).Milliseconds())
-	if _, err := fmt.Fprintf(env.Stdout, "provider=github teams=%d memberships=%d repo_ownership=%d\n",
-		result.TeamsWritten, result.MembershipsWritten, result.RepoOwnershipWritten); err != nil {
+	if _, err := fmt.Fprintf(env.Stdout, "provider=github teams=%d teams_skipped_policy=%d teams_staged_for_review=%d memberships=%d repo_ownership=%d\n",
+		result.TeamsWritten, result.TeamsSkippedPolicy, result.TeamsStagedForReview, result.MembershipsWritten, result.RepoOwnershipWritten); err != nil {
 		return cli.ExitFailure
 	}
 	return cli.ExitOK

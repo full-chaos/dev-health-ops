@@ -317,7 +317,7 @@ func newTeamsOracle(t *testing.T) *teamsOracle {
 func (o *teamsOracle) truncateAll() {
 	o.t.Helper()
 	for _, database := range []string{o.pythonDatabase, o.goDatabase} {
-		for _, table := range []string{"teams", "team_memberships", "team_repo_ownership", "team_project_ownership", "team_drift_changes", "jira_project_ops_team_links", "projects", "identities"} {
+		for _, table := range []string{"teams", "team_memberships", "team_repo_ownership", "team_project_ownership", "team_drift_changes", "jira_project_ops_team_links", "projects", "identities", "team_sync_policies"} {
 			if err := o.admin.Exec(o.ctx, fmt.Sprintf("TRUNCATE TABLE IF EXISTS %s.%s", database, table)); err != nil {
 				o.t.Fatal(err)
 			}
@@ -408,6 +408,15 @@ func (o *teamsOracle) runGitHub(fake *fakeGitHub, orgID, owner, token string, pr
 	}
 	run := githubRun{pythonStage: value("stage"), pythonCode: value("code")}
 
+	run.goCode, run.goStdout, run.goStderr = o.runGo(fake, orgID, owner, token, sc, extra...)
+	return run
+}
+
+// runGo runs only the Go verb (the same arguments and environment as runGitHub gives it).
+func (o *teamsOracle) runGo(fake *fakeGitHub, orgID, owner, token string, sc *teamsScenario, extra ...string) (int, string, string) {
+	o.t.Helper()
+	viaEnv := strings.HasPrefix(token, "env:")
+	token = strings.TrimPrefix(token, "env:")
 	baseKey := "GITHUB_BASE_URL"
 	if sc != nil && sc.baseEnv != "" {
 		baseKey = sc.baseEnv
@@ -429,9 +438,8 @@ func (o *teamsOracle) runGitHub(fake *fakeGitHub, orgID, owner, token string, pr
 	d.now = func() time.Time { return time.Date(2026, 9, 26, 12, 0, 0, 0, time.UTC) }
 	d.doer = http.DefaultClient
 	d.openStore = func(context.Context, string) (driver.Conn, error) { return &keepOpen{o.goConn}, nil }
-	run.goCode = runTeams(o.ctx, cli.Env{Args: args, Lookup: lookup, Stdout: &stdout, Stderr: &stderr}, d)
-	run.goStdout, run.goStderr = stdout.String(), stderr.String()
-	return run
+	code := runTeams(o.ctx, cli.Env{Args: args, Lookup: lookup, Stdout: &stdout, Stderr: &stderr}, d)
+	return code, stdout.String(), stderr.String()
 }
 
 // keepOpen lets the verb close "its" connection without closing the test's.
@@ -440,6 +448,16 @@ type keepOpen struct{ driver.Conn }
 func (keepOpen) Close() error { return nil }
 
 func strPtr(s string) *string { return &s }
+
+// seedSyncPolicy marks a team as not auto-applied (sync_policy 2) in both databases; the legacy verb
+// never read the policy.
+func seedSyncPolicy(o *teamsOracle, teamID string) {
+	for _, database := range []string{o.pythonDatabase, o.goDatabase} {
+		if err := o.admin.Exec(o.ctx, fmt.Sprintf("INSERT INTO %s.team_sync_policies (org_id, team_id, sync_policy, managed_fields, updated_by, updated_at) VALUES ('org-1', '%s', 2, [], NULL, now64(6))", database, teamID)); err != nil {
+			o.t.Fatal(err)
+		}
+	}
+}
 
 // teamsRule says what the comparison requires of one column of `teams` (every column of the
 // table must have one: the set is read from the schema, so a column added later fails until it is
@@ -474,8 +492,14 @@ type teamsScenario struct {
 	wantExit int
 	// wantRows is how many teams both planes must have written.
 	wantRows int
-	// after asserts more about the rows both planes wrote.
-	after func(t *testing.T, python, goRows []map[string]string)
+	// goDiffers marks a scenario where the two planes end differently BY DESIGN (the catalog needs
+	// what the legacy verb never asked for, or leaves a team its policy protects): Go's exit code
+	// and team count are goExit and goRows, and the rows are not compared column by column.
+	goDiffers bool
+	goExit    int
+	goRows    int
+	// after asserts more about what the planes did.
+	after func(t *testing.T, o *teamsOracle, fake *fakeGitHub, sc *teamsScenario, run githubRun, python, goRows []map[string]string)
 }
 
 // wantToken is the token the fake demands: the scenario's, without the "env:" marker.
@@ -511,7 +535,13 @@ func parseList(text string) []string {
 func teamsRules() map[string]teamsRule {
 	same := teamsRule{same: true}
 	return map[string]teamsRule{
-		"id": same, "name": same, "is_active": same, "org_id": same,
+		"id": same, "is_active": same, "org_id": same,
+		"name": {check: func(sc *teamsScenario, team fakeTeam, py, gr map[string]string) string {
+			if py["name"] != team.Name || gr["name"] != strings.TrimSpace(team.Name) {
+				return fmt.Sprintf("name: python keeps the provider's %q, go keeps it trimmed: python %q go %q", team.Name, py["name"], gr["name"])
+			}
+			return ""
+		}, why: "legacy: the provider's name as is; catalog: trimmed of surrounding whitespace"},
 		"manual_members": {same: true, why: "both preserve an admin's override (CHAOS-4321)"},
 		"project_keys":   {same: true, why: "neither writes project keys for a GitHub team"},
 		"parent_team_id": same, "source_id": same,
@@ -616,14 +646,18 @@ func (o *teamsOracle) compareGitHub(sc *teamsScenario, fake *fakeGitHub) {
 	if run.pythonStage != "ok" && run.pythonStage != "exit" {
 		t.Fatalf("%s: python ended %s (%s)", sc.name, run.pythonStage, run.pythonCode)
 	}
+	wantGoExit, wantGoRows := sc.wantExit, sc.wantRows
+	if sc.goDiffers {
+		wantGoExit, wantGoRows = sc.goExit, sc.goRows
+	}
 	wantPython := strconv.Itoa(sc.wantExit)
-	if run.pythonCode != wantPython || run.goCode != sc.wantExit {
-		t.Fatalf("%s: exit codes: python %s (stage %s), go %d, want %d\ngo stderr: %s", sc.name, run.pythonCode, run.pythonStage, run.goCode, sc.wantExit, run.goStderr)
+	if run.pythonCode != wantPython || run.goCode != wantGoExit {
+		t.Fatalf("%s: exit codes: python %s (stage %s, want %d), go %d (want %d)\ngo stderr: %s", sc.name, run.pythonCode, run.pythonStage, sc.wantExit, run.goCode, wantGoExit, run.goStderr)
 	}
 	python := o.rows(o.pythonDatabase, "teams", "org-1")
 	goRows := o.rows(o.goDatabase, "teams", "org-1")
-	if len(python) != sc.wantRows || len(goRows) != sc.wantRows {
-		t.Fatalf("%s: teams written: python %d, go %d, want %d", sc.name, len(python), len(goRows), sc.wantRows)
+	if len(python) != sc.wantRows || len(goRows) != wantGoRows {
+		t.Fatalf("%s: teams written: python %d (want %d), go %d (want %d)", sc.name, len(python), sc.wantRows, len(goRows), wantGoRows)
 	}
 	// Every column of the real table has a rule.
 	rules := teamsRules()
@@ -650,6 +684,9 @@ func (o *teamsOracle) compareGitHub(sc *teamsScenario, fake *fakeGitHub) {
 		byID["gh:"+team.Slug] = team
 	}
 	for index := range python {
+		if sc.goDiffers {
+			break // the planes wrote different teams by design: `after` says what each must hold
+		}
 		py, gr := python[index], goRows[index]
 		team := byID[py["id"]]
 		for _, column := range columns {
@@ -667,7 +704,7 @@ func (o *teamsOracle) compareGitHub(sc *teamsScenario, fake *fakeGitHub) {
 		}
 	}
 	if sc.after != nil {
-		sc.after(t, python, goRows)
+		sc.after(t, o, fake, sc, run, python, goRows)
 	}
 	// Python wrote nothing but `teams`; the catalog also writes memberships and repository ownership.
 	for _, table := range []string{"team_memberships", "team_repo_ownership"} {
@@ -680,7 +717,7 @@ func (o *teamsOracle) compareGitHub(sc *teamsScenario, fake *fakeGitHub) {
 		wantMemberships += len(team.Members)
 		wantOwnership += len(team.Repos)
 	}
-	if sc.wantExit == 0 && sc.wantRows > 0 {
+	if sc.wantExit == 0 && sc.wantRows > 0 && !sc.goDiffers {
 		memberships := o.rows(o.goDatabase, "team_memberships", "org-1")
 		if len(memberships) != wantMemberships {
 			t.Errorf("%s: go wrote %d team_memberships rows, the fake has %d members", sc.name, len(memberships), wantMemberships)
@@ -694,6 +731,18 @@ func (o *teamsOracle) compareGitHub(sc *teamsScenario, fake *fakeGitHub) {
 			}
 			if row["raw_email"] != want {
 				t.Errorf("%s: membership of %s carries email %q, the fake's is %q", sc.name, login, row["raw_email"], want)
+			}
+			// The membership's own keys: the team, the member, its source and provider, and the identity
+			// facets it was built from ('github:<login>' and, when public, the email).
+			if row["member_id"] != "gh:"+login || row["source"] != "provider_access" || row["provider"] != "github" || row["is_primary"] != "0" {
+				t.Errorf("%s: membership of %s has member_id %q source %q provider %q is_primary %q", sc.name, login, row["member_id"], row["source"], row["provider"], row["is_primary"])
+			}
+			if !strings.HasPrefix(row["team_id"], "gh:") || !strings.Contains(row["identity_facets"], "'github:"+login+"'") {
+				t.Errorf("%s: membership of %s has team_id %q identity_facets %s", sc.name, login, row["team_id"], row["identity_facets"])
+			}
+			// The catalog lower-cases the email it keeps as an identity facet.
+			if want != "<NULL>" && !strings.Contains(row["identity_facets"], "'"+strings.ToLower(want)+"'") {
+				t.Errorf("%s: membership of %s lacks its email in identity_facets %s", sc.name, login, row["identity_facets"])
 			}
 		}
 		if got := len(o.rows(o.goDatabase, "team_repo_ownership", "org-1")); got != wantOwnership {
@@ -748,6 +797,71 @@ func githubScenarios() []*teamsScenario {
 		{name: "unknown organization", org: "acme", owner: "nope", token: "tok", teams: two, users: emails("alice", "bob", "carol"), wantExit: 1, wantRows: 0},
 		{name: "a member roster that cannot be read stops the run", org: "acme", owner: "acme", token: "tok", teams: two, users: emails("alice", "bob", "carol"),
 			failPath: map[string]int{"/orgs/acme/teams/platform/members": 500, "/organizations/1/team/11/members": 500}, wantExit: 1, wantRows: 0},
+		{name: "a padded team name and an upper-case member login", org: "acme", owner: "acme", token: "tok", wantRows: 1,
+			teams: []fakeTeam{{ID: 31, Slug: "review", Name: "  Review Team  ", Description: strPtr("d"), Members: []string{"Alice-Upper", "bob"}, Repos: []string{"Repo-One"}}},
+			users: emails("Alice-Upper", "bob")},
+		{name: "a sync policy leaves one team untouched", org: "acme", owner: "acme", token: "tok", teams: two, users: emails("alice", "bob", "carol"),
+			wantRows: 2, goDiffers: true, goExit: 0, goRows: 1,
+			prepare: func(o *teamsOracle, fake *fakeGitHub) { seedSyncPolicy(o, "gh:platform") },
+			after: func(t *testing.T, o *teamsOracle, fake *fakeGitHub, sc *teamsScenario, run githubRun, python, goRows []map[string]string) {
+				// The legacy verb overwrote both teams; the catalog leaves the team whose policy is not auto-apply
+				// alone (the contract) and says so.
+				if len(goRows) != 1 || goRows[0]["id"] != "gh:data" || !strings.Contains(run.goStdout, "teams=1 teams_skipped_policy=1") {
+					t.Errorf("go wrote %v, stdout %q: want only gh:data and one skipped team", goRows, run.goStdout)
+				}
+			}},
+		{name: "every team is protected by its sync policy", org: "acme", owner: "acme", token: "tok", wantRows: 1, goDiffers: true, goExit: 0, goRows: 0,
+			teams: two[:1], users: emails("alice", "bob"),
+			prepare: func(o *teamsOracle, fake *fakeGitHub) { seedSyncPolicy(o, "gh:platform") },
+			after: func(t *testing.T, o *teamsOracle, fake *fakeGitHub, sc *teamsScenario, run githubRun, python, goRows []map[string]string) {
+				// Teams found and left alone are not an empty catalog: no "No teams found" refusal.
+				if run.goCode != 0 || !strings.Contains(run.goStdout, "teams=0 teams_skipped_policy=1") {
+					t.Errorf("go exit %d stdout %q stderr %q: want a clean run that reports the skipped team", run.goCode, run.goStdout, run.goStderr)
+				}
+			}},
+		{name: "one team's repositories are forbidden", org: "acme", owner: "acme", token: "tok", teams: two, users: emails("alice", "bob", "carol"),
+			failPath: map[string]int{"/orgs/acme/teams/platform/repos": 403}, wantRows: 2, goDiffers: true, goExit: 1, goRows: 0,
+			after: func(t *testing.T, o *teamsOracle, fake *fakeGitHub, sc *teamsScenario, run githubRun, python, goRows []map[string]string) {
+				// The catalog needs each team's repositories (its ownership grants); the legacy verb never asked.
+				// The run fails before anything is written.
+				if !strings.Contains(run.goStderr, "sync_failed") || len(o.rows(o.goDatabase, "team_memberships", "org-1")) != 0 || len(o.rows(o.goDatabase, "team_repo_ownership", "org-1")) != 0 {
+					t.Errorf("go stderr %q: want sync_failed and no rows in any table", run.goStderr)
+				}
+			}},
+		{name: "a write that fails part way is finished by the next run", org: "acme", owner: "acme", token: "tok", teams: two, users: emails("alice", "bob", "carol"),
+			wantRows: 2, goDiffers: true, goExit: 1, goRows: 2,
+			prepare: func(o *teamsOracle, fake *fakeGitHub) {
+				// The repository-ownership insert fails: the teams were written before it, the memberships never are.
+				if err := o.admin.Exec(o.ctx, "RENAME TABLE "+o.goDatabase+".team_repo_ownership TO "+o.goDatabase+".team_repo_ownership_off"); err != nil {
+					o.t.Fatal(err)
+				}
+				o.t.Cleanup(func() { // a failed assertion must not leave the table missing for the next scenario
+					_ = o.admin.Exec(o.ctx, "RENAME TABLE "+o.goDatabase+".team_repo_ownership_off TO "+o.goDatabase+".team_repo_ownership")
+				})
+			},
+			after: func(t *testing.T, o *teamsOracle, fake *fakeGitHub, sc *teamsScenario, run githubRun, python, goRows []map[string]string) {
+				// The catalog's writes are ordered, not transactional: the teams landed before the ownership insert
+				// failed and the memberships were never written. Nothing is undone, and the next run converges.
+				if got := len(o.rows(o.goDatabase, "team_memberships", "org-1")); got != 0 {
+					t.Errorf("after the failed run go holds %d memberships, want none (they follow the ownership write)", got)
+				}
+				if err := o.admin.Exec(o.ctx, "RENAME TABLE "+o.goDatabase+".team_repo_ownership_off TO "+o.goDatabase+".team_repo_ownership"); err != nil {
+					t.Fatal(err)
+				}
+				code, _, stderr := o.runGo(fake, "org-1", sc.owner, sc.token, sc)
+				if code != 0 {
+					t.Fatalf("the re-run failed: exit %d %s", code, stderr)
+				}
+				if got := len(o.rows(o.goDatabase, "team_memberships", "org-1")); got != 3 {
+					t.Errorf("after the re-run go holds %d memberships, want 3", got)
+				}
+				if got := len(o.rows(o.goDatabase, "teams", "org-1")); got != 2 {
+					t.Errorf("after the re-run go holds %d teams, want 2", got)
+				}
+				if got := len(o.rows(o.goDatabase, "team_repo_ownership", "org-1")); got != 2 {
+					t.Errorf("after the re-run go holds %d repository grants, want 2", got)
+				}
+			}},
 		{name: "an admin override survives", org: "acme", owner: "acme", token: "tok", teams: two, users: emails("alice", "bob", "carol"), wantRows: 2,
 			prepare: func(o *teamsOracle, fake *fakeGitHub) {
 				for _, database := range []string{o.pythonDatabase, o.goDatabase} {
@@ -756,7 +870,7 @@ func githubScenarios() []*teamsScenario {
 					}
 				}
 			},
-			after: func(t *testing.T, python, goRows []map[string]string) {
+			after: func(t *testing.T, o *teamsOracle, fake *fakeGitHub, sc *teamsScenario, run githubRun, python, goRows []map[string]string) {
 				for name, rows := range map[string][]map[string]string{"python": python, "go": goRows} {
 					for _, row := range rows {
 						want := "[]"

@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+
+	"github.com/full-chaos/dev-health-ops/internal/syncbudget"
 )
 
 // activeBudgetConsumptionSelectColumns is budgetUnitSelectColumns plus
@@ -56,6 +58,38 @@ var ErrEstimateFatal = errors.New("budget estimate failed fatally")
 // interface here so unit tests can supply a fake instead of a real bridge.
 type budgetEstimator interface {
 	DispatchBudgetEstimate(ctx context.Context, orgID, runID string, unitIDs []string) (map[string][]budgetEstimate, error)
+}
+
+// txBudgetEstimator is an estimator that can read through the caller's own
+// transaction (*InProcessBudgetEstimator does). estimateChunk prefers it, so a
+// Dispatch pass never asks the pool for a second connection while it holds one.
+type txBudgetEstimator interface {
+	DispatchBudgetEstimateOn(ctx context.Context, db syncbudget.Querier, orgID, runID string, unitIDs []string) (map[string][]budgetEstimate, error)
+}
+
+// estimateChunk estimates one chunk of units for a pass. With an estimator that
+// reads through a transaction (production) it runs inside a SAVEPOINT of the
+// pass's transaction, so a failed read rolls back to it and the pass goes on
+// exactly as it did when the estimator's own connection absorbed the failure
+// (the chunk fails open); any other estimator (test fakes) keeps its own call.
+func estimateChunk(ctx context.Context, tx pgx.Tx, estimator budgetEstimator, orgID, runID string, chunk []string) (map[string][]budgetEstimate, error) {
+	on, ok := estimator.(txBudgetEstimator)
+	if !ok {
+		return estimator.DispatchBudgetEstimate(ctx, orgID, runID, chunk)
+	}
+	savepoint, err := tx.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("%w: open estimate savepoint: %v", ErrBridgeRequest, err)
+	}
+	estimates, err := on.DispatchBudgetEstimateOn(ctx, savepoint, orgID, runID, chunk)
+	if err != nil {
+		_ = savepoint.Rollback(ctx)
+		return nil, err
+	}
+	if err := savepoint.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("%w: release estimate savepoint: %v", ErrBridgeRequest, err)
+	}
+	return estimates, nil
 }
 
 // activeBudgetConsumption ports _active_budget_consumption verbatim,
@@ -171,7 +205,7 @@ ORDER BY id`,
 		// that one group's buckets, exactly as an outright bridge failure
 		// already did before chunking existed.
 		for _, chunk := range chunkUnitIDs(unitIDs) {
-			estimatesByUnit, err := bridge.DispatchBudgetEstimate(ctx, key.orgID, key.syncRunID, chunk)
+			estimatesByUnit, err := estimateChunk(ctx, tx, bridge, key.orgID, key.syncRunID, chunk)
 			if err != nil {
 				// A fatal estimate failure here would leave enforceRun
 				// admitting against a baseline missing this chunk's

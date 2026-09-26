@@ -150,7 +150,7 @@ func enforceRun(
 	// for a transport/5xx/decode failure IS byte-for-byte parity.
 	estimatesByUnit := map[string][]budgetEstimate{}
 	for _, chunk := range chunkUnitIDs(allUnitIDs) {
-		bridgeEstimates, bridgeErr := bridge.DispatchBudgetEstimate(ctx, orgID, syncRunID, chunk)
+		bridgeEstimates, bridgeErr := estimateChunk(ctx, tx, bridge, orgID, syncRunID, chunk)
 		if bridgeErr != nil {
 			if errors.Is(bridgeErr, ErrBridgeContractRejected) || errors.Is(bridgeErr, ErrEstimateFatal) {
 				return enforceRunResult{}, bridgeErr

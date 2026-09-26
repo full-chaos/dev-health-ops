@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
-	"fmt"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -30,10 +29,9 @@ func budgetAdvisoryLockKey(budgetKey string) int64 {
 // across every concurrent pass is the whole deadlock defence, same
 // reasoning as acquireBucketAdvisoryLocks's own doc comment.
 func acquireBudgetAdvisoryLocks(ctx context.Context, tx pgx.Tx, budgetKeys []string) error {
-	for _, budgetKey := range budgetKeys {
-		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, budgetAdvisoryLockKey(budgetKey)); err != nil {
-			return fmt.Errorf("%w: acquire budget advisory lock: %w", ErrDiscoveryTransientFailure, err)
-		}
+	keys := make([]int64, len(budgetKeys))
+	for index, budgetKey := range budgetKeys {
+		keys[index] = budgetAdvisoryLockKey(budgetKey)
 	}
-	return nil
+	return acquireAdvisoryLocksBounded(ctx, tx, keys, "budget", dispatchLockWaitBudget)
 }

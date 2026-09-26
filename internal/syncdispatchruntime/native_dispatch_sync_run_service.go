@@ -202,10 +202,22 @@ func (service *NativeDispatchSyncRunService) nowUTC() time.Time {
 //
 // Idempotent / redispatchable, same as Python: nothing here assumes this
 // is the run's only or first dispatch attempt.
-func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args DispatchSyncRunArgs) error {
+func (service *NativeDispatchSyncRunService) Dispatch(ctx context.Context, args DispatchSyncRunArgs) (dispatchErr error) {
 	if service == nil || service.pool == nil || ctx == nil || args.valid() != nil {
 		return ErrDispatchSyncRunUnavailable
 	}
+	// CHAOS-6889: a pass that gave up on a bucket or budget advisory lock inside
+	// the wait budget (acquireAdvisoryLocksBounded) is retried by the job runner;
+	// say so, with the run and the budget, or the retries read as an unexplained
+	// error stream.
+	defer func() {
+		if isDispatchLockBusy(dispatchErr) {
+			service.logger.WarnContext(ctx, "dispatch_sync_run.lock_busy_requeued",
+				slog.String("sync_run_id", args.SyncRunID()),
+				slog.Duration("lock_wait_budget", dispatchLockWaitBudget),
+				slog.String("error", dispatchErr.Error()))
+		}
+	}()
 	tx, err := service.pool.Begin(ctx)
 	if err != nil {
 		return ErrDispatchSyncRunUnavailable

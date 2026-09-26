@@ -77,10 +77,26 @@ func newInProcessBudgetEstimator(db syncbudget.Querier, dependencies BudgetEstim
 func (estimator *InProcessBudgetEstimator) DispatchBudgetEstimate(
 	ctx context.Context, orgID, runID string, unitIDs []string,
 ) (map[string][]budgetEstimate, error) {
-	if estimator == nil || len(unitIDs) == 0 {
+	if estimator == nil {
 		return nil, ErrInvalidBridge
 	}
-	results, err := estimator.loader.EstimateUnits(ctx, orgID, runID, unitIDs)
+	return estimator.DispatchBudgetEstimateOn(ctx, estimator.loader.DB, orgID, runID, unitIDs)
+}
+
+// DispatchBudgetEstimateOn is DispatchBudgetEstimate reading through db instead
+// of the estimator's own pool: a Dispatch pass hands it its own transaction, so
+// the whole pass costs ONE domain connection. Reading through the pool needed a
+// second connection for a pass that already held one, which several concurrent
+// passes on a small pool turned into a deadlock (CHAOS-6889).
+func (estimator *InProcessBudgetEstimator) DispatchBudgetEstimateOn(
+	ctx context.Context, db syncbudget.Querier, orgID, runID string, unitIDs []string,
+) (map[string][]budgetEstimate, error) {
+	if estimator == nil || db == nil || len(unitIDs) == 0 {
+		return nil, ErrInvalidBridge
+	}
+	loader := estimator.loader
+	loader.DB = db
+	results, err := loader.EstimateUnits(ctx, orgID, runID, unitIDs)
 	if err != nil {
 		switch {
 		case errors.Is(err, syncbudget.ErrStaleRun),

@@ -64,6 +64,7 @@ var openers = map[string]struct {
 	"internal/migrationmatrix/restproven.go":               {kindGeneric, "a failed connect is the fixed message"},
 	"internal/storage/postgres/factory.go":                 {kindHelper, "Open and New: WithRedactedCauseAlso with the resolved credentials"},
 	"internal/synccli/dblookup.go":                         {kindDiscarded, "a connect or query error is swallowed into 'not found'"},
+	"internal/providersync/repository_postgres.go":         {kindDiscarded, "the lease renewal pool copies the running work pool's already-resolved config and dials lazily: the constructor's only failure is config validation, which carries no login, and a failed renewal is dropped into ErrLeaseLost, never printed (CHAOS-6889)"},
 	"internal/queryapi/server/home_route.go":               {kindServer, "lazy pool of a running server; errors reach its logs"},
 	"internal/queryapi/server/investment_explain_route.go": {kindServer, "lazy pool of a running server; errors reach its logs"},
 	"internal/queryapi/server/query_route.go":              {kindServer, "lazy pool of a running server; errors reach its logs"},

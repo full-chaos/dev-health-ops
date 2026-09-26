@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -21,6 +22,9 @@ import (
 type PostgresRepository struct {
 	Pool    *pgxpool.Pool
 	Metrics *providerfoundation.Metrics
+	// renewPool carries lease renewals on a connection of its own (see
+	// NewPostgresRepository); nil in a hand-built repository, which renews on Pool.
+	renewPool *pgxpool.Pool
 }
 
 // NewPostgresRepository constructs the production unit repository. metrics is
@@ -42,7 +46,27 @@ func NewPostgresRepository(pool *pgxpool.Pool, metrics ...*providerfoundation.Me
 	if len(metrics) > 0 {
 		repositoryMetrics = metrics[0]
 	}
-	return &PostgresRepository{Pool: pool, Metrics: repositoryMetrics}, nil
+	// CHAOS-6889: a lease heartbeat must not queue behind the work it keeps
+	// alive. The work pool is small (4 by default) and a dispatch pass or a sync
+	// unit can hold every connection for as long as it runs; a renewal that had to
+	// wait for one ran into its deadline, was read as a lost lease, and cancelled
+	// a healthy unit. Renewals go through a one-connection pool on the SAME login
+	// (the readiness probe pool's pattern), so they are independent of the slots
+	// the work uses. pgxpool dials lazily: nothing connects until the first renewal.
+	config := pool.Config().Copy()
+	config.MaxConns, config.MinConns = 1, 0
+	renewPool, err := pgxpool.NewWithConfig(context.Background(), config)
+	if err != nil {
+		return nil, fmt.Errorf("provider sync lease renewal pool: %w", err)
+	}
+	return &PostgresRepository{Pool: pool, Metrics: repositoryMetrics, renewPool: renewPool}, nil
+}
+
+// Close releases the lease renewal pool. The work pool belongs to the caller.
+func (repository *PostgresRepository) Close() {
+	if repository != nil && repository.renewPool != nil {
+		repository.renewPool.Close()
+	}
 }
 
 func (repository *PostgresRepository) Claim(ctx context.Context, request ClaimRequest) (Claim, error) {
@@ -616,7 +640,11 @@ func (repository *PostgresRepository) Renew(
 		now.IsZero() || !expiresAt.After(now) {
 		return ErrLeaseLost
 	}
-	command, err := repository.Pool.Exec(ctx, renewLeaseSQL, claim.ID, claim.Owner, now.UTC(), expiresAt.UTC())
+	renewals := repository.Pool
+	if repository.renewPool != nil {
+		renewals = repository.renewPool
+	}
+	command, err := renewals.Exec(ctx, renewLeaseSQL, claim.ID, claim.Owner, now.UTC(), expiresAt.UTC())
 	if err != nil || command.RowsAffected() != 1 {
 		return ErrLeaseLost
 	}

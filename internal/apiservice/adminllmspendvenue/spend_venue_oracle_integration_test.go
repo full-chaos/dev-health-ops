@@ -238,7 +238,9 @@ var sinceField = regexp.MustCompile(`"since":"[^"]*"`)
 // TestAdminLLMSpendVenueOracle answers GET /api/v1/admin/llm-settings/spend
 // with the real Python api and the real Go api over the same organizations
 // and ClickHouse rows, and requires the same status and response text.
-func TestAdminLLMSpendVenueOracle(t *testing.T) { runSpendVenue(t, "", "utc", "83b3489db754b542e25f5b863a05408362984447b7b3ae78b9ee909d1b7398be") }
+func TestAdminLLMSpendVenueOracle(t *testing.T) {
+	runSpendVenue(t, "", "utc", "83b3489db754b542e25f5b863a05408362984447b7b3ae78b9ee909d1b7398be")
+}
 
 // TestAdminLLMSpendLocalZoneVenueOracle runs both planes in
 // America/Los_Angeles (TZ for the Python plane, time.Local for Go): a naive

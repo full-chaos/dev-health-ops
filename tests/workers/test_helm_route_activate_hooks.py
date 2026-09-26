@@ -111,7 +111,12 @@ def test_route_activate_is_absent_by_default() -> None:
     "sets",
     [
         (),
-        ("migrations.hook.provisionRoles.enabled=true",),
+        # The provision-roles hook runs `dho migrate roles` (CHAOS-6951), so it
+        # needs a pinned dho image of its own to render at all, like the River hook.
+        (
+            "migrations.hook.provisionRoles.enabled=true",
+            f"migrations.hook.provisionRoles.image={_PINNED_OPERATOR_IMAGE}",
+        ),
         # The River hook needs a pinned dho image of its own to render at all.
         (
             "migrations.hook.riverMigrate.enabled=true",

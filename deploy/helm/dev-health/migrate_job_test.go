@@ -180,27 +180,55 @@ func TestMigrateSecretCarriesANativeClickHouseURI(t *testing.T) {
 	}
 }
 
-// Role provisioning needs a shell and the SQL/Python the ops runtime image
-// carries; it keeps that image (image.repository/image.tag), not the
-// distroless dho image the migrate Job now runs. The route-activate hook no
-// longer does (CHAOS-6902): see TestRouteActivateRunsOnlyTheOperatorImage.
-func TestShellHooksKeepTheOpsRuntimeImage(t *testing.T) {
-	jobs, _, refusal := renderJobs(t,
+// The provision-roles hook Job runs `dho migrate roles` on the pinned operator
+// image, exec form, args only (CHAOS-6951): no shell, no psql, no Python image, no
+// baked SQL, no password or database name in argv. The route-activate hook
+// already runs only that image (CHAOS-6902): see TestRouteActivateRunsOnlyTheOperatorImage.
+func TestProvisionRolesRunsDhoMigrateRolesOnTheOperatorImage(t *testing.T) {
+	const dsn = "postgresql://migrator:pw@postgres:5432/devhealth"
+	jobs, secrets, refusal := renderJobs(t,
 		"migrations.hook.provisionRoles.enabled=true", "migrations.hook.riverMigrate.enabled=true",
-		"migrations.hook.routeActivate.enabled=true", "migrations.hook.routeActivate.image="+pinnedOperatorImage)
+		"migrations.hook.routeActivate.enabled=true", "migrations.hook.routeActivate.image="+pinnedOperatorImage,
+		"migrations.hook.secretData.MIGRATION_DATABASE_URI="+dsn)
 	if refusal != "" {
 		t.Fatalf("render refused: %s", refusal)
 	}
-	for _, testCase := range []struct{ job, container string }{
-		{"t-dev-health-provision-roles", "provision-roles"},
-	} {
-		image := container(t, jobs[testCase.job], testCase.container)["image"].(string)
-		if !strings.HasPrefix(image, "ghcr.io/full-chaos/dev-hops-api:") {
-			t.Fatalf("%s/%s image = %s, want the ops runtime image", testCase.job, testCase.container, image)
+	job := jobs["t-dev-health-provision-roles"]
+	pod := podSpec(t, job)
+	if list, _ := pod["containers"].([]any); len(list) != 1 {
+		t.Fatalf("%d containers, want exactly one", len(list))
+	}
+	if _, has := pod["initContainers"]; has {
+		t.Fatalf("the pod declares init containers: %v", pod["initContainers"])
+	}
+	c := container(t, job, "provision-roles")
+	if c["image"] != pinnedOperatorImage {
+		t.Fatalf("image = %v, want the pinned operator image", c["image"])
+	}
+	if _, has := c["command"]; has {
+		t.Fatalf("a command override (a shell) the distroless image cannot run: %v", c["command"])
+	}
+	if args := stringsOf(c["args"]); !reflect.DeepEqual(args, []string{"migrate", "roles"}) {
+		t.Fatalf("args = %v, want [migrate roles]", args)
+	}
+	rendered, err := yaml.Marshal(job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, retired := range []string{"psql", "provision_river_roles", "PGPASSWORD", "APP_DATABASE", "dev-hops-api", "/bin/sh"} {
+		if strings.Contains(string(rendered), retired) {
+			t.Errorf("the hook still carries %q", retired)
 		}
 	}
-	if image := container(t, jobs["t-dev-health-migrate"], "migrate")["image"]; image != pinnedOperatorImage {
-		t.Fatalf("migrate image = %v, want the operator image the River hook runs", image)
+	// The elevated DSN arrives under the key the verb prefers, from a hook Secret
+	// created before the Job.
+	conn := secrets["t-dev-health-provision-roles-conn"]
+	if conn == nil {
+		t.Fatalf("no hook-scoped DSN Secret; have %v", secrets)
+	}
+	data, _ := conn["stringData"].(map[string]any)
+	if got, _ := data["MIGRATION_DATABASE_URI"].(string); got != dsn {
+		t.Fatalf("the DSN Secret carries MIGRATION_DATABASE_URI = %q, want the configured DSN: %v", got, data)
 	}
 }
 

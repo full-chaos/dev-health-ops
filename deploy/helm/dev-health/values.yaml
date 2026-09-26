@@ -758,6 +758,19 @@ migrations:
     #    116 grants -> 119 -> 119 across three passes, no revoke.
     provisionRoles:
       enabled: false
+      # -- CHAOS-6951: the hook runs `dho migrate roles` (CHAOS-6901), not psql
+      #    and the retired provision_river_roles.sql, so it needs the pinned
+      #    operator image (entrypoint dho, no shell). EMPTY MEANS
+      #    riverMigrate.image, else routeActivate.image -- the same operator
+      #    image the rest of the chain requires. The render refuses an image
+      #    that is not pinned (repo@sha256:<digest>, repo:sha-<12 hex>, or
+      #    repo:local with pullPolicy Never/IfNotPresent) or that is pinned to a
+      #    different commit than image.tag. The Job connects with the elevated
+      #    DSN (hook secretData MIGRATION_DATABASE_URI, else POSTGRES_URI, else
+      #    DATABASE_URI); parts (POSTGRES_HOST/PGPASSWORD) are no longer read --
+      #    set DEV_HEALTH_MIGRATION_PG_* in an operator-owned Secret instead.
+      image: ""
+      pullPolicy: ""
     riverMigrate:
       # -- OFF is not "River never happens". With the hook off there are two
       #    paths, and which one you are on depends on secretData below:

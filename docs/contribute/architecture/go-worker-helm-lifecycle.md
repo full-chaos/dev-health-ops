@@ -36,7 +36,7 @@ configuring workers, read
 | Hook weight | Job | Applies |
 | --- | --- | --- |
 | `0` | `…-migrate` | Alembic (application schema) and the ClickHouse migrator |
-| `5` | `…-provision-roles` | the three runtime logins, via `provision_river_roles.sql`; also the KEDA read-only role when a `goWorkers` group has `autoscaling.enabled: true` (SELECT on `river_job` and on `public.sync_run_units`, the latter granted by `dho migrate roles` only, CHAOS-6946) |
+| `5` | `…-provision-roles` | the three runtime logins, via `dho migrate roles` on the pinned operator image (CHAOS-6951; no psql, no Python image); also the KEDA read-only role when a `goWorkers` group has `autoscaling.enabled: true` (SELECT on `river_job` and on `public.sync_run_units`, the latter granted by `dho migrate roles` only, CHAOS-6946) |
 | `10` | `…-river-migrate` | the pinned River schema and the full runtime grant posture, then re-checks it |
 
 The order is not interchangeable. Role provisioning grants against tables that
@@ -133,7 +133,7 @@ Re-running provisioning on every upgrade is safe, and this is worth stating
 explicitly because the opposite was believed for a time and shaped an earlier
 design:
 
-- `provision_river_roles.sql` is bootstrap-only. The only `REVOKE`s left are
+- Role provisioning (`dho migrate roles`, formerly `provision_river_roles.sql`) is bootstrap-only. The only `REVOKE`s left are
   `TEMPORARY` on the database and `CREATE` on schema `public`; the per-table
   whitelist that once caused an incident is gone (CHAOS-4261).
 - `applyRuntimeGrants` runs unconditionally after the migrator, before the

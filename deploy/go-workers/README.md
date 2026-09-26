@@ -391,7 +391,8 @@ to read. Size those by fixed `replicas` instead.
 SELECT-only on `river_job` and on `public.sync_run_units`, the go-sync planned-backlog
 trigger's table, plus an explicit USAGE on schema `public`, CHAOS-6946) is provisioned by the same
 `…-provision-roles` Helm hook as the three runtime logins
-(`provision_river_roles.sql`), whenever a `goWorkers` group has
+(`dho migrate roles` on the pinned operator image since CHAOS-6951; no psql, no
+Python image), whenever a `goWorkers` group has
 `autoscaling.enabled: true` -- no hand-run script needed.
 6. Keep Celery consumers and Beat running during coexistence. A failed Go
    readiness, queue age threshold, or saturation threshold means scale the
@@ -987,10 +988,10 @@ different reason: the three runtime roles
 yet, or exist without the grants `CheckRolePosture`
 (`internal/storage/postgres/domain_authorization.go`) requires.
 `dho migrate roles` (Compose's `go-river-provision` runs it on the Go operator
-image since CHAOS-6904; the chart's provision-roles Job and
-`ci/lib/go_worker_fixture.sh` still run `scripts/worker/provision_river_roles.sql`
-through `psql` with the `domain_role`/`queue_role`/`coordinator_role`/`*_password`
-variables, until they move) **must run before** `dho migrate river`, every
+image since CHAOS-6904 and the chart's provision-roles hook Job on the pinned
+operator image since CHAOS-6951; only `ci/lib/go_worker_fixture.sh` still runs
+`scripts/worker/provision_river_roles.sql` through `psql` with the
+`domain_role`/`queue_role`/`coordinator_role`/`*_password` variables, until it moves) **must run before** `dho migrate river`, every
 time, on every fresh database — confirmed while building CHAOS-4266's CI
 gate (`ci/run_metrics_executed_proof.sh`).
 
@@ -1072,8 +1073,26 @@ the harness applies it to the script side and a separate test pins the baseline)
 second identical one, and compare every role attribute, whether the password was
 set and works, every effective grant (the `roleacl` enumeration the readiness
 checks use) and the ACLs of the database, `public`, the River schema and
-`river_job`. The script stays in the tree until every caller (the chart's
-provision-roles Job, Compose's `go-river-provision`) has moved to the Go leg.
+`river_job`. The script stays in the tree until every caller has moved to the
+Go leg (Compose's `go-river-provision` and the chart's provision-roles Job have,
+CHAOS-6904 and CHAOS-6951; `ci/lib/go_worker_fixture.sh` has not).
+
+The chart hook (CHAOS-6951) is executed the same way: a test renders the Job with
+helm, resolves the environment its pod would see (plain values, `secretKeyRef`s and
+the `envFrom` Secret, all from the render) and runs the real `dho migrate roles`
+with the rendered args, on a database with the migrated application schema; and the
+old hook's shell run against the old chart's render leaves a role posture
+(attributes, effective grants, memberships, logins, ACLs) equal to the new hook's,
+after one run and after a second. The hook's differences from the psql hook: it
+reads the elevated DSN from `MIGRATION_DATABASE_URI` (else `POSTGRES_URI`, with
+the chart resolving the `DATABASE_URI` alias itself) or `DEV_HEALTH_MIGRATION_PG_*`
+components, no longer the `POSTGRES_HOST`/`PGPASSWORD` parts; it bootstraps the
+database its DSN connects to (the script used the chart's `APP_DATABASE` for the
+CONNECT grant and the connected database for the rest; they are one database
+wherever the weight-0 Job ran, which reads the same DSN); its image is
+`migrations.hook.provisionRoles.image`, else `riverMigrate.image`, else
+`routeActivate.image`, pinned and in lockstep with `image.tag`; and it refuses a
+role without a password.
 
 ### query-api role: `QUERY_API_DATABASE_ROLE` (opt-in, full least-privilege posture)
 

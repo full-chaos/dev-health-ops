@@ -1450,8 +1450,9 @@ table, including on an already-initialised volume.
 Provisioning (`go-river-provision`, `dho migrate roles`) and the River migration
 run from the **Go operator image** (`DEV_HEALTH_GO_OPERATOR_IMAGE`); the runtime
 image (`DEV_HEALTH_IMAGE`) still carries `psql` and `provision_river_roles.sql`
-(`docker/Dockerfile:98`) for the callers that have not moved (the chart's
-provision-roles Job). The posture assertions that check those grants ship in
+(`docker/Dockerfile:98`) for the callers that have not moved (`ci/lib/go_worker_fixture.sh`;
+the chart's provision-roles Job runs `dho migrate roles` on the operator image since
+CHAOS-6951). The posture assertions that check those grants ship in
 the **Go worker image**, the dho image (`DEV_HEALTH_GO_DHO_IMAGE`).
 
 **A posture change requires both images to be bumped in the same deploy.** Bump

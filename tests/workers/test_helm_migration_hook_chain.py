@@ -134,12 +134,105 @@ def test_failed_migration_pods_are_retained_for_their_logs(name: str) -> None:
     )
 
 
-def test_provisioning_uses_the_ops_image_that_carries_the_sql() -> None:
-    """A bare postgres image has psql but not provision_river_roles.sql."""
+def test_provisioning_runs_dho_migrate_roles_on_the_operator_image() -> None:
+    """CHAOS-6951: the hook is `dho migrate roles` on the pinned operator image.
+
+    No shell, no psql, no Python image, no baked SQL: the image is distroless, so
+    the Job sets args only and lets the entrypoint (dho) run them.
+    """
     jobs = _jobs(*_BOTH_ON)
+    pod = jobs[_PROVISION]["spec"]["template"]["spec"]
+    (container,) = pod["containers"]
+    assert container["image"] == _PINNED_OPERATOR_IMAGE, container["image"]
+    assert "command" not in container, container.get("command")
+    assert container["args"] == ["migrate", "roles"], container.get("args")
+    assert "initContainers" not in pod
+    rendered = yaml.safe_dump(jobs[_PROVISION])
+    for retired in (
+        "psql",
+        "provision_river_roles",
+        "PGPASSWORD",
+        "APP_DATABASE",
+        "dev-hops-api",
+        "/bin/sh",
+    ):
+        assert retired not in rendered, f"the hook still carries {retired!r}"
+
+
+def test_provisioning_image_prefers_its_own_then_the_river_then_the_route_image() -> (
+    None
+):
+    own = "ghcr.io/full-chaos/dev-health-go-dho@sha256:" + "1" * 64
+    river = "ghcr.io/full-chaos/dev-health-go-dho@sha256:" + "2" * 64
+    jobs = _jobs(*_BOTH_ON, f"migrations.hook.riverMigrate.image={river}")
+    assert (
+        jobs[_PROVISION]["spec"]["template"]["spec"]["containers"][0]["image"] == river
+    )
+    jobs = _jobs(
+        *_BOTH_ON,
+        f"migrations.hook.riverMigrate.image={river}",
+        f"migrations.hook.provisionRoles.image={own}",
+    )
+    assert jobs[_PROVISION]["spec"]["template"]["spec"]["containers"][0]["image"] == own
+    assert jobs[_RIVER]["spec"]["template"]["spec"]["containers"][0]["image"] == river
+
+
+@pytest.mark.parametrize(
+    "image",
+    [
+        "",
+        "ghcr.io/full-chaos/dev-health-go-operator:latest",
+        "ghcr.io/full-chaos/dev-hops-api:0.1.0",
+    ],
+)
+def test_provisioning_refuses_an_unpinned_image(image: str) -> None:
+    """With the River and route hooks off there is no operator image to share, and
+    a floating tag would fail at ImagePullBackOff mid-upgrade: refuse at render."""
+    code, stderr = _render_stderr(
+        "migrations.hook.provisionRoles.enabled=true",
+        "migrations.hook.riverMigrate.enabled=false",
+        "migrations.hook.routeActivate.enabled=false",
+        f"migrations.hook.provisionRoles.image={image}",
+    )
+    assert code != 0, "an unpinned provision-roles hook image rendered"
+    assert (
+        "the provision-roles hook image" in stderr
+        and "not a pinned dho image" in stderr
+    ), stderr
+
+
+def test_provisioning_refuses_a_lockstep_mismatch_with_the_api_image() -> None:
+    code, stderr = _render_stderr(
+        "migrations.hook.provisionRoles.enabled=true",
+        "migrations.hook.riverMigrate.enabled=false",
+        "migrations.hook.routeActivate.enabled=false",
+        "migrations.hook.provisionRoles.image=ghcr.io/full-chaos/dev-health-go-dho:sha-aaaaaaaaaaaa",
+        "image.repository=ghcr.io/full-chaos/dev-hops-api",
+        "image.tag=sha-bbbbbbbbbbbb",
+    )
+    assert code != 0, "a provision-roles image pinned to another commit rendered"
+    assert "pinned to different commits" in stderr, stderr
+    assert "the provision-roles hook image" in stderr, stderr
+
+
+def test_provisioning_accepts_a_lockstep_match_and_a_sideloaded_local_image() -> None:
+    jobs = _jobs(
+        "migrations.hook.provisionRoles.enabled=true",
+        "migrations.hook.routeActivate.enabled=false",
+        "migrations.hook.provisionRoles.image=ghcr.io/full-chaos/dev-health-go-dho:sha-cccccccccccc",
+        "image.repository=ghcr.io/full-chaos/dev-hops-api",
+        "image.tag=sha-cccccccccccc",
+    )
     container = jobs[_PROVISION]["spec"]["template"]["spec"]["containers"][0]
-    command = " ".join(container["command"])
-    assert "provision_river_roles.sql" in command
+    assert container["image"].endswith(":sha-cccccccccccc")
+    jobs = _jobs(
+        "migrations.hook.provisionRoles.enabled=true",
+        "migrations.hook.routeActivate.enabled=false",
+        "migrations.hook.provisionRoles.image=dho:local",
+        "migrations.hook.provisionRoles.pullPolicy=Never",
+    )
+    container = jobs[_PROVISION]["spec"]["template"]["spec"]["containers"][0]
+    assert container["image"] == "dho:local" and container["imagePullPolicy"] == "Never"
 
 
 def test_river_migrate_defaults_to_the_pinned_operator_image() -> None:
@@ -505,83 +598,139 @@ def _postgres_invocation(calls: str) -> tuple[str, str, str]:
     raise AssertionError(f"`migrate postgres` was never invoked: {calls!r}")
 
 
-def _run_provision_command(
-    job: dict, tmp_path: Path, **env: str
-) -> tuple[int, list[str], str]:
-    """Execute the provisioning Job's shell with a recording `psql` stub."""
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir(exist_ok=True)
-    log = tmp_path / "psql.log"
-    stub = bin_dir / "psql"
-    stub.write_text(
-        '#!/bin/sh\nfor a in "$@"; do printf "%s\\n" "$a"; done > "$PSQL_LOG"\nexit 0\n',
-        encoding="utf-8",
-    )
-    stub.chmod(0o755)
-
-    container = job["spec"]["template"]["spec"]["containers"][0]
-    command = container["command"]
-    assert command[:2] == ["/bin/sh", "-ec"], command
-    completed = subprocess.run(
-        ["/bin/sh", "-ec", command[2]],
-        capture_output=True,
-        text=True,
-        env={
-            "PATH": f"{bin_dir}:{os.environ['PATH']}",
-            "PSQL_LOG": str(log),
-            "APP_DATABASE": "devhealth",
-            "RIVER_DOMAIN_DATABASE_ROLE": "devhealth_domain",
-            "RIVER_QUEUE_DATABASE_ROLE": "devhealth_queue",
-            "RIVER_COORDINATOR_DATABASE_ROLE": "devhealth_coordinator",
-            "RIVER_DOMAIN_DATABASE_PASSWORD": "d",
-            "RIVER_QUEUE_DATABASE_PASSWORD": "q",
-            "RIVER_COORDINATOR_DATABASE_PASSWORD": "c",
-            **env,
-        },
-    )
-    argv = log.read_text(encoding="utf-8").splitlines() if log.exists() else []
-    return completed.returncode, argv, completed.stderr
-
-
 def _provision_job(tmp_path: Path) -> dict:
     return _jobs_from_values(_values(river_migrate=True), tmp_path)[_PROVISION]
 
 
-def test_provisioning_uses_the_dedicated_migration_dsn(tmp_path: Path) -> None:
-    code, argv, stderr = _run_provision_command(
-        _provision_job(tmp_path),
-        tmp_path,
-        MIGRATION_DATABASE_URI=_MIGRATION_DSN,
-    )
-    assert code == 0, stderr
-    assert argv[0] == _MIGRATION_DSN, (
-        "with only the preferred MIGRATION_DATABASE_URI configured, psql got "
-        f"{argv!r} -- an empty argument makes it attempt a local connection"
-    )
+_PROVISION_CONN = f"{_RELEASE}-dev-health-provision-roles-conn"
 
 
-def test_provisioning_normalises_the_bundled_sqlalchemy_scheme(
+def _envfrom_secret_names(job: dict) -> list[str]:
+    container = job["spec"]["template"]["spec"]["containers"][0]
+    return [i["secretRef"]["name"] for i in container["envFrom"] if "secretRef" in i]
+
+
+def test_provisioning_reads_the_elevated_dsn_from_its_own_hook_secret(
     tmp_path: Path,
 ) -> None:
-    """`dev-health.postgresURI` is a SQLAlchemy URL; libpq rejects it."""
-    code, argv, stderr = _run_provision_command(
-        _provision_job(tmp_path),
-        tmp_path,
-        POSTGRES_URI="postgresql+asyncpg://postgres:postgres@db-postgresql:5432/devhealth",
-    )
-    assert code == 0, stderr
-    assert argv[0] == "postgresql://postgres:postgres@db-postgresql:5432/devhealth", (
-        f"psql cannot consume a driver-qualified scheme: {argv!r}"
+    """The verb prefers MIGRATION_DATABASE_URI, so the hook Secret carries it
+    under that key (the retired shell picked MIGRATION_DATABASE_URI, else
+    POSTGRES_URI, else DATABASE_URI out of the migrate Secret)."""
+    docs = _docs_from_values(_values(river_migrate=True), tmp_path)
+    secrets = {d["metadata"]["name"]: d for d in docs if d.get("kind") == "Secret"}
+    jobs = {d["metadata"]["name"]: d for d in docs if d.get("kind") == "Job"}
+    assert _envfrom_secret_names(jobs[_PROVISION]) == [_PROVISION_CONN]
+    assert secrets[_PROVISION_CONN]["stringData"] == {
+        "MIGRATION_DATABASE_URI": _MIGRATION_DSN
+    }
+    annotations = secrets[_PROVISION_CONN]["metadata"]["annotations"]
+    assert "pre-install" in annotations["helm.sh/hook"].split(",")
+    assert int(annotations["helm.sh/hook-weight"]) < 5, (
+        "a regular resource does not exist yet when a pre-install hook runs; "
+        "the DSN Secret must be created before the weight-5 Job that reads it"
     )
 
 
-def test_provisioning_without_any_dsn_fails_loudly(tmp_path: Path) -> None:
-    """An empty DSN must stop the hook, not become a local-socket attempt."""
-    code, argv, stderr = _run_provision_command(_provision_job(tmp_path), tmp_path)
-    assert code != 0, f"the Job connected to something with {argv!r}"
-    assert "MIGRATION_DATABASE_URI" in stderr, (
-        f"the error must name the value the operator has to supply: {stderr!r}"
-    )
+def test_provisioning_dsn_secret_carries_no_password_key(tmp_path: Path) -> None:
+    docs = _docs_from_values(_values(river_migrate=True), tmp_path)
+    secrets = {d["metadata"]["name"]: d for d in docs if d.get("kind") == "Secret"}
+    assert not [k for k in secrets[_PROVISION_CONN]["stringData"] if "PASSWORD" in k]
+
+
+@pytest.mark.parametrize("alias", ["POSTGRES_URI", "DATABASE_URI"])
+def test_provisioning_keeps_the_dsn_aliases_the_shell_accepted(
+    alias: str, tmp_path: Path
+) -> None:
+    """The retired shell fell back to POSTGRES_URI, then DATABASE_URI. The chart
+    resolves the same precedence in the template, so an alias-only install still
+    hands the verb a DSN (the verb itself only knows MIGRATION_DATABASE_URI and
+    POSTGRES_URI)."""
+    values = textwrap.dedent(f"""
+        migrations:
+          hook:
+            provisionRoles: {{enabled: true}}
+            routeActivate:
+              image: "{_PINNED_OPERATOR_IMAGE}"
+            secretData:
+              MIGRATION_DATABASE_URI: ""
+              POSTGRES_URI: ""
+              DATABASE_URI: ""
+              CLICKHOUSE_URI: ""
+              {alias}: "postgresql+asyncpg://postgres:pw@db:5432/devhealth"
+        """)
+    secrets = _secrets_from_values(values, tmp_path)
+    assert secrets[_PROVISION_CONN]["stringData"]["MIGRATION_DATABASE_URI"] == (
+        "postgresql+asyncpg://postgres:pw@db:5432/devhealth"
+    ), "the verb normalises the driver scheme itself (config.ResolveMigrationDatabase)"
+
+
+def test_provisioning_reads_the_operator_secret_directly_when_it_owns_it(
+    tmp_path: Path,
+) -> None:
+    """secrets.create=false: the chart cannot split the operator's keys, so the
+    Job reads that Secret (as the River hook does) and renders no DSN Secret."""
+    values = textwrap.dedent(f"""
+        secrets:
+          create: false
+          externalSecretName: operator-app-secret
+        migrations:
+          hook:
+            externalSecretName: operator-migration-secret
+            provisionRoles: {{enabled: true}}
+            routeActivate:
+              image: "{_PINNED_OPERATOR_IMAGE}"
+        """)
+    docs = _docs_from_values(values, tmp_path)
+    jobs = {d["metadata"]["name"]: d for d in docs if d.get("kind") == "Job"}
+    names = {d["metadata"]["name"] for d in docs if d.get("kind") == "Secret"}
+    assert _envfrom_secret_names(jobs[_PROVISION]) == ["operator-migration-secret"]
+    assert _PROVISION_CONN not in names
+
+
+def test_provisioning_without_any_dsn_renders_an_empty_secret_the_verb_refuses(
+    tmp_path: Path,
+) -> None:
+    """No DSN must never become a local-socket attempt: the Secret carries no
+    connection key and `dho migrate roles` exits 1 with the named message
+    (pinned in internal/rivermigrate)."""
+    values = textwrap.dedent(f"""
+        migrations:
+          hook:
+            provisionRoles: {{enabled: true}}
+            routeActivate:
+              image: "{_PINNED_OPERATOR_IMAGE}"
+            secretData:
+              MIGRATION_DATABASE_URI: ""
+              POSTGRES_URI: ""
+              DATABASE_URI: ""
+              CLICKHOUSE_URI: ""
+        """)
+    secrets = _secrets_from_values(values, tmp_path)
+    assert "stringData" not in secrets[_PROVISION_CONN]
+
+
+def test_provisioning_env_is_exactly_the_verbs_variables(tmp_path: Path) -> None:
+    job = _provision_job(tmp_path)
+    container = job["spec"]["template"]["spec"]["containers"][0]
+    env = {item["name"]: item for item in container["env"]}
+    # The KEDA trio only when a goWorkers group autoscales (the chart default).
+    keda = {
+        "RIVER_KEDA_READONLY_DATABASE_ROLE",
+        "RIVER_DATABASE_SCHEMA",
+        "RIVER_KEDA_READONLY_PASSWORD",
+    }
+    assert set(env) - keda == {
+        "RIVER_DOMAIN_DATABASE_ROLE",
+        "RIVER_QUEUE_DATABASE_ROLE",
+        "RIVER_COORDINATOR_DATABASE_ROLE",
+        "RIVER_DOMAIN_DATABASE_PASSWORD",
+        "RIVER_QUEUE_DATABASE_PASSWORD",
+        "RIVER_COORDINATOR_DATABASE_PASSWORD",
+    }, sorted(env)
+    assert set(env) & keda in (set(), keda), sorted(env)
+    for name, item in env.items():
+        if name.endswith("_PASSWORD"):
+            assert "secretKeyRef" in item["valueFrom"] and "value" not in item, name
 
 
 # --- the elevated DSN must not be IN the weight-0 Job's environment ---------
@@ -769,56 +918,3 @@ def test_hook_off_with_a_dsn_keeps_the_secret_key_that_activates_river(
         secrets[_MIGRATE_SECRETS]["stringData"]["MIGRATION_DATABASE_URI"]
         == _MIGRATION_DSN
     )
-
-
-# --- connect by PARTS when the Secret carries them ---------------------------
-#
-# GW's condition (d). Compose's go-river-provision does not build a DSN at all:
-# it passes --host/--username/--dbname and lets PGPASSWORD travel out of band
-# (deploy/docker-compose/compose.go-workers.yml:110-125 (deleted, CHAOS-6950)). Parts avoid the whole
-# question of which URL dialect the value is written in, so where the Secret
-# supplies them they win; the DSN path -- and its scheme normalisation -- is for
-# when a DSN is all there is.
-
-
-def test_provisioning_prefers_the_postgres_parts_when_the_secret_has_them(
-    tmp_path: Path,
-) -> None:
-    code, argv, stderr = _run_provision_command(
-        _provision_job(tmp_path),
-        tmp_path,
-        MIGRATION_DATABASE_URI=_MIGRATION_DSN,
-        POSTGRES_HOST="postgres.internal",
-        POSTGRES_PORT="5432",
-        POSTGRES_USER="devhealth",
-        POSTGRES_DB="devhealth",
-        PGPASSWORD="s3cret",
-    )
-    assert code == 0, stderr
-    assert "--host=postgres.internal" in argv, f"parts were not used: {argv}"
-    assert "--username=devhealth" in argv, argv
-    assert "--dbname=devhealth" in argv, argv
-    assert "--port=5432" in argv, argv
-    assert _MIGRATION_DSN not in argv, (
-        "a DSN positional alongside the parts makes the connection target "
-        f"ambiguous: {argv}"
-    )
-
-
-def test_provisioning_falls_back_to_the_dsn_without_parts(tmp_path: Path) -> None:
-    """Without a host there are no parts to build from, so the DSN it is.
-
-    Without this, preferring parts unconditionally would pass the test above
-    while breaking every install that configures only a DSN -- which is the
-    chart's own default shape.
-    """
-    code, argv, stderr = _run_provision_command(
-        _provision_job(tmp_path),
-        tmp_path,
-        POSTGRES_URI="postgresql+asyncpg://postgres:postgres@db-postgresql:5432/devhealth",
-    )
-    assert code == 0, stderr
-    assert argv[0] == "postgresql://postgres:postgres@db-postgresql:5432/devhealth", (
-        f"the DSN path must survive: {argv}"
-    )
-    assert not [a for a in argv if a.startswith("--host=")], argv

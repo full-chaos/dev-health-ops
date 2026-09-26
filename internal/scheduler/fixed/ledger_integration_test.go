@@ -10,42 +10,9 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
-
-// The DDL mirrors alembic revision 0065. It is repeated here rather than
-// executed through Alembic so the Go integration test has no Python runtime
-// dependency; the terminal-state check constraint is the part that matters,
-// because it is what proves the engine never records an ambiguous occurrence.
-const fixedScheduleOccurrenceDDL = `
-CREATE TABLE public.fixed_schedule_occurrences (
-    occurrence_key TEXT NOT NULL,
-    identity_version TEXT NOT NULL,
-    schedule_id TEXT NOT NULL,
-    target_kind TEXT NOT NULL,
-    scheduled_for TIMESTAMPTZ NOT NULL,
-    observed_at TIMESTAMPTZ NOT NULL,
-    status VARCHAR(16) NOT NULL DEFAULT 'claimed',
-    handoff_count INTEGER NOT NULL DEFAULT 0,
-    skip_reason VARCHAR(64),
-    degraded_reason VARCHAR(64),
-    completed_at TIMESTAMPTZ,
-    created_at TIMESTAMPTZ NOT NULL,
-    updated_at TIMESTAMPTZ NOT NULL,
-    CONSTRAINT pk_fixed_schedule_occurrences PRIMARY KEY (occurrence_key),
-    CONSTRAINT uq_fixed_schedule_occurrence_schedule_time UNIQUE (schedule_id, scheduled_for),
-    CONSTRAINT ck_fixed_schedule_occurrence_status
-        CHECK (status IN ('claimed', 'materialized', 'skipped')),
-    CONSTRAINT ck_fixed_schedule_occurrence_handoff_count CHECK (handoff_count >= 0),
-    CONSTRAINT ck_fixed_schedule_occurrence_terminal_state CHECK (
-        (status = 'claimed' AND completed_at IS NULL AND handoff_count = 0 AND skip_reason IS NULL)
-        OR (status = 'materialized' AND completed_at IS NOT NULL AND handoff_count > 0 AND skip_reason IS NULL)
-        OR (status = 'skipped' AND completed_at IS NOT NULL AND handoff_count = 0 AND skip_reason IS NOT NULL)
-    )
-);
-CREATE INDEX ix_fixed_schedule_occurrence_schedule_time
-    ON public.fixed_schedule_occurrences (schedule_id, scheduled_for DESC);
-`
 
 func startLedgerPostgres(t *testing.T) *pgxpool.Pool {
 	t.Helper()
@@ -85,9 +52,10 @@ func startLedgerPostgres(t *testing.T) *pgxpool.Pool {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	if _, err := pool.Exec(ctx, fixedScheduleOccurrenceDDL); err != nil {
-		t.Fatal(err)
-	}
+	// The migrated schema carries fixed_schedule_occurrences with its terminal-state check
+	// constraint (alembic 0065) -- the part that proves the engine never records an ambiguous
+	// occurrence -- and the whole report graph the report tests below use.
+	pgschema.Apply(ctx, t, pool)
 	return pool
 }
 

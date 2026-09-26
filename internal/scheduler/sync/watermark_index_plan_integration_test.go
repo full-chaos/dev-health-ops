@@ -16,6 +16,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 )
 
 // referencePlanWatermarks is loadPlanWatermarks as it was before the
@@ -106,14 +107,19 @@ func TestSharedWatermarkIndexLeavesScheduledPlansUnchanged(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	if _, err := pool.Exec(ctx, `CREATE TABLE public.sync_watermarks (
- org_id text NOT NULL, source_id text NOT NULL, dataset_key text NOT NULL,
- repo_id text NOT NULL, target text NOT NULL, last_synced_at timestamptz)`); err != nil {
-		t.Fatal(err)
-	}
+	pgschema.Apply(ctx, t, pool)
 	now := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+	// The migrated table is unique on (org, repo, target) and on (org, source, dataset): two
+	// capabilities that share a legacy target would seed the same raw legacy row twice, a state
+	// production cannot hold. Keep the first row of each key; both loaders read the same rows.
+	seenRepoTarget, seenSourceDataset := map[string]bool{}, map[string]bool{}
 	insert := func(org, source, dataset, repo, target string, at *time.Time) {
-		if _, err := pool.Exec(ctx, `INSERT INTO sync_watermarks VALUES ($1,$2,$3,$4,$5,$6)`, org, source, dataset, repo, target, at); err != nil {
+		repoTarget, sourceDataset := org+"|"+repo+"|"+target, org+"|"+source+"|"+dataset
+		if seenRepoTarget[repoTarget] || seenSourceDataset[sourceDataset] {
+			return
+		}
+		seenRepoTarget[repoTarget], seenSourceDataset[sourceDataset] = true, true
+		if _, err := pool.Exec(ctx, `INSERT INTO sync_watermarks (id, org_id, source_id, dataset_key, repo_id, target, last_synced_at) VALUES (gen_random_uuid(), $1,$2,$3,$4,$5,$6)`, org, source, dataset, repo, target, at); err != nil {
 			t.Fatal(err)
 		}
 	}

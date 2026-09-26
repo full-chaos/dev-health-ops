@@ -10,116 +10,10 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	schedulersync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
-
-// The DDL mirrors the shape alembic revisions 0001, 0005, 0053 and 0056 leave
-// behind for the report graph and the two delivery-state tables this producer
-// reads. It is repeated here rather
-// than executed through Alembic so the Go integration test has no Python runtime
-// dependency, and it deliberately keeps the parts that constrain the producer:
-//
-//   - the circular foreign keys between report_runs.scheduled_occurrence_id and
-//     scheduled_report_occurrences.report_run_id, which are immediate, so they
-//     pin the write ORDER the producer must use;
-//   - unique (report_id, scheduled_for) and unique report_run_id on the
-//     occurrence table, which are what make a second materialization of one due
-//     time impossible rather than merely unlikely;
-//   - the deliberate omission of Alembic 0096's
-//     uq_saved_reports_schedule_id constraint. This simulates a partially
-//     migrated or manually drifted schema and keeps the producer's secondary
-//     ambiguity assertion executable.
-const scheduledReportDDL = `
-CREATE TABLE public.organizations (
-    id UUID PRIMARY KEY,
-    name TEXT NOT NULL DEFAULT '',
-    is_active BOOLEAN NOT NULL DEFAULT TRUE
-);
-CREATE TABLE public.scheduled_jobs (
-    id UUID PRIMARY KEY,
-    org_id TEXT NOT NULL DEFAULT '',
-    name TEXT NOT NULL,
-    job_type TEXT NOT NULL,
-    provider TEXT NOT NULL DEFAULT '',
-    schedule_cron TEXT NOT NULL,
-    timezone TEXT NOT NULL DEFAULT 'UTC',
-    job_config JSON NOT NULL DEFAULT '{}',
-    status INTEGER NOT NULL DEFAULT 0,
-    is_running BOOLEAN NOT NULL DEFAULT FALSE,
-    last_run_at TIMESTAMPTZ,
-    next_run_at TIMESTAMPTZ,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-CREATE TABLE public.saved_reports (
-    id UUID PRIMARY KEY,
-    org_id TEXT NOT NULL DEFAULT '',
-    name TEXT NOT NULL,
-    report_plan JSON NOT NULL DEFAULT '{}',
-    is_template BOOLEAN NOT NULL DEFAULT FALSE,
-    schedule_id UUID REFERENCES public.scheduled_jobs (id) ON DELETE SET NULL,
-    is_active BOOLEAN NOT NULL DEFAULT TRUE,
-    last_run_at TIMESTAMPTZ,
-    last_run_status TEXT,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-CREATE TABLE public.report_runs (
-    id UUID PRIMARY KEY,
-    report_id UUID NOT NULL REFERENCES public.saved_reports (id) ON DELETE CASCADE,
-    scheduled_occurrence_id TEXT UNIQUE,
-    status TEXT NOT NULL DEFAULT 'pending',
-    started_at TIMESTAMPTZ,
-    completed_at TIMESTAMPTZ,
-    duration_seconds DOUBLE PRECISION,
-    rendered_markdown TEXT,
-    artifact_url TEXT,
-    provenance_records JSON,
-    error TEXT,
-    error_traceback TEXT,
-    attempt_count INTEGER NOT NULL DEFAULT 0,
-    artifact_fingerprint TEXT,
-    notification_key TEXT UNIQUE,
-    notification_status TEXT NOT NULL DEFAULT 'pending',
-    notification_sent_at TIMESTAMPTZ,
-    notification_claim_token UUID,
-    notification_lease_expires_at TIMESTAMPTZ,
-    triggered_by TEXT NOT NULL DEFAULT 'manual',
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-CREATE TABLE public.scheduled_report_occurrences (
-    occurrence_id TEXT PRIMARY KEY,
-    identity_version TEXT NOT NULL,
-    org_id TEXT NOT NULL,
-    report_id UUID NOT NULL REFERENCES public.saved_reports (id) ON DELETE CASCADE,
-    scheduled_job_id UUID NOT NULL REFERENCES public.scheduled_jobs (id) ON DELETE CASCADE,
-    scheduled_for TIMESTAMPTZ NOT NULL,
-    report_run_id UUID UNIQUE REFERENCES public.report_runs (id) ON DELETE SET NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT uq_scheduled_report_occurrence_report_time UNIQUE (report_id, scheduled_for)
-);
-ALTER TABLE public.report_runs
-    ADD CONSTRAINT fk_report_runs_scheduled_occurrence
-    FOREIGN KEY (scheduled_occurrence_id)
-    REFERENCES public.scheduled_report_occurrences (occurrence_id) ON DELETE SET NULL;
-CREATE TABLE public.worker_job_outbox (
-    id UUID PRIMARY KEY,
-    dedupe_key TEXT NOT NULL UNIQUE,
-    job_kind TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'pending',
-    attempt_count INTEGER NOT NULL DEFAULT 0,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-CREATE TABLE public.worker_job_delivery_abandonments (
-    dedupe_key VARCHAR(256) PRIMARY KEY,
-    job_kind VARCHAR(96) NOT NULL,
-    abandoned_at TIMESTAMPTZ NOT NULL,
-    attempt_count INTEGER NOT NULL,
-    last_error_code VARCHAR(64)
-);
-`
 
 const (
 	testOrganizationID = "2f1a5c88-9d0e-4b3a-8c71-5e6f7a8b9c01"
@@ -129,13 +23,9 @@ const (
 
 func startScheduledReportPostgres(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	pool := startLedgerPostgres(t)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-	defer cancel()
-	if _, err := pool.Exec(ctx, scheduledReportDDL); err != nil {
-		t.Fatal(err)
-	}
-	return pool
+	// startLedgerPostgres applies the migrated schema: the report graph, the occurrence tables and
+	// the fixed-schedule ledger all carry their real columns, foreign keys and constraints.
+	return startLedgerPostgres(t)
 }
 
 // seedScheduledReport installs one active organization, one active report
@@ -144,11 +34,7 @@ func seedScheduledReport(t *testing.T, pool *pgxpool.Pool, cron, timezone string
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	if _, err := pool.Exec(ctx, `
-INSERT INTO public.organizations (id, name, is_active) VALUES ($1::uuid, 'acme', TRUE)`,
-		testOrganizationID); err != nil {
-		t.Fatal(err)
-	}
+	pgseed.Org(ctx, t, pool, testOrganizationID, "community")
 	if _, err := pool.Exec(ctx, `
 INSERT INTO public.scheduled_jobs
     (id, org_id, name, job_type, schedule_cron, timezone, status, is_running, created_at, updated_at)
@@ -772,6 +658,12 @@ func TestScheduleOwningTwoActiveReportsFailsTheOccurrence(t *testing.T) {
 	seedScheduledReport(t, pool, "0 6 * * *", "UTC", createdAt)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
+	// The migrated schema enforces Alembic 0096's uq_saved_reports_schedule_id, so a schedule cannot own
+	// two reports. Drop it to simulate a partially migrated or manually drifted schema: the producer's
+	// secondary ambiguity assertion must stay fail-closed under that drift.
+	if _, err := pool.Exec(ctx, `ALTER TABLE public.saved_reports DROP CONSTRAINT uq_saved_reports_schedule_id`); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := pool.Exec(ctx, `
 INSERT INTO public.saved_reports (id, org_id, name, schedule_id, is_active, created_at, updated_at)
 VALUES ('7c3d1e2f-4a5b-4c6d-8e9f-0a1b2c3d4e5f'::uuid, $1, 'second', $2::uuid, TRUE, $3, $3)`,
@@ -861,8 +753,8 @@ func TestRolledBackOccurrenceLeavesNoPartialReportGraph(t *testing.T) {
 // second window at the same instant must be a duplicate rather than a second
 // dispatch.
 func TestEngineCommitsTheReportGraphAndTheOccurrenceTogether(t *testing.T) {
-	// startLedgerPostgres already applies fixedScheduleOccurrenceDDL, so the
-	// real occurrence ledger is available without repeating it here.
+	// startLedgerPostgres applies the migrated schema, so the real occurrence
+	// ledger is available without repeating it here.
 	pool := startScheduledReportPostgres(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()

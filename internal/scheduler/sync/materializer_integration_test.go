@@ -20,166 +20,9 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/syncbudget"
 	"github.com/full-chaos/dev-health-ops/internal/syncreconciler"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
-
-const materializerFixtureDDL = `
-CREATE TABLE public.sync_configurations (
- id uuid PRIMARY KEY, org_id text NOT NULL, sync_targets json NOT NULL,
- sync_options json NOT NULL, integration_id uuid, is_active boolean NOT NULL,
- source_id uuid, planner_managed boolean NOT NULL,provider text NOT NULL,
- last_sync_at timestamptz,last_sync_success boolean,last_sync_error text,last_sync_stats json,
- updated_at timestamptz NOT NULL,
- -- parent_id (real column, models/settings.py::SyncConfiguration.parent_id):
- -- added for CHAOS-4629's repo-limit rebalance
- -- (activeRepoUsageCountForLimit/rebalanceJiraSourceRepoLimit), which
- -- mirrors discovery.py::_active_repo_usage_count_for_limit's "planner-
- -- managed PARENT" distinction (parent_id IS NULL) exactly. No prior query
- -- in this package needed it.
- parent_id uuid
-);
-CREATE TABLE public.integrations (
- id uuid PRIMARY KEY, org_id text NOT NULL, provider text NOT NULL,
- credential_id uuid, is_active boolean NOT NULL, config json NOT NULL
-);
-CREATE TABLE public.integration_credentials (
- id uuid PRIMARY KEY, org_id text NOT NULL, provider text NOT NULL,
- is_active boolean NOT NULL, config json,credentials_encrypted text
-);
-CREATE TABLE public.integration_sources (
- id uuid PRIMARY KEY, org_id text NOT NULL, integration_id uuid NOT NULL,
- provider text NOT NULL,source_type text NOT NULL,external_id text NOT NULL,name text NOT NULL,
- full_name text NOT NULL,is_enabled boolean NOT NULL,metadata json NOT NULL,
- discovered_at timestamptz NOT NULL,last_seen_at timestamptz NOT NULL,
-	FOREIGN KEY(integration_id) REFERENCES integrations(id),
- UNIQUE(org_id,integration_id,provider,external_id)
-);
-CREATE TABLE public.integration_datasets (
- id uuid PRIMARY KEY, org_id text NOT NULL, integration_id uuid NOT NULL,
- dataset_key text NOT NULL, is_enabled boolean NOT NULL, options json NOT NULL,
-	FOREIGN KEY(integration_id) REFERENCES integrations(id),
- UNIQUE (org_id,integration_id,dataset_key)
-);
-CREATE TABLE public.sync_watermarks (
- org_id text NOT NULL, source_id text NOT NULL, dataset_key text NOT NULL,
- repo_id text NOT NULL, target text NOT NULL, last_synced_at timestamptz,
- id uuid NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
- updated_at timestamptz NOT NULL DEFAULT now()
-);
-CREATE TABLE public.organizations (id uuid PRIMARY KEY, tier text);
-CREATE TABLE public.org_licenses (
- org_id uuid PRIMARY KEY, tier text NOT NULL, limits_override json NOT NULL,
- features_override json NOT NULL
-);
-CREATE TABLE public.feature_flags (
- id uuid PRIMARY KEY,key text UNIQUE,min_tier text NOT NULL,is_enabled boolean NOT NULL
-);
-CREATE TABLE public.org_feature_overrides (
- id uuid PRIMARY KEY,org_id uuid NOT NULL,feature_id uuid NOT NULL,
- is_enabled boolean NOT NULL,expires_at timestamptz,config json
-);
-CREATE TABLE public.tier_limits (
- tier text NOT NULL, limit_key text NOT NULL, limit_value text,
- UNIQUE(tier,limit_key)
-);
-CREATE TABLE public.sync_runs (
- id uuid PRIMARY KEY, org_id text NOT NULL, integration_id uuid NOT NULL,
- triggered_by text NOT NULL, mode text NOT NULL, status text NOT NULL,
- total_units integer NOT NULL, completed_units integer NOT NULL, failed_units integer NOT NULL,
- credential_id uuid, credential_fingerprint text, auth_source text, started_at timestamptz, completed_at timestamptz,
-	result json, error text, created_at timestamptz NOT NULL,
-	FOREIGN KEY(integration_id) REFERENCES integrations(id)
-);
-CREATE TABLE public.sync_run_units (
- id uuid PRIMARY KEY, org_id text NOT NULL, sync_run_id uuid NOT NULL,
- integration_id uuid NOT NULL, source_id uuid NOT NULL, provider text NOT NULL,
- dataset_key text NOT NULL, cost_class text NOT NULL, mode text NOT NULL,
- since_at timestamptz, before_at timestamptz, status text NOT NULL, attempts integer NOT NULL,
- available_at timestamptz, rate_limit_deferrals integer NOT NULL DEFAULT 0,
- rate_limit_first_seen_at timestamptz, expired_lease_retry_count integer NOT NULL DEFAULT 0,
- last_retry_reason text, retry_exhausted_at timestamptz, duration_seconds integer,
- error text, result json, processor_flags json, lease_owner text, lease_expires_at timestamptz,
- last_heartbeat_at timestamptz, created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL,
-	FOREIGN KEY(sync_run_id) REFERENCES sync_runs(id),
-	FOREIGN KEY(source_id) REFERENCES integration_sources(id)
-);
--- CHAOS-4114: the maintained executed-proof projection. persistDomainGraph
--- stamps every planned pair ATTEMPTED here inside the same transaction that
--- inserts the units, so a venue without it fails materialization outright.
-CREATE TABLE public.sync_executed_proof_ledger (
- provider text NOT NULL, dataset_key text NOT NULL,
- attempted_at timestamptz NOT NULL, proven_at timestamptz,
- PRIMARY KEY (provider, dataset_key),
- CONSTRAINT ck_sync_executed_proof_ledger_provider_normalized
-  CHECK (provider = lower(provider) AND btrim(provider) <> ''),
- CONSTRAINT ck_sync_executed_proof_ledger_dataset_normalized
-  CHECK (dataset_key = lower(dataset_key) AND btrim(dataset_key) <> '')
-);
--- Mirrors occurrence_reconciler_integration_test.go's real shape: a bare
--- (id uuid PRIMARY KEY) table let every existing test in this file
--- hand-construct PendingOccurrence{JobStatus: 0} directly and never actually
--- exercise lockPendingOccurrenceSQL's real job.status/org_id/sync_config_id
--- read at all -- which is exactly why a codex review finding (a manual
--- trigger's deliberately PAUSED marker job quarantining the occurrence)
--- went uncaught by this file's own tests.
-CREATE TABLE public.scheduled_jobs (
- id uuid PRIMARY KEY, org_id text NOT NULL, sync_config_id uuid NOT NULL,
- job_type text NOT NULL, schedule_cron text NOT NULL, timezone text NOT NULL,
- status integer NOT NULL, is_running boolean NOT NULL,
- last_run_at timestamptz, updated_at timestamptz, next_run_at timestamptz
-);
-CREATE TABLE public.job_runs (
- id uuid PRIMARY KEY, job_id uuid NOT NULL, status integer NOT NULL,
- started_at timestamptz, completed_at timestamptz, duration_seconds integer,
- result json, error text, error_traceback text, triggered_by text NOT NULL,
- created_at timestamptz NOT NULL
-);
-CREATE TABLE public.sync_run_reference_discoveries (
- id uuid PRIMARY KEY, sync_run_id uuid NOT NULL UNIQUE, org_id text NOT NULL,
- status text NOT NULL, attempts integer NOT NULL, available_at timestamptz NOT NULL,
- lease_owner text, lease_expires_at timestamptz, last_heartbeat_at timestamptz,
- completed_at timestamptz, error text, result json,
- created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL
-);
-CREATE TABLE public.sync_run_post_dispatches (
- id uuid PRIMARY KEY DEFAULT gen_random_uuid(), org_id text NOT NULL,
- sync_run_id uuid NOT NULL, kind text NOT NULL, dispatched_at timestamptz NOT NULL,
- UNIQUE(sync_run_id,kind)
-);
-CREATE TABLE public.sync_dispatch_outbox (
- id uuid PRIMARY KEY, org_id text NOT NULL, sync_run_id uuid NOT NULL,
- kind text NOT NULL, status text NOT NULL, available_at timestamptz NOT NULL,
- attempts integer NOT NULL, last_error text, dispatched_at timestamptz,
- claim_token text, claim_expires_at timestamptz, claim_transport text,
- claim_route_generation bigint, dispatched_transport text,
- dispatched_route_generation bigint, transport_job_id text,
- created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL,
- UNIQUE(sync_run_id,kind)
-);
-CREATE TABLE public.scheduled_sync_occurrences (
- occurrence_id text PRIMARY KEY, identity_version text NOT NULL, org_id text NOT NULL,
- sync_config_id uuid NOT NULL, scheduled_job_id uuid NOT NULL, scheduled_for timestamptz NOT NULL,
- job_run_id uuid, sync_run_id uuid, reconcile_status text NOT NULL,
- FOREIGN KEY(sync_config_id) REFERENCES sync_configurations(id),
- FOREIGN KEY(scheduled_job_id) REFERENCES scheduled_jobs(id),
- FOREIGN KEY(job_run_id) REFERENCES job_runs(id),
- FOREIGN KEY(sync_run_id) REFERENCES sync_runs(id)
-);
--- CHAOS-4602 migration 0119, mirrored verbatim (including its CHECK
--- constraints) so a fixture row that would be rejected in production is
--- rejected here too.
-CREATE TABLE public.sync_manual_triggers (
- occurrence_id text PRIMARY KEY, mode text NOT NULL,
- since timestamptz, before timestamptz,
- source_ids text[], dataset_keys text[],
- triggered_by text NOT NULL,
- created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
- FOREIGN KEY(occurrence_id) REFERENCES scheduled_sync_occurrences(occurrence_id) ON DELETE CASCADE,
- CONSTRAINT ck_sync_manual_triggers_mode CHECK (mode IN ('incremental','full_resync','backfill')),
- CONSTRAINT ck_sync_manual_triggers_triggered_by CHECK (triggered_by IN ('manual','backfill')),
- CONSTRAINT ck_sync_manual_triggers_backfill_selector
-  CHECK ((mode = 'backfill') = (since IS NOT NULL AND before IS NOT NULL))
-);`
 
 type materializerFixture struct {
 	pool       *pgxpool.Pool
@@ -200,9 +43,7 @@ func startMaterializerPostgres(t *testing.T) materializerFixture {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	if _, err := pool.Exec(ctx, materializerFixtureDDL); err != nil {
-		t.Fatal(err)
-	}
+	pgschema.Apply(ctx, t, pool)
 	const (
 		orgID         = "00000000-0000-4000-8000-0000000000aa"
 		configID      = "00000000-0000-4000-8000-000000001001"
@@ -211,18 +52,17 @@ func startMaterializerPostgres(t *testing.T) materializerFixture {
 		datasetID     = "00000000-0000-4000-8000-000000001004"
 		jobID         = "00000000-0000-4000-8000-000000001005"
 	)
+	seedPlannerGraph(ctx, t, pool, plannerGraph{
+		orgID: orgID, integrationID: integrationID, provider: "github", configID: configID, jobID: jobID,
+		featureID: "00000000-0000-4000-8000-000000001007", datasetID: datasetID, datasetKey: "commits",
+		targets: `["git"]`, plannerManaged: false,
+	})
 	statements := []struct {
 		sql  string
 		args []any
 	}{
-		{`INSERT INTO integrations VALUES ($1::uuid,$2,'github',NULL,TRUE,'{}'::jsonb)`, []any{integrationID, orgID}},
-		{`INSERT INTO organizations VALUES ($1::uuid,'community')`, []any{orgID}},
-		{`INSERT INTO feature_flags VALUES ('00000000-0000-4000-8000-000000001007','canonical_incident_ingestion','community',TRUE)`, nil},
-		{`INSERT INTO sync_configurations (id,org_id,sync_targets,sync_options,integration_id,is_active,source_id,planner_managed,provider,updated_at) VALUES ($1::uuid,$2,'["git"]'::jsonb,'{"schedule_cron":"0 * * * *"}'::jsonb,$3::uuid,TRUE,NULL,FALSE,'github',now())`, []any{configID, orgID, integrationID}},
-		{`INSERT INTO integration_sources (id,org_id,integration_id,provider,source_type,external_id,name,full_name,is_enabled,metadata,discovered_at,last_seen_at) VALUES ($1::uuid,$2,$3::uuid,'github','repository','full-chaos/dev-health','dev-health','full-chaos/dev-health',TRUE,'{}'::jsonb,now(),now())`, []any{sourceID, orgID, integrationID}},
-		{`INSERT INTO integration_datasets VALUES ($1::uuid,$2,$3::uuid,'commits',TRUE,'{}'::jsonb)`, []any{datasetID, orgID, integrationID}},
-		{`INSERT INTO sync_watermarks VALUES ($1,'full-chaos/dev-health','commits','full-chaos/dev-health','commits',$2)`, []any{orgID, time.Date(2026, 8, 1, 6, 0, 0, 0, time.UTC)}},
-		{`INSERT INTO scheduled_jobs (id,org_id,sync_config_id,job_type,schedule_cron,timezone,status,is_running) VALUES ($1::uuid,$2,$3::uuid,'sync','0 * * * *','UTC',0,FALSE)`, []any{jobID, orgID, configID}},
+		{`INSERT INTO integration_sources (id,org_id,integration_id,provider,source_type,external_id,name,full_name,is_enabled,metadata,discovered_at,last_seen_at) VALUES ($1::uuid,$2,$3::uuid,'github','repository','full-chaos/dev-health','dev-health','full-chaos/dev-health',TRUE,'{}'::json,now(),now())`, []any{sourceID, orgID, integrationID}},
+		{`INSERT INTO sync_watermarks (id,org_id,source_id,dataset_key,repo_id,target,last_synced_at) VALUES (gen_random_uuid(),$1,'full-chaos/dev-health','commits','full-chaos/dev-health','commits',$2)`, []any{orgID, time.Date(2026, 8, 1, 6, 0, 0, 0, time.UTC)}},
 	}
 	for _, statement := range statements {
 		if _, err := pool.Exec(ctx, statement.sql, statement.args...); err != nil {
@@ -505,7 +345,7 @@ func configurePagerDutyFixture(t *testing.T, fixture materializerFixture, target
 		args []any
 	}{
 		{`DELETE FROM sync_watermarks`, nil}, {`DELETE FROM integration_sources`, nil}, {`DELETE FROM integration_datasets`, nil},
-		{`INSERT INTO integration_credentials (id,org_id,provider,is_active,config,credentials_encrypted) VALUES ($1::uuid,$2,'pagerduty',TRUE,'{"account_id":"acct-1","subdomain":"full-chaos"}'::jsonb,$3)`, []any{credentialID, fixture.occurrence.OrgID, ciphertext.Reveal()}},
+		{`INSERT INTO integration_credentials (id,org_id,provider,name,is_active,config,credentials_encrypted,created_at,updated_at) VALUES ($1::uuid,$2,'pagerduty','credential-'||$1::text,TRUE,'{"account_id":"acct-1","subdomain":"full-chaos"}'::json,$3,now(),now())`, []any{credentialID, fixture.occurrence.OrgID, ciphertext.Reveal()}},
 		{`UPDATE integrations SET provider='pagerduty',credential_id=$1::uuid WHERE id=(SELECT integration_id FROM sync_configurations LIMIT 1)`, []any{credentialID}},
 		{`UPDATE sync_configurations SET provider='pagerduty',sync_targets=$1::jsonb WHERE id=$2::uuid`, []any{targets, fixture.occurrence.ConfigID}},
 	}
@@ -987,6 +827,10 @@ func TestNativeMaterializerDoesNotHydrateCredentialMetadataForZeroUnitPlan(t *te
 		sql  string
 		args []any
 	}{
+		// The migrated schema's foreign key makes a credential id that resolves to nothing
+		// unrepresentable. Drop it to keep the scenario this test exists for: an integration pointing at
+		// a credential the materializer would fail to load IF it tried to hydrate one.
+		{`ALTER TABLE integrations DROP CONSTRAINT integrations_credential_id_fkey`, nil},
 		{`UPDATE integrations SET provider='linear',credential_id=$1::uuid`, []any{missingCredential}},
 		{`UPDATE integration_sources SET provider='linear'`, nil},
 		{`UPDATE sync_configurations SET provider='linear',sync_targets='[]'::jsonb`, nil},
@@ -1521,11 +1365,11 @@ func startBackfillTriggerFixture(t *testing.T, fixture materializerFixture, sinc
 		sql  string
 		args []any
 	}{
-		{`INSERT INTO integrations VALUES ($1::uuid,$2,'jira',NULL,TRUE,'{}'::jsonb)`, []any{jiraIntegrationID, orgID}},
+		{`INSERT INTO integrations (id,org_id,provider,name,config,is_active,created_at,updated_at) VALUES ($1::uuid,$2,'jira','integration-'||$1::text,'{}'::json,TRUE,now(),now())`, []any{jiraIntegrationID, orgID}},
 		// Deliberately NO schedule_cron: this config is intentionally
 		// unscheduled, exactly like the live org 70d529e0 Jira config this
 		// ticket's acceptance proof targets.
-		{`INSERT INTO sync_configurations (id,org_id,sync_targets,sync_options,integration_id,is_active,source_id,planner_managed,provider,updated_at) VALUES ($1::uuid,$2,'[]'::jsonb,'{}'::jsonb,$3::uuid,TRUE,NULL,TRUE,'jira',now())`, []any{jiraConfigID, orgID, jiraIntegrationID}},
+		{`INSERT INTO sync_configurations (id,org_id,name,sync_targets,sync_options,integration_id,is_active,source_id,planner_managed,provider,created_at,updated_at) VALUES ($1::uuid,$2,'config-'||$1::text,'[]'::json,'{}'::json,$3::uuid,TRUE,NULL,TRUE,'jira',now(),now())`, []any{jiraConfigID, orgID, jiraIntegrationID}},
 		// metadata carries the planner_managed_sync_config_id tag: without
 		// it loadPlanSources' own planner_managed filter (CHAOS-4602 round-1
 		// P1) would never select this row for a planner_managed=TRUE config.
@@ -1533,7 +1377,7 @@ func startBackfillTriggerFixture(t *testing.T, fixture materializerFixture, sinc
 		// "work-items" (not "incidents"): avoids the canonical-incident
 		// feature-gate entirely, keeping this fixture about the backfill
 		// mode routing itself.
-		{`INSERT INTO integration_datasets VALUES ($1::uuid,$2,$3::uuid,'work-items',TRUE,'{}'::jsonb)`, []any{jiraDatasetID, orgID, jiraIntegrationID}},
+		{`INSERT INTO integration_datasets (id,org_id,integration_id,dataset_key,is_enabled,options) VALUES ($1::uuid,$2,$3::uuid,'work-items',TRUE,'{}'::json)`, []any{jiraDatasetID, orgID, jiraIntegrationID}},
 		// status=1 (PAUSED): matches EXACTLY what _ensure_scheduled_job_for_config
 		// (execution_trigger.py) creates for a config with no schedule_cron --
 		// this config is intentionally unscheduled, the org 70d529e0 acceptance
@@ -1541,7 +1385,7 @@ func startBackfillTriggerFixture(t *testing.T, fixture materializerFixture, sinc
 		// eligibility gate used to reject this outright (occurrence.JobStatus
 		// != 0), quarantining every such manual/backfill occurrence before it
 		// could ever materialize; fixed in loadMaterializationPlan.
-		{`INSERT INTO scheduled_jobs (id,org_id,sync_config_id,job_type,schedule_cron,timezone,status,is_running) VALUES ($1::uuid,$2,$3::uuid,'sync','0 * * * *','UTC',1,FALSE)`, []any{jiraJobID, orgID, jiraConfigID}},
+		{`INSERT INTO scheduled_jobs (id,org_id,name,sync_config_id,job_type,schedule_cron,timezone,status,is_running,created_at,updated_at) VALUES ($1::uuid,$2,'job-'||$1::text,$3::uuid,'sync','0 * * * *','UTC',1,FALSE,now(),now())`, []any{jiraJobID, orgID, jiraConfigID}},
 		{`INSERT INTO scheduled_sync_occurrences (occurrence_id,identity_version,org_id,sync_config_id,scheduled_job_id,scheduled_for,reconcile_status) VALUES ($1,$2,$3,$4::uuid,$5::uuid,$6,'pending')`,
 			[]any{occurrenceID, OccurrenceIdentityVersion, orgID, jiraConfigID, jiraJobID, before}},
 		{`INSERT INTO sync_manual_triggers (occurrence_id,mode,since,before,dataset_keys,triggered_by) VALUES ($1,'backfill',$2,$3,$4,'backfill')`,
@@ -1666,15 +1510,15 @@ func startChildConfigTriggerFixture(t *testing.T, fixture materializerFixture, e
 		sql  string
 		args []any
 	}{
-		{`INSERT INTO integrations VALUES ($1::uuid,$2,'github',NULL,TRUE,'{}'::jsonb)`, []any{githubIntegrationID, orgID}},
+		{`INSERT INTO integrations (id,org_id,provider,name,config,is_active,created_at,updated_at) VALUES ($1::uuid,$2,'github','integration-'||$1::text,'{}'::json,TRUE,now(),now())`, []any{githubIntegrationID, orgID}},
 		{`INSERT INTO integration_sources (id,org_id,integration_id,provider,source_type,external_id,name,full_name,is_enabled,metadata,discovered_at,last_seen_at) VALUES ($1::uuid,$2,$3::uuid,'github','repository','full-chaos/dev-health','dev-health','full-chaos/dev-health',TRUE,'{}'::jsonb,now(),now())`, []any{githubSourceID, orgID, githubIntegrationID}},
 		// Deliberately planner_managed=FALSE: a legacy per-source child
 		// config, never the planner-managed-parent shape CHAOS-4602 covers.
 		// No schedule_cron: same "intentionally unscheduled, driven only by
 		// the manual trigger" shape startBackfillTriggerFixture uses.
-		{`INSERT INTO sync_configurations (id,org_id,sync_targets,sync_options,integration_id,is_active,source_id,planner_managed,provider,updated_at) VALUES ($1::uuid,$2,'["git"]'::jsonb,'{}'::jsonb,$3::uuid,TRUE,$4::uuid,FALSE,'github',now())`, []any{githubConfigID, orgID, githubIntegrationID, sourceIDColumn}},
-		{`INSERT INTO integration_datasets VALUES ($1::uuid,$2,$3::uuid,'commits',TRUE,'{}'::jsonb)`, []any{githubDatasetID, orgID, githubIntegrationID}},
-		{`INSERT INTO scheduled_jobs (id,org_id,sync_config_id,job_type,schedule_cron,timezone,status,is_running) VALUES ($1::uuid,$2,$3::uuid,'sync','0 * * * *','UTC',1,FALSE)`, []any{githubJobID, orgID, githubConfigID}},
+		{`INSERT INTO sync_configurations (id,org_id,name,sync_targets,sync_options,integration_id,is_active,source_id,planner_managed,provider,created_at,updated_at) VALUES ($1::uuid,$2,'config-'||$1::text,'["git"]'::json,'{}'::json,$3::uuid,TRUE,$4::uuid,FALSE,'github',now(),now())`, []any{githubConfigID, orgID, githubIntegrationID, sourceIDColumn}},
+		{`INSERT INTO integration_datasets (id,org_id,integration_id,dataset_key,is_enabled,options) VALUES ($1::uuid,$2,$3::uuid,'commits',TRUE,'{}'::json)`, []any{githubDatasetID, orgID, githubIntegrationID}},
+		{`INSERT INTO scheduled_jobs (id,org_id,name,sync_config_id,job_type,schedule_cron,timezone,status,is_running,created_at,updated_at) VALUES ($1::uuid,$2,'job-'||$1::text,$3::uuid,'sync','0 * * * *','UTC',1,FALSE,now(),now())`, []any{githubJobID, orgID, githubConfigID}},
 		{`INSERT INTO scheduled_sync_occurrences (occurrence_id,identity_version,org_id,sync_config_id,scheduled_job_id,scheduled_for,reconcile_status) VALUES ($1,$2,$3,$4::uuid,$5::uuid,$6,'pending')`,
 			[]any{occurrenceID, OccurrenceIdentityVersion, orgID, githubConfigID, githubJobID, time.Date(2026, 8, 25, 0, 0, 0, 0, time.UTC)}},
 		{`INSERT INTO sync_manual_triggers (occurrence_id,mode,triggered_by) VALUES ($1,'incremental','manual')`, []any{occurrenceID}},
@@ -2247,7 +2091,7 @@ func TestNativeMaterializerStampsZeroUnitJiraPlanForStrictDiscovery(t *testing.T
 					struct {
 						sql  string
 						args []any
-					}{`INSERT INTO integration_credentials (id,org_id,provider,is_active,config,credentials_encrypted) VALUES ($1::uuid,$2,'jira',TRUE,'{}'::jsonb,$3)`,
+					}{`INSERT INTO integration_credentials (id,org_id,provider,name,is_active,config,credentials_encrypted,created_at,updated_at) VALUES ($1::uuid,$2,'jira','credential-'||$1::text,TRUE,'{}'::json,$3,now(),now())`,
 						[]any{credentialID, fixture.occurrence.OrgID, ciphertext.Reveal()}},
 					struct {
 						sql  string

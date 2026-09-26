@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -34,7 +35,7 @@ func TestHandoffDuePostgresSkipsReplicaLockedOccurrence(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	if err := createSchedulerIntegrationFixture(ctx, pool); err != nil {
+	if err := createSchedulerIntegrationFixture(ctx, t, pool); err != nil {
 		t.Fatal(err)
 	}
 	defaultRepository, err := NewRepository(pool)
@@ -289,7 +290,7 @@ func TestHandoffDuePostgresUnsupportedCronFallsBackWithoutMarkerWrite(t *testing
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	if err := createSchedulerIntegrationFixture(ctx, pool); err != nil {
+	if err := createSchedulerIntegrationFixture(ctx, t, pool); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(ctx, `
@@ -354,7 +355,7 @@ func TestHandoffDuePostgresRespectsExternalRowLock(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	if err := createSchedulerIntegrationFixture(ctx, pool); err != nil {
+	if err := createSchedulerIntegrationFixture(ctx, t, pool); err != nil {
 		t.Fatal(err)
 	}
 
@@ -460,7 +461,7 @@ func TestHandoffDuePostgresSurvivesTransactionCrashWithoutPartialWrite(t *testin
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	if err := createSchedulerIntegrationFixture(ctx, pool); err != nil {
+	if err := createSchedulerIntegrationFixture(ctx, t, pool); err != nil {
 		t.Fatal(err)
 	}
 
@@ -561,7 +562,7 @@ func TestHandoffDuePostgresKeepsMintingWhileLastSyncStaysFrozen(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	if err := createSchedulerIntegrationFixture(ctx, pool); err != nil {
+	if err := createSchedulerIntegrationFixture(ctx, t, pool); err != nil {
 		t.Fatal(err)
 	}
 	repository, err := newRepositoryWithOwnership(pool, reviewedGoMutationOwnershipPolicy())
@@ -647,7 +648,7 @@ func TestHandoffDuePostgresRateLimitsCatchUpToTheScheduleMarker(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	if err := createSchedulerIntegrationFixture(ctx, pool); err != nil {
+	if err := createSchedulerIntegrationFixture(ctx, t, pool); err != nil {
 		t.Fatal(err)
 	}
 	repository, err := newRepositoryWithOwnership(pool, reviewedGoMutationOwnershipPolicy())
@@ -722,7 +723,7 @@ func TestOccurrenceCoordinatorPostgresReportsOnConflictAsRepeated(t *testing.T) 
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	if err := createSchedulerIntegrationFixture(ctx, pool); err != nil {
+	if err := createSchedulerIntegrationFixture(ctx, t, pool); err != nil {
 		t.Fatal(err)
 	}
 
@@ -775,86 +776,27 @@ func TestOccurrenceCoordinatorPostgresReportsOnConflictAsRepeated(t *testing.T) 
 	}
 }
 
-func createSchedulerIntegrationFixture(ctx context.Context, pool *pgxpool.Pool) error {
-	for _, statement := range []string{
-		`CREATE TABLE public.sync_configurations (
-			id uuid PRIMARY KEY,
-			org_id text NOT NULL,
-			is_active boolean NOT NULL,
-			-- CHAOS-4174: defaults TRUE here (unlike prod migration 0018's
-			-- server_default FALSE) so the many existing tests in this file that
-			-- insert a config without naming the column keep exercising the
-			-- minting path they were written for. Tests of the new refusal gate
-			-- insert planner_managed explicitly.
-			planner_managed boolean NOT NULL DEFAULT TRUE,
-			sync_targets jsonb NOT NULL DEFAULT '[]'::jsonb,
-			sync_options jsonb NOT NULL,
-			last_sync_at timestamptz,
-			created_at timestamptz NOT NULL
-		)`,
-		// The Coordinator's pre-mint organization guard reads this table. This
-		// fixture's org_id ("org-integration") is deliberately NOT a UUID, and
-		// the guard admits a non-UUID org without any lookup because Python
-		// does (workers/org_guard.py:18-20) -- so these tests keep exercising
-		// the minting path they were written for. The table is created anyway
-		// so the guard has somewhere to look if that org_id ever becomes a UUID.
-		`CREATE TABLE public.organizations (id uuid PRIMARY KEY, tier text)`,
-		`CREATE TABLE public.scheduled_jobs (
-			id uuid PRIMARY KEY,
-			org_id text NOT NULL,
-			sync_config_id uuid NOT NULL,
-			job_type text NOT NULL,
-			schedule_cron text NOT NULL,
-			timezone text NOT NULL,
-			status integer NOT NULL,
-			is_running boolean NOT NULL,
-			last_run_at timestamptz,
-			updated_at timestamptz,
-			next_run_at timestamptz
-		)`,
-		`CREATE TABLE public.scheduler_handoffs (id text PRIMARY KEY)`,
-		`CREATE TABLE public.scheduled_sync_occurrences (
-			occurrence_id text PRIMARY KEY,
-			identity_version text NOT NULL,
-			org_id text NOT NULL,
-			sync_config_id uuid NOT NULL,
-			scheduled_job_id uuid NOT NULL,
-			scheduled_for timestamptz NOT NULL,
-			job_run_id uuid,
-			sync_run_id uuid,
-			created_at timestamptz NOT NULL,
-			UNIQUE (sync_config_id, scheduled_for)
-		)`,
-		`INSERT INTO public.sync_configurations (
-			id, org_id, is_active, sync_options, last_sync_at, created_at
-		) VALUES (
-			'00000000-0000-4000-8000-000000003038',
-			'org-integration',
-			TRUE,
-			'{"schedule_cron":"0 * * * *","timezone":"UTC"}'::jsonb,
-			'2026-01-01T02:00:00-08:00',
-			'2026-01-01T01:00:00-08:00'
-		)`,
-		`INSERT INTO public.scheduled_jobs (
-			id, org_id, sync_config_id, job_type, schedule_cron, timezone,
-			status, is_running, updated_at
-		) VALUES (
-			'00000000-0000-4000-8000-000000003039',
-			'org-integration',
-			'00000000-0000-4000-8000-000000003038',
-			'sync',
-			'0 * * * *',
-			'UTC',
-			0,
-			FALSE,
-			'2026-01-01T01:00:00-08:00'
-		)`,
-	} {
-		if _, err := pool.Exec(ctx, statement); err != nil {
-			return err
-		}
+func createSchedulerIntegrationFixture(ctx context.Context, t *testing.T, pool *pgxpool.Pool) error {
+	t.Helper()
+	// The migrated schema: sync_configurations, scheduled_jobs, scheduled_sync_occurrences and
+	// organizations carry their real columns and constraints. The org_id "org-integration" is
+	// deliberately NOT a UUID: the Coordinator's pre-mint organization guard admits a non-UUID org
+	// without any lookup because Python does (workers/org_guard.py:18-20), so these tests keep
+	// exercising the minting path they were written for.
+	pgschema.Apply(ctx, t, pool)
+	// scheduler_handoffs is this file's own probe table (the coordinator stub writes into it); it is
+	// not a production table.
+	if _, err := pool.Exec(ctx, `CREATE TABLE public.scheduler_handoffs (id text PRIMARY KEY)`); err != nil {
+		return err
 	}
-	return nil
+	// planner_managed is TRUE here (prod's default is FALSE) so the many tests in this file keep
+	// exercising the minting path they were written for; tests of the refusal gate insert
+	// planner_managed explicitly (CHAOS-4174).
+	return insertPlannerFixture(ctx, pool, plannerFixture{
+		configID: "00000000-0000-4000-8000-000000003038", jobID: "00000000-0000-4000-8000-000000003039",
+		orgID: "org-integration", plannerManaged: true,
+		lastSyncAt: "2026-01-01T02:00:00-08:00", createdAt: "2026-01-01T01:00:00-08:00",
+	})
 }
 
 // TestHandoffDuePostgresRefusesNotPlannerManagedConfig is the CHAOS-4174
@@ -892,7 +834,7 @@ func TestHandoffDuePostgresRefusesNotPlannerManagedConfig(t *testing.T) {
 	// (the DDL's default) -- config 00000000-0000-4000-8000-000000003038 /
 	// job 00000000-0000-4000-8000-000000003039, due at observedAt below. That
 	// config is this test's regression proof: it must still mint.
-	if err := createSchedulerIntegrationFixture(ctx, pool); err != nil {
+	if err := createSchedulerIntegrationFixture(ctx, t, pool); err != nil {
 		t.Fatal(err)
 	}
 
@@ -900,25 +842,11 @@ func TestHandoffDuePostgresRefusesNotPlannerManagedConfig(t *testing.T) {
 		fixtureConfigID = "00000000-0000-4000-8000-00000000f001"
 		fixtureJobID    = "00000000-0000-4000-8000-00000000f002"
 	)
-	for _, statement := range []string{
-		`INSERT INTO public.sync_configurations (
-			id, org_id, is_active, planner_managed, sync_options, last_sync_at, created_at
-		) VALUES (
-			'` + fixtureConfigID + `', 'org-integration', TRUE, FALSE,
-			'{"schedule_cron":"0 * * * *","timezone":"UTC"}'::jsonb,
-			'2026-01-01T02:00:00-08:00', '2026-01-01T01:00:00-08:00'
-		)`,
-		`INSERT INTO public.scheduled_jobs (
-			id, org_id, sync_config_id, job_type, schedule_cron, timezone,
-			status, is_running, updated_at
-		) VALUES (
-			'` + fixtureJobID + `', 'org-integration', '` + fixtureConfigID + `',
-			'sync', '0 * * * *', 'UTC', 0, FALSE, '2026-01-01T01:00:00-08:00'
-		)`,
-	} {
-		if _, err := pool.Exec(ctx, statement); err != nil {
-			t.Fatal(err)
-		}
+	if err := insertPlannerFixture(ctx, pool, plannerFixture{
+		configID: fixtureConfigID, jobID: fixtureJobID, orgID: "org-integration", plannerManaged: false,
+		lastSyncAt: "2026-01-01T02:00:00-08:00", createdAt: "2026-01-01T01:00:00-08:00",
+	}); err != nil {
+		t.Fatal(err)
 	}
 
 	repository, err := newRepositoryWithOwnership(pool, reviewedGoMutationOwnershipPolicy())
@@ -1012,7 +940,7 @@ func TestScheduledCandidatesDeprioritizeRefusedRowsUnderLimit(t *testing.T) {
 	// createSchedulerIntegrationFixture's config (...3038 / job ...3039) is
 	// planner_managed=true (the DDL default) with last_sync_at
 	// 2026-01-01T10:00:00Z. This is the "real" config that must not starve.
-	if err := createSchedulerIntegrationFixture(ctx, pool); err != nil {
+	if err := createSchedulerIntegrationFixture(ctx, t, pool); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1020,28 +948,14 @@ func TestScheduledCandidatesDeprioritizeRefusedRowsUnderLimit(t *testing.T) {
 		staleConfigID = "00000000-0000-4000-8000-00000000e101"
 		staleJobID    = "00000000-0000-4000-8000-00000000e102"
 	)
-	for _, statement := range []string{
-		// last_sync_at is a full 10 hours older than the real config's, so it
-		// ranks first in schedulerHandoffCandidatesSQL's ORDER BY on plain
-		// due-ness -- exactly the condition that starves without the fix.
-		`INSERT INTO public.sync_configurations (
-			id, org_id, is_active, planner_managed, sync_options, last_sync_at, created_at
-		) VALUES (
-			'` + staleConfigID + `', 'org-integration', TRUE, FALSE,
-			'{"schedule_cron":"0 * * * *","timezone":"UTC"}'::jsonb,
-			'2026-01-01T00:00:00Z', '2025-12-31T00:00:00Z'
-		)`,
-		`INSERT INTO public.scheduled_jobs (
-			id, org_id, sync_config_id, job_type, schedule_cron, timezone,
-			status, is_running, updated_at
-		) VALUES (
-			'` + staleJobID + `', 'org-integration', '` + staleConfigID + `',
-			'sync', '0 * * * *', 'UTC', 0, FALSE, '2025-12-31T00:00:00Z'
-		)`,
-	} {
-		if _, err := pool.Exec(ctx, statement); err != nil {
-			t.Fatal(err)
-		}
+	// last_sync_at is a full 10 hours older than the real config's, so it
+	// ranks first in schedulerHandoffCandidatesSQL's ORDER BY on plain
+	// due-ness -- exactly the condition that starves without the fix.
+	if err := insertPlannerFixture(ctx, pool, plannerFixture{
+		configID: staleConfigID, jobID: staleJobID, orgID: "org-integration", plannerManaged: false,
+		lastSyncAt: "2026-01-01T00:00:00Z", createdAt: "2025-12-31T00:00:00Z",
+	}); err != nil {
+		t.Fatal(err)
 	}
 
 	repository, err := newRepositoryWithOwnership(pool, reviewedGoMutationOwnershipPolicy())

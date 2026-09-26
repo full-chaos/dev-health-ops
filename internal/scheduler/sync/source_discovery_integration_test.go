@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -35,9 +36,7 @@ func startSourceDiscoveryPostgres(t *testing.T) (materializerFixture, string) {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	if _, err := pool.Exec(ctx, materializerFixtureDDL); err != nil {
-		t.Fatal(err)
-	}
+	pgschema.Apply(ctx, t, pool)
 	const (
 		orgID         = "00000000-0000-4000-8000-0000000000bb"
 		configID      = "00000000-0000-4000-8000-000000002001"
@@ -45,28 +44,17 @@ func startSourceDiscoveryPostgres(t *testing.T) (materializerFixture, string) {
 		datasetID     = "00000000-0000-4000-8000-000000002004"
 		jobID         = "00000000-0000-4000-8000-000000002005"
 	)
-	statements := []struct {
-		sql  string
-		args []any
-	}{
-		{`INSERT INTO integrations VALUES ($1::uuid,$2,'jira',NULL,TRUE,'{}'::jsonb)`, []any{integrationID, orgID}},
-		{`INSERT INTO organizations VALUES ($1::uuid,'community')`, []any{orgID}},
-		{`INSERT INTO feature_flags VALUES ('00000000-0000-4000-8000-000000002007','canonical_incident_ingestion','community',TRUE)`, nil},
-		// planner_managed=TRUE: a REAL scheduled occurrence always has this
-		// true (Materialize's own eligibility gate requires
-		// occurrence.ConfigPlannerManaged), and it is exactly the condition
-		// under which loadPlanSources' metadata.planner_managed_sync_config_id
-		// filter applies (codex review round 1, P1) -- planner_managed=FALSE
-		// here would have silently bypassed that filter and hidden the bug.
-		{`INSERT INTO sync_configurations (id,org_id,sync_targets,sync_options,integration_id,is_active,source_id,planner_managed,provider,updated_at) VALUES ($1::uuid,$2,'["work-items"]'::jsonb,'{"schedule_cron":"0 * * * *"}'::jsonb,$3::uuid,TRUE,NULL,TRUE,'jira',now())`, []any{configID, orgID, integrationID}},
-		{`INSERT INTO integration_datasets VALUES ($1::uuid,$2,$3::uuid,'work-items',TRUE,'{}'::jsonb)`, []any{datasetID, orgID, integrationID}},
-		{`INSERT INTO scheduled_jobs (id,org_id,sync_config_id,job_type,schedule_cron,timezone,status,is_running) VALUES ($1::uuid,$2,$3::uuid,'sync','0 * * * *','UTC',0,FALSE)`, []any{jobID, orgID, configID}},
-	}
-	for _, statement := range statements {
-		if _, err := pool.Exec(ctx, statement.sql, statement.args...); err != nil {
-			t.Fatal(err)
-		}
-	}
+	// planner_managed=TRUE: a REAL scheduled occurrence always has this
+	// true (Materialize's own eligibility gate requires
+	// occurrence.ConfigPlannerManaged), and it is exactly the condition
+	// under which loadPlanSources' metadata.planner_managed_sync_config_id
+	// filter applies (codex review round 1, P1) -- planner_managed=FALSE
+	// here would have silently bypassed that filter and hidden the bug.
+	seedPlannerGraph(ctx, t, pool, plannerGraph{
+		orgID: orgID, integrationID: integrationID, provider: "jira", configID: configID, jobID: jobID,
+		featureID: "00000000-0000-4000-8000-000000002007", datasetID: datasetID, datasetKey: "work-items",
+		targets: `["work-items"]`, plannerManaged: true,
+	})
 	fixture := materializerFixture{pool: pool, occurrence: PendingOccurrence{
 		ID: "occurrence:v1:scheduled", IdentityVersion: OccurrenceIdentityVersion,
 		OrgID: orgID, ConfigID: configID, JobID: jobID,

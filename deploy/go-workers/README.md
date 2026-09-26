@@ -1039,7 +1039,9 @@ the KEDA login needs that schema to exist, so on a fresh database provision the
 KEDA login after `dho migrate river`).
 
 It does what the script did and nothing else: create a login only when missing
-(an existing role keeps its attributes and password), CONNECT on the database,
+(an existing eligible role keeps its attributes and password; an existing one that is
+not an unprivileged login, e.g. NOLOGIN or with CREATEDB, is REFUSED before any
+statement runs, naming the role label, where the script left it alone), CONNECT on the database,
 TEMPORARY revoked (from PUBLIC too), USAGE and no CREATE on schema `public`.
 It never grants a table privilege (those are `dho migrate river`'s, derived from
 the posture manifests), never runs `DROP OWNED BY`, and applies everything in ONE
@@ -1055,8 +1057,10 @@ bootstrap postconditions on the live catalog and exits 1, naming role labels and
 never a password, if one is unmet (each role is an unprivileged login with CONNECT,
 no TEMPORARY, USAGE and no CREATE on `public`; each runtime role is a member of no
 role and owns nothing, which is what its readiness check requires; the KEDA login
-holds exactly CONNECT, USAGE on the River schema and SELECT on `river_job`, counting
-what it inherits through PUBLIC or a role membership, and an extra grant it already
+holds exactly CONNECT, USAGE on the River schema and SELECT on `river_job`, and every
+role is judged on what it holds through PUBLIC too (beyond the ambient CONNECT and
+USAGE on `public`, a privilege through PUBLIC is a problem, relation privileges
+included), counting what a role inherits through a membership, and an extra grant it already
 had is reported, never silently revoked, like the script). Every role, KEDA
 included, goes through the same `roleacl` closure (identity attributes,
 member-of-no-role, owns-nothing, the effective-grant enumeration with its

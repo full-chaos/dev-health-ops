@@ -69,6 +69,11 @@ func Command() cli.Command {
 			Kind:    cli.Verb,
 			Run:     runFinalizeSynthetic,
 		}, {
+			Name:    "generate",
+			Summary: "load a frozen synthetic world (the rows of dev-hops fixtures generate) into ClickHouse",
+			Kind:    cli.Verb,
+			Run:     runGenerate,
+		}, {
 			Name:    "product-telemetry",
 			Summary: "seed product_telemetry_events across organizations",
 			Kind:    cli.Verb,

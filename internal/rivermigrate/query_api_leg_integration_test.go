@@ -15,11 +15,12 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
-// The query-api write leg through the real command: with QUERY_API_DATABASE_ROLE
+// The query-api role leg through the real command: with QUERY_API_DATABASE_ROLE
 // unset the migration grants that role nothing, with it naming an existing role
-// the migration grants the declared writes, with it naming a role that does not
-// exist the leg is skipped with a warning, and with it naming a role that has a
-// full posture of its own the command is refused.
+// the migration applies the declared manifest (CHAOS-6804: REVOKE ALL then
+// GRANT), with it naming a role that does not exist the leg is skipped with a
+// warning, and with it naming a role that has a full posture of its own, or one
+// that OWNS an object, the command is refused before any statement runs.
 //
 // The database here holds only the four tables the leg grants on, so the
 // command's closing executed check of the DOMAIN, QUEUE and COORDINATOR
@@ -102,12 +103,31 @@ func TestMigrateRiverAppliesTheQueryAPILegOnlyWhenNamed(t *testing.T) {
 		t.Fatalf("no query-api role named: exit %d, the role holds a privilege (%v), stderr:\n%s", code, anyHeld(), stderr)
 	}
 	if code, stderr := migrate(map[string]string{"QUERY_API_DATABASE_ROLE": absent}); !applied(code, stderr) ||
-		!strings.Contains(stderr, "query-api Postgres role does not exist; query-api write grants skipped") {
+		!strings.Contains(stderr, "query-api Postgres role does not exist; query-api grants skipped") {
 		t.Fatalf("a role that does not exist must be skipped with a warning: exit %d, stderr:\n%s", code, stderr)
 	}
 	if code, stderr := migrate(map[string]string{"QUERY_API_DATABASE_ROLE": domain}); code != 1 ||
 		!strings.Contains(stderr, "must be distinct") || strings.Contains(stderr, postureGate) {
 		t.Fatalf("naming the domain role as the query-api role must be refused before anything runs: exit %d, stderr:\n%s", code, stderr)
+	}
+	// A role that owns an object (the registry owner query-api logs in as today)
+	// must be refused, not REVOKEd: the leg would strip it of its own tables.
+	ownerRole := randomName(t, "qa_owner_")
+	for _, statement := range []string{
+		"CREATE ROLE " + ownerRole + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD 'x'",
+		"CREATE TABLE public.qa_owned_by_role (id uuid PRIMARY KEY)",
+		"ALTER TABLE public.qa_owned_by_role OWNER TO " + ownerRole,
+	} {
+		if _, err := admin.Exec(ctx, statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() {
+		_, _ = admin.Exec(context.Background(), "DROP OWNED BY "+ownerRole)
+		_, _ = admin.Exec(context.Background(), "DROP ROLE IF EXISTS "+ownerRole)
+	})
+	if code, stderr := migrate(map[string]string{"QUERY_API_DATABASE_ROLE": ownerRole}); code != 1 || strings.Contains(stderr, postureGate) {
+		t.Fatalf("naming a role that owns a table must be refused before any grant: exit %d, stderr:\n%s", code, stderr)
 	}
 	if anyHeld() {
 		t.Fatal("a skipped or refused leg granted the query-api role something")

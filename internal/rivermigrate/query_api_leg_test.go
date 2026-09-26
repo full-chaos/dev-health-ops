@@ -27,7 +27,7 @@ func TestQueryAPILegIsOptInAndDerivesFromTheDeclaredPosture(t *testing.T) {
 		t.Fatalf("role %q", role)
 	}
 	want := make([]riverstore.TableGrant, 0)
-	for _, table := range postgresstore.QueryAPIWritePosture().RequiredTables {
+	for _, table := range postgresstore.QueryAPIPosture().RequiredTables {
 		want = append(want, riverstore.TableGrant{
 			TableName: table.TableName, AllowInsert: table.AllowInsert,
 			AllowUpdate: table.AllowUpdate, AllowDelete: table.AllowDelete,
@@ -39,7 +39,7 @@ func TestQueryAPILegIsOptInAndDerivesFromTheDeclaredPosture(t *testing.T) {
 	// The options the leg produces must pass the migration's own validation.
 	options := riverstore.MigrationOptions{
 		Schema: "river", DomainRole: "d", QueueRole: "q",
-		QueryAPIRole: role, QueryAPIWriteGrants: grants,
+		QueryAPIRole: role, QueryAPIGrants: grants,
 	}
 	if err := riverstore.ValidateMigrationOptions(options); err != nil {
 		t.Fatalf("the derived leg does not validate: %v", err)

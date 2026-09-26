@@ -220,6 +220,74 @@ REVOKE CREATE ON SCHEMA public FROM :"queue_role";
   REVOKE CREATE ON SCHEMA public FROM :"api_role";
 \endif
 
+-- The query-api Service's own role (CHAOS-6804). Optional, same shape as
+-- api_role above -- only provisioned when the caller passes query_api_role, so
+-- every existing caller of this script behaves exactly as before. An operator
+-- opts in explicitly with query_api_role/query_api_password (the paste-ready
+-- line is in deploy/go-workers/README.md).
+--
+-- It never opens a River pool and gets no River-schema privilege of any kind.
+-- Its table privileges are owned by postgres.QueryAPIPosture() and applied by
+-- `dho migrate river` when QUERY_API_DATABASE_ROLE names this role (REVOKE ALL
+-- then GRANT the manifest); this script only makes the login exist,
+-- connectable, and unable to CREATEDB/CREATEROLE/TEMPORARY/CREATE on the public
+-- schema, and can never revoke a grant a later step applied. Naming the
+-- registry-table OWNER (or a superuser) as query_api_role is refused by the
+-- migrate leg, never REVOKEd.
+\if :{?query_api_role}
+  \if :{?query_api_password}
+  \else
+    \prompt -1 'query-api role password: ' query_api_password
+  \endif
+
+  SELECT (
+           :'query_api_role' = :'domain_role'
+           OR :'query_api_role' = :'queue_role'
+           OR :'query_api_role' = :'coordinator_role'
+         ) AS query_api_role_collides
+  \gset
+  \if :query_api_role_collides
+    \echo 'query_api_role must be distinct from domain_role, queue_role, and coordinator_role'
+    -- See the roles_match check above for why this is SELECT 1/0, not \quit N.
+    SELECT 1/0;
+  \endif
+  -- api_role and keda_role are separate optional blocks whose variables are
+  -- available for comparison regardless of textual order (psql resolves --set
+  -- variables at invocation time); each comparison is guarded on the variable
+  -- being set, since comparing an unset psql variable errors.
+  \if :{?api_role}
+    SELECT (:'query_api_role' = :'api_role') AS query_api_role_collides_api
+    \gset
+    \if :query_api_role_collides_api
+      \echo 'query_api_role must be distinct from api_role'
+      SELECT 1/0;
+    \endif
+  \endif
+  \if :{?keda_role}
+    SELECT (:'query_api_role' = :'keda_role') AS query_api_role_collides_keda
+    \gset
+    \if :query_api_role_collides_keda
+      \echo 'query_api_role must be distinct from keda_role'
+      SELECT 1/0;
+    \endif
+  \endif
+
+  SELECT format(
+           'CREATE ROLE %I LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD %L',
+           :'query_api_role',
+           :'query_api_password'
+         )
+   WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'query_api_role')
+  \gexec
+
+  GRANT CONNECT ON DATABASE :"app_database" TO :"query_api_role";
+  -- See the api_role block for why TEMPORARY is revoked from PUBLIC here too,
+  -- and why CREATE on the public schema is revoked from the role only.
+  REVOKE TEMPORARY ON DATABASE :"app_database" FROM PUBLIC, :"query_api_role";
+  GRANT USAGE ON SCHEMA public TO :"query_api_role";
+  REVOKE CREATE ON SCHEMA public FROM :"query_api_role";
+\endif
+
 -- The KEDA postgresql scaler's read-only role. Optional -- only
 -- provisioned when the caller passes keda_role (the Helm hook does this only
 -- when a goWorkers group has autoscaling.enabled=true; Compose never sets

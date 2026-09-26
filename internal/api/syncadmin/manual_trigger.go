@@ -94,7 +94,10 @@ func (h *handlers) checkWorkItemsLimit(ctx context.Context, org string, targets 
 	}
 	current, readErr := h.workItemCount(ctx, org)
 	if readErr != nil {
-		h.logger.WarnContext(ctx, "sync admin: work items count unavailable, allowing the sync",
+		// Python lets the sync proceed when the count cannot be read; that is
+		// kept, but LOUD: an unreadable count (a missing grant included) means the
+		// tier cap is not being enforced.
+		h.logger.ErrorContext(ctx, "sync admin: work items count unavailable, the tier cap is not enforced for this sync",
 			slog.String("error", readErr.Error()))
 		return nil
 	}
@@ -336,7 +339,7 @@ func (h *handlers) manualOutcome(w http.ResponseWriter, r *http.Request, configI
 	default:
 		return outcome, false, nil
 	}
-	policy.WriteModel(w, http.StatusAccepted, body, nil)
+	policy.WriteJSON(w, http.StatusAccepted, body, nil)
 	return outcome, true, nil
 }
 
@@ -387,5 +390,5 @@ func (h *handlers) triggerSyncConfig(w http.ResponseWriter, r *http.Request) {
 	body.Set("sync_run_id", outcome.SyncRunID)
 	body.Set("run_id", outcome.JobRunID)
 	body.Set("total_units", int64(outcome.TotalUnits))
-	policy.WriteModel(w, http.StatusAccepted, body, nil)
+	policy.WriteJSON(w, http.StatusAccepted, body, nil)
 }

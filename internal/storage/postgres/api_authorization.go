@@ -238,7 +238,11 @@ func apiPosture() RolePosture {
 			// SELECT is implicit). The scheduler owns every later write.
 			{"scheduled_sync_occurrences", true, false, false},
 			{"sync_manual_triggers", true, false, false},
-			{"backfill_jobs", false, false, true},
+			// CHAOS-6871: the sync configuration's backfill POST records its
+			// history row (INSERT) once the scheduler has planned the run; the
+			// list and detail reads are the implicit SELECT, and the org
+			// purge (delete) is unchanged.
+			{"backfill_jobs", true, false, true},
 			// Billing: invoice_line_items/subscription_events are each
 			// deleted via a subquery on their own owning row's org_id
 			// (invoices/subscriptions respectively). invoices also takes

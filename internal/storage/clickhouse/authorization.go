@@ -83,6 +83,12 @@ func APIPosture(database string) Posture {
 		// and its categorization outcomes per run. Read-only.
 		{Database: database, Table: "llm_token_usage", AllowSelect: true},
 		{Database: database, Table: "work_unit_investments", AllowSelect: true},
+		// POST /sync-configs/{id}/trigger (CHAOS-6871) counts the org's stored
+		// work items against the tier's max_work_items before it hands a
+		// work-items sync to the scheduler. Read-only. Without this grant the
+		// count fails and the sync is allowed (as when ClickHouse is down), so the
+		// tier cap would silently stop being enforced.
+		{Database: database, Table: "work_items", AllowSelect: true},
 	}}
 }
 

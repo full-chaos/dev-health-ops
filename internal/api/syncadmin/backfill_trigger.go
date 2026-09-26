@@ -93,7 +93,7 @@ func (h *handlers) backfillSyncConfig(w http.ResponseWriter, r *http.Request) {
 	out.Set("mode", "fanout")
 	out.Set("since", window.sinceISO())
 	out.Set("before", window.beforeISO())
-	policy.WriteModel(w, http.StatusAccepted, out, nil)
+	policy.WriteJSON(w, http.StatusAccepted, out, nil)
 }
 
 // answerBackfillFailure is the route's `except Exception` around the hand-off:

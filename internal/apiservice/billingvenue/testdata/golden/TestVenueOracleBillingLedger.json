@@ -1,0 +1,2229 @@
+{
+  "header": {
+    "test": "TestVenueOracleBillingLedger",
+    "python_build": "023ae3e584ef6345a3bfaef1f0b30abd89f5dee8",
+    "producer_digest": "53028fde43de410ecb5704202be163d92617d6794f5d2108513c8868e2607e80",
+    "recipe": "git worktree add --detach \u003cdir\u003e 023ae3e584ef6345a3bfaef1f0b30abd89f5dee8; from internal/apiservice/billingvenue: DHO_VENUE_GOLDEN_UPDATE=1 DHO_VENUE_GOLDEN_PYTHON_ROOT=\u003cdir\u003e DEV_HEALTH_LIVE_PYTHON_ORACLES=1 go test -tags=integration -count=1 -run '^TestVenueOracleBillingLedger$' ."
+  },
+  "requests": [
+    {
+      "name": "ent: anon",
+      "method": "GET",
+      "path": "/api/v1/billing/entitlements/37aa5733-344b-54a7-9210-c911e4ccf37a",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "fd6e55f2ba4c5c59ea6141921820358411e8536e2184aa6db640ebcc5a081aeb",
+      "status": 401,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "www-authenticate": "Bearer",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
+    },
+    {
+      "name": "ent: bad id",
+      "method": "GET",
+      "path": "/api/v1/billing/entitlements/nope",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "2d41025fbf95fd5eba342463d5d6c2a3b0a20b1d7ab70b9e6d0be1cb136ec547",
+      "status": 422,
+      "headers": {
+        "content-length": "386",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":[{\"type\":\"uuid_parsing\",\"loc\":[\"path\",\"org_id\"],\"msg\":\"Input should be a valid UUID, invalid character: found `n` at 1\",\"input\":\"nope\",\"ctx\":{\"error\":\"invalid character: found `n` at 1\"}},{\"type\":\"uuid_parsing\",\"loc\":[\"path\",\"org_id\"],\"msg\":\"Input should be a valid UUID, invalid character: found `n` at 1\",\"input\":\"nope\",\"ctx\":{\"error\":\"invalid character: found `n` at 1\"}}]}"
+    },
+    {
+      "name": "ent: owner",
+      "method": "GET",
+      "path": "/api/v1/billing/entitlements/37aa5733-344b-54a7-9210-c911e4ccf37a",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "2d41025fbf95fd5eba342463d5d6c2a3b0a20b1d7ab70b9e6d0be1cb136ec547",
+      "status": 200,
+      "headers": {
+        "content-length": "916",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"tier\":\"team\",\"features\":{\"git_sync\":true,\"work_items_sync\":true,\"basic_analytics\":true,\"team_management\":true,\"github_integration\":true,\"gitlab_integration\":true,\"jira_integration\":true,\"investment_view\":true,\"api_access\":true,\"capacity_forecast\":true,\"work_graph\":true,\"quadrant_analysis\":true,\"linear_integration\":true,\"llm_categorization\":true,\"webhooks\":true,\"customer_push_ingest\":true,\"canonical_incident_ingestion\":true,\"agent_context_runtime\":false,\"ask_dev\":false,\"ask_dev_contextual_entrypoints\":false,\"ask_dev_wave_3_1\":false,\"scheduled_jobs\":true,\"sso_saml\":false,\"sso_oidc\":false,\"audit_log\":false,\"custom_retention\":false,\"ip_allowlist\":false,\"data_export\":false,\"multi_org\":false,\"custom_branding\":false,\"priority_support\":false,\"byo_llm\":true},\"limits\":{\"users\":20,\"repos\":10,\"api_rate\":500},\"is_licensed\":true,\"in_grace_period\":false,\"is_trialing\":true,\"trial_ends_at\":\"2026-09-24T00:00:00+00:00\"}"
+    },
+    {
+      "name": "ent: member",
+      "method": "GET",
+      "path": "/api/v1/billing/entitlements/37aa5733-344b-54a7-9210-c911e4ccf37a",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "cd860fdd87873f44aabe6c08036b93c5cd6c8ea317fba058159e3a599ab3f467",
+      "status": 200,
+      "headers": {
+        "content-length": "916",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"tier\":\"team\",\"features\":{\"git_sync\":true,\"work_items_sync\":true,\"basic_analytics\":true,\"team_management\":true,\"github_integration\":true,\"gitlab_integration\":true,\"jira_integration\":true,\"investment_view\":true,\"api_access\":true,\"capacity_forecast\":true,\"work_graph\":true,\"quadrant_analysis\":true,\"linear_integration\":true,\"llm_categorization\":true,\"webhooks\":true,\"customer_push_ingest\":true,\"canonical_incident_ingestion\":true,\"agent_context_runtime\":false,\"ask_dev\":false,\"ask_dev_contextual_entrypoints\":false,\"ask_dev_wave_3_1\":false,\"scheduled_jobs\":true,\"sso_saml\":false,\"sso_oidc\":false,\"audit_log\":false,\"custom_retention\":false,\"ip_allowlist\":false,\"data_export\":false,\"multi_org\":false,\"custom_branding\":false,\"priority_support\":false,\"byo_llm\":true},\"limits\":{\"users\":20,\"repos\":10,\"api_rate\":500},\"is_licensed\":true,\"in_grace_period\":false,\"is_trialing\":true,\"trial_ends_at\":\"2026-09-24T00:00:00+00:00\"}"
+    },
+    {
+      "name": "ent: other org",
+      "method": "GET",
+      "path": "/api/v1/billing/entitlements/092d1323-14fb-5f19-b878-28bcca58f9d6",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "2d41025fbf95fd5eba342463d5d6c2a3b0a20b1d7ab70b9e6d0be1cb136ec547",
+      "status": 403,
+      "headers": {
+        "content-length": "29",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Access forbidden\"}"
+    },
+    {
+      "name": "ent: super org B",
+      "method": "GET",
+      "path": "/api/v1/billing/entitlements/092d1323-14fb-5f19-b878-28bcca58f9d6",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "13cb693c14be6b63125fe673ce665798f9f6005044f09ff0792790e4c8442d29",
+      "status": 200,
+      "headers": {
+        "content-length": "894",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"tier\":\"team\",\"features\":{\"git_sync\":true,\"work_items_sync\":true,\"basic_analytics\":true,\"team_management\":true,\"github_integration\":true,\"gitlab_integration\":true,\"jira_integration\":true,\"investment_view\":true,\"api_access\":true,\"capacity_forecast\":true,\"work_graph\":true,\"quadrant_analysis\":true,\"linear_integration\":true,\"llm_categorization\":true,\"webhooks\":true,\"customer_push_ingest\":true,\"canonical_incident_ingestion\":true,\"agent_context_runtime\":false,\"ask_dev\":false,\"ask_dev_contextual_entrypoints\":false,\"ask_dev_wave_3_1\":false,\"scheduled_jobs\":true,\"sso_saml\":false,\"sso_oidc\":false,\"audit_log\":false,\"custom_retention\":false,\"ip_allowlist\":false,\"data_export\":false,\"multi_org\":false,\"custom_branding\":false,\"priority_support\":false,\"byo_llm\":true},\"limits\":{\"users\":20,\"repos\":10,\"api_rate\":500},\"is_licensed\":true,\"in_grace_period\":false,\"is_trialing\":false,\"trial_ends_at\":null}"
+    },
+    {
+      "name": "ent: super org D",
+      "method": "GET",
+      "path": "/api/v1/billing/entitlements/f5fc5f0d-cbeb-5886-86ff-f6a51c89659f",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "13cb693c14be6b63125fe673ce665798f9f6005044f09ff0792790e4c8442d29",
+      "status": 200,
+      "headers": {
+        "content-length": "912",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"tier\":\"community\",\"features\":{\"git_sync\":true,\"work_items_sync\":true,\"basic_analytics\":true,\"team_management\":true,\"github_integration\":false,\"gitlab_integration\":false,\"jira_integration\":false,\"investment_view\":false,\"api_access\":false,\"capacity_forecast\":false,\"work_graph\":false,\"quadrant_analysis\":false,\"linear_integration\":false,\"llm_categorization\":false,\"webhooks\":false,\"customer_push_ingest\":false,\"canonical_incident_ingestion\":true,\"agent_context_runtime\":false,\"ask_dev\":false,\"ask_dev_contextual_entrypoints\":false,\"ask_dev_wave_3_1\":false,\"scheduled_jobs\":false,\"sso_saml\":false,\"sso_oidc\":false,\"audit_log\":false,\"custom_retention\":false,\"ip_allowlist\":false,\"data_export\":false,\"multi_org\":false,\"custom_branding\":false,\"priority_support\":false,\"byo_llm\":false},\"limits\":{\"users\":5,\"repos\":3,\"api_rate\":100},\"is_licensed\":false,\"in_grace_period\":false,\"is_trialing\":false,\"trial_ends_at\":null}"
+    },
+    {
+      "name": "ent: super missing org",
+      "method": "GET",
+      "path": "/api/v1/billing/entitlements/bbf3f791-6ede-5e3d-8f1d-fd193f599f79",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "13cb693c14be6b63125fe673ce665798f9f6005044f09ff0792790e4c8442d29",
+      "status": 200,
+      "headers": {
+        "content-length": "912",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"tier\":\"community\",\"features\":{\"git_sync\":true,\"work_items_sync\":true,\"basic_analytics\":true,\"team_management\":true,\"github_integration\":false,\"gitlab_integration\":false,\"jira_integration\":false,\"investment_view\":false,\"api_access\":false,\"capacity_forecast\":false,\"work_graph\":false,\"quadrant_analysis\":false,\"linear_integration\":false,\"llm_categorization\":false,\"webhooks\":false,\"customer_push_ingest\":false,\"canonical_incident_ingestion\":true,\"agent_context_runtime\":false,\"ask_dev\":false,\"ask_dev_contextual_entrypoints\":false,\"ask_dev_wave_3_1\":false,\"scheduled_jobs\":false,\"sso_saml\":false,\"sso_oidc\":false,\"audit_log\":false,\"custom_retention\":false,\"ip_allowlist\":false,\"data_export\":false,\"multi_org\":false,\"custom_branding\":false,\"priority_support\":false,\"byo_llm\":false},\"limits\":{\"users\":5,\"repos\":3,\"api_rate\":100},\"is_licensed\":false,\"in_grace_period\":false,\"is_trialing\":false,\"trial_ends_at\":null}"
+    },
+    {
+      "name": "ent: no org",
+      "method": "GET",
+      "path": "/api/v1/billing/entitlements/37aa5733-344b-54a7-9210-c911e4ccf37a",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "8c2bfbaa9cbc418de23df1c2273dd55b8d862b2951aa724717020d9a3afd5d77",
+      "status": 403,
+      "headers": {
+        "content-length": "29",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Access forbidden\"}"
+    },
+    {
+      "name": "ent: bad org claim",
+      "method": "GET",
+      "path": "/api/v1/billing/entitlements/092d1323-14fb-5f19-b878-28bcca58f9d6",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "31bd2ac1b8684da7fa7cabdd62a6d441cb4bffa2636577e74a7b7ab19aa10a67",
+      "status": 403,
+      "headers": {
+        "content-length": "29",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Access forbidden\"}"
+    },
+    {
+      "name": "ent: inactive user",
+      "method": "GET",
+      "path": "/api/v1/billing/entitlements/37aa5733-344b-54a7-9210-c911e4ccf37a",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "93b8e0f08e1b962bb5b9f64b4603fbd102f9a9ad2c0535cdf4a5a1438436dd8d",
+      "status": 401,
+      "headers": {
+        "content-length": "49",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "www-authenticate": "Bearer",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":{\"message\":\"Invalid or expired token\"}}"
+    },
+    {
+      "name": "ent: token names another org",
+      "method": "GET",
+      "path": "/api/v1/billing/entitlements/37aa5733-344b-54a7-9210-c911e4ccf37a",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "154f806e90beb8981cc5699f1a8396a673eddc14f6eedd0c1afdd521f777daaf",
+      "status": 403,
+      "headers": {
+        "content-length": "29",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Access forbidden\"}"
+    },
+    {
+      "name": "ent: token org without membership",
+      "method": "GET",
+      "path": "/api/v1/billing/entitlements/37aa5733-344b-54a7-9210-c911e4ccf37a",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "45a79ef866cd3253d4a6c7f6cf1e110fc444af4f303c28199c7ce1edff32698c",
+      "status": 403,
+      "headers": {
+        "content-length": "29",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Access forbidden\"}"
+    },
+    {
+      "name": "ent: invalid license tier",
+      "method": "GET",
+      "path": "/api/v1/billing/entitlements/66666666-0000-4000-8000-000000000001",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "13cb693c14be6b63125fe673ce665798f9f6005044f09ff0792790e4c8442d29",
+      "status": 200,
+      "headers": {
+        "content-length": "912",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"tier\":\"community\",\"features\":{\"git_sync\":true,\"work_items_sync\":true,\"basic_analytics\":true,\"team_management\":true,\"github_integration\":false,\"gitlab_integration\":false,\"jira_integration\":false,\"investment_view\":false,\"api_access\":false,\"capacity_forecast\":false,\"work_graph\":false,\"quadrant_analysis\":false,\"linear_integration\":false,\"llm_categorization\":false,\"webhooks\":false,\"customer_push_ingest\":false,\"canonical_incident_ingestion\":true,\"agent_context_runtime\":false,\"ask_dev\":false,\"ask_dev_contextual_entrypoints\":false,\"ask_dev_wave_3_1\":false,\"scheduled_jobs\":false,\"sso_saml\":false,\"sso_oidc\":false,\"audit_log\":false,\"custom_retention\":false,\"ip_allowlist\":false,\"data_export\":false,\"multi_org\":false,\"custom_branding\":false,\"priority_support\":false,\"byo_llm\":false},\"limits\":{\"users\":5,\"repos\":3,\"api_rate\":100},\"is_licensed\":false,\"in_grace_period\":false,\"is_trialing\":false,\"trial_ends_at\":null}"
+    },
+    {
+      "name": "ent: 405",
+      "method": "POST",
+      "path": "/api/v1/billing/entitlements/37aa5733-344b-54a7-9210-c911e4ccf37a",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "2d41025fbf95fd5eba342463d5d6c2a3b0a20b1d7ab70b9e6d0be1cb136ec547",
+      "status": 405,
+      "headers": {
+        "allow": "GET",
+        "content-length": "31",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "name": "inv list: anon",
+      "method": "GET",
+      "path": "/api/v1/billing/invoices",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "fd6e55f2ba4c5c59ea6141921820358411e8536e2184aa6db640ebcc5a081aeb",
+      "status": 401,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "www-authenticate": "Bearer",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
+    },
+    {
+      "name": "inv list: member",
+      "method": "GET",
+      "path": "/api/v1/billing/invoices",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "cd860fdd87873f44aabe6c08036b93c5cd6c8ea317fba058159e3a599ab3f467",
+      "status": 200,
+      "headers": {
+        "content-length": "2444",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"items\":[{\"id\":\"22222222-0000-4000-8000-000000000004\",\"org_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"subscription_id\":null,\"stripe_invoice_id\":\"in_err\",\"stripe_customer_id\":\"cus_A\",\"status\":\"open\",\"amount_due\":200,\"amount_paid\":0,\"amount_remaining\":200,\"currency\":\"usd\",\"period_start\":null,\"period_end\":null,\"hosted_invoice_url\":null,\"pdf_url\":null,\"payment_intent_id\":null,\"finalized_at\":null,\"paid_at\":null,\"voided_at\":null,\"attempt_count\":3,\"metadata\":{},\"created_at\":\"2026-09-04T00:00:00Z\",\"updated_at\":\"2026-09-04T00:00:00Z\",\"line_items\":[]},{\"id\":\"22222222-0000-4000-8000-000000000003\",\"org_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"subscription_id\":null,\"stripe_invoice_id\":\"in_A3\",\"stripe_customer_id\":\"cus_A\",\"status\":\"void\",\"amount_due\":100,\"amount_paid\":0,\"amount_remaining\":0,\"currency\":\"usd\",\"period_start\":null,\"period_end\":null,\"hosted_invoice_url\":null,\"pdf_url\":null,\"payment_intent_id\":null,\"finalized_at\":null,\"paid_at\":null,\"voided_at\":\"2026-09-03T00:00:00Z\",\"attempt_count\":0,\"metadata\":{},\"created_at\":\"2026-09-03T00:00:00Z\",\"updated_at\":\"2026-09-03T00:00:00Z\",\"line_items\":[]},{\"id\":\"22222222-0000-4000-8000-000000000002\",\"org_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"subscription_id\":null,\"stripe_invoice_id\":\"in_A2\",\"stripe_customer_id\":\"cus_A\",\"status\":\"paid\",\"amount_due\":7000,\"amount_paid\":7000,\"amount_remaining\":0,\"currency\":\"eur\",\"period_start\":null,\"period_end\":null,\"hosted_invoice_url\":null,\"pdf_url\":\"https://pdf.venue.test/in_A2\",\"payment_intent_id\":\"pi_A2\",\"finalized_at\":\"2026-09-02T00:00:00Z\",\"paid_at\":\"2026-09-01T22:05:00.000001Z\",\"voided_at\":null,\"attempt_count\":0,\"metadata\":{},\"created_at\":\"2026-09-02T00:00:00Z\",\"updated_at\":\"2026-09-02T00:00:00Z\",\"line_items\":[]},{\"id\":\"22222222-0000-4000-8000-000000000001\",\"org_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"subscription_id\":\"11111111-0000-4000-8000-000000000001\",\"stripe_invoice_id\":\"in_A1\",\"stripe_customer_id\":\"cus_A\",\"status\":\"open\",\"amount_due\":5000,\"amount_paid\":0,\"amount_remaining\":5000,\"currency\":\"usd\",\"period_start\":\"2026-09-01T00:00:00Z\",\"period_end\":\"2026-10-01T00:00:00.250000Z\",\"hosted_invoice_url\":\"https://pay.venue.test/in_A1\",\"pdf_url\":null,\"payment_intent_id\":null,\"finalized_at\":\"2026-09-01T00:00:01Z\",\"paid_at\":null,\"voided_at\":null,\"attempt_count\":1,\"metadata\":{\"b\":1,\"a\":{\"c\":[1.5,null,\"é\"]}},\"created_at\":\"2026-09-01T00:00:00Z\",\"updated_at\":\"2026-09-01T00:00:00Z\",\"line_items\":[]}],\"total\":4,\"limit\":20,\"offset\":0}"
+    },
+    {
+      "name": "inv list: page",
+      "method": "GET",
+      "path": "/api/v1/billing/invoices?limit=2\u0026offset=1",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "cd860fdd87873f44aabe6c08036b93c5cd6c8ea317fba058159e3a599ab3f467",
+      "status": 200,
+      "headers": {
+        "content-length": "1210",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"items\":[{\"id\":\"22222222-0000-4000-8000-000000000003\",\"org_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"subscription_id\":null,\"stripe_invoice_id\":\"in_A3\",\"stripe_customer_id\":\"cus_A\",\"status\":\"void\",\"amount_due\":100,\"amount_paid\":0,\"amount_remaining\":0,\"currency\":\"usd\",\"period_start\":null,\"period_end\":null,\"hosted_invoice_url\":null,\"pdf_url\":null,\"payment_intent_id\":null,\"finalized_at\":null,\"paid_at\":null,\"voided_at\":\"2026-09-03T00:00:00Z\",\"attempt_count\":0,\"metadata\":{},\"created_at\":\"2026-09-03T00:00:00Z\",\"updated_at\":\"2026-09-03T00:00:00Z\",\"line_items\":[]},{\"id\":\"22222222-0000-4000-8000-000000000002\",\"org_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"subscription_id\":null,\"stripe_invoice_id\":\"in_A2\",\"stripe_customer_id\":\"cus_A\",\"status\":\"paid\",\"amount_due\":7000,\"amount_paid\":7000,\"amount_remaining\":0,\"currency\":\"eur\",\"period_start\":null,\"period_end\":null,\"hosted_invoice_url\":null,\"pdf_url\":\"https://pdf.venue.test/in_A2\",\"payment_intent_id\":\"pi_A2\",\"finalized_at\":\"2026-09-02T00:00:00Z\",\"paid_at\":\"2026-09-01T22:05:00.000001Z\",\"voided_at\":null,\"attempt_count\":0,\"metadata\":{},\"created_at\":\"2026-09-02T00:00:00Z\",\"updated_at\":\"2026-09-02T00:00:00Z\",\"line_items\":[]}],\"total\":4,\"limit\":2,\"offset\":1}"
+    },
+    {
+      "name": "inv list: status",
+      "method": "GET",
+      "path": "/api/v1/billing/invoices?status=open",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "2d41025fbf95fd5eba342463d5d6c2a3b0a20b1d7ab70b9e6d0be1cb136ec547",
+      "status": 200,
+      "headers": {
+        "content-length": "1276",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"items\":[{\"id\":\"22222222-0000-4000-8000-000000000004\",\"org_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"subscription_id\":null,\"stripe_invoice_id\":\"in_err\",\"stripe_customer_id\":\"cus_A\",\"status\":\"open\",\"amount_due\":200,\"amount_paid\":0,\"amount_remaining\":200,\"currency\":\"usd\",\"period_start\":null,\"period_end\":null,\"hosted_invoice_url\":null,\"pdf_url\":null,\"payment_intent_id\":null,\"finalized_at\":null,\"paid_at\":null,\"voided_at\":null,\"attempt_count\":3,\"metadata\":{},\"created_at\":\"2026-09-04T00:00:00Z\",\"updated_at\":\"2026-09-04T00:00:00Z\",\"line_items\":[]},{\"id\":\"22222222-0000-4000-8000-000000000001\",\"org_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"subscription_id\":\"11111111-0000-4000-8000-000000000001\",\"stripe_invoice_id\":\"in_A1\",\"stripe_customer_id\":\"cus_A\",\"status\":\"open\",\"amount_due\":5000,\"amount_paid\":0,\"amount_remaining\":5000,\"currency\":\"usd\",\"period_start\":\"2026-09-01T00:00:00Z\",\"period_end\":\"2026-10-01T00:00:00.250000Z\",\"hosted_invoice_url\":\"https://pay.venue.test/in_A1\",\"pdf_url\":null,\"payment_intent_id\":null,\"finalized_at\":\"2026-09-01T00:00:01Z\",\"paid_at\":null,\"voided_at\":null,\"attempt_count\":1,\"metadata\":{\"b\":1,\"a\":{\"c\":[1.5,null,\"é\"]}},\"created_at\":\"2026-09-01T00:00:00Z\",\"updated_at\":\"2026-09-01T00:00:00Z\",\"line_items\":[]}],\"total\":2,\"limit\":20,\"offset\":0}"
+    },
+    {
+      "name": "inv list: empty status",
+      "method": "GET",
+      "path": "/api/v1/billing/invoices?status=",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "2d41025fbf95fd5eba342463d5d6c2a3b0a20b1d7ab70b9e6d0be1cb136ec547",
+      "status": 200,
+      "headers": {
+        "content-length": "2444",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"items\":[{\"id\":\"22222222-0000-4000-8000-000000000004\",\"org_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"subscription_id\":null,\"stripe_invoice_id\":\"in_err\",\"stripe_customer_id\":\"cus_A\",\"status\":\"open\",\"amount_due\":200,\"amount_paid\":0,\"amount_remaining\":200,\"currency\":\"usd\",\"period_start\":null,\"period_end\":null,\"hosted_invoice_url\":null,\"pdf_url\":null,\"payment_intent_id\":null,\"finalized_at\":null,\"paid_at\":null,\"voided_at\":null,\"attempt_count\":3,\"metadata\":{},\"created_at\":\"2026-09-04T00:00:00Z\",\"updated_at\":\"2026-09-04T00:00:00Z\",\"line_items\":[]},{\"id\":\"22222222-0000-4000-8000-000000000003\",\"org_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"subscription_id\":null,\"stripe_invoice_id\":\"in_A3\",\"stripe_customer_id\":\"cus_A\",\"status\":\"void\",\"amount_due\":100,\"amount_paid\":0,\"amount_remaining\":0,\"currency\":\"usd\",\"period_start\":null,\"period_end\":null,\"hosted_invoice_url\":null,\"pdf_url\":null,\"payment_intent_id\":null,\"finalized_at\":null,\"paid_at\":null,\"voided_at\":\"2026-09-03T00:00:00Z\",\"attempt_count\":0,\"metadata\":{},\"created_at\":\"2026-09-03T00:00:00Z\",\"updated_at\":\"2026-09-03T00:00:00Z\",\"line_items\":[]},{\"id\":\"22222222-0000-4000-8000-000000000002\",\"org_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"subscription_id\":null,\"stripe_invoice_id\":\"in_A2\",\"stripe_customer_id\":\"cus_A\",\"status\":\"paid\",\"amount_due\":7000,\"amount_paid\":7000,\"amount_remaining\":0,\"currency\":\"eur\",\"period_start\":null,\"period_end\":null,\"hosted_invoice_url\":null,\"pdf_url\":\"https://pdf.venue.test/in_A2\",\"payment_intent_id\":\"pi_A2\",\"finalized_at\":\"2026-09-02T00:00:00Z\",\"paid_at\":\"2026-09-01T22:05:00.000001Z\",\"voided_at\":null,\"attempt_count\":0,\"metadata\":{},\"created_at\":\"2026-09-02T00:00:00Z\",\"updated_at\":\"2026-09-02T00:00:00Z\",\"line_items\":[]},{\"id\":\"22222222-0000-4000-8000-000000000001\",\"org_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"subscription_id\":\"11111111-0000-4000-8000-000000000001\",\"stripe_invoice_id\":\"in_A1\",\"stripe_customer_id\":\"cus_A\",\"status\":\"open\",\"amount_due\":5000,\"amount_paid\":0,\"amount_remaining\":5000,\"currency\":\"usd\",\"period_start\":\"2026-09-01T00:00:00Z\",\"period_end\":\"2026-10-01T00:00:00.250000Z\",\"hosted_invoice_url\":\"https://pay.venue.test/in_A1\",\"pdf_url\":null,\"payment_intent_id\":null,\"finalized_at\":\"2026-09-01T00:00:01Z\",\"paid_at\":null,\"voided_at\":null,\"attempt_count\":1,\"metadata\":{\"b\":1,\"a\":{\"c\":[1.5,null,\"é\"]}},\"created_at\":\"2026-09-01T00:00:00Z\",\"updated_at\":\"2026-09-01T00:00:00Z\",\"line_items\":[]}],\"total\":4,\"limit\":20,\"offset\":0}"
+    },
+    {
+      "name": "inv list: org ignored",
+      "method": "GET",
+      "path": "/api/v1/billing/invoices?org_id=092d1323-14fb-5f19-b878-28bcca58f9d6",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "2d41025fbf95fd5eba342463d5d6c2a3b0a20b1d7ab70b9e6d0be1cb136ec547",
+      "status": 200,
+      "headers": {
+        "content-length": "2444",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"items\":[{\"id\":\"22222222-0000-4000-8000-000000000004\",\"org_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"subscription_id\":null,\"stripe_invoice_id\":\"in_err\",\"stripe_customer_id\":\"cus_A\",\"status\":\"open\",\"amount_due\":200,\"amount_paid\":0,\"amount_remaining\":200,\"currency\":\"usd\",\"period_start\":null,\"period_end\":null,\"hosted_invoice_url\":null,\"pdf_url\":null,\"payment_intent_id\":null,\"finalized_at\":null,\"paid_at\":null,\"voided_at\":null,\"attempt_count\":3,\"metadata\":{},\"created_at\":\"2026-09-04T00:00:00Z\",\"updated_at\":\"2026-09-04T00:00:00Z\",\"line_items\":[]},{\"id\":\"22222222-0000-4000-8000-000000000003\",\"org_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"subscription_id\":null,\"stripe_invoice_id\":\"in_A3\",\"stripe_customer_id\":\"cus_A\",\"status\":\"void\",\"amount_due\":100,\"amount_paid\":0,\"amount_remaining\":0,\"currency\":\"usd\",\"period_start\":null,\"period_end\":null,\"hosted_invoice_url\":null,\"pdf_url\":null,\"payment_intent_id\":null,\"finalized_at\":null,\"paid_at\":null,\"voided_at\":\"2026-09-03T00:00:00Z\",\"attempt_count\":0,\"metadata\":{},\"created_at\":\"2026-09-03T00:00:00Z\",\"updated_at\":\"2026-09-03T00:00:00Z\",\"line_items\":[]},{\"id\":\"22222222-0000-4000-8000-000000000002\",\"org_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"subscription_id\":null,\"stripe_invoice_id\":\"in_A2\",\"stripe_customer_id\":\"cus_A\",\"status\":\"paid\",\"amount_due\":7000,\"amount_paid\":7000,\"amount_remaining\":0,\"currency\":\"eur\",\"period_start\":null,\"period_end\":null,\"hosted_invoice_url\":null,\"pdf_url\":\"https://pdf.venue.test/in_A2\",\"payment_intent_id\":\"pi_A2\",\"finalized_at\":\"2026-09-02T00:00:00Z\",\"paid_at\":\"2026-09-01T22:05:00.000001Z\",\"voided_at\":null,\"attempt_count\":0,\"metadata\":{},\"created_at\":\"2026-09-02T00:00:00Z\",\"updated_at\":\"2026-09-02T00:00:00Z\",\"line_items\":[]},{\"id\":\"22222222-0000-4000-8000-000000000001\",\"org_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"subscription_id\":\"11111111-0000-4000-8000-000000000001\",\"stripe_invoice_id\":\"in_A1\",\"stripe_customer_id\":\"cus_A\",\"status\":\"open\",\"amount_due\":5000,\"amount_paid\":0,\"amount_remaining\":5000,\"currency\":\"usd\",\"period_start\":\"2026-09-01T00:00:00Z\",\"period_end\":\"2026-10-01T00:00:00.250000Z\",\"hosted_invoice_url\":\"https://pay.venue.test/in_A1\",\"pdf_url\":null,\"payment_intent_id\":null,\"finalized_at\":\"2026-09-01T00:00:01Z\",\"paid_at\":null,\"voided_at\":null,\"attempt_count\":1,\"metadata\":{\"b\":1,\"a\":{\"c\":[1.5,null,\"é\"]}},\"created_at\":\"2026-09-01T00:00:00Z\",\"updated_at\":\"2026-09-01T00:00:00Z\",\"line_items\":[]}],\"total\":4,\"limit\":20,\"offset\":0}"
+    },
+    {
+      "name": "inv list: bad params",
+      "method": "GET",
+      "path": "/api/v1/billing/invoices?limit=0\u0026offset=-1\u0026org_id=x",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "2d41025fbf95fd5eba342463d5d6c2a3b0a20b1d7ab70b9e6d0be1cb136ec547",
+      "status": 422,
+      "headers": {
+        "content-length": "463",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":[{\"type\":\"greater_than_equal\",\"loc\":[\"query\",\"limit\"],\"msg\":\"Input should be greater than or equal to 1\",\"input\":\"0\",\"ctx\":{\"ge\":1}},{\"type\":\"greater_than_equal\",\"loc\":[\"query\",\"offset\"],\"msg\":\"Input should be greater than or equal to 0\",\"input\":\"-1\",\"ctx\":{\"ge\":0}},{\"type\":\"uuid_parsing\",\"loc\":[\"query\",\"org_id\"],\"msg\":\"Input should be a valid UUID, invalid character: found `x` at 1\",\"input\":\"x\",\"ctx\":{\"error\":\"invalid character: found `x` at 1\"}}]}"
+    },
+    {
+      "name": "inv list: limit high",
+      "method": "GET",
+      "path": "/api/v1/billing/invoices?limit=101",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "2d41025fbf95fd5eba342463d5d6c2a3b0a20b1d7ab70b9e6d0be1cb136ec547",
+      "status": 422,
+      "headers": {
+        "content-length": "144",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":[{\"type\":\"less_than_equal\",\"loc\":[\"query\",\"limit\"],\"msg\":\"Input should be less than or equal to 100\",\"input\":\"101\",\"ctx\":{\"le\":100}}]}"
+    },
+    {
+      "name": "inv list: offset overflow",
+      "method": "GET",
+      "path": "/api/v1/billing/invoices?offset=99999999999999999999",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "2d41025fbf95fd5eba342463d5d6c2a3b0a20b1d7ab70b9e6d0be1cb136ec547",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "inv list: super org B",
+      "method": "GET",
+      "path": "/api/v1/billing/invoices?org_id=092d1323-14fb-5f19-b878-28bcca58f9d6",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "13cb693c14be6b63125fe673ce665798f9f6005044f09ff0792790e4c8442d29",
+      "status": 200,
+      "headers": {
+        "content-length": "591",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"items\":[{\"id\":\"22222222-0000-4000-8000-000000000005\",\"org_id\":\"092d1323-14fb-5f19-b878-28bcca58f9d6\",\"subscription_id\":null,\"stripe_invoice_id\":\"in_B1\",\"stripe_customer_id\":\"cus_B\",\"status\":\"open\",\"amount_due\":300,\"amount_paid\":0,\"amount_remaining\":300,\"currency\":\"usd\",\"period_start\":null,\"period_end\":null,\"hosted_invoice_url\":null,\"pdf_url\":null,\"payment_intent_id\":null,\"finalized_at\":null,\"paid_at\":null,\"voided_at\":null,\"attempt_count\":0,\"metadata\":{\"org\":\"b\"},\"created_at\":\"2026-08-30T00:00:00Z\",\"updated_at\":\"2026-08-30T00:00:00Z\",\"line_items\":[]}],\"total\":1,\"limit\":20,\"offset\":0}"
+    },
+    {
+      "name": "inv list: super all (bad metadata)",
+      "method": "GET",
+      "path": "/api/v1/billing/invoices",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "13cb693c14be6b63125fe673ce665798f9f6005044f09ff0792790e4c8442d29",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "inv list: org C bad metadata",
+      "method": "GET",
+      "path": "/api/v1/billing/invoices",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "077990240ebc2b9f0d76f3c8b252a47b66c98a9513fd5819d6095cf81f59b149",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "inv list: no org",
+      "method": "GET",
+      "path": "/api/v1/billing/invoices",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "8c2bfbaa9cbc418de23df1c2273dd55b8d862b2951aa724717020d9a3afd5d77",
+      "status": 400,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Organization context required\"}"
+    },
+    {
+      "name": "inv list: bad org claim",
+      "method": "GET",
+      "path": "/api/v1/billing/invoices",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "31bd2ac1b8684da7fa7cabdd62a6d441cb4bffa2636577e74a7b7ab19aa10a67",
+      "status": 400,
+      "headers": {
+        "content-length": "33",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Invalid organization\"}"
+    },
+    {
+      "name": "inv get: member",
+      "method": "GET",
+      "path": "/api/v1/billing/invoices/22222222-0000-4000-8000-000000000001",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "cd860fdd87873f44aabe6c08036b93c5cd6c8ea317fba058159e3a599ab3f467",
+      "status": 200,
+      "headers": {
+        "content-length": "1107",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"id\":\"22222222-0000-4000-8000-000000000001\",\"org_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"subscription_id\":\"11111111-0000-4000-8000-000000000001\",\"stripe_invoice_id\":\"in_A1\",\"stripe_customer_id\":\"cus_A\",\"status\":\"open\",\"amount_due\":5000,\"amount_paid\":0,\"amount_remaining\":5000,\"currency\":\"usd\",\"period_start\":\"2026-09-01T00:00:00Z\",\"period_end\":\"2026-10-01T00:00:00.250000Z\",\"hosted_invoice_url\":\"https://pay.venue.test/in_A1\",\"pdf_url\":null,\"payment_intent_id\":null,\"finalized_at\":\"2026-09-01T00:00:01Z\",\"paid_at\":null,\"voided_at\":null,\"attempt_count\":1,\"metadata\":{\"b\":1,\"a\":{\"c\":[1.5,null,\"é\"]}},\"created_at\":\"2026-09-01T00:00:00Z\",\"updated_at\":\"2026-09-01T00:00:00Z\",\"line_items\":[{\"id\":\"55555555-0000-4000-8000-000000000001\",\"stripe_line_item_id\":\"il_1\",\"description\":\"Team seats\",\"amount\":4000,\"quantity\":4,\"period_start\":\"2026-09-01T00:00:00Z\",\"period_end\":\"2026-10-01T00:00:00Z\",\"stripe_price_id\":\"price_seed_y\"},{\"id\":\"55555555-0000-4000-8000-000000000002\",\"stripe_line_item_id\":null,\"description\":null,\"amount\":1000,\"quantity\":1,\"period_start\":null,\"period_end\":null,\"stripe_price_id\":null}]}"
+    },
+    {
+      "name": "inv get: braced",
+      "method": "GET",
+      "path": "/api/v1/billing/invoices/{22222222-0000-4000-8000-000000000002}",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "cd860fdd87873f44aabe6c08036b93c5cd6c8ea317fba058159e3a599ab3f467",
+      "status": 200,
+      "headers": {
+        "content-length": "796",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"id\":\"22222222-0000-4000-8000-000000000002\",\"org_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"subscription_id\":null,\"stripe_invoice_id\":\"in_A2\",\"stripe_customer_id\":\"cus_A\",\"status\":\"paid\",\"amount_due\":7000,\"amount_paid\":7000,\"amount_remaining\":0,\"currency\":\"eur\",\"period_start\":null,\"period_end\":null,\"hosted_invoice_url\":null,\"pdf_url\":\"https://pdf.venue.test/in_A2\",\"payment_intent_id\":\"pi_A2\",\"finalized_at\":\"2026-09-02T00:00:00Z\",\"paid_at\":\"2026-09-01T22:05:00.000001Z\",\"voided_at\":null,\"attempt_count\":0,\"metadata\":{},\"created_at\":\"2026-09-02T00:00:00Z\",\"updated_at\":\"2026-09-02T00:00:00Z\",\"line_items\":[{\"id\":\"55555555-0000-4000-8000-000000000003\",\"stripe_line_item_id\":\"il_3\",\"description\":\"Café\",\"amount\":7000,\"quantity\":1,\"period_start\":null,\"period_end\":null,\"stripe_price_id\":null}]}"
+    },
+    {
+      "name": "inv get: hex",
+      "method": "GET",
+      "path": "/api/v1/billing/invoices/22222222000040008000000000000003",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "cd860fdd87873f44aabe6c08036b93c5cd6c8ea317fba058159e3a599ab3f467",
+      "status": 200,
+      "headers": {
+        "content-length": "554",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"id\":\"22222222-0000-4000-8000-000000000003\",\"org_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"subscription_id\":null,\"stripe_invoice_id\":\"in_A3\",\"stripe_customer_id\":\"cus_A\",\"status\":\"void\",\"amount_due\":100,\"amount_paid\":0,\"amount_remaining\":0,\"currency\":\"usd\",\"period_start\":null,\"period_end\":null,\"hosted_invoice_url\":null,\"pdf_url\":null,\"payment_intent_id\":null,\"finalized_at\":null,\"paid_at\":null,\"voided_at\":\"2026-09-03T00:00:00Z\",\"attempt_count\":0,\"metadata\":{},\"created_at\":\"2026-09-03T00:00:00Z\",\"updated_at\":\"2026-09-03T00:00:00Z\",\"line_items\":[]}"
+    },
+    {
+      "name": "inv get: bad id",
+      "method": "GET",
+      "path": "/api/v1/billing/invoices/nope",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "cd860fdd87873f44aabe6c08036b93c5cd6c8ea317fba058159e3a599ab3f467",
+      "status": 400,
+      "headers": {
+        "content-length": "31",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Invalid invoice id\"}"
+    },
+    {
+      "name": "inv get: other org",
+      "method": "GET",
+      "path": "/api/v1/billing/invoices/22222222-0000-4000-8000-000000000005",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "2d41025fbf95fd5eba342463d5d6c2a3b0a20b1d7ab70b9e6d0be1cb136ec547",
+      "status": 404,
+      "headers": {
+        "content-length": "30",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Invoice not found\"}"
+    },
+    {
+      "name": "inv get: super",
+      "method": "GET",
+      "path": "/api/v1/billing/invoices/22222222-0000-4000-8000-000000000005",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "13cb693c14be6b63125fe673ce665798f9f6005044f09ff0792790e4c8442d29",
+      "status": 200,
+      "headers": {
+        "content-length": "547",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"id\":\"22222222-0000-4000-8000-000000000005\",\"org_id\":\"092d1323-14fb-5f19-b878-28bcca58f9d6\",\"subscription_id\":null,\"stripe_invoice_id\":\"in_B1\",\"stripe_customer_id\":\"cus_B\",\"status\":\"open\",\"amount_due\":300,\"amount_paid\":0,\"amount_remaining\":300,\"currency\":\"usd\",\"period_start\":null,\"period_end\":null,\"hosted_invoice_url\":null,\"pdf_url\":null,\"payment_intent_id\":null,\"finalized_at\":null,\"paid_at\":null,\"voided_at\":null,\"attempt_count\":0,\"metadata\":{\"org\":\"b\"},\"created_at\":\"2026-08-30T00:00:00Z\",\"updated_at\":\"2026-08-30T00:00:00Z\",\"line_items\":[]}"
+    },
+    {
+      "name": "inv get: super wrong org",
+      "method": "GET",
+      "path": "/api/v1/billing/invoices/22222222-0000-4000-8000-000000000005?org_id=37aa5733-344b-54a7-9210-c911e4ccf37a",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "13cb693c14be6b63125fe673ce665798f9f6005044f09ff0792790e4c8442d29",
+      "status": 404,
+      "headers": {
+        "content-length": "30",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Invoice not found\"}"
+    },
+    {
+      "name": "inv get: bad org query",
+      "method": "GET",
+      "path": "/api/v1/billing/invoices/22222222-0000-4000-8000-000000000001?org_id=1",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "cd860fdd87873f44aabe6c08036b93c5cd6c8ea317fba058159e3a599ab3f467",
+      "status": 422,
+      "headers": {
+        "content-length": "253",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":[{\"type\":\"uuid_parsing\",\"loc\":[\"query\",\"org_id\"],\"msg\":\"Input should be a valid UUID, invalid length: expected length 32 for simple format, found 1\",\"input\":\"1\",\"ctx\":{\"error\":\"invalid length: expected length 32 for simple format, found 1\"}}]}"
+    },
+    {
+      "name": "inv get: missing",
+      "method": "GET",
+      "path": "/api/v1/billing/invoices/bbf3f791-6ede-5e3d-8f1d-fd193f599f79",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "cd860fdd87873f44aabe6c08036b93c5cd6c8ea317fba058159e3a599ab3f467",
+      "status": 404,
+      "headers": {
+        "content-length": "30",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Invoice not found\"}"
+    },
+    {
+      "name": "inv get: bad metadata",
+      "method": "GET",
+      "path": "/api/v1/billing/invoices/22222222-0000-4000-8000-000000000006",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "077990240ebc2b9f0d76f3c8b252a47b66c98a9513fd5819d6095cf81f59b149",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "void: anon",
+      "method": "POST",
+      "path": "/api/v1/billing/invoices/22222222-0000-4000-8000-000000000001/void",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "fd6e55f2ba4c5c59ea6141921820358411e8536e2184aa6db640ebcc5a081aeb",
+      "status": 401,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "www-authenticate": "Bearer",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
+    },
+    {
+      "name": "void: member",
+      "method": "POST",
+      "path": "/api/v1/billing/invoices/22222222-0000-4000-8000-000000000001/void",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "cd860fdd87873f44aabe6c08036b93c5cd6c8ea317fba058159e3a599ab3f467",
+      "status": 403,
+      "headers": {
+        "content-length": "34",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Admin access required\"}"
+    },
+    {
+      "name": "void: paid",
+      "method": "POST",
+      "path": "/api/v1/billing/invoices/22222222-0000-4000-8000-000000000002/void",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "2d41025fbf95fd5eba342463d5d6c2a3b0a20b1d7ab70b9e6d0be1cb136ec547",
+      "status": 400,
+      "headers": {
+        "content-length": "68",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Only open invoices can be voided (current status: paid)\"}"
+    },
+    {
+      "name": "void: stripe fails",
+      "method": "POST",
+      "path": "/api/v1/billing/invoices/22222222-0000-4000-8000-000000000004/void",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "2d41025fbf95fd5eba342463d5d6c2a3b0a20b1d7ab70b9e6d0be1cb136ec547",
+      "status": 502,
+      "headers": {
+        "content-length": "93",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Failed to void invoice: Request req_venue: This invoice can no longer be voided.\"}"
+    },
+    {
+      "name": "void: bad id",
+      "method": "POST",
+      "path": "/api/v1/billing/invoices/nope/void",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "2d41025fbf95fd5eba342463d5d6c2a3b0a20b1d7ab70b9e6d0be1cb136ec547",
+      "status": 400,
+      "headers": {
+        "content-length": "31",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Invalid invoice id\"}"
+    },
+    {
+      "name": "void: missing",
+      "method": "POST",
+      "path": "/api/v1/billing/invoices/bbf3f791-6ede-5e3d-8f1d-fd193f599f79/void",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "2d41025fbf95fd5eba342463d5d6c2a3b0a20b1d7ab70b9e6d0be1cb136ec547",
+      "status": 404,
+      "headers": {
+        "content-length": "30",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Invoice not found\"}"
+    },
+    {
+      "name": "void: other org",
+      "method": "POST",
+      "path": "/api/v1/billing/invoices/22222222-0000-4000-8000-000000000005/void",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "2d41025fbf95fd5eba342463d5d6c2a3b0a20b1d7ab70b9e6d0be1cb136ec547",
+      "status": 404,
+      "headers": {
+        "content-length": "30",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Invoice not found\"}"
+    },
+    {
+      "name": "void: owner",
+      "method": "POST",
+      "path": "/api/v1/billing/invoices/22222222-0000-4000-8000-000000000001/void",
+      "body_sha256": "d20d25a0b40229cc336aab5a3a1aef42a98c4911c08e4e59a6b08ea30a1337a8",
+      "request_headers_sha256": "f8a00f3ea6f248a3a5eb8f8f53c6b990df4825386b78c9043f74fe5d0c651751",
+      "status": 200,
+      "headers": {
+        "content-length": "1136",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"id\":\"22222222-0000-4000-8000-000000000001\",\"org_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"subscription_id\":\"11111111-0000-4000-8000-000000000001\",\"stripe_invoice_id\":\"in_A1\",\"stripe_customer_id\":\"cus_A\",\"status\":\"void\",\"amount_due\":5000,\"amount_paid\":0,\"amount_remaining\":0,\"currency\":\"usd\",\"period_start\":\"2026-09-01T00:00:00Z\",\"period_end\":\"2026-10-01T00:00:00.250000Z\",\"hosted_invoice_url\":\"https://pay.venue.test/in_A1\",\"pdf_url\":null,\"payment_intent_id\":null,\"finalized_at\":\"2026-09-01T00:00:01Z\",\"paid_at\":null,\"voided_at\":\"2026-09-26T06:01:15.326481Z\",\"attempt_count\":1,\"metadata\":{\"b\":1,\"a\":{\"c\":[1.5,null,\"é\"]}},\"created_at\":\"2026-09-01T00:00:00Z\",\"updated_at\":\"2026-09-26T06:01:15.326495Z\",\"line_items\":[{\"id\":\"55555555-0000-4000-8000-000000000001\",\"stripe_line_item_id\":\"il_1\",\"description\":\"Team seats\",\"amount\":4000,\"quantity\":4,\"period_start\":\"2026-09-01T00:00:00Z\",\"period_end\":\"2026-10-01T00:00:00Z\",\"stripe_price_id\":\"price_seed_y\"},{\"id\":\"55555555-0000-4000-8000-000000000002\",\"stripe_line_item_id\":null,\"description\":null,\"amount\":1000,\"quantity\":1,\"period_start\":null,\"period_end\":null,\"stripe_price_id\":null}]}"
+    },
+    {
+      "name": "void: again",
+      "method": "POST",
+      "path": "/api/v1/billing/invoices/22222222-0000-4000-8000-000000000001/void",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "2d41025fbf95fd5eba342463d5d6c2a3b0a20b1d7ab70b9e6d0be1cb136ec547",
+      "status": 400,
+      "headers": {
+        "content-length": "68",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Only open invoices can be voided (current status: void)\"}"
+    },
+    {
+      "name": "void: super any org",
+      "method": "POST",
+      "path": "/api/v1/billing/invoices/22222222-0000-4000-8000-000000000005/void",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "13cb693c14be6b63125fe673ce665798f9f6005044f09ff0792790e4c8442d29",
+      "status": 200,
+      "headers": {
+        "content-length": "577",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"id\":\"22222222-0000-4000-8000-000000000005\",\"org_id\":\"092d1323-14fb-5f19-b878-28bcca58f9d6\",\"subscription_id\":null,\"stripe_invoice_id\":\"in_B1\",\"stripe_customer_id\":\"cus_B\",\"status\":\"void\",\"amount_due\":300,\"amount_paid\":0,\"amount_remaining\":0,\"currency\":\"usd\",\"period_start\":null,\"period_end\":null,\"hosted_invoice_url\":null,\"pdf_url\":null,\"payment_intent_id\":null,\"finalized_at\":null,\"paid_at\":null,\"voided_at\":\"2026-09-26T06:01:15.705313Z\",\"attempt_count\":0,\"metadata\":{\"org\":\"b\"},\"created_at\":\"2026-08-30T00:00:00Z\",\"updated_at\":\"2026-09-26T06:01:15.705320Z\",\"line_items\":[]}"
+    },
+    {
+      "name": "void: read back",
+      "method": "GET",
+      "path": "/api/v1/billing/invoices/22222222-0000-4000-8000-000000000001",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "2d41025fbf95fd5eba342463d5d6c2a3b0a20b1d7ab70b9e6d0be1cb136ec547",
+      "status": 200,
+      "headers": {
+        "content-length": "1136",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"id\":\"22222222-0000-4000-8000-000000000001\",\"org_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"subscription_id\":\"11111111-0000-4000-8000-000000000001\",\"stripe_invoice_id\":\"in_A1\",\"stripe_customer_id\":\"cus_A\",\"status\":\"void\",\"amount_due\":5000,\"amount_paid\":0,\"amount_remaining\":0,\"currency\":\"usd\",\"period_start\":\"2026-09-01T00:00:00Z\",\"period_end\":\"2026-10-01T00:00:00.250000Z\",\"hosted_invoice_url\":\"https://pay.venue.test/in_A1\",\"pdf_url\":null,\"payment_intent_id\":null,\"finalized_at\":\"2026-09-01T00:00:01Z\",\"paid_at\":null,\"voided_at\":\"2026-09-26T06:01:15.326481Z\",\"attempt_count\":1,\"metadata\":{\"b\":1,\"a\":{\"c\":[1.5,null,\"é\"]}},\"created_at\":\"2026-09-01T00:00:00Z\",\"updated_at\":\"2026-09-26T06:01:15.326495Z\",\"line_items\":[{\"id\":\"55555555-0000-4000-8000-000000000001\",\"stripe_line_item_id\":\"il_1\",\"description\":\"Team seats\",\"amount\":4000,\"quantity\":4,\"period_start\":\"2026-09-01T00:00:00Z\",\"period_end\":\"2026-10-01T00:00:00Z\",\"stripe_price_id\":\"price_seed_y\"},{\"id\":\"55555555-0000-4000-8000-000000000002\",\"stripe_line_item_id\":null,\"description\":null,\"amount\":1000,\"quantity\":1,\"period_start\":null,\"period_end\":null,\"stripe_price_id\":null}]}"
+    },
+    {
+      "name": "void: 405",
+      "method": "GET",
+      "path": "/api/v1/billing/invoices/22222222-0000-4000-8000-000000000001/void",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "2d41025fbf95fd5eba342463d5d6c2a3b0a20b1d7ab70b9e6d0be1cb136ec547",
+      "status": 405,
+      "headers": {
+        "allow": "POST",
+        "content-length": "31",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "name": "refund create: anon",
+      "method": "POST",
+      "path": "/api/v1/billing/refunds",
+      "body_sha256": "b51227ccc9ce9284d12fa58a3f531fc66a8b52264dd3116902bde5b23d282f32",
+      "request_headers_sha256": "11d7e15c5a6e05ae7d0cf485a8ddf91b6512fe6237262974423cac82cff4beb6",
+      "status": 401,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "www-authenticate": "Bearer",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
+    },
+    {
+      "name": "refund create: invalid",
+      "method": "POST",
+      "path": "/api/v1/billing/refunds",
+      "body_sha256": "cc812c49c9f26f70b271796aefb3e7d39b76b5201c3e2a9531945c1a50df6162",
+      "request_headers_sha256": "e8401a965c92967810ea3f62f446f1a312661a86ed154a71a3e61867e51bf334",
+      "status": 422,
+      "headers": {
+        "content-length": "587",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"invoice_id\"],\"msg\":\"Field required\",\"input\":{\"amount\":0,\"reason\":\"because\",\"description\":5}},{\"type\":\"greater_than_equal\",\"loc\":[\"body\",\"amount\"],\"msg\":\"Input should be greater than or equal to 1\",\"input\":0,\"ctx\":{\"ge\":1}},{\"type\":\"literal_error\",\"loc\":[\"body\",\"reason\"],\"msg\":\"Input should be 'duplicate', 'fraudulent' or 'requested_by_customer'\",\"input\":\"because\",\"ctx\":{\"expected\":\"'duplicate', 'fraudulent' or 'requested_by_customer'\"}},{\"type\":\"string_type\",\"loc\":[\"body\",\"description\"],\"msg\":\"Input should be a valid string\",\"input\":5}]}"
+    },
+    {
+      "name": "refund create: member",
+      "method": "POST",
+      "path": "/api/v1/billing/refunds",
+      "body_sha256": "d65b70b5d34ade744b8474aff38595e7f48afa435b8407e8fc57530dfed5ff21",
+      "request_headers_sha256": "e8401a965c92967810ea3f62f446f1a312661a86ed154a71a3e61867e51bf334",
+      "status": 403,
+      "headers": {
+        "content-length": "38",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Superuser access required\"}"
+    },
+    {
+      "name": "refund create: bad id",
+      "method": "POST",
+      "path": "/api/v1/billing/refunds",
+      "body_sha256": "3111c46e19ff57db1fa2b7481aeaa6deb2ab7be60fc46ce694368da3a8f25329",
+      "request_headers_sha256": "e5022a88938178266e8c257612a3a7667934cb6c8ccceeec66bfc9d00a4bb584",
+      "status": 400,
+      "headers": {
+        "content-length": "31",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Invalid identifier\"}"
+    },
+    {
+      "name": "refund list: member",
+      "method": "GET",
+      "path": "/api/v1/billing/refunds",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "cd860fdd87873f44aabe6c08036b93c5cd6c8ea317fba058159e3a599ab3f467",
+      "status": 403,
+      "headers": {
+        "content-length": "38",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Superuser access required\"}"
+    },
+    {
+      "name": "refund list: super",
+      "method": "GET",
+      "path": "/api/v1/billing/refunds",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "13cb693c14be6b63125fe673ce665798f9f6005044f09ff0792790e4c8442d29",
+      "status": 200,
+      "headers": {
+        "content-length": "1524",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"items\":[{\"id\":\"33333333-0000-4000-8000-000000000002\",\"org_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"invoice_id\":null,\"subscription_id\":null,\"stripe_refund_id\":\"re_A2\",\"stripe_charge_id\":\"ch_A2\",\"stripe_payment_intent_id\":null,\"amount\":50,\"currency\":\"usd\",\"status\":\"failed\",\"reason\":null,\"description\":null,\"failure_reason\":\"expired_or_canceled_card\",\"initiated_by\":null,\"metadata\":{},\"created_at\":\"2026-09-07T00:00:00Z\",\"updated_at\":\"2026-09-07T00:00:00Z\"},{\"id\":\"33333333-0000-4000-8000-000000000001\",\"org_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"invoice_id\":\"22222222-0000-4000-8000-000000000002\",\"subscription_id\":\"11111111-0000-4000-8000-000000000001\",\"stripe_refund_id\":\"re_A1\",\"stripe_charge_id\":\"ch_A1\",\"stripe_payment_intent_id\":\"pi_A2\",\"amount\":1000,\"currency\":\"eur\",\"status\":\"succeeded\",\"reason\":\"requested_by_customer\",\"description\":\"Partial\",\"failure_reason\":null,\"initiated_by\":\"59b88176-f36f-5981-b2d3-58b612cfe80f\",\"metadata\":{\"invoice_id\":\"x\",\"n\":2},\"created_at\":\"2026-09-06T00:00:00Z\",\"updated_at\":\"2026-09-06T00:00:00.500000Z\"},{\"id\":\"33333333-0000-4000-8000-000000000003\",\"org_id\":\"092d1323-14fb-5f19-b878-28bcca58f9d6\",\"invoice_id\":null,\"subscription_id\":null,\"stripe_refund_id\":\"re_B1\",\"stripe_charge_id\":\"ch_B1\",\"stripe_payment_intent_id\":null,\"amount\":75,\"currency\":\"usd\",\"status\":\"pending\",\"reason\":\"fraudulent\",\"description\":null,\"failure_reason\":null,\"initiated_by\":null,\"metadata\":{},\"created_at\":\"2026-08-30T00:00:00Z\",\"updated_at\":\"2026-08-30T00:00:00Z\"}],\"total\":3,\"limit\":20,\"offset\":0}"
+    },
+    {
+      "name": "refund list: clamped",
+      "method": "GET",
+      "path": "/api/v1/billing/refunds?limit=0\u0026offset=-3",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "13cb693c14be6b63125fe673ce665798f9f6005044f09ff0792790e4c8442d29",
+      "status": 200,
+      "headers": {
+        "content-length": "493",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"items\":[{\"id\":\"33333333-0000-4000-8000-000000000002\",\"org_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"invoice_id\":null,\"subscription_id\":null,\"stripe_refund_id\":\"re_A2\",\"stripe_charge_id\":\"ch_A2\",\"stripe_payment_intent_id\":null,\"amount\":50,\"currency\":\"usd\",\"status\":\"failed\",\"reason\":null,\"description\":null,\"failure_reason\":\"expired_or_canceled_card\",\"initiated_by\":null,\"metadata\":{},\"created_at\":\"2026-09-07T00:00:00Z\",\"updated_at\":\"2026-09-07T00:00:00Z\"}],\"total\":3,\"limit\":1,\"offset\":0}"
+    },
+    {
+      "name": "refund list: limit high",
+      "method": "GET",
+      "path": "/api/v1/billing/refunds?limit=500\u0026offset=1",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "13cb693c14be6b63125fe673ce665798f9f6005044f09ff0792790e4c8442d29",
+      "status": 200,
+      "headers": {
+        "content-length": "1074",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"items\":[{\"id\":\"33333333-0000-4000-8000-000000000001\",\"org_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"invoice_id\":\"22222222-0000-4000-8000-000000000002\",\"subscription_id\":\"11111111-0000-4000-8000-000000000001\",\"stripe_refund_id\":\"re_A1\",\"stripe_charge_id\":\"ch_A1\",\"stripe_payment_intent_id\":\"pi_A2\",\"amount\":1000,\"currency\":\"eur\",\"status\":\"succeeded\",\"reason\":\"requested_by_customer\",\"description\":\"Partial\",\"failure_reason\":null,\"initiated_by\":\"59b88176-f36f-5981-b2d3-58b612cfe80f\",\"metadata\":{\"invoice_id\":\"x\",\"n\":2},\"created_at\":\"2026-09-06T00:00:00Z\",\"updated_at\":\"2026-09-06T00:00:00.500000Z\"},{\"id\":\"33333333-0000-4000-8000-000000000003\",\"org_id\":\"092d1323-14fb-5f19-b878-28bcca58f9d6\",\"invoice_id\":null,\"subscription_id\":null,\"stripe_refund_id\":\"re_B1\",\"stripe_charge_id\":\"ch_B1\",\"stripe_payment_intent_id\":null,\"amount\":75,\"currency\":\"usd\",\"status\":\"pending\",\"reason\":\"fraudulent\",\"description\":null,\"failure_reason\":null,\"initiated_by\":null,\"metadata\":{},\"created_at\":\"2026-08-30T00:00:00Z\",\"updated_at\":\"2026-08-30T00:00:00Z\"}],\"total\":3,\"limit\":100,\"offset\":1}"
+    },
+    {
+      "name": "refund list: org A",
+      "method": "GET",
+      "path": "/api/v1/billing/refunds?org_id=37aa5733-344b-54a7-9210-c911e4ccf37a",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "13cb693c14be6b63125fe673ce665798f9f6005044f09ff0792790e4c8442d29",
+      "status": 200,
+      "headers": {
+        "content-length": "1086",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"items\":[{\"id\":\"33333333-0000-4000-8000-000000000002\",\"org_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"invoice_id\":null,\"subscription_id\":null,\"stripe_refund_id\":\"re_A2\",\"stripe_charge_id\":\"ch_A2\",\"stripe_payment_intent_id\":null,\"amount\":50,\"currency\":\"usd\",\"status\":\"failed\",\"reason\":null,\"description\":null,\"failure_reason\":\"expired_or_canceled_card\",\"initiated_by\":null,\"metadata\":{},\"created_at\":\"2026-09-07T00:00:00Z\",\"updated_at\":\"2026-09-07T00:00:00Z\"},{\"id\":\"33333333-0000-4000-8000-000000000001\",\"org_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"invoice_id\":\"22222222-0000-4000-8000-000000000002\",\"subscription_id\":\"11111111-0000-4000-8000-000000000001\",\"stripe_refund_id\":\"re_A1\",\"stripe_charge_id\":\"ch_A1\",\"stripe_payment_intent_id\":\"pi_A2\",\"amount\":1000,\"currency\":\"eur\",\"status\":\"succeeded\",\"reason\":\"requested_by_customer\",\"description\":\"Partial\",\"failure_reason\":null,\"initiated_by\":\"59b88176-f36f-5981-b2d3-58b612cfe80f\",\"metadata\":{\"invoice_id\":\"x\",\"n\":2},\"created_at\":\"2026-09-06T00:00:00Z\",\"updated_at\":\"2026-09-06T00:00:00.500000Z\"}],\"total\":2,\"limit\":20,\"offset\":0}"
+    },
+    {
+      "name": "refund list: bad params",
+      "method": "GET",
+      "path": "/api/v1/billing/refunds?limit=abc\u0026offset=1.5\u0026org_id=x",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "13cb693c14be6b63125fe673ce665798f9f6005044f09ff0792790e4c8442d29",
+      "status": 422,
+      "headers": {
+        "content-length": "476",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":[{\"type\":\"int_parsing\",\"loc\":[\"query\",\"limit\"],\"msg\":\"Input should be a valid integer, unable to parse string as an integer\",\"input\":\"abc\"},{\"type\":\"int_parsing\",\"loc\":[\"query\",\"offset\"],\"msg\":\"Input should be a valid integer, unable to parse string as an integer\",\"input\":\"1.5\"},{\"type\":\"uuid_parsing\",\"loc\":[\"query\",\"org_id\"],\"msg\":\"Input should be a valid UUID, invalid character: found `x` at 1\",\"input\":\"x\",\"ctx\":{\"error\":\"invalid character: found `x` at 1\"}}]}"
+    },
+    {
+      "name": "refund list: offset overflow",
+      "method": "GET",
+      "path": "/api/v1/billing/refunds?offset=99999999999999999999",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "13cb693c14be6b63125fe673ce665798f9f6005044f09ff0792790e4c8442d29",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "refund get: super",
+      "method": "GET",
+      "path": "/api/v1/billing/refunds/33333333-0000-4000-8000-000000000001",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "13cb693c14be6b63125fe673ce665798f9f6005044f09ff0792790e4c8442d29",
+      "status": 200,
+      "headers": {
+        "content-length": "591",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"id\":\"33333333-0000-4000-8000-000000000001\",\"org_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"invoice_id\":\"22222222-0000-4000-8000-000000000002\",\"subscription_id\":\"11111111-0000-4000-8000-000000000001\",\"stripe_refund_id\":\"re_A1\",\"stripe_charge_id\":\"ch_A1\",\"stripe_payment_intent_id\":\"pi_A2\",\"amount\":1000,\"currency\":\"eur\",\"status\":\"succeeded\",\"reason\":\"requested_by_customer\",\"description\":\"Partial\",\"failure_reason\":null,\"initiated_by\":\"59b88176-f36f-5981-b2d3-58b612cfe80f\",\"metadata\":{\"invoice_id\":\"x\",\"n\":2},\"created_at\":\"2026-09-06T00:00:00Z\",\"updated_at\":\"2026-09-06T00:00:00.500000Z\"}"
+    },
+    {
+      "name": "refund get: failed",
+      "method": "GET",
+      "path": "/api/v1/billing/refunds/33333333-0000-4000-8000-000000000002",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "13cb693c14be6b63125fe673ce665798f9f6005044f09ff0792790e4c8442d29",
+      "status": 200,
+      "headers": {
+        "content-length": "450",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"id\":\"33333333-0000-4000-8000-000000000002\",\"org_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"invoice_id\":null,\"subscription_id\":null,\"stripe_refund_id\":\"re_A2\",\"stripe_charge_id\":\"ch_A2\",\"stripe_payment_intent_id\":null,\"amount\":50,\"currency\":\"usd\",\"status\":\"failed\",\"reason\":null,\"description\":null,\"failure_reason\":\"expired_or_canceled_card\",\"initiated_by\":null,\"metadata\":{},\"created_at\":\"2026-09-07T00:00:00Z\",\"updated_at\":\"2026-09-07T00:00:00Z\"}"
+    },
+    {
+      "name": "refund get: pending",
+      "method": "GET",
+      "path": "/api/v1/billing/refunds/33333333-0000-4000-8000-000000000003",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "13cb693c14be6b63125fe673ce665798f9f6005044f09ff0792790e4c8442d29",
+      "status": 200,
+      "headers": {
+        "content-length": "437",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"id\":\"33333333-0000-4000-8000-000000000003\",\"org_id\":\"092d1323-14fb-5f19-b878-28bcca58f9d6\",\"invoice_id\":null,\"subscription_id\":null,\"stripe_refund_id\":\"re_B1\",\"stripe_charge_id\":\"ch_B1\",\"stripe_payment_intent_id\":null,\"amount\":75,\"currency\":\"usd\",\"status\":\"pending\",\"reason\":\"fraudulent\",\"description\":null,\"failure_reason\":null,\"initiated_by\":null,\"metadata\":{},\"created_at\":\"2026-08-30T00:00:00Z\",\"updated_at\":\"2026-08-30T00:00:00Z\"}"
+    },
+    {
+      "name": "refund get: bad id",
+      "method": "GET",
+      "path": "/api/v1/billing/refunds/nope",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "13cb693c14be6b63125fe673ce665798f9f6005044f09ff0792790e4c8442d29",
+      "status": 400,
+      "headers": {
+        "content-length": "31",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Invalid identifier\"}"
+    },
+    {
+      "name": "refund get: missing",
+      "method": "GET",
+      "path": "/api/v1/billing/refunds/bbf3f791-6ede-5e3d-8f1d-fd193f599f79",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "13cb693c14be6b63125fe673ce665798f9f6005044f09ff0792790e4c8442d29",
+      "status": 404,
+      "headers": {
+        "content-length": "29",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Refund not found\"}"
+    },
+    {
+      "name": "refund get: wrong org",
+      "method": "GET",
+      "path": "/api/v1/billing/refunds/33333333-0000-4000-8000-000000000001?org_id=092d1323-14fb-5f19-b878-28bcca58f9d6",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "13cb693c14be6b63125fe673ce665798f9f6005044f09ff0792790e4c8442d29",
+      "status": 404,
+      "headers": {
+        "content-length": "29",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Refund not found\"}"
+    },
+    {
+      "name": "refund get: member",
+      "method": "GET",
+      "path": "/api/v1/billing/refunds/33333333-0000-4000-8000-000000000001",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "cd860fdd87873f44aabe6c08036b93c5cd6c8ea317fba058159e3a599ab3f467",
+      "status": 403,
+      "headers": {
+        "content-length": "38",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Superuser access required\"}"
+    },
+    {
+      "name": "refund: 405",
+      "method": "PATCH",
+      "path": "/api/v1/billing/refunds",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "13cb693c14be6b63125fe673ce665798f9f6005044f09ff0792790e4c8442d29",
+      "status": 405,
+      "headers": {
+        "allow": "POST",
+        "content-length": "31",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "name": "audit list: anon",
+      "method": "GET",
+      "path": "/api/v1/billing/audit?org_id=37aa5733-344b-54a7-9210-c911e4ccf37a",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "fd6e55f2ba4c5c59ea6141921820358411e8536e2184aa6db640ebcc5a081aeb",
+      "status": 401,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "www-authenticate": "Bearer",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
+    },
+    {
+      "name": "audit list: no org_id",
+      "method": "GET",
+      "path": "/api/v1/billing/audit",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "cd860fdd87873f44aabe6c08036b93c5cd6c8ea317fba058159e3a599ab3f467",
+      "status": 422,
+      "headers": {
+        "content-length": "92",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"query\",\"org_id\"],\"msg\":\"Field required\",\"input\":null}]}"
+    },
+    {
+      "name": "audit list: member",
+      "method": "GET",
+      "path": "/api/v1/billing/audit?org_id=37aa5733-344b-54a7-9210-c911e4ccf37a",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "cd860fdd87873f44aabe6c08036b93c5cd6c8ea317fba058159e3a599ab3f467",
+      "status": 403,
+      "headers": {
+        "content-length": "39",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Superadmin access required\"}"
+    },
+    {
+      "name": "audit list: super",
+      "method": "GET",
+      "path": "/api/v1/billing/audit?org_id=37aa5733-344b-54a7-9210-c911e4ccf37a",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "13cb693c14be6b63125fe673ce665798f9f6005044f09ff0792790e4c8442d29",
+      "status": 200,
+      "headers": {
+        "content-length": "1271",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"items\":[{\"id\":\"44444444-0000-4000-8000-000000000002\",\"org_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"actor_id\":\"96d11d6a-98ca-5997-a78a-e509db100806\",\"action\":\"checkout.created\",\"resource_type\":\"checkout\",\"resource_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"description\":\"Checkout\",\"stripe_event_id\":null,\"local_state\":null,\"stripe_state\":{\"a\":[1,2]},\"reconciliation_status\":null,\"created_at\":\"2026-09-02T12:00:00.000001Z\"},{\"id\":\"44444444-0000-4000-8000-000000000001\",\"org_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"actor_id\":null,\"action\":\"reconciliation.mismatch_found\",\"resource_type\":\"subscription\",\"resource_id\":\"11111111-0000-4000-8000-000000000001\",\"description\":\"Mismatch on status\",\"stripe_event_id\":\"evt_x\",\"local_state\":{\"field\":\"status\",\"value\":1.5,\"t\":\"é\"},\"stripe_state\":null,\"reconciliation_status\":\"mismatch\",\"created_at\":\"2026-09-02T12:00:00Z\"},{\"id\":\"44444444-0000-4000-8000-000000000003\",\"org_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"actor_id\":null,\"action\":\"webhook.received\",\"resource_type\":\"invoice\",\"resource_id\":\"22222222-0000-4000-8000-000000000002\",\"description\":\"Old\",\"stripe_event_id\":null,\"local_state\":null,\"stripe_state\":null,\"reconciliation_status\":\"matched\",\"created_at\":\"2026-08-01T00:00:00Z\"}],\"total\":3,\"limit\":50,\"offset\":0}"
+    },
+    {
+      "name": "audit list: filters",
+      "method": "GET",
+      "path": "/api/v1/billing/audit?org_id=37aa5733-344b-54a7-9210-c911e4ccf37a\u0026resource_type=subscription\u0026action=reconciliation.mismatch_found\u0026reconciliation_status=mismatch",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "13cb693c14be6b63125fe673ce665798f9f6005044f09ff0792790e4c8442d29",
+      "status": 200,
+      "headers": {
+        "content-length": "484",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"items\":[{\"id\":\"44444444-0000-4000-8000-000000000001\",\"org_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"actor_id\":null,\"action\":\"reconciliation.mismatch_found\",\"resource_type\":\"subscription\",\"resource_id\":\"11111111-0000-4000-8000-000000000001\",\"description\":\"Mismatch on status\",\"stripe_event_id\":\"evt_x\",\"local_state\":{\"field\":\"status\",\"value\":1.5,\"t\":\"é\"},\"stripe_state\":null,\"reconciliation_status\":\"mismatch\",\"created_at\":\"2026-09-02T12:00:00Z\"}],\"total\":1,\"limit\":50,\"offset\":0}"
+    },
+    {
+      "name": "audit list: empty filters",
+      "method": "GET",
+      "path": "/api/v1/billing/audit?org_id=37aa5733-344b-54a7-9210-c911e4ccf37a\u0026resource_type=\u0026action=\u0026reconciliation_status=",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "13cb693c14be6b63125fe673ce665798f9f6005044f09ff0792790e4c8442d29",
+      "status": 200,
+      "headers": {
+        "content-length": "1271",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"items\":[{\"id\":\"44444444-0000-4000-8000-000000000002\",\"org_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"actor_id\":\"96d11d6a-98ca-5997-a78a-e509db100806\",\"action\":\"checkout.created\",\"resource_type\":\"checkout\",\"resource_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"description\":\"Checkout\",\"stripe_event_id\":null,\"local_state\":null,\"stripe_state\":{\"a\":[1,2]},\"reconciliation_status\":null,\"created_at\":\"2026-09-02T12:00:00.000001Z\"},{\"id\":\"44444444-0000-4000-8000-000000000001\",\"org_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"actor_id\":null,\"action\":\"reconciliation.mismatch_found\",\"resource_type\":\"subscription\",\"resource_id\":\"11111111-0000-4000-8000-000000000001\",\"description\":\"Mismatch on status\",\"stripe_event_id\":\"evt_x\",\"local_state\":{\"field\":\"status\",\"value\":1.5,\"t\":\"é\"},\"stripe_state\":null,\"reconciliation_status\":\"mismatch\",\"created_at\":\"2026-09-02T12:00:00Z\"},{\"id\":\"44444444-0000-4000-8000-000000000003\",\"org_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"actor_id\":null,\"action\":\"webhook.received\",\"resource_type\":\"invoice\",\"resource_id\":\"22222222-0000-4000-8000-000000000002\",\"description\":\"Old\",\"stripe_event_id\":null,\"local_state\":null,\"stripe_state\":null,\"reconciliation_status\":\"matched\",\"created_at\":\"2026-08-01T00:00:00Z\"}],\"total\":3,\"limit\":50,\"offset\":0}"
+    },
+    {
+      "name": "audit list: resource id",
+      "method": "GET",
+      "path": "/api/v1/billing/audit?org_id=37aa5733-344b-54a7-9210-c911e4ccf37a\u0026resource_id=22222222-0000-4000-8000-000000000002",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "13cb693c14be6b63125fe673ce665798f9f6005044f09ff0792790e4c8442d29",
+      "status": 200,
+      "headers": {
+        "content-length": "412",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"items\":[{\"id\":\"44444444-0000-4000-8000-000000000003\",\"org_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"actor_id\":null,\"action\":\"webhook.received\",\"resource_type\":\"invoice\",\"resource_id\":\"22222222-0000-4000-8000-000000000002\",\"description\":\"Old\",\"stripe_event_id\":null,\"local_state\":null,\"stripe_state\":null,\"reconciliation_status\":\"matched\",\"created_at\":\"2026-08-01T00:00:00Z\"}],\"total\":1,\"limit\":50,\"offset\":0}"
+    },
+    {
+      "name": "audit list: dates",
+      "method": "GET",
+      "path": "/api/v1/billing/audit?org_id=37aa5733-344b-54a7-9210-c911e4ccf37a\u0026from_date=2026-09-02\u0026to_date=2026-09-02T12:00:00",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "13cb693c14be6b63125fe673ce665798f9f6005044f09ff0792790e4c8442d29",
+      "status": 200,
+      "headers": {
+        "content-length": "484",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"items\":[{\"id\":\"44444444-0000-4000-8000-000000000001\",\"org_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"actor_id\":null,\"action\":\"reconciliation.mismatch_found\",\"resource_type\":\"subscription\",\"resource_id\":\"11111111-0000-4000-8000-000000000001\",\"description\":\"Mismatch on status\",\"stripe_event_id\":\"evt_x\",\"local_state\":{\"field\":\"status\",\"value\":1.5,\"t\":\"é\"},\"stripe_state\":null,\"reconciliation_status\":\"mismatch\",\"created_at\":\"2026-09-02T12:00:00Z\"}],\"total\":1,\"limit\":50,\"offset\":0}"
+    },
+    {
+      "name": "audit list: aware dates",
+      "method": "GET",
+      "path": "/api/v1/billing/audit?org_id=37aa5733-344b-54a7-9210-c911e4ccf37a\u0026from_date=2026-09-02T13:00:00%2B01:00\u0026to_date=1788350400",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "13cb693c14be6b63125fe673ce665798f9f6005044f09ff0792790e4c8442d29",
+      "status": 200,
+      "headers": {
+        "content-length": "484",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"items\":[{\"id\":\"44444444-0000-4000-8000-000000000001\",\"org_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"actor_id\":null,\"action\":\"reconciliation.mismatch_found\",\"resource_type\":\"subscription\",\"resource_id\":\"11111111-0000-4000-8000-000000000001\",\"description\":\"Mismatch on status\",\"stripe_event_id\":\"evt_x\",\"local_state\":{\"field\":\"status\",\"value\":1.5,\"t\":\"é\"},\"stripe_state\":null,\"reconciliation_status\":\"mismatch\",\"created_at\":\"2026-09-02T12:00:00Z\"}],\"total\":1,\"limit\":50,\"offset\":0}"
+    },
+    {
+      "name": "audit list: bad params",
+      "method": "GET",
+      "path": "/api/v1/billing/audit?org_id=x\u0026resource_id=y\u0026from_date=soon\u0026to_date=2026-13-01\u0026limit=a\u0026offset=b",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "13cb693c14be6b63125fe673ce665798f9f6005044f09ff0792790e4c8442d29",
+      "status": 422,
+      "headers": {
+        "content-length": "1094",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":[{\"type\":\"uuid_parsing\",\"loc\":[\"query\",\"org_id\"],\"msg\":\"Input should be a valid UUID, invalid character: found `x` at 1\",\"input\":\"x\",\"ctx\":{\"error\":\"invalid character: found `x` at 1\"}},{\"type\":\"uuid_parsing\",\"loc\":[\"query\",\"resource_id\"],\"msg\":\"Input should be a valid UUID, invalid character: found `y` at 1\",\"input\":\"y\",\"ctx\":{\"error\":\"invalid character: found `y` at 1\"}},{\"type\":\"datetime_from_date_parsing\",\"loc\":[\"query\",\"from_date\"],\"msg\":\"Input should be a valid datetime or date, input is too short\",\"input\":\"soon\",\"ctx\":{\"error\":\"input is too short\"}},{\"type\":\"datetime_from_date_parsing\",\"loc\":[\"query\",\"to_date\"],\"msg\":\"Input should be a valid datetime or date, month value is outside expected range of 1-12\",\"input\":\"2026-13-01\",\"ctx\":{\"error\":\"month value is outside expected range of 1-12\"}},{\"type\":\"int_parsing\",\"loc\":[\"query\",\"limit\"],\"msg\":\"Input should be a valid integer, unable to parse string as an integer\",\"input\":\"a\"},{\"type\":\"int_parsing\",\"loc\":[\"query\",\"offset\"],\"msg\":\"Input should be a valid integer, unable to parse string as an integer\",\"input\":\"b\"}]}"
+    },
+    {
+      "name": "audit list: page echo",
+      "method": "GET",
+      "path": "/api/v1/billing/audit?org_id=37aa5733-344b-54a7-9210-c911e4ccf37a\u0026limit=0\u0026offset=-1",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "13cb693c14be6b63125fe673ce665798f9f6005044f09ff0792790e4c8442d29",
+      "status": 200,
+      "headers": {
+        "content-length": "461",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"items\":[{\"id\":\"44444444-0000-4000-8000-000000000002\",\"org_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"actor_id\":\"96d11d6a-98ca-5997-a78a-e509db100806\",\"action\":\"checkout.created\",\"resource_type\":\"checkout\",\"resource_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"description\":\"Checkout\",\"stripe_event_id\":null,\"local_state\":null,\"stripe_state\":{\"a\":[1,2]},\"reconciliation_status\":null,\"created_at\":\"2026-09-02T12:00:00.000001Z\"}],\"total\":3,\"limit\":0,\"offset\":-1}"
+    },
+    {
+      "name": "audit list: page",
+      "method": "GET",
+      "path": "/api/v1/billing/audit?org_id=37aa5733-344b-54a7-9210-c911e4ccf37a\u0026limit=2\u0026offset=1",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "13cb693c14be6b63125fe673ce665798f9f6005044f09ff0792790e4c8442d29",
+      "status": 200,
+      "headers": {
+        "content-length": "852",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"items\":[{\"id\":\"44444444-0000-4000-8000-000000000001\",\"org_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"actor_id\":null,\"action\":\"reconciliation.mismatch_found\",\"resource_type\":\"subscription\",\"resource_id\":\"11111111-0000-4000-8000-000000000001\",\"description\":\"Mismatch on status\",\"stripe_event_id\":\"evt_x\",\"local_state\":{\"field\":\"status\",\"value\":1.5,\"t\":\"é\"},\"stripe_state\":null,\"reconciliation_status\":\"mismatch\",\"created_at\":\"2026-09-02T12:00:00Z\"},{\"id\":\"44444444-0000-4000-8000-000000000003\",\"org_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"actor_id\":null,\"action\":\"webhook.received\",\"resource_type\":\"invoice\",\"resource_id\":\"22222222-0000-4000-8000-000000000002\",\"description\":\"Old\",\"stripe_event_id\":null,\"local_state\":null,\"stripe_state\":null,\"reconciliation_status\":\"matched\",\"created_at\":\"2026-08-01T00:00:00Z\"}],\"total\":3,\"limit\":2,\"offset\":1}"
+    },
+    {
+      "name": "audit list: limit overflow",
+      "method": "GET",
+      "path": "/api/v1/billing/audit?org_id=37aa5733-344b-54a7-9210-c911e4ccf37a\u0026limit=99999999999999999999",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "13cb693c14be6b63125fe673ce665798f9f6005044f09ff0792790e4c8442d29",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "audit list: bad state",
+      "method": "GET",
+      "path": "/api/v1/billing/audit?org_id=1bdff33b-214e-5dbf-9424-b30e42a9a0ad",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "13cb693c14be6b63125fe673ce665798f9f6005044f09ff0792790e4c8442d29",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "audit get: super",
+      "method": "GET",
+      "path": "/api/v1/billing/audit/44444444-0000-4000-8000-000000000001",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "13cb693c14be6b63125fe673ce665798f9f6005044f09ff0792790e4c8442d29",
+      "status": 200,
+      "headers": {
+        "content-length": "440",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"id\":\"44444444-0000-4000-8000-000000000001\",\"org_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"actor_id\":null,\"action\":\"reconciliation.mismatch_found\",\"resource_type\":\"subscription\",\"resource_id\":\"11111111-0000-4000-8000-000000000001\",\"description\":\"Mismatch on status\",\"stripe_event_id\":\"evt_x\",\"local_state\":{\"field\":\"status\",\"value\":1.5,\"t\":\"é\"},\"stripe_state\":null,\"reconciliation_status\":\"mismatch\",\"created_at\":\"2026-09-02T12:00:00Z\"}"
+    },
+    {
+      "name": "audit get: null states",
+      "method": "GET",
+      "path": "/api/v1/billing/audit/44444444-0000-4000-8000-000000000002",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "13cb693c14be6b63125fe673ce665798f9f6005044f09ff0792790e4c8442d29",
+      "status": 200,
+      "headers": {
+        "content-length": "417",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"id\":\"44444444-0000-4000-8000-000000000002\",\"org_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"actor_id\":\"96d11d6a-98ca-5997-a78a-e509db100806\",\"action\":\"checkout.created\",\"resource_type\":\"checkout\",\"resource_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"description\":\"Checkout\",\"stripe_event_id\":null,\"local_state\":null,\"stripe_state\":{\"a\":[1,2]},\"reconciliation_status\":null,\"created_at\":\"2026-09-02T12:00:00.000001Z\"}"
+    },
+    {
+      "name": "audit get: bad state",
+      "method": "GET",
+      "path": "/api/v1/billing/audit/44444444-0000-4000-8000-000000000004",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "13cb693c14be6b63125fe673ce665798f9f6005044f09ff0792790e4c8442d29",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "audit get: bad id",
+      "method": "GET",
+      "path": "/api/v1/billing/audit/nope",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "13cb693c14be6b63125fe673ce665798f9f6005044f09ff0792790e4c8442d29",
+      "status": 422,
+      "headers": {
+        "content-length": "201",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":[{\"type\":\"uuid_parsing\",\"loc\":[\"path\",\"audit_id\"],\"msg\":\"Input should be a valid UUID, invalid character: found `n` at 1\",\"input\":\"nope\",\"ctx\":{\"error\":\"invalid character: found `n` at 1\"}}]}"
+    },
+    {
+      "name": "audit get: missing",
+      "method": "GET",
+      "path": "/api/v1/billing/audit/bbf3f791-6ede-5e3d-8f1d-fd193f599f79",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "13cb693c14be6b63125fe673ce665798f9f6005044f09ff0792790e4c8442d29",
+      "status": 404,
+      "headers": {
+        "content-length": "34",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Audit entry not found\"}"
+    },
+    {
+      "name": "audit get: member",
+      "method": "GET",
+      "path": "/api/v1/billing/audit/44444444-0000-4000-8000-000000000001",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "cd860fdd87873f44aabe6c08036b93c5cd6c8ea317fba058159e3a599ab3f467",
+      "status": 403,
+      "headers": {
+        "content-length": "39",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Superadmin access required\"}"
+    },
+    {
+      "name": "resolve: anon",
+      "method": "POST",
+      "path": "/api/v1/billing/audit/44444444-0000-4000-8000-000000000001/resolve",
+      "body_sha256": "bf4b4a8dc029b00a846dc20d2e9f50ca65c71fb76ab6d47c9aaa1396024d8f20",
+      "request_headers_sha256": "11d7e15c5a6e05ae7d0cf485a8ddf91b6512fe6237262974423cac82cff4beb6",
+      "status": 401,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "www-authenticate": "Bearer",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
+    },
+    {
+      "name": "resolve: invalid",
+      "method": "POST",
+      "path": "/api/v1/billing/audit/nope/resolve",
+      "body_sha256": "37aeb3e484cfc111dd18c2aed50bf36c0c79b321f46bd2948a01cb750416799a",
+      "request_headers_sha256": "e5022a88938178266e8c257612a3a7667934cb6c8ccceeec66bfc9d00a4bb584",
+      "status": 422,
+      "headers": {
+        "content-length": "301",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":[{\"type\":\"uuid_parsing\",\"loc\":[\"path\",\"audit_id\"],\"msg\":\"Input should be a valid UUID, invalid character: found `n` at 1\",\"input\":\"nope\",\"ctx\":{\"error\":\"invalid character: found `n` at 1\"}},{\"type\":\"string_type\",\"loc\":[\"body\",\"resolution\"],\"msg\":\"Input should be a valid string\",\"input\":1}]}"
+    },
+    {
+      "name": "resolve: missing body field",
+      "method": "POST",
+      "path": "/api/v1/billing/audit/44444444-0000-4000-8000-000000000001/resolve",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "e8401a965c92967810ea3f62f446f1a312661a86ed154a71a3e61867e51bf334",
+      "status": 422,
+      "headers": {
+        "content-length": "93",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"resolution\"],\"msg\":\"Field required\",\"input\":{}}]}"
+    },
+    {
+      "name": "resolve: member",
+      "method": "POST",
+      "path": "/api/v1/billing/audit/44444444-0000-4000-8000-000000000001/resolve",
+      "body_sha256": "bf4b4a8dc029b00a846dc20d2e9f50ca65c71fb76ab6d47c9aaa1396024d8f20",
+      "request_headers_sha256": "e8401a965c92967810ea3f62f446f1a312661a86ed154a71a3e61867e51bf334",
+      "status": 403,
+      "headers": {
+        "content-length": "39",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Superadmin access required\"}"
+    },
+    {
+      "name": "resolve: missing",
+      "method": "POST",
+      "path": "/api/v1/billing/audit/bbf3f791-6ede-5e3d-8f1d-fd193f599f79/resolve",
+      "body_sha256": "bf4b4a8dc029b00a846dc20d2e9f50ca65c71fb76ab6d47c9aaa1396024d8f20",
+      "request_headers_sha256": "e5022a88938178266e8c257612a3a7667934cb6c8ccceeec66bfc9d00a4bb584",
+      "status": 404,
+      "headers": {
+        "content-length": "34",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Audit entry not found\"}"
+    },
+    {
+      "name": "resolve: super",
+      "method": "POST",
+      "path": "/api/v1/billing/audit/44444444-0000-4000-8000-000000000001/resolve",
+      "body_sha256": "f8346092d7b61a9d2193682cbff72e04fc1be1644220de3408ac2c99b86b599e",
+      "request_headers_sha256": "e5022a88938178266e8c257612a3a7667934cb6c8ccceeec66bfc9d00a4bb584",
+      "status": 200,
+      "headers": {
+        "content-length": "487",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"id\":\"43a79d99-c235-48c6-bef4-7f27dac934e5\",\"org_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"actor_id\":\"59b88176-f36f-5981-b2d3-58b612cfe80f\",\"action\":\"reconciliation.completed\",\"resource_type\":\"subscription\",\"resource_id\":\"11111111-0000-4000-8000-000000000001\",\"description\":\"Mismatch resolved: fixed by hand é\",\"stripe_event_id\":null,\"local_state\":{\"field\":\"status\",\"value\":1.5,\"t\":\"é\"},\"stripe_state\":{},\"reconciliation_status\":\"matched\",\"created_at\":\"2026-09-26T06:01:23.500903Z\"}"
+    },
+    {
+      "name": "resolve: null states",
+      "method": "POST",
+      "path": "/api/v1/billing/audit/44444444-0000-4000-8000-000000000002/resolve",
+      "body_sha256": "bb42064c47627f7ab71a8e94fde89348ab47b20230beea73981b85b2eb73988b",
+      "request_headers_sha256": "e5022a88938178266e8c257612a3a7667934cb6c8ccceeec66bfc9d00a4bb584",
+      "status": 200,
+      "headers": {
+        "content-length": "439",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"id\":\"122e7afb-0476-4df9-b75b-45551354e9c7\",\"org_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"actor_id\":\"59b88176-f36f-5981-b2d3-58b612cfe80f\",\"action\":\"reconciliation.completed\",\"resource_type\":\"checkout\",\"resource_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"description\":\"Mismatch resolved: \",\"stripe_event_id\":null,\"local_state\":{},\"stripe_state\":{\"a\":[1,2]},\"reconciliation_status\":\"matched\",\"created_at\":\"2026-09-26T06:01:23.718108Z\"}"
+    },
+    {
+      "name": "resolve: bad state",
+      "method": "POST",
+      "path": "/api/v1/billing/audit/44444444-0000-4000-8000-000000000004/resolve",
+      "body_sha256": "c38844db6836d4a6f980e86448f7da5b4f826af55cfab972ba6520e627e3bc72",
+      "request_headers_sha256": "e5022a88938178266e8c257612a3a7667934cb6c8ccceeec66bfc9d00a4bb584",
+      "status": 200,
+      "headers": {
+        "content-length": "424",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"id\":\"6f2cc49f-3c91-4650-b960-d2d5c1c91d98\",\"org_id\":\"1bdff33b-214e-5dbf-9424-b30e42a9a0ad\",\"actor_id\":\"59b88176-f36f-5981-b2d3-58b612cfe80f\",\"action\":\"reconciliation.completed\",\"resource_type\":\"y\",\"resource_id\":\"1bdff33b-214e-5dbf-9424-b30e42a9a0ad\",\"description\":\"Mismatch resolved: z\",\"stripe_event_id\":null,\"local_state\":{},\"stripe_state\":{},\"reconciliation_status\":\"matched\",\"created_at\":\"2026-09-26T06:01:23.932605Z\"}"
+    },
+    {
+      "name": "resolve: 405",
+      "method": "GET",
+      "path": "/api/v1/billing/audit/44444444-0000-4000-8000-000000000001/resolve",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "13cb693c14be6b63125fe673ce665798f9f6005044f09ff0792790e4c8442d29",
+      "status": 405,
+      "headers": {
+        "allow": "POST",
+        "content-length": "31",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "name": "reconcile: member",
+      "method": "POST",
+      "path": "/api/v1/billing/reconcile",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "cd860fdd87873f44aabe6c08036b93c5cd6c8ea317fba058159e3a599ab3f467",
+      "status": 403,
+      "headers": {
+        "content-length": "39",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Superadmin access required\"}"
+    },
+    {
+      "name": "reconcile: bad org",
+      "method": "POST",
+      "path": "/api/v1/billing/reconcile?org_id=x",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "13cb693c14be6b63125fe673ce665798f9f6005044f09ff0792790e4c8442d29",
+      "status": 422,
+      "headers": {
+        "content-length": "197",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":[{\"type\":\"uuid_parsing\",\"loc\":[\"query\",\"org_id\"],\"msg\":\"Input should be a valid UUID, invalid character: found `x` at 1\",\"input\":\"x\",\"ctx\":{\"error\":\"invalid character: found `x` at 1\"}}]}"
+    },
+    {
+      "name": "reconcile: org A",
+      "method": "POST",
+      "path": "/api/v1/billing/reconcile?org_id=37aa5733-344b-54a7-9210-c911e4ccf37a",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "13cb693c14be6b63125fe673ce665798f9f6005044f09ff0792790e4c8442d29",
+      "status": 200,
+      "headers": {
+        "content-length": "669",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"started_at\":\"2026-09-26T06:01:24.507364+00:00\",\"completed_at\":\"2026-09-26T06:01:24.590349+00:00\",\"subscriptions_checked\":2,\"invoices_checked\":4,\"refunds_checked\":2,\"mismatches\":[{\"resource_type\":\"subscription\",\"resource_id\":\"11111111-0000-4000-8000-000000000001\",\"stripe_id\":\"sub_A\",\"field\":\"status\",\"local_value\":\"active\",\"stripe_value\":\"past_due\",\"severity\":\"critical\"},{\"resource_type\":\"subscription\",\"resource_id\":\"11111111-0000-4000-8000-000000000002\",\"stripe_id\":\"sub_A2\",\"field\":\"status\",\"local_value\":\"trialing\",\"stripe_value\":null,\"severity\":\"critical\"}],\"missing_local\":[\"re_B1\",\"re_stripe_only\"],\"missing_stripe\":[\"in_A1\",\"in_A2\",\"in_A3\",\"in_err\",\"re_A2\"]}"
+    },
+    {
+      "name": "reconcile: org D (nothing)",
+      "method": "POST",
+      "path": "/api/v1/billing/reconcile?org_id=f5fc5f0d-cbeb-5886-86ff-f6a51c89659f",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "13cb693c14be6b63125fe673ce665798f9f6005044f09ff0792790e4c8442d29",
+      "status": 200,
+      "headers": {
+        "content-length": "261",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"started_at\":\"2026-09-26T06:01:24.768855+00:00\",\"completed_at\":\"2026-09-26T06:01:24.850278+00:00\",\"subscriptions_checked\":0,\"invoices_checked\":0,\"refunds_checked\":0,\"mismatches\":[],\"missing_local\":[\"in_A1\",\"in_A2\",\"in_B1\",\"in_stripe_only\"],\"missing_stripe\":[]}"
+    },
+    {
+      "name": "reconcile: all orgs",
+      "method": "POST",
+      "path": "/api/v1/billing/reconcile",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "13cb693c14be6b63125fe673ce665798f9f6005044f09ff0792790e4c8442d29",
+      "status": 200,
+      "headers": {
+        "content-length": "1077",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"started_at\":\"2026-09-26T06:01:25.030228+00:00\",\"completed_at\":\"2026-09-26T06:01:25.085069+00:00\",\"subscriptions_checked\":4,\"invoices_checked\":6,\"refunds_checked\":3,\"mismatches\":[{\"resource_type\":\"subscription\",\"resource_id\":\"11111111-0000-4000-8000-000000000001\",\"stripe_id\":\"sub_A\",\"field\":\"status\",\"local_value\":\"active\",\"stripe_value\":\"past_due\",\"severity\":\"critical\"},{\"resource_type\":\"subscription\",\"resource_id\":\"11111111-0000-4000-8000-000000000003\",\"stripe_id\":\"sub_C\",\"field\":\"status\",\"local_value\":\"active\",\"stripe_value\":null,\"severity\":\"critical\"},{\"resource_type\":\"invoice\",\"resource_id\":\"22222222-0000-4000-8000-000000000005\",\"stripe_id\":\"in_B1\",\"field\":\"status\",\"local_value\":\"void\",\"stripe_value\":\"uncollectible\",\"severity\":\"critical\"},{\"resource_type\":\"refund\",\"resource_id\":\"33333333-0000-4000-8000-000000000003\",\"stripe_id\":\"re_B1\",\"field\":\"status\",\"local_value\":\"pending\",\"stripe_value\":\"succeeded\",\"severity\":\"critical\"}],\"missing_local\":[\"sub_stripe_only\",\"in_stripe_only\",\"re_stripe_only\"],\"missing_stripe\":[\"sub_err\",\"in_A3\",\"in_err\",\"in_C1\",\"re_A2\"]}"
+    },
+    {
+      "name": "audit list: after runs",
+      "method": "GET",
+      "path": "/api/v1/billing/audit?org_id=37aa5733-344b-54a7-9210-c911e4ccf37a\u0026limit=100",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "13cb693c14be6b63125fe673ce665798f9f6005044f09ff0792790e4c8442d29",
+      "status": 200,
+      "headers": {
+        "content-length": "6371",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"items\":[{\"id\":\"731e18b2-12f6-4b6b-947e-c0c6bee2caad\",\"org_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"actor_id\":null,\"action\":\"reconciliation.mismatch_found\",\"resource_type\":\"reconciliation\",\"resource_id\":\"79ced177-61f0-4ddd-bd2c-40e04f971ea2\",\"description\":\"Completed billing reconciliation run\",\"stripe_event_id\":null,\"local_state\":{\"subscriptions_checked\":2,\"invoices_checked\":4,\"refunds_checked\":2},\"stripe_state\":{\"missing_local\":[\"re_B1\",\"re_stripe_only\"],\"missing_stripe\":[\"in_A1\",\"in_A2\",\"in_A3\",\"in_err\",\"re_A2\"],\"mismatch_count\":2},\"reconciliation_status\":\"mismatch\",\"created_at\":\"2026-09-26T06:01:24.597207Z\"},{\"id\":\"3aa7b2d6-4ad1-4849-aabd-afef82d3cfa7\",\"org_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"actor_id\":null,\"action\":\"reconciliation.mismatch_found\",\"resource_type\":\"subscription\",\"resource_id\":\"11111111-0000-4000-8000-000000000002\",\"description\":\"Mismatch on status: local=trialing, stripe=None\",\"stripe_event_id\":null,\"local_state\":{\"field\":\"status\",\"value\":\"trialing\"},\"stripe_state\":{\"field\":\"status\",\"value\":null},\"reconciliation_status\":\"mismatch\",\"created_at\":\"2026-09-26T06:01:24.594216Z\"},{\"id\":\"33e74129-c036-4b19-b31b-b27b13930fb1\",\"org_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"actor_id\":null,\"action\":\"reconciliation.mismatch_found\",\"resource_type\":\"subscription\",\"resource_id\":\"11111111-0000-4000-8000-000000000001\",\"description\":\"Mismatch on status: local=active, stripe=past_due\",\"stripe_event_id\":null,\"local_state\":{\"field\":\"status\",\"value\":\"active\"},\"stripe_state\":{\"field\":\"status\",\"value\":\"past_due\"},\"reconciliation_status\":\"mismatch\",\"created_at\":\"2026-09-26T06:01:24.590537Z\"},{\"id\":\"4470ad86-49d9-4c5b-8409-531cbf76ddd5\",\"org_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"actor_id\":null,\"action\":\"reconciliation.mismatch_found\",\"resource_type\":\"reconciliation\",\"resource_id\":\"edeab114-58fa-42a8-8d1f-0d8208ad3842\",\"description\":\"Completed billing reconciliation run\",\"stripe_event_id\":null,\"local_state\":{\"subscriptions_checked\":0,\"invoices_checked\":4,\"refunds_checked\":0},\"stripe_state\":{\"missing_local\":[],\"missing_stripe\":[\"in_A1\",\"in_A2\",\"in_A3\",\"in_err\"],\"mismatch_count\":0},\"reconciliation_status\":\"mismatch\",\"created_at\":\"2026-09-26T06:01:24.575228Z\"},{\"id\":\"91fa105b-7653-46e0-be8f-95f02a55beec\",\"org_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"actor_id\":null,\"action\":\"reconciliation.mismatch_found\",\"resource_type\":\"reconciliation\",\"resource_id\":\"503f9c8b-f0c3-4222-bf12-2957412aba98\",\"description\":\"Completed billing reconciliation run\",\"stripe_event_id\":null,\"local_state\":{\"subscriptions_checked\":2,\"invoices_checked\":0,\"refunds_checked\":0},\"stripe_state\":{\"missing_local\":[],\"missing_stripe\":[],\"mismatch_count\":2},\"reconciliation_status\":\"mismatch\",\"created_at\":\"2026-09-26T06:01:24.562099Z\"},{\"id\":\"f43a0b48-4c9b-408e-9f7a-b2856198fae4\",\"org_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"actor_id\":null,\"action\":\"reconciliation.mismatch_found\",\"resource_type\":\"subscription\",\"resource_id\":\"11111111-0000-4000-8000-000000000002\",\"description\":\"Mismatch on status: local=trialing, stripe=None\",\"stripe_event_id\":null,\"local_state\":{\"field\":\"status\",\"value\":\"trialing\"},\"stripe_state\":{\"field\":\"status\",\"value\":null},\"reconciliation_status\":\"mismatch\",\"created_at\":\"2026-09-26T06:01:24.559378Z\"},{\"id\":\"c3fdc1be-c5dd-452f-94a3-baf262588076\",\"org_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"actor_id\":null,\"action\":\"reconciliation.mismatch_found\",\"resource_type\":\"subscription\",\"resource_id\":\"11111111-0000-4000-8000-000000000001\",\"description\":\"Mismatch on status: local=active, stripe=past_due\",\"stripe_event_id\":null,\"local_state\":{\"field\":\"status\",\"value\":\"active\"},\"stripe_state\":{\"field\":\"status\",\"value\":\"past_due\"},\"reconciliation_status\":\"mismatch\",\"created_at\":\"2026-09-26T06:01:24.555974Z\"},{\"id\":\"2de4989a-6d70-4e92-a262-ab540913e919\",\"org_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"actor_id\":null,\"action\":\"reconciliation.started\",\"resource_type\":\"reconciliation\",\"resource_id\":\"b384fa07-7271-4df8-b681-10cc00ad8ad2\",\"description\":\"Started billing reconciliation\",\"stripe_event_id\":null,\"local_state\":null,\"stripe_state\":null,\"reconciliation_status\":\"unresolved\",\"created_at\":\"2026-09-26T06:01:24.507536Z\"},{\"id\":\"122e7afb-0476-4df9-b75b-45551354e9c7\",\"org_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"actor_id\":\"59b88176-f36f-5981-b2d3-58b612cfe80f\",\"action\":\"reconciliation.completed\",\"resource_type\":\"checkout\",\"resource_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"description\":\"Mismatch resolved: \",\"stripe_event_id\":null,\"local_state\":{},\"stripe_state\":{\"a\":[1,2]},\"reconciliation_status\":\"matched\",\"created_at\":\"2026-09-26T06:01:23.718108Z\"},{\"id\":\"43a79d99-c235-48c6-bef4-7f27dac934e5\",\"org_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"actor_id\":\"59b88176-f36f-5981-b2d3-58b612cfe80f\",\"action\":\"reconciliation.completed\",\"resource_type\":\"subscription\",\"resource_id\":\"11111111-0000-4000-8000-000000000001\",\"description\":\"Mismatch resolved: fixed by hand é\",\"stripe_event_id\":null,\"local_state\":{\"field\":\"status\",\"value\":1.5,\"t\":\"é\"},\"stripe_state\":{},\"reconciliation_status\":\"matched\",\"created_at\":\"2026-09-26T06:01:23.500903Z\"},{\"id\":\"44444444-0000-4000-8000-000000000002\",\"org_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"actor_id\":\"96d11d6a-98ca-5997-a78a-e509db100806\",\"action\":\"checkout.created\",\"resource_type\":\"checkout\",\"resource_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"description\":\"Checkout\",\"stripe_event_id\":null,\"local_state\":null,\"stripe_state\":{\"a\":[1,2]},\"reconciliation_status\":null,\"created_at\":\"2026-09-02T12:00:00.000001Z\"},{\"id\":\"44444444-0000-4000-8000-000000000001\",\"org_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"actor_id\":null,\"action\":\"reconciliation.mismatch_found\",\"resource_type\":\"subscription\",\"resource_id\":\"11111111-0000-4000-8000-000000000001\",\"description\":\"Mismatch on status\",\"stripe_event_id\":\"evt_x\",\"local_state\":{\"field\":\"status\",\"value\":1.5,\"t\":\"é\"},\"stripe_state\":null,\"reconciliation_status\":\"mismatch\",\"created_at\":\"2026-09-02T12:00:00Z\"},{\"id\":\"44444444-0000-4000-8000-000000000003\",\"org_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"actor_id\":null,\"action\":\"webhook.received\",\"resource_type\":\"invoice\",\"resource_id\":\"22222222-0000-4000-8000-000000000002\",\"description\":\"Old\",\"stripe_event_id\":null,\"local_state\":null,\"stripe_state\":null,\"reconciliation_status\":\"matched\",\"created_at\":\"2026-08-01T00:00:00Z\"}],\"total\":13,\"limit\":100,\"offset\":0}"
+    },
+    {
+      "name": "reconcile: 405",
+      "method": "GET",
+      "path": "/api/v1/billing/reconcile",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "13cb693c14be6b63125fe673ce665798f9f6005044f09ff0792790e4c8442d29",
+      "status": 405,
+      "headers": {
+        "allow": "POST",
+        "content-length": "31",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "name": "pull: 405 patch",
+      "method": "PATCH",
+      "path": "/api/v1/billing/plans/pull-stripe",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "13cb693c14be6b63125fe673ce665798f9f6005044f09ff0792790e4c8442d29",
+      "status": 405,
+      "headers": {
+        "allow": "POST",
+        "content-length": "31",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "name": "pull: 405 options",
+      "method": "OPTIONS",
+      "path": "/api/v1/billing/plans/pull-stripe",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "13cb693c14be6b63125fe673ce665798f9f6005044f09ff0792790e4c8442d29",
+      "status": 405,
+      "headers": {
+        "allow": "POST",
+        "content-length": "31",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "name": "pull: 405 head",
+      "method": "HEAD",
+      "path": "/api/v1/billing/plans/pull-stripe",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "13cb693c14be6b63125fe673ce665798f9f6005044f09ff0792790e4c8442d29",
+      "status": 405,
+      "headers": {
+        "allow": "POST",
+        "content-length": "31",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": ""
+    },
+    {
+      "name": "plan: head",
+      "method": "HEAD",
+      "path": "/api/v1/billing/plans/ae72201b-4170-5c2b-95dc-1470b1919816",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "13cb693c14be6b63125fe673ce665798f9f6005044f09ff0792790e4c8442d29",
+      "status": 405,
+      "headers": {
+        "allow": "GET",
+        "content-length": "31",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": ""
+    },
+    {
+      "name": "plan post: 405",
+      "method": "POST",
+      "path": "/api/v1/billing/plans/ae72201b-4170-5c2b-95dc-1470b1919816",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "13cb693c14be6b63125fe673ce665798f9f6005044f09ff0792790e4c8442d29",
+      "status": 405,
+      "headers": {
+        "allow": "GET",
+        "content-length": "31",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "name": "plan patch: 405",
+      "method": "PATCH",
+      "path": "/api/v1/billing/plans/ae72201b-4170-5c2b-95dc-1470b1919816",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "13cb693c14be6b63125fe673ce665798f9f6005044f09ff0792790e4c8442d29",
+      "status": 405,
+      "headers": {
+        "allow": "GET",
+        "content-length": "31",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    }
+  ],
+  "rows": {
+    "recorded_at": {
+      "rows": "2026-09-26T05:59:48.673505829Z"
+    },
+    "rows:billing_audit_log": {
+      "rows": "1bdff33b-214e-5dbf-9424-b30e42a9a0ad\u003cnil\u003exy1bdff33b-214e-5dbf-9424-b30e42a9a0adBad state\u003cnil\u003e[1]\u003cnil\u003e false true \u003cnil\u003e 2026-09-01 00:00:00 +0000 UTC | 1bdff33b-214e-5dbf-9424-b30e42a9a0ad59b88176-f36f-5981-b2d3-58b612cfe80freconciliation.completedy1bdff33b-214e-5dbf-9424-b30e42a9a0adMismatch resolved: z\u003cnil\u003e{}{}false falsematched\u003cnow\u003e | 37aa5733-344b-54a7-9210-c911e4ccf37a\u003cnil\u003ewebhook.receivedinvoice22222222-0000-4000-8000-000000000002Old\u003cnil\u003e \u003cnil\u003e \u003cnil\u003e true truematched2026-08-01 00:00:00 +0000 UTC | 37aa5733-344b-54a7-9210-c911e4ccf37a\u003cnil\u003ereconciliation.mismatch_foundsubscription11111111-0000-4000-8000-000000000001Mismatch on statusevt_x{\"field\": \"status\", \"value\": 1.50, \"t\": \"é\"}\u003cnil\u003e false truemismatch2026-09-02 12:00:00 +0000 UTC | 37aa5733-344b-54a7-9210-c911e4ccf37a96d11d6a-98ca-5997-a78a-e509db100806checkout.createdcheckout37aa5733-344b-54a7-9210-c911e4ccf37aCheckout\u003cnil\u003enull{\"a\":[1,2]}false false \u003cnil\u003e 2026-09-02 12:00:00.000001 +0000 UTC | 37aa5733-344b-54a7-9210-c911e4ccf37a59b88176-f36f-5981-b2d3-58b612cfe80freconciliation.completedsubscription11111111-0000-4000-8000-000000000001Mismatch resolved: fixed by hand é\u003cnil\u003e{\"field\": \"status\", \"value\": 1.5, \"t\": \"\\u00e9\"}{}false falsematched\u003cnow\u003e | 37aa5733-344b-54a7-9210-c911e4ccf37a59b88176-f36f-5981-b2d3-58b612cfe80freconciliation.completedcheckout37aa5733-344b-54a7-9210-c911e4ccf37aMismatch resolved: \u003cnil\u003e{}{\"a\": [1, 2]}false falsematched\u003cnow\u003e | 37aa5733-344b-54a7-9210-c911e4ccf37a\u003cnil\u003ereconciliation.startedreconciliation\u003cid\u003eStarted billing reconciliation\u003cnil\u003enullnullfalse falseunresolved\u003cnow\u003e | 37aa5733-344b-54a7-9210-c911e4ccf37a\u003cnil\u003ereconciliation.mismatch_foundsubscription11111111-0000-4000-8000-000000000001Mismatch on status: local=active, stripe=past_due\u003cnil\u003e{\"field\": \"status\", \"value\": \"active\"}{\"field\": \"status\", \"value\": \"past_due\"}false falsemismatch\u003cnow\u003e | 37aa5733-344b-54a7-9210-c911e4ccf37a\u003cnil\u003ereconciliation.mismatch_foundsubscription11111111-0000-4000-8000-000000000002Mismatch on status: local=trialing, stripe=None\u003cnil\u003e{\"field\": \"status\", \"value\": \"trialing\"}{\"field\": \"status\", \"value\": null}false falsemismatch\u003cnow\u003e | 37aa5733-344b-54a7-9210-c911e4ccf37a\u003cnil\u003ereconciliation.mismatch_foundreconciliation\u003cid\u003eCompleted billing reconciliation run\u003cnil\u003e{\"subscriptions_checked\": 2, \"invoices_checked\": 0, \"refunds_checked\": 0}{\"missing_local\": [], \"missing_stripe\": [], \"mismatch_count\": 2}false falsemismatch\u003cnow\u003e | 37aa5733-344b-54a7-9210-c911e4ccf37a\u003cnil\u003ereconciliation.mismatch_foundreconciliation\u003cid\u003eCompleted billing reconciliation run\u003cnil\u003e{\"subscriptions_checked\": 0, \"invoices_checked\": 4, \"refunds_checked\": 0}{\"missing_local\": [], \"missing_stripe\": [\"in_A1\", \"in_A2\", \"in_A3\", \"in_err\"], \"mismatch_count\": 0}false falsemismatch\u003cnow\u003e | 37aa5733-344b-54a7-9210-c911e4ccf37a\u003cnil\u003ereconciliation.mismatch_foundsubscription11111111-0000-4000-8000-000000000001Mismatch on status: local=active, stripe=past_due\u003cnil\u003e{\"field\": \"status\", \"value\": \"active\"}{\"field\": \"status\", \"value\": \"past_due\"}false falsemismatch\u003cnow\u003e | 37aa5733-344b-54a7-9210-c911e4ccf37a\u003cnil\u003ereconciliation.mismatch_foundsubscription11111111-0000-4000-8000-000000000002Mismatch on status: local=trialing, stripe=None\u003cnil\u003e{\"field\": \"status\", \"value\": \"trialing\"}{\"field\": \"status\", \"value\": null}false falsemismatch\u003cnow\u003e | 37aa5733-344b-54a7-9210-c911e4ccf37a\u003cnil\u003ereconciliation.mismatch_foundreconciliation\u003cid\u003eCompleted billing reconciliation run\u003cnil\u003e{\"subscriptions_checked\": 2, \"invoices_checked\": 4, \"refunds_checked\": 2}{\"missing_local\": [\"re_B1\", \"re_stripe_only\"], \"missing_stripe\": [\"in_A1\", \"in_A2\", \"in_A3\", \"in_err\", \"re_A2\"], \"mismatch_count\": 2}false falsemismatch\u003cnow\u003e | f5fc5f0d-cbeb-5886-86ff-f6a51c89659f\u003cnil\u003ereconciliation.startedreconciliation\u003cid\u003eStarted billing reconciliation\u003cnil\u003enullnullfalse falseunresolved\u003cnow\u003e | f5fc5f0d-cbeb-5886-86ff-f6a51c89659f\u003cnil\u003ereconciliation.completedreconciliation\u003cid\u003eCompleted billing reconciliation run\u003cnil\u003e{\"subscriptions_checked\": 0, \"invoices_checked\": 0, \"refunds_checked\": 0}{\"missing_local\": [], \"missing_stripe\": [], \"mismatch_count\": 0}false falsematched\u003cnow\u003e | f5fc5f0d-cbeb-5886-86ff-f6a51c89659f\u003cnil\u003ereconciliation.mismatch_foundreconciliation\u003cid\u003eCompleted billing reconciliation run\u003cnil\u003e{\"subscriptions_checked\": 0, \"invoices_checked\": 0, \"refunds_checked\": 0}{\"missing_local\": [\"in_A1\", \"in_A2\", \"in_B1\", \"in_stripe_only\"], \"missing_stripe\": [], \"mismatch_count\": 0}false falsemismatch\u003cnow\u003e | f5fc5f0d-cbeb-5886-86ff-f6a51c89659f\u003cnil\u003ereconciliation.mismatch_foundreconciliation\u003cid\u003eCompleted billing reconciliation run\u003cnil\u003e{\"subscriptions_checked\": 0, \"invoices_checked\": 0, \"refunds_checked\": 0}{\"missing_local\": [\"in_A1\", \"in_A2\", \"in_B1\", \"in_stripe_only\"], \"missing_stripe\": [], \"mismatch_count\": 0}false falsemismatch\u003cnow\u003e"
+    },
+    "rows:invoices": {
+      "rows": "22222222-0000-4000-8000-000000000001void0 false \u003cnow\u003e \u003cnow\u003e{\"b\": 1, \"a\": {\"c\": [1.50, null, \"é\"]}} | 22222222-0000-4000-8000-000000000002paid0 true \u003cnil\u003e 2026-09-02 00:00:00 +0000 UTCnull | 22222222-0000-4000-8000-000000000003void0 false 2026-09-03 00:00:00 +0000 UTC 2026-09-03 00:00:00 +0000 UTC[] | 22222222-0000-4000-8000-000000000004open200 true \u003cnil\u003e 2026-09-04 00:00:00 +0000 UTC{} | 22222222-0000-4000-8000-000000000005void0 false \u003cnow\u003e \u003cnow\u003e{\"org\": \"b\"} | 22222222-0000-4000-8000-000000000006open400 true \u003cnil\u003e 2026-09-05 00:00:00 +0000 UTC[1]"
+    },
+    "rows:refunds": {
+      "rows": "33333333-0000-4000-8000-000000000001succeeded{\"invoice_id\": \"x\", \"n\": 2} | 33333333-0000-4000-8000-000000000002failed[1] | 33333333-0000-4000-8000-000000000003pendingnull"
+    },
+    "stripe_calls_py": {
+      "rows": "POST /v1/invoices/in_err/void | query= | form= | version=2026-08-26.dahlia | idempotency=present | auth=fake-key\nPOST /v1/invoices/in_A1/void | query= | form= | version=2026-08-26.dahlia | idempotency=present | auth=fake-key\nPOST /v1/invoices/in_B1/void | query= | form= | version=2026-08-26.dahlia | idempotency=present | auth=fake-key\nGET /v1/subscriptions | query=limit=100 | form= | version=2026-08-26.dahlia | idempotency=absent | auth=fake-key\nGET /v1/invoices | query=limit=100 | form= | version=2026-08-26.dahlia | idempotency=absent | auth=fake-key\nGET /v1/refunds | query=limit=100 | form= | version=2026-08-26.dahlia | idempotency=absent | auth=fake-key\nGET /v1/refunds | query=limit=100\u0026starting_after=re_B1 | form= | version=2026-08-26.dahlia | idempotency=absent | auth=fake-key\nGET /v1/subscriptions | query=limit=100 | form= | version=2026-08-26.dahlia | idempotency=absent | auth=fake-key\nGET /v1/invoices | query=limit=100 | form= | version=2026-08-26.dahlia | idempotency=absent | auth=fake-key\nGET /v1/invoices | query=limit=100\u0026starting_after=in_A2 | form= | version=2026-08-26.dahlia | idempotency=absent | auth=fake-key\nGET /v1/refunds | query=limit=100 | form= | version=2026-08-26.dahlia | idempotency=absent | auth=fake-key\nGET /v1/refunds | query=limit=100\u0026starting_after=re_B1 | form= | version=2026-08-26.dahlia | idempotency=absent | auth=fake-key\nGET /v1/subscriptions | query=limit=100 | form= | version=2026-08-26.dahlia | idempotency=absent | auth=fake-key\nGET /v1/subscriptions | query=limit=100\u0026starting_after=sub_A2 | form= | version=2026-08-26.dahlia | idempotency=absent | auth=fake-key\nGET /v1/subscriptions | query=limit=100\u0026starting_after=sub_C | form= | version=2026-08-26.dahlia | idempotency=absent | auth=fake-key\nGET /v1/invoices | query=limit=100 | form= | version=2026-08-26.dahlia | idempotency=absent | auth=fake-key\nGET /v1/invoices | query=limit=100\u0026starting_after=in_A2 | form= | version=2026-08-26.dahlia | idempotency=absent | auth=fake-key\nGET /v1/refunds | query=limit=100 | form= | version=2026-08-26.dahlia | idempotency=absent | auth=fake-key\nGET /v1/refunds | query=limit=100\u0026starting_after=re_B1 | form= | version=2026-08-26.dahlia | idempotency=absent | auth=fake-key"
+    }
+  }
+}

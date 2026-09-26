@@ -1,0 +1,2616 @@
+{
+  "header": {
+    "test": "TestVenueOracleBillingPlansCheckout",
+    "python_build": "023ae3e584ef6345a3bfaef1f0b30abd89f5dee8",
+    "producer_digest": "53028fde43de410ecb5704202be163d92617d6794f5d2108513c8868e2607e80",
+    "recipe": "git worktree add --detach \u003cdir\u003e 023ae3e584ef6345a3bfaef1f0b30abd89f5dee8; from internal/apiservice/billingvenue: DHO_VENUE_GOLDEN_UPDATE=1 DHO_VENUE_GOLDEN_PYTHON_ROOT=\u003cdir\u003e DEV_HEALTH_LIVE_PYTHON_ORACLES=1 go test -tags=integration -count=1 -run '^TestVenueOracleBillingPlansCheckout$' ."
+  },
+  "requests": [
+    {
+      "name": "plans: anon",
+      "method": "GET",
+      "path": "/api/v1/billing/plans",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "fd6e55f2ba4c5c59ea6141921820358411e8536e2184aa6db640ebcc5a081aeb",
+      "status": 200,
+      "headers": {
+        "content-length": "2319",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "[{\"id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"key\":\"enterprise\",\"name\":\"Enterprise\",\"description\":null,\"tier\":\"enterprise\",\"is_active\":true,\"display_order\":1,\"stripe_product_id\":\"prod_existing\",\"metadata\":{},\"prices\":[{\"id\":\"1e60b3ef-4a4d-58ec-a34c-0b4caefd47f3\",\"plan_id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"interval\":\"monthly\",\"amount\":5000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":null},{\"id\":\"d346e58a-e52c-5bff-851e-02fa5ab423f5\",\"plan_id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"interval\":\"yearly\",\"amount\":50000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"price_ent_y\"}],\"bundles\":[]},{\"id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"key\":\"team\",\"name\":\"Team Plan\",\"description\":\"For teams\",\"tier\":\"team\",\"is_active\":true,\"display_order\":1,\"stripe_product_id\":null,\"metadata\":{\"z\":1,\"a\":{\"b\":[1.5,null]},\"q\":\"it's\"},\"prices\":[{\"id\":\"5a14dce8-d539-594b-b0ef-ec675d4b3f01\",\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"monthly\",\"amount\":1000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":null},{\"id\":\"6155ad80-b426-551c-9944-1d57c13086cf\",\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"yearly\",\"amount\":10000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"price_seed_y\"}],\"bundles\":[{\"id\":\"c85aa159-e4fa-5b28-8039-98361e34b384\",\"key\":\"a-core\",\"name\":\"Core\",\"description\":\"Core features\",\"features\":[]},{\"id\":\"d1043917-f762-5c85-8fe4-bd888f3ff1d7\",\"key\":\"b-analytics\",\"name\":\"Analytics\",\"description\":null,\"features\":[\"a\",\"b\"]}]},{\"id\":\"0b51e4e1-97b0-5c63-8fa8-82516ff19cdc\",\"key\":\"basic\",\"name\":\"Basic Old\",\"description\":null,\"tier\":\"community\",\"is_active\":true,\"display_order\":2,\"stripe_product_id\":null,\"metadata\":{\"note\":\"é\"},\"prices\":[{\"id\":\"45c48cce-2e2d-7fbd-ea1a-fc51c7c6ad26\",\"plan_id\":\"0b51e4e1-97b0-5c63-8fa8-82516ff19cdc\",\"interval\":\"monthly\",\"amount\":700,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":null}],\"bundles\":[]},{\"id\":\"5365a9d2-fcb5-5b76-9329-658b9201ad3b\",\"key\":\"empty-ids\",\"name\":\"Empty Ids\",\"description\":\"Blank Stripe ids\",\"tier\":\"team\",\"is_active\":true,\"display_order\":3,\"stripe_product_id\":\"\",\"metadata\":{},\"prices\":[{\"id\":\"d3d94468-02a4-4259-755d-38e6d163e820\",\"plan_id\":\"5365a9d2-fcb5-5b76-9329-658b9201ad3b\",\"interval\":\"monthly\",\"amount\":400,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"\"}],\"bundles\":[]}]"
+    },
+    {
+      "name": "plans: garbage token",
+      "method": "GET",
+      "path": "/api/v1/billing/plans",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "9aeefaa0407cae8aa318c16493fd5a15544337416a3e990a0dae8a34425bea84",
+      "status": 200,
+      "headers": {
+        "content-length": "2319",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "[{\"id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"key\":\"enterprise\",\"name\":\"Enterprise\",\"description\":null,\"tier\":\"enterprise\",\"is_active\":true,\"display_order\":1,\"stripe_product_id\":\"prod_existing\",\"metadata\":{},\"prices\":[{\"id\":\"1e60b3ef-4a4d-58ec-a34c-0b4caefd47f3\",\"plan_id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"interval\":\"monthly\",\"amount\":5000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":null},{\"id\":\"d346e58a-e52c-5bff-851e-02fa5ab423f5\",\"plan_id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"interval\":\"yearly\",\"amount\":50000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"price_ent_y\"}],\"bundles\":[]},{\"id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"key\":\"team\",\"name\":\"Team Plan\",\"description\":\"For teams\",\"tier\":\"team\",\"is_active\":true,\"display_order\":1,\"stripe_product_id\":null,\"metadata\":{\"z\":1,\"a\":{\"b\":[1.5,null]},\"q\":\"it's\"},\"prices\":[{\"id\":\"5a14dce8-d539-594b-b0ef-ec675d4b3f01\",\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"monthly\",\"amount\":1000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":null},{\"id\":\"6155ad80-b426-551c-9944-1d57c13086cf\",\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"yearly\",\"amount\":10000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"price_seed_y\"}],\"bundles\":[{\"id\":\"c85aa159-e4fa-5b28-8039-98361e34b384\",\"key\":\"a-core\",\"name\":\"Core\",\"description\":\"Core features\",\"features\":[]},{\"id\":\"d1043917-f762-5c85-8fe4-bd888f3ff1d7\",\"key\":\"b-analytics\",\"name\":\"Analytics\",\"description\":null,\"features\":[\"a\",\"b\"]}]},{\"id\":\"0b51e4e1-97b0-5c63-8fa8-82516ff19cdc\",\"key\":\"basic\",\"name\":\"Basic Old\",\"description\":null,\"tier\":\"community\",\"is_active\":true,\"display_order\":2,\"stripe_product_id\":null,\"metadata\":{\"note\":\"é\"},\"prices\":[{\"id\":\"45c48cce-2e2d-7fbd-ea1a-fc51c7c6ad26\",\"plan_id\":\"0b51e4e1-97b0-5c63-8fa8-82516ff19cdc\",\"interval\":\"monthly\",\"amount\":700,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":null}],\"bundles\":[]},{\"id\":\"5365a9d2-fcb5-5b76-9329-658b9201ad3b\",\"key\":\"empty-ids\",\"name\":\"Empty Ids\",\"description\":\"Blank Stripe ids\",\"tier\":\"team\",\"is_active\":true,\"display_order\":3,\"stripe_product_id\":\"\",\"metadata\":{},\"prices\":[{\"id\":\"d3d94468-02a4-4259-755d-38e6d163e820\",\"plan_id\":\"5365a9d2-fcb5-5b76-9329-658b9201ad3b\",\"interval\":\"monthly\",\"amount\":400,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"\"}],\"bundles\":[]}]"
+    },
+    {
+      "name": "plans: basic scheme",
+      "method": "GET",
+      "path": "/api/v1/billing/plans",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "f6ddcf5aef3669057fc8bb84a633b058f638f6f87efad03cb0b532117161660d",
+      "status": 200,
+      "headers": {
+        "content-length": "2319",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "[{\"id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"key\":\"enterprise\",\"name\":\"Enterprise\",\"description\":null,\"tier\":\"enterprise\",\"is_active\":true,\"display_order\":1,\"stripe_product_id\":\"prod_existing\",\"metadata\":{},\"prices\":[{\"id\":\"1e60b3ef-4a4d-58ec-a34c-0b4caefd47f3\",\"plan_id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"interval\":\"monthly\",\"amount\":5000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":null},{\"id\":\"d346e58a-e52c-5bff-851e-02fa5ab423f5\",\"plan_id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"interval\":\"yearly\",\"amount\":50000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"price_ent_y\"}],\"bundles\":[]},{\"id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"key\":\"team\",\"name\":\"Team Plan\",\"description\":\"For teams\",\"tier\":\"team\",\"is_active\":true,\"display_order\":1,\"stripe_product_id\":null,\"metadata\":{\"z\":1,\"a\":{\"b\":[1.5,null]},\"q\":\"it's\"},\"prices\":[{\"id\":\"5a14dce8-d539-594b-b0ef-ec675d4b3f01\",\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"monthly\",\"amount\":1000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":null},{\"id\":\"6155ad80-b426-551c-9944-1d57c13086cf\",\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"yearly\",\"amount\":10000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"price_seed_y\"}],\"bundles\":[{\"id\":\"c85aa159-e4fa-5b28-8039-98361e34b384\",\"key\":\"a-core\",\"name\":\"Core\",\"description\":\"Core features\",\"features\":[]},{\"id\":\"d1043917-f762-5c85-8fe4-bd888f3ff1d7\",\"key\":\"b-analytics\",\"name\":\"Analytics\",\"description\":null,\"features\":[\"a\",\"b\"]}]},{\"id\":\"0b51e4e1-97b0-5c63-8fa8-82516ff19cdc\",\"key\":\"basic\",\"name\":\"Basic Old\",\"description\":null,\"tier\":\"community\",\"is_active\":true,\"display_order\":2,\"stripe_product_id\":null,\"metadata\":{\"note\":\"é\"},\"prices\":[{\"id\":\"45c48cce-2e2d-7fbd-ea1a-fc51c7c6ad26\",\"plan_id\":\"0b51e4e1-97b0-5c63-8fa8-82516ff19cdc\",\"interval\":\"monthly\",\"amount\":700,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":null}],\"bundles\":[]},{\"id\":\"5365a9d2-fcb5-5b76-9329-658b9201ad3b\",\"key\":\"empty-ids\",\"name\":\"Empty Ids\",\"description\":\"Blank Stripe ids\",\"tier\":\"team\",\"is_active\":true,\"display_order\":3,\"stripe_product_id\":\"\",\"metadata\":{},\"prices\":[{\"id\":\"d3d94468-02a4-4259-755d-38e6d163e820\",\"plan_id\":\"5365a9d2-fcb5-5b76-9329-658b9201ad3b\",\"interval\":\"monthly\",\"amount\":400,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"\"}],\"bundles\":[]}]"
+    },
+    {
+      "name": "plans: inactive anon",
+      "method": "GET",
+      "path": "/api/v1/billing/plans?include_inactive=true",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "fd6e55f2ba4c5c59ea6141921820358411e8536e2184aa6db640ebcc5a081aeb",
+      "status": 403,
+      "headers": {
+        "content-length": "39",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Superadmin access required\"}"
+    },
+    {
+      "name": "plans: inactive member",
+      "method": "GET",
+      "path": "/api/v1/billing/plans?include_inactive=on",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "cd860fdd87873f44aabe6c08036b93c5cd6c8ea317fba058159e3a599ab3f467",
+      "status": 403,
+      "headers": {
+        "content-length": "39",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Superadmin access required\"}"
+    },
+    {
+      "name": "plans: inactive super",
+      "method": "GET",
+      "path": "/api/v1/billing/plans?include_inactive=YES",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "13cb693c14be6b63125fe673ce665798f9f6005044f09ff0792790e4c8442d29",
+      "status": 200,
+      "headers": {
+        "content-length": "2913",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "[{\"id\":\"f49e1fc2-3dc1-597b-b874-986b00eb55ba\",\"key\":\"legacy\",\"name\":\"Legacy\",\"description\":null,\"tier\":\"team\",\"is_active\":false,\"display_order\":0,\"stripe_product_id\":null,\"metadata\":{},\"prices\":[{\"id\":\"c9f0f895-fb98-ab91-59f5-1fd0297e236d\",\"plan_id\":\"f49e1fc2-3dc1-597b-b874-986b00eb55ba\",\"interval\":\"yearly\",\"amount\":3000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"price_legacy_y\"}],\"bundles\":[]},{\"id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"key\":\"enterprise\",\"name\":\"Enterprise\",\"description\":null,\"tier\":\"enterprise\",\"is_active\":true,\"display_order\":1,\"stripe_product_id\":\"prod_existing\",\"metadata\":{},\"prices\":[{\"id\":\"1e60b3ef-4a4d-58ec-a34c-0b4caefd47f3\",\"plan_id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"interval\":\"monthly\",\"amount\":5000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":null},{\"id\":\"d346e58a-e52c-5bff-851e-02fa5ab423f5\",\"plan_id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"interval\":\"yearly\",\"amount\":50000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"price_ent_y\"}],\"bundles\":[]},{\"id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"key\":\"team\",\"name\":\"Team Plan\",\"description\":\"For teams\",\"tier\":\"team\",\"is_active\":true,\"display_order\":1,\"stripe_product_id\":null,\"metadata\":{\"z\":1,\"a\":{\"b\":[1.5,null]},\"q\":\"it's\"},\"prices\":[{\"id\":\"fc4f8f2e-2593-52e3-8804-35869b2b0de2\",\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"monthly\",\"amount\":900,\"currency\":\"eur\",\"is_active\":false,\"stripe_price_id\":null},{\"id\":\"5a14dce8-d539-594b-b0ef-ec675d4b3f01\",\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"monthly\",\"amount\":1000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":null},{\"id\":\"6155ad80-b426-551c-9944-1d57c13086cf\",\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"yearly\",\"amount\":10000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"price_seed_y\"}],\"bundles\":[{\"id\":\"c85aa159-e4fa-5b28-8039-98361e34b384\",\"key\":\"a-core\",\"name\":\"Core\",\"description\":\"Core features\",\"features\":[]},{\"id\":\"d1043917-f762-5c85-8fe4-bd888f3ff1d7\",\"key\":\"b-analytics\",\"name\":\"Analytics\",\"description\":null,\"features\":[\"a\",\"b\"]}]},{\"id\":\"0b51e4e1-97b0-5c63-8fa8-82516ff19cdc\",\"key\":\"basic\",\"name\":\"Basic Old\",\"description\":null,\"tier\":\"community\",\"is_active\":true,\"display_order\":2,\"stripe_product_id\":null,\"metadata\":{\"note\":\"é\"},\"prices\":[{\"id\":\"45c48cce-2e2d-7fbd-ea1a-fc51c7c6ad26\",\"plan_id\":\"0b51e4e1-97b0-5c63-8fa8-82516ff19cdc\",\"interval\":\"monthly\",\"amount\":700,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":null}],\"bundles\":[]},{\"id\":\"5365a9d2-fcb5-5b76-9329-658b9201ad3b\",\"key\":\"empty-ids\",\"name\":\"Empty Ids\",\"description\":\"Blank Stripe ids\",\"tier\":\"team\",\"is_active\":true,\"display_order\":3,\"stripe_product_id\":\"\",\"metadata\":{},\"prices\":[{\"id\":\"d3d94468-02a4-4259-755d-38e6d163e820\",\"plan_id\":\"5365a9d2-fcb5-5b76-9329-658b9201ad3b\",\"interval\":\"monthly\",\"amount\":400,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"\"}],\"bundles\":[]}]"
+    },
+    {
+      "name": "plans: inactive last wins",
+      "method": "GET",
+      "path": "/api/v1/billing/plans?include_inactive=1\u0026include_inactive=0",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "cd860fdd87873f44aabe6c08036b93c5cd6c8ea317fba058159e3a599ab3f467",
+      "status": 200,
+      "headers": {
+        "content-length": "2319",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "[{\"id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"key\":\"enterprise\",\"name\":\"Enterprise\",\"description\":null,\"tier\":\"enterprise\",\"is_active\":true,\"display_order\":1,\"stripe_product_id\":\"prod_existing\",\"metadata\":{},\"prices\":[{\"id\":\"1e60b3ef-4a4d-58ec-a34c-0b4caefd47f3\",\"plan_id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"interval\":\"monthly\",\"amount\":5000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":null},{\"id\":\"d346e58a-e52c-5bff-851e-02fa5ab423f5\",\"plan_id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"interval\":\"yearly\",\"amount\":50000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"price_ent_y\"}],\"bundles\":[]},{\"id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"key\":\"team\",\"name\":\"Team Plan\",\"description\":\"For teams\",\"tier\":\"team\",\"is_active\":true,\"display_order\":1,\"stripe_product_id\":null,\"metadata\":{\"z\":1,\"a\":{\"b\":[1.5,null]},\"q\":\"it's\"},\"prices\":[{\"id\":\"5a14dce8-d539-594b-b0ef-ec675d4b3f01\",\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"monthly\",\"amount\":1000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":null},{\"id\":\"6155ad80-b426-551c-9944-1d57c13086cf\",\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"yearly\",\"amount\":10000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"price_seed_y\"}],\"bundles\":[{\"id\":\"c85aa159-e4fa-5b28-8039-98361e34b384\",\"key\":\"a-core\",\"name\":\"Core\",\"description\":\"Core features\",\"features\":[]},{\"id\":\"d1043917-f762-5c85-8fe4-bd888f3ff1d7\",\"key\":\"b-analytics\",\"name\":\"Analytics\",\"description\":null,\"features\":[\"a\",\"b\"]}]},{\"id\":\"0b51e4e1-97b0-5c63-8fa8-82516ff19cdc\",\"key\":\"basic\",\"name\":\"Basic Old\",\"description\":null,\"tier\":\"community\",\"is_active\":true,\"display_order\":2,\"stripe_product_id\":null,\"metadata\":{\"note\":\"é\"},\"prices\":[{\"id\":\"45c48cce-2e2d-7fbd-ea1a-fc51c7c6ad26\",\"plan_id\":\"0b51e4e1-97b0-5c63-8fa8-82516ff19cdc\",\"interval\":\"monthly\",\"amount\":700,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":null}],\"bundles\":[]},{\"id\":\"5365a9d2-fcb5-5b76-9329-658b9201ad3b\",\"key\":\"empty-ids\",\"name\":\"Empty Ids\",\"description\":\"Blank Stripe ids\",\"tier\":\"team\",\"is_active\":true,\"display_order\":3,\"stripe_product_id\":\"\",\"metadata\":{},\"prices\":[{\"id\":\"d3d94468-02a4-4259-755d-38e6d163e820\",\"plan_id\":\"5365a9d2-fcb5-5b76-9329-658b9201ad3b\",\"interval\":\"monthly\",\"amount\":400,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"\"}],\"bundles\":[]}]"
+    },
+    {
+      "name": "plans: inactive bad",
+      "method": "GET",
+      "path": "/api/v1/billing/plans?include_inactive=maybe",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "13cb693c14be6b63125fe673ce665798f9f6005044f09ff0792790e4c8442d29",
+      "status": 422,
+      "headers": {
+        "content-length": "154",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":[{\"type\":\"bool_parsing\",\"loc\":[\"query\",\"include_inactive\"],\"msg\":\"Input should be a valid boolean, unable to interpret input\",\"input\":\"maybe\"}]}"
+    },
+    {
+      "name": "plan: anon",
+      "method": "GET",
+      "path": "/api/v1/billing/plans/ae72201b-4170-5c2b-95dc-1470b1919816",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "fd6e55f2ba4c5c59ea6141921820358411e8536e2184aa6db640ebcc5a081aeb",
+      "status": 200,
+      "headers": {
+        "content-length": "879",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"key\":\"team\",\"name\":\"Team Plan\",\"description\":\"For teams\",\"tier\":\"team\",\"is_active\":true,\"display_order\":1,\"stripe_product_id\":null,\"metadata\":{\"z\":1,\"a\":{\"b\":[1.5,null]},\"q\":\"it's\"},\"prices\":[{\"id\":\"5a14dce8-d539-594b-b0ef-ec675d4b3f01\",\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"monthly\",\"amount\":1000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":null},{\"id\":\"6155ad80-b426-551c-9944-1d57c13086cf\",\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"yearly\",\"amount\":10000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"price_seed_y\"}],\"bundles\":[{\"id\":\"c85aa159-e4fa-5b28-8039-98361e34b384\",\"key\":\"a-core\",\"name\":\"Core\",\"description\":\"Core features\",\"features\":[]},{\"id\":\"d1043917-f762-5c85-8fe4-bd888f3ff1d7\",\"key\":\"b-analytics\",\"name\":\"Analytics\",\"description\":null,\"features\":[\"a\",\"b\"]}]}"
+    },
+    {
+      "name": "plan: upper id",
+      "method": "GET",
+      "path": "/api/v1/billing/plans/AE72201B-4170-5C2B-95DC-1470B1919816",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "fd6e55f2ba4c5c59ea6141921820358411e8536e2184aa6db640ebcc5a081aeb",
+      "status": 200,
+      "headers": {
+        "content-length": "879",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"key\":\"team\",\"name\":\"Team Plan\",\"description\":\"For teams\",\"tier\":\"team\",\"is_active\":true,\"display_order\":1,\"stripe_product_id\":null,\"metadata\":{\"z\":1,\"a\":{\"b\":[1.5,null]},\"q\":\"it's\"},\"prices\":[{\"id\":\"5a14dce8-d539-594b-b0ef-ec675d4b3f01\",\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"monthly\",\"amount\":1000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":null},{\"id\":\"6155ad80-b426-551c-9944-1d57c13086cf\",\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"yearly\",\"amount\":10000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"price_seed_y\"}],\"bundles\":[{\"id\":\"c85aa159-e4fa-5b28-8039-98361e34b384\",\"key\":\"a-core\",\"name\":\"Core\",\"description\":\"Core features\",\"features\":[]},{\"id\":\"d1043917-f762-5c85-8fe4-bd888f3ff1d7\",\"key\":\"b-analytics\",\"name\":\"Analytics\",\"description\":null,\"features\":[\"a\",\"b\"]}]}"
+    },
+    {
+      "name": "plan: braced id",
+      "method": "GET",
+      "path": "/api/v1/billing/plans/{ae72201b-4170-5c2b-95dc-1470b1919816}",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "fd6e55f2ba4c5c59ea6141921820358411e8536e2184aa6db640ebcc5a081aeb",
+      "status": 200,
+      "headers": {
+        "content-length": "879",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"key\":\"team\",\"name\":\"Team Plan\",\"description\":\"For teams\",\"tier\":\"team\",\"is_active\":true,\"display_order\":1,\"stripe_product_id\":null,\"metadata\":{\"z\":1,\"a\":{\"b\":[1.5,null]},\"q\":\"it's\"},\"prices\":[{\"id\":\"5a14dce8-d539-594b-b0ef-ec675d4b3f01\",\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"monthly\",\"amount\":1000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":null},{\"id\":\"6155ad80-b426-551c-9944-1d57c13086cf\",\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"yearly\",\"amount\":10000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"price_seed_y\"}],\"bundles\":[{\"id\":\"c85aa159-e4fa-5b28-8039-98361e34b384\",\"key\":\"a-core\",\"name\":\"Core\",\"description\":\"Core features\",\"features\":[]},{\"id\":\"d1043917-f762-5c85-8fe4-bd888f3ff1d7\",\"key\":\"b-analytics\",\"name\":\"Analytics\",\"description\":null,\"features\":[\"a\",\"b\"]}]}"
+    },
+    {
+      "name": "plan: inactive anon",
+      "method": "GET",
+      "path": "/api/v1/billing/plans/f49e1fc2-3dc1-597b-b874-986b00eb55ba",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "fd6e55f2ba4c5c59ea6141921820358411e8536e2184aa6db640ebcc5a081aeb",
+      "status": 404,
+      "headers": {
+        "content-length": "27",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Plan not found\"}"
+    },
+    {
+      "name": "plan: inactive super",
+      "method": "GET",
+      "path": "/api/v1/billing/plans/f49e1fc2-3dc1-597b-b874-986b00eb55ba",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "13cb693c14be6b63125fe673ce665798f9f6005044f09ff0792790e4c8442d29",
+      "status": 200,
+      "headers": {
+        "content-length": "406",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"id\":\"f49e1fc2-3dc1-597b-b874-986b00eb55ba\",\"key\":\"legacy\",\"name\":\"Legacy\",\"description\":null,\"tier\":\"team\",\"is_active\":false,\"display_order\":0,\"stripe_product_id\":null,\"metadata\":{},\"prices\":[{\"id\":\"c9f0f895-fb98-ab91-59f5-1fd0297e236d\",\"plan_id\":\"f49e1fc2-3dc1-597b-b874-986b00eb55ba\",\"interval\":\"yearly\",\"amount\":3000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"price_legacy_y\"}],\"bundles\":[]}"
+    },
+    {
+      "name": "plan: inactive prices member",
+      "method": "GET",
+      "path": "/api/v1/billing/plans/ae72201b-4170-5c2b-95dc-1470b1919816?include_inactive_prices=true",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "cd860fdd87873f44aabe6c08036b93c5cd6c8ea317fba058159e3a599ab3f467",
+      "status": 403,
+      "headers": {
+        "content-length": "39",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Superadmin access required\"}"
+    },
+    {
+      "name": "plan: inactive prices super",
+      "method": "GET",
+      "path": "/api/v1/billing/plans/ae72201b-4170-5c2b-95dc-1470b1919816?include_inactive_prices=true",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "13cb693c14be6b63125fe673ce665798f9f6005044f09ff0792790e4c8442d29",
+      "status": 200,
+      "headers": {
+        "content-length": "1066",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"key\":\"team\",\"name\":\"Team Plan\",\"description\":\"For teams\",\"tier\":\"team\",\"is_active\":true,\"display_order\":1,\"stripe_product_id\":null,\"metadata\":{\"z\":1,\"a\":{\"b\":[1.5,null]},\"q\":\"it's\"},\"prices\":[{\"id\":\"fc4f8f2e-2593-52e3-8804-35869b2b0de2\",\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"monthly\",\"amount\":900,\"currency\":\"eur\",\"is_active\":false,\"stripe_price_id\":null},{\"id\":\"5a14dce8-d539-594b-b0ef-ec675d4b3f01\",\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"monthly\",\"amount\":1000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":null},{\"id\":\"6155ad80-b426-551c-9944-1d57c13086cf\",\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"yearly\",\"amount\":10000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"price_seed_y\"}],\"bundles\":[{\"id\":\"c85aa159-e4fa-5b28-8039-98361e34b384\",\"key\":\"a-core\",\"name\":\"Core\",\"description\":\"Core features\",\"features\":[]},{\"id\":\"d1043917-f762-5c85-8fe4-bd888f3ff1d7\",\"key\":\"b-analytics\",\"name\":\"Analytics\",\"description\":null,\"features\":[\"a\",\"b\"]}]}"
+    },
+    {
+      "name": "plan: bad query before bad id",
+      "method": "GET",
+      "path": "/api/v1/billing/plans/nope?include_inactive_prices=x",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "fd6e55f2ba4c5c59ea6141921820358411e8536e2184aa6db640ebcc5a081aeb",
+      "status": 422,
+      "headers": {
+        "content-length": "157",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":[{\"type\":\"bool_parsing\",\"loc\":[\"query\",\"include_inactive_prices\"],\"msg\":\"Input should be a valid boolean, unable to interpret input\",\"input\":\"x\"}]}"
+    },
+    {
+      "name": "plan: bad id",
+      "method": "GET",
+      "path": "/api/v1/billing/plans/nope",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "fd6e55f2ba4c5c59ea6141921820358411e8536e2184aa6db640ebcc5a081aeb",
+      "status": 400,
+      "headers": {
+        "content-length": "28",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Invalid plan_id\"}"
+    },
+    {
+      "name": "plan: missing",
+      "method": "GET",
+      "path": "/api/v1/billing/plans/41ab3c3e-9c17-5d8c-99d3-7166cc5d18a9",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "13cb693c14be6b63125fe673ce665798f9f6005044f09ff0792790e4c8442d29",
+      "status": 404,
+      "headers": {
+        "content-length": "27",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Plan not found\"}"
+    },
+    {
+      "name": "plan: pull-stripe as id",
+      "method": "GET",
+      "path": "/api/v1/billing/plans/pull-stripe",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "13cb693c14be6b63125fe673ce665798f9f6005044f09ff0792790e4c8442d29",
+      "status": 400,
+      "headers": {
+        "content-length": "28",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Invalid plan_id\"}"
+    },
+    {
+      "name": "plan: 405 patch",
+      "method": "PATCH",
+      "path": "/api/v1/billing/plans/ae72201b-4170-5c2b-95dc-1470b1919816",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "e5022a88938178266e8c257612a3a7667934cb6c8ccceeec66bfc9d00a4bb584",
+      "status": 405,
+      "headers": {
+        "allow": "GET",
+        "content-length": "31",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "name": "plan: 405 post",
+      "method": "POST",
+      "path": "/api/v1/billing/plans/ae72201b-4170-5c2b-95dc-1470b1919816",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "13cb693c14be6b63125fe673ce665798f9f6005044f09ff0792790e4c8442d29",
+      "status": 405,
+      "headers": {
+        "allow": "GET",
+        "content-length": "31",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "name": "plans: 405 put",
+      "method": "PUT",
+      "path": "/api/v1/billing/plans",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "e5022a88938178266e8c257612a3a7667934cb6c8ccceeec66bfc9d00a4bb584",
+      "status": 405,
+      "headers": {
+        "allow": "GET",
+        "content-length": "31",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "name": "create: bad json anon",
+      "method": "POST",
+      "path": "/api/v1/billing/plans",
+      "body_sha256": "88336da6c323b1a19a77e8c4a3a4f3959965638f1e4c150cd2afbe4a68586a3b",
+      "request_headers_sha256": "11d7e15c5a6e05ae7d0cf485a8ddf91b6512fe6237262974423cac82cff4beb6",
+      "status": 422,
+      "headers": {
+        "content-length": "124",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":[{\"type\":\"json_invalid\",\"loc\":[\"body\",7],\"msg\":\"JSON decode error\",\"input\":{},\"ctx\":{\"error\":\"Expecting value\"}}]}"
+    },
+    {
+      "name": "create: anon",
+      "method": "POST",
+      "path": "/api/v1/billing/plans",
+      "body_sha256": "67c1f84b0dc2612ce367df004b81c0ba9b17fd630a78e5913e24582d879dbceb",
+      "request_headers_sha256": "11d7e15c5a6e05ae7d0cf485a8ddf91b6512fe6237262974423cac82cff4beb6",
+      "status": 401,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "www-authenticate": "Bearer",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
+    },
+    {
+      "name": "create: member invalid",
+      "method": "POST",
+      "path": "/api/v1/billing/plans",
+      "body_sha256": "33f67067e3c10b480ad5bc086f224b00787b45c08f3d96a1e46f69bbaced13cd",
+      "request_headers_sha256": "e8401a965c92967810ea3f62f446f1a312661a86ed154a71a3e61867e51bf334",
+      "status": 422,
+      "headers": {
+        "content-length": "366",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"key\"],\"msg\":\"Field required\",\"input\":{\"tier\":\"gold\"}},{\"type\":\"missing\",\"loc\":[\"body\",\"name\"],\"msg\":\"Field required\",\"input\":{\"tier\":\"gold\"}},{\"type\":\"literal_error\",\"loc\":[\"body\",\"tier\"],\"msg\":\"Input should be 'community', 'team' or 'enterprise'\",\"input\":\"gold\",\"ctx\":{\"expected\":\"'community', 'team' or 'enterprise'\"}}]}"
+    },
+    {
+      "name": "create: member",
+      "method": "POST",
+      "path": "/api/v1/billing/plans",
+      "body_sha256": "67c1f84b0dc2612ce367df004b81c0ba9b17fd630a78e5913e24582d879dbceb",
+      "request_headers_sha256": "e8401a965c92967810ea3f62f446f1a312661a86ed154a71a3e61867e51bf334",
+      "status": 403,
+      "headers": {
+        "content-length": "39",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Superadmin access required\"}"
+    },
+    {
+      "name": "create: invalid",
+      "method": "POST",
+      "path": "/api/v1/billing/plans",
+      "body_sha256": "5544e93100ed1ca225aa0cdf87f864ea2666016eba1598165369fceab4befd3c",
+      "request_headers_sha256": "e5022a88938178266e8c257612a3a7667934cb6c8ccceeec66bfc9d00a4bb584",
+      "status": 422,
+      "headers": {
+        "content-length": "873",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"key\"],\"msg\":\"Input should be a valid string\",\"input\":1},{\"type\":\"missing\",\"loc\":[\"body\",\"name\"],\"msg\":\"Field required\",\"input\":{\"key\":1,\"tier\":\"TEAM\",\"prices\":[{\"interval\":\"weekly\",\"amount\":-1},5]}},{\"type\":\"literal_error\",\"loc\":[\"body\",\"tier\"],\"msg\":\"Input should be 'community', 'team' or 'enterprise'\",\"input\":\"TEAM\",\"ctx\":{\"expected\":\"'community', 'team' or 'enterprise'\"}},{\"type\":\"enum\",\"loc\":[\"body\",\"prices\",0,\"interval\"],\"msg\":\"Input should be 'monthly' or 'yearly'\",\"input\":\"weekly\",\"ctx\":{\"expected\":\"'monthly' or 'yearly'\"}},{\"type\":\"greater_than_equal\",\"loc\":[\"body\",\"prices\",0,\"amount\"],\"msg\":\"Input should be greater than or equal to 0\",\"input\":-1,\"ctx\":{\"ge\":0}},{\"type\":\"model_attributes_type\",\"loc\":[\"body\",\"prices\",1],\"msg\":\"Input should be a valid dictionary or object to extract fields from\",\"input\":5}]}"
+    },
+    {
+      "name": "create: no body",
+      "method": "POST",
+      "path": "/api/v1/billing/plans",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "13cb693c14be6b63125fe673ce665798f9f6005044f09ff0792790e4c8442d29",
+      "status": 422,
+      "headers": {
+        "content-length": "82",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\"],\"msg\":\"Field required\",\"input\":null}]}"
+    },
+    {
+      "name": "create: super",
+      "method": "POST",
+      "path": "/api/v1/billing/plans",
+      "body_sha256": "67c1f84b0dc2612ce367df004b81c0ba9b17fd630a78e5913e24582d879dbceb",
+      "request_headers_sha256": "e5022a88938178266e8c257612a3a7667934cb6c8ccceeec66bfc9d00a4bb584",
+      "status": 200,
+      "headers": {
+        "content-length": "866",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"id\":\"709b3309-290e-4676-b65c-0420e1614cdf\",\"key\":\"pro\",\"name\":\"Pro\",\"description\":null,\"tier\":\"enterprise\",\"is_active\":true,\"display_order\":5,\"stripe_product_id\":null,\"metadata\":{\"k\":[1,2.0,\"é\"],\"k2\":{\"n\":null}},\"prices\":[{\"id\":\"077d5ea0-8734-43e5-a6f4-d2dca5a74517\",\"plan_id\":\"709b3309-290e-4676-b65c-0420e1614cdf\",\"interval\":\"monthly\",\"amount\":2000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":null},{\"id\":\"d546037e-b742-48f2-84cb-4849dc68cee0\",\"plan_id\":\"709b3309-290e-4676-b65c-0420e1614cdf\",\"interval\":\"yearly\",\"amount\":20000,\"currency\":\"usd\",\"is_active\":false,\"stripe_price_id\":\"price_pro_y\"}],\"bundles\":[{\"id\":\"c85aa159-e4fa-5b28-8039-98361e34b384\",\"key\":\"a-core\",\"name\":\"Core\",\"description\":\"Core features\",\"features\":[]},{\"id\":\"d1043917-f762-5c85-8fe4-bd888f3ff1d7\",\"key\":\"b-analytics\",\"name\":\"Analytics\",\"description\":null,\"features\":[\"a\",\"b\"]}]}"
+    },
+    {
+      "name": "create: duplicate key",
+      "method": "POST",
+      "path": "/api/v1/billing/plans",
+      "body_sha256": "61e3ec4043fe67f5409f44c467ff3ea55e7727cb20ed94cba3be539ba5d34206",
+      "request_headers_sha256": "e5022a88938178266e8c257612a3a7667934cb6c8ccceeec66bfc9d00a4bb584",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "create: unknown bundle",
+      "method": "POST",
+      "path": "/api/v1/billing/plans",
+      "body_sha256": "ee3b8b565636f454ede248f47afb9d648d2d6829114fb69ef3ba487be3814b39",
+      "request_headers_sha256": "e5022a88938178266e8c257612a3a7667934cb6c8ccceeec66bfc9d00a4bb584",
+      "status": 404,
+      "headers": {
+        "content-length": "55",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"One or more feature bundles were not found\"}"
+    },
+    {
+      "name": "create: bad bundle id",
+      "method": "POST",
+      "path": "/api/v1/billing/plans",
+      "body_sha256": "e26e1b02eceb0f0e020f1c85af56040cc5ce789f4bf7f67e6ff109c16d41678f",
+      "request_headers_sha256": "e5022a88938178266e8c257612a3a7667934cb6c8ccceeec66bfc9d00a4bb584",
+      "status": 400,
+      "headers": {
+        "content-length": "30",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Invalid bundle_id\"}"
+    },
+    {
+      "name": "create: duplicate price keys",
+      "method": "POST",
+      "path": "/api/v1/billing/plans",
+      "body_sha256": "7c951a828119eb183698a59ce72a1d3a3a721e811f33221ac93665b69783120a",
+      "request_headers_sha256": "e5022a88938178266e8c257612a3a7667934cb6c8ccceeec66bfc9d00a4bb584",
+      "status": 200,
+      "headers": {
+        "content-length": "574",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"id\":\"ca99e90f-e9c4-4e45-bde9-6a8c6c0dc956\",\"key\":\"dup\",\"name\":\"Dup\",\"description\":null,\"tier\":\"community\",\"is_active\":true,\"display_order\":0,\"stripe_product_id\":null,\"metadata\":{},\"prices\":[{\"id\":\"f5cf8964-2afd-44f1-907a-e690650c8073\",\"plan_id\":\"ca99e90f-e9c4-4e45-bde9-6a8c6c0dc956\",\"interval\":\"monthly\",\"amount\":1,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":null},{\"id\":\"57aa73e8-864f-4083-867e-a52b99b9a207\",\"plan_id\":\"ca99e90f-e9c4-4e45-bde9-6a8c6c0dc956\",\"interval\":\"monthly\",\"amount\":2,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":null}],\"bundles\":[]}"
+    },
+    {
+      "name": "create: order overflow",
+      "method": "POST",
+      "path": "/api/v1/billing/plans",
+      "body_sha256": "bc2be727c345f219de1849d8a8c4b065a2864a70ba03c3641db724b9df36a15d",
+      "request_headers_sha256": "e5022a88938178266e8c257612a3a7667934cb6c8ccceeec66bfc9d00a4bb584",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "create: duplicate bundles",
+      "method": "POST",
+      "path": "/api/v1/billing/plans",
+      "body_sha256": "367cb826bb880320953ac1f6d39d655f26af47b8aff3a308e98d3457c441aae0",
+      "request_headers_sha256": "e5022a88938178266e8c257612a3a7667934cb6c8ccceeec66bfc9d00a4bb584",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "plans after creates",
+      "method": "GET",
+      "path": "/api/v1/billing/plans?include_inactive=true",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "13cb693c14be6b63125fe673ce665798f9f6005044f09ff0792790e4c8442d29",
+      "status": 200,
+      "headers": {
+        "content-length": "4355",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "[{\"id\":\"ca99e90f-e9c4-4e45-bde9-6a8c6c0dc956\",\"key\":\"dup\",\"name\":\"Dup\",\"description\":null,\"tier\":\"community\",\"is_active\":true,\"display_order\":0,\"stripe_product_id\":null,\"metadata\":{},\"prices\":[{\"id\":\"f5cf8964-2afd-44f1-907a-e690650c8073\",\"plan_id\":\"ca99e90f-e9c4-4e45-bde9-6a8c6c0dc956\",\"interval\":\"monthly\",\"amount\":1,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":null},{\"id\":\"57aa73e8-864f-4083-867e-a52b99b9a207\",\"plan_id\":\"ca99e90f-e9c4-4e45-bde9-6a8c6c0dc956\",\"interval\":\"monthly\",\"amount\":2,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":null}],\"bundles\":[]},{\"id\":\"f49e1fc2-3dc1-597b-b874-986b00eb55ba\",\"key\":\"legacy\",\"name\":\"Legacy\",\"description\":null,\"tier\":\"team\",\"is_active\":false,\"display_order\":0,\"stripe_product_id\":null,\"metadata\":{},\"prices\":[{\"id\":\"c9f0f895-fb98-ab91-59f5-1fd0297e236d\",\"plan_id\":\"f49e1fc2-3dc1-597b-b874-986b00eb55ba\",\"interval\":\"yearly\",\"amount\":3000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"price_legacy_y\"}],\"bundles\":[]},{\"id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"key\":\"enterprise\",\"name\":\"Enterprise\",\"description\":null,\"tier\":\"enterprise\",\"is_active\":true,\"display_order\":1,\"stripe_product_id\":\"prod_existing\",\"metadata\":{},\"prices\":[{\"id\":\"1e60b3ef-4a4d-58ec-a34c-0b4caefd47f3\",\"plan_id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"interval\":\"monthly\",\"amount\":5000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":null},{\"id\":\"d346e58a-e52c-5bff-851e-02fa5ab423f5\",\"plan_id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"interval\":\"yearly\",\"amount\":50000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"price_ent_y\"}],\"bundles\":[]},{\"id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"key\":\"team\",\"name\":\"Team Plan\",\"description\":\"For teams\",\"tier\":\"team\",\"is_active\":true,\"display_order\":1,\"stripe_product_id\":null,\"metadata\":{\"z\":1,\"a\":{\"b\":[1.5,null]},\"q\":\"it's\"},\"prices\":[{\"id\":\"fc4f8f2e-2593-52e3-8804-35869b2b0de2\",\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"monthly\",\"amount\":900,\"currency\":\"eur\",\"is_active\":false,\"stripe_price_id\":null},{\"id\":\"5a14dce8-d539-594b-b0ef-ec675d4b3f01\",\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"monthly\",\"amount\":1000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":null},{\"id\":\"6155ad80-b426-551c-9944-1d57c13086cf\",\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"yearly\",\"amount\":10000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"price_seed_y\"}],\"bundles\":[{\"id\":\"c85aa159-e4fa-5b28-8039-98361e34b384\",\"key\":\"a-core\",\"name\":\"Core\",\"description\":\"Core features\",\"features\":[]},{\"id\":\"d1043917-f762-5c85-8fe4-bd888f3ff1d7\",\"key\":\"b-analytics\",\"name\":\"Analytics\",\"description\":null,\"features\":[\"a\",\"b\"]}]},{\"id\":\"0b51e4e1-97b0-5c63-8fa8-82516ff19cdc\",\"key\":\"basic\",\"name\":\"Basic Old\",\"description\":null,\"tier\":\"community\",\"is_active\":true,\"display_order\":2,\"stripe_product_id\":null,\"metadata\":{\"note\":\"é\"},\"prices\":[{\"id\":\"45c48cce-2e2d-7fbd-ea1a-fc51c7c6ad26\",\"plan_id\":\"0b51e4e1-97b0-5c63-8fa8-82516ff19cdc\",\"interval\":\"monthly\",\"amount\":700,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":null}],\"bundles\":[]},{\"id\":\"5365a9d2-fcb5-5b76-9329-658b9201ad3b\",\"key\":\"empty-ids\",\"name\":\"Empty Ids\",\"description\":\"Blank Stripe ids\",\"tier\":\"team\",\"is_active\":true,\"display_order\":3,\"stripe_product_id\":\"\",\"metadata\":{},\"prices\":[{\"id\":\"d3d94468-02a4-4259-755d-38e6d163e820\",\"plan_id\":\"5365a9d2-fcb5-5b76-9329-658b9201ad3b\",\"interval\":\"monthly\",\"amount\":400,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"\"}],\"bundles\":[]},{\"id\":\"709b3309-290e-4676-b65c-0420e1614cdf\",\"key\":\"pro\",\"name\":\"Pro\",\"description\":null,\"tier\":\"enterprise\",\"is_active\":true,\"display_order\":5,\"stripe_product_id\":null,\"metadata\":{\"k\":[1,2.0,\"é\"],\"k2\":{\"n\":null}},\"prices\":[{\"id\":\"077d5ea0-8734-43e5-a6f4-d2dca5a74517\",\"plan_id\":\"709b3309-290e-4676-b65c-0420e1614cdf\",\"interval\":\"monthly\",\"amount\":2000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":null},{\"id\":\"d546037e-b742-48f2-84cb-4849dc68cee0\",\"plan_id\":\"709b3309-290e-4676-b65c-0420e1614cdf\",\"interval\":\"yearly\",\"amount\":20000,\"currency\":\"usd\",\"is_active\":false,\"stripe_price_id\":\"price_pro_y\"}],\"bundles\":[{\"id\":\"c85aa159-e4fa-5b28-8039-98361e34b384\",\"key\":\"a-core\",\"name\":\"Core\",\"description\":\"Core features\",\"features\":[]},{\"id\":\"d1043917-f762-5c85-8fe4-bd888f3ff1d7\",\"key\":\"b-analytics\",\"name\":\"Analytics\",\"description\":null,\"features\":[\"a\",\"b\"]}]}]"
+    },
+    {
+      "name": "update: anon",
+      "method": "PUT",
+      "path": "/api/v1/billing/plans/ae72201b-4170-5c2b-95dc-1470b1919816",
+      "body_sha256": "db45aca66e926c444e39af70ae2e2eee19bc1dd188b7425bce5b017880adbdf4",
+      "request_headers_sha256": "11d7e15c5a6e05ae7d0cf485a8ddf91b6512fe6237262974423cac82cff4beb6",
+      "status": 401,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "www-authenticate": "Bearer",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
+    },
+    {
+      "name": "update: member",
+      "method": "PUT",
+      "path": "/api/v1/billing/plans/ae72201b-4170-5c2b-95dc-1470b1919816",
+      "body_sha256": "db45aca66e926c444e39af70ae2e2eee19bc1dd188b7425bce5b017880adbdf4",
+      "request_headers_sha256": "e8401a965c92967810ea3f62f446f1a312661a86ed154a71a3e61867e51bf334",
+      "status": 403,
+      "headers": {
+        "content-length": "39",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Superadmin access required\"}"
+    },
+    {
+      "name": "update: invalid",
+      "method": "PUT",
+      "path": "/api/v1/billing/plans/ae72201b-4170-5c2b-95dc-1470b1919816",
+      "body_sha256": "4bd95e0f00960a140fb177558b7dfac948d5ef0ba70e3186a57888745c46978c",
+      "request_headers_sha256": "e5022a88938178266e8c257612a3a7667934cb6c8ccceeec66bfc9d00a4bb584",
+      "status": 422,
+      "headers": {
+        "content-length": "324",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":[{\"type\":\"bool_parsing\",\"loc\":[\"body\",\"is_active\"],\"msg\":\"Input should be a valid boolean, unable to interpret input\",\"input\":\"maybe\"},{\"type\":\"missing\",\"loc\":[\"body\",\"prices\",0,\"interval\"],\"msg\":\"Field required\",\"input\":{}},{\"type\":\"missing\",\"loc\":[\"body\",\"prices\",0,\"amount\"],\"msg\":\"Field required\",\"input\":{}}]}"
+    },
+    {
+      "name": "update: empty",
+      "method": "PUT",
+      "path": "/api/v1/billing/plans/56b0f5ee-605f-5e5f-afdd-c6521330f863",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "e5022a88938178266e8c257612a3a7667934cb6c8ccceeec66bfc9d00a4bb584",
+      "status": 200,
+      "headers": {
+        "content-length": "615",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"key\":\"enterprise\",\"name\":\"Enterprise\",\"description\":null,\"tier\":\"enterprise\",\"is_active\":true,\"display_order\":1,\"stripe_product_id\":\"prod_existing\",\"metadata\":{},\"prices\":[{\"id\":\"1e60b3ef-4a4d-58ec-a34c-0b4caefd47f3\",\"plan_id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"interval\":\"monthly\",\"amount\":5000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":null},{\"id\":\"d346e58a-e52c-5bff-851e-02fa5ab423f5\",\"plan_id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"interval\":\"yearly\",\"amount\":50000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"price_ent_y\"}],\"bundles\":[]}"
+    },
+    {
+      "name": "update: super",
+      "method": "PUT",
+      "path": "/api/v1/billing/plans/ae72201b-4170-5c2b-95dc-1470b1919816",
+      "body_sha256": "db45aca66e926c444e39af70ae2e2eee19bc1dd188b7425bce5b017880adbdf4",
+      "request_headers_sha256": "e5022a88938178266e8c257612a3a7667934cb6c8ccceeec66bfc9d00a4bb584",
+      "status": 200,
+      "headers": {
+        "content-length": "911",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"key\":\"team\",\"name\":\"Team Plan 2\",\"description\":\"For teams\",\"tier\":\"team\",\"is_active\":true,\"display_order\":1,\"stripe_product_id\":null,\"metadata\":{},\"prices\":[{\"id\":\"df260499-ba42-4f92-bc8a-0ace348902eb\",\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"monthly\",\"amount\":800,\"currency\":\"gbp\",\"is_active\":true,\"stripe_price_id\":null},{\"id\":\"5a14dce8-d539-594b-b0ef-ec675d4b3f01\",\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"monthly\",\"amount\":1100,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":null},{\"id\":\"6155ad80-b426-551c-9944-1d57c13086cf\",\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"yearly\",\"amount\":11000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"price_seed_y\"}],\"bundles\":[{\"id\":\"d1043917-f762-5c85-8fe4-bd888f3ff1d7\",\"key\":\"b-analytics\",\"name\":\"Analytics\",\"description\":null,\"features\":[\"a\",\"b\"]}]}"
+    },
+    {
+      "name": "update: null key",
+      "method": "PUT",
+      "path": "/api/v1/billing/plans/0b51e4e1-97b0-5c63-8fa8-82516ff19cdc",
+      "body_sha256": "666629c52ffb8acc3466a70d0230e8e1b999ecff2a192509275e8d0272089391",
+      "request_headers_sha256": "e5022a88938178266e8c257612a3a7667934cb6c8ccceeec66bfc9d00a4bb584",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "update: fields",
+      "method": "PUT",
+      "path": "/api/v1/billing/plans/0b51e4e1-97b0-5c63-8fa8-82516ff19cdc",
+      "body_sha256": "2a409c0d1ae628ef98f15566e7f6ebccb03afc346a822a322403ce87ca396048",
+      "request_headers_sha256": "e5022a88938178266e8c257612a3a7667934cb6c8ccceeec66bfc9d00a4bb584",
+      "status": 200,
+      "headers": {
+        "content-length": "406",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"id\":\"0b51e4e1-97b0-5c63-8fa8-82516ff19cdc\",\"key\":\"basic\",\"name\":\"Basic Old\",\"description\":null,\"tier\":\"enterprise\",\"is_active\":true,\"display_order\":7,\"stripe_product_id\":null,\"metadata\":{\"m\":1},\"prices\":[{\"id\":\"45c48cce-2e2d-7fbd-ea1a-fc51c7c6ad26\",\"plan_id\":\"0b51e4e1-97b0-5c63-8fa8-82516ff19cdc\",\"interval\":\"monthly\",\"amount\":700,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":null}],\"bundles\":[]}"
+    },
+    {
+      "name": "update: null lists",
+      "method": "PUT",
+      "path": "/api/v1/billing/plans/0b51e4e1-97b0-5c63-8fa8-82516ff19cdc",
+      "body_sha256": "56ae8faea0503832f1b8fac85cea8a4069858968adef928c45f0c7f01e90f5af",
+      "request_headers_sha256": "e5022a88938178266e8c257612a3a7667934cb6c8ccceeec66bfc9d00a4bb584",
+      "status": 200,
+      "headers": {
+        "content-length": "406",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"id\":\"0b51e4e1-97b0-5c63-8fa8-82516ff19cdc\",\"key\":\"basic\",\"name\":\"Basic Old\",\"description\":null,\"tier\":\"enterprise\",\"is_active\":true,\"display_order\":7,\"stripe_product_id\":null,\"metadata\":{\"m\":1},\"prices\":[{\"id\":\"45c48cce-2e2d-7fbd-ea1a-fc51c7c6ad26\",\"plan_id\":\"0b51e4e1-97b0-5c63-8fa8-82516ff19cdc\",\"interval\":\"monthly\",\"amount\":700,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":null}],\"bundles\":[]}"
+    },
+    {
+      "name": "update: bad bundle",
+      "method": "PUT",
+      "path": "/api/v1/billing/plans/0b51e4e1-97b0-5c63-8fa8-82516ff19cdc",
+      "body_sha256": "23e9353d3a42074fc04eefda70e5f7ff7714613b57ec1c770c2163b2758360cb",
+      "request_headers_sha256": "e5022a88938178266e8c257612a3a7667934cb6c8ccceeec66bfc9d00a4bb584",
+      "status": 400,
+      "headers": {
+        "content-length": "30",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Invalid bundle_id\"}"
+    },
+    {
+      "name": "update: bad id",
+      "method": "PUT",
+      "path": "/api/v1/billing/plans/nope",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "e5022a88938178266e8c257612a3a7667934cb6c8ccceeec66bfc9d00a4bb584",
+      "status": 400,
+      "headers": {
+        "content-length": "28",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Invalid plan_id\"}"
+    },
+    {
+      "name": "update: missing",
+      "method": "PUT",
+      "path": "/api/v1/billing/plans/41ab3c3e-9c17-5d8c-99d3-7166cc5d18a9",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "e5022a88938178266e8c257612a3a7667934cb6c8ccceeec66bfc9d00a4bb584",
+      "status": 404,
+      "headers": {
+        "content-length": "27",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Plan not found\"}"
+    },
+    {
+      "name": "delete: member",
+      "method": "DELETE",
+      "path": "/api/v1/billing/plans/0b51e4e1-97b0-5c63-8fa8-82516ff19cdc",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "cd860fdd87873f44aabe6c08036b93c5cd6c8ea317fba058159e3a599ab3f467",
+      "status": 403,
+      "headers": {
+        "content-length": "39",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Superadmin access required\"}"
+    },
+    {
+      "name": "delete: bad id",
+      "method": "DELETE",
+      "path": "/api/v1/billing/plans/nope",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "13cb693c14be6b63125fe673ce665798f9f6005044f09ff0792790e4c8442d29",
+      "status": 400,
+      "headers": {
+        "content-length": "28",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Invalid plan_id\"}"
+    },
+    {
+      "name": "delete: missing",
+      "method": "DELETE",
+      "path": "/api/v1/billing/plans/41ab3c3e-9c17-5d8c-99d3-7166cc5d18a9",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "13cb693c14be6b63125fe673ce665798f9f6005044f09ff0792790e4c8442d29",
+      "status": 404,
+      "headers": {
+        "content-length": "27",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Plan not found\"}"
+    },
+    {
+      "name": "delete: super",
+      "method": "DELETE",
+      "path": "/api/v1/billing/plans/0b51e4e1-97b0-5c63-8fa8-82516ff19cdc",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "13cb693c14be6b63125fe673ce665798f9f6005044f09ff0792790e4c8442d29",
+      "status": 200,
+      "headers": {
+        "content-length": "16",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"deleted\":true}"
+    },
+    {
+      "name": "plan: deleted anon",
+      "method": "GET",
+      "path": "/api/v1/billing/plans/0b51e4e1-97b0-5c63-8fa8-82516ff19cdc",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "fd6e55f2ba4c5c59ea6141921820358411e8536e2184aa6db640ebcc5a081aeb",
+      "status": 404,
+      "headers": {
+        "content-length": "27",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Plan not found\"}"
+    },
+    {
+      "name": "sync: member",
+      "method": "POST",
+      "path": "/api/v1/billing/plans/ae72201b-4170-5c2b-95dc-1470b1919816/sync-stripe",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "cd860fdd87873f44aabe6c08036b93c5cd6c8ea317fba058159e3a599ab3f467",
+      "status": 403,
+      "headers": {
+        "content-length": "39",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Superadmin access required\"}"
+    },
+    {
+      "name": "sync: bad id",
+      "method": "POST",
+      "path": "/api/v1/billing/plans/nope/sync-stripe",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "13cb693c14be6b63125fe673ce665798f9f6005044f09ff0792790e4c8442d29",
+      "status": 400,
+      "headers": {
+        "content-length": "28",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Invalid plan_id\"}"
+    },
+    {
+      "name": "sync: missing",
+      "method": "POST",
+      "path": "/api/v1/billing/plans/41ab3c3e-9c17-5d8c-99d3-7166cc5d18a9/sync-stripe",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "13cb693c14be6b63125fe673ce665798f9f6005044f09ff0792790e4c8442d29",
+      "status": 404,
+      "headers": {
+        "content-length": "27",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Plan not found\"}"
+    },
+    {
+      "name": "sync: new product",
+      "method": "POST",
+      "path": "/api/v1/billing/plans/ae72201b-4170-5c2b-95dc-1470b1919816/sync-stripe",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "13cb693c14be6b63125fe673ce665798f9f6005044f09ff0792790e4c8442d29",
+      "status": 200,
+      "headers": {
+        "content-length": "943",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"key\":\"team\",\"name\":\"Team Plan 2\",\"description\":\"For teams\",\"tier\":\"team\",\"is_active\":true,\"display_order\":1,\"stripe_product_id\":\"prod_venue_1\",\"metadata\":{},\"prices\":[{\"id\":\"df260499-ba42-4f92-bc8a-0ace348902eb\",\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"monthly\",\"amount\":800,\"currency\":\"gbp\",\"is_active\":true,\"stripe_price_id\":\"price_venue_1\"},{\"id\":\"5a14dce8-d539-594b-b0ef-ec675d4b3f01\",\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"monthly\",\"amount\":1100,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"price_venue_2\"},{\"id\":\"6155ad80-b426-551c-9944-1d57c13086cf\",\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"yearly\",\"amount\":11000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"price_seed_y\"}],\"bundles\":[{\"id\":\"d1043917-f762-5c85-8fe4-bd888f3ff1d7\",\"key\":\"b-analytics\",\"name\":\"Analytics\",\"description\":null,\"features\":[\"a\",\"b\"]}]}"
+    },
+    {
+      "name": "sync: existing product",
+      "method": "POST",
+      "path": "/api/v1/billing/plans/56b0f5ee-605f-5e5f-afdd-c6521330f863/sync-stripe",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "13cb693c14be6b63125fe673ce665798f9f6005044f09ff0792790e4c8442d29",
+      "status": 200,
+      "headers": {
+        "content-length": "626",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"key\":\"enterprise\",\"name\":\"Enterprise\",\"description\":null,\"tier\":\"enterprise\",\"is_active\":true,\"display_order\":1,\"stripe_product_id\":\"prod_existing\",\"metadata\":{},\"prices\":[{\"id\":\"1e60b3ef-4a4d-58ec-a34c-0b4caefd47f3\",\"plan_id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"interval\":\"monthly\",\"amount\":5000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"price_venue_3\"},{\"id\":\"d346e58a-e52c-5bff-851e-02fa5ab423f5\",\"plan_id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"interval\":\"yearly\",\"amount\":50000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"price_ent_y\"}],\"bundles\":[]}"
+    },
+    {
+      "name": "sync: again",
+      "method": "POST",
+      "path": "/api/v1/billing/plans/ae72201b-4170-5c2b-95dc-1470b1919816/sync-stripe",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "13cb693c14be6b63125fe673ce665798f9f6005044f09ff0792790e4c8442d29",
+      "status": 200,
+      "headers": {
+        "content-length": "943",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"key\":\"team\",\"name\":\"Team Plan 2\",\"description\":\"For teams\",\"tier\":\"team\",\"is_active\":true,\"display_order\":1,\"stripe_product_id\":\"prod_venue_1\",\"metadata\":{},\"prices\":[{\"id\":\"df260499-ba42-4f92-bc8a-0ace348902eb\",\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"monthly\",\"amount\":800,\"currency\":\"gbp\",\"is_active\":true,\"stripe_price_id\":\"price_venue_1\"},{\"id\":\"5a14dce8-d539-594b-b0ef-ec675d4b3f01\",\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"monthly\",\"amount\":1100,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"price_venue_2\"},{\"id\":\"6155ad80-b426-551c-9944-1d57c13086cf\",\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"yearly\",\"amount\":11000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"price_seed_y\"}],\"bundles\":[{\"id\":\"d1043917-f762-5c85-8fe4-bd888f3ff1d7\",\"key\":\"b-analytics\",\"name\":\"Analytics\",\"description\":null,\"features\":[\"a\",\"b\"]}]}"
+    },
+    {
+      "name": "sync: blank stripe ids",
+      "method": "POST",
+      "path": "/api/v1/billing/plans/5365a9d2-fcb5-5b76-9329-658b9201ad3b/sync-stripe",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "13cb693c14be6b63125fe673ce665798f9f6005044f09ff0792790e4c8442d29",
+      "status": 200,
+      "headers": {
+        "content-length": "434",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"id\":\"5365a9d2-fcb5-5b76-9329-658b9201ad3b\",\"key\":\"empty-ids\",\"name\":\"Empty Ids\",\"description\":\"Blank Stripe ids\",\"tier\":\"team\",\"is_active\":true,\"display_order\":3,\"stripe_product_id\":\"prod_venue_2\",\"metadata\":{},\"prices\":[{\"id\":\"d3d94468-02a4-4259-755d-38e6d163e820\",\"plan_id\":\"5365a9d2-fcb5-5b76-9329-658b9201ad3b\",\"interval\":\"monthly\",\"amount\":400,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"price_venue_4\"}],\"bundles\":[]}"
+    },
+    {
+      "name": "pull: anon",
+      "method": "POST",
+      "path": "/api/v1/billing/plans/pull-stripe",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "fd6e55f2ba4c5c59ea6141921820358411e8536e2184aa6db640ebcc5a081aeb",
+      "status": 401,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "www-authenticate": "Bearer",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
+    },
+    {
+      "name": "pull: member",
+      "method": "POST",
+      "path": "/api/v1/billing/plans/pull-stripe",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "cd860fdd87873f44aabe6c08036b93c5cd6c8ea317fba058159e3a599ab3f467",
+      "status": 403,
+      "headers": {
+        "content-length": "38",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Superuser access required\"}"
+    },
+    {
+      "name": "pull: owner",
+      "method": "POST",
+      "path": "/api/v1/billing/plans/pull-stripe",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "2d41025fbf95fd5eba342463d5d6c2a3b0a20b1d7ab70b9e6d0be1cb136ec547",
+      "status": 403,
+      "headers": {
+        "content-length": "38",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Superuser access required\"}"
+    },
+    {
+      "name": "pull: super",
+      "method": "POST",
+      "path": "/api/v1/billing/plans/pull-stripe",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "13cb693c14be6b63125fe673ce665798f9f6005044f09ff0792790e4c8442d29",
+      "status": 200,
+      "headers": {
+        "content-length": "1335",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"created\":[\"n_code_pro ← prod_new\",\"conflict ← prod_conflict\"],\"updated\":[\"enterprise ← prod_existing\",\"basic ← prod_basic\",\"team ← prod_team\"],\"skipped\":[\"No Prices (prod_noprices): no recurring prices\"],\"errors\":[\"Err Product (prod_err): Request req_venue: boom\",\"Last One (prod_last): (raised as a result of Query-invoked autoflush; consider using a session.no_autoflush block if this flush is occurring prematurely)\\n(sqlalchemy.dialects.postgresql.asyncpg.IntegrityError) \u003cclass 'asyncpg.exceptions.UniqueViolationError'\u003e: duplicate key value violates unique constraint \\\"uq_billing_prices_stripe_price_id\\\"\\nDETAIL:  Key (stripe_price_id)=(price_legacy_y) already exists.\\n[SQL: INSERT INTO billing_prices (id, plan_id, interval, amount, currency, is_active, stripe_price_id, created_at, updated_at) VALUES ($1::UUID, $2::UUID, $3::VARCHAR, $4::INTEGER, $5::VARCHAR, $6::BOOLEAN, $7::VARCHAR, $8::TIMESTAMP WITH TIME ZONE, $9::TIMESTAMP WITH TIME ZONE)]\\n[parameters: ('ddbb9f19-cf2b-4b89-a716-3a1a73054506', 'd75fc73f-0145-4936-8d6d-fd60ce0c834c', 'yearly', 1, 'usd', True, 'price_legacy_y', datetime.datetime(2026, 9, 26, 6, 2, 53, 290847, tzinfo=datetime.timezone.utc), datetime.datetime(2026, 9, 26, 6, 2, 53, 290847, tzinfo=datetime.timezone.utc))]\\n(Background on this error at: https://sqlalche.me/e/20/gkpj)\"]}"
+    },
+    {
+      "name": "plans after pull",
+      "method": "GET",
+      "path": "/api/v1/billing/plans?include_inactive=true",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "13cb693c14be6b63125fe673ce665798f9f6005044f09ff0792790e4c8442d29",
+      "status": 200,
+      "headers": {
+        "content-length": "4264",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "[{\"id\":\"ca99e90f-e9c4-4e45-bde9-6a8c6c0dc956\",\"key\":\"dup\",\"name\":\"Dup\",\"description\":null,\"tier\":\"community\",\"is_active\":true,\"display_order\":0,\"stripe_product_id\":null,\"metadata\":{},\"prices\":[{\"id\":\"f5cf8964-2afd-44f1-907a-e690650c8073\",\"plan_id\":\"ca99e90f-e9c4-4e45-bde9-6a8c6c0dc956\",\"interval\":\"monthly\",\"amount\":1,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":null},{\"id\":\"57aa73e8-864f-4083-867e-a52b99b9a207\",\"plan_id\":\"ca99e90f-e9c4-4e45-bde9-6a8c6c0dc956\",\"interval\":\"monthly\",\"amount\":2,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":null}],\"bundles\":[]},{\"id\":\"f49e1fc2-3dc1-597b-b874-986b00eb55ba\",\"key\":\"legacy\",\"name\":\"Legacy\",\"description\":null,\"tier\":\"team\",\"is_active\":false,\"display_order\":0,\"stripe_product_id\":null,\"metadata\":{},\"prices\":[{\"id\":\"c9f0f895-fb98-ab91-59f5-1fd0297e236d\",\"plan_id\":\"f49e1fc2-3dc1-597b-b874-986b00eb55ba\",\"interval\":\"yearly\",\"amount\":3000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"price_legacy_y\"}],\"bundles\":[]},{\"id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"key\":\"enterprise\",\"name\":\"Enterprise\",\"description\":null,\"tier\":\"enterprise\",\"is_active\":true,\"display_order\":1,\"stripe_product_id\":\"prod_existing\",\"metadata\":{},\"prices\":[{\"id\":\"1e60b3ef-4a4d-58ec-a34c-0b4caefd47f3\",\"plan_id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"interval\":\"monthly\",\"amount\":5000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"price_venue_3\"},{\"id\":\"d346e58a-e52c-5bff-851e-02fa5ab423f5\",\"plan_id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"interval\":\"yearly\",\"amount\":50000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"price_ent_y\"}],\"bundles\":[]},{\"id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"key\":\"team\",\"name\":\"Team Plan 2\",\"description\":\"For teams\",\"tier\":\"team\",\"is_active\":true,\"display_order\":1,\"stripe_product_id\":\"prod_venue_1\",\"metadata\":{},\"prices\":[{\"id\":\"df260499-ba42-4f92-bc8a-0ace348902eb\",\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"monthly\",\"amount\":800,\"currency\":\"gbp\",\"is_active\":true,\"stripe_price_id\":\"price_venue_1\"},{\"id\":\"5a14dce8-d539-594b-b0ef-ec675d4b3f01\",\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"monthly\",\"amount\":1100,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"price_venue_2\"},{\"id\":\"6155ad80-b426-551c-9944-1d57c13086cf\",\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"yearly\",\"amount\":11000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"price_seed_y\"}],\"bundles\":[{\"id\":\"d1043917-f762-5c85-8fe4-bd888f3ff1d7\",\"key\":\"b-analytics\",\"name\":\"Analytics\",\"description\":null,\"features\":[\"a\",\"b\"]}]},{\"id\":\"5365a9d2-fcb5-5b76-9329-658b9201ad3b\",\"key\":\"empty-ids\",\"name\":\"Empty Ids\",\"description\":\"Blank Stripe ids\",\"tier\":\"team\",\"is_active\":true,\"display_order\":3,\"stripe_product_id\":\"prod_venue_2\",\"metadata\":{},\"prices\":[{\"id\":\"d3d94468-02a4-4259-755d-38e6d163e820\",\"plan_id\":\"5365a9d2-fcb5-5b76-9329-658b9201ad3b\",\"interval\":\"monthly\",\"amount\":400,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":\"price_venue_4\"}],\"bundles\":[]},{\"id\":\"709b3309-290e-4676-b65c-0420e1614cdf\",\"key\":\"pro\",\"name\":\"Pro\",\"description\":null,\"tier\":\"enterprise\",\"is_active\":true,\"display_order\":5,\"stripe_product_id\":null,\"metadata\":{\"k\":[1,2.0,\"é\"],\"k2\":{\"n\":null}},\"prices\":[{\"id\":\"077d5ea0-8734-43e5-a6f4-d2dca5a74517\",\"plan_id\":\"709b3309-290e-4676-b65c-0420e1614cdf\",\"interval\":\"monthly\",\"amount\":2000,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":null},{\"id\":\"d546037e-b742-48f2-84cb-4849dc68cee0\",\"plan_id\":\"709b3309-290e-4676-b65c-0420e1614cdf\",\"interval\":\"yearly\",\"amount\":20000,\"currency\":\"usd\",\"is_active\":false,\"stripe_price_id\":\"price_pro_y\"}],\"bundles\":[{\"id\":\"c85aa159-e4fa-5b28-8039-98361e34b384\",\"key\":\"a-core\",\"name\":\"Core\",\"description\":\"Core features\",\"features\":[]},{\"id\":\"d1043917-f762-5c85-8fe4-bd888f3ff1d7\",\"key\":\"b-analytics\",\"name\":\"Analytics\",\"description\":null,\"features\":[\"a\",\"b\"]}]},{\"id\":\"0b51e4e1-97b0-5c63-8fa8-82516ff19cdc\",\"key\":\"basic\",\"name\":\"Basic Old\",\"description\":null,\"tier\":\"enterprise\",\"is_active\":false,\"display_order\":7,\"stripe_product_id\":null,\"metadata\":{\"m\":1},\"prices\":[{\"id\":\"45c48cce-2e2d-7fbd-ea1a-fc51c7c6ad26\",\"plan_id\":\"0b51e4e1-97b0-5c63-8fa8-82516ff19cdc\",\"interval\":\"monthly\",\"amount\":700,\"currency\":\"usd\",\"is_active\":true,\"stripe_price_id\":null}],\"bundles\":[]}]"
+    },
+    {
+      "name": "checkout: bad json",
+      "method": "POST",
+      "path": "/api/v1/billing/checkout",
+      "body_sha256": "28e9bafc45d8e9d77bb0a8df443097a32dd967a6099b003712d0ef3725b43c5e",
+      "request_headers_sha256": "11d7e15c5a6e05ae7d0cf485a8ddf91b6512fe6237262974423cac82cff4beb6",
+      "status": 422,
+      "headers": {
+        "content-length": "158",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":[{\"type\":\"json_invalid\",\"loc\":[\"body\",1],\"msg\":\"JSON decode error\",\"input\":{},\"ctx\":{\"error\":\"Expecting property name enclosed in double quotes\"}}]}"
+    },
+    {
+      "name": "checkout: anon",
+      "method": "POST",
+      "path": "/api/v1/billing/checkout",
+      "body_sha256": "a679d1fbc52a15f47bce90769141c2b33c86441705ecc1014abea72b845b9d9b",
+      "request_headers_sha256": "11d7e15c5a6e05ae7d0cf485a8ddf91b6512fe6237262974423cac82cff4beb6",
+      "status": 401,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "www-authenticate": "Bearer",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
+    },
+    {
+      "name": "checkout: invalid",
+      "method": "POST",
+      "path": "/api/v1/billing/checkout",
+      "body_sha256": "7108124e690f7185aafce9dd4b077f3285eba2e7844b2d1097c0434815ac8174",
+      "request_headers_sha256": "f0be2a717f588ed7855782104a403a8d00f250af0eff306f50ba68d233555173",
+      "status": 422,
+      "headers": {
+        "content-length": "285",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"tier\"],\"msg\":\"Input should be a valid string\",\"input\":1},{\"type\":\"missing\",\"loc\":[\"body\",\"success_url\"],\"msg\":\"Field required\",\"input\":{\"tier\":1}},{\"type\":\"missing\",\"loc\":[\"body\",\"cancel_url\"],\"msg\":\"Field required\",\"input\":{\"tier\":1}}]}"
+    },
+    {
+      "name": "checkout: bad tier",
+      "method": "POST",
+      "path": "/api/v1/billing/checkout",
+      "body_sha256": "8cabb35cfd6cab196f033f9cb15e9934a4599b22dcd3347dead191875cd4a379",
+      "request_headers_sha256": "f0be2a717f588ed7855782104a403a8d00f250af0eff306f50ba68d233555173",
+      "status": 400,
+      "headers": {
+        "content-length": "31",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Invalid tier: gold\"}"
+    },
+    {
+      "name": "checkout: community",
+      "method": "POST",
+      "path": "/api/v1/billing/checkout",
+      "body_sha256": "50798d87d83fbe0366c7ee6a54072959f9255a32ab35fce82b9a154934b31ed4",
+      "request_headers_sha256": "f0be2a717f588ed7855782104a403a8d00f250af0eff306f50ba68d233555173",
+      "status": 400,
+      "headers": {
+        "content-length": "52",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"No price configured for tier: Community\"}"
+    },
+    {
+      "name": "checkout: no scheme",
+      "method": "POST",
+      "path": "/api/v1/billing/checkout",
+      "body_sha256": "bba1120cd1c9f45c2c900b8cfd42a51d2b02df8fbee4fa678bab66d5f423d976",
+      "request_headers_sha256": "f0be2a717f588ed7855782104a403a8d00f250af0eff306f50ba68d233555173",
+      "status": 400,
+      "headers": {
+        "content-length": "33",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Invalid checkout URL\"}"
+    },
+    {
+      "name": "checkout: foreign host",
+      "method": "POST",
+      "path": "/api/v1/billing/checkout",
+      "body_sha256": "450254079c5030ba7984085efa182a1cb8b77eba40581788ed2af293e2f8f4a9",
+      "request_headers_sha256": "f0be2a717f588ed7855782104a403a8d00f250af0eff306f50ba68d233555173",
+      "status": 400,
+      "headers": {
+        "content-length": "83",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Invalid checkout URL: must be relative or start with an allowed prefix\"}"
+    },
+    {
+      "name": "checkout: padded url",
+      "method": "POST",
+      "path": "/api/v1/billing/checkout",
+      "body_sha256": "d8b72e98f459232c94285726e9a801a30a63fd89c98a9760a7172b84ab95414c",
+      "request_headers_sha256": "f0be2a717f588ed7855782104a403a8d00f250af0eff306f50ba68d233555173",
+      "status": 400,
+      "headers": {
+        "content-length": "83",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Invalid checkout URL: must be relative or start with an allowed prefix\"}"
+    },
+    {
+      "name": "checkout: bad cancel",
+      "method": "POST",
+      "path": "/api/v1/billing/checkout",
+      "body_sha256": "4b1bd9754b748c0f554fc9a6ae8ba1745541dae8d8157ebdf8d6a32ff2257260",
+      "request_headers_sha256": "f0be2a717f588ed7855782104a403a8d00f250af0eff306f50ba68d233555173",
+      "status": 400,
+      "headers": {
+        "content-length": "33",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Invalid checkout URL\"}"
+    },
+    {
+      "name": "checkout: trial kept",
+      "method": "POST",
+      "path": "/api/v1/billing/checkout",
+      "body_sha256": "4d6ab0cdd8576800892b3c2f7843509aade2eeb9f9c7962bf80956f2345232ac",
+      "request_headers_sha256": "f0be2a717f588ed7855782104a403a8d00f250af0eff306f50ba68d233555173",
+      "status": 200,
+      "headers": {
+        "content-length": "74",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"session_id\":\"cs_venue_1\",\"url\":\"https://checkout.venue.test/cs_venue_1\"}"
+    },
+    {
+      "name": "checkout: trial stripped",
+      "method": "POST",
+      "path": "/api/v1/billing/checkout",
+      "body_sha256": "a679d1fbc52a15f47bce90769141c2b33c86441705ecc1014abea72b845b9d9b",
+      "request_headers_sha256": "239738c5bdf8374710057ce2836511cf0fc2af7c5149a2402866d9df3962c7a4",
+      "status": 200,
+      "headers": {
+        "content-length": "74",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"session_id\":\"cs_venue_2\",\"url\":\"https://checkout.venue.test/cs_venue_2\"}"
+    },
+    {
+      "name": "checkout: trial stripped, stripe fails",
+      "method": "POST",
+      "path": "/api/v1/billing/checkout",
+      "body_sha256": "1ee12d2075eac65ee391561a858d64b0b34b93759b6c5f1b0627757cf0d646b4",
+      "request_headers_sha256": "f8a00f3ea6f248a3a5eb8f8f53c6b990df4825386b78c9043f74fe5d0c651751",
+      "status": 502,
+      "headers": {
+        "content-length": "46",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Failed to create checkout session\"}"
+    },
+    {
+      "name": "checkout: enterprise",
+      "method": "POST",
+      "path": "/api/v1/billing/checkout",
+      "body_sha256": "72a07575be8ecf98664d2aa1b49ecd82683315a95d3e55fa6de370a8dcc60a24",
+      "request_headers_sha256": "f8a00f3ea6f248a3a5eb8f8f53c6b990df4825386b78c9043f74fe5d0c651751",
+      "status": 200,
+      "headers": {
+        "content-length": "74",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"session_id\":\"cs_venue_3\",\"url\":\"https://checkout.venue.test/cs_venue_3\"}"
+    },
+    {
+      "name": "checkout: no url",
+      "method": "POST",
+      "path": "/api/v1/billing/checkout",
+      "body_sha256": "f4b1396238595a22683a085c5304d42fa3703a0397c4b7289601f6c62a292f73",
+      "request_headers_sha256": "f8a00f3ea6f248a3a5eb8f8f53c6b990df4825386b78c9043f74fe5d0c651751",
+      "status": 200,
+      "headers": {
+        "content-length": "36",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"session_id\":\"cs_venue_4\",\"url\":\"\"}"
+    },
+    {
+      "name": "checkout: no org",
+      "method": "POST",
+      "path": "/api/v1/billing/checkout",
+      "body_sha256": "a679d1fbc52a15f47bce90769141c2b33c86441705ecc1014abea72b845b9d9b",
+      "request_headers_sha256": "c2c9b6aea2fb73d916a4e5ba6b813c7dce9573e0e8884d2c7ea242e215ed3b6a",
+      "status": 200,
+      "headers": {
+        "content-length": "74",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"session_id\":\"cs_venue_5\",\"url\":\"https://checkout.venue.test/cs_venue_5\"}"
+    },
+    {
+      "name": "checkout: bad org claim",
+      "method": "POST",
+      "path": "/api/v1/billing/checkout",
+      "body_sha256": "a679d1fbc52a15f47bce90769141c2b33c86441705ecc1014abea72b845b9d9b",
+      "request_headers_sha256": "187cd6d4b1087f79d91fedf282b491238b71b1309c5452daee584521dfdd91c7",
+      "status": 200,
+      "headers": {
+        "content-length": "74",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"session_id\":\"cs_venue_6\",\"url\":\"https://checkout.venue.test/cs_venue_6\"}"
+    },
+    {
+      "name": "portal: anon",
+      "method": "POST",
+      "path": "/api/v1/billing/portal",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "fd6e55f2ba4c5c59ea6141921820358411e8536e2184aa6db640ebcc5a081aeb",
+      "status": 401,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "www-authenticate": "Bearer",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
+    },
+    {
+      "name": "portal: owner",
+      "method": "POST",
+      "path": "/api/v1/billing/portal",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "2d41025fbf95fd5eba342463d5d6c2a3b0a20b1d7ab70b9e6d0be1cb136ec547",
+      "status": 200,
+      "headers": {
+        "content-length": "47",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"url\":\"https://portal.venue.test/bps_venue_1\"}"
+    },
+    {
+      "name": "portal: return url",
+      "method": "POST",
+      "path": "/api/v1/billing/portal?return_url=https%3A%2F%2Fx.test%2Fr\u0026return_url=https://y.test/",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "cd860fdd87873f44aabe6c08036b93c5cd6c8ea317fba058159e3a599ab3f467",
+      "status": 200,
+      "headers": {
+        "content-length": "47",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"url\":\"https://portal.venue.test/bps_venue_2\"}"
+    },
+    {
+      "name": "portal: empty return url",
+      "method": "POST",
+      "path": "/api/v1/billing/portal?return_url=",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "2d41025fbf95fd5eba342463d5d6c2a3b0a20b1d7ab70b9e6d0be1cb136ec547",
+      "status": 200,
+      "headers": {
+        "content-length": "47",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"url\":\"https://portal.venue.test/bps_venue_3\"}"
+    },
+    {
+      "name": "portal: no customer",
+      "method": "POST",
+      "path": "/api/v1/billing/portal",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "6ee0c1acb5c07caf811c293ed6ffe769bd7765660a28f5a4683b73961262fd4f",
+      "status": 404,
+      "headers": {
+        "content-length": "59",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"No billing account found for this organization\"}"
+    },
+    {
+      "name": "portal: stripe fails",
+      "method": "POST",
+      "path": "/api/v1/billing/portal",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "077990240ebc2b9f0d76f3c8b252a47b66c98a9513fd5819d6095cf81f59b149",
+      "status": 502,
+      "headers": {
+        "content-length": "44",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Failed to create portal session\"}"
+    },
+    {
+      "name": "portal: bad org claim",
+      "method": "POST",
+      "path": "/api/v1/billing/portal",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "31bd2ac1b8684da7fa7cabdd62a6d441cb4bffa2636577e74a7b7ab19aa10a67",
+      "status": 404,
+      "headers": {
+        "content-length": "59",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"No billing account found for this organization\"}"
+    },
+    {
+      "name": "portal: no org",
+      "method": "POST",
+      "path": "/api/v1/billing/portal",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "8c2bfbaa9cbc418de23df1c2273dd55b8d862b2951aa724717020d9a3afd5d77",
+      "status": 404,
+      "headers": {
+        "content-length": "59",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"No billing account found for this organization\"}"
+    },
+    {
+      "name": "sub: anon",
+      "method": "GET",
+      "path": "/api/v1/billing/subscriptions",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "fd6e55f2ba4c5c59ea6141921820358411e8536e2184aa6db640ebcc5a081aeb",
+      "status": 401,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "www-authenticate": "Bearer",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
+    },
+    {
+      "name": "sub: owner",
+      "method": "GET",
+      "path": "/api/v1/billing/subscriptions",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "2d41025fbf95fd5eba342463d5d6c2a3b0a20b1d7ab70b9e6d0be1cb136ec547",
+      "status": 200,
+      "headers": {
+        "content-length": "1030",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"id\":\"11111111-0000-4000-8000-000000000002\",\"org_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"stripe_subscription_id\":\"sub_A2\",\"stripe_customer_id\":\"cus_A\",\"status\":\"trialing\",\"current_period_start\":\"2026-09-09T22:00:00+00:00\",\"current_period_end\":\"2026-10-10T00:00:00+00:00\",\"cancel_at_period_end\":false,\"canceled_at\":\"2026-09-11T08:30:00.123456+00:00\",\"trial_start\":\"2026-09-10T00:00:00+00:00\",\"trial_end\":\"2026-09-24T00:00:00+00:00\",\"plan\":{\"description\":null,\"key\":\"enterprise\",\"is_active\":true,\"display_order\":1,\"metadata_\":\"{}\",\"created_at\":\"2026-01-01T00:00:00+00:00\",\"name\":\"Enterprise\",\"id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"tier\":\"enterprise\",\"stripe_product_id\":\"prod_existing\",\"updated_at\":\"2026-09-26T06:02:52.397219+00:00\"},\"price\":{\"plan_id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"interval\":\"yearly\",\"currency\":\"usd\",\"stripe_price_id\":\"price_ent_y\",\"updated_at\":\"2026-01-01T00:00:00+00:00\",\"amount\":50000,\"id\":\"d346e58a-e52c-5bff-851e-02fa5ab423f5\",\"is_active\":true,\"created_at\":\"2026-01-01T00:00:00+00:00\"}}"
+    },
+    {
+      "name": "sub: member own org param",
+      "method": "GET",
+      "path": "/api/v1/billing/subscriptions?org_id=37aa5733-344b-54a7-9210-c911e4ccf37a",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "cd860fdd87873f44aabe6c08036b93c5cd6c8ea317fba058159e3a599ab3f467",
+      "status": 200,
+      "headers": {
+        "content-length": "1030",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"id\":\"11111111-0000-4000-8000-000000000002\",\"org_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"stripe_subscription_id\":\"sub_A2\",\"stripe_customer_id\":\"cus_A\",\"status\":\"trialing\",\"current_period_start\":\"2026-09-09T22:00:00+00:00\",\"current_period_end\":\"2026-10-10T00:00:00+00:00\",\"cancel_at_period_end\":false,\"canceled_at\":\"2026-09-11T08:30:00.123456+00:00\",\"trial_start\":\"2026-09-10T00:00:00+00:00\",\"trial_end\":\"2026-09-24T00:00:00+00:00\",\"plan\":{\"description\":null,\"key\":\"enterprise\",\"is_active\":true,\"display_order\":1,\"metadata_\":\"{}\",\"created_at\":\"2026-01-01T00:00:00+00:00\",\"name\":\"Enterprise\",\"id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"tier\":\"enterprise\",\"stripe_product_id\":\"prod_existing\",\"updated_at\":\"2026-09-26T06:02:52.397219+00:00\"},\"price\":{\"plan_id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"interval\":\"yearly\",\"currency\":\"usd\",\"stripe_price_id\":\"price_ent_y\",\"updated_at\":\"2026-01-01T00:00:00+00:00\",\"amount\":50000,\"id\":\"d346e58a-e52c-5bff-851e-02fa5ab423f5\",\"is_active\":true,\"created_at\":\"2026-01-01T00:00:00+00:00\"}}"
+    },
+    {
+      "name": "sub: super all orgs",
+      "method": "GET",
+      "path": "/api/v1/billing/subscriptions",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "13cb693c14be6b63125fe673ce665798f9f6005044f09ff0792790e4c8442d29",
+      "status": 200,
+      "headers": {
+        "content-length": "1004",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"id\":\"11111111-0000-4000-8000-000000000003\",\"org_id\":\"1bdff33b-214e-5dbf-9424-b30e42a9a0ad\",\"stripe_subscription_id\":\"sub_C\",\"stripe_customer_id\":\"cus_fail\",\"status\":\"active\",\"current_period_start\":\"2026-08-01T00:00:00+00:00\",\"current_period_end\":\"2026-09-01T00:00:00+00:00\",\"cancel_at_period_end\":true,\"canceled_at\":null,\"trial_start\":\"2026-07-01T00:00:00+00:00\",\"trial_end\":\"2026-07-15T00:00:00+00:00\",\"plan\":{\"description\":\"For teams\",\"key\":\"team\",\"is_active\":true,\"display_order\":1,\"metadata_\":\"{}\",\"created_at\":\"2026-01-01T00:00:00+00:00\",\"name\":\"Team Plan 2\",\"id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"tier\":\"Team \",\"stripe_product_id\":\"prod_venue_1\",\"updated_at\":\"2026-09-26T06:02:52.618568+00:00\"},\"price\":{\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"monthly\",\"currency\":\"usd\",\"stripe_price_id\":\"price_venue_2\",\"updated_at\":\"2026-09-26T06:02:52.169546+00:00\",\"amount\":1100,\"id\":\"5a14dce8-d539-594b-b0ef-ec675d4b3f01\",\"is_active\":true,\"created_at\":\"2026-01-01T00:00:00+00:00\"}}"
+    },
+    {
+      "name": "sub: super org C",
+      "method": "GET",
+      "path": "/api/v1/billing/subscriptions?org_id=1bdff33b-214e-5dbf-9424-b30e42a9a0ad",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "13cb693c14be6b63125fe673ce665798f9f6005044f09ff0792790e4c8442d29",
+      "status": 200,
+      "headers": {
+        "content-length": "1004",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"id\":\"11111111-0000-4000-8000-000000000003\",\"org_id\":\"1bdff33b-214e-5dbf-9424-b30e42a9a0ad\",\"stripe_subscription_id\":\"sub_C\",\"stripe_customer_id\":\"cus_fail\",\"status\":\"active\",\"current_period_start\":\"2026-08-01T00:00:00+00:00\",\"current_period_end\":\"2026-09-01T00:00:00+00:00\",\"cancel_at_period_end\":true,\"canceled_at\":null,\"trial_start\":\"2026-07-01T00:00:00+00:00\",\"trial_end\":\"2026-07-15T00:00:00+00:00\",\"plan\":{\"description\":\"For teams\",\"key\":\"team\",\"is_active\":true,\"display_order\":1,\"metadata_\":\"{}\",\"created_at\":\"2026-01-01T00:00:00+00:00\",\"name\":\"Team Plan 2\",\"id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"tier\":\"Team \",\"stripe_product_id\":\"prod_venue_1\",\"updated_at\":\"2026-09-26T06:02:52.618568+00:00\"},\"price\":{\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"monthly\",\"currency\":\"usd\",\"stripe_price_id\":\"price_venue_2\",\"updated_at\":\"2026-09-26T06:02:52.169546+00:00\",\"amount\":1100,\"id\":\"5a14dce8-d539-594b-b0ef-ec675d4b3f01\",\"is_active\":true,\"created_at\":\"2026-01-01T00:00:00+00:00\"}}"
+    },
+    {
+      "name": "sub: super org D",
+      "method": "GET",
+      "path": "/api/v1/billing/subscriptions?org_id=f5fc5f0d-cbeb-5886-86ff-f6a51c89659f",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "13cb693c14be6b63125fe673ce665798f9f6005044f09ff0792790e4c8442d29",
+      "status": 404,
+      "headers": {
+        "content-length": "35",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"No active subscription\"}"
+    },
+    {
+      "name": "sub: org B",
+      "method": "GET",
+      "path": "/api/v1/billing/subscriptions",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "6ee0c1acb5c07caf811c293ed6ffe769bd7765660a28f5a4683b73961262fd4f",
+      "status": 200,
+      "headers": {
+        "content-length": "960",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"id\":\"11111111-0000-4000-8000-000000000004\",\"org_id\":\"092d1323-14fb-5f19-b878-28bcca58f9d6\",\"stripe_subscription_id\":\"sub_err\",\"stripe_customer_id\":\"cus_B\",\"status\":\"past_due\",\"current_period_start\":\"2026-08-01T00:00:00+00:00\",\"current_period_end\":\"2026-09-01T00:00:00+00:00\",\"cancel_at_period_end\":false,\"canceled_at\":null,\"trial_start\":null,\"trial_end\":null,\"plan\":{\"description\":\"For teams\",\"key\":\"team\",\"is_active\":true,\"display_order\":1,\"metadata_\":\"{}\",\"created_at\":\"2026-01-01T00:00:00+00:00\",\"name\":\"Team Plan 2\",\"id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"tier\":\"Team \",\"stripe_product_id\":\"prod_venue_1\",\"updated_at\":\"2026-09-26T06:02:52.618568+00:00\"},\"price\":{\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"monthly\",\"currency\":\"usd\",\"stripe_price_id\":\"price_venue_2\",\"updated_at\":\"2026-09-26T06:02:52.169546+00:00\",\"amount\":1100,\"id\":\"5a14dce8-d539-594b-b0ef-ec675d4b3f01\",\"is_active\":true,\"created_at\":\"2026-01-01T00:00:00+00:00\"}}"
+    },
+    {
+      "name": "sub: no org",
+      "method": "GET",
+      "path": "/api/v1/billing/subscriptions",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "8c2bfbaa9cbc418de23df1c2273dd55b8d862b2951aa724717020d9a3afd5d77",
+      "status": 400,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Organization context required\"}"
+    },
+    {
+      "name": "sub: bad org claim",
+      "method": "GET",
+      "path": "/api/v1/billing/subscriptions",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "31bd2ac1b8684da7fa7cabdd62a6d441cb4bffa2636577e74a7b7ab19aa10a67",
+      "status": 400,
+      "headers": {
+        "content-length": "33",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Invalid organization\"}"
+    },
+    {
+      "name": "sub: bad org param",
+      "method": "GET",
+      "path": "/api/v1/billing/subscriptions?org_id=nope",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "2d41025fbf95fd5eba342463d5d6c2a3b0a20b1d7ab70b9e6d0be1cb136ec547",
+      "status": 422,
+      "headers": {
+        "content-length": "200",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":[{\"type\":\"uuid_parsing\",\"loc\":[\"query\",\"org_id\"],\"msg\":\"Input should be a valid UUID, invalid character: found `n` at 1\",\"input\":\"nope\",\"ctx\":{\"error\":\"invalid character: found `n` at 1\"}}]}"
+    },
+    {
+      "name": "sub: urn org param",
+      "method": "GET",
+      "path": "/api/v1/billing/subscriptions?org_id=urn:uuid:37aa5733-344b-54a7-9210-c911e4ccf37a",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "2d41025fbf95fd5eba342463d5d6c2a3b0a20b1d7ab70b9e6d0be1cb136ec547",
+      "status": 200,
+      "headers": {
+        "content-length": "1030",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"id\":\"11111111-0000-4000-8000-000000000002\",\"org_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"stripe_subscription_id\":\"sub_A2\",\"stripe_customer_id\":\"cus_A\",\"status\":\"trialing\",\"current_period_start\":\"2026-09-09T22:00:00+00:00\",\"current_period_end\":\"2026-10-10T00:00:00+00:00\",\"cancel_at_period_end\":false,\"canceled_at\":\"2026-09-11T08:30:00.123456+00:00\",\"trial_start\":\"2026-09-10T00:00:00+00:00\",\"trial_end\":\"2026-09-24T00:00:00+00:00\",\"plan\":{\"description\":null,\"key\":\"enterprise\",\"is_active\":true,\"display_order\":1,\"metadata_\":\"{}\",\"created_at\":\"2026-01-01T00:00:00+00:00\",\"name\":\"Enterprise\",\"id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"tier\":\"enterprise\",\"stripe_product_id\":\"prod_existing\",\"updated_at\":\"2026-09-26T06:02:52.397219+00:00\"},\"price\":{\"plan_id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"interval\":\"yearly\",\"currency\":\"usd\",\"stripe_price_id\":\"price_ent_y\",\"updated_at\":\"2026-01-01T00:00:00+00:00\",\"amount\":50000,\"id\":\"d346e58a-e52c-5bff-851e-02fa5ab423f5\",\"is_active\":true,\"created_at\":\"2026-01-01T00:00:00+00:00\"}}"
+    },
+    {
+      "name": "list: owner",
+      "method": "GET",
+      "path": "/api/v1/billing/subscriptions/list",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "2d41025fbf95fd5eba342463d5d6c2a3b0a20b1d7ab70b9e6d0be1cb136ec547",
+      "status": 200,
+      "headers": {
+        "content-length": "2038",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"items\":[{\"id\":\"11111111-0000-4000-8000-000000000002\",\"org_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"stripe_subscription_id\":\"sub_A2\",\"stripe_customer_id\":\"cus_A\",\"status\":\"trialing\",\"current_period_start\":\"2026-09-09T22:00:00+00:00\",\"current_period_end\":\"2026-10-10T00:00:00+00:00\",\"cancel_at_period_end\":false,\"canceled_at\":\"2026-09-11T08:30:00.123456+00:00\",\"trial_start\":\"2026-09-10T00:00:00+00:00\",\"trial_end\":\"2026-09-24T00:00:00+00:00\",\"plan\":{\"description\":null,\"key\":\"enterprise\",\"is_active\":true,\"display_order\":1,\"metadata_\":\"{}\",\"created_at\":\"2026-01-01T00:00:00+00:00\",\"name\":\"Enterprise\",\"id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"tier\":\"enterprise\",\"stripe_product_id\":\"prod_existing\",\"updated_at\":\"2026-09-26T06:02:52.397219+00:00\"},\"price\":{\"plan_id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"interval\":\"yearly\",\"currency\":\"usd\",\"stripe_price_id\":\"price_ent_y\",\"updated_at\":\"2026-01-01T00:00:00+00:00\",\"amount\":50000,\"id\":\"d346e58a-e52c-5bff-851e-02fa5ab423f5\",\"is_active\":true,\"created_at\":\"2026-01-01T00:00:00+00:00\"}},{\"id\":\"11111111-0000-4000-8000-000000000001\",\"org_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"stripe_subscription_id\":\"sub_A\",\"stripe_customer_id\":\"cus_A\",\"status\":\"active\",\"current_period_start\":\"2026-09-01T00:00:00+00:00\",\"current_period_end\":\"2026-10-01T00:00:00.500000+00:00\",\"cancel_at_period_end\":false,\"canceled_at\":null,\"trial_start\":null,\"trial_end\":null,\"plan\":{\"description\":\"For teams\",\"key\":\"team\",\"is_active\":true,\"display_order\":1,\"metadata_\":\"{}\",\"created_at\":\"2026-01-01T00:00:00+00:00\",\"name\":\"Team Plan 2\",\"id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"tier\":\"Team \",\"stripe_product_id\":\"prod_venue_1\",\"updated_at\":\"2026-09-26T06:02:52.618568+00:00\"},\"price\":{\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"monthly\",\"currency\":\"usd\",\"stripe_price_id\":\"price_venue_2\",\"updated_at\":\"2026-09-26T06:02:52.169546+00:00\",\"amount\":1100,\"id\":\"5a14dce8-d539-594b-b0ef-ec675d4b3f01\",\"is_active\":true,\"created_at\":\"2026-01-01T00:00:00+00:00\"}}],\"total\":2,\"limit\":20,\"offset\":0}"
+    },
+    {
+      "name": "list: page",
+      "method": "GET",
+      "path": "/api/v1/billing/subscriptions/list?limit=1\u0026offset=1",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "2d41025fbf95fd5eba342463d5d6c2a3b0a20b1d7ab70b9e6d0be1cb136ec547",
+      "status": 200,
+      "headers": {
+        "content-length": "1006",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"items\":[{\"id\":\"11111111-0000-4000-8000-000000000001\",\"org_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"stripe_subscription_id\":\"sub_A\",\"stripe_customer_id\":\"cus_A\",\"status\":\"active\",\"current_period_start\":\"2026-09-01T00:00:00+00:00\",\"current_period_end\":\"2026-10-01T00:00:00.500000+00:00\",\"cancel_at_period_end\":false,\"canceled_at\":null,\"trial_start\":null,\"trial_end\":null,\"plan\":{\"description\":\"For teams\",\"key\":\"team\",\"is_active\":true,\"display_order\":1,\"metadata_\":\"{}\",\"created_at\":\"2026-01-01T00:00:00+00:00\",\"name\":\"Team Plan 2\",\"id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"tier\":\"Team \",\"stripe_product_id\":\"prod_venue_1\",\"updated_at\":\"2026-09-26T06:02:52.618568+00:00\"},\"price\":{\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"monthly\",\"currency\":\"usd\",\"stripe_price_id\":\"price_venue_2\",\"updated_at\":\"2026-09-26T06:02:52.169546+00:00\",\"amount\":1100,\"id\":\"5a14dce8-d539-594b-b0ef-ec675d4b3f01\",\"is_active\":true,\"created_at\":\"2026-01-01T00:00:00+00:00\"}}],\"total\":2,\"limit\":1,\"offset\":1}"
+    },
+    {
+      "name": "list: super",
+      "method": "GET",
+      "path": "/api/v1/billing/subscriptions/list",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "13cb693c14be6b63125fe673ce665798f9f6005044f09ff0792790e4c8442d29",
+      "status": 200,
+      "headers": {
+        "content-length": "4004",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"items\":[{\"id\":\"11111111-0000-4000-8000-000000000003\",\"org_id\":\"1bdff33b-214e-5dbf-9424-b30e42a9a0ad\",\"stripe_subscription_id\":\"sub_C\",\"stripe_customer_id\":\"cus_fail\",\"status\":\"active\",\"current_period_start\":\"2026-08-01T00:00:00+00:00\",\"current_period_end\":\"2026-09-01T00:00:00+00:00\",\"cancel_at_period_end\":true,\"canceled_at\":null,\"trial_start\":\"2026-07-01T00:00:00+00:00\",\"trial_end\":\"2026-07-15T00:00:00+00:00\",\"plan\":{\"description\":\"For teams\",\"key\":\"team\",\"is_active\":true,\"display_order\":1,\"metadata_\":\"{}\",\"created_at\":\"2026-01-01T00:00:00+00:00\",\"name\":\"Team Plan 2\",\"id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"tier\":\"Team \",\"stripe_product_id\":\"prod_venue_1\",\"updated_at\":\"2026-09-26T06:02:52.618568+00:00\"},\"price\":{\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"monthly\",\"currency\":\"usd\",\"stripe_price_id\":\"price_venue_2\",\"updated_at\":\"2026-09-26T06:02:52.169546+00:00\",\"amount\":1100,\"id\":\"5a14dce8-d539-594b-b0ef-ec675d4b3f01\",\"is_active\":true,\"created_at\":\"2026-01-01T00:00:00+00:00\"}},{\"id\":\"11111111-0000-4000-8000-000000000002\",\"org_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"stripe_subscription_id\":\"sub_A2\",\"stripe_customer_id\":\"cus_A\",\"status\":\"trialing\",\"current_period_start\":\"2026-09-09T22:00:00+00:00\",\"current_period_end\":\"2026-10-10T00:00:00+00:00\",\"cancel_at_period_end\":false,\"canceled_at\":\"2026-09-11T08:30:00.123456+00:00\",\"trial_start\":\"2026-09-10T00:00:00+00:00\",\"trial_end\":\"2026-09-24T00:00:00+00:00\",\"plan\":{\"description\":null,\"key\":\"enterprise\",\"is_active\":true,\"display_order\":1,\"metadata_\":\"{}\",\"created_at\":\"2026-01-01T00:00:00+00:00\",\"name\":\"Enterprise\",\"id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"tier\":\"enterprise\",\"stripe_product_id\":\"prod_existing\",\"updated_at\":\"2026-09-26T06:02:52.397219+00:00\"},\"price\":{\"plan_id\":\"56b0f5ee-605f-5e5f-afdd-c6521330f863\",\"interval\":\"yearly\",\"currency\":\"usd\",\"stripe_price_id\":\"price_ent_y\",\"updated_at\":\"2026-01-01T00:00:00+00:00\",\"amount\":50000,\"id\":\"d346e58a-e52c-5bff-851e-02fa5ab423f5\",\"is_active\":true,\"created_at\":\"2026-01-01T00:00:00+00:00\"}},{\"id\":\"11111111-0000-4000-8000-000000000001\",\"org_id\":\"37aa5733-344b-54a7-9210-c911e4ccf37a\",\"stripe_subscription_id\":\"sub_A\",\"stripe_customer_id\":\"cus_A\",\"status\":\"active\",\"current_period_start\":\"2026-09-01T00:00:00+00:00\",\"current_period_end\":\"2026-10-01T00:00:00.500000+00:00\",\"cancel_at_period_end\":false,\"canceled_at\":null,\"trial_start\":null,\"trial_end\":null,\"plan\":{\"description\":\"For teams\",\"key\":\"team\",\"is_active\":true,\"display_order\":1,\"metadata_\":\"{}\",\"created_at\":\"2026-01-01T00:00:00+00:00\",\"name\":\"Team Plan 2\",\"id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"tier\":\"Team \",\"stripe_product_id\":\"prod_venue_1\",\"updated_at\":\"2026-09-26T06:02:52.618568+00:00\"},\"price\":{\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"monthly\",\"currency\":\"usd\",\"stripe_price_id\":\"price_venue_2\",\"updated_at\":\"2026-09-26T06:02:52.169546+00:00\",\"amount\":1100,\"id\":\"5a14dce8-d539-594b-b0ef-ec675d4b3f01\",\"is_active\":true,\"created_at\":\"2026-01-01T00:00:00+00:00\"}},{\"id\":\"11111111-0000-4000-8000-000000000004\",\"org_id\":\"092d1323-14fb-5f19-b878-28bcca58f9d6\",\"stripe_subscription_id\":\"sub_err\",\"stripe_customer_id\":\"cus_B\",\"status\":\"past_due\",\"current_period_start\":\"2026-08-01T00:00:00+00:00\",\"current_period_end\":\"2026-09-01T00:00:00+00:00\",\"cancel_at_period_end\":false,\"canceled_at\":null,\"trial_start\":null,\"trial_end\":null,\"plan\":{\"description\":\"For teams\",\"key\":\"team\",\"is_active\":true,\"display_order\":1,\"metadata_\":\"{}\",\"created_at\":\"2026-01-01T00:00:00+00:00\",\"name\":\"Team Plan 2\",\"id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"tier\":\"Team \",\"stripe_product_id\":\"prod_venue_1\",\"updated_at\":\"2026-09-26T06:02:52.618568+00:00\"},\"price\":{\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"monthly\",\"currency\":\"usd\",\"stripe_price_id\":\"price_venue_2\",\"updated_at\":\"2026-09-26T06:02:52.169546+00:00\",\"amount\":1100,\"id\":\"5a14dce8-d539-594b-b0ef-ec675d4b3f01\",\"is_active\":true,\"created_at\":\"2026-01-01T00:00:00+00:00\"}}],\"total\":4,\"limit\":20,\"offset\":0}"
+    },
+    {
+      "name": "list: bad params",
+      "method": "GET",
+      "path": "/api/v1/billing/subscriptions/list?limit=0\u0026offset=-1\u0026org_id=x",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "2d41025fbf95fd5eba342463d5d6c2a3b0a20b1d7ab70b9e6d0be1cb136ec547",
+      "status": 422,
+      "headers": {
+        "content-length": "463",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":[{\"type\":\"greater_than_equal\",\"loc\":[\"query\",\"limit\"],\"msg\":\"Input should be greater than or equal to 1\",\"input\":\"0\",\"ctx\":{\"ge\":1}},{\"type\":\"greater_than_equal\",\"loc\":[\"query\",\"offset\"],\"msg\":\"Input should be greater than or equal to 0\",\"input\":\"-1\",\"ctx\":{\"ge\":0}},{\"type\":\"uuid_parsing\",\"loc\":[\"query\",\"org_id\"],\"msg\":\"Input should be a valid UUID, invalid character: found `x` at 1\",\"input\":\"x\",\"ctx\":{\"error\":\"invalid character: found `x` at 1\"}}]}"
+    },
+    {
+      "name": "list: limit high",
+      "method": "GET",
+      "path": "/api/v1/billing/subscriptions/list?limit=101",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "2d41025fbf95fd5eba342463d5d6c2a3b0a20b1d7ab70b9e6d0be1cb136ec547",
+      "status": 422,
+      "headers": {
+        "content-length": "144",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":[{\"type\":\"less_than_equal\",\"loc\":[\"query\",\"limit\"],\"msg\":\"Input should be less than or equal to 100\",\"input\":\"101\",\"ctx\":{\"le\":100}}]}"
+    },
+    {
+      "name": "list: offset overflow",
+      "method": "GET",
+      "path": "/api/v1/billing/subscriptions/list?offset=99999999999999999999",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "2d41025fbf95fd5eba342463d5d6c2a3b0a20b1d7ab70b9e6d0be1cb136ec547",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "list: anon bad params",
+      "method": "GET",
+      "path": "/api/v1/billing/subscriptions/list?limit=0",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "fd6e55f2ba4c5c59ea6141921820358411e8536e2184aa6db640ebcc5a081aeb",
+      "status": 401,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "www-authenticate": "Bearer",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
+    },
+    {
+      "name": "history: owner",
+      "method": "GET",
+      "path": "/api/v1/billing/subscriptions/history",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "2d41025fbf95fd5eba342463d5d6c2a3b0a20b1d7ab70b9e6d0be1cb136ec547",
+      "status": 200,
+      "headers": {
+        "content-length": "765",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"items\":[{\"id\":\"aab32389-22bc-c25a-6f60-6eb525ffdc56\",\"stripe_event_id\":\"evt_2\",\"event_type\":\"customer.subscription.updated\",\"previous_status\":\"incomplete\",\"new_status\":\"trialing\",\"processed_at\":\"2026-09-10T00:00:01.000500+00:00\",\"payload\":{}},{\"id\":\"9bf31c7f-f062-936a-96d3-c8bd1f8f2ff3\",\"stripe_event_id\":\"evt_3\",\"event_type\":\"customer.subscription.updated\",\"previous_status\":\"active\",\"new_status\":\"active\",\"processed_at\":\"2026-09-02T00:00:00+00:00\",\"payload\":{}},{\"id\":\"c51ce410-c124-a10e-0db5-e4b97fc2af39\",\"stripe_event_id\":\"evt_1\",\"event_type\":\"customer.subscription.created\",\"previous_status\":null,\"new_status\":\"active\",\"processed_at\":\"2026-09-01T00:00:01+00:00\",\"payload\":{\"id\":\"evt_1\",\"data\":{\"b\":1,\"a\":[true,2.5,\"é\"]}}}],\"total\":3,\"limit\":20,\"offset\":0}"
+    },
+    {
+      "name": "history: super",
+      "method": "GET",
+      "path": "/api/v1/billing/subscriptions/history?limit=2\u0026offset=1",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "13cb693c14be6b63125fe673ce665798f9f6005044f09ff0792790e4c8442d29",
+      "status": 200,
+      "headers": {
+        "content-length": "499",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"items\":[{\"id\":\"aab32389-22bc-c25a-6f60-6eb525ffdc56\",\"stripe_event_id\":\"evt_2\",\"event_type\":\"customer.subscription.updated\",\"previous_status\":\"incomplete\",\"new_status\":\"trialing\",\"processed_at\":\"2026-09-10T00:00:01.000500+00:00\",\"payload\":{}},{\"id\":\"9bf31c7f-f062-936a-96d3-c8bd1f8f2ff3\",\"stripe_event_id\":\"evt_3\",\"event_type\":\"customer.subscription.updated\",\"previous_status\":\"active\",\"new_status\":\"active\",\"processed_at\":\"2026-09-02T00:00:00+00:00\",\"payload\":{}}],\"total\":4,\"limit\":2,\"offset\":1}"
+    },
+    {
+      "name": "history: org C",
+      "method": "GET",
+      "path": "/api/v1/billing/subscriptions/history",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "077990240ebc2b9f0d76f3c8b252a47b66c98a9513fd5819d6095cf81f59b149",
+      "status": 200,
+      "headers": {
+        "content-length": "266",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"items\":[{\"id\":\"c74d97b0-1eae-257e-44aa-9d5bade97baf\",\"stripe_event_id\":\"evt_4\",\"event_type\":\"customer.subscription.updated\",\"previous_status\":null,\"new_status\":\"active\",\"processed_at\":\"2026-09-13T00:00:00+00:00\",\"payload\":{\"k\":1}}],\"total\":1,\"limit\":20,\"offset\":0}"
+    },
+    {
+      "name": "change: anon",
+      "method": "POST",
+      "path": "/api/v1/billing/subscriptions/change-plan",
+      "body_sha256": "5bbbbf7967039d18c5b0d37db85ab0c423d6367c9282a34ec27fcbbcde6524fd",
+      "request_headers_sha256": "11d7e15c5a6e05ae7d0cf485a8ddf91b6512fe6237262974423cac82cff4beb6",
+      "status": 401,
+      "headers": {
+        "content-length": "42",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "www-authenticate": "Bearer",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":{\"message\":\"Not authenticated\"}}"
+    },
+    {
+      "name": "change: member",
+      "method": "POST",
+      "path": "/api/v1/billing/subscriptions/change-plan",
+      "body_sha256": "5bbbbf7967039d18c5b0d37db85ab0c423d6367c9282a34ec27fcbbcde6524fd",
+      "request_headers_sha256": "e8401a965c92967810ea3f62f446f1a312661a86ed154a71a3e61867e51bf334",
+      "status": 403,
+      "headers": {
+        "content-length": "34",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Admin access required\"}"
+    },
+    {
+      "name": "change: invalid",
+      "method": "POST",
+      "path": "/api/v1/billing/subscriptions/change-plan?org_id=nope",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "f8a00f3ea6f248a3a5eb8f8f53c6b990df4825386b78c9043f74fe5d0c651751",
+      "status": 422,
+      "headers": {
+        "content-length": "279",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":[{\"type\":\"uuid_parsing\",\"loc\":[\"query\",\"org_id\"],\"msg\":\"Input should be a valid UUID, invalid character: found `n` at 1\",\"input\":\"nope\",\"ctx\":{\"error\":\"invalid character: found `n` at 1\"}},{\"type\":\"missing\",\"loc\":[\"body\",\"price_id\"],\"msg\":\"Field required\",\"input\":{}}]}"
+    },
+    {
+      "name": "change: super no org",
+      "method": "POST",
+      "path": "/api/v1/billing/subscriptions/change-plan",
+      "body_sha256": "5bbbbf7967039d18c5b0d37db85ab0c423d6367c9282a34ec27fcbbcde6524fd",
+      "request_headers_sha256": "e5022a88938178266e8c257612a3a7667934cb6c8ccceeec66bfc9d00a4bb584",
+      "status": 400,
+      "headers": {
+        "content-length": "28",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"org_id required\"}"
+    },
+    {
+      "name": "change: super org D",
+      "method": "POST",
+      "path": "/api/v1/billing/subscriptions/change-plan?org_id=f5fc5f0d-cbeb-5886-86ff-f6a51c89659f",
+      "body_sha256": "5bbbbf7967039d18c5b0d37db85ab0c423d6367c9282a34ec27fcbbcde6524fd",
+      "request_headers_sha256": "e5022a88938178266e8c257612a3a7667934cb6c8ccceeec66bfc9d00a4bb584",
+      "status": 404,
+      "headers": {
+        "content-length": "34",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"No subscription found\"}"
+    },
+    {
+      "name": "change: owner",
+      "method": "POST",
+      "path": "/api/v1/billing/subscriptions/change-plan",
+      "body_sha256": "5bbbbf7967039d18c5b0d37db85ab0c423d6367c9282a34ec27fcbbcde6524fd",
+      "request_headers_sha256": "f8a00f3ea6f248a3a5eb8f8f53c6b990df4825386b78c9043f74fe5d0c651751",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "change: no items",
+      "method": "POST",
+      "path": "/api/v1/billing/subscriptions/change-plan",
+      "body_sha256": "5bbbbf7967039d18c5b0d37db85ab0c423d6367c9282a34ec27fcbbcde6524fd",
+      "request_headers_sha256": "239738c5bdf8374710057ce2836511cf0fc2af7c5149a2402866d9df3962c7a4",
+      "status": 400,
+      "headers": {
+        "content-length": "45",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Stripe subscription has no items\"}"
+    },
+    {
+      "name": "change: stripe fails",
+      "method": "POST",
+      "path": "/api/v1/billing/subscriptions/change-plan",
+      "body_sha256": "5bbbbf7967039d18c5b0d37db85ab0c423d6367c9282a34ec27fcbbcde6524fd",
+      "request_headers_sha256": "f0be2a717f588ed7855782104a403a8d00f250af0eff306f50ba68d233555173",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "cancel: missing body",
+      "method": "POST",
+      "path": "/api/v1/billing/subscriptions/cancel",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "2d41025fbf95fd5eba342463d5d6c2a3b0a20b1d7ab70b9e6d0be1cb136ec547",
+      "status": 422,
+      "headers": {
+        "content-length": "82",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\"],\"msg\":\"Field required\",\"input\":null}]}"
+    },
+    {
+      "name": "cancel: at period end",
+      "method": "POST",
+      "path": "/api/v1/billing/subscriptions/cancel",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "f8a00f3ea6f248a3a5eb8f8f53c6b990df4825386b78c9043f74fe5d0c651751",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "cancel: immediately",
+      "method": "POST",
+      "path": "/api/v1/billing/subscriptions/cancel?org_id=37aa5733-344b-54a7-9210-c911e4ccf37a",
+      "body_sha256": "18f998ebf8858914408105e23c52c017c9d2a4cf5ead730ceeb09c49c4ee3893",
+      "request_headers_sha256": "e5022a88938178266e8c257612a3a7667934cb6c8ccceeec66bfc9d00a4bb584",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "cancel: bad flag",
+      "method": "POST",
+      "path": "/api/v1/billing/subscriptions/cancel",
+      "body_sha256": "9cec31ab423bab66a21bd6ea9eed1969cfce020b10ba327aad864876d1696628",
+      "request_headers_sha256": "f8a00f3ea6f248a3a5eb8f8f53c6b990df4825386b78c9043f74fe5d0c651751",
+      "status": 422,
+      "headers": {
+        "content-length": "147",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":[{\"type\":\"bool_parsing\",\"loc\":[\"body\",\"immediately\"],\"msg\":\"Input should be a valid boolean, unable to interpret input\",\"input\":\"soon\"}]}"
+    },
+    {
+      "name": "reactivate: owner",
+      "method": "POST",
+      "path": "/api/v1/billing/subscriptions/reactivate",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "2d41025fbf95fd5eba342463d5d6c2a3b0a20b1d7ab70b9e6d0be1cb136ec547",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "reactivate: body ignored",
+      "method": "POST",
+      "path": "/api/v1/billing/subscriptions/reactivate",
+      "body_sha256": "e886d94509cd06df994566b75cd2bb217ad946c8bdf81f60ddbbf744f7bc5c8e",
+      "request_headers_sha256": "f8a00f3ea6f248a3a5eb8f8f53c6b990df4825386b78c9043f74fe5d0c651751",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "reactivate: member",
+      "method": "POST",
+      "path": "/api/v1/billing/subscriptions/reactivate",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "cd860fdd87873f44aabe6c08036b93c5cd6c8ea317fba058159e3a599ab3f467",
+      "status": 403,
+      "headers": {
+        "content-length": "34",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Admin access required\"}"
+    },
+    {
+      "name": "reactivate: stripe fails",
+      "method": "POST",
+      "path": "/api/v1/billing/subscriptions/reactivate",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "6ee0c1acb5c07caf811c293ed6ffe769bd7765660a28f5a4683b73961262fd4f",
+      "status": 500,
+      "headers": {
+        "content-length": "34",
+        "content-type": "application/json"
+      },
+      "body": "{\"detail\":\"Internal Server Error\"}"
+    },
+    {
+      "name": "reactivate: 405",
+      "method": "GET",
+      "path": "/api/v1/billing/subscriptions/reactivate",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "2d41025fbf95fd5eba342463d5d6c2a3b0a20b1d7ab70b9e6d0be1cb136ec547",
+      "status": 405,
+      "headers": {
+        "allow": "POST",
+        "content-length": "31",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Method Not Allowed\"}"
+    },
+    {
+      "name": "deviation: read org B",
+      "method": "GET",
+      "path": "/api/v1/billing/subscriptions?org_id=092d1323-14fb-5f19-b878-28bcca58f9d6",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "2d41025fbf95fd5eba342463d5d6c2a3b0a20b1d7ab70b9e6d0be1cb136ec547",
+      "status": 200,
+      "headers": {
+        "content-length": "960",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"id\":\"11111111-0000-4000-8000-000000000004\",\"org_id\":\"092d1323-14fb-5f19-b878-28bcca58f9d6\",\"stripe_subscription_id\":\"sub_err\",\"stripe_customer_id\":\"cus_B\",\"status\":\"past_due\",\"current_period_start\":\"2026-08-01T00:00:00+00:00\",\"current_period_end\":\"2026-09-01T00:00:00+00:00\",\"cancel_at_period_end\":false,\"canceled_at\":null,\"trial_start\":null,\"trial_end\":null,\"plan\":{\"description\":\"For teams\",\"key\":\"team\",\"is_active\":true,\"display_order\":1,\"metadata_\":\"{}\",\"created_at\":\"2026-01-01T00:00:00+00:00\",\"name\":\"Team Plan 2\",\"id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"tier\":\"Team \",\"stripe_product_id\":\"prod_venue_1\",\"updated_at\":\"2026-09-26T06:02:52.618568+00:00\"},\"price\":{\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"monthly\",\"currency\":\"usd\",\"stripe_price_id\":\"price_venue_2\",\"updated_at\":\"2026-09-26T06:02:52.169546+00:00\",\"amount\":1100,\"id\":\"5a14dce8-d539-594b-b0ef-ec675d4b3f01\",\"is_active\":true,\"created_at\":\"2026-01-01T00:00:00+00:00\"}}"
+    },
+    {
+      "name": "deviation: list org C",
+      "method": "GET",
+      "path": "/api/v1/billing/subscriptions/list?org_id=1bdff33b-214e-5dbf-9424-b30e42a9a0ad",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "cd860fdd87873f44aabe6c08036b93c5cd6c8ea317fba058159e3a599ab3f467",
+      "status": 200,
+      "headers": {
+        "content-length": "1048",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"items\":[{\"id\":\"11111111-0000-4000-8000-000000000003\",\"org_id\":\"1bdff33b-214e-5dbf-9424-b30e42a9a0ad\",\"stripe_subscription_id\":\"sub_C\",\"stripe_customer_id\":\"cus_fail\",\"status\":\"active\",\"current_period_start\":\"2026-08-01T00:00:00+00:00\",\"current_period_end\":\"2026-09-01T00:00:00+00:00\",\"cancel_at_period_end\":true,\"canceled_at\":null,\"trial_start\":\"2026-07-01T00:00:00+00:00\",\"trial_end\":\"2026-07-15T00:00:00+00:00\",\"plan\":{\"description\":\"For teams\",\"key\":\"team\",\"is_active\":true,\"display_order\":1,\"metadata_\":\"{}\",\"created_at\":\"2026-01-01T00:00:00+00:00\",\"name\":\"Team Plan 2\",\"id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"tier\":\"Team \",\"stripe_product_id\":\"prod_venue_1\",\"updated_at\":\"2026-09-26T06:02:52.618568+00:00\"},\"price\":{\"plan_id\":\"ae72201b-4170-5c2b-95dc-1470b1919816\",\"interval\":\"monthly\",\"currency\":\"usd\",\"stripe_price_id\":\"price_venue_2\",\"updated_at\":\"2026-09-26T06:02:52.169546+00:00\",\"amount\":1100,\"id\":\"5a14dce8-d539-594b-b0ef-ec675d4b3f01\",\"is_active\":true,\"created_at\":\"2026-01-01T00:00:00+00:00\"}}],\"total\":1,\"limit\":20,\"offset\":0}"
+    },
+    {
+      "name": "deviation: history org A",
+      "method": "GET",
+      "path": "/api/v1/billing/subscriptions/history?org_id=37aa5733-344b-54a7-9210-c911e4ccf37a",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "request_headers_sha256": "077990240ebc2b9f0d76f3c8b252a47b66c98a9513fd5819d6095cf81f59b149",
+      "status": 200,
+      "headers": {
+        "content-length": "765",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"items\":[{\"id\":\"aab32389-22bc-c25a-6f60-6eb525ffdc56\",\"stripe_event_id\":\"evt_2\",\"event_type\":\"customer.subscription.updated\",\"previous_status\":\"incomplete\",\"new_status\":\"trialing\",\"processed_at\":\"2026-09-10T00:00:01.000500+00:00\",\"payload\":{}},{\"id\":\"9bf31c7f-f062-936a-96d3-c8bd1f8f2ff3\",\"stripe_event_id\":\"evt_3\",\"event_type\":\"customer.subscription.updated\",\"previous_status\":\"active\",\"new_status\":\"active\",\"processed_at\":\"2026-09-02T00:00:00+00:00\",\"payload\":{}},{\"id\":\"c51ce410-c124-a10e-0db5-e4b97fc2af39\",\"stripe_event_id\":\"evt_1\",\"event_type\":\"customer.subscription.created\",\"previous_status\":null,\"new_status\":\"active\",\"processed_at\":\"2026-09-01T00:00:01+00:00\",\"payload\":{\"id\":\"evt_1\",\"data\":{\"b\":1,\"a\":[true,2.5,\"é\"]}}}],\"total\":3,\"limit\":20,\"offset\":0}"
+    },
+    {
+      "name": "deviation: cancel org C",
+      "method": "POST",
+      "path": "/api/v1/billing/subscriptions/cancel?org_id=1bdff33b-214e-5dbf-9424-b30e42a9a0ad",
+      "body_sha256": "a135823e1f3518ee22848a79f5427d8cee0bfb85fbc6b4e6eda61f883c057c9e",
+      "request_headers_sha256": "f8a00f3ea6f248a3a5eb8f8f53c6b990df4825386b78c9043f74fe5d0c651751",
+      "status": 200,
+      "headers": {
+        "content-length": "15",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"status\":\"ok\"}"
+    },
+    {
+      "name": "deviation: change plan org C",
+      "method": "POST",
+      "path": "/api/v1/billing/subscriptions/change-plan?org_id=1bdff33b-214e-5dbf-9424-b30e42a9a0ad",
+      "body_sha256": "5bbbbf7967039d18c5b0d37db85ab0c423d6367c9282a34ec27fcbbcde6524fd",
+      "request_headers_sha256": "f8a00f3ea6f248a3a5eb8f8f53c6b990df4825386b78c9043f74fe5d0c651751",
+      "status": 400,
+      "headers": {
+        "content-length": "45",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        "content-type": "application/json",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "strict-transport-security": "max-age=31536000; includeSubDomains",
+        "vary": "Origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "x-request-id": "req-1"
+      },
+      "body": "{\"detail\":\"Stripe subscription has no items\"}"
+    }
+  ],
+  "rows": {
+    "recorded_at": {
+      "rows": "2026-09-26T06:01:32.87758657Z"
+    },
+    "rows:billing_audit_log": {
+      "rows": "1bdff33b-214e-5dbf-9424-b30e42a9a0ad7790165a-5eff-5377-92c7-40a86f18dbactrial_abuse_preventedcheckout1bdff33b-214e-5dbf-9424-b30e42a9a0adOrg already had a trial, creating checkout without trial period\u003cnil\u003e{\"requested_trial_days\": 9223372036854775808}nullfalse \u003cnil\u003e \u003cnow\u003e"
+    },
+    "rows:billing_plans": {
+      "rows": "0b51e4e1-97b0-5c63-8fa8-82516ff19cdcbasicBasic Old\u003cnil\u003eenterprisefalse 7 \u003cnil\u003e{\"m\": 1}2026-01-01 00:00:00 +0000 UTC \u003cnow\u003e | \u003cid\u003edupDup\u003cnil\u003ecommunitytrue 0 \u003cnil\u003e{}\u003cnow\u003e \u003cnow\u003e | 5365a9d2-fcb5-5b76-9329-658b9201ad3bempty-idsEmpty IdsBlank Stripe idsteamtrue 3prod_venue_2{}2026-01-01 00:00:00 +0000 UTC \u003cnow\u003e | 56b0f5ee-605f-5e5f-afdd-c6521330f863enterpriseEnterprise\u003cnil\u003eenterprisetrue 1prod_existing{}2026-01-01 00:00:00 +0000 UTC \u003cnow\u003e | f49e1fc2-3dc1-597b-b874-986b00eb55balegacyLegacy\u003cnil\u003eweirdfalse 0 \u003cnil\u003e[]2026-01-01 00:00:00 +0000 UTC 2026-01-01 00:00:00 +0000 UTC | \u003cid\u003eproPro\u003cnil\u003eenterprisetrue 5 \u003cnil\u003e{\"k\": [1, 2.0, \"\\u00e9\"], \"k2\": {\"n\": null}}\u003cnow\u003e \u003cnow\u003e | ae72201b-4170-5c2b-95dc-1470b1919816teamTeam Plan 2For teamsTeam true 1prod_venue_1{}2026-01-01 00:00:00 +0000 UTC \u003cnow\u003e"
+    },
+    "rows:billing_prices": {
+      "rows": "45c48cce-2e2d-7fbd-ea1a-fc51c7c6ad26basicmonthly700usdtrue \u003cnil\u003e 2026-01-01 00:00:00 +0000 UTC 2026-01-01 00:00:00 +0000 UTC | \u003cid\u003edupmonthly1usdtrue \u003cnil\u003e \u003cnow\u003e \u003cnow\u003e | \u003cid\u003edupmonthly2usdtrue \u003cnil\u003e \u003cnow\u003e \u003cnow\u003e | d3d94468-02a4-4259-755d-38e6d163e820empty-idsmonthly400usdtrueprice_venue_42026-01-01 00:00:00 +0000 UTC \u003cnow\u003e | 1e60b3ef-4a4d-58ec-a34c-0b4caefd47f3enterprisemonthly5000usdtrueprice_venue_32026-01-01 00:00:00 +0000 UTC \u003cnow\u003e | d346e58a-e52c-5bff-851e-02fa5ab423f5enterpriseyearly50000usdtrueprice_ent_y2026-01-01 00:00:00 +0000 UTC 2026-01-01 00:00:00 +0000 UTC | c9f0f895-fb98-ab91-59f5-1fd0297e236dlegacyyearly3000usdtrueprice_legacy_y2026-01-01 00:00:00 +0000 UTC 2026-01-01 00:00:00 +0000 UTC | \u003cid\u003epromonthly2000usdtrue \u003cnil\u003e \u003cnow\u003e \u003cnow\u003e | \u003cid\u003eproyearly20000usdfalseprice_pro_y\u003cnow\u003e \u003cnow\u003e | \u003cid\u003eteammonthly800gbptrueprice_venue_1\u003cnow\u003e \u003cnow\u003e | 5a14dce8-d539-594b-b0ef-ec675d4b3f01teammonthly1100usdtrueprice_venue_22026-01-01 00:00:00 +0000 UTC \u003cnow\u003e | 6155ad80-b426-551c-9944-1d57c13086cfteamyearly11000usdtrueprice_seed_y2026-01-01 00:00:00 +0000 UTC \u003cnow\u003e"
+    },
+    "rows:plan_feature_bundles": {
+      "rows": "proa-core | prob-analytics | teamb-analytics"
+    },
+    "rows:subscriptions": {
+      "rows": "11111111-0000-4000-8000-000000000001active\u003cnil\u003e 2026-09-02 00:00:00 +0000 UTC | 11111111-0000-4000-8000-000000000002trialingfalse 2026-09-12 00:00:00 +0000 UTC | 11111111-0000-4000-8000-000000000003activetrue 2026-09-13 00:00:00 +0000 UTC | 11111111-0000-4000-8000-000000000004past_duefalse 2026-08-13 00:00:00 +0000 UTC"
+    },
+    "stripe_calls_py": {
+      "rows": "POST /v1/products | query= | form=description=For teams\u0026metadata[plan_key]=team\u0026metadata[tier]=team\u0026name=Team Plan 2 | version=2026-08-26.dahlia | idempotency=present | auth=fake-key\nPOST /v1/prices | query= | form=currency=gbp\u0026metadata[interval]=monthly\u0026metadata[plan_key]=team\u0026product=prod_venue_1\u0026recurring[interval]=month\u0026unit_amount=800 | version=2026-08-26.dahlia | idempotency=present | auth=fake-key\nPOST /v1/prices | query= | form=currency=usd\u0026metadata[interval]=monthly\u0026metadata[plan_key]=team\u0026product=prod_venue_1\u0026recurring[interval]=month\u0026unit_amount=1100 | version=2026-08-26.dahlia | idempotency=present | auth=fake-key\nPOST /v1/prices | query= | form=currency=usd\u0026metadata[interval]=monthly\u0026metadata[plan_key]=enterprise\u0026product=prod_existing\u0026recurring[interval]=month\u0026unit_amount=5000 | version=2026-08-26.dahlia | idempotency=present | auth=fake-key\nPOST /v1/products | query= | form=description=Blank Stripe ids\u0026metadata[plan_key]=empty-ids\u0026metadata[tier]=team\u0026name=Empty Ids | version=2026-08-26.dahlia | idempotency=present | auth=fake-key\nPOST /v1/prices | query= | form=currency=usd\u0026metadata[interval]=monthly\u0026metadata[plan_key]=empty-ids\u0026product=prod_venue_2\u0026recurring[interval]=month\u0026unit_amount=400 | version=2026-08-26.dahlia | idempotency=present | auth=fake-key\nGET /v1/products | query=active=true\u0026limit=100 | form= | version=2026-08-26.dahlia | idempotency=absent | auth=fake-key\nGET /v1/products | query=active=true\u0026limit=100\u0026starting_after=prod_basic | form= | version=2026-08-26.dahlia | idempotency=absent | auth=fake-key\nGET /v1/products | query=active=true\u0026limit=100\u0026starting_after=prod_new | form= | version=2026-08-26.dahlia | idempotency=absent | auth=fake-key\nGET /v1/products | query=active=true\u0026limit=100\u0026starting_after=prod_err | form= | version=2026-08-26.dahlia | idempotency=absent | auth=fake-key\nGET /v1/prices | query=active=true\u0026limit=100\u0026product=prod_existing | form= | version=2026-08-26.dahlia | idempotency=absent | auth=fake-key\nGET /v1/prices | query=active=true\u0026limit=100\u0026product=prod_basic | form= | version=2026-08-26.dahlia | idempotency=absent | auth=fake-key\nGET /v1/prices | query=active=true\u0026limit=100\u0026product=prod_team | form= | version=2026-08-26.dahlia | idempotency=absent | auth=fake-key\nGET /v1/prices | query=active=true\u0026limit=100\u0026product=prod_new | form= | version=2026-08-26.dahlia | idempotency=absent | auth=fake-key\nGET /v1/prices | query=active=true\u0026limit=100\u0026product=prod_new\u0026starting_after=price_new_w | form= | version=2026-08-26.dahlia | idempotency=absent | auth=fake-key\nGET /v1/prices | query=active=true\u0026limit=100\u0026product=prod_noprices | form= | version=2026-08-26.dahlia | idempotency=absent | auth=fake-key\nGET /v1/prices | query=active=true\u0026limit=100\u0026product=prod_err | form= | version=2026-08-26.dahlia | idempotency=absent | auth=fake-key\nGET /v1/prices | query=active=true\u0026limit=100\u0026product=prod_conflict | form= | version=2026-08-26.dahlia | idempotency=absent | auth=fake-key\nGET /v1/prices | query=active=true\u0026limit=100\u0026product=prod_last | form= | version=2026-08-26.dahlia | idempotency=absent | auth=fake-key\nPOST /v1/checkout/sessions | query= | form=cancel_url=https://alt.venue.test/no\u0026client_reference_id=092d1323-14fb-5f19-b878-28bcca58f9d6\u0026line_items[0][price]=price_team_cfg\u0026line_items[0][quantity]=1\u0026metadata[org_id]=092d1323-14fb-5f19-b878-28bcca58f9d6\u0026mode=subscription\u0026subscription_data[trial_period_days]=9223372036854775808\u0026subscription_data[trial_settings][end_behavior][missing_payment_method]=cancel\u0026success_url=https://app.venue.test/ok?s=1 | version=2026-08-26.dahlia | idempotency=present | auth=fake-key\nPOST /v1/checkout/sessions | query= | form=cancel_url=/no\u0026client_reference_id=1bdff33b-214e-5dbf-9424-b30e42a9a0ad\u0026line_items[0][price]=price_team_cfg\u0026line_items[0][quantity]=1\u0026metadata[org_id]=1bdff33b-214e-5dbf-9424-b30e42a9a0ad\u0026mode=subscription\u0026success_url=/ok | version=2026-08-26.dahlia | idempotency=present | auth=fake-key\nPOST /v1/checkout/sessions | query= | form=cancel_url=/no\u0026client_reference_id=37aa5733-344b-54a7-9210-c911e4ccf37a\u0026line_items[0][price]=price_team_cfg\u0026line_items[0][quantity]=1\u0026metadata[org_id]=37aa5733-344b-54a7-9210-c911e4ccf37a\u0026mode=subscription\u0026success_url=/stripe-fail | version=2026-08-26.dahlia | idempotency=present | auth=fake-key\nPOST /v1/checkout/sessions | query= | form=cancel_url=https://x.test/pathz\u0026client_reference_id=37aa5733-344b-54a7-9210-c911e4ccf37a\u0026line_items[0][price]=price_ent_cfg\u0026line_items[0][quantity]=1\u0026metadata[org_id]=37aa5733-344b-54a7-9210-c911e4ccf37a\u0026mode=subscription\u0026success_url=/ok | version=2026-08-26.dahlia | idempotency=present | auth=fake-key\nPOST /v1/checkout/sessions | query= | form=cancel_url=/no\u0026client_reference_id=37aa5733-344b-54a7-9210-c911e4ccf37a\u0026line_items[0][price]=price_ent_cfg\u0026line_items[0][quantity]=1\u0026metadata[org_id]=37aa5733-344b-54a7-9210-c911e4ccf37a\u0026mode=subscription\u0026success_url=/no-url | version=2026-08-26.dahlia | idempotency=present | auth=fake-key\nPOST /v1/checkout/sessions | query= | form=cancel_url=/no\u0026client_reference_id=\u0026line_items[0][price]=price_team_cfg\u0026line_items[0][quantity]=1\u0026metadata[org_id]=\u0026mode=subscription\u0026subscription_data[trial_period_days]=9223372036854775808\u0026subscription_data[trial_settings][end_behavior][missing_payment_method]=cancel\u0026success_url=/ok | version=2026-08-26.dahlia | idempotency=present | auth=fake-key\nPOST /v1/checkout/sessions | query= | form=cancel_url=/no\u0026client_reference_id=not-a-uuid\u0026line_items[0][price]=price_team_cfg\u0026line_items[0][quantity]=1\u0026metadata[org_id]=not-a-uuid\u0026mode=subscription\u0026subscription_data[trial_period_days]=9223372036854775808\u0026subscription_data[trial_settings][end_behavior][missing_payment_method]=cancel\u0026success_url=/ok | version=2026-08-26.dahlia | idempotency=present | auth=fake-key\nPOST /v1/billing_portal/sessions | query= | form=customer=cus_A\u0026return_url=/ | version=2026-08-26.dahlia | idempotency=present | auth=fake-key\nPOST /v1/billing_portal/sessions | query= | form=customer=cus_A\u0026return_url=https://y.test/ | version=2026-08-26.dahlia | idempotency=present | auth=fake-key\nPOST /v1/billing_portal/sessions | query= | form=customer=cus_A\u0026return_url=/ | version=2026-08-26.dahlia | idempotency=present | auth=fake-key\nPOST /v1/billing_portal/sessions | query= | form=customer=cus_fail\u0026return_url=/ | version=2026-08-26.dahlia | idempotency=present | auth=fake-key\nGET /v1/subscriptions/sub_A2 | query= | form= | version=2026-08-26.dahlia | idempotency=absent | auth=fake-key\nPOST /v1/subscriptions/sub_A2 | query= | form=items[0][id]=si_sub_A2\u0026items[0][price]=price_x\u0026proration_behavior=create_prorations | version=2026-08-26.dahlia | idempotency=present | auth=fake-key\nGET /v1/subscriptions/sub_C | query= | form= | version=2026-08-26.dahlia | idempotency=absent | auth=fake-key\nGET /v1/subscriptions/sub_err | query= | form= | version=2026-08-26.dahlia | idempotency=absent | auth=fake-key\nPOST /v1/subscriptions/sub_A2 | query= | form=cancel_at_period_end=true | version=2026-08-26.dahlia | idempotency=present | auth=fake-key\nDELETE /v1/subscriptions/sub_A2 | query= | form= | version=2026-08-26.dahlia | idempotency=absent | auth=fake-key\nPOST /v1/subscriptions/sub_A2 | query= | form=cancel_at_period_end=false | version=2026-08-26.dahlia | idempotency=present | auth=fake-key\nPOST /v1/subscriptions/sub_A2 | query= | form=cancel_at_period_end=false | version=2026-08-26.dahlia | idempotency=present | auth=fake-key\nPOST /v1/subscriptions/sub_err | query= | form=cancel_at_period_end=false | version=2026-08-26.dahlia | idempotency=present | auth=fake-key\nPOST /v1/subscriptions/sub_C | query= | form=cancel_at_period_end=true | version=2026-08-26.dahlia | idempotency=present | auth=fake-key\nGET /v1/subscriptions/sub_C | query= | form= | version=2026-08-26.dahlia | idempotency=absent | auth=fake-key"
+    }
+  }
+}

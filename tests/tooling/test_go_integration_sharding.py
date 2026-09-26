@@ -282,8 +282,11 @@ def _check_shard_plan(
 
     Raises AssertionError naming the first broken one. Returns {shard: {package: weight}}.
     """
-    headers = [_PLAN_HEADER.fullmatch(line) for line in stdout.splitlines()]
-    headers = [match for match in headers if match]
+    headers = [
+        match
+        for match in map(_PLAN_HEADER.fullmatch, stdout.splitlines())
+        if match is not None
+    ]
     assert len(headers) == 1, f"want one plan header line, got {len(headers)}"
     declared = int(headers[0].group("shards"))
     assert declared == manifest_shards >= 2, (

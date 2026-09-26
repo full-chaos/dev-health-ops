@@ -765,3 +765,34 @@ func TestJudgeQueueOverTheWholeInputSpace(t *testing.T) {
 		}
 	}
 }
+
+// The stuck-slot arm never consults the backlog (lead D2606): a claimed slot
+// outside a handler, unbroken past the window with no handler activity, is the
+// same verdict whether nothing is available or a great deal is. Only the
+// separate backlog arm reads Available (a consumer that is not claiming).
+func TestJudgeQueueStuckArmIgnoresAvailable(t *testing.T) {
+	t.Parallel()
+	const window = time.Minute
+	for _, shape := range []struct {
+		name                      string
+		known                     bool
+		capacity, running, inside int64
+	}{
+		{"free capacity, stuck job", true, 2, 1, 0},
+		{"full, stuck slot", true, 1, 1, 0},
+		{"full, some inside some stuck", true, 2, 2, 1},
+		{"capacity unknown, running reported", false, 0, 1, 0},
+	} {
+		for _, available := range []int64{0, 1, 3, 1000} {
+			facts := queueFacts{
+				queue: "q", available: available, capacityKnown: shape.known,
+				capacity: shape.capacity, running: shape.running, inside: shape.inside,
+				claimAge: time.Hour, stuckFor: 5 * time.Minute, window: window,
+			}
+			if got := judgeQueue(facts); got != verdictSlotStuck {
+				t.Errorf("%s available=%d: verdict %d, want verdictSlotStuck: the stuck arm must not depend on the backlog",
+					shape.name, available, got)
+			}
+		}
+	}
+}

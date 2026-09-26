@@ -272,23 +272,22 @@ WHERE id = '00000000-0000-4000-8000-000000000402'`); err != nil {
 	if err != nil || idempotent != state {
 		t.Fatalf("idempotent apply state=%+v want=%+v err=%v", idempotent, state, err)
 	}
-	// An out-of-band pause at the SAME generation: the migrated schema's trigger refuses a state change
-	// without a generation increase, so disable it for this one write (the drift ApplyCheckedIn must
-	// repair) and restore it.
+	// An out-of-band pause -- an operator's direct UPDATE. The migrated route table's generation
+	// trigger (trg_sync_dispatch_route_generation) refuses any state change that does not raise the
+	// generation, so the reachable form of this drift is a pause that bumps the generation; that is the
+	// state ApplyCheckedIn must repair. No trigger is disabled.
 	if _, err := pool.Exec(ctx, `
-ALTER TABLE public.sync_dispatch_transport_routes DISABLE TRIGGER trg_sync_dispatch_route_generation;
 UPDATE public.sync_dispatch_transport_routes
-SET paused = TRUE, paused_at = NOW()
-WHERE kind = 'reference_discovery';
-ALTER TABLE public.sync_dispatch_transport_routes ENABLE TRIGGER trg_sync_dispatch_route_generation`); err != nil {
+SET paused = TRUE, paused_at = NOW(), generation = generation + 1
+WHERE kind = 'reference_discovery'`); err != nil {
 		t.Fatal(err)
 	}
 	unpaused, err := controller.ApplyCheckedIn(ctx, syncdispatchcontract.KindReferenceDiscovery)
-	if err != nil || unpaused.Transport != syncdispatchcontract.RouteRiver || unpaused.Paused || unpaused.Generation != routeBaseGeneration+2 {
+	if err != nil || unpaused.Transport != syncdispatchcontract.RouteRiver || unpaused.Paused || unpaused.Generation != routeBaseGeneration+3 {
 		t.Fatalf("paused checked-in apply state=%+v err=%v", unpaused, err)
 	}
 	paused, err := controller.Pause(ctx, syncdispatchcontract.KindReferenceDiscovery)
-	if err != nil || !paused.Paused || paused.Transport != syncdispatchcontract.RouteRiver || paused.Generation != routeBaseGeneration+3 {
+	if err != nil || !paused.Paused || paused.Transport != syncdispatchcontract.RouteRiver || paused.Generation != routeBaseGeneration+4 {
 		t.Fatalf("rollback pause state=%+v err=%v", paused, err)
 	}
 	rolledBack, err := controller.Resume(
@@ -296,7 +295,7 @@ ALTER TABLE public.sync_dispatch_transport_routes ENABLE TRIGGER trg_sync_dispat
 		syncdispatchcontract.RouteCelery, time.Second,
 	)
 	if err != nil || rolledBack.Transport != syncdispatchcontract.RouteCelery ||
-		rolledBack.Paused || rolledBack.Generation != routeBaseGeneration+4 {
+		rolledBack.Paused || rolledBack.Generation != routeBaseGeneration+5 {
 		t.Fatalf("checked-in rollback state=%+v err=%v", rolledBack, err)
 	}
 }

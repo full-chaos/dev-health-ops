@@ -476,13 +476,30 @@ func TestRollbackSurfacesCelerySyncQuiesceProbeFailureAsUnavailableNotLiveClaims
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	// Deliberately have NO public.sync_run_units: the probe query fails exactly as it would during a
-	// database outage.
 	prepareRouteDB(ctx, t, pool, "sync.provider_unit", "river_canary", 1)
-	if _, err := pool.Exec(ctx, `DROP TABLE public.sync_run_units CASCADE`); err != nil {
+	// The probe fails as it does under a real database stall: another session holds ACCESS EXCLUSIVE
+	// on sync_run_units (a migration or maintenance lock) and the quiescer's pool runs under a
+	// statement_timeout, so the probe query errors with 57014 instead of answering. The real schema is
+	// untouched; no table is dropped.
+	lockTx, err := pool.Begin(ctx)
+	if err != nil {
 		t.Fatal(err)
 	}
-	quiescer, err := NewPostgresCelerySyncProviderQuiescer(pool)
+	defer func() { _ = lockTx.Rollback(context.Background()) }()
+	if _, err := lockTx.Exec(ctx, `LOCK TABLE public.sync_run_units IN ACCESS EXCLUSIVE MODE`); err != nil {
+		t.Fatal(err)
+	}
+	probeConfig, err := pgxpool.ParseConfig(instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	probeConfig.ConnConfig.RuntimeParams["statement_timeout"] = "300"
+	probePool, err := pgxpool.NewWithConfig(ctx, probeConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer probePool.Close()
+	quiescer, err := NewPostgresCelerySyncProviderQuiescer(probePool)
 	if err != nil {
 		t.Fatal(err)
 	}

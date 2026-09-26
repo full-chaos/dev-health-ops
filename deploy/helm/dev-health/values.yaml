@@ -598,7 +598,28 @@ goWorkers:
       resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "1", memory: 1Gi}}
       # CHAOS-5594: single queue, concurrency 4 -- queueDepthPerReplica 5
       # mirrors that headroom.
-      autoscaling: {enabled: true, minReplicas: 1, maxReplicas: 2, queueDepthPerReplica: 5, cooldownPeriod: 300, pollingInterval: 30}
+      #
+      # CHAOS-6938: the river_job trigger cannot see a unit that is planned but not yet
+      # dispatched (a row in public.sync_run_units, not a River job): on prod 442 planned,
+      # due units read as 0-5 and this group sat at 1 replica for hours. The extra trigger
+      # counts that backlog (SELECT on the table is granted to devhealth_keda_readonly by
+      # `dho migrate roles`); target 150 per replica makes 442 ask for the maximum. The
+      # maximum stays 2: a second worker pod adds 4 domain and 2 queue-session pooler
+      # clients, and the session-pool budget has no room for more (values.prod.yaml).
+      autoscaling:
+        enabled: true
+        minReplicas: 1
+        maxReplicas: 2
+        queueDepthPerReplica: 5
+        cooldownPeriod: 300
+        pollingInterval: 30
+        extraTriggers:
+          - name: planned-units
+            query: >-
+              SELECT count(*) FROM public.sync_run_units
+              WHERE status = 'planned'
+              AND (available_at IS NULL OR available_at <= now())
+            targetQueryValue: 150
     # Its own group, like the Celery fleet splits per queue. Fused with sync it
     # cannot start while provider routes are default-off: selected queues must
     # equal constructed queues, and no provider handler is built (CHAOS-3926).

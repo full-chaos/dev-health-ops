@@ -393,6 +393,15 @@ trigger's table, plus an explicit USAGE on schema `public`, CHAOS-6946) is provi
 `…-provision-roles` Helm hook as the three runtime logins
 (`provision_river_roles.sql`), whenever a `goWorkers` group has
 `autoscaling.enabled: true` -- no hand-run script needed.
+
+A group's ScaledObject renders the `river_job` trigger above and, for each entry of
+`autoscaling.extraTriggers` (`name`, `query`, `targetQueryValue`), one more `postgresql`
+trigger over the same pooler, login and TriggerAuthentication (KEDA scales to the largest
+answer). The river_job trigger cannot see a unit that is planned but not yet dispatched (a row
+of `public.sync_run_units`, not a River job), so the `sync` group carries a `planned-units`
+trigger (`status = 'planned'` and due, target 150 per replica, CHAOS-6938); a query may read
+only what the KEDA login holds SELECT on. `extraTriggers` on a group with
+`autoscaling.enabled: false` is refused at render time.
 6. Keep Celery consumers and Beat running during coexistence. A failed Go
    readiness, queue age threshold, or saturation threshold means scale the
    affected group back to zero; do not reroute work as a recovery action.

@@ -1062,32 +1062,51 @@ exact relations `dho query-api` reaches (`QueryAPIPosture`: the read plane, plus
 the saved-report mutation writes of CHAOS-6098), and the same list drives both
 sides:
 
-- `dho migrate river` REVOKEs ALL from the named role on the public and River
-  schemas and GRANTs exactly that manifest, in one transaction. It REFUSES
+- `dho migrate river` provisions the role from ONE enumeration
+  (`internal/storage/roleacl`): it removes every grant the role holds in its OWN
+  name, in every ACL-bearing catalog class and every schema (relations, columns,
+  schemas, functions, types, languages, large objects, default privileges, the
+  database, tablespaces, foreign data wrappers and servers, parameters) plus its
+  role-level settings, then grants exactly the manifest, the baseline (CONNECT on
+  this database, USAGE on `public`) included. It REFUSES
   (`ErrMigrationConfiguration`, before any statement runs) a role that is not an
-  eligible least-privilege login, that is the migration identity, or that OWNS
-  any database, schema, relation or function: pointing it at the registry owner
-  must never strip that owner. A role that does not exist yet is skipped with a
+  unprivileged login, is a member of another role, is the migration identity, or
+  OWNS anything: pointing it at the registry owner must never strip that owner.
+  PUBLIC's grants are not the role's to lose and are left alone (other roles rely
+  on them); the check names them. A role that does not exist yet is skipped with a
   warning.
-- query-api's `/readyz` is not ready (`postgres_posture`) until the pool
-  authenticates AS that role (`session_user` and `current_user` both the role: a
-  login that only ACTS as it, e.g. `options=-c role=...` on a wider credential,
-  is refused) and the role holds exactly the manifest: no more (an unlisted
-  SELECT, an extra write, a PUBLIC or membership grant, an owned object, any
-  River-schema privilege) and no less, AND holds no privilege at all outside
-  those schemas (any table-, column- or sequence-level privilege, or CREATE, in
-  another non-system schema). The migrate leg only REVOKEs on the public and
-  River schemas, so a grant elsewhere is refused loudly by the check, naming the
-  first one, never silently revoked; revoke it by hand. A database that grants
-  another schema's relations to PUBLIC therefore keeps the new pod NotReady
-  (the old ReplicaSet keeps serving) until that is revoked. The whole-catalog query takes 1.4-1.9 s
-  on the production catalog, longer than the 2 s probe timeout, so the probe
-  never runs it: the proof starts in the background when the process starts,
-  and `/readyz` reads the last answer without waiting (`CheckNoWait`). Until the
-  first run answers the role is unproven and the pod is NotReady (fail closed);
-  a refusal is served with its age and re-run every 2 s until fixed; a pass
-  counts for up to 5 minutes without a newer answer, then the pod is NotReady
-  again.
+- query-api's `/readyz` is not ready (`postgres_posture`) until ALL of:
+  1. **Identity:** the pool AUTHENTICATED as the role (`pg_stat_activity.usename` of
+     this backend, which neither `SET ROLE` nor `SET SESSION AUTHORIZATION`
+     changes, plus `session_user` and `current_user`), and the role is an
+     unprivileged login (no SUPERUSER, BYPASSRLS, CREATEROLE, CREATEDB,
+     REPLICATION) that is a member of no role.
+  2. The role owns nothing.
+  3. **Grants:** the set of EFFECTIVE grants the role holds, enumerated from every
+     ACL-bearing catalog with PUBLIC counted as granted to the role, EQUALS the
+     manifest plus the baseline: nothing extra, nothing missing, no grant option,
+     no role-level `ALTER ROLE ... SET`. A privilege kind nobody thought to check
+     cannot slip past a set-equality over a complete enumeration. Stated scope
+     (the exclusion predicate is the enumeration's own SQL): every schema except
+     `pg_catalog`, `information_schema`, `pg_toast*` and `pg_temp_*`, and every
+     object except those an EXTENSION owns (`pg_depend` deptype `e`); PUBLIC counts
+     as granted to the role, including PUBLIC EXECUTE on a SECURITY DEFINER
+     function; the ambient PUBLIC defaults on types, languages and
+     non-SECURITY-DEFINER functions (what every catalog has) are not counted;
+     other databases are out of scope.
+  4. **Resolution:** every manifest table resolves, unqualified, to its `public`
+     relation (the application's queries are unqualified, so a `search_path` that
+     hides the manifest would leave a Ready pod failing every request).
+  The whole-catalog query takes 1.4-1.9 s on the production catalog, longer than
+  the 2 s probe timeout, so the probe never runs it: the proof starts in the
+  background when the process starts, and `/readyz` reads the last answer without
+  waiting (`CheckNoWait`). Until the first run answers the role is unproven and the
+  pod is NotReady (fail closed); a refusal is served with its age and re-run every
+  2 s until fixed; a pass counts for up to 5 minutes without a newer answer, then
+  the pod is NotReady again. A grant the migrate leg cannot remove (PUBLIC's, or
+  one whose revoke the migration identity may not run) keeps the new pod NotReady
+  (the old ReplicaSet keeps serving) until an operator revokes it; the refusal names
+  the first one.
 
 Leaving `QUERY_API_DATABASE_ROLE` unset changes nothing. The completeness proof
 for the manifest is `TestQueryAPIRoleServesEveryPostgresPathItReaches`

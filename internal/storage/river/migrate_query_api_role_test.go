@@ -51,10 +51,13 @@ func TestMigrationOptionsValidateTheQueryAPIRoleLeg(t *testing.T) {
 	}
 }
 
-// The query-api leg is the api role's policy: REVOKE ALL first, so the role's
-// posture is a function of this migration alone, then one guarded GRANT per
-// declared relation with SELECT always present.
-func TestQueryAPIGrantStatementsRevokeThenGrantTheManifest(t *testing.T) {
+// The query-api leg's fixed statements are the GRANT half only: the baseline
+// (CONNECT on this database, USAGE on public) and one guarded GRANT per manifest
+// table, SELECT always present. The REVOKE half is not a fixed list: it is derived
+// at run time from roleacl.Enumerate (applyRuntimeGrants), so it covers every grant
+// the role holds in every class; TestQueryAPIMigrateLegLeavesTheRoleExactlyOnTheManifest
+// (storage/postgres, integration) pins that end to end.
+func TestQueryAPIGrantStatementsAreTheBaselineAndTheManifestOnly(t *testing.T) {
 	t.Parallel()
 	none := queryAPIOptions()
 	none.QueryAPIRole, none.QueryAPIGrants = "", nil
@@ -62,37 +65,25 @@ func TestQueryAPIGrantStatementsRevokeThenGrantTheManifest(t *testing.T) {
 		t.Fatalf("query-api statements without a role: %v", statements)
 	}
 
-	options := queryAPIOptions()
-	statements := queryAPIGrantStatements(options)
-	want := postureGrantStatements(options.QueryAPIRole, options.Schema, options.QueryAPIGrants, nil, nil)
+	statements := queryAPIGrantStatements(queryAPIOptions())
+	want := []string{
+		`DO $$ BEGIN EXECUTE format('GRANT CONNECT ON DATABASE %I TO %I', current_database(), 'dev_health_query_api'); END $$`,
+		`GRANT USAGE ON SCHEMA public TO "dev_health_query_api"`,
+		`DO $$ BEGIN IF to_regclass('public.saved_reports') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "public"."saved_reports" TO "dev_health_query_api"; END IF; END $$`,
+		`DO $$ BEGIN IF to_regclass('public.scheduled_jobs') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE "public"."scheduled_jobs" TO "dev_health_query_api"; END IF; END $$`,
+		`DO $$ BEGIN IF to_regclass('public.report_runs') IS NOT NULL THEN GRANT SELECT, INSERT ON TABLE "public"."report_runs" TO "dev_health_query_api"; END IF; END $$`,
+		`DO $$ BEGIN IF to_regclass('public.worker_job_outbox') IS NOT NULL THEN GRANT SELECT, INSERT ON TABLE "public"."worker_job_outbox" TO "dev_health_query_api"; END IF; END $$`,
+		`DO $$ BEGIN IF to_regclass('public.go_api_routing_state') IS NOT NULL THEN GRANT SELECT ON TABLE "public"."go_api_routing_state" TO "dev_health_query_api"; END IF; END $$`,
+		`DO $$ BEGIN IF to_regclass('public.organizations') IS NOT NULL THEN GRANT SELECT ON TABLE "public"."organizations" TO "dev_health_query_api"; END IF; END $$`,
+	}
 	if !reflect.DeepEqual(statements, want) {
-		t.Fatalf("query-api statements are not the shared role-posture policy:\n%s", strings.Join(statements, "\n"))
+		t.Fatalf("statements:\n%s\nwant:\n%s", strings.Join(statements, "\n"), strings.Join(want, "\n"))
 	}
-	joined := strings.Join(statements, "\n")
-	for _, needle := range []string{
-		`REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM "dev_health_query_api"`,
-		`REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA "river" FROM "dev_health_query_api"`,
-		`GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "public"."saved_reports" TO "dev_health_query_api"`,
-		`GRANT SELECT ON TABLE "public"."go_api_routing_state" TO "dev_health_query_api"`,
-		`GRANT SELECT ON TABLE "public"."organizations" TO "dev_health_query_api"`,
-	} {
-		if !strings.Contains(joined, needle) {
-			t.Errorf("missing statement %q in:\n%s", needle, joined)
+	// A fixed REVOKE here would be the per-kind enumeration D2616 replaced.
+	for _, statement := range statements {
+		if strings.Contains(strings.ToUpper(statement), "REVOKE") {
+			t.Fatalf("a fixed statement revokes (the revoke half is the enumeration's): %s", statement)
 		}
-	}
-	// The REVOKEs must precede every GRANT: a GRANT before the REVOKE ALL would
-	// be wiped by it.
-	lastRevoke, firstGrant := -1, len(statements)
-	for i, statement := range statements {
-		if strings.HasPrefix(statement, "REVOKE") && i > lastRevoke {
-			lastRevoke = i
-		}
-		if strings.Contains(statement, "GRANT SELECT") && i < firstGrant {
-			firstGrant = i
-		}
-	}
-	if lastRevoke > firstGrant {
-		t.Fatalf("a REVOKE (index %d) follows a table GRANT (index %d)", lastRevoke, firstGrant)
 	}
 }
 

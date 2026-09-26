@@ -14,6 +14,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivermigrate"
+
+	"github.com/full-chaos/dev-health-ops/internal/storage/roleacl"
 )
 
 const (
@@ -298,37 +300,8 @@ func ApplyPinnedMigrations(
 			ctx,
 			`SELECT
 				EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = $1),
-				EXISTS (
-					SELECT 1 FROM pg_catalog.pg_roles
-					WHERE rolname = $1
-						AND rolcanlogin
-						AND NOT rolsuper
-						AND NOT rolcreatedb
-						AND NOT rolcreaterole
-						AND NOT rolreplication
-						AND NOT rolbypassrls
-				),
-				NOT EXISTS (
-					SELECT 1 FROM pg_catalog.pg_roles AS identity
-					JOIN pg_catalog.pg_database AS object ON object.datdba = identity.oid
-					WHERE identity.rolname = $1
-				)
-				AND NOT EXISTS (
-					SELECT 1 FROM pg_catalog.pg_roles AS identity
-					JOIN pg_catalog.pg_namespace AS object ON object.nspowner = identity.oid
-					WHERE identity.rolname = $1
-				)
-				AND NOT EXISTS (
-					SELECT 1 FROM pg_catalog.pg_roles AS identity
-					JOIN pg_catalog.pg_class AS object ON object.relowner = identity.oid
-						AND object.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')
-					WHERE identity.rolname = $1
-				)
-				AND NOT EXISTS (
-					SELECT 1 FROM pg_catalog.pg_roles AS identity
-					JOIN pg_catalog.pg_proc AS object ON object.proowner = identity.oid
-					WHERE identity.rolname = $1
-				)`,
+				`+roleacl.RoleAttributesSQL+` AND `+roleacl.MembershipFreeSQL+`,
+				`+roleacl.OwnsNothingSQL,
 			options.QueryAPIRole,
 		).Scan(&queryAPIRoleExists, &queryAPIRoleEligible, &queryAPIRoleOwnsNothing); err != nil {
 			return MigrationResult{}, migrationStageError("read query-api role")
@@ -839,6 +812,23 @@ func validIdentifier(value string) bool {
 }
 
 func applyRuntimeGrants(ctx context.Context, tx pgx.Tx, options MigrationOptions) error {
+	if options.QueryAPIRole != "" {
+		// CHAOS-6804 (lead D2616): the query-api role is provisioned from the SAME
+		// enumeration the readiness check reads. Remove every grant it holds in its
+		// own name, in every catalog class and schema (roleacl.RevokeStatements),
+		// then grant exactly the manifest below: its posture is a function of this
+		// migration alone. PUBLIC's grants are not the role's to lose and stay for
+		// the check to name.
+		revokes, err := roleacl.RevokeStatements(ctx, tx, options.QueryAPIRole)
+		if err != nil {
+			return fmt.Errorf("enumerate the query-api role's grants")
+		}
+		for _, statement := range revokes {
+			if _, err := tx.Exec(ctx, statement); err != nil {
+				return fmt.Errorf("revoke the query-api role's grants")
+			}
+		}
+	}
 	for _, statement := range runtimeGrantStatements(options) {
 		if _, err := tx.Exec(ctx, statement); err != nil {
 			return fmt.Errorf("apply River runtime privilege policy")
@@ -1030,14 +1020,39 @@ func runtimeGrantStatements(options MigrationOptions) []string {
 		queryAPIGrantStatements(options)...)...)
 }
 
-// queryAPIGrantStatements is the query-api role's privilege policy, built
-// exactly as the api role's: REVOKE ALL, then the grants injected from
-// postgres.QueryAPIPosture(). Returns nil when no query-api role applies.
+// queryAPIGrantStatements is the GRANT half of the query-api role's policy: the
+// baseline (CONNECT on this database, USAGE on the public schema) and one guarded
+// GRANT per manifest table. The REVOKE half is not a fixed list: it is derived at
+// run time from roleacl.Enumerate (see applyRuntimeGrants), so it covers every
+// grant the role holds, in every class, however it got there. Returns nil when no
+// query-api role applies.
 func queryAPIGrantStatements(options MigrationOptions) []string {
 	if options.QueryAPIRole == "" {
 		return nil
 	}
-	return postureGrantStatements(options.QueryAPIRole, options.Schema, options.QueryAPIGrants, nil, nil)
+	role := pgx.Identifier{options.QueryAPIRole}.Sanitize()
+	statements := []string{
+		"DO $$ BEGIN EXECUTE format('GRANT CONNECT ON DATABASE %I TO %I', current_database(), '" + options.QueryAPIRole + "'); END $$",
+		"GRANT USAGE ON SCHEMA public TO " + role,
+	}
+	for _, grant := range options.QueryAPIGrants {
+		privileges := "SELECT"
+		if grant.AllowInsert {
+			privileges += ", INSERT"
+		}
+		if grant.AllowUpdate {
+			privileges += ", UPDATE"
+		}
+		if grant.AllowDelete {
+			privileges += ", DELETE"
+		}
+		statements = append(statements,
+			"DO $$ BEGIN IF to_regclass('public."+grant.TableName+"') IS NOT NULL THEN GRANT "+
+				privileges+" ON TABLE "+pgx.Identifier{"public", grant.TableName}.Sanitize()+
+				" TO "+role+"; END IF; END $$",
+		)
+	}
+	return statements
 }
 
 // coordinatorGrantStatements emits the coordinator role's privilege policy

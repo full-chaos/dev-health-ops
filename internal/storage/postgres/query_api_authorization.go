@@ -4,9 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/full-chaos/dev-health-ops/internal/storage/roleacl"
 )
 
 // queryAPIPosture is the query-api Service's full, hold-exactly Postgres
@@ -83,92 +86,130 @@ func QueryAPIPosture() RolePosture {
 	return queryAPIPosture()
 }
 
-// CheckQueryAPIAuthorization is query-api's readiness check when the
-// deployment names a query-api role (QUERY_API_DATABASE_ROLE). It proves three
-// things, in this order, and nothing passes unless all three do:
+// CheckQueryAPIAuthorization is query-api's readiness check when the deployment
+// names a query-api role (QUERY_API_DATABASE_ROLE). "Holds exactly the manifest" is
+// defined ONCE (CHAOS-6804, lead D2616), over the role's EFFECTIVE grants, and
+// every part must hold:
 //
-//  1. The pool authenticated AS the role: session_user (the login the DSN
-//     carries) and current_user are both the named role. A login that only
-//     ACTS as the role (a startup option `-c role=...`, a SET ROLE in the DSN)
-//     still holds its own, wider credential and could RESET ROLE, so it is
-//     refused (CHAOS-6804 r1). The shared posture query below reads only
-//     current_user, so this is checked here, first.
-//  2. The role holds exactly queryAPIPosture's manifest, no more and no less, by
-//     any route, on the public and River schemas (CheckRolePosture).
-//  3. The role holds NO privilege outside those schemas either: no privilege on
-//     any relation or sequence, and no CREATE on any schema, in any other
-//     non-system schema (CHAOS-6804 r1). The migrate leg only revokes on the
-//     public and River schemas, so a grant elsewhere is REFUSED here, loudly
-//     and naming the first one, never silently revoked.
+//  1. Identity (roleacl.IdentityPredicateSQL): the pool AUTHENTICATED as the role,
+//     which is an unprivileged, membership-free login.
+//  2. The role owns nothing (roleacl.OwnsNothingSQL).
+//  3. The set of effective grants the role holds, enumerated from EVERY
+//     ACL-bearing catalog with PUBLIC counted as granted to the role and its
+//     role-level settings included (roleacl.Enumerate), EQUALS the manifest plus
+//     the baseline (CONNECT on this database, USAGE on the public schema): no
+//     grant outside it, none of it missing. A privilege kind nobody thought to
+//     check cannot slip past a set-equality over a complete enumeration.
+//  4. Every manifest table resolves, UNQUALIFIED, to its public relation: the
+//     application's queries are unqualified, so a search_path that hides the
+//     manifest (a DSN parameter; a role setting is caught by 3) would leave a
+//     Ready pod failing every request.
 //
 // It is meant to run only when a role is NAMED; a deployment that names none has
-// not opted in and the caller must not call it. It has the same cost as every
-// whole-catalog posture query (1.4-1.9 s on the production catalog,
-// CHAOS-6765), so query-api runs it through NewCachedQueryAPIPostureCheck and
-// never per probe.
+// not opted in and the caller must not call it. It costs a whole-catalog scan
+// (1.4-1.9 s on the production catalog, CHAOS-6765), so query-api runs it through
+// NewCachedQueryAPIPostureCheck and never per probe.
 func CheckQueryAPIAuthorization(ctx context.Context, pool *pgxpool.Pool, expectedRole, riverSchema string) error {
 	if pool == nil || !validRuntimeIdentifier(expectedRole) || !validRuntimeIdentifier(riverSchema) {
 		return ErrUnavailable
 	}
-	var sessionUser, currentUser string
-	if err := pool.QueryRow(ctx, "SELECT session_user::text, current_user::text").Scan(&sessionUser, &currentUser); err != nil {
-		return fmt.Errorf("%w: reading the active login: %w", ErrUnavailable, err)
-	}
-	if sessionUser != expectedRole || currentUser != expectedRole {
-		return fmt.Errorf("%w: %w: the pool authenticated as %q and acts as %q, not the named query-api role %q",
-			ErrUnavailable, ErrPostureRefused, sessionUser, currentUser, expectedRole)
-	}
-	if err := CheckRolePosture(ctx, pool, expectedRole, riverSchema, queryAPIPosture()); err != nil {
+	if err := checkRoleIdentity(ctx, pool, expectedRole); err != nil {
 		return err
 	}
-	var outside *string
-	err := pool.QueryRow(ctx, queryAPIOutsideManagedSchemasQuery, riverSchema).Scan(&outside)
+	var ownsNothing bool
+	if err := pool.QueryRow(ctx, "SELECT "+roleacl.OwnsNothingSQL, expectedRole).Scan(&ownsNothing); err != nil {
+		return fmt.Errorf("%w: reading ownership: %w", ErrUnavailable, err)
+	}
+	if !ownsNothing {
+		return refuseQueryAPI(expectedRole, "the role owns an object (a database, schema, relation or function)")
+	}
+	var database string
+	if err := pool.QueryRow(ctx, "SELECT current_database()::text").Scan(&database); err != nil {
+		return fmt.Errorf("%w: reading the database name: %w", ErrUnavailable, err)
+	}
+	grants, err := roleacl.Enumerate(ctx, pool, expectedRole)
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrUnavailable, err)
+	}
+	if mismatch := diffQueryAPIGrants(database, queryAPIPosture(), grants); mismatch != "" {
+		return refuseQueryAPI(expectedRole, mismatch)
+	}
+	tableNames := make([]string, len(queryAPIPosture().RequiredTables))
+	for i, table := range queryAPIPosture().RequiredTables {
+		tableNames[i] = table.TableName
+	}
+	var unresolved *string
+	err = pool.QueryRow(ctx, `SELECT t FROM unnest($1::text[]) AS t
+		WHERE to_regclass(quote_ident(t)) IS DISTINCT FROM to_regclass('public.' || quote_ident(t))
+		ORDER BY t LIMIT 1`, tableNames).Scan(&unresolved)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
-		return nil
 	case err != nil:
-		return fmt.Errorf("%w: reading privileges outside the managed schemas: %w", ErrUnavailable, err)
-	case outside != nil:
-		return fmt.Errorf("%w: %w for role %q: holds a privilege outside the public and %s schemas: %s",
-			ErrUnavailable, ErrPostureRefused, expectedRole, riverSchema, *outside)
+		return fmt.Errorf("%w: checking name resolution: %w", ErrUnavailable, err)
+	case unresolved != nil:
+		return refuseQueryAPI(expectedRole, fmt.Sprintf("%q does not resolve, unqualified, to public.%s: the connection's search_path hides the manifest", *unresolved, *unresolved))
 	}
 	return nil
 }
 
-// queryAPIOutsideManagedSchemasQuery finds the first privilege the calling role
-// holds, by any route (direct, PUBLIC, membership), on a relation or sequence in
-// a schema other than public, the River schema ($1) and the system schemas, or
-// CREATE on such a schema. Read-only; catalog only.
-const queryAPIOutsideManagedSchemasQuery = `
-SELECT found FROM (
-	SELECT n.nspname || '.' || c.relname AS found
-	FROM pg_catalog.pg_class AS c
-	JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace
-	WHERE n.nspname NOT IN ('public', $1::text, 'pg_catalog', 'information_schema')
-		AND n.nspname NOT LIKE 'pg\_toast%'
-		AND n.nspname NOT LIKE 'pg\_temp\_%'
-		AND (
-			(c.relkind IN ('r', 'p', 'v', 'm', 'f') AND (
-				has_table_privilege(current_user, c.oid, 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER')
-				OR has_any_column_privilege(current_user, c.oid, 'SELECT, INSERT, UPDATE, REFERENCES')))
-			OR (c.relkind = 'S' AND has_sequence_privilege(current_user, c.oid, 'USAGE, SELECT, UPDATE'))
-		)
-	UNION ALL
-	SELECT n.nspname AS found
-	FROM pg_catalog.pg_namespace AS n
-	WHERE n.nspname NOT IN ('public', $1::text, 'pg_catalog', 'information_schema')
-		AND n.nspname NOT LIKE 'pg\_toast%'
-		AND n.nspname NOT LIKE 'pg\_temp\_%'
-		AND has_schema_privilege(current_user, n.oid, 'CREATE')
-) AS outside
-ORDER BY found
-LIMIT 1`
+func refuseQueryAPI(role, mismatch string) error {
+	return fmt.Errorf("%w: %w for role %q: %s", ErrUnavailable, ErrPostureRefused, role, mismatch)
+}
+
+// diffQueryAPIGrants compares the enumerated grants with the manifest plus the
+// baseline and names the first difference ("" when they are equal). Extra grants
+// are reported in enumeration order (sorted), then missing ones (sorted), so the
+// answer is deterministic.
+func diffQueryAPIGrants(database string, posture RolePosture, grants []roleacl.Grant) string {
+	key := func(class, object, privilege string) string { return class + "\x00" + object + "\x00" + privilege }
+	allowed := map[string]struct{}{
+		key("database", database, "CONNECT"): {},
+		key("schema", "public", "USAGE"):     {},
+	}
+	// Baseline members that must be present: the schema USAGE (unqualified
+	// resolution needs it). CONNECT is implied by the login that is running this.
+	required := map[string]string{key("schema", "public", "USAGE"): "USAGE on schema public"}
+	for _, table := range posture.RequiredTables {
+		object := "public." + table.TableName
+		privileges := []string{"SELECT"}
+		if table.AllowInsert {
+			privileges = append(privileges, "INSERT")
+		}
+		if table.AllowUpdate {
+			privileges = append(privileges, "UPDATE")
+		}
+		if table.AllowDelete {
+			privileges = append(privileges, "DELETE")
+		}
+		for _, privilege := range privileges {
+			allowed[key("relation", object, privilege)] = struct{}{}
+			required[key("relation", object, privilege)] = privilege + " on relation " + object
+		}
+	}
+	held := map[string]struct{}{}
+	for _, grant := range grants {
+		k := key(grant.Class, grant.Object, grant.Privilege)
+		held[k] = struct{}{}
+		if _, ok := allowed[k]; !ok {
+			return "holds " + grant.String() + ", which is outside the manifest"
+		}
+	}
+	var missing []string
+	for k, description := range required {
+		if _, ok := held[k]; !ok {
+			missing = append(missing, description)
+		}
+	}
+	if len(missing) > 0 {
+		sort.Strings(missing)
+		return "lacks " + missing[0]
+	}
+	return ""
+}
 
 // NewCachedQueryAPIPostureCheck is the query-api's cached, single-flight,
-// non-blocking posture check: CheckQueryAPIAuthorization (identity, manifest,
-// nothing outside the managed schemas) behind the same cache every posture-checked
-// service uses. Use it, not NewCachedPostureCheck, or the two extra proofs above
-// never run.
+// non-blocking posture check over CheckQueryAPIAuthorization. Use it, not
+// NewCachedPostureCheck, or the definition above never runs.
 func NewCachedQueryAPIPostureCheck(
 	pool *pgxpool.Pool, expectedRole, riverSchema string, options PostureCheckOptions,
 ) *CachedPostureCheck {

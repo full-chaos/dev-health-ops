@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
@@ -115,6 +117,23 @@ func ExecuteRoles(
 	}
 	defer pool.Close()
 
+	// Verify logs in as each role with the supplied password, on the same direct
+	// endpoint the migration used: a stale password on a login that already existed
+	// (never rotated here) is then reported instead of passing as "provisioned".
+	options.Authenticate = func(authCtx context.Context, role roleprovision.Role) error {
+		config, err := pgx.ParseConfig(migrationURI.Reveal())
+		if err != nil {
+			return err
+		}
+		config.User, config.Password = role.Name, role.Password
+		attemptCtx, attemptCancel := context.WithTimeout(authCtx, 15*time.Second)
+		defer attemptCancel()
+		connection, err := pgx.ConnectConfig(attemptCtx, config)
+		if err != nil {
+			return err
+		}
+		return connection.Close(attemptCtx)
+	}
 	if !*check {
 		if err := roleprovision.Apply(ctx, pool, options); err != nil {
 			// roleprovision's errors carry no password and no server text.

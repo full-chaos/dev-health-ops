@@ -5,6 +5,7 @@ package rivermigrate_test
 import (
 	"bytes"
 	"context"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -193,5 +194,121 @@ func TestMigrateRolesUsesRoleNamesExactlyAsConfiguredAndRefusesWhatRiverWouldRef
 		if err := admin.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = $1)`, name).Scan(&exact); err != nil || !exact {
 			t.Errorf("no role named exactly %q was created: %v", name, err)
 		}
+	}
+}
+
+// r2 P1-b: no role name (which Compose defaults to the role's own PASSWORD) may reach
+// the output when provisioning fails.
+func TestMigrateRolesFailureNeverPrintsAConfiguredRoleNameOrPassword(t *testing.T) {
+	ctx := context.Background()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = instance.Close(context.Background()) })
+	admin, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(admin.Close)
+	// A migration login that can connect but may not CREATE ROLE.
+	if _, err := admin.Exec(ctx, `CREATE ROLE weak_migrator LOGIN PASSWORD 'weak-pw'`); err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := url.Parse(instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed.User = url.UserPassword("weak_migrator", "weak-pw")
+	weakURI := parsed.String()
+	settings := map[string]string{
+		"MIGRATION_DATABASE_URI":              weakURI,
+		"RIVER_DOMAIN_DATABASE_ROLE":          "review_secret",
+		"RIVER_QUEUE_DATABASE_ROLE":           "queue_secret",
+		"RIVER_COORDINATOR_DATABASE_ROLE":     "coordinator_secret",
+		"RIVER_DOMAIN_DATABASE_PASSWORD":      "review_secret",
+		"RIVER_QUEUE_DATABASE_PASSWORD":       "queue_secret",
+		"RIVER_COORDINATOR_DATABASE_PASSWORD": "coordinator_secret",
+	}
+	lookup := func(key string) (string, bool) { value, ok := settings[key]; return value, ok }
+	var stdout, stderr bytes.Buffer
+	code := rivermigrate.ExecuteRoles(ctx, "dho", nil, lookup, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("a migration login that cannot CREATE ROLE must fail: exit %d\n%s\n%s", code, stdout.String(), stderr.String())
+	}
+	output := stdout.String() + stderr.String()
+	for _, secret := range []string{"review_secret", "queue_secret", "coordinator_secret"} {
+		if strings.Contains(output, secret) {
+			t.Errorf("the failure output contains %q (a role name that is also a password):\n%s", secret, output)
+		}
+	}
+	if !strings.Contains(output, "domain") {
+		t.Errorf("the failure must still name the role LABEL:\n%s", output)
+	}
+}
+
+// r2 P1-c: an existing login keeps its password (never rotated) and a supplied
+// password that does not authenticate fails the command, naming the role label.
+func TestMigrateRolesFailsWhenAnExistingLoginHasADifferentPasswordAndChangesNothing(t *testing.T) {
+	ctx := context.Background()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = instance.Close(context.Background()) })
+	admin, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(admin.Close)
+	if _, err := admin.Exec(ctx, `CREATE ROLE stale_domain LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD 'old-domain-pass'`); err != nil {
+		t.Fatal(err)
+	}
+	settings := map[string]string{
+		"MIGRATION_DATABASE_URI":              instance.URI,
+		"RIVER_DOMAIN_DATABASE_ROLE":          "stale_domain",
+		"RIVER_QUEUE_DATABASE_ROLE":           "stale_queue",
+		"RIVER_COORDINATOR_DATABASE_ROLE":     "stale_coordinator",
+		"RIVER_DOMAIN_DATABASE_PASSWORD":      "new-domain-pass",
+		"RIVER_QUEUE_DATABASE_PASSWORD":       "queue-pass-ok",
+		"RIVER_COORDINATOR_DATABASE_PASSWORD": "coordinator-pass-ok",
+	}
+	lookup := func(key string) (string, bool) { value, ok := settings[key]; return value, ok }
+	var stdout, stderr bytes.Buffer
+	code := rivermigrate.ExecuteRoles(ctx, "dho", nil, lookup, &stdout, &stderr)
+	output := stdout.String() + stderr.String()
+	if code != 1 || !strings.Contains(output, "does not authenticate") {
+		t.Fatalf("a stale password must fail the command: exit %d\n%s", code, output)
+	}
+	for _, secret := range []string{"old-domain-pass", "new-domain-pass", "queue-pass-ok", "coordinator-pass-ok"} {
+		if strings.Contains(output, secret) {
+			t.Errorf("a password leaked into the output: %q", secret)
+		}
+	}
+	login := func(user, password string) bool {
+		config, err := pgxpool.ParseConfig(instance.URI)
+		if err != nil {
+			t.Fatal(err)
+		}
+		config.ConnConfig.User, config.ConnConfig.Password = user, password
+		pool, err := pgxpool.NewWithConfig(ctx, config)
+		if err != nil {
+			return false
+		}
+		defer pool.Close()
+		return pool.Ping(ctx) == nil
+	}
+	if !login("stale_domain", "old-domain-pass") || login("stale_domain", "new-domain-pass") {
+		t.Fatal("the existing role's password must be left exactly as it was")
+	}
+	if !login("stale_queue", "queue-pass-ok") {
+		t.Fatal("the roles the command created must authenticate with the supplied passwords")
+	}
+	// --check reports the same, and changes nothing.
+	stdout.Reset()
+	stderr.Reset()
+	if code := rivermigrate.ExecuteRoles(ctx, "dho", []string{"--check"}, lookup, &stdout, &stderr); code != 1 ||
+		!strings.Contains(stdout.String()+stderr.String(), "does not authenticate") {
+		t.Fatalf("--check must report the stale password: exit %d\n%s\n%s", code, stdout.String(), stderr.String())
 	}
 }

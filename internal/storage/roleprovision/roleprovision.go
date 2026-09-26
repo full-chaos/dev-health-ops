@@ -36,6 +36,7 @@ import (
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
 	"github.com/full-chaos/dev-health-ops/internal/storage/roleacl"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // MaxIdentifierBytes is PostgreSQL's identifier limit (NAMEDATALEN-1). The server
@@ -61,6 +62,10 @@ type Options struct {
 	// schema it may read (default "river").
 	Keda        Role
 	RiverSchema string
+	// Authenticate, when set, is asked to log in as a role with the password it was
+	// given; Verify uses it to notice a supplied password that does not work for a
+	// login that already existed (Apply never rotates one).
+	Authenticate func(ctx context.Context, role Role) error
 }
 
 // Errors carry no password, and no DSN.
@@ -208,8 +213,11 @@ func Apply(ctx context.Context, pool interface {
 	}
 
 	// The mandatory block, in the script's order.
-	for _, role := range []Role{options.Domain, options.Queue, options.Coordinator} {
-		if err := step("create "+role.Name, run.generated(ctx, createRoleSQL, role)); err != nil {
+	// Errors name the role LABEL, never its name: Compose defaults each role's
+	// password to the role's own name, so a name in an error or log line can be a
+	// password.
+	for _, entry := range []labelled{{"domain", options.Domain}, {"queue", options.Queue}, {"coordinator", options.Coordinator}} {
+		if err := step("create the "+entry.label+" role", run.generated(ctx, createRoleSQL, entry.role)); err != nil {
 			return err
 		}
 	}
@@ -232,11 +240,12 @@ func Apply(ctx context.Context, pool interface {
 	}
 
 	// api and query-api: the same bootstrap shape, TEMPORARY also revoked from PUBLIC.
-	for _, role := range []Role{options.API, options.QueryAPI} {
+	for _, entry := range []labelled{{"api", options.API}, {"query_api", options.QueryAPI}} {
+		role := entry.role
 		if role.Name == "" {
 			continue
 		}
-		if err := step("create "+role.Name, run.generated(ctx, createRoleSQL, role)); err != nil {
+		if err := step("create the "+entry.label+" role", run.generated(ctx, createRoleSQL, role)); err != nil {
 			return err
 		}
 		name := ident(role.Name)
@@ -256,7 +265,7 @@ func Apply(ctx context.Context, pool interface {
 	if options.Keda.Name != "" {
 		name := ident(options.Keda.Name)
 		schema := ident(options.schema())
-		if err := step("create "+options.Keda.Name, run.generated(ctx, createRoleSQL, options.Keda)); err != nil {
+		if err := step("create the keda role", run.generated(ctx, createRoleSQL, options.Keda)); err != nil {
 			return err
 		}
 		if err := step("keda password", run.generated(ctx, setPasswordSQL, options.Keda)); err != nil {
@@ -315,6 +324,20 @@ func Verify(ctx context.Context, q roleacl.Querier, options Options) (problems [
 		if !login {
 			problems = append(problems, Problem{entry.label, "is not an unprivileged login (missing, or SUPERUSER/BYPASSRLS/CREATEROLE/CREATEDB/REPLICATION, or NOLOGIN)"})
 			continue
+		}
+		// The supplied password must actually work for the login (an existing login keeps
+		// its old password: Apply never rotates one). A wrong password is definitive
+		// (SQLSTATE 28P01); anything else (pg_hba, network) only means this endpoint
+		// cannot check, which must not block a deploy.
+		if options.Authenticate != nil {
+			if authErr := options.Authenticate(ctx, entry.role); authErr != nil {
+				var pgErr *pgconn.PgError
+				if errors.As(authErr, &pgErr) && pgErr.Code == "28P01" {
+					problems = append(problems, Problem{entry.label, "the supplied password does not authenticate (an existing role keeps its old password; this command never rotates one)"})
+				} else {
+					warnings = append(warnings, Problem{entry.label, "could not verify the supplied password from this endpoint"})
+				}
+			}
 		}
 		var connect, temporary, usage, create bool
 		var direct bool
@@ -375,6 +398,15 @@ func Verify(ctx context.Context, q roleacl.Querier, options Options) (problems [
 			}
 		}
 		if entry.label == "keda" {
+			// Read-only in EFFECT: a role membership hides privileges from the role's own
+			// ACL entries, so KEDA is membership-free like the runtime roles.
+			var kedaMemberFree bool
+			if err := q.QueryRow(ctx, `SELECT `+roleacl.MembershipFreeSQL, entry.role.Name).Scan(&kedaMemberFree); err != nil {
+				return nil, nil, fmt.Errorf("%w: cannot read the KEDA role's memberships", ErrProvisioning)
+			}
+			if !kedaMemberFree {
+				problems = append(problems, Problem{entry.label, "is a member of another role (privileges it inherits are invisible to its own grants)"})
+			}
 			var readsJobs bool
 			if err := q.QueryRow(ctx, `SELECT has_schema_privilege($1::name, $2::name, 'USAGE')
 				AND has_table_privilege($1::name, format('%I.river_job', $2::text), 'SELECT')`,
@@ -393,8 +425,20 @@ func Verify(ctx context.Context, q roleacl.Querier, options Options) (problems [
 				return nil, nil, fmt.Errorf("%w: cannot enumerate the KEDA role's grants", ErrProvisioning)
 			}
 			for _, grant := range grants {
-				if grant.ViaPublic || grant.Class == "setting" || kedaGrantExpected(grant, database, options.schema()) {
+				if grant.Class == "setting" || kedaGrantExpected(grant, database, options.schema()) {
 					continue
+				}
+				// PUBLIC-derived grants count for KEDA (it has no later readiness check):
+				// what PUBLIC hands EVERY role (CONNECT here, USAGE on public) is ambient,
+				// CREATE on public is the target-wide default the others warn about, and
+				// anything else it holds through PUBLIC is a problem like a direct grant.
+				if grant.ViaPublic {
+					if publicAmbient(grant, database) {
+						continue
+					}
+					if grant.Class == "schema" && grant.Object == "public" && grant.Privilege == "CREATE" {
+						continue
+					}
 				}
 				problems = append(problems, Problem{entry.label, "holds an unexpected privilege: " + grant.String()})
 			}
@@ -437,4 +481,10 @@ func runtimeGrantOutOfScope(grant roleacl.Grant, database string) bool {
 		return true
 	}
 	return false
+}
+
+// publicAmbient is what PUBLIC gives every role on a stock database.
+func publicAmbient(grant roleacl.Grant, database string) bool {
+	return (grant.Class == "database" && grant.Object == database && grant.Privilege == "CONNECT") ||
+		(grant.Class == "schema" && grant.Object == "public" && grant.Privilege == "USAGE")
 }

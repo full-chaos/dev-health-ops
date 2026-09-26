@@ -18,6 +18,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/storage/roleacl"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivermigrate"
@@ -645,5 +646,88 @@ func TestVerifyRuntimeRolesHoldOnlyWhatRolesAndRiverGrantOfAnyCatalogClass(t *te
 	}
 	if problems, warnings, err := Verify(ctx, s.admin, options); err != nil || len(problems)+len(warnings) != 0 {
 		t.Fatalf("not clean after restore: %v %v %v", problems, warnings, err)
+	}
+}
+
+// r2 P1-a: the KEDA login is read-only in EFFECT: a write it holds through PUBLIC or
+// through a role membership is as bad as one granted to it directly.
+func TestVerifyRefusesAKedaRoleThatCanWriteThroughPublicOrAMembership(t *testing.T) {
+	t.Parallel()
+	s := startSide(t)
+	options := testOptions(true)
+	s.runGo(t, options)
+	ctx := context.Background()
+	for name, test := range map[string]struct {
+		break_  []string
+		restore []string
+		detail  string
+	}{
+		"UPDATE through PUBLIC": {
+			[]string{"GRANT UPDATE ON river.river_job TO PUBLIC"},
+			[]string{"REVOKE UPDATE ON river.river_job FROM PUBLIC"}, "unexpected privilege"},
+		"a membership that carries UPDATE": {
+			[]string{"CREATE ROLE writers NOLOGIN", "GRANT UPDATE ON river.river_job TO writers", "GRANT writers TO parity_keda"},
+			[]string{"REVOKE writers FROM parity_keda", "REVOKE UPDATE ON river.river_job FROM writers", "DROP ROLE writers"}, "member of another role"},
+	} {
+		for _, statement := range test.break_ {
+			if _, err := s.admin.Exec(ctx, statement); err != nil {
+				t.Fatalf("%s: %v", name, err)
+			}
+		}
+		problems, _, err := Verify(ctx, s.admin, options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		matched := false
+		for _, item := range problems {
+			if item.Role == "keda" && strings.Contains(item.Detail, test.detail) {
+				matched = true
+			}
+		}
+		if !matched {
+			t.Errorf("%s: the KEDA role can write but Verify is green: %v", name, problems)
+		}
+		for _, statement := range test.restore {
+			if _, err := s.admin.Exec(ctx, statement); err != nil {
+				t.Fatalf("%s restore: %v", name, err)
+			}
+		}
+	}
+	if problems, warnings, err := Verify(ctx, s.admin, options); err != nil || len(problems)+len(warnings) != 0 {
+		t.Fatalf("not clean after restore: %v %v %v", problems, warnings, err)
+	}
+}
+
+// r2 P1-c at the library seam: an Authenticate closure classifies a password
+// mismatch (28P01) as a problem and any other failure as a warning; nothing changes.
+func TestVerifyAuthenticatesTheSuppliedPasswords(t *testing.T) {
+	t.Parallel()
+	s := startSide(t)
+	options := testOptions(true)
+	s.runGo(t, options)
+	ctx := context.Background()
+	options.Authenticate = func(ctx context.Context, role Role) error {
+		switch role.Name {
+		case "parity_domain":
+			return &pgconn.PgError{Code: "28P01", Message: "password authentication failed"}
+		case "parity_queue":
+			return &pgconn.PgError{Code: "28000", Message: "no pg_hba.conf entry"}
+		}
+		return nil
+	}
+	problems, warnings, err := Verify(ctx, s.admin, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(problems) != 1 || problems[0].Role != "domain" || !strings.Contains(problems[0].Detail, "does not authenticate") {
+		t.Errorf("a 28P01 must be a problem naming the domain label: %v", problems)
+	}
+	if len(warnings) != 1 || warnings[0].Role != "queue" || !strings.Contains(warnings[0].Detail, "could not verify") {
+		t.Errorf("any other failure must be a warning naming the queue label: %v", warnings)
+	}
+	for _, item := range append(append([]Problem{}, problems...), warnings...) {
+		if strings.Contains(item.String(), "parity_") || strings.Contains(item.String(), "pw") {
+			t.Errorf("a role name or password leaked into %q", item.String())
+		}
 	}
 }

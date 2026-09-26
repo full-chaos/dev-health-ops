@@ -3,6 +3,7 @@ package localgit
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -274,6 +275,7 @@ type blameCommit struct {
 	author, authorEmail       string
 	committer, committerEmail string
 	committerDate             int64
+	committerDateFits         bool // int(committer-time) fits an int64
 	hasCommitterDate          bool
 }
 
@@ -309,6 +311,12 @@ func blameRows(groups []blameGroup, relPath string) []BlameLine {
 			continue
 		}
 		name, email := actorFromString(group.commit.author + " " + group.commit.authorEmail)
+		if classifyEpoch(group.commit.committerDate, group.commit.committerDateFits) != timeOK {
+			// commit.committed_datetime raises (ValueError past year 9999, OSError or
+			// OverflowError beyond) inside fetch_blame's try: the rows appended so
+			// far are what the file returns.
+			return rows
+		}
 		for _, line := range group.lines {
 			text := strings.TrimRight(line, "\n")
 			rows = append(rows, BlameLine{
@@ -321,6 +329,22 @@ func blameRows(groups []blameGroup, relPath string) []BlameLine {
 	return rows
 }
 
+// parseEpochText is int(value) of a blame `*-time` line: the number, and whether it
+// fits an int64 (Python's ints do not overflow; the instant then fails in
+// datetime.fromtimestamp, which classifyEpoch names).
+func parseEpochText(value string) (number int64, fits, ok bool) {
+	text := strings.TrimSpace(value)
+	parsed, err := strconv.ParseInt(text, 10, 64)
+	if err == nil {
+		return parsed, true, true
+	}
+	var numErr *strconv.NumError
+	if errors.As(err, &numErr) && errors.Is(numErr.Err, strconv.ErrRange) {
+		return 0, false, true
+	}
+	return 0, false, false
+}
+
 // blameInfo is the `info` dict of Repo.blame: only the keys it sets.
 type blameInfo struct {
 	id                        string
@@ -328,6 +352,7 @@ type blameInfo struct {
 	author, authorEmail       *string
 	committer, committerEmail *string
 	authorDate, committerDate *int64
+	committerDateFits         bool
 }
 
 // parseBlame is Repo.blame's `--porcelain` loop, statement by statement. false
@@ -378,14 +403,14 @@ func parseBlame(data []byte) ([]blameGroup, bool) {
 					info.committerEmail = &value
 				}
 			case strings.HasSuffix(firstpart, "-time"):
-				number, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
-				if err != nil {
+				number, fits, ok := parseEpochText(value)
+				if !ok {
 					return nil, false
 				}
 				if role == "author" {
 					info.authorDate = &number
 				} else {
-					info.committerDate = &number
+					info.committerDate, info.committerDateFits = &number, fits
 				}
 			case role == firstpart:
 				if role == "author" {
@@ -408,7 +433,7 @@ func parseBlame(data []byte) ([]blameGroup, bool) {
 					commit = &blameCommit{
 						author: *info.author, authorEmail: *info.authorEmail,
 						committer: *info.committer, committerEmail: *info.committerEmail,
-						committerDate: *info.committerDate, hasCommitterDate: true,
+						committerDate: *info.committerDate, committerDateFits: info.committerDateFits, hasCommitterDate: true,
 					}
 					commits[sha] = commit
 				}

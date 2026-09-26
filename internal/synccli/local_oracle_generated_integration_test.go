@@ -30,6 +30,8 @@ func generatedScenarios() []localScenario {
 	out = append(out, packedRefsScenarios()...)
 	out = append(out, mergeMessageScenarios()...)
 	out = append(out, identityScenarios()...)
+	out = append(out, blameTimeScenarios()...)
+	out = append(out, blameBatchScenarios()...)
 	return out
 }
 
@@ -767,6 +769,134 @@ func linkedWorktreeScenarios() []localScenario {
 			f.git("worktree", "add", "-q", "-b", "other", linked)
 			f.dir = linked
 		}})
+	}
+	return out
+}
+
+// blameTimeScenarios: the committer time of the commit that owns some lines of a file,
+// over the classes datetime.fromtimestamp treats in its own way (fine, past the
+// ClickHouse client's range, past year 9999, past a C int, past 2**63). The root commit
+// is older than --since, so the walk never reads it and only `git blame` sees its time:
+// Python's commit.committed_datetime raises inside fetch_blame's try and the file keeps
+// the rows it had built, so the position of the failing lines in the file matters.
+func blameTimeScenarios() []localScenario {
+	var out []localScenario
+	epochs := []string{"1700000000", "0", "10413792000", "253402300799", "253402300800", "67768036191676799", "67768036191676800", "4611686018427387904", "9223372036854775807", "9223372036854775808", "18446744073709551617"}
+	for _, epoch := range epochs {
+		for _, layout := range []string{"owner first", "owner last"} {
+			epoch, layout := epoch, layout
+			refuses := ""
+			if epoch == "10413792000" || epoch == "253402300799" {
+				refuses = "blame" // Python writes an instant the ClickHouse client cannot; the port refuses
+			}
+			out = append(out, localScenario{
+				name: "gen blame time: " + epoch + " " + layout, targets: []string{"blame"}, goRefusesOn: refuses,
+				args: []string{"--since", "2023-11-01"},
+				build: func(f *fixture) {
+					commit := func(parents string, when string, message string) string {
+						f.t.Helper()
+						f.git("add", "-A")
+						tree := f.git("write-tree")
+						line := "Name <a@b> " + when + " +0000"
+						return f.object("commit", "tree "+tree+"\n"+parents+"author "+line+"\ncommitter "+line+"\n\n"+message+"\n")
+					}
+					f.write("a.txt", "1\n2\n3\n4\n", 0o644)
+					root := commit("", epoch, "root")
+					f.write("a.txt", "1\n2\n3\n4\n5\n", 0o644)
+					second := commit("parent "+root+"\n", "1600000000", "second")
+					if layout == "owner first" {
+						f.write("a.txt", "1 changed\n2\n3\n4\n5\n", 0o644)
+					} else {
+						f.write("a.txt", "1\n2\n3\n4 changed\n5\n", 0o644)
+					}
+					third := commit("parent "+second+"\n", "1700000000", "third")
+					f.setRef("refs/heads/main", third)
+				},
+			})
+		}
+	}
+	return out
+}
+
+// blameBatchScenarios: process_files_and_blame writes in batches (chunks of 2000
+// files, a batch at 1000 rows), so the rows a run that fails leaves behind are the
+// batches before the failing one. A file name that is not valid UTF-8 makes the
+// batch holding it raise. The port validates every batch first and writes nothing
+// (named divergence, D2615): where Python left batches behind (where the name sits
+// among the files, in the file system's os.walk order, decides it) the scenario
+// asserts the port's all-or-nothing; where Python left none the tables compare.
+// placeLastInWalkOrder writes a file alone in a directory that os.walk (the file
+// system's own directory order, which is not sorted) reaches last, so it is the last
+// file of the walk: the position that leaves every earlier batch to Python. Directory
+// names are tried until one lists last.
+func placeLastInWalkOrder(f *fixture, name string) {
+	f.t.Helper()
+	for k := 0; k < 500; k++ {
+		dir := fmt.Sprintf("zz%03d", k)
+		f.write(dir+"/"+name, "the last file\n", 0o644)
+		handle, err := os.Open(f.dir)
+		if err != nil {
+			f.t.Fatal(err)
+		}
+		entries, err := handle.ReadDir(-1)
+		_ = handle.Close()
+		if err != nil {
+			f.t.Fatal(err)
+		}
+		if entries[len(entries)-1].Name() == dir {
+			return
+		}
+		if err := os.RemoveAll(filepath.Join(f.dir, dir)); err != nil {
+			f.t.Fatal(err)
+		}
+	}
+	f.t.Fatal("no directory name lists last")
+}
+
+func blameBatchScenarios() []localScenario {
+	var out []localScenario
+	for _, shape := range []struct {
+		name  string
+		files int
+		since bool
+	}{
+		{"999 files", 999, false}, {"1000 files", 1000, false}, {"1500 files", 1500, false},
+		{"2000 files", 2000, false}, {"2001 files", 2001, false}, {"2999 files", 2999, false},
+		{"4001 files", 4001, false}, {"2500 files and a since window", 2500, true},
+	} {
+		shape := shape
+		var args []string
+		if shape.since {
+			args = []string{"--since", "2023-11-01"}
+		}
+		out = append(out, localScenario{
+			name: "gen blame batches: " + shape.name + " and a name that is not UTF-8", targets: []string{"blame"}, args: args, allOrNothing: true,
+			build: func(f *fixture) {
+				for i := 0; i < shape.files; i++ {
+					f.write(fmt.Sprintf("d%d/f%04d.txt", i%7, i), fmt.Sprintf("line %d\n", i), 0o644)
+				}
+				placeLastInWalkOrder(f, "bad\xffname.txt")
+				f.commit("many\n", commitAt{committerDate: 1_690_000_000})
+				if shape.since {
+					f.write("d0/f0000.txt", "changed\n", 0o644)
+					f.commit("recent\n", commitAt{committerDate: 1_700_000_000})
+				}
+			},
+		})
+	}
+	// The same shapes with every name valid: the batches are only a grain, the rows
+	// that land are all of them.
+	for _, files := range []int{1999, 2000, 2001, 2999, 3001} {
+		files := files
+		out = append(out, localScenario{
+			name: fmt.Sprintf("gen blame batches: %d valid files", files), targets: []string{"blame"},
+			build: func(f *fixture) {
+				for i := 0; i < files; i++ {
+					f.write(fmt.Sprintf("d%d/f%04d.txt", i%7, i), fmt.Sprintf("line %d\nsecond %d\n", i, i), 0o644)
+				}
+				f.commit("many\n")
+			},
+		})
 	}
 	return out
 }

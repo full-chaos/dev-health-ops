@@ -182,6 +182,11 @@ func (w Writer) InsertBlame(ctx context.Context, repoID uuid.UUID, lines []Blame
 	synced := w.now()
 	rows := make([][]any, 0, len(lines))
 	for _, l := range lines {
+		// The DateTime64 client wraps outside 1678-2262 (see representable): the
+		// batch is refused, as a commit or pull request instant is.
+		if err := checkRepresentable("blame line "+l.CommitHash+" author time", l.AuthorWhen); err != nil {
+			return err
+		}
 		rows = append(rows, []any{repoID, l.Path, uint32(l.LineNo), nullable(l.AuthorEmail), nullable(l.AuthorName), l.AuthorWhen, l.CommitHash, l.Line, synced})
 	}
 	return w.insert(ctx, "git_blame", blameInsert, blameOrgIn, rows)

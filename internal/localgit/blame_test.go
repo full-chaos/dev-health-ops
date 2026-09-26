@@ -194,7 +194,7 @@ func TestBlameOfARealRepository(t *testing.T) {
 }
 
 func TestBlameRowsSkipAGroupWithNoCommitWithoutAdvancingTheLineNumber(t *testing.T) {
-	commit := &blameCommit{author: "A", authorEmail: "<a@e>", committerDate: 1700000000}
+	commit := &blameCommit{author: "A", authorEmail: "<a@e>", committerDate: 1700000000, committerDateFits: true}
 	rows := blameRows([]blameGroup{
 		{hash: sha1, lines: []string{"never a row"}},
 		{commit: commit, hash: sha2, lines: []string{"x\n\n", "y"}},
@@ -204,5 +204,47 @@ func TestBlameRowsSkipAGroupWithNoCommitWithoutAdvancingTheLineNumber(t *testing
 	}
 	if rows[0].AuthorEmail == nil || *rows[0].AuthorEmail != "a@e" || *rows[0].AuthorName != "A" {
 		t.Errorf("author = %+v", rows[0])
+	}
+}
+
+// commit.committed_datetime raises for an instant Python cannot build (ValueError past
+// year 9999, OSError or OverflowError beyond), inside fetch_blame's try: the rows
+// appended before the failing group are the file's rows (mutations B21, B22).
+func TestBlameRowsStopAtACommitTimePythonCannotRepresent(t *testing.T) {
+	good := &blameCommit{author: "A", authorEmail: "<a@e>", committerDate: 1700000000, committerDateFits: true}
+	future := &blameCommit{author: "B", authorEmail: "<b@e>", committerDate: 253402300800, committerDateFits: true} // year 10000
+	huge := &blameCommit{author: "C", authorEmail: "<c@e>", committerDateFits: false}                               // past int64
+	for name, bad := range map[string]*blameCommit{"year 10000": future, "past int64": huge} {
+		rows := blameRows([]blameGroup{
+			{commit: good, hash: "h1", lines: []string{"a\n", "b\n"}},
+			{commit: bad, hash: "h2", lines: []string{"c\n"}},
+			{commit: good, hash: "h3", lines: []string{"d\n"}},
+		}, "f.txt")
+		if len(rows) != 2 || rows[1].Line != "b" {
+			t.Fatalf("%s: rows = %+v, want the two rows before the failing group and none after it", name, rows)
+		}
+	}
+	// Year 9999 is Python's; the ClickHouse client's range is the writer's business.
+	edge := &blameCommit{author: "D", authorEmail: "<d@e>", committerDate: 253402300799, committerDateFits: true}
+	if rows := blameRows([]blameGroup{{commit: edge, hash: "h", lines: []string{"x\n"}}}, "f"); len(rows) != 1 {
+		t.Fatalf("year 9999 rows = %+v", rows)
+	}
+}
+
+func TestParseEpochTextKeepsWhatDoesNotFitAnInt64(t *testing.T) {
+	for text, want := range map[string]struct {
+		number   int64
+		fits, ok bool
+	}{
+		"1700000000":           {1700000000, true, true},
+		" 42 ":                 {42, true, true},
+		"9223372036854775807":  {9223372036854775807, true, true},
+		"9223372036854775808":  {0, false, true},
+		"-9223372036854775809": {0, false, true},
+		"abc":                  {0, false, false},
+	} {
+		if number, fits, ok := parseEpochText(text); number != want.number || fits != want.fits || ok != want.ok {
+			t.Errorf("parseEpochText(%q) = %d %v %v, want %+v", text, number, fits, ok, want)
+		}
 	}
 }

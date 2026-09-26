@@ -225,6 +225,12 @@ type localScenario struct {
 	// goRefusesOn names the target ("git" or "prs") on which a named divergence holds:
 	// Python succeeds and the port refuses (exit 1, "outside the range").
 	goRefusesOn string
+	// allOrNothing names a named divergence of the files/blame writer (D2615): Python
+	// writes in batches, so a run that fails (a file name that is not valid UTF-8) leaves
+	// the batches before the failing one; the port validates every batch first and
+	// writes nothing. Where Python left files behind, the port must exit non-zero with
+	// no git_files and no git_blame row; where it left none the tables compare normally.
+	allOrNothing bool
 }
 
 func localScenarios() []localScenario {
@@ -830,7 +836,7 @@ func TestLocalSyncMatchesLivePython(t *testing.T) {
 	oracle := newLocalOracle(t)
 	ctx, admin, ask := oracle.ctx, oracle.admin, oracle.ask
 	pythonDatabase, goDatabase, httpDSN, goDSN, truncate := oracle.pythonDatabase, oracle.goDB, oracle.httpDSN, oracle.goDSN, oracle.truncate
-	compared, mismatches, rowsSeen := 0, 0, 0
+	compared, mismatches, rowsSeen, allOrNothingAsserted := 0, 0, 0, 0
 	perTable := map[string]int{}
 	for _, scenario := range append(localScenarios(), generatedScenarios()...) {
 		// DHO_ORACLE_SCENARIOS narrows a run to the scenarios whose name contains it
@@ -914,6 +920,19 @@ func TestLocalSyncMatchesLivePython(t *testing.T) {
 			pythonRows := tablesSnapshot(ctx, t, admin, pythonDatabase)
 			goRows := tablesSnapshot(ctx, t, admin, goDatabase)
 			compared++
+			if scenario.allOrNothing && wantStage != "ok" && len(pythonRows["git_files"]) > 0 {
+				allOrNothingAsserted++
+				if code == cli.ExitOK || len(goRows["git_files"]) != 0 || len(goRows["git_blame"]) != 0 {
+					mismatches++
+					t.Errorf("%s: a named divergence must be a port that writes no file or blame row and fails, got exit %d with %d file rows and %d blame rows (python left %d and %d)",
+						label, code, len(goRows["git_files"]), len(goRows["git_blame"]), len(pythonRows["git_files"]), len(pythonRows["git_blame"]))
+				}
+				if !equalLines(pythonRows["repos"], goRows["repos"]) {
+					mismatches++
+					t.Errorf("%s: table repos differs\n%s", label, lineDiff(pythonRows["repos"], goRows["repos"]))
+				}
+				continue
+			}
 			for _, table := range localTables {
 				rowsSeen += len(pythonRows[table])
 				perTable[table] += len(pythonRows[table])
@@ -924,9 +943,12 @@ func TestLocalSyncMatchesLivePython(t *testing.T) {
 			}
 		}
 	}
-	t.Logf("%d scenario runs compared, %d rows seen in the Python tables %v, %d mismatches", compared, rowsSeen, perTable, mismatches)
+	t.Logf("%d scenario runs compared, %d rows seen in the Python tables %v, %d mismatches; %d all-or-nothing divergences asserted", compared, rowsSeen, perTable, mismatches, allOrNothingAsserted)
 	if os.Getenv("DHO_ORACLE_SCENARIOS") != "" {
 		return // a narrowed debugging run: the coverage checks below need the whole corpus
+	}
+	if allOrNothingAsserted < 2 {
+		t.Errorf("only %d runs left Python's earlier batches behind: the all-or-nothing divergence is not exercised", allOrNothingAsserted)
 	}
 	for _, table := range localTables {
 		if perTable[table] == 0 {

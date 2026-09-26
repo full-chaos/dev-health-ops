@@ -115,9 +115,15 @@ func TestStageFailedNamesAPoolAcquireThatSpentTheBudget(t *testing.T) {
 	if record["phase"] != "acquire" || record["phase_name"] != "coordinator" {
 		t.Fatalf("stage_failed phase = %v/%v, want acquire/coordinator; record %v", record["phase"], record["phase_name"], record)
 	}
-	elapsed, _ := record["phase_elapsed_ms"].(int64)
-	if elapsed < 250 || elapsed > 700 {
-		t.Fatalf("phase_elapsed_ms = %v, want about the 300 ms budget", record["phase_elapsed_ms"])
+	// CHAOS-6960: not a wall-clock window on phase_elapsed_ms (the timeout-fallback-
+	// masquerade shape a wall-clock threshold is: it flaked on a loaded host, elapsed
+	// under budget). The mechanism this test pins is that the bounded stage CONTEXT is
+	// what cut the acquire short, named in the error text (execution-verified: a
+	// context-timed-out pool.Begin returns "context deadline exceeded", never a
+	// SQLSTATE, since the cancellation is client-side) -- not a syntax error, not a
+	// closed pool, not a real outage.
+	if errText, _ := record["error"].(string); !strings.Contains(errText, "context deadline exceeded") {
+		t.Fatalf("stage_failed error = %q, want the bounded context to be why the acquire failed", record["error"])
 	}
 	if summary, _ := record["phases"].(string); !strings.HasPrefix(summary, "acquire:coordinator=") || !strings.HasSuffix(summary, "!") {
 		t.Fatalf("phases = %q, want one errored acquire", record["phases"])
@@ -147,9 +153,20 @@ func TestStageFailedNamesTheSlowStatementThatSpentTheBudget(t *testing.T) {
 	if record["phase"] != "statement" || record["phase_name"] != "reconciler slow probe" {
 		t.Fatalf("stage_failed phase = %v/%v, want statement/reconciler slow probe; record %v", record["phase"], record["phase_name"], record)
 	}
+	// CHAOS-6960: not a wall-clock window (see the sibling acquire test above for why --
+	// this is the exact assertion that flaked on #3316: 192ms read against a 250-700ms
+	// window on a loaded host). The mechanism this test pins: the failure names the
+	// bounded stage context, never a SQLSTATE (execution-verified: pgx's client-side
+	// timeout returns "timeout: context deadline exceeded" before PostgreSQL's own
+	// cancellation would land one), and the sleep(5) statement did not run to
+	// completion -- a wide, non-fragile margin (under half the 5s sleep), not a window
+	// around the 300ms budget.
+	if errText, _ := record["error"].(string); !strings.Contains(errText, "context deadline exceeded") {
+		t.Fatalf("stage_failed error = %q, want the bounded context to be why the statement failed", record["error"])
+	}
 	elapsed, _ := record["phase_elapsed_ms"].(int64)
-	if elapsed < 250 || elapsed > 700 {
-		t.Fatalf("phase_elapsed_ms = %v, want about the 300 ms budget", record["phase_elapsed_ms"])
+	if elapsed <= 0 || elapsed >= 2500 {
+		t.Fatalf("phase_elapsed_ms = %v, want a failure well before the 5s sleep completed (budget enforcement did not fire)", record["phase_elapsed_ms"])
 	}
 	// The acquire that came first was quick and is listed, not blamed.
 	summary, _ := record["phases"].(string)

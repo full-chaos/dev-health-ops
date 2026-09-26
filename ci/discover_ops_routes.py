@@ -113,7 +113,33 @@ class DiscoveryImportError(RuntimeError):
     """
 
 
+class DiscoveryStateError(DiscoveryImportError):
+    """A previous discovery in this process left state behind that a second one cannot survive.
+
+    A discovery that purges the modules it imported (``OTEL_ENABLED`` unset) leaves their
+    Prometheus collectors registered in the process-wide default registry. The next
+    discovery re-imports the same modules and dies deep inside the import with
+    ``DuplicateTimeseries`` (and, once that is cleaned, SQLAlchemy's "Table ... is already
+    defined"). This is raised INSTEAD, before anything is imported, naming the cause and
+    the way out. A subclass of ``DiscoveryImportError``: every caller that already treats
+    "could not import the app" as a hard failure keeps doing so.
+    """
+
+
 PACKAGE = "dev_health_ops"
+
+#: Collectors registered by modules a discovery purged and that are still registered.
+_LEAKED_COLLECTORS: set[Any] = set()
+
+
+def _registered_collectors() -> set[Any]:
+    try:
+        from prometheus_client import REGISTRY
+    except ImportError:
+        return set()
+    # The registry has no public listing of its collectors; a missing private attribute
+    # must fail loudly rather than turn the guard below into a silent no-op.
+    return set(REGISTRY._collector_to_names)  # noqa: SLF001
 
 
 def _loaded_from(module: Any, src: Path) -> bool:
@@ -153,6 +179,18 @@ def _import_context(root: Path):
       against several roots in one process (the gate's own contract tests do)
       gets each root's real set and leaves no cross-contamination behind.
     """
+    still_leaked = _LEAKED_COLLECTORS & _registered_collectors()
+    if still_leaked:
+        raise DiscoveryStateError(
+            f"a previous discovery in this process purged the modules it imported but "
+            f"{len(still_leaked)} Prometheus collector(s) they registered are still in the "
+            "default registry, so importing the app again would die with "
+            "DuplicateTimeseries. That happens when OTEL_ENABLED is unset: discovery sets "
+            "it for its own import and purges afterwards. Set OTEL_ENABLED (every CI "
+            "workflow sets it to false; tests/conftest.py does for pytest) so the modules "
+            "are kept, or run each discovery in its own process."
+        )
+    registered_before = _registered_collectors()
     otel_was = os.environ.get("OTEL_ENABLED")
     we_set_otel = otel_was is None
     if we_set_otel:
@@ -202,6 +240,9 @@ def _import_context(root: Path):
             ]:
                 del sys.modules[name]
             sys.modules.update(cached)
+            # The dropped modules' collectors are still registered: remember them, so
+            # the next discovery in this process fails with a named error up front.
+            _LEAKED_COLLECTORS.update(_registered_collectors() - registered_before)
 
 
 def _import_attr(module: str, attr: str, src: Path) -> Any:

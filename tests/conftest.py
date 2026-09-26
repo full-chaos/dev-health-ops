@@ -10,7 +10,18 @@ from pathlib import Path
 import pytest
 from git import Repo as GitRepo
 
-from tests._env_isolation import (
+# CHAOS-6943: run under the environment CI runs under. Every CI workflow sets
+# OTEL_ENABLED=false, and `ci/discover_ops_routes.py::discover()` behaves differently
+# when it is UNSET: it sets it for its own import and then purges every
+# `dev_health_ops.*` module it loaded, while the Prometheus collectors and SQLAlchemy
+# tables those modules registered stay behind in process-wide registries, so the next
+# import in the same process dies with DuplicateTimeseries / "Table ... already
+# defined". Whichever test ran second in a local pytest process failed; CI never took
+# that path. Set (never overridden) before anything imports the app, so a shell that
+# chose a value keeps it.
+os.environ.setdefault("OTEL_ENABLED", "false")
+
+from tests._env_isolation import (  # noqa: E402 -- the env default above must precede these imports
     ALLOW_ENV,
     SCRUB_ENV_NAMES,
     exempted_names,

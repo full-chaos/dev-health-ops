@@ -19,8 +19,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
-// The Stripe webhook is router.stripe_webhook (the billing-edge app's only
-// live route). Its handlers were written against event objects as plain
+// The Stripe webhook is router.stripe_webhook (the deleted Python billing-edge
+// app's only live route). Its handlers were written against event objects as plain
 // dicts; stripe-python's StripeObject is not one, so on the deployed Python
 // plane they crash or skip (CHAOS-6525). This port implements what they were
 // written to do, reading the verified event JSON as plain values -- a named

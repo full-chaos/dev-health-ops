@@ -10,9 +10,9 @@ import (
 )
 
 // The billing-edge routes: what the Python billing edge
-// (src/dev_health_ops/api/billing_edge.py) serves on its own port, served
-// here from a second listener of dho api so the billing host reaches only
-// this. Its three behaviours are the Stripe webhook (the handler of the main
+// (src/dev_health_ops/api/billing_edge.py, since deleted, CHAOS-6939) served
+// on its own port, served here from a second listener of dho api so the
+// billing host reaches only this. Its three behaviours are the Stripe webhook (the handler of the main
 // listener), GET|HEAD /health, and a JSON 404 for every other path and every
 // method (Python's catch-all route answers 404 where the main app would
 // answer 405).

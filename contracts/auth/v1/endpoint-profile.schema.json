@@ -181,7 +181,7 @@
           ]
         },
         "reachable_validators": {
-          "description": "EVERY validator that can observe/attempt to process this route's credential before or instead of its intended one -- the CHAOS-3271 class. Derived from the middleware stack (CorrelationId -> OrgId -> Impersonation -> SlowAPI -> OriginValidation/CSRF -> GraphQLQuerySizeLimit -> SecurityHeaders -> CORS -> route, per api/_middleware.py) and mount path, not from re-reading the route body. Empty only for billing-edge-app routes, which share no middleware with the main app.",
+          "description": "EVERY validator that can observe/attempt to process this route's credential before or instead of its intended one -- the CHAOS-3271 class. Derived from the middleware stack (CorrelationId -> OrgId -> Impersonation -> SlowAPI -> OriginValidation/CSRF -> GraphQLQuerySizeLimit -> SecurityHeaders -> CORS -> route, per api/_middleware.py) and mount path, not from re-reading the route body. Empty only for the routes of an app that shares no middleware with the main app (the retired billing-edge app was the one such app; none remains).",
           "items": {
             "$ref": "#/$defs/reachableValidator"
           },
